@@ -1,4 +1,4 @@
-//! One system reminder carrying team context, model identity, launch environment, sandbox view, subagent policy, and shared language servers.
+//! One system reminder carrying team context, model identity, the loop fire that launched the agent, launch environment, sandbox view, subagent policy, and shared language servers.
 
 use std::path::{Path, PathBuf};
 
@@ -111,6 +111,9 @@ pub(super) fn render(
         paragraphs.push(format!("### Team\n\n{}", launch_context::reminder(context)));
     } else if let Some(model) = reminders.model.then(|| model_fragment(params)).flatten() {
         paragraphs.push(model_line(params, &model));
+    }
+    if let Some(body) = &request.loop_reminder {
+        paragraphs.push(format!("### Loop\n\n{body}"));
     }
     if reminders.env
         || !reminders.lsp_servers.is_empty()
@@ -349,6 +352,28 @@ Launch them through Skill(rimz-subagents), subagents available to you:
 When a skill's description matches the work in hand, invoke it, even when you know the commands by heart: each skill is built for its one task and does it better than you would by hand.
 </system_reminder>"#
         );
+    }
+
+    #[test]
+    fn loop_section_follows_identity_and_precedes_environment() {
+        let mut request =
+            ExecRequest::bare_launch(crate::ids::AgentKind::new_unchecked("claude"), Vec::new());
+        let reminders = LaunchReminders {
+            env: true,
+            ..Default::default()
+        };
+        let render = |request: &ExecRequest| render(request, &reminders, Path::new("/w"), None);
+        assert!(!render(&request).contains("### Loop"));
+        request.loop_reminder = Some("The user fired the rule `x` by hand.".to_owned());
+        assert_eq!(
+            render(&request),
+            "<system_reminder>\n### Loop\n\nThe user fired the rule `x` by hand.\n\n### Environment\n\n- cwd: /w\n</system_reminder>"
+        );
+        request.identity.params.role = Some("fixer".to_owned());
+        request.identity.params.model = Some("opus".to_owned());
+        assert!(render(&request).starts_with(
+            "<system_reminder>\nYou are @fixer, running on Opus.\n\n### Loop\n\nThe user fired the rule `x` by hand.\n\n### Environment\n\n"
+        ));
     }
 
     #[test]

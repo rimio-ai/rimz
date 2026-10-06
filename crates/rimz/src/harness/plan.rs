@@ -1400,6 +1400,8 @@ pub struct LayoutPaneParams<'a> {
     pub resume_seeds: Option<&'a [CohortSeed]>,
     pub launch_identities: &'a [AgentLaunchIdentity],
     pub fallback_channel: Option<&'a str>,
+    /// A loop fire's `### Loop` reminder body, for the cell that receives the prompt.
+    pub loop_reminder: Option<&'a str>,
 }
 
 /// Compile backend-neutral pane commands for a resolved layout.
@@ -1514,6 +1516,9 @@ fn fresh_agent_argv(
     );
     if let crate::harness::launch::ExecAction::Launch { prompt, .. } = &mut request.action {
         *prompt = launch.prompt.clone();
+    }
+    if launch.prompt.is_some() {
+        request.loop_reminder = params.loop_reminder.map(str::to_owned);
     }
     Ok(crate::harness::launch::exec_argv(
         rimz_bin,

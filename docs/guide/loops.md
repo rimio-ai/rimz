@@ -54,6 +54,8 @@ That one command replaces a cron entry, the guard script around it, and the term
 
 A scheduled turn takes the launch flags you already use with [`rimz agents`](./fleet.md), so `--worktree`, `--effort`, `--system-prompt-file`, and a [permission mode](./fleet.md#set-a-permission-mode) shape it the same way; `--timeout` caps the turn and its verify commands. The `--agent` value is a kind, a [profile](./fleet.md#profiles-shape-an-agent-for-one-job), or a kind with its permission-mode suffix, like `codex-yolo`. What the agent does with the turn is bounded only by the prompt: a one-line check, or the whole [fleet that works nights](#a-fleet-that-works-nights).
 
+The prompt only has to say what the job is. Every agent a rule launches is told the rest alongside it: which rule started it and on what trigger, whether it is one turn in a pane that closes or an agent that stays on, whether you fired it by hand or nobody is watching, and the verify command, turn cap, and timeout it runs under. An unattended run therefore knows to put its result in its final message and to ask only when it cannot go on.
+
 ## Who keeps time
 
 There is no RimZ scheduler daemon. The clock is the sidebar, the background process that draws the room's column: while a room for the task's project is open, attached or not, it fires due tasks on its regular tick, each through a detached `rimz loop run <name>`. With no room open, clock tasks wait. To keep time without an open room, opt in once:

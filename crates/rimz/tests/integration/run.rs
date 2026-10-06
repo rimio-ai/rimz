@@ -2375,6 +2375,7 @@ fn run_exiting_resume_wrapper(
         close_pane_on_exit: true,
         exit_on_run_completion: false,
         subagent: false,
+        loop_reminder: None,
         identity: ExecIdentity {
             params: LaunchParams {
                 isolation: Some(rimz::config::Isolation::Host),

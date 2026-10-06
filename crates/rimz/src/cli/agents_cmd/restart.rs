@@ -559,6 +559,8 @@ mod tests {
         let mut agent = rimz::testkit::agent_state("claude", "a1", jiff::Timestamp::UNIX_EPOCH);
         agent.name = Some("otter".to_owned());
         agent.role = Some("coder".to_owned());
+        // A restart replays the session, not the fire that launched it.
+        agent.loop_task = Some("fixer".to_owned());
         let posture = ResumePosture {
             launch: rimz::harness::plan::ResumeLaunchPosture {
                 args: vec!["--model".to_owned(), "opus".to_owned()],
@@ -608,6 +610,7 @@ mod tests {
                 close_pane_on_exit: true,
                 exit_on_run_completion: false,
                 subagent: false,
+                loop_reminder: None,
                 identity: rimz::harness::launch::ExecIdentity {
                     resume_model_override: false,
                     name: Some("otter".to_owned()),
@@ -616,6 +619,7 @@ mod tests {
                     params: rimz::agents::LaunchParams {
                         role: Some("coder".to_owned()),
                         model: Some("opus".to_owned()),
+                        loop_task: Some("fixer".to_owned()),
                         ..Default::default()
                     },
                 },

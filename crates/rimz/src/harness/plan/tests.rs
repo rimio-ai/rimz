@@ -967,6 +967,7 @@ fn pane_compilation_checks_support_across_layout_before_prompt_files() {
             resume_seeds: None,
             launch_identities: &[],
             fallback_channel: None,
+            loop_reminder: None,
         },
     )
     .expect_err("later unsupported prompt wins before file checks");
@@ -2234,14 +2235,24 @@ fn layout_panes_put_the_prompt_only_on_the_leader_agent() {
             resume_seeds: None,
             launch_identities: &identities,
             fallback_channel: None,
+            loop_reminder: Some("fired"),
         },
     )
     .unwrap();
 
+    let first = exec_request(&panes.columns[0].panes[0].argv);
     assert!(matches!(
-        &exec_request(&panes.columns[0].panes[0].argv).action,
+        &first.action,
         crate::harness::launch::ExecAction::Launch { prompt: None, .. }
     ));
+    // Only the cell that receives the rule's prompt is told the rule launched it.
+    assert_eq!(first.loop_reminder, None);
+    assert_eq!(
+        exec_request(&panes.columns[1].panes[1].argv)
+            .loop_reminder
+            .as_deref(),
+        Some("fired")
+    );
     assert_eq!(panes.columns[0].panes[0].name.as_deref(), Some("claude"));
     assert_request_field(
         &panes.columns[1].panes[1].argv,
@@ -2327,6 +2338,7 @@ fn matched_resume_isolation_overrides_without_stamping_one_shot_values() {
                 resume_seeds: Some(&plan.seeds),
                 launch_identities: &[],
                 fallback_channel: None,
+                loop_reminder: None,
             },
         )
         .unwrap();
@@ -2405,6 +2417,7 @@ fn mixed_resume_and_fresh_panes_stay_aligned_in_layout_order() {
             resume_seeds: Some(&seeds),
             launch_identities: &fresh,
             fallback_channel: Some("fallback"),
+            loop_reminder: None,
         },
     )
     .expect("mixed panes");
@@ -2434,6 +2447,7 @@ fn mixed_resume_and_fresh_panes_stay_aligned_in_layout_order() {
             resume_seeds: Some(&[CohortSeed::Fresh, CohortSeed::Fresh]),
             launch_identities: &[],
             fallback_channel: None,
+            loop_reminder: None,
         },
     )
     .expect_err("identity count mismatch");
@@ -2452,6 +2466,7 @@ fn mixed_resume_and_fresh_panes_stay_aligned_in_layout_order() {
             resume_seeds: Some(&[CohortSeed::Fresh]),
             launch_identities: &fresh,
             fallback_channel: None,
+            loop_reminder: None,
         },
     )
     .expect_err("resume seed count mismatch");
@@ -2468,6 +2483,7 @@ fn mixed_resume_and_fresh_panes_stay_aligned_in_layout_order() {
             resume_seeds: Some(&seeds),
             launch_identities: &surplus,
             fallback_channel: None,
+            loop_reminder: None,
         },
     )
     .expect_err("surplus launch identity");
@@ -2529,6 +2545,7 @@ fn pane_command_stamps_cli_identity_and_close_policy() {
             resume_seeds: None,
             launch_identities: &launches,
             fallback_channel: None,
+            loop_reminder: None,
         },
     )
     .unwrap();
@@ -2568,6 +2585,7 @@ fn pane_command_stamps_cli_identity_and_close_policy() {
                 resume_seeds: None,
                 launch_identities: &launches,
                 fallback_channel: None,
+                loop_reminder: None,
             },
         )
         .unwrap();
@@ -2633,6 +2651,7 @@ fn pane_command_resume_keeps_prior_identity_and_replays_cell_posture() {
             resume_seeds: Some(&seeds),
             launch_identities: &[],
             fallback_channel: Some("new-channel"),
+            loop_reminder: None,
         },
     )
     .unwrap();

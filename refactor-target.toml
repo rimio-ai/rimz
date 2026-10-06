@@ -457,7 +457,8 @@ path = "crates/rimz/src/harness"
 # The public park_notice module itself also crosses the harness/CLI boundary (+1).
 # The loop start throttle crosses to the CLI as the `Turn` a launch reports through, the start preflight, and the held-run and readings lookups `loop show` renders, and the typed `ThrottleError` the preflight and admission return, plus the public `schedule::throttle` module itself (+10).
 # The keepalive helper reads the final-ping rule beside the shared eligibility recheck (+1).
-surface-budget = 710
+# `run::VERIFY_MAX_ATTEMPTS_DEFAULT`, the verify cap shared with the CLI (+1).
+surface-budget = 711
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -1073,7 +1074,8 @@ allowed-dependencies = [
 # Verify settlement is one call (settle_verify, VerifyStep); its three transitions are private.
 # The exec wrapper asks one pure decision over `ProviderExit` (+2), with `StartupEvidence` and `StartupRelaunch` as input and answer (+2).
 # The park-notice helper claims one park per child activity through a locked CAS, and gives it back when queueing fails.
-surface-budget = 50
+# `VERIFY_MAX_ATTEMPTS_DEFAULT` is the one verify cap the loop reminder, `loop show`, and the supervised run read (+1).
+surface-budget = 51
 
 [[module]]
 path = "crates/rimz/src/harness/run/report.rs"

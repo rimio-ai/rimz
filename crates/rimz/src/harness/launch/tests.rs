@@ -112,6 +112,7 @@ fn request(kind: &str, action: ExecAction) -> ExecRequest {
         close_pane_on_exit: false,
         exit_on_run_completion: false,
         subagent: false,
+        loop_reminder: None,
         identity: ExecIdentity::default(),
     }
 }
@@ -1256,6 +1257,7 @@ fn exec_wire_round_trips_maximal_launch_identity() {
         close_pane_on_exit: true,
         exit_on_run_completion: true,
         subagent: true,
+        loop_reminder: None,
         identity: ExecIdentity {
             resume_model_override: false,
             name: Some("swift-otter".to_owned()),

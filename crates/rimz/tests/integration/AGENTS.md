@@ -49,7 +49,7 @@ No in-process `MuxBackend` fake exists; a failing multiplexer call is a fake exe
 
 | Double | Reach | Can make fail |
 | --- | --- | --- |
-| `zellij-trace` fixture binary, behind `RIMZ_ZELLIJ_BIN` (`common::shim::zellij_trace_shim`) | every suite; logs each argv | writes and Enter (`RIMZ_TEST_ZELLIJ_MODE=fail-write`, `fail-enter`), session birth (`birth-fails`, `socket-overflow-on-birth`), `new-tab` (`RIMZ_TEST_ZELLIJ_FAIL_NEW_TAB`), `close-pane` (`RIMZ_TEST_ZELLIJ_FAIL_CLOSE_PANE`). A cached pane listing comes from the topology cache `common::room::seed_live_zellij_room` writes; an authoritative one runs `list-panes`, scripted by `RIMZ_TEST_ZELLIJ_LIST_PANES` |
+| `zellij-trace` fixture binary, behind `RIMZ_ZELLIJ_BIN` (`common::shim::zellij_trace_shim`) | every suite; logs each argv, plus each `--layout` file's contents under `RIMZ_TEST_ZELLIJ_LOG_LAYOUTS` (RimZ deletes the file afterwards) | writes and Enter (`RIMZ_TEST_ZELLIJ_MODE=fail-write`, `fail-enter`), session birth (`birth-fails`, `socket-overflow-on-birth`), `new-tab` (`RIMZ_TEST_ZELLIJ_FAIL_NEW_TAB`), `close-pane` (`RIMZ_TEST_ZELLIJ_FAIL_CLOSE_PANE`). A cached pane listing comes from the topology cache `common::room::seed_live_zellij_room` writes; an authoritative one runs `list-panes`, scripted by `RIMZ_TEST_ZELLIJ_LIST_PANES` |
 | `fake_zellij_script` in `zellij_health.rs` | that file | `list-panes`: sleep past a timeout, or exit non-zero |
 | `fake_tmux` in `asks.rs`, `tmux_shim` in `web.rs`, `common::shim::write_path_shim` for a custom body | PATH shims | nothing as written; a custom body decides |
 | `counting_action_shim` in `src/mux/zellij/tests.rs` | library unit tests only | any `action`, by run count |

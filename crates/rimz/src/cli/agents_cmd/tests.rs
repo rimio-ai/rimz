@@ -1182,6 +1182,8 @@ mod launch_options {
             let (request, _) =
                 into_loop_check_request(parse_agents(&argv), "nightly", &config).unwrap();
             assert_eq!(request.loop_task.as_deref(), Some("nightly"));
+            // The check script wrote this prompt, not the rule.
+            assert_eq!(request.loop_reminder, None);
             assert!(request.loop_zone);
             assert!(!request.background);
             assert_eq!(request.keep, keep);

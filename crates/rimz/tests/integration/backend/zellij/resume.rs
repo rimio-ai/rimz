@@ -554,6 +554,7 @@ fn zellij_agent_exec_command(
         close_pane_on_exit: true,
         exit_on_run_completion: false,
         subagent: false,
+        loop_reminder: None,
         identity: rimz::harness::launch::ExecIdentity::default(),
     };
     let exec = rimz::harness::launch::exec_argv(&env.rimz_bin(), &env.runtime_paths(), &request)

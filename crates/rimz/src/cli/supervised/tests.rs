@@ -401,6 +401,7 @@ fn supervised_request(prompt: &str, subagent: bool) -> SupervisedRunRequest {
         max_attempts: None,
         loop_zone: false,
         loop_task: None,
+        loop_reminder: None,
         passthrough: Vec::new(),
         managed_launch: rimz::agents::ManagedLaunchState::PendingResolution,
         login: rimz::store::writer::LaunchLogin::RoomDefault,
@@ -841,6 +842,7 @@ fn subagent_run_closes_its_pane_after_terminal_completion() {
             close_pane_on_exit: true,
             exit_on_run_completion: true,
             subagent: true,
+            loop_reminder: None,
             identity: rimz::harness::launch::ExecIdentity {
                 resume_model_override: false,
                 name: Some("child".to_owned()),

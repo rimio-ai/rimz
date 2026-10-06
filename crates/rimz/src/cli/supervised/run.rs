@@ -686,6 +686,7 @@ fn execute_attempt(
         run_id: Some(run_id.clone()),
         exit_on_run_completion,
         subagent: request.subagent,
+        loop_reminder: request.loop_reminder.clone(),
         ..rimz::harness::launch::ExecRequest::fresh(
             agent_cell,
             rimz::harness::launch::ExecIdentity {
@@ -766,7 +767,9 @@ fn verify_phase(
     if record.status != RunStatus::Completed {
         return Ok((record, None, waiter));
     }
-    let max_attempts = request.max_attempts.unwrap_or(3);
+    let max_attempts = request
+        .max_attempts
+        .unwrap_or(rimz::harness::run::VERIFY_MAX_ATTEMPTS_DEFAULT);
     let verify_timeout = request
         .timeout
         .unwrap_or(rimz::harness::schedule::runner::CHECK_DEFAULT_TIMEOUT);

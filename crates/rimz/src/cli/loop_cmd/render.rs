@@ -436,7 +436,9 @@ pub(super) fn task_run_rule(entry: &TaskEntry, task_action: &TaskAction) -> Stri
         (false, None) => "run".to_owned(),
     };
     if let Some(cmd) = entry.verify.as_deref() {
-        let attempts = entry.max_attempts.unwrap_or(3);
+        let attempts = entry
+            .max_attempts
+            .unwrap_or(rimz::harness::run::VERIFY_MAX_ATTEMPTS_DEFAULT);
         rule.push_str(&format!(", verify `{cmd}` (up to {attempts} attempts)"));
     }
     rule
@@ -1211,7 +1213,9 @@ fn write_show_facts(
             "verify",
             ui::cell(format!(
                 "{verify} (up to {} attempts)",
-                entry.max_attempts.unwrap_or(3)
+                entry
+                    .max_attempts
+                    .unwrap_or(rimz::harness::run::VERIFY_MAX_ATTEMPTS_DEFAULT)
             )),
         );
     }

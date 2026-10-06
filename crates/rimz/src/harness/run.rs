@@ -138,6 +138,9 @@ pub struct RunCancellation {
     requested: Arc<AtomicBool>,
 }
 
+/// The turns a verified run gets when its request sets no `max_attempts`.
+pub const VERIFY_MAX_ATTEMPTS_DEFAULT: u32 = 3;
+
 /// Command-neutral input for one supervised turn.
 #[derive(Clone, Debug)]
 pub struct SupervisedRunRequest {
@@ -179,6 +182,9 @@ pub struct SupervisedRunRequest {
     pub max_attempts: Option<u32>,
     pub loop_zone: bool,
     pub loop_task: Option<String>,
+    /// The `### Loop` reminder body the loop fire composed; every attempt's
+    /// pane request carries it.
+    pub loop_reminder: Option<String>,
     pub passthrough: Vec<String>,
     /// Managed-account state: pending inputs, unsupported selection, unresolved
     /// exact selection, or one proven binding.
@@ -230,6 +236,7 @@ impl SupervisedRunRequest {
             max_attempts: None,
             loop_zone: false,
             loop_task: None,
+            loop_reminder: None,
             passthrough: Vec::new(),
             managed_launch,
             login: crate::store::writer::LaunchLogin::RoomDefault,

@@ -62,6 +62,13 @@ fn main() {
         );
     }
     writeln!(file, "{line}").expect("write trace line");
+    // RimZ deletes a `--layout` file once the call returns, so keep its panes.
+    if env::var_os("RIMZ_TEST_ZELLIJ_LOG_LAYOUTS").is_some()
+        && let Some(layout) = args.windows(2).find(|pair| pair[0] == "--layout")
+    {
+        let contents = std::fs::read_to_string(&layout[1]).expect("read traced layout");
+        writeln!(file, "layout\t{}", contents.replace('\n', " ")).expect("write traced layout");
+    }
 
     let cli = &args[1..];
     if has_pair(cli, "action", "new-tab") {
