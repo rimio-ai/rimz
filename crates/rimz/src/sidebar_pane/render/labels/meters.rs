@@ -1,9 +1,9 @@
 use super::*;
+use crate::agents::context::PaceReading;
 use crate::config::ContextMeterConfig;
 use crate::config::GlyphRole;
 use crate::sidebar_pane::render::theme::Component;
 use crate::theme::interpolate_heat;
-use jiff::SignedDuration;
 
 /// Token-composition glyphs for the `◇ ↘ ↗ ◌` fleet breakdown: a diamond for
 /// the cumulative total (input with cache-write folded in, plus output), the
@@ -355,39 +355,6 @@ fn axis_heat_amount(value: u64, green: u64, yellow: u64, amber: u64, red: u64) -
     }
 }
 
-/// Position along the warm tail (`warn → caution → alarm`) for a value crossing
-/// three escalating thresholds `yellow < amber < red`. `None` at or below
-/// `yellow` so the caller keeps its resting tone; then `0.0` just past `yellow`,
-/// `0.5` at `amber`, and `1.0` at `red` and beyond — the sweep
-/// [`Theme::warm_heat_tone`] renders. Checked worst-first, so a misordered
-/// config degrades to the worse tier.
-fn warm_band_amount(value: u64, yellow: u64, amber: u64, red: u64) -> Option<f32> {
-    if value > red {
-        Some(1.0)
-    } else if value > amber {
-        Some(interpolate_heat(value, amber, red, 0.5, 1.0))
-    } else if value > yellow {
-        Some(interpolate_heat(value, yellow, amber, 0.0, 0.5))
-    } else {
-        None
-    }
-}
-
-/// Position along the cool tail (`body → good`) for a value crossing two
-/// descending thresholds `green > deep_green`. `None` at or above `green` so
-/// the caller keeps its resting tone; then the amount climbs toward `1.0` at
-/// `deep_green` and below. Checked greenest-first, so a misordered config
-/// degrades to the more visible signal.
-fn cool_band_amount(value: u64, green: u64, deep_green: u64) -> Option<f32> {
-    if value <= deep_green {
-        Some(1.0)
-    } else if value < green {
-        Some(interpolate_heat(value, deep_green, green, 1.0, 0.0))
-    } else {
-        None
-    }
-}
-
 /// The window token's tone: subordinate chrome — a capability label, not a
 /// status signal; the context-meter severity ramp owns the loud color slot — so
 /// the magnitude reads at a glance through a neutral→cool→accent *salience*
@@ -671,53 +638,10 @@ pub(in crate::sidebar_pane::render) fn mana_style(
     theme.style(theme.budget_tone(remaining_pct, zones), Modifier::empty())
 }
 
-/// Treat the first five percent of a budget window as already elapsed for pace
-/// math. This renderer-only damping keeps a tiny early spend from exploding the
-/// reset countdown's color, and is deliberately a tuning constant rather than a
-/// user-facing band like `[theme.display.budget_bar.burn_rate]`.
-const PACE_ELAPSED_FLOOR: f64 = 0.05;
-
-/// Suppress the cool pace signal until enough of the window has elapsed to
-/// make underspend meaningful: two hours of a five-hour window, or about 2.8
-/// days of a seven-day window. The warm side keeps its early-window behavior.
-const COOL_PACE_MIN_ELAPSED: f64 = 0.4;
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(in crate::sidebar_pane::render) struct PaceReading {
-    pub(in crate::sidebar_pane::render) ratio: f64,
-    pub(in crate::sidebar_pane::render) elapsed_share: f64,
-}
-
-/// Burn-rate pace for a budget window: used share divided by elapsed share.
-/// `1.0` means the current spend rate exactly lasts to reset. The first slice
-/// of a fresh window is floored so a tiny amount of usage does not explode the
-/// ratio, while the returned elapsed share remains raw for signal gating.
-/// Overdue reset times clamp to a full elapsed window.
-pub(in crate::sidebar_pane::render) fn pace_reading(
-    used_percentage: u8,
-    duration: SignedDuration,
-    until_reset: SignedDuration,
-) -> Option<PaceReading> {
-    let duration_secs = duration.as_secs();
-    if duration_secs <= 0 {
-        return None;
-    }
-    let elapsed_secs = duration_secs - until_reset.as_secs();
-    if elapsed_secs <= 0 {
-        return None;
-    }
-    let elapsed_share = (elapsed_secs as f64 / duration_secs as f64).clamp(0.0, 1.0);
-    let ratio = (f64::from(used_percentage) / 100.0) / elapsed_share.max(PACE_ELAPSED_FLOOR);
-    Some(PaceReading {
-        ratio,
-        elapsed_share,
-    })
-}
-
 /// The reset countdown marker's tone at a burn-rate reading. Sustainable pace
 /// rests at the countdown's soft tier. Beyond the configured yellow threshold
 /// the marker slides gold through amber to red; below green it slides from soft
-/// toward good green, once [`COOL_PACE_MIN_ELAPSED`] admits a meaningful
+/// toward good green, once enough of the window has elapsed for a meaningful
 /// underspend signal. Each side checks its most visible stop first so
 /// misordered config degrades toward visibility. With color off the marker
 /// keeps the soft tier — the countdown beside it carries the pace.
@@ -726,22 +650,11 @@ pub(in crate::sidebar_pane::render) fn pace_style(
     reading: PaceReading,
     pace: &BudgetBurnRateConfig,
 ) -> Style {
-    let pace_pct = (reading.ratio * 100.0).max(0.0).round() as u64;
-    warm_band_amount(
-        pace_pct,
-        u64::from(pace.yellow),
-        u64::from(pace.amber),
-        u64::from(pace.red),
-    )
-    .map(|amount| theme.style(theme.warm_heat_tone(amount), Modifier::empty()))
-    .or_else(|| {
-        (reading.elapsed_share >= COOL_PACE_MIN_ELAPSED)
-            .then(|| cool_band_amount(pace_pct, u64::from(pace.green), u64::from(pace.deep_green)))
-            .flatten()
-            .map(|amount| theme.style(theme.calm_tone(amount), Modifier::empty()))
-    })
-    .filter(|style| style.fg.is_some())
-    .unwrap_or_else(|| theme.body())
+    theme
+        .pace_tone(reading, pace)
+        .map(|tone| theme.style(tone, Modifier::empty()))
+        .filter(|style| style.fg.is_some())
+        .unwrap_or_else(|| theme.body())
 }
 
 /// The unmetered ("infinite") bar: a full-width empty `▱` track aligned with

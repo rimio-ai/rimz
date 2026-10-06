@@ -4,8 +4,10 @@
 //! and the Theme facade read these slots; this is the one place depth
 //! quantization and slot overrides are applied.
 
+use crate::agents::context::PaceReading;
 use crate::config::{
-    AnimationColor, BudgetBarConfig, ColorDepth, PaletteRole, ThemeColor, ThemeConfig, xterm_rgb,
+    AnimationColor, BudgetBarConfig, BudgetBurnRateConfig, ColorDepth, PaletteRole, ThemeColor,
+    ThemeConfig, xterm_rgb,
 };
 
 use super::raw::RawPalette;
@@ -67,7 +69,36 @@ pub struct Palette {
     pub(crate) selection_bg: Tone,
 }
 
+/// Suppress cool underspend until enough of the window has elapsed.
+const COOL_PACE_MIN_ELAPSED: f64 = 0.4;
+
 impl Palette {
+    /// Pace tone under the configured burn-rate bands; no tone at rest.
+    /// Warm overburn is immediate; cool underspend waits for a meaningful
+    /// elapsed share. Misordered bands degrade toward the more visible tone.
+    pub fn pace_tone(&self, reading: PaceReading, pace: &BudgetBurnRateConfig) -> Option<Tone> {
+        let pace_pct = (reading.ratio * 100.0).max(0.0).round() as u64;
+        warm_band_amount(
+            pace_pct,
+            u64::from(pace.yellow),
+            u64::from(pace.amber),
+            u64::from(pace.red),
+        )
+        .map(|amount| {
+            let mapped =
+                HEAT_RAMP_WARM_START + amount.clamp(0.0, 1.0) * (1.0 - HEAT_RAMP_WARM_START);
+            rgb_color(ramp_tone(&self.heat_ramp, mapped), self.depth)
+        })
+        .or_else(|| {
+            (reading.elapsed_share >= COOL_PACE_MIN_ELAPSED)
+                .then(|| {
+                    cool_band_amount(pace_pct, u64::from(pace.green), u64::from(pace.deep_green))
+                })
+                .flatten()
+                .map(|amount| rgb_color(ramp_tone(&self.calm_ramp, amount), self.depth))
+        })
+    }
+
     pub fn resolve(theme: &ThemeConfig, depth: ColorDepth) -> Palette {
         Self::resolve_with_raw(theme, depth, raw_palette_for_theme(theme))
     }
@@ -222,6 +253,39 @@ impl Palette {
     }
 }
 
+/// Position along the warm tail (`warn → caution → alarm`) for a value crossing
+/// three escalating thresholds `yellow < amber < red`. `None` at or below
+/// `yellow` so the caller keeps its resting tone; then `0.0` just past `yellow`,
+/// `0.5` at `amber`, and `1.0` at `red` and beyond — the sweep
+/// the warm heat ramp renders. Checked worst-first, so a misordered
+/// config degrades to the worse tier.
+fn warm_band_amount(value: u64, yellow: u64, amber: u64, red: u64) -> Option<f32> {
+    if value > red {
+        Some(1.0)
+    } else if value > amber {
+        Some(interpolate_heat(value, amber, red, 0.5, 1.0))
+    } else if value > yellow {
+        Some(interpolate_heat(value, yellow, amber, 0.0, 0.5))
+    } else {
+        None
+    }
+}
+
+/// Position along the cool tail (`body → good`) for a value crossing two
+/// descending thresholds `green > deep_green`. `None` at or above `green` so
+/// the caller keeps its resting tone; then the amount climbs toward `1.0` at
+/// `deep_green` and below. Checked greenest-first, so a misordered config
+/// degrades to the more visible signal.
+fn cool_band_amount(value: u64, green: u64, deep_green: u64) -> Option<f32> {
+    if value <= deep_green {
+        Some(1.0)
+    } else if value < green {
+        Some(interpolate_heat(value, deep_green, green, 1.0, 0.0))
+    } else {
+        None
+    }
+}
+
 fn raw_palette_for_theme(theme: &ThemeConfig) -> RawPalette {
     theme
         .colors
@@ -296,6 +360,63 @@ pub(crate) fn ramp_tone(ramp: &[(u8, u8, u8)], amount: f32) -> (u8, u8, u8) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pace_tone_walks_both_ramps_and_follows_configured_bands() {
+        for depth in [ColorDepth::Truecolor, ColorDepth::Indexed] {
+            let palette = Palette::resolve(&ThemeConfig::default(), depth);
+            let warm = |amount| {
+                rgb_color(
+                    ramp_tone(
+                        &palette.heat_ramp,
+                        HEAT_RAMP_WARM_START + amount * (1.0 - HEAT_RAMP_WARM_START),
+                    ),
+                    depth,
+                )
+            };
+            let cool = |amount| rgb_color(ramp_tone(&palette.calm_ramp, amount), depth);
+            let defaults = BudgetBurnRateConfig::default();
+            let tuned = BudgetBurnRateConfig {
+                yellow: 80,
+                amber: 120,
+                red: 160,
+                green: 60,
+                deep_green: 20,
+            };
+            let misordered = BudgetBurnRateConfig {
+                yellow: 200,
+                amber: 150,
+                red: 100,
+                green: 20,
+                deep_green: 80,
+            };
+            for (bands, ratio, elapsed_share, expected) in [
+                (defaults, 1.0, 1.0, None),
+                (defaults, 1.5, 1.0, Some(warm(0.5))),
+                (defaults, 2.01, 1.0, Some(warm(1.0))),
+                (defaults, 0.33, 0.399, None),
+                (defaults, 0.33, 0.4, Some(cool(1.0))),
+                (defaults, 0.5, 0.4, Some(cool(0.5))),
+                (tuned, 1.2, 1.0, Some(warm(0.5))),
+                (tuned, 1.6, 1.0, Some(warm(1.0))),
+                (tuned, 0.4, 0.4, Some(cool(0.5))),
+                (misordered, 1.2, 1.0, Some(warm(1.0))),
+                (misordered, 0.5, 0.4, Some(cool(1.0))),
+            ] {
+                assert_eq!(
+                    palette.pace_tone(
+                        PaceReading {
+                            ratio,
+                            elapsed_share
+                        },
+                        &bands
+                    ),
+                    expected,
+                    "{bands:?}, {ratio}, {elapsed_share} at {depth:?}"
+                );
+            }
+        }
+    }
 
     #[test]
     fn budget_tone_lands_each_zone_on_its_ramp_stop_and_degrades_worst_first() {

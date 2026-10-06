@@ -1056,7 +1056,51 @@ const NOT_STARTED_GRACE: SignedDuration = SignedDuration::from_secs(120);
 /// Usage at or below this percentage still represents a fresh provider window.
 pub(crate) const FRESH_WINDOW_USAGE_FLOOR: u8 = 1;
 
+/// Treat the first five percent of a budget window as already elapsed for pace
+/// math. This damps early-window tones and marks the
+/// cutoff below which renderers show no pace number.
+const PACE_ELAPSED_FLOOR: f64 = 0.05;
+
+/// Used share divided by elapsed share, damped during a fresh window.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PaceReading {
+    pub ratio: f64,
+    pub elapsed_share: f64,
+}
+
+impl PaceReading {
+    /// Whether the elapsed share is at or past the early-window damping floor.
+    pub fn past_floor(self) -> bool {
+        self.elapsed_share >= PACE_ELAPSED_FLOOR
+    }
+}
+
 impl RateLimitWindow {
+    /// Burn-rate pace for a budget window: used share divided by elapsed share.
+    /// `1.0` means the current spend rate exactly lasts to reset. The first slice
+    /// of a fresh window is floored so a tiny amount of usage does not explode the
+    /// ratio, while the returned elapsed share remains raw for signal gating.
+    /// Overdue reset times clamp to a full elapsed window.
+    pub fn pace(&self, now: Timestamp) -> Option<PaceReading> {
+        let used_percentage = self.used_percentage?;
+        let duration = SignedDuration::from_secs(i64::from(self.duration_mins?) * 60);
+        let until_reset = self.resets_at?.duration_since(now);
+        let duration_secs = duration.as_secs();
+        if duration_secs <= 0 {
+            return None;
+        }
+        let elapsed_secs = duration_secs - until_reset.as_secs();
+        if elapsed_secs <= 0 {
+            return None;
+        }
+        let elapsed_share = (elapsed_secs as f64 / duration_secs as f64).clamp(0.0, 1.0);
+        let ratio = (f64::from(used_percentage) / 100.0) / elapsed_share.max(PACE_ELAPSED_FLOOR);
+        Some(PaceReading {
+            ratio,
+            elapsed_share,
+        })
+    }
+
     pub(crate) fn key(&self) -> RateLimitWindowKey {
         self.scope.as_ref().map_or_else(
             || RateLimitWindowKey::Duration(self.duration_mins),

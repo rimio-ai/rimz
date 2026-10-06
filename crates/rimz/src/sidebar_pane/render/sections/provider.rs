@@ -7,7 +7,7 @@ use crate::sidebar_pane::pets::PetView;
 use crate::sidebar_pane::render::labels::value_seam;
 use crate::store::snapshot::{RedeemForecast, RemoteControlBadge, SidebarProviderPanel};
 use crate::{SpendTally, SpendWindow};
-use jiff::{SignedDuration, Timestamp};
+use jiff::Timestamp;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
@@ -15,7 +15,7 @@ use crate::sidebar_pane::render::fmt::{
     dollars_cap, dollars2, expiry_label, reset_countdown, tokens_int, tokens_short, window_label,
 };
 use crate::sidebar_pane::render::labels::{
-    ManaTick, TokenColumns, TokenDetail, mana_bar_spans, mana_style, pace_reading, pace_style,
+    ManaTick, TokenColumns, TokenDetail, mana_bar_spans, mana_style, pace_style,
     token_breakdown_spans, unknown_mana_bar_spans,
 };
 use crate::sidebar_pane::render::layout::{clip, pad_line_to, spans_width, text_width};
@@ -1371,16 +1371,7 @@ fn metered_bar_row(
         theme.body()
     } else {
         window
-            .used_percentage
-            .zip(window.duration_mins)
-            .zip(window.resets_at)
-            .and_then(|((used, mins), at)| {
-                pace_reading(
-                    used,
-                    SignedDuration::from_secs(i64::from(mins) * 60),
-                    at.duration_since(now),
-                )
-            })
+            .pace(now)
             .map(|reading| pace_style(theme, reading, &zones.burn_rate))
             .unwrap_or_else(|| theme.body())
     };
