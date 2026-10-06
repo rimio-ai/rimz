@@ -371,6 +371,22 @@ pub(crate) fn age_label(secs: u64) -> String {
     }
 }
 
+/// Descending non-zero units from days to seconds, no separators: `4m12s`, `1h3m`, `0s`.
+pub(crate) fn format_compact_duration(mut seconds: u64) -> String {
+    let mut rendered = String::new();
+    for (unit_seconds, suffix) in [(86_400, "d"), (3_600, "h"), (60, "m")] {
+        let amount = seconds / unit_seconds;
+        if amount > 0 {
+            rendered.push_str(&format!("{amount}{suffix}"));
+            seconds %= unit_seconds;
+        }
+    }
+    if seconds > 0 || rendered.is_empty() {
+        rendered.push_str(&format!("{seconds}s"));
+    }
+    rendered
+}
+
 pub(crate) fn age_short(ts: Timestamp, now: Timestamp) -> String {
     let age = now.duration_since(ts);
     age_label(age.as_secs().max(0) as u64)
