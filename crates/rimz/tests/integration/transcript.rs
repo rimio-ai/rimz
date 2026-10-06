@@ -6,6 +6,68 @@ use rimz::transcript::{TranscriptEntry, TranscriptKind};
 use crate::common::Env;
 
 #[test]
+fn agents_show_ambiguity_excludes_ended_matches() {
+    let env = Env::new();
+    let store = env.store();
+    for n in 0..12 {
+        let mut observation = rimz::agents::AgentLifecycleObservation::new(
+            Some(format!("peer-{n}").into()),
+            rimz::agents::LifecycleSignal::Registered,
+        );
+        observation.launch.role = Some("peer".to_owned());
+        observation.launch.channel = Some(format!("lane-{n}"));
+        observation.agent_pid = Some(env.agent_owner_pid());
+        observation.pane_id = Some(rimz::ids::PaneId::from_parts(
+            rimz::ids::MuxName::Zellij,
+            format!("terminal_{n}"),
+        ));
+        store
+            .append_event(&rimz::EventEnvelope::agent_lifecycle(
+                env.workspace_id.clone(),
+                "session",
+                "claude",
+                "SessionStart",
+                &observation,
+            ))
+            .unwrap();
+        if n >= 2 {
+            observation.signal = rimz::agents::LifecycleSignal::Ended;
+            store
+                .append_event(&rimz::EventEnvelope::agent_lifecycle(
+                    env.workspace_id.clone(),
+                    "session",
+                    "claude",
+                    "SessionEnd",
+                    &observation,
+                ))
+                .unwrap();
+        }
+    }
+    let live = store.snapshot_cached().unwrap();
+    assert_eq!(live.agents.len(), 2, "live fixture: {:#?}", live.agents);
+    for json in [false, true] {
+        let mut command = env.rimz();
+        command.args(["agents", "show", "@peer"]);
+        if json {
+            command.arg("--json");
+        }
+        let result = command.output().unwrap();
+        assert!(
+            !result.status.success(),
+            "json={json}: stdout={} stderr={}",
+            String::from_utf8_lossy(&result.stdout),
+            String::from_utf8_lossy(&result.stderr)
+        );
+        let stderr = String::from_utf8_lossy(&result.stderr);
+        assert!(
+            stderr.contains("matches 2 agents: @peer#lane-0, @peer#lane-1"),
+            "{stderr}"
+        );
+        assert!(!stderr.contains("lane-2"), "{stderr}");
+    }
+}
+
+#[test]
 fn transcript_renders_durable_turns_asks_answers_and_channels() {
     let env = Env::new();
     if env.skip_if_sandboxed() {

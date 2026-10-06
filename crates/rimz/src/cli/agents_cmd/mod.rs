@@ -115,6 +115,26 @@ use supervised::run::{run_print, run_supervised};
 use top::{TopArgs, run_top};
 pub(in crate::cli) use wait::wait_agent;
 
+fn resolve_live_or_audit(
+    store: &rimz::Store,
+    workspace: &rimz::ResolvedWorkspace,
+    runtime: &rimz::RuntimePaths,
+    snapshot: &rimz::store::snapshot::SidebarSnapshot,
+    reference: &str,
+    channel: Option<&str>,
+) -> Result<(AgentState, bool)> {
+    let live_error =
+        match super::resolve_agent_one_unhinted(store, snapshot, reference, None, channel) {
+            Ok(agent) => return Ok((agent.clone(), true)),
+            Err(error) if super::resolution_missed(&error) => error,
+            Err(error) => return Err(error),
+        };
+    match show::resolve_audit_agent(store, workspace, runtime, reference)? {
+        Some(agent) => Ok((agent, false)),
+        None => super::resolve_hint(reference, Err(live_error)),
+    }
+}
+
 const CHILD_SIGNAL_GRACE: Duration = Duration::from_millis(300);
 const CHILD_WAIT_POLL: Duration = Duration::from_millis(25);
 const RUN_MONITOR_POLL: Duration = Duration::from_millis(250);

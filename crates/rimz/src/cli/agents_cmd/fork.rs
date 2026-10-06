@@ -264,22 +264,15 @@ fn resolve_fork_source(
     reference: &str,
 ) -> Result<AgentState> {
     let current_channel = crate::cli::current_channel(workspace);
-    match crate::cli::resolve_agent_one(
+    resolve_live_or_audit(
         store,
+        workspace,
+        runtime,
         snapshot,
         reference,
-        None,
         current_channel.as_deref(),
-    ) {
-        Ok(agent) => Ok(agent.clone()),
-        Err(live_err) => {
-            match super::show::resolve_audit_agent(store, workspace, runtime, reference) {
-                Ok(Some(agent)) => Ok(agent),
-                Ok(None) => Err(live_err),
-                Err(audit_err) => Err(audit_err),
-            }
-        }
-    }
+    )
+    .map(|(agent, _)| agent)
 }
 
 fn validate_fork_source(

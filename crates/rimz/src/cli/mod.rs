@@ -311,6 +311,19 @@ pub(crate) fn resolve_agent_one<'a>(
     worktree_flag: Option<&str>,
     current_channel: Option<&str>,
 ) -> Result<&'a AgentState> {
+    resolve_hint(
+        raw,
+        resolve_agent_one_unhinted(store, snapshot, raw, worktree_flag, current_channel),
+    )
+}
+
+fn resolve_agent_one_unhinted<'a>(
+    store: &rimz::Store,
+    snapshot: &'a SidebarSnapshot,
+    raw: &str,
+    worktree_flag: Option<&str>,
+    current_channel: Option<&str>,
+) -> Result<&'a AgentState> {
     if raw == "@me" {
         let unidentified = || {
             anyhow::anyhow!(
@@ -318,8 +331,17 @@ pub(crate) fn resolve_agent_one<'a>(
             )
         };
         let caller = send::resolve_caller(store)?.ok_or_else(unidentified)?;
-        let agent = rimz::harness::ancestry::resolve_launch_caller(&snapshot.agents, &caller)
-            .map_err(|_| unidentified())?;
+        let resolved = rimz::harness::ancestry::resolve_launch_caller(&snapshot.agents, &caller);
+        if resolved.is_err() {
+            let audit = store.runtime_projection(rimz::RuntimeScope::Audit)?;
+            if let Ok(agent) =
+                rimz::harness::ancestry::resolve_launch_caller(&audit.agents, &caller)
+                && agent.ended_at.is_some()
+            {
+                anyhow::bail!("@me requires a live agent; the calling agent has ended");
+            }
+        }
+        let agent = resolved.map_err(|_| unidentified())?;
         if agent.ended_at.is_some() {
             anyhow::bail!("@me requires a live agent; the calling agent has ended");
         }
@@ -328,9 +350,17 @@ pub(crate) fn resolve_agent_one<'a>(
         }
         return Ok(agent);
     }
-    map_resolve(
-        raw,
-        rimz::address::resolve_one(snapshot, raw, worktree_flag, current_channel),
+    rimz::address::resolve_one(snapshot, raw, worktree_flag, current_channel).map_err(Into::into)
+}
+
+fn resolution_missed(error: &anyhow::Error) -> bool {
+    matches!(
+        error.downcast_ref::<rimz::address::TargetErr>(),
+        Some(
+            rimz::address::TargetErr::NoMatch { .. }
+                | rimz::address::TargetErr::NoMatchInChannel { .. }
+                | rimz::address::TargetErr::PaneUnbound { .. }
+        )
     )
 }
 
@@ -380,16 +410,20 @@ fn map_resolve<T>(
     raw: &str,
     result: std::result::Result<T, rimz::address::TargetErr>,
 ) -> Result<T> {
-    match result {
-        Ok(value) => Ok(value),
-        Err(rimz::address::TargetErr::NoMatch { target, suggestion }) => {
-            if let Some(hint) = launch_ref_hint(raw)? {
-                anyhow::bail!("{hint}; run `rimz agents list` to see live agents");
-            }
-            Err(rimz::address::TargetErr::NoMatch { target, suggestion }.into())
-        }
-        Err(err) => Err(err.into()),
+    resolve_hint(raw, result.map_err(Into::into))
+}
+
+fn resolve_hint<T>(raw: &str, result: Result<T>) -> Result<T> {
+    if let Err(error) = &result
+        && matches!(
+            error.downcast_ref::<rimz::address::TargetErr>(),
+            Some(rimz::address::TargetErr::NoMatch { .. })
+        )
+        && let Some(hint) = launch_ref_hint(raw)?
+    {
+        anyhow::bail!("{hint}; run `rimz agents list` to see live agents");
     }
+    result
 }
 
 fn launch_ref_hint(raw: &str) -> Result<Option<String>> {

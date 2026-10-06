@@ -59,6 +59,8 @@ How many matches a command accepts:
 | `refresh` | One agent with a reference; every live root agent in the channel without one; the whole workspace with `--all`. |
 | `message` | One agent unless you opt into fan-out with `--all` or address `@all`. |
 
+An ambiguity lists up to eight addresses you can retype, the full match count, and a pointer to `rimz agents list --all` when more matches remain. `show`, `fork`, `history`, and `explain` consult ended agents only after a live miss; a live ambiguity is not widened to historical sessions.
+
 A fan-out message is prefixed with the addressed handle (`@all,`, `@claude,`) so receivers read it as a group message. A human-sent `@all` reaches every match. An agent-sent `@all` skips the sender and fails when no other agent remains; an explicit `--all @claude` from an agent keeps every match. The [message reference](./message.md) owns delivery.
 
 `message` requires the `@` sigil, which also keeps a target from being read as a launch spec. `show`, `logs`, `history`, `fork`, `wait`, `stop`, `restart`, and `refresh` also accept a bare selector (`swift-otter`), and `wait` and `stop` (like `rimz transcript`) also accept a supervised run id. `rimz agents @coder` is refused with a hint to use `rimz agents show @coder`.
