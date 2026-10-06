@@ -1492,28 +1492,38 @@ pub struct EventPaneSig {
     pub sent_at_ms: u64,
 }
 
-/// One dashboard figure the frame observer keys. The wire shape and
-/// `identity` string are durable: records join on them across logs
-/// and Doctor incidents, so the year spend and used-% keys keep the shape they
-/// had before periods and fields existed by leaving the default one unwritten.
+/// One dashboard figure the frame observer keys. The wire shape and the
+/// `identity` string are durable: records join on them across logs and Doctor
+/// incidents. A key added later is its own `aggregate` tag and no existing
+/// variant gains a field, because a build that predates the key skips a tag it
+/// does not know but would read an unknown field as the older key.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "aggregate", rename_all = "snake_case")]
 pub enum AggregateKey {
     CockpitTally,
     WorkspaceTally,
+    /// The trailing-year spend of one login.
     ProviderSpend {
         #[serde(alias = "kind", deserialize_with = "deserialize_aggregate_login")]
         login: crate::ids::LoginKey,
-        #[serde(default, skip_serializing_if = "SpendPeriod::is_year")]
+    },
+    ProviderSpendPeriod {
+        login: crate::ids::LoginKey,
         period: SpendPeriod,
     },
+    /// The used % of one rate-limit window.
     ProviderMana {
         #[serde(alias = "kind", deserialize_with = "deserialize_aggregate_login")]
         login: crate::ids::LoginKey,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         scope_id: Option<String>,
         duration_mins: Option<u32>,
-        #[serde(default, skip_serializing_if = "WindowField::is_used_percentage")]
+    },
+    ProviderManaField {
+        login: crate::ids::LoginKey,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scope_id: Option<String>,
+        duration_mins: Option<u32>,
         field: WindowField,
     },
     ProviderField {
@@ -1522,25 +1532,19 @@ pub enum AggregateKey {
     },
 }
 
-/// Which spend window of a provider's tally a key watches.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// A rendered spend window of a provider's tally other than the trailing
+/// year, which [`AggregateKey::ProviderSpend`] keys.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SpendPeriod {
-    #[default]
-    Year,
     Headline,
     Week,
     Month,
 }
 
 impl SpendPeriod {
-    fn is_year(&self) -> bool {
-        *self == Self::Year
-    }
-
     fn as_str(self) -> &'static str {
         match self {
-            Self::Year => "year",
             Self::Headline => "headline",
             Self::Week => "week",
             Self::Month => "month",
@@ -1548,24 +1552,18 @@ impl SpendPeriod {
     }
 }
 
-/// Which reading of one rate-limit window a key watches.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// A reading of one rate-limit window other than its used %, which
+/// [`AggregateKey::ProviderMana`] keys.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WindowField {
-    #[default]
-    UsedPercentage,
     ResetsAt,
     Lifted,
 }
 
 impl WindowField {
-    fn is_used_percentage(&self) -> bool {
-        *self == Self::UsedPercentage
-    }
-
     fn as_str(self) -> &'static str {
         match self {
-            Self::UsedPercentage => "used_percentage",
             Self::ResetsAt => "resets_at",
             Self::Lifted => "lifted",
         }
@@ -1623,26 +1621,25 @@ impl AggregateKey {
         match self {
             Self::CockpitTally => "cockpit_tally".to_owned(),
             Self::WorkspaceTally => "workspace_tally".to_owned(),
-            Self::ProviderSpend { login, period } => match period {
-                SpendPeriod::Year => format!("provider_spend:{login}"),
-                period => format!("provider_spend:{login}:{}", period.as_str()),
-            },
+            Self::ProviderSpend { login } => format!("provider_spend:{login}"),
+            Self::ProviderSpendPeriod { login, period } => {
+                format!("provider_spend:{login}:{}", period.as_str())
+            }
             Self::ProviderMana {
                 login,
                 scope_id,
                 duration_mins,
+            } => mana_identity(login, scope_id.as_deref(), *duration_mins),
+            Self::ProviderManaField {
+                login,
+                scope_id,
+                duration_mins,
                 field,
-            } => {
-                let window = match (scope_id, duration_mins) {
-                    (Some(scope_id), _) => format!("scope:{scope_id}"),
-                    (None, Some(mins)) => mins.to_string(),
-                    (None, None) => "unknown".to_owned(),
-                };
-                match field {
-                    WindowField::UsedPercentage => format!("provider_mana:{login}:{window}"),
-                    field => format!("provider_mana:{login}:{window}:{}", field.as_str()),
-                }
-            }
+            } => format!(
+                "{}:{}",
+                mana_identity(login, scope_id.as_deref(), *duration_mins),
+                field.as_str()
+            ),
             Self::ProviderField { login, field } => {
                 format!("provider_field:{login}:{}", field.as_str())
             }
@@ -1654,14 +1651,23 @@ impl AggregateKey {
     pub(crate) fn is_spend_tally(&self) -> bool {
         matches!(
             self,
-            Self::CockpitTally
-                | Self::WorkspaceTally
-                | Self::ProviderSpend {
-                    period: SpendPeriod::Year,
-                    ..
-                }
+            Self::CockpitTally | Self::WorkspaceTally | Self::ProviderSpend { .. }
         )
     }
+}
+
+fn mana_identity(
+    login: &crate::ids::LoginKey,
+    scope_id: Option<&str>,
+    duration_mins: Option<u32>,
+) -> String {
+    if let Some(scope_id) = scope_id {
+        return format!("provider_mana:{login}:scope:{scope_id}");
+    }
+    let duration = duration_mins
+        .map(|mins| mins.to_string())
+        .unwrap_or_else(|| "unknown".to_owned());
+    format!("provider_mana:{login}:{duration}")
 }
 
 /// What the frame-stream observer judged anomalous; the detectors live in

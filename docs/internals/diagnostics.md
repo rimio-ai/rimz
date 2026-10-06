@@ -147,13 +147,15 @@ The `aggregate_oscillation` window bounds the time the figure was away, and `spa
 
 The provider panel is keyed per login by what it renders. A record's `aggregate` names the key:
 
-| `aggregate` | Extra field | Value |
+| `aggregate` | Names | Value |
 | --- | --- | --- |
-| `provider_spend` | `period`: `headline`, `week`, or `month`; unwritten for the trailing year | Integer cents |
-| `provider_mana` | `field`: `resets_at` or `lifted`; unwritten for the used % | The percent, the stored reset timestamp, or `true`/`false` |
+| `provider_spend` | The login's trailing-year spend | Integer cents |
+| `provider_spend_period` | `period`: `headline`, `week`, or `month` | Integer cents |
+| `provider_mana` | One window's used % | The percent |
+| `provider_mana_field` | The same window, with `field`: `resets_at` or `lifted` | The stored reset timestamp, or `true`/`false` |
 | `provider_field` | `field`: `version`, `plan`, `metered`, `remote_control`, `day_budget`, `extra_credits`, `reset_credits`, or `redeem_forecast` | The value as text. A composite is one string of everything the panel renders from it, money in cents: day budget `spend/cap` with `/parked` appended while parked, extra credits `disabled` or `used/remaining/limit` with `-` for a missing figure, reset credits `count@soonest-expiry` |
 
-An unset field is an absent value and reads `<none>`. Two panel values are left unkeyed because they move in normal operation, where a flip is not a fault: `active_sessions` and a window's `observed_at`. Year spend and used % keep the wire shape and identity they had before the other keys existed, so older records join with new ones. A build from before these keys skips a line whose `provider_field` key it cannot decode, and reads a `period` or `field` it does not know as the year or used-% key of the same login.
+An unset field is an absent value and reads `<none>`. Two panel values are left unkeyed because they move in normal operation, where a flip is not a fault: `active_sessions` and a window's `observed_at`. A period or a window field shares its identity prefix with the year or used-% key (`provider_spend:<login>:week`), and is a separate `aggregate` tag on the wire: a build from before these keys skips a tag it does not know, where it would read an unknown field on `provider_spend` or `provider_mana` as that older key.
 
 `aggregate_reset` fires on the edge, without a window, when a spend tally drops from a non-zero figure straight to zero, and carries the prior figure and the pulled value. It covers only the monetary tallies, whose trailing-year figure never legitimately drops to zero in place; a provider mana window rolling to zero is normal. A transient zero that returns inside the window also records `aggregate_oscillation`.
 

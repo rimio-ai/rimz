@@ -295,8 +295,13 @@ fn aggregate_values(snapshot: &SidebarSnapshot) -> Vec<(AggregateKey, Option<Str
     for panel in &snapshot.providers {
         let login = panel.login_key();
         let spending = panel.spending.as_ref();
+        values.push((
+            AggregateKey::ProviderSpend {
+                login: login.clone(),
+            },
+            spending.map(|tally| cents(tally.year.usd)),
+        ));
         for (period, usd) in [
-            (SpendPeriod::Year, spending.map(|tally| tally.year.usd)),
             (
                 SpendPeriod::Headline,
                 spending.map(|tally| tally.headline.usd),
@@ -305,7 +310,7 @@ fn aggregate_values(snapshot: &SidebarSnapshot) -> Vec<(AggregateKey, Option<Str
             (SpendPeriod::Month, spending.map(|tally| tally.month.usd)),
         ] {
             values.push((
-                AggregateKey::ProviderSpend {
+                AggregateKey::ProviderSpendPeriod {
                     login: login.clone(),
                     period,
                 },
@@ -313,11 +318,16 @@ fn aggregate_values(snapshot: &SidebarSnapshot) -> Vec<(AggregateKey, Option<Str
             ));
         }
         for window in &panel.windows {
+            let scope_id = || window.scope.as_ref().map(|scope| scope.id.clone());
+            values.push((
+                AggregateKey::ProviderMana {
+                    login: login.clone(),
+                    scope_id: scope_id(),
+                    duration_mins: window.duration_mins,
+                },
+                window.used_percentage.map(|pct| pct.to_string()),
+            ));
             for (field, value) in [
-                (
-                    WindowField::UsedPercentage,
-                    window.used_percentage.map(|pct| pct.to_string()),
-                ),
                 (
                     WindowField::ResetsAt,
                     window.resets_at.map(|at| at.to_string()),
@@ -325,9 +335,9 @@ fn aggregate_values(snapshot: &SidebarSnapshot) -> Vec<(AggregateKey, Option<Str
                 (WindowField::Lifted, Some(window.lifted.to_string())),
             ] {
                 values.push((
-                    AggregateKey::ProviderMana {
+                    AggregateKey::ProviderManaField {
                         login: login.clone(),
-                        scope_id: window.scope.as_ref().map(|scope| scope.id.clone()),
+                        scope_id: scope_id(),
                         duration_mins: window.duration_mins,
                         field,
                     },
@@ -632,15 +642,7 @@ mod tests {
         );
         let mana = extract_aggregates(&current, &PulledFrameSig::from_snapshot(&pulled))
             .into_iter()
-            .filter(|aggregate| {
-                matches!(
-                    aggregate.key,
-                    AggregateKey::ProviderMana {
-                        field: WindowField::UsedPercentage,
-                        ..
-                    }
-                )
-            })
+            .filter(|aggregate| matches!(aggregate.key, AggregateKey::ProviderMana { .. }))
             .collect::<Vec<_>>();
         assert_eq!(mana.len(), 2);
         let premium = mana

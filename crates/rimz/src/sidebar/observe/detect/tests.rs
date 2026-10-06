@@ -1,6 +1,6 @@
 use super::super::sig::{
     AggregateKey, AggregateSig, EventPaneSig, EventsSig, GroupSig, OwnViewSig, PulledFrameSig,
-    SpendPeriod, WatchedValues, WindowField, extract_sig,
+    WatchedValues, extract_sig,
 };
 use super::*;
 use crate::agents::{AgentStatus, TurnPhase};
@@ -242,7 +242,6 @@ fn codex_mana_key() -> AggregateKey {
         login: "codex@default".parse().unwrap(),
         scope_id: None,
         duration_mins: Some(300),
-        field: WindowField::UsedPercentage,
     }
 }
 
@@ -1162,7 +1161,6 @@ fn aggregate_reset_reports_spend_drops_only() {
             name: "provider spend reset",
             key: AggregateKey::ProviderSpend {
                 login: "claude@default".parse().unwrap(),
-                period: SpendPeriod::Year,
             },
             from: "500",
             pulled: Some("500"),
@@ -1284,7 +1282,6 @@ fn aggregate_reset_reports_spend_drops_only() {
         sig(0, Vec::new()),
         AggregateKey::ProviderSpend {
             login: "claude@default".parse().unwrap(),
-            period: SpendPeriod::Year,
         },
         Some("0"),
         Some("0"),
@@ -1293,7 +1290,6 @@ fn aggregate_reset_reports_spend_drops_only() {
         sig(11_000, Vec::new()),
         AggregateKey::ProviderSpend {
             login: "claude@default".parse().unwrap(),
-            period: SpendPeriod::Year,
         },
         Some("0"),
         Some("0"),
@@ -1302,7 +1298,6 @@ fn aggregate_reset_reports_spend_drops_only() {
         sig(12_000, Vec::new()),
         AggregateKey::ProviderSpend {
             login: "claude@default".parse().unwrap(),
-            period: SpendPeriod::Year,
         },
         Some("500"),
         Some("500"),
