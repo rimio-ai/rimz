@@ -728,3 +728,66 @@ fn a_login_outside_the_set_takes_no_cap_slot() {
         .collect();
     assert_eq!(names, ["Claude", "Codex · team-1"]);
 }
+
+#[test]
+fn panel_version_is_the_newest_reported_whichever_session_spoke_last() {
+    let session = |id: &str, version: &str, observed_secs: i64| {
+        let mut state = agent("claude", id, AgentStatus::Idle, 10);
+        let mut context = crate::agents::AgentContext::new(
+            "claude",
+            jiff::Timestamp::from_second(observed_secs).unwrap(),
+        );
+        context.agent_version = Some(version.to_owned());
+        state.context = Some(context);
+        state
+    };
+    let probed = |version: &str| {
+        BTreeMap::from([(
+            provider_key("claude"),
+            AgentAccount {
+                version: Some(version.to_owned()),
+                ..Default::default()
+            },
+        )])
+    };
+    let version = |sessions: Vec<AgentState>, probed: &BTreeMap<_, _>| {
+        room(sessions)
+            .with_provider_aggregates(
+                probed,
+                &BTreeMap::new(),
+                &BTreeMap::new(),
+                &shown(&["claude"]),
+            )
+            .providers[0]
+            .version
+            .clone()
+    };
+
+    for (old_at, new_at) in [(200, 100), (100, 200)] {
+        assert_eq!(
+            version(
+                vec![
+                    session("old", "2.1.99", old_at),
+                    session("new", "2.1.100", new_at)
+                ],
+                &BTreeMap::new(),
+            )
+            .as_deref(),
+            Some("2.1.100"),
+            "old session observed at {old_at}, new at {new_at}"
+        );
+    }
+    assert_eq!(
+        version(vec![session("old", "2.1.99", 100)], &probed("2.1.100")).as_deref(),
+        Some("2.1.100"),
+        "a newer probed binary is not hidden by an older live session"
+    );
+    assert_eq!(
+        version(
+            vec![agent("claude", "silent", AgentStatus::Idle, 10)],
+            &probed("2.1.99")
+        )
+        .as_deref(),
+        Some("2.1.99")
+    );
+}

@@ -520,3 +520,71 @@ fn missing_probeable_versions_refresh_per_provider_on_retry_cadence() {
         );
     }
 }
+
+#[test]
+fn newest_version_wins_across_sessions_and_the_cached_account() {
+    let session = |id: &str, version: &str, observed_secs: i64| {
+        let mut state = root_agent("codex", id, None);
+        let mut context = crate::agents::AgentContext::new(
+            "codex",
+            Timestamp::from_second(observed_secs).unwrap(),
+        );
+        context.agent_version = Some(version.to_owned());
+        state.context = Some(context);
+        state
+    };
+    for (old_at, new_at) in [(200, 100), (100, 200)] {
+        let snapshot = SidebarSnapshot::build_with_agents(
+            WorkspaceId::from_project_root(Path::new("/tmp/provider-version")),
+            vec![
+                session("old", "0.160.9", old_at),
+                session("new", "0.160.10", new_at),
+            ],
+            Timestamp::now(),
+        );
+        assert_eq!(
+            context_versions(&snapshot),
+            BTreeMap::from([(key("codex"), "0.160.10".to_owned())]),
+            "old session observed at {old_at}, new at {new_at}"
+        );
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("accounts.json");
+    let cached = AccountsCache {
+        logins: BTreeMap::from([(
+            key("codex"),
+            record(
+                42,
+                true,
+                Some(AgentAccount {
+                    version: Some("0.160.10".to_owned()),
+                    ..Default::default()
+                }),
+            ),
+        )]),
+    };
+    write_accounts_cache(&path, &cached);
+    let cache = read_accounts_cache(&path);
+    let merged_version = |context: &str| {
+        accounts_with_context_versions(
+            &cache,
+            &BTreeMap::from([(key("codex"), context.to_owned())]),
+            &RoomLoginSet::native(),
+        )[&key("codex")]
+            .version
+            .clone()
+    };
+
+    assert_eq!(
+        merged_version("0.160.9").as_deref(),
+        Some("0.160.10"),
+        "an older live session does not overwrite the newer cached version"
+    );
+    assert_eq!(merged_version("0.161.0").as_deref(), Some("0.161.0"));
+    assert_eq!(
+        read_accounts_cache(&path),
+        cached,
+        "the merge is frame-local"
+    );
+}
