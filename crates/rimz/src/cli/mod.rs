@@ -452,21 +452,22 @@ pub struct GlobalFlags {
         long,
         value_parser = parse_mux,
         global = true,
+        help_heading = "Global options",
         add = clap_complete::ArgValueCandidates::new(complete::mux_names)
     )]
     pub mux: Option<MuxName>,
     /// Select the Zellij backend (shorthand for `--mux zellij`).
-    #[arg(long, global = true)]
+    #[arg(long, global = true, help_heading = "Global options")]
     pub zellij: bool,
     /// Select the tmux backend (shorthand for `--mux tmux`).
-    #[arg(long, global = true)]
+    #[arg(long, global = true, help_heading = "Global options")]
     pub tmux: bool,
     /// Override project-root resolution (monorepo escape hatch).
-    #[arg(long, global = true)]
+    #[arg(long, global = true, help_heading = "Global options")]
     pub root: Option<PathBuf>,
     /// When to colorize human output: `auto` (default), `always`, or `never`.
     /// `auto` follows the terminal and the `NO_COLOR`/`CLICOLOR` environment.
-    #[arg(long, value_enum, default_value_t = ColorWhen::Auto, global = true)]
+    #[arg(long, value_enum, default_value_t = ColorWhen::Auto, global = true, help_heading = "Global options")]
     pub color: ColorWhen,
 }
 
