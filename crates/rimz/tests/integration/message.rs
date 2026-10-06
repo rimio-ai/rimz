@@ -6778,7 +6778,7 @@ fn message_miss_lists_available_agents() {
     assert!(!out.status.success(), "miss should fail");
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("no agent matches target `@ghost`"),
+        stderr.starts_with("error: no agent matches target `@ghost`"),
         "miss header missing: {stderr}"
     );
     assert!(
