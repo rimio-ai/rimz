@@ -197,11 +197,13 @@ struct Scope {
 
 mod ask_card;
 mod chat;
+mod follow;
 mod layout;
 mod scope;
 mod thread;
 
 use chat::{format_marker_when, render_entry_for_flip, render_entry_for_log_entry};
+pub(crate) use follow::{finish_render, follow};
 use scope::{
     build_identities, channel_matches, compare_optional_timestamps, dedup_asks, entry_in_scope,
     entry_matches_focus, live_agents, live_boundary, resolve_scope, sender_matches_focus,

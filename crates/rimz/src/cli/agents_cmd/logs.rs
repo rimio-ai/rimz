@@ -15,7 +15,15 @@ pub(super) fn logs_agent(
     let workspace = crate::cli::transcript::resolve_view_workspace(Some(&target), None, globals)?;
     let hidden = crate::cli::transcript::Hidden::for_json(json);
     if follow {
-        return follow_agent_logs(&workspace, &target, tail, all, json, hidden);
+        return crate::cli::transcript::follow(
+            &workspace,
+            Some(&target),
+            None,
+            tail,
+            all,
+            json,
+            false,
+        );
     }
     let view = crate::cli::transcript::chat_view_with_hidden(
         &workspace,
@@ -45,7 +53,7 @@ pub(super) fn logs_agent(
     } else {
         let tz = crate::cli::machine_config().time_zone();
         let mut out = render::out();
-        finish_transcript_render(crate::cli::transcript::render_lines_to(
+        crate::cli::transcript::finish_render(crate::cli::transcript::render_lines_to(
             &mut out,
             &view,
             &tz,
@@ -61,98 +69,6 @@ fn agent_logs_target(reference: &str) -> String {
     } else {
         format!("@{reference}")
     }
-}
-
-fn follow_agent_logs(
-    workspace: &rimz::ResolvedWorkspace,
-    target: &str,
-    tail: Option<usize>,
-    all: bool,
-    json: bool,
-    hidden: crate::cli::transcript::Hidden,
-) -> Result<()> {
-    let initial = crate::cli::transcript::chat_view_with_hidden(
-        workspace,
-        Some(target),
-        None,
-        tail,
-        all,
-        hidden,
-    )?;
-    let baseline = if tail.is_some() {
-        crate::cli::transcript::chat_view_with_hidden(
-            workspace,
-            Some(target),
-            None,
-            None,
-            all,
-            hidden,
-        )?
-        .entries
-        .len()
-    } else {
-        initial.entries.len()
-    };
-    if json {
-        for entry in crate::cli::transcript::selected_lines(&initial) {
-            render::finish(write_json_line(&entry))?;
-        }
-    } else if !crate::cli::transcript::selected_lines(&initial).is_empty() {
-        let tz = crate::cli::machine_config().time_zone();
-        let mut out = render::out();
-        finish_transcript_render(crate::cli::transcript::render_lines_to(
-            &mut out,
-            &initial,
-            &tz,
-            Prose::for_stdout(),
-        ))?;
-    }
-
-    let tz = crate::cli::machine_config().time_zone();
-    let mut seen = baseline;
-    loop {
-        std::thread::sleep(Duration::from_secs(1));
-        let view = crate::cli::transcript::chat_view_with_hidden(
-            workspace,
-            Some(target),
-            None,
-            None,
-            all,
-            hidden,
-        )?;
-        if view.entries.len() <= seen {
-            continue;
-        }
-        let new_entries = view.entries[seen..].to_vec();
-        seen = view.entries.len();
-        if json {
-            for entry in new_entries {
-                render::finish(write_json_line(&entry.chat))?;
-            }
-        } else {
-            let mut out = render::out();
-            finish_transcript_render(crate::cli::transcript::render_lines_since_to(
-                &mut out,
-                &view,
-                seen - new_entries.len(),
-                &tz,
-                Prose::for_stdout(),
-            ))?;
-        }
-    }
-}
-
-fn finish_transcript_render(write: Result<()>) -> Result<()> {
-    render::finish(write.map_err(|err| match err.downcast::<std::io::Error>() {
-        Ok(err) => err,
-        Err(err) => std::io::Error::other(err),
-    }))
-}
-
-fn write_json_line(value: &impl serde::Serialize) -> std::io::Result<()> {
-    let line = serde_json::to_string(value).map_err(std::io::Error::other)?;
-    let mut stdout = std::io::stdout().lock();
-    writeln!(stdout, "{line}")
 }
 
 fn write_json_pretty(value: &impl serde::Serialize) -> std::io::Result<()> {

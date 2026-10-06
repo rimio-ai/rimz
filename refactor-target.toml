@@ -749,7 +749,8 @@ surface-budget = 6
 
 [[module]]
 path = "crates/rimz/src/cli/transcript"
-surface-budget = 18
+# Shared follow driver and broken-pipe rendering edge for agents logs.
+surface-budget = 20
 
 [[module]]
 path = "crates/rimz/src/cli/room"
