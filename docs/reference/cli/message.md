@@ -24,6 +24,8 @@ rimz message clear @claude-2#cli-docs
 
 A send takes one target and the text: `rimz message <TARGET> "<TEXT>"`. Flags may come before, between, or after them. Pass the text as one quoted argument. `TEXT` may start with `-`; only a value that is itself one of the command's flags (`--steer`, `--wait`, `-h`, `--help`, etc.) needs `--` before it.
 
+Bare `rimz message` lists the current lane. Any send flag without a target is an invalid command line (exit 2), with the intended send form and a list hint. For inbox flags, use `rimz message list --json`, `rimz message list --all`, or `rimz message list --channel <NAME>`; these flags mean reply formatting, fan-out, and recipient scope on the send form. Bare words and message ids in place of a target also exit 2. `rimz message cancel` requires at least one message id and exits 2 without one.
+
 The target follows the [address grammar](./agents.md#addressing-agents), plus `@me` for the calling agent. A bare word that is not an address fails: `rimz message msg_01k…` suggests `rimz message show msg_01k…`, a word carrying text to deliver names the sigil (``agent target `codex` must start with `@` (try `@codex`)``), and a word with nothing to deliver lists the subcommands. An address that matches no agent prints the error followed by the live agents, and exits 1.
 
 The text comes from one of three sources:

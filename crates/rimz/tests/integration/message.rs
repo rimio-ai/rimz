@@ -18,6 +18,75 @@ use rimz::store::message::{
 
 use crate::common::{Env, trust_codex_preflight_hooks, zellij_trace_shim};
 
+#[test]
+fn targetless_send_flags_refuse_with_usage_error() {
+    let env = Env::new();
+    let mut failures = Vec::new();
+    for flags in [
+        vec!["--on", "done"],
+        vec!["--steer"],
+        vec!["--interrupt"],
+        vec!["--schedule", "1h"],
+        vec!["--after", "@planner"],
+        vec!["--when", "@coder idle 58m"],
+        vec!["--worktree", "auth"],
+        vec!["--channel", "auth"],
+        vec!["--no-enter"],
+        vec!["--force"],
+        vec!["--all"],
+        vec!["--create"],
+        vec!["--smart-compact", "70%"],
+        vec!["--file", "missing.txt"],
+        vec!["--stdin"],
+        vec!["--no-from"],
+        vec!["--wait"],
+        vec!["--json"],
+        vec!["--any"],
+        vec!["--json", "list"],
+        vec!["--steer", "list"],
+    ] {
+        let output = env.rimz().arg("message").args(&flags).output().unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if output.status.code() != Some(2)
+            || !output.stdout.is_empty()
+            || !stderr.contains(flags[0])
+            || !stderr.contains("rimz message list")
+        {
+            failures.push(format!(
+                "{flags:?}: exit {:?}, stdout {:?}, stderr {stderr}",
+                output.status.code(),
+                String::from_utf8_lossy(&output.stdout)
+            ));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn malformed_message_commands_are_usage_errors() {
+    let env = Env::new();
+    let mut failures = Vec::new();
+    for (args, hint) in [
+        (vec!["cancel"], "<MESSAGE_ID>..."),
+        (vec!["codex"], "unknown subcommand `codex`"),
+        (
+            vec!["msg_0000000000000001"],
+            "did you mean `rimz message show",
+        ),
+        (vec!["codex", "hello"], "@codex"),
+    ] {
+        let output = env.rimz().arg("message").args(&args).output().unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if output.status.code() != Some(2) || !output.stdout.is_empty() || !stderr.contains(hint) {
+            failures.push(format!(
+                "{args:?}: exit {:?}, stderr {stderr}",
+                output.status.code()
+            ));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
 fn interrupt_fixture(kind: &str) -> (Env, PathBuf) {
     let env = Env::new();
     env.install_agent_hooks(kind);
