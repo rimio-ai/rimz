@@ -151,7 +151,6 @@ pub(super) fn run_one(
             let effect = (|| {
                 let mut launch_globals = globals.clone();
                 launch_globals.root = Some(root.clone());
-                crate::cli::check_launch_room(&launch_globals)?;
                 let ctx = crate::cli::ctx::Ctx::open(&launch_globals)?;
                 let stopped = if entry.takeover {
                     match take_over_checkout(&ctx, &launch_globals, &root, &cwd)? {

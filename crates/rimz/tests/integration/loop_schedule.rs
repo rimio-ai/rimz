@@ -32,19 +32,37 @@ use crate::common::{
 #[cfg(unix)]
 #[test]
 fn scheduled_agent_opens_named_tab_despite_ambient_pane() {
-    loop_channel_case(LoopLaunch::Agent);
+    loop_channel_case(LoopLaunch::Agent, LoopFirer::None);
 }
 
 #[cfg(unix)]
 #[test]
 fn check_launch_uses_its_worktree_channel_not_the_firers_team() {
-    loop_channel_case(LoopLaunch::Check);
+    loop_channel_case(LoopLaunch::Check, LoopFirer::None);
 }
 
 #[cfg(unix)]
 #[test]
 fn resident_launch_does_not_inherit_the_firers_channel() {
-    loop_channel_case(LoopLaunch::Resident);
+    loop_channel_case(LoopLaunch::Resident, LoopFirer::None);
+}
+
+#[cfg(unix)]
+#[test]
+fn scheduled_launch_ignores_a_subagent_firer() {
+    loop_channel_case(LoopLaunch::Agent, LoopFirer::Subagent);
+}
+
+#[cfg(unix)]
+#[test]
+fn resident_launch_ignores_a_firer_at_the_chain_limit() {
+    loop_channel_case(LoopLaunch::Resident, LoopFirer::ChainLimit);
+}
+
+#[cfg(unix)]
+#[test]
+fn check_launch_ignores_a_firer_found_by_ancestry() {
+    loop_channel_case(LoopLaunch::Check, LoopFirer::Ancestry);
 }
 
 #[cfg(unix)]
@@ -56,7 +74,16 @@ enum LoopLaunch {
 }
 
 #[cfg(unix)]
-fn loop_channel_case(action: LoopLaunch) {
+#[derive(Clone, Copy, PartialEq)]
+enum LoopFirer {
+    None,
+    Subagent,
+    ChainLimit,
+    Ancestry,
+}
+
+#[cfg(unix)]
+fn loop_channel_case(action: LoopLaunch, firer: LoopFirer) {
     use crate::common::CommandTimeoutExt;
 
     let env = Env::new();
@@ -101,6 +128,7 @@ fn loop_channel_case(action: LoopLaunch) {
                 channel: Some("probe".to_owned()),
                 ..Default::default()
             },
+            None,
         );
         trust_codex_project(&env, &linked);
         canonical(&linked)
@@ -141,8 +169,36 @@ fn loop_channel_case(action: LoopLaunch) {
             env.project_root.to_str().unwrap(),
         ),
     );
-    let output = env
-        .rimz()
+    if firer != LoopFirer::None {
+        seed_agent_launch(
+            &env,
+            &env.project_root,
+            "firer",
+            rimz::agents::LaunchParams {
+                parent_agent_id: (firer == LoopFirer::Subagent)
+                    .then(|| AgentSessionId::from("launch_parent")),
+                parent_agent_kind: (firer == LoopFirer::Subagent)
+                    .then(|| AgentKind::new_unchecked("claude")),
+                launch_depth: Some(if firer == LoopFirer::Subagent { 1 } else { 3 }),
+                ..Default::default()
+            },
+            (firer == LoopFirer::Ancestry).then(|| {
+                rimz::pane::RuntimeOwner::new(
+                    rimz::pane::RuntimeOwnerKind::Agent,
+                    "firer",
+                    std::process::id(),
+                    None,
+                )
+            }),
+        );
+    }
+    let mut command = env.rimz();
+    if matches!(firer, LoopFirer::Subagent | LoopFirer::ChainLimit) {
+        command
+            .env("RIMZ_AGENT_KIND", "claude")
+            .env("RIMZ_AGENT_ID", "launch_firer");
+    }
+    let output = command
         .args(["--mux", "zellij", "loop", "run", "rimzd"])
         .env("SHELL", shell)
         .env("PATH", path_with_front(&agent_bin))
@@ -241,6 +297,9 @@ fn loop_channel_case(action: LoopLaunch) {
         .iter()
         .find(|agent| agent.name.as_deref() == request.identity.name.as_deref())
         .unwrap();
+    assert!(agent.launched_by.is_none(), "{agent:?}");
+    assert!(agent.parent_agent_id.is_none(), "{agent:?}");
+    assert_eq!(agent.launch_depth, None, "{agent:?}");
     let expected = (action == LoopLaunch::Check).then_some("linked");
     assert_eq!(
         agent.channel.as_deref(),
@@ -1255,7 +1314,7 @@ fn resident_takeover_case(case: Takeover) {
     }
     let seeded = occupants.len();
     for (session, checkout, pane, launch) in occupants {
-        seed_agent_launch(&env, checkout, session, launch);
+        seed_agent_launch(&env, checkout, session, launch, None);
         hook(session, checkout, pane, "SessionStart");
     }
     if working {
@@ -2429,10 +2488,17 @@ fn seed_team_signal_member(env: &Env, cwd: &Path, session: &str, parent: Option<
             launch_depth: parent.map(|_| 1),
             ..Default::default()
         },
+        None,
     );
 }
 
-fn seed_agent_launch(env: &Env, cwd: &Path, session: &str, launch: rimz::agents::LaunchParams) {
+fn seed_agent_launch(
+    env: &Env,
+    cwd: &Path,
+    session: &str,
+    launch: rimz::agents::LaunchParams,
+    runtime_owner: Option<rimz::pane::RuntimeOwner>,
+) {
     let workspace = env.resolve_workspace(&env.project_root);
     env.store()
         .append_event(&rimz::store::event::EventEnvelope::agent_launched(
@@ -2448,7 +2514,7 @@ fn seed_agent_launch(env: &Env, cwd: &Path, session: &str, launch: rimz::agents:
                 state: rimz::store::event::AgentLaunchState::Bound,
                 run_id: None,
                 pane_id: None,
-                runtime_owner: None,
+                runtime_owner,
                 worktree_path: Some(cwd.display().to_string()),
                 worktree_branch: Some("feature-team".to_owned()),
                 prompt: None,
