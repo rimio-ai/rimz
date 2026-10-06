@@ -4,9 +4,18 @@
 //! questions and the agent's ask-time message join from RimZ transcript state
 //! only by exact ask ID; adapter-owned safe options supply the fallback shape.
 
-use crate::agents::{AgentErr, AgentState, AskDelivery, AskKind, OpenAsk, definition_by_kind};
+use crate::agents::{
+    AgentErr, AgentState, AnswerPlanErr, AskDelivery, AskKind, OpenAsk, definition_by_kind,
+};
 use crate::disk::paths::StatePaths;
 use crate::transcript::{AskQuestion, TranscriptKind, TranscriptLogErr, latest_open_ask, read_all};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AskRoute {
+    Shell,
+    Pane,
+    AsyncPane,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OpenAskDetail {
@@ -14,6 +23,8 @@ pub struct OpenAskDetail {
     pub delivery: AskDelivery,
     pub context: Option<String>,
     pub questions: Vec<AskQuestion>,
+    pub route: AskRoute,
+    pub pane_actions: Option<&'static str>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -60,11 +71,28 @@ pub fn read_open_ask(
         }
         AskKind::Permission => (synthetic_questions(&open, adapter), None),
     };
+    let route = if delivery == AskDelivery::Async {
+        AskRoute::AsyncPane
+    } else if matches!(
+        adapter.answer_plan(open.kind, &questions, &[]),
+        Err(AnswerPlanErr::Unsupported(_))
+    ) || (matches!(open.kind, AskKind::Permission | AskKind::PlanApproval)
+        && questions
+            .first()
+            .is_none_or(|question| question.options.is_empty()))
+    {
+        AskRoute::Pane
+    } else {
+        AskRoute::Shell
+    };
+    let pane_actions = adapter.pane_actions(open.kind);
     Ok(Some(OpenAskDetail {
         open,
         delivery,
         context,
         questions,
+        route,
+        pane_actions,
     }))
 }
 
@@ -82,4 +110,75 @@ fn synthetic_questions(
         multi_select: false,
         has_option_previews: false,
     }]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn detail(provider: &str, kind: AskKind, asynchronous: bool) -> OpenAskDetail {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = crate::ids::WorkspaceId::from_project_root(root.path());
+        let paths = StatePaths::under(workspace, root.path()).unwrap();
+        let mut agent = AgentState::stub(provider, "session", crate::agents::AgentStatus::Waiting);
+        agent.waiting_since = Some(agent.last_activity);
+        agent.open_ask = Some(OpenAsk {
+            id: crate::ids::AskId::parse("ask_0123456789abcdef").unwrap(),
+            kind,
+            detail: None,
+            native_key: None,
+            since: agent.last_activity,
+        });
+        if asynchronous {
+            let open = agent.open_ask.take().unwrap();
+            agent.queued_asks.push(crate::agents::QueuedAsk {
+                id: open.id,
+                detail: "Question?".to_owned(),
+                native_key: "question".to_owned(),
+                since: open.since,
+            });
+        }
+        read_open_ask(&paths, &agent, None).unwrap().unwrap()
+    }
+
+    #[test]
+    fn codex_permission_routes_to_pane() {
+        assert_eq!(
+            detail("codex", AskKind::Permission, false).route,
+            AskRoute::Pane
+        );
+    }
+
+    #[test]
+    fn registered_adapter_without_planner_routes_to_pane() {
+        assert_eq!(
+            detail("qwen", AskKind::Question, false).route,
+            AskRoute::Pane
+        );
+    }
+
+    #[test]
+    fn async_question_routes_to_async_pane() {
+        assert_eq!(
+            detail("codex", AskKind::Question, true).route,
+            AskRoute::AsyncPane
+        );
+    }
+
+    #[test]
+    fn claude_permission_is_shell_answerable_with_pane_actions() {
+        let ask = detail("claude", AskKind::Permission, false);
+        assert_eq!(ask.route, AskRoute::Shell);
+        assert_eq!(ask.pane_actions, Some("deny and persistent grants"));
+    }
+
+    #[test]
+    fn codex_plan_is_shell_answerable_with_pane_actions() {
+        let ask = detail("codex", AskKind::PlanApproval, false);
+        assert_eq!(ask.route, AskRoute::Shell);
+        assert_eq!(
+            ask.pane_actions,
+            Some("keep-planning, clear-context implementation, and refinement")
+        );
+    }
 }

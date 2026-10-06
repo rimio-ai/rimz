@@ -10,8 +10,8 @@ use anyhow::{Context, Result};
 use clap::Args;
 use serde::Deserialize;
 
-use super::{Ctx, GlobalFlags, resolve_open_ask};
-use rimz::agents::{AnswerPlanErr, AnswerStep, AskDelivery, AskKind, AskReply};
+use super::{Ctx, GlobalFlags, ask_commands, ask_pane_owner, resolve_open_ask};
+use rimz::agents::{AnswerStep, AskReply};
 use rimz::ids::AskId;
 use rimz::mux::PaneWriter;
 use rimz::transcript::{AskAnswer, AskQuestion, TranscriptEntry, TranscriptKind};
@@ -69,49 +69,51 @@ pub fn run(args: AnswerArgs, globals: &GlobalFlags) -> Result<()> {
         .transpose()?;
     let detail = rimz::agents::read_open_ask(store.paths(), agent, target_id.as_ref())
         .unwrap_or_else(|err| answer_exit(2, &err.to_string()))
-        .unwrap_or_else(|| answer_exit(2, "agent is not asking anything"));
+        .unwrap_or_else(|| {
+            answer_exit(
+                2,
+                &format!(
+                    "{} is not asking anything",
+                    rimz::address::agent_handle(agent, &peers, true)
+                ),
+            )
+        });
     let ask_id = detail.open.id.clone();
     let kind = agent.kind.clone();
     let agent_id = agent.agent_id.clone();
-    let (pane_kind, pane_agent_id) = if agent.is_provider_subagent() {
-        (
-            agent
-                .parent_agent_kind
-                .clone()
-                .unwrap_or_else(|| kind.clone()),
-            agent
-                .parent_agent_id
-                .clone()
-                .unwrap_or_else(|| agent_id.clone()),
-        )
-    } else {
-        (kind.clone(), agent_id.clone())
+    let (owner, child_name) = ask_pane_owner(agent, &snapshot.agents)
+        .unwrap_or_else(|| answer_exit(2, &format!("ask `{ask_id}` has no live bound pane")));
+    let handle = rimz::address::agent_handle(owner, &peers, true);
+    let who = child_name
+        .as_ref()
+        .map(|name| format!("{name} (via {handle})"))
+        .unwrap_or_else(|| handle.clone());
+    let commands = ask_commands::AskCommands {
+        detail: &detail,
+        pane: &handle,
+        target: if child_name.is_some() {
+            ask_id.as_str()
+        } else {
+            &handle
+        },
     };
-    let handle = rimz::address::agent_handle(agent, &peers, true);
-    if detail.delivery == AskDelivery::Async {
-        answer_exit(
-            3,
-            &format!(
-                "{ask_id}: Codex async questions are answered in the pane: focus {handle} and press shift+←"
-            ),
-        );
+    if let Some(message) = commands.pane_refusal(&who) {
+        answer_exit(3, &message);
     }
     let adapter = rimz::agents::definition_by_kind(kind.as_str())
         .unwrap_or_else(|err| answer_exit(3, &err.to_string()));
-    if let Err(AnswerPlanErr::Unsupported(kind)) =
-        adapter.answer_plan(detail.open.kind, &detail.questions, &[])
-    {
-        answer_exit(3, &format!("{kind} does not support structured answers"));
+    if args.selectors.is_empty() && args.text.is_none() && args.json.is_none() {
+        answer_exit(3, &commands.missing_answer(&who));
     }
-    let replies = parse_replies(&args, detail.open.kind, &detail.questions)
-        .unwrap_or_else(|message| answer_exit(3, &message));
+    let replies =
+        parse_replies(&args, &commands).unwrap_or_else(|message| answer_exit(3, &message));
     let steps = adapter
         .answer_plan(detail.open.kind, &detail.questions, &replies)
-        .unwrap_or_else(|err| answer_exit(3, &err.to_string()));
+        .unwrap_or_else(|err| answer_exit(3, &format!("{err}; in the pane: {}", commands.focus())));
 
     let live = ctx.resolution_snapshot()?;
     let target = live
-        .live_agent_pane(&pane_kind, &pane_agent_id)
+        .live_agent_pane(&owner.kind, &owner.agent_id)
         .unwrap_or_else(|| answer_exit(2, &format!("{handle} has no live bound pane")));
     let writer = PaneWriter::open(store.runtime_paths(), &target, &ctx.workspace.session_name)
         .unwrap_or_else(|err| answer_exit(2, &format!("sending answer to {handle}: {err}")));
@@ -126,7 +128,10 @@ pub fn run(args: AnswerArgs, globals: &GlobalFlags) -> Result<()> {
             && agent.actionable_asks().any(|(ask, _)| ask.id == ask_id)
     });
     if !still_current {
-        answer_exit(2, &format!("ask `{ask_id}` is no longer current"));
+        answer_exit(
+            2,
+            &format!("ask `{ask_id}` was answered or replaced before any key was sent"),
+        );
     }
 
     let mut pacer = rimz::message::send::Pacer::from_env();
@@ -145,7 +150,11 @@ pub fn run(args: AnswerArgs, globals: &GlobalFlags) -> Result<()> {
 
     if args.no_wait {
         let mut out = super::render::out();
-        writeln!(out, "sent answer for {ask_id} to {handle}")?;
+        writeln!(
+            out,
+            "sent answer to {who}: {}  {ask_id}",
+            ask_commands::choice(&detail, &replies)
+        )?;
         return Ok(());
     }
 
@@ -154,13 +163,18 @@ pub fn run(args: AnswerArgs, globals: &GlobalFlags) -> Result<()> {
         answer_exit(
             4,
             &format!(
-                "answer sent for `{ask_id}`, but the agent did not confirm it within {wait:?}"
+                "typed the answer into {handle}'s pane, but it did not confirm within {wait:?}\n  do not resend. check: rimz asks show {}   or look: rimz pane capture {handle}",
+                commands.target
             ),
         );
     }
     record_answer_if_missing(store, agent, &ask_id, &detail.questions, &replies)?;
     let mut out = super::render::out();
-    writeln!(out, "answered {ask_id} for {handle}")?;
+    writeln!(
+        out,
+        "answered {who}: {}  {ask_id}",
+        ask_commands::choice(&detail, &replies)
+    )?;
     Ok(())
 }
 
@@ -172,18 +186,23 @@ fn resolve_current_agent<'a>(
 ) -> std::result::Result<&'a rimz::agents::AgentState, String> {
     let agent = resolve_open_ask(store, snapshot, target, channel)
         .map_err(|err| err.to_string())?
-        .ok_or_else(|| format!("ask `{target}` is no longer current"))?;
+        .ok_or_else(|| ask_commands::unknown_ask(target))?;
     if agent.actionable_asks().next().is_none() {
-        return Err(format!("{target} is not asking anything"));
+        let peers = rimz::address::addressable_agents(snapshot);
+        return Err(format!(
+            "{} is not asking anything",
+            rimz::address::agent_handle(agent, &peers, true)
+        ));
     }
     Ok(agent)
 }
 
 fn parse_replies(
     args: &AnswerArgs,
-    kind: AskKind,
-    questions: &[AskQuestion],
+    commands: &ask_commands::AskCommands<'_>,
 ) -> std::result::Result<Vec<AskReply>, String> {
+    let questions = &commands.detail.questions;
+    let menu_refusal = commands.menu_refusal();
     if let Some(file) = args.json.as_ref() {
         if !args.selectors.is_empty() || args.text.is_some() {
             return Err("--json cannot be combined with positional selectors or --text".to_owned());
@@ -201,7 +220,7 @@ fn parse_replies(
         };
         let values: Vec<JsonAnswer> =
             serde_json::from_str(&raw).map_err(|err| format!("invalid answer JSON: {err}"))?;
-        return normalize_json_answers(&values, kind, questions);
+        return normalize_json_answers(&values, questions, menu_refusal.as_deref());
     }
 
     if args.text.is_some() && questions.len() != 1 {
@@ -231,18 +250,21 @@ fn parse_replies(
                     raw.split(',')
                         .map(str::trim)
                         .filter(|value| !value.is_empty())
-                        .map(|value| resolve_answer_selector(kind, value, question))
+                        .map(|value| {
+                            resolve_selector(value, &question.options)
+                                .map_err(|message| menu_refusal.clone().unwrap_or(message))
+                        })
                         .collect::<std::result::Result<Vec<_>, _>>()
                 })
                 .transpose()?
                 .unwrap_or_default();
             validate_reply(
-                kind,
                 question,
                 AskReply {
                     picks,
                     text: args.text.clone(),
                 },
+                menu_refusal.as_deref(),
             )
         })
         .collect()
@@ -250,8 +272,8 @@ fn parse_replies(
 
 fn normalize_json_answers(
     values: &[JsonAnswer],
-    kind: AskKind,
     questions: &[AskQuestion],
+    menu_refusal: Option<&str>,
 ) -> std::result::Result<Vec<AskReply>, String> {
     if values.len() != questions.len() {
         return Err(format!(
@@ -267,32 +289,35 @@ fn normalize_json_answers(
             let picks = value
                 .pick
                 .iter()
-                .map(|pick| match pick {
-                    JsonPick::Index(index) => resolve_answer_index(kind, *index, question),
-                    JsonPick::Label(label) => resolve_answer_selector(kind, label, question),
+                .map(|pick| {
+                    match pick {
+                        JsonPick::Index(index) => resolve_index(*index, &question.options),
+                        JsonPick::Label(label) => resolve_selector(label, &question.options),
+                    }
+                    .map_err(|message| menu_refusal.map_or(message, str::to_owned))
                 })
                 .collect::<std::result::Result<Vec<_>, _>>()?;
             validate_reply(
-                kind,
                 question,
                 AskReply {
                     picks,
                     text: value.text.clone(),
                 },
+                menu_refusal,
             )
         })
         .collect()
 }
 
 fn validate_reply(
-    kind: AskKind,
     question: &rimz::transcript::AskQuestion,
     reply: AskReply,
+    menu_refusal: Option<&str>,
 ) -> std::result::Result<AskReply, String> {
     if reply.text.is_some()
-        && let Some(message) = menu_action_error(kind, question)
+        && let Some(message) = menu_refusal
     {
-        return Err(message);
+        return Err(message.to_owned());
     }
     if reply
         .text
@@ -307,50 +332,19 @@ fn validate_reply(
             valid_options(question)
         ));
     }
-    if reply.picks.len() > 1 && !question.multi_select {
-        return Err(format!(
-            "question is single-select; valid options: {}",
-            valid_options(question)
-        ));
-    }
     let mut unique = reply.picks.clone();
     unique.sort_unstable();
     unique.dedup();
     if unique.len() != reply.picks.len() {
         return Err("an option can be selected only once".to_owned());
     }
-    Ok(reply)
-}
-
-fn resolve_answer_selector(
-    kind: AskKind,
-    selector: &str,
-    question: &rimz::transcript::AskQuestion,
-) -> std::result::Result<usize, String> {
-    resolve_selector(selector, &question.options)
-        .map_err(|error| menu_action_error(kind, question).unwrap_or(error))
-}
-
-fn resolve_answer_index(
-    kind: AskKind,
-    index: usize,
-    question: &rimz::transcript::AskQuestion,
-) -> std::result::Result<usize, String> {
-    resolve_index(index, &question.options)
-        .map_err(|error| menu_action_error(kind, question).unwrap_or(error))
-}
-
-fn menu_action_error(kind: AskKind, question: &rimz::transcript::AskQuestion) -> Option<String> {
-    let valid = valid_options(question);
-    match kind {
-        AskKind::Permission => Some(format!(
-            "permission asks accept only the listed remote option; use the agent pane for deny or any other action; valid options: {valid}"
-        )),
-        AskKind::PlanApproval => Some(format!(
-            "plan approvals accept only the listed remote option; use the agent pane for keep-planning, refinement text, or manual-review approval; valid options: {valid}"
-        )),
-        AskKind::Question => None,
+    if reply.picks.len() > 1 && !question.multi_select {
+        return Err(format!(
+            "question is single-select; valid options: {}",
+            valid_options(question)
+        ));
     }
+    Ok(reply)
 }
 
 fn resolve_selector(

@@ -6,6 +6,10 @@ use crate::agents::{AnswerPlanErr, AnswerStep, AskKind, AskReply};
 use crate::pane::keys::NamedKey;
 use crate::transcript::{AskAnswer, AskOption, AskQuestion};
 
+pub(super) const PERMISSION_PANE_ACTIONS: &str = "deny and persistent grants";
+pub(super) const PLAN_PANE_ACTIONS: &str =
+    "keep-planning, refinement text, and manual-review approval";
+
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 struct AskUserQuestionResponse {
@@ -77,10 +81,9 @@ fn permission_answer_plan(answers: &[AskReply]) -> Result<Vec<AnswerStep>, Answe
     };
     match answer.picks.as_slice() {
         [0] if answer.text.is_none() => Ok(vec![AnswerStep::Text("1".to_owned())]),
-        _ => Err(AnswerPlanErr::Invalid(
-            "permission asks accept only `allow`; deny and persistent grants require the Claude pane"
-                .to_owned(),
-        )),
+        _ => Err(AnswerPlanErr::Invalid(format!(
+            "permission asks accept only `allow`; {PERMISSION_PANE_ACTIONS} require the Claude pane"
+        ))),
     }
 }
 
@@ -92,10 +95,9 @@ fn plan_approval_answer_plan(answers: &[AskReply]) -> Result<Vec<AnswerStep>, An
     };
     match answer.picks.as_slice() {
         [0] if answer.text.is_none() => Ok(vec![AnswerStep::Key(NamedKey::ShiftTab)]),
-        _ => Err(AnswerPlanErr::Invalid(
-            "plan approvals accept only `approve`; keep-planning, refinement text, and manual-review approval require the Claude pane"
-                .to_owned(),
-        )),
+        _ => Err(AnswerPlanErr::Invalid(format!(
+            "plan approvals accept only `approve`; {PLAN_PANE_ACTIONS} require the Claude pane"
+        ))),
     }
 }
 

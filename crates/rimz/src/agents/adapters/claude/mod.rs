@@ -1108,6 +1108,14 @@ impl crate::agents::capabilities::HookCapability for ClaudeAdapter {
         }
     }
 
+    fn pane_actions(&self, kind: AskKind) -> Option<&'static str> {
+        match kind {
+            AskKind::Permission => Some(ask::PERMISSION_PANE_ACTIONS),
+            AskKind::PlanApproval => Some(ask::PLAN_PANE_ACTIONS),
+            AskKind::Question => None,
+        }
+    }
+
     fn answer_plan(
         &self,
         kind: AskKind,

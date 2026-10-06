@@ -5,6 +5,7 @@ mod accounts;
 mod address;
 mod agents_cmd;
 mod answer;
+mod ask_commands;
 mod asks;
 mod budget;
 mod codex;
@@ -349,6 +350,34 @@ pub(crate) fn resolve_open_ask<'a>(
         return Ok(find_open_ask(snapshot, &ask_id));
     }
     resolve_agent_one(store, snapshot, raw, None, current_channel).map(Some)
+}
+
+fn ask_pane_owner<'a>(
+    agent: &'a AgentState,
+    agents: &'a [AgentState],
+) -> Option<(&'a AgentState, Option<String>)> {
+    if !agent.is_provider_subagent() {
+        return Some((agent, None));
+    }
+    let parent_kind = agent.parent_agent_kind.as_ref().unwrap_or(&agent.kind);
+    let parent =
+        rimz::store::snapshot::find_agent(agents, parent_kind, agent.parent_agent_id.as_ref()?)?;
+    let name = agent
+        .name
+        .as_deref()
+        .filter(|name| agent.name_explicit && !name.is_empty())
+        .or(agent.task.as_deref().filter(|task| !task.is_empty()))
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| {
+            let short = agent.agent_id.split('-').next().unwrap_or(&agent.agent_id);
+            let short = short.get(..8).unwrap_or(short);
+            if short.is_empty() {
+                "subagent".to_owned()
+            } else {
+                format!("subagent {short}")
+            }
+        });
+    Some((parent, Some(name)))
 }
 
 fn find_open_ask<'a>(snapshot: &'a SidebarSnapshot, ask_id: &AskId) -> Option<&'a AgentState> {

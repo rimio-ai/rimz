@@ -798,6 +798,10 @@ impl crate::agents::capabilities::HookCapability for CodexAdapter {
         }
     }
 
+    fn pane_actions(&self, kind: AskKind) -> Option<&'static str> {
+        (kind == AskKind::PlanApproval).then_some(ask::PLAN_PANE_ACTIONS)
+    }
+
     fn answer_plan(
         &self,
         kind: AskKind,

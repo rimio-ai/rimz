@@ -121,7 +121,7 @@ pub use observation::{
     LaunchRecord, LaunchedBy, QueuedQuestion, SessionOrigin, SpawnedSubagent, SubagentCorrelation,
     SubagentCorrelationInput, SubagentSpawnInput, TierSkip, TierSkipReason, TierStamp,
 };
-pub use open_ask::{OpenAskDetail, OpenAskReadErr, read_open_ask};
+pub use open_ask::{AskRoute, OpenAskDetail, OpenAskReadErr, read_open_ask};
 use payload::{CONTROL_TAG_PREFIXES, optional_payload_string, stop_payload_errored};
 pub use payload::{RimzBlock, SanitizedPrompt, peel_rimz_blocks};
 pub(crate) use payload::{non_empty_trimmed, sanitize_user_prompt};

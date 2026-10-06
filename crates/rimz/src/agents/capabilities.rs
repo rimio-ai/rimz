@@ -93,6 +93,11 @@ pub trait HookCapability: CoreCapability {
         None
     }
 
+    /// Actions reserved for the native pane on an otherwise answerable ask.
+    fn pane_actions(&self, _kind: AskKind) -> Option<&'static str> {
+        None
+    }
+
     /// Prove from this hook payload that the call behind `native_key` already
     /// resolved. A keyed ask holds through sibling tools until its own
     /// completion edge, and a user who answers a native prompt with typed

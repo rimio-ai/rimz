@@ -6,11 +6,10 @@ use anyhow::{Result, bail};
 use clap::{Args, Subcommand};
 use serde::Serialize;
 
-use super::{Ctx, GlobalFlags, resolve_open_ask};
+use super::{Ctx, GlobalFlags, ask_commands, ask_pane_owner, resolve_open_ask};
 use crate::cli::render;
 use rimz::agents::{AgentState, AskKind, OpenAskDetail, read_open_ask};
 use rimz::ids::AskId;
-use rimz::store::snapshot::find_agent;
 
 #[derive(Debug, Args)]
 pub struct AsksArgs {
@@ -160,11 +159,9 @@ fn list(all: bool, json: bool, globals: &GlobalFlags) -> Result<()> {
         ));
     }
     let now = jiff::Timestamp::now();
-    let mut table = render::Table::new(["ASK", "AGENT", "KIND", "AGE", "QUESTION"]);
+    let mut table = render::Table::new(["AGENT", "KIND", "AGE", "ASK"]);
     for view in views {
-        let question = first_line(&view).to_owned();
         table.row([
-            render::cell(view.detail.open.id.as_str()).fg(render::palette::accent()),
             render::cell(view.agent.display_name()),
             render::cell(
                 if view.detail.delivery == rimz::agents::AskDelivery::Blocking {
@@ -174,10 +171,21 @@ fn list(all: bool, json: bool, globals: &GlobalFlags) -> Result<()> {
                 },
             ),
             render::cell(render::age_short(view.detail.open.since, now)),
-            render::cell(question),
+            render::cell(preview(&view)),
+        ]);
+        table.row([
+            render::cell(""),
+            render::cell(""),
+            render::cell(""),
+            render::cell(format!("→ {}", view.commands().next_step())).fg(render::palette::faint()),
         ]);
     }
-    render::finish(table.render(&mut render::out()))
+    let mut out = render::out();
+    table.render(&mut out)?;
+    render::finish(writeln!(
+        out,
+        "\nrimz asks show <agent> prints the full prompt"
+    ))
 }
 
 /// The line a human reads when nothing is blocked. A channel-scoped list hides
@@ -201,7 +209,7 @@ fn show(target: &str, json: bool, globals: &GlobalFlags) -> Result<()> {
     let snapshot = ctx.cached_snapshot()?;
     let peers = rimz::address::addressable_agents(&snapshot);
     let agent = resolve_open_ask(&ctx.store, &snapshot, target, ctx.channel())?
-        .ok_or_else(|| anyhow::anyhow!("ask `{target}` is no longer open"))?;
+        .ok_or_else(|| anyhow::anyhow!(ask_commands::unknown_ask(target)))?;
     if agent.actionable_asks().next().is_none() {
         bail!(
             "{} is not asking anything",
@@ -219,9 +227,7 @@ fn show(target: &str, json: bool, globals: &GlobalFlags) -> Result<()> {
         &peers,
         ask_id.as_ref(),
     )?
-    .ok_or_else(|| {
-        anyhow::anyhow!("ask `{target}` is no longer actionable or has no live root agent")
-    })?;
+    .ok_or_else(|| anyhow::anyhow!("ask `{target}` is not actionable or has no live root agent"))?;
     if json {
         return render::json_pretty(&AskJsonView::from(&view));
     }
@@ -260,6 +266,9 @@ fn show(target: &str, json: bool, globals: &GlobalFlags) -> Result<()> {
             )?;
         }
     }
+    if view.detail.open.kind == AskKind::Permission {
+        writeln!(out, "\nsummary (the pane shows the full tool call):")?;
+    }
     for (question_index, question) in view.detail.questions.iter().enumerate() {
         if view.detail.questions.len() > 1 {
             writeln!(out, "\n{}. {}", question_index + 1, question.question)?;
@@ -278,6 +287,7 @@ fn show(target: &str, json: bool, globals: &GlobalFlags) -> Result<()> {
             }
         }
     }
+    writeln!(out, "\n{}", view.commands().show_footer())?;
     Ok(())
 }
 
@@ -291,23 +301,12 @@ fn view_for_agent(
     let Some(detail) = read_open_ask(paths, agent, ask_id)? else {
         return Ok(None);
     };
-    let (handle, name) = if agent.is_provider_subagent() {
-        let parent_kind = agent.parent_agent_kind.as_ref().unwrap_or(&agent.kind);
-        let Some(parent) = agent
-            .parent_agent_id
-            .as_ref()
-            .and_then(|parent_id| find_agent(agents, parent_kind, parent_id))
-        else {
-            return Ok(None);
-        };
-        let handle = rimz::address::agent_handle(parent, peers, true);
-        (handle, Some(subagent_name(agent)))
-    } else {
-        (rimz::address::agent_handle(agent, peers, true), None)
+    let Some((owner, name)) = ask_pane_owner(agent, agents) else {
+        return Ok(None);
     };
     Ok(Some(OpenAskView {
         agent: AskAgentView {
-            handle,
+            handle: rimz::address::agent_handle(owner, peers, true),
             name,
             kind: agent.kind.clone(),
             channel: agent.channel(),
@@ -325,31 +324,46 @@ impl AskAgentView {
     }
 }
 
-fn subagent_name(agent: &AgentState) -> String {
-    agent
-        .name
-        .as_deref()
-        .filter(|name| agent.name_explicit && !name.is_empty())
-        .or(agent.task.as_deref().filter(|task| !task.is_empty()))
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| {
-            let short = agent.agent_id.split('-').next().unwrap_or(&agent.agent_id);
-            let short = short.get(..8).unwrap_or(short);
-            if short.is_empty() {
-                "subagent".to_owned()
+impl OpenAskView {
+    fn commands(&self) -> ask_commands::AskCommands<'_> {
+        ask_commands::AskCommands {
+            detail: &self.detail,
+            pane: &self.agent.handle,
+            target: if self.agent.name.is_some() {
+                self.detail.open.id.as_str()
             } else {
-                format!("subagent {short}")
-            }
-        })
+                &self.agent.handle
+            },
+        }
+    }
 }
 
-fn first_line(view: &OpenAskView) -> &str {
-    view.detail
-        .questions
-        .first()
-        .map(|question| question.question.lines().next().unwrap_or_default())
-        .or(view.detail.open.detail.as_deref())
-        .unwrap_or("waiting for input")
+fn preview(view: &OpenAskView) -> String {
+    let Some(question) = view.detail.questions.first() else {
+        return view
+            .detail
+            .open
+            .detail
+            .as_deref()
+            .unwrap_or("waiting for input")
+            .to_owned();
+    };
+    let text = ask_commands::question_line(view.detail.open.kind, &question.question);
+    if view.detail.questions.len() > 1 {
+        return format!("{text} (+{} more)", view.detail.questions.len() - 1);
+    }
+    // A permission or plan offers one fixed option, which the next-step line names.
+    if view.detail.open.kind != AskKind::Question || question.options.is_empty() {
+        return text.to_owned();
+    }
+    let options = question
+        .options
+        .iter()
+        .enumerate()
+        .map(|(index, option)| format!("{} {}", index + 1, option.label))
+        .collect::<Vec<_>>()
+        .join(" · ");
+    format!("{text}  {options}")
 }
 
 #[cfg(test)]

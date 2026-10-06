@@ -129,11 +129,11 @@ A later turn-start hook classifies the first human prompt as an id-stamped free-
 
 ### Answering
 
-`rimz answer` drives the native prompt UI through the adapter's `answer_plan`, which maps validated answers to keys, typed text, and pastes. Claude, Codex, and Pi implement it; the trait default refuses, and `rimz answer` exits 3 with "does not support structured answers". The command runs in this order:
+`rimz answer` drives the native prompt UI through the adapter's `answer_plan`, which maps validated answers to keys, typed text, and pastes. Claude, Codex, and Pi implement it; the trait default refuses. Ask materialization computes one route for both CLI commands: async questions, unsupported planners, and permission or plan asks without options go to the pane. `answer` refuses these with exit 3 and a focus command. Unknown adapter kinds still fail lookup. The command runs in this order:
 
 1. Resolve the agent and its open ask, then validate every reply against the questions and build the plan. Nothing touches the pane on a validation failure.
 2. Find the live bound pane and take its [pane write lock](./messaging.md#writing-to-the-pane).
-3. Re-read the rollup and require the ask id to still be the agent's current open ask. This compare-and-swap stops a stale response from answering a newer prompt (exit 2, "no longer current").
+3. Re-read the rollup and require the ask id to still be the agent's current open ask. This compare-and-swap stops a stale response from answering a newer prompt (exit 2, "was answered or replaced before any key was sent").
 4. Send the plan's steps, paced like message segments.
 5. Poll every 100 ms, up to 30 seconds by default (`--wait`), until the ask leaves the rollup or a transcript `Answer` with that id appears. On timeout it exits 4.
 6. Append the structured `Answer` entry when the transcript does not already hold one for that id.
