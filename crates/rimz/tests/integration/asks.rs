@@ -347,6 +347,22 @@ fn write_codex_plan_rollout(env: &Env) -> std::path::PathBuf {
 }
 
 #[test]
+fn asks_stray_words_redirect_to_show() {
+    let env = Env::new();
+    let mut failures = Vec::new();
+    for target in ["@nobody", "nobody", "ask_0123456789abcdef"] {
+        let output = env.rimz().args(["asks", target]).bounded_output().unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let expected = format!("error: did you mean `rimz asks show {target}`?");
+        if output.status.code() != Some(2) || !output.stdout.is_empty() || stderr.trim() != expected
+        {
+            failures.push(format!("{target}: {:?}: {stderr}", output.status.code()));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
 fn asks_lists_and_shows_structured_question_json() {
     let env = Env::new();
     let hook = env.run_hook("claude", &question_payload(&env));

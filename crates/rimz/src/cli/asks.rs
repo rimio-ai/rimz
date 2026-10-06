@@ -15,6 +15,8 @@ use rimz::ids::AskId;
 pub struct AsksArgs {
     #[command(subcommand)]
     command: Option<AsksSubcmd>,
+    #[arg(hide = true)]
+    target: Option<String>,
     /// Include asks from every channel.
     #[arg(long)]
     all: bool,
@@ -121,6 +123,10 @@ impl<'a> From<&'a OpenAskView> for AskJsonView<'a> {
 }
 
 pub fn run(args: AsksArgs, globals: &GlobalFlags) -> Result<()> {
+    if let Some(target) = args.target {
+        let command = super::usage::shell_command(["rimz", "asks", "show", &target]);
+        return Err(super::usage::UsageError::new(format!("did you mean `{command}`?")).into());
+    }
     match args.command {
         None => list(args.all, args.json, globals),
         Some(AsksSubcmd::List { all, json }) => list(args.all || all, args.json || json, globals),

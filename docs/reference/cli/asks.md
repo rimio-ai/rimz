@@ -30,6 +30,8 @@ rimz asks show ask_0123456789abcdef --json
 
 The target is an agent address or an ask id. An address resolves in the current channel, as everywhere else ([addressing agents](./agents.md#addressing-agents)); an ask id matches in any channel.
 
+Omitting `show`, as in `rimz asks @planner`, exits `2` and suggests `rimz asks show @planner`. The same redirect applies to a bare handle or ask id.
+
 The human form prints a header line, the agent's context message when present, and each question with its numbered options:
 
 ```console
