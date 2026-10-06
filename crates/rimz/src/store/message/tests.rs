@@ -256,6 +256,34 @@ fn prompt_origin_requires_only_non_user_headers() {
 }
 
 #[test]
+fn keepalive_only_prompt_requires_every_section_to_be_a_keepalive() {
+    let keepalive =
+        "Type: CACHE_KEEPALIVE\nFrom: @rimz\nContent:\nCache keepalive, no action needed.";
+    let pasted = crate::agents::sanitize_user_prompt(Some(&format!(
+        "<pasted_content id=\"e676\">\n{keepalive}\n</pasted_content id=\"e676\">"
+    )))
+    .unwrap();
+    for prompt in [
+        keepalive.to_owned(),
+        pasted,
+        format!("{keepalive}\n\n{keepalive}"),
+    ] {
+        assert!(prompt_is_keepalive_only(&prompt), "{prompt:?}");
+    }
+    for prompt in [
+        format!("{keepalive}\n\nType: STAGE\nFrom: @rimz\nContent:\nImplement is yours."),
+        format!("Type: AGENT_MESSAGE\nFrom: @planner\nContent:\nfirst\n\n{keepalive}"),
+        "bare composer text".to_owned(),
+        "Type: USER_MESSAGE\nFrom: @user\nContent:\nnext task".to_owned(),
+        "Type: CACHE_KEEPALIVE\nFrom: rimz\nContent:\nmalformed".to_owned(),
+        String::new(),
+        " \n\t\n".to_owned(),
+    ] {
+        assert!(!prompt_is_keepalive_only(&prompt), "{prompt:?}");
+    }
+}
+
+#[test]
 fn message_header_parser_rejects_near_misses() {
     for text in [
         "Type: AGENT_MESSAGE\nFrom: @coder (plan ner)\nContent:\nship it",

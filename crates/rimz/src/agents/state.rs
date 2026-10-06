@@ -896,6 +896,9 @@ pub struct AgentState {
     /// The user-task boundary used to retire older finished children. Follows `turn_started_at` except that agent and harness prompt headers carry it forward; context resets advance both stamps.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user_turn_started_at: Option<Timestamp>,
+    /// The agent's last request before the open run of keepalive-only turns, the clock `harness.cache_keepalive_max` caps. `None` when the latest opened turn was not a keepalive ping; a context reset clears it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keepalive_since: Option<Timestamp>,
     /// Timestamp of the native prompt that put this session in `Waiting`.
     /// Activity after this instant proves a keyless prompt was answered in the
     /// agent's own UI, so read paths project the row back to work even before
@@ -1095,6 +1098,7 @@ impl AgentState {
             turn_ended_at: None,
             last_tool_at: None,
             user_turn_started_at: None,
+            keepalive_since: None,
             waiting_since: None,
             open_ask: None,
             queued_asks: Vec::new(),

@@ -488,3 +488,93 @@ fn turn_started_at_stamps_first_turn_and_existing_session_reset() {
     assert_eq!(reset_session[0].status, AgentStatus::Idle);
     assert_eq!(reset_session[0].turn_started_at, Some(reset.timestamp));
 }
+
+#[test]
+fn keepalive_since_holds_the_last_real_request_across_a_run_of_pings() {
+    let keepalive =
+        "Type: CACHE_KEEPALIVE\nFrom: @rimz\nContent:\nCache keepalive, no action needed.";
+    let event = |at: i64, prompt: Option<&str>, signal: serde_json::Value| {
+        raw_lifecycle_at(
+            "claude",
+            at,
+            json!({"agent_id": "s1", "prompt": prompt, "signal": signal}),
+        )
+    };
+    let turn = || json!({"signal": "turn_started"});
+    let ended = || json!({"signal": "turn_ended", "errored": false, "parked_on_background": false});
+    let since = |events: &[EventEnvelope]| reduce_agent_states(events)[0].keepalive_since;
+    let mut events = vec![
+        event(0, None, json!({"signal": "registered"})),
+        event(1, Some("do X"), turn()),
+        event(2, None, ended()),
+    ];
+    assert_eq!(since(&events), None, "a real turn opens no run");
+    events.push(event(3540, Some(keepalive), turn()));
+    events.push(event(3545, None, ended()));
+    assert_eq!(
+        since(&events),
+        Some(events[1].timestamp),
+        "the first ping stamps the prior last request"
+    );
+    events.push(event(7085, Some(keepalive), turn()));
+    events.push(event(7090, None, ended()));
+    assert_eq!(
+        since(&events),
+        Some(events[1].timestamp),
+        "a second ping keeps it"
+    );
+
+    let prior: AgentState =
+        serde_json::from_value(serde_json::to_value(&reduce_agent_states(&events)[0]).unwrap())
+            .unwrap();
+    let carried = reduce_agent_states_seeded(
+        BTreeMap::from([((prior.kind.clone(), prior.agent_id.clone()), prior)]),
+        &[event(7100, None, ended())],
+    );
+    assert_eq!(
+        carried.values().next().unwrap().keepalive_since,
+        Some(events[1].timestamp),
+        "the carried baseline keeps the clock across rotation"
+    );
+
+    let mixed = format!("{keepalive}\n\nType: WAIT\nFrom: @rimz\nContent:\ncheck back");
+    for (label, tail) in [
+        (
+            "stage",
+            vec![event(
+                7200,
+                Some("Type: STAGE\nFrom: @rimz\nContent:\nImplement is yours."),
+                turn(),
+            )],
+        ),
+        (
+            "agent message",
+            vec![event(
+                7200,
+                Some("Type: AGENT_MESSAGE\nFrom: @planner\nContent:\nhi"),
+                turn(),
+            )],
+        ),
+        ("batched", vec![event(7200, Some(&mixed), turn())]),
+        ("human", vec![event(7200, Some("next task"), turn())]),
+        (
+            "clear",
+            vec![event(7200, None, json!({"signal": "registered"}))],
+        ),
+        (
+            "compact",
+            vec![
+                event(7200, None, json!({"signal": "compacting"})),
+                event(
+                    7210,
+                    None,
+                    json!({"signal": "compaction_ended", "failed": false, "auto": false}),
+                ),
+            ],
+        ),
+    ] {
+        events.truncate(7);
+        events.extend(tail);
+        assert_eq!(since(&events), None, "{label} clears the run");
+    }
+}

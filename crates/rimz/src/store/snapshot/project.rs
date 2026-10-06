@@ -712,6 +712,7 @@ fn carried_base(
         state.compacted_awaiting_prompt = prior.compacted_awaiting_prompt;
         state.turn_started_at = prior.turn_started_at;
         state.user_turn_started_at = prior.user_turn_started_at;
+        state.keepalive_since = prior.keepalive_since;
         state.registered_at = prior.registered_at.or(Some(event_ts));
     }
     state
@@ -1028,6 +1029,7 @@ fn assemble_launch_state(
     if status == AgentStatus::Running {
         state.turn_started_at = Some(event.timestamp);
         state.user_turn_started_at = Some(event.timestamp);
+        state.keepalive_since = None;
     }
     state
 }
@@ -1116,6 +1118,18 @@ fn fold_lifecycle(
         && prompt.is_some_and(crate::store::message::prompt_is_harness_delivered);
     if (opened_turn && !harness_prompt) || resets_context {
         state.user_turn_started_at = Some(timestamp);
+    }
+    // A run of keepalive-only turns keeps the last real request it followed.
+    if resets_context {
+        state.keepalive_since = None;
+    } else if opened_turn {
+        state.keepalive_since = (matches!(signal, lifecycle::LifecycleSignal::TurnStarted { .. })
+            && prompt.is_some_and(crate::store::message::prompt_is_keepalive_only))
+        .then(|| {
+            prior
+                .and_then(|prior| prior.keepalive_since.or(prior.last_request_at()))
+                .unwrap_or(timestamp)
+        });
     }
     state.waiting_since = if matches!(&signal, lifecycle::LifecycleSignal::AwaitingInput { .. }) {
         Some(timestamp)
