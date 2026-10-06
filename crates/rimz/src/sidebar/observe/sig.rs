@@ -54,9 +54,11 @@ pub struct WatchedValues {
 }
 
 impl WatchedValues {
+    /// The values `value_oscillation` watches. Status is left out: a short
+    /// turn or an answered ask is a legitimate status blink, and
+    /// `status_churn` owns status motion.
     pub fn fields(&self) -> Vec<(WatchedField, Option<String>)> {
         vec![
-            (WatchedField::Status, self.status.clone()),
             (
                 WatchedField::ContextPct,
                 self.context_pct.map(|value| value.to_string()),

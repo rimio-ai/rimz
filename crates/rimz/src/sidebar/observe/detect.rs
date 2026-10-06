@@ -19,9 +19,9 @@ pub struct Observer {
     prev: Option<FrameSig>,
     roster_empty: Option<RosterEmpty>,
     presence: BTreeMap<String, RowPresence>,
-    values: BTreeMap<(String, WatchedField), ValueRing>,
-    aggregates: BTreeMap<String, AggregateRing>,
-    orders: BTreeMap<String, ValueRing>,
+    values: BTreeMap<(String, WatchedField), FlipRing<()>>,
+    aggregates: BTreeMap<String, FlipRing<Option<String>>>,
+    orders: BTreeMap<String, FlipRing<RankingStatuses>>,
     last_status: BTreeMap<String, String>,
     status_transitions: BTreeMap<String, VecDeque<u64>>,
     last_roster_rows: Vec<RosterRowSig>,
@@ -428,14 +428,8 @@ impl Observer {
         for row in &sig.rows {
             for (field, value) in row.watched.fields() {
                 let ring = self.values.entry((row.row_id.clone(), field)).or_default();
-                if let Some((_, last)) = ring.samples.back()
-                    && last == &value
-                {
+                if !ring.push(sig.at_ms, value, || ()) {
                     continue;
-                }
-                ring.samples.push_back((sig.at_ms, value));
-                while ring.samples.len() > 3 {
-                    ring.samples.pop_front();
                 }
                 let Some((from, via, back)) = ring.oscillation(window) else {
                     continue;
@@ -445,9 +439,9 @@ impl Observer {
                     AnomalyKind::ValueOscillation {
                         row_id: row.row_id.clone(),
                         field,
-                        from: value_label(&from.1),
-                        via: value_label(&via.1),
-                        span_ms: back.0.saturating_sub(from.0),
+                        from: value_label(&from.value),
+                        via: value_label(&via.value),
+                        span_ms: back.at_ms.saturating_sub(via.at_ms),
                     },
                     Some(window),
                 ));
@@ -499,39 +493,22 @@ impl Observer {
         // or a window bar blinking out and back reads as a flip through
         // `<none>`. `prune_frame_scoped_detector_state` bounds that history.
         for (identity, ring) in &mut self.aggregates {
-            if !present.contains(identity)
-                && ring
-                    .samples
-                    .back()
-                    .is_some_and(|last| last.committed.is_some())
-            {
-                ring.push(AggregateSample {
-                    at_ms: sig.at_ms,
-                    committed: None,
-                    pulled: None,
-                });
+            if !present.contains(identity) {
+                ring.push(sig.at_ms, None, || None);
             }
         }
         for aggregate in &sig.aggregates {
             let identity = aggregate.key.identity();
             let ring = self.aggregates.entry(identity).or_default();
-            if let Some(last) = ring.samples.back()
-                && last.committed == aggregate.committed
-            {
+            let prior = ring.samples.back().and_then(|sample| sample.value.clone());
+            if !ring.push(sig.at_ms, aggregate.committed.clone(), || {
+                aggregate.pulled.clone()
+            }) {
                 continue;
             }
-            let prior = ring.samples.back().cloned();
-            ring.push(AggregateSample {
-                at_ms: sig.at_ms,
-                committed: aggregate.committed.clone(),
-                pulled: aggregate.pulled.clone(),
-            });
             if aggregate.key.is_spend_tally()
                 && aggregate.committed.as_deref() == Some("0")
-                && let Some(from) = prior
-                    .as_ref()
-                    .and_then(|sample| sample.committed.as_deref())
-                    .filter(|figure| *figure != "0")
+                && let Some(from) = prior.as_deref().filter(|figure| *figure != "0")
             {
                 drafts.push(AnomalyDraft::from_sig(
                     sig,
@@ -543,12 +520,8 @@ impl Observer {
                     None,
                 ));
             }
-            if let (Some(from), Some(to)) = (
-                prior
-                    .as_ref()
-                    .and_then(|sample| sample.committed.as_deref()),
-                aggregate.committed.as_deref(),
-            ) && steps_backward(&aggregate.key, from, to)
+            if let (Some(from), Some(to)) = (prior.as_deref(), aggregate.committed.as_deref())
+                && steps_backward(&aggregate.key, from, to)
             {
                 drafts.push(AnomalyDraft::from_sig(
                     sig,
@@ -568,14 +541,14 @@ impl Observer {
                 sig,
                 AnomalyKind::AggregateOscillation {
                     aggregate: aggregate.key.clone(),
-                    from: aggregate_label(&from.committed),
-                    via: aggregate_label(&via.committed),
-                    back: aggregate_label(&back.committed),
+                    from: aggregate_label(&from.value),
+                    via: aggregate_label(&via.value),
+                    back: aggregate_label(&back.value),
                     span_ms: back.at_ms.saturating_sub(via.at_ms),
                     // Carries the pulled figure as the snapshot held it, so an
                     // absent read stays absent in the record instead of
                     // arriving as a figure the producer never published.
-                    pulled_via: via.pulled.clone(),
+                    pulled_via: via.payload.clone(),
                 },
                 Some(window),
             ));
@@ -587,21 +560,18 @@ impl Observer {
         for group in &sig.groups {
             let order = serialize_order(&group.render_order);
             let ring = self.orders.entry(group.key.clone()).or_default();
-            if let Some((_, last)) = ring.samples.back()
-                && last.as_deref() == Some(order.as_str())
-            {
+            if !ring.push(sig.at_ms, Some(order), || ranking_statuses(sig, &group.key)) {
                 continue;
-            }
-            ring.samples.push_back((sig.at_ms, Some(order)));
-            while ring.samples.len() > 3 {
-                ring.samples.pop_front();
             }
             let Some((from, via, back)) = ring.oscillation(window) else {
                 continue;
             };
-            let order = deserialize_order(&from.1);
-            let via_order = deserialize_order(&via.1);
-            if order_set(&order) != order_set(&via_order) {
+            let order = deserialize_order(&from.value);
+            let via_order = deserialize_order(&via.value);
+            // Ranking follows status, so a member whose ranking status differs
+            // between the frame the order left and the frame it returned on
+            // explains the reorder: a short turn or an answered ask.
+            if order_set(&order) != order_set(&via_order) || via.payload != back.payload {
                 continue;
             }
             drafts.push(AnomalyDraft::from_sig(
@@ -610,7 +580,7 @@ impl Observer {
                     group_key: group.key.clone(),
                     order,
                     via_order,
-                    span_ms: back.0.saturating_sub(from.0),
+                    span_ms: back.at_ms.saturating_sub(via.at_ms),
                 },
                 Some(window),
             ));
@@ -673,66 +643,55 @@ struct RowPresence {
     short_lived_emitted: bool,
 }
 
-#[derive(Clone, Debug, Default)]
-struct ValueRing {
-    samples: VecDeque<(u64, Option<String>)>,
+/// The last three distinct samples of one watched value, each carrying what
+/// its detector needs beside the value.
+#[derive(Clone, Debug)]
+struct FlipRing<P> {
+    samples: VecDeque<FlipSample<P>>,
 }
 
-#[derive(Clone, Debug, Default)]
-struct AggregateRing {
-    samples: VecDeque<AggregateSample>,
+impl<P> Default for FlipRing<P> {
+    fn default() -> Self {
+        Self {
+            samples: VecDeque::new(),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
-struct AggregateSample {
+struct FlipSample<P> {
     at_ms: u64,
-    committed: Option<String>,
-    pulled: Option<String>,
+    value: Option<String>,
+    payload: P,
 }
 
-type ValueSample = (u64, Option<String>);
-type Oscillation<'a> = (&'a ValueSample, &'a ValueSample, &'a ValueSample);
+type Flip<'a, P> = (&'a FlipSample<P>, &'a FlipSample<P>, &'a FlipSample<P>);
 
-impl ValueRing {
-    fn oscillation(&self, window_ms: u64) -> Option<Oscillation<'_>> {
-        if self.samples.len() != 3 {
-            return None;
-        }
-        let from = &self.samples[0];
-        let via = &self.samples[1];
-        let back = &self.samples[2];
-        if back.0.saturating_sub(from.0) > window_ms {
-            return None;
-        }
-        match (&from.1, &via.1, &back.1) {
-            (Some(from), via, Some(back))
-                if from == back && via.as_deref() != Some(from.as_str()) =>
-            {
-                Some((&self.samples[0], &self.samples[1], &self.samples[2]))
-            }
-            _ => None,
-        }
-    }
-}
+/// Each row's ranking status in one group, keyed by row id.
+type RankingStatuses = BTreeMap<String, Option<String>>;
 
-type AggregateOscillation<'a> = (
-    &'a AggregateSample,
-    &'a AggregateSample,
-    &'a AggregateSample,
-);
-
-impl AggregateRing {
-    fn push(&mut self, sample: AggregateSample) {
-        self.samples.push_back(sample);
+impl<P> FlipRing<P> {
+    /// Records `value` unless it repeats the last sample, and reports whether
+    /// it did. `payload` is built only for a recorded sample.
+    fn push(&mut self, at_ms: u64, value: Option<String>, payload: impl FnOnce() -> P) -> bool {
+        if self.samples.back().is_some_and(|last| last.value == value) {
+            return false;
+        }
+        self.samples.push_back(FlipSample {
+            at_ms,
+            value,
+            payload: payload(),
+        });
         while self.samples.len() > 3 {
             self.samples.pop_front();
         }
+        true
     }
 
     /// A→B→A over the last three distinct samples, bounded by how long the
-    /// figure was away from A. A's own age is not bounded: a figure stable for
+    /// value was away from A. A's own age is not bounded: a value stable for
     /// an hour that blinks away and returns is the same flip as a fresh one.
-    fn oscillation(&self, window_ms: u64) -> Option<AggregateOscillation<'_>> {
+    fn oscillation(&self, window_ms: u64) -> Option<Flip<'_, P>> {
         if self.samples.len() != 3 {
             return None;
         }
@@ -742,7 +701,7 @@ impl AggregateRing {
         if back.at_ms.saturating_sub(via.at_ms) > window_ms {
             return None;
         }
-        match (&from.committed, &via.committed, &back.committed) {
+        match (&from.value, &via.value, &back.value) {
             (Some(from), via, Some(back))
                 if from == back && via.as_deref() != Some(from.as_str()) =>
             {
@@ -751,6 +710,14 @@ impl AggregateRing {
             _ => None,
         }
     }
+}
+
+fn ranking_statuses(sig: &FrameSig, group_key: &str) -> RankingStatuses {
+    sig.rows
+        .iter()
+        .filter(|row| row.group_key == group_key)
+        .map(|row| (row.row_id.clone(), row.attention_status.clone()))
+        .collect()
 }
 
 fn value_label(value: &Option<String>) -> String {
