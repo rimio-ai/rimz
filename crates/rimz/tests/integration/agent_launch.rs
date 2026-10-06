@@ -3410,6 +3410,12 @@ fn worktree_launch_reuses_an_existing_tree_despite_a_live_lane() {
 }
 
 #[cfg(unix)]
+#[test]
+fn team_worktree_launch_refuses_a_live_lane_name() {
+    assert_worktree_launch_lane_admission(&["teams", "solo", "-w", "demo"], "demo", false);
+}
+
+#[cfg(unix)]
 fn assert_worktree_launch_lane_admission(args: &[&str], lane: &str, reuse: bool) {
     let env = Env::new();
     if !init_launch_repo(&env.project_root) {
@@ -3422,6 +3428,20 @@ fn assert_worktree_launch_lane_admission(args: &[&str], lane: &str, reuse: bool)
         "[agents]\nisolation = 'host'\n",
     )
     .unwrap();
+    crate::common::write_definition(
+        &env,
+        "agents",
+        "worker",
+        "description: Worker\nagent: claude\ntools: []",
+        "",
+    );
+    crate::common::write_definition(
+        &env,
+        "teams",
+        "solo",
+        "layout: lead\nleader: lead\nstages: [Build]\nroles:\n  - {role: lead, agent: worker, owns: [Build]}",
+        "Complete the work.",
+    );
     if reuse {
         env.rimz()
             .args(["worktree", "new", lane])
