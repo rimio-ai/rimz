@@ -1120,16 +1120,19 @@ fn fold_lifecycle(
         state.user_turn_started_at = Some(timestamp);
     }
     // A run of keepalive-only turns keeps the last real request it followed.
-    if resets_context {
+    // Any other prompt ends the run even when it resumes a parked row; a ping
+    // on a parked row leaves `turn_started_at` alone, so it opens no run.
+    let turn_started = matches!(signal, lifecycle::LifecycleSignal::TurnStarted { .. });
+    let keepalive_turn =
+        turn_started && prompt.is_some_and(crate::store::message::prompt_is_keepalive_only);
+    if resets_context || ((opened_turn || turn_started) && !keepalive_turn) {
         state.keepalive_since = None;
     } else if opened_turn {
-        state.keepalive_since = (matches!(signal, lifecycle::LifecycleSignal::TurnStarted { .. })
-            && prompt.is_some_and(crate::store::message::prompt_is_keepalive_only))
-        .then(|| {
+        state.keepalive_since = Some(
             prior
                 .and_then(|prior| prior.keepalive_since.or(prior.last_request_at()))
-                .unwrap_or(timestamp)
-        });
+                .unwrap_or(timestamp),
+        );
     }
     state.waiting_since = if matches!(&signal, lifecycle::LifecycleSignal::AwaitingInput { .. }) {
         Some(timestamp)
