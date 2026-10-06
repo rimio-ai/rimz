@@ -128,6 +128,9 @@ enum TimerSubcmd {
 struct AddArgs {
     /// Task name (letters, digits, `-`, `_`).
     name: String,
+    /// Short description, one line of 1–60 characters after trimming.
+    #[arg(long, value_name = "TEXT", allow_hyphen_values = true, value_parser = super::parse_task_label)]
+    label: Option<String>,
     /// Kind, profile, or virtual cell; with --stay, an ordinary agent layout.
     #[arg(
         long,

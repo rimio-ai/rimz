@@ -21,6 +21,8 @@ pub(super) struct WakeRow {
     target: String,
     trigger: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     dir: Option<String>,
     elapsed: Option<String>,
     elapsed_s: Option<u64>,
@@ -137,7 +139,7 @@ fn row(
         .map(|dir| super::super::render::home_relative(&dir.to_string_lossy()));
     let mut trigger = match &parsed.trigger {
         Trigger::Watch(spec) => {
-            let trigger = spec.subject();
+            let trigger = entry.label.clone().unwrap_or_else(|| spec.subject());
             match dir.as_deref() {
                 Some(dir) => format!("{trigger} · in {dir}"),
                 None => trigger,
@@ -164,6 +166,7 @@ fn row(
         state,
         target: target.handle.clone(),
         trigger,
+        label: entry.label.clone(),
         dir,
         elapsed: meta.map(|meta| super::super::render::age_short(meta.armed_at, now)),
         elapsed_s: meta.map(|meta| now.duration_since(meta.armed_at).as_secs().max(0) as u64),

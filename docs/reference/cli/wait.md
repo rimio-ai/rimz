@@ -26,6 +26,7 @@ Give exactly one trigger: `--in`, `--pid`, `--check`, `--file`, or `--run`. With
 
 | Flag | Applies to | Meaning |
 | --- | --- | --- |
+| `--label <TEXT>` | all triggers | Short description of 1 to 60 characters after trimming, on one line. |
 | `--in <DURATION>` | timer | Fire once after this delay. Greater than zero and less than `24h`. |
 | `--pid <PID>` | process | Fire once this existing process is gone. `1` to `2147483647`. |
 | `--run <COMMAND>` | command | Run the command in a detached watcher and fire on its exit. |
@@ -53,13 +54,14 @@ wait-solid-pixel  watch  watching  @coder  0s       30m      cargo test
 
 The trigger text in the receipt is `in <DURATION>`, `pid <PID>`, `watch: <command>`, `check: <command>` (with ` every <DURATION>` for a non-default interval and ` on fail` for failure polarity), or `file: <absolute path>` (with ` grep: <pattern>` when supplied). Watch receipt headers end with `(timeout <DURATION>)` when a check-in limit is recorded; timers, and watches armed without one under cache keepalive, have no suffix. `--json` prints `{"name", "trigger", "target", "pending"}`, where `trigger` carries the prefixed header text and `pending` is the array [`rimz wait list --json`](#list-pending-waits) prints, with separate types and bare trigger subjects.
 
-Arming is refused, exit 1, in these cases:
+Arming is refused, exit 1, in these cases (an invalid `--label` exits 2 during argument parsing):
 
 | Error | Cause |
 | --- | --- |
 | `choose exactly one wait trigger: --in, --pid, --check, --file, or --run` | Arming flags without a trigger, or more than one trigger. |
 | `--check needs a command` | An empty or whitespace-only check. |
 | `--run needs a command` | An empty or whitespace-only watched command. |
+| `label must be one line of 1–60 characters` | An empty label after trimming, more than 60 characters, or a line break. |
 | `--file needs a path` | An empty file path. |
 | `--grep requires --file` | A pattern without a file trigger. |
 | `--grep needs a pattern` | An empty pattern. |
@@ -193,9 +195,9 @@ A sleeping agent still takes messages: a normal message starts a turn and leaves
 | `TARGET` | The target agent's handle. |
 | `ELAPSED` | Time since the self wait was armed, including lost watches; `-` for signal and loop clock rows. |
 | `TIMEOUT` | Requested delay for a timer; check-in limit for a watch, `-` when it recorded none; `-` for signal and loop clock rows. Timer firing rounds up to the minute, so elapsed time can reach the requested delay before firing. |
-| `TRIGGER` | `once at HH:MM` for a timer, `<PID>`, `<command>[ every <DURATION>][ on fail]`, `<path>[ grep: <pattern>]`, a loop schedule such as `every day at 09:00`, or `on <selector> [k=v]`. A watch row armed from a linked worktree adds `· in <dir>`. A paused row ends with `· resumes in <DURATION>`. |
+| `TRIGGER` | `once at HH:MM` for a timer, `<PID>`, `<command>[ every <DURATION>][ on fail]`, `<path>[ grep: <pattern>]`, a loop schedule such as `every day at 09:00`, or `on <selector> [k=v]`. A labelled watch uses its label instead of the subject. A watch row armed from a linked worktree adds `· in <dir>`. A paused row ends with `· resumes in <DURATION>`. |
 
-`--json` prints an array with keys in order: `name`, `type`, `state`, `target`, `trigger`, optional `dir`, `elapsed`, `elapsed_s`, `timeout`, `timeout_s`, and optional `watcher_pid`. Elapsed and timeout values are labels plus integer seconds, always present and `null` when not applicable. `watcher_pid` appears only while a live watcher holds the row's lock. There is no `age` field. `dir` appears only when the row recorded a linked worktree, as a home-relative path; timers and signal rows record it too, though only commands and checks run there.
+`--json` prints an array with keys in order: `name`, `type`, `state`, `target`, `trigger`, optional `label`, optional `dir`, `elapsed`, `elapsed_s`, `timeout`, `timeout_s`, and optional `watcher_pid`. Elapsed and timeout values are labels plus integer seconds, always present and `null` when not applicable. `watcher_pid` appears only while a live watcher holds the row's lock. There is no `age` field. `dir` appears only when the row recorded a linked worktree, as a home-relative path; timers and signal rows record it too, though only commands and checks run there.
 
 ## Cancel a wait
 
@@ -205,7 +207,7 @@ Cancel removes each row, then sends SIGTERM to its watcher's process group, whic
 
 ## What a wait writes on your machine
 
-A wait is one row in `~/.rimz/ws/<workspace-dir>/records/loop-instances.json`; it never touches `loop.toml` or project config. Its `watch` is a command string, `{pid}`, `{check, every, on}`, or `{file, grep?, mark?}`. The file mark records size, modification time, device, and inode; an absent mark means the file was absent at arm time. Every watcher runs in its own process group and holds `locks/loop-watch-<name>.lock` in the workspace runtime directory.
+A wait is one row in `~/.rimz/ws/<workspace-dir>/records/loop-instances.json`; it never touches `loop.toml` or project config. Its optional `label` stores the trimmed description. Its `watch` is a command string, `{pid}`, `{check, every, on}`, or `{file, grep?, mark?}`. The file mark records size, modification time, device, and inode; an absent mark means the file was absent at arm time. Every watcher runs in its own process group and holds `locks/loop-watch-<name>.lock` in the workspace runtime directory.
 
 The row retires when the timer fires, the watch reaches its final outcome, the wait is canceled, or the target session ends, is lost, or is stopped. A check-in does not retire it. If a watcher dies without reporting, the room's elder notices the missing lock after a 30-second grace and delivers the `watcher died` verdict. `rimz gc` removes rows left behind.
 

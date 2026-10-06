@@ -209,6 +209,7 @@ fn binding_spec(
     arm::validate_self_signal(&selector, &matches, target)?;
     Ok(DeliverySpec {
         name: DeliveryName::Named(name),
+        label: None,
         target: target.clone(),
         trigger: DeliveryTrigger::Signal {
             selector,

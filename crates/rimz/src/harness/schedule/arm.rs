@@ -98,6 +98,7 @@ pub struct DeliverySurplus {
 
 pub struct DeliverySpec {
     pub name: DeliveryName,
+    pub label: Option<String>,
     pub target: TaskTarget,
     pub trigger: DeliveryTrigger,
     pub prompt: DeliveryPrompt,
@@ -519,6 +520,7 @@ fn build_entry(
         ));
     }
     let mut entry = TaskEntry {
+        label: spec.label,
         wait: Some(spec.target),
         root: workspace.project_root.clone(),
         dir: (workspace.worktree_root != workspace.project_root)

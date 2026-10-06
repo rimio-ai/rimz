@@ -1208,6 +1208,9 @@ fn write_show_facts(
             }
         }
     }
+    if let Some(label) = entry.label.as_deref() {
+        kv.push("label", ui::cell(label));
+    }
     if let Some(verify) = entry.verify.as_deref() {
         kv.push(
             "verify",

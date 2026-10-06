@@ -118,12 +118,13 @@ Scope is the checkout where the task was added, or `--root <worktree path>`. Fro
 
 The receipt adds `trigger: when <expression>, for <duration>`, `scope: <checkout>`, and `now: waiting · team.stage: Review, ci: unknown` (or `holding 0s/30m` when already true); a window term reads as `now: waiting · window.5h.left: 8`. Without a room, a CI or PR condition also prints `ci and pr readings come from the room's sidebar; the loop timer alone never sees them`.
 
-`--wait --when` pins the live session like other waits. A live subscription with the same target session, canonical expression, hold, project root, and scoped checkout prints `already subscribed as <name>` without rewriting it, even if its prompt or `--once` differs. Identical conditions on different worktrees remain separate waits.
+`--wait --when` pins the live session like other waits. A live subscription with the same target session, canonical expression, hold, project root, and scoped checkout prints `already subscribed as <name>` without rewriting it, even if its prompt, label, or `--once` differs. Identical conditions on different worktrees remain separate waits.
 
 ### Flags
 
 | Flag | Applies to | Meaning |
 | --- | --- | --- |
+| `--label <TEXT>` | all | Short description of 1 to 60 characters after trimming, on one line. Stored as `label`; `loop show` prints it beside the command. |
 | `--stay` | `--agent` | Open a resident layout in a background tab, once per checkout. |
 | `--each-worktree` | `--stay --when` | Evaluate and launch separately per RimZ-owned worktree. |
 | `--subscribe <SIGNAL>` | `--stay` | Arm a standing subscription for the prompt leader at registration; repeatable. |
@@ -238,7 +239,7 @@ Signals come from `rimz events emit`, forge state changes on watched checkouts, 
 
 Firing runs in the emitting process, with no queue. A signal reaches only the tasks subscribed at that moment, and nothing replays it later. A disabled or paused task, or a project task whose project is untrusted, skips the signal.
 
-`--signal --wait` with the same target session, selector, matches, and root as a live subscription prints `already subscribed as <name>` and writes nothing, even when the prompt or `--once` differ.
+`--signal --wait` with the same target session, selector, matches, and root as a live subscription prints `already subscribed as <name>` and writes nothing, even when the prompt, label, or `--once` differ.
 
 A signal delivered to a running agent (`--wait`) opens with a subject line and a verdict line carrying the task name, then the task's `--prompt`:
 

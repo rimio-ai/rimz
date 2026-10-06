@@ -255,6 +255,7 @@ fn add_delivery(
         workspace,
         DeliverySpec {
             name: DeliveryName::Named(args.name.parse()?),
+            label: args.label.clone(),
             target,
             trigger,
             prompt,
@@ -696,6 +697,7 @@ fn build_task_entry(
     }
     let uses_check_timeout = args.check.is_some();
     let mut entry = TaskEntry {
+        label: args.label.clone(),
         stay: args.stay,
         each_worktree: args.each_worktree,
         takeover: args.takeover,

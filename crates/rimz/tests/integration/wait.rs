@@ -11,6 +11,149 @@ use rimz::store::message::{DeliveryGate, HarnessNotice, MessageRecord, MessageSe
 use rimz::store::writer::AgentLifecycleIntent;
 
 #[test]
+fn wait_labels_persist_for_every_trigger_and_replace_watch_previews() {
+    let env = Env::new();
+    register_calling_agent(&env);
+    let pid = std::process::id().to_string();
+    let unicode_label = "é".repeat(60);
+    for (trigger, subject, label) in [
+        ("--in", "5m", unicode_label.as_str()),
+        ("--pid", pid.as_str(), "process"),
+        ("--check", "false", "check"),
+        ("--file", "pending.log", "file"),
+        ("--run", "exec sleep 300", "run"),
+    ] {
+        let padded = format!("  {label}  ");
+        let receipt: serde_json::Value = serde_json::from_str(&wait_ok(
+            &env,
+            &["wait", trigger, subject, "--label", &padded, "--json"],
+        ))
+        .unwrap();
+        let name = receipt["name"].as_str().unwrap();
+        let tasks = serde_json::to_value(wait_instances(&env)).unwrap();
+        assert_eq!(
+            tasks[name]["label"], label,
+            "label must survive the instance write"
+        );
+        let rows: serde_json::Value =
+            serde_json::from_str(&wait_ok(&env, &["wait", "list", "--json"])).unwrap();
+        let row = rows
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["name"] == name)
+            .unwrap();
+        assert_eq!(row["label"], label);
+        if trigger != "--in" {
+            assert_eq!(row["trigger"], label);
+            let text = wait_ok(&env, &["wait", "list"]);
+            assert!(text.contains(label), "{text}");
+            if trigger == "--run" {
+                assert!(!text.contains(subject), "{text}");
+            }
+        }
+        let shown = wait_ok(&env, &["loop", "show", name]);
+        assert!(
+            shown
+                .lines()
+                .any(|line| line.trim_start().starts_with("label:") && line.contains(label)),
+            "{shown}"
+        );
+        wait_ok(&env, &["wait", "cancel", name]);
+    }
+    let receipt: serde_json::Value =
+        serde_json::from_str(&wait_ok(&env, &["wait", "--in", "5m", "--json"])).unwrap();
+    assert!(receipt["pending"][0].get("label").is_none());
+    let tasks = serde_json::to_value(wait_instances(&env)).unwrap();
+    assert!(
+        tasks[receipt["name"].as_str().unwrap()]
+            .get("label")
+            .is_none()
+    );
+}
+
+#[test]
+fn wait_and_loop_labels_refuse_invalid_text_before_writing() {
+    let env = Env::new();
+    for label in [
+        String::new(),
+        "   ".into(),
+        "x".repeat(61),
+        "é".repeat(61),
+        "two\nlines".into(),
+        "line\rreturn".into(),
+        "end\n".into(),
+    ] {
+        for args in [
+            vec!["wait", "--in", "5m", "--label", &label],
+            vec![
+                "loop", "add", "labelled", "--every", "1h", "--check", "true", "--label", &label,
+            ],
+        ] {
+            let output = env.rimz().args(args).output().unwrap();
+            let error = String::from_utf8_lossy(&output.stderr);
+            assert!(!output.status.success(), "invalid label accepted");
+            assert!(
+                error.contains("label must be one line of 1–60 characters"),
+                "{error}"
+            );
+            assert!(!loop_instances_path(&env).exists());
+            assert!(!env.rimz_home().join("loop.toml").exists());
+        }
+    }
+}
+
+#[test]
+fn loop_labels_persist_in_machine_project_and_delivery_tasks() {
+    let env = Env::new();
+    register_calling_agent(&env);
+    for (name, extra) in [
+        ("machine", vec![]),
+        ("project", vec!["--project"]),
+        ("delivery", vec!["--wait"]),
+    ] {
+        let mut args = vec![
+            "loop",
+            "add",
+            name,
+            "--every",
+            "1h",
+            "--check",
+            "true",
+            "--label",
+            "  gate docs  ",
+        ];
+        args.extend(extra);
+        wait_ok(&env, &args);
+        let text = match name {
+            "machine" => std::fs::read_to_string(env.rimz_home().join("loop.toml")).unwrap(),
+            "project" => {
+                std::fs::read_to_string(env.project_root.join(".rimz/config.toml")).unwrap()
+            }
+            _ => std::fs::read_to_string(loop_instances_path(&env)).unwrap(),
+        };
+        let value: serde_json::Value = if name == "delivery" {
+            serde_json::from_str(&text).unwrap()
+        } else {
+            serde_json::to_value(toml::from_str::<toml::Value>(&text).unwrap()).unwrap()
+        };
+        let task = if name == "delivery" {
+            &value[name]
+        } else {
+            &value["tasks"][name]
+        };
+        assert_eq!(task["label"], "gate docs");
+        let shown = wait_ok(&env, &["loop", "show", name]);
+        assert!(
+            shown
+                .lines()
+                .any(|line| line.trim_start().starts_with("label:") && line.contains("gate docs")),
+            "{shown}"
+        );
+    }
+}
+
+#[test]
 fn wait_run_preserves_shell_string_and_runs_both_commands() {
     let env = Env::new();
     env.install_agent_hooks("claude");
