@@ -28,6 +28,178 @@ fn failed(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()
 }
 
+fn room_accounts(env: &Env, args: &[&str]) -> Output {
+    let workspace = env.resolve_workspace(&env.project_root);
+    hermetic(env, &mut env.rimz())
+        .envs(rimz::workspace::pin_env(
+            &workspace.workspace_id,
+            &workspace.project_root,
+        ))
+        .arg("accounts")
+        .args(args)
+        .output()
+        .unwrap()
+}
+
+fn trust_codex_account(env: &Env, name: &str) {
+    crate::common::trust_codex_hooks(env);
+    let native = env.agent_config_path("codex");
+    let config = env
+        .rimz_home()
+        .join(format!("accounts/codex/{name}/config.toml"));
+    let mut table: toml::Table = std::fs::read_to_string(&config).unwrap().parse().unwrap();
+    let state = table["hooks"]["state"].as_table_mut().unwrap();
+    let prefix = format!("{}:", native.display());
+    let account_state = state
+        .iter()
+        .filter_map(|(key, value)| {
+            let event = key.strip_prefix(prefix.as_str())?;
+            Some((format!("{}:{event}", config.display()), value.clone()))
+        })
+        .collect::<Vec<_>>();
+    state.extend(account_state);
+    std::fs::write(&config, toml::to_string(&table).unwrap()).unwrap();
+}
+
+#[test]
+fn room_account_reset_restores_the_machine_selection_once() {
+    let env = Env::new();
+    succeeded(&accounts(&env, &["add", "codex", "work"]));
+    trust_codex_account(&env, "work");
+    succeeded(&accounts(&env, &["add", "claude", "team"]));
+    succeeded(&accounts(&env, &["use", "--global", "codex", "work"]));
+    env.record(&env.project_root);
+    succeeded(&room_accounts(&env, &["use", "codex", "default"]));
+    succeeded(&room_accounts(&env, &["use", "claude", "team"]));
+    env.store()
+        .begin_agent_launch_batch(
+            &[rimz::store::writer::AgentLaunchRequest {
+                kind: rimz::ids::AgentKind::new_unchecked("codex"),
+                login: rimz::store::writer::LaunchLogin::RoomDefault,
+                agent_id: rimz::ids::AgentSessionId::from("reset-runner"),
+                name: rimz::store::writer::AgentLaunchName::Explicit("runner".to_owned()),
+                launch: rimz::agents::LaunchParams::default(),
+                run_id: None,
+                prompt: None,
+            }],
+            rimz::store::writer::AgentLaunchScope {
+                session_name: env.resolve_workspace(&env.project_root).session_name,
+                cwd: env.project_root.clone(),
+                branch: None,
+                description: None,
+            },
+        )
+        .unwrap();
+    let config = env.rimz_home().join("config.toml");
+    let before = std::fs::read(&config).unwrap();
+    let reset = succeeded(&room_accounts(&env, &["use", "--reset", "codex"]));
+    assert_eq!(
+        reset.trim(),
+        "this room now launches codex on account `work` (machine default); 1 running codex agent(s) keep `default` until they end"
+    );
+    let record = rimz::workspace::record::read(&env.store().paths().workspace_record).unwrap();
+    assert_eq!(
+        serde_json::to_value(record.logins).unwrap(),
+        json!({"codex": "work", "claude": "team"})
+    );
+    assert_eq!(
+        succeeded(&room_accounts(&env, &["use", "--reset", "codex"])).trim(),
+        "this room already launches codex on `work` (machine default)"
+    );
+    assert_eq!(std::fs::read(&config).unwrap(), before);
+    succeeded(&accounts(&env, &["use", "--global", "codex", "default"]));
+    let record = rimz::workspace::record::read(&env.store().paths().workspace_record).unwrap();
+    assert_eq!(
+        record.logins.unwrap()[&rimz::ids::AgentKind::new_unchecked("codex")].as_str(),
+        "work",
+        "reset copied the selection, not inheritance"
+    );
+    let reset = succeeded(&room_accounts(&env, &["use", "--reset", "codex"]));
+    assert!(
+        reset.contains("on account `default` (provider default)"),
+        "{reset}"
+    );
+}
+
+#[test]
+fn room_account_reset_uses_project_trust_and_never_writes_on_refusal() {
+    let env = Env::new();
+    succeeded(&accounts(&env, &["add", "codex", "work"]));
+    trust_codex_account(&env, "work");
+    env.record(&env.project_root);
+    succeeded(&room_accounts(&env, &["use", "codex", "default"]));
+    let project_config = env.project_root.join(".rimz/config.toml");
+    std::fs::create_dir_all(project_config.parent().unwrap()).unwrap();
+    std::fs::write(&project_config, "[accounts]\ncodex = \"work\"\n").unwrap();
+    let path = env.store().paths().workspace_record.clone();
+    let before = std::fs::read(&path).unwrap();
+    let error = failed(&room_accounts(&env, &["use", "--reset", "codex"]));
+    assert!(
+        error.contains("project account selections in .rimz/config.toml are untrusted")
+            && error.contains("rimz trust grant"),
+        "{error}"
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+    succeeded(&env.rimz().args(["trust", "grant"]).output().unwrap());
+    let reset = succeeded(&room_accounts(&env, &["use", "--reset", "codex"]));
+    assert!(
+        reset.contains("on account `work` (project default)"),
+        "{reset}"
+    );
+    let before = std::fs::read(&path).unwrap();
+    std::fs::write(&project_config, "[accounts]\ncodex = \"default\"\n").unwrap();
+    let error = failed(&room_accounts(&env, &["use", "--reset", "codex"]));
+    assert!(
+        error.contains("stale") && error.contains("rimz trust grant"),
+        "{error}"
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+}
+
+#[test]
+fn room_account_reset_refuses_a_missing_home_without_writing() {
+    let env = Env::new();
+    let home = env.home_root.join("missing-home");
+    succeeded(&accounts(
+        &env,
+        &["add", "codex", "work", "--home", home.to_str().unwrap()],
+    ));
+    succeeded(&accounts(&env, &["use", "--global", "codex", "work"]));
+    env.record(&env.project_root);
+    succeeded(&room_accounts(&env, &["use", "codex", "default"]));
+    std::fs::remove_dir_all(home).unwrap();
+    let path = env.store().paths().workspace_record.clone();
+    let before = std::fs::read(&path).unwrap();
+    let error = failed(&room_accounts(&env, &["use", "--reset", "codex"]));
+    assert!(
+        error.contains("is not a directory; run `rimz accounts add codex work`"),
+        "{error}"
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+}
+
+#[test]
+fn room_account_reset_refuses_outside_a_room() {
+    let env = Env::new();
+    let error = failed(&accounts(&env, &["use", "--reset", "codex"]));
+    assert!(error.contains("`rimz accounts use` changes the running room it is run inside; run it inside one, or pass --global to set the machine default for new rooms"), "{error}");
+}
+
+#[test]
+fn room_account_reset_refuses_unreadable_core_without_writing() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let path = env.store().paths().workspace_record.clone();
+    let before = std::fs::read(&path).unwrap();
+    std::fs::write(env.rimz_home().join("config.toml"), "[accounts.use\n").unwrap();
+    let error = failed(&room_accounts(&env, &["use", "--reset", "codex"]));
+    assert!(
+        error.contains("cannot reset this room's account") && error.contains("rimz config get"),
+        "{error}"
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+}
+
 #[test]
 fn room_account_switch_changes_only_the_room_default() {
     let env = Env::new();

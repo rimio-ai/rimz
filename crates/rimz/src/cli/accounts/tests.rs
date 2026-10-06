@@ -8,6 +8,20 @@ struct AccountsHarness {
 }
 
 #[test]
+fn use_reset_takes_only_a_kind() {
+    let parsed = AccountsHarness::try_parse_from(["accounts", "use", "--reset", "codex"]);
+    assert!(parsed.is_ok(), "{parsed:?}");
+    for argv in [
+        vec!["accounts", "use", "--reset", "codex", "work"],
+        vec!["accounts", "use", "--reset", "--global", "codex"],
+        vec!["accounts", "use", "codex"],
+        vec!["accounts", "use", "--reset"],
+    ] {
+        assert!(AccountsHarness::try_parse_from(&argv).is_err(), "{argv:?}");
+    }
+}
+
+#[test]
 fn use_targets_the_room_unless_global() {
     for (argv, room) in [
         (vec!["accounts", "use", "codex", "work"], true),

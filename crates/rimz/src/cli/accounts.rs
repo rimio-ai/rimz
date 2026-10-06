@@ -40,10 +40,14 @@ enum AccountsSubcmd {
         /// Set the machine default for new rooms instead of this room's.
         #[arg(long)]
         global: bool,
+        /// Return this room's account for the kind to the one a new room here would get.
+        #[arg(long, conflicts_with_all = ["name", "global"])]
+        reset: bool,
         /// Provider kind: claude or codex.
         kind: String,
         /// Declared account name, or `default` for the provider's own home.
-        name: LoginName,
+        #[arg(required_unless_present = "reset")]
+        name: Option<LoginName>,
     },
     /// Declare a named account, create its home, and install RimZ hooks there.
     ///
@@ -87,11 +91,14 @@ pub fn run(args: AccountsArgs, globals: &GlobalFlags) -> Result<()> {
         } => add(&account_kind(&kind)?, name, home, history),
         AccountsSubcmd::List { json } => list(globals, json),
         AccountsSubcmd::Remove { kind, name } => remove(&account_kind(&kind)?, &name),
-        AccountsSubcmd::Use { kind, name, global } => {
+        AccountsSubcmd::Use {
+            kind, name, global, ..
+        } => {
             if global {
-                use_account(&kind, &name)
+                // Clap requires a name unless --reset, which conflicts with --global.
+                use_account(&kind, &name.expect("a global selection has a name"))
             } else {
-                use_room_account(globals, &account_kind(&kind)?, &name)
+                use_room_account(globals, &account_kind(&kind)?, name.as_ref())
             }
         }
     }
@@ -243,7 +250,11 @@ fn lexical_home(login: &ProviderLogin) -> Option<PathBuf> {
     login.home().map(normalize_path_lexical)
 }
 
-fn use_room_account(globals: &GlobalFlags, kind: &AgentKind, name: &LoginName) -> Result<()> {
+fn use_room_account(
+    globals: &GlobalFlags,
+    kind: &AgentKind,
+    name: Option<&LoginName>,
+) -> Result<()> {
     let root = super::pinned_room_root().context(
         "`rimz accounts use` changes the running room it is run inside; run it inside one, or pass --global to set the machine default for new rooms",
     )?;
@@ -256,17 +267,34 @@ fn use_room_account(globals: &GlobalFlags, kind: &AgentKind, name: &LoginName) -
             override_root.display()
         );
     }
-    let ctx = super::ctx::Ctx::open(globals)?;
-    let machine = MachineConfig::load()?;
-    let login = LoginCatalog::from_config(&machine.accounts)?.select(kind, name)?;
+    let workspace =
+        rimz::workspace::WorkspaceResolver::resolve_participant(".", globals.root.clone())
+            .context("resolving current workspace")?;
+    let machine = if name.is_some() {
+        std::sync::Arc::new(MachineConfig::load()?)
+    } else {
+        MachineConfig::load_lenient()
+    };
+    let (name, layer) = match name {
+        Some(name) => (name.clone(), None),
+        None => {
+            let (name, layer) =
+                rimz::room::reset_login_selection(&workspace.project_root, &machine, kind)?;
+            (name, Some(layer))
+        }
+    };
+    let login = LoginCatalog::from_config(&machine.accounts)?.select(kind, &name)?;
     login.preflight(&rimz::agents::ambient_env())?;
-    let snapshot = ctx.cached_snapshot()?;
-    let prior = ctx.store.switch_room_login(&ctx.workspace, kind, name)?;
+    let store = super::open_existing_store(&workspace)?
+        .context("this room has no store; run `rimz start` first")?;
+    let snapshot = store.snapshot_cached().context("reading agent snapshot")?;
+    let prior = store.switch_room_login(&workspace, kind, &name)?;
+    let layer = layer.map(|layer| format!(" ({layer})")).unwrap_or_default();
     let mut out = render::out();
-    if prior == *name {
+    if prior == name {
         return render::finish(writeln!(
             out,
-            "this room already launches {kind} on `{name}`"
+            "this room already launches {kind} on `{name}`{layer}"
         ));
     }
     let count = snapshot
@@ -286,7 +314,7 @@ fn use_room_account(globals: &GlobalFlags, kind: &AgentKind, name: &LoginName) -
     };
     render::finish(writeln!(
         out,
-        "this room now launches {kind} on account `{name}`; {remaining}"
+        "this room now launches {kind} on account `{name}`{layer}; {remaining}"
     ))
 }
 
