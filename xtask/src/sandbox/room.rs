@@ -100,6 +100,9 @@ pub(super) fn run(workspace: &Path, args: &[String]) -> Result<()> {
     let stub = stub_dir.join("claude");
     std::fs::copy(assets.join("claude"), &stub).context("copying stub provider")?;
     std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755))?;
+    // A launch refuses a provider account whose home is missing or carries no RimZ hooks, and
+    // the sandbox `HOME` starts with neither for the stub provider.
+    room.rimz("stub provider hooks", &["hooks", "install", "claude"])?;
     let rimz_home = &sandbox.env["RIMZ_HOME"];
     for file in [
         "agents/claude.md",
