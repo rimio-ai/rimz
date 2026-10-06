@@ -67,7 +67,7 @@ rimz subagents list                  # inspect own children, or the user shell's
 rimz subagents stop --all            # from an agent: stop all its live children
 rimz message @coder "rebase first"   # park for the next turn boundary
 rimz message @coder --wait "did the migration land? one line" # ask and print the reply
-rimz message --steer @coder "stop"   # interrupt the live turn now
+rimz message --steer @coder "stop"   # type into the live turn now; it does not interrupt
 rimz message show msg_<id>           # why a message hasn't landed
 rimz asks --json                     # structured prompts that currently block agents
 rimz answer @coder 2                 # answer the current supported prompt in its native UI
