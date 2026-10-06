@@ -522,6 +522,52 @@ fn missing_probeable_versions_refresh_per_provider_on_retry_cadence() {
 }
 
 #[test]
+fn whitespace_only_reported_version_does_not_stop_the_version_reprobe() {
+    let snapshot_reporting = |version: &str| {
+        let mut state = root_agent("codex", "active", None);
+        let mut context = crate::agents::AgentContext::new("codex", Timestamp::now());
+        context.agent_version = Some(version.to_owned());
+        state.context = Some(context);
+        SidebarSnapshot::build_with_agents(
+            WorkspaceId::from_project_root(Path::new("/tmp/provider-version")),
+            vec![state],
+            Timestamp::now(),
+        )
+    };
+    let now_ms = unix_now_ms();
+    let mut cache = fresh_cache(now_ms);
+    cache.logins.insert(
+        key("codex"),
+        record(
+            now_ms.saturating_sub(ACCOUNTS_RETRY_TTL.as_millis() as u64 + 1),
+            true,
+            Some(AgentAccount {
+                plan: Some("Pro".to_owned()),
+                ..Default::default()
+            }),
+        ),
+    );
+    let due = |version: &str| {
+        due_provider_logins(
+            &cache,
+            &snapshot_reporting(version),
+            &native_logins(),
+            now_ms,
+        )
+        .contains(&key("codex"))
+    };
+
+    assert!(
+        due(" "),
+        "a blank reported version leaves the login without one, so it re-probes after the retry window"
+    );
+    assert!(
+        !due("0.160.10"),
+        "a session reporting a real version needs no version re-probe"
+    );
+}
+
+#[test]
 fn newest_version_wins_across_sessions_and_the_cached_account() {
     let session = |id: &str, version: &str, observed_secs: i64| {
         let mut state = root_agent("codex", id, None);
