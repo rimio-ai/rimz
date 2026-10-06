@@ -310,6 +310,20 @@ fn a_cross_account_resume_is_stopped_and_hook_checked_under_its_new_account() {
             extra_args: Vec::new(),
         };
         request.identity.params.login = Some(login_name.parse().unwrap());
+        let resumed_stamps = || {
+            env.store()
+                .read_events()
+                .unwrap()
+                .iter()
+                .filter(|event| {
+                    matches!(event.kind(), EventKind::AgentLifecycle(payload)
+                        if payload.event_name.as_deref() == Some("rimz.agent-resumed")
+                            && payload.observation.agent_id.as_ref()
+                                .is_some_and(|session| session.as_str() == SESSION))
+                })
+                .count()
+        };
+        let stamps_before = resumed_stamps();
         let child = rimz()
             .args(exec_args(&env, &request))
             .arg("--root")
@@ -322,15 +336,20 @@ fn a_cross_account_resume_is_stopped_and_hook_checked_under_its_new_account() {
             .stderr(std::process::Stdio::null())
             .spawn()
             .unwrap();
+        // The row is ready for a turn only once the wrapper's resume stamp
+        // has revived it: the stamp rests the row at Idle and is the last
+        // status write before the provider runs, so a turn opened ahead of
+        // it is undone. The attach carries the login the stamp does not.
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        while !env.store().read_events().unwrap().iter().any(|event| {
+        while !(env.store().read_events().unwrap().iter().any(|event| {
             matches!(event.kind(), EventKind::AgentAttach(attach)
                 if attach.runtime_owner.pid == child.id()
                     && attach.login.as_ref().is_some_and(|login| login.as_str() == login_name))
-        }) {
+        }) && resumed_stamps() > stamps_before)
+        {
             assert!(
                 std::time::Instant::now() < deadline,
-                "no attach under {login_name}"
+                "attach or resume stamp missing under {login_name}"
             );
             std::thread::sleep(std::time::Duration::from_millis(25));
         }
