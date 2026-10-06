@@ -174,18 +174,46 @@ fn wait_times_out_on_a_pending_board_and_settles_at_once_on_done() {
 fn wait_fails_when_the_cohort_ends_before_done() {
     let fixture = Fixture::new();
     let worktree = fixture.lane("a");
-    std::fs::write(worktree.join("blackboard.md"), "Stage: Build (@coder)\n").unwrap();
+    // The board is a FIFO, so a write to it returns only once the waiter opens it to read.
+    // The waiter reads its board after it selects the cohort, so the first write to return
+    // is the earliest point the members can end without the wait refusing a dead cohort.
+    let board = worktree.join("blackboard.md");
+    nix::unistd::mkfifo(&board, nix::sys::stat::Mode::S_IRWXU).expect("board fifo");
 
-    let child = fixture
+    let mut child = fixture
         .wait(&["forge#a", "--timeout", "20s"])
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
         .expect("spawn teams wait");
-    std::thread::sleep(std::time::Duration::from_secs(1));
-    fixture.end("coder-a");
-    fixture.end("reviewer-a");
-    let ended = child.wait_with_output().expect("teams wait exits");
+    let exited = std::sync::atomic::AtomicBool::new(false);
+    let (board_read, selected) = std::sync::mpsc::channel();
+    let (ended, _feeder_release) = std::thread::scope(|scope| {
+        scope.spawn(|| {
+            while !exited.load(std::sync::atomic::Ordering::SeqCst) {
+                let _ = std::fs::write(&board, "Stage: Build (@coder)\n");
+                let _ = board_read.send(());
+            }
+        });
+        // A waiter that exits before it reads the board fails the assertions below.
+        while selected
+            .recv_timeout(std::time::Duration::from_millis(50))
+            .is_err()
+            && child.try_wait().expect("poll teams wait").is_none()
+        {}
+        fixture.end("coder-a");
+        fixture.end("reviewer-a");
+        let ended = child.wait_with_output().expect("teams wait exits");
+        exited.store(true, std::sync::atomic::Ordering::SeqCst);
+        // A read-write open never blocks; held past the scope, it frees a feeder parked on
+        // a reader that will not come.
+        let release = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&board)
+            .expect("open board fifo");
+        (ended, release)
+    });
 
     assert_eq!(ended.status.code(), Some(1), "{}", text(&ended.stderr));
     assert!(ended.stdout.is_empty());
