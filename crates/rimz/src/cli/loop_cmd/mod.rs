@@ -70,8 +70,8 @@ pub struct LoopArgs {
 enum LoopSubcmd {
     /// Add or replace a task in the per-machine config.
     Add(Box<AddArgs>),
-    /// Remove a task from its store.
-    Remove(NameArgs),
+    /// Remove tasks from their stores.
+    Remove(NamesArgs),
     /// Rename a task in the store that owns it.
     Rename(RenameArgs),
     /// Pause a task for a bounded duration.
@@ -273,6 +273,14 @@ struct NameArgs {
 }
 
 #[derive(Debug, Args)]
+struct NamesArgs {
+    #[arg(required = true, num_args = 1.., value_name = "NAME", add = clap_complete::ArgValueCandidates::new(
+        crate::cli::complete::loop_tasks
+    ))]
+    names: Vec<String>,
+}
+
+#[derive(Debug, Args)]
 struct RunArgs {
     name: String,
     #[arg(long, hide = true)]
@@ -287,11 +295,13 @@ struct RunArgs {
 struct ScopeArgs {
     #[arg(
         required_unless_present = "all",
+        num_args = 1..,
+        value_name = "NAME",
         add = clap_complete::ArgValueCandidates::new(crate::cli::complete::loop_tasks)
     )]
-    name: Option<String>,
-    /// Apply to every task listed here: machine, state, and this project.
-    #[arg(long, conflicts_with = "name")]
+    names: Vec<String>,
+    /// Apply to all machine tasks and this project's state and project tasks.
+    #[arg(long, conflicts_with = "names")]
     all: bool,
 }
 
@@ -373,7 +383,10 @@ pub fn run(args: LoopArgs, globals: &GlobalFlags) -> Result<()> {
                 .into())
         }
         LoopSubcmd::Add(args) => add::add(*args, globals),
-        LoopSubcmd::Remove(args) => add::remove(&args.name, globals),
+        LoopSubcmd::Remove(args) => args
+            .names
+            .iter()
+            .try_for_each(|name| add::remove(name, globals)),
         LoopSubcmd::Rename(args) => add::rename(&args.name, &args.new_name, globals),
         LoopSubcmd::Pause(args) => add::pause(args, globals),
         LoopSubcmd::Enable(args) => add::enable(args, globals),

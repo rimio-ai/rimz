@@ -17,10 +17,10 @@ rimz loop fire watchdog
 | Command | What it does |
 | --- | --- |
 | `rimz loop add <NAME>` | Add a task, or replace the task of that name. |
-| `rimz loop remove <NAME>` | Delete a task from the store that owns it. Run history stays. |
+| `rimz loop remove <NAME>...` | Delete tasks from the stores that own them. Run history stays. |
 | `rimz loop rename <NAME> <NEW_NAME>` | Rename a task in its store. |
-| `rimz loop enable <NAME>\|--all` | Arm tasks on this machine and clear holds and strikes. |
-| `rimz loop disable <NAME>\|--all` | Hold tasks on this machine until enabled. |
+| `rimz loop enable <NAME>...\|--all` | Arm tasks on this machine and clear holds and strikes. |
+| `rimz loop disable <NAME>...\|--all` | Hold tasks on this machine until enabled. |
 | `rimz loop pause <NAME> --for <DUR>` | Hold a task for a bounded time. |
 | `rimz loop fire <NAME>` | Run a task now in the foreground. |
 | `rimz loop stop <NAME>` | Stop a task's active run and release its overlap lock, including a fired one-shot's run. |
@@ -404,7 +404,7 @@ After `--max-strikes` consecutive strikes (default `3`), the task disables itsel
 
 ## Enable, disable, and pause
 
-`loop enable <name>` arms a task on this machine and clears a disable, a pause, and its strike count. `loop disable <name>` holds it until the next enable. Both take `--all` instead of a name.
+`loop enable <name>...` arms tasks on this machine and clears disables, pauses, and strike counts. `loop disable <name>...` holds them until the next enable. Both resolve every name before changing any task: an unknown name refuses the command without changing any task. Both take `--all` instead of names, covering machine tasks plus the state and project tasks of the current project.
 
 `loop pause <name> --for <DUR>` holds a task for a bounded time (`s`, `m`, `h`, or `d`, greater than zero) and prints when it resumes. A disabled task refuses a pause; `disable` owns the indefinite hold.
 
@@ -492,7 +492,7 @@ Condition runs in `loop logs` include `when: <expression> · held <duration>` an
 
 `loop rename <name> <new-name>` moves the task to the new key in its store. The new name must differ and be free. A task with recorded resident launches cannot be renamed because its resident leaders retain the task name. Edit it with `loop add` under the same name, or remove and re-add under a new name (which relaunches its checkouts). A resident task without recorded launches can be renamed. The task re-arms, so an interval task next fires one interval after the rename.
 
-`loop remove <name>` deletes the task from its store and prints ``removed loop task `<name>` ``, or ``no loop task named `<name>` `` when none exists. Run history stays readable. For a project task, both commands print the [trust result](#project-tasks).
+`loop remove <name>...` deletes each task from its store and prints ``removed loop task `<name>` ``, or ``no loop task named `<name>` `` when none exists. Missing names do not stop later removals or cause a nonzero exit. Run history stays readable. For a project task, both commands print the [trust result](#project-tasks).
 
 ## Timer
 
