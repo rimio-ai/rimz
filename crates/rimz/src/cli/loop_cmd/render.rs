@@ -1580,38 +1580,13 @@ pub(super) fn run_status(record: &LoopRunRecord) -> RunStatusDisplay {
 }
 
 fn record_is_good(record: &LoopRunRecord) -> bool {
-    matches!(
-        record.result,
-        LoopRunResult::Completed | LoopRunResult::Delivered | LoopRunResult::Launched
-    ) || matches!(record.result, LoopRunResult::CheckSkipped)
-        && record
-            .check
-            .as_ref()
-            .is_some_and(|check| check.code == Some(0))
+    record.polarity() == Some(run_log::RunPolarity::Good)
 }
 
 fn verdict_line(records: &[LoopRunRecord], now: Timestamp) -> Option<(String, anstyle::Style)> {
-    let (newest_idx, healthy) = records.iter().enumerate().rev().find_map(|(idx, record)| {
-        if record_is_failure(record) {
-            Some((idx, false))
-        } else if record_is_good(record) {
-            Some((idx, true))
-        } else {
-            None
-        }
-    })?;
-    let bound = records[..newest_idx].iter().rposition(|record| {
-        if healthy {
-            record_is_failure(record)
-        } else {
-            record_is_good(record)
-        }
-    });
-    let count = records[bound.map_or(0, |idx| idx + 1)..=newest_idx]
-        .iter()
-        .filter(|record| record_is_failure(record) || record_is_good(record))
-        .count();
-    let newest = &records[newest_idx];
+    let acting = run_log::acting_run(records)?;
+    let healthy = acting.polarity == run_log::RunPolarity::Good;
+    let newest = &acting.record;
     let status = run_status(newest);
     let mut line = format!(
         "{} {} · last run {}, {}",
@@ -1623,14 +1598,14 @@ fn verdict_line(records: &[LoopRunRecord], now: Timestamp) -> Option<(String, an
     if let Some(took) = run_duration_label(newest) {
         line.push_str(&format!(" in {took}"));
     }
-    let since = bound.map(|idx| {
+    let since = acting.since.map(|at| {
         format!(
             " since a {} {}",
             if healthy { "failure" } else { "good run" },
-            ui::rel_age(records[idx].at, now)
+            ui::rel_age(at, now)
         )
     });
-    match (count, since) {
+    match (acting.streak, since) {
         (1, None) => {}
         (1, Some(since)) => line.push_str(&format!(" · first{since}")),
         (count, since) => {
@@ -1847,15 +1822,7 @@ fn record_has_detail(record: &LoopRunRecord) -> bool {
 }
 
 pub(super) fn record_is_failure(record: &LoopRunRecord) -> bool {
-    matches!(
-        record.result,
-        LoopRunResult::Errored
-            | LoopRunResult::StartFailed
-            | LoopRunResult::Failed
-            | LoopRunResult::VerifyFailed
-            | LoopRunResult::TimedOut
-            | LoopRunResult::BudgetExceeded
-    )
+    record.polarity() == Some(run_log::RunPolarity::Failure)
 }
 
 fn is_agent_run(record: &LoopRunRecord) -> bool {

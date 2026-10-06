@@ -486,7 +486,8 @@ path = "crates/rimz/src/harness"
 # `run::provider_startup_exit` shares the startup diagnostic predicate with the exec wrapper (+1).
 # Manual redemption shares its prepared preview and locked consume entry with the CLI (+3).
 # Rebirth pairs durable refill ends with a downward diag repair trace (an import, no surface).
-surface-budget = 721
+# Acting-run classification and folded history cross to the loop CLI (+5).
+surface-budget = 726
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -1297,6 +1298,16 @@ reason = "Reached by inference from the binary; narrowing is a private-interface
 kind = "item"
 key = "harness::schedule::run_log::TaskCostSummary"
 reason = "Reached by inference from the binary; narrowing is a private-interface lint."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::run_log::ActingRun"
+reason = "Returned by acting_run and carried by LoopRunStats across the loop CLI boundary."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::run_log::HeardSignal"
+reason = "Carried by LoopRunStats for the loop list model; narrowing breaks the public interface."
 
 [[verdict]]
 kind = "item"
