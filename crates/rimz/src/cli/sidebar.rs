@@ -1487,7 +1487,8 @@ fn resolve_sidebar_targets(
     let runtime = RuntimePaths::for_project_root(&workspace.project_root)
         .context("preparing runtime paths")?;
     runtime.ensure_dirs().context("preparing runtime paths")?;
-    let channel = current_channel(&workspace);
+    let existing_store = super::open_existing_store(&workspace).ok().flatten();
+    let channel = current_channel(&workspace, existing_store.as_ref());
     if let Ok(snapshot) =
         PublishedSnapshotReader::new(runtime.clone(), workspace.session_name.clone(), None)
             .read(&state)

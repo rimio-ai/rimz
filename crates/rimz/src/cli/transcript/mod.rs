@@ -409,7 +409,8 @@ fn chat_view_with_mode(
     all: bool,
     mode: ViewMode,
 ) -> Result<RenderedChat> {
-    let current = current_channel(workspace);
+    let store = crate::cli::open_existing_store(workspace).ok().flatten();
+    let current = current_channel(workspace, store.as_ref());
     let target = resolve_run_target(paths, target)?;
     let log = rimz::transcript::read_all(paths)?;
     let asked_ids = log
@@ -432,7 +433,6 @@ fn chat_view_with_mode(
         });
     }
     let identities = build_identities(&entries);
-    let store = crate::cli::open_store(workspace).ok();
     let live_agents = live_agents(store.as_ref());
     let live_root_keys = live_agents
         .iter()

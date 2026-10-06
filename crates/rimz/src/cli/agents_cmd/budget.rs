@@ -28,14 +28,9 @@ pub fn run_budget(args: BudgetArgs, globals: &GlobalFlags) -> Result<()> {
     let ctx = Ctx::open(globals)?;
     let (workspace, store) = (&ctx.workspace, &ctx.store);
     let snapshot = ctx.resolution_snapshot_with_context()?;
-    let current_channel = crate::cli::current_channel(workspace);
-    let agent = crate::cli::resolve_agent_one(
-        store,
-        &snapshot,
-        &args.reference,
-        None,
-        current_channel.as_deref(),
-    )?;
+    let current_channel = ctx.channel();
+    let agent =
+        crate::cli::resolve_agent_one(store, &snapshot, &args.reference, None, current_channel)?;
     let launched = agent
         .budget
         .as_deref()

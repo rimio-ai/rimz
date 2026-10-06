@@ -242,7 +242,12 @@ pub(super) fn list_channel_filter(
     worktree: Option<&str>,
     workspace: &rimz::ResolvedWorkspace,
 ) -> Option<String> {
-    list_channel_filter_for_current(all, worktree, crate::cli::current_channel(workspace))
+    let store = crate::cli::open_existing_store(workspace).ok().flatten();
+    list_channel_filter_for_current(
+        all,
+        worktree,
+        crate::cli::current_channel(workspace, store.as_ref()).into_name(),
+    )
 }
 
 fn list_channel_filter_for_current(

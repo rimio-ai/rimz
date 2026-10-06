@@ -31,7 +31,7 @@ A handle resolves through the shortest unique name for a running agent:
 
 The `@` sigil is required, so a stray word never reaches an agent: `rimz message coder "…"` fails with ``agent target `coder` must start with `@` (try `@coder`)`` rather than guessing. A raw pane id (`tmux:%1`, `zellij:terminal_3`) is the one address that needs no sigil. Handles are minted when an agent launches, and [the agents guide](./fleet.md) covers how kinds, profiles, and team roles become them.
 
-**Reach across channels with `#channel`.** `@codex` reaches the Codex in your current channel; `@codex#feat-a` reaches the one working the `feat-a` worktree from anywhere in the workspace. The flags `--channel <name>` and `--worktree <name>` are the same restriction in flag form, and conflict with each other.
+**Reach across channels with `#channel`.** `@codex` reaches the Codex in your current channel; `@codex#feat-a` reaches the one working the `feat-a` worktree from anywhere in the workspace. An agent keeps its card's channel even when it runs a command from the main checkout, so changing directory does not accidentally address another lane. The flags `--channel <name>` and `--worktree <name>` are the same restriction in flag form, and conflict with each other.
 
 ## Channels
 

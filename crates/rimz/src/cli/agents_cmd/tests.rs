@@ -34,6 +34,73 @@ fn logs_last_and_tail_are_aliases() {
 }
 
 #[test]
+fn create_from_worktree_channel_launches_in_place() {
+    let args = create_args_for_current_channel("/repo-worktrees/feat-x", None, None);
+    assert_eq!(args.launch.cohort.worktree, None);
+    assert_eq!(args.launch.cohort.channel, None);
+}
+
+#[test]
+fn create_from_main_checkout_derived_card_launches_in_place() {
+    let mut agent = rimz::testkit::agent_state("claude", "caller", Timestamp::UNIX_EPOCH);
+    agent.worktree_path = Some("/repo".to_owned());
+    let args = create_args_for_current_channel("/repo", None, Some(agent));
+    assert_eq!(args.launch.cohort.worktree, None);
+    assert_eq!(args.launch.cohort.channel, None);
+}
+
+#[test]
+fn create_from_named_channel_preserves_the_lane() {
+    let mut agent = rimz::testkit::agent_state("claude", "caller", Timestamp::UNIX_EPOCH);
+    agent.worktree_path = Some("/repo".to_owned());
+    agent.channel = Some("team-lane".to_owned());
+    let args = create_args_for_current_channel("/repo", None, Some(agent));
+    assert_eq!(args.launch.cohort.worktree, None);
+    assert_eq!(args.launch.cohort.channel.as_deref(), Some("team-lane"));
+    let args =
+        create_args_for_current_channel("/repo-worktrees/feat-x", Some("explicit-lane"), None);
+    assert_eq!(args.launch.cohort.worktree, None);
+    assert_eq!(args.launch.cohort.channel.as_deref(), Some("explicit-lane"));
+}
+
+fn create_args_for_current_channel(
+    worktree: &str,
+    explicit: Option<&str>,
+    agent: Option<rimz::agents::AgentState>,
+) -> AgentsArgs {
+    let root = PathBuf::from("/repo");
+    let workspace = rimz::ResolvedWorkspace {
+        workspace_id: WorkspaceId::from_project_root(&root),
+        project_root: root,
+        cwd_project_root: None,
+        root_class: rimz::workspace::RootClass::Repo,
+        worktree_root: PathBuf::from(worktree),
+        worktree_branch: None,
+        session_name: "test".to_owned(),
+        mux_hint: None,
+    };
+    let current = crate::cli::current_channel_with(&workspace, explicit.map(str::to_owned), || {
+        let agent = agent?;
+        let caller = rimz::harness::ancestry::CallerIdentity {
+            kind: agent.kind.clone(),
+            launch_id: Some(agent.agent_id.clone()),
+            pane_id: None,
+            name: None,
+            profile: None,
+            role: None,
+        };
+        Some((caller, vec![agent]))
+    });
+    let create = rimz::address::create_mention("@codex", None, current.as_deref())
+        .unwrap()
+        .unwrap();
+    let args = create_launch_args(create, "@codex", None, None, &current, "hi");
+    assert_eq!(args.launch.spec.as_deref(), Some("codex"));
+    assert_eq!(args.launch.prompt.as_deref(), Some("hi"));
+    args
+}
+
+#[test]
 fn tier_flag_is_separate_from_the_concrete_model_flag() {
     let parsed = AgentsHarness::try_parse_from(["agents", "claude", "--tier", "senior"]);
     assert!(parsed.is_ok(), "{parsed:?}");

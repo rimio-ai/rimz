@@ -328,7 +328,10 @@ fn channel_filter(
     match (worktree, all) {
         (Some(worktree), _) => Some(worktree.to_owned()),
         (None, true) => None,
-        (None, false) => crate::cli::current_channel(workspace),
+        (None, false) => {
+            let store = crate::cli::open_existing_store(workspace).ok().flatten();
+            crate::cli::current_channel(workspace, store.as_ref()).into_name()
+        }
     }
 }
 

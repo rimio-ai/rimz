@@ -40,7 +40,7 @@ These handles name a type and can match several agents:
 | `@planner` | Every agent launched under that [profile](../../guide/configuration.md#agent-profiles-commands-and-teams). |
 | `@all` | Every agent in the channel at resolution time. |
 
-A channel scopes the lookup. Without one, the channel is the `#name` tab or worktree you run the command in; a team member launched in place carries `RIMZ_CHANNEL=<dir>/<team>`, so its own commands default to that lane.
+A channel scopes the lookup. Without an explicit target channel, commands use non-empty `RIMZ_CHANNEL`, then the calling agent's card channel, then the current worktree. This also scopes an agent running from the main checkout: bare handles and default listings stay in its channel; use `#lane` to address another channel or `--all` to list the room. Human shells at the project root have no current channel.
 
 | Form | Matches |
 | --- | --- |

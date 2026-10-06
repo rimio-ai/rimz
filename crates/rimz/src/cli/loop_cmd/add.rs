@@ -911,7 +911,7 @@ fn resolve_delivery_target(
 ) -> Result<AddTaskAction> {
     let store = crate::cli::open_store(workspace)?;
     let snapshot = store.snapshot_cached().context("reading agent snapshot")?;
-    let channel = crate::cli::current_channel(workspace);
+    let channel = crate::cli::current_channel(workspace, Some(&store));
     let agent = match crate::cli::resolve_agent_one(
         &store,
         &snapshot,

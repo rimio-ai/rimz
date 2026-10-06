@@ -52,7 +52,7 @@ pub(super) fn run(args: ExplainArgs, globals: &GlobalFlags) -> Result<()> {
     let mut effective = rimz::config::effective::load(&machine, &workspace.project_root)?;
     let state = rimz::StatePaths::for_project_root(&workspace.project_root)?;
     let runtime = rimz::RuntimePaths::for_state(&state)?;
-    let channel = cli::current_channel(&workspace);
+    let channel = cli::current_channel(&workspace, store.as_ref());
     let mut warnings = Vec::new();
     let (request, cwd, action_note) = if args.target.starts_with('@') {
         let store = store.as_ref().ok_or_else(|| {

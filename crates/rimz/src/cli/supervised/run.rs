@@ -423,7 +423,7 @@ fn prepare_supervised(
                 cwd.as_deref().unwrap_or(&workspace.worktree_root),
             )
         } else {
-            crate::cli::current_channel(&workspace)
+            crate::cli::current_channel(&workspace, Some(&store)).into_name()
         }
     });
     let snapshot = lane

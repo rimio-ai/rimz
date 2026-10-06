@@ -19,7 +19,7 @@ use super::GlobalFlags;
 pub(crate) struct Ctx {
     pub(crate) workspace: ResolvedWorkspace,
     pub(crate) store: Store,
-    channel: Option<String>,
+    channel: std::sync::OnceLock<super::CurrentChannel>,
     mux: Option<MuxName>,
 }
 
@@ -29,7 +29,7 @@ impl Ctx {
         let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())
             .context("resolving current workspace")?;
         let store = super::open_store(&workspace)?;
-        let channel = super::current_channel(&workspace);
+        let channel = std::sync::OnceLock::new();
         let mux = globals.mux;
         Ok(Self {
             workspace,
@@ -64,7 +64,7 @@ impl Ctx {
             session_name: record.session_name,
             mux_hint,
         };
-        let channel = super::current_channel(&workspace);
+        let channel = std::sync::OnceLock::new();
         Ok(Self {
             workspace,
             store,
@@ -75,7 +75,12 @@ impl Ctx {
 
     /// The channel this command runs in, when it is scoped to a named lane.
     pub(crate) fn channel(&self) -> Option<&str> {
-        self.channel.as_deref()
+        self.current_channel().as_deref()
+    }
+
+    pub(super) fn current_channel(&self) -> &super::CurrentChannel {
+        self.channel
+            .get_or_init(|| super::current_channel(&self.workspace, Some(&self.store)))
     }
 
     /// The runtime paths for this workspace, as the open store already resolved them.
