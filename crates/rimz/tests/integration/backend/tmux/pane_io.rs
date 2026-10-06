@@ -179,7 +179,7 @@ fn pane_io_round_trips_keys_named_keys_and_bracketed_paste() {
         .send_keys(
             &pane_id, ANY_SESSION,
             &format!(
-                "stty raw -echo; dd bs=1 count=4 of={} 2>/dev/null; stty sane; printf '\\nrimz-raw-reader-ready\\n'",
+                "stty raw -echo; dd bs=1 count=5 of={} 2>/dev/null; stty sane; printf '\\nrimz-raw-reader-ready\\n'",
                 key_bytes.display()
             ),
         )
@@ -197,10 +197,14 @@ fn pane_io_round_trips_keys_named_keys_and_bracketed_paste() {
         .backend
         .send_key(&pane_id, ANY_SESSION, NamedKey::ShiftTab)
         .expect("send shift-tab");
+    server
+        .backend
+        .send_key(&pane_id, ANY_SESSION, "ctrl-a".parse().expect("ctrl-a key"))
+        .expect("send ctrl-a");
     let deadline = Instant::now() + Duration::from_secs(2);
     let bytes = loop {
         if let Ok(bytes) = std::fs::read(&key_bytes)
-            && bytes.len() == 4
+            && bytes.len() == 5
         {
             break bytes;
         }
@@ -210,7 +214,7 @@ fn pane_io_round_trips_keys_named_keys_and_bracketed_paste() {
         );
         thread::sleep(Duration::from_millis(25));
     };
-    assert_eq!(bytes, b"\x1b\x1b[Z");
+    assert_eq!(bytes, b"\x1b\x1b[Z\x01");
     let capture = capture_pane_until(
         &server.backend,
         &pane_id,
@@ -383,12 +387,46 @@ fn pane_split_outside_a_pane_opens_in_the_resolved_room() {
         String::from_utf8_lossy(&split.stderr)
     );
 
+    let printed = String::from_utf8(split.stdout).unwrap();
+    assert!(
+        printed.starts_with("tmux:%") && printed.lines().count() == 1,
+        "{printed:?}"
+    );
+    let created = PaneId::parse(printed.trim()).unwrap();
+    assert!(
+        rooms
+            .server
+            .wait_for_panes(&rooms.here, 2)
+            .iter()
+            .any(|pane| pane.id == created.raw())
+    );
+    let capture = rooms.pane(&["capture", created.raw()]);
+    assert!(
+        capture.status.success(),
+        "{}",
+        String::from_utf8_lossy(&capture.stderr)
+    );
+
     assert_eq!(rooms.server.wait_for_panes(&rooms.here, 2).len(), 2);
     assert_eq!(
         list_session_panes(&rooms.server, &rooms.other).len(),
         1,
         "the other session gained a pane"
     );
+}
+
+#[test]
+fn pane_list_missing_session_names_live_sessions() {
+    require_tmux!();
+    let rooms = TwoRooms::new();
+    let output = rooms.pane(&["list", "--session-name", "nope"]);
+    assert!(!output.status.success());
+    let error = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        error.contains("nope") && error.contains(&rooms.here) && error.contains(&rooms.other),
+        "{error}"
+    );
+    assert!(!error.contains('/') && !error.contains("tmux"), "{error}");
 }
 
 #[test]

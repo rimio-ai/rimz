@@ -22,90 +22,69 @@ pub(crate) fn paste_payload(text: &str) -> String {
     text.replace("\r\n", "\n").replace('\n', "\r")
 }
 
-/// Small named-key vocabulary RimZ exposes for pane automation.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum NamedKey {
-    Enter,
-    Escape,
-    Tab,
-    ShiftTab,
-    Backspace,
-    Up,
-    Down,
-    Left,
-    Right,
-    CtrlC,
-    CtrlD,
-    CtrlU,
+macro_rules! named_keys {
+    ($($key:ident: $name:literal $(| $alias:literal)* => $tmux:literal, $bytes:literal;)*) => {
+        /// Small named-key vocabulary RimZ exposes for pane automation.
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        pub enum NamedKey { $($key,)* }
+
+        impl NamedKey {
+            /// Canonical spellings shared by parsing, errors, and command help.
+            pub const NAMES: &'static [&'static str] = &[$($name,)*];
+
+            #[cfg(test)]
+            const ALL: &'static [(Self, &'static str)] = &[$((Self::$key, $name),)*];
+
+            pub(crate) fn tmux_name(self) -> &'static str {
+                match self { $(Self::$key => $tmux,)* }
+            }
+
+            pub fn write_bytes(self) -> &'static [u8] {
+                match self { $(Self::$key => $bytes,)* }
+            }
+        }
+
+        impl FromStr for NamedKey {
+            type Err = UnknownKey;
+
+            fn from_str(raw: &str) -> Result<Self, Self::Err> {
+                let normalized = raw.trim().to_ascii_lowercase().replace(['_', '+', ' '], "-");
+                match normalized.as_str() {
+                    $($name $(| $alias)* => Ok(Self::$key),)*
+                    _ => Err(UnknownKey(raw.to_owned())),
+                }
+            }
+        }
+    };
+}
+
+named_keys! {
+    Enter: "enter" | "return" => "Enter", b"\r";
+    Escape: "escape" | "esc" => "Escape", b"\x1b";
+    Tab: "tab" => "Tab", b"\t";
+    ShiftTab: "shift-tab" | "backtab" | "btab" => "BTab", b"\x1b[Z";
+    Backspace: "backspace" | "bspace" | "bs" => "BSpace", b"\x7f";
+    Up: "up" => "Up", b"\x1b[A";
+    Down: "down" => "Down", b"\x1b[B";
+    Left: "left" => "Left", b"\x1b[D";
+    Right: "right" => "Right", b"\x1b[C";
+    CtrlC: "ctrl-c" | "control-c" | "c-c" => "C-c", b"\x03";
+    CtrlD: "ctrl-d" | "control-d" | "c-d" => "C-d", b"\x04";
+    CtrlU: "ctrl-u" | "control-u" | "c-u" => "C-u", b"\x15";
+    Space: "space" => "Space", b" ";
+    Delete: "delete" | "del" => "DC", b"\x1b[3~";
+    Home: "home" => "Home", b"\x1b[H";
+    End: "end" => "End", b"\x1b[F";
+    PageUp: "page-up" | "pgup" => "PPage", b"\x1b[5~";
+    PageDown: "page-down" | "pgdn" => "NPage", b"\x1b[6~";
+    CtrlA: "ctrl-a" | "control-a" | "c-a" => "C-a", b"\x01";
+    CtrlE: "ctrl-e" | "control-e" | "c-e" => "C-e", b"\x05";
+    CtrlL: "ctrl-l" | "control-l" | "c-l" => "C-l", b"\x0c";
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
-#[error(
-    "unknown key `{0}`; expected enter, escape, tab, shift-tab, backspace, up, down, left, right, ctrl-c, ctrl-d, or ctrl-u"
-)]
+#[error("unknown key `{0}`; expected {names}", names = NamedKey::NAMES.join(", "))]
 pub struct UnknownKey(pub String);
-
-impl NamedKey {
-    pub(crate) fn tmux_name(self) -> &'static str {
-        match self {
-            Self::Enter => "Enter",
-            Self::Escape => "Escape",
-            Self::Tab => "Tab",
-            Self::ShiftTab => "BTab",
-            Self::Backspace => "BSpace",
-            Self::Up => "Up",
-            Self::Down => "Down",
-            Self::Left => "Left",
-            Self::Right => "Right",
-            Self::CtrlC => "C-c",
-            Self::CtrlD => "C-d",
-            Self::CtrlU => "C-u",
-        }
-    }
-
-    pub fn write_bytes(self) -> &'static [u8] {
-        match self {
-            Self::Enter => b"\r",
-            Self::Escape => b"\x1b",
-            Self::Tab => b"\t",
-            Self::ShiftTab => b"\x1b[Z",
-            Self::Backspace => b"\x7f",
-            Self::Up => b"\x1b[A",
-            Self::Down => b"\x1b[B",
-            Self::Right => b"\x1b[C",
-            Self::Left => b"\x1b[D",
-            Self::CtrlC => b"\x03",
-            Self::CtrlD => b"\x04",
-            Self::CtrlU => b"\x15",
-        }
-    }
-}
-
-impl FromStr for NamedKey {
-    type Err = UnknownKey;
-
-    fn from_str(raw: &str) -> Result<Self, Self::Err> {
-        let normalized = raw
-            .trim()
-            .to_ascii_lowercase()
-            .replace(['_', '+', ' '], "-");
-        match normalized.as_str() {
-            "enter" | "return" => Ok(Self::Enter),
-            "escape" | "esc" => Ok(Self::Escape),
-            "tab" => Ok(Self::Tab),
-            "shift-tab" | "backtab" | "btab" => Ok(Self::ShiftTab),
-            "backspace" | "bspace" | "bs" => Ok(Self::Backspace),
-            "up" => Ok(Self::Up),
-            "down" => Ok(Self::Down),
-            "left" => Ok(Self::Left),
-            "right" => Ok(Self::Right),
-            "ctrl-c" | "control-c" | "c-c" => Ok(Self::CtrlC),
-            "ctrl-d" | "control-d" | "c-d" => Ok(Self::CtrlD),
-            "ctrl-u" | "control-u" | "c-u" => Ok(Self::CtrlU),
-            _ => Err(UnknownKey(raw.to_owned())),
-        }
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -116,7 +95,6 @@ mod tests {
         assert_eq!("Esc".parse::<NamedKey>().unwrap(), NamedKey::Escape);
         assert_eq!("ctrl_c".parse::<NamedKey>().unwrap(), NamedKey::CtrlC);
         assert_eq!("control+d".parse::<NamedKey>().unwrap(), NamedKey::CtrlD);
-        assert!("page-down".parse::<NamedKey>().is_err());
 
         assert_eq!(NamedKey::Up.tmux_name(), "Up");
         assert_eq!(NamedKey::CtrlC.tmux_name(), "C-c");
@@ -124,6 +102,42 @@ mod tests {
         assert_eq!(NamedKey::Up.write_bytes(), b"\x1b[A");
         assert_eq!(NamedKey::ShiftTab.write_bytes(), b"\x1b[Z");
         assert_eq!(NamedKey::Backspace.write_bytes(), b"\x7f");
+    }
+
+    #[test]
+    fn navigation_and_control_keys_have_terminal_mappings() {
+        for (names, tmux, bytes) in [
+            ("space", "Space", &b" "[..]),
+            ("delete del", "DC", &b"\x1b[3~"[..]),
+            ("home", "Home", &b"\x1b[H"[..]),
+            ("end", "End", &b"\x1b[F"[..]),
+            ("page-up pgup", "PPage", &b"\x1b[5~"[..]),
+            ("page-down pgdn", "NPage", &b"\x1b[6~"[..]),
+            ("ctrl-a control-a c-a", "C-a", &b"\x01"[..]),
+            ("ctrl-e control-e c-e", "C-e", &b"\x05"[..]),
+            ("ctrl-l control-l c-l", "C-l", &b"\x0c"[..]),
+        ] {
+            for name in names.split_whitespace() {
+                let key = name.parse::<NamedKey>();
+                assert!(key.is_ok(), "{name}: {key:?}");
+                let key = key.unwrap();
+                assert_eq!(key.tmux_name(), tmux, "{name}");
+                assert_eq!(key.write_bytes(), bytes, "{name}");
+            }
+        }
+    }
+
+    #[test]
+    fn unknown_key_lists_the_whole_vocabulary() {
+        let error = "unknown".parse::<NamedKey>().unwrap_err().to_string();
+        for &(key, name) in NamedKey::ALL {
+            assert_eq!(name.parse::<NamedKey>().unwrap(), key);
+            assert!(error.contains(name), "{name}: {error}");
+            assert!(!key.tmux_name().is_empty() && !key.write_bytes().is_empty());
+        }
+        for name in "enter escape tab shift-tab backspace up down left right ctrl-c ctrl-d ctrl-u space delete home end page-up page-down ctrl-a ctrl-e ctrl-l".split_whitespace() {
+            assert!(error.contains(name), "{name}: {error}");
+        }
     }
 
     #[test]

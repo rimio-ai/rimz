@@ -528,7 +528,8 @@ path = "crates/rimz/src/mux"
 # `SweepScope` names the process sweep's two scopes in place of a bool (+1).
 # `MuxBackend::confirm_resume_tabs` and its `ResumeTabUnconfirmed` error let a birth settle each resume tab on what the session holds (+2).
 # `recovery::temp_unit_holders` selects the processes a hard reset ends inside the room's sandbox views (+1).
-surface-budget = 257
+# Structured command error redaction keeps backend socket paths out of user errors.
+surface-budget = 259
 
 [[module]]
 path = "crates/rimz/src/mux/zellij"
@@ -548,7 +549,8 @@ surface-budget = 4
 path = "crates/rimz/src/pane"
 # Daemon-host classification splits in two: card admission and the view reap read
 # the command-marker arm, view-level classifiers keep the broad predicate.
-surface-budget = 43
+# Canonical named-key inventory is also shared with CLI help.
+surface-budget = 44
 
 [[module]]
 path = "crates/rimz/src/proc"

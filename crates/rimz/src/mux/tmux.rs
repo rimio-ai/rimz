@@ -146,6 +146,7 @@ pub fn legacy_session_conflict(session: &str) -> Option<LegacySessionConflict> {
 pub(crate) fn tmux_cmd(socket: &Path) -> CommandSpec {
     CommandSpec::new("tmux")
         .args(["-S".to_owned(), socket.to_string_lossy().into_owned()])
+        .redact_arg_in_errors(1, "server")
         .cwd(MANAGED_SERVER_CWD)
         .env_remove("TMUX")
         .restore_user_tmpdir(

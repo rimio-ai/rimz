@@ -550,7 +550,7 @@ fn semantic_answer_keys_reach_a_live_pane() {
             &pane_id,
             room.name(),
             &format!(
-                "stty raw -echo; dd bs=1 count=4 of={} 2>/dev/null; stty sane",
+                "stty raw -echo; dd bs=1 count=5 of={} 2>/dev/null; stty sane",
                 key_bytes.display()
             ),
         )
@@ -565,14 +565,17 @@ fn semantic_answer_keys_reach_a_live_pane() {
     backend
         .send_key(&pane_id, room.name(), NamedKey::ShiftTab)
         .expect("send shift-tab");
+    backend
+        .send_key(&pane_id, room.name(), "ctrl-a".parse().expect("ctrl-a key"))
+        .expect("send ctrl-a");
 
     let bytes = poll_until(
         Duration::from_secs(10),
         || std::fs::read(&key_bytes).map_err(|err| err.to_string()),
-        |bytes| bytes.len() == 4,
+        |bytes| bytes.len() == 5,
         "named keys in the raw reader",
     );
-    assert_eq!(bytes, b"\x1b\x1b[Z");
+    assert_eq!(bytes, b"\x1b\x1b[Z\x01");
 }
 
 /// An authoritative read with no workspace, so no presence cache to merge,
@@ -860,7 +863,17 @@ fn pane_split_and_detach_name_the_room_among_two_sessions() {
         "split: {}",
         String::from_utf8_lossy(&split.stderr)
     );
-    wait_for_pane_count(xdg, &here, 2);
+    let printed = String::from_utf8(split.stdout).unwrap();
+    assert!(
+        printed.starts_with("zellij:terminal_") && printed.lines().count() == 1,
+        "{printed:?}"
+    );
+    let created = PaneId::parse(printed.trim()).unwrap();
+    assert!(
+        wait_for_pane_count(xdg, &here, 2)
+            .iter()
+            .any(|pane| pane.pane_id == created)
+    );
 
     room.backend()
         .split_pane(SplitPaneOptions {
