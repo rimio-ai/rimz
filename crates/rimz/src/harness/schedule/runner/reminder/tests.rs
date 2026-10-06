@@ -144,6 +144,18 @@ fn trigger_and_check_clauses_follow_the_task() {
         text.contains("\n\nThis is one turn, and the pane closes when it ends. Nobody"),
         "{text}"
     );
+    let cron = TaskEntry {
+        agent: Some("claude".to_owned()),
+        cron: Some("0 7 * * 1-5".to_owned()),
+        check: Some("./probe".to_owned()),
+        prompt: Some("job".to_owned()),
+        ..TaskEntry::default()
+    };
+    let text = body("weekdays", cron, LoopRunMode::Scheduled, None);
+    assert!(
+        text.starts_with("RimZ started you from the rule `weekdays`, which launches an agent on the cron schedule `0 7 * * 1-5` when its check `./probe` fails. The check's output follows the prompt."),
+        "{text}"
+    );
 }
 
 #[test]
