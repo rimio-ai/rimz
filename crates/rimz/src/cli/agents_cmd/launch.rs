@@ -264,6 +264,12 @@ pub(in crate::cli) fn launch_resolved(
     let mut checked_folder_trust = HashSet::new();
     let mut preflighted_logins = Vec::new();
     if !args.launch.cohort.resume {
+        crate::cli::admit_launch_worktree_name(
+            workspace,
+            &machine_config.agents.worktree,
+            &projection.agents,
+            explicit_worktree_name.as_deref(),
+        )?;
         for (index, cell) in layout.agent_cells().enumerate() {
             preflighted_logins.push(preflight_cell(
                 workspace,
