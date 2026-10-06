@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn timed_out_capture_renders_extract_before_next_step() {
-    let mut timeout = crate::runner::CaptureTimeout {
+    let mut timeout = crate::runner::BudgetOverrun {
         summary: "xtask `test` exceeded its 8s budget after 8s: terminated `cargo nextest run`"
             .into(),
         next_step: "NEXT: rerun the slow step on its own".into(),

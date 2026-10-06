@@ -26,20 +26,22 @@ pub(crate) struct Captured {
     pub(crate) output: String,
 }
 
+/// A child terminated because the run spent its budget. `output` holds what a
+/// captured run had read by then, and stays empty for the other run functions.
 #[derive(Debug)]
-pub(crate) struct CaptureTimeout {
+pub(crate) struct BudgetOverrun {
     pub(crate) summary: String,
     pub(crate) next_step: String,
     pub(crate) output: String,
 }
 
-impl std::fmt::Display for CaptureTimeout {
+impl std::fmt::Display for BudgetOverrun {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}\n{}", self.summary, self.next_step)
     }
 }
 
-impl std::error::Error for CaptureTimeout {}
+impl std::error::Error for BudgetOverrun {}
 
 struct CaptureReader<R> {
     reader: R,
@@ -168,7 +170,7 @@ where
         }
     });
     if let Err(mut error) = status {
-        if let Some(timeout) = error.downcast_mut::<CaptureTimeout>() {
+        if let Some(timeout) = error.downcast_mut::<BudgetOverrun>() {
             let until = Instant::now() + CAPTURE_GRACE;
             while !(stdout_worker.is_finished() && stderr_worker.is_finished())
                 && Instant::now() < until
@@ -219,7 +221,7 @@ fn wait_bounded<S: AsRef<OsStr>>(
         }
         if let Some(overrun) = deadline::overrun() {
             terminate(child);
-            return Err(CaptureTimeout {
+            return Err(BudgetOverrun {
                 summary: format!("{overrun}: terminated `{program} {}`", rendered_args(args)),
                 next_step: overrun.next_step(),
                 output: String::new(),
@@ -378,7 +380,7 @@ mod tests {
             started.elapsed() < Duration::from_secs(2),
             "reader wait was unbounded"
         );
-        let timeout = err.downcast_ref::<CaptureTimeout>().expect("typed timeout");
+        let timeout = err.downcast_ref::<BudgetOverrun>().expect("typed timeout");
         // Reap the pipe holder rather than leave it alive after the test.
         if let Some(pid) = timeout
             .output
