@@ -110,27 +110,6 @@ fn cache_refresher_publishes_diff_stats_project_matches_refresh() {
     let session = fixture.publish_pane_frame();
     let state = fixture.env.state_path_for(&fixture.env.project_root);
     let runtime = fixture.env.runtime_paths();
-    let now_ms = unix_now_ms();
-    let accounts = rimz::agents::account::AccountsCache {
-        logins: rimz::agents::known_kinds()
-            .map(|kind| {
-                (
-                    rimz::ids::LoginKey::default_for(rimz::ids::AgentKind::new_unchecked(kind)),
-                    rimz::agents::account::ProviderRecord {
-                        login: None,
-                        probed_at_ms: now_ms,
-                        ok: true,
-                        account: None,
-                    },
-                )
-            })
-            .collect(),
-    };
-    std::fs::write(
-        runtime.shared_accounts_path(),
-        serde_json::to_vec(&accounts).expect("serialize accounts"),
-    )
-    .expect("seed accounts cache");
     rimz::agents::spending::write_provider_spending_cache(
         &runtime.shared_provider_spending_path(),
         &rimz::agents::spending::ProviderSpendingCache {
@@ -266,27 +245,6 @@ fn directory_room_without_git_backed_rows_forks_no_git() {
         return;
     };
     fixture.env.record(&fixture.env.project_root);
-    // This assertion isolates the diff-stats lane. A real provider CLI may
-    // invoke git while answering an account probe, so hold that independent
-    // cache fresh while the PATH-level git witness is armed.
-    let now_ms = unix_now_ms();
-    fixture
-        .env
-        .publish_accounts(&rimz::agents::account::AccountsCache {
-            logins: rimz::agents::known_kinds()
-                .map(|kind| {
-                    (
-                        rimz::ids::LoginKey::default_for(rimz::ids::AgentKind::new_unchecked(kind)),
-                        rimz::agents::account::ProviderRecord {
-                            login: None,
-                            probed_at_ms: now_ms,
-                            ok: true,
-                            account: None,
-                        },
-                    )
-                })
-                .collect(),
-        });
 
     let cold = fixture.run_snapshot();
     assert!(
