@@ -450,6 +450,135 @@ fn message_cancel_and_clear_respect_ids_targets_and_channel_lanes() {
 }
 
 #[test]
+fn message_list_empty_lane_counts_other_visible_rows() {
+    let env = Env::new();
+    register_running_agent(&env, "sess-docs", "docs", &[]);
+    seed_channel_message(&env, 1, 100, Some("old"), "archived text");
+    env.store()
+        .archive_channel_messages("old", "archive", "rimz-test")
+        .unwrap();
+    seed_channel_message(&env, 2, 200, Some("ops"), "private ops text");
+    seed_channel_message(&env, 3, 300, Some("review"), "private review text");
+    let snapshot = env.store().snapshot_cached().unwrap();
+    let system = MessageRecord::new(
+        env.workspace_id.clone(),
+        &snapshot.agents[0],
+        "system text".to_owned(),
+        DeliveryGate::Done,
+    )
+    .with_channel(Some("ops".to_owned()))
+    .with_sender(MessageSender::System);
+    env.store().queue_message(&system, "rimz-test").unwrap();
+    let output = run_success(env.rimz().args(["message", "list"]), "empty lane");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        "no messages in the main lane. 2 in 2 other lanes, 2 not yet delivered — rimz message list --all --status queued"
+    );
+    let output = run_success(
+        env.rimz().args(["message", "list", "--system"]),
+        "all traffic",
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        "no messages in the main lane. 3 in 2 other lanes, 3 not yet delivered — rimz message list --all --status queued"
+    );
+    let output = run_success(
+        env.rimz().args(["message", "list", "--status", "queued"]),
+        "filtered lane",
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        "no queued messages in the main lane — rimz message list --all shows every channel"
+    );
+    let output = run_success(
+        env.rimz()
+            .args(["message", "list", "--channel", "docs", "@claude"]),
+        "filtered target",
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        "no messages in #docs — rimz message list --all shows every channel"
+    );
+    assert!(list_message_ids(&env, &["message", "list", "--json"], None).is_empty());
+}
+
+#[test]
+fn message_list_empty_lane_counts_delivered_rows_without_queue_hint() {
+    let env = Env::new();
+    register_running_agent(&env, "sess-docs", "docs", &[]);
+    deliver_direct_channel_message(&env, "docs", "delivered text");
+    let output = run_success(env.rimz().args(["message", "list"]), "empty lane");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        "no messages in the main lane. 1 in 1 other lane — rimz message list --all"
+    );
+}
+
+#[test]
+fn message_list_validates_explicit_channels_but_not_ambient() {
+    let env = Env::new();
+    register_running_agent(&env, "sess-docs", "docs", &[]);
+    seed_channel_message(&env, 1, 100, Some("old"), "old text");
+    env.store()
+        .archive_channel_messages("old", "archive", "rimz-test")
+        .unwrap();
+    for args in [
+        vec!["message", "list", "--channel", "nope-zz"],
+        vec!["message", "list", "@claude#nope-zz"],
+    ] {
+        let output = env.rimz().args(args).output().unwrap();
+        assert_eq!(output.status.code(), Some(1));
+        assert!(output.stdout.is_empty());
+        assert_eq!(
+            String::from_utf8_lossy(&output.stderr).trim(),
+            "error: no channel #nope-zz\n  known channels: docs, old"
+        );
+    }
+    assert!(
+        list_message_ids(
+            &env,
+            &["message", "list", "--channel", "old", "--json"],
+            None
+        )
+        .is_empty()
+    );
+    assert!(list_message_ids(&env, &["message", "list", "--json"], Some("never-seen")).is_empty());
+}
+
+#[test]
+fn message_list_inline_channel_matches_flag_and_all_keeps_other_rows() {
+    let env = Env::new();
+    register_running_agent(&env, "sess-docs", "docs", &[]);
+    let docs = seed_channel_message(&env, 1, 100, Some("docs"), "docs text");
+    let main = seed_channel_message(&env, 2, 200, None, "main text");
+    let inline = list_message_ids(&env, &["message", "list", "@claude#docs", "--json"], None);
+    assert_eq!(inline, vec![docs.clone()]);
+    assert_eq!(
+        inline,
+        list_message_ids(
+            &env,
+            &["message", "list", "--channel", "docs", "@claude", "--json"],
+            None
+        )
+    );
+    assert_eq!(
+        list_message_ids(
+            &env,
+            &["message", "list", "--all", "@claude#docs", "--json"],
+            None
+        ),
+        vec![main, docs]
+    );
+    let mismatch = env
+        .rimz()
+        .args(["message", "list", "@claude#docs", "--channel", "ops"])
+        .output()
+        .unwrap();
+    assert_eq!(mismatch.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&mismatch.stderr).contains("but channel flag names"));
+}
+
+#[test]
 fn message_list_scopes_orders_and_limits_records() {
     let env = Env::new();
     register_running_agent(&env, "sess-docs", "docs", &[]);

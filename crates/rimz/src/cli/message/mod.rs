@@ -440,7 +440,9 @@ fn parse_status(raw: &str) -> std::result::Result<MessageStatus, String> {
         "canceled" | "cancelled" | "removed" => Ok(MessageStatus::Canceled),
         "abandoned" => Ok(MessageStatus::Abandoned),
         "archived" => Ok(MessageStatus::Archived),
-        other => Err(format!("unknown message status `{other}`")),
+        other => Err(format!(
+            "unknown message status `{other}`; expected queued, claimed, sent, delivered, timed_out, errored, canceled, abandoned, archived"
+        )),
     }
 }
 
@@ -448,6 +450,14 @@ fn parse_status(raw: &str) -> std::result::Result<MessageStatus, String> {
 mod tests {
     use super::*;
     use clap::Parser;
+
+    #[test]
+    fn invalid_message_status_lists_valid_values() {
+        assert_eq!(
+            parse_status("bogus").unwrap_err(),
+            "unknown message status `bogus`; expected queued, claimed, sent, delivered, timed_out, errored, canceled, abandoned, archived"
+        );
+    }
 
     #[derive(Debug, Parser)]
     struct Harness {

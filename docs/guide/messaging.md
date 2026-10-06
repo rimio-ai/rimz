@@ -218,6 +218,8 @@ git diff main | rimz message @reviewer --stdin "review this"
 
 Bare `rimz message` opens the current channel's inbox. Every send is a record you can read back and act on after the fact:
 
+An empty inbox can still have messages elsewhere. Without a target or status filter, RimZ tells you how many messages are in other lanes and how many have not yet delivered, with a command to inspect them. It never mixes their rows into your lane. Use `rimz message list '@coder#auth'` to select an agent and its lane; a misspelled explicit lane lists the known names instead of showing an empty inbox. `(text no longer kept)` means a row remains after its text's retention period.
+
 ```sh
 rimz message list                       # this channel's inbox, newest first
 rimz message list --all                 # every channel, grouped by #channel
