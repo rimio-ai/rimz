@@ -1148,20 +1148,22 @@ impl<'a> TaskFire<'a> {
         let mut body = resolve_task_prompt(&self.name, &self.entry)?;
         let signal_trigger =
             self.entry.signal.is_some() || self.entry.watch.is_some() || self.entry.when.is_some();
-        if self.entry.wait.is_some()
+        let evidence = if let Some(condition) = &self.condition {
+            prompt::Evidence::Condition(condition)
+        } else if let Some(signal) = &self.signal {
+            prompt::Evidence::Signal(signal)
+        } else if signal_trigger {
+            prompt::Evidence::Manual
+        } else {
+            prompt::Evidence::Scheduled
+        };
+        if self.entry.agent.is_some() && self.entry.watch.is_none() {
+            body = prompt::compose_launch(&self.name, &evidence, &body);
+        } else if self.entry.wait.is_some()
             || signal_trigger
             || self.signal.is_some()
             || self.condition.is_some()
         {
-            let evidence = if let Some(condition) = &self.condition {
-                prompt::Evidence::Condition(condition)
-            } else if let Some(signal) = &self.signal {
-                prompt::Evidence::Signal(signal)
-            } else if signal_trigger {
-                prompt::Evidence::Manual
-            } else {
-                prompt::Evidence::Scheduled
-            };
             body = prompt::compose_wait(
                 &self.name,
                 &self.entry,

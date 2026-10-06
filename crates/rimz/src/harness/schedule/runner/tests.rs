@@ -1247,18 +1247,32 @@ fn loop_signal_prompts_keep_braces_and_check_evidence() {
     };
     let body = fire.resolve_effect_prompt(Some(&check)).unwrap();
     assert!(
-        body.starts_with("waited on deploy.failed\nfired [deployment]\nbranch: feature\n\n"),
+        body.starts_with(
+            "Rule `deployment` fired here. deploy.failed · branch: feature\n\nInspect {{branch}}\n\n--- check `false` exited 1 ---\nfailed guard"
+        ),
         "{body}"
     );
-    assert!(
-        body.contains("\n\nInspect {{branch}}\n\n--- check `false` exited 1 ---\nfailed guard"),
-        "{body}"
+    fire.signal.as_mut().unwrap().name = "ci.failed".parse().unwrap();
+    assert_eq!(
+        fire.resolve_effect_prompt(None).unwrap(),
+        "Rule `deployment` fired here. ci.failed on feature\n\nInspect {{branch}}"
     );
-    assert!(!body.contains("armed by"));
+    let launched = fire.entry.clone();
+    fire.entry.agent = None;
+    fire.entry.wait = Some(TaskTarget {
+        kind: crate::ids::AgentKind::new_unchecked("claude"),
+        session: "session".into(),
+        handle: "@coder".to_owned(),
+    });
+    assert_eq!(
+        fire.resolve_effect_prompt(None).unwrap(),
+        "waited on ci.failed on feature\nfired [deployment]\n\nInspect {{branch}}"
+    );
+    fire.entry = launched;
     fire.signal = None;
     assert_eq!(
         fire.resolve_effect_prompt(None).unwrap(),
-        "waited on deploy.failed\nfired by hand [deployment]\n\nInspect {{branch}}"
+        "Inspect {{branch}}"
     );
     fire.entry.signal = None;
     assert_eq!(
@@ -1323,23 +1337,17 @@ fn condition_evidence_reaches_prompt_and_terminal_record() {
     .with_condition(Some(evidence.clone()));
     assert_eq!(
         fire.resolve_effect_prompt(None).unwrap(),
-        "waited on team.stage=Done\nheld 30m [ship]\nci.log: \"red\\nlog\"\npr.state: unknown\nteam.stage: Done\n\nInspect {{branch}}"
+        "Rule `ship` fired here. ci.log: \"red\\nlog\" · pr.state: unknown · team.stage: Done\n\nInspect {{branch}}"
     );
     let record = fire.terminal_record(LoopRunResult::Completed);
     assert_eq!(
         serde_json::to_value(&record).unwrap()["condition"],
         serde_json::to_value(&evidence).unwrap()
     );
-    fire.condition.as_mut().unwrap().hold = None;
-    assert!(
-        fire.resolve_effect_prompt(None)
-            .unwrap()
-            .contains("\nfired [ship]\n")
-    );
     fire.condition = None;
     assert_eq!(
         fire.resolve_effect_prompt(None).unwrap(),
-        "waited on team.stage=Done\nfired by hand [ship]\n\nInspect {{branch}}"
+        "Inspect {{branch}}"
     );
 }
 

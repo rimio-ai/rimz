@@ -34,7 +34,7 @@ Every path below is under `crates/rimz/src/`; `schedule/` means `harness/schedul
 | [`cli/loop_timer.rs`](../../../crates/rimz/src/cli/loop_timer.rs) | The systemd user timer and launchd agent: install, status, removal, unit rendering, and the external tick. |
 | [`schedule/runner.rs`](../../../crates/rimz/src/harness/schedule/runner.rs) | `TaskFire`: the gate ladder, the run lock, the check, prompt preparation, the prepared effect, and the one terminal history transition; `stop_task`, the stop ladder; `in_flight_run`, the lookup of a run in flight by task name and root; `RunLocks`, the one listing of a root's run locks behind both and behind the display state. |
 | [`schedule/throttle.rs`](../../../crates/rimz/src/harness/schedule/throttle.rs) | [The start throttle](#the-start-throttle): the home-wide ticket queue, the `Turn` handle, cap counts, pressure, memory, and disk readings, the start preflight, and the held-run and readings lookups. |
-| [`schedule/runner/prompt.rs`](../../../crates/rimz/src/harness/schedule/runner/prompt.rs) | `compose_wait`: the wait line, the verdict line, the evidence, and the verbatim note. |
+| [`schedule/runner/prompt.rs`](../../../crates/rimz/src/harness/schedule/runner/prompt.rs) | `compose_wait`: the wait line, the verdict line, the evidence, and the verbatim note. `compose_launch`: the one event line a launching fire puts before its prompt. |
 | [`schedule/run_log.rs`](../../../crates/rimz/src/harness/schedule/run_log.rs) | `LoopRunRecord`, `LoopRunResult` and its `spawn_exit_code` mapping through `store::run::RunStatus`, the user-global JSONL history, cost rollups, and the daily-budget gate. |
 | [`schedule/signal.rs`](../../../crates/rimz/src/harness/schedule/signal.rs) | The runtime signal: `Signal`, `SignalSelector`, `WatchVerdict` and `WatchOutcome`, the lifecycle-to-signal mapping, the conversion into the durable payload, `fire_signal`, `wait_output_path`, and `run_watcher`. |
 | [`schedule/signal/team.rs`](../../../crates/rimz/src/harness/schedule/signal/team.rs) | The pure cohort-edge derivation behind `team.idle`, `team.waiting`, `team.failed`, and `team.ended`. |
@@ -329,7 +329,15 @@ A terminal `Watch` outcome takes the same path with the watch already evaluated:
 
 `resolve_effect_prompt` builds the delivered text. The base is `prompt`, or `prompt-file` read at fire time, with a relative path resolved against the machine config directory. `resolve_task_prompt` lets a wait row have no prompt at all, while a `Spawn` row requires one. Nothing is substituted: `{{key}}` is delivered as typed.
 
-A delivery, signal, or watch prompt goes through `compose_wait`: the wait line, the verdict, the evidence, then the loop or team prompt verbatim after a blank line. Durations are elapsed time, not wall-clock.
+A fire that launches an agent (a row with `agent` and no `watch`, resident or single run) goes through `compose_launch`. The [Loop reminder](#the-loop-reminder) already carries the standing frame, so the message is the event and the prompt:
+
+| Evidence | Message |
+| --- | --- |
+| condition | ``Rule `<name>` fired here. <key>: <reading> · <key>: <reading>``, the readings in evidence order with `unknown` for one with no value, a blank line, then the prompt. The hold is not repeated: the reminder's trigger clause states it. |
+| signal | ``Rule `<name>` fired here. <subject>``, the `signal_headline` subject followed by each `signal_details` entry after ` · `, a blank line, then the prompt |
+| none (a clock fire, any hand fire) | the prompt alone |
+
+Every delivery to a running agent (`--wait`, a self wait, a subscription) and every watch row goes through `compose_wait`: the wait line, the verdict, the evidence, then the loop or team prompt verbatim after a blank line. Durations are elapsed time, not wall-clock.
 
 | Trigger | Wait and evidence lines |
 | --- | --- |
@@ -341,7 +349,7 @@ A delivery, signal, or watch prompt goes through `compose_wait`: the wait line, 
 
 Self waits carry no note and no armer line. A check-in appends its stop and next-alarm commands.
 
-A guard that fired appends its own block through `augment_prompt`, after the composed body, so the agent wakes already reading the evidence:
+A guard that fired appends its own block through `augment_prompt`, after the composed body of a launch or a delivery, so the agent wakes already reading the evidence:
 
 ```text
 --- check `cargo test` exited 101 ---
