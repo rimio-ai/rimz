@@ -8,6 +8,7 @@ use crate::agents::{
 };
 use crate::disk::paths::StatePaths;
 use crate::ids::{AgentKind, AgentSessionId, EventId, LoginName, WorkspaceId};
+use crate::pane::{PaneRef, RuntimeOwner};
 use crate::store::event::{self, EventEnvelope};
 use crate::store::{
     session_death,
@@ -334,6 +335,92 @@ fn derive_lifecycle_events(
             }
         }
     }
+
+    if intent.observation.parent_agent_id.is_none()
+        && !matches!(intent.observation.signal, LifecycleSignal::Ended)
+        && let Some(agent_id) = intent.observation.agent_id.as_ref()
+    {
+        let (pane, owner) = session_death::observed_placement(intent.observation);
+        for forked in agents.iter().filter(|agent| {
+            forked_from_resumed(
+                agent,
+                (agent.pane.as_ref(), agent.runtime_owner.as_ref()),
+                &intent.agent_kind,
+                agent_id,
+                (pane.as_ref(), owner.as_ref()),
+            )
+        }) {
+            stage(
+                workspace_id,
+                intent,
+                "ReapedSuperseded",
+                &AgentLifecycleObservation::new(
+                    Some(forked.agent_id.clone()),
+                    LifecycleSignal::Ended,
+                ),
+                None,
+                None,
+                staged,
+            );
+        }
+    }
+}
+
+/// The supersession an attach completes for the card it binds to `pane` and `owner`. The exec
+/// wrapper attaches a resumed card's spawned provider after the spawn, so a provider that forked
+/// and registered first spoke before its process named the card's instance.
+pub(super) fn superseded_on_attach(
+    workspace_id: &WorkspaceId,
+    session_name: &str,
+    kind: &AgentKind,
+    agent_id: &AgentSessionId,
+    pane: &PaneRef,
+    owner: &RuntimeOwner,
+    agents: &[AgentState],
+) -> Option<EventEnvelope> {
+    let card = find_agent(agents, kind, agent_id)?;
+    agents
+        .iter()
+        .any(|speaker| {
+            speaker.parent_agent_id.is_none()
+                && speaker.ended_at.is_none()
+                && speaker.resumed_at.is_none()
+                && forked_from_resumed(
+                    card,
+                    (Some(pane), Some(owner)),
+                    &speaker.kind,
+                    &speaker.agent_id,
+                    (speaker.pane.as_ref(), speaker.runtime_owner.as_ref()),
+                )
+        })
+        .then(|| {
+            EventEnvelope::agent_lifecycle(
+                workspace_id.clone(),
+                session_name,
+                kind.as_str(),
+                "ReapedSuperseded",
+                &AgentLifecycleObservation::new(Some(agent_id.clone()), LifecycleSignal::Ended),
+            )
+        })
+}
+
+/// Whether root session `speaker` of `kind`, placed at `speaker_at`, ends `resumed`, placed at
+/// `resumed_at`. The exec wrapper's resume stamp revives the card it resumed until that card's
+/// provider speaks; a provider that forks on resume speaks as another session on the same pane
+/// and agent process instead, and that ends the revival rather than the next debounced reap.
+fn forked_from_resumed(
+    resumed: &AgentState,
+    resumed_at: (Option<&PaneRef>, Option<&RuntimeOwner>),
+    kind: &AgentKind,
+    speaker: &AgentSessionId,
+    speaker_at: (Option<&PaneRef>, Option<&RuntimeOwner>),
+) -> bool {
+    resumed.kind == *kind
+        && resumed.agent_id != *speaker
+        && resumed.parent_agent_id.is_none()
+        && resumed.ended_at.is_none()
+        && resumed.resumed_at.is_some()
+        && session_death::same_instance_placement(resumed_at, speaker_at)
 }
 
 fn root_parent(

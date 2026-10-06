@@ -465,7 +465,7 @@ A board with no prior stage reads `@<by> opened the stage <stage>.`, and a same-
 Your report goes in your stage file and anything for the user to @planner; end the turn with the flip and no pane text.
 ```
 
-When the current stage's owner registers after resume, restart, a single-member restart, or room rebirth, RimZ re-wakes it without touching the board or ledger: a `team.stage` signal with `from` equal to `to` and `by` set to `rimz`, and this notice:
+When the current stage's owner is resumed (by a team resume, a restart, a single-member restart, or room rebirth), RimZ re-wakes it without waiting for a prompt and without touching the board or ledger. An owner launched fresh into an open stage is re-woken when it registers instead ([resume re-wake](../../internals/harness/teams.md#resume-re-wake)). A re-wake is a `team.stage` signal with `from` equal to `to` and `by` set to `rimz`, and this notice:
 
 ```text
 The team resumed at stage Implement, which is yours. Nothing flipped since the board's last Progress line: reread blackboard.md and continue from where it stops.

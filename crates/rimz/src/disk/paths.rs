@@ -846,7 +846,7 @@ impl RuntimePaths {
     }
 
     /// Serializes stage transitions for a canonical worktree across rooms.
-    pub(crate) fn board_lock(&self, worktree: &Path) -> PathBuf {
+    pub fn board_lock(&self, worktree: &Path) -> PathBuf {
         self.shared_root.join("board-write").join(format!(
             "{}.lock",
             hex::encode(Sha256::digest(worktree.as_os_str().as_encoded_bytes()))

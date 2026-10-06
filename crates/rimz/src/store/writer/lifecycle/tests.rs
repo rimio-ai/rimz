@@ -293,6 +293,181 @@ fn side_conversation_host_is_the_pane_card_owner_at_each_hook() {
 }
 
 #[test]
+fn a_fork_on_a_resumed_cards_instance_ends_only_that_card() {
+    let kind = AgentKind::new_unchecked("codex");
+    let provider = std::process::id();
+    let append = |store: &Store, id: &str, signal, pid: u32, parent: Option<&str>| {
+        let mut observation =
+            AgentLifecycleObservation::new(Some(AgentSessionId::from(id)), signal);
+        observation.pane_id = Some(PaneId::parse("tmux:%1").unwrap());
+        observation.runtime_owner = Some(crate::pane::RuntimeOwner::new(
+            crate::pane::RuntimeOwnerKind::Agent,
+            id,
+            pid,
+            None,
+        ));
+        observation.parent_agent_id = parent.map(AgentSessionId::from);
+        store
+            .append_agent_lifecycle(AgentLifecycleIntent {
+                session_name: "rimz-test",
+                agent_kind: kind.clone(),
+                event_name: "SessionStart",
+                observation: &observation,
+                spawned_subagents: &[],
+            })
+            .expect("append lifecycle");
+    };
+    let ended = |store: &Store, id: &str| {
+        store
+            .runtime_projection(crate::store::runtime::RuntimeScope::Audit)
+            .expect("audit")
+            .agents
+            .iter()
+            .find(|agent| agent.agent_id.as_str() == id)
+            .unwrap_or_else(|| panic!("{id} has a row"))
+            .ended_at
+            .is_some()
+    };
+    let attach = |store: &Store, pid: u32| {
+        store
+            .attach_agent_pane(
+                &kind,
+                &AgentSessionId::from("old"),
+                None,
+                &crate::ids::LoginName::default(),
+                "rimz-test",
+                &PaneId::parse("tmux:%1").unwrap(),
+                crate::pane::RuntimeOwner::new(
+                    crate::pane::RuntimeOwnerKind::Agent,
+                    "old",
+                    pid,
+                    None,
+                ),
+                None,
+                None,
+                None,
+            )
+            .expect("attach resumed card");
+    };
+    // An ended card the exec wrapper resumes: bound to its pane and `owner`, the wrapper before
+    // the spawn or the spawned provider after it, then stamped started.
+    let resumed = |owner: u32| {
+        let (dir, store) = test_store();
+        append(&store, "old", LifecycleSignal::Registered, provider, None);
+        append(&store, "old", LifecycleSignal::Ended, provider, None);
+        attach(&store, owner);
+        store
+            .append_event(&EventEnvelope::agent_lifecycle(
+                store.paths().workspace_id.clone(),
+                "rimz-test",
+                kind.as_str(),
+                "rimz.agent-resumed",
+                &AgentLifecycleObservation::new(
+                    Some(AgentSessionId::from("old")),
+                    LifecycleSignal::Registered,
+                ),
+            ))
+            .expect("resume stamp");
+        assert!(!ended(&store, "old"), "the resume stamp revives the card");
+        (dir, store)
+    };
+
+    let (_dir, store) = resumed(provider);
+    append(&store, "old", LifecycleSignal::Registered, provider, None);
+    assert!(!ended(&store, "old"), "an in-place resume keeps its card");
+
+    let (_dir, store) = resumed(provider);
+    append(
+        &store,
+        "elsewhere",
+        LifecycleSignal::Registered,
+        provider.wrapping_add(1),
+        None,
+    );
+    assert!(
+        !ended(&store, "old"),
+        "another process behind the same pane id is another instance"
+    );
+    append(
+        &store,
+        "child",
+        LifecycleSignal::Registered,
+        provider,
+        Some("old"),
+    );
+    assert!(!ended(&store, "old"), "a child of the card is no fork");
+    append(
+        &store,
+        "forked",
+        LifecycleSignal::Registered,
+        provider,
+        None,
+    );
+    assert!(
+        ended(&store, "old"),
+        "the provider forked: the stamped card ends"
+    );
+    assert!(!ended(&store, "forked"));
+    assert!(!ended(&store, "elsewhere"));
+
+    // The fork can register before the wrapper attaches the spawned provider's process to the
+    // card: that attach then ends the card.
+    let wrapper = provider.wrapping_add(2);
+    let (_dir, store) = resumed(wrapper);
+    append(
+        &store,
+        "elsewhere",
+        LifecycleSignal::Registered,
+        provider.wrapping_add(1),
+        None,
+    );
+    append(
+        &store,
+        "child",
+        LifecycleSignal::Registered,
+        provider,
+        Some("old"),
+    );
+    attach(&store, provider);
+    assert!(
+        !ended(&store, "old"),
+        "neither another instance nor a child supersedes the card at attach"
+    );
+    let (_dir, store) = resumed(wrapper);
+    append(&store, "old", LifecycleSignal::Registered, provider, None);
+    append(
+        &store,
+        "forked",
+        LifecycleSignal::Registered,
+        provider,
+        None,
+    );
+    attach(&store, provider);
+    assert!(
+        !ended(&store, "old"),
+        "a card its provider answered is no longer a pending revival"
+    );
+    let (_dir, store) = resumed(wrapper);
+    append(
+        &store,
+        "forked",
+        LifecycleSignal::Registered,
+        provider,
+        None,
+    );
+    assert!(
+        !ended(&store, "old"),
+        "the card still names the wrapper's process"
+    );
+    attach(&store, provider);
+    assert!(
+        ended(&store, "old"),
+        "attaching the forked provider's process ends the card"
+    );
+    assert!(!ended(&store, "forked"));
+}
+
+#[test]
 fn late_turn_reports_leave_the_started_turn_on_ingest_and_replay() {
     let (_dir, store) = test_store();
     let append = |event_name, signal| {

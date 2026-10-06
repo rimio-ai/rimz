@@ -262,7 +262,24 @@ fn launch_and_supervise(
     let (program, rest) = process.argv.split_first().ok_or_else(|| {
         anyhow::anyhow!("agent `{}` produced an empty launch command", request.kind)
     })?;
+    let resume_since = jiff::Timestamp::now();
+    // Stamp the resumed card started, reviving an ended one so delivery reaches it, before its
+    // provider starts: a provider that forks on resume then registers its new session after the
+    // stamp, and that registration on the card's pane and process ends the stamped card.
+    if let Some(target) = attach_target.as_ref() {
+        append_agent_lifecycle_trace(
+            invocation,
+            target.0.clone(),
+            target.1.clone(),
+            rimz::agents::LifecycleSignal::Registered,
+            AGENT_RESUMED_EVENT,
+            "agent resume start stamp",
+        );
+    }
     if exec_directly {
+        if let Some(target) = attach_target.as_ref() {
+            rewake_resumed(invocation, target, globals.mux, resume_since);
+        }
         return exec_agent_command(program, rest, &process.env, &process.unset);
     }
     let mut command = Command::new(program);
@@ -303,16 +320,8 @@ fn launch_and_supervise(
             &request.identity.params,
         );
     }
-    // A root resume may fork to a new session id; only a subagent's parent addresses the resumed id.
-    if let Some(target) = attach_target.as_ref().filter(|_| request.subagent) {
-        append_agent_lifecycle_trace(
-            invocation,
-            target.0.clone(),
-            target.1.clone(),
-            rimz::agents::LifecycleSignal::Registered,
-            AGENT_RESUMED_EVENT,
-            "agent resume start stamp",
-        );
+    if let Some(target) = attach_target.as_ref() {
+        rewake_resumed(invocation, target, globals.mux, resume_since);
     }
     if let Some(context) = run_context {
         record_provider_process(context, child.id());
@@ -1596,6 +1605,39 @@ fn session_bound_to_another_pane(
                 .as_ref()
                 .is_some_and(|bound| Some(&bound.pane_id) != own_pane)
     })
+}
+
+/// Re-wake a stamped resumed card when it owns its team's open stage. `since` precedes the
+/// provider's start, so a Stage notice it already took counts.
+fn rewake_resumed(
+    invocation: &ExecInvocationContext<'_>,
+    target: &(AgentKind, AgentSessionId),
+    mux: Option<rimz::ids::MuxName>,
+    since: jiff::Timestamp,
+) {
+    let rewoken = invocation.store().and_then(|store| {
+        Ok(rimz::harness::team_stage::rewake_resumed(
+            invocation.workspace,
+            &store,
+            &target.0,
+            &target.1,
+            mux,
+            jiff::Timestamp::now(),
+            since,
+        )?)
+    });
+    match rewoken {
+        Ok(Some(receipt)) => {
+            tracing::debug!(delivery = ?receipt.delivery, "resume: re-woke team stage owner");
+        }
+        Ok(None) => tracing::debug!("resume: no team stage to re-wake"),
+        Err(err) => tracing::warn!(
+            kind = %target.0,
+            agent_id = %target.1,
+            error = %err,
+            "could not re-wake the resumed team stage owner",
+        ),
+    }
 }
 
 fn append_agent_lifecycle_trace(

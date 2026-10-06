@@ -94,7 +94,7 @@ These are the producers of queued or launch-time text. Paths are relative to `cr
 | Stage-flip compaction | `harness/team_stage.rs::compact_flipper`, `agents::compact_command`, `message/compact.rs::send_compact` | `System` / `Command` |
 | Operator compaction | `cli/agents_cmd/compact.rs::compact_agent`, adapter compact command, `message/compact.rs::send_compact` | Operator's `Human` or `Agent` / `Command` |
 | Smart compact before delivery | `message/send.rs::compact_message_for_target`, `agents::compact_command` | `System` / `Command` |
-| Stage notice | `harness/team_stage.rs::stage_open_body`, queued by `open_stage` | `Harness { notice: Stage }` / `Prompt` |
+| Stage notice | `harness/team_stage.rs::stage_open_body`, queued by `open_stage` from a flip, the exec wrapper's resume (`rewake_resumed`), or the registration backstop ([teams.md § Resume re-wake](./teams.md#resume-re-wake)) | `Harness { notice: Stage }` / `Prompt` |
 | Loop delivery or self-wait | `harness/schedule/runner.rs::resolve_effect_prompt`, `runner/prompt.rs::compose_wait`; dispatched by `cli/loop_cmd/run.rs::execute_prepared_delivery` | `Harness { notice: Wait }` / `Prompt` |
 | Signal or watch delivery | Same scheduler composition and dispatch; team bindings are armed by `harness/schedule/team.rs::arm_member` | `Harness { notice: Signal }` / `Prompt` |
 | Loop-spawned run | `harness/schedule/runner.rs::compile_spawn_request` and `resolve_effect_prompt` | No queue record; `RunRecord.loop_task` supplies harness origin |
@@ -225,7 +225,7 @@ An address that matches nothing, after the durable fallback, writes a terminal `
 | 11 | No open blocking prompt reserving input | `AskWaiting` | Answering the ask, or `--force` |
 | 12 | A live pane can receive a paste | `NoPane` | A pane appearing; affinity is cleared so any bound pane will do |
 
-All twelve pass and the verdict is `Ready`. Ended launched children remain in runtime snapshots while their parent is visible. For ended receivers omitted by that projection, the sweep and `message show` consult the audit row rather than treating its absence as an unknown receiver.
+All twelve pass and the verdict is `Ready`. An `Ended` receiver keeps refusing delivery until a later lifecycle fold revives its card: pane attach is not one, and the exec wrapper's `rimz.agent-resumed` stamp on every resume is. A record queued to an ended card before its resume, such as a cohort resume's positional prompt, waits for that stamp. Ended launched children remain in runtime snapshots while their parent is visible. For ended receivers omitted by that projection, the sweep and `message show` consult the audit row rather than treating its absence as an unknown receiver.
 
 A pane is bindable when it reaches `agent_panes`, which the snapshot builds from the panes card admission keeps ([sidebar.md § Presence model](../sidebar/sidebar.md#presence-model)). A pane the fold drops is a receiver no message can reach, however healthy the agent's record looks. Without an end stamp, `NoPane` can outlive every other gate; a durable end instead lets the sweep archive its open records.
 
@@ -395,7 +395,7 @@ Content:
 | `WAIT` | A timer, command, or clock wait delivery | `@rimz` |
 | `CACHE_KEEPALIVE` | A neutral prompt-cache ping for a sleeping agent ([policy](./loops.md#prompt-cache-keepalive)) | `@rimz` |
 | `SIGNAL` | Every delivery fired by a `Trigger::Signal` row | `@rimz` |
-| `STAGE` | A direct prose-only stage-open delivery from a flip or registration re-wait | `@rimz` |
+| `STAGE` | A direct prose-only stage-open delivery from a flip or a resume or registration re-wake | `@rimz` |
 | The notice name, upper-cased | A harness notice this binary does not know (`HarnessNotice::Other`) | `@rimz` |
 
 An unknown harness notice keeps its string and takes ordinary harness delivery ([store.md § What is in it](../store.md#what-is-in-it) explains why the string survives). System records and `--no-from` sends carry no header.

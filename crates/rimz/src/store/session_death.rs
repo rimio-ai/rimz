@@ -112,20 +112,7 @@ pub(in crate::store) fn side_conversation_host<'a>(
     kind: &AgentKind,
     observation: &AgentLifecycleObservation,
 ) -> Option<&'a AgentState> {
-    let pane = observation
-        .pane_stamp
-        .clone()
-        .or_else(|| observation.pane_id.clone().map(PaneRef::from_id));
-    let owner = observation.runtime_owner.clone().or_else(|| {
-        observation.agent_pid.map(|pid| {
-            RuntimeOwner::new(
-                RuntimeOwnerKind::Agent,
-                "",
-                pid,
-                observation.agent_process_start.clone(),
-            )
-        })
-    });
+    let (pane, owner) = observed_placement(observation);
     let roots = || agents.iter().filter(|agent| !agent.is_provider_subagent());
     roots()
         .filter(|candidate| {
@@ -141,7 +128,29 @@ pub(in crate::store) fn side_conversation_host<'a>(
         .min_by(|left, right| left.compare_same_pane_owner(right))
 }
 
-fn same_instance_placement(
+/// The pane and agent process a hook's observation reports, as a card records them.
+pub(in crate::store) fn observed_placement(
+    observation: &AgentLifecycleObservation,
+) -> (Option<PaneRef>, Option<RuntimeOwner>) {
+    let pane = observation
+        .pane_stamp
+        .clone()
+        .or_else(|| observation.pane_id.clone().map(PaneRef::from_id));
+    let owner = observation.runtime_owner.clone().or_else(|| {
+        observation.agent_pid.map(|pid| {
+            RuntimeOwner::new(
+                RuntimeOwnerKind::Agent,
+                "",
+                pid,
+                observation.agent_process_start.clone(),
+            )
+        })
+    });
+    (pane, owner)
+}
+
+/// Whether two placements name one pane and one agent-process incarnation.
+pub(in crate::store) fn same_instance_placement(
     older: (Option<&PaneRef>, Option<&RuntimeOwner>),
     newer: (Option<&PaneRef>, Option<&RuntimeOwner>),
 ) -> bool {

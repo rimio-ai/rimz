@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
+use rimz::agents::{AgentLifecycleObservation, LifecycleSignal};
+use rimz::harness::launch::{ExecAction, ExecIdentity, ExecRequest, ProviderAccountState};
 use rimz::ids::{AgentKind, AgentSessionId, MuxName, PaneId};
 use rimz::store::event::{
     AgentLaunchPayload, AgentLaunchState, EventEnvelope, EventKind, SignalEventPayload,
@@ -166,7 +168,14 @@ fn record_refusals_leave_board_unchanged() {
 fn record_refuses_a_member_of_another_worktree() {
     let fixture = Fixture::new();
     let elsewhere = tempfile::tempdir().unwrap();
-    fixture.seed_member("coder", "coder", None, "elsewhere", elsewhere.path());
+    fixture.seed_member(
+        "claude",
+        "coder",
+        "coder",
+        None,
+        "elsewhere",
+        elsewhere.path(),
+    );
     let output = fixture
         .command()
         .args(["teams", "record", "Goal", "x"])
@@ -299,11 +308,19 @@ impl Fixture {
     }
 
     fn seed(&self, role: &str, parent: Option<&str>) {
-        self.seed_member(role, role, parent, "feature-team", &self.env.project_root);
+        self.seed_member(
+            "claude",
+            role,
+            role,
+            parent,
+            "feature-team",
+            &self.env.project_root,
+        );
     }
 
     fn seed_member(
         &self,
+        kind: &str,
         name: &str,
         role: &str,
         parent: Option<&str>,
@@ -316,7 +333,7 @@ impl Fixture {
             .append_event(&EventEnvelope::agent_launched(
                 workspace.workspace_id,
                 &workspace.session_name,
-                &AgentKind::new_unchecked("claude"),
+                &AgentKind::new_unchecked(kind),
                 AgentLaunchPayload {
                     agent_id: AgentSessionId::from(format!("launch_{name}")),
                     launch_id: Some(AgentSessionId::from(format!("launch_{name}"))),
@@ -400,6 +417,20 @@ impl Fixture {
         pane: Option<&str>,
         runtime_env: Option<&Path>,
     ) -> String {
+        self.feed_from("claude", role, role, event, pane, runtime_env, "work")
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn feed_from(
+        &self,
+        source: &str,
+        name: &str,
+        session: &str,
+        event: &str,
+        pane: Option<&str>,
+        runtime_env: Option<&Path>,
+        prompt: &str,
+    ) -> String {
         let mut command = self.command();
         if let Some(cwd) = runtime_env {
             command
@@ -407,8 +438,8 @@ impl Fixture {
                 .current_dir(cwd);
         }
         command
-            .args(["hooks", "feed", "--source", "claude"])
-            .env(rimz::harness::launch::ENV_AGENT_NAME, role)
+            .args(["hooks", "feed", "--source", source])
+            .env(rimz::harness::launch::ENV_AGENT_NAME, name)
             .env("RIMZ_AGENT_PID", self.env.agent_owner_pid().to_string())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -422,16 +453,209 @@ impl Fixture {
                 command,
                 &json!({
                     "hook_event_name": event,
-                    "session_id": role,
+                    "session_id": session,
                     "cwd": runtime_env.unwrap_or(&self.env.project_root),
                     "worktree_branch": "feature-team",
-                    "prompt": "work"
+                    "prompt": prompt
                 })
                 .to_string(),
             )
             .wait_with_output()
             .unwrap();
         success(output)
+    }
+
+    /// Seed a `kind` member of `role` whose session `sess-<role>` registered and then ended,
+    /// with no hook reactor running, as a crash leaves it.
+    fn ended(&self, kind: &str, role: &str) -> AgentSessionId {
+        let workspace = self.env.resolve_workspace(&self.env.project_root);
+        let session = AgentSessionId::from(format!("sess-{role}"));
+        for signal in [LifecycleSignal::Registered, LifecycleSignal::Ended] {
+            let mut observation = AgentLifecycleObservation::new(Some(session.clone()), signal);
+            observation.agent_name = Some(role.to_owned());
+            observation.launch = rimz::agents::LaunchParams {
+                team: Some("forge".to_owned()),
+                role: Some(role.to_owned()),
+                channel: Some("feature-team".to_owned()),
+                ..Default::default()
+            };
+            observation.worktree_path = Some(self.env.project_root.display().to_string());
+            observation.worktree_branch = Some("feature-team".to_owned());
+            self.env
+                .store()
+                .append_event(&EventEnvelope::agent_lifecycle(
+                    workspace.workspace_id.clone(),
+                    &workspace.session_name,
+                    kind,
+                    "seed",
+                    &observation,
+                ))
+                .unwrap();
+        }
+        session
+    }
+
+    /// Resume `session` through the exec wrapper in pane `terminal_3`, with a provider that
+    /// stays up, and return the wrapper once its re-wake has queued its Stage notice.
+    fn resume(&self, kind: &str, role: &str, session: &AgentSessionId) -> Wrapper {
+        let wrapper = self.spawn_resume(kind, role, session);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while self.stage_records().is_empty() {
+            assert!(
+                Instant::now() < deadline,
+                "resume never re-woke the stage: {}\n{:#?}",
+                self.wrapper_log(),
+                self.env.read_events()
+            );
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        wrapper
+    }
+
+    /// Start the resume wrapper without waiting for anything it writes.
+    fn spawn_resume(&self, kind: &str, role: &str, session: &AgentSessionId) -> Wrapper {
+        let shims = self.env.home_root.join("provider-shims");
+        // The wrapper's informational `--version` probe gets a prompt failure (an unknown
+        // version) instead of a provider that sleeps through the probe's timeout.
+        crate::common::write_path_shim(
+            &shims,
+            kind,
+            "[ \"$1\" = --version ] && exit 1\nexec sleep 60",
+        );
+        let stderr = self.wrapper_log_path();
+        let mut request = ExecRequest {
+            isolation_default: None,
+            kind: AgentKind::new_unchecked(kind),
+            action: ExecAction::Resume {
+                session_id: session.to_string(),
+                extra_args: Vec::new(),
+            },
+            system_prompt_file: None,
+            append_system_prompt_files: Vec::new(),
+            team_prompt: None,
+            loop_reminder: None,
+            skills: None,
+            allowed_tools: None,
+            provider_account: ProviderAccountState::Unbound,
+            run_id: None,
+            // Closing the pane on exit keeps the wrapper supervising rather than exec'ing.
+            worktree_path: None,
+            close_pane_on_exit: true,
+            exit_on_run_completion: false,
+            subagent: false,
+            identity: ExecIdentity::default(),
+        };
+        request.identity.params = rimz::agents::LaunchParams {
+            team: Some("forge".to_owned()),
+            role: Some(role.to_owned()),
+            channel: Some("feature-team".to_owned()),
+            isolation: Some(rimz::config::Isolation::Host),
+            ..Default::default()
+        };
+        Wrapper(
+            self.command()
+                .args(crate::common::exec_args(&self.env, &request))
+                .arg("--root")
+                .arg(&self.env.project_root)
+                .env("SHELL", "/definitely/not/a/shell")
+                .env("PATH", crate::common::path_with_front(&shims))
+                .env("ZELLIJ_PANE_ID", "3")
+                .env("RUST_LOG", "warn,rimz::cli::agents_cmd::exec=debug")
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(std::fs::File::create(&stderr).unwrap())
+                .spawn()
+                .unwrap(),
+        )
+    }
+
+    /// Poll the event log until `done` holds.
+    fn wait_for(&self, done: impl Fn(&[EventEnvelope]) -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let events = self.env.read_events();
+            if done(&events) {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "timed out: {}\n{events:#?}",
+                self.wrapper_log()
+            );
+            std::thread::sleep(Duration::from_millis(25));
+        }
+    }
+
+    fn wrapper_log_path(&self) -> PathBuf {
+        self.env.home_root.join("resume-wrapper.err")
+    }
+
+    fn wrapper_log(&self) -> String {
+        std::fs::read_to_string(self.wrapper_log_path()).unwrap_or_default()
+    }
+
+    /// The wrapper's stderr once it holds `line`.
+    fn wrapper_log_until(&self, line: &str) -> String {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let log = self.wrapper_log();
+            if log.contains(line) {
+                return log;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "no `{line}` in the wrapper log: {log}"
+            );
+            std::thread::sleep(Duration::from_millis(25));
+        }
+    }
+
+    /// Sweep until the record `id` reaches `status`.
+    fn sweep_until(&self, id: &rimz::ids::MessageId, status: MessageStatus) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            success(self.command().args(["message", "sweep"]).output().unwrap());
+            let current = self
+                .env
+                .store()
+                .list_messages()
+                .unwrap()
+                .into_iter()
+                .find(|message| &message.message_id == id)
+                .map(|message| message.status);
+            if current == Some(status) {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "{id} remained {current:?}: {}",
+                String::from_utf8_lossy(
+                    &self
+                        .command()
+                        .args(["message", "show", id.as_str()])
+                        .output()
+                        .unwrap()
+                        .stdout
+                )
+            );
+            std::thread::sleep(Duration::from_millis(25));
+        }
+    }
+
+    fn stage_records(&self) -> Vec<rimz::store::message::MessageRecord> {
+        let store = self.env.store();
+        store
+            .list_messages()
+            .unwrap()
+            .into_iter()
+            .chain(store.list_message_history().unwrap())
+            .filter(|message| {
+                message.sender
+                    == MessageSender::Harness {
+                        notice: HarnessNotice::Stage,
+                    }
+            })
+            .collect()
     }
 
     fn running(&self, role: &str, pane: Option<&str>) {
@@ -441,6 +665,10 @@ impl Fixture {
     }
 
     fn live_panes(&self, ids: &[&str]) {
+        self.live_panes_running("claude", ids);
+    }
+
+    fn live_panes_running(&self, command: &str, ids: &[&str]) {
         let panes = ids
             .iter()
             .map(|pane| rimz::pane::PaneRef {
@@ -451,7 +679,7 @@ impl Fixture {
                 view_name: Some("project".to_owned()),
                 title: None,
                 is_floating: false,
-                command: Some("claude".to_owned()),
+                command: Some(command.to_owned()),
                 foreground_cmdline: None,
                 spawn_command: None,
                 cwd: Some(self.env.project_root.display().to_string()),
@@ -883,7 +1111,14 @@ fn flip_selects_the_worktree_cohort_not_the_current_channel() {
     std::fs::create_dir_all(&other).unwrap();
     std::fs::write(other.join("blackboard.md"), BOARD).unwrap();
     std::fs::write(fixture.board(), BOARD).unwrap();
-    fixture.seed_member("other-coder", "coder", None, "other-channel", &other);
+    fixture.seed_member(
+        "claude",
+        "other-coder",
+        "coder",
+        None,
+        "other-channel",
+        &other,
+    );
     let output = success(
         fixture
             .command()
@@ -906,6 +1141,7 @@ fn flip_selects_the_worktree_cohort_not_the_current_channel() {
     assert_eq!(signals.len(), 1);
     assert_eq!(signals[0].payload["instance"], "forge#feature-team");
     fixture.seed_member(
+        "claude",
         "duplicate-coder",
         "coder",
         None,
@@ -970,7 +1206,14 @@ fn foreign_team_member_cannot_flip_the_selected_worktree_as_a_user() {
     std::fs::create_dir_all(&other).unwrap();
     std::fs::write(other.join("blackboard.md"), BOARD).unwrap();
     std::fs::write(fixture.board(), BOARD).unwrap();
-    fixture.seed_member("other-coder", "coder", None, "other-channel", &other);
+    fixture.seed_member(
+        "claude",
+        "other-coder",
+        "coder",
+        None,
+        "other-channel",
+        &other,
+    );
     let output = fixture.flip("Review", Some("other-coder"), Some("Not my cohort."));
     assert!(!output.status.success());
     let error = String::from_utf8_lossy(&output.stderr);
@@ -1520,6 +1763,226 @@ fn absent_owner_is_rewoken_when_its_root_session_registers() {
             .contains("The team resumed at stage Review, which is yours.")
     );
     assert_eq!(std::fs::read_to_string(fixture.board()).unwrap(), board);
+}
+
+/// A resumed exec wrapper, killed and reaped when the test ends, pass or fail.
+struct Wrapper(std::process::Child);
+
+impl Drop for Wrapper {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+/// Where `text` was first pasted in the mux trace, which logs paste bytes as decimals.
+fn trace_position(trace: &str, text: &str) -> Option<usize> {
+    let bytes = text
+        .bytes()
+        .map(|byte| byte.to_string())
+        .collect::<Vec<_>>()
+        .join("\t");
+    trace.find(&bytes)
+}
+
+#[test]
+fn resumed_lazy_member_gets_its_stage_from_the_wrapper_without_a_prompt() {
+    let fixture = Fixture::new();
+    fixture.env.install_agent_hooks("codex");
+    crate::common::trust_codex_hooks(&fixture.env);
+    let session = fixture.ended("codex", "coder");
+    std::fs::write(fixture.board(), BOARD).unwrap();
+    fixture.live_panes_running("codex", &["terminal_3"]);
+    let _wrapper = fixture.resume("codex", "coder", &session);
+    let stages = fixture.stage_records();
+    assert_eq!(stages.len(), 1, "{stages:#?}");
+    let stage = stages[0].clone();
+    assert_eq!(stage.agent_id, session);
+    assert!(
+        stage
+            .text
+            .contains("The team resumed at stage Build, which is yours."),
+        "{}",
+        stage.text
+    );
+    assert_eq!(std::fs::read_to_string(fixture.board()).unwrap(), BOARD);
+    fixture.sweep_until(&stage.message_id, MessageStatus::Sent);
+    let trace = std::fs::read_to_string(&fixture.trace).unwrap();
+    assert!(
+        trace_position(&trace, "Type: STAGE").is_some(),
+        "no STAGE in mux writes: {trace}"
+    );
+    let envelope = format!("Type: STAGE\nFrom: @rimz\nContent:\n{}", stage.text);
+    fixture.feed_from(
+        "codex",
+        "coder",
+        session.as_str(),
+        "UserPromptSubmit",
+        Some("terminal_3"),
+        None,
+        &envelope,
+    );
+    let delivered = fixture.stage_records();
+    assert_eq!(delivered.len(), 1, "{delivered:#?}");
+    assert_eq!(delivered[0].status, MessageStatus::Delivered);
+    let entries = rimz::transcript::read_all(fixture.env.store().paths()).unwrap();
+    let entry = entries
+        .iter()
+        .find(|entry| entry.message_id.as_ref() == Some(&stage.message_id))
+        .expect("stage transcript entry");
+    assert_eq!(entry.from.as_deref(), Some("@rimz"));
+    fixture.feed_from(
+        "codex",
+        "coder",
+        session.as_str(),
+        "SessionStart",
+        Some("terminal_3"),
+        None,
+        "",
+    );
+    assert_eq!(
+        fixture.stage_records().len(),
+        1,
+        "registration re-woke again"
+    );
+    assert_eq!(fixture.signals().len(), 1, "{:#?}", fixture.signals());
+}
+
+#[test]
+fn resumed_claude_member_gets_one_stage_held_until_registration() {
+    let fixture = Fixture::new();
+    let session = fixture.ended("claude", "coder");
+    std::fs::write(fixture.board(), BOARD).unwrap();
+    fixture.live_panes(&["terminal_3"]);
+    let _wrapper = fixture.resume("claude", "coder", &session);
+    let stages = fixture.stage_records();
+    assert_eq!(stages.len(), 1, "{stages:#?}");
+    let id = stages[0].message_id.clone();
+    success(
+        fixture
+            .command()
+            .args(["message", "sweep"])
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(
+        fixture.stage_records()[0].status,
+        MessageStatus::Queued,
+        "a resumed Claude holds its notice until it registers"
+    );
+    fixture.feed_from(
+        "claude",
+        "coder",
+        session.as_str(),
+        "SessionStart",
+        Some("terminal_3"),
+        None,
+        "",
+    );
+    fixture.sweep_until(&id, MessageStatus::Sent);
+    assert_eq!(
+        fixture.stage_records().len(),
+        1,
+        "registration re-woke again"
+    );
+    assert_eq!(fixture.signals().len(), 1, "{:#?}", fixture.signals());
+    assert_eq!(std::fs::read_to_string(fixture.board()).unwrap(), BOARD);
+}
+
+#[test]
+fn resume_skips_a_stage_delivered_after_its_attempt_began() {
+    let fixture = Fixture::new();
+    let session = fixture.ended("claude", "coder");
+    std::fs::write(fixture.board(), BOARD).unwrap();
+    fixture.live_panes(&["terminal_3"]);
+    let worktree = fixture.env.project_root.canonicalize().unwrap();
+    let board_lock = rimz::disk::lock::WorkspaceLock::acquire(
+        &fixture.env.runtime_paths().board_lock(&worktree),
+    )
+    .unwrap();
+    let _wrapper = fixture.spawn_resume("claude", "coder", &session);
+    // Past its stamp, the wrapper's re-wake waits on the board lock. A provider that registered
+    // early takes its notice in this gap; any Stage notice delivered here stands in for it.
+    fixture.wait_for(|events| {
+        events.iter().any(|event| {
+            matches!(event.kind(), EventKind::AgentLifecycle(payload)
+                if payload.event_name.as_deref() == Some("rimz.agent-resumed"))
+        })
+    });
+    let kind = AgentKind::new_unchecked("claude");
+    let notice = rimz::store::message::MessageRecord::new_for_card(
+        fixture.env.workspace_id.clone(),
+        kind.clone(),
+        session.clone(),
+        Some("coder".to_owned()),
+        "stage".to_owned(),
+        true,
+        DeliveryGate::Done,
+    )
+    .with_sender(MessageSender::Harness {
+        notice: HarnessNotice::Stage,
+    })
+    .with_pane_id(PaneId::from_parts(MuxName::Zellij, "terminal_3"));
+    let store = fixture.env.store();
+    let session_name = fixture
+        .env
+        .resolve_workspace(&fixture.env.project_root)
+        .session_name;
+    store.queue_message(&notice, &session_name).unwrap();
+    store
+        .record_sent_batch(std::slice::from_ref(&notice), &session_name)
+        .unwrap();
+    store
+        .confirm_delivered_for_card(
+            &kind,
+            &session,
+            None,
+            rimz::store::writer::DeliveryAck::TurnStarted { prompt: None },
+            &session_name,
+        )
+        .unwrap();
+    drop(board_lock);
+    let log = fixture.wrapper_log_until("resume: ");
+    assert!(log.contains("resume: no team stage to re-wake"), "{log}");
+    let stages = fixture.stage_records();
+    assert_eq!(stages.len(), 1, "{stages:#?}");
+    assert_eq!(stages[0].status, MessageStatus::Delivered);
+    assert!(fixture.signals().is_empty(), "{:#?}", fixture.signals());
+}
+
+#[test]
+fn resumed_lazy_leader_gets_its_resume_prompt_then_its_stage() {
+    let fixture = Fixture::new();
+    fixture.env.install_agent_hooks("codex");
+    crate::common::trust_codex_hooks(&fixture.env);
+    let session = fixture.ended("codex", "coder");
+    std::fs::write(fixture.board(), BOARD).unwrap();
+    // The cohort resume queues the positional prompt to the leader before placing its pane.
+    let prompt = rimz::store::message::MessageRecord::new_for_card(
+        fixture.env.workspace_id.clone(),
+        AgentKind::new_unchecked("codex"),
+        session.clone(),
+        Some("coder".to_owned()),
+        "say hi".to_owned(),
+        true,
+        DeliveryGate::Done,
+    )
+    .with_sender(MessageSender::Human);
+    let workspace = fixture.env.resolve_workspace(&fixture.env.project_root);
+    fixture
+        .env
+        .store()
+        .queue_message(&prompt, &workspace.session_name)
+        .unwrap();
+    fixture.live_panes_running("codex", &["terminal_3"]);
+    let _wrapper = fixture.resume("codex", "coder", &session);
+    let stage = fixture.stage_records()[0].clone();
+    fixture.sweep_until(&prompt.message_id, MessageStatus::Sent);
+    fixture.sweep_until(&stage.message_id, MessageStatus::Sent);
+    let trace = std::fs::read_to_string(&fixture.trace).unwrap();
+    let human = trace_position(&trace, "say hi").expect("resume prompt in mux writes");
+    let notice = trace_position(&trace, "Type: STAGE").expect("stage in mux writes");
+    assert!(human < notice, "the resume prompt goes first: {trace}");
 }
 
 #[test]

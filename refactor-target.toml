@@ -468,7 +468,8 @@ path = "crates/rimz/src/harness"
 # The loop start throttle crosses to the CLI as the `Turn` a launch reports through, the start preflight, and the held-run and readings lookups `loop show` renders, and the typed `ThrottleError` the preflight and admission return, plus the public `schedule::throttle` module itself (+10).
 # The keepalive helper reads the final-ping rule beside the shared eligibility recheck (+1).
 # `run::VERIFY_MAX_ATTEMPTS_DEFAULT`, the verify cap shared with the CLI (+1).
-surface-budget = 711
+# The exec wrapper re-wakes a resumed team member's open stage through `team_stage::rewake_resumed` (+1).
+surface-budget = 712
 
 [[module]]
 path = "crates/rimz/src/ids.rs"

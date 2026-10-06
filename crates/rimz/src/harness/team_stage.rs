@@ -10,11 +10,14 @@ use tracing::{debug, warn};
 use crate::Store;
 use crate::agents::{AgentState, LifecycleSignal};
 use crate::config::{DONE_STAGE, MachineConfig, Team};
-use crate::ids::{EventId, MessageId, MuxName, PaneId};
+use crate::ids::{AgentKind, AgentSessionId, EventId, MessageId, MuxName, PaneId};
 use crate::message::compact::{self, CompactErr, CompactOutcome, CompactRequest};
 use crate::message::dispatch::{self, DispatchMode, DispatchOutcome, DispatchRequest};
 use crate::store::event::{EventKind, SignalSource};
-use crate::store::message::{AutoCompact, DeliveryGate, HarnessNotice, MessageSender};
+use crate::store::message::{
+    AutoCompact, DeliveryGate, HarnessNotice, MessageBody, MessageRecord, MessageSender,
+    MessageStatus,
+};
 use crate::store::snapshot::find_agent;
 use crate::store::writer::AgentLifecycleReceipt;
 use crate::workspace::ResolvedWorkspace;
@@ -275,6 +278,52 @@ pub fn flip(request: FlipRequest<'_>) -> Result<FlipReceipt, FlipErr> {
     })
 }
 
+/// What re-wakes a stage owner, which decides the Stage notices that already cover it.
+#[derive(Clone, Copy, Debug)]
+enum RewakeCause {
+    /// The exec wrapper resumed the member's session; `since` is captured before the
+    /// provider could start, so a notice delivered from then on belongs to this attempt.
+    Resume { since: Timestamp },
+    /// The member's root session registered, a resume or a fresh start alike.
+    Registration,
+}
+
+impl RewakeCause {
+    /// Whether a Stage notice already wakes `member`: one still in the live queue, or one
+    /// delivered to it since the resume attempt began (a provider can register and take its
+    /// notice before the wrapper's own check) or, for a registration, within a delivery window
+    /// of `now` (Codex registers in the same turn a typed notice starts). A resume ignores a
+    /// notice from an earlier attempt, so a member that dies again right after it is re-woken.
+    fn already_woken(
+        self,
+        live: &[MessageRecord],
+        history: &[MessageRecord],
+        member: &AgentState,
+        now: Timestamp,
+    ) -> bool {
+        let stage_notice = |record: &&MessageRecord| {
+            record.sender
+                == MessageSender::Harness {
+                    notice: HarnessNotice::Stage,
+                }
+                && record.same_agent_card(member)
+        };
+        if live.iter().any(|record| stage_notice(&record)) {
+            return true;
+        }
+        let cutoff = match self {
+            Self::Resume { since } => since,
+            Self::Registration => now - MessageBody::Prompt.delivery_window(),
+        };
+        history.iter().filter(stage_notice).any(|record| {
+            record.status == MessageStatus::Delivered
+                && record
+                    .delivered_at
+                    .is_some_and(|delivered| delivered >= cutoff)
+        })
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn rewake(
     workspace: &ResolvedWorkspace,
@@ -286,10 +335,13 @@ fn rewake(
     worktree: &Path,
     mux: Option<MuxName>,
     now: Timestamp,
+    cause: RewakeCause,
 ) -> Result<Option<FlipReceipt>, FlipErr> {
     if team.owned_stages().next().is_none() {
         return Ok(None);
     }
+    // The board lock serializes the check below with the enqueue, so a wrapper and a
+    // registration racing for one member cannot both find it un-woken.
     let locked = LockedBoard::open(store, worktree)?;
     let board = locked.path.clone();
     let text = &locked.text;
@@ -300,6 +352,10 @@ fn rewake(
         || team.owner_of(&stage.name) != member.role.as_deref()
         || member.role.is_none()
     {
+        return Ok(None);
+    }
+    let (live, history) = store.list_messages_and_history()?;
+    if cause.already_woken(&live, &history, member, now) {
         return Ok(None);
     }
     let owner = resolve_owner(team_name, team, &stage.name)?;
@@ -323,7 +379,10 @@ fn rewake(
             now,
             rewake: true,
         },
-        "registration",
+        match cause {
+            RewakeCause::Resume { .. } => "resume",
+            RewakeCause::Registration => "registration",
+        },
     )?;
     Ok(Some(FlipReceipt {
         board,
@@ -334,6 +393,65 @@ fn rewake(
         compaction: Compaction::Ineligible,
         signal_event,
     }))
+}
+
+/// Re-wake a resumed root team member whose role owns the board's open stage, unless a Stage
+/// notice for its card is still queued or was delivered at or after `since`, which the exec
+/// wrapper captures before its provider could start. The wrapper calls it on every resume,
+/// after the resume stamp has revived the card; a team that no longer loads is logged and
+/// re-wakes nobody.
+pub fn rewake_resumed(
+    workspace: &ResolvedWorkspace,
+    store: &Store,
+    kind: &AgentKind,
+    agent_id: &AgentSessionId,
+    mux: Option<MuxName>,
+    now: Timestamp,
+    since: Timestamp,
+) -> Result<Option<FlipReceipt>, FlipErr> {
+    let audit = store.runtime_projection(crate::store::runtime::RuntimeScope::Audit)?;
+    let Some(member) =
+        find_agent(&audit.agents, kind, agent_id).filter(|member| member.parent_agent_id.is_none())
+    else {
+        return Ok(None);
+    };
+    let (Some(name), Some(worktree)) = (member.team.as_deref(), member.worktree_path.as_deref())
+    else {
+        return Ok(None);
+    };
+    let team = match load_member_team(workspace, name) {
+        Ok(team) => team,
+        Err(err) => {
+            warn!(error = %err, "resume: failed to load team configuration");
+            return Ok(None);
+        }
+    };
+    let members = cohort_members(&audit.agents, member)
+        .into_iter()
+        .cloned()
+        .collect::<Vec<_>>();
+    rewake(
+        workspace,
+        store,
+        name,
+        &team,
+        member,
+        &members,
+        Path::new(worktree),
+        mux,
+        now,
+        RewakeCause::Resume { since },
+    )
+}
+
+/// The live members of `member`'s team cohort on its channel.
+fn cohort_members<'a>(agents: &'a [AgentState], member: &AgentState) -> Vec<&'a AgentState> {
+    let channel = member.channel().unwrap_or_else(|| "external".to_owned());
+    crate::address::team_cohorts(agents)
+        .into_iter()
+        .find(|cohort| Some(cohort.team) == member.team.as_deref() && cohort.channel == channel)
+        .map(|cohort| cohort.members)
+        .unwrap_or_default()
 }
 
 /// React to a committed lifecycle receipt: retire subscriptions, arm registered members, fire signals, and re-wake stage owners.
@@ -430,16 +548,7 @@ pub fn react_to_lifecycle(
         let live_members = audit
             .as_ref()
             .zip(member)
-            .map(|(audit, member)| {
-                let channel = member.channel().unwrap_or_else(|| "external".to_owned());
-                crate::address::team_cohorts(&audit.agents)
-                    .into_iter()
-                    .find(|cohort| {
-                        Some(cohort.team) == member.team.as_deref() && cohort.channel == channel
-                    })
-                    .map(|cohort| cohort.members)
-                    .unwrap_or_default()
-            })
+            .map(|(audit, member)| cohort_members(&audit.agents, member))
             .unwrap_or_default();
         if let (Some(member), Some(pending)) = (member, &pending) {
             let sleeping = pending_waits_by_session(
@@ -485,6 +594,7 @@ pub fn react_to_lifecycle(
                 Path::new(worktree),
                 mux,
                 event.at,
+                RewakeCause::Registration,
             ) {
                 Ok(Some(receipt)) => {
                     debug!(delivery = ?receipt.delivery, "lifecycle: re-woke team stage owner");
@@ -918,6 +1028,8 @@ pub(super) fn ledger_line(
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
 
     #[test]
@@ -1043,6 +1155,89 @@ mod tests {
             uncommitted_paths(repo.path()).unwrap(),
             ["renamed.rs", "src/new file.rs"]
         );
+    }
+
+    #[test]
+    fn rewake_skips_a_member_whose_stage_notice_is_queued_or_already_delivered() {
+        let now = Timestamp::from_second(1_000_000).unwrap();
+        let member = crate::testkit::agent_state("codex", "sess-coder", now);
+        let other = crate::testkit::agent_state("codex", "sess-reviewer", now);
+        let window = MessageBody::Prompt.delivery_window();
+        let record = |to: &AgentState, sender: MessageSender, delivered_at: Option<Timestamp>| {
+            let mut record = MessageRecord::new(
+                crate::ids::WorkspaceId::from_project_root(Path::new("/tmp/rimz-rewake")),
+                to,
+                "stage".to_owned(),
+                DeliveryGate::Done,
+            );
+            record.sender = sender;
+            if let Some(at) = delivered_at {
+                record.status = MessageStatus::Delivered;
+                record.delivered_at = Some(at);
+            }
+            record
+        };
+        let stage = MessageSender::Harness {
+            notice: HarnessNotice::Stage,
+        };
+        let wait = MessageSender::Harness {
+            notice: HarnessNotice::Wait,
+        };
+        let queued = record(&member, stage.clone(), None);
+        let just_delivered = record(&member, stage.clone(), Some(now - Duration::from_secs(1)));
+        let long_delivered = record(&member, stage.clone(), Some(now - window * 2));
+        let resume = RewakeCause::Resume {
+            since: now - Duration::from_secs(2),
+        };
+        let before_attempt = record(&member, stage.clone(), Some(now - Duration::from_secs(3)));
+        let not_stage = [
+            record(&member, wait.clone(), None),
+            record(&member, MessageSender::Human, None),
+            record(&other, stage.clone(), None),
+        ];
+        let delivered_not_stage = [
+            record(&member, wait, Some(now)),
+            record(&member, MessageSender::Human, Some(now)),
+            record(&other, stage, Some(now)),
+        ];
+        for (cause, live, history, expected) in [
+            (resume, &[queued.clone()][..], &[][..], true),
+            (resume, &[][..], std::slice::from_ref(&just_delivered), true),
+            (
+                resume,
+                &[][..],
+                std::slice::from_ref(&before_attempt),
+                false,
+            ),
+            (RewakeCause::Registration, &[queued][..], &[][..], true),
+            (
+                RewakeCause::Registration,
+                &[][..],
+                std::slice::from_ref(&just_delivered),
+                true,
+            ),
+            (
+                RewakeCause::Registration,
+                &[][..],
+                std::slice::from_ref(&long_delivered),
+                false,
+            ),
+            (resume, &not_stage[..], &delivered_not_stage[..], false),
+            (
+                RewakeCause::Registration,
+                &not_stage[..],
+                &delivered_not_stage[..],
+                false,
+            ),
+        ] {
+            assert_eq!(
+                cause.already_woken(live, history, &member, now),
+                expected,
+                "{cause:?} live={} history={}",
+                live.len(),
+                history.len()
+            );
+        }
     }
 
     #[test]

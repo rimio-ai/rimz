@@ -88,7 +88,7 @@ $ rimz events follow --replay
 | `git` | The room's sidebar, when the project trunk ref moves | `trunk.moved` |
 | `worktree` | Successful managed worktree creation or removal | `worktree.created`, `worktree.removed` |
 | `lifecycle` | The agent lifecycle hook, when a team member's transition changes its cohort | `team.idle`, `team.waiting`, `team.failed`, `team.ended` |
-| `team` | A team stage flip, and the re-wake of the stage owner when it registers | `team.stage` |
+| `team` | A team stage flip, and the [re-wake](./teams.md#the-owners-notice) of the stage owner when it is resumed | `team.stage` |
 | `watch` | The watcher of a `rimz wait` command, check, PID, or file watch, at a check-in and its final outcome | `wait.<task-name>` |
 
 Two kinds of signal fire subscribers but print no signal line. An `agent.*` signal is derived from a lifecycle record, and that record's lifecycle line is its durable trace. A `wait.<task-name>` delivery that RimZ sends because the watcher itself died is not written to the log. A watched command's exit code travels only in the delivered message, never in the signal line's payload.
