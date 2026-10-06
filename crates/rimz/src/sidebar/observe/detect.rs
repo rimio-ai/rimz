@@ -491,6 +491,24 @@ impl Observer {
 
     fn detect_aggregates(&mut self, sig: &FrameSig, drafts: &mut Vec<AnomalyDraft>) {
         let window = millis(OBSERVE_AGGREGATE_OSC_WINDOW);
+        let present = aggregate_identities(sig);
+        // A key that left the frame is sampled as an absent figure, so a panel
+        // or a window bar blinking out and back reads as a flip through
+        // `<none>`. `prune_frame_scoped_detector_state` bounds that history.
+        for (identity, ring) in &mut self.aggregates {
+            if !present.contains(identity)
+                && ring
+                    .samples
+                    .back()
+                    .is_some_and(|last| last.committed.is_some())
+            {
+                ring.push(AggregateSample {
+                    at_ms: sig.at_ms,
+                    committed: None,
+                    pulled: None,
+                });
+            }
+        }
         for aggregate in &sig.aggregates {
             let identity = aggregate.key.identity();
             let ring = self.aggregates.entry(identity).or_default();
@@ -500,14 +518,11 @@ impl Observer {
                 continue;
             }
             let prior = ring.samples.back().cloned();
-            ring.samples.push_back(AggregateSample {
+            ring.push(AggregateSample {
                 at_ms: sig.at_ms,
                 committed: aggregate.committed.clone(),
                 pulled: aggregate.pulled.clone(),
             });
-            while ring.samples.len() > 3 {
-                ring.samples.pop_front();
-            }
             if aggregate.key.is_spend_tally()
                 && aggregate.committed.as_deref() == Some("0")
                 && let Some(from) = prior
@@ -535,7 +550,7 @@ impl Observer {
                     from: aggregate_label(&from.committed),
                     via: aggregate_label(&via.committed),
                     back: aggregate_label(&back.committed),
-                    span_ms: back.at_ms.saturating_sub(from.at_ms),
+                    span_ms: back.at_ms.saturating_sub(via.at_ms),
                     // Carries the pulled figure as the snapshot held it, so an
                     // absent read stays absent in the record instead of
                     // arriving as a figure the producer never published.
@@ -600,13 +615,15 @@ impl Observer {
     }
 
     fn prune_frame_scoped_detector_state(&mut self, sig: &FrameSig) {
-        let aggregates = sig
-            .aggregates
-            .iter()
-            .map(|aggregate| aggregate.key.identity())
-            .collect::<BTreeSet<_>>();
-        self.aggregates
-            .retain(|identity, _| aggregates.contains(identity));
+        let aggregates = aggregate_identities(sig);
+        let window = millis(OBSERVE_AGGREGATE_OSC_WINDOW);
+        self.aggregates.retain(|identity, ring| {
+            aggregates.contains(identity)
+                || ring
+                    .samples
+                    .back()
+                    .is_some_and(|last| sig.at_ms.saturating_sub(last.at_ms) <= window)
+        });
         let groups = sig
             .groups
             .iter()
@@ -684,6 +701,16 @@ type AggregateOscillation<'a> = (
 );
 
 impl AggregateRing {
+    fn push(&mut self, sample: AggregateSample) {
+        self.samples.push_back(sample);
+        while self.samples.len() > 3 {
+            self.samples.pop_front();
+        }
+    }
+
+    /// A→B→A over the last three distinct samples, bounded by how long the
+    /// figure was away from A. A's own age is not bounded: a figure stable for
+    /// an hour that blinks away and returns is the same flip as a fresh one.
     fn oscillation(&self, window_ms: u64) -> Option<AggregateOscillation<'_>> {
         if self.samples.len() != 3 {
             return None;
@@ -691,7 +718,7 @@ impl AggregateRing {
         let from = &self.samples[0];
         let via = &self.samples[1];
         let back = &self.samples[2];
-        if back.at_ms.saturating_sub(from.at_ms) > window_ms {
+        if back.at_ms.saturating_sub(via.at_ms) > window_ms {
             return None;
         }
         match (&from.committed, &via.committed, &back.committed) {
@@ -736,6 +763,13 @@ fn deserialize_order(value: &Option<String>) -> Vec<String> {
 
 fn order_set(order: &[String]) -> BTreeSet<&str> {
     order.iter().map(String::as_str).collect()
+}
+
+fn aggregate_identities(sig: &FrameSig) -> BTreeSet<String> {
+    sig.aggregates
+        .iter()
+        .map(|aggregate| aggregate.key.identity())
+        .collect()
 }
 
 fn pane_closed_covers_rows(rows: &[RowSig], sig: &FrameSig) -> bool {

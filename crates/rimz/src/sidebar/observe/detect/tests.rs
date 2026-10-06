@@ -5,10 +5,12 @@ use super::super::sig::{
 use super::*;
 use crate::agents::{AgentStatus, TurnPhase};
 use crate::sidebar::event_store::EventStore;
-use crate::sidebar::test_support::{activity_row, worktree_group};
+use crate::sidebar::test_support::{
+    activity_row, provider_panel, snapshot_with_panels, worktree_group,
+};
 use crate::sidebar::timing::OBSERVE_WARMUP;
 use crate::store::snapshot::{
-    SidebarSnapshot, SidebarStatusCount, SidebarSubAgent, SidebarWorktreeKind,
+    SidebarProviderPanel, SidebarSnapshot, SidebarStatusCount, SidebarSubAgent, SidebarWorktreeKind,
 };
 use crate::{SpendTally, SpendWindow, WorkspaceId};
 
@@ -184,6 +186,47 @@ fn extracted_spend_sig(at_ms: u64, committed_usd: f64, pulled_usd: f64) -> Frame
         0,
         at_ms,
     )
+}
+
+/// A committed frame whose pull agrees with it, past the frameless guard.
+fn panel_frame(at_ms: u64, panels: Vec<SidebarProviderPanel>) -> FrameSig {
+    let mut snapshot = snapshot_with_panels(
+        WorkspaceId::from_project_root(std::path::Path::new("/repo")),
+        panels,
+    );
+    snapshot.panes_produced_at_ms = Some(1);
+    extract_sig(
+        &snapshot,
+        &PulledFrameSig::from_snapshot(&snapshot),
+        &EventStore::default(),
+        0,
+        0,
+        at_ms,
+    )
+}
+
+fn claude_panel(year_usd: f64) -> SidebarProviderPanel {
+    SidebarProviderPanel {
+        spending: Some(spend_tally(year_usd)),
+        ..provider_panel("claude", Vec::new())
+    }
+}
+
+/// Each recorded flip as `(key identity, from, via, span_ms)`.
+fn aggregate_flips(drafts: &[AnomalyDraft]) -> Vec<(String, String, String, u64)> {
+    drafts
+        .iter()
+        .filter_map(|draft| match &draft.kind {
+            AnomalyKind::AggregateOscillation {
+                aggregate,
+                from,
+                via,
+                span_ms,
+                ..
+            } => Some((aggregate.identity(), from.clone(), via.clone(), *span_ms)),
+            _ => None,
+        })
+        .collect()
 }
 
 fn has_kind(drafts: &[AnomalyDraft], key: &'static str) -> bool {
@@ -976,6 +1019,75 @@ fn aggregate_oscillation_reports_spend_and_mana_bounces() {
         Some("7"),
     ));
     assert_lacks_kind(&drafts, "aggregate_oscillation", "aggregate warmup");
+}
+
+#[test]
+fn aggregate_oscillation_measures_time_away() {
+    let frame = |at_ms, figure| {
+        with_aggregate(
+            sig(at_ms, Vec::new()),
+            codex_mana_key(),
+            Some(figure),
+            Some(figure),
+        )
+    };
+
+    let mut long_stable = Observer::default();
+    long_stable.observe(frame(0, "40"));
+    long_stable.observe(frame(11_000, "40"));
+    long_stable.observe(frame(3_611_000, "41"));
+    let drafts = long_stable.observe(frame(3_613_000, "40"));
+    assert_eq!(
+        aggregate_flips(&drafts),
+        vec![(
+            codex_mana_key().identity(),
+            "40".to_owned(),
+            "41".to_owned(),
+            2_000
+        )],
+        "a blink on a figure stable for an hour"
+    );
+
+    let mut long_away = Observer::default();
+    long_away.observe(frame(0, "40"));
+    long_away.observe(frame(11_000, "40"));
+    long_away.observe(frame(12_000, "41"));
+    let drafts = long_away.observe(frame(24_001, "40"));
+    assert_lacks_kind(&drafts, "aggregate_oscillation", "away past the window");
+}
+
+#[test]
+fn aggregate_oscillation_samples_a_missing_panel_as_absent() {
+    let spend_identity = "provider_spend:claude@default";
+
+    let mut blink = Observer::default();
+    blink.observe(panel_frame(0, vec![claude_panel(12.34)]));
+    blink.observe(panel_frame(11_000, vec![claude_panel(12.34)]));
+    assert!(blink.observe(panel_frame(3_611_000, Vec::new())).is_empty());
+    let drafts = blink.observe(panel_frame(3_613_000, vec![claude_panel(12.34)]));
+    assert_eq!(
+        aggregate_flips(&drafts),
+        vec![(
+            spend_identity.to_owned(),
+            "1234".to_owned(),
+            "<none>".to_owned(),
+            2_000
+        )],
+        "a panel missing from one frame"
+    );
+
+    let mut closed = Observer::default();
+    closed.observe(panel_frame(0, vec![claude_panel(12.34)]));
+    closed.observe(panel_frame(11_000, vec![claude_panel(12.34)]));
+    closed.observe(panel_frame(12_000, Vec::new()));
+    assert!(closed.aggregates.contains_key(spend_identity));
+    closed.observe(panel_frame(24_001, Vec::new()));
+    assert!(
+        !closed.aggregates.contains_key(spend_identity),
+        "history outlived the window"
+    );
+    let drafts = closed.observe(panel_frame(25_000, vec![claude_panel(12.34)]));
+    assert_lacks_kind(&drafts, "aggregate_oscillation", "a panel reopened later");
 }
 
 #[test]
