@@ -468,6 +468,29 @@ impl TaskRow {
         row
     }
 
+    pub(super) fn subscription_last(
+        name: &str,
+        task: &LoadedTask,
+        stats: Option<&run_log::LoopRunStats>,
+        now: &jiff::Zoned,
+    ) -> String {
+        let timing = schedule::TaskTiming::evaluate(task.trigger(), task.source(), None, None, now);
+        Self::new(
+            name,
+            task,
+            timing,
+            None,
+            RowContext {
+                open: false,
+                stats,
+                count: 0,
+                now: now.timestamp(),
+            },
+        )
+        .last_run_text(now.timestamp())
+        .unwrap_or_else(|| "never fired".into())
+    }
+
     fn rowless(
         name: String,
         holder: Option<RunLockInfo>,
@@ -558,53 +581,59 @@ impl TaskRow {
         }
     }
 
+    fn last_run_text(&self, now: Timestamp) -> Option<String> {
+        let Some(last) = &self.last else {
+            return self
+                .heard
+                .as_ref()
+                .map(|heard| format!("heard {} {}", heard.signal, ui::rel_age(heard.at, now)));
+        };
+        Some(if last.ok {
+            let mut text = format!("✓ {}", ui::rel_age(last.at, now));
+            if last.streak > 1
+                && self
+                    .action
+                    .as_ref()
+                    .is_none_or(|action| action.kind != "wake")
+            {
+                text.push_str(&format!(" · {} in a row", last.streak));
+            }
+            text
+        } else {
+            format!(
+                "✗ failed {}{}",
+                ui::rel_age(last.at, now),
+                self.exit
+                    .as_ref()
+                    .map(|exit| format!(" · exit {exit}"))
+                    .unwrap_or_default()
+            )
+        })
+    }
+
     pub(super) fn last_text(&self, now: Timestamp) -> String {
         let mut parts = vec![match self.state {
             TaskState::Running => self.state_text(now),
             TaskState::Off | TaskState::NotEnabled => self.state.label().into(),
-            _ => match &self.last {
-                Some(last) if last.ok => {
-                    let mut text = format!("✓ {}", ui::rel_age(last.at, now));
-                    if last.streak > 1
-                        && self
-                            .action
-                            .as_ref()
-                            .is_none_or(|action| action.kind != "wake")
-                    {
-                        text.push_str(&format!(" · {} in a row", last.streak));
-                    }
-                    text
+            _ => self.last_run_text(now).unwrap_or_else(|| {
+                if !self
+                    .task
+                    .as_ref()
+                    .is_some_and(|task| task.entry().watch.is_some())
+                {
+                    return "never fired".into();
                 }
-                Some(last) => format!(
-                    "✗ failed {}{}",
-                    ui::rel_age(last.at, now),
-                    self.exit
-                        .as_ref()
-                        .map(|exit| format!(" · exit {exit}"))
-                        .unwrap_or_default()
-                ),
-                None => match &self.heard {
-                    Some(heard) => format!("heard {} {}", heard.signal, ui::rel_age(heard.at, now)),
-                    None if self
-                        .task
-                        .as_ref()
-                        .is_some_and(|task| task.entry().watch.is_some()) =>
-                    {
-                        if self.watcher_live {
-                            let elapsed = self
-                                .task
-                                .as_ref()
-                                .and_then(|task| task.entry().wait_meta.as_ref())
-                                .map(|meta| format!(" {}", elapsed(meta.armed_at, now)))
-                                .unwrap_or_default();
-                            format!("watching{elapsed}")
-                        } else {
-                            "lost".into()
-                        }
-                    }
-                    None => "never fired".into(),
-                },
-            },
+                if !self.watcher_live {
+                    return "lost".into();
+                }
+                let elapsed = self
+                    .task
+                    .as_ref()
+                    .and_then(|task| task.entry().wait_meta.as_ref())
+                    .map(|meta| format!(" {}", elapsed(meta.armed_at, now)))
+                    .unwrap_or_default();
+                format!("watching{elapsed}")
+            }),
         }];
         if self
             .action

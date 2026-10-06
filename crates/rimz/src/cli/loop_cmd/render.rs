@@ -340,6 +340,7 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
         }
         write_runs_table(&mut out, &records, args.runs, now)?;
     }
+    write_subscriptions(&mut out, &args.name, &root, &now_zoned)?;
     writeln!(out)?;
     write_show_facts(
         &mut out,
@@ -362,6 +363,48 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
             ),
         )?;
     }
+    Ok(())
+}
+
+fn write_subscriptions(
+    out: &mut impl Write,
+    name: &str,
+    root: &Path,
+    now: &jiff::Zoned,
+) -> Result<()> {
+    let catalog = TaskCatalog::load_room(root)?;
+    let subscriptions = catalog
+        .visible()
+        .iter()
+        .filter(|(_, task)| task.entry().loop_task.as_deref() == Some(name))
+        .collect::<Vec<_>>();
+    if subscriptions.is_empty() {
+        return Ok(());
+    }
+    let stats = run_log::stats(&rimz::disk::paths::logs_dir(), now, Some(root));
+    writeln!(out, "\nSUBSCRIPTIONS")?;
+    let mut table = ui::Table::new(["NAME", "CHECKOUT", "TARGET", "SIGNAL", "LAST"]).indent(2);
+    for (name, task) in subscriptions {
+        let entry = task.entry();
+        let target = entry.wait.as_ref().map_or_else(
+            || ui::cell("-").dash(),
+            |target| ui::cell(&target.handle).fg(ui::palette::identity(target.kind.as_str())),
+        );
+        let history = stats.get(name);
+        let last = ui::cell(list::TaskRow::subscription_last(name, task, history, now)).fg(history
+            .and_then(|stats| stats.acting.as_ref())
+            .map_or_else(ui::palette::muted, |acting| {
+                run_status(&acting.record).style
+            }));
+        table.row([
+            ui::cell(name),
+            ui::cell(display_path(&entry.run_dir())),
+            target,
+            ui::cell(entry.signal.as_deref().unwrap_or("-")).dash(),
+            last,
+        ]);
+    }
+    table.render(out)?;
     Ok(())
 }
 
