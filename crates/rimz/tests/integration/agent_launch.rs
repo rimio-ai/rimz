@@ -2263,6 +2263,79 @@ fn unresolved_subagent_list_caller_falls_back_to_channel_scope() {
 
 #[cfg(unix)]
 #[test]
+fn empty_subagent_list_explains_itself_on_stderr_only() {
+    let env = Env::new();
+    let workspace = env.resolve_workspace(&env.project_root);
+    env.store()
+        .append_event(&EventEnvelope::agent_launched(
+            workspace.workspace_id.clone(),
+            &workspace.session_name,
+            &AgentKind::new_unchecked("claude"),
+            AgentLaunchPayload {
+                agent_id: AgentSessionId::from("planner"),
+                launch_id: None,
+                agent_name: "planner".to_owned(),
+                agent_name_explicit: true,
+                launch: LaunchParams::default(),
+                state: AgentLaunchState::Bound,
+                run_id: None,
+                pane_id: None,
+                runtime_owner: None,
+                worktree_path: None,
+                worktree_branch: None,
+                prompt: None,
+                description: None,
+            },
+        ))
+        .expect("seed parent row");
+    let list = |json: bool, env_pairs: &[(&str, &str)]| {
+        let mut command = env.rimz();
+        command.args(["subagents", "list"]);
+        if json {
+            command.arg("--json");
+        }
+        for (key, value) in env_pairs {
+            command.env(key, value);
+        }
+        let output = command.output().expect("list subagents");
+        assert!(
+            output.status.success(),
+            "list failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        (
+            String::from_utf8(output.stdout).expect("utf-8 stdout"),
+            String::from_utf8(output.stderr).expect("utf-8 stderr"),
+        )
+    };
+    let agent = [
+        (rimz::harness::launch::ENV_AGENT_KIND, "claude"),
+        (rimz::harness::launch::ENV_AGENT_ID, "planner"),
+    ];
+
+    let (stdout, stderr) = list(false, &[]);
+    assert_eq!(stdout, "");
+    assert_eq!(stderr, "No subagents in this room\n");
+    let (stdout, stderr) = list(false, &[(rimz::workspace::ENV_CHANNEL, "feat-x")]);
+    assert_eq!(stdout, "");
+    assert_eq!(stderr, "No subagents in #feat-x\n");
+    let (stdout, stderr) = list(false, &agent);
+    assert_eq!(stdout, "");
+    assert!(
+        stderr.starts_with("@planner has launched no subagents"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("rimz subagents profiles"), "{stderr}");
+    assert_eq!(stderr.lines().count(), 1, "{stderr}");
+    for env_pairs in [&[][..], &agent] {
+        let (stdout, stderr) = list(true, env_pairs);
+        assert_eq!(stdout, "[]\n");
+        assert_eq!(stderr, "");
+    }
+}
+
+#[cfg(unix)]
+#[test]
 fn launch_identity_and_parentage_survive_event_log_rotation() {
     let env = Env::new();
     let workspace = env.resolve_workspace(&env.project_root);

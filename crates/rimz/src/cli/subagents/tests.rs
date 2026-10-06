@@ -881,7 +881,7 @@ fn child_reports_name_each_parent_and_channel() {
     let agents = [planner, coder, first, second, orphan];
     let children = [&agents[2], &agents[3], &agents[4]];
 
-    let reports = child_reports(&agents, &children, &[run]);
+    let reports = child_reports(&agents, &children, &[run], Timestamp::now());
 
     assert_eq!(reports[0].parent, "@planner");
     assert_eq!(reports[1].parent, "@coder");
@@ -908,6 +908,8 @@ fn child_report_json_includes_parent_and_omits_an_unknown_channel() {
         turn_error: None,
         run_id: None,
         run_status: None,
+        started_at: None,
+        elapsed_secs: None,
     };
 
     let value = serde_json::to_value(report).expect("serialize child report");
@@ -915,6 +917,121 @@ fn child_report_json_includes_parent_and_omits_an_unknown_channel() {
     assert_eq!(value["parent"], "@planner");
     assert!(value.get("channel").is_none());
     assert!(value.get("turn_error").is_none());
+}
+
+fn launched_child(parent: &AgentState, id: &str) -> AgentState {
+    let mut child = rimz::agents::AgentState::stub("codex", id, rimz::agents::AgentStatus::Running);
+    child.name = Some(id.to_owned());
+    child.parent_agent_id = Some(parent.agent_id.clone());
+    child.parent_agent_kind = Some(parent.kind.clone());
+    child.launch_depth = Some(1);
+    child
+}
+
+fn child_run(
+    child: &AgentState,
+    status: rimz::store::run::RunStatus,
+    started_at: Timestamp,
+) -> rimz::store::run::RunRecord {
+    let mut run = rimz::store::run::RunRecord::new(
+        rimz::WorkspaceId::from_project_root(std::path::Path::new("/tmp/subagent-list")),
+        child.kind.clone(),
+        rimz::agents::PermissionMode::Auto,
+        "task".to_owned(),
+        PathBuf::from("/tmp/subagent-list"),
+    );
+    run.agent_id = Some(child.agent_id.clone());
+    run.status = status;
+    run.started_at = started_at;
+    run.updated_at = started_at;
+    run
+}
+
+#[test]
+fn child_reports_list_live_children_first_then_settled_then_runless() {
+    use rimz::store::run::RunStatus;
+    let at = |secs: i64| Timestamp::from_second(1_700_000_000 + secs).expect("valid timestamp");
+    let planner =
+        rimz::agents::AgentState::stub("claude", "planner", rimz::agents::AgentStatus::Idle);
+    let agents = [
+        planner.clone(),
+        launched_child(&planner, "runless"),
+        launched_child(&planner, "settled"),
+        launched_child(&planner, "early-live"),
+        launched_child(&planner, "late-pending"),
+    ];
+    let mut settled = child_run(&agents[2], RunStatus::Completed, at(300));
+    settled.completed_at = Some(at(400));
+    let runs = [
+        settled,
+        child_run(&agents[3], RunStatus::Running, at(100)),
+        child_run(&agents[4], RunStatus::Pending, at(200)),
+    ];
+    let children = [&agents[1], &agents[2], &agents[3], &agents[4]];
+
+    let reports = child_reports(&agents, &children, &runs, at(1_000));
+
+    let order = reports
+        .iter()
+        .map(|report| report.name.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(order, ["late-pending", "early-live", "settled", "runless"]);
+}
+
+#[test]
+fn child_reports_measure_the_current_answer() {
+    use rimz::store::run::{FollowUpTurn, RunStatus};
+    let at = |secs: i64| Timestamp::from_second(1_700_000_000 + secs).expect("valid timestamp");
+    let planner =
+        rimz::agents::AgentState::stub("claude", "planner", rimz::agents::AgentStatus::Idle);
+    let agents = [
+        planner.clone(),
+        launched_child(&planner, "live"),
+        launched_child(&planner, "settled"),
+        launched_child(&planner, "unstamped"),
+        launched_child(&planner, "followed"),
+        launched_child(&planner, "runless"),
+    ];
+    let mut settled = child_run(&agents[2], RunStatus::Completed, at(0));
+    settled.completed_at = Some(at(252));
+    settled.updated_at = at(900);
+    let mut unstamped = child_run(&agents[3], RunStatus::Failed, at(0));
+    unstamped.updated_at = at(42);
+    let mut followed = child_run(&agents[4], RunStatus::Running, at(0));
+    followed.follow_up = Some(FollowUpTurn {
+        started_at: at(3_000),
+        prompt: None,
+    });
+    let runs = [
+        child_run(&agents[1], RunStatus::Running, at(10)),
+        settled,
+        unstamped,
+        followed,
+    ];
+    let children = agents[1..].iter().collect::<Vec<_>>();
+
+    let reports = child_reports(&agents, &children, &runs, at(3_790));
+    let report = |name: &str| {
+        reports
+            .iter()
+            .find(|report| report.name == name)
+            .expect("report for child")
+    };
+
+    assert_eq!(report("live").elapsed_secs, Some(3_780));
+    assert_eq!(report("settled").elapsed_secs, Some(252));
+    assert_eq!(report("unstamped").elapsed_secs, Some(42));
+    assert_eq!(report("followed").elapsed_secs, Some(790));
+    assert_eq!(report("followed").started_at, Some(at(3_000)));
+    assert_eq!(report("runless").elapsed_secs, None);
+    let value = serde_json::to_value(report("followed")).expect("serialize child report");
+    assert_eq!(value["started_at"], at(3_000).to_string());
+    assert_eq!(value["status"], "running");
+    assert_eq!(value["run_status"], "running");
+    assert!(value.get("elapsed_secs").is_none());
+    let value = serde_json::to_value(report("runless")).expect("serialize child report");
+    assert!(value.get("started_at").is_none());
+    assert!(value.get("status").is_some());
 }
 
 #[test]
@@ -957,7 +1074,13 @@ fn child_reports_show_a_limit_parked_child_as_paused_beside_its_open_run() {
 
     let report = |child: rimz::agents::AgentState| {
         let agents = [planner.clone(), child];
-        child_reports(&agents, &[&agents[1]], std::slice::from_ref(&run)).remove(0)
+        child_reports(
+            &agents,
+            &[&agents[1]],
+            std::slice::from_ref(&run),
+            Timestamp::now(),
+        )
+        .remove(0)
     };
     let live = report(child);
     let parked = report(parked);

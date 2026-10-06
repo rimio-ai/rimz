@@ -1,5 +1,6 @@
 //! `rimz subagents` — supervised child launch and lifecycle sugar.
 
+use std::cmp::Reverse;
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::{Read, Write};
@@ -630,6 +631,10 @@ struct ChildReport {
     run_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     run_status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    started_at: Option<jiff::Timestamp>,
+    #[serde(skip)]
+    elapsed_secs: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -698,28 +703,45 @@ fn list_children(json: bool, globals: &GlobalFlags) -> Result<()> {
         None => rimz::address::launched_children_in_channel(&audit.agents, ctx.channel()),
     };
     let runs = rimz::harness::run::list(ctx.store.paths())?;
-    let reports = child_reports(&audit.agents, &children, &runs);
+    let reports = child_reports(&audit.agents, &children, &runs, jiff::Timestamp::now());
     if json {
         return render::json_pretty(&reports);
     }
     if reports.is_empty() {
-        return Ok(());
+        let line = match (caller, ctx.channel()) {
+            (Some(caller), _) => format!(
+                "{} has launched no subagents. Launch one: rimz subagents launch <PROFILE> \"<PROMPT>\" (profiles: rimz subagents profiles)",
+                peer_handle(&audit.agents, caller)
+            ),
+            (None, Some(channel)) => format!("No subagents in #{channel}"),
+            (None, None) => "No subagents in this room".to_owned(),
+        };
+        return render::finish(writeln!(render::err(), "{line}"));
     }
     let headers = match scope {
-        ListScope::Caller => vec!["SUBAGENT", "KIND", "STATUS", "RUN"],
-        ListScope::Channel => vec!["SUBAGENT", "PARENT", "CHANNEL", "KIND", "STATUS", "RUN"],
+        ListScope::Caller => vec!["SUBAGENT", "KIND", "AGENT", "RUN", "ELAPSED"],
+        ListScope::Channel => vec![
+            "SUBAGENT", "PARENT", "CHANNEL", "KIND", "AGENT", "RUN", "ELAPSED",
+        ],
     };
     let mut table = render::Table::new(headers).max_width(render::terminal_columns(120));
     for child in reports {
         let detail = child
             .detail()
             .map(|line| render::cell(line).fg(render::palette::muted()));
+        let elapsed = render::cell(
+            child
+                .elapsed_secs
+                .map_or_else(|| "-".to_owned(), render::format_compact_duration),
+        )
+        .dash();
         let row = match scope {
             ListScope::Caller => vec![
                 render::cell(child.handle),
                 render::cell(child.kind),
                 render::cell(child.status),
                 render::cell(child.run_status.unwrap_or_else(|| "-".to_owned())).dash(),
+                elapsed,
             ],
             ListScope::Channel => vec![
                 render::cell(child.handle),
@@ -728,6 +750,7 @@ fn list_children(json: bool, globals: &GlobalFlags) -> Result<()> {
                 render::cell(child.kind),
                 render::cell(child.status),
                 render::cell(child.run_status.unwrap_or_else(|| "-".to_owned())).dash(),
+                elapsed,
             ],
         };
         table.card(row, detail);
@@ -739,15 +762,21 @@ fn child_reports(
     agents: &[AgentState],
     children: &[&AgentState],
     runs: &[rimz::store::run::RunRecord],
+    now: jiff::Timestamp,
 ) -> Vec<ChildReport> {
-    let peers = agents
+    let mut rows = children
         .iter()
-        .filter(|agent| !agent.is_provider_subagent())
+        .map(|child| (*child, newest_run_for_child(runs, child)))
         .collect::<Vec<_>>();
-    children
-        .iter()
-        .map(|child| {
-            let run = newest_run_for_child(runs, child);
+    rows.sort_by_key(|(_, run)| match run {
+        Some(run) => (
+            u8::from(run.status.is_terminal()),
+            Some(Reverse(answer_start(run))),
+        ),
+        None => (2, None),
+    });
+    rows.into_iter()
+        .map(|(child, run)| {
             let name = child
                 .name
                 .clone()
@@ -756,7 +785,7 @@ fn child_reports(
                 handle: format!("@{name}"),
                 name,
                 parent: rimz::address::launched_parent(agents, child)
-                    .map(|parent| rimz::address::agent_handle(parent, &peers, false))
+                    .map(|parent| peer_handle(agents, parent))
                     .unwrap_or_else(|| {
                         format!(
                             "@{}",
@@ -780,6 +809,15 @@ fn child_reports(
                     }),
                 run_id: run.map(|run| run.run_id.to_string()),
                 run_status: run.map(|run| run.status.as_str().to_owned()),
+                started_at: run.map(answer_start),
+                elapsed_secs: run.map(|run| {
+                    let end = if run.status.is_terminal() {
+                        run.completed_at.unwrap_or(run.updated_at)
+                    } else {
+                        now
+                    };
+                    end.duration_since(answer_start(run)).as_secs().max(0) as u64
+                }),
             }
         })
         .collect()
@@ -831,6 +869,22 @@ fn list_profiles(json: bool, path: bool, globals: &GlobalFlags) -> Result<()> {
         json,
         path,
     )
+}
+
+/// How the `PARENT` column renders `agent` among the room's peers.
+fn peer_handle(agents: &[AgentState], agent: &AgentState) -> String {
+    let peers = agents
+        .iter()
+        .filter(|agent| !agent.is_provider_subagent())
+        .collect::<Vec<_>>();
+    rimz::address::agent_handle(agent, &peers, false)
+}
+
+/// The start of the answer a run is on now: a follow-up reopens the record without moving `started_at`.
+fn answer_start(run: &rimz::store::run::RunRecord) -> jiff::Timestamp {
+    run.follow_up
+        .as_ref()
+        .map_or(run.started_at, |turn| turn.started_at)
 }
 
 fn newest_run_for_child<'a>(
