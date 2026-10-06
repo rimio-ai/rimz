@@ -842,10 +842,34 @@ fn transcript_defaults_to_live_session_and_archives_prior_life() {
     assert!(stdout.contains("current answer"), "{stdout}");
     assert!(!stdout.contains("prior prompt"), "{stdout}");
     assert!(
-        stderr.contains("1 earlier line from a prior session"),
+        stderr.contains("1 earlier entry from a prior session"),
         "{stderr}"
     );
-    assert!(stderr.contains("rimz transcript --all"), "{stderr}");
+    assert!(
+        stderr.contains("rimz transcript '#living-transcript' --all"),
+        "{stderr}"
+    );
+
+    append_transcript(
+        &env,
+        entry(
+            "sess-current-life",
+            branch,
+            TranscriptKind::Prompt,
+            "third live entry",
+            "2099-01-01T00:00:00Z",
+        ),
+    );
+    for (last, has_note) in [("1", false), ("3", true)] {
+        let output = env
+            .rimz()
+            .args(["transcript", &format!("#{branch}"), "-n", last])
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(stderr.contains("earlier entry"), has_note, "{stderr}");
+    }
 
     let all = run_ok(
         env.rimz()
@@ -869,6 +893,138 @@ fn transcript_defaults_to_live_session_and_archives_prior_life() {
             .any(|entry| entry["text"] == "current prompt")
     );
     assert!(entries.iter().all(|entry| entry["text"] != "prior prompt"));
+}
+
+#[test]
+fn transcript_archive_hint_echoes_worktree_root_and_plural_entries() {
+    let env = Env::new();
+    for text in ["old one", "old two"] {
+        append_transcript(
+            &env,
+            entry(
+                "old",
+                "archive",
+                TranscriptKind::Prompt,
+                text,
+                "2020-01-01T00:00:00Z",
+            ),
+        );
+    }
+    register_live_codex_turn(
+        &env,
+        "current",
+        "archive",
+        "current prompt",
+        "current answer",
+    );
+    let output = env
+        .rimz()
+        .args(["transcript", "-w", "archive", "--root"])
+        .arg(&env.project_root)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("2 earlier entries"), "{stderr}");
+    assert!(
+        stderr.contains("rimz transcript -w archive --root"),
+        "{stderr}"
+    );
+    let output = env.rimz().args(["transcript"]).output().unwrap();
+    assert!(String::from_utf8_lossy(&output.stderr).contains("rimz transcript --all"));
+}
+
+#[test]
+fn transcript_follow_prints_appended_channel_entries_once() {
+    follow_prints_appended_entries(&["transcript", "#following", "--flat"]);
+}
+
+#[test]
+fn agents_logs_follow_prints_appended_channel_entries_once() {
+    follow_prints_appended_entries(&["agents", "logs", "#following"]);
+}
+
+fn follow_prints_appended_entries(command: &[&str]) {
+    use std::io::{BufRead, BufReader};
+    use std::process::Stdio;
+    use std::time::Duration;
+
+    let env = Env::new();
+    append_transcript(
+        &env,
+        entry(
+            "follow-session",
+            "following",
+            TranscriptKind::Prompt,
+            "excluded by tail",
+            "2026-01-01T00:00:00Z",
+        ),
+    );
+    append_transcript(
+        &env,
+        entry(
+            "follow-session",
+            "following",
+            TranscriptKind::Prompt,
+            "initial entry",
+            "2026-01-01T00:01:00Z",
+        ),
+    );
+    let mut child = env
+        .rimz()
+        .args(command)
+        .args(["-f", "--json", "-n", "1"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let stdout = child.stdout.take().unwrap();
+    let (send, receive) = std::sync::mpsc::channel();
+    let reader = std::thread::spawn(move || {
+        for line in BufReader::new(stdout).lines() {
+            if send.send(line.unwrap()).is_err() {
+                break;
+            }
+        }
+    });
+    let initial = receive.recv_timeout(Duration::from_secs(10));
+    if initial.is_ok() {
+        append_transcript(
+            &env,
+            entry(
+                "follow-session",
+                "following",
+                TranscriptKind::Prompt,
+                "appended entry",
+                "2026-01-01T00:02:00Z",
+            ),
+        );
+    }
+    let appended = receive.recv_timeout(Duration::from_secs(10));
+    let duplicate = receive.recv_timeout(Duration::from_millis(1500));
+    let _ = child.kill();
+    let output = child.wait_with_output().unwrap();
+    reader.join().unwrap();
+    let initial = initial.expect("follow prints its first view");
+    let appended = appended.expect("follow observes an entry appended after its first view");
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&initial).unwrap()["text"],
+        "initial entry"
+    );
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&appended).unwrap()["text"],
+        "appended entry"
+    );
+    assert!(duplicate.is_err(), "entry printed more than once");
+    assert!(
+        output.stderr.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[test]

@@ -10,6 +10,7 @@ rimz transcript run_0123456789abcdef0123456789abcdef   # a supervised run's agen
 rimz transcript @all                     # every channel in the workspace
 rimz transcript --all                    # include prior sessions
 rimz transcript --flat                   # arrival order, no threads
+rimz transcript '#cli-docs' -f           # follow new entries
 rimz transcript --json > /tmp/chat.json
 ```
 
@@ -66,7 +67,8 @@ A channel named explicitly (`'#<channel>'`, `@<handle>#<channel>`, `@all#<channe
 | --- | --- |
 | `[TARGET]` | What to read; see [Choose what to read](#choose-what-to-read). |
 | `-w, --worktree <channel>` | Channel used to resolve the target. |
-| `-n, --last <N>` | Keep the last `N` entries; see [Tail with `--last`](#tail-with---last). |
+| `-n, --last <N>` (alias `--tail`) | Keep the last `N` entries; see [Tail with `--last`](#tail-with---last). |
+| `-f, --follow` | Print the first view, then new entries as they land, checking once a second. Conflicts with `--all`. |
 | `--all` | Include prior sessions; see [Prior sessions](#prior-sessions). |
 | `--flat` | Print entries in arrival order instead of grouping replies into threads. |
 | `--json` | Emit JSON; see [JSON output](#json-output). |
@@ -75,13 +77,15 @@ A channel named explicitly (`'#<channel>'`, `@<handle>#<channel>`, `@all#<channe
 
 ## Prior sessions
 
-By default a view starts at the current live cohort: the earliest registration among the live root agents in scope (or the targeted agent, for an agent view). After a same-name team or worktree relaunch, the view opens on the living conversation. A message written before that registration but delivered after it arrived in the living conversation, so it stays in the default view. Earlier lines stay in the log, and a note on stderr counts them:
+By default a view starts at the current live cohort: the earliest registration among the live root agents in scope (or the targeted agent, for an agent view). After a same-name team or worktree relaunch, the view opens on the living conversation. A message written before that registration but delivered after it arrived in the living conversation, so it stays in the default view. Earlier entries stay in the log, and a note on stderr counts them:
 
 ```text
-⋯ 12 earlier lines from a prior session (Fri, Sep 11 2026) — rimz transcript --all
+⋯ 12 earlier entries from a prior session (Fri, Sep 11 2026) — rimz transcript --all
 ```
 
 `--all` prints the earlier lines first, then a `Live · <when>` rule before the current cohort's lines. When nothing in scope is live, or every line predates the cohort, the whole scope prints without a rule.
+
+The suggested command repeats the target, `-w`, and `--root` you supplied, shell-quoted for pasting. The note is withheld when `-n` drops any current-session entry, and while following.
 
 ## Read the human view
 
@@ -157,16 +161,20 @@ Each hidden entry takes with it the agent's replies and error output in the turn
 
 A scope with nothing to show exits 0 and prints a faint note on stderr. It reads `No conversation for #<channel> yet.` when the scope has a channel, `No conversation for <target> yet.` or `No conversation for this room yet.` otherwise, and `No conversation recorded yet.` when the log is empty or `--last 0` trimmed everything. With `--json`, stdout gets `{"entries": []}`.
 
+With `--follow`, an empty first view prints nothing and waits. Following honours `-n` for the first view and keeps the selected channel and `--flat` rendering for subsequent entries, until interrupted or the output pipe closes.
+
 ## JSON output
 
 `--json` prints one object with the selected entries in arrival order (`delivered_at` when it is there, otherwise `at`), hidden entries included.
+
+With `--follow`, every entry is one JSON object per line, including the first view, without an envelope.
 
 | Field | Present | Value |
 | --- | --- | --- |
 | `channel` | When the view has a channel | The channel name, without `#`. |
 | `focus` | Agent targets only | The focal agent's handle. |
 | `entries` | Always | The entries, described below. |
-| `archived_count` | When prior-session lines are left out | How many lines `--all` would add. |
+| `archived_count` | When prior-session entries are left out | How many entries `--all` would add, including ones the human view hides. |
 
 Each entry carries these fields. A field shown as optional is absent when empty or false.
 
@@ -189,6 +197,6 @@ Entries carry no kind field. `origin` is additive; `from` keeps its string shape
 
 ## See also
 
-- [`rimz agents logs`](./agents.md#logs): one agent's transcript with the same scope, rendering, and hiding, plus `-f` to follow new lines.
+- [`rimz agents logs`](./agents.md#logs): the same conversation view, with a smaller flag set and JSON envelope.
 - [Messaging guide](../../guide/messaging.md): sending messages and reading conversations back.
 - [Internals: the transcript](../../internals/harness/transcript.md): entry kinds, causal links, and how threads are assembled.

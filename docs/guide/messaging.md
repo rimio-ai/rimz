@@ -271,6 +271,8 @@ Your sends arrive as `USER_MESSAGE` from `@user`. RimZ's own deliveries come fro
 
 An agent's message lands as an ordinary conversation line, so the exchange belongs to the receiver's history like any other. `rimz transcript` reads a channel back, with each exchange grouped under the message that opened it. Its human view leaves out RimZ's own automation traffic; `rimz transcript --json` keeps everything. Name a launched child to read its separate conversation: `rimz transcript @swift-otter` ([transcript CLI](../reference/cli/transcript.md)).
 
+To keep watching a conversation, run `rimz transcript '#feature' -f`. Add `-n 10` to start with the last ten entries, then see new entries as they arrive. Stop following with Ctrl-C.
+
 ## Asks and answers
 
 An agent holding a permission prompt, a plan approval, or a blocking question has handed that prompt its input, and your queued messages wait behind it until it is answered. Answering is part of keeping the fleet moving, so RimZ lets you do it from any shell. Codex can also ask while it keeps working: these async questions appear in `rimz asks` and as a question line on its running card, without holding your messages.

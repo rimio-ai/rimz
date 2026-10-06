@@ -1,6 +1,20 @@
 use super::*;
 
 #[test]
+fn tail_alias_and_follow_parse() {
+    use clap::Parser;
+    for flag in ["--tail", "--last"] {
+        let parsed = crate::cli::Cli::try_parse_from(["rimz", "transcript", flag, "2", "-f"]);
+        assert!(parsed.is_ok(), "{parsed:?}");
+        let Some(crate::cli::Subcmd::Transcript(args)) = parsed.unwrap().subcommand else {
+            panic!("transcript command");
+        };
+        assert_eq!(args.last, Some(2));
+    }
+    assert!(crate::cli::Cli::try_parse_from(["rimz", "transcript", "-f", "--all"]).is_err());
+}
+
+#[test]
 fn entry_origin_and_rendered_author_cover_kind_and_sender_vocabulary() {
     use EntryOrigin::{Agent, Harness, Human};
     use TranscriptKind::*;
