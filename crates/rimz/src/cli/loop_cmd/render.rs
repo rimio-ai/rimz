@@ -263,11 +263,11 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
     let arming = arming::load().remove(&key);
     let now_zoned = now.to_zoned(MachineConfig::load_lenient().time_zone());
     let timing = observe_task_timing(&args.name, &task, &stamps, arming.as_ref(), &now_zoned);
-    let records = run_log::task_records(
-        &rimz::disk::paths::logs_dir(),
-        &args.name,
-        project_root_for_globals(globals).as_deref(),
-    );
+    let mut records =
+        run_log::task_records(&rimz::disk::paths::logs_dir(), &args.name, Some(&root));
+    if let Some(meta) = &entry.wait_meta {
+        records.retain(|record| record.at >= meta.armed_at);
+    }
     let launches = if entry.stay {
         rimz::harness::schedule::launch_ledger::load(&StatePaths::for_project_root(&root)?)?
             .remove(&args.name)
@@ -391,7 +391,7 @@ fn write_subscriptions(
             |target| ui::cell(&target.handle).fg(ui::palette::identity(target.kind.as_str())),
         );
         let history = stats.get(name);
-        let last = ui::cell(list::TaskRow::subscription_last(name, task, history, now)).fg(history
+        let last = ui::cell(list::TaskRow::subscription_last(task, history, now)).fg(history
             .and_then(|stats| stats.acting.as_ref())
             .map_or_else(ui::palette::muted, |acting| {
                 run_status(&acting.record).style
@@ -1302,24 +1302,6 @@ fn failure_exit_label(record: &LoopRunRecord) -> Option<String> {
         "timeout" | "signal" => exit,
         code => format!("exit {code}"),
     })
-}
-
-#[cfg(test)]
-fn failure_note_visible(result: LoopRunResult) -> bool {
-    matches!(
-        result,
-        LoopRunResult::Failed
-            | LoopRunResult::VerifyFailed
-            | LoopRunResult::TimedOut
-            | LoopRunResult::BudgetExceeded
-            | LoopRunResult::BudgetSkipped
-            | LoopRunResult::SurplusSkipped
-            | LoopRunResult::AccountSkipped
-            | LoopRunResult::ThrottleSkipped
-            | LoopRunResult::TakeoverBlocked
-            | LoopRunResult::Errored
-            | LoopRunResult::StartFailed
-    )
 }
 
 #[derive(Clone, Copy)]

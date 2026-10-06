@@ -6512,6 +6512,13 @@ fn loop_watch_scopes_to_the_whole_callers_room() {
     let elsewhere = env.home_root.join("elsewhere");
     std::fs::create_dir(&checkout).unwrap();
     std::fs::create_dir(&elsewhere).unwrap();
+    // Opening another room's instances would block the first repaint.
+    let remote_instances = env
+        .state_path_for(&elsewhere)
+        .root
+        .join("records/loop-instances.json");
+    std::fs::create_dir_all(remote_instances.parent().unwrap()).unwrap();
+    nix::unistd::mkfifo(&remote_instances, nix::sys::stat::Mode::S_IRWXU).unwrap();
     write_loop_config(
         &env,
         &toml::to_string(&LoopConfig {
