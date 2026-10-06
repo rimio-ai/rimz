@@ -1515,8 +1515,9 @@ fn tmux_settled_subagent_reports_to_parent() {
         String::from_utf8_lossy(&first.stderr)
     );
     assert!(
-        String::from_utf8_lossy(&first.stderr)
-            .contains("one SUBAGENT_REPORT from @rimz reaches you"),
+        String::from_utf8_lossy(&first.stderr).contains(
+            "one SUBAGENT_REPORT reaches you once every subagent you launched has settled"
+        ),
         "background launch should explain callback delivery: {}",
         String::from_utf8_lossy(&first.stderr)
     );

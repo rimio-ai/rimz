@@ -839,37 +839,23 @@ fn unsupported_plugin_peer_launch_explains_that_no_report_will_come() {
     );
 }
 
-#[test]
-fn peer_launch_reports_only_launcher_opened_turns() {
-    use rimz::harness::run;
-    use rimz::store::run::RunStatus;
-    use serde_json::json;
-    use std::time::{Duration, Instant};
-
-    let env = Env::new();
+/// Launch `claude --name peer "first task"` as the calling agent, through the Zellij trace shim.
+#[cfg(unix)]
+fn launch_prompted_peer(env: &Env, extra: &[&str]) -> std::process::Output {
     env.install_agent_hooks("claude");
-    crate::common::wait::register_calling_agent(&env);
-    let store = env.store();
+    crate::common::wait::register_calling_agent(env);
     std::fs::write(
         env.rimz_home().join("config.toml"),
         "[agents]\nisolation = 'host'\n",
     )
     .unwrap();
-    let shim = write_env_dump_shim(&env, "claude");
+    let shim = write_env_dump_shim(env, "claude");
     let session_name = env.resolve_workspace(&env.project_root).session_name;
     let out = env
         .rimz()
-        .args([
-            "--mux",
-            "zellij",
-            "agents",
-            "claude",
-            "--bg",
-            "--new-pane",
-            "--name",
-            "peer",
-            "first task",
-        ])
+        .args(["--mux", "zellij", "agents", "claude", "--bg", "--new-pane"])
+        .args(extra)
+        .args(["--name", "peer", "first task"])
         .env("ZELLIJ_PANE_ID", "1")
         .env(
             "ZELLIJ_SESSION_NAME",
@@ -894,6 +880,56 @@ fn peer_launch_reports_only_launcher_opened_turns() {
         "{}",
         String::from_utf8_lossy(&out.stderr)
     );
+    out
+}
+
+/// The wait target a prompted peer's stdout receipt names, after it proves a
+/// `rimz agents wait` on it finds the run still pending before registration.
+#[cfg(unix)]
+fn receipt_wait_target_finds_the_pending_run(env: &Env, out: &std::process::Output) -> String {
+    let receipt = String::from_utf8_lossy(&out.stdout);
+    assert!(receipt.contains("AGENT_REPORT"), "{receipt}");
+    assert!(!receipt.contains("Reach:"), "{receipt}");
+    let target = receipt
+        .lines()
+        .find_map(|line| line.split_once("To block instead: rimz agents wait "))
+        .map(|(_, target)| target.to_owned())
+        .unwrap_or_else(|| panic!("receipt names no wait target: {receipt}"));
+    let pending_wait = env
+        .rimz()
+        .args(["agents", "wait", &target, "--timeout", "1s"])
+        .bounded_output()
+        .unwrap();
+    assert_eq!(
+        pending_wait.status.code(),
+        Some(rimz::store::run::RunStatus::TimedOut.exit_code()),
+        "wait on {target} must find the pending run before registration: {}",
+        String::from_utf8_lossy(&pending_wait.stderr)
+    );
+    target
+}
+
+#[test]
+fn peer_launch_receipt_waits_on_the_laned_handle_before_registration() {
+    let env = Env::new();
+    let out = launch_prompted_peer(&env, &["--channel", "lane"]);
+    assert_eq!(
+        receipt_wait_target_finds_the_pending_run(&env, &out),
+        "@peer#lane"
+    );
+}
+
+#[test]
+fn peer_launch_reports_only_launcher_opened_turns() {
+    use rimz::harness::run;
+    use rimz::store::run::RunStatus;
+    use serde_json::json;
+    use std::time::{Duration, Instant};
+
+    let env = Env::new();
+    let store = env.store();
+    let session_name = env.resolve_workspace(&env.project_root).session_name;
+    let out = launch_prompted_peer(&env, &[]);
     let runs = run::list(store.paths()).unwrap();
     assert_eq!(
         runs.len(),
@@ -902,22 +938,9 @@ fn peer_launch_reports_only_launcher_opened_turns() {
     );
     let first = &runs[0];
     assert_eq!(first.status, RunStatus::Pending);
-    let pending_wait = env
-        .rimz()
-        .args(["agents", "wait", "@peer", "--timeout", "1s"])
-        .bounded_output()
-        .unwrap();
     assert_eq!(
-        pending_wait.status.code(),
-        Some(RunStatus::TimedOut.exit_code()),
-        "wait must find the pending run before registration: {}",
-        String::from_utf8_lossy(&pending_wait.stderr)
-    );
-    let receipt = String::from_utf8_lossy(&out.stdout);
-    assert!(receipt.contains("AGENT_REPORT"), "{receipt}");
-    assert!(
-        receipt.contains(&format!("rimz agents wait {}", first.run_id)),
-        "{receipt}"
+        receipt_wait_target_finds_the_pending_run(&env, &out),
+        "@peer"
     );
     let launch_id = &first.peer.as_ref().unwrap().launch_id;
     // The mux shim does not execute its pane command. Bind the pane as the exec wrapper does.

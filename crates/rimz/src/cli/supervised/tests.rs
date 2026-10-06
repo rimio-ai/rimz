@@ -929,54 +929,73 @@ fn background_receipt_names_the_report_or_the_wait_command() {
         .unwrap();
         String::from_utf8(err).unwrap()
     };
-    let receipt = |names: &[&str], path: Option<&str>, subagent: bool| {
-        receipt_for(names, path, subagent, ReportTo::Launcher)
-    };
+    let path = Some("/state/out/planner/calm-fox.output");
+    let one = ["calm-fox"].as_slice();
+    let several = ["calm-fox", "bold-owl", "shy-elk"].as_slice();
 
-    assert_eq!(
-        receipt(&["otter"], Some("/state/out/planner/otter.output"), true),
-        "@otter runs in the background. Each subagent's captured response lands at /state/out/planner/otter.output when that subagent settles. When every subagent you launched has settled, one SUBAGENT_REPORT from @rimz reaches you at your next turn boundary with each one's status and response path. Keep working or end your turn; to block instead: rimz subagents wait @otter\n"
-    );
-    assert_eq!(
-        receipt(
-            &["otter", "fox"],
-            Some("/state/out/planner/otter.output"),
-            false
-        ),
-        "@otter, @fox run in the background. Each agent's captured response lands at /state/out/planner/<name>.output when that agent settles. When every agent you launched has settled, one AGENT_REPORT from @rimz reaches you at your next turn boundary with each one's status and response path. Keep working or end your turn; to block instead: rimz agents wait otter fox\n"
-    );
-    assert_eq!(
-        receipt(&["otter"], None, false),
-        "@otter runs in the background; print its final response with: rimz agents wait otter\n"
-    );
-    assert_eq!(
-        receipt(&["otter", "fox"], None, true),
-        "@otter, @fox run in the background; print their final responses with: rimz agents wait otter fox\n"
-    );
-
-    assert_eq!(
-        receipt_for(
-            &["otter"],
-            Some("/state/out/planner/otter.output"),
+    for (subagent, report, settled, noun, wait) in [
+        (
             true,
-            ReportTo::Nobody
+            "SUBAGENT_REPORT",
+            "every subagent you launched",
+            "subagent",
+            "rimz subagents wait",
         ),
-        "@otter runs detached in the background: no SUBAGENT_REPORT reaches you and nothing holds your turn. Each subagent's captured response lands at /state/out/planner/otter.output when that subagent settles. To collect on purpose: rimz subagents wait @otter\n"
-    );
-    assert_eq!(
-        receipt_for(
-            &["otter", "fox"],
-            Some("/state/out/planner/otter.output"),
+        (
             false,
-            ReportTo::Nobody
+            "AGENT_REPORT",
+            "every agent you launched",
+            "agent",
+            "rimz agents wait",
         ),
-        "@otter, @fox run detached in the background: no AGENT_REPORT reaches you and nothing holds your turn. Each agent's captured response lands at /state/out/planner/<name>.output when that agent settles. To collect on purpose: rimz agents wait otter fox\n"
+    ] {
+        assert_eq!(
+            receipt_for(one, path, subagent, ReportTo::Launcher),
+            format!(
+                "Running in the background. Keep working or end your turn: one {report} reaches you once {settled} has settled.\nIts response lands at /state/out/planner/calm-fox.output when it settles. To block instead: {wait} calm-fox\n"
+            )
+        );
+        assert_eq!(
+            receipt_for(several, path, subagent, ReportTo::Launcher),
+            format!(
+                "Running in the background. Keep working or end your turn: one {report} reaches you once {settled} has settled.\nEach response lands at /state/out/planner/<name>.output when its {noun} settles. To block instead: {wait} calm-fox bold-owl shy-elk\n"
+            )
+        );
+        assert_eq!(
+            receipt_for(one, path, subagent, ReportTo::Nobody),
+            format!(
+                "Running detached: no {report} will reach you.\nIts response lands at /state/out/planner/calm-fox.output when it settles. To collect it: {wait} calm-fox\n"
+            )
+        );
+        assert_eq!(
+            receipt_for(several, path, subagent, ReportTo::Nobody),
+            format!(
+                "Running detached: no {report} will reach you.\nEach response lands at /state/out/planner/<name>.output when its {noun} settles. To collect them: {wait} calm-fox bold-owl shy-elk\n"
+            )
+        );
+    }
+
+    assert_eq!(
+        receipt_for(one, None, false, ReportTo::Launcher),
+        "Running in the background. To print its final response: rimz agents wait calm-fox\n"
     );
     assert_eq!(
-        receipt_for(&["otter"], None, false, ReportTo::Nobody),
-        receipt(&["otter"], None, false),
-        "a shell is told nothing either way"
+        receipt_for(several, None, false, ReportTo::Launcher),
+        "Running in the background. To print their final responses: rimz agents wait calm-fox bold-owl shy-elk\n"
     );
+    for names in [one, several] {
+        for (subagent, report_to) in [
+            (true, ReportTo::Launcher),
+            (false, ReportTo::Nobody),
+            (true, ReportTo::Nobody),
+        ] {
+            assert_eq!(
+                receipt_for(names, None, subagent, report_to),
+                receipt_for(names, None, false, ReportTo::Launcher),
+                "a shell is told the same thing in either flavour, attached or detached"
+            );
+        }
+    }
 }
 
 #[test]
