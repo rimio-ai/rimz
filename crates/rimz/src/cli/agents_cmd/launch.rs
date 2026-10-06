@@ -537,7 +537,7 @@ pub(in crate::cli) fn launch_resolved(
     }
     crate::cli::lsp_admission::admit(&launch.cwd, &machine_config)?;
     if let Some(channel) = args.launch.cohort.channel.as_deref() {
-        rimz::channel::register(workspace, store.paths(), channel)?;
+        rimz::channel::admit_launch(workspace, channel)?;
     }
     let room_channel = rimz::harness::spec::resolve_room_channel(
         &workspace.project_root,

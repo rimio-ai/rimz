@@ -357,7 +357,7 @@ An address resolves against a fresh snapshot to zero, one, or many agents.
 
 Fan-out delivers to every match, prefixes each delivery with the addressed handle (`@all,`, `@claude,`), and skips a blocked agent while the rest send. Resolution itself is caller-agnostic; message dispatch then removes a RimZ-launched caller from an intrinsic `@all`, so an agent never messages itself.
 
-`--create` launches a missing agent straight from its address. `rimz message --steer @planner#design --create "draft the API"` opens a `planner` in `#design`, registering the named channel, with the text as its first prompt. With `--worktree feat/x` it creates or reuses that worktree instead.
+`--create` launches a missing agent straight from its address. `rimz message --steer @planner#design --create "draft the API"` opens a `planner` in `#design` with the text as its first prompt. With `--worktree feat/x` it creates or reuses that worktree instead.
 
 Resolution has two sources and one matcher set over both: rollup sessions (`&AgentState`, used by management commands and parked message records) and the live agent panes the producer bound (`&PaneAgent`, used by `--steer` and send-now messages). Each command chooses its source. Pane binding then joins a match to exact lifecycle state, a same-channel provisional launch card, or a sessionless lazy target, so an agent is addressable before its first turn registers.
 

@@ -144,7 +144,7 @@ The trunk glyph ranks reconciling (a local rebase or merge in flight) first, the
 |---|---|
 | carries a channel | that channel's pod |
 | has no worktree path | a group named by its branch if it has one, otherwise `external` |
-| path inside the repo's RimZ-owned worktree home | that worktree's `#channel` pod, matching message addressing and `rimz channel list` |
+| path inside the repo's RimZ-owned worktree home | that worktree's `#channel` pod, matching message addressing |
 | path inside a group root | the deepest containing root: a checkout in a repo room, a name-only root pod for the root of a directory room |
 | path outside every root, in a room with no roots at all | its own group per path |
 | path outside every root that names the row's branch | a group named by the branch |

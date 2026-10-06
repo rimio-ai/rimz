@@ -1,21 +1,14 @@
-//! Durable named-channel registry and shared channel/worktree namespace.
+//! Channel name grammar and the shared channel/worktree namespace.
 //!
-//! Worktree, team, and directory channels are derived from their backing state.
-//! This file stores only bare named channels so an empty cooperation tab survives
-//! room rebirth. Named-channel and managed-worktree creation also enter through
-//! here so neither can claim a name already owned by the other.
+//! A channel is never a stored object: worktree, team, explicit, and directory
+//! lanes are all derived from what backs them. This file owns the two rules a
+//! lane name answers to: its syntax, and that an explicit `--channel` lane and
+//! a managed worktree never hold the same name.
 
-use std::collections::{BTreeMap, BTreeSet, btree_map::Entry};
-use std::fs;
-use std::io;
-use std::path::{Path, PathBuf};
+use std::collections::BTreeSet;
 
-use jiff::Timestamp;
-use serde::{Deserialize, Serialize};
-
-use crate::disk::atomic::{self, write_temp_then_rename};
-use crate::disk::lock::{self, WorkspaceLock};
-use crate::disk::paths::StatePaths;
+use crate::agents::AgentState;
+use crate::store::runtime::{AgentLiveness, agent_liveness};
 use crate::workspace::{ResolvedWorkspace, RootClass};
 
 #[derive(Debug, thiserror::Error)]
@@ -24,55 +17,13 @@ pub enum ChannelErr {
     InvalidName { name: String },
     #[error("channel `{name}` is backed by a worktree; use `--worktree {name}`")]
     WorktreeCollision { name: String },
-    #[error("channel `{name}` is a named channel; use `rimz channel new` or pick another name")]
-    NamedChannelCollision { name: String },
-    #[error(transparent)]
-    Worktree(#[from] crate::worktree::WorktreeErr),
-    #[error(transparent)]
-    Atomic(#[from] atomic::AtomicErr),
-    #[error(transparent)]
-    Lock(#[from] lock::LockErr),
-    #[error("cannot access {path}: {source}")]
-    Io {
-        path: PathBuf,
-        #[source]
-        source: io::Error,
-    },
-    #[error("json parse error on {path}: {source}")]
-    Json {
-        path: PathBuf,
-        #[source]
-        source: serde_json::Error,
-    },
+    #[error(
+        "channel `{name}` is held by live agents; pick another name, or stop them with `rimz agents stop`"
+    )]
+    LaneOccupied { name: String },
 }
 
 pub type Result<T> = std::result::Result<T, ChannelErr>;
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ChannelRecord {
-    pub name: String,
-    pub created_at: Timestamp,
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct Channels(pub BTreeMap<String, ChannelRecord>);
-
-impl Channels {
-    fn into_records(self) -> Vec<ChannelRecord> {
-        self.0.into_values().collect()
-    }
-}
-
-fn validate_name(name: &str) -> Result<()> {
-    if valid_name(name) {
-        Ok(())
-    } else {
-        Err(ChannelErr::InvalidName {
-            name: name.to_owned(),
-        })
-    }
-}
 
 pub fn valid_name(name: &str) -> bool {
     !name.is_empty()
@@ -81,153 +32,113 @@ pub fn valid_name(name: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
 }
 
-fn read(path: &Path) -> Result<Channels> {
-    match fs::read(path) {
-        Ok(bytes) => serde_json::from_slice(&bytes).map_err(|source| ChannelErr::Json {
-            path: path.to_path_buf(),
-            source,
-        }),
-        Err(source) if source.kind() == io::ErrorKind::NotFound => Ok(Channels::default()),
-        Err(source) => Err(ChannelErr::Io {
-            path: path.to_path_buf(),
-            source,
-        }),
-    }
-}
-
-pub fn list(path: &Path) -> Result<Vec<ChannelRecord>> {
-    Ok(read(path)?.into_records())
-}
-
-#[must_use = "durability barrier; check the result"]
-pub fn register(
-    workspace: &ResolvedWorkspace,
-    paths: &StatePaths,
-    name: &str,
-) -> Result<ChannelRecord> {
-    if managed_worktree_channel_exists(workspace, name) {
+/// Admit an explicit `--channel` launch: no managed worktree owns the name and
+/// the name is well formed. Reads Git worktree state only.
+pub fn admit_launch(workspace: &ResolvedWorkspace, name: &str) -> Result<()> {
+    if worktree_channel_names(workspace).contains(name) {
         return Err(ChannelErr::WorktreeCollision {
             name: name.to_owned(),
         });
     }
-    validate_name(name)?;
-    let _lock = WorkspaceLock::acquire(&paths.workspace_lock)?;
-    let mut channels = read(&paths.channels_record)?;
-    let record = match channels.0.entry(name.to_owned()) {
-        Entry::Occupied(entry) => entry.get().clone(),
-        Entry::Vacant(entry) => {
-            let record = ChannelRecord {
-                name: name.to_owned(),
-                created_at: Timestamp::now(),
-            };
-            entry.insert(record.clone());
-            write_temp_then_rename(&paths.channels_record, &channels)?;
-            record
-        }
-    };
-    Ok(record)
-}
-
-/// Reject a managed-worktree name already owned by a named channel.
-///
-/// Admission stays a registry-only read so worktree creation adds no Git probe.
-pub fn ensure_worktree_name_available(paths: &StatePaths, name: &str) -> Result<()> {
-    if read(&paths.channels_record).is_ok_and(|channels| channels.0.contains_key(name)) {
-        return Err(ChannelErr::NamedChannelCollision {
+    if !valid_name(name) {
+        return Err(ChannelErr::InvalidName {
             name: name.to_owned(),
         });
     }
     Ok(())
 }
 
-/// Managed-worktree names as they appear in the shared channel namespace.
-pub fn worktree_channel_names(workspace: &ResolvedWorkspace) -> Result<BTreeSet<String>> {
-    if workspace.root_class != RootClass::Repo {
-        return Ok(BTreeSet::new());
+/// Admit a managed-worktree name: no live agent holds an explicit lane under it.
+///
+/// A worktree's own agents carry the same stamp as an explicit `--channel`
+/// launch, so the checkout is what tells the two apart.
+pub fn admit_worktree_name(agents: &[AgentState], name: &str) -> Result<()> {
+    let occupied = agents.iter().any(|agent| {
+        agent.ended_at.is_none()
+            && agent.channel.as_deref() == Some(name)
+            && agent
+                .worktree_path
+                .as_deref()
+                .and_then(|path| std::path::Path::new(path).file_name())
+                != Some(std::ffi::OsStr::new(name))
+            && agent_liveness(agent) != AgentLiveness::Dead
+    });
+    if occupied {
+        return Err(ChannelErr::LaneOccupied {
+            name: name.to_owned(),
+        });
     }
-    Ok(crate::worktree::discover_owned(&workspace.project_root)?
+    Ok(())
+}
+
+/// Managed-worktree names as they appear in the shared channel namespace; an
+/// unreadable worktree list claims no name.
+fn worktree_channel_names(workspace: &ResolvedWorkspace) -> BTreeSet<String> {
+    if workspace.root_class != RootClass::Repo {
+        return BTreeSet::new();
+    }
+    crate::worktree::discover_owned(&workspace.project_root)
+        .unwrap_or_default()
         .into_iter()
         .map(|worktree| worktree.branch.unwrap_or(worktree.marker.name))
-        .collect())
-}
-
-#[must_use = "durability barrier; check the result"]
-pub fn remove(paths: &StatePaths, name: &str) -> Result<Option<ChannelRecord>> {
-    validate_name(name)?;
-    let _lock = WorkspaceLock::acquire(&paths.workspace_lock)?;
-    let mut channels = read(&paths.channels_record)?;
-    let removed = channels.0.remove(name);
-    if removed.is_some() {
-        write_temp_then_rename(&paths.channels_record, &channels)?;
-    }
-    Ok(removed)
-}
-
-fn managed_worktree_channel_exists(workspace: &ResolvedWorkspace, name: &str) -> bool {
-    worktree_channel_names(workspace).is_ok_and(|names| names.contains(name))
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ids::WorkspaceId;
+    use crate::pane::{RuntimeOwner, RuntimeOwnerKind};
     use crate::workspace::WorkspaceResolver;
+    use jiff::Timestamp;
     use tempfile::tempdir;
 
-    fn fixture() -> (ResolvedWorkspace, StatePaths) {
+    fn lane_agent(channel: &str, worktree_path: &str) -> AgentState {
+        AgentState {
+            channel: Some(channel.to_owned()),
+            worktree_path: Some(worktree_path.to_owned()),
+            ..crate::testkit::agent_state("claude", "sess", Timestamp::UNIX_EPOCH)
+        }
+    }
+
+    #[test]
+    fn launch_admission_refuses_an_invalid_name() {
         let dir = tempdir().expect("tempdir");
-        let root = dir.keep();
-        let workspace = WorkspaceResolver::resolve(&root, None).expect("workspace");
-        let id = WorkspaceId::from_project_root(&root);
-        let paths = StatePaths::under(id, &root).expect("state paths");
-        (workspace, paths)
+        let workspace = WorkspaceResolver::resolve(dir.path(), None).expect("workspace");
+
+        admit_launch(&workspace, "design").expect("bare name");
+        let err = admit_launch(&workspace, "bad/name").expect_err("invalid name");
+
+        assert!(matches!(err, ChannelErr::InvalidName { name } if name == "bad/name"));
     }
 
     #[test]
-    fn registry_round_trips_and_register_is_idempotent() {
-        let (workspace, paths) = fixture();
+    fn worktree_name_admission_refuses_a_lane_live_agents_hold() {
+        let held = [lane_agent("design", "/repo")];
 
-        let first = register(&workspace, &paths, "design").expect("register");
-        let second = register(&workspace, &paths, "design").expect("register again");
-        let records = list(&paths.channels_record).expect("list");
+        let err = admit_worktree_name(&held, "design").expect_err("occupied lane");
 
-        assert_eq!(first, second);
-        assert_eq!(records, vec![first]);
+        assert!(matches!(err, ChannelErr::LaneOccupied { name } if name == "design"));
+        admit_worktree_name(&held, "docs").expect("another name");
     }
 
     #[test]
-    fn remove_deletes_named_record() {
-        let (workspace, paths) = fixture();
-        register(&workspace, &paths, "ops").expect("register");
+    fn worktree_name_admission_ignores_ended_dead_and_worktree_agents() {
+        let ended = AgentState {
+            ended_at: Some(Timestamp::UNIX_EPOCH),
+            ..lane_agent("design", "/repo")
+        };
+        let dead = AgentState {
+            runtime_owner: Some(RuntimeOwner::new(
+                RuntimeOwnerKind::Agent,
+                "sess",
+                u32::MAX,
+                None,
+            )),
+            ..lane_agent("design", "/repo")
+        };
+        let in_worktree = lane_agent("design", "/repo/.worktrees/design");
 
-        let removed = remove(&paths, "ops").expect("remove");
-        let records = list(&paths.channels_record).expect("list");
-
-        assert_eq!(removed.map(|record| record.name), Some("ops".to_owned()));
-        assert!(records.is_empty());
-    }
-
-    #[test]
-    fn absent_remove_does_not_create_registry_file() {
-        let (_, paths) = fixture();
-
-        let removed = remove(&paths, "ops").expect("remove");
-
-        assert!(removed.is_none());
-        assert!(!paths.channels_record.exists());
-    }
-
-    #[test]
-    fn worktree_name_admission_rejects_named_channel() {
-        let (workspace, paths) = fixture();
-        register(&workspace, &paths, "design").expect("register");
-
-        let err = ensure_worktree_name_available(&paths, "design").expect_err("collision");
-
-        assert!(matches!(
-            err,
-            ChannelErr::NamedChannelCollision { name } if name == "design"
-        ));
+        admit_worktree_name(&[ended, dead, in_worktree], "design").expect("free lane");
     }
 
     #[test]

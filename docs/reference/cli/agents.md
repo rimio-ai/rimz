@@ -15,7 +15,7 @@ Why you would launch through RimZ instead of the bare CLI is the [agents guide](
 | Read and drive running agents | `list`, `show`, `logs`, `history`, `attribution`, `top`, `focus`, `fork`, `wait`, `refresh`, `stop`, `restart`, `compact` | [List and manage agents](#list-and-manage-agents) |
 | Cap one agent's spend | `budget` | [Budget CLI](./budget.md#cap-one-agent) |
 
-Neighbouring commands have their own pages: [`rimz teams`](./teams.md) launches and drives configured teams, [`rimz subagents`](./subagents.md) launches supervised children from an agent, [`rimz message`](./message.md) talks to live agents, [`rimz transcript`](./transcript.md) reads the chat log, [`rimz pane`](./pane.md) reads and types into raw panes, and [`rimz channel`](./channel.md) and [`rimz worktree`](./worktree.md) manage lanes.
+Neighbouring commands have their own pages: [`rimz teams`](./teams.md) launches and drives configured teams, [`rimz subagents`](./subagents.md) launches supervised children from an agent, [`rimz message`](./message.md) talks to live agents, [`rimz transcript`](./transcript.md) reads the chat log, [`rimz pane`](./pane.md) reads and types into raw panes, and [`rimz worktree`](./worktree.md) manages worktree lanes.
 
 ## Addressing agents
 
@@ -40,11 +40,11 @@ These handles name a type and can match several agents:
 | `@planner` | Every agent launched under that [profile](../../guide/configuration.md#agent-profiles-commands-and-teams). |
 | `@all` | Every agent in the channel at resolution time. |
 
-A channel scopes the lookup. Without one, the channel is the named-channel tab or worktree you run the command in; a team member launched in place carries `RIMZ_CHANNEL=<dir>/<team>`, so its own commands default to that lane.
+A channel scopes the lookup. Without one, the channel is the `#name` tab or worktree you run the command in; a team member launched in place carries `RIMZ_CHANNEL=<dir>/<team>`, so its own commands default to that lane.
 
 | Form | Matches |
 | --- | --- |
-| `#design` | A named channel created by [`rimz channel`](./channel.md). The flag spelling is `--channel design`. |
+| `#design` | A lane agents were launched into with `--channel design`. |
 | `#auth-refresh` | A worktree lane, by branch, generated worktree name, or directory basename. The flag spelling is `--worktree auth-refresh`. |
 | `#query-engine/forge` | The team `forge` launched in place from the `query-engine` directory. |
 | `tmux:%12`, `zellij:terminal_3` | One pane by id, ignoring channels. The [`pane` commands](./pane.md) also accept the literal `sidebar`. |
@@ -164,7 +164,7 @@ A launch runs in the current directory's checkout by default. These flags choose
 | `--cwd <DIR>` | Launch in an existing directory without changing rooms or taking worktree ownership. Relative paths resolve against the caller's current directory, in its sandbox view when sandboxed. Missing directories are refused, never created. The channel follows the directory basename unless `--channel` names one. Conflicts with `--worktree`, `--from-pr`, `--resume`, and `--fresh`. |
 | `-w`, `--worktree [NAME]` | Reuse or create the RimZ-owned worktree `NAME`, on channel `#NAME` in a tab named `#NAME`. Bare `-w` creates a fresh worktree with a generated name. |
 | `--from-pr <NUMBER\|URL>` | Reuse the marked tree holding a same-repository PR's head branch, or create a tree named `pr-<N>` unless `-w NAME` names it. An explicit name must match an existing holder. |
-| `--channel <NAME>` | Launch into the durable named channel `NAME` in the selected directory, registering it when missing, in a tab named `#NAME`. Manage channels with [`rimz channel`](./channel.md). |
+| `--channel <NAME>` | Launch into the lane `#NAME` in the selected directory, in a tab named `#NAME`. The lane exists while agents run in it. `NAME` is bare ASCII letters, digits, `_`, or `-` (`--channel '#design'` is refused with `invalid channel name`), and a name a RimZ-owned worktree holds is refused with ``channel `NAME` is backed by a worktree``. |
 
 Fresh worktree launches print the same [stale-base warning](./worktree.md#create-a-worktree) as `worktree new`, with the remedy to fast-forward the base first or set `agents.worktree.base` to `fresh`.
 

@@ -214,7 +214,6 @@ pub struct StatePaths {
     pub(crate) publish_lock: PathBuf,
     pub workspace_record: PathBuf,
     pub room_bin: PathBuf,
-    pub channels_record: PathBuf,
     pub(crate) boot_marker: PathBuf,
     pub live_roster: PathBuf,
     pub pending_recovery: PathBuf,
@@ -289,7 +288,6 @@ impl StatePaths {
             publish_lock: Class::Locks.path_under(&root).join("publish.lock"),
             workspace_record: root.join("workspace.json"),
             room_bin: root.join("rimz"),
-            channels_record: records_dir.join("channels.json"),
             boot_marker: records_dir.join("boot.json"),
             live_roster: records_dir.join("live-roster.json"),
             pending_recovery: records_dir.join("pending-recovery.json"),
@@ -315,6 +313,12 @@ impl StatePaths {
 
     pub(crate) fn lock_path(&self, name: &str) -> PathBuf {
         Class::Locks.path_under(&self.root).join(name)
+    }
+
+    /// The named-channel record no code reads or writes any more; `rimz gc`
+    /// removes one an older build left.
+    pub(crate) fn retired_channels_record(&self) -> PathBuf {
+        Class::Records.path_under(&self.root).join("channels.json")
     }
 
     pub(crate) fn recovery_log(&self) -> PathBuf {

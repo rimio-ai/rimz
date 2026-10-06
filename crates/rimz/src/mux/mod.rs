@@ -510,8 +510,7 @@ pub struct ResumeTab {
     /// Environment applied to every command pane in the tab (the pane identity
     /// pin), the same way `TabOptions.env` applies to a live tab.
     pub env: BTreeMap<String, String>,
-    /// At least one pane; an empty named channel restores as one user-shell
-    /// pane named after the channel. Resume panes run the supervised exec
+    /// At least one pane. Resume panes run the supervised exec
     /// wrapper, e.g. `["<rimz>", "agents", "exec", "claude", "--request",
     /// "<json>"]`, so a resumed agent gets the same launch-env injection as a
     /// fresh launch.

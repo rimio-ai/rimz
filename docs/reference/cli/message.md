@@ -116,7 +116,7 @@ Each fan-out delivery starts with the typed selector, such as `@all, ` or `@code
 | --- | --- |
 | `--channel <NAME>` | Match only agents in that named channel. Same as an inline `#NAME`. Conflicts with `--worktree`. |
 | `--worktree <NAME>` | Match only agents in that worktree, by name or path. Conflicts with `--channel`. |
-| `--create` | When the address matches no agent, launch one from a kind (`@codex`) or profile (`@planner`) with the text as its first prompt. `--worktree <NAME>` launches in that worktree; an inline `#NAME` or `--channel <NAME>` registers a named channel and launches there, and is refused when a worktree already owns the name. A pet name or ordinal cannot create. Conflicts with `--schedule`, `--after`, `--when`, and `--wait`. |
+| `--create` | When the address matches no agent, launch one from a kind (`@codex`) or profile (`@planner`) with the text as its first prompt. `--worktree <NAME>` launches in that worktree; an inline `#NAME` or `--channel <NAME>` launches into that lane, and is refused when a worktree already owns the name. A pet name or ordinal cannot create. Conflicts with `--schedule`, `--after`, `--when`, and `--wait`. |
 
 ## Delivery options
 

@@ -20,7 +20,7 @@ fn death_notice(death: &rimz::store::event::LastDeathMarker) -> String {
 
 /// Report recovered and skipped prior agents to stderr so attach stdout stays clean.
 pub(super) fn report_resume(plan: &rimz::harness::resume::ResumePlan) {
-    if !plan.tabs.is_empty() || !plan.channel_tabs.is_empty() {
+    if !plan.tabs.is_empty() {
         let agents = plan
             .tabs
             .iter()
@@ -29,20 +29,15 @@ pub(super) fn report_resume(plan: &rimz::harness::resume::ResumePlan) {
         let labels = plan
             .tabs
             .iter()
-            .chain(&plan.channel_tabs)
             .map(|tab| tab.label.as_str())
             .collect::<Vec<_>>()
             .join(", ");
-        if agents == 0 {
-            let _ = writeln!(std::io::stderr(), "rimz: restored channel tab(s): {labels}");
-        } else {
-            let _ = writeln!(
-                std::io::stderr(),
-                "rimz: resumed {} agent{}: {labels}",
-                agents,
-                if agents == 1 { "" } else { "s" },
-            );
-        }
+        let _ = writeln!(
+            std::io::stderr(),
+            "rimz: resumed {} agent{}: {labels}",
+            agents,
+            if agents == 1 { "" } else { "s" },
+        );
     }
     if !plan.skipped.is_empty() {
         let detail = plan

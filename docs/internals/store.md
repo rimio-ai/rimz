@@ -88,7 +88,6 @@ log/events.log.jsonl                          framed event log
 log/archive/events.<uuidv7>.jsonl              rotated logs
 records/agents-carryover.json                 agent rollup carried across rotation
 records/messages/messages.jsonl               live message queue
-records/channels.json                         named channels
 records/loop-instances.json                   loop and wait rows
 records/loop-launches.json                    resident loop launches by task and checkout
 records/boot.json                             last host boot id
@@ -136,7 +135,7 @@ This page owns the log, the caches derived from it, and the workspace record. Th
 
 | Files | Owner |
 | --- | --- |
-| `records/messages/`, `audit/messages/`, `records/channels.json` | [messaging.md](./harness/messaging.md#storage-and-audit) |
+| `records/messages/`, `audit/messages/` | [messaging.md](./harness/messaging.md#storage-and-audit) |
 | `audit/transcript/` | [transcript.md](./harness/transcript.md#the-log) |
 | `owned/runs/` | [scripting.md](./harness/scripting.md#the-record) |
 | `records/loop-instances.json`, `out/<reader>/wait-*.output` | [loops.md](./harness/loops.md#where-tasks-live) |
@@ -308,7 +307,7 @@ Every disk write falls into one of four classes, and one line sorts them: **dura
 | Event log | `log/events.log.jsonl` | One CRC-framed `write()` per record or ordered batch. The off-lock tail issues a group `fdatasync` at most once a second, and rotation syncs before the rename. | Intact through the last group sync. The trailing window can be lost, and the frame CRC turns a torn suffix into deterministic corruption that repair truncates. |
 | Audit appends | `audit/messages/<bucket-start>.jsonl`, `audit/transcript/*.jsonl`, `out/<reader>/<name>.output` | `O_APPEND`, no per-record fsync. History and transcript append under the workspace lock. A queue transaction commits `messages.jsonl` before it appends history and event frames, so a history append failure warns and never undoes the queue transition ([messaging.md → Storage and audit](./harness/messaging.md#storage-and-audit)). A wait log takes no store lock: `rimz wait` creates it at arm time, and the one watcher holding that wait's `locks/loop-watch-<name>.lock` is its only writer after that. A check watcher truncates and rewrites it for each run, keeping only the latest output ([loops.md → Watched commands](./harness/loops.md#watched-commands)). | Trailing records can be lost. The cost is history completeness, never queue correctness. For wait output, the run record keeps the last 4 KiB, and the delivered message carries the file path, estimated tokens, and line count; a file pattern match also includes a matched-line preview. |
 | Cache write | `cache/snapshots/*.json`, `records/live-roster.json`, heartbeats, sidecars, the sidebar's published lanes | Temp file plus atomic rename, no fsync. The roster is the named best-effort records exception, not rebuildable history. | Caches rebuild or refresh; loss of the roster's latest write can narrow recovery. |
-| Durable records | `records/messages/messages.jsonl`, `owned/runs/<run_id>.json`, `workspace.json`, `records/agents-carryover.json`, `records/channels.json`, `records/loop-instances.json`, `records/idle-stop.json`, trust grants, notification handlers, hook installs | Temp file, fsync, rename, parent-directory sync. | Survives. |
+| Durable records | `records/messages/messages.jsonl`, `owned/runs/<run_id>.json`, `workspace.json`, `records/agents-carryover.json`, `records/loop-instances.json`, `records/idle-stop.json`, trust grants, notification handlers, hook installs | Temp file, fsync, rename, parent-directory sync. | Survives. |
 
 Every fsync call funnels through [`disk/atomic.rs`](../../crates/rimz/src/disk/atomic.rs), and no module hand-rolls its own temp-file dance. The `cargo xtask invariants` check `ensure_store_durability` rejects a `sync_all` or `sync_data` method call anywhere else; it matches those two std methods only, so a raw `libc` or `nix` fsync would pass the grep and has to be caught in review.
 

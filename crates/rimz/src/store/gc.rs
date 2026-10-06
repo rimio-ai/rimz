@@ -357,6 +357,34 @@ mod tests {
     }
 
     #[test]
+    fn room_collection_removes_the_retired_channel_record() {
+        let home = tempfile::tempdir().unwrap();
+        let state = paths::StatePaths::under(
+            crate::WorkspaceId::from_project_root(home.path()),
+            home.path(),
+        )
+        .unwrap();
+        state.ensure_dirs().unwrap();
+        let runtime = paths::RuntimePaths::for_state_under(&state, home.path());
+        runtime.ensure_dirs().unwrap();
+        let retired = state.retired_channels_record();
+        fs::create_dir_all(retired.parent().unwrap()).unwrap();
+        fs::write(&retired, b"not json").unwrap();
+        for dry_run in [true, false] {
+            let report =
+                collect_room_under(&state, &runtime, Duration::ZERO, dry_run, |_, _| Ok(false))
+                    .unwrap();
+            let records = report.rooms[0]
+                .classes
+                .iter()
+                .find(|class| class.class == "records")
+                .expect("records class");
+            assert_eq!((records.files_removed, records.bytes_removed), (1, 8));
+            assert_eq!(retired.exists(), dry_run);
+        }
+    }
+
+    #[test]
     fn absent_room_collection_creates_nothing() {
         let home = tempfile::tempdir().unwrap();
         let state = paths::StatePaths::under(

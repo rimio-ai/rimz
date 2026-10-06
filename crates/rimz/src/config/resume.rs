@@ -35,8 +35,8 @@ const AUTO_REDEEM_DURATION_UNITS: &[DurationUnit] = &[
 /// non-interactive starts recover. A host with no readable boot signal and no
 /// lost-agent markers starts bare. A deliberate agent close — clean quit,
 /// tab/pane close while the room remains healthy, or a whole-room close down to
-/// `rimzd` while the machine stays up — keeps agents out of recovery. Empty
-/// named channel tabs still reopen, and manual `rimz reset` starts fresh. While
+/// `rimzd` while the machine stays up — keeps agents out of recovery. A manual
+/// `rimz reset` starts fresh. While
 /// the room is *live*, opt-in auto-continue picks a parked agent's turn back up
 /// after a rate-limit window resets or a non-clocked retry backoff elapses.
 /// Backend-neutral product behavior the cli and producer read directly, not a

@@ -179,7 +179,7 @@ pub(crate) struct CohortLaunchArgs {
         add = clap_complete::ArgValueCandidates::new(crate::cli::complete::worktrees)
     )]
     pub(crate) worktree: Option<String>,
-    /// Launch into a durable named channel.
+    /// Launch into the named channel.
     #[arg(
         long,
         value_name = "NAME",
@@ -1211,7 +1211,7 @@ pub(crate) fn create_on_miss(
         );
     }
     // `--worktree` keeps the historical worktree create-on-miss path. `--channel`
-    // and inline `#name` create durable named lanes.
+    // and inline `#name` launch into a named lane.
     let inline_named_channel = target
         .split_once('#')
         .is_some_and(|(_, channel)| rimz::channel::valid_name(channel));
