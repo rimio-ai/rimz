@@ -507,15 +507,20 @@ fn gate_test(root: &Path, keep_going: bool, progress: &mut dyn FnMut(&str)) -> R
     let env = sandbox.command_env();
     let removed = sandbox.removed_test_env();
     let no_fail_fast = keep_going.then_some("--no-fail-fast");
-    let result = captured_cargo_gate(
+    let captured = run_streamed(
         root,
+        "cargo",
         GATE_TEST_ARGS.iter().copied().chain(no_fail_fast),
         &env,
         &str_refs(&removed),
-        Some(extract_test_summary),
         progress,
     )?;
-    Ok(result.with_skip_report(sandbox.skip_report()))
+    Ok(captured_test_result(
+        &captured,
+        sandbox.skip_report(),
+        None,
+        &std::env::temp_dir(),
+    ))
 }
 
 fn captured_cargo_gate<I, S>(
@@ -543,6 +548,42 @@ fn captured_result(captured: &Captured, note: Option<fn(&str) -> Option<String>>
     GateResult::Fail {
         detail: failure_detail(&captured.output),
     }
+}
+
+fn captured_test_result(
+    captured: &Captured,
+    skip_report: Option<String>,
+    denied_skips: Option<String>,
+    output_dir: &Path,
+) -> GateResult {
+    let mut result = captured_result(captured, Some(extract_test_summary))
+        .with_skip_report(skip_report)
+        .denying_skips(denied_skips);
+    if captured.status.success() {
+        return result;
+    }
+    let saved = (|| -> Result<PathBuf> {
+        let mut file = tempfile::Builder::new()
+            .prefix("rimz-xtask-test-")
+            .suffix(".output")
+            .tempfile_in(std::path::absolute(output_dir)?)?;
+        file.write_all(captured.output.as_bytes())?;
+        let (_, path) = file.keep()?;
+        Ok(path)
+    })();
+    if let GateResult::Fail { detail } = &mut result {
+        let line = match saved {
+            Ok(path) => format!(
+                "{} ({} lines, {} KB)",
+                path.display(),
+                captured.output.lines().count(),
+                captured.output.len().div_ceil(1024),
+            ),
+            Err(err) => format!("not saved ({err})"),
+        };
+        detail.push_str(&format!("\nfull test output: {line}"));
+    }
+    result
 }
 
 fn capture_cargo_task<I, S>(
@@ -975,14 +1016,13 @@ pub(crate) fn test(root: &Path, args: &[String]) -> Result<()> {
             report_zero_test_match(args);
             bail!("no tests matched");
         }
-        let result = captured_result(&captured, Some(extract_test_summary));
-        return finish_cargo_task(
-            "test",
-            result
-                .with_skip_report(sandbox.skip_report())
-                .denying_skips(denied_skips()),
-            &invocation,
+        let result = captured_test_result(
+            &captured,
+            sandbox.skip_report(),
+            denied_skips(),
+            &std::env::temp_dir(),
         );
+        return finish_cargo_task("test", result, &invocation);
     }
 
     run_named_tests(root, command, &sandbox, &denied_skips, &invocation)
@@ -1128,14 +1168,13 @@ fn run_named_tests(
     }
     let captured = capture_cargo_task(root, "test", run_args, env, removed)?;
     report_test_selection(&command.names, &matches);
-    let result = captured_result(&captured, Some(extract_test_summary));
-    finish_cargo_task(
-        "test",
-        result
-            .with_skip_report(sandbox.skip_report())
-            .denying_skips(denied_skips()),
-        invocation,
-    )?;
+    let result = captured_test_result(
+        &captured,
+        sandbox.skip_report(),
+        denied_skips(),
+        &std::env::temp_dir(),
+    );
+    finish_cargo_task("test", result, invocation)?;
     if !matches.unmatched.is_empty() {
         bail!("some requested test names matched no tests");
     }
