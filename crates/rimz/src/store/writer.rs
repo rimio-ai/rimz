@@ -14,7 +14,7 @@ use tracing::warn;
 use crate::agents::LaunchParams;
 use crate::disk::{lock, paths::StatePaths};
 use crate::ids::{AgentKind, AgentSessionId, EventId, RunId, WorkspaceId};
-use crate::pane::{RuntimeOwner, RuntimeOwnerKind};
+use crate::pane::{PaneRef, RuntimeOwner, RuntimeOwnerKind};
 use crate::store::event::{
     AgentAttachPayload, AgentLaunchPayload, AgentLaunchState, AgentLaunchWarningsPayload,
     EventEnvelope, SIGNAL_METHOD, SignalEventPayload,
@@ -516,7 +516,21 @@ impl Store {
         launch: Option<&LaunchParams>,
     ) -> Result<()> {
         self.commit(|txn| {
-            txn.append(&EventEnvelope::agent_attached(
+            let (_cache, agents, _resume_outcomes) = snapshot::catch_up_rollup(txn.paths)?;
+            let pane = PaneRef {
+                pane_pid: Some(std::process::id()),
+                ..PaneRef::from_id(pane_id.clone())
+            };
+            let superseded = lifecycle::superseded_on_attach(
+                &self.inner.paths.workspace_id,
+                session_name,
+                kind,
+                agent_id,
+                &pane,
+                &runtime_owner,
+                &agents,
+            );
+            let attached = EventEnvelope::agent_attached(
                 self.inner.paths.workspace_id.clone(),
                 session_name,
                 kind,
@@ -529,11 +543,12 @@ impl Store {
                     effective_isolation,
                     launch_id: launch_id.cloned(),
                     login: Some(login.clone()),
-                    pane_id: pane_id.clone(),
-                    pane_pid: Some(std::process::id()),
+                    pane_id: pane.pane_id,
+                    pane_pid: pane.pane_pid,
                     runtime_owner,
                 },
-            ))
+            );
+            txn.append_batch(&[attached].into_iter().chain(superseded).collect::<Vec<_>>())
         })?;
         if let Err(err) = pending_recovery::settle(
             &self.inner.paths,

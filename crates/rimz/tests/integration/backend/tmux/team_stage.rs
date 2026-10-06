@@ -230,10 +230,38 @@ done
     assert!(store.list_pending_messages().unwrap().is_empty());
     assert_eq!(std::fs::read(&board).unwrap(), flipped_board);
     let before = std::fs::read(&received).unwrap();
+    let stage_count = || {
+        let (live, history) = store.list_messages_and_history().unwrap();
+        live.iter()
+            .chain(&history)
+            .filter(|message| {
+                message.sender
+                    == MessageSender::Harness {
+                        notice: HarnessNotice::Stage,
+                    }
+            })
+            .count()
+    };
+    // The typed notice is unconfirmed but still in flight, so registration adds none.
+    hook("SessionStart");
+    command()
+        .args(["message", "sweep"])
+        .assert_success_within_timeout("sweep after a registration covered by the sent notice");
+    assert_eq!(stage_count(), 1);
+    assert_eq!(std::fs::read(&received).unwrap(), before);
+    // Once that write times out unconfirmed, the next registration re-wakes the receiver.
+    let deadline = store.list_messages().unwrap()[0]
+        .sent_reconcile_deadline()
+        .expect("the notice is sent");
+    let report = store
+        .reconcile_stale_sent_messages(&workspace.session_name, deadline, 0)
+        .unwrap();
+    assert_eq!(report.timed_out, 1);
     hook("SessionStart");
     command()
         .args(["message", "sweep"])
         .assert_success_within_timeout("deliver to the registered idle receiver");
+    assert_eq!(stage_count(), 2);
     let messages = store.list_messages().unwrap();
     let rewake = messages
         .iter()

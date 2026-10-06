@@ -208,6 +208,40 @@ fn record_sent_then_turn_start_confirms_delivery() {
 }
 
 #[test]
+fn messages_and_history_read_as_one_view_across_an_ack() {
+    let q = Queue::new();
+    let sent = q.sent(1);
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::scope(|scope| {
+        q.confirm_delivered_for_card_with(
+            AgentCardRef::new(&sent.kind, &sent.agent_id, None),
+            DeliveryAck::TurnStarted {
+                prompt: Some(&user_message("next")),
+            },
+            "session",
+            |_, _| {
+                let store: &Store = &q;
+                scope.spawn(move || tx.send(store.list_messages_and_history().unwrap()));
+                assert!(
+                    rx.recv_timeout(Duration::from_millis(200)).is_err(),
+                    "the read returned while the ack held the workspace lock"
+                );
+            },
+        )
+        .unwrap();
+    });
+    let (live, history) = rx.recv_timeout(Duration::from_secs(10)).unwrap();
+    assert!(live.is_empty(), "{live:#?}");
+    assert!(
+        history
+            .iter()
+            .any(|record| record.message_id == sent.message_id
+                && record.status == MessageStatus::Delivered),
+        "{history:#?}"
+    );
+}
+
+#[test]
 fn idle_compact_command_delivers_at_boundary_and_stamps_the_rollup() {
     let q = Queue::new();
     let observation = AgentLifecycleObservation::new(

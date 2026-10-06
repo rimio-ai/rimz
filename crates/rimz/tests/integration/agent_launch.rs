@@ -2718,10 +2718,12 @@ fn resume_exec_attaches_only_the_resumed_session_to_its_pane() {
                 _ => None,
             })
             .collect::<Vec<_>>();
-        let expected = match (wrapped, subagent) {
-            (true, true) => vec!["attach", "attach", "rimz.agent-resumed", "rimz.agent-ended"],
-            (true, false) => vec!["attach", "attach", "rimz.agent-ended"],
-            (false, _) => vec!["attach"],
+        // Every resume revives its card, root or child, wrapped or direct, before its provider
+        // starts, so the stamp precedes the attach to the spawned provider.
+        let expected = if wrapped {
+            vec!["attach", "rimz.agent-resumed", "attach", "rimz.agent-ended"]
+        } else {
+            vec!["attach", "rimz.agent-resumed"]
         };
         assert_eq!(lifecycle, expected);
         let attaches = store

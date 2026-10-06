@@ -33,7 +33,7 @@ The harness spawns the fleet, addresses it, drives it, and reclaims what it leav
 | [messaging.md](./harness/messaging.md) | Message delivery: the record and its status lifecycle, sending, the delivery pipeline, the pane write, compaction commands, reply waits, scheduling, the inbox verbs, and channels. |
 | [transcript.md](./harness/transcript.md) | The durable conversation log: entry kinds, writing entries, causality, the `rimz transcript` projection, and the ask records behind `rimz asks` and `rimz answer`. |
 | [worktrees.md](./harness/worktrees.md) | RimZ-owned Git worktrees: the ownership marker, creation and seeding, dirty and landed status, landing on main, removal, and every caller that triggers it. |
-| [teams.md](./harness/teams.md) | Team memory: the scratch-file scan, the `blackboard.md` stage board, `rimz teams flip`, and registration re-wakes. |
+| [teams.md](./harness/teams.md) | Team memory: the scratch-file scan, the `blackboard.md` stage board, `rimz teams flip`, and the resume re-wake with its registration backstop. |
 | [trust.md](./harness/trust.md) | Project trust: the hashed executable surface, launch-time enforcement, grant storage, the stale-grant diff, and every way a grant is made. |
 
 ## The sidebar

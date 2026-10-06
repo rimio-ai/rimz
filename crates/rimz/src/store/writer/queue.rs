@@ -479,6 +479,14 @@ impl Store {
         )?)
     }
 
+    /// The live queue and the terminal history as one view: every terminal transition moves a
+    /// record from the first to the second under the workspace lock, so reading both under it
+    /// finds such a record in exactly one (unless its best-effort history append failed).
+    pub fn list_messages_and_history(&self) -> Result<(Vec<MessageRecord>, Vec<MessageRecord>)> {
+        let _guard = crate::disk::lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
+        Ok((self.list_messages()?, self.list_message_history()?))
+    }
+
     pub fn list_pending_messages(&self) -> Result<Vec<MessageRecord>> {
         Ok(message::list_pending(&self.inner.paths.messages_dir)?)
     }
