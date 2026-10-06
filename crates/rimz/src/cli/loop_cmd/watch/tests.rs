@@ -313,17 +313,17 @@ fn task_timing_maps_to_watch_labels() {
         (
             interval_timing(None, None, Some(&manual), now),
             RowState::Held,
-            "disabled",
+            "off",
         ),
         (
             interval_timing(None, None, Some(&strikes), now),
             RowState::Held,
-            "disabled · 3 strikes",
+            "off",
         ),
         (
             interval_timing(None, None, Some(&timed), now),
             RowState::Held,
-            "paused · in 5m",
+            "paused, resumes in 5m",
         ),
         (
             schedule::TaskTiming::evaluate(
@@ -344,7 +344,7 @@ fn task_timing_maps_to_watch_labels() {
                 &now.to_zoned(jiff::tz::TimeZone::UTC),
             ),
             RowState::Held,
-            "disabled · enable to arm",
+            "off · repo task, enable here to run",
         ),
         (
             interval_timing(None, Timestamp::from_second(8_800).ok(), None, now),
@@ -374,26 +374,25 @@ fn task_timing_maps_to_watch_labels() {
         ),
     ];
     for (timing, state, label) in cases {
-        assert_eq!(row_state_for_timing(&timing), state);
+        let observed = TaskState::observe(&timing, false, true);
+        assert_eq!(row_state_for_timing(&timing, observed), state);
         assert_eq!(
-            render::held_text(&timing.state(), now).as_deref(),
+            TaskState::held_text(&timing.state(), now).as_deref(),
             (state == RowState::Held).then_some(label)
         );
-        assert_eq!(next_text(state, &timing, None, &[], now), label);
     }
 }
 
 #[test]
 fn signal_and_watch_timing_map_to_live_watch_labels() {
     let now = Timestamp::from_second(10_000).unwrap();
-    for (entry, state, label) in [
+    for (entry, state) in [
         (
             TaskEntry {
                 signal: Some("ci.failed".to_owned()),
                 ..TaskEntry::default()
             },
             RowState::Listening,
-            "listening",
         ),
         (
             TaskEntry {
@@ -401,7 +400,6 @@ fn signal_and_watch_timing_map_to_live_watch_labels() {
                 ..TaskEntry::default()
             },
             RowState::Watching,
-            "watching",
         ),
     ] {
         let timing = schedule::TaskTiming::evaluate(
@@ -411,9 +409,10 @@ fn signal_and_watch_timing_map_to_live_watch_labels() {
             None,
             &now.to_zoned(jiff::tz::TimeZone::UTC),
         );
-        assert_eq!(row_state_for_timing(&timing), state);
-        assert_eq!(render::held_text(&timing.state(), now), None);
-        assert_eq!(next_text(state, &timing, None, &[], now), label);
+        let observed = TaskState::observe(&timing, false, true);
+        assert!(observed == TaskState::Live);
+        assert_eq!(row_state_for_timing(&timing, observed), state);
+        assert_eq!(TaskState::held_text(&timing.state(), now), None);
     }
 }
 
@@ -434,18 +433,6 @@ fn running_watch_row_retains_next_fire_through_pause_overlay() {
     );
     assert_eq!(timing.next_timestamp(), None);
     assert_eq!(watch_next_timestamp(&timing, false), None);
-    let holder = RunLockInfo {
-        pid: 7,
-        started_at: Timestamp::from_second(9_820).unwrap(),
-    };
-    assert_eq!(
-        next_text(RowState::Running, &timing, Some(holder), &[], now),
-        "▸ running 3m"
-    );
-    assert_eq!(
-        next_text(RowState::Running, &timing, None, &[], now),
-        "▸ running"
-    );
     assert_eq!(
         watch_next_timestamp(&timing, true),
         Timestamp::from_second(10_300).ok()

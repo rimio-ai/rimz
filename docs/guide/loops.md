@@ -368,7 +368,7 @@ Inspect, test, and manage tasks with the rest of the surface:
 rimz loop list                 # this room's tasks, grouped by attention and checkout
 rimz loop list --all           # every known room
 rimz loop list --json          # real task names and structured, uncollapsed rows
-rimz loop watch                # live dashboard with countdowns and running tasks
+rimz loop watch                # this room's live dashboard, including every worktree
 rimz loop show pr-watch        # health, next fire, agent-run rollup, and recent runs
 rimz loop logs pr-watch        # full forensics for recent runs
 rimz loop fire pr-watch        # fire now in the foreground for testing; the schedule stays put

@@ -4,19 +4,18 @@ use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers
 use rimz::tui::{MouseCapture, Screen, TerminalModeGuard};
 use unicode_width::UnicodeWidthStr;
 
-use super::render::{
-    ListRowContext, ObservedTask, grouped_tasks, room_label, room_style, run_status,
-};
+use super::list::{Attention, TaskRow, TaskState};
+use super::render::{room_label, room_style};
 use super::*;
 
 const WATCH_NARROW: usize = 44;
 const WATCH_WIDE: usize = 68;
 
 pub(super) fn watch(args: WatchArgs, globals: &GlobalFlags) -> Result<()> {
-    let project_root = project_root_for_globals(globals);
+    let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone()).ok();
     let _input = TerminalModeGuard::enable(MouseCapture::Off, Screen::Alternate)?;
     loop {
-        repaint_watch(project_root.as_deref(), args.hold)?;
+        repaint_watch(workspace.as_ref(), args.hold)?;
         match event::poll(Duration::from_secs(1)) {
             Ok(true) => match event::read() {
                 Ok(Event::Key(key)) if key.kind == KeyEventKind::Press => match key.code {
@@ -37,9 +36,9 @@ pub(super) fn watch(args: WatchArgs, globals: &GlobalFlags) -> Result<()> {
     }
 }
 
-fn repaint_watch(project_root: Option<&Path>, hold: bool) -> Result<()> {
+fn repaint_watch(workspace: Option<&rimz::ResolvedWorkspace>, hold: bool) -> Result<()> {
     let mut frame = Vec::new();
-    render_watch_frame(&mut frame, project_root, hold)?;
+    render_watch_frame(&mut frame, workspace, hold)?;
     if frame.last() == Some(&b'\n') {
         frame.pop();
         if frame.last() == Some(&b'\r') {
@@ -51,26 +50,23 @@ fn repaint_watch(project_root: Option<&Path>, hold: bool) -> Result<()> {
     Ok(())
 }
 
-fn render_watch_frame(out: &mut impl Write, project_root: Option<&Path>, hold: bool) -> Result<()> {
-    let catalog = TaskCatalog::load(project_root)?;
-    let now = Timestamp::now();
-    let arming_entries = arming::load();
-    let now_zoned = now.to_zoned(MachineConfig::load_lenient().time_zone());
-    let stats = run_log::stats(&rimz::disk::paths::logs_dir(), &now_zoned, project_root);
-    let context = ListRowContext { stats: &stats, now };
-    let groups = grouped_tasks(catalog.visible(), project_root, &arming_entries, &now_zoned)
-        .into_iter()
-        .map(|group| WatchGroup {
-            root: group.root,
-            room_is_open: group.room_is_open,
-            rows: group
+fn render_watch_frame(
+    out: &mut impl Write,
+    workspace: Option<&rimz::ResolvedWorkspace>,
+    hold: bool,
+) -> Result<()> {
+    let model = list::load(workspace)?;
+    let groups = model
+        .rooms
+        .iter()
+        .filter(|room| model.caller_root.is_none() || room.here)
+        .map(|room| WatchGroup {
+            root: room.root.clone(),
+            room_is_open: room.open,
+            rows: room
                 .tasks
                 .iter()
-                .map(|task| watch_row_model(task, &context))
-                .chain(group.rowless.iter().map(|(name, holder)| {
-                    let next_text = render::running_text(*holder, now);
-                    watch_row(name, RowState::Running, None, next_text, &context)
-                }))
+                .map(|task| watch_row_model(task, model.now))
                 .collect(),
         })
         .collect::<Vec<_>>();
@@ -80,7 +76,7 @@ fn render_watch_frame(out: &mut impl Write, project_root: Option<&Path>, hold: b
         &groups,
         usize::from(cols),
         usize::from(rows),
-        now,
+        model.now,
         hold,
     )?;
     Ok(())
@@ -199,85 +195,58 @@ impl<'a> WatchSummary<'a> {
     }
 }
 
-fn watch_row_model(task: &ObservedTask<'_>, context: &ListRowContext<'_>) -> WatchRow {
-    let running = task.running();
-    let held = if running.is_some() {
-        rimz::harness::schedule::throttle::held(task.name, &task.task.entry().resolved_root())
-    } else {
-        Vec::new()
-    };
-    let next_ts = watch_next_timestamp(&task.timing, running.is_some());
-    let state = if running.is_some() {
+fn watch_row_model(task: &TaskRow, now: Timestamp) -> WatchRow {
+    let state = if task.state == TaskState::Running {
         RowState::Running
+    } else if matches!(
+        task.attention,
+        Some(Attention::CheckoutGone | Attention::Blocked | Attention::Invalid)
+    ) {
+        RowState::Blocked
     } else {
-        row_state_for_timing(&task.timing)
+        task.timing.as_ref().map_or(RowState::NeverRun, |timing| {
+            row_state_for_timing(timing, task.state)
+        })
     };
-    let next_text = next_text(state, &task.timing, running.flatten(), &held, context.now);
-    watch_row(task.name, state, next_ts, next_text, context)
-}
-
-/// A dashboard row: its state as given, its last-run columns from the name's history.
-fn watch_row(
-    name: &str,
-    state: RowState,
-    next_ts: Option<Timestamp>,
-    next_text: String,
-    context: &ListRowContext<'_>,
-) -> WatchRow {
-    let (glyph, glyph_style, failed, last_text, status_text) = context.stats.get(name).map_or(
-        (
-            "○",
-            ui::palette::faint(),
-            false,
-            "—".to_owned(),
-            "never run".to_owned(),
-        ),
-        |stats| {
-            let status = run_status(&stats.last);
+    let next_ts = task
+        .timing
+        .as_ref()
+        .and_then(|timing| watch_next_timestamp(timing, task.state == TaskState::Running));
+    let (glyph, glyph_style, failed, last_text, status_text) = match &task.last {
+        Some(last) => {
+            let status = render::run_status(&last.record);
             (
                 status.glyph,
                 status.style,
-                status.style == ui::palette::alarm(),
-                ui::rel_age(stats.last.at, context.now),
+                !last.ok,
+                ui::rel_age(last.at, now),
                 status.label,
             )
-        },
-    );
+        }
+        None => (
+            "○",
+            ui::palette::faint(),
+            false,
+            task.heard
+                .as_ref()
+                .map_or_else(|| "—".into(), |heard| ui::rel_age(heard.at, now)),
+            task.heard.as_ref().map_or_else(
+                || task.last_text(now),
+                |heard| format!("heard {}", heard.signal),
+            ),
+        ),
+    };
 
     WatchRow {
-        name: name.to_owned(),
+        name: task.name.clone(),
         glyph,
         glyph_style,
         state,
         failed,
         next_ts,
-        next_text,
+        next_text: task.state_text(now),
         last_text,
         status_text,
-    }
-}
-
-fn next_text(
-    state: RowState,
-    timing: &schedule::TaskTiming,
-    holder: Option<RunLockInfo>,
-    held: &[rimz::harness::schedule::throttle::Held],
-    now: Timestamp,
-) -> String {
-    match state {
-        RowState::Running => render::in_flight_text(holder, held, now),
-        RowState::Held => {
-            // row_state_for_timing maps only disabled and paused states to Held.
-            render::held_text(&timing.state(), now)
-                .unwrap_or_else(|| unreachable!("Held rows are disabled or paused"))
-        }
-        RowState::Blocked => "blocked · trust".to_owned(),
-        RowState::Due => "due".to_owned(),
-        RowState::Upcoming(next) => ui::until_label(next, now),
-        RowState::Listening => "listening".to_owned(),
-        RowState::Watching => "watching".to_owned(),
-        RowState::Condition => timing.state().condition_label().unwrap_or_default(),
-        RowState::NeverRun => "—".to_owned(),
     }
 }
 
@@ -289,7 +258,19 @@ fn watch_next_timestamp(timing: &schedule::TaskTiming, running: bool) -> Option<
     }
 }
 
-fn row_state_for_timing(timing: &schedule::TaskTiming) -> RowState {
+fn row_state_for_timing(timing: &schedule::TaskTiming, state: TaskState) -> RowState {
+    if state != TaskState::Running
+        && matches!(timing.state(), schedule::TaskTimingState::Blocked(_))
+    {
+        return RowState::Blocked;
+    }
+    match state {
+        TaskState::Running => return RowState::Running,
+        TaskState::Off | TaskState::NotEnabled | TaskState::Paused | TaskState::WaitsForRoom => {
+            return RowState::Held;
+        }
+        TaskState::Live => {}
+    }
     match timing.state() {
         schedule::TaskTimingState::Blocked(_) => RowState::Blocked,
         schedule::TaskTimingState::Disabled(_) | schedule::TaskTimingState::Paused(_) => {

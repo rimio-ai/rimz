@@ -121,7 +121,8 @@ pub(super) fn write_show(
         .unwrap_or_else(|| match timing.state() {
             schedule::TaskTimingState::Unarmed => "unarmed".to_owned(),
             schedule::TaskTimingState::Blocked(_) => "blocked · trust".to_owned(),
-            state => render::held_text(&state, Timestamp::now()).unwrap_or_else(|| "-".to_owned()),
+            state => list::TaskState::held_text(&state, Timestamp::now())
+                .unwrap_or_else(|| "-".to_owned()),
         });
     writeln!(out, "condition: {label}")?;
     for term in expr.terms() {

@@ -4,174 +4,6 @@ use super::*;
 
 const NOTE_MAX: usize = 60;
 
-pub(super) struct ListRowContext<'a> {
-    pub(super) stats: &'a BTreeMap<String, run_log::LoopRunStats>,
-    pub(super) now: Timestamp,
-}
-
-pub(super) struct ObservedTask<'a> {
-    pub(super) name: &'a str,
-    pub(super) task: &'a LoadedTask,
-    pub(super) timing: schedule::TaskTiming,
-    pub(super) run_lock: Result<RunLockState>,
-}
-
-impl ObservedTask<'_> {
-    /// The held run lock's holder, when the task is running.
-    pub(super) fn running(&self) -> Option<Option<RunLockInfo>> {
-        match &self.run_lock {
-            Ok(RunLockState::Held(holder)) => Some(*holder),
-            Ok(RunLockState::Available) | Err(_) => None,
-        }
-    }
-}
-
-pub(super) struct ObservedTaskGroup<'a> {
-    pub(super) root: PathBuf,
-    pub(super) room_is_open: bool,
-    pub(super) tasks: Vec<ObservedTask<'a>>,
-    /// Runs in flight under the caller's project whose task row is gone, as
-    /// task name and lock holder.
-    pub(super) rowless: Vec<(String, Option<RunLockInfo>)>,
-}
-
-/// The dashboard's row source: the catalog's tasks by root, plus
-/// the runs under `project_root` that no task row accounts for.
-pub(super) fn grouped_tasks<'a>(
-    tasks: &'a BTreeMap<String, LoadedTask>,
-    project_root: Option<&Path>,
-    arming_entries: &BTreeMap<String, Arming>,
-    now_zoned: &jiff::Zoned,
-) -> Vec<ObservedTaskGroup<'a>> {
-    let mut entries_by_root: BTreeMap<PathBuf, Vec<(&str, &LoadedTask)>> = BTreeMap::new();
-    if let Some(root) = project_root {
-        entries_by_root.entry(root.to_owned()).or_default();
-    }
-    for (name, task) in tasks {
-        entries_by_root
-            .entry(task.entry().resolved_root())
-            .or_default()
-            .push((name, task));
-    }
-    entries_by_root
-        .into_iter()
-        .filter_map(|(root, entries)| {
-            let (locks, locks_error) = match RunLocks::list(&root) {
-                Ok(locks) => (Some(locks), None),
-                Err(error) => (None, Some(error)),
-            };
-            let rowless = match &locks {
-                Some(locks) if project_root == Some(root.as_path()) => {
-                    let rows = entries.iter().map(|(name, _)| *name).collect::<Vec<_>>();
-                    locks.rowless(&rows)
-                }
-                _ => Vec::new(),
-            };
-            if entries.is_empty() && rowless.is_empty() && locks_error.is_none() {
-                return None;
-            }
-            let runtime = runtime_for_root(&root);
-            let room_is_open = runtime.as_ref().is_some_and(fresh_sidebar_present);
-            let stamps = runtime
-                .as_ref()
-                .map(schedule::last_stamps)
-                .unwrap_or_default();
-            let tasks = entries
-                .into_iter()
-                .map(|(name, task)| ObservedTask {
-                    name,
-                    task,
-                    timing: observe_task_timing(
-                        name,
-                        task,
-                        &stamps,
-                        arming_entries.get(&task.key(name)),
-                        now_zoned,
-                    ),
-                    run_lock: locks
-                        .as_ref()
-                        .map_or(Ok(RunLockState::Available), |locks| locks.state(name)),
-                })
-                .collect();
-            Some(ObservedTaskGroup {
-                root,
-                room_is_open,
-                tasks,
-                rowless,
-            })
-        })
-        .collect()
-}
-
-pub(super) fn held_text(state: &schedule::TaskTimingState, now: Timestamp) -> Option<String> {
-    Some(match state {
-        schedule::TaskTimingState::Disabled(reason) => match reason {
-            DisabledReason::NotEnabledHere => "disabled · enable to arm".to_owned(),
-            DisabledReason::Manual => "disabled".to_owned(),
-            DisabledReason::Strikes(strikes) => format!("disabled · {strikes} strikes"),
-        },
-        schedule::TaskTimingState::Paused(until) => {
-            format!("paused · {}", ui::rel_until(*until, now))
-        }
-        _ => return None,
-    })
-}
-
-#[cfg(test)]
-fn next_cell(timing: &schedule::TaskTiming, now: Timestamp) -> ui::Cell {
-    match timing.state() {
-        schedule::TaskTimingState::Blocked(state) => blocked_next_cell(state),
-        state @ (schedule::TaskTimingState::Disabled(_) | schedule::TaskTimingState::Paused(_)) => {
-            // This arm only accepts the states handled by held_text.
-            ui::cell(held_text(&state, now).unwrap()).fg(ui::palette::muted())
-        }
-        schedule::TaskTimingState::Upcoming(next) | schedule::TaskTimingState::Due(next) => {
-            ui::cell(ui::rel_until(next, now))
-        }
-        schedule::TaskTimingState::Listening { .. } => ui::cell("listening"),
-        schedule::TaskTimingState::Watching { .. } => ui::cell("watching"),
-        state @ (schedule::TaskTimingState::Waiting { .. }
-        | schedule::TaskTimingState::Holding { .. }
-        | schedule::TaskTimingState::Fired) => {
-            ui::cell(state.condition_label().unwrap_or_default())
-        }
-        schedule::TaskTimingState::Invalid
-        | schedule::TaskTimingState::Unarmed
-        | schedule::TaskTimingState::NoOccurrence => ui::cell("-").dash(),
-    }
-}
-
-#[cfg(test)]
-fn blocked_next_cell(state: TrustState) -> ui::Cell {
-    ui::cell("blocked · trust").fg(ui::status::trust(state))
-}
-
-#[cfg(test)]
-fn write_blocked_footer(out: &mut impl Write, count: usize) -> std::io::Result<()> {
-    writeln!(
-        out,
-        "{}",
-        ui::paint(
-            ui::palette::warn(),
-            &format!(
-                "{count} task(s) blocked by project trust — review with `rimz trust`, approve with `rimz trust grant`"
-            )
-        )
-    )
-}
-
-#[cfg(test)]
-fn write_disabled_footer(out: &mut impl Write, count: usize) -> std::io::Result<()> {
-    writeln!(
-        out,
-        "{}",
-        ui::paint(
-            ui::palette::muted(),
-            &format!("{count} project task(s) disabled — arm with `rimz loop enable <name>`")
-        )
-    )
-}
-
 pub(super) fn room_open(root: &Path) -> bool {
     runtime_for_root(root)
         .as_ref()
@@ -188,17 +20,6 @@ fn root_with_room(root: &Path, room_is_open: bool) -> String {
 
 pub(super) fn room_label(room_is_open: bool) -> &'static str {
     if room_is_open { "room open" } else { "no room" }
-}
-
-#[cfg(test)]
-fn room_label_with_timer(room_is_open: bool, timer_is_active: bool) -> &'static str {
-    if room_is_open {
-        "room open"
-    } else if timer_is_active {
-        "no room · timer"
-    } else {
-        "no room"
-    }
 }
 
 pub(super) fn room_style(room_is_open: bool) -> anstyle::Style {
@@ -360,21 +181,6 @@ fn surplus_label(entry: &TaskEntry) -> Option<String> {
         segments.push(format!("after {after} of window"));
     }
     (!segments.is_empty()).then(|| segments.join(" · "))
-}
-
-#[cfg(test)]
-fn list_cost_label(entry: &TaskEntry, spend_today_usd: f64) -> Option<String> {
-    if let Some(cap) = entry
-        .budget_per_day
-        .as_deref()
-        .and_then(|raw| raw.parse::<rimz::harness::budget::BudgetSpec>().ok())
-    {
-        return Some(format!(
-            "${spend_today_usd:.2}/{}",
-            format_budget_cap(cap.cap_usd)
-        ));
-    }
-    (spend_today_usd > 0.0).then(|| format!("${spend_today_usd:.2}"))
 }
 
 fn spend_label(
@@ -954,7 +760,7 @@ fn write_show_headline(
         )?,
         schedule::TaskTimingState::Disabled(DisabledReason::NotEnabledHere) => write!(
             out,
-            " · disabled — enable to arm with `rimz loop enable {}`",
+            " · disabled — enable here with `rimz loop enable {}`",
             name
         )?,
         schedule::TaskTimingState::Disabled(DisabledReason::Manual) => {
@@ -1329,25 +1135,6 @@ fn collapsed_run_rows(records: &[LoopRunRecord]) -> Vec<CollapsedRunRow<'_>> {
         });
     }
     rows
-}
-
-#[cfg(test)]
-fn last_run_cells(stats: &run_log::LoopRunStats, now: Timestamp) -> (ui::Cell, ui::Cell) {
-    let status = run_status(&stats.last);
-    let mut label = format!("{} {}", status.glyph, status.label);
-    if stats.streak > 1 {
-        label.push_str(&format!(" ×{}", stats.streak));
-    }
-    if failure_note_visible(stats.last.result)
-        && let Some(note) = record_note(&stats.last)
-    {
-        label.push_str(" · ");
-        label.push_str(&note);
-    }
-    (
-        ui::cell(ui::rel_age(stats.last.at, now)),
-        ui::cell(label).fg(status.style),
-    )
 }
 
 fn run_status_cell(record: &LoopRunRecord, count: usize) -> ui::Cell {
