@@ -156,7 +156,7 @@ The legend line under the table names the layer that decides `●`, the highest 
 | --- | --- |
 | `●  this room   ○  new rooms` | The selection recorded by the room at the position. A kind the record leaves out is `default`. |
 | `●  this project   ○  new rooms` | The trusted project's selection. A kind the project leaves out follows the machine's. |
-| `●  new rooms` | The machine's selection. `   ○  new rooms` follows only when some kind has no `●`, its machine selection not being declared, say, and so marks its new-rooms account `○`. |
+| `●  new rooms` | The machine's selection. An account carries `○` only where a kind has no `●`, and `   ○  new rooms` follows the legend then. |
 | `○  new rooms` | Nothing: the position's selection is blocked or unreadable. |
 
 `5h LEFT` and `7d LEFT` are the account's five-hour and seven-day usage windows, read as what is left, as [`rimz providers`](./providers.md) reads them: 100 minus the used percentage, or 100% before the window's clock starts, then the time until the window resets. A model-scoped window stays in [`rimz providers`](./providers.md).
@@ -165,7 +165,6 @@ The legend line under the table names the layer that decides `●`, the highest 
 | --- | --- |
 | `85% · 2h46m` | 85% left; the window resets in 2 hours 46 minutes. |
 | `100% · ready` | The window's clock has not started. |
-| `85%` | 85% left, reset time unknown. |
 | `∞` | The limit is lifted, or the account has no subscription windows. |
 | `–` | Unknown: no reading yet, or the account is logged out or not declared. |
 
