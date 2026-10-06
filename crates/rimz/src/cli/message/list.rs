@@ -261,19 +261,27 @@ fn require_known_channel(
     if known.contains(explicit) {
         return Ok(());
     }
+    bail!(
+        "no channel #{explicit}\nknown channels: {}",
+        known_channels_line(&known)
+    );
+}
+
+fn known_channels_line(known: &std::collections::BTreeSet<String>) -> String {
     const SHOWN: usize = 20;
-    let mut channels = known
+    if known.is_empty() {
+        return "(none)".to_owned();
+    }
+    let mut line = known
         .iter()
         .take(SHOWN)
         .map(String::as_str)
         .collect::<Vec<_>>()
         .join(", ");
-    if known.is_empty() {
-        channels = "(none)".to_owned();
-    } else if known.len() > SHOWN {
-        channels.push_str(&format!(", …and {} more", known.len() - SHOWN));
+    if known.len() > SHOWN {
+        line.push_str(&format!(", …and {} more", known.len() - SHOWN));
     }
-    bail!("no channel #{explicit}\nknown channels: {channels}");
+    line
 }
 
 /// The empty-lane line that counts what other lanes hold, or `None` when they hold nothing.
@@ -925,6 +933,20 @@ mod tests {
         assert_eq!(
             rendered_sender(&MessageSender::System, "rimz"),
             rendered_sender(&agent_sender("rimz", None), "rimz")
+        );
+    }
+
+    #[test]
+    fn known_channels_line_caps_at_twenty_names() {
+        let known = (0..23)
+            .map(|n| format!("lane-{n:02}"))
+            .collect::<std::collections::BTreeSet<_>>();
+        let line = known_channels_line(&known);
+        assert!(line.starts_with("lane-00, lane-01, "), "{line}");
+        assert!(line.ends_with("lane-19, …and 3 more"), "{line}");
+        assert_eq!(
+            known_channels_line(&std::collections::BTreeSet::new()),
+            "(none)"
         );
     }
 
