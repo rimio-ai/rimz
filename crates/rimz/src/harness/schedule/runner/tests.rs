@@ -340,7 +340,7 @@ fn loop_check_identity_excludes_agent_and_room_environments() {
 }
 
 #[test]
-fn spawn_requests_share_loop_cleanup_without_changing_manual_placement() {
+fn spawn_requests_share_loop_cleanup_and_force_a_tab_only_when_scheduled() {
     let dir = tempfile::tempdir().unwrap();
     let catalog = TaskCatalog::load(Some(dir.path())).unwrap();
     for mode in [LoopRunMode::Scheduled, LoopRunMode::Manual] {
@@ -373,7 +373,8 @@ fn spawn_requests_share_loop_cleanup_without_changing_manual_placement() {
                 .unwrap();
             assert_eq!(request.loop_task.as_deref(), Some("nightly"));
             assert_eq!(request.self_cleanup_on_completion, !keep);
-            assert_eq!(request.loop_zone, mode == LoopRunMode::Scheduled);
+            // A scheduled fire inherits the firing pane's identity; only the flag keeps it off that tab.
+            assert_eq!(request.force_new_tab, mode == LoopRunMode::Scheduled);
             assert_eq!(
                 request.timeout,
                 (mode == LoopRunMode::Scheduled).then_some(SCHEDULED_RUN_DEFAULT_TIMEOUT)

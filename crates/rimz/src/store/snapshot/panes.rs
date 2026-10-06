@@ -374,7 +374,7 @@ pub(super) fn is_daemon_owned(agent: &AgentState, daemon_pids: &BTreeSet<u32>) -
     agent_owner_pid(agent).is_some_and(|pid| daemon_pids.contains(&pid))
 }
 
-/// Admission feeds rows, agent_panes, rimz agents, and message addressing. The loop zone puts real agent panes in the daemon view, so that view requires a stamped agent rather than blanket exclusion.
+/// Admission feeds rows, agent_panes, rimz agents, and message addressing. A user can start a real agent in the daemon view, so that view requires a stamped agent rather than blanket exclusion.
 pub(super) fn pane_admits_card(
     pane: &PaneRef,
     exclude: Option<&PaneId>,

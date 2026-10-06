@@ -310,7 +310,7 @@ Every session delivery, including recurring clocks and standing signals, lives i
 
 ### Where a scheduled turn runs
 
-A scheduled `--agent` fire opens its pane in the room's `rimzd` tab, the background tab that holds the live stats pane and a `rimz loop watch` dashboard, stacked under that dashboard, so it never splits the tab you are working in. If that dashboard pane was closed, RimZ recreates it at fire time; if the whole `rimzd` tab is gone, the run falls back to a new tab. A manual `rimz loop fire` opens the pane beside your shell instead, so its output stays in front of you.
+A scheduled `--agent` fire opens an unfocused tab named `loop <task>` with its own sidebar, so it never splits the tab you are working in. When the agent needs you, its tab shows the waiting glyph and its sidebar can ring the bell. An agent launched by a check gets the same tab, even under a manual fire. A manual `rimz loop fire` of an `--agent` task opens the pane beside your shell instead, or in a tab when called outside a pane, so its output stays in front of you.
 
 Every scheduled `--agent` turn gets a timeout: the task's own `--timeout`, or the machine's `loop.default-timeout` (two hours by default). A manual `rimz loop fire` of an `--agent` task runs unbounded unless the task sets its own.
 

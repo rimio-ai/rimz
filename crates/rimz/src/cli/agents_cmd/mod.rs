@@ -892,7 +892,6 @@ fn into_loop_check_request(
     }
     args.launch.print = true;
     let (mut request, presentation) = into_supervised_request(args)?;
-    request.loop_zone = true;
     rimz::harness::schedule::runner::shape_loop_owned(
         &mut request,
         task,

@@ -436,40 +436,6 @@ pub(super) fn wait_for_subagent_pane_bind_with(
     }
 }
 
-/// Split a run pane into the loop zone, repairing a missing loop panel first.
-/// `Ok(false)` means the caller should fall back to a run tab.
-pub(super) fn split_into_loop_zone(
-    backend: &dyn rimz::mux::MuxBackend,
-    workspace: &rimz::ResolvedWorkspace,
-    cwd: &Path,
-    env: BTreeMap<String, String>,
-    pane: &PaneCmd,
-) -> Result<bool> {
-    let Some(panel) = rimz::daemon_view::ensure_loop_panel(backend, workspace) else {
-        return Ok(false);
-    };
-    match backend.split_pane(SplitPaneOptions {
-        target: SplitTarget::SessionPane {
-            session_name: workspace.session_name.clone(),
-            pane_id: panel.pane_id.clone(),
-        },
-        env,
-        placement: SplitPlacement::Stacked,
-        ..SplitPaneOptions::from_command(pane, cwd)
-    }) {
-        Ok(()) => Ok(true),
-        Err(err) => {
-            tracing::debug!(
-                session = %workspace.session_name,
-                pane = %panel.pane_id,
-                error = &err as &dyn std::error::Error,
-                "loop zone split failed; falling back to a run tab",
-            );
-            Ok(false)
-        }
-    }
-}
-
 pub(super) fn backend_for_workspace_session(
     workspace: &rimz::ResolvedWorkspace,
     globals: &GlobalFlags,

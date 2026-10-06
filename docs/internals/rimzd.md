@@ -27,7 +27,7 @@ The sidebar is the room's ordinary renderer, kept to one per view by [sidebar re
 | Claude remote-control host | Runtime | The host argv from Claude's readiness probe (`claude remote-control --spawn worktree`, optionally behind `env CLAUDE_CONFIG_DIR=<home>`) | `[remote_control] claude = true` and the probe reports ready | Project root |
 | Loop panel | Runtime | `rimz loop watch --hold` | Always | Worktree root |
 
-The Claude host runs from the project root so a session started from the phone carves its own worktree off the canonical repository instead of the current checkout ([remote.md](../guide/remote.md#answer-asks-from-your-phone)); its readiness checks are in [adapter_claude.md](./agents/adapter_claude.md#readiness). The broker keeps one handshaked `codex app-server` warm for context enrichment ([adapter_codex.md](./agents/adapter_codex.md#app-server-enrichment)). The loop panel is in the specification even in a room that has never run a task, because scheduled runs need a stable pane to stack against ([the loop zone](#the-loop-zone)).
+The Claude host runs from the project root so a session started from the phone carves its own worktree off the canonical repository instead of the current checkout ([remote.md](../guide/remote.md#answer-asks-from-your-phone)); its readiness checks are in [adapter_claude.md](./agents/adapter_claude.md#readiness). The broker keeps one handshaked `codex app-server` warm for context enrichment ([adapter_codex.md](./agents/adapter_codex.md#app-server-enrichment)). The loop panel is a display in the specification even in a room that has never run a task. Scheduled runs open [their own tabs](./harness/loops.md#where-a-scheduled-run-lands).
 
 ## Building the specification
 
@@ -66,7 +66,9 @@ Three broader predicates in [`pane.rs`](../../crates/rimz/src/pane.rs) classify 
 | `pane_runs_daemon_host(pane)` | The pane's spawn or foreground command passes `command_is_host` | Card admission and the host reap in `store/snapshot`, to skip a daemon host wherever it sits |
 | `pane_is_host(pane)` | The pane runs a daemon host, or it is in the `rimzd` view | The sidebar frame, to tell a daemon view from a working one; tmux reconcile, to mark a view occupied; `only_daemon_view`, to tell a room that has nothing but the dashboard left |
 
-The split is what lets a loop-zone run be a card. Admission ([`store/snapshot/panes.rs`](../../crates/rimz/src/store/snapshot/panes.rs) `pane_admits_card`) reads the narrow predicate and adds one rule for this view: a `rimzd` pane admits a card only when an agent is durably stamped on it, so the dashboard's own infrastructure stays chrome while a run pane does not. Admission feeds rows, `rimz agents`, and `agent_panes`, which is where message delivery binds a receiver's pane, so a pane dropped there is also a pane no message can reach.
+Admission ([`store/snapshot/panes.rs`](../../crates/rimz/src/store/snapshot/panes.rs) `pane_admits_card`) reads the narrow predicate and adds one rule for this view: a `rimzd` pane admits a card only when an agent is durably stamped on it, so the dashboard's own infrastructure stays chrome while an agent a user starts here remains addressable. Admission feeds rows, `rimz agents`, and `agent_panes`, which is where message delivery binds a receiver's pane, so a pane dropped there is also a pane no message can reach.
+
+Tab status and the sidebar bell stay view-level on purpose: `tab_status.rs` drops the whole `rimzd` tab, and a sidebar whose own view is this one returns `BellDecision::DaemonView`. A stamped agent here remains addressable and rendered but gets no tab-status glyph or bell from this view.
 
 ## The content supervisor
 
@@ -119,16 +121,15 @@ The outcome is `Converged` or `Retry`. Callers treat `Retry` as backpressure to 
 
 ## Who repairs, and when
 
-Four callers drive repair, all best-effort:
+Three callers drive repair, all best-effort:
 
 | Caller | When | Scope |
 | --- | --- | --- |
 | Room birth (`room/birth.rs`, `launch_background_view`) | `rimz start` finds the view already running (`BackgroundViewLaunch::AlreadyRunning`) | The whole view, from the specification start just built |
 | Elder tracker (`DaemonRepairTracker`) | The elected sidebar elder's cache-refresh tick, at most every 30 seconds (`DAEMON_VIEW_REPAIR_TTL` in `sidebar_pane/app/cache_refresh.rs`) | The whole view |
 | Remote-control toggle (`remote_control::apply_runtime_toggle`) | `rimz config set remote_control.claude <bool>`, for every known workspace with a live session | The whole view, through `ensure_daemon_view_with_readiness`, so the Claude host appears or closes at once |
-| Loop zone (`daemon_view::ensure_loop_panel`) | A scheduled run fires and the loop panel is missing | The loop panel alone ([the loop zone](#the-loop-zone)) |
 
-The toggle, the elder, and the loop zone each run `remote_control::prepare_hosts` before `ReadinessSnapshot::probe`, so a host precondition the pass can restore is restored before readiness judges it.
+The toggle and the elder each run `remote_control::prepare_hosts` before `ReadinessSnapshot::probe`, so a host precondition the pass can restore is restored before readiness judges it.
 
 The elder tracker is built to make the common tick free. Election is in [state.md](./sidebar/state.md#renderers-the-producer-and-consumers). The tracker holds a `DaemonViewInputsStamp` and rebuilds the specification only when the stamp changes:
 
@@ -141,26 +142,11 @@ The elder tracker is built to make the common tick free. Election is in [state.m
 
 A rebuilt specification always gets one authoritative repair. With a stable stamp and no repair outstanding, the tracker reads the sidebar's published pane frame instead of the backend: a frame for this session, fresh within `EVENT_PANE_TTL` (10 seconds), that already satisfies the specification ends the tick with no work and no child processes. A missing, stale, or unsatisfied frame escalates to `repair_daemon_view`, and a `Retry` outcome keeps the repair outstanding until a later tick converges. When the workspace's state paths or record cannot be read, the tick is skipped.
 
-## The loop zone
-
-A scheduled run lands in the runtime column. `split_into_loop_zone` ([`cli/supervised/pane.rs`](../../crates/rimz/src/cli/supervised/pane.rs)) asks `ensure_loop_panel` for the workspace's oldest live loop panel and splits the run pane against it with `SplitPlacement::Stacked`. Which fires land there, and the new-tab fallback, are in [loops.md](./harness/loops.md#where-a-scheduled-run-lands).
-
-The run pane is the one real agent pane inside this view, and it is a card like any other: the exec wrapper stamps the agent on it at launch, so admission keeps it, the sidebar renders it, `rimz agents list` lists it, and a queued wake or a steer binds its pane. The panel, the content slots, and the hosts beside it carry no stamp and stay chrome.
-
-Tab status and the sidebar bell stay view-level on purpose, so the card is not quite like any other on those two surfaces: `tab_status.rs` drops the whole `rimzd` tab, and a sidebar whose own view is this one returns `BellDecision::DaemonView`. A loop-zone run that goes waiting therefore shows no glyph in the tab strip and rings no bell from this tab, while remaining addressable and rendered. Teaching those two surfaces the stamped-agent rule is a separate change.
-
-`ensure_loop_panel` repairs at fire time, outside the elder's tick:
-
-1. Look for the panel in a listing that prefers authoritative truth, bounded by `LOOP_PANEL_LOOKUP_TIMEOUT` (500 ms). A failed lookup returns `None`, and the run opens a new tab.
-2. When the panel is gone, build the effective specification the way the elder does, preparing hosts before probing readiness.
-3. List again authoritatively; return the panel if another pass restored it meanwhile.
-4. Place the loop panel with the same anchor rules and settle wait as a full repair, and return it. A closed view leaves no anchor, and a failed listing, split, or settle also returns `None`; the run then opens a new tab.
-
 ## Where the code lives
 
 | File | What it holds |
 | --- | --- |
-| [`daemon_view.rs`](../../crates/rimz/src/daemon_view.rs) | Specification, markers and matching, reconciliation, repair and placement, `ensure_loop_panel`, the elder tracker |
+| [`daemon_view.rs`](../../crates/rimz/src/daemon_view.rs) | Specification, markers and matching, reconciliation, repair and placement, the elder tracker |
 | [`daemon_view/tests.rs`](../../crates/rimz/src/daemon_view/tests.rs) | Specification, planner, reconciliation, identity, and tracker tests |
 | [`daemon_content.rs`](../../crates/rimz/src/daemon_content.rs) | Slot resolution, the supervisor loop, config watching, child termination |
 | [`cli/daemon.rs`](../../crates/rimz/src/cli/daemon.rs) | The hidden `rimz daemon content` entry point |
@@ -169,7 +155,6 @@ Tab status and the sidebar bell stay view-level on purpose, so the card is not q
 | [`remote_control.rs`](../../crates/rimz/src/remote_control.rs) | `ReadinessSnapshot`, `prepare_hosts`, `apply_runtime_toggle` |
 | [`room/mod.rs`](../../crates/rimz/src/room/mod.rs), [`room/birth.rs`](../../crates/rimz/src/room/birth.rs) | The start-time specification and birth-time repair |
 | [`sidebar_pane/app/cache_refresh.rs`](../../crates/rimz/src/sidebar_pane/app/cache_refresh.rs) | The elder tick that calls the tracker |
-| [`cli/supervised/pane.rs`](../../crates/rimz/src/cli/supervised/pane.rs) | `split_into_loop_zone` |
 | [`mux/mod.rs`](../../crates/rimz/src/mux/mod.rs) | `DaemonView`, `HostPane`, and `BackgroundViewOptions`, the backend-facing types |
 | [`mux/tmux/backend.rs`](../../crates/rimz/src/mux/tmux/backend.rs), [`mux/zellij/backend.rs`](../../crates/rimz/src/mux/zellij/backend.rs) | `open_background_view` on each backend |
 

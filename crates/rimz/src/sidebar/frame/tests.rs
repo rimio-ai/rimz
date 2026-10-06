@@ -810,4 +810,18 @@ fn own_view_daemon_detection_matches_host_panes() {
     )
     .expect("own pane present");
     assert!(!working.own_view_is_daemon);
+
+    let loop_run = own_view(
+        "terminal_0",
+        vec![
+            pane_named("terminal_0", "tab_2", "rimz-sidebar", "loop rimzd"),
+            pane_named("terminal_1", "tab_2", "claude", "loop rimzd"),
+        ],
+    )
+    .expect("run tab has its own sidebar");
+    assert!(!loop_run.own_view_is_daemon);
+    assert_eq!(
+        loop_run.working_pane_ids,
+        vec![PaneId::from_parts(MuxName::Zellij, "terminal_1")]
+    );
 }

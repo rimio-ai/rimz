@@ -57,7 +57,7 @@ Each of these subsystems is one page at the top of `docs/internals/`.
 | [store.md](./store.md) | The durable state engine: the on-disk tiers and the workspace record, the event log, the write path and write classes, the read path, session death, maintenance, and what survives what. |
 | [sandbox.md](./sandbox.md) | Linux agent mount views: choosing the isolation, bubblewrap preflight, mount order, reachable host paths, environment pins, temp units, and profile skill views. |
 | [multiplexers.md](./multiplexers.md) | The Zellij and tmux seam: backend selection, the `MuxBackend` trait, pane and view identity, reading the room, focus, one sidebar per view, session lifecycle with the `room/` birth, health gate, and reset, both backends, and the Zellij presence plugin. |
-| [rimzd.md](./rimzd.md) | The managed `rimzd` view: its panes and how they are specified and identified, the content supervisor, reconciliation and repair, and the loop zone. |
+| [rimzd.md](./rimzd.md) | The managed `rimzd` view: its panes and how they are specified and identified, the content supervisor, reconciliation and repair. |
 | [remote.md](./remote.md) | SSH attach: targets and aliases, the connect loop and reconnect pacing, terminal hygiene, the connection panel, link health, port forwarding, web tunnels, and bandwidth attribution. |
 | [web.md](./web.md) | Browser access: the writable and broadcast ttyd daemons, the trusted-header gate, room attach and the session picker, sharing a room, the credential, the browser client, remote rooms, and the security boundaries. |
 | [stats.md](./stats.md) | The `rimz stats` panel: where its figures come from, windows, the heatmap and breakdowns, terminal fitting, the held dashboard, and the machine-readable surfaces. |

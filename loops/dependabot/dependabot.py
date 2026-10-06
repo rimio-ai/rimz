@@ -296,8 +296,8 @@ def launch(plan, worker_timeout=None, worker_profile="astra"):
     prompt += "\n\nDependency repair plan (JSON):\n" + json.dumps(plan)
     # No shell: titles, prompts, paths, and PR metadata remain argv data.
     # Unattended repairs need forge access and writable tool caches outside the worktree.
-    # The worker runs for hours and launches subagents, so it gets its own tab rather than
-    # the `rimzd` loop zone a check launch uses by default.
+    # Keep an explicit tab for older installed RimZ versions too: the worker runs
+    # for hours and launches subagents beside it.
     argv = ["rimz", "agents", worker_profile, prompt, "-w", plan["branch"], "--yolo", "-p", "--new-tab"]
     # Uncapped by default: a worker blocked on a question waits for the human, and this
     # coordinator stays alive meanwhile, so the loop's overlap guard admits no second worker.

@@ -308,7 +308,7 @@ upward-dependencies = [
     "sidebar::frame",
     "sidebar::timing",
 ]
-surface-budget = 11
+surface-budget = 10
 
 [[module]]
 path = "crates/rimz/src/diag"

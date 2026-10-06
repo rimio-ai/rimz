@@ -33,20 +33,18 @@ fn stream_json_prompt_rejects_malformed_lines() {
 fn supervised_run_placement_matrix() {
     use super::run::{RunPlacement, run_placement};
 
-    for (force_new_tab, has_ambient_pane, loop_zone, subagent, expected) in [
-        (false, true, false, false, RunPlacement::Split),
-        (false, true, false, true, RunPlacement::SubagentZone),
-        (true, true, false, true, RunPlacement::Tab),
-        (false, false, false, true, RunPlacement::Tab),
-        (false, true, true, false, RunPlacement::LoopZone),
-        (false, false, true, false, RunPlacement::LoopZone),
-        (false, true, true, true, RunPlacement::LoopZone),
-        (true, true, true, true, RunPlacement::Tab),
+    for (force_new_tab, has_ambient_pane, subagent, expected) in [
+        (false, true, false, RunPlacement::Split),
+        (false, true, true, RunPlacement::SubagentZone),
+        (false, false, false, RunPlacement::Tab),
+        (false, false, true, RunPlacement::Tab),
+        (true, true, false, RunPlacement::Tab),
+        (true, true, true, RunPlacement::Tab),
     ] {
         assert_eq!(
-            run_placement(force_new_tab, has_ambient_pane, loop_zone, subagent),
+            run_placement(force_new_tab, has_ambient_pane, subagent),
             expected,
-            "force_new_tab={force_new_tab}, has_ambient_pane={has_ambient_pane}, loop_zone={loop_zone}, subagent={subagent}"
+            "force_new_tab={force_new_tab}, has_ambient_pane={has_ambient_pane}, subagent={subagent}"
         );
     }
 }
@@ -399,7 +397,6 @@ fn supervised_request(prompt: &str, subagent: bool) -> SupervisedRunRequest {
         retries: 0,
         verify: None,
         max_attempts: None,
-        loop_zone: false,
         loop_task: None,
         loop_reminder: None,
         passthrough: Vec::new(),
