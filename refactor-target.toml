@@ -600,7 +600,8 @@ upward-dependencies = [
 # A live reattach inspects and settles the parked recovery candidates (+2).
 # Lane resume and live settlement open a resume tab through one room entry (+1).
 # The detached helper carries opaque, scoped recovery consent (+1).
-surface-budget = 63
+# A single-kind fresh-room selection and its deciding layer serve account reset (+2).
+surface-budget = 65
 
 [[module]]
 path = "crates/rimz/src/sidebar"

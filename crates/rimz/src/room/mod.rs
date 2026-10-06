@@ -114,6 +114,64 @@ pub fn resolve_birth_logins(
     Ok(logins)
 }
 
+/// The layer choosing a fresh room's account, without an explicit request.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BirthLoginLayer {
+    Project,
+    Machine,
+    Provider,
+}
+
+impl std::fmt::Display for BirthLoginLayer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Project => "project default",
+            Self::Machine => "machine default",
+            Self::Provider => "provider default",
+        })
+    }
+}
+
+/// Select one kind's fresh-room account, ignoring any existing room record.
+/// The caller checks the selected home's preconditions before switching.
+pub fn reset_login_selection(
+    project_root: &Path,
+    machine_config: &MachineConfig,
+    kind: &crate::ids::AgentKind,
+) -> Result<(crate::ids::LoginName, BirthLoginLayer)> {
+    machine_config.require_readable_core("reset this room's account")?;
+    let mut project = project_birth_logins(project_root)?;
+    project.retain(|project_kind, _| project_kind == kind);
+    let machine = machine_config
+        .accounts
+        .use_accounts
+        .get(kind)
+        .map(|name| (kind.clone(), name.clone()))
+        .into_iter()
+        .collect();
+    let catalog = crate::agents::LoginCatalog::from_config(&machine_config.accounts)?;
+    let selected =
+        catalog.birth_selection(None, &crate::ids::RoomLogins::new(), &project, &machine)?;
+    let layer = if project.contains_key(kind) {
+        BirthLoginLayer::Project
+    } else if machine.contains_key(kind) {
+        BirthLoginLayer::Machine
+    } else {
+        BirthLoginLayer::Provider
+    };
+    Ok((selected.get(kind).cloned().unwrap_or_default(), layer))
+}
+
+fn project_birth_logins(project_root: &Path) -> Result<crate::ids::RoomLogins> {
+    match crate::trust::project_logins(project_root)? {
+        crate::trust::ProjectLogins::Unconfigured => Ok(crate::ids::RoomLogins::new()),
+        crate::trust::ProjectLogins::Apply(logins) => Ok(logins),
+        crate::trust::ProjectLogins::Blocked(state) => {
+            anyhow::bail!(standing::blocked_project_logins(state))
+        }
+    }
+}
+
 fn select_birth_logins_with_frozen(
     project_root: &Path,
     machine_config: &MachineConfig,
@@ -144,13 +202,7 @@ fn select_birth_logins_with_frozen(
     };
     let project = match frozen {
         Some(_) => empty.clone(),
-        None => match crate::trust::project_logins(project_root)? {
-            crate::trust::ProjectLogins::Unconfigured => empty.clone(),
-            crate::trust::ProjectLogins::Apply(logins) => logins,
-            crate::trust::ProjectLogins::Blocked(state) => {
-                anyhow::bail!(standing::blocked_project_logins(state))
-            }
-        },
+        None => project_birth_logins(project_root)?,
     };
     Ok(catalog.birth_selection(frozen.as_ref(), requested, &project, machine)?)
 }
@@ -678,6 +730,147 @@ fn recorded_room_bin(workspace_id: &WorkspaceId) -> PathBuf {
 mod tests {
     use super::*;
     use crate::workspace::RootClass;
+
+    fn reset_config() -> MachineConfig {
+        MachineConfig {
+            accounts: toml::from_str("[codex.work]\nhome = \"/srv/work\"\n[codex.team]\nhome = \"/srv/team\"\n[use]\ncodex = \"work\"\n").unwrap(),
+            ..Default::default()
+        }
+    }
+
+    fn project_accounts(root: &Path, value: &str) {
+        std::fs::create_dir_all(root.join(".rimz")).unwrap();
+        std::fs::write(root.join(".rimz/config.toml"), value).unwrap();
+    }
+
+    #[test]
+    fn reset_selection_reports_each_layer_and_ignores_the_room_record() {
+        let root = tempfile::tempdir().unwrap();
+        let kind = crate::ids::AgentKind::new_unchecked("codex");
+        let mut config = reset_config();
+        let paths = StatePaths::for_project_root(root.path()).unwrap();
+        std::fs::create_dir_all(paths.workspace_record.parent().unwrap()).unwrap();
+        let mut workspace = workspace();
+        workspace.project_root = root.path().to_owned();
+        workspace.workspace_id = WorkspaceId::from_project_root(root.path());
+        let mut recorded = WorkspaceRecord::from_resolved(&workspace);
+        recorded.logins = Some(crate::ids::RoomLogins::from([(
+            kind.clone(),
+            "team".parse().unwrap(),
+        )]));
+        std::fs::write(
+            &paths.workspace_record,
+            serde_json::to_vec(&recorded).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            reset_login_selection(root.path(), &config, &kind).unwrap(),
+            ("work".parse().unwrap(), BirthLoginLayer::Machine)
+        );
+        config.accounts.use_accounts.clear();
+        assert_eq!(
+            reset_login_selection(root.path(), &config, &kind).unwrap(),
+            (
+                crate::ids::LoginName::default_login(),
+                BirthLoginLayer::Provider
+            )
+        );
+        config
+            .accounts
+            .use_accounts
+            .insert(kind.clone(), "missing".parse().unwrap());
+        project_accounts(root.path(), "[accounts]\ncodex = \"team\"\n");
+        crate::trust::grant(root.path()).unwrap();
+        assert_eq!(
+            reset_login_selection(root.path(), &config, &kind).unwrap(),
+            ("team".parse().unwrap(), BirthLoginLayer::Project)
+        );
+    }
+
+    #[test]
+    fn reset_selection_validates_only_the_requested_kind() {
+        let root = tempfile::tempdir().unwrap();
+        let kind = crate::ids::AgentKind::new_unchecked("codex");
+        let mut config = reset_config();
+        config
+            .accounts
+            .use_accounts
+            .insert(kind.clone(), "missing".parse().unwrap());
+        let error = reset_login_selection(root.path(), &config, &kind).unwrap_err();
+        assert!(
+            matches!(
+                error.downcast_ref::<crate::agents::BirthLoginErr>(),
+                Some(crate::agents::BirthLoginErr::MachineUnknown { .. })
+            ),
+            "{error}"
+        );
+        config.accounts.use_accounts.remove(&kind);
+        config.accounts.use_accounts.insert(
+            crate::ids::AgentKind::new_unchecked("claude"),
+            "missing".parse().unwrap(),
+        );
+        assert_eq!(
+            reset_login_selection(root.path(), &config, &kind)
+                .unwrap()
+                .0,
+            crate::ids::LoginName::default_login()
+        );
+        project_accounts(root.path(), "[accounts]\ncodex = \"missing\"\n");
+        crate::trust::grant(root.path()).unwrap();
+        let error = reset_login_selection(root.path(), &config, &kind)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("unknown codex account `missing`"), "{error}");
+    }
+
+    #[test]
+    fn reset_selection_refuses_untrusted_and_stale_projects_even_for_other_kinds() {
+        let root = tempfile::tempdir().unwrap();
+        let kind = crate::ids::AgentKind::new_unchecked("codex");
+        let config = reset_config();
+        project_accounts(root.path(), "[accounts]\nclaude = \"default\"\n");
+        let error = reset_login_selection(root.path(), &config, &kind)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("project account selections in .rimz/config.toml are untrusted")
+                && error.contains("rimz trust grant"),
+            "{error}"
+        );
+        crate::trust::grant(root.path()).unwrap();
+        project_accounts(root.path(), "[accounts]\nclaude = \"work\"\n");
+        let error = reset_login_selection(root.path(), &config, &kind)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("project account selections in .rimz/config.toml are stale")
+                && error.contains("since your last grant")
+                && error.contains("rimz trust grant"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn reset_selection_refuses_unreadable_core_before_project_trust() {
+        let root = tempfile::tempdir().unwrap();
+        project_accounts(root.path(), "[accounts]\nclaude = \"default\"\n");
+        let mut config = reset_config();
+        config
+            .notices
+            .unreadable_files
+            .insert(MachineConfig::config_path(), "broken TOML".to_owned());
+        let error = reset_login_selection(
+            root.path(),
+            &config,
+            &crate::ids::AgentKind::new_unchecked("codex"),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            error.contains("cannot reset this room's account") && error.contains("broken TOML"),
+            "{error}"
+        );
+    }
 
     #[test]
     fn fresh_birth_refuses_unreadable_core_but_existing_rooms_and_other_files_do_not() {
