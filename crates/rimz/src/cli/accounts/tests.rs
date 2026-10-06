@@ -78,18 +78,13 @@ fn now() -> Timestamp {
     Timestamp::from_second(1_700_000_000).unwrap()
 }
 
-fn text(
-    rows: &[AccountRow],
-    deciding: &[(&str, Deciding)],
-    in_room: bool,
-    width: Option<usize>,
-) -> String {
+fn text(rows: &[AccountRow], deciding: &[(&str, Deciding)], width: Option<usize>) -> String {
     let deciding = deciding
         .iter()
         .map(|(kind, deciding)| (AgentKind::new_unchecked(*kind), *deciding))
         .collect();
     let mut stream = anstream::StripStream::new(Vec::new());
-    write_accounts(&mut stream, rows, &deciding, in_room, now(), width).unwrap();
+    write_accounts(&mut stream, rows, &deciding, now(), width).unwrap();
     String::from_utf8(stream.into_inner()).unwrap()
 }
 
@@ -107,7 +102,7 @@ fn listed(
         .into_iter()
         .filter_map(|kind| Some((kind, standing.deciding(&AgentKind::new_unchecked(kind))?)))
         .collect();
-    let text = text(&rows, &deciding, false, None);
+    let text = text(&rows, &deciding, None);
     (rows, text)
 }
 
@@ -138,7 +133,7 @@ fn logged_in(windows: Vec<RateLimitWindow>) -> LoginReading {
     }
 }
 
-/// The table's lines: everything above the legend, hint, and problems.
+/// The table's lines: everything above the legend and problems.
 fn table(text: &str) -> Vec<&str> {
     text.lines()
         .take_while(|line| {
@@ -251,7 +246,6 @@ fn markers_and_legend_name_the_layer_that_decides() {
     let room = text(
         &rows,
         &[("claude", Deciding::Room), ("codex", Deciding::Room)],
-        true,
         None,
     );
     let lines = table(&room);
@@ -263,7 +257,6 @@ fn markers_and_legend_name_the_layer_that_decides() {
     let project = text(
         &rows,
         &[("claude", Deciding::Project), ("codex", Deciding::Machine)],
-        false,
         None,
     );
     assert!(
@@ -273,7 +266,7 @@ fn markers_and_legend_name_the_layer_that_decides() {
     for row in &mut rows {
         row.active = row.machine_default;
     }
-    let project = text(&rows, &[("claude", Deciding::Project)], false, None);
+    let project = text(&rows, &[("claude", Deciding::Project)], None);
     assert!(
         !table(&project).iter().any(|line| line.starts_with('○')),
         "{project}"
@@ -289,7 +282,7 @@ fn markers_and_legend_name_the_layer_that_decides() {
         None,
         &BTreeMap::new(),
     );
-    let unread = text(&unread, &[], false, None);
+    let unread = text(&unread, &[], None);
     let lines = table(&unread);
     assert!(!unread.contains('●'), "{unread}");
     assert!(lines[1].starts_with("   claude  default"), "{unread}");
@@ -468,213 +461,13 @@ fn a_logged_out_account_reads_logged_out_unless_its_setup_is_broken() {
     assert_eq!(row.login, Some(ProviderStatus::Unavailable));
 }
 
-fn at_in(text: &str, needle: &str) -> usize {
-    text.lines()
-        .position(|line| line.contains(needle))
-        .unwrap_or_else(|| panic!("no `{needle}` in {text}"))
-}
-
-const TEAMS: &str = "[codex.team-0]\nhome = \"/srv/t0\"\n[codex.team-1]\nhome = \"/srv/t1\"\n[codex.team-2]\nhome = \"/srv/t2\"\n";
-
-/// The list where codex `default` is active with `used` on its 7d window
-/// and each sibling reads its own, every account's setup healthy.
-fn hinted(
-    used: u8,
-    siblings: &[(&str, ProviderStatus, u8)],
-    deciding: Deciding,
-    in_room: bool,
-) -> String {
-    hinted_from(
-        vec![
-            window(FIVE_HOURS, Some(30), Some(3_600)),
-            window(SEVEN_DAYS, Some(used), Some(86_400)),
-        ],
-        siblings,
-        &[],
-        deciding,
-        in_room,
-    )
-}
-
-/// `hinted` with the active account's windows given, and the `broken`
-/// siblings left with the setup problem their missing fixture home gives.
-fn hinted_from(
-    active: Vec<RateLimitWindow>,
-    siblings: &[(&str, ProviderStatus, u8)],
-    broken: &[&str],
-    deciding: Deciding,
-    in_room: bool,
-) -> String {
-    let machine = machine(TEAMS);
-    let mut readings = BTreeMap::from([(key("codex", "default"), logged_in(active))]);
-    for (name, status, used) in siblings {
-        readings.insert(
-            key("codex", name),
-            LoginReading {
-                status: *status,
-                metered: Some(true),
-                windows: vec![window(SEVEN_DAYS, Some(*used), Some(86_400))],
-            },
-        );
-    }
-    let standing = AccountStanding::machine_only(&machine);
-    let mut rows = rows_at(&machine, &standing, None, &readings);
-    for row in &mut rows {
-        if !broken.contains(&row.name.as_str()) {
-            (row.status, row.problem) = (AccountStatus::Ready, None);
-        }
-    }
-    text(&rows, &[("codex", deciding)], in_room, None)
-}
-
-#[test]
-fn hint_names_the_sibling_with_the_most_left_once_the_marked_account_runs_low() {
-    use ProviderStatus::LoggedIn;
-    let room = hinted(
-        88,
-        &[
-            ("team-2", LoggedIn, 31),
-            ("team-1", LoggedIn, 5),
-            ("team-0", LoggedIn, 5),
-        ],
-        Deciding::Room,
-        true,
-    );
-    assert!(
-        room.contains(
-            "\n●  this room   ○  new rooms\n  codex default has 12% of its 7d window left; team-0 has the most room:\n    rimz accounts use codex team-0\n"
-        ),
-        "{room}"
-    );
-    let lines: Vec<&str> = room.lines().collect();
-    let at = |needle: &str| {
-        lines
-            .iter()
-            .position(|line| line.contains(needle))
-            .unwrap_or_else(|| panic!("no `{needle}` in {room}"))
-    };
-    assert!(at("codex   team-2") < at("this room"), "{room}");
-
-    // `rimz accounts use` refuses an account with a setup problem, so the
-    // hint passes over one however much it has left.
-    let active = || {
-        vec![
-            window(FIVE_HOURS, Some(30), Some(3_600)),
-            window(SEVEN_DAYS, Some(88), Some(86_400)),
-        ]
-    };
-    let siblings = [("team-1", LoggedIn, 5), ("team-2", LoggedIn, 31)];
-    let passed_over = hinted_from(active(), &siblings, &["team-1"], Deciding::Room, true);
-    assert!(
-        passed_over.contains("; team-2 has the most room:\n    rimz accounts use codex team-2\n"),
-        "{passed_over}"
-    );
-    assert_eq!(
-        at_in(&passed_over, "rimz accounts use") + 1,
-        at_in(&passed_over, "is not a directory"),
-        "{passed_over}"
-    );
-    let none_usable = hinted_from(
-        active(),
-        &siblings,
-        &["team-1", "team-2"],
-        Deciding::Room,
-        true,
-    );
-    assert!(!none_usable.contains("has the most room"), "{none_usable}");
-
-    let global = hinted(80, &[("team-1", LoggedIn, 5)], Deciding::Machine, false);
-    assert!(
-        global.contains(
-            "\n●  new rooms\n  codex default has 20% of its 7d window left; team-1 has the most room:\n    rimz accounts use --global codex team-1\n"
-        ),
-        "{global}"
-    );
-    for (text, why) in [
-        (
-            hinted(79, &[("team-1", LoggedIn, 5)], Deciding::Room, true),
-            "more than 20% left",
-        ),
-        (
-            hinted(92, &[("team-1", LoggedIn, 5)], Deciding::Project, false),
-            "project decides",
-        ),
-        (
-            hinted(92, &[("team-1", LoggedIn, 5)], Deciding::Room, false),
-            "outside the room",
-        ),
-        (
-            hinted(
-                92,
-                &[
-                    ("team-1", ProviderStatus::Unavailable, 5),
-                    ("team-2", ProviderStatus::LoggedOut, 5),
-                ],
-                Deciding::Room,
-                true,
-            ),
-            "no sibling is logged in",
-        ),
-        (
-            hinted(
-                92,
-                &[("team-1", LoggedIn, 92), ("team-2", LoggedIn, 95)],
-                Deciding::Room,
-                true,
-            ),
-            "no sibling has more left",
-        ),
-    ] {
-        assert!(!text.contains("has the most room"), "{why}: {text}");
-    }
-}
-
-/// A hot model-scoped window never reaches the hint, even when a sibling has
-/// room on the same one: each reading passes the list's window filter first.
-#[test]
-fn a_hot_model_scoped_window_alone_gives_no_hint() {
-    let scoped = |used| RateLimitWindow {
-        scope: Some(rimz::agents::RateLimitWindowScope {
-            id: "model:fable".to_owned(),
-            label: "Fable".to_owned(),
-        }),
-        ..window(SEVEN_DAYS, Some(used), None)
-    };
-    let hint = |keep: fn(&[RateLimitWindow]) -> Vec<RateLimitWindow>| {
-        let machine = machine(TEAMS);
-        let readings = BTreeMap::from([
-            (
-                key("codex", "default"),
-                logged_in(keep(&[scoped(95), window(SEVEN_DAYS, Some(30), None)])),
-            ),
-            (
-                key("codex", "team-1"),
-                logged_in(keep(&[scoped(5), window(SEVEN_DAYS, Some(5), None)])),
-            ),
-        ]);
-        let standing = AccountStanding::machine_only(&machine);
-        let mut rows = rows_at(&machine, &standing, None, &readings);
-        for row in &mut rows {
-            (row.status, row.problem) = (AccountStatus::Ready, None);
-        }
-        text(&rows, &[("codex", Deciding::Room)], true, None)
-    };
-    let unfiltered = hint(<[RateLimitWindow]>::to_vec);
-    assert!(
-        unfiltered.contains("has the most room"),
-        "the scoped window hints once it reaches a row: {unfiltered}"
-    );
-    let filtered = hint(list_windows);
-    assert!(!filtered.contains("has the most room"), "{filtered}");
-}
-
 #[test]
 fn only_home_clips_at_a_terminal_bound() {
     let machine = machine("[claude.alpha]\nhome = \"/srv/a/rather/long/account/home/alpha\"\n");
     let standing = AccountStanding::machine_only(&machine);
     let rows = rows_at(&machine, &standing, None, &BTreeMap::new());
     let deciding = [("claude", Deciding::Machine), ("codex", Deciding::Machine)];
-    let full = text(&rows, &deciding, false, None);
+    let full = text(&rows, &deciding, None);
     let alpha = |text: &str| -> String {
         table(text)
             .into_iter()
@@ -687,7 +480,7 @@ fn only_home_clips_at_a_terminal_bound() {
         "{full}"
     );
     let bound = alpha(&full).chars().count() - 10;
-    let clipped = text(&rows, &deciding, false, Some(bound));
+    let clipped = text(&rows, &deciding, Some(bound));
     assert_eq!(alpha(&clipped).chars().count(), bound, "{clipped}");
     let home = alpha(&full).find("/srv").unwrap();
     assert_eq!(alpha(&clipped)[..home], alpha(&full)[..home], "{clipped}");

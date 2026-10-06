@@ -133,7 +133,7 @@ new rooms now use claude account `work`; existing rooms, running or stopped, kee
 rimz accounts list [--json]
 ```
 
-`list` prints one table with a row per account of each supported kind, `default` first within its kind and an empty line between kinds, then the legend for its two markers, a switch hint when the marked account runs low, and each problem on its own line with its fix:
+`list` prints one table with a row per account of each supported kind, `default` first within its kind and an empty line between kinds, then the legend for its two markers, and each problem on its own line with its fix:
 
 ```console
 $ rimz accounts list
@@ -169,8 +169,6 @@ The legend line under the table names the layer that decides `●`, the highest 
 | `–` | Unknown: no reading yet, or the account is logged out or not declared. |
 
 To fill these columns `list` probes each account's login and runs the usage reads that are due, the same ones `rimz providers` runs, and re-probes an account its last probe found logged out. It also re-probes older cached records whose login state is ambiguous. A cold run therefore waits on the provider, with a spinner on a terminal; a read that fails leaves the last stored reading.
-
-When the `●` account of a kind has 20% or less of its 5h or 7d window left and another ready, logged-in account of the kind has more left on that window, two lines under the legend name the account with the most left and the command that switches to it: `rimz accounts use` when the room decides, `rimz accounts use --global` when the machine does. A kind the project decides gets no hint, and neither does a room-decided kind read from outside the room.
 
 On a terminal narrower than the table, `HOME` clips with `…` and every other column stays whole; piped output and `--json` are never clipped.
 
