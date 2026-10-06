@@ -1377,12 +1377,34 @@ fn birth_keeps_agents_pending_when_their_resume_window_does_not_open() {
     assert!(output.contains("Recover 1 agent (#alpha)?"), "{output}");
     assert!(output.contains("rimz: resumed 1 agent: #alpha"), "{output}");
     assert_eq!(pending()["agents"], serde_json::json!([]));
-    assert_eq!(
-        ended(),
-        0,
-        "the resume ends nobody; events since the first birth:\n{}",
-        since_birth()
-    );
+    let ended_after_resume = ended();
+    if ended_after_resume != 0 {
+        // The ended stamp is the resumed wrapper's own: name what its pane
+        // printed and what the room recorded, so a CI failure explains itself.
+        let rimz_out = |args: &[&str]| {
+            let output = env
+                .rimz()
+                .env("PATH", &agent_path)
+                .args(["--mux", "tmux"])
+                .args(args)
+                .bounded_output()
+                .expect("run a forensic rimz command");
+            format!(
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            )
+        };
+        panic!(
+            "the resume ends nobody; events since the first birth:\n{}\n\
+             attended start output:\n{output}\npanes:\n{}\n@alpha pane:\n{}\n\
+             diagnostics:\n{}",
+            since_birth(),
+            rimz_out(&["pane", "list"]),
+            rimz_out(&["pane", "capture", "@alpha"]),
+            env.diag_tail(&workspace.session_name, 40),
+        );
+    }
 }
 
 /// An agent left pending in a live room and brought back by hand is a normal
