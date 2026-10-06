@@ -308,7 +308,7 @@ fn other_lanes_line(
         .len();
     let undelivered = others
         .iter()
-        .filter(|message| message.status.is_open())
+        .filter(|message| message.status == MessageStatus::Queued)
         .count();
     let lane = lane_scope.named().map_or_else(
         || "the main lane".to_owned(),
@@ -933,6 +933,23 @@ mod tests {
         assert_eq!(
             rendered_sender(&MessageSender::System, "rimz"),
             rendered_sender(&agent_sender("rimz", None), "rimz")
+        );
+    }
+
+    #[test]
+    fn other_lanes_line_counts_only_queued_as_undelivered() {
+        let mut claimed = message_row("sess-a", Some("ops"), "claimed");
+        claimed.status = MessageStatus::Claimed;
+        let queued = message_row("sess-b", Some("ops"), "queued");
+        assert_eq!(
+            other_lanes_line(&[claimed.clone(), queued], &LaneScope::Main, false).as_deref(),
+            Some(
+                "no messages in the main lane. 2 in 1 other lane, 1 not yet delivered — rimz message list --all --status queued"
+            )
+        );
+        assert_eq!(
+            other_lanes_line(&[claimed], &LaneScope::Main, false).as_deref(),
+            Some("no messages in the main lane. 1 in 1 other lane — rimz message list --all")
         );
     }
 
