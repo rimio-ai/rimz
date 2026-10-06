@@ -28,7 +28,21 @@ use rimz::store::message::{
 use rimz::store::snapshot::SidebarSnapshot;
 use rimz::store::{writer::EditOutcome, writer::MessageEdit};
 
+const LONG_ABOUT: &str = r#"Send text to an agent, and manage what you have sent.
+
+  rimz message @coder "rebase first"             now if free, else at turn end
+  rimz message @coder --wait "status? one line"  send, then print the reply
+  rimz message --steer @coder "use the cache"    type into its running turn
+  rimz message --interrupt @coder "stop"         type, then stop its turn
+  rimz message                                   what you sent in this lane
+  rimz message show msg_0123456789abcdef         why a message has not landed"#;
+
 #[derive(Debug, Args)]
+#[command(
+    about = "Send text to an agent, and manage what you have sent",
+    long_about = LONG_ABOUT,
+    override_usage = "rimz message <TARGET> <TEXT> [OPTIONS]\n       rimz message <COMMAND>"
+)]
 pub struct MessageArgs {
     #[command(subcommand)]
     command: Option<MessageSubcmd>,
@@ -41,13 +55,14 @@ pub struct MessageArgs {
     /// `--file` to deliver external contents verbatim.
     #[arg(allow_hyphen_values = true)]
     text: Option<String>,
-    /// Deliver after a successful/idle turn (`done`, the default) or after success/idle/failure (`any`).
+    /// Which turn outcomes release a parked message: `done` (the default) after a turn that
+    /// succeeded or went idle, `any` after a failed turn too.
     #[arg(long, value_parser = parse_gate, conflicts_with = "steer")]
     on: Option<DeliveryGate>,
     /// Write into the live turn now instead of parking for a turn boundary.
     #[arg(long, conflicts_with_all = ["schedule", "on"])]
     steer: bool,
-    /// Stop the live turn with the agent's interrupt key, then deliver as a fresh turn. Refused for agents without one.
+    /// Type the text, then press the agent's interrupt key about 3s later: the turn stops and the text starts a fresh one. Refused for agents without an interrupt key.
     #[arg(long, conflicts_with_all = ["steer", "on", "schedule", "after", "when"])]
     interrupt: bool,
     /// Park the message until at least this duration or configured-zone `HH:MM`.
@@ -98,11 +113,11 @@ enum MessageSubcmd {
             crate::cli::complete::queued_message_ids
         ))]
         message_id: MessageId,
-        /// Send even when the agent is Waiting.
+        /// Type the text into the pane even while a prompt is open there. The prompt receives the keystrokes.
         #[arg(long)]
         force: bool,
     },
-    /// Stop the live turn, then deliver a queued message as a fresh turn.
+    /// Type a queued message, then press the interrupt key about 3s later: the turn stops and the text starts a fresh one.
     Interrupt {
         #[arg(add = clap_complete::ArgValueCandidates::new(
             crate::cli::complete::queued_message_ids
@@ -174,7 +189,7 @@ struct ListArgs {
     /// Include every channel and archived messages.
     #[arg(long)]
     all: bool,
-    /// Include system traffic: waits, signals, subagent digests, nudges, and --no-from text.
+    /// Include system traffic: waits, signals, subagent digests, stage notices, automatic compaction commands, and --no-from text.
     #[arg(long)]
     system: bool,
     /// Exact status filter.
@@ -214,10 +229,10 @@ struct EditFlags {
     /// Clear the earliest-delivery floor.
     #[arg(long, conflicts_with = "schedule")]
     no_schedule: bool,
-    /// Send even when the agent is Waiting.
+    /// Type the text into the pane even while a prompt is open there. The prompt receives the keystrokes.
     #[arg(long, conflicts_with = "no_force")]
     force: bool,
-    /// Restore normal Waiting deferral.
+    /// Hold delivery while a prompt is open, as by default.
     #[arg(long, conflicts_with = "force")]
     no_force: bool,
     /// Submit the message with Enter after paste.
@@ -449,7 +464,87 @@ fn parse_status(raw: &str) -> std::result::Result<MessageStatus, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use clap::Parser;
+    use clap::{CommandFactory, Parser};
+
+    use crate::cli::Cli;
+
+    fn help_of(subcommand: &[&str]) -> String {
+        let argv = ["rimz", "message"]
+            .into_iter()
+            .chain(subcommand.iter().copied())
+            .chain(["--help"]);
+        Cli::command()
+            .try_get_matches_from(argv)
+            .expect_err("--help exits through clap")
+            .to_string()
+    }
+
+    fn one_line(text: &str) -> String {
+        text.split_whitespace().collect::<Vec<_>>().join(" ")
+    }
+
+    #[test]
+    fn message_help_opens_with_examples_that_parse() {
+        let help = help_of(&[]);
+        assert!(
+            help.starts_with("Send text to an agent, and manage what you have sent.\n\n"),
+            "{help}"
+        );
+        assert!(
+            help.contains(
+                "Usage: rimz message <TARGET> <TEXT> [OPTIONS]\n       rimz message <COMMAND>\n"
+            ),
+            "{help}"
+        );
+        let examples = help
+            .lines()
+            .filter_map(|line| line.strip_prefix("  rimz message"))
+            .map(|rest| format!("rimz message{}", rest.split("  ").next().unwrap()))
+            .collect::<Vec<_>>();
+        assert_eq!(examples.len(), 6, "{help}");
+        for example in examples {
+            let words = shlex::split(&example).unwrap();
+            Cli::try_parse_from(words).unwrap_or_else(|err| panic!("`{example}`: {err}"));
+        }
+    }
+
+    #[test]
+    fn message_flag_helps_state_what_the_flags_do() {
+        const FORCE: &str = "Type the text into the pane even while a prompt is open there. The prompt receives the keystrokes";
+        let send = one_line(&help_of(&[]));
+        let interrupt = one_line(&help_of(&["interrupt"]));
+        let steer = one_line(&help_of(&["steer"]));
+        let edit = one_line(&help_of(&["edit"]));
+        let list = one_line(&help_of(&["list"]));
+        for (help, wanted) in [
+            (
+                &send,
+                "Type the text, then press the agent's interrupt key about 3s later",
+            ),
+            (
+                &interrupt,
+                "Type a queued message, then press the interrupt key about 3s later",
+            ),
+            (&send, FORCE),
+            (&steer, FORCE),
+            (&edit, FORCE),
+            (
+                &list,
+                "stage notices, automatic compaction commands, and --no-from text",
+            ),
+        ] {
+            assert!(help.contains(wanted), "missing `{wanted}` in {help}");
+        }
+        for unwanted in [
+            "Stop the live turn, then deliver",
+            "when the agent is Waiting",
+            "nudges",
+        ] {
+            for help in [&send, &interrupt, &steer, &edit, &list] {
+                assert!(!help.contains(unwanted), "`{unwanted}` in {help}");
+            }
+        }
+    }
 
     #[test]
     fn invalid_message_status_lists_valid_values() {

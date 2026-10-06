@@ -715,9 +715,6 @@ enum Subcmd {
     /// Complete an attended recovery after a client attaches.
     #[command(hide = true)]
     RecoverParked(room::DeferredRecoveryArgs),
-    /// Message agents; list, edit, steer, requeue, cancel.
-    ///
-    /// Bare send routes now with `--steer`, or at the next safe turn boundary.
     #[command(visible_alias = "msg")]
     Message(Box<message::MessageArgs>),
     /// Sidebar helper API. The sidebar calls these; humans usually do not.

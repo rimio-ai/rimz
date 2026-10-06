@@ -13,10 +13,10 @@ rimz message @coder --wait "did the migration land? one line"
 rimz message @all --wait --json "status? one line"
 git diff main | rimz message @reviewer --stdin "Review this change."
 rimz message                                                          # inbox for the current lane
-rimz message show msg_01k…
-rimz message edit msg_01k… --text "Use the cache key from config."
-rimz message steer msg_01k…
-rimz message cancel msg_01k… msg_01k…
+rimz message show msg_…
+rimz message edit msg_… --text "Use the cache key from config."
+rimz message steer msg_…
+rimz message cancel msg_… msg_…
 rimz message clear @claude-2#cli-docs
 ```
 
@@ -26,7 +26,7 @@ A send takes one target and the text: `rimz message <TARGET> "<TEXT>"`. Flags ma
 
 Bare `rimz message` lists the current lane. Any send flag without a target is an invalid command line (exit 2), with the intended send form and a list hint. For inbox flags, use `rimz message list --json`, `rimz message list --all`, or `rimz message list --channel <NAME>`; these flags mean reply formatting, fan-out, and recipient scope on the send form. Bare words and message ids in place of a target also exit 2. `rimz message cancel` requires at least one message id and exits 2 without one.
 
-The target follows the [address grammar](./agents.md#addressing-agents), plus `@me` for the calling agent. A bare word that is not an address fails: `rimz message msg_01k…` suggests `rimz message show msg_01k…`, a word carrying text to deliver names the sigil (``agent target `codex` must start with `@` (try `@codex`)``), and a word with nothing to deliver lists the subcommands. An address that matches no agent prints the error followed by the live agents, and exits 1.
+The target follows the [address grammar](./agents.md#addressing-agents), plus `@me` for the calling agent. A bare word that is not an address fails: `rimz message msg_…` suggests `rimz message show msg_…`, a word carrying text to deliver names the sigil (``agent target `codex` must start with `@` (try `@codex`)``), and a word with nothing to deliver lists the subcommands. An address that matches no agent prints the error followed by the live agents, and exits 1.
 
 The text comes from one of three sources:
 
@@ -229,14 +229,14 @@ Bare `rimz message` is `rimz message list` for the current lane. In the main che
 | `--all` | Every lane, including archived messages. |
 | `--channel <NAME>` | One known lane. An unknown explicit channel, including an inline lane, exits 1 and lists up to 20 known channels. Message history, live agents, and owned worktrees supply the names. The ambient lane is not checked. |
 | `--status <STATUS>` | Exactly one status. Also accepts `pending`, `cancelled`, and `removed`. Selecting `archived` shows archived messages. |
-| `--system` | Include system traffic: waits, signals, subagent digests, stage notices, compaction commands, and `--no-from` text. |
+| `--system` | Include system traffic: waits, signals, subagent digests, stage notices, automatic compaction commands, and `--no-from` text. |
 | `--limit <N>` | At most N rows, newest first. Default 200; `0` shows all. |
 | `--json` | Emit the rows as a JSON array. |
 
 The list shows conversation by default: sends from you and from agents. Archived messages are hidden unless `--all` or `--status archived` asks for them. Each row is two lines, the header then the text clipped to the terminal width with `$HOME` shown as `~`:
 
 ```text
-you → @coder  queued  3m ago  msg_01k…
+you → @coder  queued  3m ago  msg_…
   Read plan.md when the planner finishes. · after @planner
 ```
 
@@ -262,7 +262,7 @@ Trailing lines report what the view left out:
 DELIVERY CHECK
   …
   waiting: @coder is running; gate 'done' opens at next turn end
-  force now: rimz message steer msg_01k…
+  force now: rimz message steer msg_…
 ```
 
 A scheduled message suggests `rimz message edit <id> --no-schedule` as well. An open prompt points to `rimz asks show @coder` and `rimz answer @coder <choice>`, just like the send receipt. `--json` prints `{"message": <row>, "timeline": [{"method", "at", "attempts", "reason"}], "delivery": {"check", "verdict"}}`, with `delivery` present only for open messages. Every sender class is reachable, including system messages the list hides.
