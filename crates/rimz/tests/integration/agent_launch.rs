@@ -4224,6 +4224,53 @@ fn close_pane_exec_relaunches_a_startup_death_to_the_cap_then_reports_the_failur
 
 #[cfg(unix)]
 #[test]
+fn a_provider_startup_exit_is_recorded_without_relaunches() {
+    let env = Env::new();
+    let shell = write_fake_login_shell(&env, "rimz-test-sh", &[]);
+    let shim_dir = env.home_root.join("agent-bin");
+    crate::common::write_path_shim(
+        &shim_dir,
+        "codex",
+        "if [ \"${1:-}\" = --version ]; then echo 0.159.2; exit 0; fi\nexit 2",
+    );
+    write_startup_relaunch_config(&env, "startup-relaunches = 0");
+    let request = startup_death_request(&env, "launch_startup_diag");
+    let output = env
+        .rimz()
+        .args(exec_args(&env, &request))
+        .env("SHELL", &shell)
+        .env("PATH", path_with_front(&shim_dir))
+        .bounded_output()
+        .expect("agents exec settles the provider exit");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("exit status: 2"),
+        "{output:?}"
+    );
+    let workspace = env.resolve_workspace(&env.project_root);
+    let exits: Vec<_> = env
+        .diag_records(&workspace.session_name)
+        .into_iter()
+        .map(|record| serde_json::to_value(record.event).unwrap())
+        .filter(|event| event["kind"] == "provider_startup_exit")
+        .collect();
+    assert_eq!(
+        exits.len(),
+        1,
+        "{}",
+        env.diag_tail(&workspace.session_name, 40)
+    );
+    let exit = &exits[0];
+    assert_eq!(exit["agent_kind"], "codex");
+    assert_eq!(exit["agent_name"], "pruner");
+    assert_eq!(exit["action"], "launch");
+    assert_eq!(exit["exit_code"], 2);
+    assert!(exit["signal"].is_null());
+    assert!(exit["startup_ms"].as_u64().unwrap() <= 60_000);
+    assert_eq!(exit["relaunches"], 0);
+}
+
+#[cfg(unix)]
+#[test]
 fn a_zero_startup_relaunch_cap_settles_the_first_startup_death() {
     let env = Env::new();
     let shell = write_fake_login_shell(&env, "rimz-test-sh", &[]);

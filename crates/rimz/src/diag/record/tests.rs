@@ -2,6 +2,25 @@ use super::*;
 use crate::ids::MuxName;
 
 #[test]
+fn provider_startup_exits_round_trip_exit_codes_and_signals() {
+    let wires = [
+        r#"{"kind":"provider_startup_exit","agent_kind":"codex","agent_name":"pruner","action":"launch","exit_code":2,"signal":null,"startup_ms":1,"relaunches":0}"#,
+        r#"{"kind":"provider_startup_exit","agent_kind":"codex","agent_name":"pruner","action":"resume","exit_code":null,"signal":15,"startup_ms":5,"relaunches":3}"#,
+    ];
+    let decoded = wires.map(serde_json::from_str::<DiagEvent>);
+    assert!(decoded.iter().all(Result::is_ok), "{decoded:?}");
+    for (event, wire) in decoded.into_iter().zip(wires) {
+        let event = event.unwrap();
+        assert_eq!(serde_json::to_string(&event).unwrap(), wire);
+        assert_eq!(event.severity(), DiagSeverity::Warn);
+        assert_eq!(
+            event.identity_key(),
+            "provider_startup_exit:codex:Some(\"pruner\")"
+        );
+    }
+}
+
+#[test]
 fn legacy_provider_aggregates_decode_as_default_logins() {
     for line in [
         r#"{"aggregate":"provider_spend","kind":"claude"}"#,

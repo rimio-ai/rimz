@@ -1719,6 +1719,39 @@ fn team_run_settles_once_per_done_and_reopens_for_the_next() {
 }
 
 #[test]
+fn provider_startup_exit_reports_only_unprovoked_failures_within_the_window() {
+    let exit = ProviderExit {
+        fresh_launch: false,
+        success: false,
+        abrupt: false,
+        signaled: false,
+        relaunches: 3,
+        startup: Duration::from_millis(1),
+    };
+    assert!(provider_startup_exit(exit));
+    assert!(!provider_startup_exit(ProviderExit {
+        abrupt: true,
+        ..exit
+    }));
+    assert!(!provider_startup_exit(ProviderExit {
+        signaled: true,
+        ..exit
+    }));
+    assert!(provider_startup_exit(ProviderExit {
+        startup: Duration::from_secs(60),
+        ..exit
+    }));
+    assert!(!provider_startup_exit(ProviderExit {
+        success: true,
+        ..exit
+    }));
+    assert!(!provider_startup_exit(ProviderExit {
+        startup: Duration::from_secs(61),
+        ..exit
+    }));
+}
+
+#[test]
 fn startup_relaunch_is_due_only_for_an_unopened_nonzero_exit_below_the_cap() {
     use StartupRelaunch::{Due, No, Spent};
     let died = ProviderExit {

@@ -348,6 +348,11 @@ fn launch_and_supervise(
         survives_parent,
     );
     let mut relaunches: u8 = 0;
+    let diag = rimz::diag::DiagSink::for_workspace(
+        workspace.workspace_id.clone(),
+        workspace.session_name.clone(),
+        None,
+    );
     let (outcome, terminal_grace, startup_deaths) = loop {
         let mut outcome = supervise_child(
             child,
@@ -364,6 +369,37 @@ fn launch_and_supervise(
         .context("supervising agent process")?;
         let startup = spawned_at.elapsed();
         let exit_code = outcome.status.code();
+        let exit = rimz::harness::run::ProviderExit {
+            fresh_launch,
+            success: outcome.status.success(),
+            abrupt: outcome.abrupt,
+            signaled: cleanup_signal_received() || interrupt_signal_flag().load(Ordering::SeqCst),
+            relaunches,
+            startup,
+        };
+        if rimz::harness::run::provider_startup_exit(exit) {
+            #[cfg(unix)]
+            let signal = {
+                use std::os::unix::process::ExitStatusExt;
+                outcome.status.signal()
+            };
+            #[cfg(not(unix))]
+            let signal = None;
+            let action = match &request.action {
+                rimz::harness::launch::ExecAction::Launch { .. } => "launch",
+                rimz::harness::launch::ExecAction::Resume { .. } => "resume",
+                rimz::harness::launch::ExecAction::Fork { .. } => "fork",
+            };
+            diag.emit(rimz::diag::record::DiagEvent::ProviderStartupExit {
+                agent_kind: request.kind.to_string(),
+                agent_name: request.identity.name.clone(),
+                action: action.to_owned(),
+                exit_code,
+                signal,
+                startup_ms: u64::try_from(startup.as_millis()).unwrap_or(u64::MAX),
+                relaunches,
+            });
+        }
         let parent_ended = || {
             outcome
                 .parent_watchdog
@@ -374,13 +410,10 @@ fn launch_and_supervise(
         // moment it would spawn.
         let relaunch = || {
             let exit = rimz::harness::run::ProviderExit {
-                fresh_launch,
-                success: outcome.status.success(),
                 abrupt: outcome.abrupt || parent_ended(),
                 signaled: cleanup_signal_received()
                     || interrupt_signal_flag().load(Ordering::SeqCst),
-                relaunches,
-                startup,
+                ..exit
             };
             startup_evidence(run_context, invocation, launch_identity.as_ref())
                 .map_or(rimz::harness::run::StartupRelaunch::No, |evidence| {

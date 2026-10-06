@@ -473,6 +473,8 @@ Before any of that, a fresh launch whose provider exits nonzero before its sessi
 
 ### How the wrapper settles
 
+Before any settlement, a surviving wrapper records a non-successful provider exit within 60s of spawn that it did not cause (no run-completion or parent-end stop, no signal to the wrapper) as the best-effort [`provider_startup_exit` diagnostic](../diagnostics.md#event-taxonomy), including launches, resumes, and forks, independently of run or card evidence.
+
 After the trace, the wrapper settles in one of three ways, depending on what the launch asked for.
 
 **Drop to a shell.** A clean exit from a close-pane or worktree pane that is not a supervised run prints one hint and execs the user's shell in that pane, so the pane stays usable and any worktree stays inspectable. The hint is a runnable command rebuilt from the stored identity (`rimz agents forge.reviewer`). It teaches `--resume` when the ended session can be redeemed, meaning a real provider session id whose adapter compiles a resume command for this directory, and a bare relaunch otherwise. Running the resume takes that same pane back over instead of opening a lane tab.

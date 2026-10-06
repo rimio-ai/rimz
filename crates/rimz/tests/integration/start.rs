@@ -1382,26 +1382,43 @@ fn birth_keeps_agents_pending_when_their_resume_window_does_not_open() {
         // The ended stamp is the resumed wrapper's own: name what its pane
         // printed and what the room recorded, so a CI failure explains itself.
         let rimz_out = |args: &[&str]| {
-            let output = env
-                .rimz()
+            env.rimz()
                 .env("PATH", &agent_path)
                 .args(["--mux", "tmux"])
                 .args(args)
                 .bounded_output()
-                .expect("run a forensic rimz command");
-            format!(
-                "{}{}",
-                String::from_utf8_lossy(&output.stdout),
-                String::from_utf8_lossy(&output.stderr)
-            )
+                .expect("run a forensic rimz command")
+        };
+        let pane_list = rimz_out(&["pane", "list", "--json"]);
+        let panes = format!(
+            "{}{}",
+            String::from_utf8_lossy(&pane_list.stdout),
+            String::from_utf8_lossy(&pane_list.stderr)
+        );
+        let captures = match serde_json::from_slice::<serde_json::Value>(&pane_list.stdout) {
+            Ok(list) => list["tabs"]
+                .as_array()
+                .expect("pane list tabs")
+                .iter()
+                .flat_map(|tab| tab["panes"].as_array().expect("tab panes"))
+                .map(|pane| {
+                    let id = pane["pane_id"].as_str().expect("pane id");
+                    let captured = rimz_out(&["pane", "capture", id]);
+                    format!(
+                        "{id}:\n{}{}",
+                        String::from_utf8_lossy(&captured.stdout),
+                        String::from_utf8_lossy(&captured.stderr)
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n"),
+            Err(error) => format!("could not decode pane list: {error}"),
         };
         panic!(
             "the resume ends nobody; events since the first birth:\n{}\n\
-             attended start output:\n{output}\npanes:\n{}\n@alpha pane:\n{}\n\
+             attended start output:\n{output}\npanes:\n{panes}\npane captures:\n{captures}\n\
              diagnostics:\n{}",
             since_birth(),
-            rimz_out(&["pane", "list"]),
-            rimz_out(&["pane", "capture", "@alpha"]),
             env.diag_tail(&workspace.session_name, 40),
         );
     }

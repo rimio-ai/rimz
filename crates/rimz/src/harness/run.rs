@@ -511,6 +511,12 @@ pub fn startup_relaunch(exit: ProviderExit, evidence: StartupEvidence, cap: u8) 
     }
 }
 
+/// Whether a provider exit warrants startup diagnostics, including resumes and forks:
+/// an unsuccessful exit within the window that neither the wrapper nor a signal to it caused.
+pub fn provider_startup_exit(exit: ProviderExit) -> bool {
+    !exit.success && !exit.abrupt && !exit.signaled && exit.startup <= CARD_EVIDENCE_WINDOW
+}
+
 pub fn record_failure_tail(paths: &StatePaths, run_id: &RunId, tail: &str) -> Result<RunRecord> {
     update_record(paths, run_id, |record, _| {
         if record.failure_tail.is_some() {
