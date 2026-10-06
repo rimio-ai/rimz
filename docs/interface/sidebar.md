@@ -313,11 +313,12 @@ A card with waits uses the same entry layout:
 
 Selecting a card opens the section. Clicking the line opens or closes it without focusing the pane, on any card, and that choice outranks selection and `card_density` until the sidebar restarts. In `compact` density, select the card first to reach the line.
 
-Each entry starts with its live state or wait icon, then a type word and a ` · ` separator before the headline. Without a headline, the separator disappears too. Detail sits on a muted, indented second line.
+Each entry starts with its live state or wait icon, then a type word and a ` · ` separator before the headline. Without a headline, the separator disappears too. A launched child's displayed error label replaces the description or task in italics, for both paused and failed states. Detail sits on a muted, indented second line.
 
 | entry | lead | type · headline | right side | second line |
 |-------|------|------|------------|-------------|
 | running subagent | `⠁` while it reasons, `⢿` while it acts | launch profile or kind · description, else task if different from the type | cost, when known | `▤` tokens in the child's window when the child reports its context, else `◇` tokens over its whole run, then model, effort, and elapsed time |
+| paused subagent | `⏸` | launch profile or kind · limit label in italics, else description or task | cost, when known | same as a running subagent; elapsed time keeps counting |
 | finished subagent | `✓` or `!` | launch profile or kind · description, else task if different from the type | cost, when known, after the time since it finished when there is no second line | `▤` tokens in the child's window when the child reports its context, else `◇` tokens over its whole run, then model, effort, and time since it finished |
 | timer | `◷` | `timer · in 12m`, or `timer · due` once the time passes | time since armed | never |
 | PID | working spinner | `pid · 16776` | time since armed | never |
@@ -330,7 +331,7 @@ Each entry starts with its live state or wait icon, then a type word and a ` · 
 
 Entries list in a fixed order, and opening more of the list only appends rows:
 
-1. Running subagents, in the order they started. They are never capped.
+1. Live subagents, including paused children, in the order they started. They are never capped.
 2. Finished subagents, newest first, that finished within `recent_subagent_secs` (900 seconds by default), up to `max_recent_subagents` (5 by default).
 3. Waits: timers by due time, then watches, then background shells, then signals. A wait leaves the list when it fires or its job ends.
 4. `+K older`, which folds every other finished subagent. Click it to append them. When no subagent is running or recent, opening the section lists the older ones directly.
