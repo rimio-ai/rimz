@@ -1597,6 +1597,32 @@ fn order_flap_is_quiet_when_a_ranking_status_explains_it() {
 }
 
 #[test]
+fn order_flap_ignores_a_status_change_on_a_row_that_kept_its_place() {
+    let frame = |at_ms, b_first: bool, c_status: &str| {
+        let a = row_with_status("a", "p1", "main", "idle");
+        let b = row_with_status("b", "p2", "main", "idle");
+        let c = row_with_status("c", "p3", "main", c_status);
+        sig(
+            at_ms,
+            if b_first {
+                vec![b, a, c]
+            } else {
+                vec![a, b, c]
+            },
+        )
+    };
+    let mut observer = Observer::default();
+    observer.observe(frame(0, false, "idle"));
+    observer.observe(frame(11_000, false, "idle"));
+    observer.observe(frame(12_000, true, "idle"));
+    let flaps = order_flaps(&observer.observe(frame(14_000, false, "running")));
+
+    let order = ["a", "b", "c"].map(str::to_owned).to_vec();
+    let via_order = ["b", "a", "c"].map(str::to_owned).to_vec();
+    assert_eq!(flaps, vec![(order, via_order, 2_000)]);
+}
+
+#[test]
 fn historical_detector_state_prunes_after_row_absence_window() {
     let mut observer = Observer::default();
     observer.observe(sig(0, vec![row_with_status("a", "p1", "main", "running")]));
