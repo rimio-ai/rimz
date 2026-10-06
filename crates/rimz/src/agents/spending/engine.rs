@@ -495,6 +495,14 @@ impl crate::agents::spending::WalkObserver for PublishingWalkObserver<'_> {
         {
             return;
         }
+        let published_scoped_year = self
+            .scope_hash
+            .as_deref()
+            .and_then(|scope_hash| exact_workspace_cache(self.runtime, scope_hash))
+            .map_or(0.0, |workspace| workspace.tally.year.usd);
+        if published_scoped_year > result.workspace.tally.year.usd {
+            return;
+        }
         let refreshed_at_ms = unix_now_ms();
         let provider = ProviderSpendingCache::from_walk(&result, refreshed_at_ms);
         crate::agents::spending::write_provider_spending_cache(&self.provider_path, &provider);
