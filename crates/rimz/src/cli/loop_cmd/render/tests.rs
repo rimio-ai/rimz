@@ -857,6 +857,8 @@ fn blocked_takeover_names_its_checkout_and_blocker_in_the_last_run_cell() {
     blocked.checkout = Some(PathBuf::from("/repo-worktrees/auth"));
     blocked.error = Some("@coder#auth is working".to_owned());
     let stats = run_log::LoopRunStats {
+        acting: None,
+        heard: None,
         runs: 1,
         streak: 1,
         last: blocked,
