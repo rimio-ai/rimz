@@ -1,6 +1,6 @@
 use super::super::sig::{
     AggregateKey, AggregateSig, EventPaneSig, EventsSig, GroupSig, OwnViewSig, PulledFrameSig,
-    WatchedValues, extract_sig,
+    SpendPeriod, WatchedValues, WindowField, extract_sig,
 };
 use super::*;
 use crate::agents::{AgentStatus, TurnPhase};
@@ -242,6 +242,7 @@ fn codex_mana_key() -> AggregateKey {
         login: "codex@default".parse().unwrap(),
         scope_id: None,
         duration_mins: Some(300),
+        field: WindowField::UsedPercentage,
     }
 }
 
@@ -1057,6 +1058,41 @@ fn aggregate_oscillation_measures_time_away() {
 }
 
 #[test]
+fn aggregate_oscillation_reports_a_provider_version_flip() {
+    let frame = |at_ms, version: &str| {
+        panel_frame(
+            at_ms,
+            vec![SidebarProviderPanel {
+                version: Some(version.to_owned()),
+                ..provider_panel("claude", Vec::new())
+            }],
+        )
+    };
+    let flip = |span_ms| {
+        vec![(
+            "provider_field:claude@default:version".to_owned(),
+            "2.1.289".to_owned(),
+            "2.1.291".to_owned(),
+            span_ms,
+        )]
+    };
+
+    let mut fresh = Observer::default();
+    fresh.observe(frame(0, "2.1.289"));
+    fresh.observe(frame(11_000, "2.1.289"));
+    fresh.observe(frame(13_000, "2.1.291"));
+    let drafts = fresh.observe(frame(21_000, "2.1.289"));
+    assert_eq!(aggregate_flips(&drafts), flip(8_000));
+
+    let mut long_stable = Observer::default();
+    long_stable.observe(frame(0, "2.1.289"));
+    long_stable.observe(frame(11_000, "2.1.289"));
+    long_stable.observe(frame(3_611_000, "2.1.291"));
+    let drafts = long_stable.observe(frame(3_613_000, "2.1.289"));
+    assert_eq!(aggregate_flips(&drafts), flip(2_000));
+}
+
+#[test]
 fn aggregate_oscillation_samples_a_missing_panel_as_absent() {
     let spend_identity = "provider_spend:claude@default";
 
@@ -1065,15 +1101,19 @@ fn aggregate_oscillation_samples_a_missing_panel_as_absent() {
     blink.observe(panel_frame(11_000, vec![claude_panel(12.34)]));
     assert!(blink.observe(panel_frame(3_611_000, Vec::new())).is_empty());
     let drafts = blink.observe(panel_frame(3_613_000, vec![claude_panel(12.34)]));
-    assert_eq!(
-        aggregate_flips(&drafts),
-        vec![(
+    let flips = aggregate_flips(&drafts);
+    assert!(
+        flips.contains(&(
             spend_identity.to_owned(),
             "1234".to_owned(),
             "<none>".to_owned(),
             2_000
-        )],
-        "a panel missing from one frame"
+        )),
+        "a panel missing from one frame: {flips:?}"
+    );
+    assert!(
+        flips.iter().all(|(_, _, via, _)| via == "<none>"),
+        "every key of the login blinks with its panel: {flips:?}"
     );
 
     let mut closed = Observer::default();
@@ -1122,6 +1162,7 @@ fn aggregate_reset_reports_spend_drops_only() {
             name: "provider spend reset",
             key: AggregateKey::ProviderSpend {
                 login: "claude@default".parse().unwrap(),
+                period: SpendPeriod::Year,
             },
             from: "500",
             pulled: Some("500"),
@@ -1243,6 +1284,7 @@ fn aggregate_reset_reports_spend_drops_only() {
         sig(0, Vec::new()),
         AggregateKey::ProviderSpend {
             login: "claude@default".parse().unwrap(),
+            period: SpendPeriod::Year,
         },
         Some("0"),
         Some("0"),
@@ -1251,6 +1293,7 @@ fn aggregate_reset_reports_spend_drops_only() {
         sig(11_000, Vec::new()),
         AggregateKey::ProviderSpend {
             login: "claude@default".parse().unwrap(),
+            period: SpendPeriod::Year,
         },
         Some("0"),
         Some("0"),
@@ -1259,6 +1302,7 @@ fn aggregate_reset_reports_spend_drops_only() {
         sig(12_000, Vec::new()),
         AggregateKey::ProviderSpend {
             login: "claude@default".parse().unwrap(),
+            period: SpendPeriod::Year,
         },
         Some("500"),
         Some("500"),

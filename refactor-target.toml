@@ -306,7 +306,10 @@ surface-budget = 11
 
 [[module]]
 path = "crates/rimz/src/diag"
-surface-budget = 79
+# `SpendPeriod`, `WindowField`, and `PanelField` reopened this by three: they
+# are field types of the frozen `AggregateKey` wire, which the sidebar observer
+# constructs once per keyed provider-panel value.
+surface-budget = 82
 
 [[module]]
 path = "crates/rimz/src/disk"

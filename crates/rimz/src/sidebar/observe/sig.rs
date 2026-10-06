@@ -2,9 +2,14 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Serialize;
 
-pub use crate::diag::record::{AggregateKey, EventPaneSig, EventsSig, StatusCountSig};
+use crate::agents::ExtraCredits;
+pub use crate::diag::record::{
+    AggregateKey, EventPaneSig, EventsSig, PanelField, SpendPeriod, StatusCountSig, WindowField,
+};
 use crate::sidebar::event_store::EventStore;
-use crate::store::snapshot::{SidebarSnapshot, SidebarWorktreeKind};
+use crate::store::snapshot::{
+    RedeemForecast, RemoteControlBadge, SidebarSnapshot, SidebarWorktreeKind,
+};
 use crate::wakeup::events::SidebarEvent;
 
 use super::WatchedField;
@@ -96,35 +101,10 @@ pub struct PulledFrameSig {
 
 impl PulledFrameSig {
     pub fn from_snapshot(snapshot: &SidebarSnapshot) -> Self {
-        let mut aggregates = BTreeMap::new();
-        aggregates.insert(
-            AggregateKey::CockpitTally.identity(),
-            spend_cents(snapshot.value_tally.as_ref()),
-        );
-        aggregates.insert(
-            AggregateKey::WorkspaceTally.identity(),
-            spend_cents(snapshot.workspace_value_tally.as_ref()),
-        );
-        for panel in &snapshot.providers {
-            aggregates.insert(
-                AggregateKey::ProviderSpend {
-                    login: panel.login_key(),
-                }
-                .identity(),
-                spend_cents(panel.spending.as_ref()),
-            );
-            for window in &panel.windows {
-                aggregates.insert(
-                    AggregateKey::ProviderMana {
-                        login: panel.login_key(),
-                        scope_id: window.scope.as_ref().map(|scope| scope.id.clone()),
-                        duration_mins: window.duration_mins,
-                    }
-                    .identity(),
-                    window.used_percentage.map(|pct| pct.to_string()),
-                );
-            }
-        }
+        let aggregates = aggregate_values(snapshot)
+            .into_iter()
+            .map(|(key, value)| (key.identity(), value))
+            .collect();
         Self {
             rows: snapshot
                 .worktree_groups
@@ -271,62 +251,164 @@ fn extract_aggregates(
     current: &SidebarSnapshot,
     last_pulled: &PulledFrameSig,
 ) -> Vec<AggregateSig> {
-    let mut aggregates = vec![
-        AggregateSig {
-            key: AggregateKey::CockpitTally,
-            committed: spend_cents(current.value_tally.as_ref()),
-            pulled: last_pulled
-                .aggregates
-                .get(&AggregateKey::CockpitTally.identity())
-                .cloned()
-                .flatten(),
-        },
-        AggregateSig {
-            key: AggregateKey::WorkspaceTally,
-            committed: spend_cents(current.workspace_value_tally.as_ref()),
-            pulled: last_pulled
-                .aggregates
-                .get(&AggregateKey::WorkspaceTally.identity())
-                .cloned()
-                .flatten(),
-        },
-    ];
-    for panel in &current.providers {
-        let spend_key = AggregateKey::ProviderSpend {
-            login: panel.login_key(),
-        };
-        aggregates.push(AggregateSig {
-            key: spend_key.clone(),
-            committed: spend_cents(panel.spending.as_ref()),
-            pulled: last_pulled
-                .aggregates
-                .get(&spend_key.identity())
-                .cloned()
-                .flatten(),
-        });
-        for window in &panel.windows {
-            let key = AggregateKey::ProviderMana {
-                login: panel.login_key(),
-                scope_id: window.scope.as_ref().map(|scope| scope.id.clone()),
-                duration_mins: window.duration_mins,
-            };
-            aggregates.push(AggregateSig {
-                key: key.clone(),
-                committed: window.used_percentage.map(|pct| pct.to_string()),
-                pulled: last_pulled
-                    .aggregates
-                    .get(&key.identity())
-                    .cloned()
-                    .flatten(),
-            });
-        }
-    }
-    aggregates.sort_by_key(|aggregate| aggregate.key.identity());
+    let mut aggregates = aggregate_values(current)
+        .into_iter()
+        .map(|(key, committed)| {
+            let identity = key.identity();
+            let pulled = last_pulled.aggregates.get(&identity).cloned().flatten();
+            (
+                identity,
+                AggregateSig {
+                    key,
+                    committed,
+                    pulled,
+                },
+            )
+        })
+        .collect::<Vec<_>>();
+    aggregates.sort_by(|left, right| left.0.cmp(&right.0));
     aggregates
+        .into_iter()
+        .map(|(_, aggregate)| aggregate)
+        .collect()
 }
 
-fn spend_cents(tally: Option<&crate::SpendTally>) -> Option<String> {
-    tally.map(|tally| format!("{}", (tally.year.usd * 100.0).round() as i64))
+/// Every figure the observer keys on one snapshot, with its value as the
+/// record prints it. The committed and the pulled signature are both built
+/// from this list, so a key or a format cannot exist on one side alone. An
+/// unset field is an absent value, and money is integer cents.
+///
+/// `active_sessions` and a window's `observed_at` stay out: both move in
+/// normal operation, where a flip is not a fault.
+fn aggregate_values(snapshot: &SidebarSnapshot) -> Vec<(AggregateKey, Option<String>)> {
+    let year = |tally: Option<&crate::SpendTally>| tally.map(|tally| cents(tally.year.usd));
+    let mut values = vec![
+        (
+            AggregateKey::CockpitTally,
+            year(snapshot.value_tally.as_ref()),
+        ),
+        (
+            AggregateKey::WorkspaceTally,
+            year(snapshot.workspace_value_tally.as_ref()),
+        ),
+    ];
+    for panel in &snapshot.providers {
+        let login = panel.login_key();
+        let spending = panel.spending.as_ref();
+        for (period, usd) in [
+            (SpendPeriod::Year, spending.map(|tally| tally.year.usd)),
+            (
+                SpendPeriod::Headline,
+                spending.map(|tally| tally.headline.usd),
+            ),
+            (SpendPeriod::Week, spending.map(|tally| tally.week.usd)),
+            (SpendPeriod::Month, spending.map(|tally| tally.month.usd)),
+        ] {
+            values.push((
+                AggregateKey::ProviderSpend {
+                    login: login.clone(),
+                    period,
+                },
+                usd.map(cents),
+            ));
+        }
+        for window in &panel.windows {
+            for (field, value) in [
+                (
+                    WindowField::UsedPercentage,
+                    window.used_percentage.map(|pct| pct.to_string()),
+                ),
+                (
+                    WindowField::ResetsAt,
+                    window.resets_at.map(|at| at.to_string()),
+                ),
+                (WindowField::Lifted, Some(window.lifted.to_string())),
+            ] {
+                values.push((
+                    AggregateKey::ProviderMana {
+                        login: login.clone(),
+                        scope_id: window.scope.as_ref().map(|scope| scope.id.clone()),
+                        duration_mins: window.duration_mins,
+                        field,
+                    },
+                    value,
+                ));
+            }
+        }
+        for (field, value) in [
+            (PanelField::Version, panel.version.clone()),
+            (PanelField::Plan, panel.plan.clone()),
+            (PanelField::Metered, Some(panel.metered.to_string())),
+            (
+                PanelField::RemoteControl,
+                Some(
+                    match panel.remote_control {
+                        RemoteControlBadge::Hidden => "hidden",
+                        RemoteControlBadge::Healthy => "healthy",
+                        RemoteControlBadge::Down => "down",
+                    }
+                    .to_owned(),
+                ),
+            ),
+            (
+                PanelField::DayBudget,
+                panel.day_budget.map(|budget| {
+                    let parked = if budget.parked { "/parked" } else { "" };
+                    format!(
+                        "{}/{}{parked}",
+                        cents(budget.spend_usd),
+                        cents(budget.cap_usd)
+                    )
+                }),
+            ),
+            (
+                PanelField::ExtraCredits,
+                panel.extra_credits.as_ref().map(|credits| match credits {
+                    ExtraCredits::Disabled => "disabled".to_owned(),
+                    ExtraCredits::Known {
+                        used_usd,
+                        remaining_usd,
+                        limit_usd,
+                    } => [used_usd, remaining_usd, limit_usd]
+                        .map(|usd| usd.map_or_else(|| "-".to_owned(), cents))
+                        .join("/"),
+                }),
+            ),
+            (
+                PanelField::ResetCredits,
+                panel.reset_credits.as_ref().map(|credits| {
+                    credits.soonest_expiry.map_or_else(
+                        || credits.count.to_string(),
+                        |expiry| format!("{}@{expiry}", credits.count),
+                    )
+                }),
+            ),
+            (
+                PanelField::RedeemForecast,
+                panel.redeem_forecast.map(|forecast| {
+                    match forecast {
+                        RedeemForecast::Manual => "manual",
+                        RedeemForecast::Armed => "armed",
+                        RedeemForecast::Holding => "holding",
+                    }
+                    .to_owned()
+                }),
+            ),
+        ] {
+            values.push((
+                AggregateKey::ProviderField {
+                    login: login.clone(),
+                    field,
+                },
+                value,
+            ));
+        }
+    }
+    values
+}
+
+fn cents(usd: f64) -> String {
+    ((usd * 100.0).round() as i64).to_string()
 }
 
 impl RosterSig {
@@ -394,6 +476,143 @@ mod tests {
         }
     }
 
+    fn spent(usd: f64) -> crate::SpendWindow {
+        crate::SpendWindow {
+            usd,
+            ..Default::default()
+        }
+    }
+
+    /// A panel with every keyed field set, in a snapshot whose cockpit and
+    /// workspace tallies are set too.
+    fn full_snapshot() -> SidebarSnapshot {
+        let at = |secs| jiff::Timestamp::from_second(secs).unwrap();
+        let tally = crate::SpendTally {
+            headline: spent(1.5),
+            week: spent(20.25),
+            month: spent(300.0),
+            year: spent(4000.01),
+        };
+        let panel = crate::store::snapshot::SidebarProviderPanel {
+            version: Some("2.1.291".to_owned()),
+            plan: Some("Claude Max".to_owned()),
+            remote_control: crate::store::snapshot::RemoteControlBadge::Healthy,
+            active_sessions: 3,
+            spending: Some(tally.clone()),
+            day_budget: Some(crate::store::snapshot::DailyBudgetView {
+                cap_usd: 50.0,
+                spend_usd: 12.5,
+                parked: true,
+            }),
+            extra_credits: Some(crate::agents::ExtraCredits::Known {
+                used_usd: Some(3.0),
+                remaining_usd: None,
+                limit_usd: Some(10.0),
+            }),
+            reset_credits: Some(crate::agents::ResetCredits {
+                count: 2,
+                soonest_expiry: Some(at(1_800_000_000)),
+                expiries: vec![at(1_800_000_000)],
+                effect: crate::agents::RedeemEffect::RestartsWindow,
+            }),
+            redeem_forecast: Some(crate::store::snapshot::RedeemForecast::Armed),
+            ..provider_panel(
+                "claude",
+                vec![RateLimitWindow {
+                    used_percentage: Some(40),
+                    resets_at: Some(at(1_790_000_000)),
+                    duration_mins: Some(300),
+                    observed_at: Some(at(1_789_000_000)),
+                    ..Default::default()
+                }],
+            )
+        };
+        let mut snapshot = snapshot_with_panels(
+            WorkspaceId::from_project_root(std::path::Path::new("/tmp/sig-full")),
+            vec![panel],
+        );
+        snapshot.value_tally = Some(tally.clone());
+        snapshot.workspace_value_tally = Some(tally);
+        snapshot
+    }
+
+    fn self_pulled(snapshot: &SidebarSnapshot) -> Vec<AggregateSig> {
+        extract_aggregates(snapshot, &PulledFrameSig::from_snapshot(snapshot))
+    }
+
+    #[test]
+    fn committed_and_pulled_signatures_agree_on_every_panel_key() {
+        let aggregates = self_pulled(&full_snapshot());
+        let values = aggregates
+            .iter()
+            .map(|aggregate| {
+                assert_eq!(aggregate.pulled, aggregate.committed, "{:?}", aggregate.key);
+                (aggregate.key.identity(), aggregate.pulled.clone())
+            })
+            .collect::<Vec<_>>();
+        let expected = [
+            ("cockpit_tally", "400001"),
+            (
+                "provider_field:claude@default:day_budget",
+                "1250/5000/parked",
+            ),
+            ("provider_field:claude@default:extra_credits", "300/-/1000"),
+            ("provider_field:claude@default:metered", "true"),
+            ("provider_field:claude@default:plan", "Claude Max"),
+            ("provider_field:claude@default:redeem_forecast", "armed"),
+            ("provider_field:claude@default:remote_control", "healthy"),
+            (
+                "provider_field:claude@default:reset_credits",
+                "2@2027-01-15T08:00:00Z",
+            ),
+            ("provider_field:claude@default:version", "2.1.291"),
+            ("provider_mana:claude@default:300", "40"),
+            ("provider_mana:claude@default:300:lifted", "false"),
+            (
+                "provider_mana:claude@default:300:resets_at",
+                "2026-09-21T14:13:20Z",
+            ),
+            ("provider_spend:claude@default", "400001"),
+            ("provider_spend:claude@default:headline", "150"),
+            ("provider_spend:claude@default:month", "30000"),
+            ("provider_spend:claude@default:week", "2025"),
+            ("workspace_tally", "400001"),
+        ]
+        .map(|(identity, value)| (identity.to_owned(), Some(value.to_owned())));
+        assert_eq!(values, expected);
+    }
+
+    #[test]
+    fn unset_panel_fields_are_absent_values() {
+        let snapshot = snapshot_with_panels(
+            WorkspaceId::from_project_root(std::path::Path::new("/tmp/sig-unset")),
+            vec![provider_panel("claude", Vec::new())],
+        );
+        let set = self_pulled(&snapshot)
+            .into_iter()
+            .filter(|aggregate| aggregate.committed.is_some())
+            .map(|aggregate| (aggregate.key.identity(), aggregate.committed))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            set,
+            [
+                ("provider_field:claude@default:metered", "true"),
+                ("provider_field:claude@default:remote_control", "hidden"),
+            ]
+            .map(|(identity, value)| (identity.to_owned(), Some(value.to_owned())))
+        );
+    }
+
+    #[test]
+    fn session_count_and_reading_time_are_not_keyed() {
+        let steady = full_snapshot();
+        let mut churned = steady.clone();
+        churned.providers[0].active_sessions = 9;
+        churned.providers[0].windows[0].observed_at =
+            Some(jiff::Timestamp::from_second(1_789_000_500).unwrap());
+        assert_eq!(self_pulled(&churned), self_pulled(&steady));
+    }
+
     #[test]
     fn pulled_named_quota_lookup_uses_scope_identity() {
         let workspace = WorkspaceId::from_project_root(std::path::Path::new("/tmp/sig-scopes"));
@@ -413,7 +632,15 @@ mod tests {
         );
         let mana = extract_aggregates(&current, &PulledFrameSig::from_snapshot(&pulled))
             .into_iter()
-            .filter(|aggregate| matches!(aggregate.key, AggregateKey::ProviderMana { .. }))
+            .filter(|aggregate| {
+                matches!(
+                    aggregate.key,
+                    AggregateKey::ProviderMana {
+                        field: WindowField::UsedPercentage,
+                        ..
+                    }
+                )
+            })
             .collect::<Vec<_>>();
         assert_eq!(mana.len(), 2);
         let premium = mana
