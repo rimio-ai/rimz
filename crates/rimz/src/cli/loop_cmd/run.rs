@@ -146,6 +146,7 @@ pub(super) fn run_one(
             cwd,
             spec,
             prompt,
+            loop_reminder,
         }) => {
             let effect = (|| {
                 let mut launch_globals = globals.clone();
@@ -177,7 +178,7 @@ pub(super) fn run_one(
                     &ctx,
                     MachineConfig::load_lenient(),
                     Some(cwd),
-                    Some(name),
+                    Some((name, &loop_reminder)),
                 )?
                 .context("resident launch aborted")?;
                 let leader = launched

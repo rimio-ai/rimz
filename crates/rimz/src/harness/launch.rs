@@ -583,6 +583,10 @@ pub struct ExecRequest {
     /// `rimz subagents`.
     #[serde(default)]
     pub subagent: bool,
+    /// The `### Loop` reminder body a loop fire composed for this launch; set
+    /// only on a resident's prompt leader and on a loop single run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub loop_reminder: Option<String>,
     #[serde(default)]
     pub identity: ExecIdentity,
 }
@@ -627,6 +631,7 @@ impl ExecRequest {
             close_pane_on_exit: false,
             exit_on_run_completion: false,
             subagent: false,
+            loop_reminder: None,
             identity: ExecIdentity::default(),
         }
     }

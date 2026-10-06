@@ -134,8 +134,10 @@ pub(in crate::cli) fn launch_resolved(
     ctx: &Ctx,
     machine_config: Arc<rimz::config::MachineConfig>,
     cwd: Option<PathBuf>,
-    loop_task: Option<&str>,
+    // The resident loop fire's task name and its `### Loop` reminder body.
+    loop_fire: Option<(&str, &str)>,
 ) -> Result<Option<LaunchedLayout>> {
+    let loop_task = loop_fire.map(|(task, _)| task);
     let mut args = AgentsArgs {
         launch,
         ..Default::default()
@@ -620,6 +622,7 @@ pub(in crate::cli) fn launch_resolved(
             resume_seeds: None,
             launch_identities: launch_batch.identities(),
             fallback_channel: None,
+            loop_reminder: loop_fire.map(|(_, reminder)| reminder),
         },
     )
     .inspect_err(|_| {
@@ -1122,6 +1125,7 @@ fn launch_resume_layout(
             resume_seeds: Some(&plan.seeds),
             launch_identities: launch_batch.identities(),
             fallback_channel: channel.as_deref(),
+            loop_reminder: None,
         },
     )?;
     panes.focused_pane = team_leader_pane(&layout, team);

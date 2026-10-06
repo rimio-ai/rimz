@@ -31,6 +31,7 @@ fn exec_request(kind: &str, action: ExecAction) -> ExecRequest {
         close_pane_on_exit: false,
         exit_on_run_completion: false,
         subagent: false,
+        loop_reminder: None,
         identity: ExecIdentity::default(),
     }
 }

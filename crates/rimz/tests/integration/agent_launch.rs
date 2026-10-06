@@ -72,6 +72,7 @@ fn fresh_exec(kind: &str, prompt: Option<&str>) -> ExecRequest {
         close_pane_on_exit: false,
         exit_on_run_completion: false,
         subagent: false,
+        loop_reminder: None,
         identity: ExecIdentity::default(),
     }
 }
@@ -2608,6 +2609,7 @@ fn resume_exec_attaches_only_the_resumed_session_to_its_pane() {
             close_pane_on_exit: false,
             exit_on_run_completion: false,
             subagent: false,
+            loop_reminder: None,
             identity: ExecIdentity::default(),
         };
         resume.identity.params.isolation = Some(rimz::config::Isolation::Host);
@@ -2743,6 +2745,7 @@ fn resume_exec_attaches_only_the_resumed_session_to_its_pane() {
             close_pane_on_exit: false,
             exit_on_run_completion: false,
             subagent: false,
+            loop_reminder: None,
             identity: ExecIdentity::default(),
         };
         env.rimz()
@@ -2866,6 +2869,7 @@ fn resume_exec_cleanup_case(queue_before_exit: bool) {
         close_pane_on_exit: false,
         exit_on_run_completion: true,
         subagent: true,
+        loop_reminder: None,
         identity: ExecIdentity::default(),
     };
     resume.identity.params.isolation = Some(rimz::config::Isolation::Host);

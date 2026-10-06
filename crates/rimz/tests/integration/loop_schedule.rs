@@ -6188,6 +6188,7 @@ fn loop_stop_of_a_spawn_run(pane_open: bool) {
                 crate::common::cargo_bin("zellij-trace", env!("CARGO_BIN_EXE_zellij-trace")),
             )
             .env("RIMZ_TEST_ZELLIJ_LOG", env.project_root.join("spawn.log"))
+            .env("RIMZ_TEST_ZELLIJ_LOG_LAYOUTS", "1")
             .env("RIMZ_TEST_ZELLIJ_LIST_PANES", "[]")
             .env("ZELLIJ_PANE_ID", "1")
             .env(
@@ -6261,6 +6262,25 @@ fn loop_stop_of_a_spawn_run(pane_open: bool) {
         std::thread::sleep(Duration::from_millis(25));
     };
     assert_eq!(run.loop_task.as_deref(), Some("spawn"));
+    let trace = std::fs::read_to_string(env.project_root.join("spawn.log")).unwrap();
+    // The run's pane opens in a `new-tab --layout`, which spells its argv as JSON strings.
+    let payload = trace
+        .split("\"--request\" ")
+        .nth(1)
+        .and_then(|rest| {
+            serde_json::Deserializer::from_str(rest)
+                .into_iter::<String>()
+                .next()?
+                .ok()
+        })
+        .unwrap_or_else(|| panic!("pane request in {trace}"));
+    let request = rimz::harness::launch::decode_exec_request("codex", None, &payload).unwrap();
+    assert_eq!(
+        request.loop_reminder.as_deref(),
+        Some(
+            "RimZ started you from the rule `spawn`, which launches an agent every 15m. The prompt is the rule's fixed text, not a message someone just typed.\n\nEach run is a fresh agent with no memory of earlier runs. This is one turn, and the pane closes when it ends. Nobody is watching. Your final message is the result. Ask only when you cannot go on: a question waits until the user notices or the run is stopped. The run is stopped after 2h."
+        )
+    );
     assert!(paths.workspace_record.is_file());
     assert!(
         rimz::StatePaths::history_paths(&paths.root)

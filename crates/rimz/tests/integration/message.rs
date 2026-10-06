@@ -2444,6 +2444,7 @@ fn parent_message_to_resumed_child_waits_for_installed_registration() {
         close_pane_on_exit: false,
         exit_on_run_completion: true,
         subagent: true,
+        loop_reminder: None,
         identity: ExecIdentity::default(),
     };
     request.identity.name = Some("otter".into());

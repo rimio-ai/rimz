@@ -64,6 +64,42 @@ fn resident_fire_obeys_fleet_budget_and_deadline_before_launch() {
 }
 
 #[test]
+fn resident_plan_carries_the_fire_reminder() {
+    let root = tempfile::tempdir().unwrap();
+    let catalog = TaskCatalog::load(Some(root.path())).unwrap();
+    let entry = TaskEntry {
+        root: root.path().to_owned(),
+        agent: Some("claude".into()),
+        prompt: Some("repair".into()),
+        stay: true,
+        every: Some("1h".into()),
+        throttle: Some(ThrottleSwitch::Off),
+        ..Default::default()
+    };
+    let mut fire = TaskFire::new(
+        "resident",
+        LoadedTask::new("resident", entry, catalog::TaskSource::Config),
+        &catalog,
+        LoopRunMode::Manual,
+        false,
+        Timestamp::now(),
+        Arc::new(MachineConfig::default()),
+        None,
+        CheckEcho::Capture,
+        Instant::now(),
+    )
+    .unwrap();
+    let TaskFirePlan::Resident { loop_reminder, .. } = fire.prepare(&mut |_| Ok(())).unwrap()
+    else {
+        panic!("resident plan")
+    };
+    assert_eq!(
+        loop_reminder,
+        "The user fired the rule `resident` by hand. You run once here and stay on afterwards. The user is watching this run."
+    );
+}
+
+#[test]
 fn worktree_run_locks_do_not_overlap_other_checkouts() {
     let root = tempfile::tempdir().unwrap();
     let catalog = TaskCatalog::load(Some(root.path())).unwrap();
@@ -342,8 +378,60 @@ fn spawn_requests_share_loop_cleanup_without_changing_manual_placement() {
                 request.timeout,
                 (mode == LoopRunMode::Scheduled).then_some(SCHEDULED_RUN_DEFAULT_TIMEOUT)
             );
+            let reminder = request.loop_reminder.expect("loop single run reminder");
+            assert_eq!(
+                reminder.ends_with(" The run is stopped after 2h."),
+                mode == LoopRunMode::Scheduled,
+                "{reminder}"
+            );
         }
     }
+}
+
+#[test]
+fn spawn_reminder_names_the_configured_default_timeout() {
+    let dir = tempfile::tempdir().unwrap();
+    let catalog = TaskCatalog::load(Some(dir.path())).unwrap();
+    let mut config = MachineConfig::default();
+    config.r#loop.default_timeout = Some("45m".to_owned());
+    let entry = TaskEntry {
+        agent: Some("claude".to_owned()),
+        prompt: Some("check".to_owned()),
+        every: Some("1h".to_owned()),
+        root: dir.path().to_owned(),
+        ..TaskEntry::default()
+    };
+    let fire = TaskFire::new(
+        "hourly",
+        LoadedTask::new("hourly", entry, catalog::TaskSource::Config),
+        &catalog,
+        LoopRunMode::Scheduled,
+        false,
+        Timestamp::now(),
+        Arc::new(config),
+        None,
+        CheckEcho::Capture,
+        Instant::now(),
+    )
+    .unwrap();
+    let request = fire
+        .compile_spawn_request(
+            "claude".to_owned(),
+            "check".to_owned(),
+            ManagedLaunchState::Unsupported,
+        )
+        .unwrap();
+    let reminder = request.loop_reminder.unwrap();
+    assert!(
+        reminder.starts_with(
+            "RimZ started you from the rule `hourly`, which launches an agent every 1h."
+        ),
+        "{reminder}"
+    );
+    assert!(
+        reminder.ends_with(" The run is stopped after 45m."),
+        "{reminder}"
+    );
 }
 
 #[test]

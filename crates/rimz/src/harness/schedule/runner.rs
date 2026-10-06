@@ -5,6 +5,7 @@
 //! supervised-run or message effect and returns its typed result.
 
 mod prompt;
+mod reminder;
 
 use std::cell::OnceCell;
 use std::collections::BTreeMap;
@@ -149,6 +150,8 @@ pub enum TaskFirePlan {
         cwd: PathBuf,
         spec: String,
         prompt: String,
+        /// The `### Loop` reminder body for the prompt leader.
+        loop_reminder: String,
     },
     Spawn(PreparedSpawn),
     Deliver(PreparedDelivery),
@@ -589,6 +592,7 @@ impl<'a> TaskFire<'a> {
             cwd,
             spec,
             prompt,
+            loop_reminder: self.loop_reminder(None),
         })
     }
 
@@ -1036,7 +1040,18 @@ impl<'a> TaskFire<'a> {
         request.max_attempts = self.entry.max_attempts;
         request.loop_zone = self.mode == LoopRunMode::Scheduled;
         shape_loop_owned(&mut request, &self.name, &self.config, self.mode)?;
+        request.loop_reminder = Some(self.loop_reminder(request.timeout));
         Ok(request)
+    }
+
+    fn loop_reminder(&self, timeout: Option<Duration>) -> String {
+        reminder::compose(&reminder::LoopFire {
+            name: &self.name,
+            task: &self.task,
+            mode: self.mode,
+            keep: self.keep,
+            timeout,
+        })
     }
 
     fn prepare_delivery(
