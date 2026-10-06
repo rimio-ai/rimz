@@ -76,7 +76,7 @@ Most commands exit with one of three codes:
 | --- | --- |
 | `0` | The command succeeded. |
 | `1` | The command failed. The error is on stderr, usually with the fix. |
-| `2` | The command line was invalid: an unknown command or flag, or a value that does not parse. |
+| `2` | The command line was invalid: an unknown command or flag, a value that does not parse, or `agents`, `subagents`, or `teams` run with neither a verb nor a launch target. |
 
 Commands that report an outcome add their own codes, so a script branches without parsing output:
 

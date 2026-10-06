@@ -1,6 +1,6 @@
 # Agent control CLI
 
-`rimz agents` launches agents into panes and reads and drives the agents already running in the room. Bare `rimz agents` lists the current channel's agent cards; `rimz agents <SPEC> [PROMPT]` launches; each subcommand below acts on launches, lanes, or one agent. Run these commands from inside the room, or from any directory that resolves to the same workspace ([which room a command reaches](../cli.md#which-room-a-command-reaches)). `rimz agents <subcommand> --help` prints every flag.
+`rimz agents` launches agents into panes and reads and drives the agents already running in the room. `rimz agents list` lists the current channel's agent cards; `rimz agents <SPEC> [PROMPT]` launches; bare `rimz agents`, with no verb and no spec, refuses with exit 2 and prints the `list` command to run; each subcommand below acts on launches, lanes, or one agent. Run these commands from inside the room, or from any directory that resolves to the same workspace ([which room a command reaches](../cli.md#which-room-a-command-reaches)). `rimz agents <subcommand> --help` prints every flag.
 
 Why you would launch through RimZ instead of the bare CLI is the [agents guide](../../guide/fleet.md). Profiles, commands, and teams are configured in the [configuration guide](../../guide/configuration.md#agent-profiles-commands-and-teams), and the launch machinery is [fleet.md](../../internals/harness/fleet.md).
 
@@ -91,7 +91,7 @@ A spec is one of three things:
 
 Each inline cell is `term` (a plain shell), an agent kind, a [permission-mode cell](#permission-mode-cells) such as `claude-plan`, a configured profile, a configured command, or any executable on your `PATH`. Add `:<role>` to an agent cell for an ad-hoc role handle. Quote a spec that contains `+`, a space, or anything else your shell expands. The full grammar and how cells compile to panes are in [fleet.md → The layout IR](../../internals/harness/fleet.md#the-layout-ir).
 
-The optional `PROMPT` goes to exactly one leader: the team's configured `leader` role, else its first declared role, else the first agent cell. When the first cell repeats (`claude,claude`), give it a role so the target is unambiguous. To send every agent the same text, launch without a prompt and use `rimz message @all`. A second positional that is itself a cell (`rimz agents claude codex`) is refused with a `rimz agents a,b` hint, and a scope such as `rimz agents '#auth'` takes no prompt.
+The optional `PROMPT` goes to exactly one leader: the team's configured `leader` role, else its first declared role, else the first agent cell. When the first cell repeats (`claude,claude`), give it a role so the target is unambiguous. To send every agent the same text, launch without a prompt and use `rimz message @all`. A second positional that is itself a cell (`rimz agents claude codex`) is refused with a `rimz agents a,b` hint, and a scope such as `rimz agents '#auth'` in the SPEC slot is refused with exit 2 and the `rimz agents list '#auth'` command, prompt or not.
 
 A launch that opens a new pane or tab prints a receipt: the checkout path, then each member's handle, provider, and resolved model (`-` when unset). When you gave a prompt, a shortened echo names its recipient, and non-team launches add copy-ready `Reach` and `Wait` commands for the leader. The receipt records what was launched; the agents start asynchronously. A named team prints the [team receipt](./teams.md#launch-a-team) instead, and a launch that takes over the current pane prints none.
 
@@ -362,7 +362,7 @@ Reads the machine Markdown definition trees without launching agents or generati
 
 ### Discover agent profiles
 
-`rimz agents profiles` lists the configured direct definitions and launch commands as compact cards, with each profile's description. A nonempty permission-rule list adds `  allowed-tools: Bash(git *), Read` after the description; JSON includes `"allowed_tools": ["Bash(git *)", "Read"]`, omitted when unset or empty. Subagent and team profile listings show the same detail. Built-in and plugin agent kinds are launchable but not listed, and teams are listed by [`rimz teams`](./teams.md#list-teams). Team role profiles, named `<team>.<role>` for a configured team, appear only with `--teams`; [`rimz teams profiles`](./teams.md#list-team-role-profiles) lists them alone.
+`rimz agents profiles` lists the configured direct definitions and launch commands as compact cards, with each profile's description. A nonempty permission-rule list adds `  allowed-tools: Bash(git *), Read` after the description; JSON includes `"allowed_tools": ["Bash(git *)", "Read"]`, omitted when unset or empty. Subagent and team profile listings show the same detail. Built-in and plugin agent kinds are launchable but not listed, and teams are listed by [`rimz teams list`](./teams.md#list-teams). Team role profiles, named `<team>.<role>` for a configured team, appear only with `--teams`; [`rimz teams profiles`](./teams.md#list-team-role-profiles) lists them alone.
 
 ```sh
 rimz agents profiles
@@ -431,9 +431,9 @@ The scaffold holds the manifest, a setup guide, the canonical forwarding shim, a
 ## List and manage agents
 
 ```sh
-rimz agents                              # root-agent cards, current channel
-rimz agents '#auth-refresh'              # one lane's cards
-rimz agents --all                        # every channel in the room
+rimz agents list                         # root-agent cards, current channel
+rimz agents list '#auth-refresh'         # one lane's cards
+rimz agents list --all                   # every channel in the room
 rimz agents show swift-otter --capture   # full report plus the pane's visible text
 rimz agents logs swift-otter -f          # follow the transcript
 rimz agents history swift-otter -n 10    # per-turn tokens, cost, and outcome
@@ -450,7 +450,7 @@ rimz agents compact @coder               # compact context at the next turn boun
 
 | Verb | Acts on | Does |
 | --- | --- | --- |
-| `list` (bare `agents`; aliases `ls`, `ps`) | the current channel; a scope; `--all` for the room | attention-ordered agent cards |
+| `list` (aliases `ls`, `ps`) | the current channel; a scope; `--all` for the room | attention-ordered agent cards |
 | `show` (alias `inspect`) | one agent, live or stopped | full report: activity, context, placement, run, messages, transcript tail |
 | `logs` | one agent | transcript tail; `-f` follows |
 | `history` | one agent, live or stopped | per-turn duration, tokens, cost, and outcome |
@@ -468,10 +468,10 @@ rimz agents compact @coder               # compact context at the next turn boun
 
 #### `list`
 
-`rimz agents list [SCOPE]` prints the room's pane-backed root agents as cards in attention order, scoped to the current channel. `SCOPE` (`#channel`, worktree, branch, or directory name) or `-w, --worktree` selects one lane, and `--all` covers every channel; the three conflict. Bare `rimz agents` takes the same `SCOPE`, `--all`, and `--json`; `-w` there is a launch flag and needs a spec. It needs a live room: enter one with `rimz start` or `rimz attach`.
+`rimz agents list [SCOPE]` prints the room's pane-backed root agents as cards in attention order, scoped to the current channel. `SCOPE` (`#channel`, worktree, branch, or directory name) or `-w, --worktree` selects one lane, and `--all` covers every channel; the three conflict. Listing needs the verb: bare `rimz agents` and `rimz agents '#auth'` refuse with exit 2 and print the `list` command that would run, carrying over `--all`, `--json`, `-w NAME`, and the scope. It needs a live room: enter one with `rimz start` or `rimz attach`.
 
 ```console
-$ rimz agents
+$ rimz agents list
 HANDLE    PROFILE  AGENT   STATUS   MODEL         CTX  TOKENS  AGE
 
 ⑂ auth-refresh · forge team

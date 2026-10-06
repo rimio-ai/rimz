@@ -51,6 +51,7 @@ use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand, ValueEnum};
 
 use super::GlobalFlags;
+use super::usage::{UsageError, shell_command};
 pub(super) use crate::cli::Ctx;
 use crate::cli::supervised;
 use placement::{Placement, apply_in_place_downgrade, resolve_fork_placement, resolve_placement};
@@ -130,11 +131,11 @@ pub struct AgentsArgs {
     command: Option<AgentsSubcmd>,
     #[command(flatten)]
     pub(crate) launch: AgentLaunchArgs,
-    /// Include every lane, not just the current channel (bare `agents`).
-    #[arg(long, conflicts_with_all = ["spec", "worktree"])]
+    /// Retired listing flag, kept so the no-verb refusal can echo it into `list`.
+    #[arg(long, hide = true, conflicts_with_all = ["spec", "worktree"])]
     all: bool,
-    /// Print JSON for `list` and bare `agents` card output.
-    #[arg(long)]
+    /// Retired listing flag, kept so the no-verb refusal can echo it into `list`.
+    #[arg(long, hide = true)]
     json: bool,
 }
 
@@ -676,9 +677,7 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
                 .as_deref()
                 .expect("required launch-spec group guarantees a spec");
             match top_level_spec_route(spec) {
-                TopLevelSpecRoute::ScopedList => bail!(
-                    "`rimz agents launch` requires a launch spec, not scope `{spec}`; use `rimz agents list {spec}`"
-                ),
+                TopLevelSpecRoute::Scope => return Err(scope_refusal(spec, false).into()),
                 TopLevelSpecRoute::Address => bail!(
                     "`{spec}` is an agent address, not a launch spec; try `rimz agents show {spec}` or `rimz message {spec} \"…\"`"
                 ),
@@ -805,39 +804,17 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
         Some(AgentsSubcmd::Refresh(args)) => return run_refresh(args, globals),
         None => {}
     }
-    let args = AgentsArgs {
-        command: None,
-        launch,
-        all,
-        json,
-    };
-    if args.launch.spec.is_none() {
-        reject_launch_flags_without_spec(&args)?;
-        return list_agents(
-            args.json,
-            args.all,
-            args.launch.cohort.worktree.clone(),
-            globals,
+    if let Some(refusal) = launch_refusal(&launch, all, json) {
+        return Err(refusal.into());
+    }
+    if let Some(spec) = launch.spec.as_deref()
+        && top_level_spec_route(spec) == TopLevelSpecRoute::Address
+    {
+        bail!(
+            "`{spec}` is an agent address, not a launch spec; try `rimz agents show {spec}`, `rimz message {spec} \"…\"`, or `rimz agents list`"
         );
     }
-    if let Some(spec) = args.launch.spec.as_deref() {
-        match top_level_spec_route(spec) {
-            TopLevelSpecRoute::ScopedList => {
-                reject_launch_flags_without_spec(&args)?;
-                if args.launch.prompt.is_some() {
-                    bail!(
-                        "scope `{spec}` takes no prompt; use `rimz agents {spec}` or `rimz agents list {spec}`"
-                    );
-                }
-                return list_agents(args.json, false, Some(spec.to_owned()), globals);
-            }
-            TopLevelSpecRoute::Address => bail!(
-                "`{spec}` is an agent address, not a launch spec; try `rimz agents show {spec}`, `rimz message {spec} \"…\"`, or `rimz agents list`"
-            ),
-            TopLevelSpecRoute::Launch => {}
-        }
-    }
-    dispatch_launch(args.launch, args.json, globals)
+    dispatch_launch(launch, json, globals)
 }
 
 fn dispatch_launch(launch: AgentLaunchArgs, json: bool, globals: &GlobalFlags) -> Result<()> {
@@ -863,7 +840,7 @@ fn dispatch_launch(launch: AgentLaunchArgs, json: bool, globals: &GlobalFlags) -
     }
     if json {
         bail!(
-            "--json is only supported with `rimz agents` and `rimz agents list`; on `-p`, choose output with `--output-format json`"
+            "--json is only supported with `rimz agents list`; on `-p`, choose output with `--output-format json`"
         );
     }
     launch_layout(args, globals, true)
@@ -1111,19 +1088,55 @@ fn resolve_print_prompt(args: &AgentsArgs, input_format: InputFormat) -> Result<
 
 #[derive(Debug, PartialEq, Eq)]
 enum TopLevelSpecRoute {
-    ScopedList,
+    Scope,
     Address,
     Launch,
 }
 
 fn top_level_spec_route(spec: &str) -> TopLevelSpecRoute {
     if spec.starts_with('#') {
-        TopLevelSpecRoute::ScopedList
+        TopLevelSpecRoute::Scope
     } else if spec.starts_with('@') {
         TopLevelSpecRoute::Address
     } else {
         TopLevelSpecRoute::Launch
     }
+}
+
+/// The refusal for a no-verb `rimz agents` that names no launch spec: a
+/// missing or blank SPEC, or a `#scope` in its place, whatever else was passed.
+fn launch_refusal(launch: &AgentLaunchArgs, all: bool, json: bool) -> Option<UsageError> {
+    match launch.spec.as_deref().map(str::trim) {
+        Some(spec) if top_level_spec_route(spec) == TopLevelSpecRoute::Scope => {
+            return Some(scope_refusal(spec, json));
+        }
+        Some(spec) if !spec.is_empty() => return None,
+        _ => {}
+    }
+    let worktree = launch
+        .cohort
+        .worktree
+        .as_deref()
+        .filter(|name| !name.is_empty());
+    let mut flags = Vec::new();
+    if all {
+        flags.push("--all");
+    }
+    if let Some(name) = worktree {
+        flags.extend(["--worktree", name]);
+    }
+    if json {
+        flags.push("--json");
+    }
+    Some(UsageError::missing_verb("agents", "a launch spec", &flags))
+}
+
+fn scope_refusal(scope: &str, json: bool) -> UsageError {
+    let json = json.then_some("--json");
+    let list = shell_command(["rimz", "agents", "list", scope].into_iter().chain(json));
+    UsageError::new(format!(
+        "`{scope}` is a scope, not a launch spec; to list that lane, run `{list}`"
+    ))
 }
 
 fn exit_print_usage_error(err: anyhow::Error) -> ! {

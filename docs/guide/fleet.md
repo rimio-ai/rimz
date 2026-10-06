@@ -73,10 +73,10 @@ When an agent launches a peer with a prompt, it need not poll for the answer. Ri
 
 Once a few agents are working, the same `rimz agents` command reads the room and drives it: inspect, focus, stop, restart, or compact one agent. Every verb below takes a [handle](#reach-an-agent-by-handle), and they all run from any pane in the room, or from a script anywhere that resolves to the same workspace.
 
-**See the whole room at a glance.** Bare `rimz agents` lists the current channel's cards; `--all` includes every channel. Cards group by the worktree each lives in and put whoever needs you on top:
+**See the whole room at a glance.** `rimz agents list` lists the current channel's cards; `--all` includes every channel. Cards group by the worktree each lives in and put whoever needs you on top:
 
 ```console
-$ rimz agents --all
+$ rimz agents list --all
 HANDLE     PROFILE   AGENT   STATUS   MODEL         CTX  TOKENS  AGE
 
 ⑂ auth-refresh · forge team
@@ -94,7 +94,7 @@ query-engine
   store refactor
 ```
 
-`@planner` sits first because it stopped to ask you something. `CTX` is how full each agent's context window is and `AGE` how long since it last moved; the indented line under a row is what that agent is working on. `rimz agents --all` widens past the current channel to every lane in the room, and a scope like `rimz agents '#auth-refresh'` reads one.
+`@planner` sits first because it stopped to ask you something. `CTX` is how full each agent's context window is and `AGE` how long since it last moved; the indented line under a row is what that agent is working on. `rimz agents list --all` widens past the current channel to every lane in the room, and a scope like `rimz agents list '#auth-refresh'` reads one. Listing needs the `list` verb: bare `rimz agents` refuses and prints the `list` command to run, so a launch whose spec came out empty fails instead of printing cards.
 
 **Ask why one agent is where it is.** When a card raises a question you cannot answer from one line, `rimz agents show` prints the full report for a single agent, so you see what you asked it, what it is spending, and where its pane lives without switching to it:
 

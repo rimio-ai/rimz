@@ -6,7 +6,7 @@ A team is a configured set of roles and a layout. Each role keeps its own model,
 
 | Command | Does |
 | --- | --- |
-| `rimz teams`, `list`, `ls` | [List teams](#list-teams) and their live cohorts. |
+| `rimz teams list`, `ls` | [List teams](#list-teams) and their live cohorts. |
 | `rimz teams show`, `inspect` | [Inspect one team](#inspect-one-team), or every team live in a lane. |
 | `rimz teams profiles` | [List team role profiles](#list-team-role-profiles). |
 | `rimz teams <team>`, `launch` | [Launch a team](#launch-a-team). |
@@ -22,11 +22,11 @@ A team is a configured set of roles and a layout. Each role keeps its own model,
 ## List teams
 
 ```sh
-rimz teams
+rimz teams list
 rimz teams ls --json
 ```
 
-The bare command, `list`, and `ls` print one row per live cohort, and one row for each defined team with no live cohort:
+Bare `rimz teams`, with no verb and no team name (an empty name counts as none), refuses with exit 2 and prints the `list` command to run. `list` and `ls` print one row per live cohort, and one row for each defined team with no live cohort:
 
 | Column | Live cohort | No live cohort |
 | --- | --- | --- |
@@ -160,11 +160,11 @@ A cohort's state is the first rule that matches its members' statuses:
 
 The stage comes from the first line starting `Stage:` in `<worktree>/blackboard.md`, for example `Stage: Implement (@coder)`. Only a final ` (@owner)` splits off as the owner; other parenthesized text stays part of the stage name. A missing or unreadable board shows no stage, even when the team declares a pipeline. [`flip`](#flip-the-board-to-the-next-stage) writes this line, and a hand-edited board parses the same way. The stage is advisory: RimZ never infers it from member status, and it is not proof that work finished.
 
-PR and CI facts come from the room's sidebar cache. `rimz teams` and `show` never contact the forge, so `pr none` means no pull request is cached, not that no PR exists. Before the room publishes its first snapshot, live cohorts still appear without PR facts or activity.
+PR and CI facts come from the room's sidebar cache. `rimz teams list` and `show` never contact the forge, so `pr none` means no pull request is cached, not that no PR exists. Before the room publishes its first snapshot, live cohorts still appear without PR facts or activity.
 
 ### JSON report
 
-`rimz teams --json` prints an array of team records, `show <team> --json` one record, and lane-only `show --json` an array (empty when no team is live there). Fields marked optional are omitted when unset; the rest are always present, with `null` where a value is unavailable.
+`rimz teams list --json` prints an array of team records, `show <team> --json` one record, and lane-only `show --json` an array (empty when no team is live there). Fields marked optional are omitted when unset; the rest are always present, with `null` where a value is unavailable.
 
 | Field | Meaning |
 | --- | --- |

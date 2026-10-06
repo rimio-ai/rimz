@@ -1479,48 +1479,5 @@ fn report_cohort_resume(
     Ok(())
 }
 
-pub(super) fn reject_launch_flags_without_spec(args: &AgentsArgs) -> Result<()> {
-    if !args.launch.overrides.passthrough.is_empty() {
-        bail!("missing agent spec before `--`");
-    }
-    if args.launch.cohort.worktree.is_some() {
-        bail!(
-            "--worktree requires an agent spec; use `rimz agents list --worktree <name>` to filter cards"
-        );
-    }
-    if args.launch.cohort.channel.is_some() {
-        bail!("--channel requires an agent spec; use `rimz channel list` to inspect channels");
-    }
-    if args.launch.cohort.from_pr.is_some() {
-        bail!("--from-pr requires an agent spec");
-    }
-    if args.launch.name.is_some()
-        || args.launch.cwd.is_some()
-        || args.launch.cohort.bg
-        || args.launch.new_pane
-        || args.launch.cohort.new_tab
-        || args.launch.cohort.detach
-        || args.launch.cohort.resume
-        || args.launch.cohort.fresh
-        || args.launch.overrides.ask
-        || args.launch.overrides.yolo
-        || args.launch.print
-        || args.launch.overrides.effort.is_some()
-        || args.launch.cohort.budget.is_some()
-        || args.launch.overrides.model.is_some()
-        || args.launch.overrides.tier.is_some()
-        || args.launch.overrides.agent.is_some()
-        || args.launch.overrides.isolation.is_some()
-        || args.launch.cohort.description.is_some()
-        || args.launch.overrides.system_prompt_file.is_some()
-        || !args.launch.overrides.append_system_prompt_files.is_empty()
-        || args.launch.max_turns.is_some()
-        || args.launch.retries.is_some()
-    {
-        bail!("agent launch options require an agent spec");
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests;

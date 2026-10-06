@@ -270,7 +270,7 @@ fn wait_delay_arms_instance_for_the_calling_agent() {
     assert_eq!(report["agent"]["status"], "sleeping");
     assert_eq!(report["agent"]["pending_waits"][0]["name"], *name);
     let teams: serde_json::Value =
-        serde_json::from_str(&wait_ok(&env, &["teams", "--json"])).expect("team report");
+        serde_json::from_str(&wait_ok(&env, &["teams", "list", "--json"])).expect("team report");
     assert_eq!(teams[0]["instances"][0]["state"], "sleeping", "{teams}");
     assert_eq!(agents_wait_exit(&env), Some(124), "sleeping agent finished");
     wait_ok(&env, &["wait", "cancel", name]);
@@ -278,8 +278,9 @@ fn wait_delay_arms_instance_for_the_calling_agent() {
         serde_json::from_str(&wait_ok(&env, &["agents", "show", "@planner", "--json"]))
             .expect("agent report after cancellation");
     assert_eq!(report["agent"]["status"], "success");
-    let teams: serde_json::Value = serde_json::from_str(&wait_ok(&env, &["teams", "--json"]))
-        .expect("team report after cancellation");
+    let teams: serde_json::Value =
+        serde_json::from_str(&wait_ok(&env, &["teams", "list", "--json"]))
+            .expect("team report after cancellation");
     assert_eq!(teams[0]["instances"][0]["state"], "idle");
     assert_eq!(agents_wait_exit(&env), Some(0));
     rimz::transcript::append(

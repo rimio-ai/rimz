@@ -44,17 +44,17 @@ These are the promises the product is built on. A change to one is a product dec
 Addresses are `@handle[#channel]`; the full grammar lives in [agents.md](./docs/reference/cli/agents.md).
 
 ```sh
-rimz agents                          # agent cards, current channel
+rimz agents list                     # agent cards, current channel
 rimz agents profiles                 # configured profiles, commands, and descriptions
 rimz agents validate                 # check Markdown definitions and the skill library
-rimz agents '#auth'                  # one lane's cards
+rimz agents list '#auth'             # one lane's cards
 rimz agents show @coder              # card: activity, context, messages, transcript
 rimz agents logs @coder -n 20        # transcript tail (-f follows)
 rimz agents history @coder -n 10     # per-turn tokens, cost, and outcome
 rimz agents attribution --md         # credit the lane's agents in a PR footnote
 rimz agents restart @coder           # bounce in place and resume the session
 rimz agents resume '#docs'           # restore every closed place in one lane
-rimz teams                           # configured teams and their live instances
+rimz teams list                      # configured teams and their live instances
 rimz teams show forge#feat-x         # resolved roles, status, and one live cohort
 rimz teams forge -w feat-x           # launch one configured cohort in a worktree
 rimz teams resume forge              # reopen a configured team cohort

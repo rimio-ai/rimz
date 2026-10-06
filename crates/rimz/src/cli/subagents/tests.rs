@@ -80,12 +80,6 @@ fn detach_parses_on_launch_and_fanout_and_refuses_wait() {
     );
     reject_detach_with_wait(true, false).expect("detached");
     reject_detach_with_wait(false, true).expect("waited");
-    assert_eq!(
-        reject_launch_flags_without_spec(&parse(&["subagents", "--detach"]).launch)
-            .expect_err("no profile")
-            .to_string(),
-        "subagent launch options require a profile"
-    );
 }
 
 #[test]
@@ -724,6 +718,9 @@ fn list_and_profiles_are_the_user_shell_subcommands() {
         &["rimz", "list"][..],
         &["rimz", "list", "--json"],
         &["rimz"],
+        &["rimz", ""],
+        &["rimz", " \t", "--json"],
+        &["rimz", "--detach"],
     ] {
         let args = parse(argv);
         assert!(!command_is_agent_only(&args), "{argv:?}");

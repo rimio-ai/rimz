@@ -10,7 +10,7 @@ Launching, joining, and stopping need a calling agent that RimZ can identify, th
 | `fanout [FILE]` | an agent | [Launch one child per task](#fan-out-a-task-list) in a JSON array |
 | `wait <NAME>...` | an agent | [Join](#join-results-with-wait) the named children and print their answers |
 | `stop <NAME>...`, `stop --all` | an agent | [Stop](#stop-children) live children |
-| `list` (alias `ls`), bare `rimz subagents` | any shell | [List](#list-children) children |
+| `list` (alias `ls`) | any shell | [List](#list-children) children |
 | `profiles` | any shell | [List the profiles](#discover-profiles) a child can launch from |
 
 From a user shell, an agent-only verb fails before it touches the room, and the error points at `rimz subagents list`, `rimz agents`, and `rimz teams`. A child cannot launch anything itself ([Children cannot delegate](#children-cannot-delegate)).
@@ -184,11 +184,11 @@ At least one name is required. A bare `wait` fails and lists the caller's childr
 ## List children
 
 ```sh
-rimz subagents
+rimz subagents list
 rimz subagents list --json
 ```
 
-Bare `rimz subagents` and `list` are the same read-only command. Which children it shows depends on the caller:
+`list` is read-only. Bare `rimz subagents`, with no verb and no profile (an empty profile counts as none), refuses from any shell with exit 2 and prints the `list` command to run. Which children it shows depends on the caller:
 
 | Caller | Lists | Columns |
 | --- | --- | --- |
@@ -208,9 +208,9 @@ A plain shell in the project directory has no current channel even when a team r
 | `parent` | The parent's handle |
 | `channel` | The child's lane; omitted when it has none |
 | `kind` | Agent kind |
-| `status` | Agent status, as `rimz agents --json` spells it |
+| `status` | Agent status, as `rimz agents list --json` spells it |
 | `description` | Current one-line description; omitted when empty |
-| `turn_error` | The provider error that explains `status`, with the fields `rimz agents --json` uses: `class` (`paused_rate_limit`, `paused_spend_limit`, `paused_overloaded`, `unknown`, `failed`) and `label`, the provider's message or `null`; omitted when there is none |
+| `turn_error` | The provider error that explains `status`, with the fields `rimz agents list --json` uses: `class` (`paused_rate_limit`, `paused_spend_limit`, `paused_overloaded`, `unknown`, `failed`) and `label`, the provider's message or `null`; omitted when there is none |
 | `run_id`, `run_status` | Newest supervised run and its status; omitted when there is no run |
 
 ## A child paused on a provider limit

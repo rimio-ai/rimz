@@ -3733,7 +3733,7 @@ fn agents_cli_routes_launch_role_to_successful_same_instance_successor() {
 }
 
 #[test]
-fn agents_scope_positional_lists_one_lane_and_address_hint_is_actionable() {
+fn agents_scope_positional_refuses_with_the_lane_list_and_address_hint_is_actionable() {
     let env = Env::new();
     let workspace = env.resolve_workspace(&env.project_root);
     register_list_agent(&env, &workspace, "sess-auth", "claude", "auth", "%1");
@@ -3757,22 +3757,37 @@ fn agents_scope_positional_lists_one_lane_and_address_hint_is_actionable() {
         ],
     );
 
-    let top_level = run_agents_json_command(&env, &workspace.session_name, &["agents", "#auth"]);
-    assert_agent_ids(&top_level, &["sess-auth"]);
+    let top_level = env
+        .rimz()
+        .args(["--mux", "zellij", "agents", "#auth", "--json"])
+        .output()
+        .expect("agents scope positional");
+    assert_usage_refusal(&top_level, "rimz agents list '#auth' --json");
 
     let subcommand =
         run_agents_json_command(&env, &workspace.session_name, &["agents", "list", "#auth"]);
     assert_agent_ids(&subcommand, &["sess-auth"]);
 
-    // From inside a channel the bare command lists that lane alone, and `--all`
-    // widens it to the whole room.
-    let scoped =
-        run_agents_json_command_in(&env, &workspace.session_name, &["agents"], Some("auth"));
+    // From inside a channel the bare command refuses rather than listing;
+    // `list` lists that lane alone, and `list --all` widens it to the room.
+    let bare = env
+        .rimz()
+        .args(["--mux", "zellij", "agents"])
+        .env(rimz::workspace::ENV_CHANNEL, "auth")
+        .output()
+        .expect("bare agents in a channel");
+    assert_usage_refusal(&bare, "rimz agents list");
+    let scoped = run_agents_json_command_in(
+        &env,
+        &workspace.session_name,
+        &["agents", "list"],
+        Some("auth"),
+    );
     assert_agent_ids(&scoped, &["sess-auth"]);
     let widened = run_agents_json_command_in(
         &env,
         &workspace.session_name,
-        &["agents", "--all"],
+        &["agents", "list", "--all"],
         Some("auth"),
     );
     let mut widened_ids = widened["agents"]
@@ -3800,6 +3815,59 @@ fn agents_scope_positional_lists_one_lane_and_address_hint_is_actionable() {
             && stderr.contains("rimz agents show @coder")
             && stderr.contains("rimz message @coder"),
         "hint should name address verbs: {stderr}"
+    );
+}
+
+#[test]
+fn scenes_without_a_verb_or_launch_target_refuse_with_their_list_command() {
+    let env = Env::new();
+    for (argv, list) in [
+        (&["agents"][..], "rimz agents list"),
+        (
+            &["agents", "--all", "--json"],
+            "rimz agents list --all --json",
+        ),
+        (
+            &["agents", "-w", "feat"],
+            "rimz agents list --worktree feat",
+        ),
+        (&["agents", "--yolo"], "rimz agents list"),
+        (&["agents", ""], "rimz agents list"),
+        (&["agents", "launch", "#auth"], "rimz agents list '#auth'"),
+        (&["subagents"], "rimz subagents list"),
+        (&["subagents", "--json"], "rimz subagents list --json"),
+        (&["subagents", "--detach"], "rimz subagents list"),
+        (&["subagents", " "], "rimz subagents list"),
+        (&["teams"], "rimz teams list"),
+        (&["teams", "--json"], "rimz teams list --json"),
+        (&["teams", "--fresh"], "rimz teams list"),
+        (&["teams", ""], "rimz teams list"),
+    ] {
+        // Outside any room: the refusal needs no workspace, store, or caller.
+        let out = env
+            .rimz()
+            .current_dir(&env.home_root)
+            .args(argv)
+            .output()
+            .expect("run scene without a verb");
+        assert_usage_refusal(&out, list);
+    }
+}
+
+/// A refusal is exit 2 with nothing on stdout and the runnable list
+/// command on stderr's first line.
+fn assert_usage_refusal(out: &std::process::Output, list: &str) {
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(2), "stderr:\n{stderr}");
+    assert!(
+        out.stdout.is_empty(),
+        "stdout:\n{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    let first = stderr.lines().next().unwrap_or_default();
+    assert!(
+        first.starts_with("error: ") && first.ends_with(&format!("run `{list}`")),
+        "stderr:\n{stderr}"
     );
 }
 
@@ -3853,7 +3921,8 @@ fn agents_list_and_show_share_seat_active_time() {
         )
         .unwrap();
     }
-    let listed = run_agents_json_command(&env, &workspace.session_name, &["agents", "--all"]);
+    let listed =
+        run_agents_json_command(&env, &workspace.session_name, &["agents", "list", "--all"]);
     let entries = listed["agents"].as_array().expect("listed agents");
     let parent = entries
         .iter()

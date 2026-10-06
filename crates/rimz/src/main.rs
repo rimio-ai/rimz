@@ -34,7 +34,11 @@ fn main() -> std::process::ExitCode {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(error) => {
             cli::report(&error);
-            std::process::ExitCode::FAILURE
+            if error.downcast_ref::<cli::UsageError>().is_some() {
+                std::process::ExitCode::from(2)
+            } else {
+                std::process::ExitCode::FAILURE
+            }
         }
     }
 }

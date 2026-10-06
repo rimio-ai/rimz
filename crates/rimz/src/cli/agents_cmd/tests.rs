@@ -220,12 +220,7 @@ fn profiles_parse_as_agent_profile_listings_without_legacy_aliases() {
 }
 
 #[test]
-fn bare_agents_widens_to_every_lane_with_all() {
-    let args = parse_agents(&["rimz", "--all"]);
-    assert!(args.command.is_none());
-    assert!(args.launch.spec.is_none());
-    assert!(args.all, "bare `rimz agents --all` must widen the listing");
-
+fn list_all_widens_to_every_lane() {
     let args = parse_agents(&["rimz", "list", "--all"]);
     assert!(matches!(
         args.command,
@@ -236,6 +231,8 @@ fn bare_agents_widens_to_every_lane_with_all() {
     for narrowing in [
         vec!["rimz", "--all", "#auth"],
         vec!["rimz", "--all", "-w", "auth"],
+        vec!["rimz", "list", "--all", "#auth"],
+        vec!["rimz", "list", "--all", "-w", "auth"],
     ] {
         assert!(
             AgentsHarness::try_parse_from(&narrowing).is_err(),
@@ -1000,21 +997,74 @@ mod parse {
     }
 
     #[test]
-    fn launch_preconditions_reject_missing_or_ambiguous_specs() {
-        for (argv, fragment) in [
-            (&["rimz", "--worktree=docs"][..], "--worktree requires"),
-            (&["rimz", "--from-pr", "1"], "--from-pr requires"),
-            (&["rimz", "--", "term"], "missing agent spec"),
-            (&["rimz", "--model", "opus"], "require an agent spec"),
-            (&["rimz", "--tier", "senior"], "require an agent spec"),
-            (&["rimz", "--fresh"], "require an agent spec"),
-            (&["rimz", "--isolation", "sandbox"], "require an agent spec"),
-            (&["rimz", "-p", "--max-turns", "3"], "require an agent spec"),
-            (&["rimz", "--detach"], "require an agent spec"),
+    fn no_verb_without_a_launch_spec_refuses_with_the_list_command() {
+        for (argv, list) in [
+            (&["rimz"][..], "rimz agents list"),
+            (
+                &["rimz", "--all", "--json"],
+                "rimz agents list --all --json",
+            ),
+            (&["rimz", "-w", "feat"], "rimz agents list --worktree feat"),
+            (
+                &["rimz", "-w", "feat", "--json"],
+                "rimz agents list --worktree feat --json",
+            ),
+            (&["rimz", "-w"], "rimz agents list"),
+            (&["rimz", ""], "rimz agents list"),
+            (&["rimz", " \t", "--json"], "rimz agents list --json"),
+            (&["rimz", "--yolo"], "rimz agents list"),
+            (&["rimz", "--from-pr", "1"], "rimz agents list"),
+            (&["rimz", "--channel", "docs"], "rimz agents list"),
+            (&["rimz", "--", "term"], "rimz agents list"),
+            (&["rimz", "--model", "opus"], "rimz agents list"),
+            (&["rimz", "--tier", "senior"], "rimz agents list"),
+            (&["rimz", "--fresh"], "rimz agents list"),
+            (&["rimz", "--isolation", "sandbox"], "rimz agents list"),
+            (&["rimz", "-p", "--max-turns", "3"], "rimz agents list"),
+            (&["rimz", "--detach"], "rimz agents list"),
         ] {
             let args = parse_agents(argv);
-            let err = reject_launch_flags_without_spec(&args).expect_err("reject flag");
-            assert!(err.to_string().contains(fragment), "{err:#}");
+            let refusal = launch_refusal(&args.launch, args.all, args.json)
+                .unwrap_or_else(|| panic!("{argv:?} must refuse"))
+                .to_string();
+            let first = refusal.lines().next().expect("fix line");
+            assert_eq!(
+                first,
+                format!(
+                    "`rimz agents` needs a verb or a launch spec; to list agents, run `{list}`"
+                ),
+                "{argv:?}"
+            );
+        }
+        for (argv, list) in [
+            (&["rimz", "#auth"][..], "rimz agents list '#auth'"),
+            (
+                &["rimz", "#auth", "hi", "--json"],
+                "rimz agents list '#auth' --json",
+            ),
+            (&["rimz", "#auth", "--yolo"], "rimz agents list '#auth'"),
+        ] {
+            let args = parse_agents(argv);
+            let refusal = launch_refusal(&args.launch, args.all, args.json)
+                .unwrap_or_else(|| panic!("{argv:?} must refuse"))
+                .to_string();
+            assert_eq!(
+                refusal,
+                format!("`#auth` is a scope, not a launch spec; to list that lane, run `{list}`"),
+                "{argv:?}"
+            );
+        }
+        for argv in [
+            &["rimz", "claude"][..],
+            &["rimz", "claude", "hi", "--yolo"],
+            &["rimz", "forge.planner"],
+            &["rimz", "@coder"],
+        ] {
+            let args = parse_agents(argv);
+            assert!(
+                launch_refusal(&args.launch, args.all, args.json).is_none(),
+                "{argv:?} names a launch target"
+            );
         }
     }
 }
