@@ -4,7 +4,7 @@ use std::fs;
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
-use std::sync::mpsc;
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -17,11 +17,44 @@ const POLL_INTERVAL: Duration = Duration::from_millis(50);
 /// How long a terminated child gets to reap its own children before the kill.
 /// `cargo` and `nextest` both tear down their spawned processes on `SIGTERM`.
 const TERMINATE_GRACE: Duration = Duration::from_secs(5);
+// A descendant may keep a pipe open after the child has been terminated.
+const CAPTURE_GRACE: Duration = Duration::from_millis(250);
 
 pub(crate) struct Captured {
     pub(crate) status: ExitStatus,
     pub(crate) stdout: String,
     pub(crate) output: String,
+}
+
+#[derive(Debug)]
+pub(crate) struct CaptureTimeout {
+    pub(crate) summary: String,
+    pub(crate) next_step: String,
+    pub(crate) output: String,
+}
+
+impl std::fmt::Display for CaptureTimeout {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}\n{}", self.summary, self.next_step)
+    }
+}
+
+impl std::error::Error for CaptureTimeout {}
+
+struct CaptureReader<R> {
+    reader: R,
+    output: Arc<Mutex<Vec<u8>>>,
+}
+
+impl<R: Read> Read for CaptureReader<R> {
+    fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
+        let count = self.reader.read(bytes)?;
+        self.output
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .extend_from_slice(&bytes[..count]);
+        Ok(count)
+    }
 }
 
 pub(crate) fn run<I, S>(root: &Path, program: &str, args: I) -> Result<()>
@@ -105,6 +138,16 @@ where
         .with_context(|| format!("running `{program}`"))?;
     let stdout = child.stdout.take().context("capturing command stdout")?;
     let stderr = child.stderr.take().context("capturing command stderr")?;
+    let stdout_bytes = Arc::new(Mutex::new(Vec::new()));
+    let stderr_bytes = Arc::new(Mutex::new(Vec::new()));
+    let stdout = CaptureReader {
+        reader: stdout,
+        output: Arc::clone(&stdout_bytes),
+    };
+    let stderr = CaptureReader {
+        reader: stderr,
+        output: Arc::clone(&stderr_bytes),
+    };
     let stdout_worker = thread::spawn(move || {
         let mut output = Vec::new();
         let mut stdout = stdout;
@@ -123,7 +166,25 @@ where
         while let Ok(line) = lines_rx.try_recv() {
             on_line(&line);
         }
-    })?;
+    });
+    if let Err(mut error) = status {
+        if let Some(timeout) = error.downcast_mut::<CaptureTimeout>() {
+            let until = Instant::now() + CAPTURE_GRACE;
+            while !(stdout_worker.is_finished() && stderr_worker.is_finished())
+                && Instant::now() < until
+            {
+                thread::sleep(POLL_INTERVAL);
+            }
+            for bytes in [&stdout_bytes, &stderr_bytes] {
+                let bytes = bytes
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                timeout.output.push_str(&String::from_utf8_lossy(&bytes));
+            }
+        }
+        return Err(error);
+    }
+    let status = status?;
     let stdout = stdout_worker
         .join()
         .map_err(|_| anyhow::anyhow!("command stdout reader panicked"))?
@@ -158,11 +219,12 @@ fn wait_bounded<S: AsRef<OsStr>>(
         }
         if let Some(overrun) = deadline::overrun() {
             terminate(child);
-            bail!(
-                "{overrun}: terminated `{program} {}`\n{}",
-                rendered_args(args),
-                overrun.next_step(),
-            );
+            return Err(CaptureTimeout {
+                summary: format!("{overrun}: terminated `{program} {}`", rendered_args(args)),
+                next_step: overrun.next_step(),
+                output: String::new(),
+            }
+            .into());
         }
         thread::sleep(POLL_INTERVAL);
     }
@@ -291,6 +353,65 @@ fn manifest_declares_workspace(manifest: &Path) -> Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn timed_out_capture_keeps_both_streams() {
+        assert_timeout_capture(
+            "printf 'early stdout\\n'; printf 'early stderr' >&2; exec sleep 30",
+        );
+    }
+
+    #[test]
+    fn timed_out_capture_does_not_wait_for_descendant_pipes() {
+        assert_timeout_capture(
+            "printf 'early stdout\\n'; printf 'early stderr' >&2; sleep 30 & echo $!; wait",
+        );
+    }
+
+    fn assert_timeout_capture(script: &str) {
+        deadline::arm_with("test", Some(Duration::from_millis(300)));
+        let started = Instant::now();
+        let err = run_streamed(Path::new("."), "sh", ["-c", script], &[], &[], &mut |_| {})
+            .err()
+            .expect("must time out");
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "reader wait was unbounded"
+        );
+        let timeout = err.downcast_ref::<CaptureTimeout>().expect("typed timeout");
+        // Reap the pipe holder rather than leave it alive after the test.
+        if let Some(pid) = timeout
+            .output
+            .lines()
+            .find_map(|line| line.parse::<u32>().ok())
+        {
+            signal_child(pid, "-KILL");
+        }
+        assert!(
+            timeout.output.contains("early stdout"),
+            "{}",
+            timeout.output
+        );
+        assert!(
+            timeout.output.contains("early stderr"),
+            "{}",
+            timeout.output
+        );
+        assert!(
+            timeout
+                .summary
+                .starts_with("xtask `test` exceeded its 300ms budget after")
+        );
+        assert!(
+            timeout
+                .summary
+                .ends_with(&format!("terminated `sh -c {script}`"))
+        );
+        assert_eq!(
+            timeout.next_step,
+            "NEXT: rerun the slow step on its own, or widen the budget for one run with RIMZ_XTASK_TIMEOUT=900ms"
+        );
+    }
 
     // The budget arms once per process; nextest runs each test in its own, so
     // this test owns the armed budget for the whole process.
