@@ -367,14 +367,7 @@ fn compose_answer_row(
     response: Option<&ResponseFile>,
 ) -> String {
     let status = answer.map_or(run.status, |answer| answer.status);
-    let started_at = answer.map_or_else(
-        || {
-            run.follow_up
-                .as_ref()
-                .map_or(run.started_at, |turn| turn.started_at)
-        },
-        |answer| answer.started_at,
-    );
+    let started_at = answer.map_or_else(|| run.answer_started_at(), |answer| answer.started_at);
     let finished_at = answer
         .map_or(run.completed_at, |answer| answer.completed_at)
         .unwrap_or(run.updated_at);

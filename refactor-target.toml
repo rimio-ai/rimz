@@ -638,7 +638,8 @@ path = "crates/rimz/src/store"
 # The snapshot carries an open PR's merge-queue state to the header marker as `WorktreePrQueue` (+1).
 # `ReportTo` is the run's durable report policy for `--detach`; `RunRecord::survives_parent` is the one survival predicate the wrapper watchdog and the orphan sweep read (+2).
 # `Store::is_pending_recovery` lets an exiting exec wrapper see its agent parked by a rebirth (+1).
-surface-budget = 363
+# `RunRecord::answer_started_at` is the one current-answer start the list, the report row, and the reopen fold read (+1).
+surface-budget = 364
 
 [[module]]
 path = "crates/rimz/src/theme"
