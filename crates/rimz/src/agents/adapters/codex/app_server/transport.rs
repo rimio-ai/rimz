@@ -489,13 +489,19 @@ mod tests {
         use std::io::Read;
 
         let (client, mut server) = UnixStream::pair().unwrap();
+        // The stalled server holds its end open until the client returns, so a
+        // timeout that fires late on a loaded machine still sees a silent peer
+        // rather than a hang-up.
+        let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
         let handle = thread::spawn(move || {
             let mut buf = [0u8; 512];
             let _ = server.read(&mut buf);
-            thread::sleep(Duration::from_millis(80));
+            let _ = done_rx.recv();
         });
 
-        let err = match WsTransport::from_stream(client, Duration::from_millis(20)) {
+        let result = WsTransport::from_stream(client, Duration::from_millis(20));
+        let _ = done_tx.send(());
+        let err = match result {
             Ok(_) => panic!("stalled handshake unexpectedly succeeded"),
             Err(err) => err,
         };
