@@ -145,7 +145,7 @@ A rebuilt specification always gets one authoritative repair. With a stable stam
 
 A scheduled run lands in the runtime column. `split_into_loop_zone` ([`cli/supervised/pane.rs`](../../crates/rimz/src/cli/supervised/pane.rs)) asks `ensure_loop_panel` for the workspace's oldest live loop panel and splits the run pane against it with `SplitPlacement::Stacked`. Which fires land there, and the new-tab fallback, are in [loops.md](./harness/loops.md#where-a-scheduled-run-lands).
 
-The run pane is the one real agent pane inside this view, and it is a card like any other: the exec wrapper stamps the agent on it at launch, so admission keeps it, the sidebar renders it, `rimz agents` lists it, and a queued wake or a steer binds its pane. The panel, the content slots, and the hosts beside it carry no stamp and stay chrome.
+The run pane is the one real agent pane inside this view, and it is a card like any other: the exec wrapper stamps the agent on it at launch, so admission keeps it, the sidebar renders it, `rimz agents list` lists it, and a queued wake or a steer binds its pane. The panel, the content slots, and the hosts beside it carry no stamp and stay chrome.
 
 Tab status and the sidebar bell stay view-level on purpose, so the card is not quite like any other on those two surfaces: `tab_status.rs` drops the whole `rimzd` tab, and a sidebar whose own view is this one returns `BellDecision::DaemonView`. A loop-zone run that goes waiting therefore shows no glyph in the tab strip and rings no bell from this tab, while remaining addressable and rendered. Teaching those two surfaces the stamped-agent rule is a separate change.
 

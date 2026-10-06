@@ -253,7 +253,8 @@ path = "crates/rimz/src/cli"
 # Both worktree entrypoints share the PR branch choice prompt.
 # `accounts use` and the `providers` hint share the verified-pin room check.
 # Launch cwd and prompt-file resolution share the caller tmp reversal (+1).
-surface-budget = 29
+# `main` maps the scenes' shared usage error to exit 2 (+1).
+surface-budget = 30
 
 [[module]]
 path = "crates/rimz/src/config"

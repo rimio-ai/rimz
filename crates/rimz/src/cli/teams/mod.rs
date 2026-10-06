@@ -12,6 +12,7 @@ mod wait;
 use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
 
+use super::usage::UsageError;
 use super::{GlobalFlags, agents_cmd};
 
 #[derive(Debug, Args)]
@@ -33,8 +34,8 @@ pub struct TeamsArgs {
     /// Run the cohort under this isolation instead of machine `agents.isolation`.
     #[arg(long, value_name = "host|sandbox", requires = "name")]
     isolation: Option<rimz::config::Isolation>,
-    /// Emit the team catalogue as JSON.
-    #[arg(long)]
+    /// Retired listing flag, kept so the no-verb refusal can echo it into `list`.
+    #[arg(long, hide = true)]
     json: bool,
 }
 
@@ -287,18 +288,18 @@ fn parse_progress_note(note: &str) -> Result<String, String> {
 
 pub fn run(args: TeamsArgs, globals: &GlobalFlags) -> Result<()> {
     match args.command {
-        None => match args.name {
+        None => match args.name.filter(|name| !name.trim().is_empty()) {
             Some(name) => {
                 if args.json {
                     bail!(
-                        "--json is only supported with `rimz teams` and `rimz teams list`; use `rimz teams show {name} --json` for one team"
+                        "--json is only supported with `rimz teams list`; use `rimz teams show {name} --json` for one team"
                     );
                 }
                 launch_team(name, args.prompt, args.launch, args.isolation, globals)
             }
             None => {
-                reject_launch_flags_without_name(&args.prompt, &args.launch)?;
-                list::run(args.json, globals)
+                let flags: &[&str] = if args.json { &["--json"] } else { &[] };
+                Err(UsageError::missing_verb("teams", "a team name", flags).into())
             }
         },
         Some(TeamsSubcmd::Show {
@@ -401,27 +402,6 @@ fn show_target(
     let lane_only = name.starts_with('#');
     let (team, lane) = team_lane(name, worktree)?;
     Ok(((!lane_only).then_some(team), lane))
-}
-
-fn reject_launch_flags_without_name(
-    prompt: &Option<String>,
-    launch: &agents_cmd::CohortLaunchArgs,
-) -> Result<()> {
-    if prompt.is_some()
-        || launch.description.is_some()
-        || launch.worktree.is_some()
-        || launch.channel.is_some()
-        || launch.from_pr.is_some()
-        || launch.resume
-        || launch.fresh
-        || launch.budget.is_some()
-        || launch.bg
-        || launch.new_tab
-        || launch.detach
-    {
-        bail!("team launch options require a team name");
-    }
-    Ok(())
 }
 
 fn list_profiles(json: bool, path: bool) -> Result<()> {
@@ -817,20 +797,6 @@ mod tests {
             args.launch.overrides.isolation,
             Some(rimz::config::Isolation::Host)
         );
-    }
-
-    #[test]
-    fn launch_flags_without_a_team_name_are_rejected() {
-        for argv in [
-            vec!["rimz", "-w", "feat-x"],
-            vec!["rimz", "--fresh"],
-            vec!["rimz", "--detach"],
-        ] {
-            let args = parse_teams(&argv);
-            let error = reject_launch_flags_without_name(&args.prompt, &args.launch)
-                .expect_err("missing team");
-            assert!(error.to_string().contains("require a team name"));
-        }
     }
 
     #[test]

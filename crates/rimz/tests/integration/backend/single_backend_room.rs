@@ -48,7 +48,7 @@ fn room_name_tracks_state_dir_without_rebirthing_a_live_old_name() {
     assert_eq!(rows[0]["running_on"], "tmux");
     let agents = room
         .rimz()
-        .arg("agents")
+        .args(["agents", "list"])
         .envs(rimz::workspace::pin_env(
             &record.workspace_id,
             &record.project_root,

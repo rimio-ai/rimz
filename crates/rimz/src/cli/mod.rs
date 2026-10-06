@@ -53,6 +53,7 @@ mod transcript;
 mod trust;
 mod uninstall;
 mod update;
+mod usage;
 mod wait;
 mod web;
 mod workspace;
@@ -71,6 +72,7 @@ use rimz::store::snapshot::{PaneAgent, SidebarSnapshot};
 use rimz::{RuntimePaths, StatePaths, Store};
 
 pub(crate) use ctx::Ctx;
+pub use usage::UsageError;
 
 pub(crate) fn open_browser_best_effort(url: &str) {
     let opener = if cfg!(target_os = "macos") {

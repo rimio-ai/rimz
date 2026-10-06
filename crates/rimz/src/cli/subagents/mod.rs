@@ -10,6 +10,7 @@ use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
 use serde::{Deserialize, Serialize};
 
+use super::usage::UsageError;
 use super::{Ctx, GlobalFlags, agents_cmd, render};
 use rimz::agents::AgentState;
 
@@ -23,7 +24,7 @@ pub struct SubagentsArgs {
     command: Option<SubagentsSubcmd>,
     #[command(flatten)]
     launch: SubagentLaunchArgs,
-    /// Emit the child list or waited launch result as JSON.
+    /// Emit the waited launch result as JSON.
     #[arg(long)]
     json: bool,
 }
@@ -226,12 +227,20 @@ pub fn run(args: SubagentsArgs, globals: &GlobalFlags) -> Result<()> {
             json,
         }) => wait_children(names, any, timeout, stream, json, globals),
         Some(SubagentsSubcmd::Stop { names, all }) => stop_children(names, all, globals),
-        None if args.launch.profile.is_some() => launch_child(args.launch, args.json, globals),
+        None if names_profile(&args) => launch_child(args.launch, args.json, globals),
         None => {
-            reject_launch_flags_without_spec(&args.launch)?;
-            list_children(args.json, globals)
+            let flags: &[&str] = if args.json { &["--json"] } else { &[] };
+            Err(UsageError::missing_verb("subagents", "a profile", flags).into())
         }
     }
+}
+
+/// A blank PROFILE, as an empty shell variable leaves it, names nothing.
+fn names_profile(args: &SubagentsArgs) -> bool {
+    args.launch
+        .profile
+        .as_deref()
+        .is_some_and(|profile| !profile.trim().is_empty())
 }
 
 fn command_is_agent_only(args: &SubagentsArgs) -> bool {
@@ -243,7 +252,7 @@ fn command_is_agent_only(args: &SubagentsArgs) -> bool {
             | SubagentsSubcmd::Wait { .. }
             | SubagentsSubcmd::Stop { .. },
         ) => true,
-        None => args.launch.profile.is_some(),
+        None => names_profile(args),
     }
 }
 
@@ -596,30 +605,6 @@ fn parse_warn(raw: &str) -> std::result::Result<WarnOffsets, String> {
         .map(crate::cli::supervised::parse_timeout)
         .collect::<std::result::Result<Vec<_>, _>>()
         .map(WarnOffsets)
-}
-
-fn reject_launch_flags_without_spec(args: &SubagentLaunchArgs) -> Result<()> {
-    if args.prompt.is_some()
-        || args.cwd.is_some()
-        || args.prompt_file.is_some()
-        || args.model.is_some()
-        || args.tier.is_some()
-        || args.agent.is_some()
-        || args.effort.is_some()
-        || args.isolation.is_some()
-        || args.timeout.is_some()
-        || args.warn.is_some()
-        || args.grace.is_some()
-        || args.wait.is_some()
-        || args.keep
-        || args.detach
-        || args.description.is_some()
-        || args.max_turns.is_some()
-        || !args.passthrough.is_empty()
-    {
-        bail!("subagent launch options require a profile");
-    }
-    Ok(())
 }
 
 fn caller_and_children(agents: &[AgentState]) -> Result<(&AgentState, Vec<&AgentState>)> {
