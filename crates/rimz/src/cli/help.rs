@@ -163,6 +163,54 @@ mod tests {
         <Cli as CommandFactory>::command()
     }
 
+    #[test]
+    fn global_options_follow_command_options() {
+        let mut cmd = command();
+        cmd.build();
+        for path in [&["pane", "send"][..], &["transcript"][..]] {
+            let mut selected = &cmd;
+            for name in path {
+                selected = selected.find_subcommand(name).unwrap();
+            }
+            let help = selected.clone().render_long_help().to_string();
+            let options = help.find("Options:").expect("command options");
+            let globals = help.find("Global options:");
+            assert!(globals.is_some(), "{help}");
+            let globals = globals.unwrap();
+            assert!(globals > options, "{help}");
+            for flag in ["--mux", "--zellij", "--tmux", "--root", "--color"] {
+                assert!(help[globals..].contains(flag), "{flag}: {help}");
+                assert!(!help[options..globals].contains(flag), "{flag}: {help}");
+            }
+            if path == ["pane", "send"] {
+                for flag in ["--enter", "--key"] {
+                    assert!(help[options..globals].contains(flag), "{flag}: {help}");
+                }
+            }
+        }
+        fn check(cmd: &Command) {
+            for arg in cmd.get_arguments().filter(|arg| {
+                arg.is_global_set()
+                    && matches!(
+                        arg.get_id().as_str(),
+                        "mux" | "zellij" | "tmux" | "root" | "color"
+                    )
+            }) {
+                assert_eq!(
+                    arg.get_help_heading(),
+                    Some("Global options"),
+                    "{}: {}",
+                    cmd.get_name(),
+                    arg.get_id()
+                );
+            }
+            for subcommand in cmd.get_subcommands() {
+                check(subcommand);
+            }
+        }
+        check(&cmd);
+    }
+
     fn visible_names(cmd: &Command) -> BTreeSet<String> {
         cmd.get_subcommands()
             .filter(|subcmd| subcmd.get_name() != "help" && !subcmd.is_hide_set())
