@@ -339,6 +339,118 @@ fn a_denied_skip_fails_a_passing_run_and_keeps_its_report() {
 }
 
 #[test]
+fn failed_test_capture_saves_full_output_after_reports() {
+    let dir = tempfile::tempdir().unwrap();
+    let captured = test_capture(
+        false,
+        format!(
+            "PASS [ 0.01s] progress\n{}\nmiddle diagnostic\n{}\n\x1b[31mFAIL\x1b[0m café\nSummary: 1 failed\n",
+            "head diagnostic\n".repeat(1_000),
+            "tail diagnostic\n".repeat(1_000),
+        ),
+    );
+    let GateResult::Fail { detail } = captured_test_result(
+        &captured,
+        Some("self-skipped 1 test".to_owned()),
+        Some("--deny-skips: refused".to_owned()),
+        dir.path(),
+    ) else {
+        panic!("failed capture must fail");
+    };
+    let (excerpt, saved) = detail
+        .rsplit_once("\nfull test output: ")
+        .expect("saved output line");
+    assert!(excerpt.ends_with("self-skipped 1 test\n--deny-skips: refused"));
+    assert!(excerpt.contains("output truncated"));
+    assert!(!excerpt.contains("PASS ["));
+    assert!(!excerpt.contains("middle diagnostic"));
+    let (path, counts) = saved.rsplit_once(" (").unwrap();
+    let path = Path::new(path);
+    assert!(path.is_absolute());
+    assert_eq!(path.parent(), Some(dir.path()));
+    assert!(
+        path.file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .starts_with("rimz-xtask-test-")
+    );
+    assert_eq!(path.extension().unwrap(), "output");
+    assert_eq!(fs::read(path).unwrap(), captured.output.as_bytes());
+    assert_eq!(
+        counts,
+        format!(
+            "{} lines, {} KB)",
+            captured.output.lines().count(),
+            captured.output.len().div_ceil(1024)
+        )
+    );
+}
+
+#[test]
+fn failed_test_captures_get_unique_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let captured = test_capture(false, "FAIL: same capture".to_owned());
+    let first = captured_test_result(&captured, None, None, dir.path());
+    let second = captured_test_result(&captured, None, None, dir.path());
+    assert_ne!(first, second, "each result must name a distinct file");
+    let files = fs::read_dir(dir.path())
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(files.len(), 2);
+    for file in files {
+        assert_eq!(fs::read(file.path()).unwrap(), captured.output.as_bytes());
+    }
+}
+
+#[test]
+fn passed_test_captures_save_nothing_even_with_denied_skips() {
+    let dir = tempfile::tempdir().unwrap();
+    let captured = test_capture(true, "Summary [ 0.1s] 1 test run: 1 passed\n".to_owned());
+    for denied in [None, Some("--deny-skips: refused".to_owned())] {
+        let report = Some("self-skipped 1 test".to_owned());
+        assert_eq!(
+            captured_test_result(&captured, report.clone(), denied.clone(), dir.path()),
+            captured_result(&captured, Some(extract_test_summary))
+                .with_skip_report(report)
+                .denying_skips(denied),
+        );
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 0);
+    }
+}
+
+#[test]
+fn failed_test_capture_keeps_detail_when_save_fails() {
+    let dir = tempfile::tempdir().unwrap();
+    let captured = test_capture(
+        false,
+        "PASS [ 0.01s] progress\nFAIL: diagnostic\n".to_owned(),
+    );
+    let GateResult::Fail { detail } =
+        captured_test_result(&captured, None, None, &dir.path().join("missing"))
+    else {
+        panic!("save failure must not hide the test failure");
+    };
+    assert!(
+        detail.starts_with("FAIL: diagnostic\nfull test output: not saved ("),
+        "{detail}"
+    );
+    assert!(detail.ends_with(')'));
+    assert_eq!(detail.lines().count(), 2);
+    assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 0);
+}
+
+fn test_capture(success: bool, output: String) -> Captured {
+    use std::os::unix::process::ExitStatusExt;
+    Captured {
+        status: std::process::ExitStatus::from_raw(if success { 0 } else { 1 << 8 }),
+        stdout: String::new(),
+        output,
+    }
+}
+
+#[test]
 fn deny_skips_is_consumed_before_the_separator_and_never_forwarded() {
     let command = parse_test_command(&[
         "--deny-skips".to_owned(),
