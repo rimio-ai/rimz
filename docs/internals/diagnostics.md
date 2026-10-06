@@ -135,7 +135,7 @@ The windowed family recognizes the back-and-forth motion a user would describe: 
 | `roster_flap` | 10s | A populated roster empties while own-view still counts working siblings, then refills inside the window | Active `PaneClosed` events cover every vanished row's pane (a genuinely emptied tab is [self-close](./sidebar/sidebar.md#self-close) territory) |
 | `row_presence_flap`, `short_lived_row` | 7s | One row disappears and returns inside the window, or a row is born and vanishes inside it (the phantom card, group key recorded) | A `PaneClosed` justifies the absence, the row's group had its idle tail hidden at either edge (ranking churn rotates rows through the cap), or the pane was rebound to a new identity |
 | `value_oscillation` | 5s | A watched per-row value returns to its exact prior figure after differing: status, context %, token total, group key, or model | The field's first appearance, since enrichment warm-up goes from `None` to a value |
-| `aggregate_oscillation` | 12s away | A dashboard figure returns to its exact prior value after differing, however long that value had been stable: cockpit or workspace spend year, provider spend year, or a provider mana window %. A figure whose provider panel or window bar leaves the frame and returns counts, with `via` reading `<none>` | First appearance, or a return after more than the window away; a figure the snapshot could not supply reads `<none>` with `pulled_via` absent, so an unavailable tally stays distinct from a real `0` |
+| `aggregate_oscillation` | 12s away | A dashboard figure returns to its exact prior value after differing, however long that value had been stable: cockpit or workspace spend year, or any keyed provider-panel value (below). A figure whose provider panel or window bar leaves the frame and returns counts, with `via` reading `<none>` | First appearance, or a return after more than the window away; a figure the snapshot could not supply reads `<none>` with `pulled_via` absent, so an unavailable tally stays distinct from a real `0` |
 | `order_flap` | 7s | Rendered row order inside one group returns to its prior order after differing, with unchanged visible membership | The visible set changed, as in a real re-rank or a cap tail rotation |
 | `status_churn` | 30s | Four or more status transitions on one row inside the window | A single `running → idle → running` turn boundary |
 
@@ -144,6 +144,16 @@ Under heavy mux enumeration churn a published pane frame can briefly drop and re
 A windowed record stamps the frame that **caused** the anomaly, not the frame that revealed it. `row_presence_flap` fires when the row returns but carries the frame the row went missing on. The `produced_at_ms` join therefore reaches the producer records for the same episode. Doctor still folds copies from retained multi-renderer logs or an elder handoff into one incident.
 
 The `aggregate_oscillation` window bounds the time the figure was away, and `span_ms` carries that time. A record written before this measure carries the time since the returned-to value first appeared, and that older detector missed a blink on any value that had been stable for longer than the window. A key missing from a frame is sampled as an absent figure, and its history is dropped once it has been absent for longer than the window.
+
+The provider panel is keyed per login by what it renders. A record's `aggregate` names the key:
+
+| `aggregate` | Extra field | Value |
+| --- | --- | --- |
+| `provider_spend` | `period`: `headline`, `week`, or `month`; unwritten for the trailing year | Integer cents |
+| `provider_mana` | `field`: `resets_at` or `lifted`; unwritten for the used % | The percent, the stored reset timestamp, or `true`/`false` |
+| `provider_field` | `field`: `version`, `plan`, `metered`, `remote_control`, `day_budget`, `extra_credits`, `reset_credits`, or `redeem_forecast` | The value as text. A composite is one string of everything the panel renders from it, money in cents: day budget `spend/cap` with `/parked` appended while parked, extra credits `disabled` or `used/remaining/limit` with `-` for a missing figure, reset credits `count@soonest-expiry` |
+
+An unset field is an absent value and reads `<none>`. Two panel values are left unkeyed because they move in normal operation, where a flip is not a fault: `active_sessions` and a window's `observed_at`. Year spend and used % keep the wire shape and identity they had before the other keys existed, so older records join with new ones. A build from before these keys skips a line whose `provider_field` key it cannot decode, and reads a `period` or `field` it does not know as the year or used-% key of the same login.
 
 `aggregate_reset` fires on the edge, without a window, when a spend tally drops from a non-zero figure straight to zero, and carries the prior figure and the pulled value. It covers only the monetary tallies, whose trailing-year figure never legitimately drops to zero in place; a provider mana window rolling to zero is normal. A transient zero that returns inside the window also records `aggregate_oscillation`.
 

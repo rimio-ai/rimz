@@ -20,6 +20,114 @@ fn legacy_provider_aggregates_decode_as_default_logins() {
     }
 }
 
+#[test]
+fn provider_key_vocabulary_keeps_prior_shapes_and_round_trips_new_ones() {
+    let login = || "claude@default".parse::<crate::ids::LoginKey>().unwrap();
+    let mana = |field| AggregateKey::ProviderMana {
+        login: login(),
+        scope_id: None,
+        duration_mins: Some(300),
+        field,
+    };
+    let rows = [
+        (
+            AggregateKey::ProviderSpend {
+                login: login(),
+                period: SpendPeriod::Year,
+            },
+            r#"{"aggregate":"provider_spend","login":"claude@default"}"#,
+            "provider_spend:claude@default",
+        ),
+        (
+            AggregateKey::ProviderSpend {
+                login: login(),
+                period: SpendPeriod::Headline,
+            },
+            r#"{"aggregate":"provider_spend","login":"claude@default","period":"headline"}"#,
+            "provider_spend:claude@default:headline",
+        ),
+        (
+            AggregateKey::ProviderSpend {
+                login: login(),
+                period: SpendPeriod::Week,
+            },
+            r#"{"aggregate":"provider_spend","login":"claude@default","period":"week"}"#,
+            "provider_spend:claude@default:week",
+        ),
+        (
+            AggregateKey::ProviderSpend {
+                login: login(),
+                period: SpendPeriod::Month,
+            },
+            r#"{"aggregate":"provider_spend","login":"claude@default","period":"month"}"#,
+            "provider_spend:claude@default:month",
+        ),
+        (
+            mana(WindowField::UsedPercentage),
+            r#"{"aggregate":"provider_mana","login":"claude@default","duration_mins":300}"#,
+            "provider_mana:claude@default:300",
+        ),
+        (
+            mana(WindowField::ResetsAt),
+            r#"{"aggregate":"provider_mana","login":"claude@default","duration_mins":300,"field":"resets_at"}"#,
+            "provider_mana:claude@default:300:resets_at",
+        ),
+        (
+            mana(WindowField::Lifted),
+            r#"{"aggregate":"provider_mana","login":"claude@default","duration_mins":300,"field":"lifted"}"#,
+            "provider_mana:claude@default:300:lifted",
+        ),
+        (
+            AggregateKey::ProviderMana {
+                login: login(),
+                scope_id: Some("premium".to_owned()),
+                duration_mins: None,
+                field: WindowField::ResetsAt,
+            },
+            r#"{"aggregate":"provider_mana","login":"claude@default","scope_id":"premium","duration_mins":null,"field":"resets_at"}"#,
+            "provider_mana:claude@default:scope:premium:resets_at",
+        ),
+    ];
+    for (key, wire, identity) in rows {
+        assert_eq!(serde_json::to_string(&key).unwrap(), wire);
+        assert_eq!(serde_json::from_str::<AggregateKey>(wire).unwrap(), key);
+        assert_eq!(key.identity(), identity);
+    }
+
+    for (field, name) in [
+        (PanelField::Version, "version"),
+        (PanelField::Plan, "plan"),
+        (PanelField::Metered, "metered"),
+        (PanelField::RemoteControl, "remote_control"),
+        (PanelField::DayBudget, "day_budget"),
+        (PanelField::ExtraCredits, "extra_credits"),
+        (PanelField::ResetCredits, "reset_credits"),
+        (PanelField::RedeemForecast, "redeem_forecast"),
+    ] {
+        let key = AggregateKey::ProviderField {
+            login: login(),
+            field,
+        };
+        let wire = format!(
+            r#"{{"aggregate":"provider_field","login":"claude@default","field":"{name}"}}"#
+        );
+        assert_eq!(serde_json::to_string(&key).unwrap(), wire);
+        assert_eq!(serde_json::from_str::<AggregateKey>(&wire).unwrap(), key);
+        assert_eq!(
+            key.identity(),
+            format!("provider_field:claude@default:{name}")
+        );
+    }
+
+    let legacy_period: AggregateKey =
+        serde_json::from_str(r#"{"aggregate":"provider_spend","kind":"claude","period":"week"}"#)
+            .unwrap();
+    assert_eq!(
+        legacy_period.identity(),
+        "provider_spend:claude@default:week"
+    );
+}
+
 fn workspace_id() -> WorkspaceId {
     WorkspaceId::from_project_root(std::path::Path::new("/repo"))
 }
@@ -629,6 +737,7 @@ fn representative_events_keep_json_wire_shape() {
                 anomaly: AnomalyKind::AggregateOscillation {
                     aggregate: AggregateKey::ProviderSpend {
                         login: "claude@default".parse().unwrap(),
+                        period: SpendPeriod::Year,
                     },
                     from: "1234".to_owned(),
                     via: "0".to_owned(),
@@ -661,11 +770,13 @@ fn provider_mana_identity_prefers_scope_and_keeps_legacy_duration_wire() {
         login: "plugin@default".parse().unwrap(),
         scope_id: Some("build_minutes".to_owned()),
         duration_mins: None,
+        field: WindowField::UsedPercentage,
     };
     let deployment = AggregateKey::ProviderMana {
         login: "plugin@default".parse().unwrap(),
         scope_id: Some("deployments".to_owned()),
         duration_mins: None,
+        field: WindowField::UsedPercentage,
     };
     assert_ne!(build.identity(), deployment.identity());
     assert_eq!(
