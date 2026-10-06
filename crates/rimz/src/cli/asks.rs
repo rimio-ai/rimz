@@ -214,7 +214,7 @@ fn show(target: &str, json: bool, globals: &GlobalFlags) -> Result<()> {
     let store = &ctx.store;
     let snapshot = ctx.cached_snapshot()?;
     let peers = rimz::address::addressable_agents(&snapshot);
-    let agent = resolve_open_ask(&ctx.store, &snapshot, target, ctx.channel())?
+    let agent = resolve_open_ask(&ctx.store, &snapshot, target, &ctx.address_context())?
         .ok_or_else(|| anyhow::anyhow!(ask_commands::unknown_ask(target)))?;
     if agent.actionable_asks().next().is_none() {
         bail!(

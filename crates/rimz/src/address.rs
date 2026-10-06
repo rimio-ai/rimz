@@ -31,12 +31,36 @@
 //! agent.
 
 use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 
 use crate::agents::AgentState;
 use crate::agents::petname::{sender_handle, sender_label};
 use crate::ids::{AgentKind, AgentSessionId, PaneId, compose_channel};
 use crate::store::message::MessageSender;
 use crate::store::snapshot::{PaneAgent, SidebarSnapshot, find_agent};
+
+/// Where a command's channel came from; explicit addresses and flags override it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChannelOrigin {
+    Stamped,
+    Directory,
+    Explicit,
+}
+
+/// The ambient channel and room identity used by address resolution.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AddressContext {
+    pub channel: Option<String>,
+    pub origin: ChannelOrigin,
+    pub project_root: PathBuf,
+}
+
+impl AddressContext {
+    /// Whether `agent` sits in the room's root lane, the one `#main` names.
+    pub fn is_root_lane(&self, agent: &AgentState) -> bool {
+        agent.is_root_lane(self)
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum TargetErr {
@@ -56,11 +80,14 @@ pub enum TargetErr {
         "no agent matches target `{target}`{suggestion}; run `rimz agents list` to see live agents"
     )]
     NoMatch { target: String, suggestion: String },
-    #[error("no agent matches `{target}` in channel `#{channel}`; it is running in {elsewhere}")]
+    #[error("no agent matches `{target}` in #{channel}{origin_note}\n{elsewhere}")]
     NoMatchInChannel {
         target: String,
         channel: String,
+        origin_note: &'static str,
         elsewhere: String,
+        correction_channel: Option<String>,
+        channel_flag: bool,
     },
     #[error("target `{target}` matches {candidates}")]
     Ambiguous { target: String, candidates: String },
@@ -170,6 +197,25 @@ trait Candidate<'a>: Copy {
                         == Some(filter)
             })
     }
+
+    fn is_root_lane(self, context: &AddressContext) -> bool {
+        self.channel().is_none_or(str::is_empty)
+            && self
+                .worktree_path()
+                .is_some_and(|path| Path::new(path) == context.project_root)
+    }
+
+    fn in_channel(self, filter: &str, context: &AddressContext) -> bool {
+        self.in_worktree(filter) || (filter == "main" && self.is_root_lane(context))
+    }
+
+    fn address_channel_label(self, context: &AddressContext) -> String {
+        if self.is_root_lane(context) {
+            "main".to_owned()
+        } else {
+            self.channel_label()
+        }
+    }
 }
 
 impl<'a> Candidate<'a> for &'a AgentState {
@@ -275,7 +321,7 @@ pub fn resolve_one<'a>(
     snapshot: &'a SidebarSnapshot,
     raw: &str,
     worktree_flag: Option<&str>,
-    current_channel: Option<&str>,
+    current_channel: &AddressContext,
 ) -> Result<&'a AgentState, TargetErr> {
     resolve_agent(
         raw,
@@ -292,7 +338,7 @@ pub fn resolve_many<'a>(
     snapshot: &'a SidebarSnapshot,
     raw: &str,
     worktree_flag: Option<&str>,
-    current_channel: Option<&str>,
+    current_channel: &AddressContext,
 ) -> Result<Vec<&'a AgentState>, TargetErr> {
     let candidates = addressable_agents(snapshot);
     resolve_agents(raw, worktree_flag, current_channel, &candidates)
@@ -304,7 +350,7 @@ pub fn resolve_many<'a>(
 pub(crate) fn resolve_agents<'a>(
     raw: &str,
     worktree_flag: Option<&str>,
-    current_channel: Option<&str>,
+    current_channel: &AddressContext,
     candidates: &[&'a AgentState],
 ) -> Result<Vec<&'a AgentState>, TargetErr> {
     let launch_candidates = launch_occupants(candidates.iter().copied());
@@ -322,7 +368,7 @@ pub(crate) fn resolve_agents<'a>(
 pub fn resolve_agent<'a>(
     raw: &str,
     worktree_flag: Option<&str>,
-    current_channel: Option<&str>,
+    current_channel: &AddressContext,
     candidates: &[&'a AgentState],
 ) -> Result<&'a AgentState, TargetErr> {
     let matches = resolve_agents(raw, worktree_flag, current_channel, candidates)?;
@@ -343,7 +389,7 @@ pub fn resolve_targets<'a>(
     snapshot: &'a SidebarSnapshot,
     raw: &str,
     worktree_flag: Option<&str>,
-    current_channel: Option<&str>,
+    current_channel: &AddressContext,
 ) -> Result<Vec<&'a PaneAgent>, TargetErr> {
     let candidates: Vec<&PaneAgent> = snapshot.agent_panes.iter().collect();
     resolve_mentions(raw, worktree_flag, current_channel, &candidates)
@@ -456,7 +502,7 @@ pub(crate) fn shadowed_by_pane_owner(snapshot: &SidebarSnapshot, agent: &AgentSt
 fn resolve_mentions<'a, C: Candidate<'a>>(
     raw: &str,
     worktree_flag: Option<&str>,
-    current_channel: Option<&str>,
+    current_channel: &AddressContext,
     candidates: &[C],
 ) -> Result<Vec<C>, TargetErr> {
     resolve_mentions_with_launch_candidates(
@@ -471,15 +517,24 @@ fn resolve_mentions<'a, C: Candidate<'a>>(
 fn resolve_mentions_with_launch_candidates<'a, C: Candidate<'a>>(
     raw: &str,
     worktree_flag: Option<&str>,
-    current_channel: Option<&str>,
+    current_channel: &AddressContext,
     candidates: &[C],
     launch_candidates: &[C],
 ) -> Result<Vec<C>, TargetErr> {
     match parse_target(raw)? {
         Target::Pane(pane) => resolve_by_pane(raw, &pane, launch_candidates).map(|one| vec![one]),
         Target::Mention { selector, channel } => {
-            let channel =
-                reconcile_channel(raw, channel.as_deref(), worktree_flag, current_channel)?;
+            let origin = if channel.is_some() || worktree_flag.is_some() {
+                ChannelOrigin::Explicit
+            } else {
+                current_channel.origin
+            };
+            let channel = reconcile_channel(
+                raw,
+                channel.as_deref(),
+                worktree_flag,
+                current_channel.channel.as_deref(),
+            )?;
             // A full session id is a pinned instance address, so it resolves
             // across channels like a pane id. Short prefixes still use the
             // channel-scoped selector path below.
@@ -500,7 +555,7 @@ fn resolve_mentions_with_launch_candidates<'a, C: Candidate<'a>>(
                 .filter(|candidate| {
                     channel
                         .as_deref()
-                        .is_none_or(|filter| candidate.in_worktree(filter))
+                        .is_none_or(|filter| candidate.in_channel(filter, current_channel))
                 })
                 .collect();
             let launch_in_channel = launch_candidates
@@ -509,7 +564,7 @@ fn resolve_mentions_with_launch_candidates<'a, C: Candidate<'a>>(
                 .filter(|candidate| {
                     channel
                         .as_deref()
-                        .is_none_or(|filter| candidate.in_worktree(filter))
+                        .is_none_or(|filter| candidate.in_channel(filter, current_channel))
                 })
                 .collect::<Vec<_>>();
             let matches = select_with_launch_candidates(&selector, &in_channel, &launch_in_channel);
@@ -521,7 +576,12 @@ fn resolve_mentions_with_launch_candidates<'a, C: Candidate<'a>>(
                 launch_candidates,
                 raw,
                 &selector,
-                channel,
+                &AddressContext {
+                    channel,
+                    origin,
+                    ..current_channel.clone()
+                },
+                worktree_flag.is_some(),
             ))
         }
     }
@@ -893,15 +953,54 @@ fn no_match_error<'a, C: Candidate<'a>>(
     launch_candidates: &[C],
     raw: &str,
     selector: &AgentSelector,
-    channel: Option<String>,
+    context: &AddressContext,
+    channel_flag: bool,
 ) -> TargetErr {
-    if let Some(channel) = channel {
+    if let Some(channel) = &context.channel {
         let elsewhere = select_with_launch_candidates(selector, everywhere, launch_candidates);
         if !elsewhere.is_empty() {
+            let correction_channel = elsewhere.iter().find_map(|candidate| {
+                if candidate.channel().is_none_or(str::is_empty)
+                    && candidate.worktree_path().is_none()
+                {
+                    return None;
+                }
+                let lane = candidate.address_channel_label(context);
+                let address = format!("@{}#{lane}", selector_of(raw));
+                (parse_target(&address).is_ok() && shlex::try_quote(&address).is_ok())
+                    .then_some(lane)
+            });
+            let mut elsewhere = format!(
+                "@{} is in {}",
+                selector_of(raw),
+                channel_list(&elsewhere, context)
+            );
+            if let Some(lane) = &correction_channel {
+                if channel_flag {
+                    let target = format!("@{}", selector_of(raw));
+                    if let (Ok(target), Ok(lane)) =
+                        (shlex::try_quote(&target), shlex::try_quote(lane))
+                    {
+                        elsewhere.push_str(&format!(
+                            ": use {target} with --channel {lane} or --worktree {lane}"
+                        ));
+                    }
+                } else if let Ok(address) =
+                    shlex::try_quote(&format!("@{}#{lane}", selector_of(raw)))
+                {
+                    elsewhere.push_str(&format!(": {address}"));
+                }
+            }
             return TargetErr::NoMatchInChannel {
                 target: raw.to_owned(),
-                channel,
-                elsewhere: channel_list(&elsewhere),
+                channel: channel.clone(),
+                origin_note: match context.origin {
+                    ChannelOrigin::Directory => " (taken from a directory's name)",
+                    ChannelOrigin::Stamped | ChannelOrigin::Explicit => "",
+                },
+                elsewhere,
+                correction_channel,
+                channel_flag,
             };
         }
     }
@@ -1439,10 +1538,10 @@ fn absent_agent_handle_base(
 }
 
 /// A deduplicated, quoted list of the channels a selector matches.
-fn channel_list<'a, C: Candidate<'a>>(candidates: &[C]) -> String {
+fn channel_list<'a, C: Candidate<'a>>(candidates: &[C], context: &AddressContext) -> String {
     let mut names: Vec<String> = candidates
         .iter()
-        .map(|candidate| candidate.channel_label())
+        .map(|candidate| candidate.address_channel_label(context))
         .collect();
     names.sort_unstable();
     names.dedup();

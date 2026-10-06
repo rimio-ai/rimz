@@ -21,7 +21,7 @@ pub(in crate::cli) fn wait_agent(
         let ctx = Ctx::open(globals)?;
         let store = &ctx.store;
         let snapshot = ctx.cached_snapshot()?;
-        let current_channel = ctx.channel();
+        let current_channel = &ctx.address_context();
         let options = WaitStreamOptions {
             timeout,
             from_start,
@@ -49,7 +49,7 @@ fn wait_non_stream_request(
 ) -> Result<()> {
     let ctx = Ctx::open(globals)?;
     let snapshot = ctx.cached_snapshot()?;
-    let current_channel = ctx.channel();
+    let current_channel = &ctx.address_context();
     wait_non_stream(
         &ctx,
         &snapshot,
@@ -72,7 +72,7 @@ fn wait_stream_request(
     store: &rimz::Store,
     snapshot: rimz::store::snapshot::SidebarSnapshot,
     reference: &str,
-    current_channel: Option<&str>,
+    current_channel: &rimz::address::AddressContext,
     options: WaitStreamOptions,
 ) -> Result<()> {
     match resolve_wait_target(store, &snapshot, reference, current_channel)? {
@@ -93,7 +93,7 @@ fn wait_non_stream(
     any: bool,
     timeout: Option<Duration>,
     style: WaitStyle,
-    current_channel: Option<&str>,
+    current_channel: &rimz::address::AddressContext,
 ) -> Result<()> {
     let store = &ctx.store;
     let session_name = &ctx.workspace.session_name;
@@ -173,7 +173,7 @@ impl WaitStyle {
         self,
         store: &rimz::Store,
         session_name: &str,
-        current_channel: Option<&str>,
+        current_channel: &rimz::address::AddressContext,
         waits: &WaitSet,
         selected: usize,
         settled: &[usize],
@@ -435,7 +435,7 @@ fn resolve_wait_target(
     store: &rimz::Store,
     snapshot: &rimz::store::snapshot::SidebarSnapshot,
     reference: &str,
-    current_channel: Option<&str>,
+    current_channel: &rimz::address::AddressContext,
 ) -> Result<WaitTarget> {
     let live_agent_result =
         crate::cli::resolve_agent_one(store, snapshot, reference, None, current_channel);
@@ -504,7 +504,7 @@ fn poll_target(
     store: &rimz::Store,
     agent_view: Option<&TurnWaitView>,
     target: &mut WaitTarget,
-    current_channel: Option<&str>,
+    current_channel: &rimz::address::AddressContext,
     deadline: Option<Instant>,
 ) -> Result<Option<TargetOutcome>> {
     match target {
@@ -608,7 +608,11 @@ impl WaitSet {
         }
     }
 
-    fn poll(&mut self, store: &rimz::Store, current_channel: Option<&str>) -> Result<WaitPoll> {
+    fn poll(
+        &mut self,
+        store: &rimz::Store,
+        current_channel: &rimz::address::AddressContext,
+    ) -> Result<WaitPoll> {
         let agent_view = self
             .targets
             .iter()
@@ -843,7 +847,7 @@ fn wait_interactive_agent_stream(
     store: &rimz::Store,
     reference: &str,
     kind: &rimz::ids::AgentKind,
-    current_channel: Option<&str>,
+    current_channel: &rimz::address::AddressContext,
     options: WaitStreamOptions,
 ) -> Result<()> {
     let adapter = rimz::agents::find_definition(kind.as_str())

@@ -73,7 +73,10 @@ path = "crates/rimz/src/address.rs"
 # `TeamCohort::contains` reopened it by one: team CLI and delivery scope
 # share one membership test instead of spelling the pair five times.
 # Shared ambiguity construction also serves transcript's historical candidates.
-surface-budget = 37
+# AddressContext and ChannelOrigin carry room identity and lane provenance
+# from the binary into the shared resolver and library dispatch callers;
+# `AddressContext::is_root_lane` keeps `message list` on the resolver's rule.
+surface-budget = 40
 
 [[module]]
 path = "crates/rimz/src/pixel_wire.rs"

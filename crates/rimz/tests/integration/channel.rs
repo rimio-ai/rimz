@@ -71,7 +71,8 @@ fn message_routes_to_named_channel_targets() {
     assert!(!miss.status.success(), "wrong channel must fail");
     let stderr = String::from_utf8_lossy(&miss.stderr);
     assert!(
-        stderr.contains("channel `#ops`") && stderr.contains("`design`"),
+        stderr.contains("in #ops")
+            && stderr.contains("message '@claude#design' -- 'wrong channel'"),
         "channel miss names target and real channel: {stderr}"
     );
 

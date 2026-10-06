@@ -67,8 +67,13 @@ pub(super) fn send_message(
     rimz::address::require_mention(&target)?;
     let target = if target == "@me" {
         let snapshot = ctx.cached_snapshot()?;
-        let agent =
-            crate::cli::resolve_agent_one(&ctx.store, &snapshot, &target, None, ctx.channel())?;
+        let agent = crate::cli::resolve_agent_one(
+            &ctx.store,
+            &snapshot,
+            &target,
+            None,
+            &ctx.address_context(),
+        )?;
         format!("@{}", agent.agent_id)
     } else {
         target
@@ -82,7 +87,7 @@ pub(super) fn send_message(
         target: target.clone(),
         text: text.clone(),
         target_scope: worktree.clone().or_else(|| channel_flag.clone()),
-        current_channel: current_channel.clone(),
+        current_channel: ctx.address_context(),
         caller: caller.clone(),
         sender: sender.clone(),
         automated: false,
@@ -234,7 +239,7 @@ fn recipient_miss(
                 ctx,
                 miss.target,
                 miss.worktree.or(miss.channel_flag),
-                miss.current_channel,
+                &ctx.address_context(),
             ) {
                 Ok(true) => return Ok(true),
                 Ok(false) => {}

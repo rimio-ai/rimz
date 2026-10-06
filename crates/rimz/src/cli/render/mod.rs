@@ -122,6 +122,18 @@ pub(crate) fn report(error: &anyhow::Error) {
 }
 
 fn write_report(w: &mut impl Write, error: &anyhow::Error) -> std::io::Result<()> {
+    let argv = std::env::args_os()
+        .map(|arg| arg.into_string())
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap_or_default();
+    write_report_with_args(w, error, &argv)
+}
+
+fn write_report_with_args(
+    w: &mut impl Write,
+    error: &anyhow::Error,
+    argv: &[String],
+) -> std::io::Result<()> {
     let mut messages = distinct_messages(error).into_iter();
     let Some(message) = messages.next() else {
         return Ok(());
@@ -140,7 +152,66 @@ fn write_report(w: &mut impl Write, error: &anyhow::Error) -> std::io::Result<()
             writeln!(w, "  {line}")?;
         }
     }
+    let miss = error.chain().find_map(|cause| {
+        cause
+            .downcast_ref::<rimz::address::TargetErr>()
+            .or_else(
+                || match cause.downcast_ref::<rimz::message::dispatch::DispatchErr>() {
+                    Some(rimz::message::dispatch::DispatchErr::Recipient(error)) => Some(error),
+                    _ => None,
+                },
+            )
+    });
+    if let Some(rimz::address::TargetErr::NoMatchInChannel {
+        target,
+        correction_channel: Some(channel),
+        channel_flag,
+        ..
+    }) = miss
+        && let Some(command) = corrected_command(argv, target, channel, *channel_flag)
+    {
+        writeln!(w, "  try: {command}")?;
+    }
     Ok(())
+}
+
+fn corrected_command(
+    argv: &[String],
+    target: &str,
+    channel: &str,
+    channel_flag: bool,
+) -> Option<String> {
+    let target_index = argv.iter().position(|arg| arg == target)?;
+    let (selector, _) = rimz::address::parse_selector(target).ok()?;
+    let mut argv = argv.to_vec();
+    argv[target_index] = format!("@{selector}");
+    if !channel_flag {
+        argv[target_index].push_str(&format!("#{channel}"));
+        return shlex::try_join(argv.iter().map(String::as_str)).ok();
+    }
+    let mut corrected_flag = false;
+    let mut index = 1;
+    while index < argv.len() {
+        let arg = &argv[index];
+        if arg == "--" {
+            break;
+        }
+        if matches!(arg.as_str(), "--channel" | "--worktree" | "-w") {
+            index += 1;
+            *argv.get_mut(index)? = channel.to_owned();
+            corrected_flag = true;
+        } else if let Some(prefix) = ["--channel=", "--worktree=", "-w"]
+            .into_iter()
+            .find(|prefix| arg.starts_with(prefix))
+        {
+            argv[index] = format!("{prefix}{channel}");
+            corrected_flag = true;
+        }
+        index += 1;
+    }
+    corrected_flag
+        .then(|| shlex::try_join(argv.iter().map(String::as_str)).ok())
+        .flatten()
 }
 
 /// An error's messages outermost first, each trimmed, without any source the

@@ -20,9 +20,14 @@ impl FreshReason {
 pub(super) fn restart_agent(reference: String, globals: &GlobalFlags) -> Result<()> {
     let ctx = Ctx::open(globals)?;
     let snapshot = ctx.alive_snapshot()?;
-    let agent =
-        crate::cli::resolve_agent_one(&ctx.store, &snapshot, &reference, None, ctx.channel())?
-            .clone();
+    let agent = crate::cli::resolve_agent_one(
+        &ctx.store,
+        &snapshot,
+        &reference,
+        None,
+        &ctx.address_context(),
+    )?
+    .clone();
     let peers = rimz::address::addressable_agents(&snapshot);
     let focus = LaunchFocus::resolve(false, resolve_caller(&snapshot.agents).as_ref());
     let message = restart_resolved(&ctx, &agent, &peers, focus)?;

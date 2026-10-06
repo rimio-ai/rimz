@@ -44,6 +44,14 @@ fn snapshot(agents: Vec<rimz::agents::AgentState>) -> rimz::store::snapshot::Sid
     )
 }
 
+fn context(channel: &str) -> rimz::address::AddressContext {
+    rimz::address::AddressContext {
+        channel: Some(channel.to_owned()),
+        origin: rimz::address::ChannelOrigin::Stamped,
+        project_root: "/repo".into(),
+    }
+}
+
 #[test]
 fn error_entry_projects_as_agent_error_line() {
     let entry = log_entry(
@@ -88,7 +96,7 @@ fn agent_target_prefers_live_session_over_stale_same_handle() {
     let scope = resolve_scope(
         Some("@claude"),
         None,
-        Some("chat"),
+        &context("chat"),
         &identities,
         None,
         &snapshot,
@@ -121,7 +129,7 @@ fn agent_target_uses_latest_when_no_match_is_live() {
     let scope = resolve_scope(
         Some("@claude"),
         None,
-        Some("chat"),
+        &context("chat"),
         &identities,
         None,
         &snapshot(vec![]),
@@ -146,7 +154,7 @@ fn exact_session_id_resolves_outside_the_current_channel() {
     let scope = resolve_scope(
         Some("sess-exact"),
         None,
-        Some("current"),
+        &context("current"),
         &identities,
         None,
         &snapshot(vec![]),
@@ -165,7 +173,7 @@ fn channel_and_all_targets_keep_channel_scope() {
     let channel = resolve_scope(
         Some("#docs"),
         None,
-        Some("main"),
+        &context("main"),
         &identities,
         None,
         &snapshot(vec![]),
@@ -178,7 +186,7 @@ fn channel_and_all_targets_keep_channel_scope() {
     let all = resolve_scope(
         Some("@all#docs"),
         None,
-        Some("main"),
+        &context("main"),
         &identities,
         None,
         &snapshot(vec![]),
@@ -197,7 +205,7 @@ fn degenerate_agent_targets_use_resolver_errors() {
         let err = resolve_scope(
             Some(raw),
             None,
-            Some("main"),
+            &context("main"),
             &identities,
             None,
             &snapshot(vec![]),

@@ -240,7 +240,7 @@ pub(super) fn clear_messages(
             &snapshot,
             &target,
             worktree.as_deref().or(channel_flag.as_deref()),
-            channel.as_deref(),
+            &ctx.address_context(),
         )?;
         let canceled = store.clear_messages_for(
             &agent.kind,

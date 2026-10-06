@@ -87,7 +87,7 @@ pub(super) fn stop_agent(
     let ctx = Ctx::open(globals)?;
     let (workspace, store) = (&ctx.workspace, &ctx.store);
     let snapshot = ctx.cached_snapshot()?;
-    let current_channel = ctx.channel();
+    let current_channel = &ctx.address_context();
     if all && reference != "@me" {
         let agents = rimz::address::resolve_many(&snapshot, &reference, None, current_channel)?;
         let peers = rimz::address::addressable_agents(&snapshot);
@@ -148,7 +148,7 @@ fn request_idle_stop(reference: &str, when_idle: WhenIdle, globals: &GlobalFlags
         &snapshot,
         reference,
         None,
-        ctx.channel(),
+        &ctx.address_context(),
     ) {
         Ok(agent) => agent,
         Err(err) => {

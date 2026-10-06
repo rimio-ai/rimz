@@ -12,7 +12,7 @@ use super::DeliveryKind;
 use jiff::Timestamp;
 
 use crate::Store;
-use crate::address::TargetErr;
+use crate::address::{AddressContext, TargetErr};
 use crate::agents::{AgentState, AgentStatus};
 use crate::ids::{AgentKind, MessageId, MuxName};
 use crate::message::{MessageDraft, Recipient};
@@ -75,7 +75,7 @@ pub struct DispatchRequest {
     pub target: String,
     pub text: String,
     pub target_scope: Option<String>,
-    pub current_channel: Option<String>,
+    pub current_channel: AddressContext,
     pub caller: Option<crate::harness::ancestry::CallerIdentity>,
     pub sender: MessageSender,
     pub automated: bool,
@@ -253,7 +253,7 @@ pub fn dispatch(
             snapshot,
             &request.target,
             request.target_scope.as_deref(),
-            request.current_channel.as_deref(),
+            &request.current_channel,
             &pending,
             request.mode.gate(),
             request.force,
@@ -276,7 +276,7 @@ pub fn dispatch(
         snapshot: &snapshot,
         durable_agents: &durable_agents,
         scope: request.target_scope.as_deref(),
-        channel: request.current_channel.as_deref(),
+        channel: &request.current_channel,
         rollup_only,
     };
     let mut targets = resolution.resolve(&request.target)?;
@@ -288,7 +288,7 @@ pub fn dispatch(
         request
             .target_scope
             .as_deref()
-            .or(request.current_channel.as_deref()),
+            .or(request.current_channel.channel.as_deref()),
     )?;
     if targets.len() > 1 && !request.allow_fanout && !crate::address::is_broadcast(&request.target)
     {
@@ -331,7 +331,7 @@ pub fn dispatch(
         store,
         snapshot: &snapshot,
         pending: &pending,
-        scope_channel: request.current_channel.as_deref(),
+        scope_channel: request.current_channel.channel.as_deref(),
         reply_wait: reply_preparation.is_some(),
         in_reply_to: &in_reply_to,
     };
@@ -424,7 +424,7 @@ fn targets_all_park_without_live(
     snapshot: &SidebarSnapshot,
     raw: &str,
     scope: Option<&str>,
-    channel: Option<&str>,
+    channel: &AddressContext,
     pending: &[MessageRecord],
     gate: DeliveryGate,
     force: bool,
@@ -471,7 +471,7 @@ struct ResolutionView<'a> {
     snapshot: &'a SidebarSnapshot,
     durable_agents: &'a [AgentState],
     scope: Option<&'a str>,
-    channel: Option<&'a str>,
+    channel: &'a AddressContext,
     rollup_only: bool,
 }
 

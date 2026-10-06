@@ -10,6 +10,14 @@ use crate::store::message::{
     HarnessNotice, HeaderKind, MessageRecord, MessageSender, parse_message_header,
 };
 
+fn context(channel: Option<&str>) -> AddressContext {
+    AddressContext {
+        channel: channel.map(ToOwned::to_owned),
+        origin: ChannelOrigin::Stamped,
+        project_root: "/tmp/rimz-target-test".into(),
+    }
+}
+
 #[test]
 fn resolve_prefers_name_ordinal_kind_then_session_prefix() {
     let mut snapshot = empty_snapshot();
@@ -22,47 +30,47 @@ fn resolve_prefers_name_ordinal_kind_then_session_prefix() {
     snapshot.agents = vec![alpha, beta];
 
     assert_eq!(
-        resolve_one(&snapshot, "@lucid-atlas", None, None)
+        resolve_one(&snapshot, "@lucid-atlas", None, &context(None))
             .unwrap()
             .agent_id
             .as_str(),
         "session-alpha"
     );
     assert_eq!(
-        resolve_one(&snapshot, "@claude-2", None, None)
+        resolve_one(&snapshot, "@claude-2", None, &context(None))
             .unwrap()
             .agent_id
             .as_str(),
         "session-beta"
     );
     assert!(matches!(
-        resolve_one(&snapshot, "@claude", None, None),
+        resolve_one(&snapshot, "@claude", None, &context(None)),
         Err(TargetErr::Ambiguous { .. })
     ));
     // Compact channel form picks the worktree basename.
     assert_eq!(
-        resolve_one(&snapshot, "@claude#x.y", None, None)
+        resolve_one(&snapshot, "@claude#x.y", None, &context(None))
             .unwrap()
             .agent_id
             .as_str(),
         "session-beta"
     );
     assert_eq!(
-        resolve_one(&snapshot, "@lucid-atlas#main", None, None)
+        resolve_one(&snapshot, "@lucid-atlas#main", None, &context(None))
             .unwrap()
             .agent_id
             .as_str(),
         "session-alpha"
     );
     assert_eq!(
-        resolve_one(&snapshot, "@bright-beacon#x.y", None, None)
+        resolve_one(&snapshot, "@bright-beacon#x.y", None, &context(None))
             .unwrap()
             .agent_id
             .as_str(),
         "session-beta"
     );
     assert_eq!(
-        resolve_one(&snapshot, "@session-a", None, None)
+        resolve_one(&snapshot, "@session-a", None, &context(None))
             .unwrap()
             .agent_id
             .as_str(),
@@ -70,7 +78,7 @@ fn resolve_prefers_name_ordinal_kind_then_session_prefix() {
     );
     // `claude@main` is just an unknown name now, not "claude in main".
     assert!(matches!(
-        resolve_one(&snapshot, "@claude@main", None, None),
+        resolve_one(&snapshot, "@claude@main", None, &context(None)),
         Err(TargetErr::NoMatch { .. })
     ));
 }
@@ -84,11 +92,11 @@ fn provisional_launch_id_is_not_a_session_prefix() {
     snapshot.agents = vec![launch];
 
     assert!(matches!(
-        resolve_one(&snapshot, "@launch_queued", None, None),
+        resolve_one(&snapshot, "@launch_queued", None, &context(None)),
         Err(TargetErr::NoMatch { .. })
     ));
     assert_eq!(
-        resolve_one(&snapshot, "@swift-otter", None, None)
+        resolve_one(&snapshot, "@swift-otter", None, &context(None))
             .unwrap()
             .agent_id
             .as_str(),
@@ -128,10 +136,15 @@ fn pane_id_bypasses_sigils() {
     let agent = agent("claude", "session-pane", Some("main"), "terminal_7");
     snapshot.agents = vec![agent];
     assert_eq!(
-        resolve_one(&snapshot, "zellij:terminal_7", None, Some("other"))
-            .unwrap()
-            .agent_id
-            .as_str(),
+        resolve_one(
+            &snapshot,
+            "zellij:terminal_7",
+            None,
+            &context(Some("other"))
+        )
+        .unwrap()
+        .agent_id
+        .as_str(),
         "session-pane"
     );
 }
@@ -144,7 +157,7 @@ fn at_kind_ordinal_never_falls_through_to_session_prefix() {
     snapshot.agents = vec![agent];
 
     assert!(matches!(
-        resolve_one(&snapshot, "@claude-1", None, None),
+        resolve_one(&snapshot, "@claude-1", None, &context(None)),
         Err(TargetErr::NoMatch { .. })
     ));
 }
@@ -159,15 +172,15 @@ fn at_kind_fans_out_but_resolve_one_is_ambiguous() {
     let codex = agent("codex", "session-3", Some("main"), "terminal_3");
     snapshot.agents = vec![one, two, codex];
 
-    let many = resolve_many(&snapshot, "@claude", None, None).unwrap();
+    let many = resolve_many(&snapshot, "@claude", None, &context(None)).unwrap();
     assert_eq!(many.len(), 2);
     assert!(matches!(
-        resolve_one(&snapshot, "@claude", None, None),
+        resolve_one(&snapshot, "@claude", None, &context(None)),
         Err(TargetErr::Ambiguous { .. })
     ));
     // A specific ordinal stays single.
     assert_eq!(
-        resolve_one(&snapshot, "@claude-2", None, None)
+        resolve_one(&snapshot, "@claude-2", None, &context(None))
             .unwrap()
             .agent_id
             .as_str(),
@@ -192,7 +205,7 @@ fn ambiguity_lists_round_tripping_addresses_and_full_count() {
         }
         snapshot.agents.push(peer);
     }
-    let error = resolve_one(&snapshot, "@coder", None, None).unwrap_err();
+    let error = resolve_one(&snapshot, "@coder", None, &context(None)).unwrap_err();
     let message = error.to_string();
     assert!(
         message.starts_with("target `@coder` matches 11 agents: "),
@@ -210,10 +223,10 @@ fn ambiguity_lists_round_tripping_addresses_and_full_count() {
         .next()
         .unwrap();
     assert_eq!(addresses.split(", ").count(), 8);
-    let matches = resolve_many(&snapshot, "@coder", None, None).unwrap();
+    let matches = resolve_many(&snapshot, "@coder", None, &context(None)).unwrap();
     for (address, peer) in addresses.split(", ").zip(matches) {
         assert_eq!(
-            resolve_one(&snapshot, address, None, None)
+            resolve_one(&snapshot, address, None, &context(None))
                 .unwrap()
                 .agent_id,
             peer.agent_id
@@ -235,13 +248,13 @@ fn ambiguity_uses_the_search_pool_not_only_the_matches() {
         peer.role = Some(role.to_owned());
         snapshot.agents.push(peer);
     }
-    let error = resolve_one(&snapshot, "@coder", None, None).unwrap_err();
+    let error = resolve_one(&snapshot, "@coder", None, &context(None)).unwrap_err();
     assert_eq!(
         error.to_string(),
         "target `@coder` matches 2 agents: @first#main, @codex#main"
     );
     assert_eq!(
-        resolve_one(&snapshot, "@first#main", None, None)
+        resolve_one(&snapshot, "@first#main", None, &context(None))
             .unwrap()
             .agent_id
             .as_str(),
@@ -261,7 +274,8 @@ fn ambiguity_for_unbound_panes_uses_pane_addresses() {
         "2 agents: zellij:terminal_1, zellij:terminal_2"
     );
     for pane in &peers {
-        let matches = resolve_mentions(&pane.pane_id.to_string(), None, None, &candidates).unwrap();
+        let matches =
+            resolve_mentions(&pane.pane_id.to_string(), None, &context(None), &candidates).unwrap();
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].pane_id, pane.pane_id);
     }
@@ -275,7 +289,7 @@ fn at_all_fans_to_the_channel_only() {
     let main_claude = agent("claude", "session-c", Some("main"), "terminal_3");
     snapshot.agents = vec![feat_claude, feat_codex, main_claude];
 
-    let ids: Vec<&str> = resolve_many(&snapshot, "@all", None, Some("feat"))
+    let ids: Vec<&str> = resolve_many(&snapshot, "@all", None, &context(Some("feat")))
         .unwrap()
         .iter()
         .map(|agent| agent.agent_id.as_str())
@@ -306,7 +320,7 @@ fn pane_owner_shadows_co_resident_session_from_every_address() {
     pane.role = Some("coder".to_owned());
     snapshot.agent_panes = vec![pane];
 
-    let matches = resolve_many(&snapshot, "@coder", None, Some("main")).unwrap();
+    let matches = resolve_many(&snapshot, "@coder", None, &context(Some("main"))).unwrap();
     assert_eq!(
         matches
             .iter()
@@ -315,11 +329,11 @@ fn pane_owner_shadows_co_resident_session_from_every_address() {
         ["session-owner"]
     );
     assert!(matches!(
-        resolve_one(&snapshot, "@session-older", None, None),
+        resolve_one(&snapshot, "@session-older", None, &context(None)),
         Err(TargetErr::NoMatch { .. })
     ));
     assert_eq!(
-        resolve_many(&snapshot, "@all", None, Some("main"))
+        resolve_many(&snapshot, "@all", None, &context(Some("main")))
             .unwrap()
             .len(),
         1
@@ -363,13 +377,13 @@ fn pane_shadowing_preserves_distinct_and_closed_agents() {
     ];
 
     assert_eq!(
-        resolve_many(&snapshot, "@coder", None, Some("main"))
+        resolve_many(&snapshot, "@coder", None, &context(Some("main")))
             .unwrap()
             .len(),
         3
     );
     assert_eq!(
-        resolve_one(&snapshot, "@session-closed", None, None)
+        resolve_one(&snapshot, "@session-closed", None, &context(None))
             .unwrap()
             .agent_id
             .as_str(),
@@ -385,14 +399,14 @@ fn current_channel_scoping_rules() {
     snapshot.agents = vec![feat, main];
 
     assert_eq!(
-        resolve_one(&snapshot, "@claude", None, Some("feat"))
+        resolve_one(&snapshot, "@claude", None, &context(Some("feat")))
             .unwrap()
             .agent_id
             .as_str(),
         "session-feat"
     );
     assert_eq!(
-        resolve_one(&snapshot, "@session-feat", None, Some("main"))
+        resolve_one(&snapshot, "@session-feat", None, &context(Some("main")))
             .unwrap()
             .agent_id
             .as_str(),
@@ -400,7 +414,7 @@ fn current_channel_scoping_rules() {
     );
     // No current channel must not silently narrow — both are visible.
     assert!(matches!(
-        resolve_one(&snapshot, "@claude", None, None),
+        resolve_one(&snapshot, "@claude", None, &context(None)),
         Err(TargetErr::Ambiguous { .. })
     ));
 }
@@ -427,11 +441,16 @@ fn stamped_in_place_team_channel_scopes_without_team_fallback() {
     assert!((&snapshot.agents[0]).in_worktree("team-channel/forge"));
     assert!(!(&snapshot.agents[0]).in_worktree("team-channel"));
 
-    let ids: Vec<&str> = resolve_many(&snapshot, "@all", None, Some("team-channel/forge"))
-        .unwrap()
-        .iter()
-        .map(|agent| agent.agent_id.as_str())
-        .collect();
+    let ids: Vec<&str> = resolve_many(
+        &snapshot,
+        "@all",
+        None,
+        &context(Some("team-channel/forge")),
+    )
+    .unwrap()
+    .iter()
+    .map(|agent| agent.agent_id.as_str())
+    .collect();
     assert_eq!(ids, vec!["session-planner", "session-coder"]);
 }
 
@@ -526,7 +545,7 @@ fn zero_in_channel_but_matches_elsewhere() {
     let main_codex = agent("codex", "session-codex", Some("main"), "terminal_1");
     snapshot.agents = vec![main_codex];
 
-    let err = resolve_one(&snapshot, "@codex#cli-docs", None, None).unwrap_err();
+    let err = resolve_one(&snapshot, "@codex#cli-docs", None, &context(None)).unwrap_err();
     let message = err.to_string();
     assert!(
         matches!(err, TargetErr::NoMatchInChannel { .. }),
@@ -539,10 +558,148 @@ fn zero_in_channel_but_matches_elsewhere() {
 }
 
 #[test]
+fn main_addresses_the_unstamped_project_root() {
+    let mut snapshot = empty_snapshot();
+    let mut root = agent("codex", "root-session", Some("checkout"), "terminal_1");
+    root.name = Some("root-reader".into());
+    let mut stamped = agent("codex", "stamped-session", Some("checkout"), "terminal_2");
+    stamped.channel = Some("design".into());
+    let other = agent("codex", "other-session", Some("auth"), "terminal_3");
+    snapshot.agents = vec![root, stamped, other];
+    let mut scope = context(Some("scratch"));
+    scope.project_root = "/repo/checkout".into();
+    assert_eq!(
+        resolve_one(&snapshot, "@root-reader#main", None, &scope)
+            .map(|agent| agent.agent_id.as_str()),
+        Ok("root-session")
+    );
+    assert_eq!(
+        resolve_many(&snapshot, "@all", Some("main"), &scope)
+            .unwrap()
+            .iter()
+            .map(|agent| agent.agent_id.as_str())
+            .collect::<Vec<_>>(),
+        ["root-session"]
+    );
+    snapshot.agents[1].channel = Some("main".into());
+    assert_eq!(
+        resolve_many(&snapshot, "@all#main", None, &scope)
+            .unwrap()
+            .len(),
+        2,
+        "main remains available as a stamped lane as well as the root alias"
+    );
+    assert_eq!(
+        resolve_targets(
+            &SidebarSnapshot {
+                agent_panes: vec![lazy_pane("codex", "/repo/checkout", "terminal_4")],
+                ..empty_snapshot()
+            },
+            "@codex#main",
+            None,
+            &scope
+        )
+        .unwrap()
+        .len(),
+        1
+    );
+}
+
+#[test]
+fn channel_miss_names_origin_root_and_resolving_correction() {
+    let mut snapshot = empty_snapshot();
+    let mut root = agent("codex", "root-session", Some("checkout"), "terminal_1");
+    root.name = Some("root-reader".into());
+    let mut design = root.clone();
+    design.agent_id = "design-session".into();
+    design.channel = Some("design".into());
+    snapshot.agents = vec![root, design];
+    let mut scope = context(Some("scratchpad"));
+    scope.project_root = "/repo/checkout".into();
+    for (origin, note) in [
+        (ChannelOrigin::Directory, "taken from a directory's name"),
+        (ChannelOrigin::Stamped, ""),
+    ] {
+        scope.origin = origin;
+        let error = resolve_one(&snapshot, "@root-reader", None, &scope).unwrap_err();
+        assert!(matches!(error, TargetErr::NoMatchInChannel { .. }));
+        let message = error.to_string();
+        assert!(message.contains("#scratchpad"), "{message}");
+        assert_eq!(
+            message.contains("taken from"),
+            !note.is_empty(),
+            "{message}"
+        );
+        assert!(message.contains(note), "{message}");
+        assert!(message.contains("`main`"), "{message}");
+        assert!(message.contains("`design`"), "{message}");
+        assert!(message.contains("'@root-reader#main'"), "{message}");
+        let correction = shlex::split(message.rsplit_once(": ").unwrap().1).unwrap();
+        assert_eq!(
+            resolve_one(&snapshot, &correction[0], None, &scope)
+                .unwrap()
+                .agent_id
+                .as_str(),
+            "root-session"
+        );
+    }
+    snapshot.agents.pop();
+    snapshot.agents[0].worktree_path = None;
+    let message = resolve_one(&snapshot, "@root-reader", None, &scope)
+        .unwrap_err()
+        .to_string();
+    assert!(message.contains("no-worktree"), "{message}");
+    assert!(
+        !message.contains("@root-reader#"),
+        "no usable correction without a worktree: {message}"
+    );
+}
+
+#[test]
+fn channel_miss_drops_ambient_origin_for_explicit_scopes() {
+    let mut snapshot = empty_snapshot();
+    let mut root = agent("codex", "root-session", Some("checkout"), "terminal_1");
+    root.name = Some("root-reader".into());
+    snapshot.agents = vec![root];
+    let mut scope = context(Some("ambient"));
+    scope.project_root = "/repo/checkout".into();
+    scope.origin = ChannelOrigin::Directory;
+    for (target, flag) in [
+        ("@root-reader#scratch", None),
+        ("@root-reader", Some("scratch")),
+    ] {
+        let message = resolve_one(&snapshot, target, flag, &scope)
+            .unwrap_err()
+            .to_string();
+        assert!(!message.contains("taken from"), "{message}");
+        assert!(message.contains("#scratch"), "{message}");
+        if flag.is_some() {
+            assert!(
+                message.contains("--channel main") && message.contains("--worktree main"),
+                "{message}"
+            );
+            assert!(
+                !message.contains("'@root-reader#main'"),
+                "the flag must be corrected, not contradicted: {message}"
+            );
+            assert_eq!(
+                resolve_one(&snapshot, "@root-reader", Some("main"), &scope)
+                    .unwrap()
+                    .agent_id
+                    .as_str(),
+                "root-session"
+            );
+        } else {
+            assert!(message.contains("'@root-reader#main'"), "{message}");
+        }
+    }
+}
+
+#[test]
 fn rejects_conflicting_channels() {
     let snapshot = empty_snapshot();
     assert!(matches!(
-        resolve_one(&snapshot, "@claude#main", Some("docs"), None),
+        resolve_one(&snapshot, "@claude#main", Some("docs"), &context(None)),
         Err(TargetErr::ChannelMismatch { .. })
     ));
 }
@@ -566,7 +723,7 @@ fn no_match_points_to_the_list_without_dumping_the_roster() {
         })
         .collect();
 
-    let err = resolve_one(&snapshot, "@missing-name", None, None).unwrap_err();
+    let err = resolve_one(&snapshot, "@missing-name", None, &context(None)).unwrap_err();
     let message = err.to_string();
     assert!(
         message.contains("run `rimz agents list`"),
@@ -587,7 +744,7 @@ fn no_match_suggests_close_pet_names() {
     far.name = Some("calm-fox".to_owned());
     snapshot.agents = vec![close, far];
 
-    let message = resolve_one(&snapshot, "@swift-otter", None, None)
+    let message = resolve_one(&snapshot, "@swift-otter", None, &context(None))
         .unwrap_err()
         .to_string();
     assert!(
@@ -622,7 +779,7 @@ fn handle_is_shortest_unambiguous_and_round_trips() {
     // The grouped form drops the channel — it is the section header.
     assert_eq!(agent_handle(peers[1], &peers, false), "@calm-fox");
     assert_eq!(
-        resolve_one(&snapshot, "@claude-2#main", None, None)
+        resolve_one(&snapshot, "@claude-2#main", None, &context(None))
             .unwrap()
             .agent_id,
         peers[2].agent_id
@@ -632,7 +789,7 @@ fn handle_is_shortest_unambiguous_and_round_trips() {
     for &agent in &peers {
         let handle = agent_handle(agent, &peers, true);
         assert_eq!(
-            resolve_one(&snapshot, &handle, None, None)
+            resolve_one(&snapshot, &handle, None, &context(None))
                 .unwrap()
                 .agent_id
                 .as_str(),
@@ -853,7 +1010,7 @@ fn channelless_handle_disambiguates_against_same_kind_elsewhere() {
     for &one in &peers {
         let handle = agent_handle(one, &peers, true);
         assert_eq!(
-            resolve_one(&snapshot, &handle, None, None)
+            resolve_one(&snapshot, &handle, None, &context(None))
                 .unwrap()
                 .agent_id
                 .as_str(),
@@ -876,7 +1033,7 @@ fn channelless_handle_falls_back_to_session_without_a_petname() {
     let handle = agent_handle(peers[0], &peers, true);
     assert_eq!(handle, "@session-loose");
     assert_eq!(
-        resolve_one(&snapshot, &handle, None, None)
+        resolve_one(&snapshot, &handle, None, &context(None))
             .unwrap()
             .agent_id
             .as_str(),
@@ -899,14 +1056,14 @@ fn profile_resolves_as_a_profile_handle_and_renders_first() {
     // The profile names exactly its agent; the shared kind names both, so it is
     // an explicit ambiguity — `@claude` matches the profileed claudes too.
     assert_eq!(
-        resolve_one(&snapshot, "@planner", None, None)
+        resolve_one(&snapshot, "@planner", None, &context(None))
             .unwrap()
             .agent_id
             .as_str(),
         "session-planner"
     );
     assert!(matches!(
-        resolve_one(&snapshot, "@claude", None, None),
+        resolve_one(&snapshot, "@claude", None, &context(None)),
         Err(TargetErr::Ambiguous { .. })
     ));
     // The handle prefers the profile and round-trips back to its own agent.
@@ -915,7 +1072,7 @@ fn profile_resolves_as_a_profile_handle_and_renders_first() {
     for &one in &peers {
         let handle = agent_handle(one, &peers, true);
         assert_eq!(
-            resolve_one(&snapshot, &handle, None, None)
+            resolve_one(&snapshot, &handle, None, &context(None))
                 .unwrap()
                 .agent_id,
             one.agent_id,
@@ -939,7 +1096,7 @@ fn explicit_name_renders_and_round_trips_before_profile() {
     let handle = agent_handle(peers[0], &peers, true);
     assert_eq!(handle, "@writer#auth");
     assert_eq!(
-        resolve_one(&snapshot, &handle, None, None)
+        resolve_one(&snapshot, &handle, None, &context(None))
             .unwrap()
             .agent_id
             .as_str(),
@@ -952,7 +1109,7 @@ fn explicit_name_renders_and_round_trips_before_profile() {
     let profiled_handle = agent_handle(peers[1], &peers, true);
     assert_eq!(profiled_handle, "@codex#auth");
     assert_eq!(
-        resolve_one(&snapshot, &profiled_handle, None, None)
+        resolve_one(&snapshot, &profiled_handle, None, &context(None))
             .unwrap()
             .agent_id
             .as_str(),
@@ -970,7 +1127,7 @@ fn minted_name_stays_fallback_for_solo_agent() {
 
     assert_eq!(agent_handle(peers[0], &peers, true), "@claude#auth");
     assert_eq!(
-        resolve_one(&snapshot, "@claude#auth", None, None)
+        resolve_one(&snapshot, "@claude#auth", None, &context(None))
             .unwrap()
             .agent_id
             .as_str(),
@@ -990,13 +1147,13 @@ fn kind_name_profile_handle_uses_round_tripping_disambiguator() {
     let peers: Vec<&AgentState> = snapshot.agents.iter().collect();
 
     assert!(matches!(
-        resolve_one(&snapshot, "@claude#main", None, None),
+        resolve_one(&snapshot, "@claude#main", None, &context(None)),
         Err(TargetErr::Ambiguous { .. })
     ));
     let handle = agent_handle(peers[1], &peers, true);
     assert_eq!(handle, "@claude-2#main");
     assert_eq!(
-        resolve_one(&snapshot, &handle, None, None)
+        resolve_one(&snapshot, &handle, None, &context(None))
             .unwrap()
             .agent_id
             .as_str(),
@@ -1019,7 +1176,7 @@ fn shared_profile_degrades_to_the_kind_ordinal_handle() {
     let peers: Vec<&AgentState> = snapshot.agents.iter().collect();
 
     assert!(matches!(
-        resolve_one(&snapshot, "@planner", None, None),
+        resolve_one(&snapshot, "@planner", None, &context(None)),
         Err(TargetErr::Ambiguous { .. })
     ));
     assert_eq!(agent_handle(peers[0], &peers, true), "@claude-1#auth");
@@ -1027,7 +1184,7 @@ fn shared_profile_degrades_to_the_kind_ordinal_handle() {
     for &one in &peers {
         let handle = agent_handle(one, &peers, true);
         assert_eq!(
-            resolve_one(&snapshot, &handle, None, None)
+            resolve_one(&snapshot, &handle, None, &context(None))
                 .unwrap()
                 .agent_id,
             one.agent_id,
@@ -1051,7 +1208,7 @@ fn role_resolves_before_profile_and_renders_first_when_unique() {
     let peers: Vec<&AgentState> = snapshot.agents.iter().collect();
 
     assert_eq!(
-        resolve_one(&snapshot, "@coder#auth", None, None)
+        resolve_one(&snapshot, "@coder#auth", None, &context(None))
             .unwrap()
             .agent_id
             .as_str(),
@@ -1076,13 +1233,13 @@ fn shared_role_requires_fanout_and_degrades_to_profile_or_ordinal() {
     let peers: Vec<&AgentState> = snapshot.agents.iter().collect();
 
     assert_eq!(
-        resolve_many(&snapshot, "@planner", None, Some("auth"))
+        resolve_many(&snapshot, "@planner", None, &context(Some("auth")))
             .unwrap()
             .len(),
         2
     );
     assert!(matches!(
-        resolve_one(&snapshot, "@planner", None, Some("auth")),
+        resolve_one(&snapshot, "@planner", None, &context(Some("auth"))),
         Err(TargetErr::Ambiguous { .. })
     ));
     assert_eq!(agent_handle(peers[0], &peers, true), "@planner-a#auth");
@@ -1470,7 +1627,8 @@ fn at_kind_matches_a_lazy_agent_pane() {
     let mut snapshot = empty_snapshot();
     snapshot.agent_panes = vec![lazy_pane("codex", "/repo/shimmer-effect", "terminal_170")];
 
-    let targets = resolve_targets(&snapshot, "@codex", None, Some("shimmer-effect")).unwrap();
+    let targets =
+        resolve_targets(&snapshot, "@codex", None, &context(Some("shimmer-effect"))).unwrap();
     assert_eq!(targets.len(), 1);
     assert_eq!(targets[0].kind.as_str(), "codex");
     assert_eq!(targets[0].agent_id, None);
@@ -1485,11 +1643,21 @@ fn lazy_panes_skip_ordinal_pet_name_and_session_selectors() {
     snapshot.agent_panes = vec![lazy_pane("codex", "/repo/shimmer-effect", "terminal_170")];
 
     assert!(matches!(
-        resolve_targets(&snapshot, "@codex-1", None, Some("shimmer-effect")),
+        resolve_targets(
+            &snapshot,
+            "@codex-1",
+            None,
+            &context(Some("shimmer-effect"))
+        ),
         Err(TargetErr::NoMatch { .. }) | Err(TargetErr::NoMatchInChannel { .. })
     ));
     assert!(matches!(
-        resolve_targets(&snapshot, "@swift-otter", None, Some("shimmer-effect")),
+        resolve_targets(
+            &snapshot,
+            "@swift-otter",
+            None,
+            &context(Some("shimmer-effect"))
+        ),
         Err(TargetErr::NoMatch { .. })
     ));
 }
@@ -1510,7 +1678,8 @@ fn bound_pane_reaches_its_producer_bound_pane_by_petname_and_ordinal() {
     )];
 
     for raw in ["@swift-otter", "@codex-1", "@session-x"] {
-        let targets = resolve_targets(&snapshot, raw, None, Some("shimmer-effect")).unwrap();
+        let targets =
+            resolve_targets(&snapshot, raw, None, &context(Some("shimmer-effect"))).unwrap();
         assert_eq!(targets.len(), 1, "{raw}");
         assert_eq!(targets[0].pane_id.to_string(), "zellij:terminal_5", "{raw}");
         assert_eq!(
@@ -1528,7 +1697,7 @@ fn management_resolution_never_sees_agent_panes() {
     snapshot.agent_panes = vec![lazy_pane("codex", "/repo/shimmer-effect", "terminal_170")];
 
     assert!(matches!(
-        resolve_many(&snapshot, "@codex", None, Some("shimmer-effect")),
+        resolve_many(&snapshot, "@codex", None, &context(Some("shimmer-effect"))),
         Err(TargetErr::NoMatch { .. }) | Err(TargetErr::NoMatchInChannel { .. })
     ));
 }
@@ -1549,11 +1718,12 @@ fn at_all_fans_to_in_channel_panes_only() {
         lazy_pane("codex", "/repo/other", "terminal_9"),
     ];
 
-    let kinds: Vec<String> = resolve_targets(&snapshot, "@all", None, Some("shimmer-effect"))
-        .unwrap()
-        .iter()
-        .map(|target| target.kind.to_string())
-        .collect();
+    let kinds: Vec<String> =
+        resolve_targets(&snapshot, "@all", None, &context(Some("shimmer-effect")))
+            .unwrap()
+            .iter()
+            .map(|target| target.kind.to_string())
+            .collect();
     // bound claude + the in-channel lazy codex; the other channel's pane is out.
     assert_eq!(kinds.len(), 2);
     assert!(kinds.contains(&"claude".to_owned()));
@@ -1669,18 +1839,18 @@ fn launch_role_follows_the_current_conversation_without_a_pane_frame() {
     let mut snapshot = empty_snapshot();
     snapshot.agents = vec![primary.clone(), fork.clone()];
 
-    let resolved = resolve_one(&snapshot, "@coder", None, Some("auth")).unwrap();
+    let resolved = resolve_one(&snapshot, "@coder", None, &context(Some("auth"))).unwrap();
     assert_eq!(resolved.agent_id.as_str(), "fork");
     assert_eq!(addressable_agents(&snapshot).len(), 2);
     assert_eq!(
-        resolve_one(&snapshot, "@primary-card", None, Some("auth"))
+        resolve_one(&snapshot, "@primary-card", None, &context(Some("auth")))
             .unwrap()
             .agent_id
             .as_str(),
         "primary"
     );
     assert_eq!(
-        resolve_one(&snapshot, "@primary", None, Some("auth"))
+        resolve_one(&snapshot, "@primary", None, &context(Some("auth")))
             .unwrap()
             .agent_id
             .as_str(),
@@ -1696,7 +1866,7 @@ fn launch_role_follows_the_current_conversation_without_a_pane_frame() {
     primary.status = AgentStatus::Running;
     primary.last_activity = Timestamp::from_second(3_000).unwrap();
     snapshot.agents = vec![primary, fork];
-    let resolved = resolve_one(&snapshot, "@coder", None, Some("auth")).unwrap();
+    let resolved = resolve_one(&snapshot, "@coder", None, &context(Some("auth"))).unwrap();
     assert_eq!(resolved.agent_id.as_str(), "primary");
 }
 
@@ -1728,14 +1898,14 @@ fn closed_launch_keeps_its_role_handle_and_pane_address() {
     snapshot.agents = vec![older, latest];
 
     assert_eq!(
-        resolve_one(&snapshot, "@coder", None, Some("auth"))
+        resolve_one(&snapshot, "@coder", None, &context(Some("auth")))
             .unwrap()
             .agent_id
             .as_str(),
         "latest"
     );
     assert_eq!(
-        resolve_one(&snapshot, "zellij:terminal_1", None, None)
+        resolve_one(&snapshot, "zellij:terminal_1", None, &context(None))
             .unwrap()
             .agent_id
             .as_str(),
@@ -1771,14 +1941,14 @@ fn ordinal_fallback_does_not_widen_launch_delivery_tiers() {
     snapshot.agents = vec![sibling, occupant];
 
     assert_eq!(
-        resolve_one(&snapshot, "@codex-1", None, Some("auth"))
+        resolve_one(&snapshot, "@codex-1", None, &context(Some("auth")))
             .unwrap()
             .agent_id
             .as_str(),
         "sibling"
     );
     assert_eq!(
-        resolve_many(&snapshot, "@all", None, Some("auth"))
+        resolve_many(&snapshot, "@all", None, &context(Some("auth")))
             .unwrap()
             .iter()
             .map(|agent| agent.agent_id.as_str())
@@ -1786,7 +1956,7 @@ fn ordinal_fallback_does_not_widen_launch_delivery_tiers() {
         ["occupant"]
     );
     assert_eq!(
-        resolve_many(&snapshot, "@coder", None, Some("auth"))
+        resolve_many(&snapshot, "@coder", None, &context(Some("auth")))
             .unwrap()
             .iter()
             .map(|agent| agent.agent_id.as_str())
@@ -2032,7 +2202,8 @@ fn role_handle_survives_an_unclaimed_launch_card_in_the_lane() {
     let peers = addressable_agents(&snapshot);
 
     for raw in ["@reviewer", "@reviewer#attribution-counts"] {
-        let matched = resolve_many(&snapshot, raw, None, Some("attribution-counts")).unwrap();
+        let matched =
+            resolve_many(&snapshot, raw, None, &context(Some("attribution-counts"))).unwrap();
         let ids: Vec<&str> = matched
             .iter()
             .map(|agent| agent.agent_id.as_str())
@@ -2057,7 +2228,9 @@ fn role_handle_survives_an_unclaimed_launch_card_in_the_lane() {
     );
     for (agent, handle) in peers.iter().zip(&handles) {
         assert_eq!(
-            resolve_one(&snapshot, handle, None, None).unwrap().agent_id,
+            resolve_one(&snapshot, handle, None, &context(None))
+                .unwrap()
+                .agent_id,
             agent.agent_id,
             "{handle} round-trips"
         );
@@ -2065,7 +2238,7 @@ fn role_handle_survives_an_unclaimed_launch_card_in_the_lane() {
 
     for raw in ["@claude", "@all"] {
         assert_eq!(
-            resolve_many(&snapshot, raw, None, Some("attribution-counts"))
+            resolve_many(&snapshot, raw, None, &context(Some("attribution-counts")))
                 .unwrap()
                 .len(),
             2,
@@ -2080,10 +2253,15 @@ fn a_role_with_no_claimed_holder_keeps_every_match() {
     let (_, unclaimed) = claimed_and_unclaimed_reviewers();
     snapshot.agents = vec![unclaimed.clone()];
     assert_eq!(
-        resolve_one(&snapshot, "@reviewer", None, Some("attribution-counts"))
-            .unwrap()
-            .agent_id
-            .as_str(),
+        resolve_one(
+            &snapshot,
+            "@reviewer",
+            None,
+            &context(Some("attribution-counts"))
+        )
+        .unwrap()
+        .agent_id
+        .as_str(),
         "launch_01a0bc81e1",
         "a lone starting card still answers to its role"
     );
@@ -2095,9 +2273,14 @@ fn a_role_with_no_claimed_holder_keeps_every_match() {
     second.name = Some("keen-lantern".to_owned());
     snapshot.agents = vec![unclaimed, second];
     assert_eq!(
-        resolve_many(&snapshot, "@reviewer", None, Some("attribution-counts"))
-            .unwrap()
-            .len(),
+        resolve_many(
+            &snapshot,
+            "@reviewer",
+            None,
+            &context(Some("attribution-counts"))
+        )
+        .unwrap()
+        .len(),
         2,
         "two unclaimed cards invent no winner"
     );
@@ -2114,13 +2297,23 @@ fn a_bound_launch_card_still_rivals_a_registered_holder_of_the_role() {
     snapshot.agents = vec![registered, bound];
 
     assert_eq!(
-        resolve_many(&snapshot, "@reviewer", None, Some("attribution-counts"))
-            .unwrap()
-            .len(),
+        resolve_many(
+            &snapshot,
+            "@reviewer",
+            None,
+            &context(Some("attribution-counts"))
+        )
+        .unwrap()
+        .len(),
         2
     );
     assert!(matches!(
-        resolve_one(&snapshot, "@reviewer", None, Some("attribution-counts")),
+        resolve_one(
+            &snapshot,
+            "@reviewer",
+            None,
+            &context(Some("attribution-counts"))
+        ),
         Err(TargetErr::Ambiguous { .. })
     ));
 }
@@ -2149,14 +2342,14 @@ fn the_yield_never_crosses_lanes() {
     snapshot.agents = vec![registered, elsewhere];
 
     assert_eq!(
-        resolve_many(&snapshot, "@reviewer", None, None)
+        resolve_many(&snapshot, "@reviewer", None, &context(None))
             .unwrap()
             .len(),
         2,
         "with no channel in scope a claimed holder in one lane does not silence another lane's card"
     );
     assert!(matches!(
-        resolve_one(&snapshot, "@reviewer", None, None),
+        resolve_one(&snapshot, "@reviewer", None, &context(None)),
         Err(TargetErr::Ambiguous { .. })
     ));
 
@@ -2174,18 +2367,25 @@ fn the_yield_never_crosses_lanes() {
     );
     for (agent, handle) in peers.iter().zip(&handles) {
         assert_eq!(
-            resolve_one(&snapshot, handle, None, None).unwrap().agent_id,
+            resolve_one(&snapshot, handle, None, &context(None))
+                .unwrap()
+                .agent_id,
             agent.agent_id,
             "{handle} round-trips"
         );
     }
 
     assert_eq!(
-        resolve_many(&snapshot, "@reviewer", None, Some("attribution-counts"))
-            .unwrap()
-            .iter()
-            .map(|agent| agent.agent_id.as_str())
-            .collect::<Vec<_>>(),
+        resolve_many(
+            &snapshot,
+            "@reviewer",
+            None,
+            &context(Some("attribution-counts"))
+        )
+        .unwrap()
+        .iter()
+        .map(|agent| agent.agent_id.as_str())
+        .collect::<Vec<_>>(),
         ["76b7c2b6"],
         "in one lane the claimed holder still wins"
     );

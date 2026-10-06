@@ -206,11 +206,12 @@ pub(super) fn build_identities(entries: &[TranscriptEntry]) -> HashMap<AgentKey,
 pub(super) fn resolve_scope(
     target: Option<&str>,
     worktree: Option<&str>,
-    current: Option<&str>,
+    context: &rimz::address::AddressContext,
     identities: &HashMap<AgentKey, Identity>,
     store: Option<&rimz::Store>,
     snapshot: &rimz::store::snapshot::SidebarSnapshot,
 ) -> Result<Scope> {
+    let current = context.channel.as_deref();
     match target {
         None => {
             let channel = worktree.or(current).map(ToOwned::to_owned);
@@ -248,7 +249,7 @@ pub(super) fn resolve_scope(
             let requested_channel =
                 reconcile_transcript_channel(raw, inline.as_deref(), worktree, current)?;
             let live_error = match crate::cli::resolve_agent_one_unhinted(
-                store, snapshot, raw, worktree, current,
+                store, snapshot, raw, worktree, context,
             ) {
                 Ok(agent) => {
                     let channel = agent.channel();
@@ -290,6 +291,10 @@ pub(super) fn resolve_scope(
                 [] => return crate::cli::resolve_hint(raw, Err(live_error)),
                 [one] => *one,
                 many => {
+                    let unscoped = rimz::address::AddressContext {
+                        channel: None,
+                        ..context.clone()
+                    };
                     let addresses = many
                         .iter()
                         .map(|(key, identity)| {
@@ -299,7 +304,7 @@ pub(super) fn resolve_scope(
                                 true,
                             );
                             if matches!(
-                                rimz::address::resolve_many(snapshot, &handle, None, None),
+                                rimz::address::resolve_many(snapshot, &handle, None, &unscoped),
                                 Ok(_) | Err(rimz::address::TargetErr::Ambiguous { .. })
                             ) {
                                 key.1.to_string()

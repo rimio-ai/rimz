@@ -121,7 +121,7 @@ fn resolve_live_or_audit(
     runtime: &rimz::RuntimePaths,
     snapshot: &rimz::store::snapshot::SidebarSnapshot,
     reference: &str,
-    channel: Option<&str>,
+    channel: &rimz::address::AddressContext,
 ) -> Result<(AgentState, bool)> {
     let live_error =
         match super::resolve_agent_one_unhinted(Some(store), snapshot, reference, None, channel) {
