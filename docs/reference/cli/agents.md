@@ -556,7 +556,7 @@ When the agent's temp directory exists, `show` prints its host path (`tmp:`) and
 | Flag | Effect |
 | --- | --- |
 | `-n, --tail <N>` (alias `--last`) | Keep the last `N` entries; a thread keeps its opening message. |
-| `-f, --follow` | Print new entries as they land. Conflicts with `--all`. |
+| `-f, --follow` | Follow the view as [`rimz transcript -f`](./transcript.md#flags) does. Conflicts with `--all`. |
 | `--all` | Include earlier sessions. |
 | `--json` | Emit `{"entries": [...]}` with the [transcript entry fields](./transcript.md#json-output) and no `channel`, `focus`, or `archived_count`; with `--follow`, one entry per line. |
 

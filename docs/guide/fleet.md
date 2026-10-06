@@ -159,7 +159,7 @@ after your turn, add coverage for the expiry edge cases
 Added tests/auth/refresh_expiry.rs covering sliding and hard expiry.
 ```
 
-`-f` follows new lines as the turn writes them, and `--all` reaches back into the agent's earlier sessions.
+`-f` keeps following new lines across an agent restart, and `--all` reaches back into the agent's earlier sessions. The [logs reference](../reference/cli/agents.md#logs) covers ordering and tail selection.
 
 **Read what each turn cost.** `rimz agents history` joins the conversation's user turns to the provider's token and price records, so you can see which request consumed the session without leaving the agent view. `-n` keeps the newest rows and `--json` returns the same records to a script:
 
