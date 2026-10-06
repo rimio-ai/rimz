@@ -83,7 +83,7 @@ By default a view starts at the current live cohort: the earliest registration a
 ⋯ 12 earlier entries from a prior session (Fri, Sep 11 2026) — rimz transcript --all
 ```
 
-`--all` prints the earlier lines first, then a `Live · <when>` rule before the current cohort's lines. When nothing in scope is live, or every line predates the cohort, the whole scope prints without a rule.
+`--all` prints the earlier entries first, then a `Live · <when>` rule before the current cohort's entries. When nothing in scope is live, or every entry predates the cohort, the whole scope prints without a rule.
 
 The suggested command repeats the target, `-w`, and `--root` you supplied, shell-quoted for pasting. The note is withheld when `-n` drops any current-session entry, and while following.
 
