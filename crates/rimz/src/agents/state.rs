@@ -1562,6 +1562,16 @@ impl AgentState {
         }
     }
 
+    /// Displayed provider error label, falling back to the effective class words.
+    pub fn displayed_turn_error_label(&self) -> Option<String> {
+        self.displayed_turn_error().map(|(class, error)| {
+            error
+                .label
+                .clone()
+                .unwrap_or_else(|| class.words().to_owned())
+        })
+    }
+
     /// Join a stored context sidecar onto this row; every sidecar attach goes
     /// through here. A sidecar whose occupancy is the reading the latest
     /// completed compaction retired was measured before the close, so the

@@ -692,10 +692,12 @@ pub struct SidebarSubAgent {
     #[serde(default, skip_serializing_if = "is_false")]
     pub provider_native: bool,
     pub status: AgentStatus,
-    /// The running turn's shape (reasoning / acting), the child's own lifecycle
-    /// machine output.
+    /// The displayed running turn's shape (reasoning / acting).
     #[serde(default, skip_serializing_if = "turn_phase_is_idle")]
     pub phase: TurnPhase,
+    /// Raw displayed error label; collapsed to one line by the renderer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_error_label: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task: Option<String>,
     /// The `[subagents.profiles]` profile a pane-backed child launched as;
@@ -733,6 +735,10 @@ pub struct SidebarSubAgent {
 }
 
 impl SidebarSubAgent {
+    pub(crate) fn holds_parent_turn(&self) -> bool {
+        matches!(self.status, AgentStatus::Running | AgentStatus::Paused)
+    }
+
     pub(crate) fn context_gauge_percent(&self) -> Option<u8> {
         let SubAgentTokens::Window(used) = self.tokens? else {
             return None;

@@ -255,6 +255,13 @@ pub(in crate::store::snapshot) fn sub_agent_from_state(
     } else {
         None
     };
+    let (status, phase, turn_error_label) = if child.is_launched_child() && child.ended_at.is_none()
+    {
+        let (status, phase) = child.rowless_status();
+        (status, phase, child.displayed_turn_error_label())
+    } else {
+        (child.sleeping_over(child.status), child.phase, None)
+    };
     SidebarSubAgent {
         id: child.agent_id.to_string(),
         prior_turn,
@@ -265,8 +272,9 @@ pub(in crate::store::snapshot) fn sub_agent_from_state(
             .flatten()
             .filter(|name| !name.is_empty()),
         provider_native: child.is_provider_subagent(),
-        status: child.sleeping_over(child.status),
-        phase: child.phase,
+        status,
+        phase,
+        turn_error_label,
         task: child.task.clone(),
         profile: child.profile.clone(),
         model: child.model.clone(),

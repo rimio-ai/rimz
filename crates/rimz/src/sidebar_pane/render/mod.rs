@@ -421,7 +421,7 @@ fn row_pet_action(row: &SidebarRow) -> PetAction {
             && agent
                 .sub_agents
                 .iter()
-                .any(|child| child.status == AgentStatus::Running)
+                .any(|child| child.holds_parent_turn())
         {
             return PetAction::Waiting;
         }

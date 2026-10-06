@@ -21,6 +21,7 @@ use crate::{SpendTally, SpendWindow};
 fn sub_agent(parent: &str, index: usize) -> SidebarSubAgent {
     let now = super::fixed_now();
     SidebarSubAgent {
+        turn_error_label: None,
         id: format!("{parent}-sub-{index}"),
         prior_turn: false,
         name: "Explore".to_owned(),

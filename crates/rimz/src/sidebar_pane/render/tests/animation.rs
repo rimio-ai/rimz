@@ -783,6 +783,7 @@ fn selected_pet_action_follows_the_focused_card() {
         .expect("agent row")
         .sub_agents
         .push(crate::store::snapshot::SidebarSubAgent {
+            turn_error_label: None,
             id: "child-1".to_owned(),
             prior_turn: false,
             name: "Explore".to_owned(),

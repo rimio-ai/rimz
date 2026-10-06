@@ -3,6 +3,78 @@ use crate::agents::{PendingWait, PendingWaitTrigger};
 use crate::store::snapshot::SubAgentTokens;
 
 #[test]
+fn launched_child_projects_displayed_status_and_label() {
+    let mut child = child_state("root", "child", AgentStatus::Running, 5)
+        .paused_turn_error(0, "usage limit reached");
+    child.launch_depth = Some(1);
+    child.phase = TurnPhase::Reasoning;
+    let projected = sub_agent_from_state(&child, epoch(), false);
+    assert_eq!(projected.status, AgentStatus::Paused);
+    assert_eq!(projected.phase, TurnPhase::Idle);
+    assert_eq!(
+        projected.turn_error_label.as_deref(),
+        Some("usage limit reached")
+    );
+
+    child
+        .context
+        .as_mut()
+        .unwrap()
+        .turn_error
+        .as_mut()
+        .unwrap()
+        .label = None;
+    assert_eq!(
+        sub_agent_from_state(&child, epoch(), false)
+            .turn_error_label
+            .as_deref(),
+        Some("rate limit")
+    );
+    child.last_activity = epoch();
+    child
+        .context
+        .as_mut()
+        .unwrap()
+        .turn_error
+        .as_mut()
+        .unwrap()
+        .at = ago(1);
+    let projected = sub_agent_from_state(&child, epoch(), false);
+    assert_eq!(projected.status, AgentStatus::Running);
+    assert_eq!(projected.phase, TurnPhase::Reasoning);
+    assert_eq!(projected.turn_error_label, None);
+}
+
+#[test]
+fn paused_child_keeps_parent_delegating() {
+    let parent = agent("claude", "root", AgentStatus::Idle, 0).worktree("/repo/main");
+    let mut child = child_state("root", "child", AgentStatus::Running, 5)
+        .paused_turn_error(0, "usage limit reached");
+    child.launch_depth = Some(1);
+    let snapshot = room_with_agent_panes(vec![parent, child]);
+    let row = &snapshot.worktree_groups[0].rows[0];
+    assert_eq!(row.status(), Some(AgentStatus::Running));
+    assert_eq!(row.sub_agents()[0].status, AgentStatus::Paused);
+}
+
+#[test]
+fn native_and_ended_children_keep_raw_projection() {
+    let mut child = child_state("root", "child", AgentStatus::Running, 5)
+        .paused_turn_error(0, "usage limit reached");
+    child.phase = TurnPhase::Reasoning;
+    for ended in [false, true] {
+        if ended {
+            child.launch_depth = Some(1);
+            child.ended_at = Some(epoch());
+        }
+        let projected = sub_agent_from_state(&child, epoch(), false);
+        assert_eq!(projected.status, AgentStatus::Running);
+        assert_eq!(projected.phase, TurnPhase::Reasoning);
+        assert_eq!(projected.turn_error_label, None);
+    }
+}
+
+#[test]
 fn sub_agent_projection_carries_enrichment_and_freezes_finished_elapsed() {
     let now = epoch();
     let started = ago(100);

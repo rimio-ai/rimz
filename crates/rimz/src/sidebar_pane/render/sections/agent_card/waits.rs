@@ -115,7 +115,7 @@ fn entry(
     Entry {
         lead: Span::styled(lead, theme.styled(Component::WaitHeader, Modifier::empty())),
         kind: kind.to_owned(),
-        headline,
+        headline: headline.map(|headline| Span::styled(headline, theme.body())),
         right: since
             .map(|at| {
                 vec![Span::styled(

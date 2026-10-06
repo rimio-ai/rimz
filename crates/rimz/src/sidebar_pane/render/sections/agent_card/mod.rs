@@ -405,7 +405,12 @@ fn sub_agent_entry_lines(
             Entry {
                 lead,
                 kind: sub.name.clone(),
-                headline: detail.map(str::to_owned),
+                headline: sub
+                    .turn_error_label
+                    .as_deref()
+                    .and_then(crate::agents::single_line_description)
+                    .map(|label| Span::styled(label, theme.body().add_modifier(Modifier::ITALIC)))
+                    .or_else(|| detail.map(|detail| Span::styled(detail.to_owned(), theme.body()))),
                 right,
                 detail: detail_line,
             },
