@@ -240,7 +240,7 @@ you → @coder  queued  3m ago  msg_…
   Read plan.md when the planner finishes. · after @planner
 ```
 
-An unfiltered empty lane reports counts from other lanes, not their rows. These counts exclude archived messages and, unless `--system` is passed, system traffic. Queued and claimed messages count as not yet delivered; sent messages do not. The hint offers `rimz message list --all --status queued` when any are undelivered, otherwise `rimz message list --all`. A target or status filter keeps the scoped empty-state line, and JSON stays an array of the selected lane's rows. A row whose text is no longer retained and has no reason or condition shows `(text no longer kept)`. An invalid status lists all accepted status names.
+An unfiltered empty lane reports counts from other lanes, not their rows. These counts exclude archived messages and, unless `--system` is passed, system traffic. Only queued messages count as not yet delivered, so the number matches what `--status queued` lists. The hint offers `rimz message list --all --status queued` when any are undelivered, otherwise `rimz message list --all`. A target or status filter keeps the scoped empty-state line, and JSON stays an array of the selected lane's rows. A row whose text is no longer retained and has no reason or condition shows `(text no longer kept)`. An invalid status lists all accepted status names.
 
 The sender reads `you` for a user shell, the handle for an agent, `@rimz` for RimZ notices, and `rimz` for `--no-from` text. A handle drops `#channel` when the list is already scoped to that channel. A final message whose text was not retained shows its terminal reason instead. With `--all`, rows group under a `#channel` or `(main)` header, lanes with the newest message first.
 
