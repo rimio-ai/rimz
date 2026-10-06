@@ -52,6 +52,7 @@ use super::render as ui;
 
 mod add;
 mod condition;
+mod list;
 mod render;
 mod run_report;
 #[path = "run.rs"]
@@ -83,7 +84,7 @@ enum LoopSubcmd {
     /// Stop a task's active run, releasing its overlap lock.
     Stop(NameArgs),
     /// List configured tasks and whether their room is open.
-    List,
+    List(ListArgs),
     /// Hold a live loop dashboard open and repaint countdowns.
     Watch(WatchArgs),
     /// Show one task's trigger, next fire, and recent run forensics.
@@ -106,6 +107,16 @@ enum LoopSubcmd {
     Tick,
     /// Manage the machine-wide loop timer.
     Timer(TimerArgs),
+}
+
+#[derive(Debug, Args)]
+struct ListArgs {
+    /// Show tasks in every known room.
+    #[arg(long)]
+    all: bool,
+    /// Print structured, uncollapsed task rows.
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(Debug, Args)]
@@ -395,7 +406,7 @@ pub fn run(args: LoopArgs, globals: &GlobalFlags) -> Result<()> {
         LoopSubcmd::Enable(args) => add::enable(args, globals),
         LoopSubcmd::Disable(args) => add::disable(args, globals),
         LoopSubcmd::Stop(args) => stop::stop(&args.name, globals),
-        LoopSubcmd::List => render::list(globals),
+        LoopSubcmd::List(args) => list::run(args, globals),
         LoopSubcmd::Watch(args) => watch::watch(args, globals),
         LoopSubcmd::Show(args) => render::show(args, globals),
         LoopSubcmd::Logs(args) => render::logs(args, globals),

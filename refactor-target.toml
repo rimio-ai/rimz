@@ -487,7 +487,8 @@ path = "crates/rimz/src/harness"
 # Manual redemption shares its prepared preview and locked consume entry with the CLI (+3).
 # Rebirth pairs durable refill ends with a downward diag repair trace (an import, no surface).
 # Acting-run classification and folded history cross to the loop CLI (+5).
-surface-budget = 726
+# Room-only catalog loading filters before precedence for list and watch (+1).
+surface-budget = 727
 
 [[module]]
 path = "crates/rimz/src/ids.rs"

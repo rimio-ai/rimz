@@ -628,7 +628,7 @@ fn gc_reaps_instance_rows_without_an_action_and_keeps_user_rows() {
         .expect("loop list");
     let list = String::from_utf8_lossy(&list.stdout);
     assert!(
-        list.contains("actionless") && list.contains("<invalid>"),
+        list.contains("actionless") && list.contains("invalid:"),
         "{list}"
     );
     assert!(
