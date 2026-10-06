@@ -106,6 +106,9 @@ pub enum Assist {
         delivered: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         error: Option<String>,
+        /// This ping told the agent the keepalive maximum was reached.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        capped: bool,
     },
     IdleCompact {
         kind: AgentKind,
@@ -432,6 +435,7 @@ mod tests {
                     message_id: "msg_1".into(),
                     delivered: true,
                     error: None,
+                    capped: true,
                 },
             },
             restored(20),
@@ -497,6 +501,18 @@ mod tests {
             ),
             "{decoded:?}"
         );
+        let uncapped = serde_json::json!({
+            "at": "2026-06-02T12:00:00Z", "assist": "cache_keepalive", "kind": "claude",
+            "agent_id": "session-1", "idle_secs": 3540, "waits": 1, "message_id": "msg_1",
+            "delivered": true
+        });
+        let decoded =
+            serde_json::from_value::<AssistRecord>(uncapped.clone()).expect("pre-cap line");
+        assert!(
+            matches!(decoded.assist, Assist::CacheKeepalive { capped: false, .. }),
+            "{decoded:?}"
+        );
+        assert_eq!(serde_json::to_value(decoded).unwrap(), uncapped);
         let rootless = serde_json::json!({
             "at": "2026-06-02T12:00:00Z", "assist": "launch_retry", "kind": "codex",
             "label": "@otter", "attempt": 3, "exit_code": 1, "startup_ms": 900,

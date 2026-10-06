@@ -455,7 +455,8 @@ path = "crates/rimz/src/harness"
 # The producer tick calls the park detector (+1).
 # The public park_notice module itself also crosses the harness/CLI boundary (+1).
 # The loop start throttle crosses to the CLI as the `Turn` a launch reports through, the start preflight, and the held-run and readings lookups `loop show` renders, and the typed `ThrottleError` the preflight and admission return, plus the public `schedule::throttle` module itself (+10).
-surface-budget = 709
+# The keepalive helper reads the final-ping rule beside the shared eligibility recheck (+1).
+surface-budget = 710
 
 [[module]]
 path = "crates/rimz/src/ids.rs"

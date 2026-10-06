@@ -1952,7 +1952,11 @@ fn orphan_repair_records_no_end_while_the_run_pane_stays_open() {
 fn cache_keepalive_rechecks_and_terminalizes_a_miss_with_an_assist() {
     use crate::common::wait::{register_calling_agent, wait_ok};
     use rimz::harness::cache_keepalive::CacheKeepaliveRequest;
-    for blocked in [false, true] {
+    // The capped case's real request sits 220s before a keepalive turn that
+    // anchors the ping: under a 4m maximum a ping 1s after that turn would
+    // start at 221s and is allowed, and a helper 25s past the anchor (246s)
+    // delivers it as the last one.
+    for (blocked, capped) in [(false, false), (true, false), (false, true)] {
         let env = Env::new();
         env.install_agent_hooks("claude");
         register_calling_agent(&env);
@@ -1960,22 +1964,52 @@ fn cache_keepalive_rechecks_and_terminalizes_a_miss_with_an_assist() {
             &env,
             &["config", "set", "harness.prompt_cache_ttl.claude", "61s"],
         );
+        if capped {
+            wait_ok(
+                &env,
+                &["config", "set", "harness.cache_keepalive_max", "4m"],
+            );
+        }
         wait_ok(&env, &["wait", "--in", "5m"]);
         let store = env.store();
-        let anchor = jiff::Timestamp::now();
-        for (offset, signal) in [
-            (0, LifecycleSignal::TurnStarted { turn_id: None }),
+        let anchor = jiff::Timestamp::now() - Duration::from_secs(if capped { 25 } else { 0 });
+        let turn = |offset: i64, prompt: Option<&str>| {
             (
-                0,
+                offset,
+                prompt.map(str::to_owned),
+                LifecycleSignal::TurnStarted { turn_id: None },
+            )
+        };
+        let ended = |offset: i64| {
+            (
+                offset,
+                None,
                 LifecycleSignal::TurnEnded {
                     errored: false,
                     parked_on_background: false,
                     turn_id: None,
                 },
-            ),
-        ] {
+            )
+        };
+        let turns = if capped {
+            vec![
+                turn(-220, None),
+                ended(-220),
+                turn(
+                    0,
+                    Some(
+                        "Type: CACHE_KEEPALIVE\nFrom: @rimz\nContent:\nCache keepalive, no action needed.",
+                    ),
+                ),
+                ended(0),
+            ]
+        } else {
+            vec![turn(0, None), ended(0)]
+        };
+        for (offset, prompt, signal) in turns {
             let mut observation =
                 AgentLifecycleObservation::new(Some("provider-session".into()), signal);
+            observation.prompt = rimz::agents::SanitizedPrompt::new(prompt.as_deref());
             observation.pane_id = Some(PaneId::from_parts(MuxName::Zellij, TRACE_PANE));
             let mut event = EventEnvelope::agent_lifecycle(
                 env.workspace_id.clone(),
@@ -1984,7 +2018,7 @@ fn cache_keepalive_rechecks_and_terminalizes_a_miss_with_an_assist() {
                 "test",
                 &observation,
             );
-            event.timestamp = anchor + Duration::from_secs(offset);
+            event.timestamp = anchor + jiff::SignedDuration::from_secs(offset);
             store.append_event(&event).unwrap();
         }
         let session = rimz::workspace::record::read(&store.paths().workspace_record)
@@ -2084,6 +2118,14 @@ fn cache_keepalive_rechecks_and_terminalizes_a_miss_with_an_assist() {
             }
         );
         assert!(ping.text.contains("timer"));
+        assert_eq!(
+            ping.text.ends_with(
+                "\nKeepalive limit 4m reached: this is the last ping until your next turn."
+            ),
+            capped,
+            "{}",
+            ping.text
+        );
         assert_eq!(ping.gate, DeliveryGate::Done);
         let output = run_success(env.rimz().args(["stats", "--json"]), "assist stats");
         let stats: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
@@ -2095,6 +2137,7 @@ fn cache_keepalive_rechecks_and_terminalizes_a_miss_with_an_assist() {
             .expect("keepalive assist");
         assert_eq!(assist["delivered"], !blocked);
         assert_eq!(assist["waits"], 1);
+        assert_eq!(assist["capped"], capped);
         if blocked {
             assert!(
                 !store

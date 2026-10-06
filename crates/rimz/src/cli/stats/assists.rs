@@ -122,6 +122,7 @@ pub(super) enum AssistEvent {
         delivered: bool,
         #[serde(skip_serializing_if = "Option::is_none")]
         error: Option<String>,
+        capped: bool,
     },
     #[serde(rename = "idle_compact")]
     IdleCompact {
@@ -403,6 +404,7 @@ impl AssistEvent {
                 message_id,
                 delivered,
                 error,
+                capped,
             } => Self::CacheKeepalive {
                 at: record.at,
                 kind,
@@ -413,6 +415,7 @@ impl AssistEvent {
                 message_id,
                 delivered,
                 error,
+                capped,
             },
             Assist::IdleStop {
                 kind,
@@ -783,6 +786,7 @@ pub(super) fn benefit_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> St
             idle_secs,
             waits,
             error,
+            capped,
             ..
         } => {
             let agent = label.as_deref().unwrap_or(kind.as_str());
@@ -792,7 +796,10 @@ pub(super) fn benefit_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> St
                 .map(|error| format!(" ({})", first_line(error)))
                 .unwrap_or_default();
             let noun = if *waits == 1 { "wait" } else { "waits" };
-            format!("{time} ◷ {agent} cache keepalive after {idle} — {waits} {noun} pending{error}")
+            let limit = if *capped { ", limit reached" } else { "" };
+            format!(
+                "{time} ◷ {agent} cache keepalive after {idle} — {waits} {noun} pending{error}{limit}"
+            )
         }
         AssistEvent::IdleStop {
             label,
@@ -1367,21 +1374,36 @@ mod tests {
 
     #[test]
     fn keepalive_stats_count_deliveries_and_preserve_failures() {
-        let records = [true, false]
+        let records = [(true, false), (false, false), (true, true)]
             .into_iter()
-            .map(|delivered| {
-                serde_json::from_value::<AssistRecord>(serde_json::json!({
-                "at": "2026-01-01T00:00:00Z", "assist": "cache_keepalive",
-                "kind": "claude", "agent_id": "session-1", "label": "@coder",
-                "idle_secs": 3540, "waits": 2, "message_id": "msg_1",
-                "delivered": delivered, "error": if delivered { None } else { Some("gate closed") }
-            })).expect("keepalive assist wire format")
+            .map(|(delivered, capped)| {
+                let mut record = serde_json::json!({
+                    "at": "2026-01-01T00:00:00Z", "assist": "cache_keepalive",
+                    "kind": "claude", "agent_id": "session-1", "label": "@coder",
+                    "idle_secs": 3540, "waits": 2, "message_id": "msg_1",
+                    "delivered": delivered, "error": if delivered { None } else { Some("gate closed") }
+                });
+                if capped {
+                    record["capped"] = serde_json::json!(true);
+                }
+                serde_json::from_value::<AssistRecord>(record).expect("keepalive assist wire format")
             })
             .collect();
         let stats = AssistStats::from_records("all", records);
         let json = serde_json::to_value(&stats).unwrap();
-        assert_eq!(json["rollup"]["keepalives"], 1);
+        assert_eq!(
+            json["rollup"]["keepalives"], 2,
+            "a capped delivery still counts"
+        );
         assert_eq!(json["events"][0]["assist"], "cache_keepalive");
+        let capped = json["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|event| event["capped"].clone())
+            .collect::<Vec<_>>();
+        assert_eq!(capped.iter().filter(|value| **value == true).count(), 1);
+        assert_eq!(capped.iter().filter(|value| **value == false).count(), 2);
         assert!(
             category_rows(&stats.rollup)
                 .join(" ")
@@ -1396,6 +1418,7 @@ mod tests {
         assert!(lines.contains("@coder cache keepalive after 59m — 2 waits pending"));
         assert!(lines.contains("message msg_1 · delivered true"));
         assert!(lines.contains("gate closed"));
+        assert_eq!(lines.matches("2 waits pending, limit reached").count(), 1);
     }
 
     #[test]

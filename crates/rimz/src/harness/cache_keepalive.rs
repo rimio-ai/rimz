@@ -10,7 +10,7 @@ use crate::agents::{AgentState, AgentStatus, PendingWaitTrigger};
 use crate::config::HarnessConfig;
 use crate::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
 use crate::store::snapshot::SidebarSnapshot;
-use crate::utils::time::format_duration_coarse;
+use crate::utils::time::{format_duration_coarse, format_duration_compact};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CacheKeepaliveRequest {
@@ -42,7 +42,8 @@ impl CacheKeepaliveRequest {
     }
 }
 
-pub fn prompt(agent: &AgentState, now: Timestamp) -> String {
+/// The ping text; `limit` is the reached maximum when this is the run's last ping.
+pub fn prompt(agent: &AgentState, now: Timestamp, limit: Option<Duration>) -> String {
     let mut text = "Cache keepalive, no action needed. Waiting on:".to_owned();
     for wait in &agent.pending_waits {
         let trigger = &wait.trigger;
@@ -98,7 +99,36 @@ pub fn prompt(agent: &AgentState, now: Timestamp) -> String {
         }
         text.push_str(&format!("\n- {}: {}", wait.name, facts.join(", ")));
     }
+    if let Some(limit) = limit {
+        text.push_str(&format!(
+            "\nKeepalive limit {} reached: this is the last ping until your next turn.",
+            format_duration_compact(limit)
+        ));
+    }
     text
+}
+
+/// The configured maximum when a ping delivered at `now` is the last of its run: the next one would start at or past the cap.
+pub fn final_ping(agent: &AgentState, config: &HarnessConfig, now: Timestamp) -> Option<Duration> {
+    let max = config.cache_keepalive_max?;
+    let fire_after = config
+        .prompt_cache_ttl(&agent.kind)?
+        .checked_sub(crate::config::PROMPT_CACHE_MARGIN)?;
+    let since = agent.keepalive_since.or(agent.last_request_at())?;
+    next_reaches_cap(since, now, fire_after, max).then_some(max)
+}
+
+/// Whether a ping one `fire_after` past `last_ping` would start at or past `max` after `since`; a negative span counts as reached.
+fn next_reaches_cap(
+    since: Timestamp,
+    last_ping: Timestamp,
+    fire_after: Duration,
+    max: Duration,
+) -> bool {
+    Duration::try_from(last_ping.duration_since(since))
+        .ok()
+        .and_then(|span| span.checked_add(fire_after))
+        .is_none_or(|next| next >= max)
 }
 
 fn keepalive_agents_with(
@@ -193,7 +223,19 @@ fn should_keepalive(agent: &AgentState, config: &HarnessConfig, now: Timestamp) 
     let Ok(idle) = Duration::try_from(now.duration_since(anchor)) else {
         return false;
     };
-    idle >= fire_after && idle < ttl
+    idle >= fire_after && idle < ttl && !run_reached_cap(agent, config, fire_after)
+}
+
+/// Whether the ping after the open keepalive run's last one would start at or past the cap. Reads only stamps, so the producer and the helper's recheck agree.
+fn run_reached_cap(agent: &AgentState, config: &HarnessConfig, fire_after: Duration) -> bool {
+    let (Some(max), Some(since), Some(last_ping)) = (
+        config.cache_keepalive_max,
+        agent.keepalive_since,
+        agent.turn_started_at,
+    ) else {
+        return false;
+    };
+    next_reaches_cap(since, last_ping, fire_after, max)
 }
 
 #[cfg(test)]
@@ -229,7 +271,66 @@ mod tests {
         agent.turn_started_at = Some(ts(3545));
         agent.turn_ended_at = Some(ts(3550));
         assert!(!should_keepalive(&agent, &config, ts(3550)));
+        assert_eq!(agent.keepalive_since, None);
         assert!(should_keepalive(&agent, &config, ts(7085)));
+        agent.keepalive_since = Some(ts(0));
+        assert!(should_keepalive(&agent, &config, ts(7085)), "under the cap");
+    }
+
+    fn pinged_at(since: i64, ping: i64) -> AgentState {
+        let mut agent = sleeping();
+        agent.keepalive_since = Some(ts(since));
+        agent.turn_started_at = Some(ts(ping));
+        agent.turn_ended_at = Some(ts(ping + 5));
+        agent
+    }
+
+    #[test]
+    fn keepalive_cap_refuses_a_ping_that_would_start_at_the_maximum() {
+        let config = HarnessConfig::default();
+        let cap = 6 * 3600;
+        let allowed = pinged_at(0, cap - 3540 - 1);
+        assert!(should_keepalive(&allowed, &config, ts(cap - 1)));
+        let capped = pinged_at(0, cap - 3540);
+        assert!(!should_keepalive(&capped, &config, ts(cap)));
+        assert!(
+            !should_keepalive(&pinged_at(100, 50), &config, ts(3590)),
+            "a negative span is refused"
+        );
+        let mut uncapped = config.clone();
+        uncapped.cache_keepalive_max = None;
+        assert!(should_keepalive(&capped, &uncapped, ts(cap)));
+        let mut first = capped;
+        first.keepalive_since = None;
+        assert!(
+            should_keepalive(&first, &config, ts(cap)),
+            "the first ping of a sleep is never capped"
+        );
+    }
+
+    #[test]
+    fn final_ping_is_the_one_whose_successor_would_reach_the_cap() {
+        let config = HarnessConfig::default();
+        let max = Some(Duration::from_secs(6 * 3600));
+        let cap = 6 * 3600;
+        let fresh = sleeping();
+        assert_eq!(final_ping(&fresh, &config, ts(cap - 3540 - 1)), None);
+        assert_eq!(
+            final_ping(&fresh, &config, ts(cap - 3540)),
+            max,
+            "falls back to the last request"
+        );
+        let run = pinged_at(100, 3640);
+        assert_eq!(final_ping(&run, &config, ts(cap - 3540)), None);
+        assert_eq!(final_ping(&run, &config, ts(cap - 3440)), max);
+        let mut uncapped = config.clone();
+        uncapped.cache_keepalive_max = None;
+        assert_eq!(final_ping(&run, &uncapped, ts(cap)), None);
+        let after_final = pinged_at(100, cap - 3440);
+        assert!(
+            !should_keepalive(&after_final, &config, ts(cap + 100)),
+            "no ping follows a final one"
+        );
     }
 
     #[test]
@@ -343,9 +444,13 @@ mod tests {
             },
             armed_at: Some(ts(3180)),
         });
+        let text = "Cache keepalive, no action needed. Waiting on:\n- calm-fox: 42m, active 3m ago, deadline in 18m\n- bright-owl: 42m, completed, reporting\n- forge#feat-x: 3h, stage Review\n- gate: cargo xtask gate, 58m\n- ci: signal pr.checks\n- nap: timer in 12m, 5m";
+        assert_eq!(prompt(&agent, ts(3485), None), text);
         assert_eq!(
-            prompt(&agent, ts(3485)),
-            "Cache keepalive, no action needed. Waiting on:\n- calm-fox: 42m, active 3m ago, deadline in 18m\n- bright-owl: 42m, completed, reporting\n- forge#feat-x: 3h, stage Review\n- gate: cargo xtask gate, 58m\n- ci: signal pr.checks\n- nap: timer in 12m, 5m"
+            prompt(&agent, ts(3485), Some(Duration::from_secs(90 * 60))),
+            format!(
+                "{text}\nKeepalive limit 90m reached: this is the last ping until your next turn."
+            )
         );
     }
 
