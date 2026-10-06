@@ -336,7 +336,7 @@ fn split_managed_pane(
         placement: SplitPlacement::Directional(direction),
         focus: false,
     }) {
-        Ok(()) => true,
+        Ok(_) => true,
         Err(err) => {
             tracing::warn!(
                 session = %session_name,

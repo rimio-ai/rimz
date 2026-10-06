@@ -302,6 +302,7 @@ fn open_attempt_pane(
                 placement: SplitPlacement::Directional(direction),
                 focus: false,
             })
+            .map(|_| ())
             .map_err(anyhow::Error::from),
         RunPlacement::SubagentZone => match supervised::pane::lock_subagent_zone(&prepared.store) {
             Ok(guard) => {

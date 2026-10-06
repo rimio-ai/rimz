@@ -1074,7 +1074,7 @@ impl MuxBackend for ZellijBackend {
         Ok(parse_client_view(&output.stdout))
     }
 
-    fn split_pane(&self, opts: SplitPaneOptions) -> Result<()> {
+    fn split_pane(&self, opts: SplitPaneOptions) -> Result<Option<PaneId>> {
         let target = opts.target;
         // Resolved once, before anything is spawned: the split and both of its
         // focus helpers address this one session.
@@ -1174,14 +1174,16 @@ impl MuxBackend for ZellijBackend {
             }
         }
         let spawned = spec.run()?;
+        let created = super::raw_pane::parse_new_pane_id(&String::from_utf8_lossy(&spawned.stdout))
+            .map(PaneId::from);
         if focus_spawned {
             // The pane is running, so a lost jump never fails the split. The
             // jump is bare: a focus intent naming a pane no renderer has
             // observed yet is invalidated, and a renderer that clears it
             // before dispatch cancels the jump.
-            match super::raw_pane::parse_new_pane_id(&String::from_utf8_lossy(&spawned.stdout)) {
+            match &created {
                 Some(created) => {
-                    if let Err(err) = self.focus_pane(&PaneId::from(created), Some(&session)) {
+                    if let Err(err) = self.focus_pane(created, Some(&session)) {
                         tracing::debug!(error = %err, "split opened; focusing it failed");
                     }
                 }
@@ -1198,7 +1200,7 @@ impl MuxBackend for ZellijBackend {
                 restore.as_ref(),
             );
         }
-        Ok(())
+        Ok(created)
     }
 
     fn append_companion_pane(&self, mut opts: SplitPaneOptions) -> Result<CompanionPaneAppend> {

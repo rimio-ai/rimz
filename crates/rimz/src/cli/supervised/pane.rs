@@ -284,7 +284,7 @@ pub(in crate::cli) fn split_into_subagent_zone(
             placement,
             ..SplitPaneOptions::from_command(pane, cwd)
         }) {
-        Ok(()) => SubagentZoneOpen::Opened,
+        Ok(_) => SubagentZoneOpen::Opened,
         Err(err) => {
             tracing::debug!(
                 session = %session_name,

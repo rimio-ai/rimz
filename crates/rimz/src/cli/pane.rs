@@ -711,6 +711,7 @@ fn split(backend: &dyn MuxBackend, globals: &GlobalFlags) -> Result<()> {
             placement: SplitPlacement::Directional(direction),
             focus: true,
         })
+        .map(|_| ())
         .map_err(Into::into)
 }
 
