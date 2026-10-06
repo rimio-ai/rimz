@@ -232,6 +232,8 @@ x hooks feed --source claude < child-stop.json
 
 Each feed exits 0 with no output.
 
+A payload held in a zsh variable goes to the feed through `printf '%s\n' "$payload" |`, not `echo`: zsh's `echo` expands the `\n` escapes inside JSON strings and the feed reads corrupt JSON.
+
 **Observe.** Read the child three ways, running and again after the stop:
 
 ```sh
