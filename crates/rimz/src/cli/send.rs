@@ -25,7 +25,8 @@ pub(crate) struct SendFlags {
     /// Type the text but leave it unsubmitted — no Enter after it lands.
     #[arg(long)]
     pub(crate) no_enter: bool,
-    /// Send even when the agent is Waiting.
+    /// Type the text into the pane even while a prompt is open there. The prompt
+    /// receives the keystrokes.
     #[arg(long)]
     pub(crate) force: bool,
     /// Fan out to every agent the address matches. Without it, a selector that
