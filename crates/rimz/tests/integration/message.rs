@@ -2529,12 +2529,8 @@ fn parent_message_to_resumed_child_waits_for_installed_registration() {
         );
         std::thread::sleep(Duration::from_millis(10));
     }
-    let submitted = format!(
-        "Type: AGENT_MESSAGE\nFrom: {}\nContent:\n{}",
-        message.sender.render(),
-        message.text
-    );
-    assert_text_then_enter(&trace, &submitted);
+    let submitted = "Type: AGENT_MESSAGE\nFrom: @claude\nContent:\nfollow up";
+    assert_text_then_enter(&trace, submitted);
     let started = env.run_installed_hook_in_pane(
         "claude",
         &json!({"hook_event_name":"UserPromptSubmit", "session_id":"child", "prompt":submitted})
@@ -2952,7 +2948,7 @@ fn message_wait_gathers_fanout_replies_in_completion_order() {
 fn agent_broadcast_waits_for_peers_without_waiting_on_itself() {
     let env = Env::new();
     env.install_agent_hooks("claude");
-    let [caller, peer] = ReplyAgentFixture::pair(&env, "agent-gather");
+    let [caller, peer] = ReplyAgentFixture::pair_in_channel(&env, "agent-gather");
     caller.stamp_launch_identity(&env, "launch-agent-gather", "planner");
 
     let child = traced_rimz(&env, "zellij-agent-wait-gather-trace.log")
@@ -3730,7 +3726,7 @@ fn steer_formats_human_and_agent_senders_and_no_from_stays_verbatim() {
 #[test]
 fn agent_broadcast_steer_with_no_from_writes_only_to_the_peer() {
     let env = Env::new();
-    let [caller, _peer] = ReplyAgentFixture::pair(&env, "agent-steer");
+    let [caller, _peer] = ReplyAgentFixture::pair_in_channel(&env, "agent-steer");
     caller.stamp_launch_identity(&env, "launch-agent-steer", "planner");
     let trace_log = env.project_root.join("zellij-agent-steer-trace.log");
 
@@ -7020,6 +7016,19 @@ impl ReplyAgentFixture {
 
     fn pair(env: &Env, scenario: &str) -> [Self; 2] {
         Self::pair_named(env, scenario, ["first", "second"])
+    }
+
+    fn pair_in_channel(env: &Env, scenario: &str) -> [Self; 2] {
+        [("first", "3"), ("second", "4")].map(|(side, pane)| {
+            Self::register(
+                env,
+                format!("sess-wait-{scenario}-{side}"),
+                format!("feature-{scenario}"),
+                env.runtime_root
+                    .join(format!("message-wait-{scenario}-{side}.jsonl")),
+                pane,
+            )
+        })
     }
 
     fn pair_named(env: &Env, scenario: &str, sides: [&str; 2]) -> [Self; 2] {

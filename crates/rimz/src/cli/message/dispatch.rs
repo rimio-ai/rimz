@@ -207,7 +207,7 @@ fn recipient_miss(
             miss.target,
             miss.worktree,
             miss.channel_flag,
-            miss.current_channel,
+            ctx.current_channel(),
             miss.text,
             globals,
         )

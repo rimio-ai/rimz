@@ -261,18 +261,71 @@ fn scope_facts<'a>(
     }
 }
 
+enum CurrentChannel {
+    Named(String),
+    Derived(String),
+    Unscoped,
+}
+
+impl CurrentChannel {
+    fn as_deref(&self) -> Option<&str> {
+        match self {
+            Self::Named(name) | Self::Derived(name) => Some(name),
+            Self::Unscoped => None,
+        }
+    }
+
+    fn into_name(self) -> Option<String> {
+        match self {
+            Self::Named(name) | Self::Derived(name) => Some(name),
+            Self::Unscoped => None,
+        }
+    }
+}
+
 /// The current channel a command runs in: an explicit named lane from
-/// `RIMZ_CHANNEL`, else the worktree directory basename when we are genuinely
-/// inside a separate worktree. A bare directory workspace (root == worktree)
-/// yields `None` for humans; RimZ-launched team members carry `RIMZ_CHANNEL`,
-/// so their calls scope to the stamped team lane.
-pub(crate) fn current_channel(workspace: &rimz::ResolvedWorkspace) -> Option<String> {
-    if let Ok(channel) = std::env::var(rimz::workspace::ENV_CHANNEL)
-        && !channel.is_empty()
+/// `RIMZ_CHANNEL`, else the caller's stored card channel, else the worktree
+/// rule. A human shell at the project root has no current channel. The value
+/// keeps its provenance, so create-on-miss launches in place on a derived one.
+fn current_channel(
+    workspace: &rimz::ResolvedWorkspace,
+    store: Option<&rimz::Store>,
+) -> CurrentChannel {
+    current_channel_with(
+        workspace,
+        std::env::var(rimz::workspace::ENV_CHANNEL).ok(),
+        || {
+            let store = store?;
+            let caller = send::resolve_caller(store).ok()??;
+            let rows = store
+                .runtime_projection(rimz::RuntimeScope::Audit)
+                .ok()?
+                .agents;
+            Some((caller, rows))
+        },
+    )
+}
+
+fn current_channel_with(
+    workspace: &rimz::ResolvedWorkspace,
+    explicit: Option<String>,
+    caller: impl FnOnce() -> Option<(rimz::harness::ancestry::CallerIdentity, Vec<AgentState>)>,
+) -> CurrentChannel {
+    if let Some(channel) = explicit.filter(|channel| !channel.is_empty()) {
+        return CurrentChannel::Named(channel);
+    }
+    if let Some((caller, rows)) = caller()
+        && let Ok(agent) = rimz::harness::ancestry::resolve_launch_caller(&rows, &caller)
+        && let Some(channel) = agent.channel()
     {
-        return Some(channel);
+        return if agent.channel.is_some() {
+            CurrentChannel::Named(channel)
+        } else {
+            CurrentChannel::Derived(channel)
+        };
     }
     directory_channel(workspace, &workspace.worktree_root)
+        .map_or(CurrentChannel::Unscoped, CurrentChannel::Derived)
 }
 
 fn directory_channel(workspace: &rimz::ResolvedWorkspace, cwd: &Path) -> Option<String> {

@@ -1201,16 +1201,17 @@ fn parse_pr(raw: &str) -> std::result::Result<rimz::forge::PrTarget, String> {
 /// (or creates) a worktree when it differs from the current one. An instance
 /// handle (pet name, ordinal, session id) or a pane/`@all` address refuses,
 /// because it names something that must already exist.
-pub(crate) fn create_on_miss(
+pub(super) fn create_on_miss(
     target: &str,
     worktree_flag: Option<&str>,
     channel_flag: Option<&str>,
-    current_channel: Option<&str>,
+    current_channel: &super::CurrentChannel,
     text: &str,
     globals: &GlobalFlags,
 ) -> Result<()> {
     let channel_filter = worktree_flag.or(channel_flag);
-    let Some(create) = rimz::address::create_mention(target, channel_filter, current_channel)?
+    let Some(create) =
+        rimz::address::create_mention(target, channel_filter, current_channel.as_deref())?
     else {
         bail!(
             "`{target}` cannot create an agent; address a kind or profile like `@codex` or `@planner`"
@@ -1230,34 +1231,51 @@ pub(crate) fn create_on_miss(
             "`{target}` names a specific agent that is not running; create one with `@<kind>` or a configured profile (`rimz agents profiles`)"
         );
     }
+    launch_layout(
+        create_launch_args(
+            create,
+            target,
+            worktree_flag,
+            channel_flag,
+            current_channel,
+            text,
+        ),
+        globals,
+        false,
+    )
+}
+
+fn create_launch_args(
+    create: rimz::address::CreateMention,
+    target: &str,
+    worktree_flag: Option<&str>,
+    channel_flag: Option<&str>,
+    current_channel: &super::CurrentChannel,
+    text: &str,
+) -> AgentsArgs {
     // `--worktree` keeps the historical worktree create-on-miss path. `--channel`
     // and inline `#name` launch into a named lane.
     let inline_named_channel = target
         .split_once('#')
         .is_some_and(|(_, channel)| rimz::channel::valid_name(channel));
-    let current_named = std::env::var(rimz::workspace::ENV_CHANNEL).ok();
     let named = channel_flag.is_some()
         || (worktree_flag.is_none() && inline_named_channel)
         || create
             .channel
             .as_deref()
-            .is_some_and(|channel| current_named.as_deref() == Some(channel));
+            .is_some_and(|channel| matches!(current_channel, super::CurrentChannel::Named(current) if current == channel));
     let (worktree, channel) = if named {
         (None, create.channel)
     } else {
         (
             create
                 .channel
-                .filter(|channel| Some(channel.as_str()) != current_channel),
+                .filter(|channel| Some(channel.as_str()) != current_channel.as_deref()),
             None,
         )
     };
     let prompt = (!text.trim().is_empty()).then(|| text.to_owned());
-    launch_layout(
-        AgentsArgs::for_create(create.selector, prompt, worktree, channel),
-        globals,
-        false,
-    )
+    AgentsArgs::for_create(create.selector, prompt, worktree, channel)
 }
 
 /// Whether `selector` names a launchable *type* handle: a known agent kind

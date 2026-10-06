@@ -191,6 +191,54 @@ fn workspace(
     }
 }
 
+#[test]
+fn current_channel_uses_callers_card_before_worktree() {
+    let root = workspace("/repo", "/repo", None);
+    let worktree = workspace("/repo", "/repo-worktrees/other", Some("other"));
+    let mut agent = rimz::testkit::agent_state("claude", "caller", jiff::Timestamp::UNIX_EPOCH);
+    agent.channel = Some("card".to_owned());
+    let caller = rimz::harness::ancestry::CallerIdentity {
+        kind: agent.kind.clone(),
+        launch_id: Some(agent.agent_id.clone()),
+        pane_id: None,
+        name: None,
+        profile: None,
+        role: None,
+    };
+    for workspace in [&root, &worktree] {
+        for ended in [false, true] {
+            agent.ended_at = ended.then_some(jiff::Timestamp::UNIX_EPOCH);
+            assert_eq!(
+                current_channel_with(workspace, None, || Some((
+                    caller.clone(),
+                    vec![agent.clone()]
+                )))
+                .into_name(),
+                Some("card".to_owned()),
+            );
+        }
+    }
+    assert_eq!(
+        current_channel_with(&root, Some("explicit".to_owned()), || panic!(
+            "explicit channel needs no lookup"
+        ))
+        .into_name(),
+        Some("explicit".to_owned())
+    );
+    assert_eq!(current_channel_with(&root, None, || None).into_name(), None);
+    assert_eq!(
+        current_channel_with(&worktree, None, || Some((caller.clone(), vec![]))).into_name(),
+        Some("other".to_owned())
+    );
+    agent.channel = None;
+    agent.worktree_path = Some("/elsewhere/own-card".to_owned());
+    assert_eq!(
+        current_channel_with(&root, Some(String::new()), || Some((caller, vec![agent])))
+            .into_name(),
+        Some("own-card".to_owned())
+    );
+}
+
 fn workspace_with_roots(room: &str, cwd: Option<&str>) -> rimz::ResolvedWorkspace {
     let project_root = PathBuf::from(room);
     rimz::ResolvedWorkspace {

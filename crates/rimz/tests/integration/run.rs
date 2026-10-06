@@ -1436,7 +1436,7 @@ fn assert_subagent_checkout_with_login(
             Some(&PaneId::from_parts(MuxName::Zellij, "terminal_3"))
         );
         let output = env.rimz()
-            .args(["--mux", "zellij", "agents", "restart", &format!("@{}", child.name.as_deref().unwrap())])
+            .args(["--mux", "zellij", "agents", "restart", &format!("@{}#{}", child.name.as_deref().unwrap(), child.channel().unwrap())])
             .envs(command.get_envs().filter_map(|(key, value)| value.map(|value| (key, value))))
             .env("RIMZ_TEST_ZELLIJ_LIST_PANES", r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"rimz-sidebar"},{"id":2,"is_plugin":false,"tab_id":1,"title":"sh"},{"id":3,"is_plugin":false,"tab_id":1,"title":"codex"}]"#)
             .bounded_output().unwrap();

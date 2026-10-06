@@ -266,6 +266,7 @@ path = "crates/rimz/src/cli"
 # `main` maps the scenes' shared usage error to exit 2 (+1).
 # The `accounts use` line is built once for both commands' switch hints (+1).
 # The position's standing and its in-room check serve providers and accounts list (+1).
+# Ctx shares cached channel provenance with create-on-miss; current_channel stays CLI-private.
 surface-budget = 32
 
 [[module]]

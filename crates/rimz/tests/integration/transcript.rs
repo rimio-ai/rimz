@@ -68,6 +68,50 @@ fn agents_show_ambiguity_excludes_ended_matches() {
 }
 
 #[test]
+fn agents_show_from_main_checkout_uses_callers_channel() {
+    let env = Env::new();
+    let store = env.store();
+    for (n, role, channel) in [(0, "caller", "a"), (1, "peer", "a"), (2, "peer", "b")] {
+        let mut observation = rimz::agents::AgentLifecycleObservation::new(
+            Some(format!("session-{n}").into()),
+            rimz::agents::LifecycleSignal::Registered,
+        );
+        observation.launch.role = Some(role.to_owned());
+        observation.launch.channel = Some(channel.to_owned());
+        observation.agent_pid = Some(env.agent_owner_pid());
+        observation.pane_id = Some(rimz::ids::PaneId::from_parts(
+            rimz::ids::MuxName::Zellij,
+            format!("terminal_{n}"),
+        ));
+        store
+            .append_event(&rimz::EventEnvelope::agent_lifecycle(
+                env.workspace_id.clone(),
+                "session",
+                "claude",
+                "SessionStart",
+                &observation,
+            ))
+            .unwrap();
+    }
+    assert_eq!(store.snapshot_cached().unwrap().agents.len(), 3);
+    let result = env
+        .rimz()
+        .args(["agents", "show", "@peer", "--json"])
+        .env("RIMZ_AGENT_KIND", "claude")
+        .env("RIMZ_AGENT_ID", "session-0")
+        .env_remove("RIMZ_CHANNEL")
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+    assert_eq!(json["agent"]["id"], "session-1");
+}
+
+#[test]
 fn transcript_renders_durable_turns_asks_answers_and_channels() {
     let env = Env::new();
     if env.skip_if_sandboxed() {

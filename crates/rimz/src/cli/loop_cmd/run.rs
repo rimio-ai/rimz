@@ -488,7 +488,7 @@ fn execute_prepared_delivery(
 ) -> Result<rimz::harness::schedule::runner::TaskFireEffect> {
     let workspace = WorkspaceResolver::resolve_participant(".", Some(prepared.root))?;
     let store = crate::cli::open_store(&workspace)?;
-    let channel = crate::cli::current_channel(&workspace);
+    let channel = crate::cli::current_channel(&workspace, Some(&store));
     let sender = rimz::store::message::MessageSender::Harness {
         notice: match prepared.intent {
             rimz::harness::schedule::runner::DeliveryIntent::Signal => {
@@ -520,7 +520,7 @@ fn execute_prepared_delivery(
             target: format!("@{}", prepared.target.session),
             text: prepared.prompt,
             target_scope: None,
-            current_channel: channel,
+            current_channel: channel.into_name(),
             caller: None,
             sender,
             automated: true,

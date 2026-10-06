@@ -47,7 +47,7 @@ fn collect_show_report(
         runtime,
         snapshot,
         reference,
-        crate::cli::current_channel(workspace).as_deref(),
+        crate::cli::current_channel(workspace, Some(store)).as_deref(),
     );
     let (agent, stale, deferred_error) = match agent_result {
         Ok((agent, live)) => (Some(agent), !live, None),
