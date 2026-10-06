@@ -895,13 +895,15 @@ fn scoped_tasks(args: ScopeArgs, globals: &GlobalFlags) -> Result<Vec<(String, L
             .map(|(name, task)| (name.clone(), task.clone()))
             .collect());
     }
-    let name = args.name.unwrap_or_default();
-    let task = catalog
-        .visible()
-        .get(&name)
-        .cloned()
-        .ok_or_else(|| anyhow::anyhow!("no loop task named `{name}`; see `rimz loop list`"))?;
-    Ok(vec![(name, task)])
+    args.names
+        .into_iter()
+        .map(|name| {
+            let task = catalog.visible().get(&name).cloned().ok_or_else(|| {
+                anyhow::anyhow!("no loop task named `{name}`; see `rimz loop list`")
+            })?;
+            Ok((name, task))
+        })
+        .collect()
 }
 
 fn resolve_delivery_target(

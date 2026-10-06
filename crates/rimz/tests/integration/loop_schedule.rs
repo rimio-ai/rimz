@@ -4849,6 +4849,64 @@ fn loop_task_storage_policy_and_manual_fire_preserve_one_shots() {
 }
 
 #[test]
+fn loop_multi_name_enable_disable_resolves_before_writing() {
+    let env = Env::new();
+    for name in ["first", "second"] {
+        loop_ok(
+            &env,
+            &["loop", "add", name, "--check", "true", "--every", "15m"],
+        );
+    }
+    for verb in ["disable", "enable"] {
+        let before = read_loop_arming(&env);
+        let (out, error) = loop_fail(&env, &["loop", verb, "first", "missing"]);
+        assert!(
+            error.contains("no loop task named `missing`; see `rimz loop list`"),
+            "{error}"
+        );
+        assert!(out.is_empty(), "{out}");
+        assert_eq!(read_loop_arming(&env), before);
+        let output = loop_ok(&env, &["loop", verb, "first", "second"]);
+        for name in ["first", "second"] {
+            assert!(
+                output.contains(&format!("loop `{name}`: {verb}d")),
+                "{output}"
+            );
+            assert_eq!(
+                read_loop_arming(&env)[&machine_task_key(name)].enabled,
+                verb == "enable"
+            );
+        }
+        loop_fail(&env, &["loop", verb, "first", "--all"]);
+        loop_fail(&env, &["loop", verb]);
+    }
+}
+
+#[test]
+fn loop_multi_name_remove_reports_each_outcome() {
+    let env = Env::new();
+    for name in ["first", "second"] {
+        loop_ok(
+            &env,
+            &["loop", "add", name, "--check", "true", "--every", "15m"],
+        );
+    }
+    let output = env
+        .rimz()
+        .args(["loop", "remove", "first", "missing", "second", "first"])
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        text,
+        "removed loop task `first`\nno loop task named `missing`\nremoved loop task `second`\nno loop task named `first`\n"
+    );
+    assert!(output.status.success());
+    assert!(loop_ok(&env, &["loop", "list"]).contains("no loop tasks"));
+    loop_fail(&env, &["loop", "remove"]);
+}
+
+#[test]
 fn loop_enable_disable_pause_workflow() {
     let env = Env::new();
     loop_ok(
