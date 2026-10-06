@@ -22,6 +22,18 @@ struct AgentsHarness {
 }
 
 #[test]
+fn logs_last_and_tail_are_aliases() {
+    for flag in ["--last", "--tail"] {
+        let parsed = AgentsHarness::try_parse_from(["agents", "logs", "@coder", flag, "2"]);
+        assert!(parsed.is_ok(), "{parsed:?}");
+        assert!(matches!(
+            parsed.unwrap().args.command,
+            Some(AgentsSubcmd::Logs { tail: Some(2), .. })
+        ));
+    }
+}
+
+#[test]
 fn tier_flag_is_separate_from_the_concrete_model_flag() {
     let parsed = AgentsHarness::try_parse_from(["agents", "claude", "--tier", "senior"]);
     assert!(parsed.is_ok(), "{parsed:?}");

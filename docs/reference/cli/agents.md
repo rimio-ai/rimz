@@ -549,12 +549,12 @@ When the agent's temp directory exists, `show` prints its host path (`tmp:`) and
 
 #### `logs`
 
-`rimz agents logs <REF>` prints one agent's transcript as a chat log, with the same scope and rendering as [`rimz transcript @ref`](./transcript.md). Human output hides subagent digests, waits, and `rimz`-authored prompts along with the output of the turns they open; JSON keeps them.
+`rimz agents logs <TARGET>` shows the same view as [`rimz transcript <agent>`](./transcript.md). Human output hides subagent digests, waits, and `rimz`-authored prompts along with the output of the turns they open; JSON keeps them. Unlike `transcript`, `logs` prints no prior-session note and has no `-w` or `--flat` flag.
 
 | Flag | Effect |
 | --- | --- |
-| `-n, --tail <N>` | Keep the last `N` chat lines. |
-| `-f, --follow` | Print new lines as they land. Conflicts with `--all`. |
+| `-n, --tail <N>` (alias `--last`) | Keep the last `N` entries; a thread keeps its opening message. |
+| `-f, --follow` | Print new entries as they land. Conflicts with `--all`. |
 | `--all` | Include earlier sessions. |
 | `--json` | Emit `{"entries": [...]}` with the [transcript entry fields](./transcript.md#json-output) and no `channel`, `focus`, or `archived_count`; with `--follow`, one entry per line. |
 

@@ -432,16 +432,17 @@ enum AgentsSubcmd {
         #[arg(long, requires = "capture")]
         ansi: bool,
     },
-    /// Show one agent transcript.
+    /// Show an agent's conversation: the same view as `rimz transcript <TARGET>`.
     Logs {
-        #[arg(add = clap_complete::ArgValueCandidates::new(
+        /// Whose conversation: @handle[#channel], a session id, or run_<id>. A bare name is read as @name.
+        #[arg(value_name = "TARGET", add = clap_complete::ArgValueCandidates::new(
             crate::cli::complete::agent_refs
         ))]
         reference: String,
-        /// Keep the last N chat lines.
-        #[arg(short = 'n', long = "tail")]
+        /// Keep the last N entries (a thread keeps its opening message).
+        #[arg(short = 'n', long = "tail", visible_alias = "last", value_name = "N")]
         tail: Option<usize>,
-        /// Print new lines as they land.
+        /// Print new entries as they land.
         #[arg(short = 'f', long, conflicts_with = "all")]
         follow: bool,
         /// Include prior-session history.

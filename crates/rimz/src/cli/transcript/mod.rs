@@ -18,21 +18,24 @@ use rimz::workspace::WorkspaceResolver;
 
 #[derive(Debug, Args)]
 pub struct TranscriptArgs {
-    /// Agent address, `#channel`, or `@all`. Omit for the current channel; a `#channel` is found across every known workspace.
+    /// What to read: '#channel', @handle[#channel], @all, a session id, or run_<id>. Omitted: your current channel. Quote a leading #.
     #[arg(add = clap_complete::ArgValueCandidates::new(
         crate::cli::complete::transcript_targets
     ))]
     target: Option<String>,
-    /// Override the channel/worktree used to resolve the target.
+    /// Channel for a target that names none.
     #[arg(
         short = 'w',
         long,
         add = clap_complete::ArgValueCandidates::new(crate::cli::complete::worktrees)
     )]
     worktree: Option<String>,
-    /// Keep the last N chat lines.
-    #[arg(short = 'n', long)]
+    /// Keep the last N entries (a thread keeps its opening message).
+    #[arg(short = 'n', long, visible_alias = "tail", value_name = "N")]
     last: Option<usize>,
+    /// Print new entries as they land.
+    #[arg(short = 'f', long, conflicts_with = "all")]
+    follow: bool,
     /// Include prior-session history archived before the current live cohort.
     #[arg(long)]
     all: bool,
@@ -214,6 +217,17 @@ use {chat::*, scope::*, thread::*};
 pub fn run(args: TranscriptArgs, globals: &GlobalFlags) -> Result<()> {
     let workspace =
         resolve_view_workspace(args.target.as_deref(), args.worktree.as_deref(), globals)?;
+    if args.follow {
+        return follow(
+            &workspace,
+            args.target.as_deref(),
+            args.worktree.as_deref(),
+            args.last,
+            args.all,
+            args.json,
+            args.flat,
+        );
+    }
     let paths = rimz::StatePaths::for_project_root(&workspace.project_root)
         .context("preparing state paths")?;
     let view = chat_view_with_mode(
@@ -249,8 +263,14 @@ pub fn run(args: TranscriptArgs, globals: &GlobalFlags) -> Result<()> {
         let prose = Prose::for_stdout();
         let mut out = render::out();
         render_lines_to(&mut out, &view, &tz, prose)?;
-        if view.archived_hidden > 0 {
-            write_archive_hint(view.archived_hidden, view.newest_archived_at, &tz)?;
+        if view.archived_hidden > 0 && selected.len() == view.entries.len() {
+            write_archive_hint(
+                view.archived_hidden,
+                view.newest_archived_at,
+                &tz,
+                &args,
+                globals,
+            )?;
         }
     }
     Ok(())
@@ -601,8 +621,23 @@ fn write_archive_hint(
     hidden: usize,
     newest_archived_at: Option<jiff::Timestamp>,
     tz: &TimeZone,
+    args: &TranscriptArgs,
+    globals: &GlobalFlags,
 ) -> Result<()> {
-    let line = if hidden == 1 { "line" } else { "lines" };
+    let entry = if hidden == 1 { "entry" } else { "entries" };
+    let mut command = vec!["rimz", "transcript"];
+    if let Some(target) = args.target.as_deref() {
+        command.push(target);
+    }
+    if let Some(worktree) = args.worktree.as_deref() {
+        command.extend(["-w", worktree]);
+    }
+    let root = globals.root.as_ref().map(|root| root.to_string_lossy());
+    if let Some(root) = &root {
+        command.extend(["--root", root.as_ref()]);
+    }
+    command.push("--all");
+    let command = super::usage::shell_command(command);
     let when = newest_archived_at
         .map(|at| {
             let today = jiff::Timestamp::now().to_zoned(tz.clone()).date();
@@ -615,9 +650,7 @@ fn write_archive_hint(
         "{}",
         render::paint(
             render::palette::faint(),
-            &format!(
-                "⋯ {hidden} earlier {line} from a prior session{when} — rimz transcript --all"
-            ),
+            &format!("⋯ {hidden} earlier {entry} from a prior session{when} — {command}"),
         )
     )?;
     Ok(())
