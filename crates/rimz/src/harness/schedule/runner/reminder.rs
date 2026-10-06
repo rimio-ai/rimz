@@ -9,7 +9,7 @@ use crate::harness::schedule::arm::{default_signal_match_key, duration_label};
 use crate::harness::schedule::catalog::LoadedTask;
 use crate::harness::schedule::run_log::LoopRunMode;
 use crate::harness::schedule::signal::SignalSelector;
-use crate::harness::schedule::{ParsedTrigger, Trigger};
+use crate::harness::schedule::{ParsedSchedule, ParsedTrigger, Schedule, Trigger};
 
 /// One launching fire, as the section describes it.
 pub(super) struct LoopFire<'a> {
@@ -112,6 +112,11 @@ fn origin(name: &str, task: &LoadedTask) -> String {
 
 fn trigger_clause(parsed: &ParsedTrigger, entry: &TaskEntry) -> String {
     match &parsed.trigger {
+        // `describe` prints a raw cron as a noun phrase, which no verb can follow.
+        Trigger::Schedule(ParsedSchedule {
+            schedule: Schedule::RawCron(expr),
+            ..
+        }) => format!(" on the cron schedule {}", span(expr)),
         Trigger::Schedule(_) => format!(" {}", verbatim(&parsed.describe())),
         Trigger::Signal { .. } => {
             let described = parsed.describe();
