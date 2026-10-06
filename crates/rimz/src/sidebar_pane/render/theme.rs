@@ -437,6 +437,14 @@ impl Theme {
         tone_color(self.palette.budget_tone(remaining_pct, zones))
     }
 
+    pub(super) fn pace_tone(
+        &self,
+        reading: crate::agents::context::PaceReading,
+        pace: &crate::config::BudgetBurnRateConfig,
+    ) -> Option<Color> {
+        self.palette.pace_tone(reading, pace).map(tone_color)
+    }
+
     /// The warm tail of the ramp (`warn` → `caution` → `alarm`) for `amount` ∈
     /// `[0, 1]`. Age and attention readers start warm — an idle agent is stale,
     /// not healthy — so they map into `[HEAT_RAMP_WARM_START, 1.0]` instead of

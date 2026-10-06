@@ -171,7 +171,8 @@ upward-dependencies = ["address"]
 # PingEdge names how a signal touches a ping-only turn, for the store fold and the lifecycle hook (+1).
 # AgentState::rests_in_lifecycle is the durable rest both the ping-open rule and the keep-warm hold read (+1).
 # AgentState::displayed_turn_error_label shares the nested entry and list wording (+1).
-surface-budget = 983
+# `RateLimitWindow::pace` and `PaceReading` share the pace fact and floor gate across renderers (+5).
+surface-budget = 988
 
 [[module]]
 path = "crates/rimz/src/agents/adapters/antigravity"
@@ -672,7 +673,8 @@ upward-dependencies = ["agents"]
 # Wait prompts and CLI reports share the byte-size formatter.
 # The reset-credit expiry label sits beside the reset countdown.
 # `Palette::budget_tone` is the one zone-to-tone mapping the sidebar bar and `rimz providers` read (+1).
-surface-budget = 32
+# `Palette::pace_tone` shares the burn-rate bands across the sidebar and CLI (+1).
+surface-budget = 33
 
 [[module]]
 path = "crates/rimz/src/transcript.rs"

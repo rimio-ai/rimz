@@ -589,3 +589,85 @@ fn turn_error_label_cap_trims_drops_blank_and_keeps_80_chars() {
     let capped = cap_turn_error_label(&"é".repeat(200)).unwrap();
     assert_eq!(capped.chars().count(), 80);
 }
+
+#[test]
+fn pace_reading_reads_burn_and_raw_elapsed_window_edges() {
+    let secs = SignedDuration::from_secs;
+    let pace_reading = |used, duration: SignedDuration, until_reset: SignedDuration| {
+        RateLimitWindow {
+            used_percentage: Some(used),
+            duration_mins: Some((duration.as_secs() / 60) as u32),
+            resets_at: Some(Timestamp::UNIX_EPOCH + until_reset),
+            ..Default::default()
+        }
+        .pace(Timestamp::UNIX_EPOCH)
+    };
+    let reading = |used, duration, until_reset| {
+        pace_reading(used, secs(duration), secs(until_reset)).expect("pace reading")
+    };
+    let assert_close = |actual: f64, expected: f64| {
+        assert!(
+            (actual - expected).abs() < 0.000_1,
+            "expected {expected}, got {actual}"
+        );
+    };
+
+    let five_hour = reading(50, 5 * 3_600, 4 * 3_600);
+    assert_close(five_hour.ratio, 2.5);
+    assert_close(five_hour.elapsed_share, 0.2);
+    let seven_day = reading(50, 7 * 86_400, 6 * 86_400);
+    assert_close(seven_day.ratio, 3.5);
+    assert_close(seven_day.elapsed_share, 1.0 / 7.0);
+    assert_close(reading(20, 5 * 3_600, 4 * 3_600).ratio, 1.0);
+    assert_close(reading(0, 5 * 3_600, 4 * 3_600).ratio, 0.0);
+    let floored = reading(10, 5 * 3_600, 5 * 3_600 - 60);
+    assert_close(floored.ratio, 2.0);
+    assert_close(floored.elapsed_share, 1.0 / 300.0);
+
+    assert_eq!(pace_reading(50, secs(0), secs(0)), None);
+    assert_eq!(pace_reading(50, secs(5 * 3_600), secs(5 * 3_600)), None);
+    assert_eq!(
+        pace_reading(50, secs(5 * 3_600), secs(5 * 3_600 + 60)),
+        None
+    );
+    let overdue = pace_reading(40, secs(5 * 3_600), secs(-3_600)).expect("overdue pace");
+    assert_close(overdue.ratio, 0.4);
+    assert_close(overdue.elapsed_share, 1.0);
+}
+
+#[test]
+fn window_pace_requires_all_fields_and_gates_the_floor() {
+    let now = Timestamp::UNIX_EPOCH;
+    let window = RateLimitWindow {
+        used_percentage: Some(20),
+        duration_mins: Some(300),
+        resets_at: Some(now + SignedDuration::from_secs(17_100)),
+        ..Default::default()
+    };
+    for missing in [
+        RateLimitWindow {
+            used_percentage: None,
+            ..window.clone()
+        },
+        RateLimitWindow {
+            duration_mins: None,
+            ..window.clone()
+        },
+        RateLimitWindow {
+            resets_at: None,
+            ..window.clone()
+        },
+    ] {
+        assert_eq!(missing.pace(now), None);
+    }
+    assert!(window.pace(now).unwrap().past_floor());
+    assert!(
+        !RateLimitWindow {
+            resets_at: Some(now + SignedDuration::from_secs(17_101)),
+            ..window
+        }
+        .pace(now)
+        .unwrap()
+        .past_floor()
+    );
+}

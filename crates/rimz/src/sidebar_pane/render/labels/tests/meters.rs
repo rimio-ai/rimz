@@ -1,7 +1,7 @@
 use super::*;
+use crate::agents::context::PaceReading;
 use crate::config::GlyphRole;
 use crate::sidebar_pane::render::theme::Component;
-use jiff::SignedDuration;
 
 fn text(spans: &[Span<'_>]) -> String {
     spans.iter().map(|s| s.content.as_ref()).collect()
@@ -801,42 +801,6 @@ fn mana_style_honours_custom_and_misordered_zones() {
     let clear = tone(50, &misordered).expect("tone");
     assert_ne!(clear, lit.heat_tone(1.0), "a clear window is not alarm");
     assert_ne!(clear, lit.heat_tone(2.0 / 3.0), "nor is it caution");
-}
-
-#[test]
-fn pace_reading_reads_burn_and_raw_elapsed_window_edges() {
-    let secs = SignedDuration::from_secs;
-    let reading = |used, duration, until_reset| {
-        pace_reading(used, secs(duration), secs(until_reset)).expect("pace reading")
-    };
-    let assert_close = |actual: f64, expected: f64| {
-        assert!(
-            (actual - expected).abs() < 0.000_1,
-            "expected {expected}, got {actual}"
-        );
-    };
-
-    let five_hour = reading(50, 5 * 3_600, 4 * 3_600);
-    assert_close(five_hour.ratio, 2.5);
-    assert_close(five_hour.elapsed_share, 0.2);
-    let seven_day = reading(50, 7 * 86_400, 6 * 86_400);
-    assert_close(seven_day.ratio, 3.5);
-    assert_close(seven_day.elapsed_share, 1.0 / 7.0);
-    assert_close(reading(20, 5 * 3_600, 4 * 3_600).ratio, 1.0);
-    assert_close(reading(0, 5 * 3_600, 4 * 3_600).ratio, 0.0);
-    let floored = reading(10, 5 * 3_600, 5 * 3_600 - 60);
-    assert_close(floored.ratio, 2.0);
-    assert_close(floored.elapsed_share, 1.0 / 300.0);
-
-    assert_eq!(pace_reading(50, secs(0), secs(0)), None);
-    assert_eq!(pace_reading(50, secs(5 * 3_600), secs(5 * 3_600)), None);
-    assert_eq!(
-        pace_reading(50, secs(5 * 3_600), secs(5 * 3_600 + 60)),
-        None
-    );
-    let overdue = pace_reading(40, secs(5 * 3_600), secs(-3_600)).expect("overdue pace");
-    assert_close(overdue.ratio, 0.4);
-    assert_close(overdue.elapsed_share, 1.0);
 }
 
 #[test]
