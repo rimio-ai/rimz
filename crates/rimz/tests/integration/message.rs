@@ -1296,10 +1296,10 @@ fn scheduled_message_parks_and_sweep_delivers_due_work() {
         "scheduled message",
     );
     let scheduled_id = queued_id_from_stdout(&scheduled.stdout);
-    assert_eq!(
-        String::from_utf8_lossy(&scheduled.stdout).trim(),
-        format!("queued for @claude#feature-scheduled ({scheduled_id})")
-    );
+    let receipt = String::from_utf8_lossy(&scheduled.stdout);
+    assert!(receipt.starts_with(&format!(
+        "queued for @claude#feature-scheduled ({scheduled_id}) — opens in "
+    )));
 
     let pending = env.store().list_pending_messages().expect("pending queue");
     assert_eq!(pending.len(), 1);
@@ -1307,6 +1307,7 @@ fn scheduled_message_parks_and_sweep_delivers_due_work() {
     let future_id = pending[0].message_id.clone();
     assert_eq!(future_id.as_str(), scheduled_id);
     let not_before = pending[0].not_before.expect("scheduled timestamp");
+    assert!(receipt.contains(&not_before.strftime("%Y-%m-%dT%H:%M:%SZ").to_string()));
     assert!(not_before > before);
     assert!(not_before <= before + jiff::SignedDuration::from_secs(61 * 60));
 
@@ -7862,7 +7863,7 @@ fn provisional_without_live_frame_parks_queue_and_steer() {
     let trace_log = env
         .project_root
         .join("zellij-provisional-no-frame-steer-trace.log");
-    run_success(
+    let receipt = run_success(
         traced_rimz(&env, "zellij-provisional-no-frame-steer-trace.log").args([
             "message",
             "--steer",
@@ -7872,6 +7873,7 @@ fn provisional_without_live_frame_parks_queue_and_steer() {
         ]),
         "park provisional steer",
     );
+    assert!(String::from_utf8_lossy(&receipt.stdout).contains(" — no live pane"));
     let messages = env.store().list_messages().unwrap();
     assert_eq!(messages.len(), 2, "steer parks a second record");
     assert!(

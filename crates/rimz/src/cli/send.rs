@@ -306,8 +306,29 @@ pub(crate) fn render_dispatch_outcome(outcome: &DispatchOutcome) -> Option<Strin
                 status.as_str()
             ),
             Some(ParkReason::WaitingOnPrompt) => format!(
-                "queued for {label} ({message_id}) — {label} is waiting on input in its pane; answer it or force: rimz message steer {message_id} --force"
+                "queued for {label} ({message_id}) — {label} has a prompt open and will not read this until it is answered\n  see it: rimz asks show {label}      answer it: rimz answer {label} <choice>"
             ),
+            Some(ParkReason::Scheduled(time)) => format!(
+                "queued for {label} ({message_id}) — opens {} ({})",
+                super::render::rel_until(*time, jiff::Timestamp::now()),
+                time.strftime("%Y-%m-%dT%H:%M:%SZ")
+            ),
+            Some(ParkReason::After(address)) => {
+                format!("queued for {label} ({message_id}) — after {address}")
+            }
+            Some(ParkReason::When {
+                address,
+                status,
+                dwell_secs,
+            }) => format!(
+                "queued for {label} ({message_id}) — when {address} {} {}",
+                status.as_str(),
+                rimz::store::message::format_dwell(*dwell_secs)
+            ),
+            Some(ParkReason::Behind(blocker)) => {
+                format!("queued for {label} ({message_id}) — behind {blocker}")
+            }
+            Some(ParkReason::NoPane) => format!("queued for {label} ({message_id}) — no live pane"),
             None => format!("queued for {label} ({message_id})"),
             Some(ParkReason::ProviderStarting) => format!(
                 "queued for {label} ({message_id}) — {label} is resuming; delivers when its provider registers; send now: rimz message steer {message_id}"
@@ -340,7 +361,7 @@ fn report_interrupt(outcomes: &[DispatchOutcome], compacted: &[String]) -> Resul
             DispatchOutcome::Queued {
                 label,
                 message_id,
-                reason: None,
+                reason: None | Some(ParkReason::NoPane),
             } => Some(format!(
                 "queued for {label} ({message_id}): delivery deferred; send now: rimz message interrupt {message_id}"
             )),
@@ -406,6 +427,13 @@ fn report_steer(target: &str, outcomes: &[DispatchOutcome], compacted: &[String]
         }
     }
     if outcomes.len() == 1 {
+        if let Some(outcome @ DispatchOutcome::Queued { .. }) = outcomes.first()
+            && let Some(line) = render_dispatch_outcome(outcome)
+        {
+            use std::io::Write as _;
+            writeln!(super::render::out(), "{line}")?;
+            return Ok(());
+        }
         if !sent.is_empty() {
             let label = sent_labels[0];
             print_compacted_if_needed(label, compacted);
@@ -698,7 +726,7 @@ mod tests {
         assert_eq!(
             render_dispatch_outcome(&outcome(Some(ParkReason::WaitingOnPrompt))).as_deref(),
             Some(
-                "queued for @coder (msg_0123456789abcdef) — @coder is waiting on input in its pane; answer it or force: rimz message steer msg_0123456789abcdef --force"
+                "queued for @coder (msg_0123456789abcdef) — @coder has a prompt open and will not read this until it is answered\n  see it: rimz asks show @coder      answer it: rimz answer @coder <choice>"
             )
         );
         assert_eq!(
@@ -711,6 +739,40 @@ mod tests {
                 "queued for @coder (msg_0123456789abcdef) — @coder is resuming; delivers when its provider registers; send now: rimz message steer msg_0123456789abcdef"
             )
         );
+    }
+
+    #[test]
+    fn parked_receipts_name_the_delivery_cause() {
+        let actual = [
+            ParkReason::Scheduled(jiff::Timestamp::UNIX_EPOCH),
+            ParkReason::After("@planner".to_owned()),
+            ParkReason::When {
+                address: "@coder".to_owned(),
+                status: rimz::agents::AgentStatus::Idle,
+                dwell_secs: 3480,
+            },
+            ParkReason::Behind("msg_0000000000000001".parse().unwrap()),
+            ParkReason::NoPane,
+        ]
+        .into_iter()
+        .map(|reason| {
+            render_dispatch_outcome(&DispatchOutcome::Queued {
+                label: "@coder".to_owned(),
+                message_id: "msg_0123456789abcdef".parse().unwrap(),
+                reason: Some(reason),
+            })
+            .unwrap()
+        })
+        .collect::<Vec<_>>();
+        let expected = [
+            "opens due (1970-01-01T00:00:00Z)",
+            "after @planner",
+            "when @coder idle 58m",
+            "behind msg_0000000000000001",
+            "no live pane",
+        ]
+        .map(|cause| format!("queued for @coder (msg_0123456789abcdef) — {cause}"));
+        assert_eq!(actual, expected);
     }
 
     #[test]

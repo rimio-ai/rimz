@@ -74,8 +74,14 @@ The send prints one line per target:
 | `sent to @coder (msg_…)` | The text reached the pane: park mode found the agent free, `--steer` wrote into the live turn, or `--interrupt` wrote it and pressed Escape if the agent was mid-turn. The record is `sent` until the agent acknowledges it and it becomes [`delivered`](#message-statuses). |
 | `queued for @coder (msg_…): delivery deferred; send now: rimz message interrupt msg_…` | Interrupt could not deliver, for example because the pane was absent. |
 | `queued for @coder (msg_…) — @coder is running; send now: rimz message steer msg_…` | Parked because of the agent's status. |
-| `queued for @coder (msg_…) — @coder is waiting on input in its pane; answer it or force: rimz message steer msg_… --force` | Parked behind an open prompt. |
-| `queued for @coder (msg_…)` | Parked for a schedule, a condition, an older message, or a missing pane. |
+| `queued for @coder (msg_…) — @coder is resuming; delivers when its provider registers; send now: rimz message steer msg_…` | Waiting for a resumed provider to start. |
+| `queued for @coder (msg_…) — @coder has a prompt open and will not read this until it is answered` | Followed by `  see it: rimz asks show @coder      answer it: rimz answer @coder <choice>`. |
+| `queued for @coder (msg_…) — opens <time>` | Scheduled. The time includes a relative interval and UTC timestamp, as in `message show`. |
+| `queued for @coder (msg_…) — after @planner` | The first unmet `--after` condition. |
+| `queued for @coder (msg_…) — when @coder idle 58m` | The first unmet `--when` condition. |
+| `queued for @coder (msg_…) — behind msg_…` | An older queued message or an in-flight write blocks delivery. |
+| `queued for @coder (msg_…) — no live pane` | No pane can receive the text (park mode or a single-target steer). |
+| `queued for @coder (msg_…)` | A live attempt deferred delivery without reporting a cause. |
 | `compacted @coder` | Printed before the delivery line when `--smart-compact` fired. |
 | `compacting @coder; queued msg_… (delivers when compaction completes)` | The compact command landed; the prompt follows once compaction ends. Steer prints `queued for @coder (msg_…; waiting for compaction)`. |
 
@@ -255,7 +261,7 @@ DELIVERY CHECK
   force now: rimz message steer msg_01k…
 ```
 
-A scheduled message suggests `rimz message edit <id> --no-schedule` as well, and an open prompt suggests `steer <id> --force`. `--json` prints `{"message": <row>, "timeline": [{"method", "at", "attempts", "reason"}], "delivery": {"check", "verdict"}}`, with `delivery` present only for open messages. Every sender class is reachable, including system messages the list hides.
+A scheduled message suggests `rimz message edit <id> --no-schedule` as well. An open prompt points to `rimz asks show @coder` and `rimz answer @coder <choice>`, just like the send receipt. `--json` prints `{"message": <row>, "timeline": [{"method", "at", "attempts", "reason"}], "delivery": {"check", "verdict"}}`, with `delivery` present only for open messages. Every sender class is reachable, including system messages the list hides.
 
 ### Change a queued message
 
