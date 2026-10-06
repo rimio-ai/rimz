@@ -7,10 +7,11 @@
 //! blocks on pane production; heavy git/spend/account refreshes run on the
 //! cache refresher.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::os::unix::net::UnixDatagram;
 use std::path::PathBuf;
 use std::sync::mpsc::Sender;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::config::NotificationsPrefs;
@@ -18,6 +19,8 @@ use crate::diag::record::TickLoop;
 use crate::ids::{PaneId, SidebarInstanceId};
 use crate::sidebar::ProducerElectionTracker;
 use crate::sidebar::consumer::{PublishedSnapshotReader, RollupCursor};
+use crate::sidebar::enrich::{WorkspaceSnapshot, project_local};
+use crate::sidebar::frame::PaneFrame;
 use crate::sidebar::meter::TickMeter;
 use crate::sidebar::notify::{LinkAlert, LinkNotificationState, Notification, NotificationState};
 use crate::sidebar::read_marks::ReadMarks;
@@ -85,7 +88,12 @@ pub(super) enum FetchPhase {
 
 /// Typed publication from one fetch cycle. Variant shape rules out an
 /// unchanged error, an interim failure, or conflicting protocol flags.
+#[derive(Clone)]
 pub(super) enum FetchUpdate {
+    Shared {
+        update: Box<FetchUpdate>,
+        context: Arc<FoldShared>,
+    },
     Unchanged {
         role: FetchRole,
     },
@@ -101,10 +109,51 @@ pub(super) enum FetchUpdate {
     },
 }
 
+#[derive(Default)]
+pub(super) struct FoldShared {
+    pub observation: Option<Arc<crate::sidebar::observe::FrameSig>>,
+    pub inputs: Arc<FoldInputs>,
+}
+
+pub(super) struct FoldInputs {
+    pub sampled_at: Instant,
+    pub anchor: Option<crate::mux::focus_anchor::FocusAnchor>,
+    pub filter: Option<crate::sidebar::body_filter::BodyFilter>,
+    pub marks: Arc<ReadMarks>,
+}
+
+impl Default for FoldInputs {
+    fn default() -> Self {
+        Self {
+            sampled_at: Instant::now(),
+            anchor: None,
+            filter: None,
+            marks: Arc::default(),
+        }
+    }
+}
+
+impl FoldInputs {
+    fn read(runtime: &RuntimePaths) -> Self {
+        Self {
+            sampled_at: Instant::now(),
+            anchor: crate::mux::focus_anchor::load(runtime),
+            filter: crate::sidebar::body_filter::load(runtime),
+            marks: ReadMarks::load_merged(runtime),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum SnapshotSource {
     Published,
     Produced,
+}
+
+/// One fold before its per-renderer projection.
+struct WorkspaceFold {
+    workspace: WorkspaceSnapshot,
+    frame: Option<Arc<PaneFrame>>,
 }
 
 struct SnapshotPublication {
@@ -116,6 +165,9 @@ struct SnapshotPublication {
 
 impl FetchUpdate {
     pub(super) fn is_final(&self) -> bool {
+        if let Self::Shared { update, .. } = self {
+            return update.is_final();
+        }
         !matches!(
             self,
             Self::Snapshot {
@@ -127,6 +179,7 @@ impl FetchUpdate {
 
     pub(super) fn role(&self) -> FetchRole {
         match self {
+            Self::Shared { update, .. } => update.role(),
             Self::Unchanged { role } | Self::Snapshot { role, .. } | Self::Failed { role, .. } => {
                 *role
             }
@@ -135,8 +188,16 @@ impl FetchUpdate {
 
     fn snapshot_mut(&mut self) -> Option<&mut SidebarSnapshot> {
         match self {
+            Self::Shared { update, .. } => update.snapshot_mut(),
             Self::Snapshot { snapshot, .. } => Some(snapshot),
             Self::Unchanged { .. } | Self::Failed { .. } => None,
+        }
+    }
+
+    pub(super) fn into_parts(self) -> (Self, Option<Arc<FoldShared>>) {
+        match self {
+            Self::Shared { update, context } => (*update, Some(context)),
+            update => (update, None),
         }
     }
 }
@@ -235,6 +296,7 @@ impl TabNameMemo {
 
 /// Owns all state that persists between fetch requests.
 struct FetchWorker {
+    observer: Option<crate::sidebar::observe::RoomObserver>,
     config: ServeConfig,
     runtime: RuntimePaths,
     diag: crate::diag::DiagSink,
@@ -248,10 +310,12 @@ struct FetchWorker {
     projection_publisher: crate::sidebar::workspace_projection::WorkspaceProjectionPublisher,
     tab_name_memo: TabNameMemo,
     session_listed: fn(crate::MuxName, &str) -> bool,
+    #[cfg(test)]
+    on_read: Option<Box<dyn FnMut() + Send>>,
 }
 
 struct FastFold {
-    result: crate::store::snapshot::Result<SidebarSnapshot>,
+    result: crate::store::snapshot::Result<WorkspaceFold>,
     role: FetchRole,
     produce: bool,
 }
@@ -270,6 +334,7 @@ impl FetchWorker {
         );
         let meter = TickMeter::new(TickLoop::Fetch, tick_for(config.tick_seconds));
         Self {
+            observer: None,
             config,
             runtime,
             diag,
@@ -285,6 +350,8 @@ impl FetchWorker {
             session_listed: |mux, session| {
                 crate::mux::backend_for(mux).session_accepts_agent_close(session)
             },
+            #[cfg(test)]
+            on_read: None,
         }
     }
 
@@ -325,6 +392,10 @@ impl FetchWorker {
     /// timed out into its own uncached produce). A lone renderer is its own
     /// next-eldest, so it still self-heals through the producer branch.
     fn run_cycle(&mut self, state: &StatePaths, request: FetchRequest, sink: &mut ResultSink) {
+        sink.begin_cycle();
+        if sink.cycle.is_empty() {
+            return;
+        }
         let role = self.observe_role();
         let now_ms = crate::utils::time::unix_now_ms();
         let frame_stamps =
@@ -336,12 +407,24 @@ impl FetchWorker {
             return;
         }
 
+        tracing::debug!(target: "rimz::sidebar::fold", "sidebar fold");
+        #[cfg(test)]
+        if let Some(on_read) = &mut self.on_read {
+            on_read();
+        }
+        sink.inputs = Arc::new(FoldInputs::read(&self.runtime));
+        sink.context = Some(Arc::new(FoldShared {
+            observation: None,
+            inputs: sink.inputs.clone(),
+        }));
         let fast = if role.is_producer() {
             self.read_and_publish_workspace(state)
         } else {
-            self.reader.read_adopting(state)
-        };
-        let produce = self.start_produce_if_due(request, role, frame_stamps, &fast, now_ms);
+            self.reader.read_adopting_workspace(state)
+        }
+        .map(|(workspace, frame)| WorkspaceFold { workspace, frame });
+        let tick = self.stand(sink).tick;
+        let produce = self.start_produce_if_due(request, role, frame_stamps, &fast, now_ms, tick);
         let fast_fold_ok = self.publish_fast_fold(
             state,
             FastFold {
@@ -377,7 +460,7 @@ impl FetchWorker {
     fn read_and_publish_workspace(
         &mut self,
         state: &StatePaths,
-    ) -> crate::store::snapshot::Result<SidebarSnapshot> {
+    ) -> crate::store::snapshot::Result<(WorkspaceSnapshot, Option<Arc<PaneFrame>>)> {
         let (workspace, frame) = self.reader.read_workspace(state)?;
         if let Some(frame) = frame.as_deref()
             && let Err(err) = self.projection_publisher.publish(
@@ -389,11 +472,36 @@ impl FetchWorker {
         {
             tracing::debug!(error = %err, "workspace projection publish failed");
         }
-        Ok(crate::sidebar::enrich::project_local(
-            workspace,
-            frame.as_deref(),
-            self.config.own_pane.as_ref(),
-        ))
+        Ok((workspace, frame))
+    }
+
+    /// The eldest renderer of the cycle in hand, which stands for the worker
+    /// in every decision made once per fold.
+    fn stand(&self, sink: &ResultSink) -> Stand {
+        Stand::of(sink.cycle.first(), &self.config)
+    }
+
+    /// Project one fold for the eldest renderer, which stands for the worker
+    /// in every decision made once per fold, and stage it so the publication
+    /// projects it again for each other renderer.
+    fn project_fold(&mut self, fold: WorkspaceFold, sink: &mut ResultSink) -> SidebarSnapshot {
+        sink.context = Some(Arc::new(FoldShared {
+            observation: self.observer.as_mut().map(|observer| {
+                observer.extract(fold.workspace.snapshot(), sink.cycle[0].instance_id.clone())
+            }),
+            inputs: sink.inputs.clone(),
+        }));
+        let own_pane = self.stand(sink).own_pane;
+        if sink.cycle.len() < 2 {
+            return project_local(fold.workspace, fold.frame.as_deref(), own_pane.as_ref());
+        }
+        let snapshot = project_local(
+            fold.workspace.clone(),
+            fold.frame.as_deref(),
+            own_pane.as_ref(),
+        );
+        sink.staged = Some((fold, self.config.own_pane.clone()));
+        snapshot
     }
 
     fn start_produce_if_due(
@@ -401,8 +509,9 @@ impl FetchWorker {
         request: FetchRequest,
         role: FetchRole,
         frame_stamps: Option<(u64, u64)>,
-        fast: &crate::store::snapshot::Result<SidebarSnapshot>,
+        fast: &crate::store::snapshot::Result<WorkspaceFold>,
         now_ms: u64,
+        tick: Duration,
     ) -> bool {
         // Pane-frame age gates only the producer reconciliation. An unreadable
         // store cannot coast on an otherwise-young frame.
@@ -415,7 +524,7 @@ impl FetchWorker {
             role.is_producer(),
             request.mode,
             frame_age_ms,
-            tick_for(self.config.tick_seconds),
+            tick,
             Instant::now(),
         )
     }
@@ -427,7 +536,8 @@ impl FetchWorker {
         sink: &mut ResultSink,
     ) -> bool {
         match fold.result {
-            Ok(snapshot) => {
+            Ok(fast) => {
+                let snapshot = self.project_fold(fast, sink);
                 let phase = if fold.produce {
                     FetchPhase::Interim
                 } else {
@@ -467,7 +577,7 @@ impl FetchWorker {
         let opts = crate::sidebar::produce::ProduceOptions {
             mux: self.config.mux,
             session_name: self.config.session_name.clone(),
-            exclude: self.config.own_pane.clone(),
+            exclude: self.stand(sink).own_pane,
             min_pane_cache_ms: request.min_pane_cache_ms,
             diag: self.diag.clone(),
         };
@@ -485,13 +595,16 @@ impl FetchWorker {
                 {
                     tracing::debug!(error = %err, "workspace projection publish failed");
                 }
-                let snapshot = crate::sidebar::enrich::project_local(
-                    produced.workspace,
-                    Some(&produced.frame),
-                    self.config.own_pane.as_ref(),
+                let frame = Arc::new(produced.frame);
+                let snapshot = self.project_fold(
+                    WorkspaceFold {
+                        workspace: produced.workspace,
+                        frame: Some(frame.clone()),
+                    },
+                    sink,
                 );
                 if role.is_producer() {
-                    self.update_tab_names(&snapshot, &produced.frame);
+                    self.update_tab_names(&snapshot, &frame);
                 }
                 self.publish_snapshot(
                     state,
@@ -575,6 +688,23 @@ impl FetchWorker {
         } else {
             Vec::new()
         };
+        if final_producer && let Some((fold, _)) = &mut sink.staged {
+            let unread: HashMap<_, _> = snapshot
+                .rows()
+                .map(|row| (row.id.as_str(), row.unread))
+                .collect();
+            for row in fold
+                .workspace
+                .0
+                .worktree_groups
+                .iter_mut()
+                .flat_map(|group| &mut group.rows)
+            {
+                if let Some(unread) = unread.get(row.id.as_str()) {
+                    row.unread = *unread;
+                }
+            }
+        }
         sink.publish(FetchUpdate::Snapshot {
             snapshot: Box::new(snapshot),
             role,
@@ -787,12 +917,27 @@ fn notification_panes(notification: &Notification) -> Vec<PaneId> {
 /// only, while a hard refresh remains available for manual recovery. When a
 /// request carries `min_pane_cache_ms`, any producing lane ignores a pane cache
 /// older than the signal that asked for fresh topology.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug)]
 pub(super) struct FetchRequest {
     mode: FetchMode,
     min_pane_cache_ms: Option<u64>,
     published_frame_hint: bool,
     force_fold: bool,
+    /// When the renderer learned of what this request asks to fold. A cycle
+    /// that started later already read it.
+    observed_at: Instant,
+}
+
+impl Default for FetchRequest {
+    fn default() -> Self {
+        Self {
+            mode: FetchMode::Normal,
+            min_pane_cache_ms: None,
+            published_frame_hint: false,
+            force_fold: false,
+            observed_at: Instant::now(),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -826,8 +971,7 @@ impl FetchRequest {
         Self {
             mode: FetchMode::ProducerFreshPanes,
             min_pane_cache_ms: Some(crate::utils::time::unix_now_ms()),
-            published_frame_hint: false,
-            force_fold: false,
+            ..Self::default()
         }
     }
 
@@ -835,17 +979,14 @@ impl FetchRequest {
         Self {
             mode: FetchMode::HardRefresh,
             min_pane_cache_ms: Some(crate::utils::time::unix_now_ms()),
-            published_frame_hint: false,
-            force_fold: false,
+            ..Self::default()
         }
     }
 
     pub(super) fn pane_frame_published() -> Self {
         Self {
-            mode: FetchMode::Normal,
-            min_pane_cache_ms: None,
             published_frame_hint: true,
-            force_fold: false,
+            ..Self::default()
         }
     }
 
@@ -854,10 +995,8 @@ impl FetchRequest {
     /// on local state rather than store or pane-frame inputs.
     pub(super) fn force_fold() -> Self {
         Self {
-            mode: FetchMode::Normal,
-            min_pane_cache_ms: None,
-            published_frame_hint: false,
             force_fold: true,
+            ..Self::default()
         }
     }
 
@@ -875,12 +1014,22 @@ impl FetchRequest {
         self.mode = self.mode.strongest(other.mode);
         self.published_frame_hint |= other.published_frame_hint;
         self.force_fold |= other.force_fold;
+        self.observed_at = self.observed_at.max(other.observed_at);
         self.min_pane_cache_ms = match (self.min_pane_cache_ms, other.min_pane_cache_ms) {
             (Some(current), Some(next)) => Some(current.max(next)),
             (Some(current), None) => Some(current),
             (None, Some(next)) => Some(next),
             (None, None) => None,
         };
+    }
+
+    /// A deferred request asks for a fold after its deadline, so a cycle that
+    /// started before the deadline does not answer it.
+    fn observed_now(self) -> Self {
+        Self {
+            observed_at: Instant::now(),
+            ..self
+        }
     }
 
     fn allows_unchanged_skip(self) -> bool {
@@ -891,87 +1040,341 @@ impl FetchRequest {
     }
 }
 
+/// One renderer a fetch worker feeds: where its folds go and how they are
+/// projected for it.
+#[derive(Clone)]
+pub(super) struct Subscriber {
+    pub(super) instance_id: SidebarInstanceId,
+    pub(super) own_pane: Option<PaneId>,
+    pub(super) tick_seconds: u64,
+    pub(super) refresh_override: Option<u16>,
+    pub(super) tx: Sender<FetchUpdate>,
+    pub(super) socket_path: PathBuf,
+}
+
+/// What the eldest renderer decides for every choice the worker makes once
+/// per fold: the pane the shared fold excludes and the data tick.
+pub(super) struct Stand {
+    pub(super) own_pane: Option<PaneId>,
+    pub(super) tick: Duration,
+}
+
+impl Stand {
+    /// `config` answers for a worker with no renderer, or one naming no pane.
+    pub(super) fn of(eldest: Option<&Subscriber>, config: &ServeConfig) -> Self {
+        Self {
+            own_pane: eldest
+                .and_then(|eldest| eldest.own_pane.clone())
+                .or_else(|| config.own_pane.clone()),
+            tick: tick_for(eldest.map_or(config.tick_seconds, |eldest| eldest.tick_seconds)),
+        }
+    }
+}
+
+/// The renderers one fetch worker feeds, keyed by instance id so they iterate
+/// eldest first, in the order the producer election ranks them.
+pub(super) type Subscribers = Arc<Mutex<BTreeMap<String, Subscriber>>>;
+
 struct ResultSink {
-    tx: Sender<FetchUpdate>,
     waker: Option<UnixDatagram>,
-    socket_path: PathBuf,
-    refresh_override: Option<u16>,
-    disconnected: bool,
+    subscribers: Subscribers,
+    /// The renderers this cycle serves, taken once as it starts.
+    cycle: Vec<Subscriber>,
+    covered: Covered,
+    /// The cycle in hand, recorded as covered once its answer goes out.
+    answering: Option<Coverage>,
+    /// The fold behind the next snapshot publication and the worker's
+    /// configured pane, kept so every renderer after the eldest gets its own
+    /// projection of it.
+    staged: Option<(WorkspaceFold, Option<PaneId>)>,
+    context: Option<Arc<FoldShared>>,
+    inputs: Arc<FoldInputs>,
 }
 
 impl ResultSink {
+    /// A sink feeding one renderer that folds as the worker's configured pane.
+    #[cfg(test)]
     fn new(tx: Sender<FetchUpdate>, socket_path: PathBuf, refresh_override: Option<u16>) -> Self {
-        Self {
-            tx,
-            waker: UnixDatagram::unbound().ok(),
-            socket_path,
+        let subscriber = Subscriber {
+            instance_id: SidebarInstanceId::new(),
+            own_pane: None,
+            tick_seconds: 1,
             refresh_override,
-            disconnected: false,
-        }
+            tx,
+            socket_path,
+        };
+        Self::shared(
+            Arc::new(Mutex::new(BTreeMap::from([(
+                subscriber.instance_id.as_str().to_owned(),
+                subscriber,
+            )]))),
+            Covered::default(),
+        )
     }
 
-    fn publish(&mut self, mut update: FetchUpdate) {
-        if let (Some(refresh_ms), Some(snapshot)) = (self.refresh_override, update.snapshot_mut()) {
+    fn shared(subscribers: Subscribers, covered: Covered) -> Self {
+        let mut sink = Self {
+            waker: nonblocking_waker(),
+            subscribers,
+            cycle: Vec::new(),
+            covered,
+            answering: None,
+            staged: None,
+            context: None,
+            inputs: Arc::default(),
+        };
+        sink.begin_cycle();
+        sink
+    }
+
+    fn subscribers(&self) -> Vec<Subscriber> {
+        let subscribers = match self.subscribers.lock() {
+            Ok(subscribers) => subscribers,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        subscribers.values().cloned().collect()
+    }
+
+    /// Take the renderers one cycle serves. A pane that attaches later is
+    /// answered by its own first fetch, and one that leaves is still sent the
+    /// view it was folded for.
+    fn begin_cycle(&mut self) {
+        self.cycle = self.subscribers();
+        self.context = None;
+    }
+
+    /// Deliver one update: to the eldest renderer as given, and to every
+    /// other renderer as its own projection of the staged fold (a snapshot)
+    /// or as a copy (anything else).
+    fn publish(&mut self, update: FetchUpdate) {
+        let staged = self.staged.take();
+        // Before the first send: a pane that reads this answer and asks again
+        // must find its next request unanswered, or the worker would drop it.
+        if matches!(
+            update,
+            FetchUpdate::Unchanged { .. }
+                | FetchUpdate::Snapshot {
+                    phase: FetchPhase::Final,
+                    ..
+                }
+        ) && let Some(cycle) = self.answering.take()
+        {
+            self.covered.record(cycle);
+        }
+        let Some((eldest, others)) = self.cycle.split_first() else {
+            return;
+        };
+        for subscriber in others {
+            match (&update, &staged) {
+                (
+                    FetchUpdate::Snapshot {
+                        role,
+                        phase,
+                        source,
+                        ..
+                    },
+                    Some((fold, default_pane)),
+                ) => {
+                    let snapshot = project_local(
+                        fold.workspace.clone(),
+                        fold.frame.as_deref(),
+                        subscriber.own_pane.as_ref().or(default_pane.as_ref()),
+                    );
+                    self.send(
+                        subscriber,
+                        FetchUpdate::Snapshot {
+                            snapshot: Box::new(snapshot),
+                            role: *role,
+                            phase: *phase,
+                            source: *source,
+                        },
+                    );
+                }
+                // A snapshot with no fold behind it is the eldest renderer's alone.
+                (FetchUpdate::Snapshot { .. }, None) => {}
+                _ => self.send(subscriber, update.clone()),
+            }
+        }
+        self.send(eldest, update);
+    }
+
+    fn send(&self, subscriber: &Subscriber, mut update: FetchUpdate) {
+        if let (Some(refresh_ms), Some(snapshot)) =
+            (subscriber.refresh_override, update.snapshot_mut())
+        {
             snapshot.theme.display.refresh_ms = refresh_ms;
         }
-        if self.tx.send(update).is_err() {
-            self.disconnected = true;
-            return;
+        if let Some(context) = &self.context {
+            update = FetchUpdate::Shared {
+                update: Box::new(update),
+                context: context.clone(),
+            };
         }
-        if let Some(waker) = &self.waker {
-            let _ = waker.send_to(SNAPSHOT_WAKEUP, &self.socket_path);
+        // A renderer that already closed removes itself from the set. A full
+        // inbox already holds a wake, so a dropped one loses nothing.
+        if subscriber.tx.send(update).is_ok()
+            && let Some(waker) = &self.waker
+        {
+            let _ = waker.send_to(SNAPSHOT_WAKEUP, &subscriber.socket_path);
         }
     }
 }
 
 impl FetchWorker {
-    fn run(mut self, request_rx: std::sync::mpsc::Receiver<FetchRequest>, mut sink: ResultSink) {
-        while let Ok(request) = request_rx.recv() {
+    fn run(self, request_rx: std::sync::mpsc::Receiver<FetchRequest>, sink: ResultSink) {
+        self.run_resolving(request_rx, sink, StatePaths::for_workspace);
+    }
+
+    fn run_resolving(
+        mut self,
+        request_rx: std::sync::mpsc::Receiver<FetchRequest>,
+        mut sink: ResultSink,
+        mut resolve_state: impl FnMut(
+            crate::ids::WorkspaceId,
+        )
+            -> std::result::Result<StatePaths, crate::disk::paths::PathErr>,
+    ) {
+        // Several renderers share this worker: one cycle answers every
+        // request already waiting, and none a published cycle answered.
+        let covered = sink.covered.clone();
+        drive(&request_rx, &covered, |cycle| {
+            sink.answering = Some(cycle);
             // Re-resolved every cycle so `workspace migrate` repoints reads
             // without restarting the renderer.
-            match StatePaths::for_workspace(self.config.workspace_id.clone()) {
+            match resolve_state(self.config.workspace_id.clone()) {
                 Ok(state) => {
                     let tick = self.meter.begin();
-                    self.run_cycle(&state, request, &mut sink);
+                    self.run_cycle(&state, cycle.request, &mut sink);
                     if let Some(event) = self.meter.finish(tick, crate::utils::time::unix_now_ms())
                     {
                         crate::sidebar::meter::report(&self.diag, event);
                     }
                 }
-                Err(err) => sink.publish(FetchUpdate::Failed {
-                    error: format!("resolving workspace state paths: {err}"),
-                    role: FetchRole::Consumer,
-                }),
+                Err(err) => {
+                    sink.begin_cycle();
+                    sink.publish(FetchUpdate::Failed {
+                        error: format!("resolving workspace state paths: {err}"),
+                        role: FetchRole::Consumer,
+                    });
+                }
             }
-            // A closed loop still gets all current-cycle durable and external
-            // side effects before the worker exits.
-            if sink.disconnected {
-                return;
-            }
-        }
+            sink.answering = None;
+        });
     }
 }
 
-/// Spawn background fetch owner. Result sender and socket path travel together
-/// because every successful send wakes that socket.
+/// Spawn the background fetch owner for every renderer in `subscribers`. It
+/// runs until every request sender is gone, finishing the cycle in hand so its
+/// durable and external side effects still land.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn spawn_fetch_worker(
     config: ServeConfig,
     runtime: RuntimePaths,
     diag: crate::diag::DiagSink,
     election: ProducerElectionTracker,
     request_rx: std::sync::mpsc::Receiver<FetchRequest>,
-    result: (std::sync::mpsc::Sender<FetchUpdate>, PathBuf),
+    subscribers: Subscribers,
+    covered: Covered,
+    observer: Option<crate::sidebar::observe::RoomObserver>,
 ) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
         crate::lane::set(crate::lane::WorkLane::Fetch);
-        let refresh_override = config.refresh_ms_override;
-        let worker = FetchWorker::new(config, runtime, diag, election);
-        let (result_tx, socket_path) = result;
-        worker.run(
-            request_rx,
-            ResultSink::new(result_tx, socket_path, refresh_override),
-        );
+        let mut worker = FetchWorker::new(config, runtime, diag, election);
+        worker.observer = observer;
+        worker.run(request_rx, ResultSink::shared(subscribers, covered));
     })
+}
+
+/// A sender that drops a wake rather than wait on a renderer's full inbox.
+fn nonblocking_waker() -> Option<UnixDatagram> {
+    let waker = UnixDatagram::unbound().ok()?;
+    waker.set_nonblocking(true).ok()?;
+    Some(waker)
+}
+
+/// A cycle: when it started and the merged request it runs.
+#[derive(Clone, Copy, Debug)]
+struct Coverage {
+    started: Instant,
+    request: FetchRequest,
+}
+
+impl Coverage {
+    /// Whether this cycle already did all `request` asks: it started after the
+    /// request's cause was observed, and folded at least as strongly. Hard
+    /// refreshes and forced folds are never answered for another request.
+    fn answers(&self, request: &FetchRequest) -> bool {
+        let cycle = self.request;
+        let cache_floor_met = match (request.min_pane_cache_ms, cycle.min_pane_cache_ms) {
+            (None, _) => true,
+            (Some(asked), Some(ran)) => asked <= ran,
+            (Some(_), None) => false,
+        };
+        request.observed_at < self.started
+            && request.mode != FetchMode::HardRefresh
+            && !request.force_fold
+            && request.mode.strength() <= cycle.mode.strength()
+            && (!request.published_frame_hint || cycle.published_frame_hint)
+            && cache_floor_met
+    }
+}
+
+/// The plane's last answered cycle, shared by its fetch worker and every
+/// pane's dispatcher. The worker records a cycle as it publishes the cycle's
+/// final outcome, before sending it, so every renderer the cycle serves either
+/// finds its next request answered here or receives that outcome after asking.
+/// A request observed while a cycle runs costs one more cycle, never a lost
+/// change.
+#[derive(Clone, Default)]
+pub(super) struct Covered(Arc<Mutex<Option<Coverage>>>);
+
+impl Covered {
+    fn answers(&self, request: &FetchRequest) -> bool {
+        self.last().is_some_and(|cycle| cycle.answers(request))
+    }
+
+    fn record(&self, cycle: Coverage) {
+        *self.lock() = Some(cycle);
+    }
+
+    fn last(&self) -> Option<Coverage> {
+        *self.lock()
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, Option<Coverage>> {
+        // A plain value replaced whole, so a panic while held tears nothing.
+        match self.0.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        }
+    }
+}
+
+/// Run one cycle per batch of waiting requests, dropping every request the
+/// last answered cycle covers. `cycle` records itself in `covered` once its
+/// final outcome goes out.
+fn drive(
+    requests: &std::sync::mpsc::Receiver<FetchRequest>,
+    covered: &Covered,
+    mut cycle: impl FnMut(Coverage),
+) {
+    while let Ok(first) = requests.recv() {
+        let last = covered.last();
+        let mut batch: Option<FetchRequest> = None;
+        let waiting = std::iter::once(first).chain(std::iter::from_fn(|| requests.try_recv().ok()));
+        for request in waiting.filter(|request| !last.is_some_and(|cycle| cycle.answers(request))) {
+            match &mut batch {
+                Some(batch) => batch.merge(request),
+                None => batch = Some(request),
+            }
+        }
+        if let Some(request) = batch {
+            cycle(Coverage {
+                started: Instant::now(),
+                request,
+            });
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -985,15 +1388,25 @@ struct DeferredFetch {
 /// in one place.
 pub(super) struct FetchDispatcher {
     tx: Sender<FetchRequest>,
+    covered: Covered,
     in_flight: bool,
     pending_refetch: Option<FetchRequest>,
     deferred: Option<DeferredFetch>,
 }
 
 impl FetchDispatcher {
+    /// A dispatcher whose worker serves it alone.
+    #[cfg(test)]
     pub(super) fn new(tx: Sender<FetchRequest>) -> Self {
+        Self::for_plane(tx, Covered::default())
+    }
+
+    /// A pane's dispatcher on a shared plane, which skips a request one of the
+    /// plane's finished cycles already answered.
+    pub(super) fn for_plane(tx: Sender<FetchRequest>, covered: Covered) -> Self {
         Self {
             tx,
+            covered,
             in_flight: false,
             pending_refetch: None,
             deferred: None,
@@ -1009,13 +1422,16 @@ impl FetchDispatcher {
     pub(super) fn request(&mut self, mut request: FetchRequest, force_after: bool) {
         let absorbed = self.deferred.take();
         if let Some(deferred) = absorbed {
-            request.merge(deferred.request);
+            request.merge(deferred.request.observed_now());
         }
         self.dispatch(request, force_after || absorbed.is_some());
     }
 
     fn dispatch(&mut self, request: FetchRequest, force_after: bool) {
         if !self.in_flight {
+            if self.covered.answers(&request) {
+                return;
+            }
             if self.tx.send(request).is_ok() {
                 self.in_flight = true;
             }
@@ -1063,7 +1479,7 @@ impl FetchDispatcher {
             return;
         };
         self.deferred = None;
-        self.dispatch(deferred.request, true);
+        self.dispatch(deferred.request.observed_now(), true);
     }
 
     pub(super) fn clear_deferred(&mut self) {

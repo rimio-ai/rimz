@@ -35,6 +35,7 @@ pub(crate) fn spawn(
             last_crosscheck: Instant::now(),
             dead_pids: DeadPidTracker::default(),
             hostless_agents: HostedAgentTracker::default(),
+            observer: super::Observer::default(),
         }
         .run(rx);
     })
@@ -48,6 +49,7 @@ struct Writer {
     last_crosscheck: Instant,
     dead_pids: DeadPidTracker,
     hostless_agents: HostedAgentTracker,
+    observer: super::Observer,
 }
 
 impl Writer {
@@ -58,8 +60,33 @@ impl Writer {
     fn run(&mut self, rx: Receiver<ObserveMsg>) {
         loop {
             match rx.recv_timeout(OBSERVE_CROSSCHECK_TTL) {
+                #[cfg(test)]
                 Ok(ObserveMsg::Anomaly(draft)) => self.emit_anomaly(*draft),
+                #[cfg(test)]
                 Ok(ObserveMsg::Roster(roster)) => self.latest_roster = Some(roster),
+                Ok(ObserveMsg::RoomFrame {
+                    sig,
+                    renderer,
+                    dropped_msgs,
+                }) => {
+                    self.sink = self.sink.for_renderer(renderer);
+                    self.observer.note_dropped(dropped_msgs);
+                    for draft in self.observer.observe_shared(sig) {
+                        self.emit_anomaly(draft);
+                    }
+                    if let Some(roster) = self.observer.pending_roster_update() {
+                        self.latest_roster = Some(roster);
+                        self.observer.clear_roster_update();
+                    }
+                }
+                Ok(ObserveMsg::OwnAnomaly { draft, renderer }) => {
+                    if self.is_elder() {
+                        let at_ms = draft.at_ms;
+                        self.sink
+                            .for_renderer(renderer)
+                            .emit_at_ms(anomaly_event(*draft), at_ms);
+                    }
+                }
                 Err(RecvTimeoutError::Timeout) => {}
                 Err(RecvTimeoutError::Disconnected) => break,
             }
@@ -76,18 +103,8 @@ impl Writer {
         if !self.is_elder() {
             return;
         }
-        self.sink.emit_at_ms(
-            DiagEvent::FrameAnomaly {
-                anomaly: draft.kind,
-                window_ms: draft.window_ms,
-                frame: draft.frame,
-                events_recent: draft.events_recent,
-                gate_reject_streak: draft.gate_reject_streak,
-                health_failure_streak: draft.health_failure_streak,
-                dropped_msgs: draft.dropped_msgs,
-            },
-            draft.at_ms,
-        );
+        let at_ms = draft.at_ms;
+        self.sink.emit_at_ms(anomaly_event(draft), at_ms);
     }
 
     fn run_crosschecks(&mut self) {
@@ -120,6 +137,18 @@ impl Writer {
                 self.emit_anomaly(AnomalyDraft::from_roster(unix_now_ms(), &roster, kind));
             }
         }
+    }
+}
+
+fn anomaly_event(draft: AnomalyDraft) -> DiagEvent {
+    DiagEvent::FrameAnomaly {
+        anomaly: draft.kind,
+        window_ms: draft.window_ms,
+        frame: draft.frame,
+        events_recent: draft.events_recent,
+        gate_reject_streak: draft.gate_reject_streak,
+        health_failure_streak: draft.health_failure_streak,
+        dropped_msgs: draft.dropped_msgs,
     }
 }
 
@@ -555,6 +584,77 @@ mod tests {
         handle.join().unwrap();
 
         assert!(!log_path.exists() || std::fs::read_to_string(log_path).unwrap().is_empty());
+    }
+
+    #[test]
+    fn room_common_anomaly_names_the_eldest_renderer() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = WorkspaceId::from_project_root(dir.path());
+        let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
+        let eldest = SidebarInstanceId::parse("sb_00000000000000000000000000000001").unwrap();
+        let sink = DiagSink::under(
+            dir.path().to_path_buf(),
+            workspace.clone(),
+            "rimz-test",
+            None,
+        );
+        let log = sink.log_path().unwrap();
+        let (tx, rx) = std::sync::mpsc::sync_channel(4);
+        let handle = spawn(
+            runtime.clone(),
+            sink,
+            ProducerElectionTracker::new(runtime, eldest.clone()),
+            rx,
+        );
+        let row = crate::sidebar::test_support::activity_row(
+            true,
+            None,
+            Timestamp::UNIX_EPOCH,
+            dir.path(),
+        );
+        let mut snapshot = crate::store::snapshot::SidebarSnapshot::build_with_agents(
+            workspace,
+            Vec::new(),
+            Timestamp::UNIX_EPOCH,
+        );
+        snapshot.worktree_groups = vec![crate::sidebar::test_support::worktree_group(
+            dir.path(),
+            vec![row.clone(), row],
+        )];
+        let sig = super::super::extract_sig(
+            &snapshot,
+            &super::super::PulledFrameSig::from_snapshot(&snapshot),
+            &Default::default(),
+            0,
+            0,
+            42,
+        );
+        tx.send(ObserveMsg::RoomFrame {
+            sig: std::sync::Arc::new(sig),
+            renderer: eldest.clone(),
+            dropped_msgs: 0,
+        })
+        .unwrap();
+        drop(tx);
+        handle.join().unwrap();
+        let text = std::fs::read_to_string(log).unwrap_or_default();
+        let records: Vec<DiagEnvelope> = text
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert!(
+            records
+                .iter()
+                .any(|record| record.instance_id.as_ref() == Some(&eldest)
+                    && matches!(
+                        record.event,
+                        DiagEvent::FrameAnomaly {
+                            anomaly: AnomalyKind::DuplicateRowId { .. },
+                            ..
+                        }
+                    )),
+            "common anomaly must name the eldest renderer"
+        );
     }
 
     #[test]

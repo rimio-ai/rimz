@@ -177,6 +177,205 @@ fn requested_focus_anchor(
 }
 
 #[test]
+fn older_shared_inputs_do_not_undo_a_consumed_focus_intent() {
+    let mut rig = Rig::new();
+    let first = zellij("terminal_1");
+    let target = zellij("terminal_2");
+    let snapshot = snapshot_with_focused_pane(&rig.ws, first);
+    rig.fold(snapshot.clone(), SnapshotSource::Produced);
+    let inputs = Arc::new(super::super::super::fetch::FoldInputs::default());
+    let anchor = requested_focus_anchor(target.clone(), 7, crate::utils::time::unix_now_ms(), None);
+    crate::mux::focus_anchor::store(&rig.runtime, &anchor).unwrap();
+    rig.event(SidebarEvent::FocusIntent {
+        pane_id: target.clone(),
+        nonce: anchor.nonce,
+    });
+    assert_eq!(rig.state.ui.selected_pane, Some(target.clone()));
+    assert_eq!(rig.state.ui.scroll_offset, 7);
+
+    rig.deliver(FetchUpdate::Shared {
+        update: Box::new(FetchUpdate::Snapshot {
+            snapshot: Box::new(snapshot),
+            role: FetchRole::Producer,
+            phase: FetchPhase::Final,
+            source: SnapshotSource::Produced,
+        }),
+        context: Arc::new(super::super::super::fetch::FoldShared {
+            inputs,
+            ..Default::default()
+        }),
+    });
+    assert_eq!(
+        rig.state.ui.selected_pane,
+        Some(target),
+        "an older shared cut must not rewind an already consumed focus intent"
+    );
+    assert_eq!(rig.state.ui.scroll_offset, 7);
+    assert_eq!(
+        crate::mux::focus_anchor::load(&rig.runtime).unwrap().nonce,
+        anchor.nonce
+    );
+}
+
+#[test]
+fn shared_anchor_keeps_selection_and_fresh_nonce_pane_local() {
+    let mut rig = Rig::new();
+    let stamp = crate::utils::time::unix_now_ms();
+    let old = applied_focus_anchor(zellij("terminal_1"), 7, stamp, None);
+    let new = requested_focus_anchor(zellij("terminal_2"), 9, stamp + 1, None);
+    crate::mux::focus_anchor::store(&rig.runtime, &new).unwrap();
+    rig.state.fold_inputs = Some(Arc::new(super::super::super::fetch::FoldInputs {
+        anchor: Some(old.clone()),
+        ..Default::default()
+    }));
+    rig.state.ui.selected_pane = Some(old.pane_id.clone());
+    rig.state.ui.scroll_offset = 2;
+    rig.state.apply_focus_anchor();
+    assert_eq!(
+        rig.state.ui.scroll_offset, 7,
+        "apply the fold's anchor against this pane's selection"
+    );
+
+    rig.state.ui.selected_pane = Some(new.pane_id.clone());
+    rig.state.ui.last_focus_anchor_ms = 0;
+    rig.state.ui.scroll_offset = 2;
+    rig.state.apply_focus_anchor();
+    assert_eq!(
+        rig.state.ui.scroll_offset, 2,
+        "a different selection must not adopt the cached anchor"
+    );
+    assert_eq!(rig.state.ui.last_focus_anchor_ms, 0);
+
+    rig.state.ui.selected_pane = Some(old.pane_id.clone());
+    rig.state.confirmed_focus_intent_ms = old.issued_at_ms;
+    rig.state.apply_focus_anchor();
+    assert_eq!(
+        crate::mux::focus_anchor::load(&rig.runtime).unwrap().nonce,
+        new.nonce,
+        "live nonce comparison must preserve an intent written after the shared read"
+    );
+    assert_eq!(rig.state.confirmed_focus_intent_ms, 0);
+
+    rig.state.fold_inputs = None;
+    rig.state.ui.selected_pane = Some(new.pane_id.clone());
+    rig.state.apply_focus_anchor();
+    assert_eq!(
+        rig.state.ui.scroll_offset, 9,
+        "the event path reads the newer live anchor"
+    );
+}
+
+#[test]
+fn shared_focus_cut_converges_missed_intents_and_confirmation() {
+    let mut rig = Rig::new();
+    let first = zellij("terminal_1");
+    let target = zellij("terminal_2");
+    let snapshot = snapshot_with_focused_pane(&rig.ws, first.clone());
+    rig.fold(snapshot.clone(), SnapshotSource::Produced);
+    let stamp = crate::utils::time::unix_now_ms();
+    let mut anchor = requested_focus_anchor(target.clone(), 7, stamp, None);
+    crate::mux::focus_anchor::store(&rig.runtime, &anchor).unwrap();
+    rig.shared_fold(
+        snapshot.clone(),
+        Arc::new(super::super::super::fetch::FoldInputs {
+            anchor: Some(anchor.clone()),
+            ..Default::default()
+        }),
+    );
+    assert_eq!(rig.state.ui.selected_pane, Some(target.clone()));
+    assert_eq!(rig.state.ui.scroll_offset, 7);
+
+    anchor.state = crate::mux::focus_anchor::FocusIntentState::Applied;
+    anchor.applied_at_ms = Some(stamp);
+    crate::mux::focus_anchor::store(&rig.runtime, &anchor).unwrap();
+    let applied_inputs = Arc::new(super::super::super::fetch::FoldInputs {
+        anchor: Some(anchor),
+        ..Default::default()
+    });
+    let mut confirmed = snapshot.clone();
+    confirmed.panes_observed_at_ms = Some(stamp);
+    confirmed.focused_pane = Some(target.clone());
+    confirmed.client_views = vec![crate::pane::ClientPaneView {
+        client_id: crate::ids::MuxClientId::Zellij(1),
+        pane_id: target.clone(),
+    }];
+    rig.shared_fold(confirmed, applied_inputs.clone());
+    assert_eq!(rig.state.ui.selected_pane, Some(target.clone()));
+    assert!(crate::mux::focus_anchor::load(&rig.runtime).is_none());
+
+    rig.state.ui.scroll_offset = 3;
+    rig.shared_fold(snapshot.clone(), applied_inputs);
+    assert_eq!(rig.state.ui.selected_pane, Some(target));
+    assert_eq!(rig.state.ui.scroll_offset, 3);
+    rig.shared_fold(snapshot, Arc::default());
+    assert_eq!(rig.state.ui.selected_pane, Some(first));
+}
+
+#[test]
+fn older_shared_inputs_do_not_renew_an_observed_receipt() {
+    let mut rig = Rig::new();
+    let mut snapshot = agent_snapshot(&rig.ws);
+    let row = &mut snapshot.worktree_groups[0].rows[0];
+    row.last_activity = jiff::Timestamp::UNIX_EPOCH;
+    if let crate::store::snapshot::RowCard::Agent(agent) = &mut row.card {
+        agent.status = crate::agents::AgentStatus::Waiting;
+    }
+    let pane = row.pane.as_ref().unwrap().pane_id.clone();
+    snapshot.focused_pane = Some(pane.clone());
+    snapshot.viewed_panes = vec![pane];
+    let inputs = Arc::default();
+    rig.state.read_marks.observe_fold(
+        vec!["agent-1".to_owned()],
+        1_000,
+        &HashSet::from(["agent-1".to_owned()]),
+    );
+    crate::sidebar::read_marks::take_store_reads();
+    rig.shared_fold(snapshot.clone(), inputs);
+    assert_eq!(crate::sidebar::read_marks::take_store_reads(), 0);
+    assert_eq!(
+        rig.state.read_marks.load_merged().cleared_at_ms("agent-1"),
+        Some(1_000),
+        "a stale shared receipt baseline must not renew a pane's existing clear"
+    );
+    snapshot.worktree_groups[0].rows[0].last_activity = jiff::Timestamp::now();
+    rig.shared_fold(snapshot, Arc::default());
+    assert!(
+        rig.state.read_marks.load_merged().cleared_at_ms("agent-1") > Some(1_000),
+        "a new attention episode still receives a new receipt"
+    );
+}
+
+#[test]
+fn older_shared_inputs_preserve_a_consumed_native_focus_event() {
+    let mut rig = Rig::new();
+    let first = zellij("terminal_1");
+    let target = zellij("terminal_2");
+    let mut snapshot = snapshot_with_focused_pane(&rig.ws, first.clone());
+    rig.fold(snapshot.clone(), SnapshotSource::Produced);
+    let inputs = Arc::default();
+    rig.event(SidebarEvent::FocusChanged {
+        focused: vec![target.clone()],
+        unfocused: vec![first],
+    });
+    assert_eq!(rig.state.current.focused_pane, Some(target.clone()));
+    snapshot.worktree_groups[0].rows[0].name = "updated by pull".to_owned();
+    rig.shared_fold(snapshot, inputs);
+    assert!(
+        rig.state
+            .current
+            .rows()
+            .any(|row| row.name == "updated by pull"),
+        "an older input cut still applies the complete pulled snapshot"
+    );
+    assert_eq!(
+        rig.state.current.focused_pane,
+        Some(target.clone()),
+        "a live absence is not an intent-retirement fence over native focus"
+    );
+    assert_eq!(rig.state.ui.selected_pane, Some(target));
+}
+
+#[test]
 fn fresh_focus_anchor_seeds_scroll_on_matching_fold() {
     let mut rig = Rig::new();
     let target = zellij("terminal_2");

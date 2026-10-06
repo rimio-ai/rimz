@@ -43,6 +43,7 @@ pub fn serve_fixture(snapshot: SidebarSnapshot, refresh_ms: u16) -> super::Resul
         wrap_pixels,
         pixel_lease.as_ref().map(|lease| lease.slot),
     );
+    paint.set_probed_aspect(crate::sidebar_pane::pets::probe_cell_aspect());
     let anim_start = Instant::now();
     let cadence = Duration::from_millis(u64::from(refresh_ms));
 
@@ -100,6 +101,11 @@ pub fn serve_gallery(
             }
         })
         .collect::<Vec<_>>();
+    for state in &mut states {
+        state
+            .paint
+            .set_probed_aspect(crate::sidebar_pane::pets::probe_cell_aspect());
+    }
     let anim_start = Instant::now();
     let cadence = Duration::from_millis(u64::from(refresh_ms));
 

@@ -182,7 +182,7 @@ fn frame_timing_suspends_unwatched_animation() {
 }
 
 #[test]
-fn frame_timing_keeps_unknown_or_detached_dirty_hot_but_holds_hidden_dirty() {
+fn frame_timing_keeps_unknown_hot_but_holds_hidden_and_detached_dirty() {
     let mut rig = Rig::new();
     rig.state.current = animating_agent_snapshot(&rig.ws);
     rig.state.dirty = false;
@@ -206,8 +206,8 @@ fn frame_timing_keeps_unknown_or_detached_dirty_hot_but_holds_hidden_dirty() {
 
     rig.state.current.presence = Some(crate::store::snapshot::SidebarPresence::Detached);
     assert!(
-        rig.frame_active(),
-        "detached cannot prove hidden, so it stays hot"
+        !rig.frame_active(),
+        "detached retains its dirty frame without painting"
     );
 
     rig.state.current.presence = Some(crate::store::snapshot::SidebarPresence::Active);

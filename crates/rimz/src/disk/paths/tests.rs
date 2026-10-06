@@ -1147,3 +1147,31 @@ fn ensure_temp_unit_creates_the_unit_and_room_shared_dir_private() {
         assert_eq!(mode & 0o077, 0, "{} is private", path.display());
     }
 }
+
+#[test]
+fn sidebar_host_paths_are_per_session_and_fit_the_socket_budget() {
+    let dir = tempfile::tempdir().unwrap();
+    let id = WorkspaceId::from_project_root(Path::new("/src/host-paths"));
+    let runtime = RuntimePaths::under(id.clone(), dir.path()).unwrap();
+    let session = "a session name far longer than any socket file name may be";
+    let socket = runtime.sidebar_host_socket_path(MuxName::Tmux, session);
+
+    assert_eq!(socket.parent(), Some(runtime.sock_dir.as_path()));
+    let instance = runtime.sidebar_socket_path(&SidebarInstanceId::new());
+    assert!(
+        socket.file_name().unwrap().len() <= instance.file_name().unwrap().len(),
+        "the host socket stays inside the budget the pane sockets are checked against"
+    );
+    assert_ne!(
+        socket,
+        runtime.sidebar_host_socket_path(MuxName::Zellij, session)
+    );
+    assert_ne!(
+        socket,
+        runtime.sidebar_host_socket_path(MuxName::Tmux, "another session")
+    );
+    assert_ne!(
+        runtime.sidebar_host_lock(MuxName::Tmux, session),
+        runtime.sidebar_host_spawn_lock(MuxName::Tmux, session)
+    );
+}

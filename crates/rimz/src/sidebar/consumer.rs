@@ -80,6 +80,23 @@ impl PublishedSnapshotReader {
         &mut self,
         state: &StatePaths,
     ) -> crate::store::snapshot::Result<SidebarSnapshot> {
+        let (workspace, frame) = self.read_adopting_workspace(state)?;
+        Ok(project_local(
+            workspace,
+            frame.as_deref(),
+            self.exclude.as_ref(),
+        ))
+    }
+
+    /// [`Self::read_adopting`] before the per-renderer projection, for a
+    /// reader that feeds more than one renderer.
+    pub(crate) fn read_adopting_workspace(
+        &mut self,
+        state: &StatePaths,
+    ) -> crate::store::snapshot::Result<(
+        WorkspaceSnapshot,
+        Option<std::sync::Arc<super::frame::PaneFrame>>,
+    )> {
         let frame = read_snapshot_cache(&self.runtime.pane_frame_path(), &self.session);
         let adopted = frame.as_deref().and_then(|frame| {
             let published = read_workspace_projection(&self.runtime)?;
@@ -89,22 +106,17 @@ impl PublishedSnapshotReader {
                 return None;
             }
             let current = WorkspaceProjectionSource::current(state, frame)?;
-            (current.is_matchable() && published.source == current).then(|| {
-                project_local(
-                    published.projection.clone(),
-                    Some(frame),
-                    self.exclude.as_ref(),
-                )
-            })
+            (current.is_matchable() && published.source == current)
+                .then(|| published.projection.clone())
         });
         match adopted {
-            Some(snapshot) => {
+            Some(workspace) => {
                 self.source = ConsumerSnapshotSource::Adoption;
-                Ok(snapshot)
+                Ok((workspace, frame))
             }
             None => {
                 self.source = ConsumerSnapshotSource::Fallback;
-                self.read(state)
+                self.read_workspace(state)
             }
         }
     }

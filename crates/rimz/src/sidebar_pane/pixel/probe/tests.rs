@@ -1,5 +1,5 @@
 use super::*;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, VecDeque};
 
 const TEST_SESSION: &str = "rimz-test";
@@ -24,6 +24,11 @@ struct FakeProbe {
     env: BTreeMap<String, String>,
     passthrough_targets: RefCell<Vec<String>>,
     passthrough_all_panes: RefCell<Vec<String>>,
+    client_reads: Cell<usize>,
+    process_reads: Cell<usize>,
+    version_reads: Cell<usize>,
+    pane_passthrough: Option<BTreeMap<String, bool>>,
+    pane_list_reads: Cell<usize>,
 }
 
 struct FakeKittySource {
@@ -102,6 +107,11 @@ impl FakeProbe {
             env: BTreeMap::new(),
             passthrough_targets: RefCell::new(Vec::new()),
             passthrough_all_panes: RefCell::new(Vec::new()),
+            client_reads: Cell::new(0),
+            process_reads: Cell::new(0),
+            version_reads: Cell::new(0),
+            pane_passthrough: None,
+            pane_list_reads: Cell::new(0),
         }
     }
 
@@ -112,7 +122,15 @@ impl FakeProbe {
 }
 
 impl Probe for FakeProbe {
+    fn tmux_pane_passthrough(&self, session_name: &str) -> io::Result<BTreeMap<String, bool>> {
+        assert_eq!(session_name, self.expected_session);
+        self.pane_list_reads.set(self.pane_list_reads.get() + 1);
+        self.pane_passthrough
+            .clone()
+            .ok_or_else(|| io::Error::other("listing unavailable"))
+    }
     fn tmux_version(&self) -> io::Result<String> {
+        self.version_reads.set(self.version_reads.get() + 1);
         self.version
             .clone()
             .ok_or_else(|| io::Error::other("tmux version unavailable"))
@@ -135,6 +153,7 @@ impl Probe for FakeProbe {
     }
 
     fn tmux_rendering_clients(&self, session_name: &str) -> io::Result<Vec<RenderingClient>> {
+        self.client_reads.set(self.client_reads.get() + 1);
         assert_eq!(session_name, self.expected_session);
         self.termnames
             .clone()
@@ -158,6 +177,7 @@ impl Probe for FakeProbe {
     }
 
     fn processes(&self) -> Vec<crate::proc::ProcInfo> {
+        self.process_reads.set(self.process_reads.get() + 1);
         self.processes.clone()
     }
 
@@ -168,6 +188,94 @@ impl Probe for FakeProbe {
     fn env_var(&self, key: &str) -> Option<String> {
         self.env.get(key).cloned()
     }
+}
+
+#[test]
+fn room_caps_probe_once_per_refresh_keeps_pane_passthrough() {
+    let mut probe = FakeProbe::ok();
+    probe.termnames = Some(vec!["xterm".to_owned()]);
+    probe.processes = vec![process(99, 1, "ttyd"), process(100, 99, "browser")];
+    probe.ttyd_pids = vec![99];
+    let mut room = RoomCaps::default();
+    let now = Instant::now();
+    for index in 0..40 {
+        probe
+            .env
+            .insert("TMUX_PANE".to_owned(), format!("%{index}"));
+        probe.allow_passthrough = Some(if index % 2 == 0 { "all" } else { "off" }.to_owned());
+        let caps = room.detect_with(
+            MuxName::Tmux,
+            TEST_SESSION,
+            PixelRenderCaps::default(),
+            now,
+            &probe,
+        );
+        assert!(caps.kitty_clients);
+        assert_eq!(caps.pixel_transport, index % 2 == 0);
+    }
+    assert_eq!(
+        probe.client_reads.get(),
+        1,
+        "room clients must be sampled once"
+    );
+    assert_eq!(
+        probe.process_reads.get(),
+        1,
+        "process ancestry must be scanned once"
+    );
+    assert_eq!(probe.version_reads.get(), 1, "version must be queried once");
+    assert_eq!(probe.passthrough_targets.borrow().len(), 40);
+    probe.termnames = Some(vec!["kitty".to_owned()]);
+    room.detect_with(
+        MuxName::Tmux,
+        TEST_SESSION,
+        PixelRenderCaps::default(),
+        now + Duration::from_secs(10),
+        &probe,
+    );
+    assert_eq!(
+        probe.client_reads.get(),
+        2,
+        "cadence must refresh room inputs"
+    );
+    assert_eq!(probe.version_reads.get(), 2);
+}
+
+#[test]
+fn room_caps_batches_distinct_pane_options_with_new_pane_fallback() {
+    let mut probe = FakeProbe::ok();
+    probe.pane_passthrough = Some((0..40).map(|i| (format!("%{i}"), i % 2 == 0)).collect());
+    let mut room = RoomCaps::default();
+    let now = Instant::now();
+    for i in 0..40 {
+        probe.env.insert("TMUX_PANE".to_owned(), format!("%{i}"));
+        let caps = room.detect_with(
+            MuxName::Tmux,
+            TEST_SESSION,
+            PixelRenderCaps::default(),
+            now,
+            &probe,
+        );
+        assert_eq!(
+            caps.pixel_transport,
+            i % 2 == 0,
+            "each pane keeps its own permission"
+        );
+    }
+    assert_eq!(probe.pane_list_reads.get(), 1);
+    assert!(probe.passthrough_targets.borrow().is_empty());
+    probe.env.insert("TMUX_PANE".to_owned(), "%new".to_owned());
+    assert!(
+        room.detect_with(
+            MuxName::Tmux,
+            TEST_SESSION,
+            PixelRenderCaps::default(),
+            now,
+            &probe
+        )
+        .pixel_transport
+    );
+    assert_eq!(&*probe.passthrough_targets.borrow(), &["%new"]);
 }
 
 #[test]

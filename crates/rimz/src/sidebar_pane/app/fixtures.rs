@@ -188,3 +188,18 @@ pub(crate) fn agent_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
     }];
     snapshot
 }
+
+/// Queue datagrams at the inbox bound at `path` until it holds no more, as a
+/// renderer that stopped reading leaves it.
+pub(crate) fn fill_inbox(path: &std::path::Path) {
+    let sender = std::os::unix::net::UnixDatagram::unbound().unwrap();
+    sender.set_nonblocking(true).unwrap();
+    for _ in 0..1_000_000 {
+        match sender.send_to(b"snapshot", path) {
+            Ok(_) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => return,
+            Err(err) => panic!("filling {}: {err}", path.display()),
+        }
+    }
+    panic!("{} never filled", path.display());
+}

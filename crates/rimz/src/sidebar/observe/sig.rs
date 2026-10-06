@@ -14,6 +14,16 @@ use crate::wakeup::events::SidebarEvent;
 
 use super::WatchedField;
 
+#[cfg(test)]
+thread_local! {
+    static EXTRACTIONS: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+}
+
+#[cfg(test)]
+pub(crate) fn take_extractions() -> (usize, usize) {
+    EXTRACTIONS.with(|count| count.replace((0, 0)))
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FrameSig {
     pub at_ms: u64,
@@ -132,6 +142,66 @@ pub struct OwnViewSig {
 }
 
 #[derive(Clone, Debug)]
+pub(crate) struct OwnFrameSig {
+    pub at_ms: u64,
+    pub frame: crate::diag::record::FrameStamp,
+    pub own_view: Option<OwnViewSig>,
+    pub events: EventsSig,
+    pub pane_ids: Vec<Option<String>>,
+    pub gate_reject_streak: u32,
+    pub health_failure_streak: u32,
+}
+
+impl OwnFrameSig {
+    pub(crate) fn extract(
+        current: &SidebarSnapshot,
+        pulled: (usize, Option<u64>),
+        events: &EventStore,
+        gate_reject_streak: u32,
+        health_failure_streak: u32,
+        at_ms: u64,
+    ) -> Self {
+        #[cfg(test)]
+        EXTRACTIONS.with(|count| {
+            let (common, own) = count.get();
+            count.set((common, own + 1));
+        });
+        let mut agents = 0;
+        let pane_ids: Vec<_> = current
+            .rows()
+            .map(|row| {
+                agents += usize::from(row.is_agent());
+                row.pane.as_ref().map(|pane| pane.pane_id.to_string())
+            })
+            .collect();
+        Self {
+            at_ms,
+            frame: crate::diag::record::FrameStamp {
+                produced_at_ms: current.panes_produced_at_ms,
+                rows: pane_ids.len(),
+                agents,
+                processes: pane_ids.len() - agents,
+                pulled_rows: Some(pulled.0),
+                pulled_panes_produced_at_ms: pulled.1,
+            },
+            own_view: current.own_view.as_ref().map(|view| OwnViewSig {
+                sibling_count: view.sibling_count,
+                focused_pane: current.focused_pane.as_ref().map(ToString::to_string),
+                working_pane_ids: view
+                    .working_pane_ids
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect(),
+            }),
+            events: extract_events(events, at_ms),
+            pane_ids,
+            gate_reject_streak,
+            health_failure_streak,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct RosterSig {
     pub panes_produced_at_ms: Option<u64>,
     pub rows: Vec<RosterRowSig>,
@@ -154,6 +224,11 @@ pub fn extract_sig(
     health_failure_streak: u32,
     now_ms: u64,
 ) -> FrameSig {
+    #[cfg(test)]
+    EXTRACTIONS.with(|count| {
+        let (common, own) = count.get();
+        count.set((common + 1, own));
+    });
     let mut rows = current
         .worktree_groups
         .iter()

@@ -326,7 +326,8 @@ path = "crates/rimz/src/diag"
 # `SpendPeriod`, `WindowField`, and `PanelField` reopened this by three: they
 # are field types of the frozen `AggregateKey` wire, which the sidebar observer
 # constructs once per keyed provider-panel value.
-surface-budget = 82
+# Renderer attribution rebinds a sink while retaining its shared rate limiter (+1).
+surface-budget = 83
 
 [[module]]
 path = "crates/rimz/src/disk"
@@ -371,7 +372,8 @@ allowed-dependencies = [
 # The loop start throttle's queue directory, lock, and ticket name are built here (+3).
 # GC reaches the retired named-channel record through one classed-path accessor (+1).
 # The keep-warm producer cache path is built here for the refresh lane, enrichment, and the consumer stamp (+1).
-surface-budget = 217
+# A session's sidebar host appends its stderr to one classed state log (+1).
+surface-budget = 221
 
 [[module]]
 path = "crates/rimz/src/forge"
@@ -543,13 +545,15 @@ path = "crates/rimz/src/mux"
 # `recovery::temp_unit_holders` selects the processes a hard reset ends inside the room's sandbox views (+1).
 # Structured command error redaction keeps backend socket paths out of user errors.
 # The shared capture tail rule replaces the Zellij-only trim helper.
-surface-budget = 259
+# The room plane owns Zellij's shared stamped width memo (+1).
+surface-budget = 260
 
 [[module]]
 path = "crates/rimz/src/mux/zellij"
 # Presence lifecycle stays behind upgrade_presence_plugin; public schema serves sidebar, doctor and integration fixtures.
 # ZellijSessionOption is opaque: its fields and value enum stay private to this module.
-surface-budget = 51
+# WidthMemo supplies cached per-pane geometry with live freshness checks (+1).
+surface-budget = 52
 
 [[module]]
 path = "crates/rimz/src/observability"
@@ -625,15 +629,16 @@ path = "crates/rimz/src/sidebar"
 # Consumers import those types directly; the refresh re-exports are gone.
 # Roster publication confirms the existing election without the fetch-start memo (+1).
 # One login's projected panel serves providers and accounts list (+1).
-surface-budget = 226
+# Room/own observation boundaries, shared signatures, native focus queries and retained-own receipt merging (+8).
+surface-budget = 237
 
 [[module]]
 path = "crates/rimz/src/sidebar_pane"
-surface-budget = 57
+surface-budget = 59
 
 [[module]]
 path = "crates/rimz/src/sidebar_pane/app"
-surface-budget = 6
+surface-budget = 13
 
 [[module]]
 path = "crates/rimz/src/sock.rs"
@@ -709,7 +714,7 @@ surface-budget = 35
 
 [[module]]
 path = "crates/rimz/src/tui.rs"
-surface-budget = 16
+surface-budget = 17 # In-process terminal handoff releases capture and hook ownership.
 
 [[module]]
 path = "crates/rimz/src/uninstall.rs"
@@ -905,7 +910,7 @@ allowed-dependencies = [
     "sidebar_pane",
     "utils::env",
 ]
-surface-budget = 26
+surface-budget = 27
 
 [[module]]
 path = "crates/rimz/src/disk/atomic.rs"

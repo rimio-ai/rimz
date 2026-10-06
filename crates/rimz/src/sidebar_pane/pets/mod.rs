@@ -22,6 +22,7 @@ use crate::config::{CellAspect, PetsConfig, PetsGlyphMode, PixelMode};
 #[cfg(test)]
 pub(super) use cellart::PetCell;
 pub(super) use cellart::PetCellGrid;
+pub(super) use cellart::cell_aspect;
 pub use cellart::probe_cell_aspect;
 pub(super) use model::PetAction;
 pub(super) use painter::PixelPainter;

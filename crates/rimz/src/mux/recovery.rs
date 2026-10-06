@@ -294,14 +294,18 @@ fn is_stats_refresh(cmdline: &str) -> bool {
 }
 
 /// Whether `cmdline` is one of `(workspace, session)`'s sidebar *serve* processes
-/// — `rimz sidebar serve` — and not the mux server or the agent app-server. The
-/// exact recorded session name plus the workspace id scope it; `sidebar` + `serve` selects the renderer
-/// pair and excludes `rimz codex app-server serve`.
+/// — `rimz sidebar serve` — and not the mux server, the agent app-server, or the
+/// session's `rimz sidebar host`. The exact recorded session name plus the
+/// workspace id scope it; the adjacent `sidebar serve` argv words select the
+/// supervisor and worker pair, so a session or path that merely contains
+/// either word selects nothing.
 pub(crate) fn is_sidebar_serve(cmdline: &str, workspace_id: &str, session_name: &str) -> bool {
-    names_session(cmdline, session_name)
-        && cmdline.contains(workspace_id)
-        && cmdline.contains("sidebar")
-        && cmdline.contains("serve")
+    let mut words = cmdline.split_whitespace().peekable();
+    let mut serve_command = false;
+    while let Some(word) = words.next() {
+        serve_command |= word == "sidebar" && words.peek() == Some(&"serve");
+    }
+    serve_command && names_session(cmdline, session_name) && cmdline.contains(workspace_id)
 }
 
 /// The normalized pane a sidebar process paints, from its inherited mux env var
@@ -701,6 +705,29 @@ mod tests {
                 Some(RequiredDomainCheck::Mux(MuxName::Zellij))
             );
         }
+    }
+
+    #[test]
+    fn the_room_host_is_swept_at_teardown_and_is_never_a_serve_process() {
+        // A session whose name carries both words the serve matcher reads.
+        let session = "sidebar-observer-abcd";
+        let host = format!(
+            "/usr/bin/rimz sidebar host --mux zellij --workspace-id {WS} --session-name {session}"
+        );
+
+        assert_eq!(
+            classify_sweep_target(&host, session, WS, SweepScope::Teardown),
+            Some(RequiredDomainCheck::World),
+            "teardown kills the host with the room's other daemons"
+        );
+        assert!(
+            !is_sidebar_serve(&host, WS, session),
+            "the host is no pane's serve process: nothing attributes it to a pane or counts it as one"
+        );
+        let serve = format!(
+            "/usr/bin/rimz sidebar serve --mux zellij --workspace-id {WS} --session-name {session}"
+        );
+        assert!(is_sidebar_serve(&serve, WS, session));
     }
 
     #[test]

@@ -40,11 +40,16 @@ struct SampleRect {
 /// Read terminal cell height/width from the pty's pixel and cell dimensions.
 pub fn probe_cell_aspect() -> Option<CellAspect> {
     let size = ratatui::crossterm::terminal::window_size().ok()?;
-    if size.columns == 0 || size.rows == 0 || size.width == 0 || size.height == 0 {
+    cell_aspect((size.columns, size.rows), (size.width, size.height))
+}
+
+/// Cell height/width from a window's `(columns, rows)` and `(width, height)` pixels.
+pub fn cell_aspect(cells: (u16, u16), pixels: (u16, u16)) -> Option<CellAspect> {
+    let ((columns, rows), (width, height)) = (cells, pixels);
+    if columns == 0 || rows == 0 || width == 0 || height == 0 {
         return None;
     }
-    let ratio = (f32::from(size.height) * f32::from(size.columns))
-        / (f32::from(size.rows) * f32::from(size.width));
+    let ratio = (f32::from(height) * f32::from(columns)) / (f32::from(rows) * f32::from(width));
     CellAspect::from_ratio(ratio)
 }
 

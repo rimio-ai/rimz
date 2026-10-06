@@ -283,12 +283,13 @@ pub fn fresh_sidebar_present(rt: &RuntimePaths) -> bool {
 #[derive(Clone)]
 pub(crate) struct ProducerElectionTracker {
     runtime: RuntimePaths,
-    own_id: SidebarInstanceId,
     state: Arc<Mutex<ProducerElectionState>>,
 }
 
-#[derive(Default)]
 struct ProducerElectionState {
+    own_id: SidebarInstanceId,
+    /// A host with no pane attached renders nothing and must not produce.
+    abstaining: bool,
     cached: CachedElection,
     #[cfg(test)]
     full_scans: u64,
@@ -312,9 +313,33 @@ impl ProducerElectionTracker {
     pub(crate) fn new(runtime: RuntimePaths, own_id: SidebarInstanceId) -> Self {
         Self {
             runtime,
-            own_id,
-            state: Arc::new(Mutex::new(ProducerElectionState::default())),
+            state: Arc::new(Mutex::new(ProducerElectionState {
+                own_id,
+                abstaining: false,
+                cached: CachedElection::Unknown,
+                #[cfg(test)]
+                full_scans: 0,
+            })),
         }
+    }
+
+    /// Stand in the election as `own_id` from now on. The room host renders
+    /// several panes and competes as its eldest one, which changes as panes
+    /// attach and detach; every clone of this tracker follows.
+    pub(crate) fn rebind(&self, own_id: SidebarInstanceId) {
+        let mut state = self.lock();
+        state.abstaining = false;
+        if state.own_id != own_id {
+            state.own_id = own_id;
+            state.cached = CachedElection::Unknown;
+        }
+    }
+
+    /// Leave the election until the next [`Self::rebind`]: a host with no pane
+    /// attached has no heartbeat to stand on, so it never produces. With no
+    /// one else to name, it reports the id it last stood as for the elder.
+    pub(crate) fn abstain(&self) {
+        self.lock().abstaining = true;
     }
 
     /// Return the current elder, or `None` when this renderer is the producer.
@@ -325,19 +350,24 @@ impl ProducerElectionTracker {
     /// A slow fetch may finish after an elder appears. Publication must check
     /// the same election without relying on the role memo from before the fetch.
     pub(crate) fn confirm_producer(&self) -> bool {
+        let own_id = {
+            let state = self.lock();
+            if state.abstaining {
+                return false;
+            }
+            state.own_id.clone()
+        };
         matches!(
-            self.full_scan(SystemTime::now()),
+            self.full_scan(&own_id, SystemTime::now()),
             CachedElection::Producer { .. }
         )
     }
 
     fn elder_instance_at(&self, now: SystemTime) -> Option<SidebarInstanceId> {
-        // A poisoned memo cannot invalidate election correctness. Recover its
-        // contents and let the normal validation/rescan path repair it.
-        let mut state = match self.state.lock() {
-            Ok(state) => state,
-            Err(poisoned) => poisoned.into_inner(),
-        };
+        let mut state = self.lock();
+        if state.abstaining {
+            return Some(state.own_id.clone());
+        }
         match &state.cached {
             CachedElection::Elder { id, expires_at, .. } if now < *expires_at => {
                 return Some(id.clone());
@@ -347,7 +377,7 @@ impl ProducerElectionTracker {
         }
 
         if let CachedElection::Elder { id, path, .. } = &state.cached
-            && let Some(expires_at) = self.validate_cached_elder(path, id, now)
+            && let Some(expires_at) = self.validate_cached_elder(&state.own_id, path, id, now)
         {
             let id = id.clone();
             state.cached = CachedElection::Elder {
@@ -358,7 +388,8 @@ impl ProducerElectionTracker {
             return Some(id);
         }
 
-        state.cached = self.full_scan(now);
+        let scanned = self.full_scan(&state.own_id, now);
+        state.cached = scanned;
         #[cfg(test)]
         {
             state.full_scans = state.full_scans.saturating_add(1);
@@ -369,8 +400,18 @@ impl ProducerElectionTracker {
         }
     }
 
+    fn lock(&self) -> std::sync::MutexGuard<'_, ProducerElectionState> {
+        // A poisoned memo cannot invalidate election correctness. Recover its
+        // contents and let the normal validation/rescan path repair it.
+        match self.state.lock() {
+            Ok(state) => state,
+            Err(poisoned) => poisoned.into_inner(),
+        }
+    }
+
     fn validate_cached_elder(
         &self,
+        own_id: &SidebarInstanceId,
         path: &Path,
         cached_id: &SidebarInstanceId,
         now: SystemTime,
@@ -384,12 +425,12 @@ impl ProducerElectionTracker {
         (heartbeat.protocol_version == SIDEBAR_PROTOCOL_VERSION
             && heartbeat.workspace_id == self.runtime.workspace_id
             && heartbeat.instance_id == *cached_id
-            && heartbeat.instance_id.as_str() < self.own_id.as_str()
+            && heartbeat.instance_id.as_str() < own_id.as_str()
             && self.runtime.sidebar_heartbeat_path(cached_id) == path)
             .then_some(expires_at)
     }
 
-    fn full_scan(&self, now: SystemTime) -> CachedElection {
+    fn full_scan(&self, own_id: &SidebarInstanceId, now: SystemTime) -> CachedElection {
         let heartbeats = match read_current_heartbeats(&self.runtime.heartbeat_dir) {
             Ok(heartbeats) => heartbeats,
             Err(err) => {
@@ -401,7 +442,7 @@ impl ProducerElectionTracker {
             .into_iter()
             .filter_map(|(path, heartbeat)| {
                 if heartbeat.workspace_id != self.runtime.workspace_id
-                    || heartbeat.instance_id.as_str() >= self.own_id.as_str()
+                    || heartbeat.instance_id.as_str() >= own_id.as_str()
                     || self.runtime.sidebar_heartbeat_path(&heartbeat.instance_id) != path
                 {
                     return None;
@@ -426,10 +467,7 @@ impl ProducerElectionTracker {
 
     #[cfg(test)]
     fn full_scan_count(&self) -> u64 {
-        match self.state.lock() {
-            Ok(state) => state.full_scans,
-            Err(poisoned) => poisoned.into_inner().full_scans,
-        }
+        self.lock().full_scans
     }
 }
 

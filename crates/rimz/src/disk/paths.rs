@@ -26,7 +26,9 @@ use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
-use crate::ids::{PaneId, SidebarInstanceId, WORKSPACE_DIR_HEX_MIN, WorkspaceDirName, WorkspaceId};
+use crate::ids::{
+    MuxName, PaneId, SidebarInstanceId, WORKSPACE_DIR_HEX_MIN, WorkspaceDirName, WorkspaceId,
+};
 use crate::sock::SockBudget;
 
 const EVENTS_LOG_FILE: &str = "events.log.jsonl";
@@ -319,6 +321,15 @@ impl StatePaths {
     /// removes one an older build left.
     pub(crate) fn retired_channels_record(&self) -> PathBuf {
         Class::Records.path_under(&self.root).join("channels.json")
+    }
+
+    /// Where a session's room host writes its stderr, startup failures
+    /// included.
+    pub(crate) fn sidebar_host_log(&self, mux: MuxName, session_name: &str) -> PathBuf {
+        Class::Log.path_under(&self.root).join(format!(
+            "sidebar-host.{}.log",
+            sidebar_host_key(mux, session_name)
+        ))
     }
 
     pub fn ensure_dirs(&self) -> Result<()> {
@@ -752,6 +763,30 @@ impl RuntimePaths {
         // The short id keeps the bound path inside the platform AF_UNIX budget.
         self.sock_dir
             .join(format!("sidebar.{}.sock", instance_id.short()))
+    }
+
+    /// Attach socket of the room host that paints one session's sidebar panes.
+    pub(crate) fn sidebar_host_socket_path(&self, mux: MuxName, session_name: &str) -> PathBuf {
+        // A digest keeps the bound path inside the platform AF_UNIX budget
+        // whatever the session is called.
+        self.sock_dir
+            .join(format!("host.{}.sock", sidebar_host_key(mux, session_name)))
+    }
+
+    /// Held by a session's room host for its whole life: one host per session.
+    pub(crate) fn sidebar_host_lock(&self, mux: MuxName, session_name: &str) -> PathBuf {
+        self.lock_path(format!(
+            "sidebar-host.{}.lock",
+            sidebar_host_key(mux, session_name)
+        ))
+    }
+
+    /// Held by the one supervisor starting a session's room host.
+    pub(crate) fn sidebar_host_spawn_lock(&self, mux: MuxName, session_name: &str) -> PathBuf {
+        self.lock_path(format!(
+            "sidebar-host-spawn.{}.lock",
+            sidebar_host_key(mux, session_name)
+        ))
     }
 
     /// Path of a sidebar instance's read-mark receipt file. Receipts outlive the
@@ -1517,6 +1552,12 @@ pub fn env_path(key: &str) -> Option<PathBuf> {
     env::var_os(key)
         .filter(|v| !v.is_empty())
         .map(PathBuf::from)
+}
+
+/// One room host per mux session: the key every host path of a session shares.
+fn sidebar_host_key(mux: MuxName, session_name: &str) -> String {
+    let digest = Sha256::digest(format!("{mux}\0{session_name}"));
+    hex::encode(&digest[..6])
 }
 
 #[cfg(unix)]

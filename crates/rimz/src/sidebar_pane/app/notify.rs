@@ -7,7 +7,7 @@ use crate::ids::PaneId;
 use crate::osc;
 use crate::store::snapshot::SidebarSnapshot;
 use ratatui::Terminal;
-use ratatui::backend::CrosstermBackend;
+use ratatui::backend::Backend;
 
 use super::ServeConfig;
 
@@ -22,9 +22,9 @@ pub(super) struct BellNotice<'a> {
     pub kind: &'a str,
 }
 
-pub(super) fn emit_terminal_notification<W: Write>(
+pub(super) fn emit_terminal_notification<B: Backend + Write>(
     config: &ServeConfig,
-    terminal: &mut Terminal<CrosstermBackend<W>>,
+    terminal: &mut Terminal<B>,
     snapshot: &SidebarSnapshot,
     notice: BellNotice<'_>,
     diag: &crate::diag::DiagSink,
@@ -59,7 +59,7 @@ pub(super) fn emit_terminal_notification<W: Write>(
     }
     let backend = terminal.backend_mut();
     backend.write_all(&bytes)?;
-    backend.flush()?;
+    Write::flush(backend)?;
     Ok(true)
 }
 

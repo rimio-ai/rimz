@@ -4,6 +4,18 @@
 use super::*;
 
 #[test]
+fn disabled_observer_extracts_no_signature() {
+    let mut rig = Rig::new();
+    observe::take_extractions();
+    rig.fold(agent_snapshot(&rig.ws), SnapshotSource::Published);
+    assert_eq!(
+        observe::take_extractions(),
+        (0, 0),
+        "no writer means no extraction"
+    );
+}
+
+#[test]
 fn unchanged_fetch_outcome_clears_in_flight_without_dirtying_frame() {
     let mut rig = Rig::new();
     rig.state.dirty = false;
@@ -398,6 +410,40 @@ fn body_filter_event_adopts_the_shared_file_and_repaints() {
 }
 
 #[test]
+fn older_shared_inputs_do_not_undo_a_consumed_body_filter() {
+    let mut rig = Rig::new();
+    let snapshot = agent_snapshot(&rig.ws);
+    rig.fold(snapshot.clone(), SnapshotSource::Produced);
+    let inputs = Arc::new(super::super::super::fetch::FoldInputs::default());
+    let filter = BodyFilter::Status(crate::agents::AgentStatus::Idle);
+    crate::sidebar::body_filter::write(&rig.runtime, filter).unwrap();
+    rig.event(SidebarEvent::BodyFilterChanged);
+    assert_eq!(rig.state.ui.make_up_filter, Some(filter));
+
+    rig.deliver(FetchUpdate::Shared {
+        update: Box::new(FetchUpdate::Snapshot {
+            snapshot: Box::new(snapshot),
+            role: FetchRole::Producer,
+            phase: FetchPhase::Final,
+            source: SnapshotSource::Produced,
+        }),
+        context: Arc::new(super::super::super::fetch::FoldShared {
+            inputs,
+            ..Default::default()
+        }),
+    });
+    assert_eq!(
+        rig.state.ui.make_up_filter,
+        Some(filter),
+        "an older shared cut must not undo the already consumed filter event"
+    );
+    assert_eq!(
+        crate::sidebar::body_filter::load(&rig.runtime),
+        Some(filter)
+    );
+}
+
+#[test]
 fn successful_fetch_converges_a_missed_body_filter_event() {
     let mut rig = Rig::new();
     let filter = BodyFilter::Status(crate::agents::AgentStatus::Idle);
@@ -407,6 +453,19 @@ fn successful_fetch_converges_a_missed_body_filter_event() {
     rig.fold(snapshot, SnapshotSource::Produced);
 
     assert_eq!(rig.state.ui.make_up_filter, Some(filter));
+}
+
+#[test]
+fn newer_shared_cut_converges_a_missed_filter_clear() {
+    let mut rig = Rig::new();
+    let snapshot = agent_snapshot(&rig.ws);
+    rig.fold(snapshot.clone(), SnapshotSource::Produced);
+    let filter = BodyFilter::Status(crate::agents::AgentStatus::Idle);
+    crate::sidebar::body_filter::write(&rig.runtime, filter).unwrap();
+    rig.event(SidebarEvent::BodyFilterChanged);
+    crate::sidebar::body_filter::clear(&rig.runtime).unwrap();
+    rig.shared_fold(snapshot, Arc::default());
+    assert_eq!(rig.state.ui.make_up_filter, None);
 }
 
 #[test]

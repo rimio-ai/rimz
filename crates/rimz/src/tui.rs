@@ -340,6 +340,14 @@ impl TerminalModeGuard {
         std::mem::forget(self);
     }
 
+    /// Leave tty modes in place while this process continues, without
+    /// retaining this guard's log capture or panic hook.
+    pub(crate) fn preserve_for_handoff(mut self) {
+        end_log_capture_flush();
+        self.restore_hook();
+        std::mem::forget(self);
+    }
+
     /// Hand the terminal to another full-screen application without clearing
     /// the current screen or dropping mouse reporting. The successor paints
     /// over the held frame and takes ownership of terminal modes; keeping mouse
@@ -351,6 +359,11 @@ impl TerminalModeGuard {
             execute!(io::stdout(), terminal::EnableLineWrap, cursor::Show)?;
         }
         terminal::disable_raw_mode()?;
+        self.restore_hook();
+        Ok(self)
+    }
+
+    fn restore_hook(&mut self) {
         let hook = self.saved_hook.take().and_then(|saved_hook| {
             saved_hook
                 .lock()
@@ -360,7 +373,6 @@ impl TerminalModeGuard {
         if let Some(hook) = hook {
             panic::set_hook(hook);
         }
-        Ok(self)
     }
 
     /// Resume a handed-off terminal long enough to read input before restoring
@@ -389,15 +401,7 @@ impl TerminalModeGuard {
 impl Drop for TerminalModeGuard {
     fn drop(&mut self) {
         restore_terminal(self.mouse, self.screen);
-        let hook = self.saved_hook.take().and_then(|saved_hook| {
-            saved_hook
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .take()
-        });
-        if let Some(hook) = hook {
-            panic::set_hook(hook);
-        }
+        self.restore_hook();
     }
 }
 
@@ -433,6 +437,9 @@ pub(crate) fn restore_terminal(mouse: MouseCapture, screen: Screen) {
 
 #[cfg(test)]
 mod tests {
+    use super::{
+        Arc, Command, MouseCapture, Screen, TerminalModeGuard, io, log_capture, panic, terminal,
+    };
     use super::{
         DISABLE_CLICK_WHEEL_CAPTURE, ENABLE_CLICK_WHEEL_CAPTURE, LOG_CAPTURE_CAP, TruecolorSignals,
         TuiLogWriter, begin_log_capture, captured_log_lines, end_log_capture, replace_frame,
@@ -549,5 +556,71 @@ mod tests {
             end_log_capture().expect("drain bounded capture").len(),
             LOG_CAPTURE_CAP
         );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn repeated_in_process_handoffs_keep_modes_without_capture_or_hook_leaks() {
+        const CHILD: &str = "RIMZ_TEST_TUI_HANDOFF_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let pty = nix::pty::openpty(None, None).unwrap();
+            let output = std::fs::File::from(pty.slave);
+            let mut child = Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "tui::tests::repeated_in_process_handoffs_keep_modes_without_capture_or_hook_leaks", "--nocapture"])
+                .env(CHILD, "1")
+                .stdin(output.try_clone().unwrap())
+                .stdout(output.try_clone().unwrap())
+                .stderr(output)
+                .spawn().unwrap();
+            let mut reader = std::fs::File::from(pty.master);
+            let capture = std::thread::spawn(move || {
+                let mut bytes = Vec::new();
+                let _ = io::Read::read_to_end(&mut reader, &mut bytes);
+                bytes
+            });
+            let status = child.wait().unwrap();
+            let bytes = capture.join().unwrap();
+            assert!(status.success(), "{}", String::from_utf8_lossy(&bytes));
+            assert!(
+                !bytes
+                    .windows(DISABLE_CLICK_WHEEL_CAPTURE.len())
+                    .any(|bytes| bytes == DISABLE_CLICK_WHEEL_CAPTURE.as_bytes()),
+                "handoffs must not drop mouse reporting"
+            );
+            return;
+        }
+
+        let previous = panic::take_hook();
+        let invoked = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let observed = invoked.clone();
+        panic::set_hook(Box::new(move |info| {
+            observed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let _ = writeln!(io::stderr(), "{info}");
+        }));
+        for _ in 0..3 {
+            let guard = TerminalModeGuard::enable(MouseCapture::Stdout, Screen::Main).unwrap();
+            let installed = Arc::downgrade(guard.saved_hook.as_ref().unwrap());
+            let modes = nix::sys::termios::tcgetattr(io::stdout()).unwrap();
+            guard.preserve_for_handoff();
+            let capture_depth = log_capture().lock().unwrap().depth;
+            assert_eq!(
+                capture_depth, 0,
+                "in-process handoff must release its capture"
+            );
+            assert!(
+                installed.upgrade().is_none(),
+                "in-process handoff must restore its predecessor hook"
+            );
+            assert!(terminal::is_raw_mode_enabled().unwrap());
+            assert_eq!(nix::sys::termios::tcgetattr(io::stdout()).unwrap(), modes);
+        }
+        assert!(panic::catch_unwind(|| panic!("test restored hook")).is_err());
+        assert_eq!(invoked.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert!(
+            terminal::is_raw_mode_enabled().unwrap(),
+            "the terminal-restore hook must be gone"
+        );
+        panic::set_hook(previous);
+        terminal::disable_raw_mode().unwrap();
     }
 }

@@ -1,5 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
-use std::sync::mpsc::SyncSender;
+use std::sync::{Arc, mpsc::SyncSender};
 
 use crate::agents::version::CliVersion;
 use crate::diag::record::RowPresenceGapEvidence;
@@ -13,10 +13,88 @@ use super::sig::{
 };
 use super::{AnomalyDraft, AnomalyKind, ObserveMsg, WatchedField, cap_vec};
 
+#[derive(Default)]
+pub(crate) struct OwnObserver {
+    first_frame_at_ms: Option<u64>,
+    prev: Option<super::sig::OwnFrameSig>,
+    roster_empty: Option<RosterEmpty>,
+    dropped_msgs: u32,
+}
+
+impl OwnObserver {
+    pub(crate) fn observe_into(
+        &mut self,
+        sig: super::sig::OwnFrameSig,
+        tx: &SyncSender<ObserveMsg>,
+        renderer: &crate::ids::SidebarInstanceId,
+    ) {
+        for mut draft in self.observe(sig) {
+            draft.dropped_msgs = std::mem::take(&mut self.dropped_msgs);
+            let carried = draft.dropped_msgs;
+            if tx
+                .try_send(ObserveMsg::OwnAnomaly {
+                    draft: Box::new(draft),
+                    renderer: renderer.clone(),
+                })
+                .is_err()
+            {
+                self.dropped_msgs = carried.saturating_add(1);
+            }
+        }
+    }
+
+    pub(super) fn observe(&mut self, sig: super::sig::OwnFrameSig) -> Vec<AnomalyDraft> {
+        if sig.frame.produced_at_ms.is_some() && self.first_frame_at_ms.is_none() {
+            self.first_frame_at_ms = Some(sig.at_ms);
+        }
+        let mut drafts = Vec::new();
+        if sig.frame.produced_at_ms.is_some()
+            && self
+                .first_frame_at_ms
+                .is_some_and(|first| sig.at_ms.saturating_sub(first) >= millis(OBSERVE_WARMUP))
+        {
+            let prev_rows = self.prev.as_ref().map_or(0, |prev| prev.frame.rows);
+            let closed = self.prev.as_ref().is_some_and(|prev| {
+                let mut panes = prev.pane_ids.iter().flatten().peekable();
+                panes.peek().is_some()
+                    && panes.all(|pane| {
+                        sig.events
+                            .pane_closed
+                            .iter()
+                            .any(|event| event.pane_id == *pane)
+                    })
+            });
+            if let Some(kind) = roster_flap(
+                &mut self.roster_empty,
+                sig.at_ms,
+                sig.frame.rows,
+                prev_rows,
+                sig.own_view.as_ref().map_or(0, |view| view.sibling_count),
+                closed,
+            ) {
+                drafts.push(AnomalyDraft {
+                    at_ms: sig.at_ms,
+                    kind,
+                    window_ms: Some(millis(OBSERVE_ROSTER_FLAP_WINDOW)),
+                    frame: sig.frame.clone(),
+                    events_recent: sig.events.clone(),
+                    gate_reject_streak: sig.gate_reject_streak,
+                    health_failure_streak: sig.health_failure_streak,
+                    dropped_msgs: 0,
+                });
+            }
+        } else {
+            self.roster_empty = None;
+        }
+        self.prev = Some(sig);
+        drafts
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct Observer {
     first_frame_at_ms: Option<u64>,
-    prev: Option<FrameSig>,
+    prev: Option<Arc<FrameSig>>,
     roster_empty: Option<RosterEmpty>,
     presence: BTreeMap<String, RowPresence>,
     values: BTreeMap<(String, WatchedField), FlipRing<()>>,
@@ -34,6 +112,7 @@ impl Observer {
     /// Detect on one committed frame and hand the drafts and any pending roster
     /// to the writer without blocking. A full channel drops the message and
     /// counts it, and the count rides on the next draft that gets through.
+    #[cfg(test)]
     pub fn observe_into(&mut self, sig: FrameSig, tx: &SyncSender<ObserveMsg>) {
         for draft in self.observe(sig) {
             let carried_drops = draft.dropped_msgs;
@@ -53,7 +132,12 @@ impl Observer {
         }
     }
 
+    #[cfg(test)]
     fn observe(&mut self, sig: FrameSig) -> Vec<AnomalyDraft> {
+        self.observe_shared(Arc::new(sig))
+    }
+
+    pub(super) fn observe_shared(&mut self, sig: Arc<FrameSig>) -> Vec<AnomalyDraft> {
         if sig.panes_produced_at_ms.is_some() && self.first_frame_at_ms.is_none() {
             self.first_frame_at_ms = Some(sig.at_ms);
         }
@@ -82,11 +166,15 @@ impl Observer {
         drafts
     }
 
-    fn pending_roster_update(&self) -> Option<RosterSig> {
+    pub(super) fn note_dropped(&mut self, dropped: u32) {
+        self.dropped_msgs = self.dropped_msgs.saturating_add(dropped);
+    }
+
+    pub(super) fn pending_roster_update(&self) -> Option<RosterSig> {
         self.pending_roster.clone()
     }
 
-    fn clear_roster_update(&mut self) {
+    pub(super) fn clear_roster_update(&mut self) {
         self.pending_roster = None;
     }
 
@@ -241,39 +329,24 @@ impl Observer {
     }
 
     fn detect_roster_flap(&mut self, sig: &FrameSig, drafts: &mut Vec<AnomalyDraft>) {
-        let window = millis(OBSERVE_ROSTER_FLAP_WINDOW);
-        if let Some(empty) = self.roster_empty.take() {
-            if sig.at_ms.saturating_sub(empty.empty_at_ms) <= window && !sig.rows.is_empty() {
-                drafts.push(AnomalyDraft::from_sig(
-                    sig,
-                    AnomalyKind::RosterFlap {
-                        rows_before: empty.rows_before,
-                        empty_at_ms: empty.empty_at_ms,
-                        restored_at_ms: sig.at_ms,
-                        rows_after: sig.rows.len(),
-                    },
-                    Some(window),
-                ));
-            } else if sig.rows.is_empty() {
-                self.roster_empty = Some(empty);
-            }
-        }
-
-        let Some(prev) = self.prev.as_ref() else {
-            return;
-        };
-        if sig.rows.is_empty()
-            && !prev.rows.is_empty()
-            && sig
-                .own_view
-                .as_ref()
-                .is_some_and(|view| view.sibling_count > 0)
-            && !pane_closed_covers_rows(&prev.rows, sig)
-        {
-            self.roster_empty = Some(RosterEmpty {
-                rows_before: prev.rows.len(),
-                empty_at_ms: sig.at_ms,
-            });
+        let prev_rows = self.prev.as_ref().map_or(0, |prev| prev.rows.len());
+        let closed = self
+            .prev
+            .as_ref()
+            .is_some_and(|prev| pane_closed_covers_rows(&prev.rows, sig));
+        if let Some(kind) = roster_flap(
+            &mut self.roster_empty,
+            sig.at_ms,
+            sig.rows.len(),
+            prev_rows,
+            sig.own_view.as_ref().map_or(0, |view| view.sibling_count),
+            closed,
+        ) {
+            drafts.push(AnomalyDraft::from_sig(
+                sig,
+                kind,
+                Some(millis(OBSERVE_ROSTER_FLAP_WINDOW)),
+            ));
         }
     }
 
@@ -639,6 +712,37 @@ impl Observer {
 struct RosterEmpty {
     rows_before: usize,
     empty_at_ms: u64,
+}
+
+fn roster_flap(
+    empty: &mut Option<RosterEmpty>,
+    at_ms: u64,
+    rows: usize,
+    prev_rows: usize,
+    siblings: usize,
+    closed: bool,
+) -> Option<AnomalyKind> {
+    let mut anomaly = None;
+    if let Some(onset) = empty.take() {
+        if at_ms.saturating_sub(onset.empty_at_ms) <= millis(OBSERVE_ROSTER_FLAP_WINDOW) && rows > 0
+        {
+            anomaly = Some(AnomalyKind::RosterFlap {
+                rows_before: onset.rows_before,
+                empty_at_ms: onset.empty_at_ms,
+                restored_at_ms: at_ms,
+                rows_after: rows,
+            });
+        } else if rows == 0 {
+            *empty = Some(onset);
+        }
+    }
+    if rows == 0 && prev_rows > 0 && siblings > 0 && !closed {
+        *empty = Some(RosterEmpty {
+            rows_before: prev_rows,
+            empty_at_ms: at_ms,
+        });
+    }
+    anomaly
 }
 
 #[derive(Clone, Debug)]

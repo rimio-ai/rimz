@@ -1,7 +1,7 @@
 //! Sidebar frame-stream observer.
 //!
-//! Every renderer feeds the observer one compact signature per committed frame.
-//! The pure detectors run in-process; the writer thread handles elder-only
+//! The worker shares one room signature per publication; renderers observe only
+//! their own committed view. The writer detects room-common anomalies once and handles elder-only
 //! real-world checks and emission into the typed diagnostics channel
 //! ([`crate::diag`]), which owns the one rate limit. The durable record
 //! vocabulary lives in [`crate::diag::record`].
@@ -11,16 +11,84 @@ mod sig;
 pub(crate) mod writer;
 
 use crate::diag::record::{AnomalyKind, FrameStamp, WatchedField};
-pub(crate) use detect::Observer;
-use sig::{EventsSig, FrameSig, RosterSig};
-pub(crate) use sig::{PulledFrameSig, extract_sig};
+use crate::ids::SidebarInstanceId;
+use crate::sidebar::event_store::EventStore;
+use crate::store::snapshot::SidebarSnapshot;
+pub(crate) use detect::{Observer, OwnObserver};
+#[cfg(test)]
+pub(crate) use sig::take_extractions;
+use sig::{EventsSig, RosterSig};
+pub(crate) use sig::{FrameSig, OwnFrameSig, PulledFrameSig, extract_sig};
+use std::sync::{Arc, Mutex, mpsc::SyncSender};
 
 const EVIDENCE_LIMIT: usize = 32;
 
 #[derive(Clone, Debug)]
 pub(crate) enum ObserveMsg {
+    #[cfg(test)]
     Anomaly(Box<AnomalyDraft>),
+    #[cfg(test)]
     Roster(RosterSig),
+    RoomFrame {
+        sig: Arc<FrameSig>,
+        renderer: SidebarInstanceId,
+        dropped_msgs: u32,
+    },
+    OwnAnomaly {
+        draft: Box<AnomalyDraft>,
+        renderer: SidebarInstanceId,
+    },
+}
+
+pub(crate) struct RoomObserver {
+    tx: SyncSender<ObserveMsg>,
+    pub(crate) events: Arc<Mutex<EventStore>>,
+    dropped_msgs: u32,
+}
+
+impl RoomObserver {
+    pub(crate) fn new(tx: SyncSender<ObserveMsg>) -> Self {
+        Self {
+            tx,
+            events: Arc::default(),
+            dropped_msgs: 0,
+        }
+    }
+
+    pub(crate) fn extract(
+        &mut self,
+        snapshot: &SidebarSnapshot,
+        renderer: SidebarInstanceId,
+    ) -> Arc<FrameSig> {
+        let now_ms = crate::utils::time::unix_now_ms();
+        let events = self
+            .events
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut sig = extract_sig(
+            snapshot,
+            &PulledFrameSig::from_snapshot(snapshot),
+            &events,
+            0,
+            0,
+            now_ms,
+        );
+        sig.own_view = None;
+        let sig = Arc::new(sig);
+        let dropped_msgs = std::mem::take(&mut self.dropped_msgs);
+        if self
+            .tx
+            .try_send(ObserveMsg::RoomFrame {
+                sig: sig.clone(),
+                renderer,
+                dropped_msgs,
+            })
+            .is_err()
+        {
+            self.dropped_msgs = dropped_msgs.saturating_add(1);
+        }
+        sig
+    }
 }
 
 #[derive(Clone, Debug)]

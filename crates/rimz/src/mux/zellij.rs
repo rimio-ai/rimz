@@ -27,6 +27,9 @@ pub(in crate::mux) mod socket;
 pub use pane_pid::ZellijPaneResolver;
 pub(crate) use presence::PresenceUpgrade;
 pub use presence::{ensure_presence_plugin_artifact, presence_plugin_build, presence_plugin_path};
+pub(crate) use raw_pane::WidthMemo;
+#[cfg(test)]
+pub(crate) use raw_pane::take_width_derivations;
 pub use reap::{ReapOutcome, reap_lineage_clients};
 pub use socket::{ZellijSocketHeadroom, socket_headroom, socket_preflight};
 

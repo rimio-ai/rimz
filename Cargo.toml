@@ -210,7 +210,10 @@ crc32fast = "1"
 nix = { version = "0.31", features = ["feature", "fs", "hostname", "net", "poll", "process", "signal", "socket", "term", "user"] }
 # Safe FIONREAD wraps the best-effort ignored-stdin hint without admitting
 # unsafe code into the binary; rustix 1.x is already in the dependency tree.
-rustix = "1"
+# `time` compiles nothing of its own here: rustix 1.1's `net` socket options
+# reach its `timespec` module, which only `time` (among others) builds, so a
+# build whose other dependencies enable none of them fails without it.
+rustix = { version = "1", features = ["net", "termios", "time"] }
 # Held on 0.3 because `crossterm` 0.29 (via ratatui) requires `^0.3.17`; bump when that line moves.
 signal-hook = "0.3"
 

@@ -2,6 +2,7 @@
 
 use std::collections::VecDeque;
 use std::num::NonZeroU16;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::diag::record::{
@@ -362,6 +363,7 @@ struct WidthKeyBurst {
 
 #[derive(Debug)]
 pub(super) struct WidthController {
+    pub(super) geometry: Arc<Mutex<crate::mux::zellij::WidthMemo>>,
     runtime: RuntimePaths,
     session_name: String,
     own_pane: Option<PaneId>,
@@ -391,6 +393,7 @@ impl WidthController {
     ) -> Self {
         let baseline_probe_deadline = own_pane.as_ref().map(|_| Instant::now());
         Self {
+            geometry: Arc::default(),
             runtime,
             session_name,
             own_pane,
@@ -457,12 +460,7 @@ impl WidthController {
         if self.key_burst.is_none()
             && self.current_view_cols.is_none()
             && !self.convergence.is_fullscreen_held()
-            && let Ok(step) = crate::mux::backend_for(self.mux).sidebar_width_step(
-                &self.runtime,
-                &self.session_name,
-                pane,
-                None,
-            )
+            && let Ok(step) = self.width_step(pane, None)
             && step.view_cols != 0
         {
             self.current_view_cols = Some(step.view_cols);
@@ -793,12 +791,7 @@ impl WidthController {
         let Some(pane) = self.own_pane.as_ref() else {
             return false;
         };
-        let Ok(step) = crate::mux::backend_for(self.mux).sidebar_width_step(
-            &self.runtime,
-            &self.session_name,
-            pane,
-            None,
-        ) else {
+        let Ok(step) = self.width_step(pane, None) else {
             return false;
         };
         let Some(active) = step.fullscreen_active else {
@@ -926,6 +919,31 @@ impl WidthController {
         );
     }
 
+    fn width_step(
+        &self,
+        pane: &PaneId,
+        floor: Option<u64>,
+    ) -> crate::mux::Result<crate::mux::WidthStep> {
+        if self.mux != MuxName::Zellij {
+            return crate::mux::backend_for(self.mux).sidebar_width_step(
+                &self.runtime,
+                &self.session_name,
+                pane,
+                floor,
+            );
+        }
+        self.geometry
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .step(
+                &self.runtime,
+                &self.session_name,
+                pane,
+                crate::utils::time::unix_now_ms(),
+                floor,
+            )
+    }
+
     /// Re-derive the target from a proven viewport. `floor` is the event this
     /// decision reacts to: an older topology observation cannot describe the
     /// geometry that event produced. A failed proof leaves the target untouched.
@@ -935,9 +953,7 @@ impl WidthController {
         remember_default: bool,
     ) -> Option<(crate::mux::WidthStep, NonZeroU16)> {
         let pane = self.own_pane.as_ref()?;
-        let step = crate::mux::backend_for(self.mux)
-            .sidebar_width_step(&self.runtime, &self.session_name, pane, floor)
-            .ok()?;
+        let step = self.width_step(pane, floor).ok()?;
         let view_cols = NonZeroU16::new(step.view_cols)?;
         self.convergence.seed_native_step(step);
         self.current_view_cols = Some(view_cols.get());

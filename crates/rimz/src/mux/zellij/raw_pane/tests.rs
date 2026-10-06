@@ -5,6 +5,112 @@ use crate::ids::{MuxName, PaneId};
 use crate::mux::zellij::pane_topology::{PaneTopologyCache, PaneTopologyPane};
 
 #[test]
+fn width_memo_reads_and_derives_once_per_stamp_with_live_freshness() {
+    use crate::mux::zellij::pane_topology::{self, write_pane_topology_cache};
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = crate::RuntimePaths::under(
+        crate::ids::WorkspaceId::from_project_root(dir.path()),
+        dir.path(),
+    )
+    .unwrap();
+    runtime.ensure_dirs().unwrap();
+    let stamp = crate::utils::time::unix_now_ms();
+    let mut cache: PaneTopologyCache = serde_json::from_value(serde_json::json!({
+        "session_name": "rimz-test", "produced_at_ms": stamp,
+        "panes": (0..40).flat_map(|n| [
+            serde_json::json!({"id": 2*n, "is_plugin": false, "tab_id": n, "pane_x": 0, "pane_columns": 24}),
+            serde_json::json!({"id": 2*n+1, "is_plugin": false, "tab_id": n, "pane_x": 24, "pane_columns": 176+n, "is_fullscreen": n == 39}),
+        ]).collect::<Vec<_>>()
+    })).unwrap();
+    write_pane_topology_cache(&runtime, &cache).unwrap();
+    let pane = |n| PaneId::from_parts(MuxName::Zellij, format!("terminal_{n}"));
+    let mut memo = WidthMemo::default();
+    pane_topology::take_reads();
+    take_width_derivations();
+    for n in 0..40 {
+        let step = memo
+            .step(&runtime, "rimz-test", &pane(2 * n), stamp, Some(stamp))
+            .unwrap();
+        assert_eq!(step.view_cols, 200 + n as u16);
+        assert_eq!(step.fullscreen_active, Some(n == 39));
+    }
+    assert_eq!(
+        pane_topology::take_reads(),
+        1,
+        "one topology JSON read for forty panes"
+    );
+    assert_eq!(
+        take_width_derivations(),
+        40,
+        "derive each distinct tab once"
+    );
+
+    assert!(
+        memo.step(&runtime, "rimz-test", &pane(0), stamp, Some(stamp + 1))
+            .is_err()
+    );
+    assert!(
+        memo.step(
+            &runtime,
+            "rimz-test",
+            &pane(0),
+            stamp + crate::mux::PRESENCE_STAMP_FRESH.as_millis() as u64 + 1,
+            None
+        )
+        .is_err()
+    );
+    assert_eq!(
+        memo.step(&runtime, "rimz-test", &pane(0), stamp, Some(stamp))
+            .unwrap()
+            .view_cols,
+        200
+    );
+    assert!(
+        memo.step(&runtime, "rimz-test", &pane(1000), stamp, None)
+            .is_err()
+    );
+    assert_eq!(
+        pane_topology::take_reads(),
+        0,
+        "freshness and pane lookup never re-read an unchanged stamp"
+    );
+    assert_eq!(take_width_derivations(), 0);
+
+    let path = pane_topology::pane_topology_cache_path(&runtime);
+    let modified = std::fs::metadata(&path).unwrap().modified().unwrap();
+    let length = std::fs::metadata(&path).unwrap().len();
+    cache.panes[1].pane_columns = Some(276);
+    write_pane_topology_cache(&runtime, &cache).unwrap();
+    std::fs::File::open(&path)
+        .unwrap()
+        .set_times(std::fs::FileTimes::new().set_modified(modified))
+        .unwrap();
+    assert_eq!(std::fs::metadata(&path).unwrap().len(), length);
+    assert_eq!(
+        memo.step(&runtime, "rimz-test", &pane(0), stamp, None)
+            .unwrap()
+            .view_cols,
+        300
+    );
+    assert_eq!(
+        pane_topology::take_reads(),
+        1,
+        "atomic replacement reloads even at equal length and mtime"
+    );
+    assert_eq!(take_width_derivations(), 40);
+    assert!(
+        memo.step(&runtime, "another-session", &pane(0), stamp, None)
+            .is_err()
+    );
+    assert_eq!(
+        memo.step(&runtime, "rimz-test", &pane(0), stamp, None)
+            .unwrap()
+            .view_cols,
+        300
+    );
+}
+
+#[test]
 fn tab_view_width_needs_a_sibling_extent() {
     let panes: Vec<PaneTopologyPane> = serde_json::from_str(
         r#"[
