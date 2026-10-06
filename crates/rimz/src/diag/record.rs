@@ -528,6 +528,15 @@ pub enum DiagEvent {
         orphaned_at_ms: u64,
         error: String,
     },
+    ProviderStartupExit {
+        agent_kind: String,
+        agent_name: Option<String>,
+        action: String,
+        exit_code: Option<i32>,
+        signal: Option<i32>,
+        startup_ms: u64,
+        relaunches: u8,
+    },
     PaneCacheDivergence {
         pane_id: String,
         pid: i32,
@@ -589,6 +598,7 @@ impl DiagEvent {
             | Self::SidebarOrphanReaped { .. }
             | Self::SubagentOrphanReaped { .. }
             | Self::SubagentOrphanRepairFailed { .. }
+            | Self::ProviderStartupExit { .. }
             | Self::PaneCacheDivergence { .. }
             | Self::SupervisorPreflightRejected { .. }
             | Self::SelfCloseRejected { .. }
@@ -694,6 +704,7 @@ impl DiagEvent {
             Self::SubagentOrphanReaped { .. } => "subagent_orphan_reaped",
             Self::SubagentDigestBackstopped { .. } => "subagent_digest_backstopped",
             Self::SubagentOrphanRepairFailed { .. } => "subagent_orphan_repair_failed",
+            Self::ProviderStartupExit { .. } => "provider_startup_exit",
             Self::PaneCacheDivergence { .. } => "pane_cache_divergence",
             Self::SupervisorConvergence { .. } => "supervisor_convergence",
             Self::SupervisorPreflightRejected { .. } => "supervisor_preflight_rejected",
@@ -922,6 +933,11 @@ impl DiagEvent {
             Self::SubagentDigestBackstopped {
                 parent_agent_id, ..
             } => format!("{}:{parent_agent_id}", self.kind_name()),
+            Self::ProviderStartupExit {
+                agent_kind,
+                agent_name,
+                ..
+            } => format!("{}:{agent_kind}:{agent_name:?}", self.kind_name()),
             Self::SupervisorConvergence { target_build }
             | Self::SupervisorPreflightRejected { target_build, .. } => {
                 format!("{}:{target_build}", self.kind_name())
@@ -1341,6 +1357,18 @@ impl DiagEvent {
                 format!("self-close rejected ({siblings} siblings): {reason}")
             }
             Self::RendererExit { cause } => format!("renderer exited: {}", cause.as_str()),
+            Self::ProviderStartupExit {
+                agent_kind,
+                agent_name,
+                action,
+                exit_code,
+                signal,
+                startup_ms,
+                relaunches,
+            } => format!(
+                "{agent_kind}/{} {action} exited after {startup_ms}ms; exit code {exit_code:?}, signal {signal:?}, relaunches {relaunches}",
+                agent_name.as_deref().unwrap_or("unnamed")
+            ),
             Self::FetchFoldStats {
                 interval_ms,
                 causes,

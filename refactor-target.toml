@@ -480,7 +480,8 @@ path = "crates/rimz/src/harness"
 # The exec wrapper re-wakes a resumed team member's open stage through `team_stage::rewake_resumed` (+1).
 # KeepWarmPolicy and its load/horizon/holding share one keep-warm admission between the keepalive helper, idle compaction, and the sidebar producer cache (+4).
 # `holds` is the one held-or-not predicate the ping, compaction, and the per-fold card projection share (+1).
-surface-budget = 717
+# `run::provider_startup_exit` shares the startup diagnostic predicate with the exec wrapper (+1).
+surface-budget = 718
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -1105,7 +1106,8 @@ allowed-dependencies = [
 # The exec wrapper asks one pure decision over `ProviderExit` (+2), with `StartupEvidence` and `StartupRelaunch` as input and answer (+2).
 # The park-notice helper claims one park per child activity through a locked CAS, and gives it back when queueing fails.
 # `VERIFY_MAX_ATTEMPTS_DEFAULT` is the one verify cap the loop reminder, `loop show`, and the supervised run read (+1).
-surface-budget = 51
+# `provider_startup_exit` shares the diagnostic window independently of relaunch eligibility (+1).
+surface-budget = 52
 
 [[module]]
 path = "crates/rimz/src/harness/run/report.rs"

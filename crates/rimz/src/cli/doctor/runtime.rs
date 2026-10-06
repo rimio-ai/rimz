@@ -1208,6 +1208,7 @@ fn classify_diagnostic(
         | DiagEvent::SidebarOrphanReaped { .. }
         | DiagEvent::SubagentOrphanReaped { .. }
         | DiagEvent::SubagentOrphanRepairFailed { .. }
+        | DiagEvent::ProviderStartupExit { .. }
         | DiagEvent::PaneCacheDivergence { .. }
         | DiagEvent::SupervisorConvergence { .. }
         | DiagEvent::SupervisorPreflightRejected { .. }
