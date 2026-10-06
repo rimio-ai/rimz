@@ -68,7 +68,7 @@ impl Queue {
         record
     }
 
-    /// Build under a deterministic id bound to a pane, and record it as sent.
+    /// Build under a deterministic id bound to a pane, queue it, and record it as sent.
     fn sent(&self, id: u64) -> MessageRecord {
         self.sent_with(id, |_| {})
     }
@@ -78,6 +78,7 @@ impl Queue {
             .record(id)
             .with_pane_id(PaneId::from_parts(MuxName::Tmux, "%1"));
         edit(&mut record);
+        self.store.queue_message(&record, "session").unwrap();
         self.store
             .record_sent_message(&record, "session")
             .unwrap()
@@ -134,10 +135,11 @@ impl Queue {
             .count()
     }
 
-    /// `params["reason"]` of the first event carrying this method.
+    /// `params["reason"]` of the latest event carrying this method.
     fn reason(&self, method: &str) -> String {
         self.events()
             .iter()
+            .rev()
             .find(|event| event.method == method)
             .unwrap_or_else(|| panic!("{method} event missing"))
             .params_value()["reason"]
@@ -184,7 +186,7 @@ trait SingularQueueTestExt {
     ) -> Result<Option<MessageRecord>>;
     fn record_message_delivery_failure(
         &self,
-        message_id: &MessageId,
+        held: &MessageRecord,
         error: &str,
         session_name: &str,
     ) -> Result<DeliveryFailureResult>;
@@ -214,12 +216,12 @@ impl SingularQueueTestExt for Store {
 
     fn record_message_delivery_failure(
         &self,
-        message_id: &MessageId,
+        held: &MessageRecord,
         error: &str,
         session_name: &str,
     ) -> Result<DeliveryFailureResult> {
         self.record_message_delivery_failures(
-            std::slice::from_ref(message_id),
+            std::slice::from_ref(held),
             None,
             DeliveryFailureDisposition::Retry,
             error,

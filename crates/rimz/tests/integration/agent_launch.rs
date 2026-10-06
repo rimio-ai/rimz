@@ -1129,6 +1129,9 @@ fn peer_launch_reports_only_launcher_opened_turns() {
         channel: None,
     };
     store
+        .queue_message(&message, "test fake provider delivery")
+        .unwrap();
+    store
         .record_sent_batch(&[message], "test fake provider delivery")
         .unwrap();
     hook(

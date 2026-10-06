@@ -87,7 +87,7 @@ fn defer_message_wake_keeps_a_diagnostic_it_did_not_write() {
         .claim_message_for_delivery(&queued.message_id, Timestamp::now())
         .unwrap()
         .expect("claimed");
-    q.record_message_delivery_failure(&claimed.message_id, "write failed", "session")
+    q.record_message_delivery_failure(&claimed, "write failed", "session")
         .unwrap();
     assert_eq!(q.live()[0].status, MessageStatus::Queued);
     assert_eq!(q.live()[0].last_error.as_deref(), Some("write failed"));

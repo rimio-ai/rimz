@@ -372,6 +372,45 @@ fn normalize_terminal(
     message
 }
 
+/// The record a sender was handed holds the live record when the ids match, the live record is
+/// still open, and the claim stamp (`attempts`, `last_attempt_at`) is equal. Only a claim, a
+/// release, or a stale-`Sent` requeue changes the stamp, so a sender whose stamp matches is the one
+/// whose attempt it is. A fresh send takes no claim: the record it enqueued holds the live one
+/// until another sender claims it.
+///
+/// Giving up (retry, error, release) needs the hold, so one sender cannot end another's attempt.
+/// Recording a landed write needs none, because the text is already in the pane. A terminal record
+/// stays terminal: a write that lands after a cancel, clear, or archive finds no live record and
+/// creates none.
+fn holds(held: &MessageRecord, live: &MessageRecord) -> bool {
+    held.message_id == live.message_id
+        && live.status.is_open()
+        && held.attempts == live.attempts
+        && held.last_attempt_at == live.last_attempt_at
+}
+
+fn fail_delivery(
+    message: &mut MessageRecord,
+    disposition: DeliveryFailureDisposition,
+    error: &str,
+    now: Timestamp,
+) -> MessageUpdate {
+    message.requeue(now, error);
+    if disposition == DeliveryFailureDisposition::Terminal {
+        MessageUpdate::Finalize {
+            status: MessageStatus::Errored,
+            reason: Some(error.to_owned()),
+        }
+    } else if message.attempts >= MAX_DELIVERY_ATTEMPTS {
+        MessageUpdate::Finalize {
+            status: MessageStatus::Abandoned,
+            reason: Some(error.to_owned()),
+        }
+    } else {
+        MessageUpdate::SilentRewrite
+    }
+}
+
 fn apply_sweep_update(
     message: &mut MessageRecord,
     update: &DeliverySweepUpdate,
@@ -566,6 +605,8 @@ impl Store {
         })
     }
 
+    /// Marks live `Queued`, `Claimed`, or `Sent` records `Sent`. A record that is not live is skipped
+    /// and absent from the result.
     #[must_use = "durability barrier; check the result"]
     pub fn record_sent_batch(
         &self,
@@ -576,21 +617,16 @@ impl Store {
             let now = Timestamp::now();
             let mut sent = Vec::with_capacity(messages.len());
             for supplied in messages {
-                let mut message = match queue.get(&supplied.message_id) {
-                    Some(existing)
-                        if matches!(
-                            existing.status,
-                            MessageStatus::Queued | MessageStatus::Claimed | MessageStatus::Sent
-                        ) =>
-                    {
-                        let mut existing = existing;
-                        existing.pane_id = supplied.pane_id.clone();
-                        existing.batch_id = supplied.batch_id.clone();
-                        existing
-                    }
-                    Some(_) => continue,
-                    None => supplied.clone(),
+                let Some(mut message) = queue.get(&supplied.message_id).filter(|existing| {
+                    matches!(
+                        existing.status,
+                        MessageStatus::Queued | MessageStatus::Claimed | MessageStatus::Sent
+                    )
+                }) else {
+                    continue;
                 };
+                message.pane_id = supplied.pane_id.clone();
+                message.batch_id = supplied.batch_id.clone();
                 message.status = MessageStatus::Sent;
                 message.last_sent_at = Some(now);
                 message.updated_at = now;
@@ -660,18 +696,14 @@ impl Store {
     #[must_use = "durability barrier; check the result"]
     pub fn release_message_claims(
         &self,
-        message_ids: &[MessageId],
+        held: &[MessageRecord],
         note: &str,
         session_name: &str,
     ) -> Result<Vec<MessageRecord>> {
         self.commit_queue(|queue| {
             let now = Timestamp::now();
-            let message_ids = message_ids
-                .iter()
-                .map(MessageId::as_str)
-                .collect::<BTreeSet<_>>();
             let updated = queue.apply_all(session_name, now, |message| {
-                if !message_ids.contains(message.message_id.as_str()) || !message.status.is_open() {
+                if !held.iter().any(|claim| holds(claim, message)) {
                     return MessageUpdate::Keep;
                 }
                 message.attempts = message.attempts.saturating_sub(1);
@@ -954,19 +986,19 @@ impl Store {
     #[must_use = "durability barrier; check the result"]
     pub fn record_send_error(
         &self,
-        message: &MessageRecord,
+        held: &MessageRecord,
         error: &str,
         session_name: &str,
     ) -> Result<Option<MessageRecord>> {
         self.commit_queue(|queue| {
-            let mut message = match queue.get(&message.message_id) {
-                Some(existing) if existing.status.is_open() => {
+            let mut message = match queue.get(&held.message_id) {
+                Some(existing) if holds(held, &existing) => {
                     let mut existing = existing;
-                    existing.pane_id = message.pane_id.clone();
+                    existing.pane_id = held.pane_id.clone();
                     existing
                 }
                 Some(_) => return Ok(None),
-                None => message.clone(),
+                None => held.clone(),
             };
             message.last_error = Some(error.to_owned());
             let errored = queue.terminalize(
@@ -983,47 +1015,27 @@ impl Store {
     #[must_use = "durability barrier; check the result"]
     pub fn record_message_delivery_failures(
         &self,
-        message_ids: &[MessageId],
+        held: &[MessageRecord],
         fallback_head: Option<&MessageRecord>,
         disposition: DeliveryFailureDisposition,
         error: &str,
         session_name: &str,
     ) -> Result<DeliveryFailureResult> {
         self.commit_queue(|queue| {
-            let Some(head_id) = message_ids.first() else {
+            let Some(head_id) = held.first().map(|message| &message.message_id) else {
                 return Ok(DeliveryFailureResult::default());
             };
-            let message_ids = message_ids
-                .iter()
-                .map(MessageId::as_str)
-                .collect::<BTreeSet<_>>();
             let now = Timestamp::now();
             let mut result = DeliveryFailureResult::default();
             queue.apply_all(session_name, now, |message| {
-                if !message_ids.contains(message.message_id.as_str()) {
-                    return MessageUpdate::Keep;
-                }
                 if message.message_id == *head_id {
                     result.head_found = true;
                     result.head_sent = message.status == MessageStatus::Sent;
                 }
-                if !message.status.is_open() {
+                if !held.iter().any(|claim| holds(claim, message)) {
                     return MessageUpdate::Keep;
                 }
-                message.requeue(now, error);
-                if disposition == DeliveryFailureDisposition::Terminal {
-                    MessageUpdate::Finalize {
-                        status: MessageStatus::Errored,
-                        reason: Some(error.to_owned()),
-                    }
-                } else if message.attempts >= MAX_DELIVERY_ATTEMPTS {
-                    MessageUpdate::Finalize {
-                        status: MessageStatus::Abandoned,
-                        reason: Some(error.to_owned()),
-                    }
-                } else {
-                    MessageUpdate::SilentRewrite
-                }
+                fail_delivery(message, disposition, error, now)
             });
             if !result.head_found
                 && let Some(fallback) = fallback_head
@@ -1038,6 +1050,33 @@ impl Store {
                     now,
                 );
             }
+            Ok(result)
+        })
+    }
+
+    /// A miss for a sender that holds no record, so it settles a `Queued` record only and leaves a
+    /// `Claimed` one to the sender that claimed it. `head_sent` reports a live `Sent` record.
+    #[must_use = "durability barrier; check the result"]
+    pub fn record_unheld_delivery_miss(
+        &self,
+        message_id: &MessageId,
+        disposition: DeliveryFailureDisposition,
+        error: &str,
+        session_name: &str,
+    ) -> Result<DeliveryFailureResult> {
+        self.commit_queue(|queue| {
+            let now = Timestamp::now();
+            let mut result = DeliveryFailureResult::default();
+            queue.apply_all(session_name, now, |message| {
+                if message.message_id != *message_id {
+                    return MessageUpdate::Keep;
+                }
+                result.head_sent = message.status == MessageStatus::Sent;
+                if message.status != MessageStatus::Queued {
+                    return MessageUpdate::Keep;
+                }
+                fail_delivery(message, disposition, error, now)
+            });
             Ok(result)
         })
     }

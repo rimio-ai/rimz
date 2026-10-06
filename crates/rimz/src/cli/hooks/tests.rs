@@ -171,6 +171,7 @@ fn runtime_env_context_reaches_the_first_root_prompt_of_each_session() {
     .with_sender(MessageSender::Harness {
         notice: HarnessNotice::Stage,
     });
+    store.queue_message(&notice, "hooks-test").unwrap();
     store
         .record_sent_batch(std::slice::from_ref(&notice), "hooks-test")
         .unwrap();

@@ -260,7 +260,7 @@ fn attempt_delivery(
         Err(error) => {
             tracing::warn!(%message_id, %error, "deferring subagent digest: cannot check or settle joined runs");
             store.release_message_claims(
-                std::slice::from_ref(message_id),
+                &claimed,
                 "deferred: cannot check or settle joined runs",
                 &workspace.session_name,
             )?;
@@ -338,10 +338,6 @@ pub(super) fn execute_attempt(
     let head = records
         .first()
         .expect("delivery attempts require at least one message");
-    let ids = records
-        .iter()
-        .map(|message| message.message_id.clone())
-        .collect::<Vec<_>>();
     if head.body == MessageBody::Command {
         let current = store.runtime_projection(crate::RuntimeScope::Audit)?;
         let now = Timestamp::now();
@@ -352,14 +348,14 @@ pub(super) fn execute_attempt(
         {
             if agent.is_compacting(now) {
                 store.release_message_claims(
-                    &ids,
+                    records,
                     "parked: waiting for compaction to finish",
                     &workspace.session_name,
                 )?;
                 return Ok(AttemptOutcome::Queued);
             }
             store.record_message_delivery_failures(
-                &ids,
+                records,
                 Some(head),
                 crate::store::writer::DeliveryFailureDisposition::Terminal,
                 "a compaction never follows a compaction; the agent has not taken a turn since its last one",
@@ -381,7 +377,7 @@ pub(super) fn execute_attempt(
                 return Ok(AttemptOutcome::SkippedWaiting);
             }
             store.record_message_delivery_failures(
-                &ids,
+                records,
                 records.first(),
                 crate::store::writer::DeliveryFailureDisposition::Retry,
                 WAITING,
@@ -391,7 +387,7 @@ pub(super) fn execute_attempt(
         }
         Ok(send::Receipt::CompactionPending) => {
             store.release_message_claims(
-                &ids,
+                records,
                 "parked: waiting for compaction to finish",
                 &workspace.session_name,
             )?;
@@ -406,7 +402,7 @@ pub(super) fn execute_attempt(
                     }
             );
             let failure = store.record_message_delivery_failures(
-                &ids,
+                records,
                 durable_receiver.then_some(head),
                 if durable_receiver {
                     crate::store::writer::DeliveryFailureDisposition::Retry

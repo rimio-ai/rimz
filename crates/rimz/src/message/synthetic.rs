@@ -77,13 +77,8 @@ pub fn attempt_now(
         Ok(false) => closed_reason.to_owned(),
         Err(err) => err.to_string(),
     };
-    let result = store.record_message_delivery_failures(
-        std::slice::from_ref(message_id),
-        None,
-        on_miss,
-        &reason,
-        &workspace.session_name,
-    )?;
+    let result =
+        store.record_unheld_delivery_miss(message_id, on_miss, &reason, &workspace.session_name)?;
     if result.head_sent {
         return Ok(true);
     }
