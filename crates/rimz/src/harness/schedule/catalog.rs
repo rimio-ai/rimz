@@ -146,12 +146,26 @@ impl TaskCatalog {
     /// Strict interactive load. Malformed machine, instance, or project state
     /// fails at command entry.
     pub fn load(project_root: Option<&Path>) -> Result<Self> {
+        Self::load_scoped(project_root, false)
+    }
+
+    /// Strict room-only load, filtering machine tasks before name precedence.
+    pub fn load_room(root: &Path) -> Result<Self> {
+        Self::load_scoped(Some(root), true)
+    }
+
+    fn load_scoped(project_root: Option<&Path>, room_only: bool) -> Result<Self> {
         let instances = project_root
             .map(|root| anyhow::Ok(instances::load_strict_from(&instance_root(root)?)?))
             .transpose()?
             .unwrap_or_default();
         let machine = MachineConfig::load_loop().context("reading per-machine loop.toml")?;
-        let machine_tasks = machine.tasks;
+        let mut machine_tasks = machine.tasks;
+        if room_only {
+            machine_tasks
+                .0
+                .retain(|_, entry| Some(entry.resolved_root().as_path()) == project_root);
+        }
         let project = project_root
             .map(|root| crate::config::effective::project_tasks(root, &rimz_home()))
             .transpose()?

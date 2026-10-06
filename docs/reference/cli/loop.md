@@ -24,7 +24,7 @@ rimz loop fire watchdog
 | `rimz loop pause <NAME> --for <DUR>` | Hold a task for a bounded time. |
 | `rimz loop fire <NAME>` | Run a task now in the foreground. |
 | `rimz loop stop <NAME>` | Stop a task's active run and release its overlap lock, including a fired one-shot's run. |
-| `rimz loop list` | List tasks grouped by project, with state and last run. |
+| `rimz loop list [--all] [--json]` | List the current room's tasks, grouped by attention and checkout. |
 | `rimz loop watch` | Hold a live dashboard open with countdowns and running tasks. |
 | `rimz loop show <NAME>` | One task's trigger, health, spend, and recent runs. |
 | `rimz loop logs <NAME>` | Full forensics for a task's recent runs. |
@@ -432,27 +432,25 @@ Every fire appends one record to `~/.rimz/logs/loop-runs.log.jsonl`. `show` and 
 
 ### `loop list`
 
-`loop list` groups tasks by project root. Each group's heading shows `room open`, `no room`, or `no room · timer`. The columns are NAME, STATE, LAST (age of the last finished run), RESULT (its result), TASK, SOURCE, SCHEDULE, and COST. A running task still shows its last finished run in LAST and RESULT.
+`loop list` shows the whole current room, including its worktrees. `--all` shows every known room, the caller's first; without a resolved room it behaves as `--all`. Known rooms come from machine tasks, stored instance tasks, and the caller's root. A project with only project-config tasks is not discovered unless it is the caller's. Other rooms' attention tasks appear on an `elsewhere:` line in the default view; healthy tasks elsewhere stay hidden.
 
-A run whose task row is gone keeps a row until it ends, so the name `loop stop` needs stays on screen: a fired one-shot most often, or a task removed or renamed mid-run. It sits under the project you are standing in, after that project's tasks, with `▸ running 3m` in STATE, `one-shot fired` in SCHEDULE, LAST and RESULT from the name's history, and `-` in TASK, SOURCE, and COST. Only your own project is searched, so every name listed this way can be stopped from where you stand. `no loop tasks` prints only when there is no task and no such run.
+Each heading names the home-relative root, whether its room is open, the task count before collapsing, the next clock fire when present, and nonzero spend today. Without a room, it explains which clocks and forge signals wait for `rimz start`, and whether the optional clock timer is active.
 
-| STATE | Meaning |
-| --- | --- |
-| `▸ running 3m` | A run holds the task's run lock, for that long. It replaces every state below, held ones included, until the run ends; a `--wait` delivery or a `--stay` launch holds the lock for a second or two. |
-| `held: 1 start ahead, 3m` | The running fire is waiting for its turn in [the start throttle](#the-start-throttle): the reason, and how long it has waited. It takes the place of `▸ running`. |
-| `in 12m` | The next clock fire. |
-| `listening` | A signal subscription. |
-| `watching` | A `rimz wait` command, PID, check, or file watch. |
-| `waiting · team.stage: Review, ci: unknown` | Condition readings, in expression order; the whole expression is false. |
-| `holding 12m/30m` | Continuously true since the observed start of the hold. |
-| `due` | A clock fire is due, or a condition without `--for` is true and awaiting its next tick. |
-| `fired` | Already fired in this true period; waits for a false tick to re-arm, except resident retries described above. |
-| `disabled`, `disabled · N strikes`, `disabled · enable to arm` | Held until enabled; the last is a project task not yet enabled here. |
-| `paused · in 2h` | Paused until then. |
-| `blocked · trust` | A project task whose project is not trusted. |
-| `-` | No clock has armed the task yet, or no occurrence remains. |
+Empty sections are omitted:
 
-Footers count tasks blocked by trust and project tasks not yet enabled, with the command that fixes each. A run lock that cannot be read warns on stderr with the task's name, and that task's row shows its other state. When a project's locks directory cannot be listed at all, one warning names the directory and every task in that project shows its other state.
+- NEEDS YOU names missing checkouts, strike-disabled or failing tasks, throttle holds, trust blocks, and invalid triggers, with commands addressing the named tasks. A missing checkout is flagged, not retired; the task returns to its normal section when the directory returns.
+- ROOM has NAME, TRIGGER, ACTION, LAST. Running rows come first. Actions read `run check`, `start <profile>`, or `check, then start <profile>`, with an account pin when set.
+- WORKTREES has WORKTREE, TRIGGER, WAKES, LAST, NAME. Deliveries and directory-bound tasks group by checkout, with the caller's checkout first and marked `(here)`. A target matching the calling agent is marked `(you)`. Owned signal subscriptions with the same target, owner, and non-path filters collapse; NAME reads `↳ team <team>` or `↳ <loop task>`. User-named rows without an owner never collapse.
+
+TRIGGER omits the checkout's matching `path` filter, includes labels and pauses, and puts `for <hold>` and `each worktree` on a continuation line. Watched commands read `on command exit`, not their command preview. On a terminal, the trigger wraps at modifier, condition, and word boundaries down to 24 columns; no cell is clipped. If the other columns plus that floor exceed the terminal width, the table overflows. Piped output keeps only the fixed continuation line.
+
+LAST chooses running, off, latest acting result, latest heard sibling signal, watcher liveness, then `never fired`, in that order. A good acting run reads `✓ 53m ago · 143 in a row`; a failed one reads `✗ failed 2m ago · exit 101`. A sibling signal after a good run does not replace it; with only sibling signals the row reads `heard ci.passed 7m ago`. A watch reads `watching 12m` or `lost`; a lost watcher is not NEEDS YOU. Delivery streaks, launched-worktree counts, and spend today follow inline. A daily cap is shown even at zero spend. A repo task not enabled here reads `off · repo task, enable here to run`.
+
+A run whose task row is gone keeps a ROOM row until it ends, with the real name `loop stop` needs, trigger `one-shot fired`, and LAST `▸ running 3m`. Empty rooms say how many tasks exist elsewhere and point to `--all`; with none anywhere, the add hint remains.
+
+`--json` prints one object with a `rooms` array for the same scope (`--all` widens it). Each room has `root`, `open`, `here`, `spend_today_usd`, and `tasks`. Tasks are never collapsed and always retain real names. Each has `name`, `section` (`needs_you`, `room`, `worktrees`), `state` (`live`, `off`, `not_enabled`, `paused`, `running`, `waits_for_room`), unwrapped `trigger`, `you`, and spend. `action` has `kind` (`check`, `start`, `wake`) and `subject`; it is omitted when no definition survives or the action is invalid. Other optional fields are `attention` (`checkout_gone`, `strikes`, `failing`, `held`, `blocked`, `invalid`), `label`, `dir`, `worktree`, `owner` (`kind`: `team`, `loop`; `name`), `next_at`, `running_since`, `last` (`at`, serialized run `result`, `ok`, `streak`), `heard` (`signal`, `at`), and `budget_per_day_usd`. Absent values are omitted, not null; timestamps use the same format as other JSON commands.
+
+Listing is read-only and never creates a room store. Malformed local task state fails the command; a malformed other room warns with its root and is skipped. A run lock that cannot be read warns on stderr with the task's name. When a room's locks directory cannot be listed, one warning names the root and directory, and its rows show their other state.
 
 ### `loop watch`
 

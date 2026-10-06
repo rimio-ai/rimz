@@ -23,6 +23,8 @@ use rimz::store::run::{RunRecord, RunStatus};
 use rimz::wakeup::heartbeat::SidebarHeartbeat;
 
 use crate::common::{Env, ScrubSessionEnvExt, canonical};
+#[path = "loop_list.rs"]
+mod list_tests;
 #[cfg(unix)]
 use crate::common::{
     path_with_front, trust_codex_preflight_hooks, trust_codex_project, write_fake_login_shell,
@@ -445,10 +447,9 @@ fn condition_tick_observes_board_and_records_evidence() {
     );
     assert!(read_loop_run_records(&env).is_empty());
     let listing = loop_ok(&env, &["loop", "list"]);
-    assert!(
-        listing.contains("waiting · team.stage: Review"),
-        "{listing}"
-    );
+    assert!(listing.contains("when team.stage=Done"), "{listing}");
+    let shown = loop_ok(&env, &["loop", "show", "ready"]);
+    assert!(shown.contains("waiting · team.stage: Review"), "{shown}");
     std::fs::write(&root_board, "Stage: Review\n").unwrap();
     std::fs::write(&board, "Stage: Done\n").unwrap();
     loop_ok(&env, &["loop", "tick"]);
@@ -2104,7 +2105,7 @@ fn wildcard_team_binding_arms_at_root_and_delivers_across_worktrees() {
         assert_eq!(entry.matches.as_ref(), Some(&matches));
     }
     let listing = loop_ok(&env, &["loop", "list"]);
-    assert_eq!(listing.matches("listening").count(), 2, "{listing}");
+    assert_eq!(listing.matches("↳ team forge").count(), 2, "{listing}");
     team_signal_hook(&env, &env.project_root, "sess-any", "UserPromptSubmit");
     for payload in [
         json!({"path":cwd,"repo":"o/r","number":7}),
@@ -4043,7 +4044,7 @@ fn loop_wait_workflow_pins_and_delivers_to_live_session() {
     let show = loop_ok(&env, &["loop", "show", "wait"]);
     assert!(
         list.lines()
-            .any(|line| line.contains("wait") && line.contains("delivered"))
+            .any(|line| line.contains("wait") && line.contains('✓'))
             && show.contains("source:")
             && show.contains("state"),
         "list/show smoke failed:\n{list}\n{show}"
@@ -4552,9 +4553,8 @@ fn loop_project_trust_controls_visibility_execution_and_precedence() {
     let list = loop_ok(&env, &["loop", "list"]);
     assert!(
         list.contains("repo-check")
-            && list.contains("project · untrusted")
-            && list.contains("blocked · trust")
-            && list.contains("project task(s) disabled")
+            && list.contains("blocked · project untrusted")
+            && list.contains("NEEDS YOU")
             && list.contains("rimz trust grant"),
         "{list}"
     );
@@ -4581,7 +4581,7 @@ fn loop_project_trust_controls_visibility_execution_and_precedence() {
     grant_project_trust(&env);
     let list = loop_ok(&env, &["loop", "list"]);
     assert!(
-        list.contains("repo-check") && list.contains("disabled · enable to arm"),
+        list.contains("repo-check") && list.contains("off · repo task, enable here to run"),
         "{list}"
     );
     let runs_before = read_loop_run_records(&env).len();
@@ -4614,16 +4614,22 @@ fn project_task_enablement_is_scoped_by_project_root() {
 
     assert!(
         loop_ok_root(&env, &env.project_root, &["loop", "list"])
-            .contains("disabled · enable to arm")
+            .contains("off · repo task, enable here to run")
     );
-    assert!(loop_ok_root(&env, &other, &["loop", "list"]).contains("disabled · enable to arm"));
+    assert!(
+        loop_ok_root(&env, &other, &["loop", "list"])
+            .contains("off · repo task, enable here to run")
+    );
 
     loop_ok_root(&env, &env.project_root, &["loop", "enable", "nightly"]);
     assert!(
         !loop_ok_root(&env, &env.project_root, &["loop", "list"])
-            .contains("disabled · enable to arm")
+            .contains("off · repo task, enable here to run")
     );
-    assert!(loop_ok_root(&env, &other, &["loop", "list"]).contains("disabled · enable to arm"));
+    assert!(
+        loop_ok_root(&env, &other, &["loop", "list"])
+            .contains("off · repo task, enable here to run")
+    );
 
     let arming = read_loop_arming(&env);
     assert!(arming[&project_task_key(&env.project_root, "nightly")].enabled);
@@ -4919,7 +4925,7 @@ fn loop_enable_disable_pause_workflow() {
         "{error}"
     );
     assert!(loop_ok(&env, &["loop", "disable", "probe"]).contains("disabled"));
-    assert!(loop_ok(&env, &["loop", "list"]).contains("disabled"));
+    assert!(loop_ok(&env, &["loop", "list"]).contains("off"));
     let fired = loop_ok(&env, &["loop", "fire", "probe"]);
     assert!(fired.contains("task is disabled; firing anyway") && fired.contains("check passed"));
     assert!(loop_ok(&env, &["loop", "enable", "probe"]).contains("enabled"));
@@ -4936,7 +4942,7 @@ fn loop_enable_disable_pause_workflow() {
     let fired = loop_ok(&env, &["loop", "fire", "probe"]);
     assert!(fired.contains("task is paused; firing anyway") && fired.contains("check passed"));
     assert!(loop_ok(&env, &["loop", "enable", "probe"]).contains("enabled"));
-    assert!(!loop_ok(&env, &["loop", "list"]).contains("paused ·"));
+    assert!(!loop_ok(&env, &["loop", "list"]).contains("paused, resumes"));
     assert!(loop_ok(&env, &["loop", "enable", "probe"]).contains("already enabled"));
 
     let key = machine_task_key("probe");
@@ -5976,9 +5982,10 @@ fn loop_list_uses_room_arm_stamp_for_next_fire() {
         ),
     );
     let list = loop_ok(&env, &["loop", "list"]);
-    assert!(list.lines().any(|line| {
-        line.trim_start().starts_with("next") && line.split_whitespace().last() == Some("-")
-    }));
+    assert!(
+        list.lines()
+            .any(|line| { line.trim_start().starts_with("next") && line.contains("never fired") })
+    );
     write_loop_fire_state(
         &env,
         BTreeMap::from([(
@@ -5986,6 +5993,22 @@ fn loop_list_uses_room_arm_stamp_for_next_fire() {
             Timestamp::now() - SignedDuration::from_secs(16 * 60),
         )]),
     );
+    let runtime = env.runtime_paths();
+    runtime.ensure_dirs().unwrap();
+    let instance_id = SidebarInstanceId::new();
+    let heartbeat = SidebarHeartbeat::new(
+        env.workspace_id.clone(),
+        instance_id.clone(),
+        MuxName::Tmux,
+        "rimz-test",
+        runtime.sock_dir.join("sidebar.sock"),
+        None,
+    );
+    std::fs::write(
+        runtime.sidebar_heartbeat_path(&instance_id),
+        serde_json::to_vec(&heartbeat).unwrap(),
+    )
+    .unwrap();
     let list = loop_ok(&env, &["loop", "list"]);
     assert!(
         list.lines()
@@ -6047,7 +6070,7 @@ fn loop_legacy_run_record_renders_through_list_and_show() {
     let show = loop_ok(&env, &["loop", "show", "legacy"]);
     assert!(
         list.lines()
-            .any(|line| { line.trim_start().starts_with("legacy") && line.contains("completed") })
+            .any(|line| { line.trim_start().starts_with("legacy") && line.contains('✓') })
             && show.contains("✓ completed")
             && show.contains("RECENT RUNS (newest first · 1 of 1)")
             && !show.contains("MODE")
@@ -6149,15 +6172,9 @@ fn loop_list_shows_a_running_task_beside_its_last_result() {
     };
 
     let list = loop_ok(&env, &["loop", "list"]);
-    assert_eq!(
-        row(&list, "NAME"),
-        [
-            "NAME", "STATE", "LAST", "RESULT", "TASK", "SOURCE", "SCHEDULE", "COST"
-        ]
-    );
+    assert_eq!(row(&list, "NAME"), ["NAME", "TRIGGER", "ACTION", "LAST"]);
     let idle = row(&list, "busy");
-    assert_eq!(idle[1], "-", "{list}");
-    assert_eq!(idle[4..6], ["✓", "completed"], "{list}");
+    assert!(idle.contains(&"✓".to_owned()), "{list}");
     assert!(!list.contains("▸ running"), "{list}");
 
     let holder = RunLockInfo {
@@ -6167,8 +6184,17 @@ fn loop_list_shows_a_running_task_beside_its_last_result() {
     let lock_file = hold_loop_run_lock(&loop_run_lock_path(&env, "busy"), &holder);
     let list = loop_ok(&env, &["loop", "list"]);
     let running = row(&list, "busy");
-    assert_eq!(running[1..4], ["▸", "running", "3m"], "{list}");
-    assert_eq!(running[6..], idle[4..], "{list}");
+    assert!(
+        running.ends_with(&["▸".into(), "running".into(), "3m".into()]),
+        "{list}"
+    );
+    let value: serde_json::Value =
+        serde_json::from_str(&loop_ok(&env, &["loop", "list", "--json"])).unwrap();
+    assert_eq!(value["rooms"][0]["tasks"][0]["last"]["result"], "completed");
+    assert_eq!(
+        value["rooms"][0]["tasks"][0]["running_since"],
+        json!(holder.started_at)
+    );
     lock_file.unlock().expect("unlock loop run lock");
 }
 
@@ -6181,12 +6207,13 @@ fn loop_list_shows_a_consumed_one_shot_until_its_run_ends() {
     let list = loop_ok(&env, &["loop", "list"]);
     let lines = list.lines().collect::<Vec<_>>();
     assert!(
-        lines.len() == 3
+        lines.len() == 5
             && lines[0].contains("room")
-            && lines[1].trim_start().starts_with("NAME")
-            && lines[2].trim_start().starts_with("later")
-            && lines[2].contains("▸ running")
-            && lines[2].contains("one-shot fired"),
+            && lines[2] == "ROOM"
+            && lines[3].trim_start().starts_with("NAME")
+            && lines[4].trim_start().starts_with("later")
+            && lines[4].contains("▸ running")
+            && lines[4].contains("one-shot fired"),
         "{list}"
     );
 
@@ -6216,14 +6243,14 @@ fn loop_list_adds_one_row_per_held_lock_no_task_claims() {
     let list = loop_ok(&env, &["loop", "list"]);
     let lines = list.lines().collect::<Vec<_>>();
     assert!(
-        lines.len() == 4
+        lines.len() == 6
             && lines[0].contains("room")
-            && lines[2].trim_start().starts_with("fan ")
-            && lines[2].contains("▸ running 3m")
-            && lines[2].contains("every 1h")
-            && lines[3].trim_start().starts_with("later ")
-            && lines[3].contains("▸ running 3m")
-            && lines[3].contains("one-shot fired"),
+            && lines[4].trim_start().starts_with("fan ")
+            && lines[4].contains("▸ running 3m")
+            && lines[4].contains("every 1h")
+            && lines[5].trim_start().starts_with("later ")
+            && lines[5].contains("▸ running 3m")
+            && lines[5].contains("one-shot fired"),
         "{list}"
     );
 }
