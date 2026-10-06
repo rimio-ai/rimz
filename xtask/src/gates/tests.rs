@@ -1,6 +1,29 @@
 use super::*;
 
 #[test]
+fn timed_out_capture_renders_extract_before_next_step() {
+    let mut timeout = crate::runner::CaptureTimeout {
+        summary: "xtask `test` exceeded its 8s budget after 8s: terminated `cargo nextest run`"
+            .into(),
+        next_step: "NEXT: rerun the slow step on its own".into(),
+        output: "PASS [ 0.1s] ok\nFAIL [ 0.2s] broken\n".into(),
+    };
+    let error = capture_timeout_error(&timeout).to_string();
+    assert_eq!(error.lines().next(), Some(timeout.summary.as_str()));
+    assert!(error.contains("FAIL [ 0.2s] broken"), "{error}");
+    assert!(!error.contains("PASS ["), "{error}");
+    assert_eq!(error.lines().last(), Some(timeout.next_step.as_str()));
+    timeout.output = "PASS [ 0.1s] ok\n   Compiling xtask\n".into();
+    let error = capture_timeout_error(&timeout).to_string();
+    assert!(
+        error.contains("step printed nothing beyond progress lines"),
+        "{error}"
+    );
+    assert!(!error.contains("command failed without output"));
+    assert_eq!(error.lines().last(), Some(timeout.next_step.as_str()));
+}
+
+#[test]
 fn semver_baseline_missing_matches_first_publish_error_only() {
     assert!(semver_registry_baseline_missing(
         b"error: failed to retrieve index\nCaused by:\n    rimz not found in registry (crates.io)"

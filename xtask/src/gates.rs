@@ -535,7 +535,7 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<std::ffi::OsStr>,
 {
-    let captured = run_streamed(root, "cargo", args, envs, removed_envs, progress)?;
+    let captured = capture_cargo(root, args, envs, removed_envs, progress)?;
     Ok(captured_result(&captured, note))
 }
 
@@ -605,9 +605,28 @@ where
             spinner.set(format!("{label} — {line}"));
         }
     };
-    let captured = run_streamed(root, "cargo", args, envs, removed_envs, &mut progress);
+    let captured = capture_cargo(root, args, envs, removed_envs, &mut progress);
     drop(spinner);
     captured
+}
+
+fn capture_cargo<I, S>(
+    root: &Path,
+    args: I,
+    envs: &[(&str, PathBuf)],
+    removed_envs: &[&str],
+    progress: &mut dyn FnMut(&str),
+) -> Result<Captured>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<std::ffi::OsStr>,
+{
+    run_streamed(root, "cargo", args, envs, removed_envs, progress).map_err(|error| {
+        match error.downcast_ref::<crate::runner::CaptureTimeout>() {
+            Some(timeout) => capture_timeout_error(timeout),
+            None => error,
+        }
+    })
 }
 
 fn finish_cargo_task(name: &str, result: GateResult, invocation: &str) -> Result<()> {
@@ -854,6 +873,20 @@ fn failure_detail(output: &str) -> String {
     } else {
         detail
     }
+}
+
+fn capture_timeout_error(timeout: &crate::runner::CaptureTimeout) -> anyhow::Error {
+    let detail = trim_cargo_noise(&timeout.output);
+    let detail = if detail.is_empty() {
+        "step printed nothing beyond progress lines"
+    } else {
+        &detail
+    };
+    anyhow::anyhow!(
+        "{}\nCaptured output before timeout:\n{detail}\n{}",
+        timeout.summary,
+        timeout.next_step
+    )
 }
 
 fn trim_cargo_noise(output: &str) -> String {
