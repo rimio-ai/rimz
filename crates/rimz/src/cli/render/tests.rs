@@ -542,16 +542,28 @@ fn suffixed_cells_measure_and_render_both_styles() {
     let main = palette::meta();
     let suffix = palette::faint();
     let mut table = Table::new(["PANE", "VALUE"]);
-    table.row([cell("x").fg(main).suffix("(self)", suffix), cell("one")]);
+    table.row([
+        cell("x")
+            .fg(main)
+            .suffix("(self)", suffix)
+            .suffix("pace", main),
+        cell("one"),
+    ]);
     table.row([cell("plain"), cell("two")]);
     let mut raw = Vec::new();
     table.render(&mut raw).expect("render suffixed cell");
     let raw = String::from_utf8(raw).expect("utf-8");
     assert!(raw.contains(&paint(main, "x")));
     assert!(raw.contains(&paint(suffix, "(self)")));
+    assert!(raw.contains(&paint(main, "pace")));
+    let clipped = cell("longname")
+        .suffix("(self)", suffix)
+        .suffix("pace", main)
+        .clipped(15);
+    assert_eq!(strip(|w| clipped.write_styled(w)), "lo… (self) pace");
     assert_eq!(
         strip(|w| table.render(w)),
-        "PANE      VALUE\nx (self)  one\nplain     two\n"
+        "PANE           VALUE\nx (self) pace  one\nplain          two\n"
     );
 }
 
@@ -572,7 +584,7 @@ fn window_cell_reads_what_is_left_and_when_it_resets() {
         ..Default::default()
     };
     for (window, left) in [
-        (window(Some(69), Some(3_720)), Some("31% · 1h02m")),
+        (window(Some(69), Some(3_720)), Some("31% · 1h02m · 0.9x")),
         (
             RateLimitWindow {
                 duration_mins: None,
@@ -587,4 +599,114 @@ fn window_cell_reads_what_is_left_and_when_it_resets() {
         let text = window_cell(&window, now).map(|cell| strip(|w| cell.write_styled(w)));
         assert_eq!(text.as_deref(), left);
     }
+}
+
+#[test]
+fn pace_text_rounds_tenths_and_caps_at_ten() {
+    for (ratio, expected) in [
+        (0.0, "0.0x"),
+        (0.75, "0.8x"),
+        (9.94, "9.9x"),
+        (9.96, ">10x"),
+        (10.0, ">10x"),
+        (20.0, ">10x"),
+    ] {
+        assert_eq!(pace_text(ratio), expected);
+    }
+}
+
+#[test]
+fn window_cell_gates_pace_at_the_floor_and_omits_blank_states() {
+    use jiff::SignedDuration;
+    use rimz::agents::RateLimitWindow;
+    let now = Timestamp::UNIX_EPOCH;
+    let window = RateLimitWindow {
+        used_percentage: Some(20),
+        duration_mins: Some(300),
+        resets_at: Some(now + SignedDuration::from_secs(17_101)),
+        ..Default::default()
+    };
+    let render = |window: &RateLimitWindow| {
+        window_cell(window, now).map(|cell| strip(|w| cell.write_styled(w)))
+    };
+    assert_eq!(render(&window).as_deref(), Some("80% · 4h45m · –"));
+    let mut early = Vec::new();
+    window_cell(&window, now)
+        .unwrap()
+        .write_styled(&mut early)
+        .unwrap();
+    assert!(
+        String::from_utf8(early)
+            .unwrap()
+            .contains(&paint(palette::faint(), "–"))
+    );
+    // Exactly at the floor (900 s of 18 000) and one second past it.
+    for (secs, expected) in [
+        (17_100, "80% · 4h45m · 4.0x"),
+        (17_099, "80% · 4h44m · 4.0x"),
+    ] {
+        assert_eq!(
+            render(&RateLimitWindow {
+                resets_at: Some(now + SignedDuration::from_secs(secs)),
+                ..window.clone()
+            })
+            .as_deref(),
+            Some(expected)
+        );
+    }
+    for (blank, expected) in [
+        (
+            RateLimitWindow {
+                lifted: true,
+                ..window.clone()
+            },
+            "∞",
+        ),
+        (
+            RateLimitWindow {
+                used_percentage: Some(100),
+                ..window.clone()
+            },
+            "0% · 4h45m",
+        ),
+        (
+            RateLimitWindow {
+                used_percentage: Some(0),
+                resets_at: Some(now + SignedDuration::from_secs(18_000)),
+                ..window.clone()
+            },
+            "100% · ready",
+        ),
+        (
+            RateLimitWindow {
+                resets_at: None,
+                duration_mins: None,
+                ..window.clone()
+            },
+            "80%",
+        ),
+        (
+            RateLimitWindow {
+                duration_mins: None,
+                ..window.clone()
+            },
+            "80% · 4h45m",
+        ),
+        (
+            RateLimitWindow {
+                resets_at: Some(now + SignedDuration::from_secs(18_001)),
+                ..window.clone()
+            },
+            "80% · 5h00m",
+        ),
+    ] {
+        assert_eq!(render(&blank).as_deref(), Some(expected));
+    }
+    assert_eq!(
+        render(&RateLimitWindow {
+            used_percentage: None,
+            ..window
+        }),
+        None
+    );
 }

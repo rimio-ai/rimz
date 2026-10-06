@@ -650,7 +650,7 @@ fn table_window_cells_show_what_is_left() {
             "●",
             "default",
             "Claude Max",
-            "55% · 1h10m",
+            "55% · 1h10m · 0.6x",
             "100% · ready",
             "100%",
             "–",
@@ -995,7 +995,7 @@ fn reset_rendering_respects_count_falls_back_to_summary_and_marks_due() {
 }
 
 #[test]
-fn provider_block_colours_only_dollar_and_percent_tokens() {
+fn provider_block_colours_dollar_percent_and_pace_tokens() {
     let now = Timestamp::from_second(1_700_000_000).unwrap();
     let (accounts, panel, spending) = protocol_fixture(now);
     let reports = assemble_reports(
@@ -1038,14 +1038,18 @@ fn provider_block_colours_only_dollar_and_percent_tokens() {
     assert_eq!(
         rows[2],
         format!(
-            "  {}       {} left · resets in 1h23m",
+            "  {}       {} left · resets in 1h23m · pace {}",
             painted(render::palette::muted(), "5h:"),
-            painted(render::palette::budget(38), "38%")
+            painted(render::palette::budget(38), "38%"),
+            painted(
+                render::palette::pace(reports[0].windows[0].pace(now).unwrap()),
+                "0.9x"
+            )
         ),
         "{raw:?}"
     );
     let coloured = [
-        "$12.40", "$50.00", "$31.20", "$118.75", "$8.10", "$25.00", "38%", "86%",
+        "$12.40", "$50.00", "$31.20", "$118.75", "$8.10", "$25.00", "38%", "86%", "0.9x", "0.3x",
     ];
     let labels: usize = rows
         .iter()
@@ -1087,7 +1091,7 @@ fn window_rendering_marks_ready_lifted_and_unknown_states() {
     );
     assert_eq!(
         block_window(&window(5 * 60, 45, Some(70 * 60), now), now).as_deref(),
-        Some("55% left · resets in 1h10m")
+        Some("55% left · resets in 1h10m · pace 0.6x")
     );
     assert_eq!(
         block_window(
@@ -1112,4 +1116,38 @@ fn window_rendering_marks_ready_lifted_and_unknown_states() {
         Some("∞")
     );
     assert_eq!(block_window(&RateLimitWindow::default(), now), None);
+}
+
+#[test]
+fn detail_pace_gates_the_floor_and_omits_blank_states() {
+    let now = Timestamp::UNIX_EPOCH;
+    for (secs, expected) in [
+        (17_101, "80% left · resets in 4h45m · pace –"),
+        (17_100, "80% left · resets in 4h45m · pace 4.0x"),
+        (17_099, "80% left · resets in 4h44m · pace 4.0x"),
+    ] {
+        assert_eq!(
+            block_window(&window(300, 20, Some(secs), now), now).as_deref(),
+            Some(expected)
+        );
+    }
+    for (blank, expected) in [
+        (
+            window(300, 100, Some(17_100), now),
+            "0% left · resets in 4h45m",
+        ),
+        (
+            RateLimitWindow {
+                duration_mins: None,
+                ..window(300, 20, Some(17_100), now)
+            },
+            "80% left · resets in 4h45m",
+        ),
+        (
+            window(300, 20, Some(18_001), now),
+            "80% left · resets in 5h00m",
+        ),
+    ] {
+        assert_eq!(block_window(&blank, now).as_deref(), Some(expected));
+    }
 }

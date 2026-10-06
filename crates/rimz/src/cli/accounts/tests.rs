@@ -371,10 +371,18 @@ fn window_cells_read_what_is_left_and_when_it_resets() {
     };
     // A reset-less window with a known span is the pre-start placeholder,
     // which reads as untouched here as in `rimz providers`.
-    assert_eq!(cells("default", "claude"), "98% · 3h32m 100%", "{text}");
+    assert_eq!(
+        cells("default", "claude"),
+        "98% · 3h32m · 0.1x 100%",
+        "{text}"
+    );
     assert_eq!(cells("alpha", "claude"), "– –", "logged out: {text}");
     assert_eq!(cells("beta", "claude"), "– –", "no percentage, no window");
-    assert_eq!(cells("gamma", "claude"), "– 50% · 1h00m", "failed probe");
+    assert_eq!(
+        cells("gamma", "claude"),
+        "– 50% · 1h00m · 0.5x",
+        "failed probe"
+    );
     assert_eq!(cells("default", "codex"), "∞ ∞", "unmetered: {text}");
     assert_eq!(cells("team", "codex"), "∞ 100% · ready", "lifted: {text}");
 
