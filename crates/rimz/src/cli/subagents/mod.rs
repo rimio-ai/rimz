@@ -685,10 +685,7 @@ fn list_children(json: bool, globals: &GlobalFlags) -> Result<()> {
             .remove(&(agent.kind.clone(), agent.agent_id.clone()))
             .unwrap_or_default();
     }
-    rimz::store::agent_context::attach_rest_certificates(
-        ctx.store.runtime_paths(),
-        audit.agents.iter_mut(),
-    );
+    attach_list_context(ctx.store.runtime_paths(), &mut audit.agents);
     let caller_identity = rimz::harness::ancestry::resolve_caller(&audit.agents);
     let caller = caller_identity.as_ref().and_then(|identity| {
         rimz::harness::ancestry::resolve_launch_caller(&audit.agents, identity).ok()
@@ -752,6 +749,11 @@ fn list_children(json: bool, globals: &GlobalFlags) -> Result<()> {
         table.card(row, detail);
     }
     table.render(&mut render::out()).map_err(Into::into)
+}
+
+fn attach_list_context(runtime: &rimz::disk::paths::RuntimePaths, agents: &mut [AgentState]) {
+    rimz::store::agent_context::attach_rest_certificates(runtime, agents.iter_mut());
+    rimz::store::agent_context::attach_child_display_context(runtime, agents.iter_mut());
 }
 
 fn child_reports(

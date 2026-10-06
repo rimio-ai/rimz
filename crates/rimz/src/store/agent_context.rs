@@ -84,6 +84,22 @@ pub fn attach_rest_certificates<'a>(
     }
 }
 
+/// Attach display context to launched children that have not ended, regardless of stored status.
+pub fn attach_child_display_context<'a>(
+    runtime: &RuntimePaths,
+    agents: impl IntoIterator<Item = &'a mut AgentState>,
+) {
+    for agent in agents {
+        if !agent.is_launched_child() || agent.ended_at.is_some() {
+            continue;
+        }
+        agent.attach_context(
+            read_one(runtime, agent.kind.as_str(), agent.agent_id.as_str())
+                .map(|record| record.context),
+        );
+    }
+}
+
 /// Mutate one session record against the latest published bytes while holding
 /// its per-record lock. The closure receives whether valid prior bytes existed;
 /// a `false` result leaves the sidecar untouched.
