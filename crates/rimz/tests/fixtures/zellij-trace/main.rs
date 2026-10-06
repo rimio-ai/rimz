@@ -68,6 +68,12 @@ fn main() {
     {
         let contents = std::fs::read_to_string(&layout[1]).expect("read traced layout");
         writeln!(file, "layout\t{}", contents.replace('\n', " ")).expect("write traced layout");
+        writeln!(
+            file,
+            "layout-json\t{}",
+            serde_json::to_string(&contents).unwrap()
+        )
+        .expect("write parseable traced layout");
     }
 
     let cli = &args[1..];

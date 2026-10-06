@@ -32,6 +32,31 @@ use crate::common::{
 #[cfg(unix)]
 #[test]
 fn scheduled_agent_opens_named_tab_despite_ambient_pane() {
+    loop_channel_case(LoopLaunch::Agent);
+}
+
+#[cfg(unix)]
+#[test]
+fn check_launch_uses_its_worktree_channel_not_the_firers_team() {
+    loop_channel_case(LoopLaunch::Check);
+}
+
+#[cfg(unix)]
+#[test]
+fn resident_launch_does_not_inherit_the_firers_channel() {
+    loop_channel_case(LoopLaunch::Resident);
+}
+
+#[cfg(unix)]
+#[derive(Clone, Copy, PartialEq)]
+enum LoopLaunch {
+    Agent,
+    Check,
+    Resident,
+}
+
+#[cfg(unix)]
+fn loop_channel_case(action: LoopLaunch) {
     use crate::common::CommandTimeoutExt;
 
     let env = Env::new();
@@ -42,6 +67,46 @@ fn scheduled_agent_opens_named_tab_despite_ambient_pane() {
     let agent_bin = crate::common::write_failing_agent_shim(&env, "codex", 1);
     let shell = write_fake_login_shell(&env, "rimz-test-sh", &[]);
     let workspace = env.resolve_workspace(&env.project_root);
+    let cwd = if action == LoopLaunch::Check {
+        let linked = env.home_root.join("linked");
+        assert!(git_ok(
+            &env.project_root,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                "linked",
+                linked.to_str().unwrap()
+            ]
+        ));
+        env.write_config(
+            &env.project_root,
+            r#"
+            [profiles.coder]
+            agent = "codex"
+            [[agents.teams.forge.roles]]
+            role = "coder"
+            profile = "coder"
+            "#,
+        );
+        loop_ok(&env, &["trust", "grant"]);
+        seed_agent_launch(
+            &env,
+            &env.project_root,
+            "probe-member",
+            rimz::agents::LaunchParams {
+                team: Some("forge".to_owned()),
+                role: Some("coder".to_owned()),
+                channel: Some("probe".to_owned()),
+                ..Default::default()
+            },
+        );
+        trust_codex_project(&env, &linked);
+        canonical(&linked)
+    } else {
+        env.project_root.clone()
+    };
     let trace = env.home_root.join("scheduled-tab.log");
     let panes = r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"rimz-sidebar"},{"id":2,"is_plugin":false,"tab_id":1,"title":"sh"},{"id":3,"is_plugin":false,"tab_id":2,"tab_name":"rimzd","title":"loop","pane_command":"rimz loop watch --hold"}]"#;
     crate::common::room::seed_live_zellij_room(
@@ -49,10 +114,30 @@ fn scheduled_agent_opens_named_tab_despite_ambient_pane() {
         &workspace.session_name,
         serde_json::from_str(panes).unwrap(),
     );
+    let effect = match action {
+        LoopLaunch::Check => format!(
+            "dir = {:?}\ncheck = {:?}\n",
+            cwd.to_str().unwrap(),
+            shlex::try_join([
+                env.rimz_bin().to_str().unwrap(),
+                "agents",
+                "coder",
+                "repair"
+            ])
+            .unwrap(),
+        ),
+        LoopLaunch::Resident => "agent = \"codex\"\nprompt = \"repair\"\nstay = true\n".to_owned(),
+        LoopLaunch::Agent => "agent = \"codex\"\nprompt = \"repair\"\n".to_owned(),
+    };
+    let timeout = if action == LoopLaunch::Check {
+        "30s"
+    } else {
+        "2s"
+    };
     write_loop_config(
         &env,
         &format!(
-            "[tasks.rimzd]\nevery = \"1h\"\nagent = \"codex\"\nprompt = \"repair\"\nroot = {:?}\ntimeout = \"1s\"\nthrottle = \"off\"\n",
+            "default-timeout = \"1s\"\n[tasks.rimzd]\nevery = \"1h\"\n{effect}root = {:?}\ntimeout = \"{timeout}\"\nthrottle = \"off\"\n",
             env.project_root.to_str().unwrap(),
         ),
     );
@@ -68,6 +153,7 @@ fn scheduled_agent_opens_named_tab_despite_ambient_pane() {
         .env("RIMZ_TEST_ZELLIJ_LIST_PANES", panes)
         .env("ZELLIJ_PANE_ID", "2")
         .env("ZELLIJ_SESSION_NAME", &workspace.session_name)
+        .env("RIMZ_CHANNEL", "probe")
         .env(
             "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
             format!("{} [Created 1s ago]\n", workspace.session_name),
@@ -82,10 +168,13 @@ fn scheduled_agent_opens_named_tab_despite_ambient_pane() {
     assert_eq!(
         tabs.len(),
         1,
-        "{trace}\n{}",
-        String::from_utf8_lossy(&output.stderr)
+        "{trace}\n{}\n{:?}",
+        String::from_utf8_lossy(&output.stderr),
+        read_loop_run_records(&env),
     );
-    assert!(tabs[0].contains("\t--name\tloop rimzd"), "{trace}");
+    if action != LoopLaunch::Resident {
+        assert!(tabs[0].contains("\t--name\tloop rimzd"), "{trace}");
+    }
     assert!(tabs[0].contains("\t--no-focus"), "{trace}");
     assert!(
         trace
@@ -94,6 +183,99 @@ fn scheduled_agent_opens_named_tab_despite_ambient_pane() {
         "run tab must dock a sidebar: {trace}",
     );
     assert!(!trace.contains("\tnew-pane\t"), "{trace}");
+
+    let layout: String = serde_json::from_str(
+        trace
+            .lines()
+            .find_map(|line| line.strip_prefix("layout-json\t"))
+            .unwrap(),
+    )
+    .unwrap();
+    let layout: kdl::KdlDocument = layout.parse().unwrap();
+    let argv = loop_agent_pane_args(&layout).expect("agent pane args");
+    let request = argv.windows(2).find(|pair| pair[0] == "--request").unwrap();
+    let request = rimz::harness::launch::decode_exec_request("codex", None, &request[1]).unwrap();
+    let mut pane_env: BTreeMap<String, String> = argv
+        .iter()
+        .take_while(|arg| arg.contains('='))
+        .map(|arg| {
+            let (key, value) = arg.split_once('=').unwrap();
+            (key.to_owned(), value.to_owned())
+        })
+        .collect();
+    let pane_channel = pane_env.get("RIMZ_CHANNEL").cloned();
+    pane_env.insert(
+        "RIMZ_AGENT_ID".to_owned(),
+        request.identity.launch_id.clone().unwrap(),
+    );
+    pane_env.insert(
+        "RIMZ_AGENT_NAME".to_owned(),
+        request.identity.name.clone().unwrap(),
+    );
+    if let Some(run_id) = request.run_id {
+        pane_env.insert("RIMZ_RUN_ID".to_owned(), run_id.to_string());
+    }
+    let pane_env = pane_env
+        .iter()
+        .map(|(key, value)| (key.as_str(), value.as_str()))
+        .collect::<Vec<_>>();
+    let hook = env.run_installed_hook_in_pane(
+        "codex",
+        &json!({
+            "hook_event_name": "SessionStart", "session_id": "loop-channel-session", "cwd": cwd,
+        })
+        .to_string(),
+        &pane_env,
+    );
+    assert!(
+        hook.status.success(),
+        "{}",
+        String::from_utf8_lossy(&hook.stderr)
+    );
+    let agents = env
+        .store()
+        .runtime_projection(rimz::RuntimeScope::Audit)
+        .unwrap()
+        .agents;
+    let agent = agents
+        .iter()
+        .find(|agent| agent.name.as_deref() == request.identity.name.as_deref())
+        .unwrap();
+    let expected = (action == LoopLaunch::Check).then_some("linked");
+    assert_eq!(
+        agent.channel.as_deref(),
+        expected,
+        "recorded channel after the pane's registration hook"
+    );
+    assert_eq!(
+        pane_channel.as_deref(),
+        expected,
+        "channel exported to the agent pane"
+    );
+    assert_eq!(
+        agent.team, None,
+        "the firer's team must not qualify a loop's bare profile"
+    );
+}
+
+#[cfg(unix)]
+fn loop_agent_pane_args(document: &kdl::KdlDocument) -> Option<Vec<String>> {
+    for node in document.nodes() {
+        if node.name().value() == "args" {
+            let args = node
+                .entries()
+                .iter()
+                .map(|entry| entry.value().as_string().unwrap().to_owned())
+                .collect::<Vec<_>>();
+            if args.iter().any(|arg| arg == "--request") {
+                return Some(args);
+            }
+        }
+        if let Some(args) = node.children().and_then(loop_agent_pane_args) {
+            return Some(args);
+        }
+    }
+    None
 }
 
 #[test]
@@ -6121,13 +6303,14 @@ fn manual_check_clears_the_agent_identity_overlay() {
             "--every",
             "15m",
             "--check",
-            "test -z \"${RIMZ_AGENT_ID+x}${RIMZ_AGENT_KIND+x}${RIMZ_AGENT_NAME+x}${RIMZ_AGENT_PROFILE+x}${RIMZ_AGENT_ROLE+x}${RIMZ_AGENT_MODEL+x}${RIMZ_AGENT_EFFORT+x}${RIMZ_AGENT_BUDGET+x}${RIMZ_AGENT_PID+x}\" && printf clean",
+            "test -z \"${RIMZ_AGENT_ID+x}${RIMZ_AGENT_KIND+x}${RIMZ_AGENT_NAME+x}${RIMZ_AGENT_PROFILE+x}${RIMZ_AGENT_ROLE+x}${RIMZ_AGENT_MODEL+x}${RIMZ_AGENT_EFFORT+x}${RIMZ_AGENT_BUDGET+x}${RIMZ_AGENT_PID+x}\" && printf 'clean %s' \"${RIMZ_CHANNEL-unset}\"",
         ],
     );
     let output = env
         .rimz()
         .args(["loop", "fire", "identity"])
         .envs([
+            ("RIMZ_CHANNEL", "probe"),
             ("RIMZ_AGENT_ID", "stale-launch"),
             ("RIMZ_AGENT_KIND", "claude"),
             ("RIMZ_AGENT_NAME", "old-name"),
@@ -6147,7 +6330,7 @@ fn manual_check_clears_the_agent_identity_overlay() {
     );
     let record = last_loop_record(&env);
     assert_eq!(record.result, LoopRunResult::Completed);
-    assert_eq!(record.check.unwrap().output, "clean");
+    assert_eq!(record.check.unwrap().output, "clean unset");
 }
 
 #[cfg(unix)]
