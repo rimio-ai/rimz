@@ -70,7 +70,7 @@ A channel named explicitly (`'#<channel>'`, `@<handle>#<channel>`, `@all#<channe
 | `[TARGET]` | What to read; see [Choose what to read](#choose-what-to-read). |
 | `-w, --worktree <channel>` | Channel used to resolve the target. |
 | `-n, --last <N>` (alias `--tail`) | Keep the last `N` entries; see [Tail with `--last`](#tail-with---last). |
-| `-f, --follow` | Print the first view, then new entries as they land, checking once a second. Conflicts with `--all`. |
+| `-f, --follow` | Print the first view, then every entry that enters the view after it once, in view order, including across an agent restart, checking once a second. Conflicts with `--all`. |
 | `--all` | Include prior sessions; see [Prior sessions](#prior-sessions). |
 | `--flat` | Print entries in arrival order instead of grouping replies into threads. |
 | `--json` | Emit JSON; see [JSON output](#json-output). |

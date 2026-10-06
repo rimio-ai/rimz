@@ -80,7 +80,7 @@ pub enum TranscriptLogErr {
 
 pub type Result<T> = std::result::Result<T, TranscriptLogErr>;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TranscriptKind {
     Prompt,

@@ -831,6 +831,169 @@ fn flat_and_last_apply_to_display_order() {
     );
 }
 
+fn follow_view(entries: Vec<RenderEntry>) -> RenderedChat {
+    RenderedChat {
+        channel: None,
+        focus: None,
+        entries,
+        archive_prefix: 0,
+        archived_hidden: 0,
+        newest_archived_at: None,
+        empty_message: None,
+        last: None,
+        flat: false,
+    }
+}
+
+#[test]
+fn follow_survives_archive_split() {
+    let mut archived = follow_view(vec![
+        entry("2026-06-28T04:00:00Z", "old a"),
+        entry("2026-06-28T04:01:00Z", "old b"),
+        entry("2026-06-28T04:02:00Z", "old c"),
+    ]);
+    archived.archive_prefix = 3;
+    let mut cursor = FollowCursor::seed(&archived);
+    let mut live = follow_view(vec![entry("2026-06-29T04:00:00Z", "live a")]);
+    assert_eq!(cursor.advance(&live), vec![0]);
+    live.entries.push(entry("2026-06-29T04:01:00Z", "live b"));
+    assert_eq!(cursor.advance(&live), vec![1]);
+    assert!(cursor.advance(&archived).is_empty());
+}
+
+#[test]
+fn follow_survives_hidden_turn_removal() {
+    let mut view = follow_view(vec![
+        entry("2026-06-28T04:00:00Z", "a"),
+        assistant_entry("2026-06-28T04:01:00Z", "b"),
+        entry("2026-06-28T04:02:00Z", "c"),
+    ]);
+    let mut cursor = FollowCursor::seed(&view);
+    let hidden = view.entries.remove(1);
+    view.entries.push(entry("2026-06-28T04:03:00Z", "d"));
+    assert_eq!(cursor.advance(&view), vec![2]);
+    view.entries.insert(1, hidden);
+    assert!(cursor.advance(&view).is_empty());
+}
+
+#[test]
+fn follow_survives_out_of_order_arrival() {
+    let mut view = follow_view(vec![
+        entry("2026-06-28T04:00:00Z", "a"),
+        entry("2026-06-28T04:02:00Z", "c"),
+    ]);
+    let mut cursor = FollowCursor::seed(&view);
+    view.entries.insert(1, entry("2026-06-28T04:01:00Z", "b"));
+    assert_eq!(cursor.advance(&view), vec![1]);
+    view.entries.push(entry("2026-06-28T04:03:00Z", "d"));
+    assert_eq!(cursor.advance(&view), vec![3]);
+    assert!(cursor.advance(&view).is_empty());
+}
+
+#[test]
+fn follow_distinguishes_stage_flips() {
+    let mut view = follow_view(vec![flip_entry(
+        "2026-06-28T04:00:00Z",
+        "coder",
+        Some("build"),
+        "review",
+        None,
+    )]);
+    let mut cursor = FollowCursor::seed(&view);
+    view.entries.push(flip_entry(
+        "2026-06-28T04:01:00Z",
+        "coder",
+        Some("build"),
+        "review",
+        None,
+    ));
+    assert_eq!(cursor.advance(&view), vec![1]);
+    assert!(cursor.advance(&view).is_empty());
+}
+
+#[test]
+fn follow_ignores_rendered_identity_changes() {
+    let mut view = follow_view(vec![assistant_entry("2026-06-28T04:00:00Z", "a")]);
+    let mut cursor = FollowCursor::seed(&view);
+    view.entries[0].chat.from = "@claude#lane".to_owned();
+    view.entries[0].chat.to = Some("@coder#lane".to_owned());
+    if let LineSource::Log { opener_hidden, .. } = &mut view.entries[0].source {
+        *opener_hidden = true;
+    }
+    assert!(cursor.advance(&view).is_empty());
+    view.entries
+        .push(assistant_entry("2026-06-28T04:01:00Z", "b"));
+    assert_eq!(cursor.advance(&view), vec![1]);
+}
+
+#[test]
+fn follow_distinguishes_log_entries_with_shared_timestamps() {
+    let base = entry("2026-06-28T04:00:00Z", "same");
+    let mut view = follow_view(vec![base.clone()]);
+    let mut cursor = FollowCursor::seed(&view);
+    view.entries.extend([
+        with_agent(base.clone(), agent_key_for("codex", "sess-1")),
+        with_agent(base.clone(), agent_key_for("claude", "sess-2")),
+        assistant_entry("2026-06-28T04:00:00Z", "same"),
+        entry("2026-06-28T04:01:00Z", "same"),
+        entry("2026-06-28T04:00:00Z", "different"),
+        linked(base.clone(), Some(1), &[]),
+    ]);
+    let mut delivered = base;
+    delivered.chat.delivered_at = Some(ts("2026-06-28T04:02:00Z"));
+    view.entries.push(delivered);
+    assert_eq!(cursor.advance(&view), vec![1, 2, 3, 4, 5, 6, 7]);
+    assert!(cursor.advance(&view).is_empty());
+}
+
+#[test]
+fn follow_seeds_the_full_view_before_the_initial_tail() {
+    let mut view = follow_view(vec![
+        entry("2026-06-28T04:00:00Z", "a"),
+        entry("2026-06-28T04:01:00Z", "b"),
+        entry("2026-06-28T04:02:00Z", "c"),
+    ]);
+    let mut cursor = FollowCursor::seed(&view);
+    view.last = Some(1);
+    assert_eq!(selected_lines(&view).len(), 1);
+    view.last = None;
+    assert!(cursor.advance(&view).is_empty());
+    view.entries.push(entry("2026-06-28T04:03:00Z", "d"));
+    assert_eq!(cursor.advance(&view), vec![3]);
+}
+
+#[test]
+fn follow_render_selects_indexes_in_display_order_with_thread_context() {
+    let view = follow_view(vec![
+        linked(entry("2026-06-28T04:00:00Z", "root a"), Some(1), &[]),
+        linked(entry("2026-06-28T04:01:00Z", "root b"), Some(2), &[]),
+        linked(
+            assistant_entry("2026-06-28T04:02:00Z", "reply a"),
+            None,
+            &[1],
+        ),
+        linked(
+            assistant_entry("2026-06-28T04:03:00Z", "reply b"),
+            None,
+            &[2],
+        ),
+    ]);
+    let mut out = anstream::StripStream::new(Vec::new());
+    render_selected_lines_to(&mut out, &view, &[1, 2, 3], &TimeZone::UTC, Prose::Raw)
+        .expect("render");
+    let out = String::from_utf8(out.into_inner()).expect("utf8");
+    assert_eq!(
+        out.lines()
+            .filter(|line| line.contains("root ") || line.contains("reply "))
+            .map(|line| line.trim_start_matches("│ "))
+            .collect::<Vec<_>>(),
+        vec!["reply a", "root b", "reply b"],
+        "{out}"
+    );
+    assert!(out.contains("│ reply a"), "{out}");
+    assert!(out.contains("│ reply b"), "{out}");
+}
+
 #[test]
 fn subagent_reports_and_waits_are_json_only_and_do_not_consume_the_human_last_slot() {
     let project = tempfile::TempDir::new().expect("project tempdir");

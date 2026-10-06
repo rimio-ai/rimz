@@ -213,7 +213,7 @@ use scope::{
 };
 use thread::entries_for_view;
 #[cfg(test)]
-use {chat::*, scope::*, thread::*};
+use {chat::*, follow::*, scope::*, thread::*};
 pub fn run(args: TranscriptArgs, globals: &GlobalFlags) -> Result<()> {
     let workspace =
         resolve_view_workspace(args.target.as_deref(), args.worktree.as_deref(), globals)?;
@@ -552,16 +552,17 @@ pub(crate) fn selected_lines(view: &RenderedChat) -> Vec<ChatLine> {
     thread::selected_chat_lines(view)
 }
 
-pub(crate) fn render_lines_since_to(
+fn render_selected_lines_to(
     out: &mut impl Write,
     view: &RenderedChat,
-    source_index: usize,
+    source_indexes: &[usize],
     tz: &TimeZone,
     prose: Prose,
 ) -> Result<()> {
+    let source_indexes: HashSet<_> = source_indexes.iter().copied().collect();
     let entries = entries_for_view(view)
         .into_iter()
-        .filter(|entry| entry.source_index >= source_index)
+        .filter(|entry| source_indexes.contains(&entry.source_index))
         .collect::<Vec<_>>();
     chat::render_display_chat_to(
         out,
