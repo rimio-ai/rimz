@@ -291,7 +291,30 @@ pub(crate) fn validate_reply_wait(
     Ok(())
 }
 
-pub(crate) fn render_dispatch_outcome(outcome: &DispatchOutcome) -> Option<String> {
+pub(crate) fn render_dispatch_outcome(
+    kind: DeliveryKind,
+    outcome: &DispatchOutcome,
+) -> Option<String> {
+    match (kind, outcome) {
+        (
+            DeliveryKind::Interrupt,
+            DispatchOutcome::Queued {
+                label,
+                message_id,
+                reason: None | Some(ParkReason::NoPane),
+            },
+        ) => {
+            return Some(format!(
+                "queued for {label} ({message_id}): delivery deferred; send now: rimz message interrupt {message_id}"
+            ));
+        }
+        (DeliveryKind::Steer, DispatchOutcome::CompactionPending { label, message_id }) => {
+            return Some(format!(
+                "queued for {label} ({message_id}; waiting for compaction)"
+            ));
+        }
+        _ => {}
+    }
     match outcome {
         DispatchOutcome::Sent { label, message_id } => {
             Some(format!("sent to {label} ({message_id})"))
@@ -358,21 +381,14 @@ pub(crate) fn report_dispatch(
 fn report_interrupt(outcomes: &[DispatchOutcome], compacted: &[String]) -> Result<()> {
     for outcome in outcomes {
         let line = match outcome {
-            DispatchOutcome::Queued {
-                label,
-                message_id,
-                reason: None | Some(ParkReason::NoPane),
-            } => Some(format!(
-                "queued for {label} ({message_id}): delivery deferred; send now: rimz message interrupt {message_id}"
-            )),
             DispatchOutcome::SkippedWaiting { label, .. } => {
                 bail!("{label} is waiting on your input in its pane; answer it or pass --force")
             }
             DispatchOutcome::Sent { label, .. } => {
                 print_compacted_if_needed(label, compacted);
-                render_dispatch_outcome(outcome)
+                render_dispatch_outcome(DeliveryKind::Interrupt, outcome)
             }
-            _ => render_dispatch_outcome(outcome),
+            _ => render_dispatch_outcome(DeliveryKind::Interrupt, outcome),
         };
         if let Some(line) = line {
             #[expect(clippy::print_stdout, reason = "message confirmation")]
@@ -392,7 +408,7 @@ fn report_boundary(outcomes: &[DispatchOutcome], compacted: &[String]) -> Result
         }
     }
     for outcome in outcomes {
-        if let Some(line) = render_dispatch_outcome(outcome) {
+        if let Some(line) = render_dispatch_outcome(DeliveryKind::Boundary, outcome) {
             #[expect(clippy::print_stdout, reason = "command result")]
             {
                 println!("{line}");
@@ -428,7 +444,7 @@ fn report_steer(target: &str, outcomes: &[DispatchOutcome], compacted: &[String]
     }
     if outcomes.len() == 1 {
         if let Some(outcome @ DispatchOutcome::Queued { .. }) = outcomes.first()
-            && let Some(line) = render_dispatch_outcome(outcome)
+            && let Some(line) = render_dispatch_outcome(DeliveryKind::Steer, outcome)
         {
             use std::io::Write as _;
             writeln!(super::render::out(), "{line}")?;
@@ -707,34 +723,48 @@ mod tests {
         };
 
         assert_eq!(
-            render_dispatch_outcome(&DispatchOutcome::Sent {
-                label: label.clone(),
-                message_id: message_id.clone(),
-            })
+            render_dispatch_outcome(
+                DeliveryKind::Boundary,
+                &DispatchOutcome::Sent {
+                    label: label.clone(),
+                    message_id: message_id.clone(),
+                }
+            )
             .as_deref(),
             Some("sent to @coder (msg_0123456789abcdef)")
         );
         assert_eq!(
-            render_dispatch_outcome(&outcome(Some(ParkReason::Status(
-                rimz::agents::AgentStatus::Running,
-            ))))
+            render_dispatch_outcome(
+                DeliveryKind::Boundary,
+                &outcome(Some(
+                    ParkReason::Status(rimz::agents::AgentStatus::Running,)
+                ))
+            )
             .as_deref(),
             Some(
                 "queued for @coder (msg_0123456789abcdef) — @coder is running; send now: rimz message steer msg_0123456789abcdef"
             )
         );
         assert_eq!(
-            render_dispatch_outcome(&outcome(Some(ParkReason::WaitingOnPrompt))).as_deref(),
+            render_dispatch_outcome(
+                DeliveryKind::Boundary,
+                &outcome(Some(ParkReason::WaitingOnPrompt))
+            )
+            .as_deref(),
             Some(
                 "queued for @coder (msg_0123456789abcdef) — @coder has a prompt open and will not read this until it is answered\n  see it: rimz asks show @coder      answer it: rimz answer @coder <choice>"
             )
         );
         assert_eq!(
-            render_dispatch_outcome(&outcome(None)).as_deref(),
+            render_dispatch_outcome(DeliveryKind::Boundary, &outcome(None)).as_deref(),
             Some("queued for @coder (msg_0123456789abcdef)")
         );
         assert_eq!(
-            render_dispatch_outcome(&outcome(Some(ParkReason::ProviderStarting))).as_deref(),
+            render_dispatch_outcome(
+                DeliveryKind::Boundary,
+                &outcome(Some(ParkReason::ProviderStarting))
+            )
+            .as_deref(),
             Some(
                 "queued for @coder (msg_0123456789abcdef) — @coder is resuming; delivers when its provider registers; send now: rimz message steer msg_0123456789abcdef"
             )
@@ -756,11 +786,14 @@ mod tests {
         ]
         .into_iter()
         .map(|reason| {
-            render_dispatch_outcome(&DispatchOutcome::Queued {
-                label: "@coder".to_owned(),
-                message_id: "msg_0123456789abcdef".parse().unwrap(),
-                reason: Some(reason),
-            })
+            render_dispatch_outcome(
+                DeliveryKind::Boundary,
+                &DispatchOutcome::Queued {
+                    label: "@coder".to_owned(),
+                    message_id: "msg_0123456789abcdef".parse().unwrap(),
+                    reason: Some(reason),
+                },
+            )
             .unwrap()
         })
         .collect::<Vec<_>>();

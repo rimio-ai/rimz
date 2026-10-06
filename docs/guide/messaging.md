@@ -183,7 +183,7 @@ Give a percentage of the window (`70%`) or an occupied-token count (`120000`, `1
 
 ## Ask and wait for the reply
 
-`--wait` turns a send into a question: RimZ delivers the text, waits through the reply turn, and prints the agent's final message on stdout. One shell command, one answer, no pane to read.
+`--wait` turns a send into a question: RimZ delivers the text, waits through the reply turn, and prints the agent's final message on stdout. Each target's send receipt and message id appear immediately on stderr, even with `--json`, leaving stdout for the answer.
 
 ```sh
 rimz message @coder --wait "did the migration land? one line"    # the reply alone on stdout
@@ -194,6 +194,8 @@ rimz message --steer @claude --wait "answer from this turn"      # the live turn
 ```
 
 A fan-out wait gathers every reply from the agents' existing contexts and streams them under `@handle:` lines in completion order, while a failed target writes its forensics to stderr and the others keep gathering. `--json` buffers one uniform map instead, whether you asked one agent or twenty. The command exits 0 only when every reply turn completed, and a deadline exits 124 with the unfinished targets marked `timed_out`; the full exit-code table is in [cli/message.md](../reference/cli/message.md#wait-for-replies).
+
+A deadline does not withdraw queued text: it will still deliver unless you cancel its id with `rimz message cancel`. The timeout hints distinguish that queued text from text already typed into a pane (do not resend) and a delivered message still being worked on. Use `rimz agents logs @coder` to read the reply later. The same hints appear on stderr with `--json`.
 
 Every target must be a running agent with installed and trusted [hooks](./setup.md#install-agent-hooks), since hooks are what report the turn's end. `--wait` conflicts with `--create`, `--schedule`, and `--no-enter`, and `--json` and `--any` each require it.
 
