@@ -577,4 +577,26 @@ fn keepalive_since_holds_the_last_real_request_across_a_run_of_pings() {
         events.extend(tail);
         assert_eq!(since(&events), None, "{label} clears the run");
     }
+
+    let parked = || json!({"signal": "turn_ended", "errored": false, "parked_on_background": true});
+    events.truncate(4);
+    events.push(event(3545, None, parked()));
+    assert_eq!(since(&events), Some(events[1].timestamp));
+    events.push(event(
+        3600,
+        Some("Type: WAIT\nFrom: @rimz\nContent:\ncheck back"),
+        turn(),
+    ));
+    assert_eq!(
+        since(&events),
+        None,
+        "a real wake resuming a parked ping turn clears the run"
+    );
+    events.push(event(3610, None, parked()));
+    events.push(event(7000, Some(keepalive), turn()));
+    assert_eq!(
+        since(&events),
+        None,
+        "a ping resuming a parked row opens no run"
+    );
 }
