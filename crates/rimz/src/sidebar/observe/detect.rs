@@ -1,13 +1,16 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::mpsc::SyncSender;
 
+use crate::agents::version::CliVersion;
 use crate::diag::record::RowPresenceGapEvidence;
 use crate::sidebar::timing::{
     OBSERVE_AGGREGATE_OSC_WINDOW, OBSERVE_ORDER_FLAP_WINDOW, OBSERVE_ROSTER_FLAP_WINDOW,
     OBSERVE_ROW_FLAP_WINDOW, OBSERVE_STATUS_CHURN_WINDOW, OBSERVE_VALUE_OSC_WINDOW, OBSERVE_WARMUP,
 };
 
-use super::sig::{FrameSig, RosterRowSig, RosterSig, RowSig, StatusCountSig};
+use super::sig::{
+    AggregateKey, FrameSig, PanelField, RosterRowSig, RosterSig, RowSig, StatusCountSig,
+};
 use super::{AnomalyDraft, AnomalyKind, ObserveMsg, WatchedField, cap_vec};
 
 #[derive(Debug, Default)]
@@ -540,6 +543,24 @@ impl Observer {
                     None,
                 ));
             }
+            if let (Some(from), Some(to)) = (
+                prior
+                    .as_ref()
+                    .and_then(|sample| sample.committed.as_deref()),
+                aggregate.committed.as_deref(),
+            ) && steps_backward(&aggregate.key, from, to)
+            {
+                drafts.push(AnomalyDraft::from_sig(
+                    sig,
+                    AnomalyKind::AggregateBackstep {
+                        aggregate: aggregate.key.clone(),
+                        from: from.to_owned(),
+                        to: to.to_owned(),
+                        pulled: aggregate.pulled.clone(),
+                    },
+                    None,
+                ));
+            }
             let Some((from, via, back)) = ring.oscillation(window) else {
                 continue;
             };
@@ -763,6 +784,27 @@ fn deserialize_order(value: &Option<String>) -> Vec<String> {
 
 fn order_set(order: &[String]) -> BTreeSet<&str> {
     order.iter().map(String::as_str).collect()
+}
+
+/// Whether `to` is a step back on a key whose figure only moves forward.
+/// Only the provider version is such a key: every spend window, the trailing
+/// year included, shrinks as entries age out of it, and the other panel values
+/// reset or get corrected downward by design. A version that does not parse
+/// is never judged.
+fn steps_backward(key: &AggregateKey, from: &str, to: &str) -> bool {
+    if !matches!(
+        key,
+        AggregateKey::ProviderField {
+            field: PanelField::Version,
+            ..
+        }
+    ) {
+        return false;
+    }
+    matches!(
+        (from.parse::<CliVersion>(), to.parse::<CliVersion>()),
+        (Ok(from), Ok(to)) if to < from
+    )
 }
 
 fn aggregate_identities(sig: &FrameSig) -> BTreeSet<String> {
