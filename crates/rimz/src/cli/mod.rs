@@ -60,7 +60,7 @@ mod worktree;
 mod worktree_protection;
 use std::ffi::OsString;
 use std::io::{IsTerminal, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
@@ -272,12 +272,11 @@ pub(crate) fn current_channel(workspace: &rimz::ResolvedWorkspace) -> Option<Str
     {
         return Some(channel);
     }
-    rimz::harness::spec::resolve_room_channel(
-        &workspace.project_root,
-        &workspace.worktree_root,
-        None,
-        None,
-    )
+    directory_channel(workspace, &workspace.worktree_root)
+}
+
+fn directory_channel(workspace: &rimz::ResolvedWorkspace, cwd: &Path) -> Option<String> {
+    rimz::harness::spec::resolve_room_channel(&workspace.project_root, cwd, None, None)
 }
 
 /// Refuse a plain selector that matched several agents. A bare `@<kind>`/`@<profile>`

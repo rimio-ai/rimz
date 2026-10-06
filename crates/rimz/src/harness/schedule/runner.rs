@@ -2325,6 +2325,7 @@ pub(super) fn run_command(
         }
     };
     if env.contains_key(LOOP_TASK_ENV) {
+        command.env_remove(crate::workspace::ENV_CHANNEL);
         for (key, _) in std::env::vars_os()
             .filter(|(key, _)| key.as_encoded_bytes().starts_with(b"RIMZ_AGENT_"))
         {

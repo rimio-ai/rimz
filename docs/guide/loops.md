@@ -86,7 +86,7 @@ rimz loop add yagni --when 'pr=merged' --each-worktree \
   --agent yagni --stay --prompt 'Review the merged work for unnecessary complexity and propose focused cleanup.'
 ```
 
-The fixer rule waits until the board is Done and CI passes on an open PR. It takes over the checkout, stopping the agents resting there and waiting while any of them is still busy, then opens the layout in a background tab without moving your focus, and gives its prompt leader standing subscriptions scoped to that checkout. The yagni rule opens an agent after merge. Both leave ordinary agents running on the lane, rather than closing a supervised pane after one turn.
+The fixer rule waits until the board is Done and CI passes on an open PR. It takes over the checkout, stopping the agents resting there and waiting while any of them is still busy, then opens the layout in a background tab without moving your focus, and gives its prompt leader standing subscriptions scoped to that checkout. The yagni rule opens an agent after merge. Both leave ordinary agents running on the lane, rather than closing a supervised pane after one turn. A loop's agent joins its checkout's channel, not the channel of whoever fires the rule.
 
 Keep a room running for CI and PR conditions to be observed. Lanes already meeting a rule qualify too. GitHub sees PRs already merged or closed; Gitea needs the room to have observed the checkout's PR while it was open, and room teardown or reset forgets that observation. Each task launches only once per checkout, even if the condition turns false and true again, the room restarts, or you edit the task under the same name. The project root and worktrees RimZ does not own are not included.
 

@@ -160,12 +160,20 @@ pub(in crate::cli) fn launch_resolved(
     if !args.launch.cohort.resume {
         machine_config.agents.startup_relaunch_wait()?;
     }
+    let default_lane = if loop_task.is_some() {
+        crate::cli::directory_channel(
+            workspace,
+            cwd.as_deref().unwrap_or(&workspace.worktree_root),
+        )
+    } else {
+        ctx.channel().map(str::to_owned)
+    };
     let lane = args
         .launch
         .cohort
         .channel
         .as_deref()
-        .or_else(|| ctx.channel());
+        .or(default_lane.as_deref());
     let snapshot = if args.launch.spec.is_some() && lane.is_some() {
         Some(ctx.cached_snapshot()?)
     } else {
@@ -651,7 +659,7 @@ pub(in crate::cli) fn launch_resolved(
                 workspace,
                 &cwd,
                 room_channel.as_deref(),
-                !worktree_launch,
+                !worktree_launch && loop_task.is_none(),
             ),
             focus,
             errors: LAUNCH_PLACEMENT_ERRORS,

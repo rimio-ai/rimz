@@ -257,7 +257,7 @@ fn open_attempt_pane(
         &prepared.workspace,
         &prepared.launch.cwd,
         prepared.room_channel.as_deref(),
-        request.worktree.is_none() && request.from_pr.is_none(),
+        request.worktree.is_none() && request.from_pr.is_none() && request.loop_task.is_none(),
     );
     let tab_anchor = target.clone();
     let launch_identity = launch_batch.single_identity()?;
@@ -415,10 +415,16 @@ fn prepare_supervised(
         &projection.agents,
         request.worktree.as_deref(),
     )?;
-    let lane = request
-        .channel
-        .clone()
-        .or_else(|| crate::cli::current_channel(&workspace));
+    let lane = request.channel.clone().or_else(|| {
+        if request.loop_task.is_some() {
+            crate::cli::directory_channel(
+                &workspace,
+                cwd.as_deref().unwrap_or(&workspace.worktree_root),
+            )
+        } else {
+            crate::cli::current_channel(&workspace)
+        }
+    });
     let snapshot = lane
         .is_some()
         .then(|| store.snapshot_cached())
