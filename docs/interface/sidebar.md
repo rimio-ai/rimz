@@ -318,7 +318,7 @@ Each entry starts with its live state or wait icon, then a type word and a ` · 
 | entry | lead | type · headline | right side | second line |
 |-------|------|------|------------|-------------|
 | running subagent | `⠁` while it reasons, `⢿` while it acts | launch profile or kind · description, else task if different from the type | cost, when known | `▤` tokens in the child's window when the child reports its context, else `◇` tokens over its whole run, then model, effort, and elapsed time |
-| paused subagent | `⏸` | launch profile or kind · limit label in italics, else description or task | cost, when known | same as a running subagent; elapsed time keeps counting |
+| paused subagent | `⏸︎` | launch profile or kind · limit label in italics, else description or task | cost, when known | same as a running subagent; elapsed time keeps counting |
 | finished subagent | `✓` or `!` | launch profile or kind · description, else task if different from the type | cost, when known, after the time since it finished when there is no second line | `▤` tokens in the child's window when the child reports its context, else `◇` tokens over its whole run, then model, effort, and time since it finished |
 | timer | `◷` | `timer · in 12m`, or `timer · due` once the time passes | time since armed | never |
 | PID | working spinner | `pid · 16776` | time since armed | never |
