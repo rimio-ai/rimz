@@ -1716,6 +1716,14 @@ pub enum AnomalyKind {
         from: String,
         pulled: Option<String>,
     },
+    /// A figure that only moves forward stepped back. `pulled` is the pulled
+    /// figure at the step, absent when the pull had none.
+    AggregateBackstep {
+        aggregate: AggregateKey,
+        from: String,
+        to: String,
+        pulled: Option<String>,
+    },
     OrderFlap {
         group_key: String,
         order: Vec<String>,
@@ -1781,6 +1789,7 @@ impl AnomalyKind {
             Self::ValueOscillation { .. } => "value_oscillation",
             Self::AggregateOscillation { .. } => "aggregate_oscillation",
             Self::AggregateReset { .. } => "aggregate_reset",
+            Self::AggregateBackstep { .. } => "aggregate_backstep",
             Self::OrderFlap { .. } => "order_flap",
             Self::StatusChurn { .. } => "status_churn",
             Self::DuplicateRowId { .. } => "duplicate_row_id",
@@ -1817,7 +1826,8 @@ impl AnomalyKind {
             Self::SubagentTopLevelLeak { agent_id } => Some(Cow::Borrowed(agent_id)),
             Self::SubagentDoubleRender { id } => Some(Cow::Borrowed(id)),
             Self::AggregateOscillation { aggregate, .. }
-            | Self::AggregateReset { aggregate, .. } => Some(Cow::Owned(aggregate.identity())),
+            | Self::AggregateReset { aggregate, .. }
+            | Self::AggregateBackstep { aggregate, .. } => Some(Cow::Owned(aggregate.identity())),
             Self::RosterFlap { .. }
             | Self::FramelessRows { .. }
             | Self::CardsExceedPanes { .. } => None,

@@ -1306,6 +1306,119 @@ fn aggregate_reset_reports_spend_drops_only() {
 }
 
 #[test]
+fn aggregate_backstep_reports_a_version_stepping_down() {
+    let frame = |at_ms, version: Option<&str>, pulled: Option<&str>| {
+        let panel = |version: Option<&str>| SidebarProviderPanel {
+            version: version.map(str::to_owned),
+            ..provider_panel("claude", Vec::new())
+        };
+        let mut committed = snapshot_with_panels(
+            WorkspaceId::from_project_root(std::path::Path::new("/repo")),
+            vec![panel(version)],
+        );
+        committed.panes_produced_at_ms = Some(1);
+        let mut pulled_snapshot = committed.clone();
+        pulled_snapshot.providers = vec![panel(pulled)];
+        extract_sig(
+            &committed,
+            &PulledFrameSig::from_snapshot(&pulled_snapshot),
+            &EventStore::default(),
+            0,
+            0,
+            at_ms,
+        )
+    };
+    let backsteps = |drafts: &[AnomalyDraft]| {
+        drafts
+            .iter()
+            .filter_map(|draft| match &draft.kind {
+                AnomalyKind::AggregateBackstep {
+                    aggregate,
+                    from,
+                    to,
+                    pulled,
+                } => Some((
+                    aggregate.identity(),
+                    from.clone(),
+                    to.clone(),
+                    pulled.clone(),
+                )),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+
+    // A step down long after the last change: no window bounds it.
+    let mut observer = Observer::default();
+    observer.observe(frame(0, Some("2.1.291"), Some("2.1.291")));
+    observer.observe(frame(11_000, Some("2.1.291"), Some("2.1.291")));
+    let drafts = observer.observe(frame(3_611_000, Some("2.1.289"), Some("2.1.291")));
+    assert_eq!(
+        backsteps(&drafts),
+        vec![(
+            "provider_field:claude@default:version".to_owned(),
+            "2.1.291".to_owned(),
+            "2.1.289".to_owned(),
+            Some("2.1.291".to_owned()),
+        )]
+    );
+    let drafts = observer.observe(frame(3_612_000, Some("2.2.0"), Some("2.2.0")));
+    assert_lacks_kind(&drafts, "aggregate_backstep", "a version stepping up");
+    let drafts = observer.observe(frame(3_613_000, None, None));
+    assert_lacks_kind(&drafts, "aggregate_backstep", "a version going unset");
+    let drafts = observer.observe(frame(3_614_000, Some("2.1.0"), None));
+    assert_lacks_kind(&drafts, "aggregate_backstep", "a version after unset");
+
+    let mut unparseable = Observer::default();
+    unparseable.observe(frame(0, Some("nightly-b"), None));
+    unparseable.observe(frame(11_000, Some("nightly-b"), None));
+    let drafts = unparseable.observe(frame(12_000, Some("nightly-a"), None));
+    assert_lacks_kind(&drafts, "aggregate_backstep", "unparseable versions");
+
+    let mut warmup = Observer::default();
+    warmup.observe(frame(0, Some("2.1.291"), None));
+    let drafts = warmup.observe(frame(1_000, Some("2.1.289"), None));
+    assert_lacks_kind(&drafts, "aggregate_backstep", "warmup");
+}
+
+#[test]
+fn aggregate_spend_drops_record_only_a_year_reset() {
+    let frame = |at_ms, headline: f64, week: f64, month: f64, year: f64| {
+        let spent = |usd| SpendWindow {
+            usd,
+            ..SpendWindow::default()
+        };
+        panel_frame(
+            at_ms,
+            vec![SidebarProviderPanel {
+                spending: Some(SpendTally {
+                    headline: spent(headline),
+                    week: spent(week),
+                    month: spent(month),
+                    year: spent(year),
+                }),
+                ..provider_panel("codex", Vec::new())
+            }],
+        )
+    };
+
+    let mut observer = Observer::default();
+    observer.observe(frame(0, 5.0, 50.0, 500.0, 5000.0));
+    observer.observe(frame(11_000, 5.0, 50.0, 500.0, 5000.0));
+    // Every window shrinks as entries age out of it, the year included.
+    let drafts = observer.observe(frame(12_000, 4.0, 40.0, 400.0, 4000.0));
+    assert!(drafts.is_empty(), "ageing spend: {:?}", drafts.len());
+
+    let drafts = observer.observe(frame(13_000, 0.0, 0.0, 0.0, 0.0));
+    assert_eq!(drafts.len(), 1, "one edge writes one record");
+    assert!(matches!(
+        &drafts[0].kind,
+        AnomalyKind::AggregateReset { aggregate, from, .. }
+            if aggregate.identity() == "provider_spend:codex@default" && from == "400000"
+    ));
+}
+
+#[test]
 fn aggregate_spend_signature_quantizes_to_cents() {
     let frame = extracted_spend_sig(0, 1.234, 1.236);
     let cockpit = frame

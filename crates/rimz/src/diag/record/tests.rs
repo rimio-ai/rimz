@@ -128,6 +128,27 @@ fn provider_key_vocabulary_keeps_prior_shapes_and_round_trips_new_ones() {
     }
 }
 
+#[test]
+fn aggregate_backstep_round_trips_under_its_key_identity() {
+    let wire = r#"{"detector":"aggregate_backstep","aggregate":{"aggregate":"provider_field","login":"claude@default","field":"version"},"from":"2.1.291","to":"2.1.289","pulled":null}"#;
+    let anomaly = AnomalyKind::AggregateBackstep {
+        aggregate: AggregateKey::ProviderField {
+            login: "claude@default".parse().unwrap(),
+            field: PanelField::Version,
+        },
+        from: "2.1.291".to_owned(),
+        to: "2.1.289".to_owned(),
+        pulled: None,
+    };
+    assert_eq!(serde_json::to_string(&anomaly).unwrap(), wire);
+    assert_eq!(serde_json::from_str::<AnomalyKind>(wire).unwrap(), anomaly);
+    assert_eq!(anomaly.key(), "aggregate_backstep");
+    assert_eq!(
+        anomaly.subject().as_deref(),
+        Some("provider_field:claude@default:version")
+    );
+}
+
 fn workspace_id() -> WorkspaceId {
     WorkspaceId::from_project_root(std::path::Path::new("/repo"))
 }
