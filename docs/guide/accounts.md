@@ -49,16 +49,18 @@ The account named `default` is the provider's own home and is never declared. It
 
 ```console
 $ rimz accounts list
-   KIND    NAME     STATUS           5h LEFT       7d LEFT       AGENTS  HISTORY  HOME
-○  claude  default  ready            100% · 3h31m  89% · 4d03h   -       -        ~/.claude
-●  claude  work     ready            98% · 4h21m   31% · 13h51m  -       shared   ~/.rimz/accounts/claude/work
+   KIND    NAME     STATUS           5h LEFT              7d LEFT              AGENTS  HISTORY  HOME
+○  claude  default  ready            100% · 3h31m · 0.0x  89% · 4d03h · 0.3x   -       -        ~/.claude
+●  claude  work     ready            98% · 4h21m · 0.2x   31% · 13h51m · 0.8x  -       shared   ~/.rimz/accounts/claude/work
 
-●  codex   default  hooks untrusted  ∞             64% · 5d11h   -       -        ~/.codex
+●  codex   default  hooks untrusted  ∞                    64% · 5d11h · 1.6x   -       -        ~/.codex
 ●  this room   ○  new rooms
 RimZ hooks for codex account `default` at `/home/me/.codex` are untrusted (SessionStart, UserPromptSubmit, SubagentStart, SubagentStop, Stop, PermissionRequest, PreToolUse, PostToolUse, PreCompact, PostCompact); run /hooks inside codex and trust the RimZ hooks
 ```
 
 `●` marks the account a launch from where you stand uses: inside a room, the room's selection; anywhere else, the account the next `rimz start` there would pick. `○` marks the account new rooms start on when that is a different one, and the line under the table names the selection that decides each marker (`this room`, `this project`, `new rooms`). `5h LEFT` and `7d LEFT` show how much of each usage window the account has left and how long until it resets, so you can pick the account to switch to. `AGENTS` counts the agents running on the account now across every live room. The [reference](../reference/cli/accounts.md#list) spells out the order the layers win in.
+
+Pace is the used share divided by the elapsed share of the window: `1.0x` lasts exactly to reset; above it, the account runs dry early at that average rate. It is rounded to one decimal, with `>10x` at a rounded pace of 10.0 or higher. A trailing `–` means less than 5% of the window has elapsed, too early to tell. Pace is absent for a lifted, unknown, not-started or exhausted window, or without a duration, reset time or positive elapsed time. Its color follows `[theme.display.budget_bar.burn_rate]`, the same bands as the sidebar reset marker.
 
 An account reads `ready` once its home exists, holds trusted RimZ hooks, and has no known login problem; if the provider cannot report its login state, `ready` does not prove it is logged in. Anything else prints its own line under the table with the fix: `logged out` means the provider has no login under that home, and the line carries the login command; for a named account, `home missing` and `hooks missing` both mean `rimz accounts add` never finished, so rerun it; for `default`, run `rimz hooks install <kind>`. `hooks untrusted` is Codex asking you to approve new hooks inside Codex itself, so an account you just declared stays there until you start Codex once under its home and trust them with `/hooks`. `rimz start` still offers to install and refresh the hooks in the provider's own home ([install agent hooks](./setup.md#install-agent-hooks)), so a `default` problem never stops a room from starting.
 
