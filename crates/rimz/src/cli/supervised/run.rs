@@ -426,6 +426,12 @@ fn prepare_supervised(
     // The room pin keeps the store and effective config on the same project root.
     let workspace = supervised::anchor_subagent_workspace(workspace, request, caller, globals)?;
     check_supervised_subagent_allowed(request, caller, &effective.profiles)?;
+    crate::cli::admit_launch_worktree_name(
+        &workspace,
+        &machine_config.agents.worktree,
+        &projection.agents,
+        request.worktree.as_deref(),
+    )?;
     let lane = request
         .channel
         .clone()

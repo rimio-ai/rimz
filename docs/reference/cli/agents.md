@@ -162,7 +162,7 @@ A launch runs in the current directory's checkout by default. These flags choose
 | Flag | Effect |
 | --- | --- |
 | `--cwd <DIR>` | Launch in an existing directory without changing rooms or taking worktree ownership. Relative paths resolve against the caller's current directory, in its sandbox view when sandboxed. Missing directories are refused, never created. The channel follows the directory basename unless `--channel` names one. Conflicts with `--worktree`, `--from-pr`, `--resume`, and `--fresh`. |
-| `-w`, `--worktree [NAME]` | Reuse or create the RimZ-owned worktree `NAME`, on channel `#NAME` in a tab named `#NAME`. Bare `-w` creates a fresh worktree with a generated name. |
+| `-w`, `--worktree [NAME]` | Reuse or create the RimZ-owned worktree `NAME`, on channel `#NAME` in a tab named `#NAME`. Creating a named worktree whose channel live agents hold is refused with ``channel `NAME` is held by live agents``; reusing an existing worktree is unchanged. Bare `-w` creates a fresh worktree with a generated name. |
 | `--from-pr <NUMBER\|URL>` | Reuse the marked tree holding a same-repository PR's head branch, or create a tree named `pr-<N>` unless `-w NAME` names it. An explicit name must match an existing holder. |
 | `--channel <NAME>` | Launch into the lane `#NAME` in the selected directory, in a tab named `#NAME`. The lane exists while agents run in it. `NAME` is bare ASCII letters, digits, `_`, or `-` (`--channel '#design'` is refused with `invalid channel name`), and a name a RimZ-owned worktree holds is refused with ``channel `NAME` is backed by a worktree``. |
 

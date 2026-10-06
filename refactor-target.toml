@@ -1306,7 +1306,7 @@ reason = "The run driver births the room and places, presents and closes attempt
 [[verdict]]
 kind = "item"
 key = "cli::supervised::run::prepare_supervised"
-reason = "Residual is fail-fast admission in pinned refusal order (room check, worktree config, caller ancestry, subagent allowlist before the lane snapshot read, then sandbox, login, program and LSP preflight, channel admission); the launch plan itself is harness::plan::plan_supervised_launch (pass 32c)."
+reason = "Residual is fail-fast admission in pinned refusal order (room check, worktree config, caller ancestry, subagent allowlist and new-worktree name admission before the lane snapshot read, then sandbox, login, program and LSP preflight, channel admission); the launch plan itself is harness::plan::plan_supervised_launch (pass 32c)."
 
 [[verdict]]
 kind = "item"

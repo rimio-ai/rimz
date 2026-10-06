@@ -578,7 +578,7 @@ No lane has a record of its own. Worktree lanes take their durable truth from th
 
 The sidebar is presence-driven, so a group appears only while a pane runs in that lane.
 
-Explicit lanes and RimZ-owned worktrees share one namespace, and `channel.rs` owns both halves of the rule. An explicit `--channel NAME` launch is refused for a malformed name and for a name a managed worktree owns (`channel::admit_launch`, a Git read with no store access). `rimz worktree new NAME` is refused while a live agent holds the lane (`channel::admit_worktree_name`): an agent row with no end stamp, liveness other than dead, the lane stamped, and a checkout that is not the worktree of that name.
+Explicit lanes and RimZ-owned worktrees share one namespace, and `channel.rs` owns both halves of the rule. An explicit `--channel NAME` launch is refused for a malformed name and for a name a managed worktree owns (`channel::admit_launch`, a Git read with no store access). `rimz worktree new NAME` and a launch that would create an explicitly named worktree `NAME` are refused while a live agent holds the lane (`channel::admit_worktree_name`): an agent row with no end stamp, liveness other than dead, the lane stamped, and a checkout that is not the worktree of that name. Launch admission checks the dashed name before checkout creation; an existing worktree is entered without this check, including fresh replacement. Resume, generated names, and default `pr-<N>` names are unchanged.
 
 `records/channels.json` is retired. Earlier builds kept explicit lanes there; no code reads or writes it, and `rimz gc` removes a leftover file under the `records` class.
 

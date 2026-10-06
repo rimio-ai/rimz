@@ -814,6 +814,25 @@ fn resolve_pr_branch_choice_with(
     }))
 }
 
+fn admit_launch_worktree_name(
+    workspace: &rimz::ResolvedWorkspace,
+    config: &rimz::config::WorktreeConfig,
+    agents: &[rimz::agents::AgentState],
+    worktree: Option<&str>,
+) -> Result<()> {
+    let Some(name) = worktree.map(str::trim).filter(|name| !name.is_empty()) else {
+        return Ok(());
+    };
+    let requested = rimz::worktree::parse_requested_name(name)?;
+    if rimz::worktree::worktree_path(workspace.launch_repo_root(), config, &requested.name)?
+        .exists()
+    {
+        return Ok(());
+    }
+    rimz::channel::admit_worktree_name(agents, &requested.name)?;
+    Ok(())
+}
+
 fn resolve_launch_checkout(
     workspace: &rimz::ResolvedWorkspace,
     config: &rimz::config::MachineConfig,

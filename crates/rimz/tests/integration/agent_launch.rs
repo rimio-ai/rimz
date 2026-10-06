@@ -507,6 +507,12 @@ fn assert_launch_focus_version(args: &[&str], agent: bool, action: &str, version
             if channel_hold {
                 assert!(init_launch_repo(&env.project_root));
             }
+            if action == "hold-channel-derived" {
+                env.rimz()
+                    .args(["worktree", "new", "review"])
+                    .assert()
+                    .success();
+            }
             if action == "hold-channel-symlink" {
                 let alias = env.home_root.join("checkout-alias");
                 #[cfg(unix)]
@@ -748,7 +754,7 @@ fn assert_launch_focus_version(args: &[&str], agent: bool, action: &str, version
             events_before
         );
         assert!(!std::fs::read_to_string(&log).unwrap().contains("new-tab"));
-        if matches!(action, "hold-live" | "hold-channel-derived") {
+        if action == "hold-live" {
             assert!(
                 !rimz::worktree::worktree_path(&env.project_root, &Default::default(), "review")
                     .unwrap()
@@ -3364,6 +3370,94 @@ fn invalid_new_pane_refuses_an_agents_launch_before_side_effects() {
     assert!(
         !env.state_path_for(&env.project_root).events_log.exists(),
         "a rejected --new-pane must not append launch events",
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn supervised_worktree_launch_refuses_a_live_lane_name() {
+    assert_worktree_launch_lane_admission(
+        &["agents", "claude", "-p", "hi", "-w", "demo"],
+        "demo",
+        false,
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn interactive_worktree_launch_refuses_a_live_lane_name() {
+    assert_worktree_launch_lane_admission(&["agents", "claude", "-w", "demo"], "demo", false);
+}
+
+#[cfg(unix)]
+#[test]
+fn worktree_launch_checks_the_dashed_lane_name() {
+    assert_worktree_launch_lane_admission(
+        &["agents", "claude", "-p", "hi", "-w", "feat/demo"],
+        "feat-demo",
+        false,
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn worktree_launch_reuses_an_existing_tree_despite_a_live_lane() {
+    assert_worktree_launch_lane_admission(
+        &["agents", "claude", "-p", "hi", "-w", "demo"],
+        "demo",
+        true,
+    );
+}
+
+#[cfg(unix)]
+fn assert_worktree_launch_lane_admission(args: &[&str], lane: &str, reuse: bool) {
+    let env = Env::new();
+    if !init_launch_repo(&env.project_root) {
+        crate::common::skip("git unavailable");
+        return;
+    }
+    env.install_agent_hooks("claude");
+    std::fs::write(
+        env.rimz_home().join("config.toml"),
+        "[agents]\nisolation = 'host'\n",
+    )
+    .unwrap();
+    if reuse {
+        env.rimz()
+            .args(["worktree", "new", lane])
+            .assert()
+            .success();
+    }
+    crate::channel::register_idle_lane_agent(&env, "sess-lane", lane, None);
+    let before_events = env.read_events().len();
+    let output = env.rimz().args(args).output().expect("launch");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if reuse {
+        assert!(!stderr.contains("held by live agents"), "{stderr}");
+        return;
+    }
+    assert!(!output.status.success());
+    assert!(
+        stderr.contains(&format!("channel `{lane}` is held by live agents")),
+        "{stderr}"
+    );
+    assert!(!env.home_root.join("project-worktrees").join(lane).exists());
+    let snapshot = env.store().snapshot_cached().expect("snapshot");
+    assert_eq!(snapshot.agents.len(), 1);
+    assert_eq!(snapshot.agents[0].agent_id.as_str(), "sess-lane");
+    assert_eq!(env.read_events().len(), before_events);
+    let worktrees = std::process::Command::new("git")
+        .args(["worktree", "list", "--porcelain"])
+        .current_dir(&env.project_root)
+        .output()
+        .expect("list worktrees");
+    assert!(worktrees.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&worktrees.stdout)
+            .lines()
+            .filter(|line| line.starts_with("worktree "))
+            .count(),
+        1
     );
 }
 

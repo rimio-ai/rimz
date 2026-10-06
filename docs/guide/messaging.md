@@ -51,7 +51,7 @@ rimz agents list --all                           # every lane that has agents, w
 rimz worktree list                               # every worktree lane, with or without agents
 ```
 
-A `--channel` name takes ASCII letters, numbers, `_`, and `-`. Those lanes and worktrees share one namespace, so a name belongs to one or the other and never both: `--channel auth` is refused while a worktree named `auth` exists, and `rimz worktree new auth` is refused while live agents hold a `#auth` lane. How channels render on screen, with their headers and groups, is [the sidebar guide](./sidebar.md); the launch flags are in [cli/agents.md](../reference/cli/agents.md#channel-worktree-and-placement).
+A `--channel` name takes ASCII letters, numbers, `_`, and `-`. Channels and worktrees share one namespace: `--channel auth` is refused while a worktree named `auth` exists, and both `rimz worktree new auth` and a launch that would create worktree `auth` are refused while live agents hold channel `#auth`. How channels render on screen, with their headers and groups, is [the sidebar guide](./sidebar.md); the launch flags are in [cli/agents.md](../reference/cli/agents.md#channel-worktree-and-placement).
 
 ## Park, steer, interrupt, or schedule
 
