@@ -144,16 +144,36 @@ pub(super) fn list_messages(args: ListArgs, globals: &GlobalFlags) -> Result<()>
     let store = &ctx.store;
     let snapshot = ctx.cached_snapshot()?;
     let mut messages = projected_messages(store)?;
-    let ambient_channel = ctx.channel().map(ToOwned::to_owned);
+    let inline_channel = args
+        .target
+        .as_deref()
+        .map(|raw| {
+            rimz::address::require_mention(raw)?;
+            rimz::address::parse_selector(raw).map(|(_, channel)| channel)
+        })
+        .transpose()?
+        .flatten();
+    let channel = rimz::address::reconcile_channel(
+        args.target.as_deref().unwrap_or_default(),
+        inline_channel.as_deref(),
+        args.channel.as_deref(),
+        if args.all { None } else { ctx.channel() },
+    )?;
+    if let Some(explicit) = inline_channel.as_deref().or(args.channel.as_deref()) {
+        require_known_channel(explicit, &messages, &snapshot, &ctx)?;
+    }
     let lane_scope = if args.all {
         LaneScope::All
-    } else if let Some(channel) = args.channel {
-        LaneScope::Named(channel)
-    } else if let Some(channel) = ambient_channel {
-        LaneScope::Named(channel)
+    } else if let Some(channel) = &channel {
+        LaneScope::Named(channel.clone())
     } else {
         LaneScope::Main
     };
+    let unfiltered_lane = !args.all && args.status.is_none() && args.target.is_none();
+    let empty = unfiltered_lane
+        .then(|| other_lanes_line(&messages, &lane_scope, args.system))
+        .flatten()
+        .unwrap_or_else(|| empty_message_digest(&lane_scope, args.status));
     match &lane_scope {
         LaneScope::All => {}
         LaneScope::Main => messages.retain(|message| message.channel.is_none()),
@@ -167,9 +187,8 @@ pub(super) fn list_messages(args: ListArgs, globals: &GlobalFlags) -> Result<()>
         messages.retain(|message| message.status != MessageStatus::Archived);
     }
     if let Some(raw) = args.target {
-        rimz::address::require_mention(&raw)?;
         let agent =
-            crate::cli::resolve_agent_one(store, &snapshot, &raw, None, lane_scope.named())?;
+            crate::cli::resolve_agent_one(store, &snapshot, &raw, None, channel.as_deref())?;
         messages.retain(|message| {
             rimz::agents::AgentCardRef::new(
                 &message.kind,
@@ -210,10 +229,93 @@ pub(super) fn list_messages(args: ListArgs, globals: &GlobalFlags) -> Result<()>
             &lane_scope,
             hidden,
             system_hidden,
-            args.status,
+            &empty,
         )?;
     }
     Ok(())
+}
+
+fn require_known_channel(
+    explicit: &str,
+    messages: &[MessageListRow],
+    snapshot: &SidebarSnapshot,
+    ctx: &Ctx,
+) -> Result<()> {
+    let mut known = messages
+        .iter()
+        .filter_map(|message| message.channel.clone())
+        .collect::<std::collections::BTreeSet<_>>();
+    known.extend(
+        snapshot
+            .agents
+            .iter()
+            .filter(|agent| agent.ended_at.is_none())
+            .filter_map(|agent| agent.channel()),
+    );
+    known.extend(
+        rimz::worktree::discover_owned(&ctx.workspace.project_root)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|worktree| worktree.marker.name),
+    );
+    if known.contains(explicit) {
+        return Ok(());
+    }
+    const SHOWN: usize = 20;
+    let mut channels = known
+        .iter()
+        .take(SHOWN)
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .join(", ");
+    if known.is_empty() {
+        channels = "(none)".to_owned();
+    } else if known.len() > SHOWN {
+        channels.push_str(&format!(", …and {} more", known.len() - SHOWN));
+    }
+    bail!("no channel #{explicit}\nknown channels: {channels}");
+}
+
+/// The empty-lane line that counts what other lanes hold, or `None` when they hold nothing.
+fn other_lanes_line(
+    messages: &[MessageListRow],
+    lane_scope: &LaneScope,
+    system: bool,
+) -> Option<String> {
+    let others = messages
+        .iter()
+        .filter(|message| {
+            message.channel.as_deref() != lane_scope.named()
+                && message.status != MessageStatus::Archived
+                && (system || message.sender.is_conversation())
+        })
+        .collect::<Vec<_>>();
+    if others.is_empty() {
+        return None;
+    }
+    let lanes = others
+        .iter()
+        .map(|message| &message.channel)
+        .collect::<std::collections::BTreeSet<_>>()
+        .len();
+    let undelivered = others
+        .iter()
+        .filter(|message| message.status.is_open())
+        .count();
+    let lane = lane_scope.named().map_or_else(
+        || "the main lane".to_owned(),
+        |channel| format!("#{channel}"),
+    );
+    let hint = if undelivered > 0 {
+        format!(", {undelivered} not yet delivered — rimz message list --all --status queued")
+    } else {
+        " — rimz message list --all".to_owned()
+    };
+    Some(format!(
+        "no messages in {lane}. {} in {lanes} other lane{}{hint}",
+        others.len(),
+        if lanes == 1 { "" } else { "s" }
+    ))
 }
 
 fn retain_conversation(messages: &mut Vec<MessageListRow>) -> usize {
@@ -251,18 +353,11 @@ pub(super) fn render_message_digest(
     lane_scope: &LaneScope,
     hidden: usize,
     system_hidden: usize,
-    status: Option<MessageStatus>,
+    empty: &str,
 ) -> Result<()> {
     let now = Timestamp::now();
     if messages.is_empty() {
-        writeln!(
-            out,
-            "{}",
-            render::paint(
-                render::palette::faint(),
-                &empty_message_digest(lane_scope, status)
-            )
-        )?;
+        writeln!(out, "{}", render::paint(render::palette::faint(), empty))?;
     } else if matches!(lane_scope, LaneScope::All) {
         for (index, (channel, rows)) in message_digest_groups(messages).into_iter().enumerate() {
             if index > 0 {
@@ -454,7 +549,7 @@ pub(super) fn message_snippet(message: &MessageListRow, width: usize) -> String 
     }
     render::paint(
         render::palette::faint(),
-        &marker.unwrap_or_else(|| "-".to_owned()),
+        &marker.unwrap_or_else(|| "(text no longer kept)".to_owned()),
     )
 }
 
@@ -547,6 +642,18 @@ mod tests {
     use rimz::agents::AgentStatus;
     use rimz::ids::{AgentKind, MuxName, PaneId, WorkspaceId};
     use rimz::pane::PaneRef;
+
+    #[test]
+    fn message_snippet_names_text_not_kept() {
+        let mut row = MessageListRow::from_record(MessageRecord::new(
+            workspace_id(),
+            &agent("sess-coder", AgentStatus::Idle),
+            "text".to_owned(),
+            DeliveryGate::Done,
+        ));
+        row.text = None;
+        assert!(message_snippet(&row, 120).contains("(text no longer kept)"));
+    }
 
     #[test]
     fn message_target_keeps_single_sigil() {
@@ -751,7 +858,16 @@ mod tests {
     fn message_digest_reports_hidden_system_rows() {
         for rows in [Vec::new(), vec![message_row("sess-coder", None, "task")]] {
             let mut out = Vec::new();
-            render_message_digest(&mut out, rows, &[], &LaneScope::Main, 0, 2, None).unwrap();
+            render_message_digest(
+                &mut out,
+                rows,
+                &[],
+                &LaneScope::Main,
+                0,
+                2,
+                &empty_message_digest(&LaneScope::Main, None),
+            )
+            .unwrap();
             let output = String::from_utf8(out).unwrap();
             assert!(output.ends_with("... 2 system messages hidden (--system shows them)\n"));
         }
@@ -822,7 +938,16 @@ mod tests {
         status: Option<MessageStatus>,
     ) -> String {
         let mut out = Vec::new();
-        render_message_digest(&mut out, messages, &[], &lane_scope, 0, 0, status).unwrap();
+        render_message_digest(
+            &mut out,
+            messages,
+            &[],
+            &lane_scope,
+            0,
+            0,
+            &empty_message_digest(&lane_scope, status),
+        )
+        .unwrap();
         String::from_utf8(out).unwrap()
     }
 
