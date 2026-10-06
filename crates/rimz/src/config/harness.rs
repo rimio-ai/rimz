@@ -257,6 +257,9 @@ impl<'de> Deserialize<'de> for IdleCompactMode {
 pub struct HarnessConfig {
     /// Keep waiting agents' provider prompt caches warm.
     pub cache_keepalive: bool,
+    /// Stop keepalive pings that would start this long after the agent's last request of its own; `None` (`off`) never stops them.
+    #[serde(with = "cache_keepalive_max_serde")]
+    pub cache_keepalive_max: Option<Duration>,
     #[serde(
         default,
         skip_serializing_if = "BTreeMap::is_empty",
@@ -294,6 +297,7 @@ impl Default for HarnessConfig {
     fn default() -> Self {
         Self {
             cache_keepalive: true,
+            cache_keepalive_max: Some(Duration::from_secs(6 * 3600)),
             prompt_cache_ttl: BTreeMap::new(),
             budget: None,
             turn_budget: None,
@@ -322,6 +326,46 @@ impl HarnessConfig {
     }
 }
 
+/// `off`, or a duration longer than [`PROMPT_CACHE_MARGIN`].
+fn parse_off_or_duration(raw: &str) -> Option<Option<Duration>> {
+    if raw == "off" {
+        return Some(None);
+    }
+    parse_duration_units(raw, IDLE_COMPACT_DURATION_UNITS)
+        .ok()
+        .filter(|duration| *duration > PROMPT_CACHE_MARGIN)
+        .map(Some)
+}
+
+fn format_off_or_duration(duration: Option<Duration>) -> String {
+    duration.map_or_else(
+        || "off".to_owned(),
+        crate::utils::time::format_duration_compact,
+    )
+}
+
+mod cache_keepalive_max_serde {
+    use super::*;
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<Duration>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        parse_off_or_duration(&String::deserialize(deserializer)?).ok_or_else(|| {
+            serde::de::Error::custom(
+                "harness.cache_keepalive_max must be off or a duration longer than 1m, such as 6h",
+            )
+        })
+    }
+
+    pub fn serialize<S>(max: &Option<Duration>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&format_off_or_duration(*max))
+    }
+}
+
 mod prompt_cache_ttl_serde {
     use super::*;
 
@@ -346,18 +390,11 @@ mod prompt_cache_ttl_serde {
                 "harness.prompt_cache_ttl.{kind}: unknown provider kind; use a built-in or installed plugin kind"
             ));
         }
-        if raw == "off" {
-            return Ok(None);
-        }
-        parse_duration_units(raw, IDLE_COMPACT_DURATION_UNITS)
-            .ok()
-            .filter(|ttl| *ttl > PROMPT_CACHE_MARGIN)
-            .map(Some)
-            .ok_or_else(|| {
-                format!(
-                    "harness.prompt_cache_ttl.{kind} must be off or a duration longer than 1m, such as 5m"
-                )
-            })
+        parse_off_or_duration(raw).ok_or_else(|| {
+            format!(
+                "harness.prompt_cache_ttl.{kind} must be off or a duration longer than 1m, such as 5m"
+            )
+        })
     }
 
     pub fn serialize<S>(
@@ -369,15 +406,7 @@ mod prompt_cache_ttl_serde {
     {
         values
             .iter()
-            .map(|(kind, ttl)| {
-                (
-                    kind,
-                    ttl.map_or_else(
-                        || "off".to_owned(),
-                        crate::utils::time::format_duration_compact,
-                    ),
-                )
-            })
+            .map(|(kind, ttl)| (kind, format_off_or_duration(*ttl)))
             .collect::<BTreeMap<_, _>>()
             .serialize(serializer)
     }
@@ -461,6 +490,36 @@ mod tests {
             assert!(
                 err.contains(&format!("harness.prompt_cache_ttl.{kind}")),
                 "{err}"
+            );
+        }
+    }
+
+    #[test]
+    fn cache_keepalive_max_defaults_to_six_hours_and_takes_off_or_a_duration() {
+        let six_hours = Some(Duration::from_secs(6 * 3600));
+        assert_eq!(HarnessConfig::default().cache_keepalive_max, six_hours);
+        let absent: HarnessConfig = toml::from_str("").unwrap();
+        assert_eq!(absent.cache_keepalive_max, six_hours);
+        for (raw, expected) in [("off", None), ("2h", Some(Duration::from_secs(7200)))] {
+            let config: HarnessConfig =
+                toml::from_str(&format!("cache_keepalive_max = {raw:?}")).unwrap();
+            assert_eq!(config.cache_keepalive_max, expected);
+            let rendered = toml::to_string(&config).unwrap();
+            assert!(
+                rendered.contains(&format!("cache_keepalive_max = {raw:?}")),
+                "{rendered}"
+            );
+            assert_eq!(toml::from_str::<HarnessConfig>(&rendered).unwrap(), config);
+        }
+        for raw in ["30s", "1m", "on", "nonsense"] {
+            let err = toml::from_str::<HarnessConfig>(&format!("cache_keepalive_max = {raw:?}"))
+                .unwrap_err()
+                .to_string();
+            assert!(
+                err.contains(
+                    "harness.cache_keepalive_max must be off or a duration longer than 1m, such as 6h"
+                ),
+                "{raw}: {err}"
             );
         }
     }

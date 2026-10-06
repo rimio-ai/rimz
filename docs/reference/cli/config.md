@@ -13,7 +13,7 @@ rimz list-pets [--json]
 
 A refusal or error exits 1, following the CLI-wide [exit codes](../cli.md#exit-codes); the [global flags](../cli.md#global-flags) are defined there too.
 
-Provider prompt-cache lifetimes are configurable through `rimz config set harness.prompt_cache_ttl.claude 5m` (or `off`). The provider kind must be built-in or installed as a plugin; durations must exceed one minute. `rimz config set harness.cache_keepalive false` disables waiting-agent cache pings. Defaults and idle-compaction timing are in [idle compaction](../../guide/configuration.md#idle-compaction).
+Provider prompt-cache lifetimes are configurable through `rimz config set harness.prompt_cache_ttl.claude 5m` (or `off`). The provider kind must be built-in or installed as a plugin; durations must exceed one minute. `rimz config set harness.cache_keepalive false` disables waiting-agent cache pings, and `rimz config set harness.cache_keepalive_max 2h` (default `6h`, or `off`) stops them that long after the agent's last request of its own. Defaults and idle-compaction timing are in [idle compaction](../../guide/configuration.md#idle-compaction).
 
 ## The config files
 

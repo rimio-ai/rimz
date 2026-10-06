@@ -1500,6 +1500,16 @@ fn harness_prompt_cache_edits_validate_provider_and_duration() {
         let err = editor.set(&key, value).unwrap_err().to_string();
         assert!(err.contains(&key), "{err}");
     }
+    for value in ["2h", "off"] {
+        editor.set("harness.cache_keepalive_max", value).unwrap();
+    }
+    for value in ["1m", "6"] {
+        let err = editor
+            .set("harness.cache_keepalive_max", value)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("harness.cache_keepalive_max"), "{err}");
+    }
 }
 
 #[test]
