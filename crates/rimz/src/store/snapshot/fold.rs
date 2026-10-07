@@ -656,7 +656,7 @@ pub(crate) fn stage_carryover_for_rotation(paths: &StatePaths, min_bytes: u64) -
     }
 
     let (cache, agents, resume_outcomes) = catch_up_rollup(paths)?;
-    let agents = retain_carryover_agents(agents, event_log::DEFAULT_RETENTION);
+    let agents = retain_carryover_agents(agents, event_log::CARRYOVER_RETENTION);
     let carryover_agents = agents.len();
     write_carryover(
         &paths.agents_carryover,
@@ -669,13 +669,17 @@ pub(crate) fn stage_carryover_for_rotation(paths: &StatePaths, min_bytes: u64) -
     Ok(carryover_agents)
 }
 
-/// Prune expired carryover rows without changing the active-log fold extent.
+/// Prune expired carryover rows and bound retained rows without changing the active-log fold extent.
 pub(crate) fn prune_carryover(paths: &StatePaths, older_than: Duration) -> Result<usize> {
     let mut carryover = read_carryover(&paths.agents_carryover)?;
     let before = carryover.agents.len();
     carryover.agents = retain_carryover_agents(carryover.agents, older_than);
     let removed = before.saturating_sub(carryover.agents.len());
-    if removed > 0 {
+    let mut changed = removed > 0;
+    for agent in &mut carryover.agents {
+        changed |= agent.bound_row();
+    }
+    if changed {
         write_carryover(&paths.agents_carryover, &carryover)?;
     }
     Ok(removed)

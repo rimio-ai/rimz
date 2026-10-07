@@ -6,6 +6,7 @@ use std::time::Duration;
 
 pub const DEFAULT_RETENTION_ARG: &str = "14d";
 pub const DEFAULT_RETENTION: Duration = Duration::from_secs(14 * 86_400);
+pub const CARRYOVER_RETENTION: Duration = Duration::from_secs(7 * 86_400);
 pub const DEFAULT_EVENT_LOG_ROTATE_BYTES: u64 = 64 * 1024 * 1024;
 pub(crate) const DEFAULT_OLDER_THAN: Duration = Duration::from_secs(7 * 86_400);
 pub(crate) const OWNED_GRACE: Duration = Duration::from_secs(7 * 86_400);

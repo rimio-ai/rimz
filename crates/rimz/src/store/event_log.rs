@@ -23,7 +23,7 @@ pub(super) use recovery::repair;
 pub use rotation::{PruneOutcome, RotationOutcome};
 pub(super) use rotation::{newest_archives, prune_archive, rotate};
 
-pub use crate::disk::retention::{DEFAULT_RETENTION, DEFAULT_RETENTION_ARG};
+pub use crate::disk::retention::{CARRYOVER_RETENTION, DEFAULT_RETENTION, DEFAULT_RETENTION_ARG};
 
 #[derive(Debug, thiserror::Error)]
 pub enum EventLogErr {

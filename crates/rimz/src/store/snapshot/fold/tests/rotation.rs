@@ -1,6 +1,48 @@
 use super::*;
 
 #[test]
+fn prune_carryover_rewrites_fat_rows_without_expiring_agents() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = StatePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
+    paths.ensure_dirs().unwrap();
+    let mut carried = agent("claude", "carried", AgentStatus::Idle, 0);
+    carried.last_seen = Timestamp::now();
+    let prompt = "p".repeat(6 * 1024);
+    carried.prompt = Some(prompt.clone());
+    carried.first_prompt = Some(prompt.clone());
+    carried.task = Some(prompt);
+    let mut stamp = pane("%1", "claude", "/repo");
+    stamp.spawn_command = Some("argv".repeat(400));
+    stamp.foreground_cmdline = stamp.spawn_command.clone();
+    carried.pane = Some(stamp);
+    write_carryover(
+        &paths.agents_carryover,
+        &EventCarryover {
+            agents: vec![carried],
+            ..EventCarryover::default()
+        },
+    )
+    .unwrap();
+    let before = fs::metadata(&paths.agents_carryover).unwrap().len();
+
+    assert_eq!(
+        prune_carryover(&paths, Duration::from_secs(7 * 86_400)).unwrap(),
+        0
+    );
+
+    let after = fs::metadata(&paths.agents_carryover).unwrap().len();
+    assert!(
+        after < before,
+        "retained rows must shrink: {before} -> {after}"
+    );
+    let mut bounded = read_carryover(&paths.agents_carryover)
+        .unwrap()
+        .agents
+        .remove(0);
+    assert!(!bounded.bound_row(), "the persisted row is already bounded");
+}
+
+#[test]
 fn cursor_reloads_across_a_rotation() {
     // Rotation renames the log away and recreates it; a regrown log can pass
     // the held offset, so the cursor's reload guard is the file identity, not

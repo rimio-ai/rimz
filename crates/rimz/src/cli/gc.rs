@@ -212,7 +212,7 @@ fn sweep(
                     .context("reconciling stale messages")?;
                 spinner.set("pruning store caches...");
                 let carryover_pruned = store
-                    .prune_carryover(rimz::store::event_log::DEFAULT_RETENTION)
+                    .prune_carryover(rimz::store::event_log::CARRYOVER_RETENTION)
                     .context("pruning carryover agents")?;
                 StoreMaintenance::Done {
                     archived: messages_archived,

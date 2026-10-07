@@ -1122,14 +1122,25 @@ fn prune_carryover_drops_old_agents_without_live_owner() {
     let runtime = RuntimePaths::under(workspace_id, dir.path()).expect("runtime paths");
     let store = Store::open(paths.clone(), runtime).expect("open store");
     let mut old = agent_state("claude", "old", Some("lucid-atlas"));
-    old.last_seen = jiff::Timestamp::now() - Duration::from_secs(30 * 86_400);
+    old.last_seen = jiff::Timestamp::now() - Duration::from_secs(8 * 86_400);
     old.last_activity = old.last_seen;
     old.ended_at = Some(old.last_seen);
-    let fresh = agent_state("claude", "fresh", Some("solid-lumen"));
-    write_test_carryover(&paths.agents_carryover, vec![old, fresh]);
+    let mut fresh = agent_state("claude", "fresh", Some("solid-lumen"));
+    fresh.last_seen = jiff::Timestamp::now() - Duration::from_secs(6 * 86_400);
+    fresh.last_activity = fresh.last_seen;
+    fresh.ended_at = Some(fresh.last_seen);
+    let mut live = old.clone();
+    live.agent_id = AgentSessionId::from("live");
+    live.ended_at = None;
+    live.runtime_owner = Some(runtime::process_owner(
+        RuntimeOwnerKind::Agent,
+        "live",
+        std::process::id(),
+    ));
+    write_test_carryover(&paths.agents_carryover, vec![old, fresh, live]);
 
     let removed = store
-        .prune_carryover(Duration::from_secs(14 * 86_400))
+        .prune_carryover(event_log::CARRYOVER_RETENTION)
         .expect("prune carryover");
 
     assert_eq!(removed, 1);
@@ -1139,7 +1150,7 @@ fn prune_carryover_drops_old_agents_without_live_owner() {
         .iter()
         .map(|agent| agent.agent_id.as_str())
         .collect();
-    assert_eq!(ids, vec!["fresh"]);
+    assert_eq!(ids, vec!["fresh", "live"]);
 }
 
 #[test]
