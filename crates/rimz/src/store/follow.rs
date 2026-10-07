@@ -19,6 +19,86 @@ use serde_json::{Map, Value};
 
 type AgentKey = (AgentKind, AgentSessionId);
 
+/// Fold-free raw event tail starting at a caller's saved extent.
+pub struct LaunchTail {
+    paths: StatePaths,
+    cursor: event_log::LogExtent,
+}
+
+impl LaunchTail {
+    /// Preserve the startup cursor, including rotations before the first poll.
+    pub fn from_cursor(paths: StatePaths, cursor: event_log::LogExtent) -> Self {
+        Self { paths, cursor }
+    }
+
+    /// Visit new frames in archive-to-active order and return archive warnings.
+    pub fn poll(
+        &mut self,
+        mut visit: impl FnMut(crate::store::event::EventEnvelope),
+    ) -> Result<Vec<String>, EventFollowErr> {
+        let generation = snapshot::lifecycle_log_generation(&self.paths);
+        let mut warnings = Vec::new();
+        if generation > self.cursor.generation {
+            let needed = usize::try_from(generation - self.cursor.generation).unwrap_or(usize::MAX);
+            let archives = event_log::newest_archives(&self.paths.events_archive_dir, needed)?;
+            let complete = archives.len() == needed;
+            if !complete {
+                warnings.push(format!(
+                    "lifecycle event-log archive gap: needed {needed} generation(s), found {}",
+                    archives.len()
+                ));
+            }
+            for (index, archive) in archives.iter().enumerate() {
+                if !archive.is_file() {
+                    warnings.push(format!(
+                        "lifecycle event-log archive disappeared before it could be read: {}",
+                        archive.display()
+                    ));
+                    continue;
+                }
+                let start = if complete && index == 0 {
+                    self.cursor.offset
+                } else {
+                    0
+                };
+                let end = event_log::visit_from_offset(archive, start, &mut visit)?;
+                let length = fs::metadata(archive)
+                    .map_err(|source| EventFollowErr::Io {
+                        path: archive.clone(),
+                        source,
+                    })?
+                    .len();
+                if end != length {
+                    warnings.push(format!(
+                        "lifecycle event-log archive tail could not be read: {}",
+                        archive.display()
+                    ));
+                }
+            }
+            self.cursor = event_log::LogExtent {
+                generation,
+                offset: 0,
+            };
+        } else if generation < self.cursor.generation {
+            warnings.push(format!(
+                "lifecycle event-log generation moved backward from {} to {}; resuming at the active log",
+                self.cursor.generation, generation
+            ));
+            self.cursor = event_log::LogExtent {
+                generation,
+                offset: 0,
+            };
+        }
+        // The archive precedes the generation publish. Do not alias an old
+        // offset into the shorter active log during that window.
+        if file_len(&self.paths.events_log)? >= self.cursor.offset {
+            self.cursor.offset =
+                event_log::visit_from_offset(&self.paths.events_log, self.cursor.offset, visit)?;
+        }
+        Ok(warnings)
+    }
+}
+
 #[derive(Clone, Debug)]
 struct FollowState {
     lifecycle: LifecycleState,
@@ -370,6 +450,34 @@ mod tests {
             Some(crate::agents::AgentStatus::Running)
         );
         assert_eq!(event.status, crate::agents::AgentStatus::Success);
+    }
+
+    #[test]
+    fn launch_tail_preserves_seed_through_rotation_before_first_poll() {
+        let (_dir, store, paths) = fixture();
+        append(&store, LifecycleSignal::Registered);
+        let cursor = event_log::LogExtent {
+            generation: snapshot::lifecycle_log_generation(&paths),
+            offset: fs::metadata(&paths.events_log).unwrap().len(),
+        };
+        append(&store, LifecycleSignal::Ended);
+        store.rotate_event_log(1, None).unwrap();
+        append(&store, LifecycleSignal::Registered);
+        let before = snapshot::fold_testkit::carryover_bytes_parsed();
+        let mut tail = LaunchTail::from_cursor(paths, cursor);
+        let mut signals = Vec::new();
+        let mut visit = |event: crate::store::event::EventEnvelope| {
+            if let EventKind::AgentLifecycle(payload) = event.kind() {
+                signals.push(payload.observation.signal);
+            }
+        };
+        assert!(tail.poll(&mut visit).unwrap().is_empty());
+        tail.poll(&mut visit).unwrap();
+        assert_eq!(
+            signals,
+            vec![LifecycleSignal::Ended, LifecycleSignal::Registered]
+        );
+        assert_eq!(snapshot::fold_testkit::carryover_bytes_parsed(), before);
     }
 
     #[test]

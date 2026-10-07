@@ -363,10 +363,16 @@ pub(crate) fn lifecycle_follow_seed(
 ///
 /// A follower polls this across rotations, where a same-size cache rewrite must
 /// still become visible even on filesystems with coarse modification times.
-pub(crate) fn lifecycle_log_generation(paths: &StatePaths) -> u64 {
-    std::fs::read(&paths.rollup_cache)
+pub fn lifecycle_log_generation(paths: &StatePaths) -> u64 {
+    #[derive(Deserialize)]
+    struct Header {
+        version: u32,
+        extent: event_log::LogExtent,
+    }
+
+    fs::File::open(&paths.rollup_cache)
         .ok()
-        .and_then(|bytes| serde_json::from_slice::<RollupCache>(&bytes).ok())
+        .and_then(|file| serde_json::from_reader::<_, Header>(io::BufReader::new(file)).ok())
         .filter(|cache| cache.version == ROLLUP_CACHE_VERSION)
         .map(|cache| cache.extent.generation)
         .unwrap_or(0)

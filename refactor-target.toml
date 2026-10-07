@@ -725,7 +725,8 @@ path = "crates/rimz/src/store"
 # Predicate-based queue clearing keeps root-lane policy in the CLI and cancellation under the store lock (+1).
 # Fold-private audit text loading (+1).
 # Rotation commits the projected ordinal high-water mark (+1).
-surface-budget = 373
+# Thin park exports its raw LaunchTail with from_cursor and poll, the streaming visitor, and the generation header (+4 past the one free slot).
+surface-budget = 377
 
 [[module]]
 path = "crates/rimz/src/theme"
@@ -2396,6 +2397,21 @@ reason = "The benches and the performance integration tier append through this e
 kind = "item"
 key = "store::event_log::read_from_offset"
 reason = "Narrowed to pub(crate), not the store: the message reply poll reads the log tail from its own fold base (message/reply.rs) (pass 23a)."
+
+[[verdict]]
+kind = "item"
+key = "store::event_log::visit_from_offset"
+reason = "The thin launch tail visits raw frames without retaining a fleet's log tail."
+
+[[verdict]]
+kind = "item"
+key = "store::follow::LaunchTail"
+reason = "The parked wrapper's launch-aware watchdog resumes a raw, fold-free cursor."
+
+[[verdict]]
+kind = "item"
+key = "store::snapshot::fold::lifecycle_log_generation"
+reason = "The exec startup seed reads the generation header before taking its parent projection."
 
 [[verdict]]
 kind = "item"

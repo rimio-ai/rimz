@@ -63,3 +63,24 @@ fn crc_mismatch_is_a_skipped_tail_and_a_hard_middle_error() {
     assert!(matches!(err, EventLogErr::Crc { .. }), "got {err:?}");
     assert!(err.is_corruption());
 }
+
+#[test]
+fn visitor_resumes_and_stops_before_torn_tail_but_rejects_middle_corruption() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("events.log.jsonl");
+    append(&path, &test_event("first")).unwrap();
+    let start = fs::metadata(&path).unwrap().len();
+    append(&path, &test_event("second")).unwrap();
+    let committed = fs::metadata(&path).unwrap().len();
+    atomic::append_record_bytes(&path, b"torn\n").unwrap();
+    let mut events = Vec::new();
+    let end = visit_from_offset(&path, start, |event| events.push(event)).unwrap();
+    assert_eq!(methods(&events), vec!["second"]);
+    assert_eq!(end, committed);
+    append(&path, &test_event("third")).unwrap();
+    assert!(
+        visit_from_offset(&path, start, |_| {})
+            .unwrap_err()
+            .is_corruption()
+    );
+}
