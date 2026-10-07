@@ -255,7 +255,7 @@ pub fn run(config: ServeConfig) -> Result<()> {
                         watchdog: &mut pane_watchdog,
                         orphan_reap_pending: false,
                         handoff_deadline: None,
-                        host_available_pending: false,
+                        host_available_deadline: None,
                         host_retry: host_retry.as_mut(),
                     },
                 );
@@ -1059,7 +1059,7 @@ struct WorkerMonitor<'a> {
     watchdog: &'a mut Option<PaneWatchdog>,
     orphan_reap_pending: bool,
     handoff_deadline: Option<Instant>,
-    host_available_pending: bool,
+    host_available_deadline: Option<Instant>,
     host_retry: Option<&'a mut HostRetry>,
 }
 
@@ -1072,7 +1072,7 @@ impl WorkerMonitor<'_> {
             exit_code,
             signal,
         );
-        if self.host_available_pending && matches!(exit, WorkerExit::Respawn { .. }) {
+        if self.host_available_deadline.is_some() && matches!(exit, WorkerExit::Respawn { .. }) {
             return WorkerExit::HostAvailable;
         }
         exit
@@ -1107,6 +1107,9 @@ impl WorkerMonitor<'_> {
         if self
             .handoff_deadline
             .is_some_and(|deadline| now >= deadline)
+            || self
+                .host_available_deadline
+                .is_some_and(|deadline| now >= deadline)
         {
             kill_worker(worker_pid, Signal::SIGKILL)?;
         }
@@ -1121,7 +1124,7 @@ impl WorkerMonitor<'_> {
         }
         if !self.orphan_reap_pending
             && self.handoff_deadline.is_none()
-            && !self.host_available_pending
+            && self.host_available_deadline.is_none()
             && let (Some(retry), Some(runtime)) = (self.host_retry.as_mut(), self.runtime)
             && retry.probe_if_due(now, || {
                 let current =
@@ -1134,7 +1137,7 @@ impl WorkerMonitor<'_> {
             })
         {
             kill_worker(worker_pid, Signal::SIGTERM)?;
-            self.host_available_pending = true;
+            self.host_available_deadline = Some(now + worker_handoff_grace());
         }
         Ok(())
     }

@@ -238,10 +238,14 @@ fn host_available_exit_keeps_reload_and_orphan_priority() {
         watchdog: &mut None,
         orphan_reap_pending: false,
         handoff_deadline: None,
-        host_available_pending: true,
+        host_available_deadline: Some(Instant::now()),
         host_retry: None,
     };
     assert_eq!(monitor.terminal(Some(0), None), WorkerExit::HostAvailable);
+    assert_eq!(
+        monitor.terminal(None, Some(nix::sys::signal::Signal::SIGKILL as i32)),
+        WorkerExit::HostAvailable
+    );
     assert_eq!(
         monitor.terminal(Some(RELOAD_EXIT_CODE), None),
         WorkerExit::Reload

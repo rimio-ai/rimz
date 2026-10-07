@@ -23,13 +23,19 @@ use crate::common::Env;
 #[test]
 #[cfg(target_os = "linux")]
 fn transient_fallback_waits_for_a_stable_worker_to_exit_before_attaching() {
-    transient_fallback(false);
+    transient_fallback(false, false);
 }
 
 #[test]
 #[cfg(target_os = "linux")]
 fn transient_fallback_rejection_backs_off_the_next_worker_probe() {
-    transient_fallback(true);
+    transient_fallback(true, false);
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn transient_fallback_reaps_a_stuck_worker_only_after_handoff_grace() {
+    transient_fallback(false, true);
 }
 
 #[test]
@@ -340,8 +346,8 @@ fn fallback_worker_restores_tty_and_runtime_files_on_sigterm() {
 }
 
 #[cfg(target_os = "linux")]
-fn transient_fallback(reject_again: bool) {
-    use nix::sys::signal::kill;
+fn transient_fallback(reject_again: bool, stuck: bool) {
+    use nix::sys::signal::{Signal, kill};
     use nix::unistd::Pid;
     use sha2::Digest;
     use std::io::{BufRead, BufReader, Read, Write};
@@ -379,6 +385,7 @@ fn transient_fallback(reject_again: bool) {
     command
         .env("RIMZ_TEST_SIDEBAR_STABLE_RUN_MS", "300")
         .env("RIMZ_TEST_SIDEBAR_HOST_PROBE_INTERVAL_MS", "200")
+        .env("RIMZ_TEST_SIDEBAR_HANDOFF_GRACE_MS", "500")
         .env("RIMZ_TEST_SIDEBAR_SELF_CLOSE_PROBE", "empty")
         .stdin(tty.try_clone().unwrap())
         .stdout(tty.try_clone().unwrap());
@@ -423,6 +430,9 @@ fn transient_fallback(reject_again: bool) {
             fallback_connection(&listener, early).is_none(),
             "no probe before stability or rejection backoff"
         );
+        if stuck {
+            kill(Pid::from_raw(worker_pid), Signal::SIGSTOP).unwrap();
+        }
         let mut bytes = Vec::new();
         let _ = output.read_to_end(&mut bytes);
         let probe = fallback_connection(&listener, Duration::from_secs(3))
@@ -434,6 +444,13 @@ fn transient_fallback(reject_again: bool) {
             0,
             "probe is a bare connect, never a hello"
         );
+        if stuck {
+            assert!(
+                fallback_connection(&listener, Duration::from_millis(100)).is_none(),
+                "a stuck worker gets the handoff grace before forced termination"
+            );
+            assert!(kill(Pid::from_raw(worker_pid), None).is_ok());
+        }
         let mut attached = fallback_connection(&listener, Duration::from_secs(3))
             .expect("normal attach after worker exit");
         assert_eq!(fallback_hello(&attached)["instance_id"], id.as_str());
@@ -441,6 +458,13 @@ fn transient_fallback(reject_again: bool) {
             kill(Pid::from_raw(worker_pid), None).is_err(),
             "worker must be reaped before the next hello"
         );
+        if stuck {
+            attached
+                .write_all(b"{\"accept\":{\"build\":null}}\n{\"control\":\"self-close\"}\n")
+                .unwrap();
+            drop(attached);
+            break;
+        }
         assert!(!runtime.sidebar_heartbeat_path(&id).exists());
         assert!(
             !runtime
