@@ -951,6 +951,11 @@ fn message_edit_and_requeue_enforce_record_lifecycle() {
     env.store()
         .record_send_error(&message, "terminal failure", "rimz-test")
         .expect("terminalize message");
+    // A wake stamp that cannot be written must not fail a requeue whose copy is already durable,
+    // or the user's retry queues a second copy.
+    let wake_stamp = env.runtime_paths().lane_path("message-wake.json");
+    let _ = std::fs::remove_file(&wake_stamp);
+    std::fs::create_dir(&wake_stamp).expect("block the wake stamp");
     let requeued = run_success(
         env.rimz()
             .args(["message", "requeue", &message_id, "--text", "try again"]),
