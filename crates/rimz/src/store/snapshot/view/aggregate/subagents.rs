@@ -9,7 +9,7 @@ use crate::store::snapshot::row::{SidebarRow, SidebarSubAgent, SubAgentTokens};
 use super::super::layout::cmp_start_asc;
 use crate::store::session_death::GHOST_SESSION_TTL_SECS;
 
-use super::{AgentKey, AgentProjectionIndex};
+use super::{AgentKey, AgentProjectionIndex, status::ParkDemotion};
 
 /// Nest each subagent under its parent root row. A subagent is a reduced
 /// `AgentState` carrying `parent_agent_id`; native children are paneless, while
@@ -18,7 +18,9 @@ pub(super) fn attach_sub_agents_indexed(
     rows: &mut [SidebarRow],
     index: &AgentProjectionIndex<'_>,
     now: Timestamp,
-) {
+    demotion: &ParkDemotion<'_>,
+) -> BTreeMap<AgentKey, (AgentStatus, String)> {
+    let mut delegated_parks = BTreeMap::new();
     let row_by_parent = rows
         .iter()
         .enumerate()
@@ -65,7 +67,12 @@ pub(super) fn attach_sub_agents_indexed(
             .expect("row index contains only agent rows");
         let mut delegated_cost_usd = None;
         let mut sub_agent_cost_usd = None;
-        for child in all_newest.values() {
+        let mut children = all_newest.values().copied().collect::<Vec<_>>();
+        children.sort_by(|a, b| {
+            cmp_start_asc(a.registered_at, b.registered_at)
+                .then_with(|| a.agent_id.cmp(&b.agent_id))
+        });
+        for child in children {
             let cost_usd = child_cost_usd(child);
             sub_agent_cost_usd =
                 crate::agents::spending::sum_optional_cost(sub_agent_cost_usd, cost_usd);
@@ -82,9 +89,17 @@ pub(super) fn attach_sub_agents_indexed(
             {
                 continue;
             }
-            parent
-                .sub_agents
-                .push(sub_agent_from_state(child, now, prior_turn));
+            let park = launched_child_park(child, demotion);
+            let entry = project_sub_agent(child, now, prior_turn, park.as_ref());
+            if let Some((status, label)) = park
+                && delegated_parks.get(parent_key).is_none_or(|(current, _)| {
+                    *current == AgentStatus::Paused && status == AgentStatus::Failed
+                })
+            {
+                let handle = entry.petname.as_deref().unwrap_or(&entry.name);
+                delegated_parks.insert(parent_key.clone(), (status, format!("@{handle}: {label}")));
+            }
+            parent.sub_agents.push(entry);
         }
         parent.delegated_cost_usd = delegated_cost_usd;
         parent.sub_agent_count = u32::try_from(all_newest.len()).unwrap_or(u32::MAX);
@@ -95,6 +110,30 @@ pub(super) fn attach_sub_agents_indexed(
             cmp_start_asc(a.registered_at, b.registered_at).then_with(|| a.id.cmp(&b.id))
         });
     }
+    delegated_parks
+}
+
+fn launched_child_park(
+    child: &AgentState,
+    demotion: &ParkDemotion<'_>,
+) -> Option<(AgentStatus, String)> {
+    if !child.is_launched_child() || child.ended_at.is_some() {
+        return None;
+    }
+    let (class, error) = child.displayed_turn_error()?;
+    if !class.pauses_turn() {
+        return None;
+    }
+    let status = if demotion.is_spent(child, class) {
+        AgentStatus::Failed
+    } else {
+        AgentStatus::Paused
+    };
+    let label = error
+        .label
+        .clone()
+        .unwrap_or_else(|| class.words().to_owned());
+    Some((status, label))
 }
 
 fn newest_by_id<'a>(
@@ -162,7 +201,9 @@ pub(in crate::store::snapshot) fn attach_sub_agents(
     now: Timestamp,
 ) {
     let index = AgentProjectionIndex::new(agents, rows);
-    attach_sub_agents_indexed(rows, &index, now);
+    let exhausted = Default::default();
+    let demotion = ParkDemotion::new(&BTreeMap::new(), &exhausted, now);
+    attach_sub_agents_indexed(rows, &index, now, &demotion);
 }
 
 /// Advance each parent row's *displayed* `last_activity` to its freshest
@@ -208,10 +249,11 @@ pub(super) fn fold_child_activity_onto_parents(rows: &mut [SidebarRow]) {
 
 /// A child `AgentState` projected to the compact summary the parent's expanded
 /// card paints.
-pub(in crate::store::snapshot) fn sub_agent_from_state(
+fn project_sub_agent(
     child: &AgentState,
     now: Timestamp,
     prior_turn: bool,
+    park: Option<&(AgentStatus, String)>,
 ) -> SidebarSubAgent {
     let name = if child.is_launched_child() {
         child
@@ -255,8 +297,9 @@ pub(in crate::store::snapshot) fn sub_agent_from_state(
     } else {
         None
     };
-    let (status, phase, turn_error_label) = if child.is_launched_child() && child.ended_at.is_none()
-    {
+    let (status, phase, turn_error_label) = if let Some((status, label)) = park {
+        (*status, crate::agents::TurnPhase::Idle, Some(label.clone()))
+    } else if child.is_launched_child() && child.ended_at.is_none() {
         let (status, phase) = child.rowless_status();
         (status, phase, child.displayed_turn_error_label())
     } else {
@@ -291,6 +334,18 @@ pub(in crate::store::snapshot) fn sub_agent_from_state(
         last_activity: child.last_activity,
         registered_at: child.registered_at,
     }
+}
+
+#[cfg(test)]
+pub(in crate::store::snapshot) fn sub_agent_from_state(
+    child: &AgentState,
+    now: Timestamp,
+    prior_turn: bool,
+) -> SidebarSubAgent {
+    let exhausted = Default::default();
+    let demotion = ParkDemotion::new(&BTreeMap::new(), &exhausted, now);
+    let park = launched_child_park(child, &demotion);
+    project_sub_agent(child, now, prior_turn, park.as_ref())
 }
 
 /// Prefer window occupancy; otherwise use the session spend fold or an

@@ -736,7 +736,7 @@ pub struct SidebarSubAgent {
 
 impl SidebarSubAgent {
     pub(crate) fn holds_parent_turn(&self) -> bool {
-        matches!(self.status, AgentStatus::Running | AgentStatus::Paused)
+        self.status == AgentStatus::Running
     }
 
     pub(crate) fn context_gauge_percent(&self) -> Option<u8> {

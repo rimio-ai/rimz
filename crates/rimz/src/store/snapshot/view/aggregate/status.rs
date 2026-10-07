@@ -26,10 +26,11 @@ struct SettleFacts<'a> {
     waiting_interrupted: bool,
     budget_park_label: Option<String>,
     turn_error: Option<(&'a AgentTurnError, TurnErrorClass)>,
-    resume_exhausted: bool,
+    source_agent: Option<&'a AgentState>,
+    demotion: &'a ParkDemotion<'a>,
+    delegated_park: Option<(AgentStatus, String)>,
     has_live_child: bool,
     window_spent: bool,
-    window_reset: bool,
     phase: TurnPhase,
     context: Option<&'a AgentContext>,
     last_activity: Timestamp,
@@ -68,13 +69,12 @@ impl Settled {
 pub(super) fn project_display_status(
     rows: &mut [SidebarRow],
     index: &AgentProjectionIndex<'_>,
-    provider_capacities: &BTreeMap<crate::ids::LoginKey, ProviderCapacity>,
-    exhausted_resumes: &BTreeSet<(AgentKind, AgentSessionId)>,
+    demotion: &ParkDemotion<'_>,
+    delegated_parks: &BTreeMap<AgentKey, (AgentStatus, String)>,
     now: Timestamp,
     stalled_after_secs: u32,
     tool_repeat_attention_after: u32,
 ) {
-    let rate_limit_kinds = rate_limit_window_kinds(provider_capacities, now);
     for row in rows.iter_mut() {
         let row_id = row.id.clone();
         let row_name = row.name.clone();
@@ -118,9 +118,6 @@ pub(super) fn project_display_status(
         let budget_park_label = source_agent
             .and_then(|state| state.budget_park.as_ref())
             .map(|park| park.label());
-        let resume_exhausted = source_agent.is_some_and(|state| {
-            exhausted_resumes.contains(&(state.kind.clone(), state.agent_id.clone()))
-        });
         let has_live_child = agent
             .sub_agents
             .iter()
@@ -133,9 +130,7 @@ pub(super) fn project_display_status(
         )
         .map(|error| (error, effective_turn_error_class(error)));
         let window_spent =
-            source_agent.is_some_and(|state| rate_limit_kinds.spent.contains(&state.login_key()));
-        let window_reset =
-            source_agent.is_some_and(|state| rate_limit_kinds.reset.contains(&state.login_key()));
+            source_agent.is_some_and(|state| demotion.windows.spent.contains(&state.login_key()));
         let Settled {
             status: projected,
             turn_error_label,
@@ -144,10 +139,11 @@ pub(super) fn project_display_status(
             waiting_interrupted,
             budget_park_label,
             turn_error,
-            resume_exhausted,
+            source_agent,
+            demotion,
+            delegated_park: delegated_parks.get(&key).cloned(),
             has_live_child,
             window_spent,
-            window_reset,
             phase: agent.phase,
             context: agent.context.as_ref(),
             last_activity,
@@ -171,6 +167,35 @@ pub(super) fn project_display_status(
             // a resting or attention status drop it.
             agent.phase = TurnPhase::Idle;
         }
+    }
+}
+
+pub(super) struct ParkDemotion<'a> {
+    exhausted_resumes: &'a BTreeSet<(AgentKind, AgentSessionId)>,
+    windows: RateLimitKindSummary,
+}
+
+impl<'a> ParkDemotion<'a> {
+    pub(super) fn new(
+        provider_capacities: &BTreeMap<crate::ids::LoginKey, ProviderCapacity>,
+        exhausted_resumes: &'a BTreeSet<(AgentKind, AgentSessionId)>,
+        now: Timestamp,
+    ) -> Self {
+        Self {
+            exhausted_resumes,
+            windows: rate_limit_window_kinds(provider_capacities, now),
+        }
+    }
+
+    pub(super) fn is_spent(&self, agent: &AgentState, class: TurnErrorClass) -> bool {
+        let resume_exhausted = self
+            .exhausted_resumes
+            .contains(&(agent.kind.clone(), agent.agent_id.clone()));
+        let login = agent.login_key();
+        let reset_without_budget = class.is_limit()
+            && self.windows.reset.contains(&login)
+            && !self.windows.spent.contains(&login);
+        resume_exhausted || reset_without_budget
     }
 }
 
@@ -240,10 +265,11 @@ fn settle(facts: SettleFacts<'_>) -> Settled {
         waiting_interrupted,
         budget_park_label,
         turn_error,
-        resume_exhausted,
+        source_agent,
+        demotion,
+        delegated_park,
         has_live_child,
         window_spent,
-        window_reset,
         phase,
         context,
         last_activity,
@@ -258,8 +284,7 @@ fn settle(facts: SettleFacts<'_>) -> Settled {
         return Settled::with_label(AgentStatus::Paused, Some(label));
     }
     if let Some((error, class)) = turn_error.filter(|(_, class)| class.pauses_turn()) {
-        let reset_without_budget = class.is_limit() && window_reset && !window_spent;
-        if resume_exhausted || reset_without_budget {
+        if source_agent.is_some_and(|agent| demotion.is_spent(agent, class)) {
             return Settled::with_label(AgentStatus::Failed, error.label.clone());
         }
         return Settled::status(AgentStatus::Paused);
@@ -269,13 +294,16 @@ fn settle(facts: SettleFacts<'_>) -> Settled {
     {
         return Settled::with_label(AgentStatus::Failed, error.label.clone());
     }
-    if has_live_child
-        && matches!(
-            status,
-            AgentStatus::Idle | AgentStatus::Success | AgentStatus::Running
-        )
-    {
-        return Settled::status(AgentStatus::Running);
+    if matches!(
+        status,
+        AgentStatus::Idle | AgentStatus::Success | AgentStatus::Running
+    ) {
+        if let Some((status, label)) = delegated_park {
+            return Settled::with_label(status, Some(label));
+        }
+        if has_live_child {
+            return Settled::status(AgentStatus::Running);
+        }
     }
     match crate::agents::settled_outcome(status, context, last_activity) {
         // A turn that finished without a `Stop` hook (Codex `/review` review

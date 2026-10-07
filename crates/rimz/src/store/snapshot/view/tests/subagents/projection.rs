@@ -46,15 +46,186 @@ fn launched_child_projects_displayed_status_and_label() {
 }
 
 #[test]
-fn paused_child_keeps_parent_delegating() {
-    let parent = agent("claude", "root", AgentStatus::Idle, 0).worktree("/repo/main");
-    let mut child = child_state("root", "child", AgentStatus::Running, 5)
-        .paused_turn_error(0, "usage limit reached");
+fn paused_child_parks_parent_card() {
+    for status in [
+        AgentStatus::Idle,
+        AgentStatus::Success,
+        AgentStatus::Running,
+    ] {
+        let parent = agent("claude", "root", status, 0).worktree("/repo/main");
+        let child = launched_parked_child("child", "usage limit reached");
+        let snapshot = room_with_agent_panes(vec![parent, child]);
+        let row = row(&snapshot, "root");
+        assert_eq!(row.status(), Some(AgentStatus::Paused));
+        assert_eq!(row.phase(), TurnPhase::Idle);
+        assert_eq!(row.turn_error_label(), Some("@child: usage limit reached"));
+        assert_eq!(row.sub_agents()[0].status, AgentStatus::Paused);
+        assert_eq!(row.sub_agents()[0].phase, TurnPhase::Idle);
+        assert_eq!(
+            row.sub_agents()[0].turn_error_label.as_deref(),
+            Some("usage limit reached")
+        );
+        assert_eq!(snapshot.agents[0].status, status);
+    }
+}
+
+fn launched_parked_child(id: &str, label: &str) -> AgentState {
+    let mut child = child_state("root", id, AgentStatus::Running, 5).paused_turn_error(0, label);
     child.launch_depth = Some(1);
-    let snapshot = room_with_agent_panes(vec![parent, child]);
-    let row = &snapshot.worktree_groups[0].rows[0];
-    assert_eq!(row.status(), Some(AgentStatus::Running));
-    assert_eq!(row.sub_agents()[0].status, AgentStatus::Paused);
+    child.name = Some(id.to_owned());
+    child.registered_at = Some(ago(100));
+    child
+}
+
+#[test]
+fn resumed_or_ended_child_clears_parent_park() {
+    let parent = agent("claude", "root", AgentStatus::Idle, 0).worktree("/repo/main");
+    let child = launched_parked_child("child", "usage limit reached");
+    let parked = room_with_agent_panes(vec![parent.clone(), child.clone()]);
+    assert_eq!(row(&parked, "root").status(), Some(AgentStatus::Paused));
+    let mut resumed = child.clone();
+    resumed.last_activity = epoch();
+    resumed
+        .context
+        .as_mut()
+        .unwrap()
+        .turn_error
+        .as_mut()
+        .unwrap()
+        .at = ago(1);
+    let resumed = room_with_agent_panes(vec![parent.clone(), resumed]);
+    assert_eq!(row(&resumed, "root").status(), Some(AgentStatus::Running));
+    assert_eq!(row(&resumed, "root").turn_error_label(), None);
+    let mut ended = child;
+    ended.ended_at = Some(epoch());
+    ended.status = AgentStatus::Success;
+    let ended = room_with_agent_panes(vec![parent, ended]);
+    assert_eq!(row(&ended, "root").status(), Some(AgentStatus::Idle));
+    assert_eq!(row(&ended, "root").turn_error_label(), None);
+}
+
+#[test]
+fn parent_own_attention_outranks_child_park() {
+    for (parent, status, label) in [
+        (
+            agent("claude", "root", AgentStatus::Waiting, 0),
+            AgentStatus::Waiting,
+            None,
+        ),
+        (
+            agent("claude", "root", AgentStatus::Running, 0).turn_error(0, "own failure"),
+            AgentStatus::Failed,
+            Some("own failure"),
+        ),
+        (
+            agent("claude", "root", AgentStatus::Running, 0)
+                .overloaded_turn_error(0, "own overload"),
+            AgentStatus::Paused,
+            None,
+        ),
+    ] {
+        let snapshot =
+            room_with_agent_panes(vec![parent, launched_parked_child("child", "child limit")]);
+        assert_eq!(row(&snapshot, "root").status(), Some(status));
+        assert_eq!(row(&snapshot, "root").turn_error_label(), label);
+    }
+}
+
+#[test]
+fn dead_and_native_children_do_not_park_parent() {
+    let parent = agent("claude", "root", AgentStatus::Idle, 0);
+    let mut native = launched_parked_child("native", "limit");
+    native.launch_depth = None;
+    let native = room_with_agent_panes(vec![parent.clone(), native]);
+    assert_eq!(row(&native, "root").status(), Some(AgentStatus::Running));
+    assert_eq!(row(&native, "root").turn_error_label(), None);
+    let dead = launched_parked_child("dead", "limit").turn_error(0, "dead turn");
+    let dead = room_with_agent_panes(vec![parent, dead]);
+    assert_eq!(row(&dead, "root").status(), Some(AgentStatus::Idle));
+    assert_eq!(row(&dead, "root").turn_error_label(), None);
+}
+
+#[test]
+fn delegated_park_prefers_spawn_order_and_outranks_running_sibling() {
+    let parent = agent("claude", "root", AgentStatus::Idle, 0);
+    let first = launched_parked_child("a", "first limit");
+    let mut later = launched_parked_child("b", "later limit");
+    later.registered_at = Some(ago(50));
+    let running = child_state("root", "running", AgentStatus::Running, 0);
+    for children in [
+        vec![later.clone(), first.clone()],
+        vec![first.clone(), later],
+        vec![first, running],
+    ] {
+        let snapshot = room_with_agent_panes([vec![parent.clone()], children].concat());
+        assert_eq!(row(&snapshot, "root").status(), Some(AgentStatus::Paused));
+        assert_eq!(
+            row(&snapshot, "root").turn_error_label(),
+            Some("@a: first limit")
+        );
+    }
+}
+
+#[test]
+fn delegated_park_breaks_registration_ties_by_id_and_uses_type_fallback() {
+    let parent = agent("claude", "root", AgentStatus::Idle, 0);
+    let mut first = launched_parked_child("a", "first limit");
+    first.name = None;
+    first.profile = Some("review".to_owned());
+    let second = launched_parked_child("b", "second limit");
+    let snapshot = room_with_agent_panes(vec![parent, second, first]);
+    assert_eq!(row(&snapshot, "root").status(), Some(AgentStatus::Paused));
+    assert_eq!(
+        row(&snapshot, "root").turn_error_label(),
+        Some("@review: first limit")
+    );
+}
+
+#[test]
+fn exhausted_child_demotes_entry_and_parent_before_paused_sibling() {
+    let parent = agent("claude", "root", AgentStatus::Idle, 0);
+    let first = launched_parked_child("first", "first limit");
+    let mut spent = launched_parked_child("spent", "spent limit");
+    spent.registered_at = Some(ago(50));
+    let exhausted = BTreeSet::from([(spent.kind.clone(), spent.agent_id.clone())]);
+    let snapshot = room(vec![parent.clone(), first, spent]);
+    let groups = snapshot.build_worktree_groups(
+        vec![row_from_agent(&parent, epoch())],
+        &BTreeMap::new(),
+        &exhausted,
+    );
+    let row = &groups[0].rows[0];
+    assert_eq!(row.status(), Some(AgentStatus::Failed));
+    assert_eq!(row.turn_error_label(), Some("@spent: spent limit"));
+    assert_eq!(row.sub_agents()[1].status, AgentStatus::Failed);
+    assert_eq!(
+        row.sub_agents()[1].turn_error_label.as_deref(),
+        Some("spent limit")
+    );
+}
+
+#[test]
+fn reset_child_login_demotes_entry_and_parent() {
+    let parent = agent("claude", "root", AgentStatus::Idle, 0);
+    let mut child = launched_parked_child("child", "usage limit reached");
+    child.login = Some("work".parse().unwrap());
+    let capacities = BTreeMap::from([(
+        child.login_key(),
+        crate::agents::ProviderCapacity::from_windows(vec![RateLimitWindow {
+            used_percentage: Some(100),
+            resets_at: Some(ago(1)),
+            ..Default::default()
+        }]),
+    )]);
+    let snapshot = room_with_agent_panes_and_capacities(vec![parent, child], capacities);
+    let row = row(&snapshot, "root");
+    assert_eq!(row.status(), Some(AgentStatus::Failed));
+    assert_eq!(row.turn_error_label(), Some("@child: usage limit reached"));
+    assert_eq!(row.sub_agents()[0].status, AgentStatus::Failed);
+    assert_eq!(
+        row.sub_agents()[0].turn_error_label.as_deref(),
+        Some("usage limit reached")
+    );
 }
 
 #[test]

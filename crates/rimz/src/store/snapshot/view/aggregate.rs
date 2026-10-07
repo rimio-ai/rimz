@@ -129,10 +129,12 @@ impl SidebarSnapshot {
         let now = self.now;
         let windows = AttentionWindows::from_config(&self.attention);
         let agent_index = AgentProjectionIndex::new(&self.agents, &rows);
+        let demotion = status::ParkDemotion::new(provider_capacities, exhausted_resumes, now);
         // Nest each subagent under its parent root row before grouping. This is the
         // one chokepoint every live (`rows_from_panes`) card flows through, so
         // nesting behaves identically for process, agent, and attention rows.
-        subagents::attach_sub_agents_indexed(&mut rows, &agent_index, now);
+        let delegated_parks =
+            subagents::attach_sub_agents_indexed(&mut rows, &agent_index, now, &demotion);
         // Same-pane conversations keep separate durable projections, so fold the
         // hidden roots' clocks onto whichever one currently owns the pane. A fork
         // is the same conversation to whoever prompts the pane next, so this runs
@@ -147,8 +149,8 @@ impl SidebarSnapshot {
         status::project_display_status(
             &mut rows,
             &agent_index,
-            provider_capacities,
-            exhausted_resumes,
+            &demotion,
+            &delegated_parks,
             now,
             windows.stalled_after_secs,
             windows.tool_repeat_attention_after,
