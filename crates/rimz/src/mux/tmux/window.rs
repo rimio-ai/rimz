@@ -111,7 +111,7 @@ impl SplitAxis {
 /// name reaches tmux; Zellij tab names have no such constraint, so the mapping
 /// stays inside this backend.
 pub(super) fn sanitize_window_name(raw: &str) -> String {
-    raw.replace([':', '.'], "-")
+    crate::mux::tab_name::tmux_window_name(raw)
 }
 
 /// The sanitized stored name encoded for a tmux name argument. tmux expands

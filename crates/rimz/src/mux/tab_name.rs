@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::ids::PaneId;
+use crate::ids::{PaneId, ViewKind};
 
 /// What the multiplexer records about who names a view.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -51,6 +51,19 @@ impl TabNameIntent {
 
 pub(crate) fn is_scoped_label(base: &str) -> bool {
     base.starts_with('#') || base.starts_with("team:") || base.starts_with("team-")
+}
+
+pub(super) fn tmux_window_name(raw: &str) -> String {
+    raw.replace([':', '.'], "-")
+}
+
+/// A label in the form the view's backend reads it back, so a stored label
+/// compares equal to the one that was written.
+pub(crate) fn stored_label(kind: ViewKind, label: &str) -> String {
+    match kind {
+        ViewKind::Window => tmux_window_name(label.trim()).replace(',', "_"),
+        ViewKind::Tab => label.to_owned(),
+    }
 }
 
 pub(crate) fn label_from_pane_names<'a>(names: impl IntoIterator<Item = &'a str>) -> String {

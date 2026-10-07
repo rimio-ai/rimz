@@ -298,6 +298,7 @@ fn tmux_follow_label_converges_on_the_read_back_name() {
         ("a:b,c", "a-b_c"),
         (" peer ", "peer"),
     ] {
+        assert_eq!(stored_label(ViewKind::Window, title), read_back);
         let mut frame = owned_frame("founder", &[title], &["%9"]);
         let renames = desired_tab_renames(&snapshot, &frame, "zsh");
         assert_eq!(renames.len(), 1);

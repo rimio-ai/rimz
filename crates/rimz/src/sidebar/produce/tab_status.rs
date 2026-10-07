@@ -5,9 +5,9 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::agents::AgentStatus;
-use crate::ids::{PaneId, ViewKind};
+use crate::ids::PaneId;
 use crate::mux::tab_name::{
-    TabNameIntent, TabOwnerRecord, ViewNaming, is_scoped_label, label_from_pane_names,
+    TabNameIntent, TabOwnerRecord, ViewNaming, is_scoped_label, label_from_pane_names, stored_label,
 };
 use crate::sidebar::frame::{PaneFrame, PaneState};
 use crate::sidebar::timing::TAB_SUCCESS_STATUS_TTL;
@@ -172,14 +172,12 @@ pub(crate) fn desired_tab_renames(
                 });
                 if let Some(first) = survivors.first() {
                     anchor = first.pane_id.clone();
-                    let label = label_from_pane_names(
-                        survivors.iter().filter_map(|pane| pane.title.as_deref()),
+                    let label = stored_label(
+                        tab.kind,
+                        &label_from_pane_names(
+                            survivors.iter().filter_map(|pane| pane.title.as_deref()),
+                        ),
                     );
-                    let label = if tab.kind == ViewKind::Window {
-                        label.trim().replace([':', '.'], "-").replace(',', "_")
-                    } else {
-                        label
-                    };
                     if !label.is_empty() && label != base {
                         desired_name = status.map_or_else(
                             || label.clone(),
