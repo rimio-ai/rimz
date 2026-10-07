@@ -1399,15 +1399,15 @@ impl AgentState {
         if self.status == AgentStatus::Waiting && settled == Some(TurnSettleOutcome::Interrupted) {
             return AgentStatus::Idle;
         }
-        if self.status != AgentStatus::Running {
-            return self.status;
-        }
         if let Some((class, _)) = self.displayed_turn_error() {
             return if class.pauses_turn() {
                 AgentStatus::Paused
             } else {
                 self.status
             };
+        }
+        if self.status != AgentStatus::Running {
+            return self.status;
         }
         match settled {
             Some(TurnSettleOutcome::Complete) => AgentStatus::Success,
@@ -1563,20 +1563,15 @@ impl AgentState {
     }
 
     /// Displayed status and phase of an agent with no sidebar row of its own
-    /// (a launched child nests under its parent's card). A displayed pausing
-    /// marker reads `paused` and any other displayed marker `failed`, on a
-    /// raw-`failed` row too; without one this is [`Self::effective_status`].
+    /// (a launched child nests under its parent's card). A displayed fatal or
+    /// unknown marker reads `failed`, on a raw-`failed` row too; otherwise this
+    /// is [`Self::effective_status`].
     pub fn rowless_status(&self) -> (AgentStatus, TurnPhase) {
         match self.displayed_turn_error().map(|(class, _)| class) {
-            Some(
-                TurnErrorClass::PausedRateLimit
-                | TurnErrorClass::PausedSpendLimit
-                | TurnErrorClass::PausedOverloaded,
-            ) => (AgentStatus::Paused, TurnPhase::Idle),
             Some(TurnErrorClass::Unknown | TurnErrorClass::Failed) => {
                 (AgentStatus::Failed, TurnPhase::Idle)
             }
-            None => {
+            _ => {
                 let status = self.effective_status();
                 let phase = if status == AgentStatus::Running {
                     self.phase

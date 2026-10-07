@@ -133,6 +133,55 @@ fn resume_gate_uses_the_agents_stamped_capacity() {
 }
 
 #[test]
+fn resume_gate_recovers_failed_limit_parks() {
+    let (_dir, runtime) = temp_runtime();
+    for class in [
+        TurnErrorClass::PausedRateLimit,
+        TurnErrorClass::PausedSpendLimit,
+    ] {
+        write_recovered_window(&runtime);
+        let mut cache: RateLimitsCache =
+            serde_json::from_slice(&std::fs::read(runtime.shared_rate_limits_path()).unwrap())
+                .unwrap();
+        for entry in cache.entries.values_mut() {
+            entry.limits.windows = vec![window(100, 9_000)];
+        }
+        write_rate_limits_cache(&runtime, &cache);
+        let mut agent = parked_agent(1_000, 1_000, class, "provider limit");
+        agent.status = crate::agents::AgentStatus::Failed;
+        agent.turn_started_at = Some(ts(1_000));
+        assert!(
+            !resume_gate_recovered(&runtime, &agent, ts(6_000)),
+            "spent {class:?}"
+        );
+        write_recovered_window(&runtime);
+        assert!(
+            resume_gate_recovered(&runtime, &agent, ts(6_000)),
+            "recovered {class:?}"
+        );
+    }
+}
+
+#[test]
+fn resume_gate_recovers_failed_overload_park() {
+    let (_dir, runtime) = temp_runtime();
+    let mut agent = parked_agent(1_000, 1_000, TurnErrorClass::PausedOverloaded, "overloaded");
+    agent.status = crate::agents::AgentStatus::Failed;
+    agent.turn_started_at = Some(ts(1_000));
+    assert!(resume_gate_recovered(&runtime, &agent, ts(6_000)));
+}
+
+#[test]
+fn resume_gate_rejects_failed_fatal_marker() {
+    let (_dir, runtime) = temp_runtime();
+    write_recovered_window(&runtime);
+    let mut agent = parked_agent(1_000, 1_000, TurnErrorClass::Failed, "fatal");
+    agent.status = crate::agents::AgentStatus::Failed;
+    agent.turn_started_at = Some(ts(1_000));
+    assert!(!resume_gate_recovered(&runtime, &agent, ts(6_000)));
+}
+
+#[test]
 fn exact_qwen_cache_does_not_arm_session_resume_controls() {
     let (_dir, runtime) = temp_runtime();
     write_rate_limits_cache(

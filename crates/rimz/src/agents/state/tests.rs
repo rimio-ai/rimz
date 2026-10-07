@@ -828,11 +828,54 @@ fn effective_status_projects_active_provider_parks_to_paused() {
 }
 
 #[test]
+fn effective_status_projects_terminal_provider_parks_to_paused() {
+    for class in [
+        TurnErrorClass::PausedSpendLimit,
+        TurnErrorClass::PausedRateLimit,
+        TurnErrorClass::PausedOverloaded,
+    ] {
+        let mut failed = test_agent(AgentStatus::Failed, 1_100);
+        failed.turn_started_at = Some(Timestamp::from_second(1_000).unwrap());
+        failed.context = Some(context_error(class, 1_000));
+        assert_eq!(failed.effective_status(), AgentStatus::Paused, "{class:?}");
+        assert_eq!(
+            failed.rowless_status(),
+            (AgentStatus::Paused, TurnPhase::Idle)
+        );
+    }
+}
+
+#[test]
 fn effective_status_keeps_raw_status_without_active_park() {
-    let mut failed = test_agent(AgentStatus::Failed, 1_000);
-    failed.turn_started_at = Some(Timestamp::from_second(900).unwrap());
-    failed.context = Some(context_error(TurnErrorClass::PausedSpendLimit, 1_010));
-    assert_eq!(failed.effective_status(), AgentStatus::Failed);
+    for class in [
+        TurnErrorClass::PausedSpendLimit,
+        TurnErrorClass::PausedRateLimit,
+        TurnErrorClass::PausedOverloaded,
+        TurnErrorClass::Failed,
+        TurnErrorClass::Unknown,
+    ] {
+        let mut failed = test_agent(AgentStatus::Failed, 1_100);
+        failed.context = Some(context_error(class, 1_000));
+        assert_eq!(
+            failed.effective_status(),
+            AgentStatus::Failed,
+            "unstamped {class:?}"
+        );
+        failed.turn_started_at = Some(Timestamp::from_second(1_001).unwrap());
+        assert_eq!(
+            failed.effective_status(),
+            AgentStatus::Failed,
+            "stale {class:?}"
+        );
+        if !class.pauses_turn() {
+            failed.turn_started_at = Some(Timestamp::from_second(1_000).unwrap());
+            assert_eq!(
+                failed.effective_status(),
+                AgentStatus::Failed,
+                "fatal {class:?}"
+            );
+        }
+    }
 
     let mut running = test_agent(AgentStatus::Running, 1_000);
     running.context = Some(context_error(TurnErrorClass::Failed, 1_010));
@@ -841,6 +884,27 @@ fn effective_status_keeps_raw_status_without_active_park() {
     let mut unknown = test_agent(AgentStatus::Running, 1_000);
     unknown.context = Some(context_error(TurnErrorClass::Unknown, 1_010));
     assert_eq!(unknown.effective_status(), AgentStatus::Running);
+}
+
+#[test]
+fn rowless_status_prioritizes_native_input_over_provider_parks() {
+    for outcome in [
+        TurnSettleOutcome::NativeWait,
+        TurnSettleOutcome::PlanProposed,
+    ] {
+        let mut running = test_agent(AgentStatus::Running, 1_000);
+        let mut context = context_error(TurnErrorClass::PausedRateLimit, 1_010);
+        context.settle = Some(TurnSettle::new(
+            Timestamp::from_second(1_010).unwrap(),
+            outcome,
+        ));
+        running.context = Some(context);
+        assert_eq!(
+            running.rowless_status(),
+            (AgentStatus::Waiting, TurnPhase::Idle),
+            "{outcome:?}"
+        );
+    }
 }
 
 #[test]

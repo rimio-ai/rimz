@@ -232,13 +232,13 @@ The rollup holds the agent-reported lifecycle status, and `rimz sidebar snapshot
 1. A `running` row with a native-wait or plan-proposal marker reads `waiting`.
 2. A row with a budget park, unless it is `waiting`, reads `paused`.
 3. A `waiting` row with an interruption marker reads `idle`.
-4. A `running` row with a turn-error marker of a pausing class reads `paused`.
+4. A `running` or `failed` row with a qualifying turn-error marker of a pausing class reads `paused`.
 5. A `running` row with a completion marker reads `success`; with an interruption marker, `idle`; in the `parked` phase, `success`.
 6. An `idle` or `success` result with a pending wait reads `sleeping`.
 
 That pending wait also holds a supervised run open at a clean turn end. Agent status and run status remain separate: a sleeping card can have a `Running` run with `parked_at` set.
 
-A marker counts only when it is newer than `last_activity`, so any newer hook event clears it.
+A marker counts only when it is newer than `last_activity`, so any newer hook event clears it, except a `failed` row's turn-error marker: that counts when `turn_started_at` is present and the marker is at or after it.
 
 ### The sidebar ladder
 
