@@ -354,7 +354,7 @@ A waiting or failed card looks like any other card with `?` or `!` in the lead. 
 ▌  ▤ 76k · ◌ 68k ◍ 6k ↘ 1k ↗ 2k                        ▐
 ```
 
-Two checks raise `!` without a report from the agent. A working agent that stays silent for 30 minutes becomes `!`, or `⏸︎` when its provider budget window is spent. A parent waiting on its subagents is exempt. A working agent that repeats one tool call with the same arguments shows `⟲ N` on its stats line from the third call; at 20 it becomes `!` and the description reads `loop: <tool> ×<count>`. Any different call clears the run. All three thresholds are under [`[agents.attention]`](../guide/sidebar.md#tuning).
+Two checks raise `!` without a report from the agent. A working agent that stays silent for 30 minutes becomes `!`, or `⏸︎` when its provider budget window is spent. Any open native or launched child can also become `!`, labelled `silent Nm`; sleep, pause, and displayed errors exclude it from this check. A parent waiting on a child still displayed as working is exempt. A stalled child no longer holds its turn, and a native child's failure lifts the parent card's attention because it has no pane of its own. A working agent that repeats one tool call with the same arguments shows `⟲ N` on its stats line from the third call; at 20 it becomes `!` and the description reads `loop: <tool> ×<count>`. Any different call clears the run. All three thresholds are under [`[agents.attention]`](../guide/sidebar.md#tuning).
 
 A sleeping card names its first pending wait in the description:
 

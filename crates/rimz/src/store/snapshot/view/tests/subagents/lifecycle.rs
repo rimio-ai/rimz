@@ -303,6 +303,26 @@ fn waiting_provider_child_lifts_parent_card_attention() {
     );
 }
 
+#[test]
+fn silent_native_child_frees_parent_and_lifts_attention() {
+    for status in [AgentStatus::Idle, AgentStatus::Running] {
+        let parent = agent("claude", "root", status, 0)
+            .worktree("/repo/main")
+            .active_ago(3_600);
+        let child = child_state("root", "child", AgentStatus::Running, 1_800);
+        let snapshot = room_with_agent_panes(vec![parent, child]);
+        let parent = row(&snapshot, "root");
+        let expected = if status == AgentStatus::Running {
+            AgentStatus::Failed
+        } else {
+            AgentStatus::Idle
+        };
+        assert_eq!(parent.status(), Some(expected));
+        assert_eq!(parent.attention_status(), Some(AgentStatus::Failed));
+        assert!(parent.sub_agents()[0].stalled);
+    }
+}
+
 // ── Child activity folds onto the parent's displayed clock ───────────────────
 
 #[test]

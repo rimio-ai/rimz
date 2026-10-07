@@ -285,14 +285,6 @@ fn project_sub_agent(
     };
     let silent_secs = child.silent_child_for(now, stalled_after_secs);
     let started_at = child.subagent_started_at.or(child.registered_at);
-    let elapsed_secs = started_at.map(|started| {
-        let until = if child.status == AgentStatus::Running && silent_secs.is_none() {
-            now
-        } else {
-            child.last_activity
-        };
-        until.duration_since(started).as_secs().max(0)
-    });
     let tokens = child_tokens(child);
     let context_window = if matches!(tokens, Some(SubAgentTokens::Window(_))) {
         child
@@ -316,6 +308,16 @@ fn project_sub_agent(
     } else {
         (child.sleeping_over(child.status), child.phase, None)
     };
+    let elapsed_secs = started_at.map(|started| {
+        let until = if child.status == AgentStatus::Running
+            && !matches!(status, AgentStatus::Success | AgentStatus::Failed)
+        {
+            now
+        } else {
+            child.last_activity
+        };
+        until.duration_since(started).as_secs().max(0)
+    });
     SidebarSubAgent {
         id: child.agent_id.to_string(),
         prior_turn,
