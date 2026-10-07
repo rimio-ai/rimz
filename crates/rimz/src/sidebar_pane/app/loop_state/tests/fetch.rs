@@ -4,6 +4,52 @@
 use super::*;
 
 #[test]
+fn snapshot_key_rebind_reaches_the_host_resolver() {
+    use ratatui::crossterm::event::{KeyCode, KeyModifiers};
+    let mut rig = Rig::new();
+    let snapshot = snapshot_with_panes(
+        &rig.ws,
+        vec![
+            pane("terminal_1", "tab_0", false),
+            pane("terminal_2", "tab_0", false),
+        ],
+    );
+    rig.fold(snapshot.clone(), SnapshotSource::Produced);
+    let press = Wakeup::Press {
+        code: KeyCode::Char('v'),
+        mods: KeyModifiers::NONE,
+    };
+    rig.state
+        .on_input(press.clone(), &mut rig.terminal, &mut rig.fetch)
+        .unwrap();
+    assert_eq!(rig.state.ui.selected_index, 0);
+
+    let mut rebound = snapshot;
+    rebound.sidebar.keys.down = "v".to_owned();
+    rig.fold(rebound, SnapshotSource::Produced);
+    rig.state
+        .on_input(press, &mut rig.terminal, &mut rig.fetch)
+        .unwrap();
+    assert_eq!(rig.state.ui.selected_index, 1);
+    assert_eq!(
+        rig.state.ui.selected_pane,
+        Some(pane("terminal_2", "tab_0", false).pane_id)
+    );
+    rig.input(KeyAction::Top);
+    rig.state
+        .on_input(
+            Wakeup::Press {
+                code: KeyCode::Char('j'),
+                mods: KeyModifiers::NONE,
+            },
+            &mut rig.terminal,
+            &mut rig.fetch,
+        )
+        .unwrap();
+    assert_eq!(rig.state.ui.selected_index, 0, "the old binding is gone");
+}
+
+#[test]
 fn unchanged_after_an_unread_snapshot_keeps_state_context_and_completion() {
     snapshot_then_terminal(false);
 }
@@ -555,6 +601,84 @@ fn body_filter_event_adopts_the_shared_file_and_repaints() {
         rig.next_request().is_none(),
         "filter propagation stays out of the producer path"
     );
+}
+
+#[test]
+fn search_commit_writes_and_broadcasts_the_lens() {
+    use ratatui::crossterm::event::{KeyCode, KeyModifiers};
+    let mut rig = Rig::new();
+    rig.state.current = agent_snapshot(&rig.ws);
+    std::fs::create_dir_all(rig.state.socket_path.parent().unwrap()).unwrap();
+    let socket = std::os::unix::net::UnixDatagram::bind(&rig.state.socket_path).unwrap();
+    socket
+        .set_read_timeout(Some(Duration::from_secs(1)))
+        .unwrap();
+    write_heartbeat(
+        &rig.state.config,
+        &rig.runtime,
+        &rig.state.socket_path,
+        None,
+    )
+    .unwrap();
+    for code in [KeyCode::Char('/'), KeyCode::Char('a'), KeyCode::Enter] {
+        rig.state
+            .on_input(
+                Wakeup::Press {
+                    code,
+                    mods: KeyModifiers::NONE,
+                },
+                &mut rig.terminal,
+                &mut rig.fetch,
+            )
+            .unwrap();
+    }
+    assert_eq!(
+        crate::sidebar::body_filter::load(&rig.runtime)
+            .query
+            .as_deref(),
+        Some("a")
+    );
+    let mut bytes = [0; 2048];
+    let len = socket.recv(&mut bytes).unwrap();
+    let envelope: SidebarEventEnvelope = serde_json::from_slice(&bytes[..len]).unwrap();
+    assert_eq!(envelope.event, SidebarEvent::BodyFilterChanged);
+}
+
+#[test]
+fn search_draft_survives_peer_adoption_and_focus_loss_keeps_commit() {
+    use ratatui::crossterm::event::{KeyCode, KeyModifiers};
+    let own = pane("terminal_1", "tab_0", false).pane_id;
+    let mut rig = Rig::with_own_pane(own.clone());
+    rig.state.current = agent_snapshot(&rig.ws);
+    rig.state
+        .on_input(
+            Wakeup::Press {
+                code: KeyCode::Char('/'),
+                mods: KeyModifiers::NONE,
+            },
+            &mut rig.terminal,
+            &mut rig.fetch,
+        )
+        .unwrap();
+    assert_eq!(rig.state.ui.search_draft.as_deref(), Some(""));
+    rig.state.ui.search_draft = Some("draft".to_owned());
+    let committed = BodyLens {
+        query: Some("cla".to_owned()),
+        ..Default::default()
+    };
+    crate::sidebar::body_filter::write(&rig.runtime, &committed).unwrap();
+    rig.event(SidebarEvent::BodyFilterChanged);
+    assert_eq!(rig.state.ui.search_draft.as_deref(), Some("draft"));
+    let snapshot = agent_snapshot(&rig.ws);
+    rig.fold(snapshot, SnapshotSource::Produced);
+    assert_eq!(rig.state.ui.search_draft.as_deref(), Some("draft"));
+    rig.event(SidebarEvent::FocusChanged {
+        focused: Vec::new(),
+        unfocused: vec![own],
+    });
+    assert_eq!(rig.state.ui.search_draft, None);
+    assert_eq!(rig.state.ui.make_up_filter, committed);
+    assert_eq!(crate::sidebar::body_filter::load(&rig.runtime), committed);
 }
 
 #[test]

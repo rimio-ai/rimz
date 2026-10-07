@@ -311,7 +311,7 @@ fn clicking_a_tab_label_picks_that_tab_in_place() {
 
     // A tab click repaints in place — never a jump.
     assert_eq!(outcome, InputOutcome::redraw());
-    assert_eq!(outcome.effect, None);
+    assert_eq!(outcome.effects, Vec::new());
     assert_eq!(
         render::active_dashboard_tab(&snapshot, &ui)
             .as_ref()

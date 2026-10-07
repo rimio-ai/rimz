@@ -1,0 +1,16 @@
+---
+source: crates/rimz/src/sidebar_pane/render/tests/mod.rs
+expression: screen
+---
+ ⌘ query-engine
+
+ ◎ 0                ◇ 0 ↘ 0 ↗ 0 ◌ 0
+ ¤ 0                          $0.00
+ ──────────────────────────────────
+ no match
+
+ ──────────────────────────────────
+  W: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0     $0.00
+  M: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0     $0.00
+
+ /auth  zᶻ away          ? for help

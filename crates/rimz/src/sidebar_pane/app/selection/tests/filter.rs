@@ -1,6 +1,427 @@
 use super::*;
 use std::time::Duration;
 
+fn assert_search_selection(ui: &UiState, snapshot: &SidebarSnapshot) {
+    assert_eq!(
+        ui.visible_roster(snapshot)
+            .pane_at_ordinal(ui.selected_index),
+        ui.selected_pane,
+        "Enter must focus the highlighted match"
+    );
+}
+
+fn search_press(
+    ui: &mut UiState,
+    snapshot: &SidebarSnapshot,
+    code: ratatui::crossterm::event::KeyCode,
+    mods: ratatui::crossterm::event::KeyModifiers,
+) -> InputOutcome {
+    super::super::super::loop_state::handle_wakeup(
+        super::super::super::input::Wakeup::Press { code, mods },
+        ui,
+        snapshot,
+        &super::super::super::NavKeymap::from_config(&crate::config::SidebarKeys {
+            wider: "ctrl+b".to_owned(),
+            ..Default::default()
+        }),
+    )
+}
+
+fn search_key(
+    ui: &mut UiState,
+    snapshot: &SidebarSnapshot,
+    code: ratatui::crossterm::event::KeyCode,
+) -> InputOutcome {
+    search_press(
+        ui,
+        snapshot,
+        code,
+        ratatui::crossterm::event::KeyModifiers::NONE,
+    )
+}
+
+#[test]
+fn search_typing_swallows_commands_and_rebound_characters() {
+    use ratatui::crossterm::event::{KeyCode, KeyModifiers};
+    let snapshot = clickable_block_snapshot(&workspace());
+    let mut ui = UiState::default();
+    search_key(&mut ui, &snapshot, KeyCode::Char('/'));
+    assert_eq!(ui.search_draft.as_deref(), Some(""));
+    for ch in "njqr?A1é".chars() {
+        let outcome = search_key(&mut ui, &snapshot, KeyCode::Char(ch));
+        assert!(outcome.effects.is_empty(), "typing {ch} must not act");
+    }
+    search_press(
+        &mut ui,
+        &snapshot,
+        KeyCode::Char('b'),
+        KeyModifiers::CONTROL,
+    );
+    assert_eq!(ui.search_draft.as_deref(), Some("njqr?A1éb"));
+    assert!(!ui.help_visible);
+    assert_eq!(
+        ui.make_up_filter,
+        BodyLens::default(),
+        "draft is not committed"
+    );
+    search_key(&mut ui, &snapshot, KeyCode::Backspace);
+    search_key(&mut ui, &snapshot, KeyCode::Backspace);
+    assert_eq!(ui.search_draft.as_deref(), Some("njqr?A1"));
+}
+
+#[test]
+fn search_edits_select_first_match_and_commit_focuses_it() {
+    use ratatui::crossterm::event::KeyCode;
+    let snapshot = clickable_block_snapshot(&workspace());
+    let mut ui = UiState {
+        selected_index: 1,
+        selected_pane: Some(PaneId::from_parts(MuxName::Zellij, "terminal_10")),
+        manual_scroll: Some(ManualScroll {
+            selection_at_start: None,
+        }),
+        ..Default::default()
+    };
+    search_key(&mut ui, &snapshot, KeyCode::Char('/'));
+    for ch in "cla".chars() {
+        search_key(&mut ui, &snapshot, KeyCode::Char(ch));
+    }
+    let top = PaneId::from_parts(MuxName::Zellij, "terminal_9");
+    assert_eq!(ui.selected_pane, Some(top.clone()));
+    assert_eq!(ui.selected_index, 0);
+    assert_eq!(ui.manual_scroll, None);
+    assert_eq!(ui.browse, None);
+    assert_eq!(ui.visible_roster(&snapshot).len(), 1);
+    reconcile_selection(
+        &mut ui,
+        &snapshot,
+        Some(PaneId::from_parts(MuxName::Zellij, "terminal_10")),
+    );
+    assert_search_selection(&ui, &snapshot);
+    assert_eq!(
+        ui.selected_pane,
+        Some(top.clone()),
+        "fold must preserve the draft selection"
+    );
+    let outcome = search_key(&mut ui, &snapshot, KeyCode::Enter);
+    assert_eq!(ui.search_draft, None);
+    assert_eq!(
+        outcome.effects,
+        vec![
+            InputEffect::SyncFilter(BodyLens {
+                query: Some("cla".to_owned()),
+                ..Default::default()
+            }),
+            InputEffect::Focus(top)
+        ]
+    );
+}
+
+#[test]
+fn search_cancel_with_no_committed_query_reanchors_without_a_sync() {
+    use ratatui::crossterm::event::KeyCode;
+    let snapshot = clickable_block_snapshot(&workspace());
+    let mut ui = UiState::default();
+    let baseline = PaneId::from_parts(MuxName::Zellij, "terminal_9");
+    reconcile_selection(&mut ui, &snapshot, Some(baseline.clone()));
+    search_key(&mut ui, &snapshot, KeyCode::Char('/'));
+    for ch in "zsh".chars() {
+        search_key(&mut ui, &snapshot, KeyCode::Char(ch));
+    }
+    let matched = PaneId::from_parts(MuxName::Zellij, "terminal_10");
+    assert_eq!(ui.selected_pane, Some(matched.clone()));
+    assert_eq!(ui.selected_index, 0);
+
+    let outcome = search_key(&mut ui, &snapshot, KeyCode::Esc);
+    assert!(outcome.redraw);
+    assert_eq!(
+        outcome.effects,
+        vec![],
+        "an unchanged lens is not republished"
+    );
+    assert_eq!(ui.selected_pane, Some(baseline));
+    assert_eq!(
+        ui.selected_index, 0,
+        "cancel follows the baseline like own-pane unfocus"
+    );
+}
+
+#[test]
+fn search_fold_removing_selected_row_reseats_enter_target() {
+    use crate::agents::AgentStatus;
+    use ratatui::crossterm::event::KeyCode;
+    let mut snapshot = clickable_block_snapshot(&workspace());
+    snapshot.worktree_groups[0].rows[1].card = snapshot.worktree_groups[0].rows[0].card.clone();
+    snapshot.worktree_groups[0].status_counts[0].count = 2;
+    let mut ui = UiState::default();
+    search_key(&mut ui, &snapshot, KeyCode::Char('w'));
+    search_key(&mut ui, &snapshot, KeyCode::Char('/'));
+    for ch in "main".chars() {
+        search_key(&mut ui, &snapshot, KeyCode::Char(ch));
+    }
+    assert_search_selection(&ui, &snapshot);
+
+    snapshot.worktree_groups[0].rows[0]
+        .as_agent_mut()
+        .unwrap()
+        .status = AgentStatus::Success;
+    snapshot.worktree_groups[0].status_counts[0].count = 1;
+    reconcile_selection(&mut ui, &snapshot, None);
+    assert_search_selection(&ui, &snapshot);
+    let target = PaneId::from_parts(MuxName::Zellij, "terminal_10");
+    assert_eq!(ui.selected_pane, Some(target.clone()));
+    let outcome = search_key(&mut ui, &snapshot, KeyCode::Enter);
+    assert_eq!(outcome.effects.last(), Some(&InputEffect::Focus(target)));
+}
+
+#[test]
+fn search_peer_lens_hiding_selected_row_reseats_enter_target() {
+    use ratatui::crossterm::event::KeyCode;
+    let mut snapshot = clickable_block_snapshot(&workspace());
+    snapshot.worktree_groups[0].rows[1].unread = true;
+    let mut ui = UiState::default();
+    search_key(&mut ui, &snapshot, KeyCode::Char('/'));
+    for ch in "main".chars() {
+        search_key(&mut ui, &snapshot, KeyCode::Char(ch));
+    }
+    set_make_up_filter(&mut ui, &snapshot, BodyLens::from(BodyFilter::Unread));
+    assert_search_selection(&ui, &snapshot);
+    reconcile_selection(&mut ui, &snapshot, None);
+    assert_search_selection(&ui, &snapshot);
+    let target = PaneId::from_parts(MuxName::Zellij, "terminal_10");
+    assert_eq!(ui.selected_pane, Some(target.clone()));
+    let outcome = search_key(&mut ui, &snapshot, KeyCode::Enter);
+    assert_eq!(outcome.effects.last(), Some(&InputEffect::Focus(target)));
+}
+
+#[test]
+fn search_zero_match_then_fold_reseats_enter_target() {
+    use ratatui::crossterm::event::KeyCode;
+    let mut snapshot = clickable_block_snapshot(&workspace());
+    let mut ui = UiState::default();
+    search_key(&mut ui, &snapshot, KeyCode::Char('/'));
+    for ch in "incoming".chars() {
+        search_key(&mut ui, &snapshot, KeyCode::Char(ch));
+    }
+    reconcile_selection(&mut ui, &snapshot, None);
+    assert_search_selection(&ui, &snapshot);
+    assert_eq!(ui.selected_pane, None);
+    snapshot.worktree_groups[0].rows[1].name = "incoming".to_owned();
+    reconcile_selection(&mut ui, &snapshot, None);
+    assert_search_selection(&ui, &snapshot);
+    let target = PaneId::from_parts(MuxName::Zellij, "terminal_10");
+    assert_eq!(ui.selected_pane, Some(target.clone()));
+    let outcome = search_key(&mut ui, &snapshot, KeyCode::Enter);
+    assert_eq!(outcome.effects.last(), Some(&InputEffect::Focus(target)));
+}
+
+#[test]
+fn search_enter_focuses_navigated_match() {
+    use ratatui::crossterm::event::KeyCode;
+    let snapshot = clickable_block_snapshot(&workspace());
+    let mut ui = UiState::default();
+    search_key(&mut ui, &snapshot, KeyCode::Char('/'));
+    for ch in "main".chars() {
+        search_key(&mut ui, &snapshot, KeyCode::Char(ch));
+    }
+    search_key(&mut ui, &snapshot, KeyCode::Down);
+    assert_search_selection(&ui, &snapshot);
+    let outcome = search_key(&mut ui, &snapshot, KeyCode::Enter);
+    assert_eq!(
+        outcome.effects.last(),
+        Some(&InputEffect::Focus(PaneId::from_parts(
+            MuxName::Zellij,
+            "terminal_10"
+        )))
+    );
+}
+
+#[test]
+fn search_draft_composes_with_an_active_status_pick() {
+    use ratatui::crossterm::event::KeyCode;
+    let snapshot = filterable_snapshot(&workspace());
+    let mut ui = UiState::default();
+    search_key(&mut ui, &snapshot, KeyCode::Char('w'));
+    search_key(&mut ui, &snapshot, KeyCode::Char('/'));
+    for ch in "main".chars() {
+        search_key(&mut ui, &snapshot, KeyCode::Char(ch));
+    }
+    assert_eq!(ui.visible_roster(&snapshot).len(), 1);
+    assert_search_selection(&ui, &snapshot);
+    assert_eq!(ui.make_up_filter.query, None, "draft stays local");
+    assert_eq!(
+        ui.selected_pane,
+        Some(PaneId::from_parts(MuxName::Zellij, "terminal_1"))
+    );
+}
+
+#[test]
+fn pick_click_toggle_preserves_committed_query() {
+    use crate::agents::AgentStatus;
+    let snapshot = filterable_snapshot(&workspace());
+    let mut ui = UiState {
+        make_up_filter: BodyLens {
+            query: Some("main".to_owned()),
+            ..Default::default()
+        },
+        interactions: render::FrameInteractions::from_parts(
+            vec![None],
+            vec![render::HitRegion::line(
+                0,
+                0..3,
+                HitTarget::BodyFilter(BodyFilter::Status(AgentStatus::Running)),
+            )],
+        ),
+        ..Default::default()
+    };
+    for filter in [Some(BodyFilter::Status(AgentStatus::Running)), None] {
+        let outcome = handle_mouse_click(1, 0, &mut ui, &snapshot);
+        let lens = BodyLens {
+            filter,
+            query: Some("main".to_owned()),
+        };
+        assert_eq!(ui.make_up_filter, lens);
+        assert_eq!(outcome.effects, vec![InputEffect::SyncFilter(lens)]);
+    }
+}
+
+#[test]
+fn search_cancel_and_empty_enter_clear_only_query() {
+    use ratatui::crossterm::event::KeyCode;
+    let snapshot = clickable_block_snapshot(&workspace());
+    for exit in [KeyCode::Esc, KeyCode::Backspace, KeyCode::Enter] {
+        let mut ui = UiState {
+            make_up_filter: BodyLens {
+                filter: Some(BodyFilter::Status(crate::agents::AgentStatus::Running)),
+                query: Some("cla".to_owned()),
+            },
+            ..Default::default()
+        };
+        search_key(&mut ui, &snapshot, KeyCode::Char('/'));
+        assert_eq!(ui.search_draft.as_deref(), Some("cla"));
+        if exit != KeyCode::Esc {
+            for _ in 0..3 {
+                search_key(&mut ui, &snapshot, KeyCode::Backspace);
+            }
+        }
+        let outcome = search_key(&mut ui, &snapshot, exit);
+        assert_eq!(ui.search_draft, None);
+        assert_eq!(ui.make_up_filter.query, None);
+        assert_eq!(
+            outcome.effects,
+            vec![InputEffect::SyncFilter(BodyLens::from(BodyFilter::Status(
+                crate::agents::AgentStatus::Running
+            )))]
+        );
+    }
+}
+
+#[test]
+fn search_navigation_click_scroll_and_zero_match_commit() {
+    use ratatui::crossterm::event::{KeyCode, KeyModifiers};
+    let snapshot = clickable_block_snapshot(&workspace());
+    let mut ui = UiState::default();
+    search_key(&mut ui, &snapshot, KeyCode::Char('/'));
+    for code in [KeyCode::Down, KeyCode::Char('n')] {
+        search_press(
+            &mut ui,
+            &snapshot,
+            code,
+            if code == KeyCode::Down {
+                KeyModifiers::NONE
+            } else {
+                KeyModifiers::CONTROL
+            },
+        );
+        assert_eq!(ui.selected_index, 1);
+        search_press(
+            &mut ui,
+            &snapshot,
+            KeyCode::Char('p'),
+            KeyModifiers::CONTROL,
+        );
+        assert_eq!(ui.selected_index, 0);
+    }
+    search_key(&mut ui, &snapshot, KeyCode::Down);
+    search_key(&mut ui, &snapshot, KeyCode::Up);
+    assert_eq!(ui.selected_index, 0);
+    assert_eq!(
+        search_key(&mut ui, &snapshot, KeyCode::Left),
+        InputOutcome::default()
+    );
+    search_key(&mut ui, &snapshot, KeyCode::Char('c'));
+    super::super::super::loop_state::handle_wakeup(
+        super::super::super::input::Wakeup::Scroll { down: true },
+        &mut ui,
+        &snapshot,
+        &super::super::super::NavKeymap::from_config(&crate::config::SidebarKeys {
+            wider: "ctrl+b".to_owned(),
+            ..Default::default()
+        }),
+    );
+    assert_eq!(ui.search_draft.as_deref(), Some("c"));
+    ui.interactions = render::FrameInteractions::from_parts(vec![Some(0)], Vec::new());
+    let outcome = super::super::super::loop_state::handle_wakeup(
+        super::super::super::input::Wakeup::MouseClick { column: 1, row: 0 },
+        &mut ui,
+        &snapshot,
+        &super::super::super::NavKeymap::from_config(&crate::config::SidebarKeys {
+            wider: "ctrl+b".to_owned(),
+            ..Default::default()
+        }),
+    );
+    assert_eq!(ui.search_draft, None);
+    assert_eq!(
+        outcome.effects,
+        vec![
+            InputEffect::SyncFilter(BodyLens {
+                query: Some("c".to_owned()),
+                ..Default::default()
+            }),
+            InputEffect::Focus(PaneId::from_parts(MuxName::Zellij, "terminal_9"))
+        ]
+    );
+    search_key(&mut ui, &snapshot, KeyCode::Char('/'));
+    search_key(&mut ui, &snapshot, KeyCode::Char('!'));
+    let outcome = search_key(&mut ui, &snapshot, KeyCode::Enter);
+    assert_eq!(ui.make_up_filter.query.as_deref(), Some("c!"));
+    assert_eq!(
+        outcome.effects.len(),
+        1,
+        "zero matches commits without focus"
+    );
+}
+
+#[test]
+fn search_composes_with_status_and_n_keeps_needs_you_meaning() {
+    use ratatui::crossterm::event::KeyCode;
+    let mut snapshot = clickable_block_snapshot(&workspace());
+    let mut waiting = snapshot.worktree_groups[0].rows[0].clone();
+    waiting.id = "waiting".to_owned();
+    waiting.pane = Some(pane("terminal_11", "tab_0", false));
+    waiting.as_agent_mut().unwrap().status = crate::agents::AgentStatus::Waiting;
+    let mut outside = waiting.clone();
+    outside.id = "outside".to_owned();
+    outside.name = "other".to_owned();
+    outside.pane = Some(pane("terminal_12", "tab_0", false));
+    snapshot.worktree_groups[0].rows.extend([waiting, outside]);
+    let mut ui = UiState::default();
+    search_key(&mut ui, &snapshot, KeyCode::Char('/'));
+    for ch in "cla".chars() {
+        search_key(&mut ui, &snapshot, KeyCode::Char(ch));
+    }
+    search_key(&mut ui, &snapshot, KeyCode::Enter);
+    assert_eq!(ui.make_up_filter.query.as_deref(), Some("cla"));
+    assert_eq!(
+        search_key(&mut ui, &snapshot, KeyCode::Char('n')),
+        InputOutcome::focus(PaneId::from_parts(MuxName::Zellij, "terminal_11"))
+    );
+    search_key(&mut ui, &snapshot, KeyCode::Char('w'));
+    assert_eq!(ui.visible_roster(&snapshot).len(), 1);
+    assert_eq!(ui.make_up_filter.query.as_deref(), Some("cla"));
+    search_key(&mut ui, &snapshot, KeyCode::Char('A'));
+    assert_eq!(ui.make_up_filter, BodyLens::default());
+}
+
 #[test]
 fn show_all_clears_both_pick_and_query() {
     let snapshot = filterable_snapshot(&workspace());
@@ -14,8 +435,8 @@ fn show_all_clears_both_pick_and_query() {
     let outcome = handle_key(KeyAction::Filter(None), &mut ui, &snapshot);
     assert_eq!(ui.make_up_filter, BodyLens::default());
     assert_eq!(
-        outcome.effect,
-        Some(InputEffect::SyncFilter(BodyLens::default()))
+        outcome.effects,
+        vec![InputEffect::SyncFilter(BodyLens::default())]
     );
 }
 
@@ -104,9 +525,9 @@ fn make_up_click_picks_switches_and_clears_the_filter() {
         outcome,
         InputOutcome {
             redraw: true,
-            effect: Some(InputEffect::SyncFilter(BodyLens::from(BodyFilter::Status(
+            effects: vec![InputEffect::SyncFilter(BodyLens::from(BodyFilter::Status(
                 AgentStatus::Failed,
-            )))),
+            )))],
         }
     );
     assert_eq!(
@@ -188,8 +609,8 @@ fn make_up_filter_keys_pick_toggle_clear_and_ignore_empty_buckets() {
 
     let outcome = handle_key(KeyAction::Filter(None), &mut ui, &snapshot);
     assert_eq!(
-        outcome.effect,
-        Some(InputEffect::SyncFilter(BodyLens::default()))
+        outcome.effects,
+        vec![InputEffect::SyncFilter(BodyLens::default())]
     );
     assert_eq!(ui.make_up_filter, BodyLens::default());
 
@@ -250,10 +671,10 @@ fn make_up_hits_land_on_the_painted_buckets_through_the_real_frame() {
         .expect("failed hit");
     let outcome = handle_mouse_click(column, row, &mut ui, &snapshot);
     assert_eq!(
-        outcome.effect,
-        Some(InputEffect::SyncFilter(BodyLens::from(BodyFilter::Status(
+        outcome.effects,
+        vec![InputEffect::SyncFilter(BodyLens::from(BodyFilter::Status(
             AgentStatus::Failed,
-        ))))
+        )))]
     );
     assert_eq!(
         ui.make_up_filter,

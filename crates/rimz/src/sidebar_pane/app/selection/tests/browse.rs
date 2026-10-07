@@ -54,7 +54,7 @@ fn browse_survives_a_jump_and_ends_on_baseline_change() {
     select_row(&mut ui, &snapshot, 1);
     begin_or_continue_browse(&mut ui);
     let outcome = handle_key(KeyAction::Enter, &mut ui, &snapshot);
-    assert_eq!(outcome.effect, Some(InputEffect::Focus(picked.clone())));
+    assert_eq!(outcome.effects, vec![InputEffect::Focus(picked.clone())]);
     assert!(ui.browse.is_some(), "the jump leaves the browse in place");
 
     // An inert fold (baseline unchanged) keeps the pick pinned.
@@ -91,7 +91,7 @@ fn browse_survives_a_jump_and_ends_on_baseline_change() {
 
     let row1 = ui.interactions.line_for_row(1).unwrap();
     let outcome = handle_mouse_click(1, screen_row_for(row1), &mut ui, &snapshot);
-    assert_eq!(outcome.effect, Some(InputEffect::Focus(jumped.clone())));
+    assert_eq!(outcome.effects, vec![InputEffect::Focus(jumped.clone())]);
     assert_eq!(ui.selected_pane, Some(from.clone()));
 
     // A fold still deriving the pre-jump pane keeps the old highlight.

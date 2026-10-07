@@ -172,12 +172,12 @@ fn width_keys_dispatch_without_redrawing() {
     let mut ui = UiState::default();
 
     assert_eq!(
-        handle_key(KeyAction::WidthNarrower, &mut ui, &snapshot).effect,
-        Some(InputEffect::Width(WidthAdjust::Narrower)),
+        handle_key(KeyAction::WidthNarrower, &mut ui, &snapshot).effects,
+        vec![InputEffect::Width(WidthAdjust::Narrower)],
     );
     assert_eq!(
-        handle_key(KeyAction::WidthWider, &mut ui, &snapshot).effect,
-        Some(InputEffect::Width(WidthAdjust::Wider)),
+        handle_key(KeyAction::WidthWider, &mut ui, &snapshot).effects,
+        vec![InputEffect::Width(WidthAdjust::Wider)],
     );
 }
 
@@ -586,7 +586,7 @@ fn dismiss_key_requests_alert_dismissal() {
     let outcome = handle_key(KeyAction::Dismiss, &mut ui, &snapshot);
 
     assert_eq!(outcome, InputOutcome::dismiss());
-    assert_eq!(outcome.effect, Some(InputEffect::DismissAlert));
+    assert_eq!(outcome.effects, vec![InputEffect::DismissAlert]);
     assert!(outcome.redraw);
     // Dismiss never moves the selection.
     assert_eq!(ui.selected_index, 0);
@@ -642,7 +642,7 @@ fn banner_click_scrolls_to_top_and_pins_without_focusing() {
         ui.manual_scroll.is_some(),
         "banner click pins the scroll-to-top position"
     );
-    assert_eq!(outcome.effect, None);
+    assert_eq!(outcome.effects, Vec::new());
 }
 #[test]
 fn selection_change_snaps_a_wheel_pin_back() {
@@ -747,7 +747,7 @@ fn top_and_bottom_keys_browse_to_the_ends() {
     let outcome = handle_key(KeyAction::Bottom, &mut ui, &snapshot);
     assert_eq!(outcome, InputOutcome::redraw());
     assert_eq!(ui.selected_index, 2);
-    assert_eq!(outcome.effect, None, "the end jump never focuses");
+    assert_eq!(outcome.effects, Vec::new(), "the end jump never focuses");
     assert!(ui.browse.is_some(), "G begins a browse pick");
 
     // G again at the bottom is a no-op.
@@ -889,20 +889,20 @@ fn mark_keys_name_the_selected_agent_row_without_focus() {
 
     let outcome = handle_key(KeyAction::MarkToggle, &mut ui, &snapshot);
     assert_eq!(
-        outcome.effect,
-        Some(InputEffect::MarkUnread(row_id.clone()))
+        outcome.effects,
+        vec![InputEffect::MarkUnread(row_id.clone())]
     );
     assert!(!outcome.redraw, "the loop owns the repaint after the write");
     assert_eq!(ui.selected_index, 0, "marking unread moves no selection");
 
     snapshot.worktree_groups[0].rows[0].unread = true;
     let outcome = handle_key(KeyAction::MarkToggle, &mut ui, &snapshot);
-    assert_eq!(outcome.effect, Some(InputEffect::MarkRead(row_id.clone())));
+    assert_eq!(outcome.effects, vec![InputEffect::MarkRead(row_id.clone())]);
     assert!(!outcome.redraw, "the loop owns the repaint after the write");
     assert_eq!(ui.selected_index, 0, "marking read moves no selection");
 
     let outcome = handle_key(KeyAction::MarkAllRead, &mut ui, &snapshot);
-    assert_eq!(outcome.effect, Some(InputEffect::MarkAllRead));
+    assert_eq!(outcome.effects, vec![InputEffect::MarkAllRead]);
 }
 
 #[test]

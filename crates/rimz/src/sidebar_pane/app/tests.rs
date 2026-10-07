@@ -658,7 +658,7 @@ fn help_popup_dismisses_and_consumes_any_user_input() {
         &snapshot,
         &keymap,
     );
-    assert_eq!(outcome.effect, Some(selection::InputEffect::Reload));
+    assert_eq!(outcome.effects, vec![selection::InputEffect::Reload]);
 }
 
 #[test]

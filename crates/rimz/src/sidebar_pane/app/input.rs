@@ -69,6 +69,10 @@ pub(super) enum KeyAction {
     /// Move the selection to the bottom row currently painted on screen.
     ScreenBottom,
     Enter,
+    Search,
+    QueryChar(char),
+    Backspace,
+    CancelSearch,
     /// `n`/`Space` — jump to the next item that needs you and focus it; `N`
     /// walks the same inbox in reverse. The fleet-scale triage keys.
     InboxNext,
@@ -99,6 +103,7 @@ pub(super) const SNAPSHOT_WAKEUP: &[u8] = b"snapshot";
 pub(super) enum InputMode {
     Normal,
     Help,
+    Typing,
 }
 
 pub(super) fn resolve_key(
@@ -109,6 +114,25 @@ pub(super) fn resolve_key(
 ) -> KeyAction {
     if mode == InputMode::Help {
         return KeyAction::Other;
+    }
+    if mode == InputMode::Typing {
+        let chord_mods = mods & (KeyModifiers::CONTROL | KeyModifiers::ALT);
+        return match (code, chord_mods) {
+            (KeyCode::Char('n'), KeyModifiers::CONTROL) => KeyAction::Down,
+            (KeyCode::Char('p'), KeyModifiers::CONTROL) => KeyAction::Up,
+            (KeyCode::Up, KeyModifiers::NONE) => KeyAction::Up,
+            (KeyCode::Down, KeyModifiers::NONE) => KeyAction::Down,
+            (KeyCode::Enter, KeyModifiers::NONE) => KeyAction::Enter,
+            (KeyCode::Esc, KeyModifiers::NONE) => KeyAction::CancelSearch,
+            (KeyCode::Backspace, KeyModifiers::NONE) => KeyAction::Backspace,
+            (KeyCode::Char(ch), _)
+                if !ch.is_control()
+                    && (chord_mods.is_empty() || keymap.action_for(code, mods).is_some()) =>
+            {
+                KeyAction::QueryChar(ch)
+            }
+            _ => KeyAction::Other,
+        };
     }
     if let Some(action) = keymap.action_for(code, mods) {
         return action;
@@ -127,6 +151,7 @@ pub(super) fn resolve_key(
         KeyCode::Char('m') => KeyAction::MarkToggle,
         KeyCode::Char('M') => KeyAction::MarkAllRead,
         KeyCode::Char('?') => KeyAction::Help,
+        KeyCode::Char('/') => KeyAction::Search,
         KeyCode::Char('A') => KeyAction::Filter(None),
         KeyCode::Char('u') => KeyAction::Filter(Some(BodyFilter::Unread)),
         KeyCode::Char('q') => KeyAction::Filter(Some(BodyFilter::Status(AgentStatus::Waiting))),

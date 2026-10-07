@@ -595,7 +595,7 @@ fn provider_block_lines(
 }
 
 fn folded_footer_line(parts: super::super::chrome::FooterParts, width: usize) -> Line<'static> {
-    pin_right(parts.left, vec![parts.help], width)
+    super::super::chrome::footer_line(parts, width)
 }
 
 struct ProviderPetZipLayout {

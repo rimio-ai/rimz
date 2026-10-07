@@ -4,6 +4,48 @@ fn default_keymap() -> NavKeymap {
     NavKeymap::from_config(&crate::config::SidebarKeys::default())
 }
 
+#[test]
+fn typing_resolves_before_keymap_and_command_table() {
+    let keymap = NavKeymap::from_config(&crate::config::SidebarKeys {
+        wider: "ctrl+b".to_owned(),
+        ..Default::default()
+    });
+    for ch in "njqr?A1".chars() {
+        assert_eq!(
+            resolve_key(
+                &keymap,
+                InputMode::Typing,
+                KeyCode::Char(ch),
+                KeyModifiers::NONE
+            ),
+            KeyAction::QueryChar(ch)
+        );
+    }
+    assert_eq!(
+        resolve_key(
+            &keymap,
+            InputMode::Typing,
+            KeyCode::Char('b'),
+            KeyModifiers::CONTROL
+        ),
+        KeyAction::QueryChar('b')
+    );
+    for (code, mods, action) in [
+        (KeyCode::Up, KeyModifiers::NONE, KeyAction::Up),
+        (KeyCode::Down, KeyModifiers::NONE, KeyAction::Down),
+        (KeyCode::Char('n'), KeyModifiers::CONTROL, KeyAction::Down),
+        (KeyCode::Char('p'), KeyModifiers::CONTROL, KeyAction::Up),
+        (KeyCode::Esc, KeyModifiers::NONE, KeyAction::CancelSearch),
+        (KeyCode::Backspace, KeyModifiers::NONE, KeyAction::Backspace),
+        (KeyCode::Enter, KeyModifiers::NONE, KeyAction::Enter),
+        (KeyCode::Left, KeyModifiers::NONE, KeyAction::Other),
+        (KeyCode::Up, KeyModifiers::ALT, KeyAction::Other),
+        (KeyCode::Char('y'), KeyModifiers::CONTROL, KeyAction::Other),
+    ] {
+        assert_eq!(resolve_key(&keymap, InputMode::Typing, code, mods), action);
+    }
+}
+
 fn encode_default(code: KeyCode) -> Option<String> {
     encode_key(code, KeyModifiers::NONE)
 }

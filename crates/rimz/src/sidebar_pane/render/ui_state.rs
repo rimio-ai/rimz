@@ -121,6 +121,7 @@ pub(in crate::sidebar_pane) struct UiState {
     ///
     /// Cockpit counts remain full-fleet. Toggling a pick or auto-clearing its empty bucket preserves the query; a zero-match query stays set.
     pub(in crate::sidebar_pane) make_up_filter: BodyLens,
+    pub(in crate::sidebar_pane) search_draft: Option<String>,
     /// Worktree groups expanded through the renderer-local `+K more` affordance.
     /// Expansion is presentation state only: the snapshot carries the full
     /// roster, and a group drops from this set once it no longer has a capped
@@ -162,9 +163,13 @@ impl UiState {
         &self,
         snapshot: &'a SidebarSnapshot,
     ) -> VisibleRoster<'a> {
+        let draft_lens = self.search_draft.as_ref().map(|draft| BodyLens {
+            filter: self.make_up_filter.filter,
+            query: (!draft.is_empty()).then(|| draft.clone()),
+        });
         VisibleRoster::new(
             snapshot,
-            &self.make_up_filter,
+            draft_lens.as_ref().unwrap_or(&self.make_up_filter),
             &self.expanded_groups,
             self.order_hold.as_ref().map(|hold| &hold.frozen.visible),
         )
