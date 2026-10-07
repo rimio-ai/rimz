@@ -173,7 +173,7 @@ pub struct ManualRedeem {
     pub forecast: Option<RedeemForecast>,
     pub min_gain: Duration,
     prepared: PreparedRedemption<RedeemReason>,
-    read_at: Timestamp,
+    stamp_at_read: Option<RedeemStamp>,
 }
 
 /// Read one manual preview without reserving or locking the account.
@@ -186,6 +186,7 @@ pub fn prepare_manual_redeem(
     if key.kind.as_str() != CODEX_KIND {
         return Err(AutoRedeemErr::UnsupportedKind(key.kind.to_string()));
     }
+    let stamp_at_read = read_stamp(&runtime.shared_auto_redeem_path(key));
     let read_at = Timestamp::now();
     let prepared = prepare_reset_credit_redemption(
         CODEX_KIND,
@@ -217,7 +218,7 @@ pub fn prepare_manual_redeem(
         windows,
         min_gain,
         prepared,
-        read_at,
+        stamp_at_read,
     })
 }
 
@@ -237,7 +238,7 @@ impl ManualRedeem {
             runtime,
             key,
             report,
-            self.read_at,
+            self.stamp_at_read.as_ref(),
             Timestamp::now(),
             &request_id,
             || self.prepared.consume(&request_id),
@@ -249,18 +250,18 @@ fn consume_manual_redemption(
     runtime: &RuntimePaths,
     key: &LoginKey,
     report: RedeemReport,
-    read_at: Timestamp,
+    stamp_at_read: Option<&RedeemStamp>,
     now: Timestamp,
     request_id: &str,
     consume: impl FnOnce() -> Result<ResetCreditResult, String>,
 ) -> Result<Redeemed, AutoRedeemErr> {
     let stamp_path = runtime.shared_auto_redeem_path(key);
-    if read_stamp(&stamp_path).is_some_and(|stamp| {
-        stamp.attempted_at > read_at
-            || (stamp.outcome.is_none()
-                && now.as_second() - stamp.attempted_at.as_second()
-                    < duration_seconds(ATTEMPT_COOLDOWN))
-    }) {
+    let stamp = read_stamp(&stamp_path);
+    let live_reservation = stamp.as_ref().is_some_and(|stamp| {
+        stamp.outcome.is_none()
+            && now.as_second() - stamp.attempted_at.as_second() < duration_seconds(ATTEMPT_COOLDOWN)
+    });
+    if stamp.as_ref() != stamp_at_read || live_reservation {
         return Err(AutoRedeemErr::RacingAttempt);
     }
     finish_redemption(

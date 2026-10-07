@@ -758,19 +758,22 @@ fn manual_tail_bypasses_cooldown_and_reserves_before_consuming() {
     let key = LoginKey::default_for(crate::ids::AgentKind::new_unchecked(CODEX_KIND));
     let path = runtime.shared_auto_redeem_path(&key);
     let now = ts(1_700_000_000);
-    write_stamp(
-        &path,
-        &RedeemStamp {
-            attempted_at: now - SignedDuration::from_secs(60),
-            request_id: "auto".to_owned(),
-            reason: RedeemReason::BlockedGain,
-            outcome: Some("reset".to_owned()),
-        },
-    )
-    .unwrap();
+    let seen = RedeemStamp {
+        attempted_at: now - SignedDuration::from_secs(60),
+        request_id: "auto".to_owned(),
+        reason: RedeemReason::BlockedGain,
+        outcome: Some("reset".to_owned()),
+    };
+    write_stamp(&path, &seen).unwrap();
     let consumed = std::cell::Cell::new(false);
-    let redeemed =
-        consume_manual_redemption(&runtime, &key, manual_report(), now, now, "manual", || {
+    let redeemed = consume_manual_redemption(
+        &runtime,
+        &key,
+        manual_report(),
+        Some(&seen),
+        now,
+        "manual",
+        || {
             let reservation = read_stamp(&path).unwrap();
             assert_eq!(reservation.reason, RedeemReason::Manual);
             assert_eq!(reservation.request_id, "manual");
@@ -782,7 +785,8 @@ fn manual_tail_bypasses_cooldown_and_reserves_before_consuming() {
                 refreshed: None,
                 refresh_error: Some("refresh failed".to_owned()),
             })
-        });
+        },
+    );
     assert!(
         redeemed.is_ok(),
         "manual redemption must ignore the auto cooldown"
@@ -808,13 +812,22 @@ fn manual_tail_refuses_newer_attempts_and_live_reservations() {
     let key = LoginKey::default_for(crate::ids::AgentKind::new_unchecked(CODEX_KIND));
     let path = runtime.shared_auto_redeem_path(&key);
     let now = ts(1_700_000_000);
-    for (attempted_at, outcome) in [
-        (now + SignedDuration::from_secs(1), Some("reset".to_owned())),
-        (now - SignedDuration::from_secs(60), None),
+    let reservation = RedeemStamp {
+        attempted_at: now - SignedDuration::from_secs(60),
+        outcome: None,
+        request_id: "auto".to_owned(),
+        reason: RedeemReason::BlockedGain,
+    };
+    // An attempt that landed after the preview, one already in flight at the
+    // preview that finished since, and a reservation the preview itself saw.
+    for (seen, attempted_at, outcome) in [
+        (None, now + SignedDuration::from_secs(1), Some("reset")),
+        (None, now - SignedDuration::from_secs(5), Some("reset")),
+        (Some(&reservation), reservation.attempted_at, None),
     ] {
         let stamp = RedeemStamp {
             attempted_at,
-            outcome,
+            outcome: outcome.map(str::to_owned),
             request_id: "auto".to_owned(),
             reason: RedeemReason::BlockedGain,
         };
@@ -823,7 +836,7 @@ fn manual_tail_refuses_newer_attempts_and_live_reservations() {
             &runtime,
             &key,
             manual_report(),
-            now,
+            seen,
             now + Duration::from_secs(2),
             "manual",
             || panic!("a racing helper must prevent consuming"),
@@ -849,7 +862,7 @@ fn manual_failed_reservation_never_consumes_a_credit() {
         &runtime,
         &key,
         manual_report(),
-        ts(10),
+        None,
         ts(10),
         "manual",
         || panic!("a failed reservation must prevent consuming"),

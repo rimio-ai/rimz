@@ -242,7 +242,7 @@ The preview on stdout names the resolved login, banked credits and soonest expir
 
 Without `--yes`, stderr asks `redeem one credit now? [y/N]`. Declining exits 0 with `nothing spent`. Zero credits exits 3 after the preview without prompting (`--dry-run` still exits 0). With `RIMZ_OAUTH_USAGE_OFFLINE` enabled, the command refuses before a provider read and names the switch to unset.
 
-Confirmation takes the same account-wide lock as auto-redeem, without fetching the preview again. An attempt newer than the preview, or a live helper reservation, refuses and asks you to rerun. Otherwise manual redemption bypasses auto-redeem's cooldown. The provider can still answer `already_redeemed` or `no_credit` if the prepared credit changed while you decided. Each attempt is recorded in `rimz stats --assists` with reason `manual`, not counted as an automation assist.
+Confirmation takes the same account-wide lock as auto-redeem, without fetching the preview again. If the shared redeem stamp changed since the preview (another redemption or an auto-redeem attempt started or finished while you decided), or it is a live helper reservation, the run refuses and asks you to rerun. Otherwise manual redemption bypasses auto-redeem's cooldown. The provider can still answer `already_redeemed` or `no_credit` if the prepared credit changed while you decided. Each attempt is recorded in `rimz stats --assists` with reason `manual`, not counted as an automation assist.
 
 | Exit | Outcome |
 | --- | --- |
