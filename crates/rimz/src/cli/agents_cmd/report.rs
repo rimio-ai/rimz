@@ -606,6 +606,51 @@ mod tests {
     }
 
     #[test]
+    fn delegated_park_reports_paused_without_parent_turn_error() {
+        let now = Timestamp::from_second(1_000).unwrap();
+        let mut parent = agent("parent");
+        parent.status = AgentStatus::Running;
+        parent.last_activity = now;
+        let mut pane =
+            rimz::pane::PaneRef::from_id(rimz::PaneId::from_parts(rimz::MuxName::Tmux, "%1"));
+        pane.command = Some("codex".to_owned());
+        let mut child = agent("child");
+        child.status = AgentStatus::Running;
+        child.last_activity = now - jiff::SignedDuration::from_secs(1);
+        child.parent_agent_id = Some(parent.agent_id.clone());
+        child.parent_agent_kind = Some(parent.kind.clone());
+        child.launch_depth = Some(1);
+        let mut context = rimz::agents::AgentContext::new("codex", now);
+        context.turn_error = Some(rimz::agents::AgentTurnError {
+            class: TurnErrorClass::PausedRateLimit,
+            at: now,
+            label: Some("usage limit reached".to_owned()),
+        });
+        child.context = Some(context);
+        parent.pane = Some(pane.clone());
+        let snapshot = SidebarSnapshot::build_with_agents(
+            rimz::WorkspaceId::from_project_root(std::path::Path::new("/repo")),
+            vec![parent.clone(), child],
+            now,
+        )
+        .with_live_panes(vec![pane], None);
+        let entry = build_entry(
+            &parent,
+            Some(&snapshot.worktree_groups[0].rows[0]),
+            None,
+            &[&parent],
+            None,
+            now,
+            ReportOverrides::default(),
+        );
+        let json = serde_json::to_value(entry).unwrap();
+        assert_eq!(json["status"], "paused");
+        assert_eq!(json["phase"], "idle");
+        assert!(json["turn_error"].is_null());
+        assert_eq!(json["sub_agents"][0]["status"], "paused");
+    }
+
+    #[test]
     fn projected_row_status_wins_and_rowless_error_falls_back_to_failed() {
         let now = Timestamp::from_second(1_000).unwrap();
         let mut state = agent("status");
