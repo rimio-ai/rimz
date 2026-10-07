@@ -110,7 +110,7 @@ fn paused_child_headline_stays_in_live_band() {
         let (line_index, line) = screen
             .lines()
             .enumerate()
-            .find(|(_, line)| line.contains("review"))
+            .find(|(_, line)| line.contains("review ·"))
             .unwrap();
         assert!(line.contains("⏸"), "{screen}");
         assert!(line.contains("usage"), "{screen}");
