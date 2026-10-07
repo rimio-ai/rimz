@@ -334,6 +334,7 @@ mod tests {
             test_pane_agent("sess-one", "terminal_1"),
             test_pane_agent("sess-two", "terminal_2"),
             PaneAgent {
+                root_lane: false,
                 kind: AgentKind::new_unchecked("codex"),
                 kind_ordinal: None,
                 name: None,
@@ -544,6 +545,7 @@ mod tests {
 
     fn test_pane_agent(agent_id: &str, pane: &str) -> PaneAgent {
         PaneAgent {
+            root_lane: false,
             kind: AgentKind::new_unchecked("codex"),
             kind_ordinal: None,
             name: None,

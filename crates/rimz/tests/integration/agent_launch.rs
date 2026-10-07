@@ -495,6 +495,7 @@ fn assert_launch_focus_version(args: &[&str], agent: bool, action: &str, version
     }
     let shim = write_env_dump_shim(&env, "claude");
     let workspace = env.resolve_workspace(&env.project_root);
+    env.store().record_workspace(&workspace).unwrap();
     if action == "channel-worktree" {
         assert!(init_launch_repo(&env.project_root));
         env.rimz()
@@ -2739,6 +2740,7 @@ fn agent_fork_refuses_untrusted_hooks_before_any_launch() {
     let shim = write_env_dump_shim(&env, "codex");
     let workspace = env.resolve_workspace(&env.project_root);
     let transcript = env.project_root.join("source.jsonl");
+    env.store().record_workspace(&workspace).unwrap();
     std::fs::write(&transcript, "{}\n").unwrap();
     let mut observation =
         AgentLifecycleObservation::new(Some("sess-source".into()), LifecycleSignal::Registered);

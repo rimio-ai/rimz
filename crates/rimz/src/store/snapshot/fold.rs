@@ -5,7 +5,7 @@ use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::fs;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -106,9 +106,10 @@ fn write_carryover(path: &Path, carryover: &EventCarryover) -> Result<()> {
 /// read-only by every fold on this thread until the file changes; the
 /// maintenance writers keep reading the raw file through [`read_carryover`],
 /// so derived identities are never persisted as a side effect.
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 struct FoldCarryover {
     agents: Vec<AgentState>,
+    project_root: Option<PathBuf>,
     /// The file's identity state as written — the cold fold's seed.
     agent_identity: AgentIdentityState,
     resume_outcomes: Vec<ResumeOutcome>,
@@ -126,6 +127,7 @@ impl FoldCarryover {
             .collect();
         Self {
             agents,
+            project_root: None,
             agent_identity: raw.agent_identity,
             resume_outcomes: raw.resume_outcomes,
         }
@@ -145,6 +147,7 @@ impl FoldCarryover {
         unstamp_for_rebirth(&mut agents);
         Self {
             agents,
+            project_root: self.project_root.clone(),
             agent_identity: self.agent_identity.clone(),
             resume_outcomes: self.resume_outcomes.clone(),
         }
@@ -161,12 +164,27 @@ thread_local! {
 /// Rotation and prune replace the file by atomic rename, so a changed payload
 /// changes `(len, mtime, dev, ino)` and re-parses exactly once. An error is
 /// never cached: a corrupt carryover fails every fold until it is replaced.
-fn fold_carryover(path: &Path) -> Result<Arc<FoldCarryover>> {
+fn fold_carryover(path: &Path, project_root: Option<&Path>) -> Result<Arc<FoldCarryover>> {
     let stamped = StampedPath::of(path);
-    if let Some(carryover) = CARRYOVER_PARSE_CACHE.with(|cache| cache.get_stamped(&stamped)) {
-        return Ok(carryover);
+    let (mut carryover, cached) =
+        match CARRYOVER_PARSE_CACHE.with(|cache| cache.get_stamped(&stamped)) {
+            Some(carryover) => (carryover, true),
+            None => (
+                Arc::new(FoldCarryover::from_raw(read_carryover(path)?)),
+                false,
+            ),
+        };
+    if !cached || carryover.project_root.as_deref() != project_root {
+        let carryover = Arc::make_mut(&mut carryover);
+        carryover.project_root = project_root.map(Path::to_path_buf);
+        for agent in &mut carryover.agents {
+            agent.root_lane = AgentState::is_root_lane(
+                agent.channel.as_deref(),
+                agent.worktree_path.as_deref().map(Path::new),
+                project_root,
+            );
+        }
     }
-    let carryover = Arc::new(FoldCarryover::from_raw(read_carryover(path)?));
     CARRYOVER_PARSE_CACHE.with(|cache| cache.store_stamped(&stamped, Arc::clone(&carryover)));
     Ok(carryover)
 }
@@ -465,7 +483,9 @@ fn catch_up_from(
     paths: &StatePaths,
 ) -> Result<(RollupCache, AgentRollup, Vec<ResumeOutcome>)> {
     let now = Timestamp::now();
-    let carryover = fold_carryover(&paths.agents_carryover)?;
+    let identity = super::assemble::WorkspaceSnapshotIdentity::from_paths(paths);
+    let project_root = identity.project_root.as_deref();
+    let carryover = fold_carryover(&paths.agents_carryover, project_root)?;
     let (seed, generation, start) = match base {
         Some(RollupCache {
             extent,
@@ -505,7 +525,18 @@ fn catch_up_from(
     };
     let (delta, end) = event_log::read_from_offset(&paths.events_log, start)?;
     let decoded_delta = decode_events(&delta);
-    let folded = fold_delta(seed, carryover, &decoded_delta, now);
+    let mut folded = fold_delta(seed, carryover, &decoded_delta, now);
+    for agent in folded
+        .raw_agents
+        .iter_mut()
+        .chain(Arc::make_mut(&mut folded.merged.live))
+    {
+        agent.root_lane = AgentState::is_root_lane(
+            agent.channel.as_deref(),
+            agent.worktree_path.as_deref().map(Path::new),
+            project_root,
+        );
+    }
     let refreshed = RollupCache {
         version: ROLLUP_CACHE_VERSION,
         extent: event_log::LogExtent {

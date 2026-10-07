@@ -126,6 +126,7 @@ fn room_agents_count_only_pane_bound_root_sessions() {
         now,
     );
     snapshot.agent_panes.push(rimz::store::snapshot::PaneAgent {
+        root_lane: false,
         kind: live.kind.clone(),
         kind_ordinal: None,
         name: None,

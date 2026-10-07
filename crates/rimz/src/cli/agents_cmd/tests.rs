@@ -1178,6 +1178,7 @@ fn refresh_targets_honor_channel_filter() {
     );
     let owner = &snapshot.agents[0];
     let owner_pane = rimz::store::snapshot::PaneAgent {
+        root_lane: false,
         kind: owner.kind.clone(),
         kind_ordinal: owner.kind_ordinal,
         name: owner.name.clone(),

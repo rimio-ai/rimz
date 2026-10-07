@@ -282,6 +282,7 @@ fn rollup_resolution_snapshot(store: &Store) -> Result<SidebarSnapshot> {
         .filter_map(|agent| {
             let pane = agent.pane.as_ref()?;
             Some(PaneAgent {
+                root_lane: agent.root_lane,
                 kind: agent.kind.clone(),
                 kind_ordinal: agent.kind_ordinal,
                 name: agent.name.clone(),

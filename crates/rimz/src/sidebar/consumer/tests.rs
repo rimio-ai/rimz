@@ -1356,6 +1356,8 @@ fn consumer_adopts_only_an_exact_workspace_projection() {
     assert_eq!(snapshot.display_name, "projected");
 
     for (field, value) in [
+        // Version 5 predates fold-derived root-lane flags.
+        ("schema_version", serde_json::json!(5)),
         ("schema_version", serde_json::json!(99)),
         ("session", serde_json::json!("other-session")),
     ] {

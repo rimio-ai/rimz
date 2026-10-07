@@ -462,6 +462,7 @@ mod tests {
         let mut snapshot =
             SidebarSnapshot::build_with_agents(workspace_id, vec![candidate.clone()], ts(10_000));
         snapshot.agent_panes.push(PaneAgent {
+            root_lane: false,
             kind: candidate.kind.clone(),
             kind_ordinal: None,
             name: None,
@@ -590,6 +591,7 @@ mod tests {
         let mut snapshot =
             SidebarSnapshot::build_with_agents(workspace_id, vec![seat.clone()], ts(3_540));
         snapshot.agent_panes.push(PaneAgent {
+            root_lane: false,
             kind: seat.kind.clone(),
             kind_ordinal: None,
             name: None,

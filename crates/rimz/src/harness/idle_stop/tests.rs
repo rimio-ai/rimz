@@ -719,6 +719,7 @@ fn producer_spawns_for_a_due_request_paces_and_leaves_the_record_alone() {
         );
         if pane {
             snapshot.agent_panes.push(PaneAgent {
+                root_lane: false,
                 kind: agent.kind.clone(),
                 kind_ordinal: None,
                 name: None,

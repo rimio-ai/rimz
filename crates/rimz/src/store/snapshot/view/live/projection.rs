@@ -78,7 +78,13 @@ impl SidebarSnapshot {
         for pane in panes {
             match binder.resolve(pane) {
                 PaneBindingDisposition::Agent(agent) => {
-                    agent_panes.push(push_agent_row(&mut rows, agent, pane, now));
+                    agent_panes.push(push_agent_row(
+                        &mut rows,
+                        agent,
+                        pane,
+                        now,
+                        self.project_root.as_deref(),
+                    ));
                     if !pane.is_floating {
                         rendered_agents.push(agent);
                     }
@@ -88,7 +94,11 @@ impl SidebarSnapshot {
                 }
                 PaneBindingDisposition::Idle(row) => {
                     let row = *row;
-                    agent_panes.push(pane_agent_from_idle(&row, pane));
+                    agent_panes.push(pane_agent_from_idle(
+                        &row,
+                        pane,
+                        self.project_root.as_deref(),
+                    ));
                     if !pane.is_floating {
                         rows.push(row);
                     }
@@ -126,12 +136,22 @@ impl SidebarSnapshot {
         for (agent, pane) in nested_agents {
             let parent_rendered = rendered_agents.iter().any(|parent| agent.parent_is(parent));
             if parent_rendered {
-                agent_panes.push(pane_agent_from_agent(agent, pane));
+                agent_panes.push(pane_agent_from_agent(
+                    agent,
+                    pane,
+                    self.project_root.as_deref(),
+                ));
             } else {
                 // A pane-backed child can outlive its launching parent. Keep the
                 // normal nested rendering while that parent has a row, but promote
                 // the live child rather than making its pane disappear with it.
-                agent_panes.push(push_agent_row(&mut rows, agent, pane, now));
+                agent_panes.push(push_agent_row(
+                    &mut rows,
+                    agent,
+                    pane,
+                    now,
+                    self.project_root.as_deref(),
+                ));
                 if !pane.is_floating {
                     rendered_agents.push(agent);
                 }
@@ -146,10 +166,19 @@ impl SidebarSnapshot {
     }
 }
 
-fn pane_agent_from_idle(row: &SidebarRow, pane: &PaneRef) -> PaneAgent {
+fn pane_agent_from_idle(
+    row: &SidebarRow,
+    pane: &PaneRef,
+    project_root: Option<&std::path::Path>,
+) -> PaneAgent {
     // A wired pane carries only its kind and pane — no session, pet name, or
     // ordinal until a lifecycle hook binds one.
     PaneAgent {
+        root_lane: AgentState::is_root_lane(
+            row.channel.as_deref(),
+            row.worktree_path.as_deref().map(std::path::Path::new),
+            project_root,
+        ),
         kind: AgentKind::new_unchecked(row.name.clone()),
         kind_ordinal: None,
         name: None,
@@ -173,6 +202,7 @@ fn push_agent_row(
     agent: &AgentState,
     pane: &PaneRef,
     now: Timestamp,
+    project_root: Option<&std::path::Path>,
 ) -> PaneAgent {
     let worktree_path = agent.worktree_path.clone().or_else(|| pane.cwd.clone());
     if !pane.is_floating {
@@ -181,20 +211,30 @@ fn push_agent_row(
         row.pane = Some(pane.clone());
         rows.push(row);
     }
-    pane_agent_from_agent_with_worktree(agent, pane, worktree_path)
+    pane_agent_from_agent_with_worktree(agent, pane, worktree_path, project_root)
 }
 
-fn pane_agent_from_agent(agent: &AgentState, pane: &PaneRef) -> PaneAgent {
+fn pane_agent_from_agent(
+    agent: &AgentState,
+    pane: &PaneRef,
+    project_root: Option<&std::path::Path>,
+) -> PaneAgent {
     let worktree_path = agent.worktree_path.clone().or_else(|| pane.cwd.clone());
-    pane_agent_from_agent_with_worktree(agent, pane, worktree_path)
+    pane_agent_from_agent_with_worktree(agent, pane, worktree_path, project_root)
 }
 
 fn pane_agent_from_agent_with_worktree(
     agent: &AgentState,
     pane: &PaneRef,
     worktree_path: Option<String>,
+    project_root: Option<&std::path::Path>,
 ) -> PaneAgent {
     PaneAgent {
+        root_lane: AgentState::is_root_lane(
+            agent.channel.as_deref(),
+            worktree_path.as_deref().map(std::path::Path::new),
+            project_root,
+        ),
         kind: agent.kind.clone(),
         kind_ordinal: agent.kind_ordinal,
         name: agent.name.clone(),

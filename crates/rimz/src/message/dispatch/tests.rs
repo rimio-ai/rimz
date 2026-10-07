@@ -595,6 +595,7 @@ fn resident(id: &str, pane: &str) -> AgentState {
 
 fn owner_pane(id: &str, role: Option<&str>) -> PaneAgent {
     PaneAgent {
+        root_lane: false,
         kind: AgentKind::new_unchecked("claude"),
         kind_ordinal: Some(2),
         name: Some("owner".to_owned()),
