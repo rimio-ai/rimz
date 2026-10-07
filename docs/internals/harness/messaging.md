@@ -513,7 +513,7 @@ The room's elected sidebar elder notices when a parked message comes due, throug
 
 The sweep is single-flight through a `message-sweep.lock` file lock, so overlapping wakeups collapse into one pass.
 
-Condition evaluation inside a sweep is one transaction. It evaluates every unmet condition against one context-enriched snapshot, applies every stamp, retry floor, and watched-agent archive together, reloads the pending records, and delivers newly eligible heads from the same snapshot in the same run. A new stamp emits `message.after_met` or `message.when_met`.
+Condition evaluation inside a sweep is one transaction. It evaluates every unmet condition against one context-enriched snapshot, applies every stamp, retry floor, and watched-agent archive together, reloads the pending records, and delivers newly eligible heads from the same snapshot in the same run unless their card was held in the queue read after reconciliation and before that snapshot. A new stamp emits `message.after_met` or `message.when_met`.
 
 The sweep backs off because the elder ticks often. When it cannot deliver a ready head (gate closed, ask waiting, compacting, no pane, behind a `Sent` prompt), it sets `retry_after` one delivery window ahead, so the elder retries at most once per window. `retry_after` is only a wake hint: it does not affect `is_ready`, FIFO position, claim leases, or hook-driven delivery.
 

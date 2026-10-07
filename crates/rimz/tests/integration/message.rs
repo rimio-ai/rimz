@@ -4845,6 +4845,90 @@ fn submit_subagent_report_prompt(env: &Env, prompt: &str) {
 }
 
 #[test]
+fn sweep_does_not_claim_command_acknowledged_after_idle_snapshot() {
+    let env = Env::new();
+    append_lifecycle(
+        &env,
+        "claude",
+        "SessionStart",
+        "sess-sweep-ack",
+        LifecycleSignal::Registered,
+        |observation| {
+            observation.pane_id = Some(PaneId::from_parts(MuxName::Zellij, TRACE_PANE));
+        },
+    );
+    let store = env.store();
+    let snapshot = store.snapshot_cached().unwrap();
+    let agent = &snapshot.agents[0];
+    assert_eq!(agent.status, rimz::agents::AgentStatus::Idle);
+    let mut prompt = MessageRecord::new(
+        env.workspace_id.clone(),
+        agent,
+        "start a turn".to_owned(),
+        DeliveryGate::Done,
+    );
+    prompt.message_id = fixed_message_id(1);
+    let mut command = MessageRecord::new(
+        env.workspace_id.clone(),
+        agent,
+        "/compact".to_owned(),
+        DeliveryGate::Done,
+    )
+    .with_body(MessageBody::Command);
+    command.message_id = fixed_message_id(2);
+    queue_messages(&env, &[&prompt, &command]);
+    store
+        .record_sent_batch(std::slice::from_ref(&prompt), "rimz-test")
+        .unwrap();
+    let panes = env.write_pane_fixture(&[agent_pane(&env, "claude")]);
+    let after_snapshot = DeliveryRendezvous::new(&env, "sweep-snapshot");
+    let trace = env.project_root.join("sweep-ack-trace.log");
+    let child = traced_rimz(&env, &trace)
+        .env("RIMZ_TEST_PANE_LIST", &panes)
+        .env("RIMZ_MESSAGE_DELIVERY_WINDOW_MS", "600000")
+        .env("RIMZ_TEST_SWEEP_AFTER_SNAPSHOT", &after_snapshot.path)
+        .args(["message", "sweep"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut release = after_snapshot.arrive();
+    append_lifecycle(
+        &env,
+        "claude",
+        "UserPromptSubmit",
+        "sess-sweep-ack",
+        LifecycleSignal::TurnStarted { turn_id: None },
+        |_| {},
+    );
+    assert_eq!(
+        store.snapshot_cached().unwrap().agents[0].status,
+        rimz::agents::AgentStatus::Running
+    );
+    assert_eq!(
+        store
+            .confirm_delivered_for_card(
+                &prompt.kind,
+                &prompt.agent_id,
+                prompt.agent_name.as_deref(),
+                rimz::store::writer::DeliveryAck::TurnStarted { prompt: None },
+                "rimz-test",
+            )
+            .unwrap()
+            .len(),
+        1
+    );
+    release.write_all(&[1]).unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let queued = message_by_id(&env, &command.message_id);
+    assert_eq!(queued.status, MessageStatus::Queued);
+    assert_eq!(queued.attempts, 0, "the sweep must not claim mid-turn");
+    assert_eq!(queued.last_attempt_at, None);
+    assert_no_report_pane_write(&trace);
+}
+
+#[test]
 fn sweep_requeues_unconfirmed_send_now_message_and_redelivers() {
     let env = Env::new();
     env.write_config(&env.project_root, "");

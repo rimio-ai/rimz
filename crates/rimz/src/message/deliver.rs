@@ -446,6 +446,12 @@ pub fn sweep(workspace: &ResolvedWorkspace, store: &Store, mux: Option<MuxName>)
     };
     let now = Timestamp::now();
     let delivery_window = MessageBody::Prompt.delivery_window();
+    store.reconcile_stale_messages(
+        &workspace.session_name,
+        now,
+        max_delivery_attempts_from_env(),
+    )?;
+    // An acknowledgement after this queue read must not free a card in a snapshot that still has it idle.
     let live = store.list_messages()?;
     let needs_snapshot = live
         .iter()
@@ -456,12 +462,8 @@ pub fn sweep(workspace: &ResolvedWorkspace, store: &Store, mux: Option<MuxName>)
     } else {
         None
     };
-    store.reconcile_stale_messages(
-        &workspace.session_name,
-        now,
-        max_delivery_attempts_from_env(),
-    )?;
-    let live = store.list_messages()?;
+    #[cfg(feature = "testkit")]
+    crate::testkit::rendezvous("RIMZ_TEST_SWEEP_AFTER_SNAPSHOT");
     if live
         .iter()
         .any(|message| message.status == MessageStatus::Queued && !message.conditions_met())
@@ -486,14 +488,21 @@ pub fn sweep(workspace: &ResolvedWorkspace, store: &Store, mux: Option<MuxName>)
         };
         if heads_seen.insert(head.message_id.to_string()) {
             let snapshot = snapshot.expect("queued delivery requires a resolution snapshot");
-            let report = attempt_delivery(
-                workspace,
-                store,
-                &head.message_id,
-                DeliveryPolicy::Boundary,
-                &pending,
-                snapshot,
-            )?;
+            let report =
+                if older_ready_blocker(live.iter(), head, |message| message.is_deliverable(now))
+                    .is_some()
+                {
+                    DeliveryReport::Stopped(None)
+                } else {
+                    attempt_delivery(
+                        workspace,
+                        store,
+                        &head.message_id,
+                        DeliveryPolicy::Boundary,
+                        &pending,
+                        snapshot,
+                    )?
+                };
             if let DeliveryReport::Stopped(verdict) = report {
                 let ended_receiver = match &verdict {
                     Some(DeliveryVerdict::ReceiverEnded) => snapshot
