@@ -78,7 +78,10 @@ pub(in crate::cli) fn restart_resolved(
         &cwd,
     )?;
 
-    let logins = rimz::agents::room_logins(&store.paths().workspace_record)?;
+    let logins = rimz::agents::room_accounts(
+        &store.paths().workspace_record,
+        &rimz::config::MachineConfig::load_lenient(),
+    )?;
     let catalog = rimz::agents::machine_login_catalog();
     let (action, login, fresh_reason) = relaunch_action(agent, &logins, &catalog, &cwd)?;
     rimz::agents::session_login(&agent.kind, login.as_ref(), &machine_config.accounts)?
@@ -203,7 +206,7 @@ pub(in crate::cli) fn restart_resolved(
 
 pub(in crate::cli) fn relaunch_action(
     agent: &AgentState,
-    logins: &rimz::ids::RoomLogins,
+    logins: &rimz::agents::RoomAccounts,
     catalog: &rimz::agents::LoginCatalog,
     cwd: &Path,
 ) -> Result<(
@@ -640,10 +643,10 @@ mod tests {
             ..rimz::testkit::agent_state("claude", "session-1", jiff::Timestamp::now())
         };
         let room = |name: &str| {
-            rimz::ids::RoomLogins::from([(
+            rimz::agents::RoomAccounts::from(rimz::ids::RoomLogins::from([(
                 rimz::ids::AgentKind::new_unchecked("claude"),
                 name.parse().expect("login name"),
-            )])
+            )]))
         };
 
         let accounts = |work_history: &str| {

@@ -1034,7 +1034,10 @@ fn discovered_session_acts_as_the_account_it_was_discovered_under() {
     .expect("login catalog");
     let work: crate::ids::LoginName = "work".parse().expect("login name");
     let codex = AgentKind::new_unchecked("codex");
-    let logins = crate::ids::RoomLogins::from([(codex.clone(), work.clone())]);
+    let logins = crate::agents::RoomAccounts::from(crate::ids::RoomLogins::from([(
+        codex.clone(),
+        work.clone(),
+    )]));
 
     let agent = discovered_codex_agent(Some("work"));
     assert_eq!(

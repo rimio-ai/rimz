@@ -277,9 +277,9 @@ impl RoomContext {
 
     fn launch_background_view(&self, options: &BackgroundViewOptions) {
         match StatePaths::for_project_root(&self.workspace.project_root) {
-            Ok(state) => match crate::agents::room_login(
+            Ok(state) => match crate::agents::room_account(
                 &state.workspace_record,
-                &self.machine_config.accounts,
+                &self.machine_config,
                 &crate::ids::AgentKind::new_unchecked("codex"),
             )
             .map(|login| login.env(&crate::agents::ambient_env()))

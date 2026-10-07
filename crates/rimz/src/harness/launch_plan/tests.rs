@@ -1226,17 +1226,15 @@ fn room_with_accounts(
     let state = StatePaths::under(workspace.workspace_id.clone(), root).expect("state paths");
     state.ensure_dirs().expect("state dirs");
     let mut record = crate::workspace::record::WorkspaceRecord::from_resolved(&workspace);
-    record.logins = Some(
-        logins
-            .iter()
-            .map(|(kind, name)| {
-                (
-                    AgentKind::new_unchecked(*kind),
-                    name.parse().expect("login name"),
-                )
-            })
-            .collect(),
-    );
+    record.pins = logins
+        .iter()
+        .map(|(kind, name)| {
+            (
+                AgentKind::new_unchecked(*kind),
+                name.parse().expect("login name"),
+            )
+        })
+        .collect();
     crate::workspace::record::write(&state, &record).expect("write record");
     (machine, state)
 }

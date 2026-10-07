@@ -251,10 +251,7 @@ fn credits_projection_selects_the_room_login_and_never_falls_back() {
     let default_key: LoginKey = "claude@default".parse().unwrap();
     let accounts = toml::from_str("[claude.work]\nhome = \"/srv/rimz-test-work\"\n").unwrap();
     let work = RoomLoginSet::new(
-        Some(crate::ids::RoomLogins::from([(
-            work_key.kind.clone(),
-            work_key.name.clone(),
-        )])),
+        Some(crate::ids::RoomLogins::from([(work_key.kind.clone(), work_key.name.clone())]).into()),
         Some(crate::agents::LoginCatalog::from_config(&accounts).unwrap()),
         BTreeMap::new(),
     );

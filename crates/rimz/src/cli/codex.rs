@@ -73,9 +73,9 @@ fn serve_app_server(workspace_id: &str, session_name: Option<&str>) -> Result<()
     let state = rimz::StatePaths::for_workspace(workspace_id.clone())
         .context("resolving broker workspace state")?;
     let resolve_login = move || {
-        rimz::agents::room_login(
+        rimz::agents::room_account(
             &state.workspace_record,
-            &crate::cli::machine_config().accounts,
+            &crate::cli::machine_config(),
             &rimz::ids::AgentKind::new_unchecked("codex"),
         )
     };

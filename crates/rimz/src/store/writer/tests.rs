@@ -10,6 +10,28 @@ use crate::store::event::MessageEventMethod;
 use crate::store::message::{DeliveryGate, MessageRecord, MessageStatus};
 use crate::workspace::WorkspaceResolver;
 
+pub(super) fn account_test_home(test: &str) -> bool {
+    if std::env::var_os("RIMZ_TEST_ACCOUNT_HOME").is_some() {
+        return false;
+    }
+    let home = tempfile::tempdir().unwrap();
+    std::fs::create_dir(home.path().join(".rimz")).unwrap();
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", test, "--nocapture"])
+        .env("HOME", home.path())
+        .env("RIMZ_HOME", home.path().join(".rimz"))
+        .env("RIMZ_TEST_ACCOUNT_HOME", "1")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    true
+}
+
 #[derive(Default, serde::Deserialize, serde::Serialize)]
 struct CarryoverJson {
     #[serde(default)]
@@ -67,7 +89,8 @@ fn launch_batch_pins_named_and_default_accounts_over_the_room_selection() {
         request.kind = kind.clone();
         request.login = LaunchLogin::Pinned(name.parse().unwrap());
         request.launch.login = Some("ignored".parse().unwrap());
-        let identities = allocate_agent_launch_identities(&[request], &[], Some(&room)).unwrap();
+        let identities =
+            allocate_agent_launch_identities(&[request], &[], &room.clone().into()).unwrap();
         assert_eq!(
             identities[0]
                 .launch
@@ -735,11 +758,8 @@ fn room_account_switch_preserves_other_defaults_and_returns_the_prior_login() {
         Default::default()
     );
     assert_eq!(
-        record::read(&paths.workspace_record).unwrap().logins,
-        Some(crate::ids::RoomLogins::from([(
-            claude.clone(),
-            work.clone()
-        )]))
+        record::read(&paths.workspace_record).unwrap().pins,
+        crate::ids::RoomLogins::from([(claude.clone(), work.clone())])
     );
     store
         .switch_room_login(&workspace, &codex, &personal)
@@ -748,21 +768,70 @@ fn room_account_switch_preserves_other_defaults_and_returns_the_prior_login() {
         store
             .switch_room_login(&workspace, &claude, &personal)
             .unwrap(),
-        work
+        Some(work)
     );
-    let logins = record::read(&paths.workspace_record)
-        .unwrap()
-        .logins
-        .unwrap();
+    let logins = record::read(&paths.workspace_record).unwrap().pins;
     assert_eq!(logins.get(&claude), Some(&personal));
     assert_eq!(logins.get(&codex), Some(&personal));
     assert_eq!(
         store
             .switch_room_login(&workspace, &claude, &personal)
             .unwrap(),
-        personal
+        Some(personal)
     );
     assert!(store.read_events().unwrap().is_empty());
+}
+
+#[test]
+fn unpin_room_login_returns_the_pin_and_preserves_other_kinds() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceResolver::resolve(dir.path(), None).unwrap();
+    let paths = StatePaths::under(workspace.workspace_id.clone(), dir.path()).unwrap();
+    let runtime = RuntimePaths::under(workspace.workspace_id.clone(), dir.path()).unwrap();
+    let store = Store::open(paths.clone(), runtime).unwrap();
+    let claude = AgentKind::new_unchecked("claude");
+    let codex = AgentKind::new_unchecked("codex");
+    let work = "work".parse().unwrap();
+    store.switch_room_login(&workspace, &claude, &work).unwrap();
+    store.switch_room_login(&workspace, &codex, &work).unwrap();
+    assert_eq!(
+        store.unpin_room_login(&workspace, &claude).unwrap(),
+        Some(work.clone())
+    );
+    let written: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&paths.workspace_record).unwrap()).unwrap();
+    assert_eq!(written["pins"], json!({"codex": "work"}));
+    let before = std::fs::read(&paths.workspace_record).unwrap();
+    assert_eq!(store.unpin_room_login(&workspace, &claude).unwrap(), None);
+    assert_eq!(std::fs::read(&paths.workspace_record).unwrap(), before);
+}
+
+#[test]
+fn birth_pins_refuse_a_differing_pin_without_partial_writes() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceResolver::resolve(dir.path(), None).unwrap();
+    let paths = StatePaths::under(workspace.workspace_id.clone(), dir.path()).unwrap();
+    let runtime = RuntimePaths::under(workspace.workspace_id.clone(), dir.path()).unwrap();
+    let store = Store::open(paths.clone(), runtime).unwrap();
+    let claude = AgentKind::new_unchecked("claude");
+    store
+        .switch_room_login(&workspace, &claude, &"work".parse().unwrap())
+        .unwrap();
+    let before = std::fs::read(&paths.workspace_record).unwrap();
+    let requested = crate::ids::RoomLogins::from([
+        (claude, "personal".parse().unwrap()),
+        (AgentKind::new_unchecked("codex"), "work".parse().unwrap()),
+    ]);
+    let error = store.pin_room_logins(&workspace, &requested).unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "this room uses claude account `work`, not `personal`; switch it with `rimz accounts use claude personal`"
+    );
+    assert_eq!(std::fs::read(&paths.workspace_record).unwrap(), before);
+    store
+        .pin_room_logins(&workspace, &crate::ids::RoomLogins::new())
+        .unwrap();
+    assert_eq!(std::fs::read(&paths.workspace_record).unwrap(), before);
 }
 
 #[test]
@@ -780,7 +849,7 @@ fn room_logins_freeze_at_birth_and_survive_a_generic_rerecord() {
     )]);
 
     store
-        .record_room_logins(&workspace, &logins)
+        .pin_room_logins(&workspace, &logins)
         .expect("freeze accounts");
     store
         .record_workspace(&workspace)
@@ -788,19 +857,19 @@ fn room_logins_freeze_at_birth_and_survive_a_generic_rerecord() {
     assert_eq!(
         record::read(&paths.workspace_record)
             .expect("read record")
-            .logins,
-        Some(logins.clone())
+            .pins,
+        logins.clone()
     );
 
     store
-        .record_room_logins(&workspace, &logins)
+        .pin_room_logins(&workspace, &logins)
         .expect("the same selection is a no-op");
     let other = crate::ids::RoomLogins::from([(
         crate::ids::AgentKind::new_unchecked("claude"),
         "personal".parse().expect("login name"),
     )]);
     assert!(matches!(
-        store.record_room_logins(&workspace, &other),
+        store.pin_room_logins(&workspace, &other),
         Err(StoreErr::RoomLoginsFrozen { .. })
     ));
 
@@ -810,23 +879,28 @@ fn room_logins_freeze_at_birth_and_survive_a_generic_rerecord() {
     assert_eq!(
         record::read(&paths.workspace_record)
             .expect("read record")
-            .logins,
-        Some(logins.clone())
+            .pins,
+        logins.clone()
     );
     store.reset_records(false).expect("soft reset");
     assert_eq!(
         record::read(&paths.workspace_record)
             .expect("read record")
-            .logins,
-        None
+            .pins,
+        crate::ids::RoomLogins::new()
     );
     store
-        .record_room_logins(&workspace, &other)
+        .pin_room_logins(&workspace, &other)
         .expect("reset unfreezes the selection");
 }
 
 #[test]
 fn launch_batch_stamps_room_logins_over_caller_values() {
+    if account_test_home("store::writer::tests::launch_batch_stamps_room_logins_over_caller_values")
+    {
+        return;
+    }
+    std::fs::write(crate::config::MachineConfig::config_path(), "[accounts.claude.work]\nhome = \"/srv/claude-work\"\n[accounts.codex.work]\nhome = \"/srv/codex-work\"\n[accounts.use]\ncodex = \"work\"\n").unwrap();
     for recorded in [false, true] {
         let dir = tempfile::tempdir().expect("tempdir");
         let workspace = WorkspaceResolver::resolve(dir.path(), None).expect("workspace");
@@ -836,12 +910,10 @@ fn launch_batch_stamps_room_logins_over_caller_values() {
         let store = Store::open(paths.clone(), runtime).expect("open store");
         let work = "work".parse::<crate::ids::LoginName>().expect("login name");
         if recorded {
-            let logins = crate::ids::RoomLogins::from([
-                (AgentKind::new_unchecked("claude"), work.clone()),
-                (AgentKind::new_unchecked("codex"), Default::default()),
-            ]);
+            let logins =
+                crate::ids::RoomLogins::from([(AgentKind::new_unchecked("claude"), work.clone())]);
             store
-                .record_room_logins(&workspace, &logins)
+                .pin_room_logins(&workspace, &logins)
                 .expect("freeze accounts");
         }
         let requests = ["claude", "codex"].map(|kind| {
@@ -863,7 +935,7 @@ fn launch_batch_stamps_room_logins_over_caller_values() {
             .expect("begin launch batch");
         let (_, agents, _) = snapshot::catch_up_rollup(&paths).expect("rollup");
         for identity in &batch.identities {
-            let expected = (recorded && identity.kind.as_str() == "claude").then_some(work.clone());
+            let expected = (identity.kind.as_str() == "codex" || recorded).then_some(work.clone());
             assert_eq!(identity.launch.login, expected);
             let agent = agents
                 .iter()
@@ -1226,8 +1298,22 @@ fn launch_identity_allocation_rejects_explicit_live_name_or_session_prefix() {
         prompt: None,
     };
 
-    assert!(allocate_agent_launch_identities(&[duplicate], &agents, None).is_err());
-    assert!(allocate_agent_launch_identities(&[prefix], &agents, None).is_err());
+    assert!(
+        allocate_agent_launch_identities(
+            &[duplicate],
+            &agents,
+            &crate::agents::RoomAccounts::default()
+        )
+        .is_err()
+    );
+    assert!(
+        allocate_agent_launch_identities(
+            &[prefix],
+            &agents,
+            &crate::agents::RoomAccounts::default()
+        )
+        .is_err()
+    );
 }
 
 #[test]
@@ -1247,7 +1333,12 @@ fn soft_launch_name_falls_back_when_it_collides() {
         prompt: None,
     };
 
-    let identities = allocate_agent_launch_identities(&[request], &agents, None).unwrap();
+    let identities = allocate_agent_launch_identities(
+        &[request],
+        &agents,
+        &crate::agents::RoomAccounts::default(),
+    )
+    .unwrap();
 
     assert_eq!(identities.len(), 1);
     assert_ne!(identities[0].name, "lucid-atlas");
@@ -1268,7 +1359,12 @@ fn launch_identity_tracks_explicit_name_provenance() {
         launch_request("launch_mint", AgentLaunchName::Mint),
     ];
 
-    let identities = allocate_agent_launch_identities(&requests, &agents, None).unwrap();
+    let identities = allocate_agent_launch_identities(
+        &requests,
+        &agents,
+        &crate::agents::RoomAccounts::default(),
+    )
+    .unwrap();
 
     assert_eq!(identities[0].name, "writer");
     assert!(identities[0].name_explicit);

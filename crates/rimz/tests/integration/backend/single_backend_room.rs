@@ -18,7 +18,7 @@ fn room_name_tracks_state_dir_without_rebirthing_a_live_old_name() {
     let owner = (
         record.rimz_bin.clone(),
         record.rimz_build.clone(),
-        record.logins.clone(),
+        record.pins.clone(),
     );
     let old = "rimz-old-123456";
     assert!(
@@ -80,7 +80,7 @@ fn room_name_tracks_state_dir_without_rebirthing_a_live_old_name() {
     }
     let preserved = rimz::workspace::record::read(&paths.workspace_record).unwrap();
     assert_eq!(
-        (preserved.rimz_bin, preserved.rimz_build, preserved.logins),
+        (preserved.rimz_bin, preserved.rimz_build, preserved.pins),
         owner
     );
     let reset = room

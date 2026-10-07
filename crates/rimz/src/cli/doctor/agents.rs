@@ -67,16 +67,10 @@ pub(super) fn collect_agent_rollup(ws: &rimz::ResolvedWorkspace, audit: bool) ->
 /// distinguishes installed, present-but-unwired, absent, and
 /// known-but-not-installable adapters.
 pub(super) fn collect_accounts(ws: Option<&rimz::ResolvedWorkspace>) -> Probe<Accounts> {
-    let catalog = rimz::config::MachineConfig::load()
-        .map_err(|err| err.to_string())
-        .and_then(|config| {
-            rimz::agents::LoginCatalog::from_config(&config.accounts)
-                .map(|catalog| (catalog, config))
-                .map_err(|err| err.to_string())
-        });
-    let room = ws.map(room_logins).transpose();
-    match (catalog, room) {
-        (Ok((catalog, config)), Ok(room)) => {
+    let config = rimz::config::MachineConfig::load_lenient();
+    let catalog = rimz::agents::LoginCatalog::room_view(&config.accounts);
+    match ws.map(|ws| room_logins(ws, &config)).transpose() {
+        Ok(room) => {
             let standing = match ws {
                 Some(ws) => rimz::room::AccountStanding::at(&ws.project_root, &config),
                 None => Ok(rimz::room::AccountStanding::machine_only(&config)),
@@ -103,15 +97,27 @@ pub(super) fn collect_accounts(ws: Option<&rimz::ResolvedWorkspace>) -> Probe<Ac
             }
             Probe::Ready(Accounts { rows })
         }
-        (Err(error), _) | (_, Err(error)) => Probe::Unavailable { error },
+        Err(error) => Probe::Unavailable { error },
     }
 }
 
-fn room_logins(ws: &rimz::ResolvedWorkspace) -> Result<Option<rimz::ids::RoomLogins>, String> {
+fn room_logins(
+    ws: &rimz::ResolvedWorkspace,
+    machine: &rimz::config::MachineConfig,
+) -> Result<Option<rimz::ids::RoomLogins>, String> {
     let paths =
         rimz::StatePaths::for_project_root(&ws.project_root).map_err(|err| err.to_string())?;
-    rimz::workspace::record::read_optional(&paths.workspace_record)
-        .map(|record| record.and_then(|record| record.logins))
+    let accounts = if paths.workspace_record.exists() {
+        rimz::agents::room_accounts(&paths.workspace_record, machine)
+    } else {
+        Ok(rimz::agents::resolve_room_accounts(
+            &rimz::ids::RoomLogins::new(),
+            &ws.project_root,
+            machine,
+        ))
+    };
+    accounts
+        .map(|accounts| Some(accounts.names()))
         .map_err(|err| err.to_string())
 }
 

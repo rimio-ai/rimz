@@ -226,7 +226,7 @@ fn rows_require_detection_and_a_model_and_use_the_room_login() {
                 dir.path().join("override.json").display().to_string(),
             );
         }
-        let logins = RoomLoginSet::new(Some(selection.clone()), Some(catalog.clone()), env);
+        let logins = RoomLoginSet::new(Some(selection.clone().into()), Some(catalog.clone()), env);
         let rows = rows_with_locator(&logins, dir.path(), dir.path(), |_| {
             Some("/detected".into())
         });

@@ -1,5 +1,6 @@
 //! Integration coverage for `rimz accounts add|list|remove`.
 
+use std::path::Path;
 use std::process::Output;
 
 use serde_json::{Value, json};
@@ -41,12 +42,10 @@ fn room_accounts(env: &Env, args: &[&str]) -> Output {
         .unwrap()
 }
 
-fn trust_codex_account(env: &Env, name: &str) {
+fn trust_codex_account(env: &Env, home: &Path) {
     crate::common::trust_codex_hooks(env);
     let native = env.agent_config_path("codex");
-    let config = env
-        .rimz_home()
-        .join(format!("accounts/codex/{name}/config.toml"));
+    let config = home.join("config.toml");
     let mut table: toml::Table = std::fs::read_to_string(&config).unwrap().parse().unwrap();
     let state = table["hooks"]["state"].as_table_mut().unwrap();
     let prefix = format!("{}:", native.display());
@@ -61,11 +60,12 @@ fn trust_codex_account(env: &Env, name: &str) {
     std::fs::write(&config, toml::to_string(&table).unwrap()).unwrap();
 }
 
+#[cfg(unix)]
 #[test]
-fn room_account_reset_restores_the_machine_selection_once() {
+fn room_account_reset_unpins_and_follows_the_machine_selection() {
     let env = Env::new();
     succeeded(&accounts(&env, &["add", "codex", "work"]));
-    trust_codex_account(&env, "work");
+    trust_codex_account(&env, &env.rimz_home().join("accounts/codex/work"));
     succeeded(&accounts(&env, &["add", "claude", "team"]));
     succeeded(&accounts(&env, &["use", "--global", "codex", "work"]));
     env.record(&env.project_root);
@@ -95,37 +95,92 @@ fn room_account_reset_restores_the_machine_selection_once() {
     let reset = succeeded(&room_accounts(&env, &["use", "--reset", "codex"]));
     assert_eq!(
         reset.trim(),
-        "this room now launches codex on account `work` (machine default); 1 running codex agent(s) keep `default` until they end"
+        "this room now follows the machine default for codex (`work`); 1 running codex agent(s) keep `default` until they end"
     );
     let record = rimz::workspace::record::read(&env.store().paths().workspace_record).unwrap();
     assert_eq!(
-        serde_json::to_value(record.logins).unwrap(),
-        json!({"codex": "work", "claude": "team"})
+        serde_json::to_value(record).unwrap()["pins"],
+        json!({"claude": "team"})
     );
     assert_eq!(
         succeeded(&room_accounts(&env, &["use", "--reset", "codex"])).trim(),
-        "this room already launches codex on `work` (machine default)"
+        "this room already follows the machine default for codex (`work`)"
     );
     assert_eq!(std::fs::read(&config).unwrap(), before);
     succeeded(&accounts(&env, &["use", "--global", "codex", "default"]));
-    let record = rimz::workspace::record::read(&env.store().paths().workspace_record).unwrap();
+    let rows: Value =
+        serde_json::from_str(&succeeded(&room_accounts(&env, &["list", "--json"]))).unwrap();
+    assert!(
+        rows.as_array()
+            .unwrap()
+            .iter()
+            .any(|row| row["kind"] == "codex" && row["name"] == "default" && row["active"] == true)
+    );
+    let workspace = env.resolve_workspace(&env.project_root);
+    let output = hermetic(&env, &mut env.rimz())
+        .envs(rimz::workspace::pin_env(
+            &workspace.workspace_id,
+            &workspace.project_root,
+        ))
+        .env("RIMZ_ZELLIJ_BIN", crate::common::zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", env.home_root.join("launch.trace"))
+        .env("ZELLIJ_SESSION_NAME", &workspace.session_name)
+        .env("ZELLIJ_PANE_ID", "1")
+        .env(
+            "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
+            format!("{} [Created 1m ago]\n", workspace.session_name),
+        )
+        .env("RIMZ_TEST_ZELLIJ_LIST_PANES", "[]")
+        .args([
+            "agents",
+            "codex",
+            "--name",
+            "after-switch",
+            "--new-tab",
+            "--isolation",
+            "host",
+        ])
+        .output()
+        .unwrap();
+    succeeded(&output);
+    let snapshot = env.store().snapshot_cached().unwrap();
+    let launched = snapshot
+        .agents
+        .iter()
+        .find(|agent| agent.name.as_deref() == Some("after-switch"))
+        .unwrap();
     assert_eq!(
-        record.logins.unwrap()[&rimz::ids::AgentKind::new_unchecked("codex")].as_str(),
-        "work",
-        "reset copied the selection, not inheritance"
+        launched.login, None,
+        "the consumer launch stamp follows the changed machine selection"
     );
     let reset = succeeded(&room_accounts(&env, &["use", "--reset", "codex"]));
     assert!(
-        reset.contains("on account `default` (provider default)"),
+        reset.contains("follows the provider default for codex (`default`)"),
         "{reset}"
     );
+}
+
+#[test]
+fn global_account_switch_refuses_failed_preflight_without_writing() {
+    let env = Env::new();
+    let home = env.home_root.join("missing-home");
+    succeeded(&accounts(
+        &env,
+        &["add", "claude", "work", "--home", home.to_str().unwrap()],
+    ));
+    std::fs::remove_dir_all(&home).unwrap();
+    let config = env.rimz_home().join("config.toml");
+    let before = std::fs::read(&config).unwrap();
+    let error = failed(&accounts(&env, &["use", "--global", "claude", "work"]));
+    assert!(error.contains("is not a directory"), "{error}");
+    assert_eq!(std::fs::read(&config).unwrap(), before);
 }
 
 #[test]
 fn room_account_reset_uses_project_trust_and_never_writes_on_refusal() {
     let env = Env::new();
     succeeded(&accounts(&env, &["add", "codex", "work"]));
-    trust_codex_account(&env, "work");
+    trust_codex_account(&env, &env.rimz_home().join("accounts/codex/work"));
     env.record(&env.project_root);
     succeeded(&room_accounts(&env, &["use", "codex", "default"]));
     let project_config = env.project_root.join(".rimz/config.toml");
@@ -143,7 +198,7 @@ fn room_account_reset_uses_project_trust_and_never_writes_on_refusal() {
     succeeded(&env.rimz().args(["trust", "grant"]).output().unwrap());
     let reset = succeeded(&room_accounts(&env, &["use", "--reset", "codex"]));
     assert!(
-        reset.contains("on account `work` (project default)"),
+        reset.contains("follows the project default for codex (`work`)"),
         "{reset}"
     );
     let before = std::fs::read(&path).unwrap();
@@ -164,6 +219,7 @@ fn room_account_reset_refuses_a_missing_home_without_writing() {
         &env,
         &["add", "codex", "work", "--home", home.to_str().unwrap()],
     ));
+    trust_codex_account(&env, &home);
     succeeded(&accounts(&env, &["use", "--global", "codex", "work"]));
     env.record(&env.project_root);
     succeeded(&room_accounts(&env, &["use", "codex", "default"]));
@@ -222,25 +278,26 @@ fn room_account_switch_changes_only_the_room_default() {
     };
     let global = succeeded(&switch_with(&["--global"]));
     assert!(
-        global.contains("new rooms now use claude account `work`"),
+        global.contains(
+            "new rooms and rooms following the machine default now use claude account `work`"
+        ),
         "{global}"
     );
     assert!(
         rimz::workspace::record::read(&store.paths().workspace_record)
             .unwrap()
-            .logins
-            .is_none()
+            .pins
+            .is_empty()
     );
     let before = std::fs::read(&config).unwrap();
     let switch = || switch_with(&[]);
     let output = succeeded(&switch());
-    assert!(output.contains("this room now launches claude on account `work`; no running claude agent is on `default`"), "{output}");
+    assert!(output.contains("this room now launches claude on account `work` (pinned, was machine default); no running claude agent is on `work`"), "{output}");
     assert_eq!(std::fs::read(&config).unwrap(), before);
     let record = rimz::workspace::record::read(&store.paths().workspace_record).unwrap();
     assert_eq!(
         record
-            .logins
-            .unwrap()
+            .pins
             .get(&rimz::ids::AgentKind::new_unchecked("claude"))
             .unwrap()
             .as_str(),
@@ -248,7 +305,7 @@ fn room_account_switch_changes_only_the_room_default() {
     );
     assert_eq!(
         succeeded(&switch()).trim(),
-        "this room already launches claude on `work`"
+        "this room already launches claude on `work` (pinned)"
     );
 
     let claude_rows = |command: &mut std::process::Command| -> Vec<Value> {
@@ -323,8 +380,8 @@ fn room_account_switch_refuses_a_missing_home() {
     assert!(
         rimz::workspace::record::read(&env.store().paths().workspace_record)
             .unwrap()
-            .logins
-            .is_none()
+            .pins
+            .is_empty()
     );
 }
 
@@ -690,9 +747,9 @@ fn machine_account_switch_and_removal_preserve_declared_accounts() {
     succeeded(&accounts(&env, &["add", "claude", "work"]));
     let used = succeeded(&accounts(&env, &["use", "--global", "claude", "work"]));
     assert!(
-        used.contains("new rooms")
-            && used.contains("existing rooms, running or stopped")
-            && used.contains("`rimz accounts use claude work`"),
+        used.contains("new rooms and rooms following the machine default")
+            && used.contains("no live room follows it for claude")
+            && used.contains("`rimz accounts use --reset claude`"),
         "{used}"
     );
     let listed: Value =

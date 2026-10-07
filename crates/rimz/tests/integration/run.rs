@@ -1100,10 +1100,13 @@ fn fresh_background_supervised_run_uses_shared_room_birth() {
         &std::fs::read(env.store().paths().workspace_record.clone()).expect("workspace record"),
     )
     .expect("workspace record json");
-    assert_eq!(
-        record["logins"],
-        serde_json::json!({"claude": "work", "codex": "default"}),
-        "supervised birth freezes the room's accounts"
+    assert!(
+        record.get("pins").is_none(),
+        "birth without --account pins nothing: {record}"
+    );
+    assert!(
+        record.get("logins").is_none(),
+        "birth must not freeze inherited accounts: {record}"
     );
     assert!(
         !String::from_utf8_lossy(&output.stderr).contains("claude account"),

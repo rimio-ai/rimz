@@ -45,8 +45,11 @@ pub(super) fn resume_lane(
         .context("reading audit agent rollup")?;
     let focus = LaunchFocus::resolve(bg, resolve_caller(&projection.agents).as_ref());
     let worktrees = local_worktrees(&workspace)?;
-    let logins = rimz::agents::room_logins(&store.paths().workspace_record)?;
-    let catalog = rimz::agents::LoginCatalog::from_config(&machine_config.accounts)?;
+    let logins = rimz::agents::room_accounts(
+        &store.paths().workspace_record,
+        &rimz::config::MachineConfig::load_lenient(),
+    )?;
+    let catalog = rimz::agents::LoginCatalog::room_view(&machine_config.accounts);
     let selector = lane_selector(
         scope,
         from_pr.map(|target| target.number),
@@ -70,7 +73,7 @@ pub(super) fn resume_lane(
         Path::is_dir,
         resume_session_present,
         rimz::store::runtime::agent_liveness,
-        |path| discover_lane_sessions(path, &catalog, &logins),
+        |path| discover_lane_sessions(path, &machine_config.accounts, &logins),
         || {
             let availability = rimz::harness::plan::LaunchAvailability::read(
                 store.runtime_paths(),
@@ -98,8 +101,8 @@ pub(super) fn resume_lane(
     };
     for kind in action.agent_kinds_needing_preflight() {
         rimz::harness::launch::preflight_agent_kind(&workspace.project_root, kind.as_str(), cwd)?;
-        catalog
-            .room_login(&logins, kind)?
+        logins
+            .login(kind, &machine_config.accounts)?
             .health(&catalog.native_ambient(kind, &rimz::agents::ambient_env()))?;
     }
 
@@ -252,15 +255,15 @@ fn local_worktrees(workspace: &rimz::ResolvedWorkspace) -> Result<Vec<LaneWorktr
 /// session is one the room may resume.
 fn discover_lane_sessions(
     path: &Path,
-    catalog: &rimz::agents::LoginCatalog,
-    logins: &rimz::ids::RoomLogins,
+    accounts: &rimz::config::AccountsConfig,
+    logins: &rimz::agents::RoomAccounts,
 ) -> Vec<LocalSessionObservation> {
     let ambient = rimz::agents::ambient_env();
     rimz::agents::all_definitions()
         .filter(|adapter| adapter.spec().capabilities.local_session_discovery)
         .flat_map(|adapter| {
             let kind = rimz::ids::AgentKind::new_unchecked(adapter.spec().kind);
-            match catalog.room_login(logins, &kind) {
+            match logins.login(&kind, accounts) {
                 Ok(login) => login.local_sessions(adapter, &[path], &ambient),
                 Err(_) => Vec::new(),
             }

@@ -393,7 +393,7 @@ fn markers_and_legend_name_the_layer_that_decides() {
         None,
     );
     assert!(
-        project.contains("\n●  this project   ○  new rooms\n"),
+        project.contains("\n●  this project (claude)   ●  new rooms (codex)   ○  new rooms\n"),
         "{project}"
     );
     for row in &mut rows {
@@ -646,15 +646,15 @@ fn removed_notice_without_live_rooms_matches_reference() {
 }
 
 #[test]
-fn removed_notice_warns_about_live_room_defaults() {
+fn removed_notice_warns_about_live_room_pins() {
     for (live, warning) in [
         (
             vec!["rimz-one".to_owned()],
-            "warning: room rimz-one selects it as the default for new claude launches; add the account back or run `rimz accounts use claude default` inside each room",
+            "warning: room rimz-one pins it for new claude launches; add the account back, run `rimz accounts use --reset claude` to follow the defaults, or run `rimz accounts use claude default` inside each room",
         ),
         (
             vec!["rimz-one".to_owned(), "rimz-two".to_owned()],
-            "warning: rooms rimz-one, rimz-two select it as the default for new claude launches; add the account back or run `rimz accounts use claude default` inside each room",
+            "warning: rooms rimz-one, rimz-two pin it for new claude launches; add the account back, run `rimz accounts use --reset claude` to follow the defaults, or run `rimz accounts use claude default` inside each room",
         ),
     ] {
         let notice = removed_notice(

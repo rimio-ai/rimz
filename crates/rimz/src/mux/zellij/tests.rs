@@ -239,7 +239,7 @@ impl TestRoom {
                 root_class: crate::workspace::RootClass::Directory,
                 rimz_bin: None,
                 rimz_build: None,
-                logins: None,
+                pins: crate::ids::RoomLogins::new(),
                 updated_at: jiff::Timestamp::now(),
             },
         )

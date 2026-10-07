@@ -107,12 +107,18 @@ pub enum StoreErr {
     Snapshot(#[from] snapshot::SnapshotErr),
     #[error(transparent)]
     WorkspaceRecord(#[from] crate::workspace::record::WorkspaceRecordErr),
+    #[error(transparent)]
+    RoomLogin(#[from] Box<crate::agents::RoomLoginErr>),
     #[error("{0}")]
     AgentLaunchIdentity(String),
     #[error(
-        "this room already uses accounts {current}, not {requested}; switch it with `rimz accounts use`"
+        "this room uses {kind} account `{current}`, not `{requested}`; switch it with `rimz accounts use {kind} {requested}`"
     )]
-    RoomLoginsFrozen { current: String, requested: String },
+    RoomLoginsFrozen {
+        kind: crate::ids::AgentKind,
+        current: crate::ids::LoginName,
+        requested: crate::ids::LoginName,
+    },
     #[error("cannot access {path}: {source}")]
     Io {
         path: PathBuf,

@@ -299,20 +299,6 @@ pub(in crate::cli) fn launch_resolved(
             &projection.agents,
             explicit_worktree_name.as_deref(),
         )?;
-        for (index, cell) in layout.agent_cells().enumerate() {
-            preflighted_logins.push(preflight_cell(
-                workspace,
-                store.runtime_paths(),
-                cell,
-                rimz::config::Isolation::resolve(
-                    cell.launch.isolation,
-                    cell.isolation_default,
-                    machine_config.agents.isolation,
-                ),
-                prompt.filter(|_| Some(index) == prompt_agent_index),
-                &mut checked_folder_trust,
-            )?);
-        }
     }
     // Resolve where the launch lands before any side effect — the live-session
     // probe, worktree creation, the store append, the sidebar build — so an
@@ -364,6 +350,22 @@ pub(in crate::cli) fn launch_resolved(
         allow_in_place,
     );
     let in_place = placement == Placement::SamePane;
+    if !args.launch.cohort.resume {
+        for (index, cell) in layout.agent_cells().enumerate() {
+            preflighted_logins.push(preflight_cell(
+                workspace,
+                store.runtime_paths(),
+                cell,
+                rimz::config::Isolation::resolve(
+                    cell.launch.isolation,
+                    cell.isolation_default,
+                    machine_config.agents.isolation,
+                ),
+                prompt.filter(|_| Some(index) == prompt_agent_index),
+                &mut checked_folder_trust,
+            )?);
+        }
+    }
     let room = RoomContext::live_tab(workspace, machine_config.clone(), globals.mux)?;
     let mux = room.mux_name();
     let backend = room.backend();
@@ -929,10 +931,11 @@ fn preflight_cell(
     let mut request =
         rimz::harness::launch::ExecRequest::bare_launch(cell.kind.clone(), Vec::new());
     let state = rimz::StatePaths::for_workspace(runtime.workspace_id.clone())?;
+    let machine = rimz::config::MachineConfig::load_lenient();
     let login = rimz::store::writer::LaunchLogin::RoomDefault.resolve(
         &cell.kind,
-        &rimz::agents::room_logins(&state.workspace_record)?,
-        &rimz::config::MachineConfig::load_lenient().accounts,
+        &rimz::agents::room_accounts(&state.workspace_record, &machine)?,
+        &machine.accounts,
     )?;
     request.identity.params.login = (!login.is_default()).then(|| login.name().clone());
     request.skills.clone_from(&cell.skills);
@@ -1008,7 +1011,10 @@ fn launch_resume_layout(
     let cells = cohort_cells(&layout);
     let spec = args.launch.spec.as_deref().unwrap_or("<spec>");
     let scope = worktree_filter.and_then(worktree_scope_label);
-    let logins = rimz::agents::room_logins(&store.paths().workspace_record)?;
+    let logins = rimz::agents::room_accounts(
+        &store.paths().workspace_record,
+        &rimz::config::MachineConfig::load_lenient(),
+    )?;
     let team = team_name.as_deref().and_then(|name| teams.0.get(name));
     let mut plan = rimz::harness::resume::plan_cohort_resume(
         &agents,

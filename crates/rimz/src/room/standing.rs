@@ -75,96 +75,69 @@ pub enum Deciding {
 /// machine declares.
 #[derive(Debug)]
 pub struct AccountStanding {
-    recorded: Option<RoomLogins>,
-    /// `None` when the position's layers could not be read.
+    accounts: Option<crate::agents::RoomAccounts>,
     project: Option<ProjectLogins>,
     machine: RoomLogins,
-    declared: BTreeSet<LoginKey>,
 }
 
 impl AccountStanding {
-    /// The standing at `project_root` under `machine`'s `[accounts.use]`.
+    /// The standing at `project_root` under the live pin-or-inherit selection.
     pub fn at(project_root: &Path, machine: &MachineConfig) -> Result<Self> {
         let state = StatePaths::for_project_root(project_root).context("preparing store paths")?;
-        let recorded = crate::workspace::record::read_optional(&state.workspace_record)
-            .context("reading the room's accounts")?
-            .and_then(|record| record.logins);
+        let accounts = if state.workspace_record.exists() {
+            crate::agents::room_accounts(&state.workspace_record, machine)?
+        } else {
+            crate::agents::resolve_room_accounts(&RoomLogins::new(), project_root, machine)
+        };
         Ok(Self {
-            recorded,
-            project: Some(crate::trust::project_logins(project_root)?),
-            ..Self::machine_only(machine)
+            accounts: Some(accounts),
+            project: crate::trust::project_logins(project_root).ok(),
+            machine: machine.accounts.use_accounts.clone(),
         })
     }
 
     /// The standing with no room and no project: the machine layer alone.
     pub fn machine_only(machine: &MachineConfig) -> Self {
         Self {
-            recorded: None,
+            accounts: Some(crate::agents::RoomAccounts::machine(machine)),
             project: Some(ProjectLogins::Unconfigured),
             machine: machine.accounts.use_accounts.clone(),
-            declared: declared_accounts(machine),
         }
     }
 
-    /// The standing when the position's room or project layer could not be
-    /// read: no account is active, since birth would not launch there, and
-    /// only the machine layer's scopes are known.
+    /// An unreadable position has no active account; machine scopes remain known.
     pub fn unread(machine: &MachineConfig) -> Self {
         Self {
+            accounts: None,
             project: None,
-            ..Self::machine_only(machine)
+            machine: machine.accounts.use_accounts.clone(),
         }
     }
 
-    /// The account a launch here uses for `kind`; `None` where no launch
-    /// resolves: no room is recorded and the project's selection is blocked
-    /// or unreadable, or the deciding layer names an undeclared account.
+    /// The kind's current account, or none when that kind cannot launch here.
     pub fn active(&self, kind: &AgentKind) -> Option<LoginName> {
-        let name = self.selection(kind)?;
-        (name.is_default()
-            || self
-                .declared
-                .contains(&LoginKey::new(kind.clone(), name.clone())))
-        .then_some(name)
+        self.accounts.as_ref()?.name(kind).ok()
     }
 
-    fn selection(&self, kind: &AgentKind) -> Option<LoginName> {
-        if let Some(recorded) = &self.recorded {
-            return Some(recorded.get(kind).cloned().unwrap_or_default());
-        }
-        let project = match self.project.as_ref()? {
-            ProjectLogins::Unconfigured => &RoomLogins::new(),
-            ProjectLogins::Apply(logins) => logins,
-            ProjectLogins::Blocked(_) => return None,
-        };
-        Some(crate::agents::birth_name(
-            kind,
-            &RoomLogins::new(),
-            project,
-            &self.machine,
-        ))
-    }
-
-    /// The layer the active account of `kind` follows; `None` exactly when
-    /// [`Self::active`] is.
+    /// The layer a launch of this kind follows.
     pub fn deciding(&self, kind: &AgentKind) -> Option<Deciding> {
-        self.active(kind)?;
-        if self.recorded.is_some() {
-            return Some(Deciding::Room);
-        }
-        match self.project.as_ref()? {
-            ProjectLogins::Apply(logins) if logins.contains_key(kind) => Some(Deciding::Project),
-            _ => Some(Deciding::Machine),
-        }
+        Some(match self.accounts.as_ref()?.source(kind).ok()? {
+            crate::agents::LoginSource::Pinned => Deciding::Room,
+            crate::agents::LoginSource::Project => Deciding::Project,
+            crate::agents::LoginSource::Machine | crate::agents::LoginSource::Provider => {
+                Deciding::Machine
+            }
+        })
     }
 
-    /// The layers `name` is the default of for `kind`.
+    /// The layers that explicitly select `name` for `kind`.
     pub fn scopes(&self, kind: &AgentKind, name: &LoginName) -> Scopes {
         let mut scopes = BTreeSet::new();
         if self
-            .recorded
+            .accounts
             .as_ref()
-            .is_some_and(|recorded| recorded.get(kind).cloned().unwrap_or_default() == *name)
+            .and_then(|accounts| accounts.pin(kind))
+            == Some(name)
         {
             scopes.insert(Scope::ThisRoom);
         }
@@ -179,14 +152,18 @@ impl AccountStanding {
         Scopes(scopes)
     }
 
-    /// Every account some layer names, declared or not.
+    /// Every account a layer names, declared or not.
     pub fn selected(&self) -> BTreeSet<LoginKey> {
+        let pins = self
+            .accounts
+            .as_ref()
+            .map(crate::agents::RoomAccounts::pinned_names)
+            .unwrap_or_default();
         let project = match &self.project {
             Some(ProjectLogins::Apply(logins)) => Some(logins),
             _ => None,
         };
-        self.recorded
-            .iter()
+        std::iter::once(&pins)
             .chain(project)
             .chain(std::iter::once(&self.machine))
             .flatten()
@@ -194,43 +171,24 @@ impl AccountStanding {
             .collect()
     }
 
-    /// Whether `name` is named by the machine layer for `kind`, so its
-    /// problem is reported against `[accounts.use]`.
+    /// Whether the machine selects `name`, for source-specific diagnostics.
     pub fn machine_selects(&self, kind: &AgentKind, name: &LoginName) -> bool {
         self.machine.get(kind) == Some(name)
     }
 
-    /// Why no account is active for any kind, with the fix: the project's
-    /// selection is blocked and no room is recorded here.
+    /// The kind-specific refusals, without hiding other kinds' active accounts.
     pub fn blocked(&self) -> Option<String> {
-        match (&self.recorded, &self.project) {
-            (None, Some(ProjectLogins::Blocked(state))) => Some(blocked_project_logins(*state)),
-            _ => None,
-        }
+        let accounts = self.accounts.as_ref()?;
+        let problems: BTreeSet<_> = crate::agents::known_kinds()
+            .filter_map(|kind| {
+                accounts
+                    .account(&AgentKind::new_unchecked(kind))
+                    .err()
+                    .map(|error| error.to_string())
+            })
+            .collect();
+        (!problems.is_empty()).then(|| problems.into_iter().collect::<Vec<_>>().join("; "))
     }
-}
-
-fn declared_accounts(machine: &MachineConfig) -> BTreeSet<LoginKey> {
-    crate::agents::known_kinds()
-        .map(AgentKind::new_unchecked)
-        .flat_map(|kind| {
-            machine
-                .accounts
-                .named(&kind)
-                .into_iter()
-                .flat_map(BTreeMap::keys)
-                .map(move |name| LoginKey::new(kind.clone(), name.clone()))
-        })
-        .collect()
-}
-
-/// The refusal for a project account selection behind a closed trust gate.
-pub(super) fn blocked_project_logins(state: crate::trust::TrustState) -> String {
-    format!(
-        "project account selections in .rimz/config.toml are {}; {}",
-        state.as_str(),
-        crate::trust::blocked_fix(state)
-    )
 }
 
 /// Agents per account whose provider can be writing, across every live room,

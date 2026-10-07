@@ -1,5 +1,104 @@
 use super::*;
 
+fn reset_config() -> crate::config::MachineConfig {
+    crate::config::MachineConfig {
+        accounts: toml::from_str("[codex.work]\nhome = \"/srv/work\"\n[codex.team]\nhome = \"/srv/team\"\n[use]\ncodex = \"work\"\n").unwrap(),
+        ..Default::default()
+    }
+}
+
+fn project_accounts(root: &Path, value: &str) {
+    std::fs::create_dir_all(root.join(".rimz")).unwrap();
+    std::fs::write(root.join(".rimz/config.toml"), value).unwrap();
+}
+
+#[test]
+fn inherited_selection_reports_each_layer() {
+    let root = tempfile::tempdir().unwrap();
+    let kind = crate::ids::AgentKind::new_unchecked("codex");
+    let mut config = reset_config();
+    assert_eq!(
+        inherited_selection(root.path(), &config, &kind).unwrap(),
+        ("work".parse().unwrap(), LoginSource::Machine)
+    );
+    config.accounts.use_accounts.clear();
+    assert_eq!(
+        inherited_selection(root.path(), &config, &kind).unwrap(),
+        (
+            crate::ids::LoginName::default_login(),
+            LoginSource::Provider
+        )
+    );
+    config
+        .accounts
+        .use_accounts
+        .insert(kind.clone(), "missing".parse().unwrap());
+    project_accounts(root.path(), "[accounts]\ncodex = \"team\"\n");
+    crate::trust::grant(root.path()).unwrap();
+    assert_eq!(
+        inherited_selection(root.path(), &config, &kind).unwrap(),
+        ("team".parse().unwrap(), LoginSource::Project)
+    );
+}
+
+#[test]
+fn inherited_selection_refuses_untrusted_and_stale_projects_even_for_other_kinds() {
+    let root = tempfile::tempdir().unwrap();
+    let kind = crate::ids::AgentKind::new_unchecked("codex");
+    let config = reset_config();
+    project_accounts(root.path(), "[accounts]\nclaude = \"default\"\n");
+    let error = inherited_selection(root.path(), &config, &kind)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("project account selections in .rimz/config.toml are untrusted")
+            && error.contains("rimz trust grant"),
+        "{error}"
+    );
+    crate::trust::grant(root.path()).unwrap();
+    project_accounts(root.path(), "[accounts]\nclaude = \"work\"\n");
+    let error = inherited_selection(root.path(), &config, &kind)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("project account selections in .rimz/config.toml are stale")
+            && error.contains("since your last grant")
+            && error.contains("rimz trust grant"),
+        "{error}"
+    );
+}
+
+#[test]
+fn inherited_selection_refuses_unreadable_core_before_project_trust() {
+    let root = tempfile::tempdir().unwrap();
+    project_accounts(root.path(), "[accounts]\nclaude = \"default\"\n");
+    let mut config = reset_config();
+    config.notices.unreadable_files.insert(
+        crate::config::MachineConfig::config_path(),
+        "broken TOML".to_owned(),
+    );
+    let error = inherited_selection(
+        root.path(),
+        &config,
+        &crate::ids::AgentKind::new_unchecked("codex"),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        error.contains("cannot resolve this room's account") && error.contains("broken TOML"),
+        "{error}"
+    );
+}
+
+fn inherited_selection(
+    root: &Path,
+    machine: &crate::config::MachineConfig,
+    kind: &AgentKind,
+) -> Result<(LoginName, LoginSource), RoomLoginErr> {
+    let account = resolve_room_accounts(&RoomLogins::new(), root, machine).account(kind)?;
+    Ok((account.name, account.source))
+}
+
 fn kind(value: &str) -> AgentKind {
     AgentKind::new_unchecked(value)
 }
@@ -10,6 +109,100 @@ fn name(value: &str) -> LoginName {
 
 fn accounts(toml: &str) -> AccountsConfig {
     toml::from_str(toml).expect("accounts config")
+}
+
+#[test]
+fn live_accounts_resolve_each_layer_and_follow_changes_without_moving_pins() {
+    let root = tempfile::tempdir().unwrap();
+    let mut machine = crate::config::MachineConfig {
+        accounts: accounts(
+            "[claude.work]\nhome = \"/srv/claude-work\"\n[codex.work]\nhome = \"/srv/codex-work\"\n[use]\nclaude = \"work\"\ncodex = \"work\"\n",
+        ),
+        ..Default::default()
+    };
+    let pins = RoomLogins::from([(kind("claude"), name("default"))]);
+    let selected = resolve_room_accounts(&pins, root.path(), &machine);
+    assert_eq!(selected.name(&kind("claude")).unwrap(), name("default"));
+    assert_eq!(
+        selected.source(&kind("claude")).unwrap(),
+        LoginSource::Pinned
+    );
+    assert_eq!(selected.name(&kind("codex")).unwrap(), name("work"));
+    assert_eq!(
+        selected.source(&kind("codex")).unwrap(),
+        LoginSource::Machine
+    );
+    machine.accounts.use_accounts.clear();
+    let selected = resolve_room_accounts(&pins, root.path(), &machine);
+    assert_eq!(
+        selected.source(&kind("claude")).unwrap(),
+        LoginSource::Pinned
+    );
+    assert_eq!(
+        selected.source(&kind("codex")).unwrap(),
+        LoginSource::Provider
+    );
+    std::fs::create_dir(root.path().join(".rimz")).unwrap();
+    std::fs::write(
+        root.path().join(".rimz/config.toml"),
+        "[accounts]\ncodex = \"work\"\n",
+    )
+    .unwrap();
+    crate::trust::grant(root.path()).unwrap();
+    let selected = resolve_room_accounts(&pins, root.path(), &machine);
+    assert_eq!(selected.name(&kind("codex")).unwrap(), name("work"));
+    assert_eq!(
+        selected.source(&kind("codex")).unwrap(),
+        LoginSource::Project
+    );
+}
+
+#[test]
+fn live_account_refusals_are_per_kind_and_default_pins_need_no_core_or_trust() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join(".rimz")).unwrap();
+    std::fs::write(
+        root.path().join(".rimz/config.toml"),
+        "[accounts]\ncodex = \"work\"\n",
+    )
+    .unwrap();
+    let mut machine = crate::config::MachineConfig::default();
+    let pins = RoomLogins::from([(kind("claude"), name("default"))]);
+    let selected = resolve_room_accounts(&pins, root.path(), &machine);
+    assert_eq!(selected.name(&kind("claude")).unwrap(), name("default"));
+    assert!(
+        selected
+            .name(&kind("codex"))
+            .unwrap_err()
+            .to_string()
+            .contains("untrusted")
+    );
+    machine.notices.unreadable_files.insert(
+        crate::config::MachineConfig::config_path(),
+        "broken TOML".to_owned(),
+    );
+    let selected = resolve_room_accounts(&pins, root.path(), &machine);
+    assert_eq!(selected.name(&kind("claude")).unwrap(), name("default"));
+    assert!(
+        selected
+            .name(&kind("codex"))
+            .unwrap_err()
+            .to_string()
+            .contains("broken TOML")
+    );
+}
+
+#[test]
+fn reset_selection_validates_only_the_requested_kind() {
+    let root = tempfile::tempdir().unwrap();
+    let machine = crate::config::MachineConfig {
+        accounts: accounts("[use]\nclaude = \"missing\"\n"),
+        ..Default::default()
+    };
+    let selected = resolve_room_accounts(&RoomLogins::new(), root.path(), &machine);
+    assert_eq!(selected.name(&kind("codex")).unwrap(), name("default"));
+    let error = selected.name(&kind("claude")).unwrap_err().to_string();
+    assert!(error.contains("selected by [accounts.use]"), "{error}");
 }
 
 #[test]
@@ -35,7 +228,11 @@ fn room_login_set_includes_only_defaults_and_live_root_stamps() {
         Some(Path::new("/home/u")),
     )
     .unwrap();
-    let set = RoomLoginSet::new(Some(RoomLogins::new()), Some(catalog), BTreeMap::new());
+    let set = RoomLoginSet::new(
+        Some(RoomLogins::new().into()),
+        Some(catalog),
+        BTreeMap::new(),
+    );
     let mut root = super::super::AgentState::seed(
         kind("claude"),
         "root".into(),
@@ -81,7 +278,7 @@ fn declared_answers_every_catalog_login_of_a_kind_and_none_without_a_catalog() {
     )
     .unwrap();
     let set = RoomLoginSet::new(
-        Some(RoomLogins::from([(kind("codex"), name("work"))])),
+        Some(RoomLogins::from([(kind("codex"), name("work"))]).into()),
         Some(catalog),
         BTreeMap::new(),
     );
@@ -91,7 +288,7 @@ fn declared_answers_every_catalog_login_of_a_kind_and_none_without_a_catalog() {
         .map(|login| login.key().to_string())
         .collect();
     assert_eq!(declared, ["codex@default", "codex@work"]);
-    let unloaded = RoomLoginSet::new(Some(RoomLogins::new()), None, BTreeMap::new());
+    let unloaded = RoomLoginSet::new(Some(RoomLogins::new().into()), None, BTreeMap::new());
     assert!(unloaded.declared("codex").is_empty());
 }
 
@@ -226,14 +423,12 @@ fn catalog_refuses_reserved_duplicate_relative_and_native_homes() {
 
 #[test]
 fn room_selection_names_one_login_per_kind() {
-    let catalog = LoginCatalog::from_config_under(
-        &accounts("[claude.work]\nhome = \"/srv/work\""),
-        Some(Path::new("/home/u")),
-    )
-    .expect("catalog");
-    let selection = RoomLogins::from([(kind("claude"), name("work"))]);
+    let config = accounts("[claude.work]\nhome = \"/srv/work\"");
+    let selection: RoomAccounts = RoomLogins::from([(kind("claude"), name("work"))]).into();
 
-    let room = catalog.room(&selection).expect("room logins");
+    let room: Vec<_> = crate::agents::known_kinds()
+        .map(|kind_name| selection.login(&kind(kind_name), &config).unwrap())
+        .collect();
     assert_eq!(room.len(), crate::agents::known_kinds().count());
     let claude = room
         .iter()
@@ -247,19 +442,19 @@ fn room_selection_names_one_login_per_kind() {
     );
 
     assert_eq!(
-        catalog.room_login(&selection, &kind("claude")).unwrap(),
+        selection.login(&kind("claude"), &config).unwrap(),
         claude.clone()
     );
     assert!(
-        catalog
-            .room_login(&selection, &kind("codex"))
+        selection
+            .login(&kind("codex"), &config)
             .unwrap()
             .is_default()
     );
 }
 
 #[test]
-fn birth_selection_prefers_requested_over_project_and_keeps_a_frozen_room() {
+fn birth_selection_prefers_requested_over_project() {
     let catalog = LoginCatalog::from_config_under(
         &accounts("[claude.work]\n[claude.personal]\n[codex.work]\n"),
         Some(Path::new("/home/u")),
@@ -272,7 +467,7 @@ fn birth_selection_prefers_requested_over_project_and_keeps_a_frozen_room() {
     ]);
 
     let born = catalog
-        .birth_selection(None, &requested, &project, &RoomLogins::new())
+        .birth_selection(&requested, &project, &RoomLogins::new())
         .expect("fresh birth");
     assert_eq!(
         born,
@@ -283,12 +478,7 @@ fn birth_selection_prefers_requested_over_project_and_keeps_a_frozen_room() {
     );
     assert_eq!(
         catalog
-            .birth_selection(
-                None,
-                &RoomLogins::new(),
-                &RoomLogins::new(),
-                &RoomLogins::new()
-            )
+            .birth_selection(&RoomLogins::new(), &RoomLogins::new(), &RoomLogins::new())
             .expect("default birth"),
         RoomLogins::from([
             (kind("claude"), LoginName::default_login()),
@@ -296,37 +486,15 @@ fn birth_selection_prefers_requested_over_project_and_keeps_a_frozen_room() {
         ])
     );
 
-    assert_eq!(
-        catalog.birth_selection(
-            Some(&born),
-            &RoomLogins::new(),
-            &RoomLogins::new(),
-            &RoomLogins::new()
-        ),
-        Ok(born.clone())
-    );
-    assert_eq!(
-        catalog.birth_selection(Some(&born), &requested, &project, &RoomLogins::new()),
-        Ok(born.clone())
-    );
-    let other = RoomLogins::from([(kind("claude"), name("personal"))]);
-    let refused = catalog
-        .birth_selection(Some(&born), &other, &RoomLogins::new(), &RoomLogins::new())
-        .unwrap_err();
-    assert_eq!(
-        refused.to_string(),
-        "this room uses claude account `work`, not `personal`; switch it with `rimz accounts use claude personal`"
-    );
-
     let unknown = RoomLogins::from([(kind("claude"), name("travel"))]);
     assert!(matches!(
-        catalog.birth_selection(None, &RoomLogins::new(), &unknown, &RoomLogins::new()),
+        catalog.birth_selection(&RoomLogins::new(), &unknown, &RoomLogins::new()),
         Err(BirthLoginErr::Login(LoginErr::Unknown { .. }))
     ));
     let escape = RoomLogins::from([(kind("claude"), LoginName::default_login())]);
     assert_eq!(
         catalog
-            .birth_selection(None, &escape, &unknown, &RoomLogins::new())
+            .birth_selection(&escape, &unknown, &RoomLogins::new())
             .expect("a flag overrides an undeclared project account")
             .get(&kind("claude")),
         Some(&LoginName::default_login())
@@ -368,7 +536,7 @@ fn a_named_account_preflights_its_home_and_hooks() {
 }
 
 #[test]
-fn machine_selection_fills_only_unset_kinds_and_never_changes_frozen_accounts() {
+fn machine_selection_fills_only_unset_kinds() {
     let catalog = LoginCatalog::from_config_under(
         &accounts("[claude.work]\n[codex.work]\n"),
         Some(Path::new("/home/u")),
@@ -379,32 +547,24 @@ fn machine_selection_fills_only_unset_kinds_and_never_changes_frozen_accounts() 
         (kind("claude"), name("work")),
         (kind("codex"), name("work")),
     ]);
-    let born = catalog
-        .birth_selection(None, &empty, &empty, &machine)
-        .unwrap();
+    let born = catalog.birth_selection(&empty, &empty, &machine).unwrap();
     assert_eq!(born, machine);
     let requested = RoomLogins::from([(kind("claude"), LoginName::default_login())]);
     let project = RoomLogins::from([(kind("codex"), LoginName::default_login())]);
     let overridden = catalog
-        .birth_selection(None, &requested, &project, &machine)
+        .birth_selection(&requested, &project, &machine)
         .unwrap();
     assert!(overridden.values().all(LoginName::is_default));
     let dangling = RoomLogins::from([(kind("codex"), name("missing"))]);
     assert_eq!(
         catalog
-            .birth_selection(Some(&born), &empty, &empty, &dangling)
-            .unwrap(),
-        born
-    );
-    assert_eq!(
-        catalog
-            .birth_selection(None, &project, &empty, &dangling)
+            .birth_selection(&project, &empty, &dangling)
             .unwrap()[&kind("codex")],
         LoginName::default_login()
     );
     assert_eq!(
         catalog
-            .birth_selection(None, &empty, &project, &dangling)
+            .birth_selection(&empty, &project, &dangling)
             .unwrap()[&kind("codex")],
         LoginName::default_login()
     );
@@ -418,7 +578,7 @@ fn deciding_machine_selection_refuses_unknown_names_and_unsupported_kinds() {
     for provider in ["codex", "grok"] {
         let machine = RoomLogins::from([(kind(provider), name("missing"))]);
         let error = catalog
-            .birth_selection(None, &RoomLogins::new(), &RoomLogins::new(), &machine)
+            .birth_selection(&RoomLogins::new(), &RoomLogins::new(), &machine)
             .unwrap_err()
             .to_string();
         assert!(error.contains("[accounts.use]"), "{error}");
@@ -455,7 +615,7 @@ fn room_login_set_answers_the_room_account_and_nothing_it_cannot_resolve() {
     .expect("catalog");
     let ambient = BTreeMap::from([("HOME".to_owned(), "/home/u".to_owned())]);
     let set = RoomLoginSet::new(
-        Some(RoomLogins::from([(kind("claude"), name("work"))])),
+        Some(RoomLogins::from([(kind("claude"), name("work"))]).into()),
         Some(catalog.clone()),
         ambient.clone(),
     );
@@ -474,7 +634,7 @@ fn room_login_set_answers_the_room_account_and_nothing_it_cannot_resolve() {
     );
 
     let removed = RoomLoginSet::new(
-        Some(RoomLogins::from([(kind("claude"), name("gone"))])),
+        Some(RoomLogins::from([(kind("claude"), name("gone"))]).into()),
         Some(catalog),
         ambient.clone(),
     );

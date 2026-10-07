@@ -853,6 +853,12 @@ fn adoption_inherits_immediate_parent_before_flattening_cross_kind_lineage() {
 
 #[test]
 fn ingress_stamps_the_rooms_account_only_on_rows_it_creates() {
+    if crate::store::writer::tests::account_test_home(
+        "store::writer::lifecycle::tests::ingress_stamps_the_rooms_account_only_on_rows_it_creates",
+    ) {
+        return;
+    }
+    std::fs::write(crate::config::MachineConfig::config_path(), "[accounts.claude.work]\nhome = \"/srv/claude-work\"\n[accounts.codex.work]\nhome = \"/srv/codex-work\"\n[accounts.use]\ncodex = \"work\"\n").unwrap();
     let dir = tempfile::tempdir().expect("tempdir");
     let workspace =
         crate::workspace::WorkspaceResolver::resolve(dir.path(), None).expect("workspace");
@@ -885,7 +891,7 @@ fn ingress_stamps_the_rooms_account_only_on_rows_it_creates() {
     append("claude", "before", LifecycleSignal::Registered);
     let work = "work".parse::<LoginName>().expect("login name");
     store
-        .record_room_logins(
+        .pin_room_logins(
             &workspace,
             &crate::ids::RoomLogins::from([(AgentKind::new_unchecked("claude"), work.clone())]),
         )
@@ -902,7 +908,7 @@ fn ingress_stamps_the_rooms_account_only_on_rows_it_creates() {
     assert_eq!(login("before"), Some(None));
     assert_eq!(login("resumed"), Some(Some(work.clone())));
     assert_eq!(login("unseen"), Some(Some(work)));
-    assert_eq!(login("other"), Some(None));
+    assert_eq!(login("other"), Some(Some("work".parse().unwrap())));
 }
 
 #[test]

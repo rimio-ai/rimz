@@ -1411,10 +1411,7 @@ fn account_budget_isolates_logins_and_projects_the_room_account() {
     );
 
     let logins = RoomLoginSet::new(
-        Some(BTreeMap::from([(
-            work_key.kind.clone(),
-            work_key.name.clone(),
-        )])),
+        Some(BTreeMap::from([(work_key.kind.clone(), work_key.name.clone())]).into()),
         Some(crate::agents::LoginCatalog::from_config(&config.accounts).expect("catalog")),
         BTreeMap::new(),
     )

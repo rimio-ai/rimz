@@ -14,7 +14,6 @@ use crate::store::{
     session_death,
     snapshot::{self, find_agent},
 };
-use crate::workspace::record;
 
 use super::{Store, debounce};
 use crate::store::Result;
@@ -138,10 +137,17 @@ impl Store {
                         .iter()
                         .any(|child| creates_row(&child.child_agent_id))
                 {
-                    record::read_optional(&txn.paths.workspace_record)?
-                        .and_then(|record| record.logins)
-                        .and_then(|mut logins| logins.remove(&intent.agent_kind))
-                        .filter(|name| !name.is_default())
+                    let accounts = crate::agents::room_accounts(
+                        &txn.paths.workspace_record,
+                        &crate::config::MachineConfig::load_lenient(),
+                    );
+                    match accounts.and_then(|accounts| accounts.name(&intent.agent_kind)) {
+                        Ok(name) => (!name.is_default()).then_some(name),
+                        Err(err) => {
+                            tracing::warn!(error = %err, kind = %intent.agent_kind, "hook-first account unavailable; leaving the row unstamped");
+                            None
+                        }
+                    }
                 } else {
                     None
                 };

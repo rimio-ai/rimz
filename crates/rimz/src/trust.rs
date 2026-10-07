@@ -575,6 +575,15 @@ pub(crate) fn project_logins(project_root: &Path) -> Result<ProjectLogins> {
     project_logins_with_roots(project_root, &rimz_home())
 }
 
+/// The refusal for a project account selection behind a closed trust gate.
+pub(crate) fn blocked_project_logins(state: TrustState) -> String {
+    format!(
+        "project account selections in .rimz/config.toml are {}; {}",
+        state.as_str(),
+        blocked_fix(state)
+    )
+}
+
 fn project_logins_with_roots(project_root: &Path, config_root: &Path) -> Result<ProjectLogins> {
     let Some(config) = read_project_config_at(project_root, config_root)? else {
         return Ok(ProjectLogins::Unconfigured);

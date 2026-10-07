@@ -233,7 +233,7 @@ mod tests {
         );
 
         let logins = crate::agents::RoomLoginSet::new(
-            Some(crate::ids::RoomLogins::new()),
+            Some(crate::ids::RoomLogins::new().into()),
             None,
             Default::default(),
         );

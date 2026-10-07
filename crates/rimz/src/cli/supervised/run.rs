@@ -155,8 +155,6 @@ struct PreparedRun {
     agent_launched: bool,
     /// The launching agent's handle, whose `out/` directory receives the response.
     reader: Option<String>,
-    /// The room's accounts as a cold birth would freeze them.
-    logins: rimz::ids::RoomLogins,
 }
 
 struct PresentationWaiter {
@@ -511,12 +509,10 @@ fn prepare_supervised(
     };
     let mut preflight_launch = agent_cell.launch.clone();
     preflight_launch.channel.clone_from(&request.channel);
-    let logins = rimz::room::select_birth_logins(
-        &workspace.project_root,
-        &machine_config,
-        &rimz::ids::RoomLogins::new(),
-        false,
-    )?;
+    let pins = rimz::agents::room_accounts(&store.paths().workspace_record, &machine_config)?
+        .pinned_names();
+    let logins =
+        rimz::agents::resolve_room_accounts(&pins, &workspace.project_root, &machine_config);
     let login = launch_login(request, caller, &agent_cell.kind).resolve(
         &agent_cell.kind,
         &logins,
@@ -587,7 +583,6 @@ fn prepare_supervised(
         ancestry,
         agent_launched,
         reader,
-        logins,
     }))
 }
 
@@ -881,7 +876,6 @@ pub(in crate::cli) fn run_supervised(
     let Some(mut prepared) = prepare_supervised(&request, &presentation, globals)? else {
         return Ok(None);
     };
-    let logins = prepared.logins.clone();
     let mux = rimz::mux::auto_detect_backend(globals.mux)?;
     let mut room = rimz::room::RoomContext::from_resolved(
         &prepared.workspace,
@@ -889,21 +883,6 @@ pub(in crate::cli) fn run_supervised(
         mux,
         rimz::room::RoomSizing::Birth,
     )?;
-    let was_live = room.backend().list_sessions().map_or(true, |sessions| {
-        sessions.iter().any(|name| name == room.session_name())
-    });
-    // A live room answers from its record, not the cold-birth resolution.
-    let logins = if was_live {
-        rimz::room::select_birth_logins(
-            &prepared.workspace.project_root,
-            &prepared.machine_config,
-            &rimz::ids::RoomLogins::new(),
-            true,
-        )?
-    } else {
-        logins
-    };
-    room.freeze_logins(&logins)?;
     let login_key = rimz::ids::LoginKey {
         kind: prepared.kind.clone(),
         name: prepared.login.clone(),

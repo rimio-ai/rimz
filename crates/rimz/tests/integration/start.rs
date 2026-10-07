@@ -1131,7 +1131,7 @@ fn room_logins(env: &Env) -> Option<serde_json::Value> {
     let record = env.state_path_for(&env.project_root).workspace_record;
     let text = std::fs::read_to_string(record).ok()?;
     let record: serde_json::Value = serde_json::from_str(&text).expect("workspace record json");
-    record.get("logins").cloned()
+    record.get("pins").cloned()
 }
 
 #[test]
@@ -1268,7 +1268,7 @@ fn start_refuses_named_accounts_it_cannot_launch_into() {
 }
 
 #[test]
-fn start_freezes_room_accounts_until_reset() {
+fn start_pins_only_requested_accounts_until_reset() {
     let env = Env::new();
     write_machine_config(&env, "[accounts.claude.work]\n");
     let born = start_with_accounts(&env, "", &["claude=default"], None);
@@ -1277,7 +1277,7 @@ fn start_freezes_room_accounts_until_reset() {
         "birth failed: {}",
         String::from_utf8_lossy(&born.stderr)
     );
-    let frozen = serde_json::json!({"claude": "default", "codex": "default"});
+    let frozen = serde_json::json!({"claude": "default"});
     assert_eq!(room_logins(&env), Some(frozen.clone()));
 
     let workspace = env.resolve_workspace(&env.project_root);
@@ -1365,10 +1365,7 @@ fn start_takes_project_accounts_only_under_trust() {
         "trusted start failed: {}",
         String::from_utf8_lossy(&trusted.stderr)
     );
-    assert_eq!(
-        room_logins(&env),
-        Some(serde_json::json!({"claude": "default", "codex": "default"}))
-    );
+    assert_eq!(room_logins(&env), None);
 }
 
 type LostAgent = (rimz::ids::AgentKind, rimz::ids::AgentSessionId);

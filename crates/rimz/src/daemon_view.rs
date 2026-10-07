@@ -563,7 +563,7 @@ struct DaemonViewInputsStamp {
     rimz_bin: StampedPath,
     claude_bin: Option<StampedPath>,
     codex_bin: Option<StampedPath>,
-    claude_settings: StampedPath,
+    claude_settings: Option<StampedPath>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -599,11 +599,15 @@ impl ResolvedDaemonInputs {
         let claude_bin = which::which("claude").ok();
         let codex_bin = crate::agents::runtime_control::installed_broker_bin();
         let machine = crate::config::MachineConfig::load_lenient();
-        let envs = crate::remote_control::HostLoginEnvs::for_room(record_path, &machine.accounts)
-            .unwrap_or_else(|_| crate::remote_control::HostLoginEnvs::ambient());
-        let claude_settings = crate::remote_control::claude_settings_path(
-            envs.for_host(crate::remote_control::RemoteControlHost::Claude),
-        );
+        let claude_settings = crate::agents::room_account(
+            record_path,
+            &machine,
+            &crate::ids::AgentKind::new_unchecked("claude"),
+        )
+        .ok()
+        .map(|login| {
+            crate::remote_control::claude_settings_path(&login.env(&crate::agents::ambient_env()))
+        });
         Self {
             stamp: DaemonViewInputsStamp {
                 config_generation: crate::config::MachineConfig::load_stamp_generation(),
@@ -611,7 +615,7 @@ impl ResolvedDaemonInputs {
                 rimz_bin: StampedPath::of(&rimz_bin),
                 claude_bin: claude_bin.as_deref().map(StampedPath::of),
                 codex_bin: codex_bin.as_deref().map(StampedPath::of),
-                claude_settings: StampedPath::of(&claude_settings),
+                claude_settings: claude_settings.as_deref().map(StampedPath::of),
             },
             rimz_bin,
             codex_present: codex_bin.is_some(),
@@ -714,7 +718,7 @@ impl DaemonRepairTracker {
                 // own preconditions before judging it. Probing first would read a
                 // precondition this pass is able to restore, and tear down a
                 // working host over a gap that outlives nothing but this tick.
-                let readiness = match crate::remote_control::HostLoginEnvs::for_room(&state.workspace_record, &machine.accounts) {
+                let readiness = match crate::remote_control::HostLoginEnvs::for_room(&state.workspace_record, &machine) {
                     Ok(envs) => {
                         crate::remote_control::prepare_hosts(&machine.remote_control, &envs);
                         crate::remote_control::ReadinessSnapshot::probe(&machine.remote_control, &envs)

@@ -27,10 +27,7 @@ fn provider_labels_include_only_non_default_logins() {
     let accounts = toml::from_str("[claude.work]\nhome = \"/srv/rimz-test-work\"\n").unwrap();
     let key: crate::ids::LoginKey = "claude@work".parse().unwrap();
     let work = crate::agents::RoomLoginSet::new(
-        Some(crate::ids::RoomLogins::from([(
-            key.kind.clone(),
-            key.name.clone(),
-        )])),
+        Some(crate::ids::RoomLogins::from([(key.kind.clone(), key.name.clone())]).into()),
         Some(crate::agents::LoginCatalog::from_config(&accounts).unwrap()),
         BTreeMap::new(),
     );
@@ -117,7 +114,7 @@ fn dashboard_shows_only_the_rooms_current_account_per_provider() {
     };
     let room = |selection: Option<crate::ids::RoomLogins>| {
         crate::agents::RoomLoginSet::new(
-            selection,
+            selection.map(Into::into),
             Some(crate::agents::LoginCatalog::from_config(&config.accounts).unwrap()),
             BTreeMap::new(),
         )

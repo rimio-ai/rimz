@@ -90,7 +90,10 @@ pub(super) fn run(args: ExplainArgs, globals: &GlobalFlags) -> Result<()> {
             .as_deref()
             .map(PathBuf::from)
             .unwrap_or_else(|| workspace.worktree_root.clone());
-        let logins = rimz::agents::room_logins(&state.workspace_record)?;
+        let logins = rimz::agents::room_accounts(
+            &state.workspace_record,
+            &rimz::config::MachineConfig::load_lenient(),
+        )?;
         let (action, login, note) = restart::relaunch_action(
             &agent,
             &logins,
@@ -181,9 +184,18 @@ pub(super) fn run(args: ExplainArgs, globals: &GlobalFlags) -> Result<()> {
             .expect("one cell yields one identity request")
             .launch;
         // A preview has no allocating batch; resolve its prospective account without writing a launch.
+        let accounts = if state.workspace_record.exists() {
+            rimz::agents::room_accounts(&state.workspace_record, &machine)?
+        } else {
+            rimz::agents::resolve_room_accounts(
+                &rimz::ids::RoomLogins::new(),
+                &workspace.project_root,
+                &machine,
+            )
+        };
         let login = rimz::store::writer::LaunchLogin::RoomDefault.resolve(
             &cell.kind,
-            &rimz::agents::room_logins(&state.workspace_record)?,
+            &accounts,
             &machine.accounts,
         )?;
         params.login = (!login.is_default()).then(|| login.name().clone());

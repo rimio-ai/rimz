@@ -1,10 +1,11 @@
 use super::*;
+use crate::ids::RoomLogins;
 
 #[test]
 fn host_login_envs_select_each_provider_account() {
     let accounts: AccountsConfig = toml::from_str("[claude.work]\nhome = \"/srv/work\"\n").unwrap();
     let logins = RoomLogins::from([(AgentKind::new_unchecked("claude"), "work".parse().unwrap())]);
-    let envs = HostLoginEnvs::from_logins(&accounts, &logins).unwrap();
+    let envs = HostLoginEnvs::from_logins(&accounts, &logins.into()).unwrap();
     let ambient = crate::agents::ambient_env();
     let mut claude = ambient.clone();
     claude.insert("CLAUDE_CONFIG_DIR".to_owned(), "/srv/work".to_owned());
@@ -39,7 +40,7 @@ fn host_login_envs_reject_unknown_accounts() {
         AgentKind::new_unchecked("claude"),
         "missing".parse().unwrap(),
     )]);
-    assert!(HostLoginEnvs::from_logins(&AccountsConfig::default(), &logins).is_err());
+    assert!(HostLoginEnvs::from_logins(&AccountsConfig::default(), &logins.into()).is_err());
 }
 
 #[test]
