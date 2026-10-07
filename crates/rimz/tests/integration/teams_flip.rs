@@ -1436,14 +1436,7 @@ fn compaction_delivery_error_does_not_fail_a_completed_flip() {
                 .output()
                 .unwrap(),
         );
-        assert!(
-            output.contains(if broken_wait_stamp {
-                "compact  skipped:"
-            } else {
-                "compact  queued"
-            }),
-            "{output}"
-        );
+        assert!(output.contains("compact  queued"), "{output}");
         assert!(
             std::fs::read_to_string(fixture.board())
                 .unwrap()
@@ -1461,7 +1454,7 @@ fn compaction_delivery_error_does_not_fail_a_completed_flip() {
         );
         assert!(rimz::harness::assist_log::recent(&fixture.env.rimz_home().join("logs"), None).iter().any(|record| matches!(
         &record.assist,
-        rimz::harness::assist_log::Assist::FlipCompact { message_id: Some(id), delivered: false, error, .. } if id == messages[0].message_id.as_str() && error.is_some() == broken_wait_stamp
+        rimz::harness::assist_log::Assist::FlipCompact { message_id: Some(id), delivered: false, error, .. } if id == messages[0].message_id.as_str() && error.is_none()
     )));
     }
 }

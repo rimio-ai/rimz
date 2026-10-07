@@ -836,7 +836,7 @@ fn dispatch_targets(
             decision,
         )?);
     }
-    deliver::register_message_wake(state.workspace, state.store)?;
+    deliver::refresh_message_wake(state.workspace, state.store);
     Ok((outcomes, compacted))
 }
 
@@ -962,7 +962,7 @@ fn dispatch_one(
     };
     let bound = target.bound(state.snapshot);
     let message = state.enqueue(target, Some(pane), text, mode, &handle)?;
-    deliver::arm_claim_wake(state.workspace, state.store);
+    deliver::refresh_message_wake(state.workspace, state.store);
     let message_id = message.message_id.clone();
     match deliver::execute_attempt(
         deliver::Attempt {

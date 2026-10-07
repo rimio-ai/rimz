@@ -5663,6 +5663,11 @@ fn fresh_claim_is_sent_when_its_recovery_wake_cannot_be_registered() {
         .args(["message", "@claude", "--", "retry after repair"])
         .output()
         .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains(WAKE_REFRESH_WARNING),
+        "{output:?}"
+    );
     let message = env.store().list_messages().unwrap().remove(0);
     assert_eq!(message.status, MessageStatus::Sent, "{output:?}");
     assert_eq!(message.attempts, 1);
@@ -5672,6 +5677,50 @@ fn fresh_claim_is_sent_when_its_recovery_wake_cannot_be_registered() {
         lines
             .iter()
             .filter(|line| is_paste(line, &user_message("retry after repair")))
+            .count(),
+        1
+    );
+    assert_eq!(lines.iter().filter(|line| is_enter_key(line)).count(), 1);
+}
+
+#[test]
+fn hook_delivery_is_sent_when_its_wake_cannot_be_refreshed() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    register_running_agent(
+        &env,
+        "sess-hook-broken-wake",
+        "hook-broken-wake",
+        &[("ZELLIJ_PANE_ID", "3")],
+    );
+    let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "claude")]);
+    let message_id = queue_add(&env, "@claude", "after the turn");
+    run_hook(
+        &env,
+        json!({"hook_event_name": "Stop", "session_id": "sess-hook-broken-wake", "worktree_branch": "hook-broken-wake"}),
+        &[("ZELLIJ_PANE_ID", "3")],
+    );
+    std::fs::remove_file(wake_stamp_path(&env)).unwrap();
+    std::fs::create_dir(wake_stamp_path(&env)).unwrap();
+    let trace = env.project_root.join("hook-broken-wake.log");
+    let output = run_success(
+        traced_rimz(&env, &trace)
+            .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+            .env("RIMZ_MESSAGE_SETTLE_MS", "0")
+            .args(["message", "deliver", "--message-id", &message_id]),
+        "hook delivery with a broken wake stamp",
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains(WAKE_REFRESH_WARNING),
+        "{output:?}"
+    );
+    let message = env.store().list_messages().unwrap().remove(0);
+    assert_eq!(message.status, MessageStatus::Sent, "{output:?}");
+    let lines = trace_lines(&trace);
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|line| is_paste(line, &user_message("after the turn")))
             .count(),
         1
     );
@@ -6184,6 +6233,7 @@ fn compact_first_sends_once_when_its_recovery_wake_cannot_be_registered() {
     std::fs::create_dir(wake_stamp_path(&env)).unwrap();
     release.write_all(&[1]).unwrap();
     let output = child.wait_with_output().unwrap();
+    assert!(output.status.success(), "{output:?}");
     assert!(env.store().list_message_history().unwrap().is_empty());
     let live = env.store().list_messages().unwrap();
     assert_eq!(live.len(), 2, "{output:?}");
@@ -8477,6 +8527,8 @@ fn deliver_direct_channel_message(env: &Env, channel: &str, text: &str) -> Strin
         .expect("confirm delivered");
     message.message_id.to_string()
 }
+
+const WAKE_REFRESH_WARNING: &str = "cannot refresh the message wake stamp";
 
 fn wake_stamp_path(env: &Env) -> PathBuf {
     env.runtime_paths().lane_path("message-wake.json")

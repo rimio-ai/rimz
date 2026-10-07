@@ -187,7 +187,7 @@ Delivery gates and `when` conditions read status differently, on purpose. Gates 
 4. **Bind conditions.** Each `after` and `when` address resolves once and pins a card. A condition already satisfied gets `met_at` stamped immediately, so upstream work must be queued before the message that waits on it.
 5. **Decide park or live, per target.** See below.
 6. **Deliver, per target in order.** A parked target first passes the hook preflight; then every target gets its durable record, live targets go straight into a delivery attempt, and parked ones stop at `Queued`.
-7. **Rearm the wake stamp** so the elder knows when to look again.
+7. **Rearm the wake stamp** so the elder knows when to look again. The rearm is best-effort: a stamp that cannot be written warns on stderr and never changes the send's reported outcome.
 
 The park-or-live decision (`dispatch_decision`) takes the first rule that applies:
 
