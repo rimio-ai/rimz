@@ -17,7 +17,9 @@ use crate::agents::{AgentCardRef, AgentDefinition, AgentState, AgentStatus, Turn
 use crate::ids::{AgentKind, AgentSessionId, MessageId};
 use crate::store::event::EventKind;
 use crate::store::event_log;
-use crate::store::message::{HarnessNotice, MessageRecord, MessageSender, MessageStatus};
+use crate::store::message::{
+    HarnessNotice, MessageRecord, MessageSender, MessageStatus, prompt_is_wake_only,
+};
 use crate::store::run::RunStatus;
 use crate::store::snapshot::SidebarSnapshot;
 
@@ -490,6 +492,7 @@ enum WaitPhase {
 struct CardView {
     status: AgentStatus,
     turn_started_at: Option<Timestamp>,
+    wake_turn: bool,
 }
 
 /// One wait poll's read of whether agents have finished a turn.
@@ -498,6 +501,7 @@ struct CardView {
 /// consumed, and a provider's turn start lands before the delivery ack settles
 /// that record. Reading the catalog, then the queue, then the rollup therefore
 /// catches every wake in flight in at least one of the three reads.
+/// Reply legs keep their anchor while sleeping and re-anchor on wake-only turns.
 pub struct TurnWaitView {
     pub snapshot: SidebarSnapshot,
     messages: Vec<MessageRecord>,
@@ -551,6 +555,7 @@ impl TurnWaitView {
         CardView {
             status: self.status(agent),
             turn_started_at: agent.turn_started_at,
+            wake_turn: agent.prompt.as_deref().is_some_and(prompt_is_wake_only),
         }
     }
 }
@@ -599,22 +604,22 @@ fn step_reply(turn_started_at: Option<Timestamp>, card: CardView) -> Step {
         TurnCompletion::Failed => return Step::Finish(RunStatus::Failed),
         TurnCompletion::Open => {}
     }
-    // The wake turn after a sleep continues this reply, so it must not read
-    // as a newer turn replacing the anchored one.
-    if card.status == AgentStatus::Sleeping {
-        return Step::Wait(WaitPhase::Reply {
-            turn_started_at: None,
-        });
-    }
+    // Only a non-wake running turn replaces the anchored reply turn.
     if card.status == AgentStatus::Running
         && turn_started_at.is_some()
         && card.turn_started_at.is_some()
         && turn_started_at != card.turn_started_at
+        && !card.wake_turn
     {
         return Step::Finish(RunStatus::Completed);
     }
+    let (kept, other) = if card.wake_turn {
+        (card.turn_started_at, turn_started_at)
+    } else {
+        (turn_started_at, card.turn_started_at)
+    };
     Step::Wait(WaitPhase::Reply {
-        turn_started_at: turn_started_at.or(card.turn_started_at),
+        turn_started_at: kept.or(other),
     })
 }
 

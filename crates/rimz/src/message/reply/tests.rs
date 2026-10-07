@@ -12,6 +12,7 @@ fn card(status: AgentStatus, started: i64) -> Option<CardView> {
     Some(CardView {
         status,
         turn_started_at: Some(Timestamp::from_second(started).unwrap()),
+        wake_turn: false,
     })
 }
 
@@ -97,6 +98,7 @@ fn delivery_and_reply_transitions_preserve_turn_boundaries() {
         let never_started = Some(CardView {
             status,
             turn_started_at: None,
+            wake_turn: false,
         });
         assert_eq!(
             step(
@@ -168,6 +170,69 @@ fn wake_in_flight_keeps_a_rested_agent_sleeping() {
 }
 
 #[test]
+fn wake_turn_continues_an_anchored_reply_without_a_sleeping_poll() {
+    let anchored = |second| WaitPhase::Reply {
+        turn_started_at: Some(Timestamp::from_second(second).unwrap()),
+    };
+    for (kind, status) in [
+        (DeliveryKind::Boundary, MessageStatus::Delivered),
+        (DeliveryKind::Steer, MessageStatus::Sent),
+    ] {
+        let mut wake = card(AgentStatus::Running, 2).unwrap();
+        wake.wake_turn = true;
+        assert_eq!(
+            step(anchored(1), kind, status, Some(wake)),
+            Step::Wait(anchored(2)),
+            "{kind:?}",
+        );
+        assert_eq!(
+            step(anchored(2), kind, status, card(AgentStatus::Success, 2)),
+            Step::Finish(RunStatus::Completed),
+            "{kind:?}",
+        );
+        assert_eq!(
+            step(anchored(1), kind, status, card(AgentStatus::Running, 2)),
+            Step::Finish(RunStatus::Completed),
+            "{kind:?}",
+        );
+    }
+}
+
+#[test]
+fn card_identifies_wake_turns_from_the_rollup_prompt() {
+    let mut agent = crate::testkit::agent_state("claude", "sess-wake", Timestamp::UNIX_EPOCH);
+    agent.status = AgentStatus::Running;
+    agent.turn_started_at = Some(Timestamp::UNIX_EPOCH);
+    let workspace = WorkspaceId::from_project_root(std::path::Path::new("/repo"));
+    let wait = "Type: WAIT\nFrom: @rimz\nContent:\nCheck back.";
+    let signal = "Type: SIGNAL\nFrom: @rimz\nContent:\nCI finished.";
+    let peer = "Type: AGENT_MESSAGE\nFrom: @coder\nContent:\nNext task.";
+    let mixed = format!("{wait}\n\n{peer}");
+    for (prompt, wake_turn) in [
+        (Some(wait), true),
+        (Some(signal), true),
+        (Some(peer), false),
+        (Some(mixed.as_str()), false),
+        (None, false),
+    ] {
+        agent.prompt = prompt.map(str::to_owned);
+        let view = TurnWaitView {
+            snapshot: SidebarSnapshot::build_with_agents(
+                workspace.clone(),
+                vec![agent.clone()],
+                Timestamp::UNIX_EPOCH,
+            ),
+            messages: Vec::new(),
+        };
+        assert_eq!(
+            view.card(&view.snapshot.agents[0]).wake_turn,
+            wake_turn,
+            "{prompt:?}",
+        );
+    }
+}
+
+#[test]
 fn sleeping_reply_waits_through_the_wake_turn() {
     let anchored = |second| WaitPhase::Reply {
         turn_started_at: Some(Timestamp::from_second(second).unwrap()),
@@ -181,17 +246,14 @@ fn sleeping_reply_waits_through_the_wake_turn() {
     let Step::Wait(slept) = sleeping else {
         panic!("sleeping agent finished the reply: {sleeping:?}");
     };
-    assert_eq!(
-        slept,
-        WaitPhase::Reply {
-            turn_started_at: None
-        }
-    );
+    assert_eq!(slept, anchored(1));
+    let mut wake_card = card(AgentStatus::Running, 2).unwrap();
+    wake_card.wake_turn = true;
     let wake = step(
         slept,
         DeliveryKind::Boundary,
         MessageStatus::Delivered,
-        card(AgentStatus::Running, 2),
+        Some(wake_card),
     );
     assert_eq!(wake, Step::Wait(anchored(2)));
     assert_eq!(
@@ -202,6 +264,25 @@ fn sleeping_reply_waits_through_the_wake_turn() {
             card(AgentStatus::Success, 2),
         ),
         Step::Finish(RunStatus::Completed)
+    );
+    assert_eq!(
+        step(
+            slept,
+            DeliveryKind::Boundary,
+            MessageStatus::Delivered,
+            card(AgentStatus::Running, 2),
+        ),
+        Step::Finish(RunStatus::Completed)
+    );
+    assert_eq!(
+        step(
+            slept,
+            DeliveryKind::Boundary,
+            MessageStatus::Delivered,
+            card(AgentStatus::Waiting, 2),
+        ),
+        Step::Wait(anchored(1)),
+        "an unrelated turn seen waiting must not become the anchor"
     );
 }
 
