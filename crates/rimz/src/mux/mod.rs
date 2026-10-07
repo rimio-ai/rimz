@@ -290,6 +290,13 @@ pub struct PaneListing {
     pub client_view: Option<ClientView>,
 }
 
+/// The pane's drawable terminal rectangle, excluding backend chrome.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PaneContentSize {
+    pub rows: u16,
+    pub cols: u16,
+}
+
 /// The freshest pane roster a backend push channel has cached without a
 /// control-plane command.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -937,6 +944,13 @@ pub trait MuxBackend: Send + Sync {
         None
     }
     fn list_panes(&self, opts: PaneListOptions) -> Result<PaneListing>;
+    /// Read live content geometry within the caller's budget; absent panes return `None`, zero dimensions pass through.
+    fn pane_content_size(
+        &self,
+        pane: &PaneId,
+        session: Option<&str>,
+        timeout: Duration,
+    ) -> Result<Option<PaneContentSize>>;
     fn client_view(&self, opts: ClientFocusOptions) -> Result<ClientView> {
         let _ = opts;
         Ok(ClientView::default())

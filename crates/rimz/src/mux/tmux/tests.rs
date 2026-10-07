@@ -1,6 +1,53 @@
 use super::*;
 
 #[cfg(unix)]
+use std::time::Duration;
+
+#[cfg(unix)]
+#[test]
+fn pane_content_size_reads_dimensions_and_preserves_zero() {
+    for (rows, cols) in [(38, 118), (0, 118)] {
+        let (temp, shim) = crate::mux::zellij::tests::support::zellij_shim(&format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" > \"$(dirname \"$0\")/argv\"\nprintf '{rows} {cols}\\n'\n"
+        ));
+        let mut backend = TmuxBackend::with_socket("/test/socket");
+        backend.program = Some(shim);
+        let pane = crate::PaneId::from_parts(crate::MuxName::Tmux, "%7");
+        assert_eq!(
+            backend
+                .pane_content_size(&pane, None, Duration::from_secs(2))
+                .ok(),
+            Some(Some(crate::mux::PaneContentSize { rows, cols }))
+        );
+        assert_eq!(
+            std::fs::read_to_string(temp.path().join("argv"))
+                .unwrap()
+                .trim(),
+            "-S /test/socket display-message -p -t %7 #{pane_height} #{pane_width}"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn pane_content_size_distinguishes_missing_pane_from_command_failure() {
+    for (stderr, missing) in [("can't find pane: %7", true), ("server unavailable", false)] {
+        let (_temp, shim) = crate::mux::zellij::tests::support::zellij_shim(&format!(
+            "#!/bin/sh\nprintf '%s\\n' \"{stderr}\" >&2\nexit 1\n"
+        ));
+        let mut backend = TmuxBackend::with_socket("/test/socket");
+        backend.program = Some(shim);
+        let pane = crate::PaneId::from_parts(crate::MuxName::Tmux, "%7");
+        let result = backend.pane_content_size(&pane, None, Duration::from_secs(2));
+        if missing {
+            assert_eq!(result.ok(), Some(None));
+        } else {
+            assert!(result.is_err());
+        }
+    }
+}
+
+#[cfg(unix)]
 #[test]
 fn command_failure_omits_socket_from_native_stderr() {
     use std::os::unix::fs::PermissionsExt;

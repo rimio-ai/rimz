@@ -95,6 +95,43 @@ impl TmuxBackend {
 }
 
 impl MuxBackend for TmuxBackend {
+    fn pane_content_size(
+        &self,
+        pane: &PaneId,
+        _session: Option<&str>,
+        timeout: Duration,
+    ) -> Result<Option<crate::mux::PaneContentSize>> {
+        ensure_pane_backend(pane, MuxName::Tmux)?;
+        let output = match self
+            .cmd()
+            .args([
+                "display-message",
+                "-p",
+                "-t",
+                pane.raw(),
+                "#{pane_height} #{pane_width}",
+            ])
+            .run_with_timeout(timeout)
+        {
+            Ok(output) => output,
+            Err(MuxErr::Command { stderr, .. }) if stderr.contains("can't find pane") => {
+                return Ok(None);
+            }
+            Err(error) => return Err(error),
+        };
+        let text = String::from_utf8_lossy(&output.stdout);
+        let mut fields = text.split_whitespace();
+        let rows = fields.next().and_then(|value| value.parse::<u16>().ok());
+        let cols = fields.next().and_then(|value| value.parse::<u16>().ok());
+        let (Some(rows), Some(cols), None) = (rows, cols, fields.next()) else {
+            return Err(MuxErr::Output {
+                program: "tmux".to_owned(),
+                reason: format!("invalid pane content geometry: {text:?}"),
+            });
+        };
+        Ok(Some(crate::mux::PaneContentSize { rows, cols }))
+    }
+
     fn name(&self) -> MuxName {
         MuxName::Tmux
     }

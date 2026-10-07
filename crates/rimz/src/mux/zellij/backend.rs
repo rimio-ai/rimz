@@ -72,6 +72,12 @@ pub(super) struct RawListedPane {
     #[serde(default)]
     pane_columns: Option<u64>,
     #[serde(default)]
+    pane_rows: Option<u64>,
+    #[serde(default)]
+    pane_content_rows: Option<u16>,
+    #[serde(default)]
+    pane_content_columns: Option<u16>,
+    #[serde(default)]
     pane_x: Option<u64>,
     #[serde(default)]
     pub(super) title: Option<String>,
@@ -274,7 +280,6 @@ impl ZellijBackend {
             #[serde(flatten)]
             pane: RawListedPane,
             pane_y: Option<u64>,
-            pane_rows: Option<u64>,
         }
         let output = self
             .zellij_action(session)
@@ -303,7 +308,7 @@ impl ZellijBackend {
                 return Ok(None);
             }
             let (Some(x), Some(y), Some(cols), Some(rows)) =
-                (pane.pane_x, item.pane_y, pane.pane_columns, item.pane_rows)
+                (pane.pane_x, item.pane_y, pane.pane_columns, pane.pane_rows)
             else {
                 return Ok(None);
             };
@@ -1064,6 +1069,34 @@ fn named_tab_counts(
 }
 
 impl MuxBackend for ZellijBackend {
+    fn pane_content_size(
+        &self,
+        pane: &PaneId,
+        session: Option<&str>,
+        timeout: Duration,
+    ) -> Result<Option<crate::mux::PaneContentSize>> {
+        ensure_pane_backend(pane, MuxName::Zellij)?;
+        let id = ZellijPaneId::try_from(pane)
+            .ok()
+            .and_then(ZellijPaneId::terminal_id)
+            .ok_or_else(|| output_error(format!("pane `{pane}` is not a terminal pane")))?;
+        let session = self.resolve_session(session)?;
+        let Some(listed) = self
+            .raw_listed_panes(&session, timeout)?
+            .into_iter()
+            .find(|candidate| !candidate.is_plugin && candidate.id == id)
+        else {
+            return Ok(None);
+        };
+        let (Some(rows), Some(cols)) = (listed.pane_content_rows, listed.pane_content_columns)
+        else {
+            return Err(output_error(format!(
+                "pane `{pane}` has no content geometry"
+            )));
+        };
+        Ok(Some(crate::mux::PaneContentSize { rows, cols }))
+    }
+
     fn name(&self) -> MuxName {
         MuxName::Zellij
     }
