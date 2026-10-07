@@ -54,7 +54,7 @@ Every send writes a `queued` record first. The mode decides when RimZ types it i
 A parked message delivers once all of these hold, checked in this order:
 
 1. Its `--schedule` time has passed, and every `--after` and `--when` condition is met.
-2. It is the oldest ready message for that agent. Messages to one agent deliver oldest first; scheduled and condition-held messages step out of line until they are ready.
+2. It is the oldest ready message for that agent, and no earlier prompt to it is still waiting for the agent to pick it up. Messages to one agent deliver oldest first; scheduled and condition-held messages step out of line until they are ready.
 3. The agent is not compacting its context, and its status opens the `--on` gate: `idle`, `success`, or `sleeping` for `done` (the default), plus `failed` for `any`.
 4. No open prompt in the agent's pane reserves its input, unless the message has `--force`.
 5. A live pane can receive the text.
@@ -79,7 +79,7 @@ The send prints one line per target:
 | `queued for @coder (msg_…) — opens <time>` | Scheduled. The time includes a relative interval and UTC timestamp, as in `message show`. |
 | `queued for @coder (msg_…) — after @planner` | The first unmet `--after` condition. |
 | `queued for @coder (msg_…) — when @coder idle 58m` | The first unmet `--when` condition. |
-| `queued for @coder (msg_…) — behind msg_…` | An older queued message or an in-flight write blocks delivery. |
+| `queued for @coder (msg_…) — behind msg_…` | An older queued message, an in-flight write, or a prompt the agent has not yet acknowledged blocks delivery. |
 | `queued for @coder (msg_…) — no live pane` | No pane can receive the text (park mode or a single-target steer). |
 | `queued for @coder (msg_…)` | A live attempt deferred delivery without reporting a cause. |
 | `compacted @coder` | Printed before the delivery line when `--smart-compact` fired. |
