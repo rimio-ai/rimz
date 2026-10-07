@@ -7,6 +7,7 @@ use serde::Serialize;
 
 #[path = "list_render.rs"]
 mod text;
+pub(super) use text::action_text as action;
 #[cfg(test)]
 use text::wrap_trigger;
 

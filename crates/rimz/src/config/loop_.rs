@@ -126,6 +126,17 @@ impl ThrottleConfig {
         *self == Self::default()
     }
 
+    /// Whether any admission cap or resource floor is configured, excluding pacing and wait duration.
+    pub fn has_limits(&self) -> bool {
+        self.max_active.is_some()
+            || self.max_active_per_task.is_some()
+            || self.cpu_pressure.is_some()
+            || self.io_pressure.is_some()
+            || self.memory_pressure.is_some()
+            || self.min_memory.is_some()
+            || self.min_disk.is_some()
+    }
+
     /// The longest one start holds the turn; zero turns pacing off.
     pub fn pace(&self) -> Duration {
         throttle_duration(self.pace.as_deref().unwrap_or(Self::DEFAULT_PACE))

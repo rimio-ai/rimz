@@ -2,6 +2,7 @@
 
 use super::*;
 use rimz::harness::schedule::signal::WatchVerdict;
+use serde::ser::{SerializeMap, Serializer as _};
 
 const CHECK_SUMMARY_OUTPUT_CAP: usize = 4 * 1024;
 
@@ -538,7 +539,24 @@ pub(super) fn write_record_forensics(
             .as_ref()
             .map_or_else(String::new, |hold| format!(" · held {hold}"));
         write_detail_link(out, "when", &format!("{}{held}", condition.when))?;
-        writeln!(out, "  {}", serde_json::to_string(&condition.readings)?)?;
+        write!(out, "  ")?;
+        let mut serializer = serde_json::Serializer::new(&mut *out);
+        let mut readings = serializer.serialize_map(None)?;
+        if let Ok(expr) = schedule::when::WhenExpr::parse(std::slice::from_ref(&condition.when)) {
+            let verdict = schedule::when::Verdict {
+                ok: false,
+                readings: condition.readings.clone(),
+            };
+            for (key, value) in expr.readings(&verdict) {
+                readings.serialize_entry(key, &value)?;
+            }
+        } else {
+            for (key, value) in &condition.readings {
+                readings.serialize_entry(key, value)?;
+            }
+        }
+        readings.end()?;
+        writeln!(out)?;
     }
     if let Some(message_id) = &record.message_id {
         write_detail_link(out, "message", message_id.as_str())?;
@@ -735,4 +753,38 @@ fn run_record_for(entry: &TaskEntry, run_id: &str) -> Option<rimz::store::run::R
     let run_id = rimz::RunId::parse(run_id).ok()?;
     let paths = StatePaths::for_project_root(&entry.resolved_root()).ok()?;
     rimz::harness::run::load(&paths, &run_id).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn condition_readings_follow_expression_order() {
+        let mut record =
+            LoopRunRecord::new("sweep", LoopRunResult::Launched, LoopRunMode::Scheduled, 0);
+        record.condition = Some(run_log::ConditionRecord {
+            when: "pr=open && ci=passed && pr=open".into(),
+            hold: None,
+            held_ms: 0,
+            readings: BTreeMap::from([
+                ("ci".into(), Some("passed".into())),
+                ("pr".into(), Some("open".into())),
+            ]),
+        });
+        let mut out = Vec::new();
+        write_record_forensics(
+            &mut out,
+            None,
+            &record,
+            ui::prose::Prose::Raw,
+            Forensics::Full,
+        )
+        .unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert!(
+            text.contains("  {\"pr\":\"open\",\"ci\":\"passed\"}\n"),
+            "{text}"
+        );
+    }
 }

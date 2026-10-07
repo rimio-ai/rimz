@@ -90,7 +90,7 @@ The fixer rule waits until the board is Done and CI passes on an open PR. It tak
 
 Keep a room running for CI and PR conditions to be observed. Lanes already meeting a rule qualify too. GitHub sees PRs already merged or closed; Gitea needs the room to have observed the checkout's PR while it was open, and room teardown or reset forgets that observation. Each task launches only once per checkout, even if the condition turns false and true again, the room restarts, or you edit the task under the same name. The project root and worktrees RimZ does not own are not included.
 
-Use `rimz loop show fixer` to see launched checkouts, their leader handles, and the standing subscriptions those leaders own, `rimz loop logs fixer` for each fire, and `rimz stats --assists` for the launch history. From an owned worktree, `rimz loop fire fixer` explicitly launches there again; removing the task clears its launch memory. A leader's subscriptions retire when its session ends.
+Use `rimz loop show fixer` to see launched checkouts, their leader handles, and the declared signals with the armed subscription count, `rimz loop logs fixer` for each fire, and `rimz stats --assists` for the launch history. From an owned worktree, `rimz loop fire fixer` explicitly launches there again; removing the task clears its launch memory. A leader's subscriptions retire when its session ends.
 
 ## Wake a running agent
 
@@ -324,23 +324,25 @@ A fire leaves two things: whatever the task did (one transient pane for `--agent
 $ rimz loop fire suite
 suite — check
   check: cargo test
-  │ error: could not find `Cargo.toml` in `/home/you/code/app` or any parent directory
-✗ check failed (exit 101) in 206ms
+  │ error: could not find `Cargo.toml` in `/home/me/code/app` or any parent directory
+✗ check failed (exit 101) in 1.7s
 $ rimz loop show suite
 suite — every 1h
-  ✗ failing · last run 0s ago, failed (exit 101) in 206ms
+  ✗ failing · last run 0s ago, failed (exit 101) in 1.7s
 
-LAST RUN — ✗ failed (exit 101) · 0s ago · 206ms · manual
-  │ error: could not find `Cargo.toml` in `/home/you/code/app` or any parent directory
+LAST RUN — ✗ failed (exit 101) · 0s ago · 1.7s · manual
+  │ error: could not find `Cargo.toml` in `/home/me/code/app` or any parent directory
 
 RECENT RUNS (newest first · 1 of 1)
-  WHEN    STATUS               TOOK   NOTE
-  0s ago  ✗ failed (exit 101)  206ms  error: could not find `Cargo.toml` in `/home/you/code/app...
+  WHEN    STATUS               TOOK  NOTE
+  0s ago  ✗ failed (exit 101)  1.7s  error: could not find `Cargo.toml` in `/home/me/code/app`...
 
-  task:    check · cargo test
-  root:    ~/code/app · no room
-  source:  machine — ~/.rimz/loop.toml
-  strikes: 1/3
+  action:   run check · cargo test
+  root:     ~/code/app · no room
+  source:   machine — ~/.rimz/loop.toml
+  throttle: no limits set
+  load:     cpu 11%/8% · io 52%/29% · memory 0%/0% (avg10/avg60)
+  strikes:  1/3
 ```
 
 The screen answers first and shows its evidence after. The verdict line reads the latest conclusive run: how long ago it ran, how it ended, and, once there is a streak, how many runs in a row ended that way and when the streak began. `LAST RUN` is that run's output (a passing check prints its last five lines and the `rimz loop logs` command for the rest), `RECENT RUNS` reads newest first, and the task's facts close the screen, where `strikes` counts consecutive failures against the threshold. `manual` marks a run you fired by hand; a clock's fire carries no mark.

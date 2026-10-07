@@ -1,6 +1,232 @@
 use super::super::run_report::{render_record_detail, write_failure_pointer};
 use super::*;
 
+fn show_view(each_worktree: bool) -> ShowView {
+    let now = Timestamp::from_second(100).unwrap();
+    let entry = TaskEntry {
+        root: "/repo".into(),
+        agent: Some("sweeper".into()),
+        check: Some("true".into()),
+        when: Some(vec!["pr=open && ci=passed".into()]),
+        stay: each_worktree,
+        each_worktree,
+        takeover: each_worktree,
+        subscribe: ["ci.failed", "pr.merged"]
+            .map(|signal| rimz::config::TeamSignalBinding {
+                signal: signal.into(),
+                matches: BTreeMap::new(),
+                prompt: None,
+            })
+            .into(),
+        ..TaskEntry::default()
+    };
+    let timing = schedule::TaskTiming::evaluate(
+        schedule::TaskShape::compile("sweep", &entry).trigger(),
+        TaskSource::Config,
+        None,
+        None,
+        &now.to_zoned(jiff::tz::TimeZone::UTC),
+    );
+    let mut failed = record(20, LoopRunResult::Errored);
+    failed.error = Some("launch failed".into());
+    ShowView {
+        name: "sweep".into(),
+        entry,
+        source: TaskSource::Config,
+        timing,
+        now_zoned: now.to_zoned(jiff::tz::TimeZone::UTC),
+        records: vec![failed],
+        launches: BTreeMap::from([
+            (
+                PathBuf::from("/repo/older"),
+                schedule::launch_ledger::LaunchRecord {
+                    at: Timestamp::from_second(10).unwrap(),
+                    leader: "old-leader".into(),
+                },
+            ),
+            (
+                PathBuf::from("/repo/newer"),
+                schedule::launch_ledger::LaunchRecord {
+                    at: Timestamp::from_second(90).unwrap(),
+                    leader: "new-leader".into(),
+                },
+            ),
+        ]),
+        in_flight: None,
+        condition: "condition: waiting\n  pr=open   ✓ open\n  ci=passed   ✗ unknown\n".into(),
+        subscriptions: vec![SubscriptionView {
+            name: "wake".into(),
+            checkout: "/repo/newer".into(),
+            target: None,
+            signal: Some("ci.failed".into()),
+            last: "never fired".into(),
+            last_style: ui::palette::muted(),
+        }],
+        room_is_open: false,
+        strike_count: 0,
+        live_leader: false,
+        you: false,
+        config: MachineConfig::default().into(),
+        throttle: ShowThrottle::Compact(Some(
+            "cpu 14%/18% · io 26%/22% · memory 0%/0% (avg10/avg60)".into(),
+        )),
+        show_agent_runs: true,
+    }
+}
+
+fn show_text(view: &ShowView) -> String {
+    let mut out = Vec::new();
+    render_show(&mut out, view, 10).unwrap();
+    anstream::adapter::strip_str(&String::from_utf8(out).unwrap()).to_string()
+}
+
+#[test]
+fn show_fanout_verdict_precedes_launches_and_has_no_subscriptions_section() {
+    let view = show_view(true);
+    let text = show_text(&view);
+    assert!(
+        text.lines()
+            .nth(1)
+            .is_some_and(|line| line.starts_with("  ✗ failing")),
+        "{text}"
+    );
+    assert!(
+        text.lines().next().unwrap().ends_with(" · each worktree"),
+        "{text}"
+    );
+    let sections = [
+        "LAUNCHES",
+        "condition: evaluated per owned worktree · 2 launched",
+        "LAST RUN",
+        "AGENT RUNS",
+        "RECENT RUNS",
+        "  action:",
+    ];
+    let positions = sections.map(|section| text.find(section).expect(section));
+    assert!(positions.windows(2).all(|pair| pair[0] < pair[1]), "{text}");
+    assert!(!text.contains("SUBSCRIPTIONS"), "{text}");
+    assert!(text.contains("  newer  @new-leader  10s ago"), "{text}");
+    assert!(
+        text.find("  newer").unwrap() < text.find("  older").unwrap(),
+        "{text}"
+    );
+    assert!(
+        !text.contains("/repo/newer") && !text.contains("1970-"),
+        "{text}"
+    );
+}
+
+#[test]
+fn show_single_checkout_condition_follows_verdict_and_keeps_subscriptions() {
+    let mut view = show_view(false);
+    view.launches.clear();
+    let text = show_text(&view);
+    assert!(
+        text.lines()
+            .nth(1)
+            .is_some_and(|line| line.starts_with("  ✗ failing")),
+        "{text}"
+    );
+    assert_eq!(text.lines().nth(2), Some("condition: waiting"), "{text}");
+    assert!(
+        text.find("RECENT RUNS").unwrap() < text.find("SUBSCRIPTIONS").unwrap(),
+        "{text}"
+    );
+    assert!(
+        text.find("SUBSCRIPTIONS").unwrap() < text.find("  action:").unwrap(),
+        "{text}"
+    );
+}
+
+#[test]
+fn show_resident_facts_name_action_and_wakes_without_timeout() {
+    let mut view = show_view(true);
+    view.entry.timeout = Some("1h".into());
+    view.entry.account = Some("work".parse().unwrap());
+    let text = show_text(&view);
+    assert!(
+        text.contains("check, then start sweeper · account work · stays · takes over the checkout"),
+        "{text}"
+    );
+    assert!(
+        text.contains("leader on ci.failed, pr.merged · 1 armed"),
+        "{text}"
+    );
+    assert!(
+        !text.contains("timeout:") && !text.contains("  task:"),
+        "{text}"
+    );
+}
+
+#[test]
+fn show_wakes_with_no_subscriptions_and_no_live_leader() {
+    let mut view = show_view(true);
+    view.subscriptions.clear();
+    let text = show_text(&view);
+    assert!(
+        text.contains("leader on ci.failed, pr.merged · 0 armed, no live leader"),
+        "{text}"
+    );
+}
+
+#[test]
+fn show_wakes_with_a_live_leader_and_no_subscriptions() {
+    let mut view = show_view(true);
+    view.subscriptions.clear();
+    view.live_leader = true;
+    let text = show_text(&view);
+    assert!(
+        text.contains("leader on ci.failed, pr.merged · 0 armed"),
+        "{text}"
+    );
+    assert!(!text.contains("no live leader"), "{text}");
+}
+
+#[test]
+fn show_check_only_action_and_timeout_for_nonresident_agents() {
+    let view = show_view(false);
+    assert!(show_text(&view).contains("timeout:"));
+    let mut view = view;
+    view.entry.agent = None;
+    view.entry.when = None;
+    view.entry.subscribe.clear();
+    view.entry.every = Some("1h".into());
+    let text = show_text(&view);
+    assert!(
+        text.lines()
+            .any(|line| line.trim_start().starts_with("action:")
+                && line.ends_with("run check · true")),
+        "{text}"
+    );
+    assert!(
+        !text.contains("  check:") && !text.contains("timeout:"),
+        "{text}"
+    );
+}
+
+#[test]
+fn show_no_limits_uses_compact_throttle_facts() {
+    let text = show_text(&show_view(true));
+    assert!(text.contains("throttle: no limits set"), "{text}");
+    assert!(
+        text.contains("load:     cpu 14%/18% · io 26%/22% · memory 0%/0% (avg10/avg60)"),
+        "{text}"
+    );
+    assert!(!text.contains("THROTTLE"), "{text}");
+}
+
+#[test]
+fn show_configured_limits_keep_full_throttle_section() {
+    let mut view = show_view(true);
+    view.throttle = ShowThrottle::Full(vec![(
+        "cpu pressure",
+        "avg10 2% · avg60 3% (limit 25%)".into(),
+    )]);
+    let text = show_text(&view);
+    assert!(text.contains("THROTTLE\n"), "{text}");
+    assert!(!text.contains("no limits set"), "{text}");
+}
+
 #[test]
 fn true_condition_without_hold_renders_due() {
     let root = tempfile::tempdir().unwrap();
@@ -681,7 +907,7 @@ fn signal_timing_renders_trigger_matches_and_listening_state() {
     );
 
     let mut out = Vec::new();
-    write_show_headline(&mut out, "task", &timing, None, now).unwrap();
+    write_show_headline(&mut out, "task", &timing, None, now, false).unwrap();
     let show = String::from_utf8(out).unwrap();
     assert!(
         show.contains("on ci.failed [branch=feature] · listening"),
@@ -768,7 +994,7 @@ fn running_replaces_the_headline_state_and_scales_its_elapsed_time() {
         held: Vec::new(),
     };
     let mut out = Vec::new();
-    write_show_headline(&mut out, "task", &timing, Some(&in_flight), now).unwrap();
+    write_show_headline(&mut out, "task", &timing, Some(&in_flight), now, false).unwrap();
     let show = anstream::adapter::strip_str(&String::from_utf8(out).unwrap()).to_string();
     assert!(
         show.ends_with(" · ▸ running 3m · pid 4162080\n") && !show.contains("paused"),
@@ -788,7 +1014,7 @@ fn show_headline_keeps_blocked_before_pause() {
     let timing = interval_timing(Some(TrustState::Untrusted), None, Some(&pause), now);
     let mut out = Vec::new();
 
-    write_show_headline(&mut out, "task", &timing, None, now).unwrap();
+    write_show_headline(&mut out, "task", &timing, None, now, false).unwrap();
 
     let out = anstream::adapter::strip_str(&String::from_utf8(out).unwrap()).to_string();
     assert!(out.contains("next blocked · trust"), "{out}");
@@ -938,15 +1164,17 @@ fn detail_indices_skip_a_trailing_overlap() {
 }
 
 #[test]
-fn detail_indices_pick_a_newer_launch_over_an_older_failure() {
+fn detail_indices_skip_last_run_after_a_clean_launch_even_with_a_trailing_overlap() {
     let mut error = record(10, LoopRunResult::Errored);
     error.error = Some("launch failed".to_owned());
     let mut launched = record(20, LoopRunResult::Launched);
     launched.checkout = Some(PathBuf::from("/repo/lane"));
     launched.target = Some("@fixer".to_owned());
-    let records = vec![error, launched];
+    let mut records = vec![error, launched];
 
-    assert_eq!(detail_indices(&records), (Some(1), None));
+    assert_eq!(detail_indices(&records), (None, None));
+    records.push(overlap(30));
+    assert!(!last_run(&records).contains("LAST RUN"));
 }
 
 #[test]

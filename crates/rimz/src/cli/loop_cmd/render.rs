@@ -233,6 +233,112 @@ fn has_agent_runs_section(task: &LoadedTask) -> bool {
     task.entry().check.is_some() && task.action().ok().and_then(action_words).is_some()
 }
 
+struct ShowView {
+    name: String,
+    entry: TaskEntry,
+    source: TaskSource,
+    timing: schedule::TaskTiming,
+    now_zoned: jiff::Zoned,
+    records: Vec<LoopRunRecord>,
+    launches: BTreeMap<PathBuf, schedule::launch_ledger::LaunchRecord>,
+    in_flight: Option<InFlightRun>,
+    condition: String,
+    subscriptions: Vec<SubscriptionView>,
+    room_is_open: bool,
+    strike_count: u32,
+    live_leader: bool,
+    you: bool,
+    config: std::sync::Arc<MachineConfig>,
+    throttle: ShowThrottle,
+    show_agent_runs: bool,
+}
+
+struct SubscriptionView {
+    name: String,
+    checkout: PathBuf,
+    target: Option<TaskTarget>,
+    signal: Option<String>,
+    last: String,
+    last_style: anstyle::Style,
+}
+
+enum ShowThrottle {
+    Off,
+    Compact(Option<String>),
+    Full(Vec<(&'static str, String)>),
+}
+
+fn render_show(out: &mut impl Write, view: &ShowView, runs: usize) -> Result<()> {
+    let now = view.now_zoned.timestamp();
+    write_show_headline(
+        out,
+        &view.name,
+        &view.timing,
+        view.in_flight.as_ref(),
+        now,
+        view.entry.each_worktree,
+    )?;
+    write_verdict(
+        out,
+        &view.name,
+        &view.records,
+        view.in_flight.is_some(),
+        now,
+    )?;
+    if !view.launches.is_empty() {
+        writeln!(out, "\nLAUNCHES")?;
+        let mut launches = view.launches.iter().collect::<Vec<_>>();
+        launches.sort_by(|a, b| b.1.at.cmp(&a.1.at).then(a.0.cmp(b.0)));
+        for (checkout, launch) in launches {
+            writeln!(
+                out,
+                "  {}  @{}  {}",
+                checkout.file_name().unwrap_or_default().to_string_lossy(),
+                launch.leader,
+                ui::rel_age(launch.at, now)
+            )?;
+        }
+    }
+    if view.entry.each_worktree {
+        writeln!(
+            out,
+            "condition: evaluated per owned worktree · {} launched",
+            view.launches.len()
+        )?;
+    } else {
+        write!(out, "{}", view.condition)?;
+    }
+    if view.records.is_empty() {
+        writeln!(
+            out,
+            "\nno runs recorded; try `rimz loop fire {}`",
+            view.name
+        )?;
+    } else {
+        write_last_run(
+            out,
+            &view.name,
+            &view.entry,
+            &view.records,
+            now,
+            ui::prose::Prose::for_stdout(),
+        )?;
+        if view.show_agent_runs {
+            write_agent_runs(out, &view.records, now)?;
+        }
+        write_runs_table(out, &view.records, runs, now)?;
+    }
+    if !view.entry.each_worktree {
+        write_subscriptions(out, &view.subscriptions)?;
+    }
+    writeln!(out)?;
+    write_show_facts(out, view)?;
+    if let ShowThrottle::Full(readings) = &view.throttle {
+        write_throttle_readings(out, readings)?;
+    }
+    Ok(())
+}
+
 pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
     let Some(task) = load_task(&args.name, globals)? else {
         if args.json {
@@ -262,7 +368,17 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
     let key = task.key(&args.name);
     let arming = arming::load().remove(&key);
     let now_zoned = now.to_zoned(MachineConfig::load_lenient().time_zone());
-    let timing = observe_task_timing(&args.name, &task, &stamps, arming.as_ref(), &now_zoned);
+    let timing = if entry.each_worktree {
+        schedule::TaskTiming::evaluate(
+            task.trigger(),
+            task.source(),
+            stamps.get(&args.name).copied(),
+            arming.as_ref(),
+            &now_zoned,
+        )
+    } else {
+        observe_task_timing(&args.name, &task, &stamps, arming.as_ref(), &now_zoned)
+    };
     let mut records =
         run_log::task_records(&rimz::disk::paths::logs_dir(), &args.name, Some(&root));
     if let Some(meta) = &entry.wait_meta {
@@ -297,81 +413,74 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
         )?;
         return Ok(());
     }
-    let show_agent_runs = has_agent_runs_section(&task);
-
-    let mut out = ui::out();
-    write_show_headline(&mut out, &args.name, &timing, in_flight.as_ref(), now)?;
-    if !launches.is_empty() {
-        writeln!(out, "\nLAUNCHES")?;
-        for (checkout, launch) in &launches {
-            writeln!(
-                out,
-                "  {}  @{}  {}",
-                checkout.display(),
-                launch.leader,
-                launch.at
-            )?;
-        }
+    let mut condition = Vec::new();
+    if !entry.each_worktree {
+        condition::write_show(&mut condition, entry, &timing)?;
     }
-    if entry.each_worktree {
-        writeln!(
-            out,
-            "condition: evaluated per owned worktree · {} launched",
-            launches.len()
-        )?;
+    let subscriptions = load_subscriptions(&args.name, &root, &now_zoned)?;
+    let store = if !launches.is_empty() || entry.wait.is_some() {
+        let workspace = WorkspaceResolver::resolve(&root, Some(root.clone()))?;
+        super::super::open_existing_store(&workspace)?
     } else {
-        condition::write_show(&mut out, task.entry(), &timing)?;
-    }
-    write_verdict(&mut out, &args.name, &records, in_flight.is_some(), now)?;
-    if records.is_empty() {
-        writeln!(out)?;
-        writeln!(out, "no runs recorded; try `rimz loop fire {}`", args.name)?;
+        None
+    };
+    let snapshot = store
+        .as_ref()
+        .map(|store| store.snapshot_cached())
+        .transpose()?;
+    let live_leader = snapshot.as_ref().is_some_and(|snapshot| {
+        launches.values().any(|launch| {
+            snapshot
+                .agents
+                .iter()
+                .any(|agent| agent.name.as_deref() == Some(launch.leader.as_str()))
+        })
+    });
+    let you = store
+        .as_ref()
+        .and_then(|store| {
+            let caller = super::super::send::resolve_caller(store).ok().flatten()?;
+            let projection = store.runtime_projection(rimz::RuntimeScope::Audit).ok()?;
+            rimz::harness::ancestry::resolve_launch_caller(&projection.agents, &caller)
+                .ok()
+                .filter(|agent| agent.ended_at.is_none())
+                .map(|agent| (agent.kind.clone(), agent.agent_id.clone()))
+        })
+        .zip(entry.wait.as_ref())
+        .is_some_and(|((kind, session), target)| kind == target.kind && session == target.session);
+    let config = MachineConfig::load_lenient();
+    let throttle = if entry.throttle == Some(rimz::config::ThrottleSwitch::Off) {
+        ShowThrottle::Off
+    } else if config.r#loop.throttle.has_limits()
+        || in_flight.as_ref().is_some_and(|run| !run.held.is_empty())
+    {
+        ShowThrottle::Full(schedule::throttle::readings(&config, &args.name, entry))
     } else {
-        write_last_run(
-            &mut out,
-            &args.name,
-            entry,
-            &records,
-            now,
-            ui::prose::Prose::for_stdout(),
-        )?;
-        if show_agent_runs {
-            write_agent_runs(&mut out, &records, now)?;
-        }
-        write_runs_table(&mut out, &records, args.runs, now)?;
-    }
-    write_subscriptions(&mut out, &args.name, &root, &now_zoned)?;
-    writeln!(out)?;
-    write_show_facts(
-        &mut out,
-        &args.name,
-        &task,
-        &records,
-        ShowFactsContext {
-            now_zoned: &now_zoned,
-            is_held: timing.arm_state() != ArmState::Live,
-            full_spend: !show_agent_runs,
-        },
-    )?;
-    if entry.agent.is_some() && entry.throttle != Some(rimz::config::ThrottleSwitch::Off) {
-        write_throttle_readings(
-            &mut out,
-            &rimz::harness::schedule::throttle::readings(
-                &MachineConfig::load_lenient(),
-                &args.name,
-                entry,
-            ),
-        )?;
-    }
-    Ok(())
+        ShowThrottle::Compact(schedule::throttle::compact_load())
+    };
+    let view = ShowView {
+        strike_count: strikes::load().get(&key).copied().unwrap_or(0),
+        room_is_open: room_open(&root),
+        show_agent_runs: has_agent_runs_section(&task),
+        name: args.name,
+        entry: entry.clone(),
+        source: task.source(),
+        timing,
+        now_zoned,
+        records,
+        launches,
+        in_flight,
+        condition: String::from_utf8(condition)?,
+        subscriptions,
+        live_leader,
+        you,
+        config,
+        throttle,
+    };
+    render_show(&mut ui::out(), &view, args.runs)
 }
 
-fn write_subscriptions(
-    out: &mut impl Write,
-    name: &str,
-    root: &Path,
-    now: &jiff::Zoned,
-) -> Result<()> {
+fn load_subscriptions(name: &str, root: &Path, now: &jiff::Zoned) -> Result<Vec<SubscriptionView>> {
     let catalog = TaskCatalog::load_room(root)?;
     let subscriptions = catalog
         .visible()
@@ -379,29 +488,47 @@ fn write_subscriptions(
         .filter(|(_, task)| task.entry().loop_task.as_deref() == Some(name))
         .collect::<Vec<_>>();
     if subscriptions.is_empty() {
-        return Ok(());
+        return Ok(Vec::new());
     }
     let stats = run_log::stats(&rimz::disk::paths::logs_dir(), now, Some(root));
+    Ok(subscriptions
+        .into_iter()
+        .map(|(name, task)| {
+            let entry = task.entry();
+            let history = stats.get(name);
+            SubscriptionView {
+                name: name.clone(),
+                checkout: entry.run_dir(),
+                target: entry.wait.clone(),
+                signal: entry.signal.clone(),
+                last: list::TaskRow::subscription_last(task, history, now),
+                last_style: history
+                    .and_then(|stats| stats.acting.as_ref())
+                    .map_or_else(ui::palette::muted, |acting| {
+                        run_status(&acting.record).style
+                    }),
+            }
+        })
+        .collect())
+}
+
+fn write_subscriptions(out: &mut impl Write, subscriptions: &[SubscriptionView]) -> Result<()> {
+    if subscriptions.is_empty() {
+        return Ok(());
+    }
     writeln!(out, "\nSUBSCRIPTIONS")?;
     let mut table = ui::Table::new(["NAME", "CHECKOUT", "TARGET", "SIGNAL", "LAST"]).indent(2);
-    for (name, task) in subscriptions {
-        let entry = task.entry();
-        let target = entry.wait.as_ref().map_or_else(
+    for subscription in subscriptions {
+        let target = subscription.target.as_ref().map_or_else(
             || ui::cell("-").dash(),
             |target| ui::cell(&target.handle).fg(ui::palette::identity(target.kind.as_str())),
         );
-        let history = stats.get(name);
-        let last = ui::cell(list::TaskRow::subscription_last(task, history, now)).fg(history
-            .and_then(|stats| stats.acting.as_ref())
-            .map_or_else(ui::palette::muted, |acting| {
-                run_status(&acting.record).style
-            }));
         table.row([
-            ui::cell(name),
-            ui::cell(display_path(&entry.run_dir())),
+            ui::cell(&subscription.name),
+            ui::cell(display_path(&subscription.checkout)),
             target,
-            ui::cell(entry.signal.as_deref().unwrap_or("-")).dash(),
-            last,
+            ui::cell(subscription.signal.as_deref().unwrap_or("-")).dash(),
+            ui::cell(&subscription.last).fg(subscription.last_style),
         ]);
     }
     table.render(out)?;
@@ -777,6 +904,7 @@ fn write_show_headline(
     timing: &schedule::TaskTiming,
     in_flight: Option<&InFlightRun>,
     now: Timestamp,
+    each_worktree: bool,
 ) -> std::io::Result<()> {
     let schedule_text = match timing.parsed() {
         Ok(parsed) => parsed.describe(),
@@ -788,6 +916,9 @@ fn write_show_headline(
         ui::paint(ui::palette::header(), name),
         ui::paint(schedule_style(timing.parsed()), &schedule_text)
     )?;
+    if each_worktree {
+        write!(out, " · each worktree")?;
+    }
     if let Some(in_flight) = in_flight {
         return writeln!(
             out,
@@ -824,41 +955,32 @@ fn write_show_headline(
         schedule::TaskTimingState::Watching { .. } => write!(out, " · watching")?,
         state @ (schedule::TaskTimingState::Waiting { .. }
         | schedule::TaskTimingState::Holding { .. }
-        | schedule::TaskTimingState::Fired) => {
+        | schedule::TaskTimingState::Fired)
+            if !each_worktree =>
+        {
             write!(out, " · {}", state.condition_label().unwrap_or_default())?
         }
         schedule::TaskTimingState::Invalid
         | schedule::TaskTimingState::Unarmed
-        | schedule::TaskTimingState::NoOccurrence => {}
+        | schedule::TaskTimingState::NoOccurrence
+        | schedule::TaskTimingState::Waiting { .. }
+        | schedule::TaskTimingState::Holding { .. }
+        | schedule::TaskTimingState::Fired => {}
     }
     writeln!(out)?;
     Ok(())
 }
 
-struct ShowFactsContext<'a> {
-    now_zoned: &'a jiff::Zoned,
-    is_held: bool,
-    full_spend: bool,
-}
-
-fn write_show_facts(
-    out: &mut impl Write,
-    name: &str,
-    task: &LoadedTask,
-    records: &[LoopRunRecord],
-    context: ShowFactsContext<'_>,
-) -> std::io::Result<()> {
-    let entry = task.entry();
-    let source = task.source();
+fn write_show_facts(out: &mut impl Write, view: &ShowView) -> std::io::Result<()> {
+    let entry = &view.entry;
+    let source = view.source;
     let root = entry.resolved_root();
-    let room_is_open = room_open(&root);
     let blocked_state = source.blocked_state();
-    let strike_count = strikes::load().get(&task.key(name)).copied().unwrap_or(0);
     let timeout = entry.timeout.clone().or_else(|| {
         entry.agent.as_ref().map(|_| {
             format!(
                 "{} (default)",
-                MachineConfig::load_lenient()
+                view.config
                     .r#loop
                     .default_timeout
                     .clone()
@@ -867,19 +989,47 @@ fn write_show_facts(
         })
     });
     let mut kv = ui::KeyVals::new().indent(2);
-    match (task.action(), check_summary(entry, task.action().ok())) {
-        (Ok(TaskAction::CheckOnly), Some(check)) => {
-            kv.push(
-                "task",
-                ui::cell(format!("{} · {check}", task_subject(task))),
-            );
-        }
-        (_, check) => {
-            kv.push("task", ui::cell(task_subject(task)));
-            if let Some(check) = check {
-                kv.push("check", ui::cell(check));
-            }
-        }
+    let shape = schedule::TaskShape::compile(&view.name, entry);
+    let action = shape.action().ok();
+    let mut action_text = action.map_or_else(
+        || "<invalid>".to_owned(),
+        |action| list::action(action.kind(), action.subject(), Some(entry), view.you),
+    );
+    let check = check_summary(entry, action);
+    if matches!(action, Some(TaskAction::CheckOnly))
+        && let Some(check) = &check
+    {
+        action_text.push_str(&format!(" · {check}"));
+    }
+    if entry.stay {
+        action_text.push_str(" · stays");
+    }
+    if entry.takeover {
+        action_text.push_str(" · takes over the checkout");
+    }
+    kv.push("action", ui::cell(action_text));
+    if !matches!(action, Some(TaskAction::CheckOnly))
+        && let Some(check) = check
+    {
+        kv.push("check", ui::cell(check));
+    }
+    if !entry.subscribe.is_empty() {
+        let signals = entry
+            .subscribe
+            .iter()
+            .map(|binding| binding.signal.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let armed = view.subscriptions.len();
+        let no_leader = if armed == 0 && !view.live_leader {
+            ", no live leader"
+        } else {
+            ""
+        };
+        kv.push(
+            "wakes",
+            ui::cell(format!("leader on {signals} · {armed} armed{no_leader}")),
+        );
     }
     if let Some(label) = entry.label.as_deref() {
         kv.push("label", ui::cell(label));
@@ -895,12 +1045,14 @@ fn write_show_facts(
             )),
         );
     }
-    kv.push("root", ui::cell(root_with_room(&root, room_is_open)));
+    kv.push("root", ui::cell(root_with_room(&root, view.room_is_open)));
     if let Some(dir) = entry.dir.as_deref() {
         kv.push("dir", ui::cell(display_path(dir)));
     }
     kv.push("source", ui::cell(source_detail(source, entry)));
-    if let Some(timeout) = timeout {
+    if !entry.stay
+        && let Some(timeout) = timeout
+    {
         kv.push("timeout", ui::cell(timeout));
     }
     if let Some(state) = blocked_state {
@@ -909,14 +1061,18 @@ fn write_show_facts(
             ui::cell(blocked_notice(state)).fg(ui::status::trust(state)),
         );
     }
-    if let Some(throttle) = entry.throttle {
-        kv.push(
-            "throttle",
-            ui::cell(match throttle {
-                rimz::config::ThrottleSwitch::On => "on",
-                rimz::config::ThrottleSwitch::Off => "off (starts without taking a turn)",
-            }),
-        );
+    match &view.throttle {
+        ShowThrottle::Off => kv.push("throttle", ui::cell("off (starts without taking a turn)")),
+        ShowThrottle::Compact(load) => {
+            kv.push("throttle", ui::cell("no limits set"));
+            if let Some(load) = load {
+                kv.push("load", ui::cell(load));
+            }
+        }
+        ShowThrottle::Full(_) if entry.throttle == Some(rimz::config::ThrottleSwitch::On) => {
+            kv.push("throttle", ui::cell("on"))
+        }
+        ShowThrottle::Full(_) => {}
     }
     if let Some(budget) = budget_label(entry) {
         kv.push("budget", ui::cell(budget));
@@ -924,16 +1080,16 @@ fn write_show_facts(
     if let Some(surplus) = surplus_label(entry) {
         kv.push("surplus", ui::cell(surplus));
     }
-    if let Some(spend) = spend_label(entry, records, context.now_zoned, context.full_spend) {
+    if let Some(spend) = spend_label(entry, &view.records, &view.now_zoned, !view.show_agent_runs) {
         kv.push("spend", ui::cell(spend));
     }
-    if !context.is_held
-        && strike_count > 0
+    if view.timing.arm_state() == ArmState::Live
+        && view.strike_count > 0
         && let Some(max) = strikes::threshold(entry)
     {
         kv.push(
             "strikes",
-            ui::cell(format!("{strike_count}/{max}")).fg(ui::palette::muted()),
+            ui::cell(format!("{}/{max}", view.strike_count)).fg(ui::palette::muted()),
         );
     }
     kv.render(out)
@@ -1447,9 +1603,7 @@ fn truncate_note(text: &str, max: usize) -> String {
 }
 
 fn record_has_detail(record: &LoopRunRecord) -> bool {
-    // A resident launch's detail is its checkout and leader; it sets none of the fields below.
-    record.result == LoopRunResult::Launched
-        || record.check.is_some()
+    record.check.is_some()
         || record.error.is_some()
         || record.last_message.is_some()
         || record.signal.is_some()
@@ -1478,6 +1632,14 @@ fn is_agent_run(record: &LoopRunRecord) -> bool {
 /// failing and LAST RUN is some other record. An overlap is never the detail:
 /// it is a refused fire, and the run before it is the last thing that ran.
 fn detail_indices(records: &[LoopRunRecord]) -> (Option<usize>, Option<usize>) {
+    if records
+        .iter()
+        .rev()
+        .find(|record| !is_overlap(record))
+        .is_some_and(|record| record.result == LoopRunResult::Launched)
+    {
+        return (None, None);
+    }
     let detail_idx = records
         .iter()
         .rposition(|record| !is_overlap(record) && record_has_detail(record));

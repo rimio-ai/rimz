@@ -449,16 +449,6 @@ pub fn run(args: LoopArgs, globals: &GlobalFlags) -> Result<()> {
 
 // ---- add / remove -----------------------------------------------------------
 
-fn task_subject(task: &LoadedTask) -> String {
-    let Ok(action) = task.action() else {
-        return "<invalid>".to_owned();
-    };
-    match &task.entry().account {
-        Some(account) => format!("{} · account {account}", action.subject()),
-        None => action.subject().to_owned(),
-    }
-}
-
 fn project_config_path(project_root: &Path) -> PathBuf {
     schedule::catalog::project_config_path(project_root)
 }
