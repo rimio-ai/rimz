@@ -1302,7 +1302,7 @@ pub(crate) fn linked_worktree(cwd: &Path) -> Option<LinkedWorktree> {
         }
     };
     let common_dir = normalize_path_lexical(&git_dir.join(common.trim()));
-    if common.trim().is_empty() || common_dir.file_name() != Some(OsStr::new(".git")) {
+    if common_dir.file_name() != Some(OsStr::new(".git")) {
         tracing::debug!(common_dir = %common_dir.display(), "worktree primary checkout unavailable");
         return None;
     }
