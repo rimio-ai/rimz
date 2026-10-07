@@ -1143,6 +1143,7 @@ fn classify_diagnostic(
         | DiagEvent::PaneCarryRefuted { .. }
         | DiagEvent::GateRelease { .. }
         | DiagEvent::TopologyWriterChanged { .. }
+        | DiagEvent::RecoverySeatRefilled { .. }
         | DiagEvent::HealthAlert {
             recovered_after_ms: Some(_),
             ..

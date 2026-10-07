@@ -485,6 +485,7 @@ path = "crates/rimz/src/harness"
 # `holds` is the one held-or-not predicate the ping, compaction, and the per-fold card projection share (+1).
 # `run::provider_startup_exit` shares the startup diagnostic predicate with the exec wrapper (+1).
 # Manual redemption shares its prepared preview and locked consume entry with the CLI (+3).
+# Rebirth pairs durable refill ends with a downward diag repair trace (an import, no surface).
 surface-budget = 721
 
 [[module]]
@@ -1031,7 +1032,8 @@ allowed-dependencies = [
 # resolve_member_posture gives agents restart a team member's role layers.
 # The rebirth preview joins skips, resumed keys, and worktree-gone agents to candidates by session (+3).
 # RecoveryPlan::refilled carries already-live seat replacements into rebirth settlement (+1).
-surface-budget = 62
+# RecoveryTabAgents carries confirmed resume and Fresh replacement keys into rebirth (+1).
+surface-budget = 63
 
 [[module]]
 path = "crates/rimz/src/harness/launch.rs"
