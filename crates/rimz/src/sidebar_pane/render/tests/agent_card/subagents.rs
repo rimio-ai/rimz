@@ -2,7 +2,7 @@ use super::*;
 use crate::agents::{PendingWait, PendingWaitTrigger};
 
 #[test]
-fn paused_child_keeps_parent_delegating_head_and_pet() {
+fn paused_child_parks_parent_head_and_pet() {
     let parent = agent(
         "parent",
         "claude",
@@ -20,34 +20,49 @@ fn paused_child_keeps_parent_delegating_head_and_pet() {
         Some("review"),
     );
     child.parent_agent_id = Some("parent".into());
-    let mut snapshot = snapshot_with(vec![parent, child]);
+    child.launch_depth = Some(1);
+    child.name = Some("child".to_owned());
+    child.last_activity = fixed_now() - Duration::from_secs(1);
+    let mut context = crate::agents::AgentContext::new("claude", fixed_now());
+    context.turn_error = Some(crate::agents::AgentTurnError {
+        class: crate::agents::TurnErrorClass::PausedRateLimit,
+        at: fixed_now(),
+        label: Some("usage limit reached".to_owned()),
+    });
+    child.context = Some(context);
+    let snapshot = snapshot_with(vec![parent, child]);
     let ui = UiState {
         selected_index: 0,
         ..Default::default()
     };
-    let running = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 54, 28);
-    snapshot.worktree_groups[0].rows[0]
-        .as_agent_mut()
-        .unwrap()
-        .sub_agents[0]
-        .status = AgentStatus::Paused;
     assert_eq!(
         selected_pet_action(&snapshot, &ui),
         crate::sidebar_pane::pets::PetAction::Waiting
     );
-    assert_eq!(
+    assert_ne!(
         animation_cadence_for_test(&snapshot),
         AnimationCadence::Fast
     );
-    let paused = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 54, 28);
-    let parent_line = |screen: &str| {
-        screen
-            .lines()
-            .find(|line| line.contains("claude"))
+    let bytes = snapshot_to_bytes_with_alert_and_ui(&snapshot, None, &ui, 54, 28);
+    let mut parser = vt100::Parser::new(28, 54, 0);
+    parser.process(&bytes);
+    let screen = parser.screen().contents();
+    let parent_line = screen.lines().find(|line| line.contains("claude")).unwrap();
+    assert!(parent_line.contains("⏸"), "{screen}");
+    assert!(!parent_line.contains("⢄"), "{screen}");
+    let (line_index, line) = screen
+        .lines()
+        .enumerate()
+        .find(|(_, line)| line.contains("@child: usage limit reached"))
+        .unwrap();
+    let col = line.chars().position(|ch| ch == '@').unwrap();
+    assert!(
+        parser
+            .screen()
+            .cell(line_index as u16, col as u16)
             .unwrap()
-            .to_owned()
-    };
-    assert_eq!(parent_line(&paused), parent_line(&running));
+            .italic()
+    );
 }
 
 #[test]

@@ -5,6 +5,21 @@ use crate::store::snapshot::SidebarWorktreeGroup;
 use crate::store::snapshot::group_live_agents_by_worktree;
 
 #[test]
+fn delegated_park_ranks_and_counts_as_paused() {
+    let parent = agent("claude", "root", AgentStatus::Idle, 0).worktree("/repo/main");
+    let mut child =
+        child_state("root", "child", AgentStatus::Running, 1).paused_turn_error(0, "limit");
+    child.launch_depth = Some(1);
+    let running = agent("claude", "running", AgentStatus::Running, 0).worktree("/repo/main");
+    let snapshot = room_with_agent_panes(vec![running, parent, child]);
+    let group = &snapshot.worktree_groups[0];
+    assert_eq!(group.rows[0].id, "root");
+    assert_eq!(group.rows[0].attention_status(), Some(AgentStatus::Paused));
+    assert_eq!(group.status_counts[0].status, AgentStatus::Paused);
+    assert_eq!(group.status_counts[0].count, 1);
+}
+
+#[test]
 fn bucket_order_puts_attention_first_and_idle_last() {
     // Scrambled input proves the sort, not the insertion order.
     let agents = [
