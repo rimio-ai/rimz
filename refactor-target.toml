@@ -386,6 +386,7 @@ allowed-dependencies = [
 # GC reaches the retired named-channel record through one classed-path accessor (+1).
 # The keep-warm producer cache path is built here for the refresh lane, enrichment, and the consumer stamp (+1).
 # A session's sidebar host appends its stderr to one classed state log (+1).
+# Receipt monitoring stats the queued-message file through StatePaths::message_queue_file.
 surface-budget = 221
 
 [[module]]
@@ -511,7 +512,11 @@ path = "crates/rimz/src/harness"
 # The manual forecast and CLI preview share automatic provider eligibility (+1), and the preview reads the provider hold (+1).
 # RelaunchLoginErr crosses to the CLI relaunch paths with the resume module (+1).
 # Thin exec supervision cancels runs through paths without a Store (+1).
-surface-budget = 750
+# WatchdogSeed carries the launch members and cursor across the exec boundary (+1).
+# ProbeConfirm carries authoritative one-shot death or successor answers (+1).
+# seed resolves the same parent launch for startup and confirmation (+1).
+# The parked monitor drains the parent-changed edge through ParentWatch::take_parent_changed (+1).
+surface-budget = 754
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -805,7 +810,16 @@ surface-budget = 25
 
 [[module]]
 path = "crates/rimz/src/cli/agents_cmd/exec.rs"
-surface-budget = 1
+# The hidden duty request and entry re-export cross to agents dispatch (+2).
+surface-budget = 3
+
+[[module]]
+path = "crates/rimz/src/cli/agents_cmd/exec/duty.rs"
+# The helper request and run entry serve hidden agents dispatch (+2).
+# Duty and command let the parked monitor spawn its store-owning work (+2).
+# confirm supplies the watchdog's one-shot authoritative answer (+1).
+# run_card_evidence keeps startup and helper provisional-card rules identical (+1).
+surface-budget = 6
 
 [[module]]
 path = "crates/rimz/src/cli/agents_cmd/launch.rs"

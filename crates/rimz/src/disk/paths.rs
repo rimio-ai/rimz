@@ -342,6 +342,11 @@ impl StatePaths {
         Ok(())
     }
 
+    /// The queued-message file, for fold-free receipt change detection.
+    pub fn message_queue_file(&self) -> PathBuf {
+        self.messages_dir.join("messages.jsonl")
+    }
+
     /// The temp unit an agent and every subagent it launches share:
     /// `tmp/<owner>/`, or `tmp/_unnamed/` for a launch without a handle.
     /// Handles are path-safe (`petname::valid_agent_name`) and never start with `_`.

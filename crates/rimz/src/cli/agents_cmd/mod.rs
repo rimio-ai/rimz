@@ -650,6 +650,9 @@ enum AgentsSubcmd {
     /// Hidden helper that reconstructs a missed subagent fleet digest.
     #[command(hide = true)]
     SubagentDigest(HelperRequestArgs<SubagentDigestRequest>),
+    /// Hidden helper for the parked wrapper's store-owning duties.
+    #[command(hide = true)]
+    SuperviseDuty(HelperRequestArgs<exec::SuperviseDutyRequest>),
     /// Hidden helper the producer spawns to refresh one provider's account usage
     /// (rate-limit windows + paid credits) into the shared cache.
     #[command(hide = true)]
@@ -764,6 +767,7 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
         Some(AgentsSubcmd::SubagentDigest(args)) => {
             return subagent_report::backstop_digest(args.request);
         }
+        Some(AgentsSubcmd::SuperviseDuty(args)) => return exec::run_supervise_duty(args.request),
         Some(AgentsSubcmd::RefreshUsage(args)) => return run_refresh_usage(args.request),
         Some(AgentsSubcmd::RefreshContext(args)) => return refresh_context::run(args.request),
         Some(AgentsSubcmd::Budget(args)) => return run_budget(args, globals),

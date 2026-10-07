@@ -1,5 +1,8 @@
 use super::*;
+mod duty;
 use crate::cli::{open_store, worktree};
+use duty::Duty;
+pub(super) use duty::{SuperviseDutyRequest, run as run_supervise_duty};
 use rimz::mux::winsize::WinsizeRepair;
 use rimz::store::snapshot::find_agent;
 use std::cell::RefCell;
@@ -1109,18 +1112,6 @@ struct RunExecContext {
 }
 
 impl RunExecContext {
-    fn ready_for_self_cleanup(&self, record: &rimz::store::run::RunRecord) -> bool {
-        record.status.is_terminal()
-            && match rimz::store::run::run_waiter_is_live(self.store.runtime_paths(), &self.run_id)
-            {
-                Ok(live) => !live,
-                Err(error) => {
-                    tracing::debug!(run_id = %self.run_id, %error, "could not probe supervised run waiter");
-                    false
-                }
-            }
-    }
-
     fn is_terminal(&self) -> bool {
         self.load_record()
             .is_some_and(|record| record.status.is_terminal())
@@ -1198,107 +1189,196 @@ enum StopPolicy {
     ParentReceived,
 }
 
+struct RunPaths {
+    run_id: rimz::RunId,
+    paths: rimz::StatePaths,
+    runtime: rimz::RuntimePaths,
+}
+
+enum DutyChild {
+    Process(Child),
+    #[cfg(test)]
+    Fake(std::rc::Rc<RefCell<Option<i32>>>),
+}
+
+impl DutyChild {
+    fn poll(&mut self) -> Option<i32> {
+        match self {
+            Self::Process(child) => match child.try_wait() {
+                Ok(status) => status.map(|status| status.code().unwrap_or(1)),
+                Err(error) => {
+                    tracing::debug!(%error, "could not wait for supervisor duty");
+                    Some(1)
+                }
+            },
+            #[cfg(test)]
+            Self::Fake(status) => *status.borrow(),
+        }
+    }
+}
+
+impl Drop for DutyChild {
+    fn drop(&mut self) {
+        match self {
+            Self::Process(child) => {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+            #[cfg(test)]
+            Self::Fake(_) => {}
+        }
+    }
+}
+
 struct RunMonitor {
     self_cleanup: bool,
     stop_policy: StopPolicy,
     awaiting_reopen: Option<u32>,
+    next_park_check: Instant,
     next_receipt_check: Instant,
     reported_revision: Option<jiff::Timestamp>,
-    next_park_check: Instant,
-    previous: Option<jiff::Timestamp>,
+    strand: Option<DutyChild>,
+    receipt: Option<DutyChild>,
+    strand_backoff: Duration,
+    queue_stamp: Option<(std::time::SystemTime, u64)>,
+    receipt_dirty: bool,
+    receipt_ready: bool,
+    last_receipt_check: Option<Instant>,
 }
 
 impl RunMonitor {
-    fn poll(&mut self, context: &RunExecContext, now: Instant) -> bool {
-        let Some(record) = context.load_record() else {
-            self.previous = None;
-            return false;
+    fn new(
+        self_cleanup: bool,
+        stop_policy: StopPolicy,
+        awaiting_reopen: Option<u32>,
+        now: Instant,
+    ) -> Self {
+        Self {
+            self_cleanup,
+            stop_policy,
+            awaiting_reopen,
+            next_park_check: now,
+            next_receipt_check: now,
+            reported_revision: None,
+            strand: None,
+            receipt: None,
+            strand_backoff: PARK_STRAND_POLL,
+            queue_stamp: None,
+            receipt_dirty: true,
+            receipt_ready: false,
+            last_receipt_check: None,
+        }
+    }
+
+    fn poll(
+        &mut self,
+        context: &RunPaths,
+        now: Instant,
+        parent_changed: bool,
+        mut spawn: impl FnMut(Duty) -> Result<DutyChild>,
+    ) -> bool {
+        let record = match rimz::harness::run::load(&context.paths, &context.run_id) {
+            Ok(record) => record,
+            Err(error) => {
+                tracing::debug!(run_id = %context.run_id, %error, "could not read supervised run record while monitoring pane");
+                return false;
+            }
         };
-        if record.parked_at.is_none() || record.status.is_terminal() {
-            self.previous = None;
-        } else if now >= self.next_park_check {
-            self.next_park_check = now + PARK_STRAND_POLL;
-            self.repair_digest(context, &record);
-            self.previous = match rimz::harness::run::settle_stranded_park(
-                &context.store,
-                &record,
-                self.previous,
-            ) {
-                Ok(rimz::harness::run::ParkCheck::Stranded(at)) => Some(at),
-                Ok(_) => None,
-                Err(error) => {
-                    tracing::debug!(run_id = %context.run_id, %error, "could not settle parked run");
-                    None
+        let parked = record.parked_at.is_some() && !record.status.is_terminal();
+        if !parked {
+            self.strand = None;
+            self.strand_backoff = PARK_STRAND_POLL;
+            self.next_park_check = now;
+        } else {
+            if let Some(code) = self.strand.as_mut().and_then(DutyChild::poll) {
+                self.strand = None;
+                self.next_park_check = now + self.strand_backoff;
+                if code != 0 {
+                    self.strand_backoff = (self.strand_backoff * 2).min(Duration::from_secs(60));
                 }
-            };
+            }
+            if self.strand.is_none() && now >= self.next_park_check {
+                match spawn(Duty::Strand {
+                    run_id: context.run_id.clone(),
+                }) {
+                    Ok(child) => self.strand = Some(child),
+                    Err(error) => {
+                        tracing::debug!(run_id = %context.run_id, %error, "could not spawn strand duty");
+                        self.next_park_check = now + self.strand_backoff;
+                        self.strand_backoff =
+                            (self.strand_backoff * 2).min(Duration::from_secs(60));
+                    }
+                }
+            }
         }
         if !self.self_cleanup {
             return false;
         }
         if matches!(self.stop_policy, StopPolicy::RunTerminal) {
-            return context.ready_for_self_cleanup(&record);
+            return record.status.is_terminal() && run_ready(context);
         }
-        if let Some(follow_ups) = self.awaiting_reopen {
-            // A turn can reopen and complete between polls; the durable ordinal preserves it.
-            if record.follow_ups <= follow_ups {
+        if let Some(ordinal) = self.awaiting_reopen {
+            if record.follow_ups <= ordinal {
                 return false;
             }
             self.awaiting_reopen = None;
         }
         if !record.status.is_terminal() {
+            self.receipt = None;
+            self.receipt_ready = false;
+            self.receipt_dirty = true;
             return false;
         }
+        let ready = run_ready(context);
         if record.report_to == rimz::store::run::ReportTo::Nobody {
-            // Nobody receives a detached answer, so there is no parent turn to wait for.
-            return context.ready_for_self_cleanup(&record);
+            return ready;
         }
-        if now < self.next_receipt_check {
-            return false;
+        let queue_stamp = std::fs::metadata(context.paths.message_queue_file())
+            .ok()
+            .and_then(|meta| Some((meta.modified().ok()?, meta.len())));
+        self.receipt_dirty |= parent_changed
+            || queue_stamp != self.queue_stamp
+            || self.reported_revision != Some(record.updated_at);
+        self.queue_stamp = queue_stamp;
+        if let Some(code) = self.receipt.as_mut().and_then(DutyChild::poll) {
+            self.receipt = None;
+            self.receipt_ready = code == 0;
         }
-        self.next_receipt_check = now + PARENT_RECEIPT_POLL;
-        // Files land per child; digest stamps wait for the fleet. Try once per record revision.
-        if record.owes_report() && self.reported_revision != Some(record.updated_at) {
-            self.reported_revision = Some(record.updated_at);
-            report_settled_child_or_log(context);
-        }
-        if !context.ready_for_self_cleanup(&record) {
-            return false;
-        }
-        match context.parent_received_and_rested(&record) {
-            Ok(ready) => ready,
-            Err(error) => {
-                tracing::debug!(run_id = %context.run_id, %error, "could not read subagent output receipt");
-                false
-            }
-        }
-    }
-
-    /// The strand settle exits a park that is owed nothing; a settled fleet
-    /// whose digest was lost is owed something no one else will deliver, since
-    /// the child's reporter does not retry and `orphan_sweep`'s backstop needs
-    /// a live sidebar producer. So the parked run repairs its own fleet before
-    /// each strand check. The repair is idempotent and its stamp CAS tolerates
-    /// a concurrent reporter, so every outcome and error is logged and ignored:
-    /// it never gates the check that follows it. The same repair settles ended
-    /// team cohorts before the fleet reporter runs. A park that launched nobody
-    /// costs one projection read per reporter, since each answers a launcher
-    /// with no members or team seats without listing the runs.
-    fn repair_digest(&self, context: &RunExecContext, record: &rimz::store::run::RunRecord) {
-        let Some(agent_id) = record.agent_id.as_ref() else {
-            return;
-        };
-        if let Err(error) =
-            super::team_report::settle_ended_teams(&context.workspace, &context.store, agent_id)
+        let periodic = self
+            .last_receipt_check
+            .is_none_or(|last| now.duration_since(last) >= Duration::from_secs(60));
+        if self.receipt.is_none()
+            && now >= self.next_receipt_check
+            && (self.receipt_dirty || periodic)
         {
-            tracing::debug!(run_id = %context.run_id, %error, "could not settle a parked run's ended teams");
+            let report = self.reported_revision != Some(record.updated_at);
+            match spawn(Duty::Receipt {
+                run_id: context.run_id.clone(),
+                report,
+            }) {
+                Ok(child) => {
+                    self.receipt = Some(child);
+                    self.reported_revision = Some(record.updated_at);
+                    self.receipt_dirty = false;
+                    self.receipt_ready = false;
+                    self.last_receipt_check = Some(now);
+                }
+                Err(error) => {
+                    tracing::debug!(run_id = %context.run_id, %error, "could not spawn receipt duty")
+                }
+            }
+            self.next_receipt_check = now + PARENT_RECEIPT_POLL;
         }
-        match super::subagent_report::report_fleet(&context.workspace, &context.store, agent_id) {
-            Ok(outcome) => {
-                tracing::debug!(run_id = %context.run_id, ?outcome, "repaired a parked run's fleet digest");
-            }
-            Err(error) => {
-                tracing::debug!(run_id = %context.run_id, %error, "could not repair a parked run's fleet digest");
-            }
+        ready && self.receipt_ready && !self.receipt_dirty && self.receipt.is_none()
+    }
+}
+
+fn run_ready(context: &RunPaths) -> bool {
+    match rimz::store::run::run_waiter_is_live(&context.runtime, &context.run_id) {
+        Ok(live) => !live,
+        Err(error) => {
+            tracing::debug!(run_id = %context.run_id, %error, "could not probe supervised run waiter");
+            false
         }
     }
 }
@@ -1752,15 +1832,10 @@ fn launch_card_provisional(
     invocation: &ExecInvocationContext<'_>,
     identity: &LaunchIdentity,
 ) -> Option<bool> {
-    match invocation
-        .store()
-        .and_then(|store| store.snapshot_cached().map_err(Into::into))
-    {
-        Ok(snapshot) => Some(snapshot.agents.iter().any(|agent| {
-            agent.kind == identity.kind
-                && agent.agent_id == identity.agent_id
-                && agent.name.as_deref() == Some(identity.name.as_str())
-        })),
+    match invocation.store().and_then(|store| {
+        duty::run_card_evidence(&store, &identity.kind, &identity.agent_id, &identity.name)
+    }) {
+        Ok(provisional) => Some(provisional),
         Err(err) => {
             tracing::debug!(
                 agent_name = %identity.name,
@@ -1910,15 +1985,13 @@ fn supervise_child(
     let mut run_completed = false;
     let mut parent_ended = false;
     let mut next_run_check = Instant::now();
-    let mut monitor_state = RunMonitor {
-        self_cleanup,
-        stop_policy,
-        awaiting_reopen,
-        next_receipt_check: next_run_check,
-        reported_revision: None,
-        next_park_check: next_run_check,
-        previous: None,
-    };
+    let mut monitor_state =
+        RunMonitor::new(self_cleanup, stop_policy, awaiting_reopen, next_run_check);
+    let run_paths = run_monitor.map(|context| RunPaths {
+        run_id: context.run_id.clone(),
+        paths: context.store.paths().clone(),
+        runtime: context.store.runtime_paths().clone(),
+    });
     loop {
         let now = Instant::now();
         match child.try_wait() {
@@ -1944,9 +2017,12 @@ fn supervise_child(
                 .is_some_and(|watchdog| watchdog.parent_ended())
         {
             parent_ended = true;
-            if let Some(monitor) = run_monitor
-                && let Err(err) =
-                    rimz::harness::run::cancel_and_wake(&monitor.store, &monitor.run_id)
+            if let Some(monitor) = run_paths.as_ref()
+                && let Err(err) = rimz::harness::run::cancel_and_wake_paths(
+                    &monitor.paths,
+                    &monitor.runtime,
+                    &monitor.run_id,
+                )
             {
                 tracing::debug!(
                     run_id = %monitor.run_id,
@@ -1959,7 +2035,7 @@ fn supervise_child(
         }
 
         if !run_completed
-            && let Some(monitor) = run_monitor
+            && let Some((context, monitor)) = run_monitor.zip(run_paths.as_ref())
             && now >= next_run_check
         {
             next_run_check = now
@@ -1968,7 +2044,19 @@ fn supervise_child(
                 } else {
                     PARK_STRAND_POLL
                 };
-            if monitor_state.poll(monitor, now) {
+            let parent_changed = parent_watchdog
+                .as_ref()
+                .is_some_and(|watch| watch.take_parent_changed());
+            if monitor_state.poll(monitor, now, parent_changed, |request| {
+                duty::command(
+                    monitor.paths.workspace_id.clone(),
+                    context.session_name.clone(),
+                    request,
+                )?
+                .spawn()
+                .map(DutyChild::Process)
+                .context("spawning supervise duty")
+            }) {
                 run_completed = true;
                 child.signal_term();
                 term_sent_at = Some(now);
@@ -2026,13 +2114,30 @@ fn subagent_parent_watchdog(
         tracing::debug!("subagent parent watchdog has no launch identity");
         return None;
     };
+    let paths = context.store.paths();
+    let cursor = rimz::store::event_log::LogExtent {
+        generation: rimz::store::snapshot::lifecycle_log_generation(paths),
+        offset: std::fs::metadata(&paths.events_log).map_or(0, |meta| meta.len()),
+    };
+    let projection = context
+        .store
+        .runtime_projection(rimz::RuntimeScope::Audit)
+        .ok()?;
+    let seed = rimz::harness::parent_watch::seed(
+        &projection.agents,
+        identity.kind.clone(),
+        identity.agent_id.clone(),
+        rimz::mux::ambient_pane_id(),
+        context.session_name.clone(),
+        cursor,
+    )?;
+    let workspace_id = paths.workspace_id.clone();
     Some(
-        rimz::harness::parent_watch::ParentWatchdog::new(
-            context.store.clone(),
-            identity.kind.clone(),
-            identity.agent_id.clone(),
-            rimz::mux::ambient_pane_id(),
-            context.session_name.clone(),
+        rimz::harness::parent_watch::ParentWatchdog::from_seed(
+            seed,
+            paths.clone(),
+            context.store.runtime_paths().clone(),
+            move |seed| duty::confirm(&workspace_id, seed),
         )
         .start(),
     )
