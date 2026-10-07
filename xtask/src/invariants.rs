@@ -517,6 +517,7 @@ fn ensure_sidebar_library_boundaries(root: &Path, files: &[PathBuf]) -> Result<(
         "idle_stop.rs",
         "orphan_sweep.rs",
         "park_notice.rs",
+        "stall_notice.rs",
         "run_timeout.rs",
         "schedule/fire.rs",
         "schedule/when.rs",

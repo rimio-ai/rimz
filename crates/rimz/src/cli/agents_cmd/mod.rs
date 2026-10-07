@@ -32,6 +32,7 @@ mod resume;
 mod run_timeout;
 mod runs_lookup;
 mod show;
+mod stall_notice;
 mod stop;
 mod subagent_report;
 pub(in crate::cli) mod team_report;
@@ -630,6 +631,9 @@ enum AgentsSubcmd {
     /// Hidden helper that tells a parent its child stopped on a provider limit.
     #[command(hide = true)]
     ParkNotice(HelperRequestArgs<rimz::harness::park_notice::ParkNoticeRequest>),
+    /// Hidden helper that tells a parent its child went silent past the stall window.
+    #[command(hide = true)]
+    StallNotice(HelperRequestArgs<rimz::harness::stall_notice::StallNoticeRequest>),
     /// Hidden helper that settles a supervised run after its durable deadline.
     #[command(hide = true)]
     RunTimeout(HelperRequestArgs<RunTimeoutRequest>),
@@ -745,6 +749,7 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
         Some(AgentsSubcmd::AutoRedeem(args)) => return run_auto_redeem(args.request),
         Some(AgentsSubcmd::BudgetPark(args)) => return run_budget_park(args.request),
         Some(AgentsSubcmd::ParkNotice(args)) => return park_notice::run(args.request),
+        Some(AgentsSubcmd::StallNotice(args)) => return stall_notice::run(args.request),
         Some(AgentsSubcmd::RunTimeout(args)) => return run_timeout(args.request, globals),
         Some(AgentsSubcmd::OrphanSubagent(args)) => {
             return repair_orphan(args.request, globals);

@@ -177,7 +177,8 @@ upward-dependencies = ["address"]
 # AgentState::displayed_turn_error_label shares the nested entry and list wording (+1).
 # `RateLimitWindow::pace` and `PaceReading` share the pace fact and floor gate across renderers (+5).
 # AskRoute and pane_actions share one answerability decision with both CLI consumers (+2).
-surface-budget = 990
+# AgentState::silent_child_for shares one stall predicate between projection and notice detection (+1).
+surface-budget = 991
 
 [[module]]
 path = "crates/rimz/src/agents/adapters/antigravity"
@@ -491,7 +492,8 @@ path = "crates/rimz/src/harness"
 # Acting-run classification and folded history cross to the loop CLI (+5).
 # Room-only catalog loading filters before precedence for list and watch (+1).
 # Manual resumes share refill settlement and its typed error (+2), and receive the per-tab recovery carrier (+2).
-surface-budget = 731
+# Silent-child notices share the detector, text, request, evidence and module with the CLI/producer (+6), plus the run claim and release (+2).
+surface-budget = 739
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -1128,7 +1130,8 @@ allowed-dependencies = [
 # The park-notice helper claims one park per child activity through a locked CAS, and gives it back when queueing fails.
 # `VERIFY_MAX_ATTEMPTS_DEFAULT` is the one verify cap the loop reminder, `loop show`, and the supervised run read (+1).
 # `provider_startup_exit` shares the diagnostic window independently of relaunch eligibility (+1).
-surface-budget = 52
+# A silent-child notice is claimed once per run and released only after a failed queue write (+2).
+surface-budget = 54
 
 [[module]]
 path = "crates/rimz/src/harness/run/report.rs"
