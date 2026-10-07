@@ -327,6 +327,8 @@ rimz agents resume                # in a worktree: that lane; at the project roo
 
 Members are root sessions: subagent children never come back through resume; their parent relaunches what it still needs. The durable lane listing's `MEMBERS` and `LIVE` counts exclude children.
 
+When rebuilding a team tab, a member the lane cannot resume comes back as a fresh seat; its old session ends `rimz.seat-refilled` when the tab opens.
+
 | Lane state | Result |
 | --- | --- |
 | every member live | Focuses the freshest member's pane and exits `0`, or reports it already live without jumping for an agent caller or `--bg`. |

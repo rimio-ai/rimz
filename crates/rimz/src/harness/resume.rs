@@ -188,12 +188,14 @@ impl LaneRestorePlan {
         &self.discovery_skipped
     }
 
-    /// Materialize team entries strictly, then return every planned tab.
-    pub fn materialize(self, store: &Store, session_name: &str) -> anyhow::Result<ResumePlan> {
-        Ok(self
-            .recovery
-            .materialize(session_name, RecoveryMaterializer::Strict(store))?
-            .resume)
+    /// Materialize team entries strictly, retaining each tab's replacement keys.
+    pub fn materialize(
+        self,
+        store: &Store,
+        session_name: &str,
+    ) -> anyhow::Result<MaterializedRecovery> {
+        self.recovery
+            .materialize(session_name, RecoveryMaterializer::Strict(store))
     }
 }
 
@@ -923,15 +925,15 @@ impl<'a> RecoveryMaterializer<'a> {
     }
 }
 
-pub(super) struct MaterializedRecovery {
-    pub(super) resume: ResumePlan,
+pub struct MaterializedRecovery {
+    pub resume: ResumePlan,
     /// The agents each of `resume.tabs` resumes or replaces, by position.
-    pub(super) tab_agents: Vec<RecoveryTabAgents>,
+    pub tab_agents: Vec<RecoveryTabAgents>,
 }
 
-pub(super) struct RecoveryTabAgents {
-    pub(super) resumed: BTreeSet<(AgentKind, AgentSessionId)>,
-    pub(super) refilled: BTreeSet<(AgentKind, AgentSessionId)>,
+pub struct RecoveryTabAgents {
+    pub resumed: BTreeSet<(AgentKind, AgentSessionId)>,
+    pub refilled: BTreeSet<(AgentKind, AgentSessionId)>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]

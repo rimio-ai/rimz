@@ -78,6 +78,10 @@ fn main() {
 
     let cli = &args[1..];
     if has_pair(cli, "action", "new-tab") {
+        if env::var_os("RIMZ_TEST_ZELLIJ_TRACE_TIME").is_some() {
+            let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
+            writeln!(file, "new-tab-at\t{}", now.as_nanos()).expect("record tab open time");
+        }
         if let Some(path) = env::var_os("RIMZ_TEST_ZELLIJ_ASSIST_LOG") {
             let count = std::fs::read_to_string(path)
                 .unwrap_or_default()

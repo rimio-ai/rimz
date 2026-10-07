@@ -37,6 +37,11 @@ pub enum RebirthErr {
     Inspect(#[from] anyhow::Error),
 }
 
+/// Failure to remove durably ended replacement seats from pending recovery.
+#[derive(Debug, thiserror::Error)]
+#[error(transparent)]
+pub struct RefillSettlementErr(pending_recovery::PendingRecoveryErr);
+
 /// What a settlement does with root recovery candidates. Only an attended
 /// decision declines or drops them; children and live-refilled seats end
 /// automatically under every disposition.
@@ -504,12 +509,11 @@ impl SeededRecovery {
         if !failed.is_empty() || !refilled.is_empty() {
             match Store::open(paths.clone(), runtime) {
                 Ok(store) => {
-                    confirmed.extend(record_refilled_seats(
-                        &store,
-                        &paths.workspace_id,
-                        &session_name,
-                        &refilled,
-                    ));
+                    if let Err(err) = settle_refilled_seats(&store, &session_name, &refilled) {
+                        resume
+                            .warnings
+                            .push(format!("replaced agents stay pending: {err}"));
+                    }
                     for launch in &failed {
                         let _ = store.fail_agent_launch_batch(&launch.batch);
                     }
@@ -1038,6 +1042,20 @@ fn record_agents_ended(
         }
     }
     ended
+}
+
+/// End `refilled` `rimz.seat-refilled` and take the ended keys out of the
+/// pending record. Called once the tab or pane their replacement holds is open.
+pub fn settle_refilled_seats(
+    store: &Store,
+    session_name: &str,
+    refilled: &BTreeSet<(AgentKind, AgentSessionId)>,
+) -> std::result::Result<(), RefillSettlementErr> {
+    if refilled.is_empty() {
+        return Ok(());
+    }
+    let ended = record_refilled_seats(store, &store.paths().workspace_id, session_name, refilled);
+    pending_recovery::settle(store.paths(), &ended).map_err(RefillSettlementErr)
 }
 
 fn record_refilled_seats(

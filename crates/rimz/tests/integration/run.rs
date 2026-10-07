@@ -567,10 +567,36 @@ fn tier_lane_resume_failed_tab_closes_launch_without_assist() {
 }
 
 #[cfg(unix)]
+#[test]
+fn cohort_resume_seat_refilled_after_tab_opens() {
+    assert_tier_launch("fallback", "resume-refilled");
+}
+
+#[cfg(unix)]
+#[test]
+fn cohort_resume_seat_refilled_failed_tab_stays_pending() {
+    assert_tier_launch("fallback", "resume-refilled-fails");
+}
+
+#[cfg(unix)]
+#[test]
+fn lane_resume_seat_refilled_after_tab_opens() {
+    assert_tier_launch("fallback", "lane-refilled");
+}
+
+#[cfg(unix)]
+#[test]
+fn lane_resume_seat_refilled_failed_tab_stays_pending() {
+    assert_tier_launch("fallback", "lane-refilled-fails");
+}
+
+#[cfg(unix)]
 fn assert_tier_launch(routing: &str, surface: &str) {
     let interactive = surface != "subagent";
-    let lane = matches!(surface, "lane" | "lane-fails" | "lane-unhooked");
-    let resume = surface == "resume" || lane;
+    let lane = surface.starts_with("lane");
+    let resume = surface.starts_with("resume") || lane;
+    let refilled = surface.contains("refilled");
+    let failed_tab = surface.ends_with("-fails");
     let env = Env::new();
     for kind in ["claude", "codex"] {
         env.install_agent_hooks(kind);
@@ -707,7 +733,9 @@ fn assert_tier_launch(routing: &str, surface: &str) {
         .unwrap();
     if resume {
         let transcript = env.project_root.join("closed.jsonl");
-        std::fs::write(&transcript, "{}\n").unwrap();
+        if !refilled {
+            std::fs::write(&transcript, "{}\n").unwrap();
+        }
         let mut observation =
             AgentLifecycleObservation::new(Some("parent-session".into()), LifecycleSignal::Ended);
         observation.transcript_path = Some(transcript.display().to_string());
@@ -721,6 +749,70 @@ fn assert_tier_launch(routing: &str, surface: &str) {
             ))
             .unwrap();
     }
+    if refilled {
+        std::fs::create_dir_all(store.paths().pending_recovery.parent().unwrap()).unwrap();
+        std::fs::write(
+            &store.paths().pending_recovery,
+            r#"{"version":1,"agents":[["claude","parent-session"]]}"#,
+        )
+        .unwrap();
+        let parent = store
+            .runtime_projection(rimz::RuntimeScope::Audit)
+            .unwrap()
+            .agents
+            .into_iter()
+            .find(|agent| agent.agent_id.as_str() == "parent-session")
+            .unwrap();
+        assert!(!matches!(
+            rimz::store::runtime::agent_liveness(&parent),
+            rimz::store::runtime::AgentLiveness::Live { .. }
+        ));
+        assert!(!rimz::harness::resume::resume_session_present(&parent));
+        // A lane needs a backed root before it plans closed-team refills.
+        if lane {
+            let mut backed = store
+                .read_events()
+                .unwrap()
+                .into_iter()
+                .find_map(|event| match event.kind() {
+                    rimz::store::event::EventKind::AgentLaunch(payload) => Some(payload),
+                    _ => None,
+                })
+                .unwrap();
+            backed.agent_id = "backed-session".into();
+            backed.launch_id = Some("backed-launch".into());
+            backed.agent_name = "backed".into();
+            backed.pane_id = None;
+            backed.launch = LaunchParams {
+                channel: Some("restore".into()),
+                ..Default::default()
+            };
+            store
+                .append_event(&EventEnvelope::agent_launched(
+                    workspace.workspace_id.clone(),
+                    &workspace.session_name,
+                    &AgentKind::new_unchecked("claude"),
+                    backed,
+                ))
+                .unwrap();
+            let transcript = env.project_root.join("backed.jsonl");
+            std::fs::write(&transcript, "{}\n").unwrap();
+            let mut observation = AgentLifecycleObservation::new(
+                Some("backed-session".into()),
+                LifecycleSignal::Ended,
+            );
+            observation.transcript_path = Some(transcript.display().to_string());
+            store
+                .append_event(&EventEnvelope::agent_lifecycle(
+                    workspace.workspace_id.clone(),
+                    &workspace.session_name,
+                    "claude",
+                    "SessionEnd",
+                    &observation,
+                ))
+                .unwrap();
+        }
+    }
     seed_live_zellij_room(
         &runtime,
         &workspace.session_name,
@@ -732,7 +824,7 @@ fn assert_tier_launch(routing: &str, surface: &str) {
     command
         .args(match surface {
             "same-pane" => vec!["--mux", "zellij", "agents", "preview"],
-            "resume" => vec!["--mux", "zellij", "agents", "duo", "--resume"],
+            _ if resume && !lane => vec!["--mux", "zellij", "agents", "duo", "--resume"],
             _ if lane => vec!["--mux", "zellij", "agents", "resume", "#restore"],
             _ => vec!["--mux", "zellij", "subagents", "worker", "work"],
         })
@@ -763,7 +855,10 @@ fn assert_tier_launch(routing: &str, surface: &str) {
             env.rimz_home().join("logs/assists.log.jsonl"),
         );
     }
-    if surface == "lane-fails" {
+    if refilled {
+        command.env("RIMZ_TEST_ZELLIJ_TRACE_TIME", "1");
+    }
+    if failed_tab {
         command.env("RIMZ_TEST_ZELLIJ_FAIL_NEW_TAB", "1");
     }
     if surface == "lane-unhooked" {
@@ -779,7 +874,7 @@ fn assert_tier_launch(routing: &str, surface: &str) {
         assert!(
             surface == "same-pane"
                 || output.as_ref().unwrap().status.success()
-                    == !matches!(surface, "lane-fails" | "lane-unhooked"),
+                    == !(failed_tab || surface == "lane-unhooked"),
             "{}",
             String::from_utf8_lossy(&output.as_ref().unwrap().stderr)
         );
@@ -787,6 +882,47 @@ fn assert_tier_launch(routing: &str, surface: &str) {
     })
     .unwrap();
     let events = env.read_events();
+    if refilled {
+        let refills: Vec<_> = events
+            .iter()
+            .filter(|event| matches!(event.kind(),
+                rimz::store::event::EventKind::AgentLifecycle(payload)
+                    if payload.event_name.as_deref() == Some("rimz.seat-refilled")
+                        && payload.observation.signal == LifecycleSignal::Ended
+                        && payload.observation.agent_id.as_ref().is_some_and(|id| id.as_str() == "parent-session")))
+            .collect();
+        assert_eq!(refills.len(), usize::from(!failed_tab), "refilled seat end");
+        let trace = std::fs::read_to_string(&trace).unwrap();
+        let opened_at: i128 = trace
+            .lines()
+            .find_map(|line| line.strip_prefix("new-tab-at\t"))
+            .unwrap()
+            .parse()
+            .unwrap();
+        for event in refills {
+            assert!(event.timestamp.as_nanosecond() > opened_at);
+        }
+        let pending: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&store.paths().pending_recovery).unwrap())
+                .unwrap();
+        assert_eq!(
+            pending["agents"],
+            if failed_tab {
+                json!([["claude", "parent-session"]])
+            } else {
+                json!([])
+            }
+        );
+        assert_eq!(
+            env.diag_records(&workspace.session_name)
+                .iter()
+                .filter(|record| matches!(&record.event,
+                    rimz::diag::record::DiagEvent::RecoverySeatRefilled { agent_kind, agent_id }
+                        if agent_kind.as_str() == "claude" && agent_id.as_str() == "parent-session"))
+                .count(),
+            usize::from(!failed_tab)
+        );
+    }
     if surface == "lane-unhooked" {
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(
@@ -814,10 +950,12 @@ fn assert_tier_launch(routing: &str, surface: &str) {
             rimz::store::event::EventKind::AgentLaunch(payload)
                 if payload.state == AgentLaunchState::Starting
                     && payload.launch.profile.as_deref()
-                        == Some(match surface {
-                            "resume" | "lane" | "lane-fails" => "duo.writer",
-                            "same-pane" => "preview",
-                            _ => "worker",
+                        == Some(if resume {
+                            "duo.writer"
+                        } else if surface == "same-pane" {
+                            "preview"
+                        } else {
+                            "worker"
                         }) =>
             {
                 Some((event, payload))
@@ -846,14 +984,17 @@ fn assert_tier_launch(routing: &str, surface: &str) {
         .collect();
     assert_eq!(
         fallbacks.len(),
-        usize::from(routing == "fallback" && surface != "lane-fails")
+        usize::from(routing == "fallback" && !failed_tab) * (1 + usize::from(refilled))
     );
+    if refilled {
+        assert_eq!(assists.len(), fallbacks.len());
+    }
     if lane {
         let trace = std::fs::read_to_string(&trace).unwrap();
         assert!(trace.contains("action\tnew-tab"), "{trace}");
         assert!(trace.contains("assists-before-new-tab\t0"), "{trace}");
     }
-    if surface == "lane-fails" {
+    if failed_tab {
         assert!(events.iter().any(|event| matches!(event.kind(),
             rimz::store::event::EventKind::AgentLaunch(payload)
                 if payload.agent_id == launches[0].1.agent_id && payload.state == AgentLaunchState::Failed)));
