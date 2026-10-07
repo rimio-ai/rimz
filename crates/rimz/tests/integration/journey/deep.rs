@@ -181,6 +181,227 @@ fn tmux_room_shows_agent_after_hook() {
     );
 }
 
+#[test]
+#[expect(
+    clippy::print_stderr,
+    reason = "record the measured client-byte guard evidence"
+)]
+fn tmux_cell_only_sidebar_bounds_client_bytes() {
+    if which::which("tmux").is_err() {
+        crate::common::skip("tmux not on PATH");
+        return;
+    }
+    let Some(rimz) = rimz_bin() else {
+        return;
+    };
+    let env = Env::new();
+    if env.skip_if_sandboxed() {
+        return;
+    }
+    const REFRESH_MS: u64 = 100;
+    const BYTES_PER_FRAME: u64 = 2048;
+    const STATUS_SLACK: u64 = 4096;
+    std::fs::write(
+        env.rimz_home().join("theme.toml"),
+        "[theme.pets]\nenabled = false\n[theme.display]\npixel = 'off'\n",
+    )
+    .expect("cell-only sidebar theme");
+    let runtime = tempfile::Builder::new()
+        .prefix("rz")
+        .rand_bytes(6)
+        .tempdir()
+        .expect("short runtime dir");
+    let socket = managed_socket(runtime.path());
+    let _server = TmuxServerGuard::new(socket.clone());
+    let fake_codex = fake_codex_bin(runtime.path());
+    tmux(
+        &socket,
+        &[
+            "-f",
+            "/dev/null",
+            "new-session",
+            "-d",
+            "-s",
+            "room",
+            "-x",
+            "200",
+            "-y",
+            "120",
+            "-c",
+            &env.project_root.display().to_string(),
+            &format!("{} 300", fake_codex.display()),
+        ],
+    );
+    tmux(
+        &socket,
+        &["set-option", "-as", "terminal-features", "*:sync"],
+    );
+    let codex_pane = tmux_capture(&socket, &["list-panes", "-t", "room", "-F", "#{pane_id}"]);
+    let codex_pid = tmux_capture(
+        &socket,
+        &["display-message", "-p", "-t", &codex_pane, "#{pane_pid}"],
+    );
+    let serve = format!(
+        "{} --refresh-ms {REFRESH_MS}",
+        sidebar_serve_line(&env, &rimz, runtime.path(), "tmux", "room", &[])
+    );
+    let sidebar = tmux_capture(
+        &socket,
+        &[
+            "split-window",
+            "-h",
+            "-P",
+            "-F",
+            "#{pane_id}",
+            "-t",
+            "room",
+            &serve,
+        ],
+    );
+    let parser = Arc::new(Mutex::new(vt100::Parser::new(120, 200, 0)));
+    let mut attach = CommandBuilder::new("tmux");
+    env.pin_pty_command(&mut attach);
+    attach.env("TERM", "xterm-256color");
+    attach.args([
+        "-u",
+        "-S",
+        socket.to_str().expect("utf8 socket"),
+        "attach",
+        "-t",
+        "room",
+    ]);
+    let _client = AttachProcess::on_pty(attach, &parser);
+
+    env.install_agent_hooks("codex");
+    let hook_env = [
+        ("TMUX_PANE", codex_pane.as_str()),
+        ("RIMZ_AGENT_PID", codex_pid.as_str()),
+        (rimz::harness::launch::ENV_AGENT_ROLE, "coder"),
+    ];
+    for payload in [
+        session_start_at(
+            "wire-agent",
+            "GPT-5.5",
+            "high",
+            env.project_root.display().to_string(),
+            None,
+        ),
+        serde_json::json!({
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "wire-agent",
+            "prompt": "keep working while the sidebar animates",
+        }),
+    ] {
+        let out = env.run_installed_hook_in_pane("codex", &payload.to_string(), &hook_env);
+        assert!(out.status.success(), "codex hook failed: {out:?}");
+    }
+    let screen = capture_until(&socket, &sidebar, |s| s.contains("coder"), CAPTURE_BUDGET);
+    assert!(
+        screen.contains("coder"),
+        "sidebar must paint the running agent: {screen}"
+    );
+    assert_eq!(
+        env.store()
+            .snapshot()
+            .expect("agent snapshot")
+            .agents
+            .iter()
+            .find(|agent| agent.agent_id.as_str() == "wire-agent")
+            .expect("installed hook's agent")
+            .status,
+        rimz::agents::AgentStatus::Running,
+    );
+    let dimensions = tmux_capture(
+        &socket,
+        &[
+            "display-message",
+            "-p",
+            "-t",
+            &sidebar,
+            "#{pane_width} #{pane_height}",
+        ],
+    );
+    let cells: u64 = dimensions
+        .split_whitespace()
+        .map(|dimension| dimension.parse::<u64>().expect("pane dimension"))
+        .product();
+    assert!(
+        cells >= 4000,
+        "full repaint must exceed the diff budget: {dimensions}"
+    );
+    let client_written = || {
+        tmux_capture(
+            &socket,
+            &[
+                "list-clients",
+                "-t",
+                "room",
+                "-f",
+                "#{==:#{client_control_mode},0}",
+                "-F",
+                "#{client_written}",
+            ],
+        )
+        .parse::<u64>()
+        .expect("one attached client's byte counter")
+    };
+    let agent_row = || {
+        parser
+            .lock()
+            .expect("attached client parser")
+            .screen()
+            .contents()
+            .lines()
+            .find(|line| line.contains("coder"))
+            .unwrap_or_default()
+            .to_owned()
+    };
+    let deadline = Instant::now() + CAPTURE_BUDGET;
+    while agent_row().is_empty() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    let initial_row = agent_row();
+    assert!(
+        !initial_row.is_empty(),
+        "the attached client must see the agent"
+    );
+    let screen = || {
+        parser
+            .lock()
+            .expect("attached client parser")
+            .screen()
+            .contents_formatted()
+    };
+    let initial_screen = screen();
+    let before = client_written();
+    let started = Instant::now();
+    let mut screen_changed = false;
+    while started.elapsed() < Duration::from_secs(10) {
+        std::thread::sleep(Duration::from_millis(125));
+        screen_changed |= screen() != initial_screen;
+    }
+    let after = client_written();
+    let elapsed = started.elapsed();
+    let bytes = after - before;
+    let frames = elapsed.as_millis().div_ceil(u128::from(REFRESH_MS)) as u64;
+    let budget = frames * BYTES_PER_FRAME + STATUS_SLACK;
+    eprintln!(
+        "cell-only sidebar: {bytes} client bytes in {elapsed:?}, {dimensions} cells, budget {budget}"
+    );
+    assert!(
+        bytes > 0,
+        "the attached client must receive paints during the window"
+    );
+    assert!(
+        screen_changed,
+        "the attached client must see the sidebar repaint during the window"
+    );
+    assert!(
+        bytes <= budget,
+        "cell-only frames must cost at most {BYTES_PER_FRAME} bytes each plus {STATUS_SLACK} status bytes: received {bytes}, budget {budget}",
+    );
+}
+
 /// tmux: closing a work column returns its width to the remaining work panes,
 /// not the fixed-width sidebar.
 #[test]
