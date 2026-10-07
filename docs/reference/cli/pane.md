@@ -44,30 +44,35 @@ With tmux selected, a bare `%N` is also accepted as `tmux:%N` and checked agains
 
 ## List panes
 
-`rimz pane list` prints the room as panes: one section per native tab, and one row per pane with its occupant, status, working directory, and pane id.
+`rimz pane list` prints the room as panes: one section per native tab, and one row per non-sidebar pane with its occupant, status, command, working directory, and pane id. `--all` includes sidebars; otherwise a line after the table counts the hidden sidebars.
 
 ```text
-AGENT                 STATUS   CWD                        PANE
+AGENT                 STATUS   COMMAND  CWD                        PANE
 
 #auth-refresh
-sidebar               -        ~/code/qe-wt/auth-refresh  zellij:terminal_2
-@claude#auth-refresh  running  ~/code/qe-wt/auth-refresh  zellij:terminal_3
-@codex#auth-refresh   idle     ~/code/qe-wt/auth-refresh  zellij:terminal_4 (self)
-process               -        ~/code/qe-wt/auth-refresh  zellij:terminal_5
+@claude#auth-refresh  running  claude   ~/code/qe-wt/auth-refresh  zellij:terminal_3
+@codex#auth-refresh   idle     codex    ~/code/qe-wt/auth-refresh  zellij:terminal_4 (self)
+process               -        zsh      ~/code/qe-wt/auth-refresh  zellij:terminal_5
++1 sidebar · --all shows it
 ```
 
-The `AGENT` column holds the agent's handle for a pane an agent lives in, `sidebar` for RimZ's sidebar, and `process` for any other pane. Only agent rows carry a status. `(self)` marks the pane that ran the command, which is not necessarily the focused pane; the listing has no focus mark.
+The `AGENT` column holds the agent's handle for a pane an agent lives in, `sidebar` for RimZ's sidebar, and `process` for any other pane. Only agent rows carry a status. `COMMAND` is the agent kind for agent rows, otherwise the foreground command or `-`. `(self)` marks the pane that ran the command, which is not necessarily the focused pane; the listing has no focus mark. Tab headings omit RimZ's status glyph suffix; repeated names get ` (2)`, ` (3)`, and so on. Tabs left with no visible rows are omitted.
+
+`rimz pane list [SCOPE]` limits the listing to a channel (`#` optional), worktree, branch, or directory name. An agent pane matches through its agent's channel or worktree; sidebars and process panes match when they share a native tab with a matching agent. Other agent panes in that tab still need to match individually. A scope with no matching panes exits `0`: the table view prints a note on stderr and nothing on stdout, and `--json` prints the usual document with `"tabs": []`. Scoping a session without reachable agent records, including a foreign session, fails with the session name and exits `1`.
 
 Agent labels are best effort. They come from the room's agent records, so with no records reachable every non-sidebar pane reads `process`, and a pane an agent has left, now running a shell, reads `process` too. The tab grouping does not depend on them.
 
-| Flag | Meaning |
+| Argument or flag | Meaning |
 | --- | --- |
+| `[SCOPE]` | Limit to a channel, worktree, branch, or directory name. Conflicts with `--worktree`. |
+| `-w`, `--worktree <NAME>` | Limit to a worktree by name. |
+| `--all` | Include sidebar rows in the table. Can be combined with a scope. |
 | `--session-name <NAME>` | List another multiplexer session instead of the current room. Agent labels and `(self)` appear only for the current room. On Zellij the session must be a RimZ room, because the pane roster comes from RimZ's presence plugin. Outside a room this flag is required. |
-| `--json` | Print the tab tree as JSON. |
+| `--json` | Print the tab tree as JSON, always including sidebars. The scope still applies; `--all` has no effect. |
 
 An explicit `--session-name` that is not live fails with the requested name and the live session names (or `none`). If the live-session read fails, the command attempts the pane listing as usual.
 
-The JSON document has `session`, `mux`, and `tabs`. Each tab has `view_id` and `name` (each omitted when the multiplexer gives none) and `panes`. Fields that have no value are omitted:
+The JSON document has `session`, `mux`, and `tabs`. Each tab has `view_id` and `name` (each omitted when the multiplexer gives none) and `panes`. `name` omits RimZ's status glyph suffix but is not numbered; `view_id` distinguishes repeated names. `command` remains the raw foreground command, including on agent rows. Fields that have no value are omitted:
 
 | Pane field | Meaning |
 | --- | --- |
