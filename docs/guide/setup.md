@@ -12,7 +12,7 @@ It reads the machine, writes the per-machine config, then asks about hooks, colo
 
 ## What setup writes
 
-Setup opens with a report of what it found: the multiplexer it selected and its version, the project root you ran it in and whether RimZ [trusts](./security.md#project-trust) it, the path to the core config file and whether that file already exists, then one row per agent adapter giving where RimZ found the binary and whether its hooks are installed.
+Setup opens with a report of what it found: the multiplexer it selected and its version, the project root you ran it in and whether RimZ [trusts](./security.md#project-trust) it, the path to the core config file and whether that file already exists, then hooks grouped into installed, not installed, and agents not on PATH. The installed group names any upgrade available. Paths under your home use `~`, and the project says whether it is a git repository, carries a project marker, or is a plain directory.
 
 Everything it writes goes under `~/.rimz/`, and it writes only what is missing. Three files carry the settings you will edit:
 
@@ -26,7 +26,7 @@ Two generated files land beside them and need nothing from you: `~/.rimz/remote.
 
 Rerun setup any time. When a config file already exists it asks `Keep your current config?`, which defaults to yes: your settings stay and the file is merged against the templates of the running build, so keys added since you last ran it appear with their defaults. Answering no overwrites the files with fresh templates. A file RimZ cannot parse is left exactly as it is, and setup stops there and names it rather than guessing.
 
-`rimz setup --yes` takes the non-interactive path: it prints the report, merges or writes the config files, and stops. No hooks are installed, no trust is granted, and no appearance or automation setting changes, which is what you want from a provisioning script. Without `--yes` and without a terminal to read from, setup prints the report, changes nothing, and tells you which of the two to do.
+For a provisioning script that needs files but cannot answer questions, `rimz setup --config-only` prints the report, merges or writes the config files, writes the missing remote template and the built-in consensus copy, and stops. No hooks are installed, no trust is granted, and no appearance or automation setting changes. Without `--config-only` and without a terminal to read from, setup prints the report, changes nothing, and names `rimz setup --config-only` for config. When agents lack hooks, it also names `rimz hooks install` and says how many need them.
 
 ## Install agent hooks
 
@@ -107,7 +107,7 @@ So setup lists three behaviors as rows with their current state and what each on
 
 `y` turns every listed row on, `n` turns every row off, and `choose` walks them one at a time. Enter keeps each row as it is: on a fresh machine idle compaction is on and the other rows are off. An existing idle-compaction duration counts as on and survives keeping that answer; changing the answer writes `on` or `off`. Whatever you pick, every action these take appends a record you can read back with `rimz stats --assists`.
 
-Setup removes the retired idle-compaction timer key and the old `auto` and `always` modes, reporting each removal before refreshing defaults or reading the configuration for the questions. An existing `off` is kept. This repair also runs with `--yes`.
+Setup removes the retired idle-compaction timer key and the old `auto` and `always` modes, reporting each removal before refreshing defaults or reading the configuration for the questions. An existing `off` is kept. This repair also runs with `--config-only`.
 
 The rules each one follows, down to which park resumes on which clock, are [loops → keep the fleet moving](./loops.md#keep-the-fleet-moving). The keys and their tuning are [configuration → resume](./configuration.md#resume).
 

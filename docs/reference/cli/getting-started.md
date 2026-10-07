@@ -210,16 +210,16 @@ With no rows, human output leaves stdout empty and prints a hint on stderr. If t
 ## Set up the machine
 
 ```sh
-rimz setup [--yes]
+rimz setup [--config-only]
 ```
 
-`rimz setup` prints a report (multiplexer and version, project root and root class, trust state, config path and whether it exists, and each agent's binary location and hook status) and then acts according to how it was run:
+`rimz setup` prints a report (multiplexer and version, project path and its kind, project trust, config path and whether it exists, and hooks grouped into installed, not installed, and not on PATH) and then acts according to how it was run. Paths under your home use `~`. Installed hooks with a newer version available carry `(upgrade available)` after the agent name. Empty hook groups are omitted; agents found without hook-install support are omitted too. Agents with blocked hook installation stay under `not installed`, but are excluded from the `rimz hooks install` hint.
 
 | Run | What it changes |
 | --- | --- |
 | From a terminal | If config exists, asks `Keep your current config?` (default yes): yes merges it against the current templates, no overwrites it with fresh templates. Then repairs `~/.rimz` fragments, writes a missing `remote.toml` template, offers one hook install or refresh for detected agents, and asks the truecolor, Nerd Font, pet, and hands-off automation questions; the automation question lists one row per behavior and takes `y`, `n`, or `choose`. |
-| `--yes` | Merges config against the templates, repairs `~/.rimz` fragments, and writes missing files. Installs no hooks, grants no trust, and changes no appearance or automation setting. |
-| Without a terminal and without `--yes` | Nothing. Prints the report and `No terminal input is available; setup changed nothing.` |
+| `--config-only` | Merges config against the templates, repairs `~/.rimz` fragments, and writes missing files, including the remote template and built-in consensus copy. Installs no hooks, grants no trust, and changes no appearance or automation setting. `--yes` remains an accepted hidden alias. |
+| Without a terminal and without `--config-only` | Nothing. Prints the report and `Setup changed nothing: there is no terminal to ask from.` Then names `rimz setup --config-only` for config and, only when agents lack hooks, `rimz hooks install` with their count. |
 
 A merge names every file it wrote, merged, or left untouched. An unparseable file is left as it is, and interactive setup stops at that point until you fix it. What a merge keeps and removes is defined in the [configuration guide](../../guide/configuration.md#generate-and-refresh-the-files). The hook summary points at `rimz hooks install --dry-run` for the exact diffs. [`rimz config init --force`](./config.md#write-the-templates) is the clean reset. The walkthrough is the [setup guide](../../guide/setup.md).
 

@@ -825,14 +825,33 @@ fn config_set_reports_a_duplicate_key_with_its_fix() {
 #[test]
 fn setup_without_tty_reports_and_writes_nothing() {
     let env = Env::new();
+    let files = seed_setup_agents(&env);
 
-    let output = env.rimz().arg("setup").output().expect("run setup");
+    let output = env
+        .rimz()
+        .arg("setup")
+        .env("PATH", &files.bin_dir)
+        .env("RIMZ_ANTIGRAVITY_HOOKS", &files.antigravity_hooks)
+        .env("RIMZ_ANTIGRAVITY_SETTINGS", &files.antigravity_settings)
+        .env("RIMZ_PI_EXTENSION", &files.pi_extension)
+        .env("RIMZ_OPENCODE_PLUGIN", &files.opencode_plugin)
+        .output()
+        .expect("run setup");
     assert!(output.status.success(), "setup exits zero");
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
 
     assert!(stdout.contains("RimZ setup"));
-    assert!(stdout.contains("changed nothing"));
+    assert!(
+        stdout.contains("Setup changed nothing: there is no terminal to ask from."),
+        "{stdout}"
+    );
+    assert!(stdout.contains("  rimz setup --config-only   write the default config (installs no hooks, grants no trust)"), "{stdout}");
+    assert!(
+        stdout.contains("  rimz hooks install         install hooks for the 1 agent without them"),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("refresh"), "{stdout}");
     assert!(!stdout.contains("Use truecolor?"));
     assert!(!stderr.contains("Use truecolor?"));
     assert!(!stdout.contains("Use Nerd Font icons?"));
@@ -844,28 +863,81 @@ fn setup_without_tty_reports_and_writes_nothing() {
 
     assert!(!machine_config_path(&env).exists());
     assert!(!env.rimz_home().join("teams/consensus.md").exists());
+    assert!(!files.antigravity_hooks.exists());
+    assert!(!files.antigravity_settings.exists());
+    for path in [&files.pi_extension, &files.opencode_plugin] {
+        assert_eq!(
+            std::fs::read(path).unwrap(),
+            STALE_MANAGED_SOURCE.as_bytes()
+        );
+    }
 }
 
 #[test]
-fn setup_yes_writes_default_config_without_hook_or_trust_side_effects() {
+fn setup_without_tty_omits_hook_hint_when_no_agents_need_hooks() {
     let env = Env::new();
+    let empty_path = env.home_root.join("empty-bin");
+    std::fs::create_dir_all(&empty_path).unwrap();
+    let output = env
+        .rimz()
+        .arg("setup")
+        .env("PATH", empty_path)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Setup changed nothing"), "{stdout}");
+    assert!(stdout.contains("rimz setup --config-only"), "{stdout}");
+    assert!(!stdout.contains("rimz hooks install"), "{stdout}");
+    assert!(!stdout.contains("refresh"), "{stdout}");
+    assert!(!machine_config_path(&env).exists());
+}
+
+#[test]
+fn setup_help_exposes_config_only_not_yes() {
+    let env = Env::new();
+    let output = env.rimz().args(["setup", "--help"]).output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("--config-only"), "{stdout}");
+    assert!(!stdout.contains("--yes"), "{stdout}");
+}
+
+#[test]
+fn setup_config_only_writes_default_config_without_hook_or_trust_side_effects() {
+    let env = Env::new();
+    let files = seed_setup_agents(&env);
     let pi_extension = env.home_root.join("setup-yes/pi/rimz.ts");
     let opencode_plugin = env.home_root.join("setup-yes/opencode/rimz.ts");
     write_machine_file(&pi_extension, STALE_MANAGED_SOURCE);
     write_machine_file(&opencode_plugin, STALE_MANAGED_SOURCE);
+    write_machine_file(
+        &env.project_root.join(".rimz/config.toml"),
+        "[harness]\nauto_continue = true\n",
+    );
 
     let output = env
         .rimz()
-        .args(["setup", "--yes"])
+        .args(["setup", "--config-only"])
+        .env("PATH", &files.bin_dir)
+        .env("RIMZ_ANTIGRAVITY_HOOKS", &files.antigravity_hooks)
+        .env("RIMZ_ANTIGRAVITY_SETTINGS", &files.antigravity_settings)
         .env("RIMZ_PI_EXTENSION", &pi_extension)
         .env("RIMZ_OPENCODE_PLUGIN", &opencode_plugin)
         .output()
-        .expect("run setup --yes");
-    assert!(output.status.success(), "setup --yes exits zero");
+        .expect("run setup --config-only");
+    assert!(
+        output.status.success(),
+        "setup --config-only exits zero: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stdout.contains("Wrote"));
-    assert!(stdout.contains("No hooks or trust grants were changed"));
+    assert!(
+        stdout.contains("Installed no hooks and granted no trust."),
+        "{stdout}"
+    );
     assert!(!stdout.contains("Use truecolor?"));
     assert!(!stderr.contains("Use truecolor?"));
     assert!(!stdout.contains("Use Nerd Font icons?"));
@@ -900,6 +972,16 @@ fn setup_yes_writes_default_config_without_hook_or_trust_side_effects() {
             "setup --yes preserves managed sources byte-for-byte",
         );
     }
+    assert!(!files.antigravity_hooks.exists());
+    assert!(!files.antigravity_settings.exists());
+    let trust = env
+        .rimz()
+        .args(["trust", "status", "--json"])
+        .output()
+        .unwrap();
+    assert!(trust.status.success());
+    let trust: serde_json::Value = serde_json::from_slice(&trust.stdout).unwrap();
+    assert_eq!(trust["state"], "untrusted");
     let theme_text = std::fs::read_to_string(theme_config_path(&env)).expect("read theme config");
     assert!(
         !theme_text
@@ -916,9 +998,25 @@ fn setup_yes_writes_default_config_without_hook_or_trust_side_effects() {
     let rerun = env
         .rimz()
         .args(["setup", "--yes"])
+        .env("PATH", &files.bin_dir)
+        .env("RIMZ_ANTIGRAVITY_HOOKS", &files.antigravity_hooks)
+        .env("RIMZ_ANTIGRAVITY_SETTINGS", &files.antigravity_settings)
+        .env("RIMZ_PI_EXTENSION", &pi_extension)
+        .env("RIMZ_OPENCODE_PLUGIN", &opencode_plugin)
         .output()
         .expect("rerun setup --yes");
     assert!(rerun.status.success(), "setup --yes reruns");
+    assert!(
+        String::from_utf8_lossy(&rerun.stdout).contains("Installed no hooks and granted no trust.")
+    );
+    assert!(!files.antigravity_hooks.exists());
+    assert!(!files.antigravity_settings.exists());
+    for path in [&pi_extension, &opencode_plugin] {
+        assert_eq!(
+            std::fs::read(path).unwrap(),
+            STALE_MANAGED_SOURCE.as_bytes()
+        );
+    }
     assert!(
         !String::from_utf8_lossy(&rerun.stdout).contains(&consensus.display().to_string()),
         "an unchanged consensus copy is not rewritten"
@@ -1101,16 +1199,13 @@ fn setup_pty_installs_and_refreshes_detected_agent_hooks_together() {
     assert!(
         output
             .lines()
-            .any(|line| line.contains("agent antigravity:")
-                && line.contains("on PATH; hooks not installed")),
+            .any(|line| line.contains("not installed:") && line.contains("antigravity")),
         "{output}"
     );
     for name in ["pi", "opencode"] {
         assert!(
-            output
-                .lines()
-                .any(|line| line.contains(&format!("agent {name}:"))
-                    && line.contains("on PATH; hooks installed; upgrade available")),
+            output.lines().any(|line| line.contains("installed:")
+                && line.contains(&format!("{name} (upgrade available)"))),
             "{output}"
         );
     }
@@ -1197,7 +1292,7 @@ on_force_close = "explode"
         ))
         .stdout(contains("skipped zellij.on_force_close (invalid:"))
         .stdout(contains("Wrote"))
-        .stdout(contains("No hooks or trust grants were changed"));
+        .stdout(contains("Installed no hooks and granted no trust."));
 
     let text = std::fs::read_to_string(machine_config_path(&env)).expect("read merged config");
     assert!(text.contains("enabled = false"), "override kept:\n{text}");
@@ -1355,7 +1450,7 @@ every = "15m"
         .assert()
         .success()
         .stdout(contains("Merged"))
-        .stdout(contains("No hooks or trust grants were changed"));
+        .stdout(contains("Installed no hooks and granted no trust."));
 
     let text = std::fs::read_to_string(loop_config_path(&env)).expect("read merged loop");
     assert!(

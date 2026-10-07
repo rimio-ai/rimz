@@ -108,7 +108,7 @@ rimz config init --print   # print the commented templates without writing anyth
 
 Most people run `rimz` inside a project once, or `rimz setup` once, then edit the few lines they care about. A first start on an interactive terminal writes the per-machine config, offers hook install, runs the live glyph probe, and asks whether to enable a pet; a non-interactive first start writes the same defaults without prompting. It writes each file independently: delete `config.toml` and keep your `theme.toml`, and the next start writes the one that is missing and leaves the one you kept exactly as it is.
 
-**Rerunning setup keeps your values.** On a machine that already has config, `rimz setup` asks `Keep your current config?`, and saying yes merges. `rimz setup --yes` merges without asking, and a non-interactive `rimz setup` without `--yes` changes nothing at all.
+**Rerunning setup keeps your values.** On a machine that already has config, `rimz setup` asks `Keep your current config?`, and saying yes merges. `rimz setup --config-only` merges without asking, installs no hooks, and grants no trust. A non-interactive `rimz setup` without `--config-only` changes nothing at all.
 
 A file that will not parse is the case to know first: setup leaves it byte-for-byte untouched, names the offending line and key when it can, and asks you to fix it before rerunning. Nothing is lost while the file is broken.
 
