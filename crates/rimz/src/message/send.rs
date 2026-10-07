@@ -1,9 +1,12 @@
 //! Live-pane payload construction, exclusive paced writes, and the durable Sent-before-submit barrier.
 
+use std::io::ErrorKind;
+use std::path::PathBuf;
 use std::thread::sleep;
 use std::time::Duration;
 
-use crate::Store;
+use jiff::Timestamp;
+
 use crate::agents::{AgentState, AgentStatus};
 use crate::message::{
     DeliveryKind, MessageDraft, Recipient, command_segments, command_submit_delay_from_env,
@@ -14,6 +17,7 @@ use crate::pane::keys::NamedKey;
 use crate::store::message::{AutoCompact, MessageBody, MessageRecord, MessageSender};
 use crate::store::snapshot::{PaneAgent, SidebarSnapshot};
 use crate::workspace::ResolvedWorkspace;
+use crate::{RuntimePaths, Store};
 
 type Result<T> = std::result::Result<T, SendErr>;
 
@@ -21,6 +25,14 @@ type Result<T> = std::result::Result<T, SendErr>;
 pub enum SendErr {
     #[error(transparent)]
     Store(#[from] crate::store::StoreErr),
+    #[error(transparent)]
+    Atomic(#[from] crate::disk::atomic::AtomicErr),
+    #[error("cannot access {path}: {source}")]
+    Io {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
     #[error("{0}")]
     Mux(#[from] crate::mux::MuxErr),
     #[error(
@@ -37,6 +49,28 @@ pub(super) enum Receipt {
     Sent { compacted: bool },
     SkippedWaiting,
     CompactionPending,
+    ClaimLost,
+}
+
+pub(super) fn refresh_wake_stamp(
+    runtime: &RuntimePaths,
+    store: &Store,
+    now: Timestamp,
+) -> Result<()> {
+    let path = runtime.lane_path(super::MESSAGE_WAKE_FILE);
+    match store.earliest_message_wake(now)? {
+        Some(not_before) => {
+            crate::disk::atomic::write_temp_then_rename_cache(&path, &Some(not_before))?;
+        }
+        None => match std::fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(err) if err.kind() == ErrorKind::NotFound => {}
+            Err(err) => {
+                return Err(SendErr::Io { path, source: err });
+            }
+        },
+    }
+    Ok(())
 }
 
 /// How a live-pane send is delivered: whether to send past Waiting, and pacing
@@ -144,6 +178,7 @@ fn write_live(
             match write_batch(workspace, store, snapshot, writer, bound, batch, send)? {
                 PaneWrite::Sent => Receipt::Sent { compacted: false },
                 PaneWrite::SkippedWaiting => Receipt::SkippedWaiting,
+                PaneWrite::ClaimLost => Receipt::ClaimLost,
             },
         );
     }
@@ -157,7 +192,15 @@ fn write_live(
         .iter()
         .find_map(|message| compact_message_for_target(store, target, bound, message));
     if let Some((command, threshold, agent)) = compact {
-        store.queue_message(&command, &workspace.session_name)?;
+        let command = store.queue_claimed_message(
+            &command,
+            &workspace.session_name,
+            jiff::Timestamp::now(),
+        )?;
+        // Wakes are latency, never truth: an unwritable stamp delays claim recovery, not the send.
+        if let Err(error) = refresh_wake_stamp(store.runtime_paths(), store, Timestamp::now()) {
+            tracing::warn!(%error, "cannot arm the claim recovery wake");
+        }
         match write_batch(
             workspace,
             store,
@@ -185,7 +228,22 @@ fn write_live(
                     return Ok(Receipt::CompactionPending);
                 }
             }
-            Ok(PaneWrite::SkippedWaiting) => return Ok(Receipt::SkippedWaiting),
+            Ok(PaneWrite::SkippedWaiting) => {
+                store.release_message_claims(
+                    std::slice::from_ref(&command),
+                    "agent is waiting on input in its pane",
+                    &workspace.session_name,
+                )?;
+                return Ok(Receipt::SkippedWaiting);
+            }
+            Ok(PaneWrite::ClaimLost) => {
+                store.release_message_claims(
+                    batch,
+                    "pane write stopped: message claim no longer held",
+                    &workspace.session_name,
+                )?;
+                return Ok(Receipt::ClaimLost);
+            }
             Err(err) => {
                 store.record_send_error(&command, &err.to_string(), &workspace.session_name)?;
                 return Err(err);
@@ -196,6 +254,7 @@ fn write_live(
         match write_batch(workspace, store, snapshot, writer, bound, batch, send)? {
             PaneWrite::Sent => Receipt::Sent { compacted },
             PaneWrite::SkippedWaiting => Receipt::SkippedWaiting,
+            PaneWrite::ClaimLost => Receipt::ClaimLost,
         },
     )
 }
@@ -257,6 +316,14 @@ fn write_batch(
         .first()
         .expect("write_batch requires at least one message");
     debug_assert!(batch.iter().all(|message| message.enter == head.enter));
+    if !store.message_claims_held(batch)? {
+        store.release_message_claims(
+            batch,
+            "pane write stopped: message claim no longer held",
+            &workspace.session_name,
+        )?;
+        return Ok(PaneWrite::ClaimLost);
+    }
     if !send.force && bound.is_some_and(AgentState::is_awaiting_input) {
         return Ok(PaneWrite::SkippedWaiting);
     }
@@ -348,6 +415,7 @@ fn type_command_with<E>(
 enum PaneWrite {
     Sent,
     SkippedWaiting,
+    ClaimLost,
 }
 
 fn compact_message_for_target<'a>(

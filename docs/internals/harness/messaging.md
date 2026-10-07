@@ -21,7 +21,7 @@ The rest of the module follows from that rule: how a record decides it is ready,
 | [`message.rs`](../../../crates/rimz/src/message.rs) | Delivery assembly and parsing: per-recipient record construction, delivery gates, schedule parsing, and the timing knobs. No I/O. |
 | [`message/dispatch.rs`](../../../crates/rimz/src/message/dispatch.rs) | One send request end to end: resolve targets, bind conditions, decide park or live, preflight hooks, enqueue, and pace the fan-out. |
 | [`message/deliver.rs`](../../../crates/rimz/src/message/deliver.rs) | Readiness: the ordered delivery check, the delivery attempt and its failure recovery, condition evaluation, the sweep, and the wake stamp. |
-| [`message/send.rs`](../../../crates/rimz/src/message/send.rs) | The pane write: bracketed paste, the submit barrier, pacing, and the compact-first command. |
+| [`message/send.rs`](../../../crates/rimz/src/message/send.rs) | The pane write: bracketed paste, the submit barrier, pacing, the compact-first command, and shared wake-stamp maintenance. |
 | [`message/compact.rs`](../../../crates/rimz/src/message/compact.rs) | Standalone compaction for the operator verb and idle compaction: repeat refusal and boundary delivery. |
 | [`message/reply.rs`](../../../crates/rimz/src/message/reply.rs) | `--wait`: leg state machines, transcript anchoring, cycle detection, join settlement. |
 | [`message/fire.rs`](../../../crates/rimz/src/message/fire.rs) | The elder's side of the clock: read the wake stamp and spawn `message sweep`. |
@@ -119,9 +119,9 @@ Queued ──► Claimed ──► Sent ──► Delivered
    └──► Errored    (no receiver, or a send failure with no retry path)
 ```
 
-`Queued` and `Claimed` are open states (`is_open()`). `Claimed` is a short lease taken immediately before a write so a concurrent deliverer cannot double-send. A claim older than `CLAIM_TTL` (15 s) counts as expired, so a crash mid-send leaves a redeliverable record.
+`Queued` and `Claimed` are open states (`is_open()`). `Claimed` is a short lease taken immediately before a write so a concurrent deliverer cannot double-send. A claim older than `CLAIM_TTL` (15 s) counts as expired, so a crash mid-send leaves a record that the next sweep requeues and redelivers through the normal FIFO path.
 
-A claim also protects the attempt from other senders' give-ups. Retrying, erroring, or releasing a record takes the record the sender was handed, and the writer applies the give-up only while that record's `attempts` and `last_attempt_at` still match the live one (the hold); a sender that has no such record (the boundary helper in `synthetic.rs`) can only settle a `Queued` record and leaves a `Claimed` one alone. Recording `Sent` needs no hold, because the text is already in the pane, but it only marks a live record: a record that a cancel, clear, or archive already finalized stays in that terminal state and is not recreated.
+Every attempt, including a fresh send and a compact-first command, holds a claim before writing and attempts to register its recovery wake immediately after claiming. If wake registration fails, it warns and continues the send: wakeups improve recovery latency, never durable delivery truth. Under the pane lock, before pacing or writing any bytes, the sender rechecks that every batch member is still held; if any claim was lost, it writes nothing, releases the remaining holds, and stops without settling a failure. Retrying, erroring, or releasing a record takes the record the sender was handed, and the writer applies the give-up only while the live record is `Claimed` and its `attempts` and `last_attempt_at` still match (the hold). A retry clears the stamp, making the record claimable immediately; an unclaimed record is held by nobody. A sender that has no such record (the boundary helper in `synthetic.rs`) can only settle a `Queued` record and leaves a `Claimed` one alone. Recording `Sent` needs no hold, because the text is already in the pane, but it only marks a live record: a record that a cancel, clear, or archive already finalized stays in that terminal state and is not recreated. A give-up on a record that is no longer live writes nothing, preserving its single terminal history entry and event.
 
 `Sent` means bytes reached the pane. The record stays live until a lifecycle hook confirms it or the reconciler gives up, because a write does not prove the agent took the text.
 
@@ -326,8 +326,9 @@ Stray composer text around a headered batch is never a reason to write the pane 
 
 When a turn-start adapter reports no usable prompt text, confirmation falls back to the oldest `Sent` prompt and its `batch_id`. A `Compacting` hook uses the same oldest-`Sent` fallback for `Command` records. Correlation never selects a `Claimed` record, which leaves one duplicate window between the claim and the write's acknowledgement: settling inside it could not retract the in-flight paste, so the active deliverer keeps ownership.
 
-Reconciliation runs in `message sweep` and `gc` (`reconcile_stale_sent_messages`) and has two outcomes past the window:
+Reconciliation runs in `message sweep` and `gc` (`reconcile_stale_messages`) and handles expired claims alongside stale writes:
 
+- **Expired claim** (no completed write within `CLAIM_TTL`). The reconciler clears the claim stamp, `pane_id`, and `batch_id`, keeps `attempts`, and requeues the record with a `message.queued` event and `claim expired; sender gone`. At `MAX_DELIVERY_ATTEMPTS` (five claims), the record becomes `Abandoned` instead, preventing an endless crash loop.
 - **Unconfirmed prompt** (no hook within `RIMZ_MESSAGE_DELIVERY_WINDOW_MS`, 30 s by default). The reconciler clears `pane_id` and `batch_id`, keeps `last_sent_at`, increments `unconfirmed_sends`, records `delivery unconfirmed; re-queued`, and the record retries through the normal FIFO path. A requeued batch member forms a new batch next time. At the cap the record becomes `TimedOut`.
 - **Unconfirmed command** (no hook within `RIMZ_MESSAGE_COMMAND_DELIVERY_WINDOW_MS`, 3 minutes by default). The record becomes `TimedOut` with `delivery unconfirmed; command not resent`. A command reaches the pane at most once, because a duplicate `/compact` can discard context and a missing acknowledgement does not prove the first submit failed.
 
@@ -504,9 +505,9 @@ Before polling, the CLI prints each ordinary delivery receipt on stderr, includi
 
 The room's elected sidebar elder notices when a parked message comes due, through a deliberately thin handoff:
 
-1. The CLI writes `message-wake.json` under the runtime root with the earliest future time worth a look: a `not_before`, a `Queued` retry floor, a ready-queued backstop, or an unconfirmed `Sent` reconcile deadline (30 s for prompts, 3 minutes for commands, per [Confirmation and retry](#confirmation-and-retry)).
+1. The CLI writes `message-wake.json` under the runtime root with the earliest future time worth a look: a `not_before`, a `Queued` retry floor, a ready-queued backstop, a `Claimed` lease expiry, or an unconfirmed `Sent` reconcile deadline (30 s for prompts, 3 minutes for commands, per [Confirmation and retry](#confirmation-and-retry)).
 2. The elder reads only that file, and when the stamp comes due spawns a detached `rimz message sweep` ([`fire.rs`](../../../crates/rimz/src/message/fire.rs)). The elder does no store reads, store writes, or message logic.
-3. The sweep reconciles stale `Sent` records, evaluates unmet conditions, delivers ready FIFO heads, then rewrites or removes the wake stamp.
+3. The sweep reconciles stale `Sent` records and expired `Claimed` records, evaluates unmet conditions, delivers ready FIFO heads, then rewrites or removes the wake stamp.
 
 The sweep is single-flight through a `message-sweep.lock` file lock, so overlapping wakeups collapse into one pass.
 

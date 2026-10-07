@@ -783,6 +783,13 @@ impl DispatchState<'_> {
             )
             .with_reply_wait(self.reply_wait)
             .with_in_reply_to(self.in_reply_to.to_vec());
+        if pane.is_some() {
+            return Ok(self.store.queue_claimed_message(
+                &message,
+                &self.workspace.session_name,
+                Timestamp::now(),
+            )?);
+        }
         self.store
             .queue_message(&message, &self.workspace.session_name)?;
         Ok(message)
@@ -955,6 +962,7 @@ fn dispatch_one(
     };
     let bound = target.bound(state.snapshot);
     let message = state.enqueue(target, Some(pane), text, mode, &handle)?;
+    deliver::arm_claim_wake(state.workspace, state.store);
     let message_id = message.message_id.clone();
     match deliver::execute_attempt(
         deliver::Attempt {
