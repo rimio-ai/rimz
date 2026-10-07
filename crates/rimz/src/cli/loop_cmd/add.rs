@@ -921,7 +921,7 @@ fn resolve_delivery_target(
         &snapshot,
         address,
         args.worktree.as_deref(),
-        &channel.address_context(workspace),
+        &channel.address_context(),
     ) {
         Ok(agent) => agent,
         Err(err) if address == "@me" => return Err(err),

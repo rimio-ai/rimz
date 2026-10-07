@@ -84,7 +84,7 @@ impl Ctx {
     }
 
     pub(crate) fn address_context(&self) -> rimz::address::AddressContext {
-        self.current_channel().address_context(&self.workspace)
+        self.current_channel().address_context()
     }
 
     /// The runtime paths for this workspace, as the open store already resolved them.

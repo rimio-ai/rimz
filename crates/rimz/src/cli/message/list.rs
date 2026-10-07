@@ -186,7 +186,7 @@ pub(super) fn list_messages(args: ListArgs, globals: &GlobalFlags) -> Result<()>
         )?;
         if !args.all {
             let channel = agent.channel();
-            if context.is_root_lane(agent) {
+            if agent.root_lane {
                 root_channel = channel;
                 lane_scope = LaneScope::Main;
             } else {

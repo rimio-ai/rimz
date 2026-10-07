@@ -14,7 +14,6 @@ fn context(channel: Option<&str>) -> AddressContext {
     AddressContext {
         channel: channel.map(ToOwned::to_owned),
         origin: ChannelOrigin::Stamped,
-        project_root: "/tmp/rimz-target-test".into(),
     }
 }
 
@@ -274,8 +273,14 @@ fn ambiguity_for_unbound_panes_uses_pane_addresses() {
         "2 agents: zellij:terminal_1, zellij:terminal_2"
     );
     for pane in &peers {
-        let matches =
-            resolve_mentions(&pane.pane_id.to_string(), None, &context(None), &candidates).unwrap();
+        let matches = resolve_mentions(
+            &pane.pane_id.to_string(),
+            None,
+            &context(None),
+            &candidates,
+            None,
+        )
+        .unwrap();
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].pane_id, pane.pane_id);
     }
@@ -562,12 +567,12 @@ fn main_addresses_the_unstamped_project_root() {
     let mut snapshot = empty_snapshot();
     let mut root = agent("codex", "root-session", Some("checkout"), "terminal_1");
     root.name = Some("root-reader".into());
+    root.root_lane = true;
     let mut stamped = agent("codex", "stamped-session", Some("checkout"), "terminal_2");
     stamped.channel = Some("design".into());
     let other = agent("codex", "other-session", Some("auth"), "terminal_3");
     snapshot.agents = vec![root, stamped, other];
-    let mut scope = context(Some("scratch"));
-    scope.project_root = "/repo/checkout".into();
+    let scope = context(Some("scratch"));
     assert_eq!(
         resolve_one(&snapshot, "@root-reader#main", None, &scope)
             .map(|agent| agent.agent_id.as_str()),
@@ -589,10 +594,12 @@ fn main_addresses_the_unstamped_project_root() {
         2,
         "main remains available as a stamped lane as well as the root alias"
     );
+    let mut root_pane = lazy_pane("codex", "/repo/checkout", "terminal_4");
+    root_pane.root_lane = true;
     assert_eq!(
         resolve_targets(
             &SidebarSnapshot {
-                agent_panes: vec![lazy_pane("codex", "/repo/checkout", "terminal_4")],
+                agent_panes: vec![root_pane],
                 ..empty_snapshot()
             },
             "@codex#main",
@@ -606,16 +613,60 @@ fn main_addresses_the_unstamped_project_root() {
 }
 
 #[test]
+fn root_lane_handle_round_trips_and_keeps_legacy_aliases() {
+    let mut root = agent("codex", "root-roundtrip", Some("checkout"), "terminal_1");
+    root.root_lane = true;
+    let peers = [&root];
+    let rendered = agent_handle(&root, &peers, true);
+    assert_eq!(rendered, "@codex#main");
+    let scope = context(None);
+    for target in [
+        rendered.as_str(),
+        "@codex#checkout",
+        "@codex#/repo/checkout",
+    ] {
+        assert!(std::ptr::eq(
+            resolve_agent(target, None, &scope, &peers).unwrap(),
+            &root
+        ));
+    }
+    assert!(agent_in_worktree(&root, "main"));
+    assert_eq!(root.channel().as_deref(), Some("checkout"));
+}
+
+#[test]
+fn explicit_root_alias_misses_use_the_main_header() {
+    let mut snapshot = empty_snapshot();
+    snapshot.project_root = Some(std::path::PathBuf::from("/repo/project"));
+    let mut fox = agent("claude", "fox-session", Some("feature"), "terminal_1");
+    fox.name = Some("fox".to_owned());
+    snapshot.agents = vec![fox];
+    for alias in ["main", "project", "/repo/project"] {
+        for (raw, flag) in [
+            (format!("@fox#{alias}"), None),
+            ("@fox".to_owned(), Some(alias)),
+        ] {
+            let error = resolve_one(&snapshot, &raw, flag, &context(None)).unwrap_err();
+            let TargetErr::NoMatchInChannel { channel, .. } = error else {
+                panic!("expected scoped miss: {error}");
+            };
+            assert_eq!(channel, "main", "{raw} {flag:?}");
+        }
+    }
+}
+
+#[test]
 fn channel_miss_names_origin_root_and_resolving_correction() {
     let mut snapshot = empty_snapshot();
     let mut root = agent("codex", "root-session", Some("checkout"), "terminal_1");
     root.name = Some("root-reader".into());
+    root.root_lane = true;
     let mut design = root.clone();
     design.agent_id = "design-session".into();
     design.channel = Some("design".into());
+    design.root_lane = false;
     snapshot.agents = vec![root, design];
     let mut scope = context(Some("scratchpad"));
-    scope.project_root = "/repo/checkout".into();
     for (origin, note) in [
         (ChannelOrigin::Directory, "taken from a directory's name"),
         (ChannelOrigin::Stamped, ""),
@@ -645,6 +696,7 @@ fn channel_miss_names_origin_root_and_resolving_correction() {
     }
     snapshot.agents.pop();
     snapshot.agents[0].worktree_path = None;
+    snapshot.agents[0].root_lane = false;
     let message = resolve_one(&snapshot, "@root-reader", None, &scope)
         .unwrap_err()
         .to_string();
@@ -660,9 +712,9 @@ fn channel_miss_drops_ambient_origin_for_explicit_scopes() {
     let mut snapshot = empty_snapshot();
     let mut root = agent("codex", "root-session", Some("checkout"), "terminal_1");
     root.name = Some("root-reader".into());
+    root.root_lane = true;
     snapshot.agents = vec![root];
     let mut scope = context(Some("ambient"));
-    scope.project_root = "/repo/checkout".into();
     scope.origin = ChannelOrigin::Directory;
     for (target, flag) in [
         ("@root-reader#scratch", None),

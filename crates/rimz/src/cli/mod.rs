@@ -264,35 +264,33 @@ fn scope_facts<'a>(
 enum CurrentChannel {
     Named(String),
     Derived(String),
+    Root(String),
     Unscoped,
 }
 
 impl CurrentChannel {
     fn as_deref(&self) -> Option<&str> {
         match self {
-            Self::Named(name) | Self::Derived(name) => Some(name),
+            Self::Named(name) | Self::Derived(name) | Self::Root(name) => Some(name),
             Self::Unscoped => None,
         }
     }
 
     fn into_name(self) -> Option<String> {
         match self {
-            Self::Named(name) | Self::Derived(name) => Some(name),
+            Self::Named(name) | Self::Derived(name) | Self::Root(name) => Some(name),
             Self::Unscoped => None,
         }
     }
 
-    fn address_context(
-        &self,
-        workspace: &rimz::ResolvedWorkspace,
-    ) -> rimz::address::AddressContext {
+    fn address_context(&self) -> rimz::address::AddressContext {
         rimz::address::AddressContext {
             channel: self.as_deref().map(ToOwned::to_owned),
             origin: match self {
                 Self::Derived(_) => rimz::address::ChannelOrigin::Directory,
+                Self::Root(_) => rimz::address::ChannelOrigin::Root,
                 Self::Named(_) | Self::Unscoped => rimz::address::ChannelOrigin::Stamped,
             },
-            project_root: workspace.project_root.clone(),
         }
     }
 }
@@ -332,7 +330,9 @@ fn current_channel_with(
         && let Ok(agent) = rimz::harness::ancestry::resolve_launch_caller(&rows, &caller)
         && let Some(channel) = agent.channel()
     {
-        return if agent.channel.is_some() {
+        return if agent.root_lane {
+            CurrentChannel::Root(channel)
+        } else if agent.channel.is_some() {
             CurrentChannel::Named(channel)
         } else {
             CurrentChannel::Derived(channel)

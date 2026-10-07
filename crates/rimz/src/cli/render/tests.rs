@@ -187,10 +187,10 @@ fn channel_miss_prints_a_shell_runnable_corrected_command() {
         rimz::agents::AgentState::stub("codex", "root-session", rimz::agents::AgentStatus::Idle);
     agent.name = Some("reader".into());
     agent.worktree_path = Some(root.into());
+    agent.root_lane = true;
     let scope = rimz::address::AddressContext {
         channel: Some("scratch".into()),
         origin: rimz::address::ChannelOrigin::Directory,
-        project_root: root.into(),
     };
     for (args, target, flag) in [
         (vec!["rimz", "asks", "show", "@reader"], "@reader", None),

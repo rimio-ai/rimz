@@ -47,7 +47,7 @@ fn collect_show_report(
         runtime,
         snapshot,
         reference,
-        &crate::cli::current_channel(workspace, Some(store)).address_context(workspace),
+        &crate::cli::current_channel(workspace, Some(store)).address_context(),
     );
     let (agent, stale, deferred_error) = match agent_result {
         Ok((agent, live)) => (Some(agent), !live, None),
@@ -252,7 +252,7 @@ pub(super) fn resolve_audit_agent(
         jiff::Timestamp::now(),
     )
     .with_agent_context(rimz::store::agent_context::read_all(runtime));
-    let context = crate::cli::CurrentChannel::Unscoped.address_context(workspace);
+    let context = crate::cli::CurrentChannel::Unscoped.address_context();
     match crate::cli::resolve_agent_one(store, &snapshot, reference, None, &context) {
         Ok(agent) => Ok(Some(agent.clone())),
         Err(err) => Err(err),

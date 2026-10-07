@@ -9,7 +9,6 @@ fn address_context() -> rimz::address::AddressContext {
     rimz::address::AddressContext {
         channel: None,
         origin: rimz::address::ChannelOrigin::Stamped,
-        project_root: "/tmp".into(),
     }
 }
 

@@ -144,7 +144,6 @@ fn turn_dead_primary_yields_pane_to_successful_same_pane_replacement() {
         &crate::address::AddressContext {
             channel: None,
             origin: crate::address::ChannelOrigin::Stamped,
-            project_root: "/tmp/rimz-target-test".into(),
         },
     )
     .expect("launch role resolves without a pane frame");
@@ -168,7 +167,6 @@ fn turn_dead_primary_yields_pane_to_successful_same_pane_replacement() {
         &crate::address::AddressContext {
             channel: None,
             origin: crate::address::ChannelOrigin::Stamped,
-            project_root: "/tmp/rimz-target-test".into(),
         },
     )
     .expect("launch role resolves through the pane owner");

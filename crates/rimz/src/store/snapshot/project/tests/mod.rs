@@ -1569,7 +1569,6 @@ fn same_process_fork_inherits_launch_identity_and_owns_the_role() {
         &crate::address::AddressContext {
             channel: None,
             origin: crate::address::ChannelOrigin::Stamped,
-            project_root: "/tmp/rimz-target-test".into(),
         },
     )
     .expect("the launch role has one occupant without pane context");

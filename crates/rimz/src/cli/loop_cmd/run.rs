@@ -519,7 +519,7 @@ fn execute_prepared_delivery(
             target: format!("@{}", prepared.target.session),
             text: prepared.prompt,
             target_scope: None,
-            current_channel: channel.address_context(&workspace),
+            current_channel: channel.address_context(),
             caller: None,
             sender,
             automated: true,
