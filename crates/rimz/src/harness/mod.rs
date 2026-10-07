@@ -31,6 +31,7 @@ pub mod runtime_env;
 pub mod schedule;
 pub mod scratch;
 pub mod spec;
+pub mod stall_notice;
 pub mod subagent_policy;
 pub mod team_prompt;
 pub mod team_stage;

@@ -1713,6 +1713,187 @@ fn user_shell_subagent_entrypoints_do_not_create_room_state() {
 
 #[cfg(unix)]
 #[test]
+fn silent_child_tells_its_parent_once_and_records_the_queued_assist() {
+    use rimz::harness::assist_log::AssistRecord;
+    use rimz::harness::stall_notice::StallNoticeRequest;
+    use rimz::store::message::{DeliveryGate, MessageSender};
+
+    let env = Env::new();
+    let workspace = env.resolve_workspace(&env.project_root);
+    let store = env.store();
+    store.record_workspace(&workspace).unwrap();
+    let parent_kind = AgentKind::new_unchecked("claude");
+    let parent_id = AgentSessionId::from("planner-session");
+    let child_kind = AgentKind::new_unchecked("codex");
+    let child_id = AgentSessionId::from("child-session");
+    let now = jiff::Timestamp::now();
+    for (kind, id, name, launch) in [
+        (&parent_kind, &parent_id, "planner", LaunchParams::default()),
+        (
+            &child_kind,
+            &child_id,
+            "still-silver",
+            LaunchParams {
+                parent_agent_id: Some(parent_id.clone()),
+                parent_agent_kind: Some(parent_kind.clone()),
+                launch_depth: Some(1),
+                ..Default::default()
+            },
+        ),
+    ] {
+        let mut event = EventEnvelope::agent_launched(
+            workspace.workspace_id.clone(),
+            &workspace.session_name,
+            kind,
+            AgentLaunchPayload {
+                agent_id: id.clone(),
+                launch_id: None,
+                agent_name: name.to_owned(),
+                agent_name_explicit: true,
+                launch,
+                state: AgentLaunchState::Bound,
+                run_id: None,
+                pane_id: None,
+                runtime_owner: None,
+                worktree_path: Some(env.project_root.display().to_string()),
+                worktree_branch: None,
+                prompt: None,
+                description: None,
+            },
+        );
+        event.timestamp = now - std::time::Duration::from_secs(3_600);
+        store.append_event(&event).expect("seed live agent");
+    }
+    let mut event = EventEnvelope::agent_lifecycle(
+        workspace.workspace_id.clone(),
+        &workspace.session_name,
+        child_kind.as_str(),
+        "UserPromptSubmit",
+        &AgentLifecycleObservation::new(
+            Some(child_id.clone()),
+            LifecycleSignal::TurnStarted { turn_id: None },
+        ),
+    );
+    event.timestamp = now - std::time::Duration::from_secs(3_600);
+    store
+        .append_event(&event)
+        .expect("start a silent child turn");
+    let mut run = rimz::store::run::RunRecord::new(
+        workspace.workspace_id.clone(),
+        child_kind.clone(),
+        rimz::agents::PermissionMode::Auto,
+        "gate the release".to_owned(),
+        env.project_root.clone(),
+    );
+    run.agent_id = Some(child_id.clone());
+    run.subagent = true;
+    run.status = rimz::store::run::RunStatus::Running;
+    rimz::harness::run::create(store.paths(), &run).unwrap();
+    let notify = |window| {
+        env.rimz()
+            .args(rimz::child_process::agent_helper_argv(
+                "stall-notice",
+                &StallNoticeRequest {
+                    workspace_id: workspace.workspace_id.clone(),
+                    run_id: run.run_id.clone(),
+                    stalled_after_secs: window,
+                },
+            ))
+            .assert()
+            .success();
+    };
+    let notices = || {
+        store
+            .list_messages()
+            .unwrap()
+            .into_iter()
+            .filter(|message| {
+                serde_json::to_value(&message.sender).unwrap()["notice"] == "subagent_stalled"
+            })
+            .collect::<Vec<_>>()
+    };
+    rimz::agent_activity::touch(
+        &env.runtime_paths(),
+        child_kind.as_str(),
+        child_id.as_str(),
+        rimz::agent_activity::ToolRun::Reset,
+        true,
+    )
+    .unwrap();
+    notify(1_800);
+    assert!(
+        notices().is_empty(),
+        "a fresh heartbeat suppresses the stale lifecycle clock"
+    );
+    let heartbeat_path = std::fs::read_dir(&env.runtime_paths().agent_activity_dir)
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let heartbeat = rimz::agent_activity::AgentActivity {
+        kind: child_kind.clone(),
+        agent_id: child_id.clone(),
+        at: now - std::time::Duration::from_secs(1_920),
+        tool_at: None,
+        repeat: None,
+    };
+    rimz::disk::atomic::write_temp_then_rename_cache(&heartbeat_path, &heartbeat).unwrap();
+    notify(3_000);
+    assert!(
+        notices().is_empty(),
+        "helper uses the request's window and the folded heartbeat"
+    );
+    notify(1_800);
+    notify(1_800);
+    let queued = notices();
+    assert_eq!(queued.len(), 1, "one notice per run");
+    assert_eq!(queued[0].agent_id, parent_id);
+    assert_eq!(queued[0].gate, DeliveryGate::Done);
+    assert!(matches!(queued[0].sender, MessageSender::Harness { .. }));
+    assert_eq!(
+        queued[0].text,
+        "@still-silver has been silent for 32m and is still running; its pane is open. Its run stays open. RimZ will not stop it: look with `rimz pane capture @still-silver`, stop it with `rimz subagents stop @still-silver`, or relaunch the task elsewhere."
+    );
+    let stamped = rimz::harness::run::load(store.paths(), &run.run_id).unwrap();
+    assert!(stamped.stall_noticed_at.is_some());
+    assert_eq!(stamped.status, rimz::store::run::RunStatus::Running);
+    let stats = env.rimz().args(["stats", "--json"]).output().unwrap();
+    assert!(
+        stats.status.success(),
+        "{}",
+        String::from_utf8_lossy(&stats.stderr)
+    );
+    let stats: serde_json::Value = serde_json::from_slice(&stats.stdout).unwrap();
+    let stats = &stats["assists"];
+    assert_eq!(stats["rollup"]["stall_notices"], 1, "{stats}");
+    let assist: AssistRecord = serde_json::from_value(serde_json::json!({
+        "at": stats["events"][0]["at"], "assist": "stall_notice", "kind": "codex",
+        "agent_id": child_id, "label": "@still-silver", "parent": "@planner",
+        "silent_secs": stats["events"][0]["silent_secs"], "message_id": queued[0].message_id,
+        "delivered": false
+    }))
+    .unwrap();
+    assert_eq!(stats["events"][0], serde_json::to_value(assist).unwrap());
+    rimz::agent_activity::touch(
+        &env.runtime_paths(),
+        child_kind.as_str(),
+        child_id.as_str(),
+        rimz::agent_activity::ToolRun::Reset,
+        true,
+    )
+    .unwrap();
+    rimz::disk::atomic::write_temp_then_rename_cache(&heartbeat_path, &heartbeat).unwrap();
+    notify(1_800);
+    assert_eq!(
+        notices().len(),
+        1,
+        "recovery and another stall do not rearm the run"
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn explain_uses_the_room_account_before_a_launch_batch_exists() {
     let env = Env::new();
     assert!(init_launch_repo(&env.project_root));

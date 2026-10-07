@@ -300,6 +300,13 @@ pub(super) fn refresh_heavy_lanes(
     let runs = crate::harness::run_timeout::enforce(state_paths, runtime, base.now);
     if let Some(runs) = &runs {
         crate::harness::park_notice::notify_parents(runs, &base.agents, runtime);
+        crate::harness::stall_notice::notify_parents(
+            runs,
+            &base.agents,
+            runtime,
+            base.now,
+            config.agents.attention.stalled_after_secs.get(),
+        );
     }
     let now_ms = base.now.as_millisecond().max(0) as u64;
     if let Some(runs) = runs
