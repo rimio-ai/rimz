@@ -1,19 +1,20 @@
 //! tmux command-output parsers.
 
 use crate::ids::{MuxClientId, MuxName, PaneId};
+use crate::mux::tab_name::{TabOwnerRecord, ViewNaming};
 use crate::mux::{ClientPresence, ClientView, MuxErr, Result};
 use crate::pane::{ClientPaneView, PaneRef, SIDEBAR_CHROME_TITLE};
 
 use super::options::spawn_command_is_sidebar_serve;
 
-/// Parse one comma-separated `list-panes -F` row into a [`PaneRef`]. Returns
+/// Parse one comma-separated `list-panes -F` row into a pane and its view naming. Returns
 /// `None` for a row missing the three load-bearing leading columns (session,
 /// window, pane id) — a degraded answer the caller skips rather than surfaces.
 ///
 /// Trailing columns are read with `.get(i)`, so a short row (an older tmux, or a
 /// mid-tick race that truncated the line) yields `None`/default for the missing
 /// field rather than erroring the whole read.
-pub(super) fn parse_pane_line(line: &str) -> Option<PaneRef> {
+pub(super) fn parse_pane_line(line: &str) -> Option<(PaneRef, ViewNaming)> {
     let cols: Vec<_> = line.split(',').collect();
     if cols.len() < 3 {
         return None;
@@ -24,44 +25,58 @@ pub(super) fn parse_pane_line(line: &str) -> Option<PaneRef> {
             .filter(|value| !value.is_empty())
             .map(ToOwned::to_owned)
     };
-    Some(PaneRef {
-        pane_id: PaneId::from_parts(MuxName::Tmux, cols[2]),
-        session_name: cols[0].to_owned(),
-        view_id: Some(cols[1].to_owned()),
-        view_kind: Some(crate::mux::view_kind(MuxName::Tmux)),
-        view_name: trimmed_nonempty(6),
-        title: trimmed_nonempty(7),
-        // Added in tmux 3.7. On the supported 3.5/3.6 releases an unknown
-        // format expands empty, so the optional trailing column stays false.
-        is_floating: cols.get(8).is_some_and(|value| value.trim() == "1"),
-        command: if cols
-            .get(7)
-            .is_some_and(|value| value.trim() == SIDEBAR_CHROME_TITLE)
-            || cols
-                .get(9)
-                .is_some_and(|value| spawn_command_is_sidebar_serve(value))
-        {
-            Some(SIDEBAR_CHROME_TITLE.to_owned())
-        } else {
-            trimmed_nonempty(3)
+    Some((
+        PaneRef {
+            pane_id: PaneId::from_parts(MuxName::Tmux, cols[2]),
+            session_name: cols[0].to_owned(),
+            view_id: Some(cols[1].to_owned()),
+            view_kind: Some(crate::mux::view_kind(MuxName::Tmux)),
+            view_name: trimmed_nonempty(6),
+            title: trimmed_nonempty(7),
+            // Added in tmux 3.7. On the supported 3.5/3.6 releases an unknown
+            // format expands empty, so the optional trailing column stays false.
+            is_floating: cols.get(8).is_some_and(|value| value.trim() == "1"),
+            command: if cols
+                .get(7)
+                .is_some_and(|value| value.trim() == SIDEBAR_CHROME_TITLE)
+                || cols
+                    .get(9)
+                    .is_some_and(|value| spawn_command_is_sidebar_serve(value))
+            {
+                Some(SIDEBAR_CHROME_TITLE.to_owned())
+            } else {
+                trimmed_nonempty(3)
+            },
+            foreground_cmdline: None,
+            spawn_command: trimmed_nonempty(9),
+            cwd: trimmed_nonempty(4),
+            pane_pid: cols
+                .get(5)
+                .and_then(|value| value.trim().parse::<u32>().ok()),
+            // tmux has no per-pane process-start format variable; the sidebar
+            // producer derives the stamp from `pane_pid` via `/proc`
+            // (`sidebar::produce::panes::stamp_pane_process_starts`).
+            pane_process_start: None,
+            hosted_agent_kind: None,
+            hosted_agent_process_start: None,
+            hosted_agent_lineage: Vec::new(),
+            resumed_session_id: None,
+            elevated_agent: None,
+            first_seen_at_ms: None,
         },
-        foreground_cmdline: None,
-        spawn_command: trimmed_nonempty(9),
-        cwd: trimmed_nonempty(4),
-        pane_pid: cols
-            .get(5)
-            .and_then(|value| value.trim().parse::<u32>().ok()),
-        // tmux has no per-pane process-start format variable; the sidebar
-        // producer derives the stamp from `pane_pid` via `/proc`
-        // (`sidebar::produce::panes::stamp_pane_process_starts`).
-        pane_process_start: None,
-        hosted_agent_kind: None,
-        hosted_agent_process_start: None,
-        hosted_agent_lineage: Vec::new(),
-        resumed_session_id: None,
-        elevated_agent: None,
-        first_seen_at_ms: None,
-    })
+        ViewNaming {
+            automatic: cols.get(10).is_some_and(|value| value.trim() == "1"),
+            owner: trimmed_nonempty(11).map(|base| TabOwnerRecord {
+                base,
+                founders: cols
+                    .get(12)
+                    .into_iter()
+                    .flat_map(|value| value.split_whitespace())
+                    .map(|raw| PaneId::from_parts(MuxName::Tmux, raw))
+                    .collect(),
+            }),
+        },
+    ))
 }
 
 pub(super) fn parse_client_view(stdout: &[u8]) -> ClientView {
@@ -173,12 +188,36 @@ mod tests {
     use crate::ids::{MuxName, PaneId};
 
     #[test]
+    fn parse_pane_line_reads_window_ownership() {
+        let (pane, naming) =
+            parse_pane_line("rimz-qe,@1,%3,sh,/repo,4242,opus,opus,0,sh,0,opus,%3 %4")
+                .expect("pane row");
+        assert_eq!(pane.view_id.as_deref(), Some("@1"));
+        assert_eq!(
+            naming.owner,
+            Some(crate::mux::tab_name::TabOwnerRecord {
+                base: "opus".to_owned(),
+                founders: ["%3", "%4"]
+                    .map(|id| PaneId::from_parts(MuxName::Tmux, id))
+                    .to_vec(),
+            })
+        );
+        assert!(!naming.automatic);
+        let (_, automatic) =
+            parse_pane_line("rimz-qe,@1,%3,sleep,/repo,4242,sleep,sleep,0,sleep,1,,")
+                .expect("automatic row");
+        assert!(automatic.automatic);
+        assert!(automatic.owner.is_none());
+    }
+
+    #[test]
     fn parse_pane_line_handles_full_short_and_invalid_rows() {
         // session, window_id, pane_id, command, cwd, pid, window_name,
         // pinned launch name or pane_title, pane_floating_flag, pane_start_command.
         let row =
             "rimz-qe,@1,%3,rimz,/home/u/qe,4242,qe,rimz loop watch --hold,0,rimz loop watch --hold";
-        let pane = parse_pane_line(row).expect("full row parses");
+        let (pane, naming) = parse_pane_line(row).expect("full row parses");
+        assert_eq!(naming, ViewNaming::default());
         assert_eq!(pane.pane_id.raw(), "%3");
         assert_eq!(pane.session_name, "rimz-qe");
         assert_eq!(pane.view_id.as_deref(), Some("@1"));
@@ -200,13 +239,14 @@ mod tests {
         let second = "rimz-qe,@1,%4,zsh,/home/u/qe,4243,qe";
         assert!(parse_pane_line(second).is_some());
 
-        let floating = parse_pane_line("rimz-qe,@1,%5,codex,/home/u/qe,4244,qe,,1")
+        let (floating, _) = parse_pane_line("rimz-qe,@1,%5,codex,/home/u/qe,4244,qe,,1")
             .expect("floating row parses");
         assert!(floating.is_floating);
 
         // A truncated row that still carries the three load-bearing columns
         // parses; the absent optional fields read as `None`/default.
-        let short = parse_pane_line("rimz-qe,@1,%3").expect("leading columns parse");
+        let (short, naming) = parse_pane_line("rimz-qe,@1,%3").expect("leading columns parse");
+        assert_eq!(naming, ViewNaming::default());
         assert_eq!(short.pane_id.raw(), "%3");
         assert_eq!(short.command, None);
         assert_eq!(short.spawn_command, None);
@@ -232,7 +272,7 @@ mod tests {
         ];
         let parsed_commands = commands.map(|spawn| {
             let row = format!("rimz-qe,@1,%3,rimz,/home/u/qe,4242,qe,hostname,0,{spawn}");
-            let pane = parse_pane_line(&row).expect("pane row");
+            let (pane, _) = parse_pane_line(&row).expect("pane row");
             assert_eq!(pane.title.as_deref(), Some("hostname"));
             assert_eq!(pane.spawn_command.as_deref(), Some(spawn));
             pane.command.expect("command")
@@ -247,7 +287,7 @@ mod tests {
     fn parse_pane_line_preserves_launch_names_terminal_titles_and_chrome() {
         for title in ["opus-fast", "user@host: ~/repo", "rimz-sidebar"] {
             let row = format!("rimz-qe,@1,%3,rimz,/home/u/qe,4242,qe,{title},0");
-            let pane = parse_pane_line(&row).expect("pane row");
+            let (pane, _) = parse_pane_line(&row).expect("pane row");
             assert_eq!(pane.title.as_deref(), Some(title));
             assert_eq!(
                 pane.command.as_deref(),

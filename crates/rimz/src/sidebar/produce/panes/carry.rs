@@ -374,6 +374,7 @@ fn insert_carried_pane(fresh: &mut PaneFrame, prior_tab: &TabFrame, prior_pane: 
                 view_id: prior_tab.view_id.clone(),
                 kind: prior_tab.kind,
                 name: prior_tab.name.clone(),
+                naming: prior_tab.naming.clone(),
                 panes: Vec::new(),
             });
             fresh.tabs.last_mut().expect("just pushed tab")
@@ -735,6 +736,7 @@ mod tests {
                 view_id: ViewId::new_unchecked("tab_9"),
                 kind: ViewKind::Tab,
                 name: Some("work".to_owned()),
+                naming: Default::default(),
                 panes: vec![PaneState {
                     pane_id: pane_id("terminal_9"),
                     title: None,

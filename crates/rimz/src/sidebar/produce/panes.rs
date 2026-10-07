@@ -358,6 +358,7 @@ pub fn repaired_pane_frame_for_binding(
     let listing = match super::pane_list_fixture()? {
         Some(fixture) => PaneListing {
             panes: fixture,
+            views: Vec::new(),
             observed_at_ms: unix_now_ms(),
             session_focus: None,
             client_view: None,
@@ -375,6 +376,7 @@ pub fn repaired_pane_frame_for_binding(
     let prior = read_snapshot_cache(&cache_path, session);
     let (mut frame, diagnostics) = crate::sidebar::frame::assemble_frame_from_inputs(FrameInputs {
         panes: listing.panes,
+        views: listing.views,
         produced_at_ms: unix_now_ms(),
         observed_at_ms: listing.observed_at_ms,
         session_name: session.to_owned(),
@@ -640,6 +642,7 @@ impl PaneFrameProducer<'_, '_> {
         };
         let PaneListing {
             panes,
+            views,
             observed_at_ms,
             session_focus,
             client_view: pushed_client_view,
@@ -692,6 +695,7 @@ impl PaneFrameProducer<'_, '_> {
         let (mut frame, diagnostics) =
             crate::sidebar::frame::assemble_frame_from_inputs(FrameInputs {
                 panes,
+                views,
                 produced_at_ms: unix_now_ms(),
                 observed_at_ms,
                 session_name: self.cache.session.to_owned(),

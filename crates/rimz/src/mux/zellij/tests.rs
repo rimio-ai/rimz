@@ -460,6 +460,9 @@ fn rename_tab_resolves_the_anchor_to_a_stable_id() {
         TabNameIntent::Rest {
             observed: "#feat".to_owned(),
         },
+        TabNameIntent::Rebuild {
+            observed: "#feat".to_owned(),
+        },
         TabNameIntent::Release {
             observed: "#feat".to_owned(),
         },
@@ -505,6 +508,9 @@ fn projected_rename_skips_a_tab_renamed_since_its_observation() {
             observed: "shell ?".to_owned(),
         },
         TabNameIntent::Rest {
+            observed: "shell ?".to_owned(),
+        },
+        TabNameIntent::Rebuild {
             observed: "shell ?".to_owned(),
         },
         TabNameIntent::Release {

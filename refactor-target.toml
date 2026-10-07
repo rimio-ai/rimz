@@ -556,7 +556,8 @@ path = "crates/rimz/src/mux"
 # Structured command error redaction keeps backend socket paths out of user errors.
 # The shared capture tail rule replaces the Zellij-only trim helper.
 # The room plane owns Zellij's shared stamped width memo (+1).
-surface-budget = 260
+# View naming publishes its record types through the pane listing and frame (+8).
+surface-budget = 268
 
 [[module]]
 path = "crates/rimz/src/mux/zellij"
@@ -3641,6 +3642,16 @@ reason = "Eight integration sites and the hotpath bench call it; assemble_frame_
 kind = "item"
 key = "sidebar::frame::TabFrame"
 reason = "A pub field of the pub PaneFrame wire (pass 23c)."
+
+[[verdict]]
+kind = "item"
+key = "mux::tab_name::ViewNaming"
+reason = "The view-level naming input is published by PaneListing and TabFrame; ownership must not alter the persisted PaneRef stamp."
+
+[[verdict]]
+kind = "item"
+key = "mux::tab_name::TabOwnerRecord"
+reason = "The public ViewNaming wire carries the recorded base and normalized founder pane ids."
 
 [[verdict]]
 kind = "item"

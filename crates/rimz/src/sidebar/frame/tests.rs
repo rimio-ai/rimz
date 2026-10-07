@@ -26,6 +26,40 @@ fn pane(raw: &str, view: &str, command: Option<&str>, _focused: bool) -> PaneRef
 }
 
 #[test]
+fn listing_naming_is_lifted_by_view_and_old_frames_default_to_user() {
+    let naming = crate::mux::tab_name::ViewNaming {
+        automatic: false,
+        owner: Some(crate::mux::tab_name::TabOwnerRecord {
+            base: "opus".to_owned(),
+            founders: vec![PaneId::from_parts(MuxName::Zellij, "terminal_1")],
+        }),
+    };
+    let (frame, _) = assemble_frame_from_inputs(FrameInputs {
+        panes: vec![
+            pane("terminal_1", "tab_0", None, false),
+            pane("terminal_2", "tab_1", None, false),
+        ],
+        views: vec![("tab_0".to_owned(), naming.clone())],
+        produced_at_ms: 7,
+        observed_at_ms: 7,
+        session_name: "rimz-test".to_owned(),
+        session_focus: None,
+        client_viewed: &[],
+        client_views: &[],
+        client_view_fresh: false,
+        prior: None,
+    });
+    assert_eq!(frame.tabs[0].naming, naming);
+    assert_eq!(frame.tabs[1].naming, Default::default());
+    let mut old = serde_json::to_value(&frame).unwrap();
+    old["tabs"][0].as_object_mut().unwrap().remove("naming");
+    assert_eq!(
+        serde_json::from_value::<PaneFrame>(old).unwrap().tabs[0].naming,
+        Default::default()
+    );
+}
+
+#[test]
 fn floating_flag_survives_frame_round_trip() {
     let mut pane = pane("terminal_1", "tab_0", Some("codex"), true);
     pane.is_floating = true;
@@ -107,6 +141,7 @@ fn kiro_resume_id_is_stamped_from_direct_mux_command() {
 fn client_view_sets_session_focus_register() {
     let viewed = PaneId::from_parts(MuxName::Zellij, "terminal_2");
     let (frame, diagnostics) = assemble_frame_from_inputs(FrameInputs {
+        views: Vec::new(),
         panes: vec![
             pane("terminal_1", "tab_0", Some("zsh"), true),
             pane("terminal_2", "tab_1", Some("codex"), false),
@@ -142,6 +177,7 @@ fn session_focus_wins_when_live() {
     };
 
     let (frame, diagnostics) = assemble_frame_from_inputs(FrameInputs {
+        views: Vec::new(),
         panes: vec![
             pane("terminal_1", "tab_0", Some("zsh"), true),
             pane("terminal_2", "tab_1", Some("codex"), false),
@@ -163,6 +199,7 @@ fn session_focus_wins_when_live() {
 #[test]
 fn dead_session_focus_and_fresh_empty_clients_clear() {
     let (frame, _) = assemble_frame_from_inputs(FrameInputs {
+        views: Vec::new(),
         panes: vec![pane("terminal_1", "tab_0", Some("zsh"), true)],
         produced_at_ms: 7,
         observed_at_ms: 7,
@@ -194,6 +231,7 @@ fn distinct_client_views_abstain_and_one_fresh_view_wins() {
     };
 
     let (sticky, _) = assemble_frame_from_inputs(FrameInputs {
+        views: Vec::new(),
         panes: vec![
             pane("terminal_1", "tab_0", Some("zsh"), false),
             pane("terminal_2", "tab_1", Some("codex"), false),
@@ -210,6 +248,7 @@ fn distinct_client_views_abstain_and_one_fresh_view_wins() {
     assert_eq!(sticky.focused_pane, None);
 
     let (freshest, _) = assemble_frame_from_inputs(FrameInputs {
+        views: Vec::new(),
         panes: vec![
             pane("terminal_1", "tab_0", Some("zsh"), false),
             pane("terminal_2", "tab_1", Some("codex"), false),
@@ -248,6 +287,7 @@ fn full_client_map_requires_every_client_to_agree_on_one_terminal() {
         },
     ];
     let (frame, _) = assemble_frame_from_inputs(FrameInputs {
+        views: Vec::new(),
         panes: panes.clone(),
         produced_at_ms: 7,
         observed_at_ms: 7,
@@ -268,6 +308,7 @@ fn full_client_map_requires_every_client_to_agree_on_one_terminal() {
         },
     ];
     let (frame, _) = assemble_frame_from_inputs(FrameInputs {
+        views: Vec::new(),
         panes,
         produced_at_ms: 8,
         observed_at_ms: 8,
@@ -296,6 +337,7 @@ fn tmux_client_map_resolves_one_live_pane_and_abstains_on_distinct_views() {
         pane_id: first.clone(),
     };
     let (single, _) = assemble_frame_from_inputs(FrameInputs {
+        views: Vec::new(),
         panes: panes.clone(),
         produced_at_ms: 7,
         observed_at_ms: 7,
@@ -316,6 +358,7 @@ fn tmux_client_map_resolves_one_live_pane_and_abstains_on_distinct_views() {
         },
     ];
     let (distinct, _) = assemble_frame_from_inputs(FrameInputs {
+        views: Vec::new(),
         panes,
         produced_at_ms: 8,
         observed_at_ms: 8,
@@ -348,6 +391,7 @@ fn multiple_client_views_ignore_prior_missing_from_live_frame() {
     };
 
     let (frame, _) = assemble_frame_from_inputs(FrameInputs {
+        views: Vec::new(),
         panes: vec![
             pane("terminal_1", "tab_0", Some("zsh"), false),
             pane("terminal_2", "tab_1", Some("codex"), false),
@@ -370,6 +414,7 @@ fn summarized_client_view_ignores_dead_panes_when_one_live_pane_remains() {
     let live = PaneId::from_parts(MuxName::Zellij, "terminal_1");
     let dead = PaneId::from_parts(MuxName::Zellij, "terminal_2");
     let (frame, _) = assemble_frame_from_inputs(FrameInputs {
+        views: Vec::new(),
         panes: vec![pane("terminal_1", "tab_0", Some("zsh"), false)],
         produced_at_ms: 7,
         observed_at_ms: 7,
@@ -399,6 +444,7 @@ fn unavailable_client_sample_holds_live_prior_without_raw_fallback() {
         )
     };
     let (carried, _) = assemble_frame_from_inputs(FrameInputs {
+        views: Vec::new(),
         panes: vec![
             pane("terminal_1", "tab_0", Some("zsh"), true),
             pane("terminal_2", "tab_0", Some("codex"), false),
@@ -415,6 +461,7 @@ fn unavailable_client_sample_holds_live_prior_without_raw_fallback() {
     assert_eq!(carried.focused_pane, Some(prior_focus));
 
     let (raw, _) = assemble_frame_from_inputs(FrameInputs {
+        views: Vec::new(),
         panes: vec![
             pane("terminal_1", "tab_0", Some("zsh"), false),
             pane("terminal_2", "tab_0", Some("codex"), true),
@@ -434,6 +481,7 @@ fn unavailable_client_sample_holds_live_prior_without_raw_fallback() {
 #[test]
 fn detached_ambiguous_raw_marks_clear_without_live_prior() {
     let (frame, _) = assemble_frame_from_inputs(FrameInputs {
+        views: Vec::new(),
         panes: vec![
             pane("terminal_1", "tab_0", Some("zsh"), true),
             pane("terminal_2", "tab_0", Some("codex"), true),
@@ -455,6 +503,7 @@ fn detached_ambiguous_raw_marks_clear_without_live_prior() {
 fn sidebar_pane_can_be_the_session_focus_register() {
     let own = PaneId::from_parts(MuxName::Zellij, "terminal_1");
     let (frame, _) = assemble_frame_from_inputs(FrameInputs {
+        views: Vec::new(),
         panes: vec![
             pane("terminal_1", "tab_0", Some("rimz sidebar serve"), false),
             pane("terminal_2", "tab_0", Some("zsh"), false),
@@ -475,6 +524,7 @@ fn sidebar_pane_can_be_the_session_focus_register() {
 #[test]
 fn duplicate_pane_ids_keep_first_and_report_diagnostic() {
     let (frame, diagnostics) = assemble_frame_from_inputs(FrameInputs {
+        views: Vec::new(),
         panes: vec![
             pane("terminal_1", "tab_0", Some("zsh"), false),
             pane("terminal_1", "tab_0", Some("cargo build"), true),
