@@ -11,7 +11,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::os::unix::net::UnixDatagram;
 use std::path::PathBuf;
 use std::sync::mpsc::Sender;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
 
 use crate::config::NotificationsPrefs;
@@ -1040,6 +1040,119 @@ impl FetchRequest {
     }
 }
 
+#[derive(Default)]
+pub(super) struct PendingResults {
+    pub(super) snapshot: Option<FetchUpdate>,
+    pub(super) outcome: Option<FetchUpdate>,
+    pub(super) completed: bool,
+    pub(super) role: Option<FetchRole>,
+}
+
+impl PendingResults {
+    fn push(&mut self, mut update: FetchUpdate) {
+        let is_final = update.is_final();
+        self.completed |= is_final;
+        self.role = Some(update.role());
+        if update.snapshot_mut().is_none() {
+            self.outcome = Some(update);
+            return;
+        }
+        // An unfinished cycle cannot displace a completed one the pane has
+        // not seen. Its role still advances independently of that snapshot.
+        if !is_final && self.snapshot.as_ref().is_some_and(FetchUpdate::is_final) {
+            return;
+        }
+        self.snapshot = Some(update);
+        if is_final {
+            self.outcome = None;
+        }
+    }
+
+    #[cfg(test)]
+    fn pop(&mut self) -> Option<FetchUpdate> {
+        self.snapshot.take().or_else(|| self.outcome.take())
+    }
+}
+
+#[derive(Default)]
+struct ResultMailbox {
+    pending: Mutex<PendingResults>,
+    #[cfg(test)]
+    ready: std::sync::Condvar,
+}
+
+#[derive(Clone)]
+pub(super) struct ResultSender(Weak<ResultMailbox>);
+
+pub(super) struct ResultReceiver(Arc<ResultMailbox>);
+
+pub(super) fn result_channel() -> (ResultSender, ResultReceiver) {
+    let mailbox = Arc::new(ResultMailbox::default());
+    (
+        ResultSender(Arc::downgrade(&mailbox)),
+        ResultReceiver(mailbox),
+    )
+}
+
+impl ResultSender {
+    pub(super) fn send(
+        &self,
+        update: FetchUpdate,
+    ) -> Result<(), std::sync::mpsc::SendError<FetchUpdate>> {
+        let Some(mailbox) = self.0.upgrade() else {
+            return Err(std::sync::mpsc::SendError(update));
+        };
+        mailbox
+            .pending
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push(update);
+        #[cfg(test)]
+        mailbox.ready.notify_one();
+        Ok(())
+    }
+}
+
+impl ResultReceiver {
+    pub(super) fn take(&self) -> PendingResults {
+        std::mem::take(
+            &mut *self
+                .0
+                .pending
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+        )
+    }
+
+    #[cfg(test)]
+    fn try_recv(&self) -> Result<FetchUpdate, std::sync::mpsc::TryRecvError> {
+        self.0
+            .pending
+            .lock()
+            .unwrap()
+            .pop()
+            .ok_or(std::sync::mpsc::TryRecvError::Empty)
+    }
+
+    #[cfg(test)]
+    fn try_iter(&self) -> impl Iterator<Item = FetchUpdate> + '_ {
+        std::iter::from_fn(|| self.try_recv().ok())
+    }
+
+    #[cfg(test)]
+    fn recv(&self) -> Result<FetchUpdate, std::sync::mpsc::RecvError> {
+        let pending = self.0.pending.lock().unwrap();
+        self.0
+            .ready
+            .wait_while(pending, |pending| {
+                pending.snapshot.is_none() && pending.outcome.is_none()
+            })
+            .unwrap()
+            .pop()
+            .ok_or(std::sync::mpsc::RecvError)
+    }
+}
+
 /// One renderer a fetch worker feeds: where its folds go and how they are
 /// projected for it.
 #[derive(Clone)]
@@ -1048,7 +1161,7 @@ pub(super) struct Subscriber {
     pub(super) own_pane: Option<PaneId>,
     pub(super) tick_seconds: u64,
     pub(super) refresh_override: Option<u16>,
-    pub(super) tx: Sender<FetchUpdate>,
+    pub(super) tx: ResultSender,
     pub(super) socket_path: PathBuf,
 }
 
@@ -1094,7 +1207,7 @@ struct ResultSink {
 impl ResultSink {
     /// A sink feeding one renderer that folds as the worker's configured pane.
     #[cfg(test)]
-    fn new(tx: Sender<FetchUpdate>, socket_path: PathBuf, refresh_override: Option<u16>) -> Self {
+    fn new(tx: ResultSender, socket_path: PathBuf, refresh_override: Option<u16>) -> Self {
         let subscriber = Subscriber {
             instance_id: SidebarInstanceId::new(),
             own_pane: None,

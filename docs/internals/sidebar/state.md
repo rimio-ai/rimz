@@ -160,6 +160,8 @@ A dead producer is an ordinary degradation. Status keeps flowing through consume
 
 An attachment's loop reads no data itself. It blocks on its wakeup socket, hands work to the process's fetch worker, and folds the result when the worker nudges it back. Requests from several attachments that are waiting together merge into one cycle. Everything below runs on the worker.
 
+Each subscriber retains at most one pending snapshot, with its shared context, and one non-snapshot final outcome. A newer snapshot replaces the unread one, except that an interim cannot displace a pending final snapshot. Unchanged and failed outcomes do not erase that snapshot; the loop applies the snapshot before the outcome. Request completion and the latest election role are retained independently. Publication never waits for tty output, so a stalled pane cannot accumulate folds or block other panes. Wake datagrams remain hints: frame maintenance consumes pending results even if a wake was lost.
+
 A request carries a mode, an optional pane-cache floor, and two flags:
 
 | Field | Meaning |

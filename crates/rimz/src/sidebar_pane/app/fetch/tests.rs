@@ -19,7 +19,7 @@ fn run_cycle(
     state: &StatePaths,
     request: FetchRequest,
 ) -> Vec<FetchUpdate> {
-    let (tx, rx) = std::sync::mpsc::channel();
+    let (tx, rx) = result_channel();
     let mut sink = ResultSink::new(tx, PathBuf::from("/nonexistent/rimz-test.sock"), None);
     worker.run_cycle(state, request, &mut sink);
     drop(sink);
@@ -80,7 +80,7 @@ fn refresh_override_stamps_folded_snapshot() {
         jiff::Timestamp::UNIX_EPOCH,
     );
     folded.theme.display.refresh_ms = 250;
-    let (tx, rx) = std::sync::mpsc::channel();
+    let (tx, rx) = result_channel();
     let mut sink = ResultSink::new(tx, PathBuf::from("missing.sock"), Some(50));
 
     sink.publish(FetchUpdate::Snapshot {
@@ -277,7 +277,7 @@ fn diagnostics_name_producer_transitions_and_link_alerts() {
 /// so no mux), the provider-spending stamp, and the accounts stamp — so the
 /// cycle pays no subprocess and the test is hermetic.
 #[test]
-fn forced_cycle_posts_fast_then_inprocess_produce() {
+fn forced_cycle_retains_the_reconciling_produce_for_a_stalled_consumer() {
     let dir = tempfile::tempdir().unwrap();
     let workspace_id = workspace();
     let state = StatePaths::under(workspace_id.clone(), &dir.path().join("state")).unwrap();
@@ -336,21 +336,18 @@ fn forced_cycle_posts_fast_then_inprocess_produce() {
 
     assert_eq!(
         outcomes.len(),
-        2,
-        "fast paint, then the reconciling produce"
+        1,
+        "the reconciling produce replaces the unread fast snapshot"
     );
-    let fast = &outcomes[0];
-    assert!(
-        !fast.is_final(),
-        "the fast post leaves the cycle open for the produce"
-    );
-    let fast_snapshot = snapshot(fast);
-    assert!(
-        !fast_snapshot.worktree_groups.is_empty(),
-        "the fast fold renders the published pane"
-    );
-    let produced = &outcomes[1];
+    let produced = &outcomes[0];
     assert!(produced.is_final(), "the produce closes the cycle");
+    assert!(matches!(
+        produced,
+        FetchUpdate::Snapshot {
+            source: SnapshotSource::Produced,
+            ..
+        }
+    ));
     let produced_snapshot = snapshot(produced);
     assert!(
         !produced_snapshot.worktree_groups.is_empty(),
@@ -654,7 +651,7 @@ fn roster_publication_rechecks_election_after_the_fetch() {
         .collect();
     crate::store::live_roster::publish(&fixture.state.live_roster, live).unwrap();
     let before = crate::store::live_roster::read(&fixture.state.live_roster).unwrap();
-    let (tx, _rx) = std::sync::mpsc::channel();
+    let (tx, _rx) = result_channel();
     let mut sink = ResultSink::new(tx, PathBuf::from("missing.sock"), None);
     let empty = || SnapshotPublication {
         snapshot: SidebarSnapshot::build(
@@ -689,7 +686,7 @@ fn roster_publication_rechecks_election_after_the_fetch() {
 #[test]
 fn renderer_gets_the_snapshot_before_a_narrowing_probe() {
     thread_local! {
-        static UPDATES: std::cell::RefCell<Option<std::sync::mpsc::Receiver<FetchUpdate>>> =
+        static UPDATES: std::cell::RefCell<Option<ResultReceiver>> =
             const { std::cell::RefCell::new(None) };
         static SENT_BEFORE_PROBE: std::cell::Cell<Option<bool>> =
             const { std::cell::Cell::new(None) };
@@ -700,7 +697,7 @@ fn renderer_gets_the_snapshot_before_a_narrowing_probe() {
     let role = worker.observe_role();
     let lost = [(AgentKind::new_unchecked("claude"), "lost".into())].into();
     crate::store::live_roster::publish(&fixture.state.live_roster, lost).unwrap();
-    let (tx, rx) = std::sync::mpsc::channel();
+    let (tx, rx) = result_channel();
     UPDATES.set(Some(rx));
     let mut sink = ResultSink::new(tx, PathBuf::from("missing.sock"), None);
 
@@ -780,7 +777,7 @@ fn roster_narrowing_needs_a_listed_session() {
             .unwrap()
             .agents
     };
-    let (tx, _rx) = std::sync::mpsc::channel();
+    let (tx, _rx) = result_channel();
     let mut sink = ResultSink::new(tx, PathBuf::from("missing.sock"), None);
     crate::store::live_roster::publish(&fixture.state.live_roster, roster(&["a", "b"])).unwrap();
     let before = std::fs::read(&fixture.state.live_roster).unwrap();
@@ -1444,7 +1441,7 @@ fn one_cycle_projects_the_shared_fold_once_for_each_renderer() {
     let subscribers = Subscribers::default();
     let mut updates = Vec::new();
     for (id, own) in [("01", "terminal_7"), ("02", "terminal_8")] {
-        let (tx, rx) = std::sync::mpsc::channel();
+        let (tx, rx) = result_channel();
         let instance_id = SidebarInstanceId::parse(&format!("sb_{id:0>32}")).unwrap();
         subscribers.lock().unwrap().insert(
             instance_id.as_str().to_owned(),
@@ -1476,6 +1473,54 @@ fn one_cycle_projects_the_shared_fold_once_for_each_renderer() {
             "the renderer of {own} excludes only itself"
         );
     }
+}
+
+#[test]
+fn a_stalled_subscriber_retains_only_the_latest_projected_fold() {
+    let fixture = ConsumerFixture::new();
+    let subscribers = Subscribers::default();
+    let (stalled, stalled_rx) = subscriber("01", "terminal_7", 60, "missing.sock".into());
+    let (advancing, advancing_rx) = subscriber("02", "terminal_8", 60, "missing.sock".into());
+    subscribe(&subscribers, stalled);
+    subscribe(&subscribers, advancing);
+    let mut worker = fixture.worker();
+    let mut sink = ResultSink::shared(subscribers, Covered::default());
+    let now = crate::utils::time::unix_now_ms();
+    for fold in 0..64 {
+        tick_clock();
+        let newest = format!("terminal_{}", 100 + fold);
+        let frame = crate::sidebar::frame::assemble_frame(
+            ["terminal_7", "terminal_8", &newest]
+                .into_iter()
+                .map(|id| pane(id, "tab_1", false))
+                .collect(),
+            now + fold,
+            "rimz-test",
+        );
+        std::fs::write(
+            fixture.runtime.pane_frame_path(),
+            serde_json::to_vec(&frame).unwrap(),
+        )
+        .unwrap();
+        worker.run_cycle(&fixture.state, FetchRequest::force_fold(), &mut sink);
+        let update = advancing_rx
+            .try_recv()
+            .expect("unrelated subscriber keeps advancing");
+        assert_eq!(shown_panes(&update), ["terminal_7", &newest]);
+        assert!(advancing_rx.try_recv().is_err());
+    }
+    let updates: Vec<_> = stalled_rx.try_iter().collect();
+    assert_eq!(
+        updates.len(),
+        1,
+        "a stalled consumer retains one snapshot, not one per fold"
+    );
+    assert_eq!(shown_panes(&updates[0]), ["terminal_8", "terminal_163"]);
+    let (_, context) = updates.into_iter().next().unwrap().into_parts();
+    assert!(
+        Arc::ptr_eq(&context.unwrap(), sink.context.as_ref().unwrap()),
+        "the newest snapshot keeps its own shared context"
+    );
 }
 
 #[test]
@@ -1543,7 +1588,7 @@ fn shared_observation_extracts_common_once_and_keeps_each_own_view() {
             fixture.runtime.clone(),
             PathBuf::from("missing.sock"),
             crate::diag::DiagSink::disabled(),
-            std::sync::mpsc::channel().1,
+            result_channel().1,
             None,
             tx.clone(),
             crate::sidebar_pane::pixel::PixelRenderCaps::default(),
@@ -1616,7 +1661,7 @@ fn fold_file_reads_are_shared_across_forty_attachment_threads() {
                 runtime,
                 PathBuf::from("missing.sock"),
                 crate::diag::DiagSink::disabled(),
-                std::sync::mpsc::channel().1,
+                result_channel().1,
                 None,
                 std::sync::mpsc::sync_channel(64).0,
                 crate::sidebar_pane::pixel::PixelRenderCaps::default(),
@@ -1669,8 +1714,8 @@ fn subscriber(
     own: &str,
     tick_seconds: u64,
     socket_path: PathBuf,
-) -> (Subscriber, std::sync::mpsc::Receiver<FetchUpdate>) {
-    let (tx, rx) = std::sync::mpsc::channel();
+) -> (Subscriber, ResultReceiver) {
+    let (tx, rx) = result_channel();
     let subscriber = Subscriber {
         instance_id: SidebarInstanceId::parse(&format!("sb_{id:0>32}")).unwrap(),
         own_pane: Some(PaneId::from_parts(MuxName::Zellij, own)),
@@ -1732,6 +1777,10 @@ fn staggered_requests_behind_one_fold_cost_at_most_two_folds() {
     tx.send(FetchRequest::force_fold()).unwrap();
     let reads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let counted = reads.clone();
+    let receivers = Arc::new(receivers);
+    let draining = receivers.clone();
+    let first_publications = Arc::new(Mutex::new(Vec::new()));
+    let captured = first_publications.clone();
     let sink = ResultSink::shared(subscribers, Covered::default());
     let mut worker = fixture.worker();
     worker.election = crate::sidebar::ProducerElectionTracker::new(
@@ -1755,6 +1804,8 @@ fn staggered_requests_behind_one_fold_cost_at_most_two_folds() {
                 }
             }
             2 => {
+                *captured.lock().unwrap() =
+                    draining.iter().map(|rx| rx.try_recv().unwrap()).collect();
                 for _ in 0..PANES {
                     sender
                         .as_ref()
@@ -1777,8 +1828,9 @@ fn staggered_requests_behind_one_fold_cost_at_most_two_folds() {
         2,
         "count only cycles crossing the store-reader boundary"
     );
-    for (own, rx) in panes.iter().zip(receivers) {
-        let updates: Vec<_> = rx.try_iter().collect();
+    let first_publications = std::mem::take(&mut *first_publications.lock().unwrap());
+    for ((own, rx), first) in panes.iter().zip(receivers.iter()).zip(first_publications) {
+        let updates: Vec<_> = std::iter::once(first).chain(rx.try_iter()).collect();
         assert_eq!(
             updates.len(),
             2,

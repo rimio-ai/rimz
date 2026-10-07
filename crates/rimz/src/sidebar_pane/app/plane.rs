@@ -11,8 +11,11 @@ use crate::sidebar::ProducerElectionTracker;
 use crate::sidebar::observe::{self, ObserveMsg};
 use crate::{MuxName, RuntimePaths, SidebarInstanceId};
 
+#[cfg(test)]
+use super::fetch::FetchUpdate;
 use super::fetch::{
-    Covered, FetchRequest, FetchUpdate, Stand, Subscriber, Subscribers, spawn_fetch_worker,
+    Covered, FetchRequest, ResultReceiver, Stand, Subscriber, Subscribers, result_channel,
+    spawn_fetch_worker,
 };
 use super::{ServeConfig, cache_refresh, tmux_watch, transcript_watch};
 
@@ -118,7 +121,7 @@ impl DataPlane {
         config: &ServeConfig,
         socket_path: PathBuf,
     ) -> Subscription {
-        let (tx, results) = std::sync::mpsc::channel();
+        let (tx, results) = result_channel();
         let subscriber = Subscriber {
             instance_id: config.instance_id.clone(),
             own_pane: config.own_pane.clone(),
@@ -187,7 +190,7 @@ impl DataPlane {
 pub(in crate::sidebar_pane) struct Subscription {
     pub(super) requests: Sender<FetchRequest>,
     pub(super) covered: Covered,
-    pub(super) results: Receiver<FetchUpdate>,
+    pub(super) results: ResultReceiver,
     pub(super) observe: SyncSender<ObserveMsg>,
     _membership: Membership,
 }
