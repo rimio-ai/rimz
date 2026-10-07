@@ -323,8 +323,70 @@ fn fixture_frames_are_deterministic() {
         (SidebarFixtureState::Focus, "focus_fixture_frame"),
         (SidebarFixtureState::Economy, "economy_fixture_frame"),
         (SidebarFixtureState::Reach, "reach_fixture_frame"),
+        (SidebarFixtureState::Clocks, "clocks_fixture_frame"),
+        (SidebarFixtureState::ClocksDone, "clocks_done_fixture_frame"),
+        (
+            SidebarFixtureState::ClocksNerdFont,
+            "clocks_nerd_font_fixture_frame",
+        ),
+        (
+            SidebarFixtureState::ClocksDoneNerdFont,
+            "clocks_done_nerd_font_fixture_frame",
+        ),
     ] {
         assert_fixture_frame_snapshot(state, snapshot_name);
+    }
+}
+
+#[test]
+#[cfg(feature = "testkit")]
+fn clock_fixtures_separate_runtime_quiet_and_finished_durations() {
+    for (state, markers) in [
+        (
+            SidebarFixtureState::Clocks,
+            vec![
+                "Implement 4h12m",
+                "4h51m🮇",
+                "   2h▐",
+                "◑  8m▐",
+                "silent 30m",
+                "◉ 30m▐",
+                "   9m▐",
+                "◉ 4h▐",
+            ],
+        ),
+        (
+            SidebarFixtureState::ClocksDone,
+            vec!["Done", "4h51m🮇", "   9m▐"],
+        ),
+        (
+            SidebarFixtureState::ClocksNerdFont,
+            vec![
+                "Implement 4h12m",
+                "4h51m🮇",
+                "   2h▐",
+                "silent 30m",
+                "   9m▐",
+            ],
+        ),
+        (
+            SidebarFixtureState::ClocksDoneNerdFont,
+            vec!["Done", "4h51m🮇", "   9m▐"],
+        ),
+    ] {
+        let snapshot = sidebar_fixture_snapshot(state).unwrap();
+        let mut ansi = Vec::new();
+        rimz::sidebar_pane::render::render_fixed_line_ansi(&mut ansi, &snapshot, 54, 34).unwrap();
+        let frame = strip_sgr(&ansi);
+        for marker in markers {
+            assert!(frame.contains(marker), "{marker} absent:\n{frame}");
+        }
+        if matches!(
+            state,
+            SidebarFixtureState::ClocksDone | SidebarFixtureState::ClocksDoneNerdFont
+        ) {
+            assert!(!frame.contains("4h12m"), "{frame}");
+        }
     }
 }
 

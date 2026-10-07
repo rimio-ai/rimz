@@ -2475,7 +2475,7 @@ rimz sidebar click [hidden]
     --zellij  [action=set-true takes=0..=0 global]
 
 rimz sidebar fixture [hidden]
-    <state>  [action=set takes=1..=1 required values=empty|fleet|provider|cockpit|focus|economy|reach]
+    <state>  [action=set takes=1..=1 required values=empty|fleet|provider|cockpit|focus|economy|reach|clocks|clocks-done|clocks-nerd-font|clocks-done-nerd-font]
     --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
     --height <HEIGHT>  [action=set takes=1..=1 default=34]
     -h, --help  [action=help takes=0..=0]

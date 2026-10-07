@@ -1,0 +1,38 @@
+---
+source: crates/rimz/src/cli/sidebar/tests.rs
+expression: rendered
+---
+ ⌘ query-engine                /srv/code/query-engine
+
+ ◎ 0                                  ◇ 0 ↘ 0 ↗ 0 ◌ 0
+ ¤ 1                                            $0.00
+ ────────────────────────────────────────────────────
+ ? 0   ! 0   ⏸︎ 0   ✓ 0                ⢿ 1   ☾ 0   ○ 0
+
+▎⑂ sidebar-clocks ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄🮇
+▎  recon ● ● ◉ Implement 4h12m ○ ○ ○            4h51m🮇
+▌⢄ scout · Opus 5.5 · xhigh · 1m                $5.31▐
+▌  Agents exec wrapper mapping                       ▐
+▌  ▣ ━━━━━━━━━━━━━╺━╺──────────────────────────   22%▐
+▌  ▤ 227k · ◌ 195k ◍ 22k ↘ 9k ↗ 28k              ◉ 4h▐
+▌  ⧉ subagents (6)                              $4.72▐
+▌    ⠁ explorer · making progress               $1.02▐
+▌      ◇ 206k · GPT 6.1 Sol · xhigh                2h▐
+▌    ⠁ explorer · quiet for eight minutes       $1.02▐
+▌      ◇ 206k · GPT 6.1 Sol · xhigh             ◑  8m▐
+▌    ! explorer · silent 30m                    $0.46▐
+▌      ◇ 109k · GPT 6.1 Sol · xhigh             ◉ 30m▐
+▌    ✓ explorer · map sidebar serve supervisor  $0.46▐
+▌      ◇ 109k · GPT 6.1 Sol · xhigh                9m▐
+▌    ✓ explorer · map cli entry and gates       $1.02▐
+▌      ◇ 206k · GPT 6.1 Sol · xhigh               16m▐
+▌    ✓ explorer · map perf and live harness     $0.74▐
+▌      ◇ 163k · GPT 6.1 Sol · xhigh               13m▐
+
+
+
+ ────────────────────────────────────────────────────
+  W: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                       $0.00
+  M: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                       $0.00
+
+                                           ? for help

@@ -16,9 +16,9 @@ expression: rendered
 ▌  ▤ 341k · ◌ 293k ◍ 34k ↘ 13k ↗ 42k                 ▐
 ▌  ⧉ subagents (2)                              $0.46▐
 ▌    ⠁ Plan · run focused nextest               $0.12▐
-▌      ▤ 18k · Haiku · xhigh                    ◔  3m▐
+▌      ▤ 18k · Haiku · xhigh                       3m▐
 ▌    ✓ Explore · audit auth watcher changes     $0.34▐
-▌      ◇ 22k · Haiku · xhigh                    ◔ <1m▐
+▌      ◇ 22k · Haiku · xhigh                       5m▐
 ▎? codex · GPT 5.5 · xhigh · 272k               $4.36🮇
 ▎  approve pricing cache write                       🮇
 ▎  ▣ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━╺━────────────   71%🮇

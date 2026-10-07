@@ -17,11 +17,11 @@ expression: rendered
 ▌  󰿦 183k · 󱥸 157k  18k  7k  22k             󰪠 22m▐
 ▌   subagents (5)                              $1.05▐
 ▌     Explore · summarize docs drift           $0.18▐
-▌      󰿦 11k · Haiku · xhigh                    󰪞 <1m▐
+▌      󰿦 11k · Haiku · xhigh                       6m▐
 ▌     Explore · exercise auth edge cases       $0.27▐
-▌      󰿦 18k · Haiku · xhigh                    󰪞 <1m▐
+▌      󰿦 18k · Haiku · xhigh                       6m▐
 ▌     Explore · trace handler graph            $0.34▐
-▌      󰿦 20k · Haiku · xhigh                    󰪞 <1m▐
+▌      󰿦 20k · Haiku · xhigh                       7m▐
 ▌     Plan · split blocking checks             $0.12▐
 
  ─── Claude ──── Codex ──── Pi ──── Open Code ───────
