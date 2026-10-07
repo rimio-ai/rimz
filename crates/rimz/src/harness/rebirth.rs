@@ -37,9 +37,9 @@ pub enum RebirthErr {
     Inspect(#[from] anyhow::Error),
 }
 
-/// What a settlement does with the recovery candidates. Only an attended
-/// decision declines or drops candidates; refilled seats end automatically
-/// once their replacement is live.
+/// What a settlement does with root recovery candidates. Only an attended
+/// decision declines or drops them; children and live-refilled seats end
+/// automatically under every disposition.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum RebirthDisposition {
     /// Nobody was asked: every candidate stays pending.
@@ -58,8 +58,9 @@ impl RebirthDisposition {
     }
 }
 
-/// A recovery candidate the plan does not resume and a recovering settlement
-/// ends only when the user drops the rest.
+/// A root recovery candidate the plan does not resume and a recovering
+/// settlement ends only when the user drops the rest. Children are settled
+/// automatically, never listed here.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UnresumableAgent {
     pub label: String,
@@ -98,7 +99,7 @@ impl RebirthPreview {
         self.requires_sandbox
     }
 
-    /// Lost agents awaiting a decision: neither ended, live, nor already replaced.
+    /// Lost roots awaiting a decision: neither ended, live, nor already replaced.
     pub const fn candidate_count(&self) -> usize {
         self.candidate_count
     }
@@ -130,6 +131,7 @@ pub struct RebirthPlan {
     crash_roster: Vec<AgentState>,
     crash_cache: CrashCacheSnapshot,
     candidates: Vec<AgentState>,
+    children: Vec<AgentState>,
     /// Lost agents already ended by other means: they only leave the record.
     ended: BTreeSet<(AgentKind, AgentSessionId)>,
     refilled: BTreeSet<(AgentKind, AgentSessionId)>,
@@ -150,9 +152,20 @@ enum CrashCacheEntry {
     File { path: PathBuf, bytes: Vec<u8> },
 }
 
+#[derive(Default)]
+struct SettlementPlan {
+    candidates: Vec<AgentState>,
+    children: Vec<AgentState>,
+    ended: BTreeSet<(AgentKind, AgentSessionId)>,
+    planned: RecoveryPlan,
+}
+
 impl RebirthPlan {
     pub(crate) fn is_empty(&self) -> bool {
-        self.candidates.is_empty() && self.ended.is_empty() && self.refilled.is_empty()
+        self.candidates.is_empty()
+            && self.children.is_empty()
+            && self.ended.is_empty()
+            && self.refilled.is_empty()
     }
     /// Inspect prior state without changing markers, archives, event logs, the
     /// persisted live roster, or the pending-recovery record.
@@ -335,11 +348,33 @@ impl RebirthPlan {
             RebirthDisposition::RecoverDrop => Some("rimz.not-resumed"),
             RebirthDisposition::Defer | RebirthDisposition::RecoverKeep => None,
         };
-        // An agent leaves the pending record only once it is resumed or its
-        // ended stamp is durable; otherwise the reap would drop it unasked.
+        // A key leaves pending only after its resumed tab is confirmed or its
+        // end stamp is durable.
         let mut settled = self.ended;
         let mut declined = 0;
         if let Some(store) = store.as_ref() {
+            let children = self
+                .children
+                .iter()
+                .map(|agent| (agent.kind.clone(), agent.agent_id.clone()))
+                .filter(|key| !seeded.contains(key))
+                .collect();
+            cancel_child_runs(store, &self.paths, &self.children, &children);
+            let ended = record_agents_ended(
+                store,
+                &self.paths.workspace_id,
+                session_name,
+                &children,
+                "rimz.child-not-resumed",
+            );
+            let sink = DiagSink::for_workspace(self.paths.workspace_id.clone(), session_name, None);
+            for (kind, agent_id) in &ended {
+                sink.emit(DiagEvent::RecoveryChildEnded {
+                    agent_kind: kind.clone(),
+                    agent_id: agent_id.clone(),
+                });
+            }
+            settled.extend(ended);
             settled.extend(record_refilled_seats(
                 store,
                 &self.paths.workspace_id,
@@ -373,7 +408,6 @@ impl RebirthPlan {
             if disposition == RebirthDisposition::Decline {
                 declined = dropped.len();
             }
-            cancel_child_runs(store, &self.paths, &self.candidates, &dropped);
             settled.extend(dropped);
         }
         if let Err(err) = pending_recovery::settle(&self.paths, &settled) {
@@ -627,7 +661,12 @@ fn inspect_at(
         .as_ref()
         .filter(|_| waited)
         .and_then(|(store, _)| store.runtime_projection(crate::RuntimeScope::Audit).ok());
-    let (candidates, ended, planned) = plan_settlement(
+    let SettlementPlan {
+        candidates,
+        children,
+        ended,
+        planned,
+    } = plan_settlement(
         refreshed
             .as_ref()
             .or(audit.as_ref().map(|(_, projection)| projection)),
@@ -648,6 +687,7 @@ fn inspect_at(
         crash_roster,
         crash_cache,
         candidates,
+        children,
         ended,
         refilled: planned.refilled().clone(),
         planned,
@@ -703,7 +743,12 @@ fn inspect_live_scope(
         .flatten()
         .and_then(|store| store.runtime_projection(crate::RuntimeScope::Audit).ok());
     let recovery_off = disabled || !machine.resume.on_rebirth;
-    let (candidates, ended, planned) = plan_settlement(
+    let SettlementPlan {
+        candidates,
+        children,
+        ended,
+        planned,
+    } = plan_settlement(
         projection.as_ref(),
         &paths,
         &runtime,
@@ -722,6 +767,7 @@ fn inspect_live_scope(
         crash_roster: Vec::new(),
         crash_cache: CrashCacheSnapshot::default(),
         candidates,
+        children,
         ended,
         refilled: planned.refilled().clone(),
         planned,
@@ -730,9 +776,8 @@ fn inspect_live_scope(
     }
 }
 
-/// The candidates a settlement decides about (lost agents in `scope` that are
-/// neither ended nor live), the agents in `scope` already ended, and the plan
-/// that resumes the candidates it can.
+/// Lost roots awaiting a decision, non-live children to end, the agents in
+/// `scope` already ended, and the plan that resumes the roots it can.
 fn plan_settlement(
     projection: Option<&crate::RuntimeProjection>,
     paths: &StatePaths,
@@ -741,13 +786,9 @@ fn plan_settlement(
     project_root: &Path,
     machine: &MachineConfig,
     recovery_off: bool,
-) -> (
-    Vec<AgentState>,
-    BTreeSet<(AgentKind, AgentSessionId)>,
-    RecoveryPlan,
-) {
+) -> SettlementPlan {
     let Some(projection) = projection else {
-        return (Vec::new(), BTreeSet::new(), RecoveryPlan::default());
+        return SettlementPlan::default();
     };
     let ended = projection
         .agents
@@ -769,7 +810,7 @@ fn plan_settlement(
         })
         .cloned()
         .collect::<Vec<_>>();
-    let mut candidates = lost
+    let (mut candidates, children): (Vec<_>, Vec<_>) = lost
         .iter()
         .filter(|agent| {
             if agent.ended_at.is_some() {
@@ -778,7 +819,13 @@ fn plan_settlement(
             agent.ended_at.is_none()
         })
         .cloned()
-        .collect::<Vec<_>>();
+        .partition(|agent| {
+            if agent.parent_agent_id.is_some() {
+                tracing::debug!(kind = %agent.kind, session = %agent.agent_id, "rebirth: not a candidate: launched child");
+                return false;
+            }
+            true
+        });
     for (kind, session) in scope {
         if !projection
             .agents
@@ -791,7 +838,12 @@ fn plan_settlement(
     if recovery_off || candidates.is_empty() {
         let planned = RecoveryPlan::default();
         trace_unplanned(&candidates, &planned, recovery_off);
-        return (candidates, ended, planned);
+        return SettlementPlan {
+            candidates,
+            children,
+            ended,
+            planned,
+        };
     }
     let availability =
         crate::harness::plan::LaunchAvailability::read(runtime, paths, machine, Timestamp::now());
@@ -811,7 +863,12 @@ fn plan_settlement(
             .contains(&(agent.kind.clone(), agent.agent_id.clone()))
     });
     trace_unplanned(&candidates, &planned, recovery_off);
-    (candidates, ended, planned)
+    SettlementPlan {
+        candidates,
+        children,
+        ended,
+        planned,
+    }
 }
 
 /// Debug evidence for each candidate the plan neither resumes nor reports as

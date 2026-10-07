@@ -1166,8 +1166,9 @@ enum RecoveryQuestion {
     DropRest,
 }
 
-/// Who decides what happens to recovery candidates at birth. Only an attended
-/// decision declines or drops candidates; automatic seat refills are separate.
+/// Who decides what happens to root recovery candidates at birth. Only an
+/// attended decision declines or drops them; automatic child ends and seat
+/// refills are separate.
 fn choose_disposition(
     mode: ResumePromptMode,
     recovery_off: bool,
