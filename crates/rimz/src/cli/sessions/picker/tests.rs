@@ -288,6 +288,12 @@ fn filter_matches_displayed_repo_name_and_path_then_attaches() {
     picker.apply_probe(rows(), now());
 
     assert_eq!(picker.selected.as_deref(), Some("rimz-docs"));
+    picker.handle_event(key(KeyCode::Char('/'), KeyModifiers::NONE));
+    assert!(picker.filter.is_empty());
+    picker.handle_event(key(KeyCode::Down, KeyModifiers::NONE));
+    assert_eq!(picker.selected.as_deref(), Some("rimz-infra"));
+    picker.handle_event(key(KeyCode::Up, KeyModifiers::NONE));
+    assert_eq!(picker.selected.as_deref(), Some("rimz-docs"));
     assert_eq!(
         picker.handle_event(key(KeyCode::Char('f'), KeyModifiers::NONE)),
         None
@@ -350,7 +356,7 @@ fn probe_retains_a_visible_session_selection_and_clamps_a_vanished_one() {
 }
 
 #[test]
-fn new_key_opens_the_overlay_while_other_letters_filter_rooms() {
+fn new_key_opens_the_overlay_while_other_letters_do_not_filter_rooms() {
     let mut picker = Picker::new(None);
     picker.apply_probe(rows(), now());
 
@@ -367,7 +373,25 @@ fn new_key_opens_the_overlay_while_other_letters_filter_rooms() {
     );
     assert!(matches!(picker.view, View::Rooms));
     picker.handle_event(key(KeyCode::Char('d'), KeyModifiers::NONE));
-    assert_eq!(picker.filter, "d");
+    assert!(picker.filter.is_empty());
+    picker.handle_event(key(KeyCode::Char('j'), KeyModifiers::NONE));
+    assert_eq!(picker.selected.as_deref(), Some("rimz-infra"));
+    picker.handle_event(key(KeyCode::Char('k'), KeyModifiers::NONE));
+    assert_eq!(picker.selected.as_deref(), Some("rimz-docs"));
+}
+
+#[test]
+fn open_filter_accepts_navigation_letters_and_backspace_as_text() {
+    let mut picker = Picker::new(None);
+    picker.apply_probe(rows(), now());
+    picker.handle_event(key(KeyCode::Char('/'), KeyModifiers::NONE));
+    for character in ['q', 'n', 'j', 'k', '/'] {
+        picker.handle_event(key(KeyCode::Char(character), KeyModifiers::NONE));
+    }
+    assert_eq!(picker.filter, "qnjk/");
+    assert!(matches!(picker.view, View::Rooms));
+    picker.handle_event(key(KeyCode::Backspace, KeyModifiers::NONE));
+    assert_eq!(picker.filter, "qnjk");
 }
 
 #[test]
@@ -475,16 +499,20 @@ fn new_session_overlay_render_snapshot() {
 }
 
 #[test]
-fn escape_clears_filter_before_quitting_and_control_c_always_quits() {
+fn escape_closes_filter_without_clearing_then_quits_and_control_c_always_quits() {
     let mut picker = Picker::new(None);
     picker.apply_probe(rows(), now());
+    picker.handle_event(key(KeyCode::Char('/'), KeyModifiers::NONE));
     picker.handle_event(key(KeyCode::Char('d'), KeyModifiers::NONE));
 
     assert_eq!(
         picker.handle_event(key(KeyCode::Esc, KeyModifiers::NONE)),
         None
     );
-    assert!(picker.filter.is_empty());
+    assert_eq!(picker.filter, "d");
+    assert_eq!(picker.selected.as_deref(), Some("rimz-docs"));
+    picker.handle_event(key(KeyCode::Backspace, KeyModifiers::NONE));
+    assert_eq!(picker.filter, "d");
     assert_eq!(
         picker.handle_event(key(KeyCode::Esc, KeyModifiers::NONE)),
         Some(Action::Quit)
@@ -492,6 +520,37 @@ fn escape_clears_filter_before_quitting_and_control_c_always_quits() {
     assert_eq!(
         picker.handle_event(key(KeyCode::Char('c'), KeyModifiers::CONTROL)),
         Some(Action::Quit)
+    );
+    picker.handle_event(key(KeyCode::Char('/'), KeyModifiers::NONE));
+    assert_eq!(
+        picker.handle_event(key(KeyCode::Char('c'), KeyModifiers::CONTROL)),
+        Some(Action::Quit)
+    );
+}
+
+#[test]
+fn filter_frames_keep_text_without_a_cursor_when_closed() {
+    let mut picker = Picker::new(None);
+    picker.apply_probe(rows(), now());
+    picker.handle_event(key(KeyCode::Char('/'), KeyModifiers::NONE));
+    for character in "quiet".chars() {
+        picker.handle_event(key(KeyCode::Char(character), KeyModifiers::NONE));
+    }
+    picker.handle_event(key(KeyCode::Esc, KeyModifiers::NONE));
+    let closed = render_text(&mut picker, 100, 20);
+    assert!(closed.contains("filter: quiet"), "{closed}");
+    assert!(!closed.contains("filter: quiet_"), "{closed}");
+    assert!(
+        closed.contains("↑↓ jk select · ⏎ attach · n new · / filter · esc quit"),
+        "{closed}"
+    );
+
+    picker.handle_event(key(KeyCode::Char('/'), KeyModifiers::NONE));
+    let open = render_text(&mut picker, 100, 20);
+    assert!(open.contains("filter: quiet_"), "{open}");
+    assert!(
+        open.contains("type to filter · ⏎ attach · esc done"),
+        "{open}"
     );
 }
 
@@ -544,6 +603,7 @@ fn picker_render_snapshots_cover_populated_filtered_empty_and_notice_frames() {
     populated.apply_probe(rows(), now());
     let mut filtered = Picker::new(None);
     filtered.apply_probe(rows(), now());
+    filtered.handle_event(key(KeyCode::Char('/'), KeyModifiers::NONE));
     filtered.filter = "quiet".to_owned();
     filtered.normalize_selection();
     let mut empty = Picker::new(None);
@@ -588,9 +648,9 @@ fn picker_render_snapshots_cover_populated_filtered_empty_and_notice_frames() {
                          │                                                        │
                          │                                                        │
                          │                                                        │
-                         │ filter: _                                              │
+                         │ filter:                                                │
                          ╰────────────────────────────────────────────────────────╯
-                          ↑↓ select · ⏎ attach · n new · type to filter · esc quit
+                            ↑↓ jk select · ⏎ attach · n new · / filter · esc quit
 
     FILTERED
                                        ██████╗ ██╗███╗   ███╗███████╗
@@ -612,7 +672,7 @@ fn picker_render_snapshots_cover_populated_filtered_empty_and_notice_frames() {
                          │                                                        │
                          │ filter: quiet_                                         │
                          ╰────────────────────────────────────────────────────────╯
-                          ↑↓ select · ⏎ attach · n new · type to filter · esc quit
+                                    type to filter · ⏎ attach · esc done
 
     EMPTY
                                        ██████╗ ██╗███╗   ███╗███████╗
@@ -632,9 +692,9 @@ fn picker_render_snapshots_cover_populated_filtered_empty_and_notice_frames() {
                          │                                                        │
                          │                                                        │
                          │                                                        │
-                         │ filter: _                                              │
+                         │ filter:                                                │
                          ╰────────────────────────────────────────────────────────╯
-                          ↑↓ select · ⏎ attach · n new · type to filter · esc quit
+                            ↑↓ jk select · ⏎ attach · n new · / filter · esc quit
 
     NOTICE
                                        ██████╗ ██╗███╗   ███╗███████╗
@@ -662,9 +722,9 @@ fn picker_render_snapshots_cover_populated_filtered_empty_and_notice_frames() {
                          │                                                        │
                          │                                                        │
                          │                                                        │
-                         │ filter: _                                              │
+                         │ filter:                                                │
                          ╰────────────────────────────────────────────────────────╯
-                          ↑↓ select · ⏎ attach · n new · type to filter · esc quit
+                            ↑↓ jk select · ⏎ attach · n new · / filter · esc quit
 
     DEGRADED
     ╭ RimZ ── sessions ────────────────────╮
@@ -674,8 +734,8 @@ fn picker_render_snapshots_cover_populated_filtered_empty_and_notice_frames() {
     │   ⌘ infra                /repo/infra │
     │   codex ×1          ◎ 3  ◇ 1k  $0.75 │
     │                                      │
-    │ filter: _                            │
-    │ ↑↓ select · ⏎ attach · n new · type  │
+    │ filter:                              │
+    │ ↑↓ jk select · ⏎ attach · n new · /  │
     ╰──────────────────────────────────────╯
     "###);
 }
