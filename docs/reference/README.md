@@ -24,7 +24,7 @@ To find a command's page by its name, use the command map in [cli.md](./cli.md).
 | [transcript.md](./cli/transcript.md) | `rimz transcript`: rendering a channel or one agent from RimZ's durable transcript log, as the human view or JSON. |
 | [pane.md](./cli/pane.md) | `rimz pane`: pane targets, listing, capturing, sending text and keys, focus, zoom, split, detach, and per-pane bandwidth. |
 | [events.md](./cli/events.md) | `rimz events`: following lifecycle and signal lines as JSON Lines, both line schemas and signal sources, emitting signals, and the reserved families. |
-| [accounts.md](./cli/accounts.md) | `rimz accounts`: declaring, selecting, listing, and removing provider accounts, and redeeming Codex reset credits. |
+| [accounts.md](./cli/accounts.md) | `rimz accounts`: declaring, selecting, listing, and removing provider accounts, and redeeming Claude or Codex reset credits. |
 | [stats.md](./cli/stats.md) | `rimz stats`: the machine-wide token and dollar panel, cache freshness, the held dashboard, JSON fields, and the assist timeline. |
 | [providers.md](./cli/providers.md) | `rimz providers`: login status, rate-limit windows, credits, spend, and daily-cap state, with freshness and JSON fields. |
 | [budget.md](./cli/budget.md) | `rimz agents budget` and `rimz budget`: inspecting and changing one agent's dollar cap and the room and provider-account daily caps, and what a cap blocks. |

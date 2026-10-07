@@ -128,6 +128,24 @@ pub(super) fn oauth_http_post_json<T: Serialize>(
     oauth_http_request(url, headers, Some(&body), breadcrumb)
 }
 
+/// Bounded, non-retrying JSON POST for claims whose idempotency is unverified.
+pub(super) fn oauth_http_post_json_once<T: Serialize>(
+    url: &str,
+    headers: &[(&str, String)],
+    body: &T,
+    breadcrumb: &str,
+) -> std::result::Result<String, (HttpErrKind, String)> {
+    tracing::info!(
+        target: crate::observability::BREADCRUMB_TARGET,
+        host = %url_host(url),
+        "{}",
+        breadcrumb,
+    );
+    let body =
+        serde_json::to_vec(body).map_err(|_| (HttpErrKind::Body, url_host(url).to_owned()))?;
+    oauth_http_request_once(url, headers, Some(&body))
+}
+
 fn oauth_http_request(
     url: &str,
     headers: &[(&str, String)],

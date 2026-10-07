@@ -1,11 +1,11 @@
-//! Direct Claude OAuth account-usage probe.
+//! Direct Claude OAuth account usage and manual reset-credit claims.
 //!
-//! This is a read-only fallback over Claude Code's local OAuth credentials. It
-//! reads `.credentials.json` under the login's Claude config home, calls the
-//! provider usage endpoint, and normalizes the response into RimZ's
-//! account-window and paid-usage types. It never refreshes or writes
-//! credentials; retry/backoff and cache writes live in the CLI helper that
-//! calls this module.
+//! Reads `.credentials.json` under the login's Claude config home and
+//! normalizes the provider usage endpoint's response into RimZ's
+//! account-window and paid-usage types. Probes are read-only; manual
+//! redemption prepares from usage and profile reads, then sends one claim
+//! without retries. It never refreshes or writes credentials; retry/backoff
+//! of reads and cache writes live in the CLI helper that calls this module.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -18,12 +18,18 @@ use jiff::Timestamp;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
-use crate::utils::time::unix_now_ms;
+use crate::utils::time::{format_local_timestamp, unix_now_ms};
 
 use crate::agents::account::file_mtime_ms;
+use crate::agents::account::{
+    ProviderCapacity, RedeemHold, RedemptionCode, ResetCreditAction, ResetCreditOffer,
+    ResetCreditResult,
+};
 use crate::agents::capabilities::LaunchCapability;
 use crate::agents::context::{AgentRateLimits, RateLimitWindow, WindowSource};
-use crate::agents::credits::{oauth_http_get, trusted_usage_url, url_host};
+use crate::agents::credits::{
+    oauth_http_get, oauth_http_post_json_once, trusted_usage_url, url_host,
+};
 use crate::agents::payload::non_empty_trimmed;
 use crate::agents::{AccountUsageSnapshot, ExtraCredits, HttpErrKind};
 
@@ -51,6 +57,18 @@ pub(crate) enum ClaudeOauthUsageErr {
     UntrustedUsageUrl { host: String },
     #[error("claude OAuth usage HTTP {kind} (host {host})")]
     Http { kind: HttpErrKind, host: String },
+    #[error("claude OAuth profile HTTP {kind} (host {host})")]
+    ProfileHttp { kind: HttpErrKind, host: String },
+    #[error("claude OAuth profile organization.uuid is empty")]
+    EmptyOrganization,
+    #[error(
+        "claude limit-reset claim outcome is unknown (HTTP {kind}, host {host}); check Claude's Settings > Usage before retrying"
+    )]
+    ClaimHttp { kind: HttpErrKind, host: String },
+    #[error(
+        "claude limit-reset claim outcome is unknown (invalid response: {0}); check Claude's Settings > Usage before retrying"
+    )]
+    ClaimResponse(serde_json::Error),
 }
 
 impl crate::agents::credits::AccountUsageReportable for ClaudeOauthUsageErr {
@@ -67,12 +85,77 @@ impl crate::agents::credits::AccountUsageReportable for ClaudeOauthUsageErr {
                 | Self::UntrustedUsageUrl { .. }
         ) && !matches!(
             self,
-            Self::Http { kind, .. } if kind.is_auth_rejected()
+            Self::Http { kind, .. } | Self::ProfileHttp { kind, .. } if kind.is_auth_rejected()
         )
     }
 }
 
 type Result<T> = std::result::Result<T, ClaudeOauthUsageErr>;
+
+fn redemption_hold(usage: &UsageWire, now: Timestamp) -> Option<RedeemHold> {
+    let held = |code, reason| Some(RedeemHold { code, reason });
+    let Some(resets) = usage.cedar_ember.as_ref().filter(|resets| resets.eligible) else {
+        let reason = usage
+            .cedar_ember
+            .as_ref()
+            .and_then(|resets| resets.ineligible_reason.as_deref());
+        return held(
+            RedemptionCode::NoCredit,
+            reason.map_or_else(
+                || "not eligible for limit resets".to_owned(),
+                |reason| format!("not eligible for limit resets: {reason}"),
+            ),
+        );
+    };
+    if let Some(until) = parse_reset(resets.cooldown_until.as_deref()).filter(|until| *until > now)
+    {
+        return held(
+            RedemptionCode::Cooldown,
+            format!("cooldown until {}", format_local_timestamp(until)),
+        );
+    }
+    let Some(grant) = resets.next_grant_id.as_deref().and_then(|id| {
+        resets
+            .grants
+            .iter()
+            .find(|grant| grant.id.as_deref() == Some(id))
+    }) else {
+        return held(RedemptionCode::NoCredit, "no grant selected".to_owned());
+    };
+    let reason = if grant.paused {
+        "selected grant is paused"
+    } else if grant.resets_left == 0 {
+        "selected grant has no resets left"
+    } else if parse_reset(grant.starts_at.as_deref()).is_some_and(|start| start > now) {
+        "selected grant has not started"
+    } else if parse_reset(grant.ends_at.as_deref()).is_some_and(|end| end < now) {
+        "selected grant has expired"
+    } else if !grant.usable_now {
+        if grant.use_requires_limit && !resets.at_limit {
+            "usable only while at the limit"
+        } else {
+            "selected grant is not usable now"
+        }
+    } else {
+        return None;
+    };
+    held(RedemptionCode::NoCredit, reason.to_owned())
+}
+
+fn endpoint_url(usage_url: &str, segments: &[&str]) -> Result<String> {
+    let refused = || ClaudeOauthUsageErr::UntrustedUsageUrl {
+        host: url_host(usage_url).to_owned(),
+    };
+    if !trusted_usage_url(usage_url, OFFICIAL_HOST) {
+        return Err(refused());
+    }
+    let usage = url::Url::parse(usage_url).map_err(|_| refused())?;
+    let mut url = url::Url::parse(&usage.origin().ascii_serialization()).map_err(|_| refused())?;
+    url.path_segments_mut()
+        .map_err(|_| refused())?
+        .extend(segments);
+    Ok(url.into())
+}
 
 #[derive(Debug, Clone, PartialEq)]
 struct ClaudeOauthCredentials {
@@ -109,14 +192,174 @@ struct UsageWire {
 #[serde(default)]
 struct LimitResetsWire {
     eligible: bool,
+    ineligible_reason: Option<String>,
+    at_limit: bool,
+    next_grant_id: Option<String>,
+    cooldown_until: Option<String>,
     grants: Vec<ResetGrantWire>,
 }
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 struct ResetGrantWire {
+    id: Option<String>,
     resets_left: u32,
+    starts_at: Option<String>,
     ends_at: Option<String>,
+    paused: bool,
+    usable_now: bool,
+    use_requires_limit: bool,
+}
+
+#[derive(Deserialize)]
+struct ProfileWire {
+    organization: OrganizationWire,
+}
+
+#[derive(Deserialize)]
+struct OrganizationWire {
+    uuid: String,
+}
+
+#[derive(Deserialize)]
+struct ClaimWire {
+    result: ClaimCode,
+    #[serde(default)]
+    cleared: Vec<serde_json::Value>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ClaimCode {
+    Reset,
+    AlreadyUsed,
+    NotLimited,
+    Ineligible,
+    Unavailable,
+    Cooldown,
+    #[serde(other)]
+    Unknown,
+}
+
+struct ClaudeResetCreditAction {
+    usage_url: String,
+    claim_url: String,
+    access_token: String,
+    grant_id: Option<String>,
+    identity: crate::agents::AccountUsageIdentity,
+}
+
+pub(super) fn prepare_reset_credit(
+    login_env: &BTreeMap<String, String>,
+) -> Result<ResetCreditOffer> {
+    let usage_url = usage_url()?;
+    let credentials_stamp = credentials_stamp(login_env);
+    let credentials = load_credentials(login_env)?;
+    // usage_url already parsed and validated the resolved URL.
+    let mut preview_url = url::Url::parse(&usage_url).expect("resolved usage URL was parsed");
+    preview_url.query_pairs_mut().append_pair("skip_spend", "1");
+    let usage: UsageWire =
+        serde_json::from_str(&http_get(preview_url.as_str(), &credentials.access_token)?)?;
+    let hold = redemption_hold(&usage, Timestamp::now());
+    let grant_id = if hold.is_none() {
+        usage
+            .cedar_ember
+            .as_ref()
+            .and_then(|resets| resets.next_grant_id.clone())
+    } else {
+        None
+    };
+    let profile_url = endpoint_url(&usage_url, &["api", "oauth", "profile"])?;
+    let profile: ProfileWire = serde_json::from_str(
+        &oauth_http_get(
+            &profile_url,
+            &oauth_headers(&credentials.access_token),
+            "claude: fetching OAuth account profile",
+        )
+        .map_err(|(kind, host)| ClaudeOauthUsageErr::ProfileHttp { kind, host })?,
+    )?;
+    if profile.organization.uuid.trim().is_empty() {
+        return Err(ClaudeOauthUsageErr::EmptyOrganization);
+    }
+    let claim_url = endpoint_url(
+        &usage_url,
+        &[
+            "api",
+            "organizations",
+            &profile.organization.uuid,
+            "reset_rate_limits",
+        ],
+    )?;
+    let identity = crate::agents::AccountUsageIdentity {
+        account_key: Some(credentials.account_key),
+        credentials_stamp,
+        ..Default::default()
+    };
+    let usage = usage.into_account_usage();
+    let capacity = usage
+        .rate_limits
+        .map(|limits| ProviderCapacity::from_windows(limits.windows));
+    // Every parsed Claude usage body publishes a reset-credit balance, including zero.
+    let credits = usage
+        .reset_credits
+        .expect("Claude usage always sets reset_credits");
+    let mut offer = ResetCreditOffer::new(
+        capacity,
+        credits,
+        ClaudeResetCreditAction {
+            usage_url,
+            claim_url,
+            access_token: credentials.access_token,
+            grant_id,
+            identity,
+        },
+    );
+    offer.hold = hold;
+    Ok(offer)
+}
+
+impl ResetCreditAction for ClaudeResetCreditAction {
+    fn consume(
+        self: Box<Self>,
+        request_id: &str,
+    ) -> std::result::Result<ResetCreditResult, String> {
+        let grant_id = self
+            .grant_id
+            .as_deref()
+            .ok_or_else(|| "no grant selected".to_owned())?;
+        let body = serde_json::json!({"program": "cedar_ember", "grant_id": grant_id, "request_id": request_id});
+        let response = oauth_http_post_json_once(
+            &self.claim_url,
+            &oauth_headers(&self.access_token),
+            &body,
+            "claude: claiming a limit reset",
+        )
+        .map_err(|(kind, host)| ClaudeOauthUsageErr::ClaimHttp { kind, host }.to_string())?;
+        let claim: ClaimWire = serde_json::from_str(&response)
+            .map_err(|error| ClaudeOauthUsageErr::ClaimResponse(error).to_string())?;
+        let outcome = match claim.result {
+            ClaimCode::Reset => RedemptionCode::Reset,
+            ClaimCode::AlreadyUsed => RedemptionCode::AlreadyRedeemed,
+            ClaimCode::NotLimited => RedemptionCode::NothingToReset,
+            ClaimCode::Ineligible | ClaimCode::Unavailable => RedemptionCode::NoCredit,
+            ClaimCode::Cooldown => RedemptionCode::Cooldown,
+            ClaimCode::Unknown => RedemptionCode::Unknown,
+        };
+        let (refreshed, refresh_error) = if outcome == RedemptionCode::Reset {
+            match fetch_usage_with_url(&self.usage_url, &self.access_token) {
+                Ok(usage) => (Some((self.identity, usage)), None),
+                Err(error) => (None, Some(error.to_string())),
+            }
+        } else {
+            (None, None)
+        };
+        Ok(ResetCreditResult {
+            outcome,
+            windows_reset: claim.cleared.len() as i64,
+            refreshed,
+            refresh_error,
+        })
+    }
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -331,14 +574,21 @@ fn resolve_usage_url(override_url: Option<&str>) -> Result<String> {
 }
 
 fn http_get(url: &str, token: &str) -> Result<String> {
-    let headers = [
+    oauth_http_get(
+        url,
+        &oauth_headers(token),
+        "claude: fetching OAuth account usage",
+    )
+    .map_err(|(kind, host)| ClaudeOauthUsageErr::Http { kind, host })
+}
+
+fn oauth_headers(token: &str) -> [(&'static str, String); 4] {
+    [
         ("Authorization", format!("Bearer {token}")),
         ("Accept", "application/json".to_owned()),
         ("anthropic-beta", "oauth-2025-04-20".to_owned()),
         ("User-Agent", claude_code_user_agent()),
-    ];
-    oauth_http_get(url, &headers, "claude: fetching OAuth account usage")
-        .map_err(|(kind, host)| ClaudeOauthUsageErr::Http { kind, host })
+    ]
 }
 
 fn claude_code_user_agent() -> String {

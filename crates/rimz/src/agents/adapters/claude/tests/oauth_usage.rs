@@ -62,14 +62,14 @@ fn reportable_classifier_treats_unauthorized_as_settled_auth() {
     assert!(
         !ClaudeOauthUsageErr::Http {
             kind: HttpErrKind::Status(401),
-            host: "api.anthropic.com".to_owned(),
+            host: OFFICIAL_HOST.to_owned(),
         }
         .should_report()
     );
     assert!(
         !ClaudeOauthUsageErr::Http {
             kind: HttpErrKind::Status(403),
-            host: "api.anthropic.com".to_owned(),
+            host: OFFICIAL_HOST.to_owned(),
         }
         .should_report()
     );
@@ -104,6 +104,131 @@ fn usage_url_override_accepts_only_official_or_loopback_hosts() {
     let display = error.to_string();
     assert!(display.contains("evil.example"));
     assert!(!display.contains("/private/path"));
+}
+
+#[test]
+fn redemption_endpoints_use_only_the_trusted_usage_origin() {
+    let usage = "http://127.0.0.1:8080/custom/usage?x=1#fragment";
+    assert_eq!(
+        endpoint_url(usage, &["api", "oauth", "profile"]).unwrap(),
+        "http://127.0.0.1:8080/api/oauth/profile"
+    );
+    assert_eq!(
+        endpoint_url(
+            usage,
+            &["api", "organizations", "org/uuid", "reset_rate_limits"]
+        )
+        .unwrap(),
+        "http://127.0.0.1:8080/api/organizations/org%2Fuuid/reset_rate_limits"
+    );
+    assert!(endpoint_url("https://evil.example/usage", &["api", "oauth", "profile"]).is_err());
+}
+
+#[test]
+fn redemption_holds_follow_the_provider_selected_grant_and_precedence() {
+    use crate::agents::account::RedemptionCode::{Cooldown, NoCredit};
+    let now: Timestamp = "2026-09-26T12:00:00Z".parse().unwrap();
+    let base = serde_json::json!({"cedar_ember": {
+        "eligible": true, "at_limit": false, "next_grant_id": "selected",
+        "grants": [
+            {"id": "other", "resets_left": 9, "usable_now": true},
+            {"id": "selected", "resets_left": 1, "usable_now": true,
+             "starts_at": "2026-09-25T12:00:00Z", "ends_at": "2026-09-27T12:00:00Z"}
+        ]
+    }});
+    for (pointer, value, code, reason) in [
+        (
+            "/cedar_ember",
+            serde_json::Value::Null,
+            NoCredit,
+            "not eligible",
+        ),
+        (
+            "/cedar_ember/eligible",
+            false.into(),
+            NoCredit,
+            "not eligible",
+        ),
+        (
+            "/cedar_ember/cooldown_until",
+            "2026-09-27T12:00:00Z".into(),
+            Cooldown,
+            "cooldown until",
+        ),
+        (
+            "/cedar_ember/next_grant_id",
+            serde_json::Value::Null,
+            NoCredit,
+            "no grant selected",
+        ),
+        (
+            "/cedar_ember/next_grant_id",
+            "missing".into(),
+            NoCredit,
+            "no grant selected",
+        ),
+        (
+            "/cedar_ember/grants/1/paused",
+            true.into(),
+            NoCredit,
+            "paused",
+        ),
+        (
+            "/cedar_ember/grants/1/resets_left",
+            0.into(),
+            NoCredit,
+            "no resets left",
+        ),
+        (
+            "/cedar_ember/grants/1/starts_at",
+            "2026-09-27T12:00:00Z".into(),
+            NoCredit,
+            "not started",
+        ),
+        (
+            "/cedar_ember/grants/1/ends_at",
+            "2026-09-25T12:00:00Z".into(),
+            NoCredit,
+            "expired",
+        ),
+        (
+            "/cedar_ember/grants/1/usable_now",
+            false.into(),
+            NoCredit,
+            "not usable now",
+        ),
+    ] {
+        let mut body = base.clone();
+        let (parent, field) = pointer.rsplit_once('/').unwrap();
+        body.pointer_mut(parent)
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .insert(field.to_owned(), value);
+        let usage: UsageWire = serde_json::from_value(body).unwrap();
+        let hold = redemption_hold(&usage, now).expect(pointer);
+        assert_eq!(hold.code, code, "{pointer}");
+        assert!(hold.reason.contains(reason), "{pointer}: {}", hold.reason);
+    }
+    let mut body = base.clone();
+    body["cedar_ember"]["grants"][1]["usable_now"] = false.into();
+    body["cedar_ember"]["grants"][1]["use_requires_limit"] = true.into();
+    let usage: UsageWire = serde_json::from_value(body.clone()).unwrap();
+    assert_eq!(
+        redemption_hold(&usage, now).unwrap().reason,
+        "usable only while at the limit"
+    );
+    body["cedar_ember"]["eligible"] = false.into();
+    body["cedar_ember"]["ineligible_reason"] = "surface".into();
+    body["cedar_ember"]["cooldown_until"] = "2026-09-27T12:00:00Z".into();
+    let usage: UsageWire = serde_json::from_value(body).unwrap();
+    let hold = redemption_hold(&usage, now).unwrap();
+    assert_eq!(hold.code, NoCredit);
+    assert!(hold.reason.contains("surface"));
+    let mut body = base;
+    body["cedar_ember"]["cooldown_until"] = "2026-09-25T12:00:00Z".into();
+    let usage: UsageWire = serde_json::from_value(body).unwrap();
+    assert!(redemption_hold(&usage, now).is_none());
 }
 
 #[test]

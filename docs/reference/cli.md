@@ -82,7 +82,7 @@ Commands that report an outcome add their own codes, so a script branches withou
 
 | Command | Codes | Reference |
 | --- | --- | --- |
-| `accounts redeem` | `0` reset, dry-run, or declined; `3` no credit; `4` nothing to reset; `5` already redeemed; `6` unknown; `1` refused or failed | [Redeem a credit](./cli/accounts.md#redeem) |
+| `accounts redeem` | `0` reset, dry-run, or declined; `3` no credit; `4` nothing to reset; `5` already redeemed; `6` unknown; `7` cooldown; `1` refused or failed | [Redeem a credit](./cli/accounts.md#redeem) |
 | `agents -p`, `agents wait`, `subagents wait`, `teams wait`, `message --wait` | The run's status: `0` completed, `1` failed, `123` verify failed, `124` timed out, `125` budget exceeded, `130` canceled | [Supervised runs](./cli/agents.md#supervised-runs--p) |
 | `subagents <PROFILE>`, `subagents fanout` | `125` a room or account cap, or a Qwen quota window, refused the launch; with `--wait`, the run's status | [Launch one child](./cli/subagents.md#launch-one-child) |
 | `loop fire` | An `--agent` action's run status as above; `130` when Ctrl-C interrupts the check; `0` when a gate or check skips the action | [Fire and stop a run](./cli/loop.md#fire-and-stop-a-run) |

@@ -180,7 +180,8 @@ upward-dependencies = ["address"]
 # AgentState::silent_child_for shares one stall predicate between projection and notice detection (+1).
 # AgentState::root_lane, lane_label and is_root_lane share fold-derived root identity with consumers.
 # Spent-child CLI parity shares ParkDemotion and its constructor, predicate, and window query (+4).
-surface-budget = 995
+# Manual redemption exposes the provider hold code and reason through its offer and prepared preview (+2).
+surface-budget = 997
 
 [[module]]
 path = "crates/rimz/src/agents/park.rs"
@@ -504,7 +505,8 @@ path = "crates/rimz/src/harness"
 # Spent-child CLI parity shares one read-only durable park-demotion builder (+1), and its login-set form with the sidebar fold (+1).
 # The compact pressure reading feeds loop show's no-limits facts without parsing display rows (+1).
 # Fan-out inspection publishes its module, inspect entry, CheckoutCondition, and CheckoutState to the CLI (+4).
-surface-budget = 746
+# The manual forecast and CLI preview share automatic provider eligibility (+1), and the preview reads the provider hold (+1).
+surface-budget = 748
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -990,7 +992,8 @@ allowed-dependencies = []
 # One compact duration formatter serves config serialization and CLI reports.
 # Crate-visible compact duration serde adapters serve durable run records.
 # Coarse durations serve pending-wait activity and prompt-cache notices.
-surface-budget = 17
+# The accounts preview and provider holds share local wall-clock formatting (+1).
+surface-budget = 18
 
 [[module]]
 path = "crates/rimz/src/harness/ancestry.rs"
@@ -4254,6 +4257,36 @@ reason = "The binary crate calls it on the publicly re-exported HookOutput (cli/
 kind = "item"
 key = "agents::account::AccountProbe"
 reason = "Named by public capability methods on AgentDefinition; the reset-credit and capacity contract types (AccountUsageIdentity, ProviderCapacity, RedemptionCode, ResetCreditResult, ResetCreditOffer, ResetCreditAction, PreparedRedemption) are floored the same way (pass 24b)."
+
+[[verdict]]
+kind = "item"
+key = "agents::account::RedeemHold"
+reason = "Public ResetCreditOffer.hold and ManualRedeem::hold carry the provider's code and reason to the binary's preview and exit decision."
+
+[[verdict]]
+kind = "item"
+key = "agents::account::PreparedRedemption::hold"
+reason = "The manual harness reads the provider-owned hold without copying a second verdict into its preview."
+
+[[verdict]]
+kind = "item"
+key = "agents::credits::oauth_http_post_json_once"
+reason = "Claude's claim idempotency is unverified: serialize and send once through the shared bounded, redirect-refusing transport, never its retry loop."
+
+[[verdict]]
+kind = "item"
+key = "harness::auto_redeem::ManualRedeem::hold"
+reason = "The binary shows held offers and exits with their provider code before confirmation or reservation."
+
+[[verdict]]
+kind = "item"
+key = "harness::auto_redeem::supports_kind"
+reason = "The manual harness forecast and CLI preview share the automatic path's provider gate rather than repeating the provider literal."
+
+[[verdict]]
+kind = "item"
+key = "utils::time::format_local_timestamp"
+reason = "The binary's accounts preview and Claude's cooldown hold use the same local wall-clock format through their existing utils dependency."
 
 [[verdict]]
 kind = "item"

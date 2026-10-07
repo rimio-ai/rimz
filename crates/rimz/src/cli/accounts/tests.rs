@@ -40,20 +40,10 @@ fn redeem_outcome_exit_codes_cover_every_provider_code() {
         (RedemptionCode::NothingToReset, 4),
         (RedemptionCode::AlreadyRedeemed, 5),
         (RedemptionCode::Unknown, 6),
+        (RedemptionCode::Cooldown, 7),
     ] {
         assert_eq!(redeem_exit_code(outcome), code, "{outcome:?}");
     }
-}
-
-#[test]
-fn redeem_claude_refusal_names_the_native_usage_settings() {
-    let error = check_redeem_kind(&AgentKind::new_unchecked("claude"))
-        .expect_err("Claude redemption is unsupported")
-        .to_string();
-    assert!(
-        error.contains("Claude") && error.contains("Settings > Usage"),
-        "{error}"
-    );
 }
 
 #[test]

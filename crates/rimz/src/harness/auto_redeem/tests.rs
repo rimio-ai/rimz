@@ -750,6 +750,61 @@ fn manual_report() -> RedeemReport {
 }
 
 #[test]
+fn manual_consume_refuses_held_offers_before_locking_or_reserving() {
+    use crate::agents::account::{ResetCreditAction, ResetCreditOffer};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    struct Action(Arc<AtomicUsize>);
+    impl ResetCreditAction for Action {
+        fn consume(self: Box<Self>, _: &str) -> Result<ResetCreditResult, String> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Ok(ResetCreditResult {
+                outcome: RedemptionCode::Reset,
+                windows_reset: 0,
+                refreshed: None,
+                refresh_error: None,
+            })
+        }
+    }
+
+    for code in [RedemptionCode::NoCredit, RedemptionCode::Cooldown] {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime =
+            RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
+        runtime.ensure_dirs().unwrap();
+        let key = LoginKey::default_for(crate::ids::AgentKind::new_unchecked("claude"));
+        let consumed = Arc::new(AtomicUsize::new(0));
+        let mut offer = ResetCreditOffer::new(
+            None,
+            credits(ts(1_700_000_000), None),
+            Action(consumed.clone()),
+        );
+        let hold = RedeemHold {
+            code,
+            reason: "provider hold".to_owned(),
+        };
+        offer.hold = Some(hold.clone());
+        let preview = ManualRedeem {
+            credits: offer.credits.clone(),
+            windows: Vec::new(),
+            natural_reset: None,
+            forecast: None,
+            min_gain: Duration::ZERO,
+            prepared: PreparedRedemption::from_offer(RedeemReason::Manual, offer),
+            stamp_at_read: None,
+        };
+        let result = preview.consume(&runtime, &key, uuid::Uuid::now_v7());
+        assert!(matches!(result, Err(AutoRedeemErr::Held(actual)) if actual == hold));
+        assert_eq!(consumed.load(Ordering::SeqCst), 0);
+        assert!(!runtime.shared_auto_redeem_lock(&key).exists());
+        assert!(!runtime.shared_auto_redeem_path(&key).exists());
+    }
+}
+
+#[test]
 fn manual_tail_bypasses_cooldown_and_reserves_before_consuming() {
     let dir = tempfile::tempdir().unwrap();
     let runtime =
@@ -1340,7 +1395,7 @@ fn attempted_errors_retain_the_redeem_decision_report() {
         window_resets: Vec::new(),
     };
 
-    let error = attempted_error(&report, AutoRedeemErr::Codex("offline".to_owned()));
+    let error = attempted_error(&report, AutoRedeemErr::Provider("offline".to_owned()));
     assert_eq!(error.attempted_report(), Some(&report));
     assert!(error.to_string().contains("offline"));
 }
@@ -1368,6 +1423,7 @@ fn failed_reservation_never_consumes_a_credit() {
     let consumed = std::cell::Cell::new(false);
 
     let result = consume_reserved_reset_credit(
+        &"codex@default".parse().unwrap(),
         &invalid_stamp_path,
         &stamp,
         &report,
@@ -1594,4 +1650,38 @@ fn projection_forecasts_only_the_codex_panel_with_credits() {
     snapshot.providers[0].reset_credits = None;
     project_redeem_forecasts(&mut snapshot, &runtime, &config, &logins);
     assert_eq!(forecasts(&snapshot), [None, None]);
+}
+
+#[test]
+fn claude_banked_credits_never_arm_the_automatic_path() {
+    let now = ts(1_700_000_000);
+    let dir = tempfile::tempdir().unwrap();
+    let runtime =
+        RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    let mut panel = crate::sidebar::test_support::provider_panel("claude", Vec::new());
+    panel.reset_credits = Some(keeping_schedule(credits(
+        now,
+        Some(Duration::from_secs(60)),
+    )));
+    let mut spawned = Vec::new();
+    redeem_credits_with(
+        &[panel],
+        &BTreeMap::new(),
+        &[],
+        &runtime,
+        &RoomLoginSet::native(),
+        &ResumeConfig {
+            auto_redeem: true,
+            ..Default::default()
+        },
+        now,
+        |_, key, _, _, _| {
+            spawned.push(key.clone());
+            true
+        },
+    );
+    assert!(spawned.is_empty(), "{spawned:?}");
+    let key = "claude@default".parse().unwrap();
+    assert!(!runtime.shared_auto_redeem_path(&key).exists());
 }
