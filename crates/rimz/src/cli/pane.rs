@@ -118,6 +118,9 @@ enum PaneSubcmd {
     },
     /// Measure which panes write the most output.
     Bandwidth {
+        /// Include panes with a zero write rate. JSON always includes them.
+        #[arg(long)]
+        all: bool,
         /// Sampling window in seconds.
         #[arg(long, default_value_t = 5)]
         secs: u64,
@@ -129,7 +132,7 @@ enum PaneSubcmd {
 
 pub fn run(args: PaneArgs, globals: &GlobalFlags) -> Result<()> {
     match args.command {
-        PaneSubcmd::Bandwidth { secs, json } => bandwidth::run(secs, json, globals),
+        PaneSubcmd::Bandwidth { secs, json, all } => bandwidth::run(secs, json, all, globals),
         PaneSubcmd::List {
             scope,
             worktree,

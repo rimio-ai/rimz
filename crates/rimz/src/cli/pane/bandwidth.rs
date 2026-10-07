@@ -5,6 +5,7 @@ use std::process::Command;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
+use rimz::agents::AgentState;
 use rimz::ids::{MuxName, PaneId};
 use rimz::mux::PaneListOptions;
 use rimz::pane::PaneRef;
@@ -14,6 +15,7 @@ use rimz::pane::bandwidth::{
     zellij_client_pids,
 };
 use rimz::proc::ProcInfo;
+use rimz::store::snapshot::SidebarSnapshot;
 use rimz::workspace::WorkspaceResolver;
 
 use crate::cli::GlobalFlags;
@@ -59,12 +61,13 @@ struct BandwidthJson<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     wire_rx_bps: Option<u64>,
     panes: &'a [PaneRate],
-    caveat: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    caveat: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     message: Option<&'static str>,
 }
 
-pub(super) fn run(secs: u64, json: bool, globals: &GlobalFlags) -> Result<()> {
+pub(super) fn run(secs: u64, json: bool, all: bool, globals: &GlobalFlags) -> Result<()> {
     if secs == 0 {
         bail!("--secs must be greater than 0");
     }
@@ -106,7 +109,8 @@ pub(super) fn run(secs: u64, json: bool, globals: &GlobalFlags) -> Result<()> {
         }
     }
 
-    let profiles = pane_profiles(panes, &children);
+    let overlay = super::load_agent_overlay(&workspace, &panes);
+    let profiles = pane_profiles(panes, &children, overlay.as_ref());
     if profiles.is_empty() {
         return emit_unavailable(secs as f64, json, no_pane_pids_notice(mux));
     }
@@ -126,19 +130,27 @@ pub(super) fn run(secs: u64, json: bool, globals: &GlobalFlags) -> Result<()> {
     if json {
         print_json(true, secs as f64, total, wire, &rows, None)
     } else {
-        let report = format_report(&rows, total, wire, secs as f64);
+        let report = format_report(&rows, total, wire, secs as f64, all);
         let mut out = render::out();
         out.write_all(report.as_bytes())
             .context("writing bandwidth report")
     }
 }
 
-fn pane_profiles(panes: Vec<PaneRef>, children: &HashMap<u32, Vec<u32>>) -> Vec<PaneProfile> {
+fn pane_profiles(
+    panes: Vec<PaneRef>,
+    children: &HashMap<u32, Vec<u32>>,
+    overlay: Option<&SidebarSnapshot>,
+) -> Vec<PaneProfile> {
+    let peers: Vec<_> = overlay
+        .map(|snapshot| snapshot.pane_bound_roots().collect())
+        .unwrap_or_default();
     panes
         .into_iter()
         .filter_map(|pane| {
             let root = pane.pane_pid?;
-            let label = pane_label(&pane);
+            let agent = overlay.and_then(|snapshot| snapshot.agent_bound_to_pane(&pane));
+            let label = pane_label(&pane, agent, &peers);
             Some(PaneProfile {
                 pane_id: pane.pane_id,
                 label,
@@ -148,18 +160,26 @@ fn pane_profiles(panes: Vec<PaneRef>, children: &HashMap<u32, Vec<u32>>) -> Vec<
         .collect()
 }
 
-fn pane_label(pane: &PaneRef) -> String {
-    let command = pane
-        .command
-        .as_deref()
-        .or(pane.spawn_command.as_deref())
-        .filter(|label| !label.trim().is_empty());
+fn pane_label(pane: &PaneRef, agent: Option<&AgentState>, peers: &[&AgentState]) -> String {
+    let sidebar = pane.is_rimz_sidebar();
+    if !sidebar && let Some(agent) = agent {
+        return rimz::address::agent_handle(agent, peers, true);
+    }
+    let command = if sidebar {
+        Some("sidebar")
+    } else {
+        pane.command
+            .as_deref()
+            .or(pane.spawn_command.as_deref())
+            .filter(|label| !label.trim().is_empty())
+    };
     let view = pane
         .view_name
         .as_deref()
+        .map(super::clean_tab_name)
         .filter(|label| !label.trim().is_empty());
     let label = match (view, command) {
-        (Some(view), Some(command)) if view != command => format!("{view} - {command}"),
+        (Some(view), Some(command)) if view != command || sidebar => format!("{view} - {command}"),
         (_, Some(command)) => command.to_owned(),
         (Some(view), None) => view.to_owned(),
         (None, None) => "(unknown)".to_owned(),
@@ -262,8 +282,17 @@ fn fmt_bps(bps: u64) -> String {
     }
 }
 
-fn format_report(rows: &[PaneRate], total: u64, wire: Option<(u64, u64)>, secs: f64) -> String {
-    let rows = sorted_rates(rows.to_vec());
+fn format_report(
+    rows: &[PaneRate],
+    total: u64,
+    wire: Option<(u64, u64)>,
+    secs: f64,
+    all: bool,
+) -> String {
+    let mut rows = sorted_rates(rows.to_vec());
+    let count = rows.len();
+    rows.retain(|row| all || row.bps > 0);
+    let hidden = count - rows.len();
     let rate_text: Vec<String> = rows.iter().map(|row| fmt_bps(row.bps)).collect();
     let total_label = format!("{} sample", fmt_secs(secs));
     let mut wire_rows = Vec::new();
@@ -323,8 +352,18 @@ fn format_report(rows: &[PaneRate], total: u64, wire: Option<(u64, u64)>, secs: 
         label_w,
         rate_w,
     );
-    writeln!(&mut out).expect("writing to String cannot fail");
-    writeln!(&mut out, "{REPORT_CAVEAT}").expect("writing to String cannot fail");
+    if hidden > 0 {
+        let noun = if hidden == 1 { "pane" } else { "panes" };
+        writeln!(
+            &mut out,
+            "{hidden} quiet {noun} not shown · --all lists them"
+        )
+        .expect("writing to String cannot fail");
+    }
+    if wire.is_some() {
+        writeln!(&mut out).expect("writing to String cannot fail");
+        writeln!(&mut out, "{REPORT_CAVEAT}").expect("writing to String cannot fail");
+    }
     out
 }
 
@@ -403,7 +442,7 @@ fn render_json(
         wire_tx_bps: wire.map(|(tx, _)| tx),
         wire_rx_bps: wire.map(|(_, rx)| rx),
         panes,
-        caveat: REPORT_CAVEAT,
+        caveat: wire.map(|_| REPORT_CAVEAT),
         message,
     })?)
 }
@@ -445,12 +484,13 @@ mod tests {
     }
 
     #[test]
-    fn format_report_sorts_descending_and_mentions_caveat() {
+    fn format_report_sorts_descending_hides_quiet_rows_and_omits_local_caveat() {
         let rows = [
             pane_rate("tmux:%2", "sidebar", 12),
             pane_rate("tmux:%1", "btop", 40_000),
+            pane_rate("tmux:%3", "quiet", 0),
         ];
-        let report = format_report(&rows, 40_012, None, 5.0);
+        let report = format_report(&rows, 40_012, None, 5.0, false);
 
         let header = report.lines().next().expect("header");
         assert!(header.contains("PANE"));
@@ -458,19 +498,25 @@ mod tests {
         assert!(header.contains("WRITE/S"));
         assert!(report.find("tmux:%1  btop").unwrap() < report.find("tmux:%2  sidebar").unwrap());
         assert!(report.contains("TOTAL    5s sample"));
-        assert!(report.contains(REPORT_CAVEAT));
+        assert!(!report.contains(REPORT_CAVEAT));
+        assert!(!report.contains("tmux:%3"));
+        assert!(report.contains("1 quiet pane not shown · --all lists them"));
+        let report = format_report(&rows, 40_012, None, 5.0, true);
+        assert!(report.contains("tmux:%3"));
+        assert!(!report.contains("not shown"));
     }
 
     #[test]
     fn format_report_includes_wire_rows_before_total() {
         let rows = [pane_rate("tmux:%1", "codex", 40_000)];
-        let report = format_report(&rows, 40_000, Some((8_192, 1_024)), 5.0);
+        let report = format_report(&rows, 40_000, Some((8_192, 1_024)), 5.0, false);
 
         assert!(report.contains(WIRE_TX_PANE));
         assert!(report.contains(WIRE_TX_LABEL));
         assert!(report.contains(WIRE_RX_PANE));
         assert!(report.contains(WIRE_RX_LABEL));
         assert!(report.find(WIRE_TX_PANE).unwrap() < report.find("TOTAL").unwrap());
+        assert!(report.contains(REPORT_CAVEAT));
     }
 
     #[test]
@@ -481,11 +527,33 @@ mod tests {
 
         assert_eq!(value["wire_tx_bps"], 8_192);
         assert_eq!(value["wire_rx_bps"], 1_024);
+        assert_eq!(value["caveat"], REPORT_CAVEAT);
 
         let rendered = render_json(true, 5.0, 40_000, None, &rows, None).unwrap();
         let value: serde_json::Value = serde_json::from_str(&rendered).unwrap();
         assert!(value.get("wire_tx_bps").is_none());
         assert!(value.get("wire_rx_bps").is_none());
+        assert!(value.get("caveat").is_none());
+        assert_eq!(value["panes"].as_array().unwrap().len(), rows.len());
+    }
+
+    #[test]
+    fn pane_labels_use_agent_handles_and_clean_sidebar_and_process_tabs() {
+        let mut pane = PaneRef::from_id(PaneId::parse("tmux:%1").unwrap());
+        pane.view_name = Some("brainstormer ?".to_owned());
+        pane.command = Some("rimz".to_owned());
+        let mut agent = rimz::testkit::agent_state("codex", "sess-1", jiff::Timestamp::now());
+        agent.worktree_branch = Some("auth".to_owned());
+        agent.worktree_path = Some("/repo/auth".to_owned());
+        agent.role = Some("coder".to_owned());
+        assert_eq!(pane_label(&pane, Some(&agent), &[&agent]), "@coder#auth");
+        pane.command = Some(rimz::pane::SIDEBAR_CHROME_TITLE.to_owned());
+        assert_eq!(
+            pane_label(&pane, Some(&agent), &[&agent]),
+            "brainstormer - sidebar"
+        );
+        pane.command = Some("zsh".to_owned());
+        assert_eq!(pane_label(&pane, None, &[]), "brainstormer - zsh");
     }
 
     #[test]
