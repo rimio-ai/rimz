@@ -1280,9 +1280,10 @@ pub(crate) fn read_marker_from_checkout_metadata(path: &Path) -> Result<Option<W
     read_marker_file(&marker)
 }
 
-/// `None` for a primary checkout, a directory outside git, or metadata that cannot be read. Never spawns git.
+/// Resolves the checkout holding `cwd`, the nearest ancestor with a `.git` entry. `None` for a primary checkout, a directory outside git, or metadata that cannot be read. Never spawns git.
 pub(crate) fn linked_worktree(cwd: &Path) -> Option<LinkedWorktree> {
-    let git_dir = match git_admin_dir_from_checkout_metadata(cwd) {
+    let checkout = cwd.ancestors().find(|dir| dir.join(".git").exists())?;
+    let git_dir = match git_admin_dir_from_checkout_metadata(checkout) {
         Ok(Some(path)) => path,
         Ok(None) => return None,
         Err(error) => {
@@ -1290,7 +1291,7 @@ pub(crate) fn linked_worktree(cwd: &Path) -> Option<LinkedWorktree> {
             return None;
         }
     };
-    if git_dir == cwd.join(".git") {
+    if git_dir == checkout.join(".git") {
         return None;
     }
     let common = match std::fs::read_to_string(git_dir.join("commondir")) {
@@ -1306,7 +1307,7 @@ pub(crate) fn linked_worktree(cwd: &Path) -> Option<LinkedWorktree> {
         return None;
     }
     let primary = common_dir.parent()?.to_path_buf();
-    let base_branch = match read_marker_from_checkout_metadata(cwd) {
+    let base_branch = match read_marker_from_checkout_metadata(checkout) {
         Ok(marker) => marker.and_then(|marker| marker.base_branch),
         Err(error) => {
             tracing::debug!(%error, "worktree base branch unavailable");

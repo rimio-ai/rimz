@@ -754,7 +754,9 @@ fn marker_v2_json_parses_without_base_branch() {
 fn linked_worktree_resolves_created_base_and_primary() {
     let dir = tempfile::tempdir().unwrap();
     let repo = init_test_repo(dir.path());
+    std::fs::create_dir(repo.join("nested")).unwrap();
     assert_eq!(linked_worktree(&repo), None);
+    assert_eq!(linked_worktree(&repo.join("nested")), None);
     assert_eq!(linked_worktree(dir.path()), None);
     let created = create(
         &repo,
@@ -768,13 +770,17 @@ fn linked_worktree_resolves_created_base_and_primary() {
     let mut marker = created.marker;
     marker.repo_root = dir.path().join("not-the-primary");
     write_marker(&marker.worktree_path, &marker).unwrap();
-    assert_eq!(
-        linked_worktree(&marker.worktree_path),
-        Some(LinkedWorktree {
-            base_branch: Some("main".to_owned()),
-            primary: repo
-        })
-    );
+    let nested = marker.worktree_path.join("nested/deeper");
+    std::fs::create_dir_all(&nested).unwrap();
+    for cwd in [&marker.worktree_path, &nested] {
+        assert_eq!(
+            linked_worktree(cwd),
+            Some(LinkedWorktree {
+                base_branch: Some("main".to_owned()),
+                primary: repo.clone()
+            })
+        );
+    }
 }
 
 #[test]
