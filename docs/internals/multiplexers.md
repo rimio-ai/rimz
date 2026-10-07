@@ -406,6 +406,8 @@ A session can stay in Zellij's live roster while its per-session screen thread n
 
 ### Room options and the CLI XOR problem
 
+RimZ sets only the `pane_frames` boolean; it leaves `pane_frame_style` to the user's `config.kdl` ([frame-style resolution and readback limits](../externals/mux-adapter/zellij-reference.md#configuration)).
+
 [`zellij.rs::zellij_session_options`](../../crates/rimz/src/mux/zellij.rs) resolves one ordered, typed list: RimZ's fixed `auto_layout false`, `stacked_resize true`, and `stacked_pane_list false`, the four always-resolved `[zellij]` keys, and every configured optional key except client-only `mouse_mode`. The list uses three value types (boolean, integer, enum word), with channel-specific quoting. The three channels are:
 
 - **Birth layout:** `layout.rs::render_session_layout` renders the complete session list in the KDL tail. Layout values merge absolutely; a detached birth discards CLI option flags. `create_session_with_sidebar` passes only `--default-cwd` and `--default-layout` after `options`.
@@ -441,7 +443,9 @@ The producer's shrink-confirmation path bypasses `pane-topology.json` and reads 
 
 The runtime view is `sidebar | content | runtime`. What fills the columns, how its panes are identified by launch command, and how repair rebuilds them are in [rimzd.md](./rimzd.md#how-managed-panes-are-identified). Each managed Zellij pane carries its joined launch argv as an explicit pane name for that identity. tmux births multiple content or runtime panes as equal-height rows, with at most one row of rounding drift.
 
-Subagent panes use Zellij's native stack, anchored through the target's CLI pane context with `--near-current-pane`, so attached-client focus and the active tab stay put. tmux maps the stack to equal-height rows in the target column, computing each row from pane geometry and resizing only panes in that column, so the sidebar and neighbouring columns never move. Scheduled loop runs instead open [their own unfocused tabs](./harness/loops.md#where-a-scheduled-run-lands); the loop panel remains part of [daemon-view repair](./rimzd.md#who-repairs-and-when).
+Subagent panes use Zellij's native stack, anchored through the target's CLI pane context with `--near-current-pane` below 0.45 and `--no-focus` from 0.45, so attached-client focus and the active tab stay put. tmux maps the stack to equal-height rows in the target column, computing each row from pane geometry and resizing only panes in that column, so the sidebar and neighbouring columns never move. Scheduled loop runs instead open [their own unfocused tabs](./harness/loops.md#where-a-scheduled-run-lands); the loop panel remains part of [daemon-view repair](./rimzd.md#who-repairs-and-when).
+
+Zellij's background stacked insert can leave the new PTY at winsize 0x0 ([upstream defect](../externals/mux-adapter/zellij-reference.md#action-catalog)). Before any provider starts, the `rimz agents exec` wrapper calls [`repair_zero_winsize`](../../crates/rimz/src/mux/winsize.rs), which reads the live content rectangle through `MuxBackend::pane_content_size` within its remaining startup budget. It polls for at most two seconds, writes only nonzero dimensions, and leaves an already-sized tty untouched. A repair emits [`pane_winsize_repaired`](./diagnostics.md#event-taxonomy); unavailable geometry or an ioctl failure logs at debug and never fails the launch. The wrapper neither changes client focus nor asserts a frame style.
 
 A reborn session re-seeds its remembered agents: the birth layout spells one `sidebar | agents…` tab per worktree, each agent a command pane running its resume CLI in that worktree, with focus on the most recent. Panes born from a fresh layout start running, not suspended, which is the same reason serialization is off. One renderer handles plain, daemon, and resumed births.
 
