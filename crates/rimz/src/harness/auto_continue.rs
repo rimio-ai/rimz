@@ -62,11 +62,32 @@ pub fn park_demotion(
 ) -> crate::agents::ParkDemotion {
     let logins = crate::agents::RoomLoginSet::resolve(&state.workspace_record, &config.accounts)
         .with_agents(agents);
-    let capacities = ProviderCapacity::read_all(runtime, &logins);
-    let messages = read_resume_messages(store, &config.resume, outcomes);
+    park_demotion_for_logins(
+        store,
+        runtime,
+        &config.resume,
+        &logins,
+        agents,
+        outcomes,
+        now,
+    )
+}
+
+/// [`park_demotion`] for a caller that already resolved the room's logins.
+pub(crate) fn park_demotion_for_logins(
+    store: Option<&crate::Store>,
+    runtime: &RuntimePaths,
+    config: &ResumeConfig,
+    logins: &crate::agents::RoomLoginSet,
+    agents: &[AgentState],
+    outcomes: &[ResumeOutcome],
+    now: Timestamp,
+) -> crate::agents::ParkDemotion {
+    let capacities = ProviderCapacity::read_all(runtime, logins);
+    let messages = read_resume_messages(store, config, outcomes);
     crate::agents::ParkDemotion::new(
         &capacities,
-        exhausted_parks(agents, runtime, &config.resume, &messages),
+        exhausted_parks(agents, runtime, config, &messages),
         now,
     )
 }
