@@ -912,6 +912,7 @@ fn child_report_json_includes_parent_and_omits_an_unknown_channel() {
         handle: "@swift-otter".to_owned(),
         parent: "@planner".to_owned(),
         channel: None,
+        lane_label: None,
         kind: "codex".to_owned(),
         status: "running".to_owned(),
         description: None,

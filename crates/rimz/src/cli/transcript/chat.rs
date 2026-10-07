@@ -8,6 +8,7 @@ pub(super) fn render_entry_for_log_entry(
     entry: &TranscriptEntry,
     identities: &HashMap<AgentKey, Identity>,
     include_channel: bool,
+    root_channel: Option<&str>,
 ) -> RenderEntry {
     RenderEntry {
         source: LineSource::Log {
@@ -15,7 +16,7 @@ pub(super) fn render_entry_for_log_entry(
             agent: entry_key(entry),
             opener_hidden: false,
         },
-        chat: chat_entry_for_log_entry(entry, identities, include_channel),
+        chat: chat_entry_for_log_entry(entry, identities, include_channel, root_channel),
     }
 }
 
@@ -63,20 +64,29 @@ pub(super) fn render_entry_for_flip(
 
 /// The rendered author of a turn-opening entry. `"user"` is reserved for a
 /// human origin; anything RimZ or an agent introduced renders as its handle.
-fn chat_from(entry: &TranscriptEntry) -> String {
-    entry.from.clone().unwrap_or_else(|| {
-        match entry.origin() {
-            EntryOrigin::Human => "user",
-            EntryOrigin::Agent | EntryOrigin::Harness => rimz::transcript::HARNESS_FROM,
+fn chat_from(entry: &TranscriptEntry, root_channel: Option<&str>) -> String {
+    let Some(from) = entry.from.as_deref() else {
+        return match (entry.entry, entry.origin()) {
+            (TranscriptKind::Answer, _) => "answered",
+            (_, EntryOrigin::Human) => "user",
+            (_, EntryOrigin::Agent | EntryOrigin::Harness) => rimz::transcript::HARNESS_FROM,
         }
-        .to_owned()
-    })
+        .to_owned();
+    };
+    if let Ok((selector, Some(channel))) = rimz::address::parse_selector(from) {
+        let lane = rimz::address::record_lane_label(Some(&channel), root_channel);
+        if lane != Some(channel.as_str()) {
+            return render_handle(&format!("@{selector}"), lane, true);
+        }
+    }
+    from.to_owned()
 }
 
 pub(super) fn chat_entry_for_log_entry(
     entry: &TranscriptEntry,
     identities: &HashMap<AgentKey, Identity>,
     include_channel: bool,
+    root_channel: Option<&str>,
 ) -> ChatLine {
     let receiver = handle_for(entry, identities, include_channel);
     let message_id = entry.message_id.as_ref().map(ToString::to_string);
@@ -85,12 +95,9 @@ pub(super) fn chat_entry_for_log_entry(
         TranscriptKind::Prompt
         | TranscriptKind::Message
         | TranscriptKind::SubagentReport
-        | TranscriptKind::Wait => (chat_from(entry), Some(receiver)),
+        | TranscriptKind::Wait
+        | TranscriptKind::Answer => (chat_from(entry, root_channel), Some(receiver)),
         TranscriptKind::Assistant | TranscriptKind::Ask | TranscriptKind::Error => (receiver, None),
-        TranscriptKind::Answer => (
-            entry.from.clone().unwrap_or_else(|| "answered".to_owned()),
-            Some(receiver),
-        ),
     };
     let error = entry.entry == TranscriptKind::Error;
     ChatLine {
@@ -126,7 +133,11 @@ pub(super) fn handle_for(
     if let Some(identity) = identities.get(&key) {
         return render_handle(
             &identity.base_handle,
-            entry.channel.as_deref().or(identity.channel.as_deref()),
+            if identity.root_lane {
+                Some("main")
+            } else {
+                entry.channel.as_deref().or(identity.lane_label())
+            },
             include_channel,
         );
     }

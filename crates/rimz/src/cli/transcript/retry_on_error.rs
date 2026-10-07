@@ -61,9 +61,9 @@ fn error_entry_projects_as_agent_error_line() {
         "2026-06-01T00:00:00Z",
         Some("chat"),
     );
-    let identities = build_identities(std::slice::from_ref(&entry));
+    let identities = build_identities(std::slice::from_ref(&entry), None);
 
-    let chat = chat_entry_for_log_entry(&entry, &identities, false);
+    let chat = chat_entry_for_log_entry(&entry, &identities, false, None);
 
     assert_eq!(chat.from, "@claude");
     assert!(chat.error);
@@ -88,7 +88,7 @@ fn agent_target_prefers_live_session_over_stale_same_handle() {
         "2026-06-01T00:01:00Z",
         Some("chat"),
     );
-    let identities = build_identities(&[stale, live.clone()]);
+    let identities = build_identities(&[stale, live.clone()], None);
     let mut agent = rimz::testkit::agent_state("claude", "live-sess", live.at);
     agent.channel = Some("chat".to_owned());
     let snapshot = snapshot(vec![agent]);
@@ -123,7 +123,7 @@ fn agent_target_uses_latest_when_no_match_is_live() {
         "2026-06-01T00:02:00Z",
         Some("chat"),
     );
-    let identities = build_identities(&[old, latest.clone()]);
+    let identities = build_identities(&[old, latest.clone()], None);
 
     let scope = resolve_scope(
         Some("@claude"),
@@ -148,7 +148,7 @@ fn exact_session_id_resolves_outside_the_current_channel() {
         "2026-06-01T00:00:00Z",
         Some("other"),
     );
-    let identities = build_identities(std::slice::from_ref(&exact));
+    let identities = build_identities(std::slice::from_ref(&exact), None);
 
     let scope = resolve_scope(
         Some("sess-exact"),

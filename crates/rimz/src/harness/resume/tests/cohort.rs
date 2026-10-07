@@ -1540,11 +1540,14 @@ fn cohort_relaunches_an_unresumable_match_fresh() {
         ),
         (
             "a session the provider never persisted",
-            vec![agent("claude", "a1", "/code/query-engine", 1)],
+            vec![AgentState {
+                root_lane: true,
+                ..agent("claude", "a1", "/code/query-engine", 1)
+            }],
             vec![cohort_cell("claude", None)],
             None,
             false,
-            "claude:query-engine",
+            "claude:main",
             "/code/query-engine",
         ),
     ] {

@@ -472,7 +472,7 @@ fn message_list_empty_lane_counts_other_visible_rows() {
     let output = run_success(env.rimz().args(["message", "list"]), "empty lane");
     assert_eq!(
         String::from_utf8_lossy(&output.stdout).trim(),
-        "no messages in the main lane. 2 in 2 other lanes, 2 not yet delivered — rimz message list --all --status queued"
+        "no messages in #main. 2 in 2 other lanes, 2 not yet delivered — rimz message list --all --status queued"
     );
     let output = run_success(
         env.rimz().args(["message", "list", "--system"]),
@@ -480,7 +480,7 @@ fn message_list_empty_lane_counts_other_visible_rows() {
     );
     assert_eq!(
         String::from_utf8_lossy(&output.stdout).trim(),
-        "no messages in the main lane. 3 in 2 other lanes, 3 not yet delivered — rimz message list --all --status queued"
+        "no messages in #main. 3 in 2 other lanes, 3 not yet delivered — rimz message list --all --status queued"
     );
     let output = run_success(
         env.rimz().args(["message", "list", "--status", "queued"]),
@@ -488,7 +488,7 @@ fn message_list_empty_lane_counts_other_visible_rows() {
     );
     assert_eq!(
         String::from_utf8_lossy(&output.stdout).trim(),
-        "no queued messages in the main lane — rimz message list --all shows every channel"
+        "no queued messages in #main — rimz message list --all shows every channel"
     );
     let output = run_success(
         env.rimz()
@@ -510,7 +510,7 @@ fn message_list_empty_lane_counts_delivered_rows_without_queue_hint() {
     let output = run_success(env.rimz().args(["message", "list"]), "empty lane");
     assert_eq!(
         String::from_utf8_lossy(&output.stdout).trim(),
-        "no messages in the main lane. 1 in 1 other lane — rimz message list --all"
+        "no messages in #main. 1 in 1 other lane — rimz message list --all"
     );
 }
 
@@ -642,6 +642,103 @@ fn message_list_root_address_correction_lists_the_agents_rows() {
 }
 
 #[test]
+fn message_list_main_from_root_shell_includes_root_routing_keys() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    append_lifecycle(
+        &env,
+        "claude",
+        "SessionStart",
+        "sess-root",
+        LifecycleSignal::Registered,
+        |observation| {
+            observation.launch.role = Some("reader".into());
+            observation.agent_pid = Some(env.agent_owner_pid());
+        },
+    );
+    let current = queue_add(&env, "@reader#main", "root message");
+    let named = seed_channel_message(&env, 1, 100, Some("main"), "named main message");
+    assert_eq!(
+        list_message_ids(&env, &["message", "list", "--json"], Some("main")).as_slice(),
+        std::slice::from_ref(&named)
+    );
+    for channel in ["main", "project", env.project_root.to_str().unwrap()] {
+        let ids = list_message_ids(
+            &env,
+            &["message", "list", "--channel", channel, "--json"],
+            None,
+        );
+        assert_eq!(ids, [current.clone(), named.clone()], "{channel}");
+    }
+    let rows = env.store().list_messages().unwrap();
+    let root = rows
+        .iter()
+        .find(|row| row.message_id.as_str() == current)
+        .unwrap();
+    assert_eq!(root.channel.as_deref(), Some("project"));
+    let miss = env
+        .rimz()
+        .args(["message", "list", "--channel", "missing"])
+        .output()
+        .unwrap();
+    assert_eq!(miss.status.code(), Some(1));
+    assert_eq!(
+        String::from_utf8_lossy(&miss.stderr).trim(),
+        "error: no channel #missing\n  known channels: main"
+    );
+}
+
+#[test]
+fn message_clear_root_aliases_cancel_the_same_records_as_list() {
+    for scope in ["main", "project", "path", "caller"] {
+        let env = Env::new();
+        env.install_agent_hooks("claude");
+        append_lifecycle(
+            &env,
+            "claude",
+            "SessionStart",
+            "sess-root",
+            LifecycleSignal::Registered,
+            |observation| {
+                observation.launch.role = Some("reader".into());
+                observation.agent_pid = Some(env.agent_owner_pid());
+            },
+        );
+        queue_add(&env, "@reader#main", "root message");
+        seed_channel_message(&env, 1, 100, None, "legacy root message");
+        seed_channel_message(&env, 2, 200, Some("main"), "named main message");
+        let other = seed_channel_message(&env, 3, 300, Some("feature"), "other message");
+        let mut command = env.rimz();
+        command.args(["message", "clear"]);
+        match scope {
+            "caller" => {
+                command
+                    .env(rimz::harness::launch::ENV_AGENT_KIND, "claude")
+                    .env(rimz::harness::launch::ENV_AGENT_ID, "sess-root");
+            }
+            "path" => {
+                command.arg("--channel").arg(&env.project_root);
+            }
+            channel => {
+                command.args(["--channel", channel]);
+            }
+        }
+        let output = run_success(&mut command, "clear root lane");
+        let rows = env.store().list_messages().unwrap();
+        assert_eq!(rows.len(), 1, "{scope}: {rows:?}");
+        assert_eq!(rows[0].message_id.as_str(), other);
+        assert!(String::from_utf8_lossy(&output.stdout).contains("in #main"));
+        let history = env.store().list_message_history().unwrap();
+        assert_eq!(history.len(), 3);
+        assert!(
+            history
+                .iter()
+                .all(|row| row.status == MessageStatus::Canceled)
+        );
+    }
+}
+
+#[test]
 fn message_list_root_flag_correction_lists_the_agents_rows() {
     message_list_root_correction_case(true);
 }
@@ -699,10 +796,7 @@ fn message_list_root_correction_case(flag: bool) {
         "empty root inbox",
     );
     let text = String::from_utf8_lossy(&digest.stdout);
-    assert!(
-        text.contains("no archived messages in the main lane"),
-        "{text}"
-    );
+    assert!(text.contains("no archived messages in #main"), "{text}");
 }
 
 #[test]
@@ -1027,7 +1121,7 @@ fn receiver_end_archives_open_messages() {
         .expect("child archived event");
     assert_eq!(
         archived.params_value()["reason"],
-        "receiver ended; rimz message @otter#project resumes it"
+        "receiver ended; rimz message @otter#main resumes it"
     );
 }
 
@@ -1923,16 +2017,13 @@ fn idle_stop_holds_while_a_message_is_owed_then_stops_without_canceling_the_run(
         };
         assert_eq!(
             stop(&["@claude", "--when-idle", "off"]),
-            (
-                true,
-                "@claude#project has no pending idle stop\n".to_owned()
-            )
+            (true, "@claude#main has no pending idle stop\n".to_owned())
         );
         assert_eq!(
             stop(&["@claude", "--when-idle"]),
             (
                 true,
-                "@claude#project stops once idle for 3m with nothing owed\n".to_owned()
+                "@claude#main stops once idle for 3m with nothing owed\n".to_owned()
             )
         );
         let shown = run_success(
@@ -1951,7 +2042,7 @@ fn idle_stop_holds_while_a_message_is_owed_then_stops_without_canceling_the_run(
             stop(&["@claude", "--when-idle", "0s"]),
             (
                 true,
-                "@claude#project stops once idle for 0s with nothing owed (replaces the pending 3m request)\n"
+                "@claude#main stops once idle for 0s with nothing owed (replaces the pending 3m request)\n"
                     .to_owned()
             )
         );
@@ -2092,7 +2183,7 @@ fn idle_stop_holds_while_a_message_is_owed_then_stops_without_canceling_the_run(
                 stop(&["@claude", "--when-idle", "off"]),
                 (
                     true,
-                    "withdrew the pending idle stop for @claude#project\n".to_owned()
+                    "withdrew the pending idle stop for @claude#main\n".to_owned()
                 )
             );
             assert!(rimz::store::idle_stop::read(store.paths()).is_empty());
@@ -2168,19 +2259,19 @@ fn stop_reports_a_pane_left_open_and_a_child_that_failed() {
 
     let (ok, text) = stop(&["@parent"], true);
     assert!(!ok, "{text}");
-    assert!(text.contains("@parent#project was not stopped: "), "{text}");
+    assert!(text.contains("@parent#main was not stopped: "), "{text}");
     assert!(text.contains("close-pane"), "{text}");
     assert_eq!(armed(), 1, "a root left open keeps its request");
 
     let (ok, text) = stop(&["@parent", "--all"], true);
     assert!(!ok, "{text}");
-    assert!(text.contains("error @parent#project: "), "{text}");
+    assert!(text.contains("error @parent#main: "), "{text}");
     assert!(!text.contains("stopped @parent"), "{text}");
     assert_eq!(armed(), 1);
 
     let (ok, text) = stop(&["@parent"], false);
     assert!(!ok, "{text}");
-    assert!(text.contains("@parent#project stopped, but: "), "{text}");
+    assert!(text.contains("@parent#main stopped, but: "), "{text}");
     assert!(
         text.contains("@child") && text.contains("has no bound pane"),
         "{text}"

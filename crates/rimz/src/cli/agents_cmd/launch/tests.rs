@@ -269,6 +269,11 @@ fn launch_receipt_carries_either_the_hints_or_the_peer_lines() {
     let paths =
         rimz::StatePaths::under(rimz::WorkspaceId::from_project_root(dir.path()), dir.path())
             .unwrap();
+    let store = rimz::Store::open(
+        paths.clone(),
+        rimz::RuntimePaths::under(paths.workspace_id.clone(), dir.path()).unwrap(),
+    )
+    .unwrap();
     let mut run = RunRecord::new(
         paths.workspace_id.clone(),
         AgentKind::new_unchecked("claude"),
@@ -292,7 +297,9 @@ fn launch_receipt_carries_either_the_hints_or_the_peer_lines() {
             peer,
         };
         let mut output = anstream::StripStream::new(Vec::new());
-        layout.write_receipt(&mut output, &paths).unwrap();
+        layout
+            .write_receipt(&mut output, &store, dir.path())
+            .unwrap();
         String::from_utf8(output.into_inner()).unwrap()
     };
 

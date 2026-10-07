@@ -621,6 +621,8 @@ struct ChildReport {
     parent: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     channel: Option<String>,
+    #[serde(skip)]
+    lane_label: Option<String>,
     kind: String,
     status: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -701,7 +703,8 @@ fn list_children(json: bool, globals: &GlobalFlags) -> Result<()> {
         return render::json_pretty(&reports);
     }
     if reports.is_empty() {
-        let line = match (caller, ctx.channel()) {
+        let lane_label = ctx.address_context().lane_label();
+        let line = match (caller, lane_label.as_deref()) {
             (Some(caller), _) => format!(
                 "{} has launched no subagents. Launch one: rimz subagents launch <PROFILE> \"<PROMPT>\" (profiles: rimz subagents profiles)",
                 peer_handle(&audit.agents, caller)
@@ -739,7 +742,7 @@ fn list_children(json: bool, globals: &GlobalFlags) -> Result<()> {
             ListScope::Channel => vec![
                 render::cell(child.handle),
                 render::cell(child.parent),
-                render::cell(child.channel.unwrap_or_else(|| "-".to_owned())).dash(),
+                render::cell(child.lane_label.unwrap_or_else(|| "-".to_owned())).dash(),
                 render::cell(child.kind),
                 render::cell(child.status),
                 render::cell(child.run_status.unwrap_or_else(|| "-".to_owned())).dash(),
@@ -796,6 +799,7 @@ fn child_reports(
                         )
                     }),
                 channel: child.channel(),
+                lane_label: child.lane_label(),
                 kind: child.kind.to_string(),
                 status: child.rowless_status().0.as_str().to_owned(),
                 description: child.activity_line(),

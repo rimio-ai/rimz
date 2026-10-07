@@ -289,7 +289,14 @@ pub fn dispatch(
         request
             .target_scope
             .as_deref()
-            .or(request.current_channel.channel.as_deref()),
+            .or(request.current_channel.channel.as_deref())
+            .map(|channel| {
+                if crate::address::is_root_lane_filter(channel, &workspace.project_root) {
+                    "main"
+                } else {
+                    channel
+                }
+            }),
     )?;
     if targets.len() > 1 && !request.allow_fanout && !crate::address::is_broadcast(&request.target)
     {

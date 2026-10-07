@@ -59,7 +59,7 @@ fn directory_room_groups_git_backed_rows_by_resolved_worktree() {
                 "billing",
                 1
             ),
-            (SidebarWorktreeKind::Root, "/srv/agents", "agents", 1),
+            (SidebarWorktreeKind::Root, "/srv/agents", "main", 1),
             (SidebarWorktreeKind::External, "external", "external", 1),
         ],
     );
@@ -74,7 +74,7 @@ fn non_repo_room_variants_share_the_root_pod_rule() {
             "/srv/agents",
             Vec::<&str>::new(),
             vec![pane("%1", "zsh", "/srv/agents/org/repo")],
-            "agents",
+            "main",
             1,
         ),
         (
@@ -86,7 +86,7 @@ fn non_repo_room_variants_share_the_root_pod_rule() {
                 pane("%1", "claude", "/tmp/scratch"),
                 pane("%2", "zsh", "/tmp/scratch/logs"),
             ],
-            "scratch",
+            "main",
             2,
         ),
         (
@@ -95,7 +95,7 @@ fn non_repo_room_variants_share_the_root_pod_rule() {
             "/srv/app",
             Vec::<&str>::new(),
             vec![pane("%1", "zsh", "/srv/app/src")],
-            "app",
+            "main",
             1,
         ),
     ] {
@@ -154,7 +154,7 @@ fn deeply_nested_git_backed_row_gets_own_worktree_pod() {
                 "feature/nested",
                 1
             ),
-            (SidebarWorktreeKind::Root, "/srv/agents", "agents", 1),
+            (SidebarWorktreeKind::Root, "/srv/agents", "main", 1),
         ],
     );
 }

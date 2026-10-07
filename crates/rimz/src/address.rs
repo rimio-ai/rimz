@@ -74,9 +74,21 @@ pub fn root_lane_channel(project_root: &Path) -> Option<String> {
     )
 }
 
-/// Channel-less historical records and the project's routing key share the root lane.
+/// Channel-less records, the project's routing key and stamped `main` share the root lane.
 pub fn record_in_root_lane(channel: Option<&str>, root_channel: Option<&str>) -> bool {
-    channel.is_none() || channel == root_channel
+    channel.is_none() || channel == root_channel || channel == Some("main")
+}
+
+/// The human lane label for a durable record, without changing its routing key.
+pub fn record_lane_label<'a>(
+    channel: Option<&'a str>,
+    root_channel: Option<&str>,
+) -> Option<&'a str> {
+    if record_in_root_lane(channel, root_channel) {
+        Some("main")
+    } else {
+        channel
+    }
 }
 
 /// Whether a lane filter names the root lane, including its legacy aliases.

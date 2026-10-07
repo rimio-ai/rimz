@@ -135,7 +135,7 @@ impl<'a> GroupResolver<'a> {
             return GroupIdentity {
                 kind: SidebarWorktreeKind::Root,
                 key: root_key,
-                label: path_basename(root),
+                label: "main".to_owned(),
             };
         }
         worktree_group(&root_key, root, branch, split_by_branch)

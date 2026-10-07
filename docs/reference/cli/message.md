@@ -222,13 +222,13 @@ The last six are final. A final record keeps its text in `audit/messages/<bucket
 
 ### List messages
 
-Bare `rimz message` is `rimz message list` for the current lane. In the main checkout, which has no lane, it shows messages without a channel.
+Bare `rimz message` is `rimz message list` for the current lane. A shell at the project root lists `#main`: both channel-less historical messages and messages routed under the project's directory name.
 
 | Flag | Effect |
 | --- | --- |
 | `[TARGET]` | Only messages to that agent. An inline lane (`@coder#auth`) scopes the list like `--channel auth`; with `--all`, it only selects the agent. A conflicting `--channel` is refused. |
 | `--all` | Every lane, including archived messages. |
-| `--channel <NAME>` | One known lane. An unknown explicit channel, including an inline lane, exits 1 and lists up to 20 known channels. Message history, live agents, and owned worktrees supply the names. The ambient lane is not checked. |
+| `--channel <NAME>` | One known lane. `main`, the project's directory name, and the root path always select the root lane, with or without a target. An unknown explicit channel, including an inline lane, exits 1 and lists up to 20 known channels. Message history, live agents, and owned worktrees supply the names. The ambient lane is not checked. |
 | `--status <STATUS>` | Exactly one status. Also accepts `pending`, `cancelled`, and `removed`. Selecting `archived` shows archived messages. |
 | `--system` | Include system traffic: waits, signals, subagent digests, stage notices, automatic compaction commands, and `--no-from` text. |
 | `--limit <N>` | At most N rows, newest first. Default 200; `0` shows all. |
@@ -243,7 +243,7 @@ you → @coder  queued  3m ago  msg_…
 
 An unfiltered empty lane reports counts from other lanes, not their rows. These counts exclude archived messages and, unless `--system` is passed, system traffic. Only queued messages count as not yet delivered, so the number matches what `--status queued` lists. The hint offers `rimz message list --all --status queued` when any are undelivered, otherwise `rimz message list --all`. A target or status filter keeps the scoped empty-state line, and JSON stays an array of the selected lane's rows. A row whose text is no longer retained and has no reason or condition shows `(text no longer kept)`. An invalid status lists all accepted status names.
 
-The sender reads `you` for a user shell, the handle for an agent, `@rimz` for RimZ notices, and `rimz` for `--no-from` text. A handle drops `#channel` when the list is already scoped to that channel. A final message whose text was not retained shows its terminal reason instead. With `--all`, rows group under a `#channel` or `(main)` header, lanes with the newest message first.
+The sender reads `you` for a user shell, the handle for an agent, `@rimz` for RimZ notices, and `rimz` for `--no-from` text. A handle drops `#channel` when the list is already scoped to that channel. A final message whose text was not retained shows its terminal reason instead. With `--all`, rows group under `#channel` headers, lanes with the newest message first. Channel-less messages and messages under the root directory's name share one `#main` header. Previously recorded recipient addresses retain their original spelling; JSON `channel` values remain the stored routing keys.
 
 Trailing lines report what the view left out:
 
@@ -251,7 +251,7 @@ Trailing lines report what the view left out:
 | --- | --- |
 | `... N older messages hidden (--limit 0 for all)` | The limit cut rows. |
 | `... N system messages hidden (--system shows them)` | System messages matched the lane, status, and target filters. Printed even when no conversation rows remain. |
-| `no messages in #cli-docs — rimz message list --all shows every channel` | Nothing matched. It reads `no messages in the main lane` outside a lane, bare `no messages` with `--all`, and names the status with `--status` (`no queued messages …`). |
+| `no messages in #cli-docs — rimz message list --all shows every channel` | Nothing matched. It reads `no messages in #main` at the project root, bare `no messages` with `--all`, and names the status with `--status` (`no queued messages …`). |
 
 `--json` applies the same filters and prints no hidden counts. Each row carries `message_id`, `kind`, `agent_id`, `sender`, `body` (`prompt` or `command`), `enter`, `gate`, `force`, `status`, `enqueued_at`, `updated_at`, `attempts`, and `unconfirmed_sends`. When set, a row adds `address` (the recipient's handle at send time), `agent_name`, `channel`, `text`, `pane_id`, `last_attempt_at`, `last_error`, `delivered_at`, `not_before`, `after`, `when`, `retry_after`, `auto_compact`, and `compacted_context_tokens`.
 

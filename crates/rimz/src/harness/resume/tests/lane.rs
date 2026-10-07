@@ -99,6 +99,7 @@ fn fresh_lane_relaunch_specs_are_distinct_and_preserve_place() {
     for (path, channel, command) in [
         ("/lane", None, "rimz agents opencode -w lane"),
         ("/repo", Some("docs"), "rimz agents opencode --channel docs"),
+        ("/repo", None, "rimz agents opencode"),
     ] {
         let mut agents = [
             agent("opencode", "old", path, 1),
@@ -106,10 +107,18 @@ fn fresh_lane_relaunch_specs_are_distinct_and_preserve_place() {
         ];
         for agent in &mut agents {
             agent.channel = channel.map(str::to_owned);
+            agent.root_lane = path == "/repo" && channel.is_none();
         }
-        let selector = LaneResumeSelector::Scope(
-            channel.map_or_else(|| path.to_owned(), |channel| format!("#{channel}")),
-        );
+        let selector = LaneResumeSelector::Scope(channel.map_or_else(
+            || {
+                if path == "/repo" {
+                    "#main".to_owned()
+                } else {
+                    path.to_owned()
+                }
+            },
+            |channel| format!("#{channel}"),
+        ));
         let error = LaneCase::new(selector, &agents)
             .current_root(path)
             .fresh()

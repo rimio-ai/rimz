@@ -385,7 +385,7 @@ fn wait_delay_arms_instance_for_the_calling_agent() {
     let target = entry.wait.as_ref().expect("pinned wait target");
     assert_eq!(target.kind.as_str(), "claude");
     assert_eq!(target.session.as_str(), "provider-session");
-    assert_eq!(target.handle, "@planner#project");
+    assert_eq!(target.handle, "@planner#main");
 
     for signal in [
         LifecycleSignal::TurnStarted { turn_id: None },
