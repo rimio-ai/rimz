@@ -564,7 +564,8 @@ path = "crates/rimz/src/mux/zellij"
 # Presence lifecycle stays behind upgrade_presence_plugin; public schema serves sidebar, doctor and integration fixtures.
 # ZellijSessionOption is opaque: its fields and value enum stay private to this module.
 # WidthMemo supplies cached per-pane geometry with live freshness checks (+1).
-surface-budget = 52
+# Stable tab identity, five ownership-cache operations, session runtime lookup and layout birth recording (+8).
+surface-budget = 60
 
 [[module]]
 path = "crates/rimz/src/observability"
@@ -912,7 +913,8 @@ allowed-dependencies = [
     "utils::time",
     "workspace",
 ]
-surface-budget = 15
+# Tab ownership mutations resolve the session's canonical runtime paths (+1).
+surface-budget = 16
 
 [[module]]
 path = "crates/rimz/src/sidebar_pane/pets"

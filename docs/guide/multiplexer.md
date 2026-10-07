@@ -67,6 +67,8 @@ Removing an optional `[zellij]` key returns control to `config.kdl` at the next 
 
 What RimZ does inside the room reduces to multiplexer commands you could run yourself, which is worth knowing before you hand it a room full of agents.
 
+Tab names help you find the agents still working there. A tab RimZ names keeps its launch label while any agent it was born with is still running, then follows the surviving agents as `a+b+c+…`, and returns to the shell name when none remain. Channel (`#…`) and team tabs keep their base names. Rename a tab yourself and RimZ keeps your name, adding or clearing only the agent-status suffix; rename it back to its last RimZ label to resume following agents. A tmux window named automatically by tmux is left entirely alone, without a status suffix.
+
 An agent is a plain process in an ordinary pane. A layout is pane splits: `rimz agents claude,codex` asks the multiplexer to split two panes side by side and launches a CLI in each, exactly the splits you would make by hand, in one command instead of several. The layout grammar is in [agents → compose a layout](./fleet.md#compose-a-layout).
 
 `rimz message @coder "rebase first"` resolves the handle to one live pane and writes the text into it as a single bracketed paste, then presses Enter as a separate key, using the multiplexer's own primitives. `rimz pane capture @coder` reads the pane's visible text with `capture-pane`. The sidebar is one more pane. You can list, focus, and drive every pane in a room yourself, with `zellij action` or with `tmux -S` against the socket above, and RimZ is calling exactly those commands. What a message carries and when it lands is in [messaging](./messaging.md).

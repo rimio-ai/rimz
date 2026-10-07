@@ -185,7 +185,10 @@ pub(crate) fn desired_tab_renames(
                             || label.clone(),
                             |status| format!("{label} {}", status.glyph()),
                         );
-                        intent = TabNameIntent::Rebuild { observed };
+                        intent = TabNameIntent::Rebuild {
+                            observed,
+                            base: label,
+                        };
                     }
                 } else {
                     desired_name = shell_name.to_owned();

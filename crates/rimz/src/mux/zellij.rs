@@ -22,6 +22,7 @@ mod reap;
 mod session;
 mod sidebar;
 pub(in crate::mux) mod socket;
+mod tab_owner;
 
 #[doc(hidden)]
 pub use pane_pid::ZellijPaneResolver;

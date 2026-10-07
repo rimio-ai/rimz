@@ -5,6 +5,27 @@ use crate::ids::{MuxName, PaneId};
 use crate::mux::zellij::pane_topology::{PaneTopologyCache, PaneTopologyPane};
 
 #[test]
+fn topology_retains_stable_tab_identity_separately_from_legacy_position() {
+    let pane: PaneTopologyPane = serde_json::from_value(serde_json::json!({
+        "id": 7, "tab_position": 3, "stable_tab_id": 42,
+    }))
+    .unwrap();
+    assert_eq!(serde_json::to_value(&pane).unwrap()["stable_tab_id"], 42);
+    assert_eq!(pane.tab_position, 3);
+    let legacy: PaneTopologyPane = serde_json::from_value(serde_json::json!({
+        "id": 7, "tab_id": 3,
+    }))
+    .unwrap();
+    assert_eq!(legacy.tab_position, 3);
+    assert!(
+        serde_json::to_value(legacy)
+            .unwrap()
+            .get("stable_tab_id")
+            .is_none()
+    );
+}
+
+#[test]
 fn width_memo_reads_and_derives_once_per_stamp_with_live_freshness() {
     use crate::mux::zellij::pane_topology::{self, write_pane_topology_cache};
     let dir = tempfile::tempdir().unwrap();

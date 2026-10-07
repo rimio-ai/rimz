@@ -87,6 +87,7 @@ fn rebuild_updates_the_record_only_while_the_observed_name_matches() {
             "peer's:#h.2 ?",
             TabNameIntent::Rebuild {
                 observed: "founder".to_owned(),
+                base: "peer's-#h-2".to_owned(),
             },
         )
         .unwrap();
@@ -111,6 +112,7 @@ fn rebuild_updates_the_record_only_while_the_observed_name_matches() {
             "stale",
             TabNameIntent::Rebuild {
                 observed: "peer's-#h-2 ?".to_owned(),
+                base: "stale".to_owned(),
             },
         )
         .unwrap();

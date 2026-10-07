@@ -1,6 +1,6 @@
 //! Zellij [`MuxBackend`](crate::mux::MuxBackend) trait implementation.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -18,13 +18,14 @@ use super::raw_pane::{
     tab_fullscreen_active, tab_view_cols,
 };
 use super::sidebar::DockOutcome;
+use super::tab_owner;
 use super::{
     HEALTH_PROBE_RETRY_DELAY, RECONCILE_LIST_TIMEOUT, ZellijBackend, env_prefixed, output_error,
 };
 use crate::disk::paths::RuntimePaths;
 use crate::ids::{MuxName, PaneId, WorkspaceId};
 use crate::mux::companion_layout::{GridPane, balance, plan_append};
-use crate::mux::tab_name::TabNameIntent;
+use crate::mux::tab_name::{TabNameIntent, TabOwnerRecord, ViewNaming};
 use crate::mux::{
     BackgroundViewLaunch, BackgroundViewOptions, CachedPaneRoster, ClientFocusOptions, ClientView,
     CommandSpec, CompanionPaneAppend, DaemonView, MuxBackend, MuxErr, PaneCapture, PaneListOptions,
@@ -95,6 +96,7 @@ impl From<RawListedPane> for PaneTopologyPane {
             is_suppressed: pane.is_suppressed,
             is_floating: pane.is_floating,
             tab_position: pane.tab_position.or(pane.tab_id).unwrap_or_default(),
+            stable_tab_id: pane.tab_id,
             tab_name: pane.tab_name,
             pane_columns: pane.pane_columns,
             pane_x: pane.pane_x,
@@ -105,6 +107,35 @@ impl From<RawListedPane> for PaneTopologyPane {
             terminal_command: pane.terminal_command,
         }
     }
+}
+
+fn record_tab_birth(
+    tabs: &mut BTreeMap<u64, TabOwnerRecord>,
+    tab_id: u64,
+    base: &str,
+    panes: &[RawListedPane],
+) {
+    let founders = panes
+        .iter()
+        .filter(|pane| {
+            pane.tab_id == Some(tab_id)
+                && !pane.is_plugin
+                && pane.title.as_deref() != Some(crate::pane::SIDEBAR_CHROME_TITLE)
+        })
+        .map(|pane| PaneId::from(ZellijPaneId::Terminal(pane.id)))
+        .collect();
+    let live_tab_ids = panes
+        .iter()
+        .filter_map(|pane| pane.tab_id)
+        .collect::<BTreeSet<_>>();
+    tabs.retain(|id, _| live_tab_ids.contains(id));
+    tabs.insert(
+        tab_id,
+        TabOwnerRecord {
+            base: base.to_owned(),
+            founders,
+        },
+    );
 }
 
 fn merge_topology_enrichment(cache: &mut PaneTopologyCache, prior: PaneTopologyCache) {
@@ -507,7 +538,7 @@ impl ZellijBackend {
         timeout: Duration,
     ) -> Result<u64> {
         self.tab_for_pane_within(session_name, pane, timeout)
-            .map(|(tab_id, _)| tab_id)
+            .map(|(tab_id, _, _)| tab_id)
     }
 
     /// The stable id and current name of the tab holding `pane`, from one
@@ -517,7 +548,7 @@ impl ZellijBackend {
         session_name: &str,
         pane: &PaneId,
         timeout: Duration,
-    ) -> Result<(u64, Option<String>)> {
+    ) -> Result<(u64, Option<String>, Vec<RawListedPane>)> {
         let pane_id = ZellijPaneId::try_from(pane)
             .ok()
             .and_then(ZellijPaneId::terminal_id)
@@ -526,12 +557,13 @@ impl ZellijBackend {
             })?;
         let listed = self.raw_listed_panes(session_name, timeout)?;
         listed
-            .into_iter()
+            .iter()
             .find(|candidate| !candidate.is_plugin && candidate.id == pane_id)
             .and_then(|candidate| {
-                let tab_id = candidate.tab_id.or(candidate.tab_position)?;
-                Some((tab_id, candidate.tab_name))
+                let tab_id = candidate.tab_id?;
+                Some((tab_id, candidate.tab_name.clone()))
             })
+            .map(|(tab_id, name)| (tab_id, name, listed))
             .ok_or_else(|| {
                 output_error(format!(
                     "target pane `{pane}` is absent from session `{session_name}`"
@@ -781,7 +813,7 @@ impl ZellijBackend {
         Ok(())
     }
 
-    fn run_new_tab_confirmed(&self, session: &str, args: &[String], tab_name: &str) -> Result<()> {
+    fn run_new_tab_confirmed(&self, session: &str, args: &[String], tab_name: &str) -> Result<u64> {
         let tabs = self.list_tabs(session)?;
         let config = crate::config::MachineConfig::load_lenient();
         let theme = &config.theme;
@@ -802,7 +834,8 @@ impl ZellijBackend {
                         theme,
                     )
                     .inspect_err(|_| self.close_unconfirmed_tab(session, created_tab))?;
-                    return Ok(());
+                    return created_tab
+                        .ok_or_else(|| output_error("new-tab did not return its stable tab id"));
                 }
             }
             let output = self
@@ -828,7 +861,8 @@ impl ZellijBackend {
                         theme,
                     )
                     .inspect_err(|_| self.close_unconfirmed_tab(session, created_tab))?;
-                    return Ok(());
+                    return created_tab
+                        .ok_or_else(|| output_error("new-tab did not return its stable tab id"));
                 }
                 if Instant::now() >= deadline {
                     break;
@@ -841,6 +875,77 @@ impl ZellijBackend {
             "new-tab '{tab_name}' did not appear after {} attempts",
             super::NEW_TAB_ATTEMPTS
         )))
+    }
+
+    fn record_new_tab(
+        &self,
+        runtime: &RuntimePaths,
+        session: &str,
+        tab_id: u64,
+        base: &str,
+    ) -> Result<()> {
+        tab_owner::update(runtime, session, |tabs| {
+            match self.raw_listed_panes(session, super::super::COMMAND_TIMEOUT) {
+                Ok(listed) if !listed.is_empty() => {
+                    record_tab_birth(tabs, tab_id, base, &listed);
+                    return Ok(true);
+                }
+                Ok(_) => {}
+                Err(err) => {
+                    tracing::warn!(session, tab_id, error = %err, "could not resolve tab founders");
+                }
+            }
+            tabs.insert(
+                tab_id,
+                TabOwnerRecord {
+                    base: base.to_owned(),
+                    founders: Vec::new(),
+                },
+            );
+            Ok(true)
+        })
+    }
+
+    pub(super) fn record_layout_tab_owners(
+        &self,
+        opts: &SidebarPaneOptions,
+        daemon: Option<&DaemonView>,
+    ) -> Result<()> {
+        let outcomes = self.confirm_resume_tabs(&opts.session_name, &opts.resume_tabs);
+        let labels = opts
+            .resume_tabs
+            .iter()
+            .zip(outcomes)
+            .filter(|(_, outcome)| outcome.is_ok())
+            .map(|(tab, _)| tab.label.as_str())
+            .chain(daemon.map(|view| view.name.as_str()))
+            .collect::<BTreeSet<_>>();
+        if labels.is_empty() {
+            return Ok(());
+        }
+        let runtime = self.runtime_paths_for_workspace(opts.workspace_id.clone())?;
+        let config = crate::config::MachineConfig::load_lenient();
+        tab_owner::update(&runtime, &opts.session_name, |owners| {
+            let panes = self.raw_listed_panes(&opts.session_name, super::super::COMMAND_TIMEOUT)?;
+            let tabs = panes
+                .iter()
+                .filter_map(|pane| {
+                    let id = pane.tab_id?;
+                    let base = crate::theme::strip_status_glyph_suffix(
+                        pane.tab_name.as_deref()?,
+                        &config.theme,
+                    );
+                    labels.contains(base).then_some((id, base))
+                })
+                .collect::<BTreeMap<_, _>>();
+            if tabs.is_empty() {
+                return Ok(false);
+            }
+            for (id, base) in tabs {
+                record_tab_birth(owners, id, base, &panes);
+            }
+            Ok(true)
+        })
     }
 
     fn close_unconfirmed_tab(&self, session: &str, tab: Option<u64>) {
@@ -1051,15 +1156,42 @@ impl MuxBackend for ZellijBackend {
             .command_timeout
             .unwrap_or(super::super::COMMAND_TIMEOUT);
         let session_name = opts.session_name.unwrap_or_default();
-        self.read_topology(
+        let cache = self.read_topology(
             (!session_name.is_empty()).then_some(session_name.as_str()),
             opts.runtime_paths.as_ref(),
             opts.workspace_id.as_ref(),
             opts.min_topology_produced_at_ms,
             opts.consistency,
             timeout,
-        )
-        .map(|cache| cache.into_pane_listing(session_name))
+        )?;
+        let runtime = opts
+            .runtime_paths
+            .or_else(|| {
+                opts.workspace_id
+                    .and_then(|id| self.runtime_paths_for_workspace(id).ok())
+            })
+            .or_else(|| self.runtime_paths_for_session(&cache.session_name).ok());
+        let owners = runtime
+            .as_ref()
+            .map(|runtime| tab_owner::read(runtime, &cache.session_name))
+            .unwrap_or_default();
+        let views = cache
+            .panes
+            .iter()
+            .filter(|pane| pane.is_listed_pane())
+            .map(|pane| {
+                (
+                    format!("tab_{}", pane.view_position()),
+                    ViewNaming {
+                        automatic: false,
+                        owner: pane.stable_tab_id.and_then(|id| owners.get(&id)).cloned(),
+                    },
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        let mut listing = cache.into_pane_listing(session_name);
+        listing.views = views.into_iter().collect();
+        Ok(listing)
     }
 
     fn client_view(&self, opts: ClientFocusOptions) -> Result<ClientView> {
@@ -1684,7 +1816,9 @@ impl MuxBackend for ZellijBackend {
             "--name".to_owned(),
             opts.view.name.clone(),
         ];
-        self.run_new_tab_confirmed(session, &args, &opts.view.name)?;
+        let tab_id = self.run_new_tab_confirmed(session, &args, &opts.view.name)?;
+        let runtime = self.runtime_paths_for_workspace(opts.sidebar.workspace_id.clone())?;
+        self.record_new_tab(&runtime, session, tab_id, &opts.view.name)?;
         drop(layout);
         // `new-tab` focuses the tab it creates. Return focus to the leading tab so
         // the imminent `attach` lands on a working pane, not this freshly-added
@@ -1787,7 +1921,8 @@ impl MuxBackend for ZellijBackend {
         if no_focus {
             args.push("--no-focus".to_owned());
         }
-        self.run_new_tab_confirmed(&opts.sidebar.session_name, &args, &opts.title)?;
+        let tab_id = self.run_new_tab_confirmed(&opts.sidebar.session_name, &args, &opts.title)?;
+        self.record_new_tab(&runtime, &opts.sidebar.session_name, tab_id, &opts.title)?;
         drop(layout);
         if let Some(anchor) = opts.after.as_ref()
             && let Err(err) = self.move_new_tab_after(&opts.sidebar.session_name, anchor)
@@ -1828,35 +1963,74 @@ impl MuxBackend for ZellijBackend {
         name: &str,
         intent: TabNameIntent,
     ) -> Result<()> {
-        let (tab_id, current) =
-            self.tab_for_pane_within(session, anchor, super::super::TAB_RENAME_TIMEOUT)?;
-        if let (Some(observed), Some(current)) = (intent.observed(), current.as_deref())
-            && observed != current
-        {
-            return Ok(());
+        let rename = |owners: Option<&mut BTreeMap<u64, TabOwnerRecord>>| {
+            let (tab_id, current, listed) =
+                self.tab_for_pane_within(session, anchor, super::super::TAB_RENAME_TIMEOUT)?;
+            if let (Some(observed), Some(current)) = (intent.observed(), current.as_deref())
+                && observed != current
+            {
+                return Ok(false);
+            }
+            self.zellij_action(session)
+                .args([
+                    "rename-tab-by-id".to_owned(),
+                    tab_id.to_string(),
+                    name.to_owned(),
+                ])
+                .run_with_timeout(super::super::TAB_RENAME_TIMEOUT)?;
+            if let Some(owners) = owners {
+                let live_tab_ids = listed
+                    .iter()
+                    .filter_map(|pane| pane.tab_id)
+                    .collect::<BTreeSet<_>>();
+                owners.retain(|id, _| live_tab_ids.contains(id));
+                match &intent {
+                    TabNameIntent::Claim { .. } => {
+                        let config = crate::config::MachineConfig::load_lenient();
+                        let base = crate::theme::strip_status_glyph_suffix(name, &config.theme);
+                        owners.insert(
+                            tab_id,
+                            TabOwnerRecord {
+                                base: base.to_owned(),
+                                founders: vec![anchor.clone()],
+                            },
+                        );
+                    }
+                    TabNameIntent::Rebuild { base, .. } => {
+                        if let Some(owner) = owners.get_mut(&tab_id) {
+                            base.clone_into(&mut owner.base);
+                        }
+                    }
+                    TabNameIntent::Release { .. } => {
+                        owners.remove(&tab_id);
+                    }
+                    TabNameIntent::Status { .. } | TabNameIntent::Rest { .. } => {}
+                }
+            }
+            if let TabNameIntent::Claim { pane_name } = &intent
+                && let Err(err) = self
+                    .zellij_action(session)
+                    .args(["rename-pane", "--pane-id", anchor.raw(), "--", pane_name])
+                    .run_with_timeout(super::super::TAB_RENAME_TIMEOUT)
+            {
+                tracing::warn!(
+                    session,
+                    pane = %anchor,
+                    tags.operation = "zellij.rename_pane",
+                    error = &err as &dyn std::error::Error,
+                    "could not pin the pane's launch name",
+                );
+            }
+            Ok(true)
+        };
+        if matches!(
+            intent,
+            TabNameIntent::Status { .. } | TabNameIntent::Rest { .. }
+        ) {
+            return rename(None).map(|_| ());
         }
-        self.zellij_action(session)
-            .args([
-                "rename-tab-by-id".to_owned(),
-                tab_id.to_string(),
-                name.to_owned(),
-            ])
-            .run_with_timeout(super::super::TAB_RENAME_TIMEOUT)?;
-        if let TabNameIntent::Claim { pane_name } = intent
-            && let Err(err) = self
-                .zellij_action(session)
-                .args(["rename-pane", "--pane-id", anchor.raw(), "--", &pane_name])
-                .run_with_timeout(super::super::TAB_RENAME_TIMEOUT)
-        {
-            tracing::warn!(
-                session,
-                pane = %anchor,
-                tags.operation = "zellij.rename_pane",
-                error = &err as &dyn std::error::Error,
-                "could not pin the pane's launch name",
-            );
-        }
-        Ok(())
+        let runtime = self.runtime_paths_for_session(session)?;
+        tab_owner::update(&runtime, session, |owners| rename(Some(owners)))
     }
 
     fn close_pane(&self, session: &str, pane: &PaneId) -> Result<()> {

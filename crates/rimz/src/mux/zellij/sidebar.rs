@@ -162,7 +162,16 @@ impl ZellijBackend {
             })
         };
 
+        let record_birth_owners = || -> Result<()> {
+            let runtime = self.runtime_paths_for_workspace(opts.workspace_id.clone())?;
+            super::tab_owner::clear(&runtime)?;
+            self.record_layout_tab_owners(opts, daemon)
+        };
+
         let created = spawn()?;
+        if created {
+            record_birth_owners()?;
+        }
         self.ensure_birth_presence_plugin(opts)?;
         if self.wait_for_sidebar_layout(&opts.session_name, &opts.workspace_id) {
             self.finalize_birth_focus(&opts.session_name, &opts.workspace_id);
@@ -178,6 +187,7 @@ impl ZellijBackend {
             );
             self.delete_session(&opts.session_name)?;
             spawn()?;
+            record_birth_owners()?;
             self.ensure_birth_presence_plugin(opts)?;
             if self.wait_for_sidebar_layout(&opts.session_name, &opts.workspace_id) {
                 self.finalize_birth_focus(&opts.session_name, &opts.workspace_id);

@@ -32,7 +32,7 @@ pub enum TabNameIntent {
     Claim { pane_name: String },
     Status { observed: String },
     Rest { observed: String },
-    Rebuild { observed: String },
+    Rebuild { observed: String, base: String },
     Release { observed: String },
 }
 
@@ -43,7 +43,7 @@ impl TabNameIntent {
             Self::Claim { .. } => None,
             Self::Status { observed }
             | Self::Rest { observed }
-            | Self::Rebuild { observed }
+            | Self::Rebuild { observed, .. }
             | Self::Release { observed } => Some(observed),
         }
     }
@@ -77,6 +77,7 @@ mod tests {
             },
             TabNameIntent::Rebuild {
                 observed: "before".to_owned(),
+                base: "after".to_owned(),
             },
             TabNameIntent::Release {
                 observed: "before".to_owned(),

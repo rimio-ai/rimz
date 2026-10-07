@@ -187,6 +187,7 @@ fn producer_verification_trusts_event_carried_topology_without_topology_floor() 
                 is_suppressed: false,
                 is_floating: false,
                 tab_position: 0,
+                stable_tab_id: None,
                 tab_name: Some("main".to_owned()),
                 pane_columns: Some(80),
                 pane_x: Some(0),

@@ -1033,7 +1033,9 @@ impl MuxBackend for TmuxBackend {
             TabNameIntent::Claim { pane_name } => {
                 self.claim_window_command(anchor, name, pane_name)?
             }
-            TabNameIntent::Rebuild { .. } => self.rebuild_window_command(anchor, name)?,
+            TabNameIntent::Rebuild { base, .. } => {
+                self.rebuild_window_command(anchor, name, base)?
+            }
             TabNameIntent::Status { .. } | TabNameIntent::Rest { .. } => {
                 self.rename_window_command(anchor, name)?
             }

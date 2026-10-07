@@ -44,6 +44,8 @@ pub struct PaneFields {
     pub exited: bool,
     pub is_held: bool,
     pub tab_position: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stable_tab_id: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tab_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -74,6 +76,7 @@ pub struct RawStablePaneFields<'a> {
     pub exited: bool,
     pub is_held: bool,
     pub tab_position: u64,
+    pub stable_tab_id: Option<u64>,
     pub tab_name: Option<&'a str>,
     pub pane_x: Option<u64>,
     pub pane_columns: Option<u64>,
@@ -92,6 +95,7 @@ impl<'a> RawStablePaneFields<'a> {
             exited: pane.exited,
             is_held: pane.is_held,
             tab_position: pane.tab_position,
+            stable_tab_id: pane.stable_tab_id,
             tab_name: pane.tab_name.as_deref(),
             pane_x: pane.pane_x,
             pane_columns: pane.pane_columns,
@@ -169,6 +173,7 @@ impl PaneFields {
             exited: stable.exited,
             is_held: stable.is_held,
             tab_position: stable.tab_position,
+            stable_tab_id: stable.stable_tab_id,
             tab_name: stable.tab_name.map(str::to_owned),
             pane_x: stable.pane_x,
             pane_columns: stable.pane_columns,

@@ -31,6 +31,7 @@ mod shell {
         last_failure: Option<wire::CommandFailure>,
         /// Zellij answers this through plugin stdio, so cache it at load.
         zellij_version: String,
+        tab_ids: BTreeMap<usize, u64>,
     }
 
     struct ShellHost<'a> {
@@ -141,17 +142,22 @@ mod shell {
                     engine.on_permission_denied(now, &host)
                 }
                 Event::PaneUpdate(manifest) => {
-                    let raw_hash = raw_manifest_stable_hash(&manifest, engine.tab_names());
+                    let raw_hash =
+                        raw_manifest_stable_hash(&manifest, engine.tab_names(), &self.tab_ids);
                     engine.on_pane_manifest(
                         raw_hash,
-                        |tab_names| project(&manifest, tab_names),
+                        |tab_names| project(&manifest, tab_names, &self.tab_ids),
                         now,
                         &host,
                     )
                 }
                 Event::TabUpdate(tabs) => {
+                    self.tab_ids = tabs
+                        .iter()
+                        .map(|tab| (tab.position, tab.tab_id as u64))
+                        .collect();
                     let active = tabs.iter().find(|tab| tab.active).map(|tab| tab.position);
-                    engine.on_tab_update(active, tab_names(&tabs), now, &host)
+                    engine.on_tab_update(active, tab_names(&tabs), &self.tab_ids, now, &host)
                 }
                 Event::CommandChanged(pane_id, command, is_foreground, _) => engine
                     .on_command_changed(
@@ -322,6 +328,7 @@ mod shell {
     fn project(
         manifest: &PaneManifest,
         tab_names: &BTreeMap<usize, String>,
+        tab_ids: &BTreeMap<usize, u64>,
     ) -> BTreeMap<usize, Vec<PaneFields>> {
         manifest
             .panes
@@ -331,7 +338,7 @@ mod shell {
                     .iter()
                     .map(|pane| {
                         PaneFields::from_stable(
-                            &stable_fields(*tab, pane, tab_names),
+                            &stable_fields(*tab, pane, tab_names, tab_ids),
                             pane.title.clone(),
                         )
                     })
@@ -348,6 +355,7 @@ mod shell {
         tab: usize,
         pane: &'a PaneInfo,
         tab_names: &'a BTreeMap<usize, String>,
+        tab_ids: &BTreeMap<usize, u64>,
     ) -> RawStablePaneFields<'a> {
         RawStablePaneFields {
             id: pane.id,
@@ -358,6 +366,7 @@ mod shell {
             exited: pane.exited,
             is_held: pane.is_held,
             tab_position: tab as u64,
+            stable_tab_id: tab_ids.get(&tab).copied(),
             tab_name: tab_names.get(&tab).map(String::as_str),
             pane_x: Some(pane.pane_x as u64),
             pane_columns: Some(pane.pane_columns as u64),
@@ -368,11 +377,12 @@ mod shell {
     fn raw_manifest_stable_hash(
         manifest: &PaneManifest,
         tab_names: &BTreeMap<usize, String>,
+        tab_ids: &BTreeMap<usize, u64>,
     ) -> u64 {
         policy::raw_stable_hash(manifest.panes.iter().flat_map(|(tab, panes)| {
             panes
                 .iter()
-                .map(move |pane| (*tab, stable_fields(*tab, pane, tab_names)))
+                .map(move |pane| (*tab, stable_fields(*tab, pane, tab_names, tab_ids)))
         }))
     }
 

@@ -294,6 +294,11 @@ impl ZellijBackend {
         }
     }
 
+    pub(super) fn runtime_paths_for_session(&self, session: &str) -> Result<RuntimePaths> {
+        let known = self.resolve_topology_workspace(session, None)?;
+        self.runtime_paths_for_workspace(known.workspace_id)
+    }
+
     pub(super) fn state_paths_for_workspace(
         &self,
         workspace_id: WorkspaceId,

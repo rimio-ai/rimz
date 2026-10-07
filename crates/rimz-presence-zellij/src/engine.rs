@@ -611,6 +611,7 @@ impl Engine {
         &mut self,
         active: Option<usize>,
         tab_names: BTreeMap<usize, String>,
+        tab_ids: &BTreeMap<usize, u64>,
         now: u64,
         host: &impl Host,
     ) -> Vec<Effect> {
@@ -620,6 +621,22 @@ impl Engine {
         let mut effects = Vec::new();
         self.mark_granted(now, host, &mut effects);
         self.tab_names = tab_names;
+        let mut identity_changed = false;
+        for pane in self
+            .room
+            .panes
+            .values_mut()
+            .filter_map(|state| state.manifest.as_mut())
+        {
+            let id = tab_ids.get(&(pane.tab_position as usize)).copied();
+            if pane.stable_tab_id != id {
+                pane.stable_tab_id = id;
+                identity_changed = true;
+            }
+        }
+        if identity_changed {
+            self.signal_change(now);
+        }
         self.focus.accept_tab_update(active, now);
         self.finish_update(now, host, effects)
     }

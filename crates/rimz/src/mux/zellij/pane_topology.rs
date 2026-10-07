@@ -268,6 +268,8 @@ pub struct PaneTopologyPane {
     #[serde(alias = "tab_id")]
     pub tab_position: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stable_tab_id: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tab_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pane_columns: Option<u64>,
@@ -494,6 +496,7 @@ mod tests {
             is_suppressed: false,
             is_floating: false,
             tab_position,
+            stable_tab_id: None,
             tab_name: None,
             pane_columns: None,
             pane_x: None,
