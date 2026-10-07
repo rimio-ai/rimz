@@ -2449,11 +2449,11 @@ rimz sessions
 
 rimz setup
     --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    --config-only  [action=set-true takes=0..=0 long-aliases=yes]
     -h, --help  [action=help takes=0..=0]
     --mux <MUX>  [action=set takes=1..=1 global]
     --root <ROOT>  [action=set takes=1..=1 global]
     --tmux  [action=set-true takes=0..=0 global]
-    --yes  [action=set-true takes=0..=0]
     --zellij  [action=set-true takes=0..=0 global]
 
 rimz sidebar [hidden]

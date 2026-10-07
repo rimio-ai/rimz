@@ -8,37 +8,54 @@ use clap::Args;
 use rimz::config::{ConfigEditor, MergeAction, MergeReport};
 use rimz::ids::MuxName;
 use rimz::trust::TrustState;
-use rimz::workspace::WorkspaceResolver;
+use rimz::workspace::{RootClass, WorkspaceResolver};
 
 use super::{GlobalFlags, first_run, hooks};
 use crate::cli::render;
 
 #[derive(Debug, Args)]
 pub struct SetupArgs {
-    /// Apply non-interactive setup: refresh config only, no hooks or trust.
-    #[arg(long)]
-    yes: bool,
+    /// Write or merge the config files and stop: no questions, no hooks, no trust.
+    #[arg(long, alias = "yes")]
+    config_only: bool,
 }
 
 pub fn run(args: SetupArgs, globals: &GlobalFlags) -> Result<()> {
     let report = SetupReport::detect(globals);
     let interactive = std::io::stdin().is_terminal();
 
-    if !interactive && !args.yes {
+    if !interactive && !args.config_only {
         print_report(&report)?;
-        print_line("No terminal input is available; setup changed nothing.")?;
-        print_line("Run `rimz setup --yes` to refresh config, or run setup from a terminal.")?;
+        print_line("Setup changed nothing: there is no terminal to ask from.")?;
+        print_line(
+            "  rimz setup --config-only   write the default config (installs no hooks, grants no trust)",
+        )?;
+        let missing_hooks = report
+            .agents
+            .iter()
+            .filter(|agent| agent.lacks_hooks())
+            .count();
+        if missing_hooks > 0 {
+            let agents = if missing_hooks == 1 {
+                "agent"
+            } else {
+                "agents"
+            };
+            print_line(&format!(
+                "  rimz hooks install         install hooks for the {missing_hooks} {agents} without them"
+            ))?;
+        }
         return Ok(());
     }
 
-    if args.yes {
+    if args.config_only {
         print_report(&report)?;
         let editor = ConfigEditor::machine();
         retire_idle_compact_keys(&editor)?;
         render_merge_report(&editor.merge_defaults()?)?;
         report_remote_template()?;
         report_consensus_copy()?;
-        print_line("No hooks or trust grants were changed by --yes.")?;
+        print_line("Installed no hooks and granted no trust.")?;
         print_line("Run `rimz start` when ready.")?;
         return Ok(());
     }
@@ -100,20 +117,29 @@ struct DetectedMux {
 
 struct DetectedWorkspace {
     project_root: PathBuf,
-    root_class: &'static str,
+    root_class: RootClass,
     trust: Option<TrustState>,
 }
 
 struct DetectedAgent {
     name: &'static str,
-    on_path: bool,
     /// Where the binary resolves — on `$PATH`, or in a known install dir an
     /// installer used without editing `$PATH`. `None` when nowhere known.
     binary: Option<PathBuf>,
     hook_install: bool,
+    hook_install_blocked: bool,
     hooks_installed: bool,
     hook_upgrade_available: bool,
-    local_session_discovery: bool,
+}
+
+impl DetectedAgent {
+    /// Whether a bare `rimz hooks install` would install this agent's hooks.
+    fn lacks_hooks(&self) -> bool {
+        self.binary.is_some()
+            && self.hook_install
+            && !self.hook_install_blocked
+            && !self.hooks_installed
+    }
 }
 
 impl SetupReport {
@@ -135,7 +161,7 @@ impl SetupReport {
                     .map(|report| report.state);
                 Ok(DetectedWorkspace {
                     project_root: ws.project_root,
-                    root_class: ws.root_class.label(),
+                    root_class: ws.root_class,
                     trust,
                 })
             }
@@ -147,17 +173,15 @@ impl SetupReport {
                 let definition = agent.spec();
                 DetectedAgent {
                     name: definition.kind,
-                    on_path: definition
-                        .bin_names
-                        .iter()
-                        .any(|name| which::which(name).is_ok()),
                     binary: rimz::agents::locate_binary(definition),
                     hook_install: definition.has_wired_hook_install(),
+                    hook_install_blocked: agent
+                        .managed_integration()
+                        .is_some_and(|integration| integration.install_blocker().is_some()),
                     hooks_installed: agent.hooks_installed(&login_env),
                     hook_upgrade_available: agent
                         .managed_integration()
                         .is_some_and(|integration| integration.upgrade_available(&login_env)),
-                    local_session_discovery: definition.capabilities.local_session_discovery,
                 }
             })
             .collect();
@@ -251,16 +275,20 @@ fn render_merge_report(report: &MergeReport) -> Result<()> {
 }
 
 fn print_report(report: &SetupReport) -> std::io::Result<()> {
-    use std::io::Write;
-    let mut out = render::out();
+    render_report(report, &mut render::out())
+}
+
+fn render_report(report: &SetupReport, out: &mut impl std::io::Write) -> std::io::Result<()> {
     writeln!(out, "RimZ setup")?;
     let mut kv = render::KeyVals::new().indent(2);
     match &report.mux {
         Ok(mux) => {
             let version = mux.version.as_deref().unwrap_or("version unknown");
+            let prefix = format!("{} ", mux.name);
+            let version = version.strip_prefix(prefix.as_str()).unwrap_or(version);
             kv.push(
                 "multiplexer",
-                render::cell(format!("{} ({version})", mux.name)),
+                render::cell(format!("{} {version}", mux.name)),
             );
         }
         Err(err) => kv.push(
@@ -270,22 +298,35 @@ fn print_report(report: &SetupReport) -> std::io::Result<()> {
     }
     match &report.workspace {
         Ok(workspace) => {
+            let class = match workspace.root_class {
+                RootClass::Repo => "git repository",
+                RootClass::Marker => "project marker, no git repository",
+                RootClass::Directory => "plain directory: no git repository or project marker",
+            };
             kv.push(
-                "project root",
-                render::cell(workspace.project_root.display().to_string())
-                    .fg(render::palette::accent()),
+                "project",
+                render::cell(format!(
+                    "{} ({class})",
+                    render::home_relative_path(&workspace.project_root)
+                ))
+                .fg(render::palette::accent()),
             );
-            kv.push("root class", render::cell(workspace.root_class.to_string()));
             if let Some(trust) = workspace.trust {
+                let label = match trust {
+                    TrustState::NoConfig => "no project config",
+                    TrustState::Trusted => "trusted",
+                    TrustState::Untrusted => "untrusted",
+                    TrustState::Stale => "stale",
+                };
                 kv.push(
-                    "trust",
-                    render::cell(trust.as_str()).fg(render::status::trust(trust)),
+                    "project trust",
+                    render::cell(label).fg(render::status::trust(trust)),
                 );
             }
         }
         Err(err) => kv.push(
-            "workspace",
-            render::cell(format!("could not resolve ({err})")).fg(render::palette::alarm()),
+            "project root",
+            render::cell(err).fg(render::palette::alarm()),
         ),
     }
     let (config_state, config_style) = if report.config_exists {
@@ -295,33 +336,52 @@ fn print_report(report: &SetupReport) -> std::io::Result<()> {
     };
     kv.push(
         "config",
-        render::cell(format!("{} ({config_state})", report.config_path.display())).fg(config_style),
+        render::cell(format!(
+            "{} ({config_state})",
+            render::home_relative_path(&report.config_path)
+        ))
+        .fg(config_style),
     );
+    let mut installed = Vec::new();
+    let mut not_installed = Vec::new();
+    let mut not_on_path = Vec::new();
     for agent in &report.agents {
-        let path_state = match (&agent.binary, agent.on_path) {
-            (Some(_), true) => "on PATH".to_string(),
-            (Some(path), false) => format!("found at {}", path.display()),
-            (None, _) => "not found".to_string(),
-        };
-        let hook_state = integration_state(
-            agent.hook_install,
-            agent.hooks_installed,
-            agent.hook_upgrade_available,
-            agent.local_session_discovery,
-        );
-        let style = if agent.binary.is_none() {
-            render::palette::alarm()
-        } else if agent.hook_install && (!agent.hooks_installed || agent.hook_upgrade_available) {
-            render::palette::warn()
+        if agent.binary.is_none() {
+            not_on_path.push(agent.name.to_owned());
+            continue;
+        }
+        if !agent.hook_install {
+            continue;
+        }
+        if !agent.hooks_installed {
+            not_installed.push(agent.name.to_owned());
+            continue;
+        }
+        installed.push(if agent.hook_upgrade_available {
+            format!("{} (upgrade available)", agent.name)
         } else {
-            render::palette::good()
-        };
-        kv.push(
-            format!("agent {}", agent.name),
-            render::cell(format!("{path_state}; {hook_state}")).fg(style),
-        );
+            agent.name.to_owned()
+        });
     }
-    kv.render(&mut out)
+    let mut hook_lines = Vec::new();
+    for (mut names, label, style) in [
+        (installed, "installed", render::palette::good()),
+        (not_installed, "not installed", render::palette::warn()),
+        (not_on_path, "not on PATH", render::palette::alarm()),
+    ] {
+        if names.is_empty() {
+            continue;
+        }
+        names.sort_unstable();
+        hook_lines.push(vec![
+            render::cell(format!("{} {label}: {}", names.len(), names.join(", "))).fg(style),
+        ]);
+    }
+    if hook_lines.is_empty() {
+        hook_lines.push(vec![render::cell("no agents detected")]);
+    }
+    kv.push_lines("hooks", hook_lines);
+    kv.render(out)
 }
 
 fn print_line(line: &str) -> std::io::Result<()> {
@@ -329,50 +389,203 @@ fn print_line(line: &str) -> std::io::Result<()> {
     writeln!(render::out(), "{line}")
 }
 
-fn integration_state(
-    hook_install: bool,
-    hooks_installed: bool,
-    hook_upgrade_available: bool,
-    local_session_discovery: bool,
-) -> &'static str {
-    if !hook_install && local_session_discovery {
-        "local-session discovery (no hooks needed)"
-    } else if !hook_install {
-        "hook install unsupported"
-    } else if hooks_installed && hook_upgrade_available {
-        "hooks installed; upgrade available"
-    } else if hooks_installed {
-        "hooks installed"
-    } else {
-        "hooks not installed"
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::integration_state;
+    use super::*;
+
+    fn report() -> SetupReport {
+        let home = PathBuf::from(std::env::var_os("HOME").expect("test harness supplies HOME"));
+        SetupReport {
+            mux: Ok(DetectedMux {
+                name: MuxName::Tmux,
+                version: Some("3.7c".into()),
+            }),
+            workspace: Ok(DetectedWorkspace {
+                project_root: home.join("proj"),
+                root_class: RootClass::Repo,
+                trust: Some(TrustState::NoConfig),
+            }),
+            agents: Vec::new(),
+            config_path: home.join(".rimz/config.toml"),
+            config_exists: false,
+        }
+    }
+
+    fn agent(name: &'static str) -> DetectedAgent {
+        DetectedAgent {
+            name,
+            binary: Some(PathBuf::from("/opt/agent")),
+            hook_install: true,
+            hook_install_blocked: false,
+            hooks_installed: false,
+            hook_upgrade_available: false,
+        }
+    }
+
+    fn rendered(report: &SetupReport) -> String {
+        let mut out = Vec::new();
+        render_report(report, &mut out).unwrap();
+        anstream::adapter::strip_str(&String::from_utf8(out).unwrap()).to_string()
+    }
 
     #[test]
-    fn setup_leads_with_the_hookless_adapters_observation_path() {
+    fn setup_report_folds_hooks_and_abbreviates_paths() {
+        let mut report = report();
+        report.agents = vec![
+            DetectedAgent {
+                hooks_installed: true,
+                ..agent("pi")
+            },
+            agent("antigravity"),
+            DetectedAgent {
+                binary: None,
+                ..agent("kiro")
+            },
+            DetectedAgent {
+                hooks_installed: true,
+                hook_upgrade_available: true,
+                ..agent("opencode")
+            },
+            DetectedAgent {
+                hook_install: false,
+                ..agent("discovery-only")
+            },
+        ];
         assert_eq!(
-            integration_state(false, false, false, true),
-            "local-session discovery (no hooks needed)"
+            rendered(&report),
+            concat!(
+                "RimZ setup\n",
+                "  multiplexer:   tmux 3.7c\n",
+                "  project:       ~/proj (git repository)\n",
+                "  project trust: no project config\n",
+                "  config:        ~/.rimz/config.toml (missing)\n",
+                "  hooks:         2 installed: opencode (upgrade available), pi\n",
+                "                 1 not installed: antigravity\n",
+                "                 1 not on PATH: kiro\n",
+            )
         );
-        assert_eq!(
-            integration_state(false, false, false, false),
-            "hook install unsupported"
+    }
+
+    #[test]
+    fn setup_report_lists_install_blocked_agents_as_not_installed() {
+        let mut report = report();
+        report.agents = vec![DetectedAgent {
+            hook_install_blocked: true,
+            ..agent("kiro")
+        }];
+        assert!(rendered(&report).contains("1 not installed: kiro\n"));
+    }
+
+    #[test]
+    fn setup_hook_hint_counts_only_installable_missing_hooks() {
+        let blocked = DetectedAgent {
+            hook_install_blocked: true,
+            ..agent("kiro")
+        };
+        assert!(
+            !blocked.lacks_hooks(),
+            "blocked hooks must not produce an install hint"
         );
+        let mut report = report();
+        report.agents = vec![blocked, agent("claude")];
         assert_eq!(
-            integration_state(true, true, false, false),
-            "hooks installed"
+            report
+                .agents
+                .iter()
+                .filter(|agent| agent.lacks_hooks())
+                .count(),
+            1
         );
+        report.agents.pop();
         assert_eq!(
-            integration_state(true, true, true, false),
-            "hooks installed; upgrade available"
+            report
+                .agents
+                .iter()
+                .filter(|agent| agent.lacks_hooks())
+                .count(),
+            0
         );
-        assert_eq!(
-            integration_state(true, false, false, false),
-            "hooks not installed"
+    }
+
+    #[test]
+    fn setup_report_does_not_repeat_mux_name_in_version() {
+        for (name, version) in [(MuxName::Tmux, "3.7c"), (MuxName::Zellij, "0.44.0")] {
+            for detected in [version.to_owned(), format!("{name} {version}")] {
+                let mut report = report();
+                report.mux = Ok(DetectedMux {
+                    name,
+                    version: Some(detected),
+                });
+                let output = rendered(&report);
+                assert!(
+                    output.contains(&format!("multiplexer:   {name} {version}\n")),
+                    "{output}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn setup_report_speaks_root_classes_and_trust_states() {
+        for (class, label) in [
+            (RootClass::Repo, "git repository"),
+            (RootClass::Marker, "project marker, no git repository"),
+            (
+                RootClass::Directory,
+                "plain directory: no git repository or project marker",
+            ),
+        ] {
+            let mut report = report();
+            report.workspace.as_mut().unwrap().root_class = class;
+            assert!(rendered(&report).contains(&format!("~/proj ({label})\n")));
+        }
+        for (trust, label) in [
+            (TrustState::NoConfig, "no project config"),
+            (TrustState::Trusted, "trusted"),
+            (TrustState::Untrusted, "untrusted"),
+            (TrustState::Stale, "stale"),
+        ] {
+            let mut report = report();
+            report.workspace.as_mut().unwrap().trust = Some(trust);
+            assert!(rendered(&report).contains(&format!("project trust: {label}\n")));
+        }
+    }
+
+    #[test]
+    fn setup_report_omits_empty_hook_groups_and_absent_trust() {
+        let mut report = report();
+        report.workspace.as_mut().unwrap().trust = None;
+        report.config_exists = true;
+        report.agents = vec![DetectedAgent {
+            hooks_installed: true,
+            ..agent("claude")
+        }];
+        let output = rendered(&report);
+        assert!(output.contains("1 installed: claude\n"), "{output}");
+        assert!(!output.contains("not installed:"));
+        assert!(!output.contains("not on PATH:"));
+        assert!(!output.contains("project trust:"));
+        assert!(output.contains("~/.rimz/config.toml (present)"));
+        report.agents = vec![DetectedAgent {
+            hook_install: false,
+            ..agent("hookless")
+        }];
+        assert!(rendered(&report).contains("no agents detected\n"));
+    }
+
+    #[test]
+    fn setup_report_keeps_probe_errors_visible() {
+        let mut report = report();
+        report.mux = Err("no multiplexer found".into());
+        report.workspace = Err("root unavailable".into());
+        let output = rendered(&report);
+        assert!(
+            output.contains("multiplexer:  unavailable (no multiplexer found)\n"),
+            "{output}"
+        );
+        assert!(
+            output.contains("project root: root unavailable\n"),
+            "{output}"
         );
     }
 }
