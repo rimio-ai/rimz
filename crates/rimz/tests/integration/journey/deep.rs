@@ -199,7 +199,7 @@ fn tmux_cell_only_sidebar_bounds_client_bytes() {
         return;
     }
     const REFRESH_MS: u64 = 100;
-    const BYTES_PER_FRAME: u64 = 2048;
+    const BYTES_PER_FRAME: u64 = 1024;
     const STATUS_SLACK: u64 = 4096;
     std::fs::write(
         env.rimz_home().join("theme.toml"),
