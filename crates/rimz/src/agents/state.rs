@@ -471,8 +471,9 @@ impl ContextSeverity {
 /// attention state. The sidebar projects a stalled agent to the attention
 /// bucket so a wedged agent becomes actionable instead of a frozen spinner.
 /// "Activity" is the per-tool heartbeat the snapshot folds into
-/// `last_activity` (see [`crate::agent_activity`]): it advances on every
-/// *completed* tool call, so a busy multi-tool turn stays live. An agent that
+/// `last_activity` (see [`crate::agent_activity`]): own-session agents advance
+/// it on completed tools; native children also advance it on child-keyed hooks,
+/// including pre-tool events. Cadence depends on the provider. An agent that
 /// completes no tool and crosses no turn boundary for the whole window — one
 /// long-running tool, or a genuine wedge — is surfaced as `!` so it becomes
 /// actionable. The escalation self-heals: the next heartbeat readvances
@@ -482,7 +483,7 @@ impl ContextSeverity {
 /// A `running` agent that has merely delegated to subagents is *not* stalled —
 /// its work is the children's heartbeats, not its own — so the projection
 /// caller suppresses this while a child holds its delegated turn (see the
-/// sidebar's "waiting for subagents" derivation). A silent launched child no
+/// sidebar's "waiting for subagents" derivation). A silent native or launched child no
 /// longer holds it; `AgentState::silent_child_for` applies this same rule to
 /// children. A clean turn parked on background work
 /// settles to success in the sidebar projection before this predicate becomes
@@ -1596,10 +1597,10 @@ impl AgentState {
         }
     }
 
-    /// Silence past the stall window for an open launched child. Rowless
-    /// status keeps sleep, pause, and displayed errors ahead of this rule.
+    /// Silence at the stall window for any open native or launched child.
+    /// Effective status and displayed errors exclude sleep, pause, and errors.
     pub(crate) fn silent_child_for(&self, now: Timestamp, stalled_after_secs: u32) -> Option<u64> {
-        (self.is_launched_child()
+        (self.parent_agent_id.is_some()
             && self.ended_at.is_none()
             && self.displayed_turn_error().is_none()
             && is_stalled(

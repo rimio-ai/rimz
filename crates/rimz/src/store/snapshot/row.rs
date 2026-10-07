@@ -704,7 +704,7 @@ pub struct SidebarSubAgent {
     #[serde(default, skip_serializing_if = "is_false")]
     pub provider_native: bool,
     pub status: AgentStatus,
-    /// An open launched child projected failed for silence, not a finished run.
+    /// An open native or launched child projected failed for silence, not a finished run.
     #[serde(default, skip_serializing_if = "is_false")]
     pub stalled: bool,
     /// The displayed running turn's shape (reasoning / acting).

@@ -233,7 +233,7 @@ The notice does not end or change the run, and it is not the fleet report: the r
 
 ## A child silent past the stall window
 
-A launched child still running but silent for `[agents.attention] stalled_after_secs` (default `1800`) receives a labelled `!` in the sidebar. A child sleeping on a wait, paused, or already showing an error does not trigger this notice. The parent gets one message parked for its next eligible turn boundary:
+Any child still running but silent for `[agents.attention] stalled_after_secs` (default `1800`) receives a labelled `!` in the sidebar. Provider-native children lift the parent card's attention but send no notice. A child sleeping on a wait, paused, or already showing an error does not trigger the silence check. For a launched child, the parent gets one message parked for its next eligible turn boundary:
 
 ```text
 Type: SUBAGENT_STALLED

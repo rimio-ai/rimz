@@ -3,6 +3,38 @@ use crate::agents::{PendingWait, PendingWaitTrigger};
 use crate::store::snapshot::SubAgentTokens;
 
 #[test]
+fn silent_native_child_is_labelled_and_recovers_on_a_fresh_heartbeat() {
+    let parent = agent("claude", "root", AgentStatus::Idle, 0).worktree("/repo/main");
+    let mut child = child_state("root", "child", AgentStatus::Running, 1_800);
+    child.phase = TurnPhase::Reasoning;
+    child.subagent_started_at = Some(ago(2_000));
+    let heartbeat = AgentActivity {
+        kind: child.kind.clone(),
+        agent_id: child.agent_id.clone(),
+        at: epoch(),
+        tool_at: None,
+        repeat: None,
+    };
+    let snapshot = room_with_agent_panes(vec![parent, child]);
+    let projected = &row(&snapshot, "root").sub_agents()[0];
+    assert_eq!(projected.status, AgentStatus::Failed);
+    assert!(projected.stalled);
+    assert!(projected.provider_native);
+    assert_eq!(projected.phase, TurnPhase::Idle);
+    assert_eq!(projected.turn_error_label.as_deref(), Some("silent 30m"));
+    assert_eq!(projected.elapsed_secs, Some(200));
+
+    let recovered = snapshot.with_agent_activity(&[heartbeat]);
+    let recovered = room_with_agent_panes(recovered.agents);
+    let projected = &row(&recovered, "root").sub_agents()[0];
+    assert_eq!(projected.status, AgentStatus::Running);
+    assert_eq!(projected.phase, TurnPhase::Reasoning);
+    assert_eq!(projected.turn_error_label, None);
+    assert!(!projected.stalled);
+    assert_eq!(projected.elapsed_secs, Some(2_000));
+}
+
+#[test]
 fn silent_launched_child_is_labelled_and_recovers_on_a_fresh_heartbeat() {
     let parent = agent("claude", "root", AgentStatus::Idle, 0).worktree("/repo/main");
     let mut child = child_state("root", "child", AgentStatus::Running, 1_920);
@@ -330,7 +362,7 @@ fn reset_child_login_demotes_entry_and_parent() {
 }
 
 #[test]
-fn native_and_ended_children_keep_raw_projection() {
+fn displayed_errors_and_ended_children_keep_raw_projection() {
     let mut child = child_state("root", "child", AgentStatus::Running, 5)
         .paused_turn_error(0, "usage limit reached");
     child.phase = TurnPhase::Reasoning;
@@ -338,12 +370,25 @@ fn native_and_ended_children_keep_raw_projection() {
         if ended {
             child.launch_depth = Some(1);
             child.ended_at = Some(epoch());
+            child.last_activity = ago(2_000);
         }
         let projected = sub_agent_from_state(&child, epoch(), false, 1_800);
         assert_eq!(projected.status, AgentStatus::Running);
         assert_eq!(projected.phase, TurnPhase::Reasoning);
         assert_eq!(projected.turn_error_label, None);
     }
+}
+
+#[test]
+fn displayed_child_failure_freezes_runtime_at_last_activity() {
+    let mut child =
+        child_state("root", "child", AgentStatus::Running, 60).turn_error(0, "API error");
+    child.launch_depth = Some(1);
+    child.subagent_started_at = Some(ago(600));
+    let projected = sub_agent_from_state(&child, epoch(), false, 1_800);
+    assert_eq!(projected.status, AgentStatus::Failed);
+    assert_eq!(projected.elapsed_secs, Some(540));
+    assert!(!projected.stalled);
 }
 
 #[test]
