@@ -1364,7 +1364,8 @@ impl AgentState {
 
     /// Status after cheap, context-only projections that every read path can
     /// share. A live turn with an active provider park certificate reads as
-    /// `paused` even when the lifecycle rollup is still `running`; native-input
+    /// `paused` even when the lifecycle rollup is still `running`, and so does a
+    /// `failed` row whose own turn carries one; native-input
     /// markers raise `waiting`, provider completion markers settle falsely-running
     /// rows to `success`, interruption markers settle falsely-running or waiting
     /// rows to `idle`, and a clean turn parked on background work reads as
@@ -1571,7 +1572,12 @@ impl AgentState {
             Some(TurnErrorClass::Unknown | TurnErrorClass::Failed) => {
                 (AgentStatus::Failed, TurnPhase::Idle)
             }
-            _ => {
+            Some(
+                TurnErrorClass::PausedRateLimit
+                | TurnErrorClass::PausedSpendLimit
+                | TurnErrorClass::PausedOverloaded,
+            )
+            | None => {
                 let status = self.effective_status();
                 let phase = if status == AgentStatus::Running {
                     self.phase
