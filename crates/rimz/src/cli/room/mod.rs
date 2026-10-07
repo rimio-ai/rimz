@@ -749,9 +749,10 @@ fn recover_parked_agents(context: &RoomContext, no_resume: bool, attended: bool)
         };
         writeln!(
             crate::cli::render::err(),
-            "rimz: {} agent{} from an earlier session stay parked{labels}; rimz agents resume <lane> brings a lane back, rimz start --no-resume ends them",
+            "rimz: {} agent{} from an earlier session {} parked{labels}; rimz agents resume <lane> brings a lane back, rimz start --no-resume ends them",
             outcome.parked,
             if outcome.parked == 1 { "" } else { "s" },
+            if outcome.parked == 1 { "stays" } else { "stay" },
         )?;
     } else if outcome.ended > 0 {
         writeln!(
