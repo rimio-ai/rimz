@@ -4333,6 +4333,131 @@ fn boundary_dispatch_sends_when_idle_then_parks_and_delivers_when_running() {
 }
 
 #[test]
+fn boundary_slash_prompt_parks_behind_sent_prompt_until_turn_ends() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
+    register_running_agent(&env, "sess-sent-hold", "feature-sent-hold", pane_env);
+    run_hook(
+        &env,
+        json!({
+            "hook_event_name": "Stop",
+            "session_id": "sess-sent-hold",
+            "worktree_branch": "feature-sent-hold",
+        }),
+        pane_env,
+    );
+    let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "claude")]);
+    let card_status = || {
+        env.store()
+            .snapshot_cached()
+            .expect("snapshot")
+            .agents
+            .iter()
+            .find(|agent| agent.kind.as_str() == "claude")
+            .expect("claude card")
+            .status
+    };
+    assert_eq!(card_status(), rimz::agents::AgentStatus::Success);
+
+    let trace_log = env.project_root.join("zellij-sent-hold-trace.log");
+    let sent = run_success(
+        traced_rimz(&env, "zellij-sent-hold-trace.log")
+            .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+            .env("RIMZ_MESSAGE_SETTLE_MS", "0")
+            .args(["message", "@claude", "--", "go"]),
+        "send prompt at open gate",
+    );
+    let prompt_id = MessageId::parse(&sent_id_from_stdout(&sent.stdout)).expect("message id");
+    assert_text_then_enter(&trace_log, &user_message("go"));
+    assert_eq!(message_by_id(&env, &prompt_id).status, MessageStatus::Sent);
+    let writes_after_prompt = trace_lines(&trace_log).len();
+
+    let parked = run_success(
+        traced_rimz(&env, "zellij-sent-hold-trace.log")
+            .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+            .env("RIMZ_MESSAGE_SETTLE_MS", "0")
+            .args(["message", "@claude", "--", "/compact"]),
+        "park slash prompt behind unacknowledged prompt",
+    );
+    let command_id = queued_id_from_stdout(&parked.stdout);
+    assert_eq!(
+        String::from_utf8_lossy(&parked.stdout).trim(),
+        format!("queued for @claude#feature-sent-hold ({command_id}) — behind {prompt_id}")
+    );
+    let command_id = MessageId::parse(&command_id).expect("message id");
+    assert_eq!(
+        trace_lines(&trace_log)[writes_after_prompt..]
+            .iter()
+            .filter(|line| line.contains("\taction\twrite"))
+            .collect::<Vec<_>>(),
+        Vec::<&String>::new(),
+        "a parked slash prompt must not reach the pane"
+    );
+    assert_eq!(
+        message_by_id(&env, &command_id).status,
+        MessageStatus::Queued
+    );
+    assert_eq!(message_by_id(&env, &prompt_id).status, MessageStatus::Sent);
+
+    run_hook(
+        &env,
+        json!({
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "sess-sent-hold",
+            "prompt": user_message("go"),
+            "worktree_branch": "feature-sent-hold",
+        }),
+        pane_env,
+    );
+    assert!(
+        env.store()
+            .list_message_history()
+            .expect("history")
+            .iter()
+            .any(|message| message.message_id == prompt_id
+                && message.status == MessageStatus::Delivered)
+    );
+    assert_eq!(card_status(), rimz::agents::AgentStatus::Running);
+    assert_eq!(
+        message_by_id(&env, &command_id).status,
+        MessageStatus::Queued,
+        "the acknowledgement must not deliver into the running turn"
+    );
+
+    run_hook(
+        &env,
+        json!({
+            "hook_event_name": "Stop",
+            "session_id": "sess-sent-hold",
+            "worktree_branch": "feature-sent-hold",
+        }),
+        pane_env,
+    );
+    run_success(
+        traced_rimz(&env, "zellij-sent-hold-trace.log")
+            .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+            .env("RIMZ_MESSAGE_SETTLE_MS", "0")
+            .args(["message", "deliver", "--message-id", command_id.as_str()]),
+        "deliver slash prompt at boundary",
+    );
+    assert_eq!(message_by_id(&env, &command_id).status, MessageStatus::Sent);
+    let lines = trace_lines(&trace_log);
+    let prompt_at = lines
+        .iter()
+        .position(|line| is_paste(line, &user_message("go")))
+        .expect("prompt paste");
+    let command_at = lines
+        .iter()
+        .position(|line| is_paste(line, &user_message("/compact")))
+        .unwrap_or_else(|| panic!("expected the slash prompt in the pane; trace: {lines:?}"));
+    assert!(
+        writes_after_prompt <= command_at && prompt_at < command_at,
+        "the slash prompt reaches the pane after the prompt; trace: {lines:?}"
+    );
+}
+
+#[test]
 fn busy_queue_confirmation_points_to_the_record_steer_command() {
     let env = Env::new();
     env.install_agent_hooks("claude");
