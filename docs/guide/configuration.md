@@ -685,7 +685,7 @@ An agent CLI sometimes dies while it starts, on a provider error that is gone a 
 
 #### Environment at launch
 
-Agents receive their launch cwd and the kind of shell their commands run under (`zsh`, `bash`) by default, so they can start with their environment in view. Git state is left out of the launch text: it can change between launch and the agent's first turn. To omit these optional environment bullets for your machine, set this in `~/.rimz/config.toml`:
+Agents receive their launch cwd and the kind of shell their commands run under (`zsh`, `bash`) by default, so they can start with their environment in view. A worktree launch also learns its base branch, when recorded, and where the primary checkout is. Current git state is left out of the launch text: it can change between launch and the agent's first turn. To omit these optional environment bullets for your machine, set this in `~/.rimz/config.toml`:
 
 ```toml
 [agents]

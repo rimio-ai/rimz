@@ -438,6 +438,7 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
     reminders.env = inputs
         .effective
         .is_none_or(|effective| effective.env_reminder);
+    reminders.worktree = crate::worktree::linked_worktree(inputs.cwd);
     reminders.agent_shell = inputs.agent_shell.map(Path::to_path_buf);
     let login = crate::agents::session_login(
         &request.kind,

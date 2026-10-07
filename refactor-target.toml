@@ -764,7 +764,8 @@ path = "crates/rimz/src/worktree"
 # Attribution probes the selected checkout's branch through the shared resolver.
 # PR branch choices and divergence facts cross the domain/CLI boundary.
 # Stale-base observations let the CLI warn without domain output.
-surface-budget = 60
+# LinkedWorktree and linked_worktree carry creation records into launch reminders (+2).
+surface-budget = 62
 
 # Ratchet CLI-to-CLI surfaces for future workflow rehomes out of the CLI.
 [[module]]
@@ -1104,8 +1105,10 @@ allowed-dependencies = [
     "lsp::registry",
     "mux::domain",
     "sandbox",
+    "worktree",
 ]
 # The exec wrapper and inspection share one read-only compiler and write boundary.
+# Worktree metadata supplies the launch reminder's base and primary checkout.
 # Apply refreshes the built-in consensus copy as best-effort enrichment.
 # Compile probes the provider cwd's shell and git state read-only for the launch reminder.
 # The exec wrapper resolves model aliases before the read-only compiler (+1).
