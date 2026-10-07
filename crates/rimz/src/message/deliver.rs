@@ -1282,6 +1282,31 @@ mod tests {
     }
 
     #[test]
+    fn explain_names_sent_prompt_and_claimed_fifo_blockers() {
+        let now = Timestamp::from_second(10_000).unwrap();
+        let receiver = agent("sess-receiver", AgentStatus::Idle);
+        let live = snapshot(receiver.clone(), true, now);
+        let candidate = message(&receiver, 2, "next");
+        let mut older = message(&receiver, 1, "first");
+        for status in [MessageStatus::Sent, MessageStatus::Claimed] {
+            older.status = status;
+            older.last_attempt_at = Some(now);
+            assert_eq!(
+                explain(&candidate, &[candidate.clone(), older.clone()], &live, now).verdict(),
+                DeliveryVerdict::BehindFifo {
+                    blocker: Some(older.message_id.clone())
+                }
+            );
+        }
+        older.status = MessageStatus::Sent;
+        older.body = MessageBody::Command;
+        assert_eq!(
+            explain(&candidate, &[older, candidate.clone()], &live, now).verdict(),
+            DeliveryVerdict::Ready
+        );
+    }
+
+    #[test]
     fn delivery_check_reports_first_blocker_and_passes_only_when_ready() {
         let mut check = ready_check();
         assert!(check.passes());
