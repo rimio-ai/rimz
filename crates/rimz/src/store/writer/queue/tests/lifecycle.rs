@@ -410,21 +410,34 @@ fn single_terminal_transitions_share_exact_history_and_event_contract() {
 }
 
 #[test]
-fn send_error_for_missing_message_archives_supplied_record_once() {
+fn give_up_after_cancel_keeps_one_terminal_record_and_event() {
     let q = Queue::new();
-    let supplied = q.record(1);
-
-    let errored = q
-        .record_send_error(&supplied, "pane vanished", "session")
+    let queued = q.queue(1);
+    let held = q
+        .claim_message_for_delivery(&queued.message_id, Timestamp::from_second(1_000).unwrap())
         .unwrap()
-        .expect("missing record fallback");
-
+        .unwrap();
+    assert!(
+        q.cancel_message(&held.message_id, "session", "canceled")
+            .unwrap()
+    );
+    let history = q.history();
+    let send_error = q
+        .record_send_error(&held, "pane vanished", "session")
+        .unwrap();
+    let result = q
+        .record_message_delivery_failures(
+            std::slice::from_ref(&held),
+            DeliveryFailureDisposition::Terminal,
+            "late failure",
+            "session",
+        )
+        .unwrap();
+    assert!(!result.head_sent);
     assert!(q.live().is_empty());
-    assert_eq!(q.history(), vec![errored.clone()]);
-    assert_eq!(errored.status, MessageStatus::Errored);
-    assert_eq!(errored.text, supplied.text);
-    assert_eq!(errored.last_error.as_deref(), Some("pane vanished"));
-    assert_eq!(errored.delivered_at, None);
-    assert_eq!(q.methods(), ["message.errored"]);
-    assert_eq!(q.reason("message.errored"), "pane vanished");
+    assert_eq!(q.history(), history);
+    assert_eq!(send_error, None);
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0].status, MessageStatus::Canceled);
+    assert_eq!(q.methods(), ["message.queued", "message.canceled"]);
 }

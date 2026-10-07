@@ -785,6 +785,9 @@ impl MessageRecord {
                     .unwrap_or(self.updated_at),
             ),
             MessageStatus::Sent => self.retry_after.or_else(|| self.sent_reconcile_deadline()),
+            MessageStatus::Claimed => {
+                Some(self.last_attempt_at.unwrap_or(self.updated_at) + CLAIM_TTL)
+            }
             _ => None,
         }
     }

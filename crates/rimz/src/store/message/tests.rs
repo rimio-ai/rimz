@@ -685,6 +685,21 @@ fn wait_deadline_arms_queue_retry_schedule_and_sent_reconciliation() {
         ),
         (
             MessageRecord {
+                status: MessageStatus::Claimed,
+                last_attempt_at: Some(now),
+                ..message.clone()
+            },
+            Some(now + CLAIM_TTL),
+        ),
+        (
+            MessageRecord {
+                status: MessageStatus::Claimed,
+                ..message.clone()
+            },
+            Some(updated_at + CLAIM_TTL),
+        ),
+        (
+            MessageRecord {
                 status: MessageStatus::Delivered,
                 ..message
             },

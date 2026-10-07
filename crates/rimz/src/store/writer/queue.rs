@@ -31,6 +31,7 @@ impl MessageRecord {
 pub struct ReconcileReport {
     pub requeued: usize,
     pub timed_out: usize,
+    pub abandoned: usize,
 }
 
 /// What a deferred delivery does to the message's recorded blocker. The store applies the
@@ -88,7 +89,6 @@ pub struct DeliverySweepUpdate {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct DeliveryFailureResult {
-    head_found: bool,
     pub head_sent: bool,
 }
 
@@ -373,10 +373,9 @@ fn normalize_terminal(
 }
 
 /// The record a sender was handed holds the live record when the ids match, the live record is
-/// still open, and the claim stamp (`attempts`, `last_attempt_at`) is equal. Only a claim, a
-/// release, or a stale-`Sent` requeue changes the stamp, so a sender whose stamp matches is the one
-/// whose attempt it is. A fresh send takes no claim: the record it enqueued holds the live one
-/// until another sender claims it.
+/// `Claimed`, and the claim stamp (`attempts`, `last_attempt_at`) is equal. Every attempt holds a
+/// claim, including a fresh send. Retry and release clear the stamp, so an unclaimed record is held by
+/// nobody.
 ///
 /// Giving up (retry, error, release) needs the hold, so one sender cannot end another's attempt.
 /// Recording a landed write needs none, because the text is already in the pane. A terminal record
@@ -384,7 +383,7 @@ fn normalize_terminal(
 /// creates none.
 fn holds(held: &MessageRecord, live: &MessageRecord) -> bool {
     held.message_id == live.message_id
-        && live.status.is_open()
+        && live.status == MessageStatus::Claimed
         && held.attempts == live.attempts
         && held.last_attempt_at == live.last_attempt_at
 }
@@ -396,6 +395,9 @@ fn fail_delivery(
     now: Timestamp,
 ) -> MessageUpdate {
     message.requeue(now, error);
+    if disposition == DeliveryFailureDisposition::Retry {
+        message.last_attempt_at = None;
+    }
     if disposition == DeliveryFailureDisposition::Terminal {
         MessageUpdate::Finalize {
             status: MessageStatus::Errored,
@@ -512,6 +514,13 @@ impl Store {
         Ok(message::read_queue(&self.inner.paths.messages_dir)?)
     }
 
+    pub fn message_claims_held(&self, held: &[MessageRecord]) -> Result<bool> {
+        let live = self.list_messages()?;
+        Ok(held
+            .iter()
+            .all(|claim| live.iter().any(|message| holds(claim, message))))
+    }
+
     pub fn list_message_history(&self) -> Result<Vec<MessageRecord>> {
         Ok(message::list_history(
             &self.inner.paths.message_history_dir,
@@ -538,6 +547,32 @@ impl Store {
             queue.upsert(message.clone());
             queue.stage_event(event);
             Ok(())
+        })
+    }
+
+    #[must_use = "durability barrier; check the result"]
+    pub fn queue_claimed_message(
+        &self,
+        message: &MessageRecord,
+        session_name: &str,
+        now: Timestamp,
+    ) -> Result<MessageRecord> {
+        let event =
+            EventEnvelope::message_event(message, session_name, MessageEventMethod::Queued, None);
+        self.commit_queue(|queue| {
+            queue.upsert(message.clone());
+            // Upsert guarantees the id exists, and one index produces one claim.
+            let index = queue
+                .live()
+                .iter()
+                .position(|live| live.message_id == message.message_id)
+                .expect("upserted record has a claim index");
+            let claimed = queue
+                .claim_indices(std::slice::from_ref(&index), now)
+                .pop()
+                .expect("one claim index returns one message");
+            queue.stage_event(event);
+            Ok(claimed)
         })
     }
 
@@ -894,12 +929,12 @@ impl Store {
         })
     }
 
-    /// Requeue or time out stale pane writes after their acknowledgement
-    /// window. An open receiver compaction bracket holds a `Sent` record
+    /// Requeue expired claims, abandoning them at the attempt cap, and requeue
+    /// or time out stale pane writes after their acknowledgement window. An open receiver compaction bracket holds a `Sent` record
     /// without a time limit because the composer queues the original write and
     /// submits it when compaction ends; resending would duplicate the turn.
     #[must_use = "durability barrier; check the result"]
-    pub fn reconcile_stale_sent_messages(
+    pub fn reconcile_stale_messages(
         &self,
         session_name: &str,
         now: Timestamp,
@@ -923,6 +958,22 @@ impl Store {
             };
             let mut report = ReconcileReport::default();
             let updated = queue.apply_all(session_name, now, |message| {
+                if message.status == MessageStatus::Claimed
+                    && claim_expired(message.last_attempt_at, now)
+                {
+                    const REASON: &str = "claim expired; sender gone";
+                    let update =
+                        fail_delivery(message, DeliveryFailureDisposition::Retry, REASON, now);
+                    if matches!(update, MessageUpdate::Finalize { .. }) {
+                        report.abandoned += 1;
+                        return update;
+                    }
+                    report.requeued += 1;
+                    return MessageUpdate::Rewrite {
+                        method: MessageEventMethod::Queued,
+                        reason: Some(REASON.to_owned()),
+                    };
+                }
                 if message.status != MessageStatus::Sent {
                     return MessageUpdate::Keep;
                 }
@@ -997,8 +1048,7 @@ impl Store {
                     existing.pane_id = held.pane_id.clone();
                     existing
                 }
-                Some(_) => return Ok(None),
-                None => held.clone(),
+                Some(_) | None => return Ok(None),
             };
             message.last_error = Some(error.to_owned());
             let errored = queue.terminalize(
@@ -1016,7 +1066,6 @@ impl Store {
     pub fn record_message_delivery_failures(
         &self,
         held: &[MessageRecord],
-        fallback_head: Option<&MessageRecord>,
         disposition: DeliveryFailureDisposition,
         error: &str,
         session_name: &str,
@@ -1029,7 +1078,6 @@ impl Store {
             let mut result = DeliveryFailureResult::default();
             queue.apply_all(session_name, now, |message| {
                 if message.message_id == *head_id {
-                    result.head_found = true;
                     result.head_sent = message.status == MessageStatus::Sent;
                 }
                 if !held.iter().any(|claim| holds(claim, message)) {
@@ -1037,19 +1085,6 @@ impl Store {
                 }
                 fail_delivery(message, disposition, error, now)
             });
-            if !result.head_found
-                && let Some(fallback) = fallback_head
-            {
-                let mut fallback = fallback.clone();
-                fallback.last_error = Some(error.to_owned());
-                queue.terminalize(
-                    fallback,
-                    MessageStatus::Errored,
-                    session_name,
-                    Some(error),
-                    now,
-                );
-            }
             Ok(result)
         })
     }

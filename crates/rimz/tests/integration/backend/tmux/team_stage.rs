@@ -254,7 +254,7 @@ done
         .sent_reconcile_deadline()
         .expect("the notice is sent");
     let report = store
-        .reconcile_stale_sent_messages(&workspace.session_name, deadline, 0)
+        .reconcile_stale_messages(&workspace.session_name, deadline, 0)
         .unwrap();
     assert_eq!(report.timed_out, 1);
     hook("SessionStart");

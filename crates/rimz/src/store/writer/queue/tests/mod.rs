@@ -222,7 +222,6 @@ impl SingularQueueTestExt for Store {
     ) -> Result<DeliveryFailureResult> {
         self.record_message_delivery_failures(
             std::slice::from_ref(held),
-            None,
             DeliveryFailureDisposition::Retry,
             error,
             session_name,
