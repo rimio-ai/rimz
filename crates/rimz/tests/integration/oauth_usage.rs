@@ -973,7 +973,10 @@ fn accounts_redeem_non_terminal_refuses_before_provider_reads() {
 }
 
 /// Answer `count` requests, each with the body of the route its request line
-/// starts with, and return every request with its body.
+/// starts with, and return every request with its body. One request past
+/// `count` is served and returned too when it arrives within
+/// `STRAY_REQUEST_WINDOW` of the last expected one, so a caller's count
+/// assertion fails on a request the test did not expect.
 fn serve_routes(
     routes: Vec<(&'static str, String)>,
     count: usize,
@@ -987,6 +990,8 @@ fn serve_routes(
     )
 }
 
+const STRAY_REQUEST_WINDOW: Duration = Duration::from_millis(500);
+
 fn serve_http_routes(
     routes: Vec<(&'static str, u16, String)>,
     count: usize,
@@ -996,8 +1001,15 @@ fn serve_http_routes(
     listener.set_nonblocking(true).unwrap();
     let handle = thread::spawn(move || {
         let mut requests = Vec::new();
-        let mut deadline = Instant::now() + Duration::from_secs(15);
-        while requests.len() < count {
+        let accept_window = |served: usize| {
+            if served < count {
+                Duration::from_secs(15)
+            } else {
+                STRAY_REQUEST_WINDOW
+            }
+        };
+        let mut deadline = Instant::now() + accept_window(0);
+        while requests.len() <= count {
             let (mut stream, _) = match listener.accept() {
                 Ok(connection) => connection,
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
@@ -1009,7 +1021,6 @@ fn serve_http_routes(
                 }
                 Err(error) => panic!("accept request: {error}"),
             };
-            deadline = Instant::now() + Duration::from_secs(15);
             stream.set_nonblocking(false).expect("set blocking stream");
             stream
                 .set_read_timeout(Some(Duration::from_secs(5)))
@@ -1051,6 +1062,7 @@ fn serve_http_routes(
                 .get(previous.min(matching.len().saturating_sub(1)))
                 .map_or((404, ""), |(_, status, body)| (*status, body.as_str()));
             requests.push(request);
+            deadline = Instant::now() + accept_window(requests.len());
             if status == 0 {
                 continue;
             }
