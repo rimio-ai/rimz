@@ -128,33 +128,66 @@ pub fn read_all(path: &Path) -> Result<Vec<EventEnvelope>> {
 /// never claims bytes the fold skipped. A torn record followed by more frames
 /// is corruption and stays a hard error.
 pub(crate) fn read_from_offset(path: &Path, start: u64) -> Result<(Vec<EventEnvelope>, u64)> {
-    // A missing log yields no rows and leaves the extent at `start`: a log
-    // rotated away mid-read must not rewind the caller's cursor.
-    let rows = frame::read_rows(path, start)?;
     let mut events = Vec::new();
+    let end = visit_from_offset(path, start, |event| events.push(event))?;
+    Ok((events, end))
+}
+
+/// Visit complete frames without retaining the log tail in memory.
+/// Returns the offset after the last committed frame, with the same torn-tail
+/// and middle-corruption rules as the collecting reader.
+pub fn visit_from_offset(
+    path: &Path,
+    start: u64,
+    mut visit: impl FnMut(EventEnvelope),
+) -> Result<u64> {
+    use std::io::{BufRead, BufReader, Seek, SeekFrom};
+
+    let mut file = match std::fs::File::open(path) {
+        Ok(file) => file,
+        Err(source) if source.kind() == io::ErrorKind::NotFound => return Ok(start),
+        Err(source) => {
+            return Err(EventLogErr::Io {
+                path: path.to_path_buf(),
+                source,
+            });
+        }
+    };
+    let io_error = |source| EventLogErr::Io {
+        path: path.to_path_buf(),
+        source,
+    };
+    file.seek(SeekFrom::Start(start)).map_err(io_error)?;
+    let mut reader = BufReader::new(file);
+    let mut bytes = Vec::new();
     let mut end = start;
-    let last_index = rows.len().saturating_sub(1);
-    for (idx, (at, terminated, bytes)) in rows.into_iter().enumerate() {
-        let frame_len = bytes.len() as u64 + u64::from(terminated);
-        match frame::decode_row(at, terminated, &bytes) {
+    loop {
+        bytes.clear();
+        let read = reader.read_until(b'\n', &mut bytes).map_err(io_error)?;
+        if read == 0 {
+            return Ok(end);
+        }
+        testkit::count_bytes_read(read as u64);
+        let terminated = bytes.last() == Some(&b'\n');
+        if terminated {
+            bytes.pop();
+        }
+        match frame::decode_row(end, terminated, &bytes) {
             Ok(event) => {
-                events.push(event);
-                end = at + frame_len;
+                visit(event);
+                end += read as u64;
             }
-            Err(err) if err.is_corruption() && idx == last_index => {
+            Err(err) if err.is_corruption() && reader.fill_buf().map_err(io_error)?.is_empty() => {
                 if terminated {
-                    warn!(offset = at, error = %err, "skipping torn trailing event-log record");
+                    warn!(offset = end, error = %err, "skipping torn trailing event-log record");
                 } else {
-                    // An in-flight append a lock-free reader raced — folded by
-                    // the wakeup that follows its completion. Routine, not noise.
-                    debug!(offset = at, "stopping before an in-flight tail frame");
+                    debug!(offset = end, "stopping before an in-flight tail frame");
                 }
-                break;
+                return Ok(end);
             }
             Err(err) => return Err(err),
         }
     }
-    Ok((events, end))
 }
 
 /// Always-on observability seam: bytes the row scan actually read, so the

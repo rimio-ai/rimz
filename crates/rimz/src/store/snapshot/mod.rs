@@ -27,6 +27,8 @@ use crate::store::event_log::EventLogErr;
 
 pub(super) use assemble::{build_from, rebuild};
 pub use assemble::{build_with_cursor, read_fresh_latest};
+pub(super) use fold::lifecycle_follow_seed;
+pub use fold::lifecycle_log_generation;
 #[cfg(feature = "testkit")]
 pub(crate) use fold::testkit as fold_testkit;
 pub use fold::{ResumeOutcome, RollupCursor};
@@ -34,7 +36,6 @@ pub(super) use fold::{
     catch_up_rollup, load_full_agent, prune_carryover, reseed_rollup_cache_for_rotation,
     stage_carryover_for_rotation,
 };
-pub(super) use fold::{lifecycle_follow_seed, lifecycle_log_generation};
 pub use panes::{
     HookPaneRecoveryCandidate, HookPaneRecoveryContext, HookPaneRecoveryMethod,
     HookPaneRecoveryPhase, HookPaneRecoverySelection,
