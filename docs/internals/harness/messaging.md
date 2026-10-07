@@ -123,7 +123,7 @@ Queued ──► Claimed ──► Sent ──► Delivered
 
 Every attempt, including a fresh send and a compact-first command, holds a claim before writing and attempts to register its recovery wake immediately after claiming. If wake registration fails, it warns and continues the send: wakeups improve recovery latency, never durable delivery truth. Under the pane lock, before pacing or writing any bytes, the sender rechecks that every batch member is still held; if any claim was lost, it writes nothing, releases the remaining holds, and stops without settling a failure. Retrying, erroring, or releasing a record takes the record the sender was handed, and the writer applies the give-up only while the live record is `Claimed` and its `attempts` and `last_attempt_at` still match (the hold). A retry clears the stamp, making the record claimable immediately; an unclaimed record is held by nobody. A sender that has no such record (the boundary helper in `synthetic.rs`) can only settle a `Queued` record and leaves a `Claimed` one alone. Recording `Sent` needs no hold, because the text is already in the pane, but it only marks a live record: a record that a cancel, clear, or archive already finalized stays in that terminal state and is not recreated. A give-up on a record that is no longer live writes nothing, preserving its single terminal history entry and event.
 
-`Sent` means bytes reached the pane. The record stays live until a lifecycle hook confirms it or the reconciler gives up, because a write does not prove the agent took the text.
+`Sent` means bytes reached the pane. The record stays live until a lifecycle hook confirms it or the reconciler gives up, because a write does not prove the agent took the text. A `Sent` prompt is not an open state, but still holds the card's boundary in its delivery lane until acknowledged, requeued, or timed out.
 
 `Delivered` means the agent acknowledged: `TurnStarted` for a `Prompt`, `Compacting` for a `Command`. Neither event confirms the other body.
 
@@ -195,7 +195,7 @@ The park-or-live decision (`dispatch_decision`) takes the first rule that applie
 2. A schedule or an unmet condition parks.
 3. A receiver that cannot take a prompt parks with a reason: its effective status, or its native-input wait. Readiness comes from the exact pane binding when there is one and from the durable card otherwise.
 4. No resolved pane parks.
-5. A ready queued record or an unexpired non-`Resume` claim for the same card parks, so a fresh send never jumps the queue or an in-flight write. Expired claims and the `Resume` lane do not block.
+5. A ready queued record, an unexpired non-`Resume` claim, or an unacknowledged non-`Resume` `Sent` prompt for the same card parks, so a fresh send never jumps the queue or an in-flight write. Expired claims and the `Resume` lane do not block.
 6. Otherwise the target goes live.
 
 The hook preflight in step 6 exists because turn-end hooks are what release parked text: a parked record for a kind without installed, trusted hooks would never deliver, so dispatch refuses it. The preflight runs once per login key (kind plus login account) inside the per-target loop, so in a fan-out a later target's preflight failure returns an error after earlier targets were already queued or sent.
@@ -217,7 +217,7 @@ An address that matches nothing, after the durable fallback, writes a terminal `
 | 1 | `not_before` has passed | `Scheduled` | The clock, via the elder sweep |
 | 2 | Every `after` condition stamped | `WaitingOnAfter` | The referenced agent reaching its gate with no ready queued work |
 | 3 | Every `when` condition stamped | `WaitingOnWhen` | The watched agent completing its dwell in the raw status |
-| 4 | Oldest deliverable record for this card and lane | `BehindFifo` | The blocking record settling |
+| 4 | Oldest live record for this card and lane: a deliverable `Queued` or `Claimed` record, or a `Sent` prompt awaiting its turn-start acknowledgement | `BehindFifo` | The blocking record settling, or the prompt's acknowledgement or reconciliation |
 | 5 | The receiver card exists in the snapshot | `ReceiverGone` | The agent reappearing, or GC archiving the record |
 | 6 | The receiver has not ended | `ReceiverEnded` | The sweep archives open records for the card and unmet `when` conditions watching it |
 | 7 | Not inside the compaction window | `Compacting` | `CompactionEnded`, or the 90 s window expiring |
@@ -236,6 +236,8 @@ The compaction window at check 7 closes every gate, `Resume` included. A receive
 `DeliveryGate::Resume` has no flag. Auto-continue stamps it on its own nudge, and check 10 re-verifies at delivery time that the park is still resumable. `Done` and `Any` records stay parked while an agent is paused, so a rate-limited agent does not receive a pile of user text the moment it waits. Both open for `Sleeping`, so a resting agent with an armed one-shot wait can receive a message without consuming that wait; `Resume` does not open for `Sleeping`.
 
 Scheduled, condition-blocked, and `Resume`-gated records are left out of the FIFO scan, so they never block a later record that could deliver now. Resume nudges also live in their own lane, so a wakeup never queues behind user text that cannot deliver until after it.
+
+A `Sent` prompt keeps its FIFO slot while its turn-start acknowledgement is pending, even if the card still reads `Idle`: the store already knows a prompt was submitted before the hook commits. The selector and explain scan share this hold with `Queued` and `Claimed` records, using the same card, lane, and deliverability checks (`crates/rimz/src/store/message.rs::delivery_batch_indices`, `crates/rimz/src/store/message.rs::older_ready_blocker`). Reconciliation either requeues the prompt as the older head or times it out and releases the held record. A `Sent` command does not hold the card: the provider's composer queues a paste during compaction, and holding for the command's 180 s acknowledgement window would freeze prompts when its hook never arrives. Steer and interrupt bypass FIFO, including the prompt hold.
 
 For `ReceiverGone`, `rimz message show` consults the audit rollup. When the durable card survives but runtime projection expelled it, the verdict names the card's last-seen time, says no live process claims it, and points at `rimz agents resume`; the verdict and its JSON name are the same either way.
 
@@ -259,7 +261,7 @@ The same reactor nudges the sweep when the event's agent is referenced by an unm
 
 1. **Settle.** Sleep 400 ms (`RIMZ_MESSAGE_SETTLE_MS`) so the agent's state stabilizes after the hook.
 2. **Re-check.** Run the ordered check against a fresh snapshot. The hook's choice is a hint; this check decides.
-3. **Claim.** Under the workspace lock, move the compatible FIFO [batch](#batching) from `Queued` to `Claimed` and bump each `attempts` in one transaction.
+3. **Claim.** Under the workspace lock, refuse a head behind an older deliverable holding record in its card's lane (`Queued`, `Claimed`, or a `Sent` prompt). Otherwise move the compatible FIFO [batch](#batching) from `Queued` to `Claimed` and bump each `attempts` in one transaction.
 4. **Write.** Send through the [pane write](#writing-to-the-pane). If [smart compaction](#smart-compaction) fires, type the compact command alone and release the prompt batch back to `Queued` without an attempt penalty.
 5. **Record.** A successful write moves the batch to `Sent`, live until confirmed.
 
@@ -513,7 +515,7 @@ The sweep is single-flight through a `message-sweep.lock` file lock, so overlapp
 
 Condition evaluation inside a sweep is one transaction. It evaluates every unmet condition against one context-enriched snapshot, applies every stamp, retry floor, and watched-agent archive together, reloads the pending records, and delivers newly eligible heads from the same snapshot in the same run. A new stamp emits `message.after_met` or `message.when_met`.
 
-The sweep backs off because the elder ticks often. When it cannot deliver a ready head (gate closed, ask waiting, compacting, no pane), it sets `retry_after` one delivery window ahead, so the elder retries at most once per window. `retry_after` is only a wake hint: it does not affect `is_ready`, FIFO position, claim leases, or hook-driven delivery.
+The sweep backs off because the elder ticks often. When it cannot deliver a ready head (gate closed, ask waiting, compacting, no pane, behind a `Sent` prompt), it sets `retry_after` one delivery window ahead, so the elder retries at most once per window. `retry_after` is only a wake hint: it does not affect `is_ready`, FIFO position, claim leases, or hook-driven delivery.
 
 A `NoPane` back-off also records the blocker in `last_error`, in the same queue commit and in the words `rimz message show` prints. An ended receiver is terminal instead: the sweep archives open records for the card, plus records with unmet `when` conditions watching it, only when their `enqueued_at` is at or before the observed `ended_at`. The writers apply this cutoff under the workspace lock so a concurrent resume's newer messages survive a stale sweep snapshot; the end-hook reactor keeps its unbounded archive. The receiver reason is `receiver ended; rimz message @<handle> resumes it` for a launched child, or `receiver ended` otherwise. Other refused heads, including a starting provider, move `retry_after` alone. The deferred record stays `Queued` with its pane pin and its `attempts` untouched, and the next claim clears the error.
 
