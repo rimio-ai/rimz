@@ -10,6 +10,7 @@ use std::process::Stdio;
 pub(in crate::cli::agents_cmd) struct SuperviseDutyRequest {
     workspace_id: WorkspaceId,
     session_name: String,
+    wrapper_pid: u32,
     duty: Duty,
 }
 
@@ -26,6 +27,7 @@ pub(super) enum Duty {
         child_kind: AgentKind,
         child_launch_id: AgentSessionId,
         child_pane: Option<PaneId>,
+        pane_strikes: bool,
     },
     CardEvidence {
         kind: AgentKind,
@@ -43,17 +45,23 @@ pub(super) fn command(
         workspace_id,
         session_name,
         duty,
+        wrapper_pid: std::process::id(),
     };
     let mut command = Command::new(rimz::proc::rimz_exe());
     command
         .args(["agents", "supervise-duty", "--request"])
         .arg(serde_json::to_string(&request)?)
         .stdin(Stdio::null())
-        .stdout(Stdio::null());
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
     Ok(command)
 }
 
-pub(super) fn confirm(workspace_id: &WorkspaceId, seed: &WatchdogSeed) -> ProbeConfirm {
+pub(super) fn confirm(
+    workspace_id: &WorkspaceId,
+    seed: &WatchdogSeed,
+    pane_strikes: bool,
+) -> ProbeConfirm {
     let output = command(
         workspace_id.clone(),
         seed.session_name.clone(),
@@ -61,6 +69,7 @@ pub(super) fn confirm(workspace_id: &WorkspaceId, seed: &WatchdogSeed) -> ProbeC
             child_kind: seed.child_kind.clone(),
             child_launch_id: seed.child_launch_id.clone(),
             child_pane: seed.child_pane.clone(),
+            pane_strikes,
         },
     )
     .and_then(|mut command| {
@@ -70,15 +79,8 @@ pub(super) fn confirm(workspace_id: &WorkspaceId, seed: &WatchdogSeed) -> ProbeC
     match output {
         Ok(output) if output.status.code() == Some(0) => ProbeConfirm::Ended,
         Ok(output) if output.status.code() == Some(3) => {
-            match serde_json::from_slice::<ParentAnswer>(&output.stdout) {
-                Ok(answer) => ProbeConfirm::Alive {
-                    members: answer
-                        .members
-                        .into_iter()
-                        .map(|member| (member.agent_id, member.ended))
-                        .collect(),
-                    parent_pane: answer.parent_pane,
-                },
+            match serde_json::from_slice::<WatchdogSeed>(&output.stdout) {
+                Ok(answer) => ProbeConfirm::Alive(Box::new(answer)),
                 Err(error) => {
                     tracing::debug!(%error, "invalid parent confirmation answer");
                     ProbeConfirm::Unknown
@@ -97,6 +99,8 @@ pub(super) fn confirm(workspace_id: &WorkspaceId, seed: &WatchdogSeed) -> ProbeC
 }
 
 pub(in crate::cli::agents_cmd) fn run(request: SuperviseDutyRequest) -> Result<()> {
+    #[cfg(unix)]
+    rimz::child_process::CleanupSignalMask::unblock()?;
     let ctx = Ctx::for_workspace(request.workspace_id, None)?;
     let context = |run_id| RunExecContext {
         run_id,
@@ -108,7 +112,17 @@ pub(in crate::cli::agents_cmd) fn run(request: SuperviseDutyRequest) -> Result<(
         Duty::Strand { run_id } => {
             let context = context(run_id);
             let mut previous = None;
-            while !run_strand_once(&context, &mut previous)? {
+            let wrapper_is_parent = || {
+                #[cfg(unix)]
+                {
+                    std::os::unix::process::parent_id() == request.wrapper_pid
+                }
+                #[cfg(not(unix))]
+                {
+                    true
+                }
+            };
+            while wrapper_is_parent() && !run_strand_once(&context, &mut previous)? {
                 std::thread::sleep(PARK_STRAND_POLL);
             }
             true
@@ -123,6 +137,7 @@ pub(in crate::cli::agents_cmd) fn run(request: SuperviseDutyRequest) -> Result<(
             child_kind,
             child_launch_id,
             child_pane,
+            pane_strikes,
         } => {
             let (ended, answer) = run_parent_probe(
                 &ctx.store,
@@ -130,6 +145,7 @@ pub(in crate::cli::agents_cmd) fn run(request: SuperviseDutyRequest) -> Result<(
                 child_launch_id,
                 child_pane,
                 request.session_name,
+                pane_strikes,
             )?;
             serde_json::to_writer(std::io::stdout().lock(), &answer)?;
             writeln!(std::io::stdout().lock())?;
@@ -202,16 +218,15 @@ fn repair_digest(context: &RunExecContext, record: &rimz::store::run::RunRecord)
     }
 }
 
-#[derive(Serialize, Deserialize)]
-struct ParentMember {
-    agent_id: AgentSessionId,
-    ended: bool,
-}
-
-#[derive(Serialize, Deserialize)]
-struct ParentAnswer {
-    members: Vec<ParentMember>,
-    parent_pane: Option<PaneId>,
+pub(super) fn parent_cursor(paths: &rimz::StatePaths) -> Result<rimz::store::event_log::LogExtent> {
+    let _guard = rimz::disk::lock::WorkspaceLock::acquire(&paths.workspace_lock)?;
+    loop {
+        let generation = rimz::store::snapshot::lifecycle_log_generation(paths);
+        let offset = std::fs::metadata(&paths.events_log).map_or(0, |meta| meta.len());
+        if generation == rimz::store::snapshot::lifecycle_log_generation(paths) {
+            return Ok(rimz::store::event_log::LogExtent { generation, offset });
+        }
+    }
 }
 
 fn run_parent_probe(
@@ -220,7 +235,9 @@ fn run_parent_probe(
     child_launch_id: AgentSessionId,
     child_pane: Option<PaneId>,
     session_name: String,
-) -> Result<(bool, ParentAnswer)> {
+    pane_strikes: bool,
+) -> Result<(bool, WatchdogSeed)> {
+    let cursor = parent_cursor(store.paths())?;
     let projection = store.runtime_projection(rimz::store::runtime::RuntimeScope::Audit)?;
     let seed = rimz::harness::parent_watch::seed(
         &projection.agents,
@@ -228,14 +245,14 @@ fn run_parent_probe(
         child_launch_id,
         child_pane,
         session_name,
-        rimz::store::event_log::LogExtent {
-            generation: 0,
-            offset: 0,
-        },
+        cursor,
     )
     .context("parent launch is not in the runtime projection")?;
     let mut ended = !seed.members.is_empty() && seed.members.values().all(|ended| *ended);
-    if !ended && let Some(parent_pane) = &seed.parent_pane {
+    if pane_strikes
+        && !ended
+        && let Some(parent_pane) = &seed.parent_pane
+    {
         let backend = rimz::mux::backend_for(parent_pane.mux());
         let cached_present = backend
             .cached_pane_roster(&seed.session_name, &store.paths().workspace_id)
@@ -254,17 +271,7 @@ fn run_parent_probe(
                 .any(|pane| pane.pane_id == *parent_pane);
         }
     }
-    Ok((
-        ended,
-        ParentAnswer {
-            members: seed
-                .members
-                .into_iter()
-                .map(|(agent_id, ended)| ParentMember { agent_id, ended })
-                .collect(),
-            parent_pane: seed.parent_pane,
-        },
-    ))
+    Ok((ended, seed))
 }
 
 pub(super) fn run_card_evidence(

@@ -272,7 +272,8 @@ path = "crates/rimz/src/child_process.rs"
 # The `Command` applier serves the browser opener and the synchronous loop run, and
 # the unrestored reaping entry serves the wait watcher alone (+2).
 # Same-PID wrapper re-exec adopts its existing provider by pid (+1).
-surface-budget = 21
+# The wrapper and worker creation share the native cleanup-signal mask (+3).
+surface-budget = 24
 
 [[module]]
 path = "crates/rimz/src/cli"
@@ -387,7 +388,8 @@ allowed-dependencies = [
 # The keep-warm producer cache path is built here for the refresh lane, enrichment, and the consumer stamp (+1).
 # A session's sidebar host appends its stderr to one classed state log (+1).
 # Receipt monitoring stats the queued-message file through StatePaths::message_queue_file.
-surface-budget = 221
+# LaunchPlan delegates the launch-and-PID handoff path to classed temp units (+1).
+surface-budget = 222
 
 [[module]]
 path = "crates/rimz/src/forge"
@@ -516,7 +518,9 @@ path = "crates/rimz/src/harness"
 # ProbeConfirm carries authoritative one-shot death or successor answers (+1).
 # seed resolves the same parent launch for startup and confirmation (+1).
 # The parked monitor drains the parent-changed edge through ParentWatch::take_parent_changed (+1).
-surface-budget = 754
+# LaunchPlan exposes only the handoff path using its privately resolved temp owner (+1).
+# The supervisor wakes receipt-cadence tail drains through ParentWatch (+1).
+surface-budget = 756
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -819,7 +823,14 @@ path = "crates/rimz/src/cli/agents_cmd/exec/duty.rs"
 # Duty and command let the parked monitor spawn its store-owning work (+2).
 # confirm supplies the watchdog's one-shot authoritative answer (+1).
 # run_card_evidence keeps startup and helper provisional-card rules identical (+1).
-surface-budget = 6
+# parent_cursor captures rotation-consistent seeds for startup and confirmation (+1).
+surface-budget = 7
+
+[[module]]
+path = "crates/rimz/src/cli/agents_cmd/exec/supervisor.rs"
+# park/run/error termination and the four-field outcome cross only to fat settlement (+8).
+# Fold-free handoff and run finalizers cover errors before and after park (+2).
+surface-budget = 10
 
 [[module]]
 path = "crates/rimz/src/cli/agents_cmd/launch.rs"
@@ -1157,7 +1168,8 @@ allowed-dependencies = [
 # The exec wrapper resolves model aliases before the read-only compiler (+1).
 # Compile resolves the temp-unit owner from the parent's launch row (`address`) and pins the wrapper's Zellij socket base (`mux::domain`); `agents show` shares the owner rule (+1).
 # The exec wrapper decides its launch through `prepare_exec` and its `ExecPreparation` outcome; `resolve_model` stays harness-visible for resume tests (+2).
-surface-budget = 11
+# The wrapper's handoff path retains the plan's resolved temp owner (+1).
+surface-budget = 12
 
 [[module]]
 path = "crates/rimz/src/harness/run.rs"

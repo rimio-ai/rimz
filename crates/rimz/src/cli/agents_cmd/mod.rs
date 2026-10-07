@@ -694,6 +694,8 @@ struct ExecArgs {
     worktree_path: Option<PathBuf>,
     #[arg(long, hide = true, value_name = "JSON")]
     request: String,
+    #[arg(long, hide = true)]
+    supervise: Option<PathBuf>,
 }
 
 pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {

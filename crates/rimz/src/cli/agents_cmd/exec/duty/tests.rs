@@ -423,6 +423,7 @@ fn parent_probe_confirms_ended_launch_but_preserves_live_successor_and_legacy_al
                 "child-launch".into(),
                 None,
                 "room".into(),
+                false,
             )
             .unwrap()
         };
@@ -437,7 +438,42 @@ fn parent_probe_confirms_ended_launch_but_preserves_live_successor_and_legacy_al
             answer
                 .members
                 .iter()
-                .any(|member| member.agent_id.as_str() == "NEW" && !member.ended)
+                .any(|(agent_id, ended)| agent_id.as_str() == "NEW" && !ended)
+        );
+        store
+            .append_event(&EventEnvelope::agent_attached(
+                workspace.workspace_id.clone(),
+                "room",
+                &kind,
+                rimz::store::event::AgentAttachPayload {
+                    agent_id: "NEW".into(),
+                    launch_id: Some("L".into()),
+                    pane_id: PaneId::parse("tmux:%77").unwrap(),
+                    record: None,
+                    tier: None,
+                    mode: None,
+                    isolation: None,
+                    effective_isolation: None,
+                    login: None,
+                    pane_pid: None,
+                    runtime_owner: rimz::store::runtime::current_process_owner(
+                        rimz::pane::RuntimeOwnerKind::Agent,
+                        "NEW",
+                    ),
+                },
+            ))
+            .unwrap();
+        let answer = run_parent_probe(
+            &store,
+            kind.clone(),
+            "child-launch".into(),
+            None,
+            "room".into(),
+            false,
+        );
+        assert!(
+            answer.is_ok_and(|(ended, _)| !ended),
+            "a follower nomination must preserve a live successor without requiring a pane read"
         );
     }
 }

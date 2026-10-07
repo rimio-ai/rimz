@@ -1,5 +1,6 @@
 use super::*;
 mod duty;
+mod supervisor;
 use crate::cli::{open_store, worktree};
 use duty::Duty;
 pub(super) use duty::{SuperviseDutyRequest, run as run_supervise_duty};
@@ -8,7 +9,7 @@ use rimz::store::snapshot::find_agent;
 use std::cell::RefCell;
 use std::io::IsTerminal;
 use std::os::fd::AsFd;
-use std::sync::mpsc;
+use supervisor::ExecOutcome;
 
 const PARK_STRAND_POLL: Duration = Duration::from_secs(5);
 const PARENT_RECEIPT_POLL: Duration = Duration::from_secs(1);
@@ -16,6 +17,19 @@ const AGENT_ENDED_EVENT: &str = "rimz.agent-ended";
 const AGENT_RESUMED_EVENT: &str = "rimz.agent-resumed";
 
 pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
+    #[cfg(unix)]
+    let handoff = args.supervise.clone();
+    let result = run_exec_inner(args, globals);
+    #[cfg(unix)]
+    if let Err(error) = &result
+        && let Some(path) = handoff
+    {
+        supervisor::fail_handoff(&path, error);
+    }
+    result
+}
+
+fn run_exec_inner(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())
         .context("resolving the agent launch workspace")?;
     let envelope = rimz::harness::launch::decode_exec_envelope(
@@ -30,6 +44,55 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
         .as_deref()
         .map(absolute_lexical_path)
         .unwrap_or_else(|| std::env::current_dir().context("reading the agent pane cwd"))?;
+    #[cfg(unix)]
+    if let Some(path) = args.supervise.as_deref() {
+        let exit = match supervisor::run(path, &workspace) {
+            Ok(exit) => exit,
+            Err(error) => {
+                let _ = writeln!(crate::cli::render::err(), "rimz: {error:#}");
+                install_cleanup_signal_handlers()?;
+                install_interrupt_signal_handler()?;
+                rimz::child_process::CleanupSignalMask::unblock()?;
+                let status = supervisor::terminate_retained();
+                let request = envelope.request().clone();
+                let isolation = request
+                    .isolation_default
+                    .unwrap_or(crate::cli::machine_config().agents.isolation);
+                let keep = request
+                    .run_id
+                    .as_ref()
+                    .and_then(|id| {
+                        let paths =
+                            rimz::StatePaths::for_project_root(&workspace.project_root).ok()?;
+                        rimz::harness::run::load(&paths, id)
+                            .ok()
+                            .map(|record| record.keep)
+                    })
+                    .unwrap_or(false);
+                ParkExit {
+                    identity: exec_launch_identity(&request)?,
+                    entered_worktree: request.worktree_path.as_ref().map(|_| cwd.clone()),
+                    request,
+                    cwd,
+                    isolation,
+                    keep,
+                    outcome: ExecOutcome {
+                        status,
+                        abrupt: true,
+                        parent_ended: false,
+                        parent_watchdog: None,
+                    },
+                    terminal_grace: RUN_EXIT_TERMINAL_GRACE,
+                    startup_deaths: None,
+                }
+            }
+        };
+        return settle_park_exit(exit, &workspace, globals);
+    }
+    #[cfg(not(unix))]
+    if args.supervise.is_some() {
+        bail!("park image handoff is unavailable on this platform");
+    }
     let mut invocation = ExecInvocationContext::new(&workspace, cwd);
     let run_context = run_exec_context(envelope.request(), &invocation)?;
     let mut provisional_identity = None;
@@ -318,8 +381,8 @@ fn launch_and_supervise(
         .context("reading resumed run before spawning provider")?
         .and_then(|record| resumed_run_follow_ups(request, &record));
     let provider_terminal = ProviderTerminal::capture();
-    let mut spawned_at = Instant::now();
-    let mut child = command
+    let spawned_at = jiff::Timestamp::now();
+    let child = command
         .spawn()
         .with_context(|| format!("running {program}"))?;
     if let Some(target) = attach_target.as_ref() {
@@ -360,177 +423,113 @@ fn launch_and_supervise(
         })
         .map(|record| (record.keep, record.survives_parent()))
         .unwrap_or_default();
-    let mut parent_watchdog = subagent_parent_watchdog(
+    let watchdog = subagent_parent_watchdog(
         request,
         run_context,
         launch_identity.as_ref(),
         survives_parent,
     );
-    let mut relaunches: u8 = 0;
-    let (outcome, terminal_grace, startup_deaths) = loop {
-        let mut outcome = supervise_child(
-            child,
-            run_context,
-            request.exit_on_run_completion,
-            if request.subagent {
-                StopPolicy::ParentReceived
-            } else {
-                StopPolicy::RunTerminal
-            },
-            awaiting_reopen,
-            parent_watchdog.take(),
-        )
-        .context("supervising agent process")?;
-        let startup = spawned_at.elapsed();
-        let exit_code = outcome.status.code();
-        let exit = rimz::harness::run::ProviderExit {
+    let exit = supervisor::park(
+        ParkStartup {
+            request,
+            identity: launch_identity.as_ref(),
+            command: &command,
+            provider_pid: child.id(),
+            spawned_at,
+            relaunch_cap,
+            relaunch_wait,
             fresh_launch,
-            success: outcome.status.success(),
-            abrupt: outcome.abrupt,
-            signaled: cleanup_signal_received() || interrupt_signal_flag().load(Ordering::SeqCst),
-            relaunches,
-            startup,
-        };
-        if rimz::harness::run::provider_startup_exit(exit) {
-            #[cfg(unix)]
-            let signal = {
-                use std::os::unix::process::ExitStatusExt;
-                outcome.status.signal()
-            };
-            #[cfg(not(unix))]
-            let signal = None;
-            let action = match &request.action {
-                rimz::harness::launch::ExecAction::Launch { .. } => "launch",
-                rimz::harness::launch::ExecAction::Resume { .. } => "resume",
-                rimz::harness::launch::ExecAction::Fork { .. } => "fork",
-            };
-            diag.emit(rimz::diag::record::DiagEvent::ProviderStartupExit {
-                agent_kind: request.kind.to_string(),
-                agent_name: request.identity.name.clone(),
-                action: action.to_owned(),
-                exit_code,
-                signal,
-                startup_ms: u64::try_from(startup.as_millis()).unwrap_or(u64::MAX),
-                relaunches,
-            });
-        }
-        let parent_ended = || {
-            outcome
-                .parent_watchdog
-                .as_ref()
-                .is_some_and(|watchdog| watchdog.parent_ended())
-        };
-        // Asked fresh each time: the answer is the consumer's, read at the
-        // moment it would spawn.
-        let relaunch = || {
-            let exit = rimz::harness::run::ProviderExit {
-                abrupt: outcome.abrupt || parent_ended(),
-                signaled: cleanup_signal_received()
-                    || interrupt_signal_flag().load(Ordering::SeqCst),
-                ..exit
-            };
-            startup_evidence(run_context, invocation, launch_identity.as_ref())
-                .map_or(rimz::harness::run::StartupRelaunch::No, |evidence| {
-                    rimz::harness::run::startup_relaunch(exit, evidence, relaunch_cap)
-                })
-        };
-        // The grace a late first hook gets here is the one a late terminal hook gets at settle.
-        let grace_ends = Instant::now() + RUN_EXIT_TERMINAL_GRACE;
-        let terminal_grace = || grace_ends.saturating_duration_since(Instant::now());
-        let mut verdict = startup_relaunch_at(grace_ends, relaunch);
-        if verdict == rimz::harness::run::StartupRelaunch::Due {
-            // A provider killed mid-setup can leave the pane raw, where
-            // Ctrl-C is a byte and the announced cancel never arrives.
-            provider_terminal.restore();
-            announce_startup_relaunch(request, exit_code, relaunch_wait, relaunches, relaunch_cap);
-            verdict = startup_relaunch_at(Instant::now() + relaunch_wait, relaunch);
-        }
-        match verdict {
-            rimz::harness::run::StartupRelaunch::Due => {}
-            rimz::harness::run::StartupRelaunch::Spent => {
-                break (outcome, terminal_grace(), Some(u32::from(relaunches) + 1));
-            }
-            rimz::harness::run::StartupRelaunch::No => {
-                // Seen after the provider exited, in the grace or the wait:
-                // settled as the parent end supervision would have made it.
-                if parent_ended() && !outcome.parent_ended {
-                    outcome.parent_ended = true;
-                    outcome.abrupt = true;
-                    if let Some(context) = run_context
-                        && let Err(err) =
-                            rimz::harness::run::cancel_and_wake(&context.store, &context.run_id)
-                    {
-                        tracing::debug!(
-                            run_id = %context.run_id,
-                            error = &err as &dyn std::error::Error,
-                            "could not cancel subagent run after parent exit",
-                        );
-                    }
-                }
-                break (outcome, terminal_grace(), None);
-            }
-        }
-        relaunches += 1;
-        spawned_at = Instant::now();
-        let spawned = command.spawn();
-        if let Err(error) =
-            rimz::harness::assist_log::try_append(&rimz::harness::assist_log::AssistRecord {
-                at: jiff::Timestamp::now(),
-                assist: rimz::harness::assist_log::Assist::LaunchRetry {
-                    kind: request.kind.clone(),
-                    label: launch_identity
-                        .as_ref()
-                        .map(|identity| format!("@{}", identity.name))
-                        .or_else(|| run_context.map(|context| context.run_id.to_string()))
-                        .unwrap_or_default(),
-                    run_id: run_context.map(|context| context.run_id.clone()),
-                    attempt: relaunches,
-                    exit_code,
-                    startup_ms: u64::try_from(startup.as_millis()).unwrap_or(u64::MAX),
-                    relaunched: spawned.is_ok(),
-                    error: spawned
-                        .as_ref()
-                        .err()
-                        .map(|error| format!("running {program}: {error}")),
-                },
-            })
-        {
-            let _ = writeln!(
-                crate::cli::render::err(),
-                "rimz: could not record launch retry: {error}"
-            );
-        }
-        match spawned {
-            Ok(next) => {
-                if let Some(context) = run_context {
-                    record_provider_process(context, next.id());
-                }
-                child = next;
-                parent_watchdog = outcome.parent_watchdog.take();
-            }
-            Err(error) => {
-                let _ = writeln!(
-                    crate::cli::render::err(),
-                    "rimz: running {program}: {error}"
-                );
-                break (outcome, terminal_grace(), None);
-            }
-        }
-    };
+            terminal: &provider_terminal,
+            keep,
+            survives_parent,
+            awaiting_reopen,
+            watchdog,
+            entered_worktree: entered_worktree.as_deref(),
+            cwd: &invocation.cwd,
+            isolation,
+        },
+        &plan.park_state_file(std::process::id()),
+        child,
+        workspace,
+    )?;
     settle_after_exit(
-        request,
+        &exit.request,
         globals,
         invocation,
         RunExitContext {
             run: run_context,
-            keep,
+            keep: exit.keep,
             checkout: &invocation.cwd,
-            terminal_grace,
-            startup_deaths,
+            terminal_grace: exit.terminal_grace,
+            startup_deaths: exit.startup_deaths,
         },
-        launch_identity.as_ref(),
-        entered_worktree.as_deref(),
-        outcome,
+        exit.identity.as_ref(),
+        exit.entered_worktree.as_deref(),
+        exit.outcome,
+    )
+}
+
+struct ParkStartup<'a> {
+    request: &'a rimz::harness::launch::ExecRequest,
+    identity: Option<&'a LaunchIdentity>,
+    command: &'a Command,
+    provider_pid: u32,
+    spawned_at: jiff::Timestamp,
+    relaunch_cap: u8,
+    relaunch_wait: Duration,
+    fresh_launch: bool,
+    terminal: &'a ProviderTerminal,
+    keep: bool,
+    survives_parent: bool,
+    awaiting_reopen: Option<u32>,
+    watchdog: Option<rimz::harness::parent_watch::WatchdogSeed>,
+    entered_worktree: Option<&'a Path>,
+    cwd: &'a Path,
+    isolation: rimz::config::Isolation,
+}
+
+struct ParkExit {
+    request: rimz::harness::launch::ExecRequest,
+    identity: Option<LaunchIdentity>,
+    cwd: PathBuf,
+    isolation: rimz::config::Isolation,
+    entered_worktree: Option<PathBuf>,
+    keep: bool,
+    outcome: ExecOutcome,
+    terminal_grace: Duration,
+    startup_deaths: Option<u32>,
+}
+
+#[cfg(unix)]
+fn settle_park_exit(
+    exit: ParkExit,
+    workspace: &rimz::ResolvedWorkspace,
+    globals: &GlobalFlags,
+) -> Result<()> {
+    let mut invocation = ExecInvocationContext::new(workspace, exit.cwd);
+    invocation.effective_isolation = Some(exit.isolation);
+    let run_context = match run_exec_context(&exit.request, &invocation) {
+        Ok(context) => context,
+        Err(error) => {
+            supervisor::fail_run(&exit.request, &workspace.project_root, &error);
+            supervisor::terminate_retained();
+            return Err(error);
+        }
+    };
+    settle_after_exit(
+        &exit.request,
+        globals,
+        &invocation,
+        RunExitContext {
+            run: run_context.as_ref(),
+            keep: exit.keep,
+            checkout: &invocation.cwd,
+            terminal_grace: exit.terminal_grace,
+            startup_deaths: exit.startup_deaths,
+        },
+        exit.identity.as_ref(),
+        exit.entered_worktree.as_deref(),
+        exit.outcome,
     )
 }
 
@@ -1183,206 +1182,6 @@ fn resumed_run_follow_ups(
         .then_some(record.follow_ups)
 }
 
-#[derive(Clone, Copy)]
-enum StopPolicy {
-    RunTerminal,
-    ParentReceived,
-}
-
-struct RunPaths {
-    run_id: rimz::RunId,
-    paths: rimz::StatePaths,
-    runtime: rimz::RuntimePaths,
-}
-
-enum DutyChild {
-    Process(Child),
-    #[cfg(test)]
-    Fake(std::rc::Rc<RefCell<Option<i32>>>),
-}
-
-impl DutyChild {
-    fn poll(&mut self) -> Option<i32> {
-        match self {
-            Self::Process(child) => match child.try_wait() {
-                Ok(status) => status.map(|status| status.code().unwrap_or(1)),
-                Err(error) => {
-                    tracing::debug!(%error, "could not wait for supervisor duty");
-                    Some(1)
-                }
-            },
-            #[cfg(test)]
-            Self::Fake(status) => *status.borrow(),
-        }
-    }
-}
-
-impl Drop for DutyChild {
-    fn drop(&mut self) {
-        match self {
-            Self::Process(child) => {
-                let _ = child.kill();
-                let _ = child.wait();
-            }
-            #[cfg(test)]
-            Self::Fake(_) => {}
-        }
-    }
-}
-
-struct RunMonitor {
-    self_cleanup: bool,
-    stop_policy: StopPolicy,
-    awaiting_reopen: Option<u32>,
-    next_park_check: Instant,
-    next_receipt_check: Instant,
-    reported_revision: Option<jiff::Timestamp>,
-    strand: Option<DutyChild>,
-    receipt: Option<DutyChild>,
-    strand_backoff: Duration,
-    queue_stamp: Option<(std::time::SystemTime, u64)>,
-    receipt_dirty: bool,
-    receipt_ready: bool,
-    last_receipt_check: Option<Instant>,
-}
-
-impl RunMonitor {
-    fn new(
-        self_cleanup: bool,
-        stop_policy: StopPolicy,
-        awaiting_reopen: Option<u32>,
-        now: Instant,
-    ) -> Self {
-        Self {
-            self_cleanup,
-            stop_policy,
-            awaiting_reopen,
-            next_park_check: now,
-            next_receipt_check: now,
-            reported_revision: None,
-            strand: None,
-            receipt: None,
-            strand_backoff: PARK_STRAND_POLL,
-            queue_stamp: None,
-            receipt_dirty: true,
-            receipt_ready: false,
-            last_receipt_check: None,
-        }
-    }
-
-    fn poll(
-        &mut self,
-        context: &RunPaths,
-        now: Instant,
-        parent_changed: bool,
-        mut spawn: impl FnMut(Duty) -> Result<DutyChild>,
-    ) -> bool {
-        let record = match rimz::harness::run::load(&context.paths, &context.run_id) {
-            Ok(record) => record,
-            Err(error) => {
-                tracing::debug!(run_id = %context.run_id, %error, "could not read supervised run record while monitoring pane");
-                return false;
-            }
-        };
-        let parked = record.parked_at.is_some() && !record.status.is_terminal();
-        if !parked {
-            self.strand = None;
-            self.strand_backoff = PARK_STRAND_POLL;
-            self.next_park_check = now;
-        } else {
-            if let Some(code) = self.strand.as_mut().and_then(DutyChild::poll) {
-                self.strand = None;
-                self.next_park_check = now + self.strand_backoff;
-                if code != 0 {
-                    self.strand_backoff = (self.strand_backoff * 2).min(Duration::from_secs(60));
-                }
-            }
-            if self.strand.is_none() && now >= self.next_park_check {
-                match spawn(Duty::Strand {
-                    run_id: context.run_id.clone(),
-                }) {
-                    Ok(child) => self.strand = Some(child),
-                    Err(error) => {
-                        tracing::debug!(run_id = %context.run_id, %error, "could not spawn strand duty");
-                        self.next_park_check = now + self.strand_backoff;
-                        self.strand_backoff =
-                            (self.strand_backoff * 2).min(Duration::from_secs(60));
-                    }
-                }
-            }
-        }
-        if !self.self_cleanup {
-            return false;
-        }
-        if matches!(self.stop_policy, StopPolicy::RunTerminal) {
-            return record.status.is_terminal() && run_ready(context);
-        }
-        if let Some(ordinal) = self.awaiting_reopen {
-            if record.follow_ups <= ordinal {
-                return false;
-            }
-            self.awaiting_reopen = None;
-        }
-        if !record.status.is_terminal() {
-            self.receipt = None;
-            self.receipt_ready = false;
-            self.receipt_dirty = true;
-            return false;
-        }
-        let ready = run_ready(context);
-        if record.report_to == rimz::store::run::ReportTo::Nobody {
-            return ready;
-        }
-        let queue_stamp = std::fs::metadata(context.paths.message_queue_file())
-            .ok()
-            .and_then(|meta| Some((meta.modified().ok()?, meta.len())));
-        self.receipt_dirty |= parent_changed
-            || queue_stamp != self.queue_stamp
-            || self.reported_revision != Some(record.updated_at);
-        self.queue_stamp = queue_stamp;
-        if let Some(code) = self.receipt.as_mut().and_then(DutyChild::poll) {
-            self.receipt = None;
-            self.receipt_ready = code == 0;
-        }
-        let periodic = self
-            .last_receipt_check
-            .is_none_or(|last| now.duration_since(last) >= Duration::from_secs(60));
-        if self.receipt.is_none()
-            && now >= self.next_receipt_check
-            && (self.receipt_dirty || periodic)
-        {
-            let report = self.reported_revision != Some(record.updated_at);
-            match spawn(Duty::Receipt {
-                run_id: context.run_id.clone(),
-                report,
-            }) {
-                Ok(child) => {
-                    self.receipt = Some(child);
-                    self.reported_revision = Some(record.updated_at);
-                    self.receipt_dirty = false;
-                    self.receipt_ready = false;
-                    self.last_receipt_check = Some(now);
-                }
-                Err(error) => {
-                    tracing::debug!(run_id = %context.run_id, %error, "could not spawn receipt duty")
-                }
-            }
-            self.next_receipt_check = now + PARENT_RECEIPT_POLL;
-        }
-        ready && self.receipt_ready && !self.receipt_dirty && self.receipt.is_none()
-    }
-}
-
-fn run_ready(context: &RunPaths) -> bool {
-    match rimz::store::run::run_waiter_is_live(&context.runtime, &context.run_id) {
-        Ok(live) => !live,
-        Err(error) => {
-            tracing::debug!(run_id = %context.run_id, %error, "could not probe supervised run waiter");
-            false
-        }
-    }
-}
-
 fn run_exec_context(
     request: &rimz::harness::launch::ExecRequest,
     invocation: &ExecInvocationContext<'_>,
@@ -1847,22 +1646,6 @@ fn launch_card_provisional(
     }
 }
 
-/// What durably says whether this launch's session opened: its run record
-/// when it has one, else its launch card. `None` when neither can be read.
-fn startup_evidence(
-    run: Option<&RunExecContext>,
-    invocation: &ExecInvocationContext<'_>,
-    identity: Option<&LaunchIdentity>,
-) -> Option<rimz::harness::run::StartupEvidence> {
-    match run {
-        Some(context) => context
-            .load_record()
-            .map(|record| rimz::harness::run::StartupEvidence::Run(record.status)),
-        None => launch_card_provisional(invocation, identity?)
-            .map(|provisional| rimz::harness::run::StartupEvidence::Card { provisional }),
-    }
-}
-
 fn fail_run_if_child_exited_first(
     context: &RunExecContext,
     globals: &GlobalFlags,
@@ -1922,23 +1705,6 @@ fn record_own_run_failure_tail(context: &RunExecContext, globals: &GlobalFlags) 
     }
 }
 
-/// The relaunch answer as it stands at `deadline`, or `No` as soon as it is
-/// `No`: a late first hook, a stop, an ended parent, or a settled run ends the
-/// wait at once, and the last ask is the one the spawn follows.
-fn startup_relaunch_at(
-    deadline: Instant,
-    mut relaunch: impl FnMut() -> rimz::harness::run::StartupRelaunch,
-) -> rimz::harness::run::StartupRelaunch {
-    loop {
-        let answer = relaunch();
-        let left = deadline.saturating_duration_since(Instant::now());
-        if answer == rimz::harness::run::StartupRelaunch::No || left.is_zero() {
-            return answer;
-        }
-        std::thread::sleep(CHILD_WAIT_POLL.min(left));
-    }
-}
-
 fn wait_for_terminal_run(context: &RunExecContext, cap: Duration) -> bool {
     let deadline = Instant::now() + cap;
     loop {
@@ -1952,154 +1718,12 @@ fn wait_for_terminal_run(context: &RunExecContext, cap: Duration) -> bool {
     }
 }
 
-struct ExecOutcome {
-    status: ExitStatus,
-    abrupt: bool,
-    parent_ended: bool,
-    parent_watchdog: Option<rimz::harness::parent_watch::ParentWatch>,
-}
-
-fn supervise_child(
-    child: Child,
-    run_monitor: Option<&RunExecContext>,
-    self_cleanup: bool,
-    stop_policy: StopPolicy,
-    awaiting_reopen: Option<u32>,
-    parent_watchdog: Option<rimz::harness::parent_watch::ParentWatch>,
-) -> Result<ExecOutcome> {
-    let (wake_tx, wake_rx) = mpsc::channel();
-    let mut child = rimz::child_process::SupervisedChild::adopt(child, wake_tx.clone());
-    #[cfg(unix)]
-    let cleanup_signals = {
-        use signal_hook::consts::signal::{SIGHUP, SIGTERM};
-        vec![SIGHUP, SIGTERM]
-    };
-    #[cfg(not(unix))]
-    let cleanup_signals = Vec::new();
-    rimz::child_process::register_signal_wake(cleanup_signals, wake_tx)
-        .context("registering cleanup signal wakeups")?;
-
-    let mut signal_seen_at = cleanup_signal_received().then(Instant::now);
-    let mut term_sent_at: Option<Instant> = None;
-    let mut kill_sent = false;
-    let mut run_completed = false;
-    let mut parent_ended = false;
-    let mut next_run_check = Instant::now();
-    let mut monitor_state =
-        RunMonitor::new(self_cleanup, stop_policy, awaiting_reopen, next_run_check);
-    let run_paths = run_monitor.map(|context| RunPaths {
-        run_id: context.run_id.clone(),
-        paths: context.store.paths().clone(),
-        runtime: context.store.runtime_paths().clone(),
-    });
-    loop {
-        let now = Instant::now();
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                return Ok(ExecOutcome {
-                    status,
-                    abrupt: run_completed
-                        || parent_ended
-                        || signal_seen_at.is_some()
-                        || cleanup_signal_received(),
-                    parent_ended,
-                    parent_watchdog,
-                });
-            }
-            Ok(None) => {}
-            Err(err) if err.kind() == std::io::ErrorKind::Interrupted => {}
-            Err(err) => return Err(err).context("waiting for agent process"),
-        }
-
-        if !parent_ended
-            && parent_watchdog
-                .as_ref()
-                .is_some_and(|watchdog| watchdog.parent_ended())
-        {
-            parent_ended = true;
-            if let Some(monitor) = run_paths.as_ref()
-                && let Err(err) = rimz::harness::run::cancel_and_wake_paths(
-                    &monitor.paths,
-                    &monitor.runtime,
-                    &monitor.run_id,
-                )
-            {
-                tracing::debug!(
-                    run_id = %monitor.run_id,
-                    error = &err as &dyn std::error::Error,
-                    "could not cancel subagent run after parent exit",
-                );
-            }
-            child.signal_term();
-            term_sent_at = Some(now);
-        }
-
-        if !run_completed
-            && let Some((context, monitor)) = run_monitor.zip(run_paths.as_ref())
-            && now >= next_run_check
-        {
-            next_run_check = now
-                + if self_cleanup {
-                    RUN_MONITOR_POLL
-                } else {
-                    PARK_STRAND_POLL
-                };
-            let parent_changed = parent_watchdog
-                .as_ref()
-                .is_some_and(|watch| watch.take_parent_changed());
-            if monitor_state.poll(monitor, now, parent_changed, |request| {
-                duty::command(
-                    monitor.paths.workspace_id.clone(),
-                    context.session_name.clone(),
-                    request,
-                )?
-                .spawn()
-                .map(DutyChild::Process)
-                .context("spawning supervise duty")
-            }) {
-                run_completed = true;
-                child.signal_term();
-                term_sent_at = Some(now);
-            }
-        }
-
-        if cleanup_signal_received() {
-            let first_seen = *signal_seen_at.get_or_insert(now);
-            if term_sent_at.is_none() && now.duration_since(first_seen) >= CHILD_SIGNAL_GRACE {
-                child.signal_term();
-                term_sent_at = Some(now);
-            }
-        }
-        if let Some(sent_at) = term_sent_at
-            && !kill_sent
-            && now.duration_since(sent_at) >= CHILD_SIGNAL_GRACE
-        {
-            child.signal_kill();
-            kill_sent = true;
-        }
-
-        let deadline = [
-            (!run_completed && run_monitor.is_some()).then_some(next_run_check),
-            signal_seen_at
-                .filter(|_| term_sent_at.is_none())
-                .map(|seen_at| seen_at + CHILD_SIGNAL_GRACE),
-            term_sent_at
-                .filter(|_| !kill_sent)
-                .map(|sent_at| sent_at + CHILD_SIGNAL_GRACE),
-        ]
-        .into_iter()
-        .flatten()
-        .min();
-        rimz::child_process::wait_wake(&wake_rx, deadline);
-    }
-}
-
 fn subagent_parent_watchdog(
     request: &rimz::harness::launch::ExecRequest,
     run_context: Option<&RunExecContext>,
     launch_identity: Option<&LaunchIdentity>,
     survives_parent: bool,
-) -> Option<rimz::harness::parent_watch::ParentWatch> {
+) -> Option<rimz::harness::parent_watch::WatchdogSeed> {
     if !request.subagent {
         return None;
     }
@@ -2115,31 +1739,40 @@ fn subagent_parent_watchdog(
         return None;
     };
     let paths = context.store.paths();
-    let cursor = rimz::store::event_log::LogExtent {
-        generation: rimz::store::snapshot::lifecycle_log_generation(paths),
-        offset: std::fs::metadata(&paths.events_log).map_or(0, |meta| meta.len()),
+    let cursor = duty::parent_cursor(paths).unwrap_or_else(|error| {
+        tracing::debug!(%error, "could not capture parent watchdog cursor");
+        rimz::store::event_log::LogExtent {
+            generation: 0,
+            offset: 0,
+        }
+    });
+    let child_pane = rimz::mux::ambient_pane_id();
+    let seed = match context.store.runtime_projection(rimz::RuntimeScope::Audit) {
+        Ok(projection) => rimz::harness::parent_watch::seed(
+            &projection.agents,
+            identity.kind.clone(),
+            identity.agent_id.clone(),
+            child_pane.clone(),
+            context.session_name.clone(),
+            cursor,
+        ),
+        Err(error) => {
+            tracing::debug!(%error, "could not seed parent watchdog projection");
+            None
+        }
     };
-    let projection = context
-        .store
-        .runtime_projection(rimz::RuntimeScope::Audit)
-        .ok()?;
-    let seed = rimz::harness::parent_watch::seed(
-        &projection.agents,
-        identity.kind.clone(),
-        identity.agent_id.clone(),
-        rimz::mux::ambient_pane_id(),
-        context.session_name.clone(),
-        cursor,
-    )?;
-    let workspace_id = paths.workspace_id.clone();
     Some(
-        rimz::harness::parent_watch::ParentWatchdog::from_seed(
-            seed,
-            paths.clone(),
-            context.store.runtime_paths().clone(),
-            move |seed| duty::confirm(&workspace_id, seed),
-        )
-        .start(),
+        seed.unwrap_or_else(|| rimz::harness::parent_watch::WatchdogSeed {
+            child_kind: identity.kind.clone(),
+            child_launch_id: identity.agent_id.clone(),
+            parent_kind: identity.kind.clone(),
+            parent_refs: Vec::new(),
+            members: Default::default(),
+            parent_pane: None,
+            child_pane,
+            session_name: context.session_name.clone(),
+            cursor,
+        }),
     )
 }
 

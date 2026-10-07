@@ -142,6 +142,18 @@ pub enum LaunchPlanErr {
 }
 
 impl LaunchPlan {
+    /// The handoff uses the same temp owner the provider's launch resolved.
+    pub fn park_state_file(&self, wrapper_pid: u32) -> PathBuf {
+        let launch_id = self
+            .request
+            .identity
+            .launch_id
+            .as_deref()
+            .map(crate::ids::AgentSessionId::from);
+        self.state
+            .park_state_file(self.temp_owner.as_deref(), launch_id.as_ref(), wrapper_pid)
+    }
+
     pub fn process(&self) -> &CompiledAgentProcess {
         match &self.stage {
             AgentProcessStage::Ready(process)
