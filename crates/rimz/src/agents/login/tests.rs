@@ -183,13 +183,27 @@ fn live_account_refusals_are_per_kind_and_default_pins_need_no_core_or_trust() {
     );
     let selected = resolve_room_accounts(&pins, root.path(), &machine);
     assert_eq!(selected.name(&kind("claude")).unwrap(), name("default"));
-    assert!(
-        selected
-            .name(&kind("codex"))
-            .unwrap_err()
-            .to_string()
-            .contains("broken TOML")
-    );
+    let unavailable = RoomAccounts::unavailable(selected.name(&kind("codex")).unwrap_err());
+    for selection in [&selected, &unavailable] {
+        for kind in [kind("codex"), kind("unregistered")] {
+            let error = selection.account(&kind).unwrap_err();
+            let message = error.to_string();
+            assert!(message.contains("broken TOML"), "{message}");
+            assert_eq!(
+                message
+                    .matches("cannot resolve this room's account")
+                    .count(),
+                1
+            );
+            let RoomLoginErr::Resolution(inner) = error else {
+                panic!("expected a shared resolution error");
+            };
+            assert!(
+                !matches!(inner.as_ref(), RoomLoginErr::Resolution(_)),
+                "resolution wrappers must not nest: {inner:?}"
+            );
+        }
+    }
 }
 
 #[test]
