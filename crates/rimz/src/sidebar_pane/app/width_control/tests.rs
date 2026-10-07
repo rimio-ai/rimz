@@ -15,6 +15,27 @@ fn burst_deadline(controller: &WidthController) -> Instant {
         .deadline
 }
 
+fn width_intents(diag: &DiagSink) -> Vec<(u16, Option<u16>, SidebarWidthIntentVerdict)> {
+    std::fs::read_to_string(diag.log_path().unwrap())
+        .unwrap()
+        .lines()
+        .filter_map(|line| {
+            match serde_json::from_str::<crate::diag::record::DiagEnvelope>(line)
+                .unwrap()
+                .event
+            {
+                crate::diag::record::DiagEvent::SidebarWidthIntent {
+                    own_cols,
+                    target_cols,
+                    verdict,
+                    ..
+                } => Some((own_cols, target_cols, verdict)),
+                _ => None,
+            }
+        })
+        .collect()
+}
+
 fn native_step(cols: u16, exact: bool) -> crate::mux::WidthStep {
     crate::mux::WidthStep {
         cols,
@@ -516,6 +537,73 @@ fn zellij_uses_live_step_and_clamps_floor_crossing() {
 }
 
 #[test]
+fn width_key_burst_reprobes_a_view_resized_since_the_last_proof() {
+    let (dir, runtime, mut controller) = controller(MuxName::Zellij);
+    let diag = crate::diag::DiagSink::under(
+        dir.path().to_path_buf(),
+        runtime.workspace_id.clone(),
+        "rimz-test",
+        None,
+    );
+    write_zellij_topology_panes(&runtime, 24, Some(50), controller.started_at_ms);
+    controller.backstop(Some(24), Some(1), None, &diag);
+    assert_eq!(controller.current_view_cols, Some(50));
+    assert_eq!(controller.convergence.target(), Some(target(24)));
+
+    write_zellij_topology_for_view(&runtime, 320);
+    controller.adjust(121, WidthAdjust::Wider);
+    assert_eq!(
+        controller.key_burst.as_ref().unwrap().verdict,
+        SidebarWidthIntentVerdict::Accepted,
+    );
+    assert_eq!(controller.current_view_cols, Some(320));
+    assert_eq!(controller.convergence.target(), Some(target(137)));
+    controller.backstop_at(Some(137), None, None, &diag, burst_deadline(&controller));
+
+    assert_eq!(
+        width_intents(&diag),
+        vec![(121, Some(137), SidebarWidthIntentVerdict::Accepted)]
+    );
+    assert_eq!(
+        crate::mux::width_target::pinned(&runtime),
+        Some(crate::mux::WidthPermille::from_cols(
+            target(137),
+            target(320)
+        ))
+    );
+}
+
+#[test]
+fn width_key_burst_keeps_the_last_proven_view_when_the_probe_fails() {
+    let (dir, runtime, mut controller) = controller(MuxName::Zellij);
+    let diag = crate::diag::DiagSink::under(
+        dir.path().to_path_buf(),
+        runtime.workspace_id.clone(),
+        "rimz-test",
+        None,
+    );
+    write_zellij_topology_panes(&runtime, 24, Some(50), controller.started_at_ms);
+    controller.backstop(Some(24), Some(1), None, &diag);
+    assert_eq!(controller.current_view_cols, Some(50));
+    assert_eq!(controller.convergence.target(), Some(target(24)));
+
+    std::fs::remove_file(crate::mux::zellij::pane_topology::pane_topology_cache_path(
+        &runtime,
+    ))
+    .unwrap();
+    controller.adjust(121, WidthAdjust::Wider);
+    assert_eq!(controller.current_view_cols, Some(50));
+    assert_eq!(controller.convergence.target(), Some(target(24)));
+    controller.backstop_at(Some(121), None, None, &diag, burst_deadline(&controller));
+
+    assert_eq!(
+        width_intents(&diag),
+        vec![(121, None, SidebarWidthIntentVerdict::RejectedCeiling)]
+    );
+    assert_eq!(crate::mux::width_target::pinned(&runtime), None);
+}
+
+#[test]
 fn width_key_burst_saves_and_broadcasts_only_the_last_target_once() {
     let (dir, runtime, mut controller) = controller(MuxName::Zellij);
     write_zellij_topology(&runtime);
@@ -526,6 +614,9 @@ fn width_key_burst_saves_and_broadcasts_only_the_last_target_once() {
         None,
     );
     controller.reload_target(&crate::config::ThemeConfig::default(), None, &diag);
+    // Opening the burst probes the topology, which would replace the exact step
+    // seeded below with Zellij's relative one.
+    controller.adjust(50, WidthAdjust::Wider);
     controller
         .convergence
         .seed_native_step(native_step(10, true));

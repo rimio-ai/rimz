@@ -457,8 +457,12 @@ impl WidthController {
         let Some(pane) = self.own_pane.as_ref() else {
             return;
         };
+        // A press must not fork (docs/internals/performance.md, keypress
+        // budget). Zellij's probe is a stat-keyed memo read, so every burst
+        // opens on the live view; tmux's probe is a subprocess, so it runs only
+        // while no view is stored.
         if self.key_burst.is_none()
-            && self.current_view_cols.is_none()
+            && (self.mux == MuxName::Zellij || self.current_view_cols.is_none())
             && !self.convergence.is_fullscreen_held()
             && let Ok(step) = self.width_step(pane, None)
             && step.view_cols != 0
