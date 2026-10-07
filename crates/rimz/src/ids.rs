@@ -463,6 +463,13 @@ impl MessageId {
         Self(new_short_id(MESSAGE_ID_PREFIX))
     }
 
+    pub(crate) fn successor(&self) -> Self {
+        // Constructors validate the 80-bit token; 48-bit milliseconds cannot wrap in the supported wall-clock range.
+        let value = u128::from_str_radix(&self.0[MESSAGE_ID_PREFIX.len()..], 32)
+            .expect("MessageId contains 16 base32hex digits");
+        Self(encode_short_id(MESSAGE_ID_PREFIX, value + 1))
+    }
+
     pub fn parse(value: &str) -> Result<Self, InvalidMessageId> {
         let Some(token) = value.strip_prefix(MESSAGE_ID_PREFIX) else {
             return Err(InvalidMessageId(value.to_owned()));
@@ -565,6 +572,10 @@ fn new_short_id(prefix: &str) -> String {
     let random_suffix = uuid as u32;
     let (timestamp_ms, suffix) = next_short_id_parts(timestamp_ms, random_suffix);
     let sortable = ((timestamp_ms as u128) << 32) | u128::from(suffix);
+    encode_short_id(prefix, sortable)
+}
+
+fn encode_short_id(prefix: &str, sortable: u128) -> String {
     let mut token = String::with_capacity(prefix.len() + MESSAGE_ID_LEN);
     token.push_str(prefix);
     for shift in (0..80).step_by(5).rev() {
@@ -1197,6 +1208,15 @@ mod tests {
         assert!(MessageId::parse("msg_0123456789abcde").is_err());
         assert!(MessageId::parse("msg_0123456789abcdew").is_err());
         assert!(MessageId::parse("msg_0123456789ABCDEF").is_err());
+    }
+
+    #[test]
+    fn message_id_successor_carries_suffix_overflow() {
+        let last_suffix = MessageId::parse("msg_0000000007vvvvvv").unwrap();
+        let successor = last_suffix.successor();
+        assert_eq!(successor.as_str(), "msg_0000000008000000");
+        assert!(successor.as_str() > last_suffix.as_str());
+        assert_eq!(MessageId::parse(successor.as_str()).unwrap(), successor);
     }
 
     #[test]

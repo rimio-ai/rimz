@@ -10,7 +10,7 @@ use crate::ids::{AgentKind, AgentSessionId, MessageId};
 use crate::store::event::{EventEnvelope, MessageEventMethod};
 use crate::store::message::{
     AutoCompact, DeliveryGate, MAX_DELIVERY_ATTEMPTS, MessageBody, MessageRecord, MessageStatus,
-    claim_expired, delivery_batch_indices,
+    claim_expired, delivery_batch_indices, fresh_boundary_blocker,
 };
 
 use super::super::{Result, Store, message};
@@ -54,6 +54,15 @@ pub enum DeliveryAck<'a> {
 pub enum DeliveryAckMatch {
     PromptCorrelated,
     OldestSentBatch,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum BoundaryClaim {
+    Claimed(MessageRecord),
+    Parked {
+        message: MessageRecord,
+        blocker: MessageId,
+    },
 }
 
 fn same_submitted_batch(first: &MessageRecord, candidate: &MessageRecord) -> bool {
@@ -214,6 +223,19 @@ impl<'txn, 'paths> QueueTxn<'txn, 'paths> {
             None => self.live.push(message),
         }
         self.live_changed = true;
+    }
+
+    fn upsert_claimed(&mut self, message: &MessageRecord, now: Timestamp) -> MessageRecord {
+        self.upsert(message.clone());
+        // Upsert guarantees the id exists, and one index produces one claim.
+        let index = self
+            .live
+            .iter()
+            .position(|live| live.message_id == message.message_id)
+            .expect("upserted record has a claim index");
+        self.claim_indices(std::slice::from_ref(&index), now)
+            .pop()
+            .expect("one claim index returns one message")
     }
 
     fn stage_event(&mut self, event: EventEnvelope) {
@@ -560,19 +582,63 @@ impl Store {
         let event =
             EventEnvelope::message_event(message, session_name, MessageEventMethod::Queued, None);
         self.commit_queue(|queue| {
-            queue.upsert(message.clone());
-            // Upsert guarantees the id exists, and one index produces one claim.
-            let index = queue
-                .live()
-                .iter()
-                .position(|live| live.message_id == message.message_id)
-                .expect("upserted record has a claim index");
-            let claimed = queue
-                .claim_indices(std::slice::from_ref(&index), now)
-                .pop()
-                .expect("one claim index returns one message");
+            let claimed = queue.upsert_claimed(message, now);
             queue.stage_event(event);
             Ok(claimed)
+        })
+    }
+
+    #[must_use = "durability barrier; check the result"]
+    pub fn queue_boundary_message(
+        &self,
+        message: &MessageRecord,
+        session_name: &str,
+        now: Timestamp,
+    ) -> Result<BoundaryClaim> {
+        self.commit_queue(|queue| {
+            let blocker = fresh_boundary_blocker(
+                queue
+                    .live()
+                    .iter()
+                    .filter(|live| live.message_id != message.message_id),
+                &message.kind,
+                &message.agent_id,
+                message.agent_name.as_deref(),
+                now,
+            )
+            .map(|blocker| blocker.message_id.clone());
+            let mut queued = message.clone();
+            queued.message_id = MessageId::new();
+            if let Some(last) = queue
+                .live()
+                .iter()
+                .filter(|live| live.same_card(message.card_ref()))
+                .max_by_key(|live| live.message_id.as_str())
+                && queued.message_id.as_str() <= last.message_id.as_str()
+            {
+                queued.message_id = last.message_id.successor();
+            }
+            let event = EventEnvelope::message_event(
+                &queued,
+                session_name,
+                MessageEventMethod::Queued,
+                None,
+            );
+            queue
+                .live
+                .retain(|live| live.message_id != message.message_id);
+            let outcome = match blocker {
+                Some(blocker) => {
+                    queue.upsert(queued.clone());
+                    BoundaryClaim::Parked {
+                        message: queued,
+                        blocker,
+                    }
+                }
+                None => BoundaryClaim::Claimed(queue.upsert_claimed(&queued, now)),
+            };
+            queue.stage_event(event);
+            Ok(outcome)
         })
     }
 

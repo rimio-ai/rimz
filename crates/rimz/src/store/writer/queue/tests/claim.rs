@@ -546,6 +546,190 @@ fn an_unclaimed_record_is_held_by_nobody() {
 }
 
 #[test]
+fn fresh_boundary_claim_parks_behind_either_id_order() {
+    for (winner_id, loser_id) in [(1, 2), (2, 1)] {
+        let q = Queue::new();
+        let now = Timestamp::from_second(1_000).unwrap();
+        let held = q
+            .queue_claimed_message(&q.record(winner_id), "session", now)
+            .unwrap();
+        let fresh = q.record(loser_id);
+        let BoundaryClaim::Parked {
+            message: parked,
+            blocker,
+        } = q.queue_boundary_message(&fresh, "session", now).unwrap()
+        else {
+            panic!("fresh boundary send must park behind the claim");
+        };
+        assert_eq!(blocker, held.message_id);
+        assert!(parked.message_id.as_str() > held.message_id.as_str());
+        assert_ne!(parked.message_id, fresh.message_id);
+        assert_eq!(q.by_id(&parked.message_id), parked);
+        assert_eq!(parked.status, MessageStatus::Queued);
+        assert_eq!(parked.attempts, 0);
+        assert_eq!(parked.last_attempt_at, None);
+        assert!(
+            !q.message_claims_held(std::slice::from_ref(&parked))
+                .unwrap()
+        );
+        assert_eq!(q.methods(), ["message.queued", "message.queued"]);
+        let events = q.events();
+        assert_eq!(
+            events.last().unwrap().params_value()["message_id"],
+            parked.message_id.as_str(),
+            "{events:?}"
+        );
+    }
+}
+
+#[test]
+fn fresh_boundary_claim_parks_behind_a_sent_prompt() {
+    let q = Queue::new();
+    let sent = q.sent(2);
+    let fresh = q.record(1);
+    let BoundaryClaim::Parked {
+        message: parked,
+        blocker,
+    } = q
+        .queue_boundary_message(&fresh, "session", Timestamp::now())
+        .unwrap()
+    else {
+        panic!("fresh boundary send must park behind the sent prompt");
+    };
+    assert_eq!(blocker, sent.message_id);
+    assert!(parked.message_id.as_str() > sent.message_id.as_str());
+    let mut fresh = fresh;
+    fresh.message_id = parked.message_id;
+    assert_eq!(q.by_id(&fresh.message_id), fresh);
+    assert!(!q.message_claims_held(std::slice::from_ref(&fresh)).unwrap());
+    assert_eq!(
+        q.methods(),
+        ["message.queued", "message.sent", "message.queued"]
+    );
+}
+
+#[test]
+fn fresh_boundary_claim_prefers_a_deliverable_queue_head() {
+    let q = Queue::new();
+    let head = q.queue(1);
+    let now = Timestamp::from_second(1_000).unwrap();
+    q.queue_claimed_message(&q.record(2), "session", now)
+        .unwrap();
+    let mut tail = q.record(4);
+    tail.message_id = MessageId::parse("msg_v000000000000000").unwrap();
+    tail.not_before = Some(now + CLAIM_TTL);
+    q.queue_message(&tail, "session").unwrap();
+    let mut other = q.record(5);
+    other.message_id = MessageId::parse("msg_v000000000000002").unwrap();
+    other.agent_id = "other-session".into();
+    q.queue_message(&other, "session").unwrap();
+    let fresh = q.record(3);
+    let BoundaryClaim::Parked {
+        message: parked,
+        blocker,
+    } = q.queue_boundary_message(&fresh, "session", now).unwrap()
+    else {
+        panic!("fresh boundary send must park behind the queue head");
+    };
+    assert_eq!(blocker, head.message_id);
+    assert!(parked.message_id.as_str() > tail.message_id.as_str());
+    assert!(parked.message_id.as_str() < other.message_id.as_str());
+    let mut fresh = fresh;
+    fresh.message_id = parked.message_id;
+    assert_eq!(q.by_id(&fresh.message_id), fresh);
+    assert!(!q.message_claims_held(std::slice::from_ref(&fresh)).unwrap());
+    assert_eq!(
+        q.methods(),
+        [
+            "message.queued",
+            "message.queued",
+            "message.queued",
+            "message.queued",
+            "message.queued"
+        ]
+    );
+}
+
+#[test]
+fn fresh_boundary_claim_ignores_records_outside_its_blocking_lane() {
+    for scenario in [
+        "empty",
+        "expired",
+        "resume",
+        "other-card",
+        "command",
+        "scheduled",
+        "self",
+    ] {
+        let q = Queue::new();
+        let now = Timestamp::from_second(1_000).unwrap();
+        let mut prior = q.record(1);
+        let fresh = q.record(2);
+        match scenario {
+            "empty" => {}
+            "expired" => {
+                prior.message_id = MessageId::parse("msg_v000000000000000").unwrap();
+                q.queue_claimed_message(&prior, "session", now - CLAIM_TTL)
+                    .unwrap();
+            }
+            "resume" => {
+                prior.gate = DeliveryGate::Resume;
+                q.queue_claimed_message(&prior, "session", now).unwrap();
+            }
+            "other-card" => {
+                prior.agent_id = "other-session".into();
+                q.queue_claimed_message(&prior, "session", now).unwrap();
+            }
+            "command" => {
+                q.sent_with(1, |message| message.body = MessageBody::Command);
+            }
+            "scheduled" => {
+                prior.not_before = Some(now + CLAIM_TTL);
+                q.queue_message(&prior, "session").unwrap();
+            }
+            "self" => {
+                q.queue_message(&fresh, "session").unwrap();
+            }
+            _ => unreachable!(),
+        }
+        let queued_events = q.count("message.queued");
+        let BoundaryClaim::Claimed(claimed) =
+            q.queue_boundary_message(&fresh, "session", now).unwrap()
+        else {
+            panic!("fresh boundary send must claim in {scenario}");
+        };
+        assert_ne!(claimed.message_id, fresh.message_id, "{scenario}");
+        if scenario == "expired" {
+            assert!(claimed.message_id.as_str() > prior.message_id.as_str());
+        }
+        let mut expected = fresh.clone();
+        expected.message_id = claimed.message_id.clone();
+        expected.status = MessageStatus::Claimed;
+        expected.attempts = 1;
+        expected.last_attempt_at = Some(now);
+        expected.updated_at = now;
+        assert_eq!(claimed, expected, "{scenario}");
+        assert_eq!(q.by_id(&claimed.message_id), expected);
+        assert!(
+            !q.live()
+                .iter()
+                .any(|live| live.message_id == fresh.message_id)
+        );
+        assert!(
+            q.message_claims_held(std::slice::from_ref(&expected))
+                .unwrap()
+        );
+        assert_eq!(q.count("message.queued"), queued_events + 1);
+        let events = q.events();
+        assert_eq!(
+            events.last().unwrap().params_value()["message_id"],
+            claimed.message_id.as_str(),
+            "{events:?}"
+        );
+    }
+}
+
+#[test]
 fn enqueue_and_claim_excludes_other_deliverers_until_sent() {
     let q = Queue::new();
     let now = Timestamp::from_second(1_000).unwrap();

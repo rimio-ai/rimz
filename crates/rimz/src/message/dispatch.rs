@@ -18,9 +18,10 @@ use crate::ids::{AgentKind, MessageId, MuxName};
 use crate::message::{MessageDraft, Recipient};
 use crate::store::message::{
     AfterCondition, AutoCompact, DeliveryGate, MessageBody, MessageRecord, MessageSender,
-    WhenCondition, in_flight_claim, queue_head,
+    WhenCondition, fresh_boundary_blocker, queue_head,
 };
 use crate::store::snapshot::{PaneAgent, SidebarSnapshot};
+use crate::store::writer::BoundaryClaim;
 use crate::workspace::ResolvedWorkspace;
 
 use super::reply::{PreparationTarget, ReplyJoin, ReplyPreparation, ReplyPrepareErr, ReplyWait};
@@ -759,7 +760,7 @@ impl DispatchState<'_> {
         text: &str,
         mode: &PreparedMode,
         handle: &str,
-    ) -> Result<MessageRecord> {
+    ) -> Result<(MessageRecord, Option<MessageId>)> {
         let recipient = match (target.agent.as_ref(), pane) {
             (Some(agent), pane) => Recipient::Agent { agent, pane },
             (None, Some(pane)) => Recipient::Pane {
@@ -784,15 +785,29 @@ impl DispatchState<'_> {
             .with_reply_wait(self.reply_wait)
             .with_in_reply_to(self.in_reply_to.to_vec());
         if pane.is_some() {
-            return Ok(self.store.queue_claimed_message(
+            #[cfg(feature = "testkit")]
+            crate::testkit::rendezvous("RIMZ_TEST_FRESH_SEND_BEFORE_CLAIM");
+            if mode.kind == DeliveryKind::Boundary && target.agent.is_some() {
+                let claim = self.store.queue_boundary_message(
+                    &message,
+                    &self.workspace.session_name,
+                    Timestamp::now(),
+                )?;
+                return Ok(match claim {
+                    BoundaryClaim::Claimed(message) => (message, None),
+                    BoundaryClaim::Parked { message, blocker } => (message, Some(blocker)),
+                });
+            }
+            let claimed = self.store.queue_claimed_message(
                 &message,
                 &self.workspace.session_name,
                 Timestamp::now(),
-            )?);
+            )?;
+            return Ok((claimed, None));
         }
         self.store
             .queue_message(&message, &self.workspace.session_name)?;
-        Ok(message)
+        Ok((message, None))
     }
 }
 
@@ -920,22 +935,13 @@ fn dispatch_decision(
         };
     }
     if let Some(agent) = target.agent.as_ref()
-        && let Some(blocker) = queue_head(
+        && let Some(blocker) = fresh_boundary_blocker(
             pending.iter(),
             &agent.kind,
             &agent.agent_id,
             agent.name.as_deref(),
             now,
         )
-        .or_else(|| {
-            in_flight_claim(
-                pending.iter(),
-                &agent.kind,
-                &agent.agent_id,
-                agent.name.as_deref(),
-                now,
-            )
-        })
     {
         return DispatchDecision::Parked {
             reason: Some(ParkReason::Behind(blocker.message_id.clone())),
@@ -961,7 +967,14 @@ fn dispatch_one(
         return Err(DispatchErr::NoDurableSession { label: handle });
     };
     let bound = target.bound(state.snapshot);
-    let message = state.enqueue(target, Some(pane), text, mode, &handle)?;
+    let (message, blocker) = state.enqueue(target, Some(pane), text, mode, &handle)?;
+    if let Some(blocker) = blocker {
+        return Ok(DispatchOutcome::Queued {
+            label: handle,
+            message_id: message.message_id,
+            reason: Some(ParkReason::Behind(blocker)),
+        });
+    }
     deliver::register_message_wake(state.workspace, state.store);
     let message_id = message.message_id.clone();
     match deliver::execute_attempt(
@@ -1013,7 +1026,10 @@ fn dispatch_parked(
     handle: String,
     reason: Option<ParkReason>,
 ) -> Result<DispatchOutcome> {
-    let message_id = state.enqueue(target, None, text, mode, &handle)?.message_id;
+    let message_id = state
+        .enqueue(target, None, text, mode, &handle)?
+        .0
+        .message_id;
     Ok(DispatchOutcome::Queued {
         label: handle,
         message_id,

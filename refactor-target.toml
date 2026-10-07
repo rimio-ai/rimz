@@ -493,7 +493,8 @@ surface-budget = 727
 [[module]]
 path = "crates/rimz/src/ids.rs"
 # `WorkspaceDirName` names workspace dirs beside the `WorkspaceId` they hold.
-surface-budget = 66
+# `MessageId::successor` keeps boundary claim commits in per-card FIFO order.
+surface-budget = 67
 
 [[module]]
 path = "crates/rimz/src/lane.rs"
@@ -679,7 +680,8 @@ path = "crates/rimz/src/store"
 # SidebarSubAgent::holds_parent_turn shares delegation liveness with the renderer (+1).
 # Fresh pane writes share the atomic enqueue-and-claim writer (+1).
 # The pane writer rechecks its batch against the existing claim-hold rule (+1).
-surface-budget = 368
+# Fresh boundary sends share a checked enqueue-and-claim outcome and writer (+2).
+surface-budget = 370
 
 [[module]]
 path = "crates/rimz/src/theme"

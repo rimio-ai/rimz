@@ -5733,6 +5733,148 @@ fn hook_delivery_is_sent_when_its_wake_cannot_be_refreshed() {
 }
 
 #[test]
+fn fresh_boundary_send_parks_when_another_sender_claims_after_its_read() {
+    assert_fresh_boundary_send_race(false);
+}
+
+#[test]
+fn fresh_boundary_send_parks_when_another_sender_sends_after_its_read() {
+    assert_fresh_boundary_send_race(true);
+}
+
+fn assert_fresh_boundary_send_race(winner_sent: bool) {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
+    register_running_agent(&env, "sess-send-race", "send-race", pane_env);
+    run_hook(
+        &env,
+        json!({"hook_event_name": "Stop", "session_id": "sess-send-race", "worktree_branch": "send-race"}),
+        pane_env,
+    );
+    let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "claude")]);
+    let before_claim = DeliveryRendezvous::new(&env, "fresh-before-claim");
+    let before_write = DeliveryRendezvous::new(&env, "winner-before-write");
+    let trace = env.project_root.join("fresh-send-race.log");
+    let loser = traced_rimz(&env, &trace)
+        .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+        .env("RIMZ_TEST_FRESH_SEND_BEFORE_CLAIM", &before_claim.path)
+        .args(["message", "@claude", "--", "loser"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut release_loser = before_claim.arrive();
+    assert!(env.store().list_messages().unwrap().is_empty());
+    let winner = traced_rimz(&env, &trace)
+        .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+        .env("RIMZ_TEST_PANE_WRITE_BEFORE_LOCK", &before_write.path)
+        .args(["message", "@claude", "--", "winner"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut release_winner = before_write.arrive();
+    let mut winner = Some(winner);
+    let held = env.store().list_messages().unwrap().remove(0);
+    assert_eq!(held.status, MessageStatus::Claimed);
+    assert_eq!(held.attempts, 1);
+    let winner_output = if winner_sent {
+        release_winner.write_all(&[1]).unwrap();
+        let output = winner.take().unwrap().wait_with_output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+        assert_eq!(
+            message_by_id(&env, &held.message_id).status,
+            MessageStatus::Sent
+        );
+        Some(output)
+    } else {
+        None
+    };
+    release_loser.write_all(&[1]).unwrap();
+    let loser_output = loser.wait_with_output().unwrap();
+    assert!(loser_output.status.success(), "{loser_output:?}");
+    run_success(
+        traced_rimz(&env, &trace)
+            .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+            .env("RIMZ_MESSAGE_SETTLE_MS", "0")
+            .args(["message", "sweep"]),
+        "sweep while the winner is in flight",
+    );
+    let winner_output = winner_output.unwrap_or_else(|| {
+        release_winner.write_all(&[1]).unwrap();
+        let output = winner.take().unwrap().wait_with_output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+        output
+    });
+    let lines = trace_lines(&trace);
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|line| is_paste(line, &user_message("winner"))
+                || is_paste(line, &user_message("loser")))
+            .count(),
+        1,
+        "only the commit winner may paste"
+    );
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|line| is_paste(line, &user_message("winner")))
+            .count(),
+        1
+    );
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|line| is_paste(line, &user_message("loser")))
+            .count(),
+        0
+    );
+    assert_eq!(lines.iter().filter(|line| is_enter_key(line)).count(), 1);
+    let receipt = String::from_utf8_lossy(&loser_output.stdout);
+    assert!(
+        receipt.contains(&format!("behind {}", held.message_id)),
+        "{receipt}"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&winner_output.stdout).trim(),
+        format!("sent to @claude#send-race ({})", held.message_id)
+    );
+    let loser_id = MessageId::parse(&queued_id_from_stdout(&loser_output.stdout)).unwrap();
+    assert!(loser_id.as_str() > held.message_id.as_str());
+    let parked = message_by_id(&env, &loser_id);
+    assert_eq!(parked.status, MessageStatus::Queued);
+    assert_eq!(parked.attempts, 0);
+    assert_eq!(parked.last_attempt_at, None);
+    assert_eq!(
+        message_by_id(&env, &held.message_id).status,
+        MessageStatus::Sent
+    );
+    let events = env.read_events();
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.method == "message.sent")
+            .count(),
+        1
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.method == "message.queued")
+            .count(),
+        2
+    );
+    let wake: Option<jiff::Timestamp> =
+        serde_json::from_slice(&std::fs::read(wake_stamp_path(&env)).unwrap()).unwrap();
+    assert!(
+        wake.is_some(),
+        "the parked loser must retain a delivery wake"
+    );
+}
+
+#[test]
 fn fresh_sends_exclude_hook_delivery_before_the_pane_write() {
     for mode in [None, Some("--steer"), Some("--interrupt")] {
         let env = Env::new();
