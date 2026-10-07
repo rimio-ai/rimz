@@ -121,6 +121,8 @@ Every child has a work deadline: 30 minutes unless the parent passes `--timeout`
 
 A child that stops on a provider usage limit is not finished and has not failed. It reads `paused` in `rimz subagents list`, its run stays open until the deadline, and its parent gets one `SUBAGENT_PAUSED` message naming the child and the provider's error, so the parent can wait for the reset, stop the child, or relaunch the task on another provider ([reference](../reference/cli/subagents.md#a-child-paused-on-a-provider-limit)). The [parent's card parks too](./sidebar.md#the-agent-card). If you enable [auto-continue](./loops.md#auto-continue), it resumes the child, not a parent whose card is paused only because of that child.
 
+A launched child silent past the [stall window](./configuration.md#sidebar-rendering) shows `!` with `silent Nm` under its parent and stops counting as the parent's work, so the parent shows its own status. The parent gets one `SUBAGENT_STALLED` message naming the child. RimZ never stops a child because it is silent; the deadline and explicit stop still apply ([notice and once-per-run rule](../reference/cli/subagents.md#a-child-silent-past-the-stall-window)).
+
 To stop a child yourself, stop it like any agent. The parent's report lists it as `canceled`:
 
 ```sh
