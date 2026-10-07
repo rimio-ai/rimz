@@ -162,7 +162,10 @@ pub(crate) enum StopRunErr {
 /// pane. `Ok` means the run is terminal and no pane rimz can name for it
 /// remains: the pane is gone, its session is gone, or none was ever recorded or
 /// registered, so a pane nothing names can outlive an `Ok`.
-/// For a subagent run, `Ok` also means its matched card is ended, if it registered.
+/// For a subagent run, `Ok` also means its still-un-ended card is ended,
+/// matched by the run's session id, else the newest same-kind namesake
+/// registered at or before the run finished. A later namesake is never the
+/// stop's.
 pub(crate) fn stop_supervised_run(
     workspace: &rimz::ResolvedWorkspace,
     store: &rimz::Store,
@@ -208,7 +211,7 @@ fn stamp_stopped_subagent_end(
     let Some(child) = audit
         .agents
         .iter()
-        .filter(|agent| agent.ended_at.is_none() && run.matches_agent(agent))
+        .filter(|agent| agent.ended_at.is_none() && run.matches_stopped_agent(agent))
         .max_by_key(|agent| {
             (
                 run.agent_id.as_ref() == Some(&agent.agent_id),

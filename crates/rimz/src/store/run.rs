@@ -397,6 +397,16 @@ impl RunRecord {
                 .is_some_and(|name| self.agent_name.as_ref() == Some(name))
     }
 
+    pub fn matches_stopped_agent(&self, agent: &crate::agents::AgentState) -> bool {
+        self.matches_agent(agent)
+            && (self.agent_id.as_ref() == Some(&agent.agent_id)
+                || self.completed_at.is_none_or(|completed_at| {
+                    agent
+                        .registered_at
+                        .is_some_and(|registered_at| registered_at <= completed_at)
+                }))
+    }
+
     pub fn new(
         workspace_id: WorkspaceId,
         kind: AgentKind,
@@ -801,5 +811,42 @@ mod tests {
         value.as_object_mut().unwrap().remove("retry_of");
         let decoded: RunRecord = serde_json::from_value(value).unwrap();
         assert_eq!(decoded.retry_of, None);
+    }
+
+    #[test]
+    fn stopped_agent_match_bounds_names_but_not_session_ids() {
+        let mut record = RunRecord::new(
+            WorkspaceId::from_project_root(Path::new("/repo")),
+            AgentKind::new_unchecked("codex"),
+            PermissionMode::Auto,
+            "task".into(),
+            "/repo".into(),
+        );
+        record.agent_id = Some("old".into());
+        record.agent_name = Some("otter".to_owned());
+        for (completed, registered, id, name, kind, expected) in [
+            (Some(2000), None, "new", "otter", "codex", false),
+            (Some(2000), Some(3000), "new", "otter", "codex", false),
+            (Some(2000), Some(1000), "new", "otter", "codex", true),
+            (Some(2000), Some(2000), "new", "otter", "codex", true),
+            (None, None, "new", "otter", "codex", true),
+            (None, Some(3000), "new", "otter", "codex", true),
+            (Some(2000), None, "old", "renamed", "codex", true),
+            (Some(2000), Some(3000), "old", "renamed", "codex", true),
+            (Some(2000), Some(1000), "new", "other", "codex", false),
+            (Some(2000), Some(1000), "old", "otter", "claude", false),
+        ] {
+            record.completed_at = completed.map(|seconds| Timestamp::from_second(seconds).unwrap());
+            let mut agent =
+                crate::agents::AgentState::stub(kind, id, crate::agents::AgentStatus::Idle);
+            agent.name = Some(name.to_owned());
+            agent.registered_at =
+                registered.map(|seconds| Timestamp::from_second(seconds).unwrap());
+            assert_eq!(
+                record.matches_stopped_agent(&agent),
+                expected,
+                "completed={completed:?}, registered={registered:?}, id={id}, name={name}, kind={kind}"
+            );
+        }
     }
 }
