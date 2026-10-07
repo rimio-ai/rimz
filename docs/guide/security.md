@@ -40,7 +40,7 @@ A Markdown definition's `allowed-tools` is a standing grant, not a skill's per-i
 
 ### Project trust
 
-A cloned repository can ship a `.rimz/config.toml` that declares agents, profiles, teams, loop tasks, hooks, environment variables, and which provider account a fresh room launches into. Each of those can run a command or redirect your credentials, so RimZ keeps the whole file inert until you trust the workspace. On an untrusted clone nothing the file declares can launch; RimZ parses it only far enough to tell you what it is asking for.
+A cloned repository can ship a `.rimz/config.toml` that declares agents, profiles, teams, loop tasks, hooks, environment variables, and which provider account an unpinned room follows. Each of those can run a command or redirect your credentials, so RimZ keeps the whole file inert until you trust the workspace. On an untrusted clone nothing the file declares can launch; RimZ parses it only far enough to tell you what it is asking for.
 
 A first interactive `rimz start` in an untrusted workspace offers the grant and names what the config declares. The interactive `rimz loop fire` and the project-task edit commands offer it inline when they meet the closed gate, with the field-level diff when a grant has gone stale. Declining leaves the workspace inert and suppresses only the first-start offer; the inline offers keep coming, and the first-start offer returns as soon as a command-running field in `.rimz/config.toml` changes.
 
@@ -62,7 +62,7 @@ The hash covers every field that can cause a process to run:
 - `[[hooks]]`: `event`, `command`
 - `[env]`: every key and value
 - `[lsp.servers.<name>]`: server name, executable `command`, `init-options`, and explicitly set `editor-check-on-save`; untrusted declarations warn at agent launch and stay inert, leaving same-named machine entries in effect, and the trust offer names their commands
-- `[accounts]`: which provider account a fresh room launches into
+- `[accounts]`: which provider account an unpinned room follows live
 
 Every name in those tables is hashed too, so renaming a profile drifts the grant. Any field RimZ can execute has to enter this hash, and a unit test guards the projection by hashing one config per field, every field in the lists above included, and failing when two of them collide. The mechanics, the grant record, and the diff are in [the trust internals](../internals/harness/trust.md); the command is in [the trust reference](../reference/cli/hooks-trust.md#project-trust).
 
