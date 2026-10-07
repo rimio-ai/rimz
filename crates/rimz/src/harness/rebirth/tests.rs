@@ -769,14 +769,7 @@ fn rebirth_cancels_unresumed_child_runs_and_wakes_waiters() {
             plan.planned.resumed_keys(),
             BTreeSet::from([(AgentKind::new_unchecked("claude"), "root".into())])
         );
-        assert_eq!(
-            plan.preview().unresumable(),
-            ["child", "finished"].map(|id| UnresumableAgent {
-                label: id.to_owned(),
-                reason: None,
-            }),
-            "a launched child is neither planned nor skipped"
-        );
+        let preview = plan.preview();
         if inspected {
             materialize(plan, choice, "rimz-test");
         } else {
@@ -788,28 +781,52 @@ fn rebirth_cancels_unresumed_child_runs_and_wakes_waiters() {
                 "rimz-test",
             );
         }
-        let event = match choice {
-            RebirthDisposition::RecoverDrop => "rimz.not-resumed",
-            RebirthDisposition::Decline => "rimz.recovery-declined",
-            _ => {
-                assert_eq!(ended_events(&fixture), []);
-                let mut expected = ["child", "finished"]
-                    .map(key)
-                    .into_iter()
-                    .collect::<BTreeSet<_>>();
-                if choice == RebirthDisposition::Defer {
-                    expected.insert(key("root"));
-                }
-                assert_eq!(pending(&fixture), expected);
-                ""
-            }
-        };
         let ended = ended_events(&fixture);
-        if !event.is_empty() {
+        if inspected {
             for id in ["child", "finished"] {
-                assert!(ended.contains(&(event.to_owned(), id.into())));
+                assert!(
+                    ended.contains(&("rimz.child-not-resumed".to_owned(), id.into())),
+                    "{choice:?}: child end missing for {id}: {ended:?}"
+                );
             }
-            assert!(pending(&fixture).is_empty(), "{choice:?}");
+            assert!(preview.unresumable().is_empty());
+            assert_eq!(preview.candidate_count(), 1);
+            assert_eq!(
+                pending(&fixture),
+                if choice == RebirthDisposition::Defer {
+                    BTreeSet::from([key("root")])
+                } else {
+                    BTreeSet::new()
+                },
+                "{choice:?}"
+            );
+            if choice == RebirthDisposition::Decline {
+                assert!(ended.contains(&("rimz.recovery-declined".into(), "root".into())));
+            } else {
+                assert_eq!(ended.len(), 2);
+            }
+            let sink =
+                DiagSink::for_workspace(fixture.paths.workspace_id.clone(), "rimz-test", None);
+            let diagnostics = std::fs::read_to_string(sink.log_path().unwrap()).unwrap();
+            let children = diagnostics
+                .lines()
+                .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+                .filter(|row| row["event"]["kind"] == "recovery_child_ended")
+                .collect::<Vec<_>>();
+            assert_eq!(children.len(), 2);
+            for id in ["child", "finished"] {
+                assert!(
+                    children
+                        .iter()
+                        .any(|row| { row["event"]["agent_id"] == id && row["severity"] == "info" })
+                );
+            }
+        } else {
+            assert!(ended.is_empty());
+            assert_eq!(
+                pending(&fixture),
+                ["root", "child", "finished"].map(key).into()
+            );
         }
         assert_eq!(
             run::load(&fixture.paths, &records[0].run_id)
@@ -835,6 +852,64 @@ fn rebirth_cancels_unresumed_child_runs_and_wakes_waiters() {
         assert_eq!(
             sockets[1].recv(&mut frame).unwrap_err().kind(),
             std::io::ErrorKind::WouldBlock
+        );
+    }
+}
+
+#[test]
+fn live_entry_defer_ends_children_and_cancels_their_open_runs() {
+    use crate::agents::PermissionMode;
+    use crate::harness::run;
+    use crate::store::run::{RunRecord, RunStatus};
+
+    for with_root in [true, false] {
+        let dir = tempfile::tempdir().unwrap();
+        let worktree = dir.path().join("lane");
+        let mut agents = vec![("child", worktree.as_path(), true)];
+        if with_root {
+            agents.push(("root", worktree.as_path(), true));
+        }
+        let fixture = Fixture::with_children(&agents, &["child"]);
+        park_roster(&fixture.paths).unwrap();
+        let mut record = RunRecord::new(
+            fixture.paths.workspace_id.clone(),
+            AgentKind::new_unchecked("claude"),
+            PermissionMode::Auto,
+            "task".into(),
+            worktree,
+        );
+        record.agent_id = Some("child".into());
+        record.status = RunStatus::Running;
+        run::create(&fixture.paths, &record).unwrap();
+        let plan = inspect_live_scope(
+            fixture.paths.clone(),
+            fixture.runtime.clone(),
+            &fixture.project,
+            &MachineConfig::default(),
+            false,
+            pending(&fixture),
+        );
+        assert!(!plan.boundary);
+        assert!(!plan.is_empty(), "a child-only settlement must still run");
+        let preview = plan.preview();
+        materialize(plan, RebirthDisposition::Defer, "rimz-test");
+        assert_eq!(
+            ended_events(&fixture),
+            [("rimz.child-not-resumed".into(), "child".into())]
+        );
+        assert_eq!(preview.candidate_count(), usize::from(with_root));
+        assert!(preview.unresumable().is_empty());
+        assert_eq!(
+            pending(&fixture),
+            if with_root {
+                BTreeSet::from([key("root")])
+            } else {
+                BTreeSet::new()
+            }
+        );
+        assert_eq!(
+            run::load(&fixture.paths, &record.run_id).unwrap().status,
+            RunStatus::Canceled
         );
     }
 }

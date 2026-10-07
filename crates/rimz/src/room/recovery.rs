@@ -21,7 +21,8 @@ fn parked_disposition(attended: bool, recovery_off: bool) -> RebirthDisposition 
 }
 
 impl RoomContext {
-    /// Settle filled seats and an attended decline, leaving other agents parked.
+    /// Settle non-live children, filled seats, and an attended decline,
+    /// leaving other roots parked.
     pub fn reconcile_parked_recovery(
         &self,
         no_resume: bool,
