@@ -1495,6 +1495,32 @@ fn tier_fallback_has_its_own_assist_category_and_forensic_line() {
 }
 
 #[test]
+fn stall_notice_names_child_parent_and_silence_in_stats() {
+    let record = serde_json::from_value(serde_json::json!({
+        "at": "2026-06-02T12:00:00Z", "assist": "stall_notice",
+        "kind": "codex", "agent_id": "session-1", "label": "@still-silver",
+        "parent": "@planner", "silent_secs": 1920, "message_id": "msg_1",
+        "delivered": false, "error": "pane send failed\ncaused by"
+    }));
+    assert!(record.is_ok(), "stall notice must decode: {record:?}");
+    let stats = assists::AssistStats::from_records("all", vec![record.unwrap()]);
+    assert_eq!(
+        serde_json::to_value(&stats.rollup).unwrap()["stall_notices"],
+        1
+    );
+    let rows = assists::category_rows(&stats.rollup).join("\n");
+    assert!(rows.contains("Stall notice:"), "{rows}");
+    let line = assists::benefit_line(&stats.events[0], &jiff::tz::TimeZone::UTC);
+    for fact in ["@still-silver", "@planner", "32m", "pane send failed"] {
+        assert!(line.contains(fact), "{line}");
+    }
+    assert!(!line.contains("caused by"), "{line}");
+    let wire = serde_json::to_value(&stats).unwrap();
+    assert_eq!(wire["events"][0]["assist"], "stall_notice");
+    assert_eq!(wire["events"][0]["message_id"], "msg_1");
+}
+
+#[test]
 fn model_display_names() {
     use rimz::agents::model_display::display_model;
 
@@ -1649,6 +1675,7 @@ fn assists_fold_rolls_up_benefit_and_keeps_failed_attempts_forensics() {
     assert_eq!(
         stats.rollup,
         AssistRollup {
+            stall_notices: 0,
             resident_launches: 0,
             model_aliases: 0,
             tier_fallbacks: 0,

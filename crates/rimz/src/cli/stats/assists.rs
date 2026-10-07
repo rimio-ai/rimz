@@ -16,6 +16,7 @@ pub(super) struct AssistStats {
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub(super) struct AssistRollup {
+    pub(super) stall_notices: usize,
     pub(super) resident_launches: usize,
     pub(super) model_aliases: usize,
     pub(super) tier_fallbacks: usize,
@@ -38,6 +39,19 @@ pub(super) struct AssistRollup {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "snake_case", tag = "assist")]
 pub(super) enum AssistEvent {
+    StallNotice {
+        at: Timestamp,
+        kind: AgentKind,
+        agent_id: AgentSessionId,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        label: Option<String>,
+        parent: String,
+        silent_secs: u64,
+        message_id: String,
+        delivered: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
     ResidentLaunch {
         at: Timestamp,
         task: String,
@@ -256,6 +270,7 @@ impl AssistStats {
                         rollup.recovered_secs += recovered_secs(*parked_since, *at);
                     }
                 }
+                AssistEvent::StallNotice { .. } => rollup.stall_notices += 1,
                 AssistEvent::Compact { .. } => rollup.compacts += 1,
                 AssistEvent::CacheKeepalive { delivered, .. } => {
                     rollup.keepalives += usize::from(*delivered)
@@ -299,6 +314,26 @@ impl AssistStats {
 impl AssistEvent {
     fn from_record(record: AssistRecord) -> Self {
         match record.assist {
+            Assist::StallNotice {
+                kind,
+                agent_id,
+                label,
+                parent,
+                silent_secs,
+                message_id,
+                delivered,
+                error,
+            } => Self::StallNotice {
+                at: record.at,
+                kind,
+                agent_id,
+                label,
+                parent,
+                silent_secs,
+                message_id,
+                delivered,
+                error,
+            },
             Assist::ResidentLaunch {
                 task,
                 checkout,
@@ -559,7 +594,8 @@ impl AssistEvent {
 
     fn at(&self) -> Timestamp {
         match self {
-            Self::ResidentLaunch { at, .. }
+            Self::StallNotice { at, .. }
+            | Self::ResidentLaunch { at, .. }
             | Self::ModelAlias { at, .. }
             | Self::Redeem { at, .. }
             | Self::Continue { at, .. }
@@ -642,6 +678,9 @@ pub(super) fn category_rows(rollup: &AssistRollup) -> Vec<String> {
 
 fn category_entries(rollup: &AssistRollup) -> Vec<(&'static str, String)> {
     let mut rows = Vec::with_capacity(5);
+    if rollup.stall_notices > 0 {
+        rows.push(("Stall notice:", rollup.stall_notices.to_string()));
+    }
     if rollup.resident_launches > 0 {
         rows.push(("Resident launches:", rollup.resident_launches.to_string()));
     }
@@ -702,6 +741,23 @@ pub(super) fn benefit_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> St
     let at = event.at().to_zoned(zone.clone());
     let time = at.strftime("%H:%M");
     match event {
+        AssistEvent::StallNotice {
+            kind,
+            label,
+            parent,
+            silent_secs,
+            error,
+            ..
+        } => {
+            let agent = label.as_deref().unwrap_or(kind.as_str());
+            let silence =
+                rimz::utils::time::format_duration_compact(Duration::from_secs(*silent_secs));
+            let error = error
+                .as_deref()
+                .map(|error| format!(" ({})", first_line(error)))
+                .unwrap_or_default();
+            format!("{time} {agent} silent {silence} — stall notice to {parent}{error}")
+        }
         AssistEvent::ResidentLaunch { task, handles, .. } => {
             format!("{time} loop {task} opened {}", handles.join(", "))
         }
@@ -1037,7 +1093,13 @@ pub(super) fn forensic_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> S
             timestamp_fact("natural reset", *natural_reset, zone),
             reset_facts(window_resets, zone),
         ),
-        AssistEvent::Continue {
+        AssistEvent::StallNotice {
+            agent_id,
+            message_id,
+            delivered,
+            ..
+        }
+        | AssistEvent::Continue {
             agent_id,
             message_id,
             delivered,

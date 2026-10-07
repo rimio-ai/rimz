@@ -624,6 +624,30 @@ pub fn release_park_notice(paths: &StatePaths, run_id: &RunId, activity: Timesta
     .map(|_| ())
 }
 
+/// Claim this run's one silent-child notice. A settled or already-noticed run writes nothing.
+pub fn claim_stall_notice(paths: &StatePaths, run_id: &RunId, now: Timestamp) -> Result<bool> {
+    update_record(paths, run_id, |record, _| {
+        if record.status.is_terminal() || record.stall_noticed_at.is_some() {
+            return Ok(RecordMutation::Keep(false));
+        }
+        record.stall_noticed_at = Some(now);
+        Ok(RecordMutation::Write(true))
+    })
+    .map(|(_, claimed)| claimed)
+}
+
+/// Give back only this caller's claim when its notice could not be queued.
+pub fn release_stall_notice(paths: &StatePaths, run_id: &RunId, at: Timestamp) -> Result<()> {
+    update_record(paths, run_id, |record, _| {
+        if record.stall_noticed_at != Some(at) {
+            return Ok(RecordMutation::Keep(()));
+        }
+        record.stall_noticed_at = None;
+        Ok(RecordMutation::Write(()))
+    })
+    .map(|_| ())
+}
+
 pub fn budget_exceeded(
     paths: &StatePaths,
     run_id: &RunId,

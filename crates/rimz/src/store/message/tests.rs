@@ -45,6 +45,7 @@ fn submitted_sections_cover_every_sender_and_body() {
         HarnessNotice::Stage,
         HarnessNotice::CacheKeepalive,
         HarnessNotice::SubagentPaused,
+        HarnessNotice::SubagentStalled,
         HarnessNotice::Other("future".to_owned()),
     ] {
         let origin = if matches!(
@@ -1510,6 +1511,32 @@ fn fleet_reports_keep_durable_names_and_never_batch() {
         .with_sender(MessageSender::Harness { notice });
         assert_eq!(record.batchable(), batchable, "{name}");
     }
+}
+
+#[test]
+fn stalled_notice_is_typed_batchable_and_not_a_fleet_digest() {
+    let notice: HarnessNotice =
+        serde_json::from_value(serde_json::json!("subagent_stalled")).unwrap();
+    assert!(
+        !matches!(notice, HarnessNotice::Other(_)),
+        "a stall has its own notice type"
+    );
+    assert!(!notice.is_fleet_digest());
+    assert_eq!(notice.header_type(), "SUBAGENT_STALLED");
+    assert_eq!(serde_json::to_value(&notice).unwrap(), "subagent_stalled");
+    let sender = MessageSender::Harness { notice };
+    assert_eq!(
+        sender.section_origin(),
+        SectionOrigin::Notice("@rimz".to_owned())
+    );
+    let record = MessageRecord::new(
+        WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-target-test")),
+        &agent("recipient", None),
+        "silent".into(),
+        DeliveryGate::Done,
+    )
+    .with_sender(sender);
+    assert!(record.batchable());
 }
 
 #[test]
