@@ -789,6 +789,7 @@ fn selected_pet_action_follows_the_focused_card() {
             name: "Explore".to_owned(),
             petname: None,
             provider_native: true,
+            stalled: false,
             status: AgentStatus::Running,
             phase: crate::agents::TurnPhase::Reasoning,
             task: None,

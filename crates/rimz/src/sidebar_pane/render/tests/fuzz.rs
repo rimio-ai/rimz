@@ -126,6 +126,7 @@ fn sub_agents(count: usize, text: &str) -> Vec<SidebarSubAgent> {
             name: text.to_owned(),
             petname: None,
             provider_native: true,
+            stalled: false,
             status: AgentStatus::Running,
             phase: crate::agents::TurnPhase::Acting,
             task: Some(text.to_owned()),

@@ -133,8 +133,13 @@ impl SidebarSnapshot {
         // Nest each subagent under its parent root row before grouping. This is the
         // one chokepoint every live (`rows_from_panes`) card flows through, so
         // nesting behaves identically for process, agent, and attention rows.
-        let delegated_parks =
-            subagents::attach_sub_agents_indexed(&mut rows, &agent_index, now, &demotion);
+        let delegated_parks = subagents::attach_sub_agents_indexed(
+            &mut rows,
+            &agent_index,
+            now,
+            &demotion,
+            windows.stalled_after_secs,
+        );
         // Same-pane conversations keep separate durable projections, so fold the
         // hidden roots' clocks onto whichever one currently owns the pane. A fork
         // is the same conversation to whoever prompts the pane next, so this runs
