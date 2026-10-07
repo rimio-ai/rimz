@@ -33,6 +33,8 @@ The task fails at entry when `freeze`, `rsvg-convert`, or JetBrainsMono Nerd Fon
 
 `cargo xtask screenshot pane <id> [--lines N] [--output PATH]` captures any normalized pane id, for example `zellij:terminal_3` or `tmux:%3`.
 
+For either capture command, `--lines N` renders the last `N` lines, reaching into scrollback on both backends. Trailing blank rows do not count; a pane with fewer content lines renders fewer. Without `--lines`, the visible screen is unchanged.
+
 `cargo xtask screenshot state <empty|fleet|provider|cockpit|focus|economy|reach> [--width W] [--height H] [--output PATH]` renders deterministic fixture frames through the same headless sidebar renderer used by tests. `cockpit` (fleet breadth), `focus` (expanded team cards and the remote footer), `economy` and `reach` (provider spend; pets appear in the gallery with `--pets`) are packed gallery states for review.
 
 Live sidebar state can also be captured as line-oriented terminal output without the mux through `rimz sidebar frame`.
