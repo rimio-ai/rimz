@@ -508,8 +508,8 @@ Under each row, the agent's activity description (the line the sidebar card show
 | `waiting` | The agent is waiting on you: a question, a permission prompt, or a plan to approve. |
 | `idle` | At rest, including after an interrupted turn. |
 | `success` | The last turn completed. |
-| `failed` | The last turn failed. |
-| `paused` | Parked by a provider limit or a budget cap. |
+| `failed` | The last turn failed, or a live launched child's provider park can no longer resume. |
+| `paused` | Parked by a provider limit, overload, or budget cap, or by a live launched child with a provider park. |
 | `sleeping` | At rest with a one-shot delivery armed for its session in this workspace: a timer, PID, watched command, polled check, file watch, or a one-shot signal. Standing subscriptions do not count, and running, waiting, failed, paused, or a live child take precedence. |
 
 The status is derived for display. [`rimz message --when`](./message.md) matches the raw lifecycle statuses (`running`, `waiting`, `idle`, `success`, `failed`) and never `paused` or `sleeping`. `show` adds the turn phase.
@@ -521,7 +521,7 @@ The status is derived for display. [`rimz message --when`](./message.md) matches
 | `id`, `kind`, `handle`, `name`, `name_explicit`, `profile`, `role`, `team`, `mode` | Identity. |
 | `login` | The agent's recorded named account as `kind@name`, such as `claude@work`; omitted for the default account. Switching the room default does not change this field for an existing agent. |
 | `me` | `true` on at most one entry: the caller. RimZ matches `TMUX_PANE` or `ZELLIJ_PANE_ID` to the pane binding first, then the `RIMZ_AGENT_KIND`, `RIMZ_AGENT_NAME`, `RIMZ_AGENT_PROFILE`, and `RIMZ_AGENT_ROLE` launch identity. Outside an agent pane every entry is `false`. |
-| `status`, `phase`, `turn_error`, `ask`, `unread`, `attention_score`, `description` | Projected activity. |
+| `status`, `phase`, `turn_error`, `ask`, `unread`, `attention_score`, `description` | Projected activity. `turn_error` describes the agent's own turn; it remains `null` when only a child's park pauses or fails the parent card. |
 | `pending_waits` | Armed one-shot deliveries, each with its name, trigger, and optional arm timestamp. Trigger kinds include `check` with `command` and `file` with `path` and `grep`, alongside timers, PIDs, commands, and signals. Timers come first by due time, then watches and signals; names break ties. |
 | `idle_stop` | The pending [`stop --when-idle`](#stop) request: `after_secs`, `requested_at`, `requested_by` (the asking agent's handle, omitted from a user shell), and `due_at` while the agent is resting and its clock runs. Omitted when none is pending. |
 | `launch_warnings` | Warnings the launch wrapper printed for the current launch, in print order; empty after a clean launch. |
@@ -532,7 +532,7 @@ The status is derived for display. [`rimz message --when`](./message.md) matches
 | `timeline` | Registration, turn-start, activity, and observation timestamps. |
 | `placement` | `channel`, `worktree`, `branch`, `pane`, and `pr`. A `pr` has `number`, `state` (`open`, `closed`, or `merged`), and `ci` (`pending`, `passing`, or `failing`). |
 | `budget` | `cap` (the effective cap), `spent_usd`, `parked`, and the `park` label. |
-| `sub_agents` | Nested children. Each child's `status` is its displayed status, including `paused` for a live launched child stopped on a limit. Optional `tokens` is `{"window": N}` for current context occupancy or `{"total": N}` for whole-run consumption; absent when neither is known. |
+| `sub_agents` | Nested children. Each child's `status` is its displayed status, including `paused` for a live launched child stopped on a provider limit or overload, or `failed` once that park can no longer resume (see [parent-card precedence](../../guide/sidebar.md#the-agent-card)). Optional `tokens` is `{"window": N}` for current context occupancy or `{"total": N}` for whole-run consumption; absent when neither is known. |
 
 #### `show` / `inspect`
 
