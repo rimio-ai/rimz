@@ -112,7 +112,7 @@ The stats line puts the same thing in absolute numbers. `▤` is the tokens in t
 
 The subagents and waits line appears once the session has spawned a child or armed a wait, and either count shows alone when only one applies. The subagent count is the session's lifetime children, for as long as RimZ retains its history, with their known cost pinned right. That cost is a breakdown of the identity line's figure rather than a second charge to add to it.
 
-A launched child stopped on a provider limit shows paused with the limit's label in its expanded entry, alongside the running children.
+A launched child stopped on a provider limit or overload shows paused with the error's label in its expanded entry, alongside the running children. Unless the parent is itself waiting on you, paused, or failed, its card follows the child's park: paused with `@child: label` on the second line, or failed once that pause can no longer resume automatically. The child entry changes to failed too. The label names the child so you can go to its pane rather than prompting the parent to continue.
 
 To check delegated work without leaving your pane, click the subagents and waits line to open its entries under the card; selecting the card opens them too, and your click sticks until you close it again. Each subagent entry carries its own live state, what the parent asked it to do, and, while it runs, tokens, model, and elapsed time. Running children lead in the order they started, then the children that finished recently, newest first; the rest fold behind a `+K older` line you can click to append. How long a finished child stays listed, and how many, are `recent_subagent_secs` and `max_recent_subagents` ([theming: display](./theme.md#display)).
 

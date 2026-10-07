@@ -61,7 +61,7 @@ A running or waiting card with async questions adds a yellow `?` line below its 
 |-------|--------|---------|-----------|
 | `?` | waiting | asked you something: a permission, a plan approval, a question | yes |
 | `!` | failed | the turn errored, died on a provider API error, went silent past the stall window, or repeated one tool call 20 times | yes |
-| `⏸︎` | paused | stopped mid-turn on a provider rate limit, overload, or dropped connection; nothing to answer until the provider recovers; a pause that can no longer resume becomes `!` | after recovery: prompt it to continue, or let [auto-continue](../guide/configuration.md#resume) do it (off by default) |
+| `⏸︎` | paused | stopped mid-turn on a provider rate limit, overload, or dropped connection, or one of the children it launched is; nothing to answer until the provider recovers; a pause that can no longer resume becomes `!` | after recovery: prompt the parked agent to continue, or let [auto-continue](../guide/loops.md#auto-continue) do it (off by default) |
 | `✓` | done | the turn finished cleanly | a look |
 | `⢿` | working | running a turn; the cell animates through braille frames (`⣾`, `⣽`, ...), and any of them reads as working | no |
 | `☾` | sleeping | resting until an armed one-shot wait fires | no |
@@ -77,7 +77,7 @@ A running agent can show a head in place of `⢿`. Whichever head it shows, it c
 |-------|------|---------|
 | `⠁` | thinking | the turn has not edited a file yet; a research turn that never edits stays here to the end |
 | `▇` | compacting | condensing its context window |
-| `⢄` | waiting on subagents | delegated to its children; their entries are listed under the card |
+| `⢄` | waiting on subagents | delegated to running children; their entries are listed under the card; a launched child's provider park replaces this head with `⏸︎`, or `!` once it can no longer resume |
 | `⠙` | resolving | a working-family spinner, themable as `resolving` |
 
 Each head's frames, color, effect, and speed are configurable under [`[theme.animations]`](../guide/theme.md#animations).
@@ -318,7 +318,7 @@ Each entry starts with its live state or wait icon, then a type word and a ` · 
 | entry | lead | type · headline | right side | second line |
 |-------|------|------|------------|-------------|
 | running subagent | `⠁` while it reasons, `⢿` while it acts | launch profile or kind · description, else task if different from the type | cost, when known | `▤` tokens in the child's window when the child reports its context, else `◇` tokens over its whole run, then model, effort, and elapsed time |
-| paused subagent | `⏸︎` | launch profile or kind · limit label in italics, else description or task | cost, when known | same as a running subagent; elapsed time keeps counting |
+| parked subagent | `⏸︎`, or `!` once it can no longer resume | launch profile or kind · limit label in italics, else description or task | cost, when known | same as a running subagent; elapsed time keeps counting |
 | finished subagent | `✓` or `!` | launch profile or kind · description, else task if different from the type | cost, when known, after the time since it finished when there is no second line | `▤` tokens in the child's window when the child reports its context, else `◇` tokens over its whole run, then model, effort, and time since it finished |
 | timer | `◷` | `timer · in 12m`, or `timer · due` once the time passes | time since armed | never |
 | PID | working spinner | `pid · 16776` | time since armed | never |
@@ -379,7 +379,7 @@ A sleeping card names its first pending wait in the description:
 
 Subagent waits draw no separate entry and do not count in `⧖`: the child is already visible, as a row under `⧉` or, for a peer launched with `rimz agents`, as its own root card. A team wait counts in `⧖` and draws a static `team · stage Review` entry with its elapsed age, or `stage unknown` when its board is unavailable.
 
-`☾` replaces only an idle or done status. Working, waiting, failed, paused, and waiting on subagents all take precedence, and a standing subscription does not make an agent sleep. Sleeping opens no unread mark and sends no notification, and an earlier unread result stays unread through the sleep.
+`☾` replaces only an idle or done status. Working, waiting, failed, paused (including a launched child's provider park), and waiting on running subagents all take precedence, and a standing subscription does not make an agent sleep. Sleeping opens no unread mark and sends no notification, and an earlier unread result stays unread through the sleep.
 
 ### Process rows
 
