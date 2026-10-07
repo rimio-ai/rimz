@@ -132,11 +132,13 @@ fn a_zero_geometry_pane_is_unsized_and_draws_nothing_until_resized() {
     let mut backend = PaneBackend::for_fd(pty.slave()).unwrap();
 
     assert_eq!(backend.pane_size(), None);
+    backend.begin_frame();
     backend.write_all(b"frame").unwrap();
     backend
         .clear_region(ratatui::backend::ClearType::All)
         .unwrap();
     Backend::flush(&mut backend).unwrap();
+    backend.end_frame(true).unwrap();
     assert_eq!(pty.drain(), b"");
 
     pty.resize(39, 20);
@@ -147,6 +149,38 @@ fn a_zero_geometry_pane_is_unsized_and_draws_nothing_until_resized() {
     backend.write_all(b"frame").unwrap();
     Backend::flush(&mut backend).unwrap();
     assert_eq!(pty.drain(), b"frame");
+}
+
+#[test]
+fn a_frame_holds_raw_and_encoded_bytes_until_ended() {
+    for bracket in [false, true] {
+        let mut pty = Pty::open(40, 12);
+        let mut backend = PaneBackend::for_fd(pty.slave()).unwrap();
+        backend.begin_frame();
+        backend.write_all(b"frame").unwrap();
+        backend.hide_cursor().unwrap();
+        Backend::flush(&mut backend).unwrap();
+        Write::flush(&mut backend).unwrap();
+        assert_eq!(pty.drain(), b"", "flush must not ship a held frame");
+
+        backend.end_frame(bracket).unwrap();
+        assert_eq!(
+            pty.drain(),
+            if bracket {
+                b"\x1b[?2026hframe\x1b[?25l\x1b[?2026l".as_slice()
+            } else {
+                b"frame\x1b[?25l".as_slice()
+            }
+        );
+
+        backend.write_all(b"outside").unwrap();
+        Write::flush(&mut backend).unwrap();
+        assert_eq!(
+            pty.drain(),
+            b"outside",
+            "writes outside a frame pass through"
+        );
+    }
 }
 
 #[test]

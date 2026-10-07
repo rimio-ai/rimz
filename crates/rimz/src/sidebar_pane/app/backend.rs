@@ -10,10 +10,12 @@ use ratatui::backend::{Backend, ClearType, CrosstermBackend, WindowSize};
 use ratatui::buffer::Cell as BufferCell;
 use ratatui::layout::{Position, Size};
 
+use crate::sidebar_pane::pixel::{BEGIN_SYNC, END_SYNC};
 use crate::wakeup::heartbeat::SidebarSize;
 
 pub(in crate::sidebar_pane) struct PaneBackend {
-    encoder: CrosstermBackend<Box<dyn Write + Send>>,
+    output: Box<dyn Write + Send>,
+    frame: Option<Vec<u8>>,
     geometry: Geometry,
     sized: Cell<bool>,
     cursor: Position,
@@ -28,6 +30,26 @@ enum Geometry {
 }
 
 impl PaneBackend {
+    pub(super) fn begin_frame(&mut self) {
+        self.frame = Some(Vec::new());
+    }
+
+    pub(super) fn end_frame(&mut self, bracket: bool) -> io::Result<()> {
+        let frame = self.frame.take().unwrap_or_default();
+        let bracket = bracket && !frame.is_empty();
+        if bracket {
+            self.output.write_all(BEGIN_SYNC)?;
+        }
+        let body_result = self.output.write_all(&frame);
+        let end_result = if bracket {
+            self.output.write_all(END_SYNC)
+        } else {
+            Ok(())
+        };
+        let flush_result = self.output.flush();
+        body_result.and(end_result).and(flush_result)
+    }
+
     /// Paint the pane behind `fd`, the pane's own terminal output.
     pub(in crate::sidebar_pane) fn for_fd(fd: OwnedFd) -> io::Result<Self> {
         let writer = std::fs::File::from(fd.try_clone()?);
@@ -48,7 +70,8 @@ impl PaneBackend {
 
     fn painting(output: std::fs::File, geometry: Geometry) -> Self {
         let backend = Self {
-            encoder: CrosstermBackend::new(Box::new(BufWriter::new(output))),
+            output: Box::new(BufWriter::new(output)),
+            frame: None,
             geometry,
             sized: Cell::new(true),
             cursor: Position::ORIGIN,
@@ -61,7 +84,8 @@ impl PaneBackend {
     #[cfg(test)]
     pub(in crate::sidebar_pane) fn headless(writer: impl Write + Send + 'static) -> Self {
         Self {
-            encoder: CrosstermBackend::new(Box::new(writer)),
+            output: Box::new(writer),
+            frame: None,
             geometry: Geometry::Absent,
             sized: Cell::new(true),
             cursor: Position::ORIGIN,
@@ -115,11 +139,17 @@ impl Write for PaneBackend {
         if !self.sized.get() {
             return Ok(buf.len());
         }
-        self.encoder.write(buf)
+        if let Some(frame) = &mut self.frame {
+            return frame.write(buf);
+        }
+        self.output.write(buf)
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        Write::flush(&mut self.encoder)
+        if self.frame.is_some() {
+            return Ok(());
+        }
+        self.output.flush()
     }
 }
 
@@ -133,28 +163,28 @@ impl Backend for PaneBackend {
         if !self.sized.get() {
             return Ok(());
         }
-        self.encoder.draw(content)
+        CrosstermBackend::new(self).draw(content)
     }
 
     fn append_lines(&mut self, n: u16) -> io::Result<()> {
         if !self.sized.get() {
             return Ok(());
         }
-        self.encoder.append_lines(n)
+        CrosstermBackend::new(self).append_lines(n)
     }
 
     fn hide_cursor(&mut self) -> io::Result<()> {
         if !self.sized.get() {
             return Ok(());
         }
-        self.encoder.hide_cursor()
+        CrosstermBackend::new(self).hide_cursor()
     }
 
     fn show_cursor(&mut self) -> io::Result<()> {
         if !self.sized.get() {
             return Ok(());
         }
-        self.encoder.show_cursor()
+        CrosstermBackend::new(self).show_cursor()
     }
 
     fn get_cursor_position(&mut self) -> io::Result<Position> {
@@ -166,7 +196,8 @@ impl Backend for PaneBackend {
         if !self.sized.get() {
             return Ok(());
         }
-        self.encoder.set_cursor_position(self.cursor)
+        let cursor = self.cursor;
+        CrosstermBackend::new(self).set_cursor_position(cursor)
     }
 
     fn clear(&mut self) -> io::Result<()> {
@@ -177,7 +208,7 @@ impl Backend for PaneBackend {
         if !self.sized.get() {
             return Ok(());
         }
-        self.encoder.clear_region(clear_type)
+        CrosstermBackend::new(self).clear_region(clear_type)
     }
 
     fn size(&self) -> io::Result<Size> {
