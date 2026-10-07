@@ -178,6 +178,7 @@ The deterministic gates pin exact integers. They live in `crates/rimz/tests/inte
 | --- | --- |
 | `store_fsync.rs` | The warm write path's fsync count |
 | `store_bytes.rs` | A lifecycle frame at 1 KiB or less |
+| `rollup_bytes.rs` | Rollup and carryover files at 3 KiB per row or less over 200 ended agents with 6 KiB prompts and full pane argv; neither file retains argv or prompt history |
 | `produce_budget.rs` | Zero subprocess spawns for a warm fleet-scale produce with fresh inputs, and for a produce over stale or missing heavy caches; its wall-clock cost is the `fleet::produce_warm` bench below |
 | `fold_incremental.rs` | Warm folds and produces read O(new bytes); a warm or unchanged fold parses zero carryover bytes, and a replaced carryover re-parses once |
 | `consumer_enrichment.rs`, `enrichment_cadence.rs`, `spending_incremental.rs` | Unchanged-room consumer cost, per-enrichment TTL stamps, and O(delta) spend IO |

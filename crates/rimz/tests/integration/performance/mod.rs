@@ -6,6 +6,7 @@ mod consumer_enrichment;
 mod enrichment_cadence;
 mod fold_incremental;
 mod produce_budget;
+mod rollup_bytes;
 mod sidebar_diff_stats;
 mod spending_incremental;
 mod store_bytes;

@@ -275,7 +275,7 @@ rimz gc [--older-than <DURATION>] [--dry-run] [--json] [--all]
 | `temp files` | Removes orphan atomic-write temps (`*.tmp.<pid>.<nonce>`) older than `--older-than` under the room's state and runtime roots. | Sweeps both whole roots. |
 | `messages` | Archives open messages whose receiver has ended, and requeues or times out messages stuck as sent. | Same current-room maintenance. |
 | `event log` | Cuts a corrupt tail off the event log. | Same current-room maintenance. |
-| `agent cache` | Prunes prior-agent carryover older than 14 days. | Same current-room maintenance. |
+| `agent cache` | Prunes prior-agent carryover older than 7 days, except agents with a live runtime owner, and bounds retained rows. | Same current-room maintenance. |
 | `loop schedules` | Reaps this room's dead or invalid instance rows, prunes its orphan schedule overlays, and removes unclaimed [wait outputs](./wait.md) older than 7 days. Machine `loop.toml` is untouched. | Reaps machine delivery tasks and every root's instance rows; sweeps all rooms' wait outputs. Overlay cleanup still uses the current root's known scopes. |
 
 With either scope, a current room written by an older RimZ refuses the command with a layout error; run `rimz start` or `rimz reset` there to replace it with a fresh room.
