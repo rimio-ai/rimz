@@ -68,7 +68,7 @@ The event arrives twice over: as `{{name}}` substitutions in the command, and as
 | `{{agent}}`, `{{handle}}` | | The agents' handles or roles, joined with `, ` |
 | | `RIMZ_NOTIFY_AGENT` | The agents' card labels, which prefer the task or prompt over the handle, joined with `, ` |
 | `{{count}}` | | How many agents the notification names |
-| `{{status}}`, `{{task}}`, `{{worktree}}` | | The single agent's status, task, and branch or worktree path |
+| `{{status}}`, `{{task}}`, `{{worktree}}` | | The single agent's status, task, and branch or worktree path. A long task arrives as its first kilobyte |
 | `{{pane}}`, `{{root}}` | `RIMZ_NOTIFY_PANE`, `RIMZ_NOTIFY_ROOT` | The single agent's pane id and worktree path |
 | | `RIMZ_NOTIFY_ASK` | The id of the open prompt, on a one-agent `waiting` notification |
 | `{{unread}}` | `RIMZ_NOTIFY_UNREAD` | How many cards are unread, on a nudge |
