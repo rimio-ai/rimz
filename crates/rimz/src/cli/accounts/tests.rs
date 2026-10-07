@@ -57,6 +57,39 @@ fn redeem_claude_refusal_names_the_native_usage_settings() {
 }
 
 #[test]
+fn redeem_preview_shows_a_lifted_window_without_a_redeem_line() {
+    let lifted = RateLimitWindow {
+        lifted: true,
+        ..window(FIVE_HOURS, None, None)
+    };
+    let credits = ResetCredits {
+        count: 1,
+        soonest_expiry: None,
+        expiries: Vec::new(),
+        effect: rimz::agents::RedeemEffect::RestartsWindow,
+    };
+    let mut stream = anstream::StripStream::new(Vec::new());
+    write_redeem_preview(
+        &mut stream,
+        &key("codex", "rimio"),
+        &credits,
+        &[lifted, window(SEVEN_DAYS, Some(9), Some(6 * 86_400))],
+        Some(RedeemForecast::Armed),
+        Duration::from_secs(3600),
+        now(),
+    )
+    .unwrap();
+    let text = String::from_utf8(stream.into_inner()).unwrap();
+    let row = |label: &str| {
+        text.lines()
+            .find(|line| line.trim_start().starts_with(label))
+    };
+    assert!(row("5h:").unwrap().contains("∞ not enforced now"), "{text}");
+    assert!(row("redeem 5h").is_none(), "{text}");
+    assert!(row("redeem 7d").unwrap().contains("refills now"), "{text}");
+}
+
+#[test]
 fn list_credits_show_banked_zero_and_unknown_and_serialize_the_provider_shape() {
     let credits = ResetCredits {
         count: 2,

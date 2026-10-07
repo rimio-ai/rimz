@@ -19,7 +19,7 @@ use rimz::agents::{
 };
 use rimz::config::{AccountHistory, AccountsConfig, ConfigEditor, MachineConfig, NamedAccount};
 use rimz::harness::assist_log::{Assist, AssistRecord};
-use rimz::harness::auto_redeem::{ManualRedeem, RedeemReport, prepare_manual_redeem};
+use rimz::harness::auto_redeem::{RedeemReport, prepare_manual_redeem};
 use rimz::ids::{AgentKind, LoginKey, LoginName, RoomLogins};
 use rimz::room::{AccountStanding, Deciding, Scopes};
 use rimz::sidebar::enrich::provider_panel_for_login;
@@ -208,7 +208,15 @@ fn redeem(
     let key = login.key();
     let preview = prepare_manual_redeem(&runtime, &key, &login.env(&ambient), &machine.resume)?;
     let mut out = render::out();
-    write_redeem_preview(&mut out, &key, &preview, Timestamp::now())?;
+    write_redeem_preview(
+        &mut out,
+        &key,
+        &preview.credits,
+        &preview.windows,
+        preview.forecast,
+        preview.min_gain,
+        Timestamp::now(),
+    )?;
     out.flush()?;
     if dry_run {
         return Ok(());
@@ -262,7 +270,10 @@ fn redeem(
 fn write_redeem_preview(
     w: &mut impl std::io::Write,
     key: &LoginKey,
-    preview: &ManualRedeem,
+    credits: &ResetCredits,
+    windows: &[RateLimitWindow],
+    forecast: Option<RedeemForecast>,
+    min_gain: Duration,
     now: Timestamp,
 ) -> std::io::Result<()> {
     writeln!(
@@ -274,8 +285,7 @@ fn write_redeem_preview(
         )
     )?;
     let mut rows = render::KeyVals::new().indent(2);
-    let expiry = preview
-        .credits
+    let expiry = credits
         .soonest_expiry
         .map(|expiry| {
             let local = expiry.to_zoned(jiff::tz::TimeZone::system());
@@ -288,9 +298,9 @@ fn write_redeem_preview(
         .unwrap_or_default();
     rows.push(
         "credits",
-        render::cell(format!("{}{expiry}", preview.credits.count)),
+        render::cell(format!("{}{expiry}", credits.count)),
     );
-    for window in &preview.windows {
+    for window in windows {
         if window.lifted {
             rows.push(
                 rimz::theme::fmt::window_label(window),
@@ -311,8 +321,8 @@ fn write_redeem_preview(
             render::cell(format!("{used}; {reset}")),
         );
     }
-    for window in preview.windows.iter().filter(|window| !window.lifted) {
-        let effect = match preview.credits.effect {
+    for window in windows.iter().filter(|window| !window.lifted) {
+        let effect = match credits.effect {
             RedeemEffect::RestartsWindow => {
                 // The harness projects only the duration-bearing 5h and 7d windows.
                 let mins = window
@@ -339,10 +349,9 @@ fn write_redeem_preview(
             format!("redeem {}", rimz::theme::fmt::window_label(window)),
             render::cell(effect),
         );
-        if preview.credits.effect == RedeemEffect::RestartsWindow
+        if credits.effect == RedeemEffect::RestartsWindow
             && let Some(reset) = window.resets_at.filter(|reset| {
-                *reset > now
-                    && reset.duration_since(now).as_secs_f64() < preview.min_gain.as_secs_f64()
+                *reset > now && reset.duration_since(now).as_secs_f64() < min_gain.as_secs_f64()
             })
         {
             rows.push(
@@ -356,7 +365,7 @@ fn write_redeem_preview(
             );
         }
     }
-    let forecast = match preview.forecast {
+    let forecast = match forecast {
         Some(RedeemForecast::Manual) => "off",
         Some(RedeemForecast::Armed) => "armed",
         Some(RedeemForecast::Holding) => "holding",
