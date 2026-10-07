@@ -189,13 +189,12 @@ A permission mode comes from the `mode` profile field, the `--ask` and `--yolo` 
 
 Claude additionally receives routine-command permissions by default through one merged `--settings`, independent of permission mode. Each prefix below gets one `Bash(<prefix> *)` rule, matching the bare command and its arguments:
 
-- `rimz message`, `rimz agents`, `rimz subagents`
-- `rimz teams show`, `rimz teams wait`, `rimz teams flip`, `rimz teams record`
+- `rimz message`, `rimz agents`, `rimz subagents`, `rimz teams`
 - `rimz asks`, `rimz answer`, `rimz wait --in`
 - `rimz pane list`, `rimz pane capture`, `rimz loop show`, `rimz loop logs`
 - `rimz lsp def`, `rimz lsp refs`, `rimz lsp hover`, `rimz lsp impl`, `rimz lsp callers`, `rimz lsp callees`, `rimz lsp symbols`, `rimz lsp find`, `rimz lsp check`, `rimz lsp list`, `rimz lsp status`
 
-There is no blanket RimZ grant. `pane send`, `wait --run`, `loop add`, `events emit`, and `lsp shim`, `attach`, or `stop` are not added. The settings also union the agent-visible scratch/shared directories into `permissions.additionalDirectories` and add an `autoMode.environment` entry retaining `$defaults`; profile entries remain. Opt out with machine-only [`[agents] allow-routine-rimz = false`](../guide/configuration.md#routine-rimz-commands). These are Claude permission settings, not permission hooks; Claude's managed policy and explicit ask/deny rules still apply. The `rimz agents` and `rimz subagents` rules also allow launches with `--yolo` or a passthrough bypass flag, and `rimz answer` allows answering another agent's prompt ([security](../guide/security.md#what-can-run-a-command)).
+There is no blanket RimZ grant. `pane send`, `wait --run`, `loop add`, `events emit`, and `lsp shim`, `attach`, or `stop` are not added. The settings also union the agent-visible scratch/shared directories into `permissions.additionalDirectories` and add an `autoMode.environment` entry retaining `$defaults`; profile entries remain. Opt out with machine-only [`[agents] allow-routine-rimz = false`](../guide/configuration.md#routine-rimz-commands). These are Claude permission settings, not permission hooks; Claude's managed policy and explicit ask/deny rules still apply. The `rimz agents` and `rimz subagents` rules also allow launches with `--yolo` or a passthrough bypass flag. The `rimz teams` rule covers the whole scene: launching, stopping, and restarting cohorts, resuming one with `--yolo`, and `rimz teams install`, which writes team and agent definitions from the RimZ repository into `~/.rimz/` and replaces existing ones with `--force`. `rimz answer` allows answering another agent's prompt ([security](../guide/security.md#what-can-run-a-command)).
 
 Claude's same `--settings` adds exact `Skill(<name>)` rules for every profile-listed skill, independent of that switch, and for installed `rimz-*` skills when the switch is on. Names are directory names, not frontmatter names, from the provider skill root or RimZ library; names containing `*` receive no rule. Profile rules stay first, and additions are deduplicated.
 
