@@ -160,24 +160,6 @@ pub(super) fn terminal_client_ids(view: &ClientView) -> BTreeSet<u32> {
         .collect()
 }
 
-pub(super) fn trim_capture(raw_text: String, max_lines: Option<u16>) -> (String, Vec<String>) {
-    let mut lines: Vec<String> = raw_text.lines().map(str::to_owned).collect();
-    if let Some(max_lines) = max_lines {
-        let keep = max_lines as usize;
-        if keep == 0 {
-            lines.clear();
-        } else if lines.len() > keep {
-            lines = lines.split_off(lines.len() - keep);
-        }
-    }
-
-    let mut trimmed = lines.join("\n");
-    if raw_text.ends_with('\n') && !trimmed.is_empty() {
-        trimmed.push('\n');
-    }
-    (trimmed, lines)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -317,13 +299,6 @@ mod tests {
             "missing-room",
         );
         assert!(matches!(err, MuxErr::Timeout { seconds: 8, .. }));
-    }
-
-    #[test]
-    fn capture_trim_keeps_last_requested_lines() {
-        let (raw, lines) = trim_capture("a\nb\nc\nd\n".to_owned(), Some(2));
-        assert_eq!(lines, vec!["c", "d"]);
-        assert_eq!(raw, "c\nd\n");
     }
 
     #[test]

@@ -492,7 +492,7 @@ impl MuxBackend for TmuxBackend {
         }
         let output = spec.run()?;
         let text = String::from_utf8_lossy(&output.stdout).to_string();
-        let lines = text.lines().map(ToOwned::to_owned).collect();
+        let (text, lines) = crate::mux::capture_tail(text, lines);
         Ok(PaneCapture {
             pane_id: pane.clone(),
             raw_text: text,

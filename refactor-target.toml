@@ -538,6 +538,7 @@ path = "crates/rimz/src/mux"
 # `MuxBackend::confirm_resume_tabs` and its `ResumeTabUnconfirmed` error let a birth settle each resume tab on what the session holds (+2).
 # `recovery::temp_unit_holders` selects the processes a hard reset ends inside the room's sandbox views (+1).
 # Structured command error redaction keeps backend socket paths out of user errors.
+# The shared capture tail rule replaces the Zellij-only trim helper.
 surface-budget = 259
 
 [[module]]
@@ -4366,6 +4367,11 @@ reason = "Pass 24a: carried by the public transcript::Result alias (:42) and by 
 kind = "item"
 key = "mux::reconcile::SidebarLiveness"
 reason = "Carried by the pub MuxBackend::reconcile_sidebars (mux/mod.rs:1025-1028) and driven from the separate integration crate, which sees only pub (pass 24c)."
+
+[[verdict]]
+kind = "item"
+key = "mux::capture_tail"
+reason = "The two capture implementations share one pure scrollback tail rule at the mux seam."
 
 [[verdict]]
 kind = "item"
