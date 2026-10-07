@@ -436,6 +436,7 @@ impl Store {
             {
                 crate::agents::room_accounts(
                     &txn.paths.workspace_record,
+                    None,
                     &crate::config::MachineConfig::load_lenient(),
                 )
                 .map_err(Box::new)?

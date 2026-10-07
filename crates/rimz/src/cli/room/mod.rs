@@ -578,7 +578,7 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
         // under. An enabled host whose agent is not installed is an inert toggle,
         // skipped here so the room still starts; `rimz doctor` surfaces it.
         let envs =
-            rimz::remote_control::HostLoginEnvs::from_logins(&machine_config.accounts, logins)?;
+            rimz::remote_control::HostLoginEnvs::from_logins(&machine_config.accounts, logins);
         rimz::remote_control::prepare_hosts(&machine_config.remote_control, &envs);
         let readiness =
             rimz::remote_control::ReadinessSnapshot::probe(&machine_config.remote_control, &envs);
@@ -594,9 +594,7 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
     {
         let logins = rimz::agents::RoomLoginSet::new(
             Some(logins.clone()),
-            Some(rimz::agents::LoginCatalog::room_view(
-                &machine_config.accounts,
-            )),
+            Some(rimz::agents::LoginCatalog::room_view(&machine_config.accounts).0),
             rimz::agents::ambient_env(),
         );
         if let Err(error) = prompt_folder_trust(workspace, &logins) {

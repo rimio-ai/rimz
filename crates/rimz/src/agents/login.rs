@@ -329,22 +329,28 @@ impl LoginCatalog {
         Self::from_config(&accounts)
     }
 
-    /// A read-side catalogue that keeps healthy kinds when another kind's declarations fail.
-    pub fn room_view(accounts: &AccountsConfig) -> Self {
+    /// A partial read-side catalogue and each excluded kind's declaration error.
+    pub fn room_view(accounts: &AccountsConfig) -> (Self, BTreeMap<AgentKind, LoginConfigErr>) {
         let mut result = Self::default();
+        let mut errors = BTreeMap::new();
         for kind in super::known_kinds().map(AgentKind::new_unchecked) {
-            if let Ok(catalog) = Self::for_kind(accounts, &kind) {
-                result.logins.extend(
-                    catalog
-                        .logins
-                        .into_iter()
-                        .filter(|(key, _)| key.kind == kind),
-                );
-                result.account_kinds.extend(catalog.account_kinds);
-                result.standalone.extend(catalog.standalone);
-            }
+            let catalog = match Self::for_kind(accounts, &kind) {
+                Ok(catalog) => catalog,
+                Err(error) => {
+                    errors.insert(kind, error);
+                    continue;
+                }
+            };
+            result.logins.extend(
+                catalog
+                    .logins
+                    .into_iter()
+                    .filter(|(key, _)| key.kind == kind),
+            );
+            result.account_kinds.extend(catalog.account_kinds);
+            result.standalone.extend(catalog.standalone);
         }
-        result
+        (result, errors)
     }
 
     pub fn from_config(accounts: &AccountsConfig) -> Result<Self, LoginConfigErr> {
@@ -780,7 +786,7 @@ pub fn session_login_env(
 /// The machine's read-side catalog for a caller with no config in scope.
 /// Invalid declarations exclude only their kind; other kinds keep their history pools.
 pub fn machine_login_catalog() -> LoginCatalog {
-    LoginCatalog::room_view(&crate::config::MachineConfig::load_lenient().accounts)
+    LoginCatalog::room_view(&crate::config::MachineConfig::load_lenient().accounts).0
 }
 
 /// Resolving the login a room launches a kind under.
@@ -836,6 +842,7 @@ pub struct RoomAccounts {
     outcomes: BTreeMap<AgentKind, Result<RoomAccount, Arc<RoomLoginErr>>>,
     pins: RoomLogins,
     inherited_error: Option<Arc<RoomLoginErr>>,
+    project: Option<crate::trust::ProjectLogins>,
 }
 
 impl RoomAccounts {
@@ -865,11 +872,17 @@ impl RoomAccounts {
                 .collect(),
             pins: RoomLogins::new(),
             inherited_error: Some(error),
+            project: None,
         }
     }
 
-    pub(crate) fn kinds(&self) -> impl Iterator<Item = &AgentKind> {
+    /// Kinds carrying an explicit outcome, including refusals.
+    pub fn kinds(&self) -> impl Iterator<Item = &AgentKind> {
         self.outcomes.keys()
+    }
+
+    pub(crate) fn project(&self) -> Option<&crate::trust::ProjectLogins> {
+        self.project.as_ref()
     }
 
     #[cfg(test)]
@@ -956,6 +969,7 @@ impl From<RoomLogins> for RoomAccounts {
                 .collect(),
             pins,
             inherited_error: None,
+            project: None,
         }
     }
 }
@@ -1069,6 +1083,7 @@ fn resolve_account_layers(
         outcomes,
         pins: pins.clone(),
         inherited_error,
+        project: project.ok(),
     }
 }
 
@@ -1081,9 +1096,10 @@ fn live_login_keys(agents: &[super::AgentState]) -> impl Iterator<Item = LoginKe
         .map(super::AgentState::login_key)
 }
 
-/// The room's live accounts. Only an unreadable record fails the whole view.
+/// The room's live accounts. Only an unreadable record fails the whole view. With no record, `project_root` supplies the prospective room's project layer.
 pub fn room_accounts(
     record: &Path,
+    project_root: Option<&Path>,
     machine: &crate::config::MachineConfig,
 ) -> Result<RoomAccounts, RoomLoginErr> {
     match crate::workspace::record::read_optional(record).map_err(Box::new)? {
@@ -1092,7 +1108,7 @@ pub fn room_accounts(
             &record.project_root,
             machine,
         )),
-        None => Ok(resolve_accounts(&RoomLogins::new(), None, machine)),
+        None => Ok(resolve_accounts(&RoomLogins::new(), project_root, machine)),
     }
 }
 
@@ -1197,11 +1213,15 @@ impl RoomLoginSet {
         }
     }
 
-    /// The room whose `workspace.json` is `record`, under machine `accounts`.
-    pub fn resolve(record: &Path, machine: &crate::config::MachineConfig) -> Self {
+    /// The recorded room, or a prospective one at `project_root`, under `machine`.
+    pub fn resolve(
+        record: &Path,
+        project_root: Option<&Path>,
+        machine: &crate::config::MachineConfig,
+    ) -> Self {
         Self::new(
-            room_accounts(record, machine).ok(),
-            Some(LoginCatalog::room_view(&machine.accounts)),
+            room_accounts(record, project_root, machine).ok(),
+            Some(LoginCatalog::room_view(&machine.accounts).0),
             ambient_env(),
         )
     }
@@ -1214,6 +1234,7 @@ impl RoomLoginSet {
         };
         Self::resolve(
             &paths.workspace_record,
+            None,
             &crate::config::MachineConfig::load_lenient(),
         )
     }
@@ -1257,7 +1278,7 @@ pub fn room_account(
     machine: &crate::config::MachineConfig,
     kind: &AgentKind,
 ) -> Result<ProviderLogin, RoomLoginErr> {
-    room_accounts(record, machine)?.login(kind, &machine.accounts)
+    room_accounts(record, None, machine)?.login(kind, &machine.accounts)
 }
 
 fn native_home(kind: &AgentKind, home: Option<&Path>) -> Option<PathBuf> {

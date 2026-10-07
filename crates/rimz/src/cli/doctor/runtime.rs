@@ -907,9 +907,10 @@ pub(super) fn collect_remote_control(
         // now is a separate question the provider's own record answers, and
         // doctor is the place a stalled host should become visible.
         let liveness = match (host, host_readiness, project_root) {
-            (RemoteControlHost::Claude, RuntimeControlReadiness::Ready { .. }, Some(root)) => Some(
-                runtime_control::host_liveness("claude", root, envs.for_host(host)),
-            ),
+            (RemoteControlHost::Claude, RuntimeControlReadiness::Ready { .. }, Some(root)) => envs
+                .for_host(host)
+                .ok()
+                .map(|env| runtime_control::host_liveness("claude", root, env)),
             _ => None,
         };
         let (detail, ready) = remote_control_status(host, host_readiness, liveness);

@@ -1,5 +1,6 @@
 use rimz::agents::AgentStatus;
 use rimz::trust::{self};
+use std::io::Write;
 
 use super::super::open_existing_store;
 use super::model::{
@@ -68,7 +69,10 @@ pub(super) fn collect_agent_rollup(ws: &rimz::ResolvedWorkspace, audit: bool) ->
 /// known-but-not-installable adapters.
 pub(super) fn collect_accounts(ws: Option<&rimz::ResolvedWorkspace>) -> Probe<Accounts> {
     let config = rimz::config::MachineConfig::load_lenient();
-    let catalog = rimz::agents::LoginCatalog::room_view(&config.accounts);
+    let (catalog, errors) = rimz::agents::LoginCatalog::room_view(&config.accounts);
+    for error in errors.values() {
+        let _ = writeln!(super::super::render::err(), "rimz: warning: {error}");
+    }
     match ws.map(|ws| room_logins(ws, &config)).transpose() {
         Ok(room) => {
             let standing = match ws {
@@ -85,10 +89,23 @@ pub(super) fn collect_accounts(ws: Option<&rimz::ResolvedWorkspace>) -> Probe<Ac
             };
             let mut rows = account_rows(
                 &catalog,
-                room.flatten().as_ref(),
+                room.as_ref(),
                 &rimz::agents::ambient_env(),
                 &config.accounts.use_accounts,
             );
+            for (kind, error) in errors {
+                rows.retain(|row| row.kind != kind.as_str() || row.name != "default");
+                rows.push(AccountRow {
+                    kind: kind.to_string(),
+                    name: "default".to_owned(),
+                    home: None,
+                    room: false,
+                    machine_default: false,
+                    default_for: rimz::room::Scopes::default(),
+                    problem: Some(error.to_string()),
+                });
+            }
+            rows.sort_by(|a, b| (&a.kind, &a.name).cmp(&(&b.kind, &b.name)));
             for row in &mut rows {
                 if let Ok(name) = row.name.parse() {
                     row.default_for =
@@ -104,20 +121,10 @@ pub(super) fn collect_accounts(ws: Option<&rimz::ResolvedWorkspace>) -> Probe<Ac
 fn room_logins(
     ws: &rimz::ResolvedWorkspace,
     machine: &rimz::config::MachineConfig,
-) -> Result<Option<rimz::ids::RoomLogins>, String> {
+) -> Result<rimz::agents::RoomAccounts, String> {
     let paths =
         rimz::StatePaths::for_project_root(&ws.project_root).map_err(|err| err.to_string())?;
-    let accounts = if paths.workspace_record.exists() {
-        rimz::agents::room_accounts(&paths.workspace_record, machine)
-    } else {
-        Ok(rimz::agents::resolve_room_accounts(
-            &rimz::ids::RoomLogins::new(),
-            &ws.project_root,
-            machine,
-        ))
-    };
-    accounts
-        .map(|accounts| Some(accounts.names()))
+    rimz::agents::room_accounts(&paths.workspace_record, Some(&ws.project_root), machine)
         .map_err(|err| err.to_string())
 }
 
@@ -125,12 +132,12 @@ fn room_logins(
 /// selections and any selection naming an account no longer declared.
 fn account_rows(
     catalog: &rimz::agents::LoginCatalog,
-    room: Option<&rimz::ids::RoomLogins>,
+    room: Option<&rimz::agents::RoomAccounts>,
     ambient: &std::collections::BTreeMap<String, String>,
     machine: &rimz::ids::RoomLogins,
 ) -> Vec<AccountRow> {
     let in_room = |kind: &rimz::ids::AgentKind, name: &rimz::ids::LoginName| {
-        room.and_then(|room| room.get(kind)) == Some(name)
+        room.and_then(|room| room.name(kind).ok()).as_ref() == Some(name)
     };
     let mut rows: Vec<AccountRow> = catalog
         .all()
@@ -150,18 +157,42 @@ fn account_rows(
                 .or_else(|| login.preflight(ambient).err().map(|err| err.to_string())),
         })
         .collect();
-    for (kind, name) in room.into_iter().flatten() {
-        let problem = match catalog.select(kind, name) {
-            Ok(_) if !name.is_default() => continue,
-            Ok(_) => None,
-            Err(err) => Some(err.to_string()),
+    for (room, kind) in room
+        .into_iter()
+        .flat_map(|room| room.kinds().map(move |kind| (room, kind)))
+    {
+        let (name, problem, resolved) = match room.name(kind) {
+            Ok(name) => {
+                let problem = match catalog.select(kind, &name) {
+                    Ok(_) if !name.is_default() => continue,
+                    Ok(_) => None,
+                    Err(error) => Some(error.to_string()),
+                };
+                (name, problem, true)
+            }
+            Err(error) => (
+                room.pin(kind)
+                    .or_else(|| machine.get(kind))
+                    .cloned()
+                    .unwrap_or_default(),
+                Some(error.to_string()),
+                false,
+            ),
         };
+        if let Some(row) = rows
+            .iter_mut()
+            .find(|row| row.kind == kind.as_str() && row.name == name.as_str())
+        {
+            row.problem = problem;
+            row.room = resolved;
+            continue;
+        }
         rows.push(AccountRow {
             kind: kind.to_string(),
             name: name.to_string(),
             home: None,
-            room: true,
-            machine_default: !name.is_default() && machine.get(kind) == Some(name),
+            room: resolved,
+            machine_default: !name.is_default() && machine.get(kind) == Some(&name),
             default_for: rimz::room::Scopes::default(),
             problem,
         });
@@ -321,7 +352,7 @@ mod tests {
             ("HOME".to_owned(), "/home/u".to_owned()),
             ("CODEX_HOME".to_owned(), home.display().to_string()),
         ]);
-        let problem = |room: Option<&rimz::ids::RoomLogins>| {
+        let problem = |room: Option<&rimz::agents::RoomAccounts>| {
             let rows = account_rows(&catalog, room, &ambient, &config.use_accounts);
             let rows = serde_json::to_value(rows).unwrap();
             rows[0]["problem"].as_str().map(str::to_owned)
@@ -329,10 +360,11 @@ mod tests {
 
         let outside = problem(None).expect("an exported account home is a problem");
         assert!(outside.contains("unset `CODEX_HOME`"), "{outside}");
-        let room = rimz::ids::RoomLogins::from([(
+        let room: rimz::agents::RoomAccounts = rimz::ids::RoomLogins::from([(
             rimz::ids::AgentKind::new_unchecked("codex"),
             "rimio".parse().unwrap(),
-        )]);
+        )])
+        .into();
         let inside = problem(Some(&room)).unwrap_or_default();
         assert!(!inside.contains("CODEX_HOME"), "{inside}");
     }

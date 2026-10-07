@@ -36,10 +36,9 @@ fn standing(
     AccountStanding {
         accounts: Some(crate::agents::RoomAccounts::from_layers(
             &recorded.unwrap_or_default(),
-            project.clone(),
+            project,
             &config,
         )),
-        project: Some(project),
         machine,
     }
 }

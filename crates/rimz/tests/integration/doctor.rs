@@ -50,6 +50,66 @@ fn doctor_reports_folder_trust_without_writing() {
     assert!(String::from_utf8_lossy(&output.stdout).contains("FOLDER TRUST"));
 }
 
+#[test]
+fn doctor_accounts_report_dangling_pins_and_blocked_inheritance() {
+    doctor_failed_account(false);
+}
+
+#[test]
+fn doctor_accounts_report_blocked_inheritance() {
+    doctor_failed_account(true);
+}
+
+fn doctor_failed_account(blocked_only: bool) {
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.store()
+        .switch_room_login(
+            &env.resolve_workspace(&env.project_root),
+            &AgentKind::new_unchecked("claude"),
+            &"gone".parse().unwrap(),
+        )
+        .unwrap();
+    env.write_config(&env.project_root, "[accounts]\ncodex = 'team'\n");
+    let output = crate::common::hermetic_providers(&env, &mut env.rimz())
+        .args(["doctor", "--json"])
+        .output()
+        .unwrap();
+    let report = doctor_json(&output);
+    let rows = report["accounts"]["ready"]["rows"].as_array().unwrap();
+    if !blocked_only {
+        let gone = rows
+            .iter()
+            .find(|row| row["kind"] == "claude" && row["name"] == "gone")
+            .expect("doctor retains the dangling pin");
+        assert_eq!(gone["room"], false);
+        assert!(
+            gone["problem"]
+                .as_str()
+                .unwrap()
+                .contains("unknown claude account")
+        );
+        let output = crate::common::hermetic_providers(&env, &mut env.rimz())
+            .arg("doctor")
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let human = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            human.lines().any(|line| line.contains("claude")
+                && line.contains("gone")
+                && line.contains("this room")),
+            "{human}"
+        );
+    }
+    let blocked = rows
+        .iter()
+        .find(|row| row["kind"] == "codex" && !row["problem"].is_null())
+        .expect("doctor reports the blocked inherited kind");
+    assert!(blocked["problem"].as_str().unwrap().contains("untrusted"));
+    assert_eq!(blocked["room"], false);
+}
+
 fn inject_lifecycle(
     env: &Env,
     agent_kind: &str,

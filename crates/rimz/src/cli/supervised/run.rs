@@ -509,10 +509,11 @@ fn prepare_supervised(
     };
     let mut preflight_launch = agent_cell.launch.clone();
     preflight_launch.channel.clone_from(&request.channel);
-    let pins = rimz::agents::room_accounts(&store.paths().workspace_record, &machine_config)?
-        .pinned_names();
-    let logins =
-        rimz::agents::resolve_room_accounts(&pins, &workspace.project_root, &machine_config);
+    let logins = rimz::agents::room_accounts(
+        &store.paths().workspace_record,
+        Some(&workspace.project_root),
+        &machine_config,
+    )?;
     let login = launch_login(request, caller, &agent_cell.kind).resolve(
         &agent_cell.kind,
         &logins,

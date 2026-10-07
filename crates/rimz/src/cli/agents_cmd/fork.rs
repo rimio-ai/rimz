@@ -48,6 +48,7 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
     let source = resolve_fork_source(store, workspace, ctx.runtime(), &snapshot, &args.reference)?;
     let logins = rimz::agents::room_accounts(
         &store.paths().workspace_record,
+        Some(&workspace.project_root),
         &rimz::config::MachineConfig::load_lenient(),
     )?;
     let catalog = rimz::agents::machine_login_catalog();

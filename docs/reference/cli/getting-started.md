@@ -260,7 +260,7 @@ The human report opens with the RimZ version, OS user, and binary path, then pri
 | `MACHINE CONFIG` | Parse and validation errors in the machine config files and `~/.rimz` fragments, with paths and fixes. |
 | `SANDBOX` | Isolation mode, bubblewrap path and version, mount probe result. |
 | `HOOKS` | Agents reporting to RimZ, a row with the fix for each agent whose hooks need a command, agents not found on the machine. |
-| `FOLDER TRUST` | Conditional on a resolved workspace. Detected agents' folder-trust decisions under this room's accounts (native defaults outside a room). A decided summary and undecided rows with account and fix; JSON: `folder_trust.ready.rows`. |
+| `FOLDER TRUST` | Conditional on a resolved workspace. Detected agents' folder-trust decisions under this room's accounts (outside a room: trusted project, then machine, then provider default, as a new room there would). A decided summary and undecided rows with account and fix; JSON: `folder_trust.ready.rows`. |
 | `ACCOUNTS` | Conditional. Each named account's home and status (`ready` or the problem), and the layers it is the default for: `this room`, `this project`, `new rooms` ([`rimz accounts list`](./accounts.md#list) explains each layer). Dangling selections carry a problem and fix. JSON rows include `room` and `machine_default`. |
 | `AGENT PLUGINS` | Conditional. Each plugin manifest, its validation result, and its probes. |
 | `LOOP TASKS` | Configured loop tasks with target, trigger, root, room state, and loop timer state. Warns when a live clock task has neither an open room nor an active timer. |

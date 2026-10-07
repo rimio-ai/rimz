@@ -47,9 +47,10 @@ pub(super) fn resume_lane(
     let worktrees = local_worktrees(&workspace)?;
     let logins = rimz::agents::room_accounts(
         &store.paths().workspace_record,
+        Some(&workspace.project_root),
         &rimz::config::MachineConfig::load_lenient(),
     )?;
-    let catalog = rimz::agents::LoginCatalog::room_view(&machine_config.accounts);
+    let catalog = rimz::agents::LoginCatalog::room_view(&machine_config.accounts).0;
     let selector = lane_selector(
         scope,
         from_pr.map(|target| target.number),

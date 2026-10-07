@@ -350,21 +350,19 @@ pub(in crate::cli) fn launch_resolved(
         allow_in_place,
     );
     let in_place = placement == Placement::SamePane;
-    if !args.launch.cohort.resume {
-        for (index, cell) in layout.agent_cells().enumerate() {
-            preflighted_logins.push(preflight_cell(
-                workspace,
-                store.runtime_paths(),
-                cell,
-                rimz::config::Isolation::resolve(
-                    cell.launch.isolation,
-                    cell.isolation_default,
-                    machine_config.agents.isolation,
-                ),
-                prompt.filter(|_| Some(index) == prompt_agent_index),
-                &mut checked_folder_trust,
-            )?);
-        }
+    for (index, cell) in layout.agent_cells().enumerate() {
+        preflighted_logins.push(preflight_cell(
+            workspace,
+            store.runtime_paths(),
+            cell,
+            rimz::config::Isolation::resolve(
+                cell.launch.isolation,
+                cell.isolation_default,
+                machine_config.agents.isolation,
+            ),
+            prompt.filter(|_| Some(index) == prompt_agent_index),
+            &mut checked_folder_trust,
+        )?);
     }
     let room = RoomContext::live_tab(workspace, machine_config.clone(), globals.mux)?;
     let mux = room.mux_name();
@@ -934,7 +932,11 @@ fn preflight_cell(
     let machine = rimz::config::MachineConfig::load_lenient();
     let login = rimz::store::writer::LaunchLogin::RoomDefault.resolve(
         &cell.kind,
-        &rimz::agents::room_accounts(&state.workspace_record, &machine)?,
+        &rimz::agents::room_accounts(
+            &state.workspace_record,
+            Some(&workspace.project_root),
+            &machine,
+        )?,
         &machine.accounts,
     )?;
     request.identity.params.login = (!login.is_default()).then(|| login.name().clone());
@@ -1013,6 +1015,7 @@ fn launch_resume_layout(
     let scope = worktree_filter.and_then(worktree_scope_label);
     let logins = rimz::agents::room_accounts(
         &store.paths().workspace_record,
+        Some(&workspace.project_root),
         &rimz::config::MachineConfig::load_lenient(),
     )?;
     let team = team_name.as_deref().and_then(|name| teams.0.get(name));

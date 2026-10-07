@@ -63,6 +63,78 @@ fn daemon_view() -> DaemonView {
 }
 
 #[test]
+fn effective_view_keeps_a_healthy_host_when_its_sibling_account_fails() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace_id = WorkspaceId::from_project_root(dir.path());
+    let mut record: record::WorkspaceRecord = serde_json::from_value(serde_json::json!({
+        "layout": crate::disk::paths::WORKSPACE_LAYOUT,
+        "workspace_id": workspace_id, "session_name": "rimz-demo", "project_root": dir.path(),
+        "updated_at": "2026-01-01T00:00:00Z"
+    }))
+    .unwrap();
+    record.pins = crate::ids::RoomLogins::from([
+        (
+            crate::ids::AgentKind::new_unchecked("claude"),
+            "default".parse().unwrap(),
+        ),
+        (
+            crate::ids::AgentKind::new_unchecked("codex"),
+            "gone".parse().unwrap(),
+        ),
+    ]);
+    let record_path = dir.path().join("workspace.json");
+    std::fs::write(&record_path, serde_json::to_vec(&record).unwrap()).unwrap();
+    let machine: crate::config::MachineConfig =
+        toml::from_str("[remote_control]\nclaude = true\n").unwrap();
+    let envs = crate::remote_control::HostLoginEnvs::for_room(&record_path, &machine);
+    let readiness = match envs {
+        Ok(envs) => crate::remote_control::ReadinessSnapshot::probe_with(
+            &machine.remote_control,
+            &envs,
+            |kind, _, _| {
+                assert_eq!(kind, "claude", "the failed kind must not be probed");
+                RuntimeControlReadiness::Ready {
+                    host_argv: Some(vec!["claude".to_owned(), "remote-control".to_owned()]),
+                }
+            },
+        ),
+        Err(_) => crate::remote_control::ReadinessSnapshot::disabled(),
+    };
+    let view = effective_daemon_view(
+        &workspace_id,
+        "rimz-demo",
+        &record,
+        &machine,
+        Path::new("/bin/rimz"),
+        &readiness,
+        false,
+    );
+    assert!(
+        view.hosts.iter().any(|host| host.argv[0] == "claude"),
+        "a failed codex account must not close the healthy Claude host"
+    );
+    assert!(
+        ResolvedDaemonInputs::read(&record, &record_path, &machine)
+            .stamp
+            .claude_settings
+            .is_some()
+    );
+
+    record.pins = crate::ids::RoomLogins::from([(
+        crate::ids::AgentKind::new_unchecked("claude"),
+        "gone".parse().unwrap(),
+    )]);
+    std::fs::write(&record_path, serde_json::to_vec(&record).unwrap()).unwrap();
+    assert!(
+        ResolvedDaemonInputs::read(&record, &record_path, &machine)
+            .stamp
+            .claude_settings
+            .is_none(),
+        "a failed Claude account must not stamp ambient settings"
+    );
+}
+
+#[test]
 fn daemon_view_spec_orders_the_ungated_broker_then_claude() {
     let workspace_id = WorkspaceId::parse("ws_0123456789abcdef01234567").expect("valid id");
     let rimz_bin = Path::new("/usr/bin/rimz");

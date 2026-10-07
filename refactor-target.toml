@@ -182,7 +182,8 @@ upward-dependencies = ["address"]
 # Spent-child CLI parity shares ParkDemotion and its constructor, predicate, and window query (+4).
 # Manual redemption exposes the provider hold code and reason through its offer and prepared preview (+2).
 # Per-kind room account outcomes, sources, pin accessors and the healthy-kind catalogue replace snapshot readers (+18 net).
-surface-budget = 1015
+# RoomAccounts::project shares the resolver's trust metadata with account standing (+1).
+surface-budget = 1016
 
 [[module]]
 path = "crates/rimz/src/agents/park.rs"
@@ -613,7 +614,8 @@ surface-budget = 175
 
 [[module]]
 path = "crates/rimz/src/remote_control.rs"
-surface-budget = 18
+# The injected readiness probe verifies per-host account failure at the daemon-view consumer (+1).
+surface-budget = 19
 
 [[module]]
 path = "crates/rimz/src/sandbox"
