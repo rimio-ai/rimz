@@ -834,6 +834,66 @@ fn accounts_add_history_keeps_the_declared_mode_when_the_switch_is_refused() {
 }
 
 #[test]
+fn accounts_remove_warns_only_for_rooms_pinning_the_account() {
+    let env = Env::new();
+    succeeded(&accounts(&env, &["add", "claude", "work"]));
+    env.record(&env.project_root);
+    succeeded(&room_accounts(&env, &["use", "claude", "work"]));
+
+    let following_root = env.home_root.join("following");
+    env.record(&following_root);
+    let project_config = following_root.join(".rimz/config.toml");
+    std::fs::create_dir_all(project_config.parent().unwrap()).unwrap();
+    std::fs::write(project_config, "[accounts]\nclaude = \"work\"\n").unwrap();
+    succeeded(
+        &hermetic(&env, &mut env.rimz())
+            .current_dir(&following_root)
+            .args(["trust", "grant"])
+            .output()
+            .unwrap(),
+    );
+    let listed: Value = serde_json::from_str(&succeeded(
+        &hermetic(&env, &mut env.rimz())
+            .current_dir(&following_root)
+            .args(["accounts", "list", "--json"])
+            .output()
+            .unwrap(),
+    ))
+    .unwrap();
+    let work = listed
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["kind"] == "claude" && row["name"] == "work")
+        .unwrap();
+    assert_eq!(work["active"], true);
+    assert_eq!(work["default_for"], json!(["this_project"]));
+
+    let pinned = env.resolve_workspace(&env.project_root);
+    let following = env.resolve_workspace(&following_root);
+    let removed = succeeded(
+        &hermetic(&env, &mut env.rimz())
+            .env("RIMZ_ZELLIJ_BIN", crate::common::zellij_trace_shim())
+            .env("RIMZ_TEST_ZELLIJ_LOG", env.home_root.join("remove.trace"))
+            .env(
+                "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
+                format!(
+                    "{} [Created 1m ago]\n{} [Created 1m ago]\n",
+                    pinned.session_name, following.session_name
+                ),
+            )
+            .args(["accounts", "remove", "claude", "work"])
+            .output()
+            .unwrap(),
+    );
+    assert!(
+        removed.contains(&format!("warning: room {} pins it", pinned.session_name)),
+        "{removed}"
+    );
+    assert!(!removed.contains(&following.session_name), "{removed}");
+}
+
+#[test]
 fn machine_account_switch_and_removal_preserve_declared_accounts() {
     let env = Env::new();
     let missing = failed(&accounts(&env, &["use", "--global", "codex", "missing"]));
