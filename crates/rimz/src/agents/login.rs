@@ -74,7 +74,7 @@ pub enum LoginConfigErr {
         home: PathBuf,
     },
     #[error(
-        "`{env_key}` is exported as `{home}`, the home of {kind} account `{name}`, so the `default` account launches into it too; unset `{env_key}` and run `rimz accounts use --global {kind} {name}` to start new rooms on it"
+        "`{env_key}` is exported as `{home}`, the home of {kind} account `{name}`, so the `default` account launches into it too; unset `{env_key}` and run `rimz accounts use --global {kind} {name}` for new rooms and rooms following the machine default"
     )]
     ExportedHome {
         kind: AgentKind,
@@ -316,6 +316,37 @@ pub struct LoginCatalog {
 }
 
 impl LoginCatalog {
+    fn for_kind(accounts: &AccountsConfig, kind: &AgentKind) -> Result<Self, LoginConfigErr> {
+        let mut accounts = accounts.clone();
+        for other in super::known_kinds()
+            .map(AgentKind::new_unchecked)
+            .filter(|other| other != kind)
+        {
+            if let Some(named) = accounts.named_mut(&other) {
+                named.clear();
+            }
+        }
+        Self::from_config(&accounts)
+    }
+
+    /// A read-side catalogue that keeps healthy kinds when another kind's declarations fail.
+    pub fn room_view(accounts: &AccountsConfig) -> Self {
+        let mut result = Self::default();
+        for kind in super::known_kinds().map(AgentKind::new_unchecked) {
+            if let Ok(catalog) = Self::for_kind(accounts, &kind) {
+                result.logins.extend(
+                    catalog
+                        .logins
+                        .into_iter()
+                        .filter(|(key, _)| key.kind == kind),
+                );
+                result.account_kinds.extend(catalog.account_kinds);
+                result.standalone.extend(catalog.standalone);
+            }
+        }
+        result
+    }
+
     pub fn from_config(accounts: &AccountsConfig) -> Result<Self, LoginConfigErr> {
         Self::from_config_under(
             accounts,
@@ -454,39 +485,9 @@ impl LoginCatalog {
             })
     }
 
-    /// The login of every registered kind under a room's selection: the named
-    /// one where the room froze one, `default` everywhere else.
-    pub fn room(&self, selection: &RoomLogins) -> Result<Vec<ProviderLogin>, LoginErr> {
-        self.logins
-            .values()
-            .filter(|login| login.is_default())
-            .map(|login| match selection.get(login.kind()) {
-                Some(name) if !name.is_default() => self.select(login.kind(), name),
-                _ => Ok(login.clone()),
-            })
-            .collect()
-    }
-
-    /// The login one kind launches under, under a room's selection.
-    pub fn room_login(
-        &self,
-        selection: &RoomLogins,
-        kind: &AgentKind,
-    ) -> Result<ProviderLogin, LoginErr> {
-        match selection.get(kind) {
-            Some(name) if !name.is_default() => self.select(kind, name),
-            _ => Ok(ProviderLogin::default_for(kind.clone())),
-        }
-    }
-
-    /// The selection a room is born with. A recorded selection stands, and a
-    /// requested account that disagrees with it is refused; otherwise the
-    /// requested accounts win over the project's, then the machine's, then `default`.
-    /// Every kind that can carry an account gets an explicit entry, so the
-    /// recorded selection reads the same whichever layer chose it.
+    /// Fold requested accounts over project, machine, then provider defaults.
     pub fn birth_selection(
         &self,
-        frozen: Option<&RoomLogins>,
         requested: &RoomLogins,
         project: &RoomLogins,
         machine: &RoomLogins,
@@ -496,19 +497,6 @@ impl LoginCatalog {
             .filter(|(kind, _)| !requested.contains_key(*kind));
         for (kind, name) in requested.iter().chain(chosen_project) {
             self.select(kind, name)?;
-        }
-        if let Some(frozen) = frozen {
-            for (kind, name) in requested {
-                let current = frozen.get(kind).cloned().unwrap_or_default();
-                if &current != name {
-                    return Err(BirthLoginErr::Frozen {
-                        kind: kind.clone(),
-                        current,
-                        requested: name.clone(),
-                    });
-                }
-            }
-            return Ok(frozen.clone());
         }
         for (kind, name) in machine
             .iter()
@@ -617,8 +605,7 @@ impl AccountStatus {
             Some(BirthLoginErr::HooksMissing { .. }) => Self::HooksMissing,
             Some(BirthLoginErr::HooksUntrusted { .. }) => Self::HooksUntrusted,
             Some(
-                BirthLoginErr::Frozen { .. }
-                | BirthLoginErr::Login(_)
+                BirthLoginErr::Login(_)
                 | BirthLoginErr::MachineUnknown { .. }
                 | BirthLoginErr::MachineUnsupported { .. },
             ) => Self::Unavailable,
@@ -657,14 +644,6 @@ pub enum BirthLoginErr {
         kind: AgentKind,
         name: LoginName,
         path: PathBuf,
-    },
-    #[error(
-        "this room uses {kind} account `{current}`, not `{requested}`; switch it with `rimz accounts use {kind} {requested}`"
-    )]
-    Frozen {
-        kind: AgentKind,
-        current: LoginName,
-        requested: LoginName,
     },
     #[error(transparent)]
     Login(#[from] LoginErr),
@@ -785,7 +764,7 @@ pub fn session_login(
     let Some(name) = login.filter(|name| !name.is_default()) else {
         return Ok(ProviderLogin::default_for(kind.clone()));
     };
-    Ok(LoginCatalog::from_config(accounts)?.select(kind, name)?)
+    Ok(LoginCatalog::for_kind(accounts, kind)?.select(kind, name)?)
 }
 
 /// Resolve the environment of a session's stamped account.
@@ -798,12 +777,10 @@ pub fn session_login_env(
     Ok(session_login(kind, login, accounts)?.env(&ambient))
 }
 
-/// The machine's login catalog for a caller with no config in scope. An
-/// account config that does not load answers the empty catalog, where every
-/// login is its own history pool.
+/// The machine's read-side catalog for a caller with no config in scope.
+/// Invalid declarations exclude only their kind; other kinds keep their history pools.
 pub fn machine_login_catalog() -> LoginCatalog {
-    LoginCatalog::from_config(&crate::config::MachineConfig::load_lenient().accounts)
-        .unwrap_or_default()
+    LoginCatalog::room_view(&crate::config::MachineConfig::load_lenient().accounts)
 }
 
 /// Resolving the login a room launches a kind under.
@@ -815,6 +792,284 @@ pub enum RoomLoginErr {
     Config(#[from] LoginConfigErr),
     #[error(transparent)]
     Login(#[from] LoginErr),
+    #[error(transparent)]
+    Birth(#[from] Box<BirthLoginErr>),
+    #[error(transparent)]
+    Core(#[from] Box<crate::config::ConfigErr>),
+    #[error(transparent)]
+    Trust(#[from] Box<crate::trust::TrustErr>),
+    #[error("{}", crate::trust::blocked_project_logins(*state))]
+    Blocked { state: crate::trust::TrustState },
+    #[error(transparent)]
+    Resolution(Arc<RoomLoginErr>),
+}
+
+/// What decides the account a room launches a kind under.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LoginSource {
+    Pinned,
+    Project,
+    Machine,
+    Provider,
+}
+
+impl std::fmt::Display for LoginSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Pinned => "pinned",
+            Self::Project => "project default",
+            Self::Machine => "machine default",
+            Self::Provider => "provider default",
+        })
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct RoomAccount {
+    pub name: LoginName,
+    pub source: LoginSource,
+}
+
+/// Each kind's launch account or refusal. Failed kinds never become `default`.
+#[derive(Clone, Debug, Default)]
+pub struct RoomAccounts {
+    outcomes: BTreeMap<AgentKind, Result<RoomAccount, Arc<RoomLoginErr>>>,
+    pins: RoomLogins,
+    inherited_error: Option<Arc<RoomLoginErr>>,
+}
+
+impl RoomAccounts {
+    /// Carry resolved launch overrides without discarding other kinds' refusals.
+    pub(crate) fn with_names(mut self, names: RoomLogins) -> Self {
+        for (kind, name) in names {
+            self.outcomes.insert(
+                kind,
+                Ok(RoomAccount {
+                    name,
+                    source: LoginSource::Pinned,
+                }),
+            );
+        }
+        self
+    }
+
+    pub(crate) fn machine(machine: &crate::config::MachineConfig) -> Self {
+        resolve_accounts(&RoomLogins::new(), None, machine)
+    }
+
+    pub(crate) fn unavailable(error: RoomLoginErr) -> Self {
+        let error = Arc::new(error);
+        Self {
+            outcomes: super::known_kinds()
+                .map(|kind| (AgentKind::new_unchecked(kind), Err(error.clone())))
+                .collect(),
+            pins: RoomLogins::new(),
+            inherited_error: Some(error),
+        }
+    }
+
+    pub(crate) fn kinds(&self) -> impl Iterator<Item = &AgentKind> {
+        self.outcomes.keys()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_layers(
+        pins: &RoomLogins,
+        project: crate::trust::ProjectLogins,
+        machine: &crate::config::MachineConfig,
+    ) -> Self {
+        resolve_account_layers(pins, Ok(project), machine)
+    }
+
+    pub fn account(&self, kind: &AgentKind) -> Result<RoomAccount, RoomLoginErr> {
+        match self.outcomes.get(kind) {
+            Some(Ok(account)) => Ok(account.clone()),
+            Some(Err(error)) => Err(RoomLoginErr::Resolution(error.clone())),
+            None => {
+                if let Some(error) = &self.inherited_error {
+                    return Err(RoomLoginErr::Resolution(error.clone()));
+                }
+                Ok(RoomAccount {
+                    name: LoginName::default_login(),
+                    source: LoginSource::Provider,
+                })
+            }
+        }
+    }
+
+    pub fn name(&self, kind: &AgentKind) -> Result<LoginName, RoomLoginErr> {
+        self.account(kind).map(|account| account.name)
+    }
+
+    pub fn source(&self, kind: &AgentKind) -> Result<LoginSource, RoomLoginErr> {
+        self.account(kind).map(|account| account.source)
+    }
+
+    pub fn pinned(&self, kind: &AgentKind) -> bool {
+        self.pins.contains_key(kind)
+    }
+
+    pub fn pin(&self, kind: &AgentKind) -> Option<&LoginName> {
+        self.pins.get(kind)
+    }
+
+    pub fn pinned_names(&self) -> RoomLogins {
+        self.pins.clone()
+    }
+
+    /// Successful names only; absence means no account, not `default`.
+    pub fn names(&self) -> RoomLogins {
+        self.outcomes
+            .iter()
+            .filter_map(|(kind, account)| {
+                account
+                    .as_ref()
+                    .ok()
+                    .map(|account| (kind.clone(), account.name.clone()))
+            })
+            .collect()
+    }
+
+    pub fn login(
+        &self,
+        kind: &AgentKind,
+        accounts: &AccountsConfig,
+    ) -> Result<ProviderLogin, RoomLoginErr> {
+        session_login(kind, Some(&self.name(kind)?), accounts)
+    }
+}
+
+impl From<RoomLogins> for RoomAccounts {
+    fn from(pins: RoomLogins) -> Self {
+        Self {
+            outcomes: pins
+                .iter()
+                .map(|(kind, name)| {
+                    (
+                        kind.clone(),
+                        Ok(RoomAccount {
+                            name: name.clone(),
+                            source: LoginSource::Pinned,
+                        }),
+                    )
+                })
+                .collect(),
+            pins,
+            inherited_error: None,
+        }
+    }
+}
+
+/// Resolve the pin, trusted project, machine, then provider default per kind.
+pub fn resolve_room_accounts(
+    pins: &RoomLogins,
+    project_root: &Path,
+    machine: &crate::config::MachineConfig,
+) -> RoomAccounts {
+    resolve_accounts(pins, Some(project_root), machine)
+}
+
+fn resolve_accounts(
+    pins: &RoomLogins,
+    project_root: Option<&Path>,
+    machine: &crate::config::MachineConfig,
+) -> RoomAccounts {
+    let project = if super::known_kinds()
+        .map(AgentKind::new_unchecked)
+        .chain(machine.accounts.use_accounts.keys().cloned())
+        .any(|kind| !pins.contains_key(&kind))
+    {
+        project_root
+            .map(crate::trust::project_logins)
+            .transpose()
+            .map(|project| project.unwrap_or(crate::trust::ProjectLogins::Unconfigured))
+            .map_err(|error| Arc::new(RoomLoginErr::Trust(Box::new(error))))
+    } else {
+        Ok(crate::trust::ProjectLogins::Unconfigured)
+    };
+    resolve_account_layers(pins, project, machine)
+}
+
+fn resolve_account_layers(
+    pins: &RoomLogins,
+    project: Result<crate::trust::ProjectLogins, Arc<RoomLoginErr>>,
+    machine: &crate::config::MachineConfig,
+) -> RoomAccounts {
+    let mut kinds: BTreeSet<_> = super::known_kinds()
+        .map(AgentKind::new_unchecked)
+        .filter(|kind| machine.accounts.named(kind).is_some())
+        .chain(pins.keys().cloned())
+        .chain(machine.accounts.use_accounts.keys().cloned())
+        .collect();
+    if let Ok(crate::trust::ProjectLogins::Apply(project)) = &project {
+        kinds.extend(project.keys().cloned());
+    }
+    let core_error = machine
+        .require_readable_core("resolve this room's account")
+        .err()
+        .map(|error| Arc::new(RoomLoginErr::Core(Box::new(error))));
+    let inherited_error = core_error.clone().or_else(|| match &project {
+        Ok(crate::trust::ProjectLogins::Blocked(state)) => {
+            Some(Arc::new(RoomLoginErr::Blocked { state: *state }))
+        }
+        Err(error) => Some(error.clone()),
+        _ => None,
+    });
+    let outcomes = kinds
+        .into_iter()
+        .map(|kind| {
+            let resolved = (|| -> Result<RoomAccount, RoomLoginErr> {
+                if pins.get(&kind).is_some_and(LoginName::is_default) {
+                    return Ok(RoomAccount {
+                        name: LoginName::default_login(),
+                        source: LoginSource::Pinned,
+                    });
+                }
+                let error = if pins.contains_key(&kind) {
+                    &core_error
+                } else {
+                    &inherited_error
+                };
+                if let Some(error) = error {
+                    return Err(RoomLoginErr::Resolution(error.clone()));
+                }
+                let empty = RoomLogins::new();
+                let project = if pins.contains_key(&kind) {
+                    &empty
+                } else if let Ok(crate::trust::ProjectLogins::Apply(project)) = &project {
+                    project
+                } else {
+                    &empty
+                };
+                let source = if pins.contains_key(&kind) {
+                    LoginSource::Pinned
+                } else if project.contains_key(&kind) {
+                    LoginSource::Project
+                } else if machine.accounts.use_accounts.contains_key(&kind) {
+                    LoginSource::Machine
+                } else {
+                    LoginSource::Provider
+                };
+                let name = birth_name(&kind, pins, project, &machine.accounts.use_accounts);
+                if !name.is_default() {
+                    let catalog = LoginCatalog::for_kind(&machine.accounts, &kind)?;
+                    if source == LoginSource::Machine {
+                        catalog.select_machine(&kind, &name).map_err(Box::new)?;
+                    } else {
+                        catalog.select(&kind, &name)?;
+                    }
+                }
+                Ok(RoomAccount { name, source })
+            })()
+            .map_err(Arc::new);
+            (kind, resolved)
+        })
+        .collect();
+    RoomAccounts {
+        outcomes,
+        pins: pins.clone(),
+        inherited_error,
+    }
 }
 
 /// The account of every live root agent, with a pane or without: ended rows
@@ -826,13 +1081,19 @@ fn live_login_keys(agents: &[super::AgentState]) -> impl Iterator<Item = LoginKe
         .map(super::AgentState::login_key)
 }
 
-/// The account selection of the room whose `workspace.json` is `record`; a
-/// record without one, or none at all, selects `default` for every kind.
-pub fn room_logins(record: &Path) -> Result<RoomLogins, RoomLoginErr> {
-    Ok(crate::workspace::record::read_optional(record)
-        .map_err(Box::new)?
-        .and_then(|record| record.logins)
-        .unwrap_or_default())
+/// The room's live accounts. Only an unreadable record fails the whole view.
+pub fn room_accounts(
+    record: &Path,
+    machine: &crate::config::MachineConfig,
+) -> Result<RoomAccounts, RoomLoginErr> {
+    match crate::workspace::record::read_optional(record).map_err(Box::new)? {
+        Some(record) => Ok(resolve_room_accounts(
+            &record.pins,
+            &record.project_root,
+            machine,
+        )),
+        None => Ok(resolve_accounts(&RoomLogins::new(), None, machine)),
+    }
 }
 
 /// The logins a room reads provider state under, resolved once per refresh
@@ -844,8 +1105,8 @@ pub fn room_logins(record: &Path) -> Result<RoomLogins, RoomLoginErr> {
 #[derive(Clone, Debug)]
 pub struct RoomLoginSet {
     /// `None` when the room's record could not be read.
-    selection: Option<RoomLogins>,
-    /// `None` when the machine's account config does not load.
+    selection: Option<RoomAccounts>,
+    /// `None` outside a room, where every kind is its provider's own home.
     catalog: Option<LoginCatalog>,
     ambient: BTreeMap<String, String>,
     live_logins: BTreeSet<LoginKey>,
@@ -919,12 +1180,12 @@ impl RoomLoginSet {
             .chain(
                 self.selection
                     .iter()
-                    .flat_map(|selection| selection.keys().cloned()),
+                    .flat_map(|selection| selection.outcomes.keys().cloned()),
             )
     }
 
     pub fn new(
-        selection: Option<RoomLogins>,
+        selection: Option<RoomAccounts>,
         catalog: Option<LoginCatalog>,
         ambient: BTreeMap<String, String>,
     ) -> Self {
@@ -937,10 +1198,10 @@ impl RoomLoginSet {
     }
 
     /// The room whose `workspace.json` is `record`, under machine `accounts`.
-    pub fn resolve(record: &Path, accounts: &AccountsConfig) -> Self {
+    pub fn resolve(record: &Path, machine: &crate::config::MachineConfig) -> Self {
         Self::new(
-            room_logins(record).ok(),
-            LoginCatalog::from_config(accounts).ok(),
+            room_accounts(record, machine).ok(),
+            Some(LoginCatalog::room_view(&machine.accounts)),
             ambient_env(),
         )
     }
@@ -953,21 +1214,22 @@ impl RoomLoginSet {
         };
         Self::resolve(
             &paths.workspace_record,
-            &crate::config::MachineConfig::load_lenient().accounts,
+            &crate::config::MachineConfig::load_lenient(),
         )
     }
 
     /// Every kind under its provider's own home, for callers outside a room.
     pub fn native() -> Self {
-        Self::new(Some(RoomLogins::new()), None, ambient_env())
+        Self::new(Some(RoomAccounts::default()), None, ambient_env())
     }
 
     pub fn default_login(&self, kind: &str) -> Option<ProviderLogin> {
         let kind = AgentKind::new_unchecked(kind);
-        match self.selection.as_ref()?.get(&kind) {
-            Some(name) if !name.is_default() => self.catalog.as_ref()?.select(&kind, name).ok(),
-            _ => Some(ProviderLogin::default_for(kind)),
+        let name = self.selection.as_ref()?.name(&kind).ok()?;
+        if name.is_default() {
+            return Some(ProviderLogin::default_for(kind));
         }
+        self.catalog.as_ref()?.select(&kind, &name).ok()
     }
 
     pub fn default_key(&self, kind: &str) -> Option<LoginKey> {
@@ -989,18 +1251,13 @@ impl RoomLoginSet {
 }
 
 /// The login the room whose `workspace.json` is `record` launches `kind`
-/// under. A record without a selection, or none at all, is the provider's own
-/// home.
-pub fn room_login(
+/// under now, resolving only that kind's account or refusal.
+pub fn room_account(
     record: &Path,
-    accounts: &AccountsConfig,
+    machine: &crate::config::MachineConfig,
     kind: &AgentKind,
 ) -> Result<ProviderLogin, RoomLoginErr> {
-    let record = crate::workspace::record::read_optional(record).map_err(Box::new)?;
-    let Some(selection) = record.and_then(|record| record.logins) else {
-        return Ok(ProviderLogin::default_for(kind.clone()));
-    };
-    Ok(LoginCatalog::from_config(accounts)?.room_login(&selection, kind)?)
+    room_accounts(record, machine)?.login(kind, &machine.accounts)
 }
 
 fn native_home(kind: &AgentKind, home: Option<&Path>) -> Option<PathBuf> {

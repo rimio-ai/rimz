@@ -12,7 +12,7 @@ use crate::agents::runtime_control::{
 };
 use crate::config::{AccountsConfig, RemoteControlConfig};
 use crate::disk::paths::StatePaths;
-use crate::ids::{AgentKind, LoginKey, RoomLogins};
+use crate::ids::{AgentKind, LoginKey};
 use crate::mux::LiveSessions;
 use crate::workspace::record;
 
@@ -49,34 +49,37 @@ impl HostLoginEnvs {
 
     pub fn from_logins(
         accounts: &AccountsConfig,
-        logins: &RoomLogins,
+        logins: &crate::agents::RoomAccounts,
     ) -> Result<Self, crate::agents::RoomLoginErr> {
         let ambient = crate::agents::ambient_env();
-        let catalog = crate::agents::LoginCatalog::from_config(accounts)?;
         Ok(Self {
-            claude: catalog
-                .room_login(logins, &AgentKind::new_unchecked("claude"))?
+            claude: logins
+                .login(&AgentKind::new_unchecked("claude"), accounts)?
                 .env(&ambient),
-            codex: catalog
-                .room_login(logins, &AgentKind::new_unchecked("codex"))?
+            codex: logins
+                .login(&AgentKind::new_unchecked("codex"), accounts)?
                 .env(&ambient),
         })
     }
 
     pub fn for_room(
         record: &Path,
-        accounts: &AccountsConfig,
+        machine: &crate::config::MachineConfig,
     ) -> Result<Self, crate::agents::RoomLoginErr> {
         let ambient = crate::agents::ambient_env();
         Ok(Self {
-            claude: crate::agents::room_login(
+            claude: crate::agents::room_account(
                 record,
-                accounts,
+                machine,
                 &AgentKind::new_unchecked("claude"),
             )?
             .env(&ambient),
-            codex: crate::agents::room_login(record, accounts, &AgentKind::new_unchecked("codex"))?
-                .env(&ambient),
+            codex: crate::agents::room_account(
+                record,
+                machine,
+                &AgentKind::new_unchecked("codex"),
+            )?
+            .env(&ambient),
         })
     }
 
@@ -256,7 +259,7 @@ pub fn apply_runtime_toggle(
                     continue;
                 }
             };
-            let envs = match HostLoginEnvs::for_room(&paths.workspace_record, &machine.accounts) {
+            let envs = match HostLoginEnvs::for_room(&paths.workspace_record, machine) {
                 Ok(envs) => envs,
                 Err(err) => {
                     tracing::debug!(
@@ -320,9 +323,7 @@ fn codex_daemon_envs(
         let Ok(paths) = StatePaths::for_project_root(&workspace.project_root) else {
             continue;
         };
-        if let Ok(login) =
-            crate::agents::room_login(&paths.workspace_record, &machine.accounts, &codex)
-        {
+        if let Ok(login) = crate::agents::room_account(&paths.workspace_record, machine, &codex) {
             envs.insert(login.key(), login.env(&ambient));
         }
     }

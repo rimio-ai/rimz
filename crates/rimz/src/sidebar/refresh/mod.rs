@@ -216,9 +216,8 @@ pub(super) fn refresh_heavy_lanes(
     spending_startup: crate::agents::spending::service::SpendingServiceStartup,
     state: &mut ProducerRefreshState,
 ) -> RefreshedLanes {
-    let logins =
-        crate::agents::RoomLoginSet::resolve(&state_paths.workspace_record, &config.accounts)
-            .with_agents(&base.agents);
+    let logins = crate::agents::RoomLoginSet::resolve(&state_paths.workspace_record, config)
+        .with_agents(&base.agents);
     let store = Store::open_existing(state_paths.clone(), runtime.clone());
     refresh_codex_daemon_reap_cache(
         daemon_probe_agents,

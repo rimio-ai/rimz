@@ -22,14 +22,25 @@ fn standing(
     project: ProjectLogins,
     machine: RoomLogins,
 ) -> AccountStanding {
+    let config = MachineConfig {
+        accounts: toml::from_str("[claude.work]\nhome = \"/srv/claude-work\"\n[codex.team]\nhome = \"/srv/codex-team\"\n").unwrap(),
+        ..Default::default()
+    };
+    let config = MachineConfig {
+        accounts: crate::config::AccountsConfig {
+            use_accounts: machine.clone(),
+            ..config.accounts
+        },
+        ..config
+    };
     AccountStanding {
-        recorded,
+        accounts: Some(crate::agents::RoomAccounts::from_layers(
+            &recorded.unwrap_or_default(),
+            project.clone(),
+            &config,
+        )),
         project: Some(project),
         machine,
-        declared: [("claude", "work"), ("codex", "team")]
-            .into_iter()
-            .map(|(kind_name, login)| LoginKey::new(kind(kind_name), name(login)))
-            .collect(),
     }
 }
 
@@ -62,8 +73,7 @@ fn active_account_is_what_birth_selects_without_a_request() {
         for project in &layers {
             for machine in &layers {
                 let Ok(born) = catalog.birth_selection(
-                    recorded.as_ref(),
-                    &RoomLogins::new(),
+                    &recorded.clone().unwrap_or_default(),
                     project,
                     machine,
                 ) else {
@@ -117,10 +127,7 @@ fn scopes_join_coinciding_layers_in_order_and_default_fills_unnamed_ones() {
         ProjectLogins::Unconfigured,
         logins(&[("claude", "work")]),
     );
-    assert_eq!(
-        other_kind_recorded.scopes(&claude, &default).label(),
-        "this room"
-    );
+    assert_eq!(other_kind_recorded.scopes(&claude, &default).label(), "-");
     assert_eq!(
         other_kind_recorded.scopes(&claude, &name("work")).label(),
         "new rooms"
@@ -128,7 +135,7 @@ fn scopes_join_coinciding_layers_in_order_and_default_fills_unnamed_ones() {
 }
 
 #[test]
-fn blocked_project_leaves_no_active_account_unless_a_room_is_recorded() {
+fn blocked_project_leaves_no_active_account_unless_the_kind_is_pinned() {
     let claude = kind("claude");
     let blocked = standing(
         None,
@@ -150,7 +157,8 @@ fn blocked_project_leaves_no_active_account_unless_a_room_is_recorded() {
     );
     assert_eq!(recorded.active(&claude), Some(name("work")));
     assert_eq!(recorded.deciding(&claude), Some(Deciding::Room));
-    assert_eq!(recorded.blocked(), None);
+    assert_eq!(recorded.active(&kind("codex")), None);
+    assert!(recorded.blocked().unwrap().contains("stale"));
 }
 
 #[test]
@@ -223,6 +231,14 @@ fn deciding_layer_names_who_moves_the_active_account() {
     );
     assert_eq!(project.deciding(&kind("codex")), Some(Deciding::Project));
     assert_eq!(project.deciding(&claude), Some(Deciding::Machine));
+    let mixed = standing(
+        Some(logins(&[("codex", "default")])),
+        ProjectLogins::Unconfigured,
+        logins(&[("claude", "work")]),
+    );
+    assert_eq!(mixed.active(&claude), Some(name("work")));
+    assert_eq!(mixed.deciding(&claude), Some(Deciding::Machine));
+    assert_eq!(mixed.deciding(&kind("codex")), Some(Deciding::Room));
 }
 
 #[cfg(unix)]

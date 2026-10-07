@@ -181,7 +181,8 @@ upward-dependencies = ["address"]
 # AgentState::root_lane, lane_label and is_root_lane share fold-derived root identity with consumers.
 # Spent-child CLI parity shares ParkDemotion and its constructor, predicate, and window query (+4).
 # Manual redemption exposes the provider hold code and reason through its offer and prepared preview (+2).
-surface-budget = 997
+# Per-kind room account outcomes, sources, pin accessors and the healthy-kind catalogue replace snapshot readers (+18 net).
+surface-budget = 1015
 
 [[module]]
 path = "crates/rimz/src/agents/park.rs"
@@ -506,7 +507,8 @@ path = "crates/rimz/src/harness"
 # The compact pressure reading feeds loop show's no-limits facts without parsing display rows (+1).
 # Fan-out inspection publishes its module, inspect entry, CheckoutCondition, and CheckoutState to the CLI (+4).
 # The manual forecast and CLI preview share automatic provider eligibility (+1), and the preview reads the provider hold (+1).
-surface-budget = 748
+# RelaunchLoginErr crosses to the CLI relaunch paths with the resume module (+1).
+surface-budget = 749
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -742,7 +744,8 @@ surface-budget = 24
 [[module]]
 path = "crates/rimz/src/trust.rs"
 upward-dependencies = ["agents"]
-surface-budget = 35
+# The live resolver shares the project-account refusal with birth and display readers (+1).
+surface-budget = 36
 
 [[module]]
 path = "crates/rimz/src/tui.rs"
@@ -1078,7 +1081,8 @@ allowed-dependencies = [
 # RecoveryPlan::refilled carries already-live seat replacements into rebirth settlement (+1).
 # RecoveryTabAgents carries confirmed resume and Fresh replacement keys into rebirth (+1).
 # MaterializedRecovery and RecoveryTabAgents also publish that pairing to lane placement.
-surface-budget = 63
+# RelaunchLoginErr distinguishes an unavailable kind from a history-pool mismatch (+1).
+surface-budget = 64
 
 [[module]]
 path = "crates/rimz/src/harness/launch.rs"

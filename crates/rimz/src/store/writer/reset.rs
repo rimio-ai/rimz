@@ -156,13 +156,13 @@ impl Store {
             // a surviving request would stop the resumed session.
             remove_file_if_exists(&paths.idle_stop_requests)?;
 
-            // A reset unfreezes the room's provider accounts, so the next
-            // birth is free to select again.
+            // A reset removes every account pin; subsequent launches inherit.
             if unfreeze_logins
                 && let Some(mut record) =
                     crate::workspace::record::read_optional(&paths.workspace_record)?
-                && record.logins.take().is_some()
+                && !record.pins.is_empty()
             {
+                record.pins.clear();
                 crate::workspace::record::write(paths, &record)?;
             }
 

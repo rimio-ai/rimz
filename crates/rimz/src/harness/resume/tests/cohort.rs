@@ -2031,7 +2031,7 @@ fn cohort_resume_refuses_a_member_from_another_account() {
     .unwrap_err();
 
     assert!(
-        matches!(&err, CohortResumeErr::LoginMismatch(mismatch) if mismatch.session_login.as_str() == "personal"),
+        matches!(&err, CohortResumeErr::LoginMismatch(RelaunchLoginErr::Mismatch(mismatch)) if mismatch.session_login.as_str() == "personal"),
         "{err:?}"
     );
 }

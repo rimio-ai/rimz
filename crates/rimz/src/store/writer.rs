@@ -275,51 +275,79 @@ impl Store {
         })
     }
 
-    /// Move one provider's default for future launches without changing existing agent stamps.
+    /// Pin one provider's future launches without changing existing agent stamps.
     #[must_use = "durability barrier; check the result"]
     pub fn switch_room_login(
         &self,
         workspace: &ResolvedWorkspace,
         kind: &AgentKind,
         name: &crate::ids::LoginName,
-    ) -> Result<crate::ids::LoginName> {
+    ) -> Result<Option<crate::ids::LoginName>> {
         self.commit(|txn| {
             let prior = record::read_optional(&txn.paths.workspace_record)?;
             let mut record =
                 workspace_record_preserving_room_state(prior.as_ref(), workspace, None);
-            let logins = record.logins.get_or_insert_default();
-            let prior = logins
-                .insert(kind.clone(), name.clone())
-                .unwrap_or_default();
+            let prior = record.pins.insert(kind.clone(), name.clone());
             record::write(txn.paths, &record)?;
             Ok(prior)
         })
     }
 
-    /// Freeze the room's provider accounts. Birth writes the selection once;
-    /// a later birth with the same selection is a no-op, and one that differs
-    /// is refused, because sessions are already stamped with the first.
+    /// Follow live defaults for one provider; an absent pin does not rewrite the record.
     #[must_use = "durability barrier; check the result"]
-    pub(crate) fn record_room_logins(
+    pub fn unpin_room_login(
         &self,
         workspace: &ResolvedWorkspace,
-        logins: &crate::ids::RoomLogins,
-    ) -> Result<()> {
+        kind: &AgentKind,
+    ) -> Result<Option<crate::ids::LoginName>> {
         self.commit(|txn| {
             let prior = record::read_optional(&txn.paths.workspace_record)?;
-            match prior.as_ref().and_then(|prior| prior.logins.as_ref()) {
-                Some(current) if current == logins => return Ok(()),
-                Some(current) => {
-                    return Err(StoreErr::RoomLoginsFrozen {
-                        current: render_logins(current),
-                        requested: render_logins(logins),
-                    });
-                }
-                None => {}
-            }
+            let Some(name) = prior
+                .as_ref()
+                .and_then(|record| record.pins.get(kind))
+                .cloned()
+            else {
+                return Ok(None);
+            };
             let mut record =
                 workspace_record_preserving_room_state(prior.as_ref(), workspace, None);
-            record.logins = Some(logins.clone());
+            record.pins.remove(kind);
+            record::write(txn.paths, &record)?;
+            Ok(Some(name))
+        })
+    }
+
+    #[must_use = "durability barrier; check the result"]
+    pub(crate) fn pin_room_logins(
+        &self,
+        workspace: &ResolvedWorkspace,
+        requested: &crate::ids::RoomLogins,
+    ) -> Result<()> {
+        if requested.is_empty() {
+            return Ok(());
+        }
+        self.commit(|txn| {
+            let prior = record::read_optional(&txn.paths.workspace_record)?;
+            let mut record =
+                workspace_record_preserving_room_state(prior.as_ref(), workspace, None);
+            for (kind, name) in requested {
+                if let Some(current) = record.pins.get(kind)
+                    && current != name
+                {
+                    return Err(StoreErr::RoomLoginsFrozen {
+                        kind: kind.clone(),
+                        current: current.clone(),
+                        requested: name.clone(),
+                    });
+                }
+            }
+            if requested
+                .iter()
+                .all(|(kind, name)| record.pins.get(kind) == Some(name))
+            {
+                return Ok(());
+            }
+            record.pins.extend(requested.clone());
             record::write(txn.paths, &record)?;
             Ok(())
         })
@@ -402,9 +430,19 @@ impl Store {
     ) -> Result<AgentLaunchBatch> {
         let batch = self.commit(|txn| {
             let (_cache, base_agents, _resume_outcomes) = snapshot::catch_up_rollup(txn.paths)?;
-            let logins = record::read_optional(&txn.paths.workspace_record)?.and_then(|r| r.logins);
-            let identities =
-                allocate_agent_launch_identities(requests, &base_agents, logins.as_ref())?;
+            let accounts = if requests
+                .iter()
+                .any(|request| request.login == LaunchLogin::RoomDefault)
+            {
+                crate::agents::room_accounts(
+                    &txn.paths.workspace_record,
+                    &crate::config::MachineConfig::load_lenient(),
+                )
+                .map_err(Box::new)?
+            } else {
+                crate::agents::RoomAccounts::default()
+            };
+            let identities = allocate_agent_launch_identities(requests, &base_agents, &accounts)?;
             let events = identities
                 .iter()
                 .map(|identity| {
@@ -773,7 +811,7 @@ fn workspace_record_preserving_room_state(
 ) -> record::WorkspaceRecord {
     let mut record = record::WorkspaceRecord::from_resolved(workspace);
     if let Some(prior) = prior {
-        record.logins.clone_from(&prior.logins);
+        record.pins.clone_from(&prior.pins);
     }
     match rimz_target {
         Some((rimz_bin, rimz_build)) => {
@@ -793,7 +831,7 @@ fn workspace_record_preserving_room_state(
 fn allocate_agent_launch_identities(
     requests: &[AgentLaunchRequest],
     agents: &[crate::agents::AgentState],
-    logins: Option<&crate::ids::RoomLogins>,
+    accounts: &crate::agents::RoomAccounts,
 ) -> Result<Vec<AgentLaunchIdentity>> {
     // Retained ended rows keep their names reserved so an address stays
     // unambiguous until rotation prunes the row at the retention boundary.
@@ -830,12 +868,11 @@ fn allocate_agent_launch_identities(
         };
         taken.insert(name.clone());
         let mut launch = request.launch.clone();
-        launch.login = match &request.login {
-            LaunchLogin::RoomDefault => logins.and_then(|logins| logins.get(&request.kind)),
-            LaunchLogin::Pinned(name) => Some(name),
-        }
-        .filter(|name| !name.is_default())
-        .cloned();
+        let login = match &request.login {
+            LaunchLogin::RoomDefault => accounts.name(&request.kind).map_err(Box::new)?,
+            LaunchLogin::Pinned(name) => name.clone(),
+        };
+        launch.login = (!login.is_default()).then_some(login);
         identities.push(AgentLaunchIdentity {
             kind: request.kind.clone(),
             agent_id: request.agent_id.clone(),
@@ -847,14 +884,6 @@ fn allocate_agent_launch_identities(
         });
     }
     Ok(identities)
-}
-
-fn render_logins(logins: &crate::ids::RoomLogins) -> String {
-    logins
-        .iter()
-        .map(|(kind, name)| format!("{kind}={name}"))
-        .collect::<Vec<_>>()
-        .join(", ")
 }
 
 fn validate_agent_launch_name(name: &str) -> Result<()> {

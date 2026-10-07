@@ -246,7 +246,7 @@ mod tests {
                 root_class,
                 rimz_bin: None,
                 rimz_build: None,
-                logins: None,
+                pins: Default::default(),
                 updated_at: Timestamp::UNIX_EPOCH,
             },
         )

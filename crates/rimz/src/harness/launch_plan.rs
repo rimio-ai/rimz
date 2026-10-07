@@ -796,14 +796,14 @@ pub mod testkit {
         let state = StatePaths::under(workspace.workspace_id.clone(), root).unwrap();
         state.ensure_dirs().unwrap();
         let runtime = RuntimePaths::under(workspace.workspace_id.clone(), root).unwrap();
-        let mut record = crate::workspace::record::WorkspaceRecord::from_resolved(&workspace);
-        record.logins = Some(
-            [(
+        let record = crate::workspace::record::WorkspaceRecord {
+            pins: [(
                 crate::ids::AgentKind::new_unchecked("claude"),
                 "spare".parse().unwrap(),
             )]
             .into(),
-        );
+            ..crate::workspace::record::WorkspaceRecord::from_resolved(&workspace)
+        };
         crate::workspace::record::write(&state, &record).unwrap();
         let effective = crate::config::effective::load_with_roots(&machine, root, root).unwrap();
         let mut request = request.clone();

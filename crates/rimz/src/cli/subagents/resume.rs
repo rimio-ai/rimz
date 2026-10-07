@@ -90,7 +90,10 @@ fn resume_resolved(ctx: &Ctx, child: &AgentState, caller: &AgentState) -> Result
         child.kind.as_str(),
         &cwd,
     )?;
-    let logins = rimz::agents::room_logins(&store.paths().workspace_record)?;
+    let logins = rimz::agents::room_accounts(
+        &store.paths().workspace_record,
+        &rimz::config::MachineConfig::load_lenient(),
+    )?;
     let catalog = rimz::agents::machine_login_catalog();
     let (action, login, fresh_reason) =
         agents_cmd::relaunch_action(child, &logins, &catalog, &cwd)?;

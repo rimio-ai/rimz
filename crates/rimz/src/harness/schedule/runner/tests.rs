@@ -1430,10 +1430,13 @@ fn window_triggers_refuse_at_add_in_order() {
         "{refusal}"
     );
     let unresolvable = crate::agents::RoomLoginSet::new(
-        Some(std::collections::BTreeMap::from([(
-            AgentKind::new_unchecked("claude"),
-            "work".parse().unwrap(),
-        )])),
+        Some(
+            std::collections::BTreeMap::from([(
+                AgentKind::new_unchecked("claude"),
+                "work".parse().unwrap(),
+            )])
+            .into(),
+        ),
         None,
         std::collections::BTreeMap::new(),
     );

@@ -53,12 +53,12 @@ pub struct AccountsArgs {
 
 #[derive(Debug, Subcommand)]
 enum AccountsSubcmd {
-    /// Select this room's account for future launches, or new rooms' with --global.
+    /// Pin this room's launch account, or change the live machine default with --global.
     Use {
-        /// Set the machine default for new rooms instead of this room's.
+        /// Set the default for new rooms and rooms following the machine default.
         #[arg(long)]
         global: bool,
-        /// Return this room's account for the kind to the one a new room here would get.
+        /// Unpin this kind and follow the project or machine default live.
         #[arg(long, conflicts_with_all = ["name", "global"])]
         reset: bool,
         /// Provider kind: claude or codex.
@@ -539,7 +539,7 @@ fn use_room_account(
     name: Option<&LoginName>,
 ) -> Result<()> {
     let root = super::pinned_room_root().context(
-        "`rimz accounts use` changes the running room it is run inside; run it inside one, or pass --global to set the machine default for new rooms",
+        "`rimz accounts use` changes the running room it is run inside; run it inside one, or pass --global to set the machine default for new rooms and rooms following it",
     )?;
     if let Some(override_root) = &globals.root
         && override_root.canonicalize()? != root
@@ -553,33 +553,66 @@ fn use_room_account(
     let workspace =
         rimz::workspace::WorkspaceResolver::resolve_participant(".", globals.root.clone())
             .context("resolving current workspace")?;
-    let machine = if name.is_some() {
-        std::sync::Arc::new(MachineConfig::load()?)
-    } else {
-        MachineConfig::load_lenient()
-    };
-    let (name, layer) = match name {
-        Some(name) => (name.clone(), None),
-        None => {
-            let (name, layer) =
-                rimz::room::reset_login_selection(&workspace.project_root, &machine, kind)?;
-            (name, Some(layer))
-        }
-    };
-    let login = LoginCatalog::from_config(&machine.accounts)?.select(kind, &name)?;
-    login.preflight(&rimz::agents::ambient_env())?;
+    let machine = MachineConfig::load_lenient();
     let store = super::open_existing_store(&workspace)?
         .context("this room has no store; run `rimz start` first")?;
-    let snapshot = store.snapshot_cached().context("reading agent snapshot")?;
-    let prior = store.switch_room_login(&workspace, kind, &name)?;
-    let layer = layer.map(|layer| format!(" ({layer})")).unwrap_or_default();
-    let mut out = render::out();
-    if prior == name {
-        return render::finish(writeln!(
-            out,
-            "this room already launches {kind} on `{name}`{layer}"
-        ));
+    let current = rimz::agents::room_accounts(&store.paths().workspace_record, &machine)?;
+    let prior_pin = current.pin(kind).cloned();
+    let prior_account = current.account(kind).ok();
+    let mut pins = current.pinned_names();
+    if let Some(name) = name {
+        pins.insert(kind.clone(), name.clone());
+    } else {
+        pins.remove(kind);
     }
+    let selected = rimz::agents::resolve_room_accounts(&pins, &workspace.project_root, &machine);
+    let account = selected.account(kind).with_context(|| {
+        if name.is_none() {
+            "cannot reset this room's account"
+        } else {
+            "cannot select this room's account"
+        }
+    })?;
+    selected
+        .login(kind, &machine.accounts)?
+        .preflight(&rimz::agents::ambient_env())?;
+    let snapshot = store.snapshot_cached().context("reading agent snapshot")?;
+    let heading = if name.is_none() {
+        store.unpin_room_login(&workspace, kind)?;
+        let change = if prior_pin.is_some() {
+            "now"
+        } else {
+            "already"
+        };
+        format!(
+            "this room {change} follows the {} for {kind} (`{}`)",
+            account.source, account.name
+        )
+    } else {
+        store.switch_room_login(&workspace, kind, &account.name)?;
+        if prior_pin.as_ref() == Some(&account.name) {
+            return render::finish(writeln!(
+                render::out(),
+                "this room already launches {kind} on `{}` (pinned)",
+                account.name
+            ));
+        }
+        let suffix = if prior_pin.is_some() {
+            String::new()
+        } else if let Some(prior) = &prior_account {
+            format!(" (pinned, was {})", prior.source)
+        } else {
+            " (pinned)".to_owned()
+        };
+        format!(
+            "this room now launches {kind} on account `{}`{suffix}",
+            account.name
+        )
+    };
+    if name.is_none() && prior_pin.is_none() {
+        return render::finish(writeln!(render::out(), "{heading}"));
+    }
+    let prior = prior_pin.or_else(|| prior_account.map(|account| account.name));
     let count = snapshot
         .agents
         .iter()
@@ -587,50 +620,72 @@ fn use_room_account(
             agent.kind == *kind
                 && agent.ended_at.is_none()
                 && !agent.is_provider_subagent()
-                && agent.login_key().name == prior
+                && prior
+                    .as_ref()
+                    .is_none_or(|prior| agent.login_key().name == *prior)
         })
         .count();
-    let remaining = if count == 0 {
-        format!("no running {kind} agent is on `{prior}`")
-    } else {
-        format!("{count} running {kind} agent(s) keep `{prior}` until they end")
+    let remaining = match (count, prior) {
+        (0, Some(prior)) => format!("no running {kind} agent is on `{prior}`"),
+        (count, Some(prior)) => {
+            format!("{count} running {kind} agent(s) keep `{prior}` until they end")
+        }
+        (0, None) => format!("no running {kind} agent"),
+        (count, None) => {
+            format!("{count} running {kind} agent(s) keep their accounts until they end")
+        }
     };
-    render::finish(writeln!(
-        out,
-        "this room now launches {kind} on account `{name}`{layer}; {remaining}"
-    ))
+    render::finish(writeln!(render::out(), "{heading}; {remaining}"))
 }
 
 fn use_account(raw_kind: &str, name: &LoginName) -> Result<()> {
-    // Clearing takes any kind, so it removes a hand-set entry for a kind
-    // without named accounts, the fix its birth refusal names.
+    // Clearing also repairs a hand-set selection for a kind without named accounts.
     let kind = &match account_kind(raw_kind) {
         Err(_) if name.is_default() => AgentKind::new_unchecked(raw_kind),
         kind => kind?,
     };
-    let machine = MachineConfig::load()?;
+    let mut machine = MachineConfig::load()?;
     let login = match LoginCatalog::from_config(&machine.accounts)?.select(kind, name) {
         Ok(login) => Some(login),
         Err(_) if name.is_default() => None,
         Err(error) => return Err(error.into()),
     };
+    if let Some(login) = login {
+        login.preflight(&rimz::agents::ambient_env())?;
+    }
     ConfigEditor::machine().use_account(kind, name)?;
-    let mut out = render::out();
     if name.is_default() {
-        render::finish(writeln!(
-            out,
-            "new rooms now use {kind}'s own home (`default`); existing rooms, running or stopped, keep their recorded account until `rimz accounts use {kind} {name}` runs inside each"
-        ))?;
+        machine.accounts.use_accounts.remove(kind);
     } else {
-        render::finish(writeln!(
-            out,
-            "new rooms now use {kind} account `{name}`; existing rooms, running or stopped, keep their recorded account until `rimz accounts use {kind} {name}` runs inside each"
-        ))?;
+        machine
+            .accounts
+            .use_accounts
+            .insert(kind.clone(), name.clone());
     }
-    if let Some(Err(error)) = login.map(|login| login.preflight(&rimz::agents::ambient_env())) {
-        writeln!(std::io::stderr().lock(), "rimz: warning: {error}")?;
-    }
-    Ok(())
+    let live = live_rooms_where(&machine, |accounts| {
+        matches!(
+            accounts.source(kind),
+            Ok(rimz::agents::LoginSource::Machine | rimz::agents::LoginSource::Provider)
+        )
+    });
+    let reach = if live.is_empty() {
+        format!("no live room follows it for {kind}")
+    } else {
+        format!(
+            "{} live room(s) follow it for {kind}: {}",
+            live.len(),
+            live.join(", ")
+        )
+    };
+    let selected = if name.is_default() {
+        format!("{kind}'s own home (`default`)")
+    } else {
+        format!("{kind} account `{name}`")
+    };
+    render::finish(writeln!(
+        render::out(),
+        "new rooms and rooms following the machine default now use {selected}; {reach}; a pinned room keeps its account until `rimz accounts use --reset {kind}` runs inside it"
+    ))
 }
 
 #[derive(Serialize)]
@@ -720,8 +775,8 @@ fn list_windows(windows: &[RateLimitWindow]) -> Vec<RateLimitWindow> {
 const WINDOW_SPANS: [WindowSpan; 2] = [WindowSpan::FiveHour, WindowSpan::SevenDay];
 
 fn list(globals: &GlobalFlags, json: bool) -> Result<()> {
-    let machine = MachineConfig::load()?;
-    let catalog = LoginCatalog::from_config(&machine.accounts)?;
+    let machine = MachineConfig::load_lenient();
+    let catalog = LoginCatalog::room_view(&machine.accounts);
     let standing = match super::position_standing(globals, &machine) {
         Ok((standing, _in_room)) => standing,
         Err(error) => {
@@ -1023,24 +1078,39 @@ fn window_cell(row: &AccountRow, span: WindowSpan, now: Timestamp) -> render::Ce
         .unwrap_or_else(unknown_cell)
 }
 
-/// What the two markers mean here: `●` by the highest layer deciding any
-/// kind shown, `○` wherever a row carries it or a room or project decides.
+/// Name every deciding layer present among the displayed kinds.
 fn legend(rows: &[AccountRow], deciding: &BTreeMap<AgentKind, Deciding>) -> Option<String> {
-    let layer = [Deciding::Room, Deciding::Project, Deciding::Machine]
+    let layers: Vec<_> = [Deciding::Room, Deciding::Project, Deciding::Machine]
         .into_iter()
-        .find(|layer| {
-            rows.iter()
-                .any(|row| deciding.get(&row.kind) == Some(layer))
-        });
-    let active = layer.map(|layer| {
+        .filter_map(|layer| {
+            let kinds: std::collections::BTreeSet<_> = rows
+                .iter()
+                .filter(|row| deciding.get(&row.kind) == Some(&layer))
+                .map(|row| row.kind.as_str())
+                .collect();
+            (!kinds.is_empty()).then_some((layer, kinds))
+        })
+        .collect();
+    let active = layers.iter().map(|(layer, kinds)| {
         let words = match layer {
             Deciding::Room => "this room",
             Deciding::Project => "this project",
             Deciding::Machine => "new rooms",
         };
-        format!("{}  {words}", render::paint(render::palette::accent(), "●"))
+        let kinds = if layers.len() > 1 {
+            format!(
+                " ({})",
+                kinds.iter().copied().collect::<Vec<_>>().join(", ")
+            )
+        } else {
+            String::new()
+        };
+        format!(
+            "{}  {words}{kinds}",
+            render::paint(render::palette::accent(), "●")
+        )
     });
-    let new_rooms = (matches!(layer, Some(Deciding::Room | Deciding::Project))
+    let new_rooms = (layers.iter().any(|(layer, _)| *layer != Deciding::Machine)
         || rows.iter().any(|row| row.machine_default && !row.active))
     .then(|| {
         format!(
@@ -1048,7 +1118,7 @@ fn legend(rows: &[AccountRow], deciding: &BTreeMap<AgentKind, Deciding>) -> Opti
             render::paint(render::palette::muted(), "○")
         )
     });
-    let halves: Vec<String> = active.into_iter().chain(new_rooms).collect();
+    let halves: Vec<_> = active.chain(new_rooms).collect();
     (!halves.is_empty()).then(|| halves.join("   "))
 }
 
@@ -1076,7 +1146,7 @@ fn remove(kind: &AgentKind, name: &LoginName) -> Result<()> {
     if clears_selection {
         render::finish(writeln!(
             out,
-            "cleared the machine selection; new rooms now use {kind} account `default`"
+            "cleared the machine selection; new rooms and rooms following the machine default now use {kind} account `default`"
         ))?;
     }
     render::finish(writeln!(
@@ -1091,29 +1161,42 @@ fn remove(kind: &AgentKind, name: &LoginName) -> Result<()> {
     ))
 }
 
-/// Live rooms whose default for new launches still names this account; not an inventory of session stamps.
+/// Live rooms pinned to this account, not an inventory of session stamps.
 fn live_rooms_selecting(kind: &AgentKind, name: &LoginName) -> Vec<String> {
+    live_rooms_where(&MachineConfig::load_lenient(), |accounts| {
+        accounts.pin(kind) == Some(name)
+    })
+}
+
+fn live_rooms_where(
+    machine: &MachineConfig,
+    matches: impl Fn(&rimz::agents::RoomAccounts) -> bool,
+) -> Vec<String> {
     let inventory = match rimz::room::session::room_inventory() {
         Ok(inventory) => inventory,
         Err(err) => {
-            tracing::debug!(%err, "could not inventory rooms before removing account");
+            tracing::debug!(%err, "could not inventory room accounts");
             return Vec::new();
         }
     };
     let mut rooms = Vec::new();
     for room in inventory.live {
-        let selection = (|| -> Result<RoomLogins> {
+        let selection = (|| -> Result<rimz::agents::RoomAccounts> {
             let paths = rimz::StatePaths::for_workspace(room.workspace_id)?;
-            Ok(rimz::agents::room_logins(&paths.workspace_record)?)
+            Ok(rimz::agents::room_accounts(
+                &paths.workspace_record,
+                machine,
+            )?)
         })();
         match selection {
-            Ok(logins) if logins.get(kind) == Some(name) => rooms.push(room.session_name),
+            Ok(accounts) if matches(&accounts) => rooms.push(room.session_name),
             Ok(_) => {}
             Err(err) => {
-                tracing::debug!(%err, session = %room.session_name, "could not read room accounts before removing account");
+                tracing::debug!(%err, session = %room.session_name, "could not read room accounts")
             }
         }
     }
+    rooms.sort();
     rooms
 }
 
@@ -1124,12 +1207,12 @@ fn removed_notice(kind: &AgentKind, name: &LoginName, home: &str, live: &[String
     );
     if !live.is_empty() {
         let (room, verb) = if live.len() == 1 {
-            ("room", "selects")
+            ("room", "pins")
         } else {
-            ("rooms", "select")
+            ("rooms", "pin")
         };
         notice.push_str(&format!(
-            "\nwarning: {room} {} {verb} it as the default for new {kind} launches; add the account back or run `rimz accounts use {kind} default` inside each room",
+            "\nwarning: {room} {} {verb} it for new {kind} launches; add the account back, run `rimz accounts use --reset {kind}` to follow the defaults, or run `rimz accounts use {kind} default` inside each room",
             live.join(", ")
         ));
     }

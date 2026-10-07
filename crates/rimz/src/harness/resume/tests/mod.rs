@@ -8,7 +8,8 @@ use crate::pane::PaneRef;
 use jiff::Timestamp;
 
 const RIMZ_BIN: &str = "/bin/rimz";
-static NO_LOGINS: RoomLogins = RoomLogins::new();
+static NO_LOGINS: std::sync::LazyLock<RoomAccounts> =
+    std::sync::LazyLock::new(RoomAccounts::default);
 static NO_ACCOUNTS: std::sync::LazyLock<LoginCatalog> =
     std::sync::LazyLock::new(LoginCatalog::default);
 static WORKSPACE: std::sync::LazyLock<WorkspaceId> =
@@ -215,11 +216,12 @@ fn ctx<'a>(
 }
 
 /// A room whose Claude account is `name`.
-fn claude_room(name: &str) -> RoomLogins {
-    RoomLogins::from([(
+fn claude_room(name: &str) -> RoomAccounts {
+    crate::ids::RoomLogins::from([(
         AgentKind::new_unchecked("claude"),
         name.parse().expect("login name"),
     )])
+    .into()
 }
 
 /// Claude accounts `work` and `personal`, both sharing history unless
@@ -462,7 +464,7 @@ struct LaneCase<'a> {
     worktrees: &'a [LaneWorktree],
     current_root: &'a Path,
     max: usize,
-    logins: &'a RoomLogins,
+    logins: &'a RoomAccounts,
     catalog: &'a LoginCatalog,
     path_exists: PathPredicate<'a>,
     session_backed: AgentPredicate<'a>,
@@ -490,7 +492,7 @@ impl<'a> LaneCase<'a> {
         }
     }
 
-    fn logins(mut self, logins: &'a RoomLogins) -> Self {
+    fn logins(mut self, logins: &'a RoomAccounts) -> Self {
         self.logins = logins;
         self
     }

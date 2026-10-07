@@ -502,7 +502,7 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
         was_live,
     )?;
 
-    // Every entry that births a room resolves and freezes its accounts; only
+    // Every entry that births a room resolves its accounts; only
     // `start` takes flags, and only `start` re-judges a room already live.
     let birth_root = match &entry {
         RoomEntry::Start { workspace, .. } | RoomEntry::StartDetached { workspace, .. } => {
@@ -564,7 +564,7 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
     };
     let logins = birth_root
         .map(|project_root| {
-            rimz::room::resolve_birth_logins(project_root, &machine_config, &requested, was_live)
+            rimz::room::resolve_birth_logins(project_root, &machine_config, &requested)
         })
         .transpose()?;
     let starting = matches!(
@@ -594,7 +594,9 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
     {
         let logins = rimz::agents::RoomLoginSet::new(
             Some(logins.clone()),
-            rimz::agents::LoginCatalog::from_config(&machine_config.accounts).ok(),
+            Some(rimz::agents::LoginCatalog::room_view(
+                &machine_config.accounts,
+            )),
             rimz::agents::ambient_env(),
         );
         if let Err(error) = prompt_folder_trust(workspace, &logins) {
@@ -642,7 +644,7 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
     };
     let ready = if let Some(source) = source {
         let mut context =
-            RoomContext::prepare_birth(source, machine_config.clone(), mux, logins.as_ref())?;
+            RoomContext::prepare_birth(source, machine_config.clone(), mux, Some(&requested))?;
         let cwd = match source {
             RoomBirthSource::Resolved(workspace) => workspace.worktree_root.clone(),
             RoomBirthSource::Recorded(record) => record.project_root.clone(),

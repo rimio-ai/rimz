@@ -886,17 +886,16 @@ pub(super) fn collect_remote_control(
         .and_then(|root| rimz::workspace::WorkspaceResolver::persisted_project_root(root).ok())
         .and_then(|root| StatePaths::for_project_root(&root).ok());
     let envs = match state {
-        Some(state) => match rimz::remote_control::HostLoginEnvs::for_room(
-            &state.workspace_record,
-            &machine.accounts,
-        ) {
-            Ok(envs) => envs,
-            Err(err) => {
-                return model::RemoteControl::Unavailable {
-                    error: err.to_string(),
-                };
+        Some(state) => {
+            match rimz::remote_control::HostLoginEnvs::for_room(&state.workspace_record, &machine) {
+                Ok(envs) => envs,
+                Err(err) => {
+                    return model::RemoteControl::Unavailable {
+                        error: err.to_string(),
+                    };
+                }
             }
-        },
+        }
         None => rimz::remote_control::HostLoginEnvs::ambient(),
     };
     let readiness = rimz::remote_control::ReadinessSnapshot::probe(config, &envs);

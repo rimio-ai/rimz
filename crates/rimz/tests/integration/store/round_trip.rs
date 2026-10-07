@@ -21,7 +21,7 @@ fn root_lane_is_stamped_through_every_fold_reader() {
             root_class: RootClass::Repo,
             rimz_bin: None,
             rimz_build: None,
-            logins: None,
+            pins: Default::default(),
             updated_at: jiff::Timestamp::UNIX_EPOCH,
         },
     )

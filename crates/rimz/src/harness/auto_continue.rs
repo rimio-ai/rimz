@@ -60,8 +60,8 @@ pub fn park_demotion(
     outcomes: &[ResumeOutcome],
     now: Timestamp,
 ) -> crate::agents::ParkDemotion {
-    let logins = crate::agents::RoomLoginSet::resolve(&state.workspace_record, &config.accounts)
-        .with_agents(agents);
+    let logins =
+        crate::agents::RoomLoginSet::resolve(&state.workspace_record, config).with_agents(agents);
     park_demotion_for_logins(
         store,
         runtime,

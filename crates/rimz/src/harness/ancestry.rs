@@ -48,14 +48,13 @@ impl crate::store::writer::LaunchLogin {
     pub fn resolve(
         &self,
         kind: &AgentKind,
-        defaults: &crate::ids::RoomLogins,
+        defaults: &crate::agents::RoomAccounts,
         accounts: &crate::config::AccountsConfig,
     ) -> Result<crate::agents::ProviderLogin, crate::agents::RoomLoginErr> {
-        let name = match self {
-            Self::RoomDefault => defaults.get(kind),
-            Self::Pinned(name) => Some(name),
-        };
-        crate::agents::session_login(kind, name, accounts)
+        match self {
+            Self::RoomDefault => defaults.login(kind, accounts),
+            Self::Pinned(name) => crate::agents::session_login(kind, Some(name), accounts),
+        }
     }
 }
 

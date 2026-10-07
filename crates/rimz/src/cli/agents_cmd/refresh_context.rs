@@ -30,7 +30,11 @@ pub(super) fn run(request: LifecycleRefreshRequest) -> Result<()> {
     let session_id = request.session_id.as_str();
     let prior = rimz::store::agent_context::read_one(&runtime, kind, session_id);
     let state = StatePaths::for_workspace(workspace_id.clone())?;
-    let defaults = agents::room_logins(&state.workspace_record).ok();
+    let defaults = agents::room_accounts(
+        &state.workspace_record,
+        &rimz::config::MachineConfig::load_lenient(),
+    )
+    .ok();
     let snapshot = Store::open(state, runtime.clone())?.snapshot_cached()?;
     let Some(agent) = snapshot
         .agents
@@ -48,9 +52,7 @@ pub(super) fn run(request: LifecycleRefreshRequest) -> Result<()> {
     };
     let login_env = login.env(&agents::ambient_env());
     let broker_socket = defaults
-        .filter(|defaults| {
-            defaults.get(&request.kind).cloned().unwrap_or_default() == *login.name()
-        })
+        .filter(|defaults| defaults.name(&request.kind).ok().as_ref() == Some(login.name()))
         .map(|_| runtime.codex_app_server_socket_path());
     let Some(refresh) = definition.refresh_session_context(&agents::SessionContextInput {
         login_env: &login_env,

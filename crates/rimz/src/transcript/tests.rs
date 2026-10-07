@@ -37,7 +37,7 @@ fn workspaces_with_channel_finds_transcript_evidence() {
                 root_class: crate::workspace::RootClass::Directory,
                 rimz_bin: None,
                 rimz_build: None,
-                logins: None,
+                pins: Default::default(),
                 updated_at: Timestamp::UNIX_EPOCH,
             },
         )

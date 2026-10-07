@@ -450,10 +450,7 @@ fn account_merges_and_projection_are_login_scoped() {
     let work_key: LoginKey = "claude@work".parse().unwrap();
     let accounts = toml::from_str("[claude.work]\nhome = \"/srv/rimz-test-work\"\n").unwrap();
     let work = RoomLoginSet::new(
-        Some(crate::ids::RoomLogins::from([(
-            work_key.kind.clone(),
-            work_key.name.clone(),
-        )])),
+        Some(crate::ids::RoomLogins::from([(work_key.kind.clone(), work_key.name.clone())]).into()),
         Some(crate::agents::LoginCatalog::from_config(&accounts).unwrap()),
         BTreeMap::new(),
     );

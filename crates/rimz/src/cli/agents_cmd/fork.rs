@@ -46,7 +46,10 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
     let snapshot = ctx.alive_snapshot()?;
     let focus = LaunchFocus::resolve(args.bg, resolve_caller(&snapshot.agents).as_ref());
     let source = resolve_fork_source(store, workspace, ctx.runtime(), &snapshot, &args.reference)?;
-    let logins = rimz::agents::room_logins(&store.paths().workspace_record)?;
+    let logins = rimz::agents::room_accounts(
+        &store.paths().workspace_record,
+        &rimz::config::MachineConfig::load_lenient(),
+    )?;
     let catalog = rimz::agents::machine_login_catalog();
     let mut seed = validate_fork_source(
         &source,
@@ -277,7 +280,7 @@ fn resolve_fork_source(
 
 fn validate_fork_source(
     agent: &AgentState,
-    logins: &rimz::ids::RoomLogins,
+    logins: &rimz::agents::RoomAccounts,
     catalog: &rimz::agents::LoginCatalog,
     session_backed: impl FnOnce(&AgentState) -> bool,
     worktree_exists: impl FnOnce(&Path) -> bool,
@@ -353,7 +356,8 @@ mod tests {
     use rimz::agents::AgentStatus;
     use rimz::config::{Profile, ProfilesConfig};
 
-    static NO_LOGINS: rimz::ids::RoomLogins = rimz::ids::RoomLogins::new();
+    static NO_LOGINS: std::sync::LazyLock<rimz::agents::RoomAccounts> =
+        std::sync::LazyLock::new(rimz::agents::RoomAccounts::default);
     static NO_ACCOUNTS: std::sync::LazyLock<rimz::agents::LoginCatalog> =
         std::sync::LazyLock::new(rimz::agents::LoginCatalog::default);
 
@@ -368,8 +372,9 @@ mod tests {
         .unwrap()
     }
 
-    fn room(kind: &str, name: &str) -> rimz::ids::RoomLogins {
+    fn room(kind: &str, name: &str) -> rimz::agents::RoomAccounts {
         rimz::ids::RoomLogins::from([(AgentKind::new_unchecked(kind), name.parse().unwrap())])
+            .into()
     }
 
     #[test]

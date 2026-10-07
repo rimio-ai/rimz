@@ -65,7 +65,7 @@ pub fn run(args: ProvidersArgs, globals: &GlobalFlags) -> Result<()> {
     }
     let spinner = (!args.json && std::io::stdout().is_terminal())
         .then(|| Spinner::delayed("Querying provider accounts", SPINNER_MIN_AGE));
-    let catalog = LoginCatalog::from_config(&config.accounts).ok();
+    let catalog = Some(LoginCatalog::room_view(&config.accounts));
     let logins: Vec<_> = rimz::agents::known_kinds()
         .flat_map(|kind| {
             let mut logins = vec![ProviderLogin::default_for(AgentKind::new_unchecked(kind))];

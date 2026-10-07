@@ -628,7 +628,10 @@ fn relaunch_login_answers_by_history_pool() {
     let answer = |stamp, room: &str, catalog: &LoginCatalog| {
         relaunch_login(&session(stamp), &claude_room(room), catalog)
             .map(|login| login.unwrap_or_default().to_string())
-            .map_err(|mismatch| {
+            .map_err(|error| {
+                let RelaunchLoginErr::Mismatch(mismatch) = error else {
+                    panic!("unexpected account refusal")
+                };
                 (
                     mismatch.session_login.to_string(),
                     mismatch.room_login.to_string(),
@@ -666,5 +669,26 @@ fn relaunch_login_answers_by_history_pool() {
     assert_eq!(
         answer(Some("work"), "personal", &NO_ACCOUNTS),
         Err(("work".to_owned(), "personal".to_owned()))
+    );
+    let root = tempfile::tempdir().unwrap();
+    let machine = crate::config::MachineConfig {
+        accounts: toml::from_str(
+            "[claude.personal]\nhome = \"/srv/claude-personal\"\n[use]\nclaude = \"personal\"\n",
+        )
+        .unwrap(),
+        ..Default::default()
+    };
+    let accounts =
+        crate::agents::resolve_room_accounts(&crate::ids::RoomLogins::new(), root.path(), &machine);
+    let mut agent = session(Some("work"));
+    agent.name = Some("coder".to_owned());
+    let RelaunchLoginErr::Mismatch(mismatch) =
+        relaunch_login(&agent, &accounts, &standalone).unwrap_err()
+    else {
+        panic!("expected history pool mismatch")
+    };
+    assert_eq!(
+        mismatch.to_string(),
+        "@coder's session belongs to claude account `work`; this room launches claude on `personal` (machine default). Run `rimz accounts use claude work` to pin this room to it and resume, then `rimz accounts use --reset claude` to follow the machine default again."
     );
 }

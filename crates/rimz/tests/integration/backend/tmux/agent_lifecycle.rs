@@ -811,7 +811,7 @@ fn plan_from_env(env: &Env) -> rimz::harness::resume::ResumePlan {
             runtime: &env.runtime_paths(),
             profiles: &rimz::config::ProfilesConfig::default(),
             max: rimz::config::ResumeConfig::default().max,
-            logins: &rimz::ids::RoomLogins::new(),
+            logins: &rimz::agents::RoomAccounts::default(),
             catalog: &rimz::agents::LoginCatalog::default(),
         },
         |path| path.is_dir(),

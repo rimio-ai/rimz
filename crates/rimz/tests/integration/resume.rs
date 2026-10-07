@@ -76,7 +76,7 @@ fn plan_from_rollup(h: &Harness) -> rimz::harness::resume::ResumePlan {
             runtime: h.store.runtime_paths(),
             profiles: &rimz::config::ProfilesConfig::default(),
             max: rimz::config::ResumeConfig::default().max,
-            logins: &rimz::ids::RoomLogins::new(),
+            logins: &rimz::agents::RoomAccounts::default(),
             catalog: &rimz::agents::LoginCatalog::default(),
         },
         |_| true,
@@ -206,7 +206,7 @@ fn rebirth_skips_a_session_stamped_with_another_account() {
     assert_eq!(
         plan.warnings,
         [
-            "@warm-drift's session belongs to claude account `personal`; this room now launches claude on `default`. Run `rimz accounts use claude personal` to resume it, then switch back."
+            "@warm-drift's session belongs to claude account `personal`; this room launches claude on `default` (provider default). Run `rimz accounts use claude personal` to pin this room to it and resume, then `rimz accounts use --reset claude` to follow the provider default again."
         ]
     );
 }
@@ -372,7 +372,7 @@ fn soft_reset_preserves_dead_paneless_resume_identity() {
             runtime: h.store.runtime_paths(),
             profiles: &rimz::config::ProfilesConfig::default(),
             max: rimz::config::ResumeConfig::default().max,
-            logins: &rimz::ids::RoomLogins::new(),
+            logins: &rimz::agents::RoomAccounts::default(),
             catalog: &rimz::agents::LoginCatalog::default(),
         },
         |_| true,
@@ -484,7 +484,7 @@ fn missing_worktree_candidate_is_stamped_ended_not_reported() {
             runtime: h.store.runtime_paths(),
             profiles: &rimz::config::ProfilesConfig::default(),
             max: rimz::config::ResumeConfig::default().max,
-            logins: &rimz::ids::RoomLogins::new(),
+            logins: &rimz::agents::RoomAccounts::default(),
             catalog: &rimz::agents::LoginCatalog::default(),
         },
         |_| false,

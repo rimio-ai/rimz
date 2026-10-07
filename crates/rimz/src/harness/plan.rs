@@ -51,7 +51,7 @@ impl LaunchAvailability {
         now: jiff::Timestamp,
         login: impl Fn(&AgentKind) -> crate::store::writer::LaunchLogin,
     ) -> Self {
-        let defaults = crate::agents::room_logins(&state.workspace_record).ok();
+        let defaults = crate::agents::room_accounts(&state.workspace_record, config).ok();
         let logins: BTreeMap<_, _> = crate::agents::known_kinds()
             .filter_map(|kind| {
                 let kind = AgentKind::new_unchecked(kind);
@@ -66,13 +66,15 @@ impl LaunchAvailability {
             &runtime.shared_provider_spending_path(),
         );
         let selected = crate::agents::RoomLoginSet::new(
-            Some(
-                logins
-                    .values()
-                    .map(|key| (key.kind.clone(), key.name.clone()))
-                    .collect(),
-            ),
-            crate::agents::LoginCatalog::from_config(&config.accounts).ok(),
+            defaults.map(|defaults| {
+                defaults.with_names(
+                    logins
+                        .values()
+                        .map(|key| (key.kind.clone(), key.name.clone()))
+                        .collect(),
+                )
+            }),
+            Some(crate::agents::LoginCatalog::room_view(&config.accounts)),
             crate::agents::ambient_env(),
         );
         let mut result = Self {
@@ -86,8 +88,7 @@ impl LaunchAvailability {
             model_pins: config.models.clone(),
             now,
         };
-        let catalog =
-            crate::agents::LoginCatalog::from_config(&config.accounts).unwrap_or_default();
+        let catalog = crate::agents::LoginCatalog::room_view(&config.accounts);
         let families: BTreeSet<_> = config
             .tiers
             .entries(crate::config::tiers::ModelTier::Intern)

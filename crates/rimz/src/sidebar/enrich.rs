@@ -605,9 +605,8 @@ fn enrich_core(
     // pane presence alone cannot see a host whose child stopped serving. The
     // provider's own record of the serving process settles it; a host with no
     // record stays healthy, because absence of evidence is not a failure.
-    let logins =
-        crate::agents::RoomLoginSet::resolve(&state.workspace_record, &machine_config.accounts)
-            .with_agents(&snapshot.agents);
+    let logins = crate::agents::RoomLoginSet::resolve(&state.workspace_record, &machine_config)
+        .with_agents(&snapshot.agents);
     let claude_rc_enabled = machine_config.remote_control.enabled_for("claude");
     let remote_control_health = RemoteControlServerHealth {
         claude_host_serving: frame.map(|frame| {
@@ -963,7 +962,7 @@ pub fn provider_panel_for_login(
         let selection =
             crate::ids::RoomLogins::from([(login.kind().clone(), login.name().clone())]);
         crate::agents::RoomLoginSet::new(
-            Some(selection),
+            Some(selection.into()),
             catalog.cloned(),
             crate::agents::ambient_env(),
         )
