@@ -255,6 +255,7 @@ struct ShowView {
     throttle: ShowThrottle,
     show_agent_runs: bool,
     worktrees: Vec<schedule::fanout::CheckoutCondition>,
+    worktrees_error: Option<String>,
     all: bool,
 }
 
@@ -481,10 +482,14 @@ fn worktree_rows<'a>(view: &'a ShowView, expr: Option<&'a WhenExpr>) -> Vec<Work
                 CheckoutState::Launched { leader, .. } => view.leader_statuses.get(leader).copied(),
                 _ => None,
             };
+            let checkout = condition
+                .checkout
+                .canonicalize()
+                .unwrap_or_else(|_| condition.checkout.clone());
             let armed = view
                 .subscriptions
                 .iter()
-                .filter(|subscription| subscription.checkout == condition.checkout)
+                .filter(|subscription| subscription.checkout == checkout)
                 .count();
             WorktreeRow {
                 condition,
@@ -503,6 +508,11 @@ fn write_worktrees(
     expr: Option<&WhenExpr>,
     mut rows: Vec<WorktreeRow<'_>>,
 ) -> Result<()> {
+    if let Some(error) = &view.worktrees_error {
+        writeln!(out, "\n{}", ui::paint(ui::palette::header(), "WORKTREES"))?;
+        writeln!(out, "  worktrees unavailable: {}", first_line(error))?;
+        return Ok(());
+    }
     let mut counts = vec![format!("{} owned", rows.len())];
     for state in ["blocked", "ready", "holding", "waiting", "launched"] {
         let count = rows.iter().filter(|row| row.state_name() == state).count();
@@ -525,10 +535,17 @@ fn write_worktrees(
         condition::write_no_room_hint(out, parsed)?;
     }
     let mut keys = std::collections::BTreeSet::new();
+    let mut repeated_keys = std::collections::BTreeSet::new();
     let terms = expr
         .map(|expr| {
             expr.terms()
-                .filter(|term| keys.insert(term.key.as_str()))
+                .filter(|term| {
+                    let first = keys.insert(term.key.as_str());
+                    if !first {
+                        repeated_keys.insert(term.key.as_str());
+                    }
+                    first
+                })
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
@@ -581,6 +598,10 @@ fn write_worktrees(
                 .readings
                 .get(&term.key)
                 .and_then(|value| value.as_deref());
+            if repeated_keys.contains(term.key.as_str()) {
+                cells.push(ui::cell(value.unwrap_or("unknown")));
+                continue;
+            }
             let role = if term.matches(value) {
                 ui::status::StateRole::Success
             } else {
@@ -859,34 +880,48 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
     let in_flight = displayed_in_flight(&args.name, in_flight_run(&args.name, &root));
     let room_is_open = room_open(&root);
     let worktrees = if entry.each_worktree {
-        let runtime = runtime
+        runtime
             .as_ref()
-            .context("resolving loop worktree runtime paths")?;
-        let ci_source = room_is_open.then(|| schedule::when::CiSource::read(runtime));
-        schedule::fanout::inspect(&args.name, &task, runtime, ci_source.as_ref(), now)?
+            .context("runtime paths unavailable")
+            .and_then(|runtime| {
+                let ci_source = room_is_open.then(|| schedule::when::CiSource::read(runtime));
+                schedule::fanout::inspect(&args.name, &task, runtime, ci_source.as_ref(), now)
+            })
     } else {
-        Vec::new()
+        Ok(Vec::new())
+    };
+    let (worktrees, worktrees_error) = match worktrees {
+        Ok(rows) => (rows, None),
+        Err(error) => (Vec::new(), Some(format!("{error:#}"))),
     };
     let mut condition = Vec::new();
     if !args.json && !entry.each_worktree {
         condition::write_show(&mut condition, entry, &timing)?;
     }
     let subscriptions = if !args.json || entry.each_worktree {
-        load_subscriptions(&args.name, &root, &now_zoned)?
+        load_subscriptions(&args.name, &root, &now_zoned)
     } else {
-        Vec::new()
+        Ok(Vec::new())
     };
-    let store =
+    let (subscriptions, subscriptions_error) = match subscriptions {
+        Ok(rows) => (rows, None),
+        Err(error) => (Vec::new(), Some(error)),
+    };
+    let workspace =
         if (!args.json || entry.each_worktree) && (!launches.is_empty() || entry.wait.is_some()) {
-            let workspace = WorkspaceResolver::resolve(&root, Some(root.clone()))?;
-            super::super::open_existing_store(&workspace)?
+            WorkspaceResolver::resolve(&root, Some(root.clone())).ok()
         } else {
             None
         };
+    let store = workspace
+        .as_ref()
+        .and_then(|workspace| super::super::open_existing_store(workspace).ok().flatten());
     let snapshot = store
         .as_ref()
-        .map(|store| store.snapshot_cached())
-        .transpose()?;
+        .zip(workspace.as_ref())
+        .and_then(|(store, workspace)| {
+            super::super::alive_snapshot(store, &workspace.session_name).ok()
+        });
     let leader_statuses = snapshot
         .as_ref()
         .map(|snapshot| leader_statuses(&launches, &snapshot.agents))
@@ -904,7 +939,10 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
         .zip(entry.wait.as_ref())
         .is_some_and(|((kind, session), target)| kind == target.kind && session == target.session);
     let config = MachineConfig::load_lenient();
-    let throttle = if args.json || entry.throttle == Some(rimz::config::ThrottleSwitch::Off) {
+    let throttle = if args.json
+        || entry.agent.is_none()
+        || entry.throttle == Some(rimz::config::ThrottleSwitch::Off)
+    {
         ShowThrottle::Off
     } else if config.r#loop.throttle.has_limits()
         || in_flight.as_ref().is_some_and(|run| !run.held.is_empty())
@@ -932,6 +970,7 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
         config,
         throttle,
         worktrees,
+        worktrees_error,
         all: args.all,
     };
     if args.json {
@@ -962,7 +1001,11 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
         writeln!(ui::out(), "{}", serde_json::to_string_pretty(&json)?)?;
         return Ok(());
     }
-    render_show(&mut ui::out(), &view, args.runs)
+    render_show(&mut ui::out(), &view, args.runs)?;
+    if let Some(error) = subscriptions_error {
+        return Err(error);
+    }
+    Ok(())
 }
 
 fn load_subscriptions(name: &str, root: &Path, now: &jiff::Zoned) -> Result<Vec<SubscriptionView>> {
@@ -1547,7 +1590,17 @@ fn write_show_facts(out: &mut impl Write, view: &ShowView) -> std::io::Result<()
         );
     }
     match &view.throttle {
-        ShowThrottle::Off => kv.push("throttle", ui::cell("off (starts without taking a turn)")),
+        ShowThrottle::Off => {
+            if let Some(switch) = entry.throttle {
+                kv.push(
+                    "throttle",
+                    ui::cell(match switch {
+                        rimz::config::ThrottleSwitch::On => "on",
+                        rimz::config::ThrottleSwitch::Off => "off (starts without taking a turn)",
+                    }),
+                );
+            }
+        }
         ShowThrottle::Compact(load) => {
             kv.push("throttle", ui::cell("no limits set"));
             if let Some(load) = load {
@@ -2093,11 +2146,14 @@ fn record_note(record: &LoopRunRecord) -> Option<String> {
         (Some(held), Some(note)) => Some(format!("{held} · {note}")),
         (held, note) => held.or(note),
     };
-    match (&record.checkout, note) {
-        (Some(checkout), Some(note)) if !note.is_empty() => {
-            Some(format!("{} {note}", checkout.display()))
-        }
-        (Some(checkout), _) => Some(checkout.display().to_string()),
+    let checkout = record
+        .checkout
+        .as_deref()
+        .and_then(Path::file_name)
+        .map(|name| name.to_string_lossy());
+    match (checkout, note) {
+        (Some(checkout), Some(note)) if !note.is_empty() => Some(format!("{checkout} {note}")),
+        (Some(checkout), _) => Some(checkout.into_owned()),
         (None, note) => note,
     }
 }

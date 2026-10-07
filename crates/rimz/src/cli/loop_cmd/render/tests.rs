@@ -83,6 +83,7 @@ fn show_view(each_worktree: bool) -> ShowView {
                 },
             )
             .into(),
+        worktrees_error: None,
         all: false,
     }
 }
@@ -230,6 +231,35 @@ fn show_worktrees_fresh_hold_renders_zero_elapsed() {
     *since = view.now_zoned.timestamp();
     let text = show_text(&view);
     assert!(text.contains("holding 0s/3m"), "{text}");
+}
+
+#[test]
+fn worktrees_repeated_key_readings_have_no_leaf_glyph() {
+    let mut view = worktree_view();
+    view.entry.when = Some(vec!["pr=open || pr=merged && ci=passed".into()]);
+    view.timing = schedule::TaskTiming::evaluate(
+        schedule::TaskShape::compile("sweep", &view.entry).trigger(),
+        view.source,
+        None,
+        None,
+        &view.now_zoned,
+    );
+    view.room_is_open = true;
+    view.worktrees.retain(|row| row.name == "ready");
+    let CheckoutState::Ready { verdict, .. } = &mut view.worktrees[0].state else {
+        panic!("ready fixture must carry a verdict");
+    };
+    verdict.readings.insert("pr".into(), Some("merged".into()));
+    let text = show_text(&view);
+    let row = text
+        .lines()
+        .find(|line| line.starts_with("  ready "))
+        .unwrap();
+    assert!(
+        row.contains("merged") && !row.contains("✗ merged") && !row.contains("✓ merged"),
+        "{text}"
+    );
+    assert!(row.contains("✓ passed"), "{text}");
 }
 
 #[test]
@@ -468,6 +498,83 @@ fn show_check_only_action_and_timeout_for_nonresident_agents() {
     );
     assert!(
         !text.contains("  check:") && !text.contains("timeout:"),
+        "{text}"
+    );
+}
+
+#[test]
+fn show_check_only_omits_throttle_unless_the_switch_is_set() {
+    let mut view = show_view(false);
+    view.entry.agent = None;
+    view.entry.subscribe.clear();
+    view.throttle = ShowThrottle::Off;
+    let text = show_text(&view);
+    assert!(
+        !text.contains("throttle:") && !text.contains("load:") && !text.contains("THROTTLE"),
+        "{text}"
+    );
+    for (switch, label) in [
+        (rimz::config::ThrottleSwitch::On, "on"),
+        (
+            rimz::config::ThrottleSwitch::Off,
+            "off (starts without taking a turn)",
+        ),
+    ] {
+        view.entry.throttle = Some(switch);
+        let text = show_text(&view);
+        let throttle = text
+            .lines()
+            .find(|line| line.trim_start().starts_with("throttle:"))
+            .unwrap();
+        assert!(throttle.ends_with(label), "{text}");
+        assert!(
+            !text.contains("load:") && !text.contains("THROTTLE"),
+            "{text}"
+        );
+    }
+}
+
+#[test]
+fn show_facts_follow_the_reference_order() {
+    let mut view = show_view(false);
+    view.source = TaskSource::Project {
+        state: rimz::trust::TrustState::Untrusted,
+    };
+    view.entry.label = Some("repair the build".into());
+    view.entry.verify = Some("cargo check".into());
+    view.entry.dir = Some("/repo/lane".into());
+    view.entry.budget = Some("$5".into());
+    view.entry.budget_per_day = Some("$20".into());
+    view.entry.surplus = Some("1.5x".into());
+    view.strike_count = 1;
+    let mut out = Vec::new();
+    write_show_facts(&mut out, &view).unwrap();
+    let text = String::from_utf8(out).unwrap();
+    let text = anstream::adapter::strip_str(&text).to_string();
+    let keys = text
+        .lines()
+        .map(|line| line.trim_start().split_once(':').unwrap().0)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        keys,
+        [
+            "action",
+            "check",
+            "wakes",
+            "label",
+            "verify",
+            "root",
+            "dir",
+            "source",
+            "timeout",
+            "will not fire",
+            "throttle",
+            "load",
+            "budget",
+            "surplus",
+            "spend",
+            "strikes",
+        ],
         "{text}"
     );
 }
@@ -928,7 +1035,7 @@ fn throttle_skip_is_a_refused_fire_with_a_visible_reason_and_a_waited_row_says_h
     waited.checkout = Some(PathBuf::from("/repo/lane"));
     assert_eq!(
         record_note(&waited).as_deref(),
-        Some("/repo/lane held 3m · @fixer")
+        Some("lane held 3m · @fixer")
     );
 }
 
@@ -936,9 +1043,9 @@ fn throttle_skip_is_a_refused_fire_with_a_visible_reason_and_a_waited_row_says_h
 fn checkout_without_a_note_has_no_trailing_separator() {
     let mut row = record(0, LoopRunResult::Launched);
     row.checkout = Some(PathBuf::from("/repo/lane"));
-    assert_eq!(record_note(&row).as_deref(), Some("/repo/lane"));
+    assert_eq!(record_note(&row).as_deref(), Some("lane"));
     row.target = Some("@fixer".into());
-    assert_eq!(record_note(&row).as_deref(), Some("/repo/lane @fixer"));
+    assert_eq!(record_note(&row).as_deref(), Some("lane @fixer"));
 }
 
 #[test]
