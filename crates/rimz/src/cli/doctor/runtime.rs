@@ -1144,6 +1144,7 @@ fn classify_diagnostic(
         | DiagEvent::GateRelease { .. }
         | DiagEvent::TopologyWriterChanged { .. }
         | DiagEvent::RecoverySeatRefilled { .. }
+        | DiagEvent::RecoveryChildEnded { .. }
         | DiagEvent::HealthAlert {
             recovered_after_ms: Some(_),
             ..
