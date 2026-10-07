@@ -140,7 +140,7 @@ fn launched_lane_label(channel: Option<&str>, cwd: &Path, project_root: &Path) -
     channel
         .filter(|channel| !channel.is_empty())
         .map(str::to_owned)
-        .or_else(|| rimz::address::root_lane_channel(cwd))
+        .or_else(|| cwd.file_name()?.to_str().map(str::to_owned))
 }
 
 /// Launch into an already-resolved host cwd without changing its lexical identity.
