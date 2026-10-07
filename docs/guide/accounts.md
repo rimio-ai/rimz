@@ -10,6 +10,17 @@ rimz start --account claude=work       # a room whose Claude agents all run unde
 rimz reset --account claude=default    # rebuild the room on Claude's own home
 ```
 
+## Redeem a reset credit by hand
+
+Codex reset credits can refill your allowance before its free reset. To choose the moment yourself, preview the account first:
+
+```sh
+rimz accounts redeem codex --dry-run
+rimz accounts redeem codex work
+```
+
+Without a name, RimZ uses the account a launch here would use. It shows that login, the credit count and expiry, the usage windows, and what spending one credit changes, then asks before spending. A Codex redemption restarts the window's clock: just before a free reset, you give that reset up for little extra capacity. The preview warns when it is near, but leaves the choice to you. `--yes` skips confirmation for scripts; [the reference](../reference/cli/accounts.md#redeem) lists the outcome exit codes. Claude limit resets remain yours to spend in Claude's Settings > Usage.
+
 ## Declare an account
 
 `rimz accounts add <kind> <name>` declares a named account for `claude` or `codex`:

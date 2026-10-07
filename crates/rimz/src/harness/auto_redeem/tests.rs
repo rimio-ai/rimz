@@ -737,6 +737,139 @@ fn stamp_round_trips_atomically() {
     assert_eq!(read_stamp(&path), Some(stamp));
 }
 
+fn manual_report() -> RedeemReport {
+    RedeemReport {
+        reason: RedeemReason::Manual,
+        credits: 1,
+        soonest_expiry: None,
+        natural_reset: None,
+        outcome: None,
+        windows_reset: false,
+        window_resets: Vec::new(),
+    }
+}
+
+#[test]
+fn manual_tail_bypasses_cooldown_and_reserves_before_consuming() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime =
+        RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    let key = LoginKey::default_for(crate::ids::AgentKind::new_unchecked(CODEX_KIND));
+    let path = runtime.shared_auto_redeem_path(&key);
+    let now = ts(1_700_000_000);
+    write_stamp(
+        &path,
+        &RedeemStamp {
+            attempted_at: now - SignedDuration::from_secs(60),
+            request_id: "auto".to_owned(),
+            reason: RedeemReason::BlockedGain,
+            outcome: Some("reset".to_owned()),
+        },
+    )
+    .unwrap();
+    let consumed = std::cell::Cell::new(false);
+    let redeemed =
+        consume_manual_redemption(&runtime, &key, manual_report(), now, now, "manual", || {
+            let reservation = read_stamp(&path).unwrap();
+            assert_eq!(reservation.reason, RedeemReason::Manual);
+            assert_eq!(reservation.request_id, "manual");
+            assert_eq!(reservation.outcome, None);
+            consumed.set(true);
+            Ok(ResetCreditResult {
+                outcome: RedemptionCode::Reset,
+                windows_reset: 2,
+                refreshed: None,
+                refresh_error: Some("refresh failed".to_owned()),
+            })
+        });
+    assert!(
+        redeemed.is_ok(),
+        "manual redemption must ignore the auto cooldown"
+    );
+    let redeemed = redeemed.unwrap();
+    assert!(consumed.get());
+    assert_eq!(redeemed.report.reason, RedeemReason::Manual);
+    assert_eq!(redeemed.report.outcome, Some(RedemptionCode::Reset));
+    assert!(redeemed.usage.is_none());
+    assert_eq!(redeemed.refresh_error.as_deref(), Some("refresh failed"));
+    let stamp = read_stamp(&path).unwrap();
+    assert_eq!(stamp.reason, RedeemReason::Manual);
+    assert_eq!(stamp.outcome.as_deref(), Some("reset"));
+    assert!(!stamp_allows_attempt(Some(&stamp), now + ATTEMPT_COOLDOWN));
+}
+
+#[test]
+fn manual_tail_refuses_newer_attempts_and_live_reservations() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime =
+        RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    let key = LoginKey::default_for(crate::ids::AgentKind::new_unchecked(CODEX_KIND));
+    let path = runtime.shared_auto_redeem_path(&key);
+    let now = ts(1_700_000_000);
+    for (attempted_at, outcome) in [
+        (now + SignedDuration::from_secs(1), Some("reset".to_owned())),
+        (now - SignedDuration::from_secs(60), None),
+    ] {
+        let stamp = RedeemStamp {
+            attempted_at,
+            outcome,
+            request_id: "auto".to_owned(),
+            reason: RedeemReason::BlockedGain,
+        };
+        write_stamp(&path, &stamp).unwrap();
+        let result = consume_manual_redemption(
+            &runtime,
+            &key,
+            manual_report(),
+            now,
+            now + Duration::from_secs(2),
+            "manual",
+            || panic!("a racing helper must prevent consuming"),
+        );
+        let error = result.err().expect("must refuse").to_string();
+        assert!(
+            error.contains("auto-redeem") && error.contains("rerun"),
+            "{error}"
+        );
+        assert_eq!(read_stamp(&path), Some(stamp));
+    }
+}
+
+#[test]
+fn manual_failed_reservation_never_consumes_a_credit() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime =
+        RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    let key = LoginKey::default_for(crate::ids::AgentKind::new_unchecked(CODEX_KIND));
+    std::fs::create_dir_all(runtime.shared_auto_redeem_path(&key)).unwrap();
+    let result = consume_manual_redemption(
+        &runtime,
+        &key,
+        manual_report(),
+        ts(10),
+        ts(10),
+        "manual",
+        || panic!("a failed reservation must prevent consuming"),
+    );
+    let error = result.err().expect("must fail");
+    assert_eq!(error.attempted_report(), Some(&manual_report()));
+    assert!(error.to_string().contains("stamp"));
+}
+
+#[test]
+fn manual_stamp_reads_and_round_trips() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("stamp.json");
+    std::fs::write(&path, br#"{"attempted_at":"2026-01-01T00:00:00Z","request_id":"manual","reason":"manual","outcome":"reset"}"#).unwrap();
+    let stamp = read_stamp(&path).expect("manual stamp must parse");
+    assert_eq!(stamp.reason, RedeemReason::Manual);
+    write_stamp(&path, &stamp).unwrap();
+    assert_eq!(read_stamp(&path), Some(stamp));
+}
+
 /// A live root row whose displayed turn error, raised at `now`, has `class`.
 fn limit_parked(kind: &str, agent_id: &str, class: TurnErrorClass, now: Timestamp) -> AgentState {
     let mut agent = crate::sidebar::test_support::root_agent(kind, agent_id, None);

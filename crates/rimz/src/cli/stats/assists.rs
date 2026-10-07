@@ -21,6 +21,8 @@ pub(super) struct AssistRollup {
     pub(super) tier_fallbacks: usize,
     pub(super) redeems: usize,
     pub(super) resets: usize,
+    pub(super) manual_redeems: usize,
+    pub(super) manual_resets: usize,
     pub(super) resumes: usize,
     pub(super) recovered_secs: u64,
     pub(super) compacts: usize,
@@ -233,9 +235,15 @@ impl AssistStats {
                 AssistEvent::ResidentLaunch { .. } => rollup.resident_launches += 1,
                 AssistEvent::ModelAlias { .. } => rollup.model_aliases += 1,
                 AssistEvent::TierFallback { .. } => rollup.tier_fallbacks += 1,
-                AssistEvent::Redeem { outcome, .. } => {
+                AssistEvent::Redeem {
+                    outcome, reason, ..
+                } => {
                     rollup.redeems += 1;
                     rollup.resets += usize::from(outcome.as_deref() == Some("reset"));
+                    if *reason == RedeemReason::Manual {
+                        rollup.manual_redeems += 1;
+                        rollup.manual_resets += usize::from(outcome.as_deref() == Some("reset"));
+                    }
                 }
                 AssistEvent::Continue {
                     at,
@@ -662,14 +670,12 @@ fn category_entries(rollup: &AssistRollup) -> Vec<(&'static str, String)> {
     if rollup.launch_retries > 0 {
         rows.push(("Launch retry:", rollup.launch_retries.to_string()));
     }
-    if rollup.redeems > 0 {
-        let mut value = rollup.redeems.to_string();
-        if rollup.resets > 0 {
-            value.push_str(&format!(
-                " ({} reset{})",
-                rollup.resets,
-                plural(rollup.resets)
-            ));
+    let auto_redeems = rollup.redeems - rollup.manual_redeems;
+    let auto_resets = rollup.resets - rollup.manual_resets;
+    if auto_redeems > 0 {
+        let mut value = auto_redeems.to_string();
+        if auto_resets > 0 {
+            value.push_str(&format!(" ({} reset{})", auto_resets, plural(auto_resets)));
         }
         rows.push(("Auto-redeem:", value));
     }
@@ -1163,6 +1169,7 @@ fn format_hours(seconds: u64) -> String {
 
 fn reason_label(reason: RedeemReason) -> &'static str {
     match reason {
+        RedeemReason::Manual => "manual",
         RedeemReason::ExpiryRescue => "expiry rescue",
         RedeemReason::BlockedGain => "blocked gain",
         RedeemReason::DoomedCredit => "doomed credit",

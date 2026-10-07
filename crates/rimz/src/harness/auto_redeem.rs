@@ -25,7 +25,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::RuntimePaths;
 use crate::agents::account::{
-    ProviderCapacity, RedemptionCode, ResetCreditResult, prepare_reset_credit_redemption,
+    PreparedRedemption, ProviderCapacity, RedemptionCode, ResetCreditResult, WindowSpan,
+    prepare_reset_credit_redemption,
 };
 use crate::agents::{
     AccountUsageIdentity, AccountUsageSnapshot, AgentState, ProviderLogin, RateLimitWindow,
@@ -51,6 +52,8 @@ const SECONDS_PER_DAY: f64 = 24.0 * 60.0 * 60.0;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RedeemReason {
+    /// A credit deliberately spent by the user.
+    Manual,
     /// A credit within 30 minutes of expiry, with or without the opt-in. The
     /// one rule an idle account is evaluated for, and the helper drops it
     /// there when its fresh read shows the window unused.
@@ -86,6 +89,7 @@ pub fn provider_located() -> bool {
 impl RedeemReason {
     const fn as_str(self) -> &'static str {
         match self {
+            Self::Manual => "manual",
             Self::ExpiryRescue => "expiry_rescue",
             Self::BlockedGain => "blocked_gain",
             Self::DoomedCredit => "doomed_credit",
@@ -115,6 +119,10 @@ struct RedeemStamp {
 pub enum AutoRedeemErr {
     #[error("auto-redeem supports only the `codex` provider, not `{0}`")]
     UnsupportedKind(String),
+    #[error(
+        "another redemption or auto-redeem attempt landed during the preview, or auto-redeem has a pending attempt; rerun `rimz accounts redeem`"
+    )]
+    RacingAttempt,
     #[error("locking the shared auto-redeem attempt: {0}")]
     Lock(#[from] crate::disk::lock::LockErr),
     #[error("writing the shared auto-redeem stamp: {0}")]
@@ -152,6 +160,121 @@ pub struct RedeemReport {
 pub struct Redeemed {
     pub report: RedeemReport,
     pub usage: Option<(AccountUsageIdentity, AccountUsageSnapshot)>,
+    /// A post-reset refresh failure: manual callers warn; auto-redeem returns an attempted error.
+    pub refresh_error: Option<String>,
+}
+
+/// A manual redemption read from the provider, armed to consume.
+pub struct ManualRedeem {
+    pub credits: ResetCredits,
+    /// The unscoped 5h and 7d windows projected to the read time.
+    pub windows: Vec<RateLimitWindow>,
+    pub natural_reset: Option<Timestamp>,
+    pub forecast: Option<RedeemForecast>,
+    pub min_gain: Duration,
+    prepared: PreparedRedemption<RedeemReason>,
+    read_at: Timestamp,
+}
+
+/// Read one manual preview without reserving or locking the account.
+pub fn prepare_manual_redeem(
+    runtime: &RuntimePaths,
+    key: &LoginKey,
+    login_env: &BTreeMap<String, String>,
+    config: &ResumeConfig,
+) -> Result<ManualRedeem, AutoRedeemErr> {
+    if key.kind.as_str() != CODEX_KIND {
+        return Err(AutoRedeemErr::UnsupportedKind(key.kind.to_string()));
+    }
+    let read_at = Timestamp::now();
+    let prepared = prepare_reset_credit_redemption(
+        CODEX_KIND,
+        |_, _| Some(RedeemReason::Manual),
+        login_env,
+    )
+    .map_err(AutoRedeemErr::Codex)?
+    // The unconditional manual verdict cannot decline an offered action.
+    .expect("the manual verdict always returns Some");
+    let capacity = prepared.capacity.as_ref();
+    let credits = prepared.credits.clone();
+    let min_gain = config.auto_redeem_min_gain();
+    let rate = cached_rate(read_rate_stamp(&runtime.shared_auto_redeem_rate_path(key)).as_ref());
+    let windows = [WindowSpan::FiveHour, WindowSpan::SevenDay]
+        .into_iter()
+        .filter_map(|span| capacity?.window_of_span(span, read_at))
+        .collect();
+    Ok(ManualRedeem {
+        natural_reset: capacity.and_then(|capacity| capacity.latest_spent_window_reset(read_at)),
+        forecast: redeem_forecast(
+            capacity,
+            &credits,
+            rate,
+            min_gain,
+            config.auto_redeem,
+            read_at,
+        ),
+        credits,
+        windows,
+        min_gain,
+        prepared,
+        read_at,
+    })
+}
+
+impl ManualRedeem {
+    /// Lock, apply the stamp race rule, reserve, consume one credit, stamp the outcome.
+    pub fn consume(
+        self,
+        runtime: &RuntimePaths,
+        key: &LoginKey,
+        request_id: uuid::Uuid,
+    ) -> Result<Redeemed, AutoRedeemErr> {
+        let _guard =
+            crate::disk::lock::WorkspaceLock::acquire(&runtime.shared_auto_redeem_lock(key))?;
+        let report = redemption_report(RedeemReason::Manual, &self.credits, self.natural_reset);
+        let request_id = request_id.to_string();
+        consume_manual_redemption(
+            runtime,
+            key,
+            report,
+            self.read_at,
+            Timestamp::now(),
+            &request_id,
+            || self.prepared.consume(&request_id),
+        )
+    }
+}
+
+fn consume_manual_redemption(
+    runtime: &RuntimePaths,
+    key: &LoginKey,
+    report: RedeemReport,
+    read_at: Timestamp,
+    now: Timestamp,
+    request_id: &str,
+    consume: impl FnOnce() -> Result<ResetCreditResult, String>,
+) -> Result<Redeemed, AutoRedeemErr> {
+    let stamp_path = runtime.shared_auto_redeem_path(key);
+    if read_stamp(&stamp_path).is_some_and(|stamp| {
+        stamp.attempted_at > read_at
+            || (stamp.outcome.is_none()
+                && now.as_second() - stamp.attempted_at.as_second()
+                    < duration_seconds(ATTEMPT_COOLDOWN))
+    }) {
+        return Err(AutoRedeemErr::RacingAttempt);
+    }
+    finish_redemption(
+        &stamp_path,
+        RedeemStamp {
+            attempted_at: now,
+            request_id: request_id.to_owned(),
+            reason: RedeemReason::Manual,
+            outcome: None,
+        },
+        report,
+        RedeemReason::Manual,
+        consume,
+    )
 }
 
 /// Decide whether current provider-neutral capacity and reset credits warrant
@@ -731,14 +854,38 @@ pub fn execute_auto_redeem(
     let Some(action) = action else {
         return Ok(None);
     };
-    let reason = action.decision;
-    let capacity = action.capacity.clone();
-    let credits = action.credits.clone();
-
-    let natural_reset = capacity
+    let natural_reset = action
+        .capacity
         .as_ref()
         .and_then(|capacity| capacity.latest_spent_window_reset(now));
-    let mut report = RedeemReport {
+    let report = redemption_report(action.decision, &action.credits, natural_reset);
+    let redeemed = finish_redemption(
+        &stamp_path,
+        RedeemStamp {
+            attempted_at: now,
+            request_id: request_id.to_owned(),
+            reason: action.decision,
+            outcome: None,
+        },
+        report,
+        requested_reason,
+        || action.consume(&request_id),
+    )?;
+    if let Some(error) = &redeemed.refresh_error {
+        return Err(attempted_error(
+            &redeemed.report,
+            AutoRedeemErr::Codex(error.clone()),
+        ));
+    }
+    Ok(Some(redeemed))
+}
+
+fn redemption_report(
+    reason: RedeemReason,
+    credits: &ResetCredits,
+    natural_reset: Option<Timestamp>,
+) -> RedeemReport {
+    RedeemReport {
         reason,
         credits: credits.count,
         soonest_expiry: credits.soonest_expiry,
@@ -746,43 +893,48 @@ pub fn execute_auto_redeem(
         outcome: None,
         windows_reset: false,
         window_resets: Vec::new(),
-    };
+    }
+}
 
-    let mut stamp = RedeemStamp {
-        attempted_at: now,
-        request_id: request_id.to_owned(),
-        reason,
-        outcome: None,
-    };
+fn finish_redemption(
+    stamp_path: &Path,
+    mut stamp: RedeemStamp,
+    mut report: RedeemReport,
+    requested_reason: RedeemReason,
+    consume: impl FnOnce() -> Result<ResetCreditResult, String>,
+) -> Result<Redeemed, AutoRedeemErr> {
     let action =
-        consume_reserved_reset_credit(&stamp_path, &stamp, &report, requested_reason, || {
-            action.consume(&request_id)
-        })?;
+        consume_reserved_reset_credit(stamp_path, &stamp, &report, requested_reason, consume)?;
     report.outcome = Some(action.outcome);
     report.windows_reset = action.windows_reset > 0;
     stamp.outcome = Some(action.outcome.as_str().to_owned());
-    write_stamp(&stamp_path, &stamp).map_err(|err| attempted_error(&report, err))?;
+    write_stamp(stamp_path, &stamp).map_err(|err| attempted_error(&report, err))?;
 
     tracing::info!(
         target: crate::observability::BREADCRUMB_TARGET,
         kind = CODEX_KIND,
-        reason = reason.as_str(),
+        reason = report.reason.as_str(),
         outcome = action.outcome.as_str(),
         windows_reset = action.windows_reset,
         "auto-redeem: reset-credit outcome",
     );
     if action.outcome != RedemptionCode::Reset {
-        return Ok(Some(Redeemed {
+        return Ok(Redeemed {
             report,
             usage: None,
-        }));
+            refresh_error: None,
+        });
     }
 
     let Some((usage_identity, refreshed)) = action.refreshed else {
         let error = action
             .refresh_error
             .unwrap_or_else(|| "usage refresh returned no snapshot".to_owned());
-        return Err(attempted_error(&report, AutoRedeemErr::Codex(error)));
+        return Ok(Redeemed {
+            report,
+            usage: None,
+            refresh_error: Some(error),
+        });
     };
     report.window_resets = refreshed
         .rate_limits
@@ -799,10 +951,11 @@ pub fn execute_auto_redeem(
                 .collect()
         })
         .unwrap_or_default();
-    Ok(Some(Redeemed {
+    Ok(Redeemed {
         report,
         usage: Some((usage_identity, refreshed)),
-    }))
+        refresh_error: None,
+    })
 }
 
 /// The login the helper redeems under, and whether it is idle. A login this

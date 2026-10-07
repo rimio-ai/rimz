@@ -44,6 +44,8 @@ rimz accounts help help
 
 rimz accounts help list
 
+rimz accounts help redeem
+
 rimz accounts help remove
 
 rimz accounts help use
@@ -55,6 +57,18 @@ rimz accounts list
     --mux <MUX>  [action=set takes=1..=1 global]
     --root <ROOT>  [action=set takes=1..=1 global]
     --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz accounts redeem
+    <kind>  [action=set takes=1..=1 required]
+    <name>  [action=set takes=1..=1]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    --dry-run  [action=set-true takes=0..=0]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --yes  [action=set-true takes=0..=0]
     --zellij  [action=set-true takes=0..=0 global]
 
 rimz accounts remove
@@ -875,6 +889,8 @@ rimz help accounts
 rimz help accounts add
 
 rimz help accounts list
+
+rimz help accounts redeem
 
 rimz help accounts remove
 
