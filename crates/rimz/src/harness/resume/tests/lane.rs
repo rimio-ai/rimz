@@ -954,7 +954,7 @@ fn recovery_plan_sorts_equal_freshness_by_label() {
         |_| true,
         |_| true,
     );
-    let mut recovery = RecoveryPlan::new(TeamsConfig::default(), Vec::new(), flat);
+    let mut recovery = RecoveryPlan::new(TeamsConfig::default(), Vec::new(), flat, BTreeSet::new());
     recovery.sort_by_freshness();
 
     assert_eq!(recovery.labels(), ["#alpha", "#zed"]);

@@ -878,7 +878,7 @@ fn plan_recovery(
         .and_then(|record| record.logins)
         .unwrap_or_default();
     let catalog = crate::agents::LoginCatalog::from_config(&machine.accounts).unwrap_or_default();
-    let (team, flat_agents) = split_team_and_flat(
+    let (team, flat_agents, refilled) = split_team_and_flat(
         agents,
         &logins,
         &catalog,
@@ -890,6 +890,8 @@ fn plan_recovery(
         Path::is_dir,
         resume_session_present,
         false,
+        &projection.agents,
+        agent_liveness,
     );
     let team_panes = team
         .iter()
@@ -911,7 +913,7 @@ fn plan_recovery(
         Path::is_dir,
         resume_session_present,
     );
-    let mut plan = RecoveryPlan::new(teams.clone(), team, flat);
+    let mut plan = RecoveryPlan::new(teams.clone(), team, flat, refilled);
     plan.sort_by_freshness();
     plan
 }

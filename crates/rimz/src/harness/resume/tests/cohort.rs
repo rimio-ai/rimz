@@ -4,6 +4,118 @@
 use super::*;
 
 #[test]
+fn live_team_seats_are_refilled_without_planning_a_team_tab() {
+    let (teams, profiles, commands) = team_configs();
+    let parked = vec![
+        team_agent("claude", "old-planner", "planner", "/repo/forge", 10),
+        team_agent("codex", "old-coder", "coder", "/repo/forge", 10),
+    ];
+    for fully_live in [false, true] {
+        let mut roster = parked.clone();
+        roster.push(team_agent("codex", "live-coder", "coder", "/repo/forge", 1));
+        if fully_live {
+            roster.push(team_agent(
+                "claude",
+                "live-planner",
+                "planner",
+                "/repo/forge",
+                1,
+            ));
+        }
+        let (tabs, flat, refilled) = split_team_and_flat(
+            &parked,
+            &NO_LOGINS,
+            &NO_ACCOUNTS,
+            &teams,
+            &profiles,
+            &commands,
+            Some(Path::new("/repo")),
+            &WORKSPACE,
+            |_| true,
+            |_| true,
+            false,
+            &roster,
+            |agent| {
+                if agent.agent_id.as_str().starts_with("live-") {
+                    live(agent)
+                } else {
+                    dead(agent)
+                }
+            },
+        );
+        assert!(tabs.is_empty(), "a live cohort already owns its tab");
+        assert!(refilled.contains(&(parked[1].kind.clone(), parked[1].agent_id.clone())));
+        assert_eq!(refilled.len(), if fully_live { 2 } else { 1 });
+        assert_eq!(
+            flat,
+            if fully_live {
+                Vec::new()
+            } else {
+                vec![parked[0].clone()]
+            }
+        );
+    }
+}
+
+#[test]
+fn an_ended_parked_row_never_claims_the_seat_a_live_member_refills() {
+    let (teams, profiles, commands) = team_configs();
+    let parked = vec![
+        AgentState {
+            ended_at: Some(jiff::Timestamp::now()),
+            ..team_agent("codex", "ended-coder", "coder", "/repo/forge", 20)
+        },
+        team_agent("codex", "old-coder", "coder", "/repo/forge", 10),
+    ];
+    let mut roster = parked.clone();
+    roster.push(team_agent("codex", "live-coder", "coder", "/repo/forge", 1));
+    let (_, _, refilled) = split_team_and_flat(
+        &parked,
+        &NO_LOGINS,
+        &NO_ACCOUNTS,
+        &teams,
+        &profiles,
+        &commands,
+        Some(Path::new("/repo")),
+        &WORKSPACE,
+        |_| true,
+        |_| true,
+        false,
+        &roster,
+        |agent| {
+            if agent.agent_id.as_str().starts_with("live-") {
+                live(agent)
+            } else {
+                dead(agent)
+            }
+        },
+    );
+    assert_eq!(
+        refilled,
+        BTreeSet::from([(parked[1].kind.clone(), parked[1].agent_id.clone())])
+    );
+}
+
+#[test]
+fn fresh_cohort_seeds_retain_the_parked_session_key() {
+    let coder = team_agent("codex", "coder", "coder", "/repo/forge", 1);
+    let plan = cohort_with(
+        std::slice::from_ref(&coder),
+        &[cohort_cell("codex", Some("coder"))],
+        Some("forge"),
+        dead,
+        |_| true,
+        |_| false,
+    )
+    .unwrap();
+    assert_eq!(plan.seeds, [CohortSeed::Fresh]);
+    assert_eq!(
+        plan.refilled,
+        BTreeSet::from([(coder.kind, coder.agent_id)])
+    );
+}
+
+#[test]
 fn recorded_team_restore_keeps_role_layers() {
     let (mut teams, profiles, commands) = team_configs();
     let binding = &mut teams.0.get_mut("forge").unwrap().roles[0];
@@ -41,7 +153,10 @@ fn recorded_team_restore_keeps_role_layers() {
             |_| true,
             |_| true,
             false,
-        );
+            &[],
+            dead,
+        )
+        .0;
         assert_eq!(tabs.len(), 1);
         let cell = tabs[0].layout.agent_cells().next().unwrap();
         assert!(cell.args.contains(&"--verbose".into()), "{:?}", cell.args);
@@ -938,7 +1053,10 @@ fn team_restore_routes_fresh_seats_before_planning() {
             |_| true,
             |_| true,
             fresh,
-        );
+            &[],
+            dead,
+        )
+        .0;
         assert_eq!(tabs.len(), 1);
         let cell = tabs[0].layout.agent_cells().next().unwrap();
         assert_eq!(cell.kind.as_str(), "codex");
@@ -1135,7 +1253,10 @@ fn team_restore_rebuilds_a_fallen_back_seat_on_its_stamped_render() {
         |_| true,
         |_| true,
         false,
-    );
+        &[],
+        dead,
+    )
+    .0;
     assert_eq!(tabs.len(), 1);
     let tab = &tabs[0];
     let panes = compile_layout_panes(
@@ -1822,7 +1943,10 @@ fn team_restore_tabs_seed_every_declared_role() {
             |_| true,
             |_| true,
             false,
-        );
+            &[],
+            dead,
+        )
+        .0;
 
         let Some(expected) = expected else {
             assert!(tabs.is_empty(), "{label}");
@@ -1846,7 +1970,7 @@ fn split_team_and_flat_keeps_unmatched_agents_for_flat_resume() {
     let planner = team_agent("claude", "planner", "planner", "/repo/forge", 3);
     let flat = agent("codex", "flat", "/repo/other", 5);
 
-    let (tabs, flat_agents) = split_team_and_flat(
+    let (tabs, flat_agents, _) = split_team_and_flat(
         &[planner, flat],
         &NO_LOGINS,
         &NO_ACCOUNTS,
@@ -1858,6 +1982,8 @@ fn split_team_and_flat_keeps_unmatched_agents_for_flat_resume() {
         |_| true,
         |_| true,
         false,
+        &[],
+        dead,
     );
 
     assert_eq!(tabs.len(), 1);
@@ -2172,7 +2298,7 @@ fn degraded_stamped_seat_refuses_its_cohort_restore() {
         tier: Some(tier_stamp("opus")),
         ..team_agent("claude", "planner", "planner", "/repo/forge", 3)
     };
-    let (tabs, flat) = split_team_and_flat(
+    let (tabs, flat, _) = split_team_and_flat(
         std::slice::from_ref(&planner),
         &NO_LOGINS,
         &NO_ACCOUNTS,
@@ -2184,6 +2310,8 @@ fn degraded_stamped_seat_refuses_its_cohort_restore() {
         |_| true,
         |_| true,
         false,
+        &[],
+        dead,
     );
     assert!(tabs.is_empty());
     assert_eq!(flat, [planner]);

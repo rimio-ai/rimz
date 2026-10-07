@@ -184,6 +184,7 @@ pub struct CohortResumePlan {
     pub cwd: Option<PathBuf>,
     pub channel: Option<String>,
     pub fresh: Vec<String>,
+    pub refilled: BTreeSet<(AgentKind, AgentSessionId)>,
     pub launch_group: Option<String>,
 }
 

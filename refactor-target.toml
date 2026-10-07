@@ -1030,7 +1030,8 @@ allowed-dependencies = [
 # ResumeOverrides shares saved-posture overrides with cohort CLI callers.
 # resolve_member_posture gives agents restart a team member's role layers.
 # The rebirth preview joins skips, resumed keys, and worktree-gone agents to candidates by session (+3).
-surface-budget = 61
+# RecoveryPlan::refilled carries already-live seat replacements into rebirth settlement (+1).
+surface-budget = 62
 
 [[module]]
 path = "crates/rimz/src/harness/launch.rs"
