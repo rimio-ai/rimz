@@ -337,9 +337,9 @@ screen_top = "H"
 screen_bottom = "L"
 ```
 
-`[sidebar.keys]` rebinds the twelve movement and width keys, shown above with their defaults. Each value is a space-separated list of alternate chords, and the first one is what the `?` help overlay shows. A chord takes optional `ctrl`/`control`/`c` and `alt`/`meta`/`m` modifiers joined by `+` or `-`, then either a case-sensitive single character (`H` differs from `h`) or a named key: `up`, `down`, `left`, `right`, `home`, `end`, `pageup`, `pagedown`, `enter`, or `space`.
+`[sidebar.keys]` rebinds the twelve movement and width keys, shown above with their defaults. Changes apply to each sidebar with its next refreshed snapshot, without a restart, and the `?` help overlay shows the same bindings. Each value is a space-separated list of alternate chords, and the first one is what the overlay shows. A chord takes optional `ctrl`/`control`/`c` and `alt`/`meta`/`m` modifiers joined by `+` or `-`, then either a case-sensitive single character (`H` differs from `h`) or a named key: `up`, `down`, `left`, `right`, `home`, `end`, `pageup`, `pagedown`, `enter`, or `space`.
 
-Two things to know before you rebind. Configured chords resolve before the sidebar's fixed action keys, so a rebind can shadow a filter (`A` for all, `s` for success and done) on purpose or by accident. And tmux's default prefix swallows `Ctrl+b` before the sidebar ever sees it, which is why `pageup` rides alongside it in the default.
+Two things to know before you rebind. Outside search typing, configured chords resolve before the sidebar's fixed action keys, so a rebind can shadow a filter (`A` for all, `s` for success and done) on purpose or by accident. While typing a search, characters enter the query instead, including characters from rebound chords. And tmux's default prefix swallows `Ctrl+b` before the sidebar ever sees it, which is why `pageup` rides alongside it in the default.
 
 ```toml
 [agents.attention]

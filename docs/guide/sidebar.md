@@ -51,6 +51,8 @@ The top block reads the whole room in four lines:
 
 A row of zeros with no unread count means nothing needs you, so you can skip the scan entirely. Every non-zero bucket is a click target that filters the cards to that state in every tab of the room; clearing or replacing the filter in one tab updates them all. The unread count and `⑃ N` filter the same way. When the card that most needs you scrolls out of view, an `↑ N need you` banner appears; click it to bring that card back.
 
+When you know which work you want rather than which state needs you, press `Alt+p`, then `/auth` and `Enter` to focus the first matching pane. Search narrows the cards as you type; `↓` or `Ctrl+n` selects another match before `Enter`. The committed `/auth` chip stays in every tab, so `j` and `k` browse the matches and `n` still jumps to a matching card that needs you. A state filter such as `w` narrows those matches further. Clear the search with `/` then `Esc`, or press `A` to clear both the search and the state filter. Matching and editing rules are in [Text search](../interface/sidebar.md#text-search).
+
 Every figure in this block, and how each one is counted, is [Token Insight](./insight.md#per-room-the-cockpit).
 
 ### The agent cards
@@ -75,7 +77,7 @@ Reading these figures, and how every one is calculated, is [Token Insight](./ins
 
 ### Bottom chrome
 
-The footer holds `? for help`, which opens the key and filter overlay in place. When you have been away from the keyboard, a quiet `zᶻ idle` badge appears; over SSH, a link-health badge shows the round-trip time. If the sidebar ever cannot read the room, a sticky alert takes the bottom line and says so, because a blank column should never masquerade as an empty room.
+The footer holds `? for help`, which opens the key and filter overlay in place. A search draft and its cursor appear at the left; after `Enter` the query becomes a chip, with reverse video when color is disabled. When you have been away from the keyboard, a quiet `zᶻ idle` badge appears; over SSH, a link-health badge shows the round-trip time. Those badges give way to a search on narrow panes. If the sidebar ever cannot read the room, a sticky alert takes the bottom line and says so, because a blank column should never masquerade as an empty room.
 
 ### Setting the width
 
