@@ -1,6 +1,73 @@
 use super::*;
 
 #[test]
+fn rotation_commits_reborn_ordinals_before_the_next_registration() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+    paths.ensure_dirs().unwrap();
+    let mut continuing = agent("claude", "continuing", AgentStatus::Idle, 1_000);
+    continuing.last_seen = recent(1);
+    continuing.name = Some("continuing-one".to_owned());
+    continuing.kind_ordinal = Some(10);
+    write_carryover(
+        &paths.agents_carryover,
+        &EventCarryover {
+            agents: vec![continuing],
+            ..EventCarryover::default()
+        },
+    )
+    .unwrap();
+    event_log::append(
+        &paths.events_log,
+        &EventEnvelope::session_rebirth(workspace.clone(), "session"),
+    )
+    .unwrap();
+    event_log::append(
+        &paths.events_log,
+        &lifecycle_at(
+            &workspace,
+            "claude",
+            "SessionStart",
+            "live-session",
+            lifecycle::LifecycleSignal::Registered,
+        ),
+    )
+    .unwrap();
+    let (cache, _, _) = catch_up_rollup(&paths).unwrap();
+    write_rollup_cache(&paths.rollup_cache, &cache).unwrap();
+    stage_carryover_for_rotation(&paths, 1).unwrap();
+    event_log::rotate(&paths.events_log, &paths.events_archive_dir, 1).unwrap();
+    reseed_rollup_cache_for_rotation(&paths).unwrap();
+    event_log::append(
+        &paths.events_log,
+        &lifecycle_at(
+            &workspace,
+            "claude",
+            "SessionStart",
+            "later-session",
+            lifecycle::LifecycleSignal::Registered,
+        ),
+    )
+    .unwrap();
+    let (_, agents, _) = RollupCursor::new().fold(&paths).unwrap();
+    let ordinal = |id: &str| {
+        agents
+            .iter()
+            .find(|agent| agent.agent_id.as_str() == id)
+            .unwrap()
+            .kind_ordinal
+    };
+    assert_eq!(ordinal("continuing"), Some(2));
+    assert_eq!(ordinal("live-session"), Some(1));
+    assert_eq!(
+        ordinal("later-session"),
+        Some(3),
+        "the next generation must not reuse a committed continuing ordinal"
+    );
+}
+
+#[test]
 fn rotation_preserves_ended_text_after_trimmed_folds_and_hydration() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());

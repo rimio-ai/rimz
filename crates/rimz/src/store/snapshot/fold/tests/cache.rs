@@ -3,6 +3,73 @@ use std::time::{Duration, SystemTime};
 use super::*;
 
 #[test]
+fn pre_rebirth_registration_names_agree_with_a_persisted_checkpoint() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+    paths.ensure_dirs().unwrap();
+    let mut continuing = agent("claude", "continuing", AgentStatus::Idle, 1_000);
+    continuing.name = Some("x".to_owned());
+    continuing.kind_ordinal = Some(10);
+    write_carryover(
+        &paths.agents_carryover,
+        &EventCarryover {
+            agents: vec![continuing],
+            ..EventCarryover::default()
+        },
+    )
+    .unwrap();
+    let mut observation = crate::agents::AgentLifecycleObservation::new(
+        Some("registered".into()),
+        lifecycle::LifecycleSignal::Registered,
+    );
+    observation.agent_name = Some("x".to_owned());
+    event_log::append(
+        &paths.events_log,
+        &EventEnvelope::agent_lifecycle(
+            workspace.clone(),
+            "session",
+            "claude",
+            "SessionStart",
+            &observation,
+        ),
+    )
+    .unwrap();
+    let (checkpoint, _, _) = catch_up_rollup(&paths).unwrap();
+    write_rollup_cache(&paths.rollup_cache, &checkpoint).unwrap();
+    event_log::append(
+        &paths.events_log,
+        &EventEnvelope::session_rebirth(workspace, "session"),
+    )
+    .unwrap();
+    let (_, warm, _) = catch_up_rollup(&paths).unwrap();
+    std::fs::remove_file(&paths.rollup_cache).unwrap();
+    let (_, cold, _) = catch_up_rollup(&paths).unwrap();
+    let name = |agents: &[AgentState]| {
+        agents
+            .iter()
+            .find(|agent| agent.agent_id == "registered")
+            .unwrap()
+            .name
+            .clone()
+    };
+    assert_eq!(name(&warm).as_deref(), Some("x"));
+    assert_eq!(
+        name(&cold),
+        name(&warm),
+        "fold boundaries must not reserve names early"
+    );
+    let names = |agents: &[AgentState]| {
+        agents
+            .iter()
+            .map(|agent| agent.name.clone())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(names(&cold), names(&warm), "carried names must also agree");
+    assert_eq!(sorted_value(cold), sorted_value(warm));
+}
+
+#[test]
 fn write_rollup_cache_emits_compact_json_and_sweeps_stale_temp_siblings() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("rollup.json");

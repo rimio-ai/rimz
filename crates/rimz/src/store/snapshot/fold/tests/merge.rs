@@ -145,6 +145,138 @@ fn ended_carried_child_keeps_its_activity_label_and_truncated_prefix_filter() {
 }
 
 #[test]
+fn rebirth_keeps_live_ordinals_ahead_of_continuing_carryover_in_warm_and_cold_folds() {
+    let workspace = workspace();
+    let mut ended = agent("claude", "ended", AgentStatus::Success, 1_000);
+    ended.ended_at = Some(ended.last_seen);
+    ended.name = Some("ended-one".to_owned());
+    ended.kind_ordinal = Some(10);
+    let mut continuing = agent("claude", "continuing", AgentStatus::Idle, 1_000);
+    continuing.name = Some("continuing-one".to_owned());
+    continuing.kind_ordinal = Some(20);
+    let carryover = fold_ready(vec![ended, continuing]);
+    let rebirth = EventEnvelope::session_rebirth(workspace.clone(), "session");
+    let registered = lifecycle_at(
+        &workspace,
+        "claude",
+        "SessionStart",
+        "new-session",
+        lifecycle::LifecycleSignal::Registered,
+    );
+    let warning = EventEnvelope::new(
+        workspace,
+        "session",
+        "claude",
+        "agent",
+        "agent.launch_warnings",
+        serde_json::json!({"agent_id": "continuing", "warnings": ["resume warning"]}),
+    );
+    for prefix_events in [vec![rebirth.clone()], vec![rebirth.clone(), warning]] {
+        let prefix = fold_delta(
+            FoldDeltaSeed::default(),
+            carryover.clone(),
+            &decode_events(&prefix_events),
+            epoch(),
+        );
+        let warm = fold_delta(
+            FoldDeltaSeed {
+                agents: prefix
+                    .raw_agents
+                    .into_iter()
+                    .map(|a| ((a.kind.clone(), a.agent_id.clone()), a))
+                    .collect(),
+                identity: prefix.agent_identity,
+                saw_session_rebirth: prefix.saw_session_rebirth,
+                ..FoldDeltaSeed::default()
+            },
+            carryover.clone(),
+            &decode_events(std::slice::from_ref(&registered)),
+            epoch(),
+        );
+        let mut cold_events = prefix_events;
+        cold_events.push(registered.clone());
+        let cold = fold_delta(
+            FoldDeltaSeed::default(),
+            carryover.clone(),
+            &decode_events(&cold_events),
+            epoch(),
+        );
+        let row = |id: &str| {
+            cold.merged
+                .iter()
+                .find(|a| a.agent_id.as_str() == id)
+                .unwrap()
+        };
+        assert_eq!(row("new-session").kind_ordinal, Some(1));
+        assert_eq!(row("continuing").kind_ordinal, Some(2));
+        assert_eq!(
+            row("ended").kind_ordinal,
+            None,
+            "ended carryover has no reborn ordinal"
+        );
+        assert_eq!(row("ended").name.as_deref(), Some("ended-one"));
+        assert_eq!(
+            warm.merged
+                .iter()
+                .find(|a| a.agent_id.as_str() == "new-session")
+                .unwrap()
+                .kind_ordinal,
+            row("new-session").kind_ordinal,
+            "fold boundaries must not move the live ordinal"
+        );
+        assert_eq!(
+            sorted_value(warm.merged.to_vec()),
+            sorted_value(cold.merged.to_vec()),
+            "the time of a reader's fold must not change reborn handles"
+        );
+    }
+}
+
+#[test]
+fn sticky_rebirth_delta_folds_share_the_reborn_base() {
+    let workspace = workspace();
+    let mut ended = agent("claude", "ended", AgentStatus::Success, 1_000);
+    ended.ended_at = Some(ended.last_seen);
+    let carryover = fold_ready(vec![ended]);
+    let rebirth = EventEnvelope::session_rebirth(workspace.clone(), "session");
+    let mut folded = fold_delta(
+        FoldDeltaSeed::default(),
+        carryover.clone(),
+        &decode_events(&[rebirth]),
+        epoch(),
+    );
+    for id in ["live-one", "live-two"] {
+        let event = lifecycle_at(
+            &workspace,
+            "claude",
+            "SessionStart",
+            id,
+            lifecycle::LifecycleSignal::Registered,
+        );
+        let next = fold_delta(
+            FoldDeltaSeed {
+                agents: folded
+                    .raw_agents
+                    .into_iter()
+                    .map(|a| ((a.kind.clone(), a.agent_id.clone()), a))
+                    .collect(),
+                identity: folded.agent_identity,
+                saw_session_rebirth: folded.saw_session_rebirth,
+                ..FoldDeltaSeed::default()
+            },
+            carryover.clone(),
+            &decode_events(&[event]),
+            epoch(),
+        );
+        assert!(
+            Arc::ptr_eq(&folded.merged.base, &next.merged.base),
+            "a sticky rebirth must borrow its once-per-parse base"
+        );
+        folded = next;
+    }
+}
+
+#[test]
 fn first_post_rotation_event_reduces_against_the_carried_agent() {
     let mut carried = agent("claude", "agent-1", AgentStatus::Idle, 1_000);
     carried.launch_id = Some(AgentSessionId::from("launch-1"));
