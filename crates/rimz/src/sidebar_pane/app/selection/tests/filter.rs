@@ -41,7 +41,7 @@ fn search_key(
 }
 
 #[test]
-fn search_typing_swallows_commands_and_rebound_characters() {
+fn search_typing_swallows_commands_and_rebound_chords() {
     use ratatui::crossterm::event::{KeyCode, KeyModifiers};
     let snapshot = clickable_block_snapshot(&workspace());
     let mut ui = UiState::default();
@@ -57,14 +57,13 @@ fn search_typing_swallows_commands_and_rebound_characters() {
         KeyCode::Char('b'),
         KeyModifiers::CONTROL,
     );
-    assert_eq!(ui.search_draft.as_deref(), Some("njqr?A1éb"));
+    assert_eq!(ui.search_draft.as_deref(), Some("njqr?A1é"));
     assert!(!ui.help_visible);
     assert_eq!(
         ui.make_up_filter,
         BodyLens::default(),
         "draft is not committed"
     );
-    search_key(&mut ui, &snapshot, KeyCode::Backspace);
     search_key(&mut ui, &snapshot, KeyCode::Backspace);
     assert_eq!(ui.search_draft.as_deref(), Some("njqr?A1"));
 }

@@ -125,12 +125,7 @@ pub(super) fn resolve_key(
             (KeyCode::Enter, KeyModifiers::NONE) => KeyAction::Enter,
             (KeyCode::Esc, KeyModifiers::NONE) => KeyAction::CancelSearch,
             (KeyCode::Backspace, KeyModifiers::NONE) => KeyAction::Backspace,
-            (KeyCode::Char(ch), _)
-                if !ch.is_control()
-                    && (chord_mods.is_empty() || keymap.action_for(code, mods).is_some()) =>
-            {
-                KeyAction::QueryChar(ch)
-            }
+            (KeyCode::Char(ch), KeyModifiers::NONE) if !ch.is_control() => KeyAction::QueryChar(ch),
             _ => KeyAction::Other,
         };
     }

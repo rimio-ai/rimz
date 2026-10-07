@@ -28,7 +28,16 @@ fn typing_resolves_before_keymap_and_command_table() {
             KeyCode::Char('b'),
             KeyModifiers::CONTROL
         ),
-        KeyAction::QueryChar('b')
+        KeyAction::Other
+    );
+    assert_eq!(
+        resolve_key(
+            &keymap,
+            InputMode::Typing,
+            KeyCode::Char('B'),
+            KeyModifiers::SHIFT
+        ),
+        KeyAction::QueryChar('B')
     );
     for (code, mods, action) in [
         (KeyCode::Up, KeyModifiers::NONE, KeyAction::Up),
