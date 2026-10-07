@@ -244,13 +244,11 @@ fn render_pipeline_states() {
             snapshot.theme.glyphs.set = Some("nerd_font".to_owned());
         }
         let rendered = snapshot_to_screen(&snapshot, width, 24);
-        assert!(
-            rendered.contains(if width == 22 { "Impleme…" } else { stage }),
-            "{rendered}"
-        );
+        assert!(rendered.contains(stage), "{rendered}");
         if width == 22 {
             assert!(!rendered.contains('◉'), "track drops whole: {rendered}");
-            assert!(rendered.contains("47m / 47m"));
+            assert!(rendered.contains("Implement 47m"));
+            assert!(!rendered.contains(" / "));
             assert!(!rendered.contains("forge"), "team drops first: {rendered}");
         }
         assert_snapshot(name, rendered);
@@ -369,19 +367,25 @@ fn pipeline_completion_styles_and_width_admission() {
     pipeline.stage = "Implement".to_owned();
     pipeline.stage_started_at = Some(fixed_now() - Duration::from_secs(7));
     for (width, expected) in [
-        (37, "● ● ◉ Implement ○ ○"),
-        (38, "forge ● ● ◉ Implement ○ ○"),
-        (39, "forge ● ● ◉ Implement ○ ○"),
-        (31, "Implement"),
-        (32, "● ● ◉ Implement ○ ○"),
-        (33, "● ● ◉ Implement ○ ○"),
-        (21, "Impleme…"),
-        (22, "Implement"),
-        (23, "Implement"),
+        (35, "● ● ◉ Implement 7s ○ ○"),
+        (36, "forge ● ● ◉ Implement 7s ○ ○"),
+        (37, "forge ● ● ◉ Implement 7s ○ ○"),
+        (29, "● ● ◉ Implement ○ ○"),
+        (30, "● ● ◉ Implement 7s ○ ○"),
+        (31, "● ● ◉ Implement 7s ○ ○"),
+        (26, "Implement 7s"),
+        (27, "● ● ◉ Implement ○ ○"),
+        (28, "● ● ◉ Implement ○ ○"),
+        (19, "Implement"),
+        (20, "Implement 7s"),
+        (21, "Implement 7s"),
+        (16, "Impleme…"),
+        (17, "Implement"),
+        (18, "Implement"),
         // The clock needs two cells of name beside it (`I…`), never a bare `…`.
-        (14, "Implement"),
-        (15, "I…"),
-        (16, "Im…"),
+        (9, "Impl…"),
+        (10, "I…"),
+        (11, "Im…"),
     ] {
         let lines = group_lines_at_width(&snapshot, &theme, 0, width);
         let text = lines[1]
@@ -390,9 +394,16 @@ fn pipeline_completion_styles_and_width_admission() {
             .map(|span| span.content.as_ref())
             .collect::<String>();
         assert!(text.contains(expected), "{width}: {text}");
-        assert_eq!(text.contains("forge"), width >= 38, "{width}: {text}");
-        assert_eq!(text.contains('◉'), width >= 32, "{width}: {text}");
-        assert_eq!(text.ends_with("7s / 47m🮇"), width >= 15, "{width}: {text}");
+        assert_eq!(text.contains("forge"), width >= 36, "{width}: {text}");
+        assert_eq!(text.contains('◉'), width >= 27, "{width}: {text}");
+        assert_eq!(
+            text.contains(" 7s"),
+            width >= 30 || (20..27).contains(&width),
+            "{width}: {text}"
+        );
+        assert_eq!(text.ends_with("47m🮇"), width >= 10, "{width}: {text}");
+        assert!(!text.contains(" / "), "{width}: {text}");
+        assert!(spans_width(&lines[1].spans) <= width, "{width}: {text}");
     }
     // An undeclared stage has no track to drop, so it keeps its badge at a
     // width where a tracked stage has lost its badge.
@@ -476,13 +487,15 @@ fn pipeline_revisited_future_dots_are_warm_and_hollow() {
 fn pipeline_clocks_are_independent_and_pinned_right() {
     let mut snapshot = pipeline_snapshot();
     let theme = Theme::fixed(false);
-    for (stage, prior, stage_secs, total_secs, expected) in [
-        ("Implement", 1080, Some(7), Some(2832), "18m / 47m"),
-        ("Implement", 0, Some(1080), Some(3720), "18m / 1h"),
-        ("Implement", 0, None, Some(3720), "1h"),
-        ("Implement", 0, Some(1080), None, "18m"),
-        ("Done", 0, Some(1080), Some(3720), "1h"),
-        ("Implement", 0, None, None, ""),
+    for (stage, prior, stage_secs, total_secs, stage_label, total_label) in [
+        ("Implement", 1080, Some(7), Some(2832), "18m", "47m"),
+        ("Implement", 0, Some(1080), Some(3720), "18m", "1h02m"),
+        ("Implement", 0, None, Some(3720), "", "1h02m"),
+        ("Implement", 0, Some(1080), None, "18m", ""),
+        ("Done", 0, Some(1080), Some(3720), "", "1h02m"),
+        ("Implement", 0, None, None, "", ""),
+        ("Implement", 0, Some(15120), Some(17460), "4h12m", "4h51m"),
+        ("Investigate", 0, Some(1080), Some(3720), "18m", "1h02m"),
     ] {
         let pipeline = snapshot.worktree_groups[0].pipeline.as_mut().unwrap();
         pipeline.stage = stage.to_owned();
@@ -497,16 +510,66 @@ fn pipeline_clocks_are_independent_and_pinned_right() {
             .iter()
             .map(|s| s.content.as_ref())
             .collect::<String>();
-        assert!(text.starts_with("▎  forge ● "), "{text}");
-        if expected.is_empty() {
-            assert!(!text.contains('/'));
-            continue;
+        assert!(!text.contains(" / "), "{text}");
+        assert!(
+            text.contains(&format!(
+                "{stage}{}",
+                if stage_label.is_empty() {
+                    String::new()
+                } else {
+                    format!(" {stage_label}")
+                }
+            )),
+            "{text}"
+        );
+        if !stage_label.is_empty() {
+            let time = line
+                .spans
+                .iter()
+                .find(|span| span.content == format!(" {stage_label}"))
+                .unwrap();
+            assert_eq!(time.style, theme.muted());
+        } else {
+            assert!(!text.contains("18m"), "{text}");
         }
-        assert!(text.contains(expected), "expected {expected} in {text}");
-        let clock = line.spans.iter().find(|s| s.content == expected).unwrap();
-        assert_eq!(clock.style, theme.muted());
-        assert!(text.ends_with(&format!("{expected}🮇")), "{text}");
+        if !total_label.is_empty() {
+            let total = line
+                .spans
+                .iter()
+                .find(|span| span.content == total_label)
+                .unwrap();
+            assert_eq!(total.style, theme.muted());
+            assert!(text.ends_with(&format!("{total_label}🮇")), "{text}");
+        } else {
+            assert!(
+                line.spans
+                    .iter()
+                    .all(|span| span.content != "18m" && span.content != "1h02m"),
+                "{text}"
+            );
+        }
         assert_eq!(spans_width(&line.spans), 54);
+    }
+}
+
+#[test]
+fn pipeline_duration_shapes_survive_nerd_font_and_no_color() {
+    let mut snapshot = pipeline_snapshot();
+    let pipeline = snapshot.worktree_groups[0].pipeline.as_mut().unwrap();
+    pipeline.stage_started_at = Some(fixed_now() - Duration::from_secs(15_120));
+    pipeline.started_at = Some(fixed_now() - Duration::from_secs(17_460));
+    for (modern, no_color, name) in [
+        (true, false, "pipeline_nerd_font"),
+        (true, true, "pipeline_nerd_font_no_color"),
+        (false, true, "pipeline_no_color"),
+    ] {
+        snapshot.theme.style = modern.then_some(crate::config::ThemeStyle::Modern);
+        let theme = Theme::fixed_for_theme(no_color, &snapshot.theme);
+        let lines = group_lines_at_width(&snapshot, &theme, 0, 54);
+        let text = line_texts(&lines).join("\n");
+        assert!(text.contains("Implement 4h12m"), "{text}");
+        assert!(text.lines().nth(1).unwrap().ends_with("4h51m🮇"), "{text}");
+        assert_snapshot(name, text);
     }
 }
 

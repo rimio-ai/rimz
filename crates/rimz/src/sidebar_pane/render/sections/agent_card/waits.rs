@@ -3,8 +3,8 @@
 use jiff::Timestamp;
 
 use crate::agents::{
-    BackgroundShell, PendingIdleStop, PendingWait, PendingWaitTrigger, single_line_description,
-    usable_description,
+    ATTENTION_AGE_CEILING_SECS, BackgroundShell, PendingIdleStop, PendingWait, PendingWaitTrigger,
+    single_line_description, usable_description,
 };
 use crate::proc::command::{command_program_basename, program_label};
 
@@ -119,7 +119,7 @@ fn entry(
         right: since
             .map(|at| {
                 vec![Span::styled(
-                    elapsed_cluster(theme, age_secs(at, ctx.now)),
+                    elapsed_cluster(theme, age_secs(at, ctx.now), ATTENTION_AGE_CEILING_SECS),
                     theme.muted(),
                 )]
             })

@@ -1,7 +1,7 @@
 use super::*;
 use crate::agents::{ATTENTION_AGE_CEILING_SECS, BackgroundShell, PendingWait, PendingWaitTrigger};
 use crate::config::AnimationRole;
-use crate::sidebar_pane::render::labels::{activity_age_style, elapsed_glyph, role_glyph};
+use crate::sidebar_pane::render::labels::{elapsed_glyph, role_glyph};
 use crate::sidebar_pane::render::theme::Component;
 
 #[test]
@@ -611,7 +611,7 @@ fn check_and_file_waits_have_type_specific_detail_lines() {
 }
 
 #[test]
-fn long_wait_clocks_stay_muted_while_subagent_clocks_heat() {
+fn long_wait_clocks_and_child_runtimes_stay_muted() {
     let mut parent = agent(
         "claude-1",
         "claude",
@@ -652,14 +652,13 @@ fn long_wait_clocks_stay_muted_while_subagent_clocks_heat() {
         .filter(|span| span.content == clock)
         .map(|span| span.style.fg)
         .collect();
-    assert_eq!(
-        tones,
-        vec![
-            activity_age_style(&theme, 7200, ATTENTION_AGE_CEILING_SECS).fg,
-            theme.muted().fg
-        ]
-    );
-    assert_ne!(tones[0], tones[1]);
+    assert_eq!(tones, vec![theme.muted().fg]);
+    let runtime = lines
+        .iter()
+        .flat_map(|line| &line.spans)
+        .find(|span| span.content == "   2h")
+        .expect("a healthy child's runtime has no face");
+    assert_eq!(runtime.style.fg, theme.muted().fg);
 }
 
 #[test]

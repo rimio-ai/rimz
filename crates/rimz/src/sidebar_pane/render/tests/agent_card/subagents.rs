@@ -1,5 +1,119 @@
 use super::*;
 use crate::agents::{PendingWait, PendingWaitTrigger};
+use crate::sidebar_pane::render::labels::{activity_age_style, elapsed_glyph};
+
+#[test]
+fn child_clock_uses_muted_runtime_until_quiet_and_the_configured_stall_scale() {
+    let parent = agent(
+        "root",
+        "claude",
+        AgentStatus::Running,
+        Some("/repo/main"),
+        None,
+        None,
+    );
+    let mut child = agent(
+        "child",
+        "claude",
+        AgentStatus::Running,
+        None,
+        None,
+        Some("Explore"),
+    );
+    child.parent_agent_id = Some("root".into());
+    child.subagent_started_at = Some(fixed_now() - Duration::from_secs(2 * 3_600));
+    child.model = Some("Haiku".to_owned());
+    for (status, quiet, ceiling, expected) in [
+        (AgentStatus::Running, 299, 1_800, "   2h"),
+        (AgentStatus::Running, 480, 1_800, "◑  8m"),
+        (AgentStatus::Running, 960, 1_800, "◕ 16m"),
+        (AgentStatus::Running, 960, 900, "◉ 16m"),
+        (AgentStatus::Running, 2_400, 1_800, "◉ 40m"),
+        (AgentStatus::Paused, 480, 1_800, "   1h"),
+        (AgentStatus::Waiting, 480, 1_800, "   1h"),
+        (AgentStatus::Success, 480, 1_800, "   1h"),
+    ] {
+        child.status = status;
+        child.last_activity = fixed_now() - Duration::from_secs(quiet);
+        let mut snapshot = snapshot_with(vec![parent.clone(), child.clone()]);
+        snapshot.attention.stalled_after_secs = std::num::NonZeroU32::new(ceiling).unwrap();
+        let theme = Theme::fixed(false);
+        let lines = group_lines(&snapshot, &theme, 0);
+        let metadata = lines
+            .iter()
+            .find(|line| line.spans.iter().any(|span| span.content == "Haiku"))
+            .unwrap();
+        let slot = metadata
+            .spans
+            .iter()
+            .rev()
+            .find(|span| span.content != "▐")
+            .unwrap();
+        assert_eq!(
+            slot.content, expected,
+            "status={status:?}, quiet={quiet}, ceiling={ceiling}"
+        );
+        let style = if status == AgentStatus::Running && quiet >= 300 {
+            activity_age_style(&theme, quiet as i64, i64::from(ceiling))
+        } else {
+            theme.muted()
+        };
+        assert_eq!(slot.style.fg, style.fg);
+        if quiet > u64::from(ceiling) && status == AgentStatus::Running {
+            assert_eq!(slot.style.fg, theme.alarm(Modifier::empty()).fg);
+        }
+    }
+}
+
+#[test]
+fn child_clock_shapes_survive_nerd_font_and_no_color() {
+    let parent = agent(
+        "root",
+        "claude",
+        AgentStatus::Running,
+        Some("/repo/main"),
+        None,
+        None,
+    );
+    let mut child = agent(
+        "child",
+        "claude",
+        AgentStatus::Running,
+        None,
+        None,
+        Some("Explore"),
+    );
+    child.parent_agent_id = Some("root".into());
+    child.subagent_started_at = Some(fixed_now() - Duration::from_secs(2 * 3_600));
+    child.model = Some("Haiku".to_owned());
+    for (modern, no_color, name) in [
+        (true, false, "child_clocks_nerd_font"),
+        (true, true, "child_clocks_nerd_font_no_color"),
+        (false, true, "child_clocks_no_color"),
+    ] {
+        let mut frame = Vec::new();
+        for quiet in [0, 480, 2_400] {
+            child.last_activity = fixed_now() - Duration::from_secs(quiet);
+            let mut snapshot = snapshot_with(vec![parent.clone(), child.clone()]);
+            snapshot.theme.style = modern.then_some(crate::config::ThemeStyle::Modern);
+            let theme = Theme::fixed_for_theme(no_color, &snapshot.theme);
+            let lines = group_lines(&snapshot, &theme, 0);
+            let text = line_texts(&lines).join("\n");
+            let expected = if quiet == 0 {
+                "   2h".to_owned()
+            } else {
+                format!(
+                    "{} {:>3}",
+                    elapsed_glyph(&theme, quiet as i64, 1_800),
+                    if quiet == 480 { "8m" } else { "40m" }
+                )
+            };
+            assert!(text.contains(&format!("{expected}▐")), "{text}");
+            frame.push(text);
+        }
+        assert_snapshot(name, frame.join("\n\n"));
+    }
+}
 
 #[test]
 fn paused_child_parks_parent_head_and_pet() {
@@ -249,12 +363,8 @@ fn delegation_bands_keep_live_children_and_fold_older_ones() {
 }
 
 #[test]
-fn render_selected_card_keeps_finished_metadata_without_a_live_clock() {
-    // A selected parent expands its `⧉ subagents` list. A finished child
-    // keeps its exact token/model/effort row, while the elapsed clock is dropped
-    // because a done child needs no live work span. A still-running child keeps both lines: the live thinking head,
-    // type, and description, then the token spend `◇` and model left with the
-    // live sub-minute `<1m` clock-fill elapsed pinned right.
+fn render_selected_card_keeps_finished_metadata_and_frozen_runtime() {
+    // Finished and running children keep metadata and plain runtime, not a landed age.
     let mut parent = agent(
         "claude-1",
         "claude",
@@ -319,8 +429,6 @@ fn render_selected_card_keeps_finished_metadata_without_a_live_clock() {
         rendered.contains("⧉ subagents (2)"),
         "the expanded card lists its children:\n{rendered}"
     );
-    // The finished child collapses to one line: its type + the description of
-    // what the parent asked it to do.
     assert!(
         rendered.contains("Explore · locate the render seam"),
         "the finished child keeps its type line:\n{rendered}"
@@ -339,16 +447,15 @@ fn render_selected_card_keeps_finished_metadata_without_a_live_clock() {
         rendered.contains("⠁ review · audit the trust hash"),
         "a reasoning child wears the thinking head:\n{rendered}"
     );
-    // The running child keeps its metadata row — token spend and model left
-    // (`3k` sized to the one rendered row, no sibling to pad to), the live
-    // sub-minute `<1m` clock pinned right.
     assert!(
         rendered.contains("◇  3k · Haiku 4.5"),
         "the running child carries its token spend and model:\n{rendered}"
     );
     assert!(
-        rendered.contains("◔ <1m"),
-        "the running child reads the live sub-minute clock:\n{rendered}"
+        rendered
+            .lines()
+            .any(|line| line.contains("Haiku 4.5") && line.ends_with("  <1m▐")),
+        "the running child reads plain sub-minute runtime:\n{rendered}"
     );
     assert!(
         rendered
@@ -361,8 +468,8 @@ fn render_selected_card_keeps_finished_metadata_without_a_live_clock() {
         .find(|line| line.contains("▤ 12k"))
         .expect("finished child metadata line");
     assert!(
-        finished_line.ends_with("◔ <1m▐"),
-        "the finished child's landed age pins right on line 2:\n{rendered}"
+        finished_line.ends_with("   1m▐"),
+        "the finished child's frozen runtime pins right on line 2:\n{rendered}"
     );
     // Both metadata-bearing children render a second line.
     let subagent_metadata_rows = rendered
@@ -663,6 +770,9 @@ fn metadata_free_finished_subagent_stays_one_line() {
         Some("cleanup"),
     );
     child.parent_agent_id = Some("copilot-root".into());
+    child.subagent_started_at = Some(fixed_now() - Duration::from_secs(600));
+    child.last_activity = fixed_now() - Duration::from_secs(60);
+    child.subagent_cost_usd = Some(0.42);
 
     let snapshot = snapshot_with(vec![parent, child]);
     let rendered = snapshot_to_screen_with_alert_and_ui(
@@ -687,8 +797,8 @@ fn metadata_free_finished_subagent_stays_one_line() {
         "metadata-free completion stays one line:\n{rendered}"
     );
     assert!(
-        lines[child_line].contains('◔'),
-        "with no line 2, the landed age pins on line 1:\n{rendered}"
+        lines[child_line].ends_with("   9m $0.42▐") && !lines[child_line].contains('◔'),
+        "with no line 2, frozen runtime pins ahead of cost:\n{rendered}"
     );
 }
 #[test]

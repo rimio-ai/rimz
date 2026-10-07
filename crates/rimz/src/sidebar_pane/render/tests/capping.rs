@@ -714,7 +714,7 @@ fn lone_finished_row_stays_visible_and_header_jumps_to_it() {
 }
 
 #[test]
-fn finished_receipt_pins_cost_then_tokens_and_muted_age() {
+fn finished_receipt_pins_cost_then_tokens_and_muted_active_duration() {
     let mut first = agent_row_with_cost("planner", 0.42);
     first.last_activity = fixed_now() - Duration::from_secs(2 * 60 * 60);
     let first_agent = first.as_agent_mut().expect("agent row");
@@ -767,8 +767,8 @@ fn finished_receipt_pins_cost_then_tokens_and_muted_age() {
         "member token counters sum into one detailed breakdown: {texts:?}"
     );
     assert!(
-        totals_text.trim_end().ends_with("◉ 2h"),
-        "finished age is the rightmost pin: {texts:?}"
+        totals_text.trim_end().ends_with(" 2h") && !totals_text.contains('◉'),
+        "active duration is plain at the rightmost pin: {texts:?}"
     );
     assert!(
         !totals_text.contains("32m") && !totals_text.contains('$'),
@@ -777,8 +777,8 @@ fn finished_receipt_pins_cost_then_tokens_and_muted_age() {
     let age = totals
         .spans
         .iter()
-        .find(|span| span.content.contains("◉ 2h"))
-        .expect("finished age span");
+        .find(|span| span.content == "2h")
+        .expect("active duration span");
     assert_eq!(
         age.style,
         theme.muted(),
@@ -865,7 +865,10 @@ fn finished_totals_degrade_tokens_before_the_right_pin() {
         !summary.contains('↘') && !summary.contains('↗'),
         "{texts:?}"
     );
-    assert!(summary.trim_end().ends_with("◉ 2h"), "{texts:?}");
+    assert!(
+        summary.trim_end().ends_with(" 2h") && !summary.contains('◉'),
+        "{texts:?}"
+    );
     assert!(
         !summary.contains("32m") && !summary.contains('$'),
         "{texts:?}"
@@ -875,7 +878,10 @@ fn finished_totals_degrade_tokens_before_the_right_pin() {
     let total_only = texts.last().expect("total-only receipt");
     assert!(total_only.contains("◇ 1M"), "{texts:?}");
     assert!(!total_only.contains('◌'), "{texts:?}");
-    assert!(total_only.trim_end().ends_with("◉ 2h"), "{texts:?}");
+    assert!(
+        total_only.trim_end().ends_with(" 2h") && !total_only.contains('◉'),
+        "{texts:?}"
+    );
     assert!(
         !total_only.contains("32m") && !total_only.contains('$'),
         "right pin survives token degradation: {texts:?}"

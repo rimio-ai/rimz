@@ -54,13 +54,6 @@ pub fn reset_countdown(deadline: Timestamp, now: Timestamp) -> String {
 }
 
 /// A run or stage duration: one unit below an hour, two scaled units above.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "The pipeline renderer adopts this formatter in the next change"
-    )
-)]
 pub(crate) fn run_duration(seconds: i64) -> String {
     if seconds < 3_600 {
         crate::utils::time::format_duration_coarse(seconds)
