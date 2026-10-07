@@ -810,6 +810,15 @@ pub enum RoomLoginErr {
     Resolution(Arc<RoomLoginErr>),
 }
 
+impl RoomLoginErr {
+    fn resolution(mut error: Arc<Self>) -> Self {
+        while let Self::Resolution(inner) = error.as_ref() {
+            error = inner.clone();
+        }
+        Self::Resolution(error)
+    }
+}
+
 /// What decides the account a room launches a kind under.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LoginSource {
@@ -897,10 +906,10 @@ impl RoomAccounts {
     pub fn account(&self, kind: &AgentKind) -> Result<RoomAccount, RoomLoginErr> {
         match self.outcomes.get(kind) {
             Some(Ok(account)) => Ok(account.clone()),
-            Some(Err(error)) => Err(RoomLoginErr::Resolution(error.clone())),
+            Some(Err(error)) => Err(RoomLoginErr::resolution(error.clone())),
             None => {
                 if let Some(error) = &self.inherited_error {
-                    return Err(RoomLoginErr::Resolution(error.clone()));
+                    return Err(RoomLoginErr::resolution(error.clone()));
                 }
                 Ok(RoomAccount {
                     name: LoginName::default_login(),
@@ -1045,7 +1054,7 @@ fn resolve_account_layers(
                     &inherited_error
                 };
                 if let Some(error) = error {
-                    return Err(RoomLoginErr::Resolution(error.clone()));
+                    return Err(RoomLoginErr::resolution(error.clone()));
                 }
                 let empty = RoomLogins::new();
                 let project = if pins.contains_key(&kind) {
