@@ -31,6 +31,7 @@ pub(super) enum InputEffect {
     Focus(PaneId),
     /// Dispatch one resize step. Resize wakeups own repaint and persistence.
     Width(WidthAdjust),
+    Reload,
     DismissAlert,
     /// Write the durable receipt in the loop, which owns runtime paths.
     MarkRead(String),
@@ -189,6 +190,10 @@ pub(super) fn handle_key(
     match action {
         KeyAction::WidthNarrower => InputOutcome::width(WidthAdjust::Narrower),
         KeyAction::WidthWider => InputOutcome::width(WidthAdjust::Wider),
+        KeyAction::Reload => InputOutcome {
+            effect: Some(InputEffect::Reload),
+            ..InputOutcome::default()
+        },
         KeyAction::Up => {
             if ui.selected_index > 0 {
                 let roster = ui.visible_roster(snapshot);

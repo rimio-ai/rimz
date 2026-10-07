@@ -32,9 +32,10 @@ pub(super) enum Wakeup {
     /// The supervisor has proven a replacement worker and needs this worker to
     /// release the terminal before the supervisor replaces its own image.
     SupervisorHandoff,
-    /// The local `r` key reload request. Kept separate so the help overlay can
-    /// consume keypresses without swallowing external `rimz reload` events.
-    ReloadKey,
+    Press {
+        code: KeyCode,
+        mods: KeyModifiers,
+    },
     Key(KeyAction),
     MouseClick {
         column: u16,
@@ -77,6 +78,7 @@ pub(super) enum KeyAction {
     /// `M` — mark every row read without jumping.
     MarkAllRead,
     Help,
+    Reload,
     Dismiss,
     Filter(Option<BodyFilter>),
     Digit(u8),
@@ -92,54 +94,85 @@ pub(super) enum KeyAction {
 /// socket once a snapshot is ready to fold. Riding the same socket every other
 /// wakeup uses keeps the loop blocking in exactly one place.
 pub(super) const SNAPSHOT_WAKEUP: &[u8] = b"snapshot";
-pub(super) const KEY_UP: &str = "key:up";
-pub(super) const KEY_DOWN: &str = "key:down";
-pub(super) const KEY_WORKTREE_UP: &str = "key:worktree_up";
-pub(super) const KEY_WORKTREE_DOWN: &str = "key:worktree_down";
-pub(super) const KEY_TOP: &str = "key:top";
-pub(super) const KEY_BOTTOM: &str = "key:bottom";
-pub(super) const KEY_PAGE_UP: &str = "key:page_up";
-pub(super) const KEY_PAGE_DOWN: &str = "key:page_down";
-pub(super) const KEY_SCREEN_TOP: &str = "key:screen_top";
-pub(super) const KEY_SCREEN_BOTTOM: &str = "key:screen_bottom";
-pub(super) const KEY_WIDTH_NARROWER: &str = "key:width_narrower";
-pub(super) const KEY_WIDTH_WIDER: &str = "key:width_wider";
 
-pub(super) fn encode_key(keymap: &NavKeymap, code: KeyCode, mods: KeyModifiers) -> Option<String> {
-    if let Some(wire) = keymap.wire_for(code, mods) {
-        return Some(wire.to_owned());
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum InputMode {
+    Normal,
+    Help,
+}
+
+pub(super) fn resolve_key(
+    keymap: &NavKeymap,
+    mode: InputMode,
+    code: KeyCode,
+    mods: KeyModifiers,
+) -> KeyAction {
+    if mode == InputMode::Help {
+        return KeyAction::Other;
+    }
+    if let Some(action) = keymap.action_for(code, mods) {
+        return action;
     }
     if mods.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) {
-        return None;
+        return KeyAction::Other;
     }
-    let wire = match code {
-        KeyCode::Left => "key:tab_prev",
-        KeyCode::Right => "key:tab_next",
-        KeyCode::Enter => "key:enter",
-        KeyCode::Char('l') => "key:enter",
+    match code {
+        KeyCode::Left => KeyAction::TabPrev,
+        KeyCode::Right => KeyAction::TabNext,
+        KeyCode::Enter | KeyCode::Char('l') => KeyAction::Enter,
         // `n` and `Space` are one key: walk forward through the inbox and read.
         // `N` walks it in reverse.
-        KeyCode::Char('n') | KeyCode::Char(' ') => "key:inbox_next",
-        KeyCode::Char('N') => "key:inbox_prev",
-        KeyCode::Char('m') => "key:mark_toggle",
-        KeyCode::Char('M') => "key:mark_all_read",
-        KeyCode::Char('?') => "key:help",
-        KeyCode::Char('A') => "key:filter:all",
-        KeyCode::Char('u') => "key:filter:unread",
-        KeyCode::Char('q') => "key:filter:waiting",
-        KeyCode::Char('!') => "key:filter:failed",
-        KeyCode::Char('e') => "key:filter:failed",
-        KeyCode::Char('o') => "key:filter:idle",
-        KeyCode::Char('p') => "key:filter:paused",
-        KeyCode::Char('w') => "key:filter:running",
-        KeyCode::Char('s') => "key:filter:success",
-        KeyCode::Char('z') => "key:filter:sleeping",
-        KeyCode::Char('x') => "key:dismiss",
-        KeyCode::Char(c @ '1'..='9') => return Some(format!("key:digit:{c}")),
-        KeyCode::Char('r') => "key:reload",
-        _ => "key:other",
+        KeyCode::Char('n') | KeyCode::Char(' ') => KeyAction::InboxNext,
+        KeyCode::Char('N') => KeyAction::InboxPrev,
+        KeyCode::Char('m') => KeyAction::MarkToggle,
+        KeyCode::Char('M') => KeyAction::MarkAllRead,
+        KeyCode::Char('?') => KeyAction::Help,
+        KeyCode::Char('A') => KeyAction::Filter(None),
+        KeyCode::Char('u') => KeyAction::Filter(Some(BodyFilter::Unread)),
+        KeyCode::Char('q') => KeyAction::Filter(Some(BodyFilter::Status(AgentStatus::Waiting))),
+        KeyCode::Char('!') | KeyCode::Char('e') => {
+            KeyAction::Filter(Some(BodyFilter::Status(AgentStatus::Failed)))
+        }
+        KeyCode::Char('o') => KeyAction::Filter(Some(BodyFilter::Status(AgentStatus::Idle))),
+        KeyCode::Char('p') => KeyAction::Filter(Some(BodyFilter::Status(AgentStatus::Paused))),
+        KeyCode::Char('w') => KeyAction::Filter(Some(BodyFilter::Status(AgentStatus::Running))),
+        KeyCode::Char('s') => KeyAction::Filter(Some(BodyFilter::Status(AgentStatus::Success))),
+        KeyCode::Char('z') => KeyAction::Filter(Some(BodyFilter::Status(AgentStatus::Sleeping))),
+        KeyCode::Char('x') => KeyAction::Dismiss,
+        KeyCode::Char(c @ '1'..='9') => KeyAction::Digit(c as u8 - b'0'),
+        KeyCode::Char('r') => KeyAction::Reload,
+        _ => KeyAction::Other,
+    }
+}
+
+pub(super) fn encode_key(code: KeyCode, mods: KeyModifiers) -> Option<String> {
+    let mods = match (
+        mods.contains(KeyModifiers::CONTROL),
+        mods.contains(KeyModifiers::ALT),
+    ) {
+        (false, false) => "-",
+        (true, false) => "c",
+        (false, true) => "a",
+        (true, true) => "ca",
     };
-    Some(wire.to_owned())
+    let code = match code {
+        KeyCode::Char(c) => return Some(format!("press:{mods}:char:{c}")),
+        KeyCode::Up => "up",
+        KeyCode::Down => "down",
+        KeyCode::Left => "left",
+        KeyCode::Right => "right",
+        KeyCode::Home => "home",
+        KeyCode::End => "end",
+        KeyCode::PageUp => "pageup",
+        KeyCode::PageDown => "pagedown",
+        KeyCode::Enter => "enter",
+        KeyCode::Esc => "esc",
+        KeyCode::Backspace => "backspace",
+        KeyCode::Tab => "tab",
+        KeyCode::Delete => "delete",
+        _ => return None,
+    };
+    Some(format!("press:{mods}:{code}"))
 }
 
 #[cfg(feature = "testkit")]
@@ -176,66 +209,55 @@ fn decode_wakeup(bytes: &[u8]) -> Wakeup {
     if let Some(mouse) = decode_mouse_click(raw) {
         return mouse;
     }
-    if let Some(digit) = raw.strip_prefix("key:digit:")
-        && let Ok(n @ 1..=9) = digit.parse::<u8>()
-    {
-        return Wakeup::Key(KeyAction::Digit(n));
+    if let Some(press) = decode_press(raw) {
+        return press;
     }
     match raw {
         "snapshot" => Wakeup::Snapshot,
         "resize" => Wakeup::Resize,
         RELOAD_CONTROL_WORD => Wakeup::Reload,
         SUPERVISOR_HANDOFF_CONTROL_WORD => Wakeup::SupervisorHandoff,
-        "key:reload" => Wakeup::ReloadKey,
-        KEY_UP => Wakeup::Key(KeyAction::Up),
-        KEY_DOWN => Wakeup::Key(KeyAction::Down),
-        KEY_WORKTREE_UP => Wakeup::Key(KeyAction::WorktreeUp),
-        KEY_WORKTREE_DOWN => Wakeup::Key(KeyAction::WorktreeDown),
-        KEY_TOP => Wakeup::Key(KeyAction::Top),
-        KEY_BOTTOM => Wakeup::Key(KeyAction::Bottom),
-        KEY_PAGE_UP => Wakeup::Key(KeyAction::PageUp),
-        KEY_PAGE_DOWN => Wakeup::Key(KeyAction::PageDown),
-        KEY_SCREEN_TOP => Wakeup::Key(KeyAction::ScreenTop),
-        KEY_SCREEN_BOTTOM => Wakeup::Key(KeyAction::ScreenBottom),
-        KEY_WIDTH_NARROWER => Wakeup::Key(KeyAction::WidthNarrower),
-        KEY_WIDTH_WIDER => Wakeup::Key(KeyAction::WidthWider),
-        "key:tab_prev" => Wakeup::Key(KeyAction::TabPrev),
-        "key:tab_next" => Wakeup::Key(KeyAction::TabNext),
-        "key:other" => Wakeup::Key(KeyAction::Other),
-        "key:enter" => Wakeup::Key(KeyAction::Enter),
-        "key:inbox_next" => Wakeup::Key(KeyAction::InboxNext),
-        "key:inbox_prev" => Wakeup::Key(KeyAction::InboxPrev),
-        "key:mark_toggle" => Wakeup::Key(KeyAction::MarkToggle),
-        "key:mark_all_read" => Wakeup::Key(KeyAction::MarkAllRead),
-        "key:help" => Wakeup::Key(KeyAction::Help),
-        "key:filter:all" => Wakeup::Key(KeyAction::Filter(None)),
-        "key:filter:unread" => Wakeup::Key(KeyAction::Filter(Some(BodyFilter::Unread))),
-        "key:filter:waiting" => Wakeup::Key(KeyAction::Filter(Some(BodyFilter::Status(
-            AgentStatus::Waiting,
-        )))),
-        "key:filter:failed" => Wakeup::Key(KeyAction::Filter(Some(BodyFilter::Status(
-            AgentStatus::Failed,
-        )))),
-        "key:filter:idle" => Wakeup::Key(KeyAction::Filter(Some(BodyFilter::Status(
-            AgentStatus::Idle,
-        )))),
-        "key:filter:paused" => Wakeup::Key(KeyAction::Filter(Some(BodyFilter::Status(
-            AgentStatus::Paused,
-        )))),
-        "key:filter:running" => Wakeup::Key(KeyAction::Filter(Some(BodyFilter::Status(
-            AgentStatus::Running,
-        )))),
-        "key:filter:success" => Wakeup::Key(KeyAction::Filter(Some(BodyFilter::Status(
-            AgentStatus::Success,
-        )))),
-        "key:filter:sleeping" => Wakeup::Key(KeyAction::Filter(Some(BodyFilter::Status(
-            AgentStatus::Sleeping,
-        )))),
-        "key:dismiss" => Wakeup::Key(KeyAction::Dismiss),
         "scroll:up" => Wakeup::Scroll { down: false },
         "scroll:down" => Wakeup::Scroll { down: true },
         _ => Wakeup::Tick,
     }
+}
+
+fn decode_press(raw: &str) -> Option<Wakeup> {
+    let (mods, code) = raw.strip_prefix("press:")?.split_once(':')?;
+    let mods = match mods {
+        "-" => KeyModifiers::NONE,
+        "c" => KeyModifiers::CONTROL,
+        "a" => KeyModifiers::ALT,
+        "ca" => KeyModifiers::CONTROL | KeyModifiers::ALT,
+        _ => return None,
+    };
+    let code = if let Some(raw) = code.strip_prefix("char:") {
+        let mut chars = raw.chars();
+        let c = chars.next()?;
+        if chars.next().is_some() {
+            return None;
+        }
+        KeyCode::Char(c)
+    } else {
+        match code {
+            "up" => KeyCode::Up,
+            "down" => KeyCode::Down,
+            "left" => KeyCode::Left,
+            "right" => KeyCode::Right,
+            "home" => KeyCode::Home,
+            "end" => KeyCode::End,
+            "pageup" => KeyCode::PageUp,
+            "pagedown" => KeyCode::PageDown,
+            "enter" => KeyCode::Enter,
+            "esc" => KeyCode::Esc,
+            "backspace" => KeyCode::Backspace,
+            "tab" => KeyCode::Tab,
+            "delete" => KeyCode::Delete,
+            _ => return None,
+        }
+    };
+    Some(Wakeup::Press { code, mods })
 }
 
 fn decode_event_wakeup(bytes: &[u8]) -> Wakeup {
@@ -285,445 +307,4 @@ pub(super) fn wait_for_wakeup(socket: &UnixDatagram) -> io::Result<Wakeup> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn default_keymap() -> NavKeymap {
-        NavKeymap::from_config(&crate::config::SidebarKeys::default())
-    }
-
-    fn encode_default(code: KeyCode) -> Option<String> {
-        encode_key(&default_keymap(), code, KeyModifiers::NONE)
-    }
-
-    #[test]
-    #[cfg(feature = "testkit")]
-    fn injected_click_decodes_as_mouse_press() {
-        let wire = encode_click(4, 7);
-        let press = encode_mouse(MouseEventKind::Down(MouseButton::Left), 4, 7).unwrap();
-        assert_eq!(wire, press);
-        assert_eq!(
-            decode_wakeup(wire.as_bytes()),
-            Wakeup::MouseClick { column: 4, row: 7 }
-        );
-    }
-
-    #[test]
-    fn mouse_events_encode_clicks_and_scrolls() {
-        let encoded = encode_mouse(MouseEventKind::Down(MouseButton::Left), 4, 7)
-            .expect("left button down is encoded");
-        assert_eq!(
-            decode_wakeup(encoded.as_bytes()),
-            Wakeup::MouseClick { column: 4, row: 7 }
-        );
-        // The release must NOT also encode a click: one physical click is one
-        // selection event, so the card's compact→full expansion between press
-        // and release can't relocate the highlight.
-        assert_eq!(
-            encode_mouse(MouseEventKind::Up(MouseButton::Left), 4, 7),
-            None
-        );
-        // The wheel scrolls the viewport, never the selection: it must round-
-        // trip to the scroll wakeup, not an arrow key.
-        assert_eq!(
-            decode_wakeup(
-                encode_mouse(MouseEventKind::ScrollUp, 4, 7)
-                    .unwrap()
-                    .as_bytes()
-            ),
-            Wakeup::Scroll { down: false }
-        );
-        assert_eq!(
-            decode_wakeup(
-                encode_mouse(MouseEventKind::ScrollDown, 4, 7)
-                    .unwrap()
-                    .as_bytes()
-            ),
-            Wakeup::Scroll { down: true }
-        );
-    }
-
-    #[test]
-    fn r_key_triggers_a_reload() {
-        // Pressing `r` re-execs the renderer in place unless the help overlay
-        // consumes it first; external reloads keep the shared control word.
-        let encoded = encode_default(KeyCode::Char('r')).expect("r is bound");
-        assert_eq!(decode_wakeup(encoded.as_bytes()), Wakeup::ReloadKey);
-        assert_eq!(
-            decode_wakeup(RELOAD_CONTROL_WORD.as_bytes()),
-            Wakeup::Reload
-        );
-    }
-
-    #[test]
-    fn sidebar_event_envelope_decodes_to_event() {
-        let envelope = SidebarEventEnvelope::new(
-            crate::WorkspaceId::parse("ws_0123456789abcdef01234567").unwrap(),
-            Some("rimz-test".to_owned()),
-            42,
-            crate::wakeup::events::SidebarEvent::StoreDelta {
-                event_method: None,
-                agent_signal: None,
-            },
-        );
-        let encoded = serde_json::to_vec(&envelope).unwrap();
-        assert_eq!(decode_wakeup(&encoded), Wakeup::Event(envelope));
-        assert_eq!(decode_wakeup(b"{}"), Wakeup::Tick);
-    }
-
-    #[test]
-    fn agent_session_boundary_event_requests_fresh_panes() {
-        let start = crate::wakeup::events::SidebarEvent::StoreDelta {
-            event_method: Some("agent.lifecycle".to_owned()),
-            agent_signal: Some(crate::agents::LifecycleSignal::Registered.tag().to_owned()),
-        };
-        assert!(start.requests_producer_verification());
-
-        let status = crate::wakeup::events::SidebarEvent::StoreDelta {
-            event_method: Some("agent.lifecycle".to_owned()),
-            agent_signal: Some(
-                crate::agents::LifecycleSignal::TurnStarted { turn_id: None }
-                    .tag()
-                    .to_owned(),
-            ),
-        };
-        assert!(!status.requests_producer_verification());
-    }
-
-    #[test]
-    fn keys_round_trip_through_the_wire() {
-        // Every keycode encodes to its wire word and decodes back to the wakeup
-        // the serve loop dispatches: vim row/focus keys, the J/K worktree jumps,
-        // and the full filter key set. (The `r` reload keypress is covered by
-        // `r_key_triggers_a_reload`; the literal reload word is checked below.)
-        let keymap = default_keymap();
-        let cases = [
-            // vim row and focus keys
-            (
-                "j → down",
-                KeyCode::Char('j'),
-                KeyModifiers::NONE,
-                Wakeup::Key(KeyAction::Down),
-            ),
-            (
-                "↓ → down",
-                KeyCode::Down,
-                KeyModifiers::NONE,
-                Wakeup::Key(KeyAction::Down),
-            ),
-            (
-                "k → up",
-                KeyCode::Char('k'),
-                KeyModifiers::NONE,
-                Wakeup::Key(KeyAction::Up),
-            ),
-            (
-                "↑ → up",
-                KeyCode::Up,
-                KeyModifiers::NONE,
-                Wakeup::Key(KeyAction::Up),
-            ),
-            (
-                "l → enter",
-                KeyCode::Char('l'),
-                KeyModifiers::NONE,
-                Wakeup::Key(KeyAction::Enter),
-            ),
-            (
-                "a → narrower",
-                KeyCode::Char('a'),
-                KeyModifiers::NONE,
-                Wakeup::Key(KeyAction::WidthNarrower),
-            ),
-            (
-                "d → wider",
-                KeyCode::Char('d'),
-                KeyModifiers::NONE,
-                Wakeup::Key(KeyAction::WidthWider),
-            ),
-            // worktree-jump keys
-            (
-                "J → worktree down",
-                KeyCode::Char('J'),
-                KeyModifiers::SHIFT,
-                Wakeup::Key(KeyAction::WorktreeDown),
-            ),
-            (
-                "K → worktree up",
-                KeyCode::Char('K'),
-                KeyModifiers::SHIFT,
-                Wakeup::Key(KeyAction::WorktreeUp),
-            ),
-            // top/bottom jumps
-            (
-                "g → top",
-                KeyCode::Char('g'),
-                KeyModifiers::NONE,
-                Wakeup::Key(KeyAction::Top),
-            ),
-            (
-                "G → bottom",
-                KeyCode::Char('G'),
-                KeyModifiers::SHIFT,
-                Wakeup::Key(KeyAction::Bottom),
-            ),
-            (
-                "Ctrl+b → page up",
-                KeyCode::Char('b'),
-                KeyModifiers::CONTROL,
-                Wakeup::Key(KeyAction::PageUp),
-            ),
-            (
-                "PageUp → page up",
-                KeyCode::PageUp,
-                KeyModifiers::NONE,
-                Wakeup::Key(KeyAction::PageUp),
-            ),
-            (
-                "Ctrl+f → page down",
-                KeyCode::Char('f'),
-                KeyModifiers::CONTROL,
-                Wakeup::Key(KeyAction::PageDown),
-            ),
-            (
-                "PageDown → page down",
-                KeyCode::PageDown,
-                KeyModifiers::NONE,
-                Wakeup::Key(KeyAction::PageDown),
-            ),
-            (
-                "H → screen top",
-                KeyCode::Char('H'),
-                KeyModifiers::SHIFT,
-                Wakeup::Key(KeyAction::ScreenTop),
-            ),
-            (
-                "L → screen bottom",
-                KeyCode::Char('L'),
-                KeyModifiers::SHIFT,
-                Wakeup::Key(KeyAction::ScreenBottom),
-            ),
-            // inbox triage: n and Space step forward, N steps back
-            (
-                "n → inbox next",
-                KeyCode::Char('n'),
-                KeyModifiers::NONE,
-                Wakeup::Key(KeyAction::InboxNext),
-            ),
-            (
-                "space → inbox next",
-                KeyCode::Char(' '),
-                KeyModifiers::NONE,
-                Wakeup::Key(KeyAction::InboxNext),
-            ),
-            (
-                "N → inbox prev",
-                KeyCode::Char('N'),
-                KeyModifiers::SHIFT,
-                Wakeup::Key(KeyAction::InboxPrev),
-            ),
-            // read-state hygiene without jumping
-            (
-                "m → toggle read",
-                KeyCode::Char('m'),
-                KeyModifiers::NONE,
-                Wakeup::Key(KeyAction::MarkToggle),
-            ),
-            (
-                "M → mark all read",
-                KeyCode::Char('M'),
-                KeyModifiers::SHIFT,
-                Wakeup::Key(KeyAction::MarkAllRead),
-            ),
-            // filter keys
-            (
-                "A → all",
-                KeyCode::Char('A'),
-                KeyModifiers::SHIFT,
-                Wakeup::Key(KeyAction::Filter(None)),
-            ),
-            (
-                "u → unread",
-                KeyCode::Char('u'),
-                KeyModifiers::NONE,
-                Wakeup::Key(KeyAction::Filter(Some(BodyFilter::Unread))),
-            ),
-            (
-                "q → waiting",
-                KeyCode::Char('q'),
-                KeyModifiers::NONE,
-                Wakeup::Key(KeyAction::Filter(Some(BodyFilter::Status(
-                    AgentStatus::Waiting,
-                )))),
-            ),
-            (
-                "! → failed",
-                KeyCode::Char('!'),
-                KeyModifiers::SHIFT,
-                Wakeup::Key(KeyAction::Filter(Some(BodyFilter::Status(
-                    AgentStatus::Failed,
-                )))),
-            ),
-            (
-                "e → failed",
-                KeyCode::Char('e'),
-                KeyModifiers::NONE,
-                Wakeup::Key(KeyAction::Filter(Some(BodyFilter::Status(
-                    AgentStatus::Failed,
-                )))),
-            ),
-            (
-                "o → idle",
-                KeyCode::Char('o'),
-                KeyModifiers::NONE,
-                Wakeup::Key(KeyAction::Filter(Some(BodyFilter::Status(
-                    AgentStatus::Idle,
-                )))),
-            ),
-            (
-                "p → paused",
-                KeyCode::Char('p'),
-                KeyModifiers::NONE,
-                Wakeup::Key(KeyAction::Filter(Some(BodyFilter::Status(
-                    AgentStatus::Paused,
-                )))),
-            ),
-            (
-                "w → running",
-                KeyCode::Char('w'),
-                KeyModifiers::NONE,
-                Wakeup::Key(KeyAction::Filter(Some(BodyFilter::Status(
-                    AgentStatus::Running,
-                )))),
-            ),
-            (
-                "s → success",
-                KeyCode::Char('s'),
-                KeyModifiers::NONE,
-                Wakeup::Key(KeyAction::Filter(Some(BodyFilter::Status(
-                    AgentStatus::Success,
-                )))),
-            ),
-            (
-                "z → sleeping",
-                KeyCode::Char('z'),
-                KeyModifiers::NONE,
-                Wakeup::Key(KeyAction::Filter(Some(BodyFilter::Status(
-                    AgentStatus::Sleeping,
-                )))),
-            ),
-        ];
-        for (label, key, mods, wakeup) in cases {
-            let encoded = encode_key(&keymap, key, mods).expect("key is encoded");
-            assert_eq!(decode_wakeup(encoded.as_bytes()), wakeup, "{label}");
-        }
-        assert_eq!(
-            encode_key(&keymap, KeyCode::Char('s'), KeyModifiers::CONTROL),
-            None,
-            "modified fixed keys do not fall back to bare actions"
-        );
-        // The literal reload control word also decodes to a reload on its own.
-        assert_eq!(decode_wakeup(b"reload"), Wakeup::Reload);
-    }
-
-    #[test]
-    fn control_words_never_start_with_brace() {
-        // The leading-brace discriminator (store delta vs control/input) holds
-        // only while no control or input wire word can begin with `{`.
-        let mut words = vec![
-            "resize".to_owned(),
-            RELOAD_CONTROL_WORD.to_owned(),
-            String::from_utf8(SNAPSHOT_WAKEUP.to_vec()).unwrap(),
-        ];
-        let keymap = default_keymap();
-        for (code, mods) in [
-            (KeyCode::Up, KeyModifiers::NONE),
-            (KeyCode::Down, KeyModifiers::NONE),
-            (KeyCode::Char('b'), KeyModifiers::CONTROL),
-            (KeyCode::PageUp, KeyModifiers::NONE),
-            (KeyCode::Char('f'), KeyModifiers::CONTROL),
-            (KeyCode::PageDown, KeyModifiers::NONE),
-            (KeyCode::Char('H'), KeyModifiers::SHIFT),
-            (KeyCode::Char('L'), KeyModifiers::SHIFT),
-            (KeyCode::Left, KeyModifiers::NONE),
-            (KeyCode::Right, KeyModifiers::NONE),
-            (KeyCode::Enter, KeyModifiers::NONE),
-            (KeyCode::Char('j'), KeyModifiers::NONE),
-            (KeyCode::Char('k'), KeyModifiers::NONE),
-            (KeyCode::Char('J'), KeyModifiers::SHIFT),
-            (KeyCode::Char('K'), KeyModifiers::SHIFT),
-            (KeyCode::Char('g'), KeyModifiers::NONE),
-            (KeyCode::Char('G'), KeyModifiers::SHIFT),
-            (KeyCode::Char('l'), KeyModifiers::NONE),
-            (KeyCode::Char('n'), KeyModifiers::NONE),
-            (KeyCode::Char('N'), KeyModifiers::SHIFT),
-            (KeyCode::Char(' '), KeyModifiers::NONE),
-            (KeyCode::Char('m'), KeyModifiers::NONE),
-            (KeyCode::Char('M'), KeyModifiers::SHIFT),
-            (KeyCode::Char('?'), KeyModifiers::SHIFT),
-            (KeyCode::Char('A'), KeyModifiers::SHIFT),
-            (KeyCode::Char('q'), KeyModifiers::NONE),
-            (KeyCode::Char('!'), KeyModifiers::SHIFT),
-            (KeyCode::Char('e'), KeyModifiers::NONE),
-            (KeyCode::Char('o'), KeyModifiers::NONE),
-            (KeyCode::Char('p'), KeyModifiers::NONE),
-            (KeyCode::Char('w'), KeyModifiers::NONE),
-            (KeyCode::Char('s'), KeyModifiers::NONE),
-            (KeyCode::Char('z'), KeyModifiers::NONE),
-            (KeyCode::Char('x'), KeyModifiers::NONE),
-            (KeyCode::Char('r'), KeyModifiers::NONE),
-            (KeyCode::Char('1'), KeyModifiers::NONE),
-            (KeyCode::Esc, KeyModifiers::NONE),
-            (KeyCode::Char('y'), KeyModifiers::NONE),
-        ] {
-            if let Some(w) = encode_key(&keymap, code, mods) {
-                words.push(w);
-            }
-        }
-        words.push(encode_mouse(MouseEventKind::Down(MouseButton::Left), 1, 2).unwrap());
-        for word in words {
-            assert_ne!(
-                word.as_bytes().first(),
-                Some(&b'{'),
-                "{word:?} must not collide with the store-delta discriminator"
-            );
-        }
-    }
-
-    #[test]
-    fn digit_keys_round_trip_one_through_nine() {
-        let keymap = default_keymap();
-        for c in '1'..='9' {
-            let encoded = encode_key(&keymap, KeyCode::Char(c), KeyModifiers::NONE)
-                .expect("digit is encoded");
-            let n = c.to_digit(10).unwrap() as u8;
-            assert_eq!(
-                decode_wakeup(encoded.as_bytes()),
-                Wakeup::Key(KeyAction::Digit(n))
-            );
-        }
-        // '0' and out-of-range digit wire strings are not selectable rows.
-        assert_eq!(
-            decode_wakeup(
-                encode_key(&keymap, KeyCode::Char('0'), KeyModifiers::NONE)
-                    .expect("unbound keys close help")
-                    .as_bytes()
-            ),
-            Wakeup::Key(KeyAction::Other)
-        );
-        assert_eq!(decode_wakeup(b"key:digit:0"), Wakeup::Tick);
-    }
-
-    #[test]
-    fn unbound_keys_round_trip_as_other() {
-        let keymap = default_keymap();
-        for code in [KeyCode::Esc, KeyCode::Char('y')] {
-            let encoded =
-                encode_key(&keymap, code, KeyModifiers::NONE).expect("unbound key is encoded");
-            assert_eq!(
-                decode_wakeup(encoded.as_bytes()),
-                Wakeup::Key(KeyAction::Other)
-            );
-        }
-    }
-}
+mod tests;

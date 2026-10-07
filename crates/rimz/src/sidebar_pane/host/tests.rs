@@ -561,7 +561,7 @@ fn hidden_reveal(presence: crate::store::snapshot::SidebarPresence, reveal_by_re
         room.heartbeat(&hidden_pane.instance_id).unwrap().last_seen > beat
     });
     assert_eq!(hidden.drain(), b"", "heartbeat maintenance does not paint");
-    for word in [b"key:help".as_slice(), b"key:other".as_slice()] {
+    for word in [b"press:-:char:?".as_slice(), b"press:-:esc".as_slice()] {
         room.wake(&hidden_pane.instance_id, word);
         std::thread::sleep(Duration::from_millis(600));
         assert_eq!(hidden.drain(), b"", "hidden input drains without painting");

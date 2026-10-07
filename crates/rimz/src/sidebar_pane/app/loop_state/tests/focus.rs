@@ -564,6 +564,38 @@ fn external_focus_change_arms_group_reveal_once() {
 }
 
 #[test]
+fn reload_key_preserves_control_reload_flow_without_freezing_order() {
+    use ratatui::crossterm::event::{KeyCode, KeyModifiers};
+
+    let mut control = Rig::new();
+    let expected = control
+        .state
+        .on_wakeup(&mut control.fetch, &mut control.terminal, Wakeup::Reload)
+        .expect("control reload");
+
+    let mut key = Rig::new();
+    let actual = key
+        .state
+        .on_wakeup(
+            &mut key.fetch,
+            &mut key.terminal,
+            Wakeup::Press {
+                code: KeyCode::Char('r'),
+                mods: KeyModifiers::NONE,
+            },
+        )
+        .expect("key reload");
+    assert_eq!(
+        actual, expected,
+        "local reload propagates the control reload's loop flow"
+    );
+    assert!(
+        key.state.ui.order_hold.is_none(),
+        "reload must not freeze the refreshed order"
+    );
+}
+
+#[test]
 fn input_browse_arms_order_hold_before_next_fold() {
     let mut rig = Rig::new();
     let panes = vec![

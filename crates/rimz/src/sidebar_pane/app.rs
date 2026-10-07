@@ -148,10 +148,7 @@ pub(super) fn serve(config: ServeConfig) -> Result<ServeOutcome> {
     // the store uses, so a resize is just another wakeup; without it the first
     // usable frame waits for the next `tick`, reading as a blank sidebar.
     let input_mode = TerminalModeGuard::enable(MouseCapture::Stdout, Screen::Main)?;
-    spawn_event_waker(
-        attachment.socket_path().to_path_buf(),
-        config.nav_keys.clone(),
-    );
+    spawn_event_waker(attachment.socket_path().to_path_buf());
     let backend = PaneBackend::ambient(io::stdout().as_fd().try_clone_to_owned()?, ambient_window)?;
     let mut signals = signal_hook::iterator::Signals::new([signal_hook::consts::SIGTERM])?;
     let signal_stop = signals.handle();

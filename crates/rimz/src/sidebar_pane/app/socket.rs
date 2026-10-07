@@ -13,7 +13,7 @@ use ratatui::crossterm::event::{self, Event, KeyEventKind};
 use tracing::warn;
 
 use super::input::{encode_key, encode_mouse};
-use super::{NavKeymap, Result, ServeConfig, SidebarAppErr};
+use super::{Result, ServeConfig, SidebarAppErr};
 
 pub(super) fn heartbeat_write_due(last_heartbeat: Option<Instant>) -> bool {
     last_heartbeat.is_none_or(|last| last.elapsed() >= HEARTBEAT_WRITE_INTERVAL)
@@ -64,14 +64,9 @@ const FORWARDER_STOP_POLL: Duration = Duration::from_millis(250);
 /// on its own thread for the life of the process; it self-wakes by sending to
 /// `wake_path` (the loop's bound wakeup socket), which keeps redraw and input
 /// on one path. Stops quietly if the event source or socket goes away.
-pub(super) fn spawn_event_waker(wake_path: PathBuf, keymap: NavKeymap) {
+pub(super) fn spawn_event_waker(wake_path: PathBuf) {
     std::thread::spawn(move || {
-        forward_events(
-            &wake_path,
-            &keymap,
-            RESIZE_POLL_INTERVAL,
-            &AtomicBool::new(false),
-        );
+        forward_events(&wake_path, RESIZE_POLL_INTERVAL, &AtomicBool::new(false));
     });
 }
 
@@ -84,11 +79,11 @@ pub(in crate::sidebar_pane) struct EventForwarder {
 }
 
 impl EventForwarder {
-    pub(in crate::sidebar_pane) fn start(wake_path: PathBuf, keymap: NavKeymap) -> Self {
+    pub(in crate::sidebar_pane) fn start(wake_path: PathBuf) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
         let stopped = stop.clone();
         let thread = std::thread::spawn(move || {
-            forward_events(&wake_path, &keymap, FORWARDER_STOP_POLL, &stopped);
+            forward_events(&wake_path, FORWARDER_STOP_POLL, &stopped);
         });
         Self { stop, thread }
     }
@@ -100,7 +95,7 @@ impl EventForwarder {
     }
 }
 
-fn forward_events(wake_path: &Path, keymap: &NavKeymap, poll: Duration, stop: &AtomicBool) {
+fn forward_events(wake_path: &Path, poll: Duration, stop: &AtomicBool) {
     let waker = match forwarding_socket() {
         Ok(socket) => socket,
         Err(err) => {
@@ -113,7 +108,7 @@ fn forward_events(wake_path: &Path, keymap: &NavKeymap, poll: Duration, stop: &A
             Ok(true) => match event::read() {
                 Ok(Event::Resize(_, _)) => Some("resize".to_owned()),
                 Ok(Event::Key(key)) if key.kind == KeyEventKind::Press => {
-                    encode_key(keymap, key.code, key.modifiers)
+                    encode_key(key.code, key.modifiers)
                 }
                 Ok(Event::Mouse(mouse)) => encode_mouse(mouse.kind, mouse.column, mouse.row),
                 Ok(_) => None,

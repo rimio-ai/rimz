@@ -3,10 +3,7 @@
 use crate::config::SidebarKeys;
 use ratatui::crossterm::event::{KeyCode, KeyModifiers};
 
-use super::input::{
-    KEY_BOTTOM, KEY_DOWN, KEY_PAGE_DOWN, KEY_PAGE_UP, KEY_SCREEN_BOTTOM, KEY_SCREEN_TOP, KEY_TOP,
-    KEY_UP, KEY_WIDTH_NARROWER, KEY_WIDTH_WIDER, KEY_WORKTREE_DOWN, KEY_WORKTREE_UP,
-};
+use super::input::KeyAction;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct KeyChord {
@@ -72,32 +69,32 @@ fn parse_code(raw: &str) -> Option<KeyCode> {
 
 #[derive(Clone, Debug)]
 pub struct NavKeymap {
-    bindings: Vec<(KeyChord, &'static str)>,
+    bindings: Vec<(KeyChord, KeyAction)>,
 }
 
 impl NavKeymap {
     pub fn from_config(keys: &SidebarKeys) -> Self {
         let mut bindings = Vec::new();
-        for (spec, wire) in [
-            (keys.narrower.as_str(), KEY_WIDTH_NARROWER),
-            (keys.wider.as_str(), KEY_WIDTH_WIDER),
-            (keys.up.as_str(), KEY_UP),
-            (keys.down.as_str(), KEY_DOWN),
-            (keys.top.as_str(), KEY_TOP),
-            (keys.bottom.as_str(), KEY_BOTTOM),
-            (keys.worktree_up.as_str(), KEY_WORKTREE_UP),
-            (keys.worktree_down.as_str(), KEY_WORKTREE_DOWN),
-            (keys.page_up.as_str(), KEY_PAGE_UP),
-            (keys.page_down.as_str(), KEY_PAGE_DOWN),
-            (keys.screen_top.as_str(), KEY_SCREEN_TOP),
-            (keys.screen_bottom.as_str(), KEY_SCREEN_BOTTOM),
+        for (spec, action) in [
+            (keys.narrower.as_str(), KeyAction::WidthNarrower),
+            (keys.wider.as_str(), KeyAction::WidthWider),
+            (keys.up.as_str(), KeyAction::Up),
+            (keys.down.as_str(), KeyAction::Down),
+            (keys.top.as_str(), KeyAction::Top),
+            (keys.bottom.as_str(), KeyAction::Bottom),
+            (keys.worktree_up.as_str(), KeyAction::WorktreeUp),
+            (keys.worktree_down.as_str(), KeyAction::WorktreeDown),
+            (keys.page_up.as_str(), KeyAction::PageUp),
+            (keys.page_down.as_str(), KeyAction::PageDown),
+            (keys.screen_top.as_str(), KeyAction::ScreenTop),
+            (keys.screen_bottom.as_str(), KeyAction::ScreenBottom),
         ] {
             for token in spec.split_whitespace() {
                 match KeyChord::parse(token) {
-                    Some(chord) => bindings.push((chord, wire)),
+                    Some(chord) => bindings.push((chord, action)),
                     None => tracing::warn!(
                         binding = token,
-                        action = wire,
+                        action = ?action,
                         "invalid sidebar motion key binding skipped",
                     ),
                 }
@@ -106,10 +103,10 @@ impl NavKeymap {
         Self { bindings }
     }
 
-    pub(super) fn wire_for(&self, code: KeyCode, mods: KeyModifiers) -> Option<&'static str> {
+    pub(super) fn action_for(&self, code: KeyCode, mods: KeyModifiers) -> Option<KeyAction> {
         self.bindings
             .iter()
-            .find_map(|(chord, wire)| chord.matches(code, mods).then_some(*wire))
+            .find_map(|(chord, action)| chord.matches(code, mods).then_some(*action))
     }
 }
 
@@ -243,8 +240,8 @@ mod tests {
                 for (_, mods) in modifiers {
                     for shift in [KeyModifiers::NONE, KeyModifiers::SHIFT] {
                         assert_eq!(
-                            keymap.wire_for(code, mods | shift),
-                            (mods == expected_mods).then_some(KEY_WIDTH_NARROWER),
+                            keymap.action_for(code, mods | shift),
+                            (mods == expected_mods).then_some(KeyAction::WidthNarrower),
                             "{prefix}{name}: {mods:?} | {shift:?}",
                         );
                     }
@@ -257,44 +254,53 @@ mod tests {
     fn default_config_binds_all_motion_actions() {
         let keymap = NavKeymap::from_config(&SidebarKeys::default());
         let cases = [
-            (KeyCode::Char('a'), KeyModifiers::NONE, KEY_WIDTH_NARROWER),
-            (KeyCode::Char('d'), KeyModifiers::NONE, KEY_WIDTH_WIDER),
-            (KeyCode::Char('k'), KeyModifiers::NONE, KEY_UP),
-            (KeyCode::Up, KeyModifiers::NONE, KEY_UP),
-            (KeyCode::Char('j'), KeyModifiers::NONE, KEY_DOWN),
-            (KeyCode::Down, KeyModifiers::NONE, KEY_DOWN),
-            (KeyCode::Char('g'), KeyModifiers::NONE, KEY_TOP),
-            (KeyCode::Char('G'), KeyModifiers::SHIFT, KEY_BOTTOM),
-            (KeyCode::Char('K'), KeyModifiers::SHIFT, KEY_WORKTREE_UP),
-            (KeyCode::Char('J'), KeyModifiers::SHIFT, KEY_WORKTREE_DOWN),
-            (KeyCode::Char('b'), KeyModifiers::CONTROL, KEY_PAGE_UP),
-            (KeyCode::PageUp, KeyModifiers::NONE, KEY_PAGE_UP),
-            (KeyCode::Char('f'), KeyModifiers::CONTROL, KEY_PAGE_DOWN),
-            (KeyCode::PageDown, KeyModifiers::NONE, KEY_PAGE_DOWN),
-            (KeyCode::Char('H'), KeyModifiers::SHIFT, KEY_SCREEN_TOP),
-            (KeyCode::Char('L'), KeyModifiers::SHIFT, KEY_SCREEN_BOTTOM),
+            (
+                KeyCode::Char('a'),
+                KeyModifiers::NONE,
+                KeyAction::WidthNarrower,
+            ),
+            (
+                KeyCode::Char('d'),
+                KeyModifiers::NONE,
+                KeyAction::WidthWider,
+            ),
+            (KeyCode::Char('k'), KeyModifiers::NONE, KeyAction::Up),
+            (KeyCode::Up, KeyModifiers::NONE, KeyAction::Up),
+            (KeyCode::Char('j'), KeyModifiers::NONE, KeyAction::Down),
+            (KeyCode::Down, KeyModifiers::NONE, KeyAction::Down),
+            (KeyCode::Char('g'), KeyModifiers::NONE, KeyAction::Top),
+            (KeyCode::Char('G'), KeyModifiers::SHIFT, KeyAction::Bottom),
+            (
+                KeyCode::Char('K'),
+                KeyModifiers::SHIFT,
+                KeyAction::WorktreeUp,
+            ),
+            (
+                KeyCode::Char('J'),
+                KeyModifiers::SHIFT,
+                KeyAction::WorktreeDown,
+            ),
+            (KeyCode::Char('b'), KeyModifiers::CONTROL, KeyAction::PageUp),
+            (KeyCode::PageUp, KeyModifiers::NONE, KeyAction::PageUp),
+            (
+                KeyCode::Char('f'),
+                KeyModifiers::CONTROL,
+                KeyAction::PageDown,
+            ),
+            (KeyCode::PageDown, KeyModifiers::NONE, KeyAction::PageDown),
+            (
+                KeyCode::Char('H'),
+                KeyModifiers::SHIFT,
+                KeyAction::ScreenTop,
+            ),
+            (
+                KeyCode::Char('L'),
+                KeyModifiers::SHIFT,
+                KeyAction::ScreenBottom,
+            ),
         ];
-        for (code, mods, wire) in cases {
-            assert_eq!(keymap.wire_for(code, mods), Some(wire), "{code:?}");
+        for (code, mods, action) in cases {
+            assert_eq!(keymap.action_for(code, mods), Some(action), "{code:?}");
         }
-    }
-
-    #[test]
-    fn configurable_width_bindings_shadow_fixed_actions() {
-        let keys = SidebarKeys {
-            narrower: "q".to_owned(),
-            wider: "x".to_owned(),
-            ..SidebarKeys::default()
-        };
-        let keymap = NavKeymap::from_config(&keys);
-
-        assert_eq!(
-            keymap.wire_for(KeyCode::Char('q'), KeyModifiers::NONE),
-            Some(KEY_WIDTH_NARROWER),
-        );
-        assert_eq!(
-            keymap.wire_for(KeyCode::Char('x'), KeyModifiers::NONE),
-            Some(KEY_WIDTH_WIDER),
-        );
     }
 }
