@@ -2352,7 +2352,7 @@ fn status_counts_from_rows(rows: &[SidebarRow]) -> Vec<SidebarStatusCount> {
     .filter_map(|status| {
         let count = rows
             .iter()
-            .filter(|row| row.status() == Some(status))
+            .filter(|row| row.attention_status() == Some(status))
             .count();
         (count > 0).then_some(SidebarStatusCount { status, count })
     })
