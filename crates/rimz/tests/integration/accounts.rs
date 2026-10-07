@@ -257,6 +257,19 @@ fn invalid_kind_report(doctor: bool) {
     );
     if !doctor {
         assert_eq!(default["active"], false);
+        let human = succeeded(&accounts(&env, &["list"]));
+        let default_row = human
+            .lines()
+            .find(|row| {
+                row.contains("codex") && row.contains("default") && row.contains("unavailable")
+            })
+            .expect("failed kind retains its unavailable default row in the table");
+        assert_eq!(default["default_for"], json!([]), "{human}");
+        assert_eq!(default["machine_default"], false, "{human}");
+        assert!(
+            !default_row.contains('○') && !default_row.contains('●'),
+            "{human}"
+        );
     }
 }
 
