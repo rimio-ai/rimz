@@ -1658,3 +1658,54 @@ fn align_submitted_prompt_requires_exact_system_text() {
         assert_eq!(align_submitted_prompt(prompt, &[&record]), None, "{prompt}");
     }
 }
+
+/// Every header `@rimz` sends, with an exhaustive match so a new variant fails
+/// to compile until it is listed here and, through the test below, documented.
+fn every_named_harness_notice() -> Vec<HarnessNotice> {
+    let all = vec![
+        HarnessNotice::CacheKeepalive,
+        HarnessNotice::Deadline,
+        HarnessNotice::SubagentReport,
+        HarnessNotice::AgentReport,
+        HarnessNotice::Wait,
+        HarnessNotice::Signal,
+        HarnessNotice::Stage,
+        HarnessNotice::TeamReport,
+        HarnessNotice::SubagentPaused,
+        HarnessNotice::SubagentStalled,
+    ];
+    for notice in &all {
+        match notice {
+            HarnessNotice::CacheKeepalive
+            | HarnessNotice::Deadline
+            | HarnessNotice::SubagentReport
+            | HarnessNotice::AgentReport
+            | HarnessNotice::Wait
+            | HarnessNotice::Signal
+            | HarnessNotice::Stage
+            | HarnessNotice::TeamReport
+            | HarnessNotice::SubagentPaused
+            | HarnessNotice::SubagentStalled => {}
+            // `Other` preserves unknown future notices; it names no header of its own.
+            HarnessNotice::Other(_) => unreachable!("only named notices are listed"),
+        }
+    }
+    all
+}
+
+#[test]
+fn every_harness_notice_header_is_indexed_in_user_docs() {
+    let guide = include_str!("../../../../../docs/guide/messaging.md");
+    let reference = include_str!("../../../../../docs/reference/cli/message.md");
+    for notice in every_named_harness_notice() {
+        let header = format!("`{}`", notice.header_type());
+        assert!(
+            guide.contains(&header),
+            "docs/guide/messaging.md does not list {header}"
+        );
+        assert!(
+            reference.contains(&header),
+            "docs/reference/cli/message.md does not list {header}"
+        );
+    }
+}
