@@ -500,8 +500,8 @@ path = "crates/rimz/src/harness"
 # Room-only catalog loading filters before precedence for list and watch (+1).
 # Manual resumes share refill settlement and its typed error (+2), and receive the per-tab recovery carrier (+2).
 # Silent-child notices share the detector, text, request, evidence and module with the CLI/producer (+6), plus the run claim and release (+2).
-# Spent-child CLI parity shares one read-only durable park-demotion builder (+1).
-surface-budget = 740
+# Spent-child CLI parity shares one read-only durable park-demotion builder (+1), and its login-set form with the sidebar fold (+1).
+surface-budget = 741
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -2446,6 +2446,11 @@ reason = "Spent-child CLI parity preserves the root status ladder's spent-window
 kind = "item"
 key = "harness::auto_continue::park_demotion"
 reason = "Spent-child CLI parity assembles durable demotion inputs once for sidebar and binary consumers."
+
+[[verdict]]
+kind = "item"
+key = "harness::auto_continue::park_demotion_for_logins"
+reason = "The sidebar fold builds the shared demotion from the login set it already resolved."
 
 [[verdict]]
 kind = "item"

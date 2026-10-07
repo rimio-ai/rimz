@@ -642,11 +642,11 @@ fn enrich_core(
         exclude_pane: None,
     });
 
-    let demotion = crate::harness::park_demotion(
+    let demotion = crate::harness::auto_continue::park_demotion_for_logins(
         store,
-        state,
         runtime,
-        &machine_config,
+        &machine_config.resume,
+        &logins,
         &snapshot.agents,
         snapshot.resume_outcomes.as_deref().unwrap_or_default(),
         snapshot.now,
