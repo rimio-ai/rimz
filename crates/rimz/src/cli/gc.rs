@@ -463,7 +463,10 @@ fn render_report(out: &GcOutcome, w: &mut impl Write) -> io::Result<()> {
         }
     } else if reclaimed > 0 {
         format!("gc — reclaimed {}", fmt_bytes(reclaimed))
-    } else if out.schedules_reaped > 0 || out.wait_logs_pruned > 0 {
+    } else if out.schedules_reaped > 0
+        || out.wait_logs_pruned > 0
+        || carryover_pruned(&out.store_maintenance) > 0
+    {
         "gc — maintenance complete".to_owned()
     } else if problems > 0 {
         "gc — no bytes reclaimed".to_owned()
@@ -1417,6 +1420,22 @@ mod tests {
         assert!(out.contains("✓ event log"));
         assert!(out.contains("✓ agent cache"));
         assert!(out.contains("✓ loop schedules"));
+    }
+
+    #[test]
+    fn render_report_counts_pruned_carryover_as_maintenance() {
+        let out = strip_report(&GcOutcome {
+            store_maintenance: StoreMaintenance::Done {
+                archived: 0,
+                reconciled: 0,
+                repaired: RepairOutcome::default(),
+                carryover_pruned: 2,
+            },
+            ..clean_outcome()
+        });
+
+        assert!(out.starts_with("gc — maintenance complete\n"));
+        assert!(out.contains("2 expired entries pruned"));
     }
 
     #[test]
