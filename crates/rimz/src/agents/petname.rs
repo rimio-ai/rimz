@@ -5,8 +5,6 @@
 //! no dependency, deterministic fallback for old logs, and a collision check
 //! supplied by the caller's current rollup.
 
-use std::collections::BTreeSet;
-
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
@@ -73,15 +71,12 @@ pub const RESERVED_AGENT_WORDS: &[&str] = &[
 /// Handles used in message envelopes for senders that are not agents.
 pub(crate) const HEADER_PSEUDO_HANDLES: &[&str] = &["user", "rimz"];
 
-pub(crate) fn mint(taken: impl IntoIterator<Item = impl AsRef<str>>) -> String {
+pub(crate) fn mint(taken: impl Fn(&str) -> bool) -> String {
     let seed = Uuid::now_v7().simple().to_string();
     mint_from_seed(&seed, taken)
 }
 
-pub(crate) fn mint_for_session(
-    agent_id: &AgentSessionId,
-    taken: impl IntoIterator<Item = impl AsRef<str>>,
-) -> String {
+pub(crate) fn mint_for_session(agent_id: &AgentSessionId, taken: impl Fn(&str) -> bool) -> String {
     mint_from_seed(agent_id.as_str(), taken)
 }
 
@@ -109,16 +104,7 @@ fn basic_valid_name(name: &str) -> bool {
         && !RESERVED_AGENT_WORDS.contains(&name)
 }
 
-fn mint_from_seed(seed: &str, taken: impl IntoIterator<Item = impl AsRef<str>>) -> String {
-    let mut taken: BTreeSet<String> = taken
-        .into_iter()
-        .map(|value| value.as_ref().to_owned())
-        .collect();
-    taken.extend(
-        HEADER_PSEUDO_HANDLES
-            .iter()
-            .map(|value| (*value).to_owned()),
-    );
+fn mint_from_seed(seed: &str, taken: impl Fn(&str) -> bool) -> String {
     for attempt in 0u32.. {
         let value = hash_u64(seed, attempt);
         let adjective = ADJECTIVES[(value as usize) % ADJECTIVES.len()];
@@ -128,7 +114,10 @@ fn mint_from_seed(seed: &str, taken: impl IntoIterator<Item = impl AsRef<str>>) 
         } else {
             format!("{adjective}-{noun}-{attempt}")
         };
-        if valid_agent_name(&candidate) && !taken.contains(&candidate) {
+        if valid_agent_name(&candidate)
+            && !HEADER_PSEUDO_HANDLES.contains(&candidate.as_str())
+            && !taken(&candidate)
+        {
             return candidate;
         }
     }
@@ -187,13 +176,24 @@ mod tests {
     #[test]
     fn deterministic_fallback_avoids_taken_names() {
         let agent_id = AgentSessionId::from("session-a");
-        let first = mint_for_session(&agent_id, std::iter::empty::<&str>());
-        assert_eq!(
-            first,
-            mint_for_session(&agent_id, std::iter::empty::<&str>())
-        );
-        let second = mint_for_session(&agent_id, [first.as_str()]);
+        let first = mint_for_session(&agent_id, |_| false);
+        assert_eq!(first, mint_for_session(&agent_id, |_| false));
+        let second = mint_for_session(&agent_id, |name| name == first);
         assert_ne!(first, second);
+    }
+
+    #[test]
+    fn predicate_mint_preserves_names_and_excludes_pseudo_handles() {
+        assert_eq!(mint_from_seed("session-a", |_| false), "ideal-flare");
+        assert_eq!(
+            mint_from_seed("session-a", |name| name == "ideal-flare"),
+            "valid-glyph-1"
+        );
+        for seed in HEADER_PSEUDO_HANDLES {
+            let name = mint_from_seed(seed, |_| false);
+            assert!(valid_agent_name(&name));
+            assert!(!HEADER_PSEUDO_HANDLES.contains(&name.as_str()));
+        }
     }
 
     #[test]
@@ -219,10 +219,11 @@ mod tests {
         }
         assert!(valid_agent_name(&mint_for_session(
             &AgentSessionId::from("session-matrix"),
-            std::iter::empty::<&str>(),
+            |_| false,
         )));
-        assert!(!HEADER_PSEUDO_HANDLES.contains(
-            &mint_for_session(&AgentSessionId::from("user"), std::iter::empty::<&str>(),).as_str()
-        ));
+        assert!(
+            !HEADER_PSEUDO_HANDLES
+                .contains(&mint_for_session(&AgentSessionId::from("user"), |_| false).as_str())
+        );
     }
 }

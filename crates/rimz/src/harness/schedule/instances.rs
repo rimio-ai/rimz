@@ -150,12 +150,10 @@ pub(super) fn insert_delivery(
         return Ok((name.clone(), true));
     }
     let mut name = name.map(ToOwned::to_owned).unwrap_or_else(|| {
-        let petname = crate::agents::petname::mint(
-            tasks
-                .keys()
-                .chain(taken)
-                .filter_map(|name| name.strip_prefix("wait-")),
-        );
+        let petname = crate::agents::petname::mint(|name| {
+            let name = format!("wait-{name}");
+            tasks.contains_key(&name) || taken.contains(&name)
+        });
         format!("wait-{petname}")
     });
     if entry.loop_task.is_some() {

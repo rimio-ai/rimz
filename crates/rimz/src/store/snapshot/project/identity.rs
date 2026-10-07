@@ -335,7 +335,7 @@ impl CardIdentityAllocator {
         {
             return name.to_owned();
         }
-        crate::agents::petname::mint_for_session(fallback_id, self.names.keys().map(String::as_str))
+        crate::agents::petname::mint_for_session(fallback_id, |name| self.names.contains_key(name))
     }
 
     fn assign_name_candidate(
@@ -359,12 +359,9 @@ impl CardIdentityAllocator {
             self.names.insert(name.to_owned(), key.clone());
             return name.to_owned();
         }
-        let taken = self
-            .names
-            .iter()
-            .filter(|(_name, owner)| *owner != key)
-            .map(|(name, _owner)| name.as_str());
-        let name = crate::agents::petname::mint_for_session(fallback_id, taken);
+        let name = crate::agents::petname::mint_for_session(fallback_id, |name| {
+            self.names.get(name).is_some_and(|owner| owner != key)
+        });
         self.names.insert(name.clone(), key.clone());
         name
     }
