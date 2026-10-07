@@ -541,6 +541,10 @@ pub enum DiagEvent {
         agent_kind: AgentKind,
         agent_id: AgentSessionId,
     },
+    RecoveryChildEnded {
+        agent_kind: AgentKind,
+        agent_id: AgentSessionId,
+    },
     PaneCacheDivergence {
         pane_id: String,
         pid: i32,
@@ -646,6 +650,7 @@ impl DiagEvent {
             | Self::TopologyWriterChanged { .. }
             | Self::SubagentDigestBackstopped { .. }
             | Self::RecoverySeatRefilled { .. }
+            | Self::RecoveryChildEnded { .. }
             | Self::SupervisorConvergence { .. }
             | Self::RendererExit {
                 cause: RendererExitCause::SelfCloseEmptyTab,
@@ -711,6 +716,7 @@ impl DiagEvent {
             Self::SubagentOrphanRepairFailed { .. } => "subagent_orphan_repair_failed",
             Self::ProviderStartupExit { .. } => "provider_startup_exit",
             Self::RecoverySeatRefilled { .. } => "recovery_seat_refilled",
+            Self::RecoveryChildEnded { .. } => "recovery_child_ended",
             Self::PaneCacheDivergence { .. } => "pane_cache_divergence",
             Self::SupervisorConvergence { .. } => "supervisor_convergence",
             Self::SupervisorPreflightRejected { .. } => "supervisor_preflight_rejected",
@@ -937,6 +943,10 @@ impl DiagEvent {
                 ..
             }
             | Self::RecoverySeatRefilled {
+                agent_kind,
+                agent_id,
+            }
+            | Self::RecoveryChildEnded {
                 agent_kind,
                 agent_id,
             } => format!("{}:{agent_kind}:{agent_id}", self.kind_name()),
@@ -1373,6 +1383,10 @@ impl DiagEvent {
             } => {
                 format!("{agent_kind}/{agent_id} ended: a live replacement holds its recovery seat")
             }
+            Self::RecoveryChildEnded {
+                agent_kind,
+                agent_id,
+            } => format!("{agent_kind}/{agent_id} ended: recovery never resumes a launched child"),
             Self::ProviderStartupExit {
                 agent_kind,
                 agent_name,

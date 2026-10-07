@@ -81,6 +81,7 @@ The emitter is the triage pointer. Producer kinds describe pane-source truth, re
 | `client_reaped` | `cli::room::attach_exec` | Stale mux clients killed during attach, with killed pids, client counts before and after, and whether the reap settled or timed out |
 | `provider_startup_exit` | `cli::agents_cmd::exec` | A non-successful provider exit within 60s of spawn that the wrapper did not cause (no wrapper stop, parent end, or signal to the wrapper), for launch, resume, or fork: `agent_kind`, optional `agent_name`, `action`, exactly one of `exit_code` or `signal`, `startup_ms`, and `relaunches`; rate-limit identity is `(agent_kind, agent_name)` |
 | `recovery_seat_refilled` | `harness::rebirth` | A parked session ended because a live replacement holds its team seat, either already present or in a confirmed replacement tab: `agent_kind`, `agent_id`; rate-limit identity is `(agent_kind, agent_id)` |
+| `recovery_child_ended` | `harness::rebirth` | A non-live child ended because recovery never resumes a row with a parent: `agent_kind`, `agent_id`; rate-limit identity is `(agent_kind, agent_id)` |
 | `tool_loop_escalated` | `cli::hooks::lifecycle` | A named tool's consecutive identical argument signature reaching the configured attention threshold |
 
 The schema also keeps `fetch_fold_stats`, which no current code path emits; Doctor still reads retained records of it as expected.
@@ -104,7 +105,7 @@ Severity follows the event, and for a few kinds the event's own fields. `DiagEve
 | `warn` | `frame_rejected`, `pane_count_drop`, `pane_carry_forward`, `carry_forward_expired`, `duplicate_pane_id`, `foreign_session_pane`, `row_conflict`, `live_roster_held`, `gate_hold`, `fetch_failure`, `frame_anomaly`, `tool_loop_escalated`, `topology_write_rejected`, `renderer_orphan_reaped`, `sidebar_orphan_reaped`, `subagent_orphan_reaped`, `subagent_orphan_repair_failed`, `pane_cache_divergence`, `supervisor_preflight_rejected`, `self_close_rejected`, `provider_startup_exit` |
 | `warn` while active, `info` on recovery | `health_alert`, `link_alert`, `tick_budget_breach` (recovery sets `recovered_after_ms`) |
 | depends on a field | `client_reaped`: `warn` unless `settled`. `hosted_carry_dropped`: `warn` for `start_regressed` and `foreground_kind_mismatch`. `renderer_exit`: `warn` for `degraded_gave_up`. Each is `info` otherwise |
-| `info` | `frame_shrink_verified`, `resolution_fallback`, `pane_carry_refuted`, `gate_release`, `producer_elected`, `producer_demoted`, `local_session_bind_rejected`, `group_migration`, `newborn_quarantined`, `mixed_build_writers`, `topology_writer_changed`, `supervisor_convergence`, `subagent_digest_backstopped`, `recovery_seat_refilled`, `work_pane_boundary_moved`, the three width traces, `fetch_fold_stats` |
+| `info` | `frame_shrink_verified`, `resolution_fallback`, `pane_carry_refuted`, `gate_release`, `producer_elected`, `producer_demoted`, `local_session_bind_rejected`, `group_migration`, `newborn_quarantined`, `mixed_build_writers`, `topology_writer_changed`, `supervisor_convergence`, `subagent_digest_backstopped`, `recovery_seat_refilled`, `recovery_child_ended`, `work_pane_boundary_moved`, the three width traces, `fetch_fold_stats` |
 
 Filter on the kind as well as the severity: `mixed_build_writers` and `newborn_quarantined` are `info` yet often explain a `warn` beside them.
 
