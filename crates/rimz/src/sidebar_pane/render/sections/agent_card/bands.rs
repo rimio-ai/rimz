@@ -104,6 +104,22 @@ mod tests {
     }
 
     #[test]
+    fn a_stalled_child_stays_live_while_an_old_failure_folds() {
+        let now = Timestamp::UNIX_EPOCH + SignedDuration::from_hours(1);
+        let stalled = child("silent", AgentStatus::Failed, 1_920, now);
+        let mut wire = serde_json::to_value(stalled).unwrap();
+        wire["stalled"] = serde_json::json!(true);
+        let children = vec![
+            serde_json::from_value(wire).unwrap(),
+            child("failed", AgentStatus::Failed, 1_920, now),
+        ];
+        let bands = delegation_bands(&children, now, 900, 5);
+        assert_eq!(ids(&bands.live), ["silent"]);
+        assert!(bands.recent.is_empty());
+        assert_eq!(ids(&bands.older), ["failed"]);
+    }
+
+    #[test]
     fn live_keeps_spawn_order_and_recent_runs_newest_first() {
         let now = Timestamp::UNIX_EPOCH + SignedDuration::from_hours(1);
         let children = roster(now);

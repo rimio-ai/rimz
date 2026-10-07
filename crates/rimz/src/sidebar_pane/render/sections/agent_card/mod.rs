@@ -427,7 +427,7 @@ fn sub_agent_tokens(sub: &SidebarSubAgent) -> Option<u64> {
 
 /// A finished subagent has a verdict and no longer needs a live elapsed clock.
 fn sub_agent_finished(sub: &SidebarSubAgent) -> bool {
-    matches!(sub.status, AgentStatus::Success | AgentStatus::Failed)
+    matches!(sub.status, AgentStatus::Success | AgentStatus::Failed) && !sub.stalled
 }
 
 fn sub_agent_metadata_line(

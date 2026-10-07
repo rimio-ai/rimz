@@ -480,8 +480,10 @@ impl ContextSeverity {
 ///
 /// A `running` agent that has merely delegated to subagents is *not* stalled —
 /// its work is the children's heartbeats, not its own — so the projection
-/// caller suppresses this while the agent has a live child (see the sidebar's
-/// "waiting for subagents" derivation). A clean turn parked on background work
+/// caller suppresses this while a child holds its delegated turn (see the
+/// sidebar's "waiting for subagents" derivation). A silent launched child no
+/// longer holds it; `AgentState::silent_child_for` applies this same rule to
+/// children. A clean turn parked on background work
 /// settles to success in the sidebar projection before this predicate becomes
 /// relevant.
 pub fn is_stalled(
@@ -1560,6 +1562,20 @@ impl AgentState {
                 (status, phase)
             }
         }
+    }
+
+    /// Silence past the stall window for an open launched child. Rowless
+    /// status keeps sleep, pause, and displayed errors ahead of this rule.
+    pub(crate) fn silent_child_for(&self, now: Timestamp, stalled_after_secs: u32) -> Option<u64> {
+        (self.is_launched_child()
+            && self.ended_at.is_none()
+            && is_stalled(
+                self.rowless_status().0,
+                self.last_activity,
+                now,
+                stalled_after_secs,
+            ))
+        .then(|| now.duration_since(self.last_activity).as_secs() as u64)
     }
 
     /// Displayed provider error label, falling back to the effective class words.

@@ -815,6 +815,7 @@ mod tests {
                     name: "explorer".to_owned(),
                     petname: Some("swift-otter".to_owned()),
                     provider_native: false,
+                    stalled: false,
                     status: AgentStatus::Running,
                     phase: TurnPhase::Reasoning,
                     task: None,

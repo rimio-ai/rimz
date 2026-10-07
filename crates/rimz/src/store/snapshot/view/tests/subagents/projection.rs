@@ -3,12 +3,116 @@ use crate::agents::{PendingWait, PendingWaitTrigger};
 use crate::store::snapshot::SubAgentTokens;
 
 #[test]
+fn silent_launched_child_is_labelled_and_recovers_on_a_fresh_heartbeat() {
+    let parent = agent("claude", "root", AgentStatus::Idle, 0).worktree("/repo/main");
+    let mut child = child_state("root", "child", AgentStatus::Running, 1_920);
+    child.launch_depth = Some(1);
+    child.phase = TurnPhase::Reasoning;
+    child.registered_at = Some(ago(2_000));
+    let heartbeat = AgentActivity {
+        kind: child.kind.clone(),
+        agent_id: child.agent_id.clone(),
+        at: epoch(),
+        tool_at: None,
+        repeat: None,
+    };
+    let snapshot = room_with_agent_panes(vec![parent, child]);
+    let projected = &row(&snapshot, "root").sub_agents()[0];
+    assert_eq!(projected.status, AgentStatus::Failed);
+    assert_eq!(projected.phase, TurnPhase::Idle);
+    assert_eq!(projected.turn_error_label.as_deref(), Some("silent 32m"));
+    assert_eq!(projected.elapsed_secs, Some(80));
+    assert_eq!(serde_json::to_value(projected).unwrap()["stalled"], true);
+
+    let recovered = snapshot.with_agent_activity(&[heartbeat]);
+    let recovered = room_with_agent_panes(recovered.agents);
+    let projected = &row(&recovered, "root").sub_agents()[0];
+    assert_eq!(projected.status, AgentStatus::Running);
+    assert_eq!(projected.phase, TurnPhase::Reasoning);
+    assert_eq!(projected.turn_error_label, None);
+    assert!(
+        serde_json::to_value(projected)
+            .unwrap()
+            .get("stalled")
+            .is_none()
+    );
+}
+
+#[test]
+fn child_stall_uses_the_configured_window_but_not_sleep_or_errors() {
+    let parent = agent("claude", "root", AgentStatus::Idle, 0)
+        .worktree("/repo/main")
+        .in_pane("%1");
+    let mut child = child_state("root", "child", AgentStatus::Running, 120);
+    child.launch_depth = Some(1);
+    let project = |child: AgentState| {
+        let mut snapshot = room(vec![parent.clone(), child]);
+        snapshot.attention.stalled_after_secs = std::num::NonZeroU32::new(120).unwrap();
+        snapshot.with_live_panes(vec![pane("%1", "node", "/repo/main")], None)
+    };
+    assert_eq!(
+        row(&project(child.clone()), "root").sub_agents()[0].status,
+        AgentStatus::Failed
+    );
+    child.last_activity = ago(119);
+    assert_eq!(
+        row(&project(child.clone()), "root").sub_agents()[0].status,
+        AgentStatus::Running
+    );
+    child.last_activity = ago(3_600);
+    for status in [AgentStatus::Idle, AgentStatus::Success] {
+        let mut sleeping = child.clone();
+        sleeping.status = status;
+        sleeping.pending_waits.push(PendingWait {
+            name: "wait-command".to_owned(),
+            trigger: PendingWaitTrigger::Command {
+                command: "cargo test".to_owned(),
+            },
+            armed_at: Some(ago(3_600)),
+        });
+        let snapshot = project(sleeping);
+        let projected = &row(&snapshot, "root").sub_agents()[0];
+        assert_eq!(projected.status, AgentStatus::Sleeping);
+        assert_eq!(projected.turn_error_label, None);
+        assert!(
+            serde_json::to_value(projected)
+                .unwrap()
+                .get("stalled")
+                .is_none()
+        );
+    }
+    for (child, status, label) in [
+        (
+            child.clone().paused_turn_error(0, "usage limit reached"),
+            AgentStatus::Paused,
+            "usage limit reached",
+        ),
+        (
+            child.turn_error(0, "API error"),
+            AgentStatus::Failed,
+            "API error",
+        ),
+    ] {
+        let snapshot = project(child);
+        let projected = &row(&snapshot, "root").sub_agents()[0];
+        assert_eq!(projected.status, status);
+        assert_eq!(projected.turn_error_label.as_deref(), Some(label));
+        assert!(
+            serde_json::to_value(projected)
+                .unwrap()
+                .get("stalled")
+                .is_none()
+        );
+    }
+}
+
+#[test]
 fn launched_child_projects_displayed_status_and_label() {
     let mut child = child_state("root", "child", AgentStatus::Running, 5)
         .paused_turn_error(0, "usage limit reached");
     child.launch_depth = Some(1);
     child.phase = TurnPhase::Reasoning;
-    let projected = sub_agent_from_state(&child, epoch(), false);
+    let projected = sub_agent_from_state(&child, epoch(), false, 1_800);
     assert_eq!(projected.status, AgentStatus::Paused);
     assert_eq!(projected.phase, TurnPhase::Idle);
     assert_eq!(
@@ -25,7 +129,7 @@ fn launched_child_projects_displayed_status_and_label() {
         .unwrap()
         .label = None;
     assert_eq!(
-        sub_agent_from_state(&child, epoch(), false)
+        sub_agent_from_state(&child, epoch(), false, 1_800)
             .turn_error_label
             .as_deref(),
         Some("rate limit")
@@ -39,7 +143,7 @@ fn launched_child_projects_displayed_status_and_label() {
         .as_mut()
         .unwrap()
         .at = ago(1);
-    let projected = sub_agent_from_state(&child, epoch(), false);
+    let projected = sub_agent_from_state(&child, epoch(), false, 1_800);
     assert_eq!(projected.status, AgentStatus::Running);
     assert_eq!(projected.phase, TurnPhase::Reasoning);
     assert_eq!(projected.turn_error_label, None);
@@ -238,7 +342,7 @@ fn native_and_ended_children_keep_raw_projection() {
             child.launch_depth = Some(1);
             child.ended_at = Some(epoch());
         }
-        let projected = sub_agent_from_state(&child, epoch(), false);
+        let projected = sub_agent_from_state(&child, epoch(), false, 1_800);
         assert_eq!(projected.status, AgentStatus::Running);
         assert_eq!(projected.phase, TurnPhase::Reasoning);
         assert_eq!(projected.turn_error_label, None);
@@ -262,7 +366,7 @@ fn sub_agent_projection_carries_enrichment_and_freezes_finished_elapsed() {
     running.usage.output_tokens = Some(99);
     running.model = Some("claude-opus-4-8".to_owned());
     running.effort = Some("high".to_owned());
-    let sub = sub_agent_from_state(&running, now, false);
+    let sub = sub_agent_from_state(&running, now, false, 1_800);
     assert_eq!(sub.phase, TurnPhase::Reasoning);
     assert_eq!(sub.description.as_deref(), Some("locate the render seam"));
     assert_eq!(sub.tokens, Some(SubAgentTokens::Window(12_400)));
@@ -275,7 +379,7 @@ fn sub_agent_projection_carries_enrichment_and_freezes_finished_elapsed() {
     let mut finished = child_state("sess-root", "child-2", AgentStatus::Success, 0);
     finished.last_activity = ago(60);
     finished.subagent_started_at = Some(started);
-    let sub = sub_agent_from_state(&finished, now, false);
+    let sub = sub_agent_from_state(&finished, now, false, 1_800);
     assert_eq!(sub.elapsed_secs, Some(40));
 
     finished.pending_waits.push(PendingWait {
@@ -285,13 +389,13 @@ fn sub_agent_projection_carries_enrichment_and_freezes_finished_elapsed() {
         },
         armed_at: Some(ago(60)),
     });
-    let sub = sub_agent_from_state(&finished, now, false);
+    let sub = sub_agent_from_state(&finished, now, false, 1_800);
     assert_eq!(sub.status, AgentStatus::Sleeping);
     assert_eq!(sub.elapsed_secs, Some(40));
     assert_eq!(finished.status, AgentStatus::Success);
     finished.pending_waits.clear();
     assert_eq!(
-        sub_agent_from_state(&finished, now, false).status,
+        sub_agent_from_state(&finished, now, false, 1_800).status,
         AgentStatus::Success
     );
 
@@ -299,7 +403,7 @@ fn sub_agent_projection_carries_enrichment_and_freezes_finished_elapsed() {
     let mut bare = child_state("sess-root", "child-3", AgentStatus::Running, 5);
     bare.registered_at = Some(ago(5));
     bare.description = Some("adapter task description".to_owned());
-    let sub = sub_agent_from_state(&bare, now, false);
+    let sub = sub_agent_from_state(&bare, now, false, 1_800);
     assert_eq!(sub.phase, TurnPhase::Idle);
     assert_eq!(sub.description.as_deref(), Some("adapter task description"));
     assert_eq!(sub.tokens, None);
@@ -312,7 +416,7 @@ fn sub_agent_projection_carries_enrichment_and_freezes_finished_elapsed() {
     named.name = Some("Atlas".to_owned());
     named.name_explicit = true;
     named.task = Some("research/explore_hooks".to_owned());
-    let sub = sub_agent_from_state(&named, now, false);
+    let sub = sub_agent_from_state(&named, now, false, 1_800);
     assert_eq!(sub.name, "Atlas");
     assert_eq!(sub.petname, None);
     assert_eq!(sub.task.as_deref(), Some("research/explore_hooks"));
@@ -338,7 +442,7 @@ fn launched_child_projects_profile_cost_and_lifetime_delegated_spend() {
     });
     child.context = Some(context);
 
-    let projected = sub_agent_from_state(&child, epoch(), true);
+    let projected = sub_agent_from_state(&child, epoch(), true, 1_800);
     assert!(projected.prior_turn);
     assert_eq!(projected.name, "explorer");
     assert_eq!(projected.petname.as_deref(), Some("helper"));
@@ -347,7 +451,10 @@ fn launched_child_projects_profile_cost_and_lifetime_delegated_spend() {
 
     let mut bare = child.clone();
     bare.profile = None;
-    assert_eq!(sub_agent_from_state(&bare, epoch(), true).name, "codex");
+    assert_eq!(
+        sub_agent_from_state(&bare, epoch(), true, 1_800).name,
+        "codex"
+    );
 
     let mut native = child_state("root", "native", AgentStatus::Success, 5);
     native.subagent_cost_usd = Some(0.25);
@@ -385,9 +492,9 @@ fn child_tokens_prefer_window_then_session_then_run_total_never_bare_total() {
     child.context = Some(context);
     child.usage.fresh_input_tokens = Some(3_000);
     child.usage.run_total_tokens = Some(22_116);
-    let mut actual = vec![sub_agent_from_state(&child, epoch(), false).tokens];
+    let mut actual = vec![sub_agent_from_state(&child, epoch(), false, 1_800).tokens];
     child.usage.fresh_input_tokens = None;
-    actual.push(sub_agent_from_state(&child, epoch(), false).tokens);
+    actual.push(sub_agent_from_state(&child, epoch(), false, 1_800).tokens);
 
     child
         .context
@@ -395,17 +502,17 @@ fn child_tokens_prefer_window_then_session_then_run_total_never_bare_total() {
         .and_then(|context| context.tokens.as_mut())
         .expect("child token context")
         .session_usage = None;
-    actual.push(sub_agent_from_state(&child, epoch(), false).tokens);
+    actual.push(sub_agent_from_state(&child, epoch(), false, 1_800).tokens);
     child.usage.run_total_tokens = None;
-    actual.push(sub_agent_from_state(&child, epoch(), false).tokens);
+    actual.push(sub_agent_from_state(&child, epoch(), false, 1_800).tokens);
     child.usage.fresh_input_tokens = Some(0);
-    actual.push(sub_agent_from_state(&child, epoch(), false).tokens);
+    actual.push(sub_agent_from_state(&child, epoch(), false, 1_800).tokens);
     child.usage.fresh_input_tokens = None;
     child.usage.run_total_tokens = Some(0);
-    actual.push(sub_agent_from_state(&child, epoch(), false).tokens);
+    actual.push(sub_agent_from_state(&child, epoch(), false, 1_800).tokens);
     child.usage.fresh_input_tokens = Some(0);
     child.usage.run_total_tokens = Some(42);
-    actual.push(sub_agent_from_state(&child, epoch(), false).tokens);
+    actual.push(sub_agent_from_state(&child, epoch(), false, 1_800).tokens);
     assert_eq!(
         actual,
         [
@@ -444,7 +551,7 @@ fn child_context_window_uses_only_reported_window_occupancy() {
         child.usage.context_window = usage;
         child.usage.fresh_input_tokens = window_tokens.then_some(190_000);
         child.usage.run_total_tokens = Some(250_000);
-        let projected = sub_agent_from_state(&child, epoch(), false);
+        let projected = sub_agent_from_state(&child, epoch(), false, 1_800);
         let value = serde_json::to_value(projected).unwrap();
         assert_eq!(value.get("context_window").is_some(), expected.is_some());
         assert_eq!(value["context_window"], serde_json::json!(expected));

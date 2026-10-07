@@ -100,7 +100,7 @@ fn with_subagent_context_enriches_matching_children_and_preserves_lifecycle_type
     );
     assert_eq!(child.context_used_tokens(), Some(12_400));
     assert_eq!(
-        sub_agent_from_state(child, epoch(), false).tokens,
+        sub_agent_from_state(child, epoch(), false, 1_800).tokens,
         Some(crate::store::snapshot::SubAgentTokens::Window(12_400))
     );
     assert_eq!(child.usage.output_tokens, Some(9));
@@ -112,7 +112,7 @@ fn with_subagent_context_enriches_matching_children_and_preserves_lifecycle_type
     // A lifecycle split recorded at stop outlives the older sidecar reading.
     let stopped = rollup_agent(&folded, "stopped-1");
     assert_eq!(
-        sub_agent_from_state(stopped, epoch(), false).tokens,
+        sub_agent_from_state(stopped, epoch(), false, 1_800).tokens,
         Some(crate::store::snapshot::SubAgentTokens::Window(50_000))
     );
 
@@ -127,7 +127,7 @@ fn with_subagent_context_enriches_matching_children_and_preserves_lifecycle_type
     let typed = rollup_agent(&folded, "typed-1");
     assert_eq!(typed.context_used_tokens(), Some(42));
     assert_eq!(
-        sub_agent_from_state(typed, epoch(), false).tokens,
+        sub_agent_from_state(typed, epoch(), false, 1_800).tokens,
         Some(crate::store::snapshot::SubAgentTokens::Window(42))
     );
     assert_eq!(
