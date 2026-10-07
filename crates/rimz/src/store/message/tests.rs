@@ -1152,12 +1152,17 @@ fn older_ready_blocker_names_claimed_and_sent_prompt_fifo_holds() {
             Some(&blocker)
         );
         blocker.not_before = Some(now + Duration::from_secs(60));
+        let expected = match status {
+            // A written prompt already reached the pane: its own readiness no longer applies.
+            MessageStatus::Sent => &blocker,
+            _ => &queued,
+        };
         assert_eq!(
             older_ready_blocker([&blocker, &queued], &head, |message| {
                 message.is_deliverable(now)
             }),
-            Some(&queued),
-            "an unready hold does not occupy the lane"
+            Some(expected),
+            "only an open hold yields the lane while unready"
         );
     }
     let mut command =
@@ -1184,6 +1189,18 @@ fn sent_prompt_holds_boundary_batch_until_acknowledged() {
         )
         .is_none(),
         "an unacknowledged prompt holds even an idle-reading card"
+    );
+    let mut deferred = sent.clone();
+    deferred.not_before = Some(now + Duration::from_secs(60));
+    assert!(
+        delivery_batch_indices(
+            &[deferred, command.clone()],
+            &command.message_id,
+            AgentStatus::Idle,
+            now,
+        )
+        .is_none(),
+        "a written prompt holds whatever its own readiness"
     );
     let prompt = command.clone().with_body(MessageBody::Prompt);
     for sender in [MessageSender::Human, agent_sender("planner", None)] {
