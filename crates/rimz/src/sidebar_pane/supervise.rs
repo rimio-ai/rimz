@@ -396,7 +396,7 @@ fn attach_to_host(
     if let Ok(waker) = std::os::unix::net::UnixDatagram::unbound() {
         let _ = waker.send_to(b"resize", &wake_path);
     }
-    let forwarder = EventForwarder::start(wake_path, config.nav_keys.clone());
+    let forwarder = EventForwarder::start(wake_path);
     Some(Attached {
         link,
         modes,

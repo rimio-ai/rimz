@@ -38,7 +38,7 @@ use super::fetch::{
 };
 use super::gate::{GateState, apply_gate, gate_remaining};
 use super::health::{Health, degraded_too_long};
-use super::input::Wakeup;
+use super::input::{InputMode, Wakeup, resolve_key};
 use super::lifecycle::{
     PaintHold, SELF_CLOSE_WATCHDOG, SelfCloseState, grow_beyond_legit, resize_grew,
 };
@@ -151,14 +151,26 @@ pub(super) fn handle_wakeup(
     wakeup: Wakeup,
     ui: &mut UiState,
     snapshot: &SidebarSnapshot,
+    keymap: &super::NavKeymap,
 ) -> InputOutcome {
+    let wakeup = match wakeup {
+        Wakeup::Press { code, mods } => {
+            let mode = if ui.help_visible {
+                InputMode::Help
+            } else {
+                InputMode::Normal
+            };
+            Wakeup::Key(resolve_key(keymap, mode, code, mods))
+        }
+        wakeup => wakeup,
+    };
     // The help popup is a transient modal: while it is up, the next
     // interaction dismisses it and is consumed, never also acting on the
     // sidebar beneath.
     if ui.help_visible
         && matches!(
             wakeup,
-            Wakeup::ReloadKey | Wakeup::Key(_) | Wakeup::MouseClick { .. } | Wakeup::Scroll { .. }
+            Wakeup::Key(_) | Wakeup::MouseClick { .. } | Wakeup::Scroll { .. }
         )
     {
         ui.help_visible = false;
@@ -176,7 +188,7 @@ pub(super) fn handle_wakeup(
         | Wakeup::Event(_)
         | Wakeup::Reload
         | Wakeup::SupervisorHandoff
-        | Wakeup::ReloadKey
+        | Wakeup::Press { .. }
         | Wakeup::Snapshot => InputOutcome::default(),
     }
 }
@@ -416,17 +428,7 @@ impl LoopState {
                 self.reload_requested = true;
                 Ok(LoopFlow::Exit)
             }
-            // The local `r` key uses a key-specific wakeup so the help overlay
-            // can close on the keypress before it reaches the reload path.
-            Wakeup::ReloadKey if self.ui.help_visible => {
-                self.on_input(Wakeup::ReloadKey, terminal, fetch)?;
-                Ok(LoopFlow::Continue)
-            }
-            Wakeup::ReloadKey => Ok(self.handle_reload(fetch)),
-            wakeup => {
-                self.on_input(wakeup, terminal, fetch)?;
-                Ok(LoopFlow::Continue)
-            }
+            wakeup => self.on_input(wakeup, terminal, fetch),
         }
     }
 
@@ -924,7 +926,7 @@ impl LoopState {
         wakeup: Wakeup,
         terminal: &mut Terminal<PaneBackend>,
         fetch: &mut FetchDispatcher,
-    ) -> Result<()> {
+    ) -> Result<LoopFlow> {
         let applied = self.apply_input(wakeup, terminal)?;
         if applied.redraw && self.watched() {
             // Key/mouse input paints synchronously for instant feedback; a
@@ -932,7 +934,7 @@ impl LoopState {
             self.dirty = false;
         }
         let interacted = applied.redraw || applied.effect.is_some();
-        if interacted {
+        if interacted && !matches!(applied.effect, Some(InputEffect::Reload)) {
             order_hold::arm_order_hold(&mut self.ui, jiff::Timestamp::now().as_millisecond());
         }
         match applied.effect {
@@ -949,7 +951,7 @@ impl LoopState {
             }
             Some(InputEffect::Width(dir)) => {
                 let Ok(size) = terminal.size() else {
-                    return Ok(());
+                    return Ok(LoopFlow::Continue);
                 };
                 self.width_control.adjust(size.width, dir);
             }
@@ -957,9 +959,10 @@ impl LoopState {
             Some(InputEffect::MarkUnread(row_id)) => self.mark_row_unread(fetch, &row_id),
             Some(InputEffect::MarkAllRead) => self.mark_all_read(fetch),
             Some(InputEffect::SyncFilter(filter)) => self.persist_body_filter(filter),
+            Some(InputEffect::Reload) => return Ok(self.handle_reload(fetch)),
             Some(InputEffect::DismissAlert) | None => {}
         }
-        Ok(())
+        Ok(LoopFlow::Continue)
     }
 
     fn persist_body_filter(&mut self, filter: Option<BodyFilter>) {
@@ -996,7 +999,7 @@ impl LoopState {
         wakeup: Wakeup,
         terminal: &mut Terminal<PaneBackend>,
     ) -> Result<InputOutcome> {
-        let outcome = handle_wakeup(wakeup, &mut self.ui, &self.current);
+        let outcome = handle_wakeup(wakeup, &mut self.ui, &self.current, &self.config.nav_keys);
         if matches!(outcome.effect, Some(InputEffect::DismissAlert)) {
             self.health.alert = None;
         }

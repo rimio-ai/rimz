@@ -1,4 +1,4 @@
-use super::input::{KeyAction, Wakeup};
+use super::input::{InputMode, KeyAction, Wakeup, resolve_key};
 use super::loop_state::handle_wakeup;
 use super::notify::{
     BellDecision, bell_decision, desktop_notification_targets_renderer,
@@ -546,7 +546,60 @@ fn frame_grid_advances_one_frame_or_snaps_past_missed_frames() {
 }
 
 #[test]
+fn configurable_width_bindings_shadow_fixed_actions() {
+    use ratatui::crossterm::event::{KeyCode, KeyModifiers};
+
+    let keys = crate::config::SidebarKeys {
+        narrower: "q ctrl+b".to_owned(),
+        wider: "x /".to_owned(),
+        ..Default::default()
+    };
+    let keymap = NavKeymap::from_config(&keys);
+    for (code, mods, action) in [
+        (
+            KeyCode::Char('q'),
+            KeyModifiers::NONE,
+            KeyAction::WidthNarrower,
+        ),
+        (
+            KeyCode::Char('b'),
+            KeyModifiers::CONTROL,
+            KeyAction::WidthNarrower,
+        ),
+        (
+            KeyCode::Char('x'),
+            KeyModifiers::NONE,
+            KeyAction::WidthWider,
+        ),
+    ] {
+        assert_eq!(resolve_key(&keymap, InputMode::Normal, code, mods), action);
+    }
+    for (code, mods) in [
+        (KeyCode::Esc, KeyModifiers::NONE),
+        (KeyCode::Char('y'), KeyModifiers::NONE),
+        (KeyCode::Char('s'), KeyModifiers::CONTROL),
+    ] {
+        assert_eq!(
+            resolve_key(&keymap, InputMode::Normal, code, mods),
+            KeyAction::Other
+        );
+    }
+    assert_eq!(
+        resolve_key(
+            &keymap,
+            InputMode::Help,
+            KeyCode::Char('/'),
+            KeyModifiers::NONE
+        ),
+        KeyAction::Other,
+        "help consumes even a rebound slash before the keymap",
+    );
+}
+
+#[test]
 fn help_popup_dismisses_and_consumes_any_user_input() {
+    use ratatui::crossterm::event::{KeyCode, KeyModifiers};
+
     let ws = workspace();
     let snapshot = snapshot_with_panes(
         &ws,
@@ -555,9 +608,24 @@ fn help_popup_dismisses_and_consumes_any_user_input() {
             pane("terminal_2", "tab_0", false),
         ],
     );
+    let keymap = NavKeymap::from_config(&crate::config::SidebarKeys {
+        wider: "/".to_owned(),
+        ..Default::default()
+    });
 
     for wakeup in [
-        Wakeup::ReloadKey,
+        Wakeup::Press {
+            code: KeyCode::Char('/'),
+            mods: KeyModifiers::NONE,
+        },
+        Wakeup::Press {
+            code: KeyCode::Char('r'),
+            mods: KeyModifiers::NONE,
+        },
+        Wakeup::Press {
+            code: KeyCode::Char('n'),
+            mods: KeyModifiers::CONTROL,
+        },
         Wakeup::Key(KeyAction::Down),
         Wakeup::Key(KeyAction::Other),
         Wakeup::MouseClick { column: 1, row: 0 },
@@ -571,7 +639,7 @@ fn help_popup_dismisses_and_consumes_any_user_input() {
             ..Default::default()
         };
 
-        let outcome = handle_wakeup(wakeup, &mut ui, &snapshot);
+        let outcome = handle_wakeup(wakeup, &mut ui, &snapshot, &keymap);
 
         assert_eq!(outcome, InputOutcome::redraw());
         assert!(!ui.help_visible);
@@ -580,6 +648,17 @@ fn help_popup_dismisses_and_consumes_any_user_input() {
         assert_eq!(ui.manual_scroll, None, "scroll input was consumed");
         assert_eq!(ui.browse, None, "key input was consumed");
     }
+
+    let outcome = handle_wakeup(
+        Wakeup::Press {
+            code: KeyCode::Char('r'),
+            mods: KeyModifiers::NONE,
+        },
+        &mut UiState::default(),
+        &snapshot,
+        &keymap,
+    );
+    assert_eq!(outcome.effect, Some(selection::InputEffect::Reload));
 }
 
 #[test]
@@ -1093,7 +1172,12 @@ fn a_stopped_forwarder_gives_up_on_a_full_inbox() {
     let target = path.clone();
     std::thread::spawn(move || {
         let waker = forwarding_socket().unwrap();
-        let _ = tx.send(forward(&waker, b"key:j", &target, &AtomicBool::new(true)));
+        let _ = tx.send(forward(
+            &waker,
+            b"press:-:char:j",
+            &target,
+            &AtomicBool::new(true),
+        ));
     });
     assert_eq!(
         rx.recv_timeout(Duration::from_secs(5)),
@@ -1105,7 +1189,12 @@ fn a_stopped_forwarder_gives_up_on_a_full_inbox() {
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let waker = forwarding_socket().unwrap();
-        let _ = tx.send(forward(&waker, b"key:j", &path, &AtomicBool::new(false)));
+        let _ = tx.send(forward(
+            &waker,
+            b"press:-:char:j",
+            &path,
+            &AtomicBool::new(false),
+        ));
     });
     std::thread::sleep(Duration::from_millis(400));
     let mut word = [0u8; 16];
