@@ -112,6 +112,8 @@ The rows print in this order, and a row with nothing to report is left out:
 
 Window rows use the same pace rules as the table, with `· pace –` during the first 5% and no pace in the blank states listed above.
 
+To spend a banked reset, use [`rimz accounts redeem codex` or `rimz accounts redeem claude`](./accounts.md#redeem). Claude's banked count can include grants that cannot be spent now; its redemption preview explains the hold.
+
 Each reset-credit expiry prints as `YYYY-MM-DD HH:MM:SS ±HH:MM` in the machine timezone, followed by `in <interval>`, or `due` once it has passed. When the cache holds only the soonest expiry, that one line prints.
 
 Windows, paid usage, and reset credits belong to the account, so each account reports its own. Spend and the daily cap belong to the history pool: `default` and the shared accounts of a provider report one figure, and a standalone account its own.

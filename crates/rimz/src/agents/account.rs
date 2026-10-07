@@ -735,6 +735,7 @@ pub enum RedemptionCode {
     NoCredit,
     AlreadyRedeemed,
     Unknown,
+    Cooldown,
 }
 
 impl RedemptionCode {
@@ -745,6 +746,7 @@ impl RedemptionCode {
             Self::NoCredit => "no_credit",
             Self::AlreadyRedeemed => "already_redeemed",
             Self::Unknown => "unknown",
+            Self::Cooldown => "cooldown",
         }
     }
 }
@@ -757,6 +759,20 @@ pub struct PreparedRedemption<T> {
 }
 
 impl<T> PreparedRedemption<T> {
+    #[cfg(test)]
+    pub(crate) fn from_offer(decision: T, offer: ResetCreditOffer) -> Self {
+        Self {
+            decision,
+            capacity: offer.capacity.clone(),
+            credits: offer.credits.clone(),
+            offer,
+        }
+    }
+
+    pub(crate) fn hold(&self) -> Option<&RedeemHold> {
+        self.offer.hold.as_ref()
+    }
+
     /// Spend the prepared provider-owned credit only after the caller has
     /// durably recorded its attempt.
     pub fn consume(self, request_id: &str) -> Result<ResetCreditResult, String> {
@@ -767,7 +783,14 @@ impl<T> PreparedRedemption<T> {
 pub struct ResetCreditOffer {
     pub capacity: Option<ProviderCapacity>,
     pub credits: super::ResetCredits,
+    pub hold: Option<RedeemHold>,
     action: Box<dyn ResetCreditAction>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RedeemHold {
+    pub code: RedemptionCode,
+    pub reason: String,
 }
 
 impl ResetCreditOffer {
@@ -779,6 +802,7 @@ impl ResetCreditOffer {
         Self {
             capacity,
             credits,
+            hold: None,
             action: Box::new(action),
         }
     }

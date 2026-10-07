@@ -47,7 +47,8 @@ pub(super) fn run_auto_redeem(request: AutoRedeemRequest) -> Result<()> {
                     Some(err.to_string()),
                 );
             }
-            return Err(err).context("redeeming Codex reset credit");
+            return Err(err)
+                .with_context(|| format!("redeeming {} reset credit", request.login.kind));
         }
     }
     Ok(())

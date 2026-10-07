@@ -969,10 +969,7 @@ fn accounts_redeem_non_terminal_refuses_before_provider_reads() {
         .unwrap();
     assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("Claude") && stderr.contains("Settings > Usage"),
-        "{stderr}"
-    );
+    assert!(stderr.contains("--yes"), "{stderr}");
 }
 
 /// Answer `count` requests, each with the body of the route its request line
@@ -981,12 +978,39 @@ fn serve_routes(
     routes: Vec<(&'static str, String)>,
     count: usize,
 ) -> (String, thread::JoinHandle<Vec<String>>) {
+    serve_http_routes(
+        routes
+            .into_iter()
+            .map(|(path, body)| (path, 200, body))
+            .collect(),
+        count,
+    )
+}
+
+fn serve_http_routes(
+    routes: Vec<(&'static str, u16, String)>,
+    count: usize,
+) -> (String, thread::JoinHandle<Vec<String>>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind http stub");
     let addr = listener.local_addr().expect("local addr");
+    listener.set_nonblocking(true).unwrap();
     let handle = thread::spawn(move || {
-        let mut requests = Vec::with_capacity(count);
-        for _ in 0..count {
-            let (mut stream, _) = listener.accept().expect("accept request");
+        let mut requests = Vec::new();
+        let mut deadline = Instant::now() + Duration::from_secs(15);
+        while requests.len() < count {
+            let (mut stream, _) = match listener.accept() {
+                Ok(connection) => connection,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    if Instant::now() >= deadline {
+                        break;
+                    }
+                    thread::sleep(Duration::from_millis(10));
+                    continue;
+                }
+                Err(error) => panic!("accept request: {error}"),
+            };
+            deadline = Instant::now() + Duration::from_secs(15);
+            stream.set_nonblocking(false).expect("set blocking stream");
             stream
                 .set_read_timeout(Some(Duration::from_secs(5)))
                 .expect("set read timeout");
@@ -1013,22 +1037,604 @@ fn serve_routes(
                 request.extend_from_slice(&buf[..read]);
             }
             let request = String::from_utf8_lossy(&request).into_owned();
-            let (status, body) = routes
+            let matching: Vec<_> = routes
                 .iter()
-                .find(|(route, _)| request.starts_with(route))
-                .map_or(("404 Not Found", ""), |(_, body)| ("200 OK", body.as_str()));
+                .filter(|(route, _, _)| request.starts_with(route))
+                .collect();
+            let previous = matching.first().map_or(0, |(route, _, _)| {
+                requests
+                    .iter()
+                    .filter(|request: &&String| request.starts_with(route))
+                    .count()
+            });
+            let (status, body) = matching
+                .get(previous.min(matching.len().saturating_sub(1)))
+                .map_or((404, ""), |(_, status, body)| (*status, body.as_str()));
+            requests.push(request);
+            if status == 0 {
+                continue;
+            }
             let response = format!(
-                "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                "HTTP/1.1 {status} Stub\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
                 body.len(),
             );
             stream
                 .write_all(response.as_bytes())
                 .expect("write response");
-            requests.push(request);
         }
         requests
     });
     (format!("http://{addr}"), handle)
+}
+
+fn claude_redeem_usage() -> Value {
+    serde_json::json!({
+        "five_hour": {"utilization": 42, "resets_at": "2100-01-01T00:00:00Z"},
+        "seven_day": {"utilization": 7, "resets_at": "2100-01-02T00:00:00Z"},
+        "cedar_ember": {"eligible": true, "next_grant_id": "selected", "grants": [
+            {"id": "other", "resets_left": 1, "usable_now": true, "paused": true},
+            {"id": "selected", "resets_left": 1, "usable_now": true, "ends_at": "2100-02-01T00:00:00Z"}
+        ]}
+    })
+}
+
+#[derive(Default)]
+struct ClaudeRedeemOptions {
+    named_org: bool,
+    omit_cleared: bool,
+    fail_refresh: bool,
+}
+
+fn claude_redeem_fixture(
+    env: &Env,
+    usage: Value,
+    profile_status: u16,
+    claim_status: u16,
+    result: &str,
+    count: usize,
+    options: ClaudeRedeemOptions,
+) -> (String, thread::JoinHandle<Vec<String>>) {
+    env.install_agent_hooks("claude");
+    let native = env.home_root.join(".claude");
+    let spare = env.home_root.join("spare");
+    for (home, token) in [(&native, "default"), (&spare, "spare")] {
+        std::fs::create_dir_all(home).unwrap();
+        write_claude_credentials(home, token);
+    }
+    std::fs::copy(native.join("settings.json"), spare.join("settings.json")).unwrap();
+    write_fake_claude(&env.home_root.join("bin"));
+    std::fs::create_dir_all(env.rimz_home()).unwrap();
+    std::fs::write(
+        env.rimz_home().join("config.toml"),
+        format!(
+            "[resume]\nauto_redeem = true\n[accounts.claude.spare]\nhome = {:?}\n",
+            spare.to_str().unwrap()
+        ),
+    )
+    .unwrap();
+    let org = if options.named_org {
+        "spare-org"
+    } else {
+        "profile-org"
+    };
+    let claim_route = if options.named_org {
+        "POST /api/organizations/spare-org/reset_rate_limits "
+    } else {
+        "POST /api/organizations/profile-org/reset_rate_limits "
+    };
+    let mut refreshed = usage.clone();
+    if claim_status == 200 && result == "reset" {
+        refreshed["cedar_ember"]["grants"][1]["resets_left"] = 0.into();
+        refreshed["extra_usage"] = serde_json::json!({
+            "is_enabled": true, "used_credits": 725, "monthly_limit": 5000
+        });
+    }
+    let mut response = serde_json::json!({"result": result, "reason": "provider reason", "cleared": if result == "reset" {vec!["five_hour", "seven_day"]} else {Vec::new()}});
+    if options.omit_cleared {
+        response.as_object_mut().unwrap().remove("cleared");
+    }
+    let (origin, server) = serve_http_routes(
+        vec![
+            (
+                "GET /api/oauth/usage?cedar_ember=1&skip_spend=1 ",
+                200,
+                usage.to_string(),
+            ),
+            (
+                "GET /api/oauth/usage?cedar_ember=1 ",
+                if options.fail_refresh { 401 } else { 200 },
+                refreshed.to_string(),
+            ),
+            (
+                "GET /api/oauth/profile ",
+                profile_status,
+                serde_json::json!({"organization":{"uuid": org}}).to_string(),
+            ),
+            (
+                claim_route,
+                claim_status,
+                if result == "malformed" {
+                    "{".to_owned()
+                } else {
+                    response.to_string()
+                },
+            ),
+        ],
+        count,
+    );
+    (format!("{origin}/api/oauth/usage"), server)
+}
+
+fn claude_redeem_command(
+    env: &Env,
+    usage_url: &str,
+    name: &str,
+    flag: &str,
+) -> std::process::Output {
+    let mut command = env.rimz();
+    command.args(["accounts", "redeem", "claude"]);
+    if !name.is_empty() {
+        command.arg(name);
+    }
+    if !flag.is_empty() {
+        command.arg(flag);
+    }
+    command
+        .env("RIMZ_CLAUDE_OAUTH_USAGE_URL", usage_url)
+        .env("PATH", path_with_front(&env.home_root.join("bin")))
+        .bounded_output()
+        .unwrap()
+}
+
+fn claude_redeem_stamp(env: &Env, name: &str) -> std::path::PathBuf {
+    env.runtime_paths()
+        .shared_credits_path()
+        .with_file_name(format!("auto_redeem.claude@{name}.json"))
+}
+
+#[test]
+fn claude_redeem_dry_run_has_two_reads_no_forecast_and_no_durable_attempt() {
+    let env = Env::new();
+    let (url, server) = claude_redeem_fixture(
+        &env,
+        claude_redeem_usage(),
+        200,
+        200,
+        "reset",
+        2,
+        Default::default(),
+    );
+    let output = claude_redeem_command(&env, &url, "", "--dry-run");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout
+            .lines()
+            .any(|line| line.split_whitespace().take(2).eq(["credits:", "2;"]))
+            && stdout.contains("reset stays at"),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("forecast"), "{stdout}");
+    assert!(!claude_redeem_stamp(&env, "default").exists());
+    assert!(rimz::harness::assist_log::recent(&env.rimz_home().join("logs"), None).is_empty());
+    let requests = server.join().unwrap();
+    assert_eq!(requests.len(), 2, "{requests:?}");
+    assert!(requests.iter().all(|request| request.starts_with("GET ")));
+}
+
+#[test]
+fn claude_redeem_results_persist_once_and_refresh_only_a_reset() {
+    for (result, outcome, exit) in [
+        ("reset", "reset", 0),
+        ("already_used", "already_redeemed", 5),
+        ("not_limited", "nothing_to_reset", 4),
+        ("ineligible", "no_credit", 3),
+        ("unavailable", "no_credit", 3),
+        ("cooldown", "cooldown", 7),
+        ("new_result", "unknown", 6),
+    ] {
+        let env = Env::new();
+        let (url, server) = claude_redeem_fixture(
+            &env,
+            claude_redeem_usage(),
+            200,
+            200,
+            result,
+            if result == "reset" { 4 } else { 3 },
+            Default::default(),
+        );
+        let output = claude_redeem_command(&env, &url, "", "--yes");
+        assert_eq!(
+            output.status.code(),
+            Some(exit),
+            "{result}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains(&format!("claude@default: {outcome}")),
+            "{stdout}"
+        );
+        let stamp = read_json(claude_redeem_stamp(&env, "default"));
+        assert_eq!(stamp["outcome"], outcome);
+        let records = rimz::harness::assist_log::recent(&env.rimz_home().join("logs"), None);
+        assert_eq!(records.len(), 1);
+        let record = serde_json::to_value(&records[0]).unwrap();
+        assert_eq!(record["kind"], "claude");
+        assert_eq!(record["reason"], "manual");
+        assert_eq!(record["outcome"], outcome);
+        assert_eq!(record["windows_reset"], result == "reset");
+        let requests = server.join().unwrap();
+        assert_eq!(requests.len(), if result == "reset" { 4 } else { 3 });
+        assert!(requests[0].starts_with("GET /api/oauth/usage?cedar_ember=1&skip_spend=1 "));
+        let claims: Vec<_> = requests
+            .iter()
+            .filter(|request| request.starts_with("POST "))
+            .collect();
+        assert_eq!(claims.len(), 1);
+        let claim = claims[0];
+        assert!(claim.starts_with("POST /api/organizations/profile-org/reset_rate_limits "));
+        let headers = claim.split_once("\r\n\r\n").unwrap().0.to_lowercase();
+        for header in [
+            "authorization: bearer access-default",
+            "anthropic-beta: oauth-2025-04-20",
+            "user-agent: claude-cli/2.1.173 (external, cli)",
+            "content-type: application/json",
+            "accept: application/json",
+        ] {
+            assert!(headers.contains(header), "{headers}");
+        }
+        let body: Value = serde_json::from_str(claim.split_once("\r\n\r\n").unwrap().1).unwrap();
+        assert_eq!(body.as_object().unwrap().len(), 3);
+        assert_eq!(body["program"], "cedar_ember");
+        assert_eq!(body["grant_id"], "selected");
+        assert_eq!(body["request_id"], stamp["request_id"]);
+        assert_eq!(body["request_id"], record["request_id"]);
+        assert_eq!(
+            uuid::Uuid::parse_str(body["request_id"].as_str().unwrap())
+                .unwrap()
+                .get_version_num(),
+            7
+        );
+        if result == "reset" {
+            assert!(requests[3].starts_with("GET /api/oauth/usage?cedar_ember=1 "));
+            assert_eq!(
+                read_json(env.runtime_paths().shared_credits_path())["logins"]["claude@default"]["extra_credits"]
+                    ["known"]["used_usd"],
+                7.25
+            );
+            assert_eq!(
+                read_json(env.runtime_paths().shared_credits_path())["logins"]["claude@default"]["reset_credits"]
+                    ["count"],
+                1
+            );
+            let output = env
+                .rimz()
+                .args(["stats", "--json"])
+                .bounded_output()
+                .unwrap();
+            assert!(output.status.success());
+            let stats: Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(stats["assists"]["rollup"]["manual_redeems"], 1, "{stats}");
+            assert_eq!(stats["assists"]["rollup"]["manual_resets"], 1);
+        }
+    }
+}
+
+#[test]
+fn claude_redeem_named_account_uses_only_its_credentials() {
+    let env = Env::new();
+    let (url, server) = claude_redeem_fixture(
+        &env,
+        claude_redeem_usage(),
+        200,
+        200,
+        "reset",
+        4,
+        ClaudeRedeemOptions {
+            named_org: true,
+            ..Default::default()
+        },
+    );
+    let output = claude_redeem_command(&env, &url, "spare", "--yes");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let requests = server.join().unwrap();
+    assert_eq!(requests.len(), 4);
+    assert!(requests[2].starts_with("POST /api/organizations/spare-org/reset_rate_limits "));
+    assert!(requests.iter().all(|request| {
+        request
+            .to_lowercase()
+            .contains("authorization: bearer access-spare")
+            && !request.contains("access-default")
+    }));
+    assert_eq!(
+        read_json(claude_redeem_stamp(&env, "spare"))["outcome"],
+        "reset"
+    );
+}
+
+#[test]
+fn claude_redeem_holds_do_not_reserve_or_record() {
+    for (field, value, code, reason) in [
+        ("paused", true.into(), 3, "paused"),
+        (
+            "cooldown_until",
+            "2100-01-01T00:00:00Z".into(),
+            7,
+            "cooldown",
+        ),
+    ] {
+        let env = Env::new();
+        let mut usage = claude_redeem_usage();
+        if field == "paused" {
+            usage["cedar_ember"]["grants"][1][field] = value;
+        } else {
+            usage["cedar_ember"][field] = value;
+        }
+        let (url, server) =
+            claude_redeem_fixture(&env, usage, 200, 200, "reset", 2, Default::default());
+        let output = claude_redeem_command(&env, &url, "", "--yes");
+        assert_eq!(
+            output.status.code(),
+            Some(code),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains("hold")
+                && stdout.contains(reason)
+                && stdout
+                    .lines()
+                    .any(|line| line.split_whitespace().take(2).eq(["credits:", "2;"])),
+            "{stdout}"
+        );
+        assert!(!claude_redeem_stamp(&env, "default").exists());
+        assert!(rimz::harness::assist_log::recent(&env.rimz_home().join("logs"), None).is_empty());
+        assert_eq!(server.join().unwrap().len(), 2);
+    }
+}
+
+#[test]
+fn claude_redeem_unknown_transport_outcomes_leave_a_live_reservation() {
+    for status in [503, 0, 200] {
+        let env = Env::new();
+        let (url, server) = claude_redeem_fixture(
+            &env,
+            claude_redeem_usage(),
+            200,
+            status,
+            if status == 200 { "malformed" } else { "reset" },
+            5,
+            Default::default(),
+        );
+        let output = claude_redeem_command(&env, &url, "", "--yes");
+        assert_eq!(output.status.code(), Some(1));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("outcome is unknown") && stderr.contains("Settings > Usage"),
+            "{stderr}"
+        );
+        let stamp = read_json(claude_redeem_stamp(&env, "default"));
+        assert!(stamp.get("outcome").is_none());
+        let records = rimz::harness::assist_log::recent(&env.rimz_home().join("logs"), None);
+        assert_eq!(records.len(), 1);
+        assert!(
+            serde_json::to_value(&records[0]).unwrap()["error"]
+                .as_str()
+                .unwrap()
+                .contains("outcome is unknown")
+        );
+        let retry = claude_redeem_command(&env, &url, "", "--yes");
+        assert_eq!(retry.status.code(), Some(1));
+        assert!(String::from_utf8_lossy(&retry.stderr).contains("pending attempt"));
+        assert_eq!(read_json(claude_redeem_stamp(&env, "default")), stamp);
+        let requests = server.join().unwrap();
+        assert_eq!(requests.len(), 5);
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|request| request.starts_with("POST "))
+                .count(),
+            1
+        );
+    }
+}
+
+#[test]
+fn claude_redeem_profile_and_credential_failures_spend_nothing() {
+    for profile_status in [404, 401] {
+        let env = Env::new();
+        let (url, server) = claude_redeem_fixture(
+            &env,
+            claude_redeem_usage(),
+            profile_status,
+            200,
+            "reset",
+            2,
+            Default::default(),
+        );
+        let output = claude_redeem_command(&env, &url, "", "--yes");
+        assert_eq!(output.status.code(), Some(1));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(&format!(
+                "claude OAuth profile HTTP status {profile_status}"
+            )),
+            "{stderr}"
+        );
+        assert!(!claude_redeem_stamp(&env, "default").exists());
+        assert_eq!(server.join().unwrap().len(), 2);
+    }
+    let env = Env::new();
+    let (url, server) = claude_redeem_fixture(
+        &env,
+        claude_redeem_usage(),
+        200,
+        200,
+        "reset",
+        0,
+        Default::default(),
+    );
+    let path = env.home_root.join(".claude/.credentials.json");
+    let mut credentials = read_json(path.clone());
+    credentials["claudeAiOauth"]["expiresAt"] = 1.into();
+    std::fs::write(path, credentials.to_string()).unwrap();
+    let output = claude_redeem_command(&env, &url, "", "--yes");
+    assert_eq!(output.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("token is expired"));
+    assert!(!claude_redeem_stamp(&env, "default").exists());
+    assert!(server.join().unwrap().is_empty());
+}
+
+#[test]
+fn claude_redeem_missing_cleared_and_failed_refresh_still_complete_the_claim() {
+    let env = Env::new();
+    let (url, server) = claude_redeem_fixture(
+        &env,
+        claude_redeem_usage(),
+        200,
+        200,
+        "reset",
+        4,
+        ClaudeRedeemOptions {
+            omit_cleared: true,
+            fail_refresh: true,
+            ..Default::default()
+        },
+    );
+    let output = claude_redeem_command(&env, &url, "", "--yes");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stderr).contains("usage refresh failed"));
+    assert_eq!(
+        read_json(claude_redeem_stamp(&env, "default"))["outcome"],
+        "reset"
+    );
+    let records = rimz::harness::assist_log::recent(&env.rimz_home().join("logs"), None);
+    assert_eq!(
+        serde_json::to_value(&records[0]).unwrap()["windows_reset"],
+        false
+    );
+    assert_eq!(server.join().unwrap().len(), 4);
+}
+
+#[test]
+fn claude_redeem_live_reservation_and_nonterminal_refuse_without_claiming() {
+    let env = Env::new();
+    let (url, server) = claude_redeem_fixture(
+        &env,
+        claude_redeem_usage(),
+        200,
+        200,
+        "reset",
+        2,
+        Default::default(),
+    );
+    let output = claude_redeem_command(&env, &url, "", "");
+    assert_eq!(output.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("--yes"));
+    let path = claude_redeem_stamp(&env, "default");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, serde_json::json!({"attempted_at": jiff::Timestamp::now(), "request_id": "pending", "reason": "manual"}).to_string()).unwrap();
+    let output = claude_redeem_command(&env, &url, "", "--yes");
+    assert_eq!(output.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("pending attempt"));
+    assert_eq!(server.join().unwrap().len(), 2);
+}
+
+#[test]
+fn claude_redeem_declined_terminal_confirmation_spends_nothing() {
+    let env = Env::new();
+    let (url, server) = claude_redeem_fixture(
+        &env,
+        claude_redeem_usage(),
+        200,
+        200,
+        "reset",
+        2,
+        Default::default(),
+    );
+    let pty = nix::pty::openpty(None, None).unwrap();
+    let mut master = std::fs::File::from(pty.master);
+    master.write_all(b"n\n").unwrap();
+    let output = env
+        .rimz()
+        .args(["accounts", "redeem", "claude"])
+        .stdin(std::process::Stdio::from(pty.slave))
+        .env("RIMZ_CLAUDE_OAUTH_USAGE_URL", url)
+        .env("PATH", path_with_front(&env.home_root.join("bin")))
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stderr).contains("nothing spent"));
+    assert!(!claude_redeem_stamp(&env, "default").exists());
+    assert!(rimz::harness::assist_log::recent(&env.rimz_home().join("logs"), None).is_empty());
+    assert_eq!(server.join().unwrap().len(), 2);
+}
+
+#[test]
+fn claude_redeem_cooldown_uses_local_preview_time() {
+    let env = Env::new();
+    let mut usage = claude_redeem_usage();
+    usage["cedar_ember"]["cooldown_until"] = "2100-01-01T00:00:00Z".into();
+    let (url, server) =
+        claude_redeem_fixture(&env, usage, 200, 200, "reset", 2, Default::default());
+    let output = env
+        .rimz()
+        .args(["accounts", "redeem", "claude", "--yes"])
+        .env("RIMZ_CLAUDE_OAUTH_USAGE_URL", url)
+        .env("PATH", path_with_front(&env.home_root.join("bin")))
+        .env("TZ", "America/New_York")
+        .bounded_output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(7));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("cooldown until 2099-12-31 19:00:00 -05:00"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("reset stays at 2099-12-31 19:00:00 -05:00"),
+        "{stdout}"
+    );
+    assert!(!claude_redeem_stamp(&env, "default").exists());
+    assert_eq!(server.join().unwrap().len(), 2);
+}
+
+#[test]
+fn accounts_redeem_kind_without_named_accounts_lists_supported_kinds() {
+    for kind in ["grok", "claud"] {
+        let env = Env::new();
+        let output = env
+            .rimz()
+            .args(["accounts", "redeem", kind, "--dry-run"])
+            .bounded_output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(&format!(
+                "{kind} has no named accounts; accounts are supported for claude, codex"
+            )),
+            "{stderr}"
+        );
+    }
 }
 
 fn serve_after_failures(

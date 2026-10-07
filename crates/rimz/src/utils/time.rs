@@ -12,6 +12,14 @@ pub fn unix_now_ms() -> u64 {
         .min(u128::from(u64::MAX)) as u64
 }
 
+/// Format a wall-clock timestamp in local time, including its UTC offset.
+pub fn format_local_timestamp(timestamp: jiff::Timestamp) -> String {
+    timestamp
+        .to_zoned(jiff::tz::TimeZone::system())
+        .strftime("%Y-%m-%d %H:%M:%S %:z")
+        .to_string()
+}
+
 /// A nonnegative duration floored to its largest unit: seconds, minutes, hours, or days.
 pub(crate) fn format_duration_coarse(seconds: i64) -> String {
     let seconds = seconds.max(0);

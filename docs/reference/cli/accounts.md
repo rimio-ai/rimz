@@ -1,6 +1,6 @@
 # Accounts CLI
 
-`rimz accounts` declares, selects, lists, and removes the named provider accounts a room can launch into, and redeems Codex reset credits by hand. A named account is a separate provider home: RimZ launches Claude with `CLAUDE_CONFIG_DIR`, and Codex with `CODEX_HOME`, set to that home. Credentials stay apart; `add` and every launch link the rest of a `shared` account, or the settings of a `standalone` one, to the provider's own home. The `default` account is the provider's own home, resolved the way the provider CLI resolves it, and is never declared.
+`rimz accounts` declares, selects, lists, and removes the named provider accounts a room can launch into, and redeems Claude or Codex reset credits by hand. A named account is a separate provider home: RimZ launches Claude with `CLAUDE_CONFIG_DIR`, and Codex with `CODEX_HOME`, set to that home. Credentials stay apart; `add` and every launch link the rest of a `shared` account, or the settings of a `standalone` one, to the provider's own home. The `default` account is the provider's own home, resolved the way the provider CLI resolves it, and is never declared.
 
 The commands work inside or outside a room, except bare `use`, which requires running inside one. Bare `use` writes only the current room's launch default for that provider, leaving running agents and machine and project configuration unchanged. `add`, `use --global`, and `remove` write the machine `config.toml`; `add` also writes into the account home. A room picks its defaults at birth and keeps them across restarts ([Accounts at start](./getting-started.md#accounts)), so the machine selection reaches only rooms born after it. Inside its own multiplexer session, `start --account` refuses and names `accounts use` instead. The workflow is in the [accounts guide](../../guide/accounts.md).
 
@@ -233,16 +233,20 @@ rimz accounts redeem <KIND> [NAME] [--dry-run] [--yes]
 
 | Argument or flag | Effect |
 | --- | --- |
-| `KIND` | `codex`. Claude is refused before any provider read; spend Claude limit resets in Claude's Settings > Usage. |
+| `KIND` | `codex` or `claude`. |
 | `NAME` | A declared account or `default`. When omitted, the account a launch here uses (room, project, then machine selection), or `default` if none is selected. |
 | `--dry-run` | Read and print the preview, then exit 0 without prompting, stamping, or spending. |
 | `--yes` | Spend without prompting. Required for a non-terminal stdin unless `--dry-run` is set. |
 
-The preview on stdout names the resolved login, banked credits and soonest expiry (countdown and wall clock), then each unscoped 5h and 7d window's used percentage and reset countdown, or `∞` for a window the provider is not enforcing, which gets no redemption line. It shows what redemption does: Codex refills now and restarts each reset a full window from now. A free reset closer than `resume.auto_redeem_min_gain` produces a warning about giving it up, not a refusal. The final line is auto-redeem's forecast (`off`, `armed`, or `holding`) if the longest window ran dry now, not a verdict on a live agent.
+Other kinds refuse with `<kind> has no named accounts; accounts are supported for claude, codex`, exit 1.
 
-Without `--yes`, stderr asks `redeem one credit now? [y/N]`. Declining exits 0 with `nothing spent`. Zero credits exits 3 after the preview without prompting (`--dry-run` still exits 0). With `RIMZ_OAUTH_USAGE_OFFLINE` enabled, the command refuses before a provider read and names the switch to unset.
+The preview on stdout names the resolved login, banked credits and soonest expiry (countdown and wall clock), then each unscoped 5h and 7d window's used percentage and reset countdown, or `∞` for a window the provider is not enforcing, which gets no redemption line. Codex refills now and restarts each reset a full window from now. A free reset closer than `resume.auto_redeem_min_gain` produces a warning about giving it up, not a refusal. Codex's final line is auto-redeem's forecast (`off`, `armed`, or `holding`) if the longest window ran dry now, not a verdict on a live agent. Claude refills now while its reset stays at the displayed time, with no forecast: automatic Claude redemption is not supported. A Claude `hold` row explains why banked credits cannot be spent now; a cooldown deadline uses the same local wall-clock format as the reset rows.
+
+Without `--yes`, stderr asks `redeem one credit now? [y/N]`. Declining exits 0 with `nothing spent`. A held Claude preview prints `<outcome>: <reason>` and exits 3 (`no_credit`) or 7 (`cooldown`) without prompting, stamping, or recording an attempt. Zero credits exits 3 after the preview without prompting. `--dry-run` still exits 0, including when held. With `RIMZ_OAUTH_USAGE_OFFLINE` enabled, the command refuses before a provider read and names the switch to unset.
 
 Confirmation takes the same account-wide lock as auto-redeem, without fetching the preview again. If the shared redeem stamp changed since the preview (another redemption or an auto-redeem attempt started or finished while you decided), or it is a live helper reservation, the run refuses and asks you to rerun. Otherwise manual redemption bypasses auto-redeem's cooldown. The provider can still answer `already_redeemed` or `no_credit` if the prepared credit changed while you decided. Each attempt is recorded in `rimz stats --assists` with reason `manual`, not counted as an automation assist.
+
+Claude preview reads usage and the account's organization profile using its existing OAuth credentials; RimZ never refreshes those credentials. Confirmation sends exactly one claim POST, never retried. A transport failure, unreadable or malformed response, or non-200 status leaves the outcome unknown: check Claude's Settings > Usage before retrying. The pending reservation prevents another attempt for ten minutes. Only a confirmed `reset` triggers a fresh usage read.
 
 | Exit | Outcome |
 | --- | --- |
@@ -251,6 +255,7 @@ Confirmation takes the same account-wide lock as auto-redeem, without fetching t
 | `4` | `nothing_to_reset`; the credit stays available. |
 | `5` | `already_redeemed`. |
 | `6` | `unknown`. |
+| `7` | `cooldown`. |
 | `1` | Refused or failed; the error and fix are on stderr. |
 
 ## `remove`

@@ -681,7 +681,21 @@ With `cedar_ember=1`, live probes on 2026-09-26 returned banked limit resets in 
 }
 ```
 
-Anthropic's [limit-reset help article](https://support.claude.com/en/articles/17007452), read 2026-09-26, describes redemption under Settings > Usage on web and desktop, not Claude Code. A reset refills the chosen allowance without moving its usual weekly reset time. The article does not define the wire's `paused` or cooldown semantics. The Claude Code 2.1.291 binary carries a hidden `/limit-reset` command that consumes through `POST /api/organizations/{org}/reset_rate_limits`. This is a binary observation, unverified live; RimZ does not use the endpoint.
+Anthropic's [limit-reset help article](https://support.claude.com/en/articles/17007452), read 2026-09-26, describes redemption under Settings > Usage on web and desktop, not Claude Code. A reset refills the chosen allowance without moving its usual weekly reset time. The article does not define the wire's `paused` or cooldown semantics. The Claude Code 2.1.291 binary carries a hidden `/limit-reset` command that consumes through `POST /api/organizations/{org}/reset_rate_limits`; this is a binary observation, unverified live.
+
+[CodexBar issue 3895](https://github.com/steipete/CodexBar/issues/3895) reports Claude Code 2.1.280 reading `/api/oauth/usage?cedar_ember=1&skip_spend=1` with the bearer, beta, and CLI User-Agent headers above. Its grant fields include `id`, `resets_left`, `starts_at`, `ends_at`, `paused`, `usable_now`, and `use_requires_limit`; the program carries `eligible`, `ineligible_reason`, `at_limit`, `next_grant_id`, and `cooldown_until`. This is primary observer evidence, not an Anthropic public API guarantee. These observations do not establish whether `skip_spend=1` preserves `extra_usage`; RimZ's [read policy](../../internals/agents/adapter_claude.md#oauth-usage-probe) therefore scopes the flag to the manual preview.
+
+[Pane's implementation at a55578c7](https://github.com/ItsJazii/pane/blob/a55578c7b10c2ef1d136dc4decaefcaa0fb7a15e/src-tauri/src/providers/claude.rs) reads `GET /api/oauth/profile`, extracts `organization.uuid`, then sends one `POST /api/organizations/{org}/reset_rate_limits`. Both requests use the same bearer, beta, and CLI User-Agent headers; the claim adds `Content-Type: application/json`. Observed request and response shapes:
+
+```json
+{"program":"cedar_ember","grant_id":"<next_grant_id>","request_id":"<uuid>"}
+```
+
+```json
+{"result":"reset","reason":"optional explanation","cleared":["five_hour","seven_day"]}
+```
+
+Pane decodes `reset`, `already_used`, `not_limited`, `ineligible`, `unavailable`, and `cooldown`; `reason` and `cleared` may be absent. Its claimability checks use the selected grant, usability, pause, and cooldown fields. These are source observations, not live claim verification. Server request-id idempotency is unverified. RimZ's manual action uses this wire but does not retry a claim.
 
 ## Transcript JSONL
 

@@ -25,8 +25,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::RuntimePaths;
 use crate::agents::account::{
-    PreparedRedemption, ProviderCapacity, RedemptionCode, ResetCreditResult, WindowSpan,
-    prepare_reset_credit_redemption,
+    PreparedRedemption, ProviderCapacity, RedeemHold, RedemptionCode, ResetCreditResult,
+    WindowSpan, prepare_reset_credit_redemption,
 };
 use crate::agents::{
     AccountUsageIdentity, AccountUsageSnapshot, AgentState, ProviderLogin, RateLimitWindow,
@@ -35,7 +35,7 @@ use crate::agents::{
 use crate::config::ResumeConfig;
 use crate::disk::atomic::write_temp_then_rename_cache;
 use crate::harness::assist_log::AssistWindowReset;
-use crate::ids::{LoginKey, WorkspaceId};
+use crate::ids::{AgentKind, LoginKey, WorkspaceId};
 use crate::store::snapshot::{RedeemForecast, SidebarProviderPanel, SidebarSnapshot};
 
 const CODEX_KIND: &str = "codex";
@@ -80,10 +80,15 @@ pub struct AutoRedeemRequest {
 }
 
 /// Whether auto-redeem has anything to act on here: the Codex CLI, the only
-/// provider with reset credits, is installed on this machine.
+/// provider with automated redemption, is installed on this machine.
 pub fn provider_located() -> bool {
     crate::agents::spec_by_kind(CODEX_KIND)
         .is_some_and(|spec| crate::agents::locate_binary(spec).is_some())
+}
+
+/// Whether this provider is served by the automatic redemption path.
+pub fn supports_kind(kind: &AgentKind) -> bool {
+    kind.as_str() == CODEX_KIND
 }
 
 impl RedeemReason {
@@ -127,8 +132,10 @@ pub enum AutoRedeemErr {
     Lock(#[from] crate::disk::lock::LockErr),
     #[error("writing the shared auto-redeem stamp: {0}")]
     Stamp(#[from] crate::disk::atomic::AtomicErr),
-    #[error("Codex auto-redeem request failed: {0}")]
-    Codex(String),
+    #[error("reset-credit request failed: {0}")]
+    Provider(String),
+    #[error("reset-credit redemption held: {}", .0.reason)]
+    Held(RedeemHold),
     #[error("{error}")]
     Attempted {
         report: Box<RedeemReport>,
@@ -183,17 +190,14 @@ pub fn prepare_manual_redeem(
     login_env: &BTreeMap<String, String>,
     config: &ResumeConfig,
 ) -> Result<ManualRedeem, AutoRedeemErr> {
-    if key.kind.as_str() != CODEX_KIND {
-        return Err(AutoRedeemErr::UnsupportedKind(key.kind.to_string()));
-    }
     let stamp_at_read = read_stamp(&runtime.shared_auto_redeem_path(key));
     let read_at = Timestamp::now();
     let prepared = prepare_reset_credit_redemption(
-        CODEX_KIND,
+        key.kind.as_str(),
         |_, _| Some(RedeemReason::Manual),
         login_env,
     )
-    .map_err(AutoRedeemErr::Codex)?
+    .map_err(AutoRedeemErr::Provider)?
     // The unconditional manual verdict cannot decline an offered action.
     .expect("the manual verdict always returns Some");
     let capacity = prepared.capacity.as_ref();
@@ -206,14 +210,18 @@ pub fn prepare_manual_redeem(
         .collect();
     Ok(ManualRedeem {
         natural_reset: capacity.and_then(|capacity| capacity.latest_spent_window_reset(read_at)),
-        forecast: redeem_forecast(
-            capacity,
-            &credits,
-            rate,
-            min_gain,
-            config.auto_redeem,
-            read_at,
-        ),
+        forecast: supports_kind(&key.kind)
+            .then(|| {
+                redeem_forecast(
+                    capacity,
+                    &credits,
+                    rate,
+                    min_gain,
+                    config.auto_redeem,
+                    read_at,
+                )
+            })
+            .flatten(),
         credits,
         windows,
         min_gain,
@@ -223,6 +231,10 @@ pub fn prepare_manual_redeem(
 }
 
 impl ManualRedeem {
+    pub fn hold(&self) -> Option<&RedeemHold> {
+        self.prepared.hold()
+    }
+
     /// Lock, apply the stamp race rule, reserve, consume one credit, stamp the outcome.
     pub fn consume(
         self,
@@ -230,6 +242,9 @@ impl ManualRedeem {
         key: &LoginKey,
         request_id: uuid::Uuid,
     ) -> Result<Redeemed, AutoRedeemErr> {
+        if let Some(hold) = self.hold() {
+            return Err(AutoRedeemErr::Held(hold.clone()));
+        }
         let _guard =
             crate::disk::lock::WorkspaceLock::acquire(&runtime.shared_auto_redeem_lock(key))?;
         let report = redemption_report(RedeemReason::Manual, &self.credits, self.natural_reset);
@@ -265,6 +280,7 @@ fn consume_manual_redemption(
         return Err(AutoRedeemErr::RacingAttempt);
     }
     finish_redemption(
+        key,
         &stamp_path,
         RedeemStamp {
             attempted_at: now,
@@ -851,7 +867,7 @@ pub fn execute_auto_redeem(
         },
         &logins.env(&login),
     );
-    let action = action.map_err(AutoRedeemErr::Codex)?;
+    let action = action.map_err(AutoRedeemErr::Provider)?;
     let Some(action) = action else {
         return Ok(None);
     };
@@ -861,6 +877,7 @@ pub fn execute_auto_redeem(
         .and_then(|capacity| capacity.latest_spent_window_reset(now));
     let report = redemption_report(action.decision, &action.credits, natural_reset);
     let redeemed = finish_redemption(
+        key,
         &stamp_path,
         RedeemStamp {
             attempted_at: now,
@@ -875,7 +892,7 @@ pub fn execute_auto_redeem(
     if let Some(error) = &redeemed.refresh_error {
         return Err(attempted_error(
             &redeemed.report,
-            AutoRedeemErr::Codex(error.clone()),
+            AutoRedeemErr::Provider(error.clone()),
         ));
     }
     Ok(Some(redeemed))
@@ -898,6 +915,7 @@ fn redemption_report(
 }
 
 fn finish_redemption(
+    key: &LoginKey,
     stamp_path: &Path,
     mut stamp: RedeemStamp,
     mut report: RedeemReport,
@@ -905,7 +923,7 @@ fn finish_redemption(
     consume: impl FnOnce() -> Result<ResetCreditResult, String>,
 ) -> Result<Redeemed, AutoRedeemErr> {
     let action =
-        consume_reserved_reset_credit(stamp_path, &stamp, &report, requested_reason, consume)?;
+        consume_reserved_reset_credit(key, stamp_path, &stamp, &report, requested_reason, consume)?;
     report.outcome = Some(action.outcome);
     report.windows_reset = action.windows_reset > 0;
     stamp.outcome = Some(action.outcome.as_str().to_owned());
@@ -913,7 +931,7 @@ fn finish_redemption(
 
     tracing::info!(
         target: crate::observability::BREADCRUMB_TARGET,
-        kind = CODEX_KIND,
+        kind = key.kind.as_str(),
         reason = report.reason.as_str(),
         outcome = action.outcome.as_str(),
         windows_reset = action.windows_reset,
@@ -990,6 +1008,7 @@ fn redeem_login(
 }
 
 fn consume_reserved_reset_credit(
+    key: &LoginKey,
     stamp_path: &Path,
     stamp: &RedeemStamp,
     report: &RedeemReport,
@@ -999,12 +1018,12 @@ fn consume_reserved_reset_credit(
     write_stamp(stamp_path, stamp).map_err(|error| attempted_error(report, error))?;
     tracing::info!(
         target: crate::observability::BREADCRUMB_TARGET,
-        kind = CODEX_KIND,
+        kind = key.kind.as_str(),
         requested_reason = requested_reason.as_str(),
         reason = report.reason.as_str(),
         "auto-redeem: consuming reset credit",
     );
-    consume().map_err(|message| attempted_error(report, AutoRedeemErr::Codex(message)))
+    consume().map_err(|message| attempted_error(report, AutoRedeemErr::Provider(message)))
 }
 
 fn attempted_error(report: &RedeemReport, error: AutoRedeemErr) -> AutoRedeemErr {

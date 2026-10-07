@@ -1243,6 +1243,13 @@ impl crate::agents::capabilities::ContextCapability for ClaudeAdapter {
 }
 
 impl crate::agents::capabilities::AccountCapability for ClaudeAdapter {
+    fn prepare_reset_credit(
+        &self,
+        login_env: &BTreeMap<String, String>,
+    ) -> std::result::Result<crate::agents::account::ResetCreditOffer, String> {
+        oauth_usage::prepare_reset_credit(login_env).map_err(|error| error.to_string())
+    }
+
     fn probe_account(
         &self,
         login_env: &BTreeMap<String, String>,

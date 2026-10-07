@@ -19,13 +19,14 @@ use rimz::agents::{
 };
 use rimz::config::{AccountHistory, AccountsConfig, ConfigEditor, MachineConfig, NamedAccount};
 use rimz::harness::assist_log::{Assist, AssistRecord};
-use rimz::harness::auto_redeem::{RedeemReport, prepare_manual_redeem};
+use rimz::harness::auto_redeem::{RedeemReport, prepare_manual_redeem, supports_kind};
 use rimz::ids::{AgentKind, LoginKey, LoginName, RoomLogins};
 use rimz::room::{AccountStanding, Deciding, Scopes};
 use rimz::sidebar::enrich::provider_panel_for_login;
 use rimz::sidebar::refresh::{query_provider_accounts, refresh_provider_usage};
 use rimz::store::snapshot::RedeemForecast;
 use rimz::utils::path::normalize_path_lexical;
+use rimz::utils::time::format_local_timestamp;
 use serde::Serialize;
 
 use super::spinner::Spinner;
@@ -40,16 +41,8 @@ fn redeem_exit_code(outcome: RedemptionCode) -> i32 {
         RedemptionCode::NothingToReset => 4,
         RedemptionCode::AlreadyRedeemed => 5,
         RedemptionCode::Unknown => 6,
+        RedemptionCode::Cooldown => 7,
     }
-}
-
-fn check_redeem_kind(kind: &AgentKind) -> Result<()> {
-    if kind.as_str() == "claude" {
-        bail!(
-            "Claude limit resets cannot be spent from RimZ; redeem them in Claude's Settings > Usage"
-        );
-    }
-    Ok(())
 }
 
 #[derive(Debug, Args)]
@@ -97,9 +90,9 @@ enum AccountsSubcmd {
         #[arg(long)]
         json: bool,
     },
-    /// Preview and spend one Codex reset credit by hand.
+    /// Preview and spend one reset credit by hand (claude or codex).
     Redeem {
-        /// Provider kind: codex. Claude limit resets must be spent in Settings > Usage.
+        /// Provider kind: claude or codex.
         kind: String,
         /// Account name; defaults to the account a launch here uses.
         name: Option<LoginName>,
@@ -177,7 +170,6 @@ fn redeem(
     dry_run: bool,
     yes: bool,
 ) -> Result<()> {
-    check_redeem_kind(kind)?;
     if !dry_run && !yes && !std::io::stdin().is_terminal() {
         bail!("pass --yes to confirm without a terminal, or --dry-run to preview without spending");
     }
@@ -217,9 +209,19 @@ fn redeem(
         preview.min_gain,
         Timestamp::now(),
     )?;
+    if let Some(hold) = preview.hold() {
+        let mut rows = render::KeyVals::new().indent(2);
+        rows.push("hold", render::cell(&hold.reason));
+        rows.render(&mut out)?;
+    }
     out.flush()?;
     if dry_run {
         return Ok(());
+    }
+    if let Some(hold) = preview.hold() {
+        writeln!(out, "{}: {}", hold.code.as_str(), hold.reason)?;
+        out.flush()?;
+        std::process::exit(redeem_exit_code(hold.code));
     }
     if preview.credits.count == 0 {
         writeln!(out, "no_credit: nothing spent")?;
@@ -237,7 +239,7 @@ fn redeem(
             if let Some(report) = error.attempted_report() {
                 append_manual_report(&key, request_id, report, Some(error.to_string()));
             }
-            return Err(error).context("redeeming Codex reset credit");
+            return Err(error).with_context(|| format!("redeeming {} reset credit", key.kind));
         }
     };
     if let Some((identity, snapshot)) = redeemed.usage {
@@ -288,11 +290,10 @@ fn write_redeem_preview(
     let expiry = credits
         .soonest_expiry
         .map(|expiry| {
-            let local = expiry.to_zoned(jiff::tz::TimeZone::system());
             format!(
                 "; soonest expiry {} ({})",
                 render::rel_until(expiry, now),
-                local.strftime("%Y-%m-%d %H:%M:%S %:z")
+                format_local_timestamp(expiry)
             )
         })
         .unwrap_or_default();
@@ -338,9 +339,7 @@ fn write_redeem_preview(
                 |reset| {
                     format!(
                         "refills now, reset stays at {}",
-                        reset
-                            .to_zoned(jiff::tz::TimeZone::system())
-                            .strftime("%Y-%m-%d %H:%M:%S %:z")
+                        format_local_timestamp(reset)
                     )
                 },
             ),
@@ -364,6 +363,9 @@ fn write_redeem_preview(
                 .fg(render::palette::warn()),
             );
         }
+    }
+    if !supports_kind(&key.kind) {
+        return rows.render(w);
     }
     let forecast = match forecast {
         Some(RedeemForecast::Manual) => "off",
