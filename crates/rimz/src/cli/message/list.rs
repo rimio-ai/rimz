@@ -560,7 +560,8 @@ pub(super) fn message_sender(
         *channel =
             rimz::address::record_lane_label(channel.as_deref(), root_channel).map(str::to_owned);
     }
-    rimz::address::agent_sender_handle(&sender, agents, None).unwrap_or_else(|| sender.render())
+    rimz::address::agent_sender_handle(&sender, agents, None, root_channel)
+        .unwrap_or_else(|| sender.render())
 }
 
 pub(super) fn scoped_handle(rendered: String, filter_channel: Option<&str>) -> String {

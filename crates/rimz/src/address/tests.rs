@@ -360,7 +360,7 @@ fn pane_owner_shadows_co_resident_session_from_every_address() {
         channel: Some("main".to_owned()),
     };
     assert_eq!(
-        message_header(&sender, &peers, Some("main")).as_deref(),
+        message_header(&sender, &peers, Some("main"), None).as_deref(),
         Some("Type: AGENT_MESSAGE\nFrom: @coder (codex)\nContent:\n")
     );
 }
@@ -921,7 +921,7 @@ fn message_header_parser_round_trips_attributed_senders() {
             role: role.map(str::to_owned),
             channel: None,
         };
-        let prompt = message_header(&sender, &[], None).unwrap() + body;
+        let prompt = message_header(&sender, &[], None, None).unwrap() + body;
         assert_eq!(
             prompt,
             format!("Type: AGENT_MESSAGE\nFrom: {expected}\nContent:\n{body}")
@@ -944,13 +944,13 @@ fn message_header_parser_round_trips_attributed_senders() {
         channel: Some("design".to_owned()),
     };
 
-    let same_channel = message_header(&sender, &[], Some("design")).unwrap() + body;
+    let same_channel = message_header(&sender, &[], Some("design"), None).unwrap() + body;
     assert_eq!(
         parse_message_header(&same_channel),
         Some((HeaderKind::Agent, "@codex".to_owned(), body.to_owned()))
     );
 
-    let cross_channel = message_header(&sender, &[], Some("main")).unwrap() + body;
+    let cross_channel = message_header(&sender, &[], Some("main"), None).unwrap() + body;
     assert_eq!(
         parse_message_header(&cross_channel),
         Some((
@@ -960,17 +960,20 @@ fn message_header_parser_round_trips_attributed_senders() {
         ))
     );
 
-    let human = message_header(&MessageSender::Human, &[], None).unwrap() + body;
+    let human = message_header(&MessageSender::Human, &[], None, None).unwrap() + body;
     assert_eq!(
         parse_message_header(&human),
         Some((HeaderKind::User, "@user".to_owned(), body.to_owned()))
     );
-    assert_eq!(message_header(&MessageSender::System, &[], None), None);
+    assert_eq!(
+        message_header(&MessageSender::System, &[], None, None),
+        None
+    );
 
     let subagent = MessageSender::Harness {
         notice: HarnessNotice::SubagentReport,
     };
-    let report = message_header(&subagent, &[], None).unwrap() + body;
+    let report = message_header(&subagent, &[], None, None).unwrap() + body;
     assert_eq!(
         parse_message_header(&report),
         Some((HeaderKind::Subagent, "@rimz".to_owned(), body.to_owned()))
@@ -986,7 +989,7 @@ fn message_header_parser_round_trips_attributed_senders() {
         ),
     ] {
         let sender = MessageSender::Harness { notice };
-        let prompt = message_header(&sender, &[], None).unwrap() + body;
+        let prompt = message_header(&sender, &[], None, None).unwrap() + body;
         assert_eq!(
             prompt,
             format!("Type: {header_type}\nFrom: @rimz\nContent:\n{body}")
@@ -1017,7 +1020,8 @@ fn unknown_harness_notice_header_and_ack_agree() {
         crate::store::message::DeliveryGate::Done,
     )
     .with_sender(sender);
-    let prompt = message_header(&record.sender, &[], None).expect("harness header") + &record.text;
+    let prompt =
+        message_header(&record.sender, &[], None, None).expect("harness header") + &record.text;
     assert_eq!(
         prompt,
         "Type: FUTURE_NOTICE\nFrom: @rimz\nContent:\nship it"
@@ -1316,11 +1320,11 @@ fn message_header_uses_live_handle_and_channel_only_when_crossing_channels() {
     };
 
     assert_eq!(
-        message_header(&sender, &peers, Some("docs")).unwrap(),
+        message_header(&sender, &peers, Some("docs"), None).unwrap(),
         "Type: AGENT_MESSAGE\nFrom: @lucid-atlas (claude)\nContent:\n"
     );
     assert_eq!(
-        message_header(&sender, &peers, Some("main")).unwrap(),
+        message_header(&sender, &peers, Some("main"), None).unwrap(),
         "Type: AGENT_MESSAGE\nFrom: @lucid-atlas#docs (claude)\nContent:\n"
     );
 }
@@ -1344,7 +1348,7 @@ fn message_header_uses_explicit_live_handle() {
     };
 
     assert_eq!(
-        message_header(&sender, &peers, Some("docs")).unwrap(),
+        message_header(&sender, &peers, Some("docs"), None).unwrap(),
         "Type: AGENT_MESSAGE\nFrom: @writer (claude)\nContent:\n"
     );
 }
@@ -1393,13 +1397,13 @@ fn message_header_uses_recipient_channel_for_same_lane_fresh_pane() {
 
     let same_channel = recipient_channel(&target, None, Some("bandwidth-profiling"));
     assert_eq!(
-        message_header(&sender, &[], same_channel.as_deref()).unwrap(),
+        message_header(&sender, &[], same_channel.as_deref(), None).unwrap(),
         "Type: AGENT_MESSAGE\nFrom: @claude\nContent:\n"
     );
 
     let cross_channel = recipient_channel(&target, None, Some("other"));
     assert_eq!(
-        message_header(&sender, &[], cross_channel.as_deref()).unwrap(),
+        message_header(&sender, &[], cross_channel.as_deref(), None).unwrap(),
         "Type: AGENT_MESSAGE\nFrom: @claude#bandwidth-profiling\nContent:\n"
     );
 }
@@ -1425,7 +1429,7 @@ fn message_header_live_handle_disambiguates_same_kind_peers() {
     };
 
     assert_eq!(
-        message_header(&sender, &peers, Some("main")).unwrap(),
+        message_header(&sender, &peers, Some("main"), None).unwrap(),
         "Type: AGENT_MESSAGE\nFrom: @bright-lark (claude)\nContent:\n"
     );
 }
@@ -1433,7 +1437,7 @@ fn message_header_live_handle_disambiguates_same_kind_peers() {
 #[test]
 fn message_header_falls_back_to_stored_identity_when_sender_is_absent() {
     let peers: Vec<&AgentState> = Vec::new();
-    let sender = crate::store::message::MessageSender::Agent {
+    let mut sender = crate::store::message::MessageSender::Agent {
         agent_id: None,
         kind: AgentKind::new_unchecked("codex"),
         name: Some("lucid-atlas".to_owned()),
@@ -1443,11 +1447,24 @@ fn message_header_falls_back_to_stored_identity_when_sender_is_absent() {
     };
 
     assert_eq!(
-        message_header(&sender, &peers, Some("main")).unwrap(),
+        message_header(&sender, &peers, Some("main"), None).unwrap(),
         "Type: AGENT_MESSAGE\nFrom: @lucid-atlas#docs (reviewer)\nContent:\n"
     );
     assert_eq!(
-        message_header(&sender, &peers, Some("docs")).unwrap(),
+        message_header(&sender, &peers, Some("docs"), None).unwrap(),
+        "Type: AGENT_MESSAGE\nFrom: @lucid-atlas (reviewer)\nContent:\n"
+    );
+    let MessageSender::Agent { channel, .. } = &mut sender else {
+        unreachable!();
+    };
+    *channel = Some("project".to_owned());
+    let root_channel = root_lane_channel(std::path::Path::new("/repo/project"));
+    assert_eq!(
+        message_header(&sender, &peers, Some("docs"), root_channel.as_deref()).unwrap(),
+        "Type: AGENT_MESSAGE\nFrom: @lucid-atlas#main (reviewer)\nContent:\n"
+    );
+    assert_eq!(
+        message_header(&sender, &peers, Some("project"), root_channel.as_deref()).unwrap(),
         "Type: AGENT_MESSAGE\nFrom: @lucid-atlas (reviewer)\nContent:\n"
     );
 }
@@ -1469,7 +1486,7 @@ fn message_header_omits_redundant_team_profile() {
 
     for peers in [vec![], vec![&live]] {
         for (channel, handle) in [("docs", "@planner"), ("main", "@planner#docs")] {
-            let header = message_header(&sender, &peers, Some(channel)).unwrap();
+            let header = message_header(&sender, &peers, Some(channel), None).unwrap();
             assert_eq!(
                 header,
                 format!("Type: AGENT_MESSAGE\nFrom: {handle}\nContent:\n")
@@ -1503,7 +1520,7 @@ fn message_header_uses_live_petname_and_profile_label() {
     };
 
     assert_eq!(
-        message_header(&sender, &peers, Some("auth")).unwrap(),
+        message_header(&sender, &peers, Some("auth"), None).unwrap(),
         "Type: AGENT_MESSAGE\nFrom: @calm-fox (planner)\nContent:\n"
     );
 }

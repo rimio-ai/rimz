@@ -1379,6 +1379,7 @@ pub(crate) fn message_header(
     sender: &MessageSender,
     peers: &[&AgentState],
     target_channel: Option<&str>,
+    root_channel: Option<&str>,
 ) -> Option<String> {
     if matches!(sender, MessageSender::Human) {
         return Some("Type: USER_MESSAGE\nFrom: @user\nContent:\n".to_owned());
@@ -1392,7 +1393,7 @@ pub(crate) fn message_header(
             notice.header_type()
         ));
     }
-    let handle = agent_sender_handle(sender, peers, target_channel)?;
+    let handle = agent_sender_handle(sender, peers, target_channel, root_channel)?;
     let MessageSender::Agent { kind, profile, .. } = sender else {
         return None;
     };
@@ -1421,10 +1422,12 @@ fn live_sender<'a>(sender: &MessageSender, peers: &[&'a AgentState]) -> Option<&
 }
 
 /// The canonical handle used in an agent-authored message header.
+/// An absent sender's recorded channel is labelled against the workspace's root routing key.
 pub fn agent_sender_handle(
     sender: &MessageSender,
     peers: &[&AgentState],
     target_channel: Option<&str>,
+    root_channel: Option<&str>,
 ) -> Option<String> {
     let MessageSender::Agent {
         kind,
@@ -1451,7 +1454,9 @@ pub fn agent_sender_handle(
     );
     let include_channel = channel != target_channel;
     let lane_label = live.and_then(AgentState::lane_label);
-    let channel = lane_label.as_deref().or(channel);
+    let channel = lane_label
+        .as_deref()
+        .or_else(|| channel.and_then(|channel| record_lane_label(Some(channel), root_channel)));
     let mut handle = sender_handle(role, name, kind);
     if include_channel && let Some(channel) = channel.filter(|value| !value.is_empty()) {
         handle.push('#');

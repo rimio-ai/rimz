@@ -377,7 +377,11 @@ fn launched_parent_handle(
         },
     };
     let peers = rimz::address::addressable_agents(snapshot);
-    rimz::address::agent_sender_handle(&sender, &peers, child_channel)
+    let root_channel = snapshot
+        .project_root
+        .as_deref()
+        .and_then(rimz::address::root_lane_channel);
+    rimz::address::agent_sender_handle(&sender, &peers, child_channel, root_channel.as_deref())
 }
 
 fn append_turn_entry(
