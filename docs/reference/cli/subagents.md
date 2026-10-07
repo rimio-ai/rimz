@@ -255,6 +255,8 @@ rimz subagents stop --all
 
 Stopping declines the child's result: it leaves the fleet report as described [above](#the-fleet-report). The canceled run stays in the record, so `wait` still reads it. `stop` is also the only way to close a `--keep` pane; `rimz gc` does not reclaim it.
 
+A successful stop ends the child's card even if its pane was already gone, so a later [parent message](#follow-up-messages) resumes it or names why it cannot resume.
+
 Stopping a parent with `rimz agents stop`, or through `rimz teams stop`, stops its live children first, `--keep` children included.
 
 ## Follow-up messages

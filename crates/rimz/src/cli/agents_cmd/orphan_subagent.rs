@@ -55,20 +55,29 @@ pub fn repair_orphan(request: OrphanSubagentRequest, globals: &super::GlobalFlag
         return Err(err);
     }
 
-    let observation = rimz::agents::AgentLifecycleObservation::new(
-        Some(orphan.child.agent_id.clone()),
-        rimz::agents::LifecycleSignal::Ended,
-    );
-    let ended = rimz::EventEnvelope::agent_lifecycle(
-        ctx.workspace.workspace_id.clone(),
-        &ctx.workspace.session_name,
-        orphan.child.kind.as_str(),
-        "rimz.subagent-orphan-reaped",
-        &observation,
-    );
-    ctx.store
-        .append_event(&ended)
-        .context("recording orphaned subagent end")?;
+    let audit = ctx
+        .store
+        .runtime_projection(rimz::RuntimeScope::Audit)
+        .context("checking orphaned subagent end")?;
+    if !audit
+        .ended
+        .contains(&(orphan.child.kind.clone(), orphan.child.agent_id.clone()))
+    {
+        let observation = rimz::agents::AgentLifecycleObservation::new(
+            Some(orphan.child.agent_id.clone()),
+            rimz::agents::LifecycleSignal::Ended,
+        );
+        let ended = rimz::EventEnvelope::agent_lifecycle(
+            ctx.workspace.workspace_id.clone(),
+            &ctx.workspace.session_name,
+            orphan.child.kind.as_str(),
+            "rimz.subagent-orphan-reaped",
+            &observation,
+        );
+        ctx.store
+            .append_event(&ended)
+            .context("recording orphaned subagent end")?;
+    }
     diag.emit(rimz::diag::record::DiagEvent::SubagentOrphanReaped {
         agent_kind: orphan.child.kind,
         agent_id: orphan.child.agent_id,
