@@ -699,7 +699,6 @@ fn carried_base(
         event::carry_lifetime_fields(&mut state, prior);
         state.origin = prior.origin;
         state.compacted_from = prior.compacted_from.clone();
-        state.recent_prompts = prior.recent_prompts.clone();
         state.model = prior.model.clone();
         state.effort = prior.effort.clone();
         state.budget = prior.budget.clone();

@@ -93,7 +93,7 @@ fn adapter_description_replaces_launch_label_and_carries_forward() {
 }
 
 #[test]
-fn lifecycle_carries_transcript_path_and_bounded_prompt_history() {
+fn lifecycle_carries_transcript_path_and_latest_prompt() {
     let start = raw_lifecycle(
         "claude",
         serde_json::json!({
@@ -121,19 +121,11 @@ fn lifecycle_carries_transcript_path_and_bounded_prompt_history() {
 
     assert_eq!(agent.transcript_path.as_deref(), Some("/tmp/s1.jsonl"));
     assert_eq!(agent.prompt.as_deref(), Some("prompt 17"));
-    assert_eq!(agent.recent_prompts.len(), 16);
-    assert_eq!(
-        agent.recent_prompts.first().map(String::as_str),
-        Some("prompt 2")
-    );
-    assert_eq!(
-        agent.recent_prompts.last().map(String::as_str),
-        Some("prompt 17")
-    );
+    assert_eq!(agent.first_prompt.as_deref(), Some("prompt 0"));
 }
 
 #[test]
-fn launch_prompts_append_to_recent_prompt_history() {
+fn launch_prompts_replace_latest_and_preserve_first_prompt() {
     let launch_with_prompt = |prompt: &str, offset: i64| {
         let mut event = launch_event(
             "codex",
@@ -152,9 +144,6 @@ fn launch_prompts_append_to_recent_prompt_history() {
         launch_with_prompt("verify", 3),
     ]);
 
-    assert_eq!(
-        agents[0].recent_prompts,
-        vec!["plan".to_owned(), "build".to_owned(), "verify".to_owned()]
-    );
+    assert_eq!(agents[0].prompt.as_deref(), Some("verify"));
     assert_eq!(agents[0].first_prompt.as_deref(), Some("plan"));
 }

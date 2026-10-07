@@ -521,7 +521,6 @@ fn merge_bound_local_session(
                 state.phase = TurnPhase::Idle;
                 state.task = None;
                 state.prompt = None;
-                state.recent_prompts.clear();
                 state.usage.context_pct = None;
                 state.turn_started_at = None;
                 state.user_turn_started_at = None;

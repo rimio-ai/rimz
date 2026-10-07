@@ -637,8 +637,8 @@ pub fn settled_outcome(
 /// to condense.
 pub const COMPACTING_WINDOW_SECS: i64 = 90;
 
-/// How many user prompts a session rollup retains, newest last.
-const RECENT_PROMPTS_LIMIT: usize = 16;
+/// Maximum stored bytes in each prompt-derived rollup label.
+pub const PROMPT_BYTES_LIMIT: usize = 1024;
 
 /// Borrowed identity for one logical agent card.
 ///
@@ -668,18 +668,6 @@ impl<'a> AgentCardRef<'a> {
     pub fn matches(self, other: Self) -> bool {
         self.kind == other.kind
             && (self.agent_id == other.agent_id || (self.name.is_some() && self.name == other.name))
-    }
-}
-
-/// Append one concrete prompt without duplicating a repeated observation.
-fn append_recent_prompt(recent_prompts: &mut Vec<String>, prompt: &str) {
-    if prompt.is_empty() || recent_prompts.last().is_some_and(|prior| prior == prompt) {
-        return;
-    }
-    recent_prompts.push(prompt.to_owned());
-    let excess = recent_prompts.len().saturating_sub(RECENT_PROMPTS_LIMIT);
-    if excess > 0 {
-        recent_prompts.drain(0..excess);
     }
 }
 
@@ -835,11 +823,6 @@ pub struct AgentState {
     /// provider compact evidence so the predecessor can be superseded exactly.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compacted_from: Option<AgentSessionId>,
-    /// Recent user prompts for this session, newest last, capped by the rollup.
-    /// The sidebar row keeps only `prompt`; snapshot JSON exposes the history on
-    /// `agents[]` for diagnostics and future panes.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub recent_prompts: Vec<String>,
     pub model: Option<String>,
     pub effort: Option<String>,
     /// Canonical launch-carried budget (`$5.00` or `$20.00/day`).
@@ -999,13 +982,36 @@ fn is_zero_u32(n: &u32) -> bool {
 }
 
 impl AgentState {
+    /// Bound prompt labels and remove pane argv from stored agent rows.
+    /// Returns whether any stored field changed.
+    pub fn bound_row(&mut self) -> bool {
+        let mut changed = false;
+        if let Some(pane) = &mut self.pane {
+            changed |= pane.spawn_command.take().is_some();
+            changed |= pane.foreground_cmdline.take().is_some();
+        }
+        for label in [&mut self.prompt, &mut self.first_prompt, &mut self.task]
+            .into_iter()
+            .flatten()
+        {
+            if label.len() > PROMPT_BYTES_LIMIT {
+                let mut end = PROMPT_BYTES_LIMIT;
+                while !label.is_char_boundary(end) {
+                    end -= 1;
+                }
+                label.truncate(end);
+                changed = true;
+            }
+        }
+        changed
+    }
+
     /// Record a prompt and own the set-once rule for the first usable prompt.
     pub fn observe_prompt(&mut self, prompt: &str) {
         self.prompt = Some(prompt.to_owned());
         if self.first_prompt.is_none() && usable_description(prompt) {
             self.first_prompt = Some(prompt.to_owned());
         }
-        append_recent_prompt(&mut self.recent_prompts, prompt);
     }
 
     /// Request-start estimate shared by cache-aligned timers: the last real
@@ -1117,7 +1123,6 @@ impl AgentState {
             origin: None,
             account_key: None,
             compacted_from: None,
-            recent_prompts: Vec::new(),
             model: None,
             effort: None,
             budget: None,

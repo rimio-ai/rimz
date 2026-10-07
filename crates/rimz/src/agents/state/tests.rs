@@ -2,7 +2,64 @@ use super::*;
 use crate::agents::TurnSettle;
 
 #[test]
-fn observe_prompt_sets_first_prompt_once_skips_control_text_and_caps_recent() {
+fn bound_row_strips_argv_without_losing_pane_identity() {
+    let mut agent = test_agent(AgentStatus::Running, 1_000);
+    let mut pane = crate::pane::PaneRef::from_id(crate::ids::PaneId::parse("tmux:%1").unwrap());
+    pane.spawn_command = Some("rimz agents exec ".repeat(100));
+    pane.foreground_cmdline = pane.spawn_command.clone();
+    pane.command = Some("claude".to_owned());
+    pane.cwd = Some("/repo".to_owned());
+    pane.pane_pid = Some(42);
+    agent.pane = Some(pane.clone());
+
+    agent.bound_row();
+
+    pane.spawn_command = None;
+    pane.foreground_cmdline = None;
+    assert_eq!(agent.pane, Some(pane));
+}
+
+#[test]
+fn bound_row_caps_prompt_labels_at_utf8_boundaries_and_is_idempotent() {
+    let mut agent = test_agent(AgentStatus::Running, 1_000);
+    let prefix = "p".repeat(PROMPT_BYTES_LIMIT - 1);
+    let prompt = format!("{prefix}🦊{}", "x".repeat(5_000));
+    agent.prompt = Some(prompt.clone());
+    agent.first_prompt = Some(prompt.clone());
+    agent.task = Some(prompt);
+
+    assert!(agent.bound_row());
+    for label in [&agent.prompt, &agent.first_prompt, &agent.task] {
+        assert_eq!(label.as_deref(), Some(prefix.as_str()));
+    }
+    let bounded = agent.clone();
+    assert!(!agent.bound_row());
+    assert_eq!(agent, bounded);
+
+    agent.prompt = Some("p".repeat(PROMPT_BYTES_LIMIT));
+    agent.first_prompt = None;
+    agent.task = Some("short".to_owned());
+    assert!(!agent.bound_row());
+}
+
+#[test]
+fn overlong_observed_first_prompt_is_set_once_before_bounding() {
+    let mut agent = test_agent(AgentStatus::Running, 1_000);
+    let first = "first ".repeat(1_024);
+    agent.observe_prompt(&first);
+    assert_eq!(agent.first_prompt.as_deref(), Some(first.as_str()));
+    agent.bound_row();
+    agent.observe_prompt("second prompt");
+    agent.bound_row();
+    assert_eq!(
+        agent.first_prompt.as_deref(),
+        Some(&first[..PROMPT_BYTES_LIMIT])
+    );
+    assert_eq!(agent.prompt.as_deref(), Some("second prompt"));
+}
+
+#[test]
+fn observe_prompt_sets_first_prompt_once_and_skips_control_text() {
     let mut agent = test_agent(AgentStatus::Running, 1_000);
     let initial = agent.clone();
     for prompt in [
@@ -13,33 +70,19 @@ fn observe_prompt_sets_first_prompt_once_skips_control_text_and_caps_recent() {
         agent.observe_prompt(prompt);
         assert_eq!(agent.prompt.as_deref(), Some(prompt));
         assert_eq!(agent.first_prompt, None);
-        if !prompt.is_empty() {
-            assert_eq!(
-                agent.recent_prompts.last().map(String::as_str),
-                Some(prompt)
-            );
-        }
     }
-    assert_eq!(agent.recent_prompts.len(), 2);
     agent.observe_prompt("first usable prompt");
     agent.observe_prompt("first usable prompt");
-    assert_eq!(agent.recent_prompts.len(), 3);
     agent.observe_prompt("");
     assert_eq!(agent.prompt.as_deref(), Some(""));
     assert_eq!(agent.first_prompt.as_deref(), Some("first usable prompt"));
-    assert_eq!(agent.recent_prompts.len(), 3);
     for n in 0..20 {
         agent.observe_prompt(&format!("prompt {n}"));
     }
     assert_eq!(agent.prompt.as_deref(), Some("prompt 19"));
     assert_eq!(agent.first_prompt.as_deref(), Some("first usable prompt"));
-    assert_eq!(
-        agent.recent_prompts,
-        (4..20).map(|n| format!("prompt {n}")).collect::<Vec<_>>()
-    );
     agent.prompt = initial.prompt.clone();
     agent.first_prompt = initial.first_prompt.clone();
-    agent.recent_prompts = initial.recent_prompts.clone();
     assert_eq!(agent, initial);
 }
 
@@ -142,7 +185,6 @@ fn seed_sets_status_phase_clocks_and_empty_enrichment() {
     assert!(running.name.is_none());
     assert!(running.pane.is_none());
     assert!(running.runtime_owner.is_none());
-    assert!(running.recent_prompts.is_empty());
     assert!(running.usage.context_pct.is_none());
     assert!(running.usage.context_window.is_none());
     assert!(running.usage.total_tokens.is_none());

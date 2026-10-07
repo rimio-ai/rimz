@@ -180,7 +180,8 @@ upward-dependencies = ["address"]
 # AgentState::silent_child_for shares one stall predicate between projection and notice detection (+1).
 # AgentState::root_lane, lane_label and is_root_lane share fold-derived root identity with consumers.
 # Spent-child CLI parity shares ParkDemotion and its constructor, predicate, and window query (+4).
-surface-budget = 995
+# Stored rows share a prompt-byte cap and one bound; prompt history is removed (+1).
+surface-budget = 996
 
 [[module]]
 path = "crates/rimz/src/agents/park.rs"
@@ -381,7 +382,8 @@ allowed-dependencies = [
 # GC reaches the retired named-channel record through one classed-path accessor (+1).
 # The keep-warm producer cache path is built here for the refresh lane, enrichment, and the consumer stamp (+1).
 # A session's sidebar host appends its stderr to one classed state log (+1).
-surface-budget = 221
+# Agent carryover has its own retention policy, separate from archives (+1).
+surface-budget = 222
 
 [[module]]
 path = "crates/rimz/src/forge"
@@ -699,7 +701,8 @@ path = "crates/rimz/src/store"
 # Fresh boundary sends share a checked enqueue-and-claim outcome and writer (+2).
 # PaneAgent::root_lane and lane_label carry the same root identity into pane resolution.
 # Predicate-based queue clearing keeps root-lane policy in the CLI and cancellation under the store lock (+1).
-surface-budget = 371
+# Carryover maintenance exposes its separate retention policy to the CLI (+1).
+surface-budget = 372
 
 [[module]]
 path = "crates/rimz/src/theme"

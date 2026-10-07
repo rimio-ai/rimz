@@ -426,7 +426,6 @@ fn hook_bound_prompt_survives_bounded_local_observations_without_prompt_evidence
             .worktree("/repo/main")
             .in_pane("%1");
         durable.prompt = Some("sticky hook prompt".to_owned());
-        durable.recent_prompts = vec!["sticky hook prompt".to_owned()];
         let mut local = observation("conversation-a", 20, Some(10), None);
         local.kind = AgentKind::new_unchecked("antigravity");
         let projected = lifecycle_state(&mut local);
@@ -443,7 +442,6 @@ fn hook_bound_prompt_survives_bounded_local_observations_without_prompt_evidence
             .with_live_panes(vec![pane], None);
         let merged = rollup_agent(&snapshot, "conversation-a");
         assert_eq!(merged.prompt.as_deref(), Some("sticky hook prompt"));
-        assert_eq!(merged.recent_prompts, ["sticky hook prompt"]);
     }
 }
 
@@ -454,7 +452,6 @@ fn concrete_local_prompt_replaces_once_while_new_session_stays_blank() {
         .worktree("/repo/main")
         .in_pane("%1");
     durable.prompt = Some("older prompt".to_owned());
-    durable.recent_prompts = vec!["older prompt".to_owned()];
     let mut local = observation("conversation-a", 20, Some(10), None);
     local.kind = AgentKind::new_unchecked("antigravity");
     lifecycle_state(&mut local).latest_prompt = Some("newer prompt".to_owned());
@@ -466,7 +463,6 @@ fn concrete_local_prompt_replaces_once_while_new_session_stays_blank() {
         .with_live_panes(vec![shared_pane], None);
     let merged = rollup_agent(&snapshot, "conversation-a");
     assert_eq!(merged.prompt.as_deref(), Some("newer prompt"));
-    assert_eq!(merged.recent_prompts, ["older prompt", "newer prompt"]);
 
     let mut blank_pane = pane("%2", "agy", "/repo/main");
     blank_pane.resumed_session_id = Some(AgentSessionId::from("conversation-blank"));
@@ -477,7 +473,6 @@ fn concrete_local_prompt_replaces_once_while_new_session_stays_blank() {
         .with_local_sessions(std::slice::from_ref(&blank_pane), vec![blank]);
     let blank = rollup_agent(&blank_snapshot, "conversation-blank");
     assert!(blank.prompt.is_none());
-    assert!(blank.recent_prompts.is_empty());
 }
 
 #[test]
@@ -648,7 +643,6 @@ fn newer_identity_only_observation_preserves_running_lifecycle_and_clocks() {
         .in_pane("%1");
     durable.phase = TurnPhase::Acting;
     durable.prompt = Some("current prompt".to_owned());
-    durable.recent_prompts = vec!["older prompt".to_owned(), "current prompt".to_owned()];
     durable.turn_started_at = Some(turn_started_at);
     durable.last_seen = last_activity;
     durable.last_activity = last_activity;
@@ -664,10 +658,6 @@ fn newer_identity_only_observation_preserves_running_lifecycle_and_clocks() {
     assert_eq!(agent.status, AgentStatus::Running);
     assert_eq!(agent.phase, TurnPhase::Acting);
     assert_eq!(agent.prompt.as_deref(), Some("current prompt"));
-    assert_eq!(
-        agent.recent_prompts,
-        ["older prompt".to_owned(), "current prompt".to_owned()]
-    );
     assert_eq!(agent.turn_started_at, Some(turn_started_at));
     assert_eq!(agent.last_activity, last_activity);
     assert_eq!(agent.usage.context_pct, Some(42));
