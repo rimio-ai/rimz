@@ -6,6 +6,8 @@ use rimz::agents::{AgentStatus, LaunchParams};
 use rimz::mux::tab_name::TabNameIntent;
 use rimz::store::event::{AgentLaunchPayload, AgentLaunchState, EventEnvelope};
 use rimz::store::writer::AgentLifecycleIntent;
+#[cfg(target_os = "linux")]
+use rimz::testkit::sandbox::{SandboxSpec, sandbox_processes};
 
 fn write_sleeping_agent_shim(env: &Env, agent: &str) -> PathBuf {
     let dir = env.home_root.join("agent-bin");
@@ -761,6 +763,42 @@ fn wait_for_agent_end_observation(env: &Env, agent_id: &str) {
     panic!("agent.ended observation was not recorded for {agent_id}");
 }
 
+#[cfg(target_os = "linux")]
+fn wait_for_wrapper_cleanup(env: &Env, wrappers: &[u32]) {
+    let spec = SandboxSpec {
+        home_root: env.home_root.clone(),
+        runtime_root: env.runtime_root.clone(),
+    };
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        // End stamps precede the detached helper spawn, so the wrappers must exit too.
+        let live_wrappers = wrappers
+            .iter()
+            .copied()
+            .filter(|pid| rimz::proc::process_is_live(*pid, None))
+            .map(|pid| (pid, rimz::proc::argv(pid)))
+            .collect::<Vec<_>>();
+        let cleanup = sandbox_processes(&spec)
+            .into_iter()
+            .filter_map(|pid| rimz::proc::argv(pid).map(|argv| (pid, argv)))
+            .filter(|(_, argv)| {
+                (argv.iter().any(|arg| arg == "worktree")
+                    && argv.iter().any(|arg| arg == "cleanup"))
+                    || (argv.iter().any(|arg| arg == "agents")
+                        && argv.iter().any(|arg| arg == "exec"))
+            })
+            .collect::<Vec<_>>();
+        if live_wrappers.is_empty() && cleanup.is_empty() {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "wrapper cleanup did not settle: wrappers={live_wrappers:?}, cleanup={cleanup:?}"
+        );
+        thread::sleep(Duration::from_millis(25));
+    }
+}
+
 fn plan_from_env(env: &Env) -> rimz::harness::resume::ResumePlan {
     let projection = env
         .store()
@@ -1484,6 +1522,7 @@ fn cohort_resume_selects_closed_profile_parent_over_live_child_and_dead_placehol
     );
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn fresh_cohort_relaunch_preserves_dirty_checkout_and_does_not_duplicate_live_agents() {
     use std::io::Write;
@@ -1615,6 +1654,25 @@ fn fresh_cohort_relaunch_preserves_dirty_checkout_and_does_not_duplicate_live_ag
             .expect("audit cohort")
             .agents
     };
+    let spec = SandboxSpec {
+        home_root: env.home_root.clone(),
+        runtime_root: env.runtime_root.clone(),
+    };
+    let wrapper_pids = || {
+        let wrappers = sandbox_processes(&spec)
+            .into_iter()
+            .filter_map(|pid| rimz::proc::argv(pid).map(|argv| (pid, argv)))
+            .filter(|(_, argv)| {
+                argv.iter().any(|arg| arg == "agents") && argv.iter().any(|arg| arg == "exec")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            wrappers.len(),
+            2,
+            "expected two exec wrappers: {wrappers:?}"
+        );
+        wrappers.into_iter().map(|(pid, _)| pid).collect::<Vec<_>>()
+    };
     let wait_for_launch = |count: usize| {
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
@@ -1652,6 +1710,18 @@ fn fresh_cohort_relaunch_preserves_dirty_checkout_and_does_not_duplicate_live_ag
     let original = wait_for_launch(2);
     assert_eq!(original.len(), 2);
     let worktree = env.home_root.join("project-worktrees/fresh");
+    let assert_checkout_preserved = || {
+        assert!(
+            worktree.exists(),
+            "wrapper cleanup removed the dirty checkout"
+        );
+        assert!(
+            rimz::worktree::read_marker_for_worktree(&worktree)
+                .expect("read preserved checkout marker")
+                .is_some(),
+            "wrapper cleanup removed the dirty checkout marker"
+        );
+    };
     std::fs::write(worktree.join("README.md"), "unfinished work\n").expect("dirty checkout");
     std::fs::write(worktree.join("board.md"), "keep this scratch memory\n").expect("write scratch");
     let checkout_inode = std::fs::metadata(&worktree)
@@ -1659,10 +1729,13 @@ fn fresh_cohort_relaunch_preserves_dirty_checkout_and_does_not_duplicate_live_ag
         .ino();
     let git_file = std::fs::read(worktree.join(".git")).expect("checkout git pointer");
     let target = format!("{}:#fresh", workspace.session_name);
+    let wrappers = wrapper_pids();
     server.tmux(&["kill-window", "-t", &target]);
     for agent in &original {
         wait_for_agent_end_observation(&env, agent.agent_id.as_str());
     }
+    wait_for_wrapper_cleanup(&env, &wrappers);
+    assert_checkout_preserved();
     let closed = agents();
     assert!(closed.iter().all(|agent| agent.ended_at.is_some()));
     let windows = server.window_names(&workspace.session_name);
@@ -1770,19 +1843,25 @@ fn fresh_cohort_relaunch_preserves_dirty_checkout_and_does_not_duplicate_live_ag
     };
     assert_eq!(identities(&agents()), identities(&relaunched));
 
+    let wrappers = wrapper_pids();
     server.tmux(&["kill-window", "-t", &target]);
     for agent in live {
         wait_for_agent_end_observation(&env, agent.agent_id.as_str());
     }
+    wait_for_wrapper_cleanup(&env, &wrappers);
+    assert_checkout_preserved();
     let fresh = run_launch(true);
     assert!(fresh.contains("fresh in worktree `fresh`"), "{fresh}");
     let relaunched = wait_for_launch(6);
     assert_eq!(relaunched.len(), 6);
 
+    let wrappers = wrapper_pids();
     server.tmux(&["kill-window", "-t", &target]);
     for agent in relaunched.iter().filter(|agent| agent.ended_at.is_none()) {
         wait_for_agent_end_observation(&env, agent.agent_id.as_str());
     }
+    wait_for_wrapper_cleanup(&env, &wrappers);
+    assert_checkout_preserved();
     std::fs::copy(
         env.project_root.join("README.md"),
         worktree.join("README.md"),

@@ -333,6 +333,7 @@ impl TmuxServer {
             .trim()
             .to_owned()
     }
+    #[cfg(target_os = "linux")]
     pub(super) fn try_stdout(&self, args: &[&str]) -> Result<String, String> {
         let output = Command::new("tmux")
             .scrub_session_env()
