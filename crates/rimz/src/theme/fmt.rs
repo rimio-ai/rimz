@@ -53,6 +53,22 @@ pub fn reset_countdown(deadline: Timestamp, now: Timestamp) -> String {
     reset_secs(deadline.duration_since(now).as_secs())
 }
 
+/// A run or stage duration: one unit below an hour, two scaled units above.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "The pipeline renderer adopts this formatter in the next change"
+    )
+)]
+pub(crate) fn run_duration(seconds: i64) -> String {
+    if seconds < 3_600 {
+        crate::utils::time::format_duration_coarse(seconds)
+    } else {
+        reset_secs(seconds)
+    }
+}
+
 fn reset_secs(seconds: i64) -> String {
     let seconds = seconds.max(0);
     if seconds >= 86_400 {
@@ -181,6 +197,19 @@ mod tests {
         }
         assert_eq!(reset_secs(45 * 60).chars().count(), 5);
         assert_eq!(reset_secs(5 * 86_400).chars().count(), 5);
+    }
+
+    #[test]
+    fn run_duration_scales_from_one_unit_to_two() {
+        for (seconds, expected) in [
+            (45, "45s"),
+            (18 * 60, "18m"),
+            (3_600, "1h00m"),
+            (4 * 3_600 + 12 * 60, "4h12m"),
+            (26 * 3_600, "1d02h"),
+        ] {
+            assert_eq!(run_duration(seconds), expected);
+        }
     }
 
     #[test]
