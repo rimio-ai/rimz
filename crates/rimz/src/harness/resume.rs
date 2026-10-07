@@ -863,7 +863,10 @@ impl RecoveryPlan {
         for entry in self.entries {
             match entry {
                 RecoveryEntry::Flat(planned) => {
-                    tab_agents.push(planned.resumed);
+                    tab_agents.push(RecoveryTabAgents {
+                        resumed: planned.resumed,
+                        refilled: BTreeSet::new(),
+                    });
                     resume.tabs.push(planned.tab);
                 }
                 RecoveryEntry::Team(planned) => {
@@ -872,7 +875,10 @@ impl RecoveryPlan {
                     };
                     match materialize_team_restore_tab(store, session_name, &self.teams, &planned) {
                         Ok((tab, batch)) => {
-                            tab_agents.push(RecoveryEntry::Team(planned).resumed_keys());
+                            tab_agents.push(RecoveryTabAgents {
+                                refilled: planned.cohort.refilled.clone(),
+                                resumed: RecoveryEntry::Team(planned).resumed_keys(),
+                            });
                             if let Some(batch) = batch {
                                 resume.team_launches.push(TeamTabLaunch {
                                     tab: resume.tabs.len(),
@@ -919,8 +925,13 @@ impl<'a> RecoveryMaterializer<'a> {
 
 pub(super) struct MaterializedRecovery {
     pub(super) resume: ResumePlan,
-    /// The agents each of `resume.tabs` resumes, by position.
-    pub(super) tab_agents: Vec<BTreeSet<(AgentKind, AgentSessionId)>>,
+    /// The agents each of `resume.tabs` resumes or replaces, by position.
+    pub(super) tab_agents: Vec<RecoveryTabAgents>,
+}
+
+pub(super) struct RecoveryTabAgents {
+    pub(super) resumed: BTreeSet<(AgentKind, AgentSessionId)>,
+    pub(super) refilled: BTreeSet<(AgentKind, AgentSessionId)>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]

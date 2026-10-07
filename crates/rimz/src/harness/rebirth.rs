@@ -11,10 +11,12 @@ use jiff::Timestamp;
 use crate::Store;
 use crate::agents::AgentState;
 use crate::config::{MachineConfig, ProfilesConfig, TeamsConfig};
+use crate::diag::DiagSink;
+use crate::diag::record::DiagEvent;
 use crate::disk::paths::{RuntimePaths, StatePaths, cache_home};
 use crate::harness::resume::{
-    MaterializedRecovery, RecoveryMaterializer, RecoveryPlan, ResumePlan, ResumeSkipReason,
-    plan_resume_detailed, resume_session_present, split_team_and_flat,
+    MaterializedRecovery, RecoveryMaterializer, RecoveryPlan, RecoveryTabAgents, ResumePlan,
+    ResumeSkipReason, plan_resume_detailed, resume_session_present, split_team_and_flat,
 };
 use crate::ids::{AgentKind, AgentSessionId, WorkspaceId};
 use crate::mux::{MuxBackend, ResumeTab};
@@ -35,8 +37,9 @@ pub enum RebirthErr {
     Inspect(#[from] anyhow::Error),
 }
 
-/// What a settlement does with the recovery candidates. Only an interactive
-/// answer may choose a disposition that ends an agent.
+/// What a settlement does with the recovery candidates. Only an attended
+/// decision declines or drops candidates; refilled seats end automatically
+/// once their replacement is live.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum RebirthDisposition {
     /// Nobody was asked: every candidate stays pending.
@@ -104,6 +107,7 @@ pub struct RebirthPreview {
     labels: Vec<String>,
     requires_sandbox: bool,
     candidate_count: usize,
+    refilled_count: usize,
     unresumable: Vec<UnresumableAgent>,
     recovery_off: bool,
 }
@@ -127,9 +131,14 @@ impl RebirthPreview {
         self.requires_sandbox
     }
 
-    /// Lost agents awaiting a decision: neither ended nor live.
+    /// Lost agents awaiting a decision: neither ended, live, nor already replaced.
     pub const fn candidate_count(&self) -> usize {
         self.candidate_count
+    }
+
+    /// Parked seats already held by live replacements, not planned Fresh seeds.
+    pub const fn refilled_count(&self) -> usize {
+        self.refilled_count
     }
 
     pub fn unresumable(&self) -> &[UnresumableAgent] {
@@ -156,6 +165,7 @@ pub struct RebirthPlan {
     candidates: Vec<AgentState>,
     /// Lost agents already ended by other means: they only leave the record.
     ended: BTreeSet<(AgentKind, AgentSessionId)>,
+    refilled: BTreeSet<(AgentKind, AgentSessionId)>,
     planned: RecoveryPlan,
     recovery_off: bool,
     requires_sandbox: bool,
@@ -272,6 +282,7 @@ impl RebirthPlan {
             labels,
             requires_sandbox: self.requires_sandbox,
             candidate_count: self.candidates.len(),
+            refilled_count: self.refilled.len(),
             unresumable,
             recovery_off: self.recovery_off,
         }
@@ -351,9 +362,9 @@ impl RebirthPlan {
                 (ResumePlan::default(), Vec::new())
             }
         };
-        let resumed = tab_agents
+        let seeded = tab_agents
             .iter()
-            .flatten()
+            .flat_map(|agents| agents.resumed.iter().chain(&agents.refilled))
             .cloned()
             .collect::<BTreeSet<_>>();
         let worktree_gone = resume
@@ -369,6 +380,14 @@ impl RebirthPlan {
         // An agent leaves the pending record only once it is resumed or its
         // ended stamp is durable; otherwise the reap would drop it unasked.
         let mut settled = self.ended;
+        if let Some(store) = store.as_ref() {
+            settled.extend(record_refilled_seats(
+                store,
+                &self.paths.workspace_id,
+                session_name,
+                &self.refilled,
+            ));
+        }
         if let Some(store) = store.as_ref()
             && let Some(event_name) = dropped_as
         {
@@ -383,7 +402,7 @@ impl RebirthPlan {
                 .candidates
                 .iter()
                 .map(|agent| (agent.kind.clone(), agent.agent_id.clone()))
-                .filter(|key| !resumed.contains(key) && !worktree_gone.contains(key))
+                .filter(|key| !seeded.contains(key) && !worktree_gone.contains(key))
                 .collect();
             let dropped = record_agents_ended(
                 store,
@@ -420,8 +439,8 @@ pub(crate) struct SeededRecovery {
     death: Option<LastDeathMarker>,
     session_name: String,
     resume: ResumePlan,
-    /// The agents each of `resume.tabs` resumes, by position.
-    tab_agents: Vec<BTreeSet<(AgentKind, AgentSessionId)>>,
+    /// The agents each of `resume.tabs` resumes or replaces, by position.
+    tab_agents: Vec<RecoveryTabAgents>,
 }
 
 impl SeededRecovery {
@@ -449,13 +468,15 @@ impl SeededRecovery {
         } = self;
         let planned = std::mem::take(&mut resume.tabs);
         let mut confirmed = BTreeSet::new();
+        let mut refilled = BTreeSet::new();
         // Where each planned tab sits in the returned plan, if it is there.
         let mut returned = Vec::with_capacity(planned.len());
         for (index, (tab, agents)) in planned.into_iter().zip(tab_agents).enumerate() {
             match outcome(index, &tab) {
                 Ok(()) => {
                     returned.push(Some(resume.tabs.len()));
-                    confirmed.extend(agents);
+                    confirmed.extend(agents.resumed);
+                    refilled.extend(agents.refilled);
                     resume.tabs.push(tab);
                 }
                 Err(error) => {
@@ -477,11 +498,22 @@ impl SeededRecovery {
                 Some(launch)
             })
             .collect();
-        if !failed.is_empty()
-            && let Ok(store) = Store::open(paths.clone(), runtime)
-        {
-            for launch in &failed {
-                let _ = store.fail_agent_launch_batch(&launch.batch);
+        if !failed.is_empty() || !refilled.is_empty() {
+            match Store::open(paths.clone(), runtime) {
+                Ok(store) => {
+                    confirmed.extend(record_refilled_seats(
+                        &store,
+                        &paths.workspace_id,
+                        &session_name,
+                        &refilled,
+                    ));
+                    for launch in &failed {
+                        let _ = store.fail_agent_launch_batch(&launch.batch);
+                    }
+                }
+                Err(err) => resume.warnings.push(format!(
+                    "could not settle replacement seats or failed launch batches: {err}; replaced agents stay pending"
+                )),
             }
         }
         if let Err(err) = pending_recovery::settle(&paths, &confirmed) {
@@ -648,6 +680,7 @@ fn inspect_at(
         crash_cache,
         candidates,
         ended,
+        refilled: planned.refilled().clone(),
         planned,
         recovery_off,
         requires_sandbox,
@@ -721,6 +754,7 @@ fn inspect_live_scope(
         crash_cache: CrashCacheSnapshot::default(),
         candidates,
         ended,
+        refilled: planned.refilled().clone(),
         planned,
         recovery_off,
         requires_sandbox,
@@ -766,7 +800,7 @@ fn plan_settlement(
         })
         .cloned()
         .collect::<Vec<_>>();
-    let candidates = lost
+    let mut candidates = lost
         .iter()
         .filter(|agent| {
             if agent.ended_at.is_some() {
@@ -802,6 +836,11 @@ fn plan_settlement(
         machine,
         &teams_and_profiles,
     );
+    candidates.retain(|agent| {
+        !planned
+            .refilled()
+            .contains(&(agent.kind.clone(), agent.agent_id.clone()))
+    });
     trace_unplanned(&candidates, &planned, recovery_off);
     (candidates, ended, planned)
 }
@@ -923,7 +962,7 @@ fn materialize_recovery(
     paths: &StatePaths,
     session_name: &str,
     planned: RecoveryPlan,
-) -> (ResumePlan, Vec<BTreeSet<(AgentKind, AgentSessionId)>>) {
+) -> (ResumePlan, Vec<RecoveryTabAgents>) {
     let MaterializedRecovery { resume, tab_agents } = match planned.materialize(
         session_name,
         RecoveryMaterializer::BestEffort {
@@ -971,6 +1010,32 @@ fn record_agents_ended(
                 tracing::warn!(workspace = %workspace_id, kind = %kind, agent_id = %agent_id, error = %err, "rebirth: could not stamp unrecovered agent ended");
             }
         }
+    }
+    ended
+}
+
+fn record_refilled_seats(
+    store: &Store,
+    workspace_id: &WorkspaceId,
+    session_name: &str,
+    agents: &BTreeSet<(AgentKind, AgentSessionId)>,
+) -> BTreeSet<(AgentKind, AgentSessionId)> {
+    let ended = record_agents_ended(
+        store,
+        workspace_id,
+        session_name,
+        agents,
+        "rimz.seat-refilled",
+    );
+    if ended.is_empty() {
+        return ended;
+    }
+    let sink = DiagSink::for_workspace(workspace_id.clone(), session_name.to_owned(), None);
+    for (kind, agent_id) in &ended {
+        sink.emit(DiagEvent::RecoverySeatRefilled {
+            agent_kind: kind.clone(),
+            agent_id: agent_id.clone(),
+        });
     }
     ended
 }

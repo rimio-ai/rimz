@@ -2,6 +2,26 @@ use super::*;
 use crate::ids::MuxName;
 
 #[test]
+fn recovery_seat_refills_are_informational_session_diagnostics() {
+    let wire = r#"{"kind":"recovery_seat_refilled","agent_kind":"codex","agent_id":"old-coder"}"#;
+    let decoded = serde_json::from_str::<DiagEvent>(wire);
+    assert!(
+        decoded.is_ok(),
+        "refill diagnostic must decode: {decoded:?}"
+    );
+    let event = decoded.unwrap();
+    assert_eq!(event.kind_name(), "recovery_seat_refilled");
+    assert_eq!(event.severity(), DiagSeverity::Info);
+    assert_eq!(
+        event.identity_key(),
+        "recovery_seat_refilled:codex:old-coder"
+    );
+    assert!(event.summary().contains("old-coder"));
+    assert!(event.summary().contains("live replacement"));
+    assert_eq!(serde_json::to_string(&event).unwrap(), wire);
+}
+
+#[test]
 fn provider_startup_exits_round_trip_exit_codes_and_signals() {
     let wires = [
         r#"{"kind":"provider_startup_exit","agent_kind":"codex","agent_name":"pruner","action":"launch","exit_code":2,"signal":null,"startup_ms":1,"relaunches":0}"#,

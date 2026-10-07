@@ -6,6 +6,140 @@ use crate::harness::resume::RecoveryEntry;
 use crate::ids::{MuxName, PaneId};
 
 #[test]
+fn fresh_replacements_end_only_after_their_tab_is_confirmed() {
+    for (disposition, confirmed) in [
+        (RebirthDisposition::RecoverKeep, true),
+        (RebirthDisposition::RecoverKeep, false),
+        (RebirthDisposition::RecoverDrop, true),
+        (RebirthDisposition::RecoverDrop, false),
+        (RebirthDisposition::Defer, false),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let worktree = dir.path().join("forge");
+        let fixture = Fixture::new(&[("planner", &worktree, true), ("coder", &worktree, true)]);
+        fixture.stamp_team("planner", &worktree, "forge", "planner", "claude-plan");
+        fixture.stamp_team("coder", &worktree, "forge", "coder", "codex-code");
+        let transcript = fixture.project.join("planner.jsonl");
+        std::fs::write(&transcript, "{}\n").unwrap();
+        let store = Store::open(fixture.paths.clone(), fixture.runtime.clone()).unwrap();
+        for (id, path) in [
+            ("planner", transcript),
+            ("coder", fixture.project.join("missing.jsonl")),
+        ] {
+            let mut observation =
+                AgentLifecycleObservation::new(Some(id.into()), LifecycleSignal::Registered);
+            observation.transcript_path = Some(path.display().to_string());
+            store
+                .append_event(&crate::EventEnvelope::agent_lifecycle(
+                    fixture.paths.workspace_id.clone(),
+                    "rimz-test",
+                    "claude",
+                    "SessionStart",
+                    &observation,
+                ))
+                .unwrap();
+        }
+        let plan = fixture.inspect_with(&team_machine(), false);
+        assert_eq!(plan.preview().candidate_count(), 2);
+        park_roster(&fixture.paths).unwrap();
+        let seeded = plan.settle(disposition, "rimz-test");
+        assert!(
+            pending(&fixture).contains(&key("coder")),
+            "not yet confirmed"
+        );
+        assert!(ended_events(&fixture).is_empty(), "not yet confirmed");
+        let resume = seeded.confirm(|_, _| {
+            if confirmed {
+                Ok(())
+            } else {
+                Err("tab did not open")
+            }
+        });
+        if !confirmed {
+            assert!(pending(&fixture).contains(&key("coder")));
+            assert!(ended_events(&fixture).is_empty());
+            assert!(resume.tabs.is_empty());
+            continue;
+        }
+        assert!(
+            !pending(&fixture).contains(&key("coder")),
+            "confirmed replacement must settle its old session"
+        );
+        assert_eq!(
+            ended_events(&fixture),
+            [("rimz.seat-refilled".into(), "coder".into())]
+        );
+        let sink = crate::diag::DiagSink::for_workspace(
+            fixture.paths.workspace_id.clone(),
+            "rimz-test",
+            None,
+        );
+        let records = std::fs::read_to_string(sink.log_path().unwrap()).unwrap();
+        let refills = records
+            .lines()
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+            .filter(|row| row["event"]["kind"] == "recovery_seat_refilled")
+            .collect::<Vec<_>>();
+        assert_eq!(refills.len(), 1);
+        assert_eq!(refills[0]["event"]["agent_id"], "coder");
+        assert_eq!(refills[0]["severity"], "info");
+    }
+}
+
+#[test]
+fn live_replacements_settle_only_the_seats_they_fill() {
+    for with_planner in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let worktree = dir.path().join("forge");
+        let mut agents = vec![("coder", worktree.as_path(), true)];
+        if with_planner {
+            agents.push(("planner", worktree.as_path(), true));
+        }
+        let fixture = Fixture::new(&agents);
+        fixture.stamp_team("coder", &worktree, "forge", "coder", "codex-code");
+        if with_planner {
+            fixture.stamp_team("planner", &worktree, "forge", "planner", "claude-plan");
+        }
+        park_roster(&fixture.paths).unwrap();
+        fixture.stamp_team("live-coder", &worktree, "forge", "coder", "codex-code");
+        fixture.own("live-coder", std::process::id());
+        assert!(matches!(
+            owner_liveness(&fixture, "live-coder"),
+            AgentLiveness::Live { .. }
+        ));
+        let plan = inspect_live_at(
+            fixture.paths.clone(),
+            fixture.runtime.clone(),
+            &fixture.project,
+            &team_machine(),
+            false,
+        );
+        assert_eq!(plan.preview().candidate_count(), usize::from(with_planner));
+        assert_eq!(plan.preview().refilled_count(), 1);
+        assert!(
+            plan.planned
+                .entries
+                .iter()
+                .all(|entry| matches!(entry, RecoveryEntry::Flat(_)))
+        );
+        let resume = materialize(plan, RebirthDisposition::Defer, "rimz-test");
+        assert!(resume.tabs.is_empty());
+        assert_eq!(
+            pending(&fixture),
+            if with_planner {
+                BTreeSet::from([key("planner")])
+            } else {
+                BTreeSet::new()
+            }
+        );
+        assert_eq!(
+            ended_events(&fixture),
+            [("rimz.seat-refilled".into(), "coder".into())]
+        );
+    }
+}
+
+#[test]
 fn invalid_effective_config_keeps_flat_recovery_without_fresh_team_seats() {
     let fixture = Fixture::new(&[]);
     std::fs::create_dir_all(fixture.project.join(".rimz")).unwrap();

@@ -1,9 +1,10 @@
-//! Lost agents awaiting the user's recovery decision.
+//! Lost agents awaiting recovery, replacement, or the user's decline.
 //!
 //! A rebirth boundary parks the dead incarnation's live roster here before it
-//! deletes the roster, and a settlement removes the agents it resumed or
-//! ended. Until then membership keeps an agent out of the dead and stale reap,
-//! so only a user decision drops it.
+//! deletes the roster. A settlement removes agents whose resumed or replacement
+//! tab is confirmed open, or whose ended stamp is durable, including automatic
+//! seat refills. A wrapper's durable pane attachment also settles its session.
+//! Until then membership keeps an agent out of the dead and stale reap.
 //!
 //! Boundary and settlement are read-modify-write from separate CLI processes,
 //! so both take the workspace lock and publish durably. Readers stay

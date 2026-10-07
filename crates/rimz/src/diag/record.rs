@@ -537,6 +537,10 @@ pub enum DiagEvent {
         startup_ms: u64,
         relaunches: u8,
     },
+    RecoverySeatRefilled {
+        agent_kind: AgentKind,
+        agent_id: AgentSessionId,
+    },
     PaneCacheDivergence {
         pane_id: String,
         pid: i32,
@@ -641,6 +645,7 @@ impl DiagEvent {
             | Self::MixedBuildWriters { .. }
             | Self::TopologyWriterChanged { .. }
             | Self::SubagentDigestBackstopped { .. }
+            | Self::RecoverySeatRefilled { .. }
             | Self::SupervisorConvergence { .. }
             | Self::RendererExit {
                 cause: RendererExitCause::SelfCloseEmptyTab,
@@ -705,6 +710,7 @@ impl DiagEvent {
             Self::SubagentDigestBackstopped { .. } => "subagent_digest_backstopped",
             Self::SubagentOrphanRepairFailed { .. } => "subagent_orphan_repair_failed",
             Self::ProviderStartupExit { .. } => "provider_startup_exit",
+            Self::RecoverySeatRefilled { .. } => "recovery_seat_refilled",
             Self::PaneCacheDivergence { .. } => "pane_cache_divergence",
             Self::SupervisorConvergence { .. } => "supervisor_convergence",
             Self::SupervisorPreflightRejected { .. } => "supervisor_preflight_rejected",
@@ -929,6 +935,10 @@ impl DiagEvent {
                 agent_kind,
                 agent_id,
                 ..
+            }
+            | Self::RecoverySeatRefilled {
+                agent_kind,
+                agent_id,
             } => format!("{}:{agent_kind}:{agent_id}", self.kind_name()),
             Self::SubagentDigestBackstopped {
                 parent_agent_id, ..
@@ -1357,6 +1367,12 @@ impl DiagEvent {
                 format!("self-close rejected ({siblings} siblings): {reason}")
             }
             Self::RendererExit { cause } => format!("renderer exited: {}", cause.as_str()),
+            Self::RecoverySeatRefilled {
+                agent_kind,
+                agent_id,
+            } => {
+                format!("{agent_kind}/{agent_id} ended: a live replacement holds its recovery seat")
+            }
             Self::ProviderStartupExit {
                 agent_kind,
                 agent_name,
