@@ -61,7 +61,7 @@ live-web = { max-threads = 1 }
 rendered-journey = { max-threads = 4 }
 
 [[profile.default.overrides]]
-filter = 'package(rimz) & (test(/^backend::zellij::/) | test(/^backend::single_backend_room::/) | test(/^journey::deep::zellij/))'
+filter = 'package(rimz) & (test(/^backend::zellij::/) | test(/^backend::single_backend_room::/) | test(/^journey::deep::(room_host::)?zellij/))'
 test-group = 'live-zellij'
 retries = { backoff = "exponential", count = 4, delay = "3s", max-delay = "30s", jitter = true }
 
@@ -70,7 +70,7 @@ retries = { backoff = "exponential", count = 4, delay = "3s", max-delay = "30s",
 # examples/: the group cap + retries here, out of `gate` and into `live` below.
 # Pinned by exact test name — a rename must update all three filters.
 [[profile.default.overrides]]
-filter = 'package(rimz) & (test(/^backend::tmux::/) | test(/^journey::deep::tmux/) | test(/^examples::pane_send::pane_send_resolver_completes_full_round_trip$/))'
+filter = 'package(rimz) & (test(/^backend::tmux::/) | test(/^journey::deep::(room_host::)?tmux/) | test(/^examples::pane_send::pane_send_resolver_completes_full_round_trip$/))'
 test-group = 'live-tmux'
 retries = { backoff = "exponential", count = 4, delay = "3s", max-delay = "30s", jitter = true }
 

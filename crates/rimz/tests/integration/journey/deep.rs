@@ -24,6 +24,9 @@ use crate::common::{
     write_hook_firing_agent,
 };
 
+#[cfg(target_os = "linux")]
+mod room_host;
+
 const CAPTURE_BUDGET: Duration = Duration::from_secs(30);
 
 /// Trailing diagnostic records carried into a width assertion's message.
