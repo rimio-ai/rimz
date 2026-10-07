@@ -94,6 +94,8 @@ struct PendingFocusRepair {
 
 pub(super) struct LoopState {
     pub(super) current: SidebarSnapshot,
+    /// The keymap beside the `[sidebar.keys]` table it was built from, rebuilt only when the snapshot's table differs.
+    nav_keys: (crate::config::SidebarKeys, super::NavKeymap),
     config: ServeConfig,
     runtime: RuntimePaths,
     socket_path: PathBuf,
@@ -235,6 +237,10 @@ impl LoopState {
         );
         let make_up_filter = crate::sidebar::body_filter::load(&runtime);
         Self {
+            nav_keys: (
+                current.sidebar.keys.clone(),
+                super::NavKeymap::from_config(&current.sidebar.keys),
+            ),
             config,
             runtime,
             socket_path,
@@ -1007,8 +1013,11 @@ impl LoopState {
         wakeup: Wakeup,
         terminal: &mut Terminal<PaneBackend>,
     ) -> Result<InputOutcome> {
-        let keymap = super::NavKeymap::from_config(&self.current.sidebar.keys);
-        let outcome = handle_wakeup(wakeup, &mut self.ui, &self.current, &keymap);
+        let keys = &self.current.sidebar.keys;
+        if self.nav_keys.0 != *keys {
+            self.nav_keys = (keys.clone(), super::NavKeymap::from_config(keys));
+        }
+        let outcome = handle_wakeup(wakeup, &mut self.ui, &self.current, &self.nav_keys.1);
         if outcome.effects.contains(&InputEffect::DismissAlert) {
             self.health.alert = None;
         }
