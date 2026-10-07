@@ -292,6 +292,50 @@ fn fold_fixture(history_carryover: usize, append: bool) -> FoldFixture {
     }
 }
 
+fn ended_carryover_fixture(rows: usize, rebirth: bool) -> FoldFixture {
+    let workspace = BenchWorkspace::new();
+    let store =
+        rimz::Store::open(workspace.paths.clone(), workspace.runtime.clone()).expect("open store");
+    rimz::testkit::fleet::seed_ended_carryover(&store, rows).expect("seed carryover");
+    let export_dir = std::env::var_os("RIMZ_CARRYOVER_FIXTURE_DIR").map(PathBuf::from);
+    if let Some(root) = &export_dir {
+        std::fs::create_dir_all(root).expect("fixture export directory");
+        let target = root.join(format!("carryover-{rows}.json"));
+        if !target.exists() {
+            std::fs::copy(&workspace.paths.agents_carryover, target).expect("export fixture");
+        }
+    }
+    let mut cursor = rimz::sidebar::consumer::RollupCursor::new();
+    if rebirth {
+        rimz::store::event_log::append(
+            &workspace.paths.events_log,
+            &rimz::store::event::EventEnvelope::session_rebirth(
+                workspace.paths.workspace_id.clone(),
+                "bench-session",
+            ),
+        )
+        .expect("append rebirth");
+        if let Some(root) = &export_dir {
+            std::fs::copy(
+                &workspace.paths.events_log,
+                root.join(format!("rebirth-{rows}.log.jsonl")),
+            )
+            .expect("export rebirth log");
+        }
+        cursor.fold(&workspace.paths).expect("prime reborn cursor");
+        rimz::store::event_log::append(
+            &workspace.paths.events_log,
+            &rimz::testkit::fleet::registered_lifecycle(&workspace.paths.workspace_id, 0),
+        )
+        .expect("append registration");
+    }
+    FoldFixture {
+        paths: workspace.paths.clone(),
+        cursor,
+        _workspace: workspace,
+    }
+}
+
 fn spending_fixture(warm: bool) -> SpendingFixture {
     spending_fixture_scaled(SPENDING_FILES, SPENDING_ENTRIES_PER_FILE, warm, false)
 }
@@ -447,6 +491,31 @@ fn rollup_fold_unchanged(bencher: Bencher, history_carryover: usize) {
         .with_inputs(|| fold_fixture(history_carryover, false))
         .bench_local_values(|mut fixture| {
             divan::black_box(fixture.cursor.fold(&fixture.paths).expect("unchanged fold"));
+            fixture
+        });
+}
+
+#[divan::bench(args = [3_300, 13_200], sample_count = 20, sample_size = 1, skip_ext_time)]
+fn carryover_fold_cold(bencher: Bencher, rows: usize) {
+    bencher
+        .with_inputs(|| ended_carryover_fixture(rows, false))
+        .bench_local_values(|mut fixture| {
+            divan::black_box(fixture.cursor.fold(&fixture.paths).expect("cold fold"));
+            fixture
+        });
+}
+
+#[divan::bench(args = [3_300, 13_200], sample_count = 20, sample_size = 1, skip_ext_time)]
+fn carryover_fold_rebirth_warm(bencher: Bencher, rows: usize) {
+    bencher
+        .with_inputs(|| ended_carryover_fixture(rows, true))
+        .bench_local_values(|mut fixture| {
+            divan::black_box(
+                fixture
+                    .cursor
+                    .fold(&fixture.paths)
+                    .expect("reborn delta fold"),
+            );
             fixture
         });
 }

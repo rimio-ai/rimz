@@ -75,6 +75,8 @@ Each event is a partial update. `carried_base` clones the prior row, `assemble_a
 | turn identity | `started_turn_id`, `superseded_turn_id` | A `turn_started` whose id differs from `started_turn_id` replaces it (an id-less start clears it) and moves the replaced id, when there is one, into `superseded_turn_id`. A repeated start for the same id and every other signal carry both. |
 | compaction | `compacting_since`, `compacted_awaiting_prompt` | `compacting_since` marks an open [compaction bracket](#the-compaction-bracket). `compacted_awaiting_prompt` is set by a sent compact command or a successful manual close, cleared only by `turn_started`, and consulted only for adapters with a native turn-start hook. |
 
+These lifetimes describe durable state. The [carryover read path](../store.md#the-read-path) retains only a bounded first-line `first_prompt` label on ended carried rows, omitting their other prompt and pane-command text in memory until an explicit full-agent read restores it.
+
 Five of these rules need their reason stated:
 
 - A provider-native subagent's `task` holds the child's type (`Explore`, and so on) and carries forward, so a finished child stays labeled when its `SubagentStop` omits the type. A root's `task` follows the activity rule.
