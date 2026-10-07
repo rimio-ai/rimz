@@ -887,6 +887,22 @@ fn linked_worktree_omits_unreadable_and_unsupported_metadata() {
 }
 
 #[test]
+fn linked_worktree_omits_submodule_checkout() {
+    let dir = tempfile::tempdir().unwrap();
+    let submodule = dir.path().join("super/sub");
+    let admin = dir.path().join("super/.git/modules/sub");
+    std::fs::create_dir_all(&submodule).unwrap();
+    std::fs::create_dir_all(&admin).unwrap();
+    std::fs::write(admin.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+    std::fs::write(submodule.join(".git"), "gitdir: ../.git/modules/sub\n").unwrap();
+    assert_eq!(
+        git_admin_dir_from_checkout_metadata(&submodule).unwrap(),
+        Some(submodule.join("../.git/modules/sub"))
+    );
+    assert_eq!(linked_worktree(&submodule), None);
+}
+
+#[test]
 fn marker_v3_json_parses_without_pr_provenance() {
     let raw = r#"{
         "version": 3,
