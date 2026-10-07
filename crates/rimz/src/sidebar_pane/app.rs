@@ -157,17 +157,27 @@ pub(super) fn serve(config: ServeConfig) -> Result<ServeOutcome> {
     let signal_stop = signals.handle();
     let close = attachment.close_handle();
     let signal_thread = std::thread::spawn(move || {
-        if signals.forever().next().is_some() {
+        let received = signals.forever().next().is_some();
+        if received {
             close.close();
         }
+        received
     });
     let plane = DataPlane::start(&config, &runtime, &diag);
     let outcome = attachment.run(&plane, backend);
     signal_stop.close();
-    let _ = signal_thread.join();
+    let signal_received = signal_thread.join().unwrap_or(false);
     // `process::exit` never runs RAII drops, so every arm below relies on
     // `run` having released the attachment's runtime files before it returned.
-    match outcome? {
+    finish_worker(outcome?, input_mode, signal_received)
+}
+
+fn finish_worker(
+    outcome: AttachmentExit,
+    input_mode: TerminalModeGuard,
+    signal_received: bool,
+) -> Result<ServeOutcome> {
+    match outcome {
         AttachmentExit::GaveUp => {
             std::process::exit(crate::sidebar_pane::supervise::RESPAWN_EXIT_CODE)
         }
@@ -187,7 +197,12 @@ pub(super) fn serve(config: ServeConfig) -> Result<ServeOutcome> {
             input_mode.preserve_for_reexec();
             Ok(ServeOutcome::SelfCloseRequested)
         }
-        AttachmentExit::Closed => Ok(ServeOutcome::Stopped),
+        AttachmentExit::Closed => {
+            if signal_received {
+                input_mode.preserve_for_reexec();
+            }
+            Ok(ServeOutcome::Stopped)
+        }
     }
 }
 

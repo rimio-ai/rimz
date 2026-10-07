@@ -261,7 +261,7 @@ fn fallback_hello(stream: &std::os::unix::net::UnixStream) -> serde_json::Value 
 
 #[test]
 #[cfg(target_os = "linux")]
-fn fallback_worker_restores_tty_and_runtime_files_on_sigterm() {
+fn fallback_worker_preserves_tty_and_removes_runtime_files_on_sigterm() {
     use nix::sys::signal::{Signal, kill};
     use nix::unistd::Pid;
     use std::io::Read;
@@ -330,7 +330,14 @@ fn fallback_worker_restores_tty_and_runtime_files_on_sigterm() {
         status.success(),
         "SIGTERM must exit through the worker's cleanup, not default signal death: {status}"
     );
-    assert_eq!(nix::sys::termios::tcgetattr(&tty).unwrap(), original);
+    assert_ne!(nix::sys::termios::tcgetattr(&tty).unwrap(), original);
+    assert!(
+        !nix::sys::termios::tcgetattr(&tty)
+            .unwrap()
+            .local_flags
+            .contains(nix::sys::termios::LocalFlags::ICANON),
+        "signal close keeps raw mode for the supervisor's next attachment"
+    );
     assert!(!runtime.sidebar_heartbeat_path(&id).exists());
     assert!(
         !runtime
@@ -339,7 +346,7 @@ fn fallback_worker_restores_tty_and_runtime_files_on_sigterm() {
             .exists()
     );
     assert!(
-        bytes
+        !bytes
             .windows(b"\x1b[?1006l\x1b[?1000l".len())
             .any(|part| part == b"\x1b[?1006l\x1b[?1000l")
     );
@@ -474,10 +481,17 @@ fn transient_fallback(reject_again: bool, stuck: bool) {
         );
         let _ = output.read_to_end(&mut bytes);
         assert!(
-            bytes
+            !bytes
                 .windows(b"\x1b[?1006l\x1b[?1000l".len())
                 .any(|part| part == b"\x1b[?1006l\x1b[?1000l"),
-            "SIGTERM must let the worker restore mouse modes before reattachment"
+            "SIGTERM must not drop mouse reporting before reattachment"
+        );
+        assert!(
+            !nix::sys::termios::tcgetattr(&tty)
+                .unwrap()
+                .local_flags
+                .contains(nix::sys::termios::LocalFlags::ICANON),
+            "raw mode remains enabled while the next hello awaits acceptance"
         );
         if reject_again && retry == 0 {
             attached
