@@ -864,6 +864,17 @@ fn holds_boundary(message: &MessageRecord) -> bool {
         || (message.status == MessageStatus::Sent && message.body == MessageBody::Prompt)
 }
 
+pub(crate) fn fresh_boundary_blocker<'a>(
+    pending: impl Iterator<Item = &'a MessageRecord> + Clone,
+    kind: &AgentKind,
+    agent_id: &AgentSessionId,
+    agent_name: Option<&str>,
+    now: Timestamp,
+) -> Option<&'a MessageRecord> {
+    queue_head(pending.clone(), kind, agent_id, agent_name, now)
+        .or_else(|| in_flight_claim(pending, kind, agent_id, agent_name, now))
+}
+
 /// A non-`Resume` unexpired claim or `Sent` prompt a fresh boundary send parks behind.
 pub(crate) fn in_flight_claim<'a>(
     pending: impl IntoIterator<Item = &'a MessageRecord>,
