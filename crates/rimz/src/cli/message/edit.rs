@@ -60,7 +60,7 @@ pub(super) fn edit_message(
     }
     match store.edit_message(&message_id, edit, &workspace.session_name)? {
         EditOutcome::Edited(_) => {
-            deliver::register_message_wake(workspace, store)?;
+            deliver::register_message_wake(workspace, store);
             #[expect(clippy::print_stdout, reason = "command result")]
             {
                 println!("edited {message_id} ({})", fields.join(", "));
@@ -180,7 +180,7 @@ pub(super) fn requeue_message(
     edit.apply(&mut copy);
     let new_id = copy.message_id.clone();
     store.queue_message(&copy, &workspace.session_name)?;
-    deliver::register_message_wake(workspace, store)?;
+    deliver::register_message_wake(workspace, store);
     let snapshot = store.snapshot_cached().context("reading agent snapshot")?;
     let label = message_target_for_record(&copy, &snapshot);
     #[expect(clippy::print_stdout, reason = "command result")]
