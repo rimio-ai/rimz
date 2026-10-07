@@ -3,6 +3,33 @@ use super::*;
 use crate::agents::context::SubagentContext;
 
 #[test]
+fn subagent_context_bounds_backfilled_task_labels() {
+    let mut child = child_state("sess-root", "child-1", AgentStatus::Running, 5);
+    child.task = None;
+    let snapshot = room(vec![child]).with_subagent_context(vec![record(
+        "child-1",
+        SubagentContext {
+            usage: None,
+            agent_type: Some("p".repeat(6 * 1024)),
+            model: None,
+            effort: None,
+            description: None,
+            cost_usd: None,
+            started_at: None,
+            observed_at: epoch(),
+        },
+    )]);
+    assert_eq!(
+        rollup_agent(&snapshot, "child-1")
+            .task
+            .as_ref()
+            .unwrap()
+            .len(),
+        crate::agents::state::PROMPT_BYTES_LIMIT
+    );
+}
+
+#[test]
 fn with_subagent_context_enriches_matching_children_and_preserves_lifecycle_type() {
     let parent = agent("claude", "sess-root", AgentStatus::Running, 100);
     let mut child = child_state("sess-root", "child-1", AgentStatus::Running, 5);

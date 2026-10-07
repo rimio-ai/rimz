@@ -909,6 +909,7 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
     if let Some(report) = &input.observation.background_shells {
         report.apply(&mut state.background_shells);
     }
+    state.bound_row();
     state
 }
 
@@ -1034,6 +1035,7 @@ fn assemble_launch_state(
         state.user_turn_started_at = Some(event.timestamp);
         state.keepalive_since = None;
     }
+    state.bound_row();
     state
 }
 

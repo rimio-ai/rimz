@@ -117,6 +117,9 @@ struct FoldCarryover {
 
 impl FoldCarryover {
     fn from_raw(mut raw: EventCarryover) -> Self {
+        for agent in &mut raw.agents {
+            agent.bound_row();
+        }
         backfill_agent_identities(&mut raw.agents, raw.agent_identity.clone());
         let agents = raw
             .agents
@@ -274,7 +277,7 @@ pub(crate) fn agent_rollup_with_carryover(
 
 /// Bump when [`RollupCache`]'s shape or a reducer's semantics change — a
 /// mismatched cache reads as absent and cold-rebuilds.
-const ROLLUP_CACHE_VERSION: u32 = 26;
+const ROLLUP_CACHE_VERSION: u32 = 27;
 
 /// The resumable agent-rollup fold base persisted in `snapshots/rollup.json`:
 /// the raw pre-projection fold map stamped with the log extent folded so far.

@@ -69,7 +69,7 @@ fn default_root_class() -> RootClass {
 
 /// Bump when [`SidebarSnapshot`]'s persisted shape changes; old
 /// `latest.json` files read as stale instead of accreting one-off guards.
-pub const SNAPSHOT_VERSION: u32 = 34;
+pub const SNAPSHOT_VERSION: u32 = 35;
 
 /// The first rollup row matching an exact provider and session identity.
 pub fn find_agent<'a>(
@@ -533,6 +533,7 @@ impl SidebarSnapshot {
                 // overwrite a type the lifecycle already established.
                 if agent.task.is_none() {
                     agent.task = context.agent_type;
+                    agent.bound_row();
                 }
                 // Lifecycle learns Claude's child model only at SubagentStop;
                 // until then, paint the transcript-harvested model without

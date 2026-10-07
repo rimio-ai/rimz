@@ -1,6 +1,55 @@
 use super::*;
 
 #[test]
+fn lifecycle_rows_bound_full_pane_stamps_and_prompt_labels() {
+    let prompt = "p".repeat(6 * 1024);
+    let mut stamp = pane("%1", "claude", "/repo");
+    stamp.spawn_command = Some("rimz agents exec ".repeat(100));
+    stamp.foreground_cmdline = stamp.spawn_command.clone();
+    let event = raw_lifecycle(
+        "claude",
+        json!({
+            "event_name": "SessionStart",
+            "agent_id": "s1",
+            "signal": { "signal": "registered" },
+            "pane_stamp": stamp,
+            "prompt": prompt,
+            "task": prompt,
+        }),
+    );
+    let agents = reduce_agent_states(&[event]);
+    let agent = &agents[0];
+    let stamp = agent.pane.as_ref().unwrap();
+    assert!(stamp.spawn_command.is_none());
+    assert!(stamp.foreground_cmdline.is_none());
+    assert_eq!(stamp.cwd.as_deref(), Some("/repo"));
+    for label in [&agent.prompt, &agent.first_prompt, &agent.task] {
+        assert_eq!(
+            label.as_ref().unwrap().len(),
+            crate::agents::state::PROMPT_BYTES_LIMIT
+        );
+    }
+}
+
+#[test]
+fn launch_rows_bound_prompt_and_task_before_registration() {
+    let prompt = "p".repeat(6 * 1024);
+    let agents = reduce_agent_states(&[launch_event(
+        "codex",
+        AgentLaunchPayload {
+            prompt: Some(prompt),
+            ..launch_payload("launch-a", "lucid-atlas")
+        },
+    )]);
+    for label in [&agents[0].prompt, &agents[0].first_prompt, &agents[0].task] {
+        assert_eq!(
+            label.as_ref().unwrap().len(),
+            crate::agents::state::PROMPT_BYTES_LIMIT
+        );
+    }
+}
+
+#[test]
 fn prompt_persists_past_stop_while_task_clears() {
     let prompt = raw_lifecycle(
         "claude",

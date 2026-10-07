@@ -47,6 +47,30 @@ fn lifecycle_state(observation: &mut LocalSessionObservation) -> &mut LocalSessi
     state
 }
 
+#[test]
+fn local_session_rows_bound_frame_argv_and_prompt_labels() {
+    let mut pane = pane("%1", "kiro-cli chat --v3", "/repo/main");
+    pane.pane_process_start = Some(ago(21));
+    pane.spawn_command = Some("kiro-cli chat --v3 ".repeat(100));
+    pane.foreground_cmdline = pane.spawn_command.clone();
+    let mut local = event_observation("sess-live", 20, 10);
+    let prompt = "p".repeat(6 * 1024);
+    let projection = lifecycle_state(&mut local);
+    projection.latest_prompt = Some(prompt.clone());
+    projection.native_prompt_detail = Some(prompt);
+    let snapshot = room(Vec::new()).with_local_sessions(std::slice::from_ref(&pane), vec![local]);
+    let agent = rollup_agent(&snapshot, "sess-live");
+    assert!(agent.pane.as_ref().unwrap().spawn_command.is_none());
+    assert!(agent.pane.as_ref().unwrap().foreground_cmdline.is_none());
+    for label in [&agent.prompt, &agent.first_prompt, &agent.task] {
+        assert_eq!(
+            label.as_ref().unwrap().len(),
+            crate::agents::state::PROMPT_BYTES_LIMIT
+        );
+    }
+    assert!(pane.spawn_command.is_some(), "the frame remains intact");
+}
+
 fn event_observation(
     id: &str,
     created_secs_ago: i64,

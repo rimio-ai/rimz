@@ -1,6 +1,43 @@
 use super::*;
 
 #[test]
+fn carryover_file_bounds_rows_even_without_active_events() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = StatePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
+    paths.ensure_dirs().unwrap();
+    let mut carried = agent("claude", "carried", AgentStatus::Idle, 0);
+    let prompt = "p".repeat(6 * 1024);
+    carried.prompt = Some(prompt.clone());
+    carried.first_prompt = Some(prompt.clone());
+    carried.task = Some(prompt);
+    let mut stamp = pane("%1", "claude", "/repo");
+    stamp.spawn_command = Some("argv".repeat(400));
+    stamp.foreground_cmdline = stamp.spawn_command.clone();
+    carried.pane = Some(stamp);
+    write_carryover(
+        &paths.agents_carryover,
+        &EventCarryover {
+            agents: vec![carried],
+            ..EventCarryover::default()
+        },
+    )
+    .unwrap();
+
+    let mut cursor = RollupCursor::new();
+    let (_, agents, _) = cursor.fold(&paths).unwrap();
+    assert_eq!(agents.len(), 1);
+    let carried = agents.iter().next().unwrap();
+    assert!(carried.pane.as_ref().unwrap().spawn_command.is_none());
+    assert!(carried.pane.as_ref().unwrap().foreground_cmdline.is_none());
+    for label in [&carried.prompt, &carried.first_prompt, &carried.task] {
+        assert_eq!(
+            label.as_ref().unwrap().len(),
+            crate::agents::state::PROMPT_BYTES_LIMIT
+        );
+    }
+}
+
+#[test]
 fn launch_warnings_hydrate_a_rotated_row() {
     let carried = agent("codex", "agent-1", AgentStatus::Idle, 1_000);
     let warning = EventEnvelope::new(

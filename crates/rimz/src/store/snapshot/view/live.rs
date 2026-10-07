@@ -540,6 +540,7 @@ fn merge_bound_local_session(
         }
         state.registered_at = Some(observation.created_at);
     }
+    state.bound_row();
     agents.push(state);
 }
 
