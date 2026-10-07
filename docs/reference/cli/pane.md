@@ -153,21 +153,24 @@ The new pane's normalized id (`tmux:%3` or `zellij:terminal_7`) is the only line
 
 ```text
 PANE          LABEL                      WRITE/S
-tmux:%2       #auth-refresh - codex        39k/s
-tmux:%1       #auth-refresh - claude        3k/s
+tmux:%2       @codex#auth-refresh          39k/s
+tmux:%1       @claude#auth-refresh          3k/s
 tmux:%4       #auth-refresh - zsh         120B/s
 WIRE(ssh↑)    ssh egress → client(s)        6k/s
 WIRE(ssh↓)    ssh ingress ← client(s)     400B/s
-TOTAL         5s sample                    43k/s
+TOTAL         5s sample                    42k/s
 
 per-pane rows are producer write-rate; muxes diff the focused tab and SSH compresses it, so WIRE(ssh) is the actual TCP payload on this room's SSH socket, usually far below the per-pane sum. WIRE is absent for local rooms.
 ```
 
-Each pane row is everything the pane's process tree wrote, including files such as transcripts, labelled `<tab> - <command>`. The two `WIRE(ssh)` rows are what actually crossed the SSH socket to and from attached clients, after the multiplexer redraws only the focused tab and SSH compresses the stream, so they sit far below the per-pane sum. They appear only when an SSH client is attached and `ss` can read the socket's counters. `TOTAL` is the sum of the pane rows. Full-screen programs that redraw constantly, such as an agent mid-turn or a system monitor, lead the report.
+Each pane row is everything the pane's process tree wrote, including files such as transcripts. An agent pane is labelled by its handle, a sidebar `<tab> - sidebar`, and other panes `<tab> - <command>`. Tab names omit RimZ's status glyph suffix. Rows with a zero write rate are hidden unless `--all` is passed; a line after `TOTAL` counts the quiet panes not shown. `TOTAL` includes every pane, including quiet panes.
+
+The two `WIRE(ssh)` rows are what actually crossed the SSH socket to and from attached clients, after the multiplexer redraws only the focused tab and SSH compresses the stream, so they sit far below the per-pane sum. They appear only when an SSH client is attached and `ss` can read the socket's counters. The caveat paragraph appears only with these rows. Full-screen programs that redraw constantly, such as an agent mid-turn or a system monitor, lead the report.
 
 | Flag | Meaning |
 | --- | --- |
 | `--secs <N>` | Sampling window in seconds. Default `5`; `0` is refused. A process started during the window is not counted, so a longer window catches more. |
-| `--json` | Print `available`, `sample_secs`, `total_bps`, `wire_tx_bps` and `wire_rx_bps` (present only with an SSH client), `panes` (each with `pane_id`, `label`, `bps`), `caveat`, and `message`. |
+| `--all` | Include quiet panes (zero write rate) in the table. |
+| `--json` | Print `available`, `sample_secs`, `total_bps`, `wire_tx_bps` and `wire_rx_bps` (present only with an SSH client), `panes` (each with `pane_id`, `label`, `write_bps`), `caveat` (only with wire rates), and `message`. Every pane is included, regardless of `--all`. |
 
 When the host cannot measure, the command prints one notice instead of the report and exits `0`; with `--json` it sets `available` to `false` and puts the notice in `message`. The notices cover a host that is not Linux, no pane that resolves to a process (on Zellij, a pane resolves only while it runs a uniquely named foreground command, so idle shells are skipped), and unreadable `/proc/<pid>/io` (usually a room served by another user, or a kernel built without `CONFIG_TASK_IO_ACCOUNTING`). The [bandwidth attribution internals](../../internals/remote.md#bandwidth-attribution) explain the measurements.
