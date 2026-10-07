@@ -248,7 +248,7 @@ fn attempt_delivery(
     let Some(claimed) = claimed else {
         return Ok(DeliveryReport::Stopped(None));
     };
-    arm_claim_wake(workspace, store);
+    refresh_message_wake(workspace, store);
     #[cfg(feature = "testkit")]
     crate::testkit::rendezvous("RIMZ_TEST_DELIVERY_AFTER_CLAIM");
     match cancel_joined_subagent_report(workspace, store, &claimed[0]) {
@@ -294,7 +294,7 @@ fn attempt_delivery(
         },
         &mut live_send,
     )?;
-    register_message_wake(workspace, store)?;
+    refresh_message_wake(workspace, store);
     Ok(if matches!(outcome, AttemptOutcome::Sent { .. }) {
         DeliveryReport::Sent
     } else {
@@ -1071,12 +1071,16 @@ fn delivery_candidate<'a>(
     }))
 }
 
-/// Arms the elder's wake for a claim before its pane write, so a sender that dies mid-write is
-/// requeued after `CLAIM_TTL`. Wakes are latency, never truth: a stamp that cannot be written
-/// delays that recovery and does not stop the send.
-pub(super) fn arm_claim_wake(workspace: &ResolvedWorkspace, store: &Store) {
+/// Refreshes the elder's wake around a send: before a claim's pane write, so a sender that dies
+/// mid-write is requeued after `CLAIM_TTL`, and after the attempt, so the elder sees what remains.
+/// Wakes are latency, never truth: a stamp that cannot be written delays the elder's next look and
+/// never changes the outcome of the claim or the send it follows.
+pub(super) fn refresh_message_wake(workspace: &ResolvedWorkspace, store: &Store) {
     if let Err(error) = register_message_wake(workspace, store) {
-        tracing::warn!(%error, "cannot arm the claim recovery wake");
+        tracing::warn!(
+            %error,
+            "cannot refresh the message wake stamp; the elder sweep may run late"
+        );
     }
 }
 
