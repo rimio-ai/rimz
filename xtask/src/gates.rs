@@ -332,6 +332,7 @@ struct GateOptions {
 
 pub(crate) fn gate(root: &Path, args: &[String]) -> Result<()> {
     let options = parse_gate_options(args)?;
+    warn_if_behind_trunk(root);
     let invocation = gate_invocation(options);
     let fmt_step = match options.fmt {
         FmtMode::Fix => gate_fmt_fix,
@@ -390,6 +391,31 @@ pub(crate) fn gate(root: &Path, args: &[String]) -> Result<()> {
         bail!("gate failed at {}", failed.join(", "));
     }
     Ok(())
+}
+
+#[expect(
+    clippy::print_stderr,
+    reason = "xtask prints the stale-base advisory to the operator's stderr"
+)]
+fn warn_if_behind_trunk(root: &Path) {
+    // Advisory only: use the fetched ref without adding network access to the gate.
+    let Ok(output) = Command::new("git")
+        .current_dir(root)
+        .args(["rev-list", "--count", "HEAD..origin/main"])
+        .output()
+    else {
+        return;
+    };
+    if !output.status.success() {
+        return;
+    }
+    if let Ok(behind) = String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .parse::<u64>()
+        && behind > 0
+    {
+        eprintln!("warning: branch is {behind} commits behind origin/main; rebase first");
+    }
 }
 
 fn parse_gate_options(args: &[String]) -> Result<GateOptions> {
