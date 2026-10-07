@@ -342,7 +342,7 @@ pub(super) fn build_bottom_chrome(
     let mut bottom = RenderedBlock::default();
     let folded_footer = plan
         .folded_footer
-        .then(|| footer_parts(snapshot, theme, inner));
+        .then(|| footer_parts(snapshot, theme, inner, ui));
     bottom.append(dashboard_chrome(
         snapshot,
         theme,
@@ -373,7 +373,7 @@ pub(super) fn build_bottom_chrome(
         bottom.extend_inert(gate_notice_lines(theme, notice).into_iter().map(pad_chrome));
     }
     if plan.footer {
-        let footer = footer_lines(snapshot, theme, inner);
+        let footer = footer_lines(snapshot, theme, inner, ui);
         if !footer.is_empty() {
             // No rule above the footer — it sits quietly under the dashboard's
             // own top rule, with one blank line of breathing room when a
@@ -800,6 +800,17 @@ pub(super) fn scroll_lines(
     mut meter_pixels: Option<&mut MeterPixels>,
 ) -> RenderedBlock {
     let mut block = RenderedBlock::default();
+
+    if roster.len() == 0
+        && ui
+            .search_draft
+            .as_deref()
+            .or(ui.make_up_filter.query.as_deref())
+            .is_some_and(|query| !query.is_empty())
+    {
+        block.push_inert(pad_chrome(Line::styled("no match", theme.muted())));
+        return block;
+    }
 
     if !snapshot.worktree_groups.is_empty() {
         let lead_unread_id = lead_unread(&snapshot.worktree_groups).map(|(id, _)| id);

@@ -4,34 +4,42 @@ expression: screen
 ---
  ⌘ query-engine
 
- ◎ 0
- ¤ 1
+ ◎ 0                                                            ◇ 0 ↘ 0 ↗ 0 ◌ 0
+ ¤ 6                                                                      $0.00
  ──────────────────────────────────────────────────────────────────────────────
- ? 1   ! 0   ⏸︎ 0   ✓ 0                                                ⢿ 0   ○ 0
+ ? 0   ! 0   ⏸︎ 0   ✓ 0                                          ⢿ 6   ☾ 0   ○ 0
 
-▎⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄🮇
-▌? codex                                                                       ▐
-▌  allow?                                                                      ▐
+▎⑂ alpha ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄🮇
+▌⣾ codex                                                                       ▐
+▌  task-0                                                                      ▐
 ▌  ▢ ────────────────────────────────────────────────────────────────────    0%▐
-
-
-                                       ╭ help ─────────────────────────────────╮
-                                       │ keys                                  │
-                                       │ ↕ j/k rows          ↕ J/K   worktrees │
-                                       │ ↕ g/G ends          ↕ ^f/^b page      │
-                                       │ ↕ H/L screen        ⏎ l     focus     │
-                                       │ ⏎ 1-9 direct        ␣ n/N   needs-you │
-                                       │ ✉ m   read/unread   ✉ M     read all  │
-                                       │ ↔ ←/→ account tabs  ⟳ r     reload    │
-                                       │ ✕ x   dismiss                         │
-                                       │                                       │
-                                       │ filter                                │
-                                       │ ? q   waiting       ! e     attention │
-                                       │ ⏸︎ p   paused        ✓ d     done      │
-                                       │ ⢿ w   working       ○ o     idle      │
-                                       │ ● u   unread        ≡ a     all       │
+▌  ▤ 0                                                                         ▐
+▎⣾ codex                                                                       🮇
+▎  task-1                                                                      🮇
+▎  ▢ ────────────────────────────────────────────────────────────────────    0%🮇
+▎  ▤ 0                                                                         🮇
+▎⣾ codex                                                                       🮇
+▎  task-2                                                                      🮇
+▎  ▢ ──────────────────────────────────╭ help ─────────────────────────────────╮
+▎  ▤ 0                                 │ keys                                  │
+                                       │   /   search                          │
+ ⑂ beta                                │ ↕ j/k rows          ↕ J/K   worktrees │
+ ⣾ codex                               │ ↕ g/G ends          ↕ ^f/^b page      │
+   task-3                              │ ↕ H/L screen        ⏎ l     focus     │
+   ▢ ──────────────────────────────────│ ⏎ 1-9 direct        ␣ n/N   needs-you │
+   ▤ 0                                 │ ✉ m   read/unread   ✉ M     read all  │
+ ⣾ codex                               │ ↔ ←/→ account tabs  ⟳ r     reload    │
+   task-4                              │ ✕ x   dismiss       ↕ a/d   width     │
+   ▢ ──────────────────────────────────│                                       │
+   ▤ 0                                 │ filter                                │
+ ⣾ codex                               │ ? q   waiting       ! e     attention │
+   task-5                              │ ⏸︎ p   paused        ✓ s     done      │
+   ▢ ──────────────────────────────────│ ⢿ w   working       ○ o     idle      │
+   ▤ 0                                 │ ☾ z   sleeping                        │
+                                       │ ● u   unread        ≡ A     all       │
                                        │                                       │
                                        │ ▐ alt p sidebar                       │
+                                       │   alt g zoom                          │
                                        ╰────────── any key to close ───────────╯
  ──────────────────────────────────────────────────────────────────────────────
   W: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                                                 $0.00

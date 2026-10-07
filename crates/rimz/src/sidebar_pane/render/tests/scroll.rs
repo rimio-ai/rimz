@@ -152,6 +152,19 @@ fn help_overlay_floats_over_cards_with_scrollbar() {
         rendered.contains("task-0"),
         "the floating help box leaves uncovered card body visible:\n{rendered}"
     );
+    assert_snapshot(
+        "help_overlay_floating_box",
+        snapshot_to_screen_with_alert_and_ui(
+            &snapshot,
+            None,
+            &UiState {
+                help_visible: true,
+                ..Default::default()
+            },
+            80,
+            44,
+        ),
+    );
 }
 #[test]
 fn render_scroll_offset_follows_selection_to_bottom() {

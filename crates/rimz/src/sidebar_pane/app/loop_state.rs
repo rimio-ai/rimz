@@ -48,8 +48,8 @@ use super::paint::FramePainter;
 use super::reload::{ReloadAction, reload_action};
 use super::remind::RemindState;
 use super::selection::{
-    InputEffect, InputOutcome, handle_key, handle_mouse_click, handle_scroll, reconcile_selection,
-    row_index_of_pane, set_make_up_filter,
+    InputEffect, InputOutcome, finish_search, handle_key, handle_mouse_click, handle_scroll,
+    reconcile_selection, row_index_of_pane, set_make_up_filter,
 };
 use super::socket::{heartbeat_write_due, write_heartbeat};
 use super::state::{
@@ -157,6 +157,8 @@ pub(super) fn handle_wakeup(
         Wakeup::Press { code, mods } => {
             let mode = if ui.help_visible {
                 InputMode::Help
+            } else if ui.search_draft.is_some() {
+                InputMode::Typing
             } else {
                 InputMode::Normal
             };
@@ -178,7 +180,13 @@ pub(super) fn handle_wakeup(
     }
     match wakeup {
         Wakeup::Key(action) => handle_key(action, ui, snapshot),
-        Wakeup::MouseClick { column, row } => handle_mouse_click(column, row, ui, snapshot),
+        Wakeup::MouseClick { column, row } => {
+            let mut outcome = finish_search(ui, snapshot, true);
+            let click = handle_mouse_click(column, row, ui, snapshot);
+            outcome.redraw |= click.redraw;
+            outcome.effects.extend(click.effects);
+            outcome
+        }
         Wakeup::Scroll { down } => handle_scroll(down, ui),
         Wakeup::Resize => InputOutcome::redraw(),
         // The serve loop intercepts these before dispatching here: a tick, a
@@ -810,6 +818,10 @@ impl LoopState {
         } else if own_unfocused {
             self.optimistic_watch_until = None;
             self.ui.help_visible = false;
+            if self.ui.search_draft.take().is_some() {
+                reconcile_selection(&mut self.ui, &self.current, None);
+                self.dirty = true;
+            }
         }
     }
 
@@ -933,34 +945,36 @@ impl LoopState {
             // paint settles any frame the loop owed.
             self.dirty = false;
         }
-        let interacted = applied.redraw || applied.effect.is_some();
-        if interacted && !matches!(applied.effect, Some(InputEffect::Reload)) {
+        let interacted = applied.redraw || !applied.effects.is_empty();
+        if interacted && !applied.effects.contains(&InputEffect::Reload) {
             order_hold::arm_order_hold(&mut self.ui, jiff::Timestamp::now().as_millisecond());
         }
-        match applied.effect {
-            Some(InputEffect::Focus(pane)) => {
-                spawn_pane_focus(
-                    pane,
-                    &self.config.session_name,
-                    self.runtime.clone(),
-                    crate::mux::focus_anchor::FocusOrigin::User,
-                    None,
-                    (self.ui.scroll_offset, Some(self.ui.last_order.clone())),
-                    None,
-                );
+        for effect in applied.effects {
+            match effect {
+                InputEffect::Focus(pane) => {
+                    spawn_pane_focus(
+                        pane,
+                        &self.config.session_name,
+                        self.runtime.clone(),
+                        crate::mux::focus_anchor::FocusOrigin::User,
+                        None,
+                        (self.ui.scroll_offset, Some(self.ui.last_order.clone())),
+                        None,
+                    );
+                }
+                InputEffect::Width(dir) => {
+                    let Ok(size) = terminal.size() else {
+                        return Ok(LoopFlow::Continue);
+                    };
+                    self.width_control.adjust(size.width, dir);
+                }
+                InputEffect::MarkRead(row_id) => self.mark_row_read(fetch, &row_id),
+                InputEffect::MarkUnread(row_id) => self.mark_row_unread(fetch, &row_id),
+                InputEffect::MarkAllRead => self.mark_all_read(fetch),
+                InputEffect::SyncFilter(filter) => self.persist_body_filter(filter),
+                InputEffect::Reload => return Ok(self.handle_reload(fetch)),
+                InputEffect::DismissAlert => {}
             }
-            Some(InputEffect::Width(dir)) => {
-                let Ok(size) = terminal.size() else {
-                    return Ok(LoopFlow::Continue);
-                };
-                self.width_control.adjust(size.width, dir);
-            }
-            Some(InputEffect::MarkRead(row_id)) => self.mark_row_read(fetch, &row_id),
-            Some(InputEffect::MarkUnread(row_id)) => self.mark_row_unread(fetch, &row_id),
-            Some(InputEffect::MarkAllRead) => self.mark_all_read(fetch),
-            Some(InputEffect::SyncFilter(filter)) => self.persist_body_filter(filter),
-            Some(InputEffect::Reload) => return Ok(self.handle_reload(fetch)),
-            Some(InputEffect::DismissAlert) | None => {}
         }
         Ok(LoopFlow::Continue)
     }
@@ -993,8 +1007,9 @@ impl LoopState {
         wakeup: Wakeup,
         terminal: &mut Terminal<PaneBackend>,
     ) -> Result<InputOutcome> {
-        let outcome = handle_wakeup(wakeup, &mut self.ui, &self.current, &self.config.nav_keys);
-        if matches!(outcome.effect, Some(InputEffect::DismissAlert)) {
+        let keymap = super::NavKeymap::from_config(&self.current.sidebar.keys);
+        let outcome = handle_wakeup(wakeup, &mut self.ui, &self.current, &keymap);
+        if outcome.effects.contains(&InputEffect::DismissAlert) {
             self.health.alert = None;
         }
         if outcome.redraw {

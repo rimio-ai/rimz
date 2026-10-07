@@ -82,7 +82,6 @@ pub struct ServeConfig {
     pub refresh_ms_override: Option<u16>,
     pub timezone: jiff::tz::TimeZone,
     pub notification_prefs: NotificationsPrefs,
-    pub nav_keys: NavKeymap,
     /// The sidebar's own mux pane, resolved once from the per-pane env at
     /// launch (`crate::mux::own_pane_id`) — the fold's self-exclusion and the
     /// heartbeat's pane claim. `None` outside a pane. Carried here rather than

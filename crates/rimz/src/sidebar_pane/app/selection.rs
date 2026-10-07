@@ -21,7 +21,7 @@ const SCROLL_STEP: usize = 3;
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(super) struct InputOutcome {
     pub(super) redraw: bool,
-    pub(super) effect: Option<InputEffect>,
+    pub(super) effects: Vec<InputEffect>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -52,14 +52,14 @@ impl InputOutcome {
 
     pub(super) fn focus(pane: PaneId) -> Self {
         Self {
-            effect: Some(InputEffect::Focus(pane)),
+            effects: vec![InputEffect::Focus(pane)],
             ..Self::default()
         }
     }
 
     fn width(width: WidthAdjust) -> Self {
         Self {
-            effect: Some(InputEffect::Width(width)),
+            effects: vec![InputEffect::Width(width)],
             ..Self::default()
         }
     }
@@ -67,7 +67,7 @@ impl InputOutcome {
     pub(super) fn dismiss() -> Self {
         Self {
             redraw: true,
-            effect: Some(InputEffect::DismissAlert),
+            effects: vec![InputEffect::DismissAlert],
         }
     }
 
@@ -76,21 +76,21 @@ impl InputOutcome {
     /// flashes the pre-clear state first.
     fn mark_read(row_id: String) -> Self {
         Self {
-            effect: Some(InputEffect::MarkRead(row_id)),
+            effects: vec![InputEffect::MarkRead(row_id)],
             ..Self::default()
         }
     }
 
     fn mark_unread(row_id: String) -> Self {
         Self {
-            effect: Some(InputEffect::MarkUnread(row_id)),
+            effects: vec![InputEffect::MarkUnread(row_id)],
             ..Self::default()
         }
     }
 
     fn mark_all_read() -> Self {
         Self {
-            effect: Some(InputEffect::MarkAllRead),
+            effects: vec![InputEffect::MarkAllRead],
             ..Self::default()
         }
     }
@@ -98,7 +98,7 @@ impl InputOutcome {
     fn sync_filter(filter: BodyLens) -> Self {
         Self {
             redraw: true,
-            effect: Some(InputEffect::SyncFilter(filter)),
+            effects: vec![InputEffect::SyncFilter(filter)],
         }
     }
 }
@@ -188,10 +188,34 @@ pub(super) fn handle_key(
     snapshot: &SidebarSnapshot,
 ) -> InputOutcome {
     match action {
+        KeyAction::Search => {
+            ui.search_draft = Some(ui.make_up_filter.query.clone().unwrap_or_default());
+            select_first_search_match(ui, snapshot);
+            InputOutcome::redraw()
+        }
+        KeyAction::QueryChar(ch) => {
+            if let Some(draft) = &mut ui.search_draft {
+                draft.push(ch);
+                select_first_search_match(ui, snapshot);
+                return InputOutcome::redraw();
+            }
+            InputOutcome::default()
+        }
+        KeyAction::Backspace => {
+            let Some(draft) = &mut ui.search_draft else {
+                return InputOutcome::default();
+            };
+            if draft.pop().is_none() {
+                return finish_search(ui, snapshot, false);
+            }
+            select_first_search_match(ui, snapshot);
+            InputOutcome::redraw()
+        }
+        KeyAction::CancelSearch => finish_search(ui, snapshot, false),
         KeyAction::WidthNarrower => InputOutcome::width(WidthAdjust::Narrower),
         KeyAction::WidthWider => InputOutcome::width(WidthAdjust::Wider),
         KeyAction::Reload => InputOutcome {
-            effect: Some(InputEffect::Reload),
+            effects: vec![InputEffect::Reload],
             ..InputOutcome::default()
         },
         KeyAction::Up => {
@@ -222,6 +246,16 @@ pub(super) fn handle_key(
         KeyAction::ScreenTop => select_screen_edge(ui, snapshot, End::Top),
         KeyAction::ScreenBottom => select_screen_edge(ui, snapshot, End::Bottom),
         KeyAction::Enter => {
+            if let Some(draft) = &ui.search_draft {
+                let pane = (!draft.is_empty())
+                    .then(|| ui.selected_pane.clone())
+                    .flatten();
+                let mut outcome = finish_search(ui, snapshot, true);
+                if let Some(pane) = pane {
+                    outcome.effects.push(InputEffect::Focus(pane));
+                }
+                return outcome;
+            }
             // Focus the current visible row without moving the highlight — it
             // follows once the derived baseline catches up, identical to a
             // click.
@@ -265,6 +299,35 @@ pub(super) fn handle_key(
         KeyAction::TabNext => cycle_dashboard_tab(ui, snapshot, 1),
         KeyAction::Other => InputOutcome::default(),
     }
+}
+
+fn select_first_search_match(ui: &mut UiState, snapshot: &SidebarSnapshot) {
+    let roster = ui.visible_roster(snapshot);
+    select_row_in(ui, &roster, 0);
+    ui.browse = None;
+}
+
+pub(super) fn finish_search(
+    ui: &mut UiState,
+    snapshot: &SidebarSnapshot,
+    commit: bool,
+) -> InputOutcome {
+    let Some(draft) = ui.search_draft.take() else {
+        return InputOutcome::default();
+    };
+    let mut lens = ui.make_up_filter.clone();
+    lens.query = (commit && !draft.is_empty()).then_some(draft);
+    let changed = set_make_up_filter(ui, snapshot, lens);
+    if !commit {
+        reconcile_selection(ui, snapshot, None);
+    }
+    if !changed {
+        // The draft narrowed the body; ending it widens the roster back to the unchanged lens.
+        ui.manual_scroll = None;
+        anchor_selection(ui, snapshot);
+        return InputOutcome::redraw();
+    }
+    InputOutcome::sync_filter(ui.make_up_filter.clone())
 }
 
 /// Step the dashboard's tab `step` entries left or right of the currently
@@ -597,7 +660,10 @@ fn reconcile_browse_and_selection(ui: &mut UiState, snapshot: &SidebarSnapshot) 
         ui.browse = Some(browse);
         browse_pinned = true;
     }
-    if !browse_pinned && let Some(pane) = ui.baseline_pane.clone() {
+    if !browse_pinned
+        && ui.search_draft.is_none()
+        && let Some(pane) = ui.baseline_pane.clone()
+    {
         ui.selected_pane = Some(pane);
     }
 
@@ -656,6 +722,9 @@ fn anchor_selection_in(ui: &mut UiState, roster: &VisibleRoster<'_>) {
         ui.selected_pane = None;
     }
     clamp_selection_in(ui, roster);
+    if ui.search_draft.is_some() {
+        ui.selected_pane = roster.pane_at_ordinal(ui.selected_index);
+    }
 }
 
 /// The visible-row index backing `pane_id` under the lens. Pass an empty lens for room membership regardless of body narrowing, and the active lens for rendered membership.

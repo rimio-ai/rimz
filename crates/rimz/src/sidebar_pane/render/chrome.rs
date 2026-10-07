@@ -11,7 +11,7 @@ use ratatui::text::{Line, Span};
 use super::fmt::age_short;
 use super::labels::{status_glyph, status_rest_style};
 use super::theme::{Component, Theme};
-use super::{Alert, GateNotice, layout};
+use super::{Alert, GateNotice, UiState, layout};
 use crate::remote::link::link_badge_heat;
 
 /// The borderless repo header (dashboard L1): the workspace name behind a `⌘`
@@ -159,17 +159,23 @@ pub(super) fn footer_lines(
     snapshot: &SidebarSnapshot,
     theme: &Theme,
     width: usize,
+    ui: &UiState,
 ) -> Vec<Line<'static>> {
-    vec![footer_line(footer_parts(snapshot, theme, width), width)]
+    vec![footer_line(footer_parts(snapshot, theme, width, ui), width)]
 }
 
 #[derive(Clone)]
 pub(super) struct FooterParts {
-    pub(super) left: Vec<Span<'static>>,
-    pub(super) help: Span<'static>,
+    left_options: Vec<Vec<Span<'static>>>,
+    help: Span<'static>,
 }
 
-pub(super) fn footer_parts(snapshot: &SidebarSnapshot, theme: &Theme, width: usize) -> FooterParts {
+pub(super) fn footer_parts(
+    snapshot: &SidebarSnapshot,
+    theme: &Theme,
+    width: usize,
+    ui: &UiState,
+) -> FooterParts {
     const HELP_TEXT: &str = "? for help";
 
     let presence = presence_badge(snapshot.presence, theme, width);
@@ -178,35 +184,58 @@ pub(super) fn footer_parts(snapshot: &SidebarSnapshot, theme: &Theme, width: usi
         .as_ref()
         .map(|link| link_badge(link, theme, width));
     let has_presence = presence.is_some();
-    let help_text = layout::clip(HELP_TEXT, width);
-    let help = Span::styled(help_text, theme.faint());
-    let help_start = width.saturating_sub(help.width());
+    let help = Span::styled(HELP_TEXT, theme.faint());
 
-    let left = footer_left_spans(presence.clone(), link.clone());
-    if footer_left_fits(&left, help_start) {
-        return FooterParts { left, help };
+    let search = if let Some(draft) = &ui.search_draft {
+        Some(vec![
+            Span::styled(format!("/{draft}"), theme.body()),
+            Span::styled(" ", theme.body().add_modifier(Modifier::REVERSED)),
+        ])
+    } else {
+        ui.make_up_filter.query.as_ref().map(|query| {
+            vec![Span::styled(
+                format!("/{query}"),
+                theme.picked_chip(theme.body_tone(), Modifier::empty()),
+            )]
+        })
+    };
+    if let Some(search) = search {
+        let mut left_options = Vec::new();
+        for badges in [
+            footer_left_spans(presence, link.clone()),
+            footer_left_spans(None, link),
+            Vec::new(),
+        ] {
+            let mut left = search.clone();
+            if !badges.is_empty() {
+                left.push(Span::raw("  "));
+                left.extend(badges);
+            }
+            left_options.push(left);
+        }
+        return FooterParts { left_options, help };
     }
+
+    let mut left_options = vec![footer_left_spans(presence.clone(), link.clone())];
     if has_presence {
-        let left = footer_left_spans(presence, None);
-        if footer_left_fits(&left, help_start) {
-            return FooterParts { left, help };
-        }
+        left_options.push(footer_left_spans(presence, None));
     }
-    if !has_presence {
-        let left = footer_left_spans(None, link);
-        if footer_left_fits(&left, help_start) {
-            return FooterParts { left, help };
-        }
-    }
-    FooterParts {
-        left: Vec::new(),
-        help,
-    }
+    left_options.push(Vec::new());
+    FooterParts { left_options, help }
 }
 
-fn footer_line(parts: FooterParts, width: usize) -> Line<'static> {
-    let help_start = width.saturating_sub(parts.help.width());
-    positioned_footer_line(parts.left, Some((help_start, parts.help)))
+pub(super) fn footer_line(parts: FooterParts, width: usize) -> Line<'static> {
+    let help = Span::styled(layout::clip(&parts.help.content, width), parts.help.style);
+    let help_start = width.saturating_sub(help.width());
+    let mut left = Vec::new();
+    for option in parts.left_options {
+        left = option;
+        if footer_left_fits(&left, help_start) {
+            break;
+        }
+    }
+    let left = layout::trim_spans_to_width(left, help_start.saturating_sub(1));
+    positioned_footer_line(left, Some((help_start, help)))
         .unwrap_or_else(|| Line::from(Vec::<Span<'static>>::new()))
 }
 
@@ -365,6 +394,7 @@ fn help_body_rows(
         )
     };
     let keys_section = vec![
+        (key_entry(theme, None, "/", "search"), None),
         (
             movement(
                 format!("{}/{}", chord_label(&keys.down), chord_label(&keys.up)),
