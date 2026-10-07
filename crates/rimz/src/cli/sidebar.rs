@@ -381,6 +381,10 @@ enum SidebarFixtureState {
     Focus,
     Economy,
     Reach,
+    Clocks,
+    ClocksDone,
+    ClocksNerdFont,
+    ClocksDoneNerdFont,
 }
 
 impl SidebarArgs {

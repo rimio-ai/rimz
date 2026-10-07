@@ -64,6 +64,12 @@ pub(super) fn sidebar_fixture_snapshot(state: SidebarFixtureState) -> Result<Sid
         SidebarFixtureState::Focus => add_focus_fixture(&mut snapshot, now),
         SidebarFixtureState::Economy => add_economy_fixture(&mut snapshot, now),
         SidebarFixtureState::Reach => add_reach_fixture(&mut snapshot, now),
+        SidebarFixtureState::Clocks
+        | SidebarFixtureState::ClocksDone
+        | SidebarFixtureState::ClocksNerdFont
+        | SidebarFixtureState::ClocksDoneNerdFont => {
+            add_clock_fixture(&mut snapshot, now, state);
+        }
     }
     snapshot.sort_groups_for_presentation();
     for group in &mut snapshot.worktree_groups {
@@ -80,6 +86,172 @@ fn fixture_now() -> Result<jiff::Timestamp> {
     "2026-06-09T12:00:00Z"
         .parse()
         .context("parsing sidebar fixture timestamp")
+}
+
+fn add_clock_fixture(
+    snapshot: &mut SidebarSnapshot,
+    now: jiff::Timestamp,
+    state: SidebarFixtureState,
+) {
+    use rimz::agents::{AgentStatus, TurnPhase};
+
+    let done = matches!(
+        state,
+        SidebarFixtureState::ClocksDone | SidebarFixtureState::ClocksDoneNerdFont
+    );
+    if matches!(
+        state,
+        SidebarFixtureState::ClocksNerdFont | SidebarFixtureState::ClocksDoneNerdFont
+    ) {
+        snapshot.theme.style = Some(rimz::config::ThemeStyle::Modern);
+    }
+    let sub_agents = [
+        (
+            "healthy",
+            AgentStatus::Running,
+            "making progress",
+            7_200,
+            0,
+            206_000,
+            1.02,
+        ),
+        (
+            "quiet",
+            AgentStatus::Running,
+            "quiet for eight minutes",
+            7_200,
+            480,
+            206_000,
+            1.02,
+        ),
+        (
+            "silent",
+            AgentStatus::Failed,
+            "stalled native child",
+            600,
+            1_801,
+            109_000,
+            0.46,
+        ),
+        (
+            "serve",
+            AgentStatus::Success,
+            "map sidebar serve supervisor",
+            540,
+            60,
+            109_000,
+            0.46,
+        ),
+        (
+            "cli",
+            AgentStatus::Success,
+            "map cli entry and gates",
+            960,
+            90,
+            206_000,
+            1.02,
+        ),
+        (
+            "perf",
+            AgentStatus::Success,
+            "map perf and live harness",
+            780,
+            120,
+            163_000,
+            0.74,
+        ),
+    ]
+    .into_iter()
+    .filter(|(_, status, _, _, _, _, _)| !done || *status == AgentStatus::Success)
+    .map(
+        |(id, status, description, elapsed_secs, quiet_secs, tokens, cost_usd)| {
+            let mut child = sub_agent(
+                SubAgentSpec {
+                    id,
+                    name: "explorer",
+                    status,
+                    phase: if status == AgentStatus::Running {
+                        TurnPhase::Reasoning
+                    } else {
+                        TurnPhase::Idle
+                    },
+                    task: None,
+                    model: Some("GPT 6.1 Sol"),
+                    description: Some(description),
+                    tokens: Some(SubAgentTokens::Total(tokens)),
+                    context_window: None,
+                    cost_usd: Some(cost_usd),
+                    elapsed_secs: Some(elapsed_secs),
+                    quiet_secs,
+                },
+                now,
+            );
+            if id == "silent" {
+                child.stalled = true;
+                child.turn_error_label = Some("silent 30m".to_owned());
+            }
+            child
+        },
+    )
+    .collect();
+    let mut row = agent_row(
+        AgentRowSpec {
+            id: "clock-parent",
+            name: "claude",
+            pane: "terminal_0",
+            cwd: "/srv/code/query-engine",
+            branch: "sidebar-clocks",
+            status: if done {
+                AgentStatus::Success
+            } else {
+                AgentStatus::Running
+            },
+            phase: if done {
+                TurnPhase::Idle
+            } else {
+                TurnPhase::Reasoning
+            },
+            task: "Agents exec wrapper mapping",
+            model: "Opus 5.5",
+            context: Some((227_000, 5.31)),
+            handle: Some("scout".to_owned()),
+            age_secs: Some(4 * 3_600),
+            sub_agents: Some(sub_agents),
+            ..AgentRowSpec::default()
+        },
+        now,
+    );
+    if let Some(card) = row.as_agent_mut() {
+        card.own_last_activity = Some(now - std::time::Duration::from_secs(4 * 3_600));
+        card.team = Some("recon".to_owned());
+    }
+    row.last_activity = row
+        .sub_agents()
+        .iter()
+        .map(|child| child.last_activity)
+        .fold(row.last_activity, std::cmp::max);
+    let mut group = worktree_group(WorktreeGroupSpec {
+        key: "/srv/code/query-engine",
+        label: "sidebar-clocks",
+        rows: vec![row],
+        ..WorktreeGroupSpec::default()
+    });
+    group.team = Some("recon".to_owned());
+    group.pipeline = Some(rimz::store::snapshot::SidebarPipeline {
+        stages: ["Plan", "Explore", "Implement", "Review", "Fix", "Finish"]
+            .map(str::to_owned)
+            .to_vec(),
+        stage: if done { "Done" } else { "Implement" }.to_owned(),
+        owner: Some("scout".to_owned()),
+        started_at: Some(now - std::time::Duration::from_secs(4 * 3_600 + 51 * 60)),
+        stage_started_at: (!done)
+            .then_some(now - std::time::Duration::from_secs(4 * 3_600 + 12 * 60)),
+        stage_prior_secs: 0,
+        visited: Default::default(),
+        done_at: done.then_some(now),
+    });
+    snapshot.worktree_groups = vec![group];
+    snapshot.wired_kinds = vec!["claude".to_owned()];
 }
 
 struct WorktreeGroupSpec {
@@ -708,6 +880,7 @@ fn add_focus_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
                         context_window: None,
                         cost_usd: None,
                         elapsed_secs: Some(210),
+                        quiet_secs: 0,
                     },
                     now,
                 ),
@@ -724,6 +897,7 @@ fn add_focus_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
                         context_window: Some(16_000),
                         cost_usd: None,
                         elapsed_secs: Some(260),
+                        quiet_secs: 0,
                     },
                     now,
                 ),
@@ -764,6 +938,7 @@ fn add_focus_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
                         context_window: None,
                         cost_usd: Some(0.34),
                         elapsed_secs: Some(420),
+                        quiet_secs: 0,
                     },
                     now,
                 ),
@@ -780,6 +955,7 @@ fn add_focus_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
                         context_window: None,
                         cost_usd: Some(0.27),
                         elapsed_secs: Some(390),
+                        quiet_secs: 0,
                     },
                     now,
                 ),
@@ -796,6 +972,7 @@ fn add_focus_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
                         context_window: None,
                         cost_usd: Some(0.18),
                         elapsed_secs: Some(360),
+                        quiet_secs: 0,
                     },
                     now,
                 ),
@@ -812,6 +989,7 @@ fn add_focus_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
                         context_window: None,
                         cost_usd: Some(0.14),
                         elapsed_secs: Some(300),
+                        quiet_secs: 0,
                     },
                     now,
                 ),
@@ -828,6 +1006,7 @@ fn add_focus_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
                         context_window: None,
                         cost_usd: Some(0.12),
                         elapsed_secs: Some(240),
+                        quiet_secs: 0,
                     },
                     now,
                 ),
@@ -1994,6 +2173,7 @@ fn default_sub_agents(kind: &str, now: jiff::Timestamp) -> Vec<SidebarSubAgent> 
                 context_window: None,
                 cost_usd: (kind == "claude").then_some(0.34),
                 elapsed_secs: Some(320),
+                quiet_secs: 0,
             },
             now,
         ),
@@ -2010,6 +2190,7 @@ fn default_sub_agents(kind: &str, now: jiff::Timestamp) -> Vec<SidebarSubAgent> 
                 context_window: None,
                 cost_usd: (kind == "claude").then_some(0.12),
                 elapsed_secs: Some(180),
+                quiet_secs: 0,
             },
             now,
         ),
@@ -2030,11 +2211,18 @@ struct SubAgentSpec<'a> {
     context_window: Option<u64>,
     cost_usd: Option<f64>,
     elapsed_secs: Option<i64>,
+    quiet_secs: u64,
 }
 
 fn sub_agent(spec: SubAgentSpec<'_>, now: jiff::Timestamp) -> SidebarSubAgent {
+    let last_activity = now - std::time::Duration::from_secs(spec.quiet_secs);
+    let until = if spec.status == rimz::agents::AgentStatus::Running {
+        now
+    } else {
+        last_activity
+    };
     let registered_at = spec.elapsed_secs.map_or(now, |secs| {
-        now - std::time::Duration::from_secs(secs.max(0) as u64)
+        until - std::time::Duration::from_secs(secs.max(0) as u64)
     });
     SidebarSubAgent {
         turn_error_label: None,
@@ -2056,7 +2244,7 @@ fn sub_agent(spec: SubAgentSpec<'_>, now: jiff::Timestamp) -> SidebarSubAgent {
         cost_usd: spec.cost_usd,
         elapsed_secs: spec.elapsed_secs,
         started_at: Some(registered_at),
-        last_activity: now,
+        last_activity,
         registered_at: Some(registered_at),
     }
 }
