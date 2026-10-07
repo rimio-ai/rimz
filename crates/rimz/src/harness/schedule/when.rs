@@ -237,6 +237,21 @@ pub struct WhenState {
     pub fired: bool,
 }
 
+impl WhenState {
+    pub(super) fn matches_condition(
+        &self,
+        expr: &WhenExpr,
+        hold: Option<std::time::Duration>,
+        run_dir: &Path,
+    ) -> bool {
+        self.fingerprint
+            .as_ref()
+            .is_some_and(|(when, duration, scope)| {
+                when == &expr.to_string() && *duration == hold && scope == run_dir
+            })
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConditionEvidence {
     pub when: String,

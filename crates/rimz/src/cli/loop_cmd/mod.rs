@@ -352,9 +352,12 @@ struct RenameArgs {
 
 #[derive(Debug, Args)]
 struct ShowArgs {
-    /// Print the task, launch ledger and run history as JSON.
+    /// Print the task, worktree conditions, launch ledger and run history as JSON.
     #[arg(long)]
     json: bool,
+    /// Show every owned worktree, including waiting checkouts and ended leaders.
+    #[arg(long)]
+    all: bool,
     #[arg(add = clap_complete::ArgValueCandidates::new(
         crate::cli::complete::loop_tasks
     ))]

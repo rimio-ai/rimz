@@ -503,7 +503,8 @@ path = "crates/rimz/src/harness"
 # Silent-child notices share the detector, text, request, evidence and module with the CLI/producer (+6), plus the run claim and release (+2).
 # Spent-child CLI parity shares one read-only durable park-demotion builder (+1), and its login-set form with the sidebar fold (+1).
 # The compact pressure reading feeds loop show's no-limits facts without parsing display rows (+1).
-surface-budget = 742
+# Fan-out inspection publishes its module, inspect entry, CheckoutCondition, and CheckoutState to the CLI (+4).
+surface-budget = 746
 
 [[module]]
 path = "crates/rimz/src/ids.rs"

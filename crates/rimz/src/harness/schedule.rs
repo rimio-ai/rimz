@@ -24,6 +24,7 @@ pub mod arm;
 pub mod arming;
 pub mod catalog;
 mod config_edit;
+pub mod fanout;
 #[doc(hidden)]
 pub mod fire;
 pub mod instances;

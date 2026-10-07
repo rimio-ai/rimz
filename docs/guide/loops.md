@@ -90,7 +90,7 @@ The fixer rule waits until the board is Done and CI passes on an open PR. It tak
 
 Keep a room running for CI and PR conditions to be observed. Lanes already meeting a rule qualify too. GitHub sees PRs already merged or closed; Gitea needs the room to have observed the checkout's PR while it was open, and room teardown or reset forgets that observation. Each task launches only once per checkout, even if the condition turns false and true again, the room restarts, or you edit the task under the same name. The project root and worktrees RimZ does not own are not included.
 
-Use `rimz loop show fixer` to see launched checkouts, their leader handles, and the declared signals with the armed subscription count, `rimz loop logs fixer` for each fire, and `rimz stats --assists` for the launch history. From an owned worktree, `rimz loop fire fixer` explicitly launches there again; removing the task clears its launch memory. A leader's subscriptions retire when its session ends.
+Use `rimz loop show fixer` to see why each checkout is blocked, ready, holding, waiting, or already launched, with current condition readings, live leader status, and armed subscription counts. Checkouts waiting on several terms and launches whose leaders ended fold into counts; `rimz loop show fixer --all` shows every checkout. Use `rimz loop logs fixer` for each fire and `rimz stats --assists` for the launch history. From an owned worktree, `rimz loop fire fixer` explicitly launches there again; removing the task clears its launch memory. A leader's subscriptions retire when its session ends.
 
 ## Wake a running agent
 
