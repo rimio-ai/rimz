@@ -1004,6 +1004,10 @@ pub trait MuxBackend: Send + Sync {
     /// pane exits 0 without doing anything once two sessions are live, so the
     /// caller's environment is never trusted to pick the session; tmux ignores
     /// it because pane ids are server-global.
+    ///
+    /// `Some(n)` returns the last `n` lines of scrollback plus screen, after
+    /// trailing blank rows are removed. `None` returns the visible screen
+    /// unchanged. A trailing newline is preserved when the backend supplied it.
     fn capture_pane(
         &self,
         pane: &PaneId,
@@ -1236,9 +1240,70 @@ fn require_held_pane(
     })
 }
 
+pub(crate) fn capture_tail(raw_text: String, max_lines: Option<u16>) -> (String, Vec<String>) {
+    let mut lines: Vec<String> = raw_text.lines().map(str::to_owned).collect();
+    let Some(max_lines) = max_lines else {
+        return (raw_text, lines);
+    };
+    while lines
+        .last()
+        .is_some_and(|line| anstream::adapter::strip_str(line).all(|text| text.trim().is_empty()))
+    {
+        lines.pop();
+    }
+    lines.drain(..lines.len().saturating_sub(usize::from(max_lines)));
+    let mut trimmed = lines.join("\n");
+    if raw_text.ends_with('\n') && !trimmed.is_empty() {
+        trimmed.push('\n');
+    }
+    (trimmed, lines)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn capture_trim_keeps_last_requested_lines() {
+        let (raw, lines) = capture_tail("a\nb\nc\nd\n".to_owned(), Some(2));
+        assert_eq!(lines, vec!["c", "d"]);
+        assert_eq!(raw, "c\nd\n");
+    }
+
+    #[test]
+    fn capture_tail_leaves_visible_screen_unchanged() {
+        let text = "a\r\nb\n \t\n\n";
+        let (raw, lines) = capture_tail(text.to_owned(), None);
+        assert_eq!(raw, text);
+        assert_eq!(lines, ["a", "b", " \t", ""]);
+    }
+
+    #[test]
+    fn capture_tail_counts_content_before_blank_padding() {
+        let (raw, lines) = capture_tail("a\nb\nc\nd\n \t\n\n".to_owned(), Some(2));
+        assert_eq!(lines, ["c", "d"]);
+        assert_eq!(raw, "c\nd\n");
+    }
+
+    #[test]
+    fn capture_tail_ignores_sgr_only_padding() {
+        let (raw, lines) = capture_tail(
+            "\x1b[31ma\n\x1b[31mb\n\x1b[m\n \x1b[0m\t\n".to_owned(),
+            Some(1),
+        );
+        assert_eq!(lines, ["\x1b[31mb"]);
+        assert_eq!(raw, "\x1b[31mb\n");
+    }
+
+    #[test]
+    fn capture_tail_keeps_short_content_and_original_newline() {
+        let (raw, lines) = capture_tail("a\nb\n\n".to_owned(), Some(500));
+        assert_eq!(lines, ["a", "b"]);
+        assert_eq!(raw, "a\nb\n");
+        let (raw, lines) = capture_tail("a\nb".to_owned(), Some(500));
+        assert_eq!(lines, ["a", "b"]);
+        assert_eq!(raw, "a\nb");
+    }
 
     #[test]
     fn command_summary_omits_the_tmux_socket() {

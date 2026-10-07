@@ -11,7 +11,7 @@ use super::pane_topology::{
 };
 use super::parse::{
     classify_session_not_found, is_no_active_sessions, is_session_not_found, is_transient_empty,
-    live_session_name_from_line, parse_client_view, trim_capture,
+    live_session_name_from_line, parse_client_view,
 };
 use super::raw_pane::{
     floating_panes_in_anchor_view, is_daemon_host_pane, is_sidebar_pane, sidebar_geometry_off_spec,
@@ -1381,13 +1381,13 @@ impl MuxBackend for ZellijBackend {
         if lines.is_some() {
             // The `-f`/`--full` flag dumps the entire scrollback. Zellij does
             // not expose a "last N lines" cap at the CLI level, so any non-None
-            // request maps onto "include scrollback"; the caller can post-trim.
+            // request maps onto "include scrollback" before the shared tail cut.
             spec = spec.arg("-f");
         }
         spec = spec.args(["-p".to_owned(), target]);
         let output = spec.run()?;
         let raw_text = String::from_utf8_lossy(&output.stdout).into_owned();
-        let (raw_text, lines) = trim_capture(raw_text, lines);
+        let (raw_text, lines) = crate::mux::capture_tail(raw_text, lines);
         Ok(PaneCapture {
             pane_id: pane.clone(),
             raw_text,
