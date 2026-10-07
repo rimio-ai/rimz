@@ -333,6 +333,22 @@ impl TmuxServer {
             .trim()
             .to_owned()
     }
+    pub(super) fn try_stdout(&self, args: &[&str]) -> Result<String, String> {
+        let output = Command::new("tmux")
+            .scrub_session_env()
+            .arg("-S")
+            .arg(&self.socket)
+            .args(args)
+            .bounded_output()
+            .map_err(|err| format!("spawn tmux {args:?}: {err}"))?;
+        if !output.status.success() {
+            return Err(format!(
+                "tmux {args:?} failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
+    }
     pub(super) fn display(&self, target: &str, format: &str) -> String {
         self.stdout(&["display-message", "-p", "-t", target, format])
     }
