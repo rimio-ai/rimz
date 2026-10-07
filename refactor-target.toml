@@ -383,7 +383,8 @@ allowed-dependencies = [
 # The keep-warm producer cache path is built here for the refresh lane, enrichment, and the consumer stamp (+1).
 # A session's sidebar host appends its stderr to one classed state log (+1).
 # Agent carryover has its own retention policy, separate from archives (+1).
-surface-budget = 222
+# Compact carryover JSON keeps the durable publish barrier (+1).
+surface-budget = 223
 
 [[module]]
 path = "crates/rimz/src/forge"
@@ -931,7 +932,8 @@ surface-budget = 27
 path = "crates/rimz/src/disk/atomic.rs"
 allowed-dependencies = []
 # Checked executable copying shares the durable publication funnel.
-surface-budget = 20
+# Compact durable JSON shares the existing sync and formatting machinery (+1).
+surface-budget = 21
 
 [[module]]
 path = "crates/rimz/src/store/gc"

@@ -19,7 +19,7 @@ use super::project::{
 };
 use super::{Result, SnapshotErr};
 use crate::agents::AgentState;
-use crate::disk::atomic::{self, write_temp_then_rename};
+use crate::disk::atomic::{self, write_temp_then_rename_compact};
 use crate::disk::parse_cache::{ParseCache, StampedPath};
 use crate::disk::paths::StatePaths;
 use crate::disk::retention::RESUME_OUTCOME_RETENTION_SECS;
@@ -96,7 +96,7 @@ fn read_carryover(path: &Path) -> Result<EventCarryover> {
 
 #[must_use = "durability barrier; check the result"]
 fn write_carryover(path: &Path, carryover: &EventCarryover) -> Result<()> {
-    write_temp_then_rename(path, carryover)?;
+    write_temp_then_rename_compact(path, carryover)?;
     Ok(())
 }
 

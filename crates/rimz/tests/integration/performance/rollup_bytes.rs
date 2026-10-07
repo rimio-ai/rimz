@@ -11,7 +11,7 @@ use rimz::testkit::fleet::synthetic_panes;
 use crate::common::Harness;
 
 const AGENTS: usize = 200;
-const ROLLUP_ROW_BYTES_CEILING: usize = 3072;
+const ROLLUP_ROW_BYTES_CEILING: usize = 2816;
 
 #[test]
 fn ended_rows_keep_rollup_and_carryover_within_byte_budget() {

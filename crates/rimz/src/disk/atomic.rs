@@ -160,6 +160,12 @@ pub fn write_temp_then_rename<T: Serialize>(path: &Path, value: &T) -> Result<()
     write_temp_then_rename_with(path, value, Fsync::Durable, JsonStyle::Pretty, None)
 }
 
+/// Like [`write_temp_then_rename`] but emits compact JSON with the same durable syncs.
+#[must_use = "durability barrier; check the result"]
+pub(crate) fn write_temp_then_rename_compact<T: Serialize>(path: &Path, value: &T) -> Result<()> {
+    write_temp_then_rename_with(path, value, Fsync::Durable, JsonStyle::Compact, None)
+}
+
 /// Like [`write_temp_then_rename`], but the temp file is created and renamed
 /// with mode 0600. Used for plaintext secret caches.
 #[must_use = "durability barrier; check the result"]
@@ -497,6 +503,30 @@ mod tests {
         assert!(read.ends_with('\n'));
         let parsed: serde_json::Value = serde_json::from_str(&read).unwrap();
         assert_eq!(parsed["a"], 1);
+    }
+
+    #[test]
+    fn temp_rename_compact_replaces_json_with_durable_syncs() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("durable.json");
+        let before = testkit::fsync_count();
+        write_temp_then_rename(&path, &json!({ "old": true })).unwrap();
+        let pretty_syncs = testkit::fsync_count() - before;
+        let value = json!({ "nested": { "label": "space and\nnewline", "items": [1, 2] } });
+
+        let before = testkit::fsync_count();
+        write_temp_then_rename_compact(&path, &value).unwrap();
+        let compact_syncs = testkit::fsync_count() - before;
+
+        let read = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(read.lines().count(), 1, "compact JSON occupies one line");
+        assert!(read.ends_with('\n'));
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&read).unwrap(),
+            value
+        );
+        assert_eq!(compact_syncs, pretty_syncs);
+        assert_eq!(compact_syncs, 2, "temp file and parent dir sync");
     }
 
     #[test]

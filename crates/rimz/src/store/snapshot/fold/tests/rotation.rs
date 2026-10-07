@@ -1,6 +1,22 @@
 use super::*;
 
 #[test]
+fn carryover_writes_compact_json_without_changing_rows() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("carryover.json");
+    let carryover = EventCarryover {
+        agents: vec![agent("claude", "carried", AgentStatus::Idle, 0)],
+        ..EventCarryover::default()
+    };
+
+    write_carryover(&path, &carryover).unwrap();
+
+    let contents = fs::read_to_string(&path).unwrap();
+    assert_eq!(contents.lines().count(), 1, "carryover must be compact");
+    assert_eq!(read_carryover(&path).unwrap().agents, carryover.agents);
+}
+
+#[test]
 fn prune_carryover_rewrites_fat_rows_without_expiring_agents() {
     let dir = tempfile::tempdir().unwrap();
     let paths = StatePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();

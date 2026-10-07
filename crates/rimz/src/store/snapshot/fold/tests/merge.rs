@@ -14,7 +14,7 @@ fn carryover_file_bounds_rows_even_without_active_events() {
     stamp.spawn_command = Some("argv".repeat(400));
     stamp.foreground_cmdline = stamp.spawn_command.clone();
     carried.pane = Some(stamp);
-    write_carryover(
+    atomic::write_temp_then_rename(
         &paths.agents_carryover,
         &EventCarryover {
             agents: vec![carried],
