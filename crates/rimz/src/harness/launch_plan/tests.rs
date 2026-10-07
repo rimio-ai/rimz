@@ -970,6 +970,90 @@ fn prompt_environment_reaches_qwen_without_entering_argv() {
 }
 
 #[test]
+fn env_reminder_compile_resolves_worktree_from_launch_cwd() {
+    let project = tempfile::tempdir().unwrap();
+    let repo = project.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    for args in [
+        vec!["init", "-b", "main"],
+        vec![
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.test",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "base",
+        ],
+    ] {
+        assert!(
+            std::process::Command::new("git")
+                .current_dir(&repo)
+                .args(args)
+                .output()
+                .unwrap()
+                .status
+                .success()
+        );
+    }
+    let created = crate::worktree::create(
+        &repo,
+        &crate::config::WorktreeConfig {
+            dir: project.path().join("worktrees").display().to_string(),
+            ..Default::default()
+        },
+        Some("demo"),
+        None,
+        None,
+        false,
+    )
+    .unwrap();
+    let cwd = &created.marker.worktree_path;
+    let machine = crate::config::MachineConfig::default();
+    let mut effective =
+        crate::config::effective::load_with_roots(&machine, project.path(), project.path())
+            .unwrap();
+    let id = crate::WorkspaceId::from_project_root(project.path());
+    let runtime = RuntimePaths::under(id.clone(), project.path()).unwrap();
+    let state = StatePaths::under(id, project.path()).unwrap();
+    let mut request = ExecRequest::bare_launch(AgentKind::new_unchecked("claude"), Vec::new());
+    for subagent in [false, true] {
+        request.subagent = subagent;
+        for enabled in [true, false] {
+            effective.env_reminder = enabled;
+            let plan = compile(LaunchPlanInputs {
+                request: &request,
+                cwd,
+                project_root: project.path(),
+                rimz_bin: Path::new("/bin/rimz"),
+                runtime: &runtime,
+                state: &state,
+                effective: Some(&effective),
+                commands: &machine.agents.commands,
+                accounts: &machine.accounts,
+                bwrap: None,
+                agents: Ok(&[]),
+                ambient_env: &BTreeMap::new(),
+                agent_shell: None,
+            })
+            .unwrap();
+            let reminder = &plan.process().reminder;
+            assert_eq!(
+                reminder.contains(&format!(
+                    "- cwd: {}\n- worktree: branched from main; primary checkout at {}",
+                    cwd.display(),
+                    repo.display()
+                )),
+                enabled
+            );
+            assert_eq!(reminder.contains("- worktree:"), enabled);
+            assert!(plan.warnings.is_empty());
+        }
+    }
+}
+
+#[test]
 fn env_reminder_compile_uses_launch_cwd_and_effective_switch_for_children_too() {
     let project = tempfile::tempdir().unwrap();
     let other = tempfile::tempdir().unwrap();

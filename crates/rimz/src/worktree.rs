@@ -191,6 +191,15 @@ pub struct WorktreeMarker {
     pub created_at: jiff::Timestamp,
 }
 
+/// What a linked worktree's `.git` metadata records about where it came from.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct LinkedWorktree {
+    /// The branch the tree was cut from, from the RimZ marker; `None` without a marker or a recorded base.
+    pub base_branch: Option<String>,
+    /// The primary checkout: the parent of git's common `.git` directory.
+    pub primary: PathBuf,
+}
+
 /// The base branch sat behind its upstream when the tree was cut, as of the last fetch.
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct StaleBase {
@@ -1269,6 +1278,45 @@ pub(crate) fn read_marker_from_checkout_metadata(path: &Path) -> Result<Option<W
         return Ok(None);
     };
     read_marker_file(&marker)
+}
+
+/// `None` for a primary checkout, a directory outside git, or metadata that cannot be read. Never spawns git.
+pub(crate) fn linked_worktree(cwd: &Path) -> Option<LinkedWorktree> {
+    let git_dir = match git_admin_dir_from_checkout_metadata(cwd) {
+        Ok(Some(path)) => path,
+        Ok(None) => return None,
+        Err(error) => {
+            tracing::debug!(%error, "worktree metadata unavailable");
+            return None;
+        }
+    };
+    if git_dir == cwd.join(".git") {
+        return None;
+    }
+    let common = match std::fs::read_to_string(git_dir.join("commondir")) {
+        Ok(text) => text,
+        Err(error) => {
+            tracing::debug!(%error, "worktree common directory unavailable");
+            return None;
+        }
+    };
+    let common_dir = normalize_path_lexical(&git_dir.join(common.trim()));
+    if common.trim().is_empty() || common_dir.file_name() != Some(OsStr::new(".git")) {
+        tracing::debug!(common_dir = %common_dir.display(), "worktree primary checkout unavailable");
+        return None;
+    }
+    let primary = common_dir.parent()?.to_path_buf();
+    let base_branch = match read_marker_from_checkout_metadata(cwd) {
+        Ok(marker) => marker.and_then(|marker| marker.base_branch),
+        Err(error) => {
+            tracing::debug!(%error, "worktree base branch unavailable");
+            None
+        }
+    };
+    Some(LinkedWorktree {
+        base_branch,
+        primary,
+    })
 }
 
 /// Resolve current lane lifetimes once from a report's full record set.

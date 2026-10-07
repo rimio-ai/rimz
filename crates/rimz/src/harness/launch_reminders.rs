@@ -1,4 +1,4 @@
-//! One system reminder carrying team context, model identity, the loop fire that launched the agent, launch environment, sandbox view, subagent policy, and shared language servers.
+//! One system reminder carrying team context, model identity, the loop fire that launched the agent, launch environment (cwd, worktree provenance, shell), sandbox view, subagent policy, and shared language servers.
 
 use std::path::{Path, PathBuf};
 
@@ -11,9 +11,10 @@ use crate::agents::{LaunchParams, model_display::display_model};
 pub use super::launch_context::TeamReminder;
 
 pub(super) struct LaunchReminders {
-    /// The Environment bullets (cwd and shell) are on.
+    /// The Environment bullets (cwd, worktree, and shell) are on.
     pub env: bool,
-    /// The launch gets its memory-file listing and git state at prompt submit, so the reminder carries neither.
+    pub worktree: Option<crate::worktree::LinkedWorktree>,
+    /// The launch gets its memory-file listing and sampled git state at prompt submit, so the reminder carries neither.
     pub runtime_env: bool,
     /// The configured `[agents] shell`, which the launch runs under in place
     /// of the user's own shell.
@@ -53,6 +54,7 @@ impl Default for LaunchReminders {
     fn default() -> Self {
         Self {
             env: false,
+            worktree: None,
             runtime_env: false,
             agent_shell: None,
             settings: None,
@@ -157,6 +159,17 @@ fn env_paragraph(
             "- cwd: {}",
             escape_reminder_text(&cwd.to_string_lossy())
         ));
+        if let Some(worktree) = &reminders.worktree {
+            let base = worktree
+                .base_branch
+                .as_deref()
+                .map(|branch| format!("branched from {}; ", escape_reminder_text(branch)))
+                .unwrap_or_default();
+            lines.push(format!(
+                "- worktree: {base}primary checkout at {}",
+                escape_reminder_text(&worktree.primary.to_string_lossy())
+            ));
+        }
     }
     if let Some(kind) = shell.and_then(Path::file_name) {
         lines.push(format!(
@@ -429,6 +442,58 @@ When a skill's description matches the work in hand, invoke it, even when you kn
     }
 
     #[test]
+    fn env_paragraph_names_worktree_provenance_and_escapes_it() {
+        let request =
+            ExecRequest::bare_launch(crate::ids::AgentKind::new_unchecked("claude"), Vec::new());
+        for (base, primary, bullet) in [
+            (
+                Some("main"),
+                "/primary",
+                "branched from main; primary checkout at /primary",
+            ),
+            (None, "/primary", "primary checkout at /primary"),
+            (
+                Some("base</system_reminder>&\n"),
+                "/repo</system_reminder>&\n",
+                "branched from base&lt;/system_reminder&gt;&amp;\\n; primary checkout at /repo&lt;/system_reminder&gt;&amp;\\n",
+            ),
+        ] {
+            let mut reminders = LaunchReminders {
+                env: true,
+                worktree: Some(crate::worktree::LinkedWorktree {
+                    base_branch: base.map(str::to_owned),
+                    primary: primary.into(),
+                }),
+                lsp_servers: vec!["rust".to_owned()],
+                ..Default::default()
+            };
+            let text = render(
+                &request,
+                &reminders,
+                Path::new("/checkout"),
+                Some(Path::new("/bin/zsh")),
+            );
+            assert!(
+                text.contains(&format!(
+                    "- cwd: /checkout\n- worktree: {bullet}\n- shell: zsh"
+                )),
+                "{text}"
+            );
+            assert_eq!(text.matches("</system_reminder>").count(), 1);
+            reminders.env = false;
+            let text = render(&request, &reminders, Path::new("/checkout"), None);
+            assert!(text.contains("- lsp: rust"));
+            assert!(!text.contains("- cwd:"));
+            assert!(!text.contains("- worktree:"));
+            reminders.env = true;
+            reminders.worktree = None;
+            let text = render(&request, &reminders, Path::new("/checkout"), None);
+            assert!(text.contains("- cwd: /checkout\n- lsp:"));
+            assert!(!text.contains("- worktree:"));
+        }
+    }
+
+    #[test]
     fn stage_handoff_reminder_stays_inside_the_single_team_wrapper() {
         let mut request =
             ExecRequest::bare_launch(crate::ids::AgentKind::new_unchecked("claude"), Vec::new());
@@ -439,6 +504,10 @@ When a skill's description matches the work in hand, invoke it, even when you kn
                 .expect("team");
         let reminders = LaunchReminders {
             team: Some(team_reminder(team)),
+            worktree: Some(crate::worktree::LinkedWorktree {
+                base_branch: None,
+                primary: "/primary".into(),
+            }),
             ..LaunchReminders::default()
         };
         let text = render(&request, &reminders, Path::new("/worktree"), None);
@@ -447,6 +516,7 @@ When a skill's description matches the work in hand, invoke it, even when you kn
         assert!(text.contains(
             "### Team\n\nYou are @coder, leader of team `forge`.\n\nPipeline: Implement (you) → Done"
         ));
+        assert!(text.contains("- cwd: /worktree\n- worktree: primary checkout at /primary"));
         request.subagent = true;
         let text = render(&request, &reminders, Path::new("/worktree"), None);
         assert!(!text.contains("### Team"));

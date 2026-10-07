@@ -751,6 +751,133 @@ fn marker_v2_json_parses_without_base_branch() {
 }
 
 #[test]
+fn linked_worktree_resolves_created_base_and_primary() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = init_test_repo(dir.path());
+    assert_eq!(linked_worktree(&repo), None);
+    assert_eq!(linked_worktree(dir.path()), None);
+    let created = create(
+        &repo,
+        &test_worktree_config(dir.path()),
+        Some("demo"),
+        None,
+        None,
+        false,
+    )
+    .unwrap();
+    let mut marker = created.marker;
+    marker.repo_root = dir.path().join("not-the-primary");
+    write_marker(&marker.worktree_path, &marker).unwrap();
+    assert_eq!(
+        linked_worktree(&marker.worktree_path),
+        Some(LinkedWorktree {
+            base_branch: Some("main".to_owned()),
+            primary: repo
+        })
+    );
+}
+
+#[test]
+fn linked_worktree_handles_legacy_and_missing_markers() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = init_test_repo(dir.path());
+    let worktree = dir.path().join("demo");
+    git_run(
+        &repo,
+        ["worktree", "add", "-b", "demo", worktree.to_str().unwrap()],
+    )
+    .unwrap();
+    let expected = Some(LinkedWorktree {
+        base_branch: None,
+        primary: repo,
+    });
+    assert_eq!(linked_worktree(&worktree), expected);
+    let marker = marker_path_from_checkout_metadata(&worktree)
+        .unwrap()
+        .unwrap();
+    std::fs::write(
+        &marker,
+        r#"{
+        "version": 2,
+        "name": "demo",
+        "branch": "demo",
+        "base_ref": "0123456789abcdef0123456789abcdef01234567",
+        "repo_root": "/repo",
+        "worktree_path": "/repo-worktrees/demo",
+        "created_at": "2026-06-10T00:00:00Z"
+    }"#,
+    )
+    .unwrap();
+    assert_eq!(linked_worktree(&worktree), expected);
+    std::fs::write(marker, "invalid marker").unwrap();
+    assert_eq!(linked_worktree(&worktree), expected);
+}
+
+#[test]
+fn linked_worktree_resolves_relative_gitdir_and_absolute_commondir() {
+    let dir = tempfile::tempdir().unwrap();
+    let worktree = dir.path().join("demo");
+    let admin = dir.path().join("admin/demo");
+    let primary = dir.path().join("primary");
+    std::fs::create_dir_all(&worktree).unwrap();
+    std::fs::create_dir_all(&admin).unwrap();
+    std::fs::create_dir_all(primary.join(".git")).unwrap();
+    std::fs::write(worktree.join(".git"), "gitdir: ../admin/demo\n").unwrap();
+    for common in [
+        "../../primary/./.git\n".to_owned(),
+        primary.join(".git").display().to_string(),
+    ] {
+        std::fs::write(admin.join("commondir"), common).unwrap();
+        assert_eq!(
+            linked_worktree(&worktree),
+            Some(LinkedWorktree {
+                base_branch: None,
+                primary: primary.clone(),
+            })
+        );
+    }
+}
+
+#[test]
+fn linked_worktree_omits_unreadable_and_unsupported_metadata() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = init_test_repo(dir.path());
+    let created = create(
+        &repo,
+        &test_worktree_config(dir.path()),
+        Some("demo"),
+        None,
+        None,
+        false,
+    )
+    .unwrap();
+    let worktree = &created.marker.worktree_path;
+    assert_eq!(
+        linked_worktree(worktree),
+        Some(LinkedWorktree {
+            base_branch: Some("main".to_owned()),
+            primary: repo,
+        })
+    );
+    let admin = git_admin_dir_from_checkout_metadata(worktree)
+        .unwrap()
+        .unwrap();
+    let common = admin.join("commondir");
+    for invalid in [b"../bare-repo".as_slice(), b"", b"\xff"] {
+        std::fs::write(&common, invalid).unwrap();
+        assert_eq!(linked_worktree(worktree), None);
+    }
+    std::fs::remove_file(&common).unwrap();
+    assert_eq!(linked_worktree(worktree), None);
+    std::fs::create_dir(&common).unwrap();
+    assert_eq!(linked_worktree(worktree), None);
+    std::fs::write(worktree.join(".git"), b"\xff").unwrap();
+    assert_eq!(linked_worktree(worktree), None);
+    std::fs::write(worktree.join(".git"), "not a gitdir").unwrap();
+    assert_eq!(linked_worktree(worktree), None);
+}
+
+#[test]
 fn marker_v3_json_parses_without_pr_provenance() {
     let raw = r#"{
         "version": 3,
