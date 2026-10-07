@@ -262,7 +262,16 @@ fn recipient_miss(
         Some(reason) => mapped.context(reason),
         None => mapped,
     };
-    message_miss(&snapshot, miss.current_channel, &mapped).map(|()| false)
+    let demotion = rimz::harness::park_demotion(
+        Some(store),
+        store.paths(),
+        ctx.runtime(),
+        &crate::cli::machine_config(),
+        &snapshot.agents,
+        snapshot.resume_outcomes.as_deref().unwrap_or_default(),
+        Timestamp::now(),
+    );
+    message_miss(&demotion, &snapshot, miss.current_channel, &mapped).map(|()| false)
 }
 
 fn map_dispatch_err(err: DispatchErr) -> anyhow::Error {
@@ -377,6 +386,7 @@ fn map_reply_prepare_err(err: ReplyPrepareErr) -> anyhow::Error {
 }
 
 pub(super) fn message_miss(
+    demotion: &rimz::agents::ParkDemotion,
     snapshot: &SidebarSnapshot,
     channel: Option<&str>,
     err: &anyhow::Error,
@@ -394,6 +404,7 @@ pub(super) fn message_miss(
     } else {
         writeln!(out, "available agents:")?;
         crate::cli::agents_cmd::render_agents_table(
+            demotion,
             &mut out,
             snapshot,
             &agents,

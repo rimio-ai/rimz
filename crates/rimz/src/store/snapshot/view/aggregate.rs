@@ -1,8 +1,8 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use jiff::Timestamp;
 
-use crate::agents::{AgentState, ProviderCapacity};
+use crate::agents::{AgentState, ParkDemotion};
 use crate::ids::{AgentKind, AgentSessionId};
 use crate::store::snapshot::row::SidebarRow;
 
@@ -123,13 +123,11 @@ impl SidebarSnapshot {
     pub(super) fn build_worktree_groups(
         &self,
         mut rows: Vec<SidebarRow>,
-        provider_capacities: &BTreeMap<crate::ids::LoginKey, ProviderCapacity>,
-        exhausted_resumes: &BTreeSet<(AgentKind, AgentSessionId)>,
+        demotion: &ParkDemotion,
     ) -> Vec<SidebarWorktreeGroup> {
         let now = self.now;
         let windows = AttentionWindows::from_config(&self.attention);
         let agent_index = AgentProjectionIndex::new(&self.agents, &rows);
-        let demotion = status::ParkDemotion::new(provider_capacities, exhausted_resumes, now);
         // Nest each subagent under its parent root row before grouping. This is the
         // one chokepoint every live (`rows_from_panes`) card flows through, so
         // nesting behaves identically for process, agent, and attention rows.
@@ -137,7 +135,7 @@ impl SidebarSnapshot {
             &mut rows,
             &agent_index,
             now,
-            &demotion,
+            demotion,
             windows.stalled_after_secs,
         );
         // Same-pane conversations keep separate durable projections, so fold the
@@ -154,7 +152,7 @@ impl SidebarSnapshot {
         status::project_display_status(
             &mut rows,
             &agent_index,
-            &demotion,
+            demotion,
             &delegated_parks,
             now,
             windows.stalled_after_secs,

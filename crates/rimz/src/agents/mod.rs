@@ -33,6 +33,7 @@ pub(crate) mod managed_statusline;
 pub mod model_display;
 mod observation;
 mod open_ask;
+mod park;
 pub(crate) mod payload;
 pub mod petname;
 pub mod pricing;
@@ -122,6 +123,7 @@ pub use observation::{
     SubagentCorrelationInput, SubagentSpawnInput, TierSkip, TierSkipReason, TierStamp,
 };
 pub use open_ask::{AskRoute, OpenAskDetail, OpenAskReadErr, read_open_ask};
+pub use park::ParkDemotion;
 use payload::{CONTROL_TAG_PREFIXES, optional_payload_string, stop_payload_errored};
 pub use payload::{RimzBlock, SanitizedPrompt, peel_rimz_blocks};
 pub(crate) use payload::{non_empty_trimmed, sanitize_user_prompt};

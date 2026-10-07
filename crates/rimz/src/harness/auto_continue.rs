@@ -46,6 +46,31 @@ use crate::store::snapshot::SidebarSnapshot;
 /// agent, RimZ retries on this cadence rather than typing every frame.
 const AUTO_CONTINUE_RETRY_INTERVAL: Duration = Duration::from_secs(120);
 
+/// Read durable park evidence for the sidebar and rowless CLI projections.
+///
+/// Resolves room logins, reads cached capacity and park records, and merges
+/// terminal resume outcomes with the live message queue. No store write or
+/// subprocess is needed, including before the room has a pane frame.
+pub fn park_demotion(
+    store: Option<&crate::Store>,
+    state: &crate::StatePaths,
+    runtime: &RuntimePaths,
+    config: &crate::config::MachineConfig,
+    agents: &[AgentState],
+    outcomes: &[ResumeOutcome],
+    now: Timestamp,
+) -> crate::agents::ParkDemotion {
+    let logins = crate::agents::RoomLoginSet::resolve(&state.workspace_record, &config.accounts)
+        .with_agents(agents);
+    let capacities = ProviderCapacity::read_all(runtime, &logins);
+    let messages = read_resume_messages(store, &config.resume, outcomes);
+    crate::agents::ParkDemotion::new(
+        &capacities,
+        exhausted_parks(agents, runtime, &config.resume, &messages),
+        now,
+    )
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AutoContinueRequest {
     pub workspace_id: WorkspaceId,
@@ -245,7 +270,7 @@ pub(crate) fn resume_parked(
 }
 
 pub(crate) fn exhausted_parks(
-    snapshot: &SidebarSnapshot,
+    agents: &[AgentState],
     runtime: &RuntimePaths,
     config: &ResumeConfig,
     resume_messages: &[ResumeMessage],
@@ -254,7 +279,7 @@ pub(crate) fn exhausted_parks(
     if !config.auto_continue {
         return exhausted;
     }
-    for agent in &snapshot.agents {
+    for agent in agents {
         if agent.is_provider_subagent() || agent.agent_id.is_empty() {
             continue;
         }
@@ -529,8 +554,12 @@ impl ResumeMessage {
 
 pub(crate) fn read_resume_messages(
     store: Option<&crate::store::Store>,
+    config: &ResumeConfig,
     outcomes: &[ResumeOutcome],
 ) -> Vec<ResumeMessage> {
+    if !config.auto_continue {
+        return Vec::new();
+    }
     let mut messages = outcomes
         .iter()
         .map(ResumeMessage::from_outcome)

@@ -1,11 +1,11 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use jiff::Timestamp;
 
 use crate::agent_activity::ToolRepeat;
 use crate::agents::lifecycle::TurnPhase;
 use crate::agents::{
-    AgentContext, AgentState, AgentStatus, AgentTurnError, ProviderCapacity, TurnErrorClass,
+    AgentContext, AgentState, AgentStatus, AgentTurnError, ParkDemotion, TurnErrorClass,
     TurnSettleOutcome, display_turn_error, effective_turn_error_class,
 };
 use crate::ids::{AgentKind, AgentSessionId};
@@ -27,7 +27,7 @@ struct SettleFacts<'a> {
     budget_park_label: Option<String>,
     turn_error: Option<(&'a AgentTurnError, TurnErrorClass)>,
     source_agent: Option<&'a AgentState>,
-    demotion: &'a ParkDemotion<'a>,
+    demotion: &'a ParkDemotion,
     delegated_park: Option<(AgentStatus, String)>,
     has_live_child: bool,
     window_spent: bool,
@@ -69,7 +69,7 @@ impl Settled {
 pub(super) fn project_display_status(
     rows: &mut [SidebarRow],
     index: &AgentProjectionIndex<'_>,
-    demotion: &ParkDemotion<'_>,
+    demotion: &ParkDemotion,
     delegated_parks: &BTreeMap<AgentKey, (AgentStatus, String)>,
     now: Timestamp,
     stalled_after_secs: u32,
@@ -130,7 +130,7 @@ pub(super) fn project_display_status(
         )
         .map(|error| (error, effective_turn_error_class(error)));
         let window_spent =
-            source_agent.is_some_and(|state| demotion.windows.spent.contains(&state.login_key()));
+            source_agent.is_some_and(|state| demotion.window_spent(&state.login_key()));
         let Settled {
             status: projected,
             turn_error_label,
@@ -168,72 +168,6 @@ pub(super) fn project_display_status(
             agent.phase = TurnPhase::Idle;
         }
     }
-}
-
-pub(super) struct ParkDemotion<'a> {
-    exhausted_resumes: &'a BTreeSet<(AgentKind, AgentSessionId)>,
-    windows: RateLimitKindSummary,
-}
-
-impl<'a> ParkDemotion<'a> {
-    pub(super) fn new(
-        provider_capacities: &BTreeMap<crate::ids::LoginKey, ProviderCapacity>,
-        exhausted_resumes: &'a BTreeSet<(AgentKind, AgentSessionId)>,
-        now: Timestamp,
-    ) -> Self {
-        Self {
-            exhausted_resumes,
-            windows: rate_limit_window_kinds(provider_capacities, now),
-        }
-    }
-
-    pub(super) fn is_spent(&self, agent: &AgentState, class: TurnErrorClass) -> bool {
-        let resume_exhausted = self
-            .exhausted_resumes
-            .contains(&(agent.kind.clone(), agent.agent_id.clone()));
-        let login = agent.login_key();
-        let reset_without_budget = class.is_limit()
-            && self.windows.reset.contains(&login)
-            && !self.windows.spent.contains(&login);
-        resume_exhausted || reset_without_budget
-    }
-}
-
-#[derive(Default)]
-struct RateLimitKindSummary {
-    spent: BTreeSet<crate::ids::LoginKey>,
-    reset: BTreeSet<crate::ids::LoginKey>,
-}
-
-fn rate_limit_window_kinds(
-    provider_capacities: &BTreeMap<crate::ids::LoginKey, ProviderCapacity>,
-    now: Timestamp,
-) -> RateLimitKindSummary {
-    let mut summary = RateLimitKindSummary::default();
-    for (kind, capacity) in provider_capacities {
-        let mut has_spent = false;
-        let mut has_reset = false;
-        for window in capacity.projected_windows(now) {
-            if window.scope.is_some() && window.duration_mins.is_some() {
-                continue;
-            }
-            if !window.is_spent() {
-                continue;
-            }
-            if window.resets_at.is_none_or(|reset| reset > now) {
-                has_spent = true;
-            } else {
-                has_reset = true;
-            }
-        }
-        if has_spent {
-            summary.spent.insert(kind.clone());
-        }
-        if has_reset {
-            summary.reset.insert(kind.clone());
-        }
-    }
-    summary
 }
 
 fn resolve_waiting(

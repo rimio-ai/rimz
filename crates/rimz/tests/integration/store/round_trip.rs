@@ -74,6 +74,40 @@ fn root_lane_is_stamped_through_every_fold_reader() {
 }
 
 #[test]
+fn runtime_and_audit_projections_retain_snapshot_resume_outcomes() {
+    use rimz::store::event::{EventEnvelope, MessageEventMethod};
+    use rimz::store::message::{DeliveryGate, MessageRecord, MessageStatus};
+
+    let h = crate::common::Harness::new();
+    let agent = rimz::testkit::agent_state("claude", "child", jiff::Timestamp::now());
+    let mut message = MessageRecord::new(
+        h.store.paths().workspace_id.clone(),
+        &agent,
+        "continue".to_owned(),
+        DeliveryGate::Resume,
+    );
+    message.status = MessageStatus::Delivered;
+    h.store
+        .append_event(&EventEnvelope::message_event(
+            &message,
+            "test",
+            MessageEventMethod::Delivered,
+            None,
+        ))
+        .unwrap();
+    let snapshot = h.store.snapshot().unwrap();
+    let outcomes = snapshot.resume_outcomes.unwrap();
+    assert_eq!(outcomes.len(), 1);
+    assert_eq!(outcomes[0].message_id, message.message_id);
+    for scope in [rimz::RuntimeScope::Audit, rimz::RuntimeScope::Runtime] {
+        assert_eq!(
+            h.store.runtime_projection(scope).unwrap().resume_outcomes,
+            outcomes
+        );
+    }
+}
+
+#[test]
 fn runtime_projection_serves_lock_free_while_a_writer_holds_the_lock() {
     // Reads resume from the persisted rollup fold base, so they never take
     // the workspace lock: a projection completes — and still sees every

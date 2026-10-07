@@ -891,7 +891,13 @@ fn child_reports_name_each_parent_and_channel() {
     let agents = [planner, coder, first, second, orphan];
     let children = [&agents[2], &agents[3], &agents[4]];
 
-    let reports = child_reports(&agents, &children, &[run], Timestamp::now());
+    let reports = child_reports(
+        &rimz::agents::ParkDemotion::default(),
+        &agents,
+        &children,
+        &[run],
+        Timestamp::now(),
+    );
 
     assert_eq!(reports[0].parent, "@planner");
     assert_eq!(reports[1].parent, "@coder");
@@ -981,7 +987,13 @@ fn child_reports_list_live_children_first_then_settled_then_runless() {
     ];
     let children = [&agents[1], &agents[2], &agents[3], &agents[4]];
 
-    let reports = child_reports(&agents, &children, &runs, at(1_000));
+    let reports = child_reports(
+        &rimz::agents::ParkDemotion::default(),
+        &agents,
+        &children,
+        &runs,
+        at(1_000),
+    );
 
     let order = reports
         .iter()
@@ -1022,7 +1034,13 @@ fn child_reports_measure_the_current_answer() {
     ];
     let children = agents[1..].iter().collect::<Vec<_>>();
 
-    let reports = child_reports(&agents, &children, &runs, at(3_790));
+    let reports = child_reports(
+        &rimz::agents::ParkDemotion::default(),
+        &agents,
+        &children,
+        &runs,
+        at(3_790),
+    );
     let report = |name: &str| {
         reports
             .iter()
@@ -1087,6 +1105,7 @@ fn child_reports_show_a_limit_parked_child_as_paused_beside_its_open_run() {
     let report = |child: rimz::agents::AgentState| {
         let agents = [planner.clone(), child];
         child_reports(
+            &rimz::agents::ParkDemotion::default(),
             &agents,
             &[&agents[1]],
             std::slice::from_ref(&run),
@@ -1139,6 +1158,99 @@ fn nested_child_agrees_with_list_status_and_detail() {
             assert_eq!(value["turn_error"]["label"], serde_json::json!(label));
         }
     }
+}
+
+fn parked_child_report(demotion: &rimz::agents::ParkDemotion) -> ChildReport {
+    let now = Timestamp::from_second(1_000).unwrap();
+    let mut child = AgentState::stub("claude", "child", rimz::agents::AgentStatus::Running);
+    child.parent_agent_id = Some("parent".into());
+    child.launch_depth = Some(1);
+    child.last_activity = now - Duration::from_secs(1);
+    let mut context = rimz::agents::AgentContext::new("claude", now);
+    context.turn_error = Some(rimz::agents::AgentTurnError {
+        class: rimz::agents::TurnErrorClass::PausedRateLimit,
+        at: now,
+        label: Some("Usage limit reached".to_owned()),
+    });
+    child.context = Some(context);
+    let run = child_run(&child, rimz::store::run::RunStatus::Running, now);
+    child_reports(
+        demotion,
+        std::slice::from_ref(&child),
+        &[&child],
+        &[run],
+        now,
+    )
+    .remove(0)
+}
+
+fn assert_spent_child_report(demotion: &rimz::agents::ParkDemotion) {
+    let report = parked_child_report(demotion);
+    assert_eq!(report.status, "failed");
+    assert_eq!(report.run_status.as_deref(), Some("running"));
+    assert_eq!(report.detail().as_deref(), Some("Usage limit reached"));
+    let json = serde_json::to_value(report).unwrap();
+    assert_eq!(json["status"], "failed");
+    assert_eq!(json["run_status"], "running");
+    assert_eq!(json["turn_error"]["class"], "paused_rate_limit");
+    assert_eq!(json["turn_error"]["label"], "Usage limit reached");
+    assert_eq!(
+        parked_child_report(&rimz::agents::ParkDemotion::default()).status,
+        "paused"
+    );
+}
+
+#[test]
+fn exhausted_child_report_reads_failed_with_its_open_run() {
+    let demotion = rimz::agents::ParkDemotion::new(
+        &Default::default(),
+        [(
+            rimz::ids::AgentKind::new_unchecked("claude"),
+            "child".into(),
+        )]
+        .into(),
+        Timestamp::from_second(1_000).unwrap(),
+    );
+    assert_spent_child_report(&demotion);
+}
+
+#[test]
+fn reset_child_report_reads_failed_with_its_open_run() {
+    let now = Timestamp::from_second(1_000).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let runtime =
+        rimz::RuntimePaths::under(rimz::WorkspaceId::from_project_root(dir.path()), dir.path())
+            .unwrap();
+    let login = rimz::ids::LoginKey::default_for(rimz::ids::AgentKind::new_unchecked("claude"));
+    let cache = rimz::agents::RateLimitsCache {
+        entries: [(
+            login.clone(),
+            rimz::agents::RateLimitCacheEntry {
+                limits: rimz::agents::AgentRateLimits {
+                    windows: vec![rimz::agents::RateLimitWindow {
+                        used_percentage: Some(100),
+                        resets_at: Some(now - Duration::from_secs(1)),
+                        ..Default::default()
+                    }],
+                },
+                ..Default::default()
+            },
+        )]
+        .into(),
+        ..Default::default()
+    };
+    rimz::disk::atomic::write_temp_then_rename_cache(&runtime.shared_rate_limits_path(), &cache)
+        .unwrap();
+    let capacities = [(
+        login.clone(),
+        rimz::agents::ProviderCapacity::read(&runtime, &login).unwrap(),
+    )]
+    .into();
+    assert_spent_child_report(&rimz::agents::ParkDemotion::new(
+        &capacities,
+        Default::default(),
+        now,
+    ));
 }
 
 #[test]
@@ -1229,7 +1341,14 @@ fn child_list_and_nested_entry(
     let agents = vec![parent, child];
     let mut list_agents = agents.clone();
     attach_list_context(&runtime, &mut list_agents);
-    let report = child_reports(&list_agents, &[&list_agents[1]], &[run], now).remove(0);
+    let report = child_reports(
+        &rimz::agents::ParkDemotion::default(),
+        &list_agents,
+        &[&list_agents[1]],
+        &[run],
+        now,
+    )
+    .remove(0);
     let snapshot =
         rimz::store::snapshot::SidebarSnapshot::build_with_agents(workspace_id, agents, now)
             .with_agent_context(rimz::store::agent_context::read_all(&runtime))

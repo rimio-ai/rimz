@@ -1,13 +1,17 @@
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+#[cfg(test)]
+use std::collections::BTreeMap;
+use std::collections::{BTreeSet, HashSet};
 use std::path::Path;
 
 use crate::agent_activity::AgentActivity;
+#[cfg(test)]
+use crate::agents::ProviderCapacity;
 use crate::agents::{
     AgentState, AgentStatus, LocalSessionObservation, LocalSessionProjection, LocalSessionState,
-    ProviderCapacity, TurnPhase,
+    ParkDemotion, TurnPhase,
 };
 use crate::diag::record::{DiagEvent, LocalSessionBindRejectReason};
-use crate::ids::{AgentKind, AgentSessionId, PaneId};
+use crate::ids::PaneId;
 use crate::pane::PaneRef;
 use crate::store::snapshot::panes::{
     LazyAgentPairingResult, PaneBindingIndex, pane_admits_card, row_from_frame_pane,
@@ -187,7 +191,7 @@ impl SidebarSnapshot {
     /// building stays independent of any backend command.
     pub fn with_live_panes(mut self, panes: Vec<PaneRef>, exclude: Option<&PaneId>) -> Self {
         let panes = self.card_admitted_live_panes(panes, exclude);
-        self.fold_admitted_live_panes(&panes, None, None, &BTreeMap::new(), &BTreeSet::new());
+        self.fold_admitted_live_panes(&panes, None, None, &ParkDemotion::default());
         self
     }
 
@@ -199,7 +203,8 @@ impl SidebarSnapshot {
         provider_capacities: &BTreeMap<crate::ids::LoginKey, ProviderCapacity>,
     ) -> Self {
         let panes = self.card_admitted_live_panes(panes, exclude);
-        self.fold_admitted_live_panes(&panes, None, None, provider_capacities, &BTreeSet::new());
+        let demotion = ParkDemotion::new(provider_capacities, BTreeSet::new(), self.now);
+        self.fold_admitted_live_panes(&panes, None, None, &demotion);
         self
     }
 
@@ -220,16 +225,10 @@ impl SidebarSnapshot {
         panes: Vec<PaneRef>,
         lazy_pairings: &LazyAgentPairingResult,
         unread_row_ids: Option<&BTreeSet<String>>,
-        provider_capacities: &BTreeMap<crate::ids::LoginKey, ProviderCapacity>,
-        exhausted_resumes: &BTreeSet<(AgentKind, AgentSessionId)>,
+        demotion: &ParkDemotion,
     ) -> (Self, Vec<DiagEvent>) {
-        let diagnostics = self.fold_admitted_live_panes(
-            &panes,
-            Some(lazy_pairings),
-            unread_row_ids,
-            provider_capacities,
-            exhausted_resumes,
-        );
+        let diagnostics =
+            self.fold_admitted_live_panes(&panes, Some(lazy_pairings), unread_row_ids, demotion);
         (self, diagnostics)
     }
 
@@ -238,16 +237,14 @@ impl SidebarSnapshot {
         panes: &[PaneRef],
         lazy_pairings: Option<&LazyAgentPairingResult>,
         unread_row_ids: Option<&BTreeSet<String>>,
-        provider_capacities: &BTreeMap<crate::ids::LoginKey, ProviderCapacity>,
-        exhausted_resumes: &BTreeSet<(AgentKind, AgentSessionId)>,
+        demotion: &ParkDemotion,
     ) -> Vec<DiagEvent> {
         let mut projection = self.rows_from_panes(panes, lazy_pairings);
         if let Some(unread_row_ids) = unread_row_ids {
             stamp_unread_rows(&mut projection.rows, unread_row_ids);
         }
         self.agent_panes = projection.agent_panes;
-        self.worktree_groups =
-            self.build_worktree_groups(projection.rows, provider_capacities, exhausted_resumes);
+        self.worktree_groups = self.build_worktree_groups(projection.rows, demotion);
         projection.diagnostics
     }
 

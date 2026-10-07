@@ -56,10 +56,7 @@ use self::pr::produce_pr_states;
 use self::rate_limits::refresh_rate_limits;
 use self::sessions::refresh_live_sessions;
 use self::usage::refresh_account_usage;
-use super::enrich::{
-    PanelScope, RemoteControlServerHealth, fold_machine_config_with,
-    read_auto_continue_resume_messages,
-};
+use super::enrich::{PanelScope, RemoteControlServerHealth, fold_machine_config_with};
 use crate::utils::time::unix_now_ms;
 
 const ORPHAN_SWEEP_SCAN_TTL: Duration = Duration::from_secs(60);
@@ -259,7 +256,7 @@ pub(super) fn refresh_heavy_lanes(
 
     refresh_live_sessions(base, runtime);
     refresh_account_usage(&panels, runtime, &logins);
-    let resume_messages = read_auto_continue_resume_messages(
+    let resume_messages = crate::harness::auto_continue::read_resume_messages(
         store.as_ref(),
         &config.resume,
         base.resume_outcomes.as_deref().unwrap_or_default(),

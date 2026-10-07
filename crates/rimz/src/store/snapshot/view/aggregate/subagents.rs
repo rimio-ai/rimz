@@ -4,14 +4,14 @@ use jiff::Timestamp;
 use tracing::debug;
 
 use crate::agents::lifecycle::TurnPhase;
-use crate::agents::{AgentSessionUsage, AgentState, AgentStatus};
+use crate::agents::{AgentSessionUsage, AgentState, AgentStatus, ParkDemotion};
 use crate::store::snapshot::row::{SidebarRow, SidebarSubAgent, SubAgentTokens};
 use crate::utils::time::format_duration_coarse;
 
 use super::super::layout::cmp_start_asc;
 use crate::store::session_death::GHOST_SESSION_TTL_SECS;
 
-use super::{AgentKey, AgentProjectionIndex, status::ParkDemotion};
+use super::{AgentKey, AgentProjectionIndex};
 
 /// Nest each subagent under its parent root row. A subagent is a reduced
 /// `AgentState` carrying `parent_agent_id`; native children are paneless, while
@@ -20,7 +20,7 @@ pub(super) fn attach_sub_agents_indexed(
     rows: &mut [SidebarRow],
     index: &AgentProjectionIndex<'_>,
     now: Timestamp,
-    demotion: &ParkDemotion<'_>,
+    demotion: &ParkDemotion,
     stalled_after_secs: u32,
 ) -> BTreeMap<AgentKey, (AgentStatus, String)> {
     let mut delegated_parks = BTreeMap::new();
@@ -93,8 +93,7 @@ pub(super) fn attach_sub_agents_indexed(
                 continue;
             }
             let park = launched_child_park(child, demotion);
-            let entry =
-                project_sub_agent(child, now, prior_turn, park.as_ref(), stalled_after_secs);
+            let entry = project_sub_agent(child, now, prior_turn, demotion, stalled_after_secs);
             if let Some((status, label)) = park
                 && delegated_parks.get(parent_key).is_none_or(|(current, _)| {
                     *current == AgentStatus::Paused && status == AgentStatus::Failed
@@ -119,7 +118,7 @@ pub(super) fn attach_sub_agents_indexed(
 
 fn launched_child_park(
     child: &AgentState,
-    demotion: &ParkDemotion<'_>,
+    demotion: &ParkDemotion,
 ) -> Option<(AgentStatus, String)> {
     if !child.is_launched_child() || child.ended_at.is_some() {
         return None;
@@ -128,11 +127,7 @@ fn launched_child_park(
     if !class.pauses_turn() {
         return None;
     }
-    let status = if demotion.is_spent(child, class) {
-        AgentStatus::Failed
-    } else {
-        AgentStatus::Paused
-    };
+    let status = child.rowless_status(demotion).0;
     let label = error
         .label
         .clone()
@@ -205,13 +200,11 @@ pub(in crate::store::snapshot) fn attach_sub_agents(
     now: Timestamp,
 ) {
     let index = AgentProjectionIndex::new(agents, rows);
-    let exhausted = Default::default();
-    let demotion = ParkDemotion::new(&BTreeMap::new(), &exhausted, now);
     attach_sub_agents_indexed(
         rows,
         &index,
         now,
-        &demotion,
+        &ParkDemotion::default(),
         crate::config::AttentionConfig::default()
             .stalled_after_secs
             .get(),
@@ -265,7 +258,7 @@ fn project_sub_agent(
     child: &AgentState,
     now: Timestamp,
     prior_turn: bool,
-    park: Option<&(AgentStatus, String)>,
+    demotion: &ParkDemotion,
     stalled_after_secs: u32,
 ) -> SidebarSubAgent {
     let name = if child.is_launched_child() {
@@ -290,11 +283,7 @@ fn project_sub_agent(
                 degraded_subagent_label(&child.agent_id)
             })
     };
-    // A park outranks silence: the parked child already carries its own label.
-    let silent_secs = park
-        .is_none()
-        .then(|| child.silent_child_for(now, stalled_after_secs))
-        .flatten();
+    let silent_secs = child.silent_child_for(now, stalled_after_secs);
     let started_at = child.subagent_started_at.or(child.registered_at);
     let elapsed_secs = started_at.map(|started| {
         let until = if child.status == AgentStatus::Running && silent_secs.is_none() {
@@ -315,16 +304,14 @@ fn project_sub_agent(
     } else {
         None
     };
-    let (status, phase, turn_error_label) = if let Some((status, label)) = park {
-        (*status, TurnPhase::Idle, Some(label.clone()))
-    } else if let Some(secs) = silent_secs {
+    let (status, phase, turn_error_label) = if let Some(secs) = silent_secs {
         (
             AgentStatus::Failed,
             TurnPhase::Idle,
             Some(format!("silent {}", format_duration_coarse(secs as i64))),
         )
     } else if child.is_launched_child() && child.ended_at.is_none() {
-        let (status, phase) = child.rowless_status();
+        let (status, phase) = child.rowless_status(demotion);
         (status, phase, child.displayed_turn_error_label())
     } else {
         (child.sleeping_over(child.status), child.phase, None)
@@ -368,10 +355,13 @@ pub(in crate::store::snapshot) fn sub_agent_from_state(
     prior_turn: bool,
     stalled_after_secs: u32,
 ) -> SidebarSubAgent {
-    let exhausted = Default::default();
-    let demotion = ParkDemotion::new(&BTreeMap::new(), &exhausted, now);
-    let park = launched_child_park(child, &demotion);
-    project_sub_agent(child, now, prior_turn, park.as_ref(), stalled_after_secs)
+    project_sub_agent(
+        child,
+        now,
+        prior_turn,
+        &ParkDemotion::default(),
+        stalled_after_secs,
+    )
 }
 
 /// Prefer window occupancy; otherwise use the session spend fold or an
