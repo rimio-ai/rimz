@@ -60,8 +60,8 @@ tmux publishes no prebuilt binaries, so when the packaged one is below the floor
 
 ```sh
 sudo apt install -y build-essential pkg-config libevent-dev libncurses-dev bison
-curl -fsSLO https://github.com/tmux/tmux/releases/download/3.7/tmux-3.7.tar.gz
-tar -xzf tmux-3.7.tar.gz && cd tmux-3.7
+curl -fsSLO https://github.com/tmux/tmux/releases/download/3.7c/tmux-3.7c.tar.gz
+tar -xzf tmux-3.7c.tar.gz && cd tmux-3.7c
 ./configure && make -j"$(nproc)" && sudo make install
 ```
 
