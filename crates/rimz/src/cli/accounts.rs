@@ -994,6 +994,8 @@ fn account_rows(
         let login = ProviderLogin::default_for(kind.clone());
         let mut failed = row(kind, login.name(), login.home_dir(ambient), None);
         failed.active = false;
+        failed.machine_default = false;
+        failed.default_for = Scopes::default();
         failed.status = AccountStatus::Unavailable;
         failed.problem = Some(error.to_string());
         rows.push(failed);
