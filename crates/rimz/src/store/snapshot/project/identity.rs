@@ -26,6 +26,18 @@ pub(crate) struct AgentIdentityState {
 }
 
 impl AgentIdentityState {
+    pub(crate) fn with_agent_ordinals(mut self, agents: &[AgentState]) -> Self {
+        for agent in agents {
+            if let Some(ordinal) = agent.kind_ordinal {
+                self.next_ordinal
+                    .entry(agent.kind.clone())
+                    .and_modify(|next| *next = (*next).max(ordinal.saturating_add(1)))
+                    .or_insert(ordinal.saturating_add(1));
+            }
+        }
+        self
+    }
+
     pub(crate) fn is_side_session(&self, agent_id: &AgentSessionId) -> bool {
         self.side_sessions.contains(agent_id)
     }

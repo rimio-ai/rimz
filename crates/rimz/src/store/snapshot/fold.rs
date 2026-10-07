@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use jiff::Timestamp;
@@ -117,6 +117,7 @@ struct FoldCarryover {
     agent_identity: AgentIdentityState,
     resume_outcomes: Vec<ResumeOutcome>,
     source_path: Option<PathBuf>,
+    reborn: OnceLock<Arc<Self>>,
 }
 
 const CARRIED_FIRST_PROMPT_MAX_CHARS: usize = 160;
@@ -137,6 +138,7 @@ impl FoldCarryover {
             agent_identity: raw.agent_identity,
             resume_outcomes: raw.resume_outcomes,
             source_path: None,
+            reborn: OnceLock::new(),
         }
     }
 
@@ -167,6 +169,7 @@ impl FoldCarryover {
 
     fn stamp_root_lane(&mut self, project_root: Option<&Path>) {
         self.project_root = project_root.map(Path::to_path_buf);
+        self.reborn = OnceLock::new();
         for agent in &mut self.agents {
             agent.root_lane = AgentState::is_root_lane(
                 agent.channel.as_deref(),
@@ -185,16 +188,19 @@ impl FoldCarryover {
 
     /// The copy a session rebirth folds against: panes and ordinals unstamped.
     /// Keys are untouched, so the sort order holds.
-    fn unstamped_for_rebirth(&self) -> Self {
-        let mut agents = self.agents.clone();
-        unstamp_for_rebirth(&mut agents);
-        Self {
-            agents,
-            project_root: self.project_root.clone(),
-            agent_identity: self.agent_identity.clone(),
-            resume_outcomes: self.resume_outcomes.clone(),
-            source_path: self.source_path.clone(),
-        }
+    fn unstamped_for_rebirth(&self) -> Arc<Self> {
+        Arc::clone(self.reborn.get_or_init(|| {
+            let mut agents = self.agents.clone();
+            unstamp_for_rebirth(&mut agents);
+            Arc::new(Self {
+                agents,
+                project_root: self.project_root.clone(),
+                agent_identity: self.agent_identity.clone(),
+                resume_outcomes: self.resume_outcomes.clone(),
+                source_path: self.source_path.clone(),
+                reborn: OnceLock::new(),
+            })
+        }))
     }
 }
 
@@ -253,15 +259,6 @@ impl AgentRollup {
         Self { base, live }
     }
 
-    /// A rollup already merged flat — the session-rebirth path, whose
-    /// re-identification spans both layers.
-    fn materialized(merged: Vec<AgentState>) -> Self {
-        Self {
-            base: Arc::default(),
-            live: merged.into(),
-        }
-    }
-
     pub fn iter(&self) -> impl Iterator<Item = &AgentState> + Clone {
         let mut base = self.base.agents.iter().peekable();
         let mut live = self.live.iter().peekable();
@@ -316,7 +313,7 @@ pub(crate) fn agent_rollup_with_carryover(
 
 /// Bump when [`RollupCache`]'s shape or a reducer's semantics change — a
 /// mismatched cache reads as absent and cold-rebuilds.
-const ROLLUP_CACHE_VERSION: u32 = 26;
+const ROLLUP_CACHE_VERSION: u32 = 27;
 
 /// The resumable agent-rollup fold base persisted in `snapshots/rollup.json`:
 /// the raw pre-projection fold map stamped with the log extent folded so far.
@@ -412,85 +409,124 @@ fn fold_delta(
     now: Timestamp,
 ) -> Result<FoldedDelta> {
     let rebirth_precedes_delta = seed.saw_session_rebirth;
-    seed.saw_session_rebirth |= events_have_rebirth(events);
+    let rebirth = events
+        .iter()
+        .position(|event| matches!(event.kind, EventKind::SessionRebirth));
+    seed.saw_session_rebirth |= rebirth.is_some();
     // The shared parse is never mutated: a rebirth folds against its own copy.
     let carryover = if rebirth_precedes_delta {
-        Arc::new(carryover.unstamped_for_rebirth())
+        carryover.unstamped_for_rebirth()
     } else {
         carryover
     };
 
-    // Hydrate only observed keys, linked predecessors, and command receivers. Stamps
-    // are applied by the reducer in log order and persist in raw_agents, not carryover.
+    // Hydrate continuing rows at rebirth, plus observed keys, linked predecessors,
+    // and command receivers. Stamps persist in raw_agents, not the shared carryover.
+    let (before_rebirth, after_rebirth) = events.split_at(rebirth.unwrap_or(0));
     let mut full_rows: Option<BTreeMap<_, _>> = None;
-    for event in events {
-        let key = match &event.kind {
-            EventKind::Message { payload, .. } => compact_command_agent_key(
-                seed.agents.values().chain(carryover.agents.iter()),
-                payload,
-            ),
-            _ => agent_event_key(event),
-        };
-        let Some(key) = key else {
-            continue;
-        };
-        let predecessor = match &event.kind {
-            EventKind::AgentLifecycle(payload) => payload
-                .observation
-                .compacted_from
-                .as_ref()
-                .map(|id| (key.0.clone(), id.clone())),
-            _ => None,
-        };
-        for key in std::iter::once(key).chain(predecessor) {
-            if seed.agents.contains_key(&key) {
-                continue;
-            }
-            if let Some(carried) = carryover.get(&key.0, &key.1) {
-                let mut carried = carried.clone();
-                if carried.ended_at.is_some()
-                    && let Some(source) = &carryover.source_path
-                {
-                    if full_rows.is_none() {
-                        full_rows = Some(
-                            read_carryover(source)?
-                                .agents
-                                .into_iter()
-                                .map(|agent| ((agent.kind.clone(), agent.agent_id.clone()), agent))
-                                .collect(),
-                        );
-                    }
-                    if let Some(full) = full_rows.as_ref().and_then(|rows| rows.get(&key)) {
-                        restore_agent_text(&mut carried, full);
-                    }
+    for delta in std::iter::once(before_rebirth)
+        .filter(|delta| !delta.is_empty())
+        .chain(std::iter::once(after_rebirth))
+    {
+        if delta
+            .first()
+            .is_some_and(|event| matches!(event.kind, EventKind::SessionRebirth))
+        {
+            for carried in &carryover.agents {
+                if carried.ended_at.is_none() {
+                    seed.agents
+                        .entry((carried.kind.clone(), carried.agent_id.clone()))
+                        .or_insert_with(|| carried.clone());
                 }
-                seed.agents.insert(key, carried);
             }
         }
+        for event in delta {
+            let key = match &event.kind {
+                EventKind::Message { payload, .. } => compact_command_agent_key(
+                    seed.agents.values().chain(carryover.agents.iter()),
+                    payload,
+                ),
+                _ => agent_event_key(event),
+            };
+            let Some(key) = key else {
+                continue;
+            };
+            let predecessor = match &event.kind {
+                EventKind::AgentLifecycle(payload) => payload
+                    .observation
+                    .compacted_from
+                    .as_ref()
+                    .map(|id| (key.0.clone(), id.clone())),
+                _ => None,
+            };
+            for key in std::iter::once(key).chain(predecessor) {
+                if seed.agents.contains_key(&key) {
+                    continue;
+                }
+                if let Some(carried) = carryover.get(&key.0, &key.1) {
+                    let mut carried = carried.clone();
+                    if carried.ended_at.is_some()
+                        && let Some(source) = &carryover.source_path
+                    {
+                        if full_rows.is_none() {
+                            full_rows = Some(
+                                read_carryover(source)?
+                                    .agents
+                                    .into_iter()
+                                    .map(|agent| {
+                                        ((agent.kind.clone(), agent.agent_id.clone()), agent)
+                                    })
+                                    .collect(),
+                            );
+                        }
+                        if let Some(full) = full_rows.as_ref().and_then(|rows| rows.get(&key)) {
+                            restore_agent_text(&mut carried, full);
+                        }
+                    }
+                    seed.agents.insert(key, carried);
+                }
+            }
+        }
+        (seed.agents, seed.identity) =
+            reduce_agent_states_seeded_with_identity(seed.agents, seed.identity, delta);
     }
 
-    let (map, mut agent_identity) =
-        reduce_agent_states_seeded_with_identity(seed.agents, seed.identity, events);
+    let (map, mut agent_identity) = (seed.agents, seed.identity);
     let resume_outcomes: Vec<ResumeOutcome> =
         reduce_resume_outcomes_seeded(seed.resume_outcomes, events, now)
             .into_values()
             .collect();
     let mut raw_agents: Vec<AgentState> = map.into_values().collect();
+    let provisional: Vec<_> = raw_agents
+        .iter()
+        .enumerate()
+        .filter(|(_, agent)| seed.saw_session_rebirth && agent.kind_ordinal.is_none())
+        .map(|(index, agent)| (index, agent.name.clone(), agent.name_explicit))
+        .collect();
+    let reducer_identity = (!provisional.is_empty()).then(|| agent_identity.clone());
     let merged_resume_outcomes =
         merge_resume_outcomes(&carryover.resume_outcomes, &resume_outcomes, now);
     let merged = if seed.saw_session_rebirth {
         let carryover = if rebirth_precedes_delta {
             carryover
         } else {
-            Arc::new(carryover.unstamped_for_rebirth())
+            carryover.unstamped_for_rebirth()
         };
         agent_identity = backfill_agent_identities(&mut raw_agents, agent_identity);
-        let mut merged = AgentRollup::layered(carryover, &raw_agents).to_vec();
-        backfill_agent_identities(&mut merged, AgentIdentityState::default());
-        AgentRollup::materialized(merged)
+        AgentRollup::layered(carryover, &raw_agents)
     } else {
         AgentRollup::layered(carryover, &raw_agents)
     };
+
+    // Reducer-unassigned identities belong to the projection, not the next delta's claims.
+    for (index, name, name_explicit) in provisional {
+        raw_agents[index].name = name;
+        raw_agents[index].name_explicit = name_explicit;
+        raw_agents[index].kind_ordinal = None;
+    }
+    if let Some(identity) = reducer_identity {
+        agent_identity = identity;
+    }
 
     Ok(FoldedDelta {
         raw_agents,
@@ -730,12 +766,6 @@ fn prune_resume_outcomes(
     });
 }
 
-fn events_have_rebirth(events: &[FoldEvent<'_>]) -> bool {
-    events
-        .iter()
-        .any(|event| matches!(event.kind, EventKind::SessionRebirth))
-}
-
 /// Preserve retained audit identity before the active event log rotates.
 pub(crate) fn stage_carryover_for_rotation(paths: &StatePaths, min_bytes: u64) -> Result<usize> {
     let current_bytes = match fs::metadata(&paths.events_log) {
@@ -762,11 +792,15 @@ pub(crate) fn stage_carryover_for_rotation(paths: &StatePaths, min_bytes: u64) -
     let (cache, agents, resume_outcomes) = catch_up_from(base, paths, Arc::new(carryover))?;
     let agents = retain_carryover_agents(agents.to_vec(), event_log::DEFAULT_RETENTION);
     let carryover_agents = agents.len();
+    let agent_identity = cache
+        .agent_identity
+        .with_agent_ordinals(&agents)
+        .without_consumed_launches();
     write_carryover(
         &paths.agents_carryover,
         &EventCarryover {
             agents,
-            agent_identity: cache.agent_identity.without_consumed_launches(),
+            agent_identity,
             resume_outcomes,
         },
     )?;

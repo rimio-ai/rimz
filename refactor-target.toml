@@ -702,7 +702,8 @@ path = "crates/rimz/src/store"
 # PaneAgent::root_lane and lane_label carry the same root identity into pane resolution.
 # Predicate-based queue clearing keeps root-lane policy in the CLI and cancellation under the store lock (+1).
 # Fold-private audit text loading (+1).
-surface-budget = 372
+# Rotation commits the projected ordinal high-water mark (+1).
+surface-budget = 373
 
 [[module]]
 path = "crates/rimz/src/theme"
