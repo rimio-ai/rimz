@@ -66,6 +66,12 @@ fn check_launch_ignores_a_firer_found_by_ancestry() {
 }
 
 #[cfg(unix)]
+#[test]
+fn scheduled_launch_ignores_a_firers_room_pin() {
+    loop_channel_case(LoopLaunch::Agent, LoopFirer::RoomPin);
+}
+
+#[cfg(unix)]
 #[derive(Clone, Copy, PartialEq)]
 enum LoopLaunch {
     Agent,
@@ -80,6 +86,7 @@ enum LoopFirer {
     Subagent,
     ChainLimit,
     Ancestry,
+    RoomPin,
 }
 
 #[cfg(unix)]
@@ -179,7 +186,11 @@ fn loop_channel_case(action: LoopLaunch, firer: LoopFirer) {
                     .then(|| AgentSessionId::from("launch_parent")),
                 parent_agent_kind: (firer == LoopFirer::Subagent)
                     .then(|| AgentKind::new_unchecked("claude")),
-                launch_depth: Some(if firer == LoopFirer::Subagent { 1 } else { 3 }),
+                launch_depth: Some(match firer {
+                    LoopFirer::Subagent => 1,
+                    LoopFirer::RoomPin => 0,
+                    _ => 3,
+                }),
                 ..Default::default()
             },
             (firer == LoopFirer::Ancestry).then(|| {
@@ -193,10 +204,24 @@ fn loop_channel_case(action: LoopLaunch, firer: LoopFirer) {
         );
     }
     let mut command = env.rimz();
-    if matches!(firer, LoopFirer::Subagent | LoopFirer::ChainLimit) {
+    if matches!(
+        firer,
+        LoopFirer::Subagent | LoopFirer::ChainLimit | LoopFirer::RoomPin
+    ) {
         command
             .env("RIMZ_AGENT_KIND", "claude")
             .env("RIMZ_AGENT_ID", "launch_firer");
+    }
+    if firer == LoopFirer::RoomPin {
+        let firer_root = env.home_root.join("firer-project");
+        std::fs::create_dir(&firer_root).unwrap();
+        assert!(init_git_repo(&firer_root));
+        let firer_workspace = env.resolve_workspace(&firer_root);
+        assert_ne!(workspace.workspace_id, firer_workspace.workspace_id);
+        command.envs(rimz::workspace::pin_env(
+            &firer_workspace.workspace_id,
+            &firer_workspace.project_root,
+        ));
     }
     let output = command
         .args(["--mux", "zellij", "loop", "run", "rimzd"])
