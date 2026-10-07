@@ -205,6 +205,8 @@ Allocation per operation is the steadier regression signal; medians move with ho
 | `hotpath::rollup_fold_warm` 40 agents, 0 / 1,500 carryover rows, shared carryover parse | 56.9 µs / 79.8 µs | 655.6 KB / 655.6 KB | 2026-09-14 |
 | `hotpath::rollup_fold_unchanged` 40 agents, 0 / 1,500 carryover rows, cloning the held rollup | 10.95 µs / 1.92 ms | 121.6 KB / 16.03 MB | 2026-09-14 |
 | `hotpath::rollup_fold_unchanged` 40 agents, 0 / 1,500 carryover rows, layered rollup | 2.24 µs / 2.99 µs | 0 B / 0 B | 2026-09-14 |
+| `hotpath::carryover_fold_cold` 3,300 / 13,200 rows | 58.97 ms / 299.4 ms | 107.9 MB / 420.5 MB | 2026-10-07 |
+| `hotpath::carryover_fold_rebirth_warm` 3,300 / 13,200 rows, one registration delta | 429.8 µs / 4.347 ms | 1.725 MB / 6.746 MB | 2026-10-07 |
 | `hotpath::enrich_cached` 40 agents | 610 µs | 1.21 MB | 2026-07-05 |
 | `hotpath::consumer_adopt_parse_cached` 40 agents | 116 µs | 125.2 KB | 2026-07-18 |
 | `hotpath::consumer_adopt_changed_file` 40 agents | 329 µs | 226.9 KB | 2026-07-18 |
@@ -217,6 +219,23 @@ Allocation per operation is the steadier regression signal; medians move with ho
 | `hotpath::spending_live_scale_warm_discovery_only` 6k files | 19.55 ms | 770.9 KB | 2026-07-18 |
 | `hotpath::spending_live_scale_warm_discovery_inclusive` 6k files / 102k entries | 140.2 ms | 99.59 MB | 2026-07-18 |
 | `hotpath::spending_live_scale_additional_workspace_scope` 6k files / 102k entries | 116.6 ms | 58.59 MB | 2026-07-20 |
+
+### Carryover fold measurements
+
+Run `cargo xtask perf --bench hotpath -- carryover_fold` for these two benches. `crates/rimz/src/testkit/mod.rs::fleet::seed_ended_carryover` supplies unique identities, 98% ended rows, and 39% pane-bearing rows. Compact row JSON is 4,800 bytes at p50, about 13,200 at p90, and 35,900 at maximum; the 1x and 4x files are 32,943,350 and 131,784,597 bytes. Each bench takes 20 samples with fixture setup and teardown outside timing. The cold bench parses inside timing; the warm bench primes a rebirth cursor and appends one `Registered` frame outside timing before measuring the delta fold. Alloc/op is Divan's `alloc` byte count; cold allocation includes transient raw-file text and decoding, not just the retained projection.
+
+The 2026-10-07 capture ran from 19:20 to 19:26 UTC on the host above, with load averages `29.58 39.46 40.04` before and `59.70 54.95 47.02` after. These are non-gating observations, not latency bounds.
+
+For process RSS, set `RIMZ_CARRYOVER_FIXTURE_DIR` to a scratch directory when running the benches. They export `carryover-3300.json`, `carryover-13200.json`, and the matching `rebirth-<rows>.log.jsonl` files outside timing. Build with `cargo build --release -p rimz --bin rimz` and resolve this checkout's binary as `$(cargo metadata --format-version 1 --no-deps | jq -r .target_directory)/release/rimz`. From a managed room, retain its `RIMZ_WORKSPACE_ID` and `RIMZ_PROJECT_ROOT`; create a scratch `RIMZ_HOME` with only the room's copied `ws/<directory>/workspace.json`. For each size, put the exported carryover under that workspace's `records/agents-carryover.json` and its rebirth log under `log/events.log.jsonl`, with no snapshot checkpoints. Time invocations with `env RIMZ_HOME="$carryover_rss_home" /usr/bin/time -f '%M %e %U %S' "$carryover_binary" agents list --json > /dev/null`. For a before/after comparison, verify binary versions and alternate three runs per binary and size in one session on the same scratch home and fixtures. If the installed binary is not the intended base, build that revision in a separate scratch worktree and target directory, then remove the worktree.
+
+The 2026-10-07 release-profile comparison began at 19:31 UTC with load averages `40.04 48.07 46.28`, ending at `44.51 48.70 46.50`. Before is the merge base `g805007bff1bf`; after is this change. Each entry reports minimum wall time and maximum peak RSS across three alternating runs per binary and size. An earlier untimed `strace -f -e trace=openat,execve` control at 1x confirmed the then-current branch release executable, one scratch carryover read, and two active-log reads (the snapshot and audit folds). The CLI retains the existing room's live-mux and runtime-cache overhead. Peak RSS includes transient raw parsing and allocator pages, so it is not a retained-heap measurement.
+
+| Binary | Rows | Peak RSS (KiB) | Min wall (s) |
+| --- | ---: | ---: | ---: |
+| Before | 3,300 | 142,308 | 0.33 |
+| After | 3,300 | 82,332 | 0.25 |
+| Before | 13,200 | 513,260 | 0.87 |
+| After | 13,200 | 302,124 | 0.51 |
 
 ## Overhead at fleet scale
 
@@ -274,7 +293,7 @@ Every writer that knows about a change pushes: store and sidecar writers post a 
 
 ### No reader pays for history
 
-The rollup persists a raw fold base with its `(generation, offset)` stamp, and catch-up seeks to the offset and folds only new frames ([`fold.rs`](../../crates/rimz/src/store/snapshot/fold.rs), [store.md → The read path](./store.md#the-read-path)). Runtime projection, resume outcomes, and smart-compact dedupe ride the same fold instead of rescanning `log/events.log.jsonl`. A `(path, mtime, len)` parse cache on `lanes/snapshot.json`, `cache/snapshots/latest.json`, and `cache/snapshots/rollup.json`, and a full-identity `(len, mtime, dev, ino)` one on `records/agents-carryover.json`, return `Arc<T>` handles, so an unchanged file costs neither a re-parse nor a deep clone ([`disk/parse_cache.rs`](../../crates/rimz/src/disk/parse_cache.rs)). The carryover's cached form is fold-ready (identities backfilled, rows key-sorted), and a cursor holds the merged rollup as that shared carryover beneath the live rows that win the merge, so a fold thread retains one copy of history however many times it folds. A corrupt carryover is never cached: every fold reports it until the file is replaced.
+The rollup persists a raw fold base with its `(generation, offset)` stamp, and catch-up seeks to the offset and folds only new frames ([`fold.rs`](../../crates/rimz/src/store/snapshot/fold.rs), [store.md → The read path](./store.md#the-read-path)). Runtime projection, resume outcomes, and smart-compact dedupe ride the same fold instead of rescanning `log/events.log.jsonl`. A `(path, mtime, len)` parse cache on `lanes/snapshot.json`, `cache/snapshots/latest.json`, and `cache/snapshots/rollup.json`, and a full-identity `(len, mtime, dev, ino)` one on `records/agents-carryover.json`, return `Arc<T>` handles, so an unchanged file costs neither a re-parse nor a deep clone ([`disk/parse_cache.rs`](../../crates/rimz/src/disk/parse_cache.rs)). The carryover's cached form is fold-ready (identities backfilled, rows key-sorted) and retains only a bounded first-line prompt label on ended rows, unlike the unchanged durable record. Its reborn base is cached once per parse, and every fold layers live rows over the shared base without copying all history. The [read-path contract](./store.md#the-read-path) owns the prefix bound, hydration, and the explicit `Store::load_full_agent` read. A corrupt carryover is never cached: every fold reports it until the file is replaced.
 
 The spend walk is incremental in three layers: the walker's directory index stats only active frontiers and reconciles fully every 15 minutes, the disk cache keeps a cursor per file so a grown file parses only its appended suffix, and the one elected walker holds the only parsed cache, so workspace requests borrow instead of cloning. Aggregation uses hash collections for session uniqueness and keeps deterministic order only in the published maps. The cache layout is [spending.md → The incremental cache](./agents/spending.md#the-incremental-cache).
 
