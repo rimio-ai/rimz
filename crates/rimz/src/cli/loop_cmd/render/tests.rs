@@ -64,7 +64,7 @@ fn show_view(each_worktree: bool) -> ShowView {
         }],
         room_is_open: false,
         strike_count: 0,
-        live_leader: false,
+        leader_statuses: BTreeMap::new(),
         you: false,
         config: MachineConfig::default().into(),
         throttle: ShowThrottle::Compact(Some(
@@ -173,7 +173,8 @@ fn show_wakes_with_no_subscriptions_and_no_live_leader() {
 fn show_wakes_with_a_live_leader_and_no_subscriptions() {
     let mut view = show_view(true);
     view.subscriptions.clear();
-    view.live_leader = true;
+    view.leader_statuses
+        .insert("new-leader".into(), rimz::agents::AgentStatus::Idle);
     let text = show_text(&view);
     assert!(
         text.contains("leader on ci.failed, pr.merged · 0 armed"),
@@ -225,6 +226,228 @@ fn show_configured_limits_keep_full_throttle_section() {
     let text = show_text(&view);
     assert!(text.contains("THROTTLE\n"), "{text}");
     assert!(!text.contains("no limits set"), "{text}");
+}
+
+fn refusal(second: i64, checkout: &str, reason: &str) -> LoopRunRecord {
+    let mut row = scheduled(second, LoopRunResult::TakeoverBlocked);
+    row.checkout = Some(PathBuf::from(checkout));
+    row.error = Some(reason.into());
+    row
+}
+
+#[test]
+fn takeover_refusals_fold_alternating_checkouts_with_latest_reason_and_oldest_age() {
+    let records = [
+        refusal(10, "/repo/alpha", "@old is working"),
+        refusal(20, "/repo/beta", "@beta is waiting on you"),
+        refusal(70, "/repo/alpha", "@alpha is compacting"),
+        refusal(80, "/repo/beta", "@beta is working"),
+    ];
+    let text = runs_table(&records, 10);
+    assert_eq!(text.matches("○ takeover blocked ×2").count(), 2, "{text}");
+    assert!(
+        text.contains("beta · @beta is working · since 1m ago"),
+        "{text}"
+    );
+    assert!(
+        text.contains("alpha · @alpha is compacting · since 1m ago"),
+        "{text}"
+    );
+    assert!(
+        text.find("beta ·").unwrap() < text.find("alpha ·").unwrap(),
+        "{text}"
+    );
+    assert!(text.contains("4 of 4"), "{text}");
+    assert!(!text.contains("/repo/") && !text.contains("@old"), "{text}");
+    let limited = runs_table(&records, 1);
+    assert!(
+        limited.contains("2 of 4") && limited.contains("beta ·"),
+        "{limited}"
+    );
+    assert!(!limited.contains("alpha ·"), "{limited}");
+}
+
+#[test]
+fn takeover_refusal_folding_preserves_other_rows_and_overlap_counts() {
+    let mut completed = scheduled(30, LoopRunResult::Completed);
+    completed.checkout = Some("/repo/alpha".into());
+    let records = [
+        overlap(5),
+        refusal(10, "/repo/alpha", "@old is working"),
+        completed,
+        scheduled(40, LoopRunResult::Failed),
+        scheduled(50, LoopRunResult::Failed),
+        overlap(60),
+        refusal(70, "/repo/alpha", "@new is waiting on you"),
+        scheduled(80, LoopRunResult::Failed),
+    ];
+    let text = runs_table(&records, 10);
+    assert_eq!(text.matches("takeover blocked ×1").count(), 2, "{text}");
+    assert!(
+        text.contains("alpha · @new is waiting on you · since 30s ago · 1 fire skipped"),
+        "{text}"
+    );
+    assert!(
+        text.contains("alpha · @old is working · since 1m ago · 1 fire skipped"),
+        "{text}"
+    );
+    assert!(text.contains("✗ failed ×2"), "{text}");
+    assert_eq!(text.matches("✗ failed").count(), 2, "{text}");
+    assert!(text.contains("8 of 8"), "{text}");
+    let limited = runs_table(&records, 2);
+    assert!(limited.contains("3 of 8"), "{limited}");
+}
+
+#[test]
+fn takeover_refusal_runs_have_separate_counts_and_ages_matching_current_block() {
+    let mut launch = scheduled(30, LoopRunResult::Launched);
+    launch.checkout = Some("/repo/alpha".into());
+    launch.target = Some("@leader".into());
+    let records = [
+        refusal(10, "/repo/alpha", "@old is working"),
+        refusal(20, "/repo/alpha", "@old is working"),
+        launch,
+        refusal(70, "/repo/alpha", "@new is working"),
+        refusal(80, "/repo/alpha", "@new is working"),
+        refusal(90, "/repo/alpha", "@new is working"),
+    ];
+    let text = runs_table(&records, 10);
+    assert!(text.contains("○ takeover blocked ×3"), "{text}");
+    assert!(text.contains("○ takeover blocked ×2"), "{text}");
+    let newest = text
+        .find("alpha · @new is working · since 30s ago")
+        .unwrap();
+    let launched = text.find("✓ launched").unwrap();
+    let oldest = text.find("alpha · @old is working · since 1m ago").unwrap();
+    assert!(newest < launched && launched < oldest, "{text}");
+    assert!(text.contains("6 of 6"), "{text}");
+    let blocks = takeover_refusals(&records);
+    let block = &blocks[Path::new("/repo/alpha")];
+    assert_eq!(block.count, 3);
+    assert_eq!(
+        block.active_since,
+        Some(Timestamp::from_second(70).unwrap())
+    );
+}
+
+#[test]
+fn takeover_refusal_run_ends_at_an_overlapped_fire_in_the_same_checkout() {
+    let mut skipped = overlap(50);
+    skipped.checkout = Some("/repo/alpha".into());
+    let text = runs_table(
+        &[
+            refusal(10, "/repo/alpha", "@old is working"),
+            refusal(20, "/repo/alpha", "@old is working"),
+            skipped,
+            refusal(70, "/repo/alpha", "@new is working"),
+            refusal(80, "/repo/alpha", "@new is working"),
+        ],
+        10,
+    );
+    assert_eq!(text.matches("○ takeover blocked ×2").count(), 2, "{text}");
+    assert!(
+        text.contains("alpha · @new is working · since 30s ago · 1 fire skipped"),
+        "{text}"
+    );
+    assert!(
+        text.contains("alpha · @old is working · since 1m ago"),
+        "{text}"
+    );
+    assert!(text.contains("5 of 5"), "{text}");
+}
+
+#[test]
+fn show_attention_warns_at_30m_only_for_current_unledgered_blocks() {
+    let mut view = show_view(true);
+    view.now_zoned = Timestamp::from_second(4000)
+        .unwrap()
+        .to_zoned(jiff::tz::TimeZone::UTC);
+    let mut cleared = scheduled(2100, LoopRunResult::Completed);
+    cleared.checkout = Some("/repo/retried".into());
+    let mut resolved = cleared.clone();
+    resolved.checkout = Some("/repo/resolved".into());
+    view.records = vec![
+        scheduled(5, LoopRunResult::Launched),
+        refusal(10, "/repo/retried", "@busy is working"),
+        refusal(20, "/repo/resolved", "@busy is working"),
+        refusal(30, "/repo/newer", "@busy is working"),
+        cleared,
+        resolved,
+        refusal(2200, "/repo/alpha", "@busy is working"),
+        refusal(2200, "/repo/beta", "@busy is working"),
+        refusal(2260, "/repo/retried", "@busy is working"),
+        refusal(3900, "/repo/alpha", "@busy is compacting"),
+    ];
+    let text = show_text(&view);
+    assert_eq!(
+        text.lines().nth(2),
+        Some("  ! 2 ready but blocked over 30m: alpha, beta"),
+        "{text}"
+    );
+    assert!(
+        text.lines().nth(1).unwrap().starts_with("  ✓ healthy"),
+        "{text}"
+    );
+    view.now_zoned = Timestamp::from_second(3940)
+        .unwrap()
+        .to_zoned(jiff::tz::TimeZone::UTC);
+    assert!(!show_text(&view).contains("ready but blocked over 30m"));
+}
+
+#[test]
+fn show_attention_names_failed_live_leaders_but_not_ended_leaders() {
+    let mut view = show_view(true);
+    view.records = vec![scheduled(20, LoopRunResult::Launched)];
+    let mut failed = rimz::testkit::agent_state("codex", "live", view.now_zoned.timestamp());
+    failed.name = Some("new-leader".into());
+    failed.status = rimz::agents::AgentStatus::Failed;
+    view.leader_statuses = leader_statuses(&view.launches, &[failed]);
+    let text = show_text(&view);
+    assert_eq!(
+        text.lines().nth(2),
+        Some("  ! 1 failed leader: @new-leader in newer"),
+        "{text}"
+    );
+    assert!(
+        text.lines().nth(1).unwrap().starts_with("  ✓ healthy"),
+        "{text}"
+    );
+    view.leader_statuses
+        .insert("old-leader".into(), rimz::agents::AgentStatus::Failed);
+    view.records
+        .insert(0, refusal(-1800, "/repo/blocked", "@busy is working"));
+    let text = show_text(&view);
+    assert_eq!(
+        text.lines().nth(2),
+        Some("  ! 1 ready but blocked over 30m: blocked"),
+        "{text}"
+    );
+    assert_eq!(
+        text.lines().nth(3),
+        Some("  ! 2 failed leaders: @new-leader in newer, @old-leader in older"),
+        "{text}"
+    );
+    view.leader_statuses.clear();
+    let text = show_text(&view);
+    assert!(!text.contains("failed leader"), "{text}");
+}
+
+#[test]
+fn leader_lookup_uses_ledger_petnames_and_effective_status() {
+    let view = show_view(true);
+    let mut live = rimz::testkit::agent_state("codex", "live", view.now_zoned.timestamp());
+    live.name = Some("new-leader".into());
+    live.profile = Some("sweeper".into());
+    live.status = rimz::agents::AgentStatus::Running;
+    live.phase = rimz::agents::TurnPhase::Parked;
+    let mut unrelated = live.clone();
+    unrelated.name = Some("sweeper".into());
+    unrelated.status = rimz::agents::AgentStatus::Failed;
+    let statuses = leader_statuses(&view.launches, &[live, unrelated]);
+    assert_eq!(
+        statuses,
+        BTreeMap::from([("new-leader".into(), rimz::agents::AgentStatus::Success)])
+    );
 }
 
 #[test]

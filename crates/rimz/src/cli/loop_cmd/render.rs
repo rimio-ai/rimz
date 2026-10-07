@@ -3,6 +3,7 @@
 use super::*;
 
 const NOTE_MAX: usize = 60;
+const BLOCKED_WARN_AFTER_SECS: i64 = 30 * 60;
 
 pub(super) fn room_open(root: &Path) -> bool {
     runtime_for_root(root)
@@ -246,11 +247,45 @@ struct ShowView {
     subscriptions: Vec<SubscriptionView>,
     room_is_open: bool,
     strike_count: u32,
-    live_leader: bool,
+    leader_statuses: BTreeMap<String, rimz::agents::AgentStatus>,
     you: bool,
     config: std::sync::Arc<MachineConfig>,
     throttle: ShowThrottle,
     show_agent_runs: bool,
+}
+
+impl ShowView {
+    fn takeover_refusals(&self) -> BTreeMap<&Path, CheckoutRefusals<'_>> {
+        takeover_refusals(&self.records)
+    }
+}
+
+struct CheckoutRefusals<'a> {
+    count: usize,
+    reason: &'a str,
+    active_since: Option<Timestamp>,
+}
+
+fn takeover_refusals(records: &[LoopRunRecord]) -> BTreeMap<&Path, CheckoutRefusals<'_>> {
+    let mut refusals = BTreeMap::<&Path, CheckoutRefusals<'_>>::new();
+    for record in records {
+        let Some(checkout) = record.checkout.as_deref() else {
+            continue;
+        };
+        if record.result != LoopRunResult::TakeoverBlocked {
+            refusals.remove(checkout);
+            continue;
+        }
+        let refusal = refusals.entry(checkout).or_insert(CheckoutRefusals {
+            count: 0,
+            reason: "",
+            active_since: None,
+        });
+        refusal.count += 1;
+        refusal.reason = record.error.as_deref().unwrap_or_default();
+        refusal.active_since.get_or_insert(record.at);
+    }
+    refusals
 }
 
 struct SubscriptionView {
@@ -266,6 +301,86 @@ enum ShowThrottle {
     Off,
     Compact(Option<String>),
     Full(Vec<(&'static str, String)>),
+}
+
+fn leader_statuses(
+    launches: &BTreeMap<PathBuf, schedule::launch_ledger::LaunchRecord>,
+    agents: &[rimz::agents::AgentState],
+) -> BTreeMap<String, rimz::agents::AgentStatus> {
+    launches
+        .values()
+        .filter_map(|launch| {
+            let agent = agents
+                .iter()
+                .find(|agent| agent.name.as_deref() == Some(launch.leader.as_str()))?;
+            Some((launch.leader.clone(), agent.effective_status()))
+        })
+        .collect()
+}
+
+fn write_attention(out: &mut impl Write, view: &ShowView) -> std::io::Result<()> {
+    let now = view.now_zoned.timestamp();
+    let blocked = view
+        .takeover_refusals()
+        .into_iter()
+        .filter(|(checkout, refusal)| {
+            !view.launches.contains_key(*checkout)
+                && refusal.active_since.is_some_and(|since| {
+                    now.duration_since(since).as_secs() >= BLOCKED_WARN_AFTER_SECS
+                })
+        })
+        .map(|(checkout, _)| {
+            checkout
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect::<Vec<_>>();
+    if !blocked.is_empty() {
+        writeln!(
+            out,
+            "  {}",
+            ui::paint(
+                ui::palette::warn(),
+                &format!(
+                    "! {} ready but blocked over 30m: {}",
+                    blocked.len(),
+                    blocked.join(", ")
+                )
+            )
+        )?;
+    }
+    let failed = view
+        .launches
+        .iter()
+        .filter(|(_, launch)| {
+            view.leader_statuses.get(&launch.leader) == Some(&rimz::agents::AgentStatus::Failed)
+        })
+        .map(|(checkout, launch)| {
+            format!(
+                "@{} in {}",
+                launch.leader,
+                checkout.file_name().unwrap_or_default().to_string_lossy()
+            )
+        })
+        .collect::<Vec<_>>();
+    if !failed.is_empty() {
+        writeln!(
+            out,
+            "  {}",
+            ui::paint(
+                ui::palette::warn(),
+                &format!(
+                    "! {} failed leader{}: {}",
+                    failed.len(),
+                    if failed.len() == 1 { "" } else { "s" },
+                    failed.join(", ")
+                )
+            )
+        )?;
+    }
+    Ok(())
 }
 
 fn render_show(out: &mut impl Write, view: &ShowView, runs: usize) -> Result<()> {
@@ -285,6 +400,7 @@ fn render_show(out: &mut impl Write, view: &ShowView, runs: usize) -> Result<()>
         view.in_flight.is_some(),
         now,
     )?;
+    write_attention(out, view)?;
     if !view.launches.is_empty() {
         writeln!(out, "\nLAUNCHES")?;
         let mut launches = view.launches.iter().collect::<Vec<_>>();
@@ -428,14 +544,10 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
         .as_ref()
         .map(|store| store.snapshot_cached())
         .transpose()?;
-    let live_leader = snapshot.as_ref().is_some_and(|snapshot| {
-        launches.values().any(|launch| {
-            snapshot
-                .agents
-                .iter()
-                .any(|agent| agent.name.as_deref() == Some(launch.leader.as_str()))
-        })
-    });
+    let leader_statuses = snapshot
+        .as_ref()
+        .map(|snapshot| leader_statuses(&launches, &snapshot.agents))
+        .unwrap_or_default();
     let you = store
         .as_ref()
         .and_then(|store| {
@@ -472,7 +584,7 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
         in_flight,
         condition: String::from_utf8(condition)?,
         subscriptions,
-        live_leader,
+        leader_statuses,
         you,
         config,
         throttle,
@@ -1021,7 +1133,7 @@ fn write_show_facts(out: &mut impl Write, view: &ShowView) -> std::io::Result<()
             .collect::<Vec<_>>()
             .join(", ");
         let armed = view.subscriptions.len();
-        let no_leader = if armed == 0 && !view.live_leader {
+        let no_leader = if armed == 0 && view.leader_statuses.is_empty() {
             ", no live leader"
         } else {
             ""
@@ -1190,7 +1302,7 @@ fn write_runs_table(
     let show_tokens = visible_rows
         .iter()
         .any(|row| row.latest.input_tokens.is_some() || row.latest.output_tokens.is_some());
-    let show_note = visible_rows.iter().any(|row| row.note().is_some());
+    let show_note = visible_rows.iter().any(|row| row.note(now).is_some());
     let mut headers = vec!["WHEN"];
     if show_mode {
         headers.push("MODE");
@@ -1242,7 +1354,7 @@ fn write_runs_table(
             );
         }
         if show_note {
-            cells.push(ui::cell(row.note().as_deref().unwrap_or("-")).dash());
+            cells.push(ui::cell(row.note(now).as_deref().unwrap_or("-")).dash());
         }
         table.row(cells);
     }
@@ -1280,17 +1392,22 @@ struct CollapsedRunRow<'a> {
     key: RunRowKey,
     latest: &'a LoopRunRecord,
     count: usize,
+    refusal_since: Option<Timestamp>,
     /// Overlapped fires folded into this row: refused while its runs held the lock.
     skipped: usize,
 }
 
 impl CollapsedRunRow<'_> {
-    fn note(&self) -> Option<String> {
+    fn note(&self, now: Timestamp) -> Option<String> {
+        let note = self.key.note.as_ref().map(|note| match self.refusal_since {
+            Some(since) => format!("{note} · since {}", ui::rel_age(since, now)),
+            None => note.clone(),
+        });
         let skipped = (self.skipped > 0)
             .then(|| format!("{} skipped, run already active", fires(self.skipped)));
-        match (&self.key.note, skipped) {
+        match (note, skipped) {
             (Some(note), Some(skipped)) => Some(format!("{note} · {skipped}")),
-            (note, skipped) => note.clone().or(skipped),
+            (note, skipped) => note.or(skipped),
         }
     }
 }
@@ -1301,45 +1418,81 @@ impl CollapsedRunRow<'_> {
 /// Overlaps with no later record are a run still in flight, or one that
 /// crashed, and keep one row.
 fn collapsed_run_rows(records: &[LoopRunRecord]) -> Vec<CollapsedRunRow<'_>> {
-    let mut rows = Vec::<CollapsedRunRow<'_>>::new();
+    let mut rows = Vec::<Option<CollapsedRunRow<'_>>>::new();
+    let mut by_checkout = BTreeMap::<&Path, usize>::new();
     let mut overlaps = 0;
     for record in records {
+        if record.result != LoopRunResult::TakeoverBlocked
+            && let Some(checkout) = record.checkout.as_deref()
+        {
+            by_checkout.remove(checkout);
+        }
         if is_overlap(record) {
             overlaps += 1;
             continue;
         }
         let key = RunRowKey::new(record);
-        if let Some(row) = rows.last_mut().filter(|row| row.key == key) {
+        if record.result == LoopRunResult::TakeoverBlocked
+            && let Some(checkout) = record.checkout.as_deref()
+        {
+            let previous = by_checkout
+                .insert(checkout, rows.len())
+                .and_then(|index| rows[index].take());
+            let mut row = CollapsedRunRow {
+                key,
+                latest: record,
+                count: 1,
+                refusal_since: Some(record.at),
+                skipped: overlaps,
+            };
+            if let Some(previous) = previous {
+                row.count += previous.count;
+                row.skipped += previous.skipped;
+                row.refusal_since = previous.refusal_since.map(|since| since.min(record.at));
+            }
+            row.key.note = Some(format!(
+                "{} · {}",
+                checkout.file_name().unwrap_or_default().to_string_lossy(),
+                record.error.as_deref().unwrap_or_default()
+            ));
+            rows.push(Some(row));
+        } else if let Some(row) = rows
+            .last_mut()
+            .and_then(Option::as_mut)
+            .filter(|row| row.key == key)
+        {
             row.count += 1;
             row.skipped += overlaps;
             if record.at >= row.latest.at {
                 row.latest = record;
             }
         } else {
-            rows.push(CollapsedRunRow {
+            rows.push(Some(CollapsedRunRow {
                 key,
                 latest: record,
                 count: 1,
+                refusal_since: None,
                 skipped: overlaps,
-            });
+            }));
         }
         overlaps = 0;
     }
     if let Some(latest) = records.last().filter(|_| overlaps > 0) {
-        rows.push(CollapsedRunRow {
+        rows.push(Some(CollapsedRunRow {
             key: RunRowKey::new(latest),
             latest,
             count: overlaps,
+            refusal_since: None,
             skipped: 0,
-        });
+        }));
     }
-    rows
+    rows.into_iter().flatten().collect()
 }
 
 fn run_status_cell(record: &LoopRunRecord, count: usize) -> ui::Cell {
     let status = run_status(record);
     let mut label = format!("{} {}", status.glyph, status.label);
-    if count > 1 {
+    if count > 1 || (record.result == LoopRunResult::TakeoverBlocked && record.checkout.is_some()) {
         label.push_str(&format!(" ×{count}"));
     }
     ui::cell(label).fg(status.style)
