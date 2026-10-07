@@ -57,7 +57,7 @@ A `--channel` name takes ASCII letters, numbers, `_`, and `-`. Channels and work
 
 ## Park, steer, interrupt, or schedule
 
-**Park for the next turn boundary.** This is what a send does with no flags at all. The text holds until the agent finishes the turn it is working on, then lands at the boundary, so it never cuts into work in flight. Use it to hand off follow-up without watching for the agent to free up. The default gate, `--on done`, waits for a finished turn: one that succeeded, went idle, or ended with the agent waiting on a timer or watch it armed. `--on any` releases the text after a failed turn too.
+**Park for the next turn boundary.** This is what a send does with no flags at all. The text holds until the agent finishes the turn it is working on, then lands at the boundary, so it never cuts into work in flight. Use it to hand off follow-up without watching for the agent to free up. The default gate, `--on done`, waits for a finished turn: one that succeeded, went idle, or ended with the agent waiting on a timer or watch it armed. `--on any` releases the text after a failed turn too. A turn that stopped on a provider rate limit, spend limit, or overload is `paused`, not failed, so both gates hold the text until the agent resumes.
 
 ```sh
 rimz message @coder "open a PR summary once tests pass"   # waits for the turn to end, then delivers
