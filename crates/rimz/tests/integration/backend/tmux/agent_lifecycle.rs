@@ -764,11 +764,16 @@ fn wait_for_agent_end_observation(env: &Env, agent_id: &str) {
 }
 
 #[cfg(target_os = "linux")]
-fn wait_for_wrapper_cleanup(env: &Env, wrappers: &[u32]) {
-    let spec = SandboxSpec {
-        home_root: env.home_root.clone(),
-        runtime_root: env.runtime_root.clone(),
-    };
+fn sandbox_commands(spec: &SandboxSpec, words: [&str; 2]) -> Vec<(u32, Vec<std::ffi::OsString>)> {
+    sandbox_processes(spec)
+        .into_iter()
+        .filter_map(|pid| rimz::proc::argv(pid).map(|argv| (pid, argv)))
+        .filter(|(_, argv)| words.iter().all(|word| argv.iter().any(|arg| arg == word)))
+        .collect()
+}
+
+#[cfg(target_os = "linux")]
+fn wait_for_wrapper_cleanup(spec: &SandboxSpec, wrappers: &[u32]) {
     let deadline = Instant::now() + Duration::from_secs(15);
     loop {
         // End stamps precede the detached helper spawn, so the wrappers must exit too.
@@ -778,16 +783,8 @@ fn wait_for_wrapper_cleanup(env: &Env, wrappers: &[u32]) {
             .filter(|pid| rimz::proc::process_is_live(*pid, None))
             .map(|pid| (pid, rimz::proc::argv(pid)))
             .collect::<Vec<_>>();
-        let cleanup = sandbox_processes(&spec)
-            .into_iter()
-            .filter_map(|pid| rimz::proc::argv(pid).map(|argv| (pid, argv)))
-            .filter(|(_, argv)| {
-                (argv.iter().any(|arg| arg == "worktree")
-                    && argv.iter().any(|arg| arg == "cleanup"))
-                    || (argv.iter().any(|arg| arg == "agents")
-                        && argv.iter().any(|arg| arg == "exec"))
-            })
-            .collect::<Vec<_>>();
+        let mut cleanup = sandbox_commands(spec, ["worktree", "cleanup"]);
+        cleanup.extend(sandbox_commands(spec, ["agents", "exec"]));
         if live_wrappers.is_empty() && cleanup.is_empty() {
             return;
         }
@@ -1659,13 +1656,7 @@ fn fresh_cohort_relaunch_preserves_dirty_checkout_and_does_not_duplicate_live_ag
         runtime_root: env.runtime_root.clone(),
     };
     let wrapper_pids = || {
-        let wrappers = sandbox_processes(&spec)
-            .into_iter()
-            .filter_map(|pid| rimz::proc::argv(pid).map(|argv| (pid, argv)))
-            .filter(|(_, argv)| {
-                argv.iter().any(|arg| arg == "agents") && argv.iter().any(|arg| arg == "exec")
-            })
-            .collect::<Vec<_>>();
+        let wrappers = sandbox_commands(&spec, ["agents", "exec"]);
         assert_eq!(
             wrappers.len(),
             2,
@@ -1734,7 +1725,7 @@ fn fresh_cohort_relaunch_preserves_dirty_checkout_and_does_not_duplicate_live_ag
     for agent in &original {
         wait_for_agent_end_observation(&env, agent.agent_id.as_str());
     }
-    wait_for_wrapper_cleanup(&env, &wrappers);
+    wait_for_wrapper_cleanup(&spec, &wrappers);
     assert_checkout_preserved();
     let closed = agents();
     assert!(closed.iter().all(|agent| agent.ended_at.is_some()));
@@ -1848,7 +1839,7 @@ fn fresh_cohort_relaunch_preserves_dirty_checkout_and_does_not_duplicate_live_ag
     for agent in live {
         wait_for_agent_end_observation(&env, agent.agent_id.as_str());
     }
-    wait_for_wrapper_cleanup(&env, &wrappers);
+    wait_for_wrapper_cleanup(&spec, &wrappers);
     assert_checkout_preserved();
     let fresh = run_launch(true);
     assert!(fresh.contains("fresh in worktree `fresh`"), "{fresh}");
@@ -1860,7 +1851,7 @@ fn fresh_cohort_relaunch_preserves_dirty_checkout_and_does_not_duplicate_live_ag
     for agent in relaunched.iter().filter(|agent| agent.ended_at.is_none()) {
         wait_for_agent_end_observation(&env, agent.agent_id.as_str());
     }
-    wait_for_wrapper_cleanup(&env, &wrappers);
+    wait_for_wrapper_cleanup(&spec, &wrappers);
     assert_checkout_preserved();
     std::fs::copy(
         env.project_root.join("README.md"),
