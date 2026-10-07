@@ -164,8 +164,9 @@ pub(crate) enum StopRunErr {
 /// registered, so a pane nothing names can outlive an `Ok`.
 /// For a subagent run, `Ok` also means its still-un-ended card is ended,
 /// matched by the run's session id, else the newest same-kind namesake
-/// registered at or before the run finished. A later namesake is never the
-/// stop's.
+/// registered at or before the run finished. That bound holds for a run already
+/// finished when the stop began; a run still live then keeps the unbounded name
+/// match.
 pub(crate) fn stop_supervised_run(
     workspace: &rimz::ResolvedWorkspace,
     store: &rimz::Store,
