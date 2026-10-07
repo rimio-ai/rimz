@@ -365,6 +365,52 @@ fn pane_send_and_capture_refuse_a_pane_from_another_room() {
     );
 }
 
+#[test]
+fn pane_capture_lines_bounds_scrollback_without_blank_padding() {
+    require_tmux!();
+    let rooms = TwoRooms::new();
+    rooms.server.tmux(&[
+        "respawn-pane", "-k", "-t", rooms.here_pane.raw(), "sh", "-c",
+        r#"printf '\033[31m'; for i in $(seq 1 80); do printf 'CAPTURE_%03d\n' "$i"; done; sleep 120"#,
+    ]);
+    let target = rooms.here_pane.to_string();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let output = rooms.pane(&["capture", &target, "--lines", "500"]);
+        if output.status.success()
+            && String::from_utf8_lossy(&output.stdout).contains("CAPTURE_080")
+        {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "capture content not ready: {output:?}"
+        );
+        thread::sleep(Duration::from_millis(50));
+    }
+    for ansi in [false, true] {
+        for (bound, count) in [("5", 5), ("500", 80)] {
+            let mut args = vec!["capture", &target, "--lines", bound];
+            if ansi {
+                args.push("--ansi");
+            }
+            let output = rooms.pane(&args);
+            assert!(output.status.success(), "{:?}", output);
+            let text = String::from_utf8(output.stdout).expect("capture utf-8");
+            assert_eq!(text.lines().count(), count, "ansi={ansi}: {text:?}");
+            assert!(
+                text.lines().last().unwrap().contains("CAPTURE_080"),
+                "{text:?}"
+            );
+        }
+    }
+    let output = rooms.pane(&["capture", &target, "--lines", "5", "--json"]);
+    assert!(output.status.success(), "{output:?}");
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).expect("capture JSON");
+    assert_eq!(value["lines"].as_array().unwrap().len(), 5);
+    assert_eq!(value["raw_text"].as_str().unwrap().lines().count(), 5);
+}
+
 /// From a shell outside any pane, `pane split` opens its pane in the resolved
 /// room although the other session is the one tmux picks when no target is
 /// named.

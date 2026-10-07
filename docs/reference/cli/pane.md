@@ -85,7 +85,7 @@ The JSON document has `session`, `mux`, and `tabs`. Each tab has `view_id` and `
 
 | Flag | Meaning |
 | --- | --- |
-| `--lines <N>` | Include scrollback. The result differs by backend: tmux prints `N` lines of scrollback followed by the whole visible screen; Zellij prints the last `N` lines of the full scrollback, which can end inside the visible screen, and `--lines 0` prints nothing. Without the flag, only the visible screen. |
+| `--lines <N>` | Print the last `N` lines, reaching into scrollback, on either backend. Trailing blank rows are removed before counting, so a pane with fewer content lines prints fewer than `N`. `N` must be at least `1`; `0` is a usage error (exit `2`). Without the flag, only the visible screen, unchanged. |
 | `--ansi` | Keep colors and text attributes as escape sequences. |
 | `--json` | Print `pane_id`, `raw_text` (the capture as one string), and `lines` (the same text split into lines). |
 

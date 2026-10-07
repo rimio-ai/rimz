@@ -44,8 +44,8 @@ enum PaneSubcmd {
             crate::cli::complete::pane_targets
         ))]
         target: String,
-        /// Capture only the last N lines.
-        #[arg(long)]
+        /// Print the last N lines, reaching into scrollback. Default: the visible screen
+        #[arg(long, value_name = "N", value_parser = clap::value_parser!(u16).range(1..))]
         lines: Option<u16>,
         /// Emit JSON.
         #[arg(long)]
@@ -790,6 +790,23 @@ fn parse_key(raw: &str) -> std::result::Result<NamedKey, String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn capture_lines_rejects_zero_and_accepts_positive_bounds() {
+        use clap::Parser;
+        let err =
+            crate::cli::Cli::try_parse_from(["rimz", "pane", "capture", "tmux:%1", "--lines", "0"])
+                .expect_err("zero is not a useful capture bound");
+        assert_eq!(err.exit_code(), 2);
+        for n in ["1", "500", "65535"] {
+            assert!(
+                crate::cli::Cli::try_parse_from([
+                    "rimz", "pane", "capture", "tmux:%1", "--lines", n,
+                ])
+                .is_ok()
+            );
+        }
+    }
+
     use super::*;
     use clap::Parser;
     use jiff::Timestamp;

@@ -1013,6 +1013,87 @@ fn pane_capture_reads_a_held_pane_that_pane_list_omits() {
     );
 }
 
+#[test]
+fn pane_capture_lines_bounds_scrollback_without_blank_padding() {
+    require_zellij!();
+    let env = Env::new();
+    let workspace = env.resolve_workspace(&env.project_root);
+    let here = workspace.session_name;
+    record_known_workspace_session(
+        &env.rimz_home(),
+        &workspace.workspace_id,
+        &env.project_root,
+        &here,
+    );
+    let room = LiveZellijSession::from_namespace(crate::common::ZellijNamespace::new(), &here);
+    let xdg = room.path();
+    room.create_background();
+    let opened = room.command()
+        .args(["--session", &here, "action", "new-pane", "--", "sh", "-c",
+            r#"printf '\033[31m'; for i in $(seq 1 80); do printf 'CAPTURE_%03d\n' "$i"; done; sleep 120"#])
+        .bounded_output().expect("open capture pane");
+    assert!(opened.status.success(), "{opened:?}");
+    let target = poll_until(
+        Duration::from_secs(10),
+        || {
+            list_panes(xdg, &here).map(|snapshot| {
+                snapshot.panes.into_iter().find(|pane| {
+                    pane.terminal_command
+                        .as_deref()
+                        .is_some_and(|command| command.contains("CAPTURE_"))
+                })
+            })
+        },
+        Option::is_some,
+        "capture pane listed",
+    )
+    .expect("capture pane");
+    let target = PaneId::from_parts(MuxName::Zellij, format!("terminal_{}", target.id)).to_string();
+    let capture = |args: &[&str]| {
+        env.rimz()
+            .env("XDG_RUNTIME_DIR", xdg)
+            .env("XDG_CACHE_HOME", xdg)
+            .env("TMPDIR", xdg)
+            .arg("pane")
+            .args(args)
+            .bounded_output()
+            .expect("rimz pane capture")
+    };
+    poll_until(
+        Duration::from_secs(10),
+        || {
+            let output = capture(&["capture", &target, "--lines", "500"]);
+            Ok::<_, String>(
+                output.status.success()
+                    && String::from_utf8_lossy(&output.stdout).contains("CAPTURE_080"),
+            )
+        },
+        |ready| *ready,
+        "all capture content printed",
+    );
+    for ansi in [false, true] {
+        for (bound, count) in [("5", 5), ("500", 80)] {
+            let mut args = vec!["capture", &target, "--lines", bound];
+            if ansi {
+                args.push("--ansi");
+            }
+            let output = capture(&args);
+            assert!(output.status.success(), "{output:?}");
+            let text = String::from_utf8(output.stdout).expect("capture utf-8");
+            assert_eq!(text.lines().count(), count, "ansi={ansi}: {text:?}");
+            assert!(
+                text.lines().last().unwrap().contains("CAPTURE_080"),
+                "{text:?}"
+            );
+        }
+    }
+    let output = capture(&["capture", &target, "--lines", "5", "--json"]);
+    assert!(output.status.success(), "{output:?}");
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).expect("capture JSON");
+    assert_eq!(value["lines"].as_array().unwrap().len(), 5);
+    assert_eq!(value["raw_text"].as_str().unwrap().lines().count(), 5);
+}
+
 /// A room pane another pane replaced in place stays in the session suppressed,
 /// where Zellij takes a write or a screen dump for it, exits 0, and does
 /// nothing. `pane send` and `pane capture` refuse it rather than report a
