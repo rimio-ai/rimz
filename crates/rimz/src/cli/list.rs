@@ -12,6 +12,7 @@
 //! unroomed project's loop dir), and `rimz gc` reaps it only while it holds no
 //! history. A *corrupt* record is still surfaced.
 
+use std::io::Write;
 use std::time::{Duration, SystemTime};
 
 use anyhow::{Context, Result};
@@ -20,11 +21,11 @@ use jiff::Timestamp;
 use serde::Serialize;
 use tracing::warn;
 
-use super::GlobalFlags;
+use super::{GlobalFlags, pinned_room_root};
 use crate::cli::render;
 use rimz::disk::paths::workspaces_dir;
 use rimz::ids::MuxName;
-use rimz::store::event::{LastDeathMarker, SessionDeathCause};
+use rimz::store::event::{LastDeathMarker, SessionDeathAgent, SessionDeathCause};
 
 /// Workspaces idle longer than this are hidden from the default view; `--all`
 /// reveals them.
@@ -49,24 +50,35 @@ struct WorkspaceRow {
     running_on: Option<String>,
     last_activity: Option<Timestamp>,
     last_death: Option<String>,
+    current: bool,
+    last_death_detail: Option<LastDeathDetail>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct LastDeathDetail {
+    cause: SessionDeathCause,
+    at: Timestamp,
+    lost_agents: Vec<SessionDeathAgent>,
 }
 
 pub fn run(args: ListArgs, _globals: &GlobalFlags) -> Result<()> {
-    let rows = collect_rows(args.all).context("listing workspaces")?;
+    let (rows, dormant) = collect_rows(args.all).context("listing workspaces")?;
     if args.json {
         return crate::cli::render::json_pretty(&rows);
     }
-    print_human(&rows)?;
+    print_human(&rows, dormant)?;
     Ok(())
 }
 
-fn collect_rows(all: bool) -> Result<Vec<WorkspaceRow>> {
+fn collect_rows(all: bool) -> Result<(Vec<WorkspaceRow>, usize)> {
     let workspaces = rimz::workspace::known_workspaces_under(&workspaces_dir())
         .context("reading known workspaces")?;
     let zellij_sessions = backend_sessions(MuxName::Zellij);
     let tmux_sessions = backend_sessions(MuxName::Tmux);
     let now = SystemTime::now();
     let root = workspaces_dir();
+    let current_root = pinned_room_root();
+    let mut dormant = 0;
 
     let mut rows: Vec<WorkspaceRow> = workspaces
         .into_iter()
@@ -84,15 +96,25 @@ fn collect_rows(all: bool) -> Result<Vec<WorkspaceRow>> {
             // Default view: running sessions plus anything touched recently.
             // `--all` keeps dormant workspaces in the listing.
             if !all && running_on.is_none() && !is_recent(last_activity, now) {
+                dormant += 1;
                 return None;
             }
+            let current = current_root
+                .as_ref()
+                .is_some_and(|pin| known.project_root.canonicalize().ok().as_ref() == Some(pin));
             Some(WorkspaceRow {
                 workspace_id: Some(known.workspace_id.as_str().to_owned()),
                 project_root: known.project_root.display().to_string(),
                 session_name: known.session_name,
                 running_on,
                 last_activity: last_activity.and_then(|at| Timestamp::try_from(at).ok()),
-                last_death,
+                last_death: last_death.as_ref().map(death_summary),
+                current,
+                last_death_detail: last_death.map(|marker| LastDeathDetail {
+                    cause: marker.cause,
+                    at: marker.at,
+                    lost_agents: marker.lost_agents,
+                }),
             })
         })
         .collect();
@@ -107,13 +129,12 @@ fn collect_rows(all: bool) -> Result<Vec<WorkspaceRow>> {
                 .then_with(|| a.workspace_id.cmp(&b.workspace_id)),
         }
     });
-    Ok(rows)
+    Ok((rows, dormant))
 }
 
-fn death_for(workspace_dir: &std::path::Path) -> Option<String> {
+fn death_for(workspace_dir: &std::path::Path) -> Option<LastDeathMarker> {
     let path = rimz::StatePaths::history_paths(workspace_dir).last_death_marker;
-    let marker: LastDeathMarker = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
-    Some(death_summary(&marker))
+    serde_json::from_slice(&std::fs::read(path).ok()?).ok()
 }
 
 fn death_summary(marker: &LastDeathMarker) -> String {
@@ -174,29 +195,38 @@ fn backend_sessions(mux: MuxName) -> Vec<String> {
     }
 }
 
-fn print_human(rows: &[WorkspaceRow]) -> std::io::Result<()> {
+fn print_human(rows: &[WorkspaceRow], dormant: usize) -> std::io::Result<()> {
     if rows.is_empty() {
-        return Ok(());
+        if dormant > 0 {
+            return writeln!(
+                render::err(),
+                "No rooms running or active in the last 24h. {dormant} dormant: rimz list --all"
+            );
+        }
+        return writeln!(
+            render::err(),
+            "No rooms yet. Run `rimz` in a project to open one."
+        );
     }
-    let mut table = render::Table::new([
-        "WORKSPACE",
-        "SESSION",
-        "PROJECT_ROOT",
-        "RUNNING",
-        "LAST_SEEN",
-    ]);
+    let now = Timestamp::now();
+    let mut table = render::Table::new(["ROOM", "PROJECT", "MUX", "LAST ACTIVE"]);
     for row in rows {
+        let room = if row.current {
+            format!("{} (here)", row.session_name)
+        } else {
+            row.session_name.clone()
+        };
+        let project = render::home_relative_path(std::path::Path::new(&row.project_root));
         let running = row.running_on.as_deref().unwrap_or("-");
-        let seen = last_seen(row);
+        let seen = last_seen(row, now);
         let running_style = if row.running_on.is_some() {
             render::palette::good()
         } else {
             render::palette::faint()
         };
         table.row([
-            render::cell(row.workspace_id.as_deref().unwrap_or("-")).fg(render::palette::accent()),
-            render::cell(row.session_name.as_str()),
-            render::cell(row.project_root.as_str()).fg(render::palette::body()),
+            render::cell(room).fg(render::palette::accent()),
+            render::cell(project).fg(render::palette::body()),
             render::cell(running).fg(running_style),
             render::cell(seen).dash(),
         ]);
@@ -204,13 +234,21 @@ fn print_human(rows: &[WorkspaceRow]) -> std::io::Result<()> {
     table.render(&mut render::out())
 }
 
-fn last_seen(row: &WorkspaceRow) -> String {
-    let activity = row
-        .last_activity
-        .as_ref()
-        .map(|ts| ts.strftime("%Y-%m-%d %H:%M").to_string());
-    match (&row.running_on, &row.last_death) {
-        (None, Some(death)) => death.clone(),
+fn last_seen(row: &WorkspaceRow, now: Timestamp) -> String {
+    let activity = row.last_activity.map(|at| render::rel_age(at, now));
+    match (&row.running_on, &row.last_death_detail) {
+        (None, Some(death)) => {
+            let verb = match death.cause {
+                SessionDeathCause::Crash => "crashed",
+                SessionDeathCause::Reboot => "rebooted",
+            };
+            let at = render::rel_age(death.at, now);
+            match death.lost_agents.len() {
+                0 => format!("{verb} · {at}"),
+                1 => format!("{verb} · 1 agent · {at}"),
+                n => format!("{verb} · {n} agents · {at}"),
+            }
+        }
         _ => activity.unwrap_or_else(|| "-".to_owned()),
     }
 }
@@ -219,7 +257,6 @@ fn last_seen(row: &WorkspaceRow) -> String {
 mod tests {
     use super::*;
     use rimz::ids::AgentKind;
-    use rimz::store::event::SessionDeathAgent;
 
     #[test]
     fn recency_window_bounds() {
@@ -268,17 +305,31 @@ mod tests {
 
     #[test]
     fn last_seen_prefers_running_activity_over_stale_death_marker() {
-        let death = "crashed · 2 agents · 1970-01-01 00:00";
-        let mut row = row(Some("tmux"), Some(death), Some(Timestamp::UNIX_EPOCH));
+        let now = Timestamp::UNIX_EPOCH + jiff::SignedDuration::from_hours(2);
+        let mut row = row(
+            Some("tmux"),
+            Some(marker(SessionDeathCause::Crash, 16)),
+            Some(now),
+        );
 
-        assert_eq!(last_seen(&row), "1970-01-01 00:00");
+        assert_eq!(last_seen(&row, now), "0s ago");
 
         row.running_on = None;
-        assert_eq!(last_seen(&row), death);
+        assert_eq!(last_seen(&row, now), "crashed · 16 agents · 2h ago");
 
         row.last_death = None;
+        row.last_death_detail = None;
+        assert_eq!(last_seen(&row, now), "0s ago");
         row.last_activity = None;
-        assert_eq!(last_seen(&row), "-");
+        assert_eq!(last_seen(&row, now), "-");
+    }
+
+    #[test]
+    fn last_seen_death_uses_relative_age_and_singular_agent() {
+        let now = Timestamp::UNIX_EPOCH + jiff::SignedDuration::from_hours(2);
+        let row = row(None, Some(marker(SessionDeathCause::Reboot, 1)), None);
+
+        assert_eq!(last_seen(&row, now), "rebooted · 1 agent · 2h ago");
     }
 
     fn marker(cause: SessionDeathCause, agents: usize) -> LastDeathMarker {
@@ -298,7 +349,7 @@ mod tests {
 
     fn row(
         running_on: Option<&str>,
-        last_death: Option<&str>,
+        last_death: Option<LastDeathMarker>,
         last_activity: Option<Timestamp>,
     ) -> WorkspaceRow {
         WorkspaceRow {
@@ -307,7 +358,13 @@ mod tests {
             session_name: "rimz-repo-000000".to_owned(),
             running_on: running_on.map(str::to_owned),
             last_activity,
-            last_death: last_death.map(str::to_owned),
+            last_death: last_death.as_ref().map(death_summary),
+            current: false,
+            last_death_detail: last_death.map(|marker| LastDeathDetail {
+                cause: marker.cause,
+                at: marker.at,
+                lost_agents: marker.lost_agents,
+            }),
         }
     }
 }
