@@ -372,6 +372,51 @@ const LIST_PANES: &str = "action list-panes --all --json";
 
 #[cfg(unix)]
 #[test]
+fn pane_content_size_reads_terminal_content_not_outer_geometry() {
+    let (temp, shim) = support::pane_roster_shim(
+        r#"[{"id":7,"is_plugin":true,"pane_content_rows":1,"pane_content_columns":2},{"id":7,"pane_rows":40,"pane_columns":120,"pane_content_rows":38,"pane_content_columns":118}]"#,
+    );
+    let backend = ZellijBackend::with_program_for_test(&shim);
+    let pane = PaneId::from_parts(crate::MuxName::Zellij, "terminal_7");
+    assert_eq!(
+        backend
+            .pane_content_size(&pane, Some("room-a"), Duration::from_secs(2))
+            .ok(),
+        Some(Some(crate::mux::PaneContentSize {
+            rows: 38,
+            cols: 118
+        })),
+    );
+    assert_eq!(
+        shim_log(&temp).trim(),
+        "--session room-a action list-panes --all --json"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn pane_content_size_preserves_zero_and_missing_panes() {
+    let (_temp, shim) =
+        support::pane_roster_shim(r#"[{"id":7,"pane_content_rows":0,"pane_content_columns":118}]"#);
+    let backend = ZellijBackend::with_program_for_test(&shim);
+    let pane = PaneId::from_parts(crate::MuxName::Zellij, "terminal_7");
+    assert_eq!(
+        backend
+            .pane_content_size(&pane, Some("room-a"), Duration::from_secs(2))
+            .ok(),
+        Some(Some(crate::mux::PaneContentSize { rows: 0, cols: 118 }))
+    );
+    let missing = PaneId::from_parts(crate::MuxName::Zellij, "terminal_8");
+    assert_eq!(
+        backend
+            .pane_content_size(&missing, Some("room-a"), Duration::from_secs(2))
+            .ok(),
+        Some(None)
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn pane_room_check_reruns_a_transient_empty_listing() {
     let (temp, shim) = zellij_shim(
         r#"#!/bin/sh

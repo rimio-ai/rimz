@@ -560,7 +560,8 @@ path = "crates/rimz/src/mux"
 # The shared capture tail rule replaces the Zellij-only trim helper.
 # The room plane owns Zellij's shared stamped width memo (+1).
 # View naming publishes its record types through the pane listing and frame (+8).
-surface-budget = 268
+# PaneContentSize, its read, and the winsize repair module, function and outcome serve startup repair (+5).
+surface-budget = 273
 
 [[module]]
 path = "crates/rimz/src/mux/zellij"

@@ -231,6 +231,8 @@ pub struct TmuxBackend {
     socket: PathBuf,
     /// Memoized `tmux -V` stdout ([`MuxBackend::version`]).
     version: std::sync::OnceLock<String>,
+    #[cfg(test)]
+    program: Option<PathBuf>,
 }
 
 impl Default for TmuxBackend {
@@ -244,6 +246,8 @@ impl TmuxBackend {
         Self {
             socket: socket.into(),
             version: std::sync::OnceLock::new(),
+            #[cfg(test)]
+            program: None,
         }
     }
 
@@ -262,7 +266,16 @@ impl TmuxBackend {
     /// here is what lets a read-only caller — `rimz doctor` above all — probe
     /// tmux without touching the runtime tree.
     fn cmd(&self) -> CommandSpec {
-        tmux_cmd(&self.socket)
+        let spec = tmux_cmd(&self.socket);
+        #[cfg(test)]
+        let spec = {
+            let mut spec = spec;
+            if let Some(program) = &self.program {
+                spec.program = program.to_string_lossy().into_owned();
+            }
+            spec
+        };
+        spec
     }
 
     /// Fail fast when the managed endpoint cannot be addressed.
