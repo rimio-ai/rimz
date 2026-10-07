@@ -99,6 +99,7 @@ fn dispatch_park_causes_follow_schedule_conditions_readiness_and_fifo() {
     for status in [
         crate::store::message::MessageStatus::Queued,
         crate::store::message::MessageStatus::Claimed,
+        crate::store::message::MessageStatus::Sent,
     ] {
         blocker.status = status;
         blocker.last_attempt_at = Some(now());
@@ -111,6 +112,28 @@ fn dispatch_park_causes_follow_schedule_conditions_readiness_and_fifo() {
         ));
         expected.push(parked(ParkReason::Behind(blocker.message_id.clone())));
     }
+    blocker.body = MessageBody::Command;
+    actual.push(dispatch_decision(
+        &snapshot,
+        &[blocker.clone()],
+        &target,
+        &mode,
+        now(),
+    ));
+    expected.push(DispatchDecision::Live);
+    blocker.body = MessageBody::Prompt;
+    for kind in [DeliveryKind::Steer, DeliveryKind::Interrupt] {
+        mode.kind = kind;
+        actual.push(dispatch_decision(
+            &snapshot,
+            &[blocker.clone()],
+            &target,
+            &mode,
+            now(),
+        ));
+        expected.push(DispatchDecision::Live);
+    }
+    mode.kind = DeliveryKind::Boundary;
     let mut busy = snapshot;
     busy.agents[0].status = AgentStatus::Running;
     actual.push(dispatch_decision(&busy, &[blocker], &target, &mode, now()));

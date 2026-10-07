@@ -859,7 +859,12 @@ pub fn queue_head<'a>(
         .min_by(|a, b| a.message_id.as_str().cmp(b.message_id.as_str()))
 }
 
-/// An ordinary claim still inside its TTL that a fresh boundary send parks behind.
+fn holds_boundary(message: &MessageRecord) -> bool {
+    message.status.is_open()
+        || (message.status == MessageStatus::Sent && message.body == MessageBody::Prompt)
+}
+
+/// A non-`Resume` unexpired claim or `Sent` prompt a fresh boundary send parks behind.
 pub(crate) fn in_flight_claim<'a>(
     pending: impl IntoIterator<Item = &'a MessageRecord>,
     kind: &AgentKind,
@@ -868,10 +873,12 @@ pub(crate) fn in_flight_claim<'a>(
     now: Timestamp,
 ) -> Option<&'a MessageRecord> {
     pending.into_iter().find(|message| {
-        message.status == MessageStatus::Claimed
+        holds_boundary(message)
             && message.gate != DeliveryGate::Resume
             && message.same_card(AgentCardRef::new(kind, agent_id, agent_name))
-            && !claim_expired(message.last_attempt_at, now)
+            && (message.status == MessageStatus::Sent
+                || (message.status == MessageStatus::Claimed
+                    && !claim_expired(message.last_attempt_at, now)))
     })
 }
 
@@ -886,7 +893,7 @@ pub(crate) fn older_ready_blocker<'a>(
     pending
         .into_iter()
         .filter(|message| {
-            message.status == MessageStatus::Queued
+            holds_boundary(message)
                 && message.same_card(candidate.card_ref())
                 && same_delivery_lane(candidate.gate, message.gate)
                 && message.message_id.as_str() < candidate.message_id.as_str()
@@ -918,7 +925,7 @@ pub(crate) fn delivery_batch_indices(
         || !head.is_deliverable(now)
         || !claim_expired(head.last_attempt_at, now)
         || live[..head_index].iter().any(|message| {
-            message.status.is_open()
+            holds_boundary(message)
                 && message.same_card(head.card_ref())
                 && same_delivery_lane(head.gate, message.gate)
                 && message.is_deliverable(now)

@@ -76,11 +76,22 @@ fn message_routes_to_named_channel_targets() {
         "channel miss names target and real channel: {stderr}"
     );
 
-    let messages = env.store().list_messages().expect("messages");
+    let mut messages = env.store().list_messages().expect("messages");
+    messages.sort_by(|a, b| a.message_id.as_str().cmp(b.message_id.as_str()));
     assert_eq!(messages.len(), 2, "only successful sends are recorded");
-    assert!(messages.iter().all(|message| {
-        message.agent_id.as_str() == "sess-channel-message" && message.status == MessageStatus::Sent
-    }));
+    assert!(
+        messages
+            .iter()
+            .all(|message| message.agent_id.as_str() == "sess-channel-message")
+    );
+    assert_eq!(
+        messages
+            .iter()
+            .map(|message| message.status)
+            .collect::<Vec<_>>(),
+        [MessageStatus::Sent, MessageStatus::Queued],
+        "the second send parks behind the first, still unacknowledged, prompt"
+    );
 }
 
 #[test]
