@@ -8,6 +8,7 @@ use crate::ids::PaneId;
 use crate::store::snapshot::{SidebarRow, SidebarSnapshot, SidebarWorktreeGroup, WorktreePrState};
 
 pub(crate) use crate::sidebar::body_filter::BodyFilter;
+pub(super) use crate::sidebar::body_filter::BodyLens;
 
 /// Maximum calm rows painted before overflow moves behind `+K more`.
 pub const WORKTREE_ROW_CAP: usize = 6;
@@ -61,7 +62,7 @@ pub(super) struct VisibleRoster<'a> {
 impl<'a> VisibleRoster<'a> {
     pub(super) fn new(
         snapshot: &'a SidebarSnapshot,
-        filter: Option<BodyFilter>,
+        lens: &BodyLens,
         expanded_groups: &BTreeSet<String>,
         held: Option<&HashSet<String>>,
     ) -> Self {
@@ -70,14 +71,9 @@ impl<'a> VisibleRoster<'a> {
         for group in &snapshot.worktree_groups {
             let expanded = expanded_groups.contains(&group.key);
             let start = rows.len();
-            let projection = project_group(
-                group,
-                filter,
-                expanded,
-                held,
-                snapshot.focused_pane.as_ref(),
-            );
-            let hidden_count = if filter.is_none() {
+            let projection =
+                project_group(group, lens, expanded, held, snapshot.focused_pane.as_ref());
+            let hidden_count = if lens.is_empty() {
                 group.rows.len().saturating_sub(projection.rows.len())
             } else {
                 0
@@ -87,7 +83,7 @@ impl<'a> VisibleRoster<'a> {
                 source: group,
                 range: start..rows.len(),
                 expanded,
-                natural_hidden_count: if filter.is_none() {
+                natural_hidden_count: if lens.is_empty() {
                     projection.natural_hidden_count
                 } else {
                     0
@@ -99,19 +95,19 @@ impl<'a> VisibleRoster<'a> {
     }
 
     pub(super) fn baseline(snapshot: &'a SidebarSnapshot) -> Self {
-        Self::new(snapshot, None, &BTreeSet::new(), None)
+        Self::new(snapshot, &BodyLens::default(), &BTreeSet::new(), None)
     }
 
     #[cfg(test)]
     pub(crate) fn single(
         group: &'a SidebarWorktreeGroup,
-        filter: Option<BodyFilter>,
+        lens: &BodyLens,
         expanded: bool,
         held: Option<&HashSet<String>>,
         focused_pane: Option<&PaneId>,
     ) -> Self {
-        let projection = project_group(group, filter, expanded, held, focused_pane);
-        let hidden_count = if filter.is_none() {
+        let projection = project_group(group, lens, expanded, held, focused_pane);
+        let hidden_count = if lens.is_empty() {
             group.rows.len().saturating_sub(projection.rows.len())
         } else {
             0
@@ -123,7 +119,7 @@ impl<'a> VisibleRoster<'a> {
                 source: group,
                 range: 0..len,
                 expanded,
-                natural_hidden_count: if filter.is_none() {
+                natural_hidden_count: if lens.is_empty() {
                     projection.natural_hidden_count
                 } else {
                     0
@@ -198,27 +194,51 @@ struct GroupProjection<'a> {
 
 fn project_group<'a>(
     group: &'a SidebarWorktreeGroup,
-    filter: Option<BodyFilter>,
+    lens: &BodyLens,
     expanded: bool,
     held: Option<&HashSet<String>>,
     focused_pane: Option<&PaneId>,
 ) -> GroupProjection<'a> {
     let pr_open = group.pr_state == Some(WorktreePrState::Open);
-    project_rows(
+    let mut projection = project_rows(
         &group.rows,
         group.collapses(),
-        filter,
+        lens,
         expanded,
         held,
         pr_open,
         focused_pane,
-    )
+    );
+    let Some(query) = &lens.query else {
+        return projection;
+    };
+    let query = query.to_lowercase();
+    let contains = |text: &str| text.to_lowercase().contains(&query);
+    if contains(&group.label)
+        || group.label_qualifier.as_deref().is_some_and(contains)
+        || group.team.as_deref().is_some_and(contains)
+        || group
+            .pr_number
+            .is_some_and(|number| format!("#{number}").contains(&query))
+    {
+        return projection;
+    }
+    projection.rows.retain(|row| {
+        contains(&row.name)
+            || row.worktree_branch.as_deref().is_some_and(contains)
+            || row.team().is_some_and(contains)
+            || row
+                .as_agent()
+                .and_then(|agent| agent.handle.as_deref())
+                .is_some_and(|handle| contains(&format!("@{handle}")))
+    });
+    projection
 }
 
 fn project_rows<'a>(
     source: &'a [SidebarRow],
     collapses: bool,
-    filter: Option<BodyFilter>,
+    lens: &BodyLens,
     expanded: bool,
     held: Option<&HashSet<String>>,
     pr_open: bool,
@@ -256,9 +276,9 @@ fn project_rows<'a>(
         };
         natural_visible += usize::from(natural);
 
-        let visible = match filter {
+        let visible = match lens.filter {
             Some(filter) => filter.matches(row, pr_open),
-            None if expanded => true,
+            None if lens.query.is_some() || expanded => true,
             None if collapses => revealed,
             None => {
                 essential
@@ -290,7 +310,7 @@ pub fn capped_visible_rows<'a>(
     rows: &'a [SidebarRow],
     held: Option<&HashSet<String>>,
 ) -> Vec<&'a SidebarRow> {
-    project_rows(rows, false, None, false, held, false, None).rows
+    project_rows(rows, false, &BodyLens::default(), false, held, false, None).rows
 }
 
 fn row_is_focused(row: &SidebarRow, focused_pane: Option<&PaneId>) -> bool {
@@ -322,7 +342,7 @@ mod tests {
         let group = group(idle_rows(9));
         let snapshot = snapshot(vec![group]);
 
-        let collapsed = VisibleRoster::new(&snapshot, None, &BTreeSet::new(), None);
+        let collapsed = VisibleRoster::new(&snapshot, &BodyLens::default(), &BTreeSet::new(), None);
         assert_eq!(
             ids(&collapsed),
             ["idle-0", "idle-1", "idle-2", "idle-3", "idle-4", "idle-5"]
@@ -331,7 +351,7 @@ mod tests {
         assert_eq!(collapsed.groups()[0].hidden_count(), 3);
 
         let expanded_keys = BTreeSet::from(["group-0".to_owned()]);
-        let expanded = VisibleRoster::new(&snapshot, None, &expanded_keys, None);
+        let expanded = VisibleRoster::new(&snapshot, &BodyLens::default(), &expanded_keys, None);
         assert_eq!(expanded.len(), 9);
         assert!(expanded.groups()[0].expanded());
         assert_eq!(expanded.groups()[0].natural_hidden_count(), 3);
@@ -339,14 +359,19 @@ mod tests {
 
         let filtered = VisibleRoster::new(
             &snapshot,
-            Some(BodyFilter::Status(AgentStatus::Idle)),
+            &BodyLens::from(BodyFilter::Status(AgentStatus::Idle)),
             &BTreeSet::new(),
             None,
         );
         assert_eq!(filtered.len(), 9, "filters expose every matching row");
 
         let held_ids = HashSet::from(["idle-8".to_owned()]);
-        let held = VisibleRoster::new(&snapshot, None, &BTreeSet::new(), Some(&held_ids));
+        let held = VisibleRoster::new(
+            &snapshot,
+            &BodyLens::default(),
+            &BTreeSet::new(),
+            Some(&held_ids),
+        );
         assert_eq!(held.len(), 7);
         assert_eq!(held.groups()[0].natural_hidden_count(), 3);
         assert_eq!(held.groups()[0].hidden_count(), 2);
@@ -409,7 +434,7 @@ mod tests {
 
         let filtered = VisibleRoster::new(
             &snapshot,
-            Some(BodyFilter::Status(AgentStatus::Success)),
+            &BodyLens::from(BodyFilter::Status(AgentStatus::Success)),
             &BTreeSet::new(),
             None,
         );
@@ -442,12 +467,97 @@ mod tests {
         closed.pr_state = Some(WorktreePrState::Closed);
         let snapshot = snapshot(vec![open, closed]);
 
-        let filtered =
-            VisibleRoster::new(&snapshot, Some(BodyFilter::OpenPr), &BTreeSet::new(), None);
+        let filtered = VisibleRoster::new(
+            &snapshot,
+            &BodyLens::from(BodyFilter::OpenPr),
+            &BTreeSet::new(),
+            None,
+        );
 
         assert_eq!(filtered.len(), 9, "the PR lens bypasses the calm row cap");
         assert!(ids(&filtered).contains(&"open-shell"));
         assert!(!ids(&filtered).contains(&"closed"));
+    }
+
+    #[test]
+    fn query_matches_row_name_branch_and_handle_case_insensitively() {
+        let mut rows = idle_rows(9);
+        rows[0].name = "Auth helper".to_owned();
+        rows[7].worktree_branch = Some("feature/AUTH".to_owned());
+        if let RowCard::Agent(card) = &mut rows[8].card {
+            card.handle = Some("AuthScout".to_owned());
+        }
+        rows.push(process_row("unrelated"));
+        let mut unrelated = group(vec![agent_row("other", AgentStatus::Running)]);
+        unrelated.key = "other".to_owned();
+        let snapshot = snapshot(vec![group(rows), unrelated]);
+        let lens = BodyLens {
+            query: Some("aUtH".to_owned()),
+            ..Default::default()
+        };
+        let roster = VisibleRoster::new(&snapshot, &lens, &BTreeSet::new(), None);
+        assert_eq!(ids(&roster), ["idle-0", "idle-7", "idle-8"]);
+        assert!(roster.groups()[1].is_empty());
+        assert_eq!(roster.groups()[0].hidden_count(), 0);
+        let lens = BodyLens {
+            query: Some("@authscout".to_owned()),
+            ..Default::default()
+        };
+        let roster = VisibleRoster::new(&snapshot, &lens, &BTreeSet::new(), None);
+        assert_eq!(ids(&roster), ["idle-8"]);
+    }
+
+    #[test]
+    fn query_matches_row_team_in_a_mixed_team_group() {
+        let mut rows = idle_rows(3);
+        for (row, team) in rows.iter_mut().zip(["forge", "docs", "forge"]) {
+            row.as_agent_mut().unwrap().team = Some(team.to_owned());
+        }
+        let snapshot = snapshot(vec![group(rows)]);
+        let lens = BodyLens {
+            query: Some("forge".to_owned()),
+            ..Default::default()
+        };
+        let roster = VisibleRoster::new(&snapshot, &lens, &BTreeSet::new(), None);
+        assert_eq!(ids(&roster), ["idle-0", "idle-2"]);
+    }
+
+    #[test]
+    fn group_query_matches_keep_all_rows_and_lift_the_fold_cap() {
+        let mut matching = group(idle_rows(8));
+        matching.label = "feature/Auth".to_owned();
+        matching.label_qualifier = Some("RepoIdentity".to_owned());
+        matching.team = Some("Forge".to_owned());
+        matching.pr_number = Some(123);
+        let snapshot = snapshot(vec![matching]);
+        for query in ["AUTH", "identity", "forge", "#123", "123"] {
+            let lens = BodyLens {
+                query: Some(query.to_owned()),
+                ..Default::default()
+            };
+            let roster = VisibleRoster::new(&snapshot, &lens, &BTreeSet::new(), None);
+            assert_eq!(roster.len(), 8, "group query: {query}");
+            assert_eq!(roster.groups()[0].hidden_count(), 0);
+            assert_eq!(roster.groups()[0].natural_hidden_count(), 0);
+        }
+    }
+
+    #[test]
+    fn query_composes_with_status_even_when_the_group_matches() {
+        let mut matching = group(vec![
+            agent_row("running", AgentStatus::Running),
+            agent_row("idle", AgentStatus::Idle),
+        ]);
+        matching.label = "Auth".to_owned();
+        let mut unrelated = group(vec![agent_row("other", AgentStatus::Running)]);
+        unrelated.key = "other".to_owned();
+        let snapshot = snapshot(vec![matching, unrelated]);
+        let lens = BodyLens {
+            filter: Some(BodyFilter::Status(AgentStatus::Running)),
+            query: Some("auth".to_owned()),
+        };
+        let roster = VisibleRoster::new(&snapshot, &lens, &BTreeSet::new(), None);
+        assert_eq!(ids(&roster), ["running"]);
     }
 
     fn snapshot(groups: Vec<SidebarWorktreeGroup>) -> SidebarSnapshot {

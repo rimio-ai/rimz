@@ -1,8 +1,8 @@
 use super::*;
 
-fn body_filter_hit(hit: &HitRegion) -> Option<BodyFilter> {
+fn body_filter_hit(hit: &HitRegion) -> Option<&BodyFilter> {
     match &hit.target {
-        HitTarget::BodyFilter(filter) => Some(*filter),
+        HitTarget::BodyFilter(filter) => Some(filter),
         _ => None,
     }
 }
@@ -186,7 +186,7 @@ fn attention_bucket_holds_a_fixed_tone() {
             &theme,
             &snapshot.worktree_groups,
             snapshot.now,
-            None,
+            &BodyLens::default(),
             0,
             60,
             None,
@@ -226,7 +226,7 @@ fn state_glyphs_keep_their_cockpit_tier() {
         &theme,
         &snapshot.worktree_groups,
         snapshot.now,
-        None,
+        &BodyLens::default(),
         0,
         60,
         None,
@@ -297,7 +297,10 @@ fn make_up_filter_keeps_every_glyph_still_across_picks() {
             &theme,
             &snapshot.worktree_groups,
             snapshot.now,
-            filter,
+            &BodyLens {
+                filter,
+                ..Default::default()
+            },
             0,
             38,
             None,
@@ -332,7 +335,7 @@ fn make_up_filter_keeps_every_glyph_still_across_picks() {
         let text = make_up_text(lines);
         let hit = hits
             .iter()
-            .find(|hit| body_filter_hit(hit) == Some(BodyFilter::Status(status)))
+            .find(|hit| body_filter_hit(hit).copied() == Some(BodyFilter::Status(status)))
             .expect("active bucket keeps its hit");
         let footprint = text_cell_range(&text, hit.columns.start, hit.columns.end);
         assert_eq!(footprint, expected, "hit covers the fixed bucket");
@@ -348,7 +351,7 @@ fn make_up_filter_no_color_marks_the_fixed_bucket_cells() {
         &theme,
         &snapshot.worktree_groups,
         snapshot.now,
-        None,
+        &BodyLens::default(),
         0,
         38,
         None,
@@ -357,7 +360,7 @@ fn make_up_filter_no_color_marks_the_fixed_bucket_cells() {
         &theme,
         &snapshot.worktree_groups,
         snapshot.now,
-        Some(BodyFilter::Status(AgentStatus::Failed)),
+        &BodyLens::from(BodyFilter::Status(AgentStatus::Failed)),
         0,
         38,
         None,
@@ -375,7 +378,7 @@ fn make_up_filter_no_color_marks_the_fixed_bucket_cells() {
     );
     let hit = hits
         .iter()
-        .find(|hit| body_filter_hit(hit) == Some(BodyFilter::Status(AgentStatus::Failed)))
+        .find(|hit| body_filter_hit(hit).copied() == Some(BodyFilter::Status(AgentStatus::Failed)))
         .expect("the picked bucket keeps its hit");
     let footprint = text_cell_range(&text, hit.columns.start, hit.columns.end);
     assert_eq!(footprint, "! 1", "the hit covers the fixed bucket");
@@ -406,7 +409,7 @@ fn selected_idle_filter_preserves_soft_gray_with_reverse_video() {
         &theme,
         &snapshot.worktree_groups,
         snapshot.now,
-        Some(BodyFilter::Status(AgentStatus::Idle)),
+        &BodyLens::from(BodyFilter::Status(AgentStatus::Idle)),
         0,
         38,
         None,
@@ -436,14 +439,17 @@ fn make_up_zero_buckets_emit_no_hit_and_hits_cover_their_text() {
         &theme,
         &snapshot.worktree_groups,
         snapshot.now,
-        None,
+        &BodyLens::default(),
         0,
         38,
         None,
     );
     let text = make_up_text(&lines);
     assert_eq!(
-        hits.iter().filter_map(body_filter_hit).collect::<Vec<_>>(),
+        hits.iter()
+            .filter_map(body_filter_hit)
+            .copied()
+            .collect::<Vec<_>>(),
         vec![
             BodyFilter::Status(AgentStatus::Failed),
             BodyFilter::Status(AgentStatus::Running),
@@ -452,7 +458,7 @@ fn make_up_zero_buckets_emit_no_hit_and_hits_cover_their_text() {
     );
     for hit in &hits {
         let footprint = text_cell_range(&text, hit.columns.start, hit.columns.end);
-        let Some(BodyFilter::Status(status)) = body_filter_hit(hit) else {
+        let Some(BodyFilter::Status(status)) = body_filter_hit(hit).copied() else {
             panic!("fleet line emits only status buckets");
         };
         assert_eq!(
@@ -474,7 +480,7 @@ fn make_up_clipped_bucket_drops_its_hit() {
         &theme,
         &snapshot.worktree_groups,
         snapshot.now,
-        None,
+        &BodyLens::default(),
         0,
         18,
         None,
@@ -484,7 +490,10 @@ fn make_up_clipped_bucket_drops_its_hit() {
         "no hit points past the visible edge: {hits:?}"
     );
     assert_eq!(
-        hits.iter().filter_map(body_filter_hit).collect::<Vec<_>>(),
+        hits.iter()
+            .filter_map(body_filter_hit)
+            .copied()
+            .collect::<Vec<_>>(),
         vec![BodyFilter::Status(AgentStatus::Failed)],
         "the clipped working bucket keeps no hit"
     );
@@ -499,7 +508,7 @@ fn make_up_buckets_pulse_only_while_unread() {
             &theme,
             &snapshot.worktree_groups,
             snapshot.now,
-            None,
+            &BodyLens::default(),
             animation_phase,
             38,
             lead_unread(&snapshot.worktree_groups).map(|(_, status)| status),
@@ -899,7 +908,7 @@ fn render_make_up_filter_narrows_the_body() {
         ),
     });
     let ui = UiState {
-        make_up_filter: Some(BodyFilter::Status(crate::agents::AgentStatus::Failed)),
+        make_up_filter: BodyLens::from(BodyFilter::Status(crate::agents::AgentStatus::Failed)),
         ..Default::default()
     };
     let screen = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 38, 20);
@@ -937,7 +946,7 @@ fn render_unread_filter_narrows_the_body() {
         .expect("failed row");
     failed.unread = true;
     let ui = UiState {
-        make_up_filter: Some(BodyFilter::Unread),
+        make_up_filter: BodyLens::from(BodyFilter::Unread),
         ..Default::default()
     };
 

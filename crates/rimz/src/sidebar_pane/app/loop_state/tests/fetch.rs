@@ -21,7 +21,7 @@ fn snapshot_then_terminal(failed: bool) {
     assert!(rig.next_request().is_some());
     rig.fetch
         .request(FetchRequest::producer_fresh_panes(), true);
-    let filter = BodyFilter::Status(crate::agents::AgentStatus::Idle);
+    let filter = BodyLens::from(BodyFilter::Status(crate::agents::AgentStatus::Idle));
     rig.result_tx
         .send(FetchUpdate::Shared {
             update: Box::new(FetchUpdate::Snapshot {
@@ -32,7 +32,7 @@ fn snapshot_then_terminal(failed: bool) {
             }),
             context: Arc::new(super::super::super::fetch::FoldShared {
                 inputs: Arc::new(super::super::super::fetch::FoldInputs {
-                    filter: Some(filter),
+                    filter: filter.clone(),
                     ..Default::default()
                 }),
                 ..Default::default()
@@ -58,8 +58,7 @@ fn snapshot_then_terminal(failed: bool) {
         "a terminal outcome must not erase the unread snapshot"
     );
     assert_eq!(
-        rig.state.ui.make_up_filter,
-        Some(filter),
+        rig.state.ui.make_up_filter, filter,
         "snapshot context is applied with its snapshot"
     );
     assert_eq!(rig.state.health.failure_streak, u32::from(failed));
@@ -529,9 +528,12 @@ fn width_target_event_reloads_the_target_without_a_producer_fetch() {
 
 #[test]
 fn birth_seeds_the_shared_body_filter() {
-    let rig = Rig::with_filter(BodyFilter::Unread);
+    let rig = Rig::with_filter(BodyLens::from(BodyFilter::Unread));
 
-    assert_eq!(rig.state.ui.make_up_filter, Some(BodyFilter::Unread));
+    assert_eq!(
+        rig.state.ui.make_up_filter,
+        BodyLens::from(BodyFilter::Unread)
+    );
 }
 
 #[test]
@@ -539,12 +541,15 @@ fn body_filter_event_adopts_the_shared_file_and_repaints() {
     let mut rig = Rig::new();
     rig.state.current = agent_snapshot(&rig.ws);
     rig.state.dirty = false;
-    let filter = BodyFilter::Status(crate::agents::AgentStatus::Idle);
-    crate::sidebar::body_filter::write(&rig.runtime, filter).expect("write shared filter");
+    let filter = BodyLens {
+        filter: Some(BodyFilter::Status(crate::agents::AgentStatus::Idle)),
+        query: Some("auth".to_owned()),
+    };
+    crate::sidebar::body_filter::write(&rig.runtime, &filter).expect("write shared filter");
 
     rig.event(SidebarEvent::BodyFilterChanged);
 
-    assert_eq!(rig.state.ui.make_up_filter, Some(filter));
+    assert_eq!(rig.state.ui.make_up_filter, filter);
     assert!(rig.state.dirty);
     assert!(
         rig.next_request().is_none(),
@@ -558,10 +563,10 @@ fn older_shared_inputs_do_not_undo_a_consumed_body_filter() {
     let snapshot = agent_snapshot(&rig.ws);
     rig.fold(snapshot.clone(), SnapshotSource::Produced);
     let inputs = Arc::new(super::super::super::fetch::FoldInputs::default());
-    let filter = BodyFilter::Status(crate::agents::AgentStatus::Idle);
-    crate::sidebar::body_filter::write(&rig.runtime, filter).unwrap();
+    let filter = BodyLens::from(BodyFilter::Status(crate::agents::AgentStatus::Idle));
+    crate::sidebar::body_filter::write(&rig.runtime, &filter).unwrap();
     rig.event(SidebarEvent::BodyFilterChanged);
-    assert_eq!(rig.state.ui.make_up_filter, Some(filter));
+    assert_eq!(rig.state.ui.make_up_filter, filter);
 
     rig.deliver(FetchUpdate::Shared {
         update: Box::new(FetchUpdate::Snapshot {
@@ -576,26 +581,44 @@ fn older_shared_inputs_do_not_undo_a_consumed_body_filter() {
         }),
     });
     assert_eq!(
-        rig.state.ui.make_up_filter,
-        Some(filter),
+        rig.state.ui.make_up_filter, filter,
         "an older shared cut must not undo the already consumed filter event"
     );
-    assert_eq!(
-        crate::sidebar::body_filter::load(&rig.runtime),
-        Some(filter)
-    );
+    assert_eq!(crate::sidebar::body_filter::load(&rig.runtime), filter);
 }
 
 #[test]
 fn successful_fetch_converges_a_missed_body_filter_event() {
     let mut rig = Rig::new();
-    let filter = BodyFilter::Status(crate::agents::AgentStatus::Idle);
-    crate::sidebar::body_filter::write(&rig.runtime, filter).expect("write shared filter");
+    let filter = BodyLens {
+        filter: Some(BodyFilter::Status(crate::agents::AgentStatus::Idle)),
+        query: Some("auth".to_owned()),
+    };
+    crate::sidebar::body_filter::write(&rig.runtime, &filter).expect("write shared filter");
 
     let snapshot = agent_snapshot(&rig.ws);
     rig.fold(snapshot, SnapshotSource::Produced);
 
-    assert_eq!(rig.state.ui.make_up_filter, Some(filter));
+    assert_eq!(rig.state.ui.make_up_filter, filter);
+}
+
+#[test]
+fn shared_fold_adopts_query_in_the_visible_roster() {
+    let mut rig = Rig::new();
+    let snapshot = agent_snapshot(&rig.ws);
+    let lens = BodyLens {
+        query: Some("no such row".to_owned()),
+        ..Default::default()
+    };
+    rig.shared_fold(
+        snapshot,
+        Arc::new(super::super::super::fetch::FoldInputs {
+            filter: lens.clone(),
+            ..Default::default()
+        }),
+    );
+    assert_eq!(rig.state.ui.visible_roster(&rig.state.current).len(), 0);
+    assert_eq!(rig.state.ui.make_up_filter, lens);
 }
 
 #[test]
@@ -603,52 +626,50 @@ fn newer_shared_cut_converges_a_missed_filter_clear() {
     let mut rig = Rig::new();
     let snapshot = agent_snapshot(&rig.ws);
     rig.fold(snapshot.clone(), SnapshotSource::Produced);
-    let filter = BodyFilter::Status(crate::agents::AgentStatus::Idle);
-    crate::sidebar::body_filter::write(&rig.runtime, filter).unwrap();
+    let filter = BodyLens::from(BodyFilter::Status(crate::agents::AgentStatus::Idle));
+    crate::sidebar::body_filter::write(&rig.runtime, &filter).unwrap();
     rig.event(SidebarEvent::BodyFilterChanged);
-    crate::sidebar::body_filter::clear(&rig.runtime).unwrap();
+    crate::sidebar::body_filter::write(&rig.runtime, &BodyLens::default()).unwrap();
     rig.shared_fold(snapshot, Arc::default());
-    assert_eq!(rig.state.ui.make_up_filter, None);
+    assert_eq!(rig.state.ui.make_up_filter, BodyLens::default());
 }
 
 #[test]
 fn failed_or_rowless_birth_fold_does_not_publish_a_filter_clear() {
-    let filter = BodyFilter::Status(crate::agents::AgentStatus::Waiting);
-    let mut rig = Rig::with_filter(filter);
+    let filter = BodyLens::from(BodyFilter::Status(crate::agents::AgentStatus::Waiting));
+    let mut rig = Rig::with_filter(filter.clone());
 
     rig.deliver(FetchUpdate::Failed {
         error: "not ready".to_owned(),
         role: FetchRole::Producer,
     });
-    assert_eq!(rig.state.ui.make_up_filter, None);
-    assert_eq!(
-        crate::sidebar::body_filter::load(&rig.runtime),
-        Some(filter)
-    );
+    assert_eq!(rig.state.ui.make_up_filter, BodyLens::default());
+    assert_eq!(crate::sidebar::body_filter::load(&rig.runtime), filter);
 
     let rowless = snapshot(&rig.ws);
     rig.fold(rowless, SnapshotSource::Produced);
-    assert_eq!(rig.state.ui.make_up_filter, None);
-    assert_eq!(
-        crate::sidebar::body_filter::load(&rig.runtime),
-        Some(filter)
-    );
+    assert_eq!(rig.state.ui.make_up_filter, BodyLens::default());
+    assert_eq!(crate::sidebar::body_filter::load(&rig.runtime), filter);
 }
 
 #[test]
 fn empty_body_filter_auto_clear_updates_the_shared_file() {
-    let filter = BodyFilter::Status(crate::agents::AgentStatus::Waiting);
-    let mut rig = Rig::with_filter(filter);
-    assert_eq!(
-        crate::sidebar::body_filter::load(&rig.runtime),
-        Some(filter)
-    );
+    let filter = BodyLens {
+        filter: Some(BodyFilter::Status(crate::agents::AgentStatus::Waiting)),
+        query: Some("auth".to_owned()),
+    };
+    let mut rig = Rig::with_filter(filter.clone());
+    assert_eq!(crate::sidebar::body_filter::load(&rig.runtime), filter);
 
     let snapshot = agent_snapshot(&rig.ws);
     rig.fold(snapshot, SnapshotSource::Produced);
 
-    assert_eq!(rig.state.ui.make_up_filter, None);
-    assert_eq!(crate::sidebar::body_filter::load(&rig.runtime), None);
+    let expected = BodyLens {
+        query: Some("auth".to_owned()),
+        ..Default::default()
+    };
+    assert_eq!(rig.state.ui.make_up_filter, expected);
+    assert_eq!(crate::sidebar::body_filter::load(&rig.runtime), expected);
 }
 
 #[test]

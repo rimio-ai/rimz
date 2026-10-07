@@ -14,6 +14,7 @@ use crate::sidebar_pane::render::labels::{
 };
 use crate::sidebar_pane::render::theme::Theme;
 use crate::sidebar_pane::render::{BodyFilter, HitRegion, HitTarget};
+use crate::sidebar_pane::view::BodyLens;
 
 use super::{pin_right, trim_spans_to_width};
 
@@ -52,12 +53,12 @@ pub(in crate::sidebar_pane::render) fn fleet_header_lines(
     theme: &Theme,
     groups: &[SidebarWorktreeGroup],
     now: Timestamp,
-    filter: Option<BodyFilter>,
+    lens: &BodyLens,
     animation_phase: u64,
     width: usize,
     lead_unread_status: Option<AgentStatus>,
 ) -> (Vec<Line<'static>>, Vec<HitRegion>) {
-    let status_filter = match filter {
+    let status_filter = match lens.filter {
         Some(BodyFilter::Status(status)) => Some(status),
         Some(BodyFilter::Unread | BodyFilter::OpenPr) | None => None,
     };

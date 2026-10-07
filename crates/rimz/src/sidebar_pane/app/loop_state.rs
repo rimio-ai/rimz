@@ -22,7 +22,7 @@ use crate::sidebar::timing::{FOCUS_STRANDED_EVENT_TTL, TAB_READ_DWELL};
 use crate::sidebar::unread::{self, UnreadClearCause};
 use crate::sidebar_pane::pixel::{PixelRenderCaps, PixelSlot};
 use crate::sidebar_pane::render::{self, UiState};
-use crate::sidebar_pane::view::BodyFilter;
+use crate::sidebar_pane::view::BodyLens;
 use crate::store::snapshot::{SidebarOwnView, SidebarSnapshot};
 use crate::wakeup::events::{SidebarEvent, SidebarEventEnvelope};
 use crate::{MuxName, RuntimePaths};
@@ -965,15 +965,9 @@ impl LoopState {
         Ok(LoopFlow::Continue)
     }
 
-    fn persist_body_filter(&mut self, filter: Option<BodyFilter>) {
+    fn persist_body_filter(&mut self, filter: BodyLens) {
         self.filter_observed_at = Some(Instant::now());
-        let persisted = match filter {
-            Some(filter) => crate::sidebar::body_filter::write(&self.runtime, filter)
-                .map_err(|err| err.to_string()),
-            None => {
-                crate::sidebar::body_filter::clear(&self.runtime).map_err(|err| err.to_string())
-            }
-        };
+        let persisted = crate::sidebar::body_filter::write(&self.runtime, &filter);
         if let Err(err) = persisted {
             debug!(error = %err, "sidebar body filter write failed");
             return;
@@ -1578,21 +1572,21 @@ impl LoopState {
         let derived_focus_pane = focused_pane.is_some();
         if authoritative_filter_fold {
             let shared_filter = if let Some(inputs) = &self.fold_inputs {
-                inputs.filter
+                inputs.filter.clone()
             } else {
                 self.filter_observed_at = Some(Instant::now());
                 crate::sidebar::body_filter::load(&self.runtime)
             };
             set_make_up_filter(&mut self.ui, &self.current, shared_filter);
         }
-        let previous_filter = self.ui.make_up_filter;
+        let previous_filter = self.ui.make_up_filter.filter;
         reconcile_selection(&mut self.ui, &self.current, focused_pane);
         if authoritative_filter_fold
             && !self.current.worktree_groups.is_empty()
             && previous_filter.is_some()
-            && self.ui.make_up_filter.is_none()
+            && self.ui.make_up_filter.filter.is_none()
         {
-            self.persist_body_filter(None);
+            self.persist_body_filter(self.ui.make_up_filter.clone());
         }
         // A fresh focus-register derivation that moved the highlight is an external
         // focus switch. Arm a one-shot reveal so the next paint brings the focused
@@ -1873,13 +1867,13 @@ fn focus_stranded_target(
     let view = snapshot.own_view.as_ref()?;
     if let Some(baseline) = ui.baseline_pane.as_ref()
         && view.working_pane_ids.contains(baseline)
-        && row_index_of_pane(snapshot, None, baseline).is_some()
+        && row_index_of_pane(snapshot, &BodyLens::default(), baseline).is_some()
     {
         return Some(baseline.clone());
     }
     view.working_pane_ids
         .iter()
-        .find(|pane| row_index_of_pane(snapshot, None, pane).is_some())
+        .find(|pane| row_index_of_pane(snapshot, &BodyLens::default(), pane).is_some())
         .cloned()
 }
 

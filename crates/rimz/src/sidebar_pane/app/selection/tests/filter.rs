@@ -2,6 +2,54 @@ use super::*;
 use std::time::Duration;
 
 #[test]
+fn show_all_clears_both_pick_and_query() {
+    let snapshot = filterable_snapshot(&workspace());
+    let mut ui = UiState {
+        make_up_filter: BodyLens {
+            filter: Some(BodyFilter::Unread),
+            query: Some("auth".to_owned()),
+        },
+        ..Default::default()
+    };
+    let outcome = handle_key(KeyAction::Filter(None), &mut ui, &snapshot);
+    assert_eq!(ui.make_up_filter, BodyLens::default());
+    assert_eq!(
+        outcome.effect,
+        Some(InputEffect::SyncFilter(BodyLens::default()))
+    );
+}
+
+#[test]
+fn empty_pick_auto_clear_preserves_the_query() {
+    let snapshot = filterable_snapshot(&workspace());
+    let mut ui = UiState {
+        make_up_filter: BodyLens {
+            filter: Some(BodyFilter::Status(crate::agents::AgentStatus::Waiting)),
+            query: Some("auth".to_owned()),
+        },
+        ..Default::default()
+    };
+    reconcile_selection(&mut ui, &snapshot, None);
+    assert_eq!(ui.make_up_filter.filter, None);
+    assert_eq!(ui.make_up_filter.query.as_deref(), Some("auth"));
+}
+
+#[test]
+fn zero_match_query_stays_set_with_an_empty_roster() {
+    let snapshot = filterable_snapshot(&workspace());
+    let mut ui = UiState {
+        make_up_filter: BodyLens {
+            query: Some("no such row".to_owned()),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    reconcile_selection(&mut ui, &snapshot, None);
+    assert_eq!(ui.visible_roster(&snapshot).len(), 0);
+    assert_eq!(ui.make_up_filter.query.as_deref(), Some("no such row"));
+}
+
+#[test]
 fn worktree_keys_respect_the_make_up_filter() {
     use crate::agents::AgentStatus;
     let ws = workspace();
@@ -10,7 +58,7 @@ fn worktree_keys_respect_the_make_up_filter() {
     let mut ui = UiState {
         selected_index: 0,
         selected_pane: Some(failed),
-        make_up_filter: Some(BodyFilter::Status(AgentStatus::Failed)),
+        make_up_filter: BodyLens::from(BodyFilter::Status(AgentStatus::Failed)),
         ..Default::default()
     };
 
@@ -23,7 +71,7 @@ fn worktree_keys_respect_the_make_up_filter() {
     );
     assert_eq!(
         ui.make_up_filter,
-        Some(BodyFilter::Status(AgentStatus::Failed))
+        BodyLens::from(BodyFilter::Status(AgentStatus::Failed))
     );
 }
 #[test]
@@ -56,32 +104,32 @@ fn make_up_click_picks_switches_and_clears_the_filter() {
         outcome,
         InputOutcome {
             redraw: true,
-            effect: Some(InputEffect::SyncFilter(Some(BodyFilter::Status(
+            effect: Some(InputEffect::SyncFilter(BodyLens::from(BodyFilter::Status(
                 AgentStatus::Failed,
             )))),
         }
     );
     assert_eq!(
         ui.make_up_filter,
-        Some(BodyFilter::Status(AgentStatus::Failed))
+        BodyLens::from(BodyFilter::Status(AgentStatus::Failed))
     );
 
     // A click on another bucket switches the pick in place.
     handle_mouse_click(28, 5, &mut ui, &snapshot);
     assert_eq!(
         ui.make_up_filter,
-        Some(BodyFilter::Status(AgentStatus::Running))
+        BodyLens::from(BodyFilter::Status(AgentStatus::Running))
     );
 
     // A second click on the active bucket clears back to show-all.
     handle_mouse_click(28, 5, &mut ui, &snapshot);
-    assert_eq!(ui.make_up_filter, None);
+    assert_eq!(ui.make_up_filter, BodyLens::default());
 
     // The hit range is half-open: the cell past the bucket falls through to
     // the row hit-test (and lands nowhere on this chrome line).
     let outcome = handle_mouse_click(8, 5, &mut ui, &snapshot);
     assert_eq!(outcome, InputOutcome::default());
-    assert_eq!(ui.make_up_filter, None);
+    assert_eq!(ui.make_up_filter, BodyLens::default());
 }
 #[test]
 fn make_up_filter_keys_pick_toggle_clear_and_ignore_empty_buckets() {
@@ -97,11 +145,11 @@ fn make_up_filter_keys_pick_toggle_clear_and_ignore_empty_buckets() {
     );
     assert_eq!(
         outcome,
-        InputOutcome::sync_filter(Some(BodyFilter::Status(AgentStatus::Failed)))
+        InputOutcome::sync_filter(BodyLens::from(BodyFilter::Status(AgentStatus::Failed)))
     );
     assert_eq!(
         ui.make_up_filter,
-        Some(BodyFilter::Status(AgentStatus::Failed))
+        BodyLens::from(BodyFilter::Status(AgentStatus::Failed))
     );
 
     let outcome = handle_key(
@@ -109,8 +157,12 @@ fn make_up_filter_keys_pick_toggle_clear_and_ignore_empty_buckets() {
         &mut ui,
         &snapshot,
     );
-    assert_eq!(outcome, InputOutcome::sync_filter(None));
-    assert_eq!(ui.make_up_filter, None, "the active key toggles to all");
+    assert_eq!(outcome, InputOutcome::sync_filter(BodyLens::default()));
+    assert_eq!(
+        ui.make_up_filter,
+        BodyLens::default(),
+        "the active key toggles to all"
+    );
 
     let outcome = handle_key(
         KeyAction::Filter(Some(BodyFilter::Status(AgentStatus::Waiting))),
@@ -122,7 +174,7 @@ fn make_up_filter_keys_pick_toggle_clear_and_ignore_empty_buckets() {
         InputOutcome::default(),
         "zero-count buckets are inert from keys too"
     );
-    assert_eq!(ui.make_up_filter, None);
+    assert_eq!(ui.make_up_filter, BodyLens::default());
 
     handle_key(
         KeyAction::Filter(Some(BodyFilter::Status(AgentStatus::Running))),
@@ -131,12 +183,15 @@ fn make_up_filter_keys_pick_toggle_clear_and_ignore_empty_buckets() {
     );
     assert_eq!(
         ui.make_up_filter,
-        Some(BodyFilter::Status(AgentStatus::Running))
+        BodyLens::from(BodyFilter::Status(AgentStatus::Running))
     );
 
     let outcome = handle_key(KeyAction::Filter(None), &mut ui, &snapshot);
-    assert_eq!(outcome.effect, Some(InputEffect::SyncFilter(None)));
-    assert_eq!(ui.make_up_filter, None);
+    assert_eq!(
+        outcome.effect,
+        Some(InputEffect::SyncFilter(BodyLens::default()))
+    );
+    assert_eq!(ui.make_up_filter, BodyLens::default());
 
     let outcome = handle_key(KeyAction::Filter(None), &mut ui, &snapshot);
     assert_eq!(outcome, InputOutcome::default());
@@ -196,13 +251,13 @@ fn make_up_hits_land_on_the_painted_buckets_through_the_real_frame() {
     let outcome = handle_mouse_click(column, row, &mut ui, &snapshot);
     assert_eq!(
         outcome.effect,
-        Some(InputEffect::SyncFilter(Some(BodyFilter::Status(
+        Some(InputEffect::SyncFilter(BodyLens::from(BodyFilter::Status(
             AgentStatus::Failed,
         ))))
     );
     assert_eq!(
         ui.make_up_filter,
-        Some(BodyFilter::Status(AgentStatus::Failed))
+        BodyLens::from(BodyFilter::Status(AgentStatus::Failed))
     );
 }
 
@@ -245,8 +300,11 @@ fn unread_count_click_toggles_the_unread_lens() {
 
     ui.interactions = composed.interactions;
     let outcome = handle_mouse_click(unread_column, unread_row, &mut ui, &snapshot);
-    assert_eq!(outcome, InputOutcome::sync_filter(Some(BodyFilter::Unread)));
-    assert_eq!(ui.make_up_filter, Some(BodyFilter::Unread));
+    assert_eq!(
+        outcome,
+        InputOutcome::sync_filter(BodyLens::from(BodyFilter::Unread))
+    );
+    assert_eq!(ui.make_up_filter, BodyLens::from(BodyFilter::Unread));
     let theme = ui.theme(&snapshot.theme);
     let picked = render::compose_lines(&snapshot, None, &ui, theme.as_ref(), 54, 64);
     let picked_count = picked.lines[usize::from(unread_row)]
@@ -271,8 +329,8 @@ fn unread_count_click_toggles_the_unread_lens() {
     );
 
     let outcome = handle_mouse_click(unread_column, unread_row, &mut ui, &snapshot);
-    assert_eq!(outcome, InputOutcome::sync_filter(None));
-    assert_eq!(ui.make_up_filter, None);
+    assert_eq!(outcome, InputOutcome::sync_filter(BodyLens::default()));
+    assert_eq!(ui.make_up_filter, BodyLens::default());
 
     for row in snapshot
         .worktree_groups
@@ -333,8 +391,11 @@ fn pr_count_click_toggles_the_open_pr_lens() {
 
     ui.interactions = composed.interactions;
     let outcome = handle_mouse_click(pr_column, pr_row, &mut ui, &snapshot);
-    assert_eq!(outcome, InputOutcome::sync_filter(Some(BodyFilter::OpenPr)));
-    assert_eq!(ui.make_up_filter, Some(BodyFilter::OpenPr));
+    assert_eq!(
+        outcome,
+        InputOutcome::sync_filter(BodyLens::from(BodyFilter::OpenPr))
+    );
+    assert_eq!(ui.make_up_filter, BodyLens::from(BodyFilter::OpenPr));
 
     let theme = ui.theme(&snapshot.theme);
     let picked = render::compose_lines(&snapshot, None, &ui, theme.as_ref(), 54, 64);
@@ -361,8 +422,8 @@ fn pr_count_click_toggles_the_open_pr_lens() {
     }
 
     let outcome = handle_mouse_click(pr_column, pr_row, &mut ui, &snapshot);
-    assert_eq!(outcome, InputOutcome::sync_filter(None));
-    assert_eq!(ui.make_up_filter, None);
+    assert_eq!(outcome, InputOutcome::sync_filter(BodyLens::default()));
+    assert_eq!(ui.make_up_filter, BodyLens::default());
 
     snapshot.worktree_groups[1].pr_state = None;
     snapshot.worktree_groups[1].pr_number = None;
@@ -406,24 +467,25 @@ fn make_up_filter_auto_clears_when_its_bucket_empties() {
     // The waiting bucket reads 0 in this room, so a stale waiting filter ends
     // on the fold — the body's twin of a tab pick whose panel left.
     let mut ui = UiState {
-        make_up_filter: Some(BodyFilter::Status(AgentStatus::Waiting)),
+        make_up_filter: BodyLens::from(BodyFilter::Status(AgentStatus::Waiting)),
         ..Default::default()
     };
     reconcile_selection(&mut ui, &snapshot, None);
-    assert_eq!(ui.make_up_filter, None);
+    assert_eq!(ui.make_up_filter, BodyLens::default());
 
     // A filter whose bucket still counts holds through the fold.
-    ui.make_up_filter = Some(BodyFilter::Status(AgentStatus::Failed));
+    ui.make_up_filter = BodyLens::from(BodyFilter::Status(AgentStatus::Failed));
     reconcile_selection(&mut ui, &snapshot, None);
     assert_eq!(
         ui.make_up_filter,
-        Some(BodyFilter::Status(AgentStatus::Failed))
+        BodyLens::from(BodyFilter::Status(AgentStatus::Failed))
     );
 
-    ui.make_up_filter = Some(BodyFilter::OpenPr);
+    ui.make_up_filter = BodyLens::from(BodyFilter::OpenPr);
     reconcile_selection(&mut ui, &snapshot, None);
     assert_eq!(
-        ui.make_up_filter, None,
+        ui.make_up_filter,
+        BodyLens::default(),
         "a stale open PR lens clears after its last PR resolves"
     );
 }
@@ -432,21 +494,27 @@ fn make_up_filter_narrows_ordinals_in_lockstep_with_frame_targets() {
     use crate::agents::AgentStatus;
     let ws = workspace();
     let snapshot = filterable_snapshot(&ws);
-    let filter = Some(BodyFilter::Status(AgentStatus::Failed));
+    let filter = BodyLens::from(BodyFilter::Status(AgentStatus::Failed));
 
     // The selection walk and the rendered line map share one predicate, so
     // their ordinals can never drift: the filtered universe is exactly the
     // contiguous 0..count the body's hit-test entries carry.
-    assert_eq!(roster_len(&snapshot, None, &Default::default()), 3);
-    assert_eq!(roster_len(&snapshot, filter, &Default::default()), 1);
+    assert_eq!(
+        roster_len(&snapshot, &BodyLens::default(), &Default::default()),
+        3
+    );
+    assert_eq!(roster_len(&snapshot, &filter, &Default::default()), 1);
     let failed = PaneId::from_parts(MuxName::Zellij, "terminal_3");
     let running = PaneId::from_parts(MuxName::Zellij, "terminal_1");
-    assert_eq!(row_index_of_pane(&snapshot, filter, &failed), Some(0));
-    assert_eq!(row_index_of_pane(&snapshot, filter, &running), None);
-    assert_eq!(row_index_of_pane(&snapshot, None, &failed), Some(2));
+    assert_eq!(row_index_of_pane(&snapshot, &filter, &failed), Some(0));
+    assert_eq!(row_index_of_pane(&snapshot, &filter, &running), None);
+    assert_eq!(
+        row_index_of_pane(&snapshot, &BodyLens::default(), &failed),
+        Some(2)
+    );
 
     let mut ui = UiState {
-        make_up_filter: filter,
+        make_up_filter: filter.clone(),
         ..Default::default()
     };
     let theme = ui.theme(&snapshot.theme);
@@ -458,7 +526,7 @@ fn make_up_filter_narrows_ordinals_in_lockstep_with_frame_targets() {
     ordinals.dedup();
     assert_eq!(
         ordinals,
-        (0..roster_len(&snapshot, filter, &Default::default())).collect::<Vec<_>>(),
+        (0..roster_len(&snapshot, &filter, &Default::default())).collect::<Vec<_>>(),
         "the line map carries exactly the filtered walk's ordinals"
     );
 }
@@ -469,15 +537,26 @@ fn next_attention_jump_respects_the_filter() {
     let snapshot = filterable_snapshot(&ws);
 
     // Unfiltered, `␣` finds the failed row at its body ordinal.
-    assert_eq!(next_attention_index(&snapshot, None, 0), Some(2));
+    assert_eq!(
+        next_attention_index(&snapshot, &BodyLens::default(), 0),
+        Some(2)
+    );
     // Filtered to a calm status, the universe holds nothing actionable.
     assert_eq!(
-        next_attention_index(&snapshot, Some(BodyFilter::Status(AgentStatus::Running)), 0),
+        next_attention_index(
+            &snapshot,
+            &BodyLens::from(BodyFilter::Status(AgentStatus::Running)),
+            0
+        ),
         None
     );
     // Filtered to the attention status, the jump cycles the filtered rows.
     assert_eq!(
-        next_attention_index(&snapshot, Some(BodyFilter::Status(AgentStatus::Failed)), 0),
+        next_attention_index(
+            &snapshot,
+            &BodyLens::from(BodyFilter::Status(AgentStatus::Failed)),
+            0
+        ),
         Some(0)
     );
 }
@@ -488,10 +567,13 @@ fn unread_filter_narrows_to_unread_rows() {
     let mut snapshot = filterable_snapshot(&ws);
     snapshot.worktree_groups[0].rows[0].unread = true;
     snapshot.worktree_groups[1].rows[0].unread = true;
-    let filter = Some(BodyFilter::Unread);
+    let filter = BodyLens::from(BodyFilter::Unread);
 
-    assert_eq!(roster_len(&snapshot, None, &Default::default()), 3);
-    assert_eq!(roster_len(&snapshot, filter, &Default::default()), 2);
+    assert_eq!(
+        roster_len(&snapshot, &BodyLens::default(), &Default::default()),
+        3
+    );
+    assert_eq!(roster_len(&snapshot, &filter, &Default::default()), 2);
 
     let mut ui = UiState::default();
     let outcome = handle_key(
@@ -499,15 +581,15 @@ fn unread_filter_narrows_to_unread_rows() {
         &mut ui,
         &snapshot,
     );
-    assert_eq!(outcome, InputOutcome::sync_filter(filter));
+    assert_eq!(outcome, InputOutcome::sync_filter(filter.clone()));
     assert_eq!(ui.make_up_filter, filter);
 
     let failed = PaneId::from_parts(MuxName::Zellij, "terminal_3");
     let running = PaneId::from_parts(MuxName::Zellij, "terminal_1");
-    assert_eq!(row_index_of_pane(&snapshot, filter, &running), Some(0));
-    assert_eq!(row_index_of_pane(&snapshot, filter, &failed), Some(1));
+    assert_eq!(row_index_of_pane(&snapshot, &filter, &running), Some(0));
+    assert_eq!(row_index_of_pane(&snapshot, &filter, &failed), Some(1));
     assert_eq!(
-        next_attention_index(&snapshot, filter, 0),
+        next_attention_index(&snapshot, &filter, 0),
         Some(1),
         "only the unread failed row is an unread needs-a-look target"
     );
@@ -517,8 +599,8 @@ fn unread_filter_narrows_to_unread_rows() {
         &mut ui,
         &snapshot,
     );
-    assert_eq!(outcome, InputOutcome::sync_filter(None));
-    assert_eq!(ui.make_up_filter, None);
+    assert_eq!(outcome, InputOutcome::sync_filter(BodyLens::default()));
+    assert_eq!(ui.make_up_filter, BodyLens::default());
 
     for row in snapshot
         .worktree_groups
@@ -533,7 +615,7 @@ fn unread_filter_narrows_to_unread_rows() {
         &snapshot,
     );
     assert_eq!(outcome, InputOutcome::default());
-    assert_eq!(ui.make_up_filter, None);
+    assert_eq!(ui.make_up_filter, BodyLens::default());
 }
 
 #[test]
@@ -560,17 +642,17 @@ fn next_attention_jump_targets_unread_before_read_attention() {
     unread_success.last_activity = snapshot.now - Duration::from_secs(900);
 
     assert_eq!(
-        next_attention_index(&snapshot, None, 0),
+        next_attention_index(&snapshot, &BodyLens::default(), 0),
         Some(1),
         "unread calm/running rows are filtered out, unread needs-a-look rows lead"
     );
     assert_eq!(
-        next_attention_index(&snapshot, None, 1),
+        next_attention_index(&snapshot, &BodyLens::default(), 1),
         Some(2),
         "read actionable rows follow after unread episodes"
     );
     assert_eq!(
-        next_attention_index(&snapshot, None, 2),
+        next_attention_index(&snapshot, &BodyLens::default(), 2),
         Some(1),
         "the triage list cycles by attention priority"
     );
@@ -609,17 +691,17 @@ fn next_attention_jump_orders_unread_episodes_by_age() {
     snapshot.worktree_groups[1].rows[0].last_activity = snapshot.now - Duration::from_secs(600);
 
     assert_eq!(
-        next_attention_index(&snapshot, None, 0),
+        next_attention_index(&snapshot, &BodyLens::default(), 0),
         Some(1),
         "oldest unread episode leads when the selection is outside the triage list"
     );
     assert_eq!(
-        next_attention_index(&snapshot, None, 1),
+        next_attention_index(&snapshot, &BodyLens::default(), 1),
         Some(3),
         "paused unread episodes stay in the unread pass"
     );
     assert_eq!(
-        next_attention_index(&snapshot, None, 3),
+        next_attention_index(&snapshot, &BodyLens::default(), 3),
         Some(2),
         "newer unread episodes follow"
     );
@@ -646,17 +728,35 @@ fn step_attention_index_reverses_the_inbox_walk() {
     // The forward triage order is [unread success @1, read failed @2]; reverse
     // inverts every step and enters at the last row from outside the list.
     assert_eq!(
-        step_attention_index(&snapshot, None, &Default::default(), 1, false),
+        step_attention_index(
+            &snapshot,
+            &BodyLens::default(),
+            &Default::default(),
+            1,
+            false
+        ),
         Some(2),
         "reverse from the first candidate wraps to the last"
     );
     assert_eq!(
-        step_attention_index(&snapshot, None, &Default::default(), 2, false),
+        step_attention_index(
+            &snapshot,
+            &BodyLens::default(),
+            &Default::default(),
+            2,
+            false
+        ),
         Some(1),
         "reverse steps to the previous candidate"
     );
     assert_eq!(
-        step_attention_index(&snapshot, None, &Default::default(), 0, false),
+        step_attention_index(
+            &snapshot,
+            &BodyLens::default(),
+            &Default::default(),
+            0,
+            false
+        ),
         Some(2),
         "a selection outside the list enters at the last row going backward"
     );
@@ -677,7 +777,7 @@ fn filtered_out_selection_drops_and_reseats_from_the_held_baseline() {
     toggle_make_up_filter(&mut ui, &snapshot, BodyFilter::Status(AgentStatus::Failed));
     assert_eq!(
         ui.make_up_filter,
-        Some(BodyFilter::Status(AgentStatus::Failed))
+        BodyLens::from(BodyFilter::Status(AgentStatus::Failed))
     );
     assert_eq!(ui.selected_pane, None);
     assert_eq!(ui.selected_index, 0);
@@ -687,7 +787,7 @@ fn filtered_out_selection_drops_and_reseats_from_the_held_baseline() {
 
     // Clearing the filter re-seats the highlight on the held baseline.
     toggle_make_up_filter(&mut ui, &snapshot, BodyFilter::Status(AgentStatus::Failed));
-    assert_eq!(ui.make_up_filter, None);
+    assert_eq!(ui.make_up_filter, BodyLens::default());
     reconcile_selection(&mut ui, &snapshot, None);
     assert_eq!(ui.selected_pane, Some(running));
     assert_eq!(ui.selected_index, 0);
@@ -702,19 +802,19 @@ fn focus_jumps_keep_the_make_up_filter() {
     // A digit resolves its target in the filtered body and focuses it without
     // changing renderer-local state.
     let mut ui = UiState {
-        make_up_filter: Some(BodyFilter::Status(AgentStatus::Failed)),
+        make_up_filter: BodyLens::from(BodyFilter::Status(AgentStatus::Failed)),
         ..Default::default()
     };
     let outcome = handle_key(KeyAction::Digit(1), &mut ui, &snapshot);
     assert_eq!(outcome, InputOutcome::focus(failed.clone()));
     assert_eq!(
         ui.make_up_filter,
-        Some(BodyFilter::Status(AgentStatus::Failed))
+        BodyLens::from(BodyFilter::Status(AgentStatus::Failed))
     );
 
     // Enter focuses the highlighted filtered row with the same pure effect.
     let mut ui = UiState {
-        make_up_filter: Some(BodyFilter::Status(AgentStatus::Failed)),
+        make_up_filter: BodyLens::from(BodyFilter::Status(AgentStatus::Failed)),
         selected_pane: Some(failed.clone()),
         ..Default::default()
     };
@@ -722,7 +822,7 @@ fn focus_jumps_keep_the_make_up_filter() {
     assert_eq!(outcome, InputOutcome::focus(failed));
     assert_eq!(
         ui.make_up_filter,
-        Some(BodyFilter::Status(AgentStatus::Failed))
+        BodyLens::from(BodyFilter::Status(AgentStatus::Failed))
     );
     assert_eq!(ui.selected_index, 0, "the filtered ordinal stays anchored");
 }
@@ -747,11 +847,11 @@ fn inbox_jumps_keep_the_make_up_filter_in_both_directions() {
     snapshot.worktree_groups[1].rows[0].unread = true;
     snapshot.worktree_groups[1].rows[0].last_activity = snapshot.now - Duration::from_secs(1_800);
 
-    let filter = Some(BodyFilter::Unread);
+    let filter = BodyLens::from(BodyFilter::Unread);
     let mut ui = UiState {
         selected_index: 0,
         selected_pane: Some(PaneId::from_parts(MuxName::Zellij, "terminal_1")),
-        make_up_filter: filter,
+        make_up_filter: filter.clone(),
         ..Default::default()
     };
 
@@ -784,7 +884,7 @@ fn make_up_filter_survives_repeated_row_clicks_and_keeps_frame_ordinals() {
             &mut ui,
             &snapshot
         ),
-        InputOutcome::sync_filter(Some(BodyFilter::Unread))
+        InputOutcome::sync_filter(BodyLens::from(BodyFilter::Unread))
     );
     let theme = ui.theme(&snapshot.theme);
     let composed = render::compose_lines(&snapshot, None, &ui, theme.as_ref(), 54, 64);
@@ -809,12 +909,12 @@ fn make_up_filter_survives_repeated_row_clicks_and_keeps_frame_ordinals() {
         first,
         InputOutcome::focus(PaneId::from_parts(MuxName::Zellij, "terminal_1"))
     );
-    assert_eq!(ui.make_up_filter, Some(BodyFilter::Unread));
+    assert_eq!(ui.make_up_filter, BodyLens::from(BodyFilter::Unread));
 
     let second = handle_mouse_click(0, second_row, &mut ui, &snapshot);
     assert_eq!(
         second,
         InputOutcome::focus(PaneId::from_parts(MuxName::Zellij, "terminal_3"))
     );
-    assert_eq!(ui.make_up_filter, Some(BodyFilter::Unread));
+    assert_eq!(ui.make_up_filter, BodyLens::from(BodyFilter::Unread));
 }

@@ -8,7 +8,7 @@ fn collapsed_cap_keeps_attention_focused_unread_and_liveness_process_rows() {
     rows.push(agent_row("failed", AgentStatus::Failed));
     assert_visible(
         &rows,
-        None,
+        &BodyLens::default(),
         false,
         "failed",
         "attention row remains visible past the calm-row cap",
@@ -17,7 +17,13 @@ fn collapsed_cap_keeps_attention_focused_unread_and_liveness_process_rows() {
     let rows = idle_rows(8);
     let focused_pane = rows[7].pane.as_ref().expect("pane").pane_id.clone();
     let group = group(rows);
-    let visible = visible_ids_with_context(&group, None, false, None, Some(&focused_pane));
+    let visible = visible_ids_with_context(
+        &group,
+        &BodyLens::default(),
+        false,
+        None,
+        Some(&focused_pane),
+    );
     assert!(visible.contains(&"idle-7"));
     assert!(visible.len() < group.rows.len(), "tail still trims");
 
@@ -25,7 +31,7 @@ fn collapsed_cap_keeps_attention_focused_unread_and_liveness_process_rows() {
     rows[7].unread = true;
     assert_visible(
         &rows,
-        None,
+        &BodyLens::default(),
         false,
         "idle-7",
         "sticky unread idle row remains visible past the calm-row cap",
@@ -41,7 +47,7 @@ fn collapsed_cap_keeps_attention_focused_unread_and_liveness_process_rows() {
     rows.push(process_row("proc-live"));
     assert_visible(
         &rows,
-        None,
+        &BodyLens::default(),
         false,
         "proc-live",
         "the only live process row remains visible as the group's liveness anchor",
@@ -51,7 +57,7 @@ fn collapsed_cap_keeps_attention_focused_unread_and_liveness_process_rows() {
 #[test]
 fn collapsed_cap_trims_ordinary_idle_tail() {
     let group = group(idle_rows(9));
-    let visible = visible_ids(&group, None, false);
+    let visible = visible_ids(&group, &BodyLens::default(), false);
 
     assert_eq!(
         visible,
@@ -63,9 +69,14 @@ fn collapsed_cap_trims_ordinary_idle_tail() {
 fn expanded_and_filtered_groups_are_uncapped() {
     let group = group(idle_rows(9));
 
-    assert_eq!(visible_ids(&group, None, true).len(), 9);
+    assert_eq!(visible_ids(&group, &BodyLens::default(), true).len(), 9);
     assert_eq!(
-        visible_ids(&group, Some(BodyFilter::Status(AgentStatus::Idle)), false).len(),
+        visible_ids(
+            &group,
+            &BodyLens::from(BodyFilter::Status(AgentStatus::Idle)),
+            false
+        )
+        .len(),
         9,
         "make-up filters show every matching row"
     );
@@ -76,7 +87,7 @@ fn held_visible_rows_stay_visible_past_the_cap_and_update_more_count() {
     let group = group(idle_rows(9));
     let held = HashSet::from(["idle-8".to_owned()]);
 
-    let visible = visible_ids_with_held(&group, None, false, Some(&held));
+    let visible = visible_ids_with_held(&group, &BodyLens::default(), false, Some(&held));
 
     assert!(visible.contains(&"idle-8"));
     assert_eq!(visible.len(), 7);
@@ -85,8 +96,13 @@ fn held_visible_rows_stay_visible_past_the_cap_and_update_more_count() {
     let theme = Theme::fixed(true);
     let cost_rolls = CostRolls::default();
     let ctx = test_row_ctx(&snapshot, &theme, 54, 0, 0, &cost_rolls);
-    let roster =
-        crate::sidebar_pane::view::VisibleRoster::single(&group, None, false, Some(&held), None);
+    let roster = crate::sidebar_pane::view::VisibleRoster::single(
+        &group,
+        &BodyLens::default(),
+        false,
+        Some(&held),
+        None,
+    );
     let lines = worktree_group_lines_projected(WorktreeRenderContext {
         row: &ctx,
         roster: &roster,
@@ -122,8 +138,13 @@ fn expanded_group_keeps_less_control_when_hold_makes_all_rows_visible() {
     let theme = Theme::fixed(true);
     let cost_rolls = CostRolls::default();
     let ctx = test_row_ctx(&snapshot, &theme, 54, 0, 0, &cost_rolls);
-    let roster =
-        crate::sidebar_pane::view::VisibleRoster::single(&group, None, true, Some(&held), None);
+    let roster = crate::sidebar_pane::view::VisibleRoster::single(
+        &group,
+        &BodyLens::default(),
+        true,
+        Some(&held),
+        None,
+    );
     let block = worktree_group_lines_projected(WorktreeRenderContext {
         row: &ctx,
         roster: &roster,
@@ -155,7 +176,7 @@ fn make_up_filter_ignores_held_visible_rows() {
 
     let visible = visible_ids_with_held(
         &group,
-        Some(BodyFilter::Status(AgentStatus::Waiting)),
+        &BodyLens::from(BodyFilter::Status(AgentStatus::Waiting)),
         false,
         Some(&held),
     );
@@ -174,20 +195,20 @@ fn finished_group_collapses_unread_success_until_revealed() {
     group.finished = true;
 
     assert!(
-        visible_ids(&group, None, false).is_empty(),
+        visible_ids(&group, &BodyLens::default(), false).is_empty(),
         "terminal acceptance hides even unread success rows"
     );
     let held = HashSet::from(["success-unread".to_owned()]);
     assert_eq!(
-        visible_ids_with_held(&group, None, false, Some(&held)),
+        visible_ids_with_held(&group, &BodyLens::default(), false, Some(&held)),
         ["success-unread", "success"],
         "the order hold reveals the whole roster while the terminal collapse settles"
     );
-    assert_eq!(visible_ids(&group, None, true).len(), 2);
+    assert_eq!(visible_ids(&group, &BodyLens::default(), true).len(), 2);
     assert_eq!(
         visible_ids(
             &group,
-            Some(BodyFilter::Status(AgentStatus::Success)),
+            &BodyLens::from(BodyFilter::Status(AgentStatus::Success)),
             false
         )
         .len(),
@@ -197,7 +218,13 @@ fn finished_group_collapses_unread_success_until_revealed() {
 
     let focused_pane = group.rows[1].pane.as_ref().expect("pane").pane_id.clone();
     assert_eq!(
-        visible_ids_with_context(&group, None, false, None, Some(&focused_pane)),
+        visible_ids_with_context(
+            &group,
+            &BodyLens::default(),
+            false,
+            None,
+            Some(&focused_pane)
+        ),
         ["success-unread", "success"],
         "a focused member reveals the whole finished roster"
     );
@@ -404,7 +431,7 @@ fn body_keeps_collapsed_finished_group_until_filter_empties_it() {
         &snapshot,
         None,
         &UiState {
-            make_up_filter: Some(BodyFilter::Status(AgentStatus::Running)),
+            make_up_filter: BodyLens::from(BodyFilter::Status(AgentStatus::Running)),
             ..Default::default()
         },
         54,
@@ -595,7 +622,7 @@ fn finished_process_only_group_stays_expanded() {
         "{texts:?}"
     );
     assert_eq!(
-        visible_ids(&finished, None, false),
+        visible_ids(&finished, &BodyLens::default(), false),
         ["shell-one", "shell-two"]
     );
     assert_eq!(texts.iter().filter(|line| line.contains("zsh")).count(), 2);
@@ -615,8 +642,13 @@ fn held_member_reveals_the_whole_finished_roster() {
     let theme = Theme::fixed(true);
     let cost_rolls = CostRolls::default();
     let ctx = test_row_ctx(&snapshot, &theme, 54, 0, 0, &cost_rolls);
-    let roster =
-        crate::sidebar_pane::view::VisibleRoster::single(&finished, None, false, Some(&held), None);
+    let roster = crate::sidebar_pane::view::VisibleRoster::single(
+        &finished,
+        &BodyLens::default(),
+        false,
+        Some(&held),
+        None,
+    );
     assert_eq!(
         roster
             .rows()
@@ -906,7 +938,7 @@ fn render_group_with_focus(
     let ctx = test_row_ctx(&snapshot, &theme, 54, 0, 0, &cost_rolls);
     let roster = crate::sidebar_pane::view::VisibleRoster::single(
         group,
-        None,
+        &BodyLens::default(),
         expanded,
         None,
         Some(focused_pane),
@@ -971,7 +1003,7 @@ fn roster_receipt(texts: &[String]) -> &str {
 
 fn assert_visible(
     rows: &[crate::store::snapshot::SidebarRow],
-    filter: Option<BodyFilter>,
+    filter: &BodyLens,
     expanded: bool,
     id: &str,
     message: &str,
@@ -982,17 +1014,17 @@ fn assert_visible(
     assert!(visible.len() < group.rows.len(), "tail still trims");
 }
 
-fn visible_ids(
-    group: &crate::store::snapshot::SidebarWorktreeGroup,
-    filter: Option<BodyFilter>,
+fn visible_ids<'a>(
+    group: &'a crate::store::snapshot::SidebarWorktreeGroup,
+    filter: &BodyLens,
     expanded: bool,
-) -> Vec<&str> {
+) -> Vec<&'a str> {
     visible_ids_with_held(group, filter, expanded, None)
 }
 
 fn visible_ids_with_held<'a>(
     group: &'a crate::store::snapshot::SidebarWorktreeGroup,
-    filter: Option<BodyFilter>,
+    filter: &BodyLens,
     expanded: bool,
     held: Option<&HashSet<String>>,
 ) -> Vec<&'a str> {
@@ -1001,7 +1033,7 @@ fn visible_ids_with_held<'a>(
 
 fn visible_ids_with_context<'a>(
     group: &'a crate::store::snapshot::SidebarWorktreeGroup,
-    filter: Option<BodyFilter>,
+    filter: &BodyLens,
     expanded: bool,
     held: Option<&HashSet<String>>,
     focused_pane: Option<&crate::PaneId>,

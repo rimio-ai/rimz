@@ -118,7 +118,7 @@ pub(super) struct FoldShared {
 pub(super) struct FoldInputs {
     pub sampled_at: Instant,
     pub anchor: Option<crate::mux::focus_anchor::FocusAnchor>,
-    pub filter: Option<crate::sidebar::body_filter::BodyFilter>,
+    pub filter: crate::sidebar::body_filter::BodyLens,
     pub marks: Arc<ReadMarks>,
 }
 
@@ -127,7 +127,7 @@ impl Default for FoldInputs {
         Self {
             sampled_at: Instant::now(),
             anchor: None,
-            filter: None,
+            filter: Default::default(),
             marks: Arc::default(),
         }
     }

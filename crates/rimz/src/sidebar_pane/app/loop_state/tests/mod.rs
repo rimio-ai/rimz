@@ -3,6 +3,7 @@ use crate::sidebar_pane::app::fixtures::{
     agent_snapshot, pane, serve_config, snapshot, snapshot_with_panes, workspace,
 };
 use crate::sidebar_pane::app::input::KeyAction;
+use crate::sidebar_pane::view::BodyFilter;
 use crate::{SidebarInstanceId, WorkspaceId};
 use std::collections::HashSet;
 
@@ -27,15 +28,15 @@ struct Rig {
 
 impl Rig {
     fn new() -> Self {
-        Self::build(None, None)
+        Self::build(None, BodyLens::default())
     }
 
     fn with_own_pane(own_pane: PaneId) -> Self {
-        Self::build(Some(own_pane), None)
+        Self::build(Some(own_pane), BodyLens::default())
     }
 
-    fn with_filter(filter: BodyFilter) -> Self {
-        Self::build(None, Some(filter))
+    fn with_filter(filter: BodyLens) -> Self {
+        Self::build(None, filter)
     }
 
     /// The terminal viewport width. Only the attach-resize path cares.
@@ -44,13 +45,11 @@ impl Rig {
         self
     }
 
-    fn build(own_pane: Option<PaneId>, filter: Option<BodyFilter>) -> Self {
+    fn build(own_pane: Option<PaneId>, filter: BodyLens) -> Self {
         let ws = workspace();
         let dir = tempfile::TempDir::new().expect("tempdir");
         let runtime = RuntimePaths::under(ws.clone(), dir.path()).expect("runtime");
-        if let Some(filter) = filter {
-            crate::sidebar::body_filter::write(&runtime, filter).expect("write initial filter");
-        }
+        crate::sidebar::body_filter::write(&runtime, &filter).expect("write initial filter");
         let instance_id = SidebarInstanceId::new();
         let socket_path = runtime.sidebar_socket_path(&instance_id);
         let mut config = serve_config(&ws);

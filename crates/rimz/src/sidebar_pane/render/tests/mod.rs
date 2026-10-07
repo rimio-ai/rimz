@@ -38,6 +38,7 @@ mod scroll;
 mod worktree;
 
 use super::*;
+use crate::sidebar_pane::view::BodyLens;
 
 fn fixed_workspace() -> WorkspaceId {
     WorkspaceId::parse("ws_0123456789abcdef01234567").unwrap()
@@ -576,7 +577,7 @@ fn worktree_group_block<'render, 'snapshot>(
     expanded: bool,
     meter_pixels: Option<&'render mut MeterPixels>,
 ) -> RenderedBlock {
-    let roster = VisibleRoster::single(group, None, expanded, None, None);
+    let roster = VisibleRoster::single(group, &BodyLens::default(), expanded, None, None);
     worktree_group_lines_projected(WorktreeRenderContext {
         row: ctx,
         group: &roster.groups()[0],

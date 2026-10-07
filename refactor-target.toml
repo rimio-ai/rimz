@@ -644,6 +644,16 @@ path = "crates/rimz/src/sidebar"
 # Room/own observation boundaries, shared signatures, native focus queries and retained-own receipt merging (+8).
 surface-budget = 237
 
+[[verdict]]
+kind = "item"
+key = "sidebar::body_filter::BodyLens"
+reason = "The shared pick and query travel together through the lane file, fetch fold, renderer and room birth."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::body_filter::BodyLens::is_empty"
+reason = "The lane writer and visible-roster projection share the empty-lens predicate."
+
 [[module]]
 path = "crates/rimz/src/sidebar_pane"
 surface-budget = 59
