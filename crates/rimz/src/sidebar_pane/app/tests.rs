@@ -20,6 +20,60 @@ use jiff::Timestamp;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 
+#[test]
+fn worker_close_preserves_modes_only_after_a_signal() {
+    const CHILD: &str = "RIMZ_TEST_WORKER_CLOSE_CHILD";
+    let Ok(signal) = std::env::var(CHILD) else {
+        for signal in ["false", "true"] {
+            let pty = nix::pty::openpty(None, None).unwrap();
+            let tty = std::fs::File::from(pty.slave);
+            let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "sidebar_pane::app::tests::worker_close_preserves_modes_only_after_a_signal",
+                    "--nocapture",
+                ])
+                .env(CHILD, signal)
+                .stdin(tty.try_clone().unwrap())
+                .stdout(tty.try_clone().unwrap())
+                .stderr(tty)
+                .spawn()
+                .unwrap();
+            let capture = std::thread::spawn(move || {
+                let mut master = std::fs::File::from(pty.master);
+                let mut bytes = Vec::new();
+                let _ = std::io::Read::read_to_end(&mut master, &mut bytes);
+                bytes
+            });
+            let status = child.wait().unwrap();
+            let bytes = capture.join().unwrap();
+            assert!(status.success(), "{}", String::from_utf8_lossy(&bytes));
+            assert_eq!(
+                bytes
+                    .windows(b"\x1b[?1006l\x1b[?1000l".len())
+                    .any(|part| part == b"\x1b[?1006l\x1b[?1000l"),
+                signal == "false",
+                "only a genuine non-signal close restores mouse modes"
+            );
+        }
+        return;
+    };
+    let original = nix::sys::termios::tcgetattr(io::stdout()).unwrap();
+    let guard = TerminalModeGuard::enable(MouseCapture::Stdout, Screen::Main).unwrap();
+    let raw = nix::sys::termios::tcgetattr(io::stdout()).unwrap();
+    assert_ne!(raw, original);
+    let signal = signal == "true";
+    assert_eq!(
+        finish_worker(AttachmentExit::Closed, guard, signal).unwrap(),
+        ServeOutcome::Stopped
+    );
+    assert_eq!(
+        nix::sys::termios::tcgetattr(io::stdout()).unwrap(),
+        if signal { raw } else { original },
+        "signal close preserves raw mode; non-signal close restores it"
+    );
+}
+
 fn kitty_commands(bytes: &[u8]) -> Vec<std::collections::BTreeMap<String, String>> {
     String::from_utf8_lossy(bytes)
         .split("\x1b_G")
