@@ -344,12 +344,14 @@ Unless marked, these live in the workspace runtime directory.
 | `lanes/loop-fire.json` | The elder's loop-task arm and fire stamps for this room. |
 | `lanes/authoritative-pane-probe.json` | One single-flight winner's authoritative mux pane observation, shared by every sidebar's liveness watchdog. |
 | `lanes/sidebar-width.json` | The room-runtime sidebar width the renderers settled on. |
-| `lanes/sidebar-filter.json` | The room-runtime cockpit lens every renderer adopts. |
+| `lanes/sidebar-filter.json` | The room-runtime body lens: independent status/unread/PR pick and committed text query, adopted by every renderer. |
 | `audit/binding.log.jsonl` (state directory) | Append-only pane-bind decisions ([sidebar.md](./sidebar.md#the-binding-ladder)). |
 | `records/live-roster.json` (state directory) | The producer's pane-backed live root-agent set, read by rebirth recovery ([sidebar.md → Resume-on-rebirth](./sidebar.md#resume-on-rebirth), [store.md → session death](../store.md#session-death)). |
 | `audit/diag.log.jsonl` (state directory) | Typed anomaly records ([diagnostics.md](../diagnostics.md)). |
 
 `cache/snapshots/latest.json` and `cache/snapshots/rollup.json` are not sidebar files: the store's write tail publishes them into the state directory ([store.md → the read path](../store.md#the-read-path)).
+
+The body lens codec is `BodyLens` in [`body_filter.rs`](../../../crates/rimz/src/sidebar/body_filter.rs), for example `{"filter":{"kind":"status","status":"waiting"},"query":"auth"}`. Both fields are optional; writing an empty lens removes the file. An absent or malformed file, including the former single-filter shape, loads as an empty lens (an active pick clears once on upgrade). A typing draft is pane-local and never written here.
 
 Heartbeats are bounded by TTL while the session lives and by purge at rebirth: a birth that has proven the session absent deletes heartbeat files before creating the replacement session.
 
@@ -380,7 +382,7 @@ The overlay store ([`event_store.rs`](../../../crates/rimz/src/sidebar/event_sto
 | `FocusIntent` | target `pane_id`, nonce | Fold the durable focus anchor now, so hidden peer tabs adopt the target before the mux switch reveals them. | Renderer jumps |
 | `FocusStranded` | owning sidebar `pane_id`, generation, client views | Focus repair in the matching renderer: keep its baseline if that is a live visible work sibling, otherwise pick the leftmost sibling. Distinct client views leave focus alone, because `focus-pane-id` is session-global. Dropped after `FOCUS_STRANDED_EVENT_TTL` (2 seconds) so late delivery cannot yank focus. | Host presence projector, from a settled Zellij switch or a tmux window switch |
 | `WidthTargetChanged` | none | Re-read the room-runtime width share, resolve it against this renderer's view, and converge only its own pane. | The resolver or renderer that published a new target |
-| `BodyFilterChanged` | none | Re-read the cockpit lens and adopt it without a producer fetch. | A renderer that changed or auto-cleared the lens |
+| `BodyFilterChanged` | none | Re-read the whole body lens and adopt pick and committed query without a producer fetch, leaving any local draft intact. | A renderer that changed the lens or auto-cleared its empty pick |
 | `Notify` | `title`, `body`, target panes, `recheck_unread`, kind | Raise the configured desktop, bell, or command notification, gated on row-unread when `recheck_unread` is set. Never fused into rows ([notifications.md](./notifications.md)). | The notification path |
 | `Reload` | none | Accelerate the supervisor's poll of the durable workspace record; the worker hands off or hard-refreshes. | `rimz reload` |
 

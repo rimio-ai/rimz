@@ -602,17 +602,18 @@ Each row reads sessions, total tokens, input including cache creation, output, c
 The footer is the last line, apart from a recovered alert, which sits beneath it. The cards give up space before the dashboard or the footer do, so neither scrolls away.
 
 ```
- zᶻ idle · 17m                               ? for help
+ /auth  zᶻ away          ? for help
 ```
 
 | mark | when |
 |------|------|
 | `? for help` | always, at the right edge |
+| `/auth` | the search draft with a cursor while typing, then a filled chip (reverse video without color) after `Enter` |
 | `zᶻ idle`, then `zᶻ idle · 17m` | tmux: no input for `[sidebar] afk_after_secs` (15 minutes by default); minutes are added after the first minute |
 | `zᶻ away` | no terminal client is attached; Zellij reports only this state |
 | `⇄ remote 210ms` | the room runs over SSH: the smoothed round-trip time, with packet loss added above 10%; `⇄ remote ?` means the last reading is stale |
 
-The away badge takes the left edge. The remote badge sits there otherwise, and follows the away badge only when the line has room. The remote badge's color runs from green through yellow and amber to red, bold at the worst, and stays neutral until the link has a first reading.
+With a search active, its segment takes the left edge; the away badge drops first, then the remote badge, and the query clips on the right if it still cannot fit beside help. Otherwise the away badge takes the left edge. The remote badge sits there otherwise, and follows the away badge only when the line has room. The remote badge's color runs from green through yellow and amber to red, bold at the worst, and stays neutral until the link has a first reading.
 
 ### Notices and alerts
 
@@ -644,11 +645,12 @@ If the alert persists, see [troubleshooting](../guide/troubleshooting.md#the-sid
 
 ### The help overlay
 
-`?` opens the overlay over the bottom right of the cards. Any key closes it except an unbound Ctrl or Alt chord, and so does focus leaving the sidebar. It lists your configured movement keys, so it differs from this frame after a rebind.
+`?` opens the overlay over the bottom right of the cards. Any key the sidebar reads closes it and is consumed, and so does focus leaving the sidebar. While typing a search, `?` enters a character instead. The overlay lists your configured movement keys, so it differs from this frame after a rebind.
 
 ```
 ╭ help ─────────────────────────────────╮
 │ keys                                  │
+│   /   search                          │
 │ ↕ j/k rows          ↕ J/K   worktrees │
 │ ↕ g/G ends          ↕ ^f/^b page      │
 │ ↕ H/L screen        ⏎ l     focus     │
@@ -691,6 +693,7 @@ These keys work while the sidebar has focus. From any other pane, `Alt+p` focuse
 | `r` | reload this tab's sidebar |
 | `x` | dismiss a recovered alert |
 | `?` | open the help overlay |
+| `/` | start or edit a text search |
 
 | filter key | cards shown |
 |------------|-------------|
@@ -702,9 +705,19 @@ These keys work while the sidebar has focus. From any other pane, `Alt+p` focuse
 | `w` | working |
 | `z` | sleeping |
 | `o` | idle |
-| `A` | all |
+| `A` | all; clear both the status/unread/PR pick and the text search |
 
-Pressing the active filter's key again also returns to all. Movement keys and `a` / `d` can be rebound under `[sidebar.keys]`, and a rebound chord takes priority over a fixed key, so it can shadow a filter. The other keys are fixed.
+Pressing the active filter's key again clears just that pick; a text search stays active. Movement keys and `a` / `d` can be rebound under `[sidebar.keys]`, and outside search typing a rebound chord takes priority over a fixed key, so it can shadow a filter. The other keys are fixed.
+
+### Text search
+
+`/` starts typing, seeded with the committed query. Matching is case-insensitive substring over worktree/group names and qualifiers, branches, agent names and handles, teams, and PR numbers (`#123` or `123`). A matching group name, team, or PR keeps all its rows; otherwise only matching rows remain. Search composes with the status, unread, or open-PR pick, hides empty groups, and lifts the fold cap. The cockpit counts still describe the whole fleet.
+
+Every printable key enters the draft, including `n`, `j`, `q`, `r`, `?`, `A`, digits, and characters from rebound chords. `Backspace` removes one character; on an empty draft it cancels. `↑` / `↓` and `Ctrl+p` / `Ctrl+n` move among matches; other chords do nothing. Every edit selects the first match again. `Enter` commits the query and focuses the selected match, or ends typing without focus when the draft is empty. A zero-match query stays set and shows `no match` in the body.
+
+`Esc` ends typing and clears the committed query, leaving any other pick intact. A click commits the draft and then acts normally; the wheel scrolls without ending typing. Focus leaving the sidebar discards only the draft. The committed query follows you across tabs and survives a sidebar reload; the draft is local to the sidebar where you type and does not survive a reload. After `Enter`, ordinary movement stays inside the matches and `n` / `N` keep their needs-you meaning. Clear with `/` then `Esc`, or `A` to clear both narrowings.
+
+### Mouse
 
 | mouse | action |
 |-------|--------|
