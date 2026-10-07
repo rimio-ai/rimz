@@ -36,4 +36,4 @@ pub mod subagent_policy;
 pub mod team_prompt;
 pub mod team_stage;
 
-pub use auto_continue::AutoContinueRequest;
+pub use auto_continue::{AutoContinueRequest, park_demotion};

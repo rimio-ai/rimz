@@ -103,14 +103,25 @@ fn collect_show_report(
     .filter(|view| !view.entries.is_empty());
     let peers = rimz::address::addressable_agents(snapshot);
     let me = SelfIdentity::from_env().resolve(snapshot);
+    let now = jiff::Timestamp::now();
+    let demotion = rimz::harness::park_demotion(
+        Some(store),
+        store.paths(),
+        runtime,
+        &crate::cli::machine_config(),
+        &snapshot.agents,
+        snapshot.resume_outcomes.as_deref().unwrap_or_default(),
+        now,
+    );
     let report_agent = agent.as_ref().map(|agent| {
         build_entry(
+            &demotion,
             agent,
             row_for_agent(snapshot, agent),
             agent_pr(snapshot, agent),
             &peers,
             me.as_ref(),
-            jiff::Timestamp::now(),
+            now,
             ReportOverrides {
                 runtime: Some(runtime),
                 effort: effort.map(|(effort, _)| effort),
@@ -901,6 +912,7 @@ mod tests {
         let report = ShowReport {
             tmp_dir: None,
             agent: Some(build_entry(
+                &rimz::agents::ParkDemotion::default(),
                 &state,
                 None,
                 None,
@@ -942,6 +954,7 @@ mod tests {
         for login in [None, Some("work".parse().unwrap())] {
             state.login = login;
             let entry = build_entry(
+                &rimz::agents::ParkDemotion::default(),
                 &state,
                 None,
                 None,
@@ -967,6 +980,7 @@ mod tests {
         ] {
             state.launch_warnings = warnings;
             let entry = build_entry(
+                &rimz::agents::ParkDemotion::default(),
                 &state,
                 None,
                 None,

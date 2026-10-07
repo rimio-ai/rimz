@@ -73,7 +73,8 @@ fn assemble_snapshot<'a>(
         ended,
         expelled,
         agents,
-    } = RuntimeProjection::runtime_from_refs(agents);
+        resume_outcomes,
+    } = RuntimeProjection::runtime_from_refs(agents, resume_outcomes);
     let mut snapshot = SidebarSnapshot::build_with_agents(paths.workspace_id.clone(), agents, now);
     snapshot.fenced_sessions = ended;
     snapshot.fenced_sessions.extend(expelled);

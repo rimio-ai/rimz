@@ -179,7 +179,13 @@ upward-dependencies = ["address"]
 # AskRoute and pane_actions share one answerability decision with both CLI consumers (+2).
 # AgentState::silent_child_for shares one stall predicate between projection and notice detection (+1).
 # AgentState::root_lane, lane_label and is_root_lane share fold-derived root identity with consumers.
-surface-budget = 991
+# Spent-child CLI parity shares ParkDemotion and its constructor, predicate, and window query (+4).
+surface-budget = 995
+
+[[module]]
+path = "crates/rimz/src/agents/park.rs"
+# Spent-child CLI parity shares durable park projection without reaching store or harness.
+surface-budget = 4
 
 [[module]]
 path = "crates/rimz/src/agents/adapters/antigravity"
@@ -494,7 +500,8 @@ path = "crates/rimz/src/harness"
 # Room-only catalog loading filters before precedence for list and watch (+1).
 # Manual resumes share refill settlement and its typed error (+2), and receive the per-tab recovery carrier (+2).
 # Silent-child notices share the detector, text, request, evidence and module with the CLI/producer (+6), plus the run claim and release (+2).
-surface-budget = 739
+# Spent-child CLI parity shares one read-only durable park-demotion builder (+1).
+surface-budget = 740
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -2409,6 +2416,36 @@ reason = "Returned by pub agent_liveness, which the harness and the tmux backend
 kind = "item"
 key = "store::runtime::RuntimeProjection"
 reason = "Returned by pub Store::runtime_projection and re-exported from the crate root; the harness rebirth path names it (pass 23a)."
+
+[[verdict]]
+kind = "item"
+key = "store::runtime::RuntimeProjection::resume_outcomes"
+reason = "Spent-child CLI parity carries the fold's terminal resume evidence into audit and runtime readers."
+
+[[verdict]]
+kind = "item"
+key = "agents::park::ParkDemotion"
+reason = "Spent-child CLI parity shares one agent-model projection with sidebar and binary callers."
+
+[[verdict]]
+kind = "item"
+key = "agents::park::ParkDemotion::new"
+reason = "Spent-child CLI parity constructs the shared projection in the harness builder and test fixtures."
+
+[[verdict]]
+kind = "item"
+key = "agents::park::ParkDemotion::is_spent"
+reason = "Spent-child CLI parity applies the same retry/window predicate to root and rowless statuses."
+
+[[verdict]]
+kind = "item"
+key = "agents::park::ParkDemotion::window_spent"
+reason = "Spent-child CLI parity preserves the root status ladder's spent-window rung without exposing window sets."
+
+[[verdict]]
+kind = "item"
+key = "harness::auto_continue::park_demotion"
+reason = "Spent-child CLI parity assembles durable demotion inputs once for sidebar and binary consumers."
 
 [[verdict]]
 kind = "item"

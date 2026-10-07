@@ -839,7 +839,7 @@ fn effective_status_projects_terminal_provider_parks_to_paused() {
         failed.context = Some(context_error(class, 1_000));
         assert_eq!(failed.effective_status(), AgentStatus::Paused, "{class:?}");
         assert_eq!(
-            failed.rowless_status(),
+            failed.rowless_status(&crate::agents::ParkDemotion::default()),
             (AgentStatus::Paused, TurnPhase::Idle)
         );
     }
@@ -900,7 +900,7 @@ fn rowless_status_prioritizes_native_input_over_provider_parks() {
         ));
         running.context = Some(context);
         assert_eq!(
-            running.rowless_status(),
+            running.rowless_status(&crate::agents::ParkDemotion::default()),
             (AgentStatus::Waiting, TurnPhase::Idle),
             "{outcome:?}"
         );

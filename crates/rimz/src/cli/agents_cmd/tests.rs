@@ -1924,6 +1924,7 @@ mod render {
         );
         let peers = [&agent];
         let report = super::report::build_entry(
+            &rimz::agents::ParkDemotion::default(),
             &agent,
             None,
             Some(super::report::PrInfo {
@@ -1969,6 +1970,7 @@ mod render {
         let report = |agent: &AgentState| {
             let peers = [agent];
             super::report::build_entry(
+                &rimz::agents::ParkDemotion::default(),
                 agent,
                 None,
                 None,
@@ -2327,8 +2329,16 @@ fn render_agents_text_with_theme(
 ) -> String {
     let agents: Vec<&AgentState> = snapshot.agents.iter().collect();
     let mut out = anstream::StripStream::new(Vec::new());
-    render_agents_table(&mut out, snapshot, &agents, now, max_width, theme)
-        .expect("render agents table");
+    render_agents_table(
+        &rimz::agents::ParkDemotion::default(),
+        &mut out,
+        snapshot,
+        &agents,
+        now,
+        max_width,
+        theme,
+    )
+    .expect("render agents table");
     String::from_utf8(out.into_inner()).expect("utf8")
 }
 

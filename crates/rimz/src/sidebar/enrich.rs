@@ -11,15 +11,13 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::agents::spending::SpendingCaches;
 use crate::forge::pr_state::{PrLink, PrQueueFact, read_pr_state_cache};
-use crate::harness::auto_continue::{self, ResumeMessage};
 use crate::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
 use crate::store::Store;
 use crate::store::snapshot::{
-    LazyAgentPairingDiagnostic, LazyAgentPairingResult, RemoteControlBadge, ResumeOutcome,
-    RuntimeReapInputs, SidebarLinkFreshness, SidebarLinkHealth, SidebarOwnView, SidebarPresence,
-    SidebarProviderPanel, SidebarRow, SidebarSnapshot, SidebarWorktreeGroup, SidebarWorktreeKind,
-    TruthNotice, WorktreeCi, WorktreePrQueue, WorktreePrState, WorktreeTrunkSync,
-    compute_lazy_agent_pairings,
+    LazyAgentPairingDiagnostic, LazyAgentPairingResult, RemoteControlBadge, RuntimeReapInputs,
+    SidebarLinkFreshness, SidebarLinkHealth, SidebarOwnView, SidebarPresence, SidebarProviderPanel,
+    SidebarRow, SidebarSnapshot, SidebarWorktreeGroup, SidebarWorktreeKind, TruthNotice,
+    WorktreeCi, WorktreePrQueue, WorktreePrState, WorktreeTrunkSync, compute_lazy_agent_pairings,
 };
 use crate::{RuntimePaths, StatePaths};
 use jiff::Timestamp;
@@ -39,18 +37,6 @@ use super::timing::{LINK_STATS_EXPIRE, LINK_STATS_STALE};
 
 #[cfg(test)]
 mod tests;
-
-pub(super) fn read_auto_continue_resume_messages(
-    store: Option<&Store>,
-    config: &crate::config::ResumeConfig,
-    outcomes: &[ResumeOutcome],
-) -> Vec<ResumeMessage> {
-    if config.auto_continue {
-        auto_continue::read_resume_messages(store, outcomes)
-    } else {
-        Vec::new()
-    }
-}
 
 /// Fold the remote-link stats sidecar onto the snapshot. Local rooms never have
 /// this file; corrupt, unknown-version, and expired files erase the badge.
@@ -656,17 +642,14 @@ fn enrich_core(
         exclude_pane: None,
     });
 
-    let provider_capacities = crate::agents::ProviderCapacity::read_all(runtime, &logins);
-    let resume_messages = read_auto_continue_resume_messages(
+    let demotion = crate::harness::park_demotion(
         store,
-        &machine_config.resume,
-        snapshot.resume_outcomes.as_deref().unwrap_or_default(),
-    );
-    let exhausted_resumes = auto_continue::exhausted_parks(
-        &snapshot,
+        state,
         runtime,
-        &machine_config.resume,
-        &resume_messages,
+        &machine_config,
+        &snapshot.agents,
+        snapshot.resume_outcomes.as_deref().unwrap_or_default(),
+        snapshot.now,
     );
 
     if let Some(frame) = frame {
@@ -695,8 +678,7 @@ fn enrich_core(
             admitted_panes,
             &lazy_pairings,
             Some(&unread_row_ids),
-            &provider_capacities,
-            &exhausted_resumes,
+            &demotion,
         );
         snapshot = next_snapshot;
         for event in diagnostics {

@@ -688,6 +688,16 @@ fn list_children(json: bool, globals: &GlobalFlags) -> Result<()> {
             .unwrap_or_default();
     }
     attach_list_context(ctx.store.runtime_paths(), &mut audit.agents);
+    let now = jiff::Timestamp::now();
+    let demotion = rimz::harness::park_demotion(
+        Some(&ctx.store),
+        ctx.store.paths(),
+        ctx.store.runtime_paths(),
+        &crate::cli::machine_config(),
+        &audit.agents,
+        &audit.resume_outcomes,
+        now,
+    );
     let caller_identity = rimz::harness::ancestry::resolve_caller(&audit.agents);
     let caller = caller_identity.as_ref().and_then(|identity| {
         rimz::harness::ancestry::resolve_launch_caller(&audit.agents, identity).ok()
@@ -698,7 +708,7 @@ fn list_children(json: bool, globals: &GlobalFlags) -> Result<()> {
         None => rimz::address::launched_children_in_channel(&audit.agents, ctx.channel()),
     };
     let runs = rimz::harness::run::list(ctx.store.paths())?;
-    let reports = child_reports(&audit.agents, &children, &runs, jiff::Timestamp::now());
+    let reports = child_reports(&demotion, &audit.agents, &children, &runs, now);
     if json {
         return render::json_pretty(&reports);
     }
@@ -760,6 +770,7 @@ fn attach_list_context(runtime: &rimz::disk::paths::RuntimePaths, agents: &mut [
 }
 
 fn child_reports(
+    demotion: &rimz::agents::ParkDemotion,
     agents: &[AgentState],
     children: &[&AgentState],
     runs: &[rimz::store::run::RunRecord],
@@ -801,7 +812,7 @@ fn child_reports(
                 channel: child.channel(),
                 lane_label: child.lane_label(),
                 kind: child.kind.to_string(),
-                status: child.rowless_status().0.as_str().to_owned(),
+                status: child.rowless_status(demotion).0.as_str().to_owned(),
                 description: child.activity_line(),
                 turn_error_label: child.displayed_turn_error_label(),
                 turn_error: child

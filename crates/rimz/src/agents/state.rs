@@ -1565,13 +1565,20 @@ impl AgentState {
 
     /// Displayed status and phase of an agent with no sidebar row of its own
     /// (a launched child nests under its parent's card). A displayed fatal or
-    /// unknown marker reads `failed`, on a raw-`failed` row too; otherwise this
-    /// is [`Self::effective_status`].
-    pub fn rowless_status(&self) -> (AgentStatus, TurnPhase) {
-        match self.displayed_turn_error().map(|(class, _)| class) {
+    /// unknown marker reads `failed`, on a raw-`failed` row too, and so does a
+    /// displayed pausing marker the card's [`super::ParkDemotion`] counts as
+    /// spent; otherwise this is [`Self::effective_status`].
+    pub fn rowless_status(&self, demotion: &super::ParkDemotion) -> (AgentStatus, TurnPhase) {
+        let class = self.displayed_turn_error().map(|(class, _)| class);
+        match class {
             Some(TurnErrorClass::Unknown | TurnErrorClass::Failed) => {
                 (AgentStatus::Failed, TurnPhase::Idle)
             }
+            Some(
+                class @ (TurnErrorClass::PausedRateLimit
+                | TurnErrorClass::PausedSpendLimit
+                | TurnErrorClass::PausedOverloaded),
+            ) if demotion.is_spent(self, class) => (AgentStatus::Failed, TurnPhase::Idle),
             Some(
                 TurnErrorClass::PausedRateLimit
                 | TurnErrorClass::PausedSpendLimit
@@ -1594,8 +1601,9 @@ impl AgentState {
     pub(crate) fn silent_child_for(&self, now: Timestamp, stalled_after_secs: u32) -> Option<u64> {
         (self.is_launched_child()
             && self.ended_at.is_none()
+            && self.displayed_turn_error().is_none()
             && is_stalled(
-                self.rowless_status().0,
+                self.effective_status(),
                 self.last_activity,
                 now,
                 stalled_after_secs,

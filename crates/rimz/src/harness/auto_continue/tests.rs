@@ -946,7 +946,7 @@ fn limit_replies_preserve_pacing_and_retry_cap() {
         }
         if now == 6_599 {
             assert!(
-                exhausted_parks(&snapshot, &runtime, &config, &messages).contains(&(
+                exhausted_parks(&snapshot.agents, &runtime, &config, &messages).contains(&(
                     snapshot.agents[0].kind.clone(),
                     snapshot.agents[0].agent_id.clone()
                 ))
@@ -1187,7 +1187,7 @@ fn phantom_spawns_never_exhaust_a_park() {
     };
 
     assert!(nudge_due(&record, 0, ts(6_000), &config));
-    assert!(exhausted_parks(&snapshot, &runtime, &config, &[]).is_empty());
+    assert!(exhausted_parks(&snapshot.agents, &runtime, &config, &[]).is_empty());
 }
 
 #[test]
@@ -1216,9 +1216,54 @@ fn exhausted_resume_attempts_report_actionable_key() {
         resume_message(3, MessageStatus::Queued, 5_940),
     ];
     assert!(
-        exhausted_parks(&snapshot, &runtime, &config, &messages).contains(&(
+        exhausted_parks(&snapshot.agents, &runtime, &config, &messages).contains(&(
             AgentKind::new_unchecked("claude"),
             AgentSessionId::from("sess")
         ))
     );
+}
+
+#[test]
+fn park_demotion_counts_delivered_outcomes_without_live_messages() {
+    let (dir, runtime) = temp_runtime();
+    let state = crate::StatePaths::under(runtime.workspace_id.clone(), dir.path()).unwrap();
+    let mut agent = parked_agent(6_001, 6_002, TurnErrorClass::PausedRateLimit, "usage limit");
+    agent.user_turn_started_at = Some(ts(6_001));
+    let mut record = rate_record(5_000, 6_001, Some(6_000), 0);
+    record.attempts_since = Some(ts(1_000));
+    write_park(&park_path(&runtime), &record);
+    // The rollup retains only the latest terminal outcome per agent card.
+    let outcomes = [ResumeOutcome {
+        message_id: MessageId::parse("msg_0000000000000001").unwrap(),
+        kind: agent.kind.clone(),
+        agent_id: agent.agent_id.clone(),
+        agent_name: agent.name.clone(),
+        status: MessageStatus::Delivered,
+        enqueued_at: ts(6_000),
+        updated_at: ts(6_000),
+    }];
+    let mut config = crate::config::MachineConfig::default();
+    config.resume.auto_continue = true;
+    config.resume.auto_continue_max_retries = 1;
+    let demotion = park_demotion(
+        None,
+        &state,
+        &runtime,
+        &config,
+        std::slice::from_ref(&agent),
+        &outcomes,
+        ts(6_100),
+    );
+    assert!(demotion.is_spent(&agent, TurnErrorClass::PausedRateLimit));
+    config.resume.auto_continue = false;
+    let demotion = park_demotion(
+        None,
+        &state,
+        &runtime,
+        &config,
+        std::slice::from_ref(&agent),
+        &outcomes,
+        ts(6_100),
+    );
+    assert!(!demotion.is_spent(&agent, TurnErrorClass::PausedRateLimit));
 }

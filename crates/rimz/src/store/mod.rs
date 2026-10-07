@@ -169,8 +169,12 @@ impl Store {
         &self,
         scope: runtime::RuntimeScope,
     ) -> Result<runtime::RuntimeProjection> {
-        let (_, agents, _) = snapshot::catch_up_rollup(&self.inner.paths)?;
-        Ok(runtime::RuntimeProjection::from_parts(agents, scope))
+        let (_, agents, resume_outcomes) = snapshot::catch_up_rollup(&self.inner.paths)?;
+        Ok(runtime::RuntimeProjection::from_parts(
+            agents,
+            scope,
+            resume_outcomes,
+        ))
     }
 
     /// Build a fresh snapshot in memory (no disk write). Lock-free and

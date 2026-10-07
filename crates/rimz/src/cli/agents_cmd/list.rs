@@ -44,8 +44,20 @@ pub(super) fn list_agents(
         })
         .collect();
     let now = jiff::Timestamp::now();
+    let machine_config = crate::cli::machine_config();
+    let store = crate::cli::open_existing_store(&workspace)?;
+    let demotion = rimz::harness::park_demotion(
+        store.as_ref(),
+        &state,
+        &runtime,
+        &machine_config,
+        &snapshot.agents,
+        snapshot.resume_outcomes.as_deref().unwrap_or_default(),
+        now,
+    );
     if json {
-        let audit = crate::cli::open_existing_store(&workspace)?
+        let audit = store
+            .as_ref()
             .map(|store| store.runtime_projection(rimz::RuntimeScope::Audit))
             .transpose()
             .context("reading audit agent rollup")?
@@ -69,6 +81,7 @@ pub(super) fn list_agents(
                 .get(),
         );
         return render::json_pretty(&build_list_report(
+            &demotion,
             &snapshot,
             &agents,
             now,
@@ -78,9 +91,9 @@ pub(super) fn list_agents(
         ));
     }
 
-    let machine_config = crate::cli::machine_config();
     let mut out = render::out();
     render_agents_table(
+        &demotion,
         &mut out,
         &snapshot,
         &agents,
@@ -126,6 +139,7 @@ pub(super) fn pr_info(group: &SidebarWorktreeGroup) -> Option<PrInfo> {
 }
 
 pub(crate) fn render_agents_table(
+    demotion: &rimz::agents::ParkDemotion,
     w: &mut impl std::io::Write,
     snapshot: &SidebarSnapshot,
     agents: &[&AgentState],
@@ -151,6 +165,7 @@ pub(crate) fn render_agents_table(
         let pr = group_pr(snapshot, &group.key).and_then(pr_info);
         for &agent in &group.agents {
             let report = build_entry(
+                demotion,
                 agent,
                 row_for_agent(snapshot, agent),
                 pr,
@@ -378,6 +393,7 @@ mod tests {
 
         let peers: Vec<&AgentState> = snapshot.pane_bound_roots().collect();
         let report = build_list_report(
+            &rimz::agents::ParkDemotion::default(),
             &snapshot,
             &peers,
             jiff::Timestamp::UNIX_EPOCH,
@@ -468,7 +484,15 @@ mod tests {
         );
 
         let refs = snapshot.agents.iter().collect::<Vec<_>>();
-        let entries = build_list_report(&snapshot, &refs, now, None, &[], &Default::default());
+        let entries = build_list_report(
+            &rimz::agents::ParkDemotion::default(),
+            &snapshot,
+            &refs,
+            now,
+            None,
+            &[],
+            &Default::default(),
+        );
         let linked = entries
             .agents
             .iter()
