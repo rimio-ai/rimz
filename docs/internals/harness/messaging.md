@@ -85,6 +85,7 @@ These are the producers of queued or launch-time text. Paths are relative to `cr
 | Subagent fleet digest | `cli/agents_cmd/subagent_report.rs::report_fleet_with_kind`, text from `compose_digest` | `Harness { notice: SubagentReport }` / `Prompt` |
 | Team report | `cli/agents_cmd/team_report.rs::report_team` | `Harness { notice: TeamReport }` / `Prompt` |
 | Child parked on a provider limit | `cli/agents_cmd/park_notice.rs::run`, text from `harness/park_notice.rs::text`, via `message/synthetic.rs::SyntheticMessage` | `Harness { notice: SubagentPaused }` / `Prompt` |
+| Silent launched child | `cli/agents_cmd/stall_notice.rs::run`, text from `harness/stall_notice.rs::text`, via `message/synthetic.rs::SyntheticMessage` | `Harness { notice: SubagentStalled }` / `Prompt` |
 | Prompt-cache keepalive | `cli/agents_cmd/cache_keepalive.rs::run`, text from `harness/cache_keepalive.rs::prompt`, via `message/synthetic.rs::deliver_now` | `Harness { notice: CacheKeepalive }` / `Prompt` |
 | Auto-continue | `cli/agents_cmd/auto_continue.rs::run_auto_continue`, configured resume text via `message/synthetic.rs::SyntheticMessage` and `deliver_now` (or `attempt_now` for a queued id) | `System` / `Prompt` |
 | Supervised verification reprompt | `harness/prompt_compose.rs::verify_reprompt`, delivered by `cli/supervised/verify.rs::deliver_reprompt` via `message/synthetic.rs::SyntheticMessage` and `deliver_now` | `System` / `Prompt` |
@@ -396,6 +397,7 @@ Content:
 | `AGENT_REPORT` | The status-only fleet digest containing any solo agent row, including `-p --bg` runs and launcher-opened interactive peer turns | `@rimz` |
 | `TEAM_REPORT` | An agent-launched team's leader, reported when the board flips to `Done` or the cohort ends before `Done`, followed by `Memory: <absolute board path>` as seen by the launcher | `@rimz` |
 | `SUBAGENT_PAUSED` | A launched child parked on a provider limit, sent to its parent once per park ([backstops](./subagents.md#backstops)) | `@rimz` |
+| `SUBAGENT_STALLED` | A launched child silent past the stall window, sent to its parent once per run ([backstops](./subagents.md#backstops)) | `@rimz` |
 | `DEADLINE` | A deadline-ladder rung steered to the supervised child | `@rimz` |
 | `WAIT` | A timer, command, or clock wait delivery | `@rimz` |
 | `CACHE_KEEPALIVE` | A neutral prompt-cache ping for a sleeping agent ([policy](./loops.md#prompt-cache-keepalive)) | `@rimz` |

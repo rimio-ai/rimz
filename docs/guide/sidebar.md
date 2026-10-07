@@ -161,7 +161,7 @@ RimZ also derives states rather than waiting for an agent to report one.
 
 **Paused** keeps a card honest when the provider, not the agent, is the blocker. A turn that stops because the budget window is spent, the API is overloaded, or the connection dropped mid-response parks at `⏸` instead of reading as a failure, and with [auto-continue](./loops.md#keep-the-fleet-moving) enabled it resumes by itself once the window resets or the backoff clears.
 
-**Failed** also covers two safety nets RimZ raises without a report: a running agent silent past the stall window (30 minutes by default), and a running agent that repeats one tool call with identical arguments 20 times, whose description then reads `loop: <tool> ×<count>` until a differing call clears the run. A parent quietly waiting on its subagents is exempt from the stall check. Either net can fire on an agent that is still executing, which is deliberate: silence that long, or a twentieth identical call, usually means something needs a look.
+**Failed** also covers two safety nets RimZ raises without a report: a running agent silent past the stall window (30 minutes by default), including a [launched child](./subagents.md#deadlines-stopping-and-cleanup), and a running agent that repeats one tool call with identical arguments 20 times, whose description then reads `loop: <tool> ×<count>` until a differing call clears the run. A parent quietly waiting on its subagents is exempt from the stall check while a child is still working. Either net can fire on an agent that is still executing, which is deliberate: silence that long, or a twentieth identical call, usually means something needs a look.
 
 **Sleeping** distinguishes a finished turn from finished work. After an agent arms a [one-shot wait](./loops.md#wake-a-running-agent) and rests, its card wears a static cool-toned moon and a description such as `wakes in 12m` or `wakes after cargo test`. Sleeping cards rank below running and above idle, and the `☾` bucket on the make-up line counts them.
 
@@ -227,7 +227,7 @@ Inside a group, the six-row cap folds idle cards and process rows behind `+K mor
 
 ## Tuning
 
-Five `[agents.attention]` knobs move the boundaries: `stalled_after_secs` (a silent agent escalates to `!`, 30 minutes), `tool_repeat_warn_after` (an identical-tool run gains `⟲`, 3 calls), `tool_repeat_attention_after` (that run escalates to `!`, 20 calls), `inactive_after_secs` (hot work ends, one hour), and `archive_after_secs` (a card archives, 24 hours). Details in [configuration](./configuration.md#sidebar-rendering).
+Five `[agents.attention]` knobs move the boundaries: `stalled_after_secs` (a silent agent, launched children included, escalates to `!`, 30 minutes), `tool_repeat_warn_after` (an identical-tool run gains `⟲`, 3 calls), `tool_repeat_attention_after` (that run escalates to `!`, 20 calls), `inactive_after_secs` (hot work ends, one hour), and `archive_after_secs` (a card archives, 24 hours). Details in [configuration](./configuration.md#sidebar-rendering).
 
 ## See also
 

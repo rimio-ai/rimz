@@ -231,6 +231,19 @@ The quoted text is the provider's own message; when the provider gave none, the 
 
 The notice does not end or change the run, and it is not the fleet report: the report still arrives once every child has settled. The room's sidebar producer detects the stop, so a room with no sidebar running sends no notice. Detection waits for RimZ to record the provider's error and for a producer refresh; delivery then waits for the parent's next eligible turn boundary. There is no fixed delivery delay.
 
+## A child silent past the stall window
+
+A launched child still running but silent for `[agents.attention] stalled_after_secs` (default `1800`) receives a labelled `!` in the sidebar. A child sleeping on a wait, paused, or already showing an error does not trigger this notice. The parent gets one message parked for its next eligible turn boundary:
+
+```text
+Type: SUBAGENT_STALLED
+From: @rimz
+Content:
+@still-silver has been silent for 32m and is still running; its pane is open. Its run stays open until its deadline in 24m. RimZ will not stop it: look with `rimz pane capture @still-silver`, stop it with `rimz subagents stop @still-silver`, or relaunch the task elsewhere.
+```
+
+The deadline clause is omitted when there is no deadline, or reads `, past its deadline, until it is stopped` after the deadline. The notice is once per run, even if the child recovers and stalls again or a follow-up reopens that run. Fresh activity clears the sidebar's stall label. The notice leaves the run open and does not replace its eventual fleet report. Detection needs the room's sidebar producer; delivery waits for the parent's next eligible boundary. The notice attempt is recorded in [assists](../../internals/harness/loops.md#the-assist-log) and shown by `rimz stats`.
+
 ## Stop children
 
 ```sh
