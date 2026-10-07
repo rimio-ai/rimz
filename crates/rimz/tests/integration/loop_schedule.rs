@@ -721,6 +721,7 @@ fn resident_launch_deduplicates_and_manual_fire_relaunches() {
 #[test]
 fn resident_show_summarizes_worktree_conditions() {
     let env = Env::new();
+    assert!(init_git_repo(&env.project_root));
     write_loop_config(
         &env,
         &format!(
@@ -729,11 +730,177 @@ fn resident_show_summarizes_worktree_conditions() {
         ),
     );
     let summary = loop_ok(&env, &["loop", "show", "resident"]);
-    assert!(
-        summary.contains("condition: evaluated per owned worktree · 0 launched"),
-        "{summary}"
-    );
+    assert!(summary.contains("WORKTREES (0 owned)"), "{summary}");
     assert!(!summary.contains("SUBSCRIPTIONS"), "{summary}");
+}
+
+#[test]
+fn resident_inspector_reads_the_planners_checkout_clocks_without_writes() {
+    let env = Env::new();
+    assert!(init_git_repo(&env.project_root));
+    for name in ["holding", "ready", "waiting"] {
+        loop_ok(&env, &["worktree", "new", name]);
+    }
+    let owned = rimz::worktree::discover_owned(&env.project_root).unwrap();
+    for worktree in &owned {
+        std::fs::write(
+            worktree.path.join("blackboard.md"),
+            if worktree.marker.name == "waiting" {
+                "Stage: Review\n"
+            } else {
+                "Stage: Done\n"
+            },
+        )
+        .unwrap();
+    }
+    let config = format!(
+        "[tasks.resident]\nroot = {:?}\nagent = \"codex\"\nprompt = \"repair\"\nstay = true\neach-worktree = true\nwhen = [\"team.stage=Done\"]\n",
+        env.project_root
+    );
+    write_loop_config(&env, &format!("{config}for = \"3m\"\n"));
+    loop_ok(&env, &["loop", "tick"]);
+    loop_ok(&env, &["loop", "tick"]);
+    let runtime = env.runtime_paths();
+    let when_path = runtime.lane_path("loop-when.json");
+    let mut clocks: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&when_path).unwrap()).unwrap();
+    let now = jiff::Timestamp::now();
+    for worktree in owned
+        .iter()
+        .filter(|worktree| worktree.marker.name != "waiting")
+    {
+        let checkout = rimz::utils::path::normalize_path_lexical(&worktree.marker.worktree_path);
+        let key = serde_json::to_string(&("resident", checkout.to_string_lossy())).unwrap();
+        assert!(clocks[&key].is_object(), "planner clock missing for {key}");
+        clocks[&key]["since"] = json!(
+            now.checked_sub(jiff::SignedDuration::from_secs(
+                if worktree.marker.name == "holding" {
+                    120
+                } else {
+                    180
+                }
+            ))
+            .unwrap()
+        );
+    }
+    let bytes = serde_json::to_vec(&clocks).unwrap();
+    std::fs::write(&when_path, &bytes).unwrap();
+    let shown = loop_ok(&env, &["loop", "show", "resident", "--json"]);
+    let shown: serde_json::Value = serde_json::from_str(&shown).unwrap();
+    assert_eq!(
+        shown["worktrees"]
+            .as_array()
+            .expect("inspected checkout rows")
+            .len(),
+        3
+    );
+    assert_eq!(shown["worktrees"][0]["state"], "holding");
+    assert_eq!(shown["worktrees"][0]["hold_ms"], 180000);
+    assert!(shown["worktrees"][0]["held_ms"].as_u64().unwrap() >= 120000);
+    assert_eq!(shown["worktrees"][1]["state"], "ready");
+    assert_eq!(shown["worktrees"][2]["short"], json!(["team.stage"]));
+    assert_eq!(shown["worktrees"][2]["state"], "waiting");
+    assert_eq!(shown["worktrees"][2]["readings"]["team.stage"], "Review");
+    assert_eq!(
+        std::fs::read(&when_path).unwrap(),
+        bytes,
+        "inspection must not update clocks"
+    );
+    std::fs::remove_file(&when_path).unwrap();
+    let shown = loop_ok(&env, &["loop", "show", "resident", "--json"]);
+    let shown: serde_json::Value = serde_json::from_str(&shown).unwrap();
+    assert_eq!(
+        shown["worktrees"][0]["state"], "holding",
+        "a true condition without a matching clock must start its hold"
+    );
+    assert_eq!(shown["worktrees"][0]["hold_ms"], 180000);
+    assert_eq!(shown["worktrees"][0]["held_ms"], 0);
+    assert!(
+        shown["worktrees"][0]["since"]
+            .as_str()
+            .unwrap()
+            .parse::<Timestamp>()
+            .unwrap()
+            >= now
+    );
+    let summary = loop_ok(&env, &["loop", "show", "resident"]);
+    assert_eq!(summary.matches("holding 0s/3m").count(), 2, "{summary}");
+    assert!(
+        !when_path.exists(),
+        "inspection must not start a stored clock"
+    );
+    let mut stale = clocks;
+    for clock in stale.as_object_mut().unwrap().values_mut() {
+        clock["fingerprint"][0] = json!("team.stage=Review");
+    }
+    let stale = serde_json::to_vec(&stale).unwrap();
+    std::fs::write(&when_path, &stale).unwrap();
+    let shown = loop_ok(&env, &["loop", "show", "resident", "--json"]);
+    let shown: serde_json::Value = serde_json::from_str(&shown).unwrap();
+    assert_eq!(shown["worktrees"][0]["state"], "holding");
+    assert_eq!(shown["worktrees"][0]["held_ms"], 0);
+    assert_eq!(std::fs::read(&when_path).unwrap(), stale);
+    write_loop_config(&env, &config);
+    let shown = loop_ok(&env, &["loop", "show", "resident", "--json"]);
+    let shown: serde_json::Value = serde_json::from_str(&shown).unwrap();
+    assert_eq!(shown["worktrees"][0]["state"], "ready");
+    assert_eq!(shown["worktrees"][1]["state"], "ready");
+}
+
+#[test]
+fn resident_show_json_adds_unfolded_worktrees_and_keeps_existing_keys() {
+    let env = Env::new();
+    assert!(init_git_repo(&env.project_root));
+    loop_ok(&env, &["worktree", "new", "waiting"]);
+    let owned = rimz::worktree::discover_owned(&env.project_root).unwrap();
+    write_loop_config(
+        &env,
+        &format!(
+            "[tasks.resident]\nroot = {:?}\nagent = \"codex\"\nprompt = \"repair\"\nstay = true\neach-worktree = true\nwhen = [\"pr=open && ci=passed && team.stage=Done\"]\n",
+            env.project_root
+        ),
+    );
+    let raw = loop_ok(&env, &["loop", "show", "resident", "--json"]);
+    let shown: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    for key in [
+        "task", "entry", "launches", "runs", "running", "held", "waiting",
+    ] {
+        assert!(shown.get(key).is_some(), "existing key {key} must remain");
+    }
+    assert_eq!(
+        shown["worktrees"]
+            .as_array()
+            .expect("additive worktrees array")
+            .len(),
+        1
+    );
+    assert_eq!(
+        shown["worktrees"][0]["checkout"],
+        rimz::utils::path::normalize_path_lexical(&owned[0].marker.worktree_path)
+            .to_string_lossy()
+            .as_ref()
+    );
+    assert_eq!(shown["worktrees"][0]["name"], "waiting");
+    assert_eq!(shown["worktrees"][0]["state"], "waiting");
+    assert_eq!(
+        shown["worktrees"][0]["readings"],
+        json!({"pr": null, "ci": null, "team.stage": null})
+    );
+    assert_eq!(
+        shown["worktrees"][0]["short"],
+        json!(["pr", "ci", "team.stage"])
+    );
+    let readings = raw.split("\"readings\"").last().unwrap();
+    assert!(
+        readings.find("\"pr\"").unwrap() < readings.find("\"ci\"").unwrap(),
+        "readings must follow expression order: {raw}"
+    );
+    let all = loop_ok(&env, &["loop", "show", "resident", "--all"]);
+    assert!(
+        all.lines().any(|line| line.starts_with("  waiting ")),
+        "{all}"
+    );
+    assert!(!all.contains("… 1 more waiting"), "{all}");
 }
 
 #[test]
@@ -1299,9 +1466,18 @@ fn resident_launch_case(each_worktree: bool, team: bool) {
         expected_checkout.to_string_lossy().as_ref()
     );
     if each_worktree {
+        let row = &shown["worktrees"][0];
+        assert_eq!(
+            row["checkout"],
+            expected_checkout.to_string_lossy().as_ref()
+        );
+        assert_eq!(row["state"], "launched");
+        assert!(row["leader"].is_string() && row["since"].is_string());
+        assert!(row.get("leader_status").is_some(), "{row}");
+        assert_eq!(row["armed"], 0);
         let summary = loop_ok(&env, &["loop", "show", "resident"]);
         assert!(
-            summary.contains("condition: evaluated per owned worktree · 1 launched"),
+            summary.contains("WORKTREES (1 owned · 1 launched)"),
             "{summary}"
         );
         assert!(!summary.contains("condition: unarmed"), "{summary}");
@@ -1521,6 +1697,14 @@ fn resident_takeover_case(case: Takeover) {
     }
     let runtime = env.runtime_paths();
     crate::common::room::seed_live_zellij_room(&runtime, &workspace.session_name, Vec::new());
+    if symlinked {
+        std::fs::write(
+            runtime.lane_path("pr-state.json"),
+            json!({"states": {launch_cwd.to_string_lossy().to_string(): {"state": "open"}}})
+                .to_string(),
+        )
+        .unwrap();
+    }
     let agent_bin = crate::common::write_failing_agent_shim(&env, "codex", 1);
     let shell = write_fake_login_shell(&env, "rimz-test-sh", &[]);
     let trace = env.home_root.join("takeover.log");
@@ -1641,6 +1825,24 @@ fn resident_takeover_case(case: Takeover) {
             strikes
         );
         assert_eq!(read_loop_instances(&env).0.len(), 2);
+        if symlinked {
+            let shown = command()
+                .args(["loop", "show", "resident", "--json"])
+                .output()
+                .unwrap();
+            assert!(
+                shown.status.success(),
+                "{}",
+                String::from_utf8_lossy(&shown.stderr)
+            );
+            let shown: serde_json::Value = serde_json::from_slice(&shown.stdout).unwrap();
+            let row = &shown["worktrees"][0];
+            assert_eq!(row["checkout"], checkout.to_string_lossy().as_ref());
+            assert_eq!(row["state"], "blocked");
+            assert_eq!(row["blocked"]["count"], 1);
+            assert_eq!(row["blocked"]["reason"], reason);
+            assert_eq!(row["blocked"]["since"], json!(record.at));
+        }
         assert_eq!(
             store
                 .runtime_projection(rimz::RuntimeScope::Audit)

@@ -1,6 +1,8 @@
 //! List, show, and log loop task state.
 
 use super::*;
+use schedule::fanout::{CheckoutCondition, CheckoutState};
+use schedule::when::{Verdict, WhenExpr};
 
 const NOTE_MAX: usize = 60;
 const BLOCKED_WARN_AFTER_SECS: i64 = 30 * 60;
@@ -252,6 +254,8 @@ struct ShowView {
     config: std::sync::Arc<MachineConfig>,
     throttle: ShowThrottle,
     show_agent_runs: bool,
+    worktrees: Vec<schedule::fanout::CheckoutCondition>,
+    all: bool,
 }
 
 impl ShowView {
@@ -318,24 +322,36 @@ fn leader_statuses(
         .collect()
 }
 
-fn write_attention(out: &mut impl Write, view: &ShowView) -> std::io::Result<()> {
+fn write_attention(
+    out: &mut impl Write,
+    view: &ShowView,
+    rows: &[WorktreeRow<'_>],
+) -> std::io::Result<()> {
     let now = view.now_zoned.timestamp();
-    let blocked = view
-        .takeover_refusals()
+    let blocked = if view.entry.each_worktree {
+        rows.iter()
+            .filter_map(|row| Some((row.condition.name.clone(), row.blocked.as_ref()?.0)))
+            .collect::<Vec<_>>()
+    } else {
+        view.takeover_refusals()
+            .into_iter()
+            .filter(|(checkout, _)| !view.launches.contains_key(*checkout))
+            .filter_map(|(checkout, refusal)| {
+                Some((
+                    checkout
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .into_owned(),
+                    refusal.active_since?,
+                ))
+            })
+            .collect()
+    };
+    let blocked = blocked
         .into_iter()
-        .filter(|(checkout, refusal)| {
-            !view.launches.contains_key(*checkout)
-                && refusal.active_since.is_some_and(|since| {
-                    now.duration_since(since).as_secs() >= BLOCKED_WARN_AFTER_SECS
-                })
-        })
-        .map(|(checkout, _)| {
-            checkout
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .into_owned()
-        })
+        .filter(|(_, since)| now.duration_since(*since).as_secs() >= BLOCKED_WARN_AFTER_SECS)
+        .map(|(name, _)| name)
         .collect::<Vec<_>>();
     if !blocked.is_empty() {
         writeln!(
@@ -383,6 +399,337 @@ fn write_attention(out: &mut impl Write, view: &ShowView) -> std::io::Result<()>
     Ok(())
 }
 
+struct WorktreeRow<'a> {
+    condition: &'a CheckoutCondition,
+    blocked: Option<(Timestamp, CheckoutRefusals<'a>)>,
+    leader_status: Option<rimz::agents::AgentStatus>,
+    armed: usize,
+    short: Vec<&'a str>,
+}
+
+impl WorktreeRow<'_> {
+    fn state_name(&self) -> &'static str {
+        if self.blocked.is_some() {
+            return "blocked";
+        }
+        match self.condition.state {
+            CheckoutState::Launched { .. } => "launched",
+            CheckoutState::Holding { .. } => "holding",
+            CheckoutState::Ready { .. } => "ready",
+            CheckoutState::Waiting { .. } => "waiting",
+        }
+    }
+
+    fn rank(&self) -> u8 {
+        if self.blocked.is_some() {
+            return 0;
+        }
+        match self.condition.state {
+            CheckoutState::Ready { .. } => 1,
+            CheckoutState::Holding { .. } => 2,
+            CheckoutState::Waiting { .. } if self.short.len() <= 1 => 3,
+            CheckoutState::Waiting { .. } => 4,
+            CheckoutState::Launched { .. } if self.leader_status.is_some() => 5,
+            CheckoutState::Launched { .. } => 6,
+        }
+    }
+}
+
+fn worktree_expr(view: &ShowView) -> Option<&WhenExpr> {
+    let schedule::Trigger::Condition { expr, .. } = &view.timing.parsed().ok()?.trigger else {
+        return None;
+    };
+    Some(expr)
+}
+
+fn worktree_verdict(state: &CheckoutState) -> Option<&Verdict> {
+    match state {
+        CheckoutState::Launched { .. } => None,
+        CheckoutState::Holding { verdict, .. }
+        | CheckoutState::Ready { verdict, .. }
+        | CheckoutState::Waiting { verdict } => Some(verdict),
+    }
+}
+
+fn worktree_rows<'a>(view: &'a ShowView, expr: Option<&'a WhenExpr>) -> Vec<WorktreeRow<'a>> {
+    let mut refusals = view.takeover_refusals();
+    view.worktrees
+        .iter()
+        .map(|condition| {
+            let blocked = if matches!(condition.state, CheckoutState::Ready { .. }) {
+                refusals
+                    .remove(condition.checkout.as_path())
+                    .and_then(|refusal| Some((refusal.active_since?, refusal)))
+            } else {
+                None
+            };
+            let mut short = Vec::new();
+            if let (Some(expr), Some(verdict)) = (expr, worktree_verdict(&condition.state)) {
+                for term in expr.terms() {
+                    if !term.matches(
+                        verdict
+                            .readings
+                            .get(&term.key)
+                            .and_then(|value| value.as_deref()),
+                    ) && !short.contains(&term.key.as_str())
+                    {
+                        short.push(term.key.as_str());
+                    }
+                }
+            }
+            let leader_status = match &condition.state {
+                CheckoutState::Launched { leader, .. } => view.leader_statuses.get(leader).copied(),
+                _ => None,
+            };
+            let armed = view
+                .subscriptions
+                .iter()
+                .filter(|subscription| subscription.checkout == condition.checkout)
+                .count();
+            WorktreeRow {
+                condition,
+                blocked,
+                leader_status,
+                armed,
+                short,
+            }
+        })
+        .collect()
+}
+
+fn write_worktrees(
+    out: &mut impl Write,
+    view: &ShowView,
+    expr: Option<&WhenExpr>,
+    mut rows: Vec<WorktreeRow<'_>>,
+) -> Result<()> {
+    let mut counts = vec![format!("{} owned", rows.len())];
+    for state in ["blocked", "ready", "holding", "waiting", "launched"] {
+        let count = rows.iter().filter(|row| row.state_name() == state).count();
+        if count > 0 {
+            counts.push(format!("{count} {state}"));
+        }
+    }
+    writeln!(
+        out,
+        "\n{}",
+        ui::paint(
+            ui::palette::header(),
+            &format!("WORKTREES ({})", counts.join(" · "))
+        )
+    )?;
+    if !view.room_is_open
+        && expr.is_some_and(WhenExpr::reads_forge)
+        && let Ok(parsed) = view.timing.parsed()
+    {
+        condition::write_no_room_hint(out, parsed)?;
+    }
+    let mut keys = std::collections::BTreeSet::new();
+    let terms = expr
+        .map(|expr| {
+            expr.terms()
+                .filter(|term| keys.insert(term.key.as_str()))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let mut headers = vec!["WORKTREE", "STATE"];
+    headers.extend(terms.iter().map(|term| term.key.as_str()));
+    headers.push("LEADER");
+    let mut table = ui::Table::new(headers).indent(2);
+    rows.sort_by(|a, b| {
+        a.rank()
+            .cmp(&b.rank())
+            .then_with(|| match (&a.condition.state, &b.condition.state) {
+                (CheckoutState::Launched { at: a, .. }, CheckoutState::Launched { at: b, .. }) => {
+                    b.cmp(a)
+                }
+                _ => std::cmp::Ordering::Equal,
+            })
+            .then(a.condition.name.cmp(&b.condition.name))
+    });
+    let now = view.now_zoned.timestamp();
+    for row in &rows {
+        if !view.all && matches!(row.rank(), 4 | 6) {
+            continue;
+        }
+        let state = if let Some((since, _)) = &row.blocked {
+            format!("ready · blocked {}", ui::rel_age(*since, now))
+        } else {
+            match &row.condition.state {
+                CheckoutState::Launched { at, .. } => format!("launched {}", ui::rel_age(*at, now)),
+                CheckoutState::Holding { since, hold, .. } => schedule::TaskTimingState::Holding {
+                    elapsed: Duration::from_millis(
+                        u64::try_from(now.duration_since(*since).as_millis()).unwrap_or(0),
+                    ),
+                    hold: *hold,
+                }
+                .condition_label()
+                .unwrap_or_default(),
+                CheckoutState::Ready { .. } => "ready".into(),
+                CheckoutState::Waiting { .. } => "waiting".into(),
+            }
+        };
+        let mut cells = vec![ui::cell(&row.condition.name), ui::cell(state)];
+        for term in &terms {
+            let Some(verdict) =
+                worktree_verdict(&row.condition.state).filter(|_| row.blocked.is_none())
+            else {
+                cells.push(ui::cell(""));
+                continue;
+            };
+            let value = verdict
+                .readings
+                .get(&term.key)
+                .and_then(|value| value.as_deref());
+            let role = if term.matches(value) {
+                ui::status::StateRole::Success
+            } else {
+                ui::status::StateRole::Failed
+            };
+            let (glyph, style) = ui::verdict(role);
+            cells.push(ui::cell(format!("{glyph} {}", value.unwrap_or("unknown"))).fg(style));
+        }
+        let leader = if let Some((_, refusal)) = &row.blocked {
+            refusal.reason.to_owned()
+        } else if let CheckoutState::Launched { leader, .. } = &row.condition.state {
+            row.leader_status.map_or_else(
+                || format!("@{leader} ended"),
+                |status| format!("@{leader}  {} · {} armed", status.as_str(), row.armed),
+            )
+        } else {
+            String::new()
+        };
+        cells.push(ui::cell(leader));
+        table.row(cells);
+    }
+    table.render(out)?;
+    if !view.all {
+        for (rank, label) in [
+            (4, "more waiting on two or more terms"),
+            (6, "launched, leader ended"),
+        ] {
+            let count = rows.iter().filter(|row| row.rank() == rank).count();
+            if count > 0 {
+                writeln!(
+                    out,
+                    "  {}",
+                    ui::paint(ui::palette::muted(), &format!("… {count} {label}"))
+                )?;
+            }
+        }
+    }
+    Ok(())
+}
+
+struct ConditionReadings<'a> {
+    expr: &'a WhenExpr,
+    verdict: &'a Verdict,
+}
+
+impl serde::Serialize for ConditionReadings<'_> {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut map = serializer.serialize_map(None)?;
+        for (key, value) in self.expr.readings(self.verdict) {
+            map.serialize_entry(key, &value)?;
+        }
+        map.end()
+    }
+}
+
+#[derive(serde::Serialize)]
+struct WorktreeJson<'a> {
+    checkout: &'a Path,
+    name: &'a str,
+    state: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    since: Option<Timestamp>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    hold_ms: Option<u128>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    held_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    readings: Option<ConditionReadings<'a>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    short: Option<Vec<&'a str>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    leader: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    leader_status: Option<Option<&'static str>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    armed: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    blocked: Option<BlockedJson<'a>>,
+}
+
+#[derive(serde::Serialize)]
+struct BlockedJson<'a> {
+    count: usize,
+    since: Timestamp,
+    reason: &'a str,
+}
+
+fn worktrees_json(view: &ShowView) -> Vec<WorktreeJson<'_>> {
+    let expr = worktree_expr(view);
+    worktree_rows(view, expr)
+        .into_iter()
+        .map(|row| {
+            let readings = expr
+                .zip(worktree_verdict(&row.condition.state))
+                .map(|(expr, verdict)| ConditionReadings { expr, verdict });
+            let mut json = WorktreeJson {
+                checkout: &row.condition.checkout,
+                name: &row.condition.name,
+                state: row.state_name(),
+                since: None,
+                hold_ms: None,
+                held_ms: None,
+                short: readings.as_ref().map(|_| row.short),
+                readings,
+                leader: None,
+                leader_status: None,
+                armed: None,
+                blocked: None,
+            };
+            match &row.condition.state {
+                CheckoutState::Launched { leader, at } => {
+                    json.since = Some(*at);
+                    json.leader = Some(leader);
+                    json.leader_status = Some(row.leader_status.map(|status| status.as_str()));
+                    json.armed = Some(row.armed);
+                }
+                CheckoutState::Holding { since, hold, .. } => {
+                    json.since = Some(*since);
+                    json.hold_ms = Some(hold.as_millis());
+                    json.held_ms = Some(
+                        u64::try_from(
+                            view.now_zoned
+                                .timestamp()
+                                .duration_since(*since)
+                                .as_millis(),
+                        )
+                        .unwrap_or(0),
+                    );
+                }
+                CheckoutState::Ready { since, .. } => json.since = Some(*since),
+                CheckoutState::Waiting { .. } => {}
+            }
+            if let Some((since, refusal)) = row.blocked {
+                json.since = Some(since);
+                json.blocked = Some(BlockedJson {
+                    count: refusal.count,
+                    since,
+                    reason: refusal.reason,
+                });
+            }
+            json
+        })
+        .collect()
+}
+
 fn render_show(out: &mut impl Write, view: &ShowView, runs: usize) -> Result<()> {
     let now = view.now_zoned.timestamp();
     write_show_headline(
@@ -400,8 +747,16 @@ fn render_show(out: &mut impl Write, view: &ShowView, runs: usize) -> Result<()>
         view.in_flight.is_some(),
         now,
     )?;
-    write_attention(out, view)?;
-    if !view.launches.is_empty() {
+    let expr = worktree_expr(view);
+    let rows = if view.entry.each_worktree {
+        worktree_rows(view, expr)
+    } else {
+        Vec::new()
+    };
+    write_attention(out, view, &rows)?;
+    if view.entry.each_worktree {
+        write_worktrees(out, view, expr, rows)?;
+    } else if !view.launches.is_empty() {
         writeln!(out, "\nLAUNCHES")?;
         let mut launches = view.launches.iter().collect::<Vec<_>>();
         launches.sort_by(|a, b| b.1.at.cmp(&a.1.at).then(a.0.cmp(b.0)));
@@ -415,13 +770,7 @@ fn render_show(out: &mut impl Write, view: &ShowView, runs: usize) -> Result<()>
             )?;
         }
     }
-    if view.entry.each_worktree {
-        writeln!(
-            out,
-            "condition: evaluated per owned worktree · {} launched",
-            view.launches.len()
-        )?;
-    } else {
+    if !view.entry.each_worktree {
         write!(out, "{}", view.condition)?;
     }
     if view.records.is_empty() {
@@ -508,38 +857,32 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
         BTreeMap::new()
     };
     let in_flight = displayed_in_flight(&args.name, in_flight_run(&args.name, &root));
-    if args.json {
-        let running = in_flight.as_ref().map(|in_flight| {
-            serde_json::json!({
-                "pid": in_flight.holder.map(|info| info.pid),
-                "started_at": in_flight.holder.map(|info| info.started_at),
-                "run_id": in_flight.run.as_ref().map(|run| &run.run_id),
-            })
-        });
-        let (held, waiting) = in_flight.as_ref().map_or((None, Vec::new()), |in_flight| {
-            let (own, others) = split_held(in_flight.holder, &in_flight.held);
-            (own.map(held_json), others.map(held_json).collect())
-        });
-        writeln!(
-            ui::out(),
-            "{}",
-            serde_json::to_string_pretty(
-                &serde_json::json!({ "task": args.name, "entry": entry, "launches": launches, "runs": records, "running": running, "held": held, "waiting": waiting })
-            )?
-        )?;
-        return Ok(());
-    }
+    let room_is_open = room_open(&root);
+    let worktrees = if entry.each_worktree {
+        let runtime = runtime
+            .as_ref()
+            .context("resolving loop worktree runtime paths")?;
+        let ci_source = room_is_open.then(|| schedule::when::CiSource::read(runtime));
+        schedule::fanout::inspect(&args.name, &task, runtime, ci_source.as_ref(), now)?
+    } else {
+        Vec::new()
+    };
     let mut condition = Vec::new();
-    if !entry.each_worktree {
+    if !args.json && !entry.each_worktree {
         condition::write_show(&mut condition, entry, &timing)?;
     }
-    let subscriptions = load_subscriptions(&args.name, &root, &now_zoned)?;
-    let store = if !launches.is_empty() || entry.wait.is_some() {
-        let workspace = WorkspaceResolver::resolve(&root, Some(root.clone()))?;
-        super::super::open_existing_store(&workspace)?
+    let subscriptions = if !args.json || entry.each_worktree {
+        load_subscriptions(&args.name, &root, &now_zoned)?
     } else {
-        None
+        Vec::new()
     };
+    let store =
+        if (!args.json || entry.each_worktree) && (!launches.is_empty() || entry.wait.is_some()) {
+            let workspace = WorkspaceResolver::resolve(&root, Some(root.clone()))?;
+            super::super::open_existing_store(&workspace)?
+        } else {
+            None
+        };
     let snapshot = store
         .as_ref()
         .map(|store| store.snapshot_cached())
@@ -561,7 +904,7 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
         .zip(entry.wait.as_ref())
         .is_some_and(|((kind, session), target)| kind == target.kind && session == target.session);
     let config = MachineConfig::load_lenient();
-    let throttle = if entry.throttle == Some(rimz::config::ThrottleSwitch::Off) {
+    let throttle = if args.json || entry.throttle == Some(rimz::config::ThrottleSwitch::Off) {
         ShowThrottle::Off
     } else if config.r#loop.throttle.has_limits()
         || in_flight.as_ref().is_some_and(|run| !run.held.is_empty())
@@ -572,7 +915,7 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
     };
     let view = ShowView {
         strike_count: strikes::load().get(&key).copied().unwrap_or(0),
-        room_is_open: room_open(&root),
+        room_is_open,
         show_agent_runs: has_agent_runs_section(&task),
         name: args.name,
         entry: entry.clone(),
@@ -588,7 +931,37 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
         you,
         config,
         throttle,
+        worktrees,
+        all: args.all,
     };
+    if args.json {
+        let running = view.in_flight.as_ref().map(|in_flight| {
+            serde_json::json!({
+                "pid": in_flight.holder.map(|info| info.pid),
+                "started_at": in_flight.holder.map(|info| info.started_at),
+                "run_id": in_flight.run.as_ref().map(|run| &run.run_id),
+            })
+        });
+        let (held, waiting) = view
+            .in_flight
+            .as_ref()
+            .map_or((None, Vec::new()), |in_flight| {
+                let (own, others) = split_held(in_flight.holder, &in_flight.held);
+                (own.map(held_json), others.map(held_json).collect())
+            });
+        #[derive(serde::Serialize)]
+        struct ShowJson<'a> {
+            #[serde(flatten)]
+            facts: serde_json::Value,
+            worktrees: Vec<WorktreeJson<'a>>,
+        }
+        let json = ShowJson {
+            facts: serde_json::json!({ "task": view.name, "entry": view.entry, "launches": view.launches, "runs": view.records, "running": running, "held": held, "waiting": waiting }),
+            worktrees: worktrees_json(&view),
+        };
+        writeln!(ui::out(), "{}", serde_json::to_string_pretty(&json)?)?;
+        return Ok(());
+    }
     render_show(&mut ui::out(), &view, args.runs)
 }
 

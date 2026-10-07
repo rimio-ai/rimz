@@ -42,6 +42,11 @@ struct ScopedTask {
     task: LoadedTask,
 }
 
+pub(super) fn scope_key(name: &str, checkout: &Path) -> String {
+    // A tuple of strings is always JSON-serializable; unlike concatenation, it cannot collide with another pair.
+    serde_json::to_string(&(name, checkout.to_string_lossy())).expect("string tuple serializes")
+}
+
 fn scoped_tasks(
     tasks: &BTreeMap<String, LoadedTask>,
     ledger: &super::launch_ledger::Ledger,
@@ -72,9 +77,7 @@ fn scoped_tasks(
             if launches.is_some_and(|launches| launches.contains_key(&checkout)) {
                 continue;
             }
-            // A tuple of strings is always JSON-serializable; unlike concatenation, it cannot collide with another pair.
-            let key = serde_json::to_string(&(name, checkout.to_string_lossy()))
-                .expect("string tuple serializes");
+            let key = scope_key(name, &checkout);
             scoped.insert(
                 key,
                 ScopedTask {
@@ -441,7 +444,7 @@ fn plan(
                 let fingerprint = Some((expr.to_string(), *hold, task.entry().run_dir()));
                 let mut state = when_states
                     .get(name)
-                    .filter(|state| state.fingerprint == fingerprint)
+                    .filter(|state| state.matches_condition(expr, *hold, &task.entry().run_dir()))
                     .cloned()
                     .unwrap_or(WhenState {
                         fingerprint,

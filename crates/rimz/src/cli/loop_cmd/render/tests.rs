@@ -71,6 +71,19 @@ fn show_view(each_worktree: bool) -> ShowView {
             "cpu 14%/18% · io 26%/22% · memory 0%/0% (avg10/avg60)".into(),
         )),
         show_agent_runs: true,
+        worktrees: [("older", "old-leader", 10), ("newer", "new-leader", 90)]
+            .map(
+                |(name, leader, second)| schedule::fanout::CheckoutCondition {
+                    checkout: PathBuf::from(format!("/repo/{name}")),
+                    name: name.into(),
+                    state: schedule::fanout::CheckoutState::Launched {
+                        leader: leader.into(),
+                        at: Timestamp::from_second(second).unwrap(),
+                    },
+                },
+            )
+            .into(),
+        all: false,
     }
 }
 
@@ -81,7 +94,7 @@ fn show_text(view: &ShowView) -> String {
 }
 
 #[test]
-fn show_fanout_verdict_precedes_launches_and_has_no_subscriptions_section() {
+fn show_fanout_verdict_precedes_worktrees_and_has_no_subscriptions_section() {
     let view = show_view(true);
     let text = show_text(&view);
     assert!(
@@ -95,8 +108,7 @@ fn show_fanout_verdict_precedes_launches_and_has_no_subscriptions_section() {
         "{text}"
     );
     let sections = [
-        "LAUNCHES",
-        "condition: evaluated per owned worktree · 2 launched",
+        "WORKTREES (2 owned · 2 launched)",
         "LAST RUN",
         "AGENT RUNS",
         "RECENT RUNS",
@@ -105,15 +117,232 @@ fn show_fanout_verdict_precedes_launches_and_has_no_subscriptions_section() {
     let positions = sections.map(|section| text.find(section).expect(section));
     assert!(positions.windows(2).all(|pair| pair[0] < pair[1]), "{text}");
     assert!(!text.contains("SUBSCRIPTIONS"), "{text}");
-    assert!(text.contains("  newer  @new-leader  10s ago"), "{text}");
+    assert!(text.contains("… 2 launched, leader ended"), "{text}");
     assert!(
-        text.find("  newer").unwrap() < text.find("  older").unwrap(),
+        !text.contains("LAUNCHES") && !text.contains("condition:"),
         "{text}"
     );
     assert!(
         !text.contains("/repo/newer") && !text.contains("1970-"),
         "{text}"
     );
+}
+
+fn worktree_view() -> ShowView {
+    use schedule::fanout::{CheckoutCondition, CheckoutState};
+    let mut view = show_view(true);
+    view.now_zoned = Timestamp::from_second(3600)
+        .unwrap()
+        .to_zoned(jiff::tz::TimeZone::UTC);
+    let verdict = |pr: Option<&str>, ci: Option<&str>| schedule::when::Verdict {
+        ok: pr == Some("open") && ci == Some("passed"),
+        readings: BTreeMap::from([
+            ("pr".into(), pr.map(str::to_owned)),
+            ("ci".into(), ci.map(str::to_owned)),
+        ]),
+    };
+    let since = Timestamp::from_second(3480).unwrap();
+    view.worktrees = [
+        (
+            "ended",
+            CheckoutState::Launched {
+                leader: "ended-leader".into(),
+                at: since,
+            },
+        ),
+        (
+            "waiting-many",
+            CheckoutState::Waiting {
+                verdict: verdict(None, Some("failed")),
+            },
+        ),
+        (
+            "older",
+            CheckoutState::Launched {
+                leader: "old-leader".into(),
+                at: Timestamp::from_second(10).unwrap(),
+            },
+        ),
+        (
+            "waiting-one",
+            CheckoutState::Waiting {
+                verdict: verdict(Some("open"), Some("failed")),
+            },
+        ),
+        (
+            "holding",
+            CheckoutState::Holding {
+                since,
+                hold: Duration::from_secs(180),
+                verdict: verdict(Some("open"), Some("passed")),
+            },
+        ),
+        (
+            "newer",
+            CheckoutState::Launched {
+                leader: "new-leader".into(),
+                at: since,
+            },
+        ),
+        (
+            "blocked",
+            CheckoutState::Ready {
+                since,
+                verdict: verdict(Some("open"), Some("passed")),
+            },
+        ),
+        (
+            "ready",
+            CheckoutState::Ready {
+                since,
+                verdict: verdict(Some("open"), Some("passed")),
+            },
+        ),
+    ]
+    .map(|(name, state)| CheckoutCondition {
+        checkout: format!("/repo/{name}").into(),
+        name: name.into(),
+        state,
+    })
+    .into();
+    let mut refusal = record(1800, LoopRunResult::TakeoverBlocked);
+    refusal.checkout = Some("/repo/blocked".into());
+    refusal.error = Some("@busy is working".into());
+    view.records = vec![refusal];
+    view.leader_statuses = BTreeMap::from([
+        ("old-leader".into(), rimz::agents::AgentStatus::Idle),
+        ("new-leader".into(), rimz::agents::AgentStatus::Failed),
+    ]);
+    view
+}
+
+#[test]
+fn show_worktrees_fresh_hold_renders_zero_elapsed() {
+    let mut view = worktree_view();
+    let row = view
+        .worktrees
+        .iter_mut()
+        .find(|row| row.name == "holding")
+        .unwrap();
+    let CheckoutState::Holding { since, .. } = &mut row.state else {
+        panic!("holding fixture must carry a hold");
+    };
+    *since = view.now_zoned.timestamp();
+    let text = show_text(&view);
+    assert!(text.contains("holding 0s/3m"), "{text}");
+}
+
+#[test]
+fn worktrees_order_counts_terms_and_fold_lines() {
+    let view = worktree_view();
+    let text = show_text(&view);
+    assert!(
+        text.contains(
+            "WORKTREES (8 owned · 1 blocked · 1 ready · 1 holding · 2 waiting · 3 launched)"
+        ),
+        "{text}"
+    );
+    let table = text
+        .split("WORKTREES")
+        .nth(1)
+        .unwrap()
+        .split("RECENT RUNS")
+        .next()
+        .unwrap();
+    let positions = [
+        "  blocked ",
+        "  ready ",
+        "  holding ",
+        "  waiting-one ",
+        "  newer ",
+        "  older ",
+    ]
+    .map(|name| table.find(name).expect(name));
+    assert!(positions.windows(2).all(|pair| pair[0] < pair[1]), "{text}");
+    assert!(table.contains("ready · blocked 30m ago"), "{text}");
+    assert!(table.contains("holding 2m/3m"), "{text}");
+    let header = table
+        .lines()
+        .find(|line| line.contains("WORKTREE "))
+        .unwrap();
+    assert!(
+        header.find("pr").unwrap() < header.find("ci").unwrap(),
+        "{text}"
+    );
+    let waiting = table
+        .lines()
+        .find(|line| line.starts_with("  waiting-one "))
+        .unwrap();
+    assert!(
+        waiting.contains("✓ open") && waiting.contains("✗ failed"),
+        "{text}"
+    );
+    let blocked = table
+        .lines()
+        .find(|line| line.starts_with("  blocked "))
+        .unwrap();
+    assert!(
+        blocked.contains("@busy is working") && !blocked.contains("✓"),
+        "{text}"
+    );
+    let launched = table
+        .lines()
+        .find(|line| line.starts_with("  newer "))
+        .unwrap();
+    assert!(
+        launched.contains("@new-leader  failed · 1 armed") && !launched.contains("✓"),
+        "{text}"
+    );
+    assert!(
+        table.contains("… 1 more waiting on two or more terms"),
+        "{text}"
+    );
+    assert!(table.contains("… 1 launched, leader ended"), "{text}");
+    assert!(
+        !table.contains("  waiting-many ") && !table.contains("  ended "),
+        "{text}"
+    );
+    assert!(
+        table.contains(
+            "ci and pr readings come from the room's sidebar; the loop timer alone never sees them"
+        ),
+        "{text}"
+    );
+}
+
+#[test]
+fn worktrees_all_unfolds_waiting_and_ended_rows() {
+    let mut view = worktree_view();
+    view.all = true;
+    view.room_is_open = true;
+    let text = show_text(&view);
+    assert!(text.contains("WORKTREES"), "{text}");
+    let table = text
+        .split("WORKTREES")
+        .nth(1)
+        .unwrap()
+        .split("RECENT RUNS")
+        .next()
+        .unwrap();
+    assert!(!table.contains('…'), "{text}");
+    let many = table
+        .lines()
+        .find(|line| line.starts_with("  waiting-many "))
+        .expect("unfolded waiting row");
+    assert!(
+        many.contains("✗ unknown") && many.contains("✗ failed"),
+        "{text}"
+    );
+    assert!(
+        table.find("  waiting-one ").unwrap() < table.find("  waiting-many ").unwrap(),
+        "{text}"
+    );
+    assert!(
+        table.find("  older ").unwrap() < table.find("  ended ").unwrap(),
+        "{text}"
+    );
+    assert!(table.contains("@ended-leader ended"), "{text}");
+    assert!(!table.contains("ci and pr readings come"), "{text}");
 }
 
 #[test]
@@ -136,6 +365,44 @@ fn show_single_checkout_condition_follows_verdict_and_keeps_subscriptions() {
         text.find("SUBSCRIPTIONS").unwrap() < text.find("  action:").unwrap(),
         "{text}"
     );
+}
+
+#[test]
+fn worktrees_json_preserves_the_full_accepted_hold_duration() {
+    let mut view = show_view(true);
+    view.entry.hold = Some(format!("{}s", u64::MAX));
+    let parsed = schedule::parse_trigger(&view.name, &view.entry).unwrap();
+    let schedule::Trigger::Condition {
+        hold: Some(hold), ..
+    } = parsed.trigger
+    else {
+        panic!("accepted condition hold");
+    };
+    view.worktrees = vec![schedule::fanout::CheckoutCondition {
+        checkout: "/repo/holding".into(),
+        name: "holding".into(),
+        state: schedule::fanout::CheckoutState::Holding {
+            since: view.now_zoned.timestamp(),
+            hold,
+            verdict: schedule::when::Verdict {
+                ok: true,
+                readings: BTreeMap::new(),
+            },
+        },
+    }];
+    let serialized = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        serde_json::to_string(&worktrees_json(&view))
+    }));
+    assert!(
+        serialized.is_ok(),
+        "an accepted hold must serialize without panicking"
+    );
+    #[derive(serde::Deserialize)]
+    struct HoldJson {
+        hold_ms: u128,
+    }
+    let rows: Vec<HoldJson> = serde_json::from_str(&serialized.unwrap().unwrap()).unwrap();
+    assert_eq!(rows[0].hold_ms, hold.as_millis());
 }
 
 #[test]
@@ -378,6 +645,22 @@ fn show_attention_warns_at_30m_only_for_current_unledgered_blocks() {
         refusal(2260, "/repo/retried", "@busy is working"),
         refusal(3900, "/repo/alpha", "@busy is compacting"),
     ];
+    view.worktrees.extend(
+        ["alpha", "beta", "retried", "resolved"].map(|name| CheckoutCondition {
+            checkout: format!("/repo/{name}").into(),
+            name: name.into(),
+            state: CheckoutState::Ready {
+                since: Timestamp::from_second(2100).unwrap(),
+                verdict: Verdict {
+                    ok: true,
+                    readings: BTreeMap::from([
+                        ("pr".into(), Some("open".into())),
+                        ("ci".into(), Some("passed".into())),
+                    ]),
+                },
+            },
+        }),
+    );
     let text = show_text(&view);
     assert_eq!(
         text.lines().nth(2),
@@ -392,6 +675,65 @@ fn show_attention_warns_at_30m_only_for_current_unledgered_blocks() {
         .unwrap()
         .to_zoned(jiff::tz::TimeZone::UTC);
     assert!(!show_text(&view).contains("ready but blocked over 30m"));
+}
+
+#[test]
+fn show_fanout_refusals_do_not_override_waiting_conditions() {
+    let mut view = worktree_view();
+    view.worktrees.retain(|row| row.name == "blocked");
+    view.worktrees[0].state = CheckoutState::Waiting {
+        verdict: Verdict {
+            ok: false,
+            readings: BTreeMap::from([
+                ("pr".into(), Some("open".into())),
+                ("ci".into(), Some("failed".into())),
+            ]),
+        },
+    };
+    let text = show_text(&view);
+    assert!(text.contains("WORKTREES (1 owned · 1 waiting)"), "{text}");
+    assert!(!text.contains("ready but blocked over 30m"), "{text}");
+    let row = text
+        .lines()
+        .find(|line| line.starts_with("  blocked "))
+        .unwrap();
+    assert!(
+        row.contains("waiting") && row.contains("✗ failed"),
+        "{text}"
+    );
+    let json = serde_json::to_value(worktrees_json(&view)).unwrap();
+    assert_eq!(json[0]["state"], "waiting");
+    assert!(json[0].get("blocked").is_none(), "{json}");
+}
+
+#[test]
+fn show_fanout_refusals_do_not_override_holding_conditions() {
+    let mut view = worktree_view();
+    view.worktrees.retain(|row| row.name == "holding");
+    view.records = vec![refusal(1800, "/repo/holding", "@busy is working")];
+    let text = show_text(&view);
+    assert!(text.contains("WORKTREES (1 owned · 1 holding)"), "{text}");
+    assert!(text.contains("holding 2m/3m"), "{text}");
+    assert!(!text.contains("ready but blocked over 30m"), "{text}");
+    let json = serde_json::to_value(worktrees_json(&view)).unwrap();
+    assert_eq!(json[0]["state"], "holding");
+    assert!(json[0].get("blocked").is_none(), "{json}");
+}
+
+#[test]
+fn show_fanout_refusals_on_unowned_checkouts_do_not_warn() {
+    let mut view = worktree_view();
+    view.worktrees.retain(|row| row.name == "ready");
+    let text = show_text(&view);
+    assert!(!text.contains("ready but blocked over 30m"), "{text}");
+    assert!(text.contains("WORKTREES (1 owned · 1 ready)"), "{text}");
+    let json = serde_json::to_value(worktrees_json(&view)).unwrap();
+    assert_eq!(json.as_array().unwrap().len(), 1);
+    assert_eq!(json[0]["name"], "ready");
+    assert!(json[0].get("blocked").is_none(), "{json}");
+
+    view.entry.each_worktree = false;
+    assert!(show_text(&view).contains("! 1 ready but blocked over 30m: blocked"));
 }
 
 #[test]
@@ -416,6 +758,17 @@ fn show_attention_names_failed_live_leaders_but_not_ended_leaders() {
         .insert("old-leader".into(), rimz::agents::AgentStatus::Failed);
     view.records
         .insert(0, refusal(-1800, "/repo/blocked", "@busy is working"));
+    view.worktrees.push(CheckoutCondition {
+        checkout: "/repo/blocked".into(),
+        name: "blocked".into(),
+        state: CheckoutState::Ready {
+            since: view.now_zoned.timestamp(),
+            verdict: Verdict {
+                ok: true,
+                readings: BTreeMap::new(),
+            },
+        },
+    });
     let text = show_text(&view);
     assert_eq!(
         text.lines().nth(2),
