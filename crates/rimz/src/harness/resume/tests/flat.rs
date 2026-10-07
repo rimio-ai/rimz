@@ -122,11 +122,14 @@ fn resume_reports_why_a_candidate_was_not_seeded() {
         ),
         (
             "a session the provider cannot reopen plans fresh instead",
-            agent("claude", "a1", "/code/query-engine", 1),
+            AgentState {
+                root_lane: true,
+                ..agent("claude", "a1", "/code/query-engine", 1)
+            },
             true,
             false,
             vec![ResumeSkip {
-                label: "claude:query-engine".to_owned(),
+                label: "claude:main".to_owned(),
                 reason: ResumeSkipReason::NoConversation,
             }],
             vec![],

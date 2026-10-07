@@ -46,9 +46,15 @@ pub(super) fn show_message(message_id: MessageId, json: bool, globals: &GlobalFl
     }
 
     let agents = rimz::address::addressable_agents(&cached_snapshot);
-    let raw_target = message_target(&message, &agents);
-    let target = scoped_handle(raw_target.clone(), message.channel.as_deref());
-    let sender = scoped_handle(message.sender.render(), message.channel.as_deref());
+    let root_channel = rimz::address::root_lane_channel(&ctx.workspace.project_root);
+    let lane_label =
+        rimz::address::record_lane_label(message.channel.as_deref(), root_channel.as_deref());
+    let raw_target = message_target(&message, &agents, root_channel.as_deref());
+    let target = scoped_handle(raw_target.clone(), lane_label);
+    let sender = scoped_handle(
+        message_sender(&message.sender, &agents, root_channel.as_deref()),
+        lane_label,
+    );
     let prose = render::prose::Prose::for_stdout();
     let mut out = render::out();
     writeln!(
@@ -63,7 +69,7 @@ pub(super) fn show_message(message_id: MessageId, json: bool, globals: &GlobalFl
             message.status.as_str()
         )
     )?;
-    let kv = render_message_kv(&message, &target, &sender, now);
+    let kv = render_message_kv(&message, &target, &sender, lane_label, now);
     kv.render(&mut out)?;
     writeln!(out)?;
     writeln!(out, "{}", render::paint(render::palette::header(), "TEXT"))?;
@@ -105,7 +111,8 @@ fn open_delivery(
     let snapshot = ctx.fold_agent_context(ctx.resolution_snapshot()?);
     let mut check = deliver::explain(record, live_messages, &snapshot, now);
     let agents = rimz::address::addressable_agents(&snapshot);
-    let target = message_target(message, &agents);
+    let root_channel = rimz::address::root_lane_channel(&ctx.workspace.project_root);
+    let target = message_target(message, &agents, root_channel.as_deref());
     let verdict = check.verdict();
     let audit_receiver = if verdict == deliver::DeliveryVerdict::ReceiverEnded {
         snapshot
@@ -143,15 +150,13 @@ fn render_message_kv(
     message: &MessageListRow,
     target: &str,
     sender: &str,
+    lane_label: Option<&str>,
     now: Timestamp,
 ) -> render::KeyVals {
     let mut kv = render::KeyVals::new().indent(2);
     kv.push("from", render::cell(sender).fg(render::palette::meta()));
     kv.push("to", render::cell(target).fg(render::palette::meta()));
-    kv.push(
-        "channel",
-        render::cell(message.channel.clone().unwrap_or_else(|| "-".to_owned())).dash(),
-    );
+    kv.push("channel", render::cell(lane_label.unwrap_or("-")).dash());
     if message.body != MessageBody::Prompt {
         kv.push("body", render::cell(message.body.as_str()));
     }

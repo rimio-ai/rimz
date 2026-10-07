@@ -61,7 +61,10 @@ pub fn run(args: AnswerArgs, globals: &GlobalFlags) -> Result<()> {
     let snapshot = ctx.cached_snapshot()?;
     let peers = rimz::address::addressable_agents(&snapshot);
     let agent = resolve_current_agent(store, &snapshot, &args.target, &ctx.address_context())
-        .unwrap_or_else(|message| answer_exit(2, &message));
+        .unwrap_or_else(|error| {
+            super::render::report(&error);
+            std::process::exit(2);
+        });
     let target_id = args
         .target
         .starts_with("ask_")
@@ -183,13 +186,12 @@ fn resolve_current_agent<'a>(
     snapshot: &'a rimz::store::snapshot::SidebarSnapshot,
     target: &str,
     channel: &rimz::address::AddressContext,
-) -> std::result::Result<&'a rimz::agents::AgentState, String> {
-    let agent = resolve_open_ask(store, snapshot, target, channel)
-        .map_err(|err| err.to_string())?
-        .ok_or_else(|| ask_commands::unknown_ask(target))?;
+) -> Result<&'a rimz::agents::AgentState> {
+    let agent = resolve_open_ask(store, snapshot, target, channel)?
+        .ok_or_else(|| anyhow::anyhow!(ask_commands::unknown_ask(target)))?;
     if agent.actionable_asks().next().is_none() {
         let peers = rimz::address::addressable_agents(snapshot);
-        return Err(format!(
+        return Err(anyhow::anyhow!(
             "{} is not asking anything",
             rimz::address::agent_handle(agent, &peers, true)
         ));

@@ -1300,6 +1300,62 @@ fn subagent_caller_refuses_subagent_launch_before_creating_runtime_state() {
 
 #[cfg(unix)]
 #[test]
+fn user_shell_subagents_list_labels_root_children_main_but_keeps_json_channel() {
+    let env = Env::new();
+    let workspace = env.resolve_workspace(&env.project_root);
+    for (id, name, parent) in [
+        ("planner", "planner", None),
+        ("child", "swift-otter", Some("planner")),
+    ] {
+        env.store()
+            .append_event(&EventEnvelope::agent_launched(
+                workspace.workspace_id.clone(),
+                &workspace.session_name,
+                &AgentKind::new_unchecked("claude"),
+                AgentLaunchPayload {
+                    agent_id: AgentSessionId::from(id),
+                    launch_id: None,
+                    agent_name: name.to_owned(),
+                    agent_name_explicit: true,
+                    launch: LaunchParams {
+                        parent_agent_id: parent.map(AgentSessionId::from),
+                        parent_agent_kind: parent.map(|_| AgentKind::new_unchecked("claude")),
+                        launch_depth: parent.map(|_| 1),
+                        ..Default::default()
+                    },
+                    state: AgentLaunchState::Bound,
+                    run_id: None,
+                    pane_id: None,
+                    runtime_owner: None,
+                    worktree_path: Some(env.project_root.display().to_string()),
+                    worktree_branch: None,
+                    prompt: None,
+                    description: None,
+                },
+            ))
+            .unwrap();
+    }
+    let output = env.rimz().args(["subagents", "list"]).output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let text = String::from_utf8_lossy(&output.stdout);
+    let child = text
+        .lines()
+        .find(|line| line.contains("@swift-otter"))
+        .unwrap();
+    assert_eq!(child.split_whitespace().nth(2), Some("main"), "{text}");
+    let output = env
+        .rimz()
+        .args(["subagents", "list", "--json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let rows: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(rows[0]["channel"], "project");
+    assert!(rows[0].get("lane_label").is_none());
+}
+
+#[cfg(unix)]
+#[test]
 fn user_shell_subagents_list_inspects_the_channel() {
     let env = Env::new();
     let workspace = env.resolve_workspace(&env.project_root);

@@ -69,6 +69,55 @@ fn transcript_cli_bounds_human_stdout_but_not_json_or_zero() {
 }
 
 #[test]
+fn main_transcript_filter_stays_in_current_workspace_and_matches_root_records() {
+    let env = Env::new();
+    let paths = env.store().paths().clone();
+    for (id, channel, text) in [
+        ("root", Some("project"), "root record"),
+        ("legacy", None, "legacy record"),
+        ("named", Some("main"), "named main record"),
+        ("other", Some("feature"), "other record"),
+    ] {
+        let mut entry = TranscriptEntry::new(
+            jiff::Timestamp::now(),
+            AgentKind::new_unchecked("claude"),
+            id.into(),
+            TranscriptKind::Prompt,
+            text.into(),
+        );
+        entry.channel = channel.map(str::to_owned);
+        entry.from = Some("@sender#project".to_owned());
+        rimz::transcript::append(&paths, &entry).unwrap();
+    }
+    for channel in ["main", "project", env.project_root.to_str().unwrap()] {
+        let output = env
+            .rimz()
+            .args(["transcript", &format!("#{channel}"), "--all"])
+            .output()
+            .unwrap();
+        let text = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            text.contains("root record") && text.contains("legacy record"),
+            "{text}"
+        );
+        assert!(!text.contains("other record"), "{text}");
+        assert!(text.contains("named main record"), "{text}");
+        assert!(text.contains("#main"), "{text}");
+        assert!(!text.contains("@sender#project"), "{text}");
+    }
+    let text = env.rimz().args(["transcript", "--all"]).output().unwrap();
+    assert!(text.status.success());
+    let text = String::from_utf8_lossy(&text.stdout);
+    assert!(text.contains("@sender#main"), "{text}");
+    assert!(!text.contains("@sender#project"), "{text}");
+}
+
+#[test]
 fn agents_show_ambiguity_excludes_ended_matches() {
     let env = Env::new();
     let store = env.store();

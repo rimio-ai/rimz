@@ -19,6 +19,26 @@ struct Fixture {
     env: Env,
 }
 
+#[test]
+fn teams_show_root_alias_misses_use_main() {
+    let fixture = Fixture::new();
+    for alias in [
+        "main",
+        "project",
+        fixture.env.project_root.to_str().unwrap(),
+    ] {
+        let output = fixture
+            .env
+            .rimz()
+            .args(["teams", "show", &format!("forge#{alias}")])
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let text = String::from_utf8_lossy(&output.stdout);
+        assert!(text.contains("no live instance in #main"), "{text}");
+    }
+}
+
 impl Fixture {
     fn new() -> Self {
         let env = Env::new();

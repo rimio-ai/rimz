@@ -126,6 +126,8 @@ pub(super) struct TimelineReport {
 
 #[derive(Clone, Debug, Serialize)]
 pub(super) struct PlacementReport {
+    #[serde(skip)]
+    pub lane_label: Option<String>,
     pub channel: Option<String>,
     pub worktree: Option<String>,
     pub branch: Option<String>,
@@ -378,6 +380,7 @@ pub(super) fn build_entry(
             last_seen: agent.last_seen,
         },
         placement: PlacementReport {
+            lane_label: agent.lane_label(),
             channel: agent.channel(),
             worktree: agent.worktree_path.clone(),
             branch: agent.worktree_branch.clone(),

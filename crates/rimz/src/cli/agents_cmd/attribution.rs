@@ -98,7 +98,7 @@ pub(super) fn attribution(
         now,
         active_grace_secs,
     );
-    let report = rimz::agents::attribution::build(AttributionRequest {
+    let mut report = rimz::agents::attribution::build(AttributionRequest {
         agents: &agents,
         lifetimes: &lifetimes,
         peers: &peers,
@@ -115,6 +115,16 @@ pub(super) fn attribution(
     if json {
         return render::json_pretty(&report);
     }
+    report.scope.channel =
+        common_optional(roots.iter().map(|agent| agent.lane_label())).or_else(|| {
+            report.scope.channel.clone().map(|channel| {
+                if rimz::address::is_root_lane_filter(&channel, &ctx.workspace.project_root) {
+                    "main".to_owned()
+                } else {
+                    channel
+                }
+            })
+        });
     let mut out = render::out();
     if md {
         return render::finish(render_markdown(&mut out, &report));

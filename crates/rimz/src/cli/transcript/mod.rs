@@ -181,6 +181,7 @@ struct ViewMode {
 
 #[derive(Clone, Debug)]
 struct Identity {
+    root_lane: bool,
     base_handle: String,
     channel: Option<String>,
     name: Option<String>,
@@ -191,13 +192,59 @@ struct Identity {
     child: bool,
 }
 
+impl Identity {
+    fn lane_label(&self) -> Option<&str> {
+        if self.root_lane {
+            Some("main")
+        } else {
+            self.channel.as_deref()
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 struct Scope {
+    root_channel: Option<String>,
     channel: Option<String>,
     channel_filter: Option<String>,
     focus: Option<String>,
     focus_keys: Option<BTreeSet<AgentKey>>,
     include_channel: bool,
+}
+
+impl Scope {
+    fn for_channel(channel: Option<String>, project_root: Option<&std::path::Path>) -> Self {
+        let include_channel = channel.is_none();
+        let root_channel = project_root.and_then(rimz::address::root_lane_channel);
+        let root_filter = channel.as_deref().is_some_and(|channel| {
+            project_root.is_some_and(|root| rimz::address::is_root_lane_filter(channel, root))
+        });
+        let channel_filter = if root_filter {
+            Some("main".to_owned())
+        } else {
+            channel.clone()
+        };
+        Self {
+            channel: if root_filter {
+                root_channel.clone()
+            } else {
+                channel
+            },
+            root_channel,
+            channel_filter,
+            focus: None,
+            focus_keys: None,
+            include_channel,
+        }
+    }
+
+    fn lane_label(&self) -> Option<&str> {
+        if self.channel_filter.as_deref() == Some("main") {
+            Some("main")
+        } else {
+            self.channel.as_deref()
+        }
+    }
 }
 
 mod ask_card;
@@ -325,6 +372,9 @@ pub(crate) fn resolve_view_workspace(
     let Some(channel) = requested_channel(target, worktree) else {
         return Ok(current);
     };
+    if rimz::address::is_root_lane_filter(&channel, &current.project_root) {
+        return Ok(current);
+    }
     let paths = rimz::StatePaths::for_project_root(&current.project_root)
         .context("preparing state paths")?;
     let current_has = live_agents(crate::cli::open_store(&current).ok().as_ref())
@@ -388,6 +438,7 @@ fn channel_home(
 
 #[derive(Clone, Debug)]
 pub(crate) struct RenderedChat {
+    pub(crate) lane_label: Option<String>,
     pub(crate) channel: Option<String>,
     pub(crate) focus: Option<String>,
     pub(crate) entries: Vec<RenderEntry>,
@@ -452,7 +503,8 @@ fn chat_view_with_mode(
         .flat_map(|entry| entry.reply_to.iter().map(ToString::to_string))
         .collect::<HashSet<_>>();
     let entries = dedup_asks(log);
-    let identities = build_identities(&entries);
+    let root_channel = rimz::address::root_lane_channel(&workspace.project_root);
+    let identities = build_identities(&entries, root_channel.as_deref());
     let snapshot = store
         .as_ref()
         .map(rimz::Store::snapshot_cached)
@@ -463,7 +515,8 @@ fn chat_view_with_mode(
                 Vec::new(),
                 jiff::Timestamp::now(),
             )
-        });
+        })
+        .with_project_root(Some(workspace.project_root.clone()));
     let scope = resolve_scope(
         target.as_deref(),
         worktree,
@@ -474,6 +527,7 @@ fn chat_view_with_mode(
     )?;
     if entries.is_empty() && scope.focus_keys.is_none() {
         return Ok(RenderedChat {
+            lane_label: None,
             channel: None,
             focus: None,
             entries: Vec::new(),
@@ -490,7 +544,12 @@ fn chat_view_with_mode(
         .iter()
         .filter(|entry| entry_in_scope(entry, &scope, &identities))
         .filter_map(|entry| {
-            let render = render_entry_for_log_entry(entry, &identities, scope.include_channel);
+            let render = render_entry_for_log_entry(
+                entry,
+                &identities,
+                scope.include_channel,
+                root_channel.as_deref(),
+            );
             entry_matches_focus(entry, &render.chat, &scope, &identities).then_some(render)
         })
         .collect();
@@ -501,7 +560,13 @@ fn chat_view_with_mode(
     entries.extend(
         flips
             .iter()
-            .filter(|flip| channel_matches(Some(flip.channel()), scope.channel_filter.as_deref()))
+            .filter(|flip| {
+                channel_matches(
+                    Some(flip.channel()),
+                    scope.channel_filter.as_deref(),
+                    root_channel.as_deref(),
+                )
+            })
             .map(|flip| render_entry_for_flip(flip, scope.include_channel))
             .filter(|render| {
                 scope.focus_keys.as_ref().is_none_or(|focus| {
@@ -510,6 +575,7 @@ fn chat_view_with_mode(
                         focus,
                         &identities,
                         scope.channel_filter.as_deref(),
+                        root_channel.as_deref(),
                     )
                 })
             }),
@@ -524,6 +590,7 @@ fn chat_view_with_mode(
     if entries.is_empty() {
         let empty_message = empty_scope_message(&scope, target.as_deref());
         return Ok(RenderedChat {
+            lane_label: scope.lane_label().map(str::to_owned),
             channel: scope.channel,
             focus: scope.focus,
             entries: Vec::new(),
@@ -553,6 +620,7 @@ fn chat_view_with_mode(
     };
 
     Ok(RenderedChat {
+        lane_label: scope.lane_label().map(str::to_owned),
         channel: scope.channel,
         focus: scope.focus,
         entries: shown,
@@ -573,7 +641,7 @@ pub(crate) fn render_lines_to(
 ) -> Result<()> {
     chat::render_display_chat_to(
         out,
-        view.channel.as_deref(),
+        view.lane_label.as_deref(),
         &entries_for_view(view),
         tz,
         jiff::Timestamp::now().to_zoned(tz.clone()).date(),
@@ -599,7 +667,7 @@ fn render_selected_lines_to(
         .collect::<Vec<_>>();
     chat::render_display_chat_to(
         out,
-        view.channel.as_deref(),
+        view.lane_label.as_deref(),
         &entries,
         tz,
         jiff::Timestamp::now().to_zoned(tz.clone()).date(),
@@ -632,12 +700,11 @@ fn write_empty_chat(json: bool, message: &str) -> Result<()> {
 
 fn empty_scope_message(scope: &Scope, target: Option<&str>) -> String {
     if let Some(focus) = &scope.focus {
-        let label = chat::render_handle(focus, scope.channel.as_deref(), true);
+        let label = chat::render_handle(focus, scope.lane_label(), true);
         return format!("No conversation for {label} yet.");
     }
     let label = scope
-        .channel
-        .as_ref()
+        .lane_label()
         .map(|channel| format!("#{channel}"))
         .or_else(|| target.map(ToOwned::to_owned))
         .unwrap_or_else(|| "this room".to_owned());

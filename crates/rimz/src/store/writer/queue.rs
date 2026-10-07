@@ -1246,12 +1246,25 @@ impl Store {
         channel: &str,
         session_name: &str,
     ) -> Result<Vec<MessageRecord>> {
+        self.clear_messages_matching(
+            |message| message.channel.as_deref() == Some(channel),
+            session_name,
+        )
+    }
+
+    /// Cancel selected open messages under the workspace lock, preserving terminal history and audit events.
+    #[must_use = "durability barrier; check the result"]
+    pub fn clear_messages_matching(
+        &self,
+        mut select: impl FnMut(&MessageRecord) -> bool,
+        session_name: &str,
+    ) -> Result<Vec<MessageRecord>> {
         self.commit_queue(|queue| {
             let cleared = queue.finalize_matching(
                 MessageStatus::Canceled,
                 session_name,
                 "clear",
-                |message| message.status.is_open() && message.channel.as_deref() == Some(channel),
+                |message| message.status.is_open() && select(message),
             );
             Ok(cleared)
         })

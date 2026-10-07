@@ -945,6 +945,7 @@ enum ResumeCandidateKey {
 #[derive(Clone, Debug)]
 struct ResumeCandidate {
     identity: ResumeLaunchIdentity,
+    lane_label: Option<String>,
     /// The permission mode the original launch event recorded, replayed when
     /// the profile declares none of its own.
     stamped_mode: Option<PermissionMode>,
@@ -977,6 +978,7 @@ impl ResumeCandidate {
     fn from_agent_identity(agent: &AgentState, conversation_present: bool) -> Self {
         Self {
             identity: ResumeLaunchIdentity::from(agent),
+            lane_label: agent.lane_label(),
             stamped_mode: agent.mode,
             cwd: agent_worktree(agent).unwrap_or_default(),
             pane_id: agent.pane.as_ref().map(|pane| pane.pane_id.clone()),
@@ -1011,6 +1013,7 @@ impl ResumeCandidate {
                 tier: None,
             },
             stamped_mode: None,
+            lane_label: None,
             cwd: observation.workspace.clone(),
             pane_id: None,
             last_activity: observation.last_activity,
@@ -1273,7 +1276,11 @@ fn resolve_scope_lane(
             .map(|worktree| worktree.name.clone())
             .unwrap_or_else(|| path_label(&path));
         return Ok(ResolvedLane {
-            display: raw_scope.to_owned(),
+            display: if agent.root_lane {
+                "#main".to_owned()
+            } else {
+                raw_scope.to_owned()
+            },
             path,
             channel,
             worktree_name,
@@ -1324,7 +1331,8 @@ fn resolve_current_lane(
         })?;
     let channel = agent.channel();
     Ok(ResolvedLane {
-        display: channel
+        display: agent
+            .lane_label()
             .as_deref()
             .map_or_else(|| path_label(&current), |channel| format!("#{channel}")),
         path: current.clone(),
@@ -1547,20 +1555,23 @@ fn plan_closed_lane(
         .map(|planned| planned.cohort.seeds.len())
         .sum::<usize>();
     let flat = if request.fresh {
-        let place = if lane.path != crate::utils::path::normalize_path_lexical(request.project_root)
-        {
-            format!(" -w {}", lane.worktree_name)
-        } else {
-            lane.channel
-                .as_ref()
-                .map(|channel| format!(" --channel {channel}"))
-                .unwrap_or_default()
-        };
         let mut specs = HashSet::new();
         DetailedResumePlan {
             skipped: flat_agents
                 .iter()
                 .filter_map(|agent| {
+                    let place = if lane.path
+                        != crate::utils::path::normalize_path_lexical(request.project_root)
+                    {
+                        format!(" -w {}", lane.worktree_name)
+                    } else {
+                        agent
+                            .channel
+                            .as_deref()
+                            .filter(|channel| !channel.is_empty())
+                            .map(|channel| format!(" --channel {channel}"))
+                            .unwrap_or_default()
+                    };
                     let spec = format!(
                         "rimz agents {}{place}",
                         relaunch_spec(
@@ -1571,7 +1582,7 @@ fn plan_closed_lane(
                         )
                     );
                     specs.insert(spec.clone()).then(|| ResumeSkip {
-                        label: build_label(&agent.kind, agent.channel().as_deref(), &lane.path),
+                        label: build_label(&agent.kind, agent.lane_label().as_deref(), &lane.path),
                         reason: ResumeSkipReason::FreshRelaunch(spec),
                     })
                 })
@@ -1670,10 +1681,10 @@ fn lane_summaries(
                 .count();
             Some(LaneSummary {
                 path: lane.path.clone(),
-                label: lane
-                    .channel
-                    .clone()
-                    .or_else(|| candidates.first().and_then(AgentState::channel))
+                label: candidates
+                    .first()
+                    .and_then(AgentState::lane_label)
+                    .or_else(|| lane.channel.clone())
                     .map_or_else(
                         || format!("#{}", path_label(&lane.path)),
                         |value| format!("#{value}"),
@@ -1875,7 +1886,9 @@ fn plan_team_restore_tabs(
                 channel: newest.channel(),
                 fresh: cells
                     .iter()
-                    .map(|cell| build_label(cell.kind.as_str(), newest.channel().as_deref(), &cwd))
+                    .map(|cell| {
+                        build_label(cell.kind.as_str(), newest.lane_label().as_deref(), &cwd)
+                    })
                     .collect(),
                 launch_group: None,
                 refilled: BTreeSet::new(),
@@ -2110,7 +2123,18 @@ fn plan_resume_candidates_detailed(
             continue;
         }
         let channel = candidate_room_channel(ctx.project_root, &candidate);
-        let label = build_label(&candidate.identity.kind, channel.as_deref(), &candidate.cwd);
+        let lane_label = candidate.lane_label.as_deref().or_else(|| {
+            if AgentState::is_root_lane(
+                channel.as_deref(),
+                Some(candidate.cwd.as_path()),
+                ctx.project_root,
+            ) {
+                Some("main")
+            } else {
+                channel.as_deref()
+            }
+        });
+        let label = build_label(&candidate.identity.kind, lane_label, &candidate.cwd);
         if !worktree_exists(&candidate.cwd) {
             plan.agents_to_end.push((
                 candidate.identity.kind.clone(),
@@ -2363,7 +2387,7 @@ pub fn plan_cohort_resume(
             None => {
                 let label = cwd
                     .as_deref()
-                    .map(|cwd| build_label(cell.kind.as_str(), channel.as_deref(), cwd))
+                    .map(|cwd| build_label(cell.kind.as_str(), newest.lane_label().as_deref(), cwd))
                     .unwrap_or_else(|| cell.kind.as_str().to_owned());
                 fresh.push(label);
                 CohortSeed::Fresh
@@ -3122,7 +3146,7 @@ fn cohort_agent_label(agent: &AgentState) -> String {
 
 fn cohort_fresh_label_for_agent(agent: &AgentState) -> String {
     let cwd = agent_worktree(agent).unwrap_or_default();
-    build_label(agent.kind.as_str(), agent.channel.as_deref(), &cwd)
+    build_label(agent.kind.as_str(), agent.lane_label().as_deref(), &cwd)
 }
 
 fn resume_tab_identity(channel: Option<&str>, cwd: &Path) -> ResumeTabIdentity {

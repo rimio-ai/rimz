@@ -4554,7 +4554,7 @@ fn agent_budget_edits_and_views_use_local_day() {
     // handle the reader can type back, never by the session id behind it.
     let view = loop_ok(&env, &["agents", "budget", "@claude"]);
     assert!(
-        view.contains("agent:  @claude#project"),
+        view.contains("agent:  @claude#main"),
         "budget view must print the handle: {view}"
     );
     assert!(

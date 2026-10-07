@@ -9,6 +9,7 @@ use super::list::{
 };
 use rimz::harness::schedule::run_log::LoopRunResult;
 use rimz::store::snapshot::{WorktreeCi, WorktreePrState};
+use rimz::workspace::WorkspaceResolver;
 
 pub(super) fn run(
     name: Option<&str>,
@@ -26,6 +27,19 @@ pub(super) fn run(
             render::json_pretty(&selected)
         };
     }
+    let lane = if let Some(lane) = lane {
+        let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())
+            .context("resolving current workspace")?;
+        Some(
+            if rimz::address::is_root_lane_filter(lane, &workspace.project_root) {
+                "main"
+            } else {
+                lane
+            },
+        )
+    } else {
+        None
+    };
     let mut out = render::out();
     if selected.is_empty() {
         writeln!(

@@ -33,7 +33,7 @@ A handle resolves through the shortest unique name for a running agent:
 
 The `@` sigil is required, so a stray word never reaches an agent: `rimz message coder "…"` fails with ``agent target `coder` must start with `@` (try `@coder`)`` rather than guessing. A raw pane id (`tmux:%1`, `zellij:terminal_3`) is the one address that needs no sigil. Handles are minted when an agent launches, and [the agents guide](./fleet.md) covers how kinds, profiles, and team roles become them.
 
-**Reach across channels with `#channel`.** `@codex` reaches the Codex in your current channel; `@codex#feat-a` reaches the one working the `feat-a` worktree from anywhere in the workspace. An agent keeps its card's channel even when it runs a command from the main checkout, so changing directory does not accidentally address another lane. The flags `--channel <name>` and `--worktree <name>` are the same restriction in flag form, and conflict with each other.
+**Reach across channels with `#channel`.** `@codex` reaches the Codex in your current channel; `@codex#feat-a` reaches the one working the `feat-a` worktree from anywhere in the workspace. Use `rimz message @codex#main "…"` to reach the project's root channel. An agent keeps its card's channel even when it runs a command from the main checkout, so changing directory does not accidentally address another lane. The flags `--channel <name>` and `--worktree <name>` are the same restriction in flag form, and conflict with each other.
 
 ## Channels
 
@@ -44,7 +44,7 @@ A channel is never created or removed on its own: it is derived from what backs 
 - **A Git worktree.** Every agent working an isolated worktree shares that channel, named for the worktree ([worktrees guide](./worktrees.md)).
 - **An explicit `--channel`.** A launch with `--channel design` puts its agents in `#design`, a lane with no branch and no directory behind it. It lasts while agents run in it.
 - **A team in place.** A named team launched at the room root gets a channel of its own, `<dir>/<team>`.
-- **The working directory.** Agents with no other channel fall back to their directory's name.
+- **The working directory.** Agents with no other channel fall back to their directory's name, except at the project root, which always displays `main`. The project's directory name remains accepted as an alias for `#main`.
 
 ```sh
 rimz agents claude --channel design "draft it"   # launch straight into #design, in a tab of that name

@@ -161,7 +161,10 @@ fn list(all: bool, json: bool, globals: &GlobalFlags) -> Result<()> {
         return render::finish(writeln!(
             render::out(),
             "{}",
-            render::paint(render::palette::faint(), &empty_ask_digest(all, channel))
+            render::paint(
+                render::palette::faint(),
+                &empty_ask_digest(all, ctx.address_context().lane_label().as_deref())
+            )
         ));
     }
     let now = jiff::Timestamp::now();

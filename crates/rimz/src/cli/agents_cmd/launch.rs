@@ -84,7 +84,7 @@ pub(super) fn launch_layout(
         cwd,
         None,
     )? {
-        launched.write_receipt(&mut render::out(), ctx.store.paths())?;
+        launched.write_receipt(&mut render::out(), &ctx.store, &ctx.workspace.project_root)?;
     }
     Ok(())
 }
@@ -100,15 +100,22 @@ pub(in crate::cli) struct LaunchedLayout {
 }
 
 impl LaunchedLayout {
-    fn write_receipt(&self, w: &mut impl Write, paths: &rimz::StatePaths) -> Result<()> {
+    fn write_receipt(
+        &self,
+        w: &mut impl Write,
+        store: &rimz::Store,
+        project_root: &Path,
+    ) -> Result<()> {
         if self.in_place {
             return Ok(());
         }
+        let paths = store.paths();
+        let lane_label = launched_lane_label(self.channel.as_deref(), &self.cwd, project_root);
         write_launch_receipt(
             w,
             &LaunchReceipt {
                 team: self.team.as_ref().map(|(name, team)| (name.as_str(), team)),
-                channel: self.channel.as_deref(),
+                channel: lane_label.as_deref(),
                 cwd: &self.cwd,
                 identities: &self.identities,
                 leader_index: self.leader_index,
@@ -120,10 +127,20 @@ impl LaunchedLayout {
             w,
             &self.identities,
             self.peer.as_ref(),
-            self.channel.as_deref(),
+            self.channel.as_ref().and(lane_label.as_deref()),
             paths,
         )
     }
+}
+
+fn launched_lane_label(channel: Option<&str>, cwd: &Path, project_root: &Path) -> Option<String> {
+    if rimz::agents::AgentState::is_root_lane(channel, Some(cwd), Some(project_root)) {
+        return Some("main".to_owned());
+    }
+    channel
+        .filter(|channel| !channel.is_empty())
+        .map(str::to_owned)
+        .or_else(|| rimz::address::root_lane_channel(cwd))
 }
 
 /// Launch into an already-resolved host cwd without changing its lexical identity.
@@ -1148,12 +1165,13 @@ fn launch_resume_layout(
     )?;
     panes.focused_pane = team_leader_pane(&layout, team);
     let leader = team.and_then(|team| team.leader.as_deref());
+    let lane_label = launched_lane_label(channel.as_deref(), &cwd, &workspace.project_root);
     let write_receipt = || {
         write_resume_receipt(
             &mut render::out(),
             &plan,
             team_name.as_deref(),
-            channel.as_deref(),
+            lane_label.as_deref(),
             launch_batch.identities(),
             leader,
         )

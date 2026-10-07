@@ -531,7 +531,7 @@ pub(super) fn render_placement_section(
     let mut kv = render::KeyVals::new().indent(2);
     kv.push(
         "channel",
-        render::cell(agent.placement.channel.as_deref().unwrap_or("-")).dash(),
+        render::cell(agent.placement.lane_label.as_deref().unwrap_or("-")).dash(),
     );
     kv.push(
         "worktree",

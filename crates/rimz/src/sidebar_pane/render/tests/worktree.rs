@@ -579,7 +579,7 @@ fn render_directory_room_root_pod_is_name_only() {
         "the git-backed row keeps the fork-glyph pod header:\n{rendered}"
     );
     assert!(
-        rendered.contains("agents") && !rendered.contains("⑂ agents"),
+        rendered.lines().any(|line| line.trim() == "main") && !rendered.contains("⑂ agents"),
         "the room's own pod is name-only:\n{rendered}"
     );
     assert_snapshot("directory_room_root_pod", rendered);
