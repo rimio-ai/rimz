@@ -873,7 +873,7 @@ fn name_taken(name: &str, taken: &BTreeSet<String>, session_ids: &[&str]) -> boo
 
 fn mint_available_agent_name(taken: &BTreeSet<String>, session_ids: &[&str]) -> String {
     loop {
-        let candidate = crate::agents::petname::mint(taken.iter().map(String::as_str));
+        let candidate = crate::agents::petname::mint(|name| taken.contains(name));
         if crate::agents::petname::valid_agent_name(&candidate)
             && !name_taken(&candidate, taken, session_ids)
         {
