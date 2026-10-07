@@ -1,8 +1,18 @@
+use std::ops::RangeInclusive;
+
 use rimz::ids::{MuxName, PaneId};
 use rimz::mux::{LayoutPanes, MuxBackend, PaneCmd, TabOptions, ZellijBackend};
 use tempfile::TempDir;
 
 use super::support::*;
+
+const SETTLE_WINDOW: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// Mirror the symmetric half-step tolerance in `sidebar_width_off_spec`.
+fn settled_band(target_cols: u64, stop_step: u64) -> RangeInclusive<u64> {
+    let half_step = stop_step.max(1) / 2;
+    target_cols.saturating_sub(half_step)..=target_cols.saturating_add(half_step)
+}
 
 #[test]
 fn renderer_width_keys_hold_their_live_zellij_step() {
@@ -10,7 +20,6 @@ fn renderer_width_keys_hold_their_live_zellij_step() {
 
     const VIEW_COLS: u16 = 320;
     const VIEW_ROWS: u16 = 80;
-    const SETTLE_WINDOW: std::time::Duration = std::time::Duration::from_secs(3);
 
     let room = LiveZellijSession::new("renderer-width");
     let xdg = room.path();
@@ -83,23 +92,25 @@ fn renderer_repicks_the_viewport_after_a_wider_attach() {
     backend.open_sidebar(&sidebar, None).expect("open sidebar");
     wait_for_pane_count(xdg, &name, 2);
 
-    // Seed the renderer with a valid detached topology, then attach a much
-    // wider client before publishing the new geometry. The old observation
-    // must never be used to shrink the attached pane.
+    // Seed a detached 50-column topology; it must not become the attached viewport's target.
+    // Prove convergence within half a stop step of the live target and parking there.
     write_topology_cache_from_list_panes(xdg, &sidebar.workspace_id, &name);
     let _client = AttachedClient::attach(&room, ATTACHED_VIEW_COLS, ATTACHED_VIEW_ROWS);
     let _mirror = topology_cache_mirror(xdg, &sidebar.workspace_id, &name);
 
     let target_cols = rimz::mux::SidebarWidth::default().target_cols(u64::from(ATTACHED_VIEW_COLS));
     let stop_step = u64::from(ATTACHED_VIEW_COLS).div_ceil(20);
+    let band = settled_band(target_cols, stop_step);
     assert!(
-        wait_for_sidebar_columns(
-            xdg,
-            &name,
-            &[target_cols..=target_cols.saturating_add(stop_step).saturating_sub(1)],
-        ),
+        wait_for_sidebar_columns(xdg, &name, std::slice::from_ref(&band)),
         "renderer did not converge against the attached viewport: {:?}",
         sidebar_columns_by_tab(xdg, &name),
+    );
+    std::thread::sleep(SETTLE_WINDOW);
+    let widths = sidebar_columns_by_tab(xdg, &name);
+    assert!(
+        widths.len() == 1 && widths.values().all(|width| band.contains(width)),
+        "renderer left the half-step band around {target_cols} after settling: {widths:?}",
     );
 }
 
@@ -241,12 +252,7 @@ fn sidebar_widths_converge_after_resize_new_tab_and_shared_target() {
     let target_cols = u16::try_from(rimz::mux::SidebarWidth::default().target_cols(VIEW_COLS))
         .expect("target fits u16");
     let stop_step = VIEW_COLS.div_ceil(20);
-    let target_band = || {
-        u64::from(target_cols)
-            ..=u64::from(target_cols)
-                .saturating_add(stop_step)
-                .saturating_sub(1)
-    };
+    let target_band = || settled_band(u64::from(target_cols), stop_step);
     let _client =
         AttachedClient::attach(&room, u16::try_from(VIEW_COLS).expect("view fits u16"), 60);
     write_topology_cache_from_list_panes(xdg, &sidebar.workspace_id, &name);
@@ -263,7 +269,7 @@ fn sidebar_widths_converge_after_resize_new_tab_and_shared_target() {
     );
     assert!(
         wait_for_sidebar_columns(xdg, &name, &[target_band()]),
-        "the birth pane converges at or just above the smaller view's {target_cols}-column target, got {:?}",
+        "the birth pane converges within half a step of the smaller view's {target_cols}-column target, got {:?}",
         sidebar_columns_by_tab(xdg, &name),
     );
 
@@ -282,7 +288,7 @@ fn sidebar_widths_converge_after_resize_new_tab_and_shared_target() {
     );
     assert!(
         wait_for_sidebar_columns(xdg, &name, &[target_band(), target_band()]),
-        "both tabs converge at or just above the 25% live target, got {:?}",
+        "both tabs converge within half a step of the 25% live target, got {:?}",
         sidebar_columns_by_tab(xdg, &name),
     );
 
@@ -298,7 +304,7 @@ fn sidebar_widths_converge_after_resize_new_tab_and_shared_target() {
 
     // A shared target applies to every existing tab, including the two
     // background tabs, and every future tab.
-    let shared_band = || 40..=40_u64.saturating_add(stop_step).saturating_sub(1);
+    let shared_band = || settled_band(40, stop_step);
     assert_eq!(
         converge_each_sidebar_with_nudges(&backend, xdg, &name, 40, stop_step),
         2,
@@ -388,7 +394,7 @@ fn sidebar_widths_agree_across_tabs_after_a_pinned_retarget() {
     assert!(
         widths
             .iter()
-            .all(|width| width.abs_diff(u64::from(target_cols)) * 2 <= native_step),
+            .all(|width| settled_band(u64::from(target_cols), native_step).contains(width)),
         "nearest-reachable convergence overshot target {target_cols}: {widths:?}",
     );
     assert!(
@@ -404,6 +410,7 @@ fn converge_each_sidebar_with_nudges(
     target_cols: u16,
     step_cols: u64,
 ) -> usize {
+    let band = settled_band(u64::from(target_cols), step_cols);
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     let mut resized = std::collections::HashSet::new();
     loop {
@@ -415,9 +422,7 @@ fn converge_each_sidebar_with_nudges(
             .collect();
         let pending: Vec<_> = sidebars
             .into_iter()
-            .filter(|pane| {
-                pane.pane_columns.abs_diff(u64::from(target_cols)) > step_cols.max(1) / 2
-            })
+            .filter(|pane| !band.contains(&pane.pane_columns))
             .collect();
         if pending.is_empty() {
             return resized.len();
