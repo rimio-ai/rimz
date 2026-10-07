@@ -158,6 +158,85 @@ fn older_claim_blocks_boundary_head_even_after_ttl() {
 }
 
 #[test]
+fn sent_prompt_holds_command_claim_until_turn_start_ack() {
+    let q = Queue::new();
+    let first = q.queue(1);
+    let claimed = q
+        .claim_delivery_batch(&first.message_id, AgentStatus::Idle, Timestamp::now())
+        .unwrap()
+        .expect("prompt claimed");
+    let sent = q.record_sent_batch(&claimed, "session").unwrap();
+    let second = q.queue_with(2, |message| message.body = MessageBody::Command);
+    assert!(
+        q.claim_delivery_batch(&second.message_id, AgentStatus::Idle, Timestamp::now())
+            .unwrap()
+            .is_none(),
+        "no boundary write passes an unacknowledged prompt"
+    );
+    assert_eq!(q.by_id(&second.message_id).attempts, 0);
+    let delivered = q
+        .confirm_delivered_for_card(
+            &first.kind,
+            &first.agent_id,
+            first.agent_name.as_deref(),
+            DeliveryAck::TurnStarted { prompt: None },
+            "session",
+        )
+        .unwrap();
+    assert_eq!(delivered.len(), sent.len());
+    assert_eq!(delivered[0].message_id, first.message_id);
+    assert_eq!(delivered[0].status, MessageStatus::Delivered);
+    assert!(
+        q.claim_delivery_batch(&second.message_id, AgentStatus::Idle, Timestamp::now())
+            .unwrap()
+            .is_some()
+    );
+}
+
+#[test]
+fn sent_prompt_reconciliation_preserves_fifo_or_releases_timed_out_hold() {
+    for unconfirmed_sends in [0, 1] {
+        let q = Queue::new();
+        let first = q.queue_with(1, |message| message.unconfirmed_sends = unconfirmed_sends);
+        let claimed = q
+            .claim_delivery_batch(&first.message_id, AgentStatus::Idle, Timestamp::now())
+            .unwrap()
+            .expect("prompt claimed");
+        let sent = q.record_sent_batch(&claimed, "session").unwrap();
+        let second = q.queue_with(2, |message| message.body = MessageBody::Command);
+        assert!(
+            q.claim_delivery_batch(&second.message_id, AgentStatus::Idle, Timestamp::now())
+                .unwrap()
+                .is_none()
+        );
+        let deadline = sent[0].last_sent_at.unwrap() + MessageBody::Prompt.delivery_window();
+        let report = q.reconcile_stale_messages("session", deadline, 1).unwrap();
+        if unconfirmed_sends == 1 {
+            assert_eq!(report.timed_out, 1);
+            assert!(
+                q.claim_delivery_batch(&second.message_id, AgentStatus::Idle, deadline)
+                    .unwrap()
+                    .is_some()
+            );
+            continue;
+        }
+        assert_eq!(report.requeued, 1);
+        assert_eq!(q.by_id(&first.message_id).status, MessageStatus::Queued);
+        assert!(
+            q.claim_delivery_batch(&second.message_id, AgentStatus::Idle, deadline)
+                .unwrap()
+                .is_none(),
+            "reconciliation requeues the older prompt ahead of the command"
+        );
+        assert!(
+            q.claim_delivery_batch(&first.message_id, AgentStatus::Idle, deadline)
+                .unwrap()
+                .is_some()
+        );
+    }
+}
+
+#[test]
 fn boundary_batch_claims_maximal_compatible_fifo_prefix() {
     let q = Queue::new();
     let first = q.record(1).with_channel(Some("same".to_owned()));
