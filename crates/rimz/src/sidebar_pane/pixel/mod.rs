@@ -145,7 +145,6 @@ impl<K: Ord, C: Eq> ImageResidency<K, C> {
             now_ms,
             cols,
             rows,
-            synchronized,
         } = request;
         let changed = self
             .images
@@ -162,20 +161,10 @@ impl<K: Ord, C: Eq> ImageResidency<K, C> {
             return Ok(false);
         }
 
-        let write_image = |writer: &mut W| -> io::Result<()> {
-            let png = png();
-            let mut payload = transmit_png(image_id, &png);
-            payload.extend_from_slice(&resident_place(image_id, cols, rows));
-            writer.write_all(&wrap_pixel_payload(&payload, self.wrap))
-        };
-        if synchronized {
-            writer.write_all(&wrap_pixel_payload(BEGIN_SYNC, self.wrap))?;
-            let body = write_image(writer);
-            let end = writer.write_all(&wrap_pixel_payload(END_SYNC, self.wrap));
-            body.and(end)?;
-        } else {
-            write_image(writer)?;
-        }
+        let png = png();
+        let mut payload = transmit_png(image_id, &png);
+        payload.extend_from_slice(&resident_place(image_id, cols, rows));
+        writer.write_all(&wrap_pixel_payload(&payload, self.wrap))?;
         self.images.insert(
             key,
             Resident {
@@ -249,7 +238,6 @@ pub(super) struct ImageRequest<K, C> {
     pub(super) now_ms: u64,
     pub(super) cols: u16,
     pub(super) rows: u16,
-    pub(super) synchronized: bool,
 }
 
 pub fn write_synchronized_pixel_output<W: Write>(
@@ -463,7 +451,6 @@ mod tests {
                         now_ms: 0,
                         cols: 12,
                         rows: 6,
-                        synchronized: false,
                     },
                     || png.clone(),
                 )

@@ -277,7 +277,6 @@ impl MeterPainter {
                 now_ms,
                 cols: raster.width_cells,
                 rows: 1,
-                synchronized: true,
             },
             || {
                 let image = rasterize(raster);
@@ -294,9 +293,7 @@ impl MeterPainter {
 
 #[cfg(test)]
 mod tests {
-    use super::super::{
-        BEGIN_SYNC, END_SYNC, MIN_RESEND_SPACING_MS, RESIDENT_REFRESH_MS, wrap_pixel_payload,
-    };
+    use super::super::{MIN_RESEND_SPACING_MS, RESIDENT_REFRESH_MS};
     use super::*;
     use ratatui::style::Style;
     use ratatui::text::Span;
@@ -447,8 +444,8 @@ mod tests {
         assert!(text.contains("a=t"));
         assert!(text.contains("a=p"));
         assert!(text.contains(&format!("i={same_id}")));
-        assert!(first_bytes.starts_with(BEGIN_SYNC));
-        assert!(first_bytes.ends_with(END_SYNC));
+        assert!(first_bytes.starts_with(b"\x1b_G"));
+        assert!(!text.contains("\x1b[?2026"));
 
         let mut repeat = Vec::new();
         painter
@@ -479,11 +476,11 @@ mod tests {
                 .windows(b"\x1bPtmux;".len())
                 .filter(|window| *window == b"\x1bPtmux;")
                 .count(),
-            3
+            1
         );
         assert!(!bytes.starts_with(super::super::BEGIN_SYNC));
-        assert!(bytes.starts_with(&wrap_pixel_payload(BEGIN_SYNC, true)));
-        assert!(bytes.ends_with(&wrap_pixel_payload(END_SYNC, true)));
+        assert!(bytes.starts_with(b"\x1bPtmux;\x1b\x1b_G"));
+        assert!(!String::from_utf8_lossy(&bytes).contains("[?2026"));
 
         let mut no_op = Vec::new();
         painter

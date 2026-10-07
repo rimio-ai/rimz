@@ -600,7 +600,7 @@ fn hidden_reveal(presence: crate::store::snapshot::SidebarPresence, reveal_by_re
     assert!(!room.has_runtime_files(&instance_id));
     assert_eq!(
         hidden.drain(),
-        b"\x1b[?2026h\x1b[?2026l\x1b[?25h",
+        b"\x1b[?25h",
         "hidden self-close only clears pixels and restores the cursor"
     );
     let instance_id = visible_pane.instance_id.clone();
@@ -609,7 +609,7 @@ fn hidden_reveal(presence: crate::store::snapshot::SidebarPresence, reveal_by_re
     assert!(!room.has_runtime_files(&instance_id));
     assert_eq!(
         visible.drain(),
-        b"\x1b[?2026h\x1b[?2026l\x1b[?25h",
+        b"\x1b[?25h",
         "hidden reload only clears pixels and restores the cursor"
     );
 }

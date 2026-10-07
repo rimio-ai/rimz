@@ -11,7 +11,7 @@ use super::*;
 use crate::ids::PaneId;
 use crate::sidebar::timing::HEARTBEAT_WRITE_INTERVAL;
 use crate::sidebar_pane::app::fixtures::{
-    focus_fixture, pane, snapshot, snapshot_with_panes, workspace,
+    agent_snapshot, focus_fixture, pane, snapshot, snapshot_with_panes, workspace,
 };
 use crate::sidebar_pane::pets::{PetAssets, PetPixelView};
 use crate::sidebar_pane::pixel::{BEGIN_SYNC, END_SYNC, PixelRenderCaps, placeholder_cluster};
@@ -19,6 +19,20 @@ use crate::sidebar_pane::render::{self, UiState};
 use jiff::Timestamp;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
+
+#[derive(Clone, Default)]
+struct SharedBuffer(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl std::io::Write for SharedBuffer {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
 
 #[test]
 fn worker_close_preserves_modes_only_after_a_signal() {
@@ -211,6 +225,83 @@ fn pixel_slot_sweep_precedes_first_transmit_once() {
 }
 
 #[test]
+fn pixel_meter_only_frame_brackets_draw_sweep_and_transmit() {
+    for wrap in [false, true] {
+        let mut painter = paint::FramePainter::new(
+            PixelRenderCaps {
+                pixel_transport: true,
+                kitty_clients: true,
+            },
+            wrap,
+            Some(crate::sidebar_pane::pixel::PixelSlot::new(0)),
+        );
+        let mut snapshot = agent_snapshot(&workspace());
+        snapshot.theme.mode = crate::config::ThemeMode::Truecolor;
+        snapshot.theme.pets.enabled = false;
+        let card = snapshot.worktree_groups[0].rows[0].as_agent_mut().unwrap();
+        card.usage.context_pct = Some(50);
+        card.usage.context_window = Some(200_000);
+        let mut ui = UiState::default();
+        painter.refresh_view(&mut ui, &snapshot, false);
+        assert!(ui.pet.is_none());
+        assert!(
+            ui.meter_pixels
+                .as_ref()
+                .unwrap()
+                .visible_rasters()
+                .next()
+                .is_none()
+        );
+        let output = SharedBuffer::default();
+        let mut terminal = Terminal::with_options(
+            PaneBackend::headless(output.clone()),
+            ratatui::TerminalOptions {
+                viewport: ratatui::Viewport::Fixed(ratatui::layout::Rect::new(0, 0, 44, 30)),
+            },
+        )
+        .unwrap();
+
+        painter
+            .draw_and_paint(&mut terminal, &snapshot, None, &mut ui)
+            .unwrap();
+        let bytes = output.0.lock().unwrap().clone();
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(text.contains("a=t"), "the draw composes a visible meter");
+        assert!(bytes.starts_with(BEGIN_SYNC) && bytes.ends_with(END_SYNC));
+        assert_eq!(text.matches("[?2026h").count(), 1);
+        assert_eq!(text.matches("[?2026l").count(), 1);
+        assert!(text.find(&placeholder_cluster(0, 0)).unwrap() < text.find("a=d,d=I").unwrap());
+        assert!(text.find("a=d,d=I").unwrap() < text.find("a=t").unwrap());
+    }
+}
+
+#[test]
+fn an_unsized_pixel_frame_writes_no_sync_markers() {
+    let mut pty = Pty::open(0, 0);
+    let mut terminal = Terminal::with_options(
+        PaneBackend::for_fd(pty.slave()).unwrap(),
+        ratatui::TerminalOptions {
+            viewport: ratatui::Viewport::Fixed(ratatui::layout::Rect::new(0, 0, 44, 30)),
+        },
+    )
+    .unwrap();
+    let mut painter = paint::FramePainter::with_slot(
+        Some(crate::sidebar_pane::pixel::PixelSlot::new(0)),
+        PixelRenderCaps {
+            pixel_transport: true,
+            kitty_clients: true,
+        },
+    );
+    let snapshot = snapshot(&workspace());
+    let mut ui = UiState::default();
+    painter.refresh_view(&mut ui, &snapshot, false);
+    painter
+        .draw_and_paint(&mut terminal, &snapshot, None, &mut ui)
+        .unwrap();
+    assert!(pty.drain().is_empty(), "an unsized frame ships no bytes");
+}
+
+#[test]
 fn pixel_leases_are_exclusive_reused_and_exhaustion_disables_pixels() {
     use crate::sidebar_pane::pixel::PixelLease;
     let root = tempfile::tempdir().unwrap();
@@ -254,9 +345,9 @@ fn pixel_leases_are_exclusive_reused_and_exhaustion_disables_pixels() {
     let draw = |painter: &mut paint::FramePainter,
                 snapshot: &crate::store::snapshot::SidebarSnapshot,
                 ui: &mut UiState| {
-        let mut output = Vec::new();
+        let output = SharedBuffer::default();
         let mut terminal = Terminal::with_options(
-            CrosstermBackend::new(&mut output),
+            PaneBackend::headless(output.clone()),
             ratatui::TerminalOptions {
                 viewport: ratatui::Viewport::Fixed(ratatui::layout::Rect::new(0, 0, 44, 30)),
             },
@@ -266,9 +357,13 @@ fn pixel_leases_are_exclusive_reused_and_exhaustion_disables_pixels() {
             .draw_and_paint(&mut terminal, snapshot, None, ui)
             .unwrap();
         drop(terminal);
-        output
+        output.0.lock().unwrap().clone()
     };
     let exhausted_frame = draw(&mut painter, &snapshot, &mut ui);
+    assert!(
+        !String::from_utf8_lossy(&exhausted_frame).contains("\x1b[?2026"),
+        "a disabled pixel session emits no synchronized-output markers"
+    );
     snapshot.theme.display.pixel = crate::config::PixelMode::Off;
     let mut cell_painter = paint::FramePainter::with_slot(
         Some(crate::sidebar_pane::pixel::PixelSlot::new(0)),
@@ -344,6 +439,12 @@ fn pixel_disable_and_clear_retire_resident_meter_ids() {
                 .map(|command| command["i"].clone())
                 .collect::<std::collections::BTreeSet<_>>(),
             ids
+        );
+        bytes.clear();
+        painter.clear(&mut bytes).unwrap();
+        assert!(
+            bytes.is_empty(),
+            "clearing an empty residency writes nothing"
         );
     }
 }
@@ -644,20 +745,8 @@ fn pixel_layout_shift_uses_ratatui_diff_without_full_clear() {
         PixelRenderCaps::default(),
         true,
     );
-    #[derive(Clone)]
-    struct SharedBuffer(std::rc::Rc<std::cell::RefCell<Vec<u8>>>);
-    impl std::io::Write for SharedBuffer {
-        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-            self.0.borrow_mut().extend_from_slice(buf);
-            Ok(buf.len())
-        }
-
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-    let output = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-    let backend = CrosstermBackend::new(SharedBuffer(output.clone()));
+    let output = SharedBuffer::default();
+    let backend = PaneBackend::headless(output.clone());
     let viewport = ratatui::Viewport::Fixed(ratatui::layout::Rect::new(0, 0, 80, 12));
     let mut terminal =
         Terminal::with_options(backend, ratatui::TerminalOptions { viewport }).expect("terminal");
@@ -665,7 +754,7 @@ fn pixel_layout_shift_uses_ratatui_diff_without_full_clear() {
     painter
         .draw_and_paint(&mut terminal, &snapshot, None, &mut ui)
         .expect("first draw");
-    let first_len = output.borrow().len();
+    let first_len = output.0.lock().unwrap().len();
 
     snapshot.providers[0].windows = vec![
         crate::agents::RateLimitWindow {
@@ -682,12 +771,12 @@ fn pixel_layout_shift_uses_ratatui_diff_without_full_clear() {
     painter
         .draw_and_paint(&mut terminal, &snapshot, None, &mut ui)
         .expect("shifted draw");
-    let second_len = output.borrow().len();
+    let second_len = output.0.lock().unwrap().len();
 
     painter
         .draw_and_paint(&mut terminal, &snapshot, None, &mut ui)
         .expect("steady draw");
-    let output = output.borrow();
+    let output = output.0.lock().unwrap().clone();
     let second = String::from_utf8_lossy(&output[first_len..second_len]);
     let steady = String::from_utf8_lossy(&output[second_len..]);
 
@@ -714,6 +803,8 @@ fn pixel_layout_shift_uses_ratatui_diff_without_full_clear() {
         !steady.contains("\u{1b}_G"),
         "unchanged frame emits no kitty graphics bytes"
     );
+    assert!(!second.contains("\x1b[?2026"));
+    assert!(!steady.contains("\x1b[?2026"));
     assert!(
         !String::from_utf8_lossy(&output[first_len..]).contains("a=d,d=I"),
         "layout shifts must keep resident kitty images alive"
@@ -723,13 +814,13 @@ fn pixel_layout_shift_uses_ratatui_diff_without_full_clear() {
         output
             .matches(std::str::from_utf8(BEGIN_SYNC).unwrap())
             .count(),
-        3
+        1
     );
     assert_eq!(
         output
             .matches(std::str::from_utf8(END_SYNC).unwrap())
             .count(),
-        3
+        1
     );
 }
 
