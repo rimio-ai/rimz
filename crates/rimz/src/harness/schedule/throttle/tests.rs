@@ -194,6 +194,18 @@ fn config(text: &str) -> ThrottleConfig {
     toml::from_str(text).expect("throttle config")
 }
 
+#[test]
+fn compact_load_reports_pressure_pairs_and_omits_unavailable_readings() {
+    let host = FakeHost::new();
+    host.set_pressure(14.0, 18.0);
+    assert_eq!(
+        compact_load_in(host.as_ref()).as_deref(),
+        Some("cpu 14%/18% · io 14%/18% · memory 14%/18% (avg10/avg60)")
+    );
+    *host.pressure.lock().unwrap() = Err("unavailable".into());
+    assert_eq!(compact_load_in(host.as_ref()), None);
+}
+
 fn workspace() -> WorkspaceId {
     WorkspaceId::from_project_root(Path::new("/repo"))
 }

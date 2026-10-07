@@ -1,6 +1,29 @@
 use super::*;
 
 #[test]
+fn throttle_has_limits_excludes_pacing_and_wait_deadlines() {
+    assert!(!ThrottleConfig::default().has_limits());
+    let pacing: ThrottleConfig = toml::from_str("pace = \"1s\"\nmax-wait = \"2m\"").unwrap();
+    assert!(!pacing.has_limits());
+    for limit in [
+        "cpu-pressure = 25",
+        "io-pressure = 25",
+        "memory-pressure = 25",
+        "min-memory = \"1GB\"",
+        "min-disk = \"1GB\"",
+        "max-active = 2",
+        "max-active-per-task = 2",
+    ] {
+        assert!(
+            toml::from_str::<ThrottleConfig>(limit)
+                .unwrap()
+                .has_limits(),
+            "{limit}"
+        );
+    }
+}
+
+#[test]
 fn watch_descriptions_preserve_prefixes_and_expose_subjects() {
     let cases = [
         (

@@ -207,32 +207,37 @@ fn action(row: &TaskRow) -> String {
     let Some(spec) = &row.action else {
         return String::new();
     };
-    let mut action = match spec.kind {
-        ActionKind::Wake => spec
-            .subject
-            .split('#')
-            .next()
-            .unwrap_or(&spec.subject)
-            .to_owned(),
-        ActionKind::Start
-            if row
-                .task
-                .as_ref()
-                .is_some_and(|task| task.entry().check.is_some()) =>
-        {
-            format!("check, then start {}", spec.subject)
-        }
-        ActionKind::Start => format!("start {}", spec.subject),
-        ActionKind::Check => "run check".into(),
+    let kind = match spec.kind {
+        ActionKind::Wake => TaskActionKind::Deliver,
+        ActionKind::Start => TaskActionKind::Spawn,
+        ActionKind::Check => TaskActionKind::CheckOnly,
     };
-    if row.you {
+    action_text(
+        kind,
+        &spec.subject,
+        row.task.as_ref().map(LoadedTask::entry),
+        row.you,
+    )
+}
+
+pub(in crate::cli::loop_cmd) fn action_text(
+    kind: TaskActionKind,
+    subject: &str,
+    entry: Option<&TaskEntry>,
+    you: bool,
+) -> String {
+    let mut action = match kind {
+        TaskActionKind::Deliver => subject.split('#').next().unwrap_or(subject).to_owned(),
+        TaskActionKind::Spawn if entry.is_some_and(|entry| entry.check.is_some()) => {
+            format!("check, then start {subject}")
+        }
+        TaskActionKind::Spawn => format!("start {subject}"),
+        TaskActionKind::CheckOnly => "run check".into(),
+    };
+    if you {
         action.push_str(" (you)");
     }
-    if let Some(account) = row
-        .task
-        .as_ref()
-        .and_then(|task| task.entry().account.as_ref())
-    {
+    if let Some(account) = entry.and_then(|entry| entry.account.as_ref()) {
         action.push_str(&format!(" · account {account}"));
     }
     action

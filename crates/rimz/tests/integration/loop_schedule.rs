@@ -4614,8 +4614,8 @@ fn loop_spawn_controls_persist_render_and_gate_daily_budget() {
     assert_eq!((task.max_attempts, task.max_strikes), (Some(4), Some(5)));
     let show = loop_ok(&env, &["loop", "show", "bounded"]);
     assert!(
-        show.contains("\n  verify:  cargo xtask gate (up to 4 attempts)\n")
-            && show.contains("\n  timeout: 3h (default)\n"),
+        show.contains("\n  verify:   cargo xtask gate (up to 4 attempts)\n")
+            && show.contains("\n  timeout:  3h (default)\n"),
         "{show}"
     );
 
@@ -6227,13 +6227,11 @@ fn loop_legacy_run_record_renders_through_list_and_show() {
             && !show.contains("last failure"),
         "{list}\n{show}"
     );
-    assert_eq!(
-        show.lines().rev().take(3).collect::<Vec<_>>()[2],
-        "  task:   check · true",
-        "{show}"
-    );
+    assert!(show.contains("  action:   run check · true"), "{show}");
     assert!(
-        show.lines().last().unwrap().starts_with("  source: "),
+        show.lines().any(|line| line.starts_with("  source: "))
+            && show.contains("  throttle: no limits set")
+            && !show.contains("THROTTLE"),
         "{show}"
     );
 }
@@ -7191,7 +7189,10 @@ fn loop_run_held_by_the_start_throttle_is_shown_skipped_and_stopped() {
         show.contains("throttle skipped") && show.contains("1 start ahead; held 2s"),
         "{show}"
     );
-    assert!(show.contains("THROTTLE"), "{show}");
+    assert!(
+        show.contains("throttle: no limits set") && !show.contains("THROTTLE"),
+        "{show}"
+    );
 
     loop_ok(&env, &["config", "set", "loop.throttle.max-wait", "30m"]);
     let mut runner = env

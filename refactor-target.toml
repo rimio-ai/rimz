@@ -313,7 +313,8 @@ upward-dependencies = [
 # MachineConfig::model_alias exposes machine pins to the launch wrapper (+1).
 # AccountHistory carries a named account's history mode to the login catalog and `rimz accounts` (+1).
 # KeepWarm parses the role/profile horizon and the floor for definitions, config edit, harness policy, and `agents validate` (+1).
-surface-budget = 187
+# ThrottleConfig::has_limits lets loop show distinguish admission limits from pacing (+1).
+surface-budget = 188
 
 [[module]]
 path = "crates/rimz/src/daemon_content.rs"
@@ -501,7 +502,8 @@ path = "crates/rimz/src/harness"
 # Manual resumes share refill settlement and its typed error (+2), and receive the per-tab recovery carrier (+2).
 # Silent-child notices share the detector, text, request, evidence and module with the CLI/producer (+6), plus the run claim and release (+2).
 # Spent-child CLI parity shares one read-only durable park-demotion builder (+1), and its login-set form with the sidebar fold (+1).
-surface-budget = 741
+# The compact pressure reading feeds loop show's no-limits facts without parsing display rows (+1).
+surface-budget = 742
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
