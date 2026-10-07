@@ -550,7 +550,6 @@ fn context(channel: Option<&str>) -> AddressContext {
     AddressContext {
         channel: channel.map(ToOwned::to_owned),
         origin: crate::address::ChannelOrigin::Stamped,
-        project_root: "/repo".into(),
     }
 }
 

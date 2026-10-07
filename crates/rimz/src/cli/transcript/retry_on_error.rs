@@ -48,7 +48,6 @@ fn context(channel: &str) -> rimz::address::AddressContext {
     rimz::address::AddressContext {
         channel: Some(channel.to_owned()),
         origin: rimz::address::ChannelOrigin::Stamped,
-        project_root: "/repo".into(),
     }
 }
 

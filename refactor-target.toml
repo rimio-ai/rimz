@@ -75,8 +75,8 @@ path = "crates/rimz/src/address.rs"
 # Shared ambiguity construction also serves transcript's historical candidates.
 # AddressContext and ChannelOrigin carry room identity and lane provenance
 # from the binary into the shared resolver and library dispatch callers;
-# `AddressContext::is_root_lane` keeps `message list` on the resolver's rule.
-surface-budget = 40
+# Root-lane labels and record/filter predicates keep CLI readers on one rule (+4).
+surface-budget = 44
 
 [[module]]
 path = "crates/rimz/src/pixel_wire.rs"
@@ -690,7 +690,9 @@ path = "crates/rimz/src/store"
 # Fresh pane writes share the atomic enqueue-and-claim writer (+1).
 # The pane writer rechecks its batch against the existing claim-hold rule (+1).
 # Fresh boundary sends share a checked enqueue-and-claim outcome and writer (+2).
-surface-budget = 370
+# PaneAgent::root_lane and lane_label carry the same root identity into pane resolution.
+# Predicate-based queue clearing keeps root-lane policy in the CLI and cancellation under the store lock (+1).
+surface-budget = 371
 
 [[module]]
 path = "crates/rimz/src/theme"

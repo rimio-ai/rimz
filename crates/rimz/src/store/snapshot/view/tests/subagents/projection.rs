@@ -683,7 +683,6 @@ fn launched_cross_kind_child_nests_without_losing_its_pane() {
         &crate::address::AddressContext {
             channel: None,
             origin: crate::address::ChannelOrigin::Stamped,
-            project_root: "/tmp/rimz-target-test".into(),
         },
     )
     .expect("launched child remains addressable");

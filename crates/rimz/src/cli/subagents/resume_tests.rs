@@ -28,7 +28,6 @@ fn only_the_parent_can_resolve_an_ended_child_for_resume() {
     let context = rimz::address::AddressContext {
         channel: None,
         origin: rimz::address::ChannelOrigin::Stamped,
-        project_root: "/tmp".into(),
     };
     assert!(ended_child(&agents, &parent, "@otter", None, &context).is_some());
     assert!(ended_child(&agents, &peer, "@otter", None, &context).is_none());

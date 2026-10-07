@@ -242,7 +242,6 @@ fn current_channel_uses_callers_card_before_worktree() {
 #[test]
 fn address_context_preserves_current_channel_provenance() {
     use rimz::address::ChannelOrigin;
-    let room = workspace("/repo/checkout", "/tmp/scratch", None);
     for (current, channel, origin) in [
         (
             CurrentChannel::Named("card".into()),
@@ -256,10 +255,9 @@ fn address_context_preserves_current_channel_provenance() {
         ),
         (CurrentChannel::Unscoped, None, ChannelOrigin::Stamped),
     ] {
-        let context = current.address_context(&room);
+        let context = current.address_context();
         assert_eq!(context.channel.as_deref(), channel);
         assert_eq!(context.origin, origin);
-        assert_eq!(context.project_root, room.project_root);
     }
 }
 

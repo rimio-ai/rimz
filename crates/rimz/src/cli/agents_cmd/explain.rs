@@ -70,7 +70,7 @@ pub(super) fn run(args: ExplainArgs, globals: &GlobalFlags) -> Result<()> {
             &runtime,
             snapshot,
             &args.target,
-            &channel.address_context(&workspace),
+            &channel.address_context(),
         )?;
         let posture = rimz::harness::resume::resolve_posture(
             rimz::harness::resume::PostureRequest {

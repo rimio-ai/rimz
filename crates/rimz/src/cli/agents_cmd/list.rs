@@ -298,6 +298,11 @@ mod tests {
 
     #[test]
     fn list_channel_filter_resolves_explicit_all_and_current_channel() {
+        let mut root = test_agent("root");
+        root.worktree_path = Some("/repo/checkout".into());
+        root.root_lane = true;
+        let filter = list_channel_filter_for_current(false, Some("#main"), None).unwrap();
+        assert!(rimz::address::agent_in_worktree(&root, &filter));
         assert_eq!(
             list_channel_filter_for_current(true, Some("manual"), Some("feature".to_owned()))
                 .as_deref(),

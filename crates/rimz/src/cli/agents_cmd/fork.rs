@@ -270,7 +270,7 @@ fn resolve_fork_source(
         runtime,
         snapshot,
         reference,
-        &current_channel.address_context(workspace),
+        &current_channel.address_context(),
     )
     .map(|(agent, _)| agent)
 }

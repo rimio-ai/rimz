@@ -779,7 +779,6 @@ fn open_stage(
             current_channel: crate::address::AddressContext {
                 channel: Some(opening.channel.to_owned()),
                 origin: crate::address::ChannelOrigin::Stamped,
-                project_root: opening.workspace.project_root.clone(),
             },
             caller: None,
             sender: MessageSender::Harness {

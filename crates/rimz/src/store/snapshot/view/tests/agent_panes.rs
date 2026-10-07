@@ -7,6 +7,29 @@
 use super::*;
 
 #[test]
+fn bound_pane_cwd_supplies_root_lane_when_the_agent_has_no_worktree() {
+    for (cwd, root_lane) in [("/repo", true), ("/repo/feature", false)] {
+        let mut bound = agent("codex", "sess-1", AgentStatus::Running, 1_000).in_pane("term1");
+        bound.worktree_path = None;
+        let snapshot = room(vec![bound])
+            .with_project_root(Some(PathBuf::from("/repo")))
+            .with_live_panes(vec![pane("term1", "codex", cwd)], None);
+        assert_eq!(snapshot.agent_panes.len(), 1);
+        assert_eq!(snapshot.agent_panes[0].root_lane, root_lane, "{cwd}");
+        let resolved = crate::address::resolve_targets(
+            &snapshot,
+            "@codex#main",
+            None,
+            &crate::address::AddressContext {
+                channel: None,
+                origin: crate::address::ChannelOrigin::Stamped,
+            },
+        );
+        assert_eq!(resolved.is_ok(), root_lane, "{cwd}: {resolved:?}");
+    }
+}
+
+#[test]
 fn cwd_bound_session_lists_its_producer_bound_pane() {
     // A daemon-routed codex carries no stamped pane; the fold binds it to the live
     // pane by cwd, and agent_panes carries that pane so message can reach it — even
@@ -106,7 +129,6 @@ fn floating_agent_pane_stays_addressable_without_room_row() {
         &crate::address::AddressContext {
             channel: Some("main".to_owned()),
             origin: crate::address::ChannelOrigin::Stamped,
-            project_root: "/tmp/rimz-target-test".into(),
         },
     )
     .unwrap();
