@@ -2,7 +2,9 @@
 
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::sync::mpsc::{Receiver, SyncSender};
+#[cfg(test)]
+use std::sync::mpsc::Receiver;
+use std::sync::mpsc::SyncSender;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -31,7 +33,8 @@ use tracing::{debug, warn};
 
 use super::backend::PaneBackend;
 use super::fetch::{
-    FetchDispatcher, FetchPhase, FetchRequest, FetchRole, FetchUpdate, SnapshotSource,
+    FetchDispatcher, FetchPhase, FetchRequest, FetchRole, FetchUpdate, ResultReceiver,
+    SnapshotSource,
 };
 use super::gate::{GateState, apply_gate, gate_remaining};
 use super::health::{Health, degraded_too_long};
@@ -95,7 +98,7 @@ pub(super) struct LoopState {
     runtime: RuntimePaths,
     socket_path: PathBuf,
     diag: crate::diag::DiagSink,
-    result_rx: Receiver<FetchUpdate>,
+    result_rx: ResultReceiver,
     anim_start: Instant,
     /// Full pulled truth retained only while an overlay, focus fence, or gate
     /// hold can outlive its source. The steady overlay-free path moves the pull
@@ -185,7 +188,7 @@ impl LoopState {
         runtime: RuntimePaths,
         socket_path: PathBuf,
         diag: crate::diag::DiagSink,
-        result_rx: Receiver<FetchUpdate>,
+        result_rx: ResultReceiver,
         initial_width: Option<u16>,
         observe_tx: SyncSender<ObserveMsg>,
         pet_render_caps: PixelRenderCaps,
@@ -351,16 +354,15 @@ impl LoopState {
     }
 
     pub(super) fn on_snapshot(&mut self, fetch: &mut FetchDispatcher) {
-        let mut latest = None;
-        let mut saw_final = false;
-        while let Ok(update) = self.result_rx.try_recv() {
-            saw_final |= update.is_final();
-            latest = Some(update);
+        let pending = self.result_rx.take();
+        let saw_final = pending.completed;
+        let mut rejected = false;
+        for update in pending.snapshot.into_iter().chain(pending.outcome) {
+            rejected |= self.apply_latest_snapshot(update);
         }
-        let rejected = match latest {
-            Some(update) => self.apply_latest_snapshot(update),
-            None => false,
-        };
+        if let Some(role) = pending.role {
+            self.last_known_elder = role.is_producer();
+        }
         if saw_final {
             fetch.complete(!self.should_exit);
         }
@@ -1130,7 +1132,7 @@ impl LoopState {
         // Snapshot wakeups are a latency hint, not the only correctness path.
         // `rimz reload` replaces the renderer in place and a ready-result
         // datagram can be lost around socket teardown/rebind; the frame/tick
-        // path still drains the channel so startup cannot strand the
+        // path still drains pending results so startup cannot strand the
         // placeholder cockpit.
         self.on_snapshot(fetch);
         fetch.fire_due(Instant::now());

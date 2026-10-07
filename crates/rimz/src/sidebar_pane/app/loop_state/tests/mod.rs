@@ -19,7 +19,7 @@ struct Rig {
     ws: WorkspaceId,
     runtime: RuntimePaths,
     state: LoopState,
-    result_tx: std::sync::mpsc::Sender<FetchUpdate>,
+    result_tx: super::super::fetch::ResultSender,
     fetch: FetchDispatcher,
     requests: Receiver<FetchRequest>,
     terminal: Terminal<PaneBackend>,
@@ -60,7 +60,7 @@ impl Rig {
         config.tick_seconds = 60;
         let (observe_tx, _observe_rx) = std::sync::mpsc::sync_channel(64);
         let (request_tx, requests) = std::sync::mpsc::channel();
-        let (result_tx, result_rx) = std::sync::mpsc::channel();
+        let (result_tx, result_rx) = super::super::fetch::result_channel();
         Self {
             state: LoopState::new(
                 config,

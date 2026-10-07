@@ -319,7 +319,7 @@ impl ApplyHarness {
         config.own_pane = Some(PaneId::from_parts(crate::MuxName::Tmux, "%sidebar"));
         let socket_path = runtime.sidebar_socket_path(&instance_id);
         let (observe_tx, _observe_rx) = std::sync::mpsc::sync_channel(64);
-        let (_result_tx, result_rx) = std::sync::mpsc::channel();
+        let (_result_tx, result_rx) = super::super::fetch::result_channel();
         let mut state = LoopState::new(
             config,
             runtime,

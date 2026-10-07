@@ -4,6 +4,149 @@
 use super::*;
 
 #[test]
+fn unchanged_after_an_unread_snapshot_keeps_state_context_and_completion() {
+    snapshot_then_terminal(false);
+}
+
+#[test]
+fn failure_after_an_unread_snapshot_keeps_state_context_and_completion() {
+    snapshot_then_terminal(true);
+}
+
+fn snapshot_then_terminal(failed: bool) {
+    let mut rig = Rig::new();
+    let mut snapshot = agent_snapshot(&rig.ws);
+    snapshot.worktree_groups[0].rows[0].name = "unread-snapshot".into();
+    rig.fetch.request(FetchRequest::default(), false);
+    assert!(rig.next_request().is_some());
+    rig.fetch
+        .request(FetchRequest::producer_fresh_panes(), true);
+    let filter = BodyFilter::Status(crate::agents::AgentStatus::Idle);
+    rig.result_tx
+        .send(FetchUpdate::Shared {
+            update: Box::new(FetchUpdate::Snapshot {
+                snapshot: Box::new(snapshot),
+                role: FetchRole::Producer,
+                phase: FetchPhase::Final,
+                source: SnapshotSource::Produced,
+            }),
+            context: Arc::new(super::super::super::fetch::FoldShared {
+                inputs: Arc::new(super::super::super::fetch::FoldInputs {
+                    filter: Some(filter),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+        })
+        .unwrap();
+    rig.result_tx
+        .send(if failed {
+            FetchUpdate::Failed {
+                error: "fold failed".into(),
+                role: FetchRole::Consumer,
+            }
+        } else {
+            FetchUpdate::Unchanged {
+                role: FetchRole::Consumer,
+            }
+        })
+        .unwrap();
+    rig.state.on_snapshot(&mut rig.fetch);
+    assert_eq!(
+        rig.state.current.rows().next().map(|row| row.name.as_str()),
+        Some("unread-snapshot"),
+        "a terminal outcome must not erase the unread snapshot"
+    );
+    assert_eq!(
+        rig.state.ui.make_up_filter,
+        Some(filter),
+        "snapshot context is applied with its snapshot"
+    );
+    assert_eq!(rig.state.health.failure_streak, u32::from(failed));
+    assert!(
+        !rig.state.last_known_elder,
+        "the latest outcome carries election state"
+    );
+    assert!(
+        rig.next_request()
+            .expect("final outcome releases the queued request")
+            .is_producer_fresh_panes()
+    );
+    assert!(rig.next_request().is_none());
+}
+
+#[test]
+fn a_final_snapshot_never_yields_to_an_interim_or_loses_completion() {
+    let mut rig = Rig::new();
+    rig.fetch.request(FetchRequest::default(), false);
+    assert!(rig.next_request().is_some());
+    rig.fetch
+        .request(FetchRequest::producer_fresh_panes(), true);
+    for (name, phase, role) in [
+        ("final-snapshot", FetchPhase::Final, FetchRole::Producer),
+        ("interim-snapshot", FetchPhase::Interim, FetchRole::Consumer),
+    ] {
+        let mut snapshot = agent_snapshot(&rig.ws);
+        snapshot.worktree_groups[0].rows[0].name = name.into();
+        rig.result_tx
+            .send(FetchUpdate::Snapshot {
+                snapshot: Box::new(snapshot),
+                role,
+                phase,
+                source: SnapshotSource::Published,
+            })
+            .unwrap();
+    }
+    rig.state.on_snapshot(&mut rig.fetch);
+    assert_eq!(
+        rig.state.current.rows().next().unwrap().name,
+        "final-snapshot",
+        "an interim must not displace the pending final snapshot"
+    );
+    assert!(!rig.state.last_known_elder);
+    assert!(
+        rig.next_request()
+            .expect("completion survives an interim publication")
+            .is_producer_fresh_panes()
+    );
+}
+
+#[test]
+fn a_failed_completion_survives_a_later_interim_snapshot() {
+    let mut rig = Rig::new();
+    rig.fetch.request(FetchRequest::default(), false);
+    assert!(rig.next_request().is_some());
+    rig.fetch
+        .request(FetchRequest::producer_fresh_panes(), true);
+    rig.result_tx
+        .send(FetchUpdate::Failed {
+            error: "fold failed".into(),
+            role: FetchRole::Producer,
+        })
+        .unwrap();
+    rig.result_tx
+        .send(FetchUpdate::Snapshot {
+            snapshot: Box::new(agent_snapshot(&rig.ws)),
+            role: FetchRole::Consumer,
+            phase: FetchPhase::Interim,
+            source: SnapshotSource::Published,
+        })
+        .unwrap();
+    rig.state.on_snapshot(&mut rig.fetch);
+    assert_eq!(
+        rig.state.health.failure_streak, 1,
+        "an interim must not erase a pending failure"
+    );
+    assert_eq!(rig.state.current.rows().count(), 1);
+    assert!(!rig.state.last_known_elder);
+    assert!(
+        rig.next_request()
+            .expect("failed final releases the request")
+            .is_producer_fresh_panes()
+    );
+}
+
+#[test]
 fn disabled_observer_extracts_no_signature() {
     let mut rig = Rig::new();
     observe::take_extractions();
