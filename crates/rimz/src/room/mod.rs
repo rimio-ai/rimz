@@ -14,7 +14,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 
 use crate::config::{MachineConfig, MultiplexerConfig};
-use crate::harness::rebirth::{RebirthDisposition, RebirthPlan};
+use crate::harness::rebirth::RebirthPlan;
 use crate::ids::{MuxName, WorkspaceId};
 use crate::mux::{
     BackgroundViewOptions, CommandSpec, MuxBackend, MuxErr, PresencePluginOptions, SessionHealth,
@@ -27,7 +27,7 @@ use crate::{RuntimePaths, StatePaths, Store, workspace::record::WorkspaceRecord}
 pub use birth::{
     AttendedRecovery, BirthOutcome, NormalRebirth, ResetRecoveryError, RoomBirth, RoomResetReport,
 };
-pub use recovery::DeferredRecovery;
+pub use recovery::ParkedRecoveryOutcome;
 pub use standing::{
     AccountStanding, Deciding, Scope, Scopes, live_agents_by_login, other_live_agents_on,
 };
@@ -470,35 +470,6 @@ impl RoomContext {
             &self.machine_config,
             disabled,
         )
-    }
-
-    /// Plan the agents parked by an earlier boundary, for a session that is
-    /// already live, without mutating anything.
-    pub fn inspect_parked_recovery(
-        &self,
-        disabled: bool,
-    ) -> std::result::Result<RebirthPlan, crate::harness::rebirth::RebirthErr> {
-        RebirthPlan::inspect_live(
-            &self.workspace.workspace_id,
-            &self.workspace.project_root,
-            &self.machine_config,
-            disabled,
-        )
-    }
-
-    /// Settle a plan from [`Self::inspect_parked_recovery`], opening its
-    /// resumed tabs in the live session without taking focus. The returned
-    /// plan holds the tabs that opened and a warning for one that did not.
-    pub fn settle_parked_recovery(
-        &self,
-        plan: RebirthPlan,
-        disposition: RebirthDisposition,
-    ) -> crate::harness::resume::ResumePlan {
-        self.settle_recovery_consent(plan.consent(disposition))
-            .unwrap_or_else(|error| crate::harness::resume::ResumePlan {
-                warnings: vec![format!("agents stay parked: {error}")],
-                ..Default::default()
-            })
     }
 
     /// Open one resume tab in this room's live session.

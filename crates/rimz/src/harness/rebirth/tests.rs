@@ -1039,7 +1039,7 @@ fn settlement_confirms_each_resume_tab_on_its_own() {
                 assert!(
                     warning.starts_with("could not open resumed tab #")
                         && warning.ends_with(
-                            ": no tab; its agents stay pending for the next attended start"
+                            ": no tab; its agents stay pending for a later rebirth or explicit resume"
                         ),
                     "{case}: {warning}"
                 );

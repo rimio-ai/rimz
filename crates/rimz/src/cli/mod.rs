@@ -162,7 +162,6 @@ pub fn dispatch() -> Result<()> {
         Some(Subcmd::Setup(args)) => setup::run(args, &globals),
         Some(Subcmd::Ping) => doctor::ping(),
         Some(Subcmd::Start(args)) => room::start(args, &globals),
-        Some(Subcmd::RecoverParked(args)) => room::recover_deferred(args),
         Some(Subcmd::Attach(args)) => room::attach(args, &globals),
         Some(Subcmd::Sessions(args)) => sessions::run(args, &globals),
         Some(Subcmd::Remote(args)) => remote::run(args, &globals),
@@ -726,9 +725,6 @@ enum Subcmd {
     /// Pricing snapshot projection helper. Contributor automation calls this.
     #[command(hide = true)]
     PricingRefresh(pricing_refresh::PricingRefreshArgs),
-    /// Complete an attended recovery after a client attaches.
-    #[command(hide = true)]
-    RecoverParked(room::DeferredRecoveryArgs),
     #[command(visible_alias = "msg")]
     Message(Box<message::MessageArgs>),
     /// Sidebar helper API. The sidebar calls these; humans usually do not.

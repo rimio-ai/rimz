@@ -52,39 +52,6 @@ pub enum RebirthDisposition {
     RecoverDrop,
 }
 
-/// The decision covers only agents the user was offered, not later losses.
-#[derive(serde::Serialize, serde::Deserialize)]
-pub(crate) struct RecoveryConsent {
-    candidates: BTreeSet<(AgentKind, AgentSessionId)>,
-    pub(crate) disposition: RebirthDisposition,
-    recovery_off: bool,
-}
-
-impl RecoveryConsent {
-    pub(crate) fn inspect(
-        &self,
-        paths: StatePaths,
-        runtime: RuntimePaths,
-        project_root: &Path,
-        machine: &MachineConfig,
-    ) -> Result<RebirthPlan> {
-        let guard = crate::disk::lock::WorkspaceLock::acquire(&paths.workspace_lock)?;
-        let scope = pending_recovery::read(&paths.pending_recovery)
-            .intersection(&self.candidates)
-            .cloned()
-            .collect();
-        drop(guard);
-        Ok(inspect_live_scope(
-            paths,
-            runtime,
-            project_root,
-            machine,
-            self.recovery_off,
-            scope,
-        ))
-    }
-}
-
 impl RebirthDisposition {
     pub const fn recovers(self) -> bool {
         matches!(self, Self::RecoverKeep | Self::RecoverDrop)
@@ -184,17 +151,8 @@ enum CrashCacheEntry {
 }
 
 impl RebirthPlan {
-    pub(crate) fn consent(&self, disposition: RebirthDisposition) -> RecoveryConsent {
-        RecoveryConsent {
-            candidates: self
-                .candidates
-                .iter()
-                .map(|agent| (agent.kind.clone(), agent.agent_id.clone()))
-                .chain(self.ended.iter().cloned())
-                .collect(),
-            disposition,
-            recovery_off: self.recovery_off,
-        }
+    pub(crate) fn is_empty(&self) -> bool {
+        self.candidates.is_empty() && self.ended.is_empty() && self.refilled.is_empty()
     }
     /// Inspect prior state without changing markers, archives, event logs, the
     /// persisted live roster, or the pending-recovery record.
@@ -380,6 +338,7 @@ impl RebirthPlan {
         // An agent leaves the pending record only once it is resumed or its
         // ended stamp is durable; otherwise the reap would drop it unasked.
         let mut settled = self.ended;
+        let mut declined = 0;
         if let Some(store) = store.as_ref() {
             settled.extend(record_refilled_seats(
                 store,
@@ -411,6 +370,9 @@ impl RebirthPlan {
                 &rest,
                 event_name,
             );
+            if disposition == RebirthDisposition::Decline {
+                declined = dropped.len();
+            }
             cancel_child_runs(store, &self.paths, &self.candidates, &dropped);
             settled.extend(dropped);
         }
@@ -427,6 +389,7 @@ impl RebirthPlan {
             session_name: session_name.to_owned(),
             resume,
             tab_agents,
+            declined,
         }
     }
 }
@@ -441,9 +404,14 @@ pub(crate) struct SeededRecovery {
     resume: ResumePlan,
     /// The agents each of `resume.tabs` resumes or replaces, by position.
     tab_agents: Vec<RecoveryTabAgents>,
+    declined: usize,
 }
 
 impl SeededRecovery {
+    pub(crate) const fn declined_count(&self) -> usize {
+        self.declined
+    }
+
     /// The tabs whose agents this settlement resumes.
     pub(crate) fn tabs(&self) -> &[ResumeTab] {
         &self.resume.tabs
@@ -453,7 +421,7 @@ impl SeededRecovery {
     /// position is open: a confirmed tab's agents leave the pending record
     /// and count as recovered, while an unconfirmed tab fails its launch
     /// batch, leaves the returned plan with a warning, and keeps its agents
-    /// pending for the next attended start.
+    /// pending for a later rebirth or explicit resume.
     pub(crate) fn confirm<E: std::fmt::Display>(
         self,
         mut outcome: impl FnMut(usize, &ResumeTab) -> std::result::Result<(), E>,
@@ -465,6 +433,7 @@ impl SeededRecovery {
             session_name,
             mut resume,
             tab_agents,
+            declined: _,
         } = self;
         let planned = std::mem::take(&mut resume.tabs);
         let mut confirmed = BTreeSet::new();
@@ -482,7 +451,7 @@ impl SeededRecovery {
                 Err(error) => {
                     returned.push(None);
                     resume.warnings.push(format!(
-                        "could not open resumed tab {}: {error}; its agents stay pending for the next attended start",
+                        "could not open resumed tab {}: {error}; its agents stay pending for a later rebirth or explicit resume",
                         tab.label
                     ));
                 }

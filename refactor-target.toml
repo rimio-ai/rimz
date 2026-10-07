@@ -456,8 +456,8 @@ path = "crates/rimz/src/harness"
 # A supervised launch judges tier availability on its own login per kind: `LaunchAvailability::read_as` (+1).
 # A loop task's one account resolution serves the runner and `loop add`: `task_login` (+1).
 # Rebirth settlement takes a disposition and previews the unresumable agents; the plan reads skips by session (+5).
-# The preview says recovery was switched off, and a live settlement opens its tabs through the room (+2).
-# Deferred consent scopes a fresh live inspection to offered identities (+3).
+# The preview says recovery was switched off, and live room entry settles parked recovery through the room (+2).
+# Live room entry reads the plan's empty verdict and its declined count, and the preview counts seats live members already fill (+3).
 # Birth calls rebirth::park_roster before session creation so parking can refuse (+1).
 # The exec wrapper decides its launch through one harness entry and its outcome type, `launch_plan::prepare_exec` (+1).
 # Supervised launch planning and verify settlement leave the CLI: plan +2, run +2 with three transitions made private (+1).
@@ -534,7 +534,6 @@ path = "crates/rimz/src/mux"
 # The resolved Zellij session option list is one public type plus its resolver,
 # consumed by the live backend tests that prove room options at the multiplexer.
 # `MuxBackend::require_pane_in_session` is the room-membership check `pane send` and `pane capture` run before any pane I/O (+1).
-# Room entry asks the backend whether it can open a tab before attach (+1).
 # `SweepScope` names the process sweep's two scopes in place of a bool (+1).
 # `MuxBackend::confirm_resume_tabs` and its `ResumeTabUnconfirmed` error let a birth settle each resume tab on what the session holds (+2).
 # `recovery::temp_unit_holders` selects the processes a hard reset ends inside the room's sandbox views (+1).
@@ -610,9 +609,8 @@ upward-dependencies = [
 # The account standing, its scopes and deciding layer, and live agents per account serve accounts list, providers, and doctor (+5).
 # Birth-login selection stands apart from the all-account check room entry adds, since a supervised launch checks only its own account (+1).
 # A launch on a named account counts that account's other live agents (+1).
-# A live reattach inspects and settles the parked recovery candidates (+2).
-# Lane resume and live settlement open a resume tab through one room entry (+1).
-# The detached helper carries opaque, scoped recovery consent (+1).
+# Live entry reconciles parked recovery and returns its notice counts as `ParkedRecoveryOutcome` (+1).
+# Lane resume opens a resume tab through one room entry (+1).
 # A single-kind fresh-room selection and its deciding layer serve account reset (+2).
 surface-budget = 65
 

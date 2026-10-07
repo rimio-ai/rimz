@@ -1857,10 +1857,6 @@ impl MuxBackend for ZellijBackend {
         Ok(())
     }
 
-    fn can_open_tab(&self, session: &str) -> bool {
-        self.session_can_open_tab(session)
-    }
-
     fn rename_tab(
         &self,
         session: &str,
