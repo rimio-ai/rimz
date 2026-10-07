@@ -938,6 +938,16 @@ fn message_edit_and_requeue_enforce_record_lifecycle() {
     assert!(String::from_utf8_lossy(&open.stderr).contains("still queued"));
 
     let message = message_by_id(&env, &MessageId::parse(&message_id).expect("message id"));
+    let message = env
+        .store()
+        .claim_delivery_batch(
+            &message.message_id,
+            rimz::agents::AgentStatus::Idle,
+            jiff::Timestamp::now(),
+        )
+        .expect("claim message")
+        .expect("claimed")
+        .remove(0);
     env.store()
         .record_send_error(&message, "terminal failure", "rimz-test")
         .expect("terminalize message");
@@ -4231,7 +4241,7 @@ fn boundary_dispatch_sends_when_idle_then_parks_and_delivers_when_running() {
     assert_text_then_enter(&trace_log, &user_message("go"));
     let fresh = message_by_id(&env, &MessageId::parse(&sent_id).expect("message id"));
     assert_eq!(fresh.status, MessageStatus::Sent);
-    assert_eq!(fresh.attempts, 0, "fresh live send is not claimed");
+    assert_eq!(fresh.attempts, 1, "fresh live send holds a claim");
 
     run_hook(
         &env,
@@ -4884,7 +4894,10 @@ fn sweep_requeues_unconfirmed_send_now_message_and_redelivers() {
         .find(|message| message.message_id.as_str() == message_id)
         .expect("redelivered message");
     assert_eq!(sent.status, MessageStatus::Sent);
-    assert_eq!(sent.attempts, 1, "redelivery claim counted attempts");
+    assert_eq!(
+        sent.attempts, 2,
+        "fresh and redelivery claims count attempts"
+    );
     assert_eq!(sent.unconfirmed_sends, 1);
     assert!(
         sent.last_sent_at.is_some_and(|at| at >= first_last_sent_at),
@@ -5394,6 +5407,8 @@ fn send_now_write_failure_leaves_queued_record_for_sweep_retry() {
     assert_eq!(pending.len(), 1);
     assert_eq!(pending[0].message_id.as_str(), message_id);
     assert_eq!(pending[0].status, MessageStatus::Queued);
+    assert_eq!(pending[0].attempts, 1);
+    assert_eq!(pending[0].last_attempt_at, None);
     assert!(pending[0].last_error.is_some(), "send error is recorded");
     assert_eq!(pending[0].pane_id, None, "retry re-resolves a fresh pane");
 
@@ -5414,7 +5429,288 @@ fn send_now_write_failure_leaves_queued_record_for_sweep_retry() {
         .find(|message| message.message_id.as_str() == message_id)
         .expect("retried message");
     assert_eq!(sent.status, MessageStatus::Sent);
-    assert_eq!(sent.attempts, 1);
+    assert_eq!(sent.attempts, 2);
+}
+
+#[test]
+fn fresh_claim_is_sent_when_its_recovery_wake_cannot_be_registered() {
+    let env = Env::new();
+    register_running_agent(
+        &env,
+        "sess-broken-wake",
+        "broken-wake",
+        &[("ZELLIJ_PANE_ID", "3")],
+    );
+    run_hook(
+        &env,
+        json!({"hook_event_name": "Stop", "session_id": "sess-broken-wake", "worktree_branch": "broken-wake"}),
+        &[("ZELLIJ_PANE_ID", "3")],
+    );
+    let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "claude")]);
+    std::fs::create_dir(wake_stamp_path(&env)).unwrap();
+    let trace = env.project_root.join("broken-wake.log");
+    let output = traced_rimz(&env, &trace)
+        .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+        .args(["message", "@claude", "--", "retry after repair"])
+        .output()
+        .unwrap();
+    let message = env.store().list_messages().unwrap().remove(0);
+    assert_eq!(message.status, MessageStatus::Sent, "{output:?}");
+    assert_eq!(message.attempts, 1);
+    assert_eq!(message.last_error, None);
+    let lines = trace_lines(&trace);
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|line| is_paste(line, &user_message("retry after repair")))
+            .count(),
+        1
+    );
+    assert_eq!(lines.iter().filter(|line| is_enter_key(line)).count(), 1);
+}
+
+#[test]
+fn fresh_sends_exclude_hook_delivery_before_the_pane_write() {
+    for mode in [None, Some("--steer"), Some("--interrupt")] {
+        let env = Env::new();
+        env.install_agent_hooks("claude");
+        let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
+        register_running_agent(&env, "sess-fresh-claim", "fresh-claim", pane_env);
+        run_hook(
+            &env,
+            json!({
+                "hook_event_name": "Stop", "session_id": "sess-fresh-claim", "worktree_branch": "fresh-claim",
+            }),
+            pane_env,
+        );
+        let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "claude")]);
+        let before = DeliveryRendezvous::new(&env, "fresh-before-lock");
+        let trace = env.project_root.join("fresh-claim.log");
+        let mut command = traced_rimz(&env, &trace);
+        command
+            .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+            .env("RIMZ_TEST_PANE_WRITE_BEFORE_LOCK", &before.path)
+            .args(["message"]);
+        if let Some(mode) = mode {
+            command.arg(mode);
+        }
+        let child = command
+            .args(["@claude", "--", "once"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut release = before.arrive();
+        let held = env.store().list_messages().unwrap().remove(0);
+        let wake: Option<jiff::Timestamp> = std::fs::read(wake_stamp_path(&env))
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).unwrap());
+        run_success(
+            traced_rimz(&env, &trace)
+                .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+                .env("RIMZ_MESSAGE_SETTLE_MS", "0")
+                .args([
+                    "message",
+                    "deliver",
+                    "--message-id",
+                    held.message_id.as_str(),
+                ]),
+            "concurrent hook delivery",
+        );
+        release.write_all(&[1]).unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+        assert_eq!(
+            wake,
+            Some(held.last_attempt_at.unwrap() + Duration::from_secs(15)),
+            "fresh claim must arm recovery before waiting for the pane lock"
+        );
+        let lines = trace_lines(&trace);
+        assert_eq!(
+            lines
+                .iter()
+                .filter(|line| is_paste(line, &user_message("once")))
+                .count(),
+            1,
+            "mode {mode:?}: {lines:?}"
+        );
+        assert_eq!(lines.iter().filter(|line| is_enter_key(line)).count(), 1);
+        assert_eq!(held.status, MessageStatus::Claimed);
+        assert_eq!(held.attempts, 1);
+        assert_text_then_enter(&trace, &user_message("once"));
+        assert_eq!(
+            env.read_events()
+                .iter()
+                .filter(|event| event.method == "message.sent")
+                .count(),
+            1
+        );
+    }
+}
+
+#[test]
+fn expired_fresh_sender_stops_after_sweep_redelivers_its_claim() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
+    register_running_agent(&env, "sess-expired-sender", "expired-sender", pane_env);
+    run_hook(
+        &env,
+        json!({
+            "hook_event_name": "Stop", "session_id": "sess-expired-sender", "worktree_branch": "expired-sender",
+        }),
+        pane_env,
+    );
+    let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "claude")]);
+    let before = DeliveryRendezvous::new(&env, "expired-before-lock");
+    let trace = env.project_root.join("expired-sender.log");
+    let child = traced_rimz(&env, &trace)
+        .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+        .env("RIMZ_TEST_PANE_WRITE_BEFORE_LOCK", &before.path)
+        .args(["message", "@claude", "--", "once"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut release = before.arrive();
+    let mut expired = env.store().list_messages().unwrap().remove(0);
+    expired.last_attempt_at = Some(jiff::Timestamp::now() - Duration::from_secs(60));
+    env.store().queue_message(&expired, "rimz-test").unwrap();
+    run_success(
+        traced_rimz(&env, &trace)
+            .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+            .args(["message", "sweep"]),
+        "recover waiting sender's claim",
+    );
+    release.write_all(&[1]).unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let lines = trace_lines(&trace);
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|line| is_paste(line, &user_message("once")))
+            .count(),
+        1,
+        "stale sender pasted again: {lines:?}"
+    );
+    assert_eq!(lines.iter().filter(|line| is_enter_key(line)).count(), 1);
+    assert_eq!(
+        env.read_events()
+            .iter()
+            .filter(|event| event.method == "message.sent")
+            .count(),
+        1
+    );
+    let sent = message_by_id(&env, &expired.message_id);
+    assert_eq!(sent.status, MessageStatus::Sent);
+    assert_eq!(sent.attempts, 2);
+}
+
+#[test]
+fn delivery_releases_remaining_claims_when_a_batch_member_is_canceled_before_write() {
+    let env = Env::new();
+    run_hook(
+        &env,
+        json!({"hook_event_name": "SessionStart", "session_id": "sess-lost-batch"}),
+        &[("ZELLIJ_PANE_ID", "3")],
+    );
+    let agent = env.store().snapshot_cached().unwrap().agents.remove(0);
+    let first = MessageRecord::new(
+        env.workspace_id.clone(),
+        &agent,
+        "first".to_owned(),
+        DeliveryGate::Done,
+    );
+    let second = MessageRecord::new(
+        env.workspace_id.clone(),
+        &agent,
+        "second".to_owned(),
+        DeliveryGate::Done,
+    );
+    queue_messages(&env, &[&first, &second]);
+    let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "claude")]);
+    let before = DeliveryRendezvous::new(&env, "lost-batch-before-lock");
+    let trace = env.project_root.join("lost-batch.log");
+    let child = traced_rimz(&env, &trace)
+        .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+        .env("RIMZ_TEST_PANE_WRITE_BEFORE_LOCK", &before.path)
+        .args([
+            "message",
+            "deliver",
+            "--message-id",
+            first.message_id.as_str(),
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut release = before.arrive();
+    assert_eq!(
+        message_by_id(&env, &second.message_id).status,
+        MessageStatus::Claimed
+    );
+    assert!(
+        env.store()
+            .cancel_message(&second.message_id, "rimz-test", "cancel")
+            .unwrap()
+    );
+    release.write_all(&[1]).unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert_no_report_pane_write(&trace);
+    let released = message_by_id(&env, &first.message_id);
+    assert_eq!(released.status, MessageStatus::Queued);
+    assert_eq!(released.attempts, 0, "a stopped batch spends no attempt");
+    assert_eq!(released.last_attempt_at, None);
+    assert!(
+        !env.read_events()
+            .iter()
+            .any(|event| event.method == "message.sent" || event.method == "message.errored")
+    );
+}
+
+#[test]
+fn sweep_recovers_a_lane_containing_only_an_expired_claim() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
+    register_running_agent(&env, "sess-expired-claim", "expired-claim", pane_env);
+    run_hook(
+        &env,
+        json!({
+            "hook_event_name": "Stop", "session_id": "sess-expired-claim", "worktree_branch": "expired-claim",
+        }),
+        pane_env,
+    );
+    let agent = env.store().snapshot_cached().unwrap().agents.remove(0);
+    let queued = MessageRecord::new(
+        env.workspace_id.clone(),
+        &agent,
+        "recover claim".to_owned(),
+        DeliveryGate::Done,
+    );
+    env.store().queue_message(&queued, "rimz-test").unwrap();
+    env.store()
+        .claim_delivery_batch(
+            &queued.message_id,
+            rimz::agents::AgentStatus::Idle,
+            jiff::Timestamp::now() - Duration::from_secs(60),
+        )
+        .unwrap()
+        .unwrap();
+    let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "claude")]);
+    let trace = env.project_root.join("expired-claim.log");
+    run_success(
+        traced_rimz(&env, &trace)
+            .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+            .args(["message", "sweep"]),
+        "sweep expired claim",
+    );
+    assert_text_then_enter(&trace, &user_message("recover claim"));
+    let sent = message_by_id(&env, &queued.message_id);
+    assert_eq!(sent.status, MessageStatus::Sent);
+    assert_eq!(sent.attempts, 2);
 }
 
 #[test]
@@ -5461,7 +5757,7 @@ fn send_now_submit_failure_leaves_sent_record() {
     );
     let sent = message_by_id(&env, &message_id);
     assert_eq!(sent.status, MessageStatus::Sent);
-    assert_eq!(sent.attempts, 0);
+    assert_eq!(sent.attempts, 1);
 }
 
 #[test]
@@ -5645,6 +5941,125 @@ fn queued_delivery_batches_compatible_prompts() {
     assert_eq!(message_by_id(&env, &third_id).status, MessageStatus::Queued);
     let delivered = delivered_message_ids(&env);
     assert_eq!(delivered, vec![first_id.to_string(), second_id.to_string()]);
+}
+
+#[test]
+fn compact_first_sends_once_when_its_recovery_wake_cannot_be_registered() {
+    let env = Env::new();
+    register_running_agent(
+        &env,
+        "sess-compact-wake-fail",
+        "compact-wake-fail",
+        &[("ZELLIJ_PANE_ID", "3")],
+    );
+    seed_context_fill(&env, "sess-compact-wake-fail", 80);
+    let trace = env.project_root.join("compact-wake-fail.log");
+    let before = DeliveryRendezvous::new(&env, "compact-wake-fail-before-lock");
+    let child = traced_rimz(&env, &trace)
+        .env("RIMZ_TEST_PANE_WRITE_BEFORE_LOCK", &before.path)
+        .args([
+            "message",
+            "--steer",
+            "@claude",
+            "--smart-compact",
+            "70%",
+            "--",
+            "go",
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut release = before.arrive();
+    std::fs::remove_file(wake_stamp_path(&env)).unwrap();
+    std::fs::create_dir(wake_stamp_path(&env)).unwrap();
+    release.write_all(&[1]).unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(env.store().list_message_history().unwrap().is_empty());
+    let live = env.store().list_messages().unwrap();
+    assert_eq!(live.len(), 2, "{output:?}");
+    for body in [MessageBody::Command, MessageBody::Prompt] {
+        let message = live.iter().find(|message| message.body == body).unwrap();
+        assert_eq!(message.status, MessageStatus::Sent, "{output:?}");
+        assert_eq!(message.attempts, 1);
+        assert_eq!(message.last_error, None);
+    }
+    let lines = trace_lines(&trace);
+    assert_eq!(
+        lines.iter().filter(|line| is_compact_command(line)).count(),
+        1
+    );
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|line| is_paste(line, &user_message("go")))
+            .count(),
+        1
+    );
+    assert_eq!(lines.iter().filter(|line| is_enter_key(line)).count(), 2);
+    assert_compact_segments_then_enter(
+        &lines,
+        rimz::config::HarnessConfig::default().compact_instruction(rimz::config::CompactSeat::Solo),
+    );
+}
+
+#[test]
+fn compact_first_claim_arms_recovery_before_the_command_finishes() {
+    let env = Env::new();
+    register_running_agent(
+        &env,
+        "sess-compact-wake",
+        "compact-wake",
+        &[("ZELLIJ_PANE_ID", "3")],
+    );
+    seed_context_fill(&env, "sess-compact-wake", 80);
+    let trace = env.project_root.join("compact-wake.log");
+    let before = DeliveryRendezvous::new(&env, "compact-wake-before-lock");
+    let token = DeliveryRendezvous::new(&env, "compact-wake-token");
+    let child = traced_rimz(&env, &trace)
+        .env("RIMZ_TEST_PANE_WRITE_BEFORE_LOCK", &before.path)
+        .env("RIMZ_TEST_COMMAND_TOKEN_WRITTEN", &token.path)
+        .env("RIMZ_MESSAGE_COMMAND_SUBMIT_DELAY_MS", "0")
+        .args([
+            "message",
+            "--steer",
+            "@claude",
+            "--smart-compact",
+            "70%",
+            "--",
+            "go",
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut release = before.arrive();
+    if wake_stamp_path(&env).exists() {
+        std::fs::remove_file(wake_stamp_path(&env)).unwrap();
+    }
+    release.write_all(&[1]).unwrap();
+    let mut release = token.arrive();
+    let claimed = env.store().list_messages().unwrap();
+    let wake: Option<jiff::Timestamp> = std::fs::read(wake_stamp_path(&env))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).unwrap());
+    release.write_all(&[1]).unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(claimed.len(), 2);
+    assert!(
+        claimed
+            .iter()
+            .all(|message| message.status == MessageStatus::Claimed)
+    );
+    assert_eq!(
+        wake,
+        claimed
+            .iter()
+            .map(|message| message.last_attempt_at.unwrap() + Duration::from_secs(15))
+            .min(),
+        "compact claim must refresh recovery before writing its command"
+    );
 }
 
 #[test]
@@ -5937,6 +6352,10 @@ fn command_delivery_parks_without_spending_an_attempt_when_compaction_starts_aft
         .spawn()
         .unwrap();
     let mut release = after.arrive();
+    let held = message_by_id(&env, &command.message_id);
+    let wake: Option<jiff::Timestamp> = std::fs::read(wake_stamp_path(&env))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).unwrap());
     let observation = AgentLifecycleObservation::new(
         Some("sess-compact-park".into()),
         LifecycleSignal::Compacting,
@@ -5956,6 +6375,11 @@ fn command_delivery_parks_without_spending_an_attempt_when_compaction_starts_aft
     let parked = message_by_id(&env, &command.message_id);
     assert_eq!(parked.status, MessageStatus::Queued);
     assert_eq!(parked.attempts, command.attempts);
+    assert_eq!(
+        wake,
+        Some(held.last_attempt_at.unwrap() + Duration::from_secs(15)),
+        "delivery claim must arm recovery before the sender continues"
+    );
     assert_no_report_pane_write(&trace);
 }
 
@@ -7054,7 +7478,7 @@ fn boundary_fanout_preserves_target_order_on_hook_failure() {
         assert_eq!(records.len(), usize::from(live_first));
         if let Some(record) = records.first() {
             assert_eq!(record.status, MessageStatus::Sent);
-            assert_eq!(record.attempts, 0);
+            assert_eq!(record.attempts, 1);
         }
     }
 }

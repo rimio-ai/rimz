@@ -1,7 +1,6 @@
 //! Receiver readiness, shared delivery-attempt recovery, queued sweeps, and wake maintenance.
 
 use std::fs::File;
-use std::io::ErrorKind;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -249,6 +248,7 @@ fn attempt_delivery(
     let Some(claimed) = claimed else {
         return Ok(DeliveryReport::Stopped(None));
     };
+    arm_claim_wake(workspace, store);
     #[cfg(feature = "testkit")]
     crate::testkit::rendezvous("RIMZ_TEST_DELIVERY_AFTER_CLAIM");
     match cancel_joined_subagent_report(workspace, store, &claimed[0]) {
@@ -367,6 +367,7 @@ pub(super) fn execute_attempt(
         workspace, store, snapshot, target, bound, records, live_send,
     ) {
         Ok(send::Receipt::Sent { compacted }) => Ok(AttemptOutcome::Sent { compacted }),
+        Ok(send::Receipt::ClaimLost) => Ok(AttemptOutcome::Queued),
         Ok(send::Receipt::SkippedWaiting) => {
             const WAITING: &str = "agent is waiting on input in its pane";
             if matches!(source, AttemptSource::Fresh { .. })
@@ -1061,27 +1062,18 @@ fn delivery_candidate<'a>(
     }))
 }
 
-pub fn register_message_wake(workspace: &ResolvedWorkspace, store: &Store) -> Result<()> {
-    let runtime = RuntimePaths::for_project_root(&workspace.project_root)?;
-    refresh_wake_stamp(&runtime, store, Timestamp::now())
+/// Arms the elder's wake for a claim before its pane write, so a sender that dies mid-write is
+/// requeued after `CLAIM_TTL`. Wakes are latency, never truth: a stamp that cannot be written
+/// delays that recovery and does not stop the send.
+pub(super) fn arm_claim_wake(workspace: &ResolvedWorkspace, store: &Store) {
+    if let Err(error) = register_message_wake(workspace, store) {
+        tracing::warn!(%error, "cannot arm the claim recovery wake");
+    }
 }
 
-fn refresh_wake_stamp(runtime: &RuntimePaths, store: &Store, now: Timestamp) -> Result<()> {
-    let path = wake_stamp_path(runtime);
-    let next = store.earliest_message_wake(now)?;
-    match next {
-        Some(not_before) => {
-            crate::disk::atomic::write_temp_then_rename_cache(&path, &Some(not_before))?;
-        }
-        None => match std::fs::remove_file(&path) {
-            Ok(()) => {}
-            Err(err) if err.kind() == ErrorKind::NotFound => {}
-            Err(err) => {
-                return Err(DeliverErr::Io { path, source: err });
-            }
-        },
-    }
-    Ok(())
+pub fn register_message_wake(workspace: &ResolvedWorkspace, store: &Store) -> Result<()> {
+    let runtime = RuntimePaths::for_project_root(&workspace.project_root)?;
+    Ok(send::refresh_wake_stamp(&runtime, store, Timestamp::now())?)
 }
 
 pub(super) fn wake_stamp_path(runtime: &RuntimePaths) -> PathBuf {
