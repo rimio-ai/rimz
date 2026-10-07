@@ -41,32 +41,38 @@ pub struct SupervisedChild {
 }
 
 impl SupervisedChild {
+    /// Adopt the child retained across a same-process exec.
+    #[cfg(unix)]
+    pub fn adopt_pid(pid: u32, wake: Sender<()>) -> Self {
+        Self::adopt_target(pid, WaitTarget::Pid(pid), wake)
+    }
+
+    #[cfg(unix)]
+    fn adopt_target(pid: u32, target: WaitTarget, wake: Sender<()>) -> Self {
+        let status = Arc::new(Mutex::new(None));
+        let waiter = SupervisedWaiter {
+            target: Some(target),
+            status: status.clone(),
+            wake: wake.clone(),
+        };
+        if let Err(err) = std::thread::Builder::new()
+            .name("rimz-child-wait".to_owned())
+            .spawn(move || waiter.wait())
+        {
+            tracing::warn!(pid, error = %err, "supervised child waiter could not start; child waited inline");
+        }
+        Self {
+            pid,
+            status,
+            _wake: wake,
+        }
+    }
+
     /// Move `child` into a waiter thread and notify `wake` when it exits.
     pub fn adopt(child: Child, wake: Sender<()>) -> Self {
         #[cfg(unix)]
         {
-            let pid = child.id();
-            let status = Arc::new(Mutex::new(None));
-            let waiter = SupervisedWaiter {
-                child: Some(child),
-                status: status.clone(),
-                wake: wake.clone(),
-            };
-            if let Err(err) = std::thread::Builder::new()
-                .name("rimz-child-wait".to_owned())
-                .spawn(move || waiter.wait())
-            {
-                tracing::warn!(
-                    pid,
-                    error = %err,
-                    "supervised child waiter could not start; child waited inline"
-                );
-            }
-            Self {
-                pid,
-                status,
-                _wake: wake,
-            }
+            Self::adopt_target(child.id(), WaitTarget::Child(child), wake)
         }
 
         #[cfg(not(unix))]
@@ -115,7 +121,7 @@ impl SupervisedChild {
 
 #[cfg(unix)]
 struct SupervisedWaiter {
-    child: Option<Child>,
+    target: Option<WaitTarget>,
     status: Arc<Mutex<Option<io::Result<std::process::ExitStatus>>>>,
     wake: Sender<()>,
 }
@@ -123,8 +129,8 @@ struct SupervisedWaiter {
 #[cfg(unix)]
 impl SupervisedWaiter {
     fn wait(mut self) {
-        if let Some(mut child) = self.child.take() {
-            self.finish(child.wait());
+        if let Some(target) = self.target.take() {
+            self.finish(target.wait());
         }
     }
 
@@ -142,8 +148,46 @@ impl SupervisedWaiter {
 #[cfg(unix)]
 impl Drop for SupervisedWaiter {
     fn drop(&mut self) {
-        if let Some(mut child) = self.child.take() {
-            self.finish(child.wait());
+        if let Some(target) = self.target.take() {
+            self.finish(target.wait());
+        }
+    }
+}
+
+#[cfg(unix)]
+enum WaitTarget {
+    Child(Child),
+    Pid(u32),
+}
+
+#[cfg(unix)]
+impl WaitTarget {
+    fn wait(self) -> io::Result<std::process::ExitStatus> {
+        match self {
+            Self::Child(mut child) => child.wait(),
+            Self::Pid(pid) => wait_pid(pid),
+        }
+    }
+}
+
+#[cfg(unix)]
+fn wait_pid(pid: u32) -> io::Result<std::process::ExitStatus> {
+    use nix::sys::wait::{WaitStatus, waitpid};
+    use nix::unistd::Pid;
+    use std::os::unix::process::ExitStatusExt;
+
+    loop {
+        match waitpid(Pid::from_raw(pid as i32), None) {
+            Ok(WaitStatus::Exited(_, code)) => {
+                return Ok(std::process::ExitStatus::from_raw(code << 8));
+            }
+            Ok(WaitStatus::Signaled(_, signal, core_dumped)) => {
+                return Ok(std::process::ExitStatus::from_raw(
+                    signal as i32 | if core_dumped { 0x80 } else { 0 },
+                ));
+            }
+            Ok(_) | Err(nix::errno::Errno::EINTR) => {}
+            Err(error) => return Err(error.into()),
         }
     }
 }
@@ -693,6 +737,49 @@ mod tests {
             .expect("child exit wake arrived before watchdog");
 
         assert_eq!(status.code(), Some(3));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn adopted_pid_wakes_with_exit_status_and_supports_signals() {
+        for signal in [
+            None,
+            Some(SupervisedChild::signal_term as fn(&mut SupervisedChild)),
+            Some(SupervisedChild::signal_kill),
+        ] {
+            let (wake, receiver) = mpsc::channel();
+            let child = Command::new("sh")
+                .args([
+                    "-c",
+                    if signal.is_some() {
+                        "exec sleep 5"
+                    } else {
+                        "exit 7"
+                    },
+                ])
+                .spawn()
+                .unwrap();
+            let pid = child.id();
+            drop(child);
+            let mut adopted = SupervisedChild::adopt_pid(pid, wake);
+            if let Some(signal) = signal {
+                signal(&mut adopted);
+            }
+            assert!(
+                receiver.recv_timeout(WAIT_TIMEOUT).is_ok(),
+                "adopted pid must wake its supervisor"
+            );
+            let status = adopted
+                .try_wait()
+                .unwrap()
+                .expect("exit published before wake");
+            if signal.is_none() {
+                assert_eq!(status.code(), Some(7));
+            } else {
+                use std::os::unix::process::ExitStatusExt;
+                assert!(status.signal().is_some());
+            }
+        }
     }
 
     #[test]
