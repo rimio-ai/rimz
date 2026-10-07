@@ -1622,16 +1622,22 @@ fn fresh_cohort_relaunch_preserves_dirty_checkout_and_does_not_duplicate_live_ag
             let ready_count = std::fs::read_dir(&ready)
                 .expect("read readiness records")
                 .count();
-            if ready_count == count
-                && rows.iter().filter(|agent| agent.ended_at.is_none()).count() == 2
-                && rows.iter().all(|agent| !agent.agent_id.is_provisional())
-            {
+            let live_count = rows.iter().filter(|agent| agent.ended_at.is_none()).count();
+            let provisional = rows.iter().any(|agent| agent.agent_id.is_provisional());
+            if ready_count == count && live_count == 2 && !provisional {
                 return rows;
             }
             assert!(
                 Instant::now() < deadline,
-                "cohort did not launch: ready={ready_count}, expected={count}, panes={}",
-                server.stdout(&[
+                "cohort did not launch: ready={ready_count}, expected={count}, live={live_count}, provisional={provisional}, windows={:?}, panes={:?}",
+                server.try_stdout(&[
+                    "list-windows",
+                    "-t",
+                    &workspace.session_name,
+                    "-F",
+                    "#{window_name}"
+                ]),
+                server.try_stdout(&[
                     "capture-pane",
                     "-p",
                     "-t",
