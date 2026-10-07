@@ -175,6 +175,8 @@ Both chokepoints (`ZellijBackend::cmd` and `tmux::tmux_cmd`) also give every mux
 
 Rebirth re-pins on both backends. Panes also carry a pane-scope pin ([`pane_pin_env`](../../crates/rimz/src/workspace.rs)): `RIMZ=1`, `RIMZ_WORKTREE_PATH` set to the tab's cwd, and `RIMZ_CHANNEL` when the tab has a channel. A live tab applies it through `TabOptions.env` and a resume tab through `ResumeTab.env`, both rendered per pane (tmux `-e K=V`, Zellij an `env` argv prefix), so a re-seeded agent or a reborn `#channel` shell starts with the same identity a fresh launch gets. The harness builds `ResumeTab.env` from stored fields; the backends never derive a channel from a tab label.
 
+`RIMZ_WORKTREE_PATH` therefore marks more than agent panes, and code reading it cannot take it as proof of an agent. The pane-scope pin goes to agent launches (fresh, forked, restarted, resumed, and supervised runs), `rimz pane split` shells, and reborn tabs. Two non-pane processes set the key alone, without `RIMZ=1` or a channel: a loop check, where it names the task's run directory on top of the session pin, and a worktree hook, where it names the worktree the hook fired for. The room's first shell carries only the session pin.
+
 A pane's launch-name pin is separate from room identity. tmux stores it in the pane option `@rimz_title`, sanitized like window names (`:` and `.` become `-`), and removes it from every pane in a released window. Zellij uses the pane name and keeps it on release.
 
 ### Pane metadata
