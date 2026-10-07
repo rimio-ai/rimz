@@ -184,6 +184,10 @@ The deterministic gates pin exact integers. They live in `crates/rimz/tests/inte
 
 The `cargo xtask invariants` check `ensure_sidebar_library_boundaries` keeps store writers, the run-wake sender, and the broker out of the sidebar data plane's imports, so the producer cannot grow write-side machinery unnoticed.
 
+### Live client-byte guard
+
+`crates/rimz/tests/integration/journey/deep.rs::tmux_cell_only_sidebar_bounds_client_bytes` runs the real sidebar beside an agent driven by installed Codex hooks, with a PTY-attached tmux client. A cell-only frame costs that client at most 2 KiB: over a measured window, the guard allows one 2048-byte diff per configured frame interval plus 4 KiB for the status line. It also requires the attached client's agent row to animate, so a renderer that paints nothing cannot pass. The pane has at least 4000 cells, making the old full repaint exceed the budget. This is a live-tmux gate, run with `cargo xtask test -E 'binary(integration) & test(journey::deep::tmux)'`, not a wall-clock assertion.
+
 ### Benchmarks
 
 `cargo xtask perf` runs the non-gating divan benches in `crates/rimz/benches/` over synthetic stores and pane frames, through the same entry points the sidebar uses. It launches no agents and spends no tokens. Wall-clock and allocation figures stay out of `ci`, so a busy runner never fails a build on timing.
@@ -242,7 +246,7 @@ Totals across a fleet of 2 to 5 rooms:
 
 Against the agents it tracks, that overhead is a rounding error. One developer's week of Claude and Codex sessions produced 1.23 GiB of transcript JSONL (about 177 MiB a day), with each agent process resident at 250 to 340 MiB (Claude) or 50 to 65 MiB (Codex). RimZ watched the same fleet with tens of MiB of durable state, a resident set about the size of one agent process, one fsync a second per room, and one pricing refresh a week.
 
-Remote render-stream bytes sit outside this budget: SSH carries whatever the visible full-screen TUIs repaint. Idle RimZ surfaces send close to nothing, and a busy agent TUI commonly sends tens of KB/s. `rimz pane bandwidth` reports each pane's producer write rate beside the room's SSH socket payload (`WIRE(ssh)`), which is usually far below the per-pane sum ([reference](../reference/cli/pane.md#bandwidth)).
+Remote render-stream bytes sit outside this CPU and memory budget: SSH carries whatever the visible full-screen TUIs repaint. The sidebar has a separate [client-byte guard](#live-client-byte-guard): a cell-only frame costs the attached tmux client at most 2 KiB, rather than the roughly 17 KB full repaint its unconditional synchronized-output bracket caused on a 60x69 pane (tmux 3.7c, 2026-10-07; about 165 KB/s). A same-day guard re-measure on a 50x119 pane received 496667 bytes in 10.066 seconds before this change, versus 19963 bytes in 10.114 seconds with graphics-only brackets, about 49 KB/s versus 2 KB/s. These are attached-client bytes, not the renderer's producer write rate. Idle RimZ surfaces send close to nothing, and a busy agent TUI commonly sends tens of KB/s. `rimz pane bandwidth` reports each pane's producer write rate beside the room's SSH socket payload (`WIRE(ssh)`), which is usually far below the per-pane sum ([reference](../reference/cli/pane.md#bandwidth)).
 
 ## What's optimized
 
