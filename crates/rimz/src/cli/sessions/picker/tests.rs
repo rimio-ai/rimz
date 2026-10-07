@@ -399,7 +399,7 @@ fn new_session_overlay_filters_navigates_and_confirms_every_row_kind() {
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path();
     let alpha = home.join("alpha");
-    let beta = home.join("beta");
+    let beta = home.join("overlay-filter-target");
     std::fs::create_dir_all(&alpha).unwrap();
     std::fs::create_dir_all(&beta).unwrap();
     std::fs::create_dir_all(home.join(".hidden")).unwrap();
@@ -433,12 +433,13 @@ fn new_session_overlay_filters_navigates_and_confirms_every_row_kind() {
         Some(Action::Create(alpha.clone()))
     );
 
-    overlay.input = "bet".to_owned();
+    // The filter matches full paths, so it must be text no temp root holds.
+    overlay.input = "overlay-filter-t".to_owned();
     overlay.selected = 0;
     assert_eq!(
         overlay.rows(),
         vec![NewSessionRow::Directory {
-            name: "beta".to_owned(),
+            name: "overlay-filter-target".to_owned(),
             path: beta,
         }]
     );
