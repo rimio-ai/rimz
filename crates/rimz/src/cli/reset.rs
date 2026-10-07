@@ -10,7 +10,6 @@ use anyhow::{Context, Result};
 use clap::Args;
 
 use super::{AttachFlags, GlobalFlags, StartArgs};
-use rimz::room::session::MissingSessionReport;
 use rimz::room::{RoomContext, RoomSizing};
 use rimz::workspace::WorkspaceResolver;
 
@@ -43,7 +42,6 @@ pub fn run(args: ResetArgs, globals: &GlobalFlags) -> Result<()> {
     let mux = super::render::room::present_mux_pick(rimz::room::session::pick_mux_for_session(
         &workspace.session_name,
         globals.mux,
-        MissingSessionReport::Silent,
     ))?;
     super::render::room::print_notices(rimz::room::session::ensure_single_backend_room(
         mux,

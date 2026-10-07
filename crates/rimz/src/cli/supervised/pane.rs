@@ -15,7 +15,6 @@ use rimz::mux::{
     SplitTarget, TabOptions,
 };
 use rimz::pane::PaneRef;
-use rimz::room::session::MissingSessionReport;
 use rimz::store::run::RunRecord;
 use rimz::store::snapshot::find_agent;
 
@@ -440,12 +439,9 @@ pub(super) fn backend_for_workspace_session(
     workspace: &rimz::ResolvedWorkspace,
     globals: &GlobalFlags,
 ) -> Result<Box<dyn rimz::mux::MuxBackend>> {
-    let mux =
-        crate::cli::render::room::present_mux_pick(rimz::room::session::pick_mux_for_session(
-            &workspace.session_name,
-            globals.mux,
-            MissingSessionReport::Silent,
-        ))?;
+    let mux = crate::cli::render::room::present_mux_pick(
+        rimz::room::session::pick_mux_for_session(&workspace.session_name, globals.mux),
+    )?;
     Ok(rimz::mux::backend_for(mux))
 }
 

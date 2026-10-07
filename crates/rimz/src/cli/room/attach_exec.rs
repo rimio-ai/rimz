@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use rimz::ids::{MuxName, WorkspaceId};
 
-use super::{AttachAction, AttachMode};
+use super::{AttachAction, AttachMode, RoomSituation};
 
 // The local recovery panel parks its cursor on the Multiplexer symbol cell;
 // this in-band marker lands there immediately before the mux paints.
@@ -248,18 +248,36 @@ pub(super) fn should_report_already_inside(mode: AttachMode, inside_mux: bool) -
 
 pub(super) fn report_already_inside(
     mux: MuxName,
-    workspace: &rimz::ResolvedWorkspace,
+    session: &str,
+    situation: RoomSituation,
 ) -> Result<()> {
-    let mut stderr = std::io::stderr().lock();
-    writeln!(
-        stderr,
-        "You're already inside a {mux} session, which can't host a nested room.",
-    )?;
-    writeln!(
-        stderr,
-        "This directory's room is `{}`. Detach to (re)launch it, or run `rimz` from outside the session.",
-        workspace.session_name,
-    )?;
+    let mut stderr = crate::cli::render::err();
+    match situation {
+        RoomSituation::CurrentRoom => writeln!(
+            stderr,
+            "You're already in this directory's room (`{session}`, {mux})."
+        )?,
+        RoomSituation::LiveElsewhere => {
+            writeln!(
+                stderr,
+                "This directory's room `{session}` is running in another {mux} session."
+            )?;
+            writeln!(
+                stderr,
+                "Detach from this session, then run `rimz` here to enter it."
+            )?;
+        }
+        RoomSituation::NotRunning => {
+            writeln!(
+                stderr,
+                "This directory's room isn't running, and {mux} can't start one inside this session."
+            )?;
+            writeln!(
+                stderr,
+                "Detach and run `rimz` here, or run it from another terminal."
+            )?;
+        }
+    }
     Ok(())
 }
 

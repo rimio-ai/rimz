@@ -36,6 +36,48 @@ fn stdout_line(out: &Output) -> String {
     String::from_utf8_lossy(&out.stdout).trim().to_owned()
 }
 
+#[test]
+fn remote_connect_help_describes_printing_without_opening_a_room() {
+    let env = Env::new();
+    let output = env
+        .rimz()
+        .args(["remote", "connect", "--help"])
+        .bounded_output()
+        .expect("remote connect help");
+    let help = stdout_line(&output);
+    assert!(
+        help.contains("Print the SSH command instead of connecting; opens nothing"),
+        "{help}"
+    );
+    assert!(
+        help.contains("Connect to the remote room instead of only printing the SSH command"),
+        "{help}"
+    );
+    assert!(help.contains("Alias for `--no-attach`"), "{help}");
+    assert!(!help.contains("Open the room, then print"), "{help}");
+    assert!(!help.contains("Enter the room after opening it"), "{help}");
+
+    for args in [
+        vec!["--help"],
+        vec!["start", "--help"],
+        vec!["attach", "--help"],
+    ] {
+        let output = env.rimz().args(args).bounded_output().expect("local help");
+        let help = stdout_line(&output)
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(
+            help.contains("Open the room, then print the attach command instead of entering it"),
+            "{help}"
+        );
+        assert!(
+            help.contains("Enter the room after opening it, where RimZ would otherwise only print the attach command"),
+            "{help}"
+        );
+    }
+}
+
 fn write_infocmp_shim(path: &Path) {
     std::fs::write(path, "#!/bin/sh\nprintf 'CANNED,'\n").expect("write infocmp shim");
     #[cfg(unix)]

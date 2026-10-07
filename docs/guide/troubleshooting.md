@@ -105,16 +105,16 @@ RimZ needs Zellij 0.44.2 or newer, or tmux 3.5 or newer ([install one](./install
 
 RimZ refuses to open a room on either backend below its floor and names the upgrade, and the same check runs when you attach to a room that already exists, so upgrading the multiplexer is the way back in. An unrecognised tmux version, including a development build, also refuses: install a supported release build, or start a new room with `--mux zellij`. When both backends are installed and RimZ resolved the one you did not want, pick explicitly with `--zellij`, `--tmux`, or `--mux <name>`.
 
-### RimZ reports an existing room instead of opening one
+### RimZ won't nest a room inside the current session
 
-A RimZ room is its own Zellij or tmux session, so it cannot nest inside a session of that same backend you are already attached to. Run bare `rimz` (or `rimz start`) from inside one and it names the room rather than nesting:
+A RimZ room is its own Zellij or tmux session, so it cannot nest inside a session of that same backend you are already attached to. Run bare `rimz` (or `rimz start`) from inside one and it reports whether this directory's room is your current room, is running elsewhere, or is not running. In the last case:
 
 ```
-You're already inside a zellij session, which can't host a nested room.
-This directory's room is `rimz-f89e`. Detach to (re)launch it, or run `rimz` from outside the session.
+This directory's room isn't running, and zellij can't start one inside this session.
+Detach and run `rimz` here, or run it from another terminal.
 ```
 
-Open a fresh terminal window that is not attached to Zellij or tmux, then run `rimz` there.
+If you're already in this directory's room, there is nothing to do. Otherwise detach and run `rimz` here, or open a fresh terminal outside the backend and run `rimz` there. The [CLI reference](../reference/cli/getting-started.md#attach-or-print) shows all three reports.
 
 ### `tmux ls` does not list my RimZ room
 

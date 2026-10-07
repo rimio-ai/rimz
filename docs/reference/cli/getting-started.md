@@ -11,10 +11,10 @@ rimz                       # open this project's room and attach
 | Need | Command |
 | --- | --- |
 | Open the current project's room | `rimz` |
-| Open or reattach the room for a path | `rimz start [PATH]` |
-| Attach to a room by session name | `rimz attach [SESSION]` |
-| Pick, create, and enter rooms interactively | `rimz sessions` |
-| List known rooms and the backend running each | `rimz list` |
+| Open a directory's room and attach; first run asks setup questions | `rimz start [PATH]` |
+| Enter a room by name; no first-run questions | `rimz attach [SESSION]` |
+| Full-screen picker: live rooms, their agents, and who needs you | `rimz sessions` |
+| List rooms: running, or stopped within 24h | `rimz list`, `rimz ls` |
 | Report the machine and write default config | `rimz setup` |
 | Diagnose backend, hooks, trust, and room health | `rimz doctor` |
 
@@ -32,8 +32,8 @@ Bare `rimz` is `rimz start .`. `rimz start [PATH]` resolves the room for `PATH` 
 
 | Launch option | Effect |
 | --- | --- |
-| `--attach` | Attach to the session even when RimZ would print the attach command. |
-| `--no-attach`, `--print` | Print the attach command on stdout instead of attaching. |
+| `--attach` | Enter the room after opening it, where RimZ would otherwise only print the attach command. |
+| `--no-attach`, `--print` | Open the room, then print the attach command instead of entering it. |
 | `--no-resume` | Bring a reborn room up empty, without recovering its prior agents. See [Resume on rebirth](#resume-on-rebirth). |
 | `--refresh-ms <MS>` | Sidebar render cadence in milliseconds for sidebars this launch creates, clamped to 16 through 1000. The persistent setting is `refresh_ms` under [`[theme.display]`](../../guide/theme.md#display). |
 | `--account <KIND=NAME>` | `start` only, repeatable. Launch that provider's agents under a named account. See [Accounts](#accounts). |
@@ -42,29 +42,54 @@ Bare `rimz` is `rimz start .`. `rimz start [PATH]` resolves the room for `PATH` 
 
 ### Attach or print
 
-Without `--attach` or `--print`, RimZ attaches only when both stdin and stdout are terminals and you are not already inside the selected backend. Otherwise it prints the attach command on stdout, which is what a script or shell wrapper wants. When RimZ attaches, it exits with the multiplexer client's exit code once you detach.
+Without an explicit attach flag, RimZ attaches only when both stdin and stdout are terminals and you are not already inside the selected backend. Outside that backend, a missing terminal makes it print the attach command on stdout, which is what a script or shell wrapper wants. Inside the selected backend, `rimz` and `rimz start` report the room situation instead, without opening a room or writing its state. When RimZ attaches, it exits with the multiplexer client's exit code once you detach.
 
 | Situation | `rimz` and `rimz start` | `rimz attach` |
 | --- | --- | --- |
 | Terminal, outside the backend | Attach | Attach |
-| stdin or stdout is not a terminal | Print the attach command | Print the attach command |
-| Inside a session of the selected backend | Report this directory's room on stderr and exit 0 | Print the attach command |
+| Outside the backend, stdin or stdout is not a terminal | Print the attach command | Print the attach command |
+| Inside a session of the selected backend | Report the room situation on stderr and exit 0 | Print the attach command |
 | `--attach` | Attach | Attach |
 | `--no-attach` or `--print` | Print the attach command | Print the attach command |
 
-The report from inside a session names the room instead of nesting one session in another:
+Already in this directory's own room:
 
 ```console
 $ rimz
-You're already inside a zellij session, which can't host a nested room.
-This directory's room is `rimz-f89e`. Detach to (re)launch it, or run `rimz` from outside the session.
+You're already in this directory's room (`rimz-f89e`, zellij).
 ```
+
+This directory's room is running elsewhere:
+
+```console
+$ rimz
+This directory's room `rimz-f89e` is running in another zellij session.
+Detach from this session, then run `rimz` here to enter it.
+```
+
+This directory's room is not running:
+
+```console
+$ rimz
+This directory's room isn't running, and zellij can't start one inside this session.
+Detach and run `rimz` here, or run it from another terminal.
+```
+
+For tmux, the same messages name `tmux` instead of `zellij`.
 
 Inside a session, `rimz start --account` fails instead, because accounts apply only when a room is born.
 
 ### Attach by session name
 
-`rimz attach` with no `SESSION` opens the current directory's room, creating it if needed. Unlike `start`, it skips the first-run, hook, and trust prompts below, takes no `--account`, and does not start the browser daemon. `rimz attach <SESSION>` takes an exact session name, the `SESSION` column of [`rimz list`](#list-rooms). When RimZ has a workspace record for that session, it restores the room's sidebar and reconciles parked recovery state before attaching. An attach to a running room asks nothing and leaves recovery candidates parked. A session RimZ has no record for is attached, or printed, as a plain multiplexer session.
+`rimz attach` with no `SESSION` opens the current directory's room, creating it if needed. Unlike `start`, it skips the first-run, hook, and trust prompts below, takes no `--account`, and does not start the browser daemon. `rimz attach <SESSION>` takes an exact session name from [`rimz list`](#list-rooms). When RimZ has a workspace record for that session, it restores the room's sidebar and reconciles parked recovery state before attaching, creating the session if it is stopped. An attach to a running room asks nothing and leaves recovery candidates parked. A live session RimZ has no record for is attached, or printed, as a plain multiplexer session. With neither a record nor a live session, RimZ refuses instead of creating an empty session, and suggests at most one nearby recorded name:
+
+```console
+$ rimz --mux zellij attach agnts-72ff
+error: no room or zellij session named `agnts-72ff`
+  did you mean `agents-72ff`?   all rooms: rimz list --all
+```
+
+Without a nearby name, the second line is `  all rooms: rimz list --all`.
 
 `rimz start` goes through the same health check on the way in, so either command is the way back into a room whose sidebar was closed or whose session came back wrong after a reboot.
 

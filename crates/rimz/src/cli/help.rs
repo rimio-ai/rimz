@@ -164,6 +164,16 @@ mod tests {
     }
 
     #[test]
+    fn attach_help_scopes_the_questions_it_skips() {
+        let cmd = command();
+        let attach = cmd.find_subcommand("attach").unwrap();
+        assert_eq!(
+            about_line(attach),
+            "Enter a room by name; no first-run questions"
+        );
+    }
+
+    #[test]
     fn global_options_follow_command_options() {
         let mut cmd = command();
         cmd.build();
@@ -289,6 +299,11 @@ mod tests {
             })
             .expect("message command line");
         assert!(message_line.ends_with(" [alias: msg]"));
+        let list_line = help
+            .lines()
+            .find(|line| line.starts_with("  ") && line.split_whitespace().next() == Some("list"))
+            .expect("list command line");
+        assert!(list_line.ends_with(" [alias: ls]"), "{list_line}");
         assert!(help.contains("Run `rimz <command> --help` for full flags and defaults."));
     }
 

@@ -643,13 +643,15 @@ impl ColorWhen {
 enum Subcmd {
     /// Navigate code through shared language servers.
     Lsp(lsp::LspArgs),
-    /// Open or attach the room for a path (default action).
+    /// Open a directory's room and attach; first run asks questions.
+    ///
+    /// The first run on a machine asks the setup questions before it opens the room.
     Start(StartArgs),
-    /// Attach to a room by session name.
+    /// Enter a room by name; no first-run questions.
     ///
     /// Omit the name to use the cwd's workspace.
     Attach(AttachArgs),
-    /// Pick and open live RimZ rooms in a session manager.
+    /// Full-screen picker: live rooms, their agents, and who needs you.
     Sessions(sessions::SessionsArgs),
     /// Manage and connect to SSH remote rooms.
     Remote(remote::RemoteArgs),
@@ -657,7 +659,10 @@ enum Subcmd {
     Web(web::WebArgs),
     /// Workspace identity helpers.
     Workspace(workspace::WorkspaceArgs),
-    /// Show known workspaces and which mux is running them.
+    /// List rooms: running, or stopped within 24h.
+    ///
+    /// `--all` lists every room.
+    #[command(visible_alias = "ls")]
     List(list::ListArgs),
     /// Show where RimZ keeps this project's files.
     Paths(paths::PathsArgs),
@@ -784,10 +789,10 @@ pub struct StartArgs {
 #[derive(Debug, Args, Default)]
 #[group(required = false, multiple = false)]
 pub struct AttachFlags {
-    /// Attach to the mux session instead of printing the attach command.
+    /// Enter the room after opening it, where RimZ would otherwise only print the attach command.
     #[arg(long)]
     attach: bool,
-    /// Print the attach command instead of entering the mux session.
+    /// Open the room, then print the attach command instead of entering it.
     #[arg(long)]
     no_attach: bool,
     /// Alias for `--no-attach`.

@@ -67,12 +67,6 @@ fn room_inventory_from(
     RoomInventory { live, dormant }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum MissingSessionReport {
-    Silent,
-    Warn,
-}
-
 #[derive(Debug, PartialEq, Eq)]
 pub struct MuxPick {
     pub mux: MuxName,
@@ -173,7 +167,6 @@ fn test_session_probe_timeout() -> Option<Duration> {
 pub fn pick_mux_for_session(
     session: &str,
     explicit: Option<MuxName>,
-    missing_report: MissingSessionReport,
 ) -> std::result::Result<MuxPick, MuxPickErr> {
     if let Some(mux) = explicit {
         return Ok(MuxPick {
@@ -203,13 +196,6 @@ pub fn pick_mux_for_session(
         Ok(detected) => detected,
         Err(source) => return Err(MuxPickErr { notices, source }),
     };
-    if missing_report == MissingSessionReport::Warn {
-        tracing::warn!(
-            session = %session,
-            mux = %detected,
-            "no live session matches; emitting attach command for auto-detected mux",
-        );
-    }
     Ok(MuxPick {
         mux: detected,
         notices,
@@ -247,6 +233,13 @@ pub fn ensure_single_backend_room(mux: MuxName, session_name: &str) -> Result<Ve
         );
     }
     Ok(Vec::new())
+}
+
+/// Whether `session` is listed by `mux` right now; a probe failure reads as not live.
+pub fn session_is_live(mux: MuxName, session: &str) -> bool {
+    let backend = crate::mux::backend_for(mux);
+    list_sessions_with_retry(backend.as_ref())
+        .is_ok_and(|sessions| sessions.iter().any(|name| name == session))
 }
 
 fn list_sessions_with_retry(backend: &dyn MuxBackend) -> crate::mux::Result<Vec<String>> {
