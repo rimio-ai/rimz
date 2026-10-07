@@ -155,7 +155,7 @@ The receipt adds `trigger: when <expression>, for <duration>`, `scope: <checkout
 
 ### The account pin
 
-Without `--account`, each fire takes the room's current account for the agent's provider, so `rimz accounts use` moves the task with the room. `--account <NAME>` holds the task on one [named account](./accounts.md) whatever the room selects: the fire launches on it, and its hooks preflight, daily caps, surplus gate, and window triggers read it. `--account default` pins the provider's own home.
+Without `--account`, each fire takes the room's current account for the agent's provider: its pin, else the trusted project default, else the live machine default, else `default`. Pinning, unpinning, or changing a default the room follows moves the task with the room. `--account <NAME>` holds the task on one [named account](./accounts.md) whatever the room selects: the fire launches on it, and its hooks preflight, daily caps, surplus gate, and window triggers read it. `--account default` pins the provider's own home.
 
 The flag takes a bare name, where `rimz start --account` takes `KIND=NAME`: a task has one agent, so the provider is the one its `--agent` spec resolves to. Add refuses a name that provider does not declare, a provider without named accounts, and an account whose home is missing or unhooked, each with the `rimz accounts` fix. The row stores the name alone as `account`. A tier-routed spec that lands on another provider at fire time resolves the name against that provider, and runs on that provider's account of the same name when it declares one.
 

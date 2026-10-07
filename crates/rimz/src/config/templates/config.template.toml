@@ -53,8 +53,9 @@
 ## codex = 25.0
 
 # Named provider accounts (Claude and Codex). Each one is a standalone provider
-# home a room launches into, selected at birth with `rimz start --account
-# claude=work`; `default` is the provider's own home and is never declared.
+# home a room launches into. Pin it with `rimz start --account claude=work` or
+# `rimz accounts use claude work`; `default` is the provider's own home and is
+# never declared. Without a pin, the room follows project and machine defaults.
 # `rimz accounts add` writes these entries, creates the directory and installs
 # the RimZ hooks into it. An empty table takes RimZ's default location.
 # `history` is "shared" (the default: the account joins the provider's own
@@ -64,8 +65,10 @@
 ## history = "standalone"
 ## [accounts.codex.personal]
 
-# Account selections for new rooms, below --account and trusted project choices.
-# For future launches in a running room, use `rimz accounts use` there.
+# Defaults for new rooms and rooms following the machine selection live,
+# below room pins and trusted project choices. `rimz accounts use --global`
+# checks a named account's home and hooks first. `rimz accounts use --reset`
+# inside a room unpins that provider so it follows defaults again.
 ## [accounts.use]
 ## codex = "personal"
 
