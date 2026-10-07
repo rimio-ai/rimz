@@ -1002,7 +1002,7 @@ fn queue_head_selects_oldest_deliverable_record_per_lane() {
 }
 
 #[test]
-fn in_flight_claim_selects_only_unexpired_ordinary_claims_for_the_card() {
+fn in_flight_claim_selects_unexpired_claims_and_sent_prompts_for_the_card() {
     let now = Timestamp::from_second(1_700_000_100).unwrap();
     let receiver = agent("receiver", Some("coder"));
     let provisional = agent("launch_1", Some("coder"));
@@ -1079,7 +1079,14 @@ fn in_flight_claim_selects_only_unexpired_ordinary_claims_for_the_card() {
             MessageStatus::Sent,
             DeliveryGate::Done,
             Some(now),
-            false,
+            true,
+        ),
+        (
+            &receiver,
+            MessageStatus::Sent,
+            DeliveryGate::Done,
+            None,
+            true,
         ),
         (
             &receiver,
@@ -1102,6 +1109,109 @@ fn in_flight_claim_selects_only_unexpired_ordinary_claims_for_the_card() {
             ),
             selected.then_some(&message),
             "{message:?}"
+        );
+    }
+
+    for (claim_agent, gate, body, selected) in [
+        (&receiver, DeliveryGate::Done, MessageBody::Command, false),
+        (&receiver, DeliveryGate::Resume, MessageBody::Prompt, false),
+        (&other, DeliveryGate::Done, MessageBody::Prompt, false),
+        (&provisional, DeliveryGate::Any, MessageBody::Prompt, true),
+    ] {
+        let mut message = delivery_message(1, claim_agent, gate, None).with_body(body);
+        message.status = MessageStatus::Sent;
+        message.last_attempt_at = Some(now - CLAIM_TTL);
+        assert_eq!(
+            in_flight_claim(
+                [&message],
+                &receiver.kind,
+                &receiver.agent_id,
+                receiver.name.as_deref(),
+                now,
+            ),
+            selected.then_some(&message),
+            "{message:?}"
+        );
+    }
+}
+
+#[test]
+fn older_ready_blocker_names_claimed_and_sent_prompt_fifo_holds() {
+    let now = Timestamp::from_second(1_700_000_100).unwrap();
+    let receiver = agent("receiver", Some("coder"));
+    let head = delivery_message(3, &receiver, DeliveryGate::Done, None);
+    let queued = delivery_message(2, &receiver, DeliveryGate::Done, None);
+    for status in [MessageStatus::Sent, MessageStatus::Claimed] {
+        let mut blocker = delivery_message(1, &receiver, DeliveryGate::Any, None);
+        blocker.status = status;
+        blocker.last_attempt_at = Some(now);
+        assert_eq!(
+            older_ready_blocker([&queued, &head, &blocker], &head, |message| {
+                message.is_deliverable(now)
+            }),
+            Some(&blocker)
+        );
+        blocker.not_before = Some(now + Duration::from_secs(60));
+        assert_eq!(
+            older_ready_blocker([&blocker, &queued], &head, |message| {
+                message.is_deliverable(now)
+            }),
+            Some(&queued),
+            "an unready hold does not occupy the lane"
+        );
+    }
+    let mut command =
+        delivery_message(1, &receiver, DeliveryGate::Done, None).with_body(MessageBody::Command);
+    command.status = MessageStatus::Sent;
+    assert!(older_ready_blocker([&command], &head, |_| true).is_none());
+}
+
+#[test]
+fn sent_prompt_holds_boundary_batch_until_acknowledged() {
+    let now = Timestamp::from_second(1_700_000_100).unwrap();
+    let receiver = agent("receiver", Some("coder"));
+    let mut sent = delivery_message(1, &receiver, DeliveryGate::Done, None);
+    sent.status = MessageStatus::Sent;
+    let command =
+        delivery_message(2, &receiver, DeliveryGate::Done, None).with_body(MessageBody::Command);
+
+    assert!(
+        delivery_batch_indices(
+            &[sent.clone(), command.clone()],
+            &command.message_id,
+            AgentStatus::Idle,
+            now,
+        )
+        .is_none(),
+        "an unacknowledged prompt holds even an idle-reading card"
+    );
+    let prompt = command.clone().with_body(MessageBody::Prompt);
+    for sender in [MessageSender::Human, agent_sender("planner", None)] {
+        sent.sender = sender;
+        assert!(
+            delivery_batch_indices(
+                &[sent.clone(), prompt.clone()],
+                &prompt.message_id,
+                AgentStatus::Idle,
+                now,
+            )
+            .is_none()
+        );
+    }
+    let mut other_card = sent.clone();
+    other_card.agent_id = "other".into();
+    other_card.agent_name = Some("reviewer".to_owned());
+    let mut resume = sent.clone();
+    resume.gate = DeliveryGate::Resume;
+    for non_blocker in [sent.with_body(MessageBody::Command), other_card, resume] {
+        assert_eq!(
+            delivery_batch_indices(
+                &[non_blocker, prompt.clone()],
+                &prompt.message_id,
+                AgentStatus::Idle,
+                now,
+            ),
+            Some(vec![1])
         );
     }
 }
