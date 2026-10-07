@@ -528,6 +528,11 @@ pub enum DiagEvent {
         orphaned_at_ms: u64,
         error: String,
     },
+    PaneWinsizeRepaired {
+        pane: PaneId,
+        rows: u16,
+        cols: u16,
+    },
     ProviderStartupExit {
         agent_kind: String,
         agent_name: Option<String>,
@@ -651,6 +656,7 @@ impl DiagEvent {
             | Self::SubagentDigestBackstopped { .. }
             | Self::RecoverySeatRefilled { .. }
             | Self::RecoveryChildEnded { .. }
+            | Self::PaneWinsizeRepaired { .. }
             | Self::SupervisorConvergence { .. }
             | Self::RendererExit {
                 cause: RendererExitCause::SelfCloseEmptyTab,
@@ -715,6 +721,7 @@ impl DiagEvent {
             Self::SubagentDigestBackstopped { .. } => "subagent_digest_backstopped",
             Self::SubagentOrphanRepairFailed { .. } => "subagent_orphan_repair_failed",
             Self::ProviderStartupExit { .. } => "provider_startup_exit",
+            Self::PaneWinsizeRepaired { .. } => "pane_winsize_repaired",
             Self::RecoverySeatRefilled { .. } => "recovery_seat_refilled",
             Self::RecoveryChildEnded { .. } => "recovery_child_ended",
             Self::PaneCacheDivergence { .. } => "pane_cache_divergence",
@@ -958,6 +965,7 @@ impl DiagEvent {
                 agent_name,
                 ..
             } => format!("{}:{agent_kind}:{agent_name:?}", self.kind_name()),
+            Self::PaneWinsizeRepaired { pane, .. } => format!("{}:{pane}", self.kind_name()),
             Self::SupervisorConvergence { target_build }
             | Self::SupervisorPreflightRejected { target_build, .. } => {
                 format!("{}:{target_build}", self.kind_name())
@@ -1399,6 +1407,9 @@ impl DiagEvent {
                 "{agent_kind}/{} {action} exited after {startup_ms}ms; exit code {exit_code:?}, signal {signal:?}, relaunches {relaunches}",
                 agent_name.as_deref().unwrap_or("unnamed")
             ),
+            Self::PaneWinsizeRepaired { pane, rows, cols } => {
+                format!("{pane} tty winsize repaired to {rows} rows, {cols} columns")
+            }
             Self::FetchFoldStats {
                 interval_ms,
                 causes,

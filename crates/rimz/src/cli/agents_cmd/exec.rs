@@ -1,7 +1,10 @@
 use super::*;
 use crate::cli::{open_store, worktree};
+use rimz::mux::winsize::WinsizeRepair;
 use rimz::store::snapshot::find_agent;
 use std::cell::RefCell;
+use std::io::IsTerminal;
+use std::os::fd::AsFd;
 use std::sync::mpsc;
 
 const PARK_STRAND_POLL: Duration = Duration::from_secs(5);
@@ -192,6 +195,19 @@ fn launch_and_supervise(
     ) {
         tracing::debug!(%error, "language-server lease registration failed");
     }
+    let diag = match rimz::StatePaths::for_project_root(&workspace.project_root) {
+        Ok(state) => rimz::diag::DiagSink::under(
+            state.root,
+            workspace.workspace_id.clone(),
+            workspace.session_name.clone(),
+            None,
+        ),
+        Err(error) => {
+            tracing::debug!(%error, "diagnostic sink unavailable");
+            rimz::diag::DiagSink::disabled()
+        }
+    };
+    repair_own_launch_winsize(workspace, &diag);
     if let rimz::harness::launch::AgentProcessStage::LoginShellReentry { argv, .. } = &plan.stage {
         let (program, rest) = argv
             .split_first()
@@ -348,11 +364,6 @@ fn launch_and_supervise(
         survives_parent,
     );
     let mut relaunches: u8 = 0;
-    let diag = rimz::diag::DiagSink::for_workspace(
-        workspace.workspace_id.clone(),
-        workspace.session_name.clone(),
-        None,
-    );
     let (outcome, terminal_grace, startup_deaths) = loop {
         let mut outcome = supervise_child(
             child,
@@ -1390,6 +1401,33 @@ fn record_provider_process(context: &RunExecContext, pid: u32) {
             error = %err,
             "could not persist supervised provider process identity",
         );
+    }
+}
+
+fn repair_own_launch_winsize(workspace: &rimz::ResolvedWorkspace, diag: &rimz::diag::DiagSink) {
+    let stdin = std::io::stdin();
+    let Some(pane) = rimz::mux::ambient_pane_id() else {
+        return;
+    };
+    if !stdin.is_terminal() {
+        return;
+    }
+    let backend = rimz::mux::backend_for(pane.mux());
+    match rimz::mux::winsize::repair_zero_winsize(
+        backend.as_ref(),
+        &pane,
+        &workspace.session_name,
+        stdin.as_fd(),
+        Duration::from_secs(2),
+    ) {
+        WinsizeRepair::Sized => {}
+        WinsizeRepair::Repaired { rows, cols } => {
+            tracing::debug!(%pane, rows, cols, "repaired unsized provider tty");
+            diag.emit(rimz::diag::record::DiagEvent::PaneWinsizeRepaired { pane, rows, cols });
+        }
+        WinsizeRepair::Unavailable(reason) => {
+            tracing::debug!(%pane, %reason, "provider tty size repair unavailable");
+        }
     }
 }
 
