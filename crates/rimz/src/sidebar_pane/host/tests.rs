@@ -136,11 +136,33 @@ fn eventually(what: &str, mut holds: impl FnMut() -> bool) {
     }
 }
 
+fn has_frame_content(bytes: &[u8], rows: u16, cols: u16) -> bool {
+    let mut parser = vt100::Parser::new(rows, cols, 0);
+    parser.process(bytes);
+    !parser.screen().contents().trim().is_empty()
+}
+
+#[test]
+fn frame_content_check_rejects_title_and_clear_only_output() {
+    for bytes in [
+        b"".as_slice(),
+        b"\x1b]0;paint-proof\x07",
+        b"\x1b[2J\x1b[H",
+        b"\x1b]0;paint-proof\x07\x1b[2J\x1b[H\x1b[?25l",
+    ] {
+        assert!(
+            !has_frame_content(bytes, 12, 40),
+            "terminal controls are not a painted frame: {bytes:?}"
+        );
+    }
+}
+
 fn painted(pty: &mut Pty) -> Vec<u8> {
+    let size = rustix::termios::tcgetwinsize(pty.slave()).unwrap();
     let mut bytes = Vec::new();
     eventually("the pane is painted", || {
         bytes.extend(pty.drain());
-        !bytes.is_empty()
+        has_frame_content(&bytes, size.ws_row, size.ws_col)
     });
     bytes
 }
@@ -167,6 +189,19 @@ fn an_accepted_pane_is_painted_through_its_fd_and_reports_its_size() {
         heartbeat.wakeup_socket,
         room.runtime.sidebar_socket_path(&pane.instance_id)
     );
+
+    pty.resize(40, 30);
+    room.wake(&pane.instance_id, b"resize");
+    let mut snapshot = crate::sidebar_pane::app::fixtures::agent_snapshot(&workspace());
+    snapshot.worktree_groups[0].rows[0].name = "paint-proof".into();
+    room.host
+        .plane
+        .publish_snapshot(&pane.instance_id, snapshot);
+    let mut parser = vt100::Parser::new(30, 40, 0);
+    eventually("the real rendered card reaches terminal cells", || {
+        parser.process(&pty.drain());
+        parser.screen().contents().contains("paint-proof")
+    });
 }
 
 #[test]
