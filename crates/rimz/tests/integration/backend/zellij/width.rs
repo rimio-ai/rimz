@@ -293,7 +293,7 @@ fn sidebar_widths_converge_after_resize_new_tab_and_shared_target() {
     );
 
     // Keep one tab active while the two converged tabs need the room target;
-    // the launch-seeded tab is already within its tolerance.
+    // the launch-seeded tab is within its tolerance unless it seeds at 46.
     open_new_tab(xdg, &name);
     wait_for_tab_count(xdg, &name, 3);
     assert!(
@@ -305,9 +305,13 @@ fn sidebar_widths_converge_after_resize_new_tab_and_shared_target() {
     // A shared target applies to every existing tab, including the two
     // background tabs, and every future tab.
     let shared_band = || settled_band(40, stop_step);
+    let off_shared_target = sidebar_columns_by_tab(xdg, &name)
+        .values()
+        .filter(|width| !shared_band().contains(width))
+        .count();
     assert_eq!(
         converge_each_sidebar_with_nudges(&backend, xdg, &name, 40, stop_step),
-        2,
+        off_shared_target,
     );
     assert!(wait_for_sidebar_columns(
         xdg,
