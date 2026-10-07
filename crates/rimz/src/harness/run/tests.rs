@@ -1113,6 +1113,34 @@ fn terminal_transitions_are_once_only_and_map_exit_codes() {
 }
 
 #[test]
+fn paths_cancellation_wakes_only_the_first_terminal_transition() {
+    let (dir, paths, record) = setup();
+    let runtime = crate::RuntimePaths::under(record.workspace_id.clone(), dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    let socket = std::os::unix::net::UnixDatagram::bind(crate::store::run::run_socket_path(
+        &runtime,
+        &record.run_id,
+    ))
+    .unwrap();
+    socket
+        .set_read_timeout(Some(Duration::from_millis(50)))
+        .unwrap();
+    let canceled = cancel_and_wake_paths(&paths, &runtime, &record.run_id).unwrap();
+    assert_eq!(canceled.status, RunStatus::Canceled);
+    let mut frame = [0; 1024];
+    assert!(
+        socket.recv(&mut frame).is_ok(),
+        "new cancellation wakes waiter"
+    );
+    let unchanged = cancel_and_wake_paths(&paths, &runtime, &record.run_id).unwrap();
+    assert_eq!(unchanged.updated_at, canceled.updated_at);
+    assert!(
+        socket.recv(&mut frame).is_err(),
+        "idempotent cancellation sends no wake"
+    );
+}
+
+#[test]
 fn verify_transitions_reopen_completed_runs_and_finish_once() {
     let (_dir, paths, record) = setup();
     let completed = AgentLifecycleObservation::new(

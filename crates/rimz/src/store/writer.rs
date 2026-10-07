@@ -98,7 +98,7 @@ pub struct AgentLaunchRequest {
     pub prompt: Option<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct AgentLaunchIdentity {
     pub kind: AgentKind,
     pub agent_id: AgentSessionId,

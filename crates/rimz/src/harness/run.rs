@@ -21,7 +21,7 @@ use crate::agents::{
 };
 use crate::agents::{AgentState, AgentStatus};
 use crate::disk::lock::WorkspaceLock;
-use crate::disk::paths::StatePaths;
+use crate::disk::paths::{RuntimePaths, StatePaths};
 use crate::harness::owed::OwedWake;
 use crate::ids::{AgentSessionId, PaneId, RunId};
 use crate::store::run::{
@@ -287,9 +287,18 @@ impl RunCancellation {
 /// Durably cancel a run and wake its waiter only for the newly-written
 /// terminal transition.
 pub fn cancel_and_wake(store: &Store, run_id: &RunId) -> Result<RunRecord> {
-    let (record, wrote) = cancel(store.paths(), run_id)?;
+    cancel_and_wake_paths(store.paths(), store.runtime_paths(), run_id)
+}
+
+/// Cancel using only durable paths and the waiter's runtime socket.
+pub fn cancel_and_wake_paths(
+    paths: &StatePaths,
+    runtime: &RuntimePaths,
+    run_id: &RunId,
+) -> Result<RunRecord> {
+    let (record, wrote) = cancel(paths, run_id)?;
     if wrote {
-        crate::store::run::wake_run(store.runtime_paths(), &record);
+        crate::store::run::wake_run(runtime, &record);
     }
     Ok(record)
 }

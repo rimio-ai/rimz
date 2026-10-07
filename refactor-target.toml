@@ -271,7 +271,8 @@ path = "crates/rimz/src/child_process.rs"
 # decision type, and its function serve mux, launch compile, and the sandbox (+4).
 # The `Command` applier serves the browser opener and the synchronous loop run, and
 # the unrestored reaping entry serves the wait watcher alone (+2).
-surface-budget = 20
+# Same-PID wrapper re-exec adopts its existing provider by pid (+1).
+surface-budget = 21
 
 [[module]]
 path = "crates/rimz/src/cli"
@@ -509,7 +510,8 @@ path = "crates/rimz/src/harness"
 # Fan-out inspection publishes its module, inspect entry, CheckoutCondition, and CheckoutState to the CLI (+4).
 # The manual forecast and CLI preview share automatic provider eligibility (+1), and the preview reads the provider hold (+1).
 # RelaunchLoginErr crosses to the CLI relaunch paths with the resume module (+1).
-surface-budget = 749
+# Thin exec supervision cancels runs through paths without a Store (+1).
+surface-budget = 750
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -1173,7 +1175,8 @@ allowed-dependencies = [
 # `VERIFY_MAX_ATTEMPTS_DEFAULT` is the one verify cap the loop reminder, `loop show`, and the supervised run read (+1).
 # `provider_startup_exit` shares the diagnostic window independently of relaunch eligibility (+1).
 # A silent-child notice is claimed once per run and released only after a failed queue write (+2).
-surface-budget = 54
+# Thin exec supervision cancels runs through paths without a Store (+1).
+surface-budget = 55
 
 [[module]]
 path = "crates/rimz/src/harness/run/report.rs"
