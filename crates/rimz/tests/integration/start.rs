@@ -256,7 +256,6 @@ fn singular_agent_is_unknown_subcommand_with_agents_suggestion() {
 #[test]
 fn start_inside_selected_mux_reports_and_skips_launch() {
     let env = Env::new();
-    let workspace = env.resolve_workspace(&env.project_root);
     let bin = env.home_root.join("sandbox-bin");
     std::fs::create_dir(&bin).expect("mkdir bwrap PATH");
     let bwrap = bin.join("bwrap");
@@ -292,19 +291,12 @@ fn start_inside_selected_mux_reports_and_skips_launch() {
     );
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        !stdout.contains("attach --create"),
-        "a nested run must not emit the doomed attach command, got stdout: {stdout}"
-    );
+    assert!(stdout.is_empty(), "{stdout}");
 
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains(&workspace.session_name),
-        "stderr should name the directory's room, got: {stderr}"
-    );
-    assert!(
-        stderr.contains("nested"),
-        "stderr should explain it can't nest a room, got: {stderr}"
+    assert_eq!(
+        stderr,
+        "This directory's room isn't running, and zellij can't start one inside this session.\nDetach and run `rimz` here, or run it from another terminal.\n"
     );
     // The guard returns before `ensure_detected_agent_hooks`, so the first-run
     // hook consent gate never prints — proving the bypass skips the ceremony.
@@ -312,6 +304,237 @@ fn start_inside_selected_mux_reports_and_skips_launch() {
         !stderr.contains("RimZ first run"),
         "the nested bypass must run before hook install, got: {stderr}"
     );
+    assert!(!env.rimz_home().join("config.toml").exists());
+    assert!(
+        !env.state_path_for(&env.project_root)
+            .workspace_record
+            .exists()
+    );
+}
+
+#[test]
+fn start_inside_selected_mux_reports_a_stopped_recorded_room_without_writing() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let paths = env.state_path_for(&env.project_root);
+    let before = std::fs::read(&paths.workspace_record).expect("record bytes");
+    let output = env
+        .rimz()
+        .args(["--mux", "zellij", "start"])
+        .env("ZELLIJ", "1")
+        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", env.home_root.join("zellij.log"))
+        .bounded_output()
+        .expect("run nested start for a stopped room");
+
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        "This directory's room isn't running, and zellij can't start one inside this session.\nDetach and run `rimz` here, or run it from another terminal.\n"
+    );
+    assert!(output.stdout.is_empty());
+    assert_eq!(std::fs::read(&paths.workspace_record).unwrap(), before);
+    assert!(!env.rimz_home().join("config.toml").exists());
+}
+
+#[test]
+fn nested_start_account_refusal_matches_the_room_situation() {
+    for (pinned, live) in [(false, false), (false, true), (true, false)] {
+        let env = Env::new();
+        let workspace = env.resolve_workspace(&env.project_root);
+        let mut command = env.rimz();
+        command
+            .args(["--mux", "zellij", "start", "--account", "claude=work"])
+            .env("ZELLIJ", "1")
+            .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+            .env("RIMZ_TEST_ZELLIJ_LOG", env.home_root.join("zellij.log"));
+        if live {
+            command.env("RIMZ_TEST_ZELLIJ_LIST_SESSIONS", &workspace.session_name);
+        }
+        if pinned {
+            command
+                .env("RIMZ_WORKSPACE_ID", workspace.workspace_id.as_str())
+                .env("RIMZ_PROJECT_ROOT", &workspace.project_root);
+        }
+        let output = command.bounded_output().expect("nested start with account");
+        assert_eq!(output.status.code(), Some(1));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if pinned || live {
+            assert_eq!(
+                stderr,
+                "error: --account applies when a room is born, and this room is already running; run `rimz accounts use <KIND> <NAME>` to change its default for future launches\n"
+            );
+        } else {
+            assert_eq!(
+                stderr,
+                "error: --account applies when a room is born, and zellij can't start one inside this session; detach and rerun the same command\n"
+            );
+        }
+        assert!(output.stdout.is_empty());
+        assert!(!env.rimz_home().join("config.toml").exists());
+        assert!(
+            !env.state_path_for(&env.project_root)
+                .workspace_record
+                .exists()
+        );
+    }
+}
+
+#[test]
+fn start_inside_its_pinned_room_reports_the_current_room_without_writing() {
+    let env = Env::new();
+    let workspace = env.resolve_workspace(&env.project_root);
+    let output = env
+        .rimz()
+        .env("ZELLIJ", "1")
+        .env("RIMZ_WORKSPACE_ID", workspace.workspace_id.as_str())
+        .env("RIMZ_PROJECT_ROOT", &workspace.project_root)
+        .bounded_output()
+        .expect("run bare rimz");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+    assert_eq!(
+        stderr,
+        format!(
+            "You're already in this directory's room (`{}`, zellij).\n",
+            workspace.session_name
+        )
+    );
+    assert!(output.stdout.is_empty());
+    assert!(!env.rimz_home().join("config.toml").exists());
+    assert!(
+        !env.state_path_for(&env.project_root)
+            .workspace_record
+            .exists()
+    );
+}
+
+#[test]
+fn start_inside_another_session_reports_the_live_room_without_writing() {
+    let env = Env::new();
+    let workspace = env.resolve_workspace(&env.project_root);
+    let log = env.home_root.join("zellij.log");
+    let output = env
+        .rimz()
+        .args(["--mux", "zellij", "start"])
+        .env("ZELLIJ", "1")
+        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &log)
+        .env("RIMZ_TEST_ZELLIJ_LIST_SESSIONS", &workspace.session_name)
+        .bounded_output()
+        .expect("run nested rimz start");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+    assert_eq!(
+        stderr,
+        format!(
+            "This directory's room `{}` is running in another zellij session.\nDetach from this session, then run `rimz` here to enter it.\n",
+            workspace.session_name
+        )
+    );
+    assert!(output.stdout.is_empty());
+    assert!(!env.rimz_home().join("config.toml").exists());
+    assert!(
+        !env.state_path_for(&env.project_root)
+            .workspace_record
+            .exists()
+    );
+    let trace = std::fs::read_to_string(log).expect("mux trace");
+    assert!(
+        trace
+            .lines()
+            .all(|line| line.split('\t').nth(1) == Some("list-sessions")),
+        "{trace}"
+    );
+}
+
+#[test]
+fn attach_unknown_name_refuses_without_emitting_an_attach_command() {
+    let env = Env::new();
+    let log = env.home_root.join("zellij.log");
+    let output = env
+        .rimz()
+        .args(["--mux", "zellij", "attach", "nosuch", "--print"])
+        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &log)
+        .bounded_output()
+        .expect("run unknown attach");
+
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        "error: no room or zellij session named `nosuch`\n  all rooms: rimz list --all\n"
+    );
+    assert!(output.stdout.is_empty());
+    let trace = std::fs::read_to_string(log).expect("mux trace");
+    assert!(
+        !trace
+            .lines()
+            .any(|line| line.split('\t').nth(1) == Some("attach")),
+        "{trace}"
+    );
+    assert!(
+        !env.state_path_for(&env.project_root)
+            .workspace_record
+            .exists()
+    );
+}
+
+#[test]
+fn attach_unknown_name_suggests_one_nearby_recorded_room() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let paths = env.state_path_for(&env.project_root);
+    let mut record = rimz::workspace::record::read(&paths.workspace_record).expect("read record");
+    record.session_name = "agents-72ff".into();
+    rimz::workspace::record::write(&paths, &record).expect("write named record");
+    let before = std::fs::read(&paths.workspace_record).expect("record bytes");
+    let output = env
+        .rimz()
+        .args(["--mux", "zellij", "attach", "agnts-72ff", "--print"])
+        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", env.home_root.join("zellij.log"))
+        .bounded_output()
+        .expect("run misspelled attach");
+
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        "error: no room or zellij session named `agnts-72ff`\n  did you mean `agents-72ff`?   all rooms: rimz list --all\n"
+    );
+    assert!(output.stdout.is_empty());
+    assert_eq!(std::fs::read(&paths.workspace_record).unwrap(), before);
+}
+
+#[test]
+fn attach_unknown_name_preserves_a_record_lookup_error_as_its_cause() {
+    let env = Env::new();
+    let records = env.rimz_home().join("ws");
+    std::fs::create_dir_all(&records).expect("records root");
+    std::fs::remove_dir_all(&records).expect("remove records directory");
+    std::fs::write(&records, b"not a directory").expect("block record lookup");
+    let output = env
+        .rimz()
+        .args(["--mux", "zellij", "attach", "nosuch", "--print"])
+        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", env.home_root.join("zellij.log"))
+        .bounded_output()
+        .expect("run attach with unreadable records");
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("no room or zellij session named `nosuch`"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("all rooms: rimz list --all"), "{stderr}");
+    assert!(
+        stderr.contains(&format!("reading {}", records.display())),
+        "{stderr}"
+    );
+    assert!(output.stdout.is_empty());
 }
 
 #[test]

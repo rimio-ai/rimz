@@ -2077,6 +2077,11 @@ reason = "Selection, record lookup and the rival guard stay separate: the CLI pr
 
 [[verdict]]
 kind = "item"
+key = "room::session::session_is_live"
+reason = "Nested start needs a retrying presence probe without the health refusal that room preflight applies. The binary CLI requires a public library entry."
+
+[[verdict]]
+kind = "item"
 key = "daemon_view::repair_daemon_view"
 reason = "Stays public with RepairOutcome for the live tmux test; room and the runtime toggle discard the outcome by design (pass 15c)."
 

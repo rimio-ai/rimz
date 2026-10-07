@@ -14,8 +14,8 @@ use anyhow::{Context, Result, bail};
 use rimz::config::ConfigErr;
 use rimz::ids::{MuxName, RoomLogins, WorkspaceId};
 use rimz::room::session::{
-    MissingSessionReport, ensure_single_backend_room, pick_mux_for_session,
-    session_probe_retry_timeout, session_probe_timeout, workspace_record_for_session,
+    ensure_single_backend_room, pick_mux_for_session, session_is_live, session_probe_retry_timeout,
+    session_probe_timeout, workspace_record_for_session,
 };
 use rimz::room::{
     AttendedRecovery, NormalRebirth, RoomBirth, RoomBirthSource, RoomContext, RoomSizing,
@@ -54,6 +54,23 @@ pub(crate) enum AttachAction {
 enum ResumePromptMode {
     Interactive,
     Silent,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RoomSituation {
+    CurrentRoom,
+    LiveElsewhere,
+    NotRunning,
+}
+
+fn room_situation(pin_matches: bool, session_live: bool) -> RoomSituation {
+    if pin_matches {
+        return RoomSituation::CurrentRoom;
+    }
+    if session_live {
+        return RoomSituation::LiveElsewhere;
+    }
+    RoomSituation::NotRunning
 }
 
 enum RoomEntry<'a> {
@@ -208,22 +225,31 @@ pub(crate) fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
     // A live room owns this path's session, so attach on its backend rather
     // than the auto-selected default. An explicit rival `--mux` still flows to
     // the birth guard below and refuses the cross-backend split.
-    let mux = render::room::present_mux_pick(pick_mux_for_session(
-        &workspace.session_name,
-        globals.mux,
-        MissingSessionReport::Silent,
-    ))?;
+    let mux =
+        render::room::present_mux_pick(pick_mux_for_session(&workspace.session_name, globals.mux))?;
     // A same-mux room can't be nested: if we're already inside this backend's
     // session, report the directory's room and stop before any launch side
     // effect — hook install, session birth, sidebar, or the doomed nested
     // `attach --create`.
     if should_report_already_inside(args.attach.mode(), inside_selected_mux(mux)) {
+        let in_room = crate::cli::pinned_room_root().is_some_and(|pin| {
+            pin.canonicalize().ok() == workspace.project_root.canonicalize().ok()
+        });
+        let situation = room_situation(
+            in_room,
+            !in_room && session_is_live(mux, &workspace.session_name),
+        );
+        if !args.account.is_empty() && situation == RoomSituation::NotRunning {
+            bail!(
+                "--account applies when a room is born, and {mux} can't start one inside this session; detach and rerun the same command"
+            );
+        }
         if !args.account.is_empty() {
             bail!(
                 "--account applies when a room is born, and this room is already running; run `rimz accounts use <KIND> <NAME>` to change its default for future launches"
             );
         }
-        report_already_inside(mux, &workspace)?;
+        report_already_inside(mux, &workspace.session_name, situation)?;
         return Ok(());
     }
     report_start_notices(&workspace)?;
@@ -264,11 +290,8 @@ pub(crate) fn ensure_workspace_room_detached(
     validate_agent_plugins()?;
     let workspace = rimz::WorkspaceResolver::resolve(path, globals.root.clone())
         .with_context(|| format!("resolving workspace at {}", path.display()))?;
-    let mux = render::room::present_mux_pick(pick_mux_for_session(
-        &workspace.session_name,
-        globals.mux,
-        MissingSessionReport::Silent,
-    ))?;
+    let mux =
+        render::room::present_mux_pick(pick_mux_for_session(&workspace.session_name, globals.mux))?;
     render::room::print_notices(ensure_single_backend_room(mux, &workspace.session_name)?)?;
     setup::ensure_default_config()?;
     let ready = prepare_room(
@@ -305,11 +328,7 @@ pub(crate) fn ensure_session_room_for_web(
     no_resume: bool,
     confirm_resume: bool,
 ) -> Result<RoomContext> {
-    let mux = render::room::present_mux_pick(pick_mux_for_session(
-        session,
-        globals.mux,
-        MissingSessionReport::Silent,
-    ))?;
+    let mux = render::room::present_mux_pick(pick_mux_for_session(session, globals.mux))?;
     let record = workspace_record_for_web_session(session, mux)?;
     preflight_web_engine()?;
     let ready = prepare_room(
@@ -324,11 +343,7 @@ pub(crate) fn ensure_session_room_for_web(
 }
 
 pub(crate) fn web_room_for_session(session: &str, globals: &GlobalFlags) -> Result<RoomContext> {
-    let mux = render::room::present_mux_pick(pick_mux_for_session(
-        session,
-        globals.mux,
-        MissingSessionReport::Silent,
-    ))?;
+    let mux = render::room::present_mux_pick(pick_mux_for_session(session, globals.mux))?;
     let record = workspace_record_for_web_session(session, mux)?;
     RoomContext::from_record(&record, machine_config(), mux, RoomSizing::OrdinaryTab)
 }
@@ -349,11 +364,8 @@ pub(crate) fn existing_web_room_for_path(
             path.display(),
         );
     };
-    let mux = render::room::present_mux_pick(pick_mux_for_session(
-        &record.session_name,
-        globals.mux,
-        MissingSessionReport::Silent,
-    ))?;
+    let mux =
+        render::room::present_mux_pick(pick_mux_for_session(&record.session_name, globals.mux))?;
     render::room::print_notices(ensure_single_backend_room(mux, &record.session_name)?)?;
     RoomContext::from_record(&record, machine_config(), mux, RoomSizing::OrdinaryTab)
 }
@@ -461,17 +473,7 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
     let mux = match &entry {
         RoomEntry::Start { mux, .. } | RoomEntry::StartDetached { mux, .. } => *mux,
         _ => {
-            let missing_report = match &entry {
-                RoomEntry::AttachSession { record, .. } if !matches!(record, Ok(Some(_))) => {
-                    MissingSessionReport::Warn
-                }
-                _ => MissingSessionReport::Silent,
-            };
-            render::room::present_mux_pick(pick_mux_for_session(
-                entry.session_name(),
-                globals.mux,
-                missing_report,
-            ))?
+            render::room::present_mux_pick(pick_mux_for_session(entry.session_name(), globals.mux))?
         }
     };
 
@@ -614,6 +616,16 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
         RoomEntry::AttachSession {
             session, record, ..
         } => {
+            if !was_live {
+                let message = unknown_session_message(mux, session);
+                if let RoomEntry::AttachSession {
+                    record: Err(error), ..
+                } = entry
+                {
+                    return Err(error).context(message);
+                }
+                bail!(message);
+            }
             match record {
                 Ok(_) => tracing::warn!(
                     session = %session,
@@ -669,6 +681,34 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
     }
 
     Ok(ready)
+}
+
+fn unknown_session_message(mux: MuxName, session: &str) -> String {
+    let known = rimz::workspace::known_workspaces().unwrap_or_default();
+    let nearest = known
+        .iter()
+        .map(|workspace| {
+            let name = &workspace.session_name;
+            let mut row: Vec<_> = (0..=name.chars().count()).collect();
+            for (i, left) in session.chars().enumerate() {
+                let mut diagonal = row[0];
+                row[0] = i + 1;
+                for (j, right) in name.chars().enumerate() {
+                    let above = row[j + 1];
+                    row[j + 1] = (diagonal + usize::from(left != right))
+                        .min(above + 1)
+                        .min(row[j] + 1);
+                    diagonal = above;
+                }
+            }
+            (row[name.chars().count()], name)
+        })
+        .min()
+        .filter(|(distance, _)| *distance <= 2);
+    let hint = nearest
+        .map(|(_, name)| format!("did you mean `{name}`?   "))
+        .unwrap_or_default();
+    format!("no room or {mux} session named `{session}`\n{hint}all rooms: rimz list --all")
 }
 
 fn birth_managed_room(

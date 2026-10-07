@@ -9,6 +9,17 @@ use rimz::harness::rebirth::RebirthDisposition;
 use rimz::ids::MuxName;
 use rimz::trust::{BirthPromptOffer, SurfaceSummary};
 
+#[test]
+fn nested_start_distinguishes_the_current_room_live_elsewhere_and_not_running() {
+    use super::{RoomSituation, room_situation};
+
+    for live in [false, true] {
+        assert_eq!(room_situation(true, live), RoomSituation::CurrentRoom);
+    }
+    assert_eq!(room_situation(false, true), RoomSituation::LiveElsewhere);
+    assert_eq!(room_situation(false, false), RoomSituation::NotRunning);
+}
+
 fn folder_trust_row(kind: &'static str, grantable: bool) -> rimz::agents::FolderTrustRow {
     rimz::agents::FolderTrustRow {
         kind,

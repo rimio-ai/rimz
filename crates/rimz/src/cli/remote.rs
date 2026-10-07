@@ -135,6 +135,10 @@ impl SavedAliasArgs {
 }
 
 #[derive(Debug, Args)]
+#[command(
+    mut_arg("no_attach", |arg| arg.help("Print the SSH command instead of connecting; opens nothing")),
+    mut_arg("attach", |arg| arg.help("Connect to the remote room instead of only printing the SSH command"))
+)]
 struct ConnectionArgs {
     /// Alias or `[user@]host:<session-or-path>`; bare names prefer remote home directories, `host:session:<name>` forces a session.
     #[arg(add = clap_complete::ArgValueCandidates::new(
