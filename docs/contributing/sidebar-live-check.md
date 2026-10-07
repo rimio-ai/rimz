@@ -159,11 +159,11 @@ This is the first `Review` frame read from the watched tmux consumer `tmux:%3`:
                                        ? for help
 ```
 
-**2c.** Keep the consumer watched and record the earlier Build duration from the board ledger. Run the card's Flip with `Build` in place of `Review`, then repeat Capture until the first Build frame. Record the adoption latency and stage / total clock. The Review dot must now be hollow and warm (`warn`), and the stage clock must resume Build's earlier duration plus the time since the return, not restart at zero. Add `--ansi` to Capture to retain the dot's color; a plain capture cannot prove tone. Flip back to `Review` before continuing checks 3 and 4.
+**2c.** Keep the consumer watched and record the earlier Build duration from the board ledger. Run the card's Flip with `Build` in place of `Review`, then repeat Capture until the first Build frame. Record the adoption latency, the stage time, and the run total. The Review dot must now be hollow and warm (`warn`), and the stage clock must resume Build's earlier duration plus the time since the return, not restart at zero. Add `--ansi` to Capture to retain the dot's color; a plain capture cannot prove tone. Flip back to `Review` before continuing checks 3 and 4.
 
 The 2026-09-25 flip-back check used `env -u NO_COLOR cargo xtask sandbox room --mux <backend> --for 15m` with the testkit build. Both ANSI captures retained a hollow Review dot with foreground `38;2;224;175;104` (the warm tone). Earlier Build time below is the ledger interval, also confirmed by the published `stage_prior_secs`; the clock and adoption latency were read from the watched consumer, not inferred from publication.
 
-| Backend | Watched consumer | Earlier Build time | Review -> Build adoption | First resumed stage / total |
+| Backend | Watched consumer | Earlier Build time | Review -> Build adoption | First resumed stage time and run total |
 | --- | --- | --- | --- | --- |
 | tmux | `tmux:%3` | 58 s | 1409 ms | `59s / 1m` |
 | Zellij | `zellij:terminal_0` | 65 s | 2034 ms | `1m / 1m` |
@@ -207,7 +207,7 @@ target/debug/rimz sidebar snapshot --json > /tmp/snap.json
 jq '.worktree_groups[].rows[] | select(.handle == "coder")' /tmp/snap.json
 ```
 
-`.agents[]` on the same snapshot is the rollup the fold reads, not what the card paints: it carries each session's own unfolded clock and no nested children, so a check that reads it will report the display fields missing. Row-level projections — the child-activity fold, display status, attention — exist only under `.worktree_groups[].rows[]`.
+`.agents[]` on the same snapshot is the rollup the fold reads, not what the card paints: it carries each session's own unfolded clock and no nested children, so a check that reads it will report the display fields missing. Row-level projections exist only under `.worktree_groups[].rows[]`: the folded `status`, the `attention_score` that orders the card, and the nested `sub_agents[]`. A row has no `attention` or `display_status` key, so a `jq` filter naming one prints `null` rather than failing. A child that lifts its parent shows in the row's `attention_score` and the group's `status_counts`, while the row's own `status` can stay `idle`.
 
 Two rules for a check whose subject is time:
 
@@ -277,7 +277,15 @@ In the recorded run (2026-09-26, tmux) that sum was `2 + 118420 + 2589 = 121011`
 ▌      ▤ 121k · Opus 5                           ▐
 ```
 
-The replay proves the adapter and renderer path from hook to frame. It does not prove that Claude sends these payloads in this order or shape; that contract lives in [claude-reference.md](../externals/agent-adapter/claude-reference.md). It has run on tmux only.
+The replay proves the adapter and renderer path from hook to frame. It does not prove that Claude sends these payloads in this order or shape; that contract lives in [claude-reference.md](../externals/agent-adapter/claude-reference.md). The 2026-09-26 run was on tmux; on 2026-10-07 the same recipe ran on Zellij with `--zellij` in place of `--tmux`.
+
+**Quiet and stalled child.** To watch a native child go quiet and then stall, feed the first three payloads and leave the stop unfed. The child's entry shows plain runtime, the faced quiet clock from five minutes of silence, and `!` with `silent Nm` once `stalled_after_secs` has passed. Shorten that window before the feed by appending to the sandbox home's config:
+
+```sh
+printf '[agents.attention]\nstalled_after_secs = 480\n' >> "$ROOT/home/.rimz/config.toml"
+```
+
+`jq .attention.stalled_after_secs` on the snapshot confirms the room read it. One transcript pair replays once per room: a second copy fed to the room's other agent moved the session off the first card and its child arrived already `success`, so a second scenario takes a fresh room.
 
 After SessionStart, the same `x()` helper also identifies the caller for commands such as `wait` ([Run a command as an agent](#run-a-command-as-an-agent)).
 
