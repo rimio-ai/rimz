@@ -12,6 +12,15 @@ use crate::store::event::{
 use crate::store::message::{DeliveryGate, MessageBody, MessageRecord, MessageStatus};
 use crate::store::snapshot::testkit::*;
 
+fn fold_delta(
+    seed: FoldDeltaSeed,
+    carryover: Arc<FoldCarryover>,
+    events: &[FoldEvent<'_>],
+    now: Timestamp,
+) -> FoldedDelta {
+    super::fold_delta(seed, carryover, events, now).expect("fold delta")
+}
+
 fn recent(secs_ago: u64) -> jiff::Timestamp {
     jiff::Timestamp::now() - std::time::Duration::from_secs(secs_ago)
 }

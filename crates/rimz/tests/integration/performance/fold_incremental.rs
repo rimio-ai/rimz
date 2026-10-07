@@ -12,14 +12,13 @@ use rimz::store::event_log::{self, testkit::bytes_read};
 use rimz::store::snapshot::RollupCursor;
 use rimz::testkit::carryover_bytes_parsed;
 use rimz::testkit::fleet::{
-    SESSION_NAME, registered_lifecycle, seed_fleet_store, seed_history_carryover, synthetic_panes,
+    SESSION_NAME, registered_lifecycle, seed_ended_carryover, seed_fleet_store, synthetic_panes,
 };
 
 use crate::common::Harness;
 
 const HISTORY_EVENTS: usize = 3_000;
 const FLEET: usize = 30;
-const HISTORY_PROMPT_BYTES: usize = 1_000;
 
 #[test]
 fn delta_fold_is_o_new_bytes() {
@@ -265,7 +264,7 @@ fn warm_fold_parses_unchanged_carryover_zero_times() {
     for history in [100, 800] {
         let h = Harness::new();
         let paths = h.store.paths().clone();
-        seed_history_carryover(&h.store, history, HISTORY_PROMPT_BYTES).expect("stage carryover");
+        seed_ended_carryover(&h.store, history).expect("stage carryover");
         seed_fleet_store(&paths, FLEET, HISTORY_EVENTS).expect("seed event");
         std::thread::spawn(move || assert_carryover_parsed_once(&paths, history))
             .join()
@@ -344,4 +343,211 @@ fn assert_carryover_parsed_once(paths: &rimz::StatePaths, history: usize) {
 
 fn file_len(path: &std::path::Path) -> u64 {
     std::fs::metadata(path).expect("file meta").len()
+}
+
+#[test]
+fn cold_carryover_trims_ended_text_and_shares_the_parse_with_audit_reads() {
+    let h = Harness::new();
+    seed_ended_carryover(&h.store, 3_300).expect("seed carryover");
+    let paths = h.store.paths().clone();
+    let carryover_len = file_len(&paths.agents_carryover);
+    std::thread::spawn(move || {
+        let before = carryover_bytes_parsed();
+        let (_, agents, _) = RollupCursor::new().fold(&paths).expect("cold fold");
+        assert_eq!(carryover_bytes_parsed() - before, carryover_len);
+        for agent in agents.iter() {
+            if agent.ended_at.is_none() {
+                assert!(agent.first_prompt.is_some());
+                assert!(!agent.recent_prompts.is_empty());
+                if let Some(pane) = &agent.pane {
+                    assert!(pane.foreground_cmdline.is_some());
+                    assert!(pane.spawn_command.is_some());
+                }
+                continue;
+            }
+            let first_prompt = agent.first_prompt.as_deref().expect("ended prompt prefix");
+            assert!(first_prompt.chars().count() <= 160, "bounded ended prefix");
+            assert_eq!(first_prompt.lines().count(), 1);
+            assert!(agent.prompt.is_none());
+            assert!(agent.recent_prompts.is_empty());
+            if let Some(pane) = &agent.pane {
+                assert!(pane.foreground_cmdline.is_none());
+                assert!(pane.spawn_command.is_none());
+            }
+        }
+    })
+    .join()
+    .expect("fold thread");
+
+    let before = carryover_bytes_parsed();
+    for _ in 0..2 {
+        let audit = h
+            .store
+            .runtime_projection(rimz::RuntimeScope::Audit)
+            .expect("audit");
+        assert_eq!(audit.agents.len(), 3_300);
+    }
+    assert_eq!(carryover_bytes_parsed() - before, carryover_len);
+}
+
+#[test]
+fn delta_hydrates_an_ended_carried_row_with_one_raw_parse() {
+    let h = Harness::new();
+    seed_ended_carryover(&h.store, 100).expect("seed carryover");
+    let paths = h.store.paths();
+    let raw: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&paths.agents_carryover).expect("carryover bytes"))
+            .expect("carryover JSON");
+    let mut cursor = RollupCursor::new();
+    cursor.fold(paths).expect("cold fold");
+    event_log::append(
+        &paths.events_log,
+        &rimz::store::event::EventEnvelope::new(
+            paths.workspace_id.clone(),
+            "session",
+            "claude",
+            "agent",
+            "agent.launch_warnings",
+            serde_json::json!({"agent_id": "history-0", "warnings": ["new warning"]}),
+        ),
+    )
+    .expect("append delta");
+    let before = carryover_bytes_parsed();
+    let (_, agents, _) = cursor.fold(paths).expect("hydrate");
+    assert_eq!(
+        carryover_bytes_parsed() - before,
+        file_len(&paths.agents_carryover)
+    );
+    let agent = agents
+        .iter()
+        .find(|agent| agent.agent_id.as_str() == "history-0")
+        .expect("row");
+    let row = serde_json::to_value(agent).expect("row JSON");
+    assert_eq!(row["first_prompt"], raw["agents"][0]["first_prompt"]);
+    assert_eq!(row["recent_prompts"], raw["agents"][0]["recent_prompts"]);
+    assert_eq!(row["pane"], raw["agents"][0]["pane"]);
+}
+
+#[test]
+fn explicit_agent_load_keeps_post_rotation_prompts() {
+    for reuse_timestamp in [true, false] {
+        let h = Harness::new();
+        seed_ended_carryover(&h.store, 100).expect("seed carryover");
+        let paths = h.store.paths();
+        event_log::append(
+            &paths.events_log,
+            &rimz::store::event::EventEnvelope::new(
+                paths.workspace_id.clone(),
+                "session",
+                "rimz",
+                "cli",
+                "test.noop",
+                serde_json::json!({}),
+            ),
+        )
+        .expect("append before rotation");
+        h.store.rotate_event_log(1, None).expect("rotate");
+        let raw: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(&paths.agents_carryover).expect("carryover bytes"),
+        )
+        .expect("carryover JSON");
+        let carried: rimz::agents::AgentState = serde_json::from_value(
+            raw["agents"]
+                .as_array()
+                .expect("rows")
+                .iter()
+                .find(|row| row["agent_id"] == "history-0")
+                .expect("carried row")
+                .clone(),
+        )
+        .expect("row");
+        for (signal, seconds) in [
+            (
+                rimz::agents::LifecycleSignal::TurnStarted { turn_id: None },
+                1,
+            ),
+            (rimz::agents::LifecycleSignal::Ended, 2),
+        ] {
+            let mut observation = rimz::agents::AgentLifecycleObservation::new(
+                Some(carried.agent_id.clone()),
+                signal,
+            );
+            observation.prompt =
+                rimz::agents::SanitizedPrompt::new(Some("new post-rotation prompt"));
+            let mut event = rimz::store::event::EventEnvelope::agent_lifecycle(
+                paths.workspace_id.clone(),
+                "session",
+                "claude",
+                "post-rotation",
+                &observation,
+            );
+            event.timestamp = if reuse_timestamp {
+                carried.last_seen
+            } else {
+                carried.last_seen + std::time::Duration::from_secs(seconds)
+            };
+            event_log::append(&paths.events_log, &event).expect("append lifecycle");
+        }
+        let audit = h
+            .store
+            .runtime_projection(rimz::RuntimeScope::Audit)
+            .expect("audit");
+        let advanced = audit
+            .agents
+            .iter()
+            .find(|agent| agent.agent_id.as_str() == "history-0")
+            .expect("advanced row");
+        assert_eq!(advanced.prompt.as_deref(), Some("new post-rotation prompt"));
+        assert!(advanced.ended_at.is_some());
+        if reuse_timestamp {
+            assert_eq!(advanced.ended_at, carried.ended_at);
+            assert_eq!(advanced.last_seen, carried.last_seen);
+        }
+        let loaded = h.store.load_full_agent(advanced).expect("load");
+        assert_eq!(
+            loaded.prompt, advanced.prompt,
+            "explicit loading must not overwrite an active-log prompt with carried text"
+        );
+        assert_eq!(loaded.recent_prompts, advanced.recent_prompts);
+        assert_eq!(&loaded, advanced);
+    }
+}
+
+#[test]
+fn explicit_agent_load_restores_only_text_with_one_raw_parse() {
+    let h = Harness::new();
+    seed_ended_carryover(&h.store, 100).expect("seed carryover");
+    let raw: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(&h.store.paths().agents_carryover).expect("carryover bytes"),
+    )
+    .expect("carryover JSON");
+    let full: rimz::agents::AgentState =
+        serde_json::from_value(raw["agents"][0].clone()).expect("row");
+    let mut trimmed = full.clone();
+    trimmed.first_prompt = None;
+    trimmed.prompt = None;
+    trimmed.recent_prompts.clear();
+    let pane = trimmed.pane.as_mut().expect("pane");
+    pane.foreground_cmdline = None;
+    pane.spawn_command = None;
+    trimmed.launch_warnings = vec!["new warning".to_owned()];
+    let before = carryover_bytes_parsed();
+    let loaded = h.store.load_full_agent(&trimmed).expect("load");
+    assert_eq!(
+        loaded.first_prompt, full.first_prompt,
+        "restore first prompt"
+    );
+    assert_eq!(loaded.prompt, full.prompt);
+    assert_eq!(loaded.recent_prompts, full.recent_prompts);
+    assert_eq!(loaded.pane, full.pane);
+    assert_eq!(loaded.launch_warnings, trimmed.launch_warnings);
+    assert_eq!(
+        carryover_bytes_parsed() - before,
+        file_len(&h.store.paths().agents_carryover)
+    );
+    trimmed.agent_id = rimz::ids::AgentSessionId::from("absent");
+    assert_eq!(
+        h.store.load_full_agent(&trimmed).expect("absent load"),
+        trimmed
+    );
 }

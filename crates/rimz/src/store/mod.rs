@@ -177,6 +177,17 @@ impl Store {
         ))
     }
 
+    /// Restore prompt text and pane argv only for an ended carried observation
+    /// with matching timestamps and no same-key agent event in the active log.
+    /// Other rows stay unchanged. Lock-free; reads raw carryover at most once
+    /// and checks the active log for a matching carried observation.
+    pub fn load_full_agent(
+        &self,
+        agent: &crate::agents::AgentState,
+    ) -> Result<crate::agents::AgentState> {
+        Ok(snapshot::load_full_agent(&self.inner.paths, agent)?)
+    }
+
     /// Build a fresh snapshot in memory (no disk write). Lock-free and
     /// O(delta): the rollup resumes from the persisted fold base.
     pub fn snapshot(&self) -> Result<SidebarSnapshot> {

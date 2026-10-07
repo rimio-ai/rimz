@@ -1659,6 +1659,81 @@ mod render {
     use super::*;
 
     #[test]
+    fn live_resolution_loads_full_ended_child_text_but_does_not_read_for_a_live_parent() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace_id = WorkspaceId::from_project_root(dir.path());
+        let paths = rimz::StatePaths::under(workspace_id.clone(), dir.path()).unwrap();
+        let runtime = rimz::RuntimePaths::under(workspace_id.clone(), dir.path()).unwrap();
+        let store = rimz::Store::open(paths, runtime.clone()).unwrap();
+        store.paths().ensure_dirs().unwrap();
+        let now = Timestamp::now();
+        let mut parent = rimz::testkit::agent_state("claude", "parent", now);
+        parent.name = Some("parent".to_owned());
+        parent.kind_ordinal = Some(1);
+        let mut child = rimz::testkit::agent_state("claude", "child", now);
+        child.name = Some("child".to_owned());
+        child.kind_ordinal = Some(2);
+        child.parent_agent_id = Some(parent.agent_id.clone());
+        child.launch_depth = Some(1);
+        child.ended_at = Some(now);
+        child.first_prompt = Some(format!("{}\nsecond line", "full prompt ".repeat(40)));
+        child.prompt = Some("latest prompt".to_owned());
+        child.recent_prompts = vec!["latest prompt".to_owned()];
+        rimz::disk::atomic::write_temp_then_rename(
+            &store.paths().agents_carryover,
+            &serde_json::json!({"agents": [parent, child]}),
+        )
+        .unwrap();
+        let projection = store
+            .runtime_projection(rimz::RuntimeScope::Runtime)
+            .unwrap();
+        assert_eq!(
+            projection.agents.len(),
+            2,
+            "ended child stays under its visible parent"
+        );
+        let snapshot = rimz::store::snapshot::SidebarSnapshot::build_with_agents(
+            workspace_id.clone(),
+            projection.agents,
+            now,
+        );
+        let workspace = rimz::ResolvedWorkspace {
+            workspace_id,
+            project_root: dir.path().to_owned(),
+            cwd_project_root: None,
+            root_class: rimz::workspace::RootClass::Repo,
+            worktree_root: dir.path().to_owned(),
+            worktree_branch: None,
+            session_name: "test".to_owned(),
+            mux_hint: None,
+        };
+        let channel = crate::cli::current_channel_with(&workspace, None, || None).address_context();
+        let before = rimz::testkit::carryover_bytes_parsed();
+        let (loaded, live) =
+            resolve_live_or_audit(&store, &workspace, &runtime, &snapshot, "@parent", &channel)
+                .unwrap();
+        assert!(live);
+        assert_eq!(loaded.first_prompt, parent.first_prompt);
+        assert_eq!(rimz::testkit::carryover_bytes_parsed(), before);
+        let (loaded, live) =
+            resolve_live_or_audit(&store, &workspace, &runtime, &snapshot, "@child", &channel)
+                .unwrap();
+        assert!(live, "the ended child resolves on the live path");
+        assert_eq!(
+            loaded.first_prompt, child.first_prompt,
+            "explicit reads restore the whole prompt"
+        );
+        assert_eq!(loaded.prompt, child.prompt);
+        assert_eq!(loaded.recent_prompts, child.recent_prompts);
+        assert_eq!(
+            rimz::testkit::carryover_bytes_parsed() - before,
+            std::fs::metadata(&store.paths().agents_carryover)
+                .unwrap()
+                .len(),
+        );
+    }
+
+    #[test]
     fn agents_table_shows_petnames_profiles_and_kinds() {
         let now = Timestamp::from_second(2_000).unwrap();
         let mut first =

@@ -701,7 +701,8 @@ path = "crates/rimz/src/store"
 # Fresh boundary sends share a checked enqueue-and-claim outcome and writer (+2).
 # PaneAgent::root_lane and lane_label carry the same root identity into pane resolution.
 # Predicate-based queue clearing keeps root-lane policy in the CLI and cancellation under the store lock (+1).
-surface-budget = 371
+# Fold-private audit text loading (+1).
+surface-budget = 372
 
 [[module]]
 path = "crates/rimz/src/theme"
@@ -965,7 +966,8 @@ allowed-dependencies = [
 # The pending-recovery record module (+1).
 # The idle-stop record module (+1).
 # The exec wrapper asks whether its agent is parked for recovery (+1).
-surface-budget = 33
+# Explicit audit-row text loading (+1).
+surface-budget = 34
 
 [[module]]
 path = "crates/rimz/src/utils/time.rs"
