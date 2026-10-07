@@ -985,7 +985,7 @@ fn stopped_subagent_end_skips_root_ended_and_unmatched_rows() {
 }
 
 #[test]
-fn stopped_subagent_end_selects_newest_matching_row() {
+fn stopped_subagent_end_prefers_the_run_id_row_over_a_newer_namesake() {
     use rimz::agents::{AgentLifecycleObservation, LifecycleSignal};
 
     let mut fixture = RunFixture::new(RunStatus::Completed);
@@ -1026,7 +1026,7 @@ fn stopped_subagent_end_selects_newest_matching_row() {
     assert!(
         agents
             .iter()
-            .find(|agent| agent.agent_id == "newer")
+            .find(|agent| agent.agent_id == "older")
             .unwrap()
             .ended_at
             .is_some(),
@@ -1035,7 +1035,7 @@ fn stopped_subagent_end_selects_newest_matching_row() {
     assert!(
         agents
             .iter()
-            .find(|agent| agent.agent_id == "older")
+            .find(|agent| agent.agent_id == "newer")
             .unwrap()
             .ended_at
             .is_none(),

@@ -209,7 +209,12 @@ fn stamp_stopped_subagent_end(
         .agents
         .iter()
         .filter(|agent| agent.ended_at.is_none() && run.matches_agent(agent))
-        .max_by_key(|agent| agent.registered_at)
+        .max_by_key(|agent| {
+            (
+                run.agent_id.as_ref() == Some(&agent.agent_id),
+                agent.registered_at,
+            )
+        })
     else {
         return Ok(());
     };
