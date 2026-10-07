@@ -798,7 +798,7 @@ fn live_room_start_keeps_parked_agents_without_prompting() {
         } else {
             assert_eq!(
                 output
-                    .matches("rimz: 1 agent from an earlier session stay parked")
+                    .matches("rimz: 1 agent from an earlier session stays parked")
                     .count(),
                 1,
                 "{output}"
@@ -1403,7 +1403,7 @@ fn birth_keeps_agents_pending_when_their_resume_window_does_not_open() {
     assert!(!output.contains("Recover "), "{output}");
     assert!(!output.contains("rimz: resumed"), "{output}");
     assert!(
-        output.contains("1 agent from an earlier session stay parked (#alpha)"),
+        output.contains("1 agent from an earlier session stays parked (#alpha)"),
         "{output}"
     );
     assert_eq!(pending()["agents"], serde_json::json!([lost]));
