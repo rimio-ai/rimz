@@ -83,7 +83,8 @@ From your own shell:
 ```sh
 rimz subagents list              # every child in the current channel, with its parent
 rimz agents show @calm-fox       # one child's activity, context, and recent transcript
-rimz transcript @calm-fox        # its conversation, after the pane has closed too
+rimz transcript @calm-fox        # last 20 entries, after the pane has closed too
+rimz transcript @calm-fox -n 0   # the whole run
 ```
 
 `list` from a shell outside any channel shows every child in the room. A child parked on a provider usage limit reads `paused` there, with the provider's message under its row, while its `RUN` column still says `running`: nothing has ended, and the child can still resume before its deadline. A reset alone does not guarantee continuation; automatic continuation depends on the configured [resume policy](./loops.md). Channel and `@all` transcript views leave children out, so read a child by its handle.

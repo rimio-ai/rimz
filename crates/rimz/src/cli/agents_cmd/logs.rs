@@ -23,6 +23,7 @@ pub(super) fn logs_agent(
             all,
             json,
             false,
+            false,
         );
     }
     let view = crate::cli::transcript::chat_view_with_hidden(

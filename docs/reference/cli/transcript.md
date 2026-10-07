@@ -69,7 +69,7 @@ A channel named explicitly (`'#<channel>'`, `@<handle>#<channel>`, `@all#<channe
 | --- | --- |
 | `[TARGET]` | What to read; see [Choose what to read](#choose-what-to-read). |
 | `-w, --worktree <channel>` | Channel used to resolve the target. |
-| `-n, --last <N>` (alias `--tail`) | Keep the last `N` entries; see [Tail with `--last`](#tail-with---last). |
+| `-n, --last <N>` (alias `--tail`) | Keep the last `N` entries; `0` reads all entries. The human view defaults to `20`; JSON has no default bound. See [Tail with `--last`](#tail-with---last). |
 | `-f, --follow` | Print the first view, then every entry that enters the view after it once, in view order, including across an agent restart, checking once a second. Conflicts with `--all`. |
 | `--all` | Include prior sessions; see [Prior sessions](#prior-sessions). |
 | `--flat` | Print entries in arrival order instead of grouping replies into threads. |
@@ -157,17 +157,25 @@ Each hidden entry takes with it the agent's replies and error output in the turn
 
 ## Tail with `--last`
 
-`-n, --last <N>` keeps the last `N` entries in display order, after hidden entries are removed. One entry is one message, however many lines its body takes, and an answer folded into an ask card still counts as one. When the cut lands inside a thread, the tail widens back to the displayed thread's first line so the conversation keeps its opener. `--last` applies to `--json` the same way.
+Without `-n`, the human view keeps the last `20` entries in display order, after hidden entries are removed. This bound also applies with `--all`, `--flat`, and to the first view when following. `-n 0` reads every entry; `-n N` chooses another bound. One entry is one message, however many lines its body takes, and an answer folded into an ask card still counts as one. When the cut lands inside a thread, the tail widens back to the displayed thread's first line so the conversation keeps its opener.
+
+When the default bound hides entries, a separate faint line on stderr counts the displayed entries before and after the cut:
+
+```text
+⋯ last 20 of 42 entries · -n 0 for all
+```
+
+The count can exceed `20` when a thread keeps its opener. No bound note prints when nothing was cut or `-n` was supplied explicitly. The prior-session note never prints alongside it: that note appears only when the whole current session is shown, because it fits the bound or `-n 0` was passed. JSON has no default bound; an explicit `-n N` applies to it the same way.
 
 ## Empty results
 
-A resolved agent with nothing to show exits 0 and prints `No conversation for @handle#channel yet.` on stderr (without the suffix when it has no channel). A channel or room scope with nothing to show also exits 0: `No conversation for #<channel> yet.`, `No conversation for <target> yet.`, or `No conversation for this room yet.`; an empty log without an agent target or `--last 0` reads `No conversation recorded yet.`. With `--json`, stdout gets `{"entries": []}`. An unknown agent is an error, not an empty conversation.
+A resolved agent with nothing to show exits 0 and prints `No conversation for @handle#channel yet.` on stderr (without the suffix when it has no channel). A channel or room scope with nothing to show also exits 0: `No conversation for #<channel> yet.`, `No conversation for <target> yet.`, or `No conversation for this room yet.`; an empty log without an agent target reads `No conversation recorded yet.`. With `--json`, stdout gets `{"entries": []}`. An unknown agent is an error, not an empty conversation.
 
 With `--follow`, an empty first view prints nothing and waits. Following honours `-n` for the first view and keeps the selected channel and `--flat` rendering for subsequent entries, until interrupted or the output pipe closes.
 
 ## JSON output
 
-`--json` prints one object with the selected entries in arrival order (`delivered_at` when it is there, otherwise `at`), hidden entries included.
+`--json` prints one object with the selected entries in arrival order (`delivered_at` when it is there, otherwise `at`), hidden entries included. There is no default entry bound; pass `-n N` to bound the result explicitly.
 
 With `--follow`, every entry is one JSON object per line, including the first view, without an envelope.
 

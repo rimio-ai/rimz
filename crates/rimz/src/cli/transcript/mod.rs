@@ -16,6 +16,8 @@ use rimz::ids::{AgentKind, AgentSessionId};
 use rimz::transcript::{AskOption, EntryOrigin, TranscriptEntry, TranscriptKind};
 use rimz::workspace::WorkspaceResolver;
 
+const DEFAULT_TAIL_ENTRIES: usize = 20;
+
 #[derive(Debug, Args)]
 pub struct TranscriptArgs {
     /// What to read: '#channel', @handle[#channel], @all, a session id, or run_<id>. Omitted: your current channel. Quote a leading #.
@@ -222,10 +224,11 @@ pub fn run(args: TranscriptArgs, globals: &GlobalFlags) -> Result<()> {
             &workspace,
             args.target.as_deref(),
             args.worktree.as_deref(),
-            args.last,
+            transcript_tail(args.last, args.json),
             args.all,
             args.json,
             args.flat,
+            args.last.is_none() && !args.json,
         );
     }
     let paths = rimz::StatePaths::for_project_root(&workspace.project_root)
@@ -235,7 +238,7 @@ pub fn run(args: TranscriptArgs, globals: &GlobalFlags) -> Result<()> {
         &paths,
         args.target.as_deref(),
         args.worktree.as_deref(),
-        args.last,
+        transcript_tail(args.last, args.json),
         args.all,
         ViewMode {
             hidden: Hidden::for_json(args.json),
@@ -263,6 +266,7 @@ pub fn run(args: TranscriptArgs, globals: &GlobalFlags) -> Result<()> {
         let prose = Prose::for_stdout();
         let mut out = render::out();
         render_lines_to(&mut out, &view, &tz, prose)?;
+        write_default_bound_hint(&view, args.last)?;
         if view.archived_hidden > 0 && selected.len() == view.entries.len() {
             write_archive_hint(
                 view.archived_hidden,
@@ -272,6 +276,35 @@ pub fn run(args: TranscriptArgs, globals: &GlobalFlags) -> Result<()> {
                 globals,
             )?;
         }
+    }
+    Ok(())
+}
+
+fn transcript_tail(last: Option<usize>, json: bool) -> Option<usize> {
+    match last {
+        Some(0) => None,
+        Some(n) => Some(n),
+        None if json => None,
+        None => Some(DEFAULT_TAIL_ENTRIES),
+    }
+}
+
+fn default_bound_hint(view: &RenderedChat, last: Option<usize>) -> Option<String> {
+    if last.is_some() {
+        return None;
+    }
+    let total = thread::assemble_threads(&view.entries, view.archive_prefix, view.flat).len();
+    let shown = entries_for_view(view).len();
+    (shown < total).then(|| format!("⋯ last {shown} of {total} entries · -n 0 for all"))
+}
+
+fn write_default_bound_hint(view: &RenderedChat, last: Option<usize>) -> Result<()> {
+    if let Some(hint) = default_bound_hint(view, last) {
+        writeln!(
+            render::err(),
+            "{}",
+            render::paint(render::palette::faint(), &hint)
+        )?;
     }
     Ok(())
 }

@@ -1,6 +1,71 @@
 use super::*;
 
 #[test]
+fn transcript_default_bounds_human_entries_and_reports_display_counts() {
+    let mut view = follow_view(
+        (0..25)
+            .map(|n| entry("2026-06-28T04:00:00Z", &format!("entry {n}")))
+            .collect(),
+    );
+    view.last = transcript_tail(None, false);
+    let lines = selected_lines(&view);
+    assert_eq!(lines.len(), 20);
+    assert_eq!(lines[0].text, "entry 5");
+    assert_eq!(
+        default_bound_hint(&view, None).as_deref(),
+        Some("⋯ last 20 of 25 entries · -n 0 for all")
+    );
+    view.last = transcript_tail(Some(20), false);
+    assert!(default_bound_hint(&view, Some(20)).is_none());
+    view.entries[5] = linked(view.entries[5].clone(), Some(6), &[]);
+    view.entries.push(linked(
+        assistant_entry("2026-06-28T04:01:00Z", "reply"),
+        None,
+        &[6],
+    ));
+    view.last = transcript_tail(None, false);
+    assert_eq!(
+        selected_lines(&view).len(),
+        21,
+        "the cut preserves the thread opener"
+    );
+    assert_eq!(
+        default_bound_hint(&view, None).as_deref(),
+        Some("⋯ last 21 of 26 entries · -n 0 for all")
+    );
+    view.entries.truncate(10);
+    view.last = transcript_tail(None, false);
+    assert!(default_bound_hint(&view, None).is_none());
+}
+
+#[test]
+fn transcript_zero_reads_all_without_a_footer() {
+    let mut view = follow_view(
+        (0..25)
+            .map(|n| entry("2026-06-28T04:00:00Z", &format!("entry {n}")))
+            .collect(),
+    );
+    for json in [false, true] {
+        view.last = transcript_tail(Some(0), json);
+        assert_eq!(selected_lines(&view).len(), 25);
+        assert!(default_bound_hint(&view, Some(0)).is_none());
+    }
+}
+
+#[test]
+fn transcript_json_has_no_default_bound() {
+    let mut view = follow_view(
+        (0..25)
+            .map(|n| entry("2026-06-28T04:00:00Z", &format!("entry {n}")))
+            .collect(),
+    );
+    view.last = transcript_tail(None, true);
+    assert_eq!(selected_lines(&view).len(), 25);
+    view.last = transcript_tail(Some(3), true);
+    assert_eq!(selected_lines(&view).len(), 3);
+}
+
+#[test]
 fn tail_alias_and_follow_parse() {
     use clap::Parser;
     for flag in ["--tail", "--last"] {

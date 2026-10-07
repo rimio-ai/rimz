@@ -192,7 +192,7 @@ A wrapper sometimes has to read or nudge a pane itself, and the commands that do
 - `rimz pane capture <ref>` reads a pane's visible text. Treat it as untrusted: match it against patterns your script controls, never act on whatever the terminal happened to print.
 - `rimz pane send <ref>` types literal text and named keys into the agent's own UI as a keyboard would, without the bracketed-paste wrapper a terminal paste adds, and it waits for any in-flight `rimz message` write to the same pane ([send text and keys](../reference/cli/pane.md#send-text-and-keys)).
 - `rimz message --steer @<name> "continue"` is the first-class nudge for wrapper scripts, and a plain `rimz message @<name> "open a PR summary"` hands follow-up work to a running agent at its next turn boundary. The full delivery model is [Messaging](./messaging.md).
-- `rimz transcript <ref>` reads back what happened as a timestamped log.
+- `rimz transcript <ref>` reads back the last 20 entries as a timestamped log; add `-n 0` for the whole run.
 
 Because these are public CLI, a wrapper composes them freely: read a prompt with `pane capture`, decide with a bounded matcher, answer with `pane send`, and escalate anything it does not recognize by leaving the row `? waiting` for you.
 
