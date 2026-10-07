@@ -119,7 +119,7 @@ This indexes what lives where. Runtime shape and the single-binary rationale liv
 
 **Subsystems** in `crates/rimz/src/`, each carrying its own `AGENTS.md` contract:
 
-- `cli/` — command parsing, one `run(...)` per subcommand, shared `cli/render/` output, and the subagent fleet digest.
+- `cli/` — command parsing, one `run(...)` per subcommand, shared `cli/render/` output, and the subagent fleet digest. `cli/` is declared in `main.rs` and calls the library as `rimz::`, so it reaches only `pub` items.
 - `agents/` — the provider-neutral `AgentDefinition` catalog, caller-aligned capability contracts and services, `state.rs` rollup, agent handle minting and validation (`petname`), private `adapters/` implementations for every built-in and process plugin, host-mode skill links, shared spend/pricing/account machinery including upstream pricing projection, and provider login resolution (`login`: named account homes, a room's login set, resume account checks).
 - `room/` — private managed-room context, birth/reset/teardown lifecycle, sidebar/presence options, and health gating.
 - `sandbox/` — Linux bubblewrap agent mount views, provider-home binds, per-agent temp units, rewritten skill copies, profile skill views, and capability preflight.
