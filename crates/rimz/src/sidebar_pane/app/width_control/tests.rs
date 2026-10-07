@@ -225,7 +225,12 @@ fn write_zellij_fullscreen_topology(runtime: &RuntimePaths, active: bool) -> u64
 }
 
 fn write_zellij_topology_for_view_at(runtime: &RuntimePaths, view_cols: u16, produced_at_ms: u64) {
-    write_zellij_topology_panes(runtime, 80, Some(view_cols), produced_at_ms);
+    write_zellij_topology_panes(
+        runtime,
+        80.min(view_cols / 2),
+        Some(view_cols),
+        produced_at_ms,
+    );
 }
 
 fn write_zellij_topology_panes(
@@ -545,7 +550,7 @@ fn width_key_burst_reprobes_a_view_resized_since_the_last_proof() {
         "rimz-test",
         None,
     );
-    write_zellij_topology_panes(&runtime, 24, Some(50), controller.started_at_ms);
+    write_zellij_topology_for_view_at(&runtime, 50, controller.started_at_ms);
     controller.backstop(Some(24), Some(1), None, &diag);
     assert_eq!(controller.current_view_cols, Some(50));
     assert_eq!(controller.convergence.target(), Some(target(24)));
@@ -582,7 +587,7 @@ fn width_key_burst_keeps_the_last_proven_view_when_the_probe_fails() {
         "rimz-test",
         None,
     );
-    write_zellij_topology_panes(&runtime, 24, Some(50), controller.started_at_ms);
+    write_zellij_topology_for_view_at(&runtime, 50, controller.started_at_ms);
     controller.backstop(Some(24), Some(1), None, &diag);
     assert_eq!(controller.current_view_cols, Some(50));
     assert_eq!(controller.convergence.target(), Some(target(24)));
