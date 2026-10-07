@@ -1,19 +1,20 @@
 //! Fixture and gallery serve loops for previewing supplied snapshots with the renderer's animation and pixel-painting paths.
 
 use std::io::{self, Write};
+use std::os::fd::AsFd;
 use std::time::{Duration, Instant};
 
 use ratatui::Terminal;
-use ratatui::backend::CrosstermBackend;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 
 use crate::RuntimePaths;
-use crate::sidebar_pane::pixel::{BEGIN_SYNC, END_SYNC, PixelLease, detect_pixel_render_env};
+use crate::sidebar_pane::pixel::{PixelLease, detect_pixel_render_env};
 use crate::sidebar_pane::render::{self, UiState};
 use crate::store::snapshot::SidebarSnapshot;
 use crate::tui::{MouseCapture, Screen, TerminalModeGuard};
 
 use super::paint::FramePainter;
+use super::{PaneBackend, ambient_window};
 
 struct GalleryState {
     snapshot: SidebarSnapshot,
@@ -31,7 +32,7 @@ fn lease_demo_slot(runtime: &RuntimePaths) -> Option<PixelLease> {
 pub fn serve_fixture(snapshot: SidebarSnapshot, refresh_ms: u16) -> super::Result<()> {
     let refresh_ms = refresh_ms.max(1);
     let _input_mode = TerminalModeGuard::enable(MouseCapture::Off, Screen::Main)?;
-    let backend = CrosstermBackend::new(io::stdout());
+    let backend = PaneBackend::ambient(io::stdout().as_fd().try_clone_to_owned()?, ambient_window)?;
     let mut terminal = Terminal::new(backend)?;
     terminal.clear()?;
 
@@ -70,7 +71,7 @@ pub fn serve_gallery(
 ) -> super::Result<()> {
     let refresh_ms = refresh_ms.max(1);
     let _input_mode = TerminalModeGuard::enable(MouseCapture::Stdout, Screen::Main)?;
-    let backend = CrosstermBackend::new(io::stdout());
+    let backend = PaneBackend::ambient(io::stdout().as_fd().try_clone_to_owned()?, ambient_window)?;
     let mut terminal = Terminal::new(backend)?;
     terminal.clear()?;
 
@@ -118,24 +119,29 @@ pub fn serve_gallery(
                 .paint
                 .refresh_view(&mut state.ui, &state.snapshot, false);
         }
-        terminal.backend_mut().write_all(BEGIN_SYNC)?;
+        terminal.backend_mut().begin_frame();
+        let mut graphics = Vec::new();
+        let mut bracket = false;
         let body_result = (|| {
             for state in &mut states {
                 state
                     .paint
-                    .ensure_pixel_transmitted(terminal.backend_mut(), &state.ui, now_ms)?;
+                    .ensure_pixel_transmitted(&mut graphics, &state.ui, now_ms)?;
             }
+            bracket = !graphics.is_empty();
+            terminal.backend_mut().write_all(&graphics)?;
+            graphics.clear();
             draw_gallery_to_terminal(&mut terminal, &mut states)?;
             for state in &mut states {
                 state
                     .paint
-                    .ensure_meters_transmitted(terminal.backend_mut(), &state.ui, now_ms)?;
+                    .ensure_meters_transmitted(&mut graphics, &state.ui, now_ms)?;
             }
-            Ok(())
+            bracket |= !graphics.is_empty();
+            terminal.backend_mut().write_all(&graphics)
         })();
-        let end_result = terminal.backend_mut().write_all(END_SYNC);
-        let flush_result = terminal.backend_mut().flush();
-        body_result.and(end_result).and(flush_result)?;
+        let end_result = terminal.backend_mut().end_frame(bracket);
+        body_result.and(end_result)?;
 
         if !event::poll(cadence)? {
             continue;
@@ -149,8 +155,8 @@ pub fn serve_gallery(
     Ok(())
 }
 
-fn draw_gallery_to_terminal<W: io::Write>(
-    terminal: &mut Terminal<CrosstermBackend<W>>,
+fn draw_gallery_to_terminal(
+    terminal: &mut Terminal<PaneBackend>,
     states: &mut [GalleryState],
 ) -> io::Result<()> {
     let mut columns = states

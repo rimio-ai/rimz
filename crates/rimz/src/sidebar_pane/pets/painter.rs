@@ -64,7 +64,6 @@ impl PixelPainter {
                 now_ms,
                 cols: pixel.size.cols,
                 rows: pixel.size.rows,
-                synchronized: false,
             },
             || {
                 png.entry(pixel.sprite_index)

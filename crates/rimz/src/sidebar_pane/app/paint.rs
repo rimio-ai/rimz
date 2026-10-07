@@ -4,7 +4,6 @@ use std::io::{self, Write};
 use std::time::Instant;
 
 use ratatui::Terminal;
-use ratatui::backend::Backend;
 
 use crate::MuxName;
 use crate::config::{CellAspect, PixelMode};
@@ -13,11 +12,11 @@ use crate::sidebar_pane::pets::{
 };
 use crate::sidebar_pane::pixel::meter::{MeterPainter, MeterPixels};
 use crate::sidebar_pane::pixel::probe::CAPS_REFRESH_INTERVAL;
-use crate::sidebar_pane::pixel::{
-    BEGIN_SYNC, END_SYNC, PixelRenderCaps, PixelSlot, write_synchronized_pixel_output,
-};
+use crate::sidebar_pane::pixel::{BEGIN_SYNC, END_SYNC, PixelRenderCaps, PixelSlot};
 use crate::sidebar_pane::render::{self, UiState};
 use crate::store::snapshot::SidebarSnapshot;
+
+use super::backend::PaneBackend;
 
 enum PixelSession {
     Disabled,
@@ -177,25 +176,30 @@ impl FramePainter {
         }
     }
 
-    pub(super) fn draw_and_paint<B: Backend<Error = io::Error> + Write>(
+    pub(super) fn draw_and_paint(
         &mut self,
-        terminal: &mut Terminal<B>,
+        terminal: &mut Terminal<PaneBackend>,
         snapshot: &SidebarSnapshot,
         alert: Option<&render::Alert>,
         ui: &mut UiState,
     ) -> io::Result<()> {
-        terminal.backend_mut().write_all(BEGIN_SYNC)?;
+        terminal.backend_mut().begin_frame();
+        let mut graphics = Vec::new();
+        let mut bracket = false;
         let body_result = (|| {
             let now_ms = u64::from(snapshot.theme.display.resolved_refresh_ms())
                 .saturating_mul(ui.animation_phase);
-            self.ensure_pixel_transmitted(terminal.backend_mut(), ui, now_ms)?;
+            self.ensure_pixel_transmitted(&mut graphics, ui, now_ms)?;
+            bracket = !graphics.is_empty();
+            terminal.backend_mut().write_all(&graphics)?;
+            graphics.clear();
             render::draw_to_terminal(terminal, snapshot, alert, ui)?;
-            self.ensure_meters_transmitted(terminal.backend_mut(), ui, now_ms)?;
-            Ok(())
+            self.ensure_meters_transmitted(&mut graphics, ui, now_ms)?;
+            bracket |= !graphics.is_empty();
+            terminal.backend_mut().write_all(&graphics)
         })();
-        let end_result = terminal.backend_mut().write_all(END_SYNC);
-        let flush_result = Write::flush(terminal.backend_mut());
-        body_result.and(end_result).and(flush_result)
+        let end_result = terminal.backend_mut().end_frame(bracket);
+        body_result.and(end_result)
     }
 
     pub(super) fn ensure_pixel_transmitted<W: Write>(
@@ -255,10 +259,16 @@ impl FramePainter {
     }
 
     pub(super) fn clear<W: Write>(&mut self, backend: &mut W) -> io::Result<()> {
-        write_synchronized_pixel_output(backend, |backend| {
-            let pets = self.painter.clear(backend);
-            pets.and(self.meter_painter.clear(backend))
-        })?;
-        backend.flush()
+        let mut graphics = Vec::new();
+        self.painter.clear(&mut graphics)?;
+        self.meter_painter.clear(&mut graphics)?;
+        if graphics.is_empty() {
+            return Ok(());
+        }
+        backend.write_all(BEGIN_SYNC)?;
+        let body_result = backend.write_all(&graphics);
+        let end_result = backend.write_all(END_SYNC);
+        let flush_result = backend.flush();
+        body_result.and(end_result).and(flush_result)
     }
 }
