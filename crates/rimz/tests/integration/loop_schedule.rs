@@ -735,6 +735,218 @@ fn resident_show_summarizes_worktree_conditions() {
 }
 
 #[test]
+fn resident_show_survives_failed_worktree_discovery() {
+    let env = Env::new();
+    assert!(rimz::worktree::discover_owned(&env.project_root).is_err());
+    write_loop_config(
+        &env,
+        &format!(
+            "[tasks.resident]\nroot = {:?}\nagent = \"codex\"\nprompt = \"repair\"\nstay = true\neach-worktree = true\nwhen = [\"team.stage=Done\"]\n",
+            env.project_root
+        ),
+    );
+    let shown = loop_ok(&env, &["loop", "show", "resident"]);
+    assert!(
+        shown.contains("WORKTREES\n  worktrees unavailable:"),
+        "{shown}"
+    );
+    assert!(!shown.contains("0 owned"), "{shown}");
+    let json = loop_ok(&env, &["loop", "show", "resident", "--json"]);
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&json).unwrap()["worktrees"],
+        json!([])
+    );
+}
+
+#[test]
+fn resident_show_survives_unavailable_worktree_runtime() {
+    let env = Env::new();
+    assert!(init_git_repo(&env.project_root));
+    write_loop_config(
+        &env,
+        &format!(
+            "[tasks.resident]\nroot = {:?}\nagent = \"codex\"\nprompt = \"repair\"\nstay = true\neach-worktree = true\nwhen = [\"team.stage=Done\"]\n",
+            env.project_root
+        ),
+    );
+    let runtime = env.runtime_root.join("x".repeat(120));
+    let output = env
+        .rimz()
+        .args(["loop", "show", "resident"])
+        .env("XDG_RUNTIME_DIR", &runtime)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let shown = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        shown.contains("WORKTREES\n  worktrees unavailable:"),
+        "{shown}"
+    );
+    assert!(!shown.contains("0 owned"), "{shown}");
+    let output = env
+        .rimz()
+        .args(["loop", "show", "resident", "--json"])
+        .env("XDG_RUNTIME_DIR", runtime)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()["worktrees"],
+        json!([])
+    );
+}
+
+#[test]
+fn resident_show_keeps_the_screen_on_room_catalog_failure() {
+    let env = Env::new();
+    let root = env.home_root.join("other-project");
+    std::fs::create_dir(&root).unwrap();
+    assert!(init_git_repo(&root));
+    write_loop_config(
+        &env,
+        &format!(
+            "[tasks.resident]\nroot = {:?}\nagent = \"codex\"\nprompt = \"repair\"\nstay = true\neach-worktree = true\nwhen = [\"team.stage=Done\"]\n",
+            root
+        ),
+    );
+    let instances = env
+        .state_path_for(&root)
+        .root
+        .join("records/loop-instances.json");
+    std::fs::create_dir_all(instances.parent().unwrap()).unwrap();
+    std::fs::write(instances, "not json").unwrap();
+    let json = env
+        .rimz()
+        .args(["loop", "show", "resident", "--json"])
+        .output()
+        .unwrap();
+    let human = env
+        .rimz()
+        .args(["loop", "show", "resident"])
+        .output()
+        .unwrap();
+    let shown = String::from_utf8_lossy(&human.stdout);
+    assert!(
+        json.status.success() && shown.contains("WORKTREES (0 owned)") && shown.contains("action:"),
+        "JSON: {json:?}\nhuman: {human:?}"
+    );
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&json.stdout).unwrap()["worktrees"],
+        json!([])
+    );
+    assert!(
+        !human.status.success(),
+        "the base's catalog error must remain an error"
+    );
+    assert!(
+        String::from_utf8_lossy(&human.stderr).contains("loop-instances.json"),
+        "{human:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn resident_show_drops_a_daemon_leader_reaped_by_agents_list() {
+    let env = Env::new();
+    let store = env.store();
+    let workspace = env.resolve_workspace(&env.project_root);
+    let kind = AgentKind::new_unchecked("codex");
+    store
+        .append_event(&rimz::store::event::EventEnvelope::agent_launched(
+            workspace.workspace_id,
+            &workspace.session_name,
+            &kind,
+            rimz::store::event::AgentLaunchPayload {
+                agent_id: "ghost-session".into(),
+                launch_id: None,
+                agent_name: "ghost-leader".into(),
+                agent_name_explicit: true,
+                launch: Default::default(),
+                state: rimz::store::event::AgentLaunchState::Bound,
+                run_id: None,
+                pane_id: None,
+                runtime_owner: Some(rimz::pane::RuntimeOwner::new(
+                    rimz::pane::RuntimeOwnerKind::Daemon,
+                    "ghost-session",
+                    std::process::id(),
+                    None,
+                )),
+                worktree_path: Some(env.project_root.display().to_string()),
+                worktree_branch: None,
+                prompt: None,
+                description: None,
+            },
+        ))
+        .unwrap();
+    let reap = env.runtime_paths().lane_path("codex-daemon-reap.json");
+    std::fs::create_dir_all(reap.parent().unwrap()).unwrap();
+    std::fs::write(
+        reap,
+        json!({
+            "produced_at_ms": rimz::utils::time::unix_now_ms(),
+            "daemon_pids": [std::process::id()],
+            "loaded": [],
+        })
+        .to_string(),
+    )
+    .unwrap();
+    assert!(
+        store
+            .snapshot_cached()
+            .unwrap()
+            .agents
+            .iter()
+            .any(|agent| agent.name.as_deref() == Some("ghost-leader"))
+    );
+    crate::common::room::seed_live_zellij_room(
+        &env.runtime_paths(),
+        &workspace.session_name,
+        Vec::new(),
+    );
+    let listed = env
+        .rimz()
+        .args(["--mux", "zellij", "agents", "list", "--json"])
+        .env("RIMZ_ZELLIJ_BIN", crate::common::zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", env.home_root.join("reap.log"))
+        .env("RIMZ_TEST_ZELLIJ_LIST_PANES", "[]")
+        .env(
+            "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
+            format!("{} [Created 1s ago]\n", workspace.session_name),
+        )
+        .output()
+        .unwrap();
+    assert!(listed.status.success(), "{listed:?}");
+    let listed = String::from_utf8_lossy(&listed.stdout);
+    assert!(!listed.contains("ghost-leader"), "{listed}");
+    write_loop_config(
+        &env,
+        &format!(
+            "[tasks.resident]\nroot = {:?}\nagent = \"codex\"\nprompt = \"repair\"\nevery = \"1h\"\nstay = true\nsubscribe = [{{ signal = \"ci.failed\" }}]\n",
+            env.project_root
+        ),
+    );
+    let ledger = store.paths().root.join("records/loop-launches.json");
+    std::fs::create_dir_all(ledger.parent().unwrap()).unwrap();
+    std::fs::write(
+        ledger,
+        serde_json::to_vec(&BTreeMap::from([(
+            "resident",
+            BTreeMap::from([(
+                env.project_root.clone(),
+                rimz::harness::schedule::launch_ledger::LaunchRecord {
+                    at: Timestamp::now(),
+                    leader: "ghost-leader".into(),
+                },
+            )]),
+        )]))
+        .unwrap(),
+    )
+    .unwrap();
+    let shown = loop_ok(&env, &["loop", "show", "resident"]);
+    assert!(shown.contains("0 armed, no live leader"), "{shown}");
+}
+
+#[test]
 fn resident_inspector_reads_the_planners_checkout_clocks_without_writes() {
     let env = Env::new();
     assert!(init_git_repo(&env.project_root));
@@ -1341,6 +1553,27 @@ fn resident_launch_case(each_worktree: bool, team: bool) {
         "resident-session"
     );
     assert!(binding.once.is_none() && binding.team.is_none());
+    if each_worktree {
+        let output = command()
+            .args(["loop", "show", "resident", "--json"])
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let shown: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(shown["worktrees"][0]["armed"], 1, "{shown}");
+        let output = command()
+            .args(["loop", "show", "resident"])
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let shown = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            shown
+                .lines()
+                .any(|line| line.contains("wakes:") && line.contains("1 armed")),
+            "{shown}"
+        );
+    }
     hook("SessionStart");
     assert_eq!(read_loop_instances(&env), armed);
     let restarted = command()
@@ -6429,12 +6662,98 @@ fn loop_legacy_run_record_renders_through_list_and_show() {
             && !show.contains("last failure"),
         "{list}\n{show}"
     );
-    assert!(show.contains("  action:   run check · true"), "{show}");
+    assert!(show.contains("  action: run check · true"), "{show}");
     assert!(
         show.lines().any(|line| line.starts_with("  source: "))
-            && show.contains("  throttle: no limits set")
+            && !show.contains("throttle:")
             && !show.contains("THROTTLE"),
         "{show}"
+    );
+}
+
+#[test]
+fn loop_show_nonspawning_tasks_have_no_throttle_readings() {
+    let env = Env::new();
+    for limit in ["", "[throttle]\nmax-active = 1\n"] {
+        write_loop_config(
+            &env,
+            &format!(
+                "{limit}[tasks.check]\ncheck = \"true\"\nroot = {:?}\nevery = \"1h\"\n\
+                 [tasks.wake]\nroot = {:?}\nevery = \"1h\"\n\
+                 wait = {{ kind = \"claude\", session = \"session\", handle = \"@reader\" }}\n",
+                env.project_root, env.project_root,
+            ),
+        );
+        for name in ["check", "wake"] {
+            let show = loop_ok(&env, &["loop", "show", name]);
+            assert!(
+                !show.contains("throttle:")
+                    && !show.contains("load:")
+                    && !show.contains("THROTTLE"),
+                "{show}"
+            );
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn loop_show_wait_survives_unavailable_workspace_enrichment() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let env = Env::new();
+    let git_bin = env.home_root.join("git-bin");
+    let git = write_path_shim(&git_bin, "git", "exit 1");
+    std::fs::set_permissions(git, std::fs::Permissions::from_mode(0o644)).unwrap();
+    write_loop_config(
+        &env,
+        &format!(
+            "[tasks.wake]\nroot = {:?}\nevery = \"1h\"\n\
+             wait = {{ kind = \"claude\", session = \"session\", handle = \"@reader\" }}\n",
+            env.project_root,
+        ),
+    );
+    let output = env
+        .rimz()
+        .env("PATH", git_bin)
+        .args(["loop", "show", "wake"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "workspace enrichment must not prevent showing the task: {output:?}"
+    );
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        text.contains("@reader") && !text.contains(" (you)"),
+        "{text}"
+    );
+}
+
+#[test]
+fn loop_show_wait_survives_unreadable_store_enrichment() {
+    let env = Env::new();
+    write_loop_config(
+        &env,
+        &format!(
+            "[tasks.wake]\nroot = {:?}\nevery = \"1h\"\n\
+             wait = {{ kind = \"claude\", session = \"session\", handle = \"@reader\" }}\n",
+            env.project_root,
+        ),
+    );
+    let store = env.store();
+    let events = rimz::StatePaths::history_paths(&store.paths().root).events_log;
+    std::fs::create_dir_all(events).unwrap();
+    assert!(store.snapshot_cached().is_err());
+    let output = env.rimz().args(["loop", "show", "wake"]).output().unwrap();
+    assert!(
+        output.status.success(),
+        "store enrichment must not prevent showing the task: {output:?}"
+    );
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        text.contains("@reader") && !text.contains(" (you)"),
+        "{text}"
     );
 }
 
