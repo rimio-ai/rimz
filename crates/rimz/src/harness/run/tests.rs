@@ -1984,3 +1984,27 @@ fn a_park_is_claimed_once_until_the_child_acts_again() {
         .unwrap()
     );
 }
+
+#[test]
+fn a_stall_is_claimed_once_per_run_and_released_only_by_its_owner() {
+    let (_dir, paths, record) = setup();
+    let at: Timestamp = "2026-01-01T01:00:00Z".parse().unwrap();
+    let later = at + std::time::Duration::from_secs(600);
+    let stamp = || {
+        serde_json::to_value(load(&paths, &record.run_id).unwrap()).unwrap()["stall_noticed_at"]
+            .clone()
+    };
+    assert!(claim_stall_notice(&paths, &record.run_id, at).unwrap());
+    assert!(!claim_stall_notice(&paths, &record.run_id, later).unwrap());
+    assert_eq!(stamp(), serde_json::to_value(at).unwrap());
+    release_stall_notice(&paths, &record.run_id, later).unwrap();
+    assert_eq!(stamp(), serde_json::to_value(at).unwrap());
+    release_stall_notice(&paths, &record.run_id, at).unwrap();
+    assert_eq!(stamp(), serde_json::Value::Null);
+    assert!(claim_stall_notice(&paths, &record.run_id, later).unwrap());
+    release_stall_notice(&paths, &record.run_id, at).unwrap();
+    assert_eq!(stamp(), serde_json::to_value(later).unwrap());
+    release_stall_notice(&paths, &record.run_id, later).unwrap();
+    cancel(&paths, &record.run_id).unwrap();
+    assert!(!claim_stall_notice(&paths, &record.run_id, later).unwrap());
+}

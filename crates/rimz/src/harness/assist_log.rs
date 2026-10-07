@@ -26,6 +26,18 @@ pub struct AssistRecord {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "assist")]
 pub enum Assist {
+    StallNotice {
+        kind: AgentKind,
+        agent_id: AgentSessionId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        label: Option<String>,
+        parent: String,
+        silent_secs: u64,
+        message_id: String,
+        delivered: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
     ResidentLaunch {
         task: String,
         checkout: PathBuf,
@@ -403,6 +415,15 @@ mod tests {
 
     #[test]
     fn variants_round_trip_through_the_wire_shape() {
+        let stalled = serde_json::json!({
+            "at": "2026-06-02T12:00:00Z", "assist": "stall_notice",
+            "kind": "codex", "agent_id": "session-1", "label": "@still-silver",
+            "parent": "@planner", "silent_secs": 1920, "message_id": "msg_1",
+            "delivered": false
+        });
+        let decoded = serde_json::from_value::<AssistRecord>(stalled.clone());
+        assert!(decoded.is_ok(), "stall notice is an assist: {decoded:?}");
+        assert_eq!(serde_json::to_value(decoded.unwrap()).unwrap(), stalled);
         let fallback = serde_json::json!({
             "at": "2026-06-02T12:00:00Z", "assist": "tier_fallback",
             "kind": "codex", "agent_id": "session-1", "profile": "worker",

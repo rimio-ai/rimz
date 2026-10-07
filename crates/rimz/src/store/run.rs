@@ -301,6 +301,9 @@ pub struct RunRecord {
     /// on any resume, so a later park carries a later value.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub park_noticed_activity: Option<Timestamp>,
+    /// When this run's parent was told the launched child went silent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stall_noticed_at: Option<Timestamp>,
 }
 
 /// Who authored a run's first prompt: its launching agent, RimZ's loop, or a person.
@@ -447,6 +450,7 @@ impl RunRecord {
             completed_at: None,
             parked_at: None,
             park_noticed_activity: None,
+            stall_noticed_at: None,
         }
     }
 
