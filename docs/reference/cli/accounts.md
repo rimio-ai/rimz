@@ -1,6 +1,6 @@
 # Accounts CLI
 
-`rimz accounts` declares, selects, lists, and removes the named provider accounts a room can launch into. A named account is a separate provider home: RimZ launches Claude with `CLAUDE_CONFIG_DIR`, and Codex with `CODEX_HOME`, set to that home. Credentials stay apart; `add` and every launch link the rest of a `shared` account, or the settings of a `standalone` one, to the provider's own home. The `default` account is the provider's own home, resolved the way the provider CLI resolves it, and is never declared.
+`rimz accounts` declares, selects, lists, and removes the named provider accounts a room can launch into, and redeems Codex reset credits by hand. A named account is a separate provider home: RimZ launches Claude with `CLAUDE_CONFIG_DIR`, and Codex with `CODEX_HOME`, set to that home. Credentials stay apart; `add` and every launch link the rest of a `shared` account, or the settings of a `standalone` one, to the provider's own home. The `default` account is the provider's own home, resolved the way the provider CLI resolves it, and is never declared.
 
 The commands work inside or outside a room, except bare `use`, which requires running inside one. Bare `use` writes only the current room's launch default for that provider, leaving running agents and machine and project configuration unchanged. `add`, `use --global`, and `remove` write the machine `config.toml`; `add` also writes into the account home. A room picks its defaults at birth and keeps them across restarts ([Accounts at start](./getting-started.md#accounts)), so the machine selection reaches only rooms born after it. Inside its own multiplexer session, `start --account` refuses and names `accounts use` instead. The workflow is in the [accounts guide](../../guide/accounts.md).
 
@@ -12,6 +12,7 @@ rimz accounts use --reset codex                      # return to a new room's ac
 rimz accounts use --global codex personal            # machine selection for new rooms
 rimz accounts list                                   # every account, its usage left, and whether a room can use it
 rimz accounts list --json
+rimz accounts redeem codex personal --dry-run        # preview without spending
 rimz accounts remove claude work                     # forget the entry; the home stays on disk
 ```
 
@@ -150,11 +151,11 @@ rimz accounts list [--json]
 
 ```console
 $ rimz accounts list
-   KIND    NAME     STATUS           5h LEFT              7d LEFT              AGENTS  HISTORY  HOME
-○  claude  default  ready            100% · 3h31m · 0.0x  89% · 4d03h · 0.3x   -       -        ~/.claude
-●  claude  work     ready            98% · 4h21m · 0.2x   31% · 13h51m · 0.8x  -       shared   ~/.rimz/accounts/claude/work
+   KIND    NAME     STATUS           5h LEFT              7d LEFT              CREDITS  AGENTS  HISTORY  HOME
+○  claude  default  ready            100% · 3h31m · 0.0x  89% · 4d03h · 0.3x   -        -       -        ~/.claude
+●  claude  work     ready            98% · 4h21m · 0.2x   31% · 13h51m · 0.8x  -        -       shared   ~/.rimz/accounts/claude/work
 
-●  codex   default  hooks untrusted  ∞                    64% · 5d11h · 1.6x   -       -        ~/.codex
+●  codex   default  hooks untrusted  ∞                    64% · 5d11h · 1.6x   -        -       -        ~/.codex
 ●  this room   ○  new rooms
 RimZ hooks for codex account `default` at `/home/me/.codex` are untrusted (SessionStart, UserPromptSubmit, SubagentStart, SubagentStop, Stop, PermissionRequest, PreToolUse, PostToolUse, PreCompact, PostCompact); run /hooks inside codex and trust the RimZ hooks
 ```
@@ -172,7 +173,7 @@ The legend line under the table names the layer that decides `●`, the highest 
 | `●  new rooms` | The machine's selection. An account carries `○` only where a kind has no `●`, and `   ○  new rooms` follows the legend then. |
 | `○  new rooms` | Nothing: the position's selection is blocked or unreadable. |
 
-`5h LEFT` and `7d LEFT` are the account's five-hour and seven-day usage windows, read as what is left, as [`rimz providers`](./providers.md) reads them: 100 minus the used percentage, or 100% before the window's clock starts, then the time until the window resets. A model-scoped window stays in [`rimz providers`](./providers.md).
+`5h LEFT` and `7d LEFT` are the account's five-hour and seven-day usage windows, read as what is left, as [`rimz providers`](./providers.md) reads them: 100 minus the used percentage, or 100% before the window's clock starts, then the time until the window resets. A model-scoped window stays in [`rimz providers`](./providers.md). `CREDITS` is the banked reset-credit count: `-` at zero, or the faint unknown cell without a login or a reading.
 
 | Cell | Meaning |
 | --- | --- |
@@ -219,9 +220,38 @@ On a terminal narrower than the table, `HOME` clips with `…` and every other c
 | `default_for` | Always present: every layer that selects the account, of `this_room`, `this_project`, and `new_rooms`, or `[]`. |
 | `agents` | The `AGENTS` count, `0` for none, or `null` when the rooms or one live room's agents could not be read. |
 | `windows` | Always present: the account's 5h and 7d windows in used terms, each with `duration_mins` (`300` or `10080`) and, when known, `used_percentage`, `resets_at`, and `lifted`, the fields [`rimz providers --json`](./providers.md) uses; `[]` when there is no reading. |
+| `reset_credits` | Present when read: `count`, `soonest_expiry`, `expiries`, and `effect`, the same shape as [`rimz providers --json`](./providers.md). |
 | `metered` | `true` for a subscription account, `false` for one without usage windows, `null` when unknown. |
 
 `rimz doctor` reports an exported-home conflict as the problem on that account's row and recommends unsetting the variable and selecting the account with `rimz accounts use --global`, except inside a room born on that account, where RimZ exports the home itself. `rimz doctor` lists named accounts and the current room's selections in its ACCOUNTS section with a `DEFAULT FOR` column (`this room`, `this project`, `new rooms`); its JSON account rows always include `machine_default` too ([Diagnose with doctor](./getting-started.md#diagnose-with-doctor)).
+
+## `redeem`
+
+```sh
+rimz accounts redeem <KIND> [NAME] [--dry-run] [--yes]
+```
+
+| Argument or flag | Effect |
+| --- | --- |
+| `KIND` | `codex`. Claude is refused before any provider read; spend Claude limit resets in Claude's Settings > Usage. |
+| `NAME` | A declared account or `default`. When omitted, the account a launch here uses (room, project, then machine selection), or `default` if none is selected. |
+| `--dry-run` | Read and print the preview, then exit 0 without prompting, stamping, or spending. |
+| `--yes` | Spend without prompting. Required for a non-terminal stdin unless `--dry-run` is set. |
+
+The preview on stdout names the resolved login, banked credits and soonest expiry (countdown and wall clock), then each unscoped 5h and 7d window's used percentage and reset countdown, or `∞` for a window the provider is not enforcing, which gets no redemption line. It shows what redemption does: Codex refills now and restarts each reset a full window from now. A free reset closer than `resume.auto_redeem_min_gain` produces a warning about giving it up, not a refusal. The final line is auto-redeem's forecast (`off`, `armed`, or `holding`) if the longest window ran dry now, not a verdict on a live agent.
+
+Without `--yes`, stderr asks `redeem one credit now? [y/N]`. Declining exits 0 with `nothing spent`. Zero credits exits 3 after the preview without prompting (`--dry-run` still exits 0). With `RIMZ_OAUTH_USAGE_OFFLINE` enabled, the command refuses before a provider read and names the switch to unset.
+
+Confirmation takes the same account-wide lock as auto-redeem, without fetching the preview again. An attempt newer than the preview, or a live helper reservation, refuses and asks you to rerun. Otherwise manual redemption bypasses auto-redeem's cooldown. The provider can still answer `already_redeemed` or `no_credit` if the prepared credit changed while you decided. Each attempt is recorded in `rimz stats --assists` with reason `manual`, not counted as an automation assist.
+
+| Exit | Outcome |
+| --- | --- |
+| `0` | `reset`, `--dry-run`, or declined confirmation. A reset whose usage refresh fails still exits 0, warning on stderr that the sidebar will catch up on its next refresh. |
+| `3` | `no_credit`, including zero credits in the preview. |
+| `4` | `nothing_to_reset`; the credit stays available. |
+| `5` | `already_redeemed`. |
+| `6` | `unknown`. |
+| `1` | Refused or failed; the error and fix are on stderr. |
 
 ## `remove`
 

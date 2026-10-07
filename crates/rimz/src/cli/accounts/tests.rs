@@ -22,6 +22,100 @@ fn use_reset_takes_only_a_kind() {
 }
 
 #[test]
+fn redeem_accepts_optional_name_dry_run_and_yes() {
+    for argv in [
+        vec!["accounts", "redeem", "codex", "--dry-run"],
+        vec!["accounts", "redeem", "codex", "spare", "--yes"],
+    ] {
+        assert!(AccountsHarness::try_parse_from(&argv).is_ok(), "{argv:?}");
+    }
+}
+
+#[test]
+fn redeem_outcome_exit_codes_cover_every_provider_code() {
+    use rimz::agents::account::RedemptionCode;
+    for (outcome, code) in [
+        (RedemptionCode::Reset, 0),
+        (RedemptionCode::NoCredit, 3),
+        (RedemptionCode::NothingToReset, 4),
+        (RedemptionCode::AlreadyRedeemed, 5),
+        (RedemptionCode::Unknown, 6),
+    ] {
+        assert_eq!(redeem_exit_code(outcome), code, "{outcome:?}");
+    }
+}
+
+#[test]
+fn redeem_claude_refusal_names_the_native_usage_settings() {
+    let error = check_redeem_kind(&AgentKind::new_unchecked("claude"))
+        .expect_err("Claude redemption is unsupported")
+        .to_string();
+    assert!(
+        error.contains("Claude") && error.contains("Settings > Usage"),
+        "{error}"
+    );
+}
+
+#[test]
+fn list_credits_show_banked_zero_and_unknown_and_serialize_the_provider_shape() {
+    let credits = ResetCredits {
+        count: 2,
+        soonest_expiry: Some(now() + Duration::from_secs(3600)),
+        expiries: vec![now() + Duration::from_secs(3600)],
+        effect: rimz::agents::RedeemEffect::RestartsWindow,
+    };
+    let mut spare = logged_in(Vec::new());
+    spare.reset_credits = Some(credits.clone());
+    let mut zero = logged_in(Vec::new());
+    zero.reset_credits = Some(ResetCredits {
+        count: 0,
+        ..credits.clone()
+    });
+    let readings = BTreeMap::from([
+        (key("codex", "team"), spare),
+        (key("codex", "default"), zero),
+    ]);
+    let (rows, text) = listed(ACCOUNTS, None, &readings);
+    let header: Vec<_> = text.lines().next().unwrap().split_whitespace().collect();
+    assert!(
+        header
+            .windows(4)
+            .any(|cols| cols == ["7d", "LEFT", "CREDITS", "AGENTS"]),
+        "{text}"
+    );
+    let credit_cell = |kind: &str, name: &str| {
+        let line = text
+            .lines()
+            .find(|line| line.contains(kind) && line.contains(name))
+            .unwrap();
+        let header = text.lines().next().unwrap();
+        line.chars()
+            .skip(header.find("CREDITS").unwrap())
+            .take(7)
+            .collect::<String>()
+            .trim()
+            .to_owned()
+    };
+    assert_eq!(credit_cell("codex", "team"), "2");
+    assert_eq!(credit_cell("codex", "default"), "-");
+    assert_eq!(credit_cell("claude", "default"), "–");
+    let team = rows
+        .iter()
+        .find(|row| row.kind.as_str() == "codex" && row.name.as_str() == "team")
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(team).unwrap()["reset_credits"],
+        serde_json::to_value(credits).unwrap()
+    );
+    assert!(
+        serde_json::to_value(&rows[0])
+            .unwrap()
+            .get("reset_credits")
+            .is_none()
+    );
+}
+
+#[test]
 fn use_targets_the_room_unless_global() {
     for (argv, room) in [
         (vec!["accounts", "use", "codex", "work"], true),
@@ -141,6 +235,7 @@ const SEVEN_DAYS: u32 = 10_080;
 
 fn logged_in(windows: Vec<RateLimitWindow>) -> LoginReading {
     LoginReading {
+        reset_credits: None,
         status: ProviderStatus::LoggedIn,
         metered: Some(true),
         windows,
@@ -171,7 +266,8 @@ fn list_is_one_table_with_default_first_and_one_marker_per_kind() {
         "{text}"
     );
     assert!(
-        lines[0].starts_with("   KIND    NAME     STATUS        5h LEFT  7d LEFT  AGENTS  "),
+        lines[0]
+            .starts_with("   KIND    NAME     STATUS        5h LEFT  7d LEFT  CREDITS  AGENTS  "),
         "{text}"
     );
     assert!(lines[1].starts_with("●  claude  default"), "{text}");
@@ -324,6 +420,7 @@ fn window_cells_read_what_is_left_and_when_it_resets() {
             key("claude", "alpha"),
             LoginReading {
                 status: ProviderStatus::LoggedOut,
+                reset_credits: None,
                 metered: Some(true),
                 windows: vec![window(FIVE_HOURS, Some(10), Some(60))],
             },
@@ -336,6 +433,7 @@ fn window_cells_read_what_is_left_and_when_it_resets() {
             key("claude", "gamma"),
             LoginReading {
                 status: ProviderStatus::Unavailable,
+                reset_credits: None,
                 metered: None,
                 windows: vec![window(SEVEN_DAYS, Some(50), Some(3_600))],
             },
@@ -344,6 +442,7 @@ fn window_cells_read_what_is_left_and_when_it_resets() {
             key("codex", "default"),
             LoginReading {
                 status: ProviderStatus::LoggedIn,
+                reset_credits: None,
                 metered: Some(false),
                 windows: vec![window(FIVE_HOURS, Some(10), Some(60))],
             },
@@ -360,7 +459,7 @@ fn window_cells_read_what_is_left_and_when_it_resets() {
             .find(|line| line.contains(&format!("{kind}  ")) && line.contains(name))
             .unwrap_or_else(|| panic!("no {kind} {name} row in {text}"));
         let from = text.lines().next().unwrap().find("5h LEFT").unwrap();
-        let to = text.lines().next().unwrap().find("AGENTS").unwrap();
+        let to = text.lines().next().unwrap().find("CREDITS").unwrap();
         line.chars()
             .skip(from)
             .take(to - from)
@@ -436,6 +535,7 @@ fn a_logged_out_account_reads_logged_out_unless_its_setup_is_broken() {
 
     let reading = |status| LoginReading {
         status,
+        reset_credits: None,
         metered: None,
         windows: vec![window(FIVE_HOURS, Some(10), None)],
     };

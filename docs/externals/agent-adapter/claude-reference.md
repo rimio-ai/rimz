@@ -681,7 +681,7 @@ With `cedar_ember=1`, live probes on 2026-09-26 returned banked limit resets in 
 }
 ```
 
-Anthropic's [limit-reset help article](https://support.claude.com/en/articles/17007452), read 2026-09-26, describes redemption under Settings > Usage on web and desktop, not Claude Code. A reset refills the chosen allowance without moving its usual weekly reset time. The article does not define the wire's `paused` or cooldown semantics.
+Anthropic's [limit-reset help article](https://support.claude.com/en/articles/17007452), read 2026-09-26, describes redemption under Settings > Usage on web and desktop, not Claude Code. A reset refills the chosen allowance without moving its usual weekly reset time. The article does not define the wire's `paused` or cooldown semantics. The Claude Code 2.1.291 binary carries a hidden `/limit-reset` command that consumes through `POST /api/organizations/{org}/reset_rate_limits`. This is a binary observation, unverified live; RimZ does not use the endpoint.
 
 ## Transcript JSONL
 

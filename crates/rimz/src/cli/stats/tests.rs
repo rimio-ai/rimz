@@ -1654,6 +1654,8 @@ fn assists_fold_rolls_up_benefit_and_keeps_failed_attempts_forensics() {
             tier_fallbacks: 0,
             redeems: 1,
             resets: 1,
+            manual_redeems: 0,
+            manual_resets: 0,
             resumes: 1,
             recovered_secs: 3_600,
             compacts: 2,
@@ -1871,6 +1873,66 @@ fn assists_panel_omits_empty_chrome_and_formats_the_rollup() {
     lines.clear();
     panel_lines(&mut lines, &failed_only, 80);
     assert!(lines.is_empty());
+}
+
+#[test]
+fn manual_redeems_stay_in_the_ledger_but_not_the_automation_row() {
+    use rimz::harness::assist_log::{Assist, AssistRecord};
+    use rimz::harness::auto_redeem::RedeemReason;
+    for manual_outcome in ["reset", "nothing_to_reset"] {
+        let records = [RedeemReason::BlockedGain, RedeemReason::Manual]
+            .into_iter()
+            .map(|reason| AssistRecord {
+                at: Timestamp::from_second(1_700_000_000).unwrap(),
+                assist: Assist::AutoRedeem {
+                    kind: "codex".to_owned(),
+                    login: Some("spare".parse().unwrap()),
+                    reason,
+                    request_id: "request".to_owned(),
+                    credits: 1,
+                    soonest_expiry: None,
+                    natural_reset: None,
+                    outcome: Some(
+                        if reason == RedeemReason::Manual {
+                            manual_outcome
+                        } else {
+                            "reset"
+                        }
+                        .to_owned(),
+                    ),
+                    windows_reset: true,
+                    window_resets: Vec::new(),
+                    error: None,
+                },
+            })
+            .collect();
+        let stats = AssistStats::from_records("7d", records);
+        assert_eq!(stats.rollup.redeems, 2);
+        assert_eq!(
+            stats.rollup.resets,
+            1 + usize::from(manual_outcome == "reset")
+        );
+        assert_eq!(stats.rollup.manual_redeems, 1);
+        assert_eq!(
+            stats.rollup.manual_resets,
+            usize::from(manual_outcome == "reset")
+        );
+        let rows = category_rows(&stats.rollup)
+            .into_iter()
+            .map(|row| strip_ansi(&row))
+            .collect::<Vec<_>>();
+        assert_eq!(rows, ["Auto-redeem: 1 (1 reset)"]);
+        assert!(
+            stats
+                .events
+                .iter()
+                .any(|event| benefit_line(event, &jiff::tz::TimeZone::UTC).contains("manual"))
+        );
+        let mut manual = stats.rollup;
+        manual.manual_redeems = manual.redeems;
+        manual.manual_resets = manual.resets;
+        assert!(category_rows(&manual).is_empty());
+    }
 }
 
 #[test]

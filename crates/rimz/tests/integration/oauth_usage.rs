@@ -758,6 +758,223 @@ fn auto_redeem_rescues_an_idle_codex_account_and_records_its_login() {
     assert_eq!(body["credit_id"], "credit-1");
 }
 
+fn manual_redeem_fixture(env: &Env, count: usize, code: &str) -> thread::JoinHandle<Vec<String>> {
+    env.install_agent_hooks("codex");
+    crate::common::trust_codex_hooks(env);
+    let now = jiff::Timestamp::now();
+    let usage = serde_json::json!({
+        "plan_type": "pro",
+        "rate_limit": {
+            "primary_window": {"used_percent": 42, "reset_at": (now + Duration::from_secs(3600)).as_second(), "limit_window_seconds": 18000},
+            "secondary_window": {"used_percent": 7, "reset_at": (now + Duration::from_secs(3 * 86400)).as_second(), "limit_window_seconds": 604800}
+        }
+    });
+    let credits = serde_json::json!({
+        "available_count": 1,
+        "credits": [{"id": "credit-1", "status": "available", "expires_at": now + Duration::from_secs(10 * 60)}]
+    });
+    let (origin, server) = serve_routes(
+        vec![
+            ("GET /backend-api/wham/usage ", usage.to_string()),
+            (
+                "GET /backend-api/wham/rate-limit-reset-credits ",
+                credits.to_string(),
+            ),
+            (
+                "POST /backend-api/wham/rate-limit-reset-credits/consume ",
+                serde_json::json!({"code": code, "windows_reset": if code == "reset" {2} else {0}})
+                    .to_string(),
+            ),
+        ],
+        count,
+    );
+    let home = env.home_root.join("spare");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::write(
+        home.join("auth.json"),
+        r#"{"tokens":{"access_token":"spare-token","account_id":"acc_spare"}}"#,
+    )
+    .unwrap();
+    let native = env.agent_config_path("codex");
+    let config = home.join("config.toml");
+    let mut settings: toml::Table = std::fs::read_to_string(&native).unwrap().parse().unwrap();
+    settings.insert(
+        "chatgpt_base_url".to_owned(),
+        format!("{origin}/backend-api").into(),
+    );
+    let state = settings["hooks"]["state"].as_table_mut().unwrap();
+    let prefix = format!("{}:", native.display());
+    let trusted = state
+        .iter()
+        .filter_map(|(key, value)| {
+            Some((
+                format!("{}:{}", config.display(), key.strip_prefix(&prefix)?),
+                value.clone(),
+            ))
+        })
+        .collect::<Vec<_>>();
+    state.extend(trusted);
+    std::fs::write(&config, toml::to_string(&settings).unwrap()).unwrap();
+    std::fs::create_dir_all(env.rimz_home()).unwrap();
+    std::fs::write(
+        env.rimz_home().join("config.toml"),
+        format!(
+            "[accounts.codex.spare]\nhome = {:?}\n",
+            home.to_str().unwrap()
+        ),
+    )
+    .unwrap();
+    server
+}
+
+#[test]
+fn accounts_redeem_spends_one_credit_and_records_the_manual_login() {
+    let env = Env::new();
+    // Two preview GETs, consume, then two refresh GETs.
+    let server = manual_redeem_fixture(&env, 5, "reset");
+    let output = env
+        .rimz()
+        .args(["accounts", "redeem", "codex", "spare", "--yes"])
+        .bounded_output()
+        .unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for fact in [
+        "codex@spare",
+        "credits",
+        "42% used",
+        "7% used",
+        "refills now",
+        "forecast",
+        "reset",
+    ] {
+        assert!(stdout.contains(fact), "missing {fact}: {stdout}");
+    }
+    let records = rimz::harness::assist_log::recent(&env.rimz_home().join("logs"), None);
+    let [record] = records.as_slice() else {
+        panic!("{records:?}")
+    };
+    let value = serde_json::to_value(record).unwrap();
+    assert_eq!(value["assist"], "auto_redeem");
+    assert_eq!(value["reason"], "manual");
+    assert_eq!(value["login"], "spare");
+    assert_eq!(value["outcome"], "reset");
+    let requests = server.join().unwrap();
+    assert_eq!(requests.len(), 5);
+    let consume = &requests[2];
+    assert!(consume.starts_with("POST /backend-api/wham/rate-limit-reset-credits/consume "));
+    let body: Value = serde_json::from_str(consume.split_once("\r\n\r\n").unwrap().1).unwrap();
+    assert_eq!(body["credit_id"], "credit-1");
+    assert_eq!(body["redeem_request_id"], value["request_id"]);
+    assert_eq!(
+        uuid::Uuid::parse_str(value["request_id"].as_str().unwrap())
+            .unwrap()
+            .get_version_num(),
+        7
+    );
+    let stamp: Value = serde_json::from_slice(
+        &std::fs::read(
+            env.runtime_paths()
+                .shared_credits_path()
+                .with_file_name("auto_redeem.codex@spare.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(stamp["reason"], "manual");
+    assert_eq!(stamp["outcome"], "reset");
+}
+
+#[test]
+fn accounts_redeem_nothing_to_reset_exits_four_and_records_the_outcome() {
+    let env = Env::new();
+    // Two preview GETs and consume; no refresh for a non-reset.
+    let server = manual_redeem_fixture(&env, 3, "nothing_to_reset");
+    let output = env
+        .rimz()
+        .args(["accounts", "redeem", "codex", "spare", "--yes"])
+        .bounded_output()
+        .unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(4),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let records = rimz::harness::assist_log::recent(&env.rimz_home().join("logs"), None);
+    let [record] = records.as_slice() else {
+        panic!("{records:?}")
+    };
+    assert_eq!(
+        serde_json::to_value(record).unwrap()["outcome"],
+        "nothing_to_reset"
+    );
+    assert_eq!(server.join().unwrap().len(), 3);
+}
+
+#[test]
+fn accounts_redeem_dry_run_reads_only_and_leaves_no_stamp_or_record() {
+    let env = Env::new();
+    // Only the two preview GETs.
+    let server = manual_redeem_fixture(&env, 2, "reset");
+    let output = env
+        .rimz()
+        .args(["accounts", "redeem", "codex", "spare", "--dry-run"])
+        .bounded_output()
+        .unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("codex@spare"));
+    assert!(rimz::harness::assist_log::recent(&env.rimz_home().join("logs"), None).is_empty());
+    assert!(
+        !env.runtime_paths()
+            .shared_credits_path()
+            .with_file_name("auto_redeem.codex@spare.json")
+            .exists()
+    );
+    assert!(
+        server
+            .join()
+            .unwrap()
+            .iter()
+            .all(|request| request.starts_with("GET "))
+    );
+}
+
+#[test]
+fn accounts_redeem_non_terminal_refuses_before_provider_reads() {
+    let env = Env::new();
+    let output = env
+        .rimz()
+        .args(["accounts", "redeem", "codex"])
+        .stdin(std::process::Stdio::null())
+        .bounded_output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("--yes"), "{stderr}");
+    let output = env
+        .rimz()
+        .args(["accounts", "redeem", "claude"])
+        .bounded_output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Claude") && stderr.contains("Settings > Usage"),
+        "{stderr}"
+    );
+}
+
 /// Answer `count` requests, each with the body of the route its request line
 /// starts with, and return every request with its body.
 fn serve_routes(

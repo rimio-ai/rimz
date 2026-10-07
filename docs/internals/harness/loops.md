@@ -622,10 +622,12 @@ This is best-effort cache retention, not durable correctness. The activity heart
 
 The assist log is that invariant's record: `~/.rimz/logs/assists.log.jsonl`, account-global, best-effort append, rotating at 4 MiB to one `assists.log.1.jsonl` predecessor. Readers fold both generations by timestamp. When an append fails, the intervention itself remains the operational truth.
 
+The redeem record also carries user-initiated redemptions under reason `manual`, for the credit ledger; they are not counted as automation assists.
+
 | `Assist` variant | Writer | Records |
 | --- | --- | --- |
 | `resident_launch` | the loop helper, after stop and launch succeed and the ledger is published | task, condition evidence, checkout, the handles taken over from if any, and launched handles; an append error fails the fire and keeps the ledger entry |
-| `auto_redeem` | the detached redeem helper | provider, account (`login`, absent on records older than the field), decision reason, request id, available credits, soonest expiry, the natural reset it beat, consume outcome or error, whether a reset occurred, and refreshed window stamps |
+| `auto_redeem` | the detached redeem helper or `accounts redeem` | provider, account (`login`, absent on records older than the field), decision reason, request id, available credits, soonest expiry, the natural reset it beat, consume outcome or error, whether a reset occurred, and refreshed window stamps |
 | `tier_fallback` | interactive and supervised launch, once the launch is placed; team lane restore after each tab opens, rebirth after birth succeeds for each tab confirmed open ([fleet.md](./fleet.md#every-path-that-builds-a-launch-layout) lists each path) | launched kind, agent id, optional label, profile, tier, model entry as configured (alias or full ID), and usage skips (`logged_out`, `exhausted` with optional reset, or `daily_cap` with spend and cap); one record per steered agent, none for explain or static exclusions |
 | `auto_continue` | the detached continue helper | typed provider and session ids, display handle, park class, original park timestamp, delivery verdict, and the durable message id |
 | `auto_compact` | the message delivery path, after a compact command lands | target session, display handle, threshold, occupied context when known, and the durable compact-command message id |

@@ -1,4 +1,4 @@
-//! Provider accounts at the command line: `rimz accounts add|use|list|remove`,
+//! Provider accounts at the command line: `rimz accounts add|use|list|redeem|remove`,
 //! and the `--account <kind>=<name>` selection `rimz start` and `rimz reset`
 //! pass to a room's birth.
 
@@ -11,14 +11,20 @@ use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
 use jiff::Timestamp;
 use rimz::RuntimePaths;
-use rimz::agents::account::{ProviderStatus, WindowSpan};
+use rimz::agents::account::{ProviderStatus, RedemptionCode, WindowSpan};
 use rimz::agents::spending::read_provider_spending_cache;
-use rimz::agents::{AccountStatus, BirthLoginErr, LoginCatalog, ProviderLogin, RateLimitWindow};
+use rimz::agents::{
+    AccountStatus, BirthLoginErr, LoginCatalog, ProviderLogin, RateLimitWindow, RedeemEffect,
+    ResetCredits,
+};
 use rimz::config::{AccountHistory, AccountsConfig, ConfigEditor, MachineConfig, NamedAccount};
+use rimz::harness::assist_log::{Assist, AssistRecord};
+use rimz::harness::auto_redeem::{ManualRedeem, RedeemReport, prepare_manual_redeem};
 use rimz::ids::{AgentKind, LoginKey, LoginName, RoomLogins};
 use rimz::room::{AccountStanding, Deciding, Scopes};
 use rimz::sidebar::enrich::provider_panel_for_login;
 use rimz::sidebar::refresh::{query_provider_accounts, refresh_provider_usage};
+use rimz::store::snapshot::RedeemForecast;
 use rimz::utils::path::normalize_path_lexical;
 use serde::Serialize;
 
@@ -26,6 +32,25 @@ use super::spinner::Spinner;
 use super::{GlobalFlags, render};
 
 const SPINNER_MIN_AGE: Duration = Duration::from_millis(150);
+
+fn redeem_exit_code(outcome: RedemptionCode) -> i32 {
+    match outcome {
+        RedemptionCode::Reset => 0,
+        RedemptionCode::NoCredit => 3,
+        RedemptionCode::NothingToReset => 4,
+        RedemptionCode::AlreadyRedeemed => 5,
+        RedemptionCode::Unknown => 6,
+    }
+}
+
+fn check_redeem_kind(kind: &AgentKind) -> Result<()> {
+    if kind.as_str() == "claude" {
+        bail!(
+            "Claude limit resets cannot be spent from RimZ; redeem them in Claude's Settings > Usage"
+        );
+    }
+    Ok(())
+}
 
 #[derive(Debug, Args)]
 pub struct AccountsArgs {
@@ -72,6 +97,19 @@ enum AccountsSubcmd {
         #[arg(long)]
         json: bool,
     },
+    /// Preview and spend one Codex reset credit by hand.
+    Redeem {
+        /// Provider kind: codex. Claude limit resets must be spent in Settings > Usage.
+        kind: String,
+        /// Account name; defaults to the account a launch here uses.
+        name: Option<LoginName>,
+        /// Print the fresh preview without spending or prompting.
+        #[arg(long)]
+        dry_run: bool,
+        /// Skip confirmation (required without a terminal, unless --dry-run).
+        #[arg(long)]
+        yes: bool,
+    },
     /// Forget a named account; its home directory stays on disk.
     Remove {
         /// Provider kind: claude or codex.
@@ -90,6 +128,12 @@ pub fn run(args: AccountsArgs, globals: &GlobalFlags) -> Result<()> {
             history,
         } => add(&account_kind(&kind)?, name, home, history),
         AccountsSubcmd::List { json } => list(globals, json),
+        AccountsSubcmd::Redeem {
+            kind,
+            name,
+            dry_run,
+            yes,
+        } => redeem(globals, &account_kind(&kind)?, name, dry_run, yes),
         AccountsSubcmd::Remove { kind, name } => remove(&account_kind(&kind)?, &name),
         AccountsSubcmd::Use {
             kind, name, global, ..
@@ -124,6 +168,234 @@ fn account_kind(raw: &str) -> Result<AgentKind> {
             .collect::<Vec<_>>()
             .join(", ")
     )
+}
+
+fn redeem(
+    globals: &GlobalFlags,
+    kind: &AgentKind,
+    name: Option<LoginName>,
+    dry_run: bool,
+    yes: bool,
+) -> Result<()> {
+    check_redeem_kind(kind)?;
+    if !dry_run && !yes && !std::io::stdin().is_terminal() {
+        bail!("pass --yes to confirm without a terminal, or --dry-run to preview without spending");
+    }
+    let machine = MachineConfig::load()?;
+    let (standing, in_room) = super::position_standing(globals, &machine)?;
+    let name = name.unwrap_or_else(|| standing.active(kind).unwrap_or_default());
+    let catalog = LoginCatalog::from_config(&machine.accounts)?;
+    let login = catalog.select(kind, &name)?;
+    let ambient = rimz::agents::ambient_env();
+    let ambient = if login.is_default() {
+        catalog.native_ambient(kind, &ambient)
+    } else {
+        ambient
+    };
+    login.preflight(&ambient)?;
+    if rimz::utils::env::flag_enabled("RIMZ_OAUTH_USAGE_OFFLINE") {
+        bail!(
+            "RIMZ_OAUTH_USAGE_OFFLINE disables provider usage reads; unset it to redeem a reset credit"
+        );
+    }
+    let runtime = if in_room {
+        let workspace = rimz::WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
+        super::runtime_paths_for(workspace.workspace_id)?
+    } else {
+        RuntimePaths::shared()
+    };
+    runtime.ensure_shared_dirs()?;
+    let key = login.key();
+    let preview = prepare_manual_redeem(&runtime, &key, &login.env(&ambient), &machine.resume)?;
+    let mut out = render::out();
+    write_redeem_preview(&mut out, &key, &preview, Timestamp::now())?;
+    out.flush()?;
+    if dry_run {
+        return Ok(());
+    }
+    if preview.credits.count == 0 {
+        writeln!(out, "no_credit: nothing spent")?;
+        out.flush()?;
+        std::process::exit(redeem_exit_code(RedemptionCode::NoCredit));
+    }
+    if !yes && !super::confirm("redeem one credit now?")? {
+        writeln!(std::io::stderr().lock(), "nothing spent")?;
+        return Ok(());
+    }
+    let request_id = uuid::Uuid::now_v7();
+    let redeemed = match preview.consume(&runtime, &key, request_id) {
+        Ok(redeemed) => redeemed,
+        Err(error) => {
+            if let Some(report) = error.attempted_report() {
+                append_manual_report(&key, request_id, report, Some(error.to_string()));
+            }
+            return Err(error).context("redeeming Codex reset credit");
+        }
+    };
+    if let Some((identity, snapshot)) = redeemed.usage {
+        rimz::sidebar::refresh::publish_account_usage_snapshot(&runtime, &key, identity, snapshot);
+    }
+    append_manual_report(&key, request_id, &redeemed.report, None);
+    if in_room && redeemed.report.outcome == Some(RedemptionCode::Reset) {
+        let _ = rimz::wakeup::wake_store_delta(&runtime, None, None);
+    }
+    if let Some(error) = redeemed.refresh_error {
+        writeln!(
+            std::io::stderr().lock(),
+            "rimz: warning: the credit was spent and the window refilled, but usage refresh failed: {error}; the sidebar will catch up on its next refresh"
+        )?;
+    }
+    // Every completed consume returns a provider outcome, including unknown codes.
+    let outcome = redeemed
+        .report
+        .outcome
+        .expect("a completed consume has an outcome");
+    writeln!(out, "{key}: {}", outcome.as_str())?;
+    out.flush()?;
+    let code = redeem_exit_code(outcome);
+    if code != 0 {
+        std::process::exit(code);
+    }
+    Ok(())
+}
+
+fn write_redeem_preview(
+    w: &mut impl std::io::Write,
+    key: &LoginKey,
+    preview: &ManualRedeem,
+    now: Timestamp,
+) -> std::io::Result<()> {
+    writeln!(
+        w,
+        "{}",
+        render::paint(
+            render::palette::identity(key.kind.as_str()),
+            &key.to_string()
+        )
+    )?;
+    let mut rows = render::KeyVals::new().indent(2);
+    let expiry = preview
+        .credits
+        .soonest_expiry
+        .map(|expiry| {
+            let local = expiry.to_zoned(jiff::tz::TimeZone::system());
+            format!(
+                "; soonest expiry {} ({})",
+                render::rel_until(expiry, now),
+                local.strftime("%Y-%m-%d %H:%M:%S %:z")
+            )
+        })
+        .unwrap_or_default();
+    rows.push(
+        "credits",
+        render::cell(format!("{}{expiry}", preview.credits.count)),
+    );
+    for window in &preview.windows {
+        if window.lifted {
+            rows.push(
+                rimz::theme::fmt::window_label(window),
+                render::cell("∞ not enforced now"),
+            );
+            continue;
+        }
+        let used = window.used_percentage.map_or_else(
+            || "unknown usage".to_owned(),
+            |used| format!("{used}% used"),
+        );
+        let reset = window.resets_at.map_or_else(
+            || "reset unknown".to_owned(),
+            |reset| format!("reset {}", render::rel_until(reset, now)),
+        );
+        rows.push(
+            rimz::theme::fmt::window_label(window),
+            render::cell(format!("{used}; {reset}")),
+        );
+    }
+    for window in preview.windows.iter().filter(|window| !window.lifted) {
+        let effect = match preview.credits.effect {
+            RedeemEffect::RestartsWindow => {
+                // The harness projects only the duration-bearing 5h and 7d windows.
+                let mins = window
+                    .duration_mins
+                    .expect("preview windows have a duration");
+                format!(
+                    "refills now, next reset in {}",
+                    render::format_compact_duration(u64::from(mins) * 60)
+                )
+            }
+            RedeemEffect::KeepsSchedule => window.resets_at.map_or_else(
+                || "refills now, reset stays unknown".to_owned(),
+                |reset| {
+                    format!(
+                        "refills now, reset stays at {}",
+                        reset
+                            .to_zoned(jiff::tz::TimeZone::system())
+                            .strftime("%Y-%m-%d %H:%M:%S %:z")
+                    )
+                },
+            ),
+        };
+        rows.push(
+            format!("redeem {}", rimz::theme::fmt::window_label(window)),
+            render::cell(effect),
+        );
+        if preview.credits.effect == RedeemEffect::RestartsWindow
+            && let Some(reset) = window.resets_at.filter(|reset| {
+                *reset > now
+                    && reset.duration_since(now).as_secs_f64() < preview.min_gain.as_secs_f64()
+            })
+        {
+            rows.push(
+                "warning",
+                render::cell(format!(
+                    "gives up the free {} reset {}",
+                    rimz::theme::fmt::window_label(window),
+                    render::rel_until(reset, now)
+                ))
+                .fg(render::palette::warn()),
+            );
+        }
+    }
+    let forecast = match preview.forecast {
+        Some(RedeemForecast::Manual) => "off",
+        Some(RedeemForecast::Armed) => "armed",
+        Some(RedeemForecast::Holding) => "holding",
+        None => "no credits",
+    };
+    rows.push(
+        "auto-redeem forecast",
+        render::cell(format!("{forecast}, if the longest window ran dry now")),
+    );
+    rows.render(w)
+}
+
+fn append_manual_report(
+    login: &LoginKey,
+    request_id: uuid::Uuid,
+    report: &RedeemReport,
+    error: Option<String>,
+) {
+    let outcome = if error.is_none() {
+        report.outcome.map(|outcome| outcome.as_str().to_owned())
+    } else {
+        None
+    };
+    rimz::harness::assist_log::append(&AssistRecord {
+        at: Timestamp::now(),
+        assist: Assist::AutoRedeem {
+            kind: login.kind.to_string(),
+            login: Some(login.name.clone()),
+            reason: report.reason,
+            request_id: request_id.to_string(),
+            credits: report.credits,
+            soonest_expiry: report.soonest_expiry,
+            natural_reset: report.natural_reset,
+            outcome,
+            windows_reset: report.windows_reset,
+            window_resets: report.window_resets.clone(),
+            error,
+        },
+    });
 }
 
 fn add(
@@ -371,6 +643,8 @@ struct AccountRow {
     /// The unscoped 5h then 7d window the provider projection holds, in used
     /// terms as `rimz providers --json` reports them.
     windows: Vec<RateLimitWindow>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reset_credits: Option<ResetCredits>,
     /// `false` for an account without subscription windows.
     metered: Option<bool>,
     /// This run's login record; `None` for a row no declared login backs.
@@ -390,6 +664,7 @@ impl AccountRow {
         };
         self.metered = reading.metered;
         self.windows.clone_from(&reading.windows);
+        self.reset_credits.clone_from(&reading.reset_credits);
         if self.status == AccountStatus::Ready && status == ProviderStatus::LoggedOut {
             self.status = AccountStatus::LoggedOut;
             self.problem = Some(format!(
@@ -413,6 +688,7 @@ struct LoginReading {
     status: ProviderStatus,
     metered: Option<bool>,
     windows: Vec<RateLimitWindow>,
+    reset_credits: Option<ResetCredits>,
 }
 
 /// The windows the list shows: the unscoped 5h and 7d ones, in that order.
@@ -548,6 +824,7 @@ fn login_readings(
                 &spending,
             );
             let reading = LoginReading {
+                reset_credits: panel.as_ref().and_then(|panel| panel.reset_credits.clone()),
                 status: ProviderStatus::from_record(record),
                 metered: panel.as_ref().map(|panel| panel.metered).or(probed_metered),
                 windows: panel
@@ -593,6 +870,7 @@ fn account_rows(
                     .unwrap_or_default()
             }),
             windows: Vec::new(),
+            reset_credits: None,
             metered: None,
             login: None,
         };
@@ -644,7 +922,7 @@ fn write_accounts(
     width: Option<usize>,
 ) -> std::io::Result<()> {
     let mut table = render::Table::new([
-        "", "KIND", "NAME", "STATUS", "5h LEFT", "7d LEFT", "AGENTS", "HISTORY", "HOME",
+        "", "KIND", "NAME", "STATUS", "5h LEFT", "7d LEFT", "CREDITS", "AGENTS", "HISTORY", "HOME",
     ]);
     if let Some(width) = width {
         table = table.max_width(width);
@@ -676,6 +954,15 @@ fn write_accounts(
             render::cell(row.status.as_str()).fg(render::status::account(row.status)),
             five_hour,
             seven_day,
+            if row.without_login() {
+                unknown_cell()
+            } else {
+                match row.reset_credits.as_ref().map(|credits| credits.count) {
+                    None => unknown_cell(),
+                    Some(0) => render::cell("-").dash(),
+                    Some(count) => render::cell(count.to_string()),
+                }
+            },
             match row.agents {
                 None => unknown_cell(),
                 Some(0) => render::cell("-").dash(),

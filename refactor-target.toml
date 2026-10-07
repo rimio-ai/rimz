@@ -484,7 +484,8 @@ path = "crates/rimz/src/harness"
 # KeepWarmPolicy and its load/horizon/holding share one keep-warm admission between the keepalive helper, idle compaction, and the sidebar producer cache (+4).
 # `holds` is the one held-or-not predicate the ping, compaction, and the per-fold card projection share (+1).
 # `run::provider_startup_exit` shares the startup diagnostic predicate with the exec wrapper (+1).
-surface-budget = 718
+# Manual redemption shares its prepared preview and locked consume entry with the CLI (+3).
+surface-budget = 721
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -3910,6 +3911,11 @@ reason = "Pub field ScratchScan.files; atlas caveat 13 (pass 23b)."
 kind = "item"
 key = "harness::auto_redeem::Redeemed"
 reason = "Return of pub execute_auto_redeem: the binary's helper publishes `usage` through sidebar::refresh before appending `report`, so harness never reaches sidebar; cli sees only pub (pass 25)."
+
+[[verdict]]
+kind = "item"
+key = "harness::auto_redeem::ManualRedeem"
+reason = "The binary's accounts redeem entry previews fresh credits/windows and consumes only after confirmation; transport, shared locking and stamps stay in harness, publication and records in CLI."
 
 [[verdict]]
 kind = "item"
