@@ -1,6 +1,5 @@
 use rimz::agents::AgentStatus;
 use rimz::trust::{self};
-use std::io::Write;
 
 use super::super::open_existing_store;
 use super::model::{
@@ -70,9 +69,6 @@ pub(super) fn collect_agent_rollup(ws: &rimz::ResolvedWorkspace, audit: bool) ->
 pub(super) fn collect_accounts(ws: Option<&rimz::ResolvedWorkspace>) -> Probe<Accounts> {
     let config = rimz::config::MachineConfig::load_lenient();
     let (catalog, errors) = rimz::agents::LoginCatalog::room_view(&config.accounts);
-    for error in errors.values() {
-        let _ = writeln!(super::super::render::err(), "rimz: warning: {error}");
-    }
     match ws.map(|ws| room_logins(ws, &config)).transpose() {
         Ok(room) => {
             let standing = match ws {

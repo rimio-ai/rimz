@@ -209,10 +209,31 @@ fn invalid_kind_report(doctor: bool) {
     };
     let report: Value = serde_json::from_str(&succeeded(&output)).unwrap();
     let warning = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        warning.contains("give each account its own directory"),
-        "doctor={doctor}: {warning}"
-    );
+    if doctor {
+        let human_output = hermetic(&env, &mut env.rimz())
+            .arg("doctor")
+            .output()
+            .unwrap();
+        let human = succeeded(&human_output);
+        assert!(
+            human.lines().any(|row| row.contains("codex")
+                && row.contains("default")
+                && row.contains("give each account its own directory")),
+            "failed kind retains its unavailable default row and error: {human}"
+        );
+        for output in [&output, &human_output] {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                !stderr.contains("give each account its own directory"),
+                "declaration errors belong in the report, not stderr: {stderr}"
+            );
+        }
+    } else {
+        assert!(
+            warning.contains("give each account its own directory"),
+            "{warning}"
+        );
+    }
     let rows = if doctor {
         &report["accounts"]["ready"]["rows"]
     } else {
