@@ -15,7 +15,7 @@ fn terminal_feature_count(stdout: &str, feature: &str) -> usize {
 }
 
 #[test]
-fn tab_status_clear_restores_automatic_rename() {
+fn tab_status_and_rest_only_rename_the_window() {
     require_tmux!();
     let server = TmuxServer::new();
     let session = "rimz-rename-tab";
@@ -40,16 +40,6 @@ fn tab_status_clear_restores_automatic_rename() {
 
     assert_eq!(server.display(session, "#{window_name}"), "work ?");
     assert_eq!(server.display(session, "#{automatic-rename}"), "0");
-    assert_eq!(
-        server.stdout(&[
-            "show-options",
-            "-wqv",
-            "-t",
-            anchor.raw(),
-            "@rimz_restore_automatic_rename",
-        ]),
-        "on",
-    );
 
     server
         .backend
@@ -64,7 +54,7 @@ fn tab_status_clear_restores_automatic_rename() {
         .expect("clear pane's window status");
 
     assert_eq!(server.display(session, "#{window_name}"), "work");
-    assert_eq!(server.display(session, "#{automatic-rename}"), "1");
+    assert_eq!(server.display(session, "#{automatic-rename}"), "0");
     assert_eq!(
         server.stdout(&[
             "show-options",
@@ -73,18 +63,8 @@ fn tab_status_clear_restores_automatic_rename() {
             anchor.raw(),
             "automatic-rename",
         ]),
-        "",
-        "clear must restore the inherited option rather than pinning window-local on",
-    );
-    assert_eq!(
-        server.stdout(&[
-            "show-options",
-            "-wqv",
-            "-t",
-            anchor.raw(),
-            "@rimz_restore_automatic_rename",
-        ]),
-        "",
+        "automatic-rename off",
+        "Rest must leave the native rename-window naming policy alone",
     );
 }
 
@@ -123,16 +103,6 @@ fn tab_status_clear_preserves_an_intentionally_stable_name() {
 
     assert_eq!(server.display(session, "#{window_name}"), "stable");
     assert_eq!(server.display(session, "#{automatic-rename}"), "0");
-    assert_eq!(
-        server.stdout(&[
-            "show-options",
-            "-wqv",
-            "-t",
-            anchor.raw(),
-            "@rimz_restore_automatic_rename",
-        ]),
-        "",
-    );
 }
 
 #[test]
@@ -160,10 +130,6 @@ fn tab_release_restores_automatic_rename_and_clears_every_pane_pin() {
         ]);
     }
     assert_eq!(server.display(anchor.raw(), "#{automatic-rename}"), "0");
-    assert_eq!(
-        server.display(anchor.raw(), "#{@rimz_restore_automatic_rename}"),
-        ""
-    );
 
     server
         .backend
@@ -185,7 +151,7 @@ fn tab_release_restores_automatic_rename_and_clears_every_pane_pin() {
         thread::sleep(Duration::from_millis(25));
     }
     assert_eq!(server.display(anchor.raw(), "#{automatic-rename}"), "1");
-    for option in ["automatic-rename", "@rimz_restore_automatic_rename"] {
+    for option in ["automatic-rename", "@rimz_tab_base", "@rimz_tab_founders"] {
         assert_eq!(
             server.stdout(&["show-options", "-wq", "-t", anchor.raw(), option]),
             ""

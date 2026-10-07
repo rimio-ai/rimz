@@ -1361,7 +1361,7 @@ fn birth_keeps_agents_pending_when_their_resume_window_does_not_open() {
                 &env,
                 &tmux,
                 &agent_path,
-                r#"*" new-window "*" -n ##"*) exit 1 ;;"#,
+                r#"*" new-window "*" rename-window "*" ##"*) exit 1 ;;"#,
             ),
         )
         .args(["--mux", "tmux", "start", "--no-attach"])
@@ -1482,7 +1482,7 @@ fn closing_an_agent_resumed_while_pending_ends_it() {
                 &env,
                 &tmux,
                 &agent_path,
-                r#"*" new-window "*" -n ##"*) exit 1 ;;"#,
+                r#"*" new-window "*" rename-window "*" ##"*) exit 1 ;;"#,
             ),
         )
         .args(["--mux", "tmux", "start", "--no-attach"])
@@ -1741,7 +1741,7 @@ fn attended_start_waits_for_a_birth_to_confirm_its_resume_window() {
     // Parks the birth where it opens the resume window: settled, the session
     // live, and the agent not yet running in a pane.
     let arms = format!(
-        r#"*" new-window "*" -n ##"*) : > {}; until [ -e {} ]; do sleep 0.05; done ;;"#,
+        r#"*" new-window "*" rename-window "*" ##"*) : > {}; until [ -e {} ]; do sleep 0.05; done ;;"#,
         shlex::try_quote(reached.to_str().expect("UTF-8 path")).expect("quote"),
         shlex::try_quote(release.to_str().expect("UTF-8 path")).expect("quote"),
     );

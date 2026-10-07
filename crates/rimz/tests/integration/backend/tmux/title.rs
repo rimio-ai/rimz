@@ -62,6 +62,66 @@ fn window_names_keep_literal_hashes() {
 }
 
 #[test]
+fn rebuild_updates_the_record_only_while_the_observed_name_matches() {
+    require_tmux!();
+    let server = TmuxServer::new();
+    let session = "rimz-rebuild-title";
+    server.ensure_with_shell(session);
+    let anchor = list_session_panes(&server, session)[0].pane_id.clone();
+    server
+        .backend
+        .rename_tab(
+            session,
+            &anchor,
+            "founder",
+            TabNameIntent::Claim {
+                pane_name: "founder".to_owned(),
+            },
+        )
+        .unwrap();
+    server
+        .backend
+        .rename_tab(
+            session,
+            &anchor,
+            "peer's:#h.2 ?",
+            TabNameIntent::Rebuild {
+                observed: "founder".to_owned(),
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        server.display(anchor.raw(), "#{window_name}"),
+        "peer's-#h-2 ?"
+    );
+    assert_eq!(
+        server.display(anchor.raw(), "#{@rimz_tab_base}"),
+        "peer's-#h-2"
+    );
+    assert_eq!(
+        server.display(anchor.raw(), "#{@rimz_tab_founders}"),
+        anchor.raw()
+    );
+    server.output(&["rename-window", "-t", anchor.raw(), "my tab"]);
+    server
+        .backend
+        .rename_tab(
+            session,
+            &anchor,
+            "stale",
+            TabNameIntent::Rebuild {
+                observed: "peer's-#h-2 ?".to_owned(),
+            },
+        )
+        .unwrap();
+    assert_eq!(server.display(anchor.raw(), "#{window_name}"), "my tab");
+    assert_eq!(
+        server.display(anchor.raw(), "#{@rimz_tab_base}"),
+        "peer's-#h-2"
+    );
+}
+
+#[test]
 fn in_place_claim_pins_the_pane_name_not_the_scoped_tab_title() {
     require_tmux!();
     let session = "rimz-claim-title";
@@ -102,10 +162,6 @@ fn in_place_claim_pins_the_pane_name_not_the_scoped_tab_title() {
             .title
             .as_deref(),
         Some("opus-fast"),
-    );
-    assert_eq!(
-        server.display(anchor.raw(), "#{@rimz_restore_automatic_rename}"),
-        ""
     );
     let format = server.show_option(&["-t", session], "set-titles-string");
     assert_eq!(

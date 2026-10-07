@@ -554,6 +554,10 @@ fn released_tab_deduplicates_and_settles_on_the_next_observation() {
     pane.title = Some("opus".to_owned());
     pane.view_name = Some("opus".to_owned());
     let mut frame = crate::sidebar::frame::assemble_frame(vec![pane], 12, "rimz-test");
+    frame.tabs[0].naming.owner = Some(crate::mux::tab_name::TabOwnerRecord {
+        base: "opus".to_owned(),
+        founders: Vec::new(),
+    });
     let snapshot = SidebarSnapshot::build_with_agents(
         crate::ids::WorkspaceId::parse("ws_0123456789abcdef01234567").expect("workspace"),
         Vec::new(),

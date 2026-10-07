@@ -78,6 +78,8 @@ pub struct TabFrame {
     pub kind: ViewKind,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    #[serde(default)]
+    pub naming: crate::mux::tab_name::ViewNaming,
     pub panes: Vec<PaneState>,
 }
 
@@ -338,6 +340,7 @@ fn is_false(value: &bool) -> bool {
 
 pub(super) struct FrameInputs<'a> {
     pub panes: Vec<PaneRef>,
+    pub views: Vec<(String, crate::mux::tab_name::ViewNaming)>,
     pub produced_at_ms: u64,
     pub observed_at_ms: u64,
     pub session_name: String,
@@ -355,6 +358,7 @@ pub fn assemble_frame(
 ) -> PaneFrame {
     assemble_frame_from_inputs(FrameInputs {
         panes,
+        views: Vec::new(),
         produced_at_ms,
         observed_at_ms: produced_at_ms,
         session_name: session_name.into(),
@@ -370,6 +374,7 @@ pub fn assemble_frame(
 pub(super) fn assemble_frame_from_inputs(inputs: FrameInputs<'_>) -> (PaneFrame, Vec<DiagEvent>) {
     let FrameInputs {
         panes,
+        views,
         produced_at_ms,
         observed_at_ms,
         session_name,
@@ -382,6 +387,7 @@ pub(super) fn assemble_frame_from_inputs(inputs: FrameInputs<'_>) -> (PaneFrame,
     let topology_stamp_ms = prior.and_then(|frame| frame.topology_stamp_ms);
     let metrics_stamp_ms = prior.and_then(|frame| frame.metrics_stamp_ms);
     let mut tabs: BTreeMap<ViewId, TabFrame> = BTreeMap::new();
+    let views = views.into_iter().collect::<HashMap<_, _>>();
     let mut seen_panes = HashSet::new();
     let mut diagnostics = Vec::new();
     for pane in panes {
@@ -400,6 +406,7 @@ pub(super) fn assemble_frame_from_inputs(inputs: FrameInputs<'_>) -> (PaneFrame,
             .view_kind
             .unwrap_or_else(|| crate::mux::view_kind(pane.pane_id.mux()));
         let tab = tabs.entry(view_id.clone()).or_insert_with(|| TabFrame {
+            naming: views.get(view_id.as_str()).cloned().unwrap_or_default(),
             view_id,
             kind,
             name: pane.view_name.clone(),

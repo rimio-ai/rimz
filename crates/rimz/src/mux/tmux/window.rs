@@ -9,7 +9,7 @@ use crate::mux::{CommandSpec, HostPane, MuxErr, Result, SidebarPaneOptions, ensu
 
 use super::TmuxBackend;
 use super::options::{
-    RIMZ_RESTORE_AUTOMATIC_RENAME_OPTION, RIMZ_TITLE_OPTION, sidebar_serve_command,
+    RIMZ_TAB_BASE_OPTION, RIMZ_TAB_FOUNDERS_OPTION, RIMZ_TITLE_OPTION, sidebar_serve_command,
     spawn_command_is_sidebar_serve,
 };
 use super::parse::parse_new_window_ids;
@@ -241,14 +241,33 @@ impl TmuxBackend {
             .set_pane_rimz_title_command(anchor.raw(), pane_name)
             .arg(";")
             .args(rename)
-            .args([
-                ";",
-                "set-option",
-                "-wu",
-                "-t",
+            .arg(";")
+            .args(Self::window_owner_args(
                 anchor.raw(),
-                RIMZ_RESTORE_AUTOMATIC_RENAME_OPTION,
-            ]))
+                name,
+                &[anchor.raw().to_owned()],
+            )))
+    }
+
+    pub(super) fn window_owner_args(target: &str, base: &str, founders: &[String]) -> Vec<String> {
+        [
+            "set-option",
+            "-w",
+            "-t",
+            target,
+            RIMZ_TAB_BASE_OPTION,
+            &sanitize_window_name(base),
+            ";",
+            "set-option",
+            "-w",
+            "-t",
+            target,
+            RIMZ_TAB_FOUNDERS_OPTION,
+            &founders.join(" "),
+        ]
+        .into_iter()
+        .map(ToOwned::to_owned)
+        .collect()
     }
 
     pub(super) fn window_pane_ids_command(&self, anchor: &PaneId) -> Result<CommandSpec> {
@@ -266,7 +285,14 @@ impl TmuxBackend {
         name: &str,
         pane_ids: &[String],
     ) -> Result<CommandSpec> {
-        let mut command = self.clear_window_status_and_restore_command(anchor, name)?;
+        let mut command = self.rename_window_command(anchor, name)?;
+        for option in [
+            "automatic-rename",
+            RIMZ_TAB_BASE_OPTION,
+            RIMZ_TAB_FOUNDERS_OPTION,
+        ] {
+            command = command.args([";", "set-option", "-wu", "-t", anchor.raw(), option]);
+        }
         for pane_id in pane_ids {
             command = command.args([
                 ";",
@@ -294,70 +320,22 @@ impl TmuxBackend {
         Ok(self.cmd().args(Self::rename_window_args(anchor, name)?))
     }
 
-    pub(super) fn automatic_rename_probe_command(&self, anchor: &PaneId) -> Result<CommandSpec> {
-        ensure_pane_backend(anchor, MuxName::Tmux)?;
-        Ok(self.cmd().args([
-            "display-message".to_owned(),
-            "-p".to_owned(),
-            "-t".to_owned(),
-            anchor.raw().to_owned(),
-            "#{automatic-rename}".to_owned(),
-        ]))
-    }
-
-    pub(super) fn restore_automatic_rename_probe_command(
-        &self,
-        anchor: &PaneId,
-    ) -> Result<CommandSpec> {
-        ensure_pane_backend(anchor, MuxName::Tmux)?;
-        Ok(self.cmd().args([
-            "show-options".to_owned(),
-            "-wqv".to_owned(),
-            "-t".to_owned(),
-            anchor.raw().to_owned(),
-            RIMZ_RESTORE_AUTOMATIC_RENAME_OPTION.to_owned(),
-        ]))
-    }
-
-    pub(super) fn rename_window_with_restore_marker_command(
+    pub(super) fn rebuild_window_command(
         &self,
         anchor: &PaneId,
         name: &str,
     ) -> Result<CommandSpec> {
-        let rename = Self::rename_window_args(anchor, name)?;
-        Ok(self
-            .cmd()
-            .args([
-                "set-option".to_owned(),
-                "-w".to_owned(),
-                "-t".to_owned(),
-                anchor.raw().to_owned(),
-                RIMZ_RESTORE_AUTOMATIC_RENAME_OPTION.to_owned(),
-                "on".to_owned(),
-                ";".to_owned(),
-            ])
-            .args(rename))
-    }
-
-    pub(super) fn clear_window_status_and_restore_command(
-        &self,
-        anchor: &PaneId,
-        name: &str,
-    ) -> Result<CommandSpec> {
-        let rename = Self::rename_window_args(anchor, name)?;
-        Ok(self.cmd().args(rename).args([
-            ";".to_owned(),
-            "set-option".to_owned(),
-            "-wu".to_owned(),
-            "-t".to_owned(),
-            anchor.raw().to_owned(),
-            "automatic-rename".to_owned(),
-            ";".to_owned(),
-            "set-option".to_owned(),
-            "-wu".to_owned(),
-            "-t".to_owned(),
-            anchor.raw().to_owned(),
-            RIMZ_RESTORE_AUTOMATIC_RENAME_OPTION.to_owned(),
+        let config = crate::config::MachineConfig::load_lenient();
+        let base =
+            sanitize_window_name(crate::theme::strip_status_glyph_suffix(name, &config.theme));
+        Ok(self.rename_window_command(anchor, name)?.args([
+            ";",
+            "set-option",
+            "-w",
+            "-t",
+            anchor.raw(),
+            RIMZ_TAB_BASE_OPTION,
+            &base,
         ]))
     }
 
@@ -366,8 +344,7 @@ impl TmuxBackend {
     /// invocation's command list without another client's commands in between,
     /// so the check and the rename are one step. Both names travel as window
     /// options and the rename reads its name through a format, so neither is
-    /// parsed as tmux command syntax; every other word is a pane id, flag, or
-    /// option name.
+    /// parsed as tmux command syntax; record values are quoted separately.
     pub(super) fn window_name_guarded_command(
         &self,
         anchor: &PaneId,
@@ -386,13 +363,7 @@ impl TmuxBackend {
                 } else {
                     word.clone()
                 };
-                if word.contains('\'') {
-                    return Err(MuxErr::Output {
-                        program: "tmux".to_owned(),
-                        reason: format!("cannot quote `{word}` in a guarded tab rename"),
-                    });
-                }
-                quoted.push(format!("'{word}'"));
+                quoted.push(format!("'{}'", word.replace('\'', "'\\''")));
             }
             guarded.push(quoted.join(" "));
         }
@@ -461,6 +432,8 @@ impl TmuxBackend {
                 None
             }
         };
+        let birth_name = format!("rimz-birth-{}", uuid::Uuid::now_v7().simple());
+        let birth_target = format!("={session}:={birth_name}");
         let mut args = vec!["new-window".to_owned(), "-d".to_owned()];
         if anchor_window.is_some() {
             args.push("-a".to_owned());
@@ -472,14 +445,42 @@ impl TmuxBackend {
             "-t".to_owned(),
             anchor_window.unwrap_or_else(|| session.to_owned()),
             "-n".to_owned(),
-            window_name_arg(name),
+            birth_name,
             "-c".to_owned(),
             cwd.to_string_lossy().into_owned(),
         ]);
         for (key, value) in env {
             args.extend(["-e".to_owned(), format!("{key}={value}")]);
         }
-        let output = self.cmd().args(args).args(argv.iter().cloned()).run()?;
+        // The final name is visible only after ownership exists. A detached
+        // new-window does not make the new window the command list's target.
+        let output = self
+            .cmd()
+            .args(args)
+            .args(argv.iter().cloned())
+            .args([
+                ";",
+                "set-option",
+                "-w",
+                "-t",
+                &birth_target,
+                RIMZ_TAB_BASE_OPTION,
+                &sanitize_window_name(name),
+                ";",
+                "set-option",
+                "-w",
+                "-F",
+                "-t",
+                &birth_target,
+                RIMZ_TAB_FOUNDERS_OPTION,
+                "#{pane_id}",
+                ";",
+                "rename-window",
+                "-t",
+                &birth_target,
+                &window_name_arg(name),
+            ])
+            .run()?;
         let (window_id, first_pane) = parse_new_window_ids(&output.stdout)?;
         Ok(OpenedWindow {
             window_id,
@@ -1024,18 +1025,24 @@ impl TmuxBackend {
                     // sidebar: `select-layout` retiles every pane in the window,
                     // including the managed left sidebar. Additional agents split
                     // the active work area and preserve the sidebar's fixed width.
-                    if let Err(err) = self.split_layout_columns(
-                        &opened.first_pane,
-                        &tab.cwd,
-                        &tab.layout,
-                        &tab.env,
-                    ) {
+                    if let Err(err) = self
+                        .split_layout_columns(&opened.first_pane, &tab.cwd, &tab.layout, &tab.env)
+                        .and_then(|founders| {
+                            self.cmd()
+                                .args(Self::window_owner_args(
+                                    &opened.window_id,
+                                    &tab.label,
+                                    &founders,
+                                ))
+                                .run()
+                        })
+                    {
                         tracing::warn!(
                             session = %opts.session_name,
                             tab = %tab.label,
                             tags.operation = "tmux.resume.split_window",
                             error = &err as &dyn std::error::Error,
-                            "resume: launching an agent pane failed; leaving it out",
+                            "resume: launching or recording agent panes failed; leaving them out",
                         );
                     }
                 }

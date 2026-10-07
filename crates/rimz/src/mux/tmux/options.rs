@@ -10,7 +10,8 @@ use crate::pane::SIDEBAR_CHROME_TITLE;
 
 pub(super) const SIDEBAR_WIDTH_OPTION: &str = "@rimz_sidebar_cols";
 pub(super) const RIMZ_TITLE_OPTION: &str = "@rimz_title";
-pub(super) const RIMZ_RESTORE_AUTOMATIC_RENAME_OPTION: &str = "@rimz_restore_automatic_rename";
+pub(super) const RIMZ_TAB_BASE_OPTION: &str = "@rimz_tab_base";
+pub(super) const RIMZ_TAB_FOUNDERS_OPTION: &str = "@rimz_tab_founders";
 
 pub(super) fn spawn_command_is_sidebar_serve(spawn: &str) -> bool {
     // tmux quotes a single shell-command argument as a whole. Decode that

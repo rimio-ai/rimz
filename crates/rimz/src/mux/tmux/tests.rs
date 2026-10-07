@@ -97,10 +97,18 @@ fn tab_claim_pins_the_sanitized_pane_name_not_the_tab_name() {
             "##feat-one-2",
             ";",
             "set-option",
-            "-wu",
+            "-w",
             "-t",
             "%7",
-            "@rimz_restore_automatic_rename",
+            "@rimz_tab_base",
+            "#feat-one-2",
+            ";",
+            "set-option",
+            "-w",
+            "-t",
+            "%7",
+            "@rimz_tab_founders",
+            "%7",
         ]
     );
 }
@@ -120,7 +128,13 @@ fn tab_release_lists_the_anchor_window_and_clears_each_pane_pin() {
     assert_eq!(
         verb_args(&release)[15..],
         [
-            "@rimz_restore_automatic_rename",
+            "@rimz_tab_base",
+            ";",
+            "set-option",
+            "-wu",
+            "-t",
+            "%7",
+            "@rimz_tab_founders",
             ";",
             "set-option",
             "-pu",
@@ -134,6 +148,43 @@ fn tab_release_lists_the_anchor_window_and_clears_each_pane_pin() {
             "%8",
             "@rimz_title",
         ]
+    );
+}
+
+#[test]
+fn rebuild_updates_the_base_inside_the_observed_name_guard() {
+    let backend = TmuxBackend::with_socket("/run/user/1000/rimz/tmux/server");
+    let pane = crate::PaneId::from_parts(crate::MuxName::Tmux, "%7");
+    let rebuild = backend
+        .rebuild_window_command(&pane, "peer.fast ?")
+        .expect("tmux pane");
+    let guarded = backend
+        .window_name_guarded_command(&pane, "founder", "peer.fast ?", &rebuild)
+        .expect("guard");
+    assert_eq!(
+        verb_args(&guarded)[19],
+        "'rename-window' '-t' '%7' '#{@rimz_rename_target}' ; 'set-option' '-w' '-t' '%7' '@rimz_tab_base' 'peer-fast'"
+    );
+}
+
+#[test]
+fn release_clears_ownership_inside_the_observed_name_guard() {
+    let backend = TmuxBackend::with_socket("/run/user/1000/rimz/tmux/server");
+    let pane = crate::PaneId::from_parts(crate::MuxName::Tmux, "%7");
+    let release = backend
+        .release_window_command(&pane, "sh", &["%7".to_owned()])
+        .expect("release");
+    let guarded = backend
+        .window_name_guarded_command(&pane, "opus", "sh", &release)
+        .expect("guard");
+    let command = &verb_args(&guarded)[19];
+    assert!(
+        command.contains("'set-option' '-wu' '-t' '%7' '@rimz_tab_base'"),
+        "{command}"
+    );
+    assert!(
+        command.contains("'set-option' '-wu' '-t' '%7' '@rimz_tab_founders'"),
+        "{command}"
     );
 }
 
@@ -193,85 +244,6 @@ fn projected_rename_runs_under_one_window_name_check() {
             "names travel as option values, never as command syntax"
         );
     }
-}
-
-#[test]
-fn tab_status_commands_probe_and_remember_automatic_rename() {
-    let backend = TmuxBackend::with_socket("/run/user/1000/rimz/tmux/server");
-    let pane = crate::PaneId::from_parts(crate::MuxName::Tmux, "%7");
-
-    let automatic = backend
-        .automatic_rename_probe_command(&pane)
-        .expect("tmux pane");
-    assert_eq!(
-        verb_args(&automatic),
-        ["display-message", "-p", "-t", "%7", "#{automatic-rename}"]
-    );
-
-    let rename = backend
-        .rename_window_with_restore_marker_command(&pane, "#feat:one.2 ✓")
-        .expect("tmux pane");
-    assert_eq!(
-        verb_args(&rename),
-        [
-            "set-option",
-            "-w",
-            "-t",
-            "%7",
-            "@rimz_restore_automatic_rename",
-            "on",
-            ";",
-            "rename-window",
-            "-t",
-            "%7",
-            "##feat-one-2 ✓",
-        ]
-    );
-}
-
-#[test]
-fn tab_status_clear_commands_probe_and_restore_automatic_rename() {
-    let backend = TmuxBackend::with_socket("/run/user/1000/rimz/tmux/server");
-    let pane = crate::PaneId::from_parts(crate::MuxName::Tmux, "%7");
-
-    let marker = backend
-        .restore_automatic_rename_probe_command(&pane)
-        .expect("tmux pane");
-    assert_eq!(
-        verb_args(&marker),
-        [
-            "show-options",
-            "-wqv",
-            "-t",
-            "%7",
-            "@rimz_restore_automatic_rename",
-        ]
-    );
-
-    let clear = backend
-        .clear_window_status_and_restore_command(&pane, "#feat:one.2")
-        .expect("tmux pane");
-    assert_eq!(
-        verb_args(&clear),
-        [
-            "rename-window",
-            "-t",
-            "%7",
-            "##feat-one-2",
-            ";",
-            "set-option",
-            "-wu",
-            "-t",
-            "%7",
-            "automatic-rename",
-            ";",
-            "set-option",
-            "-wu",
-            "-t",
-            "%7",
-            "@rimz_restore_automatic_rename",
-        ]
-    );
 }
 
 #[test]

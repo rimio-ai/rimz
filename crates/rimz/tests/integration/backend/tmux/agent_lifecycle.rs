@@ -171,7 +171,7 @@ fn producer_keeps_profile_tab_until_both_agents_exit() {
     assert_producer_releases_profile_tab(2);
 }
 
-fn assert_producer_releases_profile_tab(count: usize) {
+fn tab_naming_env() -> (Env, PathBuf, PathBuf) {
     let env = Env::new();
     env.install_agent_hooks("claude");
     let config_dir = env.rimz_home();
@@ -220,6 +220,227 @@ fn assert_producer_releases_profile_tab(count: usize) {
             0
         );
     }
+    (env, agent_bin, ready)
+}
+
+struct TabNamingRoom {
+    env: Env,
+    server: TmuxServer,
+    _client: AttachedTmuxClient,
+    agent_bin: PathBuf,
+    ready: PathBuf,
+    session: String,
+}
+
+impl TabNamingRoom {
+    fn new() -> Self {
+        let (env, agent_bin, ready) = tab_naming_env();
+        crate::common::write_definition(
+            &env,
+            "agents",
+            "brainstormer",
+            "description: Brainstormer\nagent: claude\ntools: []",
+            "",
+        );
+        let session = env.resolve_workspace(&env.project_root).session_name;
+        let server = TmuxServer::in_runtime_root(&env.runtime_root);
+        env.rimz()
+            .env("PATH", path_with_front(&agent_bin))
+            .env("RIMZ_TEST_AGENT_READY", &ready)
+            .env("RIMZ_TEST_RIMZ_BIN", env.rimz_bin())
+            .args(["--mux", "tmux", "start", "--no-attach"])
+            .assert_success_within_timeout("start real sidebar producer");
+        let client = AttachedTmuxClient::attach(&server.socket, &session, 160, 40);
+        Self {
+            env,
+            server,
+            _client: client,
+            agent_bin,
+            ready,
+            session,
+        }
+    }
+
+    fn launch(&self, profile: &str, target: Option<&PaneId>) -> (PaneId, String) {
+        let existing = std::fs::read_dir(&self.ready)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect::<Vec<_>>();
+        let mut command = self.env.rimz();
+        command
+            .env("PATH", path_with_front(&self.agent_bin))
+            .env("RIMZ_TEST_AGENT_READY", &self.ready)
+            .env("RIMZ_TEST_RIMZ_BIN", self.env.rimz_bin())
+            .args(["--mux", "tmux", "agents", profile]);
+        if let Some(target) = target {
+            command
+                .env("TMUX_PANE", target.raw())
+                .args(["--bg", "--detach", "check tab naming"]);
+        } else {
+            command.arg("--new-tab");
+        }
+        command.assert_success_within_timeout("launch tab naming agent");
+        let deadline = Instant::now() + Duration::from_secs(15);
+        loop {
+            for entry in std::fs::read_dir(&self.ready).unwrap().map(Result::unwrap) {
+                if existing.contains(&entry.file_name()) {
+                    continue;
+                }
+                let pid = std::fs::read_to_string(entry.path()).unwrap();
+                if !pid.is_empty() {
+                    return (
+                        PaneId::from_parts(MuxName::Tmux, entry.file_name().to_string_lossy()),
+                        pid,
+                    );
+                }
+            }
+            assert!(Instant::now() < deadline, "agent did not start");
+            thread::sleep(Duration::from_millis(25));
+        }
+    }
+
+    fn wait_name(&self, anchor: &PaneId, expected: &str, after_ms: u64) -> u64 {
+        let deadline = Instant::now() + Duration::from_secs(15);
+        loop {
+            let frame = rimz::sidebar::cache::read_snapshot_cache(
+                &self.env.runtime_paths().pane_frame_path(),
+                &self.session,
+            );
+            if let Some(frame) = frame.as_ref()
+                && frame.observed_at_ms > after_ms
+                && frame.tabs.iter().any(|tab| {
+                    tab.name.as_deref() == Some(expected)
+                        && tab.panes.iter().any(|pane| pane.pane_id == *anchor)
+                })
+                && self.server.display(anchor.raw(), "#{window_name}") == expected
+            {
+                return frame.observed_at_ms;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "producer did not observe {expected:?}: {frame:?}; actual name: {}",
+                self.server.display(anchor.raw(), "#{window_name}")
+            );
+            thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    fn end(&self, pid: &str) {
+        nix::sys::signal::kill(
+            nix::unistd::Pid::from_raw(pid.parse().unwrap()),
+            nix::sys::signal::Signal::SIGTERM,
+        )
+        .unwrap();
+        wait_for_agent_end_observation(&self.env, &format!("tab-name-{pid}"));
+    }
+}
+
+#[test]
+fn producer_leaves_an_automatic_window_alone() {
+    require_tmux!();
+    let room = TabNamingRoom::new();
+    let raw = room.server.stdout(&[
+        "new-window",
+        "-d",
+        "-P",
+        "-F",
+        "#{pane_id}",
+        "-t",
+        &room.session,
+        "-c",
+        room.env.project_root.to_str().unwrap(),
+        "sleep",
+        "300",
+    ]);
+    let anchor = PaneId::from_parts(MuxName::Tmux, raw.trim());
+    room.server
+        .output(&["select-pane", "-t", anchor.raw(), "-T", "sleep"]);
+    room.server.output(&[
+        "set-option",
+        "-w",
+        "-t",
+        anchor.raw(),
+        "automatic-rename",
+        "on",
+    ]);
+    let first = room.wait_name(&anchor, "sleep", 0);
+    room.wait_name(&anchor, "sleep", first);
+    assert_eq!(room.server.display(anchor.raw(), "#{@rimz_tab_base}"), "");
+    assert_eq!(
+        room.server.display(anchor.raw(), "#{automatic-rename}"),
+        "1"
+    );
+    assert_eq!(
+        room.server.stdout(&[
+            "show-options",
+            "-wqv",
+            "-t",
+            anchor.raw(),
+            "automatic-rename"
+        ]),
+        "on",
+        "the producer must not unset even the window-local automatic policy"
+    );
+}
+
+#[test]
+fn producer_holds_the_founder_name_then_follows_the_peer() {
+    require_tmux!();
+    let room = TabNamingRoom::new();
+    let (founder, founder_pid) = room.launch("opus", None);
+    let (peer, peer_pid) = room.launch("brainstormer", Some(&founder));
+    assert_eq!(
+        room.server.display(founder.raw(), "#{window_id}"),
+        room.server.display(peer.raw(), "#{window_id}")
+    );
+    let first = room.wait_name(&peer, "opus", 0);
+    room.wait_name(&peer, "opus", first);
+    assert_eq!(
+        room.server.display(founder.raw(), "#{@rimz_tab_founders}"),
+        founder.raw()
+    );
+    room.end(&founder_pid);
+    room.wait_name(&peer, "brainstormer", first);
+    assert_eq!(
+        room.server.display(peer.raw(), "#{@rimz_tab_base}"),
+        "brainstormer"
+    );
+    room.end(&peer_pid);
+    room.wait_name(&peer, "sh", first);
+    for pane in [&founder, &peer] {
+        assert_eq!(room.server.display(pane.raw(), "#{@rimz_title}"), "");
+    }
+    assert_eq!(room.server.display(peer.raw(), "#{@rimz_tab_base}"), "");
+    assert_eq!(room.server.display(peer.raw(), "#{automatic-rename}"), "1");
+}
+
+#[test]
+fn producer_keeps_a_user_name_over_an_agent() {
+    require_tmux!();
+    let room = TabNamingRoom::new();
+    let raw = room.server.stdout(&[
+        "new-window",
+        "-d",
+        "-P",
+        "-F",
+        "#{pane_id}",
+        "-t",
+        &room.session,
+        "-n",
+        "my tab",
+        "sh",
+    ]);
+    let anchor = PaneId::from_parts(MuxName::Tmux, raw.trim());
+    let (peer, pid) = room.launch("brainstormer", Some(&anchor));
+    let first = room.wait_name(&peer, "my tab", 0);
+    room.wait_name(&peer, "my tab", first);
+    assert_eq!(room.server.display(peer.raw(), "#{@rimz_tab_base}"), "");
+    room.end(&pid);
+    room.wait_name(&peer, "my tab", first);
+}
+
+fn assert_producer_releases_profile_tab(count: usize) {
+    let (env, agent_bin, ready) = tab_naming_env();
     let workspace = env.resolve_workspace(&env.project_root);
     let server = TmuxServer::in_runtime_root(&env.runtime_root);
     env.rimz()
@@ -260,6 +481,14 @@ fn assert_producer_releases_profile_tab(count: usize) {
     for (pane, _) in &agents {
         assert_eq!(server.display(pane.raw(), "#{window_name}"), title);
         assert_eq!(server.display(pane.raw(), "#{@rimz_title}"), "opus");
+        assert_eq!(server.display(pane.raw(), "#{@rimz_tab_base}"), title);
+        let founders = server.display(pane.raw(), "#{@rimz_tab_founders}");
+        for (founder, _) in &agents {
+            assert!(
+                founders.split_whitespace().any(|id| id == founder.raw()),
+                "{founders:?} must include {founder}"
+            );
+        }
     }
     let deadline = Instant::now() + Duration::from_secs(15);
     loop {

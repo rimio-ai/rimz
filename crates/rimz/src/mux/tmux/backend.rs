@@ -242,12 +242,20 @@ impl MuxBackend for TmuxBackend {
         let observed_at_ms = crate::utils::time::unix_now_ms();
         let spec = self.list_panes_command(opts.session_name.as_deref());
         let output = spec.run_with_timeout(timeout)?;
-        let panes = String::from_utf8_lossy(&output.stdout)
+        let mut panes = Vec::new();
+        let mut views = BTreeMap::new();
+        for (pane, naming) in String::from_utf8_lossy(&output.stdout)
             .lines()
             .filter_map(parse_pane_line)
-            .collect();
+        {
+            if let Some(view_id) = &pane.view_id {
+                views.entry(view_id.clone()).or_insert(naming);
+            }
+            panes.push(pane);
+        }
         Ok(PaneListing {
             panes,
+            views: views.into_iter().collect(),
             observed_at_ms,
             session_focus: None,
             client_view: None,
@@ -993,7 +1001,10 @@ impl MuxBackend for TmuxBackend {
             // tracks client size again like every other tab.
             self.restore_window_autosize(&window_id);
         }
-        split_result?;
+        let founders = split_result?;
+        self.cmd()
+            .args(Self::window_owner_args(&window_id, &opts.title, &founders))
+            .run()?;
         if !opts.dock_sidebar {
             let rebalance_even = opts
                 .panes
@@ -1022,27 +1033,9 @@ impl MuxBackend for TmuxBackend {
             TabNameIntent::Claim { pane_name } => {
                 self.claim_window_command(anchor, name, pane_name)?
             }
-            TabNameIntent::Status { .. } => {
-                let automatic = self
-                    .automatic_rename_probe_command(anchor)?
-                    .run_with_timeout(super::super::TAB_RENAME_TIMEOUT)
-                    .is_ok_and(|output| String::from_utf8_lossy(&output.stdout).trim() == "1");
-                if automatic {
-                    self.rename_window_with_restore_marker_command(anchor, name)?
-                } else {
-                    self.rename_window_command(anchor, name)?
-                }
-            }
-            TabNameIntent::Rest { .. } => {
-                let restore = self
-                    .restore_automatic_rename_probe_command(anchor)?
-                    .run_with_timeout(super::super::TAB_RENAME_TIMEOUT)
-                    .is_ok_and(|output| String::from_utf8_lossy(&output.stdout).trim() == "on");
-                if restore {
-                    self.clear_window_status_and_restore_command(anchor, name)?
-                } else {
-                    self.rename_window_command(anchor, name)?
-                }
+            TabNameIntent::Rebuild { .. } => self.rebuild_window_command(anchor, name)?,
+            TabNameIntent::Status { .. } | TabNameIntent::Rest { .. } => {
+                self.rename_window_command(anchor, name)?
             }
             TabNameIntent::Release { .. } => {
                 let output = self
@@ -1114,9 +1107,9 @@ impl TmuxBackend {
         cwd: &Path,
         panes: &LayoutPanes,
         env: &BTreeMap<String, String>,
-    ) -> Result<()> {
+    ) -> Result<Vec<String>> {
         let Some((first_column, rest_columns)) = panes.columns.split_first() else {
-            return Ok(());
+            return Ok(vec![first_pane.to_owned()]);
         };
         // Split every column open before the first tmux command runs, so an
         // empty column errors out of an untouched window.
@@ -1149,7 +1142,7 @@ impl TmuxBackend {
                 .args(["select-pane", "-t", &layout_order[focus_position]])
                 .run()?;
         }
-        Ok(())
+        Ok(layout_order)
     }
 
     fn sole_current_window_pane(&self, session: &str) -> Result<Option<String>> {
@@ -1186,7 +1179,7 @@ impl TmuxBackend {
     }
 
     pub(super) fn list_panes_command(&self, session_name: Option<&str>) -> CommandSpec {
-        let format = "#{s/,/_/g:session_name},#{window_id},#{pane_id},#{s/,/_/g:pane_current_command},#{s/,/_/g:pane_current_path},#{pane_pid},#{s/,/_/g:window_name},#{s/,/_/g:#{?#{@rimz_title},#{@rimz_title},#{pane_title}}},#{pane_floating_flag},#{s/,/_/g:pane_start_command}";
+        let format = "#{s/,/_/g:session_name},#{window_id},#{pane_id},#{s/,/_/g:pane_current_command},#{s/,/_/g:pane_current_path},#{pane_pid},#{s/,/_/g:window_name},#{s/,/_/g:#{?#{@rimz_title},#{@rimz_title},#{pane_title}}},#{pane_floating_flag},#{s/,/_/g:pane_start_command},#{automatic-rename},#{s/,/_/g:@rimz_tab_base},#{@rimz_tab_founders}";
         match session_name {
             Some(session) => self
                 .cmd()

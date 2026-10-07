@@ -60,6 +60,7 @@ impl PaneTopologyCache {
         let client_view = clients.map(TopologyClients::into_client_view);
         let session_focus = project_session_focus(&panes, client_view.as_ref(), focused_pane);
         PaneListing {
+            views: Vec::new(),
             panes: panes
                 .into_iter()
                 .filter_map(|mut pane| {

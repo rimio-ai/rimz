@@ -838,6 +838,21 @@ fn open_sidebar_seeds_resume_windows_idempotently() {
     // Every reborn pane starts under the tab's pane identity pin.
     super::super::assert_identity_markers(&sidebar.resume_tabs[0], "feature");
     let panes = server.wait_for_panes("rimz-resume:#feature", 4);
+    assert_eq!(
+        server.display("rimz-resume:#feature", "#{@rimz_tab_base}"),
+        "#feature"
+    );
+    let founders = server.display("rimz-resume:#feature", "#{@rimz_tab_founders}");
+    assert_eq!(
+        founders
+            .split_whitespace()
+            .collect::<std::collections::BTreeSet<_>>(),
+        panes
+            .iter()
+            .filter(|pane| pane.left > 0)
+            .map(|pane| pane.id.as_str())
+            .collect::<std::collections::BTreeSet<_>>()
+    );
     // Two full-height work columns of even rows, and resume seeding keeps the
     // hook-docked sidebar at its birth width.
     let window_height: u64 = server
