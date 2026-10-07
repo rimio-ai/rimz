@@ -25,6 +25,7 @@ const PROBE_INTERVAL: Duration = Duration::from_secs(60);
 const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 const PANE_GONE_STRIKES: u8 = 3;
 const RECONFIRM_DELAY: Duration = Duration::from_millis(500);
+const RECEIPT_POLL: Duration = Duration::from_secs(1);
 #[cfg(any(test, feature = "testkit"))]
 const TEST_PROBE_INTERVAL_MS_ENV: &str = "RIMZ_TEST_SUBAGENT_PARENT_PROBE_INTERVAL_MS";
 #[cfg(feature = "testkit")]
@@ -47,10 +48,7 @@ pub struct WatchdogSeed {
 /// Authoritative answer from the one-shot parent probe.
 pub enum ProbeConfirm {
     Ended,
-    Alive {
-        members: BTreeMap<AgentSessionId, bool>,
-        parent_pane: Option<PaneId>,
-    },
+    Alive(Box<WatchdogSeed>),
     Unknown,
 }
 
@@ -117,14 +115,19 @@ enum ParentProbe {
     Unknown,
 }
 
+type ConfirmParent = dyn Fn(&WatchdogSeed, bool) -> ProbeConfirm + Send;
+
 /// Fold-free watchdog for one pane-backed child.
 pub struct ParentWatchdog {
     seed: WatchdogSeed,
     tail: LaunchTail,
-    workspace_id: WorkspaceId,
-    confirm: Box<dyn Fn(&WatchdogSeed) -> ProbeConfirm + Send>,
+    paths: StatePaths,
+    confirm: Box<ConfirmParent>,
     changed: Arc<AtomicBool>,
+    receipt_waiting: Arc<AtomicBool>,
     next_probe: Instant,
+    next_tail: Instant,
+    tail_uncertain: bool,
     strikes: u8,
     last_observed_at_ms: Option<u64>,
 }
@@ -133,9 +136,18 @@ pub struct ParentWatchdog {
 pub struct ParentWatch {
     ended: Arc<AtomicBool>,
     changed: Arc<AtomicBool>,
+    receipt_waiting: Arc<AtomicBool>,
+    worker: thread::Thread,
 }
 
 impl ParentWatch {
+    /// Wake the tail reader while a terminal child awaits its parent's receipt.
+    pub fn set_receipt_waiting(&self, waiting: bool) {
+        if self.receipt_waiting.swap(waiting, Ordering::AcqRel) != waiting {
+            self.worker.unpark();
+        }
+    }
+
     pub fn parent_ended(&self) -> bool {
         self.ended.load(Ordering::Acquire)
     }
@@ -149,15 +161,25 @@ impl ParentWatchdog {
     pub fn from_seed(
         seed: WatchdogSeed,
         paths: StatePaths,
-        confirm: impl Fn(&WatchdogSeed) -> ProbeConfirm + Send + 'static,
+        confirm: impl Fn(&WatchdogSeed, bool) -> ProbeConfirm + Send + 'static,
     ) -> Self {
+        let tail_uncertain = seed.parent_refs.is_empty();
+        let next_probe = Instant::now()
+            + if tail_uncertain {
+                Duration::ZERO
+            } else {
+                probe_interval()
+            };
         Self {
-            workspace_id: paths.workspace_id.clone(),
-            tail: LaunchTail::from_cursor(paths, seed.cursor),
+            tail: LaunchTail::from_cursor(paths.clone(), seed.cursor),
+            paths,
             seed,
             confirm: Box::new(confirm),
             changed: Arc::new(AtomicBool::new(false)),
-            next_probe: Instant::now() + probe_interval(),
+            receipt_waiting: Arc::new(AtomicBool::new(false)),
+            next_probe,
+            next_tail: next_probe,
+            tail_uncertain,
             strikes: 0,
             last_observed_at_ms: None,
         }
@@ -167,25 +189,42 @@ impl ParentWatchdog {
         let ended = Arc::new(AtomicBool::new(false));
         let signal = ended.clone();
         let changed = self.changed.clone();
-        thread::spawn(move || {
+        let receipt_waiting = self.receipt_waiting.clone();
+        let worker = thread::spawn(move || {
+            let mut was_waiting = false;
             loop {
-                thread::sleep(self.next_probe.saturating_duration_since(Instant::now()));
-                if self.probe_if_due(Instant::now()) {
+                let now = Instant::now();
+                let waiting = self.receipt_waiting.load(Ordering::Acquire);
+                if waiting && !was_waiting {
+                    self.next_tail = now;
+                } else if !waiting {
+                    self.next_tail = self.next_probe;
+                }
+                was_waiting = waiting;
+                if self.probe_if_due(now) {
                     signal.store(true, Ordering::Release);
                     break;
                 }
+                let deadline = self.next_probe.min(self.next_tail);
+                thread::park_timeout(deadline.saturating_duration_since(Instant::now()));
             }
         });
-        ParentWatch { ended, changed }
+        ParentWatch {
+            ended,
+            changed,
+            receipt_waiting,
+            worker: worker.thread().clone(),
+        }
     }
 
     fn probe_if_due(&mut self, now: Instant) -> bool {
-        if now < self.next_probe {
+        if now < self.next_tail && now < self.next_probe {
             return false;
         }
-        self.next_probe = now + probe_interval();
         #[cfg(feature = "testkit")]
         if std::env::var(TEST_WATCH_ENV).ok().as_deref() == Some("disabled") {
+            self.next_probe = now + probe_interval();
+            self.next_tail = self.next_probe;
             return false;
         }
         let seed = &mut self.seed;
@@ -196,36 +235,45 @@ impl ParentWatchdog {
             }
         }) {
             Ok(warnings) => {
+                self.tail_uncertain |= !warnings.is_empty();
                 for warning in warnings {
                     tracing::debug!(%warning, "parent watchdog event tail");
                 }
             }
             Err(error) => {
                 tracing::debug!(%error, "could not read parent watchdog event tail");
-                return false;
+                self.tail_uncertain = true;
             }
         }
+        self.next_tail = if self.receipt_waiting.load(Ordering::Acquire) {
+            now + RECEIPT_POLL
+        } else {
+            now + probe_interval()
+        };
+        if now < self.next_probe {
+            return false;
+        }
+        self.next_probe = now + probe_interval();
         let ended = !self.seed.members.is_empty() && self.seed.members.values().all(|ended| *ended);
-        let probe = if ended {
+        let probe = if ended || self.tail_uncertain {
             ParentProbe::Ended
         } else {
-            pane_probe(&self.seed, &self.workspace_id)
+            pane_probe(&self.seed, &self.paths.workspace_id)
         };
         if !self.observe(probe) {
             return false;
         }
-        // Pane absence settles before the confirmation; a durable end has nothing to wait for.
+        // Only pane-strike nominations wait for reconfirmation.
         if probe != ParentProbe::Ended {
             thread::sleep(RECONFIRM_DELAY);
         }
-        match (self.confirm)(&self.seed) {
+        self.next_probe = self.next_probe.max(Instant::now() + probe_interval());
+        match (self.confirm)(&self.seed, probe != ParentProbe::Ended) {
             ProbeConfirm::Ended => true,
-            ProbeConfirm::Alive {
-                members,
-                parent_pane,
-            } => {
-                self.seed.members = members;
-                self.seed.parent_pane = parent_pane;
+            ProbeConfirm::Alive(seed) => {
+                self.tail = LaunchTail::from_cursor(self.paths.clone(), seed.cursor);
+                self.seed = *seed;
+                self.tail_uncertain = false;
                 self.strikes = 0;
                 self.last_observed_at_ms = None;
                 false
@@ -277,7 +325,7 @@ fn observe_frame(seed: &mut WatchdogSeed, event: EventEnvelope) -> bool {
                     .as_ref()
                     .is_some_and(|id| seed.parent_refs.contains(id)) =>
         {
-            seed.members.insert(payload.agent_id, false);
+            seed.members.entry(payload.agent_id).or_insert(false);
             if Some(&payload.pane_id) != seed.child_pane.as_ref() {
                 seed.parent_pane = Some(payload.pane_id);
             }

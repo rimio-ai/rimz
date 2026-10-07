@@ -2,7 +2,7 @@ use super::*;
 
 fn watchdog() -> ParentWatchdog {
     let (_dir, paths, _rt, seed) = fixture();
-    ParentWatchdog::from_seed(seed, paths, |_| ProbeConfirm::Unknown)
+    ParentWatchdog::from_seed(seed, paths, |_, _| ProbeConfirm::Unknown)
 }
 
 #[test]
@@ -145,7 +145,7 @@ fn cursor_end_requires_confirmation_without_parsing_carryover() {
     append(&paths, "OLD", LifecycleSignal::Ended);
     let calls = Arc::new(Mutex::new(0));
     let seen = calls.clone();
-    let mut watch = ParentWatchdog::from_seed(seed, paths, move |_| {
+    let mut watch = ParentWatchdog::from_seed(seed, paths, move |_, _| {
         *seen.lock().unwrap() += 1;
         ProbeConfirm::Ended
     });
@@ -165,14 +165,13 @@ fn alive_successor_reseeds_and_later_end_is_confirmed_with_a_probe_floor() {
     append(&paths, "OLD", LifecycleSignal::Ended);
     let calls = Arc::new(Mutex::new(0));
     let seen = calls.clone();
-    let mut watch = ParentWatchdog::from_seed(seed, paths.clone(), move |_| {
+    let mut watch = ParentWatchdog::from_seed(seed, paths.clone(), move |seed, _| {
         let mut count = seen.lock().unwrap();
         *count += 1;
         if *count == 1 {
-            ProbeConfirm::Alive {
-                members: BTreeMap::from([("OLD".into(), true), ("NEW".into(), false)]),
-                parent_pane: None,
-            }
+            let mut seed = seed.clone();
+            seed.members = BTreeMap::from([("OLD".into(), true), ("NEW".into(), false)]);
+            ProbeConfirm::Alive(Box::new(seed))
         } else {
             ProbeConfirm::Ended
         }
@@ -225,7 +224,7 @@ fn attach_adds_the_parent_member_before_its_end_counts() {
     .unwrap();
     let calls = Arc::new(Mutex::new(0));
     let seen = calls.clone();
-    let mut watch = ParentWatchdog::from_seed(seed, paths.clone(), move |_| {
+    let mut watch = ParentWatchdog::from_seed(seed, paths.clone(), move |_, _| {
         *seen.lock().unwrap() += 1;
         ProbeConfirm::Ended
     });
@@ -252,12 +251,138 @@ fn seed_to_first_probe_rotation_loses_no_end_frame() {
         .rotate_event_log(1, None)
         .unwrap();
     invalidate_carryover(&paths);
-    let mut watch = ParentWatchdog::from_seed(seed, paths, |_| ProbeConfirm::Ended);
+    let mut watch = ParentWatchdog::from_seed(seed, paths, |_, _| ProbeConfirm::Ended);
     let before = crate::store::snapshot::fold_testkit::carryover_bytes_parsed();
     let due = watch.next_probe;
     assert!(probe_without_fold(&mut watch, due));
     assert_eq!(
         crate::store::snapshot::fold_testkit::carryover_bytes_parsed(),
         before
+    );
+}
+
+#[test]
+fn receipt_mode_wakes_a_sleeping_watch_and_drains_without_a_confirm() {
+    let (_dir, paths, _rt, seed) = fixture();
+    let watch = ParentWatchdog::from_seed(seed, paths.clone(), |_, _| {
+        panic!("receipt drains must not confirm before the probe interval")
+    })
+    .start();
+    watch.set_receipt_waiting(true);
+    append(
+        &paths,
+        "OLD",
+        LifecycleSignal::TurnEnded {
+            errored: false,
+            parked_on_background: false,
+            turn_id: None,
+        },
+    );
+    let deadline = Instant::now() + Duration::from_millis(1250);
+    while !watch.take_parent_changed() {
+        assert!(
+            Instant::now() < deadline,
+            "receipt mode must wake and drain within one second"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+    watch.set_receipt_waiting(false);
+}
+
+#[test]
+fn corrupt_archived_cursor_still_confirms_parent_end() {
+    let (_dir, paths, rt, mut seed) = fixture();
+    seed.cursor.offset += 1;
+    append(&paths, "OLD", LifecycleSignal::Ended);
+    crate::Store::open(paths.clone(), rt)
+        .unwrap()
+        .rotate_event_log(1, None)
+        .unwrap();
+    let mut watch = ParentWatchdog::from_seed(seed, paths, |_, _| ProbeConfirm::Ended);
+    let due = watch.next_probe;
+    assert!(
+        probe_without_fold(&mut watch, due),
+        "a tail error must retain the authoritative backstop"
+    );
+}
+
+#[test]
+fn missing_archive_still_confirms_parent_end() {
+    let (_dir, paths, rt, seed) = fixture();
+    append(&paths, "OLD", LifecycleSignal::Ended);
+    crate::Store::open(paths.clone(), rt)
+        .unwrap()
+        .rotate_event_log(1, None)
+        .unwrap();
+    for archive in std::fs::read_dir(&paths.events_archive_dir).unwrap() {
+        std::fs::remove_file(archive.unwrap().path()).unwrap();
+    }
+    let mut watch = ParentWatchdog::from_seed(seed, paths, |_, _| ProbeConfirm::Ended);
+    let due = watch.next_probe;
+    assert!(
+        probe_without_fold(&mut watch, due),
+        "an archive gap must nominate confirmation"
+    );
+}
+
+#[test]
+fn an_unseeded_watch_is_seeded_by_its_first_confirmation() {
+    let (_dir, paths, _rt, mut seed) = fixture();
+    seed.members.clear();
+    seed.parent_refs.clear();
+    let calls = Arc::new(Mutex::new(0));
+    let seen = calls.clone();
+    let mut watch = ParentWatchdog::from_seed(seed, paths, move |seed, _| {
+        *seen.lock().unwrap() += 1;
+        let mut seed = seed.clone();
+        seed.parent_refs = vec!["L".into()];
+        seed.members = BTreeMap::from([("NEW".into(), false)]);
+        ProbeConfirm::Alive(Box::new(seed))
+    });
+    let due = watch.next_probe;
+    assert!(!probe_without_fold(&mut watch, due));
+    assert_eq!(
+        *calls.lock().unwrap(),
+        1,
+        "an unresolved launch needs its first confirm"
+    );
+    assert_eq!(
+        watch.seed.members.get(&AgentSessionId::from("NEW")),
+        Some(&false)
+    );
+}
+
+#[test]
+fn an_attach_does_not_revive_an_ended_parent_member() {
+    let (_dir, _paths, _rt, mut seed) = fixture();
+    seed.members.insert("OLD".into(), true);
+    observe_frame(
+        &mut seed,
+        EventEnvelope::agent_attached(
+            WorkspaceId::from_project_root(std::path::Path::new("/test")),
+            "room",
+            &AgentKind::new_unchecked("codex"),
+            AgentAttachPayload {
+                agent_id: "OLD".into(),
+                launch_id: Some("L".into()),
+                pane_id: PaneId::parse("tmux:%77").unwrap(),
+                record: None,
+                tier: None,
+                mode: None,
+                isolation: None,
+                effective_isolation: None,
+                login: None,
+                pane_pid: None,
+                runtime_owner: crate::store::runtime::current_process_owner(
+                    crate::pane::RuntimeOwnerKind::Agent,
+                    "OLD",
+                ),
+            },
+        ),
+    );
+    assert_eq!(
+        seed.members.get(&AgentSessionId::from("OLD")),
+        Some(&true),
+        "attach changes placement, not lifecycle"
     );
 }

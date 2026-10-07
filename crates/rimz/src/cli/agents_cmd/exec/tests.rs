@@ -164,6 +164,10 @@ fn parent_watchdog_is_admitted_only_for_a_child_that_dies_with_its_parent() {
         run_id: None,
         prompt: None,
     };
+    assert!(
+        subagent_parent_watchdog(&request, Some(&context), Some(&identity), false).is_some(),
+        "an unresolved parent must keep its watchdog backstop"
+    );
     for id in ["parent", "child-launch"] {
         let mut observation = rimz::agents::AgentLifecycleObservation::new(
             Some(id.into()),
@@ -202,64 +206,6 @@ fn parent_watchdog_is_admitted_only_for_a_child_that_dies_with_its_parent() {
     assert!(!admitted(&record), "a kept child outlives its parent");
 }
 
-#[test]
-fn terminal_self_cleanup_defers_to_waiter_and_survives_rearm() {
-    let state = tempfile::tempdir().unwrap();
-    let runtime_root = tempfile::tempdir_in("/tmp").unwrap();
-    let workspace_id = rimz::WorkspaceId::from_project_root(state.path());
-    let paths = rimz::StatePaths::under(workspace_id.clone(), state.path()).unwrap();
-    let runtime = rimz::RuntimePaths::under(workspace_id.clone(), runtime_root.path()).unwrap();
-    paths.ensure_dirs().unwrap();
-    runtime.ensure_dirs().unwrap();
-    let mut record = rimz::store::run::RunRecord::new(
-        workspace_id.clone(),
-        AgentKind::new_unchecked("claude"),
-        PermissionMode::Auto,
-        "check".to_owned(),
-        state.path().to_owned(),
-    );
-    record.status = rimz::store::run::RunStatus::Completed;
-    rimz::harness::run::create(&paths, &record).unwrap();
-    let context = RunPaths {
-        run_id: record.run_id.clone(),
-        paths,
-        runtime,
-    };
-    let now = Instant::now();
-    let mut monitor = RunMonitor::new(true, StopPolicy::RunTerminal, None, now);
-    let mut spawn = |_| panic!("terminal cleanup needs no helper");
-    assert!(
-        monitor.poll(&context, now, false, &mut spawn),
-        "background run has no waiter"
-    );
-    let waiter = rimz::harness::run_wake::RunWaiter::bind(
-        &context.runtime,
-        rimz::harness::run_wake::ExpectedRunFrame {
-            workspace_id,
-            run_id: record.run_id.clone(),
-        },
-        rimz::harness::run::RunCancellation::new(),
-    )
-    .unwrap();
-    assert!(
-        !monitor.poll(&context, now, false, &mut spawn),
-        "live waiter owns verification and evidence capture"
-    );
-    record.status = rimz::store::run::RunStatus::Running;
-    rimz::harness::run::create(&context.paths, &record).unwrap();
-    drop(waiter);
-    assert!(
-        !monitor.poll(&context, now, false, &mut spawn),
-        "rearmed run remains active even without a waiter"
-    );
-    record.status = rimz::store::run::RunStatus::Completed;
-    rimz::harness::run::create(&context.paths, &record).unwrap();
-    assert!(
-        monitor.poll(&context, now, false, &mut spawn),
-        "terminal run is reclaimed once waiter leaves"
-    );
-}
-
 fn parse_exec_request(input: &ExecRequest) -> ExecRequest {
     let dir = tempfile::tempdir().expect("temp dir");
     let runtime = rimz::RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path())
@@ -281,7 +227,7 @@ fn parse_exec_request(input: &ExecRequest) -> ExecRequest {
     .expect("decode exec request")
 }
 
-fn minimal_exec_request(kind: &str, action: ExecAction) -> ExecRequest {
+pub(super) fn minimal_exec_request(kind: &str, action: ExecAction) -> ExecRequest {
     ExecRequest {
         isolation_default: None,
         kind: AgentKind::new_unchecked(kind),
@@ -639,37 +585,6 @@ mod pane_exec {
     /// The respawn decision is the consumer's: whatever ended the relaunch
     /// during the wait (a late first hook, a terminal or timed-out run, an
     /// ended parent, a stop) is read by the last ask before the spawn.
-    #[test]
-    fn a_relaunch_is_asked_again_until_its_wait_ends() {
-        use rimz::harness::run::StartupRelaunch::{Due, No, Spent};
-
-        assert_eq!(startup_relaunch_at(Instant::now(), || Due), Due);
-        assert_eq!(startup_relaunch_at(Instant::now(), || Spent), Spent);
-        assert_eq!(
-            startup_relaunch_at(Instant::now(), || No),
-            No,
-            "a zero wait still asks once"
-        );
-
-        let asked = std::cell::Cell::new(0);
-        let started = Instant::now();
-        let answer = startup_relaunch_at(started + Duration::from_secs(60), || {
-            asked.set(asked.get() + 1);
-            if asked.get() < 3 { Due } else { No }
-        });
-        assert_eq!(answer, No, "the answer changed during the wait");
-        assert_eq!(asked.get(), 3, "the wait ends at the first refusal");
-        assert!(started.elapsed() < Duration::from_secs(10));
-
-        let asked = std::cell::Cell::new(0);
-        let answer = startup_relaunch_at(Instant::now() + CHILD_WAIT_POLL * 3, || {
-            asked.set(asked.get() + 1);
-            Due
-        });
-        assert_eq!(answer, Due);
-        assert!(asked.get() >= 2, "asked after the wait, not only before it");
-    }
-
     /// A rebirth parks the agent after its wrapper took the pane; the wrapper's
     /// abrupt exit then reads the record through a real store and stamps nothing.
     #[test]
@@ -1056,225 +971,5 @@ mod runs {
                 fail_run_if_child_exited_first(&context, &globals, Duration::ZERO);
             }
         }
-    }
-}
-
-mod monitor {
-    use super::*;
-    use std::rc::Rc;
-
-    fn fixture(
-        status: rimz::store::run::RunStatus,
-    ) -> (tempfile::TempDir, RunPaths, rimz::store::run::RunRecord) {
-        let dir = tempfile::tempdir().unwrap();
-        let id = rimz::WorkspaceId::from_project_root(dir.path());
-        let paths = rimz::StatePaths::under(id.clone(), dir.path()).unwrap();
-        let runtime = rimz::RuntimePaths::under(id.clone(), dir.path()).unwrap();
-        rimz::Store::open(paths.clone(), runtime.clone()).unwrap();
-        let mut record = rimz::store::run::RunRecord::new(
-            id,
-            AgentKind::new_unchecked("codex"),
-            rimz::agents::PermissionMode::Auto,
-            "work".into(),
-            dir.path().into(),
-        );
-        record.status = status;
-        rimz::harness::run::create(&paths, &record).unwrap();
-        let context = RunPaths {
-            run_id: record.run_id.clone(),
-            paths,
-            runtime,
-        };
-        (dir, context, record)
-    }
-
-    #[test]
-    fn strand_is_single_flight_stops_with_its_phase_and_backs_off_failures() {
-        let (_dir, context, mut record) = fixture(rimz::store::run::RunStatus::Running);
-        record.parked_at = Some(jiff::Timestamp::now());
-        rimz::harness::run::create(&context.paths, &record).unwrap();
-        let now = Instant::now();
-        let mut monitor = RunMonitor::new(false, StopPolicy::RunTerminal, None, now);
-        let mut calls = Vec::new();
-        let statuses = Rc::new(RefCell::new(Vec::new()));
-        let children = statuses.clone();
-        let mut spawn = |duty| {
-            calls.push(duty);
-            let status = Rc::new(RefCell::new(None));
-            children.borrow_mut().push(status.clone());
-            Ok(DutyChild::Fake(status))
-        };
-        assert!(!monitor.poll(&context, now, false, &mut spawn));
-        assert_eq!(
-            statuses.borrow().len(),
-            1,
-            "the park launches a strand duty"
-        );
-        assert!(!monitor.poll(&context, now + PARK_STRAND_POLL, false, &mut spawn));
-        assert_eq!(
-            statuses.borrow().len(),
-            1,
-            "a live strand is never duplicated"
-        );
-        *statuses.borrow()[0].borrow_mut() = Some(1);
-        let failed = now + PARK_STRAND_POLL;
-        monitor.poll(&context, failed, false, &mut spawn);
-        monitor.poll(
-            &context,
-            failed + PARK_STRAND_POLL - RUN_MONITOR_POLL,
-            false,
-            &mut spawn,
-        );
-        assert_eq!(
-            statuses.borrow().len(),
-            1,
-            "record ticks do not accelerate retry"
-        );
-        monitor.poll(&context, failed + PARK_STRAND_POLL, false, &mut spawn);
-        assert_eq!(statuses.borrow().len(), 2);
-        record.parked_at = None;
-        rimz::harness::run::create(&context.paths, &record).unwrap();
-        monitor.poll(
-            &context,
-            failed + PARK_STRAND_POLL + RUN_MONITOR_POLL,
-            false,
-            &mut spawn,
-        );
-        assert!(
-            monitor.strand.is_none(),
-            "leaving the park stops its resident helper"
-        );
-        assert_eq!(
-            calls,
-            vec![
-                Duty::Strand {
-                    run_id: context.run_id.clone()
-                };
-                2
-            ]
-        );
-    }
-
-    #[test]
-    fn receipt_is_triggered_and_spaced_and_a_new_parent_event_invalidates_success() {
-        let (_dir, context, _record) = fixture(rimz::store::run::RunStatus::Completed);
-        let now = Instant::now();
-        let mut monitor = RunMonitor::new(true, StopPolicy::ParentReceived, None, now);
-        let mut calls = Vec::new();
-        let statuses = Rc::new(RefCell::new(Vec::new()));
-        let children = statuses.clone();
-        let mut spawn = |duty| {
-            calls.push(duty);
-            let status = Rc::new(RefCell::new(None));
-            children.borrow_mut().push(status.clone());
-            Ok(DutyChild::Fake(status))
-        };
-        assert!(!monitor.poll(&context, now, false, &mut spawn));
-        assert_eq!(
-            statuses.borrow().len(),
-            1,
-            "completion launches a receipt duty"
-        );
-        *statuses.borrow()[0].borrow_mut() = Some(3);
-        assert!(!monitor.poll(&context, now + RUN_MONITOR_POLL, false, &mut spawn));
-        assert!(!monitor.poll(&context, now + 2 * RUN_MONITOR_POLL, true, &mut spawn));
-        assert_eq!(
-            statuses.borrow().len(),
-            1,
-            "a trigger respects the one-second floor"
-        );
-        assert!(!monitor.poll(&context, now + PARENT_RECEIPT_POLL, false, &mut spawn));
-        assert_eq!(statuses.borrow().len(), 2);
-        *statuses.borrow()[1].borrow_mut() = Some(0);
-        assert!(
-            !monitor.poll(
-                &context,
-                now + PARENT_RECEIPT_POLL + RUN_MONITOR_POLL,
-                true,
-                &mut spawn
-            ),
-            "a newer parent event invalidates the receipt before cleanup"
-        );
-        assert!(!monitor.poll(&context, now + 2 * PARENT_RECEIPT_POLL, false, &mut spawn));
-        *statuses.borrow()[2].borrow_mut() = Some(0);
-        assert!(monitor.poll(
-            &context,
-            now + 2 * PARENT_RECEIPT_POLL + RUN_MONITOR_POLL,
-            false,
-            &mut spawn
-        ));
-        assert!(monitor.poll(&context, now + 3 * PARENT_RECEIPT_POLL, false, &mut spawn));
-        assert_eq!(
-            statuses.borrow().len(),
-            3,
-            "quiet receipts do not poll every second"
-        );
-        std::fs::create_dir_all(&context.paths.messages_dir).unwrap();
-        std::fs::write(
-            context.paths.messages_dir.join("messages.jsonl"),
-            "queue changed",
-        )
-        .unwrap();
-        assert!(!monitor.poll(&context, now + 3 * PARENT_RECEIPT_POLL, false, &mut spawn));
-        assert_eq!(
-            statuses.borrow().len(),
-            4,
-            "a queue stamp change starts a fresh check"
-        );
-        *statuses.borrow()[3].borrow_mut() = Some(3);
-        assert!(!monitor.poll(&context, now + 4 * PARENT_RECEIPT_POLL, false, &mut spawn));
-        monitor.poll(&context, now + Duration::from_secs(62), false, &mut spawn);
-        assert_eq!(statuses.borrow().len(), 4);
-        monitor.poll(&context, now + Duration::from_secs(63), false, &mut spawn);
-        assert_eq!(
-            statuses.borrow().len(),
-            5,
-            "the fallback eventually rechecks an unchanged queue"
-        );
-        assert_eq!(
-            calls,
-            vec![
-                Duty::Receipt {
-                    run_id: context.run_id.clone(),
-                    report: true
-                },
-                Duty::Receipt {
-                    run_id: context.run_id.clone(),
-                    report: false
-                },
-                Duty::Receipt {
-                    run_id: context.run_id.clone(),
-                    report: false
-                },
-                Duty::Receipt {
-                    run_id: context.run_id.clone(),
-                    report: false
-                },
-                Duty::Receipt {
-                    run_id: context.run_id.clone(),
-                    report: false
-                },
-            ]
-        );
-    }
-
-    #[test]
-    fn detached_terminal_cleanup_respects_reopen_and_waiter_without_helpers() {
-        let (_dir, context, mut record) = fixture(rimz::store::run::RunStatus::Completed);
-        record.report_to = rimz::store::run::ReportTo::Nobody;
-        rimz::harness::run::create(&context.paths, &record).unwrap();
-        let now = Instant::now();
-        let mut monitor = RunMonitor::new(
-            true,
-            StopPolicy::ParentReceived,
-            Some(record.follow_ups),
-            now,
-        );
-        let mut spawn = |_| panic!("detached cleanup needs no helper");
-        assert!(!monitor.poll(&context, now, false, &mut spawn));
-        record.follow_ups += 1;
-        rimz::harness::run::create(&context.paths, &record).unwrap();
-        assert!(monitor.poll(&context, now, false, &mut spawn));
-        assert_eq!(monitor.awaiting_reopen, None);
     }
 }

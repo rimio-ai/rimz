@@ -247,7 +247,7 @@ Per workspace, RimZ pays once. The producer pays the roster and metrics on its f
 
 Per worktree, cost follows activity. The git input set scales with distinct group roots, not agents; a root drops to its idle TTL once its agents go quiet, and the sweep runs at most 8 roots at once. PR probes scale with origin repositories, each enumerating open PRs once when due. A hundred agents sharing a few checkouts pay for a few hot roots.
 
-Per agent, cost is event-driven. An agent reports through a short-lived `rimz hooks feed` child that appends when something happens and exits. Nothing resident wraps a running agent, so an agent blocked on a question holds no RimZ process.
+Per agent, cost is event-driven. An agent reports through a short-lived `rimz hooks feed` child that appends when something happens and exits. Direct-exec launches leave no wrapper. A surviving Unix wrapper re-execs into a parked image with no store and an 8 MiB PSS budget, guarded by the live `backend::tmux::agent_lifecycle::parked_wrapper_holds_under_8_mib` test and the thin-image invariant. Fold-dependent duties run in helper children: strand repair is resident only for its parked nonterminal phase, while receipt, parent confirmation and card evidence are one-shot. A `--keep` subagent's settled linger is outside this budget ([the exec wrapper](./harness/fleet.md#direct-exec-or-resident-wrapper)).
 
 Two costs stay flat in agent count: one group `fdatasync` per second per workspace however many agents append, and one snapshot rename per second per workspace. Both scale with rooms. The hot runtime caches live in `$XDG_RUNTIME_DIR` (tmpfs), so their churn is memory traffic, not disk IO.
 

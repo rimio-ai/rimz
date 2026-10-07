@@ -1,6 +1,27 @@
 use super::*;
 use crate::ids::WorkspaceId;
 
+#[test]
+fn park_files_stay_in_the_temp_unit_and_distinguish_launches_and_pids() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = StatePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
+    let launch = crate::ids::AgentSessionId::from("../../outside");
+    let file = paths.park_state_file(Some("parent"), Some(&launch), 10);
+    assert_eq!(
+        file.parent(),
+        Some(paths.temp_unit_dir(Some("parent")).as_path())
+    );
+    assert_ne!(
+        file,
+        paths.park_state_file(Some("parent"), Some(&launch), 11)
+    );
+    assert_ne!(
+        file,
+        paths.park_state_file(Some("parent"), Some(&".._.._outside".into()), 10)
+    );
+    assert_ne!(file, paths.park_state_file(Some("parent"), None, 10));
+}
+
 impl StatePaths {
     /// Room-local state paths.
     fn all_paths(&self) -> Vec<PathBuf> {

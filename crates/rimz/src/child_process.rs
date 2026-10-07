@@ -29,6 +29,51 @@ static REAPER_INIT: Mutex<()> = Mutex::new(());
 #[cfg(test)]
 static REAPER_STARTS: AtomicUsize = AtomicUsize::new(0);
 
+/// Keep cleanup signals pending across an image handoff and out of worker threads.
+#[cfg(unix)]
+pub struct CleanupSignalMask {
+    previous: nix::sys::signal::SigSet,
+}
+
+#[cfg(unix)]
+impl CleanupSignalMask {
+    pub fn block() -> io::Result<Self> {
+        use nix::sys::signal::{SigSet, SigmaskHow, pthread_sigmask};
+        let mut previous = SigSet::empty();
+        pthread_sigmask(
+            SigmaskHow::SIG_BLOCK,
+            Some(&Self::signals()),
+            Some(&mut previous),
+        )?;
+        Ok(Self { previous })
+    }
+
+    pub fn unblock() -> io::Result<()> {
+        use nix::sys::signal::{SigmaskHow, pthread_sigmask};
+        pthread_sigmask(SigmaskHow::SIG_UNBLOCK, Some(&Self::signals()), None)?;
+        Ok(())
+    }
+
+    fn signals() -> nix::sys::signal::SigSet {
+        use nix::sys::signal::{SigSet, Signal};
+        let mut signals = SigSet::empty();
+        for signal in [Signal::SIGHUP, Signal::SIGTERM, Signal::SIGINT] {
+            signals.add(signal);
+        }
+        signals
+    }
+}
+
+#[cfg(unix)]
+impl Drop for CleanupSignalMask {
+    fn drop(&mut self) {
+        use nix::sys::signal::{SigmaskHow, pthread_sigmask};
+        if let Err(error) = pthread_sigmask(SigmaskHow::SIG_SETMASK, Some(&self.previous), None) {
+            tracing::error!(%error, "could not restore cleanup signal mask");
+        }
+    }
+}
+
 /// A child whose exit can wake an event-driven supervisor.
 pub struct SupervisedChild {
     #[cfg(unix)]
@@ -49,6 +94,9 @@ impl SupervisedChild {
 
     #[cfg(unix)]
     fn adopt_target(pid: u32, target: WaitTarget, wake: Sender<()>) -> Self {
+        let _worker_mask = CleanupSignalMask::block()
+            .inspect_err(|error| tracing::warn!(%error, "could not mask child waiter signals"))
+            .ok();
         let status = Arc::new(Mutex::new(None));
         let waiter = SupervisedWaiter {
             target: Some(target),
@@ -195,6 +243,7 @@ fn wait_pid(pid: u32) -> io::Result<std::process::ExitStatus> {
 /// Forward process signals to an event-driven supervisor.
 #[cfg(unix)]
 pub fn register_signal_wake(signals: Vec<i32>, wake: Sender<()>) -> io::Result<()> {
+    let _worker_mask = CleanupSignalMask::block()?;
     let mut signals = signal_hook::iterator::Signals::new(signals)?;
     std::thread::Builder::new()
         .name("rimz-signal-wake".to_owned())
@@ -467,6 +516,8 @@ fn reaper_sender() -> io::Result<&'static Sender<Child>> {
         return Ok(sender);
     }
 
+    #[cfg(unix)]
+    let _worker_mask = CleanupSignalMask::block()?;
     let (tx, rx) = mpsc::channel::<Child>();
     std::thread::Builder::new()
         .name("rimz-child-reaper".to_owned())
@@ -510,6 +561,10 @@ fn reaper_loop(rx: Receiver<Child>) {
 }
 
 fn spawn_fallback_waiter(child: Child, label: &'static str) {
+    #[cfg(unix)]
+    let _worker_mask = CleanupSignalMask::block()
+        .inspect_err(|error| tracing::warn!(%error, "could not mask fallback waiter signals"))
+        .ok();
     let pid = child.id();
     let waiter = WaitOnDrop {
         child: Some(child),
@@ -857,6 +912,44 @@ mod tests {
                 crate::proc::stat_metrics(pid).map(|stat| stat.state)
             );
             std::thread::sleep(REAP_WAIT_STEP);
+        }
+    }
+    #[cfg(unix)]
+    #[test]
+    fn cleanup_mask_is_inherited_by_workers_and_restored_on_the_caller() {
+        use nix::sys::signal::{SigSet, SigmaskHow, Signal, pthread_sigmask};
+        let current = || {
+            let mut signals = SigSet::empty();
+            pthread_sigmask(SigmaskHow::SIG_BLOCK, None, Some(&mut signals)).unwrap();
+            signals
+        };
+        let before = current();
+        let mask = CleanupSignalMask::block().unwrap();
+        for signal in [Signal::SIGHUP, Signal::SIGTERM, Signal::SIGINT] {
+            assert!(
+                current().contains(signal),
+                "handoff must retain {signal:?} as pending"
+            );
+        }
+        let worker = std::thread::spawn(current).join().unwrap();
+        for signal in [Signal::SIGHUP, Signal::SIGTERM, Signal::SIGINT] {
+            assert!(
+                worker.contains(signal),
+                "workers must not consume {signal:?} during exec"
+            );
+        }
+        drop(mask);
+        for signal in [
+            Signal::SIGHUP,
+            Signal::SIGTERM,
+            Signal::SIGINT,
+            Signal::SIGUSR1,
+        ] {
+            assert_eq!(
+                current().contains(signal),
+                before.contains(signal),
+                "provider spawn keeps its original {signal:?} mask"
+            );
         }
     }
 }

@@ -25,6 +25,8 @@ Detail lives in four places, narrowing as you go:
 
 There is no general RimZ daemon. Store writes belong to CLI or hook subprocesses, and the sidebar is a native pane that reads store state in process.
 
+Surviving agent exec wrappers have two images on Unix: startup compiles and binds the provider, then same-PID exec enters a thin parked image that holds no store. Fold-dependent supervision duties run in hidden helper children, and the wrapper opens the store only after provider exit for settlement. Direct exec and off-Unix supervision retain their existing shape ([the exec wrapper](./docs/internals/harness/fleet.md#direct-exec-or-resident-wrapper)).
+
 The sidebar's painter is one detached process per mux session, the hidden `rimz sidebar host`. Each tab's sidebar pane runs a `rimz sidebar serve` supervisor that holds the pane's terminal and hands the host its output, and the host paints every pane of the room over one shared data plane. It is started by the first pane that finds none, exits ten seconds after its last pane detaches, and is replaced on reload; a pane it cannot take is painted by that pane's own worker process ([state.md](./docs/internals/sidebar/state.md#the-room-host-and-its-attachments)).
 
 An attended recovery into a clientless Zellij room uses a bounded detached `rimz recover-parked` helper: it waits for attach, then settles the user's decision through the same room recovery path. Its output goes to the room's state log. [Resume and rebirth](./docs/internals/harness/fleet.md#resume-and-rebirth) owns the consent, locking, and failure rules.

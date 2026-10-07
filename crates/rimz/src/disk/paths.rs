@@ -354,6 +354,21 @@ impl StatePaths {
         self.tmp_dir.join(owner.unwrap_or(UNNAMED_DIR))
     }
 
+    /// The launch's private same-PID exec handoff file.
+    pub fn park_state_file(
+        &self,
+        owner: Option<&str>,
+        launch_id: Option<&crate::ids::AgentSessionId>,
+        wrapper_pid: u32,
+    ) -> PathBuf {
+        let launch = launch_id.map_or_else(
+            || "unnamed".to_owned(),
+            |id| hex::encode(Sha256::digest(id.as_str().as_bytes())),
+        );
+        self.temp_unit_dir(owner)
+            .join(format!("park.{launch}.{wrapper_pid}.json"))
+    }
+
     /// Every temp unit directory the room has on disk, including the units an
     /// interrupted reset left under the detached sibling of `tmp/`.
     pub(crate) fn temp_unit_dirs(&self) -> Vec<PathBuf> {
