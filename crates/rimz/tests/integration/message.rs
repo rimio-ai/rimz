@@ -2310,6 +2310,7 @@ fn orphan_repair_records_no_end_while_the_run_pane_stays_open() {
     );
     run.agent_id = Some("child".into());
     run.status = RunStatus::Completed;
+    run.subagent = true;
     rimz::harness::run::create(store.paths(), &run).expect("create run");
     let session = env.resolve_workspace(&env.project_root).session_name;
 
@@ -2363,6 +2364,103 @@ fn orphan_repair_records_no_end_while_the_run_pane_stays_open() {
         })
         .expect("a repair-failed diagnostic");
     assert!(failed.contains("is still open"), "{failed}");
+}
+
+#[test]
+fn orphan_repair_records_one_end_with_and_without_a_run() {
+    use rimz::store::run::{RunRecord, RunStatus};
+
+    for with_run in [false, true] {
+        let env = Env::new();
+        env.install_agent_hooks("claude");
+        append_lifecycle(
+            &env,
+            "claude",
+            "SessionStart",
+            "child",
+            LifecycleSignal::Registered,
+            |observation| {
+                observation.pane_id = Some(PaneId::from_parts(MuxName::Zellij, TRACE_PANE));
+                observation.launch.parent_agent_id = Some("gone".into());
+                observation.launch.parent_agent_kind = Some(AgentKind::new_unchecked("claude"));
+                observation.launch.launch_depth = Some(1);
+            },
+        );
+        let store = env.store();
+        let kind = AgentKind::new_unchecked("claude");
+        if with_run {
+            let mut run = RunRecord::new(
+                env.workspace_id.clone(),
+                kind.clone(),
+                rimz::agents::PermissionMode::Auto,
+                "task".to_owned(),
+                env.project_root.clone(),
+            );
+            run.agent_id = Some("child".into());
+            run.status = RunStatus::Completed;
+            run.subagent = true;
+            rimz::harness::run::create(store.paths(), &run).unwrap();
+        }
+        run_success(
+            env.rimz().args(["events", "emit", "orphan.test"]),
+            "events emit",
+        );
+        let session = env.resolve_workspace(&env.project_root).session_name;
+        let request = rimz::harness::orphan_sweep::OrphanSubagentRequest {
+            workspace_id: env.workspace_id.clone(),
+            child_kind: kind,
+            child_agent_id: "child".into(),
+            parent_agent_id: "gone".into(),
+        };
+        let output = traced_rimz(&env, "orphan-trace.log")
+            .env("RIMZ_TEST_SUBAGENT_ORPHAN_GRACE_MS", "0")
+            .env(
+                "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
+                format!("{session} [Created 1s ago]\n"),
+            )
+            .env("RIMZ_TEST_ZELLIJ_LIST_PANES", "[]")
+            .args(rimz::child_process::agent_helper_argv(
+                "orphan-subagent",
+                &request,
+            ))
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let agents = store
+            .runtime_projection(rimz::RuntimeScope::Audit)
+            .unwrap()
+            .agents;
+        assert!(agents[0].ended_at.is_some(), "{agents:?}");
+        let events = env.read_events();
+        let ends = events
+            .iter()
+            .filter_map(|event| match event.kind() {
+                rimz::store::event::EventKind::AgentLifecycle(payload)
+                    if payload.observation.signal == LifecycleSignal::Ended =>
+                {
+                    Some(payload)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(ends.len(), 1, "{events:?}");
+        assert_eq!(
+            ends[0].event_name.as_deref(),
+            Some(if with_run {
+                "rimz.subagent-stopped"
+            } else {
+                "rimz.subagent-orphan-reaped"
+            })
+        );
+        assert!(env.diag_records(&session).iter().any(|record| matches!(
+            record.event,
+            rimz::diag::record::DiagEvent::SubagentOrphanReaped { .. }
+        )));
+    }
 }
 
 #[test]
@@ -2642,6 +2740,131 @@ fn parent_message_to_ended_child_reports_missing_conversation() {
 #[test]
 fn parent_message_to_ended_child_refuses_a_login_without_hooks() {
     assert_ended_child_resume_refusal(true);
+}
+
+#[test]
+fn parent_message_to_stopped_pane_gone_child_reaches_resume_refusal() {
+    use rimz::store::run::{RunRecord, RunStatus};
+
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    append_lifecycle(
+        &env,
+        "claude",
+        "SessionStart",
+        "parent",
+        LifecycleSignal::Registered,
+        |observation| {
+            observation.agent_name = Some("parent".to_owned());
+        },
+    );
+    append_lifecycle(
+        &env,
+        "claude",
+        "SessionStart",
+        "child",
+        LifecycleSignal::Registered,
+        |observation| {
+            observation.agent_name = Some("otter".to_owned());
+            observation.pane_id = Some(PaneId::from_parts(MuxName::Zellij, TRACE_PANE));
+            observation.launch.parent_agent_id = Some("parent".into());
+            observation.launch.parent_agent_kind = Some(AgentKind::new_unchecked("claude"));
+            observation.launch.launch_depth = Some(1);
+            observation.launch.isolation = Some(rimz::config::Isolation::Host);
+            observation.transcript_path =
+                Some(env.project_root.join("missing.jsonl").display().to_string());
+        },
+    );
+    let store = env.store();
+    let mut run = RunRecord::new(
+        env.workspace_id.clone(),
+        AgentKind::new_unchecked("claude"),
+        rimz::agents::PermissionMode::Auto,
+        "task".to_owned(),
+        env.project_root.clone(),
+    );
+    run.agent_id = Some("child".into());
+    run.agent_name = Some("otter".to_owned());
+    run.pane_id = Some(PaneId::from_parts(MuxName::Zellij, TRACE_PANE));
+    run.status = RunStatus::Running;
+    run.subagent = true;
+    rimz::harness::run::create(store.paths(), &run).unwrap();
+    let session = env.resolve_workspace(&env.project_root).session_name;
+    let panes = env.write_pane_fixture(&[]);
+    let as_parent = || {
+        let mut command = traced_rimz(&env, "stopped-child-trace.log");
+        command
+            .env(rimz::harness::launch::ENV_AGENT_KIND, "claude")
+            .env(rimz::harness::launch::ENV_AGENT_ID, "parent")
+            .env("RIMZ_TEST_PANE_LIST", &panes)
+            .env(
+                "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
+                format!("{session} [Created 1s ago]\n"),
+            )
+            .env("RIMZ_TEST_ZELLIJ_LIST_PANES", "[]");
+        command
+    };
+    run_success(
+        as_parent().args(["subagents", "stop", "otter"]),
+        "subagents stop",
+    );
+    assert_eq!(
+        rimz::harness::run::load(store.paths(), &run.run_id)
+            .unwrap()
+            .status,
+        RunStatus::Canceled
+    );
+
+    // Check the consumer first: without the end stamp this succeeds and queues forever.
+    let output = as_parent()
+        .args(["message", "@otter", "follow up"])
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "stdout={}; stderr={}; pending={:?}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+        store.list_pending_messages().unwrap()
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("cannot resume @otter") && stderr.contains("no recorded conversation"),
+        "{stderr}"
+    );
+    assert!(store.list_pending_messages().unwrap().is_empty());
+    let agents = store
+        .runtime_projection(rimz::RuntimeScope::Audit)
+        .unwrap()
+        .agents;
+    assert!(
+        agents
+            .iter()
+            .find(|agent| agent.agent_id == "child")
+            .unwrap()
+            .ended_at
+            .is_some(),
+        "{agents:?}"
+    );
+    let events = env.read_events();
+    let ends = events
+        .iter()
+        .filter_map(|event| match event.kind() {
+            rimz::store::event::EventKind::AgentLifecycle(payload)
+                if payload
+                    .observation
+                    .agent_id
+                    .as_ref()
+                    .is_some_and(|id| id == "child")
+                    && payload.observation.signal == LifecycleSignal::Ended =>
+            {
+                Some(payload)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(ends.len(), 1, "{events:?}");
+    assert_eq!(ends[0].event_name.as_deref(), Some("rimz.subagent-stopped"));
 }
 
 fn assert_ended_child_resume_refusal(unhooked: bool) {

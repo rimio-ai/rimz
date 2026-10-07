@@ -32,7 +32,7 @@ pub(super) fn stop(name: &str, globals: &GlobalFlags) -> Result<()> {
                         ));
                         Ok(())
                     }
-                    Err(StopRunErr::NotCanceled(err)) => Err(err),
+                    Err(StopRunErr::NotCanceled(err) | StopRunErr::NotEnded(err)) => Err(err),
                     Ok(()) => Ok(()),
                 }
             }

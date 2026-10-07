@@ -50,6 +50,7 @@ impl SupervisedPresentation {
 
 static RUN_INTERRUPT_SIGNAL_RECEIVED: OnceLock<RunCancellation> = OnceLock::new();
 static RUN_INTERRUPT_HANDLERS_INSTALLED: OnceLock<()> = OnceLock::new();
+const SUBAGENT_STOPPED_EVENT: &str = "rimz.subagent-stopped";
 
 #[cfg(test)]
 use output::RunStreamEvent;
@@ -151,6 +152,9 @@ pub(crate) enum StopRunErr {
     /// The run is terminal and its pane was not confirmed closed.
     #[error("{0}; rerun the stop to close it")]
     PaneOpen(pane::PaneOpen),
+    /// The run is terminal and its pane is gone, but its child's end was not recorded.
+    #[error("run stopped, but recording its child's end failed: {0:#}; rerun the stop")]
+    NotEnded(anyhow::Error),
 }
 
 /// Cancel a live supervised run, then reclaim its pane after the existing
@@ -158,6 +162,7 @@ pub(crate) enum StopRunErr {
 /// pane. `Ok` means the run is terminal and no pane rimz can name for it
 /// remains: the pane is gone, its session is gone, or none was ever recorded or
 /// registered, so a pane nothing names can outlive an `Ok`.
+/// For a subagent run, `Ok` also means its matched card is ended, if it registered.
 pub(crate) fn stop_supervised_run(
     workspace: &rimz::ResolvedWorkspace,
     store: &rimz::Store,
@@ -178,7 +183,8 @@ pub(crate) fn stop_supervised_run(
         run,
         pane::STOP_BACKSTOP_GRACE,
     )
-    .map_err(StopRunErr::PaneOpen)
+    .map_err(StopRunErr::PaneOpen)?;
+    stamp_stopped_subagent_end(store, &workspace.session_name, run).map_err(StopRunErr::NotEnded)
 }
 
 pub(crate) fn cancel_supervised_run(store: &rimz::Store, run: &RunRecord) -> Result<()> {
@@ -186,6 +192,41 @@ pub(crate) fn cancel_supervised_run(store: &rimz::Store, run: &RunRecord) -> Res
         rimz::harness::run::cancel_and_wake(store, &run.run_id)?;
     }
     Ok(())
+}
+
+fn stamp_stopped_subagent_end(
+    store: &rimz::Store,
+    session_name: &str,
+    run: &RunRecord,
+) -> Result<()> {
+    if !run.subagent {
+        return Ok(());
+    }
+    let audit = store
+        .runtime_projection(rimz::RuntimeScope::Audit)
+        .context("reading stopped subagent card")?;
+    let Some(child) = audit
+        .agents
+        .iter()
+        .filter(|agent| agent.ended_at.is_none() && run.matches_agent(agent))
+        .max_by_key(|agent| agent.registered_at)
+    else {
+        return Ok(());
+    };
+    let observation = rimz::agents::AgentLifecycleObservation::new(
+        Some(child.agent_id.clone()),
+        rimz::agents::LifecycleSignal::Ended,
+    );
+    let ended = rimz::EventEnvelope::agent_lifecycle(
+        run.workspace_id.clone(),
+        session_name,
+        child.kind.as_str(),
+        SUBAGENT_STOPPED_EVENT,
+        &observation,
+    );
+    store
+        .append_event(&ended)
+        .context("recording stopped subagent end")
 }
 
 fn run_pane_cmd(

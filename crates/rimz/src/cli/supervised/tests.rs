@@ -860,6 +860,189 @@ struct RunFixture {
     record: RunRecord,
 }
 
+#[test]
+fn stopped_subagent_end_is_recorded_once() {
+    use rimz::agents::{AgentLifecycleObservation, LifecycleSignal};
+
+    let mut fixture = RunFixture::new(RunStatus::Canceled);
+    fixture.record.subagent = true;
+    fixture.record.agent_id = Some("launch_child".into());
+    fixture.record.agent_name = Some("otter".to_owned());
+    let pane_id = PaneId::from_parts(MuxName::Tmux, "%3");
+    fixture
+        .store
+        .append_event(&rimz::EventEnvelope::agent_launched(
+            fixture.workspace_id.clone(),
+            "room",
+            &fixture.record.kind,
+            rimz::store::event::AgentLaunchPayload {
+                agent_id: "launch_child".into(),
+                launch_id: None,
+                agent_name: "otter".to_owned(),
+                agent_name_explicit: false,
+                launch: LaunchParams {
+                    parent_agent_id: Some("parent".into()),
+                    parent_agent_kind: Some(AgentKind::new_unchecked("codex")),
+                    launch_depth: Some(1),
+                    ..Default::default()
+                },
+                state: rimz::store::event::AgentLaunchState::Starting,
+                run_id: Some(fixture.run_id()),
+                pane_id: Some(pane_id.clone()),
+                runtime_owner: None,
+                worktree_path: None,
+                worktree_branch: None,
+                prompt: None,
+                description: None,
+            },
+        ))
+        .unwrap();
+    let mut observation =
+        AgentLifecycleObservation::new(Some("child".into()), LifecycleSignal::Registered);
+    observation.pane_id = Some(pane_id);
+    fixture
+        .store
+        .append_event(&rimz::EventEnvelope::agent_lifecycle(
+            fixture.workspace_id.clone(),
+            "room",
+            "codex",
+            "SessionStart",
+            &observation,
+        ))
+        .unwrap();
+    let registered = fixture
+        .store
+        .runtime_projection(rimz::RuntimeScope::Audit)
+        .unwrap()
+        .agents;
+    assert_eq!(registered.len(), 1, "{registered:?}");
+    assert_eq!(registered[0].agent_id, "child");
+    assert_eq!(registered[0].name.as_deref(), Some("otter"));
+    assert!(fixture.record.matches_agent(&registered[0]));
+
+    stamp_stopped_subagent_end(&fixture.store, "room", &fixture.record).unwrap();
+    stamp_stopped_subagent_end(&fixture.store, "room", &fixture.record).unwrap();
+
+    let agents = fixture
+        .store
+        .runtime_projection(rimz::RuntimeScope::Audit)
+        .unwrap()
+        .agents;
+    assert!(agents[0].ended_at.is_some(), "{agents:?}");
+    let events = fixture.store.read_events().unwrap();
+    let ends = events
+        .iter()
+        .filter_map(|event| match event.kind() {
+            rimz::store::event::EventKind::AgentLifecycle(payload)
+                if payload.observation.signal == LifecycleSignal::Ended =>
+            {
+                Some(payload)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(ends.len(), 1, "{events:?}");
+    assert_eq!(ends[0].event_name.as_deref(), Some("rimz.subagent-stopped"));
+    assert_eq!(ends[0].observation.agent_id.as_ref().unwrap(), "child");
+}
+
+#[test]
+fn stopped_subagent_end_skips_root_ended_and_unmatched_rows() {
+    use rimz::agents::{AgentLifecycleObservation, LifecycleSignal};
+
+    for case in ["root", "ended", "unmatched"] {
+        let mut fixture = RunFixture::new(RunStatus::Canceled);
+        fixture.record.subagent = case != "root";
+        fixture.record.agent_id = Some(
+            if case == "unmatched" {
+                "missing"
+            } else {
+                "child"
+            }
+            .into(),
+        );
+        fixture
+            .store
+            .append_event(&rimz::EventEnvelope::agent_lifecycle(
+                fixture.workspace_id.clone(),
+                "room",
+                "codex",
+                "SessionStart",
+                &AgentLifecycleObservation::new(
+                    Some("child".into()),
+                    if case == "ended" {
+                        LifecycleSignal::Ended
+                    } else {
+                        LifecycleSignal::Registered
+                    },
+                ),
+            ))
+            .unwrap();
+        let before = fixture.store.read_events().unwrap();
+        stamp_stopped_subagent_end(&fixture.store, "room", &fixture.record).unwrap();
+        assert_eq!(fixture.store.read_events().unwrap(), before, "{case}");
+    }
+}
+
+#[test]
+fn stopped_subagent_end_selects_newest_matching_row() {
+    use rimz::agents::{AgentLifecycleObservation, LifecycleSignal};
+
+    let mut fixture = RunFixture::new(RunStatus::Completed);
+    fixture.record.subagent = true;
+    fixture.record.agent_id = Some("older".into());
+    fixture.record.agent_name = Some("otter".to_owned());
+    let registered_at = jiff::Timestamp::now();
+    for (id, name, age) in [("older", "previous", 2), ("newer", "otter", 1)] {
+        let mut observation =
+            AgentLifecycleObservation::new(Some(id.into()), LifecycleSignal::Registered);
+        observation.agent_name = Some(name.to_owned());
+        let mut event = rimz::EventEnvelope::agent_lifecycle(
+            fixture.workspace_id.clone(),
+            "room",
+            "codex",
+            "SessionStart",
+            &observation,
+        );
+        event.timestamp = registered_at - jiff::SignedDuration::from_secs(age);
+        fixture.store.append_event(&event).unwrap();
+    }
+    let before = fixture
+        .store
+        .runtime_projection(rimz::RuntimeScope::Audit)
+        .unwrap()
+        .agents;
+    assert!(
+        before.iter().all(|agent| agent.ended_at.is_none()),
+        "{before:?}"
+    );
+
+    stamp_stopped_subagent_end(&fixture.store, "room", &fixture.record).unwrap();
+    let agents = fixture
+        .store
+        .runtime_projection(rimz::RuntimeScope::Audit)
+        .unwrap()
+        .agents;
+    assert!(
+        agents
+            .iter()
+            .find(|agent| agent.agent_id == "newer")
+            .unwrap()
+            .ended_at
+            .is_some(),
+        "{agents:?}"
+    );
+    assert!(
+        agents
+            .iter()
+            .find(|agent| agent.agent_id == "older")
+            .unwrap()
+            .ended_at
+            .is_none(),
+        "{agents:?}"
+    );
+}
+
 impl RunFixture {
     fn new(status: RunStatus) -> Self {
         let dir = tempfile::Builder::new()
