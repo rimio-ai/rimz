@@ -183,15 +183,16 @@ The browser's room picker is the same manager ([web guide](../../guide/web.md)).
 rimz list [-a | --all] [--json]
 ```
 
-`rimz list` joins RimZ's workspace records with the live Zellij and tmux sessions, matched by session name. By default it shows running rooms and rooms active in the last 24 hours; `--all` adds dormant ones. Running rooms sort first, then by most recent activity. It reads records only and changes no room. With no rows, it prints nothing.
+`rimz list` (alias `rimz ls`) joins RimZ's workspace records with the live Zellij and tmux sessions, matched by session name. By default it shows running rooms and rooms active in the last 24 hours; `--all` adds dormant ones. Running rooms sort first, then by most recent activity. It reads records only and changes no room.
 
 | Column | Content |
 | --- | --- |
-| `WORKSPACE` | Workspace id (`ws_...`). |
-| `SESSION` | Multiplexer session name, the argument to `rimz attach`. |
-| `PROJECT_ROOT` | Absolute project root. |
-| `RUNNING` | `zellij`, `tmux`, or `-` when no session is live. |
-| `LAST_SEEN` | Last activity as `YYYY-MM-DD HH:MM`. A stopped room whose last session died shows the death instead, such as `crashed · 16 agents · 2026-07-02 17:37` or `rebooted · 1 agent · ...`. |
+| `ROOM` | Multiplexer session name, the argument to `rimz attach`. The current room has `(here)` after its name. |
+| `PROJECT` | Project root, abbreviated with `~` under your home directory. |
+| `MUX` | `zellij`, `tmux`, or `-` when no session is live. |
+| `LAST ACTIVE` | Relative age of the last activity, such as `5h ago`. A stopped room whose last session died shows the death instead, such as `crashed · 16 agents · 2h ago` or `rebooted · 1 agent · 2h ago`. |
+
+With no rows, human output leaves stdout empty and prints a hint on stderr. If the default view hides dormant rooms, the hint gives their count and names `rimz list --all`. With no known rooms, it says to run `rimz` in a project. Both exit 0. An empty JSON view prints `[]` on stdout and nothing on stderr.
 
 `--json` prints an array with one object per row:
 
@@ -202,7 +203,9 @@ rimz list [-a | --all] [--json]
 | `session_name` | string |
 | `running_on` | `"zellij"`, `"tmux"`, or `null` |
 | `last_activity` | RFC 3339 timestamp or `null` |
-| `last_death` | the `LAST_SEEN` death summary string, or `null` |
+| `last_death` | death summary with a UTC `YYYY-MM-DD HH:MM` time, such as `crashed · 16 agents · 2026-07-02 17:37`, or `null` |
+| `current` | boolean: whether this is the calling pane's verified room |
+| `last_death_detail` | object with `cause` (`"crash"` or `"reboot"`), `at` (RFC 3339 timestamp), and `lost_agents` (array of objects with `kind`, `agent_id`, and optional `name`), or `null` |
 
 ## Set up the machine
 
