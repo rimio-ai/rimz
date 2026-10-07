@@ -156,7 +156,7 @@ fn rebuild_updates_the_base_inside_the_observed_name_guard() {
     let backend = TmuxBackend::with_socket("/run/user/1000/rimz/tmux/server");
     let pane = crate::PaneId::from_parts(crate::MuxName::Tmux, "%7");
     let rebuild = backend
-        .rebuild_window_command(&pane, "peer.fast ?")
+        .rebuild_window_command(&pane, "peer.fast ?", "peer-fast")
         .expect("tmux pane");
     let guarded = backend
         .window_name_guarded_command(&pane, "founder", "peer.fast ?", &rebuild)

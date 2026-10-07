@@ -11,6 +11,7 @@ fn pane(id: u32) -> PaneFields {
         exited: false,
         is_held: false,
         tab_position: 0,
+        stable_tab_id: Some(0),
         tab_name: Some("main".to_owned()),
         pane_x: Some(0),
         pane_columns: Some(80),
@@ -77,6 +78,7 @@ fn published_topology_payload_carries_clients_without_focus_verdict() {
     let json = serde_json::to_value(payload).expect("topology serializes");
     assert!(json.get("focused_pane").is_none());
     assert_eq!(json["clients"]["views"][0]["pane_id"]["id"], 2);
+    assert_eq!(json["panes"][0]["stable_tab_id"], 0);
     assert!(json["panes"].as_array().unwrap().iter().all(|pane| {
         pane.as_object()
             .is_some_and(|pane| !pane.contains_key("is_focused"))

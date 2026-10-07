@@ -221,6 +221,31 @@ impl TestRoom {
             .with_presence_plugin_for_test(shim)
     }
 
+    fn publish_workspace(&self) {
+        let state = crate::disk::paths::StatePaths::under(
+            self.workspace_id.clone(),
+            self.runtime_root.path(),
+        )
+        .unwrap();
+        state.ensure_dirs().unwrap();
+        crate::workspace::record::write(
+            &state,
+            &crate::workspace::record::WorkspaceRecord {
+                layout: 2,
+                workspace_id: self.workspace_id.clone(),
+                project_root: self.project_root.path().to_path_buf(),
+                worktree_root: None,
+                session_name: "rimz-test".to_owned(),
+                root_class: crate::workspace::RootClass::Directory,
+                rimz_bin: None,
+                rimz_build: None,
+                logins: None,
+                updated_at: jiff::Timestamp::now(),
+            },
+        )
+        .unwrap();
+    }
+
     fn write_cache(
         &self,
         produced_at_ms: u64,
@@ -462,21 +487,73 @@ fn rename_tab_resolves_the_anchor_to_a_stable_id() {
         },
         TabNameIntent::Rebuild {
             observed: "#feat".to_owned(),
+            base: "#feat".to_owned(),
         },
         TabNameIntent::Release {
             observed: "#feat".to_owned(),
         },
     ] {
+        let room = TestRoom::new();
+        room.publish_workspace();
         let claim = matches!(intent, TabNameIntent::Claim { .. });
+        let release = matches!(intent, TabNameIntent::Release { .. });
+        let writes_ownership = !matches!(
+            intent,
+            TabNameIntent::Status { .. } | TabNameIntent::Rest { .. }
+        );
         let (temp, shim) = support::pane_roster_shim(
             r##"[{"id":7,"is_plugin":false,"tab_id":42,"tab_position":3,"tab_name":"#feat","is_focused":false},{"id":8,"is_plugin":false,"tab_id":43,"tab_position":1,"is_focused":true}]"##,
         );
-        let backend = ZellijBackend::with_program_for_test(&shim);
+        let backend = room.backend(&shim);
         let pane = PaneId::from_parts(crate::MuxName::Zellij, "terminal_7");
+        let original = crate::mux::tab_name::TabOwnerRecord {
+            base: "#feat".to_owned(),
+            founders: vec![PaneId::from_parts(crate::MuxName::Zellij, "terminal_99")],
+        };
+        let path = room.runtime.lane_path("tab-owners.json");
+        std::fs::write(
+            &path,
+            serde_json::to_vec(&serde_json::json!({
+                "version": 1, "session_name": "rimz-test",
+                "tabs": {"42": original, "43": {"base": "peer", "founders": []}, "99": original},
+            }))
+            .unwrap(),
+        )
+        .unwrap();
 
         backend
             .rename_tab("rimz-test", &pane, "#feat ✓", intent)
             .expect("rename by stable tab id");
+
+        let file: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        if release {
+            assert!(
+                file["tabs"]["42"].is_null(),
+                "Release clears the anchor's ownership"
+            );
+        } else {
+            let owner: crate::mux::tab_name::TabOwnerRecord =
+                serde_json::from_value(file["tabs"]["42"].clone()).unwrap();
+            assert_eq!(owner.base, "#feat", "recorded base excludes the glyph");
+            assert_eq!(
+                owner.founders,
+                if claim {
+                    vec![pane.clone()]
+                } else {
+                    original.founders
+                }
+            );
+        }
+        assert_eq!(
+            file["tabs"]["43"]["base"], "peer",
+            "live peer ownership survives"
+        );
+        assert_eq!(
+            file["tabs"]["99"].is_null(),
+            writes_ownership,
+            "only owner writes prune dead tabs"
+        );
 
         let log = shim_log(&temp);
         assert!(
@@ -512,16 +589,26 @@ fn projected_rename_skips_a_tab_renamed_since_its_observation() {
         },
         TabNameIntent::Rebuild {
             observed: "shell ?".to_owned(),
+            base: "shell".to_owned(),
         },
         TabNameIntent::Release {
             observed: "shell ?".to_owned(),
         },
     ] {
+        let room = TestRoom::new();
+        room.publish_workspace();
         let (temp, shim) = support::pane_roster_shim(
             r#"[{"id":7,"is_plugin":false,"tab_id":42,"tab_position":3,"tab_name":"opus","is_focused":true}]"#,
         );
-        let backend = ZellijBackend::with_program_for_test(&shim);
+        let backend = room.backend(&shim);
         let pane = PaneId::from_parts(crate::MuxName::Zellij, "terminal_7");
+        let path = room.runtime.lane_path("tab-owners.json");
+        let record = serde_json::to_vec(&serde_json::json!({
+            "version": 1, "session_name": "rimz-test",
+            "tabs": {"42": {"base": "opus", "founders": [pane]}},
+        }))
+        .unwrap();
+        std::fs::write(&path, &record).unwrap();
 
         backend
             .rename_tab("rimz-test", &pane, "shell", intent)
@@ -529,6 +616,192 @@ fn projected_rename_skips_a_tab_renamed_since_its_observation() {
 
         let log = shim_log(&temp);
         assert_eq!(command_count(&log, "action rename-tab-by-id"), 0, "{log}");
+        assert_eq!(
+            std::fs::read(path).unwrap(),
+            record,
+            "stale projections leave ownership untouched"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn rebuild_changes_only_the_owned_base() {
+    let room = TestRoom::new();
+    room.publish_workspace();
+    let (_temp, shim) = support::pane_roster_shim(
+        r#"[{"id":7,"tab_id":42,"tab_position":3,"tab_name":"debugger"}]"#,
+    );
+    let backend = room.backend(&shim);
+    let pane = PaneId::from_parts(crate::MuxName::Zellij, "terminal_7");
+    let path = room.runtime.lane_path("tab-owners.json");
+    std::fs::write(
+        &path,
+        serde_json::to_vec(&serde_json::json!({
+            "version": 1, "session_name": "rimz-test",
+            "tabs": {"42": {"base": "debugger", "founders": ["zellij:terminal_1"]}},
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    backend
+        .rename_tab(
+            "rimz-test",
+            &pane,
+            "brainstormer ✓",
+            crate::mux::tab_name::TabNameIntent::Rebuild {
+                observed: "debugger".to_owned(),
+                base: "brainstormer".to_owned(),
+            },
+        )
+        .unwrap();
+    let file: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(file["tabs"]["42"]["base"], "brainstormer");
+    assert_eq!(
+        file["tabs"]["42"]["founders"],
+        serde_json::json!(["zellij:terminal_1"])
+    );
+    std::fs::write(
+        &path,
+        serde_json::to_vec(&serde_json::json!({
+            "version": 1, "session_name": "rimz-test", "tabs": {},
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    backend
+        .rename_tab(
+            "rimz-test",
+            &pane,
+            "brainstormer ✓",
+            crate::mux::tab_name::TabNameIntent::Rebuild {
+                observed: "debugger".to_owned(),
+                base: "brainstormer".to_owned(),
+            },
+        )
+        .unwrap();
+    let file: serde_json::Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    assert!(
+        file["tabs"].as_object().unwrap().is_empty(),
+        "Rebuild does not claim an unowned tab"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn ownership_rename_holds_the_lock_while_listing_and_renaming() {
+    let room = TestRoom::new();
+    room.publish_workspace();
+    let (temp, shim) = zellij_shim(
+        r#"#!/bin/sh
+dir=$(dirname "$0")
+case " $* " in
+  *" action list-panes "*)
+    touch "$dir/listing"
+    while [ ! -f "$dir/listing-continue" ]; do sleep 0.01; done
+    printf '%s\n' '[{"id":7,"tab_id":42,"tab_name":"debugger"}]' ;;
+  *" action rename-tab-by-id "*)
+    touch "$dir/renaming"
+    while [ ! -f "$dir/renaming-continue" ]; do sleep 0.01; done ;;
+esac
+"#,
+    );
+    let backend = room.backend(&shim);
+    let pane = PaneId::from_parts(crate::MuxName::Zellij, "terminal_7");
+    let lock_path = room.runtime.lock_path("tab-owners.lock");
+    let mut held = Vec::new();
+    std::thread::scope(|scope| {
+        let rename = scope.spawn(|| {
+            backend.rename_tab(
+                "rimz-test",
+                &pane,
+                "brainstormer",
+                crate::mux::tab_name::TabNameIntent::Rebuild {
+                    observed: "debugger".to_owned(),
+                    base: "brainstormer".to_owned(),
+                },
+            )
+        });
+        for stage in ["listing", "renaming"] {
+            let deadline = std::time::Instant::now() + Duration::from_secs(2);
+            while !temp.path().join(stage).exists() {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "rename did not reach {stage}"
+                );
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            held.push(
+                crate::disk::lock::WorkspaceLock::try_acquire(&lock_path)
+                    .unwrap()
+                    .is_none(),
+            );
+            std::fs::write(temp.path().join(format!("{stage}-continue")), b"").unwrap();
+        }
+        rename.join().unwrap().unwrap();
+    });
+    assert_eq!(
+        held,
+        [true, true],
+        "both decisions must exclude another owner writer"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn list_panes_joins_ownership_by_stable_id_on_cached_and_native_paths() {
+    let room = TestRoom::new();
+    room.publish_workspace();
+    let panes = r#"[{"id":7,"tab_id":42,"tab_position":3,"stable_tab_id":42,"tab_name":"debugger"},{"id":8,"tab_id":43,"tab_position":4,"tab_name":"legacy"}]"#;
+    let (_temp, shim) = support::pane_roster_shim(panes);
+    let backend = room.backend(&shim);
+    // The legacy pane lacks the new identity in the cache, but the native row has it.
+    let cached = panes
+        .replace("\"tab_id\":42,", "")
+        .replace("\"tab_id\":43,", "");
+    room.write_cache(
+        unix_now_ms(),
+        None,
+        None,
+        serde_json::from_str(&cached).unwrap(),
+    );
+    let owner = crate::mux::tab_name::TabOwnerRecord {
+        base: "debugger".to_owned(),
+        founders: vec![PaneId::from_parts(crate::MuxName::Zellij, "terminal_7")],
+    };
+    std::fs::write(
+        room.runtime.lane_path("tab-owners.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "version": 1, "session_name": "rimz-test", "tabs": {"42": owner, "43": owner},
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    for consistency in [
+        PaneReadConsistency::Cached,
+        PaneReadConsistency::RequireAuthoritative,
+    ] {
+        let listing = backend
+            .list_panes(PaneListOptions {
+                session_name: Some("rimz-test".to_owned()),
+                runtime_paths: Some(room.runtime.clone()),
+                workspace_id: Some(room.workspace_id.clone()),
+                consistency,
+                ..Default::default()
+            })
+            .unwrap();
+        let views = listing
+            .views
+            .into_iter()
+            .collect::<std::collections::BTreeMap<_, _>>();
+        assert_eq!(
+            views.get("tab_3").and_then(|view| view.owner.as_ref()),
+            Some(&owner)
+        );
+        assert_eq!(
+            views.get("tab_4").and_then(|view| view.owner.as_ref()),
+            (consistency == PaneReadConsistency::RequireAuthoritative).then_some(&owner)
+        );
     }
 }
 
@@ -549,6 +822,7 @@ fn terminal_pane(
         is_suppressed: false,
         is_floating: false,
         tab_position,
+        stable_tab_id: None,
         tab_name: Some("work".to_owned()),
         pane_columns: Some(pane_columns),
         pane_x: Some(pane_x),
@@ -2174,9 +2448,9 @@ case " $* " in
     exit 0 ;;
   *" action list-panes --all --json "*)
     count=$(cat "$state" 2>/dev/null || printf 0)
-    if [ "$count" -ge 2 ]; then printf '[{{"id":9,"is_plugin":false,"tab_position":1,"title":"rimz-sidebar","pane_x":0,"pane_columns":30}},{{"id":7,"is_plugin":false,"tab_position":1,"title":"zsh","pane_x":30,"pane_columns":90}}]\n';
-    elif [ "$count" -ge 1 ]; then printf '[{{"id":7,"is_plugin":false,"tab_position":1,"title":"zsh","pane_x":0,"pane_columns":90}},{{"id":8,"is_plugin":false,"tab_position":1,"title":"rimz-sidebar","pane_x":90,"pane_columns":30}}]\n';
-    else printf '[{{"id":7,"is_plugin":false,"tab_position":1,"title":"zsh","pane_x":0,"pane_columns":120}}]\n'; fi
+    if [ "$count" -ge 2 ]; then printf '[{{"id":9,"is_plugin":false,"tab_id":1,"tab_position":1,"title":"rimz-sidebar","pane_x":0,"pane_columns":30}},{{"id":7,"is_plugin":false,"tab_id":1,"tab_position":1,"title":"zsh","pane_x":30,"pane_columns":90}}]\n';
+    elif [ "$count" -ge 1 ]; then printf '[{{"id":7,"is_plugin":false,"tab_id":1,"tab_position":1,"title":"zsh","pane_x":0,"pane_columns":90}},{{"id":8,"is_plugin":false,"tab_id":1,"tab_position":1,"title":"rimz-sidebar","pane_x":90,"pane_columns":30}}]\n';
+    else printf '[{{"id":7,"is_plugin":false,"tab_id":1,"tab_position":1,"title":"zsh","pane_x":0,"pane_columns":120}}]\n'; fi
     exit 0 ;;
   *" action new-pane "*) count=$(cat "$state" 2>/dev/null || printf 0); printf '%s\n' "$((count + 1))" > "$state"; printf 'terminal_7\n'; exit 0 ;;
 esac
@@ -2285,7 +2559,7 @@ dir=$(dirname "$0"); log="$dir/zellij.log"; tab="$dir/tab-created"; layout_ref="
 printf '%s\n' "$*" >> "$log"
 if [ "$1" = "--version" ]; then printf 'zellij 0.44.3\n'; exit 0; fi
 case " $* " in
-  *" action new-tab "*) while [ "$#" -gt 0 ]; do if [ "$1" = "--layout" ]; then shift; printf '%s' "$1" > "$layout_ref"; fi; shift; done; : > "$tab"; exit 0 ;;
+  *" action new-tab "*) while [ "$#" -gt 0 ]; do if [ "$1" = "--layout" ]; then shift; printf '%s' "$1" > "$layout_ref"; fi; shift; done; : > "$tab"; printf '7\n'; exit 0 ;;
   *" action list-tabs "*)
     count=$(cat "$count_file" 2>/dev/null || printf 0); count=$((count + 1)); printf '%s\n' "$count" > "$count_file"
     printf '[{"name":"main","selectable_tiled_panes_count":1}'
@@ -2405,7 +2679,7 @@ case " $* " in
   *) printf '%s\n' "$*" >> "$dir/zellij.log" ;;
 esac
 case " $* " in
-  *" action new-tab "*) touch "$dir/opened" ;;
+  *" action new-tab "*) touch "$dir/opened"; printf '45\n' ;;
   *" action move-tab "*)
     position=$(cat "$dir/position" 2>/dev/null || printf 3)
     printf '%s' "$((position - 1))" > "$dir/position" ;;
@@ -2498,7 +2772,7 @@ case " $* " in
     if [ -f "$tab" ]; then printf '[{"name":"main","selectable_tiled_panes_count":1},{"name":"new","selectable_tiled_panes_count":1}]\n';
     else printf '[{"name":"main","selectable_tiled_panes_count":1}]\n'; fi
     exit 0 ;;
-  *" action new-tab "*) : > "$tab"; exit 0 ;;
+  *" action new-tab "*) : > "$tab"; printf '7\n'; exit 0 ;;
 esac
 exit 0
 "#.replace("VERSION", version).as_str(),

@@ -121,6 +121,28 @@ fn strings(values: &[&str]) -> Vec<String> {
     values.iter().map(|value| (*value).to_owned()).collect()
 }
 
+#[test]
+fn tab_update_publishes_stable_identity_after_the_pane_manifest() {
+    let host = FakeHost::default();
+    let mut engine = Engine::new(0, config());
+    grant(&mut engine, 10, &host);
+    let pane = PaneFields {
+        stable_tab_id: None,
+        ..pane(1)
+    };
+    seed_manifest(&mut engine, tabs(vec![pane]), 20, &host);
+    engine.on_tab_update(
+        Some(0),
+        BTreeMap::from([(0, "main".to_owned())]),
+        &BTreeMap::from([(0, 42)]),
+        200,
+        &host,
+    );
+    let effects = engine.on_dump_topology_pipe(300, &host);
+    let topology = topology_json(run_commands(&effects)[0]);
+    assert_eq!(topology["panes"][0]["stable_tab_id"], 42);
+}
+
 fn pane(id: u32) -> PaneFields {
     PaneFields {
         id,
@@ -131,6 +153,7 @@ fn pane(id: u32) -> PaneFields {
         exited: false,
         is_held: false,
         tab_position: 0,
+        stable_tab_id: Some(0),
         tab_name: Some("main".to_owned()),
         pane_x: Some(0),
         pane_columns: Some(80),
@@ -179,6 +202,7 @@ fn raw_hash(tabs: &BTreeMap<usize, Vec<PaneFields>>) -> u64 {
                     exited: pane.exited,
                     is_held: pane.is_held,
                     tab_position: pane.tab_position,
+                    stable_tab_id: pane.stable_tab_id,
                     tab_name: pane.tab_name.as_deref(),
                     pane_x: pane.pane_x,
                     pane_columns: pane.pane_columns,
@@ -651,7 +675,7 @@ fn client(client_id: u16, pane_id: ProjectedPaneId) -> ProjectedClientFocus {
 
 fn seed_switch_room(engine: &mut Engine, host: &FakeHost) -> BTreeMap<usize, String> {
     let names = BTreeMap::from([(0, "tab-0".to_owned()), (1, "tab-1".to_owned())]);
-    let _ = engine.on_tab_update(Some(0), names.clone(), 20, host);
+    let _ = engine.on_tab_update(Some(0), names.clone(), &BTreeMap::new(), 20, host);
     seed_manifest(
         engine,
         tabs_by_index(vec![
@@ -700,7 +724,7 @@ fn tab_switch_emits_one_settled_observation_at_the_deadline() {
     grant(&mut engine, 10, &host);
     let names = seed_switch_room(&mut engine, &host);
 
-    let effects = engine.on_tab_update(Some(1), names, 100, &host);
+    let effects = engine.on_tab_update(Some(1), names, &BTreeMap::new(), 100, &host);
     assert!(!effects.contains(&Effect::ListClients));
     assert!(
         !engine
@@ -745,14 +769,14 @@ fn rapid_switch_supersedes_the_old_query() {
     grant(&mut engine, 10, &host);
     let names = seed_switch_room(&mut engine, &host);
 
-    let first = engine.on_tab_update(Some(1), names.clone(), 100, &host);
+    let first = engine.on_tab_update(Some(1), names.clone(), &BTreeMap::new(), 100, &host);
     assert!(!first.contains(&Effect::ListClients));
     assert!(
         engine
             .on_timer(100 + policy::FOCUS_SETTLE_MS, &host)
             .contains(&Effect::ListClients)
     );
-    let second = engine.on_tab_update(Some(0), names, 360, &host);
+    let second = engine.on_tab_update(Some(0), names, &BTreeMap::new(), 360, &host);
     assert!(!second.contains(&Effect::ListClients));
 
     let stale = engine.on_list_clients(vec![client(1, ProjectedPaneId::Terminal(11))], 370, &host);
@@ -823,7 +847,7 @@ fn detached_switch_still_emits_the_settled_observation() {
     let mut engine = Engine::new(0, config());
     grant(&mut engine, 10, &host);
     let names = seed_switch_room(&mut engine, &host);
-    let _ = engine.on_tab_update(Some(1), names, 100, &host);
+    let _ = engine.on_tab_update(Some(1), names, &BTreeMap::new(), 100, &host);
     assert!(
         engine
             .on_timer(100 + policy::FOCUS_SETTLE_MS, &host)
@@ -843,7 +867,7 @@ fn expired_untagged_reply_is_general_and_rearms_settled_query() {
     let mut engine = Engine::new(0, config());
     grant(&mut engine, 10, &host);
     let names = seed_switch_room(&mut engine, &host);
-    let _ = engine.on_tab_update(Some(1), names, 100, &host);
+    let _ = engine.on_tab_update(Some(1), names, &BTreeMap::new(), 100, &host);
 
     let expired = engine.on_timer(100 + policy::FOCUS_SETTLE_MS, &host);
     assert!(expired.contains(&Effect::ListClients));
@@ -903,7 +927,7 @@ fn repeated_active_tab_update_keeps_the_original_settle_deadline() {
     let mut engine = Engine::new(0, config());
     grant(&mut engine, 10, &host);
     let names = BTreeMap::from([(0, "tab-0".to_owned()), (1, "tab-1".to_owned())]);
-    let _ = engine.on_tab_update(Some(0), names.clone(), 20, &host);
+    let _ = engine.on_tab_update(Some(0), names.clone(), &BTreeMap::new(), 20, &host);
     seed_manifest(
         &mut engine,
         tabs_by_index(vec![
@@ -916,10 +940,10 @@ fn repeated_active_tab_update_keeps_the_original_settle_deadline() {
     let _ = engine.on_list_clients(Vec::new(), 40, &host);
     let _ = engine.on_list_clients(Vec::new(), 50, &host);
 
-    let effects = engine.on_tab_update(Some(1), names.clone(), 100, &host);
+    let effects = engine.on_tab_update(Some(1), names.clone(), &BTreeMap::new(), 100, &host);
     assert!(!effects.contains(&Effect::ListClients));
 
-    let effects = engine.on_tab_update(Some(1), names, 110, &host);
+    let effects = engine.on_tab_update(Some(1), names, &BTreeMap::new(), 110, &host);
     assert!(!effects.contains(&Effect::ListClients));
     assert!(
         engine

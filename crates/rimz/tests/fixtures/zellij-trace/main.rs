@@ -92,6 +92,15 @@ fn main() {
         if env::var_os("RIMZ_TEST_ZELLIJ_FAIL_NEW_TAB").is_some() {
             std::process::exit(1);
         }
+        let trace = std::fs::read_to_string(&log_path).expect("read tab launches");
+        let tab_id = trace
+            .lines()
+            .filter(|line| {
+                let args = line.split('\t').map(str::to_owned).collect::<Vec<_>>();
+                has_pair(&args, "action", "new-tab")
+            })
+            .count();
+        write_stdout(&tab_id.to_string());
     }
     if has_pair(cli, "action", "close-pane")
         && env::var_os("RIMZ_TEST_ZELLIJ_FAIL_CLOSE_PANE").is_some()

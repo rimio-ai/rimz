@@ -94,6 +94,36 @@ fn tab_injects_env_into_every_column_and_row() {
             );
         }
     }
+    let runtime =
+        rimz::RuntimePaths::under(WorkspaceId::from_project_root(cwd.path()), room.path()).unwrap();
+    let file: serde_json::Value = std::fs::read(runtime.lane_path("tab-owners.json"))
+        .ok()
+        .map(|bytes| serde_json::from_slice(&bytes).unwrap())
+        .unwrap_or_default();
+    let panes = expect_list_panes(room.path(), room.name());
+    let founders = panes
+        .panes
+        .iter()
+        .filter(|pane| {
+            !pane.is_plugin && !pane.is_sidebar() && pane.tab_name.as_deref() == Some("env")
+        })
+        .map(|pane| PaneId::from_parts(MuxName::Zellij, format!("terminal_{}", pane.id)))
+        .collect::<Vec<_>>();
+    let tab = panes
+        .panes
+        .iter()
+        .find(|pane| pane.tab_name.as_deref() == Some("env"))
+        .unwrap()
+        .tab_id;
+    let owner: Option<rimz::mux::tab_name::TabOwnerRecord> =
+        serde_json::from_value(file["tabs"][tab.to_string()].clone()).unwrap();
+    assert_eq!(
+        owner,
+        Some(rimz::mux::tab_name::TabOwnerRecord {
+            base: "env".to_owned(),
+            founders
+        })
+    );
 }
 
 #[test]
@@ -505,6 +535,11 @@ fn rename_tab_uses_the_anchor_panes_stable_tab_id() {
     require_zellij!();
 
     let room = LiveZellijSession::new("rename-tab");
+    let (_stub_dir, stub) = sidebar_command_stub();
+    let mut opts = sidebar_opts(room.name(), room.path(), stub, 100);
+    opts.workspace_id = WorkspaceId::from_project_root(room.path());
+    publish_room_bin(room.path(), &opts);
+    let runtime = rimz::RuntimePaths::under(opts.workspace_id.clone(), room.path()).unwrap();
     room.create_background();
     let mut client = AttachedClient::attach(&room, 100, 30);
     open_new_tab(room.path(), room.name());
@@ -569,6 +604,15 @@ fn rename_tab_uses_the_anchor_panes_stable_tab_id() {
             },
         )
         .expect("name existing launch tab");
+    let file: serde_json::Value = std::fs::read(runtime.lane_path("tab-owners.json"))
+        .ok()
+        .map(|bytes| serde_json::from_slice(&bytes).unwrap())
+        .unwrap_or_default();
+    assert_eq!(file["tabs"][target_id.to_string()]["base"], "#feat");
+    assert_eq!(
+        file["tabs"][target_id.to_string()]["founders"],
+        serde_json::json!([anchor])
+    );
     poll_until(
         Duration::from_secs(10),
         || list_panes(room.path(), room.name()),
@@ -658,6 +702,10 @@ fn rename_tab_uses_the_anchor_panes_stable_tab_id() {
             },
         )
         .expect("release anchored tab");
+    let file: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(runtime.lane_path("tab-owners.json")).unwrap())
+            .unwrap();
+    assert!(file["tabs"].get(target_id.to_string()).is_none());
     let released = poll_until(
         Duration::from_secs(10),
         || list_panes(room.path(), room.name()),

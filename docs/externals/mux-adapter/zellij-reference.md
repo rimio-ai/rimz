@@ -158,6 +158,18 @@ enum PaneId { Terminal(u32), Plugin(u32) }
 struct PaneManifest { panes: HashMap<usize /* tab position */, Vec<PaneInfo>> }
 ```
 
+Identity fields in [`PaneInfo`, `PaneListEntry`, and `TabInfo`](https://github.com/zellij-org/zellij/blob/v0.45.1/zellij-utils/src/data.rs), also present in the plugin API's [pinned 0.44.3 types](https://github.com/zellij-org/zellij/blob/v0.44.3/zellij-utils/src/data.rs):
+
+| Type | Field | Meaning |
+| --- | --- | --- |
+| `PaneInfo` | `id: u32`, `is_plugin: bool` | Pane ordinal in the terminal or plugin namespace |
+| `PaneListEntry` | `tab_id: usize` | Stable containing-tab id within the live session |
+| `PaneListEntry` | `tab_position: usize`, `tab_name: String` | Current tab position and display name |
+| `TabInfo` | `tab_id: usize` | Stable tab id within the live session |
+| `TabInfo` | `position: usize`, `name: String` | Current tab position and display name |
+
+`PaneInfo` itself has no tab identity. Plugin manifests are keyed by position and join `TabUpdate`'s `TabInfo.tab_id`; native `list-panes` returns `PaneListEntry`. These ids are not resurrection identities. A disposable 0.45.1 session with one remaining tab at id `1` and terminal pane id `1` resurrected with both at `0`, retaining its tab name.
+
 `PaneInfo` has five field groups:
 
 | Group | Fields |

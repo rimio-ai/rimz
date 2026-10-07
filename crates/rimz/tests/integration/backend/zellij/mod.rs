@@ -32,6 +32,7 @@ mod reconcile;
 mod resume;
 mod self_close;
 mod support;
+mod tab_ownership;
 mod tabs;
 mod title;
 mod width;

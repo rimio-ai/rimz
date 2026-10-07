@@ -250,6 +250,7 @@ fn write_zellij_topology_panes(
         is_suppressed: false,
         is_floating: false,
         tab_position: 0,
+        stable_tab_id: None,
         tab_name: None,
         pane_columns: Some(pane_columns),
         pane_x: Some(pane_x),

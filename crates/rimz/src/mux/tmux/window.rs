@@ -324,10 +324,8 @@ impl TmuxBackend {
         &self,
         anchor: &PaneId,
         name: &str,
+        base: &str,
     ) -> Result<CommandSpec> {
-        let config = crate::config::MachineConfig::load_lenient();
-        let base =
-            sanitize_window_name(crate::theme::strip_status_glyph_suffix(name, &config.theme));
         Ok(self.rename_window_command(anchor, name)?.args([
             ";",
             "set-option",
@@ -335,7 +333,7 @@ impl TmuxBackend {
             "-t",
             anchor.raw(),
             RIMZ_TAB_BASE_OPTION,
-            &base,
+            base,
         ]))
     }
 

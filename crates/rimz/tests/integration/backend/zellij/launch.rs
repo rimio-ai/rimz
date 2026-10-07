@@ -351,12 +351,47 @@ fn confirm_resume_tabs_reports_each_planned_tab_of_a_clientless_birth() {
     };
     let backend = ZellijBackend::with_runtime_dir(xdg);
     publish_room_bin(xdg, &opts);
+    let runtime = rimz::RuntimePaths::under(opts.workspace_id.clone(), xdg).unwrap();
+    runtime.ensure_dirs().unwrap();
+    std::fs::write(
+        runtime.lane_path("tab-owners.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "version": 1, "session_name": name, "tabs": {"999": {"base": "stale", "founders": []}},
+        }))
+        .unwrap(),
+    )
+    .unwrap();
     assert_eq!(
         backend
             .ensure_clean_session(&opts, None)
             .expect("ensure_clean_session births the room with its resume tabs"),
         SessionHealth::Reborn,
     );
+
+    let file: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(runtime.lane_path("tab-owners.json")).unwrap())
+            .unwrap();
+    assert!(
+        file["tabs"].get("999").is_none(),
+        "session birth clears old ids"
+    );
+    let panes = expect_list_panes(xdg, &name);
+    for (tab, count) in [(&seeded, 2), (&thin, 1)] {
+        let label = tab.label.as_str();
+        let tab = panes
+            .panes
+            .iter()
+            .find(|pane| pane.tab_name.as_deref() == Some(label))
+            .unwrap()
+            .tab_id;
+        assert_eq!(file["tabs"][tab.to_string()]["base"], label);
+        assert_eq!(
+            file["tabs"][tab.to_string()]["founders"]
+                .as_array()
+                .map(Vec::len),
+            Some(count)
+        );
+    }
 
     assert_eq!(
         backend.confirm_resume_tabs(&name, &[seeded.clone(), thin]),

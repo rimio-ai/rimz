@@ -236,7 +236,8 @@ fn founder_holds_then_label_follows_then_releases() {
     assert_eq!(
         renames[0].intent,
         TabNameIntent::Rebuild {
-            observed: "debugger".to_owned()
+            observed: "debugger".to_owned(),
+            base: "brainstormer".to_owned(),
         }
     );
     frame.tabs[0].name = Some("brainstormer".to_owned());
