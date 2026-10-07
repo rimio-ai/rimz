@@ -233,9 +233,10 @@ impl Attachment {
         // fork on target refresh, structural, classification, and commit events
         // (or tmux's first press without cached geometry), never on cached
         // presses or resize feedback; on Zellij the opening press of a burst
-        // re-reads the topology memo, a stat and no fork. Width commits and
-        // trailing capability refreshes run once after their bursts settle;
-        // resize actuators run off-thread.
+        // re-reads the topology memo and room share, a stat and one small
+        // share-file read, no fork. Width commits and trailing capability
+        // refreshes run once after their bursts settle; resize actuators run
+        // off-thread.
         let loop_result: Result<()> = (|| {
             while !state.should_exit && !close_requested.load(Ordering::SeqCst) {
                 let (active, mut timeout) = state.frame_timing();

@@ -579,6 +579,66 @@ fn width_key_burst_reprobes_a_view_resized_since_the_last_proof() {
 }
 
 #[test]
+fn width_key_burst_narrower_steps_from_the_target_resolved_on_the_live_view() {
+    let (dir, runtime, mut controller) = controller(MuxName::Zellij);
+    let diag = crate::diag::DiagSink::under(
+        dir.path().to_path_buf(),
+        runtime.workspace_id.clone(),
+        "rimz-test",
+        None,
+    );
+    write_zellij_topology_for_view_at(&runtime, 50, controller.started_at_ms);
+    controller.backstop(Some(24), Some(1), None, &diag);
+    crate::mux::width_target::pin(
+        &runtime,
+        crate::mux::SidebarWidth::default(),
+        target(24),
+        50,
+    )
+    .expect("pin prior target");
+
+    let own_cols = 154;
+    let view_cols = 320;
+    let expected_target = target(own_cols - 16);
+    write_zellij_topology_panes(
+        &runtime,
+        own_cols,
+        Some(view_cols),
+        crate::utils::time::unix_now_ms(),
+    );
+    controller.adjust(own_cols, WidthAdjust::Narrower);
+    assert_eq!(controller.current_view_cols, Some(view_cols));
+    assert_eq!(
+        controller.key_burst.as_ref().unwrap().verdict,
+        SidebarWidthIntentVerdict::Accepted,
+    );
+    assert_eq!(controller.convergence.target(), Some(expected_target));
+    controller.backstop_at(
+        Some(expected_target.get()),
+        None,
+        None,
+        &diag,
+        burst_deadline(&controller),
+    );
+
+    assert_eq!(
+        width_intents(&diag),
+        vec![(
+            own_cols,
+            Some(expected_target.get()),
+            SidebarWidthIntentVerdict::Accepted,
+        )]
+    );
+    assert_eq!(
+        crate::mux::width_target::pinned(&runtime),
+        Some(crate::mux::WidthPermille::from_cols(
+            expected_target,
+            target(view_cols),
+        ))
+    );
+}
+
+#[test]
 fn width_key_burst_keeps_the_last_proven_view_when_the_probe_fails() {
     let (dir, runtime, mut controller) = controller(MuxName::Zellij);
     let diag = crate::diag::DiagSink::under(

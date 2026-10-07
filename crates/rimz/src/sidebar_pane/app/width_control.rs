@@ -459,17 +459,21 @@ impl WidthController {
         };
         // A press must not fork (docs/internals/performance.md, keypress
         // budget). Zellij's probe is a stat-keyed memo read, so every burst
-        // opens on the live view; tmux's probe is a subprocess, so it runs only
-        // while no view is stored.
-        if self.key_burst.is_none()
-            && (self.mux == MuxName::Zellij || self.current_view_cols.is_none())
-            && !self.convergence.is_fullscreen_held()
-            && let Ok(step) = self.width_step(pane, None)
-            && step.view_cols != 0
-        {
-            self.current_view_cols = Some(step.view_cols);
-            self.convergence.seed_native_step(step);
-            self.baseline_probe_deadline = None;
+        // opens on the live view and re-resolves the room target; tmux's probe
+        // is a subprocess, so it runs only while no view is stored.
+        if self.key_burst.is_none() && !self.convergence.is_fullscreen_held() {
+            if self.mux == MuxName::Zellij {
+                if self.refresh_target(None, false).is_some() {
+                    self.baseline_probe_deadline = None;
+                }
+            } else if self.current_view_cols.is_none()
+                && let Ok(step) = self.width_step(pane, None)
+                && step.view_cols != 0
+            {
+                self.current_view_cols = Some(step.view_cols);
+                self.convergence.seed_native_step(step);
+                self.baseline_probe_deadline = None;
+            }
         }
         let burst = self.key_burst.get_or_insert(WidthKeyBurst {
             deadline: Instant::now() + KEY_SETTLE,
