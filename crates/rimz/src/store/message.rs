@@ -897,7 +897,7 @@ pub(crate) fn older_ready_blocker<'a>(
                 && message.same_card(candidate.card_ref())
                 && same_delivery_lane(candidate.gate, message.gate)
                 && message.message_id.as_str() < candidate.message_id.as_str()
-                && ready(message)
+                && (message.status == MessageStatus::Sent || ready(message))
         })
         .min_by(|a, b| a.message_id.as_str().cmp(b.message_id.as_str()))
 }
@@ -928,7 +928,7 @@ pub(crate) fn delivery_batch_indices(
             holds_boundary(message)
                 && message.same_card(head.card_ref())
                 && same_delivery_lane(head.gate, message.gate)
-                && message.is_deliverable(now)
+                && (message.status == MessageStatus::Sent || message.is_deliverable(now))
         })
     {
         return None;
