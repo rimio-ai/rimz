@@ -285,6 +285,48 @@ fn keepalive_only_prompt_requires_every_section_to_be_a_keepalive() {
 }
 
 #[test]
+fn wake_only_prompt_requires_every_section_to_be_a_wake() {
+    let wait = "Type: WAIT\nFrom: @rimz\nContent:\nCheck back.";
+    let signal = "Type: SIGNAL\nFrom: @rimz\nContent:\nCI finished.";
+    let pasted = crate::agents::sanitize_user_prompt(Some(&format!(
+        "<pasted_content id=\"e676\">\n{wait}\n</pasted_content id=\"e676\">"
+    )))
+    .unwrap();
+    for prompt in [
+        wait.to_owned(),
+        signal.to_owned(),
+        pasted,
+        format!("{wait}\n\n{signal}"),
+    ] {
+        assert!(prompt_is_wake_only(&prompt), "{prompt:?}");
+    }
+    for header in [
+        "STAGE",
+        "DEADLINE",
+        "CACHE_KEEPALIVE",
+        "AGENT_MESSAGE",
+        "SUBAGENT_REPORT",
+        "AGENT_REPORT",
+        "TEAM_REPORT",
+        "USER_MESSAGE",
+    ] {
+        let other = format!("Type: {header}\nFrom: @coder\nContent:\nNext task.");
+        for prompt in [other.clone(), format!("{wait}\n\n{other}")] {
+            assert!(!prompt_is_wake_only(&prompt), "{prompt:?}");
+        }
+    }
+    for prompt in [
+        "bare composer text",
+        "Type: WAIT\nFrom: rimz\nContent:\nmalformed",
+        "Type: SIGNAL\nFrom: @\nContent:\nmalformed",
+        "",
+        " \n\t\n",
+    ] {
+        assert!(!prompt_is_wake_only(prompt), "{prompt:?}");
+    }
+}
+
+#[test]
 fn message_header_parser_rejects_near_misses() {
     for text in [
         "Type: AGENT_MESSAGE\nFrom: @coder (plan ner)\nContent:\nship it",

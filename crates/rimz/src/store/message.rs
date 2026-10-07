@@ -1102,6 +1102,15 @@ pub(in crate::store) fn prompt_is_keepalive_only(prompt: &str) -> bool {
         })
 }
 
+/// True when every section of a non-blank prompt is a `WAIT` or `SIGNAL` wake notice.
+pub(crate) fn prompt_is_wake_only(prompt: &str) -> bool {
+    !prompt.trim().is_empty()
+        && split_batched_prompt(prompt).into_iter().all(|section| {
+            parse_message_header(section.trim_start())
+                .is_some_and(|(kind, ..)| matches!(kind, HeaderKind::Wait | HeaderKind::Signal))
+        })
+}
+
 /// A classified section and the queue record that supplied it, when known.
 pub struct PromptSection<'a> {
     pub text: String,
