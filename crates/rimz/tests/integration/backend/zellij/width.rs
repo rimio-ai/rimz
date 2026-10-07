@@ -35,6 +35,20 @@ fn renderer_width_keys_hold_their_live_zellij_step() {
     write_topology_cache_from_list_panes(xdg, &sidebar.workspace_id, &name);
     let _mirror = topology_cache_mirror(xdg, &sidebar.workspace_id, &name);
 
+    let target_cols = rimz::mux::SidebarWidth::default().target_cols(u64::from(VIEW_COLS));
+    let band = settled_band(target_cols, u64::from(VIEW_COLS).div_ceil(20));
+    assert!(
+        wait_for_sidebar_columns(xdg, &name, std::slice::from_ref(&band)),
+        "renderer did not converge against the attached viewport: {:?}",
+        sidebar_columns_by_tab(xdg, &name),
+    );
+    std::thread::sleep(SETTLE_WINDOW);
+    let widths = sidebar_columns_by_tab(xdg, &name);
+    assert!(
+        widths.len() == 1 && widths.values().all(|width| band.contains(width)),
+        "renderer left the half-step band around {target_cols} after settling: {widths:?}",
+    );
+
     let listed = raw_sidebar_pane(xdg, &name);
     let pane = PaneId::from_parts(MuxName::Zellij, format!("terminal_{}", listed.id));
     let initial = listed.pane_columns;
