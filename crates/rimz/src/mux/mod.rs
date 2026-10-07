@@ -21,6 +21,7 @@ pub mod tab_name;
 pub mod tmux;
 pub(crate) mod width;
 pub(crate) mod width_target;
+pub mod winsize;
 pub mod zellij;
 
 pub use capabilities::drops_desktop_osc;
