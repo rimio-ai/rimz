@@ -151,17 +151,25 @@ rimz sessions
 
 `rimz sessions` opens a full-screen manager of every live RimZ room on the machine. Each room is a two-line card: the repository name and path, then live agent counts by kind (`claude ×2`), a `●` count of agents that need attention, and the session, token, and spend totals of the sidebar's headline window ([`spend_window`](../../guide/configuration.md#sidebar-rendering)). Rooms with a prompt in the last 24 hours come first, newest prompt first; the rest follow by the time RimZ last wrote the workspace record, then by repository name and project path. A narrow terminal drops the card's right-hand metrics rather than wrapping them: the token total goes first, then the session count. The dollar figure always stays. Detaching from a room you entered returns you to the manager.
 
-| Key (room list) | Action |
+| Key (room list, filter closed) | Action |
 | --- | --- |
 | `↑` `↓`, `k` `j`, scroll wheel | Move the selection |
 | `Enter`, or click the selected card | Attach to the selected room |
-| Any other printable key | Add to the filter on repository name and path |
-| `Backspace` | Delete the last filter character |
 | `n` | Open the new-session selector |
-| `Esc` | Clear the filter; with an empty filter, quit |
+| `/` | Open the filter on repository name and path |
+| `Esc` | Quit |
 | `Ctrl-C` | Quit |
 
-The filter cannot contain `j`, `k`, or `n`, because those keys act first.
+| Key (filter open) | Action |
+| --- | --- |
+| Any printable key, including `j`, `k`, `n`, and `/` | Add to the filter |
+| `Backspace` | Delete the last filter character |
+| `↑` `↓`, scroll wheel | Move the selection |
+| `Enter`, or click the selected card | Attach to the selected room |
+| `Esc` | Close the filter, keeping its text applied and visible |
+| `Ctrl-C` | Quit |
+
+The filter line stays visible. Its cursor appears only while the filter is open; reopen it with `/` to edit or backspace away the text.
 
 The new-session selector lists dormant known workspaces, then the current directory, then its non-hidden subdirectories, starting at `$HOME`. Typing filters the list.
 
@@ -173,7 +181,7 @@ The new-session selector lists dormant known workspaces, then the current direct
 | `Enter` | Create the room for the selected path and attach |
 | `Esc` | Return to the room list |
 
-An unreadable directory shows an empty directory list with a notice. `rimz sessions` refuses to run inside Zellij or tmux and points at `rimz attach`. Without a terminal on stdin and stdout, it prints the live sessions in its error message and exits 1.
+An unreadable directory shows an empty directory list with a notice. `rimz sessions` refuses to run inside Zellij or tmux and points at `rimz attach`. Without a terminal on stdin and stdout, it prints the live sessions in its error message, ends with `for a list, run: rimz list`, and exits 1.
 
 The browser's room picker is the same manager ([web guide](../../guide/web.md)).
 

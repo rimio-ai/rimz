@@ -549,6 +549,7 @@ struct Picker {
     rows: Vec<RoomRow>,
     selected: Option<String>,
     filter: String,
+    filter_open: bool,
     notice: Option<String>,
     hit_rows: BTreeMap<u16, String>,
     dormant: Vec<KnownWorkspace>,
@@ -561,6 +562,7 @@ impl Picker {
             rows: Vec::new(),
             selected: None,
             filter: String::new(),
+            filter_open: false,
             notice: rejected_session
                 .filter(|session| !session.is_empty())
                 .map(|session| format!("session `{session}` is not a live RimZ room")),
@@ -703,31 +705,26 @@ impl Picker {
 
         match event {
             Event::Key(key) if matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) => {
+                let text_key = !key
+                    .modifiers
+                    .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
                 match key.code {
-                    KeyCode::Up | KeyCode::Char('k') => self.move_selection(-1),
-                    KeyCode::Down | KeyCode::Char('j') => self.move_selection(1),
-                    KeyCode::Char('n')
-                        if !key
-                            .modifiers
-                            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
-                    {
-                        self.open_new_session();
+                    KeyCode::Up => self.move_selection(-1),
+                    KeyCode::Down => self.move_selection(1),
+                    KeyCode::Char('k') if !self.filter_open => self.move_selection(-1),
+                    KeyCode::Char('j') if !self.filter_open => self.move_selection(1),
+                    KeyCode::Char('n') if !self.filter_open && text_key => self.open_new_session(),
+                    KeyCode::Char('/') if !self.filter_open && text_key => {
+                        self.filter_open = true;
                     }
                     KeyCode::Enter => return self.selected_action(),
-                    KeyCode::Backspace => {
+                    KeyCode::Backspace if self.filter_open => {
                         self.filter.pop();
                         self.normalize_selection();
                     }
-                    KeyCode::Esc if self.filter.is_empty() => return Some(Action::Quit),
-                    KeyCode::Esc => {
-                        self.filter.clear();
-                        self.normalize_selection();
-                    }
-                    KeyCode::Char(character)
-                        if !key
-                            .modifiers
-                            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
-                    {
+                    KeyCode::Esc if !self.filter_open => return Some(Action::Quit),
+                    KeyCode::Esc => self.filter_open = false,
+                    KeyCode::Char(character) if self.filter_open && text_key => {
                         self.filter.push(character);
                         self.normalize_selection();
                     }
@@ -1002,7 +999,7 @@ fn render_picker_block(
             Paragraph::new(Line::from(vec![
                 Span::styled("filter: ", theme.meta()),
                 Span::styled(picker.filter.clone(), theme.body()),
-                Span::styled("_", theme.accent()),
+                Span::styled(if picker.filter_open { "_" } else { "" }, theme.accent()),
             ])),
             Rect::new(inner.x, filter_y, inner.width, 1),
         );
@@ -1017,7 +1014,8 @@ fn render_picker_block(
 
 fn help_text(picker: &Picker) -> &'static str {
     match &picker.view {
-        View::Rooms => "↑↓ select · ⏎ attach · n new · type to filter · esc quit",
+        View::Rooms if picker.filter_open => "type to filter · ⏎ attach · esc done",
+        View::Rooms => "↑↓ jk select · ⏎ attach · n new · / filter · esc quit",
         View::NewSession(_) => "↑↓ select · →/tab open · ← back · ⏎ create · esc cancel",
     }
 }

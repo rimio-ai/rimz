@@ -60,7 +60,9 @@ fn session_listing(rooms: &[rimz::room::session::LiveRoom]) -> String {
             .collect::<Vec<_>>()
             .join("\n")
     };
-    format!("`rimz sessions` needs an interactive terminal\n\nLive RimZ sessions:\n{listing}")
+    format!(
+        "`rimz sessions` needs an interactive terminal\n\nLive RimZ sessions:\n{listing}\n\nfor a list, run: rimz list"
+    )
 }
 
 #[cfg(test)]
@@ -71,7 +73,7 @@ mod tests {
     fn noninteractive_listing_matches_the_web_session_shape() {
         assert_eq!(
             session_listing(&[]),
-            "`rimz sessions` needs an interactive terminal\n\nLive RimZ sessions:\n  (none)"
+            "`rimz sessions` needs an interactive terminal\n\nLive RimZ sessions:\n  (none)\n\nfor a list, run: rimz list"
         );
     }
 }

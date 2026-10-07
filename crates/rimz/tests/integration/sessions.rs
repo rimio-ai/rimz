@@ -15,6 +15,10 @@ fn sessions_non_tty_lists_live_rooms_and_exits_nonzero() {
     );
     assert!(stderr.contains("Live RimZ sessions:"), "{stderr}");
     assert!(stderr.contains("(none)"), "{stderr}");
+    assert!(
+        stderr.trim_end().ends_with("for a list, run: rimz list"),
+        "{stderr}"
+    );
 }
 
 #[test]
