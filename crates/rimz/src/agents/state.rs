@@ -774,6 +774,8 @@ pub struct AgentState {
     /// the illegal combinations are unrepresentable here too.
     #[serde(default)]
     pub phase: TurnPhase,
+    /// Carried ended rows retain the pane id but omit `foreground_cmdline`
+    /// and `spawn_command` in memory; `Store::load_full_agent` restores them.
     pub pane: Option<PaneRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runtime_owner: Option<RuntimeOwner>,
@@ -806,11 +808,14 @@ pub struct AgentState {
     pub task: Option<String>,
     /// The session's first usable user prompt. Set once and carried for the
     /// whole session so an unnamed card has a stable label across later turns.
+    /// On carried ended rows in memory, only the first non-blank line's first 160
+    /// characters remain; use `Store::load_full_agent` for the full prompt.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub first_prompt: Option<String>,
     /// The user's latest prompt, carried forward across events (unlike the
     /// activity-bound `task`). Labels an unnamed session on the sidebar until a
     /// real session name exists.
+    /// Empty on carried ended rows in memory; use `Store::load_full_agent`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt: Option<String>,
     /// Launch-seeded card label (`rimz agents --description`), carried forward.
@@ -839,6 +844,7 @@ pub struct AgentState {
     /// Recent user prompts for this session, newest last, capped by the rollup.
     /// The sidebar row keeps only `prompt`; snapshot JSON exposes the history on
     /// `agents[]` for diagnostics and future panes.
+    /// Empty on carried ended rows in memory; use `Store::load_full_agent`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub recent_prompts: Vec<String>,
     pub model: Option<String>,

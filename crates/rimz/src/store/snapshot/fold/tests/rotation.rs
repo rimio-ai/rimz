@@ -1,6 +1,80 @@
 use super::*;
 
 #[test]
+fn rotation_preserves_ended_text_after_trimmed_folds_and_hydration() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+    paths.ensure_dirs().unwrap();
+    let mut carried = agent("claude", "ended", AgentStatus::Success, 1_000);
+    carried.last_seen = recent(1);
+    carried.ended_at = Some(carried.last_seen);
+    carried.name = Some("lucid-atlas".to_owned());
+    carried.kind_ordinal = Some(1);
+    carried.first_prompt = Some(format!("{}\nsecond line", "first prompt ".repeat(30)));
+    carried.prompt = Some("latest prompt".to_owned());
+    carried.recent_prompts = vec!["first prompt".to_owned(), "latest prompt".to_owned()];
+    let mut stamp = pane("%7", "claude", "/repo");
+    stamp.foreground_cmdline = Some("foreground prompt".to_owned());
+    stamp.spawn_command = Some("birth prompt".to_owned());
+    carried.pane = Some(stamp);
+    write_carryover(
+        &paths.agents_carryover,
+        &EventCarryover {
+            agents: vec![carried],
+            ..EventCarryover::default()
+        },
+    )
+    .unwrap();
+    let before = read_carryover(&paths.agents_carryover).unwrap();
+    let mut cursor = RollupCursor::new();
+    let (_, folded, _) = cursor.fold(&paths).unwrap();
+    assert_eq!(
+        folded.iter().next().unwrap().first_prompt,
+        Some("first prompt ".repeat(30).chars().take(160).collect()),
+        "cold fold retains only the bounded first line"
+    );
+    event_log::append(
+        &paths.events_log,
+        &EventEnvelope::new(
+            workspace.clone(),
+            "session",
+            "rimz",
+            "cli",
+            "test.noop",
+            serde_json::json!({}),
+        ),
+    )
+    .unwrap();
+    cursor.fold(&paths).unwrap();
+    stage_carryover_for_rotation(&paths, 1).unwrap();
+    assert_eq!(
+        read_carryover(&paths.agents_carryover).unwrap().agents,
+        before.agents
+    );
+    event_log::rotate(&paths.events_log, &paths.events_archive_dir, 1).unwrap();
+    reseed_rollup_cache_for_rotation(&paths).unwrap();
+    event_log::append(
+        &paths.events_log,
+        &EventEnvelope::new(
+            workspace,
+            "session",
+            "claude",
+            "agent",
+            "agent.launch_warnings",
+            serde_json::json!({"agent_id": "ended", "warnings": ["new warning"]}),
+        ),
+    )
+    .unwrap();
+    cursor.fold(&paths).unwrap();
+    stage_carryover_for_rotation(&paths, 1).unwrap();
+    let after = read_carryover(&paths.agents_carryover).unwrap();
+    let mut expected = before.agents[0].clone();
+    expected.launch_warnings = vec!["new warning".to_owned()];
+    assert_eq!(after.agents, vec![expected]);
+}
+
+#[test]
 fn cursor_reloads_across_a_rotation() {
     // Rotation renames the log away and recreates it; a regrown log can pass
     // the held offset, so the cursor's reload guard is the file identity, not

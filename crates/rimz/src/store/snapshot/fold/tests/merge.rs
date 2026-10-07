@@ -69,6 +69,82 @@ fn fold_ready(agents: Vec<AgentState>) -> Arc<FoldCarryover> {
 }
 
 #[test]
+fn ended_carryover_keeps_a_bounded_first_line_without_splitting_characters() {
+    for (prompt, expected) in [
+        ("é🦊".repeat(200), "é🦊".repeat(80)),
+        (format!("{}\nsecond line", "x".repeat(300)), "x".repeat(160)),
+        ("short prompt".to_owned(), "short prompt".to_owned()),
+        (
+            "first line\r\nsecond line".to_owned(),
+            "first line".to_owned(),
+        ),
+        (
+            "\n  \nfix the auth flow\nthen ship".to_owned(),
+            "fix the auth flow".to_owned(),
+        ),
+    ] {
+        let mut ended = agent("claude", "ended", AgentStatus::Success, 1_000);
+        ended.ended_at = Some(ended.last_seen);
+        ended.first_prompt = Some(prompt);
+        ended.prompt = Some("latest prompt".to_owned());
+        ended.recent_prompts = vec!["latest prompt".to_owned()];
+        let mut stamp = pane("%7", "claude", "/repo");
+        stamp.foreground_cmdline = Some("foreground prompt".to_owned());
+        stamp.spawn_command = Some("birth prompt".to_owned());
+        ended.pane = Some(stamp);
+        let mut continuing = ended.clone();
+        continuing.agent_id = "continuing".into();
+        continuing.ended_at = None;
+        let trimmed = FoldCarryover::from_raw(EventCarryover {
+            agents: vec![ended, continuing.clone()],
+            ..EventCarryover::default()
+        })
+        .trimmed(Path::new("/unused/carryover.json"));
+        let ended = trimmed.get(&continuing.kind, &"ended".into()).unwrap();
+        assert_eq!(ended.first_prompt.as_deref(), Some(expected.as_str()));
+        assert!(ended.prompt.is_none());
+        assert!(ended.recent_prompts.is_empty());
+        let stamp = ended.pane.as_ref().unwrap();
+        assert!(stamp.foreground_cmdline.is_none());
+        assert!(stamp.spawn_command.is_none());
+        let live = trimmed.get(&continuing.kind, &continuing.agent_id).unwrap();
+        assert_eq!(live.first_prompt, continuing.first_prompt);
+        assert_eq!(live.prompt, continuing.prompt);
+        assert_eq!(live.recent_prompts, continuing.recent_prompts);
+        assert_eq!(live.pane, continuing.pane);
+    }
+}
+
+#[test]
+fn ended_carried_child_keeps_its_activity_label_and_truncated_prefix_filter() {
+    let mut child = agent("claude", "child", AgentStatus::Success, 1_000);
+    child.parent_agent_id = Some("parent".into());
+    child.launch_depth = Some(1);
+    child.ended_at = Some(child.last_seen);
+    child.first_prompt = Some(format!("{}\nsecond line", "x".repeat(240)));
+    assert!(child.description.is_none());
+    assert!(child.task.is_none());
+    let trimmed = FoldCarryover::from_raw(EventCarryover {
+        agents: vec![child],
+        ..EventCarryover::default()
+    })
+    .trimmed(Path::new("/unused/carryover.json"));
+    let mut child = trimmed.agents[0].clone();
+    assert_eq!(child.activity_line(), Some("x".repeat(160)));
+    child.context = Some(crate::agents::AgentContext {
+        session_name: Some("x".repeat(120)),
+        ..Default::default()
+    });
+    assert_eq!(child.activity_line(), Some("x".repeat(160)));
+    child.context.as_mut().unwrap().session_name = Some("x".repeat(200));
+    assert_eq!(
+        child.activity_line(),
+        Some("x".repeat(200)),
+        "a session name longer than the retained prompt is no longer its prefix"
+    );
+}
+
+#[test]
 fn first_post_rotation_event_reduces_against_the_carried_agent() {
     let mut carried = agent("claude", "agent-1", AgentStatus::Idle, 1_000);
     carried.launch_id = Some(AgentSessionId::from("launch-1"));

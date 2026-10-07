@@ -260,6 +260,60 @@ pub mod fleet {
         Ok(())
     }
 
+    /// Representative retained history: 98% ended, 39% with pane argv, unique
+    /// names and ids, and compact row sizes of about 4.8/13.2/35.9 kB (p50/p90/max).
+    pub fn seed_ended_carryover(store: &crate::Store, rows: usize) -> crate::store::Result<()> {
+        let at = jiff::Timestamp::now();
+        let mut names = std::collections::BTreeMap::new();
+        let agents: Vec<_> = (0..rows)
+            .map(|index| {
+                let mut agent = super::agent_state("claude", &format!("history-{index}"), at);
+                let name = format!("historical-{index}");
+                names.insert(name.clone(), (agent.kind.clone(), agent.agent_id.clone()));
+                agent.name = Some(name);
+                agent.kind_ordinal = Some(u32::try_from(index + 1).expect("fixture ordinal"));
+                agent.ended_at = ((index % 100 * 37) % 100 < 98).then_some(at);
+                agent.task = Some("history task".to_owned());
+                agent.first_prompt = Some(String::new());
+                agent.prompt = Some(String::new());
+                agent.recent_prompts = vec![String::new(), String::new()];
+                if index % 100 < 39 {
+                    let mut pane = synthetic_pane(index);
+                    pane.foreground_cmdline = Some(String::new());
+                    pane.spawn_command = Some(String::new());
+                    agent.pane = Some(pane);
+                }
+                let target_bytes: usize = match index % 100 {
+                    0..51 => 4_800,
+                    51..91 => 13_200,
+                    91..99 => 20_000,
+                    _ => 35_900,
+                };
+                let base_bytes = serde_json::to_vec(&agent).expect("fixture row").len();
+                let fields = if agent.pane.is_some() { 6 } else { 4 };
+                let prompt = "p".repeat(target_bytes.saturating_sub(base_bytes) / fields);
+                agent.first_prompt = Some(prompt.clone());
+                agent.prompt = Some(prompt.clone());
+                agent.recent_prompts = vec![prompt.clone(), prompt.clone()];
+                if let Some(pane) = &mut agent.pane {
+                    pane.foreground_cmdline = Some(prompt.clone());
+                    pane.spawn_command = Some(prompt);
+                }
+                agent
+            })
+            .collect();
+        crate::disk::atomic::write_temp_then_rename(
+            &store.paths().agents_carryover,
+            &serde_json::json!({
+                "agents": agents,
+                "agent_identity": {"names": names, "next_ordinal": {"claude": rows + 1}},
+                "resume_outcomes": [],
+            }),
+        )
+        .map_err(crate::store::snapshot::SnapshotErr::from)?;
+        Ok(())
+    }
+
     /// Append lifecycle frames bound to synthetic panes with real worktree paths.
     pub fn seed_fleet_store_with_panes(
         paths: &StatePaths,

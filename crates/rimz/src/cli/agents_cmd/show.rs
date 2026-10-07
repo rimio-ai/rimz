@@ -265,7 +265,11 @@ pub(super) fn resolve_audit_agent(
     .with_agent_context(rimz::store::agent_context::read_all(runtime));
     let context = crate::cli::CurrentChannel::Unscoped.address_context();
     match crate::cli::resolve_agent_one(store, &snapshot, reference, None, &context) {
-        Ok(agent) => Ok(Some(agent.clone())),
+        Ok(agent) => Ok(Some(
+            store
+                .load_full_agent(agent)
+                .context("loading audit agent text")?,
+        )),
         Err(err) => Err(err),
     }
 }
