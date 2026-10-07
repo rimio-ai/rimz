@@ -76,7 +76,6 @@ pub enum Deciding {
 #[derive(Debug)]
 pub struct AccountStanding {
     accounts: Option<crate::agents::RoomAccounts>,
-    project: Option<ProjectLogins>,
     machine: RoomLogins,
 }
 
@@ -84,14 +83,10 @@ impl AccountStanding {
     /// The standing at `project_root` under the live pin-or-inherit selection.
     pub fn at(project_root: &Path, machine: &MachineConfig) -> Result<Self> {
         let state = StatePaths::for_project_root(project_root).context("preparing store paths")?;
-        let accounts = if state.workspace_record.exists() {
-            crate::agents::room_accounts(&state.workspace_record, machine)?
-        } else {
-            crate::agents::resolve_room_accounts(&RoomLogins::new(), project_root, machine)
-        };
+        let accounts =
+            crate::agents::room_accounts(&state.workspace_record, Some(project_root), machine)?;
         Ok(Self {
             accounts: Some(accounts),
-            project: crate::trust::project_logins(project_root).ok(),
             machine: machine.accounts.use_accounts.clone(),
         })
     }
@@ -100,7 +95,6 @@ impl AccountStanding {
     pub fn machine_only(machine: &MachineConfig) -> Self {
         Self {
             accounts: Some(crate::agents::RoomAccounts::machine(machine)),
-            project: Some(ProjectLogins::Unconfigured),
             machine: machine.accounts.use_accounts.clone(),
         }
     }
@@ -109,7 +103,6 @@ impl AccountStanding {
     pub fn unread(machine: &MachineConfig) -> Self {
         Self {
             accounts: None,
-            project: None,
             machine: machine.accounts.use_accounts.clone(),
         }
     }
@@ -141,7 +134,10 @@ impl AccountStanding {
         {
             scopes.insert(Scope::ThisRoom);
         }
-        if let Some(ProjectLogins::Apply(logins)) = &self.project
+        if let Some(ProjectLogins::Apply(logins)) = self
+            .accounts
+            .as_ref()
+            .and_then(crate::agents::RoomAccounts::project)
             && logins.get(kind) == Some(name)
         {
             scopes.insert(Scope::ThisProject);
@@ -159,7 +155,11 @@ impl AccountStanding {
             .as_ref()
             .map(crate::agents::RoomAccounts::pinned_names)
             .unwrap_or_default();
-        let project = match &self.project {
+        let project = match self
+            .accounts
+            .as_ref()
+            .and_then(crate::agents::RoomAccounts::project)
+        {
             Some(ProjectLogins::Apply(logins)) => Some(logins),
             _ => None,
         };

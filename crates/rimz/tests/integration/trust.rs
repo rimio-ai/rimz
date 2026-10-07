@@ -261,6 +261,49 @@ fn folder_trust_status_grant_and_revoke_scope() {
 }
 
 #[test]
+fn folder_trust_without_record_uses_the_trusted_project_account() {
+    let env = Env::new();
+    for name in ["work", "team"] {
+        env.rimz()
+            .args(["accounts", "add", "claude", name])
+            .assert()
+            .success();
+    }
+    env.rimz()
+        .args(["accounts", "use", "--global", "claude", "work"])
+        .assert()
+        .success();
+    env.write_config(&env.project_root, "[accounts]\nclaude = 'team'\n");
+    env.rimz().args(["trust", "grant"]).assert().success();
+    assert!(!env.store().paths().workspace_record.exists());
+    let bin = write_env_dump_shim(&env, "claude");
+    let output = crate::common::hermetic_providers(&env, &mut env.rimz())
+        .env("PATH", bin)
+        .args(["trust", "status", "--json"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let claude = report["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["kind"] == "claude")
+        .unwrap();
+    assert_eq!(claude["login"], "team");
+    assert!(
+        claude["path"]
+            .as_str()
+            .unwrap()
+            .contains("accounts/claude/team")
+    );
+}
+
+#[test]
 fn trust_status_shows_stale_field_diff() {
     let env = Env::new();
     env.write_config(&env.project_root, CLAUDE_HOOK_CONFIG);

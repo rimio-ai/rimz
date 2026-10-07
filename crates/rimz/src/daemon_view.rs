@@ -591,23 +591,27 @@ struct ResolvedDaemonInputs {
     stamp: DaemonViewInputsStamp,
     rimz_bin: PathBuf,
     codex_present: bool,
+    host_envs: Result<crate::remote_control::HostLoginEnvs, crate::agents::RoomLoginErr>,
 }
 
 impl ResolvedDaemonInputs {
-    fn read(record: &record::WorkspaceRecord, record_path: &Path) -> Self {
+    fn read(
+        record: &record::WorkspaceRecord,
+        record_path: &Path,
+        machine: &crate::config::MachineConfig,
+    ) -> Self {
         let rimz_bin = crate::proc::rimz_exe();
         let claude_bin = which::which("claude").ok();
         let codex_bin = crate::agents::runtime_control::installed_broker_bin();
-        let machine = crate::config::MachineConfig::load_lenient();
-        let claude_settings = crate::agents::room_account(
-            record_path,
-            &machine,
-            &crate::ids::AgentKind::new_unchecked("claude"),
-        )
-        .ok()
-        .map(|login| {
-            crate::remote_control::claude_settings_path(&login.env(&crate::agents::ambient_env()))
-        });
+        let host_envs = crate::remote_control::HostLoginEnvs::for_room(record_path, machine);
+        let claude_settings = host_envs
+            .as_ref()
+            .ok()
+            .and_then(|envs| {
+                envs.for_host(crate::remote_control::RemoteControlHost::Claude)
+                    .ok()
+            })
+            .map(crate::remote_control::claude_settings_path);
         Self {
             stamp: DaemonViewInputsStamp {
                 config_generation: crate::config::MachineConfig::load_stamp_generation(),
@@ -619,6 +623,7 @@ impl ResolvedDaemonInputs {
             },
             rimz_bin,
             codex_present: codex_bin.is_some(),
+            host_envs,
         }
     }
 }
@@ -701,7 +706,8 @@ impl DaemonRepairTracker {
                 return;
             }
         };
-        let resolved = ResolvedDaemonInputs::read(&record, &state.workspace_record);
+        let machine = crate::config::MachineConfig::load_lenient();
+        let resolved = ResolvedDaemonInputs::read(&record, &state.workspace_record, &machine);
         let frame = crate::sidebar::cache::read_snapshot_cache(
             &runtime.pane_frame_path(),
             &self.session_name,
@@ -713,15 +719,14 @@ impl DaemonRepairTracker {
             frame.as_deref(),
             crate::utils::time::unix_now_ms(),
             || {
-                let machine = crate::config::MachineConfig::load_lenient();
                 // Repair keeps an enabled host serving, so it refills the host's
                 // own preconditions before judging it. Probing first would read a
                 // precondition this pass is able to restore, and tear down a
                 // working host over a gap that outlives nothing but this tick.
-                let readiness = match crate::remote_control::HostLoginEnvs::for_room(&state.workspace_record, &machine) {
+                let readiness = match &resolved.host_envs {
                     Ok(envs) => {
-                        crate::remote_control::prepare_hosts(&machine.remote_control, &envs);
-                        crate::remote_control::ReadinessSnapshot::probe(&machine.remote_control, &envs)
+                        crate::remote_control::prepare_hosts(&machine.remote_control, envs);
+                        crate::remote_control::ReadinessSnapshot::probe(&machine.remote_control, envs)
                     }
                     Err(err) => {
                         tracing::warn!(workspace = %workspace_id, error = %err, "daemon host accounts unavailable");

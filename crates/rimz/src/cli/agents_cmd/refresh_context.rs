@@ -32,6 +32,7 @@ pub(super) fn run(request: LifecycleRefreshRequest) -> Result<()> {
     let state = StatePaths::for_workspace(workspace_id.clone())?;
     let defaults = agents::room_accounts(
         &state.workspace_record,
+        None,
         &rimz::config::MachineConfig::load_lenient(),
     )
     .ok();

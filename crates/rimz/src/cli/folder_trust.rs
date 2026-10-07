@@ -16,7 +16,12 @@ pub(super) fn collect(workspace: &rimz::ResolvedWorkspace) -> Result<Vec<FolderT
         .transpose()?
         .map(|snapshot| snapshot.agents)
         .unwrap_or_default();
-    let logins = RoomLoginSet::resolve(&paths.workspace_record, &machine).with_agents(&agents);
+    let logins = RoomLoginSet::resolve(
+        &paths.workspace_record,
+        Some(&workspace.project_root),
+        &machine,
+    )
+    .with_agents(&agents);
     Ok(rimz::agents::folder_trust_rows(
         &logins,
         &workspace.worktree_root,

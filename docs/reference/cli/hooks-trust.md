@@ -124,7 +124,7 @@ All three exit 0 whatever the state, and 1 when configuration or a grant record 
 
 ### Agent folder trust
 
-Every report adds an `agents:` section for detected Codex and Claude binaries, using this room's account for each kind or the provider's native default outside a room. `decided` means the provider will not ask its folder-trust question; `undecided` includes a fix. JSON adds `agents`, with `kind`, `login`, and `state`; undecided rows also carry `key`, `path`, and `fix`.
+Every report adds an `agents:` section for detected Codex and Claude binaries, using this room's account for each kind; outside a room it follows the trusted project, then machine, then provider default, as a new room there would. `decided` means the provider will not ask its folder-trust question; `undecided` includes a fix. JSON adds `agents`, with `kind`, `login`, and `state`; undecided rows also carry `key`, `path`, and `fix`.
 
 After the project grant, `rimz trust grant` on a terminal shows proposed provider-file diffs and asks `Also trust this folder for <kinds>?`, default No. Without a terminal it only prints the command to grant; provider files stay untouched. `--agents` explicitly authorizes writes without a question: bare `--agents` selects all undecided kinds, while `--agents codex,claude` or repeated `--agents` selects named kinds. The diffs still print before writes. Already-decided named kinds are left unchanged. Any `rimz trust grant` clears the workspace's remembered folder-trust decline; automatic project re-grants after `rimz loop` edits do not.
 

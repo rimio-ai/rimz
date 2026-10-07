@@ -139,6 +139,7 @@ impl Store {
                 {
                     let accounts = crate::agents::room_accounts(
                         &txn.paths.workspace_record,
+                        None,
                         &crate::config::MachineConfig::load_lenient(),
                     );
                     match accounts.and_then(|accounts| accounts.name(&intent.agent_kind)) {

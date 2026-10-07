@@ -92,6 +92,7 @@ fn resume_resolved(ctx: &Ctx, child: &AgentState, caller: &AgentState) -> Result
     )?;
     let logins = rimz::agents::room_accounts(
         &store.paths().workspace_record,
+        Some(&workspace.project_root),
         &rimz::config::MachineConfig::load_lenient(),
     )?;
     let catalog = rimz::agents::machine_login_catalog();

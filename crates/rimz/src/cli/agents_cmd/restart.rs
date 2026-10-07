@@ -80,6 +80,7 @@ pub(in crate::cli) fn restart_resolved(
 
     let logins = rimz::agents::room_accounts(
         &store.paths().workspace_record,
+        Some(&workspace.project_root),
         &rimz::config::MachineConfig::load_lenient(),
     )?;
     let catalog = rimz::agents::machine_login_catalog();
@@ -262,7 +263,7 @@ pub(in crate::cli) fn relaunch_request(
         launch_depth: agent.launch_depth,
         launched_by: agent.launched_by.clone().map(Box::new),
         profile: agent.profile.clone(),
-        login,
+        login: fresh_identity.map_or(login, |identity| identity.launch.login.clone()),
         tier: posture.launch.tier.clone(),
         role: agent.role.clone(),
         team: agent.team.clone(),
@@ -633,6 +634,39 @@ mod tests {
                 },
             }
         );
+    }
+
+    #[test]
+    fn fresh_relaunch_exec_uses_the_allocated_login() {
+        let agent = rimz::testkit::agent_state("claude", "old", jiff::Timestamp::UNIX_EPOCH);
+        for allocated in [Some("team".parse().unwrap()), None] {
+            let identity = AgentLaunchIdentity {
+                kind: agent.kind.clone(),
+                agent_id: "new".into(),
+                name: "otter".to_owned(),
+                name_explicit: false,
+                launch: rimz::agents::LaunchParams {
+                    login: allocated.clone(),
+                    ..Default::default()
+                },
+                run_id: None,
+                prompt: None,
+            };
+            let request = relaunch_request(
+                &agent,
+                &ResumePosture::default(),
+                ExecAction::Launch {
+                    prompt: None,
+                    extra_args: Vec::new(),
+                },
+                Some("work".parse().unwrap()),
+                Some(&identity),
+            );
+            assert_eq!(
+                request.identity.params.login, allocated,
+                "exec and the allocated stamp must use the same account"
+            );
+        }
     }
 
     #[test]

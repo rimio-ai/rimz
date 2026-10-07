@@ -174,6 +174,69 @@ fn global_account_switch_refuses_failed_preflight_without_writing() {
     let error = failed(&accounts(&env, &["use", "--global", "claude", "work"]));
     assert!(error.contains("is not a directory"), "{error}");
     assert_eq!(std::fs::read(&config).unwrap(), before);
+
+    succeeded(&accounts(&env, &["add", "codex", "untrusted"]));
+    let before = std::fs::read(&config).unwrap();
+    let error = failed(&accounts(&env, &["use", "--global", "codex", "untrusted"]));
+    assert!(error.contains("/hooks"), "{error}");
+    assert_eq!(std::fs::read(&config).unwrap(), before);
+}
+
+#[test]
+fn invalid_kind_keeps_its_error_and_default_beside_healthy_accounts() {
+    invalid_kind_report(false);
+}
+
+#[test]
+fn doctor_invalid_kind_keeps_its_error_and_default_beside_healthy_accounts() {
+    invalid_kind_report(true);
+}
+
+fn invalid_kind_report(doctor: bool) {
+    let env = Env::new();
+    succeeded(&accounts(&env, &["add", "claude", "work"]));
+    let config = env.rimz_home().join("config.toml");
+    let mut machine = std::fs::read_to_string(&config).unwrap();
+    machine.push_str("\n[accounts.codex.work]\nhome = '/srv/duplicate'\n[accounts.codex.dup]\nhome = '/srv/duplicate'\n");
+    std::fs::write(config, machine).unwrap();
+    let output = if doctor {
+        hermetic(&env, &mut env.rimz())
+            .args(["doctor", "--json"])
+            .output()
+            .unwrap()
+    } else {
+        accounts(&env, &["list", "--json"])
+    };
+    let report: Value = serde_json::from_str(&succeeded(&output)).unwrap();
+    let warning = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        warning.contains("give each account its own directory"),
+        "doctor={doctor}: {warning}"
+    );
+    let rows = if doctor {
+        &report["accounts"]["ready"]["rows"]
+    } else {
+        &report
+    };
+    let rows = rows.as_array().unwrap();
+    assert!(
+        rows.iter()
+            .any(|row| row["kind"] == "claude" && row["name"] == "work"),
+        "{rows:?}"
+    );
+    let default = rows
+        .iter()
+        .find(|row| row["kind"] == "codex" && row["name"] == "default")
+        .expect("failed kind retains its default row");
+    assert!(
+        default["problem"]
+            .as_str()
+            .unwrap()
+            .contains("give each account its own directory")
+    );
+    if !doctor {
+        assert_eq!(default["active"], false);
+    }
 }
 
 #[test]

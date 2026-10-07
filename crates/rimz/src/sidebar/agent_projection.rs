@@ -72,7 +72,7 @@ impl LocalSessionInputs {
     /// be resolved discovers nothing rather than another account's sessions.
     fn discover(&self, state: &StatePaths) -> Vec<LocalSessionObservation> {
         let machine = crate::config::MachineConfig::load_lenient();
-        let logins = crate::agents::RoomLoginSet::resolve(&state.workspace_record, &machine);
+        let logins = crate::agents::RoomLoginSet::resolve(&state.workspace_record, None, &machine);
         let ambient = crate::agents::ambient_env();
         self.discover_with(|kind, workspaces| {
             let Some(login) = logins.default_login(kind.as_str()) else {

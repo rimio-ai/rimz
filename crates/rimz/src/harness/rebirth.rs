@@ -942,9 +942,9 @@ fn plan_recovery(
     teams_and_profiles: &(TeamsConfig, ProfilesConfig),
 ) -> RecoveryPlan {
     let (teams, profiles) = teams_and_profiles;
-    let logins = crate::agents::room_accounts(&paths.workspace_record, machine)
+    let logins = crate::agents::room_accounts(&paths.workspace_record, Some(project_root), machine)
         .unwrap_or_else(crate::agents::RoomAccounts::unavailable);
-    let catalog = crate::agents::LoginCatalog::room_view(&machine.accounts);
+    let catalog = crate::agents::LoginCatalog::room_view(&machine.accounts).0;
     let (team, flat_agents, refilled) = split_team_and_flat(
         agents,
         &logins,

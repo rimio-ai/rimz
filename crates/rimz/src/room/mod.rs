@@ -87,7 +87,8 @@ pub fn resolve_birth_logins(
 ) -> Result<crate::agents::RoomAccounts> {
     let state = StatePaths::for_project_root(project_root).context("preparing store paths")?;
     let mut pins =
-        crate::agents::room_accounts(&state.workspace_record, machine_config)?.pinned_names();
+        crate::agents::room_accounts(&state.workspace_record, Some(project_root), machine_config)?
+            .pinned_names();
     for (kind, name) in requested {
         if let Some(current) = pins.get(kind)
             && current != name

@@ -6,6 +6,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use crate::agents::runtime_control::{
     self, RuntimeControlError, RuntimeControlIssue, RuntimeControlReadiness,
@@ -32,61 +33,59 @@ impl RemoteControlHost {
 }
 
 /// The provider environment each remote-control host of one room runs under.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct HostLoginEnvs {
-    claude: BTreeMap<String, String>,
-    codex: BTreeMap<String, String>,
+    claude: Result<BTreeMap<String, String>, Arc<crate::agents::RoomLoginErr>>,
+    codex: Result<BTreeMap<String, String>, Arc<crate::agents::RoomLoginErr>>,
+}
+
+impl Default for HostLoginEnvs {
+    fn default() -> Self {
+        Self {
+            claude: Ok(BTreeMap::new()),
+            codex: Ok(BTreeMap::new()),
+        }
+    }
 }
 
 impl HostLoginEnvs {
     pub fn ambient() -> Self {
         let ambient = crate::agents::ambient_env();
         Self {
-            claude: ambient.clone(),
-            codex: ambient,
+            claude: Ok(ambient.clone()),
+            codex: Ok(ambient),
         }
     }
 
-    pub fn from_logins(
-        accounts: &AccountsConfig,
-        logins: &crate::agents::RoomAccounts,
-    ) -> Result<Self, crate::agents::RoomLoginErr> {
+    pub fn from_logins(accounts: &AccountsConfig, logins: &crate::agents::RoomAccounts) -> Self {
         let ambient = crate::agents::ambient_env();
-        Ok(Self {
+        Self {
             claude: logins
-                .login(&AgentKind::new_unchecked("claude"), accounts)?
-                .env(&ambient),
+                .login(&AgentKind::new_unchecked("claude"), accounts)
+                .map(|login| login.env(&ambient))
+                .map_err(Arc::new),
             codex: logins
-                .login(&AgentKind::new_unchecked("codex"), accounts)?
-                .env(&ambient),
-        })
+                .login(&AgentKind::new_unchecked("codex"), accounts)
+                .map(|login| login.env(&ambient))
+                .map_err(Arc::new),
+        }
     }
 
     pub fn for_room(
         record: &Path,
         machine: &crate::config::MachineConfig,
     ) -> Result<Self, crate::agents::RoomLoginErr> {
-        let ambient = crate::agents::ambient_env();
-        Ok(Self {
-            claude: crate::agents::room_account(
-                record,
-                machine,
-                &AgentKind::new_unchecked("claude"),
-            )?
-            .env(&ambient),
-            codex: crate::agents::room_account(
-                record,
-                machine,
-                &AgentKind::new_unchecked("codex"),
-            )?
-            .env(&ambient),
-        })
+        let logins = crate::agents::room_accounts(record, None, machine)?;
+        Ok(Self::from_logins(&machine.accounts, &logins))
     }
 
-    pub fn for_host(&self, host: RemoteControlHost) -> &BTreeMap<String, String> {
+    pub fn for_host(
+        &self,
+        host: RemoteControlHost,
+    ) -> Result<&BTreeMap<String, String>, &Arc<crate::agents::RoomLoginErr>> {
         match host {
-            RemoteControlHost::Claude => &self.claude,
-            RemoteControlHost::Codex => &self.codex,
+            RemoteControlHost::Claude => self.claude.as_ref(),
+            RemoteControlHost::Codex => self.codex.as_ref(),
         }
     }
 }
@@ -99,19 +98,26 @@ pub struct ReadinessSnapshot {
 }
 
 impl ReadinessSnapshot {
-    pub fn probe(config: &RemoteControlConfig, envs: &HostLoginEnvs) -> Self {
+    pub(crate) fn probe_with(
+        config: &RemoteControlConfig,
+        envs: &HostLoginEnvs,
+        mut probe: impl FnMut(&str, bool, &BTreeMap<String, String>) -> RuntimeControlReadiness,
+    ) -> Self {
+        let mut readiness = |host: RemoteControlHost| match envs.for_host(host) {
+            Ok(env) => probe(host.kind(), config.enabled_for(host.kind()), env),
+            Err(error) if config.enabled_for(host.kind()) => RuntimeControlReadiness::Blocked(
+                RuntimeControlIssue::new(host.kind(), "account_unavailable", error),
+            ),
+            Err(_) => RuntimeControlReadiness::Disabled,
+        };
         Self::from_readiness(
-            runtime_control::readiness(
-                "claude",
-                config.enabled_for("claude"),
-                envs.for_host(RemoteControlHost::Claude),
-            ),
-            runtime_control::readiness(
-                "codex",
-                config.enabled_for("codex"),
-                envs.for_host(RemoteControlHost::Codex),
-            ),
+            readiness(RemoteControlHost::Claude),
+            readiness(RemoteControlHost::Codex),
         )
+    }
+
+    pub fn probe(config: &RemoteControlConfig, envs: &HostLoginEnvs) -> Self {
+        Self::probe_with(config, envs, runtime_control::readiness)
     }
 
     pub(crate) fn disabled() -> Self {
@@ -180,11 +186,10 @@ impl ReadinessSnapshot {
 /// fill its precondition reports it through readiness instead of failing here.
 pub fn prepare_hosts(config: &RemoteControlConfig, envs: &HostLoginEnvs) {
     for host in [RemoteControlHost::Claude, RemoteControlHost::Codex] {
-        runtime_control::prepare(
-            host.kind(),
-            config.enabled_for(host.kind()),
-            envs.for_host(host),
-        );
+        let Ok(env) = envs.for_host(host) else {
+            continue;
+        };
+        runtime_control::prepare(host.kind(), config.enabled_for(host.kind()), env);
     }
 }
 
@@ -199,8 +204,8 @@ pub fn preflight_enable(host: RemoteControlHost) -> Result<(), RuntimeControlIss
 pub fn advisories(config: &RemoteControlConfig, envs: &HostLoginEnvs) -> Vec<String> {
     let mut out = Vec::new();
     if config.enabled_for("codex")
-        && let Some(skew) =
-            runtime_control::updater_advisory("codex", envs.for_host(RemoteControlHost::Codex))
+        && let Ok(env) = envs.for_host(RemoteControlHost::Codex)
+        && let Some(skew) = runtime_control::updater_advisory("codex", env)
     {
         out.push(skew);
     }

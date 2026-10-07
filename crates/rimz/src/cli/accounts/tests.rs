@@ -202,6 +202,7 @@ fn rows_at(
         &ambient,
         agents,
         readings,
+        &BTreeMap::new(),
     )
 }
 

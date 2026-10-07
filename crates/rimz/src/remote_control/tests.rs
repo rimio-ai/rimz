@@ -5,12 +5,12 @@ use crate::ids::RoomLogins;
 fn host_login_envs_select_each_provider_account() {
     let accounts: AccountsConfig = toml::from_str("[claude.work]\nhome = \"/srv/work\"\n").unwrap();
     let logins = RoomLogins::from([(AgentKind::new_unchecked("claude"), "work".parse().unwrap())]);
-    let envs = HostLoginEnvs::from_logins(&accounts, &logins.into()).unwrap();
+    let envs = HostLoginEnvs::from_logins(&accounts, &logins.into());
     let ambient = crate::agents::ambient_env();
     let mut claude = ambient.clone();
     claude.insert("CLAUDE_CONFIG_DIR".to_owned(), "/srv/work".to_owned());
-    assert_eq!(envs.for_host(RemoteControlHost::Claude), &claude);
-    assert_eq!(envs.for_host(RemoteControlHost::Codex), &ambient);
+    assert_eq!(envs.for_host(RemoteControlHost::Claude).unwrap(), &claude);
+    assert_eq!(envs.for_host(RemoteControlHost::Codex).unwrap(), &ambient);
 }
 
 #[test]
@@ -40,7 +40,9 @@ fn host_login_envs_reject_unknown_accounts() {
         AgentKind::new_unchecked("claude"),
         "missing".parse().unwrap(),
     )]);
-    assert!(HostLoginEnvs::from_logins(&AccountsConfig::default(), &logins.into()).is_err());
+    let envs = HostLoginEnvs::from_logins(&AccountsConfig::default(), &logins.into());
+    assert!(envs.for_host(RemoteControlHost::Claude).is_err());
+    assert!(envs.for_host(RemoteControlHost::Codex).is_ok());
 }
 
 #[test]

@@ -556,9 +556,16 @@ fn use_room_account(
     let machine = MachineConfig::load_lenient();
     let store = super::open_existing_store(&workspace)?
         .context("this room has no store; run `rimz start` first")?;
-    let current = rimz::agents::room_accounts(&store.paths().workspace_record, &machine)?;
-    let prior_pin = current.pin(kind).cloned();
-    let prior_account = current.account(kind).ok();
+    let current = rimz::agents::room_accounts(
+        &store.paths().workspace_record,
+        Some(&workspace.project_root),
+        &machine,
+    )?;
+    let mut prior_pin = current.pin(kind).cloned();
+    let prior_account = current
+        .account(kind)
+        .ok()
+        .filter(|account| account.source != rimz::agents::LoginSource::Pinned);
     let mut pins = current.pinned_names();
     if let Some(name) = name {
         pins.insert(kind.clone(), name.clone());
@@ -589,7 +596,7 @@ fn use_room_account(
             account.source, account.name
         )
     } else {
-        store.switch_room_login(&workspace, kind, &account.name)?;
+        prior_pin = store.switch_room_login(&workspace, kind, &account.name)?;
         if prior_pin.as_ref() == Some(&account.name) {
             return render::finish(writeln!(
                 render::out(),
@@ -776,7 +783,10 @@ const WINDOW_SPANS: [WindowSpan; 2] = [WindowSpan::FiveHour, WindowSpan::SevenDa
 
 fn list(globals: &GlobalFlags, json: bool) -> Result<()> {
     let machine = MachineConfig::load_lenient();
-    let catalog = LoginCatalog::room_view(&machine.accounts);
+    let (catalog, errors) = LoginCatalog::room_view(&machine.accounts);
+    for error in errors.values() {
+        writeln!(std::io::stderr().lock(), "rimz: warning: {error}")?;
+    }
     let standing = match super::position_standing(globals, &machine) {
         Ok((standing, _in_room)) => standing,
         Err(error) => {
@@ -809,6 +819,7 @@ fn list(globals: &GlobalFlags, json: bool) -> Result<()> {
         &rimz::agents::ambient_env(),
         agents.as_ref(),
         &readings,
+        &errors,
     );
     if json {
         return render::json_pretty(&rows);
@@ -911,6 +922,7 @@ fn account_rows(
     ambient: &BTreeMap<String, String>,
     agents: Option<&BTreeMap<LoginKey, usize>>,
     readings: &BTreeMap<LoginKey, LoginReading>,
+    errors: &BTreeMap<AgentKind, rimz::agents::LoginConfigErr>,
 ) -> Vec<AccountRow> {
     let row =
         |kind: &AgentKind, name: &LoginName, home, problem: Option<BirthLoginErr>| AccountRow {
@@ -973,6 +985,18 @@ fn account_rows(
         if let Some(problem) = problem {
             rows.push(row(&key.kind, &key.name, None, Some(problem)));
         }
+    }
+    for (kind, error) in errors {
+        rows.retain(|row| row.kind != *kind || !row.name.is_default());
+        for row in rows.iter_mut().filter(|row| row.kind == *kind) {
+            row.active = false;
+        }
+        let login = ProviderLogin::default_for(kind.clone());
+        let mut failed = row(kind, login.name(), login.home_dir(ambient), None);
+        failed.active = false;
+        failed.status = AccountStatus::Unavailable;
+        failed.problem = Some(error.to_string());
+        rows.push(failed);
     }
     rows.sort_by(|a, b| {
         (&a.kind, !a.name.is_default(), &a.name).cmp(&(&b.kind, !b.name.is_default(), &b.name))
@@ -1185,6 +1209,7 @@ fn live_rooms_where(
             let paths = rimz::StatePaths::for_workspace(room.workspace_id)?;
             Ok(rimz::agents::room_accounts(
                 &paths.workspace_record,
+                None,
                 machine,
             )?)
         })();
