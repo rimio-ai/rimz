@@ -356,7 +356,6 @@ pub(super) fn execute_attempt(
             }
             store.record_message_delivery_failures(
                 records,
-                Some(head),
                 crate::store::writer::DeliveryFailureDisposition::Terminal,
                 "a compaction never follows a compaction; the agent has not taken a turn since its last one",
                 &workspace.session_name,
@@ -378,7 +377,6 @@ pub(super) fn execute_attempt(
             }
             store.record_message_delivery_failures(
                 records,
-                records.first(),
                 crate::store::writer::DeliveryFailureDisposition::Retry,
                 WAITING,
                 &workspace.session_name,
@@ -403,7 +401,6 @@ pub(super) fn execute_attempt(
             );
             let failure = store.record_message_delivery_failures(
                 records,
-                durable_receiver.then_some(head),
                 if durable_receiver {
                     crate::store::writer::DeliveryFailureDisposition::Retry
                 } else {
@@ -451,14 +448,14 @@ pub fn sweep(workspace: &ResolvedWorkspace, store: &Store, mux: Option<MuxName>)
     let live = store.list_messages()?;
     let needs_snapshot = live
         .iter()
-        .any(|message| matches!(message.status, MessageStatus::Sent | MessageStatus::Queued));
+        .any(|message| message.status.is_open() || message.status == MessageStatus::Sent);
     let snapshot = if needs_snapshot {
         let snapshot = crate::sidebar::produce::resolution_snapshot(workspace, store, mux)?;
         Some(snapshot.with_agent_context(crate::store::agent_context::read_all(&runtime)))
     } else {
         None
     };
-    store.reconcile_stale_sent_messages(
+    store.reconcile_stale_messages(
         &workspace.session_name,
         now,
         max_delivery_attempts_from_env(),

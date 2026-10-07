@@ -676,7 +676,9 @@ path = "crates/rimz/src/store"
 # `RunRecord::answer_started_at` is the one current-answer start the list, the report row, and the reopen fold read (+1).
 # CacheClock carries the card's provider cache window and keep-warm hold from enrichment to the renderer (+1).
 # SidebarSubAgent::holds_parent_turn shares delegation liveness with the renderer (+1).
-surface-budget = 366
+# Fresh pane writes share the atomic enqueue-and-claim writer (+1).
+# The pane writer rechecks its batch against the existing claim-hold rule (+1).
+surface-budget = 368
 
 [[module]]
 path = "crates/rimz/src/theme"
@@ -833,6 +835,7 @@ allowed-dependencies = [
     "(crate)",
     "agents",
     "config",
+    "disk::atomic",
     "harness::assist_log",
     "address",
     "ids",
@@ -844,7 +847,8 @@ allowed-dependencies = [
     "workspace",
 ]
 # Queued delivery shares the typed interrupt-key preflight with pane sends.
-surface-budget = 10
+# Delivery and compact-first writes share pre-write wake-stamp maintenance (+1).
+surface-budget = 11
 
 [[module]]
 path = "crates/rimz/src/mux/mount_proof.rs"

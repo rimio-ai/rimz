@@ -204,19 +204,19 @@ fn sweep(
                     .archive_orphan_messages(&workspace.session_name)
                     .context("archiving orphan messages")?;
                 let reconcile = store
-                    .reconcile_stale_sent_messages(
+                    .reconcile_stale_messages(
                         &workspace.session_name,
                         jiff::Timestamp::now(),
                         rimz::message::max_delivery_attempts_from_env(),
                     )
-                    .context("reconciling sent messages")?;
+                    .context("reconciling stale messages")?;
                 spinner.set("pruning store caches...");
                 let carryover_pruned = store
                     .prune_carryover(rimz::store::event_log::DEFAULT_RETENTION)
                     .context("pruning carryover agents")?;
                 StoreMaintenance::Done {
                     archived: messages_archived,
-                    reconciled: reconcile.requeued + reconcile.timed_out,
+                    reconciled: reconcile.requeued + reconcile.timed_out + reconcile.abandoned,
                     repaired,
                     carryover_pruned,
                 }

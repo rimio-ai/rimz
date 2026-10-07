@@ -112,7 +112,7 @@ fn no_op_queue_transaction_changes_no_durable_surface() {
     let _ = std::fs::remove_file(&q.inner.paths.latest_snapshot);
 
     let report = q
-        .reconcile_stale_sent_messages("session", Timestamp::now(), 3)
+        .reconcile_stale_messages("session", Timestamp::now(), 3)
         .unwrap();
 
     assert_eq!(report, ReconcileReport::default());
@@ -722,7 +722,7 @@ fn correlated_ack_absorbs_queued_late_ack_but_not_a_claimed_record() {
     let reconcile_at =
         claimed.last_sent_at.expect("sent timestamp") + MessageBody::Prompt.delivery_window();
     let report = q
-        .reconcile_stale_sent_messages("session", reconcile_at, 3)
+        .reconcile_stale_messages("session", reconcile_at, 3)
         .unwrap();
     assert_eq!(report.requeued, 2);
     q.claim_message_for_steer(&claimed.message_id, reconcile_at)
@@ -768,7 +768,7 @@ fn stale_sent_message_requeues_before_attempt_cap() {
     let last_sent_at = sent.last_sent_at.expect("last sent");
 
     let report = q
-        .reconcile_stale_sent_messages("session", last_sent_at + sent.body.delivery_window(), 3)
+        .reconcile_stale_messages("session", last_sent_at + sent.body.delivery_window(), 3)
         .unwrap();
 
     assert_eq!(report.requeued, 1);
@@ -790,6 +790,74 @@ fn stale_sent_message_requeues_before_attempt_cap() {
 }
 
 #[test]
+fn expired_claim_requeues_at_ttl_and_is_claimable_by_another_sender() {
+    let q = Queue::new();
+    let queued = q.queue(1);
+    let now = Timestamp::from_second(1_000).unwrap();
+    let held = q
+        .claim_message_for_delivery(&queued.message_id, now)
+        .unwrap()
+        .unwrap();
+    let report = q
+        .reconcile_stale_messages("session", now + CLAIM_TTL - Duration::from_secs(1), 3)
+        .unwrap();
+    assert_eq!(report, ReconcileReport::default());
+    assert_eq!(q.live(), vec![held.clone()]);
+    let report = q
+        .reconcile_stale_messages("session", now + CLAIM_TTL, 3)
+        .unwrap();
+    assert_eq!(report.requeued, 1);
+    assert_eq!(report.timed_out, 0);
+    assert_eq!(report.abandoned, 0);
+    let requeued = q.by_id(&held.message_id);
+    assert_eq!(requeued.status, MessageStatus::Queued);
+    assert_eq!(requeued.attempts, 1);
+    assert_eq!(requeued.last_attempt_at, None);
+    assert_eq!(q.methods(), ["message.queued", "message.queued"]);
+    assert_eq!(q.reason("message.queued"), "claim expired; sender gone");
+    let reclaimed = q
+        .claim_message_for_delivery(&held.message_id, now + CLAIM_TTL)
+        .unwrap()
+        .unwrap();
+    assert_eq!(reclaimed.attempts, 2);
+}
+
+#[test]
+fn fifth_expired_claim_abandons_once() {
+    let q = Queue::new();
+    let queued = q.queue(1);
+    let mut now = Timestamp::from_second(1_000).unwrap();
+    for attempt in 1..=MAX_DELIVERY_ATTEMPTS {
+        let held = q
+            .claim_message_for_delivery(&queued.message_id, now)
+            .unwrap()
+            .unwrap();
+        assert_eq!(held.attempts, attempt);
+        now += CLAIM_TTL;
+        let report = q.reconcile_stale_messages("session", now, 3).unwrap();
+        assert_eq!(
+            report.requeued,
+            usize::from(attempt < MAX_DELIVERY_ATTEMPTS)
+        );
+        assert_eq!(
+            report.abandoned,
+            usize::from(attempt == MAX_DELIVERY_ATTEMPTS)
+        );
+    }
+    assert!(q.live().is_empty());
+    assert_eq!(q.history().len(), 1);
+    assert_eq!(q.history()[0].status, MessageStatus::Abandoned);
+    assert_eq!(q.history()[0].attempts, MAX_DELIVERY_ATTEMPTS);
+    assert_eq!(q.count("message.abandoned"), 1);
+    assert_eq!(q.reason("message.abandoned"), "claim expired; sender gone");
+    assert_eq!(
+        q.reconcile_stale_messages("session", now, 3).unwrap(),
+        ReconcileReport::default()
+    );
+    assert_eq!(q.count("message.abandoned"), 1);
+}
+
+#[test]
 fn stale_command_times_out_without_resend_regardless_of_counter() {
     let q = Queue::new();
     let sent = q.sent_with(1, |message| {
@@ -799,13 +867,14 @@ fn stale_command_times_out_without_resend_regardless_of_counter() {
     });
     let now = sent.last_sent_at.expect("last sent") + sent.body.delivery_window();
 
-    let report = q.reconcile_stale_sent_messages("session", now, 3).unwrap();
+    let report = q.reconcile_stale_messages("session", now, 3).unwrap();
 
     assert_eq!(
         report,
         ReconcileReport {
             requeued: 0,
-            timed_out: 1
+            timed_out: 1,
+            abandoned: 0,
         }
     );
     assert!(q.live().is_empty());
@@ -852,7 +921,7 @@ fn stale_sent_message_is_deferred_while_receiver_compacts() {
         - jiff::SignedDuration::from_secs(crate::agents::COMPACTING_WINDOW_SECS + 1);
     q.append_event(&event).unwrap();
 
-    let report = q.reconcile_stale_sent_messages("session", now, 3).unwrap();
+    let report = q.reconcile_stale_messages("session", now, 3).unwrap();
 
     assert_eq!(report, ReconcileReport::default());
     let messages = q.live();
@@ -890,7 +959,7 @@ fn stale_sent_message_requeues_once_compaction_bracket_closes() {
         .unwrap();
     }
 
-    let report = q.reconcile_stale_sent_messages("session", now, 3).unwrap();
+    let report = q.reconcile_stale_messages("session", now, 3).unwrap();
 
     assert_eq!(report.requeued, 1);
     let message = &q.live()[0];
@@ -905,7 +974,7 @@ fn stale_sent_message_times_out_at_attempt_cap() {
     let sent = q.sent_with(1, |message| message.unconfirmed_sends = 3);
     let now = sent.last_sent_at.expect("last sent") + sent.body.delivery_window();
 
-    let report = q.reconcile_stale_sent_messages("session", now, 3).unwrap();
+    let report = q.reconcile_stale_messages("session", now, 3).unwrap();
 
     assert_eq!(report.requeued, 0);
     assert_eq!(report.timed_out, 1);
@@ -924,7 +993,7 @@ fn stale_sent_reconcile_preserves_cross_message_event_order() {
         .max()
         .expect("deadline");
 
-    q.reconcile_stale_sent_messages("session", now, 3).unwrap();
+    q.reconcile_stale_messages("session", now, 3).unwrap();
 
     let methods = q.methods();
     assert_eq!(
@@ -939,7 +1008,7 @@ fn fresh_sent_message_waits_for_reconcile_deadline() {
     q.sent(1);
 
     let report = q
-        .reconcile_stale_sent_messages("session", Timestamp::now(), 3)
+        .reconcile_stale_messages("session", Timestamp::now(), 3)
         .unwrap();
 
     assert_eq!(report, ReconcileReport::default());
