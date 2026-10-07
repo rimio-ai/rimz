@@ -162,6 +162,80 @@ fn agent_with_context(
 }
 
 #[test]
+fn delegated_park_opens_one_unread_episode_and_parent_notification() {
+    use crate::sidebar::read_marks::ReadMarks;
+    use crate::sidebar::unread::UnreadEpisodes;
+
+    let now = Timestamp::from_second(1_000).unwrap();
+    let mut parent = agent("parent", AgentStatus::Running, false);
+    parent.name = Some("parent".to_owned());
+    parent.name_explicit = true;
+    parent.last_activity = now;
+    let mut child = agent("child", AgentStatus::Running, false);
+    child.parent_agent_id = Some(parent.agent_id.clone());
+    child.parent_agent_kind = Some(parent.kind.clone());
+    child.launch_depth = Some(1);
+    child.name = Some("child".to_owned());
+    child.last_activity = now - jiff::SignedDuration::from_secs(1);
+    let mut context = crate::agents::AgentContext::new("claude", now);
+    context.turn_error = Some(crate::agents::AgentTurnError {
+        class: crate::agents::TurnErrorClass::PausedRateLimit,
+        at: now,
+        label: Some("usage limit reached".to_owned()),
+    });
+    child.context = Some(context);
+    let frame = |children: Vec<AgentState>| {
+        let mut snapshot = SidebarSnapshot::build_with_agents(
+            workspace(),
+            [vec![parent.clone()], children].concat(),
+            now,
+        )
+        .with_live_panes(vec![parent.pane.clone().unwrap()], None);
+        snapshot.panes_produced_at_ms = Some(1);
+        snapshot
+    };
+    let marks = ReadMarks::default();
+    let mut episodes = UnreadEpisodes::default();
+    let mut state = NotificationState::default();
+    let prefs = NotificationsPrefs {
+        triggers: vec![crate::config::NotificationTrigger::Paused],
+        ..prefs()
+    };
+    let mut first = frame(vec![child.clone()]);
+    let opened = episodes.reconcile(&mut first, &marks, false);
+    assert_eq!(opened.opened.len(), 1);
+    assert_eq!(opened.opened[0].status, AgentStatus::Paused);
+    assert_eq!(opened.opened[0].handle, "parent");
+    let notifications = state.evaluate(&first, &opened.opened, &prefs, 1);
+    assert_eq!(notifications.len(), 1);
+    assert_eq!(notifications[0].notification_kind, NotificationKind::Paused);
+    assert_eq!(notifications[0].agents[0].handle, "parent");
+    assert!(
+        notifications[0]
+            .body
+            .ends_with(" is parked on a provider limit.")
+    );
+    let mut second_child = child.clone();
+    second_child.agent_id = "second".into();
+    let mut second = frame(vec![child.clone(), second_child]);
+    let opened = episodes.reconcile(&mut second, &marks, false);
+    assert!(opened.opened.is_empty());
+    assert!(
+        state
+            .evaluate(&second, &opened.opened, &prefs, 2)
+            .is_empty()
+    );
+    child.last_activity = now + jiff::SignedDuration::from_secs(1);
+    let mut resumed = frame(vec![child]);
+    let outcome = episodes.reconcile(&mut resumed, &marks, false);
+    assert!(outcome.opened.is_empty());
+    assert!(outcome.cleared.is_empty());
+    let row = &resumed.worktree_groups[0].rows[0];
+    assert_eq!(row.status(), Some(AgentStatus::Running));
+    assert!(row.unread);
+}
+
+#[test]
 fn configured_unread_episode_triggers_fire() {
     let mut state = NotificationState::default();
     let prefs = NotificationsPrefs {

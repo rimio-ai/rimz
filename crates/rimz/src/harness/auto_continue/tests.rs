@@ -229,6 +229,115 @@ fn parked_agent(activity: i64, error_at: i64, class: TurnErrorClass, label: &str
 }
 
 #[test]
+fn launched_child_arms_and_fires_resume_but_native_child_does_not() {
+    let (_dir, runtime) = temp_runtime();
+    let path = park_path(&runtime);
+    let capacity = ProviderCapacity::from_windows(vec![window(100, 5_000)]);
+    write_rate_limits_cache(
+        &runtime,
+        &RateLimitsCache {
+            entries: [(
+                crate::ids::LoginKey::default_for(AgentKind::new_unchecked("claude")),
+                crate::agents::RateLimitCacheEntry {
+                    limits: AgentRateLimits {
+                        windows: vec![window(100, 5_000)],
+                    },
+                    ..Default::default()
+                },
+            )]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        },
+    );
+    for (class, expected) in [
+        (
+            TurnErrorClass::PausedRateLimit,
+            ResumeArm::RateLimit {
+                deadline: ts(5_000),
+            },
+        ),
+        (
+            TurnErrorClass::PausedOverloaded,
+            ResumeArm::Overloaded {
+                overloaded_at: ts(1_010),
+            },
+        ),
+    ] {
+        let mut child = parked_agent(1_000, 1_010, class, "provider park");
+        child.parent_agent_id = Some("parent".into());
+        child.parent_agent_kind = Some(child.kind.clone());
+        child.launch_depth = Some(1);
+        assert_eq!(
+            resume_park(&child, Some(&capacity), ts(2_000)),
+            Some(expected)
+        );
+        let mut snapshot = SidebarSnapshot::build_with_agents(
+            runtime.workspace_id.clone(),
+            vec![child.clone()],
+            ts(2_000),
+        );
+        let config = ResumeConfig {
+            auto_continue: true,
+            ..ResumeConfig::default()
+        };
+        resume_parked(
+            &snapshot,
+            &runtime,
+            &crate::agents::RoomLoginSet::native(),
+            &config,
+            &[],
+        );
+        let armed = read_park(&path).expect("launched child park armed");
+        assert_eq!(armed.last_nudge_at, None);
+        snapshot.now = ts(6_000);
+        fire_if_due(
+            &child,
+            &path,
+            FireContext {
+                snapshot: &snapshot,
+                runtime: &runtime,
+                now: snapshot.now,
+                text: "continue",
+                config: &config,
+                resume_messages: &[],
+            },
+        );
+        assert_eq!(read_park(&path), Some(armed));
+        snapshot.agent_panes = vec![live_pane()];
+        fire_if_due(
+            &child,
+            &path,
+            FireContext {
+                snapshot: &snapshot,
+                runtime: &runtime,
+                now: snapshot.now,
+                text: "continue",
+                config: &config,
+                resume_messages: &[],
+            },
+        );
+        assert_eq!(read_park(&path).unwrap().last_nudge_at, Some(ts(6_000)));
+        remove_park(&path);
+        child.launch_depth = None;
+        assert_eq!(resume_park(&child, Some(&capacity), ts(2_000)), None);
+        let native = SidebarSnapshot::build_with_agents(
+            runtime.workspace_id.clone(),
+            vec![child],
+            ts(2_000),
+        );
+        resume_parked(
+            &native,
+            &runtime,
+            &crate::agents::RoomLoginSet::native(),
+            &config,
+            &[],
+        );
+        assert_eq!(read_park(&path), None);
+    }
+}
+
+#[test]
 fn provider_limit_parks_arm_from_capacity_and_overload_arms_without_it() {
     let capacity = ProviderCapacity::from_windows(vec![
         window(100, 5_000),
