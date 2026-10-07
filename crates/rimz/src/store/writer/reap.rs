@@ -4,7 +4,7 @@ use std::time::Duration;
 use jiff::Timestamp;
 use tracing::warn;
 
-use crate::agents::{AgentLifecycleObservation, LifecycleSignal};
+use crate::agents::{AgentLifecycleObservation, AgentState, LifecycleSignal};
 use crate::store::event::EventEnvelope;
 use crate::store::runtime::{self, AgentLiveness, RuntimeScope};
 use crate::store::{live_roster, pending_recovery, session_death};
@@ -85,10 +85,11 @@ impl Store {
     fn reap_dead_sessions(&self) -> Result<usize> {
         // The persisted roster protects crash-recovery candidates until a
         // rebirth boundary parks them in the pending-recovery record, which
-        // protects them from every reap reason until the user decides.
-        // Parked agents cannot supersede another owner either. The scan stays
-        // lock-free: a live same-id session that races the append clears its
-        // end stamp on its next lifecycle event.
+        // shields pending roots from every reap reason until the user decides;
+        // they cannot supersede another owner either. Pending launched
+        // children get no shield: no settlement asks about them. The scan
+        // stays lock-free: a live same-id session that races the append
+        // clears its end stamp on its next lifecycle event.
         let mut projection = self.runtime_projection(RuntimeScope::Audit)?;
         // Rest certificates are cache-class sidecars. Reading only raw-active
         // roots lets a provider-rested owner yield; a missing sidecar leaves
@@ -103,18 +104,22 @@ impl Store {
             .map(|roster| roster.agents)
             .unwrap_or_default();
         let pending = pending_recovery::read(&self.inner.paths.pending_recovery);
+        let shielded = |agent: &AgentState| {
+            pending.contains(&(agent.kind.clone(), agent.agent_id.clone()))
+                && !agent.is_launched_child()
+        };
         let now = Timestamp::now();
         let victims = projection
             .agents
             .iter()
             .filter(|agent| !agent.is_provider_subagent())
             .filter(|agent| agent.ended_at.is_none())
-            .filter(|agent| !pending.contains(&(agent.kind.clone(), agent.agent_id.clone())))
+            .filter(|agent| !shielded(agent))
             .filter_map(|agent| {
                 let superseded = projection.agents.iter().any(|newer| {
                     !newer.is_provider_subagent()
                         && newer.ended_at.is_none()
-                        && !pending.contains(&(newer.kind.clone(), newer.agent_id.clone()))
+                        && !shielded(newer)
                         && session_death::supersedes(agent, newer)
                 });
                 let event_name = if superseded {

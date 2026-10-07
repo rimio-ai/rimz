@@ -664,6 +664,50 @@ fn parked_paneless_teammate_cannot_supersede_an_unparked_owner() {
 
 #[cfg(unix)]
 #[test]
+fn pending_children_are_reaped_only_when_their_owner_is_dead() {
+    let (_dir, store, workspace_id) = store();
+    for (id, pid, child) in [
+        ("root", Some(u32::MAX), false),
+        ("dead-child", Some(u32::MAX), true),
+        ("young-child", None, true),
+    ] {
+        let mut observation =
+            AgentLifecycleObservation::new(Some(id.into()), LifecycleSignal::Registered);
+        observation.agent_pid = pid;
+        observation.worktree_path = Some(format!("/repo/{id}"));
+        if child {
+            observation.parent_agent_id = Some("root".into());
+            observation.launch.parent_agent_id = Some("root".into());
+            observation.launch.launch_depth = Some(1);
+        }
+        event_log::append(
+            &store.paths().events_log,
+            &EventEnvelope::agent_lifecycle(
+                workspace_id.clone(),
+                "rimz-test",
+                "codex",
+                "SessionStart",
+                &observation,
+            ),
+        )
+        .unwrap();
+    }
+    let key = |id: &str| (AgentKind::new_unchecked("codex"), AgentSessionId::from(id));
+    let pending = ["root", "dead-child", "young-child"].map(key).into();
+    pending_recovery::park(store.paths(), &pending).unwrap();
+
+    assert_eq!(store.reap_dead_sessions().unwrap(), 1);
+    let audit = store.runtime_projection(RuntimeScope::Audit).unwrap();
+    assert_eq!(audit.ended, [key("dead-child")].into());
+    assert!(store.read_events().unwrap().iter().any(|event| {
+        matches!(event.kind(), EventKind::AgentLifecycle(payload)
+            if payload.event_name.as_deref() == Some("ReapedDead")
+                && payload.observation.agent_id.as_deref() == Some("dead-child"))
+    }));
+}
+
+#[cfg(unix)]
+#[test]
 fn parked_recovery_candidates_survive_the_roster_until_settled() {
     let (_dir, store, workspace_id) = store();
     let mut stale = lifecycle(&workspace_id, "stale", None, None);
