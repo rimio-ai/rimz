@@ -2,7 +2,7 @@
 
 You may pay for more than one Claude or Codex plan: a work subscription and a personal one, or a second seat you move to when the first hits its weekly limit. Both CLIs already support this. Claude reads its credentials, settings, and transcripts from `CLAUDE_CONFIG_DIR` (default `~/.claude`), and Codex from `CODEX_HOME` (default `~/.codex`), so `CLAUDE_CONFIG_DIR=~/.claude-work claude` is a second, fully separate account: its own credentials, its own limits, its own transcripts.
 
-That works for one terminal. A fleet needs each agent, child, and restart to keep the correct home too: a session can resume only under an account that reads the same history, which a standalone account keeps in its own home. RimZ records an account on each agent and a default for future launches in the room. Declare each home once, pick the room's default, and switch it later without moving the agents already working.
+That works for one terminal. A fleet needs each agent, child, and restart to keep the correct home too: a session can resume only under an account that reads the same history, which a standalone account keeps in its own home. RimZ records an account on each agent. For future launches, a room either pins an account or follows the project and machine defaults live. Declare each home once, then choose whether this room should stay on one account or follow your defaults, without moving the agents already working.
 
 ```sh
 rimz accounts add claude work          # declare the home, link it, install hooks
@@ -29,7 +29,7 @@ Without a name, RimZ uses the account a launch here would use. It shows that log
 
 ```console
 $ rimz accounts add claude work
-linked to /home/me/.claude: settings.json, settings.local.json, CLAUDE.md, skills, plugins, agents, commands, output-styles
+linked to /home/me/.claude: settings.json, settings.local.json, CLAUDE.md, skills, plugins, agents, commands, output-styles, projects
 ✓ claude  installed 13 hooks → ~/.rimz/accounts/claude/work/settings.json  (new file)
 claude account `work` lives at ~/.rimz/accounts/claude/work
   log in once   CLAUDE_CONFIG_DIR=/home/me/.rimz/accounts/claude/work claude
@@ -42,7 +42,7 @@ What it does on your machine:
 
 1. Writes `[accounts.claude.work]` to the per-machine config, `~/.rimz/config.toml`.
 2. Creates the home directory, `~/.rimz/accounts/<kind>/<name>`.
-3. Links the account home to the provider's own home, as `default` resolves it: every top-level entry of either home except the provider's credentials, its per-install state, and its lock and temp files. The line above is a provider home that holds nothing yet; yours also lists what your own `~/.claude` holds, such as `projects`.
+3. Links the account home to the provider's own home, as `default` resolves it: every top-level entry of either home except the provider's credentials, its per-install state, and its lock and temp files. The line above is a provider home that holds nothing yet; yours also lists any other shared entries your own `~/.claude` holds.
 4. Installs the RimZ reporting hooks through the links into the shared config, so the provider's own home gains the hooks too.
 5. Prints the account home, login command, and commands to select it.
 
@@ -62,16 +62,16 @@ The account named `default` is the provider's own home and is never declared. It
 
 ```console
 $ rimz accounts list
-   KIND    NAME     STATUS           5h LEFT              7d LEFT              AGENTS  HISTORY  HOME
-○  claude  default  ready            100% · 3h31m · 0.0x  89% · 4d03h · 0.3x   -       -        ~/.claude
-●  claude  work     ready            98% · 4h21m · 0.2x   31% · 13h51m · 0.8x  -       shared   ~/.rimz/accounts/claude/work
+   KIND    NAME     STATUS           5h LEFT              7d LEFT              CREDITS  AGENTS  HISTORY  HOME
+○  claude  default  ready            100% · 3h31m · 0.0x  89% · 4d03h · 0.3x   -        -       -        ~/.claude
+●  claude  work     ready            98% · 4h21m · 0.2x   31% · 13h51m · 0.8x  -        -       shared   ~/.rimz/accounts/claude/work
 
-●  codex   default  hooks untrusted  ∞                    64% · 5d11h · 1.6x   -       -        ~/.codex
-●  this room   ○  new rooms
+●  codex   default  hooks untrusted  ∞                    64% · 5d11h · 1.6x   -        -       -        ~/.codex
+●  this room (claude)   ●  new rooms (codex)   ○  new rooms
 RimZ hooks for codex account `default` at `/home/me/.codex` are untrusted (SessionStart, UserPromptSubmit, SubagentStart, SubagentStop, Stop, PermissionRequest, PreToolUse, PostToolUse, PreCompact, PostCompact); run /hooks inside codex and trust the RimZ hooks
 ```
 
-`●` marks the account a launch from where you stand uses: inside a room, the room's selection; anywhere else, the account the next `rimz start` there would pick. `○` marks the account new rooms start on when that is a different one, and the line under the table names the selection that decides each marker (`this room`, `this project`, `new rooms`). `5h LEFT` and `7d LEFT` show how much of each usage window the account has left and how long until it resets, so you can pick the account to switch to. `AGENTS` counts the agents running on the account now across every live room. The [reference](../reference/cli/accounts.md#list) spells out the order the layers win in.
+`●` marks the account a launch from where you stand uses: a room's pin, else the trusted project's selection, else the machine's, else the provider's own home. `○` marks the machine default when that is a different account. The line under the table names every deciding layer (`this room`, `this project`, `new rooms`), with provider kinds when they differ. `5h LEFT` and `7d LEFT` show how much of each usage window the account has left and how long until it resets, so you can pick the account to switch to. `AGENTS` counts the agents running on the account now across every live room. The [reference](../reference/cli/accounts.md#list) spells out the order the layers win in.
 
 Pace is the used share divided by the elapsed share of the window: `1.0x` lasts exactly to reset; above it, the account runs dry early at that average rate. It is rounded to one decimal, with `>10x` at a rounded pace of 10.0 or higher. A trailing `–` means less than 5% of the window has elapsed, too early to tell. Pace is absent for a lifted, unknown, not-started or exhausted window, or without a duration, reset time or positive elapsed time. Its color follows `[theme.display.budget_bar.burn_rate]`, the same bands as the sidebar reset marker.
 
@@ -79,22 +79,22 @@ An account reads `ready` once its home exists, holds trusted RimZ hooks, and has
 
 ## Start a room on an account
 
-A room picks one account per provider when it is born:
+To keep a room on one account per provider across restarts and changes to your defaults, pin it at start:
 
 ```sh
 rimz start --account claude=work --account codex=personal
 ```
 
-To use the same account in every new room without repeating the flag, run `rimz accounts use --global codex personal` once. It writes the machine's `[accounts.use]` selection while keeping the account declarations and comments. Reverse it with `rimz accounts use --global codex default`. Existing rooms, running or stopped, keep their launch defaults until you [switch them inside the room](#change-a-rooms-account).
+To set the machine default without repeating the flag, run `rimz accounts use --global codex personal` once. It checks the account's home and hooks, then writes the machine's `[accounts.use]` selection while keeping the account declarations and comments. New rooms and existing rooms following that default use it on their next launch; pinned rooms keep their account, and running agents stay where they are. Reverse it with `rimz accounts use --global codex default`.
 
-A room keeps its recorded launch defaults across starts. For each provider in a new room, `--account` wins over the trusted project's `[accounts]`, then the machine's `[accounts.use]`, then `default`. The project selection lives in `<repo>/.rimz/config.toml`:
+A room keeps its pins across starts. Without a pin, each launch follows the trusted project's `[accounts]`, then the machine's `[accounts.use]`, then `default`. Without `--account`, start writes no pin. Older rooms keep recorded named accounts as pins; their recorded `default` accounts follow live defaults unless you explicitly pin `default` now. On re-entry from outside the room, `--account` can pin a provider that was following defaults, or repeat its existing pin; a different pin refuses and names `rimz accounts use` as the fix. The project selection lives in `<repo>/.rimz/config.toml`:
 
 ```toml
 [accounts]
 claude = "work"
 ```
 
-That selection sits in the project trust hash, so a repository you cloned cannot quietly move your agents onto another account: until you trust the project, `rimz start` refuses and prints the fix.
+That selection sits in the project trust hash, so a repository you cloned cannot quietly move your agents onto another account. An untrusted or stale selection refuses a launch for a provider following defaults and prints the fix; a pinned provider ignores it. An unreadable machine `config.toml` also refuses a provider following defaults or pinned to a named account. A provider pinned to `default` needs neither the project selection nor the machine file. These refusals belong to that provider only; a healthy provider can still launch. Start checks all providers before opening the room.
 
 `rimz start` also checks every selected named account before it builds the room, and refuses rather than opening a room whose agents cannot reach their home or report from it:
 
@@ -111,7 +111,7 @@ RimZ sets `CLAUDE_CONFIG_DIR` or `CODEX_HOME` on each provider process from that
 
 ## What the account changes
 
-The sidebar's provider dashboard shows one block per provider, for the account the room launches under: the plan, the 5-hour and 7-day limit bars, and the credits all come from that account's home. A named account labels its block, as in `Codex · team-1`. After `rimz accounts use`, the block shows the new account from the next refresh on. Agents still running on the old account keep running and keep their own cards, but the dashboard does not show that account. Right after a switch to an account no room has read yet, the provider has no block until RimZ reads that account, and an account that was never logged in shows none. `rimz providers` lists every account, one table row each ([reading the numbers](./insight.md#per-account-the-provider-dashboard)).
+The sidebar's provider dashboard shows one block per provider, for the account the room launches under: the plan, the 5-hour and 7-day limit bars, and the credits all come from that account's home. A named account labels its block, as in `Codex · team-1`. After pinning, unpinning, or changing a default the room follows, the block shows the new account from the next refresh on. Agents still running on the old account keep running and keep their own cards, but the dashboard does not show that account. Right after a switch to an account no room has read yet, the provider has no block until RimZ reads that account, and an account that was never logged in shows none. `rimz providers` lists every account, one table row each ([reading the numbers](./insight.md#per-account-the-provider-dashboard)).
 
 A daily cap in the per-machine config's `[accounts.budget]` table follows the history: `default` and the shared accounts of a provider spend against one cap, and each standalone account has its own:
 
@@ -126,17 +126,19 @@ With `work` shared, a room on `work` parks when `default` and the shared account
 
 ## Change a room's account
 
-When you want future launches to use another account without interrupting running work, switch the default from a shell inside the room:
+When you want future launches to stay on one account without interrupting running work, pin it from a shell inside the room:
 
 ```sh
 rimz accounts use claude work
 ```
 
-The command checks the selected home's hooks, then changes only that provider's launch default in the room record. It leaves machine and project configuration alone and reports how many running agents keep the prior account. Reverse it with `rimz accounts use --reset claude` to copy the account a new room here would get now; `default` means the provider's own home, not a reset. Its output confirms the switch immediately; sidebar account information follows on the next refresh. Outside a room the command refuses and names `--global`, which sets the machine selection for new rooms instead.
+The command checks the selected home's hooks, then pins only that provider's account in the room record, even when the room already follows that account. It leaves machine and project configuration alone and reports how many running agents keep the prior account. Reverse it with `rimz accounts use --reset claude` to remove the pin and follow the project and machine defaults live again. Reset checks the inherited account before removing the pin, so a refusal leaves it intact. `rimz accounts use claude default` instead pins the provider's own home; `default` is an account, not a reset. Its output confirms the switch immediately; sidebar account information follows on the next refresh. Outside a room the command refuses and names `--global`, which changes the machine default instead.
 
 Every new launch uses the room's current account for its provider, including peers launched by existing agents and team members. A `rimz subagents` child of the same provider as its parent stays on its parent's account, so the work an agent delegates does not move when the room switches. A loop task pinned with `--account` stays on its account too, and skips its fire when that account cannot run. Resuming, restarting, or forking a session also runs on the room's current account. `default` and every shared account of a provider read one history, so a session moves between them: switch the room to another shared account, resume, and the conversation continues there, with the agent recorded on the account it now runs on. A standalone account keeps its history in its own home, so RimZ refuses to reopen a session across that boundary, in either direction. The refusal names both accounts and the fix, for example `rimz accounts use claude default` to resume the session, then switch back. Recovery after a crash skips such sessions and lists each as `different account`. Keep an account declared to resume its sessions. A running [remote-control host](./remote.md#answer-asks-from-your-phone) keeps its account until its next spawn.
 
 Inside a room that is already running, `rimz start --account` refuses and points at `rimz accounts use`. `rimz reset --account` remains available when you want to tear down and rebuild the room instead.
+
+A changed project or machine default can move an unpinned room outside an old session's history pool. That does not block the default change; the later resume refuses. Pin the room to the session's account with `rimz accounts use`, resume, then use `rimz accounts use --reset` to follow live defaults again.
 
 ## Remove an account
 
@@ -144,9 +146,9 @@ Inside a room that is already running, `rimz start --account` refuses and points
 rimz accounts remove claude work
 ```
 
-This removes the `[accounts.claude.work]` declaration and clears the machine selection if it names that account. The home, its credentials, and its transcripts stay on disk; `rimz accounts add claude work --home <that home>` brings the account back. A room still selecting a removed account needs it added again or its launch default switched to another account.
+This removes the `[accounts.claude.work]` declaration and clears the machine selection if it names that account. The home, its credentials, and its transcripts stay on disk; `rimz accounts add claude work --home <that home>` brings the account back. A room pinned to a removed account needs it added again, unpinned with `rimz accounts use --reset claude`, or pinned to another account. Rooms following the machine default move with the cleared entry; a project that still names the removed account needs its selection changed too.
 
-If a live room selects the account as its launch default, `remove` warns and names it. Add the account back, or switch that room's default. The warning checks room defaults, not every running agent's account; an older session still needs its own account declared, and selected in the room, to resume.
+If a live room pins the account, `remove` warns and names it. Add the account back, unpin it, or pin another account in that room. The warning checks room pins, not every running agent's account; an older session still needs its account declared and a room account sharing its history to resume.
 
 `rimz uninstall` keeps account homes too: it removes RimZ's hooks from every declared account's home and leaves `~/.rimz/accounts/` in place, whichever flags you pass it.
 
