@@ -335,6 +335,8 @@ The listing that follows `armed` can read `watcher lost` with AGE `-` right afte
 
 A held room draws cell bars, never pixel meters or pixel pets, because no kitty-capable client is looking at it. On tmux the sidebar sends kitty graphics only when every rendering client's termname is a kitty-capable one (`sidebar_pane/pixel/probe.rs` `termname_allowed`: `xterm-kitty`, `kitty`, `xterm-ghostty`, `ghostty`), and the room keeps its own `tmux-256color` client attached. To check which image ids go out, the `p=` on each placement, or the `d=I` deletes, replace that client with a recorded one that reports `xterm-kitty`. This recipe is tmux-only.
 
+Start the room with `env -u NO_COLOR`: with `NO_COLOR` set, pets and meters are suppressed by design. Zellij renders pets and meters on the cell tier only, so pixel checks are tmux-only.
+
 Take `ROOT` and the session from your card (`Mux: tmux  Session: room-e5ac`). The machine usually has no `xterm-kitty` terminfo, so alias one from `xterm-256color` under the room's tmp. Then detach the room's rendering client (control-mode `1` lines are RimZ's own link; leave them), and attach a `script`-recorded client for 30 seconds, long enough for the sidebar's 10-second caps refresh to see it:
 
 ```sh
