@@ -190,7 +190,7 @@ Expect one `sidebar host` line and one `sidebar serve` line per tab. The host's 
 
 Three checks cover what a unit test cannot:
 
-1. **Host death.** Kill the host by PID with `kill -9`. Every pane keeps its last frame, then repaints: each supervisor reads the end of its stream and attaches to a host one of them starts, or runs its own worker when its attachment was younger than the stable-run window. Look on each tab, then repeat the `ps` and confirm one host again once the room has been quiet for a minute and a tab's worker has next exited.
+1. **Host death.** Kill the host by PID with `kill -9`. Every pane keeps its last frame, then repaints: each supervisor reads the end of its stream and attaches to a host one of them starts, or runs its own worker when its attachment was younger than the stable-run window. Look on each tab, then repeat the `ps` and confirm one host again with no worker: a supervisor on a worker probes for a host once the stable-run window has passed, about a minute, then stops the worker and attaches its pane to that host.
 2. **Supervisor death.** Kill one tab's `sidebar serve` by PID. The host drops that pane: its heartbeat and wakeup socket leave the room's runtime directory (the testkit build's `rimz sidebar renderers` no longer lists the instance), and the other tabs keep painting.
 3. **Last pane.** Close every tab's sidebar pane, or kill the session. The host exits about ten seconds after its last pane detaches; `ps` shows no `sidebar host` for the session after that.
 
