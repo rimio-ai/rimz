@@ -488,7 +488,8 @@ path = "crates/rimz/src/harness"
 # Rebirth pairs durable refill ends with a downward diag repair trace (an import, no surface).
 # Acting-run classification and folded history cross to the loop CLI (+5).
 # Room-only catalog loading filters before precedence for list and watch (+1).
-surface-budget = 727
+# Manual resumes share refill settlement and its typed error (+2), and receive the per-tab recovery carrier (+2).
+surface-budget = 731
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -1033,6 +1034,7 @@ allowed-dependencies = [
 # The rebirth preview joins skips, resumed keys, and worktree-gone agents to candidates by session (+3).
 # RecoveryPlan::refilled carries already-live seat replacements into rebirth settlement (+1).
 # RecoveryTabAgents carries confirmed resume and Fresh replacement keys into rebirth (+1).
+# MaterializedRecovery and RecoveryTabAgents also publish that pairing to lane placement.
 surface-budget = 63
 
 [[module]]
@@ -3132,6 +3134,16 @@ reason = "Payload of LaneResumeAction::RestoreClosed; the CLI materializes it (p
 
 [[verdict]]
 kind = "item"
+key = "harness::resume::MaterializedRecovery"
+reason = "Lane resume consumes the materialized tabs with their per-tab refill keys from the binary crate."
+
+[[verdict]]
+kind = "item"
+key = "harness::resume::RecoveryTabAgents"
+reason = "Public MaterializedRecovery field; lane placement settles only the refilled keys of its opened tab."
+
+[[verdict]]
+kind = "item"
 key = "harness::resume::PlannedTeamTab"
 reason = "Returned by split_team_and_flat to rebirth, which reads cohort seeds without naming the type (pass 19a)."
 
@@ -3914,6 +3926,16 @@ reason = "Returned by the held room::RoomContext::inspect_rebirth and carried by
 kind = "item"
 key = "harness::rebirth::RebirthErr"
 reason = "Error type of the held room::RoomContext::inspect_rebirth; atlas caveat 13 (pass 23b)."
+
+[[verdict]]
+kind = "item"
+key = "harness::rebirth::settle_refilled_seats"
+reason = "Cohort and lane CLI placement share the durable refill end and pending-removal boundary with rebirth confirmation."
+
+[[verdict]]
+kind = "item"
+key = "harness::rebirth::RefillSettlementErr"
+reason = "The binary displays refill settlement failures without exposing the store's private pending-recovery error."
 
 [[verdict]]
 kind = "item"

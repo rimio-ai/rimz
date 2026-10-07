@@ -1193,6 +1193,16 @@ fn launch_resume_layout(
             errors: LAUNCH_PLACEMENT_ERRORS,
         },
         || {
+            if let Err(err) = rimz::harness::rebirth::settle_refilled_seats(
+                store,
+                &workspace.session_name,
+                &plan.refilled,
+            ) {
+                let _ = writeln!(
+                    std::io::stderr(),
+                    "rimz: replaced agents stay pending: {err}"
+                );
+            }
             rimz::harness::assist_log::record_tier_fallbacks(launch_batch.identities());
             if args.launch.overrides.tier.is_some() {
                 for (cell, seed) in layout.agent_cells().zip(&plan.seeds) {

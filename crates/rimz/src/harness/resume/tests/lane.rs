@@ -238,7 +238,7 @@ fn fresh_lane_materializes_new_team_launches() {
     let runtime =
         crate::disk::paths::RuntimePaths::under(workspace, &dir.path().join("runtime")).unwrap();
     let store = Store::open(paths, runtime).unwrap();
-    let materialized = plan.materialize(&store, "rimz-test").unwrap();
+    let materialized = plan.materialize(&store, "rimz-test").unwrap().resume;
     assert_eq!(materialized.team_launches.len(), 1);
     assert_eq!(materialized.team_launches[0].tab, 0);
     assert_eq!(materialized.team_launches[0].batch.identities().len(), 2);
@@ -889,7 +889,8 @@ fn lane_recovery_materializes_team_first_and_fails_strictly() {
     let materialized = plan
         .clone()
         .materialize(&store, "rimz-test")
-        .expect("strict lane materialization");
+        .expect("strict lane materialization")
+        .resume;
     assert!(materialized.team_launches.is_empty());
     let tabs = materialized.tabs;
     assert_eq!(tabs.len(), 2);

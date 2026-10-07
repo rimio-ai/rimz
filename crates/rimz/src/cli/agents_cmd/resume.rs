@@ -13,7 +13,8 @@ use rimz::agents::LocalSessionObservation;
 use rimz::harness::ancestry::{LaunchFocus, resolve_caller};
 use rimz::harness::resume::{
     LaneRestoreConfig, LaneResumeAction, LaneResumeError, LaneResumeRequest, LaneResumeSelector,
-    LaneSummary, LaneWorktree, ResumeSkip, plan_lane_resume, resume_session_present,
+    LaneSummary, LaneWorktree, MaterializedRecovery, ResumeSkip, plan_lane_resume,
+    resume_session_present,
 };
 use rimz::mux::{ResumeTab, SplitPaneOptions, SplitPlacement, SplitTarget};
 
@@ -176,9 +177,12 @@ pub(super) fn resume_lane(
             report_discovery_skips(plan.discovery_skipped())?;
             report_resume_skips(plan.skipped())?;
             report_posture_warnings(plan.warnings())?;
-            let plan = plan.materialize(&store, &workspace.session_name)?;
+            let MaterializedRecovery {
+                resume: plan,
+                tab_agents,
+            } = plan.materialize(&store, &workspace.session_name)?;
             let count = plan.tabs.iter().map(ResumeTab::pane_count).sum::<usize>();
-            for (index, tab) in plan.tabs.into_iter().enumerate() {
+            for (index, (tab, agents)) in plan.tabs.into_iter().zip(tab_agents).enumerate() {
                 if let Err(error) = room.open_resume_tab(tab, focus.takes_focus()) {
                     for launch in plan
                         .team_launches
@@ -188,6 +192,16 @@ pub(super) fn resume_lane(
                         let _ = store.fail_agent_launch_batch(&launch.batch);
                     }
                     return Err(error.into());
+                }
+                if let Err(err) = rimz::harness::rebirth::settle_refilled_seats(
+                    &store,
+                    &workspace.session_name,
+                    &agents.refilled,
+                ) {
+                    let _ = writeln!(
+                        std::io::stderr(),
+                        "rimz: replaced agents stay pending: {err}"
+                    );
                 }
                 if let Some(launch) = plan.team_launches.iter().find(|launch| launch.tab == index) {
                     rimz::harness::assist_log::record_tier_fallbacks(launch.batch.identities());
