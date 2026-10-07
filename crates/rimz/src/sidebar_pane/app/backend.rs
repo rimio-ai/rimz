@@ -1,6 +1,6 @@
 //! Terminal backend for one sidebar pane, bound to an owned output fd rather than the process terminal, so the room host can paint a pane whose tty it does not hold.
 //!
-//! Drawing goes through crossterm's encoder; geometry is read from the fd, and the cursor query is answered from the last position set, because crossterm's own answers round-trip the controlling tty a detached host lacks. A pane the mux has not laid out yet reports `0x0`: such a pane is unsized, and everything written to it is dropped until a read finds it sized. Output that is no terminal at all (a pipe, a file) has no geometry to wait for and is written as it comes.
+//! Drawing goes through crossterm's encoder; geometry is read from the fd, and the cursor query is answered from the last position set, because crossterm's own answers round-trip the controlling tty a detached host lacks. A pane the mux has not laid out yet reports `0x0`: such a pane is unsized, and everything written to it is dropped until a read finds it sized. Output that is no terminal at all (a pipe, a file) has no geometry to wait for and is written as it comes. `begin_frame` holds everything written until `end_frame`, which ships the held frame in one write, bracketed as a synchronized update when the caller asks.
 
 use std::cell::Cell;
 use std::io::{self, BufWriter, Write};
