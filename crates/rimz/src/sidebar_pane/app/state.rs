@@ -209,7 +209,7 @@ pub(super) fn session_focus_baseline(
         .focused_pane
         .as_ref()
         .filter(|pane| own_pane != Some(*pane))
-        .filter(|pane| row_index_of_pane(snapshot, None, pane).is_some())
+        .filter(|pane| row_index_of_pane(snapshot, &Default::default(), pane).is_some())
         .cloned()
 }
 

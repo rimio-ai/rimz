@@ -10,7 +10,7 @@ use crate::sidebar_pane::render::{
     BodyFilter, Browse, DashboardTab, HitTarget, ManualScroll, UiState, active_dashboard_tab,
     dashboard_tab_of_kind, dashboard_tabbed, dashboard_tabs, selected_agent_kind,
 };
-use crate::sidebar_pane::view::VisibleRoster;
+use crate::sidebar_pane::view::{BodyLens, VisibleRoster};
 
 use super::input::KeyAction;
 
@@ -39,7 +39,7 @@ pub(super) enum InputEffect {
     MarkAllRead,
     /// Persist and broadcast the shared cockpit lens from the loop, which owns
     /// the room runtime paths.
-    SyncFilter(Option<BodyFilter>),
+    SyncFilter(BodyLens),
 }
 
 impl InputOutcome {
@@ -95,7 +95,7 @@ impl InputOutcome {
         }
     }
 
-    fn sync_filter(filter: Option<BodyFilter>) -> Self {
+    fn sync_filter(filter: BodyLens) -> Self {
         Self {
             redraw: true,
             effect: Some(InputEffect::SyncFilter(filter)),
@@ -242,7 +242,17 @@ pub(super) fn handle_key(
             ui.help_visible = true;
             InputOutcome::redraw()
         }
-        KeyAction::Filter(action) => apply_make_up_filter(ui, snapshot, action),
+        KeyAction::Filter(filter) => {
+            let changed = match filter {
+                None => set_make_up_filter(ui, snapshot, BodyLens::default()),
+                Some(filter) => toggle_make_up_filter(ui, snapshot, filter),
+            };
+            if changed {
+                InputOutcome::sync_filter(ui.make_up_filter.clone())
+            } else {
+                InputOutcome::default()
+            }
+        }
         KeyAction::Dismiss => InputOutcome::dismiss(),
         KeyAction::Digit(digit) => {
             let index = usize::from(digit.saturating_sub(1));
@@ -305,7 +315,7 @@ pub(super) fn handle_mouse_click(
         }
         Some(HitTarget::BodyFilter(filter)) => {
             if toggle_make_up_filter(ui, snapshot, filter) {
-                InputOutcome::sync_filter(ui.make_up_filter)
+                InputOutcome::sync_filter(ui.make_up_filter.clone())
             } else {
                 InputOutcome::default()
             }
@@ -414,42 +424,28 @@ fn toggle_delegation_history(ui: &mut UiState, snapshot: &SidebarSnapshot, row_i
 /// (the [`select_row`] discipline) and the selection re-anchors at once: a
 /// highlight whose row the filter hides drops to a clamped index, re-seated by
 /// the held baseline when the filter clears.
-fn apply_make_up_filter(
-    ui: &mut UiState,
-    snapshot: &SidebarSnapshot,
-    filter: Option<BodyFilter>,
-) -> InputOutcome {
-    let changed = match filter {
-        None => set_make_up_filter(ui, snapshot, None),
-        Some(filter) => toggle_make_up_filter(ui, snapshot, filter),
-    };
-    if changed {
-        InputOutcome::sync_filter(ui.make_up_filter)
-    } else {
-        InputOutcome::default()
-    }
-}
-
 fn toggle_make_up_filter(ui: &mut UiState, snapshot: &SidebarSnapshot, filter: BodyFilter) -> bool {
-    let target = if ui.make_up_filter == Some(filter) {
+    let target = if ui.make_up_filter.filter == Some(filter) {
         None
     } else if filter.total(&snapshot.worktree_groups) > 0 {
         Some(filter)
     } else {
         return false;
     };
-    set_make_up_filter(ui, snapshot, target)
+    let mut lens = ui.make_up_filter.clone();
+    lens.filter = target;
+    set_make_up_filter(ui, snapshot, lens)
 }
 
 pub(super) fn set_make_up_filter(
     ui: &mut UiState,
     snapshot: &SidebarSnapshot,
-    filter: Option<BodyFilter>,
+    lens: BodyLens,
 ) -> bool {
-    if ui.make_up_filter == filter {
+    if ui.make_up_filter == lens {
         return false;
     }
-    ui.make_up_filter = filter;
+    ui.make_up_filter = lens;
     ui.manual_scroll = None;
     anchor_selection(ui, snapshot);
     true
@@ -582,10 +578,10 @@ fn reconcile_filter_and_baseline(
     snapshot: &SidebarSnapshot,
     derived: Option<PaneId>,
 ) {
-    if let Some(filter) = ui.make_up_filter
+    if let Some(filter) = ui.make_up_filter.filter
         && filter.total(&snapshot.worktree_groups) == 0
     {
-        ui.make_up_filter = None;
+        ui.make_up_filter.filter = None;
     }
     if let Some(pane) = derived {
         ui.baseline_pane = Some(pane);
@@ -662,13 +658,10 @@ fn anchor_selection_in(ui: &mut UiState, roster: &VisibleRoster<'_>) {
     clamp_selection_in(ui, roster);
 }
 
-/// The visible-row index backing `pane_id`, in `visible_rows` order under
-/// `filter`. Pass `None` to ask about room membership regardless of the
-/// make-up filter (the baseline's question), the active filter to ask about
-/// the rendered body (the highlight's).
+/// The visible-row index backing `pane_id` under the lens. Pass an empty lens for room membership regardless of body narrowing, and the active lens for rendered membership.
 pub(super) fn row_index_of_pane(
     snapshot: &SidebarSnapshot,
-    filter: Option<BodyFilter>,
+    filter: &BodyLens,
     pane_id: &PaneId,
 ) -> Option<usize> {
     VisibleRoster::new(snapshot, filter, &Default::default(), None).ordinal_of_pane(pane_id)
@@ -725,7 +718,7 @@ fn select_row(ui: &mut UiState, snapshot: &SidebarSnapshot, index: usize) {
 #[cfg(test)]
 fn step_attention_index(
     snapshot: &SidebarSnapshot,
-    filter: Option<BodyFilter>,
+    filter: &BodyLens,
     expanded_groups: &std::collections::BTreeSet<String>,
     selected: usize,
     forward: bool,

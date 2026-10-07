@@ -695,7 +695,7 @@ pub(super) fn top_lines(
     let (today_usd, spend_epoch) = cockpit_spend_target(snapshot).unwrap_or((0.0, None));
     let today_usd = ui.spend_ratchet.display(spend_epoch, today_usd);
     let spend_line = header.len();
-    let unread_picked = ui.make_up_filter == Some(BodyFilter::Unread);
+    let unread_picked = ui.make_up_filter.filter == Some(BodyFilter::Unread);
     let (spend, chip_hits) = cockpit_spend_line(
         theme,
         live_agents,
@@ -704,7 +704,7 @@ pub(super) fn top_lines(
             unread_picked,
             open_prs,
             open_pr_ci,
-            pr_picked: ui.make_up_filter == Some(BodyFilter::OpenPr),
+            pr_picked: ui.make_up_filter.filter == Some(BodyFilter::OpenPr),
         },
         (today_usd, tripped),
         &ui.tally,
@@ -746,7 +746,7 @@ pub(super) fn top_lines(
         theme,
         &snapshot.worktree_groups,
         snapshot.now,
-        ui.make_up_filter,
+        &ui.make_up_filter,
         ui.animation_phase,
         inner,
         lead_unread_status,

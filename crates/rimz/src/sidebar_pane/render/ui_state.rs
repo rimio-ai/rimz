@@ -3,7 +3,7 @@ use crate::diag::record::GateRule;
 use crate::ids::PaneId;
 use crate::sidebar_pane::pets::PetView;
 use crate::sidebar_pane::pixel::meter::MeterPixels;
-use crate::sidebar_pane::view::{BodyFilter, VisibleRoster};
+use crate::sidebar_pane::view::{BodyLens, VisibleRoster};
 use crate::store::snapshot::SidebarSnapshot;
 use jiff::Timestamp;
 use std::collections::{BTreeMap, BTreeSet};
@@ -117,15 +117,10 @@ pub(in crate::sidebar_pane) struct UiState {
     /// Pane-local context-meter interning state, persisted across frames so a
     /// quantized raster keeps its image id while ratatui diffs placeholders.
     pub(in crate::sidebar_pane) meter_pixels: Option<MeterPixels>,
-    /// The cockpit filter target the user picked to filter the agent-card
-    /// body, or `None` for the resting show-all view.
-    /// Shared session display state persisted in room runtime and adopted by
-    /// every renderer; the producer, the store, and the cockpit counts (always
-    /// the full fleet) are untouched. Only the body iteration narrows through
-    /// one `VisibleRoster` projection. A pure toggle: a click on the active
-    /// target clears it, and it auto-clears when its count drops to zero — the
-    /// make-up twin of a dashboard tab pick ending when its panel leaves.
-    pub(in crate::sidebar_pane) make_up_filter: Option<BodyFilter>,
+    /// Shared room-runtime lens narrowing the body through one `VisibleRoster` projection.
+    ///
+    /// Cockpit counts remain full-fleet. Toggling a pick or auto-clearing its empty bucket preserves the query; a zero-match query stays set.
+    pub(in crate::sidebar_pane) make_up_filter: BodyLens,
     /// Worktree groups expanded through the renderer-local `+K more` affordance.
     /// Expansion is presentation state only: the snapshot carries the full
     /// roster, and a group drops from this set once it no longer has a capped
@@ -169,7 +164,7 @@ impl UiState {
     ) -> VisibleRoster<'a> {
         VisibleRoster::new(
             snapshot,
-            self.make_up_filter,
+            &self.make_up_filter,
             &self.expanded_groups,
             self.order_hold.as_ref().map(|hold| &hold.frozen.visible),
         )

@@ -22,7 +22,7 @@ fn browse(pane: &PaneId, baseline: Option<&PaneId>) -> Browse {
 /// seam over the directional [`step_attention_index`].
 fn next_attention_index(
     snapshot: &SidebarSnapshot,
-    filter: Option<BodyFilter>,
+    filter: &BodyLens,
     selected: usize,
 ) -> Option<usize> {
     step_attention_index(snapshot, filter, &Default::default(), selected, true)
@@ -30,7 +30,7 @@ fn next_attention_index(
 
 fn roster_len(
     snapshot: &SidebarSnapshot,
-    filter: Option<BodyFilter>,
+    filter: &BodyLens,
     expanded_groups: &std::collections::BTreeSet<String>,
 ) -> usize {
     VisibleRoster::new(snapshot, filter, expanded_groups, None).len()

@@ -275,7 +275,7 @@ fn more_line_click_toggles_group_expansion_and_ordinals_stay_in_lockstep() {
     let composed = render::compose_lines(&snapshot, None, &ui, theme.as_ref(), 54, 64);
     ui.interactions = composed.interactions;
     assert_eq!(
-        roster_len(&snapshot, None, &ui.expanded_groups),
+        roster_len(&snapshot, &BodyLens::default(), &ui.expanded_groups),
         6,
         "collapsed body exposes the capped row ordinals"
     );
@@ -290,7 +290,7 @@ fn more_line_click_toggles_group_expansion_and_ordinals_stay_in_lockstep() {
     assert!(ui.expanded_groups.contains(&group_key));
     assert!(ui.manual_scroll.is_some(), "the toggle pins the viewport");
     assert_eq!(
-        roster_len(&snapshot, None, &ui.expanded_groups),
+        roster_len(&snapshot, &BodyLens::default(), &ui.expanded_groups),
         9,
         "expanded body exposes every row ordinal"
     );

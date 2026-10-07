@@ -142,7 +142,8 @@ impl RoomContext {
                     "clearing room-runtime sidebar width target failed",
                 );
             }
-            if let Err(err) = crate::sidebar::body_filter::clear(&self.runtime) {
+            if let Err(err) = crate::sidebar::body_filter::write(&self.runtime, &Default::default())
+            {
                 tracing::debug!(
                     workspace = %self.workspace.workspace_id,
                     error = %err,
