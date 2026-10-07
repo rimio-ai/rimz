@@ -396,7 +396,7 @@ These commands touch state RimZ owns: its rooms, its runtime files, and the work
 
 To skip recovering prior agents when a room is reborn, pass `--no-resume` to `rimz`, `rimz start`, or `rimz attach`. The room comes up empty instead of seeding the fleet you left.
 
-Typed at a terminal, this is a one-way skip, not a deferred recovery: the agents that were not brought back are recorded as ended, and the next start without the flag has nothing left to seed from. From a script or any start with no terminal, the room still comes up empty but no agent is ended, and your next start at a terminal offers them. Their transcripts and history stay in the store, behind `rimz agents show` and `rimz transcript`.
+Typed at a terminal, this is a one-way skip, not a deferred recovery: the agents that were not brought back are recorded as ended, and the next start without the flag has nothing left to seed from. From a script or any start with no terminal, the room still comes up empty but no agent is ended: they stay parked, a start into the running room tells you so, and `rimz agents resume <lane>` brings a lane back. Their transcripts and history stay in the store, behind `rimz agents show` and `rimz transcript`.
 
 ```sh
 rimz --no-resume    # come up empty: skip recovering prior agents

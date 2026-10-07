@@ -3018,7 +3018,7 @@ fn zellij_recovery_survives_a_sidebar_that_outlives_its_session() {
         return;
     }
     assert!(
-        stderr.contains("its agents stay pending for the next attended start"),
+        stderr.contains("its agents stay pending for a later rebirth or explicit resume"),
         "the recovered agent was neither resumed nor left pending: {stderr}"
     );
     let pending: serde_json::Value = serde_json::from_slice(

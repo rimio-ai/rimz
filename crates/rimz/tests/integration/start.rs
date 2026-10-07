@@ -658,7 +658,7 @@ fn unattended_start_without_resume_parks_lost_agents() {
 }
 
 #[test]
-fn live_room_start_offers_parked_agents_only_when_attended() {
+fn live_room_start_keeps_parked_agents_without_prompting() {
     use rimz::agents::{AgentLifecycleObservation, LifecycleSignal};
     use rimz::store::event::EventKind;
 
@@ -725,68 +725,94 @@ fn live_room_start_offers_parked_agents_only_when_attended() {
     assert_eq!(pending(), parked, "nobody was asked");
     assert_eq!(ended(), Vec::<String>::new());
 
-    let pair = native_pty_system()
-        .openpty(PtySize {
-            rows: 24,
-            cols: 100,
-            pixel_width: 0,
-            pixel_height: 0,
-        })
-        .expect("open pty");
-    let mut command = CommandBuilder::new(env.rimz_bin());
-    env.pin_pty_command(&mut command);
-    command.cwd(&env.project_root);
-    command.args(["--mux", "zellij", "start", "--no-attach"]);
-    command.env("PATH", &bin_dir);
-    command.env("TERM", "dumb");
-    command.env("RIMZ_PETS_OFFLINE", "1");
-    command.env("RIMZ_ZELLIJ_BIN", zellij_trace_shim());
-    command.env("RIMZ_TEST_ZELLIJ_LOG", &zellij_log);
-    command.env("RIMZ_TEST_ZELLIJ_LIST_SESSIONS", &sessions);
-    command.env("RIMZ_TEST_ZELLIJ_HEALTH_PROBE_MS", "250");
-    command.env("RIMZ_TEST_ZELLIJ_LIST_PANES", MATERIALIZED_ROOM_PANES);
-    let mut child = pair
-        .slave
-        .spawn_command(command)
-        .expect("spawn attended start");
-    drop(pair.slave);
-    let mut reader = pair.master.try_clone_reader().expect("clone pty reader");
-    let reader_thread = std::thread::spawn(move || {
-        let mut output = Vec::new();
-        let _ = reader.read_to_end(&mut output);
-        output
-    });
-    let mut writer = pair.master.take_writer().expect("pty writer");
-    std::io::Write::write_all(&mut writer, b"y\n").expect("answer the drop question");
-    let deadline = Instant::now() + COMMAND_TIMEOUT;
-    let status = loop {
-        if let Some(status) = child.try_wait().expect("poll attended start") {
-            break Some(status);
+    for no_resume in [false, true] {
+        let pair = native_pty_system()
+            .openpty(PtySize {
+                rows: 24,
+                cols: 100,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .expect("open pty");
+        let mut command = CommandBuilder::new(env.rimz_bin());
+        env.pin_pty_command(&mut command);
+        command.cwd(&env.project_root);
+        command.args(["--mux", "zellij", "start", "--no-attach"]);
+        if no_resume {
+            command.arg("--no-resume");
         }
-        if Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
-            break None;
+        command.env("PATH", &bin_dir);
+        command.env("TERM", "dumb");
+        command.env("RIMZ_PETS_OFFLINE", "1");
+        command.env("RIMZ_ZELLIJ_BIN", zellij_trace_shim());
+        command.env("RIMZ_TEST_ZELLIJ_LOG", &zellij_log);
+        command.env("RIMZ_TEST_ZELLIJ_LIST_SESSIONS", &sessions);
+        command.env("RIMZ_TEST_ZELLIJ_HEALTH_PROBE_MS", "250");
+        command.env("RIMZ_TEST_ZELLIJ_LIST_PANES", MATERIALIZED_ROOM_PANES);
+        let mut child = pair
+            .slave
+            .spawn_command(command)
+            .expect("spawn attended start");
+        drop(pair.slave);
+        let mut reader = pair.master.try_clone_reader().expect("clone pty reader");
+        let reader_thread = std::thread::spawn(move || {
+            let mut output = Vec::new();
+            let _ = reader.read_to_end(&mut output);
+            output
+        });
+        let mut writer = pair.master.take_writer().expect("pty writer");
+        std::io::Write::write_all(&mut writer, b"n\n").expect("finish any unexpected prompt");
+        let deadline = Instant::now() + COMMAND_TIMEOUT;
+        let status = loop {
+            if let Some(status) = child.try_wait().expect("poll attended start") {
+                break Some(status);
+            }
+            if Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                break None;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        };
+        drop(writer);
+        drop(pair.master);
+        let output =
+            String::from_utf8_lossy(&reader_thread.join().expect("join pty reader")).into_owned();
+        let status = status.unwrap_or_else(|| {
+            panic!("attended start did not finish within {COMMAND_TIMEOUT:?}:\n{output}")
+        });
+        assert!(status.success(), "attended start failed: {output}");
+        assert!(!output.contains("Recover "), "{output}");
+        assert!(!output.contains("Drop "), "{output}");
+        assert!(!output.contains("cannot be resumed"), "{output}");
+        if no_resume {
+            assert_eq!(
+                output
+                    .matches("rimz: ended 1 parked agent (--no-resume)")
+                    .count(),
+                1,
+                "{output}"
+            );
+            assert_eq!(ended(), ["rimz.recovery-declined"]);
+            assert_eq!(pending()["agents"], serde_json::json!([]));
+        } else {
+            assert_eq!(
+                output
+                    .matches("rimz: 1 agent from an earlier session stay parked")
+                    .count(),
+                1,
+                "{output}"
+            );
+            assert!(
+                output.contains(
+                    "rimz agents resume <lane> brings a lane back, rimz start --no-resume ends them"
+                ),
+                "{output}"
+            );
+            assert_eq!(pending(), parked);
+            assert!(ended().is_empty());
         }
-        std::thread::sleep(Duration::from_millis(25));
-    };
-    drop(writer);
-    drop(pair.master);
-    let output =
-        String::from_utf8_lossy(&reader_thread.join().expect("join pty reader")).into_owned();
-    let status = status.unwrap_or_else(|| {
-        panic!("attended start did not finish within {COMMAND_TIMEOUT:?}:\n{output}")
-    });
-    assert!(status.success(), "attended start failed: {output}");
-    assert!(output.contains("rimz: cannot be resumed:"), "{output}");
-    assert!(output.contains("Drop 1 agent"), "{output}");
-    assert!(output.contains("worktree gone"), "{output}");
-    assert!(
-        !output.contains("Recover "),
-        "nothing is resumable: {output}"
-    );
-    assert_eq!(ended(), ["rimz.worktree-gone"]);
-    assert_eq!(pending()["agents"], serde_json::json!([]));
+    }
     let events = env.read_events();
     assert!(
         !events.iter().any(|event| matches!(
@@ -1264,7 +1290,7 @@ fn attended_tmux_start_accepting(env: &Env, path: &std::ffi::OsStr) -> String {
 }
 
 /// The consumer proof for a birth whose resume window never opened: the agent
-/// survives the reap in the pending record and the next attended start offers it.
+/// survives the reap and stays parked when the next attended start attaches.
 #[test]
 fn birth_keeps_agents_pending_when_their_resume_window_does_not_open() {
     use rimz::agents::{AgentLifecycleObservation, LifecycleSignal};
@@ -1348,7 +1374,7 @@ fn birth_keeps_agents_pending_when_their_resume_window_does_not_open() {
     );
     assert!(
         stderr.contains("could not open resumed tab #alpha")
-            && stderr.contains("stay pending for the next attended start"),
+            && stderr.contains("stay pending for a later rebirth or explicit resume"),
         "{stderr}"
     );
     assert!(!stderr.contains("rimz: resumed"), "{stderr}");
@@ -1374,13 +1400,17 @@ fn birth_keeps_agents_pending_when_their_resume_window_does_not_open() {
     );
 
     let output = attended_tmux_start_accepting(&env, &agent_path);
-    assert!(output.contains("Recover 1 agent (#alpha)?"), "{output}");
-    assert!(output.contains("rimz: resumed 1 agent: #alpha"), "{output}");
-    assert_eq!(pending()["agents"], serde_json::json!([]));
-    let ended_after_resume = ended();
-    if ended_after_resume != 0 {
-        // The ended stamp is the resumed wrapper's own: name what its pane
-        // printed and what the room recorded, so a CI failure explains itself.
+    assert!(!output.contains("Recover "), "{output}");
+    assert!(!output.contains("rimz: resumed"), "{output}");
+    assert!(
+        output.contains("1 agent from an earlier session stay parked (#alpha)"),
+        "{output}"
+    );
+    assert_eq!(pending()["agents"], serde_json::json!([lost]));
+    let ended_after_start = ended();
+    if ended_after_start != 0 {
+        // Name what the pane printed and the room recorded, so a CI failure
+        // explains an unexpected end despite pending membership.
         let rimz_out = |args: &[&str]| {
             env.rimz()
                 .env("PATH", &agent_path)
@@ -1415,7 +1445,7 @@ fn birth_keeps_agents_pending_when_their_resume_window_does_not_open() {
             Err(error) => format!("could not decode pane list: {error}"),
         };
         panic!(
-            "the resume ends nobody; events since the first birth:\n{}\n\
+            "the live start ends nobody; events since the first birth:\n{}\n\
              attended start output:\n{output}\npanes:\n{panes}\npane captures:\n{captures}\n\
              diagnostics:\n{}",
             since_birth(),

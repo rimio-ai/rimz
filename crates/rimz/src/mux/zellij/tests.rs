@@ -2321,21 +2321,6 @@ exit 0
 
 #[cfg(unix)]
 #[test]
-fn tab_opening_accepts_a_client_focused_on_a_plugin_or_terminal() {
-    for (pane, expected) in [("plugin_7", true), ("terminal_7", true), ("", false)] {
-        let (_temp, shim) = zellij_shim(&format!(
-            "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'zellij 0.45.1'; else printf '1 {pane}\\n'; fi\n"
-        ));
-        assert_eq!(
-            ZellijBackend::with_program_for_test(&shim).can_open_tab("test"),
-            expected,
-            "client focused on {pane:?}"
-        );
-    }
-}
-
-#[cfg(unix)]
-#[test]
 fn unconfirmed_tab_is_closed_by_id_without_closing_an_existing_namesake() {
     let room = TestRoom::new();
     let (temp, shim) = zellij_shim(

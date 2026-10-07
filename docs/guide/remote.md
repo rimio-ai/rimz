@@ -60,7 +60,7 @@ Retries pace themselves. While the network is up, RimZ opens an SSH connection i
 
 Your terminal tells you on every edge, because a dead link cannot count on the remote sidebar to reach you. A probe that stalls raises a local terminal notification. A confirmed drop and a recovery raise one and also fire any [notification handler](./notifications.md) you configured, as the `link_lost` and `link_restored` kinds. All of it obeys your notification settings, so a machine with sound off stays quiet.
 
-A retry runs unattended, and that limits what it can settle for you. Hook installation, project trust, and recovery consent all need an answer, so a reconnect leaves them pending for the next start you make while you are present rather than parking the link on a prompt nobody is there to type into. An initial password, two-factor, or host-key prompt is the exception: it falls back to one plain interactive `ssh` attempt so you can answer it.
+A retry runs unattended, and never waits for consent. Hook installation and project trust wait for a later attended room birth rather than parking the link on a prompt nobody is there to type into. Rebirth follows the [resume configuration](./configuration.md#resume); a running room only reports parked agents, never asks a recovery question. An initial password, two-factor, or host-key prompt is the exception: it falls back to one plain interactive `ssh` attempt so you can answer it.
 
 On Zellij, a reconnect retires an orphaned earlier attach that used the same target spelling from this machine, so opening the same room twice from one terminal moves it to the newer one, while attachments from different machines coexist.
 
@@ -107,7 +107,7 @@ The per-pane figures are raw producer output. The `WIRE(sshâ†‘)` and `WIRE(sshâ†
 
 ## Continuity across reboots
 
-The room and its state both live on the host, in durable flat files under `~/.rimz/` there, so the room survives a mux crash or a reboot of the host. On the next start you make while you are present, the host's `rimz` asks whether to recover the agents it found and defaults to yes: they come back idle in their tabs, one prompt from where they stopped (`claude --resume`, `codex resume`, `pi --session`). A start with no terminal on stdin recovers without asking and drops nothing: an agent it cannot resume waits for your next attended start. A room you closed deliberately stays closed. A supervised reconnect after a host reboot takes that automatic path, and hook-installation and project-trust offers stay pending for your next attended start.
+The room and its state both live on the host, in durable flat files under `~/.rimz/` there, so the room survives a mux crash or a reboot of the host. At the next rebirth while you are present, the host's `rimz` asks whether to recover the agents it found and defaults to yes: they come back idle in their tabs, one prompt from where they stopped (`claude --resume`, `codex resume`, `pi --session`). An unattended rebirth recovers without asking and keeps agents it cannot resume parked; when a team seat is refilled, its old session is retired. A running room only reports what stays parked. A room you closed deliberately stays closed. A supervised reconnect after a host reboot takes the automatic rebirth path, and hook-installation and project-trust offers stay pending for a later attended birth.
 
 To bring a room up empty instead, or to rebuild one that came back wrong, run `rimz` with `--no-resume` or `rimz reset` on the host ([reset and clean up](./troubleshooting.md#reset-and-clean-up)).
 

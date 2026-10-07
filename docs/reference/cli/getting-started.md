@@ -64,13 +64,13 @@ Inside a session, `rimz start --account` fails instead, because accounts apply o
 
 ### Attach by session name
 
-`rimz attach` with no `SESSION` opens the current directory's room, creating it if needed. Unlike `start`, it skips the first-run, hook, and trust prompts below, takes no `--account`, and does not start the browser daemon. `rimz attach <SESSION>` takes an exact session name, the `SESSION` column of [`rimz list`](#list-rooms). When RimZ has a workspace record for that session, it restores the room's sidebar and recovery state before attaching. A session RimZ has no record for is attached, or printed, as a plain multiplexer session.
+`rimz attach` with no `SESSION` opens the current directory's room, creating it if needed. Unlike `start`, it skips the first-run, hook, and trust prompts below, takes no `--account`, and does not start the browser daemon. `rimz attach <SESSION>` takes an exact session name, the `SESSION` column of [`rimz list`](#list-rooms). When RimZ has a workspace record for that session, it restores the room's sidebar and reconciles parked recovery state before attaching. An attach to a running room asks nothing and leaves recovery candidates parked. A session RimZ has no record for is attached, or printed, as a plain multiplexer session.
 
 `rimz start` goes through the same health check on the way in, so either command is the way back into a room whose sidebar was closed or whose session came back wrong after a reboot.
 
 ### Prompts at room birth
 
-A `rimz start` that creates the session, run from a terminal, can ask up to five things before it attaches. A start that reattaches a running session asks none of them; `rimz attach` asks only the recovery question.
+A `rimz start` that creates the session, run from a terminal, can ask up to five things before it attaches. A start or attach that reattaches a running session asks none of them.
 
 | Prompt | When | Default |
 | --- | --- | --- |
@@ -80,7 +80,7 @@ A `rimz start` that creates the session, run from a terminal, can ask up to five
 | Trust this folder for the listed agents | Detected Codex or Claude has no folder-trust decision under the room's account; shows the proposed file changes first. A decline is remembered per workspace and agent kind; `rimz trust grant` clears it. When no listed kind can be written (Claude in `$HOME`, say), it prints each fix, asks nothing, and remembers those kinds as declined | No |
 | Recover prior agents | The room is reborn with agents from its previous session | Yes |
 
-A start without a terminal on stdin, including a remote reconnect, asks nothing: it prints notices for missing hooks and undecided agent folder trust, leaves trust unchanged, and recovers prior agents. It does not remember a decline. The commands behind these prompts are in [agent hooks](./hooks-trust.md#agent-hooks) and [project trust](./hooks-trust.md#project-trust); the trust model is in the [security guide](../../guide/security.md).
+A start without a terminal on stdin, including a remote reconnect, asks nothing: at birth it prints notices for missing hooks and undecided agent folder trust, leaves trust unchanged, and recovers prior agents. It does not remember a decline. A running room leaves recovery candidates parked. The commands behind these prompts are in [agent hooks](./hooks-trust.md#agent-hooks) and [project trust](./hooks-trust.md#project-trust); the trust model is in the [security guide](../../guide/security.md).
 
 ### Resume on rebirth
 
@@ -92,9 +92,9 @@ rimz: this room's previous session ended with agents still running (2026-07-02 1
 Recover 2 agents (claude, codex)? [Y/n]
 ```
 
-After a reboot the first line reads `rimz: machine rebooted since this room was last open (...)`. Inline recovery reports on stderr as `rimz: resumed 2 agents: ...`, and any left behind as `rimz: not resumed: <label> (<reason>)`. In an already-running Zellij room without an attached client, RimZ instead says the agents resume once the room is attached; their tabs open after attach. With `--no-attach` they stay parked and no recovery is scheduled. When some agents cannot be resumed, RimZ lists each with its reason and asks a second question, whether to drop them, which defaults to no: kept agents are offered again at your next start. `--no-resume` skips recovery and brings the room up with no agents, and so does answering `n` to the first question. Typed at a terminal, both are one-way: RimZ records the agents it did not recover as ended, so a later start without the flag has nothing left to seed from. Their transcripts and history stay on disk.
+After a reboot the first line reads `rimz: machine rebooted since this room was last open (...)`. Rebirth recovery reports on stderr as `rimz: resumed 2 agents: ...`, and any left behind as `rimz: not resumed: <label> (<reason>)`. When some agents cannot be resumed, RimZ lists each with its reason and asks a second question, whether to drop them, which defaults to no: kept agents are offered again at the next rebirth. `--no-resume` skips recovery and brings the room up with no agents, and so does answering `n` to the first question. Typed at a terminal, both are one-way: RimZ records the agents it did not recover as ended, so a later start without the flag has nothing left to seed from. Their transcripts and history stay on disk.
 
-A start with no terminal never ends an agent. With recovery on it resumes what it can; the agents it cannot resume, and every lost agent when recovery is off, wait for your next start at a terminal, which asks about them even when the room is already running and opens the recovered tabs in place. Otherwise a healthy running room is never affected. The `[resume]` settings are in the [configuration guide](../../guide/configuration.md#resume).
+A running room never asks a recovery question, including web and remote entries, and opens no recovery tabs on entry. When agents remain parked it prints one stderr notice naming their count: `rimz agents resume <lane>` brings a lane back, and an attended `rimz start --no-resume` ends the parked candidates. The latter prints an ended count instead. With recovery on, even an unattended entry retires an old parked team session whose seat a live replacement already fills. An unattended rebirth resumes what it can and keeps the rest parked for an explicit resume or a later rebirth. The `[resume]` settings are in the [configuration guide](../../guide/configuration.md#resume).
 
 ### Accounts
 

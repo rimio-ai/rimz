@@ -56,46 +56,6 @@ enum ResumePromptMode {
     Silent,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum RecoveryOpening {
-    Inline,
-    Deferred,
-    Parked,
-}
-
-fn recovery_opening(
-    disposition: RebirthDisposition,
-    panes: usize,
-    can_open: bool,
-    will_attach: bool,
-) -> RecoveryOpening {
-    if !disposition.recovers() || panes == 0 || can_open {
-        RecoveryOpening::Inline
-    } else if will_attach {
-        RecoveryOpening::Deferred
-    } else {
-        RecoveryOpening::Parked
-    }
-}
-
-#[derive(Debug, clap::Args)]
-pub(crate) struct DeferredRecoveryArgs {
-    #[arg(long)]
-    request: String,
-}
-
-pub(crate) fn recover_deferred(args: DeferredRecoveryArgs) -> Result<()> {
-    let resume = RoomContext::complete_deferred_recovery(
-        serde_json::from_str(&args.request)?,
-        machine_config(),
-    )?;
-    for launch in &resume.team_launches {
-        rimz::harness::assist_log::record_tier_fallbacks(launch.batch.identities());
-    }
-    report_resume(&resume);
-    Ok(())
-}
-
 enum RoomEntry<'a> {
     Start {
         workspace: rimz::ResolvedWorkspace,
@@ -685,18 +645,7 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
             cwd,
         )?;
         if was_live {
-            let will_attach = attach_action(
-                entry.mode(),
-                std::io::stdin().is_terminal(),
-                std::io::stdout().is_terminal(),
-                inside_selected_mux(mux),
-            ) == AttachAction::Launch;
-            recover_parked_agents(
-                &context,
-                entry.no_resume(),
-                entry.resume_prompt_mode(),
-                will_attach,
-            )?;
+            recover_parked_agents(&context, entry.no_resume(), start_attended())?;
         }
         ReadyRoom::Managed(Box::new(context))
     } else {
@@ -780,60 +729,38 @@ fn birth_managed_room(
     Ok(())
 }
 
-/// Offer the agents an earlier unattended birth parked to the user now
-/// attending the live room. Nobody unattended is asked, so they stay parked.
-fn recover_parked_agents(
-    context: &RoomContext,
-    no_resume: bool,
-    resume_prompt: ResumePromptMode,
-    will_attach: bool,
-) -> Result<()> {
-    if resume_prompt != ResumePromptMode::Interactive {
-        return Ok(());
-    }
-    let plan = match context.inspect_parked_recovery(no_resume) {
-        Ok(plan) => plan,
+/// Reconcile parked recovery without prompting or opening tabs in a live room.
+fn recover_parked_agents(context: &RoomContext, no_resume: bool, attended: bool) -> Result<()> {
+    let outcome = match context.reconcile_parked_recovery(no_resume, attended) {
+        Ok(outcome) => outcome,
         Err(err) => {
-            tracing::warn!(workspace = %context.workspace_id(), error = %err, "parked recovery inspection skipped");
+            tracing::warn!(workspace = %context.workspace_id(), error = %err, "parked recovery reconciliation skipped");
             return Ok(());
         }
     };
-    let preview = plan.preview();
-    if preview.candidate_count() == 0 {
-        return Ok(());
+    for warning in &outcome.warnings {
+        writeln!(crate::cli::render::err(), "rimz: {warning}")?;
     }
-    let disposition = prompt_disposition(&preview, resume_prompt)?;
-    preflight_recovery(&plan, disposition)?;
-    match recovery_opening(
-        disposition,
-        preview.pane_count(),
-        context.backend().can_open_tab(context.session_name()),
-        will_attach,
-    ) {
-        RecoveryOpening::Inline => {}
-        RecoveryOpening::Deferred => {
-            let count = preview.pane_count();
-            context.defer_parked_recovery(plan, disposition)?;
-            writeln!(
-                crate::cli::render::err(),
-                "rimz: {count} agent{} will resume once the room is attached",
-                if count == 1 { "" } else { "s" },
-            )?;
-            return Ok(());
-        }
-        RecoveryOpening::Parked => {
-            writeln!(
-                crate::cli::render::err(),
-                "rimz: agents stay parked; attach with rimz start to recover them"
-            )?;
-            return Ok(());
-        }
+    if outcome.parked > 0 {
+        let labels = if outcome.labels.is_empty() {
+            String::new()
+        } else {
+            format!(" ({})", outcome.labels.join(", "))
+        };
+        writeln!(
+            crate::cli::render::err(),
+            "rimz: {} agent{} from an earlier session stay parked{labels}; rimz agents resume <lane> brings a lane back, rimz start --no-resume ends them",
+            outcome.parked,
+            if outcome.parked == 1 { "" } else { "s" },
+        )?;
+    } else if outcome.ended > 0 {
+        writeln!(
+            crate::cli::render::err(),
+            "rimz: ended {} parked agent{} (--no-resume)",
+            outcome.ended,
+            if outcome.ended == 1 { "" } else { "s" },
+        )?;
     }
-    let resume = context.settle_parked_recovery(plan, disposition);
-    for launch in &resume.team_launches {
-        rimz::harness::assist_log::record_tier_fallbacks(launch.batch.identities());
-    }
-    report_resume(&resume);
     Ok(())
 }
 
@@ -1238,9 +1165,8 @@ enum RecoveryQuestion {
     DropRest,
 }
 
-/// Who decides what happens to the recovery candidates. Only an interactive
-/// start reaches a disposition that ends an agent: by its answers, or by
-/// having switched recovery off.
+/// Who decides what happens to recovery candidates at birth. Only an attended
+/// decision declines or drops candidates; automatic seat refills are separate.
 fn choose_disposition(
     mode: ResumePromptMode,
     recovery_off: bool,
@@ -1297,7 +1223,7 @@ fn prompt_disposition(
                 drop(err);
                 confirm_with_default(
                     &format!(
-                        "Drop {} agent{} (No keeps them for the next start)?",
+                        "Drop {} agent{} (No keeps them parked)?",
                         unresumable.len(),
                         plural(unresumable.len()),
                     ),

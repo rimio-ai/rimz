@@ -16,13 +16,13 @@ use super::{
     MOUNT_POLL_STEP, MOUNT_POLL_TIMEOUT, RECONCILE_LIST_TIMEOUT, SIDEBAR_LAYOUT_TIMEOUT,
     TOPOLOGY_CACHE_POLL_STEP, ZellijBackend,
 };
-use crate::ids::{MuxClientId, MuxName, PaneId, WorkspaceId};
+use crate::ids::{MuxName, PaneId, WorkspaceId};
 use crate::mux::width::{
     sidebar_width_off_spec, width_step_regressed, zellij_resize_stop_step_cols,
 };
 use crate::mux::{
-    ClientFocusOptions, DaemonView, MuxBackend, MuxErr, PaneReadConsistency, PresencePluginOptions,
-    Result, SessionLiveness, SidebarPaneOptions, WidthSyncOptions, sidebar_serve_args,
+    DaemonView, MuxBackend, MuxErr, PaneReadConsistency, PresencePluginOptions, Result,
+    SessionLiveness, SidebarPaneOptions, WidthSyncOptions, sidebar_serve_args,
 };
 use crate::pane::SIDEBAR_CHROME_TITLE;
 use crate::utils::time::unix_now_ms;
@@ -792,26 +792,6 @@ impl ZellijBackend {
     /// unstable or empty roster reads detached and the add defers.
     pub(super) fn session_has_attached_client(&self, session: &str) -> bool {
         Self::confirm_attached_client(|| self.focused_terminal_client_ids(session))
-    }
-
-    /// Tab creation also works when the attached client focuses a plugin.
-    pub(super) fn session_can_open_tab(&self, session: &str) -> bool {
-        Self::confirm_attached_client(|| {
-            self.client_view(ClientFocusOptions {
-                session_name: Some(session.to_owned()),
-                command_timeout: None,
-            })
-            .map(|view| {
-                view.clients
-                    .into_iter()
-                    .filter_map(|client| match client.client_id {
-                        MuxClientId::Zellij(id) => Some(id),
-                        MuxClientId::Tmux(_) => None,
-                    })
-                    .collect()
-            })
-            .unwrap_or_default()
-        })
     }
 
     fn confirm_attached_client(probe: impl Fn() -> BTreeSet<u32>) -> bool {

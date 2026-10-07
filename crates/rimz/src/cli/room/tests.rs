@@ -9,36 +9,6 @@ use rimz::harness::rebirth::RebirthDisposition;
 use rimz::ids::MuxName;
 use rimz::trust::{BirthPromptOffer, SurfaceSummary};
 
-#[test]
-fn recovery_opening_waits_only_for_recoverable_tabs_with_an_attach() {
-    use super::{RecoveryOpening, recovery_opening};
-    for disposition in [
-        RebirthDisposition::Defer,
-        RebirthDisposition::Decline,
-        RebirthDisposition::RecoverKeep,
-        RebirthDisposition::RecoverDrop,
-    ] {
-        for panes in [0, 2] {
-            for can_open in [false, true] {
-                for will_attach in [false, true] {
-                    let expected = if !disposition.recovers() || panes == 0 || can_open {
-                        RecoveryOpening::Inline
-                    } else if will_attach {
-                        RecoveryOpening::Deferred
-                    } else {
-                        RecoveryOpening::Parked
-                    };
-                    assert_eq!(
-                        recovery_opening(disposition, panes, can_open, will_attach),
-                        expected,
-                        "{disposition:?}, panes={panes}, can_open={can_open}, will_attach={will_attach}"
-                    );
-                }
-            }
-        }
-    }
-}
-
 fn folder_trust_row(kind: &'static str, grantable: bool) -> rimz::agents::FolderTrustRow {
     rimz::agents::FolderTrustRow {
         kind,
