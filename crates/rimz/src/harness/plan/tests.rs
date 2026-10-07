@@ -2351,6 +2351,7 @@ fn matched_resume_isolation_overrides_without_stamping_one_shot_values() {
             cwd: Some(dir.path().to_owned()),
             channel: None,
             fresh: Vec::new(),
+            refilled: Default::default(),
             launch_group: None,
         };
         let identities = launch_identity_requests(

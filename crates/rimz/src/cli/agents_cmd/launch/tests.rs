@@ -620,6 +620,7 @@ fn resume_hint_uses_the_first_resumed_member_without_fresh_identities() {
         cwd: Some(PathBuf::from("/repo")),
         channel: Some("feat-x".to_owned()),
         fresh: Vec::new(),
+        refilled: Default::default(),
         launch_group: None,
     };
 

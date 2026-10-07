@@ -738,6 +738,7 @@ pub(super) struct RecoveryPlan {
     pub(super) warnings: Vec<String>,
     agents_to_end: Vec<(AgentKind, AgentSessionId)>,
     base_resumed: BTreeSet<(AgentKind, AgentSessionId)>,
+    refilled: BTreeSet<(AgentKind, AgentSessionId)>,
 }
 
 impl RecoveryPlan {
@@ -773,6 +774,7 @@ impl RecoveryPlan {
         teams: TeamsConfig,
         team: Vec<PlannedTeamTab>,
         flat: DetailedResumePlan,
+        refilled: BTreeSet<(AgentKind, AgentSessionId)>,
     ) -> Self {
         let mut flat_tabs = flat.tabs;
         disambiguate_flat_labels_from_teams(&team, &mut flat_tabs);
@@ -789,6 +791,7 @@ impl RecoveryPlan {
             warnings: flat.warnings,
             agents_to_end: flat.agents_to_end,
             base_resumed: flat.resumed,
+            refilled,
         }
     }
 
@@ -801,6 +804,10 @@ impl RecoveryPlan {
                 right.label(),
             )
         });
+    }
+
+    pub(super) fn refilled(&self) -> &BTreeSet<(AgentKind, AgentSessionId)> {
+        &self.refilled
     }
 
     pub(super) fn pane_count(&self) -> usize {
@@ -1136,6 +1143,7 @@ pub fn plan_lane_resume(
             path_exists,
             session_backed,
             restore_config()?,
+            &liveness,
         );
     }
     if let Some(mismatch) = closed
@@ -1190,6 +1198,7 @@ pub fn plan_lane_resume(
         path_exists,
         session_backed,
         restore_config()?,
+        &liveness,
     )
 }
 
@@ -1425,7 +1434,7 @@ fn plan_discovered_lane(
         lane_label: lane.display.clone(),
         cwd: lane.path.clone(),
         plan: LaneRestorePlan {
-            recovery: RecoveryPlan::new(TeamsConfig::default(), Vec::new(), flat),
+            recovery: RecoveryPlan::new(TeamsConfig::default(), Vec::new(), flat, BTreeSet::new()),
             discovery_skipped,
             preflight_kinds,
         },
@@ -1503,8 +1512,9 @@ fn plan_closed_lane(
     path_exists: impl Fn(&Path) -> bool,
     session_backed: impl Fn(&AgentState) -> bool,
     restore: LaneRestoreConfig,
+    liveness: impl Fn(&AgentState) -> AgentLiveness,
 ) -> Result<LaneResumeAction, LaneResumeError> {
-    let (team, flat_agents) = split_team_and_flat(
+    let (team, flat_agents, refilled) = split_team_and_flat(
         &closed,
         request.logins,
         request.catalog,
@@ -1516,6 +1526,8 @@ fn plan_closed_lane(
         &path_exists,
         &session_backed,
         request.fresh,
+        request.agents,
+        liveness,
     );
     let team_panes = team
         .iter()
@@ -1598,7 +1610,7 @@ fn plan_closed_lane(
         lane_label: lane.display,
         cwd: lane.path,
         plan: LaneRestorePlan {
-            recovery: RecoveryPlan::new(restore.teams, team, flat),
+            recovery: RecoveryPlan::new(restore.teams, team, flat, refilled),
             discovery_skipped: Vec::new(),
             preflight_kinds,
         },
@@ -1783,7 +1795,9 @@ fn plan_team_restore_tabs(
     worktree_exists: impl Fn(&Path) -> bool,
     session_backed: impl Fn(&AgentState) -> bool,
     fresh: bool,
-) -> Vec<PlannedTeamTab> {
+    roster: &[AgentState],
+    liveness: impl Fn(&AgentState) -> AgentLiveness,
+) -> (Vec<PlannedTeamTab>, BTreeSet<(AgentKind, AgentSessionId)>) {
     let mut groups: BTreeMap<(String, PathBuf), Vec<&AgentState>> = BTreeMap::new();
     for agent in agents {
         if !root_session(agent) {
@@ -1805,12 +1819,39 @@ fn plan_team_restore_tabs(
     }
 
     let mut tabs = Vec::new();
+    let mut refilled = BTreeSet::new();
     for ((team, cwd), group) in groups {
         let Ok(mut layout) = crate::harness::spec::resolve_team(&team, teams, profiles, commands)
         else {
             continue;
         };
         let cells = cohort_cells(&layout);
+        let present = roster
+            .iter()
+            .filter(|agent| cohort_admits(agent, &liveness))
+            .filter(|agent| agent.team.as_deref() == Some(team.as_str()))
+            .filter(|agent| normalized_agent_worktree(agent).as_deref() == Some(cwd.as_path()))
+            .filter(|agent| agent.ended_at.is_none())
+            .filter(|agent| matches!(liveness(agent), AgentLiveness::Live { .. }))
+            .collect::<Vec<_>>();
+        if !present.is_empty() {
+            let parked = group
+                .iter()
+                .copied()
+                .filter(|agent| agent.ended_at.is_none())
+                .collect::<Vec<_>>();
+            for (live, parked) in match_team_cohort(&present, &cells, &team)
+                .into_iter()
+                .zip(match_team_cohort(&parked, &cells, &team))
+            {
+                if live.is_some()
+                    && let Some(agent) = parked
+                {
+                    refilled.insert((agent.kind.clone(), agent.agent_id.clone()));
+                }
+            }
+            continue;
+        }
         let Some(newest) = newest_agent(&group) else {
             continue;
         };
@@ -1824,6 +1865,7 @@ fn plan_team_restore_tabs(
                     .map(|cell| build_label(cell.kind.as_str(), newest.channel().as_deref(), &cwd))
                     .collect(),
                 launch_group: None,
+                refilled: BTreeSet::new(),
             }
         } else {
             let group_agents = group.iter().copied().cloned().collect::<Vec<_>>();
@@ -1833,7 +1875,7 @@ fn plan_team_restore_tabs(
                 &group_agents,
                 logins,
                 catalog,
-                |_| AgentLiveness::Dead,
+                &liveness,
                 &cells,
                 Some(&team),
                 |path| worktree_exists(path),
@@ -1881,7 +1923,7 @@ fn plan_team_restore_tabs(
         });
     }
     tabs.sort_by(|a, b| newest_cmp(a.freshest, &a.team, b.freshest, &b.team));
-    tabs
+    (tabs, refilled)
 }
 
 /// Partition agents into planned named-team tabs and flat resume candidates.
@@ -1901,8 +1943,14 @@ pub(super) fn split_team_and_flat(
     worktree_exists: impl Fn(&Path) -> bool,
     session_backed: impl Fn(&AgentState) -> bool,
     fresh: bool,
-) -> (Vec<PlannedTeamTab>, Vec<AgentState>) {
-    let team = plan_team_restore_tabs(
+    roster: &[AgentState],
+    liveness: impl Fn(&AgentState) -> AgentLiveness,
+) -> (
+    Vec<PlannedTeamTab>,
+    Vec<AgentState>,
+    BTreeSet<(AgentKind, AgentSessionId)>,
+) {
+    let (team, refilled) = plan_team_restore_tabs(
         agents,
         logins,
         catalog,
@@ -1914,17 +1962,20 @@ pub(super) fn split_team_and_flat(
         worktree_exists,
         session_backed,
         fresh,
+        roster,
+        liveness,
     );
     let flat = agents
         .iter()
         .filter(|agent| {
-            !team
-                .iter()
-                .any(|planned| planned_team_matches_agent(planned, agent))
+            !refilled.contains(&(agent.kind.clone(), agent.agent_id.clone()))
+                && !team
+                    .iter()
+                    .any(|planned| planned_team_matches_agent(planned, agent))
         })
         .cloned()
         .collect();
-    (team, flat)
+    (team, flat, refilled)
 }
 
 fn planned_team_matches_agent(planned: &PlannedTeamTab, agent: &AgentState) -> bool {
@@ -2281,6 +2332,7 @@ pub fn plan_cohort_resume(
 
     let mut seeds = Vec::with_capacity(cells.len());
     let mut fresh = Vec::new();
+    let mut refilled = BTreeSet::new();
     for (index, cell) in cells.iter().enumerate() {
         let matched = matches[index];
         let seed = match matched {
@@ -2292,6 +2344,7 @@ pub fn plan_cohort_resume(
             }
             Some(agent) => {
                 fresh.push(cohort_fresh_label_for_agent(agent));
+                refilled.insert((agent.kind.clone(), agent.agent_id.clone()));
                 CohortSeed::Fresh
             }
             None => {
@@ -2312,6 +2365,7 @@ pub fn plan_cohort_resume(
         channel,
         fresh,
         launch_group,
+        refilled,
     })
 }
 
