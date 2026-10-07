@@ -4,8 +4,8 @@
 //! that skeleton. The card anatomy is drawn in docs/interface/sidebar.md; the
 //! density and expansion invariants live in docs/internals/sidebar/sidebar.md.
 
-use crate::agents::{ATTENTION_AGE_CEILING_SECS, AgentStatus, ContextSeverity};
 use crate::agents::{AgentContext, AgentCurrentUsage, CacheHealth, TurnPhase};
+use crate::agents::{AgentStatus, ContextSeverity};
 use crate::config::{AnimationRole, CardDensityMode, ContextMeterConfig, GlyphRole};
 use crate::store::snapshot::{
     AgentCard, SidebarRow, SidebarSubAgent, SidebarWorktreeGroup, SubAgentTokens,
@@ -329,12 +329,14 @@ fn delegation_line(ctx: &RowCtx<'_>, agent: &AgentCard) -> Option<Line<'static>>
 /// the working fill while it acts, or the static `✓`/`!` verdict once it
 /// finishes — then its type and description, with its known cost pinned right.
 /// Line 2 carries the typed token figure, model, and reasoning effort on a
-/// per-card column grid, with the clock pinned right: elapsed work while the
-/// child runs, how long ago it landed once it finishes. Children stay at the
+/// per-card column grid, with a five-cell clock pinned right: plain muted
+/// runtime, frozen on finish; a running child quiet for five minutes instead
+/// shows a face and quiet age heated over the configured stall window. A
+/// stalled child keeps that quiet clock in alarm. Children stay at the
 /// soft middle weight and indent past the parent's stats. The token glyph
 /// distinguishes current window occupancy from a whole-run total; unknown
 /// figures leave a blank slot. A metadata-free finished child degrades to its
-/// bare type line, its landed age pinned ahead of its cost. Entry lines for
+/// bare type line, its frozen runtime pinned ahead of its cost. Entry lines for
 /// `rows`, laid on the metadata grid of every child in `grid`, so rows rendered
 /// in separate bands share one set of columns.
 fn sub_agent_entry_lines(
@@ -348,7 +350,7 @@ fn sub_agent_entry_lines(
     // The metadata lines below form one per-card grid: the token figure
     // right-aligns to the widest sibling and the model pads to the widest
     // sibling, so the `·` seams, the models, and the efforts stack into
-    // columns across children (the elapsed cluster already stacks via its
+    // columns across children (the clock already stacks via its
     // fixed right-pinned slot). A column exists only while some child carries
     // the field; a child missing a carried field blank-fills the slot. Finished
     // metadata-free children render no second row.
@@ -381,14 +383,11 @@ fn sub_agent_entry_lines(
             .as_deref()
             .or(sub.task.as_deref().filter(|task| *task != sub.name));
         // The clock rides line 2; a metadata-free landed child has no line 2,
-        // so it pins how long ago it finished ahead of its cost instead.
+        // so it pins its frozen runtime ahead of its cost instead.
         let detail_line = sub_agent_metadata_line(ctx, sub, token_col, model_col);
         let mut right = Vec::new();
         if detail_line.is_none() && sub_agent_finished(sub) {
-            right.push(Span::styled(
-                elapsed_cluster(theme, age_secs(sub.last_activity, ctx.now)),
-                theme.muted(),
-            ));
+            right.extend(sub_agent_clock(ctx, sub));
         }
         if let Some(usd) = sub.cost_usd.filter(|usd| *usd >= 0.005) {
             if !right.is_empty() {
@@ -439,10 +438,10 @@ fn sub_agent_metadata_line(
     let theme = ctx.theme;
     let tokens = sub_agent_tokens(sub);
     let finished = sub_agent_finished(sub);
-    let elapsed = (!finished).then_some(sub.elapsed_secs).flatten();
+    let clock = sub_agent_clock(ctx, sub);
     let model = sub.model.as_deref();
     let effort = sub.effort.as_deref();
-    if tokens.is_none() && elapsed.is_none() && model.is_none() && effort.is_none() {
+    if tokens.is_none() && model.is_none() && effort.is_none() && (finished || clock.is_none()) {
         return None;
     }
     let mut left = vec![Span::raw("      ")];
@@ -463,15 +462,11 @@ fn sub_agent_metadata_line(
         model_col,
         prev_rendered,
     );
-    let clock = if finished {
-        vec![Span::styled(
-            elapsed_cluster(theme, age_secs(sub.last_activity, ctx.now)),
-            theme.muted(),
-        )]
-    } else {
-        sub_agent_elapsed(theme, elapsed)
-    };
-    Some(pin_right(left, clock, content_width(ctx.width)))
+    Some(pin_right(
+        left,
+        clock.into_iter().collect(),
+        content_width(ctx.width),
+    ))
 }
 
 fn append_sub_agent_tokens(
@@ -575,21 +570,26 @@ fn append_sub_agent_effort(
     left.push(Span::styled(effort.to_owned(), theme.muted()));
 }
 
-fn elapsed_cluster(theme: &Theme, secs: i64) -> String {
+fn elapsed_cluster(theme: &Theme, secs: i64, ceiling: i64) -> String {
     format!(
         "{} {:>3}",
-        elapsed_glyph(theme, secs, ATTENTION_AGE_CEILING_SECS),
+        elapsed_glyph(theme, secs, ceiling),
         elapsed_label(secs)
     )
 }
 
-fn sub_agent_elapsed(theme: &Theme, elapsed: Option<i64>) -> Vec<Span<'static>> {
-    elapsed
-        .map(|secs| {
-            vec![Span::styled(
-                elapsed_cluster(theme, secs),
-                activity_age_style(theme, secs, ATTENTION_AGE_CEILING_SECS),
-            )]
-        })
-        .unwrap_or_default()
+fn sub_agent_clock(ctx: &RowCtx<'_>, sub: &SidebarSubAgent) -> Option<Span<'static>> {
+    let quiet = age_secs(sub.last_activity, ctx.now);
+    if sub.stalled
+        || (sub.status == AgentStatus::Running
+            && activity_short(sub.last_activity, ctx.now).is_some())
+    {
+        let ceiling = i64::from(ctx.stalled_after_secs);
+        return Some(Span::styled(
+            elapsed_cluster(ctx.theme, quiet, ceiling),
+            activity_age_style(ctx.theme, quiet, ceiling),
+        ));
+    }
+    sub.elapsed_secs
+        .map(|secs| Span::styled(format!("{:>5}", elapsed_label(secs)), ctx.theme.muted()))
 }

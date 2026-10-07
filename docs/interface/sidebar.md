@@ -23,8 +23,8 @@ The sidebar stacks three zones and a footer. The [cockpit](#the-cockpit) at the 
 ▌  ▤ 76k · ◌ 68k ◍ 6k ↘ 1k ↗ 2k · 97%              ◔ 8m▐    ← tokens in the window, cache hit, last activity
 ▌  ⧉ subagents (2) · ⧖ waits (3)                  $0.42▐    ← subagents and waits line
 ▌    ⠁ Explore · audit the trust hash                  ▐    ← running subagent
-▌      ▤ 3k · Opus 4.8                            ◔  3m▐    ← its tokens, model, elapsed time
-▌    ✓ Explore · locate the render seam           ◔  1m▐    ← finished subagent, time since it finished
+▌      ▤ 3k · Opus 4.8                               3m▐    ← its tokens, model, muted runtime
+▌    ✓ Explore · locate the render seam              9m▐    ← finished subagent, frozen runtime
 ▌    ◷ timer · in 12m                             ◔ 18m▐    ← timer wait, time since it was armed
 ▌    ⣾ shell · Run the test suite                 ◔  4m▐    ← background shell
 ▌      cargo test                                      ▐    ← its command
@@ -93,7 +93,8 @@ Each head's frames, color, effect, and speed are configurable under [`[theme.ani
 | `97%` | session cache hit: green from 90%, yellow from 70%, red below |
 | `↻ 2` | completed context compactions |
 | `⟲ 5` | consecutive identical tool calls, shown from 3 through 19 |
-| `◔ 8m` | an age or elapsed time; the face fills by the quarter hour: `◔` to 15 minutes, `◑` to 30, `◕` to 45, `●` to 60, `◉` past an hour. A card's own age clock fills by the quarter of its provider's prompt-cache lifetime instead. |
+| `◔ 8m` | an age, never a duration. The face fills by quarters of the scale, then becomes `◉` past it: the provider's prompt-cache lifetime for a card's own age, `stalled_after_secs` for child quiet, and an hour for waits. |
+| `9m`, `2h` | plain muted runtime, frozen for finished children; pipeline durations use two units from an hour up, such as `4h12m`. |
 | `200k`, `1m` | the model's context window size |
 | `$1.27` | cost in dollars, two decimals |
 | `⋯ bg` after the description | the turn finished while background work it started is still running |
@@ -263,7 +264,7 @@ On a narrow sidebar the identity line drops the reasoning token first, then the 
 
 On the stats line, a column that is zero or unreported is left out. A provider that reports only session totals, as stock Droid does, shows `◇ total ↘ input ↗ output ◌ cache-read` on this line instead, and its meter stays empty. The cache hit is cached input divided by all input, and it is absent until the session has input counters.
 
-The meter draws windows up to 256k tokens linearly and larger ones on a log curve that reaches full strength at 1M, so a large window keeps detail in its working range. The percent is always the raw share in use. The age clock fills and heats over the provider's prompt-cache lifetime — 60 minutes for Claude, 30 for Codex, or your [`[harness.prompt_cache_ttl]`](../guide/configuration.md#idle-compaction) override — and turns red at it, because a prompt after that much quiet usually re-reads the whole context uncached. A provider with no known lifetime keeps the hour. While a [keep-warm horizon](../guide/configuration.md#keep-warm) is actively holding the cache, the clock instead shows the time since the agent's last real turn in steady green, filling over the horizon; once the horizon passes, the usual ramp resumes from the last ping. Wait and subagent clocks, the worktree clock, and the card's breathing keep the hour scale. Outside a hold the age clock counts from the later of the agent's own activity and its last cache ping, so a ping restarts the ramp without reading as work. The age clock measures the agent's own quiet time, so a parent waiting on its subagents keeps heating while they work — its own session is making no call, and its cache ages the whole wait. The children's own times ride their entries under the card. Bands, curve, and tones are set under [`[theme.display]`](../guide/theme.md#display).
+The meter draws windows up to 256k tokens linearly and larger ones on a log curve that reaches full strength at 1M, so a large window keeps detail in its working range. The percent is always the raw share in use. The age clock fills and heats over the provider's prompt-cache lifetime (60 minutes for Claude, 30 for Codex, or your [`[harness.prompt_cache_ttl]`](../guide/configuration.md#idle-compaction) override) and turns red at it. Past the lifetime it becomes muted with its full `◉` face: no action can save a cache that has already expired. A provider with no known lifetime keeps the hour. While a [keep-warm horizon](../guide/configuration.md#keep-warm) is actively holding the cache, the clock instead shows the time since the agent's last real turn in steady green, filling over the horizon; once the horizon passes, the usual ramp resumes from the last ping. Wait ages and the card's breathing keep the hour scale; child quiet uses the configured stall window, and durations never heat. Outside a hold the age clock counts from the later of the agent's own activity and its last cache ping, so a ping restarts the ramp without reading as work. The age clock measures the agent's own quiet time, so a parent waiting on its subagents keeps counting while they work: its own session is making no call, and its cache ages the whole wait. The children's own times ride their entries under the card. Bands, curve, and tones are set under [`[theme.display]`](../guide/theme.md#display).
 
 ### Card shapes
 
@@ -292,9 +293,9 @@ Selecting a card only appends lines below it. When the selected agent belongs to
 ```
 ▌  ⧉ subagents (2)                              $0.42▐
 ▌    ⠁ review · audit the trust hash                 ▐
-▌      ◇  3k · Haiku 4.5                        ◔ <1m▐
+▌      ◇  3k · Haiku 4.5                          <1m▐
 ▌    ✓ Explore · locate the render seam         $0.42▐
-▌      ▤ 12k · Opus 4.8  · high                 ◔ <1m▐
+▌      ▤ 12k · Opus 4.8  · high                    1m▐
 ```
 
 A card with waits uses the same entry layout:
@@ -317,9 +318,10 @@ Each entry starts with its live state or wait icon, then a type word and a ` · 
 
 | entry | lead | type · headline | right side | second line |
 |-------|------|------|------------|-------------|
-| running subagent | `⠁` while it reasons, `⢿` while it acts | launch profile or kind · description, else task if different from the type | cost, when known | `▤` tokens in the child's window when the child reports its context, else `◇` tokens over its whole run, then model, effort, and elapsed time |
-| parked subagent | `⏸︎`, or `!` once it can no longer resume | launch profile or kind · limit label in italics, else description or task | cost, when known | same as a running subagent; elapsed time keeps counting |
-| finished subagent | `✓` or `!` | launch profile or kind · description, else task if different from the type | cost, when known, after the time since it finished when there is no second line | `▤` tokens in the child's window when the child reports its context, else `◇` tokens over its whole run, then model, effort, and time since it finished |
+| running subagent | `⠁` while it reasons, `⢿` while it acts | launch profile or kind · description, else task if different from the type | cost, when known | `▤` tokens in the child's window when the child reports its context, else `◇` tokens over its whole run, then model, effort, and plain muted runtime; from five minutes quiet, a face and quiet age heated toward the configured stall threshold instead |
+| parked subagent | `⏸︎`, or `!` once it can no longer resume | launch profile or kind · limit label in italics, else description or task | cost, when known | tokens, model, effort, and plain muted runtime, counting while parked and frozen once failed |
+| stalled subagent | `!` | launch profile or kind · `silent Nm` | cost, when known | tokens, model, effort, and quiet age with a face, in alarm at and past the stall threshold |
+| finished subagent | `✓` or `!` | launch profile or kind · description, else task if different from the type | cost, when known, after frozen runtime when there is no second line | tokens, model, effort, and plain muted runtime frozen at the child's last activity |
 | timer | `◷` | `timer · in 12m`, or `timer · due` once the time passes | time since armed | never |
 | PID | working spinner | `pid · 16776` | time since armed | never |
 | command | working spinner | `command · cargo` (program name) | time since armed | full command, with the program path trimmed |
@@ -459,7 +461,7 @@ A group with one staged team and a readable worktree `blackboard.md` containing 
 
 ```
 ▎⑂ pipeline ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄🮇
-▎  forge ● ● ◉ Implement ○ ○                47m / 47m🮇
+▎  forge ● ● ◉ Implement 47m ○ ○                  47m🮇
 ▌⣾ planner                                           ▐
 ```
 
@@ -467,7 +469,7 @@ The team badge leads, followed by the track; a stage outside the declared pipeli
 
 Without color there is no revisit cue; a forward re-entry warms nothing to its right.
 
-The muted, glyph-free clock is pinned right: stage elapsed / run total, such as `18m / 1h`. Each duration uses its highest whole unit (`45s`, `18m`, `1h`, `2d`), without zero-padding. If only one duration is known it appears alone; if neither is known the clock is absent. At `Done`, only the total appears. The stage clock sums every visit to the current stage since the run started, counted from parseable entries in the board's `## Progress` (or `## Progress log`) ledger, including an `opened` entry. A backward flip resumes the stage's accumulated time; a same-stage re-flip changes nothing. The total starts at the first parseable ledger entry (or the latest flip out of `Done`, which also clears earlier visits) and runs until now, or until the last `-> Done` entry at `Done`; a `Done -> Done` re-flip does not move the stop. On a RimZ-written board the stage time never exceeds the total. A missing or future start omits that duration, and `Done` without a valid stop omits the clock. If a hand-edited `Stage:` disagrees with the ledger's open stage, the stage clock is absent. Clicking the line focuses the visible stage owner's pane, otherwise the first actionable team member, otherwise the group's first visible row.
+The stage duration sits immediately after the stage name, such as `Implement 4h12m`; the run total alone is pinned right, such as `4h51m`. Both are muted, without a clock face or slash. Below an hour a duration uses one whole unit (`45s`, `18m`); from an hour it uses two scaled units (`1h00m`, `4h12m`, `1d02h`). An unknown stage time leaves just the name; an unknown total leaves the right side empty. At `Done`, only the frozen total appears. The stage clock sums every visit to the current stage since the run started, counted from parseable entries in the board's `## Progress` (or `## Progress log`) ledger, including an `opened` entry. A backward flip resumes the stage's accumulated time; a same-stage re-flip changes nothing. The total starts at the first parseable ledger entry (or the latest flip out of `Done`, which also clears earlier visits) and runs until now, or until the last `-> Done` entry at `Done`; a `Done -> Done` re-flip does not move the stop. On a RimZ-written board the stage time never exceeds the total. A missing or future start omits that duration, and `Done` without a valid stop omits the clock. If a hand-edited `Stage:` disagrees with the ledger's open stage, the stage clock is absent. Clicking the line focuses the visible stage owner's pane, otherwise the first actionable team member, otherwise the group's first visible row.
 
 ### Row cap and finished groups
 
@@ -489,10 +491,10 @@ A group is finished when its pull request merged or closed, or the trunk contain
 ```
  ↩ merged-work                                   ✓ main
  ▸ rimz  ✓ planner  ✓ coder  ✓ reviewer           $4.02
-   ◇ 1M ↘ 300k ↗ 80k ◌ 900k · 75%                  ◉ 2h
+   ◇ 1M ↘ 300k ↗ 80k ◌ 900k · 75%                    2h
 ```
 
-The first line lists the team name when the members share one, each member's final status and name, `+n` for members and shells that do not fit, and the group's lifetime cost. The second shows its lifetime tokens and cache hit, with its active time on the right, or the time since it finished once that record expires. Both cover every session the team ran in this worktree, resumed sessions and subagents included. When the line is too narrow for one member it reads `▸ +K done`.
+The first line lists the team name when the members share one, each member's final status and name, `+n` for members and shells that do not fit, and the group's lifetime cost. The second shows its lifetime tokens and cache hit, with plain muted active duration on the right, or an age with a clock face since it finished once that record expires. Both cover every session the team ran in this worktree, resumed sessions and subagents included. When the line is too narrow for one member it reads `▸ +K done`.
 
 Click the header or either receipt line, press `s`, or focus a member to show the cards, and click the header to collapse them again. Each revealed card shows that member's lifetime cost, so the cards add up to the receipt. A finished group with one agent, and a group with only process rows, stay open.
 
@@ -579,7 +581,7 @@ With `[theme.pets] enabled = true`, the active block narrows and an animated com
 
 ### Narrow panes
 
-The pipeline keeps its clock and stage name ahead of its track and team badge: the team drops first, then the dots disappear as a whole, then the name ellipsizes, and the clock goes last. Dropping the track never buys the team badge back, and the line draws neither a partial track nor a clipped clock.
+The pipeline reserves the whole run total, then admits the first shape that fits: track, name, and stage time; track and name; name and stage time; or an ellipsized name. The team badge fits only beside a drawn track or an undeclared stage and drops first. Stage time can reappear after the dots drop; dropping a declared track never buys the team badge back. The name keeps two cells beside an admitted total, and neither duration nor track draws partially.
 
 As the pane narrows, a block drops the input and output token split, then the version text. Below 36 columns the provider emblem goes and the bars run the full width. A pet narrows the block further.
 

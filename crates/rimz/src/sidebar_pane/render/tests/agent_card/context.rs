@@ -1000,7 +1000,7 @@ fn calm_context_bar_orders_segments_left_to_right() {
 /// idle span) with a continuous tone: the dim resting weight while a resume
 /// would still hit cache, then a warn-caution-alarm ramp to the hour — the cost
 /// warning that resuming will likely re-read the whole context uncached. The
-/// ramp reads off the clock alone, so a finished card carries the same warning.
+/// ramp reads off the clock alone, but once the cache expires the pin is muted.
 #[test]
 fn context_line_age_tone_slides_with_the_clock_age() {
     let theme = Theme::fixed(false);
@@ -1046,15 +1046,19 @@ fn context_line_age_tone_slides_with_the_clock_age() {
         "mid-ramp tone past the half hour"
     );
     assert_eq!(
+        age_style(AgentStatus::Idle, 3_599, '●'),
+        heat(3_599),
+        "the pin heats until the cache ceiling"
+    );
+    assert_eq!(
         age_style(AgentStatus::Idle, 10 * 60 * 60, '◉'),
-        theme.alarm(Modifier::empty()),
-        "red once a resume would pay for the context again"
+        theme.muted(),
+        "past the ceiling no action can save the cache"
     );
     assert_eq!(
         age_style(AgentStatus::Success, 10 * 60 * 60, '◉'),
-        theme.alarm(Modifier::empty()),
-        "a finished-success context heats on the same ramp — prompting it again \
-         re-reads the whole context uncached"
+        theme.muted(),
+        "a finished-success context also rests once the cache expires"
     );
 }
 
@@ -1123,8 +1127,8 @@ fn context_line_age_pin_reads_the_card_cache_clock() {
     assert_ne!(half_style, hour_style);
     assert_eq!(
         age_span(ttl(1800), 40 * 60),
-        ("◉ 40m".to_owned(), theme.alarm(Modifier::empty())),
-        "red once the provider's TTL has passed"
+        ("◉ 40m".to_owned(), theme.muted()),
+        "muted once the provider's TTL has passed"
     );
 
     let held = |warm_until_secs: u64| {

@@ -1,4 +1,5 @@
 use super::*;
+use crate::agents::ATTENTION_AGE_CEILING_SECS;
 use crate::sidebar_pane::pixel::meter::{MeterPixels, MeterRaster};
 use crate::sidebar_pane::pixel::{
     image_id_color, placeholder_cluster, placeholder_columns_supported,
@@ -308,7 +309,8 @@ pub(super) fn gauge_segments(
 /// the time since the last real turn ended, the face filling over the horizon
 /// in the steady `good` tone; otherwise the time since the agent's own activity
 /// or its last cache request (a ping refreshes the cache, not the activity),
-/// face and heat over the card's provider cache TTL, else the hour.
+/// face and heat over the card's provider cache TTL, else the hour. Past that
+/// ceiling the full face remains, but the tone becomes muted.
 fn cache_age_pin(theme: &Theme, row: &SidebarRow, now: jiff::Timestamp) -> Option<Span<'static>> {
     let cache = row.as_agent().and_then(|agent| agent.cache);
     let held = cache.and_then(|clock| {
@@ -335,7 +337,11 @@ fn cache_age_pin(theme: &Theme, row: &SidebarRow, now: jiff::Timestamp) -> Optio
     });
     Some(Span::styled(
         format!("{} {label}", elapsed_glyph(theme, secs, ceiling)),
-        activity_age_style(theme, secs, ceiling),
+        if secs > ceiling {
+            theme.muted()
+        } else {
+            activity_age_style(theme, secs, ceiling)
+        },
     ))
 }
 
@@ -367,9 +373,11 @@ fn cache_age_pin(theme: &Theme, row: &SidebarRow, now: jiff::Timestamp) -> Optio
 /// continuous age tone ([`activity_age_style`]): dim while warm, then sliding
 /// through warn, caution, and alarm toward the provider's prompt-cache TTL (the
 /// hour when the card carries none), when resuming would likely re-read the
-/// whole context uncached. While a keep-warm horizon holds the cache the pin
+/// whole context uncached. Past that ceiling its face stays full and its tone
+/// drops to muted. While a keep-warm horizon holds the cache the pin
 /// instead reads the steady held tone ([`cache_age_pin`]). A finished row heats on the same ramp —
-/// its context is exactly what a follow-up prompt would pay to re-read. The age
+/// its context is exactly what a follow-up prompt would pay to re-read, then
+/// mutes past the ceiling too. The age
 /// is the agent's own quiet time ([`SidebarRow::own_last_activity`]), not the
 /// child-folded row clock: a parent waiting on its subagents' reports is making
 /// no model call, so its cache keeps cooling while they work.

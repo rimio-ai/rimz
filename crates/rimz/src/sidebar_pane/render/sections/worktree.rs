@@ -2,7 +2,8 @@
 //! and right-pinned git story, the dim `external` divider, and the row roster
 //! with its parallel hit-test map entries. Finished multi-row pods collapse
 //! hidden agents into a two-line receipt: an expandable team/member roster with
-//! cost pinned right, then token totals and cache health with the finished age
+//! cost pinned right, then token totals and cache health with active duration,
+//! or the finished age when that record is absent,
 //! pinned right.
 
 use std::collections::HashSet;
@@ -178,6 +179,10 @@ fn finished_folded(group: &VisibleGroup<'_>) -> bool {
     group.hidden_count() > 0 && !group.expanded() && group.source().collapses()
 }
 
+/// Whole stage track and name, with muted stage duration immediately after
+/// the name and the run total alone pinned right. Duration uses one unit below
+/// an hour and two above; Done has only the frozen total. Admission preserves
+/// the total, then track/name, then stage time, with the team badge last.
 fn pipeline_line(
     ctx: &RowCtx<'_>,
     pipeline: &SidebarPipeline,
@@ -195,6 +200,7 @@ fn pipeline_line(
         })
     };
     let mut track = Vec::new();
+    let mut stage_time_index = 0;
     if position != PipelinePosition::Undeclared {
         for index in 0..pipeline.stages.len() {
             if index > 0 {
@@ -221,16 +227,18 @@ fn pipeline_line(
             if matches!(role, GlyphRole::PipelineCurrent | GlyphRole::PipelineDone) {
                 track.push(Span::raw(" "));
                 track.push(Span::styled(pipeline.stage.clone(), name_style));
+                stage_time_index = track.len();
             }
         }
     }
     let width = content_width(ctx.width);
-    // Timestamp differences fit i64 seconds, as used by age_label.
-    let clock = [pipeline.span_secs(ctx.now), pipeline.total_secs(ctx.now)]
-        .into_iter()
-        .flatten()
-        .map(|secs| age_label(secs as i64))
-        .reduce(|stage, total| format!("{stage} / {total}"))
+    // Timestamp differences fit i64 seconds.
+    let stage_time = pipeline
+        .span_secs(ctx.now)
+        .map(|secs| crate::theme::fmt::run_duration(secs as i64));
+    let clock = pipeline
+        .total_secs(ctx.now)
+        .map(|secs| crate::theme::fmt::run_duration(secs as i64))
         .filter(|clock| 3 + text_width(clock) + 2 <= width);
     // Keep two cells of the name (`I…`, never a bare `…`), then reserve the
     // whole right clock.
@@ -246,6 +254,16 @@ fn pipeline_line(
     } else {
         vec![Span::styled(ellipsize(&pipeline.stage, budget), name_style)]
     };
+    if let Some(time) =
+        stage_time.filter(|time| spans_width(&body) + 1 + text_width(time) <= budget)
+    {
+        let index = if draws_track {
+            stage_time_index
+        } else {
+            body.len()
+        };
+        body.insert(index, Span::styled(format!(" {time}"), theme.muted()));
+    }
     if let Some(team) = team.filter(|_| draws_track || !has_track) {
         // The track's glyphs already set the stage apart; a trackless stage needs the seam.
         let seam = if draws_track {
@@ -428,14 +446,7 @@ fn finished_totals_line(ctx: &RowCtx<'_>, group: &SidebarWorktreeGroup) -> Optio
         },
         |active_secs| {
             let seconds = i64::try_from(active_secs).unwrap_or(i64::MAX);
-            vec![Span::styled(
-                format!(
-                    "{} {}",
-                    elapsed_glyph(ctx.theme, seconds, ATTENTION_AGE_CEILING_SECS),
-                    age_label(seconds)
-                ),
-                ctx.theme.muted(),
-            )]
+            vec![Span::styled(age_label(seconds), ctx.theme.muted())]
         },
     );
     if total == 0 && right.is_empty() {

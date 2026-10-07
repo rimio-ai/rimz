@@ -229,16 +229,13 @@ fn assert_snapshot(name: &str, screen: String) {
             // Budget-bar reset countdowns are a live two-unit duration in the
             // bar's right value column (`3h12m`, `3d3h`); scrub them so the
             // card snapshot stays stable across time.
-            (r"\b\d+[dhms]\d+[dhms]\b", "<reset>"),
+            (r"([↻\x{f0450}]\s+)\d+[dhms]\d+[dhms]\b", "$1<reset>"),
             // Single-unit live durations, anchored to where they render so
             // the identity line's deterministic window token (`1m`) stays
             // visible: an age after its clock-fill glyph, and the `5h`/`7d`
             // budget label ahead of its mana bar.
             (r"([◔◑◕●◉]) \d+[smhd]\b", "$1 <t>"),
             (r"\b\d+[hd](\s+[▰▱])", "<t>$1"),
-            // Pipeline clocks sit directly below a worktree header, not in a card.
-            (r"(?m)(^[▎ ][⑂↩] [^\n]*\n[▎ ] {2}\S[^\n]*? )\d+[smhd] / \d+[smhd](🮇?)$", "$1<t> / <t>$2"),
-            (r"(?m)(^[▎ ][⑂↩] [^\n]*\n[▎ ] {2}\S[^\n]*? )\d+[smhd](🮇?)$", "$1<t>$2"),
         ],
     }, {
         insta::assert_snapshot!(name, screen);
@@ -515,6 +512,7 @@ fn test_row_ctx<'a>(
         tier: Tier::for_width(content_width(width)),
         bands: &snapshot.theme.display.context_meter,
         tool_repeat_warn_after: snapshot.attention.tool_repeat_warn_after.get(),
+        stalled_after_secs: snapshot.attention.stalled_after_secs.get(),
         card_density: snapshot.theme.display.card_density,
         selected_index,
         animation_phase,
