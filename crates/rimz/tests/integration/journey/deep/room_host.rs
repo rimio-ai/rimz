@@ -13,6 +13,9 @@ use super::*;
 
 const SESSION: &str = "room-host";
 const POLL: Duration = Duration::from_millis(100);
+/// Budget for an assertion on a state that already holds: it only outlasts a
+/// forked child that still reads as its parent in the census.
+const CENSUS_RETRY: Duration = Duration::from_secs(2);
 const OVERRIDES: &[(&str, &str)] = &[
     ("RIMZ_TEST_SIDEBAR_STABLE_RUN_MS", "8000"),
     ("RIMZ_TEST_SIDEBAR_HOST_PROBE_INTERVAL_MS", "250"),
@@ -203,8 +206,19 @@ impl Room {
         if env.skip_if_sandboxed() {
             return None;
         }
-        assert_eq!(rimz, env.rimz_bin(), "use the testkit cargo binary");
         env.record(&env.project_root);
+        // `renderers` exists only in a testkit build, the one that honours the timing overrides.
+        let probe = env
+            .rimz()
+            .args(["sidebar", "renderers", "--json"])
+            .bounded_output()
+            .expect("probe the testkit-only verb");
+        assert!(
+            probe.status.success(),
+            "{} lacks the testkit feature the timing overrides need: {}",
+            rimz.display(),
+            String::from_utf8_lossy(&probe.stderr)
+        );
         env.install_agent_hooks("codex");
         let fake_codex = fake_codex_bin(&env.home_root);
         let image = std::fs::metadata(&rimz).expect("fixture binary inode");
@@ -412,8 +426,11 @@ impl Room {
             "two supervisor panes materialized",
             CAPTURE_BUDGET,
             |snapshot| {
-                snapshot.census.supervisors.len() == 2
-                    && snapshot.census.supervisors.iter().all(|p| p.pane.is_some())
+                // A supervisor's child reads as a second supervisor until it execs.
+                matches!(
+                    snapshot.census.supervisors.as_slice(),
+                    [a, b] if a.pane.is_some() && b.pane.is_some() && a.pane != b.pane
+                )
             },
         );
         let mut panes: Vec<_> = ready
@@ -694,12 +711,10 @@ fn shape(mux: MuxName) {
     for index in 0..2 {
         room.assert_paints(index, None);
     }
-    let snapshot = room.observe();
-    assert!(
-        snapshot.settled(&room.panes),
-        "painted room must stay settled: {snapshot:#?}\nsteps: {:?}",
-        room.steps
-    );
+    let panes = room.panes.clone();
+    room.wait("painted room stays settled", CENSUS_RETRY, |snapshot| {
+        snapshot.settled(&panes)
+    });
 }
 
 fn host_kill(mux: MuxName) {
@@ -757,12 +772,12 @@ fn host_kill(mux: MuxName) {
         room.steps
     );
     room.paint_marker("youngpaint", 0, &[0, 1]);
-    let painted = room.observe();
-    assert!(
-        painted.settled(&room.panes)
-            && painted.census.hosts[0].same_process(&young.census.hosts[0]),
-        "young repaint must stay on the successor host: {painted:#?}\nsteps: {:?}",
-        room.steps
+    room.wait(
+        "young repaint stays on the successor host",
+        CENSUS_RETRY,
+        |painted| {
+            painted.settled(&panes) && painted.census.hosts[0].same_process(&young.census.hosts[0])
+        },
     );
 
     let mature_at = reattached_at + HOST_KILL_STABLE + HOST_KILL_MARGIN;
@@ -798,12 +813,12 @@ fn host_kill(mux: MuxName) {
         room.steps
     );
     room.paint_marker("maturepaint", 1, &[0, 1]);
-    let painted = room.observe();
-    assert!(
-        painted.settled(&room.panes)
-            && painted.census.hosts[0].same_process(&mature.census.hosts[0]),
-        "mature repaint must stay on the successor host: {painted:#?}\nsteps: {:?}",
-        room.steps
+    room.wait(
+        "mature repaint stays on the successor host",
+        CENSUS_RETRY,
+        |painted| {
+            painted.settled(&panes) && painted.census.hosts[0].same_process(&mature.census.hosts[0])
+        },
     );
 }
 
@@ -834,34 +849,30 @@ fn supervisor_kill(mux: MuxName) {
     let survivor_pane = room.panes[1 - victim_index].clone();
     room.step(format!("victim {} is host parent", victim.pid));
     room.kill(victim);
-    let remaining = room.wait(
-        "killed instance evicted and survivor fresh (TTL + 5s)",
+    room.wait(
+        "killed instance evicted, same host, survivor attachment kept (TTL + 5s)",
         Duration::from_secs(10),
-        |snapshot| {
-            !snapshot.attachments.values().any(|id| id == &instance)
-                && snapshot.attachments.get(&survivor_pane)
+        |remaining| {
+            !remaining.attachments.values().any(|id| id == &instance)
+                && remaining.census.hosts.len() == 1
+                && remaining.census.hosts[0].same_process(host)
+                && remaining.census.workers.is_empty()
+                && remaining.census.supervisors.len() == 1
+                && remaining.attachments.len() == 1
+                && remaining.attachments.get(&survivor_pane)
                     == initial.attachments.get(&survivor_pane)
         },
     );
-    assert!(
-        remaining.census.hosts.len() == 1
-            && remaining.census.hosts[0].same_process(host)
-            && remaining.census.workers.is_empty()
-            && remaining.census.supervisors.len() == 1
-            && remaining.attachments.len() == 1
-            && remaining.attachments.get(&survivor_pane) == initial.attachments.get(&survivor_pane),
-        "eviction must retain the same host and surviving attachment: {remaining:#?}\ninitial: {initial:#?}\nsteps: {:?}",
-        room.steps
-    );
     room.paint_marker("survivorpaint", 1 - victim_index, &[1 - victim_index]);
-    let painted = room.observe();
-    assert!(
-        painted.census.hosts.len() == 1
-            && painted.census.hosts[0].same_process(host)
-            && painted.census.workers.is_empty()
-            && painted.census.supervisors.len() == 1,
-        "survivor must paint on the original host: {painted:#?}\nsteps: {:?}",
-        room.steps
+    room.wait(
+        "survivor painted on the original host",
+        CENSUS_RETRY,
+        |painted| {
+            painted.census.hosts.len() == 1
+                && painted.census.hosts[0].same_process(host)
+                && painted.census.workers.is_empty()
+                && painted.census.supervisors.len() == 1
+        },
     );
 }
 
