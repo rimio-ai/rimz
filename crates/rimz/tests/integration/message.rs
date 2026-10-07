@@ -1863,6 +1863,72 @@ fn resume_gate_waits_for_recovery_then_delivers() {
 }
 
 #[test]
+fn resume_gate_failed_park_waits_for_recovery_then_delivers() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
+    register_running_agent(&env, "sess-failed-resume", "feature-resume", pane_env);
+    append_lifecycle(
+        &env,
+        "claude",
+        "Stop",
+        "sess-failed-resume",
+        LifecycleSignal::TurnEnded {
+            errored: true,
+            parked_on_background: false,
+            turn_id: None,
+        },
+        |_| {},
+    );
+    seed_turn_error(&env, "sess-failed-resume", TurnErrorClass::PausedRateLimit);
+    seed_rate_limit_budget(&env, 100);
+    let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "claude")]);
+    let snapshot = env.store().snapshot_cached().expect("snapshot");
+    let agent = snapshot
+        .agents
+        .iter()
+        .find(|agent| agent.agent_id.as_str() == "sess-failed-resume")
+        .expect("agent");
+    assert_eq!(agent.status, rimz::agents::AgentStatus::Failed);
+    let message = MessageRecord::new(
+        env.workspace_id.clone(),
+        agent,
+        "continue".to_owned(),
+        DeliveryGate::Resume,
+    )
+    .with_pane_id(PaneId::from_parts(MuxName::Zellij, TRACE_PANE));
+    let message_id = message.message_id.clone();
+    env.store()
+        .queue_message(&message, "rimz-test")
+        .expect("queue resume message");
+
+    let trace_log = env.project_root.join("zellij-failed-resume-trace.log");
+    run_success(
+        traced_rimz(&env, "zellij-failed-resume-trace.log")
+            .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+            .env("RIMZ_MESSAGE_SETTLE_MS", "0")
+            .args(["message", "deliver", "--message-id", message_id.as_str()]),
+        "deferred failed-park resume delivery",
+    );
+    assert!(trace_lines(&trace_log).is_empty());
+    let queued = message_by_id(&env, &message_id);
+    assert_eq!(queued.status, MessageStatus::Queued);
+    assert_eq!(queued.attempts, 0);
+
+    seed_rate_limit_budget(&env, 20);
+    run_success(
+        traced_rimz(&env, "zellij-failed-resume-trace.log")
+            .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+            .env("RIMZ_MESSAGE_SETTLE_MS", "0")
+            .args(["message", "deliver", "--message-id", message_id.as_str()]),
+        "recovered failed-park resume delivery",
+    );
+
+    assert_eq!(message_by_id(&env, &message_id).status, MessageStatus::Sent);
+    assert_text_then_enter(&trace_log, &user_message("continue"));
+}
+
+#[test]
 fn auto_continue_queues_a_pinned_system_resume_then_defers_on_a_closed_gate() {
     let env = Env::new();
     env.install_agent_hooks("claude");

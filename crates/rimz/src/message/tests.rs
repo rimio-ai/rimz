@@ -4,7 +4,8 @@ use jiff::Timestamp;
 
 use super::*;
 use crate::agents::{
-    AgentContext, AgentState, AgentStatus, LifecycleSignal, TurnSettle, TurnSettleOutcome,
+    AgentContext, AgentState, AgentStatus, AgentTurnError, LifecycleSignal, TurnErrorClass,
+    TurnSettle, TurnSettleOutcome,
 };
 use crate::ids::{AgentKind, MuxName, PaneId, WorkspaceId};
 use crate::store::message::MessageStatus;
@@ -210,6 +211,42 @@ fn delivery_gates_follow_agent_lifecycle() {
     compacting.compacting_since = Some(now);
     for gate in [DeliveryGate::Done, DeliveryGate::Any, DeliveryGate::Resume] {
         assert!(!gate_open_for_agent(gate, &compacting, true, now));
+    }
+}
+
+#[test]
+fn delivery_gates_distinguish_failed_provider_parks_from_fatal_errors() {
+    let now = Timestamp::from_second(1_100).unwrap();
+    for (class, resumes) in [
+        (TurnErrorClass::PausedSpendLimit, true),
+        (TurnErrorClass::PausedRateLimit, true),
+        (TurnErrorClass::PausedOverloaded, true),
+        (TurnErrorClass::Failed, false),
+        (TurnErrorClass::Unknown, false),
+    ] {
+        let mut failed = agent("sess-failed", None);
+        failed.status = AgentStatus::Failed;
+        failed.last_activity = now;
+        failed.turn_started_at = Some(Timestamp::from_second(1_000).unwrap());
+        failed.context = Some(AgentContext {
+            turn_error: Some(AgentTurnError {
+                class,
+                at: failed.turn_started_at.unwrap(),
+                label: None,
+            }),
+            ..AgentContext::new("claude", now)
+        });
+        for (gate, expected) in [
+            (DeliveryGate::Resume, resumes),
+            (DeliveryGate::Any, !resumes),
+            (DeliveryGate::Done, false),
+        ] {
+            assert_eq!(
+                gate_open_for_agent(gate, &failed, false, now),
+                expected,
+                "{class:?}/{gate:?}"
+            );
+        }
     }
 }
 
