@@ -6329,6 +6329,99 @@ fn queue_deliver_folds_provisional_message_to_registered_card_name() {
 }
 
 #[test]
+fn queued_delivery_labels_an_ended_root_sender_main() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    register_running_agent(&env, "receiver", "docs", &[("ZELLIJ_PANE_ID", "3")]);
+    append_lifecycle(
+        &env,
+        "claude",
+        "Stop",
+        "receiver",
+        LifecycleSignal::TurnEnded {
+            errored: false,
+            parked_on_background: false,
+            turn_id: None,
+        },
+        |observation| observation.launch.channel = Some("docs".to_owned()),
+    );
+    append_lifecycle(
+        &env,
+        "codex",
+        "SessionStart",
+        "sender",
+        LifecycleSignal::Registered,
+        |observation| observation.agent_name = Some("lucid-atlas".to_owned()),
+    );
+    let snapshot = env.store().snapshot_cached().unwrap();
+    let sender = snapshot
+        .agents
+        .iter()
+        .find(|agent| agent.agent_id == "sender")
+        .unwrap();
+    assert!(sender.root_lane, "{sender:?}");
+    let receiver = snapshot
+        .agents
+        .iter()
+        .find(|agent| agent.agent_id == "receiver")
+        .unwrap();
+    assert_eq!(receiver.channel.as_deref(), Some("docs"));
+    let message = MessageRecord::new(
+        env.workspace_id.clone(),
+        receiver,
+        "handoff".to_owned(),
+        DeliveryGate::Done,
+    )
+    .with_sender(MessageSender::Agent {
+        agent_id: Some(sender.agent_id.clone()),
+        kind: sender.kind.clone(),
+        name: sender.name.clone(),
+        profile: None,
+        role: None,
+        channel: sender.channel(),
+    });
+    queue_messages(&env, &[&message]);
+    append_lifecycle(
+        &env,
+        "codex",
+        "SessionEnd",
+        "sender",
+        LifecycleSignal::Ended,
+        |_| {},
+    );
+    let audit = env
+        .store()
+        .runtime_projection(rimz::RuntimeScope::Audit)
+        .unwrap();
+    assert!(
+        audit
+            .agents
+            .iter()
+            .any(|agent| agent.agent_id == "sender" && agent.ended_at.is_some())
+    );
+    let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "claude")]);
+    let trace = env.project_root.join("ended-root-sender.log");
+    run_success(
+        traced_rimz(&env, &trace)
+            .env("RIMZ_TEST_PANE_LIST", pane_fixture)
+            .env("RIMZ_MESSAGE_SETTLE_MS", "0")
+            .args([
+                "message",
+                "deliver",
+                "--message-id",
+                message.message_id.as_str(),
+            ]),
+        "deliver ended root sender",
+    );
+    let sent = message_by_id(&env, &message.message_id);
+    assert_eq!(sent.status, MessageStatus::Sent, "{sent:?}");
+    assert_text_then_enter(
+        &trace,
+        "Type: AGENT_MESSAGE\nFrom: @lucid-atlas#main (codex)\nContent:\nhandoff",
+    );
+}
+
+#[test]
 fn queued_delivery_batches_compatible_prompts() {
     let env = Env::new();
     env.write_config(&env.project_root, "");
