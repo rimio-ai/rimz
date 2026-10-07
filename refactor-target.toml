@@ -178,6 +178,7 @@ upward-dependencies = ["address"]
 # `RateLimitWindow::pace` and `PaceReading` share the pace fact and floor gate across renderers (+5).
 # AskRoute and pane_actions share one answerability decision with both CLI consumers (+2).
 # AgentState::silent_child_for shares one stall predicate between projection and notice detection (+1).
+# AgentState::root_lane, lane_label and is_root_lane share fold-derived root identity with consumers.
 surface-budget = 991
 
 [[module]]

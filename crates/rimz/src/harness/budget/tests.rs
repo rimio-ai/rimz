@@ -314,6 +314,7 @@ fn turn_budget_clears_midnight_auto_continue_parks() {
     let mut snapshot =
         SidebarSnapshot::build_with_agents(workspace_id.clone(), vec![state.clone()], first);
     snapshot.agent_panes = vec![crate::store::snapshot::PaneAgent {
+        root_lane: false,
         kind: state.kind.clone(),
         kind_ordinal: state.kind_ordinal,
         name: state.name.clone(),
@@ -575,6 +576,7 @@ fn fleet_enforcement_arms_resume_after_interrupting_a_running_agent() {
     snapshot.fleet_day_spend_usd = Some(6.0);
     snapshot.fleet_day_spend_epoch_secs = Some(cutoff);
     snapshot.agent_panes = vec![crate::store::snapshot::PaneAgent {
+        root_lane: false,
         kind: running.kind.clone(),
         kind_ordinal: running.kind_ordinal,
         name: running.name.clone(),

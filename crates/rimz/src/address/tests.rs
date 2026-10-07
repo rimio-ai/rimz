@@ -1562,6 +1562,7 @@ fn agent(kind: &str, id: &str, branch: Option<&str>, raw_pane: &str) -> AgentSta
 /// `agent_panes` — kind and pane only.
 fn lazy_pane(kind: &str, worktree_path: &str, raw_pane: &str) -> PaneAgent {
     PaneAgent {
+        root_lane: false,
         kind: AgentKind::new_unchecked(kind),
         kind_ordinal: None,
         name: None,
@@ -1580,6 +1581,7 @@ fn lazy_pane(kind: &str, worktree_path: &str, raw_pane: &str) -> PaneAgent {
 /// A freshly registered live pane before cwd/channel capture lands.
 fn fresh_pane(kind: &str, raw_pane: &str) -> PaneAgent {
     PaneAgent {
+        root_lane: false,
         kind: AgentKind::new_unchecked(kind),
         kind_ordinal: None,
         name: None,
@@ -1606,6 +1608,7 @@ fn bound_pane(
     raw_pane: &str,
 ) -> PaneAgent {
     PaneAgent {
+        root_lane: false,
         kind: AgentKind::new_unchecked(kind),
         kind_ordinal: Some(ordinal),
         name: Some(name.to_owned()),

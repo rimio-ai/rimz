@@ -534,6 +534,7 @@ mod tests {
 
     fn pane_agent(id: &str, pane: &str) -> PaneAgent {
         PaneAgent {
+            root_lane: false,
             kind: AgentKind::new_unchecked("codex"),
             kind_ordinal: None,
             name: Some(format!("{id}-name")),

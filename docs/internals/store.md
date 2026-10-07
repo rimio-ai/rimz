@@ -12,6 +12,8 @@ Three properties follow, and the rest of RimZ relies on all three. Writers canno
 
 A reader that finds a cache stale, corrupt, or absent folds the log itself. A writer that dies before publishing therefore costs the next reader a bounded fold, never a wrong answer. The same rule lets the sidebar be read-only on the store: it never has to write to be correct, only to be fast. The `cargo xtask invariants` check `ensure_sidebar_library_boundaries` keeps store writers out of the sidebar's import graph.
 
+The fold derives `AgentState.root_lane` from the workspace record: an unstamped channel whose worktree path equals the project root. Bound `PaneAgent` rows copy it; sessionless panes derive it from the snapshot's project root. This display fact never comes from a lifecycle event and does not change routing channel values. Carryover rows retain their shared fold-ready layer, stamped once per workspace identity, rather than being copied on every fold.
+
 Two habits follow from the rule, and new code here keeps both.
 
 Cache the parse, never a verdict. [`disk/parse_cache.rs`](../../crates/rimz/src/disk/parse_cache.rs) memoizes one thread's last deserialization of a JSON file under one of two keys. `ParseCache::get`, which the snapshot readers use, keys on `(path, mtime, len)`, so two republishes inside one mtime tick at equal length can serve the older parse. `ParseCache::get_stamped` adds the device and inode pair and tells those replacements apart. Every caller re-validates against live truth, so a stale serve costs a re-read and never a wrong result.

@@ -229,6 +229,7 @@ fn keepalive_producers_share_pacing_even_during_spawn() {
     snapshot
         .agent_panes
         .push(crate::store::snapshot::PaneAgent {
+            root_lane: false,
             kind: agent.kind.clone(),
             kind_ordinal: None,
             name: None,
@@ -670,6 +671,7 @@ fn helper_rechecks_the_horizon_before_pinging() {
     snapshot
         .agent_panes
         .push(crate::store::snapshot::PaneAgent {
+            root_lane: false,
             kind: agent.kind.clone(),
             kind_ordinal: None,
             name: None,

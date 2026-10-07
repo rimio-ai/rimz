@@ -549,6 +549,7 @@ fn pane(
     raw: &str,
 ) -> PaneAgent {
     PaneAgent {
+        root_lane: false,
         kind: AgentKind::new_unchecked(kind),
         kind_ordinal: None,
         name: name.map(ToOwned::to_owned),

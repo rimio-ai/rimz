@@ -1,6 +1,79 @@
 //! Synthetic store round-trip checks that do not spawn `rimz`.
 
 #[test]
+fn root_lane_is_stamped_through_every_fold_reader() {
+    use rimz::agents::AgentLifecycleObservation;
+    use rimz::agents::lifecycle::LifecycleSignal;
+    use rimz::store::snapshot::RollupCursor;
+    use rimz::workspace::RootClass;
+    use rimz::workspace::record::{self, WorkspaceRecord};
+
+    let h = crate::common::Harness::new();
+    let root = std::path::PathBuf::from("/repo/project");
+    record::write(
+        h.store.paths(),
+        &WorkspaceRecord {
+            layout: 2,
+            workspace_id: h.workspace_id.clone(),
+            project_root: root,
+            worktree_root: None,
+            session_name: "rimz-test".into(),
+            root_class: RootClass::Repo,
+            rimz_bin: None,
+            rimz_build: None,
+            logins: None,
+            updated_at: jiff::Timestamp::UNIX_EPOCH,
+        },
+    )
+    .unwrap();
+    for (index, (id, path, channel)) in [
+        ("root", "/repo/project", None),
+        ("worktree", "/repo/feature", None),
+        ("named", "/repo/project", Some("design")),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut observation =
+            AgentLifecycleObservation::new(Some(id.into()), LifecycleSignal::Registered);
+        observation.worktree_path = Some(path.into());
+        observation.pane_id = Some(rimz::ids::PaneId::from_parts(
+            rimz::ids::MuxName::Tmux,
+            format!("%{index}"),
+        ));
+        observation.agent_pid = Some(std::process::id());
+        observation.launch.channel = channel.map(str::to_owned);
+        h.store
+            .append_event(&rimz::EventEnvelope::agent_lifecycle(
+                h.workspace_id.clone(),
+                "rimz-test",
+                "claude",
+                "SessionStart",
+                &observation,
+            ))
+            .unwrap();
+    }
+    let assert_rows = |rows: Vec<&rimz::agents::AgentState>| {
+        assert_eq!(rows.len(), 3);
+        for row in rows {
+            assert_eq!(row.root_lane, row.agent_id == "root", "{}", row.agent_id);
+        }
+    };
+    let projection = h
+        .store
+        .runtime_projection(rimz::RuntimeScope::Runtime)
+        .unwrap();
+    assert_rows(projection.agents.iter().collect());
+    let snapshot = h.store.snapshot().unwrap();
+    assert_rows(snapshot.agents.iter().collect());
+    let mut cursor = RollupCursor::new();
+    for _ in 0..2 {
+        let (_, rows, _) = cursor.fold(h.store.paths()).unwrap();
+        assert_rows(rows.iter().collect());
+    }
+}
+
+#[test]
 fn runtime_projection_serves_lock_free_while_a_writer_holds_the_lock() {
     // Reads resume from the persisted rollup fold base, so they never take
     // the workspace lock: a projection completes — and still sees every

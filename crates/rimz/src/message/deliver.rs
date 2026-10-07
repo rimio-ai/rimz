@@ -1513,6 +1513,7 @@ mod tests {
         if with_pane {
             let agent = &snapshot.agents[0];
             snapshot.agent_panes = vec![PaneAgent {
+                root_lane: false,
                 kind: agent.kind.clone(),
                 kind_ordinal: agent.kind_ordinal,
                 name: agent.name.clone(),

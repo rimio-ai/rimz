@@ -79,10 +79,10 @@ fn assemble_snapshot<'a>(
     snapshot.fenced_sessions.extend(expelled);
     snapshot.reap_stale_sessions();
     let identity = WorkspaceSnapshotIdentity::from_paths(paths);
-    snapshot.display_name = identity.display_name;
+    snapshot.display_name = identity.display_name.clone();
     let mut snapshot = snapshot
         .with_root_class(identity.root_class)
-        .with_project_root(identity.project_root);
+        .with_project_root(identity.project_root.clone());
     // Stamp the extent the fold consumed. The freshness gate compares it
     // against the live log length, so a racing append can never pass a
     // stale rollup off as current.
@@ -155,11 +155,12 @@ thread_local! {
     /// This thread's last `latest.json` parse — the rollup a long-lived
     /// consumer thread re-reads on every store delta.
     static LATEST_PARSE_CACHE: ParseCache<SidebarSnapshot> = const { ParseCache::new() };
+    static WORKSPACE_IDENTITY_PARSE_CACHE: ParseCache<WorkspaceSnapshotIdentity> = const { ParseCache::new() };
 }
 
-struct WorkspaceSnapshotIdentity {
+pub(super) struct WorkspaceSnapshotIdentity {
     display_name: String,
-    project_root: Option<PathBuf>,
+    pub(super) project_root: Option<PathBuf>,
     root_class: RootClass,
 }
 
@@ -172,13 +173,19 @@ impl WorkspaceSnapshotIdentity {
         }
     }
 
-    fn from_paths(paths: &StatePaths) -> Self {
+    pub(super) fn from_paths(paths: &StatePaths) -> Arc<Self> {
+        let stamped = StampedPath::of(&paths.workspace_record);
+        if let Some(identity) =
+            WORKSPACE_IDENTITY_PARSE_CACHE.with(|cache| cache.get_stamped(&stamped))
+        {
+            return identity;
+        }
         let record = match record::read(&paths.workspace_record) {
             Ok(record) => record,
             Err(WorkspaceRecordErr::Io { source, .. })
                 if source.kind() == std::io::ErrorKind::NotFound =>
             {
-                return Self::fallback(paths);
+                return Arc::new(Self::fallback(paths));
             }
             Err(err) => {
                 tracing::debug!(
@@ -186,7 +193,7 @@ impl WorkspaceSnapshotIdentity {
                     error = %err,
                     "workspace record is unreadable while resolving the display name",
                 );
-                return Self::fallback(paths);
+                return Arc::new(Self::fallback(paths));
             }
         };
         let root = crate::utils::path::normalize_path_lexical(&record.project_root);
@@ -202,11 +209,14 @@ impl WorkspaceSnapshotIdentity {
                 );
                 paths.workspace_id.as_str().to_owned()
             });
-        Self {
+        let identity = Arc::new(Self {
             display_name,
-            project_root: Some(record.project_root),
+            project_root: Some(root),
             root_class: record.root_class,
-        }
+        });
+        WORKSPACE_IDENTITY_PARSE_CACHE
+            .with(|cache| cache.store_stamped(&stamped, Arc::clone(&identity)));
+        identity
     }
 }
 
@@ -254,9 +264,11 @@ mod tests {
             RootClass::Repo,
         );
 
+        let identity = WorkspaceSnapshotIdentity::from_paths(&paths);
+        assert_eq!(identity.display_name, "rimz");
         assert_eq!(
-            WorkspaceSnapshotIdentity::from_paths(&paths).display_name,
-            "rimz"
+            identity.project_root.as_deref(),
+            Some(std::path::Path::new("/srv/projects/rimz"))
         );
     }
 
@@ -270,7 +282,7 @@ mod tests {
 
         let identity = WorkspaceSnapshotIdentity::from_paths(&paths);
         assert_eq!(identity.display_name, workspace.as_str());
-        assert_eq!(identity.project_root, Some(PathBuf::from("/tmp/..")));
+        assert_eq!(identity.project_root, Some(PathBuf::from("/")));
         assert_eq!(identity.root_class, RootClass::Directory);
     }
 
@@ -288,6 +300,30 @@ mod tests {
         assert_eq!(snapshot.display_name, "identity");
         assert_eq!(snapshot.project_root, Some(project_root));
         assert_eq!(snapshot.root_class, RootClass::Marker);
+    }
+
+    #[test]
+    fn workspace_identity_reuses_the_parse_until_the_record_is_replaced() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths =
+            StatePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
+        paths.ensure_dirs().unwrap();
+        write_workspace_record(&paths, PathBuf::from("/srv/root-a"), RootClass::Repo);
+        let first = WorkspaceSnapshotIdentity::from_paths(&paths);
+        let warm = WorkspaceSnapshotIdentity::from_paths(&paths);
+        assert!(
+            Arc::ptr_eq(&first, &warm),
+            "a warm identity read must reuse its parse"
+        );
+
+        write_workspace_record(&paths, PathBuf::from("/srv/root-b"), RootClass::Marker);
+        let replaced = WorkspaceSnapshotIdentity::from_paths(&paths);
+        assert!(!Arc::ptr_eq(&first, &replaced));
+        assert_eq!(
+            replaced.project_root.as_deref(),
+            Some(std::path::Path::new("/srv/root-b"))
+        );
+        assert_eq!(replaced.root_class, RootClass::Marker);
     }
 
     #[test]

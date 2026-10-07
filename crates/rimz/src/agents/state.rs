@@ -5,6 +5,7 @@
 
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -754,6 +755,9 @@ pub struct AgentState {
     /// basename.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub channel: Option<String>,
+    /// Derived at the store fold exit from the workspace record's project root, never from an event.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub root_lane: bool,
     /// When this session explicitly ended or the store proved its root process
     /// dead. Runtime views hide stamped rows; audit views retain them so an
     /// explicit resume can recover the provider session within retention.
@@ -1030,6 +1034,16 @@ impl AgentState {
         }
     }
 
+    /// Whether an unstamped launch belongs to the project's root lane.
+    pub fn is_root_lane(
+        channel: Option<&str>,
+        worktree_path: Option<&Path>,
+        project_root: Option<&Path>,
+    ) -> bool {
+        channel.is_none_or(str::is_empty)
+            && project_root.is_some_and(|root| worktree_path == Some(root))
+    }
+
     /// The agent's channel — the lane it cooperates in: stamped lane, else
     /// worktree directory basename.
     /// `None` when the agent runs outside any channel context.
@@ -1040,6 +1054,15 @@ impl AgentState {
                 .as_deref()
                 .and_then(|path| path.rsplit('/').next()),
         )
+    }
+
+    /// The human lane name; the root lane is `main`, while [`Self::channel`] stays the routing key.
+    pub fn lane_label(&self) -> Option<String> {
+        if self.root_lane {
+            Some("main".to_owned())
+        } else {
+            self.channel()
+        }
     }
 
     pub(crate) fn seed(
@@ -1069,6 +1092,7 @@ impl AgentState {
             launch_group: None,
             launch_ordinal: None,
             channel: None,
+            root_lane: false,
             ended_at: None,
             resumed_at: None,
             status,

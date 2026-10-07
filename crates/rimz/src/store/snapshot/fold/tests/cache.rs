@@ -223,9 +223,9 @@ fn carryover_parse_is_shared_per_identity_and_corruption_errors_until_replaced()
         ..EventCarryover::default()
     };
     write_carryover(&path, &carryover_with("aaaa")).unwrap();
-    let first = fold_carryover(&path).unwrap();
+    let first = fold_carryover(&path, None).unwrap();
     assert!(
-        Arc::ptr_eq(&first, &fold_carryover(&path).unwrap()),
+        Arc::ptr_eq(&first, &fold_carryover(&path, None).unwrap()),
         "an unchanged file identity serves the shared parse"
     );
     assert!(
@@ -236,7 +236,7 @@ fn carryover_parse_is_shared_per_identity_and_corruption_errors_until_replaced()
     // Atomic replacement with identical bytes still changes the inode.
     write_carryover(&path, &carryover_with("aaaa")).unwrap();
     assert!(
-        !Arc::ptr_eq(&first, &fold_carryover(&path).unwrap()),
+        !Arc::ptr_eq(&first, &fold_carryover(&path, None).unwrap()),
         "a replaced file re-parses"
     );
 
@@ -245,15 +245,18 @@ fn carryover_parse_is_shared_per_identity_and_corruption_errors_until_replaced()
     std::fs::rename(&corrupt, &path).unwrap();
     for attempt in 0..2 {
         assert!(
-            matches!(fold_carryover(&path), Err(SnapshotErr::Json { .. })),
+            matches!(fold_carryover(&path, None), Err(SnapshotErr::Json { .. })),
             "corruption surfaces on fold {attempt}, never a cached default"
         );
     }
     write_carryover(&path, &carryover_with("bbbb")).unwrap();
-    assert_eq!(fold_carryover(&path).unwrap().agents[0].agent_id, "bbbb");
+    assert_eq!(
+        fold_carryover(&path, None).unwrap().agents[0].agent_id,
+        "bbbb"
+    );
 
     std::fs::remove_file(&path).unwrap();
-    assert!(fold_carryover(&path).unwrap().agents.is_empty());
+    assert!(fold_carryover(&path, None).unwrap().agents.is_empty());
 }
 
 #[test]

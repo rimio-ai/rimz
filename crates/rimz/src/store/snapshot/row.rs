@@ -236,6 +236,9 @@ pub struct PaneAgent {
     /// Routing lane copied from the bound session.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub channel: Option<String>,
+    /// Copied from the bound row, or derived from the snapshot's project root for a sessionless pane.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub root_lane: bool,
     /// The bound session, or `None` for a wired pane with no session yet.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_id: Option<AgentSessionId>,
@@ -288,6 +291,15 @@ impl PaneAgent {
                 .as_deref()
                 .and_then(|path| path.rsplit('/').next()),
         )
+    }
+
+    /// The human lane name; the root lane is `main`, while [`Self::channel`] stays the routing key.
+    pub fn lane_label(&self) -> Option<String> {
+        if self.root_lane {
+            Some("main".to_owned())
+        } else {
+            self.channel()
+        }
     }
 }
 
