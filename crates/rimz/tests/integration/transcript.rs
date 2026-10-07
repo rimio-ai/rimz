@@ -6,6 +6,69 @@ use rimz::transcript::{TranscriptEntry, TranscriptKind};
 use crate::common::Env;
 
 #[test]
+fn transcript_cli_bounds_human_stdout_but_not_json_or_zero() {
+    let env = Env::new();
+    for n in 0..25 {
+        append_transcript(
+            &env,
+            entry(
+                "bounded",
+                "bounded",
+                TranscriptKind::Prompt,
+                &format!("entry-{n:03}"),
+                "2026-06-01T00:00:00Z",
+            ),
+        );
+    }
+    for flags in [vec![], vec!["--all"], vec!["--flat"]] {
+        let output = env
+            .rimz()
+            .args(["transcript", "#bounded"])
+            .args(flags)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let text = String::from_utf8(output.stdout).unwrap();
+        assert_eq!(
+            text.lines()
+                .filter(|line| line.starts_with("entry-"))
+                .count(),
+            20,
+            "{text}"
+        );
+        assert!(!text.contains("entry-000"), "{text}");
+        assert_eq!(
+            String::from_utf8(output.stderr).unwrap().trim(),
+            "⋯ last 20 of 25 entries · -n 0 for all"
+        );
+    }
+    let output = env
+        .rimz()
+        .args(["transcript", "#bounded", "-n", "0"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .lines()
+            .filter(|line| line.starts_with("entry-"))
+            .count(),
+        25
+    );
+    assert!(output.stderr.is_empty(), "{:?}", output.stderr);
+    let output = env
+        .rimz()
+        .args(["transcript", "#bounded", "--json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["entries"].as_array().unwrap().len(), 25);
+    assert!(output.stderr.is_empty(), "{:?}", output.stderr);
+}
+
+#[test]
 fn agents_show_ambiguity_excludes_ended_matches() {
     let env = Env::new();
     let store = env.store();

@@ -8,6 +8,10 @@ use std::collections::HashSet;
 
 use super::*;
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The shared follower preserves explicit agent-log tails while showing the transcript's default-bound hint"
+)]
 pub(crate) fn follow(
     workspace: &rimz::ResolvedWorkspace,
     target: Option<&str>,
@@ -16,6 +20,7 @@ pub(crate) fn follow(
     all: bool,
     json: bool,
     flat: bool,
+    default_bound: bool,
 ) -> Result<()> {
     let paths = rimz::StatePaths::for_project_root(&workspace.project_root)
         .context("preparing state paths")?;
@@ -49,6 +54,9 @@ pub(crate) fn follow(
             &tz,
             Prose::for_stdout(),
         ))?;
+        if default_bound {
+            write_default_bound_hint(&initial, None)?;
+        }
     }
 
     let tz = crate::cli::machine_config().time_zone();
