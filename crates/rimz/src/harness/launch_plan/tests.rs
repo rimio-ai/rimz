@@ -972,7 +972,8 @@ fn prompt_environment_reaches_qwen_without_entering_argv() {
 #[test]
 fn env_reminder_compile_resolves_worktree_from_launch_cwd() {
     let project = tempfile::tempdir().unwrap();
-    let repo = project.path().join("repo");
+    let root = project.path().canonicalize().unwrap();
+    let repo = root.join("repo");
     std::fs::create_dir(&repo).unwrap();
     for args in [
         vec!["init", "-b", "main"],
@@ -1000,7 +1001,7 @@ fn env_reminder_compile_resolves_worktree_from_launch_cwd() {
     let created = crate::worktree::create(
         &repo,
         &crate::config::WorktreeConfig {
-            dir: project.path().join("worktrees").display().to_string(),
+            dir: root.join("worktrees").display().to_string(),
             ..Default::default()
         },
         Some("demo"),
@@ -1011,12 +1012,10 @@ fn env_reminder_compile_resolves_worktree_from_launch_cwd() {
     .unwrap();
     let cwd = &created.marker.worktree_path;
     let machine = crate::config::MachineConfig::default();
-    let mut effective =
-        crate::config::effective::load_with_roots(&machine, project.path(), project.path())
-            .unwrap();
-    let id = crate::WorkspaceId::from_project_root(project.path());
-    let runtime = RuntimePaths::under(id.clone(), project.path()).unwrap();
-    let state = StatePaths::under(id, project.path()).unwrap();
+    let mut effective = crate::config::effective::load_with_roots(&machine, &root, &root).unwrap();
+    let id = crate::WorkspaceId::from_project_root(&root);
+    let runtime = RuntimePaths::under(id.clone(), &root).unwrap();
+    let state = StatePaths::under(id, &root).unwrap();
     let mut request = ExecRequest::bare_launch(AgentKind::new_unchecked("claude"), Vec::new());
     for subagent in [false, true] {
         request.subagent = subagent;
@@ -1025,7 +1024,7 @@ fn env_reminder_compile_resolves_worktree_from_launch_cwd() {
             let plan = compile(LaunchPlanInputs {
                 request: &request,
                 cwd,
-                project_root: project.path(),
+                project_root: &root,
                 rimz_bin: Path::new("/bin/rimz"),
                 runtime: &runtime,
                 state: &state,
