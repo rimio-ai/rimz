@@ -222,6 +222,12 @@ Each record is one newline-terminated line: `<payload length> <crc32, 8 lowercas
 sed -E 's/^[0-9]+ [0-9a-f]{8} //' log/events.log.jsonl | jq 'select(.method == "agent.lifecycle")'
 ```
 
+A full envelope is long, so to follow one agent, run, or message through the log, match its id and project the three fields that say what happened and when:
+
+```sh
+rg -a <id> log/events.log.jsonl | sed -E 's/^[0-9]+ [0-9a-f]{8} //' | jq -r '[.timestamp, .method, .params.event_name // ""] | @tsv'
+```
+
 The payload is an `EventEnvelope`: schema version, event id, workspace id, session name, mux name, source and source kind, method, timestamp, and a method-specific `params` blob kept as raw JSON, so a reducer parses only the events it folds.
 
 ### What is in it
