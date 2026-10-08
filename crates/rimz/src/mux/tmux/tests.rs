@@ -100,6 +100,29 @@ fn managed_endpoint_prefixes_every_command() {
 }
 
 #[test]
+fn new_session_birth_removes_outer_mux_context() {
+    let opts = crate::mux::SessionOptions {
+        session_name: "rimz-test".to_owned(),
+        workspace_id: crate::ids::WorkspaceId::from_project_root(Path::new("/project")),
+        project_root: PathBuf::from("/project"),
+        extra_env: Default::default(),
+        cwd: PathBuf::from("/project"),
+        config: Default::default(),
+        detected_size: Some((132, 40)),
+        truecolor: false,
+    };
+    let spec =
+        TmuxBackend::with_socket("/test/socket").new_session_command(&opts, &Default::default());
+    for key in crate::mux::AMBIENT_MUX_ENV {
+        assert!(
+            spec.env_remove.contains(key),
+            "{key} remains inherited at birth"
+        );
+    }
+    assert_eq!(verb_args(&spec)[0], "new-session");
+}
+
+#[test]
 fn existing_session_attach_targets_the_managed_server() {
     let backend = TmuxBackend::with_socket("/run/user/1000/rimz/tmux/server");
     let spec = backend.attach_existing_command("rimz-test");

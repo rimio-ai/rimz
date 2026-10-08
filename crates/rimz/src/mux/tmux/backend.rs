@@ -33,6 +33,46 @@ use crate::pane::keys::{BRACKET_PASTE_CLOSE, BRACKET_PASTE_OPEN, NamedKey, paste
 const SIDEBAR_RESIZE_STEP_COLS: u16 = 2;
 
 impl TmuxBackend {
+    pub(super) fn new_session_command(
+        &self,
+        opts: &SessionOptions,
+        env: &BTreeMap<String, String>,
+    ) -> CommandSpec {
+        // `new-session -d` births detached; an already-live room answers
+        // `duplicate session` (exit 1), which is the goal state and treated as
+        // success by `ensure_session`. `-A` is unusable here: on a live session it switches
+        // to the attach path, which ignores `-d`/`-e`/`-x`/`-y` and needs a
+        // terminal on stdin — `CommandSpec` nulls stdin, so it exits 1 with
+        // `open terminal failed` (docs/externals/mux-adapter/tmux-reference.md).
+        let mut spec = self.cmd().without_mux_context().args([
+            "new-session".to_owned(),
+            "-d".to_owned(),
+            "-s".to_owned(),
+            opts.session_name.clone(),
+            "-c".to_owned(),
+            opts.cwd.to_string_lossy().into_owned(),
+        ]);
+        // The birth env lands in the session environment at birth (`-e`),
+        // so the first window's panes already inherit it — `set-environment`
+        // in `ensure_session` would only reach panes created after it runs.
+        for (key, value) in env {
+            spec = spec.args(["-e".to_owned(), format!("{key}={value}")]);
+        }
+        // Birth the detached session at the launching terminal's geometry
+        // (instead of tmux's 80×24 default), so a fixed-column sidebar split
+        // is already correct before the client attaches. The duplicate path
+        // skips creation entirely, so a re-ensure never resizes a live room.
+        if let Some((cols, rows)) = opts.detected_size {
+            spec = spec.args([
+                "-x".to_owned(),
+                cols.to_string(),
+                "-y".to_owned(),
+                rows.to_string(),
+            ]);
+        }
+        spec
+    }
+
     /// Resize exactly-one-sidebar windows from one geometry snapshot, scoped
     /// to the panes structural reconcile kept or mounted.
     fn converge_live_sidebar_geometries(
@@ -154,39 +194,7 @@ impl MuxBackend for TmuxBackend {
         if opts.truecolor {
             env.insert("COLORTERM".to_owned(), "truecolor".to_owned());
         }
-        // `new-session -d` births detached; an already-live room answers
-        // `duplicate session` (exit 1), which is the goal state and treated as
-        // success below. `-A` is unusable here: on a live session it switches
-        // to the attach path, which ignores `-d`/`-e`/`-x`/`-y` and needs a
-        // terminal on stdin — `CommandSpec` nulls stdin, so it exits 1 with
-        // `open terminal failed` (docs/externals/mux-adapter/tmux-reference.md).
-        let mut spec = self.cmd().args([
-            "new-session".to_owned(),
-            "-d".to_owned(),
-            "-s".to_owned(),
-            opts.session_name.clone(),
-            "-c".to_owned(),
-            opts.cwd.to_string_lossy().into_owned(),
-        ]);
-        // The birth env lands in the session environment at birth (`-e`),
-        // so the first window's panes already inherit it — `set-environment`
-        // below would only reach panes created after it runs.
-        for (key, value) in &env {
-            spec = spec.args(["-e".to_owned(), format!("{key}={value}")]);
-        }
-        // Birth the detached session at the launching terminal's geometry
-        // (instead of tmux's 80×24 default), so a fixed-column sidebar split
-        // is already correct before the client attaches. The duplicate path
-        // skips creation entirely, so a re-ensure never resizes a live room.
-        if let Some((cols, rows)) = opts.detected_size {
-            spec = spec.args([
-                "-x".to_owned(),
-                cols.to_string(),
-                "-y".to_owned(),
-                rows.to_string(),
-            ]);
-        }
-        match spec.run() {
+        match self.new_session_command(opts, &env).run() {
             // Only a session this call created proves anything about the
             // server's cwd: a live room's pane may have been `cd`-ed since.
             Ok(_) => self.verify_birth_cwd(&opts.session_name, &opts.cwd)?,

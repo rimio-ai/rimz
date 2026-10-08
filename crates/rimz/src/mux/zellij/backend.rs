@@ -1110,6 +1110,7 @@ impl MuxBackend for ZellijBackend {
 
     fn attach_command(&self, name: &str, config: &crate::config::MultiplexerConfig) -> CommandSpec {
         self.cmd()
+            .without_mux_context()
             .args([
                 "attach".to_owned(),
                 "--create".to_owned(),
