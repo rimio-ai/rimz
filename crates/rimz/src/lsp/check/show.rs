@@ -190,7 +190,7 @@ fn render_selected(
         .or(anchor.hint)
         .expect("line anchor has a hint");
     let lines: Vec<_> = source.lines().collect();
-    if start == 0 || start > end || end as usize > lines.len() {
+    if start == 0 || start > end || start as usize > lines.len() {
         return failure(
             argument,
             "line-outside",
@@ -198,6 +198,7 @@ fn render_selected(
             5,
         );
     }
+    let end = end.min(lines.len() as u32);
     let mut text = format!(
         "{}:{start}-{end}{}",
         path.display(),
@@ -217,12 +218,7 @@ fn render_selected(
         for child in children {
             let line = child.selection.start.line as usize;
             let Some(source) = lines.get(line) else {
-                return failure(
-                    argument,
-                    "line-outside",
-                    &format!("file has {} lines", lines.len()),
-                    5,
-                );
+                continue;
             };
             text.push_str(&format!(
                 "{:>6}\t{} ({}-{})\n",
@@ -327,6 +323,66 @@ mod tests {
     }
 
     #[test]
+    fn show_clamps_line_range_to_the_last_disk_line() {
+        assert_eq!(
+            read("src/lib.rs:209-211", false, false),
+            (
+                "src/lib.rs:209-210\n   209\t  line 209\n   210\t  line 210\n".into(),
+                0
+            )
+        );
+        for argument in ["src/lib.rs:211-212", "src/lib.rs:0-2", "src/lib.rs:2-1"] {
+            assert_eq!(
+                read(argument, false, false),
+                (format!("{argument}  line-outside  file has 210 lines\n"), 5)
+            );
+        }
+    }
+
+    #[test]
+    fn show_clamps_symbol_and_position_ranges_from_unsaved_outlines() {
+        let mut nodes = nodes();
+        nodes[2].range[1] = 215;
+        for argument in ["src/lib.rs::child ~208", "src/lib.rs:208:4"] {
+            let (anchor, position) = parse_argument(argument).unwrap();
+            for dirty in [false, true] {
+                let marker = if dirty { "  (unsaved in editor)" } else { "" };
+                assert_eq!(
+                    render_item(
+                        &anchor,
+                        position,
+                        Path::new("src/lib.rs"),
+                        &nodes,
+                        &source(),
+                        dirty,
+                        false
+                    ),
+                    (
+                        format!(
+                            "src/lib.rs:208-210{marker}\n   208\t  line 208\n   209\t  line 209\n   210\t  line 210\n"
+                        ),
+                        0
+                    )
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn show_zoom_omits_children_past_the_clamped_range() {
+        let mut nodes = nodes();
+        nodes[0].range[1] = 215;
+        let mut outside = nodes[1].clone();
+        outside.range = [211, 215];
+        outside.selection.start.line = 210;
+        nodes.push(outside);
+        assert_eq!(
+            render_item(&parse_argument("src/lib.rs::Parent").unwrap().0, None, Path::new("src/lib.rs"), &nodes, &source(), false, false),
+            ("src/lib.rs:1-210  (outline: 210 lines; --full prints the body)\n     4\tline 4 (3-5)\n".into(), 0)
+        );
+    }
+
+    #[test]
     fn show_reports_missing_and_outside() {
         let argument = "src/lib.rs::Parent::chld";
         let (anchor, _) = parse_argument(argument).unwrap();
@@ -346,7 +402,7 @@ mod tests {
         for argument in [
             "src/lib.rs::absent",
             "src/lib.rs:210:50",
-            "src/lib.rs:209-211",
+            "src/lib.rs:211-212",
             "src/lib.rs:0-2",
         ] {
             assert_eq!(read(argument, false, false).1, 5, "{argument}");
