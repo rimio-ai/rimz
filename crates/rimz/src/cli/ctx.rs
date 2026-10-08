@@ -3,7 +3,7 @@
 //!
 //! Commands that address a running room open a `Ctx` and read what they need from it. Commands that name or create a room by path (`start`, `attach`, `setup`) resolve directly through `WorkspaceResolver::resolve` instead.
 //!
-//! `gc` and `accounts use` address the running room through `resolve_participant` directly, then use `open_existing_store` so they never create a store or re-record it before a refusal.
+//! `gc`, `accounts use`, and `message sweep` without `--workspace-id` address the running room through `resolve_participant` directly, then use `open_existing_store` so they never create a store or re-record it before a refusal.
 
 use anyhow::{Context, Result};
 
