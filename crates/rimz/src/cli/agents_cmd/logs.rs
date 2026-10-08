@@ -13,6 +13,7 @@ pub(super) fn logs_agent(
 ) -> Result<()> {
     let target = agent_logs_target(&reference);
     let workspace = crate::cli::transcript::resolve_view_workspace(Some(&target), None, globals)?;
+    crate::cli::require_existing_store(&workspace)?;
     let hidden = crate::cli::transcript::Hidden::for_json(json);
     if follow {
         return crate::cli::transcript::follow(

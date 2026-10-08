@@ -554,7 +554,7 @@ When the agent's temp directory exists, `show` prints its host path (`tmp:`) and
 
 #### `logs`
 
-`rimz agents logs <TARGET>` shows the same view as [`rimz transcript <agent>`](./transcript.md). It resolves live agents first and historical sessions only after a live miss; ambiguity refuses with addresses to retype rather than choosing a session. Human output hides subagent digests, waits, and `rimz`-authored prompts along with the output of the turns they open; JSON keeps them. Unlike `transcript`, `logs` prints no prior-session note and has no `-w` or `--flat` flag.
+`rimz agents logs <TARGET>` shows the same view as [`rimz transcript <agent>`](./transcript.md). It resolves live agents first and historical sessions only after a live miss; ambiguity refuses with addresses to retype rather than choosing a session. Like `transcript`, it requires an existing room and refuses outside one with `no room at <root>: run \`rimz start\` there, or pass --root <room>`. Human output hides subagent digests, waits, and `rimz`-authored prompts along with the output of the turns they open; JSON keeps them. Unlike `transcript`, `logs` prints no prior-session note and has no `-w` or `--flat` flag.
 
 | Flag | Effect |
 | --- | --- |
