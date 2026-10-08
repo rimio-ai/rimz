@@ -95,7 +95,8 @@ pub struct RefreshedLanes {
 #[derive(Debug, Default)]
 pub struct ProducerRefreshState {
     git: git_stats::GitRefreshState,
-    cohort_rollup: crate::store::snapshot::RollupCursor,
+    /// This thread's audit cursor, shared by cohort spend and the orphan sweep.
+    rollup: crate::store::snapshot::RollupCursor,
     cohort_effort: crate::agents::spending::EffortParseMemo,
     orphan_sweep_checked_at_ms: Option<u64>,
     auto_gc: crate::harness::auto_gc::AutoGcMemo,
@@ -313,7 +314,13 @@ pub(super) fn refresh_heavy_lanes(
         && orphan_sweep_due(state.orphan_sweep_checked_at_ms, now_ms)
     {
         state.orphan_sweep_checked_at_ms = Some(now_ms);
-        crate::harness::orphan_sweep::enforce(state_paths, runtime, &runs, base.now);
+        crate::harness::orphan_sweep::enforce(
+            state_paths,
+            runtime,
+            &runs,
+            base.now,
+            &mut state.rollup,
+        );
     }
     crate::harness::auto_gc::sweep_if_due(
         state_paths,
@@ -335,7 +342,7 @@ pub(super) fn refresh_heavy_lanes(
         runtime,
         config.agents.attention.active_grace_secs.get(),
         unix_now_ms(),
-        &mut state.cohort_rollup,
+        &mut state.rollup,
         &mut state.cohort_effort,
     );
     pipeline::refresh_pipeline_for(base, runtime, config, teams);
