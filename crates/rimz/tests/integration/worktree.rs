@@ -60,6 +60,7 @@ fn worktree_exec_request(worktree: &Path) -> ExecRequest {
         exit_on_run_completion: false,
         subagent: false,
         loop_reminder: None,
+        headless: None,
         identity: ExecIdentity::default(),
     }
 }

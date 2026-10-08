@@ -115,6 +115,7 @@ static GROK_DESCRIPTOR: AgentSpec = AgentSpec {
             effort: Some(super::StaticPresetMatcher::Flag(&["--reasoning-effort"])),
             ..super::PresetMatchers::EMPTY
         },
+        ..super::LaunchSpec::EMPTY
     },
 };
 

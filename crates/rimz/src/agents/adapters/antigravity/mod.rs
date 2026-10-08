@@ -220,6 +220,7 @@ static ANTIGRAVITY_DESCRIPTOR: AgentSpec = AgentSpec {
             effort: Some(super::StaticPresetMatcher::Flag(&["--effort"])),
             ..super::PresetMatchers::EMPTY
         },
+        ..super::LaunchSpec::EMPTY
     },
 };
 

@@ -63,6 +63,7 @@ pub struct LaunchSpec {
     pub compact_command: Option<CompactCommand>,
     pub interrupt_key: Option<crate::pane::keys::NamedKey>,
     pub presets: PresetMatchers,
+    pub headless: Option<&'static dyn super::HeadlessForm>,
 }
 
 impl LaunchSpec {
@@ -78,6 +79,7 @@ impl LaunchSpec {
         compact_command: None,
         interrupt_key: None,
         presets: PresetMatchers::EMPTY,
+        headless: None,
     };
 
     /// Render argv that forks a prior session under a provider-assigned new id.

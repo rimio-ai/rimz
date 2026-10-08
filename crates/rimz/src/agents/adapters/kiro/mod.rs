@@ -114,6 +114,7 @@ static KIRO_DESCRIPTOR: AgentSpec = AgentSpec {
             effort: Some(super::StaticPresetMatcher::Flag(&["--effort"])),
             system_prompt_file: None,
         },
+        ..super::LaunchSpec::EMPTY
     },
 };
 

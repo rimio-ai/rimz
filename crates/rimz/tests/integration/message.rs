@@ -3345,6 +3345,7 @@ fn parent_message_to_resumed_child_waits_for_installed_registration() {
         exit_on_run_completion: true,
         subagent: true,
         loop_reminder: None,
+        headless: None,
         identity: ExecIdentity::default(),
     };
     request.identity.name = Some("otter".into());

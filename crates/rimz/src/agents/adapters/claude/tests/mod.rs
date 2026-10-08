@@ -14,6 +14,112 @@ mod local_context;
 mod subagents;
 
 #[test]
+fn headless_result_reads_structured_verdict_cost_and_all_input_tokens() {
+    let request = crate::agents::HeadlessRequest {
+        schema: crate::agents::CHECK_VERDICT_SCHEMA.into(),
+        schema_file: "/unused/schema.json".into(),
+        verdict_file: "/unused/verdict.json".into(),
+    };
+    let stdout = br#"{"structured_output":{"pass":false,"reason":"Nothing to do."},"result":"not the verdict","total_cost_usd":0.003,"usage":{"input_tokens":10,"cache_creation_input_tokens":20,"cache_read_input_tokens":30,"output_tokens":4},"is_error":false,"subtype":"success"}"#;
+    let result = CLAUDE_DESCRIPTOR.launch.headless.unwrap().read_result(
+        stdout,
+        b"diagnostic on stderr",
+        &request,
+        Some("haiku"),
+        &crate::agents::pricing::PriceBook::fixture(),
+    );
+    assert_eq!(
+        result.verdict,
+        Some(crate::agents::HeadlessVerdict {
+            pass: false,
+            reason: "Nothing to do.".into()
+        })
+    );
+    assert_eq!(result.cost_usd, Some(0.003));
+    assert_eq!(result.input_tokens, Some(60));
+    assert_eq!(result.output_tokens, Some(4));
+    assert_eq!(result.error, None);
+    let noisy_stdout = [b"shell startup message\n".as_slice(), stdout, b"\n  \n"].concat();
+    let noisy = CLAUDE_DESCRIPTOR.launch.headless.unwrap().read_result(
+        &noisy_stdout,
+        b"diagnostic on stderr",
+        &request,
+        Some("haiku"),
+        &crate::agents::pricing::PriceBook::fixture(),
+    );
+    assert_eq!(
+        noisy, result,
+        "startup output must not hide the verdict or usage"
+    );
+}
+
+#[test]
+fn headless_result_rejects_malformed_and_provider_error_verdicts() {
+    let request = crate::agents::HeadlessRequest {
+        schema: crate::agents::CHECK_VERDICT_SCHEMA.into(),
+        schema_file: "/unused/schema.json".into(),
+        verdict_file: "/unused/verdict.json".into(),
+    };
+    for stdout in [
+        "not JSON",
+        r#"{"result":"{\"pass\":true,\"reason\":\"No structured output\"}"}"#,
+        r#"{"structured_output":{"pass":"true","reason":"wrong type"}}"#,
+        r#"{"structured_output":{"pass":true}}"#,
+        r#"{"structured_output":{"pass":true,"reason":"bad","extra":1}}"#,
+        r#"{"is_error":true,"result":"quota exhausted","structured_output":{"pass":true,"reason":"must not trust"}}"#,
+    ] {
+        let result = CLAUDE_DESCRIPTOR.launch.headless.unwrap().read_result(
+            stdout.as_bytes(),
+            b"",
+            &request,
+            None,
+            &crate::agents::pricing::PriceBook::fixture(),
+        );
+        assert!(result.error.is_some(), "{stdout}");
+        assert_eq!(result.verdict, None);
+    }
+}
+
+#[test]
+fn headless_settings_merge_pending_host_skills_without_another_settings_flag() {
+    let root = tempfile::tempdir().unwrap();
+    let mut args = vec!["--settings".into(), r#"{"theme":"dark"}"#.into()];
+    let mut artifact = merge_settings(root.path(), root.path(), &mut args, None, true, |object| {
+        object.insert(
+            "skillOverrides".into(),
+            json!({"unlisted":"user-invocable-only"}),
+        );
+        Ok(())
+    })
+    .unwrap();
+    let request = crate::agents::HeadlessRequest {
+        schema: crate::agents::CHECK_VERDICT_SCHEMA.into(),
+        schema_file: root.path().join("schema.json"),
+        verdict_file: root.path().join("verdict.json"),
+    };
+    let argv = CLAUDE_DESCRIPTOR
+        .launch
+        .headless
+        .unwrap()
+        .render_argv(
+            &args,
+            Some("Decide."),
+            &request,
+            root.path(),
+            (root.path(), &mut artifact),
+        )
+        .unwrap();
+    assert_eq!(argv.iter().filter(|arg| *arg == "--settings").count(), 1);
+    let (_, settings, _) = artifact.unwrap();
+    assert_eq!(settings["disableAllHooks"], true);
+    assert_eq!(settings["theme"], "dark");
+    assert_eq!(
+        settings["skillOverrides"]["unlisted"],
+        "user-invocable-only"
+    );
+}
+
+#[test]
 fn deadline_context_reply_matches_native_post_tool_contract() {
     let (post, other) = crate::agents::testkit::deadline_context_replies("claude", "PostToolUse");
     insta::assert_json_snapshot!(post, @r#"

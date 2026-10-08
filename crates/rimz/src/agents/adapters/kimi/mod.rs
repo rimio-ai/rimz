@@ -142,6 +142,7 @@ static KIMI_DESCRIPTOR: AgentSpec = AgentSpec {
             model: Some(super::StaticPresetMatcher::Flag(&["--model", "-m"])),
             ..super::PresetMatchers::EMPTY
         },
+        ..super::LaunchSpec::EMPTY
     },
 };
 

@@ -121,6 +121,7 @@ static CURSOR_DESCRIPTOR: AgentSpec = AgentSpec {
             model: Some(super::StaticPresetMatcher::Flag(&["--model"])),
             ..super::PresetMatchers::EMPTY
         },
+        ..super::LaunchSpec::EMPTY
     },
 };
 

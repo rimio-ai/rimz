@@ -117,6 +117,7 @@ static DROID_DESCRIPTOR: AgentSpec = AgentSpec {
             instruction: super::CompactInstruction::Trailing,
         }),
         presets: super::PresetMatchers::EMPTY,
+        ..super::LaunchSpec::EMPTY
     },
 };
 

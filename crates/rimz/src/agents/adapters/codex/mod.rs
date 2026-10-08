@@ -29,6 +29,7 @@ mod account;
 mod app_server;
 mod ask;
 pub(in crate::agents) mod broker;
+mod headless;
 mod install;
 mod local_sessions;
 mod model_alias;
@@ -200,6 +201,7 @@ static CODEX_DESCRIPTOR: AgentSpec = AgentSpec {
     // Codex logs one rollout file per session.
     thread_key: ThreadKey::PerFile,
     launch: super::LaunchSpec {
+        headless: Some(&headless::CodexHeadless),
         definitions: DEFINITIONS,
         program: Some("codex"),
         fixed_args: &["--no-daemon"],

@@ -403,6 +403,7 @@ fn build_descriptor(manifest: &'static PluginManifest, plugin_dir: &'static Path
                     effort: flag(&launch.effort_flag),
                     system_prompt_file: flag(&launch.system_prompt_file_flag),
                 },
+                ..LaunchSpec::EMPTY
             }
         });
     AgentSpec {

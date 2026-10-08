@@ -20,6 +20,7 @@
 mod account;
 mod ask;
 mod folder_trust;
+mod headless;
 mod install;
 mod json_edit;
 mod local_context;
@@ -142,6 +143,7 @@ static CLAUDE_DESCRIPTOR: AgentSpec = AgentSpec {
     // `<session_id>/subagents/*.jsonl`; the session directory is the thread.
     thread_key: ThreadKey::SessionDir,
     launch: super::LaunchSpec {
+        headless: Some(&headless::ClaudeHeadless),
         definitions: DEFINITIONS,
         program: Some("claude"),
         fixed_args: &[],

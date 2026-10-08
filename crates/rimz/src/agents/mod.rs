@@ -20,6 +20,7 @@ pub mod definition;
 pub(crate) mod delegated_account;
 mod emblems;
 mod folder_trust;
+mod headless;
 pub(crate) mod hook_types;
 pub(crate) mod identity;
 pub(crate) mod jsonc;
@@ -99,6 +100,9 @@ pub use emblems::{Emblem, EmblemTint, emblem_for};
 pub use folder_trust::{
     FolderTrust, FolderTrustErr, FolderTrustGap, FolderTrustPreview, FolderTrustRow,
     folder_trust_rows, grant_folder_trust,
+};
+pub use headless::{
+    CHECK_VERDICT_SCHEMA, HeadlessForm, HeadlessRequest, HeadlessResult, HeadlessVerdict,
 };
 pub use hook_types::{HookOutput, HookReply, HookRouting};
 use identity::{RootIdentity, SubagentIdentity, resolve_root_identity, resolve_subagent_identity};

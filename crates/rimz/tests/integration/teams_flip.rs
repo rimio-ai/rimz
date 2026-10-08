@@ -535,6 +535,7 @@ impl Fixture {
             append_system_prompt_files: Vec::new(),
             team_prompt: None,
             loop_reminder: None,
+            headless: None,
             skills: None,
             allowed_tools: None,
             provider_account: ProviderAccountState::Unbound,

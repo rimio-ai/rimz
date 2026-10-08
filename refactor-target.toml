@@ -183,7 +183,8 @@ upward-dependencies = ["address"]
 # Manual redemption exposes the provider hold code and reason through its offer and prepared preview (+2).
 # Per-kind room account outcomes, sources, pin accessors and the healthy-kind catalogue replace snapshot readers (+18 net).
 # RoomAccounts::project shares the resolver's trust metadata with account standing (+1).
-surface-budget = 1016
+# Headless schema, request, verdict, result, form operations, adapter forms and shared Codex billing (+10).
+surface-budget = 1026
 
 [[module]]
 path = "crates/rimz/src/agents/park.rs"
