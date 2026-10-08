@@ -3648,6 +3648,70 @@ fn message_wait_prints_the_reply_after_the_turn_ends() {
 }
 
 #[test]
+fn message_wait_prints_the_wake_turns_reply() {
+    const POLL_WINDOW: Duration = Duration::from_millis(1500);
+
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    let agent = ReplyAgentFixture::single(&env, "wake-reply");
+    let mut child = traced_rimz(&env, "zellij-wait-wake-reply-trace.log")
+        .args(["message", "@claude", "--wait", "did it land?"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn message --wait");
+
+    let stderr = child.stderr.take().unwrap();
+    let (receipt_tx, receipt_rx) = std::sync::mpsc::channel();
+    let (finished_tx, finished_rx) = std::sync::mpsc::channel();
+    let stderr_reader = std::thread::spawn(move || {
+        use std::io::{BufRead, Read};
+        let mut reader = std::io::BufReader::new(stderr);
+        let mut first = String::new();
+        reader.read_line(&mut first).unwrap();
+        let _ = receipt_tx.send(first);
+        let mut rest = String::new();
+        reader.read_to_string(&mut rest).unwrap();
+        let _ = finished_tx.send(());
+        rest
+    });
+
+    wait_for_message_event(&env, "message.sent", Duration::from_secs(2));
+    let receipt = receipt_rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("receipt arrives before the receiver starts its reply turn");
+    assert!(receipt.starts_with("sent to @claude"), "{receipt}");
+    agent.start(&env, "did it land?");
+    let wake = agent.send_wake(&env);
+    agent.finish(&env, "pausing until the wake", false);
+
+    std::thread::sleep(POLL_WINDOW);
+    assert!(
+        child.try_wait().expect("poll message --wait").is_none(),
+        "reply wait ended at the sleeping turn boundary"
+    );
+
+    agent.start_reported(&env, "Type: WAIT\nFrom: @rimz\nContent:\nwake now");
+    assert!(
+        !env.store()
+            .list_messages()
+            .unwrap()
+            .iter()
+            .any(|pending| pending.message_id == wake.message_id),
+        "wake turn did not acknowledge its wake"
+    );
+    // Keep the wake turn open across polls; an early exit is checked below.
+    let _ = finished_rx.recv_timeout(POLL_WINDOW);
+    agent.finish(&env, "migration landed", false);
+
+    let out = wait_with_output_bounded(child, Duration::from_secs(10));
+    assert!(out.status.success());
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "migration landed\n");
+    assert!(stderr_reader.join().unwrap().is_empty());
+    assert!(env.store().list_messages().unwrap().is_empty());
+}
+
+#[test]
 fn message_wait_gathers_fanout_replies_in_completion_order() {
     let env = Env::new();
     env.install_agent_hooks("claude");
@@ -8754,6 +8818,34 @@ impl ReplyAgentFixture {
             }),
             &[("ZELLIJ_PANE_ID", self.pane_id)],
         );
+    }
+
+    fn send_wake(&self, env: &Env) -> MessageRecord {
+        let store = env.store();
+        let agent = store
+            .snapshot()
+            .expect("snapshot")
+            .agents
+            .into_iter()
+            .find(|agent| agent.agent_id.as_str() == self.session_id)
+            .expect("reply card");
+        let workspace = env.resolve_workspace(&env.project_root);
+        let message = MessageRecord::new(
+            workspace.workspace_id,
+            &agent,
+            "wake now".to_owned(),
+            DeliveryGate::Done,
+        )
+        .with_sender(MessageSender::Harness {
+            notice: HarnessNotice::Wait,
+        });
+        store
+            .queue_message(&message, "rimz-test")
+            .expect("publish wake");
+        store
+            .record_sent_batch(std::slice::from_ref(&message), "rimz-test")
+            .expect("send wake");
+        message
     }
 
     fn stamp_launch_identity(&self, env: &Env, launch_id: &str, name: &str) {
