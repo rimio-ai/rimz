@@ -533,10 +533,27 @@ fn recorded_workspace_id(dir: &Path) -> Option<String> {
     struct Recorded {
         workspace_id: String,
     }
-    let bytes = fs::read(dir.join("workspace.json")).ok()?;
+    let bytes = read_workspace_record_bytes(&dir.join("workspace.json")).ok()?;
     serde_json::from_slice::<Recorded>(&bytes)
         .ok()
         .map(|recorded| recorded.workspace_id)
+}
+
+pub(crate) fn read_workspace_record_bytes(path: &Path) -> io::Result<std::sync::Arc<Vec<u8>>> {
+    use super::parse_cache::{ParseCache, StampedPath};
+    thread_local! {
+        static BYTES: ParseCache<Vec<u8>> = const { ParseCache::new() };
+    }
+    // Records are replaced atomically; the full stamp distinguishes replacements.
+    let stamped = StampedPath::of(path);
+    BYTES.with(|cache| {
+        if let Some(bytes) = cache.get_stamped(&stamped) {
+            return Ok(bytes);
+        }
+        let bytes = std::sync::Arc::new(fs::read(path)?);
+        cache.store_stamped(&stamped, bytes.clone());
+        Ok(bytes)
+    })
 }
 
 /// Workspace state dirs, `<home>/ws`.

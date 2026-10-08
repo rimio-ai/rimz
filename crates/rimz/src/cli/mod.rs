@@ -109,6 +109,7 @@ pub fn complete_env() {
 
 /// Entry point used by `main.rs`.
 pub fn dispatch() -> Result<()> {
+    hooks::register_drainer();
     reject_removed_top_level_tokens()?;
     let cmd = help::customize(<Cli as CommandFactory>::command());
     let mut matches = cmd.get_matches();

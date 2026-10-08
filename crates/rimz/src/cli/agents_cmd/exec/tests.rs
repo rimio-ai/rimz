@@ -833,6 +833,120 @@ mod pane_exec {
 mod runs {
     use super::*;
 
+    #[test]
+    fn child_exit_drains_an_already_appended_stop_before_failing_the_run() {
+        queued_stop_at_child_exit(false);
+    }
+
+    #[test]
+    fn child_exit_waits_for_a_resident_drain_beyond_the_terminal_hook_grace() {
+        queued_stop_at_child_exit(true);
+    }
+
+    fn queued_stop_at_child_exit(slow_resident: bool) {
+        let state = tempfile::tempdir().unwrap();
+        let root = state.path().canonicalize().unwrap();
+        let workspace_id = WorkspaceId::from_project_root(&root);
+        let paths = rimz::StatePaths::under(workspace_id.clone(), state.path()).unwrap();
+        let runtime_root = tempfile::Builder::new()
+            .prefix("rr")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let runtime = rimz::RuntimePaths::under(workspace_id.clone(), runtime_root.path()).unwrap();
+        let store = rimz::Store::open(paths, runtime).unwrap();
+        let mut workspace = test_workspace(&root);
+        workspace.workspace_id = workspace_id.clone();
+        workspace.project_root = root.clone();
+        workspace.worktree_root = root.clone();
+        store.record_workspace(&workspace).unwrap();
+        let mut run = RunRecord::new(
+            workspace_id.clone(),
+            AgentKind::new_unchecked("claude"),
+            PermissionMode::Auto,
+            "task".into(),
+            root.clone(),
+        );
+        run.status = RunStatus::Running;
+        run.agent_id = Some("exit-stop".into());
+        rimz::harness::run::create(store.paths(), &run).unwrap();
+        let frame = rimz::store::ingress::HookIngress {
+            schema_version: "1".into(),
+            event_id: rimz::EventId::new(),
+            ts: jiff::Timestamp::now(),
+            source: AgentKind::new_unchecked("claude"),
+            event: Some("Stop".into()),
+            payload:
+                serde_json::json!({"session_id": "exit-stop", "last_assistant_message": "done"})
+                    .to_string(),
+            cwd: root.clone(),
+            hook_pid: std::process::id(),
+            env: std::collections::BTreeMap::from([
+                ("RIMZ_RUN_ID".into(), run.run_id.to_string()),
+                ("RIMZ_PROJECT_ROOT".into(), root.display().to_string()),
+                ("RIMZ_WORKSPACE_ID".into(), workspace_id.to_string()),
+                ("RIMZ_AGENT_PID".into(), std::process::id().to_string()),
+            ]),
+        };
+        {
+            let lock =
+                rimz::disk::lock::IngressAppendLock::acquire(&store.paths().hook_ingress_lock)
+                    .unwrap();
+            rimz::store::ingress::append(store.paths(), &frame, &lock).unwrap();
+        }
+        crate::cli::hooks::register_test_drainer();
+        let context = RunExecContext {
+            run_id: run.run_id.clone(),
+            store,
+            session_name: workspace.session_name.clone(),
+            workspace,
+        };
+        let globals = GlobalFlags {
+            mux: None,
+            zellij: false,
+            tmux: false,
+            root: None,
+            color: crate::cli::ColorWhen::Never,
+        };
+        std::thread::scope(|scope| {
+            if slow_resident {
+                let lifetime = rimz::disk::lock::WorkspaceLock::acquire(
+                    &context.store.runtime_paths().hook_drainer_lock(),
+                )
+                .unwrap();
+                let listener = std::os::unix::net::UnixListener::bind(
+                    context.store.runtime_paths().hook_drainer_socket_path(),
+                )
+                .unwrap();
+                let store = &context.store;
+                scope.spawn(move || {
+                    use std::io::{BufRead, Write};
+                    let _lifetime = lifetime;
+                    let (mut stream, _) = listener.accept().unwrap();
+                    let mut request = String::new();
+                    std::io::BufReader::new(&stream)
+                        .read_line(&mut request)
+                        .unwrap();
+                    let request: serde_json::Value = serde_json::from_str(&request).unwrap();
+                    assert_eq!(request["through"], 0);
+                    std::thread::sleep(RUN_EXIT_TERMINAL_GRACE * 2 + Duration::from_millis(200));
+                    run.status = RunStatus::Completed;
+                    run.last_message = Some("done".into());
+                    rimz::harness::run::create(store.paths(), &run).unwrap();
+                    let _ = stream.write_all(b"{\"applied\":0,\"reply\":null}\n");
+                });
+            }
+            fail_run_if_child_exited_first(&context, &globals, RUN_EXIT_TERMINAL_GRACE);
+            let completed =
+                rimz::harness::run::load(context.store.paths(), &context.run_id).unwrap();
+            assert_eq!(
+                completed.status,
+                RunStatus::Completed,
+                "the terminal decision must see the queued Stop"
+            );
+            assert_eq!(completed.last_message.as_deref(), Some("done"));
+        });
+    }
+
     #[tokio::test(flavor = "current_thread")]
     async fn child_exit_marks_nonterminal_run_failed_and_wakes_waiter() {
         #[cfg(unix)]

@@ -295,6 +295,10 @@ impl crate::agents::capabilities::CoreCapability for AmpAdapter {
 }
 
 impl crate::agents::capabilities::HookCapability for AmpAdapter {
+    fn hook_env_keys(&self) -> &'static [&'static str] {
+        &["AMP_DATA_DIR"]
+    }
+
     fn decode_hook(&self, event_name: &str, payload: &Value) -> Result<HookOutput> {
         let ask_kind = (event_name == "permission_ask").then_some(AskKind::Permission);
         let mut decoded = decode_catalog_hook(AMP_HOOKS, event_name, ask_kind);

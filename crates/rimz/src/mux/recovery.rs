@@ -97,7 +97,11 @@ fn select_sweep_targets(
                 .or_else(|| {
                     // Hooks can outlive their pane and publish caches. Only an
                     // explicit teardown may reap them, not reload's liveness probe.
-                    if scope != SweepScope::Teardown || !proc.cmdline.contains("hooks feed") {
+                    if scope != SweepScope::Teardown
+                        || !["hooks feed", "hooks drain", "hooks apply"]
+                            .iter()
+                            .any(|command| proc.cmdline.contains(command))
+                    {
                         return None;
                     }
                     let (argv, pin) = hook_identity(proc.pid)?;
@@ -108,7 +112,9 @@ fn select_sweep_targets(
                         .file_name()
                         .is_some_and(|name| name == "rimz")
                         && command == "hooks"
-                        && subcommand == "feed"
+                        && ["feed", "drain", "apply"]
+                            .iter()
+                            .any(|name| subcommand == name)
                         && pin == workspace_id)
                         .then_some(RequiredDomainCheck::World)
                 })
@@ -659,6 +665,49 @@ mod tests {
             )
             .is_empty(),
             "reload must not kill hooks on a possibly mistaken dead-session probe",
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn teardown_sweeps_pinned_hook_drainers_and_apply_children() {
+        let procs = vec![
+            proc(10, 1, 1000, "/build/rimz hooks drain --project-root /work"),
+            proc(11, 1, 1000, "/build/rimz hooks apply"),
+        ];
+        let identity = |pid| {
+            let process = procs.iter().find(|process| process.pid == pid).unwrap();
+            Some((
+                process.cmdline.split_whitespace().map(Into::into).collect(),
+                WS.into(),
+            ))
+        };
+        assert_eq!(
+            select_sweep_targets(
+                &procs,
+                1000,
+                SESSION,
+                WS,
+                &HashSet::new(),
+                SweepScope::Teardown,
+                identity
+            ),
+            vec![
+                (10, RequiredDomainCheck::World),
+                (11, RequiredDomainCheck::World)
+            ]
+        );
+        assert!(
+            select_sweep_targets(
+                &procs,
+                1000,
+                SESSION,
+                WS,
+                &HashSet::new(),
+                SweepScope::LivenessProbe,
+                identity
+            )
+            .is_empty()
         );
     }
 

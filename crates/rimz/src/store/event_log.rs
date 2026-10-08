@@ -15,7 +15,7 @@ use tracing::{debug, warn};
 use crate::disk::atomic;
 use crate::store::event::EventEnvelope;
 
-mod frame;
+pub(super) mod frame;
 mod recovery;
 mod rotation;
 
@@ -91,14 +91,19 @@ pub(super) fn append_batch(path: &Path, events: &[EventEnvelope]) -> Result<()> 
     if events.is_empty() {
         return Ok(());
     }
+    let bytes = encode_batch(events)?;
+    atomic::append_record_bytes(path, &bytes)?;
+    testkit::count_bytes_written(bytes.len() as u64);
+    Ok(())
+}
+
+pub(super) fn encode_batch(events: &[EventEnvelope]) -> Result<Vec<u8>> {
     let mut bytes = Vec::new();
     for event in events {
         let payload = serde_json::to_vec(event).map_err(atomic::AtomicErr::Json)?;
         bytes.extend_from_slice(&frame::encode_frame(&payload));
     }
-    atomic::append_record_bytes(path, &bytes)?;
-    testkit::count_bytes_written(bytes.len() as u64);
-    Ok(())
+    Ok(bytes)
 }
 
 #[must_use = "durability barrier; check the result"]

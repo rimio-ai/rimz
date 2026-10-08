@@ -39,6 +39,7 @@ fn claude_old_workspace_session_cannot_repaint_switched_account_limits() {
         .spawn_payload(old_hook, &old_start)
         .wait_with_output()
         .expect("wait old-account SessionStart");
+    env.drain_hooks_for(&old_project);
     assert!(
         output.status.success(),
         "old-account hook stderr: {}",

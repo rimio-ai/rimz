@@ -22,7 +22,7 @@ pub fn run_timeout(request: RunTimeoutRequest, globals: &super::GlobalFlags) -> 
     let now = Timestamp::now();
     if stop_due_by_pane(&initial, now) {
         if let Some(rung) =
-            rimz::harness::run::claim_rung(ctx.store.paths(), &request.run_id, now, |rung| {
+            rimz::harness::run::claim_rung(ctx.store.paths(), &request.run_id, now, |_, rung| {
                 matches!(rung, Rung::Stop { .. })
             })?
         {

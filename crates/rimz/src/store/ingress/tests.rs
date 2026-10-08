@@ -27,7 +27,7 @@ fn frame() -> HookIngress {
 }
 
 fn seed(paths: &StatePaths, frame: &HookIngress) -> u64 {
-    let lock = WorkspaceLock::acquire(&paths.hook_ingress_lock).unwrap();
+    let lock = IngressAppendLock::acquire(&paths.hook_ingress_lock).unwrap();
     append(paths, frame, &lock).unwrap()
 }
 
@@ -35,7 +35,7 @@ fn seed(paths: &StatePaths, frame: &HookIngress) -> u64 {
 fn frames_round_trip_with_resumable_byte_offsets() {
     let dir = tempfile::tempdir().unwrap();
     let paths = paths(dir.path());
-    let lock = WorkspaceLock::acquire(&paths.hook_ingress_lock).unwrap();
+    let lock = IngressAppendLock::acquire(&paths.hook_ingress_lock).unwrap();
     let first = frame();
     let second = frame();
     let first_end = append(&paths, &first, &lock).unwrap();
@@ -49,6 +49,51 @@ fn frames_round_trip_with_resumable_byte_offsets() {
         read_from_offset(&paths, first_end).unwrap(),
         (vec![(second, end)], end)
     );
+}
+
+#[test]
+fn concurrent_appenders_keep_frames_complete_and_uninterleaved() {
+    use std::collections::HashMap;
+    use std::sync::Barrier;
+
+    let dir = tempfile::tempdir().unwrap();
+    let paths = paths(dir.path());
+    let expected: Vec<_> = (0..24)
+        .map(|slot| {
+            let mut frame = frame();
+            frame.payload = format!("{slot}:{}\nλ", "large payload\n".repeat(10_000));
+            frame
+        })
+        .collect();
+    let barrier = Barrier::new(expected.len());
+    std::thread::scope(|scope| {
+        let writers: Vec<_> = expected
+            .iter()
+            .map(|frame| {
+                let paths = &paths;
+                let barrier = &barrier;
+                scope.spawn(move || {
+                    barrier.wait();
+                    let lock = IngressAppendLock::acquire(&paths.hook_ingress_lock).unwrap();
+                    append(paths, frame, &lock).unwrap();
+                })
+            })
+            .collect();
+        for writer in writers {
+            writer.join().unwrap();
+        }
+    });
+    let (frames, end) = read_from_offset(&paths, 0).unwrap();
+    let actual: HashMap<_, _> = frames
+        .into_iter()
+        .map(|(frame, _)| (frame.event_id.clone(), frame))
+        .collect();
+    let expected: HashMap<_, _> = expected
+        .into_iter()
+        .map(|frame| (frame.event_id.clone(), frame))
+        .collect();
+    assert_eq!(actual, expected, "every complete frame must survive intact");
+    assert_eq!(end, fs::metadata(&paths.hook_ingress_log).unwrap().len());
 }
 
 #[test]
@@ -248,7 +293,7 @@ fn truncation_waits_for_an_ingress_append_and_keeps_its_frame() {
     };
     write_cursor(&paths, &cursor, &workspace).unwrap();
     drop(workspace);
-    let ingress = WorkspaceLock::acquire(&paths.hook_ingress_lock).unwrap();
+    let ingress = IngressAppendLock::acquire(&paths.hook_ingress_lock).unwrap();
     let second = frame();
     let (entered_tx, entered_rx) = mpsc::channel();
     let (finished_tx, finished_rx) = mpsc::channel();

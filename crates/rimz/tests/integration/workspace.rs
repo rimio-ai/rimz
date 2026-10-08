@@ -593,6 +593,7 @@ fn hook_inside_a_nested_repo_lands_in_the_pinned_room() {
         .spawn_payload(cmd, &crate::common::permission_payload("Read"))
         .wait_with_output()
         .expect("wait hook");
+    env.drain_hooks();
     assert!(
         output.status.success(),
         "hook failed: {}",
@@ -635,6 +636,7 @@ fn corrupt_pin_falls_back_to_the_repo_workspace() {
         .spawn_payload(cmd, &crate::common::permission_payload("Read"))
         .wait_with_output()
         .expect("wait hook");
+    env.drain_hooks_for(&nested);
     assert!(
         output.status.success(),
         "hook failed: {}",
@@ -759,6 +761,7 @@ fn codex_hook_recovers_pin_from_sibling_process_when_env_pin_absent() {
             .spawn_payload(cmd, &crate::common::codex_permission_payload())
             .wait_with_output()
             .expect("wait hook");
+        env.drain_hooks();
         assert!(
             output.status.success(),
             "hook failed: {}",
@@ -809,6 +812,7 @@ fn codex_daemon_hook_ignores_valid_inherited_pin_from_another_room() {
             .spawn_payload(cmd, &crate::common::codex_permission_payload())
             .wait_with_output()
             .expect("wait hook");
+        env.drain_hooks();
         assert!(
             output.status.success(),
             "hook failed: {}",

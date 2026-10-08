@@ -386,6 +386,10 @@ impl crate::agents::capabilities::LaunchCapability for PiAdapter {
 }
 
 impl crate::agents::capabilities::HookCapability for PiAdapter {
+    fn hook_env_keys(&self) -> &'static [&'static str] {
+        &["PI_AGENT_DIR", "PI_CODING_AGENT_SESSION_DIR"]
+    }
+
     fn decode_hook(&self, event_name: &str, payload: &Value) -> Result<HookOutput> {
         // The rpiv questionnaire and in-turn extension dialogs block on native
         // UI. Ordinary tool calls remain neutral, and headless calls cannot

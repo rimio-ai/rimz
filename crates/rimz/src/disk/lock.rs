@@ -189,6 +189,12 @@ fn open_lock_file(path: &Path) -> Result<File> {
         })
 }
 
+impl std::os::fd::AsFd for WorkspaceLock {
+    fn as_fd(&self) -> std::os::fd::BorrowedFd<'_> {
+        self.file.as_fd()
+    }
+}
+
 impl Drop for WorkspaceLock {
     fn drop(&mut self) {
         // Best-effort unlock; failure here is unrecoverable and would only

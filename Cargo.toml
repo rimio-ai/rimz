@@ -183,9 +183,8 @@ glob = "0.3"
 # Filesystem-event watch — the elder sidebar tails live Codex rollout files so
 # a mid-turn token update repaints on the write instead of the next producer
 # tick. `notify` is the standard cross-platform watcher (inotify/kqueue/
-# ReadDirectoryChanges) behind one small API. Used only as a latency hint over
-# the existing stat-gated refresh: every init or event error is fail-soft to the
-# tick backstop, never on a correctness path.
+# ReadDirectoryChanges) behind one small API. Sidebar refresh uses it as a
+# latency hint over stat-gated refresh.
 notify = { version = "8", default-features = false, features = ["macos_kqueue"] }
 
 # Hashing

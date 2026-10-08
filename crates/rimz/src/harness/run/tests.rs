@@ -550,7 +550,7 @@ fn stop_is_claimed_once_and_reopen_rearms_the_original_timeout() {
     record.deadline_at = Some(now - std::time::Duration::from_secs(1));
     create(&paths, &record).unwrap();
     assert_eq!(
-        claim_rung(&paths, &record.run_id, now, |_| false).unwrap(),
+        claim_rung(&paths, &record.run_id, now, |_, _| false).unwrap(),
         None
     );
     assert_eq!(
@@ -558,14 +558,17 @@ fn stop_is_claimed_once_and_reopen_rearms_the_original_timeout() {
         None
     );
     assert_eq!(
-        claim_rung(&paths, &record.run_id, now, |_| true).unwrap(),
+        claim_rung(&paths, &record.run_id, now, |_, _| true).unwrap(),
         Some(super::super::deadline::Rung::Stop {
             at: record.deadline_at.unwrap()
         })
     );
     for _ in 0..3 {
         assert_eq!(
-            claim_rung(&paths, &record.run_id, now, |_| panic!("already claimed")).unwrap(),
+            claim_rung(&paths, &record.run_id, now, |_, _| panic!(
+                "already claimed"
+            ))
+            .unwrap(),
             None
         );
     }

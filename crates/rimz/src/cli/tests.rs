@@ -433,6 +433,7 @@ fn command_scope_uses_canonical_clap_labels() {
 fn command_scope_keeps_nested_labels_and_agent_identity() {
     for (args, expected) in [
         (vec!["rimz", "remote", "list"], ("remote list", None, None)),
+        (vec!["rimz", "hooks", "apply"], ("hooks apply", None, None)),
         (
             vec!["rimz", "sidebar", "snapshot"],
             ("sidebar snapshot", None, None),
@@ -440,6 +441,17 @@ fn command_scope_keeps_nested_labels_and_agent_identity() {
         (
             vec!["rimz", "hooks", "feed", "--source", "codex"],
             ("hooks feed", None, Some("codex")),
+        ),
+        (
+            vec![
+                "rimz",
+                "hooks",
+                "drain",
+                "--project-root",
+                "/workspace",
+                "--once",
+            ],
+            ("hooks drain", None, None),
         ),
     ] {
         let (_, command, session, agent) = parsed_scope(&args);

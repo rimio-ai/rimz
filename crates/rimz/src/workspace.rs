@@ -476,6 +476,26 @@ impl WorkspaceResolver {
         )
     }
 
+    /// Resolve a persisted hook using its captured environment, not the drainer's.
+    pub fn resolve_hook(
+        start: &Path,
+        daemon: bool,
+        env: &std::collections::BTreeMap<String, String>,
+        scan: PinScan,
+    ) -> Result<ResolvedWorkspace> {
+        Self::resolve_with(
+            if daemon {
+                ResolveMode::ParticipateDaemon
+            } else {
+                ResolveMode::Participate
+            },
+            start,
+            None,
+            &|key| env.get(key).map(std::ffi::OsString::from),
+            scan,
+        )
+    }
+
     fn resolve_with(
         mode: ResolveMode,
         start_in: &Path,

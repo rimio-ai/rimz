@@ -61,6 +61,18 @@ pub(super) fn record_assistant_response(
         .or_else(|| state.as_ref().and_then(|state| state.role.clone()));
     stamp_parent(&mut entry, state.as_ref());
     entry.reply_to = turn_opened_by(store, agent, &agent_id);
+    entry.ingress = store.hook_ingress_id().cloned();
+    // Only a redo can meet its own entry, and the drainer applies one frame at a time.
+    let recorded = rimz::harness::hook_drain::frame_attempt()
+        == rimz::harness::hook_drain::FrameAttempt::Redo
+        && rimz::transcript::read_all(store.paths()).is_ok_and(|entries| {
+            entries
+                .iter()
+                .any(|existing| existing.entry == entry.entry && existing.ingress == entry.ingress)
+        });
+    if recorded {
+        return Some((agent_id, message));
+    }
     if let Err(err) = rimz::transcript::append(store.paths(), &entry) {
         warn!(
             agent = agent.spec().kind,
@@ -97,6 +109,9 @@ pub(super) fn record_native_answer(
     // confirmation already closed it, so the idempotent append suppresses the
     // native duplicate rather than emitting a legacy id-less answer.
     let ask_id = latest_native_ask_id(store, agent.spec().kind, agent_id.as_str());
+    if rimz::harness::hook_drain::is_replay() && ask_id.is_none() {
+        return;
+    }
     let state = agent_state(store, agent, agent_id);
     let awaiting = recorded.is_some_and(|recorded| recorded.receipt.waiting_cleared)
         || state
@@ -233,7 +248,11 @@ pub(super) fn record_conversation(
 
     let message = assistant_message.unwrap_or_default().trim();
     if let Some(edit) = &observation.ask_queue {
-        for question in &edit.queued {
+        for question in edit
+            .queued
+            .iter()
+            .filter(|_| !rimz::harness::hook_drain::is_replay())
+        {
             let mut entry = entry_base(rimz::transcript::TranscriptKind::Ask, String::new());
             entry.id = question.ask_id.clone();
             entry.questions = vec![question.question.clone()];
@@ -255,7 +274,7 @@ pub(super) fn record_conversation(
             rimz::transcript::append_answer_if_missing(store.paths(), &entry)?;
         }
     }
-    if observation.parent_agent_id.is_some() {
+    if observation.parent_agent_id.is_some() || rimz::harness::hook_drain::is_replay() {
         return Ok(());
     }
     let mut entry = match &observation.signal {
@@ -464,6 +483,9 @@ pub(super) fn record_turn_error_entry(
     context_agent_id: &str,
     marker: &rimz::agents::AgentTurnError,
 ) {
+    if rimz::harness::hook_drain::is_replay() {
+        return;
+    }
     let mut entry = rimz::transcript::TranscriptEntry::new(
         marker.at,
         agent.spec().kind_id(),

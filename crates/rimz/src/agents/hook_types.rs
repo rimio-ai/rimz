@@ -79,7 +79,7 @@ impl CanonicalHookEvent {
 }
 
 impl HookOutput {
-    pub(super) fn new(classified: ClassifiedHook) -> Self {
+    pub fn new(classified: ClassifiedHook) -> Self {
         let meaning = match (classified.class, classified.ask_kind) {
             (AgentHookClass::AwaitingUser, Some(kind)) => CanonicalHookMeaning::Ask(kind),
             (AgentHookClass::Lifecycle, None) => CanonicalHookMeaning::Lifecycle,

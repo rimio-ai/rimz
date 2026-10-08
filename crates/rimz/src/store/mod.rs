@@ -84,6 +84,8 @@ pub(crate) fn room_logins_in_use(runtime: &RuntimePaths) -> crate::agents::RoomL
 #[derive(Clone, Debug)]
 pub struct Store {
     inner: Arc<StoreInner>,
+    ingress: Option<(crate::ids::EventId, jiff::Timestamp)>,
+    hook_transaction: Option<Arc<writer::HookTransaction>>,
 }
 
 #[derive(Debug)]
@@ -138,6 +140,8 @@ impl Store {
         runtime.ensure_dirs()?;
         Ok(Self {
             inner: Arc::new(StoreInner { paths, runtime }),
+            ingress: None,
+            hook_transaction: None,
         })
     }
 
@@ -150,11 +154,17 @@ impl Store {
         runtime.bind_state_locks(&paths);
         Some(Self {
             inner: Arc::new(StoreInner { paths, runtime }),
+            ingress: None,
+            hook_transaction: None,
         })
     }
 
     pub fn paths(&self) -> &StatePaths {
         &self.inner.paths
+    }
+
+    pub fn hook_ingress_id(&self) -> Option<&crate::ids::EventId> {
+        self.ingress.as_ref().map(|(id, _)| id)
     }
 
     pub fn runtime_paths(&self) -> &RuntimePaths {
@@ -172,7 +182,8 @@ impl Store {
         &self,
         scope: runtime::RuntimeScope,
     ) -> Result<runtime::RuntimeProjection> {
-        let (_, agents, resume_outcomes) = snapshot::catch_up_rollup(&self.inner.paths)?;
+        let (_, agents, resume_outcomes) =
+            snapshot::catch_up_with_pending(&self.inner.paths, &self.pending_hook_events())?;
         Ok(runtime::RuntimeProjection::from_parts(
             agents,
             scope,
@@ -194,6 +205,12 @@ impl Store {
     /// Build a fresh snapshot in memory (no disk write). Lock-free and
     /// O(delta): the rollup resumes from the persisted fold base.
     pub fn snapshot(&self) -> Result<SidebarSnapshot> {
+        if self.hook_transaction.is_some() {
+            return Ok(snapshot::build_from_pending(
+                &self.inner.paths,
+                &self.pending_hook_events(),
+            )?);
+        }
         Ok(snapshot::build_from(&self.inner.paths)?)
     }
 
@@ -209,7 +226,12 @@ impl Store {
     /// also attach cache-class agent context so every address resolver sees the
     /// same rest certificates as pane ownership.
     pub fn snapshot_cached(&self) -> Result<SidebarSnapshot> {
-        let snapshot = match snapshot::read_fresh_latest(&self.inner.paths) {
+        let snapshot = match self
+            .hook_transaction
+            .is_none()
+            .then(|| snapshot::read_fresh_latest(&self.inner.paths))
+            .flatten()
+        {
             Some(snapshot) => snapshot,
             None => self.snapshot()?,
         };
@@ -234,6 +256,20 @@ impl Store {
     /// torn records at `warn`.
     pub fn read_events(&self) -> Result<Vec<EventEnvelope>> {
         Ok(event_log::read_all(&self.inner.paths.events_log)?)
+    }
+
+    fn pending_hook_events(&self) -> Vec<EventEnvelope> {
+        self.hook_transaction
+            .as_ref()
+            .map(|transaction| {
+                transaction
+                    .tail
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .0
+                    .clone()
+            })
+            .unwrap_or_default()
     }
 
     /// Return a frame-aligned active-log offset for incremental wait polls.

@@ -24,7 +24,6 @@ use crate::disk::parse_cache::{ParseCache, StampedPath};
 use crate::disk::paths::StatePaths;
 use crate::disk::retention::RESUME_OUTCOME_RETENTION_SECS;
 use crate::ids::{AgentKind, AgentSessionId, MessageId};
-#[cfg(test)]
 use crate::store::event::EventEnvelope;
 use crate::store::event::EventKind;
 use crate::store::event_log::{self};
@@ -615,6 +614,27 @@ pub(crate) fn catch_up_rollup(
 ) -> Result<(RollupCache, Vec<AgentState>, Vec<ResumeOutcome>)> {
     let (cache, merged, resume_outcomes) = catch_up_rollup_layered(paths)?;
     Ok((cache, merged.to_vec(), resume_outcomes))
+}
+
+pub(in crate::store) fn catch_up_with_pending(
+    paths: &StatePaths,
+    pending: &[EventEnvelope],
+) -> Result<(RollupCache, Vec<AgentState>, Vec<ResumeOutcome>)> {
+    let (mut cache, agents, outcomes) = catch_up_rollup(paths)?;
+    if pending.is_empty() {
+        return Ok((cache, agents, outcomes));
+    }
+    let seed = agents
+        .into_iter()
+        .map(|agent| ((agent.kind.clone(), agent.agent_id.clone()), agent))
+        .collect();
+    let (agents, identity) = reduce_agent_states_seeded_with_identity(
+        seed,
+        cache.agent_identity.clone(),
+        &decode_events(pending),
+    );
+    cache.agent_identity = identity;
+    Ok((cache, agents.into_values().collect(), outcomes))
 }
 
 fn catch_up_rollup_layered(

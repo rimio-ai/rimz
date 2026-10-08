@@ -1773,6 +1773,7 @@ fn run_hook_for_owner_and_run(
         .spawn_payload(cmd, &payload)
         .wait_with_output()
         .expect("wait hook");
+    env.drain_hooks();
     assert!(
         output.status.success(),
         "hook failed\nstdout={}\nstderr={}",

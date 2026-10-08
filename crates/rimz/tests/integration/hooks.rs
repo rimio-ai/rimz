@@ -18,6 +18,8 @@ use crate::common::{
     codex_pre_tool_use_payload, permission_payload, pi_tool_call_payload, tmux_pane,
 };
 
+mod drain;
+
 #[test]
 fn hook_outside_a_room_ignores_the_event() {
     for (source, event, reply) in [("claude", "Stop", ""), ("cursor", "sessionStart", "{}\n")] {
@@ -112,6 +114,7 @@ fn run_claude_lifecycle(env: &Env, payload: Value) {
         .spawn_payload(command, &payload)
         .wait_with_output()
         .expect("wait Claude hook");
+    env.drain_hooks();
     assert!(
         output.status.success(),
         "stderr: {}",
@@ -615,6 +618,7 @@ fn claude_launch_seeds_do_not_replace_observed_identity() {
                 .spawn_payload(command, &payload.to_string())
                 .wait_with_output()
                 .unwrap();
+            env.drain_hooks();
             assert!(
                 output.status.success(),
                 "{}",
@@ -961,6 +965,7 @@ fn copilot_native_order_routes_camel_case_identity_context_and_cleanup() {
         .spawn_payload(prompt_cmd, &prompt)
         .wait_with_output()
         .expect("wait Copilot prompt");
+    env.drain_hooks();
     assert_hook_succeeded_neutral("copilot", out);
     assert_eq!(env.snapshot_json()["agents"][0]["status"], "running");
     assert!(
@@ -1297,6 +1302,7 @@ fn cursor_user_hook_uses_project_dir_for_pinned_worktree_attribution() {
         .spawn_payload(command, &payload)
         .wait_with_output()
         .unwrap();
+    env.drain_hooks();
     assert!(
         output.status.success(),
         "cursor stderr: {}",
@@ -1454,6 +1460,7 @@ fn cursor_ask_local_store_waits_in_pane_without_creating_a_structured_ask() {
             .spawn_payload(command, &payload.to_string())
             .wait_with_output()
             .unwrap();
+        env.drain_hooks();
         assert!(
             output.status.success(),
             "cursor stderr: {}",
@@ -1533,6 +1540,7 @@ fn cursor_progress_hook_touches_activity_by_conversation_id() {
         .spawn_payload(command, &payload)
         .wait_with_output()
         .expect("wait cursor hook");
+    env.drain_hooks();
     assert!(
         output.status.success(),
         "cursor stderr: {}",
@@ -2085,6 +2093,7 @@ fn terminal_supervised_hook_settles_session_spend_once_but_not_for_peers() {
                     .wait_with_output()
                     .unwrap(),
             );
+            env.drain_hooks();
             rimz::harness::run::load(env.store().paths(), &run.run_id).unwrap()
         };
         let settled = feed();
@@ -2209,6 +2218,7 @@ fn duplicate_cursor_session_end_is_idempotent_beyond_audit_end_stamps() {
             .spawn_payload(command, &payload)
             .wait_with_output()
             .unwrap();
+        env.drain_hooks();
         assert!(
             output.status.success(),
             "sessionEnd stderr: {}",
@@ -2387,6 +2397,7 @@ fn codex_subagent_lifecycle_uses_child_agent_identity() {
             .spawn_payload(env.hook_command("codex"), &payload)
             .wait_with_output()
             .expect("wait codex hook");
+        env.drain_hooks();
         assert_hook_succeeded_neutral("codex", output);
     };
     run(json!({
@@ -2442,6 +2453,7 @@ fn codex_subagent_lifecycle_uses_child_agent_identity() {
             .wait_with_output()
             .expect("wait start"),
     );
+    env.drain_hooks();
 
     run(json!({
         "hook_event_name": "PostToolUse",
@@ -3584,6 +3596,7 @@ fn codex_turn_boundary_refreshes_context_sidecar_from_app_server() {
         .spawn_payload(cmd, &payload)
         .wait_with_output()
         .expect("wait hook");
+    env.drain_hooks();
     assert!(
         out.status.success(),
         "stderr: {}",
@@ -3668,6 +3681,7 @@ fn codex_stop_over_error_rollout_writes_turn_error_sidecar() {
         .spawn_payload(cmd, &payload)
         .wait_with_output()
         .expect("wait hook");
+    env.drain_hooks();
     assert!(
         out.status.success(),
         "stderr: {}",

@@ -39,11 +39,14 @@ pub(super) fn manage_agent_context(ctx: AgentContextHook<'_>) {
     }
     // Refresh the activity heartbeat on progress-proving events so the
     // sidebar's `last_activity` advances per tool call, not just per turn.
-    if (decoded.records_progress() && !ping_edge) || parent_agent_id.is_some() {
+    if !rimz::harness::hook_drain::is_replay()
+        && ((decoded.records_progress() && !ping_edge) || parent_agent_id.is_some())
+    {
         touch_agent_activity(
             workspace, store, agent, event_name, agent_id, tool_run, tool_used,
         );
-    } else if tool_used
+    } else if !rimz::harness::hook_drain::is_replay()
+        && tool_used
         && let Err(err) = rimz::agent_activity::touch_tool_clock(
             store.runtime_paths(),
             agent.spec().kind,
@@ -57,7 +60,9 @@ pub(super) fn manage_agent_context(ctx: AgentContextHook<'_>) {
             "lifecycle: failed to advance the tool clock",
         );
     }
-    if let Some(parent_agent_id) = parent_activity_id {
+    if !rimz::harness::hook_drain::is_replay()
+        && let Some(parent_agent_id) = parent_activity_id
+    {
         touch_agent_activity(
             workspace,
             store,
@@ -257,7 +262,7 @@ pub(super) fn merge_agent_context_sidecars(input: ContextSidecarInput<'_>) {
     let prior_spend_fold = (selected_transcript_path == prior_transcript_path)
         .then(|| prior.as_ref().and_then(|record| record.spend_fold.as_ref()))
         .flatten();
-    let login_env = rimz::agents::ambient_env();
+    let login_env = rimz::harness::hook_drain::capture_env();
     let refresh_ctx = rimz::agents::LocalContextRefreshCtx {
         login_env: &login_env,
         agent_id: context_agent_id,
@@ -327,9 +332,11 @@ pub(super) fn supplement_realtime_cost(
         .and_then(|refresh| refresh.transcript_path.as_deref())
         .or_else(|| prior.and_then(|record| record.transcript_path.as_deref()))
         .map(Path::new);
-    let Some(path) =
-        agent.session_transcript(context_agent_id, prior_path, &rimz::agents::ambient_env())
-    else {
+    let Some(path) = agent.session_transcript(
+        context_agent_id,
+        prior_path,
+        &rimz::harness::hook_drain::capture_env(),
+    ) else {
         return;
     };
     let Some(stat) = agent.transcript_stat(&path) else {

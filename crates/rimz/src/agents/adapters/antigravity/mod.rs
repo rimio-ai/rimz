@@ -391,18 +391,23 @@ impl crate::agents::capabilities::CoreCapability for AntigravityAdapter {
 }
 
 impl crate::agents::capabilities::HookCapability for AntigravityAdapter {
+    fn payload_hook_reply(&self, event_name: &str, _payload: &Value) -> super::HookReply {
+        match event_name {
+            "Stop" => super::HookReply::Json(serde_json::json!({ "decision": "" })),
+            event if ANTIGRAVITY_EVENT_NAMES.contains(&event) => {
+                super::HookReply::Json(serde_json::json!({}))
+            }
+            _ => super::HookReply::Silent,
+        }
+    }
+
     fn decode_hook(&self, event_name: &str, payload: &Value) -> Result<HookOutput> {
         let mut decoded = decode_catalog_hook(
             ANTIGRAVITY_HOOKS.iter().map(|entry| &entry.hook),
             event_name,
             None,
         );
-        let reply = match event_name {
-            "Stop" => Some(serde_json::json!({ "decision": "" })),
-            event if ANTIGRAVITY_EVENT_NAMES.contains(&event) => Some(serde_json::json!({})),
-            _ => None,
-        };
-        decoded.set_reply(reply.map_or(super::HookReply::Silent, super::HookReply::Json));
+        decoded.set_reply(self.payload_hook_reply(event_name, payload));
         let fields = decode_lifecycle_fields(event_name, payload, session::latest_prompt);
         decoded.set_routing(
             HookRouting::session(fields.agent_id.map(Into::into))

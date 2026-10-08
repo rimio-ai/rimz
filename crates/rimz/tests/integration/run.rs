@@ -1745,6 +1745,7 @@ fn hooks_bind_and_complete_supervised_run() {
         .spawn_payload(prompt_cmd, &prompt_payload)
         .wait_with_output()
         .expect("wait prompt hook");
+    env.drain_hooks();
     assert!(
         out.status.success(),
         "prompt hook failed\nstdout:\n{}\nstderr:\n{}",
@@ -1772,6 +1773,7 @@ fn hooks_bind_and_complete_supervised_run() {
         .spawn_payload(stop_cmd, &stop_payload)
         .wait_with_output()
         .expect("wait stop hook");
+    env.drain_hooks();
     assert!(
         out.status.success(),
         "stop hook failed\nstdout:\n{}\nstderr:\n{}",
@@ -1812,6 +1814,7 @@ fn a_ping_only_turn_leaves_the_team_leaders_reply_and_activity_alone() {
             .spawn_payload(command, &payload.to_string())
             .wait_with_output()
             .expect("wait hook");
+        env.drain_hooks();
         assert!(
             out.status.success(),
             "{}",
@@ -1869,6 +1872,7 @@ fn a_duplicate_real_verdict_inside_a_ping_moves_nothing() {
             .spawn_payload(command, &payload.to_string())
             .wait_with_output()
             .expect("wait hook");
+        env.drain_hooks();
         assert!(
             out.status.success(),
             "{}",
@@ -1997,6 +2001,7 @@ mod parked {
                 )
                 .wait_with_output()
                 .expect("run lifecycle hook");
+            self.env.drain_hooks();
             assert!(
                 output.status.success(),
                 "{}",
@@ -2304,6 +2309,7 @@ fn copilot_hooks_bind_transcript_and_capture_supervised_final_text() {
         )
         .wait_with_output()
         .expect("wait Copilot prompt hook");
+    env.drain_hooks();
     assert!(
         out.status.success(),
         "{}",
@@ -2333,6 +2339,7 @@ fn copilot_hooks_bind_transcript_and_capture_supervised_final_text() {
         )
         .wait_with_output()
         .expect("wait Copilot stop hook");
+    env.drain_hooks();
     assert!(
         out.status.success(),
         "{}",
@@ -2369,6 +2376,7 @@ fn cursor_response_hook_seeds_run_before_terminal_outcome() {
             .spawn_payload(command, &payload.to_string())
             .wait_with_output()
             .unwrap();
+        env.drain_hooks();
         assert!(
             output.status.success(),
             "hook stderr: {}",
@@ -4946,7 +4954,17 @@ fn completed_subagent_wait_prints_the_durable_result_after_the_child_ends() {
     let env = Env::new();
     env.record(&env.project_root);
     let store = env.store();
-    let (record, parent_kind, parent_launch_id) = create_finished_subagent(&env, &store);
+    let (mut record, parent_kind, parent_launch_id) = create_finished_subagent(&env, &store);
+    record.status = RunStatus::Running;
+    record.completed_at = None;
+    rimz::harness::run::create(store.paths(), &record).unwrap();
+    for event in ["UserPromptSubmit", "Stop", "SessionEnd"] {
+        let mut hook = env.hook_command("codex");
+        hook.env(rimz::harness::launch::ENV_RUN_ID, record.run_id.as_str());
+        let output = env.spawn_payload(hook, &json!({"hook_event_name": event, "session_id": "child-session", "prompt": "inspect the wait path"}).to_string()).wait_with_output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+        env.drain_hooks();
+    }
 
     let out = env
         .rimz()

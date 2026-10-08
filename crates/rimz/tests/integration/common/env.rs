@@ -394,9 +394,12 @@ impl Env {
     }
 
     pub fn run_copilot_hook(&self, event: &str, payload: &str) -> Output {
-        self.spawn_payload(self.copilot_hook_command(event), payload)
+        let output = self
+            .spawn_payload(self.copilot_hook_command(event), payload)
             .wait_with_output()
-            .expect("wait Copilot hook")
+            .expect("wait Copilot hook");
+        self.drain_hooks();
+        output
     }
 
     /// Spawn a prepared command and write `payload` to its stdin.
@@ -418,9 +421,37 @@ impl Env {
 
     /// Run the hook to completion — the one-shot waiting / neutral path.
     pub fn run_hook(&self, source: &str, payload: &str) -> Output {
-        self.spawn_hook(source, payload)
+        let output = self
+            .spawn_hook(source, payload)
             .wait_with_output()
-            .expect("wait hook")
+            .expect("wait hook");
+        self.drain_hooks();
+        output
+    }
+
+    /// Wait for every hook frame queued in this room before reading its effects.
+    pub fn drain_hooks(&self) {
+        self.drain_hooks_for(&self.project_root);
+    }
+
+    pub fn drain_hooks_for(&self, project_root: &Path) {
+        if !self
+            .state_path_for(project_root)
+            .hook_ingress_log
+            .metadata()
+            .is_ok_and(|metadata| metadata.len() > 0)
+        {
+            return;
+        }
+        let output = self
+            .rimz()
+            .args(["hooks", "drain", "--project-root"])
+            .arg(project_root)
+            .arg("--once")
+            .output()
+            .expect("drain hooks");
+        assert!(output.status.success(), "{output:?}");
+        assert!(output.stdout.is_empty(), "{output:?}");
     }
 
     // --- agent onboarding (the user's `rimz hooks install` setup step) ---
@@ -522,9 +553,12 @@ impl Env {
         payload: &str,
         pane_env: &[(&str, &str)],
     ) -> Output {
-        self.spawn_installed_hook_in_pane(source, payload, pane_env)
+        let output = self
+            .spawn_installed_hook_in_pane(source, payload, pane_env)
             .wait_with_output()
-            .expect("wait installed hook")
+            .expect("wait installed hook");
+        self.drain_hooks();
+        output
     }
 
     pub fn spawn_installed_hook_in_pane(

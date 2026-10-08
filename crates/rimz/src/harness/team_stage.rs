@@ -325,7 +325,7 @@ impl RewakeCause {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn rewake(
+fn with_rewake<T>(
     workspace: &ResolvedWorkspace,
     store: &Store,
     team_name: &str,
@@ -336,7 +336,8 @@ fn rewake(
     mux: Option<MuxName>,
     now: Timestamp,
     cause: RewakeCause,
-) -> Result<Option<FlipReceipt>, FlipErr> {
+    apply: impl FnOnce(&StageOpening<'_>, &'static str) -> Result<T, FlipErr>,
+) -> Result<Option<T>, FlipErr> {
     if team.owned_stages().next().is_none() {
         return Ok(None);
     }
@@ -360,7 +361,7 @@ fn rewake(
     }
     let owner = resolve_owner(team_name, team, &stage.name)?;
     let channel = member.channel().unwrap_or_else(|| "external".to_owned());
-    let (signal_event, delivery) = open_stage(
+    apply(
         &StageOpening {
             workspace,
             store,
@@ -383,16 +384,8 @@ fn rewake(
             RewakeCause::Resume { .. } => "resume",
             RewakeCause::Registration => "registration",
         },
-    )?;
-    Ok(Some(FlipReceipt {
-        board,
-        from: Some(stage.name.clone()),
-        to: stage.name,
-        owner: owner.map(str::to_owned),
-        delivery,
-        compaction: Compaction::Ineligible,
-        signal_event,
-    }))
+    )
+    .map(Some)
 }
 
 /// Re-wake a resumed root team member whose role owns the board's open stage, unless a Stage
@@ -430,7 +423,7 @@ pub fn rewake_resumed(
         .into_iter()
         .cloned()
         .collect::<Vec<_>>();
-    rewake(
+    with_rewake(
         workspace,
         store,
         name,
@@ -441,6 +434,18 @@ pub fn rewake_resumed(
         mux,
         now,
         RewakeCause::Resume { since },
+        |opening, completed| {
+            let (signal_event, delivery) = open_stage(opening, completed)?;
+            Ok(FlipReceipt {
+                board: opening.board.to_path_buf(),
+                from: opening.from.map(str::to_owned),
+                to: opening.to.to_owned(),
+                owner: opening.owner.map(str::to_owned),
+                delivery,
+                compaction: Compaction::Ineligible,
+                signal_event,
+            })
+        },
     )
 }
 
@@ -460,6 +465,26 @@ pub fn react_to_lifecycle(
     store: &Store,
     receipt: &AgentLifecycleReceipt,
     mux: Option<MuxName>,
+) {
+    react_lifecycle(workspace, store, receipt, mux, false);
+}
+
+/// Re-run keyed lifecycle repairs without arming subscriptions or firing signals.
+pub fn replay_lifecycle(
+    workspace: &ResolvedWorkspace,
+    store: &Store,
+    receipt: &AgentLifecycleReceipt,
+    mux: Option<MuxName>,
+) {
+    react_lifecycle(workspace, store, receipt, mux, true);
+}
+
+fn react_lifecycle(
+    workspace: &ResolvedWorkspace,
+    store: &Store,
+    receipt: &AgentLifecycleReceipt,
+    mux: Option<MuxName>,
+    replay: bool,
 ) {
     // The receipt's commit publishes and runs the session reaper only when it
     // appended an event, and it appends one exactly when the receipt carries a
@@ -491,12 +516,16 @@ pub fn react_to_lifecycle(
     if receipt.side_conversation.is_some() {
         return;
     }
-    let pending = store
-        .list_pending_messages()
-        .inspect_err(|err| {
-            warn!(error = %err, "lifecycle: failed to read team signal state");
-        })
-        .ok();
+    let pending = if replay {
+        None
+    } else {
+        store
+            .list_pending_messages()
+            .inspect_err(|err| {
+                warn!(error = %err, "lifecycle: failed to read team signal state");
+            })
+            .ok()
+    };
     for event in &receipt.events {
         if matches!(event.signal, LifecycleSignal::Ended | LifecycleSignal::Lost)
             && let Err(err) = arm::retire_session(
@@ -544,36 +573,42 @@ pub fn react_to_lifecycle(
         {
             warn!(error = %err, "lifecycle: failed to arm team signal bindings");
         }
-        let mut signals: Vec<_> = lifecycle_signal(event).into_iter().collect();
         let live_members = audit
             .as_ref()
             .zip(member)
             .map(|(audit, member)| cohort_members(&audit.agents, member))
             .unwrap_or_default();
-        if let (Some(member), Some(pending)) = (member, &pending) {
-            let sleeping = pending_waits_by_session(
-                &TaskCatalog::load_lenient(Some(&workspace.project_root)),
-                &workspace.project_root,
-                &event.at.to_zoned(MachineConfig::load_lenient().time_zone()),
-            )
-            .into_keys()
-            .collect();
-            for signal in team_lifecycle_signals(event, member, &live_members, pending, &sleeping) {
-                match store.append_signal(&workspace.session_name, (&signal).into()) {
-                    Ok(_) => signals.push(signal),
-                    Err(err) => {
-                        warn!(signal = %signal.name, error = %err, "lifecycle: failed to append team signal")
+        if !replay {
+            let mut signals: Vec<_> = lifecycle_signal(event).into_iter().collect();
+            if let (Some(member), Some(pending)) = (member, &pending) {
+                let sleeping = pending_waits_by_session(
+                    &TaskCatalog::load_lenient(Some(&workspace.project_root)),
+                    &workspace.project_root,
+                    &event.at.to_zoned(MachineConfig::load_lenient().time_zone()),
+                )
+                .into_keys()
+                .collect();
+                for signal in
+                    team_lifecycle_signals(event, member, &live_members, pending, &sleeping)
+                {
+                    match store.append_signal(&workspace.session_name, (&signal).into()) {
+                        Ok(_) => signals.push(signal),
+                        Err(err) => {
+                            warn!(signal = %signal.name, error = %err, "lifecycle: failed to append team signal")
+                        }
                     }
                 }
             }
-        }
-        for signal in signals {
-            if let Err(err) = fire_signal(store.runtime_paths(), &workspace.project_root, &signal) {
-                warn!(
-                    signal = %signal.name,
-                    error = %err,
-                    "lifecycle: failed to fire matching loop tasks",
-                );
+            for signal in signals {
+                if let Err(err) =
+                    fire_signal(store.runtime_paths(), &workspace.project_root, &signal)
+                {
+                    warn!(
+                        signal = %signal.name,
+                        error = %err,
+                        "lifecycle: failed to fire matching loop tasks",
+                    );
+                }
             }
         }
         if let (Some(member), Some(team)) = (registered_member, registered_team.as_ref())
@@ -584,7 +619,7 @@ pub fn react_to_lifecycle(
                 .iter()
                 .map(|member| (*member).clone())
                 .collect::<Vec<_>>();
-            match rewake(
+            match with_rewake(
                 workspace,
                 store,
                 name,
@@ -595,9 +630,15 @@ pub fn react_to_lifecycle(
                 mux,
                 event.at,
                 RewakeCause::Registration,
+                |opening, completed| {
+                    if replay {
+                        return deliver_stage(opening, completed);
+                    }
+                    open_stage(opening, completed).map(|(_, delivery)| delivery)
+                },
             ) {
-                Ok(Some(receipt)) => {
-                    debug!(delivery = ?receipt.delivery, "lifecycle: re-woke team stage owner");
+                Ok(Some(delivery)) => {
+                    debug!(?delivery, "lifecycle: re-woke team stage owner");
                 }
                 Ok(None) => {}
                 Err(err) => {
@@ -733,6 +774,18 @@ fn open_stage(
     ) {
         tracing::warn!(error = %err, "failed to fire team.stage subscriptions");
     }
+    deliver_stage(
+        opening,
+        if opening.rewake {
+            "signal"
+        } else {
+            "board, signal"
+        },
+    )
+    .map(|delivery| (event, delivery))
+}
+
+fn deliver_stage(opening: &StageOpening<'_>, completed: &'static str) -> Result<Delivery, FlipErr> {
     let Some(owner) = opening.owner else {
         if let Some(root) = opening.board.parent()
             && let Err(error) = crate::lsp::registry::stop_checkout(
@@ -742,10 +795,10 @@ fn open_stage(
         {
             tracing::debug!(%error, "failed to stop language servers at Done");
         }
-        return Ok((event, Delivery::Terminal));
+        return Ok(Delivery::Terminal);
     };
     if opening.self_owned {
-        return Ok((event, Delivery::SelfOwned));
+        return Ok(Delivery::SelfOwned);
     }
     let cohort = opening.members.iter().filter(|member| {
         member.team.as_deref() == Some(opening.team_name)
@@ -755,12 +808,9 @@ fn open_stage(
         .into_iter()
         .next()
     else {
-        return Ok((
-            event,
-            Delivery::OwnerNotLive {
-                owner: owner.to_owned(),
-            },
-        ));
+        return Ok(Delivery::OwnerNotLive {
+            owner: owner.to_owned(),
+        });
     };
     let result = dispatch::dispatch(
         opening.workspace,
@@ -799,16 +849,7 @@ fn open_stage(
             },
         },
     )
-    .map_err(|err| {
-        FlipErr::from(err).after(
-            if opening.rewake {
-                "signal"
-            } else {
-                "board, signal"
-            },
-            opening.to,
-        )
-    })?;
+    .map_err(|err| FlipErr::from(err).after(completed, opening.to))?;
     // A single durable session target with fanout disabled has exactly one outcome.
     let outcome = result
         .outcomes
@@ -821,7 +862,7 @@ fn open_stage(
         | DispatchOutcome::CompactionPending { label, .. }
         | DispatchOutcome::SkippedWaiting { label, .. } => Delivery::Queued { label },
     };
-    Ok((event, delivery))
+    Ok(delivery)
 }
 
 /// `leader` is set only for an owner who is not the leader: the seat's channel rule rides on
