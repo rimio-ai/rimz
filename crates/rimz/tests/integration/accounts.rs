@@ -1197,10 +1197,12 @@ fn a_history_entry_on_another_filesystem_stays_in_the_account_home_and_out_of_th
     };
 
     let local = Env::new();
+    local.record(&local.project_root);
     let (spend, added) = run(&local, &local.home_root.join("work"));
     assert!(spend.contains("spend:  $0.25 today"), "{spend}\n{added}");
 
     let env = Env::new();
+    env.record(&env.project_root);
     let native = env.home_root.join(".claude");
     let home = foreign.path().join("work");
     let (spend, added) = run(&env, &home);

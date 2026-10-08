@@ -97,6 +97,7 @@ fn loop_channel_case(action: LoopLaunch, firer: LoopFirer) {
 
     let env = Env::new();
     assert!(init_git_repo(&env.project_root));
+    env.record(&env.project_root);
     env.install_agent_hooks("codex");
     trust_codex_preflight_hooks(&env);
     trust_codex_project(&env, &env.project_root);
@@ -395,6 +396,7 @@ fn resident_layout_refuses_account_pin() {
 fn condition_tick_observes_board_and_records_evidence() {
     let env = Env::new();
     assert!(init_git_repo(&env.project_root));
+    env.record(&env.project_root);
     let scope = env.home_root.join("condition-scope");
     assert!(git_ok(
         &env.project_root,
@@ -560,6 +562,7 @@ fn condition_add_refuses_invalid_predicates_and_options() {
 fn paused_fanout_keeps_hold_and_fired_state() {
     let env = Env::new();
     assert!(init_git_repo(&env.project_root));
+    env.record(&env.project_root);
     loop_ok(&env, &["worktree", "new", "lane"]);
     let owned = rimz::worktree::discover_owned(&env.project_root).unwrap();
     assert_eq!(owned.len(), 1);
@@ -847,6 +850,7 @@ fn resident_show_keeps_the_screen_on_room_catalog_failure() {
 #[test]
 fn resident_show_drops_a_daemon_leader_reaped_by_agents_list() {
     let env = Env::new();
+    env.record(&env.project_root);
     let store = env.store();
     let workspace = env.resolve_workspace(&env.project_root);
     let kind = AgentKind::new_unchecked("codex");
@@ -949,6 +953,7 @@ fn resident_show_drops_a_daemon_leader_reaped_by_agents_list() {
 fn resident_inspector_reads_the_planners_checkout_clocks_without_writes() {
     let env = Env::new();
     assert!(init_git_repo(&env.project_root));
+    env.record(&env.project_root);
     for name in ["holding", "ready", "waiting"] {
         loop_ok(&env, &["worktree", "new", name]);
     }
@@ -1062,6 +1067,7 @@ fn resident_inspector_reads_the_planners_checkout_clocks_without_writes() {
 fn resident_show_json_adds_unfolded_worktrees_and_keeps_existing_keys() {
     let env = Env::new();
     assert!(init_git_repo(&env.project_root));
+    env.record(&env.project_root);
     loop_ok(&env, &["worktree", "new", "waiting"]);
     let owned = rimz::worktree::discover_owned(&env.project_root).unwrap();
     write_loop_config(
@@ -1265,7 +1271,7 @@ fn loop_show_subscriptions_case(other_room: bool) {
 
 #[cfg(unix)]
 #[test]
-fn resident_worktree_launch_preserves_marker_path_without_a_room() {
+fn resident_worktree_launch_preserves_marker_path() {
     resident_launch_case(true, false);
 }
 
@@ -1279,6 +1285,7 @@ fn resident_team_layout_uses_the_helpers_resolved_checkout() {
 fn agents_team_cwd_subdirectory_refuses_root_checkout_bindings() {
     let env = Env::new();
     assert!(init_git_repo(&env.project_root));
+    env.record(&env.project_root);
     env.install_agent_hooks("codex");
     env.write_config(
         &env.project_root,
@@ -1312,6 +1319,7 @@ fn agents_team_cwd_subdirectory_refuses_root_checkout_bindings() {
 fn resident_launch_case(each_worktree: bool, team: bool) {
     let env = Env::new();
     assert!(init_git_repo(&env.project_root));
+    env.record(&env.project_root);
     env.install_agent_hooks("codex");
     trust_codex_preflight_hooks(&env);
     let actual = env.home_root.join("actual-worktrees");
@@ -1797,6 +1805,7 @@ fn resident_takeover_case(case: Takeover) {
     let Some(cwd) = team_signal_fixture(&env) else {
         return;
     };
+    env.record(&env.project_root);
     // The launch checkout as the task names it, and as a provider hook reports
     // the occupant's cwd: the same path unless a symlink leads to the checkout.
     let symlinked = case == Takeover::SymlinkedCheckout;
@@ -2234,6 +2243,7 @@ fn publish_claude_5h_resetting(env: &Env, used: u8, resets_in: SignedDuration) {
 #[test]
 fn after_reset_fires_once_at_the_window_reset_and_removes_its_row() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     register_running_agent(&env, "sess-reset", "feature-loop");
     let add = |name: &str, extra: &[&str]| {
@@ -2328,6 +2338,7 @@ fn after_reset_fires_once_at_the_window_reset_and_removes_its_row() {
 #[test]
 fn window_condition_waits_for_room_in_the_provider_window() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     register_running_agent(&env, "sess-window", "feature-loop");
     publish_claude_5h(&env, 92);
@@ -2381,6 +2392,7 @@ fn window_condition_waits_for_room_in_the_provider_window() {
 fn condition_wait_pins_projects_and_deduplicates() {
     let env = Env::new();
     assert!(init_git_repo(&env.project_root));
+    env.record(&env.project_root);
     let first = env.home_root.join("condition-first");
     let second = env.home_root.join("condition-second");
     for (branch, path) in [("first", &first), ("second", &second)] {
@@ -2468,6 +2480,7 @@ fn condition_wait_pins_projects_and_deduplicates() {
 #[test]
 fn trunk_signal_fires_only_through_git_source() {
     let env = Env::new();
+    env.record(&env.project_root);
     loop_ok(
         &env,
         &[
@@ -2509,6 +2522,7 @@ fn trunk_signal_fires_only_through_git_source() {
 #[test]
 fn worktree_created_fires_a_loop_subscriber() {
     let env = Env::new();
+    env.record(&env.project_root);
     for args in [
         vec!["init", "-b", "main"],
         vec![
@@ -2566,6 +2580,7 @@ fn worktree_created_fires_a_loop_subscriber() {
 #[test]
 fn forge_behind_signal_fires_matching_task_and_skips_merged_sibling() {
     let env = Env::new();
+    env.record(&env.project_root);
     for (name, signal) in [("behind", "pr.behind"), ("merged", "pr.merged")] {
         loop_ok(
             &env,
@@ -2634,6 +2649,7 @@ fn forge_behind_signal_fires_matching_task_and_skips_merged_sibling() {
 #[test]
 fn wildcard_team_binding_arms_at_root_and_delivers_across_worktrees() {
     let env = Env::new();
+    env.record(&env.project_root);
     if !init_git_repo(&env.project_root) {
         crate::common::skip("git unavailable");
         return;
@@ -2732,6 +2748,7 @@ fn wildcard_team_binding_arms_at_root_and_delivers_across_worktrees() {
 #[test]
 fn team_signal_binding_registers_delivers_and_retires() {
     let env = Env::new();
+    env.record(&env.project_root);
     let Some(cwd) = team_signal_fixture(&env) else {
         return;
     };
@@ -2811,6 +2828,7 @@ fn team_signal_binding_registers_delivers_and_retires() {
 #[test]
 fn team_signal_registration_preserves_same_named_machine_configuration() {
     let env = Env::new();
+    env.record(&env.project_root);
     let Some(cwd) = team_signal_fixture(&env) else {
         return;
     };
@@ -2842,6 +2860,7 @@ fn team_signal_registration_preserves_same_named_machine_configuration() {
 #[test]
 fn team_signal_slug_collisions_preserve_distinct_subscriptions() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     write_team_signal_config(&env);
     crate::common::write_definition(
@@ -2896,6 +2915,7 @@ roles:
 #[test]
 fn team_signal_bindings_ignore_child_registration() {
     let env = Env::new();
+    env.record(&env.project_root);
     let Some(cwd) = team_signal_fixture(&env) else {
         return;
     };
@@ -2917,6 +2937,7 @@ fn team_signal_bindings_ignore_child_registration() {
 #[test]
 fn team_signal_binding_resume_keeps_session_rows_separate() {
     let env = Env::new();
+    env.record(&env.project_root);
     let Some(cwd) = team_signal_fixture(&env) else {
         return;
     };
@@ -2964,6 +2985,7 @@ fn team_signal_binding_resume_keeps_session_rows_separate() {
 fn team_idle_and_root_end_hooks_deliver_only_to_the_matching_instance() {
     for (signal, hook) in [("team.idle", "Stop"), ("team.ended", "SessionEnd")] {
         let env = Env::new();
+        env.record(&env.project_root);
         let Some(cwd) = team_signal_fixture(&env) else {
             return;
         };
@@ -3012,6 +3034,7 @@ fn team_idle_and_root_end_hooks_deliver_only_to_the_matching_instance() {
 #[test]
 fn team_signal_launch_refuses_root_before_side_effects() {
     let env = Env::new();
+    env.record(&env.project_root);
     write_team_signal_config(&env);
     let before = env
         .store()
@@ -3162,6 +3185,7 @@ fn team_signal_hook(env: &Env, cwd: &Path, session: &str, event: &str) {
 #[test]
 fn loop_deliveries_always_persist_as_instances() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     register_running_agent(&env, "sess-instance-storage", "feature-loop");
     for (name, trigger) in [
@@ -3201,6 +3225,7 @@ fn loop_deliveries_always_persist_as_instances() {
 #[test]
 fn loop_wait_me_and_bare_wait_pin_the_calling_session() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     register_running_agent(&env, "sess-loop-caller", "feature-loop");
     for (name, wait) in [
@@ -3228,6 +3253,7 @@ fn loop_wait_me_and_bare_wait_pin_the_calling_session() {
 #[test]
 fn loop_signal_dedupe_preserves_the_existing_definition_and_overlays() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     register_running_agent(&env, "sess-loop-dedupe", "feature-loop");
     let output = loop_ok(
@@ -3365,6 +3391,7 @@ fn loop_signal_dedupe_preserves_the_existing_definition_and_overlays() {
 #[test]
 fn concurrent_signal_adds_return_one_existing_name() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     register_running_agent(&env, "sess-loop-concurrent", "feature-loop");
     let children = ["first", "second"].map(|name| {
@@ -3403,6 +3430,7 @@ fn concurrent_signal_adds_return_one_existing_name() {
 #[test]
 fn loop_signal_defaults_follow_the_caller_worktree_and_team() {
     let env = Env::new();
+    env.record(&env.project_root);
     let Some(cwd) = team_signal_fixture(&env) else {
         return;
     };
@@ -3481,6 +3509,7 @@ fn loop_signal_defaults_follow_the_caller_worktree_and_team() {
 #[test]
 fn signal_siblings_keep_subscriptions_and_matches_consume_only_once() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     register_running_agent(&env, "sess-signal-lifetimes", "feature-loop");
     loop_ok(
@@ -3549,6 +3578,7 @@ fn signal_siblings_keep_subscriptions_and_matches_consume_only_once() {
 #[test]
 fn session_end_hook_retires_all_own_deliveries_and_their_overlays() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     register_running_agent(&env, "sess-retire", "feature-loop");
     for (name, trigger) in [
@@ -3597,6 +3627,7 @@ fn session_end_hook_retires_all_own_deliveries_and_their_overlays() {
 #[test]
 fn non_hook_end_retires_matching_subscription_before_delivery() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     register_running_agent(&env, "sess-ended", "feature-loop");
     loop_ok(
@@ -3661,6 +3692,7 @@ fn non_hook_end_retires_matching_subscription_before_delivery() {
 #[test]
 fn sibling_fire_retires_only_the_durably_ended_subscription() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     register_running_agent(&env, "sess-ended", "feature-loop");
     loop_ok(
@@ -3718,6 +3750,7 @@ fn sibling_fire_retires_only_the_durably_ended_subscription() {
 #[test]
 fn other_session_hook_retires_non_hook_ended_subscription() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     register_running_agent(&env, "sess-ended", "feature-loop");
     loop_ok(
@@ -3753,6 +3786,7 @@ fn other_session_hook_retires_non_hook_ended_subscription() {
 #[test]
 fn side_conversation_registration_hook_retires_ended_subscription() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     register_running_agent(&env, "sess-ended", "feature-loop");
     loop_ok(
@@ -3791,6 +3825,7 @@ fn side_conversation_registration_hook_retires_ended_subscription() {
 #[test]
 fn repeat_side_conversation_hook_reconciles_nothing() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     register_running_agent(&env, "sess-ended", "feature-loop");
     loop_ok(
@@ -3838,6 +3873,7 @@ fn repeat_side_conversation_hook_reconciles_nothing() {
 #[test]
 fn revived_session_subscription_survives_matching_signal() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     register_running_agent(&env, "sess-revived", "feature-loop");
     loop_ok(
@@ -3875,6 +3911,7 @@ fn revived_session_subscription_survives_matching_signal() {
 #[test]
 fn retired_delivery_runner_preserves_replacement_session_subscription() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     register_running_agent(&env, "retired-session", "feature-cas");
     let ready = env.project_root.join("check-ready");
@@ -3956,6 +3993,7 @@ fn same_task_name_in_two_rooms_does_not_collide() {
     let other = env.home_root.join("other-project");
     std::fs::create_dir(&other).expect("other project");
     for root in [&env.project_root, &other] {
+        env.record(root);
         let output = env
             .rimz()
             .current_dir(root)
@@ -4083,6 +4121,10 @@ fn external_tick_fires_a_machine_task_without_a_workspace_record() {
     );
     assert!(!env.runtime_paths().shared_root.exists());
 
+    assert!(tick_without_runner_leaves_state_absent(
+        &env,
+        &env.project_root
+    ));
     loop_ok(&env, &["loop", "tick"]);
 
     wait_for_path(&marker);
@@ -4144,6 +4186,7 @@ fn external_tick_discovers_a_trusted_project_without_a_workspace_record() {
         BTreeMap::from([("project-tick".to_owned(), prior)]),
     );
 
+    assert!(tick_without_runner_leaves_state_absent(&env, &project));
     loop_ok(&env, &["loop", "tick"]);
 
     wait_for_path(&marker);
@@ -4166,14 +4209,15 @@ fn malformed_instances_fail_reads_and_survive_adds() {
 }
 
 #[test]
-fn instance_task_in_a_project_without_a_room_reaches_machine_wide_readers() {
+fn instance_task_in_a_recorded_project_reaches_machine_wide_readers() {
     let env = Env::new();
+    env.record(&env.project_root);
     loop_ok(
         &env,
         &["loop", "add", "nightly", "--at", "07:00", "--check", "true"],
     );
     assert!(
-        !env.state_path_for(&env.project_root)
+        env.state_path_for(&env.project_root)
             .workspace_record
             .exists()
     );
@@ -4190,9 +4234,73 @@ fn instance_task_in_a_project_without_a_room_reaches_machine_wide_readers() {
     assert!(stdout.contains("\"nightly\""), "{stdout}");
 }
 
+#[cfg(unix)]
+#[test]
+fn external_tick_spawns_an_agent_without_a_workspace_record() {
+    if which::which("tmux").is_err() && which::which("zellij").is_err() {
+        crate::common::skip("neither tmux nor zellij on PATH");
+        return;
+    }
+    let env = Env::new();
+    env.install_agent_hooks("codex");
+    trust_codex_preflight_hooks(&env);
+    trust_codex_project(&env, &env.project_root);
+    let agent_bin = crate::common::write_failing_agent_shim(&env, "codex", 1);
+    let login_shell = write_fake_login_shell(&env, "rimz-test-sh", &[]);
+    let shell = write_path_shim(
+        &env.home_root.join("interactive-shell-bin"),
+        "rimz-test-sh",
+        &format!(
+            "for arg do\n  if [ \"$arg\" = -c ]; then exec {} \"$@\"; fi\ndone\nexec /bin/sh \"$@\"",
+            shlex::try_quote(login_shell.to_str().unwrap()).unwrap(),
+        ),
+    );
+    write_loop_config(
+        &env,
+        &format!(
+            "default-timeout = \"1s\"\n[tasks.cold-agent]\nagent = \"codex\"\nprompt = \"repair\"\nroot = {:?}\nevery = \"1m\"\ntimeout = \"2s\"\nthrottle = \"off\"\n",
+            env.project_root,
+        ),
+    );
+    let prior = Timestamp::now() - SignedDuration::from_mins(2);
+    write_loop_fire_state(&env, BTreeMap::from([("cold-agent".to_owned(), prior)]));
+    assert!(!env.state_path_for(&env.project_root).root.exists());
+
+    let output = env
+        .rimz()
+        .args(["loop", "tick"])
+        .env("PATH", path_with_front(&agent_bin))
+        .env("SHELL", shell)
+        .output()
+        .expect("tick a cold agent root");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    wait_for_path(&loop_runs_path(&env));
+    assert!(
+        env.state_path_for(&env.project_root)
+            .workspace_record
+            .exists()
+    );
+    assert_eq!(
+        rimz::harness::run::list(env.store().paths())
+            .expect("supervised runs")
+            .len(),
+        1,
+        "{:?}",
+        read_loop_run_records(&env),
+    );
+}
+
 #[test]
 fn external_tick_yields_a_root_with_a_fresh_sidebar() {
     let env = Env::new();
+    env.record(&env.project_root);
+    let record_path = env.state_path_for(&env.project_root).workspace_record;
+    let record = std::fs::read(&record_path).unwrap();
     let marker = env.project_root.join("open-root-tick-ran");
     write_loop_config(
         &env,
@@ -4232,11 +4340,7 @@ fn external_tick_yields_a_root_with_a_fresh_sidebar() {
 
     loop_ok(&env, &["loop", "run", "open-root"]);
     assert!(marker.exists());
-    assert!(
-        !env.state_path_for(&env.project_root)
-            .workspace_record
-            .exists()
-    );
+    assert_eq!(std::fs::read(&record_path).unwrap(), record);
 }
 
 #[cfg(unix)]
@@ -4292,6 +4396,7 @@ fn external_tick_refuses_when_the_systemd_user_manager_is_unreachable() {
 #[test]
 fn external_tick_records_a_spawn_failure_without_retrying_or_striking() {
     let env = Env::new();
+    env.record(&env.project_root);
     write_loop_config(
         &env,
         &format!(
@@ -4351,6 +4456,7 @@ fn external_tick_records_a_spawn_failure_without_retrying_or_striking() {
 #[test]
 fn signal_emit_records_a_spawn_failure_without_reporting_the_task_as_fired() {
     let env = Env::new();
+    env.record(&env.project_root);
     write_loop_config(
         &env,
         &format!(
@@ -4395,6 +4501,7 @@ fn signal_emit_records_a_spawn_failure_without_reporting_the_task_as_fired() {
 #[test]
 fn external_tick_records_a_failed_scope_handoff() {
     let env = Env::new();
+    env.record(&env.project_root);
     let shims = env.home_root.join("tick-shims");
     write_path_shim(&shims, "systemctl", "exit 0");
     write_path_shim(&shims, "systemd-run", "exit 1");
@@ -4443,6 +4550,7 @@ fn external_tick_records_a_failed_scope_handoff() {
 #[test]
 fn external_tick_does_not_record_a_fast_run_as_a_failed_start() {
     let env = Env::new();
+    env.record(&env.project_root);
     let shims = env.home_root.join("tick-shims");
     write_path_shim(&shims, "systemctl", "exit 0");
     write_path_shim(
@@ -4579,6 +4687,7 @@ fn loop_watch_reloads_tasks_without_reprobing_workspace() {
 #[test]
 fn loop_wait_workflow_pins_and_delivers_to_live_session() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     register_running_agent(&env, "sess-loop-live", "feature-loop");
     loop_ok(&env, &["config", "set", "harness.smart_compact", "70%"]);
@@ -4638,6 +4747,7 @@ fn loop_wait_workflow_pins_and_delivers_to_live_session() {
 #[test]
 fn emitted_signal_reaches_the_matching_wait_consumer() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     let workspace = env.resolve_workspace(&env.project_root);
     env.store()
@@ -4858,6 +4968,7 @@ fn emitted_signal_reaches_the_matching_wait_consumer() {
 #[test]
 fn lifecycle_signal_wakes_only_for_the_matching_agent_session() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     register_running_agent(&env, "planner-session", "feature-planner");
     loop_ok(
@@ -4935,6 +5046,7 @@ fn lifecycle_signal_wakes_only_for_the_matching_agent_session() {
 #[test]
 fn agent_budget_edits_and_views_use_local_day() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     register_running_agent(&env, "sess-budget", "feature-budget");
     let agent_id = AgentSessionId::from("sess-budget");
@@ -5118,6 +5230,7 @@ fn loop_spawn_controls_persist_render_and_gate_daily_budget() {
 #[test]
 fn loop_project_trust_controls_visibility_execution_and_precedence() {
     let env = Env::new();
+    env.record(&env.project_root);
     write_loop_config(
         &env,
         &format!(
@@ -5223,6 +5336,7 @@ fn project_task_enablement_is_scoped_by_project_root() {
 #[test]
 fn trusted_project_task_edits_repin_trust() {
     let env = Env::new();
+    env.record(&env.project_root);
     write_project_config(&env, "[tasks.first]\ncheck = \"true\"\nevery = \"15m\"\n");
     grant_project_trust(&env);
     let dismissal = env
@@ -5355,6 +5469,7 @@ fn project_task_edit_does_not_grant_foreign_change() {
 #[test]
 fn loop_task_storage_policy_and_manual_fire_preserve_one_shots() {
     let env = Env::new();
+    env.record(&env.project_root);
     write_loop_config(
         &env,
         &format!(
@@ -5499,6 +5614,7 @@ fn loop_multi_name_remove_reports_each_outcome() {
 #[test]
 fn loop_enable_disable_pause_workflow() {
     let env = Env::new();
+    env.record(&env.project_root);
     loop_ok(
         &env,
         &["loop", "add", "probe", "--check", "true", "--every", "15m"],
@@ -5577,6 +5693,7 @@ fn loop_enable_disable_pause_workflow() {
 #[test]
 fn loop_repeated_failures_auto_disable_notify_once_and_enable() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     register_running_agent(&env, "sess-loop-strikes", "feature-loop");
     let notify_log = env.project_root.join("loop-disabled-notify.log");
@@ -5663,6 +5780,7 @@ fn loop_repeated_failures_auto_disable_notify_once_and_enable() {
 #[test]
 fn loop_task_mutations_move_and_clear_overlays() {
     let env = Env::new();
+    env.record(&env.project_root);
     write_loop_config(
         &env,
         &format!(
@@ -5735,6 +5853,7 @@ fn loop_task_mutations_move_and_clear_overlays() {
 #[test]
 fn loop_rename_rejects_collisions_and_reports_missing() {
     let env = Env::new();
+    env.record(&env.project_root);
     write_loop_config(
         &env,
         &format!(
@@ -5765,6 +5884,7 @@ fn loop_rename_rejects_collisions_and_reports_missing() {
 #[test]
 fn loop_qwen_exact_quota_skip_precedes_check_command() {
     let env = Env::new();
+    env.record(&env.project_root);
     loop_ok(&env, &["config", "init"]);
     loop_ok(&env, &["config", "set", "harness.budget", "0/day"]);
     let settings = env.agent_config_path("qwen");
@@ -5975,6 +6095,7 @@ fn loop_qwen_exact_quota_skip_precedes_check_command() {
 #[test]
 fn loop_check_runs_in_the_arming_worktree() {
     let env = Env::new();
+    env.record(&env.project_root);
     if !init_git_repo(&env.project_root) {
         crate::common::skip("git unavailable");
         return;
@@ -6098,6 +6219,7 @@ fn loop_check_runs_in_the_arming_worktree() {
 #[test]
 fn loop_check_failure_records_and_renders_history() {
     let env = Env::new();
+    env.record(&env.project_root);
     loop_ok(
         &env,
         &[
@@ -6171,6 +6293,7 @@ fn loop_check_failure_records_and_renders_history() {
 #[test]
 fn loop_guard_skips_or_delivers_with_evidence() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     register_running_agent(&env, "sess-loop-check", "feature-loop");
     loop_ok(
@@ -6236,6 +6359,7 @@ fn loop_guard_skips_or_delivers_with_evidence() {
 #[test]
 fn loop_trip_then_preparation_error_records_and_renders() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     register_running_agent(&env, "sess-loop-trip-error", "feature-loop");
     write_loop_config(
@@ -6303,6 +6427,7 @@ fn loop_missing_spawn_prompt_names_task() {
 #[test]
 fn loop_scheduled_one_shot_consumption_follows_preflight_boundary() {
     let dispatch = Env::new();
+    dispatch.record(&dispatch.project_root);
     dispatch.install_agent_hooks("claude");
     loop_ok(
         &dispatch,
@@ -6413,6 +6538,7 @@ fn loop_show_surfaces_spawn_failure_tail_and_prior_error() {
 #[test]
 fn loop_poll_until_delivers_once_or_expires() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     register_running_agent(&env, "sess-loop-until", "feature-loop");
     loop_ok(
@@ -6441,6 +6567,7 @@ fn loop_poll_until_delivers_once_or_expires() {
     assert!(!read_loop_instances(&env).0.contains_key("green"));
 
     let expired = Env::new();
+    expired.record(&expired.project_root);
     write_loop_instances(
         &expired,
         Tasks(BTreeMap::from([(
@@ -6482,6 +6609,7 @@ fn loop_poll_until_delivers_once_or_expires() {
 #[test]
 fn loop_worktree_target_delivery_preserves_session() {
     let env = Env::new();
+    env.record(&env.project_root);
     if !init_git_repo(&env.project_root) {
         crate::common::skip("git unavailable");
         return;
@@ -6529,6 +6657,7 @@ fn loop_worktree_target_delivery_preserves_session() {
 #[test]
 fn loop_dead_target_run_removes_but_fire_keeps_task() {
     let env = Env::new();
+    env.record(&env.project_root);
     let config = format!(
         "[tasks.dead]\nwait = {{ kind = \"claude\", session = \"sess-dead\", handle = \"@claude\" }}\n\
          prompt = \"wake up\"\ncheck = \"false\"\nroot = \"{}\"\nat = \"07:00\"\n",
@@ -6603,6 +6732,7 @@ fn loop_list_uses_room_arm_stamp_for_next_fire() {
 #[test]
 fn malformed_schedule_stays_visible_and_manual_action_remains_runnable() {
     let env = Env::new();
+    env.record(&env.project_root);
     write_loop_config(
         &env,
         &format!(
@@ -6759,6 +6889,7 @@ fn loop_show_wait_survives_unreadable_store_enrichment() {
 #[test]
 fn loop_overlap_records_holder_and_preserves_one_shot() {
     let env = Env::new();
+    env.record(&env.project_root);
     loop_ok(
         &env,
         &["loop", "add", "busy", "--check", "true", "--at", "07:00"],
@@ -6825,6 +6956,7 @@ fn loop_overlap_records_holder_and_preserves_one_shot() {
 #[test]
 fn loop_list_shows_a_running_task_beside_its_last_result() {
     let env = Env::new();
+    env.record(&env.project_root);
     loop_ok(
         &env,
         &["loop", "add", "busy", "--check", "true", "--every", "1h"],
@@ -6897,6 +7029,7 @@ fn loop_list_shows_a_consumed_one_shot_until_its_run_ends() {
 #[test]
 fn loop_list_adds_one_row_per_held_lock_no_task_claims() {
     let env = Env::new();
+    env.record(&env.project_root);
     loop_ok(
         &env,
         &["loop", "add", "fan", "--check", "true", "--every", "1h"],
@@ -6926,6 +7059,7 @@ fn loop_list_adds_one_row_per_held_lock_no_task_claims() {
 #[test]
 fn loop_list_warns_once_when_the_run_locks_cannot_be_listed() {
     let env = Env::new();
+    env.record(&env.project_root);
     for name in ["first", "second"] {
         loop_ok(
             &env,
@@ -7094,6 +7228,7 @@ fn loop_watch_scopes_to_the_whole_callers_room() {
 #[test]
 fn loop_watch_shows_a_run_whose_task_row_is_gone() {
     let env = Env::new();
+    env.record(&env.project_root);
     let holder = RunLockInfo {
         pid: 42_424,
         started_at: Timestamp::now() - SignedDuration::from_secs(3 * 60),
@@ -7172,6 +7307,7 @@ fn loop_watch_stays_silent_and_drops_a_group_holding_only_a_listing_error() {
 #[test]
 fn loop_stop_reaches_a_run_holding_only_a_per_checkout_lock() {
     let env = Env::new();
+    env.record(&env.project_root);
     loop_ok(
         &env,
         &["loop", "add", "fan", "--check", "true", "--every", "1h"],
@@ -7211,6 +7347,7 @@ fn loop_stop_reaches_a_run_holding_only_a_per_checkout_lock() {
 #[test]
 fn loop_stop_without_active_run_reports_no_active_run() {
     let env = Env::new();
+    env.record(&env.project_root);
     loop_ok(
         &env,
         &["loop", "add", "idle", "--check", "true", "--every", "15m"],
@@ -7227,6 +7364,7 @@ fn terminal_check_runs_interactive_shell_to_completion() {
         return;
     }
     let env = Env::new();
+    env.record(&env.project_root);
     loop_ok(
         &env,
         &[
@@ -7275,6 +7413,7 @@ fn terminal_check_runs_interactive_shell_to_completion() {
 #[test]
 fn manual_check_clears_the_agent_identity_overlay() {
     let env = Env::new();
+    env.record(&env.project_root);
     loop_ok(
         &env,
         &[
@@ -7325,6 +7464,7 @@ fn manual_fire_forwards_interrupt_to_the_check_group() {
         (Some("fail"), true),
     ] {
         let env = Env::new();
+        env.record(&env.project_root);
         let check = if ignores_interrupt {
             "trap '' INT; printf ready > check-ready; sleep 30"
         } else {
@@ -7620,6 +7760,7 @@ fn loop_stop_of_a_spawn_run(pane_open: bool) {
 #[test]
 fn loop_stop_terminates_holder_and_records_cancellation() {
     let env = Env::new();
+    env.record(&env.project_root);
     loop_ok(
         &env,
         &[
@@ -7666,6 +7807,7 @@ fn loop_stop_terminates_holder_and_records_cancellation() {
 #[test]
 fn loop_run_held_by_the_start_throttle_is_shown_skipped_and_stopped() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     loop_ok(
         &env,
@@ -8000,6 +8142,7 @@ impl ConsumedSpawn {
 
 #[cfg(unix)]
 fn start_consumed_spawn(env: &Env, name: &str) -> (ConsumedSpawn, std::process::Child, RunRecord) {
+    env.record(&env.project_root);
     env.install_agent_hooks("codex");
     trust_codex_preflight_hooks(env);
     trust_codex_project(env, &env.project_root);
@@ -8170,6 +8313,7 @@ fn loop_stop_reaches_a_consumed_one_shot_run() {
 #[test]
 fn loop_commands_follow_the_lock_before_a_consumed_one_shot_has_a_run_record() {
     let env = Env::new();
+    env.record(&env.project_root);
     loop_ok(
         &env,
         &[
@@ -8227,6 +8371,7 @@ fn loop_commands_follow_the_lock_before_a_consumed_one_shot_has_a_run_record() {
 #[test]
 fn loop_commands_reject_an_unknown_name_with_a_free_lock() {
     let env = Env::new();
+    env.record(&env.project_root);
     for command in ["show", "logs", "stop"] {
         let (_stdout, error) = loop_fail(&env, &["loop", command, "ghost"]);
         assert!(error.contains("no loop task named `ghost`"), "{error}");
@@ -8252,6 +8397,7 @@ fn loop_commands_reject_an_unknown_name_with_a_free_lock() {
 #[test]
 fn loop_show_and_logs_drop_only_the_active_run_when_the_lock_lookup_fails() {
     let env = Env::new();
+    env.record(&env.project_root);
     loop_ok(
         &env,
         &["loop", "add", "probe", "--check", "true", "--every", "1h"],
@@ -8402,6 +8548,7 @@ fn loop_add_persists_machine_and_project_signal_triggers() {
 #[test]
 fn loop_add_rejects_agent_signal_self_waits() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     register_running_agent(&env, "sess-loop-self-wait", "feature-loop");
 
@@ -8744,6 +8891,7 @@ fn loop_fire_launches_on_the_pinned_account_not_the_rooms() {
 #[test]
 fn loop_add_rejects_invalid_action_shapes() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     register_running_agent(&env, "sess-loop-validate", "feature-loop");
     let cases = [
@@ -9367,6 +9515,33 @@ fn write_loop_fire_state_for_root(env: &Env, root: &Path, stamps: BTreeMap<Strin
     std::fs::create_dir_all(path.parent().expect("loop fire parent")).expect("mkdir runtime");
     std::fs::write(path, serde_json::to_vec_pretty(&stamps).expect("json"))
         .expect("write loop fire state");
+}
+
+fn tick_without_runner_leaves_state_absent(env: &Env, root: &Path) -> bool {
+    let state = env.state_path_for(root);
+    let fire_path =
+        rimz::RuntimePaths::for_state_under(&state, &env.runtime_root).lane_path("loop-fire.json");
+    let before = std::fs::read(&fire_path).expect("fire state before probe");
+    let output = env
+        .rimz()
+        .args(["loop", "tick"])
+        .env("RIMZ_BIN", env.home_root.join("missing-rimz"))
+        .output()
+        .expect("tick without a runner");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let root = canonical(root);
+    let fired = read_loop_run_records(env).iter().any(|record| {
+        record.root.as_deref() == Some(root.as_path())
+            && record.result == LoopRunResult::StartFailed
+    });
+    let absent = !env.rimz_home().join("ws").exists();
+    // No child can birth a room; restore the due stamp for the real-run assertion.
+    std::fs::write(fire_path, before).expect("restore fire state after probe");
+    fired && absent
 }
 
 fn wait_for_path(path: &Path) {

@@ -9,6 +9,7 @@ use crate::common::{Env, zellij_trace_shim};
 #[test]
 fn message_routes_to_named_channel_targets() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     register_idle_channel_agent(&env, "sess-channel-message", "design");
     let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "claude")]);
@@ -97,6 +98,7 @@ fn message_routes_to_named_channel_targets() {
 #[test]
 fn bare_role_spawn_resolves_against_the_lane_team() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     write_forge_team_config(&env);
     register_idle_lane_agent(&env, "sess-forge-planner", "forge", Some("forge"));
@@ -131,6 +133,7 @@ fn bare_role_spawn_resolves_against_the_lane_team() {
 #[test]
 fn bare_role_colliding_with_a_cell_word_refuses() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     write_forge_team_config(&env);
     register_idle_lane_agent(&env, "sess-forge-planner", "forge", Some("forge"));

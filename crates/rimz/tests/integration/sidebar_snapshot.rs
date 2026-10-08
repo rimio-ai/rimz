@@ -372,6 +372,7 @@ fn sidebar_suppresses_claude_rc_badge_when_auth_blocks_remote_control() {
 #[test]
 fn codex_identity_enrichment_preserves_hook_owned_question() {
     let env = Env::new();
+    env.record(&env.project_root);
     let session_id = "11111111-1111-4111-8111-111111111111";
     let now = jiff::Timestamp::now();
     let date = now.to_zoned(jiff::tz::TimeZone::UTC).date();

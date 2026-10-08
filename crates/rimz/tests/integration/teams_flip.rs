@@ -266,6 +266,7 @@ struct Fixture {
 impl Fixture {
     fn new() -> Self {
         let env = Env::new();
+        env.record(&env.project_root);
         env.install_agent_hooks("claude");
         crate::common::write_definition(
             &env,

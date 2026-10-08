@@ -10,6 +10,7 @@ use crate::common::{CommandTimeoutExt, Env};
 #[test]
 fn plugin_scaffold_registry_doctor_and_start_validation_work_end_to_end() {
     let env = Env::new();
+    env.record(&env.project_root);
     let output = env
         .rimz()
         .args(["agents", "register", "testbot"])

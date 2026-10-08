@@ -1711,6 +1711,7 @@ fn supervised_claude_without_folder_trust_passes_preflight() {
 #[test]
 fn hooks_bind_and_complete_supervised_run() {
     let env = Env::new();
+    env.record(&env.project_root);
     let store = env.store();
     let sessions = env.home_root.join("codex-sessions");
     let day = sessions.join("2026").join("06").join("10");
@@ -1789,6 +1790,7 @@ fn hooks_bind_and_complete_supervised_run() {
 #[test]
 fn a_ping_only_turn_leaves_the_team_leaders_reply_and_activity_alone() {
     let env = Env::new();
+    env.record(&env.project_root);
     let store = env.store();
     let mut record = RunRecord::new(
         env.workspace_id.clone(),
@@ -1845,6 +1847,7 @@ fn a_ping_only_turn_leaves_the_team_leaders_reply_and_activity_alone() {
 #[test]
 fn a_duplicate_real_verdict_inside_a_ping_moves_nothing() {
     let env = Env::new();
+    env.record(&env.project_root);
     let store = env.store();
     let mut record = RunRecord::new(
         env.workspace_id.clone(),
@@ -1938,6 +1941,7 @@ mod parked {
 
     impl Fixture {
         fn new(env: Env) -> Self {
+            env.record(&env.project_root);
             register_calling_agent(&env);
             let store = env.store();
             let record = RunRecord::new(
@@ -2267,6 +2271,7 @@ mod parked {
 #[test]
 fn copilot_hooks_bind_transcript_and_capture_supervised_final_text() {
     let env = Env::new();
+    env.record(&env.project_root);
     let store = env.store();
     let session_id = "copilot-run";
     let session_dir = env
@@ -2344,6 +2349,7 @@ fn copilot_hooks_bind_transcript_and_capture_supervised_final_text() {
 #[test]
 fn cursor_response_hook_seeds_run_before_terminal_outcome() {
     let env = Env::new();
+    env.record(&env.project_root);
     let store = env.store();
     let create_run = || {
         let record = RunRecord::new(
@@ -2695,6 +2701,7 @@ fn exec_wrapper_exit_ends_session_and_retires_its_subscription() {
     use rimz::config::Tasks;
 
     let env = Env::new();
+    env.record(&env.project_root);
     let store = env.store();
     let kind = AgentKind::new_unchecked("codex");
     let session_id = AgentSessionId::from("sess-wrapper-exit");
@@ -2740,6 +2747,7 @@ fn exec_wrapper_without_its_own_pane_binding_ends_nothing() {
     use rimz::config::Tasks;
 
     let env = Env::new();
+    env.record(&env.project_root);
     let store = env.store();
     let kind = AgentKind::new_unchecked("codex");
     let session_id = AgentSessionId::from("sess-wrapper-exit");
@@ -3422,6 +3430,7 @@ fn finish_run(store: &rimz::Store, record: &mut RunRecord) {
 #[test]
 fn run_stop_marks_canceled_and_wakes_waiter() {
     let env = Env::new();
+    env.record(&env.project_root);
     if env.skip_if_sandboxed() {
         return;
     }
@@ -3474,6 +3483,7 @@ fn run_stop_marks_canceled_and_wakes_waiter() {
 #[test]
 fn run_status_honors_pinned_room_inside_nested_repo() {
     let env = Env::new();
+    env.record(&env.project_root);
     let nested = env.project_root.join("code").join("query-engine");
     std::fs::create_dir_all(&nested).expect("mkdir nested repo");
     let status = Command::new("git")
@@ -3529,6 +3539,7 @@ fn run_status_honors_pinned_room_inside_nested_repo() {
 #[test]
 fn agents_show_retains_ended_pidless_audit_card_and_keeps_fresh_context() {
     let env = Env::new();
+    env.record(&env.project_root);
     let store = env.store();
     std::fs::write(store.paths().cache_dir.join("dead-reap.stamp"), b"")
         .expect("defer initial reap");
@@ -3652,6 +3663,7 @@ fn agents_show_filters_live_and_delivered_system_messages_in_human_and_json_view
 
     for conversation in [true, false] {
         let env = Env::new();
+        env.record(&env.project_root);
         let store = env.store();
         let mut observation = AgentLifecycleObservation::new(
             Some("sess-messages".into()),
@@ -3827,6 +3839,7 @@ fn agents_show_filters_live_and_delivered_system_messages_in_human_and_json_view
 #[test]
 fn agents_show_capture_errors_when_agent_has_no_bound_pane() {
     let env = Env::new();
+    env.record(&env.project_root);
     let store = env.store();
     let mut observation = rimz::agents::AgentLifecycleObservation::new(
         Some("sess-captureless".into()),
@@ -3866,6 +3879,7 @@ fn agents_show_capture_errors_when_agent_has_no_bound_pane() {
 #[test]
 fn agents_list_requires_live_room() {
     let env = Env::new();
+    env.record(&env.project_root);
 
     assert_agents_list_requires_live_room(&env, &["agents", "list"]);
     assert_agents_list_requires_live_room(&env, &["agents", "list", "--all"]);
@@ -3893,6 +3907,7 @@ fn assert_agents_list_requires_live_room(env: &Env, args: &[&str]) {
 #[test]
 fn agents_cli_routes_launch_role_to_successful_same_instance_successor() {
     let env = Env::new();
+    env.record(&env.project_root);
     let workspace = env.resolve_workspace(&env.project_root);
     let store = env.store();
     let pane_id = PaneId::from_parts(MuxName::Tmux, "%1");
@@ -4015,6 +4030,7 @@ fn agents_cli_routes_launch_role_to_successful_same_instance_successor() {
 #[test]
 fn agents_scope_positional_refuses_with_the_lane_list_and_address_hint_is_actionable() {
     let env = Env::new();
+    env.record(&env.project_root);
     let workspace = env.resolve_workspace(&env.project_root);
     register_list_agent(&env, &workspace, "sess-auth", "claude", "auth", "%1");
     register_list_agent(&env, &workspace, "sess-ops", "codex", "ops", "%2");
@@ -4154,6 +4170,7 @@ fn assert_usage_refusal(out: &std::process::Output, list: &str) {
 #[test]
 fn agents_list_and_show_share_seat_active_time() {
     let env = Env::new();
+    env.record(&env.project_root);
     let workspace = env.resolve_workspace(&env.project_root);
     for (id, name, pane, parent) in [
         ("parent", "seat-parent", "%1", None),
@@ -4375,6 +4392,7 @@ fn run_stream_prints_codex_and_copilot_text_until_terminal_record() {
         ),
     ] {
         let env = Env::new();
+        env.record(&env.project_root);
         let store = env.store();
         let transcript = env.runtime_root.join("run-stream.jsonl");
         std::fs::write(&transcript, "").expect("seed transcript");
@@ -4431,6 +4449,7 @@ fn run_stream_prints_codex_and_copilot_text_until_terminal_record() {
 #[test]
 fn run_stream_json_polls_transcript_until_terminal_record() {
     let env = Env::new();
+    env.record(&env.project_root);
     let store = env.store();
     let transcript = env.runtime_root.join("run-stream-json.jsonl");
     std::fs::write(&transcript, "").expect("seed transcript");
@@ -4497,6 +4516,7 @@ fn run_stream_json_polls_transcript_until_terminal_record() {
 #[test]
 fn run_stream_timeout_stops_watching_without_timing_out_run() {
     let env = Env::new();
+    env.record(&env.project_root);
     let store = env.store();
     let mut record = RunRecord::new(
         env.workspace_id.clone(),
@@ -4777,6 +4797,7 @@ impl WaitResolutionWatch {
 #[test]
 fn wait_single_run_prints_full_human_output_and_terminal_exit() {
     let env = Env::new();
+    env.record(&env.project_root);
     let store = env.store();
     let mut record = create_running_named_run(&env, &store, "swift-otter");
     record.last_message = Some("finished review\n".to_owned());
@@ -4801,6 +4822,7 @@ fn wait_single_run_prints_full_human_output_and_terminal_exit() {
 #[test]
 fn wait_single_run_json_prints_full_record() {
     let env = Env::new();
+    env.record(&env.project_root);
     let store = env.store();
     let mut record = create_running_named_run(&env, &store, "swift-otter");
     record.last_message = Some("done".to_owned());
@@ -4921,6 +4943,7 @@ fn subagent_report_publishes_response_files_in_host_and_sandbox_views() {
 #[test]
 fn completed_subagent_wait_prints_the_durable_result_after_the_child_ends() {
     let env = Env::new();
+    env.record(&env.project_root);
     let store = env.store();
     let (record, parent_kind, parent_launch_id) = create_finished_subagent(&env, &store);
 
@@ -4999,6 +5022,7 @@ fn wait_rechecks_parent_rest_certificate_before_each_printed_result() {
 
 fn assert_wait_rechecks_parent_turn(settle_without_hook: bool) {
     let env = Env::new();
+    env.record(&env.project_root);
     let store = env.store();
     let (attended, parent_kind, parent_launch_id) = create_finished_subagent(&env, &store);
     let workspace = env.resolve_workspace(&env.project_root);
@@ -5130,6 +5154,7 @@ fn assert_wait_rechecks_parent_turn(settle_without_hook: bool) {
 #[test]
 fn wait_multi_blocks_until_all_terminal() {
     let env = Env::new();
+    env.record(&env.project_root);
     let store = env.store();
     let mut otter = create_running_named_run(&env, &store, "swift-otter");
     let mut fox = create_running_named_run(&env, &store, "quiet-fox");
@@ -5192,6 +5217,7 @@ fn wait_multi_exits_with_first_failed_code() {
 #[test]
 fn wait_multi_json_emits_labeled_map() {
     let env = Env::new();
+    env.record(&env.project_root);
     let store = env.store();
     let mut otter = create_running_named_run(&env, &store, "swift-otter");
     let mut fox = create_running_named_run(&env, &store, "quiet-fox");
@@ -5221,6 +5247,7 @@ fn wait_multi_json_emits_labeled_map() {
 #[test]
 fn wait_multi_json_reports_failed_entry_and_exit() {
     let env = Env::new();
+    env.record(&env.project_root);
     let store = env.store();
     let mut completed = create_running_named_run(&env, &store, "swift-otter");
     let mut failed = create_running_named_run(&env, &store, "quiet-fox");
@@ -5246,6 +5273,7 @@ fn wait_multi_json_reports_failed_entry_and_exit() {
 #[test]
 fn wait_any_prints_first_finisher_and_leaves_rest_running() {
     let env = Env::new();
+    env.record(&env.project_root);
     let store = env.store();
     let otter = create_running_named_run(&env, &store, "swift-otter");
     let mut fox = create_running_named_run(&env, &store, "quiet-fox");
@@ -5277,6 +5305,7 @@ fn wait_any_prints_first_finisher_and_leaves_rest_running() {
 #[test]
 fn wait_any_json_prints_winner_map() {
     let env = Env::new();
+    env.record(&env.project_root);
     let store = env.store();
     let otter = create_running_named_run(&env, &store, "swift-otter");
     let mut fox = create_running_named_run(&env, &store, "quiet-fox");
@@ -5308,6 +5337,7 @@ fn wait_any_json_prints_winner_map() {
 #[test]
 fn wait_any_first_finisher_failure_is_nonzero() {
     let env = Env::new();
+    env.record(&env.project_root);
     let store = env.store();
     let _otter = create_running_named_run(&env, &store, "swift-otter");
     let mut fox = create_running_named_run(&env, &store, "quiet-fox");
@@ -5336,6 +5366,7 @@ fn wait_any_first_finisher_failure_is_nonzero() {
 #[test]
 fn wait_any_same_poll_selects_first_input_reference() {
     let env = Env::new();
+    env.record(&env.project_root);
     let store = env.store();
     let mut otter = create_running_named_run(&env, &store, "swift-otter");
     let mut fox = create_running_named_run(&env, &store, "quiet-fox");
@@ -5363,6 +5394,7 @@ fn wait_any_same_poll_selects_first_input_reference() {
 #[test]
 fn wait_single_disappearing_agent_returns_resolution_error() {
     let env = Env::new();
+    env.record(&env.project_root);
     let store = env.store();
     register_running_wait_agent(&env, &store, "swift-otter", "sess-wait-single");
     let resolution = WaitResolutionWatch::arm(&store);
@@ -5393,6 +5425,7 @@ fn wait_single_disappearing_agent_returns_resolution_error() {
 #[test]
 fn wait_multi_disappearing_agent_records_failed_entry_and_diagnostic() {
     let env = Env::new();
+    env.record(&env.project_root);
     let store = env.store();
     register_running_wait_agent(&env, &store, "swift-otter", "sess-wait-multi");
     let mut fox = create_running_named_run(&env, &store, "quiet-fox");
@@ -5444,6 +5477,7 @@ fn wait_multi_rejects_stream() {
 #[test]
 fn wait_multi_timeout_exits_124() {
     let env = Env::new();
+    env.record(&env.project_root);
     let store = env.store();
     let otter = create_running_named_run(&env, &store, "swift-otter");
     let fox = create_running_named_run(&env, &store, "quiet-fox");
@@ -5470,6 +5504,7 @@ fn wait_multi_timeout_exits_124() {
 #[test]
 fn wait_single_timeout_names_the_pending_target() {
     let env = Env::new();
+    env.record(&env.project_root);
     let store = env.store();
     let otter = create_running_named_run(&env, &store, "swift-otter");
 
@@ -5502,6 +5537,7 @@ fn wait_single_timeout_names_the_pending_target() {
 #[test]
 fn wait_multi_json_timeout_stamps_pending_entries() {
     let env = Env::new();
+    env.record(&env.project_root);
     let store = env.store();
     let mut otter = create_running_named_run(&env, &store, "swift-otter");
     let fox = create_running_named_run(&env, &store, "quiet-fox");

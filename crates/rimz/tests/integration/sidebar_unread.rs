@@ -8,6 +8,7 @@ use crate::common::{Env, tmux_pane};
 #[test]
 fn sidebar_mark_unread_and_mark_read_drive_snapshot_unread_bit() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     register_running_agent(
         &env,
@@ -134,6 +135,7 @@ fn sidebar_notify_test_refuses_disabled_notifications_before_target_resolution()
 #[test]
 fn sidebar_notify_test_spawns_configured_command_with_notify_env() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     register_running_agent(
         &env,

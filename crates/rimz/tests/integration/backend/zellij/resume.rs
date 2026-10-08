@@ -18,6 +18,7 @@ fn steer_and_self_wait_reach_the_live_consumer_among_two_sessions() {
 
     for working in [false, true] {
         let env = Env::new();
+        env.record(&env.project_root);
         env.install_agent_hooks("claude");
         let workspace = env.resolve_workspace(&env.project_root);
         let room = LiveZellijSession::from_namespace(
@@ -209,6 +210,7 @@ fn closing_agent_pane_records_end_trace_when_session_survives_without_sidebar() 
     require_zellij!();
 
     let env = Env::new();
+    env.record(&env.project_root);
     let workspace = env.resolve_workspace(&env.project_root);
     let worktree = env.project_root.join("rimz-zellij");
     std::fs::create_dir_all(&worktree).expect("mkdir worktree");

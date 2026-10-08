@@ -444,6 +444,7 @@ const CODEX_ENV_CONFIG: &str =
 #[test]
 fn trusted_agent_env_reaches_the_spawned_agent() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.write_config(&env.project_root, CODEX_ENV_CONFIG);
     env.rimz().args(["trust", "grant"]).assert().success();
 
@@ -466,6 +467,7 @@ fn trusted_agent_env_reaches_the_spawned_agent() {
 #[test]
 fn untrusted_agent_env_refuses_the_launch() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.write_config(&env.project_root, CODEX_ENV_CONFIG);
 
     env.rimz()
@@ -481,6 +483,7 @@ fn untrusted_agent_env_refuses_the_launch() {
 #[test]
 fn trusted_claude_agent_view_env_reaches_the_process() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.write_config(
         &env.project_root,
         "[[agents]]\nname = \"claude\"\nenv = { CLAUDE_CODE_DISABLE_AGENT_VIEW = \"0\" }\n",
@@ -513,6 +516,7 @@ fn trusted_claude_agent_view_env_reaches_the_process() {
 #[test]
 fn resumed_agent_env_funnels_through_the_exec_wrapper() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.write_config(
         &env.project_root,
         "[[agents]]\nname = \"claude\"\nenv = { RIMZ_TEST_INJECTED = \"yes\" }\n",
@@ -544,6 +548,7 @@ fn resumed_agent_env_funnels_through_the_exec_wrapper() {
 #[test]
 fn untrusted_agent_env_refuses_a_resume_launch() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.write_config(&env.project_root, CODEX_ENV_CONFIG);
 
     env.rimz()
@@ -559,6 +564,7 @@ fn untrusted_agent_env_refuses_a_resume_launch() {
 #[test]
 fn untrusted_agent_env_refuses_an_agents_launch_before_side_effects() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.write_config(&env.project_root, CODEX_ENV_CONFIG);
 
     env.rimz()

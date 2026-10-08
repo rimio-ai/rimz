@@ -7,6 +7,7 @@ fn live_work_boundary_resize_is_audited() {
     require_tmux!();
 
     let env = Env::new();
+    env.record(&env.project_root);
     let server = TmuxServer::in_runtime_root(&env.runtime_root);
     let session = "boundary-audit";
     server
@@ -114,6 +115,7 @@ fn live_work_boundary_resize_is_audited() {
 fn sidebar_reload_keeps_mouse_capture_alive() {
     require_tmux!();
     let env = Env::new();
+    env.record(&env.project_root);
     let server = TmuxServer::in_runtime_root(&env.runtime_root);
     let session = "mouse-reload";
     let binary_dir = TempDir::new().expect("binary tempdir");
@@ -966,6 +968,7 @@ fn fixture_room_starts_no_codex_process_and_no_broker_pane() {
     require_tmux!();
 
     let env = Env::new();
+    env.record(&env.project_root);
     let witness_log = env.home_root.join("witness.log");
     let witness_bin = env.home_root.join("witness-bin");
     for program in ["codex", "claude"] {

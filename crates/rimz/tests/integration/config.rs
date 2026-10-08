@@ -1554,6 +1554,7 @@ fn setup_yes_preserves_template_comments_for_untouched_config() {
 #[test]
 fn config_set_account_history_declares_the_pool_and_leaves_links_to_accounts_add() {
     let env = Env::new();
+    env.record(&env.project_root);
     let rimz = || {
         let mut command = env.rimz();
         command

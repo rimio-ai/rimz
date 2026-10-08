@@ -13,6 +13,7 @@ use rimz::store::writer::AgentLifecycleIntent;
 #[test]
 fn wait_labels_persist_for_every_trigger_and_replace_watch_previews() {
     let env = Env::new();
+    env.record(&env.project_root);
     register_calling_agent(&env);
     let pid = std::process::id().to_string();
     let unicode_label = "é".repeat(60);
@@ -106,6 +107,7 @@ fn wait_and_loop_labels_refuse_invalid_text_before_writing() {
 #[test]
 fn loop_labels_persist_in_machine_project_and_delivery_tasks() {
     let env = Env::new();
+    env.record(&env.project_root);
     register_calling_agent(&env);
     for (name, extra) in [
         ("machine", vec![]),
@@ -156,6 +158,7 @@ fn loop_labels_persist_in_machine_project_and_delivery_tasks() {
 #[test]
 fn wait_run_preserves_shell_string_and_runs_both_commands() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     register_calling_agent(&env);
     let command = "printf 'one\\n' && printf 'two\\n'";
@@ -189,6 +192,7 @@ fn wait_run_preserves_shell_string_and_runs_both_commands() {
 #[test]
 fn wait_run_keeps_the_agent_temp_environment() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     register_calling_agent(&env);
     let unit = env.home_root.join("unit");
@@ -238,6 +242,7 @@ fn wait_run_rejects_empty_commands() {
 #[test]
 fn wait_check_lists_elapsed_and_checkin_limit() {
     let env = Env::new();
+    env.record(&env.project_root);
     register_calling_agent(&env);
     let receipt = wait_ok(&env, &["wait", "--check", "false", "--timeout", "12m"]);
     assert!(
@@ -271,6 +276,7 @@ fn lost_watch_keeps_elapsed_and_recorded_checkin_limit() {
         ("true", serde_json::Value::Null, serde_json::Value::Null),
     ] {
         let env = Env::new();
+        env.record(&env.project_root);
         register_calling_agent(&env);
         wait_ok(&env, &["config", "set", "harness.cache_keepalive", switch]);
         wait_ok(
@@ -300,6 +306,7 @@ fn lost_watch_keeps_elapsed_and_recorded_checkin_limit() {
 #[test]
 fn loop_clock_wait_does_not_expose_check_guard_timeout_as_budget() {
     let env = Env::new();
+    env.record(&env.project_root);
     register_calling_agent(&env);
     let armed = env
         .rimz()
@@ -335,6 +342,7 @@ fn loop_clock_wait_does_not_expose_check_guard_timeout_as_budget() {
 #[test]
 fn wait_delay_arms_instance_for_the_calling_agent() {
     let env = Env::new();
+    env.record(&env.project_root);
     register_calling_agent_with_launch(
         &env,
         LaunchParams {
@@ -452,6 +460,7 @@ fn wait_checkin_default_yields_to_keepalive_but_explicit_timeout_wins() {
         ("true", "1h", Some("1s"), Some("1s")),
     ] {
         let env = Env::new();
+        env.record(&env.project_root);
         register_calling_agent(&env);
         wait_ok(&env, &["config", "set", "harness.cache_keepalive", switch]);
         wait_ok(
@@ -487,6 +496,7 @@ fn agents_wait_exit(env: &Env) -> Option<i32> {
 #[test]
 fn calling_agent_can_list_and_cancel_human_armed_loop_delivery_by_launch_identity() {
     let env = Env::new();
+    env.record(&env.project_root);
     register_calling_agent(&env);
     let armed = env
         .rimz()
@@ -545,6 +555,7 @@ fn calling_agent_can_list_and_cancel_human_armed_loop_delivery_by_launch_identit
 #[test]
 fn wait_arm_refuses_a_plain_shell() {
     let env = Env::new();
+    env.record(&env.project_root);
     let output = env
         .rimz()
         .args(["wait", "--in", "5m"])
@@ -591,6 +602,7 @@ fn wait_rejects_watch_checkins_at_or_above_24_hours() {
 #[test]
 fn wait_pid_checks_in_then_delivers_after_process_disappears_without_output_file() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     register_calling_agent(&env);
     let mut process = std::process::Command::new("sleep")
@@ -653,6 +665,7 @@ fn wait_pid_checks_in_then_delivers_after_process_disappears_without_output_file
 #[test]
 fn canceling_pid_wait_leaves_the_existing_process_running() {
     let env = Env::new();
+    env.record(&env.project_root);
     register_calling_agent(&env);
     let mut process = std::process::Command::new("sleep")
         .arg("30")
@@ -686,6 +699,7 @@ fn wait_pid_refuses_a_process_it_cannot_observe() {
         return;
     }
     let env = Env::new();
+    env.record(&env.project_root);
     register_calling_agent(&env);
     let output = agent_wait(&env)
         .args(["wait", "--pid", "1"])
@@ -732,6 +746,7 @@ fn wait_pid_rejects_invalid_pids_and_conflicting_triggers() {
 #[test]
 fn wait_check_polls_until_the_command_succeeds_then_retires() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     register_calling_agent(&env);
     let flag = env.home_root.join("check-flag");
@@ -779,6 +794,7 @@ fn wait_check_polls_until_the_command_succeeds_then_retires() {
 #[test]
 fn wait_check_on_fail_checks_in_with_still_not_met() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     register_calling_agent(&env);
     let flag = env.home_root.join("check-flag");
@@ -814,6 +830,7 @@ fn wait_check_on_fail_checks_in_with_still_not_met() {
 #[test]
 fn wait_check_reports_a_command_it_cannot_run() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     register_calling_agent(&env);
     wait_ok(&env, &["wait", "--check", "definitely-not-a-rimz-command"]);
@@ -874,6 +891,7 @@ fn wait_check_rejects_shapes_without_a_meaning() {
 #[test]
 fn wait_file_fires_on_any_change_including_creation() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     register_calling_agent(&env);
     let dir = env.project_root.join("logs");
@@ -934,6 +952,7 @@ fn wait_file_fires_on_any_change_including_creation() {
 #[test]
 fn wait_file_grep_fires_only_on_a_line_after_the_arm_point() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     register_calling_agent(&env);
     let path = canonical(&env.home_root).join("server.log");
@@ -998,6 +1017,7 @@ fn wait_file_grep_fires_only_on_a_line_after_the_arm_point() {
 #[test]
 fn watched_wait_runs_in_the_arming_worktree() {
     let env = Env::new();
+    env.record(&env.project_root);
     let initialized = std::process::Command::new("git")
         .args(["init", "-q"])
         .current_dir(&env.project_root)
@@ -1074,6 +1094,7 @@ fn watched_wait_runs_in_the_arming_worktree() {
 #[test]
 fn watched_failure_preserves_full_output_and_delivers_its_summary() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     register_calling_agent(&env);
     let output = agent_wait(&env)
@@ -1167,6 +1188,7 @@ fn watched_wait_survives_the_arming_process_group_exiting() {
     use std::process::Stdio;
 
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     register_calling_agent(&env);
     let child = agent_wait(&env)
@@ -1197,6 +1219,7 @@ fn watched_wait_survives_the_arming_process_group_exiting() {
 #[test]
 fn missing_watcher_row_reports_its_error_to_the_wait_output() {
     let env = Env::new();
+    env.record(&env.project_root);
     let store = env.store();
     let dir = store.paths().out_reader_dir(None);
     std::fs::create_dir_all(&dir).unwrap();
@@ -1219,6 +1242,7 @@ fn missing_watcher_row_reports_its_error_to_the_wait_output() {
 #[test]
 fn lost_watcher_delivers_elapsed_and_the_existing_output_summary() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     register_calling_agent(&env);
     let receipt = wait_ok(
@@ -1305,6 +1329,7 @@ fn lost_watcher_delivers_elapsed_and_the_existing_output_summary() {
 fn watch_retires_without_delivery_when_its_polarity_does_not_match() {
     for (on, command) in [("fail", "true"), ("success", "false")] {
         let env = Env::new();
+        env.record(&env.project_root);
         env.install_agent_hooks("claude");
         register_calling_agent(&env);
         wait_ok(&env, &["wait", "--on", on, "--run", command]);
@@ -1320,6 +1345,7 @@ fn watch_retires_without_delivery_when_its_polarity_does_not_match() {
 fn self_wait_queues_with_any_gate_for_working_and_idle_targets() {
     for working in [false, true] {
         let env = Env::new();
+        env.record(&env.project_root);
         env.install_agent_hooks("claude");
         register_calling_agent(&env);
         // The idle target rests after a finished turn, so only the wake in
@@ -1382,6 +1408,7 @@ fn watch_checkin_delivers_once_without_consuming_or_killing_command() {
         ("fail", "0", false),
     ] {
         let env = Env::new();
+        env.record(&env.project_root);
         env.install_agent_hooks("claude");
         register_calling_agent(&env);
         let release = env.home_root.join("release");
@@ -1544,6 +1571,7 @@ fn watch_checkin_delivers_once_without_consuming_or_killing_command() {
 #[test]
 fn once_wait_subscriber_is_consumed_by_watcher_checkin() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     register_calling_agent(&env);
     wait_ok(
@@ -1635,6 +1663,7 @@ fn once_wait_subscriber_is_consumed_by_watcher_checkin() {
 #[test]
 fn watcher_survives_retiring_its_own_row_mid_fire() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     register_calling_agent(&env);
     register_agent(
@@ -1731,6 +1760,7 @@ fn stamp_session_ended(env: &Env, session_id: &str) {
 #[test]
 fn wait_cancel_before_watcher_start_prevents_command() {
     let env = Env::new();
+    env.record(&env.project_root);
     register_calling_agent(&env);
     let receipt = wait_ok(&env, &["wait", "--in", "5m", "--json"]);
     let receipt: serde_json::Value = serde_json::from_str(&receipt).unwrap();
@@ -1759,6 +1789,7 @@ fn wait_cancel_before_watcher_start_prevents_command() {
 #[test]
 fn wait_cancel_all_stops_command_groups_and_prints_pending() {
     let env = Env::new();
+    env.record(&env.project_root);
     register_calling_agent(&env);
     let mut pids = Vec::new();
     for index in 0..2 {
@@ -1810,6 +1841,7 @@ fn wait_receipts_and_list_share_pending_rows() {
         rows
     };
     let env = Env::new();
+    env.record(&env.project_root);
     register_calling_agent(&env);
     let first = wait_ok(&env, &["wait", "--in", "5m", "--json"]);
     let first: serde_json::Value = serde_json::from_str(&first).unwrap();

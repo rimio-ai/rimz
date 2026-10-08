@@ -144,8 +144,7 @@ fn project_lane_enrich_reads_stale_codex_daemon_reap_without_rewriting() {
 fn producer_binding_log_dedups_unchanged_lazy_pairing_ambiguity() {
     let (dir, runtime, snapshot) = runtime();
     let state = crate::StatePaths::under(snapshot.workspace_id.clone(), dir.path()).unwrap();
-    std::fs::create_dir_all(&state.root).unwrap();
-    let store = Store::open_existing(state.clone(), runtime.clone()).unwrap();
+    let store = Store::open(state.clone(), runtime.clone()).unwrap();
     let fold = |snapshot, frame| {
         enrich(
             snapshot,

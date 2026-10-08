@@ -28,6 +28,7 @@ fn bash_registration_calls_the_rimz_binary() {
 #[test]
 fn dynamic_completion_reads_live_handles_and_message_ids() {
     let env = Env::new();
+    env.record(&env.project_root);
     let mut observation =
         AgentLifecycleObservation::new(Some("sess-coder".into()), LifecycleSignal::Registered);
     observation.launch.role = Some("coder".to_owned());

@@ -42,6 +42,7 @@ fn teams_show_root_alias_misses_use_main() {
 impl Fixture {
     fn new() -> Self {
         let env = Env::new();
+        env.record(&env.project_root);
         crate::common::write_definition(
             &env,
             "agents",

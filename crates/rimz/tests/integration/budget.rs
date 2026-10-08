@@ -9,6 +9,7 @@ use rimz::ids::{AgentKind, LoginKey};
 #[test]
 fn budget_set_raise_clear_and_config_routes() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.rimz().args(["config", "init"]).assert().success();
     env.rimz()
         .args(["config", "set", "harness.budget", "50/day"])
@@ -129,6 +130,7 @@ fn budget_set_raise_clear_and_config_routes() {
 #[test]
 fn budget_ignores_ineligible_siblings_and_warns_only_for_fleet_reports() {
     let env = Env::new();
+    env.record(&env.project_root);
     std::fs::create_dir_all(env.rimz_home()).expect("config dir");
     std::fs::write(
         env.rimz_home().join("config.toml"),
@@ -180,6 +182,7 @@ fn budget_ignores_ineligible_siblings_and_warns_only_for_fleet_reports() {
 #[test]
 fn budget_refuses_to_arm_unconfigured_daily_caps() {
     let env = Env::new();
+    env.record(&env.project_root);
 
     env.rimz()
         .args(["budget", "20/day", "--no-continue"])
@@ -261,6 +264,7 @@ fn a_cross_account_resume_is_stopped_and_hook_checked_under_its_new_account() {
     const SESSION: &str = "sess-pool";
     const PANE: &str = "terminal_3";
     let env = Env::new();
+    env.record(&env.project_root);
     let workspace = env.resolve_workspace(&env.project_root);
     let rimz = || {
         let mut command = env.rimz();

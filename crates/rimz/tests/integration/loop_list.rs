@@ -223,6 +223,7 @@ fn other_room_hints_act_on_that_room() {
     let env = Env::new();
     let other = env.home_root.join("other ' room");
     std::fs::create_dir(&other).unwrap();
+    env.record(&other);
     config(&env, BTreeMap::from([("discover".into(), task(&other))]));
     write_loop_instances(
         &env,
@@ -670,6 +671,7 @@ fn each_worktree_uses_acting_history_and_launch_count() {
 fn watch_label_lost_and_caller_markers_are_enrichment() {
     let env = Env::new();
     assert!(init_git_repo(&env.project_root));
+    env.record(&env.project_root);
     let checkout = env.home_root.join("feature");
     assert!(git_ok(
         &env.project_root,

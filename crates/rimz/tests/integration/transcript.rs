@@ -71,6 +71,7 @@ fn transcript_cli_bounds_human_stdout_but_not_json_or_zero() {
 #[test]
 fn main_transcript_filter_stays_in_current_workspace_and_matches_root_records() {
     let env = Env::new();
+    env.record(&env.project_root);
     let paths = env.store().paths().clone();
     for (id, channel, text) in [
         ("root", Some("project"), "root record"),
@@ -120,6 +121,7 @@ fn main_transcript_filter_stays_in_current_workspace_and_matches_root_records() 
 #[test]
 fn agents_show_ambiguity_excludes_ended_matches() {
     let env = Env::new();
+    env.record(&env.project_root);
     let store = env.store();
     for n in 0..12 {
         let mut observation = rimz::agents::AgentLifecycleObservation::new(
@@ -182,6 +184,7 @@ fn agents_show_ambiguity_excludes_ended_matches() {
 #[test]
 fn agents_show_from_main_checkout_uses_callers_channel() {
     let env = Env::new();
+    env.record(&env.project_root);
     let store = env.store();
     for (n, role, channel) in [(0, "caller", "a"), (1, "peer", "a"), (2, "peer", "b")] {
         let mut observation = rimz::agents::AgentLifecycleObservation::new(
@@ -226,6 +229,7 @@ fn agents_show_from_main_checkout_uses_callers_channel() {
 #[test]
 fn transcript_live_ambiguity_matches_agents_show() {
     let env = Env::new();
+    env.record(&env.project_root);
     register_address_peer(&env, "claude", "live-a", "peer", "a", 1);
     register_address_peer(&env, "claude", "live-b", "peer", "b", 2);
     let show = env
@@ -246,6 +250,7 @@ fn transcript_live_ambiguity_matches_agents_show() {
 #[test]
 fn transcript_from_main_checkout_resolves_peer_and_me() {
     let env = Env::new();
+    env.record(&env.project_root);
     for (n, role, channel) in [(0, "caller", "a"), (1, "peer", "a"), (2, "peer", "b")] {
         let id = format!("session-{n}");
         register_address_peer(&env, "claude", &id, role, channel, n);
@@ -288,6 +293,7 @@ fn transcript_from_main_checkout_resolves_peer_and_me() {
 #[test]
 fn transcript_live_empty_focus_does_not_use_other_channel_lines() {
     let env = Env::new();
+    env.record(&env.project_root);
     register_address_peer(&env, "claude", "live-a", "peer", "a", 1);
     let mut other = entry(
         "old-b",
@@ -331,6 +337,7 @@ fn transcript_unknown_target_with_populated_log_uses_resolver_error() {
 
 fn assert_unknown_transcript_target(populated: bool) {
     let env = Env::new();
+    env.record(&env.project_root);
     if populated {
         append_transcript(
             &env,
@@ -365,6 +372,7 @@ fn transcript_shadowed_historical_candidates_round_trip() {
 
 fn assert_historical_ambiguity_round_trips(shadowed: bool) {
     let env = Env::new();
+    env.record(&env.project_root);
     for channel in ["a", "b"] {
         let mut line = entry(
             &format!("old-{channel}"),
@@ -432,6 +440,7 @@ fn register_address_peer(env: &Env, kind: &str, id: &str, role: &str, channel: &
 #[test]
 fn transcript_renders_durable_turns_asks_answers_and_channels() {
     let env = Env::new();
+    env.record(&env.project_root);
     if env.skip_if_sandboxed() {
         return;
     }
@@ -542,6 +551,7 @@ fn transcript_renders_durable_turns_asks_answers_and_channels() {
 #[test]
 fn transcript_records_native_ask_question_context_and_answer() {
     let env = Env::new();
+    env.record(&env.project_root);
     let branch = "native-ask-transcript";
     let session_id = "sess-native-ask";
     let claude_path = env.home_root.join("native-ask-chat.jsonl");
@@ -669,6 +679,7 @@ fn transcript_records_native_ask_question_context_and_answer() {
 #[test]
 fn transcript_records_pane_typed_prompt_as_open_ask_answer() {
     let env = Env::new();
+    env.record(&env.project_root);
     let branch = "pane-answer-transcript";
     let session_id = "sess-pane-answer";
     let claude_path = env.home_root.join("pane-answer-chat.jsonl");
@@ -957,6 +968,7 @@ fn transcript_attributes_agent_messages_and_filters_agent_view() {
 #[test]
 fn transcript_hook_records_routed_prompt_as_message_entry() {
     let env = Env::new();
+    env.record(&env.project_root);
     let branch = "hook-routed-transcript";
     register_codex_turn(
         &env,
@@ -993,6 +1005,7 @@ fn signal_delivery_is_acknowledged_and_hidden_from_rendered_transcript() {
     };
 
     let env = Env::new();
+    env.record(&env.project_root);
     let session_id = "sess-signal-transcript";
     let branch = "signal-transcript";
     register_codex_turn(&env, session_id, branch, "visible request", "initial reply");
@@ -1070,6 +1083,7 @@ fn signal_delivery_is_acknowledged_and_hidden_from_rendered_transcript() {
 #[test]
 fn transcript_hook_strips_user_message_header_from_prompt_entry() {
     let env = Env::new();
+    env.record(&env.project_root);
     register_codex_turn(
         &env,
         "sess-hook-user",
@@ -1092,6 +1106,7 @@ fn transcript_hook_strips_user_message_header_from_prompt_entry() {
 #[test]
 fn transcript_scopes_launched_child_and_attributes_brief() {
     let env = Env::new();
+    env.record(&env.project_root);
     let branch = "launched-child-transcript";
     let store = env.store();
     let parent_kind = AgentKind::new_unchecked("claude");
@@ -1230,6 +1245,7 @@ fn transcript_scopes_launched_child_and_attributes_brief() {
 #[test]
 fn transcript_defaults_to_live_session_and_archives_prior_life() {
     let env = Env::new();
+    env.record(&env.project_root);
     let branch = "living-transcript";
     append_transcript(
         &env,
@@ -1322,6 +1338,7 @@ fn transcript_defaults_to_live_session_and_archives_prior_life() {
 #[test]
 fn transcript_archive_hint_echoes_worktree_root_and_plural_entries() {
     let env = Env::new();
+    env.record(&env.project_root);
     for text in ["old one", "old two"] {
         append_transcript(
             &env,
@@ -1545,6 +1562,7 @@ fn message_entry(
 }
 
 fn append_transcript(env: &Env, entry: TranscriptEntry) {
+    env.record(&env.project_root);
     rimz::transcript::append(env.store().paths(), &entry).expect("append transcript");
 }
 

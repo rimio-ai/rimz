@@ -260,6 +260,7 @@ fn sandbox_unconfigured_unreadable_skills_keep_native_launch_behavior() {
     let execute = available();
     for invalid_name in [false, true] {
         let env = Env::new();
+        env.record(&env.project_root);
         let root = env.home_root.join(".agents/skills");
         std::fs::create_dir_all(root.parent().unwrap()).unwrap();
         if invalid_name {
@@ -501,6 +502,7 @@ fn sandboxed_exec_merges_library_without_native_skill_root() {
         return;
     }
     let env = Env::new();
+    env.record(&env.project_root);
     enable(&env);
     let root = env.home_root.join(".agents/skills");
     let library = env.rimz_home().join("skills/library-only");
@@ -919,6 +921,7 @@ fn sandbox_prepare_preserves_symlinked_skill_sources() {
 #[test]
 fn sandbox_symlinked_manual_skills_resolve_shared_modules() {
     let env = Env::new();
+    env.record(&env.project_root);
     let root = env.home_root.join(".claude/skills");
     let source = env.home_root.join(".agents/skills/manual");
     let shared = source.parent().unwrap().join("_shared");
@@ -1169,6 +1172,7 @@ fn sandboxed_exec_shows_profile_skill_view_and_shared_temp_unit() {
         return;
     }
     let env = Env::new();
+    env.record(&env.project_root);
     enable(&env);
     let cwd = env
         .store()
@@ -1393,6 +1397,7 @@ fn sandboxed_exec_uses_probed_bwrap_with_trusted_path() {
         return;
     }
     let env = Env::new();
+    env.record(&env.project_root);
     enable(&env);
     let shim_dir = write_env_dump_shim(&env, "codex");
     std::fs::write(
@@ -1434,6 +1439,7 @@ fn a_shared_account_writes_its_history_into_the_default_home_under_both_isolatio
             continue;
         }
         let env = Env::new();
+        env.record(&env.project_root);
         let work = env.home_root.join("work");
         let native = env.home_root.join(".codex");
         std::fs::create_dir_all(native.join("sessions")).unwrap();
@@ -1502,6 +1508,7 @@ fn a_sandboxed_named_account_reaches_a_default_home_under_tmp_outside_home() {
     // standalone one its settings: both reach through the account home.
     for history in ["shared", "standalone"] {
         let env = Env::new();
+        env.record(&env.project_root);
         let work = env.home_root.join("work");
         // The provider's own home, moved by its native override to a `/tmp`
         // path no rebound root contains: the temp unit mounted over `/tmp`
@@ -1574,6 +1581,7 @@ fn a_sandboxed_named_account_reaches_a_default_home_under_tmp_outside_home() {
 #[test]
 fn sandbox_skills_under_host_use_provider_switches() {
     let env = Env::new();
+    env.record(&env.project_root);
     let shell = write_fake_login_shell(&env, "host-skills-shell", &[]);
     let probe = env.home_root.join("provider-env");
     let library_skill = env.agents_home().join("skills/unlisted-dir");
@@ -1721,6 +1729,7 @@ fn sandbox_skills_under_host_use_provider_switches() {
 #[test]
 fn a_nested_launch_drops_a_parent_temp_root_it_does_not_own() {
     let env = Env::new();
+    env.record(&env.project_root);
     let shell = write_fake_login_shell(&env, "nested-temp-shell", &[]);
     let probe = env.home_root.join("provider-env");
     let parent = env.home_root.join("parent-unit");
@@ -2033,6 +2042,7 @@ fn host_skill_links_apply_tolerates_siblings_and_reports_foreign_races() {
 fn host_exec_links_library_into_codex_and_claude_account_roots_once() {
     for kind in ["codex", "claude"] {
         let env = Env::new();
+        env.record(&env.project_root);
         let library = env.agents_home().join("skills");
         std::fs::create_dir_all(library.join("shared")).unwrap();
         std::fs::write(library.join("shared/SKILL.md"), "shared skill").unwrap();
