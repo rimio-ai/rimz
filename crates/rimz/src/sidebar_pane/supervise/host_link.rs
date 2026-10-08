@@ -23,10 +23,7 @@ pub(super) const HOST_WAIT: Duration = Duration::from_secs(2);
 pub(super) const REPLY_WAIT: Duration = Duration::from_secs(5);
 const CONNECT_RETRY: Duration = Duration::from_millis(20);
 
-/// Per-pane and per-session variables a host must not inherit from the pane
-/// that happened to start it: it belongs to no pane, and process attribution
-/// reads these from its environment. The mux's own endpoint variables stay,
-/// so the host reaches the same server its panes live in.
+/// Per-pane and per-session variables a host must not inherit from the pane that happened to start it: it belongs to no pane, and process attribution reads these from its environment. The host gets its room and mux from `host_args` and passes them to its helpers by argv.
 const PANE_SCOPED_ENV: &[&str] = &[
     "TMUX",
     "TMUX_PANE",

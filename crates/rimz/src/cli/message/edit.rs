@@ -319,9 +319,24 @@ pub(super) fn deliver_message(message_id: MessageId, globals: &GlobalFlags) -> R
     Ok(())
 }
 
-pub(super) fn sweep_messages(globals: &GlobalFlags) -> Result<()> {
-    let ctx = Ctx::open(globals)?;
-    let (workspace, store) = (&ctx.workspace, &ctx.store);
-    deliver::sweep(workspace, store, globals.mux)?;
+pub(super) fn sweep_messages(
+    workspace_id: Option<WorkspaceId>,
+    globals: &GlobalFlags,
+) -> Result<()> {
+    if let Some(workspace_id) = workspace_id {
+        let ctx = Ctx::for_workspace(workspace_id, globals.mux)?;
+        deliver::sweep(&ctx.workspace, &ctx.store, globals.mux)?;
+        return Ok(());
+    }
+    let workspace =
+        rimz::workspace::WorkspaceResolver::resolve_participant(".", globals.root.clone())
+            .context("resolving current workspace")?;
+    let store = crate::cli::open_existing_store(&workspace)?.with_context(|| {
+        format!(
+            "no room at {}: nothing to sweep",
+            workspace.project_root.display()
+        )
+    })?;
+    deliver::sweep(&workspace, &store, globals.mux)?;
     Ok(())
 }

@@ -1627,6 +1627,103 @@ fn resume_prompt_wakes_and_sends_after_registration_without_a_stop() {
 }
 
 #[test]
+fn host_sweep_delivers_from_the_room_store_without_the_pane_env() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
+    register_running_agent(&env, "sess-host-sweep", "feature-host-sweep", pane_env);
+    let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "claude")]);
+    run_hook(
+        &env,
+        json!({
+            "hook_event_name": "Stop",
+            "session_id": "sess-host-sweep",
+            "worktree_branch": "feature-host-sweep",
+        }),
+        pane_env,
+    );
+    let store = env.store();
+    let snapshot = store.snapshot_cached().expect("snapshot");
+    let agent = snapshot
+        .agents
+        .iter()
+        .find(|agent| agent.agent_id.as_str() == "sess-host-sweep")
+        .expect("agent");
+    let due_at = jiff::Timestamp::now() - jiff::SignedDuration::from_secs(1);
+    let due = MessageRecord::new(
+        env.workspace_id.clone(),
+        agent,
+        "host sweep delivery".to_owned(),
+        DeliveryGate::Done,
+    )
+    .with_not_before(Some(due_at));
+    store
+        .queue_message(&due, "rimz-test")
+        .expect("queue due message");
+    rimz::disk::atomic::write_temp_then_rename_cache(&wake_stamp_path(&env), &Some(due_at))
+        .expect("write wake stamp");
+    let shared_root = env.runtime_paths().shared_root;
+    std::fs::create_dir_all(&shared_root).expect("mkdir shared runtime root");
+    let trace_log = env.project_root.join("host-sweep-trace.log");
+    run_success(
+        traced_rimz(&env, &trace_log)
+            .current_dir(&shared_root)
+            .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+            .args([
+                "--mux",
+                "zellij",
+                "message",
+                "sweep",
+                "--workspace-id",
+                env.workspace_id.as_str(),
+            ]),
+        "host message sweep",
+    );
+    assert_text_then_enter(&trace_log, &user_message("host sweep delivery"));
+    let messages = store.list_messages().expect("messages");
+    let sent = messages
+        .iter()
+        .find(|message| message.message_id == due.message_id)
+        .expect("swept message");
+    assert_eq!(sent.status, MessageStatus::Sent);
+    let wait: Option<jiff::Timestamp> =
+        serde_json::from_slice(&std::fs::read(wake_stamp_path(&env)).expect("wake stamp"))
+            .expect("wake stamp json");
+    assert_eq!(wait, sent.sent_reconcile_deadline());
+    let workspaces: Vec<_> = std::fs::read_dir(env.rimz_home().join("ws"))
+        .expect("workspace directories")
+        .map(|entry| entry.expect("workspace entry").path())
+        .collect();
+    assert_eq!(workspaces, vec![store.paths().root.clone()]);
+}
+
+#[test]
+fn sweep_without_a_room_refuses_and_creates_nothing() {
+    let env = Env::new();
+    let shared_root = env.runtime_paths().shared_root;
+    std::fs::create_dir_all(&shared_root).expect("mkdir shared runtime root");
+    let output = env
+        .rimz()
+        .current_dir(&shared_root)
+        .args(["message", "sweep"])
+        .output()
+        .expect("message sweep");
+    assert!(!output.status.success(), "a sweep must not create a room");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("no room at"), "{stderr}");
+    assert!(stderr.contains("nothing to sweep"), "{stderr}");
+    let workspaces = env.rimz_home().join("ws");
+    assert!(
+        !workspaces.exists()
+            || std::fs::read_dir(&workspaces)
+                .expect("workspace entries")
+                .next()
+                .is_none(),
+        "a sweep must not create workspace state"
+    );
+}
+
+#[test]
 fn scheduled_message_parks_and_sweep_delivers_due_work() {
     let env = Env::new();
     env.install_agent_hooks("claude");

@@ -24,7 +24,7 @@ The rest of the module follows from that rule: how a record decides it is ready,
 | [`message/send.rs`](../../../crates/rimz/src/message/send.rs) | The pane write: bracketed paste, the submit barrier, pacing, the compact-first command, and shared wake-stamp maintenance. |
 | [`message/compact.rs`](../../../crates/rimz/src/message/compact.rs) | Standalone compaction for the operator verb and idle compaction: repeat refusal and boundary delivery. |
 | [`message/reply.rs`](../../../crates/rimz/src/message/reply.rs) | `--wait`: leg state machines, transcript anchoring, cycle detection, join settlement. |
-| [`message/fire.rs`](../../../crates/rimz/src/message/fire.rs) | The elder's side of the clock: read the wake stamp and spawn `message sweep`. |
+| [`message/fire.rs`](../../../crates/rimz/src/message/fire.rs) | The elder's side of the clock: read the wake stamp and spawn `message sweep`, naming the room by workspace id and mux. |
 | [`store/message.rs`](../../../crates/rimz/src/store/message.rs) | The record schema and vocabulary, card matching, FIFO, claim, and batch selection, prompt alignment for [confirmation](#confirmation-and-retry), and the read-only submitted-prompt origin classifier. |
 | [`store/message/codec.rs`](../../../crates/rimz/src/store/message/codec.rs) | The JSONL codec for the live queue and terminal history. |
 | [`store/writer/queue.rs`](../../../crates/rimz/src/store/writer/queue.rs) | Every status transition, under the workspace lock, with its audit event where one is written. |
@@ -250,7 +250,7 @@ Three paths converge on the same helper.
 
 The same reactor nudges the sweep when the event's agent is referenced by an unmet condition: `after` conditions on `DELIVERY_CHECKPOINT`, and `when` conditions on the wider [`CONDITION_CHECKPOINT`](../../../crates/rimz/src/agents/lifecycle/event.rs), which adds `TurnStarted`, `AwaitingInput`, and the subagent edges because a dwell can start or break on any of them. Both actions run after the `LifecycleEvent` commits, and the helper re-checks durable state before claiming.
 
-**The elder sweep.** The room's elected sidebar elder spawns `rimz message sweep` when the wake stamp comes due ([Scheduling and wakeups](#scheduling-and-wakeups)).
+**The elder sweep.** The room's elected sidebar elder spawns `rimz --mux <mux> message sweep --workspace-id <id>` when the wake stamp comes due ([Scheduling and wakeups](#scheduling-and-wakeups)). Its argv names the room and mux even though the host inherits no pane environment.
 
 **Auto-continue.** When a persisted park reaches its reset or backoff condition, the producer spawns `rimz agents auto-continue`, which queues a `Resume` message (or reuses the existing one) and calls the same helper ([providers.md § Auto-continue](../agents/providers.md#auto-continue)).
 
@@ -510,7 +510,7 @@ Before polling, the CLI prints each ordinary delivery receipt on stderr, includi
 The room's elected sidebar elder notices when a parked message comes due, through a deliberately thin handoff:
 
 1. The CLI writes `message-wake.json` under the runtime root with the earliest future time worth a look: a `not_before`, a `Queued` retry floor, a ready-queued backstop, a `Claimed` lease expiry, or an unconfirmed `Sent` reconcile deadline (30 s for prompts, 3 minutes for commands, per [Confirmation and retry](#confirmation-and-retry)).
-2. The elder reads only that file, and when the stamp comes due spawns a detached `rimz message sweep` ([`fire.rs`](../../../crates/rimz/src/message/fire.rs)). The elder does no store reads, store writes, or message logic.
+2. The elder reads only that file, and when the stamp comes due spawns a detached `rimz --mux <mux> message sweep --workspace-id <id>` ([`fire.rs`](../../../crates/rimz/src/message/fire.rs)), passing its room's workspace id and mux by argv. The elder does no store reads, store writes, or message logic.
 3. The sweep reconciles stale `Sent` records and expired `Claimed` records, evaluates unmet conditions, delivers ready FIFO heads, then rewrites or removes the wake stamp.
 
 The sweep is single-flight through a `message-sweep.lock` file lock, so overlapping wakeups collapse into one pass.
@@ -560,7 +560,7 @@ Flags and rendering are in [cli/message.md](../../reference/cli/message.md). Und
 - `message requeue` copies a terminal history record into a fresh `Queued` record with a new id, keeping text, receiver, channel, sender, body, delivery settings, and `in_reply_to`, and clearing condition stamps. A terminal row known only from events cannot be requeued, because its text was never stored there.
 - `message cancel` settles named live records. `message clear <target>` settles every open record for one card, and a targetless `message clear` settles the scoped lane. Both include system records hidden from the inbox, and `clear` prints the ids it canceled.
 
-Two hidden helpers do the pipeline's background work, each spawned detached: `message deliver --message-id <id>` and `message sweep`.
+Two hidden helpers do the pipeline's background work, each spawned detached: `message deliver --message-id <id>` and `message sweep --workspace-id <id>`. The sweep opens the recorded room by id without recording it again; the id wins over `--root`, and a missing workspace record is an error. Without an id, it resolves the participant room and opens only an existing store: no room means `no room at <project_root>: nothing to sweep`, a nonzero exit, and no state created.
 
 ## Channels
 
