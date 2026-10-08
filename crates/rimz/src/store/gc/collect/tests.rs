@@ -1,5 +1,5 @@
 use super::*;
-use crate::disk::paths::RuntimePaths;
+use crate::disk::paths::{RuntimePaths, StatePaths};
 use crate::ids::{MuxName, SidebarInstanceId};
 use crate::wakeup::heartbeat::SidebarHeartbeat;
 use tempfile::tempdir;
@@ -106,28 +106,31 @@ fn runtime_classes_preserve_lanes_and_probe_unlistened_sockets() {
 #[test]
 fn lock_sweep_keeps_held_files_and_previews_unheld_files() {
     let temp = tempdir().unwrap();
-    let held_path = temp.path().join("held.lock");
-    let free_path = temp.path().join("free.lock");
-    let held = crate::disk::lock::WorkspaceLock::acquire(&held_path).unwrap();
+    let paths =
+        StatePaths::under(WorkspaceId::from_project_root(temp.path()), temp.path()).unwrap();
+    let held_path = &paths.hook_ingress_lock;
+    let locks = held_path.parent().unwrap();
+    let free_path = locks.join("free.lock");
+    let held = crate::disk::lock::IngressAppendLock::acquire(held_path).unwrap();
     fs::write(&free_path, "old holder").unwrap();
     let mut preview = GcReport::default();
-    collect_locks(temp.path(), &mut Sweep::new(true), &mut preview).unwrap();
+    collect_locks(locks, &mut Sweep::new(true), &mut preview).unwrap();
     assert!(held_path.exists());
     assert!(free_path.exists());
     let mut actual = GcReport::default();
-    collect_locks(temp.path(), &mut Sweep::new(false), &mut actual).unwrap();
+    collect_locks(locks, &mut Sweep::new(false), &mut actual).unwrap();
     assert_eq!(preview.sidecar_files_removed, 0);
     assert_eq!(preview.locks_would_check, 2);
     assert_eq!(actual.sidecar_files_removed, 1);
     assert!(held_path.exists());
     assert!(!free_path.exists());
     assert!(
-        crate::disk::lock::WorkspaceLock::try_acquire(&held_path)
+        crate::disk::lock::WorkspaceLock::try_acquire(held_path)
             .unwrap()
             .is_none()
     );
     drop(held);
-    collect_locks(temp.path(), &mut Sweep::new(false), &mut actual).unwrap();
+    collect_locks(locks, &mut Sweep::new(false), &mut actual).unwrap();
     assert!(!held_path.exists());
 }
 

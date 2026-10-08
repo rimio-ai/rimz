@@ -200,6 +200,9 @@ pub struct StatePaths {
     pub out_dir: PathBuf,
     pub skills_dir: PathBuf,
     pub events_log: PathBuf,
+    pub hook_ingress_log: PathBuf,
+    pub hook_ingress_lock: PathBuf,
+    pub hook_drain_cursor: PathBuf,
     pub events_archive_dir: PathBuf,
     pub agents_carryover: PathBuf,
     pub snapshots_dir: PathBuf,
@@ -279,6 +282,9 @@ impl StatePaths {
             skills_dir: cache_dir.join("skills"),
             tmp_dir,
             events_log: history.events_log,
+            hook_ingress_log: Class::Log.path_under(&root).join("hook-ingress.log.jsonl"),
+            hook_ingress_lock: Class::Locks.path_under(&root).join("hook-ingress.lock"),
+            hook_drain_cursor: records_dir.join("hook-drain.json"),
             events_archive_dir: history.events_archive_dir,
             agents_carryover: records_dir.join("agents-carryover.json"),
             latest_snapshot: history.latest_snapshot,
@@ -333,6 +339,11 @@ impl StatePaths {
             "sidebar-host.{}.log",
             sidebar_host_key(mux, session_name)
         ))
+    }
+
+    /// The workspace hook drainer's diagnostic log.
+    pub fn hook_drainer_log(&self) -> PathBuf {
+        Class::Log.path_under(&self.root).join("hook-drainer.log")
     }
 
     pub fn ensure_dirs(&self) -> Result<()> {
@@ -810,6 +821,21 @@ impl RuntimePaths {
             "sidebar-host-spawn.{}.lock",
             sidebar_host_key(mux, session_name)
         ))
+    }
+
+    /// Request/reply socket of the workspace hook drainer.
+    pub fn hook_drainer_socket_path(&self) -> PathBuf {
+        self.sock_dir.join("hook-drainer.sock")
+    }
+
+    /// Held by the elected workspace hook drainer for its lifetime.
+    pub fn hook_drainer_lock(&self) -> PathBuf {
+        self.lock_path("hook-drainer.lock")
+    }
+
+    /// Serializes starters of the workspace hook drainer.
+    pub fn hook_drainer_spawn_lock(&self) -> PathBuf {
+        self.lock_path("hook-drainer-spawn.lock")
     }
 
     /// Path of a sidebar instance's read-mark receipt file. Receipts outlive the

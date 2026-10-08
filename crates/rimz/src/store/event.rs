@@ -533,6 +533,8 @@ impl PartialEq for EventKind<'_> {
 pub struct EventEnvelope {
     pub schema_version: String,
     pub event_id: EventId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ingress: Option<EventId>,
     pub workspace_id: WorkspaceId,
     pub session_name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -548,6 +550,7 @@ impl PartialEq for EventEnvelope {
     fn eq(&self, other: &Self) -> bool {
         self.schema_version == other.schema_version
             && self.event_id == other.event_id
+            && self.ingress == other.ingress
             && self.workspace_id == other.workspace_id
             && self.session_name == other.session_name
             && self.mux == other.mux
@@ -571,6 +574,7 @@ impl EventEnvelope {
         Self {
             schema_version: EVENT_SCHEMA_VERSION.to_owned(),
             event_id: EventId::new(),
+            ingress: None,
             workspace_id,
             session_name: session_name.into(),
             mux: None,

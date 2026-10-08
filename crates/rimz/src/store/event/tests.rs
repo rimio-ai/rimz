@@ -10,6 +10,68 @@ fn workspace() -> WorkspaceId {
 }
 
 #[test]
+fn envelope_without_ingress_keeps_its_old_shape_and_schema() {
+    let old = format!(
+        r#"{{"schema_version":"rimz.event.v2","event_id":"evt_0123456789abcdef0123456789abcdef","workspace_id":"{}","session_name":"session","source":"codex","source_kind":"agent","method":"future.event","timestamp":"2026-01-01T00:00:00Z","params":{{"text":"kept"}}}}"#,
+        workspace(),
+    );
+    let decoded = serde_json::from_str::<EventEnvelope>(&old);
+    assert!(
+        decoded.is_ok(),
+        "old-shape envelopes remain readable: {decoded:?}"
+    );
+    let event = decoded.unwrap();
+    assert_eq!(event.ingress, None);
+    assert_eq!(serde_json::to_string(&event).unwrap(), old);
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("events.log.jsonl");
+    std::fs::write(&path, format!("{} {old}\n", old.len())).unwrap();
+    assert_eq!(
+        crate::store::event_log::read_all(&path).unwrap(),
+        vec![event]
+    );
+    let constructed = EventEnvelope::new(
+        workspace(),
+        "session",
+        "codex",
+        "agent",
+        "future.event",
+        json!({}),
+    );
+    assert_eq!(constructed.schema_version, "rimz.event.v2");
+    assert!(
+        !serde_json::to_value(constructed)
+            .unwrap()
+            .as_object()
+            .unwrap()
+            .contains_key("ingress")
+    );
+}
+
+#[test]
+fn envelope_ingress_stamp_round_trips_and_distinguishes_frames() {
+    let mut event = EventEnvelope::new(
+        workspace(),
+        "session",
+        "codex",
+        "agent",
+        "future.event",
+        json!({}),
+    );
+    let unstamped = event.clone();
+    let id = EventId::new();
+    event.ingress = Some(id.clone());
+    assert_ne!(event, unstamped);
+    let encoded = serde_json::to_string(&event).unwrap();
+    assert_eq!(
+        serde_json::from_str::<EventEnvelope>(&encoded)
+            .unwrap()
+            .ingress,
+        Some(id)
+    );
+}
+
+#[test]
 fn launch_warnings_decode_with_optional_identity_and_future_fields() {
     for launch_id in [None, Some("launch-1")] {
         let event = EventEnvelope::new(

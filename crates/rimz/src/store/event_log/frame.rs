@@ -2,6 +2,8 @@ use std::fs::File;
 use std::io::{self, BufRead, BufReader, Seek, SeekFrom};
 use std::path::Path;
 
+use serde::de::DeserializeOwned;
+
 use crate::store::event::EventEnvelope;
 
 use super::{EventLogErr, Result, testkit};
@@ -69,6 +71,14 @@ pub(super) fn read_rows(path: &Path, start: u64) -> Result<Vec<(u64, bool, Vec<u
 /// Decode one raw row into its event: unterminated and non-UTF-8 rows read as
 /// torn, terminated ones go through the frame decoder.
 pub(super) fn decode_row(at: u64, terminated: bool, bytes: &[u8]) -> Result<EventEnvelope> {
+    decode_record(at, terminated, bytes)
+}
+
+pub(super) fn decode_record<T: DeserializeOwned>(
+    at: u64,
+    terminated: bool,
+    bytes: &[u8],
+) -> Result<T> {
     if !terminated {
         return Err(EventLogErr::Torn {
             offset: at,
@@ -84,7 +94,7 @@ pub(super) fn decode_row(at: u64, terminated: bool, bytes: &[u8]) -> Result<Even
     }
 }
 
-fn decode_line(line: &str, offset: u64) -> Result<EventEnvelope> {
+fn decode_line<T: DeserializeOwned>(line: &str, offset: u64) -> Result<T> {
     let (len, rest) = line.split_once(' ').ok_or_else(|| EventLogErr::Torn {
         offset,
         reason: "no length prefix".into(),
