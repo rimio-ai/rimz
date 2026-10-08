@@ -22,6 +22,8 @@ pub const DEFAULT_DELIVERY_WINDOW: Duration = Duration::from_secs(30);
 pub const DELIVERY_WINDOW_ENV: &str = "RIMZ_MESSAGE_DELIVERY_WINDOW_MS";
 pub const DEFAULT_COMMAND_DELIVERY_WINDOW: Duration = Duration::from_secs(180);
 pub const COMMAND_DELIVERY_WINDOW_ENV: &str = "RIMZ_MESSAGE_COMMAND_DELIVERY_WINDOW_MS";
+pub const DEFAULT_COMMAND_VALIDITY: Duration = Duration::from_secs(600);
+pub const COMMAND_VALIDITY_ENV: &str = "RIMZ_MESSAGE_COMMAND_VALIDITY_MS";
 /// Cap for pre-send delivery failures after a queued claim.
 pub const MAX_DELIVERY_ATTEMPTS: u32 = 5;
 pub(super) const CLAIM_TTL: Duration = Duration::from_secs(15);
@@ -281,6 +283,7 @@ pub enum MessageStatus {
     #[serde(alias = "removed")]
     Canceled,
     Abandoned,
+    Expired,
     Archived,
 }
 
@@ -293,6 +296,7 @@ impl MessageStatus {
                 | Self::Errored
                 | Self::Canceled
                 | Self::Abandoned
+                | Self::Expired
                 | Self::Archived
         )
     }
@@ -311,6 +315,7 @@ impl MessageStatus {
             Self::Errored => "errored",
             Self::Canceled => "canceled",
             Self::Abandoned => "abandoned",
+            Self::Expired => "expired",
             Self::Archived => "archived",
         }
     }
@@ -761,7 +766,20 @@ impl MessageRecord {
     }
 
     pub fn is_deliverable(&self, now: Timestamp) -> bool {
-        self.is_ready(now) && self.conditions_met()
+        self.is_ready(now) && self.conditions_met() && !self.expired(now)
+    }
+
+    pub fn perishable(&self) -> bool {
+        self.body == MessageBody::Command && self.automated
+    }
+
+    pub fn expires_at(&self) -> Option<Timestamp> {
+        self.perishable()
+            .then(|| self.enqueued_at + command_validity())
+    }
+
+    pub fn expired(&self, now: Timestamp) -> bool {
+        self.status == MessageStatus::Queued && self.expires_at().is_some_and(|at| now >= at)
     }
 
     pub fn sent_reconcile_deadline(&self) -> Option<Timestamp> {
@@ -782,12 +800,17 @@ impl MessageRecord {
     /// Next time the elder should sweep this record, or `None` if it arms nothing.
     pub fn wake_deadline(&self, now: Timestamp) -> Option<Timestamp> {
         match self.status {
-            MessageStatus::Queued => Some(
-                self.not_before
+            MessageStatus::Queued => {
+                let deadline = self
+                    .not_before
                     .filter(|not_before| *not_before > now)
                     .or(self.retry_after)
-                    .unwrap_or(self.updated_at),
-            ),
+                    .unwrap_or(self.updated_at);
+                Some(
+                    self.expires_at()
+                        .map_or(deadline, |expires_at| deadline.min(expires_at)),
+                )
+            }
             MessageStatus::Sent => self.retry_after.or_else(|| self.sent_reconcile_deadline()),
             MessageStatus::Claimed => {
                 Some(self.last_attempt_at.unwrap_or(self.updated_at) + CLAIM_TTL)
@@ -979,6 +1002,10 @@ fn batch_compatible(head: &MessageRecord, candidate: &MessageRecord, status: Age
         && candidate.batch_key() == head.batch_key()
         && candidate.force == head.force
         && gate_open(candidate.gate, status)
+}
+
+pub fn command_validity() -> Duration {
+    env_ms(COMMAND_VALIDITY_ENV).unwrap_or(DEFAULT_COMMAND_VALIDITY)
 }
 
 pub(crate) fn env_ms(key: &str) -> Option<Duration> {

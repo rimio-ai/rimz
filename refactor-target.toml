@@ -557,7 +557,8 @@ upward-dependencies = [
 # Attributed boundary nudges share queue-and-deliver with system nudges and retain their id on failure.
 # The synthetic request type and public submodule join the surface; two entry functions replace three.
 # The ended-receiver archive reason is one formatter for the sweep and the lifecycle reactor.
-surface-budget = 77
+# ExpiryCheck carries the first ordered delivery check into the CLI (+1).
+surface-budget = 78
 
 [[module]]
 path = "crates/rimz/src/mux"
@@ -735,7 +736,8 @@ path = "crates/rimz/src/store"
 # Fold-private audit text loading (+1).
 # Rotation commits the projected ordinal high-water mark (+1).
 # Thin park exports its raw LaunchTail with from_cursor and poll, the streaming visitor, and the generation header (+4 past the one free slot).
-surface-budget = 377
+# Automatic-command expiry shares three predicates, two constants, and its validity formatter input (+6).
+surface-budget = 383
 
 [[module]]
 path = "crates/rimz/src/theme"
@@ -1811,6 +1813,11 @@ reason = "Pass 13: show renders the complete ordered check; the record and its f
 
 [[verdict]]
 kind = "item"
+key = "message::deliver::ExpiryCheck"
+reason = "Public field type of DeliveryCheck; show reports read-time expiry before every other blocker."
+
+[[verdict]]
+kind = "item"
 key = "message::deliver::AfterConditionCheck"
 reason = "Pass 13: public field type of DeliveryCheck; narrowing violates private_interfaces under -D warnings, and show renders each."
 
@@ -2348,6 +2355,36 @@ reason = "The queue writer passes dynamic method and reason at seven sites; name
 kind = "item"
 key = "store::message::MessageStatus"
 reason = "The pending and removed serde aliases are load-bearing: 20f455f0b kept legacy store parsing so mixed-binary workspaces read old records (pass 21b)."
+
+[[verdict]]
+kind = "item"
+key = "store::message::DEFAULT_COMMAND_VALIDITY"
+reason = "The ten-minute automatic-command window is shared vocabulary for queue readers, diagnosis and tests."
+
+[[verdict]]
+kind = "item"
+key = "store::message::COMMAND_VALIDITY_ENV"
+reason = "Tests shorten the derived window without changing durable records; the CLI shares the same timing source."
+
+[[verdict]]
+kind = "item"
+key = "store::message::command_validity"
+reason = "Read-time expiry and CLI verdict text must resolve one window through the internal env_ms parser."
+
+[[verdict]]
+kind = "item"
+key = "store::message::perishable"
+reason = "The record owns the automatic-command classification independently of sender and command text."
+
+[[verdict]]
+kind = "item"
+key = "store::message::expires_at"
+reason = "Queue wake deadlines and the serialized delivery check derive expiry from the record's stable enqueue time."
+
+[[verdict]]
+kind = "item"
+key = "store::message::expired"
+reason = "The read-time invariant and locked reconciler share the Queued-only expiry predicate."
 
 [[verdict]]
 kind = "item"

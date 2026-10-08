@@ -858,6 +858,52 @@ fn fifth_expired_claim_abandons_once() {
 }
 
 #[test]
+fn reconcile_expires_only_past_window_automatic_queued_commands() {
+    let q = Queue::new();
+    let now = Timestamp::now();
+    let expired = q.queue_with(1, |record| {
+        record.body = MessageBody::Command;
+        record.automated = true;
+        record.enqueued_at = now - message::DEFAULT_COMMAND_VALIDITY;
+        record.updated_at = now;
+    });
+    let fresh = q.queue_with(2, |record| {
+        record.body = MessageBody::Command;
+        record.automated = true;
+        record.enqueued_at = now - message::DEFAULT_COMMAND_VALIDITY + Duration::from_secs(1);
+    });
+    let operator = q.queue_with(3, |record| {
+        record.body = MessageBody::Command;
+        record.enqueued_at = Timestamp::UNIX_EPOCH;
+    });
+    let prompt = q.queue_with(4, |record| {
+        record.automated = true;
+        record.enqueued_at = Timestamp::UNIX_EPOCH;
+    });
+    let report = q.reconcile_stale_messages("session", now, 3).unwrap();
+    assert_eq!(report.expired, 1);
+    assert_eq!(report.requeued + report.timed_out + report.abandoned, 0);
+    assert_eq!(q.live(), vec![fresh, operator, prompt]);
+    let history = q.history();
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0].message_id, expired.message_id);
+    assert_eq!(history[0].status, MessageStatus::Expired);
+    assert_eq!(
+        history[0].last_error.as_deref(),
+        Some("expired: automatic command not delivered within 10m of queueing")
+    );
+    assert_eq!(q.count("message.expired"), 1);
+    assert_eq!(
+        q.reason("message.expired"),
+        history[0].last_error.as_deref().unwrap()
+    );
+    assert_eq!(
+        q.reconcile_stale_messages("session", now, 3).unwrap(),
+        ReconcileReport::default()
+    );
+}
+
+#[test]
 fn stale_command_times_out_without_resend_regardless_of_counter() {
     let q = Queue::new();
     let sent = q.sent_with(1, |message| {
@@ -875,6 +921,7 @@ fn stale_command_times_out_without_resend_regardless_of_counter() {
             requeued: 0,
             timed_out: 1,
             abandoned: 0,
+            expired: 0,
         }
     );
     assert!(q.live().is_empty());

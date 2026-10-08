@@ -458,9 +458,10 @@ fn parse_status(raw: &str) -> std::result::Result<MessageStatus, String> {
         "errored" => Ok(MessageStatus::Errored),
         "canceled" | "cancelled" | "removed" => Ok(MessageStatus::Canceled),
         "abandoned" => Ok(MessageStatus::Abandoned),
+        "expired" => Ok(MessageStatus::Expired),
         "archived" => Ok(MessageStatus::Archived),
         other => Err(format!(
-            "unknown message status `{other}`; expected queued, claimed, sent, delivered, timed_out, errored, canceled, abandoned, archived"
+            "unknown message status `{other}`; expected queued, claimed, sent, delivered, timed_out, errored, canceled, abandoned, expired, archived"
         )),
     }
 }
@@ -552,9 +553,10 @@ mod tests {
 
     #[test]
     fn invalid_message_status_lists_valid_values() {
+        assert_eq!(parse_status("expired"), Ok(MessageStatus::Expired));
         assert_eq!(
             parse_status("bogus").unwrap_err(),
-            "unknown message status `bogus`; expected queued, claimed, sent, delivered, timed_out, errored, canceled, abandoned, archived"
+            "unknown message status `bogus`; expected queued, claimed, sent, delivered, timed_out, errored, canceled, abandoned, expired, archived"
         );
     }
 

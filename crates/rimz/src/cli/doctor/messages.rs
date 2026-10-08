@@ -78,7 +78,10 @@ pub(super) fn collect_messages(
         };
         if !matches!(
             payload.status,
-            MessageStatus::TimedOut | MessageStatus::Errored | MessageStatus::Abandoned
+            MessageStatus::TimedOut
+                | MessageStatus::Errored
+                | MessageStatus::Abandoned
+                | MessageStatus::Expired
         ) || event.timestamp < cutoff
             || cleared_at.is_some_and(|cleared_at| event.timestamp <= cleared_at)
         {

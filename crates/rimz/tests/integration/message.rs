@@ -7833,6 +7833,282 @@ fn agents_compact_uses_native_commands_and_refuses_unsupported_instructions() {
 }
 
 #[test]
+fn compaction_left_queued_arms_the_elder_wake() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    register_running_agent(
+        &env,
+        "sess-compact-wake",
+        "feature-compact-wake",
+        &[("ZELLIJ_PANE_ID", "3")],
+    );
+    assert!(!wake_stamp_path(&env).exists());
+    let trace = env.project_root.join("queued-compact-wake.log");
+    let output = run_success(
+        traced_rimz(&env, &trace).args(["agents", "compact", "@claude"]),
+        "queue running compact",
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout).starts_with("queued compaction for @claude (msg_")
+    );
+    let messages = env.store().list_messages().expect("messages");
+    assert_eq!(messages.len(), 1);
+    let command = &messages[0];
+    assert_eq!(command.status, MessageStatus::Queued);
+    assert_eq!(command.body, MessageBody::Command);
+    assert!(
+        command.expires_at().is_none(),
+        "operator commands do not expire"
+    );
+    let wake: Option<jiff::Timestamp> = serde_json::from_slice(
+        &std::fs::read(wake_stamp_path(&env)).expect("queued compaction must arm the elder wake"),
+    )
+    .expect("wake stamp json");
+    let wake = wake.expect("queued compaction wake deadline");
+    assert!(
+        wake <= jiff::Timestamp::now(),
+        "queued compaction must be due"
+    );
+    assert!(
+        trace_lines(&trace)
+            .iter()
+            .all(|line| !line.contains("\taction\twrite"))
+    );
+}
+
+#[test]
+fn expired_automatic_command_releases_fifo_without_a_sweep_and_is_audited() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    register_role_agent(
+        &env,
+        "claude",
+        "sess-expiry",
+        "expiry",
+        false,
+        Some(TRACE_PANE),
+    );
+    let panes = env.write_pane_fixture(&[agent_pane(&env, "claude")]);
+    let trace = env.project_root.join("command-expiry.log");
+    let store = env.store();
+    let receiver = store.snapshot_cached().unwrap().agents.remove(0);
+    let mut command = MessageRecord::new(
+        env.workspace_id.clone(),
+        &receiver,
+        "/compact".to_owned(),
+        DeliveryGate::Done,
+    )
+    .with_sender(MessageSender::System)
+    .with_body(MessageBody::Command)
+    .with_automated(true);
+    command.message_id = fixed_message_id(1);
+    // Backdate rather than race a timer: only the short child-process override
+    // expires this record, and the queued state stays open until the explicit sweep.
+    command.enqueued_at = jiff::Timestamp::now() - Duration::from_secs(2);
+    queue_messages(&env, &[&command]);
+    let mut send = traced_rimz(&env, &trace);
+    let output = run_success(
+        send.env("RIMZ_TEST_PANE_LIST", &panes)
+            .env("RIMZ_MESSAGE_COMMAND_VALIDITY_MS", "1000")
+            .args(["message", "@expiry-agent", "stage notice"]),
+        "send past expired command",
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout).starts_with("sent to @expiry"),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert_eq!(
+        message_by_id(&env, &command.message_id).status,
+        MessageStatus::Queued
+    );
+    assert!(store.list_message_history().unwrap().is_empty());
+    assert_text_then_enter(&trace, &user_message("stage notice"));
+    let shown = run_success(
+        traced_rimz(&env, &trace)
+            .env("RIMZ_TEST_PANE_LIST", &panes)
+            .env("RIMZ_MESSAGE_COMMAND_VALIDITY_MS", "1000")
+            .args(["message", "show", command.message_id.as_str(), "--json"]),
+        "show uncleared expiry",
+    );
+    let shown: serde_json::Value = serde_json::from_slice(&shown.stdout).unwrap();
+    assert_eq!(shown["delivery"]["check"]["expiry"]["expired"], true);
+    let shown = run_success(
+        traced_rimz(&env, &trace)
+            .env("RIMZ_TEST_PANE_LIST", &panes)
+            .env("RIMZ_MESSAGE_COMMAND_VALIDITY_MS", "1000")
+            .args(["message", "show", command.message_id.as_str()]),
+        "show expiry verdict",
+    );
+    let shown = String::from_utf8_lossy(&shown.stdout);
+    assert!(
+        shown.contains("expired: automatic command valid for 1s, queued"),
+        "{shown}"
+    );
+    assert!(shown.contains("the next sweep records it expired"));
+    assert!(!shown.contains("force now:"));
+    run_success(
+        traced_rimz(&env, &trace)
+            .env("RIMZ_TEST_PANE_LIST", &panes)
+            .env("RIMZ_MESSAGE_COMMAND_VALIDITY_MS", "1000")
+            .args(["message", "sweep"]),
+        "clean expired command",
+    );
+    let expired = store.list_message_history().unwrap().remove(0);
+    assert_eq!(expired.status, MessageStatus::Expired);
+    assert_eq!(
+        expired.last_error.as_deref(),
+        Some("expired: automatic command not delivered within 1s of queueing")
+    );
+    let shown = run_success(
+        env.rimz()
+            .args(["message", "show", command.message_id.as_str()]),
+        "show cleaned expiry",
+    );
+    let shown = String::from_utf8_lossy(&shown.stdout);
+    assert!(
+        shown.contains("expired") && shown.contains(expired.last_error.as_deref().unwrap()),
+        "{shown}"
+    );
+    assert_eq!(
+        list_message_ids(
+            &env,
+            &[
+                "message", "list", "--system", "--all", "--status", "expired", "--json"
+            ],
+            None
+        ),
+        vec![command.message_id.to_string()]
+    );
+    let event = env
+        .read_events()
+        .into_iter()
+        .find(|event| event.method == "message.expired")
+        .unwrap();
+    assert_eq!(event.params_value()["reason"], expired.last_error.unwrap());
+    assert!(
+        !trace_lines(&trace)
+            .iter()
+            .any(|line| is_compact_command(line))
+    );
+    let confirmed = store
+        .confirm_delivered_for_card(
+            &receiver.kind,
+            &receiver.agent_id,
+            receiver.name.as_deref(),
+            rimz::store::writer::DeliveryAck::TurnStarted {
+                prompt: Some(&user_message("stage notice")),
+            },
+            "rimz-test",
+        )
+        .unwrap();
+    assert_eq!(confirmed.len(), 1);
+    let mut old_prompt = MessageRecord::new(
+        env.workspace_id.clone(),
+        &receiver,
+        "old prompt".to_owned(),
+        DeliveryGate::Done,
+    );
+    old_prompt.message_id = fixed_message_id(2);
+    old_prompt.enqueued_at = jiff::Timestamp::UNIX_EPOCH;
+    queue_messages(&env, &[&old_prompt]);
+    let output = run_success(
+        traced_rimz(&env, &trace)
+            .env("RIMZ_TEST_PANE_LIST", &panes)
+            .env("RIMZ_MESSAGE_COMMAND_VALIDITY_MS", "1000")
+            .args(["message", "@expiry-agent", "later prompt"]),
+        "send behind old prompt",
+    );
+    let output = String::from_utf8_lossy(&output.stdout);
+    assert!(output.starts_with("queued for @expiry"), "{output}");
+    let later = store
+        .list_messages()
+        .unwrap()
+        .into_iter()
+        .find(|record| record.text == "later prompt")
+        .unwrap();
+    let shown = run_success(
+        traced_rimz(&env, &trace)
+            .env("RIMZ_TEST_PANE_LIST", &panes)
+            .env("RIMZ_MESSAGE_COMMAND_VALIDITY_MS", "1000")
+            .args(["message", "show", later.message_id.as_str(), "--json"]),
+        "show old prompt blocker",
+    );
+    let shown: serde_json::Value = serde_json::from_slice(&shown.stdout).unwrap();
+    assert_eq!(
+        shown["delivery"]["check"]["fifo"]["blocker"],
+        old_prompt.message_id.as_str()
+    );
+}
+
+#[test]
+fn expired_automatic_command_cannot_be_forced_into_the_pane() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    register_role_agent(
+        &env,
+        "claude",
+        "sess-expiry",
+        "expiry",
+        false,
+        Some(TRACE_PANE),
+    );
+    let panes = env.write_pane_fixture(&[agent_pane(&env, "claude")]);
+    let trace = env.project_root.join("forced-expiry.log");
+    let receiver = env.store().snapshot_cached().unwrap().agents.remove(0);
+    let mut command = MessageRecord::new(
+        env.workspace_id.clone(),
+        &receiver,
+        "/compact".to_owned(),
+        DeliveryGate::Done,
+    )
+    .with_sender(MessageSender::System)
+    .with_body(MessageBody::Command)
+    .with_automated(true);
+    command.enqueued_at = jiff::Timestamp::now() - Duration::from_secs(600);
+    queue_messages(&env, &[&command]);
+    for verb in ["steer", "interrupt"] {
+        let output = traced_rimz(&env, &trace)
+            .env("RIMZ_TEST_PANE_LIST", &panes)
+            .args(["message", verb, command.message_id.as_str(), "--force"])
+            .output()
+            .unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "{verb}: {}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stderr)
+                .contains("expired: automatic command valid for 10m")
+        );
+    }
+    run_success(
+        traced_rimz(&env, &trace)
+            .env("RIMZ_TEST_PANE_LIST", &panes)
+            .args([
+                "message",
+                "deliver",
+                "--message-id",
+                command.message_id.as_str(),
+            ]),
+        "deliver expired command",
+    );
+    assert_eq!(
+        message_by_id(&env, &command.message_id).status,
+        MessageStatus::Queued
+    );
+    assert!(
+        !trace_lines(&trace)
+            .iter()
+            .any(|line| line.contains("\taction\twrite")),
+        "{:?}",
+        trace_lines(&trace)
+    );
+}
+
+#[test]
 fn agents_compact_queues_for_a_running_agent() {
     let env = Env::new();
     env.install_agent_hooks("claude");

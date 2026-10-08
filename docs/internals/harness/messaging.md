@@ -116,6 +116,7 @@ Queued ──► Claimed ──► Sent ──► Delivered
    │          └──► Errored    (repeat compaction, or a send failure with no retry path)
    │
    ├──► Canceled   (user, or a joined digest)
+   ├──► Expired    (automatic command's queueing window elapsed)
    ├──► Archived   (receiver or watched session ended, channel torn down)
    └──► Errored    (no receiver, or a send failure with no retry path)
 ```
@@ -128,11 +129,12 @@ Every attempt, including a fresh send and a compact-first command, holds a claim
 
 `Delivered` means the agent acknowledged: `TurnStarted` for a `Prompt`, `Compacting` for a `Command`. Neither event confirms the other body.
 
-The six terminal states are final. A terminal transition removes the record from `records/messages/messages.jsonl`, appends the full record to `audit/messages/<bucket-start>.jsonl`, and appends a `message.*` audit event without text ([Storage and audit](#storage-and-audit)).
+The seven terminal states are final. A terminal transition removes the record from `records/messages/messages.jsonl`, appends the full record to `audit/messages/<bucket-start>.jsonl`, and appends a `message.*` audit event without text ([Storage and audit](#storage-and-audit)).
 
 | Trigger | Terminal status |
 | --- | --- |
 | A lifecycle hook correlates with the submitted record | `Delivered` |
+| A queued automatic command reaches its validity deadline | `Expired` |
 | An unconfirmed command reaches its delivery deadline | `TimedOut` |
 | An unconfirmed prompt reaches the unconfirmed-send cap | `TimedOut` |
 | The address resolved to no agent, after the durable fallback | `Errored` |
@@ -215,26 +217,27 @@ An address that matches nothing, after the durable fallback, writes a terminal `
 
 | # | Check | Verdict when it fails | What releases it |
 | --- | --- | --- | --- |
-| 1 | `not_before` has passed | `Scheduled` | The clock, via the elder sweep |
-| 2 | Every `after` condition stamped | `WaitingOnAfter` | The referenced agent reaching its gate with no ready queued work |
-| 3 | Every `when` condition stamped | `WaitingOnWhen` | The watched agent completing its dwell in the raw status |
-| 4 | Oldest live record for this card and lane: a deliverable `Queued` or `Claimed` record, or a `Sent` prompt awaiting its turn-start acknowledgement | `BehindFifo` | The blocking record settling, or the prompt's acknowledgement or reconciliation |
-| 5 | The receiver card exists in the snapshot | `ReceiverGone` | The agent reappearing, or GC archiving the record |
-| 6 | The receiver has not ended | `ReceiverEnded` | The sweep archives open records for the card and unmet `when` conditions watching it |
-| 7 | Not inside the compaction window | `Compacting` | `CompactionEnded`, or the 90 s window expiring |
-| 8 | The gate is open for the effective status | `GateClosed` | The agent reaching `Idle`, `Success`, or `Sleeping`, plus `Failed` under `--on any` |
-| 9 | The resumed provider has started | `ProviderStarting` | Its next lifecycle observation, normally `Registered`, or one delivery window elapsing; lazy-registering providers skip this check |
-| 10 | A `Resume` gate's park is recoverable | `ResumeUnrecovered` | The budget window resetting or the overload marker clearing |
-| 11 | No open blocking prompt reserving input | `AskWaiting` | Answering the ask, or `--force` |
-| 12 | A live pane can receive a paste | `NoPane` | A pane appearing; affinity is cleared so any bound pane will do |
+| 1 | A queued automatic command is still within its validity window | `Expired` | Nothing; the next sweep records the terminal outcome |
+| 2 | `not_before` has passed | `Scheduled` | The clock, via the elder sweep |
+| 3 | Every `after` condition stamped | `WaitingOnAfter` | The referenced agent reaching its gate with no ready queued work |
+| 4 | Every `when` condition stamped | `WaitingOnWhen` | The watched agent completing its dwell in the raw status |
+| 5 | Oldest live record for this card and lane: a deliverable `Queued` or `Claimed` record, or a `Sent` prompt awaiting its turn-start acknowledgement | `BehindFifo` | The blocking record settling, or the prompt's acknowledgement or reconciliation |
+| 6 | The receiver card exists in the snapshot | `ReceiverGone` | The agent reappearing, or GC archiving the record |
+| 7 | The receiver has not ended | `ReceiverEnded` | The sweep archives open records for the card and unmet `when` conditions watching it |
+| 8 | Not inside the compaction window | `Compacting` | `CompactionEnded`, or the 90 s window expiring |
+| 9 | The gate is open for the effective status | `GateClosed` | The agent reaching `Idle`, `Success`, or `Sleeping`, plus `Failed` under `--on any` |
+| 10 | The resumed provider has started | `ProviderStarting` | Its next lifecycle observation, normally `Registered`, or one delivery window elapsing; lazy-registering providers skip this check |
+| 11 | A `Resume` gate's park is recoverable | `ResumeUnrecovered` | The budget window resetting or the overload marker clearing |
+| 12 | No open blocking prompt reserving input | `AskWaiting` | Answering the ask, or `--force` |
+| 13 | A live pane can receive a paste | `NoPane` | A pane appearing; affinity is cleared so any bound pane will do |
 
-All twelve pass and the verdict is `Ready`. An `Ended` receiver keeps refusing delivery until a later lifecycle fold revives its card: pane attach is not one, and the exec wrapper's `rimz.agent-resumed` stamp on every resume is. A record queued to an ended card before its resume, such as a cohort resume's positional prompt, waits for that stamp. Ended launched children remain in runtime snapshots while their parent is visible. For ended receivers omitted by that projection, the sweep and `message show` consult the audit row rather than treating its absence as an unknown receiver.
+All thirteen pass and the verdict is `Ready`. An `Ended` receiver keeps refusing delivery until a later lifecycle fold revives its card: pane attach is not one, and the exec wrapper's `rimz.agent-resumed` stamp on every resume is. A record queued to an ended card before its resume, such as a cohort resume's positional prompt, waits for that stamp. Ended launched children remain in runtime snapshots while their parent is visible. For ended receivers omitted by that projection, the sweep and `message show` consult the audit row rather than treating its absence as an unknown receiver.
 
 A pane is bindable when it reaches `agent_panes`, which the snapshot builds from the panes card admission keeps ([sidebar.md § Presence model](../sidebar/sidebar.md#presence-model)). A pane the fold drops is a receiver no message can reach, however healthy the agent's record looks. Without an end stamp, `NoPane` can outlive every other gate; a durable end instead lets the sweep archive its open records.
 
-The compaction window at check 7 closes every gate, `Resume` included. A receiver with a `compacting_since` marker less than 90 seconds old takes nothing. The window expires so a lost compaction-end signal costs a delay instead of a wedged queue. Stale-`Sent` reconciliation uses the full compaction bracket instead ([model.md § The compaction bracket](../agents/model.md#the-compaction-bracket)).
+The compaction window at check 8 closes every gate, `Resume` included. A receiver with a `compacting_since` marker less than 90 seconds old takes nothing. The window expires so a lost compaction-end signal costs a delay instead of a wedged queue. Stale-`Sent` reconciliation uses the full compaction bracket instead ([model.md § The compaction bracket](../agents/model.md#the-compaction-bracket)).
 
-`DeliveryGate::Resume` has no flag. Auto-continue stamps it on its own nudge, and check 10 re-verifies at delivery time that the park is still resumable. `Done` and `Any` records stay parked while an agent is paused, so a rate-limited agent does not receive a pile of user text the moment it waits. Both open for `Sleeping`, so a resting agent with an armed one-shot wait can receive a message without consuming that wait; `Resume` does not open for `Sleeping`.
+`DeliveryGate::Resume` has no flag. Auto-continue stamps it on its own nudge, and check 11 re-verifies at delivery time that the park is still resumable. `Done` and `Any` records stay parked while an agent is paused, so a rate-limited agent does not receive a pile of user text the moment it waits. Both open for `Sleeping`, so a resting agent with an armed one-shot wait can receive a message without consuming that wait; `Resume` does not open for `Sleeping`.
 
 Scheduled, condition-blocked, and `Resume`-gated records are left out of the FIFO scan, so they never block a later record that could deliver now. Resume nudges also live in their own lane, so a wakeup never queues behind user text that cannot deliver until after it.
 
@@ -417,6 +420,10 @@ The receiver's turn-start hook parses the header into transcript entries ([trans
 
 Four callers send a native compact command through a `Command` record: smart compaction ahead of a prompt, idle compaction from the sidebar producer, flip compaction at a team hand-off, and the operator's `rimz agents compact`. Routing the command through a record gives it the same claim, retry, audit, and at-most-once write as any message.
 
+`send_compact` arms the elder's wake stamp whenever it leaves a standalone compaction `Queued`, for operator and automatic callers alike. The sweep retries it at most once per delivery window until it delivers or, for an automatic command, expires.
+
+An automatic command (`body == Command && automated`) is perishable: while `Queued`, it is valid for ten minutes from `enqueued_at`. The window is derived, not stored; `RIMZ_MESSAGE_COMMAND_VALIDITY_MS` shortens it for tests. `MessageRecord::is_deliverable` excludes an expired record at every FIFO head and blocker decision, even when no sweep runs. The next `Store::reconcile_stale_messages`, called by the sweep or `rimz gc`, alone finalizes it as `Expired`, recording the reason in `last_error` and `message.expired`. `message show` reports expiry before every other blocker; steer and interrupt cannot bypass it. Prompts, harness notices, operator commands (`automated: false`), and non-`Queued` records do not expire. A lapsed claim returns to `Queued` and then ages by its original enqueue time; a human requeue creates a new record with a fresh window. Smart compaction's released prompt can deliver on its own once its compact command expires.
+
 `agents::compact_command` is the one composer every automatic caller uses: it picks the brief for the agent's seat, `CompactSeat::Team` when the launch-stamped `AgentState.team` is set and `Solo` otherwise, and `HarnessConfig::compact_instruction` returns a set `compact_instruction` for either seat or RimZ's brief for that seat. `rimz agents compact` bypasses the composer only for an explicit instruction. `LaunchSpec::compact_command` renders the adapter's native command. When the adapter declares `CompactInstruction::Trailing`, it appends [`[harness] compact_instruction`](../../guide/configuration.md#smart-compaction), folded to one line because a newline would submit it, and the send path types it as the [second segment](#commands-are-typed). Other adapters receive the bare command.
 
 Two guards stop a repeated compaction:
@@ -509,11 +516,13 @@ Before polling, the CLI prints each ordinary delivery receipt on stderr, includi
 
 The room's elected sidebar elder notices when a parked message comes due, through a deliberately thin handoff:
 
-1. The CLI writes `message-wake.json` under the runtime root with the earliest future time worth a look: a `not_before`, a `Queued` retry floor, a ready-queued backstop, a `Claimed` lease expiry, or an unconfirmed `Sent` reconcile deadline (30 s for prompts, 3 minutes for commands, per [Confirmation and retry](#confirmation-and-retry)).
+1. The CLI writes `message-wake.json` under the runtime root with the earliest time worth a look: a `not_before`, a `Queued` retry floor, a ready-queued backstop, a `Claimed` lease expiry, or an unconfirmed `Sent` reconcile deadline (30 s for prompts, 3 minutes for commands, per [Confirmation and retry](#confirmation-and-retry)). A standalone compaction left `Queued` arms this stamp too, whether operator-requested or automatic, so its sweep does not depend on later message traffic.
 2. The elder reads only that file, and when the stamp comes due spawns a detached `rimz --mux <mux> message sweep --workspace-id <id>` ([`fire.rs`](../../../crates/rimz/src/message/fire.rs)), passing its room's workspace id and mux by argv. The elder does no store reads, store writes, or message logic.
-3. The sweep reconciles stale `Sent` records and expired `Claimed` records, evaluates unmet conditions, delivers ready FIFO heads, then rewrites or removes the wake stamp.
+3. The sweep finalizes expired queued automatic commands, reconciles stale `Sent` records and expired `Claimed` records, evaluates unmet conditions, delivers ready FIFO heads, then rewrites or removes the wake stamp.
 
 The sweep is single-flight through a `message-sweep.lock` file lock, so overlapping wakeups collapse into one pass.
+
+A queued perishable command's wake deadline is capped at `expires_at`, even when its schedule or retry floor is later. That wake tightens cleanup latency; read-time expiry releases its FIFO slot without any helper.
 
 Condition evaluation inside a sweep is one transaction. It evaluates every unmet condition against one context-enriched snapshot, applies every stamp, retry floor, and watched-agent archive together, reloads the pending records, and delivers newly eligible heads from the same snapshot in the same run unless their card was held in the queue read after reconciliation and before that snapshot. A new stamp emits `message.after_met` or `message.when_met`.
 
@@ -543,11 +552,13 @@ The queue file holds only live records and is the truth. One queue transaction r
 
 History is audit, so an append failure warns and leaves the queue transition standing. This order matters with mixed binaries: if a history file an older binary cannot parse could fail the transaction, the queue would keep a record its caller believes settled and the next sweep would deliver it again. A crash between the queue rewrite and the appends costs the terminal text and its audit event, never queue state.
 
+`Expired` adds a status an older binary cannot decode. Once an expired record is in `audit/messages/`, older binaries sharing the workspace store fail history reads used by `message list`, `message show`, `message requeue`, and `send_compact`'s settled lookup until upgraded. The terminal commit removes it from the live queue, so older queue transactions never encounter that status. Event-log readers retain unknown methods through their existing catch-all.
+
 The store reads through `list()` (live), `list_history()` (terminal, with text), and `list_pending()` (`Queued` only).
 
-The event log carries these methods: `message.queued`, `message.edited`, `message.after_met`, `message.when_met`, `message.sent`, `message.delivered`, `message.timed_out`, `message.errored`, `message.canceled`, `message.abandoned`, and `message.archived`. The parser reads the retired `message.removed` as a cancellation. Not every transition writes one: a claim, a retryable pre-send failure returning a claim to `Queued`, a `Sent` record held during compaction, and a sweep that only moves `retry_after` and its blocker rewrite the queue silently. An explicit claim release (`release_message_claims`) does write `message.queued`.
+The event log carries these methods: `message.queued`, `message.edited`, `message.after_met`, `message.when_met`, `message.sent`, `message.delivered`, `message.timed_out`, `message.errored`, `message.canceled`, `message.abandoned`, `message.expired`, and `message.archived`. The parser reads the retired `message.removed` as a cancellation. Not every transition writes one: a claim, a retryable pre-send failure returning a claim to `Queued`, a `Sent` record held during compaction, and a sweep that only moves `retry_after` and its blocker rewrite the queue silently. An explicit claim release (`release_message_claims`) does write `message.queued`.
 
-The payload carries `message_id`, `address`, `kind`, `agent_id`, `agent_name`, `channel`, `gate`, `status`, `body`, `pane_id`, the `forced` flag, sender attribution, `text_len`, both counters, timestamps, the compaction baseline, and an optional `reason`. The reason is set on errors, abandons, cancels, archives, releases and requeues, timeouts, edits (the changed fields), condition stamps, and mixed-submit deliveries. **Message text never enters the event log**, which is why `message list` merges three sources: live records, history records with text, and terminal rows known only from events.
+The payload carries `message_id`, `address`, `kind`, `agent_id`, `agent_name`, `channel`, `gate`, `status`, `body`, `pane_id`, the `forced` flag, sender attribution, `text_len`, both counters, timestamps, the compaction baseline, and an optional `reason`. The reason is set on errors, abandons, cancels, archives, expiries, releases and requeues, timeouts, edits (the changed fields), condition stamps, and mixed-submit deliveries. **Message text never enters the event log**, which is why `message list` merges three sources: live records, history records with text, and terminal rows known only from events.
 
 ## The inbox verbs
 

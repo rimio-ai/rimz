@@ -300,6 +300,7 @@ pub enum MessageEventMethod {
     Errored,
     Canceled,
     Abandoned,
+    Expired,
     Archived,
 }
 
@@ -316,6 +317,7 @@ impl MessageEventMethod {
             Self::Errored => "message.errored",
             Self::Canceled => "message.canceled",
             Self::Abandoned => "message.abandoned",
+            Self::Expired => "message.expired",
             Self::Archived => "message.archived",
         }
     }
@@ -330,6 +332,7 @@ impl MessageEventMethod {
             MessageStatus::Errored => Some(Self::Errored),
             MessageStatus::Canceled => Some(Self::Canceled),
             MessageStatus::Abandoned => Some(Self::Abandoned),
+            MessageStatus::Expired => Some(Self::Expired),
             MessageStatus::Archived => Some(Self::Archived),
         }
     }
@@ -346,6 +349,7 @@ impl MessageEventMethod {
             "message.errored" => Some(Self::Errored),
             "message.canceled" | "message.removed" => Some(Self::Canceled),
             "message.abandoned" => Some(Self::Abandoned),
+            "message.expired" => Some(Self::Expired),
             "message.archived" => Some(Self::Archived),
             _ => None,
         }

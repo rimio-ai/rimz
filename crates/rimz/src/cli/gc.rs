@@ -216,7 +216,10 @@ fn sweep(
                     .context("pruning carryover agents")?;
                 StoreMaintenance::Done {
                     archived: messages_archived,
-                    reconciled: reconcile.requeued + reconcile.timed_out + reconcile.abandoned,
+                    reconciled: reconcile.requeued
+                        + reconcile.timed_out
+                        + reconcile.abandoned
+                        + reconcile.expired,
                     repaired,
                     carryover_pruned,
                 }

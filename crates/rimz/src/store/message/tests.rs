@@ -421,6 +421,7 @@ fn message_status_classifies_queue_and_terminal_lifecycle() {
         MessageStatus::Errored,
         MessageStatus::Canceled,
         MessageStatus::Abandoned,
+        MessageStatus::Expired,
         MessageStatus::Archived,
     ] {
         assert!(status.is_terminal(), "{status}");
@@ -429,6 +430,113 @@ fn message_status_classifies_queue_and_terminal_lifecycle() {
     assert_eq!(legacy, MessageStatus::Queued);
     let legacy: MessageStatus = serde_json::from_str("\"removed\"").unwrap();
     assert_eq!(legacy, MessageStatus::Canceled);
+}
+
+#[test]
+fn automatic_command_expires_only_while_queued() {
+    let now = Timestamp::from_second(10_000).unwrap();
+    let mut command = delivery_message(1, &agent("sess", None), DeliveryGate::Done, None)
+        .with_body(MessageBody::Command)
+        .with_automated(true);
+    command.enqueued_at = now - DEFAULT_COMMAND_VALIDITY;
+    command.updated_at = now;
+    assert!(!command.is_deliverable(now));
+    assert!(command.perishable());
+    assert_eq!(command.expires_at(), Some(now));
+    assert!(command.expired(now));
+    assert!(command.is_deliverable(now - Duration::from_secs(1)));
+    for status in [
+        MessageStatus::Claimed,
+        MessageStatus::Sent,
+        MessageStatus::Delivered,
+    ] {
+        command.status = status;
+        assert!(!command.expired(now));
+        assert!(command.is_deliverable(now));
+    }
+}
+
+#[test]
+fn expired_command_is_neither_a_head_nor_a_batch_blocker() {
+    let now = Timestamp::from_second(10_000).unwrap();
+    let receiver = agent("sess", None);
+    let mut command = delivery_message(1, &receiver, DeliveryGate::Done, None)
+        .with_body(MessageBody::Command)
+        .with_automated(true);
+    command.enqueued_at = now - DEFAULT_COMMAND_VALIDITY;
+    let prompt = delivery_message(2, &receiver, DeliveryGate::Done, None);
+    let live = [command.clone(), prompt.clone()];
+    assert_eq!(
+        queue_head(live.iter(), &receiver.kind, &receiver.agent_id, None, now),
+        Some(&prompt)
+    );
+    assert_eq!(
+        queue_head(
+            live.iter(),
+            &receiver.kind,
+            &receiver.agent_id,
+            None,
+            now - Duration::from_secs(1)
+        ),
+        Some(&command)
+    );
+    assert!(delivery_batch_indices(&live, &command.message_id, AgentStatus::Idle, now).is_none());
+    assert_eq!(
+        delivery_batch_indices(&live, &prompt.message_id, AgentStatus::Idle, now),
+        Some(vec![1])
+    );
+    let mut later = command;
+    later.message_id = message_id(3);
+    assert_eq!(
+        delivery_batch_indices(
+            &[prompt.clone(), later],
+            &prompt.message_id,
+            AgentStatus::Idle,
+            now
+        ),
+        Some(vec![0])
+    );
+}
+
+#[test]
+fn command_expiry_caps_a_scheduled_or_deferred_wake() {
+    let now = Timestamp::from_second(10_000).unwrap();
+    let mut command = delivery_message(1, &agent("sess", None), DeliveryGate::Done, None)
+        .with_body(MessageBody::Command)
+        .with_automated(true);
+    command.enqueued_at = now;
+    command.updated_at = now;
+    command.not_before = Some(now + DEFAULT_COMMAND_VALIDITY + Duration::from_secs(60));
+    assert_eq!(
+        command.wake_deadline(now),
+        Some(now + DEFAULT_COMMAND_VALIDITY)
+    );
+    command.retry_after = command.not_before.take();
+    assert_eq!(
+        command.wake_deadline(now),
+        Some(now + DEFAULT_COMMAND_VALIDITY)
+    );
+    command.retry_after = None;
+    assert_eq!(command.wake_deadline(now), Some(now));
+}
+
+#[test]
+fn prompts_and_operator_commands_never_expire() {
+    let now = Timestamp::from_second(10_000).unwrap();
+    for (body, automated) in [
+        (MessageBody::Prompt, true),
+        (MessageBody::Prompt, false),
+        (MessageBody::Command, false),
+    ] {
+        let mut record = delivery_message(1, &agent("sess", None), DeliveryGate::Done, None)
+            .with_body(body)
+            .with_automated(automated);
+        record.enqueued_at = Timestamp::UNIX_EPOCH;
+        assert!(record.is_deliverable(now));
+        assert!(!record.perishable());
+        assert_eq!(record.expires_at(), None);
+        assert!(!record.expired(now));
+    }
 }
 
 #[test]

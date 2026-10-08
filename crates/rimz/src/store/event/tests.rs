@@ -596,6 +596,7 @@ fn message_method_wire_contract() {
             Some(Status::Abandoned),
         ),
         (Method::Archived, "message.archived", Some(Status::Archived)),
+        (Method::Expired, "message.expired", Some(Status::Expired)),
     ];
 
     for (method, wire, terminal_status) in cases {

@@ -324,6 +324,10 @@ pub(super) fn steer_failure(
     target: &str,
     message_id: &MessageId,
 ) -> String {
+    let verdict = check.verdict();
+    if matches!(verdict, deliver::DeliveryVerdict::Expired { .. }) {
+        return render_verdict(&verdict, target, None, Timestamp::now());
+    }
     if check.ask.waiting {
         return format!(
             "{target} ({message_id}) is waiting on your input in its pane; answer it or pass --force"
@@ -345,7 +349,7 @@ pub(super) fn steer_failure(
             "{message_id} has a recent delivery attempt in progress; retry in a few seconds"
         );
     }
-    render_verdict(&check.verdict(), target, None, Timestamp::now())
+    render_verdict(&verdict, target, None, Timestamp::now())
 }
 
 pub(super) fn time_with_absolute(ts: Timestamp, now: Timestamp) -> String {
@@ -603,6 +607,16 @@ pub(super) fn render_verdict(
     now: Timestamp,
 ) -> String {
     match verdict {
+        deliver::DeliveryVerdict::Expired { expires_at } => {
+            let validity = rimz::store::message::command_validity();
+            let queued_at = *expires_at - validity;
+            let age = now.duration_since(queued_at).as_secs().max(0) as u64;
+            format!(
+                "expired: automatic command valid for {}, queued {} ago; the next sweep records it expired",
+                rimz::store::message::format_dwell(validity.as_secs()),
+                rimz::store::message::format_dwell(age),
+            )
+        }
         deliver::DeliveryVerdict::Scheduled { not_before } => not_before
             .as_ref()
             .copied()
@@ -725,6 +739,7 @@ pub(super) fn delivery_action_hint(
         )),
         deliver::DeliveryVerdict::NoPane { .. } | deliver::DeliveryVerdict::Ready => None,
         deliver::DeliveryVerdict::ReceiverEnded => None,
+        deliver::DeliveryVerdict::Expired { .. } => None,
     }
 }
 
@@ -781,6 +796,10 @@ mod tests {
     fn delivery_checks_report_recent_attempt_and_after_blocker() {
         let message_id = MessageId::parse("msg_0000000000000001").unwrap();
         let mut check = deliver::DeliveryCheck {
+            expiry: deliver::ExpiryCheck {
+                expired: false,
+                expires_at: None,
+            },
             schedule: deliver::ScheduleCheck {
                 ready: true,
                 not_before: None,
@@ -840,6 +859,20 @@ mod tests {
         assert_eq!(
             delivery_action_hint(&check.verdict(), &message_id, "@claude"),
             Some("force now: rimz message steer msg_0000000000000001".to_owned())
+        );
+        check.expiry = deliver::ExpiryCheck {
+            expired: true,
+            expires_at: Some(Timestamp::UNIX_EPOCH),
+        };
+        check.ask.waiting = true;
+        check.agent.present = false;
+        assert!(
+            steer_failure(&check, "@claude", &message_id)
+                .starts_with("expired: automatic command valid for 10m")
+        );
+        assert_eq!(
+            delivery_action_hint(&check.verdict(), &message_id, "@claude"),
+            None
         );
     }
 

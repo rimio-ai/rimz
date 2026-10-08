@@ -378,7 +378,9 @@ fn single_terminal_transitions_share_exact_history_and_event_contract() {
         (4, MessageStatus::Abandoned, "message.abandoned"),
         (5, MessageStatus::Archived, "message.archived"),
         (6, MessageStatus::Canceled, "message.canceled"),
+        (7, MessageStatus::Expired, "message.expired"),
     ] {
+        assert!(status.is_terminal());
         let q = Queue::new();
         let mut queued = q.record(index);
         queued.text = format!("terminal {index}");
@@ -400,7 +402,8 @@ fn single_terminal_transitions_share_exact_history_and_event_contract() {
         );
         assert_eq!(
             terminal.last_error.as_deref(),
-            (status == MessageStatus::Archived).then_some("terminal reason")
+            matches!(status, MessageStatus::Archived | MessageStatus::Expired)
+                .then_some("terminal reason")
         );
         let event = q.events().pop().expect("terminal event");
         assert_eq!(event.method, method);

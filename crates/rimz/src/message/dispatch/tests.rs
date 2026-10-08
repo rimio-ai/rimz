@@ -121,6 +121,27 @@ fn dispatch_park_causes_follow_schedule_conditions_readiness_and_fifo() {
         now(),
     ));
     expected.push(DispatchDecision::Live);
+    blocker.status = crate::store::message::MessageStatus::Queued;
+    blocker.automated = true;
+    blocker.enqueued_at = now() - crate::store::message::DEFAULT_COMMAND_VALIDITY;
+    actual.push(dispatch_decision(
+        &snapshot,
+        &[blocker.clone()],
+        &target,
+        &mode,
+        now(),
+    ));
+    expected.push(DispatchDecision::Live);
+    blocker.enqueued_at += std::time::Duration::from_secs(1);
+    actual.push(dispatch_decision(
+        &snapshot,
+        &[blocker.clone()],
+        &target,
+        &mode,
+        now(),
+    ));
+    expected.push(parked(ParkReason::Behind(blocker.message_id.clone())));
+    blocker.status = crate::store::message::MessageStatus::Sent;
     blocker.body = MessageBody::Prompt;
     for kind in [DeliveryKind::Steer, DeliveryKind::Interrupt] {
         mode.kind = kind;

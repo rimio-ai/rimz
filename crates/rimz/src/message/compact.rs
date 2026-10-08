@@ -109,6 +109,7 @@ pub fn send_compact(
         .iter()
         .any(|queued| queued.message_id == message.message_id)
     {
+        deliver::register_message_wake(workspace, store);
         return Ok(CompactOutcome::Queued);
     }
     let settled = store
