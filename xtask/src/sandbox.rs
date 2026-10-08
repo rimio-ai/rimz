@@ -181,7 +181,7 @@ impl HostSandbox {
     /// suite launched from inside a RimZ pane or supervised run hands its
     /// `RIMZ_RUN_ID` and identity pin to in-process unit tests, which then take
     /// the supervised branch a clean shell never sees. Keys the sandbox sets
-    /// itself and build-script inputs survive: the runner applies removals after
+    /// itself, build-script inputs, and park-budget overrides survive: the runner applies removals after
     /// the sandbox env, and dropping a build input would change the binary.
     pub(crate) fn removed_test_env(&self) -> Vec<String> {
         test_removed_env(std::env::vars_os().map(|(key, _)| key), &self.env)
@@ -558,7 +558,9 @@ fn test_removed_env(
             .filter(|key| session_key(key))
             .filter_map(|key| key.into_string().ok())
             .filter(|key| {
-                !sandbox.contains_key(key.as_str()) && !BUILD_INPUT_ENV.contains(&key.as_str())
+                !sandbox.contains_key(key.as_str())
+                    && !BUILD_INPUT_ENV.contains(&key.as_str())
+                    && key != "RIMZ_TEST_PARK_BUDGET_MIB"
             }),
     );
     removed

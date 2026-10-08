@@ -260,6 +260,15 @@ impl ParentWatchdog {
         } else {
             pane_probe(&self.seed, &self.paths.workspace_id)
         };
+        #[cfg(feature = "testkit")]
+        if let Some(path) = std::env::var_os("RIMZ_TEST_PARENT_PROBE_MARKER")
+            && let Ok(mut file) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+        {
+            let _ = std::io::Write::write_all(&mut file, b"probe\n");
+        }
         if !self.observe(probe) {
             return false;
         }
