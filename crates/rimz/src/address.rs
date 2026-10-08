@@ -1127,16 +1127,17 @@ fn launch_occupant<'a>(group: &[&'a AgentState]) -> Option<&'a AgentState> {
 }
 
 fn launch_members<'a>(
-    agents: &'a [AgentState],
+    agents: impl IntoIterator<Item = &'a AgentState> + Clone,
     kind: &AgentKind,
     id: &AgentSessionId,
 ) -> Vec<&'a AgentState> {
     let alias = agents
-        .iter()
+        .clone()
+        .into_iter()
         .find(|agent| &agent.kind == kind && &agent.agent_id == id && !agent.is_provider_subagent())
         .and_then(|agent| agent.launch_id.as_ref());
     agents
-        .iter()
+        .into_iter()
         .filter(|agent| {
             &agent.kind == kind
                 && !agent.is_provider_subagent()
@@ -1149,11 +1150,13 @@ fn launch_members<'a>(
 
 /// Current row of a launch, including a legacy session-id alias.
 ///
+/// Accepts a reusable borrowed row view, including a layered rollup.
+///
 /// - Live rows win by pane-owner order.
 /// - An ended launch keeps its latest-active row.
 /// - Attach rest certificates before selecting among live rows.
 pub fn launch_row<'a>(
-    agents: &'a [AgentState],
+    agents: impl IntoIterator<Item = &'a AgentState> + Clone,
     kind: &AgentKind,
     id: &AgentSessionId,
 ) -> Option<&'a AgentState> {
@@ -1165,7 +1168,10 @@ pub fn launch_row<'a>(
 /// An ended predecessor conversation shares its live successor's launch id,
 /// launcher, and open peer run, so a per-launch judgement (liveness, a turn to
 /// settle) filters through here rather than reading each row on its own.
-pub fn is_launch_row(agents: &[AgentState], agent: &AgentState) -> bool {
+pub fn is_launch_row<'a>(
+    agents: impl IntoIterator<Item = &'a AgentState> + Clone,
+    agent: &AgentState,
+) -> bool {
     launch_row(
         agents,
         &agent.kind,
@@ -1191,9 +1197,11 @@ pub(crate) fn launch_occupants<'a>(
 ///
 /// Agents launched outside a named lane share the `external` fallback, matching
 /// the teams catalogue.
-pub fn team_cohorts(agents: &[AgentState]) -> Vec<TeamCohort<'_>> {
+pub fn team_cohorts<'a>(
+    agents: impl IntoIterator<Item = &'a AgentState> + Clone,
+) -> Vec<TeamCohort<'a>> {
     let mut grouped: BTreeMap<(&str, String), Vec<&AgentState>> = BTreeMap::new();
-    for agent in launch_occupants(agents.iter())
+    for agent in launch_occupants(agents)
         .into_iter()
         .filter(|agent| agent.ended_at.is_none())
     {
@@ -1246,15 +1254,18 @@ pub fn launched_children<'a>(agents: &'a [AgentState], parent: &AgentState) -> V
 /// Returns every conversation row of a launch, ended predecessors included;
 /// judge a launch's liveness through [`is_launch_row`], never per row. Team
 /// seats are left out: a team reports once, at Done, not through this fleet.
-pub fn launched_fleet<'a>(agents: &'a [AgentState], launcher: &AgentState) -> Vec<&'a AgentState> {
+pub fn launched_fleet<'a>(
+    agents: impl IntoIterator<Item = &'a AgentState> + Clone,
+    launcher: &AgentState,
+) -> Vec<&'a AgentState> {
     let members = launch_members(
-        agents,
+        agents.clone(),
         &launcher.kind,
         launcher.launch_id.as_ref().unwrap_or(&launcher.agent_id),
     );
     by_registration(
         agents
-            .iter()
+            .into_iter()
             .filter(|agent| !agent.is_team_seat())
             .filter(|agent| {
                 agent.launcher_is(launcher)
@@ -1281,7 +1292,10 @@ pub fn launched_children_in_channel<'a>(
 }
 
 /// The current row of the launch that parents `child`.
-pub fn launched_parent<'a>(agents: &'a [AgentState], child: &AgentState) -> Option<&'a AgentState> {
+pub fn launched_parent<'a>(
+    agents: impl IntoIterator<Item = &'a AgentState> + Clone,
+    child: &AgentState,
+) -> Option<&'a AgentState> {
     if !child.is_launched_child() {
         return None;
     }
