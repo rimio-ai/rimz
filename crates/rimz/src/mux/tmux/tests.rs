@@ -67,6 +67,19 @@ fn command_failure_omits_socket_from_native_stderr() {
     assert!(error.contains("No such file or directory"), "{error}");
 }
 
+fn session_options() -> crate::mux::SessionOptions {
+    crate::mux::SessionOptions {
+        session_name: "rimz-test".to_owned(),
+        workspace_id: crate::ids::WorkspaceId::from_project_root(Path::new("/project")),
+        project_root: PathBuf::from("/project"),
+        extra_env: Default::default(),
+        cwd: PathBuf::from("/project"),
+        config: Default::default(),
+        detected_size: None,
+        truecolor: false,
+    }
+}
+
 /// Argv past the `-S <socket>` prefix every managed command carries, so a verb
 /// assertion stays about the verb. [`managed_endpoint_prefixes_every_command`]
 /// owns the prefix itself.
@@ -101,16 +114,7 @@ fn managed_endpoint_prefixes_every_command() {
 
 #[test]
 fn new_session_birth_removes_outer_mux_context() {
-    let opts = crate::mux::SessionOptions {
-        session_name: "rimz-test".to_owned(),
-        workspace_id: crate::ids::WorkspaceId::from_project_root(Path::new("/project")),
-        project_root: PathBuf::from("/project"),
-        extra_env: Default::default(),
-        cwd: PathBuf::from("/project"),
-        config: Default::default(),
-        detected_size: Some((132, 40)),
-        truecolor: false,
-    };
+    let opts = session_options();
     let spec =
         TmuxBackend::with_socket("/test/socket").new_session_command(&opts, &Default::default());
     for key in crate::mux::AMBIENT_MUX_ENV {
@@ -128,6 +132,87 @@ fn existing_session_attach_targets_the_managed_server() {
     let spec = backend.attach_existing_command("rimz-test");
 
     assert_eq!(verb_args(&spec), ["attach", "-t", "rimz-test"]);
+}
+
+#[test]
+fn global_mux_context_removal_marks_all_five_names() {
+    let spec = TmuxBackend::with_socket("/test/socket").global_mux_context_removal_command();
+    let commands = verb_args(&spec).split(|arg| arg == ";").collect::<Vec<_>>();
+    let expected = [
+        "TMUX",
+        "TMUX_PANE",
+        "ZELLIJ",
+        "ZELLIJ_PANE_ID",
+        "ZELLIJ_SESSION_NAME",
+    ];
+    assert_eq!(commands.len(), expected.len());
+    for (command, key) in commands.into_iter().zip(expected) {
+        assert_eq!(command, ["set-environment", "-g", "-r", key]);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn ensure_session_repairs_global_mux_context_before_and_after_birth() {
+    for (pre_birth_error, duplicate) in [
+        ("", false),
+        ("", true),
+        ("no server running on server", false),
+        (
+            "error connecting to server (No such file or directory)",
+            false,
+        ),
+    ] {
+        let (temp, shim) = crate::mux::zellij::tests::support::zellij_shim(&format!(
+            r#"#!/bin/sh
+dir=$(dirname "$0")
+printf '%s\n' "$*" >> "$dir/argv"
+if [ "$3" = set-environment ] && [ "$4" = -g ] && [ ! -e "$dir/repaired" ]; then
+    touch "$dir/repaired"
+    if [ -n '{pre_birth_error}' ]; then printf '%s\n' '{pre_birth_error}' >&2; exit 1; fi
+fi
+if [ "$3" = new-session ] && [ '{duplicate}' = true ]; then
+    printf 'duplicate session: rimz-test\n' >&2
+    exit 1
+fi
+"#
+        ));
+        let mut backend = TmuxBackend::with_socket(temp.path().join("server"));
+        backend.program = Some(shim);
+        let opts = session_options();
+        backend.ensure_session(&opts).expect("ensure session");
+        let log = std::fs::read_to_string(temp.path().join("argv")).unwrap();
+        let commands = log.lines().collect::<Vec<_>>();
+        assert!(
+            commands[0].contains("set-environment -g -r TMUX"),
+            "repair must precede new-session: {log}"
+        );
+        let birth = commands
+            .iter()
+            .position(|line| line.contains(" new-session "))
+            .unwrap();
+        let repair = backend.global_mux_context_removal_command().args.join(" ");
+        assert_eq!(commands[0], repair);
+        assert!(
+            commands[birth + 1..].contains(&repair.as_str()),
+            "post-birth repair: {log}"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn ensure_session_does_not_ignore_global_environment_repair_failure() {
+    let (temp, shim) = crate::mux::zellij::tests::support::zellij_shim(
+        "#!/bin/sh\nif [ \"$3\" = set-environment ] && [ \"$4\" = -g ]; then printf 'error connecting to server (Permission denied)\\n' >&2; exit 1; fi\n",
+    );
+    let mut backend = TmuxBackend::with_socket(temp.path().join("server"));
+    backend.program = Some(shim);
+    let opts = session_options();
+    assert!(
+        backend.ensure_session(&opts).is_err(),
+        "only the pre-birth no-server error may be ignored"
+    );
 }
 
 #[test]

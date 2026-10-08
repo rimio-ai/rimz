@@ -488,6 +488,135 @@ fn a_nested_room_gives_panes_only_its_own_mux_context() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
+#[test]
+fn a_room_repairs_outer_mux_context_on_an_existing_tmux_server() {
+    use rimz::mux::MuxBackend;
+
+    let Some(room) = TmuxRoom::new() else {
+        return;
+    };
+    let socket = rimz::mux::tmux::managed_server_socket_path_under(&room.env.runtime_root);
+    std::fs::create_dir_all(socket.parent().expect("socket parent")).expect("mkdir socket dir");
+    let output = Command::new("tmux")
+        .scrub_session_env()
+        .env("HOME", &room.env.home_root)
+        .env("XDG_RUNTIME_DIR", &room.env.runtime_root)
+        .env("SHELL", "/bin/sh")
+        .envs([
+            ("ZELLIJ", "0"),
+            ("ZELLIJ_PANE_ID", "terminal_1"),
+            ("ZELLIJ_SESSION_NAME", "outer"),
+        ])
+        .arg("-S")
+        .arg(&socket)
+        .args(["new-session", "-d", "-s", "pre-fix", "sleep 60"])
+        .bounded_output()
+        .expect("birth contaminated tmux server");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // Inspect the original birth shell before room start can repurpose it as sidebar.
+    let workspace = room.env.resolve_workspace(&room.env.project_root);
+    let command = room.rimz();
+    rimz::mux::TmuxBackend::with_socket(&socket)
+        .ensure_session(&rimz::mux::SessionOptions {
+            session_name: room.session_name.clone(),
+            workspace_id: workspace.workspace_id,
+            project_root: room.env.project_root.clone(),
+            extra_env: command
+                .get_envs()
+                .filter_map(|(key, value)| {
+                    value.map(|value| {
+                        (
+                            key.to_string_lossy().into_owned(),
+                            value.to_string_lossy().into_owned(),
+                        )
+                    })
+                })
+                .collect(),
+            cwd: room.env.project_root.clone(),
+            config: Default::default(),
+            detected_size: None,
+            truecolor: false,
+        })
+        .expect("ensure room on contaminated server");
+    let first = tmux_output(
+        &room.env.runtime_root,
+        &[
+            "display-message",
+            "-p",
+            "-t",
+            &room.session_name,
+            "#{pane_id} #{pane_pid}",
+        ],
+    );
+    assert!(first.status.success());
+    let first = String::from_utf8(first.stdout).unwrap();
+    let (pane, pid) = first.trim().split_once(' ').expect("first pane identity");
+    let marker = room.env.project_root.join("first-env");
+    let doctor = room.env.project_root.join("first-doctor");
+    assert!(
+        tmux_output(
+            &room.env.runtime_root,
+            &[
+                "send-keys",
+                "-t",
+                pane,
+                "-l",
+                &pane_mux_probe(&room.env, &marker, &doctor)
+            ]
+        )
+        .status
+        .success()
+    );
+    assert!(
+        tmux_output(&room.env.runtime_root, &["send-keys", "-t", pane, "Enter"])
+            .status
+            .success()
+    );
+    let mut failures = Vec::new();
+    check_pane_mux("tmux", &marker, &doctor, &mut failures);
+    #[cfg(target_os = "linux")]
+    {
+        let pid = pid.parse().expect("first pane pid");
+        for key in ["ZELLIJ", "ZELLIJ_PANE_ID", "ZELLIJ_SESSION_NAME"] {
+            if let Some(value) = rimz::proc::env_var(pid, key) {
+                failures.push(format!("first-window process inherited {key}={value}"));
+            }
+        }
+        assert!(
+            rimz::proc::env_var(pid, "TMUX").is_some(),
+            "first pane's own tmux identity"
+        );
+        assert_eq!(rimz::proc::env_var(pid, "TMUX_PANE").as_deref(), Some(pane));
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = pid;
+
+    room.open(&[]);
+    let marker = room.env.project_root.join("later-env");
+    let doctor = room.env.project_root.join("later-doctor");
+    assert!(
+        tmux_output(
+            &room.env.runtime_root,
+            &[
+                "new-window",
+                "-d",
+                "-t",
+                &room.session_name,
+                &pane_mux_probe(&room.env, &marker, &doctor)
+            ]
+        )
+        .status
+        .success()
+    );
+    check_pane_mux("tmux", &marker, &doctor, &mut failures);
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
 fn pane_mux_probe(env: &Env, marker: &Path, doctor: &Path) -> String {
     let command = env.rimz();
     let pinned_env = command
@@ -572,6 +701,12 @@ impl TmuxRoom {
 
     /// Start the room from a process carrying `extra` over the fixture env.
     fn start_with(extra: &[(&str, &str)]) -> Option<Self> {
+        let room = Self::new()?;
+        room.open(extra);
+        Some(room)
+    }
+
+    fn new() -> Option<Self> {
         if which::which("tmux").is_err() {
             crate::common::skip("tmux not on PATH");
             return None;
@@ -582,25 +717,25 @@ impl TmuxRoom {
         let workspace = env.resolve_workspace(&env.project_root);
         let session_name = workspace.session_name;
 
-        let output = {
-            let mut cmd = env.rimz();
-            cmd.args(["--mux", "tmux", "start"])
-                .env("TMUX_TMPDIR", &tmux_tmpdir)
-                .envs(extra.iter().copied())
-                .bounded_output()
-                .expect("run tmux start")
-        };
-        assert!(
-            output.status.success(),
-            "tmux start failed: {}",
-            String::from_utf8_lossy(&output.stderr),
-        );
-
         Some(Self {
             env,
             session_name,
             tmux_tmpdir,
         })
+    }
+
+    fn open(&self, extra: &[(&str, &str)]) {
+        let output = self
+            .rimz()
+            .args(["--mux", "tmux", "start"])
+            .envs(extra.iter().copied())
+            .bounded_output()
+            .expect("run tmux start");
+        assert!(
+            output.status.success(),
+            "tmux start failed: {}",
+            String::from_utf8_lossy(&output.stderr),
+        );
     }
 
     fn rimz(&self) -> Command {
