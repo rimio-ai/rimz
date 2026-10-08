@@ -372,7 +372,8 @@ pub struct Transition {
 }
 
 /// How a signal touches a ping-only turn, which is no work of the agent's.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum PingEdge {
     /// A keepalive-only prompt opened a turn from rest.
     Open,

@@ -357,13 +357,15 @@ impl crate::agents::capabilities::HookCapability for CursorAdapter {
         })
     }
 
+    fn payload_hook_reply(&self, event_name: &str, _payload: &Value) -> super::HookReply {
+        catalog_contains(CURSOR_HOOKS, event_name)
+            .then(|| json!({}))
+            .map_or(super::HookReply::Silent, super::HookReply::Json)
+    }
+
     fn decode_hook(&self, event_name: &str, payload: &Value) -> Result<HookOutput> {
         let mut decoded = decode_catalog_hook(CURSOR_HOOKS, event_name, None);
-        decoded.set_reply(
-            catalog_contains(CURSOR_HOOKS, event_name)
-                .then(|| json!({}))
-                .map_or(super::HookReply::Silent, super::HookReply::Json),
-        );
+        decoded.set_reply(self.payload_hook_reply(event_name, payload));
         let parsed = payloads::parse_payload(payload);
         let agent_id = parsed
             .conversation_id

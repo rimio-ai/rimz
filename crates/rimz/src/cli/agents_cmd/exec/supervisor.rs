@@ -8,6 +8,22 @@ use std::sync::mpsc;
 
 const PARK_VERSION: u32 = 1;
 const CARD_EVIDENCE_POLL: Duration = Duration::from_millis(250);
+const DRAINER_LEASE_POLL: Duration = Duration::from_millis(200);
+
+pub(super) fn drainer_lease(
+    workspace: &rimz::ResolvedWorkspace,
+    isolation: rimz::config::Isolation,
+) -> Result<Option<rimz::harness::hook_drain::DrainerLease>> {
+    if isolation != rimz::config::Isolation::Sandbox {
+        return Ok(None);
+    }
+    let store = crate::cli::open_existing_store(workspace)?
+        .context("sandbox hook drainer requires an existing room")?;
+    Ok(Some(
+        rimz::harness::hook_drain::DrainerLease::acquire(&store)
+            .context("starting host hook drainer for sandboxed provider")?,
+    ))
+}
 
 #[derive(Serialize, Deserialize)]
 struct ParkState {
@@ -440,6 +456,7 @@ fn run_loop(
     mut child: ProviderChild,
     workspace: &rimz::ResolvedWorkspace,
 ) -> Result<ParkExit> {
+    let mut drainer_lease = drainer_lease(workspace, state.isolation)?;
     let paths = rimz::StatePaths::for_project_root(&workspace.project_root)?;
     let runtime = rimz::RuntimePaths::for_state(&paths)?;
     let diag = rimz::diag::DiagSink::under(
@@ -496,14 +513,18 @@ fn run_loop(
             child,
             run_paths.as_ref(),
             &workspace.session_name,
-            request.exit_on_run_completion,
-            if request.subagent {
-                StopPolicy::ParentReceived
-            } else {
-                StopPolicy::RunTerminal
-            },
-            awaiting_reopen,
+            RunMonitor::new(
+                request.exit_on_run_completion,
+                if request.subagent {
+                    StopPolicy::ParentReceived
+                } else {
+                    StopPolicy::RunTerminal
+                },
+                awaiting_reopen,
+                Instant::now(),
+            ),
             parent_watchdog.take(),
+            &mut drainer_lease,
         )
         .context("supervising agent process")?;
         let startup = spawned_at.elapsed();
@@ -666,6 +687,7 @@ fn run_loop(
         }
     };
 
+    drop(drainer_lease);
     Ok(state.into_exit(outcome, terminal_grace, startup_deaths))
 }
 
@@ -685,6 +707,12 @@ fn startup_evidence(
     workspace: &rimz::ResolvedWorkspace,
     identity: Option<&LaunchIdentity>,
 ) -> Option<rimz::harness::run::StartupEvidence> {
+    if let Ok(Some(store)) = crate::cli::open_existing_store(workspace)
+        && let Err(error) =
+            rimz::harness::hook_drain::drain_through(&store, 0, None, HOOK_DRAIN_WAIT)
+    {
+        tracing::debug!(%error, "could not drain hooks before startup evidence");
+    }
     if let Some(context) = run {
         return rimz::harness::run::load(&context.paths, &context.run_id)
             .ok()
@@ -952,10 +980,9 @@ fn supervise_child(
     child: ProviderChild,
     run_monitor: Option<&RunPaths>,
     session_name: &str,
-    self_cleanup: bool,
-    stop_policy: StopPolicy,
-    awaiting_reopen: Option<u32>,
+    mut monitor_state: RunMonitor,
     parent_watchdog: Option<rimz::harness::parent_watch::ParentWatch>,
+    drainer_lease: &mut Option<rimz::harness::hook_drain::DrainerLease>,
 ) -> Result<ExecOutcome> {
     #[cfg(unix)]
     let signal_mask = rimz::child_process::CleanupSignalMask::block()?;
@@ -982,10 +1009,17 @@ fn supervise_child(
     let mut run_completed = false;
     let mut parent_ended = false;
     let mut next_run_check = Instant::now();
-    let mut monitor_state =
-        RunMonitor::new(self_cleanup, stop_policy, awaiting_reopen, next_run_check);
+    let mut next_lease_check = Instant::now();
     loop {
         let now = Instant::now();
+        if let Some(lease) = drainer_lease.as_mut()
+            && now >= next_lease_check
+        {
+            next_lease_check = now + DRAINER_LEASE_POLL;
+            if let Err(error) = lease.refresh() {
+                tracing::warn!(%error, "could not reconnect host hook drainer");
+            }
+        }
         match child.try_wait() {
             Ok(Some(status)) => {
                 if let Some(watch) = &parent_watchdog {
@@ -1034,7 +1068,7 @@ fn supervise_child(
             && now >= next_run_check
         {
             next_run_check = now
-                + if self_cleanup {
+                + if monitor_state.self_cleanup {
                     RUN_MONITOR_POLL
                 } else {
                     PARK_STRAND_POLL
@@ -1078,6 +1112,7 @@ fn supervise_child(
         }
 
         let deadline = [
+            drainer_lease.is_some().then_some(next_lease_check),
             (!run_completed && run_monitor.is_some()).then_some(next_run_check),
             signal_seen_at
                 .filter(|_| term_sent_at.is_none())

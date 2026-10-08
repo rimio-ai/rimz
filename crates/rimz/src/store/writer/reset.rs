@@ -139,6 +139,7 @@ impl Store {
         F: FnOnce(&Path, &Path, u64) -> event_log::Result<event_log::RotationOutcome>,
         C: Fn(&Path) -> Result<usize>,
     {
+        let _drainer = crate::store::ingress::stop_drainer(self.runtime_paths())?;
         let (mut outcome, canceled_runs) = self.commit_boundary(|paths| {
             let canceled_runs = cancel_active_runs_for_reset_locked(paths)?;
             let runs_canceled = canceled_runs.len();

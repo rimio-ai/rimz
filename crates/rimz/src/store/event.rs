@@ -158,6 +158,27 @@ pub struct AgentLifecyclePayload {
     pub event_name: Option<String>,
     #[serde(flatten)]
     pub observation: AgentLifecycleObservation,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) replay: Option<HookLifecycleReplay>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(super) struct HookLifecycleReplay {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prior_status: Option<crate::agents::AgentStatus>,
+    pub status: crate::agents::AgentStatus,
+    pub phase: crate::agents::lifecycle::TurnPhase,
+    pub transition: crate::agents::LifecycleTransition,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub compaction_closed: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub waiting_cleared: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub compacting: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub opened_turn: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ping: Option<crate::agents::lifecycle::PingEdge>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -468,6 +489,7 @@ impl AgentLifecyclePayload {
         Self {
             event_name: Some(event_name.into()),
             observation: observation.clone(),
+            replay: None,
         }
     }
 }

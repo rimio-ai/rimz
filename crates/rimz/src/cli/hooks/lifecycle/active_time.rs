@@ -35,7 +35,11 @@ pub(super) fn record(
         ActiveTimeOp::Progress | ActiveTimeOp::Stop => agent_id,
     };
     let Some(agent_id) = agent_id else { return };
-    let at = active_time_at(op, jiff::Timestamp::now(), decoded.turn_error());
+    let at = active_time_at(
+        op,
+        rimz::harness::hook_drain::frame_timestamp(),
+        decoded.turn_error(),
+    );
     apply(store, agent, op, agent_id, at, event_name);
 }
 
@@ -49,7 +53,7 @@ pub(super) fn record_side_conversation(
     event_name: &str,
 ) {
     let op = side_conversation_op(signal, host_running);
-    let at = active_time_at(op, jiff::Timestamp::now(), None);
+    let at = active_time_at(op, rimz::harness::hook_drain::frame_timestamp(), None);
     apply(store, agent, op, host_agent_id, at, event_name);
 }
 

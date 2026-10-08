@@ -55,9 +55,80 @@ pub struct SideConversation {
 struct StagedLifecycleEvent {
     envelope: EventEnvelope,
     event: Option<LifecycleEvent>,
+    transition: Option<Transition>,
 }
 
 impl Store {
+    /// Recover reactor inputs without appending the ingress lifecycle again.
+    pub fn recover_hook_lifecycle(envelope: &EventEnvelope) -> Option<AgentLifecycleReceipt> {
+        let event::EventKind::AgentLifecycle(payload) = envelope.kind() else {
+            return None;
+        };
+        let observation = payload.observation;
+        let mut receipt = AgentLifecycleReceipt {
+            primary_event_id: Some(envelope.event_id.clone()),
+            ..Default::default()
+        };
+        if observation.origin == Some(SessionOrigin::SideConversation) {
+            receipt.side_conversation = Some(SideConversation::default());
+            return Some(receipt);
+        }
+        let agent_id = observation.agent_id?;
+        let transition = if let Some(replay) = payload.replay.as_ref() {
+            receipt.prior_status = replay.prior_status;
+            receipt.waiting_cleared = replay.waiting_cleared;
+            let transition = Transition {
+                next: lifecycle::LifecycleState {
+                    status: replay.status,
+                    phase: replay.phase,
+                    compacting: replay.compacting,
+                },
+                kind: match &replay.transition {
+                    crate::agents::LifecycleTransition::Normal => TransitionKind::Normal,
+                    crate::agents::LifecycleTransition::Reconciled { from, .. } => {
+                        TransitionKind::Reconciled {
+                            from: *from,
+                            reason: "recovered hook transition",
+                        }
+                    }
+                    crate::agents::LifecycleTransition::Ignored { .. } => TransitionKind::Ignored {
+                        reason: "recovered hook transition",
+                    },
+                },
+                compaction_closed: replay.compaction_closed,
+                waiting_cleared: replay.waiting_cleared,
+                opened_turn: replay.opened_turn,
+                ping: replay.ping,
+            };
+            receipt.transition = Some(transition);
+            transition
+        } else {
+            lifecycle::step(
+                None,
+                None,
+                lifecycle::PriorTurnIds::default(),
+                &observation.signal,
+            )
+        };
+        let mut event = LifecycleEvent::new(
+            envelope.event_id.clone(),
+            envelope.timestamp,
+            envelope.workspace_id.clone(),
+            AgentKind::new_unchecked(envelope.source.clone()),
+            agent_id,
+            observation.agent_name,
+            observation.parent_agent_id,
+            observation.signal,
+            receipt.prior_status,
+            transition,
+        );
+        if let Some(replay) = payload.replay {
+            event.transition = replay.transition;
+        }
+        receipt.events.push(event);
+        Some(receipt)
+    }
+
     /// Apply lifecycle append policy and report whether the CLI should launch
     /// the existing detached event-log rotation command.
     #[must_use = "durability barrier; check the result"]
@@ -74,7 +145,7 @@ impl Store {
         rotation_threshold: u64,
     ) -> Result<AgentLifecycleReceipt> {
         self.commit(|txn| {
-            let (cache, agents, _resume_outcomes) = snapshot::catch_up_rollup(txn.paths)?;
+            let (cache, agents, _resume_outcomes) = snapshot::catch_up_with_pending(txn.paths, &self.pending_hook_events())?;
             let known_side = intent
                 .observation
                 .agent_id
@@ -198,13 +269,44 @@ impl Store {
                     side_conversation: None,
                 }
             };
+            if let Some((_, at)) = txn.ingress {
+                for staged in &mut staged {
+                    staged.envelope.timestamp = *at;
+                    if let Some(event) = &mut staged.event {
+                        event.at = *at;
+                    }
+                    if let Some((event, transition)) = staged.event.as_ref().zip(staged.transition) {
+                        let mut payload: event::AgentLifecyclePayload = serde_json::from_str(staged.envelope.params.get())
+                            .map_err(crate::disk::atomic::AtomicErr::Json)
+                            .map_err(crate::store::event_log::EventLogErr::from)?;
+                        payload.replay = Some(event::HookLifecycleReplay {
+                            prior_status: event.prior_status, status: event.status,
+                            phase: event.phase, transition: event.transition.clone(),
+                            compaction_closed: event.compaction_closed,
+                            waiting_cleared: event.waiting_cleared,
+                            compacting: transition.next.compacting,
+                            opened_turn: transition.opened_turn, ping: transition.ping,
+                        });
+                        staged.envelope.params = serde_json::value::to_raw_value(&payload)
+                            .map_err(crate::disk::atomic::AtomicErr::Json)
+                            .map_err(crate::store::event_log::EventLogErr::from)?;
+                    }
+                }
+            }
             let envelopes = staged
                 .iter()
                 .map(|staged| staged.envelope.clone())
                 .collect::<Vec<_>>();
             txn.append_batch(&envelopes)?;
+            let pending_bytes = if txn.staged {
+                let mut pending = self.pending_hook_events();
+                pending.extend_from_slice(&txn.events);
+                crate::store::event_log::encode_batch(&pending)?.len() as u64
+            } else {
+                0
+            };
             receipt.rotation_due =
-                !staged.is_empty() && claim_rotation(txn.paths, rotation_threshold);
+                !staged.is_empty() && claim_rotation(txn.paths, rotation_threshold, pending_bytes);
             receipt.events = staged
                 .into_iter()
                 .filter_map(|staged| staged.event)
@@ -217,9 +319,10 @@ impl Store {
 
 /// Whether the event log crossed the rotation threshold, claiming the debounce
 /// stamp when it did.
-fn claim_rotation(paths: &StatePaths, rotation_threshold: u64) -> bool {
+fn claim_rotation(paths: &StatePaths, rotation_threshold: u64, pending_bytes: u64) -> bool {
     let stamp = paths.cache_dir.join(AUTO_ROTATE_STAMP);
-    std::fs::metadata(&paths.events_log).is_ok_and(|metadata| metadata.len() >= rotation_threshold)
+    let log_bytes = std::fs::metadata(&paths.events_log).map_or(0, |metadata| metadata.len());
+    log_bytes.saturating_add(pending_bytes) >= rotation_threshold
         && debounce::claim(&stamp, AUTO_ROTATE_DEBOUNCE)
 }
 
@@ -654,7 +757,11 @@ fn stage(
                 transition,
             )
         });
-    staged.push(StagedLifecycleEvent { envelope, event });
+    staged.push(StagedLifecycleEvent {
+        envelope,
+        event,
+        transition,
+    });
     event_id
 }
 

@@ -19,6 +19,7 @@ use crate::ids::{SidebarInstanceId, WorkspaceId};
 pub mod binding;
 pub mod focus_repair;
 pub(crate) mod focus_trace;
+pub(crate) mod hook_drain;
 pub mod lsp;
 pub mod notify;
 pub mod plugin_presence;

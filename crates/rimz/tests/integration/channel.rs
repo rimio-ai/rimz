@@ -218,6 +218,7 @@ pub(crate) fn register_idle_lane_agent(
         .spawn_payload(cmd, &payload)
         .wait_with_output()
         .expect("wait channel hook");
+    env.drain_hooks();
     assert!(
         output.status.success(),
         "channel hook failed: {}",

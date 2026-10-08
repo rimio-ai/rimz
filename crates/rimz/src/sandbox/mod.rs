@@ -219,6 +219,24 @@ pub struct MountPlan {
     pub mounts: Vec<Mount>,
 }
 
+pub const HOOK_HOST_PATHS_ENV: &str = "RIMZ_SANDBOX_HOST_PATHS";
+
+impl MountPlan {
+    pub fn host_bound_paths(&self) -> Vec<PathBuf> {
+        self.mounts
+            .iter()
+            .filter_map(|mount| match mount {
+                Mount::Bind { source, target } | Mount::RoBind { source, target }
+                    if source == target =>
+                {
+                    Some(target.clone())
+                }
+                _ => None,
+            })
+            .collect()
+    }
+}
+
 #[derive(Debug, serde::Serialize)]
 pub struct SandboxDiagnostic {
     pub path: Option<PathBuf>,
@@ -379,8 +397,17 @@ pub fn plan(inputs: &SandboxInputs<'_>) -> Result<SandboxPlan, SandboxErr> {
             mounts.push(Mount::RoBind { source, target });
         }
     }
+    let plan = MountPlan { mounts };
+    pins.insert(
+        HOOK_HOST_PATHS_ENV.into(),
+        EnvPin::Set(
+            // validate_path checks identity-bind sources; rewrite::plan uses a validated skills_dir for copy paths.
+            serde_json::to_string(&plan.host_bound_paths())
+                .expect("identity bind targets were validated as absolute UTF-8 paths"),
+        ),
+    );
     Ok(SandboxPlan {
-        plan: MountPlan { mounts },
+        plan,
         pins,
         skipped: views.skipped,
         copies: views.copies,
@@ -574,6 +601,7 @@ mod tests {
                 "HOME",
                 "RIMZ_AGENTS_HOME",
                 "RIMZ_HOME",
+                "RIMZ_SANDBOX_HOST_PATHS",
                 "RIMZ_TEMP_ROOT_KEYS",
                 "RIMZ_USER_TMPDIR",
                 "SCCACHE_CLIENT_SIDE",

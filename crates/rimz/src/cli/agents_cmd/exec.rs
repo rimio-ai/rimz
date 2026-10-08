@@ -13,6 +13,7 @@ use supervisor::ExecOutcome;
 
 const PARK_STRAND_POLL: Duration = Duration::from_secs(5);
 const PARENT_RECEIPT_POLL: Duration = Duration::from_secs(1);
+const HOOK_DRAIN_WAIT: Duration = Duration::from_secs(30);
 const AGENT_ENDED_EVENT: &str = "rimz.agent-ended";
 const AGENT_RESUMED_EVENT: &str = "rimz.agent-resumed";
 
@@ -301,7 +302,8 @@ fn launch_and_supervise(
     // A supervising wrapper owes the store an end from its first binding on,
     // so a hangup after that binding must reach the settle path. A direct exec
     // keeps the default dispositions its provider would see.
-    let exec_directly = should_exec_agent_directly(request, relaunch_cap);
+    let exec_directly = isolation != rimz::config::Isolation::Sandbox
+        && should_exec_agent_directly(request, relaunch_cap);
     if !exec_directly {
         reset_cleanup_signal_flag();
         install_cleanup_signal_handlers().context("installing cleanup signal handlers")?;
@@ -397,6 +399,7 @@ fn launch_and_supervise(
         .transpose()
         .context("reading resumed run before spawning provider")?
         .and_then(|record| resumed_run_follow_ups(request, &record));
+    let _drainer_lease = supervisor::drainer_lease(workspace, isolation)?;
     let provider_terminal = ProviderTerminal::capture();
     let spawned_at = jiff::Timestamp::now();
     let child = command
@@ -1668,6 +1671,11 @@ fn fail_run_if_child_exited_first(
     globals: &GlobalFlags,
     terminal_grace: Duration,
 ) {
+    if let Err(error) =
+        rimz::harness::hook_drain::drain_through(&context.store, 0, None, HOOK_DRAIN_WAIT)
+    {
+        tracing::debug!(%error, "could not drain terminal hooks before child-exit settlement");
+    }
     if wait_for_terminal_run(context, terminal_grace) {
         if let Ok(record) = rimz::harness::run::load(context.store.paths(), &context.run_id)
             && record.status.is_terminal()

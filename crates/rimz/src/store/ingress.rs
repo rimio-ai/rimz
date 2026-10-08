@@ -1,6 +1,6 @@
 //! Durable hook ingress frames and the drainer's byte cursor.
 //!
-//! Appends hold the ingress lock, cursor writes the workspace lock. Truncation holds both, workspace then ingress. Ingress is pending work, separate from the event log that readers fold; only a fully applied and unclaimed tail may be truncated.
+//! Appends share the blocking ingress lock, cursor writes the workspace lock. Length snapshots and truncation take ingress exclusively; truncation holds both, workspace then ingress. Ingress is pending work, separate from the event log that readers fold; only a fully applied and unclaimed tail may be truncated.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -11,13 +11,39 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use crate::disk::atomic;
-use crate::disk::lock::WorkspaceLock;
-use crate::disk::paths::StatePaths;
+use crate::disk::lock::{IngressAppendLock, WorkspaceLock};
+use crate::disk::paths::{RuntimePaths, StatePaths};
 use crate::ids::{AgentKind, EventId};
 
 use super::event_log::{self, EventLogErr, LogExtent};
 
 const CURSOR_VERSION: u32 = 1;
+
+pub(crate) struct DrainerStop {
+    _spawn: WorkspaceLock,
+    _lifetime: WorkspaceLock,
+}
+
+pub(crate) fn stop_drainer(runtime: &RuntimePaths) -> Result<DrainerStop, EventLogErr> {
+    use std::io::Write as _;
+    use std::os::unix::net::UnixStream;
+
+    let spawn = WorkspaceLock::acquire(&runtime.hook_drainer_spawn_lock())
+        .map_err(|error| io_error(&runtime.hook_drainer_spawn_lock(), io::Error::other(error)))?;
+    if let Ok(mut stream) = UnixStream::connect(runtime.hook_drainer_socket_path()) {
+        stream
+            .set_write_timeout(Some(std::time::Duration::from_millis(200)))
+            .map_err(|error| io_error(&runtime.hook_drainer_socket_path(), error))?;
+        let request = serde_json::json!({"through": 0, "reply_for": null, "stop": true});
+        let _ = writeln!(stream, "{request}");
+    }
+    let lifetime = WorkspaceLock::acquire(&runtime.hook_drainer_lock())
+        .map_err(|error| io_error(&runtime.hook_drainer_lock(), io::Error::other(error)))?;
+    Ok(DrainerStop {
+        _spawn: spawn,
+        _lifetime: lifetime,
+    })
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HookIngress {
@@ -60,12 +86,12 @@ impl Default for HookDrainCursor {
     }
 }
 
-/// Append a raw hook frame while the caller holds `paths.hook_ingress_lock`, returning the byte offset after it.
+/// Append a raw hook frame while the caller shares `paths.hook_ingress_lock`, returning the log length after it (possibly including concurrent appends).
 #[must_use = "durability barrier; check the result"]
 pub fn append(
     paths: &StatePaths,
     frame: &HookIngress,
-    _lock: &WorkspaceLock,
+    _lock: &IngressAppendLock,
 ) -> Result<u64, EventLogErr> {
     event_log::append(&paths.hook_ingress_log, frame)?;
     log_len(paths)
@@ -91,6 +117,56 @@ pub fn read_from_offset(
         },
     )?;
     Ok((frames, end))
+}
+
+/// Repair and read pending ingress while holding workspace, then exclusive ingress. Corrupt terminated rows retain their offsets and become skipped records; an unterminated tail is cut before application.
+pub fn repair_and_read(
+    paths: &StatePaths,
+    start: u64,
+    _workspace: &WorkspaceLock,
+    wait: std::time::Duration,
+) -> Result<Vec<(Option<HookIngress>, u64)>, EventLogErr> {
+    use crate::diag::hook_drain::{self, HookDrainEvent};
+
+    let _ingress = WorkspaceLock::acquire_with_timeout(&paths.hook_ingress_lock, wait)
+        .map_err(|error| io_error(&paths.hook_ingress_lock, io::Error::other(error)))?;
+    let mut records = Vec::new();
+    for (at, terminated, bytes) in event_log::frame::read_rows(&paths.hook_ingress_log, start)? {
+        let end = at + bytes.len() as u64 + u64::from(terminated);
+        if !terminated {
+            atomic::truncate_file(&paths.hook_ingress_log, at)?;
+            hook_drain::append(paths, HookDrainEvent::TruncateTail { start: at, end });
+            break;
+        }
+        match event_log::frame::decode_record(at, terminated, &bytes) {
+            Ok(frame) => records.push((Some(frame), end)),
+            Err(error) if error.is_corruption() => {
+                let fused = fused_frame(at, &bytes);
+                hook_drain::append(
+                    paths,
+                    HookDrainEvent::SkipRecord {
+                        start: at,
+                        end: fused.as_ref().map_or(end, |(start, _)| *start),
+                        error: error.to_string(),
+                    },
+                );
+                records.push((fused.map(|(_, frame)| frame), end));
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(records)
+}
+
+/// The whole frame a later appender wrote straight after a torn one, which shares its line.
+fn fused_frame(at: u64, row: &[u8]) -> Option<(u64, HookIngress)> {
+    (1..row.len())
+        .filter(|&start| row[start].is_ascii_digit())
+        .find_map(|start| {
+            let start_at = at + start as u64;
+            let frame = event_log::frame::decode_record(start_at, true, &row[start..]).ok()?;
+            Some((start_at, frame))
+        })
 }
 
 /// A missing cursor or one whose offsets no longer end at the recorded frame IDs starts at zero; malformed or unsupported cursors remain errors.
@@ -119,19 +195,25 @@ pub fn read_cursor(paths: &StatePaths) -> Result<HookDrainCursor, EventLogErr> {
     let mut applied_matches = cursor.applied == 0 && cursor.applied_event_id.is_none();
     let mut claimed_matches = cursor.claimed == 0 && cursor.claimed_event_id.is_none();
     if !applied_matches || !claimed_matches {
-        event_log::visit_records_through_offset::<HookIngress>(
-            &paths.hook_ingress_log,
-            0,
-            cursor.applied.max(cursor.claimed),
-            |frame, end| {
-                if end == cursor.applied {
-                    applied_matches = cursor.applied_event_id.as_ref() == Some(&frame.event_id);
+        for (at, terminated, bytes) in event_log::frame::read_rows(&paths.hook_ingress_log, 0)? {
+            let end = at + bytes.len() as u64 + u64::from(terminated);
+            if end > cursor.applied.max(cursor.claimed) {
+                break;
+            }
+            let id = match event_log::frame::decode_record::<HookIngress>(at, terminated, &bytes) {
+                Ok(frame) => Some(frame.event_id),
+                Err(error) if error.is_corruption() && terminated => {
+                    fused_frame(at, &bytes).map(|(_, frame)| frame.event_id)
                 }
-                if end == cursor.claimed {
-                    claimed_matches = cursor.claimed_event_id.as_ref() == Some(&frame.event_id);
-                }
-            },
-        )?;
+                Err(error) => return Err(error),
+            };
+            if end == cursor.applied {
+                applied_matches = cursor.applied_event_id == id;
+            }
+            if end == cursor.claimed {
+                claimed_matches = cursor.claimed_event_id == id;
+            }
+        }
     }
     if !applied_matches || !claimed_matches {
         return Ok(HookDrainCursor::default());

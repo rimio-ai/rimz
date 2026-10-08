@@ -655,6 +655,10 @@ impl crate::agents::capabilities::CoreCapability for CodexAdapter {
 }
 
 impl crate::agents::capabilities::HookCapability for CodexAdapter {
+    fn hook_env_keys(&self) -> &'static [&'static str] {
+        &["CODEX_SQLITE_HOME"]
+    }
+
     fn hook_ingress(&self, pid: Option<u32>) -> super::HookIngressDecision {
         hook_ingress_decision(
             pid,

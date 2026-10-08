@@ -1033,6 +1033,7 @@ fn peer_launch_reports_only_launcher_opened_turns() {
             "hook_event_name": event, "session_id": "peer-session", "cwd": env.project_root,
             "prompt": prompt, "last_assistant_message": answer,
         }).to_string()).wait_with_output().unwrap();
+            env.drain_hooks();
             assert!(
                 out.status.success(),
                 "{}",

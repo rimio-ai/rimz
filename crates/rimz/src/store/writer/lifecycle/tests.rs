@@ -37,6 +37,212 @@ pub(super) fn observation(signal: LifecycleSignal) -> AgentLifecycleObservation 
 }
 
 #[test]
+fn hook_transaction_hides_all_events_until_the_batch_commits() {
+    let (_dir, store) = test_store();
+    let scoped = store.for_hook_ingress(EventId::new(), jiff::Timestamp::now());
+    scoped
+        .with_hook_transaction::<_, crate::store::StoreErr>(|scoped| {
+            for signal in [
+                LifecycleSignal::Registered,
+                LifecycleSignal::TurnStarted { turn_id: None },
+            ] {
+                scoped.append_agent_lifecycle(AgentLifecycleIntent {
+                    session_name: "rimz-test",
+                    agent_kind: AgentKind::new_unchecked("claude"),
+                    event_name: "fixture",
+                    observation: &observation(signal),
+                    spawned_subagents: &[],
+                })?;
+                assert!(
+                    store.read_events()?.is_empty(),
+                    "a reader must not see a partial hook batch"
+                );
+                assert_eq!(
+                    scoped.snapshot_cached()?.agents.len(),
+                    1,
+                    "the transaction must read its staged lifecycle"
+                );
+            }
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(store.read_events().unwrap().len(), 2);
+    assert_eq!(
+        store.snapshot_cached().unwrap().agents[0].status,
+        AgentStatus::Running
+    );
+}
+
+#[test]
+fn hook_transaction_error_leaves_none_of_the_frames_events() {
+    let (_dir, store) = test_store();
+    let scoped = store.for_hook_ingress(EventId::new(), jiff::Timestamp::now());
+    let result = scoped.with_hook_transaction::<(), crate::store::StoreErr>(|scoped| {
+        scoped.append_agent_lifecycle(AgentLifecycleIntent {
+            session_name: "rimz-test",
+            agent_kind: AgentKind::new_unchecked("claude"),
+            event_name: "fixture",
+            observation: &observation(LifecycleSignal::Registered),
+            spawned_subagents: &[],
+        })?;
+        Err(crate::store::StoreErr::Io {
+            path: scoped.paths().events_log.clone(),
+            source: std::io::Error::other("second observation failed"),
+        })
+    });
+    assert!(result.is_err());
+    assert!(
+        store.read_events().unwrap().is_empty(),
+        "failure must not commit just the first observation"
+    );
+}
+
+#[test]
+fn staged_hook_events_count_toward_rotation() {
+    let (_dir, store) = test_store();
+    store
+        .for_hook_ingress(EventId::new(), jiff::Timestamp::now())
+        .with_hook_transaction::<_, crate::store::StoreErr>(|scoped| {
+            let receipt = scoped.append_agent_lifecycle_with_threshold(
+                AgentLifecycleIntent {
+                    session_name: "rimz-test",
+                    agent_kind: AgentKind::new_unchecked("claude"),
+                    event_name: "SessionStart",
+                    observation: &observation(LifecycleSignal::Registered),
+                    spawned_subagents: &[],
+                },
+                1,
+            )?;
+            assert!(
+                receipt.rotation_due,
+                "staging must not delay a crossed rotation threshold until another hook"
+            );
+            Ok(())
+        })
+        .unwrap();
+}
+
+#[test]
+fn hook_replay_metadata_does_not_repeat_the_event_payload() {
+    let mut recorded = Vec::new();
+    for (name, signal) in [
+        (
+            "Stop",
+            LifecycleSignal::TurnEnded {
+                errored: false,
+                parked_on_background: false,
+                turn_id: None,
+            },
+        ),
+        (
+            "PostToolUse",
+            LifecycleSignal::ToolUsed {
+                mutates: true,
+                edits: true,
+                name: Some("Edit".into()),
+                native_key: None,
+                turn_id: None,
+            },
+        ),
+    ] {
+        let (_dir, store) = test_store();
+        let append = |store: &Store, name, signal| {
+            let mut observation = observation(signal);
+            observation.agent_name = Some("scout".into());
+            observation.worktree_path = Some("/project".into());
+            store
+                .append_agent_lifecycle(AgentLifecycleIntent {
+                    session_name: "rimz-test",
+                    agent_kind: AgentKind::new_unchecked("claude"),
+                    event_name: name,
+                    observation: &observation,
+                    spawned_subagents: &[],
+                })
+                .unwrap()
+        };
+        append(&store, "SessionStart", LifecycleSignal::Registered);
+        append(
+            &store,
+            "UserPromptSubmit",
+            LifecycleSignal::TurnStarted { turn_id: None },
+        );
+        let scoped =
+            store.for_hook_ingress(EventId::new(), "2026-06-01T12:00:00Z".parse().unwrap());
+        let receipt = append(&scoped, name, signal);
+        let envelope = store.read_events().unwrap().pop().unwrap();
+        let with_replay = crate::store::event_log::encode_batch(std::slice::from_ref(&envelope))
+            .unwrap()
+            .len();
+        let mut payload: serde_json::Value = serde_json::from_str(envelope.params.get()).unwrap();
+        payload.as_object_mut().unwrap().remove("replay");
+        let mut without = envelope.clone();
+        without.params = serde_json::value::to_raw_value(&payload).unwrap();
+        let without_replay = crate::store::event_log::encode_batch(&[without])
+            .unwrap()
+            .len();
+        recorded.push((name, envelope, receipt, with_replay, without_replay));
+    }
+    for (name, envelope, receipt, with_replay, without_replay) in recorded {
+        assert_eq!(
+            Store::recover_hook_lifecycle(&envelope).unwrap().events,
+            receipt.events,
+            "{name}: with replay {with_replay} bytes, without replay {without_replay} bytes"
+        );
+        assert!(
+            with_replay * 100 <= without_replay * 125,
+            "{name}: replay grew the frame from {without_replay} to {with_replay} bytes"
+        );
+        let payload: serde_json::Value = serde_json::from_str(envelope.params.get()).unwrap();
+        assert!(
+            payload["replay"].get("event").is_none(),
+            "{name}: replay must not duplicate the envelope's lifecycle event"
+        );
+    }
+}
+
+#[test]
+fn hook_recovery_preserves_the_keepalive_ping_transition() {
+    let (_dir, store) = test_store();
+    let append = |store: &Store, observation: &AgentLifecycleObservation| {
+        store
+            .append_agent_lifecycle(AgentLifecycleIntent {
+                session_name: "rimz-test",
+                agent_kind: AgentKind::new_unchecked("claude"),
+                event_name: "fixture",
+                observation,
+                spawned_subagents: &[],
+            })
+            .unwrap()
+    };
+    append(&store, &observation(LifecycleSignal::Registered));
+    let scoped = store.for_hook_ingress(EventId::new(), jiff::Timestamp::now());
+    let mut prompt = observation(LifecycleSignal::TurnStarted { turn_id: None });
+    prompt.prompt = crate::agents::SanitizedPrompt::new(Some(
+        "Type: CACHE_KEEPALIVE\nFrom: @rimz\nContent:\nCache keepalive, no action needed.",
+    ));
+    append(&scoped, &prompt);
+    let original = append(
+        &scoped,
+        &observation(LifecycleSignal::TurnEnded {
+            errored: false,
+            parked_on_background: false,
+            turn_id: None,
+        }),
+    );
+    let envelope = store.read_events().unwrap().pop().unwrap();
+    let recovered = Store::recover_hook_lifecycle(&envelope).unwrap();
+    assert_eq!(
+        recovered.transition.map(|transition| transition.ping),
+        Some(Some(PingEdge::Close)),
+        "replay must not treat a ping close as real work"
+    );
+    assert_eq!(
+        recovered.events, original.events,
+        "reactors must get the recorded lifecycle classification"
+    );
+}
+
+#[test]
 fn lifecycle_append_gate_keeps_durable_truth_for_progress_signals() {
     let proof = LifecycleSignal::ToolUsed {
         mutates: false,

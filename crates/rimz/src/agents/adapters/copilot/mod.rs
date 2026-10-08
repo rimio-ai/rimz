@@ -361,6 +361,10 @@ impl crate::agents::capabilities::CoreCapability for CopilotAdapter {
 }
 
 impl crate::agents::capabilities::HookCapability for CopilotAdapter {
+    fn hook_env_keys(&self) -> &'static [&'static str] {
+        &["COPILOT_OTEL_FILE_EXPORTER_PATH"]
+    }
+
     fn decode_hook(&self, event_name: &str, payload: &Value) -> Result<HookOutput> {
         let parsed = payloads::parse_payload(payload);
         let tools = parsed.normalized_tool_calls();

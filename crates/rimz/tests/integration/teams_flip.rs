@@ -463,6 +463,7 @@ impl Fixture {
             )
             .wait_with_output()
             .unwrap();
+        self.env.drain_hooks();
         success(output)
     }
 

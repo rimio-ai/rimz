@@ -582,7 +582,7 @@ pub fn claim_rung(
     paths: &StatePaths,
     run_id: &RunId,
     now: Timestamp,
-    attach: impl FnOnce(&super::deadline::Rung) -> bool,
+    attach: impl FnOnce(&RunRecord, &super::deadline::Rung) -> bool,
 ) -> Result<Option<super::deadline::Rung>> {
     // Records are published atomically, so an unlocked read can rule out the
     // common case (no rung due) without taking the workspace lock on every tool
@@ -594,7 +594,7 @@ pub fn claim_rung(
         let Some(rung) = super::deadline::due_rung(record, now) else {
             return Ok(RecordMutation::Keep(None));
         };
-        if !attach(&rung) {
+        if !attach(record, &rung) {
             return Ok(RecordMutation::Keep(None));
         }
         record.deadline_notice_at = Some(rung.at());

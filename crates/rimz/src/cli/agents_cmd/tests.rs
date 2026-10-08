@@ -629,6 +629,43 @@ fn hidden_helper_requests_round_trip_through_cli() {
         panic!("expected refresh-context");
     };
     assert_eq!(args.request, refresh_context);
+
+    let root = crate::cli::Cli::command();
+    let drain = root
+        .find_subcommand("hooks")
+        .unwrap()
+        .find_subcommand("drain")
+        .unwrap();
+    assert!(drain.is_hide_set());
+    for once in [false, true] {
+        let mut argv = vec![
+            "rimz",
+            "hooks",
+            "drain",
+            "--project-root",
+            "/workspace with spaces",
+        ];
+        if once {
+            argv.push("--once");
+        }
+        let parsed = crate::cli::Cli::try_parse_from(argv).unwrap();
+        let Some(crate::cli::Subcmd::Hooks(args)) = parsed.subcommand else {
+            panic!("expected hooks drain");
+        };
+        assert_eq!(args.scope(), ("hooks drain", None));
+    }
+    let parsed = crate::cli::Cli::try_parse_from([
+        "rimz",
+        "hooks",
+        "apply",
+        "--recover-from",
+        "{\"generation\":0,\"offset\":0}",
+    ])
+    .unwrap();
+    let Some(crate::cli::Subcmd::Hooks(args)) = parsed.subcommand else {
+        panic!("expected hooks apply");
+    };
+    assert_eq!(args.scope(), ("hooks apply", None));
 }
 
 fn assert_clap_error(argv: &[&str], kind: clap::error::ErrorKind) {

@@ -12,8 +12,10 @@ pub(super) fn record_lifecycle_observation(
     decoded: &mut HookOutput,
     ingress_owner: HookIngressOwner,
     globals: &GlobalFlags,
-) -> Option<RecordedLifecycle> {
-    let mut observation = decoded.take_lifecycle()?;
+) -> Result<Option<RecordedLifecycle>> {
+    let Some(mut observation) = decoded.take_lifecycle() else {
+        return Ok(None);
+    };
     if let LifecycleSignal::AwaitingInput { ask_id, detail, .. } = &mut observation.signal {
         ask_id.get_or_insert_with(rimz::ids::AskId::new);
         if detail.is_none() {
@@ -52,14 +54,15 @@ pub(super) fn record_lifecycle_observation(
     attach_agent_owner(ingress_owner, &mut observation);
     attach_agent_pane(&mut observation);
     correlate_subagent_observation(workspace, store, agent, &mut observation);
-    Some(record_mapped_lifecycle_observation(
+    record_mapped_lifecycle_observation(
         workspace,
         store,
         agent,
         decoded.event_name(),
         observation,
         globals,
-    ))
+    )
+    .map(Some)
 }
 
 /// Close a keyed ask whose own call the transcript already resolved, before
@@ -79,28 +82,35 @@ pub(super) fn release_resolved_keyed_ask(
     payload: &Value,
     ingress_owner: HookIngressOwner,
     globals: &GlobalFlags,
-) -> Option<RecordedLifecycle> {
-    let observation = decoded.lifecycle()?;
+) -> Result<Option<RecordedLifecycle>> {
+    let Some(observation) = decoded.lifecycle() else {
+        return Ok(None);
+    };
     let LifecycleSignal::ToolUsed {
         native_key: Some(key),
         ..
     } = &observation.signal
     else {
-        return None;
+        return Ok(None);
     };
     // A child's tool never answers its parent's ask on this path: Store
     // derives that edge from the child observation itself.
     if observation.parent_agent_id.is_some() {
-        return None;
+        return Ok(None);
     }
-    let agent_id = observation.agent_id.as_ref()?;
-    let open_key = agent_state(store, agent, agent_id)
+    let Some(agent_id) = observation.agent_id.as_ref() else {
+        return Ok(None);
+    };
+    let Some(open_key) = agent_state(store, agent, agent_id)
         .filter(|state| state.status == rimz::agents::AgentStatus::Waiting)
-        .and_then(|state| state.open_ask?.native_key)?;
+        .and_then(|state| state.open_ask?.native_key)
+    else {
+        return Ok(None);
+    };
     if open_key == *key || !agent.tool_call_resolved(payload, &open_key) {
-        return None;
+        return Ok(None);
     }
-    Some(record_derived_lifecycle_observation(
+    record_derived_lifecycle_observation(
         workspace,
         store,
         agent,
@@ -117,7 +127,8 @@ pub(super) fn release_resolved_keyed_ask(
         ),
         ingress_owner,
         globals,
-    ))
+    )
+    .map(Some)
 }
 
 fn context_window_is_unset(
@@ -166,7 +177,7 @@ pub(super) fn record_derived_lifecycle_observation(
     mut observation: AgentLifecycleObservation,
     ingress_owner: HookIngressOwner,
     globals: &GlobalFlags,
-) -> RecordedLifecycle {
+) -> Result<RecordedLifecycle> {
     attach_agent_owner(ingress_owner, &mut observation);
     attach_agent_pane(&mut observation);
     record_mapped_lifecycle_observation(workspace, store, agent, event_name, observation, globals)
@@ -179,7 +190,7 @@ fn record_mapped_lifecycle_observation(
     event_name: &str,
     mut observation: AgentLifecycleObservation,
     globals: &GlobalFlags,
-) -> RecordedLifecycle {
+) -> Result<RecordedLifecycle> {
     // Launch identity belongs to the pane's root session. A child stop can
     // omit its optional label fields; filling those from the parent
     // process environment would overwrite the child's carried identity.
@@ -246,40 +257,24 @@ fn record_mapped_lifecycle_observation(
     } else {
         Vec::new()
     };
-    let receipt = match store.append_agent_lifecycle(AgentLifecycleIntent {
+    let receipt = store.append_agent_lifecycle(AgentLifecycleIntent {
         session_name: &workspace.session_name,
         agent_kind: agent.spec().kind_id(),
         event_name,
         observation: &observation,
         spawned_subagents: &spawned_subagents,
-    }) {
-        Ok(receipt) => receipt,
-        Err(err) => {
-            warn!(
-                agent = agent.spec().kind,
-                event = %event_name,
-                error = %err,
-                "lifecycle: failed to record the agent.lifecycle event",
-            );
-            return RecordedLifecycle {
-                model_hint,
-                observation,
-                receipt: Default::default(),
-            };
-        }
-    };
+    })?;
     let side_conversation = receipt.side_conversation.is_some();
     if side_conversation {
         debug!(agent = agent.spec().kind, "lifecycle: side conversation");
     } else {
         log_lifecycle_receipt(agent.spec().kind, &observation, &receipt);
     }
-    rimz::harness::team_stage::react_to_lifecycle(workspace, store, &receipt, globals.mux);
-    RecordedLifecycle {
+    Ok(RecordedLifecycle {
         model_hint,
         observation,
         receipt,
-    }
+    })
 }
 
 fn correlate_subagent_observation(

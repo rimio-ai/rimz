@@ -494,6 +494,10 @@ impl crate::agents::capabilities::LaunchCapability for QwenAdapter {
 }
 
 impl crate::agents::capabilities::HookCapability for QwenAdapter {
+    fn hook_env_keys(&self) -> &'static [&'static str] {
+        &["QWEN_RUNTIME_DIR"]
+    }
+
     fn hook_ingress(&self, pid: Option<u32>) -> super::HookIngressDecision {
         super::HookIngressDecision::Accept(super::HookIngressAcceptance::agent(
             pid.and_then(process::hook_owner_pid),

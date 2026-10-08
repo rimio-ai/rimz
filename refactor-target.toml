@@ -128,6 +128,9 @@ upward-dependencies = ["address"]
 # ContextCapability::prompt_cache_ttl supplies provider cache facts to idle-compaction policy.
 # The seat active-time sum and its session map are shared by store, sidebar and CLI.
 # Native post-tool context attachment crosses the adapter/CLI hook seam.
+# HookOutput::new lets the hook construct a reply without decoding provider facts (+1).
+# HookCapability::payload_hook_reply separates native decisions from provider reads (+1).
+# HookCapability::hook_env_keys declares hook-discovery paths without changing named-account home selectors (+1).
 # A sanitized-prompt newtype and the RimZ prompt-block registry are the adapters' and the CLI's only way to hand over prompt text.
 # AgentState::last_request_at shares one request clock with producer and helper timers.
 # `is_team_seat` keeps team seats out of peer runs and the launcher's fleet digest.
@@ -184,7 +187,7 @@ upward-dependencies = ["address"]
 # Per-kind room account outcomes, sources, pin accessors and the healthy-kind catalogue replace snapshot readers (+18 net).
 # RoomAccounts::project shares the resolver's trust metadata with account standing (+1).
 # Headless schema, request, verdict, result, form operations, adapter forms and shared Codex billing (+10).
-surface-budget = 1026
+surface-budget = 1029
 
 [[module]]
 path = "crates/rimz/src/agents/park.rs"
@@ -345,7 +348,8 @@ path = "crates/rimz/src/diag"
 # Renderer attribution rebinds a sink while retaining its shared rate limiter (+1).
 # ModelCatalogFallback is the rung field of the model-catalog refresh record, kept in the record vocabulary so it imports nothing from `agents` (+1).
 # Focus tracing exposes its vocabulary, sink, and shared log path to producer and attachment evidence (+5).
-surface-budget = 89
+# Store repair and the drainer share typed hook repair/drop evidence and its sink (+3).
+surface-budget = 92
 
 [[module]]
 path = "crates/rimz/src/disk"
@@ -373,6 +377,7 @@ allowed-dependencies = [
 # State classes expose shared path routing for root-only readers.
 # Record codecs and cross-room scanners share the layout version, legacy default, and two validation entry points.
 # File-backed lock guards share blocking and immediate inode-checked acquisition.
+# Workspace path discovery and record validation share one atomic-record byte read (+1).
 # Root-only readers share history probes and the remaining room retention policy.
 # Explicit state pairing and runtime-only preparation keep lock identity independent of runtime roots.
 # Daily machine GC shares its stamp and election-lock paths with the harness.
@@ -396,8 +401,9 @@ allowed-dependencies = [
 # Room birth and sidebar readers share the classed workspace projection path (+1).
 # Hook ingress exposes the drainer's diagnostic log, socket, lifetime lock, and spawn lock (+4).
 # Hook ingress serializes appends independently of lifecycle folds (+1).
+# Apply children inherit the lifetime lock so parent death cannot admit concurrent replay (+1).
 # Hook appenders share a typed, blocking ingress guard (+2).
-surface-budget = 230
+surface-budget = 232
 
 [[module]]
 path = "crates/rimz/src/forge"
@@ -530,7 +536,12 @@ path = "crates/rimz/src/harness"
 # The supervisor wakes receipt-cadence tail drains through ParentWatch (+1).
 # ModelRefreshFailure carries actual catalog refresh failures to the exec wrapper (+1).
 # AgentCheckRecord carries headless verdicts and usage into loop CLI forensics (+1).
-surface-budget = 758
+# The hook drainer publishes its wire, accepted-owner env seam and entry points; lifecycle replay keeps signal firing at-most-once (+14).
+# Connected sandbox hooks and host-wrapper leases share the existing socket (+8).
+# The CLI apply-child wait reuses the bounded subprocess pump through the drainer (+1).
+# Active-time ingress shares the captured frame timestamp with lifecycle application (+1).
+# FrameAttempt tells an apply whether a crashed attempt preceded it, so only a redo scans for its own transcript entry (+2).
+surface-budget = 784
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -589,7 +600,8 @@ path = "crates/rimz/src/mux"
 # View naming publishes its record types through the pane listing and frame (+8).
 # PaneContentSize, its read, and the winsize repair module, function and outcome serve startup repair (+5).
 # Ambient mux identity and its scrub builder are shared by the birth specs and the web helpers (+2).
-surface-budget = 275
+# Captured hook pane values use the existing mux-owned normalization (+1).
+surface-budget = 276
 
 [[module]]
 path = "crates/rimz/src/mux/zellij"
@@ -651,7 +663,8 @@ allowed-dependencies = ["agents", "child_process", "config", "disk", "ids", "mux
 # Exec presents typed skill omissions returned by sandbox preparation.
 # Inspection shares read-only mount/copy plans and explicit application with exec.
 # Explicit launch cwd resolution and prompt-file resolution reverse the caller's tmp view through TmpView::host_path.
-surface-budget = 22
+# Hook mapping consumes the launch mount plan's identity binds and captured pin (+2).
+surface-budget = 24
 
 [[module]]
 path = "crates/rimz/src/room"
@@ -765,8 +778,11 @@ path = "crates/rimz/src/store"
 # QUEUED_NOTICE_BUSY_ENV names its millisecond override (+1).
 # Store::queue_still_queued_notice atomically stamps and enqueues for message/deliver.rs::sweep (+1).
 # Hook ingress shares its codec module, raw frame, cursor, and five locked-write/read entry points (+8).
+# Hook application scopes the lock and ingress stamp and reconstructs reactor receipts (+3).
 # Ingress readers reuse the frame visitor with a snapshotted byte limit (+1).
-surface-budget = 405
+# Reset and room teardown retain drainer election/lifetime stop guards (+2).
+# The CLI stamps assistant transcripts with the scoped Store ingress id (+1).
+surface-budget = 411
 
 [[module]]
 path = "crates/rimz/src/theme"
@@ -817,7 +833,8 @@ surface-budget = 48
 [[module]]
 path = "crates/rimz/src/workspace.rs"
 # Record scanners expose only rooms using the current layout.
-surface-budget = 24
+# Persisted hooks resolve through their captured environment (+1).
+surface-budget = 25
 
 [[module]]
 path = "crates/rimz/src/wakeup"
@@ -1049,7 +1066,8 @@ allowed-dependencies = [
 # The exec wrapper asks whether its agent is parked for recovery (+1).
 # Explicit audit-row text loading (+1).
 # The hook ingress and drain cursor codec module (+1).
-surface-budget = 35
+# The CLI reads a scoped handle's hook ingress id to key assistant transcripts (+1).
+surface-budget = 36
 
 [[module]]
 path = "crates/rimz/src/utils/time.rs"
@@ -3129,6 +3147,11 @@ reason = "Best-effort rotating JSONL diagnostics deliberately skip fsync; genera
 
 [[verdict]]
 kind = "item"
+key = "disk::paths::read_workspace_record_bytes"
+reason = "Workspace path discovery and typed record validation reuse bytes keyed by the full atomic-replacement stamp, avoiding a second foreground hook open without changing parsing or errors."
+
+[[verdict]]
+kind = "item"
 key = "disk::paths::legacy_layout"
 reason = "serde default named by string in workspace/record.rs; atlas sees no referrer; pins pre-layout records reading as layout 1 and being refused (2bf9c08d0). (pass 27d)."
 
@@ -4371,6 +4394,31 @@ reason = "Floored pub by the public Capabilities::hook_context field the binary 
 kind = "item"
 key = "agents::definition::AgentDefinition::attach_hook_context"
 reason = "The one writer of the spec-declared hook-context reply, called by the binary's lifecycle hook on a due rung; an inherent method replaces the HookCapability trait method so no adapter can restate the reply shape (pass 32a)."
+
+[[verdict]]
+kind = "item"
+key = "agents::hook_types::HookOutput::new"
+reason = "The binary's ingress frontend constructs the in-hook deadline reply without adapter decode or provider transcript reads."
+
+[[verdict]]
+kind = "item"
+key = "agents::capabilities::HookCapability::payload_hook_reply"
+reason = "The ingress frontend answers Cursor and preserves Antigravity's native neutral JSON on a late reply; provider-reading decode stays in the apply child."
+
+[[verdict]]
+kind = "item"
+key = "agents::capabilities::HookCapability::hook_env_keys"
+reason = "Captured hooks retain provider-discovery path overrides separately from the single named-account config-home selector."
+
+[[verdict]]
+kind = "item"
+key = "disk::lock::WorkspaceLock::as_fd"
+reason = "A hook apply child keeps the drainer lifetime lock until it can no longer write, including after parent death; the child restores close-on-exec before spawning helpers."
+
+[[verdict]]
+kind = "item"
+key = "store::writer::Store::for_hook_ingress"
+reason = "The CLI apply child attributes every derived durable event to the captured ingress frame."
 
 [[verdict]]
 kind = "item"

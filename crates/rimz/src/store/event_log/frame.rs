@@ -25,7 +25,7 @@ pub(super) fn encode_frame(payload: &[u8]) -> Vec<u8> {
 
 /// Split the log into raw `(offset, terminated, line bytes)` rows from byte
 /// `start` — the scan `read_from_offset` folds and `repair` validates.
-pub(super) fn read_rows(path: &Path, start: u64) -> Result<Vec<(u64, bool, Vec<u8>)>> {
+pub(in crate::store) fn read_rows(path: &Path, start: u64) -> Result<Vec<(u64, bool, Vec<u8>)>> {
     // A missing log reads as empty, decided by the open itself: rotation can
     // rename the active log away between any existence check and the open.
     let mut file = match File::open(path) {
@@ -74,7 +74,7 @@ pub(super) fn decode_row(at: u64, terminated: bool, bytes: &[u8]) -> Result<Even
     decode_record(at, terminated, bytes)
 }
 
-pub(super) fn decode_record<T: DeserializeOwned>(
+pub(in crate::store) fn decode_record<T: DeserializeOwned>(
     at: u64,
     terminated: bool,
     bytes: &[u8],

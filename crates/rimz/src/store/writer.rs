@@ -151,26 +151,50 @@ pub struct ResetRecordsOutcome {
 
 struct Txn<'a> {
     paths: &'a StatePaths,
+    ingress: Option<&'a (EventId, jiff::Timestamp)>,
     events: Vec<EventEnvelope>,
     force_publish: bool,
+    staged: bool,
 }
 
 impl Txn<'_> {
     fn append(&mut self, event: &EventEnvelope) -> Result<()> {
-        event_log::append(&self.paths.events_log, event)?;
-        self.events.push(event.clone());
+        let mut event = event.clone();
+        if let Some((ingress, at)) = self.ingress {
+            event.ingress = Some(ingress.clone());
+            event.timestamp = *at;
+        }
+        if !self.staged {
+            event_log::append(&self.paths.events_log, &event)?;
+        }
+        self.events.push(event);
         Ok(())
     }
 
     fn append_batch(&mut self, events: &[EventEnvelope]) -> Result<()> {
-        event_log::append_batch(&self.paths.events_log, events)?;
-        self.events.extend_from_slice(events);
+        let mut events = events.to_vec();
+        if let Some((ingress, at)) = self.ingress {
+            for event in &mut events {
+                event.ingress = Some(ingress.clone());
+                event.timestamp = *at;
+            }
+        }
+        if !self.staged {
+            event_log::append_batch(&self.paths.events_log, &events)?;
+        }
+        self.events.extend(events);
         Ok(())
     }
 
     fn force_publish(&mut self) {
         self.force_publish = true;
     }
+}
+
+#[derive(Debug)]
+pub(super) struct HookTransaction {
+    _lock: lock::WorkspaceLock,
+    pub(super) tail: std::sync::Mutex<(Vec<EventEnvelope>, bool)>,
 }
 
 enum RollupInvalidation {
@@ -196,6 +220,52 @@ fn remove_file_if_exists(path: &Path) -> Result<()> {
 }
 
 impl Store {
+    /// Attribute all events written through this handle to one ingress frame.
+    pub fn for_hook_ingress(&self, ingress: EventId, at: jiff::Timestamp) -> Self {
+        Self {
+            ingress: Some((ingress, at)),
+            ..self.clone()
+        }
+    }
+
+    /// Stage the lifecycle batch under one lock and publish one ordered append before release.
+    pub fn with_hook_transaction<T, E: From<StoreErr>>(
+        &self,
+        apply: impl FnOnce(&Self) -> std::result::Result<T, E>,
+    ) -> std::result::Result<T, E> {
+        if self.ingress.is_none() {
+            return apply(self);
+        }
+        let transaction = std::sync::Arc::new(HookTransaction {
+            _lock: lock::WorkspaceLock::acquire(&self.paths().workspace_lock)
+                .map_err(StoreErr::from)?,
+            tail: std::sync::Mutex::new((Vec::new(), false)),
+        });
+        let scoped = Self {
+            hook_transaction: Some(transaction.clone()),
+            ..self.clone()
+        };
+        let result = apply(&scoped)?;
+        drop(scoped);
+        let (events, force) = transaction
+            .tail
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        event_log::append_batch(&self.paths().events_log, &events).map_err(StoreErr::from)?;
+        drop(transaction);
+        #[cfg(feature = "testkit")]
+        crate::testkit::rendezvous("RIMZ_TEST_HOOK_DRAIN_AFTER_LOCKED_APPLY");
+        for event in &events {
+            self.wake_sidebars_for_event_best_effort(event);
+        }
+        if force || !events.is_empty() {
+            self.publish_tail(force);
+            self.reap_dead_sessions_if_due();
+        }
+        Ok(result)
+    }
+
     /// Run a mutation that may replace or cut the active event log.
     ///
     /// The publish lock fences checkpoint writers under the canonical
@@ -230,15 +300,33 @@ impl Store {
 
     fn commit<T>(&self, f: impl FnOnce(&mut Txn<'_>) -> Result<T>) -> Result<T> {
         let (out, txn) = {
-            let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
+            let _guard = if self.hook_transaction.is_none() {
+                Some(lock::WorkspaceLock::acquire(
+                    &self.inner.paths.workspace_lock,
+                )?)
+            } else {
+                None
+            };
             let mut txn = Txn {
                 paths: &self.inner.paths,
+                ingress: self.ingress.as_ref(),
                 events: Vec::new(),
                 force_publish: false,
+                staged: self.hook_transaction.is_some(),
             };
             let out = f(&mut txn)?;
             (out, txn)
         };
+
+        if let Some(transaction) = &self.hook_transaction {
+            let mut tail = transaction
+                .tail
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            tail.0.extend(txn.events);
+            tail.1 |= txn.force_publish;
+            return Ok(out);
+        }
 
         for event in &txn.events {
             self.wake_sidebars_for_event_best_effort(event);

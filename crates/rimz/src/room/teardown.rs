@@ -109,8 +109,15 @@ pub fn teardown_room(
     {
         tracing::warn!(error = %err, "could not restore the pre-teardown live roster");
     }
-    if let Err(err) = runtime.remove_disposable_dirs() {
-        tracing::warn!(error = %err, "room runtime removal failed");
+    match crate::store::ingress::stop_drainer(runtime) {
+        Ok(_drainer) => {
+            if let Err(err) = runtime.remove_disposable_dirs() {
+                tracing::warn!(error = %err, "room runtime removal failed");
+            }
+        }
+        Err(err) => {
+            tracing::warn!(error = %err, "could not stop hook drainer; retaining room runtime")
+        }
     }
     TeardownReport {
         session_killed,

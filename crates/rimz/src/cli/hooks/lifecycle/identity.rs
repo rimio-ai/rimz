@@ -3,7 +3,7 @@
 use super::*;
 
 pub(super) fn env_run_id() -> Option<rimz::RunId> {
-    let raw = std::env::var(rimz::harness::launch::ENV_RUN_ID).ok()?;
+    let raw = rimz::harness::hook_drain::env_value(rimz::harness::launch::ENV_RUN_ID)?;
     match raw.parse() {
         Ok(run_id) => Some(run_id),
         Err(err) => {
@@ -24,7 +24,7 @@ pub(super) fn agent_identity_env(
     var: &str,
     validate: IdentityValidator,
 ) -> Option<String> {
-    if let Ok(raw) = std::env::var(var) {
+    if let Some(raw) = rimz::harness::hook_drain::env_value(var) {
         if raw.trim().is_empty() {
             let _ = validate(raw, "env", var);
             return None;

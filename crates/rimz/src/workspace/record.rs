@@ -8,7 +8,6 @@
 //! the account stamp its exec wrapper resolves instead.
 //! There is no version upgrade path: an incompatible layout is refused.
 
-use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -187,9 +186,11 @@ pub fn read_optional(path: &Path) -> Result<Option<WorkspaceRecord>> {
 }
 
 pub fn read(path: &Path) -> Result<WorkspaceRecord> {
-    let bytes = fs::read(path).map_err(|source| WorkspaceRecordErr::Io {
-        path: path.to_path_buf(),
-        source,
+    let bytes = crate::disk::paths::read_workspace_record_bytes(path).map_err(|source| {
+        WorkspaceRecordErr::Io {
+            path: path.to_path_buf(),
+            source,
+        }
     })?;
     let record: WorkspaceRecord =
         serde_json::from_slice(&bytes).map_err(|source| WorkspaceRecordErr::Json {

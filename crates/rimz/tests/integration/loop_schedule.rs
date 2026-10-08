@@ -1695,6 +1695,7 @@ fn resident_launch_case(each_worktree: bool, team: bool) {
             )
             .wait_with_output()
             .unwrap();
+        env.drain_hooks();
         assert!(
             output.status.success(),
             "{}",
@@ -2031,6 +2032,7 @@ fn resident_takeover_case(case: Takeover) {
             )
             .wait_with_output()
             .unwrap();
+        env.drain_hooks();
         assert!(
             output.status.success(),
             "{}",
@@ -3002,6 +3004,7 @@ fn team_signal_registration_preserves_same_named_machine_configuration() {
         .env(rimz::harness::launch::ENV_AGENT_NAME, "configured-session")
         .env(rimz::workspace::ENV_CHANNEL, "feature-team");
     let output = env.spawn_payload(command, &json!({ "hook_event_name": "SessionStart", "session_id": "configured-session", "cwd": cwd }).to_string()).wait_with_output().unwrap();
+    env.drain_hooks();
     assert!(output.status.success());
     assert_eq!(
         std::fs::read_to_string(loop_config_path(&env)).unwrap(),
@@ -3009,7 +3012,9 @@ fn team_signal_registration_preserves_same_named_machine_configuration() {
     );
     assert!(read_loop_instances(&env).0.is_empty());
     assert!(
-        String::from_utf8_lossy(&output.stderr).contains("configuration-owned"),
+        std::fs::read_to_string(env.store().paths().hook_drainer_log())
+            .unwrap()
+            .contains("configuration-owned"),
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
@@ -3328,6 +3333,7 @@ fn team_signal_hook(env: &Env, cwd: &Path, session: &str, event: &str) {
         .spawn_payload(command, &payload)
         .wait_with_output()
         .unwrap();
+    env.drain_hooks();
     assert!(
         output.status.success(),
         "{}",
@@ -7770,6 +7776,7 @@ fn loop_stop_of_a_spawn_run(pane_open: bool) {
                     )
                     .wait_with_output()
                     .unwrap();
+                env.drain_hooks();
                 assert!(
                     output.status.success(),
                     "{}",
@@ -8361,6 +8368,7 @@ fn start_consumed_spawn(env: &Env, name: &str) -> (ConsumedSpawn, std::process::
                     )
                     .wait_with_output()
                     .unwrap();
+                env.drain_hooks();
                 assert!(
                     output.status.success(),
                     "{}",
@@ -9562,6 +9570,7 @@ fn run_agent_hook(env: &Env, source: &str, payload: serde_json::Value, cwd: &Pat
         .spawn_payload(cmd, &payload)
         .wait_with_output()
         .expect("wait hook");
+    env.drain_hooks();
     assert!(
         output.status.success(),
         "hook failed: {}",

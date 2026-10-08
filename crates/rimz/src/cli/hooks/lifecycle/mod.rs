@@ -29,6 +29,7 @@ pub(super) use identity::fill_root_launch_identity;
 #[cfg(test)]
 pub(super) use observe::root_identity_rollup;
 
+#[cfg(test)]
 pub(super) fn handle_lifecycle_hook(
     workspace: &ResolvedWorkspace,
     store: &Store,
@@ -37,9 +38,8 @@ pub(super) fn handle_lifecycle_hook(
     payload: &Value,
     ingress_owner: rimz::agents::HookIngressOwner,
     globals: &GlobalFlags,
-) -> Result<()> {
-    let agent_id = decoded.event_agent_id().cloned();
-    let released = release_resolved_keyed_ask(
+) -> Result<rimz::agents::HookReply> {
+    handle_lifecycle_frame(
         workspace,
         store,
         agent,
@@ -47,13 +47,101 @@ pub(super) fn handle_lifecycle_hook(
         payload,
         ingress_owner,
         globals,
-    );
-    let recorded =
-        record_lifecycle_observation(workspace, store, agent, decoded, ingress_owner, globals);
+        &[],
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn handle_lifecycle_frame(
+    workspace: &ResolvedWorkspace,
+    store: &Store,
+    agent: &AgentDefinition,
+    decoded: &mut HookOutput,
+    payload: &Value,
+    ingress_owner: rimz::agents::HookIngressOwner,
+    globals: &GlobalFlags,
+    recovered: &[rimz::store::event::EventEnvelope],
+) -> Result<rimz::agents::HookReply> {
+    let replay = rimz::harness::hook_drain::is_replay();
+    let agent_id = decoded.event_agent_id().cloned();
+    let (released, recorded, derived) = if replay {
+        let event_name = decoded.event_name().to_owned();
+        decoded.take_lifecycle();
+        let mut primary = None;
+        let mut others = Vec::new();
+        for envelope in recovered {
+            let rimz::store::event::EventKind::AgentLifecycle(payload) = envelope.kind() else {
+                continue;
+            };
+            let Some(receipt) = Store::recover_hook_lifecycle(envelope) else {
+                continue;
+            };
+            let recorded = RecordedLifecycle {
+                model_hint: payload.observation.launch.model.clone(),
+                observation: payload.observation,
+                receipt,
+            };
+            if payload.event_name.as_deref() == Some(event_name.as_str())
+                && recorded.observation.agent_id == agent_id
+            {
+                primary = Some(recorded);
+            } else {
+                others.push(recorded);
+            }
+        }
+        (None, primary, others)
+    } else {
+        store.with_hook_transaction::<_, anyhow::Error>(|store| {
+            let released = release_resolved_keyed_ask(
+                workspace,
+                store,
+                agent,
+                decoded,
+                payload,
+                ingress_owner,
+                globals,
+            )?;
+            let recorded = record_lifecycle_observation(
+                workspace,
+                store,
+                agent,
+                decoded,
+                ingress_owner,
+                globals,
+            )?;
+            let derived = if recorded.as_ref().is_some_and(|recorded| {
+                recorded.receipt.side_conversation.is_none()
+                    && recorded.observation.agent_id.is_some()
+                    && recorded.observation.parent_agent_id.is_none()
+            }) {
+                derive_subagent_lifecycle(workspace, store, agent, ingress_owner, globals)?
+            } else {
+                Vec::new()
+            };
+            Ok((released, recorded, derived))
+        })?
+    };
+    for record in released.iter().chain(recorded.iter()).chain(&derived) {
+        if replay {
+            rimz::harness::team_stage::replay_lifecycle(
+                workspace,
+                store,
+                &record.receipt,
+                globals.mux,
+            );
+        } else {
+            rimz::harness::team_stage::react_to_lifecycle(
+                workspace,
+                store,
+                &record.receipt,
+                globals.mux,
+            );
+        }
+    }
     if let Some(recorded) = recorded.as_ref()
         && let Some(side) = recorded.receipt.side_conversation.as_ref()
     {
-        if let Some(host) = side.host.as_ref() {
+        if !replay && let Some(host) = side.host.as_ref() {
             touch_agent_activity(
                 workspace,
                 store,
@@ -75,22 +163,16 @@ pub(super) fn handle_lifecycle_hook(
         if recorded.receipt.rotation_due {
             spawn_auto_rotation(workspace);
         }
-        return Ok(());
+        return Ok(decoded.reply().clone());
     }
     let event_name = decoded.event_name().to_owned();
-    let mut events: Vec<_> = released
+    let events: Vec<_> = released
         .iter()
         .chain(recorded.as_ref())
+        .chain(&derived)
         .flat_map(|recorded| recorded.receipt.events.clone())
         .collect();
-    let (derived_events, derived_rotation_due) = if recorded.as_ref().is_some_and(|recorded| {
-        recorded.observation.agent_id.is_some() && recorded.observation.parent_agent_id.is_none()
-    }) {
-        derive_subagent_lifecycle(workspace, store, agent, ingress_owner, globals)
-    } else {
-        (Vec::new(), false)
-    };
-    events.extend(derived_events);
+    let derived_rotation_due = derived.iter().any(|recorded| recorded.receipt.rotation_due);
     if derived_rotation_due || released.is_some_and(|released| released.receipt.rotation_due) {
         spawn_auto_rotation(workspace);
     }
@@ -101,8 +183,17 @@ pub(super) fn handle_lifecycle_hook(
         .and_then(|recorded| recorded.receipt.transition.as_ref())
         .is_some_and(|transition| transition.ping.is_some());
     let mut run_id = session_run_id(store, agent, agent_id.as_ref());
-    let assistant_message =
-        record_assistant_response(workspace, store, agent, decoded, recorded.as_ref());
+    let assistant_message = if replay {
+        decoded.event_agent_id().cloned().zip(
+            decoded
+                .assistant_message()
+                .map(str::trim)
+                .filter(|message| !message.is_empty())
+                .map(ToOwned::to_owned),
+        )
+    } else {
+        record_assistant_response(workspace, store, agent, decoded, recorded.as_ref())
+    };
     if let (Some(run_id), Some((agent_id, message)), false) =
         (run_id.as_ref(), assistant_message, ping_edge)
         && let Err(err) = rimz::harness::run::record_assistant_message(
@@ -156,7 +247,7 @@ pub(super) fn handle_lifecycle_hook(
     let context_agent_id = observed_agent_id
         .or_else(|| decoded.context_agent_id().cloned())
         .or_else(|| agent_id.clone());
-    if !ping_edge {
+    if !ping_edge && !replay {
         active_time::record(
             store,
             agent,
@@ -206,18 +297,6 @@ pub(super) fn handle_lifecycle_hook(
                 run_id.as_ref(),
             );
         }
-        if root_tool_used
-            && agent.spec().capabilities.hook_context.is_some()
-            && let Some(run_id) = run_id.as_ref()
-            && let Err(error) = rimz::harness::run::claim_rung(
-                store.paths(),
-                run_id,
-                jiff::Timestamp::now(),
-                |rung| agent.attach_hook_context(decoded, &rung.text()),
-            )
-        {
-            warn!(%run_id, %error, "lifecycle: failed to claim deadline context");
-        }
         let in_flight = in_flight_messages_for_lifecycle(store, agent, recorded);
         let delivered = confirm_sent_message_for_lifecycle(store, agent, recorded, workspace);
         if run_id.is_none() {
@@ -228,15 +307,17 @@ pub(super) fn handle_lifecycle_hook(
             &delivered.iter().collect::<Vec<_>>(),
             &in_flight.iter().collect::<Vec<_>>(),
         );
-        record_user_input_for_lifecycle(
-            workspace,
-            agent,
-            recorded,
-            &sections,
-            &delivered,
-            run_id.is_some(),
-            user_input_state_root(store),
-        );
+        if !replay {
+            record_user_input_for_lifecycle(
+                workspace,
+                agent,
+                recorded,
+                &sections,
+                &delivered,
+                run_id.is_some(),
+                user_input_state_root(store),
+            );
+        }
         let questions = match &recorded.observation.signal {
             LifecycleSignal::AwaitingInput { .. } => decoded.questions(),
             _ => &[],
@@ -284,7 +365,7 @@ pub(super) fn handle_lifecycle_hook(
         },
         &events,
     );
-    Ok(())
+    Ok(decoded.reply().clone())
 }
 
 /// Spawn a hook-triggered `rimz` helper detached, with all stdio nulled (the
@@ -295,7 +376,11 @@ pub(super) fn handle_lifecycle_hook(
 fn spawn_refresh_detached(spawn: &rimz::agents::RefreshSpawn) {
     let exe = rimz::proc::rimz_exe();
     let mut cmd = Command::new(exe);
+    for name in rimz::harness::hook_drain::HOOK_ENV_NAMES {
+        cmd.env_remove(name);
+    }
     cmd.args(&spawn.args)
+        .envs(rimz::harness::hook_drain::capture_env())
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
@@ -327,10 +412,10 @@ fn derive_subagent_lifecycle(
     agent: &AgentDefinition,
     ingress_owner: rimz::agents::HookIngressOwner,
     globals: &GlobalFlags,
-) -> (Vec<rimz::agents::LifecycleEvent>, bool) {
+) -> Result<Vec<RecordedLifecycle>> {
     let observations = agent.derive_subagent_observations(&workspace.worktree_root);
     if observations.is_empty() {
-        return (Vec::new(), false);
+        return Ok(Vec::new());
     }
     let snapshot = match store.snapshot_cached() {
         Ok(snapshot) => snapshot,
@@ -340,11 +425,10 @@ fn derive_subagent_lifecycle(
                 error = %err,
                 "lifecycle: skipped derived subagents because the prior rollup was unreadable",
             );
-            return (Vec::new(), false);
+            return Ok(Vec::new());
         }
     };
     let kind = agent.spec().kind;
-    let mut rotation_due = false;
     let mut events = Vec::new();
     for observation in observations {
         let (Some(child_id), Some(parent_id)) = (
@@ -379,11 +463,10 @@ fn derive_subagent_lifecycle(
             observation,
             ingress_owner,
             globals,
-        );
-        rotation_due |= recorded.receipt.rotation_due;
-        events.extend(recorded.receipt.events);
+        )?;
+        events.push(recorded);
     }
-    (events, rotation_due)
+    Ok(events)
 }
 
 fn user_input_state_root(_store: &Store) -> Option<&std::path::Path> {
@@ -463,7 +546,14 @@ fn record_run_lifecycle(
         &recorded.observation,
         assistant_message.map(ToOwned::to_owned),
     ) {
-        Ok(record) => record,
+        Ok(record) => record.or_else(|| {
+            if !rimz::harness::hook_drain::is_replay() {
+                return None;
+            }
+            rimz::harness::run::load(store.paths(), run_id)
+                .ok()
+                .filter(|record| record.status.is_terminal())
+        }),
         Err(err) => {
             warn!(
                 agent = agent.spec().kind,

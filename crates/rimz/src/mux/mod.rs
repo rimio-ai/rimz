@@ -410,7 +410,7 @@ pub struct SessionOptions {
 /// bare integer in `ZELLIJ_PANE_ID` (normalized as `terminal_<id>`), tmux the
 /// full raw id (`%<n>`) in `TMUX_PANE`. The one place the env→id mapping lives —
 /// the renderer and reload both resolve through here.
-pub(in crate::mux) fn pane_from_env_value(mux: MuxName, raw_env: &str) -> PaneId {
+pub fn pane_from_env_value(mux: MuxName, raw_env: &str) -> PaneId {
     match mux {
         MuxName::Zellij => raw_env
             .parse::<u64>()

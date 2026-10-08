@@ -59,6 +59,75 @@ fn hooks_test_store() -> (tempfile::TempDir, rimz::Store) {
 }
 
 #[test]
+fn sandbox_path_mapping_preserves_rebound_roots_and_maps_native_path_lists() {
+    let (_dir, store) = hooks_test_store();
+    let home = store.paths().root.join("home");
+    let unit = store.paths().temp_unit_dir(Some("scout"));
+    let mut frame = rimz::store::ingress::HookIngress {
+        schema_version: "1".into(),
+        event_id: rimz::EventId::new(),
+        ts: jiff::Timestamp::now(),
+        source: rimz::ids::AgentKind::new_unchecked("claude"),
+        event: Some("SessionStart".into()),
+        payload: serde_json::json!({"cwd": "/tmp/work", "transcript_path": "/var/tmp/tail.jsonl", "prompt": "/tmp/user text"}).to_string(),
+        cwd: home.clone(),
+        hook_pid: std::process::id(),
+        env: std::collections::BTreeMap::from([
+            ("RIMZ_ISOLATION".into(), "sandbox".into()),
+            ("RIMZ_AGENT_NAME".into(), "scout".into()),
+            ("HOME".into(), home.display().to_string()),
+            ("TMPDIR".into(), "/tmp".into()),
+            ("ZELLIJ_SOCKET_DIR".into(), "/tmp/hook-zellij".into()),
+            ("TMUX".into(), "/tmp/hook-tmux/default,123,0".into()),
+            ("PATH".into(), "/tmp/bin:/var/tmp/tools:/usr/bin".into()),
+            ("PI_AGENT_DIR".into(), "/tmp/one,/var/tmp/two".into()),
+            ("CLAUDE_CONFIG_DIR".into(), "/tmp/account,/var/tmp/other".into()),
+        ]),
+    };
+    let mounts = rimz::sandbox::MountPlan {
+        mounts: vec![
+            rimz::sandbox::Mount::Bind {
+                source: home.clone(),
+                target: home.clone(),
+            },
+            rimz::sandbox::Mount::Bind {
+                source: "/tmp/hook-zellij".into(),
+                target: "/tmp/hook-zellij".into(),
+            },
+        ],
+    };
+    frame.env.insert(
+        rimz::sandbox::HOOK_HOST_PATHS_ENV.into(),
+        serde_json::to_string(&mounts.host_bound_paths()).unwrap(),
+    );
+    super::map_sandbox_paths(&store, &mut frame).unwrap();
+    assert_eq!(frame.cwd, home);
+    assert_eq!(frame.env["HOME"], home.display().to_string());
+    assert_eq!(frame.env["TMPDIR"], unit.display().to_string());
+    assert_eq!(frame.env["ZELLIJ_SOCKET_DIR"], "/tmp/hook-zellij");
+    assert_eq!(frame.env["TMUX"], "/tmp/hook-tmux/default,123,0");
+    assert_eq!(
+        frame.env["PATH"],
+        format!("{}/bin:{}/tools:/usr/bin", unit.display(), unit.display())
+    );
+    assert_eq!(
+        frame.env["PI_AGENT_DIR"],
+        format!("{}/one,{}/two", unit.display(), unit.display())
+    );
+    assert_eq!(
+        frame.env["CLAUDE_CONFIG_DIR"],
+        format!("{}/account,{}/other", unit.display(), unit.display())
+    );
+    let payload: serde_json::Value = serde_json::from_str(&frame.payload).unwrap();
+    assert_eq!(payload["cwd"], unit.join("work").display().to_string());
+    assert_eq!(
+        payload["transcript_path"],
+        unit.join("tail.jsonl").display().to_string()
+    );
+    assert_eq!(payload["prompt"], "/tmp/user text");
+}
+
+#[test]
 fn runtime_env_context_reaches_the_first_root_prompt_of_each_session() {
     use rimz::agents::HookReply;
     use rimz::harness::launch::ENV_RUNTIME_ENV;
@@ -267,7 +336,7 @@ fn deadline_context_reaches_only_the_root_post_tool_consumer_once() {
             &hooks_test_globals(),
         )
         .unwrap();
-        decoded.reply().clone()
+        super::attach_deadline_context(&store, adapter, event, &payload)
     };
     assert_eq!(feed("PreToolUse", false), HookReply::Silent);
     assert_eq!(feed("PostToolUse", true), HookReply::Silent);

@@ -697,6 +697,7 @@ fn watch_label_lost_and_caller_markers_are_enrichment() {
         )
         .wait_with_output()
         .unwrap();
+    env.drain_hooks();
     assert!(
         output.status.success(),
         "{}",

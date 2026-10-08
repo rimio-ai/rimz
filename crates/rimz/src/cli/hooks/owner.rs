@@ -5,8 +5,7 @@ use rimz::pane::RuntimeOwnerKind;
 use rimz::store::runtime::process_owner;
 
 pub(super) fn hook_agent_pid(source: &str) -> Option<u32> {
-    if let Some(pid) = std::env::var("RIMZ_AGENT_PID")
-        .ok()
+    if let Some(pid) = rimz::harness::hook_drain::env_value("RIMZ_AGENT_PID")
         .and_then(|raw| raw.parse::<u32>().ok())
         .filter(|pid| *pid > 1)
     {
@@ -20,7 +19,16 @@ pub(super) fn hook_agent_pid(source: &str) -> Option<u32> {
 /// same-kind agents in one worktree. A daemon-owned hook skips this ambient
 /// stamp because its environment belongs to the shared daemon.
 pub(super) fn attach_agent_pane(observation: &mut AgentLifecycleObservation) {
-    attach_agent_pane_with(observation, rimz::mux::ambient_pane_id);
+    attach_agent_pane_with(observation, || {
+        rimz::harness::hook_drain::env_value("ZELLIJ_PANE_ID")
+            .filter(|raw| !raw.is_empty())
+            .map(|raw| rimz::mux::pane_from_env_value(MuxName::Zellij, &raw))
+            .or_else(|| {
+                rimz::harness::hook_drain::env_value("TMUX_PANE")
+                    .filter(|raw| !raw.is_empty())
+                    .map(|raw| rimz::mux::pane_from_env_value(MuxName::Tmux, &raw))
+            })
+    });
 }
 
 fn attach_agent_pane_with(

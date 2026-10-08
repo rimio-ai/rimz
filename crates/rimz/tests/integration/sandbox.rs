@@ -30,6 +30,92 @@ fn enable(env: &Env) {
     std::fs::write(path, "[agents]\nisolation = \"sandbox\"\n").unwrap();
 }
 
+#[test]
+#[cfg(target_os = "linux")]
+fn sandbox_wrapper_keeps_and_reconnects_the_host_drainer_until_provider_exit() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    enable(&env);
+    let shims = env.home_root.join("lease-bin");
+    crate::common::write_path_shim(
+        &shims,
+        "bwrap",
+        "while [ \"$1\" != -- ]; do shift; done; shift; exec \"$@\"",
+    );
+    crate::common::write_path_shim(
+        &shims,
+        "claude",
+        "case \"$1\" in --version) echo 'claude 9.0.0'; exit 0;; auth) exit 0;; esac; printf ready > \"$RIMZ_TEST_PROVIDER_READY\"; while [ ! -f \"$RIMZ_TEST_PROVIDER_EXIT\" ]; do /usr/bin/sleep 0.02; done",
+    );
+    let ready = env.project_root.join("provider-ready");
+    let exit = env.project_root.join("provider-exit");
+    let request = ExecRequest::bare_launch(AgentKind::new_unchecked("claude"), Vec::new());
+    let mut wrapper = env
+        .rimz()
+        .args(exec_args(&env, &request))
+        .env("PATH", path_with_front(&shims))
+        .env("SHELL", write_fake_login_shell(&env, "lease-shell", &[]))
+        .env("RIMZ_TEST_PROVIDER_READY", &ready)
+        .env("RIMZ_TEST_PROVIDER_EXIT", &exit)
+        .env("RIMZ_TEST_HOOK_DRAIN_IDLE_MS", "100")
+        .spawn()
+        .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !ready.exists() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "provider did not start"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    let socket = env.store().runtime_paths().hook_drainer_socket_path();
+    assert!(
+        socket.exists(),
+        "the host wrapper must establish a lease before starting the sandbox provider"
+    );
+    std::thread::sleep(std::time::Duration::from_millis(400));
+    assert!(
+        std::os::unix::net::UnixStream::connect(&socket).is_ok(),
+        "a quiet provider must keep the drainer past its idle deadline"
+    );
+    let stream = std::os::unix::net::UnixStream::connect(&socket).unwrap();
+    let pid = nix::sys::socket::getsockopt(&stream, nix::sys::socket::sockopt::PeerCredentials)
+        .unwrap()
+        .pid();
+    drop(stream);
+    nix::sys::signal::kill(
+        nix::unistd::Pid::from_raw(pid),
+        nix::sys::signal::Signal::SIGKILL,
+    )
+    .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        if let Ok(stream) = std::os::unix::net::UnixStream::connect(&socket)
+            && nix::sys::socket::getsockopt(&stream, nix::sys::socket::sockopt::PeerCredentials)
+                .unwrap()
+                .pid()
+                != pid
+        {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the wrapper must replace a dead drainer"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    std::fs::write(exit, "exit").unwrap();
+    assert!(wrapper.wait().unwrap().success());
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while socket.exists() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the exited wrapper must release the lease"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
 fn child_cap_launch(explicit_host: bool) {
     use rimz::agents::LaunchParams;
     use rimz::store::event::{AgentLaunchPayload, AgentLaunchState, EventEnvelope};

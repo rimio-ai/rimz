@@ -16,7 +16,7 @@ use crate::disk::buckets::{bucket_file_name, bucket_files};
 use crate::disk::paths::{StatePaths, rimz_home, workspaces_dir_under};
 use crate::disk::retention::TRANSCRIPT_FILE_DAYS as FILE_DAYS;
 use crate::disk::{atomic, lock};
-use crate::ids::{AgentKind, AgentSessionId, MessageId};
+use crate::ids::{AgentKind, AgentSessionId, EventId, MessageId};
 use crate::ids::{AskId, compose_channel};
 use crate::workspace::{KnownWorkspace, known_workspaces_under};
 
@@ -100,6 +100,9 @@ pub struct TranscriptEntry {
     pub agent_id: AgentSessionId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<AskId>,
+    /// Hook ingress key for an assistant response, retained across apply redo.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ingress: Option<EventId>,
     /// Queue record that opened this prompt/message turn, when delivery was
     /// confirmed against a RimZ-authored message.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -169,6 +172,7 @@ impl TranscriptEntry {
             kind,
             agent_id,
             id: None,
+            ingress: None,
             message_id: None,
             enqueued_at: None,
             reply_to: Vec::new(),

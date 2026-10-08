@@ -49,6 +49,14 @@ pub(crate) fn build_from(paths: &StatePaths) -> Result<SidebarSnapshot> {
     assemble_snapshot(paths, rollup.extent, &agents, resume_outcomes)
 }
 
+pub(in crate::store) fn build_from_pending(
+    paths: &StatePaths,
+    pending: &[crate::store::event::EventEnvelope],
+) -> Result<SidebarSnapshot> {
+    let (rollup, agents, outcomes) = super::fold::catch_up_with_pending(paths, pending)?;
+    assemble_snapshot(paths, rollup.extent, &agents, outcomes)
+}
+
 /// Build the same projection for a long-lived reader, but with the
 /// rollup base rides in the caller's [`RollupCursor`] instead of being
 /// re-read from `rollup.json` per call — O(new log bytes) per delta.

@@ -41,6 +41,16 @@ pub trait CoreCapability: Send + Sync {
 
 #[doc(hidden)]
 pub trait HookCapability: CoreCapability {
+    /// Provider path overrides needed to apply a captured hook, beyond the account home.
+    fn hook_env_keys(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    /// The payload-only decision reply, without lifecycle decode or provider reads.
+    fn payload_hook_reply(&self, _event_name: &str, _payload: &Value) -> HookReply {
+        HookReply::Silent
+    }
+
     /// Attach additive model context when this native event is the provider's
     /// prompt submit and its reply accepts it.
     fn attach_prompt_context(&self, _decoded: &mut HookOutput, _text: &str) -> bool {

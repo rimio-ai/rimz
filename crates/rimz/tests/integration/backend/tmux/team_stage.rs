@@ -156,6 +156,7 @@ done
             )
             .wait_with_output()
             .unwrap();
+        env.drain_hooks();
         assert!(
             output.status.success(),
             "{}",
