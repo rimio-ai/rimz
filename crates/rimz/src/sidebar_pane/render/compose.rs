@@ -383,12 +383,10 @@ pub(super) fn build_bottom_chrome(
         let footer = footer_lines(snapshot, theme, inner);
         if !footer.is_empty() {
             // No rule above the footer — it sits quietly under the dashboard's
-            // own top rule, with one blank line of breathing room when a
-            // dashboard is present (skipped in an empty room so the footer
-            // doesn't float).
-            if !bottom.lines.is_empty() {
-                bottom.push_inert(Line::from(""));
-            }
+            // own top rule, with one blank line of breathing room. A footer
+            // never draws on an empty block: without an alert the dashboard
+            // or the fleet store's `W:`/`M:` rows always precede it.
+            bottom.push_inert(Line::from(""));
             bottom.extend_inert(footer.into_iter().map(pad_chrome));
         }
     }
