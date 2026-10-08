@@ -1349,6 +1349,68 @@ impl AdoptionFixture {
 }
 
 #[test]
+fn published_pair_needs_no_store_or_current_source() {
+    let mut fixture = AdoptionFixture::new();
+    fixture.frame.metrics_stamp_ms = Some(99);
+    atomic::write_temp_then_rename_cache(&fixture.runtime.pane_frame_path(), &fixture.frame)
+        .unwrap();
+    std::fs::remove_file(&fixture.state.latest_snapshot).unwrap();
+
+    let pair = read_published_pair(&fixture.runtime, "rimz-test");
+    assert!(
+        pair.is_some(),
+        "a same-session publication seeds without live store stamps"
+    );
+    let (workspace, frame) = pair.unwrap();
+    assert_eq!(workspace.snapshot().display_name, "projected");
+    assert_eq!(frame.metrics_stamp_ms, Some(99));
+    assert_eq!(frame.session_name, "rimz-test");
+}
+
+#[test]
+fn published_pair_requires_a_valid_same_session_projection_and_frame() {
+    let fixture = AdoptionFixture::new();
+    assert!(read_published_pair(&fixture.runtime, "rimz-test").is_some());
+
+    for (field, value) in [
+        ("schema_version", serde_json::json!(5)),
+        ("schema_version", serde_json::json!(99)),
+        ("session", serde_json::json!("other-session")),
+    ] {
+        let fixture = AdoptionFixture::new();
+        let path = workspace_projection_path(&fixture.runtime);
+        let mut projection: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        projection[field] = value;
+        atomic::write_temp_then_rename_cache(&path, &projection).unwrap();
+        assert!(
+            read_published_pair(&fixture.runtime, "rimz-test").is_none(),
+            "{field}"
+        );
+    }
+
+    let fixture = AdoptionFixture::new();
+    std::fs::write(
+        workspace_projection_path(&fixture.runtime),
+        b"{broken projection",
+    )
+    .unwrap();
+    assert!(read_published_pair(&fixture.runtime, "rimz-test").is_none());
+
+    for path in [workspace_projection_path, RuntimePaths::pane_frame_path] {
+        let fixture = AdoptionFixture::new();
+        std::fs::remove_file(path(&fixture.runtime)).unwrap();
+        assert!(read_published_pair(&fixture.runtime, "rimz-test").is_none());
+    }
+
+    let mut fixture = AdoptionFixture::new();
+    fixture.frame.session_name = "other-session".to_owned();
+    atomic::write_temp_then_rename_cache(&fixture.runtime.pane_frame_path(), &fixture.frame)
+        .unwrap();
+    assert!(read_published_pair(&fixture.runtime, "rimz-test").is_none());
+}
+
+#[test]
 fn consumer_adopts_only_an_exact_workspace_projection() {
     let fixture = AdoptionFixture::new();
     let (snapshot, read_source) = fixture.read();
