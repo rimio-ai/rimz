@@ -9079,9 +9079,12 @@ fn loop_add_agent_check_names_the_checker_and_rejects_unsupported_kinds() {
     let mut flags = flags;
     flags[11] = "claude";
     let receipt = loop_ok(&env, &flags);
-    assert!(receipt.contains("check by `claude`"), "{receipt}");
+    assert!(receipt.contains("check: by `claude`"), "{receipt}");
     let show = loop_ok(&env, &["loop", "show", "guarded"]);
-    assert!(show.contains("check by `claude`"), "{show}");
+    assert!(
+        show.contains("check by `claude`") && !show.contains("check by `claude` ("),
+        "{show}"
+    );
     let list = loop_ok(&env, &["loop", "list"]);
     assert!(list.contains("check by `claude`"), "{list}");
     let config: LoopConfig =

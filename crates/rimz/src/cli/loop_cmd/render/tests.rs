@@ -14,7 +14,7 @@ fn agent_check_rows_name_the_profile() {
     let action = TaskAction::Spawn("codex".into());
     assert_eq!(
         check_summary(&entry, Some(&action)).as_deref(),
-        Some("check by `haiku` (starts codex on success)")
+        Some("by `haiku` (starts codex on success)")
     );
     assert_eq!(
         task_run_rule(&entry, &action),
@@ -2437,4 +2437,12 @@ fn a_fan_out_shows_its_running_checkout_and_the_others_waiting_beside_it() {
         in_flight_text(None, &held, now),
         "▸ running · 2 held: 1 start ahead"
     );
+}
+
+#[test]
+fn a_sub_cent_run_cost_is_not_shown_as_free() {
+    assert_eq!(run_cost(0.0), "$0.00");
+    assert_eq!(run_cost(0.0031), "<$0.01");
+    assert_eq!(run_cost(0.006), "$0.01");
+    assert_eq!(run_cost(1.239), "$1.24");
 }

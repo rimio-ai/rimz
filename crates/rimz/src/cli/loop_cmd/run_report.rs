@@ -606,7 +606,7 @@ fn write_check_section(
             let spend = agent
                 .cost_usd
                 .filter(|cost| cost.is_finite() && *cost >= 0.0)
-                .map_or_else(String::new, |cost| format!(" · ${cost:.2}"));
+                .map_or_else(String::new, |cost| format!(" · {}", render::run_cost(cost)));
             let tokens = match (agent.input_tokens, agent.output_tokens) {
                 (None, None) => String::new(),
                 (input, output) => format!(

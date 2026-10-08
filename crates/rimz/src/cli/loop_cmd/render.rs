@@ -73,13 +73,22 @@ fn check_summary(entry: &TaskEntry, action: Option<&TaskAction>) -> Option<Strin
     let check = entry.check.as_ref()?;
     if let Some(action) = action.and_then(action_words) {
         Some(format!(
-            "{check} ({} {} on {})",
+            "{} ({} {} on {})",
+            check_value(check),
             action.third_person,
             action.subject,
             check_on_label(entry.on.unwrap_or_default())
         ))
     } else {
-        Some(check.to_string())
+        Some(check_value(check))
+    }
+}
+
+/// A check as the value beside a `check:` label, which already names it.
+pub(super) fn check_value(check: &TaskCheck) -> String {
+    match check {
+        TaskCheck::Shell(command) => command.clone(),
+        TaskCheck::Agent(check) => format!("by `{}`", check.agent),
     }
 }
 
@@ -2125,10 +2134,18 @@ fn valid_cost(record: &LoopRunRecord) -> Option<f64> {
         .filter(|cost| cost.is_finite() && *cost >= 0.0)
 }
 
+pub(super) fn run_cost(cost: f64) -> String {
+    if cost > 0.0 && cost < 0.005 {
+        "<$0.01".to_owned()
+    } else {
+        format!("${cost:.2}")
+    }
+}
+
 fn cost_cell(record: &LoopRunRecord) -> ui::Cell {
     ui::cell(
         valid_cost(record)
-            .map(|cost| format!("${cost:.2}"))
+            .map(run_cost)
             .unwrap_or_else(|| "-".to_owned()),
     )
     .dash()
@@ -2264,10 +2281,7 @@ pub(super) fn spend_segments(
     input_tokens: Option<u64>,
     output_tokens: Option<u64>,
 ) -> Option<String> {
-    let mut segments = cost_usd
-        .map(|cost| format!("${cost:.2}"))
-        .into_iter()
-        .collect::<Vec<_>>();
+    let mut segments = cost_usd.map(run_cost).into_iter().collect::<Vec<_>>();
     if let Some(tokens) = token_segments(input_tokens, output_tokens) {
         segments.push(tokens);
     }
