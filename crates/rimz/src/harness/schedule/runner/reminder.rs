@@ -139,7 +139,9 @@ fn trigger_clause(parsed: &ParsedTrigger, entry: &TaskEntry) -> String {
 
 /// A resident runs no check: the ladder never reads one.
 fn check_clause(entry: &TaskEntry, after_condition: bool) -> Option<String> {
-    let cmd = entry.check.as_deref().filter(|_| !entry.stay)?;
+    let crate::config::TaskCheck::Shell(cmd) = entry.check.as_ref().filter(|_| !entry.stay)? else {
+        return None;
+    };
     let joiner = if after_condition { "and" } else { "when" };
     Some(match entry.on.unwrap_or_default() {
         CheckOn::Fail => format!(" {joiner} its check {} fails", span(cmd)),

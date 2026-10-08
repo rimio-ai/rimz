@@ -143,7 +143,7 @@ fn an_error_recorded_as_a_skip_succeeds_and_any_other_error_propagates() {
 fn spawn_entry(check: bool, on: CheckOn) -> TaskEntry {
     TaskEntry {
         agent: Some("codex".to_owned()),
-        check: check.then(|| "cargo test".to_owned()),
+        check: check.then(|| "cargo test".into()),
         on: Some(on),
         ..TaskEntry::default()
     }
@@ -156,7 +156,7 @@ fn wait_entry(check: bool, on: CheckOn) -> TaskEntry {
             session: "sess-planner".into(),
             handle: "@planner".to_owned(),
         }),
-        check: check.then(|| "cargo test".to_owned()),
+        check: check.then(|| "cargo test".into()),
         on: Some(on),
         ..TaskEntry::default()
     }
@@ -164,7 +164,7 @@ fn wait_entry(check: bool, on: CheckOn) -> TaskEntry {
 
 fn check_entry() -> TaskEntry {
     TaskEntry {
-        check: Some("cargo test".to_owned()),
+        check: Some("cargo test".into()),
         ..TaskEntry::default()
     }
 }

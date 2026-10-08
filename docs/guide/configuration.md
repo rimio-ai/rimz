@@ -821,6 +821,19 @@ Every task you write here does one thing: `agent` runs one agent cell on a calen
 
 `check` guards that run. It is a shell command RimZ runs first, and its exit code decides whether the agent fires at all: `on = "fail"` proceeds on a non-zero exit or a timeout, `on = "success"` on a zero exit. The check's output is appended to the agent's prompt when it fires. It runs in the task's `dir` when one is set, and at `root` otherwise; `rimz loop add` fills `dir` with the worktree you ran it from.
 
+When the guard needs judgment rather than a command's exit code, `check` also accepts an agent table. The profile must resolve to one Claude or Codex agent, with exactly one of `prompt` and `prompt-file`:
+
+```toml
+[tasks.pr_watch.check]
+agent = "haiku"
+prompt = "Does this failure need a code change?"
+timeout = "5m"           # optional; the check's own cap, independent of the task timeout
+# prompt-file = "prompts/check.md"  # instead of prompt
+# recheck = "6h"         # optional; resident tasks only, no default
+```
+
+Agent tables can be configured now, but their fires currently report `agent checks are not runnable yet`. The [loop reference](../reference/cli/loop.md#waits-and-checks) lists the corresponding flags and refusals.
+
 The rest tune what one fire is allowed to do:
 
 - `verify` runs a shell command after an agent turn and re-prompts that same session when it fails. `max-attempts` caps the agent turns one fire may take, and defaults to `3`.

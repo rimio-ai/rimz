@@ -35,7 +35,9 @@ use crate::agents::{
     RateLimitWindow, RoomLoginErr, TurnLifecycleNeed, WindowSpan, WindowSurplus, ambient_env,
     find_definition, preflight_hooks,
 };
-use crate::config::{CheckOn, MachineConfig, TaskEntry, TaskTarget, ThrottleSwitch, WatchSpec};
+use crate::config::{
+    CheckOn, MachineConfig, TaskCheck, TaskEntry, TaskTarget, ThrottleSwitch, WatchSpec,
+};
 use crate::disk::paths::{RuntimePaths, StatePaths, logs_dir};
 use crate::harness::plan::ResolvedSingleAgentLaunch;
 use crate::harness::run::{SupervisedRunOutcome, SupervisedRunRequest};
@@ -606,6 +608,9 @@ impl<'a> TaskFire<'a> {
         if let Some(done) = self.prepare_deadline()? {
             return Ok(TaskFirePlan::Done(done));
         }
+        if matches!(self.entry.check.as_ref(), Some(TaskCheck::Agent(_))) {
+            bail!("agent checks are not runnable yet");
+        }
         if let Some(done) = self.prepare_throttle()? {
             return Ok(TaskFirePlan::Done(done));
         }
@@ -948,7 +953,11 @@ impl<'a> TaskFire<'a> {
                 outcome.to_check_outcome(),
                 outcome.verdict.elapsed_ms(),
             )
-        } else if let Some(command) = self.entry.check.clone() {
+        } else if let Some(check) = self.entry.check.clone() {
+            let command = match check {
+                TaskCheck::Shell(command) => command,
+                TaskCheck::Agent(_) => bail!("agent checks are not runnable yet"),
+            };
             let root = self.context_root()?;
             if self.run_lock.is_some()
                 || !matches!(

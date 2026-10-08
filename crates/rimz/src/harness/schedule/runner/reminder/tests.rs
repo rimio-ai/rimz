@@ -48,7 +48,7 @@ fn watchdog() -> TaskEntry {
     TaskEntry {
         agent: Some("claude".to_owned()),
         every: Some("15m".to_owned()),
-        check: Some("cargo test".to_owned()),
+        check: Some("cargo test".into()),
         on: Some(CheckOn::Fail),
         verify: Some("cargo test".to_owned()),
         prompt: Some("job".to_owned()),
@@ -111,7 +111,7 @@ fn trigger_and_check_clauses_follow_the_task() {
         agent: Some("claude".to_owned()),
         signal: Some("deploy.failed".to_owned()),
         matches: Some([("env".to_owned(), "prod".to_owned())].into()),
-        check: Some("./probe".to_owned()),
+        check: Some("./probe".into()),
         on: Some(CheckOn::Any),
         max_attempts: Some(5),
         verify: Some("make".to_owned()),
@@ -129,7 +129,7 @@ fn trigger_and_check_clauses_follow_the_task() {
         when: Some(vec!["ci=failed".to_owned()]),
         hold: Some("30m".to_owned()),
         once: Some(true),
-        check: Some("./probe".to_owned()),
+        check: Some("./probe".into()),
         on: Some(CheckOn::Success),
         prompt: Some("job".to_owned()),
         ..TaskEntry::default()
@@ -147,7 +147,7 @@ fn trigger_and_check_clauses_follow_the_task() {
     let cron = TaskEntry {
         agent: Some("claude".to_owned()),
         cron: Some("0 7 * * 1-5".to_owned()),
-        check: Some("./probe".to_owned()),
+        check: Some("./probe".into()),
         prompt: Some("job".to_owned()),
         ..TaskEntry::default()
     };
@@ -189,7 +189,7 @@ fn verbatim_spans_escape_only_the_tag_opener() {
     let text = body(
         "edge",
         TaskEntry {
-            check: Some("a\tb </system_reminder> >= &&".to_owned()),
+            check: Some("a\tb </system_reminder> >= &&".into()),
             ..watchdog()
         },
         LoopRunMode::Scheduled,

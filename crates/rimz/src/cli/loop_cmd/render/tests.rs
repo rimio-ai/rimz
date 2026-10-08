@@ -1,6 +1,27 @@
 use super::super::run_report::{render_record_detail, write_failure_pointer};
 use super::*;
 
+#[test]
+fn agent_check_rows_name_the_profile() {
+    let decoded = toml::from_str::<TaskEntry>(
+        "agent = 'codex'\non = 'success'\n[check]\nagent = 'haiku'\nprompt = 'q'",
+    );
+    assert!(
+        decoded.is_ok(),
+        "agent check table must be accepted: {decoded:?}"
+    );
+    let entry = decoded.unwrap();
+    let action = TaskAction::Spawn("codex".into());
+    assert_eq!(
+        check_summary(&entry, Some(&action)).as_deref(),
+        Some("check by `haiku` (starts codex on success)")
+    );
+    assert_eq!(
+        task_run_rule(&entry, &action),
+        "check by `haiku`, then start codex on success"
+    );
+}
+
 fn show_view(each_worktree: bool) -> ShowView {
     let now = Timestamp::from_second(100).unwrap();
     let entry = TaskEntry {
@@ -917,7 +938,7 @@ fn true_condition_without_hold_renders_due() {
     let entry = TaskEntry {
         root: root.path().to_owned(),
         when: Some(vec!["team.stage=Done".to_owned()]),
-        check: Some("true".to_owned()),
+        check: Some("true".into()),
         ..TaskEntry::default()
     };
     let parsed = schedule::parse_trigger("ready", &entry);
@@ -1052,7 +1073,7 @@ fn checkout_without_a_note_has_no_trailing_separator() {
 fn task_rules_and_check_rows_use_action_specific_verbs() {
     let spawn = TaskEntry {
         agent: Some("codex".to_owned()),
-        check: Some("cargo test".to_owned()),
+        check: Some("cargo test".into()),
         on: Some(CheckOn::Fail),
         ..TaskEntry::default()
     };
@@ -1075,7 +1096,7 @@ fn task_rules_and_check_rows_use_action_specific_verbs() {
             session: "sess-planner".into(),
             handle: "@planner".to_owned(),
         }),
-        check: Some("cargo test".to_owned()),
+        check: Some("cargo test".into()),
         on: Some(CheckOn::Success),
         ..TaskEntry::default()
     };
@@ -1093,7 +1114,7 @@ fn task_rules_and_check_rows_use_action_specific_verbs() {
     );
 
     let check = TaskEntry {
-        check: Some("cargo test".to_owned()),
+        check: Some("cargo test".into()),
         ..TaskEntry::default()
     };
     let check_action = schedule::TaskShape::compile("task", &check)

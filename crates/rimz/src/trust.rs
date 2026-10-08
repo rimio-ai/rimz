@@ -19,7 +19,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use crate::agents::PermissionMode;
-use crate::config::{CheckOn, ConfigFileDiagnosis, Team};
+use crate::config::{CheckOn, ConfigFileDiagnosis, TaskCheck, Team};
 use crate::disk::atomic::{self, write_bytes_atomically};
 use crate::disk::paths::rimz_home;
 use crate::ids::{RoomLogins, WorkspaceId};
@@ -866,7 +866,7 @@ pub struct ProjectTask {
     pub prompt: Option<String>,
     #[serde(rename = "prompt-file")]
     pub prompt_file: Option<PathBuf>,
-    pub check: Option<String>,
+    pub check: Option<TaskCheck>,
     pub verify: Option<String>,
     #[serde(rename = "max-attempts")]
     pub max_attempts: Option<u32>,
@@ -995,7 +995,7 @@ struct ExecutableTask<'a> {
     agent: Option<&'a str>,
     prompt: Option<&'a str>,
     prompt_file: Option<String>,
-    check: Option<&'a str>,
+    check: Option<&'a TaskCheck>,
     verify: Option<&'a str>,
     max_attempts: Option<u32>,
     on: Option<CheckOn>,
@@ -1137,7 +1137,7 @@ impl<'a> From<&'a ProjectConfig> for ExecutableSurface<'a> {
                         .prompt_file
                         .as_ref()
                         .map(|path| path.to_string_lossy().into_owned()),
-                    check: task.check.as_deref(),
+                    check: task.check.as_ref(),
                     verify: task.verify.as_deref(),
                     max_attempts: task.max_attempts,
                     on: task.on,

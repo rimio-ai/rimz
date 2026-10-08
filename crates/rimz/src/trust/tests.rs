@@ -234,6 +234,10 @@ fn task_labels_do_not_change_the_executable_hash() {
         executable_surface_hash(&base),
         executable_surface_hash(&labelled)
     );
+    assert_eq!(
+        executable_surface_hash(&base),
+        "sha256:1d75306246407c1e334fb78d696bc606ca2bcc971c6b4878eae1be89ddf4c716"
+    );
 }
 
 #[test]
@@ -551,6 +555,13 @@ fn hash_covers_every_documented_surface_field() {
         "[tasks.x]\nprompt = \"repair CI\"\n",
         "[tasks.x]\nprompt-file = \"prompts/ci.md\"\n",
         "[tasks.x]\ncheck = \"cargo test\"\n",
+        "[tasks.x.check]\nagent = 'haiku'\nprompt = 'q'\n",
+        "[tasks.x.check]\nagent = 'sonnet'\nprompt = 'q'\n",
+        "[tasks.x.check]\nagent = 'haiku'\nprompt = 'other'\n",
+        "[tasks.x.check]\nagent = 'haiku'\nprompt-file = 'q.md'\n",
+        "[tasks.x.check]\nagent = 'haiku'\nprompt-file = 'other.md'\n",
+        "[tasks.x.check]\nagent = 'haiku'\nprompt = 'q'\nrecheck = '6h'\n",
+        "[tasks.x.check]\nagent = 'haiku'\nprompt = 'q'\ntimeout = '5m'\n",
         "[tasks.x]\nverify = \"cargo test\"\n",
         "[tasks.x]\nmax-attempts = 4\n",
         "[tasks.x]\non = \"success\"\n",
@@ -574,8 +585,12 @@ fn hash_covers_every_documented_surface_field() {
     ];
     let mut hashes = std::collections::HashSet::new();
     for text in cases {
-        let config: ProjectConfig =
-            toml::from_str(text).unwrap_or_else(|err| panic!("parse `{text}`: {err}"));
+        let config = toml::from_str::<ProjectConfig>(text);
+        assert!(
+            config.is_ok(),
+            "executable surface must accept `{text}`: {config:?}"
+        );
+        let config = config.unwrap();
         assert!(
             hashes.insert(executable_surface_hash(&config)),
             "case `{text}` collided with another surface case",

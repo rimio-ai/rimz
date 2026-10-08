@@ -234,6 +234,13 @@ pub(in crate::cli::loop_cmd) fn action_text(
         TaskActionKind::Spawn => format!("start {subject}"),
         TaskActionKind::CheckOnly => "run check".into(),
     };
+    if let Some(check @ TaskCheck::Agent(_)) = entry.and_then(|entry| entry.check.as_ref()) {
+        action = if kind.is_spawn() {
+            format!("{check}, then start {subject}")
+        } else {
+            format!("{action} · {check}")
+        };
+    }
     if you {
         action.push_str(" (you)");
     }

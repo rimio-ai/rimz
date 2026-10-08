@@ -23,7 +23,7 @@ use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
 use jiff::Timestamp;
 
-use rimz::config::{CheckOn, MachineConfig, TaskEntry, TaskTarget};
+use rimz::config::{AgentCheck, CheckOn, MachineConfig, TaskCheck, TaskEntry, TaskTarget};
 use rimz::disk::paths::{RuntimePaths, StatePaths};
 use rimz::harness::plan::{ResolvedSingleAgentLaunch, resolve_single_agent_launch};
 use rimz::harness::schedule::run_log::{
@@ -180,6 +180,21 @@ struct AddArgs {
     /// Shell command to run before any agent action.
     #[arg(long, value_name = "CMD")]
     check: Option<String>,
+    /// Profile to run as a headless guard before the task's action.
+    #[arg(long, value_name = "PROFILE")]
+    check_agent: Option<String>,
+    /// Inline question for the headless guard.
+    #[arg(long, value_name = "TEXT")]
+    check_prompt: Option<String>,
+    /// File containing the headless guard's question.
+    #[arg(long, value_name = "PATH")]
+    check_prompt_file: Option<PathBuf>,
+    /// Ask again this long after a resident guard declines.
+    #[arg(long, value_name = "DUR")]
+    check_recheck: Option<String>,
+    /// Headless guard's timeout; default 5m, independent of --timeout.
+    #[arg(long, value_name = "DUR")]
+    check_timeout: Option<String>,
     /// Shell command that must pass before a spawned agent task is complete.
     #[arg(long, value_name = "CMD", requires = "agent")]
     verify: Option<String>,
@@ -189,7 +204,7 @@ struct AddArgs {
     /// Auto-disable after N consecutive failed fires; default 3, 0 disables.
     #[arg(long, value_name = "N")]
     max_strikes: Option<u32>,
-    /// Guard polarity for --check: fail, success, or any outcome.
+    /// Guard polarity for either check: fail, success, or any outcome.
     #[arg(long, value_name = "fail|success|any")]
     on: Option<String>,
     /// Poll-until deadline as a duration such as `30m`; resolves at add time.

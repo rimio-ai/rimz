@@ -29,7 +29,7 @@ The pin is on the surface itself because agents in the room can write `.rimz/con
 | `[profiles.<name>]` | `agent`, `skills`, `mode`, `model`, `effort`, `auto-compact`, `system-prompt-file`, `append-system-prompt-files`, `args` |
 | `[subagents.profiles.<name>]` | the same keys as `[profiles.<name>]`, in the child-launch namespace |
 | `[agents.teams.<name>]` | `layout`, `consensus-file`, `append-system-prompt-files`; per role: `role`, `profile`, `signals`, `mode`, `model`, `effort`, `auto-compact`, `system-prompt-file`, `append-system-prompt-files`, `args` |
-| `[tasks.<name>]` | `agent`, `prompt`, `prompt-file`, `check`, `verify`, `max-attempts`, `on`, `worktree`, `mode`, `effort`, `system-prompt-file`, `timeout`, `at`, `every`, `cron`, `signal`, `match` |
+| `[tasks.<name>]` | `agent`, `prompt`, `prompt-file`, `check` (shell string or table with `agent`, `prompt`, `prompt-file`, `recheck`, `timeout`), `verify`, `max-attempts`, `on`, `worktree`, `mode`, `effort`, `system-prompt-file`, `timeout`, `at`, `every`, `cron`, `signal`, `match` |
 | `[[hooks]]` | `event`, `command` |
 | `[env]` | every key and value |
 | `[lsp.servers.<name>]` | server name, `command` argv, canonical JSON `init-options`, and `editor-check-on-save` when explicitly set |

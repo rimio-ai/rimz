@@ -91,8 +91,8 @@ pub use harness::{CompactSeat, DayCap, HarnessConfig, IdleCompactMode, KeepWarm}
 use loop_::TaskBudgetError;
 pub(crate) use loop_::WaitMeta;
 pub use loop_::{
-    CheckOn, FileMark, LoopConfig, TaskEntry, TaskTarget, Tasks, ThrottleConfig, ThrottleSwitch,
-    WatchSpec,
+    AgentCheck, CheckOn, FileMark, LoopConfig, TaskCheck, TaskEntry, TaskTarget, Tasks,
+    ThrottleConfig, ThrottleSwitch, WatchSpec,
 };
 pub use lsp::{LspConfig, LspPolicy, LspServerConfig, LspServerKind};
 pub use mux::MultiplexerConfig;
