@@ -505,15 +505,21 @@ struct CardView {
 pub struct TurnWaitView {
     pub snapshot: SidebarSnapshot,
     messages: Vec<MessageRecord>,
+    now: Timestamp,
 }
 
 impl TurnWaitView {
     pub fn load(store: &Store) -> Result<Self, crate::store::StoreErr> {
         let waits = crate::harness::schedule::pending::SessionWaits::load(store.paths());
         let messages = store.list_messages()?;
+        let now = Timestamp::now();
         let mut snapshot = store.snapshot_cached()?;
         waits.attach(&mut snapshot);
-        Ok(Self { snapshot, messages })
+        Ok(Self {
+            snapshot,
+            messages,
+            now,
+        })
     }
 
     /// Effective status, held at `sleeping` while a wake for the agent is
@@ -547,7 +553,9 @@ impl TurnWaitView {
                 }
                 _ => false,
             };
-            wake && !message.status.is_terminal() && message.same_agent_card(agent)
+            wake && !message.status.is_terminal()
+                && !message.sent_hold_expired(self.now)
+                && message.same_agent_card(agent)
         })
     }
 

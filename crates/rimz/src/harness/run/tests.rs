@@ -752,6 +752,86 @@ fn stranded_park_requires_two_checks_and_preserves_racing_turns() {
     );
 }
 
+#[test]
+fn overdue_sent_wake_releases_a_clean_park_without_reconciliation() {
+    use crate::store::message::{
+        DeliveryGate, HarnessNotice, MessageRecord, MessageSender, MessageStatus,
+    };
+    let (dir, paths, mut record) = setup();
+    let runtime =
+        crate::RuntimePaths::under(record.workspace_id.clone(), &dir.path().join("rt")).unwrap();
+    let store = Store::open(paths, runtime).unwrap();
+    record.status = RunStatus::Running;
+    record.agent_id = Some("session".into());
+    create(store.paths(), &record).unwrap();
+    let mut registered =
+        AgentLifecycleObservation::new(record.agent_id.clone(), LifecycleSignal::Registered);
+    registered.pane_id = Some(crate::ids::PaneId::from_parts(MuxName::Tmux, "%1"));
+    store
+        .append_agent_lifecycle(crate::store::writer::AgentLifecycleIntent {
+            session_name: "park-test",
+            agent_kind: record.kind.clone(),
+            event_name: "test",
+            observation: &registered,
+            spawned_subagents: &[],
+        })
+        .unwrap();
+    let agent = store
+        .snapshot_cached()
+        .unwrap()
+        .agents
+        .into_iter()
+        .find(|agent| Some(&agent.agent_id) == record.agent_id.as_ref())
+        .unwrap();
+    let mut wake = MessageRecord::new(
+        record.workspace_id.clone(),
+        &agent,
+        "wake".to_owned(),
+        DeliveryGate::Done,
+    )
+    .with_sender(MessageSender::Harness {
+        notice: HarnessNotice::Wait,
+    });
+    wake.status = MessageStatus::Sent;
+    wake.last_sent_at = Some(wake.updated_at);
+    store.queue_message(&wake, "park-test").unwrap();
+    let ended = AgentLifecycleObservation::new(
+        record.agent_id.clone(),
+        LifecycleSignal::TurnEnded {
+            errored: false,
+            parked_on_background: false,
+            turn_id: None,
+        },
+    );
+    let adapter = crate::agents::definition_by_kind("claude").unwrap();
+    assert!(
+        settle_lifecycle(
+            &store,
+            &record.run_id,
+            adapter,
+            &ended,
+            Some("answer".into())
+        )
+        .unwrap()
+        .is_none()
+    );
+    let parked = load(store.paths(), &record.run_id).unwrap();
+    let at = parked.parked_at.unwrap();
+    wake.updated_at = Timestamp::now() - wake.body.delivery_window() - Duration::from_secs(60);
+    wake.last_sent_at = Some(wake.updated_at);
+    store.queue_message(&wake, "park-test").unwrap();
+    assert_eq!(
+        settle_stranded_park(&store, &parked, None).unwrap(),
+        ParkCheck::Stranded(at)
+    );
+    let settled = settle_lifecycle(&store, &record.run_id, adapter, &ended, None)
+        .unwrap()
+        .unwrap();
+    assert_eq!(settled.status, RunStatus::Completed);
+    assert_eq!(settled.last_message.as_deref(), Some("answer"));
+    assert_eq!(settled.parked_at, None);
+}
+
 /// A park whose turn end carried no transcript path is woken by a turn start
 /// that does: clearing the park cannot swallow the late-path fold the
 /// non-Claude adapters depend on.
