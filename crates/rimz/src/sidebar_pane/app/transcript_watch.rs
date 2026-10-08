@@ -18,7 +18,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::thread::JoinHandle;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use notify::{RecursiveMode, Watcher};
 use tracing::debug;
@@ -26,6 +26,7 @@ use tracing::debug;
 use crate::RuntimePaths;
 use crate::agents::context::record::AgentContextRecord;
 use crate::sidebar::ProducerElectionTracker;
+use crate::store::event_log::LogExtent;
 
 /// Idle cadence for the producer-election re-check while not elected.
 const ELECTION_POLL: Duration = Duration::from_secs(5);
@@ -35,6 +36,8 @@ const RESPAWN_BACKOFF: Duration = Duration::from_secs(5);
 /// Cadence for reconciling watched paths against the live sidecar roster —
 /// new sessions gain a watch, ended sessions drop theirs.
 const ROSTER_RESCAN: Duration = Duration::from_secs(5);
+/// Bound coarse directory-mtime misses even while the inputs stamp is equal.
+const ROSTER_RESCAN_BACKSTOP: Duration = Duration::from_secs(60);
 /// Coalescing window: a burst of rollout appends within it flushes as one
 /// refresh per session, bounding refresh rate during fast token streams.
 const DEBOUNCE: Duration = Duration::from_millis(300);
@@ -47,6 +50,37 @@ struct WatchTarget {
     login: Option<crate::ids::LoginName>,
     session_id: String,
     model_hint: Option<String>,
+}
+
+#[derive(Default)]
+struct Roster {
+    watched: BTreeMap<PathBuf, BTreeSet<WatchTarget>>,
+    stamp: Option<RosterStamp>,
+}
+
+struct RosterStamp {
+    extent: LogExtent,
+    sidecar_mtime: Option<SystemTime>,
+    taken_at: Instant,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum RosterPass {
+    Unchanged,
+    Rebuilt,
+}
+
+fn roster_unchanged(
+    stamp: Option<&RosterStamp>,
+    extent: LogExtent,
+    sidecar_mtime: Option<SystemTime>,
+    now: Instant,
+) -> bool {
+    stamp.is_some_and(|stamp| {
+        stamp.extent == extent
+            && stamp.sidecar_mtime == sidecar_mtime
+            && now.duration_since(stamp.taken_at) < ROSTER_RESCAN_BACKSTOP
+    })
 }
 
 /// Spawn the watcher manager thread. It runs for the process lifetime; the
@@ -88,7 +122,7 @@ fn watch_while_elected(
             }
         }
     })?;
-    let mut roster: BTreeMap<PathBuf, BTreeSet<WatchTarget>> = BTreeMap::new();
+    let mut roster = Roster::default();
     let mut pending: BTreeSet<PathBuf> = BTreeSet::new();
     let mut flush_at: Option<Instant> = None;
     let mut rescan_at = Instant::now();
@@ -121,7 +155,7 @@ fn watch_while_elected(
             if !is_producer(election) {
                 return Ok(());
             }
-            for target in due_refreshes(&pending, &roster) {
+            for target in due_refreshes(&pending, &roster.watched) {
                 crate::sidebar::refresh::refresh_session_transcript_context_from_watch(
                     runtime,
                     &target.kind,
@@ -139,19 +173,36 @@ fn watch_while_elected(
 /// session ended, watch paths that appeared. A registration failure (the file
 /// not yet on disk, an inotify limit) is logged and retried next rescan; the
 /// tick backstop covers the gap.
-fn reconcile_roster(
+///
+/// The sidecar scan and the rebuild run only when the log extent or the
+/// sidecar directory's mtime moved since the last stamp, or the stamp is
+/// [`ROSTER_RESCAN_BACKSTOP`] old. Only a pass whose every registration
+/// succeeded stores a stamp, which is what keeps that retry alive.
+fn reconcile_roster<W: Watcher>(
     runtime: &RuntimePaths,
     state: &crate::StatePaths,
     cursor: &mut crate::sidebar::consumer::RollupCursor,
-    watcher: &mut notify::RecommendedWatcher,
-    roster: &mut BTreeMap<PathBuf, BTreeSet<WatchTarget>>,
-) {
-    let Ok((_, agents, _)) = cursor.fold(state) else {
-        return;
+    watcher: &mut W,
+    roster: &mut Roster,
+) -> RosterPass {
+    let Ok((extent, agents, _)) = cursor.fold(state) else {
+        roster.stamp = None;
+        return RosterPass::Unchanged;
     };
-    let agents: Vec<_> = agents.iter().cloned().collect();
-    let live = transcript_targets(&crate::store::agent_context::read_all(runtime), &agents);
-    roster.retain(|path, _| {
+    let sidecar_mtime = std::fs::metadata(&runtime.agent_context_dir)
+        .ok()
+        .and_then(|meta| meta.modified().ok());
+    let now = Instant::now();
+    if roster_unchanged(roster.stamp.as_ref(), extent, sidecar_mtime, now) {
+        return RosterPass::Unchanged;
+    }
+    roster.stamp = None;
+    let live = transcript_targets(
+        &crate::store::agent_context::read_all(runtime),
+        agents.iter(),
+    );
+    let mut registration_failed = false;
+    roster.watched.retain(|path, _| {
         if live.contains_key(path) {
             return true;
         }
@@ -159,7 +210,7 @@ fn reconcile_roster(
         false
     });
     for (path, targets) in live {
-        match roster.entry(path) {
+        match roster.watched.entry(path) {
             std::collections::btree_map::Entry::Occupied(mut entry) => {
                 // Keep the one OS watch; refresh every session target sharing it.
                 entry.insert(targets);
@@ -170,20 +221,29 @@ fn reconcile_roster(
                         entry.insert(targets);
                     }
                     Err(err) => {
+                        registration_failed = true;
                         debug!(path = %entry.key().display(), error = %err, "transcript watch registration failed");
                     }
                 }
             }
         }
     }
+    if !registration_failed {
+        roster.stamp = Some(RosterStamp {
+            extent,
+            sidecar_mtime,
+            taken_at: now,
+        });
+    }
+    RosterPass::Rebuilt
 }
 
 /// The local-source paths worth watching: every sidecar for an adapter that
 /// declares transcript-tail context and names its source. Pure over the
 /// records so the roster policy is testable without a watcher or a runtime dir.
-fn transcript_targets(
+fn transcript_targets<'a>(
     records: &[AgentContextRecord],
-    agents: &[crate::agents::AgentState],
+    agents: impl IntoIterator<Item = &'a crate::agents::AgentState> + Clone,
 ) -> BTreeMap<PathBuf, BTreeSet<WatchTarget>> {
     let mut targets = BTreeMap::<PathBuf, BTreeSet<WatchTarget>>::new();
     for record in records.iter().filter(|record| {
@@ -191,7 +251,8 @@ fn transcript_targets(
             .is_some_and(|definition| definition.capabilities.transcript_tail_context)
     }) {
         let agent = agents
-            .iter()
+            .clone()
+            .into_iter()
             .find(|agent| agent.kind == record.kind && agent.agent_id == record.agent_id);
         let Some(path) = record.transcript_path.as_deref().map(PathBuf::from) else {
             continue;
@@ -256,6 +317,176 @@ mod tests {
                 .insert(target(kind, session));
         }
         roster
+    }
+
+    fn fixture() -> (tempfile::TempDir, crate::StatePaths, RuntimePaths) {
+        let dir = tempfile::tempdir().unwrap();
+        let id = crate::ids::WorkspaceId::from_project_root(dir.path());
+        let state = crate::StatePaths::under(id.clone(), dir.path()).unwrap();
+        let runtime = RuntimePaths::under(id, dir.path()).unwrap();
+        state.ensure_dirs().unwrap();
+        runtime.ensure_dirs().unwrap();
+        crate::testkit::fleet::seed_fleet_store(&state, 1, 1).unwrap();
+        (dir, state, runtime)
+    }
+
+    fn write_sidecar(runtime: &RuntimePaths, session: &str, source: &str) -> PathBuf {
+        let mut record = AgentContextRecord::new("codex", session, context("codex"));
+        record.transcript_path = Some(source.to_owned());
+        let path = crate::store::agent_context::path_for(runtime, "codex", session);
+        std::fs::write(&path, serde_json::to_vec(&record).unwrap()).unwrap();
+        path
+    }
+
+    fn stamp_directory(runtime: &RuntimePaths, seconds: u64) {
+        std::fs::File::open(&runtime.agent_context_dir)
+            .unwrap()
+            .set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(seconds))
+            .unwrap();
+    }
+
+    #[test]
+    fn roster_rescan_skips_unchanged_inputs_and_rebuilds_after_add_and_remove() {
+        let (_dir, state, runtime) = fixture();
+        write_sidecar(&runtime, "first", "/t/first.jsonl");
+        stamp_directory(&runtime, 1);
+        let mut cursor = crate::sidebar::consumer::RollupCursor::new();
+        let mut watcher = notify::NullWatcher;
+        let mut roster = Roster::default();
+        assert_eq!(
+            reconcile_roster(&runtime, &state, &mut cursor, &mut watcher, &mut roster),
+            RosterPass::Rebuilt
+        );
+        let first = BTreeMap::from([(
+            PathBuf::from("/t/first.jsonl"),
+            BTreeSet::from([target("codex", "first")]),
+        )]);
+        assert_eq!(roster.watched, first);
+        assert_eq!(
+            reconcile_roster(&runtime, &state, &mut cursor, &mut watcher, &mut roster),
+            RosterPass::Unchanged
+        );
+        assert_eq!(roster.watched, first);
+        let second_path = write_sidecar(&runtime, "second", "/t/second.jsonl");
+        stamp_directory(&runtime, 2);
+        assert_eq!(
+            reconcile_roster(&runtime, &state, &mut cursor, &mut watcher, &mut roster),
+            RosterPass::Rebuilt
+        );
+        let mut both = first.clone();
+        both.insert(
+            PathBuf::from("/t/second.jsonl"),
+            BTreeSet::from([target("codex", "second")]),
+        );
+        assert_eq!(roster.watched, both);
+        std::fs::remove_file(second_path).unwrap();
+        stamp_directory(&runtime, 3);
+        assert_eq!(
+            reconcile_roster(&runtime, &state, &mut cursor, &mut watcher, &mut roster),
+            RosterPass::Rebuilt
+        );
+        assert_eq!(roster.watched, first);
+    }
+
+    #[test]
+    fn roster_stamp_is_fresh_only_for_equal_inputs_before_the_backstop() {
+        let now = Instant::now();
+        let extent = LogExtent {
+            generation: 2,
+            offset: 10,
+        };
+        let mtime = SystemTime::UNIX_EPOCH;
+        let stamp = RosterStamp {
+            extent,
+            sidecar_mtime: Some(mtime),
+            taken_at: now,
+        };
+        assert!(roster_unchanged(Some(&stamp), extent, Some(mtime), now));
+        assert!(!roster_unchanged(None, extent, Some(mtime), now));
+        for changed in [
+            LogExtent {
+                generation: 3,
+                ..extent
+            },
+            LogExtent {
+                offset: 11,
+                ..extent
+            },
+        ] {
+            assert!(!roster_unchanged(Some(&stamp), changed, Some(mtime), now));
+        }
+        assert!(!roster_unchanged(Some(&stamp), extent, None, now));
+        assert!(!roster_unchanged(
+            Some(&stamp),
+            extent,
+            Some(mtime + Duration::from_secs(1)),
+            now
+        ));
+        assert!(roster_unchanged(
+            Some(&stamp),
+            extent,
+            Some(mtime),
+            now + ROSTER_RESCAN_BACKSTOP - Duration::from_nanos(1)
+        ));
+        assert!(!roster_unchanged(
+            Some(&stamp),
+            extent,
+            Some(mtime),
+            now + ROSTER_RESCAN_BACKSTOP
+        ));
+        assert!(!roster_unchanged(
+            Some(&stamp),
+            extent,
+            Some(mtime),
+            now + ROSTER_RESCAN_BACKSTOP + Duration::from_nanos(1)
+        ));
+        let missing = RosterStamp {
+            sidecar_mtime: None,
+            ..stamp
+        };
+        assert!(roster_unchanged(Some(&missing), extent, None, now));
+    }
+
+    #[derive(Default)]
+    struct RefusingWatcher {
+        attempts: usize,
+    }
+
+    impl Watcher for RefusingWatcher {
+        fn new<F: notify::EventHandler>(_: F, _: notify::Config) -> notify::Result<Self> {
+            Ok(Self::default())
+        }
+
+        fn watch(&mut self, _: &std::path::Path, _: RecursiveMode) -> notify::Result<()> {
+            self.attempts += 1;
+            Err(notify::Error::generic("registration refused"))
+        }
+
+        fn unwatch(&mut self, _: &std::path::Path) -> notify::Result<()> {
+            Ok(())
+        }
+
+        fn kind() -> notify::WatcherKind {
+            notify::WatcherKind::NullWatcher
+        }
+    }
+
+    #[test]
+    fn failed_registration_keeps_the_roster_gate_open() {
+        let (_dir, state, runtime) = fixture();
+        write_sidecar(&runtime, "first", "/t/first.jsonl");
+        let mut cursor = crate::sidebar::consumer::RollupCursor::new();
+        let mut watcher = RefusingWatcher::default();
+        let mut roster = Roster::default();
+        for _ in 0..2 {
+            assert_eq!(
+                reconcile_roster(&runtime, &state, &mut cursor, &mut watcher, &mut roster),
+                RosterPass::Rebuilt
+            );
+            assert!(roster.watched.is_empty());
+            assert!(roster.stamp.is_none());
+        }
+        assert_eq!(watcher.attempts, 2);
     }
 
     #[test]
