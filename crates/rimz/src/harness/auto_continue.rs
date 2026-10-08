@@ -17,7 +17,7 @@
 //!   agent is still idle (`last_activity` has not advanced), the producer
 //!   spawns the detached `rimz agents auto-continue` helper that queues and
 //!   delivers a resume-gated message record.
-//! - **Clear.** Activity or a delivered resume message clears the record, except a nudge's still-limited reply carries the park and its attempt anchor forward. Evidenced resume messages control exhaustion, while helper spawns only pace retries.
+//! - **Clear.** Activity or a delivered resume message clears the record, except a nudge's still-limited reply carries the park and its attempt anchor forward. Every retained terminal outcome and the live resume queue evidence exhaustion, while helper spawns only pace retries.
 //!
 //! This module owns only the durable record, the pane join, and the spawn — the
 //! arm decision is the pure, unit-tested [`resume_park`].
@@ -48,9 +48,7 @@ const AUTO_CONTINUE_RETRY_INTERVAL: Duration = Duration::from_secs(120);
 
 /// Read durable park evidence for the sidebar and rowless CLI projections.
 ///
-/// Resolves room logins, reads cached capacity and park records, and merges
-/// terminal resume outcomes with the live message queue. No store write or
-/// subprocess is needed, including before the room has a pane frame.
+/// Resolves room logins, reads cached capacity and park records, and merges every retained terminal resume outcome with the live message queue. No store write or subprocess is needed, including before the room has a pane frame.
 pub fn park_demotion(
     store: Option<&crate::Store>,
     state: &crate::StatePaths,
@@ -574,6 +572,7 @@ impl ResumeMessage {
     }
 }
 
+/// Merge every retained terminal resume outcome with the live resume prompt queue.
 pub(crate) fn read_resume_messages(
     store: Option<&crate::store::Store>,
     config: &ResumeConfig,

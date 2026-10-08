@@ -104,7 +104,7 @@ fn resume_outcomes_default_missing_enqueued_at_to_event_time() {
 }
 
 #[test]
-fn resume_outcomes_keep_latest_per_agent_card() {
+fn resume_outcomes_keep_every_message_and_latest_event_per_id() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());
     let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
@@ -152,12 +152,37 @@ fn resume_outcomes_keep_latest_per_agent_card() {
     }
 
     let (_, _, outcomes) = catch_up_rollup(&paths).unwrap();
-    assert_eq!(outcomes.len(), 1);
+    assert_eq!(outcomes.len(), 4);
     assert_eq!(
-        outcomes[0].message_id,
-        message_id(4),
-        "max order is enqueued_at, then updated_at, then message_id"
+        outcomes
+            .iter()
+            .map(|outcome| outcome.message_id.clone())
+            .collect::<Vec<_>>(),
+        (1..=4).map(message_id).collect::<Vec<_>>()
     );
+
+    for updated_at in [newer_updated, older_updated] {
+        event_log::append(
+            &paths.events_log,
+            &resume_event(
+                &workspace,
+                2,
+                "sess-a",
+                MessageStatus::Delivered,
+                newer_enqueued,
+                updated_at,
+            ),
+        )
+        .unwrap();
+    }
+    let (cache, _, outcomes) = catch_up_rollup(&paths).unwrap();
+    assert_eq!(cache.resume_outcomes.len(), 4);
+    assert_eq!(outcomes.len(), 4);
+    let repeated = outcomes
+        .iter()
+        .find(|outcome| outcome.message_id == message_id(2))
+        .unwrap();
+    assert_eq!(repeated.updated_at, newer_updated);
 }
 
 #[test]
@@ -233,8 +258,11 @@ fn cursor_warm_fold_picks_up_and_holds_resume_outcomes() {
 fn carryover_resume_outcomes_merge_after_rotation_reseed() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());
-    let paths = StatePaths::under(workspace, dir.path()).unwrap();
+    let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
     paths.ensure_dirs().unwrap();
+    let enqueued = recent(60);
+    let carried_updated = recent(30);
+    let live_updated = recent(20);
     write_carryover(
         &paths.agents_carryover,
         &EventCarryover {
@@ -246,8 +274,8 @@ fn carryover_resume_outcomes_merge_after_rotation_reseed() {
                 agent_id: AgentSessionId::from("sess-a"),
                 agent_name: Some("lucid-atlas".to_owned()),
                 status: MessageStatus::Delivered,
-                enqueued_at: recent(60),
-                updated_at: recent(30),
+                enqueued_at: enqueued,
+                updated_at: carried_updated,
             }],
         },
     )
@@ -258,4 +286,27 @@ fn carryover_resume_outcomes_merge_after_rotation_reseed() {
     assert!(cache.resume_outcomes.is_empty());
     assert_eq!(outcomes.len(), 1);
     assert_eq!(outcomes[0].agent_name.as_deref(), Some("lucid-atlas"));
+
+    for id in [1, 2] {
+        event_log::append(
+            &paths.events_log,
+            &resume_event(
+                &workspace,
+                id,
+                "sess-a",
+                MessageStatus::Delivered,
+                enqueued,
+                live_updated,
+            ),
+        )
+        .unwrap();
+    }
+    let (_, _, outcomes) = catch_up_rollup(&paths).unwrap();
+    assert_eq!(outcomes.len(), 2);
+    let repeated = outcomes
+        .iter()
+        .filter(|outcome| outcome.message_id == message_id(1))
+        .collect::<Vec<_>>();
+    assert_eq!(repeated.len(), 1);
+    assert_eq!(repeated[0].updated_at, live_updated);
 }
