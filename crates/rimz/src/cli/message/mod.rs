@@ -16,7 +16,7 @@ use super::send::{self, SendFlags, resolve_message};
 use super::usage::{UsageError, shell_command};
 use crate::cli::render;
 use rimz::agents::AgentState;
-use rimz::ids::{AgentKind, AgentSessionId, MessageId, PaneId};
+use rimz::ids::{AgentKind, AgentSessionId, MessageId, PaneId, WorkspaceId};
 use rimz::message::deliver;
 use rimz::message::dispatch::WhenRequest;
 use rimz::message::parse_schedule_at;
@@ -178,7 +178,11 @@ enum MessageSubcmd {
     },
     /// Deliver due scheduled messages and cross-agent triggers.
     #[command(hide = true)]
-    Sweep,
+    Sweep {
+        /// Open the recorded room by id instead of resolving the current directory.
+        #[arg(long)]
+        workspace_id: Option<WorkspaceId>,
+    },
 }
 
 #[derive(Debug, Default, Args)]
@@ -277,7 +281,7 @@ pub fn run(args: MessageArgs, globals: &GlobalFlags) -> Result<()> {
             channel,
         }) => clear_messages(target, worktree, channel, globals),
         Some(MessageSubcmd::Deliver { message_id }) => deliver_message(message_id, globals),
-        Some(MessageSubcmd::Sweep) => sweep_messages(globals),
+        Some(MessageSubcmd::Sweep { workspace_id }) => sweep_messages(workspace_id, globals),
         None => {
             let Some(target) = args.target.as_ref() else {
                 return list_messages(ListArgs::default(), globals);
