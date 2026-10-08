@@ -1,3 +1,8 @@
+//! Deterministic sidebar snapshots behind the screenshot and gallery fixture states.
+//!
+//! A fixture card carries only state its agent kind can reach on a default configuration: a cache
+//! clock goes on a Claude or Codex card, since only those adapters declare a prompt-cache lifetime.
+
 use super::*;
 use rimz::agents::spending::sum_optional_cost;
 use rimz::ids::LinkTier;
