@@ -247,9 +247,9 @@ The inbox shows conversation by default: your sends and attributed agent sends. 
 
 When something is stuck the loop is always the same: `list` to find the record, `show` to name the blocker, then `steer`, `edit`, or `cancel` to clear it.
 
-Nine statuses cover a record's whole life. `queued` and `claimed` are still live; `sent` means the bytes reached the pane and `delivered` that the prompt's turn started; `canceled` means you stopped it and `archived` that the receiver, its channel, or a watched agent ended first; `timed_out`, `errored`, and `abandoned` are the three failures. [cli/message.md](../reference/cli/message.md#message-statuses) defines each. A finished record keeps its text in the recent history, which is what lets `show` print it and `requeue` send it again; `requeue` refuses a record whose text has aged out of that history.
+Ten statuses cover a record's whole life. `queued` and `claimed` are still live; `sent` means the bytes reached the pane and `delivered` that the prompt's turn started; `canceled` means you stopped it and `archived` that the receiver, its channel, or a watched agent ended first; `expired` means an automatic command waited ten minutes without reaching the pane, so later messages can pass it; `timed_out`, `errored`, and `abandoned` are the three failures. [cli/message.md](../reference/cli/message.md#message-statuses) defines each. A finished record keeps its text in the recent history, which is what lets `show` print it and `requeue` send it again; `requeue` refuses a record whose text has aged out of that history. Your prompts and operator compaction commands never expire.
 
-`message steer` overrides every condition above: it delivers past the schedule, the conditions, the queue order, and the gate. An open prompt still stops it unless you add `--force`.
+`message steer` delivers past the schedule, the conditions, the queue order, and the gate. An open prompt still stops it unless you add `--force`. An expired automatic command cannot be steered; cancel it or requeue it after the sweep records its expiry.
 
 ## Agents message each other
 

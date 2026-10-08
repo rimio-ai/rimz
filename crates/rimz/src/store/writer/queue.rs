@@ -32,6 +32,7 @@ pub struct ReconcileReport {
     pub requeued: usize,
     pub timed_out: usize,
     pub abandoned: usize,
+    pub expired: usize,
 }
 
 /// What a deferred delivery does to the message's recorded blocker. The store applies the
@@ -383,7 +384,7 @@ fn normalize_terminal(
     debug_assert!(status.is_terminal());
     message.status = status;
     message.updated_at = now;
-    if status == MessageStatus::Archived
+    if matches!(status, MessageStatus::Archived | MessageStatus::Expired)
         && let Some(reason) = reason
     {
         message.last_error = Some(reason.to_owned());
@@ -1024,6 +1025,16 @@ impl Store {
             };
             let mut report = ReconcileReport::default();
             let updated = queue.apply_all(session_name, now, |message| {
+                if message.expired(now) {
+                    report.expired += 1;
+                    return MessageUpdate::Finalize {
+                        status: MessageStatus::Expired,
+                        reason: Some(format!(
+                            "expired: automatic command not delivered within {} of queueing",
+                            message::format_dwell(message::command_validity().as_secs())
+                        )),
+                    };
+                }
                 if message.status == MessageStatus::Claimed
                     && claim_expired(message.last_attempt_at, now)
                 {

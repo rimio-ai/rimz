@@ -212,9 +212,10 @@ A wait is refused before sending when a target has no lifecycle state, is not ru
 | `errored` | Delivery could not happen, for example the address matched no agent. |
 | `canceled` | `message cancel` or `message clear` stopped it. |
 | `abandoned` | Delivery attempts failed repeatedly before anything reached the pane. |
+| `expired` | An automatic command remained queued for ten minutes without delivery. It no longer blocks later messages, even before the next sweep records this status. Prompts and operator commands never expire. |
 | `archived` | The recipient, its channel, or a watched `--when` agent ended first. |
 
-The last six are final. A final record keeps its text in `audit/messages/<bucket-start>.jsonl`, subject to the room's audit retention. `show`, `list`, and `requeue` read the room's newest 500 final records, so they display or resend a final message while it is among those and still retained.
+The last seven are final. A final record keeps its text in `audit/messages/<bucket-start>.jsonl`, subject to the room's audit retention. `show`, `list`, and `requeue` read the room's newest 500 final records, so they display or resend a final message while it is among those and still retained. Requeueing an expired automatic command starts a fresh ten-minute window. Steer and interrupt cannot deliver an expired queued command.
 
 ## Inbox and queue verbs
 
