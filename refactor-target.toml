@@ -618,7 +618,8 @@ upward-dependencies = [
 # launch validates a configured shell with `launchable_shell`.
 # `root_path_identity` reads what a process sees at a path in its own root; Linux and non-Linux definitions (+2).
 # `memory` is the host and cgroup memory reading that `lsp` and the loop throttle share: module, reading, error, sampler (+4).
-surface-budget = 112
+# The calling-thread bounded pump and its kill scope are shared with mux (+2).
+surface-budget = 114
 
 [[module]]
 path = "crates/rimz/src/reload.rs"

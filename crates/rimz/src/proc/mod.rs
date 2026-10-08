@@ -7,18 +7,24 @@
 //! fall back rather than guessing. It also owns the hot-path subprocess spawn
 //! seams the perf guards count and the user's login-shell selection.
 
+mod bounded;
 pub(crate) mod command;
 #[cfg(target_os = "macos")]
 mod macos;
 pub(crate) mod memory;
 mod pane_probe;
 
+pub(crate) use bounded::{BoundedOutput, run_bounded_output};
+#[expect(
+    unused_imports,
+    reason = "The mux runner adopts this engine in the next commit."
+)]
+pub(crate) use bounded::{KillScope, pump_child};
 pub(crate) use command::{command_program_basename, program_label, rimz_exec_worktree_path};
 
-use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitStatus, Stdio};
-use std::time::{Duration, Instant};
+use std::process::Command;
+use std::time::Duration;
 
 /// Stable per-device identity carried to the remote attach so a replacement
 /// can retire an orphaned predecessor before entering the multiplexer.
@@ -207,91 +213,6 @@ fn strip_deleted_suffix(path: &Path) -> Option<PathBuf> {
         .to_str()
         .and_then(|raw| raw.strip_suffix(" (deleted)"))
         .map(PathBuf::from)
-}
-
-#[derive(Debug)]
-pub(crate) struct BoundedOutput {
-    pub(crate) status: ExitStatus,
-    pub(crate) stdout: Vec<u8>,
-    pub(crate) stderr: Vec<u8>,
-    pub(crate) timed_out: bool,
-}
-
-/// Run a subprocess with captured stdout and a wall-clock timeout.
-///
-/// Timeout kills and reaps the child, then drains any bytes already written.
-/// This mirrors the mux bounded-command pattern without importing backend code
-/// into domain modules.
-pub(crate) fn run_bounded_output(
-    command: &mut Command,
-    timeout: Duration,
-) -> std::io::Result<BoundedOutput> {
-    testkit::count_spawn();
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt as _;
-
-        command.process_group(0);
-    }
-    let mut child = command
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?;
-    let stdout = child.stdout.take().map(read_to_end_thread);
-    let stderr = child.stderr.take().map(read_to_end_thread);
-    let deadline = Instant::now() + timeout;
-    loop {
-        // Descendants can retain the output pipes after the direct child exits.
-        if let Some(status) = child.try_wait()?
-            && stdout.as_ref().is_none_or(|reader| reader.is_finished())
-            && stderr.as_ref().is_none_or(|reader| reader.is_finished())
-        {
-            return Ok(BoundedOutput {
-                status,
-                stdout: join_reader(stdout),
-                stderr: join_reader(stderr),
-                timed_out: false,
-            });
-        }
-        if Instant::now() >= deadline {
-            tracing::debug!(
-                program = %command.get_program().to_string_lossy(),
-                timeout_ms = timeout.as_millis(),
-                "bounded subprocess timed out",
-            );
-            #[cfg(unix)]
-            {
-                use nix::sys::signal::{Signal, killpg};
-                use nix::unistd::Pid;
-
-                let _ = killpg(Pid::from_raw(child.id() as i32), Signal::SIGKILL);
-            }
-            #[cfg(not(unix))]
-            let _ = child.kill();
-            let status = child.wait()?;
-            return Ok(BoundedOutput {
-                status,
-                stdout: join_reader(stdout),
-                stderr: join_reader(stderr),
-                timed_out: true,
-            });
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    }
-}
-
-fn read_to_end_thread(mut reader: impl Read + Send + 'static) -> std::thread::JoinHandle<Vec<u8>> {
-    std::thread::spawn(move || {
-        let mut bytes = Vec::new();
-        let _ = reader.read_to_end(&mut bytes);
-        bytes
-    })
-}
-
-fn join_reader(handle: Option<std::thread::JoinHandle<Vec<u8>>>) -> Vec<u8> {
-    handle
-        .and_then(|handle| handle.join().ok())
-        .unwrap_or_default()
 }
 
 /// One process as the reset sweep needs to see it: its pid, its parent, the real
@@ -1254,48 +1175,6 @@ mod tests {
             let deleted = Path::new("/opt/rimz/bin/rimz (deleted)");
 
             assert!(resolve_existing_or_replacement_with(deleted, |_| false).is_none());
-        }
-
-        #[test]
-        fn bounded_output_captures_both_streams() {
-            let mut cmd = Command::new("sh");
-            cmd.args(["-c", "printf rimz; printf trace >&2"]);
-
-            let output =
-                run_bounded_output(&mut cmd, Duration::from_secs(1)).expect("bounded output");
-
-            assert!(output.status.success());
-            assert!(!output.timed_out);
-            assert_eq!(output.stdout, b"rimz");
-            assert_eq!(output.stderr, b"trace");
-        }
-
-        #[test]
-        fn bounded_output_kills_and_reaps_on_timeout() {
-            let mut cmd = Command::new("sh");
-            cmd.args(["-c", "sleep 5"]);
-
-            let output =
-                run_bounded_output(&mut cmd, Duration::from_millis(20)).expect("bounded output");
-
-            assert!(output.timed_out);
-            assert!(!output.status.success());
-        }
-
-        #[cfg(unix)]
-        #[test]
-        fn bounded_output_kills_pipe_holding_grandchildren_on_timeout() {
-            for script in ["sleep 30 & exec sleep 30", "sleep 1 & exit 0"] {
-                let mut cmd = Command::new("sh");
-                cmd.args(["-c", script]);
-                let started = Instant::now();
-
-                let output = run_bounded_output(&mut cmd, Duration::from_millis(100))
-                    .expect("bounded output");
-
-                assert!(output.timed_out, "{script}");
-                assert!(started.elapsed() < Duration::from_secs(1));
-            }
         }
 
         #[test]
