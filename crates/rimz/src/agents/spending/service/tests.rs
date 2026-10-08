@@ -377,8 +377,13 @@ fn walk_panic_replies_internal_and_resets_walker() {
 #[test]
 fn sequential_requests_reuse_service_and_walker_threads() {
     let (_dir, runtime, service_request, _discovery) = spending_fixture();
-    let thread_count = || std::fs::read_dir("/proc/self/task").unwrap().count();
-    let before = thread_count();
+    let threads = || {
+        std::fs::read_dir("/proc/self/task")
+            .unwrap()
+            .map(|task| task.unwrap().file_name())
+            .collect::<std::collections::BTreeSet<_>>()
+    };
+    let before = threads();
     let first = request(
         &runtime,
         service_request.clone(),
@@ -386,8 +391,20 @@ fn sequential_requests_reuse_service_and_walker_threads() {
     )
     .unwrap();
     assert!((first.workspace.tally.year.usd - 2.5).abs() < 1e-9);
-    let after_first = thread_count();
-    assert_eq!(after_first, before + 2, "one service and one walker thread");
+    // A scoped parse worker can outlive its scope by a moment, so let the first walk's threads settle.
+    let settled = std::time::Instant::now() + Duration::from_secs(30);
+    let after_first = loop {
+        let threads = threads();
+        if threads.len() == before.len() + 2 || std::time::Instant::now() >= settled {
+            break threads;
+        }
+        std::thread::yield_now();
+    };
+    assert_eq!(
+        after_first.len(),
+        before.len() + 2,
+        "one service and one walker thread"
+    );
     let walker_threads = std::fs::read_dir("/proc/self/task")
         .unwrap()
         .filter(|task| {
@@ -401,15 +418,24 @@ fn sequential_requests_reuse_service_and_walker_threads() {
     for _ in 0..4 {
         std::fs::remove_file(runtime.shared_provider_spending_path()).unwrap();
         assert!(super::super::engine::fresh_publication(&runtime, &service_request).is_none());
-        let caches = request(
-            &runtime,
-            service_request.clone(),
-            SpendingServiceStartup::HostEligible,
-        )
-        .unwrap();
+        // The reply reaches the client before the walker releases its claim, so only these later requests wait out Busy.
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        let caches = loop {
+            match request(
+                &runtime,
+                service_request.clone(),
+                SpendingServiceStartup::HostEligible,
+            ) {
+                Err(SpendingServiceClientError::Service(SpendingServiceFailure {
+                    code: SpendingServiceErrorCode::Busy,
+                    ..
+                })) if std::time::Instant::now() < deadline => std::thread::yield_now(),
+                reply => break reply.unwrap(),
+            }
+        };
         assert!((caches.workspace.tally.year.usd - 2.5).abs() < 1e-9);
     }
-    assert_eq!(thread_count(), after_first, "requests add no threads");
+    assert_eq!(threads(), after_first, "requests reuse the same threads");
 }
 
 #[test]
