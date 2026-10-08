@@ -18,6 +18,7 @@ Local contract for `crates/rimz/src/sidebar_pane/` — the sidebar renderer: the
 ## Read-only on the store
 
 - The renderer draws; [`store/`](../store/AGENTS.md) writes. The invariant rejects a store-atomic or store-writer import anywhere under this tree, and it greps text, so state the rule in prose rather than pasting the banned paths.
+- The rule covers test files too; a fixture writes its runtime files with serde and `std::fs::write`.
 - Event-log history enters through a `RollupCursor` fold, the same rule that binds [`sidebar/`](../sidebar/AGENTS.md).
 
 ## The theme edge
