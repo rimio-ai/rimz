@@ -210,7 +210,10 @@ impl CommandSpec {
     /// Run the command with raw exit status and captured output, bounded by
     /// `timeout`. Callers inspect nonzero status themselves. The child's
     /// stdout/stderr and optional stdin are polled on the calling thread;
-    /// their I/O and child exit share the same deadline. On the deadline the
+    /// their I/O and child exit share the same deadline. Once both outputs
+    /// close, the exit is collected by a `try_wait` retry that starts at tens
+    /// of microseconds and backs off to 1 ms, so a fast command returns within
+    /// a fraction of a millisecond of its exit. On the deadline the
     /// child is SIGKILLed by pid and reaped, and a [`MuxErr::Timeout`] is
     /// returned. A [`RefusalRetry`] rule reruns a refused command inside the
     /// same `timeout`.
