@@ -517,13 +517,14 @@ fn luminance(color: Color) -> f32 {
 }
 
 #[test]
-fn cache_expired_reads_as_greyed_caution() {
+fn cache_expired_reads_as_greyed_alarm() {
     for theme in [truecolor_default(), Theme::fixed(false)] {
         let expired = theme.component(Component::CacheExpired);
         for tone in [
-            theme.palette.caution,
+            theme.palette.alarm,
+            theme.palette.expense,
             theme.palette.muted,
-            theme.palette.warn,
+            theme.palette.caution,
             theme.palette.faint,
         ] {
             assert_ne!(expired, tone_color(tone), "expired has its own tone");
@@ -534,15 +535,12 @@ fn cache_expired_reads_as_greyed_caution() {
     use std::f32::consts::{PI, TAU};
     let theme = truecolor_default();
     let expired = color_to_rgb(theme.component(Component::CacheExpired)).unwrap();
-    let caution = color_to_rgb(tone_color(theme.palette.caution)).unwrap();
+    let alarm = color_to_rgb(tone_color(theme.palette.alarm)).unwrap();
     let muted = color_to_rgb(tone_color(theme.palette.muted)).unwrap();
-    assert!(
-        chroma(expired) < chroma(caution),
-        "less chromatic than caution"
-    );
-    assert!(chroma(expired) > chroma(muted), "warmer than muted");
-    let arc = (hue_angle(expired) - hue_angle(caution) + PI).rem_euclid(TAU) - PI;
-    assert!(arc.abs() < 0.3, "expired holds caution's hue: {arc:.3}rad");
+    assert!(chroma(expired) < chroma(alarm), "less chromatic than alarm");
+    assert!(chroma(expired) > chroma(muted), "redder than muted");
+    let arc = (hue_angle(expired) - hue_angle(alarm) + PI).rem_euclid(TAU) - PI;
+    assert!(arc.abs() < 0.3, "expired holds alarm's hue: {arc:.3}rad");
 }
 
 #[test]

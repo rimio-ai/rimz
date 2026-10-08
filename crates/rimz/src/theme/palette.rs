@@ -42,11 +42,8 @@ pub(crate) const HEAT_RAMP_WARM_START: f32 = 1.0 / (HEAT_RAMP_STOPS as f32 - 1.0
 const INPUT_EXPENSE_CHROMA: f32 = 1.30;
 const INPUT_EXPENSE_DEEPEN: f32 = -0.09;
 
-/// Pull `caution` halfway to `muted`: a dull, warm grey for an expired prompt
-/// cache, not the hot bar's amber. `muted` sits nearly opposite `caution` in
-/// hue, so the blend drains chroma fast: past about 0.54 on the default scheme
-/// the tone leaves caution's hue for a pinkish grey no more chromatic than
-/// `muted` itself.
+/// Pull `alarm` halfway to `muted`: a dull, greyed red for an expired prompt
+/// cache, not the full bar's live red.
 const CACHE_EXPIRED_GREY: f32 = 0.5;
 
 /// The active palette, one named slot per semantic tone.
@@ -142,7 +139,7 @@ impl Palette {
         );
         let cache_expired = rgb_color(
             oklab::blend(
-                heat_ramp[2],
+                heat_ramp[3],
                 derived_rgb_slot(theme.muted, tones.muted, &raw),
                 CACHE_EXPIRED_GREY,
             ),
@@ -477,6 +474,30 @@ mod tests {
             };
             assert_eq!(palette.budget_tone(30, &misordered), stop(1.0));
             assert_ne!(palette.budget_tone(50, &misordered), stop(1.0));
+        }
+    }
+
+    #[test]
+    fn cache_expired_blends_alarm_halfway_to_muted_and_follows_their_overrides() {
+        const ALARM: (u8, u8, u8) = (0xd7, 0x00, 0x00);
+        const MUTED: (u8, u8, u8) = (0x60, 0x70, 0x80);
+        let overridden = ThemeConfig {
+            alarm: Some(ThemeColor::Rgb(ALARM.0, ALARM.1, ALARM.2)),
+            muted: Some(ThemeColor::Rgb(MUTED.0, MUTED.1, MUTED.2)),
+            ..ThemeConfig::default()
+        };
+        let scheme = raw_palette_for_theme(&ThemeConfig::default()).derive_tones();
+        for depth in [ColorDepth::Truecolor, ColorDepth::Indexed] {
+            for (theme, alarm, muted) in [
+                (ThemeConfig::default(), scheme.alarm, scheme.muted),
+                (overridden.clone(), ALARM, MUTED),
+            ] {
+                assert_eq!(
+                    Palette::resolve(&theme, depth).cache_expired,
+                    rgb_color(oklab::blend(alarm, muted, 0.5), depth),
+                    "alarm {alarm:?} and muted {muted:?} at {depth:?}"
+                );
+            }
         }
     }
 }

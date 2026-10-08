@@ -112,8 +112,8 @@ pub(crate) enum Component {
     WindowLarge,
     /// Window token, `1M`+ tier — the loudest, an accent (never a brand clay).
     WindowHuge,
-    /// The context meter's expired prompt-cache fill: greyed `caution`, warm
-    /// enough to read as costly without looking like the hot bar.
+    /// The context meter's expired prompt-cache fill: greyed `alarm`, red
+    /// enough to read as lost without looking like the full bar.
     CacheExpired,
 }
 
