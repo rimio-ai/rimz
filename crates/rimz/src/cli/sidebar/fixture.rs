@@ -376,7 +376,7 @@ fn add_fleet_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
         },
         now,
     );
-    let codex = agent_row(
+    let mut codex = agent_row(
         AgentRowSpec {
             id: "agent:codex:pricing",
             name: "codex",
@@ -388,11 +388,20 @@ fn add_fleet_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
             task: "approve pricing cache write",
             model: "GPT-5.5",
             context: Some((193_480, 4.36)),
+            age_secs: Some(40 * 60),
             ..AgentRowSpec::default()
         },
         now,
     );
-    let mut pi = agent_row(
+    if let Some(card) = codex.as_agent_mut() {
+        card.cache = Some(rimz::store::snapshot::CacheClock {
+            ceiling_secs: 1800,
+            last_request_at: None,
+            warm_until: None,
+            held_since: None,
+        });
+    }
+    let pi = agent_row(
         AgentRowSpec {
             id: "agent:pi:mux",
             name: "pi",
@@ -404,19 +413,10 @@ fn add_fleet_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
             task: "debug zellij health probe",
             model: "GPT-5.5",
             context: Some((258_610, 2.18)),
-            age_secs: Some(70 * 60),
             ..AgentRowSpec::default()
         },
         now,
     );
-    if let Some(card) = pi.as_agent_mut() {
-        card.cache = Some(rimz::store::snapshot::CacheClock {
-            ceiling_secs: 3600,
-            last_request_at: None,
-            warm_until: None,
-            held_since: None,
-        });
-    }
     let process = process_row(ProcessRowSpec {
         id: "process:cargo-nextest",
         name: "cargo nextest",
