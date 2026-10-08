@@ -33,6 +33,16 @@ use crate::pane::keys::{BRACKET_PASTE_CLOSE, BRACKET_PASTE_OPEN, NamedKey, paste
 const SIDEBAR_RESIZE_STEP_COLS: u16 = 2;
 
 impl TmuxBackend {
+    pub(super) fn global_mux_context_removal_command(&self) -> CommandSpec {
+        let commands = crate::mux::AMBIENT_MUX_ENV.map(|key| {
+            ["set-environment", "-g", "-r", key]
+                .into_iter()
+                .map(str::to_owned)
+                .collect()
+        });
+        self.batch_spec(&commands)
+    }
+
     pub(super) fn new_session_command(
         &self,
         opts: &SessionOptions,
@@ -178,6 +188,17 @@ impl MuxBackend for TmuxBackend {
 
     fn ensure_session(&self, opts: &SessionOptions) -> Result<()> {
         self.ensure_endpoint_ready()?;
+        // Repair a pre-fix server before new-session forks its first pane.
+        // This command cannot start a server; absent or stale sockets are
+        // expected on a true birth, but other repair failures must surface.
+        match self.global_mux_context_removal_command().run() {
+            Ok(_) => {}
+            Err(MuxErr::Command { stderr, .. })
+                if stderr.starts_with("no server running on ")
+                    || (stderr.starts_with("error connecting to ")
+                        && stderr.trim_end().ends_with("(No such file or directory)")) => {}
+            Err(err) => return Err(err),
+        }
         // The runtime domain goes in first so the pin and any caller override
         // win on conflict: a pane inherits concrete HOME/XDG values naming the
         // same store and mux endpoint this client resolved.
@@ -202,6 +223,7 @@ impl MuxBackend for TmuxBackend {
                 if stderr.to_ascii_lowercase().contains("duplicate session") => {}
             Err(err) => return Err(err),
         }
+        self.global_mux_context_removal_command().run()?;
         // The duplicate path never saw `-e`, so the birth env is re-asserted
         // idempotently: future panes of a pre-stamp room inherit it; existing
         // panes keep the env they were born with and their participants fall
