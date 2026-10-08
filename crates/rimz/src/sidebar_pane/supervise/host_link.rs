@@ -74,9 +74,10 @@ pub(super) fn spawn_host(
         .append(true)
         .open(log)?;
     // A rendered pane's own log sink is off, so the host's log is where a
-    // host that was never started says why.
+    // host that was never started says why. A pane on its worker asks again
+    // on every retry, so each line says when.
     let mut command = host_command(exe, config, runtime, state).inspect_err(|err| {
-        let _ = writeln!(stderr, "{err}");
+        let _ = writeln!(stderr, "{} {err}", jiff::Timestamp::now());
     })?;
     command.stderr(stderr);
     crate::child_process::spawn_detached_reaped(&mut command, "sidebar-host").map(drop)

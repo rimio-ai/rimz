@@ -297,6 +297,14 @@ fn the_host_environment_pins_its_room_and_keeps_the_session_not_the_pane() {
     assert_eq!(env.len(), 8, "only the pin and pane removals are set");
 }
 
+/// The log holds one line: when the host was refused, then why.
+fn assert_refusal_logged(log: &Path, error: &str) {
+    let logged = std::fs::read_to_string(log).unwrap();
+    let (at, reason) = logged.split_once(' ').unwrap();
+    at.parse::<jiff::Timestamp>().unwrap();
+    assert_eq!(reason, format!("{error}\n"));
+}
+
 #[test]
 fn a_host_without_a_workspace_record_is_not_spawned() {
     let room = Room::new();
@@ -314,7 +322,7 @@ fn a_host_without_a_workspace_record_is_not_spawned() {
     .to_string();
     assert!(error.contains(room.config.workspace_id.as_str()), "{error}");
     assert!(error.contains("cannot access"), "{error}");
-    assert_eq!(std::fs::read_to_string(&log).unwrap(), format!("{error}\n"));
+    assert_refusal_logged(&log, &error);
 }
 
 #[test]
@@ -335,5 +343,5 @@ fn a_host_with_a_workspace_record_for_another_root_is_not_spawned() {
     .to_string();
     assert!(error.contains(room.config.workspace_id.as_str()), "{error}");
     assert!(error.contains("does not verify"), "{error}");
-    assert_eq!(std::fs::read_to_string(&log).unwrap(), format!("{error}\n"));
+    assert_refusal_logged(&log, &error);
 }
