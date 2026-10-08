@@ -1,10 +1,14 @@
 use super::*;
+use crate::agent_activity::AgentActivity;
 use crate::agents::account::RateLimitsCache;
+use crate::agents::lifecycle::LifecycleSignal;
 use crate::agents::{
     AgentContext, AgentRateLimits, AgentStatus, AgentTurnError, ProviderCapacity, RateLimitWindow,
     TurnErrorClass,
 };
 use crate::ids::{AgentSessionId, MuxName, WorkspaceId};
+use crate::store::event::EventEnvelope;
+use serde_json::{Value, json};
 
 fn ts(secs: i64) -> Timestamp {
     Timestamp::from_second(secs).expect("valid test timestamp")
@@ -275,6 +279,55 @@ fn parked_agent(activity: i64, error_at: i64, class: TurnErrorClass, label: &str
         observed_at: ts(error_at),
     });
     agent
+}
+
+fn folded_hook_frames(
+    runtime: &RuntimePaths,
+    kind: &str,
+    hooks: &[(&str, Value, i64)],
+) -> SidebarSnapshot {
+    let definition = crate::agents::definition_by_kind(kind).expect("registered provider");
+    let mut events = Vec::new();
+    let mut activity: Option<AgentActivity> = None;
+    for (name, payload, at) in hooks {
+        let decoded = definition.decode_hook(name, payload).expect("decode hook");
+        let tool_used = decoded.lifecycle().is_some_and(|observation| {
+            observation.parent_agent_id.is_none()
+                && matches!(observation.signal, LifecycleSignal::ToolUsed { .. })
+        });
+        if let Some(observation) = decoded.lifecycle() {
+            let mut event = EventEnvelope::agent_lifecycle(
+                runtime.workspace_id.clone(),
+                "test",
+                kind,
+                *name,
+                observation,
+            );
+            event.timestamp = ts(*at);
+            events.push(event);
+        }
+        if decoded.records_progress() {
+            activity = Some(AgentActivity {
+                kind: AgentKind::new_unchecked(kind),
+                agent_id: "sess".into(),
+                at: ts(*at),
+                tool_at: if tool_used {
+                    Some(ts(*at))
+                } else {
+                    activity.as_ref().and_then(|touch| touch.tool_at)
+                },
+                repeat: None,
+            });
+        } else if tool_used && let Some(touch) = activity.as_mut() {
+            touch.tool_at = Some(ts(*at));
+        }
+    }
+    SidebarSnapshot::build(
+        runtime.workspace_id.clone(),
+        events,
+        ts(hooks.last().unwrap().2 + 1),
+    )
+    .with_agent_activity(&activity.into_iter().collect::<Vec<_>>())
 }
 
 #[test]
@@ -1148,6 +1201,344 @@ fn overload_replies_preserve_backoff_and_retry_cap() {
         }
     }
     assert_eq!(nudges, vec![1_180, 1_480, 1_780]);
+}
+
+#[test]
+fn productive_nudged_turns_start_fresh_allowances_before_limit_stops() {
+    for (kind, stopped_status) in [
+        ("claude", AgentStatus::Running),
+        ("grok", AgentStatus::Failed),
+    ] {
+        let (_dir, runtime) = temp_runtime();
+        let path = park_record_path(&runtime, &AgentKind::new_unchecked(kind), &"sess".into());
+        write_rate_limits_cache(
+            &runtime,
+            &RateLimitsCache {
+                entries: [(
+                    crate::ids::LoginKey::default_for(AgentKind::new_unchecked(kind)),
+                    crate::agents::account::RateLimitCacheEntry {
+                        limits: AgentRateLimits {
+                            windows: vec![window(100, 30_000)],
+                        },
+                        ..Default::default()
+                    },
+                )]
+                .into_iter()
+                .collect(),
+                ..Default::default()
+            },
+        );
+        let config = ResumeConfig {
+            auto_continue: true,
+            auto_continue_max_retries: 3,
+            ..ResumeConfig::default()
+        };
+        let logins = crate::agents::RoomLoginSet::native();
+        let payload = json!({"session_id": "sess", "sessionId": "sess", "prompt": "continue", "tool_name": "Bash", "toolName": "Bash", "error": "rate_limit"});
+        let mut hooks = vec![("UserPromptSubmit", payload.clone(), 1_000)];
+        let mut messages = Vec::new();
+        write_park(&path, &rate_record(5_000, 1_000, None, 0));
+        for (id, nudge_at) in [(1, 6_000), (2, 7_000), (3, 8_000)] {
+            let nudged = nudged_record(read_park(&path).unwrap(), ts(nudge_at));
+            write_park(&path, &nudged);
+            let mut message = resume_message(id, MessageStatus::Delivered, nudge_at);
+            message.kind = AgentKind::new_unchecked(kind);
+            messages.push(message);
+            hooks.push(("UserPromptSubmit", payload.clone(), nudge_at + 1));
+            let in_flight = folded_hook_frames(&runtime, kind, &hooks);
+            assert_eq!(in_flight.agents[0].turn_started_at, Some(ts(nudge_at + 1)));
+            resume_parked(&in_flight, &runtime, &logins, &config, &messages);
+            assert_eq!(read_park(&path), Some(nudged.clone()));
+
+            hooks.push(("PostToolUse", payload.clone(), nudge_at + 100));
+            let working = folded_hook_frames(&runtime, kind, &hooks);
+            assert_eq!(working.agents[0].last_tool_at, Some(ts(nudge_at + 100)));
+            assert!(working.agents[0].last_activity > working.agents[0].turn_started_at.unwrap());
+            resume_parked(&working, &runtime, &logins, &config, &messages);
+            assert_eq!(read_park(&path), Some(nudged));
+
+            hooks.push(("StopFailure", payload.clone(), nudge_at + 101));
+            let mut stopped = folded_hook_frames(&runtime, kind, &hooks);
+            assert_eq!(stopped.agents[0].status, stopped_status);
+            stopped.agents[0].context = parked_agent(
+                1_000,
+                nudge_at + 101,
+                TurnErrorClass::PausedRateLimit,
+                "usage limit",
+            )
+            .context;
+            assert!(stopped.agents[0].displayed_turn_error().is_some());
+            resume_parked(&stopped, &runtime, &logins, &config, &messages);
+            let fresh = read_park(&path).unwrap();
+            assert_eq!(
+                fresh.attempts_since, None,
+                "productive turn kept the old allowance"
+            );
+            assert_eq!(fresh.retries, 0, "productive turn kept the old retry state");
+            assert_eq!(fresh.last_nudge_at, None);
+            assert_eq!(fresh.parked_at_activity, stopped.agents[0].last_activity);
+            assert!(exhausted_parks(&stopped.agents, &runtime, &config, &messages).is_empty());
+        }
+    }
+}
+
+#[test]
+fn in_flight_turn_holds_park_when_resume_message_is_not_visible() {
+    let (_dir, runtime) = temp_runtime();
+    write_recovered_window(&runtime);
+    let record = rate_record(5_000, 1_000, Some(6_000), 1);
+    write_park(&park_path(&runtime), &record);
+    let snapshot = folded_hook_frames(
+        &runtime,
+        "claude",
+        &[
+            (
+                "UserPromptSubmit",
+                json!({"session_id": "sess", "prompt": "work"}),
+                1_000,
+            ),
+            (
+                "UserPromptSubmit",
+                json!({"session_id": "sess", "prompt": "continue"}),
+                6_001,
+            ),
+        ],
+    );
+    assert_eq!(snapshot.agents[0].status, AgentStatus::Running);
+    assert!(snapshot.agents[0].displayed_turn_error().is_none());
+    let config = ResumeConfig {
+        auto_continue: true,
+        ..ResumeConfig::default()
+    };
+    resume_parked(
+        &snapshot,
+        &runtime,
+        &crate::agents::RoomLoginSet::native(),
+        &config,
+        &[],
+    );
+    assert_eq!(
+        read_park(&park_path(&runtime)),
+        Some(record),
+        "message visibility gap lost the park"
+    );
+}
+
+#[test]
+fn failed_turn_holds_park_until_its_limit_marker_is_visible() {
+    let (_dir, runtime) = temp_runtime();
+    let kind = AgentKind::new_unchecked("grok");
+    let path = park_record_path(&runtime, &kind, &"sess".into());
+    let mut record = rate_record(5_000, 1_000, Some(6_000), 2);
+    record.attempts_since = Some(ts(900));
+    write_park(&path, &record);
+    let payload = json!({"sessionId": "sess", "prompt": "continue", "error": "rate_limit"});
+    let mut snapshot = folded_hook_frames(
+        &runtime,
+        "grok",
+        &[
+            ("UserPromptSubmit", payload.clone(), 1_000),
+            ("UserPromptSubmit", payload.clone(), 6_001),
+            ("StopFailure", payload, 6_002),
+        ],
+    );
+    assert_eq!(snapshot.agents[0].status, AgentStatus::Failed);
+    assert_eq!(snapshot.agents[0].turn_started_at, Some(ts(6_001)));
+    assert_eq!(snapshot.agents[0].last_activity, ts(6_002));
+    assert!(snapshot.agents[0].displayed_turn_error().is_none());
+    let config = ResumeConfig {
+        auto_continue: true,
+        ..ResumeConfig::default()
+    };
+    let mut message = resume_message(1, MessageStatus::Delivered, 6_000);
+    message.kind = kind;
+    let messages = [message];
+    let logins = crate::agents::RoomLoginSet::native();
+    resume_parked(&snapshot, &runtime, &logins, &config, &messages);
+    assert_eq!(
+        read_park(&path),
+        Some(record.clone()),
+        "unclassified failed frame lost the park"
+    );
+    snapshot.agents[0].context =
+        parked_agent(1_000, 6_002, TurnErrorClass::PausedRateLimit, "usage limit").context;
+    assert!(snapshot.agents[0].displayed_turn_error().is_some());
+    resume_parked(&snapshot, &runtime, &logins, &config, &messages);
+    record.parked_at_activity = ts(6_002);
+    assert_eq!(
+        read_park(&path),
+        Some(record),
+        "bare failed reply lost the attempt anchor"
+    );
+}
+
+#[test]
+fn bare_limit_replies_preserve_allowances_from_folded_provider_hooks() {
+    for (kind, start_hook, stop_hook, error, stopped_status) in [
+        (
+            "claude",
+            "UserPromptSubmit",
+            "StopFailure",
+            json!("rate_limit"),
+            AgentStatus::Running,
+        ),
+        (
+            "claude",
+            "UserPromptSubmit",
+            "Stop",
+            json!(true),
+            AgentStatus::Failed,
+        ),
+        (
+            "grok",
+            "UserPromptSubmit",
+            "StopFailure",
+            json!("rate_limit"),
+            AgentStatus::Failed,
+        ),
+        (
+            "qwen",
+            "UserPromptSubmit",
+            "StopFailure",
+            json!("rate_limit"),
+            AgentStatus::Failed,
+        ),
+        (
+            "kimi",
+            "UserPromptSubmit",
+            "StopFailure",
+            json!("rate_limit"),
+            AgentStatus::Failed,
+        ),
+        (
+            "codex",
+            "UserPromptSubmit",
+            "Stop",
+            json!(true),
+            AgentStatus::Failed,
+        ),
+        (
+            "copilot",
+            "userPromptSubmitted",
+            "errorOccurred",
+            json!("rate limit exceeded"),
+            AgentStatus::Running,
+        ),
+    ] {
+        let (_dir, runtime) = temp_runtime();
+        let path = park_record_path(&runtime, &AgentKind::new_unchecked(kind), &"sess".into());
+        let mut payload = json!({"prompt": "continue", "error": error, "recoverable": false});
+        let camel_case = matches!(kind, "grok" | "copilot");
+        payload[if camel_case {
+            "sessionId"
+        } else {
+            "session_id"
+        }] = json!("sess");
+        payload[if camel_case { "toolName" } else { "tool_name" }] = json!("Bash");
+        let mut snapshot = folded_hook_frames(
+            &runtime,
+            kind,
+            &[
+                (start_hook, payload.clone(), 1_000),
+                (
+                    if kind == "copilot" {
+                        "postToolUse"
+                    } else {
+                        "PostToolUse"
+                    },
+                    payload.clone(),
+                    1_001,
+                ),
+                (start_hook, payload.clone(), 6_001),
+                (stop_hook, payload, 6_002),
+            ],
+        );
+        assert_eq!(
+            snapshot.agents[0].status, stopped_status,
+            "{kind} {stop_hook} mapping"
+        );
+        assert_eq!(snapshot.agents[0].turn_started_at, Some(ts(6_001)));
+        assert_eq!(snapshot.agents[0].last_tool_at, Some(ts(1_001)));
+        if stopped_status == AgentStatus::Failed {
+            assert!(snapshot.agents[0].last_activity > snapshot.agents[0].turn_started_at.unwrap());
+        }
+        snapshot.agents[0].context =
+            parked_agent(1_000, 6_002, TurnErrorClass::PausedRateLimit, "usage limit").context;
+        let record = rate_record(5_000, 1_000, Some(6_000), 2);
+        write_park(&path, &record);
+        let mut message = resume_message(1, MessageStatus::Delivered, 6_000);
+        message.kind = AgentKind::new_unchecked(kind);
+        let config = ResumeConfig {
+            auto_continue: true,
+            ..ResumeConfig::default()
+        };
+        resume_parked(
+            &snapshot,
+            &runtime,
+            &crate::agents::RoomLoginSet::native(),
+            &config,
+            &[message],
+        );
+        let mut rebased = record;
+        rebased.attempts_since = Some(ts(1_000));
+        rebased.parked_at_activity = snapshot.agents[0].last_activity;
+        assert_eq!(
+            read_park(&path),
+            Some(rebased),
+            "{kind} bare reply started a fresh allowance"
+        );
+    }
+}
+
+#[test]
+fn background_wake_bare_limit_reply_keeps_episode_anchor() {
+    let (_dir, runtime) = temp_runtime();
+    let payload = json!({"session_id": "sess", "prompt": "continue", "tool_name": "Bash"});
+    let mut snapshot = folded_hook_frames(
+        &runtime,
+        "claude",
+        &[
+            ("UserPromptSubmit", payload.clone(), 1_000),
+            ("PostToolUse", payload.clone(), 1_001),
+            (
+                "Stop",
+                json!({"session_id": "sess", "background_tasks": [{"id": "task", "status": "running"}]}),
+                1_500,
+            ),
+            ("UserPromptSubmit", payload, 6_001),
+            (
+                "StopFailure",
+                json!({"session_id": "sess", "error": "rate_limit"}),
+                6_002,
+            ),
+        ],
+    );
+    assert_eq!(snapshot.agents[0].status, AgentStatus::Running);
+    assert_eq!(snapshot.agents[0].turn_started_at, Some(ts(1_000)));
+    assert_eq!(snapshot.agents[0].last_tool_at, Some(ts(1_001)));
+    assert_eq!(snapshot.agents[0].last_activity, ts(6_001));
+    snapshot.agents[0].context =
+        parked_agent(1_500, 6_002, TurnErrorClass::PausedRateLimit, "usage limit").context;
+    let mut record = rate_record(5_000, 1_500, Some(6_000), 2);
+    record.attempts_since = Some(ts(900));
+    write_park(&park_path(&runtime), &record);
+    let config = ResumeConfig {
+        auto_continue: true,
+        ..ResumeConfig::default()
+    };
+    resume_parked(
+        &snapshot,
+        &runtime,
+        &crate::agents::RoomLoginSet::native(),
+        &config,
+        &[resume_message(1, MessageStatus::Delivered, 6_000)],
+    );
+    record.parked_at_activity = ts(6_001);
+    assert_eq!(
+        read_park(&park_path(&runtime)),
+        Some(record),
+        "pre-nudge tools reset the allowance after a background wake"
+    );
 }
 
 #[test]
