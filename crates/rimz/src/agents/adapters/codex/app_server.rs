@@ -36,7 +36,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use jiff::Timestamp;
 use serde_json::{Value, json};
@@ -178,14 +178,67 @@ enum ConnectAttempt {
     Broker(PathBuf),
     /// Connect to the per-user daemon's WebSocket control socket.
     DaemonWs(PathBuf),
-    /// Spawn a `codex` invocation for the throwaway cold-spawn fallback. Carries
-    /// its wall-clock budget.
-    Spawn(Duration),
+    /// Spawn a `codex` invocation for the throwaway cold-spawn fallback.
+    Spawn,
+}
+
+fn catalog_from_attempts<T: JsonRpcTransport>(
+    attempts: Vec<ConnectAttempt>,
+    deadline: Instant,
+    mut open: impl FnMut(&ConnectAttempt, Duration) -> Result<T, AppServerErr>,
+) -> Result<Vec<crate::agents::capabilities::ModelCatalogEntry>, AppServerErr> {
+    let mut last_error = AppServerErr::Timeout;
+    for attempt in attempts {
+        let remaining = deadline
+            .checked_duration_since(Instant::now())
+            .filter(|remaining| !remaining.is_zero())
+            .ok_or(AppServerErr::Timeout)?;
+        let result = open(&attempt, remaining).and_then(|transport| {
+            let mut client = CodexAppServer::new(transport);
+            client.handshake()?;
+            client.model_catalog()
+        });
+        match result {
+            Ok(catalog) => return Ok(catalog),
+            Err(error) => {
+                last_error = AppServerErr::Attempt {
+                    attempt: match attempt {
+                        ConnectAttempt::Broker(_) => "broker",
+                        ConnectAttempt::DaemonWs(_) => "daemon",
+                        ConnectAttempt::Spawn => "cold spawn",
+                    },
+                    source: Box::new(error),
+                };
+            }
+        }
+    }
+    Err(last_error)
 }
 
 pub(crate) enum Transport {
     Framed(FramedTransport),
     Ws(Box<WsTransport>),
+}
+
+impl Transport {
+    fn open(
+        attempt: &ConnectAttempt,
+        bin: &Path,
+        login_env: &BTreeMap<String, String>,
+        budget: Duration,
+    ) -> Result<Self, AppServerErr> {
+        match attempt {
+            ConnectAttempt::Broker(path) => {
+                FramedTransport::connect(path, budget).map(Self::Framed)
+            }
+            ConnectAttempt::DaemonWs(path) => WsTransport::connect(path, budget)
+                .map(Box::new)
+                .map(Self::Ws),
+            ConnectAttempt::Spawn => {
+                FramedTransport::spawn(bin, budget, login_env).map(Self::Framed)
+            }
+        }
+    }
 }
 
 impl JsonRpcTransport for Transport {
@@ -213,25 +266,14 @@ impl CodexAppServer<Transport> {
     pub(crate) fn connect(
         broker_socket: Option<&Path>,
         login_env: &BTreeMap<String, String>,
-        spawn_deadline: Option<Duration>,
     ) -> Option<Self> {
         let bin = codex_bin();
-        for attempt in connect_attempts(
-            broker_socket,
-            login_env,
-            spawn_deadline.unwrap_or(APP_SERVER_DEADLINE),
-        ) {
-            let transport = match &attempt {
-                ConnectAttempt::Broker(path) => {
-                    FramedTransport::connect(path, DAEMON_PROBE_DEADLINE).map(Transport::Framed)
-                }
-                ConnectAttempt::DaemonWs(path) => WsTransport::connect(path, DAEMON_PROBE_DEADLINE)
-                    .map(Box::new)
-                    .map(Transport::Ws),
-                ConnectAttempt::Spawn(deadline) => {
-                    FramedTransport::spawn(&bin, *deadline, login_env).map(Transport::Framed)
-                }
+        for attempt in connect_attempts(broker_socket, login_env) {
+            let budget = match attempt {
+                ConnectAttempt::Spawn => APP_SERVER_DEADLINE,
+                _ => DAEMON_PROBE_DEADLINE,
             };
+            let transport = Transport::open(&attempt, &bin, login_env, budget);
             let Ok(transport) = transport else {
                 continue;
             };
@@ -241,6 +283,20 @@ impl CodexAppServer<Transport> {
             }
         }
         None
+    }
+
+    pub(super) fn fetch_catalog(
+        broker_socket: Option<&Path>,
+        login_env: &BTreeMap<String, String>,
+        budget: Duration,
+    ) -> Result<Vec<crate::agents::capabilities::ModelCatalogEntry>, AppServerErr> {
+        let deadline = Instant::now() + budget;
+        let bin = codex_bin();
+        catalog_from_attempts(
+            connect_attempts(broker_socket, login_env),
+            deadline,
+            |attempt, remaining| Transport::open(attempt, &bin, login_env, remaining),
+        )
     }
 }
 
@@ -275,14 +331,12 @@ impl CodexAppServer<WsTransport> {
 fn connect_attempts(
     broker_socket: Option<&Path>,
     login_env: &BTreeMap<String, String>,
-    spawn_deadline: Duration,
 ) -> Vec<ConnectAttempt> {
     attempts_for(
         broker_socket.filter(|path| path.exists()),
         daemon_socket(login_env)
             .filter(|path| path.exists())
             .as_deref(),
-        spawn_deadline,
     )
 }
 
@@ -291,11 +345,7 @@ fn connect_attempts(
 /// disk), order the attempts — broker (warm) first, then the daemon WebSocket,
 /// always followed by a cold-spawned `app-server` fallback so enrichment never
 /// depends on either being up.
-fn attempts_for(
-    broker: Option<&Path>,
-    daemon: Option<&Path>,
-    spawn_deadline: Duration,
-) -> Vec<ConnectAttempt> {
+fn attempts_for(broker: Option<&Path>, daemon: Option<&Path>) -> Vec<ConnectAttempt> {
     let mut attempts = Vec::new();
     if let Some(broker) = broker {
         attempts.push(ConnectAttempt::Broker(broker.to_path_buf()));
@@ -303,7 +353,7 @@ fn attempts_for(
     if let Some(daemon) = daemon {
         attempts.push(ConnectAttempt::DaemonWs(daemon.to_path_buf()));
     }
-    attempts.push(ConnectAttempt::Spawn(spawn_deadline));
+    attempts.push(ConnectAttempt::Spawn);
     attempts
 }
 

@@ -17,6 +17,7 @@ use crate::utils::time::unix_now_ms;
 const CACHE_VERSION: u32 = 1;
 const FRESH_MS: u64 = 60 * 60 * 1000;
 const RETRY_MS: u64 = 60 * 1000;
+const CATALOG_BUDGET: std::time::Duration = std::time::Duration::from_secs(2);
 
 #[derive(Serialize, Deserialize)]
 struct CatalogCache {
@@ -58,15 +59,12 @@ impl ModelCatalogSource for AppServerSource {
         paths: &RuntimePaths,
         login_env: &BTreeMap<String, String>,
     ) -> Result<Vec<ModelCatalogEntry>, ModelCatalogErr> {
-        let mut client = super::app_server::CodexAppServer::connect(
+        super::app_server::CodexAppServer::fetch_catalog(
             Some(&paths.codex_app_server_socket_path()),
             login_env,
-            Some(std::time::Duration::from_secs(15)),
+            CATALOG_BUDGET,
         )
-        .ok_or_else(|| ModelCatalogErr::Unavailable("cannot connect to Codex app-server".into()))?;
-        client
-            .model_catalog()
-            .map_err(|err| ModelCatalogErr::Unavailable(err.to_string()))
+        .map_err(|err| ModelCatalogErr::Unavailable(err.to_string()))
     }
 }
 

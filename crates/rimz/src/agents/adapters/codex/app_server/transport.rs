@@ -7,6 +7,7 @@
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::io::{BufRead, BufReader, Write};
+use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -39,6 +40,12 @@ pub(crate) enum AppServerErr {
     JsonRpc { code: i64, message: String },
     #[error("codex app-server stream closed before responding")]
     Closed,
+    #[error("{attempt}: {source}")]
+    Attempt {
+        attempt: &'static str,
+        #[source]
+        source: Box<AppServerErr>,
+    },
 }
 
 /// One JSON-RPC round-trip surface. The production impl spawns `codex
@@ -230,6 +237,31 @@ fn app_server_command(bin: &Path, login_env: &BTreeMap<String, String>) -> Comma
     command
 }
 
+fn connect_stream(path: &Path, total: Duration) -> Result<UnixStream, AppServerErr> {
+    use nix::sys::socket::{AddressFamily, SockFlag, SockType, UnixAddr, connect, socket};
+
+    if total.is_zero() {
+        return Err(AppServerErr::Timeout);
+    }
+    let socket = socket(
+        AddressFamily::Unix,
+        SockType::Stream,
+        SockFlag::SOCK_CLOEXEC,
+        None,
+    )
+    .map_err(|error| AppServerErr::Io(error.into()))?;
+    let stream = UnixStream::from(socket);
+    stream
+        .set_write_timeout(Some(total))
+        .map_err(AppServerErr::Io)?;
+    let address = UnixAddr::new(path).map_err(|error| AppServerErr::Io(error.into()))?;
+    connect(stream.as_raw_fd(), &address).map_err(|error| match error {
+        nix::errno::Errno::EAGAIN | nix::errno::Errno::EINPROGRESS => AppServerErr::Timeout,
+        other => AppServerErr::Io(other.into()),
+    })?;
+    Ok(stream)
+}
+
 impl FramedTransport {
     /// Spawn `bin app-server`, giving the handshake +
     /// reads `total` wall-clock.
@@ -238,6 +270,7 @@ impl FramedTransport {
         total: Duration,
         login_env: &BTreeMap<String, String>,
     ) -> Result<Self, AppServerErr> {
+        let deadline = Instant::now() + total;
         let mut child = app_server_command(bin, login_env)
             // Mark this as a RimZ-internal enrichment server so the lifecycle
             // hooks it fires on startup no-op instead of spawning another
@@ -263,7 +296,7 @@ impl FramedTransport {
             writer: Box::new(stdin),
             rx,
             next_id: 1,
-            deadline: Instant::now() + total,
+            deadline,
             child: Some(child),
         })
     }
@@ -281,17 +314,27 @@ impl FramedTransport {
         }
     }
 
+    pub(in crate::agents::adapters::codex) fn child_is_live(
+        &mut self,
+    ) -> Result<bool, AppServerErr> {
+        match self.child.as_mut() {
+            Some(child) => Ok(child.try_wait().map_err(AppServerErr::Io)?.is_none()),
+            None => Ok(false),
+        }
+    }
+
     /// Connect to the per-session broker socket at `path`, giving the handshake +
     /// reads `total` wall-clock. The broker is warm, so this is the fast path.
     pub(super) fn connect(path: &Path, total: Duration) -> Result<Self, AppServerErr> {
-        let stream = UnixStream::connect(path).map_err(AppServerErr::Io)?;
+        let deadline = Instant::now() + total;
+        let stream = connect_stream(path, total)?;
         let reader = stream.try_clone().map_err(AppServerErr::Io)?;
         let rx = spawn_frame_reader(BufReader::new(reader));
         Ok(Self {
             writer: Box::new(stream),
             rx,
             next_id: 1,
-            deadline: Instant::now() + total,
+            deadline,
             child: None,
         })
     }
@@ -323,8 +366,9 @@ pub(crate) struct WsTransport {
 
 impl WsTransport {
     pub(super) fn connect(path: &Path, total: Duration) -> Result<Self, AppServerErr> {
-        let stream = UnixStream::connect(path).map_err(AppServerErr::Io)?;
-        Self::from_stream(stream, total)
+        let started = Instant::now();
+        let stream = connect_stream(path, total)?;
+        Self::from_stream(stream, total.saturating_sub(started.elapsed()))
     }
 
     fn from_stream(stream: UnixStream, total: Duration) -> Result<Self, AppServerErr> {
@@ -348,6 +392,15 @@ impl WsTransport {
     }
 
     fn send_value(&mut self, value: &Value) -> Result<(), AppServerErr> {
+        let remaining = self
+            .deadline
+            .checked_duration_since(Instant::now())
+            .filter(|remaining| !remaining.is_zero())
+            .ok_or(AppServerErr::Timeout)?;
+        self.ws
+            .get_ref()
+            .set_write_timeout(Some(remaining))
+            .map_err(AppServerErr::Io)?;
         self.ws
             .send(Message::Text(encode_frame(value)?.into()))
             .map_err(map_ws_err)
@@ -360,9 +413,15 @@ impl JsonRpcTransport for WsTransport {
         self.next_id += 1;
         self.send_value(&json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}))?;
         loop {
-            if Instant::now() >= self.deadline {
-                return Err(AppServerErr::Timeout);
-            }
+            let remaining = self
+                .deadline
+                .checked_duration_since(Instant::now())
+                .filter(|remaining| !remaining.is_zero())
+                .ok_or(AppServerErr::Timeout)?;
+            self.ws
+                .get_ref()
+                .set_read_timeout(Some(remaining))
+                .map_err(AppServerErr::Io)?;
             match self.ws.read().map_err(map_ws_err)? {
                 Message::Text(text) => {
                     let Ok(value) = serde_json::from_str::<Value>(&text) else {
@@ -394,6 +453,45 @@ mod tests {
     use std::thread;
 
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_full_socket_backlog_is_bounded_by_the_open_budget() {
+        use nix::sys::socket::{
+            AddressFamily, Backlog, SockFlag, SockType, UnixAddr, bind, listen, socket,
+        };
+        use std::os::fd::AsRawFd;
+
+        for websocket in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("full.sock");
+            let socket = socket(
+                AddressFamily::Unix,
+                SockType::Stream,
+                SockFlag::SOCK_CLOEXEC,
+                None,
+            )
+            .unwrap();
+            bind(socket.as_raw_fd(), &UnixAddr::new(&path).unwrap()).unwrap();
+            listen(&socket, Backlog::new(0).unwrap()).unwrap();
+            let listener = std::os::unix::net::UnixListener::from(socket);
+            let _queued = UnixStream::connect(&path).unwrap();
+            let release = thread::spawn(move || {
+                thread::sleep(Duration::from_millis(300));
+                let _ = listener.accept();
+            });
+            let started = Instant::now();
+            let result = if websocket {
+                WsTransport::connect(&path, Duration::from_millis(30)).map(|_| ())
+            } else {
+                FramedTransport::connect(&path, Duration::from_millis(30)).map(|_| ())
+            };
+            let elapsed = started.elapsed();
+            release.join().unwrap();
+            assert!(matches!(result, Err(AppServerErr::Timeout)), "{result:?}");
+            assert!(elapsed < Duration::from_millis(200), "{elapsed:?}");
+        }
+    }
 
     #[test]
     fn the_override_decides_both_the_binary_and_whether_codex_is_installed() {
