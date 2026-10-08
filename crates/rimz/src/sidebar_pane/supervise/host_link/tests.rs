@@ -6,6 +6,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use super::*;
 use crate::sidebar_pane::app::fixtures::{serve_config, workspace};
 use crate::sidebar_pane::attach::REJECT_PROTOCOL;
+use crate::workspace::record::{self, WorkspaceRecord};
 
 const BRIEF: Duration = Duration::from_millis(150);
 const SETTLE: Duration = Duration::from_secs(10);
@@ -37,6 +38,37 @@ impl Room {
 
     fn hello(&self) -> Hello {
         hello_for(&self.config, Some("build-a"))
+    }
+
+    fn recorded() -> (Self, crate::StatePaths, std::path::PathBuf) {
+        let mut room = Self::new();
+        let root = room._dir.path().join("project");
+        std::fs::create_dir(&root).unwrap();
+        let root = root.canonicalize().unwrap();
+        let alias = room._dir.path().join("project-alias");
+        std::os::unix::fs::symlink(&root, &alias).unwrap();
+        let id = crate::ids::WorkspaceId::from_project_root(&root);
+        room.config = serve_config(&id);
+        room.runtime = RuntimePaths::under(id.clone(), room._dir.path()).unwrap();
+        room.runtime.ensure_dirs().unwrap();
+        let state = crate::StatePaths::under(id.clone(), room._dir.path()).unwrap();
+        record::write(
+            &state,
+            &WorkspaceRecord {
+                layout: crate::disk::paths::WORKSPACE_LAYOUT,
+                workspace_id: id,
+                project_root: alias,
+                worktree_root: None,
+                session_name: room.config.session_name.clone(),
+                root_class: crate::workspace::RootClass::Directory,
+                rimz_bin: None,
+                rimz_build: None,
+                pins: Default::default(),
+                updated_at: jiff::Timestamp::now(),
+            },
+        )
+        .unwrap();
+        (room, state, root)
     }
 }
 
@@ -210,13 +242,13 @@ fn the_host_argv_names_the_session_and_reads_as_no_other_sidebar_process() {
 fn a_host_that_fails_to_start_says_why_in_its_log() {
     use std::os::unix::fs::PermissionsExt;
 
-    let room = Room::new();
+    let (room, state, _) = Room::recorded();
     let exe = room._dir.path().join("failing-host");
     std::fs::write(&exe, "#!/bin/sh\necho \"host refused: $*\" >&2\nexit 1\n").unwrap();
     std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
     let log = room._dir.path().join("state/log/sidebar-host.log");
 
-    spawn_host(&exe, &room.config, &room.runtime, &log).unwrap();
+    spawn_host(&exe, &room.config, &room.runtime, &state, &log).unwrap();
 
     let deadline = Instant::now() + SETTLE;
     loop {
@@ -231,4 +263,77 @@ fn a_host_that_fails_to_start_says_why_in_its_log() {
         );
         std::thread::sleep(Duration::from_millis(20));
     }
+}
+
+#[test]
+fn the_host_environment_pins_its_room_and_keeps_the_session_not_the_pane() {
+    let (room, state, root) = Room::recorded();
+    let command =
+        host_command(Path::new("/bin/true"), &room.config, &room.runtime, &state).unwrap();
+    let env: std::collections::BTreeMap<_, _> = command.get_envs().collect();
+    for (name, value) in crate::workspace::pin_env(&room.config.workspace_id, &root) {
+        assert_eq!(
+            env.get(std::ffi::OsStr::new(&name)),
+            Some(&Some(std::ffi::OsStr::new(&value))),
+            "{name}"
+        );
+    }
+    for name in [
+        "TMUX_PANE",
+        "ZELLIJ_PANE_ID",
+        "RIMZ_CHANNEL",
+        "RIMZ_WORKTREE_PATH",
+        "RIMZ_SIDEBAR_WORKER",
+        "RIMZ_SIDEBAR_INSTANCE_ID",
+    ] {
+        assert_eq!(env.get(std::ffi::OsStr::new(name)), Some(&None), "{name}");
+    }
+    for name in ["TMUX", "ZELLIJ", "ZELLIJ_SESSION_NAME"] {
+        assert!(
+            !env.contains_key(std::ffi::OsStr::new(name)),
+            "inherit {name}"
+        );
+    }
+    assert_eq!(env.len(), 8, "only the pin and pane removals are set");
+}
+
+#[test]
+fn a_host_without_a_workspace_record_is_not_spawned() {
+    let room = Room::new();
+    let state =
+        crate::StatePaths::under(room.config.workspace_id.clone(), room._dir.path()).unwrap();
+    let log = room._dir.path().join("host.log");
+    let error = spawn_host(
+        Path::new("/bin/true"),
+        &room.config,
+        &room.runtime,
+        &state,
+        &log,
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains(room.config.workspace_id.as_str()), "{error}");
+    assert!(error.contains("cannot access"), "{error}");
+    assert_eq!(std::fs::read_to_string(&log).unwrap(), format!("{error}\n"));
+}
+
+#[test]
+fn a_host_with_a_workspace_record_for_another_root_is_not_spawned() {
+    let (room, state, _) = Room::recorded();
+    let mut record = record::read(&state.workspace_record).unwrap();
+    record.project_root = room._dir.path().to_path_buf();
+    record::write(&state, &record).unwrap();
+    let log = room._dir.path().join("host.log");
+    let error = spawn_host(
+        Path::new("/bin/true"),
+        &room.config,
+        &room.runtime,
+        &state,
+        &log,
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains(room.config.workspace_id.as_str()), "{error}");
+    assert!(error.contains("does not verify"), "{error}");
+    assert_eq!(std::fs::read_to_string(&log).unwrap(), format!("{error}\n"));
 }

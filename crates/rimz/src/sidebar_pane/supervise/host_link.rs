@@ -1,18 +1,19 @@
 //! The supervisor's end of a pane painted by the room host: find or start the host, hand it the pane's output, and listen for what it says.
 
 use std::ffi::OsString;
-use std::io::{self, BufRead, BufReader};
+use std::io::{self, BufRead, BufReader, Write};
 use std::os::fd::BorrowedFd;
 use std::os::unix::net::UnixStream;
 use std::path::Path;
+use std::process::Command;
 use std::time::{Duration, Instant};
 
-use tracing::debug;
+use tracing::{debug, warn};
 
-use crate::RuntimePaths;
 use crate::disk::lock::WorkspaceLock;
 use crate::sidebar_pane::app::ServeConfig;
 use crate::sidebar_pane::attach::{self, Control, ControlLine, Hello, PROTOCOL, Reply};
+use crate::{RuntimePaths, StatePaths};
 
 /// How long a pane waits for a host before its own worker paints it: long
 /// enough for a host to start, short enough to read as a slow first frame.
@@ -23,15 +24,16 @@ pub(super) const HOST_WAIT: Duration = Duration::from_secs(2);
 pub(super) const REPLY_WAIT: Duration = Duration::from_secs(5);
 const CONNECT_RETRY: Duration = Duration::from_millis(20);
 
-/// Per-pane and per-session variables a host must not inherit from the pane that happened to start it: it belongs to no pane, and process attribution reads these from its environment. The host gets its room and mux from `host_args` and passes them to its helpers by argv.
-const PANE_SCOPED_ENV: &[&str] = &[
-    "TMUX",
+/// What a host must not inherit from the pane that happened to start it. It
+/// keeps its session's environment and loses only what belongs to one pane:
+/// the pane ids process attribution reads, the channel and worktree path a
+/// command defaults its lane from, and the markers that would make it a
+/// worker or lend it a supervisor's instance. Its room pin is set from the
+/// verified workspace record, never inherited. Helpers that take a room take
+/// it by argv from `host_args`; the environment is the floor.
+const HOST_PANE_ENV_REMOVALS: &[&str] = &[
     "TMUX_PANE",
-    "ZELLIJ",
     "ZELLIJ_PANE_ID",
-    "ZELLIJ_SESSION_NAME",
-    crate::workspace::ENV_WORKSPACE_ID,
-    crate::workspace::ENV_PROJECT_ROOT,
     crate::workspace::ENV_CHANNEL,
     crate::workspace::ENV_WORKTREE_PATH,
     super::WORKER_ENV,
@@ -55,26 +57,61 @@ pub(super) fn host_args(config: &ServeConfig) -> Vec<OsString> {
 }
 
 /// Start the session's host from `exe`, detached from this pane, its stderr
-/// appended to `log`.
+/// appended to `log`. A host refused for want of a verified room pin leaves
+/// its reason there too.
 pub(super) fn spawn_host(
     exe: &Path,
     config: &ServeConfig,
     runtime: &RuntimePaths,
+    state: &StatePaths,
     log: &Path,
 ) -> io::Result<()> {
     if let Some(dir) = log.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    let stderr = std::fs::OpenOptions::new()
+    let mut stderr = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(log)?;
+    // A rendered pane's own log sink is off, so the host's log is where a
+    // host that was never started says why.
+    let mut command = host_command(exe, config, runtime, state).inspect_err(|err| {
+        let _ = writeln!(stderr, "{err}");
+    })?;
+    command.stderr(stderr);
+    crate::child_process::spawn_detached_reaped(&mut command, "sidebar-host").map(drop)
+}
+
+fn host_command(
+    exe: &Path,
+    config: &ServeConfig,
+    runtime: &RuntimePaths,
+    state: &StatePaths,
+) -> io::Result<Command> {
+    let record = crate::workspace::record::read(&state.workspace_record).map_err(|err| {
+        io::Error::other(format!(
+            "sidebar host for workspace {}: {err}",
+            config.workspace_id
+        ))
+    })?;
+    let root = crate::workspace::verify_pin(config.workspace_id.as_str(), &record.project_root)
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "sidebar host for workspace {}: workspace record root {} does not verify (root missing or workspace id does not hash from it)",
+                    config.workspace_id,
+                    record.project_root.display(),
+                ),
+            )
+        })?;
     let mut command = crate::child_process::detached_rimz_command(exe.to_path_buf(), runtime);
-    command.stderr(stderr).args(host_args(config));
-    for name in PANE_SCOPED_ENV {
+    command.args(host_args(config));
+    for name in HOST_PANE_ENV_REMOVALS {
         command.env_remove(name);
     }
-    crate::child_process::spawn_detached_reaped(&mut command, "sidebar-host").map(drop)
+    command.envs(crate::workspace::pin_env(&config.workspace_id, &root));
+    Ok(command)
 }
 
 /// Connect to the session's host, starting one when none answers. Every pane
@@ -100,7 +137,7 @@ pub(super) fn connect(
             return Some(stream);
         }
         if let Err(err) = start_host() {
-            debug!(error = %err, "sidebar host did not start; falling back to a worker");
+            warn!(workspace = %config.workspace_id, error = %err, "sidebar host did not start; falling back to a worker");
             return None;
         }
     }
