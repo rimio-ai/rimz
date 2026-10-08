@@ -639,7 +639,7 @@ fn help_popup_dismisses_and_consumes_any_user_input() {
             ..Default::default()
         };
 
-        let outcome = handle_wakeup(wakeup, &mut ui, &snapshot, &keymap);
+        let outcome = handle_wakeup(wakeup, &mut ui, &snapshot, &keymap, false);
 
         assert_eq!(outcome, InputOutcome::redraw());
         assert!(!ui.help_visible);
@@ -657,6 +657,7 @@ fn help_popup_dismisses_and_consumes_any_user_input() {
         &mut UiState::default(),
         &snapshot,
         &keymap,
+        false,
     );
     assert_eq!(outcome.effects, vec![selection::InputEffect::Reload]);
 }

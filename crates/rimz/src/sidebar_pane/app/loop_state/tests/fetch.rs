@@ -682,6 +682,63 @@ fn search_draft_survives_peer_adoption_and_focus_loss_keeps_commit() {
 }
 
 #[test]
+fn active_alert_discards_search_draft_and_preserves_committed_lens() {
+    use ratatui::crossterm::event::{KeyCode, KeyModifiers};
+    let committed = BodyLens {
+        filter: Some(BodyFilter::Status(crate::agents::AgentStatus::Idle)),
+        query: Some("cla".to_owned()),
+    };
+    let mut rig = Rig::with_filter(committed.clone());
+    let committed_pane = Some(pane("terminal_9", "tab_0", false).pane_id);
+    let mut snapshot = agent_snapshot(&rig.ws);
+    snapshot.focused_pane = committed_pane.clone();
+    rig.fold(snapshot, SnapshotSource::Produced);
+    assert_eq!(rig.state.ui.selected_pane, committed_pane);
+    for ch in ['/', '!'] {
+        rig.state
+            .on_input(
+                Wakeup::Press {
+                    code: KeyCode::Char(ch),
+                    mods: KeyModifiers::NONE,
+                },
+                &mut rig.terminal,
+                &mut rig.fetch,
+            )
+            .unwrap();
+    }
+    assert_eq!(rig.state.ui.search_draft.as_deref(), Some("cla!"));
+    assert_eq!(rig.state.ui.selected_pane, None, "draft has no matches");
+    rig.deliver(FetchUpdate::Failed {
+        error: "snapshot failed".to_owned(),
+        role: FetchRole::Producer,
+    });
+    assert!(!rig.state.alert_active());
+    assert_eq!(rig.state.ui.search_draft.as_deref(), Some("cla!"));
+    rig.state.dirty = false;
+    rig.deliver(FetchUpdate::Failed {
+        error: "snapshot failed".to_owned(),
+        role: FetchRole::Producer,
+    });
+    assert_eq!(rig.state.ui.search_draft, None);
+    assert_eq!(rig.state.ui.make_up_filter, committed);
+    assert_eq!(crate::sidebar::body_filter::load(&rig.runtime), committed);
+    assert!(rig.state.alert_active());
+    assert!(rig.state.dirty);
+    assert_eq!(rig.state.ui.selected_pane, committed_pane);
+    rig.state
+        .on_input(
+            Wakeup::Press {
+                code: KeyCode::Char('/'),
+                mods: KeyModifiers::NONE,
+            },
+            &mut rig.terminal,
+            &mut rig.fetch,
+        )
+        .unwrap();
+    assert_eq!(rig.state.ui.search_draft, None);
+}
+
+#[test]
 fn older_shared_inputs_do_not_undo_a_consumed_body_filter() {
     let mut rig = Rig::new();
     let snapshot = agent_snapshot(&rig.ws);

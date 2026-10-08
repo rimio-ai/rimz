@@ -24,6 +24,7 @@ fn search_press(
             wider: "ctrl+b".to_owned(),
             ..Default::default()
         }),
+        false,
     )
 }
 
@@ -38,6 +39,57 @@ fn search_key(
         code,
         ratatui::crossterm::event::KeyModifiers::NONE,
     )
+}
+
+#[test]
+fn active_alert_blocks_search_but_keeps_normal_commands_and_help() {
+    use super::super::super::input::Wakeup;
+    use super::super::super::loop_state::handle_wakeup;
+    use ratatui::crossterm::event::{KeyCode, KeyModifiers};
+
+    let snapshot = clickable_block_snapshot(&workspace());
+    let keymap = super::super::super::NavKeymap::from_config(&Default::default());
+    for (ch, expected) in [
+        ('/', InputOutcome::default()),
+        (
+            'r',
+            InputOutcome {
+                effects: vec![InputEffect::Reload],
+                ..Default::default()
+            },
+        ),
+        ('x', InputOutcome::dismiss()),
+    ] {
+        let mut ui = UiState::default();
+        let outcome = handle_wakeup(
+            Wakeup::Press {
+                code: KeyCode::Char(ch),
+                mods: KeyModifiers::NONE,
+            },
+            &mut ui,
+            &snapshot,
+            &keymap,
+            true,
+        );
+        assert_eq!(outcome, expected, "active-alert key {ch}");
+        assert_eq!(ui.search_draft, None);
+    }
+    let mut ui = UiState {
+        help_visible: true,
+        ..Default::default()
+    };
+    assert_eq!(
+        handle_wakeup(
+            Wakeup::Key(KeyAction::Search),
+            &mut ui,
+            &snapshot,
+            &keymap,
+            true
+        ),
+        InputOutcome::redraw(),
+    );
+    assert!(!ui.help_visible);
+    assert_eq!(ui.search_draft, None);
 }
 
 #[test]
@@ -356,6 +408,7 @@ fn search_navigation_click_scroll_and_zero_match_commit() {
             wider: "ctrl+b".to_owned(),
             ..Default::default()
         }),
+        false,
     );
     assert_eq!(ui.search_draft.as_deref(), Some("c"));
     ui.interactions = render::FrameInteractions::from_parts(vec![Some(0)], Vec::new());
@@ -367,6 +420,7 @@ fn search_navigation_click_scroll_and_zero_match_commit() {
             wider: "ctrl+b".to_owned(),
             ..Default::default()
         }),
+        false,
     );
     assert_eq!(ui.search_draft, None);
     assert_eq!(
