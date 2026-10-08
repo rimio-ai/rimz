@@ -178,7 +178,7 @@ fn a_published_projection_populates_the_first_nonblank_screen() {
     });
     let mut frame = crate::sidebar::frame::assemble_frame(
         seed.rows().filter_map(|row| row.pane.clone()).collect(),
-        42,
+        crate::utils::time::unix_now_ms(),
         "rimz-test",
     );
     frame.topology_stamp_ms = Some(42);

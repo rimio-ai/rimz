@@ -35,6 +35,24 @@ fn birth_session_name(
     }
 }
 
+fn clear_birth_publications(runtime: &crate::RuntimePaths, pre_existed: bool) -> Result<()> {
+    if pre_existed {
+        return Ok(());
+    }
+    for path in [
+        runtime.workspace_projection_path(),
+        runtime.pane_frame_path(),
+    ] {
+        if let Err(err) = std::fs::remove_file(&path)
+            && err.kind() != std::io::ErrorKind::NotFound
+        {
+            return Err(err)
+                .with_context(|| format!("clearing previous room publication {}", path.display()));
+        }
+    }
+    Ok(())
+}
+
 /// Selected normal-room recovery state from the CLI's two-phase inspection.
 pub enum NormalRebirth {
     /// Existing healthy room: preserve its durable incarnation.
@@ -151,6 +169,7 @@ impl RoomContext {
                 );
             }
         }
+        clear_birth_publications(&self.runtime, pre_existed)?;
 
         #[cfg(unix)]
         {
@@ -534,6 +553,40 @@ mod tests {
              keeps its /tmp in use:\n  pid 42: writer-42\n\
              Stop it, then run `rimz reset --hard` again."
         );
+    }
+
+    #[test]
+    fn rebirth_removes_even_fresh_publications_but_live_birth_preserves_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = crate::ids::WorkspaceId::from_project_root(dir.path());
+        let runtime = crate::RuntimePaths::under(workspace, dir.path()).unwrap();
+        runtime.ensure_dirs().unwrap();
+        let frame = crate::sidebar::frame::assemble_frame(
+            Vec::new(),
+            crate::utils::time::unix_now_ms(),
+            "room",
+        );
+        let pair = [
+            runtime.pane_frame_path(),
+            runtime.lane_path("workspace-projection.json"),
+        ];
+        std::fs::write(&pair[0], serde_json::to_vec(&frame).unwrap()).unwrap();
+        std::fs::write(&pair[1], b"{\"session\":\"room\"}").unwrap();
+        let unrelated = runtime.unread_path();
+        std::fs::write(&unrelated, b"{}").unwrap();
+
+        clear_birth_publications(&runtime, true).unwrap();
+        assert!(
+            pair.iter().all(|path| path.exists()),
+            "live birth keeps the publication"
+        );
+        clear_birth_publications(&runtime, false).unwrap();
+        assert!(
+            pair.iter().all(|path| !path.exists()),
+            "a prior incarnation cannot seed, even at age zero"
+        );
+        assert!(unrelated.exists(), "other runtime lanes are preserved");
+        clear_birth_publications(&runtime, false).unwrap();
     }
 
     #[test]

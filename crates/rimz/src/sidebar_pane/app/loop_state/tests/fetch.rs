@@ -7,6 +7,7 @@ use super::*;
 fn published_seed_commits_before_delivery_and_keeps_the_final_correction() {
     let own = pane("terminal_10", "tab_0", false);
     let mut rig = Rig::with_own_pane(own.pane_id.clone());
+    rig.state.config.refresh_ms_override = Some(37);
     rig.runtime.ensure_dirs().unwrap();
     let placeholder =
         SidebarSnapshot::build_with_agents(rig.ws.clone(), Vec::new(), rig.state.current.now);
@@ -19,6 +20,7 @@ fn published_seed_commits_before_delivery_and_keeps_the_final_correction() {
 
     let mut seed = agent_snapshot(&rig.ws);
     seed.now = Timestamp::now();
+    seed.theme.display.refresh_ms = 100;
     seed.worktree_groups[0].rows[0].name = "seed-card".into();
     seed.worktree_groups[0]
         .rows
@@ -38,7 +40,7 @@ fn published_seed_commits_before_delivery_and_keeps_the_final_correction() {
     });
     let mut frame = crate::sidebar::frame::assemble_frame(
         seed.rows().filter_map(|row| row.pane.clone()).collect(),
-        42,
+        seed.now.as_millisecond() as u64,
         "rimz-test",
     );
     frame.topology_stamp_ms = Some(42);
@@ -75,6 +77,7 @@ fn published_seed_commits_before_delivery_and_keeps_the_final_correction() {
         "the seed is projected for this pane before any delivery"
     );
     assert_eq!(rig.state.current.rows().next().unwrap().name, "seed-card");
+    assert_eq!(rig.state.current.theme.display.refresh_ms, 37);
     assert!(rig.state.dirty, "the seed is paint-pending");
     assert!(
         !rig.state.last_known_elder,
@@ -122,6 +125,54 @@ fn published_seed_commits_before_delivery_and_keeps_the_final_correction() {
         rig.next_request().unwrap().is_producer_fresh_panes(),
         "only the final correction completes the fetch"
     );
+}
+
+#[test]
+fn published_seed_age_outlasts_the_frame_reuse_window_by_three_ticks() {
+    for (tick_seconds, age_ms, seeds) in [
+        (1, 12_000, true),
+        (1, 14_000, false),
+        (60, 189_000, true),
+        (60, 191_000, false),
+        (3600, 10_809_000, true),
+        (3600, 10_811_000, false),
+    ] {
+        let mut rig = Rig::new();
+        rig.runtime.ensure_dirs().unwrap();
+        rig.state.config.tick_seconds = tick_seconds;
+        let mut seed = agent_snapshot(&rig.ws);
+        seed.reflects_log = Some(crate::store::event_log::LogExtent {
+            generation: 0,
+            offset: 0,
+        });
+        let mut frame = crate::sidebar::frame::assemble_frame(
+            seed.rows().filter_map(|row| row.pane.clone()).collect(),
+            crate::utils::time::unix_now_ms() - age_ms,
+            "rimz-test",
+        );
+        frame.topology_stamp_ms = Some(42);
+        frame.metrics_stamp_ms = Some(42);
+        std::fs::write(
+            rig.runtime.pane_frame_path(),
+            serde_json::to_vec(&frame).unwrap(),
+        )
+        .unwrap();
+        crate::sidebar::workspace_projection::WorkspaceProjectionPublisher::default()
+            .publish(
+                &rig.runtime,
+                "rimz-test",
+                &crate::sidebar::enrich::WorkspaceSnapshot(seed),
+                &frame,
+            )
+            .unwrap();
+
+        rig.state.seed_published(FetchRole::Consumer);
+        assert_eq!(
+            rig.state.current.rows().count(),
+            usize::from(seeds),
+            "tick={tick_seconds}, age={age_ms}"
+        );
+    }
 }
 
 #[test]
