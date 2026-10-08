@@ -368,8 +368,19 @@ fn attachment_diagnostics_name_the_renderer_and_share_the_limiter() {
     });
     snapshot.panes_produced_at_ms = None;
     room.host.plane.publish_snapshot(&id, snapshot);
+    // Wait on the gate-hold record itself: the log file exists as soon as any
+    // diagnostic lands, which under load is before the hold is appended.
     eventually("the attachment emits a gate hold", || {
-        diag.log_path().unwrap().exists()
+        std::fs::read_to_string(diag.log_path().unwrap())
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|line| serde_json::from_str::<crate::diag::record::DiagEnvelope>(line).ok())
+            .any(|record| {
+                matches!(
+                    record.event,
+                    crate::diag::record::DiagEvent::GateHold { .. }
+                )
+            })
     });
     let records: Vec<crate::diag::record::DiagEnvelope> =
         std::fs::read_to_string(diag.log_path().unwrap())
