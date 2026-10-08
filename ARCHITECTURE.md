@@ -40,7 +40,7 @@ terminal emulator
   mux session (Zellij or tmux)
     sidebar panes (one supervisor each, holding the pane's terminal)
   sidebar host (one per session, detached; paints every pane, read-only on the store)
-      elected user-scoped spending service thread (disposable warm cache)
+      elected user-scoped spending service and walker threads (disposable warm cache)
     shells, scripts, agents, CI helpers
                 │
                 │  per-instance sidebar socket   (typed wakeup events of record)
@@ -56,7 +56,7 @@ workspace store (a directory of flat files)
 
 When browser access is enabled, one authenticated ttyd daemon binds the configured loopback port for every Zellij and tmux room. A second no-auth daemon binds its own port only after `rimz web share` allowlists a live room, and it omits ttyd's write flag. Each connection supplies a session argument to a hidden `rimz web exec` shim. The writable shim validates durable workspace ownership and live mux state; the broadcast shim also validates the durable per-room allowlist. ttyd owns transport but no session authority ([web.md](./docs/internals/web.md)).
 
-The spending service is a private thread inside whichever host-eligible long-lived RimZ process wins its persistent/discovery-namespace lifetime lock; one-shot inspection commands connect or fall back directly without becoming the warm owner. Its schema- and namespace-versioned Unix socket accepts clients concurrently while one try-locked walker owns stale work, so a slow request cannot queue another workspace's refresh tick. `spending.json`, the provider/workspace publications, and their atomic-write and downgrade guards remain truth. Process exit discards the service and the next eligible client re-elects an owner, so this warm cache introduces no RimZ daemon.
+The spending service runs private service and walker threads inside whichever host-eligible long-lived RimZ process wins its persistent/discovery-namespace lifetime lock; one-shot inspection commands connect or fall back directly without becoming the warm owner. Its schema- and namespace-versioned Unix socket admits clients on the service thread while one lifetime walker fulfils stale work; a claim held through the reply write rejects busy stale requests immediately rather than queueing another workspace's refresh tick. `spending.json`, the provider/workspace publications, and their atomic-write and downgrade guards remain truth. Process exit discards the service and the next eligible client re-elects an owner, so this warm cache introduces no RimZ daemon.
 
 The CLI and hook subprocesses are the only writers of product truth. The sidebar reads the store read-only and writes its own runtime caches and read receipts; `rimz sidebar snapshot` is the one-shot inspection surface over the same pipeline. The per-instance sidebar socket is the wakeup channel of record, and backend-specific fast paths are latency hints layered over it ([multiplexers.md](./docs/internals/multiplexers.md)). The wire behind that socket is its own module, [`wakeup/`](./crates/rimz/src/wakeup/mod.rs), a leaf below the store: the renderer heartbeat record, the typed event vocabulary, and the datagram send, reached downward by the mux seam, the store's write tail, remote control, and the sidebar. The producer/consumer split, push channels, and timing cadences are in [state.md](./docs/internals/sidebar/state.md).
 
