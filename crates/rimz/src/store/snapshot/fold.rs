@@ -64,6 +64,17 @@ pub mod testkit {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static CARRYOVER_BYTES_PARSED: AtomicU64 = AtomicU64::new(0);
+    static ROLLUP_ROWS_MATERIALIZED: AtomicU64 = AtomicU64::new(0);
+
+    /// Rollup rows flattened since process start; borrowed readers add nothing.
+    #[cfg(test)]
+    pub fn rollup_rows_materialized() -> u64 {
+        ROLLUP_ROWS_MATERIALIZED.load(Ordering::Relaxed)
+    }
+
+    pub(super) fn count_rows_materialized(n: u64) {
+        ROLLUP_ROWS_MATERIALIZED.fetch_add(n, Ordering::Relaxed);
+    }
 
     /// `agents.carryover.json` bytes parsed since process start.
     #[cfg(feature = "testkit")]
@@ -287,7 +298,9 @@ impl AgentRollup {
     }
 
     pub fn to_vec(&self) -> Vec<AgentState> {
-        self.iter().cloned().collect()
+        let agents: Vec<_> = self.iter().cloned().collect();
+        testkit::count_rows_materialized(agents.len() as u64);
+        agents
     }
 }
 
