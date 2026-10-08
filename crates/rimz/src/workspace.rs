@@ -22,6 +22,8 @@
 //! [`WorkspaceResolver::resolve`], keeping a deliberate per-repo room one
 //! `rimz start` away from inside a parent room. See `docs/internals` and
 //! `DESIGN.md` for the rules this implements.
+//!
+//! Resolution selects identity, not room existence, and creates no state. Participant store opens require a readable workspace record; room-choosing commands create and record it.
 
 pub mod record;
 
@@ -38,6 +40,8 @@ use crate::ids::{MuxName, WorkspaceId};
 
 #[derive(Debug, thiserror::Error)]
 pub enum WorkspaceErr {
+    #[error("no room {location}: run `rimz start` there, or pass --root <room>")]
+    NoRoom { location: String },
     #[error("could not resolve workspace from {path}: {reason}")]
     Resolve { path: PathBuf, reason: String },
     #[error("git probe failed: {0}")]
@@ -350,13 +354,11 @@ enum ResolveMode {
     Create,
     /// Room participation (hooks, statusline): the
     /// session's env pin wins over the static ladder, so a pane's writes land
-    /// in the room it lives in. Never refuses — a hook on the agent's
-    /// critical path degrades to the static ladder, never errors on identity.
+    /// in the room it lives in. Identity never refuses for lack of a room: it falls back to the static ladder. The participant store door, not the resolver, checks room existence.
     Participate,
     /// Daemon-owned hook participation: the shared daemon's environment may
     /// belong to an unrelated room, so only a recovered sibling pin precedes
-    /// the static ladder. An explicit root still wins. Never refuses, like
-    /// [`Self::Participate`].
+    /// the static ladder. An explicit root still wins. Identity never refuses for lack of a room, like [`Self::Participate`].
     ParticipateDaemon,
 }
 
@@ -551,7 +553,7 @@ impl WorkspaceResolver {
 
         let workspace_id = WorkspaceId::from_project_root(&project_root);
         let paths = crate::StatePaths::for_project_root_under(&project_root, home)?;
-        let session_name = recorded_session_name(&paths);
+        let session_name = recorded_session_name(&paths, mode);
         let worktree_branch = current_branch(&worktree_root)?;
 
         Ok(ResolvedWorkspace {
@@ -752,12 +754,15 @@ fn has_project_marker(dir: &Path, home: &Path) -> bool {
     })
 }
 
-fn recorded_session_name(paths: &crate::StatePaths) -> String {
+fn recorded_session_name(paths: &crate::StatePaths, mode: ResolveMode) -> String {
     match record::read_optional(&paths.workspace_record) {
         Ok(Some(record)) => return record.session_name,
         Ok(None) => {}
-        Err(err) => {
+        Err(err) if mode == ResolveMode::Create => {
             tracing::warn!(path = %paths.workspace_record.display(), error = %err, "could not read room session name; using state directory name")
+        }
+        Err(err) => {
+            tracing::debug!(path = %paths.workspace_record.display(), error = %err, "could not read room session name; using state directory name")
         }
     }
     paths.dir_name.as_str().to_owned()

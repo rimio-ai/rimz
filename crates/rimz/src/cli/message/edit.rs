@@ -333,8 +333,8 @@ pub(super) fn sweep_messages(
             .context("resolving current workspace")?;
     let store = crate::cli::open_existing_store(&workspace)?.with_context(|| {
         format!(
-            "no room at {}: nothing to sweep",
-            workspace.project_root.display()
+            "{}; nothing to sweep",
+            super::super::no_room(format_args!("at {}", workspace.project_root.display()))
         )
     })?;
     deliver::sweep(&workspace, &store, globals.mux)?;

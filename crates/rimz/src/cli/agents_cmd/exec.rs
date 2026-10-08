@@ -1,7 +1,7 @@
 use super::*;
 mod duty;
 mod supervisor;
-use crate::cli::{open_store, worktree};
+use crate::cli::{require_existing_store, worktree};
 use duty::Duty;
 pub(super) use duty::{SuperviseDutyRequest, run as run_supervise_duty};
 use rimz::mux::winsize::WinsizeRepair;
@@ -94,6 +94,7 @@ fn run_exec_inner(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
         bail!("park image handoff is unavailable on this platform");
     }
     let mut invocation = ExecInvocationContext::new(&workspace, cwd);
+    invocation.store()?;
     let run_context = run_exec_context(envelope.request(), &invocation)?;
     let mut provisional_identity = None;
     let launched = exec_launch_identity(envelope.request()).and_then(|identity| {
@@ -1110,7 +1111,7 @@ impl<'a> ExecInvocationContext<'a> {
         if let Some(store) = self.store.borrow().as_ref() {
             return Ok(store.clone());
         }
-        let store = open_store(self.workspace)?;
+        let store = require_existing_store(self.workspace)?;
         *self.store.borrow_mut() = Some(store.clone());
         Ok(store)
     }

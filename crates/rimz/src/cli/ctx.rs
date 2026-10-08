@@ -1,5 +1,4 @@
-//! The shared entry for participant-facing commands: resolve the current
-//! workspace, open its store, and derive the current channel in one step.
+//! The shared entry for participant-facing commands: resolve the current workspace, open its existing store, and derive the current channel in one step. An absent or unreadable workspace record refuses; participation never creates room state or re-records its identity.
 //!
 //! Commands that address a running room open a `Ctx` and read what they need from it. Commands that name or create a room by path (`start`, `attach`, `setup`) resolve directly through `WorkspaceResolver::resolve` instead.
 //!
@@ -28,7 +27,7 @@ impl Ctx {
     pub(crate) fn open(globals: &GlobalFlags) -> Result<Self> {
         let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())
             .context("resolving current workspace")?;
-        let store = super::open_store(&workspace)?;
+        let store = super::require_existing_store(&workspace)?;
         let channel = std::sync::OnceLock::new();
         let mux = globals.mux;
         Ok(Self {
@@ -46,14 +45,8 @@ impl Ctx {
     ) -> Result<Self> {
         let paths =
             StatePaths::for_workspace(workspace_id.clone()).context("preparing store paths")?;
-        let runtime = RuntimePaths::for_state(&paths).context("preparing runtime paths")?;
-        let record = record::read(&paths.workspace_record).with_context(|| {
-            format!(
-                "reading workspace record `{}`",
-                paths.workspace_record.display()
-            )
-        })?;
-        let store = Store::open(paths, runtime).context("opening store")?;
+        let record = record::read(&paths.workspace_record)
+            .with_context(|| super::no_room(format_args!("for workspace {workspace_id}")))?;
         let workspace = ResolvedWorkspace {
             workspace_id,
             project_root: record.project_root.clone(),
@@ -64,6 +57,9 @@ impl Ctx {
             session_name: record.session_name,
             mux_hint,
         };
+        let store = super::open_existing_store_at(paths)?.with_context(|| {
+            super::no_room(format_args!("for workspace {}", workspace.workspace_id))
+        })?;
         let channel = std::sync::OnceLock::new();
         Ok(Self {
             workspace,

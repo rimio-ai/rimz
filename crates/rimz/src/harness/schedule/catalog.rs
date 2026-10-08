@@ -272,6 +272,11 @@ impl TaskCatalog {
         }
         let instance_root = StatePaths::for_project_root(&entry.resolved_root())?;
         if entry.wait.is_some() || super::ephemeral_lifetime(entry) {
+            crate::workspace::record::read(&instance_root.workspace_record).map_err(|_| {
+                crate::workspace::WorkspaceErr::NoRoom {
+                    location: format!("at {}", entry.resolved_root().display()),
+                }
+            })?;
             instances::insert(&instance_root, name, entry)?;
             config_edit::remove(config_edit::TaskStore::Machine, name)?;
         } else {
@@ -542,8 +547,13 @@ pub(super) fn delivery_target_alive(
     let project_root = WorkspaceResolver::persisted_project_root(&root)
         .with_context(|| format!("resolving persisted project root at {}", root.display()))?;
     let paths = StatePaths::for_project_root(&project_root)?;
+    if crate::workspace::record::read(&paths.workspace_record).is_err() {
+        return Ok(false);
+    }
     let runtime = RuntimePaths::for_state(&paths)?;
-    let store = Store::open(paths, runtime)?;
+    let Some(store) = Store::open_existing(paths, runtime) else {
+        return Ok(false);
+    };
     let snapshot = store.snapshot_cached().context("reading agent snapshot")?;
     Ok(snapshot.agents.iter().any(|agent| {
         !agent.is_provider_subagent()
@@ -567,6 +577,12 @@ mod tests {
         let paths_a = StatePaths::for_project_root(&root_a).unwrap();
         let paths_b = StatePaths::for_project_root(&root_b).unwrap();
         for (root, paths) in [(&root_a, &paths_a), (&root_b, &paths_b)] {
+            let workspace = crate::workspace::WorkspaceResolver::resolve(root, None).unwrap();
+            crate::workspace::record::write(
+                paths,
+                &crate::workspace::record::WorkspaceRecord::from_resolved(&workspace),
+            )
+            .unwrap();
             instances::insert(
                 paths,
                 "actionless",

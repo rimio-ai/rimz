@@ -57,6 +57,7 @@ pub fn run(args: EventsArgs, globals: &GlobalFlags) -> Result<()> {
 fn follow(replay: bool, globals: &GlobalFlags) -> Result<()> {
     let workspace = rimz::WorkspaceResolver::resolve_participant(".", globals.root.clone())
         .context("resolving current workspace")?;
+    super::require_existing_store(&workspace)?;
     let paths = rimz::StatePaths::for_project_root(&workspace.project_root)
         .context("resolving lifecycle event-log paths")?;
     let mut follower = rimz::store::follow::EventFollower::open(paths, replay)
@@ -107,7 +108,7 @@ fn emit(name: &str, raw_payload: Option<&str>, source: &str, globals: &GlobalFla
     let payload = parse_payload(raw_payload)?;
     let workspace = rimz::WorkspaceResolver::resolve_participant(".", globals.root.clone())
         .context("resolving current workspace")?;
-    let store = super::open_store(&workspace)?;
+    let store = super::require_existing_store(&workspace)?;
     let signal = rimz::harness::schedule::signal::Signal {
         name: name.clone(),
         payload,

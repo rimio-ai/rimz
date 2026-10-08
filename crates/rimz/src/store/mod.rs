@@ -140,17 +140,13 @@ impl Store {
         })
     }
 
-    /// Open an existing store for read paths without creating directories.
+    /// Open a room with a readable workspace record without creating directories.
     #[must_use]
     pub fn open_existing(paths: StatePaths, mut runtime: RuntimePaths) -> Option<Self> {
-        if let Err(err) = crate::disk::paths::check_workspace_layout(&paths.root) {
-            tracing::warn!(error = %err, "skipping workspace store");
+        if crate::workspace::record::read(&paths.workspace_record).is_err() {
             return None;
         }
         runtime.bind_state_locks(&paths);
-        if !paths.root.is_dir() {
-            return None;
-        }
         Some(Self {
             inner: Arc::new(StoreInner { paths, runtime }),
         })

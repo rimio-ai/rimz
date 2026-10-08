@@ -51,6 +51,11 @@ pub fn run(template: ServeConfig) -> Result<(), SidebarAppErr> {
     // leading a session is the same outcome.
     let _ = nix::unistd::setsid();
     let runtime = RuntimePaths::for_workspace(template.workspace_id.clone())?;
+    let state = crate::StatePaths::for_workspace(template.workspace_id.clone())?;
+    if crate::Store::open_existing(state, runtime.clone()).is_none() {
+        warn!(workspace = %template.workspace_id, "sidebar host: no room; run `rimz start` first");
+        return Ok(());
+    }
     runtime.ensure_dirs()?;
     let lock_path = runtime.sidebar_host_lock(template.mux, &template.session_name);
     let Ok(_lifetime) =

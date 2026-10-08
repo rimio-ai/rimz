@@ -670,7 +670,7 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
 }
 
 pub fn apply(plan: &LaunchPlan) -> Result<Option<SkillLinkOutcome>, LaunchPlanErr> {
-    plan.runtime.ensure_dirs()?;
+    plan.runtime.ensure_runtime_dirs()?;
     if let Some((path, settings, _)) = &plan.process().settings_artifact {
         crate::disk::paths::ensure_private_runtime_dir(&plan.runtime.prompt_dir())?;
         crate::disk::atomic::write_private_temp_then_rename(path, settings)

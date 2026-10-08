@@ -140,8 +140,10 @@ fn link_stats_runtime(args: LinkStatsIngestArgs) -> Result<(rimz::RuntimePaths, 
         }
         _ => bail!("give exactly one of --session or --dir"),
     };
-    let runtime = rimz::RuntimePaths::for_project_root(&project_root)?;
-    Ok((runtime, link_client_id()))
+    let state = rimz::StatePaths::for_project_root(&project_root)?;
+    let store = crate::cli::open_existing_store_at(state)?
+        .with_context(|| crate::cli::no_room(format_args!("at {}", project_root.display())))?;
+    Ok((store.runtime_paths().clone(), link_client_id()))
 }
 
 fn link_client_id() -> String {

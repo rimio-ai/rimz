@@ -446,6 +446,9 @@ impl<'a> TaskFire<'a> {
     /// The last gate of both ladders: take a turn in the start throttle. A
     /// fire that will not spawn an agent never reaches it.
     fn prepare_throttle(&mut self) -> Result<Option<TaskFireFinished>> {
+        if self.throttle_turn.is_some() {
+            return Ok(None);
+        }
         let listening = self.check_interrupts.take();
         if self.entry.throttle == Some(ThrottleSwitch::Off) {
             return Ok(None);
@@ -512,7 +515,11 @@ impl<'a> TaskFire<'a> {
         if let Some(done) = self.prepare_scope_gates()? {
             return Ok(TaskFirePlan::Done(done));
         }
-        if let Some(done) = self.prepare_run_lock()? {
+        let may_birth = self.context.as_ref().is_some_and(|context| {
+            matches!(context.action, TaskAction::Spawn(_))
+                || (self.mode == LoopRunMode::Scheduled && context.action.is_check_only())
+        });
+        if let Some(done) = self.prepare_run_lock(may_birth)? {
             return Ok(TaskFirePlan::Done(done));
         }
 
@@ -520,10 +527,34 @@ impl<'a> TaskFire<'a> {
             return Ok(TaskFirePlan::Done(done));
         }
 
-        let fired_check = match self.prepare_check(before_check)? {
+        let check = if self.run_lock.is_none()
+            && self
+                .context
+                .as_ref()
+                .is_some_and(|context| context.action.is_check_only())
+        {
+            before_check(&self.context_root()?)?;
+            if let Some(done) = self.prepare_run_lock(false)? {
+                return Ok(TaskFirePlan::Done(done));
+            }
+            self.prepare_check(&mut |_| Ok(()))?
+        } else {
+            self.prepare_check(before_check)?
+        };
+        let fired_check = match check {
             ControlFlow::Break(done) => return Ok(TaskFirePlan::Done(done)),
             ControlFlow::Continue(check) => check,
         };
+        if self.run_lock.is_none() {
+            self.fired_check = fired_check.as_ref().map(|check| check.record.clone());
+            if let Some(done) = self.prepare_throttle()? {
+                return Ok(TaskFirePlan::Done(done));
+            }
+            before_check(&self.context_root()?)?;
+            if let Some(done) = self.prepare_run_lock(false)? {
+                return Ok(TaskFirePlan::Done(done));
+            }
+        }
         self.prepare_effect(fired_check)
     }
 
@@ -555,7 +586,7 @@ impl<'a> TaskFire<'a> {
         &mut self,
         before_launch: &mut dyn FnMut(&Path) -> Result<()>,
     ) -> Result<TaskFirePlan> {
-        if let Some(done) = self.prepare_run_lock()? {
+        if let Some(done) = self.prepare_run_lock(true)? {
             return Ok(TaskFirePlan::Done(done));
         }
         let root = self.entry.resolved_root();
@@ -587,6 +618,27 @@ impl<'a> TaskFire<'a> {
         };
         let prompt = self.resolve_effect_prompt(None)?;
         before_launch(&root)?;
+        if self.run_lock.is_none() {
+            if let Some(done) = self.prepare_run_lock(false)? {
+                return Ok(TaskFirePlan::Done(done));
+            }
+            if self.mode == LoopRunMode::Scheduled
+                && super::launch_ledger::load(&paths)?
+                    .get(&self.name)
+                    .is_some_and(|launches| launches.contains_key(&cwd))
+            {
+                let detail = "resident launch completed during room birth — skipped".to_owned();
+                return Ok(TaskFirePlan::Done(self.record_terminal_with(
+                    LoopRunResult::Overlapped,
+                    LoopRunPresentation::default(),
+                    TaskFireNotice::Overlap {
+                        detail: Some(detail.clone()),
+                    },
+                    None,
+                    |record| record.error = Some(detail),
+                )));
+            }
+        }
         self.pending = Some(PendingEffect::Resident);
         Ok(TaskFirePlan::Resident {
             root,
@@ -716,13 +768,25 @@ impl<'a> TaskFire<'a> {
             .map(|reason| (LoopRunResult::SurplusSkipped, reason))
     }
 
-    fn prepare_run_lock(&mut self) -> Result<Option<TaskFireFinished>> {
+    fn prepare_run_lock(&mut self, may_birth: bool) -> Result<Option<TaskFireFinished>> {
         let checkout = self
             .entry
             .each_worktree
             .then(|| WorkspaceId::from_project_root(&self.launch_checkout()));
         let file = run_lock_file_name(&self.name, checkout.as_ref());
-        let path = (self.run_lock_path)(&file, &self.entry)?;
+        let path = match (self.run_lock_path)(&file, &self.entry) {
+            Ok(path) => path,
+            Err(err)
+                if may_birth
+                    && matches!(
+                        err.downcast_ref::<crate::workspace::WorkspaceErr>(),
+                        Some(crate::workspace::WorkspaceErr::NoRoom { .. })
+                    ) =>
+            {
+                return Ok(None);
+            }
+            Err(err) => return Err(err),
+        };
         match acquire_run_lock(&path)? {
             RunLockAttempt::Acquired(guard) => {
                 self.run_lock = Some(guard);
@@ -886,7 +950,14 @@ impl<'a> TaskFire<'a> {
             )
         } else if let Some(command) = self.entry.check.clone() {
             let root = self.context_root()?;
-            before_check(&root)?;
+            if self.run_lock.is_some()
+                || !matches!(
+                    self.context.as_ref().map(|context| &context.action),
+                    Some(TaskAction::Spawn(_))
+                )
+            {
+                before_check(&root)?;
+            }
             let mut env = crate::workspace::pin_env(&WorkspaceId::from_project_root(&root), &root);
             env.insert(LOOP_TASK_ENV.to_owned(), self.name.clone());
             let dir = self.entry.run_dir();
@@ -1930,9 +2001,12 @@ struct RunLockFile {
 }
 
 impl RunLocks {
-    /// List and probe the run locks under `root`; a root with no `locks/` has none.
+    /// List and probe run locks; a root without a room or `locks/` has none.
     pub fn list(root: &Path) -> Result<Self> {
-        let locks = run_lock_runtime(root)?.locks_dir;
+        let Some(runtime) = run_lock_runtime(root)? else {
+            return Ok(Self { files: Vec::new() });
+        };
+        let locks = runtime.locks_dir;
         let listing = || format!("listing loop run locks `{}`", locks.display());
         let entries = match std::fs::read_dir(&locks) {
             Ok(entries) => entries,
@@ -2030,12 +2104,21 @@ fn probe_run_lock_path(path: &Path) -> Result<RunLockState> {
 }
 
 fn run_lock_path(file: &str, entry: &TaskEntry) -> Result<PathBuf> {
-    Ok(run_lock_runtime(&entry.resolved_root())?.lock_path(file))
+    let root = entry.resolved_root();
+    let runtime =
+        run_lock_runtime(&root)?.ok_or_else(|| crate::workspace::WorkspaceErr::NoRoom {
+            location: format!("at {}", root.display()),
+        })?;
+    Ok(runtime.lock_path(file))
 }
 
-fn run_lock_runtime(root: &Path) -> Result<RuntimePaths> {
+fn run_lock_runtime(root: &Path) -> Result<Option<RuntimePaths>> {
     let state = StatePaths::for_project_root(root).context("locating loop task state")?;
-    RuntimePaths::for_state(&state).context("locating loop task runtime")
+    if crate::workspace::record::read(&state.workspace_record).is_err() {
+        return Ok(None);
+    }
+    let runtime = RuntimePaths::for_state(&state).context("locating loop task runtime")?;
+    Ok(crate::store::Store::open_existing(state, runtime.clone()).map(|_| runtime))
 }
 
 /// The one spelling of a run lock's file name. `checkout` names the launch

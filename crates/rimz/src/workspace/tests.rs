@@ -92,7 +92,10 @@ fn recorded_session_survives_resolution() {
     let mut record = WorkspaceRecord::from_resolved(&workspace);
     record.session_name = "rimz-old-123456".to_owned();
     record::write(&paths, &record).unwrap();
-    assert_eq!(recorded_session_name(&paths), record.session_name);
+    assert_eq!(
+        recorded_session_name(&paths, ResolveMode::Create),
+        record.session_name
+    );
 }
 
 #[test]

@@ -174,10 +174,13 @@ pub fn run_worker(
 pub fn run(config: ServeConfig) -> Result<()> {
     use std::io::IsTerminal;
 
+    let mut record_watch = RecordWatch::new(&config.workspace_id);
+    if crate::workspace::record::read(&record_watch.record_path).is_err() {
+        return Ok(());
+    }
     let args = env::args_os().skip(1).collect::<Vec<_>>();
     let mut backoff = RESPAWN_BACKOFF_INITIAL;
     let mut pane_watchdog = PaneWatchdog::from_config(&config);
-    let mut record_watch = RecordWatch::new(&config.workspace_id);
     let supervisor_build = crate::build_id::current().map(str::to_owned);
     let runtime = crate::RuntimePaths::for_workspace(config.workspace_id.clone()).ok();
     let mut host_retry = (runtime.is_some() && io::stdout().is_terminal()).then(HostRetry::default);

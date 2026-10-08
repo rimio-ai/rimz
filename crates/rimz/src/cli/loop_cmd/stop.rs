@@ -13,8 +13,9 @@ pub(super) fn stop(name: &str, globals: &GlobalFlags) -> Result<()> {
     };
     let mut pane_open = None;
     let outcome = stop_task(name, &root, |workspace, paths, record| {
-        let runtime = RuntimePaths::for_state(&paths)?;
-        let store = rimz::Store::open(paths, runtime)?;
+        let id = paths.workspace_id.clone();
+        let store = crate::cli::open_existing_store_at(paths)?
+            .with_context(|| crate::cli::no_room(format_args!("for workspace {id}")))?;
         match (workspace, record) {
             (_, None) => Ok(()),
             (Some(workspace), Some(record)) => {

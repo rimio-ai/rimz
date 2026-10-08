@@ -15,7 +15,7 @@ use std::io::Write;
 use anyhow::{Context, Result, anyhow, bail};
 use clap::{ArgAction, Args, Subcommand};
 
-use super::{GlobalFlags, current_channel, open_store};
+use super::{GlobalFlags, current_channel};
 use crate::cli::render;
 use rimz::ids::{AgentKind, AgentSessionId, MuxName, PaneId, WorkspaceId};
 use rimz::sidebar::consumer::{PublishedSnapshotReader, RollupCursor, published_frame_exists};
@@ -1520,16 +1520,14 @@ fn resolve_sidebar_targets(
 ) -> Result<ResolvedSidebarTargets> {
     rimz::address::require_mention(target)?;
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
-    let state =
-        StatePaths::for_project_root(&workspace.project_root).context("preparing state paths")?;
-    let runtime = RuntimePaths::for_project_root(&workspace.project_root)
-        .context("preparing runtime paths")?;
+    let store = super::require_existing_store(&workspace)?;
+    let state = store.paths();
+    let runtime = store.runtime_paths().clone();
     runtime.ensure_dirs().context("preparing runtime paths")?;
-    let existing_store = super::open_existing_store(&workspace).ok().flatten();
-    let channel = current_channel(&workspace, existing_store.as_ref()).address_context();
+    let channel = current_channel(&workspace, Some(&store)).address_context();
     if let Ok(snapshot) =
         PublishedSnapshotReader::new(runtime.clone(), workspace.session_name.clone(), None)
-            .read(&state)
+            .read(state)
         && let Ok(rows) = resolve_rows(&snapshot, target, worktree, &channel)
         && !rows.is_empty()
     {
@@ -1540,7 +1538,6 @@ fn resolve_sidebar_targets(
         });
     }
 
-    let store = open_store(&workspace)?;
     let snapshot = rimz::sidebar::produce::resolution_snapshot(&workspace, &store, globals.mux)?;
     let rows = resolve_rows(&snapshot, target, worktree, &channel)?;
     Ok(ResolvedSidebarTargets {

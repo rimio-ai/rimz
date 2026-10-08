@@ -18,6 +18,8 @@ use jiff::Timestamp;
 #[derive(Debug, thiserror::Error)]
 pub(super) enum InstanceErr {
     #[error(transparent)]
+    Room(#[from] crate::workspace::WorkspaceErr),
+    #[error(transparent)]
     Lock(#[from] LockErr),
     #[error(transparent)]
     Write(#[from] AtomicErr),
@@ -93,6 +95,16 @@ fn mutate<T>(
     paths: &StatePaths,
     edit: impl FnOnce(&mut BTreeMap<String, TaskEntry>) -> Result<(T, bool)>,
 ) -> Result<T> {
+    if crate::workspace::record::read(&paths.workspace_record).is_err() {
+        let (result, changed) = edit(&mut BTreeMap::new())?;
+        if !changed {
+            return Ok(result);
+        }
+        return Err(crate::workspace::WorkspaceErr::NoRoom {
+            location: format!("for workspace {}", paths.workspace_id),
+        }
+        .into());
+    }
     let _guard = WorkspaceLock::acquire(&paths.lock_path("loop-instances.lock"))?;
     let mut entries = load_strict_from(&paths.root)?.0;
     let (result, changed) = edit(&mut entries)?;
@@ -108,6 +120,12 @@ pub(super) fn insert_delivery(
     entry: &TaskEntry,
     taken: &BTreeSet<String>,
 ) -> Result<(String, bool)> {
+    if crate::workspace::record::read(&paths.workspace_record).is_err() {
+        return Err(crate::workspace::WorkspaceErr::NoRoom {
+            location: format!("for workspace {}", paths.workspace_id),
+        }
+        .into());
+    }
     let _guard = WorkspaceLock::acquire(&paths.lock_path("loop-instances.lock"))?;
     let mut tasks = load_strict_from(&paths.root)?.0;
     let arming = super::arming::load();
@@ -232,6 +250,15 @@ mod tests {
     use super::super::arm::RetireScope;
     use super::*;
 
+    fn record_room(paths: &StatePaths, root: &Path) {
+        let workspace = crate::workspace::WorkspaceResolver::resolve(root, None).unwrap();
+        crate::workspace::record::write(
+            paths,
+            &crate::workspace::record::WorkspaceRecord::from_resolved(&workspace),
+        )
+        .unwrap();
+    }
+
     fn task() -> TaskEntry {
         TaskEntry {
             agent: Some("claude".to_owned()),
@@ -240,6 +267,41 @@ mod tests {
             at: Some("07:00".to_owned()),
             ..TaskEntry::default()
         }
+    }
+
+    #[test]
+    fn recordless_instance_removals_create_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = StatePaths::for_project_root_under(dir.path(), dir.path()).unwrap();
+        assert!(!remove(&paths, "missing", None).unwrap());
+        assert!(!rename(&paths, "missing", "renamed").unwrap());
+        assert!(
+            retire_session(
+                &paths,
+                &crate::ids::AgentKind::new_unchecked("claude"),
+                &"missing".into(),
+                RetireScope::Session,
+            )
+            .unwrap()
+            .is_empty()
+        );
+        assert!(!paths.root.exists());
+    }
+
+    #[test]
+    fn recordless_instance_insert_refuses_without_creating_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = StatePaths::for_project_root_under(dir.path(), dir.path()).unwrap();
+        assert!(insert(&paths, "probe", &task()).is_err());
+        assert!(!paths.root.exists());
+    }
+
+    #[test]
+    fn recordless_delivery_insert_refuses_without_creating_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = StatePaths::for_project_root_under(dir.path(), dir.path()).unwrap();
+        assert!(insert_delivery(&paths, Some("probe"), &task(), &BTreeSet::new()).is_err());
+        assert!(!paths.root.exists());
     }
 
     #[test]
@@ -260,6 +322,7 @@ mod tests {
             dir.path(),
         )
         .unwrap();
+        record_room(&paths, dir.path());
         let entry = task();
 
         insert(&paths, "wait", &entry).expect("insert");
@@ -290,6 +353,7 @@ mod tests {
             dir.path(),
         )
         .unwrap();
+        record_room(&paths, dir.path());
         let entry = task();
 
         insert(&paths, "wait", &entry).expect("insert");
@@ -308,6 +372,7 @@ mod tests {
     fn resident_name_collision_preserves_both_subscribers() {
         let dir = tempfile::tempdir().unwrap();
         let paths = StatePaths::for_project_root(dir.path()).unwrap();
+        record_room(&paths, dir.path());
         let subscriber = |task: &str, session: &str| TaskEntry {
             root: dir.path().to_owned(),
             loop_task: Some(task.into()),
@@ -346,6 +411,7 @@ mod tests {
             dir.path(),
         )
         .unwrap();
+        record_room(&paths, dir.path());
         let kind = crate::ids::AgentKind::new_unchecked("claude");
         let session = crate::ids::AgentSessionId::from("resumed");
         let pinned = |session_id: &str, team: Option<&str>| TaskEntry {
@@ -414,6 +480,7 @@ mod tests {
             dir.path(),
         )
         .unwrap();
+        record_room(&paths, dir.path());
         let root = paths;
         let barrier = std::sync::Arc::new(std::sync::Barrier::new(3));
         let writers = ["first", "second"].map(|name| {

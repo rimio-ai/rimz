@@ -54,6 +54,51 @@ fn thin_park_rejects_store_entry_points_but_leaves_event_follower_alone() {
 }
 
 #[test]
+fn room_creators_rejects_participants_but_allows_creators_and_tests() {
+    let root = temp_repo_root("room-creators");
+    let source = root.join("crates/rimz/src");
+    for relative in [
+        "cli/ctx.rs",
+        "cli/hooks.rs",
+        "reload.rs",
+        "harness/schedule/catalog.rs",
+    ] {
+        let path = source.join(relative);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        for call in ["open_store(workspace);", "Store::open(state, runtime);"] {
+            std::fs::write(&path, call).unwrap();
+            let err = ensure_room_creators(&root, std::slice::from_ref(&path)).unwrap_err();
+            assert!(err.to_string().contains("room-choosing"));
+        }
+        std::fs::write(&path, "fn participant() {}\n#[cfg(test)]\nmod tests {\n    fn fixture() { Store::open(state, runtime); }\n}\n").unwrap();
+        ensure_room_creators(&root, &[path]).unwrap();
+    }
+    for relative in [
+        "cli/mod.rs",
+        "cli/room/start.rs",
+        "cli/workspace.rs",
+        "cli/supervised/run.rs",
+        "room/birth.rs",
+        "room/mod.rs",
+        "harness/rebirth.rs",
+        "store/mod.rs",
+        "testkit.rs",
+        "tests.rs",
+        "caller/tests.rs",
+    ] {
+        let path = source.join(relative);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            "Store::open(state, runtime);\nopen_store(workspace);\n",
+        )
+        .unwrap();
+        ensure_room_creators(&root, &[path]).unwrap();
+    }
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn sidebar_fold_requires_caller_state() {
     let root = temp_repo_root("fold-state");
     for relative in [

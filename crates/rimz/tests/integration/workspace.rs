@@ -13,7 +13,240 @@ use rimz::ids::AgentSessionId;
 use rimz::store::event::EventEnvelope;
 use rimz::store::message::{DeliveryGate, MessageRecord, MessageStatus};
 
-use crate::common::{Env, canonical};
+use crate::common::{CommandTimeoutExt, Env, canonical};
+
+#[test]
+fn participant_outside_a_room_refuses_and_creates_nothing() {
+    let env = Env::new();
+    for command in [vec!["asks", "--json"], vec!["agents", "list"]] {
+        env.rimz()
+            .args(command)
+            .assert()
+            .failure()
+            .stderr(contains(format!(
+                "no room at {}: run `rimz start` there, or pass --root <room>",
+                canonical(&env.project_root).display()
+            )));
+    }
+    let ws = env.rimz_home().join("ws");
+    assert!(!ws.exists() || std::fs::read_dir(ws).unwrap().next().is_none());
+}
+
+#[test]
+fn loop_read_commands_without_a_room_are_quiet_and_create_nothing() {
+    let env = Env::new();
+    std::fs::write(
+        env.rimz_home().join("loop.toml"),
+        format!(
+            "[tasks.probe]\nroot = {:?}\nevery = \"1h\"\ncheck = \"true\"\n",
+            env.project_root
+        ),
+    )
+    .unwrap();
+    for command in [
+        vec!["loop", "list"],
+        vec!["loop", "show", "probe"],
+        vec!["loop", "logs", "probe"],
+        vec!["loop", "stop", "probe"],
+    ] {
+        let output = env.rimz().args(&command).bounded_output().unwrap();
+        assert!(output.status.success(), "{command:?}: {output:?}");
+        assert!(output.stderr.is_empty(), "{command:?}: {output:?}");
+        if command[1] == "stop" {
+            assert!(String::from_utf8_lossy(&output.stdout).contains("no active run"));
+        }
+        assert!(!env.rimz_home().join("ws").exists(), "{command:?}");
+    }
+}
+
+#[test]
+fn machine_loop_edits_without_a_room_create_no_state() {
+    let env = Env::new();
+    for command in [
+        vec!["loop", "add", "probe", "--every", "1h", "--check", "true"],
+        vec!["loop", "rename", "probe", "renamed"],
+        vec!["loop", "remove", "renamed"],
+    ] {
+        let output = env.rimz().args(&command).bounded_output().unwrap();
+        assert!(output.status.success(), "{command:?}: {output:?}");
+        assert!(!env.rimz_home().join("ws").exists(), "{command:?}");
+    }
+}
+
+fn assert_room_view_refuses(command: &[&str]) {
+    let env = Env::new();
+    let output = env
+        .rimz()
+        .args(command)
+        .bounded_output_within(Duration::from_secs(5));
+    assert!(output.is_ok(), "must refuse instead of polling: {output:?}");
+    let output = output.unwrap();
+    assert!(!output.status.success(), "{command:?}: {output:?}");
+    assert!(output.stdout.is_empty(), "{command:?}: {output:?}");
+    assert!(String::from_utf8_lossy(&output.stderr).contains(&format!(
+        "no room at {}: run `rimz start` there, or pass --root <room>",
+        canonical(&env.project_root).display()
+    )));
+    assert!(!env.rimz_home().join("ws").exists());
+}
+
+#[test]
+fn transcript_without_a_room_refuses() {
+    assert_room_view_refuses(&["transcript"]);
+}
+
+#[test]
+fn ephemeral_loop_add_without_a_room_refuses_on_entry() {
+    assert_room_view_refuses(&["loop", "add", "probe", "--at", "07:00", "--check", "true"]);
+}
+
+#[test]
+fn transcript_json_without_a_room_refuses() {
+    assert_room_view_refuses(&["transcript", "--json"]);
+}
+
+#[test]
+fn transcript_follow_without_a_room_refuses_on_entry() {
+    assert_room_view_refuses(&["transcript", "-f"]);
+}
+
+#[test]
+fn events_follow_without_a_room_refuses_on_entry() {
+    assert_room_view_refuses(&["events", "follow", "--replay", "--json"]);
+}
+
+#[test]
+fn sidebar_supervisor_without_a_room_stops_before_spawning_or_logging() {
+    let env = Env::new();
+    let started = env.home_root.join("worker-started");
+    let output = env
+        .rimz()
+        .args([
+            "sidebar",
+            "serve",
+            "--workspace-id",
+            env.workspace_id.as_str(),
+            "--session-name",
+            "x",
+            "--mux",
+            "tmux",
+        ])
+        .env("RIMZ_TEST_SIDEBAR_WORKER_FAULT", "self_close")
+        .env("RIMZ_TEST_SIDEBAR_SELF_CLOSE_PROBE", "empty")
+        .env("RIMZ_TEST_SIDEBAR_WORKER_STARTED_FILE", &started)
+        .bounded_output_within(Duration::from_secs(5));
+    assert!(output.is_ok(), "supervisor must stop: {output:?}");
+    assert!(output.unwrap().status.success());
+    assert!(!env.rimz_home().join("ws").exists());
+    assert!(!started.exists(), "no worker should be spawned");
+}
+
+#[test]
+fn participant_inside_a_room_behaves_as_before() {
+    let env = Env::new();
+    let store = env.store();
+    env.record(&env.project_root);
+    let path = &store.paths().workspace_record;
+    std::fs::File::options()
+        .write(true)
+        .open(path)
+        .unwrap()
+        .set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(1))
+        .unwrap();
+    let before = std::fs::metadata(path).unwrap().modified().unwrap();
+    let bytes = std::fs::read(path).unwrap();
+
+    let workspace = env.resolve_workspace(&env.project_root);
+    for command in [vec!["asks", "--json"], vec!["agents", "list"]] {
+        env.rimz()
+            .args(["--mux", "zellij"])
+            .args(command)
+            .env("RIMZ_ZELLIJ_BIN", crate::common::zellij_trace_shim())
+            .env("RIMZ_TEST_ZELLIJ_LOG", env.home_root.join("zellij.log"))
+            .env("RIMZ_TEST_ZELLIJ_LIST_SESSIONS", &workspace.session_name)
+            .assert()
+            .success();
+
+        assert_eq!(std::fs::metadata(path).unwrap().modified().unwrap(), before);
+        assert_eq!(std::fs::read(path).unwrap(), bytes);
+    }
+}
+
+#[test]
+fn recordless_or_corrupt_state_is_not_a_room() {
+    for corrupt in [false, true] {
+        let env = Env::new();
+        let store = env.store();
+        if corrupt {
+            std::fs::write(&store.paths().workspace_record, "not JSON").unwrap();
+        }
+        assert!(
+            rimz::Store::open_existing(store.paths().clone(), store.runtime_paths().clone())
+                .is_none()
+        );
+        env.rimz()
+            .args(["asks", "--json"])
+            .assert()
+            .failure()
+            .stderr(contains("no room at"));
+        if corrupt {
+            assert_eq!(
+                std::fs::read(&store.paths().workspace_record).unwrap(),
+                b"not JSON"
+            );
+        } else {
+            assert!(!store.paths().workspace_record.exists());
+        }
+    }
+}
+
+#[test]
+fn id_only_helper_outside_a_room_refuses() {
+    let env = Env::new();
+    let request = serde_json::json!({
+        "workspace_id": env.workspace_id,
+        "kind": "claude",
+        "agent_id": "missing-agent",
+        "pane_id": "tmux:%1",
+        "label": "missing-agent"
+    });
+    env.rimz()
+        .args(["agents", "idle-stop", "--request", &request.to_string()])
+        .assert()
+        .failure()
+        .stderr(contains(format!(
+            "no room for workspace {}: run `rimz start` there, or pass --root <room>",
+            env.workspace_id
+        )));
+    let ws = env.rimz_home().join("ws");
+    assert!(!ws.exists() || std::fs::read_dir(ws).unwrap().next().is_none());
+}
+
+#[test]
+fn id_only_helper_uses_the_recorded_state_directory_when_the_root_is_stale() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let paths = env.state_path_for(&env.project_root);
+    let moved = env.home_root.join("moved");
+    std::fs::create_dir(&moved).unwrap();
+    let mut record = rimz::workspace::record::read(&paths.workspace_record).unwrap();
+    record.project_root = moved.clone();
+    let bytes = serde_json::to_vec(&record).unwrap();
+    std::fs::write(&paths.workspace_record, &bytes).unwrap();
+    let request = serde_json::json!({
+        "workspace_id": env.workspace_id,
+        "kind": "claude",
+        "agent_id": "missing-agent",
+        "pane_id": "tmux:%1",
+        "label": "missing-agent"
+    });
+    env.rimz()
+        .args(["agents", "idle-stop", "--request", &request.to_string()])
+        .assert()
+        .success();
+    assert_eq!(std::fs::read(&paths.workspace_record).unwrap(), bytes);
+    assert!(!env.state_path_for(&moved).root.exists());
+}
 
 fn init_git_repo(path: &std::path::Path) -> bool {
     std::fs::create_dir_all(path).expect("mkdir repo");

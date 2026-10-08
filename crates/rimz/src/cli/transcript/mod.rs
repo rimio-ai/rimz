@@ -266,6 +266,7 @@ use {chat::*, follow::*, scope::*, thread::*};
 pub fn run(args: TranscriptArgs, globals: &GlobalFlags) -> Result<()> {
     let workspace =
         resolve_view_workspace(args.target.as_deref(), args.worktree.as_deref(), globals)?;
+    super::require_existing_store(&workspace)?;
     if args.follow {
         return follow(
             &workspace,
@@ -377,9 +378,14 @@ pub(crate) fn resolve_view_workspace(
     }
     let paths = rimz::StatePaths::for_project_root(&current.project_root)
         .context("preparing state paths")?;
-    let current_has = live_agents(crate::cli::open_store(&current).ok().as_ref())
-        .iter()
-        .any(|agent| agent.channel.as_deref() == Some(channel.as_str()))
+    let current_has = live_agents(
+        crate::cli::open_existing_store(&current)
+            .ok()
+            .flatten()
+            .as_ref(),
+    )
+    .iter()
+    .any(|agent| agent.channel.as_deref() == Some(channel.as_str()))
         || rimz::transcript::channels(&paths)
             .is_ok_and(|channels| channels.contains(channel.as_str()));
     let candidates = if current_has {

@@ -265,7 +265,7 @@ impl RoomContext {
             .context("preparing adapter store paths")?;
         let runtime = RuntimePaths::for_state(&state).context("preparing adapter runtime paths")?;
         runtime
-            .ensure_dirs()
+            .ensure_runtime_dirs()
             .context("preparing adapter runtime directories")?;
         let mux_config = MultiplexerConfig::from(machine_config.as_ref());
         let width = SidebarWidth::from_config(&machine_config.theme);

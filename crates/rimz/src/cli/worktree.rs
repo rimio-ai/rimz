@@ -9,7 +9,7 @@ use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
 use serde::Serialize;
 
-use super::{GlobalFlags, open_store};
+use super::{GlobalFlags, require_existing_store};
 use crate::cli::render;
 use rimz::agents::AgentState;
 use rimz::config::{WorktreeBase, WorktreeConfig};
@@ -149,7 +149,7 @@ fn new_worktree(
     from_pr: Option<PrTarget>,
     branch: Option<String>,
 ) -> Result<()> {
-    let store = open_store(workspace)?;
+    let store = require_existing_store(workspace)?;
     let requested_name = name
         .as_deref()
         .map(rimz::worktree::parse_requested_name)
@@ -316,8 +316,9 @@ fn render_worktree_table(
 }
 
 fn root_agents(workspace: &ResolvedWorkspace) -> Vec<AgentState> {
-    crate::cli::open_store(workspace)
+    crate::cli::open_existing_store(workspace)
         .ok()
+        .flatten()
         .and_then(|store| store.snapshot_cached().ok())
         .map(|snapshot| {
             snapshot
@@ -394,7 +395,7 @@ fn remove_worktree(
     name: String,
     force: bool,
 ) -> Result<()> {
-    let store = open_store(workspace)?;
+    let store = require_existing_store(workspace)?;
     let guard = super::worktree_protection::for_explicit_removal(&workspace.project_root, globals);
     let path = rimz::worktree::worktree_path(&workspace.project_root, config, &name)?;
     if force && guard.protections.protects(&path) {
@@ -456,7 +457,7 @@ fn sweep_worktrees(
         };
         store
     } else {
-        open_store(workspace)?
+        require_existing_store(workspace)?
     };
     let guard = super::worktree_protection::for_automatic_gc(workspace, &store, globals)
         .context("reading the live agent roster before sweeping worktrees")?;
@@ -644,7 +645,7 @@ fn remove_for_cleanup(
 ) -> Result<rimz::worktree::RemovalOutcome> {
     let removed =
         rimz::worktree::remove_marked_worktree(&marker.repo_root, path, marker, force, hooks)?;
-    let store = open_store(workspace);
+    let store = require_existing_store(workspace);
     match store {
         Ok(store) => {
             let retirement = rimz::worktree::retire_removal(

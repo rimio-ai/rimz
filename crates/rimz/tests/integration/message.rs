@@ -1629,6 +1629,7 @@ fn resume_prompt_wakes_and_sends_after_registration_without_a_stop() {
 #[test]
 fn host_sweep_delivers_from_the_room_store_without_the_pane_env() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
     register_running_agent(&env, "sess-host-sweep", "feature-host-sweep", pane_env);

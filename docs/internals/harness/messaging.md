@@ -571,7 +571,7 @@ Flags and rendering are in [cli/message.md](../../reference/cli/message.md). Und
 - `message requeue` copies a terminal history record into a fresh `Queued` record with a new id, keeping text, receiver, channel, sender, body, delivery settings, and `in_reply_to`, and clearing condition stamps. A terminal row known only from events cannot be requeued, because its text was never stored there.
 - `message cancel` settles named live records. `message clear <target>` settles every open record for one card, and a targetless `message clear` settles the scoped lane. Both include system records hidden from the inbox, and `clear` prints the ids it canceled.
 
-Two hidden helpers do the pipeline's background work, each spawned detached: `message deliver --message-id <id>` and `message sweep --workspace-id <id>`. The sweep opens the recorded room by id without recording it again; the id wins over `--root`, and a missing workspace record is an error. Without an id, it resolves the participant room and opens only an existing store: no room means `no room at <project_root>: nothing to sweep`, a nonzero exit, and no state created.
+Two hidden helpers do the pipeline's background work, each spawned detached: `message deliver --message-id <id>` and `message sweep --workspace-id <id>`. The sweep opens the recorded room by id without recording it again; the id wins over `--root`, and a missing workspace record is an error. Without an id, it resolves the participant room and opens only an existing store: no room means ``no room at <project_root>: run `rimz start` there, or pass --root <room>; nothing to sweep``, a nonzero exit, and no state created.
 
 ## Channels
 

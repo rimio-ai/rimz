@@ -107,11 +107,19 @@ pub(super) fn run_one(
         if !entry.stay
             && (mode != LoopRunMode::Scheduled || !matches!(action, TaskAction::CheckOnly))
         {
-            return Ok(());
+            if !matches!(action, TaskAction::Spawn(_)) {
+                return Ok(());
+            }
+            let workspace = WorkspaceResolver::resolve_participant(root, Some(root.to_path_buf()))?;
+            if crate::cli::open_existing_store(&workspace)?.is_some() {
+                return Ok(());
+            }
         }
         let state = StatePaths::for_project_root(root)?;
         let runtime = RuntimePaths::for_state(&state)?;
-        if fresh_sidebar_present(&runtime) {
+        if fresh_sidebar_present(&runtime)
+            && rimz::Store::open_existing(state, runtime.clone()).is_some()
+        {
             return Ok(());
         }
         let mut room_globals = globals.clone();
@@ -486,7 +494,7 @@ fn execute_prepared_delivery(
     globals: &GlobalFlags,
 ) -> Result<rimz::harness::schedule::runner::TaskFireEffect> {
     let workspace = WorkspaceResolver::resolve_participant(".", Some(prepared.root))?;
-    let store = crate::cli::open_store(&workspace)?;
+    let store = crate::cli::require_existing_store(&workspace)?;
     let channel = crate::cli::current_channel(&workspace, Some(&store));
     let sender = rimz::store::message::MessageSender::Harness {
         notice: match prepared.intent {

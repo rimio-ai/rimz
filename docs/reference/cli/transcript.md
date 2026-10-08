@@ -169,6 +169,8 @@ The count can exceed `20` when a thread keeps its opener. No bound note prints w
 
 ## Empty results
 
+All views, including `--json` and `--follow`, require an existing room. Outside a room the command exits nonzero with `no room at <root>: run \`rimz start\` there, or pass --root <room>` before reading or following anything.
+
 A resolved agent with nothing to show exits 0 and prints `No conversation for @handle#channel yet.` on stderr (without the suffix when it has no channel). A channel or room scope with nothing to show also exits 0: `No conversation for #<channel> yet.`, `No conversation for <target> yet.`, or `No conversation for this room yet.`; an empty log without an agent target reads `No conversation recorded yet.`. With `--json`, stdout gets `{"entries": []}`. An unknown agent is an error, not an empty conversation.
 
 With `--follow`, an empty first view prints nothing and waits. Following honours `-n` for the first view and keeps the selected channel and `--flat` rendering for subsequent entries, until interrupted or the output pipe closes.

@@ -1257,6 +1257,7 @@ surface-budget = 14
 
 [[module]]
 path = "crates/rimz/src/harness/schedule/runner.rs"
+# The recorded-room predicate gates state-lock creation.
 allowed-dependencies = [
     "agents",
     "config",
@@ -1270,6 +1271,7 @@ allowed-dependencies = [
     "harness::schedule",
     "ids",
     "proc",
+    "store",
     "store::run",
     "store::writer",
     "utils::time",

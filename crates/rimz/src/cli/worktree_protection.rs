@@ -7,7 +7,7 @@ use std::path::Path;
 
 use anyhow::Result;
 
-use super::{GlobalFlags, open_store};
+use super::{GlobalFlags, open_existing_store};
 use rimz::agents::AgentState;
 use rimz::ids::{MuxName, PaneId};
 use rimz::pane::PaneRef;
@@ -88,9 +88,10 @@ fn best_effort_workspace(
 ) -> RuntimeProtection {
     let (mux, panes) = list_panes(Some(workspace), globals);
     let own_pane = mux.and_then(rimz::mux::own_pane_id);
-    let agents = open_store(workspace)
-        .and_then(|store| alive_agents(workspace, &store))
+    let agents = open_existing_store(workspace)
         .ok()
+        .flatten()
+        .and_then(|store| alive_agents(workspace, &store).ok())
         .unwrap_or_default();
     assemble(&panes, agents, own_pane.as_ref(), occupancy)
 }

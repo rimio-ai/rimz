@@ -14,7 +14,7 @@ use clap::{Args, Subcommand};
 use serde_json::Value;
 use tracing::{debug, warn};
 
-use super::{GlobalFlags, open_store};
+use super::{GlobalFlags, open_existing_store};
 use rimz::Store;
 use rimz::agents::lifecycle::LifecycleSignal;
 use rimz::agents::{
@@ -166,7 +166,6 @@ fn run_feed(source: String, event: Option<String>, globals: &GlobalFlags) -> Res
             &scan,
         )?
     };
-    let store = open_store(&workspace)?;
     let event_name = event
         .or_else(|| {
             payload
@@ -177,6 +176,14 @@ fn run_feed(source: String, event: Option<String>, globals: &GlobalFlags) -> Res
         })
         .unwrap_or_else(|| "unknown".to_owned());
     let mut decoded = agent.decode_hook(&event_name, &payload)?;
+    let Some(store) = open_existing_store(&workspace)? else {
+        warn!(
+            "rimz hooks feed: no room at {}; ignoring {} (run `rimz start` there)",
+            workspace.project_root.display(),
+            event_name,
+        );
+        return emit_reply(&decoded);
+    };
 
     if decoded.class() != AgentHookClass::AwaitingUser {
         handle_lifecycle_hook(

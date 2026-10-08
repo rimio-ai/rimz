@@ -24,19 +24,27 @@ pub(super) fn run(request: LifecycleRefreshRequest) -> Result<()> {
         return Ok(());
     };
     let workspace_id = request.workspace_id;
-    let runtime = crate::cli::runtime_paths_for(workspace_id.clone())?;
+    let state = StatePaths::for_workspace(workspace_id.clone())?;
+    let Some(store) = crate::cli::open_existing_store_at(state)? else {
+        tracing::warn!(
+            "{}",
+            crate::cli::no_room(format_args!("for workspace {workspace_id}"))
+        );
+        return Ok(());
+    };
+    let runtime = store.runtime_paths().clone();
+    runtime.ensure_runtime_dirs()?;
 
     let kind = request.kind.as_str();
     let session_id = request.session_id.as_str();
     let prior = rimz::store::agent_context::read_one(&runtime, kind, session_id);
-    let state = StatePaths::for_workspace(workspace_id.clone())?;
     let defaults = agents::room_accounts(
-        &state.workspace_record,
+        &store.paths().workspace_record,
         None,
         &rimz::config::MachineConfig::load_lenient(),
     )
     .ok();
-    let snapshot = Store::open(state, runtime.clone())?.snapshot_cached()?;
+    let snapshot = store.snapshot_cached()?;
     let Some(agent) = snapshot
         .agents
         .iter()
@@ -147,7 +155,7 @@ fn session_pane(
 ) -> Option<(PaneId, String)> {
     let paths = StatePaths::for_workspace(workspace_id.clone()).ok()?;
     let record = record::read(&paths.workspace_record).ok()?;
-    let store = Store::open(paths, runtime.clone()).ok()?;
+    let store = Store::open_existing(paths, runtime.clone())?;
     let workspace = ResolvedWorkspace {
         workspace_id: workspace_id.clone(),
         project_root: record.project_root.clone(),
