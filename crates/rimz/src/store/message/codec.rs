@@ -344,6 +344,39 @@ mod tests {
         assert!(serde_json::from_value::<MessageRecord>(value).is_err());
     }
 
+    /// Status has no catch-all, unlike a harness notice: a binary that
+    /// predates a status fails the whole history read on one such record.
+    #[test]
+    fn unknown_status_in_history_fails_the_read() {
+        let dir = tempdir().unwrap();
+        let messages_dir = dir.path().join("messages");
+        let mut message = MessageRecord::new(
+            WorkspaceId::from_project_root(dir.path()),
+            &agent(),
+            "settled".to_owned(),
+            DeliveryGate::Done,
+        );
+        message.status = MessageStatus::Delivered;
+        append_history_many(&messages_dir, std::slice::from_ref(&message)).unwrap();
+        let mut newer = message.clone();
+        newer.message_id = fixed_message_id(1);
+        let mut value = serde_json::to_value(&newer).unwrap();
+        value["status"] = serde_json::json!("future_status");
+        let path = messages_dir.join(bucket_file_name(message.updated_at, TRANSCRIPT_FILE_DAYS));
+        let mut bytes = fs::read(&path).unwrap();
+        serde_json::to_writer(&mut bytes, &value).unwrap();
+        bytes.push(b'\n');
+        fs::write(&path, bytes).unwrap();
+
+        let err = list_history(&messages_dir).unwrap_err();
+
+        assert!(
+            matches!(&err, MessageStoreErr::Json { path: failed, .. } if *failed == path),
+            "{err}"
+        );
+        assert!(err.to_string().contains("future_status"), "{err}");
+    }
+
     #[test]
     fn torn_trailing_line_is_ignored() {
         let dir = tempdir().unwrap();
