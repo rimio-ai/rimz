@@ -491,21 +491,22 @@ pub fn sweep(workspace: &ResolvedWorkspace, store: &Store, mux: Option<MuxName>)
         };
         if heads_seen.insert(head.message_id.to_string()) {
             let snapshot = snapshot.expect("queued delivery requires a resolution snapshot");
-            let report =
-                if older_ready_blocker(live.iter(), head, |message| message.is_deliverable(now))
-                    .is_some()
-                {
-                    DeliveryReport::Stopped(None)
-                } else {
-                    attempt_delivery(
-                        workspace,
-                        store,
-                        &head.message_id,
-                        DeliveryPolicy::Boundary,
-                        &pending,
-                        snapshot,
-                    )?
-                };
+            let report = if older_ready_blocker(live.iter(), head, now, |message| {
+                message.is_deliverable(now)
+            })
+            .is_some()
+            {
+                DeliveryReport::Stopped(None)
+            } else {
+                attempt_delivery(
+                    workspace,
+                    store,
+                    &head.message_id,
+                    DeliveryPolicy::Boundary,
+                    &pending,
+                    snapshot,
+                )?
+            };
             if let DeliveryReport::Stopped(verdict) = report {
                 let ended_receiver = match &verdict {
                     Some(DeliveryVerdict::ReceiverEnded) => snapshot
@@ -856,7 +857,8 @@ fn evaluate_delivery<'a>(
     let when_ready = when.iter().all(|condition| condition.check.met);
     let fifo =
         if message.status == MessageStatus::Queued && schedule.ready && after_ready && when_ready {
-            match older_ready_blocker(pending, message, |pending| pending.is_deliverable(now)) {
+            match older_ready_blocker(pending, message, now, |pending| pending.is_deliverable(now))
+            {
                 Some(head) => FifoCheck {
                     head: false,
                     blocker: Some(head.message_id.clone()),

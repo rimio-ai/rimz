@@ -742,7 +742,8 @@ path = "crates/rimz/src/store"
 # Rotation commits the projected ordinal high-water mark (+1).
 # Thin park exports its raw LaunchTail with from_cursor and poll, the streaming visitor, and the generation header (+4 past the one free slot).
 # Automatic-command expiry shares three predicates, two constants, and its validity formatter input (+6).
-surface-budget = 383
+# Queue consumers and harness wake readers share the sent-hold deadline (+1).
+surface-budget = 384
 
 [[module]]
 path = "crates/rimz/src/theme"

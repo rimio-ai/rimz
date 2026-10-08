@@ -880,7 +880,19 @@ impl Store {
                         && message.body == body
                         && message.same_card(card)
                 });
-                let Some(oldest) = pool.clone().next() else {
+                let Some(oldest) = pool
+                    .clone()
+                    .find(|first| {
+                        body != MessageBody::Prompt
+                            || pool.clone().any(|message| {
+                                !message.sent_hold_expired(now)
+                                    && (message.message_id == first.message_id
+                                        || (first.batch_id.is_some()
+                                            && message.batch_id == first.batch_id))
+                            })
+                    })
+                    .or_else(|| pool.clone().next())
+                else {
                     return BTreeSet::new();
                 };
                 pool.filter(|message| {

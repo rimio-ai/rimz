@@ -462,6 +462,110 @@ fn confirm_delivered_for_card_selects_oldest_matching_batch() {
 }
 
 #[test]
+fn textless_ack_prefers_an_unexpired_sent_prompt_batch() {
+    for (prompt, deferred_member) in [
+        (None, None),
+        (Some(" \n"), None),
+        (None, Some(1)),
+        (None, Some(2)),
+    ] {
+        let q = Queue::new();
+        let now = Timestamp::now();
+        let expired = now - MessageBody::Prompt.delivery_window() - Duration::from_secs(60);
+        for id in [1, 2] {
+            q.queue_with(id, |message| {
+                message.status = MessageStatus::Sent;
+                message.batch_id = Some(message_id(1));
+                message.last_sent_at = Some(expired);
+                message.updated_at = expired;
+                message.retry_after =
+                    (deferred_member == Some(id)).then_some(now + Duration::from_secs(60));
+            });
+        }
+        let oldest = q.by_id(&message_id(1));
+        for id in [3, 4] {
+            q.queue_with(id, |message| {
+                message.status = MessageStatus::Sent;
+                message.batch_id = Some(message_id(3));
+                message.last_sent_at = Some(now);
+            });
+        }
+
+        let delivered = q
+            .confirm_delivered_for_card(
+                &oldest.kind,
+                &oldest.agent_id,
+                None,
+                DeliveryAck::TurnStarted { prompt },
+                "session",
+            )
+            .unwrap();
+        let (selected, remaining) = if deferred_member.is_some() {
+            ([1, 2], [3, 4])
+        } else {
+            ([3, 4], [1, 2])
+        };
+        assert_eq!(
+            delivered
+                .iter()
+                .map(|message| message.message_id.clone())
+                .collect::<Vec<_>>(),
+            selected.map(message_id)
+        );
+        assert!(
+            delivered
+                .iter()
+                .all(|message| message.status == MessageStatus::Delivered)
+        );
+        assert_eq!(
+            q.live()
+                .iter()
+                .map(|message| message.message_id.clone())
+                .collect::<Vec<_>>(),
+            remaining.map(message_id)
+        );
+        assert!(
+            q.live()
+                .iter()
+                .all(|message| message.status == MessageStatus::Sent)
+        );
+    }
+}
+
+#[test]
+fn textless_ack_keeps_the_oldest_when_all_sent_prompts_expired() {
+    for count in [1, 2] {
+        let q = Queue::new();
+        let expired =
+            Timestamp::now() - MessageBody::Prompt.delivery_window() - Duration::from_secs(60);
+        for id in 1..=count {
+            q.queue_with(id, |message| {
+                message.status = MessageStatus::Sent;
+                message.last_sent_at = Some(expired);
+                message.updated_at = expired;
+            });
+        }
+        let oldest = q.by_id(&message_id(1));
+        let delivered = q
+            .confirm_delivered_for_card(
+                &oldest.kind,
+                &oldest.agent_id,
+                None,
+                DeliveryAck::TurnStarted { prompt: None },
+                "session",
+            )
+            .unwrap();
+        assert_eq!(delivered.len(), 1);
+        assert_eq!(delivered[0].message_id, oldest.message_id);
+        assert_eq!(delivered[0].status, MessageStatus::Delivered);
+        assert_eq!(q.live().len(), (count - 1) as usize);
+        if count == 2 {
+            assert_eq!(q.by_id(&message_id(2)).status, MessageStatus::Sent);
+        }
+    }
+}
+
+#[test]
 fn correlated_ack_confirms_matching_prompt_instead_of_oldest_sent() {
     let q = Queue::new();
     let oldest = q.sent_with(1, |message| message.text = "human typed this".to_owned());

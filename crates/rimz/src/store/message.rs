@@ -787,6 +787,14 @@ impl MessageRecord {
             .then_some(self.last_sent_at.unwrap_or(self.updated_at) + self.body.delivery_window())
     }
 
+    /// Read-side mirror of the reconciler's deadline, including a compaction deferral.
+    pub(crate) fn sent_hold_expired(&self, now: Timestamp) -> bool {
+        self.status == MessageStatus::Sent
+            && self
+                .wake_deadline(now)
+                .is_some_and(|deadline| now >= deadline)
+    }
+
     /// Whether a prior unconfirmed pane write can still be acknowledged.
     ///
     /// Submitted text proves consumption regardless of elapsed time. A queued
@@ -886,9 +894,11 @@ pub fn queue_head<'a>(
         .min_by(|a, b| a.message_id.as_str().cmp(b.message_id.as_str()))
 }
 
-fn holds_boundary(message: &MessageRecord) -> bool {
+fn holds_boundary(message: &MessageRecord, now: Timestamp) -> bool {
     message.status.is_open()
-        || (message.status == MessageStatus::Sent && message.body == MessageBody::Prompt)
+        || (message.status == MessageStatus::Sent
+            && message.body == MessageBody::Prompt
+            && !message.sent_hold_expired(now))
 }
 
 pub(crate) fn fresh_boundary_blocker<'a>(
@@ -911,7 +921,7 @@ pub(crate) fn in_flight_claim<'a>(
     now: Timestamp,
 ) -> Option<&'a MessageRecord> {
     pending.into_iter().find(|message| {
-        holds_boundary(message)
+        holds_boundary(message, now)
             && message.gate != DeliveryGate::Resume
             && message.same_card(AgentCardRef::new(kind, agent_id, agent_name))
             && (message.status == MessageStatus::Sent
@@ -926,12 +936,13 @@ pub(crate) fn in_flight_claim<'a>(
 pub(crate) fn older_ready_blocker<'a>(
     pending: impl IntoIterator<Item = &'a MessageRecord>,
     candidate: &MessageRecord,
+    now: Timestamp,
     ready: impl Fn(&MessageRecord) -> bool,
 ) -> Option<&'a MessageRecord> {
     pending
         .into_iter()
         .filter(|message| {
-            holds_boundary(message)
+            holds_boundary(message, now)
                 && message.same_card(candidate.card_ref())
                 && same_delivery_lane(candidate.gate, message.gate)
                 && message.message_id.as_str() < candidate.message_id.as_str()
@@ -963,7 +974,7 @@ pub(crate) fn delivery_batch_indices(
         || !head.is_deliverable(now)
         || !claim_expired(head.last_attempt_at, now)
         || live[..head_index].iter().any(|message| {
-            holds_boundary(message)
+            holds_boundary(message, now)
                 && message.same_card(head.card_ref())
                 && same_delivery_lane(head.gate, message.gate)
                 && (message.status == MessageStatus::Sent || message.is_deliverable(now))
