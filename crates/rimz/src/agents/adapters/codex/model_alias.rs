@@ -17,6 +17,7 @@ use crate::utils::time::unix_now_ms;
 const CACHE_VERSION: u32 = 1;
 const FRESH_MS: u64 = 60 * 60 * 1000;
 const RETRY_MS: u64 = 60 * 1000;
+const STALE_WARN_MS: u64 = 24 * 60 * 60 * 1000;
 const CATALOG_BUDGET: std::time::Duration = std::time::Duration::from_secs(2);
 
 #[derive(Serialize, Deserialize)]
@@ -25,6 +26,8 @@ struct CatalogCache {
     fetched_at: u64,
     #[serde(default)]
     failed_at: Option<u64>,
+    #[serde(default)]
+    failed_error: Option<String>,
     catalog: Vec<ModelCatalogEntry>,
     targets: BTreeMap<String, String>,
 }
@@ -164,6 +167,7 @@ pub(super) fn resolve(
     let mut cache = CatalogCache::read(&path);
     let now = unix_now_ms();
     let mut reason = String::new();
+    let mut refresh_failure = None;
     let mut cache_updated = false;
     if let Err(err) = &lock {
         reason = format!("{err}; check cache directory permissions");
@@ -173,7 +177,10 @@ pub(super) fn resolve(
         .and_then(|failed_at| now.checked_sub(failed_at))
         .is_some_and(|age| age < RETRY_MS)
     {
-        reason = "recent catalog fetch failed; retry after one minute".into();
+        reason = cache
+            .as_ref()
+            .and_then(|cache| cache.failed_error.clone())
+            .unwrap_or_else(|| "recent catalog fetch failed".into());
     } else if !cache.as_ref().is_some_and(|cache| cache.fresh(now)) {
         match source
             .unwrap_or(&mut AppServerSource)
@@ -194,24 +201,28 @@ pub(super) fn resolve(
                         version: CACHE_VERSION,
                         fetched_at: now,
                         failed_at: None,
+                        failed_error: None,
                         catalog,
                         targets: cache.map_or_else(BTreeMap::new, |cache| cache.targets),
                     });
                     cache_updated = true;
                 }
             }
-            Err(err) => {
-                reason = err.to_string();
-                let cache = cache.get_or_insert_with(|| CatalogCache {
-                    version: CACHE_VERSION,
-                    fetched_at: 0,
-                    failed_at: None,
-                    catalog: Vec::new(),
-                    targets: BTreeMap::new(),
-                });
-                cache.failed_at = Some(now);
-                cache_updated = true;
-            }
+            Err(err) => reason = err.to_string(),
+        }
+        if !reason.is_empty() {
+            refresh_failure = Some(reason.clone());
+            let cache = cache.get_or_insert_with(|| CatalogCache {
+                version: CACHE_VERSION,
+                fetched_at: 0,
+                failed_at: None,
+                failed_error: None,
+                catalog: Vec::new(),
+                targets: BTreeMap::new(),
+            });
+            cache.failed_at = Some(unix_now_ms());
+            cache.failed_error = Some(reason.clone());
+            cache_updated = true;
         }
     }
 
@@ -223,7 +234,7 @@ pub(super) fn resolve(
             reason = format!("catalog has no {} family", request.alias);
         }
         let mut warnings = vec![format!(
-            "codex alias {} is using baked fallback {baked}: {reason}; check that codex runs and is logged in",
+            "codex alias {} is using baked fallback {baked}: {reason}",
             request.alias
         )];
         if cache_updated
@@ -239,13 +250,29 @@ pub(super) fn resolve(
             rung: ModelAliasRung::Baked,
             warnings,
             movement: None,
+            refresh_failure,
         });
     };
     let id = id.to_owned();
     let rung = if reason.is_empty() && cache.as_ref().is_some_and(|cache| cache.fresh(now)) {
         ModelAliasRung::FreshCatalog
     } else {
-        warnings.push(format!("codex alias {} is using cached catalog: {reason}; check that codex runs and is logged in", request.alias));
+        if lock.is_err() {
+            warnings.push(format!(
+                "codex alias {} cannot refresh catalog: {reason}",
+                request.alias
+            ));
+        } else if let Some(cache) = &cache
+            && now.saturating_sub(cache.fetched_at) >= STALE_WARN_MS
+        {
+            let seconds =
+                i64::try_from(now.saturating_sub(cache.fetched_at) / 1000).unwrap_or(i64::MAX);
+            let age = crate::utils::time::format_duration_coarse(seconds);
+            warnings.push(format!(
+                "codex alias {} is using a catalog from {age} ago: {reason}",
+                request.alias
+            ));
+        }
         ModelAliasRung::CachedCatalog
     };
     let mut movement = None;
@@ -284,6 +311,7 @@ pub(super) fn resolve(
         rung,
         warnings,
         movement,
+        refresh_failure,
     })
 }
 

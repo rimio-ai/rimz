@@ -163,12 +163,13 @@ impl LaunchPlan {
 }
 
 /// What the exec wrapper's launch decisions produced. The account-link and
-/// model warnings and the alias move survive a later failure, since the
-/// wrapper reports them either way.
+/// model warnings, the refresh failure, and the alias move survive a later
+/// failure, since the wrapper reports them either way.
 pub struct ExecPreparation {
     /// What `link_account` reported, printed ahead of the model warnings.
     pub link_warnings: Vec<String>,
     pub model_warnings: Vec<String>,
+    pub model_refresh_failure: Option<ModelRefreshFailure>,
     /// The alias move, with the login whose catalog moved.
     pub model_move: Option<(
         crate::agents::capabilities::ModelAliasMove,
@@ -177,6 +178,22 @@ pub struct ExecPreparation {
     /// The compiled plan and the isolation it resolved.
     pub outcome: Result<(LaunchPlan, Isolation), LaunchPlanErr>,
 }
+
+/// A failed model-catalog refresh, carried to the exec wrapper for its
+/// diagnostic record.
+#[derive(Debug)]
+pub struct ModelRefreshFailure {
+    pub login: crate::ids::LoginKey,
+    pub alias: String,
+    pub rung: crate::agents::capabilities::ModelAliasRung,
+    pub reason: String,
+}
+
+type ModelResolution = (
+    Vec<String>,
+    Option<crate::agents::capabilities::ModelAliasMove>,
+    Option<ModelRefreshFailure>,
+);
 
 /// Decide what the exec wrapper launches, from its decoded envelope to the
 /// compiled plan. Writes and prints nothing itself; `room_agents` reads the
@@ -201,6 +218,7 @@ pub fn prepare_exec(
     let mut link_warnings = Vec::new();
     let mut model_warnings = Vec::new();
     let mut model_move = None;
+    let mut model_refresh_failure = None;
     let prepare = || {
         let request = envelope.request();
         if let Some(detail) = definition_failure(request, machine, effective) {
@@ -242,7 +260,7 @@ pub fn prepare_exec(
                 })
             }
         };
-        let (warnings, movement) = resolve_model(
+        let (warnings, movement, refresh_failure) = resolve_model(
             &mut request,
             machine,
             &runtime,
@@ -253,6 +271,7 @@ pub fn prepare_exec(
         )?;
         model_warnings = warnings;
         model_move = movement.map(|movement| (movement, login.key()));
+        model_refresh_failure = refresh_failure;
         // A child resolves its temp unit from its parent's row; a failed read
         // falls back to its own unit, and the plan's warning carries the error.
         let agents = if request.identity.params.parent_agent_id.is_some() {
@@ -281,6 +300,7 @@ pub fn prepare_exec(
         outcome: prepare(),
         link_warnings,
         model_warnings,
+        model_refresh_failure,
         model_move,
     }
 }
@@ -315,16 +335,11 @@ pub(super) fn resolve_model(
     recorded_session: Option<&crate::agents::AgentState>,
     source: Option<&mut dyn crate::agents::capabilities::ModelCatalogSource>,
     ambient_env: &BTreeMap<String, String>,
-) -> Result<
-    (
-        Vec<String>,
-        Option<crate::agents::capabilities::ModelAliasMove>,
-    ),
-    LaunchPlanErr,
-> {
+) -> Result<ModelResolution, LaunchPlanErr> {
     use crate::agents::{LaunchPreset, PresetField, capabilities::ModelAliasRequest};
     let mut warnings = Vec::new();
     let mut movement = None;
+    let mut refresh_failure = None;
     let recorded_model = recorded_session.and_then(|agent| agent.model.as_deref());
     request.identity.params.record = Some(crate::agents::LaunchRecord::replay_or_new(
         request.identity.params.record.as_deref(),
@@ -332,14 +347,14 @@ pub(super) fn resolve_model(
         request.identity.params.effort.as_deref(),
     ));
     let Some(alias) = request.identity.params.model.as_deref() else {
-        return Ok((warnings, movement));
+        return Ok((warnings, movement, refresh_failure));
     };
     let adapter = crate::agents::find_definition(request.kind.as_str())
         .ok_or_else(|| LaunchPlanErr::UnknownAgent(request.kind.clone()))?;
     let pin = machine.model_alias(&request.kind, alias);
     let is_alias = pin.is_some() || adapter.is_model_alias(alias);
     if !is_alias {
-        return Ok((warnings, movement));
+        return Ok((warnings, movement, refresh_failure));
     }
     let replay = if matches!(request.action, launch::ExecAction::Launch { .. })
         || request.identity.resume_model_override
@@ -383,9 +398,15 @@ pub(super) fn resolve_model(
     ) {
         warnings.extend(resolved.warnings);
         movement = resolved.movement;
+        refresh_failure = resolved.refresh_failure.map(|reason| ModelRefreshFailure {
+            login: login.key(),
+            alias: alias.into(),
+            rung: resolved.rung,
+            reason,
+        });
         resolved.id
     } else {
-        return Ok((warnings, movement));
+        return Ok((warnings, movement, refresh_failure));
     };
     let args = adapter.spec().render_preset(&LaunchPreset {
         model: Some(id.clone()),
@@ -410,7 +431,7 @@ pub(super) fn resolve_model(
         }
     }
     request.identity.params.model = Some(id);
-    Ok((warnings, movement))
+    Ok((warnings, movement, refresh_failure))
 }
 
 pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr> {

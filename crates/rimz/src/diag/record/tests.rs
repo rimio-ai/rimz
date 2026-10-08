@@ -462,7 +462,15 @@ fn agent_card_without_process_has_stable_diagnostic_identity() {
 
 #[test]
 fn severity_table_pins_conditional_and_regression_categories() {
+    let catalog_failed = |rung| DiagEvent::ModelCatalogRefreshFailed {
+        agent_kind: AgentKind::new_unchecked("codex"),
+        login: crate::agents::ProviderLogin::default_for(AgentKind::new_unchecked("codex")).key(),
+        alias: "sol".into(),
+        rung,
+        reason: "broker: offline".into(),
+    };
     let info = [
+        catalog_failed(ModelCatalogFallback::CachedCatalog),
         DiagEvent::SidebarWidthIntent {
             trigger: SidebarWidthIntentTrigger::Narrower,
             own_cols: 40,
@@ -514,6 +522,7 @@ fn severity_table_pins_conditional_and_regression_categories() {
         },
     ];
     let warn = [
+        catalog_failed(ModelCatalogFallback::Baked),
         health_alert(10, None),
         link_alert(LinkTier::Degraded, Some(230), 4, 10, None),
         tick_budget_breach(TickLoop::Fetch, 10, None),
@@ -566,6 +575,38 @@ fn severity_table_pins_conditional_and_regression_categories() {
             assert_eq!(event.severity(), severity, "{event:?}");
         }
     }
+}
+
+#[test]
+fn model_catalog_failure_keeps_wire_evidence_and_partitions_by_login() {
+    let failure = |login, alias: &str, rung| DiagEvent::ModelCatalogRefreshFailed {
+        agent_kind: AgentKind::new_unchecked("codex"),
+        login,
+        alias: alias.into(),
+        rung,
+        reason: "broker: offline".into(),
+    };
+    let login = crate::agents::ProviderLogin::default_for(AgentKind::new_unchecked("codex")).key();
+    let cached = failure(login.clone(), "sol", ModelCatalogFallback::CachedCatalog);
+    let baked = failure(login.clone(), "astra", ModelCatalogFallback::Baked);
+    assert_eq!(
+        cached.identity_key(),
+        "model_catalog_refresh_failed:codex:codex@default"
+    );
+    assert_eq!(cached.identity_key(), baked.identity_key());
+    let mut other = login;
+    other.name = "work".parse().unwrap();
+    assert_ne!(
+        cached.identity_key(),
+        failure(other, "sol", ModelCatalogFallback::CachedCatalog).identity_key()
+    );
+    let wire = serde_json::to_value(&cached).unwrap();
+    assert_eq!(wire["kind"], "model_catalog_refresh_failed");
+    assert_eq!(wire["rung"], "cached_catalog");
+    assert_eq!(wire["reason"], "broker: offline");
+    assert_eq!(serde_json::from_value::<DiagEvent>(wire).unwrap(), cached);
+    assert!(cached.summary().contains("sol"));
+    assert!(cached.summary().contains("broker: offline"));
 }
 
 #[test]

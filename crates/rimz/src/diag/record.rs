@@ -8,7 +8,8 @@ use std::borrow::Cow;
 use serde::{Deserialize, Serialize};
 
 use crate::ids::{
-    AgentKind, AgentSessionId, LinkTier, MessageId, PaneId, SidebarInstanceId, ViewId, WorkspaceId,
+    AgentKind, AgentSessionId, LinkTier, LoginKey, MessageId, PaneId, SidebarInstanceId, ViewId,
+    WorkspaceId,
 };
 
 const DIAG_SCHEMA_VERSION: &str = "rimz.diag.v1";
@@ -216,6 +217,13 @@ impl RendererExitCause {
             Self::DegradedGaveUp => "degraded_gave_up",
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelCatalogFallback {
+    CachedCatalog,
+    Baked,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -533,6 +541,13 @@ pub enum DiagEvent {
         rows: u16,
         cols: u16,
     },
+    ModelCatalogRefreshFailed {
+        agent_kind: AgentKind,
+        login: LoginKey,
+        alias: String,
+        rung: ModelCatalogFallback,
+        reason: String,
+    },
     ProviderStartupExit {
         agent_kind: String,
         agent_name: Option<String>,
@@ -586,6 +601,10 @@ pub enum DiagEvent {
 impl DiagEvent {
     pub fn severity(&self) -> DiagSeverity {
         match self {
+            Self::ModelCatalogRefreshFailed { rung, .. } => match rung {
+                ModelCatalogFallback::CachedCatalog => DiagSeverity::Info,
+                ModelCatalogFallback::Baked => DiagSeverity::Warn,
+            },
             Self::FrameRejected { .. }
             | Self::PaneCountDrop { .. }
             | Self::PaneCarryForward { .. }
@@ -679,6 +698,7 @@ impl DiagEvent {
 
     pub(super) fn kind_name(&self) -> &'static str {
         match self {
+            Self::ModelCatalogRefreshFailed { .. } => "model_catalog_refresh_failed",
             Self::FrameRejected { .. } => "frame_rejected",
             Self::ResolutionFallback { .. } => "resolution_fallback",
             Self::FrameShrinkVerified { .. } => "frame_shrink_verified",
@@ -735,6 +755,9 @@ impl DiagEvent {
 
     pub fn identity_key(&self) -> String {
         match self {
+            Self::ModelCatalogRefreshFailed {
+                agent_kind, login, ..
+            } => format!("{}:{agent_kind}:{login}", self.kind_name()),
             Self::FrameRejected { reason, .. } => format!("{}:{reason:?}", self.kind_name()),
             Self::PaneCountDrop { removed, added, .. } => {
                 format!("{}:{removed:?}:{added:?}", self.kind_name())
@@ -1038,6 +1061,19 @@ impl DiagEvent {
     /// A one-line human description of what this event records.
     pub fn summary(&self) -> String {
         match self {
+            Self::ModelCatalogRefreshFailed {
+                login,
+                alias,
+                rung,
+                reason,
+                ..
+            } => {
+                let fallback = match rung {
+                    ModelCatalogFallback::CachedCatalog => "cached catalog",
+                    ModelCatalogFallback::Baked => "baked fallback",
+                };
+                format!("{login} alias {alias} catalog refresh failed; using {fallback}: {reason}")
+            }
             Self::FrameRejected {
                 reason,
                 prior_pane_count,

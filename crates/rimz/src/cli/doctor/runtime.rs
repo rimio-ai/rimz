@@ -1130,6 +1130,12 @@ fn classify_diagnostic(
 ) -> (model::DoctorState, model::DoctorImpact) {
     use rimz::diag::record::{DiagEvent, HostedCarryDropReason, RendererExitCause};
     let state = match event {
+        DiagEvent::ModelCatalogRefreshFailed { rung, .. } => match rung {
+            rimz::diag::record::ModelCatalogFallback::CachedCatalog => {
+                model::DoctorState::Contained
+            }
+            rimz::diag::record::ModelCatalogFallback::Baked => model::DoctorState::Investigate,
+        },
         DiagEvent::FrameRejected { .. }
         | DiagEvent::PaneCarryForward { .. }
         | DiagEvent::GateHold { .. }

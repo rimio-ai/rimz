@@ -670,12 +670,32 @@ fn diagnostic_classification_requires_complete_positive_evidence() {
 
 #[test]
 fn diagnostic_classification_covers_retained_and_reason_sensitive_events() {
+    let catalog_failed = |rung| DiagEvent::ModelCatalogRefreshFailed {
+        agent_kind: rimz::ids::AgentKind::new_unchecked("codex"),
+        login: rimz::agents::ProviderLogin::default_for(rimz::ids::AgentKind::new_unchecked(
+            "codex",
+        ))
+        .key(),
+        alias: "sol".into(),
+        rung,
+        reason: "offline".into(),
+    };
     let hosted = |reason| DiagEvent::HostedCarryDropped {
         pane_id: rimz::PaneId::from_parts(rimz::MuxName::Zellij, "terminal_5"),
         agent_kind: rimz::ids::AgentKind::new_unchecked("codex"),
         reason,
     };
     let cases = [
+        (
+            catalog_failed(rimz::diag::record::ModelCatalogFallback::CachedCatalog),
+            model::DoctorState::Contained,
+            model::DoctorImpact::Info,
+        ),
+        (
+            catalog_failed(rimz::diag::record::ModelCatalogFallback::Baked),
+            model::DoctorState::Investigate,
+            model::DoctorImpact::Warn,
+        ),
         (
             DiagEvent::FetchFoldStats {
                 interval_ms: 30_000,

@@ -183,6 +183,34 @@ fn launch_and_supervise(
             Ok(shared.iter().flat_map(|shared| shared.warnings()).collect())
         },
     );
+    let diag = match rimz::StatePaths::for_project_root(&workspace.project_root) {
+        Ok(state) => rimz::diag::DiagSink::under(
+            state.root,
+            workspace.workspace_id.clone(),
+            workspace.session_name.clone(),
+            None,
+        ),
+        Err(error) => {
+            tracing::debug!(%error, "diagnostic sink unavailable");
+            rimz::diag::DiagSink::disabled()
+        }
+    };
+    if let Some(failure) = prepared.model_refresh_failure {
+        diag.emit(rimz::diag::record::DiagEvent::ModelCatalogRefreshFailed {
+            agent_kind: kind.clone(),
+            login: failure.login,
+            alias: failure.alias,
+            rung: match failure.rung {
+                rimz::agents::capabilities::ModelAliasRung::Baked => {
+                    rimz::diag::record::ModelCatalogFallback::Baked
+                }
+                // A fresh rung carries no refresh failure, so every other
+                // failed refresh resolved on the cached catalog.
+                _ => rimz::diag::record::ModelCatalogFallback::CachedCatalog,
+            },
+            reason: failure.reason,
+        });
+    }
     for warning in prepared.link_warnings {
         warn(warning);
     }
@@ -261,18 +289,6 @@ fn launch_and_supervise(
     ) {
         tracing::debug!(%error, "language-server lease registration failed");
     }
-    let diag = match rimz::StatePaths::for_project_root(&workspace.project_root) {
-        Ok(state) => rimz::diag::DiagSink::under(
-            state.root,
-            workspace.workspace_id.clone(),
-            workspace.session_name.clone(),
-            None,
-        ),
-        Err(error) => {
-            tracing::debug!(%error, "diagnostic sink unavailable");
-            rimz::diag::DiagSink::disabled()
-        }
-    };
     repair_own_launch_winsize(workspace, &diag);
     if let rimz::harness::launch::AgentProcessStage::LoginShellReentry { argv, .. } = &plan.stage {
         let (program, rest) = argv
