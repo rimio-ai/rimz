@@ -22,6 +22,13 @@ pub(crate) enum KillScope {
 /// writer the kill did not reach cannot hold the return past the bound.
 const DRAIN_READS: usize = 8;
 
+/// The reap wait after both outputs close starts here and doubles to
+/// [`REAP_STEP_MAX`]. An exiting child closes its pipes just before it becomes
+/// reapable, so the first `try_wait` usually misses and a fixed 1 ms step
+/// would land on most successful runs.
+const REAP_STEP_MIN: Duration = Duration::from_micros(40);
+const REAP_STEP_MAX: Duration = Duration::from_millis(1);
+
 #[derive(Debug)]
 pub(crate) struct BoundedOutput {
     pub(crate) status: ExitStatus,
@@ -67,6 +74,7 @@ pub(crate) fn pump_child(
     }
     let mut stdout_bytes = Vec::new();
     let mut stderr_bytes = Vec::new();
+    let mut reap_step = REAP_STEP_MIN;
     let (status, timed_out) = loop {
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
@@ -90,7 +98,8 @@ pub(crate) fn pump_child(
             if let Some(status) = child.try_wait()? {
                 break (status, false);
             }
-            std::thread::sleep(remaining.min(Duration::from_millis(1)));
+            std::thread::sleep(remaining.min(reap_step));
+            reap_step = (reap_step * 2).min(REAP_STEP_MAX);
             continue;
         }
         let ready = {
