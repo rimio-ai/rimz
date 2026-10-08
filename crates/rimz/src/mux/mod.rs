@@ -45,6 +45,15 @@ pub use width::{
 };
 pub use zellij::ZellijBackend;
 
+/// Ambient pane and session identity, not multiplexer endpoint configuration.
+pub(crate) const AMBIENT_MUX_ENV: [&str; 5] = [
+    "TMUX",
+    "TMUX_PANE",
+    "ZELLIJ",
+    "ZELLIJ_PANE_ID",
+    "ZELLIJ_SESSION_NAME",
+];
+
 use std::collections::BTreeMap;
 use std::io;
 use std::path::PathBuf;
