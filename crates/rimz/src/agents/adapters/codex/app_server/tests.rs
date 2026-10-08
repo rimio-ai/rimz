@@ -734,7 +734,10 @@ fn catalog_budget_exhausted_by_an_attempt_prevents_the_next_open() {
             Err::<CannedTransport, _>(AppServerErr::Closed)
         },
     );
-    assert!(matches!(result, Err(AppServerErr::Timeout)));
+    assert_eq!(
+        result.unwrap_err().to_string(),
+        "broker: codex app-server stream closed before responding"
+    );
     assert_eq!(opened, 1);
 }
 

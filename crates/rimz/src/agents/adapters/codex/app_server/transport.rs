@@ -7,7 +7,6 @@
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::io::{BufRead, BufReader, Write};
-use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -237,8 +236,13 @@ fn app_server_command(bin: &Path, login_env: &BTreeMap<String, String>) -> Comma
     command
 }
 
+/// Open the socket within `total`. A full listen backlog blocks a plain
+/// `UnixStream::connect` past any budget, and Linux bounds that wait by the send
+/// timeout set before connecting.
+#[cfg(target_os = "linux")]
 fn connect_stream(path: &Path, total: Duration) -> Result<UnixStream, AppServerErr> {
     use nix::sys::socket::{AddressFamily, SockFlag, SockType, UnixAddr, connect, socket};
+    use std::os::fd::AsRawFd;
 
     if total.is_zero() {
         return Err(AppServerErr::Timeout);
@@ -260,6 +264,14 @@ fn connect_stream(path: &Path, total: Duration) -> Result<UnixStream, AppServerE
         other => AppServerErr::Io(other.into()),
     })?;
     Ok(stream)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn connect_stream(path: &Path, total: Duration) -> Result<UnixStream, AppServerErr> {
+    if total.is_zero() {
+        return Err(AppServerErr::Timeout);
+    }
+    UnixStream::connect(path).map_err(AppServerErr::Io)
 }
 
 impl FramedTransport {

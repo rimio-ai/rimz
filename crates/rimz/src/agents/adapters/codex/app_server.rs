@@ -187,12 +187,14 @@ fn catalog_from_attempts<T: JsonRpcTransport>(
     deadline: Instant,
     mut open: impl FnMut(&ConnectAttempt, Duration) -> Result<T, AppServerErr>,
 ) -> Result<Vec<crate::agents::capabilities::ModelCatalogEntry>, AppServerErr> {
-    let mut last_error = AppServerErr::Timeout;
+    let mut last_error = None;
     for attempt in attempts {
-        let remaining = deadline
+        let Some(remaining) = deadline
             .checked_duration_since(Instant::now())
             .filter(|remaining| !remaining.is_zero())
-            .ok_or(AppServerErr::Timeout)?;
+        else {
+            break;
+        };
         let result = open(&attempt, remaining).and_then(|transport| {
             let mut client = CodexAppServer::new(transport);
             client.handshake()?;
@@ -201,18 +203,18 @@ fn catalog_from_attempts<T: JsonRpcTransport>(
         match result {
             Ok(catalog) => return Ok(catalog),
             Err(error) => {
-                last_error = AppServerErr::Attempt {
+                last_error = Some(AppServerErr::Attempt {
                     attempt: match attempt {
                         ConnectAttempt::Broker(_) => "broker",
                         ConnectAttempt::DaemonWs(_) => "daemon",
                         ConnectAttempt::Spawn => "cold spawn",
                     },
                     source: Box::new(error),
-                };
+                });
             }
         }
     }
-    Err(last_error)
+    Err(last_error.unwrap_or(AppServerErr::Timeout))
 }
 
 pub(crate) enum Transport {
