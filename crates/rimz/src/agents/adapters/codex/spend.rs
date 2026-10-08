@@ -198,7 +198,7 @@ pub(crate) fn resume_live_fold(
 /// applies `cache_read`, so an implicit rate folds the cached slice into the
 /// input field to price it at the input rate — the long-context threshold still
 /// sees the same total request size either way.
-fn codex_billed_split(price: Pricing, split: TokenSplit) -> TokenSplit {
+pub(super) fn codex_billed_split(price: Pricing, split: TokenSplit) -> TokenSplit {
     if price.cache_read_explicit {
         split
     } else {

@@ -620,6 +620,7 @@ mod tests {
                 exit_on_run_completion: false,
                 subagent: false,
                 loop_reminder: None,
+                headless: None,
                 identity: rimz::harness::launch::ExecIdentity {
                     resume_model_override: false,
                     name: Some("otter".to_owned()),

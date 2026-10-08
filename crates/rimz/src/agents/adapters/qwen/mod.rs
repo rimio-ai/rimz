@@ -130,6 +130,7 @@ static QWEN_DESCRIPTOR: AgentSpec = AgentSpec {
             system_prompt_file: Some(super::StaticPresetMatcher::EnvPathVar("QWEN_SYSTEM_MD")),
             ..super::PresetMatchers::EMPTY
         },
+        ..super::LaunchSpec::EMPTY
     },
 };
 

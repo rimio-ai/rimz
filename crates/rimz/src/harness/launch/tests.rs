@@ -96,6 +96,114 @@ fn provider_compiler_preserves_action_and_trailing_argument_order() {
     }
 }
 
+#[test]
+fn headless_claude_provider_compiler_preserves_profile_and_schema_argv() {
+    headless_provider_argv("claude");
+}
+
+#[test]
+fn headless_codex_provider_compiler_preserves_profile_and_schema_argv() {
+    headless_provider_argv("codex");
+}
+
+fn headless_provider_argv(kind: &str) {
+    let root = tempfile::tempdir().unwrap();
+    let mut request = ExecRequest::bare_launch(
+        AgentKind::new_unchecked(kind),
+        vec!["--model".into(), "small".into()],
+    );
+    if let ExecAction::Launch { prompt, extra_args } = &mut request.action {
+        *prompt = Some("Decide now.".into());
+        if kind == "claude" {
+            extra_args.extend(["--settings".into(), r#"{"theme":"dark"}"#.into()]);
+        } else {
+            extra_args.push("--no-daemon".into());
+        }
+    }
+    request.headless = Some(crate::agents::HeadlessRequest {
+        schema: crate::agents::CHECK_VERDICT_SCHEMA.into(),
+        schema_file: "/check/schema.json".into(),
+        verdict_file: "/check/verdict.json".into(),
+    });
+    let process = compile_agent_process_with_extra_env(
+        None,
+        root.path(),
+        &request,
+        root.path(),
+        &BTreeMap::new(),
+        &LaunchReminders::default(),
+    )
+    .unwrap();
+    let argv = process.provider_argv;
+    if kind == "claude" {
+        assert_eq!(argv.iter().filter(|arg| *arg == "--settings").count(), 1);
+        let settings =
+            crate::agents::PresetArgMatcher::Flag(vec!["--settings".into()]).occurrences(&argv);
+        let value: serde_json::Value = serde_json::from_str(&settings[0].value).unwrap();
+        assert_eq!(value["theme"], "dark");
+        assert_eq!(value["disableAllHooks"], true);
+        insta::assert_json_snapshot!(argv, @r###"
+            [
+              "claude",
+              "--model",
+              "small",
+              "--append-system-prompt",
+              "<system_reminder>\n\n</system_reminder>",
+              "--settings",
+              "{\"disableAllHooks\":true,\"theme\":\"dark\"}",
+              "-p",
+              "--output-format",
+              "json",
+              "--json-schema",
+              "{\"type\":\"object\",\"properties\":{\"pass\":{\"type\":\"boolean\"},\"reason\":{\"type\":\"string\"}},\"required\":[\"pass\",\"reason\"],\"additionalProperties\":false}",
+              "--",
+              "Decide now."
+            ]
+            "###);
+    } else {
+        insta::assert_json_snapshot!(argv, @r###"
+            [
+              "codex",
+              "--model",
+              "small",
+              "-c",
+              "developer_instructions=\"\"\"\n<system_reminder>\n\n</system_reminder>\"\"\"",
+              "-c",
+              "features.hooks=false",
+              "exec",
+              "--json",
+              "--output-schema",
+              "/check/schema.json",
+              "-o",
+              "/check/verdict.json",
+              "--",
+              "Decide now."
+            ]
+            "###);
+    }
+}
+
+#[test]
+fn headless_provider_compiler_refuses_unsupported_forms() {
+    let root = tempfile::tempdir().unwrap();
+    let mut request = ExecRequest::bare_launch(AgentKind::new_unchecked("amp"), Vec::new());
+    request.headless = Some(crate::agents::HeadlessRequest {
+        schema: crate::agents::CHECK_VERDICT_SCHEMA.into(),
+        schema_file: root.path().join("schema.json"),
+        verdict_file: root.path().join("verdict.json"),
+    });
+    let result = compile_agent_process_with_extra_env(
+        None,
+        root.path(),
+        &request,
+        root.path(),
+        &BTreeMap::new(),
+        &LaunchReminders::default(),
+    );
+    assert!(result.is_err(), "unsupported headless launch must refuse");
+    assert!(result.unwrap_err().to_string().contains("amp"));
+}
+
 fn request(kind: &str, action: ExecAction) -> ExecRequest {
     ExecRequest {
         isolation_default: None,
@@ -113,6 +221,7 @@ fn request(kind: &str, action: ExecAction) -> ExecRequest {
         exit_on_run_completion: false,
         subagent: false,
         loop_reminder: None,
+        headless: None,
         identity: ExecIdentity::default(),
     }
 }
@@ -1259,6 +1368,7 @@ fn exec_wire_round_trips_maximal_launch_identity() {
         exit_on_run_completion: true,
         subagent: true,
         loop_reminder: None,
+        headless: None,
         identity: ExecIdentity {
             resume_model_override: false,
             name: Some("swift-otter".to_owned()),

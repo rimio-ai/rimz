@@ -93,6 +93,7 @@ fn only_terminal_subagent_resumes_await_reopening() {
         exit_on_run_completion: false,
         subagent: true,
         loop_reminder: None,
+        headless: None,
         identity: Default::default(),
     };
     let mut record = RunRecord::new(
@@ -244,6 +245,7 @@ pub(super) fn minimal_exec_request(kind: &str, action: ExecAction) -> ExecReques
         exit_on_run_completion: false,
         subagent: false,
         loop_reminder: None,
+        headless: None,
         identity: ExecIdentity::default(),
     }
 }
@@ -284,6 +286,7 @@ fn bare_exec_args() -> ExecRequest {
         exit_on_run_completion: false,
         subagent: false,
         loop_reminder: None,
+        headless: None,
         identity: ExecIdentity {
             name: Some("lucid-atlas".to_owned()),
             launch_id: Some("launch_0123456789abcdef0123456789abcdef".to_owned()),
@@ -332,6 +335,7 @@ fn exec_argv_round_trips_identity_actions_and_bindings() {
         exit_on_run_completion: true,
         subagent: true,
         loop_reminder: None,
+        headless: None,
         identity: ExecIdentity {
             resume_model_override: false,
             name: Some("swift-otter".to_owned()),

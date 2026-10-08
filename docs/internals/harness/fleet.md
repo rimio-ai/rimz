@@ -230,7 +230,7 @@ What RimZ tells the agent about itself arrives as one `<system_reminder>` tag, w
 | Order | Content | Present when |
 | --- | --- | --- |
 | 1 | Team heading, identity, grouped pipeline and channel rule; otherwise a standalone model line | a non-child team member; otherwise the model line, when the launch knows its model and `model-reminder` is on |
-| 2 | Loop: what launched the agent, how long it lives, and who is watching ([loops.md](./loops.md#the-loop-reminder)) | a loop fire's prompt leader (resident) or each attempt of a loop's single run; never a restart, resume, or check launch |
+| 2 | Loop: what launched the agent, how long it lives, and who is watching ([loops.md](./loops.md#the-loop-reminder)); Check replaces the heading for a headless request | a loop fire's prompt leader (resident), each attempt of a loop's single run, or a headless checker carrying a reminder body; never a restart or resume |
 | 3 | Environment: cwd, optional `worktree` bullet naming its recorded base branch and primary checkout, shell-kind bullet, optional `lsp` bullet naming languages and `Skill(rimz-lsp)`, the `tmp` and `shared` bullets ([sandbox.md](../sandbox.md#launch-reminder)), then the team's memory-file listing unless the launch gets it [at prompt submit](#environment-at-prompt-submit) | every compiled launch, since it always carries the temp lines; team context always includes cwd, worktree follows cwd only in a linked checkout, shell requires env reminder |
 | 4 | Subagents: catalog, or the child's no-delegation body | a non-child request with a catalog; every child request |
 | 5 | Skills: invoke a skill whose description matches the work | the launch's profile `skills` list names any `rimz-*` skill |

@@ -113,6 +113,7 @@ fn resumed_child_reuses_newest_run_and_preserves_keep_and_lineage() {
                 exit_on_run_completion: !keep,
                 subagent: true,
                 loop_reminder: None,
+                headless: None,
                 identity: ExecIdentity {
                     resume_model_override: false,
                     name: Some("otter".to_owned()),

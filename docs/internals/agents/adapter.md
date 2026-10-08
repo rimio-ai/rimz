@@ -52,9 +52,15 @@ Each adapter is a private unit struct under [`adapters/<kind>/`](../../../crates
 | Policy | `capabilities` (below) |
 | Claims | `coverage`, `user_coverage`, `lifecycle_hooks` ([declared coverage](#declared-coverage)) |
 | Defaults | `default_model`, `default_context_window`, `sub_providers`, `thread_key` |
-| Launch | `launch`: program, fixed args, prompt style, resume and fork argv, per-mode permission args, max-turn flag, compact command, preset matchers |
+| Launch | `launch`: program, fixed args, prompt style, resume and fork argv, per-mode permission args, max-turn flag, compact command, preset matchers, optional headless form |
 
 The launch block is data so that one registry entry is enough to light up `<kind>-auto`, `<kind>-ask`, `<kind>-plan`, `<kind>-yolo`, `rimz agents restart`, and resolved profile rendering for a new agent. Permission argv, resume shape, and preset flag spellings need no code elsewhere.
+
+The optional `LaunchSpec.headless` form owns two operations: render schema-enforced argv and normalize captured output into a verdict, cost, tokens, and an error. The neutral request and result live in [`agents/headless.rs`](../../../crates/rimz/src/agents/headless.rs); only Claude and Codex declare forms. A marked launch for any other built-in or process plugin fails with `AgentProcessCompileErr::NoHeadless`, naming the kind. Unmarked launches keep their existing argv.
+
+Claude uses print mode with JSON output and the request's inline schema. Its form merges `disableAllHooks = true` into the existing settings object, including any pending private settings artifact, so exactly one `--settings` survives and profile permissions and skills remain intact. It reads only `structured_output` as the verdict, takes dollars from `total_cost_usd`, and includes fresh, cache-creation, and cache-read input in the token total. A provider error or invalid structured output yields no verdict.
+
+Codex removes `--no-daemon`, leaves profile flags before `exec`, and appends `-c features.hooks=false exec --json --output-schema <file> -o <file>`. The caller materializes the schema file and supplies a fresh verdict path. The form reads that verdict file rather than an agent-message event, takes usage from the last `turn.completed`, and prices it inside the adapter from the launch model and the supplied cached price book. Cached input follows the same explicit-versus-implicit cache-rate rule as historical Codex spending. Unknown or absent models leave cost unknown, not zero. Malformed events or verdicts yield an error and no verdict; valid usage remains available when the verdict file fails.
 
 `capabilities` is operational policy that no coverage claim can derive:
 

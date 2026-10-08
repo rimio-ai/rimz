@@ -840,6 +840,7 @@ fn subagent_run_closes_its_pane_after_terminal_completion() {
             exit_on_run_completion: true,
             subagent: true,
             loop_reminder: None,
+            headless: None,
             identity: rimz::harness::launch::ExecIdentity {
                 resume_model_override: false,
                 name: Some("child".to_owned()),

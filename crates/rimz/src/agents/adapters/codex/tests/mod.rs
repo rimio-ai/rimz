@@ -20,6 +20,113 @@ mod project_trust;
 mod transcript;
 
 #[test]
+fn headless_result_reads_verdict_file_and_prices_last_completed_turn() {
+    let root = tempfile::tempdir().unwrap();
+    let request = crate::agents::HeadlessRequest {
+        schema: crate::agents::CHECK_VERDICT_SCHEMA.into(),
+        schema_file: root.path().join("schema.json"),
+        verdict_file: root.path().join("verdict.json"),
+    };
+    std::fs::write(
+        &request.verdict_file,
+        r#"{"pass":true,"reason":"Work remains."}"#,
+    )
+    .unwrap();
+    let prices = crate::agents::pricing::PriceBook::from_litellm_json(
+        r#"{"check-model":{"input_cost_per_token":0.001,"output_cost_per_token":0.01,"cache_read_input_token_cost":0.0001}}"#,
+    );
+    let stdout = br#"{"type":"thread.started","thread_id":"thread"}
+{"type":"turn.completed","usage":{"input_tokens":1,"cached_input_tokens":0,"output_tokens":1}}
+{"type":"item.completed","item":{"type":"agent_message","text":"not the verdict"}}
+{"type":"turn.completed","usage":{"input_tokens":100,"cached_input_tokens":40,"output_tokens":5}}
+"#;
+    let result = CODEX_DESCRIPTOR.launch.headless.unwrap().read_result(
+        stdout,
+        b"",
+        &request,
+        Some("check-model"),
+        &prices,
+    );
+    assert_eq!(
+        result.verdict,
+        Some(crate::agents::HeadlessVerdict {
+            pass: true,
+            reason: "Work remains.".into()
+        })
+    );
+    assert_eq!(result.input_tokens, Some(100));
+    assert_eq!(result.output_tokens, Some(5));
+    assert!((result.cost_usd.unwrap() - 0.114).abs() < 1e-12);
+    assert_eq!(result.error, None);
+    let noisy_stdout = [
+        b"shell startup message\n".as_slice(),
+        stdout,
+        b"shell diagnostic\n\n",
+    ]
+    .concat();
+    let noisy = CODEX_DESCRIPTOR.launch.headless.unwrap().read_result(
+        &noisy_stdout,
+        b"",
+        &request,
+        Some("check-model"),
+        &prices,
+    );
+    assert_eq!(
+        noisy, result,
+        "startup output must not hide the verdict or usage"
+    );
+    let unpriced = CODEX_DESCRIPTOR.launch.headless.unwrap().read_result(
+        stdout,
+        b"",
+        &request,
+        Some("unknown-check-model"),
+        &prices,
+    );
+    assert_eq!(unpriced.cost_usd, None);
+    assert_eq!(unpriced.verdict, result.verdict);
+    assert_eq!(unpriced.input_tokens, Some(100));
+    let prices = crate::agents::pricing::PriceBook::from_litellm_json(
+        r#"{"check-model":{"input_cost_per_token":0.001,"output_cost_per_token":0.01}}"#,
+    );
+    let implicit = CODEX_DESCRIPTOR.launch.headless.unwrap().read_result(
+        stdout,
+        b"",
+        &request,
+        Some("check-model"),
+        &prices,
+    );
+    assert!((implicit.cost_usd.unwrap() - 0.15).abs() < 1e-12);
+}
+
+#[test]
+fn headless_result_rejects_missing_and_malformed_verdict_files() {
+    let root = tempfile::tempdir().unwrap();
+    let request = crate::agents::HeadlessRequest {
+        schema: crate::agents::CHECK_VERDICT_SCHEMA.into(),
+        schema_file: root.path().join("schema.json"),
+        verdict_file: root.path().join("verdict.json"),
+    };
+    let form = CODEX_DESCRIPTOR.launch.headless.unwrap();
+    let prices = crate::agents::pricing::PriceBook::fixture();
+    let result = form.read_result(b"", b"", &request, None, &prices);
+    assert!(result.error.is_some());
+    for verdict in [
+        "garbage",
+        r#"{"pass":false}"#,
+        r#"{"pass":true,"reason":"bad","extra":1}"#,
+    ] {
+        std::fs::write(&request.verdict_file, verdict).unwrap();
+        let result = form.read_result(b"", b"", &request, None, &prices);
+        assert!(result.error.is_some());
+        assert_eq!(result.verdict, None);
+    }
+    std::fs::remove_file(&request.verdict_file).unwrap();
+    let result = form.read_result(b"not JSON", b"", &request, None, &prices);
+    assert!(result.error.is_some());
+    assert_eq!(result.verdict, None);
+}
+
+#[test]
 fn deadline_context_reply_matches_native_post_tool_contract() {
     let (post, other) = crate::agents::testkit::deadline_context_replies("codex", "PostToolUse");
     insta::assert_json_snapshot!(post, @r#"

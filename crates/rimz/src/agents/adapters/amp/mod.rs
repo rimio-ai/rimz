@@ -103,6 +103,7 @@ static AMP_DESCRIPTOR: AgentSpec = AgentSpec {
             effort: None,
             system_prompt_file: None,
         },
+        ..super::LaunchSpec::EMPTY
     },
 };
 

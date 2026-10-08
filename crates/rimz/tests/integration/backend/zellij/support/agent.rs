@@ -43,6 +43,7 @@ pub(in crate::backend::zellij) fn zellij_agent_exec_command(
         exit_on_run_completion: false,
         subagent: false,
         loop_reminder: None,
+        headless: None,
         identity: ExecIdentity::default(),
     };
     let exec = rimz::harness::launch::exec_argv(&env.rimz_bin(), &env.runtime_paths(), &request)

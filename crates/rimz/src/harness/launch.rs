@@ -175,6 +175,8 @@ pub enum AgentProcessCompileErr {
     UnknownAgent { kind: String },
     #[error("agent `{kind}` has no launch command")]
     NoLaunch { kind: String },
+    #[error("agent `{kind}` has no headless launch command")]
+    NoHeadless { kind: String },
     #[error("agent `{kind}` has no resume command")]
     NoResume { kind: String },
     #[error("agent `{kind}` has no fork command")]
@@ -583,10 +585,12 @@ pub struct ExecRequest {
     /// `rimz subagents`.
     #[serde(default)]
     pub subagent: bool,
-    /// The `### Loop` reminder body a loop fire composed for this launch; set
-    /// only on a resident's prompt leader and on a loop single run.
+    /// The `### Loop` or headless `### Check` reminder body composed for this
+    /// launch; set on a resident's prompt leader, a loop single run, or a checker.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub loop_reminder: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub headless: Option<crate::agents::HeadlessRequest>,
     #[serde(default)]
     pub identity: ExecIdentity,
 }
@@ -632,6 +636,7 @@ impl ExecRequest {
             exit_on_run_completion: false,
             subagent: false,
             loop_reminder: None,
+            headless: None,
             identity: ExecIdentity::default(),
         }
     }
@@ -709,6 +714,20 @@ pub fn compile_provider_argv(
     action: &ExecAction,
     cwd: &Path,
 ) -> AgentProcessResult<Vec<String>> {
+    compile_provider_argv_with_headless(adapter, kind, action, cwd, None, (cwd, &mut None))
+}
+
+fn compile_provider_argv_with_headless(
+    adapter: &crate::agents::AgentDefinition,
+    kind: &str,
+    action: &ExecAction,
+    cwd: &Path,
+    headless: Option<&crate::agents::HeadlessRequest>,
+    settings: (
+        &Path,
+        &mut Option<crate::agents::skills::LaunchSettingsArtifact>,
+    ),
+) -> AgentProcessResult<Vec<String>> {
     if let Some(rejected) = adapter.rejected_extra_arg(action.extra_args()) {
         return Err(AgentProcessCompileErr::RejectedArg {
             kind: kind.to_owned(),
@@ -728,16 +747,32 @@ pub fn compile_provider_argv(
             limit: TEXT_PROMPT_LIMIT,
         });
     }
-    let argv = match action {
-        ExecAction::Launch { prompt, extra_args } => adapter
+    let argv = match (headless, action) {
+        (Some(request), ExecAction::Launch { prompt, extra_args }) => adapter
+            .spec()
+            .launch
+            .headless
+            .ok_or_else(|| AgentProcessCompileErr::NoHeadless {
+                kind: kind.to_owned(),
+            })?
+            .render_argv(extra_args, prompt.as_deref(), request, cwd, settings)?,
+        (Some(_), _) => {
+            return Err(AgentProcessCompileErr::NoHeadless {
+                kind: kind.to_owned(),
+            });
+        }
+        (None, ExecAction::Launch { prompt, extra_args }) => adapter
             .launch_command(extra_args, prompt.as_deref())
             .ok_or_else(|| AgentProcessCompileErr::NoLaunch {
                 kind: kind.to_owned(),
             })?,
-        ExecAction::Resume {
-            session_id,
-            extra_args,
-        } => {
+        (
+            None,
+            ExecAction::Resume {
+                session_id,
+                extra_args,
+            },
+        ) => {
             let mut argv = adapter.resume_command(session_id, cwd).ok_or_else(|| {
                 AgentProcessCompileErr::NoResume {
                     kind: kind.to_owned(),
@@ -746,10 +781,13 @@ pub fn compile_provider_argv(
             argv.extend(extra_args.iter().cloned());
             argv
         }
-        ExecAction::Fork {
-            session_id,
-            extra_args,
-        } => {
+        (
+            None,
+            ExecAction::Fork {
+                session_id,
+                extra_args,
+            },
+        ) => {
             let mut argv = adapter
                 .spec()
                 .launch
@@ -889,7 +927,18 @@ fn compile_agent_process_with_extra_env(
             &mut settings_artifact,
         )?;
     }
-    let provider_argv = compile_provider_argv(adapter, kind, &action, cwd)?;
+    let artifact_dir = reminders
+        .settings
+        .as_ref()
+        .map_or(cwd, |(dir, _)| dir.as_path());
+    let provider_argv = compile_provider_argv_with_headless(
+        adapter,
+        kind,
+        &action,
+        cwd,
+        request.headless.as_ref(),
+        (artifact_dir, &mut settings_artifact),
+    )?;
     let provider_program =
         provider_argv
             .first()
