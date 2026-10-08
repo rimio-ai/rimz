@@ -1,6 +1,7 @@
 //! Zellij sidebar birth, in-place recovery, and geometry convergence.
 
 use std::collections::{BTreeSet, HashSet};
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use super::layout::{TempLayoutFile, render_session_layout};
@@ -21,8 +22,8 @@ use crate::mux::width::{
     sidebar_width_off_spec, width_step_regressed, zellij_resize_stop_step_cols,
 };
 use crate::mux::{
-    DaemonView, MuxBackend, MuxErr, PaneReadConsistency, PresencePluginOptions, Result,
-    SessionLiveness, SidebarPaneOptions, WidthSyncOptions, sidebar_serve_args,
+    CommandSpec, DaemonView, MuxBackend, MuxErr, PaneReadConsistency, PresencePluginOptions,
+    Result, SessionLiveness, SidebarPaneOptions, WidthSyncOptions, sidebar_serve_args,
 };
 use crate::pane::SIDEBAR_CHROME_TITLE;
 use crate::utils::time::unix_now_ms;
@@ -68,28 +69,11 @@ fn sidebar_pane(
 }
 
 impl ZellijBackend {
-    /// Create the background session from a layout that puts the sidebar chrome
-    /// pane on the left and focuses the user's terminal on the right. The
-    /// layout carries the new-tab template, so new tabs are born with a sidebar
-    /// too. The sidebar pane is `close_on_exit`, so when its own process exits
-    /// the pane closes — see the self-close loop in `sidebar_pane::app`.
-    ///
-    /// Zellij parses `--default-layout` asynchronously, after the
-    /// `--create-background` client returns, so the temp layout file must
-    /// outlive the call. We hold it through a bounded wait for the sidebar pane
-    /// to appear, then let it drop.
-    pub(super) fn create_session_with_sidebar(
+    pub(super) fn background_session_command(
         &self,
         opts: &SidebarPaneOptions,
-        daemon: Option<&DaemonView>,
-    ) -> Result<()> {
-        // A daemon view leads only if it is born first, and resumed agents only
-        // come back as command panes the birth layout spells out: Zellij can't
-        // reorder tabs or add command panes after birth. The same birth layout
-        // handles a plain room as `None, &[]`, so every session carries the same
-        // new-tab template and fixed sidebar/compact-bar tree shape.
-        let body = render_session_layout(opts, daemon, &opts.resume_tabs)?;
-        let layout = TempLayoutFile::new(body)?;
+        layout: &Path,
+    ) -> CommandSpec {
         let option_args = vec![
             "attach".to_owned(),
             "--create-background".to_owned(),
@@ -98,9 +82,9 @@ impl ZellijBackend {
             "--default-cwd".to_owned(),
             opts.cwd.to_string_lossy().into_owned(),
             "--default-layout".to_owned(),
-            layout.path().to_string_lossy().into_owned(),
+            layout.to_string_lossy().into_owned(),
         ];
-        let mut spec = self.cmd().args(option_args);
+        let mut spec = self.cmd().without_mux_context().args(option_args);
         // The identity pin rides the spawning client's environment: the
         // per-session server is forked from this command, and every pane is
         // forked from the server, so panes — and the agents and in-pane hook
@@ -125,6 +109,32 @@ impl ZellijBackend {
         if let Some(term) = birth_term(std::env::var("TERM").ok().as_deref()) {
             spec = spec.env("TERM", term);
         }
+        spec
+    }
+
+    /// Create the background session from a layout that puts the sidebar chrome
+    /// pane on the left and focuses the user's terminal on the right. The
+    /// layout carries the new-tab template, so new tabs are born with a sidebar
+    /// too. The sidebar pane is `close_on_exit`, so when its own process exits
+    /// the pane closes — see the self-close loop in `sidebar_pane::app`.
+    ///
+    /// Zellij parses `--default-layout` asynchronously, after the
+    /// `--create-background` client returns, so the temp layout file must
+    /// outlive the call. We hold it through a bounded wait for the sidebar pane
+    /// to appear, then let it drop.
+    pub(super) fn create_session_with_sidebar(
+        &self,
+        opts: &SidebarPaneOptions,
+        daemon: Option<&DaemonView>,
+    ) -> Result<()> {
+        // A daemon view leads only if it is born first, and resumed agents only
+        // come back as command panes the birth layout spells out: Zellij can't
+        // reorder tabs or add command panes after birth. The same birth layout
+        // handles a plain room as `None, &[]`, so every session carries the same
+        // new-tab template and fixed sidebar/compact-bar tree shape.
+        let body = render_session_layout(opts, daemon, &opts.resume_tabs)?;
+        let layout = TempLayoutFile::new(body)?;
+        let spec = self.background_session_command(opts, layout.path());
         let spawn = || -> Result<bool> {
             let output = spec.clone().cwd(opts.cwd.clone()).output_raw()?;
             if output.status.success() {

@@ -307,6 +307,36 @@ fn existing_session_attach_has_no_creation_or_options_tail() {
 }
 
 #[test]
+fn creating_attach_removes_outer_mux_context() {
+    let spec = ZellijBackend::default()
+        .attach_command("rimz-test", &crate::config::MultiplexerConfig::default());
+    for key in crate::mux::AMBIENT_MUX_ENV {
+        assert!(
+            spec.env_remove.contains(key),
+            "{key} remains inherited at birth"
+        );
+    }
+    assert!(spec.args.iter().any(|arg| arg == "--create"));
+}
+
+#[cfg(unix)]
+#[test]
+fn background_session_birth_removes_outer_mux_context() {
+    let room = TestRoom::new();
+    let spec = ZellijBackend::default().background_session_command(
+        &room.sidebar_options(120),
+        std::path::Path::new("/layout.kdl"),
+    );
+    for key in crate::mux::AMBIENT_MUX_ENV {
+        assert!(
+            spec.env_remove.contains(key),
+            "{key} remains inherited at birth"
+        );
+    }
+    assert!(spec.args.iter().any(|arg| arg == "--create-background"));
+}
+
+#[test]
 fn readonly_attach_relies_on_the_broadcast_ttyd_input_boundary() {
     let spec = ZellijBackend::default().attach_readonly_command("rimz-test");
 
