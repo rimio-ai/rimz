@@ -480,7 +480,8 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
     )?;
     // The block rides the provider's prompt hook: without wired hooks the
     // launch keeps its listing, as a provider without the capability does.
-    reminders.runtime_env = adapter.spec().capabilities.prompt_context
+    reminders.runtime_env = request.headless.is_none()
+        && adapter.spec().capabilities.prompt_context
         && inputs
             .effective
             .is_none_or(|effective| effective.runtime_env)
@@ -526,6 +527,10 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
     let unit = inputs.state.temp_unit_dir(owner);
     let view = sandbox::TmpView::current(isolation, owner, inputs.state);
     let tmp = view.agent_path(&unit);
+    if let Some(headless) = &mut request.headless {
+        headless.schema_file = view.agent_path(&headless.schema_file);
+        headless.verdict_file = view.agent_path(&headless.verdict_file);
+    }
     let shared = inputs.state.room_shared_dir.clone();
     if inputs
         .effective
@@ -593,11 +598,44 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
         AgentProcessStage::Ready(process)
         | AgentProcessStage::LoginShellReentry { process, .. } => process,
     };
-    let unset: BTreeMap<String, sandbox::EnvPin> = inherited_keys
+    let mut unset: BTreeMap<String, sandbox::EnvPin> = inherited_keys
         .into_iter()
         .filter(|key| !process.env.contains_key(key))
         .map(|key| (key, sandbox::EnvPin::Unset))
         .collect();
+    if request.headless.is_some() {
+        unset.extend(
+            inputs
+                .ambient_env
+                .keys()
+                .chain(process.env.keys())
+                .filter(|key| key.starts_with("RIMZ_AGENT_"))
+                .map(|key| (key.clone(), sandbox::EnvPin::Unset)),
+        );
+        unset.insert(
+            crate::workspace::ENV_CHANNEL.to_owned(),
+            sandbox::EnvPin::Unset,
+        );
+        unset.insert(launch::ENV_RUNTIME_ENV.to_owned(), sandbox::EnvPin::Unset);
+        unset.extend(
+            crate::workspace::pin_env(
+                &crate::ids::WorkspaceId::from_project_root(inputs.project_root),
+                inputs.project_root,
+            )
+            .into_iter()
+            .map(|(key, value)| (key, sandbox::EnvPin::Set(value))),
+        );
+        unset.insert(
+            crate::workspace::ENV_WORKTREE_PATH.to_owned(),
+            sandbox::EnvPin::Set(inputs.cwd.display().to_string()),
+        );
+        if let Some(task) = &request.identity.params.loop_task {
+            unset.insert(
+                super::schedule::LOOP_TASK_ENV.to_owned(),
+                sandbox::EnvPin::Set(task.clone()),
+            );
+        }
+    }
     if !unset.is_empty() {
         process.pin_env(unset);
     }

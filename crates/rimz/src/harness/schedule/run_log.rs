@@ -183,13 +183,27 @@ impl LoopRunMode {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CheckRecord {
     pub code: Option<i32>,
     pub timed_out: bool,
     pub output: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_path: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<AgentCheckRecord>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct AgentCheckRecord {
+    pub profile: String,
+    pub kind: crate::ids::AgentKind,
+    pub model: Option<String>,
+    pub verdict: Option<crate::agents::HeadlessVerdict>,
+    pub error: Option<String>,
+    pub cost_usd: Option<f64>,
+    pub input_tokens: Option<u64>,
+    pub output_tokens: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -568,6 +582,14 @@ fn capped_record(record: &LoopRunRecord) -> LoopRunRecord {
     }
     if let Some(check) = &mut capped.check {
         check.output = tail_string(&check.output, CHECK_OUTPUT_CAP);
+        if let Some(agent) = &mut check.agent {
+            if let Some(verdict) = &mut agent.verdict {
+                verdict.reason = tail_string(&verdict.reason, CHECK_OUTPUT_CAP);
+            }
+            if let Some(error) = &mut agent.error {
+                *error = tail_string(error, CHECK_OUTPUT_CAP);
+            }
+        }
     }
     if let Some(signal) = &mut capped.signal
         && serde_json::to_vec(&signal.payload).is_ok_and(|bytes| bytes.len() > CHECK_OUTPUT_CAP)

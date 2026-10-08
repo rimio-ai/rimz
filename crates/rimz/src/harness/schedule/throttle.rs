@@ -276,7 +276,7 @@ impl Interrupts {
         Self { raised, id: None }
     }
 
-    fn raised(&self) -> bool {
+    pub(super) fn raised(&self) -> bool {
         self.raised.load(Ordering::SeqCst)
     }
 }

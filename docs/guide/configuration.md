@@ -832,7 +832,7 @@ timeout = "5m"           # optional; the check's own cap, independent of the tas
 # recheck = "6h"         # optional; resident tasks only, no default
 ```
 
-Agent tables can be configured now, but their fires currently report `agent checks are not runnable yet`. The [loop reference](../reference/cli/loop.md#waits-and-checks) lists the corresponding flags and refusals.
+Agent checks run without a pane and return a verdict and reason before the action. The [loop guide](./loops.md#guard-a-turn-with-a-check) explains judgment guards, and the [loop reference](../reference/cli/loop.md#waits-and-checks) lists the corresponding flags and refusals.
 
 The rest tune what one fire is allowed to do:
 

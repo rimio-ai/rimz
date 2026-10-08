@@ -72,6 +72,32 @@ pub(super) fn compose(fire: &LoopFire<'_>) -> String {
     }
 }
 
+pub(super) fn compose_check(name: &str, task: &LoadedTask, action_prompt: &str) -> String {
+    let entry = task.entry();
+    let trigger = task
+        .trigger()
+        .as_ref()
+        .map_or_else(|_| String::new(), |parsed| trigger_clause(parsed, entry));
+    let action = if let Some(agent) = &entry.agent {
+        format!("start {}", span(agent))
+    } else if let Some(target) = &entry.wait {
+        format!("wake {}", span(&format!("@{}", target.handle)))
+    } else {
+        "run the task".to_owned()
+    };
+    let polarity = match entry.on.unwrap_or_default() {
+        CheckOn::Success => "on = success launches on pass: true and skips on pass: false",
+        CheckOn::Fail => "on = fail launches on pass: false and skips on pass: true",
+        CheckOn::Any => "on = any launches on either verdict",
+    };
+    format!(
+        "This is a headless run with no pane and no user present: ask no questions and decide with what you have.\n\nThis is a read-only check, not the task: change nothing in the checkout.\n\nThe rule {}{} guards this action: {action}.\n\nThe guarded action will {action} with prompt: {}. For this task, {polarity}; a pass launches the action only when that polarity permits it.\n\nYour final answer is one JSON object {{\"pass\": <bool>, \"reason\": \"<one or two sentences>\"}} and nothing else. The reason is read by the launched agent and by the user in rimz loop show.",
+        span(name),
+        trigger,
+        verbatim(action_prompt.lines().next().unwrap_or(""))
+    )
+}
+
 fn turn_sentence(verify: bool, keep: bool) -> Option<&'static str> {
     match (verify, keep) {
         (false, false) => Some("This is one turn, and the pane closes when it ends."),
@@ -137,16 +163,16 @@ fn trigger_clause(parsed: &ParsedTrigger, entry: &TaskEntry) -> String {
     }
 }
 
-/// A resident runs no check: the ladder never reads one.
 fn check_clause(entry: &TaskEntry, after_condition: bool) -> Option<String> {
-    let crate::config::TaskCheck::Shell(cmd) = entry.check.as_ref().filter(|_| !entry.stay)? else {
-        return None;
+    let check = match entry.check.as_ref()? {
+        crate::config::TaskCheck::Shell(cmd) => span(cmd),
+        crate::config::TaskCheck::Agent(check) => format!("by {}", span(&check.agent)),
     };
     let joiner = if after_condition { "and" } else { "when" };
     Some(match entry.on.unwrap_or_default() {
-        CheckOn::Fail => format!(" {joiner} its check {} fails", span(cmd)),
-        CheckOn::Success => format!(" {joiner} its check {} passes", span(cmd)),
-        CheckOn::Any => format!(" after its check {} runs", span(cmd)),
+        CheckOn::Fail => format!(" {joiner} its check {check} fails"),
+        CheckOn::Success => format!(" {joiner} its check {check} passes"),
+        CheckOn::Any => format!(" after its check {check} runs"),
     })
 }
 

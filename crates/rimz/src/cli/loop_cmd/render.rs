@@ -2028,6 +2028,7 @@ fn check_skipped_label(record: &LoopRunRecord) -> &'static str {
     match record.check.as_ref() {
         Some(check) if check.timed_out => "check timed out",
         Some(check) if check.code == Some(0) => "check passed",
+        Some(check) if check.agent.is_some() => "check declined",
         Some(_) => "check failed",
         None => "check failed",
     }

@@ -220,6 +220,15 @@ A `--check` with no agent action is still worth having. It is a scheduled comman
 
 `--check` gates firing; `--verify` gates completion. Add `--verify "cargo test"` to a scheduled `--agent` task when the command is the definition of done: a red result returns its evidence to the same live session, up to `--max-attempts` total turns (default 3), before the fire records `verify failed`. It behaves exactly as it does on a hand-run `-p`, described under [verify and retry](./scripting.md#verify-and-retry).
 
+When the decision needs judgment rather than an exit code, use a small agent as the guard:
+
+```sh
+rimz loop add triage --every 1h --agent codex --prompt 'Fix actionable CI failures.' \
+  --check-agent claude --check-prompt 'Does this checkout have an actionable CI failure?' --on success
+```
+
+The checker runs without a pane, using the room-default account and the profile's isolation, and is told to ask no questions and change nothing. It returns `pass` and a short reason: with `--on success`, only a positive verdict opens the task's agent pane. `loop logs triage` shows the reason, cost, and tokens, and the launched agent receives the same evidence. The checker has its own five-minute cap, adjustable with `--check-timeout`. If it cannot produce a verdict, the action proceeds and the log carries the error, so a provider outage cannot silently prevent recovery. Shell and agent checks also guard `--stay` launches, and re-run on each eligible fire until the task launches. The [check reference](../reference/cli/loop.md#waits-and-checks) lists polarity and prompt-file rules.
+
 A check script that sometimes needs judgment can call an agent itself: `rimz agents codex "inspect the failed deployment"`. RimZ supplies `RIMZ_LOOP_TASK` with the task name and keeps nested commands in the task's room; the launched agent uses the check's checkout unless it selects another worktree. Inside a check, a prompted launch implies `-p`: it waits for the run, captures the answer in the check output, and returns the run's exit code. The run opens its pane beside the room's loop dashboard and closes it on success or failure, unless `--keep` holds it open; its timeout is the launch's own `--timeout` or `loop.default-timeout` (two hours by default). A launch with no prompt, or with `--bg`, is refused, because the check has to wait for the run to end, and the check's own timeout still bounds how long it can wait.
 
 ## Gate a task on surplus

@@ -4,6 +4,7 @@
 //! launch preparation, and terminal record mapping. CLI executes the prepared
 //! supervised-run or message effect and returns its typed result.
 
+mod agent_check;
 mod prompt;
 mod reminder;
 
@@ -197,6 +198,31 @@ struct FiredCheck {
     record: CheckRecord,
 }
 
+impl FiredCheck {
+    fn heading(&self) -> String {
+        if let Some(agent) = &self.record.agent {
+            let status = agent.verdict.as_ref().map_or("no verdict", |verdict| {
+                if verdict.pass { "pass" } else { "fail" }
+            });
+            return format!(
+                "check by `{}` ({} {}): {status}",
+                agent.profile,
+                agent.kind,
+                agent.model.as_deref().unwrap_or("default")
+            );
+        }
+        let status = if self.outcome.timed_out {
+            "timeout".to_owned()
+        } else {
+            self.outcome
+                .code
+                .map(|code| code.to_string())
+                .unwrap_or_else(|| "signal".to_owned())
+        };
+        format!("check `{}` exited {status}", self.command)
+    }
+}
+
 struct FireContext {
     action: TaskAction,
     root: PathBuf,
@@ -363,6 +389,7 @@ pub struct TaskFire<'a> {
     fired_check: Option<CheckRecord>,
     pending: Option<PendingEffect>,
     finished: bool,
+    check_process: agent_check::ProcessRunner,
 }
 
 impl<'a> TaskFire<'a> {
@@ -414,6 +441,7 @@ impl<'a> TaskFire<'a> {
             fired_check: None,
             pending: None,
             finished: false,
+            check_process: agent_check::execute,
         })
     }
 
@@ -608,9 +636,10 @@ impl<'a> TaskFire<'a> {
         if let Some(done) = self.prepare_deadline()? {
             return Ok(TaskFirePlan::Done(done));
         }
-        if matches!(self.entry.check.as_ref(), Some(TaskCheck::Agent(_))) {
-            bail!("agent checks are not runnable yet");
-        }
+        let fired_check = match self.prepare_check(before_launch)? {
+            ControlFlow::Break(done) => return Ok(TaskFirePlan::Done(done)),
+            ControlFlow::Continue(check) => check,
+        };
         if let Some(done) = self.prepare_throttle()? {
             return Ok(TaskFirePlan::Done(done));
         }
@@ -621,7 +650,7 @@ impl<'a> TaskFire<'a> {
         else {
             bail!("--stay requires an agent layout");
         };
-        let prompt = self.resolve_effect_prompt(None)?;
+        let prompt = self.resolve_effect_prompt(fired_check.as_ref())?;
         before_launch(&root)?;
         if self.run_lock.is_none() {
             if let Some(done) = self.prepare_run_lock(false)? {
@@ -945,31 +974,33 @@ impl<'a> TaskFire<'a> {
         before_check: &mut dyn FnMut(&Path) -> Result<()>,
     ) -> Result<ControlFlow<TaskFireFinished, Option<FiredCheck>>> {
         let watch_command = self.watch_spec().map(WatchSpec::describe);
-        let (command, outcome, duration_ms) = if let Some((command, outcome)) =
+        let (command, outcome, duration_ms, agent) = if let Some((command, outcome)) =
             watch_command.as_ref().zip(self.watch_outcome())
         {
             (
                 command.clone(),
                 outcome.to_check_outcome(),
                 outcome.verdict.elapsed_ms(),
+                None,
             )
         } else if let Some(check) = self.entry.check.clone() {
-            let command = match check {
-                TaskCheck::Shell(command) => command,
-                TaskCheck::Agent(_) => bail!("agent checks are not runnable yet"),
+            let root = if self.entry.stay {
+                self.entry.resolved_root()
+            } else {
+                self.context_root()?
             };
-            let root = self.context_root()?;
-            if self.run_lock.is_some()
-                || !matches!(
-                    self.context.as_ref().map(|context| &context.action),
-                    Some(TaskAction::Spawn(_))
-                )
+            if !self.entry.stay
+                && (self.run_lock.is_some()
+                    || !matches!(
+                        self.context.as_ref().map(|context| &context.action),
+                        Some(TaskAction::Spawn(_))
+                    ))
             {
                 before_check(&root)?;
             }
             let mut env = crate::workspace::pin_env(&WorkspaceId::from_project_root(&root), &root);
             env.insert(LOOP_TASK_ENV.to_owned(), self.name.clone());
-            let dir = self.entry.run_dir();
+            let dir = self.launch_checkout();
             env.insert(
                 crate::workspace::ENV_WORKTREE_PATH.to_owned(),
                 dir.to_string_lossy().into_owned(),
@@ -982,21 +1013,41 @@ impl<'a> TaskFire<'a> {
                     .map_err(throttle::ThrottleError::Interrupts)?,
             );
             let check_started = Instant::now();
-            let outcome = run_check(
-                &dir,
-                &command,
-                task_timeout(&self.entry)?.unwrap_or(CHECK_DEFAULT_TIMEOUT),
-                self.check_echo.take().unwrap_or(CheckEcho::Capture),
-                &env,
-            )?;
-            (command, outcome, elapsed_millis(check_started))
+            let (command, outcome, agent) = match check {
+                TaskCheck::Shell(command) => {
+                    let outcome = run_check(
+                        &dir,
+                        &command,
+                        task_timeout(&self.entry)?.unwrap_or(CHECK_DEFAULT_TIMEOUT),
+                        self.check_echo.take().unwrap_or(CheckEcho::Capture),
+                        &env,
+                    )?;
+                    (command, outcome, None)
+                }
+                TaskCheck::Agent(check) => {
+                    let (outcome, record) = match agent_check::run(self, &check, &dir, &root)? {
+                        ControlFlow::Continue(result) => result,
+                        ControlFlow::Break((result, reason)) => {
+                            return Ok(ControlFlow::Break(self.record_gate(result, reason)));
+                        }
+                    };
+                    (String::new(), outcome, Some(record))
+                }
+            };
+            (command, outcome, elapsed_millis(check_started), agent)
         } else {
             return Ok(ControlFlow::Continue(None));
         };
         let supplied_watch = watch_command.as_ref().and(self.watch_outcome());
         let mut record = check_record(&outcome);
+        record.agent = agent;
         record.output_path = supplied_watch.and_then(|watch| watch.output_path.clone());
-        if supplied_watch.is_some_and(|watch| !watch.verdict.is_terminal()) {
+        let supplied_watch = supplied_watch.map(|watch| watch.verdict.clone());
+        self.fired_check = Some(record.clone());
+        if supplied_watch
+            .as_ref()
+            .is_some_and(|watch| !watch.is_terminal())
+        {
             return Ok(ControlFlow::Continue(Some(FiredCheck {
                 command,
                 outcome,
@@ -1011,7 +1062,12 @@ impl<'a> TaskFire<'a> {
             .is_some_and(|context| context.action.is_check_only())
         {
             Some((check_only_result(&outcome), self.ephemeral))
-        } else if !polarity_fires(self.entry.on, &outcome) {
+        } else if !record
+            .agent
+            .as_ref()
+            .is_some_and(|agent| agent.verdict.is_none())
+            && !polarity_fires(self.entry.on, &outcome)
+        {
             Some((LoopRunResult::CheckSkipped, self.watch_spec().is_some()))
         } else {
             None
@@ -1038,7 +1094,7 @@ impl<'a> TaskFire<'a> {
         if self.mode == LoopRunMode::Manual {
             self.check_trip = Some(CheckTrip {
                 record: record.clone(),
-                watch: supplied_watch.map(|watch| watch.verdict.clone()),
+                watch: supplied_watch,
                 duration_ms,
             });
         }
@@ -1256,7 +1312,7 @@ impl<'a> TaskFire<'a> {
         if let Some(check) = fired_check
             && self.entry.watch.is_none()
         {
-            body = augment_prompt(body, &check.command, &check.outcome);
+            body = augment_prompt(body, &check.heading(), &check.outcome.output);
         }
         Ok(body)
     }
@@ -1277,6 +1333,7 @@ impl<'a> TaskFire<'a> {
         if self.entry.stay {
             record.checkout = Some(self.launch_checkout());
         }
+        add_check_usage(&mut record);
         record
     }
 
@@ -1356,6 +1413,7 @@ fn finish_spawn_effect(
             record.cost_usd = run.cost_usd;
             record.input_tokens = run.input_tokens;
             record.output_tokens = run.output_tokens;
+            add_check_usage(record);
             (
                 LoopRunPresentation {
                     failure_tail: run.failure_tail,
@@ -1378,6 +1436,30 @@ fn finish_spawn_effect(
             )
         }
     }
+}
+
+fn add_check_usage(record: &mut LoopRunRecord) {
+    let Some(agent) = record.check.as_ref().and_then(|check| check.agent.as_ref()) else {
+        return;
+    };
+    record.cost_usd = match (record.cost_usd, agent.cost_usd) {
+        (None, None) => None,
+        (run, check) => Some(run.unwrap_or_default() + check.unwrap_or_default()),
+    };
+    record.input_tokens = match (record.input_tokens, agent.input_tokens) {
+        (None, None) => None,
+        (run, check) => Some(
+            run.unwrap_or_default()
+                .saturating_add(check.unwrap_or_default()),
+        ),
+    };
+    record.output_tokens = match (record.output_tokens, agent.output_tokens) {
+        (None, None) => None,
+        (run, check) => Some(
+            run.unwrap_or_default()
+                .saturating_add(check.unwrap_or_default()),
+        ),
+    };
 }
 
 fn elapsed_millis(started: Instant) -> u64 {
@@ -2272,6 +2354,7 @@ pub fn check_record(outcome: &CheckOutcome) -> CheckRecord {
         timed_out: outcome.timed_out,
         output: outcome.output.clone(),
         output_path: None,
+        agent: None,
     }
 }
 
@@ -2312,19 +2395,8 @@ fn polarity_fires(on: Option<CheckOn>, outcome: &CheckOutcome) -> bool {
     }
 }
 
-fn augment_prompt(base: String, cmd: &str, outcome: &CheckOutcome) -> String {
-    let status = if outcome.timed_out {
-        "timeout".to_owned()
-    } else {
-        outcome
-            .code
-            .map(|code| code.to_string())
-            .unwrap_or_else(|| "signal".to_owned())
-    };
-    format!(
-        "{base}\n\n--- check `{cmd}` exited {status} ---\n{}",
-        outcome.output
-    )
+fn augment_prompt(base: String, heading: &str, output: &str) -> String {
+    format!("{base}\n\n--- {heading} ---\n{output}")
 }
 
 pub fn run_check(

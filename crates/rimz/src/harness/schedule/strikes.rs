@@ -36,6 +36,12 @@ pub(super) fn classify(record: &LoopRunRecord) -> Signal {
     {
         return Signal::Neutral;
     }
+    let check = record.check.as_ref().filter(|check| {
+        !check
+            .agent
+            .as_ref()
+            .is_some_and(|agent| agent.verdict.is_none())
+    });
     match record.result {
         LoopRunResult::Failed
         | LoopRunResult::VerifyFailed
@@ -43,17 +49,13 @@ pub(super) fn classify(record: &LoopRunRecord) -> Signal {
         | LoopRunResult::Errored
         | LoopRunResult::BudgetExceeded => Signal::Strike,
         LoopRunResult::Completed | LoopRunResult::Delivered | LoopRunResult::Launched => {
-            if record
-                .check
-                .as_ref()
-                .is_some_and(|check| !check_passed(check))
-            {
+            if check.is_some_and(|check| !check_passed(check)) {
                 Signal::Strike
             } else {
                 Signal::Reset
             }
         }
-        LoopRunResult::CheckSkipped => match record.check.as_ref().map(check_passed) {
+        LoopRunResult::CheckSkipped => match check.map(check_passed) {
             Some(true) => Signal::Reset,
             Some(false) | None => Signal::Neutral,
         },
@@ -184,6 +186,7 @@ mod tests {
 
     fn check(code: Option<i32>, timed_out: bool) -> Option<CheckRecord> {
         Some(CheckRecord {
+            agent: None,
             output_path: None,
             code,
             timed_out,

@@ -262,6 +262,7 @@ fn skipped_check_summary_uses_check_time_and_action_verbs() {
     let spawn = RunOutcome::check_result(
         LoopRunResult::CheckSkipped,
         CheckRecord {
+            agent: None,
             output_path: None,
             code: Some(0),
             timed_out: false,
@@ -301,6 +302,7 @@ fn skipped_check_summary_uses_check_time_and_action_verbs() {
     let wait = RunOutcome::check_result(
         LoopRunResult::CheckSkipped,
         CheckRecord {
+            agent: None,
             output_path: None,
             code: Some(1),
             timed_out: false,
@@ -313,6 +315,59 @@ fn skipped_check_summary_uses_check_time_and_action_verbs() {
         summary("nudge", &entry, 8_000, LoopRunMode::Manual, false, &wait,),
         "○ check failed (exit 1) in 2.0s — @planner not woken; fires when the check passes\n"
     );
+
+    for (pass, on, expected) in [
+        (
+            false,
+            CheckOn::Success,
+            "○ check declined in 2.0s — codex not started; fires when the check passes\n",
+        ),
+        (
+            true,
+            CheckOn::Fail,
+            "✓ check passed in 2.0s — codex not started; fires when the check fails\n",
+        ),
+    ] {
+        let check = CheckRecord {
+            agent: Some(
+                serde_json::from_value(serde_json::json!({
+                    "profile": "haiku",
+                    "kind": "claude",
+                    "model": null,
+                    "verdict": {"pass": pass, "reason": "Decision."},
+                    "error": null,
+                    "cost_usd": null,
+                    "input_tokens": null,
+                    "output_tokens": null
+                }))
+                .unwrap(),
+            ),
+            output_path: None,
+            code: Some(if pass { 0 } else { 1 }),
+            timed_out: false,
+            output: "Decision.".into(),
+        };
+        let outcome = RunOutcome::check_result(LoopRunResult::CheckSkipped, check, 2_000);
+        let mut entry = spawn_entry(true, on);
+        entry.check = Some(TaskCheck::Agent(AgentCheck {
+            agent: "haiku".into(),
+            prompt: Some("Question.".into()),
+            prompt_file: None,
+            recheck: None,
+            timeout: None,
+        }));
+        assert_eq!(
+            summary(
+                "watchdog",
+                &entry,
+                8_000,
+                LoopRunMode::Manual,
+                false,
+                &outcome
+            ),
+            expected
+        );
+    }
 }
 
 #[test]
@@ -321,6 +376,7 @@ fn scheduled_check_skip_keeps_compact_task_prefix() {
     let outcome = RunOutcome::check_result(
         LoopRunResult::CheckSkipped,
         CheckRecord {
+            agent: None,
             output_path: None,
             code: Some(0),
             timed_out: false,
@@ -345,6 +401,7 @@ fn scheduled_check_skip_keeps_compact_task_prefix() {
 #[test]
 fn trip_line_names_check_fact_and_action() {
     let check = CheckRecord {
+        agent: None,
         output_path: None,
         code: Some(101),
         timed_out: false,
@@ -501,6 +558,7 @@ fn check_only_verdicts_name_the_check_fact() {
         ),
     ] {
         let outcome = RunOutcome::terminal(result).with_check(Some(CheckRecord {
+            agent: None,
             output_path: None,
             code,
             timed_out,
@@ -578,6 +636,7 @@ fn watch_trip_and_summary_use_verdict_elapsed_once() {
         },
     ] {
         let check = CheckRecord {
+            agent: None,
             code: match verdict {
                 WatchVerdict::Exited { code, .. } => code,
                 _ => None,

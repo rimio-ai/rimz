@@ -863,7 +863,7 @@ fn signal_note_and_guard_evidence_remain_after_wait_body() {
     );
     let outcome = super::super::CheckOutcome::new(false, false, "failed guard".to_owned(), Some(1));
     assert_eq!(
-        super::super::augment_prompt(body, "false", &outcome),
+        super::super::augment_prompt(body, "check `false` exited 1", &outcome.output),
         "waited on deploy.failed\nfired [deployment]\nbranch: feature\n\nInspect {{branch}}\n\n--- check `false` exited 1 ---\nfailed guard"
     );
 }

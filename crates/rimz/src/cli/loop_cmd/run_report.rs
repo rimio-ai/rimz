@@ -209,7 +209,7 @@ fn manual_result_label(action_kind: TaskActionKind, summary: &RunSummary<'_>) ->
     if action_kind.is_check_only()
         && let Some(check) = &summary.record.check
     {
-        return check_result_label(check, summary.record.watch.as_ref());
+        return check_result_label(check, summary.record.watch.as_ref(), false);
     }
     let mut label = success_result_label(summary.record);
     if let Some(exit_label) = outcome_exit_label(summary) {
@@ -219,9 +219,20 @@ fn manual_result_label(action_kind: TaskActionKind, summary: &RunSummary<'_>) ->
     label
 }
 
-fn check_result_label(check: &CheckRecord, watch: Option<&WatchVerdict>) -> String {
+fn check_result_label(check: &CheckRecord, watch: Option<&WatchVerdict>, declined: bool) -> String {
     if let Some(verdict) = watch {
         return verdict.label();
+    }
+    if let Some(agent) = &check.agent {
+        return match &agent.verdict {
+            Some(verdict) if verdict.pass => "check passed".to_owned(),
+            Some(_) if declined => "check declined".to_owned(),
+            Some(_) => "check failed".to_owned(),
+            None => format!(
+                "check: no verdict ({})",
+                agent.error.as_deref().unwrap_or("unknown error")
+            ),
+        };
     }
     if check.timed_out {
         "check timed out".to_owned()
@@ -247,7 +258,7 @@ pub(super) fn write_check_trip_line(
     } else {
         ("✓", ui::palette::good())
     };
-    let mut label = check_result_label(check, watch);
+    let mut label = check_result_label(check, watch, false);
     if watch.is_none() {
         label.push_str(&format!(" in {}", render::format_duration_ms(duration_ms)));
     }
@@ -275,7 +286,7 @@ fn write_check_skipped_summary(
         .record
         .check
         .as_ref()
-        .map(|check| check_result_label(check, summary.record.watch.as_ref()))
+        .map(|check| check_result_label(check, summary.record.watch.as_ref(), true))
         .unwrap_or_else(|| "check skipped".to_owned());
     let check_duration_ms = summary
         .presentation
@@ -572,19 +583,61 @@ fn write_check_section(
     detail: Forensics,
 ) -> std::io::Result<()> {
     if let Some(check) = &record.check {
-        if let Some(path) = &check.output_path {
-            write_detail_link(out, "output", &path.display().to_string())?;
-        }
-        let first_style = if check.timed_out || check.code != Some(0) {
-            Some(ui::palette::alarm())
+        if let Some(agent) = &check.agent {
+            let verdict = agent.verdict.as_ref().map_or_else(
+                || {
+                    format!(
+                        "no verdict ({})",
+                        agent.error.as_deref().unwrap_or("unknown error")
+                    )
+                },
+                |verdict| {
+                    if verdict.pass {
+                        "pass".into()
+                    } else {
+                        "fail".into()
+                    }
+                },
+            );
+            let reason = agent
+                .verdict
+                .as_ref()
+                .map_or(check.output.as_str(), |verdict| verdict.reason.as_str());
+            let spend = agent
+                .cost_usd
+                .filter(|cost| cost.is_finite() && *cost >= 0.0)
+                .map_or_else(String::new, |cost| format!(" · ${cost:.2}"));
+            let tokens = match (agent.input_tokens, agent.output_tokens) {
+                (None, None) => String::new(),
+                (input, output) => format!(
+                    " · {}/{} tok",
+                    input.map_or_else(|| "?".into(), |tokens| tokens.to_string()),
+                    output.map_or_else(|| "?".into(), |tokens| tokens.to_string())
+                ),
+            };
+            writeln!(
+                out,
+                "  check by {}: {verdict} — {reason}{spend}{tokens}",
+                agent.profile
+            )?;
+            if check.output != reason {
+                write_gutter_block(out, None, &check.output)?;
+            }
         } else {
-            None
-        };
-        let tail = match detail {
-            Forensics::Full => None,
-            Forensics::Summary => summary_check_tail(record, check),
-        };
-        write_gutter_block(out, first_style, tail.unwrap_or(&check.output))?;
+            if let Some(path) = &check.output_path {
+                write_detail_link(out, "output", &path.display().to_string())?;
+            }
+            let first_style = if check.timed_out || check.code != Some(0) {
+                Some(ui::palette::alarm())
+            } else {
+                None
+            };
+            let tail = match detail {
+                Forensics::Full => None,
+                Forensics::Summary => summary_check_tail(record, check),
+            };
+            write_gutter_block(out, first_style, tail.unwrap_or(&check.output))?;
+        }
     }
     if let Some(error) = &record.error {
         write_detail_label(out, "error")?;
@@ -757,6 +810,69 @@ fn run_record_for(entry: &TaskEntry, run_id: &str) -> Option<rimz::store::run::R
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn agent_check_forensics_names_verdict_reason_and_usage() {
+        use super::*;
+        for (verdict, expected, error) in [
+            (Some(true), "pass", None),
+            (Some(false), "fail", None),
+            (None, "no verdict (provider down)", Some("provider down")),
+        ] {
+            let mut record = LoopRunRecord::new(
+                "guard",
+                LoopRunResult::CheckSkipped,
+                LoopRunMode::Scheduled,
+                1,
+            );
+            let agent: rimz::harness::schedule::run_log::AgentCheckRecord = serde_json::from_value(serde_json::json!({"profile":"haiku","kind":"claude","model":"haiku","verdict":verdict.map(|pass| serde_json::json!({"pass":pass,"reason":"Read the tree."})),"error":error,"cost_usd":0.02,"input_tokens":10,"output_tokens":5})).unwrap();
+            record.check = Some(CheckRecord {
+                code: verdict.map(|pass| if pass { 0 } else { 1 }),
+                timed_out: false,
+                output: "Read the tree.".into(),
+                output_path: None,
+                agent: Some(agent),
+            });
+            let mut trip = Vec::new();
+            write_check_trip_line(
+                &mut trip,
+                &TaskAction::Spawn("claude".into()),
+                record.check.as_ref().unwrap(),
+                None,
+                1,
+            )
+            .unwrap();
+            let trip = String::from_utf8(trip).unwrap();
+            let label = match verdict {
+                Some(true) => "check passed",
+                Some(false) => "check failed",
+                None => "provider down",
+            };
+            assert!(
+                trip.contains(label) && !trip.contains("declined") && !trip.contains("signal"),
+                "{trip}"
+            );
+            let mut out = Vec::new();
+            write_check_section(
+                &mut out,
+                &record,
+                None,
+                ui::prose::Prose::Raw,
+                Forensics::Full,
+            )
+            .unwrap();
+            let text = String::from_utf8(out).unwrap();
+            assert!(
+                text.contains(&format!("check by haiku: {expected}")),
+                "{text}"
+            );
+            assert!(
+                text.contains("Read the tree.")
+                    && text.contains("$0.02")
+                    && text.contains("10/5 tok"),
+                "{text}"
+            );
+        }
+    }
     use super::*;
 
     #[test]

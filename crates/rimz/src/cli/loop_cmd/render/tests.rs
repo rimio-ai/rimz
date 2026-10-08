@@ -991,11 +991,23 @@ fn record(second: i64, result: LoopRunResult) -> LoopRunRecord {
 
 fn check(code: Option<i32>, output: &str) -> CheckRecord {
     CheckRecord {
+        agent: None,
         output_path: None,
         code,
         timed_out: false,
         output: output.to_owned(),
     }
+}
+
+#[test]
+fn agent_check_skips_name_a_decline_without_changing_passed_labels() {
+    let mut row = record(1, LoopRunResult::CheckSkipped);
+    let mut check = check(Some(1), "No work.");
+    check.agent = Some(serde_json::from_str(r#"{"profile":"haiku","kind":"claude","model":null,"verdict":{"pass":false,"reason":"No work."},"error":null,"cost_usd":0.02,"input_tokens":10,"output_tokens":5}"#).unwrap());
+    row.check = Some(check);
+    assert_eq!(check_skipped_label(&row), "check declined");
+    row.check.as_mut().unwrap().code = Some(0);
+    assert_eq!(check_skipped_label(&row), "check passed");
 }
 
 /// An overlap as `prepare_run_lock` records it: a note no two fires share.
@@ -1309,6 +1321,7 @@ fn agent_runs_heading_aggregates_all_valid_costs() {
 fn check_failure_line_uses_last_non_empty_failed_check_line() {
     let mut failed = record(10, LoopRunResult::Failed);
     failed.check = Some(CheckRecord {
+        agent: None,
         output_path: None,
         code: Some(127),
         timed_out: false,
@@ -1318,6 +1331,7 @@ fn check_failure_line_uses_last_non_empty_failed_check_line() {
 
     let mut passed = record(11, LoopRunResult::Completed);
     passed.check = Some(CheckRecord {
+        agent: None,
         output_path: None,
         code: Some(0),
         timed_out: false,
@@ -1330,6 +1344,7 @@ fn check_failure_line_uses_last_non_empty_failed_check_line() {
 fn record_note_prefers_error_then_failed_check_output() {
     let mut failed = record(10, LoopRunResult::Failed);
     failed.check = Some(CheckRecord {
+        agent: None,
         output_path: None,
         code: Some(1),
         timed_out: false,
@@ -1346,6 +1361,7 @@ fn record_note_prefers_error_then_failed_check_output() {
 fn run_status_names_check_skipped_outcomes() {
     let mut skipped = record(10, LoopRunResult::CheckSkipped);
     skipped.check = Some(CheckRecord {
+        agent: None,
         output_path: None,
         code: Some(0),
         timed_out: false,
@@ -1357,6 +1373,7 @@ fn run_status_names_check_skipped_outcomes() {
     assert_eq!(status.style, ui::palette::good());
 
     skipped.check = Some(CheckRecord {
+        agent: None,
         output_path: None,
         code: Some(1),
         timed_out: false,
@@ -1368,6 +1385,7 @@ fn run_status_names_check_skipped_outcomes() {
     assert_eq!(status.style, ui::palette::muted());
 
     skipped.check = Some(CheckRecord {
+        agent: None,
         output_path: None,
         code: None,
         timed_out: true,
@@ -1761,6 +1779,7 @@ fn run_status_merges_failed_check_exit() {
     let mut failed = record(10, LoopRunResult::Failed);
     failed.run_id = Some("run_0123456789abcdef01234567".to_owned());
     failed.check = Some(CheckRecord {
+        agent: None,
         output_path: None,
         code: Some(127),
         timed_out: false,
@@ -1805,6 +1824,7 @@ fn collapsed_run_rows_merge_adjacent_matching_render_columns() {
     first.mode = Some(LoopRunMode::Scheduled);
     first.duration_ms = Some(10);
     first.check = Some(CheckRecord {
+        agent: None,
         output_path: None,
         code: Some(1),
         timed_out: false,
@@ -1816,6 +1836,7 @@ fn collapsed_run_rows_merge_adjacent_matching_render_columns() {
     let mut third = second.clone();
     third.at = Timestamp::from_second(30).expect("timestamp");
     third.check = Some(CheckRecord {
+        agent: None,
         output_path: None,
         code: Some(1),
         timed_out: false,
@@ -1919,6 +1940,7 @@ fn render_record_detail_titles_status_age_and_mode() {
 fn render_record_detail_marks_failed_check_output() {
     let mut detail = record(20, LoopRunResult::Failed);
     detail.check = Some(CheckRecord {
+        agent: None,
         output_path: None,
         code: Some(2),
         timed_out: false,
@@ -2317,6 +2339,7 @@ fn watch_history_uses_verdict_words_and_output_path() {
             detail.watch = Some(verdict.clone());
             detail.duration_ms = Some(0);
             detail.check = Some(CheckRecord {
+                agent: None,
                 code: match verdict {
                     WatchVerdict::Exited { code, .. } => code,
                     _ => None,

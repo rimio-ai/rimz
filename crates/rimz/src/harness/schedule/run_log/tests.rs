@@ -1,6 +1,67 @@
 use super::*;
 use std::io::Write as _;
 
+#[test]
+fn agent_check_evidence_is_bounded_in_the_persisted_record() {
+    let dir = tempfile::tempdir().unwrap();
+    let evidence = format!("{}tail", "界".repeat(CHECK_OUTPUT_CAP));
+    let mut row = record("guard", 1, LoopRunResult::CheckSkipped);
+    row.check = Some(serde_json::from_value::<CheckRecord>(serde_json::json!({
+        "code": 1, "timed_out": false, "output": evidence,
+        "agent": {"profile": "haiku", "kind": "claude", "verdict": {"pass": false, "reason": evidence}, "error": evidence}
+    })).unwrap());
+    row.check
+        .as_mut()
+        .unwrap()
+        .agent
+        .as_mut()
+        .unwrap()
+        .verdict
+        .as_mut()
+        .unwrap()
+        .reason = evidence.clone();
+    append_to(dir.path(), &row);
+    let stored: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(log_path(dir.path())).unwrap()).unwrap();
+    let check = &stored["check"];
+    for text in [
+        &check["output"],
+        &check["agent"]["verdict"]["reason"],
+        &check["agent"]["error"],
+    ] {
+        let text = text.as_str().unwrap();
+        assert!(
+            text.len() <= CHECK_OUTPUT_CAP && text.ends_with("tail"),
+            "stored evidence must be a bounded UTF-8 tail: {} bytes",
+            text.len()
+        );
+    }
+}
+
+#[test]
+fn skipped_check_cost_counts_and_old_check_rows_still_parse() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut row = record("guard", 1, LoopRunResult::CheckSkipped);
+    row.cost_usd = Some(0.25);
+    row.check =
+        Some(serde_json::from_str(r#"{"code":0,"timed_out":false,"output":"old row"}"#).unwrap());
+    assert!(row.check.as_ref().unwrap().agent.is_none());
+    assert!(
+        serde_json::to_value(&row.check)
+            .unwrap()
+            .get("agent")
+            .is_none()
+    );
+    append_to(dir.path(), &row);
+    let now = Timestamp::from_second(10)
+        .unwrap()
+        .to_zoned(jiff::tz::TimeZone::UTC);
+    assert_eq!(
+        spend_on_local_day(&task_records(dir.path(), "guard", None), &now),
+        0.25
+    );
+}
+
 fn record(task: &str, second: i64, result: LoopRunResult) -> LoopRunRecord {
     LoopRunRecord {
         checkout: None,
@@ -75,6 +136,7 @@ fn acting_polarity_preserves_show_membership() {
     ] {
         let mut row = record("task", 1, CheckSkipped);
         row.check = Some(CheckRecord {
+            agent: None,
             code,
             timed_out,
             output: String::new(),
@@ -274,6 +336,7 @@ fn terminal_records_keep_durable_and_presentation_fields_separate() {
     }
 
     let check = CheckRecord {
+        agent: None,
         output_path: None,
         code: Some(7),
         timed_out: false,
@@ -493,6 +556,7 @@ fn new_fields_round_trip_and_task_records_filter() {
     with_detail.mode = Some(LoopRunMode::Manual);
     with_detail.duration_ms = Some(123);
     with_detail.check = Some(CheckRecord {
+        agent: None,
         output_path: Some(PathBuf::from("/tmp/wait.log")),
         code: Some(127),
         timed_out: false,
@@ -563,6 +627,7 @@ fn append_caps_forensic_fields() {
     record.error = Some("e".repeat(ERROR_CAP + 20));
     record.last_message = Some("m".repeat(LAST_MESSAGE_CAP + 20));
     record.check = Some(CheckRecord {
+        agent: None,
         output_path: None,
         code: Some(1),
         timed_out: false,

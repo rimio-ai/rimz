@@ -540,6 +540,7 @@ fn spawn_timeout_prefers_task_then_config_then_builtin() {
 #[test]
 fn budget_refusal_finishes_as_a_recorded_gate() {
     let check = CheckRecord {
+        agent: None,
         code: Some(1),
         timed_out: false,
         output: "guard failed".to_owned(),
