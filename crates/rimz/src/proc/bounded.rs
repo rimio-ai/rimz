@@ -29,6 +29,10 @@ const DRAIN_READS: usize = 8;
 const REAP_STEP_MIN: Duration = Duration::from_micros(40);
 const REAP_STEP_MAX: Duration = Duration::from_millis(1);
 
+/// How long an interruptible run waits on its pipes between two asks of its
+/// interrupt.
+const INTERRUPT_STEP: Duration = Duration::from_millis(10);
+
 #[derive(Debug)]
 pub(crate) struct BoundedOutput {
     pub(crate) status: ExitStatus,
@@ -46,10 +50,23 @@ pub(crate) struct BoundedOutput {
 /// fires, so its pid cannot be recycled before the deadline signal lands.
 /// On timeout, only bytes available without waiting for pipe EOF are drained.
 pub(crate) fn pump_child(
+    child: Child,
+    input: Option<&[u8]>,
+    deadline: Instant,
+    kill_scope: KillScope,
+) -> io::Result<BoundedOutput> {
+    pump_child_until(child, input, deadline, kill_scope, None)
+}
+
+/// [`pump_child`] with an interrupt asked at least every [`INTERRUPT_STEP`].
+/// A true answer kills and reaps the child as the deadline does, then returns
+/// [`io::ErrorKind::Interrupted`] in place of the captured output.
+fn pump_child_until(
     mut child: Child,
     input: Option<&[u8]>,
     deadline: Instant,
     kill_scope: KillScope,
+    mut interrupted: Option<&mut dyn FnMut() -> bool>,
 ) -> io::Result<BoundedOutput> {
     let mut stdout = nonblocking(child.stdout.take()).unwrap_or_default();
     let mut stderr = nonblocking(child.stderr.take()).unwrap_or_default();
@@ -76,14 +93,18 @@ pub(crate) fn pump_child(
     let mut stderr_bytes = Vec::new();
     let mut reap_step = REAP_STEP_MIN;
     let (status, timed_out) = loop {
+        let canceled = interrupted.as_mut().is_some_and(|ask| ask());
         let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
+        if canceled || remaining.is_zero() {
             let pid = Pid::from_raw(child.id() as i32);
             let _ = match kill_scope {
                 KillScope::Process => kill(pid, Signal::SIGKILL),
                 KillScope::Group => killpg(pid, Signal::SIGKILL),
             };
             let status = child.wait()?;
+            if canceled {
+                return Err(io::ErrorKind::Interrupted.into());
+            }
             for _ in 0..DRAIN_READS {
                 let more_stdout = read_pipe(&mut stdout, &mut stdout_bytes);
                 let more_stderr = read_pipe(&mut stderr, &mut stderr_bytes);
@@ -117,9 +138,13 @@ pub(crate) fn pump_child(
             .into_iter()
             .flatten()
             .collect();
+            let wait = match interrupted {
+                Some(_) => remaining.min(INTERRUPT_STEP),
+                None => remaining,
+            };
             match poll(
                 &mut fds,
-                PollTimeout::try_from(remaining).unwrap_or(PollTimeout::MAX),
+                PollTimeout::try_from(wait).unwrap_or(PollTimeout::MAX),
             ) {
                 Ok(_) => {
                     let mut events = fds.iter();
@@ -214,13 +239,38 @@ pub(crate) fn run_bounded_output(
     command: &mut Command,
     timeout: Duration,
 ) -> io::Result<BoundedOutput> {
+    run_bounded(command, timeout, None)
+}
+
+/// [`run_bounded_output`] that also stops when `interrupted` answers true:
+/// the process group is killed and reaped, and the run returns
+/// [`io::ErrorKind::Interrupted`].
+pub(crate) fn run_bounded_output_interruptible(
+    command: &mut Command,
+    timeout: Duration,
+    mut interrupted: impl FnMut() -> bool,
+) -> io::Result<BoundedOutput> {
+    run_bounded(command, timeout, Some(&mut interrupted))
+}
+
+fn run_bounded(
+    command: &mut Command,
+    timeout: Duration,
+    interrupted: Option<&mut dyn FnMut() -> bool>,
+) -> io::Result<BoundedOutput> {
     super::testkit::count_spawn();
     command.process_group(0);
     let child = command
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;
-    let output = pump_child(child, None, Instant::now() + timeout, KillScope::Group)?;
+    let output = pump_child_until(
+        child,
+        None,
+        Instant::now() + timeout,
+        KillScope::Group,
+        interrupted,
+    )?;
     if output.timed_out {
         tracing::debug!(
             program = %command.get_program().to_string_lossy(),
@@ -237,7 +287,8 @@ mod tests {
     use std::thread::{self, spawn};
     use std::time::{Duration, Instant};
 
-    use super::run_bounded_output;
+    use super::{run_bounded_output, run_bounded_output_interruptible};
+    use crate::proc::process_is_live;
 
     fn probe_thread_id() -> u64 {
         let id = spawn(|| thread::current().id())
@@ -353,5 +404,56 @@ mod tests {
             assert!(output.timed_out, "{script}");
             assert!(started.elapsed() < Duration::from_secs(1));
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn bounded_output_deadline_survives_an_escaped_pipe_holder() {
+        let mut command = Command::new("sh");
+        command.args(["-c", "setsid sh -c 'printf escaped; sleep 2' & wait"]);
+        let started = Instant::now();
+        let output = run_bounded_output(&mut command, Duration::from_millis(100)).unwrap();
+        assert!(output.timed_out);
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "escaped pipe holder delayed the timeout: {:?}",
+            started.elapsed()
+        );
+    }
+
+    #[test]
+    fn bounded_output_interrupt_kills_and_reaps_the_group() {
+        let dir = tempfile::tempdir().unwrap();
+        let pid_file = dir.path().join("child-pid");
+        let mut command = Command::new("sh");
+        command
+            .args([
+                "-c",
+                "sleep 30 & printf '%s' $! > \"$CHECK_CHILD_PID\"; wait",
+            ])
+            .env("CHECK_CHILD_PID", &pid_file);
+        let started = Instant::now();
+        let result = run_bounded_output_interruptible(&mut command, Duration::from_secs(2), || {
+            std::fs::read_to_string(&pid_file).is_ok_and(|pid| !pid.is_empty())
+        });
+        assert!(
+            result
+                .as_ref()
+                .is_err_and(|error| error.kind() == std::io::ErrorKind::Interrupted),
+            "interrupt must end the bounded process: {result:?}"
+        );
+        assert!(started.elapsed() < Duration::from_secs(1));
+        let pid = std::fs::read_to_string(pid_file)
+            .unwrap()
+            .parse::<u32>()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while process_is_live(pid, None) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            !process_is_live(pid, None),
+            "interrupted descendant survived"
+        );
     }
 }

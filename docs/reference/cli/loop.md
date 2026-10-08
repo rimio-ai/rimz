@@ -335,11 +335,17 @@ A scheduled check-only task opens its root's room before it runs the check, so a
 
 `--verify <CMD>` runs after an `--agent` turn and re-prompts the same session with the failure until the command passes or `--max-attempts` turns are spent, then records `verify failed`. `--wait` and check-only tasks refuse it, because they have no supervised session to re-prompt. The retry loop is the one [supervised runs](./agents.md#supervised-runs--p) use.
 
-`--check-agent` requires `--agent` or `--wait`, and exactly one of `--check-prompt` and `--check-prompt-file`. The prompt flags, `--check-recheck`, and `--check-timeout` require `--check-agent`; `--check-recheck` also requires `--stay`. Layouts with multiple cells and kinds other than Claude or Codex are refused at add. Agent checks are stored as a [check table](../../guide/configuration.md#looptoml-scheduled-turns), and receipts, `loop show`, and `loop list` name them as ``check by `<profile>` ``. Both check forms are accepted with `--stay`. Agent checks currently refuse to run with `agent checks are not runnable yet`; resident shell checks are stored but not yet executed.
+`--check-agent` requires `--agent` or `--wait`, and exactly one of `--check-prompt` and `--check-prompt-file`. The prompt flags, `--check-recheck`, and `--check-timeout` require `--check-agent`; `--check-recheck` also requires `--stay`. Layouts with multiple cells and kinds other than Claude or Codex are refused at add. Agent checks are stored as a [check table](../../guide/configuration.md#looptoml-scheduled-turns), and receipts, `loop show`, and `loop list` name them as ``check by `<profile>` ``. Both check forms run with `--stay`, before the action launches. A resident check runs again on each eligible fire; a decline does not yet suppress later fires.
+
+The checker runs headlessly in the task's checkout, with the profile's isolation and the room-default account. It has no pane or user to question, and is instructed to change nothing. This is an instruction, not an enforced read-only permission mode. Its final answer is one JSON object with `pass` and `reason`: `pass: true` counts as success, `pass: false` as failure, and `--on` applies as above. A missing or invalid verdict, provider failure, or timeout lets the action proceed, with the error in `loop logs`; a provider outage does not add a strike. A missing profile, unsupported kind, or unreadable prompt file instead records `error` and stops the fire.
+
+`--check-timeout` caps only the checker, default `5m`; the task's `--timeout` never caps an agent check. Relative checker prompt files resolve beside `loop.toml` for machine and instance tasks, or beside `.rimz/config.toml` for project tasks. A fired prompt includes ``--- check by `<profile>` (<kind> <model>): pass ---`` (or `fail` or `no verdict`) and the reason or error. `loop logs` shows the verdict, reason, cost when known, and token counts. The task's recorded cost and tokens include both the checker and the action.
+
+Ctrl-C during an agent check cancels the checker and the fire, exits `130`, and neither launches the action nor sends a delivery. This also applies when the start throttle is off or has no limits.
 
 ## Budgets, gates, and strikes
 
-Gates run before the check, so a closed gate spends nothing and opens no room. A gate skip never counts as a strike.
+Budget, account, and deadline gates run before the check, so their refusals spend nothing and open no room. An agent checker also passes the same scope gates for its own kind and room-default account before it runs; a refusal skips the entire fire without running the check or launching the action. The start throttle runs after the check. A gate skip never counts as a strike.
 
 ### Budgets
 

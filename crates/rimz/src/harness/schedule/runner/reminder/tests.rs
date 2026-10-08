@@ -59,6 +59,48 @@ fn watchdog() -> TaskEntry {
 const TWO_HOURS: Duration = Duration::from_secs(2 * 60 * 60);
 
 #[test]
+fn resident_reminder_names_its_agent_check() {
+    let mut entry = resident("ci=failed");
+    entry.check = Some(
+        toml::from_str::<crate::config::TaskCheck>("agent = 'codex'\nprompt = 'Is work needed?'\n")
+            .unwrap(),
+    );
+    entry.on = Some(CheckOn::Success);
+    let text = body("repair", entry, LoopRunMode::Scheduled, None);
+    assert!(text.contains("and its check by `codex` passes"), "{text}");
+}
+
+#[test]
+fn check_reminder_orders_the_headless_rule_action_and_verdict_contract() {
+    let task = LoadedTask::new("repair", resident("ci=failed"), TaskSource::Config);
+    let text = compose_check("repair", &task, "Repair CI.\nDetails.");
+    let positions = [
+        "headless",
+        "read-only",
+        "`repair`",
+        "`ci=failed` holds",
+        "`claude`",
+        "Repair CI.",
+        "on = fail",
+        "{\"pass\":",
+        "rimz loop show",
+    ]
+    .map(|part| {
+        text.find(part)
+            .unwrap_or_else(|| panic!("missing {part}: {text}"))
+    });
+    assert!(positions.windows(2).all(|pair| pair[0] < pair[1]), "{text}");
+    assert!(
+        text.contains("ask no questions") && text.contains("change nothing"),
+        "{text}"
+    );
+    assert!(
+        !text.contains("Details."),
+        "only the action prompt's first line"
+    );
+}
+
+#[test]
 fn approved_examples_render_exactly() {
     let triage = resident("pr=merged && window.5h.left>=42");
     assert_eq!(

@@ -525,7 +525,8 @@ path = "crates/rimz/src/harness"
 # LaunchPlan exposes only the handoff path using its privately resolved temp owner (+1).
 # The supervisor wakes receipt-cadence tail drains through ParentWatch (+1).
 # ModelRefreshFailure carries actual catalog refresh failures to the exec wrapper (+1).
-surface-budget = 757
+# AgentCheckRecord carries headless verdicts and usage into loop CLI forensics (+1).
+surface-budget = 758
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -621,7 +622,8 @@ upward-dependencies = [
 # `root_path_identity` reads what a process sees at a path in its own root; Linux and non-Linux definitions (+2).
 # `memory` is the host and cgroup memory reading that `lsp` and the loop throttle share: module, reading, error, sampler (+4).
 # The calling-thread bounded pump and its kill scope are shared with mux (+2).
-surface-budget = 114
+# Headless loop guards use cancellable bounded capture; existing probes keep the non-cancellable wrapper (+1).
+surface-budget = 115
 
 [[module]]
 path = "crates/rimz/src/reload.rs"
@@ -1164,12 +1166,14 @@ allowed-dependencies = [
     "harness::launch",
     "harness::launch_reminders",
     "harness::prompt_compose",
+    "harness::schedule",
     "harness::subagent_policy",
     "harness::team_prompt",
     "ids",
     "lsp::registry",
     "mux::domain",
     "sandbox",
+    "workspace",
     "worktree",
 ]
 # The exec wrapper and inspection share one read-only compiler and write boundary.
@@ -1181,6 +1185,7 @@ allowed-dependencies = [
 # The exec wrapper decides its launch through `prepare_exec` and its `ExecPreparation` outcome; `resolve_model` stays harness-visible for resume tests (+2).
 # The wrapper's handoff path retains the plan's resolved temp owner (+1).
 # ModelRefreshFailure preserves refresh evidence through a failed launch compile (+1).
+# Headless loop checks pin workspace identity without inheriting an agent or channel.
 surface-budget = 13
 
 [[module]]
