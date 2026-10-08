@@ -649,7 +649,7 @@ fn resolve(root: &Path, files: &[PathBuf], path: &str) -> Vec<PathBuf> {
     let Some(path) = query::checkout_relative(root, Path::new(path)) else {
         return Vec::new();
     };
-    if files.contains(&path) {
+    if files.contains(&path) || root.join(&path).is_file() {
         return vec![path];
     }
     files
