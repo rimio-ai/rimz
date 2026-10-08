@@ -664,7 +664,8 @@ path = "crates/rimz/src/sidebar"
 # Roster publication confirms the existing election without the fetch-start memo (+1).
 # One login's projected panel serves providers and accounts list (+1).
 # Room/own observation boundaries, shared signatures, native focus queries and retained-own receipt merging (+8).
-surface-budget = 237
+# The attachment's pre-paint seed reads the validated published pair without store access (+1).
+surface-budget = 238
 
 [[verdict]]
 kind = "item"

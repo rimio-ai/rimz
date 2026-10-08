@@ -13,8 +13,8 @@ use crate::{RuntimePaths, StatePaths, Store};
 use super::cache::read_snapshot_cache;
 use super::enrich::{FoldOpts, WorkspaceSnapshot, enrich_workspace, project_local};
 use super::workspace_projection::{
-    WORKSPACE_PROJECTION_SCHEMA_VERSION, WorkspaceProjectionSource, read_workspace_projection,
-    workspace_projection_path,
+    PublishedWorkspaceProjection, WORKSPACE_PROJECTION_SCHEMA_VERSION, WorkspaceProjectionSource,
+    read_workspace_projection, workspace_projection_path,
 };
 
 #[cfg(test)]
@@ -23,6 +23,36 @@ mod tests;
 /// Re-exported for long-lived consumers (the sidebar fetch worker), which sit
 /// behind this module's read-only boundary and never import `crate::store`.
 pub use crate::store::snapshot::RollupCursor;
+
+/// Read a same-session publication without checking its source against the store.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "Used by the attachment seed in the next commit.")
+)]
+pub(crate) fn read_published_pair(
+    runtime: &RuntimePaths,
+    session: &str,
+) -> Option<(WorkspaceSnapshot, std::sync::Arc<super::frame::PaneFrame>)> {
+    let (published, frame) = read_publication(runtime, session)?;
+    Some((published.projection.clone(), frame))
+}
+
+fn read_publication(
+    runtime: &RuntimePaths,
+    session: &str,
+) -> Option<(
+    std::sync::Arc<PublishedWorkspaceProjection>,
+    std::sync::Arc<super::frame::PaneFrame>,
+)> {
+    let frame = read_snapshot_cache(&runtime.pane_frame_path(), session)?;
+    let published = read_workspace_projection(runtime)?;
+    if published.schema_version != WORKSPACE_PROJECTION_SCHEMA_VERSION
+        || published.session != session
+    {
+        return None;
+    }
+    Some((published, frame))
+}
 
 /// Long-lived consumer context and incremental store-rollup state.
 pub struct PublishedSnapshotReader {
@@ -97,22 +127,16 @@ impl PublishedSnapshotReader {
         WorkspaceSnapshot,
         Option<std::sync::Arc<super::frame::PaneFrame>>,
     )> {
-        let frame = read_snapshot_cache(&self.runtime.pane_frame_path(), &self.session);
-        let adopted = frame.as_deref().and_then(|frame| {
-            let published = read_workspace_projection(&self.runtime)?;
-            if published.schema_version != WORKSPACE_PROJECTION_SCHEMA_VERSION
-                || published.session != self.session
-            {
-                return None;
-            }
-            let current = WorkspaceProjectionSource::current(state, frame)?;
-            (current.is_matchable() && published.source == current)
-                .then(|| published.projection.clone())
-        });
+        let adopted =
+            read_publication(&self.runtime, &self.session).and_then(|(published, frame)| {
+                let current = WorkspaceProjectionSource::current(state, &frame)?;
+                (current.is_matchable() && published.source == current)
+                    .then(|| (published.projection.clone(), frame))
+            });
         match adopted {
-            Some(workspace) => {
+            Some((workspace, frame)) => {
                 self.source = ConsumerSnapshotSource::Adoption;
-                Ok((workspace, frame))
+                Ok((workspace, Some(frame)))
             }
             None => {
                 self.source = ConsumerSnapshotSource::Fallback;
