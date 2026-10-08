@@ -77,9 +77,13 @@ fn select_backend(
 }
 
 fn detect_env_mux() -> Option<MuxName> {
-    if std::env::var_os("ZELLIJ").is_some() || std::env::var_os("ZELLIJ_PANE_ID").is_some() {
+    detect_env_mux_with(|name| std::env::var_os(name))
+}
+
+fn detect_env_mux_with(get: impl Fn(&str) -> Option<std::ffi::OsString>) -> Option<MuxName> {
+    if get("ZELLIJ").is_some() || get("ZELLIJ_PANE_ID").is_some() {
         Some(MuxName::Zellij)
-    } else if std::env::var_os("TMUX").is_some() || std::env::var_os("TMUX_PANE").is_some() {
+    } else if get("TMUX").is_some() || get("TMUX_PANE").is_some() {
         Some(MuxName::Tmux)
     } else {
         None
@@ -103,6 +107,24 @@ pub fn auto_detect_backend(explicit: Option<MuxName>) -> Result<MuxName> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn session_environment_selects_the_backend_without_a_pane() {
+        for (names, expected) in [
+            (vec!["ZELLIJ"], Some(MuxName::Zellij)),
+            (vec!["TMUX"], Some(MuxName::Tmux)),
+            (vec!["ZELLIJ", "TMUX"], Some(MuxName::Zellij)),
+            (vec![], None),
+            (vec!["ZELLIJ_PANE_ID"], Some(MuxName::Zellij)),
+            (vec!["TMUX_PANE"], Some(MuxName::Tmux)),
+        ] {
+            assert_eq!(
+                detect_env_mux_with(|name| names.contains(&name).then(|| "1".into())),
+                expected,
+                "{names:?}"
+            );
+        }
+    }
 
     #[test]
     fn live_sessions_resolve_with_zellij_first_precedence() {
