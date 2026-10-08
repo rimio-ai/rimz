@@ -87,8 +87,8 @@ fn phase1_to_3_agent_moves_from_idle_to_running_to_waiting() {
     // can appear from live-pane presence before the event-fresh model folds in.
     let screen = room.wait_for(|s| s.contains("○ coder") && s.contains("GPT 5.5"), SETTLE);
     assert!(
-        screen.contains("main ┄"),
-        "the agent groups under its worktree:\n{screen}"
+        screen.lines().any(|line| line.trim() == "⑂ main"),
+        "the agent groups under its unsealed worktree header:\n{screen}"
     );
     assert!(
         screen.contains("○ coder"),
@@ -241,8 +241,8 @@ fn phase6_reattach_reconstructs_from_store() {
     let room = RoomHarness::launch(&env, MuxName::Tmux);
     let screen = room.wait_for(|s| s.contains("○ coder"), SETTLE);
     assert!(
-        screen.contains("main ┄"),
-        "reattach reconstructs the worktree group:\n{screen}"
+        screen.lines().any(|line| line.trim() == "⑂ main"),
+        "reattach reconstructs the unsealed worktree group:\n{screen}"
     );
     assert!(
         screen.contains("○ coder"),

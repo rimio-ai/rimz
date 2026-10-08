@@ -2,11 +2,11 @@ use rimz::ids::MuxName;
 use serde_json::{Value, json};
 
 use super::{
-    RoomHarness, SETTLE, compacting_row, pi_agent_end, pi_agent_settled, pi_before_agent_start,
-    pi_session_before_compact, pi_session_compact, pi_session_shutdown, pi_session_start,
-    pi_tool_execution_end, post_compact, post_tool_use, pre_compact, running_row, session_end,
-    session_start, session_start_compact, stop_failure, stop_turn, subagent_start, subagent_stop,
-    thinking_row, user_prompt_submit,
+    KEY_DOWN, RoomHarness, SETTLE, compacting_row, pi_agent_end, pi_agent_settled,
+    pi_before_agent_start, pi_session_before_compact, pi_session_compact, pi_session_shutdown,
+    pi_session_start, pi_tool_execution_end, post_compact, post_tool_use, pre_compact, running_row,
+    session_end, session_start, session_start_compact, stop_failure, stop_turn, subagent_start,
+    subagent_stop, thinking_row, user_prompt_submit,
 };
 use crate::common::Env;
 
@@ -370,6 +370,18 @@ fn subagent_child_row_appears_and_stays_recent_across_the_next_turn() {
         room.agent_hook(agent.source(), &agent.register());
         room.agent_hook(agent.source(), &agent.prompt("parent task"));
         room.wait_for(|s| thinking_row(s, agent.role()), SETTLE);
+
+        room.send_keys(KEY_DOWN);
+        let selected_parent = |screen: &str| {
+            screen
+                .lines()
+                .any(|line| line.trim_start().starts_with('▌') && line.contains(agent.role()))
+        };
+        let screen = room.wait_for(selected_parent, SETTLE);
+        assert!(
+            selected_parent(&screen),
+            "the first down key selects the parent card:\n{screen}"
+        );
 
         let child_id = format!("{}-child", agent.source());
         room.agent_hook(agent.source(), &subagent_start(agent.session(), &child_id));
