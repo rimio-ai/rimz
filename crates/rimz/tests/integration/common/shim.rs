@@ -92,6 +92,14 @@ pub fn cargo_bin(name: &str, cargo_env_path: &str) -> PathBuf {
     archive_extracted_bin(name).unwrap_or_else(|| PathBuf::from(cargo_env_path))
 }
 
+/// Absolute path to the built `codex app-server` stub fixture.
+pub(crate) fn codex_appserver_stub() -> PathBuf {
+    cargo_bin(
+        "codex-appserver-stub",
+        env!("CARGO_BIN_EXE_codex-appserver-stub"),
+    )
+}
+
 /// The `zellij-trace` test binary: a fake `zellij` that logs each call.
 pub fn zellij_trace_shim() -> PathBuf {
     cargo_bin("zellij-trace", env!("CARGO_BIN_EXE_zellij-trace"))

@@ -44,6 +44,8 @@ pub use payloads::{
     lifecycle_event, permission_payload, pi_tool_call_payload,
 };
 #[cfg(unix)]
+pub(crate) use shim::codex_appserver_stub;
+#[cfg(unix)]
 pub use shim::{cargo_bin, zellij_trace_shim};
 pub use shim::{hermetic_providers, provider_bin};
 #[cfg(unix)]

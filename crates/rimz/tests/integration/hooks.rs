@@ -14,8 +14,8 @@ use serde_json::{Value, json};
 use sha2::Sha256;
 
 use crate::common::{
-    Env, claude_pre_tool_use_payload, codex_permission_payload, codex_pre_tool_use_payload,
-    permission_payload, pi_tool_call_payload, tmux_pane,
+    Env, claude_pre_tool_use_payload, codex_appserver_stub, codex_permission_payload,
+    codex_pre_tool_use_payload, permission_payload, pi_tool_call_payload, tmux_pane,
 };
 
 #[test]
@@ -3560,14 +3560,6 @@ fn codex_hook_with_app_server(env: &Env, codex_bin: &std::path::Path) -> Command
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     cmd
-}
-
-/// Absolute path to the built `codex app-server` stub fixture.
-fn codex_appserver_stub() -> std::path::PathBuf {
-    crate::common::cargo_bin(
-        "codex-appserver-stub",
-        env!("CARGO_BIN_EXE_codex-appserver-stub"),
-    )
 }
 
 /// A Codex turn boundary spawns a detached refresh that reads the app-server
