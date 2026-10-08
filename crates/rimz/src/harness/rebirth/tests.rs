@@ -214,6 +214,8 @@ impl Fixture {
         let runtime =
             RuntimePaths::under(workspace.clone(), &dir.path().join("runtime")).expect("runtime");
         let store = Store::open(paths.clone(), runtime.clone()).expect("store");
+        let resolved = crate::workspace::WorkspaceResolver::resolve(&project, None).unwrap();
+        store.record_workspace(&resolved).unwrap();
         write_boot_marker(&paths.boot_marker, "boot-a");
         let mut roster = BTreeSet::new();
         for (id, worktree, create_worktree) in agents {

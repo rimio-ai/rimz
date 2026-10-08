@@ -100,6 +100,13 @@ fn wakeup_fixture() -> Option<WakeupFixture> {
     let state =
         StatePaths::for_project_root_under(&project_root, &state_root).expect("state paths");
     let runtime = RuntimePaths::for_state_under(&state, &runtime_root);
+    let mut workspace =
+        rimz::WorkspaceResolver::resolve_under(&project_root, None, &state_root).unwrap();
+    workspace.session_name = SESSION_NAME.to_owned();
+    rimz::Store::open(state, runtime.clone())
+        .unwrap()
+        .record_workspace(&workspace)
+        .unwrap();
     runtime.ensure_dirs().expect("ensure runtime dirs");
     if crate::common::af_unix_bind_sandboxed(&runtime.sock_dir) {
         crate::common::skip(crate::common::AF_UNIX_SANDBOXED);

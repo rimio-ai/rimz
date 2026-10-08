@@ -660,6 +660,7 @@ fn link_stats_ingest_writes_the_runtime_sidecar_and_acks() {
     use std::io::{BufRead as _, Write as _};
 
     let env = Env::new();
+    env.record(&env.project_root);
     let dir = env.project_root.to_string_lossy().into_owned();
     let proc_net = env.project_root.join("proc-net");
     std::fs::create_dir_all(&proc_net).expect("create proc net fixture");
@@ -739,6 +740,7 @@ fn link_stats_ingest_writes_the_runtime_sidecar_and_acks() {
 #[test]
 fn link_stats_ingest_keeps_a_newer_publishers_sidecar() {
     let env = Env::new();
+    env.record(&env.project_root);
     let runtime = env.runtime_paths();
     let path = rimz::remote::link::stats_path(&runtime);
     let seeded = rimz::remote::link::LinkStatsFile::new(

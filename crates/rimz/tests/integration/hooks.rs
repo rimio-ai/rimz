@@ -123,6 +123,7 @@ fn run_claude_lifecycle(env: &Env, payload: Value) {
 #[test]
 fn kiro_global_hook_install_gates_version_reclaims_legacy_and_routes_neutrally() {
     let env = Env::new();
+    env.record(&env.project_root);
     let path = env.agent_config_path("kiro");
     let bin = env.home_root.join("kiro-bin");
     std::fs::create_dir_all(&bin).expect("mkdir Kiro stub dir");
@@ -256,6 +257,7 @@ fn kiro_global_hook_install_gates_version_reclaims_legacy_and_routes_neutrally()
 #[test]
 fn grok_global_hooks_preserve_user_config_and_route_camelcase_events_neutrally() {
     let env = Env::new();
+    env.record(&env.project_root);
     let path = env.agent_config_path("grok");
     std::fs::create_dir_all(path.parent().expect("Grok hooks parent"))
         .expect("mkdir Grok hooks parent");
@@ -399,6 +401,7 @@ fn session_start_hooks_write_lifecycle_rows() {
         ),
     ] {
         let env = Env::new();
+        env.record(&env.project_root);
         let payload = serde_json::to_string(&payload).expect("payload");
         let output = env.run_hook(source, &payload);
         assert!(
@@ -430,6 +433,7 @@ fn runtime_env_context_reaches_the_root_prompt_and_never_a_side_conversation() {
     }
     let env = Env::new();
     crate::common::git::init_repo(&env.project_root);
+    env.record(&env.project_root);
     let run = |payload: Value| {
         let output = env.run_installed_hook_in_pane(
             "codex",
@@ -490,6 +494,7 @@ fn runtime_env_context_reaches_the_root_prompt_and_never_a_side_conversation() {
 fn codex_side_conversation_hooks_credit_the_host_without_becoming_an_agent() {
     for host_running in [false, true] {
         let env = Env::new();
+        env.record(&env.project_root);
         let run = |payload: Value| {
             let output = env.run_installed_hook_in_pane(
                 "codex",
@@ -582,6 +587,7 @@ fn codex_side_conversation_hooks_credit_the_host_without_becoming_an_agent() {
 fn claude_launch_seeds_do_not_replace_observed_identity() {
     for observe_first in [true, false] {
         let env = Env::new();
+        env.record(&env.project_root);
         let transcript = env.project_root.join("identity.jsonl");
         std::fs::write(&transcript, "").unwrap();
         let hook = |event: &str,
@@ -676,6 +682,7 @@ fn claude_launch_seeds_do_not_replace_observed_identity() {
 #[test]
 fn claude_price_book_capacity_does_not_replace_an_established_window() {
     let env = Env::new();
+    env.record(&env.project_root);
     let pricing = env.runtime_paths().shared_pricing_cache_path();
     std::fs::create_dir_all(pricing.parent().unwrap()).unwrap();
     std::fs::write(
@@ -725,6 +732,7 @@ fn claude_price_book_capacity_does_not_replace_an_established_window() {
 #[test]
 fn kimi_subagent_join_surfaces_children_and_suppresses_child_stops() {
     let env = Env::new();
+    env.record(&env.project_root);
     let session_id = "session-kimi-parent";
     let kimi_home = env.home_root.join(".kimi-code");
     let session = kimi_home.join("sessions/wd_project").join(session_id);
@@ -918,6 +926,7 @@ fn kimi_subagent_join_surfaces_children_and_suppresses_child_stops() {
 #[test]
 fn copilot_native_order_routes_camel_case_identity_context_and_cleanup() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("copilot");
     assert!(env.agent_hooks_installed("copilot"));
 
@@ -1120,6 +1129,7 @@ fn copilot_native_order_routes_camel_case_identity_context_and_cleanup() {
 #[test]
 fn cursor_lifecycle_hook_writes_state_and_returns_json_neutral() {
     let env = Env::new();
+    env.record(&env.project_root);
     let payload = serde_json::to_string(&json!({
         "hook_event_name": "sessionStart",
         "conversation_id": "conv-cursor-01",
@@ -1148,6 +1158,7 @@ fn cursor_lifecycle_hook_writes_state_and_returns_json_neutral() {
 #[test]
 fn cursor_parent_hook_derives_chats_store_children_once() {
     let env = Env::new();
+    env.record(&env.project_root);
     let parent_id = "cursor-derived-parent";
     let child_id = "cursor-derived-child";
     let registered = env.run_hook(
@@ -1264,6 +1275,7 @@ fn cursor_parent_hook_derives_chats_store_children_once() {
 #[test]
 fn cursor_user_hook_uses_project_dir_for_pinned_worktree_attribution() {
     let env = Env::new();
+    env.record(&env.project_root);
     let cursor_cwd = env.home_root.join(".cursor");
     std::fs::create_dir_all(&cursor_cwd).unwrap();
     let payload = json!({
@@ -1334,6 +1346,7 @@ fn cursor_ask_local_store_waits_in_pane_without_creating_a_structured_ask() {
     }
 
     let env = Env::new();
+    env.record(&env.project_root);
     let session_id = "22222222-2222-4222-8222-222222222222";
     let created_at_ms = Timestamp::now().as_millisecond() - 60_000;
     let cursor_home = env.home_root.join(".cursor");
@@ -1503,6 +1516,7 @@ fn cursor_ask_local_store_waits_in_pane_without_creating_a_structured_ask() {
 #[test]
 fn cursor_progress_hook_touches_activity_by_conversation_id() {
     let env = Env::new();
+    env.record(&env.project_root);
     let payload = serde_json::to_string(&json!({
         "hook_event_name": "postToolUse",
         "conversation_id": "conv-cursor-progress",
@@ -1535,6 +1549,7 @@ fn cursor_progress_hook_touches_activity_by_conversation_id() {
 #[test]
 fn repeated_tool_payload_updates_and_restarts_the_activity_run() {
     let env = Env::new();
+    env.record(&env.project_root);
     run_claude_lifecycle(
         &env,
         json!({
@@ -1657,6 +1672,7 @@ fn repeated_tool_payload_updates_and_restarts_the_activity_run() {
 #[test]
 fn cursor_concurrent_subagents_fold_independently_without_context_sidecars() {
     let env = Env::new();
+    env.record(&env.project_root);
     let run = |payload: Value| {
         let event = payload["hook_event_name"]
             .as_str()
@@ -1810,6 +1826,7 @@ fn cursor_concurrent_subagents_fold_independently_without_context_sidecars() {
 #[test]
 fn cursor_response_tokens_and_interruption_flow_end_to_end() {
     let env = Env::new();
+    env.record(&env.project_root);
     let transcript_path = env.project_root.join("conv-cursor-flow.jsonl");
     std::fs::write(
         &transcript_path,
@@ -1891,6 +1908,7 @@ fn cursor_response_tokens_and_interruption_flow_end_to_end() {
     assert!(context.transcript_stat.is_some());
 
     let aborted = Env::new();
+    aborted.record(&aborted.project_root);
     let payload = serde_json::to_string(&json!({
         "hook_event_name": "stop",
         "conversation_id": "conv-cursor-aborted",
@@ -1910,6 +1928,7 @@ fn cursor_response_tokens_and_interruption_flow_end_to_end() {
 #[test]
 fn cursor_transcript_recovery_does_not_settle_a_new_active_turn() {
     let env = Env::new();
+    env.record(&env.project_root);
     let transcript_path = env.project_root.join("conv-cursor-recovery.jsonl");
     let terminal = "{\"type\":\"turn_ended\",\"status\":\"success\"}\n";
     let first_turn = concat!(
@@ -2031,6 +2050,7 @@ fn cursor_transcript_recovery_does_not_settle_a_new_active_turn() {
 fn terminal_supervised_hook_settles_session_spend_once_but_not_for_peers() {
     for peer in [false, true] {
         let env = Env::new();
+        env.record(&env.project_root);
         let transcript = env.project_root.join("spend.jsonl");
         let usage = |input, output| {
             json!({
@@ -2116,6 +2136,7 @@ fn terminal_supervised_hook_settles_session_spend_once_but_not_for_peers() {
 #[test]
 fn duplicate_cursor_session_end_is_idempotent_beyond_audit_end_stamps() {
     let env = Env::new();
+    env.record(&env.project_root);
     let transcript_path = env.project_root.join("conv-cursor-end.jsonl");
     std::fs::write(
         &transcript_path,
@@ -2290,6 +2311,7 @@ fn internal_app_server_hook_is_suppressed_and_records_nothing() {
 fn permission_hook_sets_waiting_status() {
     for (source, payload) in permission_cases() {
         let env = Env::new();
+        env.record(&env.project_root);
         let output = env.run_hook(source, &payload);
         assert_hook_succeeded_neutral(source, output);
 
@@ -2314,6 +2336,7 @@ fn permission_hook_sets_waiting_status() {
 #[test]
 fn permission_waiting_clears_on_tool_use() {
     let env = Env::new();
+    env.record(&env.project_root);
     let output = env.run_hook("claude", &permission_payload("Bash"));
     assert_hook_succeeded_neutral("claude", output);
 
@@ -2357,6 +2380,7 @@ fn pi_tool_call_emits_neutral_and_no_waiting_row() {
 #[test]
 fn codex_subagent_lifecycle_uses_child_agent_identity() {
     let env = Env::new();
+    env.record(&env.project_root);
     let run = |payload: Value| {
         let payload = serde_json::to_string(&payload).expect("payload");
         let output = env
@@ -2489,6 +2513,7 @@ fn codex_subagent_lifecycle_uses_child_agent_identity() {
 #[test]
 fn codex_subagent_permission_without_parent_frame_stays_metadata_only() {
     let env = Env::new();
+    env.record(&env.project_root);
     let start_payload = serde_json::to_string(&json!({
         "hook_event_name": "SubagentStart",
         "session_id": "sess-codex-parent",
@@ -2536,6 +2561,7 @@ fn claude_in_subagent_tool_event_folds_onto_child() {
     // backgrounded child's mutating tool arrives on the parent's session with a
     // foreign id. It must fold onto the child without advancing the parent.
     let env = Env::new();
+    env.record(&env.project_root);
     let output = env.run_hook(
         "claude",
         &serde_json::to_string(&json!({
@@ -2594,6 +2620,7 @@ fn claude_in_subagent_tool_event_folds_onto_child() {
 #[test]
 fn claude_subagent_ask_waits_and_clears_on_the_child() {
     let env = Env::new();
+    env.record(&env.project_root);
     let run = |payload: Value| {
         let payload = serde_json::to_string(&payload).expect("payload");
         let output = env.run_hook("claude", &payload);
@@ -2663,6 +2690,7 @@ fn waiting_agent_survives_backgrounded_child_tool() {
     // foreign-id drop, the child's mutating PostToolUse advanced the parent's
     // `last_activity` past the ask and the `waiting` fold dropped.
     let env = Env::new();
+    env.record(&env.project_root);
     let run = |payload: &Value| {
         let payload = serde_json::to_string(payload).expect("payload");
         let output = env.run_installed_hook_in_pane("claude", &payload, &[("TMUX_PANE", "%0")]);
@@ -2713,6 +2741,7 @@ fn waiting_agent_survives_backgrounded_child_tool() {
 #[test]
 fn manual_compact_then_pre_tool_use_resumes_running() {
     let env = Env::new();
+    env.record(&env.project_root);
     let run = |payload: &serde_json::Value| {
         let payload = serde_json::to_string(payload).expect("payload");
         let output = env.run_hook("codex", &payload);
@@ -2766,6 +2795,7 @@ fn claude_pre_tool_blocking_events_set_waiting() {
         ("AskUserQuestion", "question"),
     ] {
         let env = Env::new();
+        env.record(&env.project_root);
         let output = env.run_hook("claude", &claude_pre_tool_use_payload(tool));
         assert!(
             output.status.success(),
@@ -2800,6 +2830,7 @@ fn claude_pre_tool_blocking_events_set_waiting() {
 #[test]
 fn codex_request_user_input_sets_waiting() {
     let env = Env::new();
+    env.record(&env.project_root);
     let output = env.run_hook("codex", &codex_pre_tool_use_payload());
     assert!(
         output.status.success(),
@@ -2851,6 +2882,7 @@ fn claude_compaction_bracket_closers_clear_head() {
         ),
     ] {
         let env = Env::new();
+        env.record(&env.project_root);
         run_claude_lifecycle(
             &env,
             json!({
@@ -3059,6 +3091,7 @@ fn cursor_install_from_a_shell_without_xdg_is_current_inside_a_tmux_room() {
 #[test]
 fn cursor_statusline_and_stop_hook_merge_rich_context_and_leave_auto_unpriced() {
     let env = Env::new();
+    env.record(&env.project_root);
     let config = env.cursor_cli_config_path();
     std::fs::create_dir_all(config.parent().unwrap()).unwrap();
     std::fs::write(
@@ -3159,6 +3192,7 @@ fn cursor_statusline_and_stop_hook_merge_rich_context_and_leave_auto_unpriced() 
 #[test]
 fn statusline_feed_with_no_wrap_captures_context_and_folds_snapshot() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
 
     let payload = r#"{
@@ -3205,6 +3239,7 @@ fn statusline_feed_with_no_wrap_captures_context_and_folds_snapshot() {
 #[test]
 fn qwen_statusline_and_hook_fold_into_snapshot() {
     let env = Env::new();
+    env.record(&env.project_root);
     let pricing = env.runtime_paths().shared_pricing_cache_path();
     std::fs::create_dir_all(pricing.parent().unwrap()).unwrap();
     std::fs::write(
@@ -3324,6 +3359,7 @@ fn qwen_statusline_and_hook_fold_into_snapshot() {
 #[test]
 fn statusline_feed_captures_claude_turn_interruption() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     let transcript = env.project_root.join("session.jsonl");
     std::fs::write(
@@ -3366,6 +3402,7 @@ fn statusline_feed_captures_claude_turn_interruption() {
 #[test]
 fn subagent_statusline_feed_writes_one_sidecar_per_task() {
     let env = Env::new();
+    env.record(&env.project_root);
     let pricing = env.runtime_paths().shared_pricing_cache_path();
     std::fs::create_dir_all(pricing.parent().unwrap()).unwrap();
     std::fs::write(
@@ -3541,6 +3578,7 @@ fn codex_appserver_stub() -> std::path::PathBuf {
 #[test]
 fn codex_turn_boundary_refreshes_context_sidecar_from_app_server() {
     let env = Env::new();
+    env.record(&env.project_root);
     let payload = serde_json::to_string(&json!({
         "hook_event_name": "SessionStart",
         "session_id": "sess-codex-rt",
@@ -3604,6 +3642,7 @@ fn codex_turn_boundary_refreshes_context_sidecar_from_app_server() {
 #[test]
 fn codex_stop_over_error_rollout_writes_turn_error_sidecar() {
     let env = Env::new();
+    env.record(&env.project_root);
     let session_id = "sess-codex-error";
     let sessions = env.home_root.join("codex-sessions");
     let day = sessions.join("2026").join("06").join("11");

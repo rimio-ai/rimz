@@ -70,6 +70,7 @@ fn signal_vocabulary_shape_and_cap_are_pinned() {
 #[test]
 fn events_emit_is_durable_and_replayed_by_follow() {
     let env = Env::new();
+    env.record(&env.project_root);
     let emitted = env
         .rimz()
         .args([
@@ -142,6 +143,7 @@ fn append(env: &Env, signal: LifecycleSignal) {
 #[test]
 fn events_follow_replays_then_streams_across_rotation_without_a_gap() {
     let env = Env::new();
+    env.record(&env.project_root);
     append(&env, LifecycleSignal::Registered);
     append(&env, LifecycleSignal::TurnStarted { turn_id: None });
 

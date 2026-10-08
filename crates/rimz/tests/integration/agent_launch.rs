@@ -283,6 +283,7 @@ fn assert_from_pr_launch(cohort: Option<LifecycleSignal>, behind: bool, symlinke
     let env = Env::new();
     env.install_agent_hooks("claude");
     let (pr_head, trunk) = publish_pr_ref(&env, "refs/pull/1/head");
+    env.record(&env.project_root);
     configure_github_origin_rewrite(&env);
     let mut config = "[agents]\nisolation = 'host'\n".to_owned();
     let mut holder = env.home_root.join("project-worktrees/feature");
@@ -833,6 +834,7 @@ fn assert_launch_focus_version(args: &[&str], agent: bool, action: &str, version
 #[test]
 fn unsupported_plugin_peer_launch_explains_that_no_report_will_come() {
     let env = Env::new();
+    env.record(&env.project_root);
     crate::common::wait::register_calling_agent(&env);
     std::fs::write(
         env.rimz_home().join("config.toml"),
@@ -962,6 +964,7 @@ fn receipt_wait_target_finds_the_pending_run(env: &Env, out: &std::process::Outp
 #[test]
 fn peer_launch_receipt_waits_on_the_laned_handle_before_registration() {
     let env = Env::new();
+    env.record(&env.project_root);
     let out = launch_prompted_peer(&env, &["--channel", "lane"]);
     assert_eq!(
         receipt_wait_target_finds_the_pending_run(&env, &out),
@@ -977,6 +980,7 @@ fn peer_launch_reports_only_launcher_opened_turns() {
     use std::time::{Duration, Instant};
 
     let env = Env::new();
+    env.record(&env.project_root);
     let store = env.store();
     let session_name = env.resolve_workspace(&env.project_root).session_name;
     let out = launch_prompted_peer(&env, &[]);
@@ -1176,6 +1180,7 @@ fn peer_launch_reports_only_launcher_opened_turns() {
 #[test]
 fn over_limit_agent_launch_refuses_before_creating_runtime_state() {
     let env = Env::new();
+    env.record(&env.project_root);
     let workspace = env.resolve_workspace(&env.project_root);
     let launch_id = AgentSessionId::from("launch_caller");
     env.store()
@@ -1302,6 +1307,7 @@ fn subagent_caller_refuses_subagent_launch_before_creating_runtime_state() {
 #[test]
 fn user_shell_subagents_list_labels_root_children_main_but_keeps_json_channel() {
     let env = Env::new();
+    env.record(&env.project_root);
     let workspace = env.resolve_workspace(&env.project_root);
     for (id, name, parent) in [
         ("planner", "planner", None),
@@ -1358,6 +1364,7 @@ fn user_shell_subagents_list_labels_root_children_main_but_keeps_json_channel() 
 #[test]
 fn user_shell_subagents_list_inspects_the_channel() {
     let env = Env::new();
+    env.record(&env.project_root);
     let workspace = env.resolve_workspace(&env.project_root);
     let rows = [
         ("claude", "planner", "planner", None, None, "feat-x"),
@@ -1493,6 +1500,7 @@ fn limit_parked_child_lists_paused_and_tells_its_parent_once() {
     use rimz::store::message::{HarnessNotice, MessageSender};
 
     let env = Env::new();
+    env.record(&env.project_root);
     let workspace = env.resolve_workspace(&env.project_root);
     let store = env.store();
     let parent_kind = AgentKind::new_unchecked("claude");
@@ -2390,6 +2398,7 @@ fn explain_redacts_trusted_project_env_in_json_and_human_output() {
 fn explain_seat_replays_current_profile_without_writes_and_refuses_overrides() {
     for stamped in [false, true] {
         let env = Env::new();
+        env.record(&env.project_root);
         let provider_home = env.home_root.join(".claude");
         std::fs::create_dir_all(provider_home.join("projects"))
             .expect("empty conversation catalog");
@@ -2502,6 +2511,7 @@ fn explain_seat_replays_current_profile_without_writes_and_refuses_overrides() {
 #[test]
 fn explain_from_a_subagent_reports_the_refusal_and_prints_the_plan() {
     let env = Env::new();
+    env.record(&env.project_root);
     let config_dir = env.rimz_home();
     std::fs::create_dir_all(&config_dir).expect("mkdir config");
     std::fs::write(
@@ -2539,26 +2549,33 @@ fn explain_from_a_subagent_reports_the_refusal_and_prints_the_plan() {
 
 #[cfg(unix)]
 #[test]
-fn explain_refuses_missing_seats_and_multi_agent_layouts_without_state() {
+fn explain_refuses_missing_seats_and_multi_agent_layouts_without_writes() {
     let env = Env::new();
+    env.record(&env.project_root);
     let state = env.state_path_for(&env.project_root);
+    let record = std::fs::read(&state.workspace_record).unwrap();
     env.rimz()
         .args(["agents", "explain", "@missing"])
         .assert()
         .failure()
-        .stderr(contains("@handle needs a room that has run"));
+        .stderr(contains("no agent matches target `@missing`"));
     env.rimz()
         .args(["agents", "explain", "claude,codex"])
         .assert()
         .failure()
         .stderr(contains("explain describes one agent"));
-    assert!(!state.root.exists(), "explain refusal created room state");
+    assert!(
+        !state.events_log.exists(),
+        "explain refusal appended events"
+    );
+    assert_eq!(std::fs::read(&state.workspace_record).unwrap(), record);
 }
 
 #[cfg(unix)]
 #[test]
 fn unresolved_subagent_list_caller_falls_back_to_channel_scope() {
     let env = Env::new();
+    env.record(&env.project_root);
     let output = env
         .rimz()
         .env(rimz::harness::launch::ENV_AGENT_KIND, "claude")
@@ -2578,6 +2595,7 @@ fn unresolved_subagent_list_caller_falls_back_to_channel_scope() {
 #[test]
 fn empty_subagent_list_explains_itself_on_stderr_only() {
     let env = Env::new();
+    env.record(&env.project_root);
     let workspace = env.resolve_workspace(&env.project_root);
     env.store()
         .append_event(&EventEnvelope::agent_launched(
@@ -2651,6 +2669,7 @@ fn empty_subagent_list_explains_itself_on_stderr_only() {
 #[test]
 fn launch_identity_and_parentage_survive_event_log_rotation() {
     let env = Env::new();
+    env.record(&env.project_root);
     let workspace = env.resolve_workspace(&env.project_root);
     let kind = AgentKind::new_unchecked("codex");
     let agent_id = AgentSessionId::from("provider-rotated-child");
@@ -2738,6 +2757,7 @@ fn launch_identity_and_parentage_survive_event_log_rotation() {
 fn profile_default_exec_stamps_effective_isolation_not_an_override() {
     use rimz::config::Isolation;
     let env = Env::new();
+    env.record(&env.project_root);
     std::fs::create_dir_all(env.rimz_home()).unwrap();
     std::fs::write(
         env.rimz_home().join("config.toml"),
@@ -2855,6 +2875,7 @@ fn resume_exec_attaches_only_the_resumed_session_to_its_pane() {
     // (wrapped, subagent): a direct-exec resume, a wrapped root resume, a wrapped subagent resume.
     for (wrapped, subagent) in [(false, false), (true, false), (true, true)] {
         let env = Env::new();
+        env.record(&env.project_root);
         let shim_dir = write_env_dump_shim(&env, "codex");
         let session_id = AgentSessionId::from("sess-resumed");
         let workspace = env.resolve_workspace(&env.project_root);
@@ -3020,6 +3041,7 @@ fn resume_exec_attaches_only_the_resumed_session_to_its_pane() {
         },
     ] {
         let env = Env::new();
+        env.record(&env.project_root);
         let shim_dir = write_env_dump_shim(&env, "codex");
         let dump = env.home_root.join("codex-no-attach.env");
         let request = ExecRequest {
@@ -3093,6 +3115,7 @@ fn resume_exec_cleanup_case(queue_before_exit: bool) {
         return;
     }
     let env = Env::new();
+    env.record(&env.project_root);
     let store = env.store();
     let workspace = env.resolve_workspace(&env.project_root);
     let kind = AgentKind::new_unchecked("codex");
@@ -3366,6 +3389,7 @@ fn resume_exec_cleanup_case(queue_before_exit: bool) {
 #[test]
 fn shell_rc_env_reaches_the_spawned_agent() {
     let env = Env::new();
+    env.record(&env.project_root);
     let shell = write_fake_login_shell(
         &env,
         "rimz-test-sh",
@@ -3394,6 +3418,7 @@ fn shell_rc_env_reaches_the_spawned_agent() {
 #[test]
 fn bashrc_path_reaches_the_spawned_agent() {
     let env = Env::new();
+    env.record(&env.project_root);
     let shell = write_fake_bash_shell(&env);
     let shim_dir = write_env_dump_shim(&env, "codex");
     std::fs::write(
@@ -3426,6 +3451,7 @@ fn bashrc_path_reaches_the_spawned_agent() {
 #[test]
 fn adapter_preserves_agent_view_shell_env() {
     let env = Env::new();
+    env.record(&env.project_root);
     let shell = write_fake_login_shell(
         &env,
         "rimz-test-sh",
@@ -3454,6 +3480,7 @@ fn adapter_preserves_agent_view_shell_env() {
 #[test]
 fn trusted_agent_env_overrides_shell_rc_env() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.write_config(
         &env.project_root,
         "[[agents]]\nname = \"codex\"\nenv = { RIMZ_TEST_CONFIGURED = \"trusted\" }\n",
@@ -3483,6 +3510,7 @@ fn trusted_agent_env_overrides_shell_rc_env() {
 #[test]
 fn missing_shell_path_falls_back_to_direct_exec() {
     let env = Env::new();
+    env.record(&env.project_root);
     let shim_dir = write_env_dump_shim(&env, "codex");
     let dump = env.home_root.join("codex-direct.env");
 
@@ -3517,6 +3545,7 @@ fn write_agent_shell_config(env: &Env, shell: &std::path::Path) {
 #[test]
 fn configured_agent_shell_runs_the_spawned_agent() {
     let env = Env::new();
+    env.record(&env.project_root);
     let user_shell = write_fake_login_shell(
         &env,
         "rimz-test-sh",
@@ -3563,6 +3592,7 @@ fn configured_agent_shell_runs_the_spawned_agent() {
 #[test]
 fn missing_configured_agent_shell_refuses_the_launch() {
     let env = Env::new();
+    env.record(&env.project_root);
     write_agent_shell_config(&env, &env.home_root.join("missing").join("bash"));
     let shim_dir = write_env_dump_shim(&env, "codex");
     let dump = env.home_root.join("codex-missing-agent-shell.env");
@@ -3592,6 +3622,7 @@ fn missing_configured_agent_shell_refuses_the_launch() {
 #[test]
 fn invalid_new_pane_refuses_an_agents_launch_before_side_effects() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     env.install_agent_hooks("codex");
     crate::common::trust_codex_preflight_hooks(&env);
@@ -3664,6 +3695,7 @@ fn assert_worktree_launch_lane_admission(args: &[&str], lane: &str, reuse: bool)
         crate::common::skip("git unavailable");
         return;
     }
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     std::fs::write(
         env.rimz_home().join("config.toml"),
@@ -3727,6 +3759,7 @@ fn assert_worktree_launch_lane_admission(args: &[&str], lane: &str, reuse: bool)
 #[test]
 fn unreadable_machine_config_blocks_worktree_launch_before_store_events() {
     let env = Env::new();
+    env.record(&env.project_root);
     if !init_launch_repo(&env.project_root) {
         crate::common::skip("git unavailable");
         return;
@@ -3881,6 +3914,7 @@ fn supervised_cross_repo_worktree_refuses_non_terminal_input() {
 #[test]
 fn ambiguous_prompt_leader_refuses_before_side_effects() {
     let env = Env::new();
+    env.record(&env.project_root);
 
     env.rimz()
         .args(["agents", "claude,claude", "do the thing"])
@@ -3901,6 +3935,7 @@ fn ambiguous_prompt_leader_refuses_before_side_effects() {
 #[test]
 fn prompt_without_an_agent_cell_refuses_before_side_effects() {
     let env = Env::new();
+    env.record(&env.project_root);
 
     env.rimz()
         .args(["agents", "term", "do the thing"])
@@ -3920,6 +3955,7 @@ fn prompt_without_an_agent_cell_refuses_before_side_effects() {
 #[test]
 fn resume_with_empty_store_refuses_before_mux_probe() {
     let env = Env::new();
+    env.record(&env.project_root);
 
     env.rimz()
         .args(["agents", "claude", "--resume"])
@@ -3934,6 +3970,7 @@ fn resume_with_empty_store_refuses_before_mux_probe() {
 #[test]
 fn prompt_with_shell_metacharacters_stays_one_argument_after_terminator() {
     let env = Env::new();
+    env.record(&env.project_root);
     let shell = write_fake_login_shell(&env, "rimz-test-sh", &[]);
     let shim_dir = write_env_dump_shim(&env, "codex");
     let dump = env.home_root.join("codex-prompt.env");
@@ -4044,6 +4081,7 @@ fn launch_prompt_artifact_round_trips_and_missing_file_fails() {
 fn unsupported_profile_skills_refuse_before_launch_and_run_records() {
     for supervised in [false, true] {
         let env = Env::new();
+        env.record(&env.project_root);
         let config_dir = env.rimz_home();
         std::fs::create_dir_all(&config_dir).expect("mkdir config");
         std::fs::write(
@@ -4088,6 +4126,7 @@ fn unsupported_profile_skills_refuse_before_launch_and_run_records() {
 fn oversized_prompt_refuses_before_launch_and_run_records() {
     for supervised in [false, true] {
         let env = Env::new();
+        env.record(&env.project_root);
         let prompt = "x".repeat(120 * 1024 + 1);
         let mut command = env.rimz();
         command.args(["agents", "codex", &prompt]);
@@ -4125,6 +4164,7 @@ async fn exec_prompt_failures_fail_provisional_launch_and_release_run_waiter() {
 
     for missing_artifact in [true, false] {
         let env = Env::new();
+        env.record(&env.project_root);
         let store = env.store();
         let launch_id = "launch_prompt_failure";
         seed_provisional_agent_launch(&env, launch_id, "pruner");
@@ -4224,6 +4264,7 @@ async fn exec_spawn_failure_fails_the_run_with_its_reason_and_releases_run_waite
     use rimz::store::run::{RunRecord, RunStatus};
 
     let env = Env::new();
+    env.record(&env.project_root);
     let store = env.store();
     let record = RunRecord::new(
         env.workspace_id.clone(),
@@ -4271,6 +4312,7 @@ async fn exec_failed_definition_persists_detail_before_releasing_run_waiter() {
     use rimz::store::run::{RunRecord, RunStatus};
 
     let env = Env::new();
+    env.record(&env.project_root);
     std::fs::create_dir_all(env.rimz_home()).expect("config directory");
     std::fs::write(
         env.rimz_home().join("config.toml"),
@@ -4399,6 +4441,7 @@ fn launch_count(log: &std::path::Path) -> usize {
 #[test]
 fn close_pane_exec_relaunches_a_startup_death_to_the_cap_then_reports_the_failure() {
     let env = Env::new();
+    env.record(&env.project_root);
     let shell = write_fake_login_shell(&env, "rimz-test-sh", &[]);
     let launch_log = env.home_root.join("launches.log");
     let shim_dir = write_counting_dead_agent(&env, &launch_log);
@@ -4465,6 +4508,7 @@ fn close_pane_exec_relaunches_a_startup_death_to_the_cap_then_reports_the_failur
 #[test]
 fn a_provider_startup_exit_is_recorded_without_relaunches() {
     let env = Env::new();
+    env.record(&env.project_root);
     let shell = write_fake_login_shell(&env, "rimz-test-sh", &[]);
     let shim_dir = env.home_root.join("agent-bin");
     crate::common::write_path_shim(
@@ -4512,6 +4556,7 @@ fn a_provider_startup_exit_is_recorded_without_relaunches() {
 #[test]
 fn a_zero_startup_relaunch_cap_settles_the_first_startup_death() {
     let env = Env::new();
+    env.record(&env.project_root);
     let shell = write_fake_login_shell(&env, "rimz-test-sh", &[]);
     let launch_log = env.home_root.join("launches.log");
     let shim_dir = write_counting_dead_agent(&env, &launch_log);
@@ -4539,6 +4584,7 @@ fn a_zero_startup_relaunch_cap_settles_the_first_startup_death() {
 #[test]
 fn an_in_place_launch_keeps_its_wrapper_and_relaunches_a_startup_death() {
     let env = Env::new();
+    env.record(&env.project_root);
     let launch_log = env.home_root.join("launches.log");
     let shim_dir = write_counting_dead_agent(&env, &launch_log);
     write_startup_relaunch_config(&env, "startup-relaunch-wait = \"0s\"");
@@ -4578,6 +4624,7 @@ fn a_stop_signal_during_the_startup_relaunch_wait_cancels_the_relaunch() {
     use std::io::Read as _;
 
     let env = Env::new();
+    env.record(&env.project_root);
     let shell = write_fake_login_shell(&env, "rimz-test-sh", &[]);
     let launch_log = env.home_root.join("launches.log");
     let shim_dir = write_counting_dead_agent(&env, &launch_log);
@@ -4678,6 +4725,7 @@ fn interrupt_the_startup_relaunch_wait(
 #[test]
 fn a_run_canceled_during_the_startup_relaunch_wait_is_not_relaunched() {
     let env = Env::new();
+    env.record(&env.project_root);
     let launch_log = env.home_root.join("launches.log");
     let shim_dir = write_counting_dead_agent(&env, &launch_log);
     let store = env.store();
@@ -4719,6 +4767,7 @@ fn a_run_canceled_during_the_startup_relaunch_wait_is_not_relaunched() {
 #[test]
 fn a_session_registered_during_the_startup_relaunch_wait_is_not_relaunched() {
     let env = Env::new();
+    env.record(&env.project_root);
     let launch_log = env.home_root.join("launches.log");
     let shim_dir = write_counting_dead_agent(&env, &launch_log);
     let launch_id = "launch_late_hook";
@@ -4778,6 +4827,7 @@ fn a_session_registered_during_the_startup_relaunch_wait_is_not_relaunched() {
 #[cfg(unix)]
 fn parent_end_after_a_startup_death(parent_ended_before_launch: bool) {
     let env = Env::new();
+    env.record(&env.project_root);
     let launch_log = env.home_root.join("launches.log");
     let shim_dir = write_counting_dead_agent(&env, &launch_log);
     std::os::unix::fs::symlink(crate::common::zellij_trace_shim(), shim_dir.join("zellij"))
@@ -4884,6 +4934,7 @@ fn ctrl_c_cancels_the_relaunch_wait_after_a_startup_death_left_the_terminal_raw(
     use std::io::{Read as _, Write as _};
 
     let env = Env::new();
+    env.record(&env.project_root);
     let launch_log = env.home_root.join("launches.log");
     let shim_dir = write_counting_dead_agent(&env, &launch_log);
     write_startup_relaunch_config(&env, "startup-relaunch-wait = \"5m\"");
@@ -4958,6 +5009,7 @@ fn ctrl_c_cancels_the_relaunch_wait_after_a_startup_death_left_the_terminal_raw(
 #[test]
 fn an_unparseable_startup_relaunch_wait_refuses_the_launch() {
     let env = Env::new();
+    env.record(&env.project_root);
     let launch_log = env.home_root.join("launches.log");
     let shim_dir = write_counting_dead_agent(&env, &launch_log);
     write_startup_relaunch_config(&env, "startup-relaunch-wait = \"soon\"");
@@ -4982,6 +5034,7 @@ fn an_unparseable_startup_relaunch_wait_refuses_the_launch() {
 #[test]
 fn an_unusable_startup_relaunch_wait_refuses_every_launch_doorway_before_side_effects() {
     let env = Env::new();
+    env.record(&env.project_root);
     let workspace = env.resolve_workspace(&env.project_root);
     let caller = AgentSessionId::from("launch_root_caller");
     env.store()
@@ -5085,6 +5138,7 @@ fn seed_launch(env: &Env, launch_id: &str, agent_name: &str, launch: LaunchParam
 #[test]
 fn host_skill_errors_refuse_before_launch_without_writes() {
     let env = Env::new();
+    env.record(&env.project_root);
     let config = env.project_root.join(".rimz");
     std::fs::create_dir_all(&config).unwrap();
     std::fs::write(
@@ -5111,6 +5165,7 @@ fn host_skill_errors_refuse_before_launch_without_writes() {
 #[test]
 fn profile_isolation_is_preflighted_before_launch() {
     let env = Env::new();
+    env.record(&env.project_root);
     std::fs::create_dir_all(env.rimz_home().join("agents")).unwrap();
     std::fs::write(
         env.rimz_home().join("config.toml"),
@@ -5184,6 +5239,7 @@ fn cohort_resume_preflights_a_matched_session_on_its_effective_isolation() {
         (Some(Isolation::Sandbox), Some("host"), false),
     ] {
         let env = Env::new();
+        env.record(&env.project_root);
         env.install_agent_hooks("codex");
         crate::common::trust_codex_preflight_hooks(&env);
         std::fs::create_dir_all(env.rimz_home()).expect("config directory");

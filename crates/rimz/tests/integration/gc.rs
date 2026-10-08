@@ -552,6 +552,7 @@ fn gc_reaps_dead_loop_delivery_schedule() {
 #[test]
 fn gc_reaps_instance_rows_without_an_action_and_keeps_user_rows() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     register_running_agent(&env, "sess-live", "feature-live");
     let root = env.project_root.display().to_string();
@@ -735,6 +736,7 @@ fn gc_json_emits_report() {
 #[test]
 fn gc_preserves_owned_state_when_the_rollup_needs_repair() {
     let env = Env::new();
+    env.record(&env.project_root);
     register_running_agent(&env, "needs-repair", "main");
     let store = env.store();
     let paths = store.paths();
@@ -934,6 +936,7 @@ fn gc_keeps_worktree_with_live_agent() {
     }
     let env = Env::new();
     init_repo(&env.project_root);
+    env.record(&env.project_root);
 
     env.rimz()
         .args(["worktree", "new", "demo"])
@@ -972,6 +975,7 @@ fn gc_dry_run_previews_worktree_after_agent_dies() {
     }
     let env = Env::new();
     init_repo(&env.project_root);
+    env.record(&env.project_root);
 
     env.rimz()
         .args(["worktree", "new", "demo"])
@@ -1012,6 +1016,7 @@ fn gc_sweeps_worktree_after_agent_dies() {
     }
     let env = Env::new();
     init_repo(&env.project_root);
+    env.record(&env.project_root);
 
     env.rimz()
         .args(["worktree", "new", "demo"])

@@ -2,6 +2,14 @@ use std::path::Path;
 
 use super::*;
 
+fn record_room(root: &Path) -> Result<()> {
+    let workspace = crate::workspace::WorkspaceResolver::resolve(root, None)?;
+    let paths = StatePaths::for_project_root(root)?;
+    let runtime = RuntimePaths::for_state(&paths)?;
+    crate::Store::open(paths, runtime)?.record_workspace(&workspace)?;
+    Ok(())
+}
+
 #[test]
 fn resident_fire_obeys_fleet_budget_and_deadline_before_launch() {
     let root = tempfile::tempdir().unwrap();
@@ -89,13 +97,69 @@ fn resident_plan_carries_the_fire_reminder() {
         Instant::now(),
     )
     .unwrap();
-    let TaskFirePlan::Resident { loop_reminder, .. } = fire.prepare(&mut |_| Ok(())).unwrap()
+    let TaskFirePlan::Resident { loop_reminder, .. } = fire.prepare(&mut record_room).unwrap()
     else {
         panic!("resident plan")
     };
     assert_eq!(
         loop_reminder,
         "The user fired the rule `resident` by hand. You run once here and stay on afterwards. The user is watching this run."
+    );
+}
+
+#[test]
+fn a_cold_resident_fire_overlaps_a_launch_completed_during_room_birth() {
+    let root = tempfile::tempdir().unwrap();
+    let catalog = TaskCatalog::load(Some(root.path())).unwrap();
+    let make_fire = || {
+        TaskFire::new(
+            "resident",
+            LoadedTask::new(
+                "resident",
+                TaskEntry {
+                    every: Some("1h".into()),
+                    throttle: Some(ThrottleSwitch::Off),
+                    ..resident_entry(root.path())
+                },
+                catalog::TaskSource::Config,
+            ),
+            &catalog,
+            LoopRunMode::Scheduled,
+            false,
+            Timestamp::now(),
+            Arc::new(MachineConfig::default()),
+            None,
+            CheckEcho::Capture,
+            Instant::now(),
+        )
+        .unwrap()
+    };
+    let mut second = make_fire();
+    let plan = second
+        .prepare(&mut |_| {
+            let mut first = make_fire();
+            assert!(matches!(
+                first.prepare(&mut record_room)?,
+                TaskFirePlan::Resident { .. }
+            ));
+            let done = first.finish(TaskFireEffect::Resident {
+                leader: "coder".into(),
+                handles: vec!["@coder".into()],
+                stopped: Vec::new(),
+            })?;
+            assert_eq!(done.record.result, LoopRunResult::Launched);
+            Ok(())
+        })
+        .unwrap();
+    assert!(
+        matches!(plan, TaskFirePlan::Done(done) if done.record.result == LoopRunResult::Overlapped)
+    );
+    assert_eq!(
+        run_log::task_records(&logs_dir(), "resident", Some(root.path()))
+            .iter()
+            .map(|record| record.result)
+            .collect::<Vec<_>>(),
+        [LoopRunResult::Launched, LoopRunResult::Overlapped]
     );
 }
 
@@ -175,7 +239,7 @@ fn worktree_fire_lock_is_found_by_the_task_lookups() {
     .unwrap()
     .with_checkout(Some(root.path().join("a")));
     assert!(matches!(
-        fire.prepare(&mut |_| Ok(())).unwrap(),
+        fire.prepare(&mut record_room).unwrap(),
         TaskFirePlan::Resident { .. }
     ));
 
@@ -198,6 +262,7 @@ fn worktree_fire_lock_is_found_by_the_task_lookups() {
 #[test]
 fn task_lookup_reports_the_earliest_holder_among_its_held_locks() {
     let root = tempfile::tempdir().unwrap();
+    record_room(root.path()).unwrap();
     let locks = RuntimePaths::for_project_root(root.path())
         .unwrap()
         .locks_dir;
@@ -240,6 +305,7 @@ fn task_lookup_reports_the_earliest_holder_among_its_held_locks() {
 #[test]
 fn held_locks_no_row_claims_are_listed_under_their_whole_stem() {
     let root = tempfile::tempdir().unwrap();
+    record_room(root.path()).unwrap();
     let locks = RuntimePaths::for_project_root(root.path())
         .unwrap()
         .locks_dir;
@@ -304,6 +370,9 @@ fn held_locks_no_row_claims_are_listed_under_their_whole_stem() {
 fn vanished_delivery_root_still_resolves_and_finds_no_active_run() {
     let dir = tempfile::tempdir().expect("tempdir");
     let root = dir.path().join("vanished");
+    std::fs::create_dir(&root).unwrap();
+    record_room(&root).unwrap();
+    std::fs::remove_dir(&root).unwrap();
     let entry = TaskEntry {
         root: root.clone(),
         ..TaskEntry::default()
@@ -692,6 +761,7 @@ fn check_polarity_truth_table() {
 #[test]
 fn skipped_check_preserves_poll_until_and_consumes_watch() {
     let dir = tempfile::tempdir().expect("tempdir");
+    record_room(dir.path()).unwrap();
     let poll_name = "runner-skipped-poll-until";
     let watch_name = "runner-skipped-watch";
     let poll = TaskEntry {
@@ -806,6 +876,7 @@ fn skipped_check_preserves_poll_until_and_consumes_watch() {
 #[test]
 fn check_only_terminals_consume_only_one_shots() {
     let dir = tempfile::tempdir().unwrap();
+    record_room(dir.path()).unwrap();
     let state = StatePaths::for_project_root(dir.path()).unwrap();
     for (name, once, command, result) in [
         ("once-pass", true, "true", LoopRunResult::Completed),
@@ -846,6 +917,7 @@ fn check_only_terminals_consume_only_one_shots() {
 #[test]
 fn a_scheduled_gate_skip_removes_a_fire_at_row_and_leaves_the_rest() {
     let dir = tempfile::tempdir().unwrap();
+    record_room(dir.path()).unwrap();
     let state = StatePaths::for_project_root(dir.path()).unwrap();
     use LoopRunResult::{AccountSkipped, SurplusSkipped};
     for (name, fire_at, mode, result, kept) in [
@@ -938,6 +1010,7 @@ fn skipped_fire<'a>(
 fn check_room_hook_precedes_execution_and_pins_loop_identity() {
     let dir = tempfile::tempdir().unwrap();
     let project_root = dir.path().canonicalize().unwrap();
+    record_room(&project_root).unwrap();
     let catalog = TaskCatalog::load(Some(&project_root)).unwrap();
     let worktree = tempfile::tempdir().unwrap();
     let worktree_root = worktree.path().canonicalize().unwrap();
@@ -1751,6 +1824,7 @@ fn the_account_daily_cap_reads_the_pinned_account_not_the_rooms() {
 
     let dir = tempfile::tempdir().unwrap();
     let workspace_id = WorkspaceId::from_project_root(dir.path());
+    record_room(dir.path()).unwrap();
     let runtime = RuntimePaths::under(workspace_id, dir.path()).unwrap();
     runtime.ensure_dirs().unwrap();
     let state = StatePaths::for_project_root(dir.path()).unwrap();
@@ -1826,6 +1900,7 @@ fn a_pin_that_stops_resolving_at_launch_skips_and_every_other_error_strikes() {
     use crate::harness::schedule::strikes::{Signal, classify};
 
     let dir = tempfile::tempdir().unwrap();
+    record_room(dir.path()).unwrap();
     let state = StatePaths::for_project_root(dir.path()).unwrap();
     let unresolved = |kind: &str| {
         let err = crate::agents::session_login(
@@ -2042,6 +2117,7 @@ fn a_fire_that_cannot_read_a_configured_limit_errors() {
 #[test]
 fn min_disk_is_read_where_a_fresh_worktree_will_be_made() {
     let dir = tempfile::tempdir().unwrap();
+    record_room(dir.path()).unwrap();
     let mount = dir.path().join("mount");
     std::fs::create_dir(&mount).unwrap();
     let state = StatePaths::for_project_root(dir.path()).unwrap();
@@ -2085,6 +2161,7 @@ fn min_disk_is_read_where_a_fresh_worktree_will_be_made() {
 #[test]
 fn only_a_spawning_fire_that_is_not_exempt_takes_a_turn() {
     let dir = tempfile::tempdir().unwrap();
+    record_room(dir.path()).unwrap();
     let state = StatePaths::for_project_root(dir.path()).unwrap();
     let spawn = TaskEntry {
         agent: Some("claude".to_owned()),
@@ -2238,6 +2315,7 @@ fn only_a_spawning_fire_that_is_not_exempt_takes_a_turn() {
 #[test]
 fn ctrl_c_from_the_check_on_ends_a_spawn_the_throttle_then_holds() {
     let dir = tempfile::tempdir().unwrap();
+    record_room(dir.path()).unwrap();
     let state = StatePaths::for_project_root(dir.path()).unwrap();
     let checked = TaskEntry {
         agent: Some("claude".to_owned()),
@@ -2275,6 +2353,7 @@ fn ctrl_c_from_the_check_on_ends_a_spawn_the_throttle_then_holds() {
     fire.config = Arc::new(config);
     fire.throttle_host = host.host();
 
+    fire.prepare_run_lock(false).unwrap();
     let fired_check = fire
         .prepare_check(&mut |_| {
             host.interrupt

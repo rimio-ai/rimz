@@ -89,6 +89,7 @@ fn malformed_message_commands_are_usage_errors() {
 
 fn interrupt_fixture(kind: &str) -> (Env, PathBuf) {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks(kind);
     if kind == "codex" {
         trust_codex_preflight_hooks(&env);
@@ -266,6 +267,7 @@ fn interrupt_fanout_keyless_refuses_entire_send() {
 #[test]
 fn interrupt_unbound_live_pane_refuses_before_record() {
     let env = Env::new();
+    env.record(&env.project_root);
     let panes = env.write_pane_fixture(&[agent_pane(&env, "codex")]);
     let output = traced_rimz(&env, "interrupt-unbound.log")
         .env("RIMZ_TEST_PANE_LIST", panes)
@@ -280,6 +282,7 @@ fn interrupt_unbound_live_pane_refuses_before_record() {
 #[test]
 fn interrupt_without_live_pane_parks_with_interrupt_hint() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     append_lifecycle(
         &env,
@@ -379,6 +382,7 @@ fn interrupt_refuses_create_policy_before_delivery() {
 #[test]
 fn message_cancel_and_clear_respect_ids_targets_and_channel_lanes() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     register_running_agent(&env, "sess-queue", "feature-q", &[]);
 
@@ -452,6 +456,7 @@ fn message_cancel_and_clear_respect_ids_targets_and_channel_lanes() {
 #[test]
 fn message_list_empty_lane_counts_other_visible_rows() {
     let env = Env::new();
+    env.record(&env.project_root);
     register_running_agent(&env, "sess-docs", "docs", &[]);
     seed_channel_message(&env, 1, 100, Some("old"), "archived text");
     env.store()
@@ -505,6 +510,7 @@ fn message_list_empty_lane_counts_other_visible_rows() {
 #[test]
 fn message_list_empty_lane_counts_delivered_rows_without_queue_hint() {
     let env = Env::new();
+    env.record(&env.project_root);
     register_running_agent(&env, "sess-docs", "docs", &[]);
     deliver_direct_channel_message(&env, "docs", "delivered text");
     let output = run_success(env.rimz().args(["message", "list"]), "empty lane");
@@ -517,6 +523,7 @@ fn message_list_empty_lane_counts_delivered_rows_without_queue_hint() {
 #[test]
 fn message_list_validates_explicit_channels_but_not_ambient() {
     let env = Env::new();
+    env.record(&env.project_root);
     register_running_agent(&env, "sess-docs", "docs", &[]);
     seed_channel_message(&env, 1, 100, Some("old"), "old text");
     env.store()
@@ -548,6 +555,7 @@ fn message_list_validates_explicit_channels_but_not_ambient() {
 #[test]
 fn message_list_inline_channel_matches_flag_and_all_keeps_other_rows() {
     let env = Env::new();
+    env.record(&env.project_root);
     register_running_agent(&env, "sess-docs", "docs", &[]);
     let docs = seed_channel_message(&env, 1, 100, Some("docs"), "docs text");
     let main = seed_channel_message(&env, 2, 200, None, "main text");
@@ -581,6 +589,7 @@ fn message_list_inline_channel_matches_flag_and_all_keeps_other_rows() {
 #[test]
 fn message_list_scopes_orders_and_limits_records() {
     let env = Env::new();
+    env.record(&env.project_root);
     register_running_agent(&env, "sess-docs", "docs", &[]);
     let main = seed_channel_message(&env, 1, 100, None, "main task");
     let archived_docs = seed_channel_message(&env, 2, 200, Some("docs"), "old docs task");
@@ -644,6 +653,7 @@ fn message_list_root_address_correction_lists_the_agents_rows() {
 #[test]
 fn message_list_main_from_root_shell_includes_root_routing_keys() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     append_lifecycle(
         &env,
@@ -692,6 +702,7 @@ fn message_list_main_from_root_shell_includes_root_routing_keys() {
 fn message_clear_root_aliases_cancel_the_same_records_as_list() {
     for scope in ["main", "project", "path", "caller"] {
         let env = Env::new();
+        env.record(&env.project_root);
         env.install_agent_hooks("claude");
         append_lifecycle(
             &env,
@@ -745,6 +756,7 @@ fn message_list_root_flag_correction_lists_the_agents_rows() {
 
 fn message_list_root_correction_case(flag: bool) {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     append_lifecycle(
         &env,
@@ -803,6 +815,7 @@ fn message_list_root_correction_case(flag: bool) {
 fn message_list_target_follows_stamped_and_worktree_record_channels() {
     for stamped in [true, false] {
         let env = Env::new();
+        env.record(&env.project_root);
         env.install_agent_hooks("claude");
         append_lifecycle(
             &env,
@@ -845,6 +858,7 @@ fn message_list_target_follows_stamped_and_worktree_record_channels() {
 #[test]
 fn message_list_hides_system_traffic_unless_asked() {
     let env = Env::new();
+    env.record(&env.project_root);
     register_running_agent(&env, "sess-conversation", "docs", &[]);
     let human = queue_direct_channel_message(&env, "docs", "human conversation");
     let snapshot = env.store().snapshot_cached().expect("snapshot");
@@ -908,6 +922,7 @@ fn message_list_hides_system_traffic_unless_asked() {
 #[test]
 fn terminal_history_list_and_show_preserve_content_and_channel_fallback() {
     let env = Env::new();
+    env.record(&env.project_root);
     register_running_agent(&env, "sess-history", "docs", &[]);
     let message_id = deliver_direct_channel_message(&env, "docs", "kept body");
 
@@ -973,6 +988,7 @@ fn terminal_history_list_and_show_preserve_content_and_channel_fallback() {
 #[test]
 fn message_edit_and_requeue_enforce_record_lifecycle() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     register_running_agent(&env, "sess-edit", "edit-message", &[]);
     let queued = run_success(
@@ -1067,6 +1083,7 @@ fn message_edit_and_requeue_enforce_record_lifecycle() {
 #[test]
 fn receiver_end_archives_open_messages() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     register_running_agent(&env, "sess-ended", "docs", &[]);
     let message_id = queue_add_in_channel(&env, "docs", "@claude", "stale task");
@@ -1128,6 +1145,7 @@ fn receiver_end_archives_open_messages() {
 #[test]
 fn watched_agent_end_archives_unmet_when_message() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     register_role_agent(&env, "claude", "sess-coder", "coder", false, None);
     register_role_agent(&env, "claude", "sess-planner", "planner", true, None);
@@ -1174,6 +1192,7 @@ fn watched_agent_end_archives_unmet_when_message() {
 #[test]
 fn message_when_latches_met_dwell_and_schedules_future_trip() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     let base = register_old_idle_role_agent(&env, "sess-coder", "coder", 120);
 
@@ -1277,6 +1296,7 @@ fn message_when_latches_met_dwell_and_schedules_future_trip() {
 #[test]
 fn sweep_delivers_harness_wake_to_stamped_daemon_view_agent() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     register_running_agent(
         &env,
@@ -1330,6 +1350,7 @@ fn sweep_delivers_harness_wake_to_stamped_daemon_view_agent() {
 fn sweep_records_missing_pane_blocker_without_losing_harness_wake_pin() {
     for pinned in [false, true] {
         let env = Env::new();
+        env.record(&env.project_root);
         env.install_agent_hooks("claude");
         register_running_agent(
             &env,
@@ -1395,6 +1416,7 @@ fn sweep_records_missing_pane_blocker_without_losing_harness_wake_pin() {
 #[test]
 fn sweep_archives_an_ended_receiver_hidden_from_the_runtime_snapshot() {
     let env = Env::new();
+    env.record(&env.project_root);
     append_lifecycle(
         &env,
         "claude",
@@ -1454,6 +1476,7 @@ fn sweep_archives_an_ended_receiver_hidden_from_the_runtime_snapshot() {
 #[test]
 fn sweep_clears_a_recorded_no_pane_blocker_once_the_pane_returns() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     // Every rimz process here, hooks included, reaches the trace shim rather
     // than a live multiplexer; the empty trace at the end proves none tried.
@@ -1539,6 +1562,7 @@ fn sweep_clears_a_recorded_no_pane_blocker_once_the_pane_returns() {
 #[test]
 fn resume_prompt_wakes_and_sends_after_registration_without_a_stop() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     crate::common::wait::register_calling_agent(&env);
     std::fs::write(
@@ -1727,6 +1751,7 @@ fn sweep_without_a_room_refuses_and_creates_nothing() {
 #[test]
 fn scheduled_message_parks_and_sweep_delivers_due_work() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
     register_running_agent(&env, "sess-scheduled", "feature-scheduled", pane_env);
@@ -1830,6 +1855,7 @@ fn scheduled_message_parks_and_sweep_delivers_due_work() {
 #[test]
 fn a_bare_sweep_from_shared_root_uses_the_host_pin_without_a_phantom_workspace() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
     register_running_agent(&env, "sess-host-pin", "feature-host-pin", pane_env);
@@ -1888,6 +1914,7 @@ fn a_bare_sweep_from_shared_root_uses_the_host_pin_without_a_phantom_workspace()
 #[test]
 fn message_after_rejects_cycles_then_delivers_cross_agent_relay() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     register_role_agent(
         &env,
@@ -1968,6 +1995,7 @@ fn message_after_rejects_cycles_then_delivers_cross_agent_relay() {
 #[test]
 fn resume_gate_waits_for_recovery_then_delivers() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
     register_running_agent(&env, "sess-resume-ready", "feature-resume", pane_env);
@@ -2021,6 +2049,7 @@ fn resume_gate_waits_for_recovery_then_delivers() {
 #[test]
 fn resume_gate_failed_park_waits_for_recovery_then_delivers() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
     register_running_agent(&env, "sess-failed-resume", "feature-resume", pane_env);
@@ -2087,6 +2116,7 @@ fn resume_gate_failed_park_waits_for_recovery_then_delivers() {
 #[test]
 fn auto_continue_queues_a_pinned_system_resume_then_defers_on_a_closed_gate() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     register_running_agent(
         &env,
@@ -2169,6 +2199,7 @@ fn idle_stop_holds_while_a_message_is_owed_then_stops_without_canceling_the_run(
     use rimz::store::run::{RunRecord, RunStatus};
     for owed in [Some("message"), Some("wait"), Some("collision"), None] {
         let env = Env::new();
+        env.record(&env.project_root);
         env.install_agent_hooks("claude");
         let pane_id = PaneId::from_parts(MuxName::Zellij, TRACE_PANE);
         for (event, signal) in [
@@ -2435,6 +2466,7 @@ fn idle_stop_holds_while_a_message_is_owed_then_stops_without_canceling_the_run(
 #[test]
 fn stop_reports_a_pane_left_open_and_a_child_that_failed() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     let register = |id: &'static str, parent: Option<&'static str>| {
         append_lifecycle(
@@ -2507,6 +2539,7 @@ fn stop_reports_a_pane_left_open_and_a_child_that_failed() {
 fn orphan_repair_records_no_end_while_the_run_pane_stays_open() {
     use rimz::store::run::{RunRecord, RunStatus};
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     let kind = AgentKind::new_unchecked("claude");
     append_lifecycle(
@@ -2594,6 +2627,7 @@ fn orphan_repair_records_one_end_with_and_without_a_run() {
 
     for with_run in [false, true] {
         let env = Env::new();
+        env.record(&env.project_root);
         env.install_agent_hooks("claude");
         append_lifecycle(
             &env,
@@ -2695,6 +2729,7 @@ fn cache_keepalive_rechecks_and_terminalizes_a_miss_with_an_assist() {
     // delivers it as the last one.
     for (blocked, capped) in [(false, false), (true, false), (false, true)] {
         let env = Env::new();
+        env.record(&env.project_root);
         env.install_agent_hooks("claude");
         register_calling_agent(&env);
         wait_ok(
@@ -2905,6 +2940,7 @@ fn cache_keepalive_rechecks_and_terminalizes_a_miss_with_an_assist() {
 #[test]
 fn deliver_helper_settles_before_reading_state() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     register_running_agent(
         &env,
@@ -2932,6 +2968,7 @@ fn deliver_helper_settles_before_reading_state() {
 #[test]
 fn queue_add_for_bound_agent_does_not_enumerate_panes() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     register_running_agent(&env, "sess-rollup", "feature-rollup", &[]);
 
@@ -2969,6 +3006,7 @@ fn parent_message_to_stopped_pane_gone_child_reaches_resume_refusal() {
     use rimz::store::run::{RunRecord, RunStatus};
 
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     append_lifecycle(
         &env,
@@ -3091,6 +3129,7 @@ fn parent_message_to_stopped_pane_gone_child_reaches_resume_refusal() {
 
 fn assert_ended_child_resume_refusal(unhooked: bool) {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     for id in ["parent", "peer"] {
         append_lifecycle(
@@ -3179,6 +3218,7 @@ fn parent_message_to_resumed_child_waits_for_installed_registration() {
     use rimz::harness::launch::{ExecAction, ExecIdentity, ExecRequest, ProviderAccountState};
 
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     let store = env.store();
     let workspace = env.resolve_workspace(&env.project_root);
@@ -3231,10 +3271,6 @@ fn parent_message_to_resumed_child_waits_for_installed_registration() {
         LifecycleSignal::Ended,
         |o| {
             o.agent_name = Some("otter".into());
-            o.launch.parent_agent_id = Some("parent".into());
-            o.launch.parent_agent_kind = Some(AgentKind::new_unchecked("claude"));
-            o.launch.launch_depth = Some(1);
-            o.launch.isolation = Some(rimz::config::Isolation::Host);
             o.transcript_path = Some(transcript.display().to_string());
         },
     );
@@ -3257,7 +3293,7 @@ fn parent_message_to_resumed_child_waits_for_installed_registration() {
     std::os::unix::fs::symlink(zellij_trace_shim(), shim.join("zellij")).unwrap();
     let mut parent_pane = agent_pane(&env, "claude");
     parent_pane.pane_id = PaneId::from_parts(MuxName::Zellij, "terminal_1");
-    let panes = env.write_pane_fixture(&[parent_pane, agent_pane(&env, "claude")]);
+    let panes = env.write_pane_fixture(&[parent_pane.clone()]);
     let trace = env.project_root.join("resume-trace.log");
     let mut sender = traced_rimz(&env, &trace)
         .args(["--mux", "zellij", "message", "@otter", "follow up"])
@@ -3289,6 +3325,7 @@ fn parent_message_to_resumed_child_waits_for_installed_registration() {
         std::thread::sleep(Duration::from_millis(10));
     }
     // The trace mux records opens rather than executing them; start the same exec wrapper in the requested child pane.
+    env.write_pane_fixture(&[parent_pane, agent_pane(&env, "claude")]);
     let mut request = ExecRequest {
         isolation_default: None,
         kind: AgentKind::new_unchecked("claude"),
@@ -3311,8 +3348,15 @@ fn parent_message_to_resumed_child_waits_for_installed_registration() {
         identity: ExecIdentity::default(),
     };
     request.identity.name = Some("otter".into());
+    request.identity.name_explicit = true;
     request.identity.launch_id = Some("launch_child".into());
-    request.identity.params.isolation = Some(rimz::config::Isolation::Host);
+    request.identity.params = LaunchParams {
+        parent_agent_id: Some("parent".into()),
+        parent_agent_kind: Some(AgentKind::new_unchecked("claude")),
+        launch_depth: Some(1),
+        isolation: Some(rimz::config::Isolation::Host),
+        ..LaunchParams::default()
+    };
     let mut wrapper = traced_rimz(&env, &trace)
         .args(exec_args(&env, &request))
         .args(["--mux", "zellij"])
@@ -3470,6 +3514,7 @@ fn message_add_does_not_resolve_reaped_dead_owner_agent() {
 #[test]
 fn deliver_leaves_ineligible_message_unclaimed() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     register_running_agent(&env, "sess-deliver", "feature-d", &[]);
 
@@ -3505,6 +3550,7 @@ fn deliver_leaves_ineligible_message_unclaimed() {
 #[test]
 fn message_steer_queued_record_respects_waiting_force_and_overrides_gate() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
     register_running_agent(&env, "sess-steer-queued", "steer-queued", pane_env);
@@ -3544,6 +3590,7 @@ fn message_steer_queued_record_respects_waiting_force_and_overrides_gate() {
 #[test]
 fn steer_queues_when_durable_agent_has_no_live_pane() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     append_lifecycle(
         &env,
@@ -3574,6 +3621,7 @@ fn steer_queues_when_durable_agent_has_no_live_pane() {
 #[test]
 fn steer_enter_modes_respect_discrete_submit_key() {
     let env = Env::new();
+    env.record(&env.project_root);
     register_running_agent(
         &env,
         "sess-steer-enter",
@@ -3626,6 +3674,7 @@ fn steer_enter_modes_respect_discrete_submit_key() {
 #[test]
 fn agent_wait_refuses_existing_reply_wait_cycle_before_enqueue() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     register_role_agent(&env, "claude", "sess-coder", "coder", true, None);
     register_role_agent(&env, "claude", "sess-reviewer", "reviewer", true, None);
@@ -3686,6 +3735,7 @@ fn agent_wait_refuses_existing_reply_wait_cycle_before_enqueue() {
 #[test]
 fn steer_wait_times_out_without_turn_started_ack() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     register_running_agent(
         &env,
@@ -3737,6 +3787,7 @@ fn assert_sent_receipts(stderr: &[u8], expected: usize) {
 #[test]
 fn message_wait_prints_the_reply_after_the_turn_ends() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     let agent = ReplyAgentFixture::single(&env, "reply");
     std::fs::write(
@@ -3817,6 +3868,7 @@ fn message_wait_wake_reply_case(fast_wake: bool) {
     const POLL_WINDOW: Duration = Duration::from_millis(1500);
 
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     let agent = ReplyAgentFixture::single(&env, "wake-reply");
     let mut child = traced_rimz(&env, "zellij-wait-wake-reply-trace.log")
@@ -3885,6 +3937,7 @@ fn message_wait_wake_reply_case(fast_wake: bool) {
 #[test]
 fn message_wait_gathers_fanout_replies_in_completion_order() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     let [first, second] = ReplyAgentFixture::pair(&env, "gather");
 
@@ -3917,6 +3970,7 @@ fn message_wait_gathers_fanout_replies_in_completion_order() {
 #[test]
 fn agent_broadcast_waits_for_peers_without_waiting_on_itself() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     let [caller, peer] = ReplyAgentFixture::pair_in_channel(&env, "agent-gather");
     caller.stamp_launch_identity(&env, "launch-agent-gather", "planner");
@@ -3959,6 +4013,7 @@ fn agent_broadcast_waits_for_peers_without_waiting_on_itself() {
 #[test]
 fn message_wait_json_emits_one_fanout_map() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     let [first, second] = ReplyAgentFixture::pair(&env, "json");
 
@@ -4003,6 +4058,7 @@ fn message_wait_json_emits_one_fanout_map() {
 #[test]
 fn message_wait_gathers_other_replies_after_one_leg_fails() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     let [failed, completed] =
         ReplyAgentFixture::pair_named(&env, "partial", ["failed", "completed"]);
@@ -4039,6 +4095,7 @@ fn message_wait_gathers_other_replies_after_one_leg_fails() {
 #[test]
 fn message_wait_any_returns_only_the_first_terminal_leg() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     let [first, second] = ReplyAgentFixture::pair(&env, "any");
 
@@ -4071,6 +4128,7 @@ fn message_wait_any_returns_only_the_first_terminal_leg() {
 #[test]
 fn message_wait_json_classifies_every_unfinished_fanout_leg_on_deadline() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     let _agents = ReplyAgentFixture::pair(&env, "timeout");
 
@@ -4103,6 +4161,7 @@ fn message_wait_json_classifies_every_unfinished_fanout_leg_on_deadline() {
 #[test]
 fn message_wait_timeout_marks_only_sent_leg_and_keeps_queued_leg() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     let [_sent, queued] = ReplyAgentFixture::pair_named(&env, "mixed", ["sent", "queued"]);
     push_pending_agent_ask(&env, &queued.session_id);
@@ -4155,6 +4214,7 @@ fn message_wait_timeout_marks_only_sent_leg_and_keeps_queued_leg() {
 #[test]
 fn message_wait_requires_live_hooked_agent_target() {
     let env = Env::new();
+    env.record(&env.project_root);
     let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "bash")]);
     let pane = env
         .rimz()
@@ -4191,6 +4251,7 @@ fn message_wait_requires_live_hooked_agent_target() {
 #[test]
 fn steer_sends_a_file_with_cr_newlines_inside_the_paste() {
     let env = Env::new();
+    env.record(&env.project_root);
     register_running_agent(
         &env,
         "sess-file",
@@ -4225,6 +4286,7 @@ fn steer_sends_a_file_with_cr_newlines_inside_the_paste() {
 #[test]
 fn steer_combines_inline_text_with_piped_stdin() {
     let env = Env::new();
+    env.record(&env.project_root);
     register_running_agent(
         &env,
         "sess-stdin",
@@ -4257,6 +4319,7 @@ fn steer_combines_inline_text_with_piped_stdin() {
 #[test]
 fn message_ignores_an_open_empty_stdin_without_the_flag() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     register_running_agent(&env, "sess-open-stdin", "feature-open-stdin", &[]);
 
@@ -4289,6 +4352,7 @@ fn message_ignores_an_open_empty_stdin_without_the_flag() {
 #[test]
 fn message_warns_when_ignoring_buffered_stdin() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     register_running_agent(&env, "sess-buffered-stdin", "feature-buffered-stdin", &[]);
     let (read_end, write_end) = nix::unistd::pipe().expect("pipe");
@@ -4322,6 +4386,7 @@ fn message_warns_when_ignoring_buffered_stdin() {
 #[test]
 fn message_me_resolves_launch_and_process_ancestry() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     let [caller, peer] = ReplyAgentFixture::pair(&env, "me");
     caller.stamp_launch_identity(&env, "launch-me", "planner");
@@ -4401,6 +4466,7 @@ fn message_me_resolves_launch_and_process_ancestry() {
 #[test]
 fn message_me_rejects_unidentified_shell_and_snapshot_only_owner() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     let caller = ReplyAgentFixture::single(&env, "me-shell");
     caller.stamp_launch_identity(&env, "launch-me-shell", "planner");
@@ -4474,6 +4540,7 @@ fn message_me_rejects_unidentified_shell_and_snapshot_only_owner() {
 #[test]
 fn message_me_rejects_stale_identity_and_unregistered_session() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     let caller = ReplyAgentFixture::single(&env, "me-stale");
     caller.stamp_launch_identity(&env, "launch-me-stale", "planner");
@@ -4526,6 +4593,7 @@ fn message_me_rejects_stale_identity_and_unregistered_session() {
 #[test]
 fn bare_resumed_agent_message_is_attributed_by_process_ancestry() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     env.install_agent_hooks("codex");
     trust_codex_preflight_hooks(&env);
@@ -4644,6 +4712,7 @@ fn bare_resumed_agent_message_is_attributed_by_process_ancestry() {
 #[test]
 fn steer_formats_human_and_agent_senders_and_no_from_stays_verbatim() {
     let env = Env::new();
+    env.record(&env.project_root);
     register_running_agent(
         &env,
         "sess-from-steer",
@@ -4711,6 +4780,7 @@ fn steer_formats_human_and_agent_senders_and_no_from_stays_verbatim() {
 #[test]
 fn agent_broadcast_steer_with_no_from_writes_only_to_the_peer() {
     let env = Env::new();
+    env.record(&env.project_root);
     let [caller, _peer] = ReplyAgentFixture::pair_in_channel(&env, "agent-steer");
     caller.stamp_launch_identity(&env, "launch-agent-steer", "planner");
     let trace_log = env.project_root.join("zellij-agent-steer-trace.log");
@@ -4744,6 +4814,7 @@ fn agent_broadcast_steer_with_no_from_writes_only_to_the_peer() {
 #[test]
 fn solo_agent_broadcast_errors_but_an_exact_self_handle_still_delivers() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     let caller = ReplyAgentFixture::single(&env, "agent-solo");
     caller.stamp_launch_identity(&env, "launch-agent-solo", "planner");
@@ -4785,6 +4856,7 @@ fn solo_agent_broadcast_errors_but_an_exact_self_handle_still_delivers() {
 #[test]
 fn steer_sender_header_ignores_shadowed_co_resident_session() {
     let env = Env::new();
+    env.record(&env.project_root);
     register_role_agent(
         &env,
         "claude",
@@ -4833,6 +4905,7 @@ fn steer_sender_header_ignores_shadowed_co_resident_session() {
 #[test]
 fn boundary_dispatch_sends_when_idle_then_parks_and_delivers_when_running() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
     register_running_agent(&env, "sess-boundary", "feature-boundary", pane_env);
@@ -4955,6 +5028,7 @@ fn boundary_dispatch_sends_when_idle_then_parks_and_delivers_when_running() {
 #[test]
 fn boundary_slash_prompt_parks_behind_sent_prompt_until_turn_ends() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
     register_running_agent(&env, "sess-sent-hold", "feature-sent-hold", pane_env);
@@ -5080,6 +5154,7 @@ fn boundary_slash_prompt_parks_behind_sent_prompt_until_turn_ends() {
 #[test]
 fn busy_queue_confirmation_points_to_the_record_steer_command() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
     register_running_agent(&env, "sess-queue-hint", "feature-queue-hint", pane_env);
@@ -5426,6 +5501,7 @@ fn subagent_report_fixture(joined: &[bool]) -> (Env, MessageRecord, PathBuf) {
     use rimz::store::run::{RunRecord, RunStatus};
 
     let env = Env::new();
+    env.record(&env.project_root);
     env.write_config(&env.project_root, "");
     env.install_agent_hooks("claude");
     let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
@@ -5592,6 +5668,7 @@ fn submit_subagent_report_prompt(env: &Env, prompt: &str) {
 #[test]
 fn sweep_does_not_claim_command_acknowledged_after_idle_snapshot() {
     let env = Env::new();
+    env.record(&env.project_root);
     append_lifecycle(
         &env,
         "claude",
@@ -5676,6 +5753,7 @@ fn sweep_does_not_claim_command_acknowledged_after_idle_snapshot() {
 #[test]
 fn sweep_requeues_unconfirmed_send_now_message_and_redelivers() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.write_config(&env.project_root, "");
     env.install_agent_hooks("claude");
     let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
@@ -5762,6 +5840,7 @@ fn sweep_requeues_unconfirmed_send_now_message_and_redelivers() {
 #[test]
 fn sweep_holds_unconfirmed_prompt_while_compaction_bracket_is_open() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.write_config(&env.project_root, "");
     env.install_agent_hooks("claude");
     let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
@@ -5908,6 +5987,7 @@ fn sweep_holds_unconfirmed_prompt_while_compaction_bracket_is_open() {
 #[test]
 fn mixed_submit_confirms_record_and_never_resends() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.write_config(&env.project_root, "");
     env.install_agent_hooks("claude");
     let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
@@ -6028,6 +6108,7 @@ fn mixed_submit_confirms_record_and_never_resends() {
 #[test]
 fn late_ack_after_reconcile_window_still_settles_without_resend() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.write_config(&env.project_root, "");
     env.install_agent_hooks("claude");
     let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
@@ -6121,6 +6202,7 @@ fn late_ack_after_reconcile_window_still_settles_without_resend() {
 #[test]
 fn shortened_reconcile_window_preserves_prompt_for_late_correlated_ack() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.write_config(&env.project_root, "");
     env.install_agent_hooks("claude");
     let pane_env: &[(&str, &str)] = &[
@@ -6205,6 +6287,7 @@ fn shortened_reconcile_window_preserves_prompt_for_late_correlated_ack() {
 #[test]
 fn send_now_write_failure_leaves_queued_record_for_sweep_retry() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
     register_running_agent(&env, "sess-send-fail", "feature-send-fail", pane_env);
@@ -6264,6 +6347,7 @@ fn send_now_write_failure_leaves_queued_record_for_sweep_retry() {
 #[test]
 fn fresh_claim_is_sent_when_its_recovery_wake_cannot_be_registered() {
     let env = Env::new();
+    env.record(&env.project_root);
     register_running_agent(
         &env,
         "sess-broken-wake",
@@ -6306,6 +6390,7 @@ fn fresh_claim_is_sent_when_its_recovery_wake_cannot_be_registered() {
 #[test]
 fn hook_delivery_is_sent_when_its_wake_cannot_be_refreshed() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     register_running_agent(
         &env,
@@ -6359,6 +6444,7 @@ fn fresh_boundary_send_parks_when_another_sender_sends_after_its_read() {
 
 fn assert_fresh_boundary_send_race(winner_sent: bool) {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
     register_running_agent(&env, "sess-send-race", "send-race", pane_env);
@@ -6493,6 +6579,7 @@ fn assert_fresh_boundary_send_race(winner_sent: bool) {
 fn fresh_sends_exclude_hook_delivery_before_the_pane_write() {
     for mode in [None, Some("--steer"), Some("--interrupt")] {
         let env = Env::new();
+        env.record(&env.project_root);
         env.install_agent_hooks("claude");
         let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
         register_running_agent(&env, "sess-fresh-claim", "fresh-claim", pane_env);
@@ -6571,6 +6658,7 @@ fn fresh_sends_exclude_hook_delivery_before_the_pane_write() {
 #[test]
 fn expired_fresh_sender_stops_after_sweep_redelivers_its_claim() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
     register_running_agent(&env, "sess-expired-sender", "expired-sender", pane_env);
@@ -6630,6 +6718,7 @@ fn expired_fresh_sender_stops_after_sweep_redelivers_its_claim() {
 #[test]
 fn delivery_releases_remaining_claims_when_a_batch_member_is_canceled_before_write() {
     let env = Env::new();
+    env.record(&env.project_root);
     run_hook(
         &env,
         json!({"hook_event_name": "SessionStart", "session_id": "sess-lost-batch"}),
@@ -6693,6 +6782,7 @@ fn delivery_releases_remaining_claims_when_a_batch_member_is_canceled_before_wri
 #[test]
 fn sweep_recovers_a_lane_containing_only_an_expired_claim() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
     register_running_agent(&env, "sess-expired-claim", "expired-claim", pane_env);
@@ -6736,6 +6826,7 @@ fn sweep_recovers_a_lane_containing_only_an_expired_claim() {
 #[test]
 fn send_now_submit_failure_leaves_sent_record() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
     register_running_agent(&env, "sess-submit-fail", "feature-submit-fail", pane_env);
@@ -6783,6 +6874,7 @@ fn send_now_submit_failure_leaves_sent_record() {
 #[test]
 fn queue_deliver_folds_provisional_message_to_registered_card_name() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("codex");
     trust_codex_preflight_hooks(&env);
     seed_provisional_codex_launch(
@@ -6855,6 +6947,7 @@ fn queue_deliver_folds_provisional_message_to_registered_card_name() {
 #[test]
 fn queued_delivery_labels_an_ended_root_sender_main() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     register_running_agent(&env, "receiver", "docs", &[("ZELLIJ_PANE_ID", "3")]);
     append_lifecycle(
@@ -6948,6 +7041,7 @@ fn queued_delivery_labels_an_ended_root_sender_main() {
 #[test]
 fn queued_delivery_batches_compatible_prompts() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.write_config(&env.project_root, "");
     env.install_agent_hooks("claude");
     let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
@@ -7059,6 +7153,7 @@ fn queued_delivery_batches_compatible_prompts() {
 #[test]
 fn compact_first_sends_once_when_its_recovery_wake_cannot_be_registered() {
     let env = Env::new();
+    env.record(&env.project_root);
     register_running_agent(
         &env,
         "sess-compact-wake-fail",
@@ -7120,6 +7215,7 @@ fn compact_first_sends_once_when_its_recovery_wake_cannot_be_registered() {
 #[test]
 fn compact_first_claim_arms_recovery_before_the_command_finishes() {
     let env = Env::new();
+    env.record(&env.project_root);
     register_running_agent(
         &env,
         "sess-compact-wake",
@@ -7179,6 +7275,7 @@ fn compact_first_claim_arms_recovery_before_the_command_finishes() {
 #[test]
 fn steer_auto_compact_runs_before_a_full_window() {
     let env = Env::new();
+    env.record(&env.project_root);
     register_running_agent(&env, "sess-ac", "feature-ac", &[("ZELLIJ_PANE_ID", "3")]);
     seed_context_fill(&env, "sess-ac", 80);
 
@@ -7265,6 +7362,7 @@ fn steer_auto_compact_runs_before_a_full_window() {
 #[test]
 fn sweep_times_out_unconfirmed_compact_without_writing_it_twice() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.write_config(&env.project_root, "");
     register_running_agent(
         &env,
@@ -7331,6 +7429,7 @@ fn sweep_times_out_unconfirmed_compact_without_writing_it_twice() {
 #[test]
 fn message_inherits_smart_compact_default() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     register_running_agent(&env, "sess-ac-default", "feature-ac-default", &[]);
     run_success(
@@ -7353,6 +7452,7 @@ fn message_inherits_smart_compact_default() {
 fn agents_compact_reports_sibling_delivery_and_terminal_reasons() {
     for delivered in [true, false] {
         let env = Env::new();
+        env.record(&env.project_root);
         run_hook(
             &env,
             json!({"hook_event_name": "SessionStart", "session_id": "sess-compact-race"}),
@@ -7435,6 +7535,7 @@ fn agents_compact_reports_sibling_delivery_and_terminal_reasons() {
 #[test]
 fn command_delivery_parks_without_spending_an_attempt_when_compaction_starts_after_claim() {
     let env = Env::new();
+    env.record(&env.project_root);
     run_hook(
         &env,
         json!({"hook_event_name": "SessionStart", "session_id": "sess-compact-park"}),
@@ -7542,6 +7643,7 @@ fn pane_writer_lock_is_shared_across_workspaces_and_released_on_drop() {
 #[test]
 fn boundary_dispatch_parks_behind_a_claimed_record() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     run_hook(
         &env,
@@ -7590,6 +7692,7 @@ fn boundary_dispatch_parks_behind_a_claimed_record() {
 #[test]
 fn pane_write_lock_holds_a_steer_behind_an_in_flight_command() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     run_hook(
         &env,
@@ -7646,6 +7749,7 @@ fn pane_write_lock_holds_a_steer_behind_an_in_flight_command() {
 #[test]
 fn agents_compact_types_the_native_command_and_refuses_a_repeat() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     run_hook(
         &env,
@@ -7767,6 +7871,7 @@ fn agents_compact_uses_configured_custom_and_bare_instructions() {
         ("", None, ""),
     ] {
         let env = Env::new();
+        env.record(&env.project_root);
         run_hook(
             &env,
             json!({"hook_event_name": "SessionStart", "session_id": "sess-manual-instruction"}),
@@ -7812,6 +7917,7 @@ fn agents_compact_uses_native_commands_and_refuses_unsupported_instructions() {
         ("amp", None),
     ] {
         let env = Env::new();
+        env.record(&env.project_root);
         register_role_agent(
             &env,
             kind,
@@ -7894,6 +8000,7 @@ fn agents_compact_uses_native_commands_and_refuses_unsupported_instructions() {
 #[test]
 fn compaction_left_queued_arms_the_elder_wake() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     register_running_agent(
         &env,
@@ -7938,6 +8045,7 @@ fn compaction_left_queued_arms_the_elder_wake() {
 #[test]
 fn expired_automatic_command_releases_fifo_without_a_sweep_and_is_audited() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     register_role_agent(
         &env,
@@ -8103,6 +8211,7 @@ fn expired_automatic_command_releases_fifo_without_a_sweep_and_is_audited() {
 #[test]
 fn expired_automatic_command_cannot_be_forced_into_the_pane() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     register_role_agent(
         &env,
@@ -8170,6 +8279,7 @@ fn expired_automatic_command_cannot_be_forced_into_the_pane() {
 #[test]
 fn agents_compact_queues_for_a_running_agent() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     register_running_agent(
         &env,
@@ -8253,6 +8363,7 @@ fn agents_compact_queues_for_a_running_agent() {
 #[test]
 fn queued_compaction_is_rejected_after_a_native_manual_compaction() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     register_running_agent(
         &env,
@@ -8315,6 +8426,7 @@ fn smart_compact_sends_the_configured_instruction() {
         ("", None),
     ] {
         let env = Env::new();
+        env.record(&env.project_root);
         register_running_agent(
             &env,
             "sess-ac-instruction",
@@ -8364,6 +8476,7 @@ fn smart_compact_types_the_slash_token_apart_from_its_instruction() {
         "the regression instruction must exceed Claude's paste threshold"
     );
     let env = Env::new();
+    env.record(&env.project_root);
     register_running_agent(
         &env,
         "sess-ac-segments",
@@ -8381,6 +8494,7 @@ fn smart_compact_types_the_slash_token_apart_from_its_instruction() {
 #[test]
 fn boundary_auto_compact_defers_prompt_until_compaction_ends() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     run_hook(
         &env,
@@ -8512,6 +8626,7 @@ fn boundary_auto_compact_defers_prompt_until_compaction_ends() {
 #[test]
 fn steer_auto_compact_write_failure_keeps_only_prompt_queued() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     register_running_agent(
         &env,
@@ -8552,6 +8667,7 @@ fn steer_auto_compact_write_failure_keeps_only_prompt_queued() {
 #[test]
 fn steer_auto_compact_suppresses_only_an_unchanged_baseline() {
     let env = Env::new();
+    env.record(&env.project_root);
     register_running_agent(
         &env,
         "sess-ac-dupe",
@@ -8611,6 +8727,7 @@ fn steer_auto_compact_suppresses_only_an_unchanged_baseline() {
 fn queue_waiting_agent_defers_unforced_and_force_delivers() {
     {
         let env = Env::new();
+        env.record(&env.project_root);
         env.install_agent_hooks("claude");
         let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
         register_running_agent(&env, "sess-qd", "feature-qd", pane_env);
@@ -8648,6 +8765,7 @@ fn queue_waiting_agent_defers_unforced_and_force_delivers() {
 
     {
         let env = Env::new();
+        env.record(&env.project_root);
         env.install_agent_hooks("claude");
         let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
         register_running_agent(&env, "sess-qf", "feature-qf", pane_env);
@@ -8681,6 +8799,7 @@ fn queue_waiting_agent_defers_unforced_and_force_delivers() {
 #[test]
 fn message_miss_lists_available_agents() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     register_running_agent(&env, "sess-miss-list", "feature-miss-list", &[]);
     append_lifecycle(
@@ -8743,6 +8862,7 @@ fn message_miss_lists_available_agents() {
 #[test]
 fn steer_fanout_requires_opt_in_then_reports_all_targets() {
     let env = Env::new();
+    env.record(&env.project_root);
     register_running_agent(&env, "sess-amb-a", "feature-aa", &[("ZELLIJ_PANE_ID", "3")]);
     register_running_agent(&env, "sess-amb-b", "feature-ab", &[("ZELLIJ_PANE_ID", "4")]);
 
@@ -8773,6 +8893,7 @@ fn steer_fanout_requires_opt_in_then_reports_all_targets() {
 #[test]
 fn steer_fanout_skips_blocked_and_steers_the_rest() {
     let env = Env::new();
+    env.record(&env.project_root);
     register_running_agent(
         &env,
         "sess-skip-a",
@@ -8816,6 +8937,7 @@ fn steer_fanout_skips_blocked_and_steers_the_rest() {
 fn boundary_fanout_preserves_target_order_on_hook_failure() {
     fn scenario(live_first: bool) -> (std::process::Output, Vec<String>, Vec<MessageRecord>) {
         let env = Env::new();
+        env.record(&env.project_root);
         let (first_role, first_pane, second_role, second_pane) = if live_first {
             ("live", Some(TRACE_PANE), "parked", None)
         } else {
@@ -9897,6 +10019,7 @@ fn seed_provisional_codex_launch(
 #[test]
 fn steer_reaches_unbound_codex_pane() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("codex");
     let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "codex")]);
 
@@ -9913,6 +10036,7 @@ fn steer_reaches_unbound_codex_pane() {
 #[test]
 fn queue_to_provisional_codex_sends_to_live_pane_not_stale_rollup_pane() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("codex");
     seed_provisional_codex_launch(
         &env,
@@ -9947,6 +10071,7 @@ fn queue_to_provisional_codex_sends_to_live_pane_not_stale_rollup_pane() {
 #[test]
 fn provisional_without_live_frame_parks_queue_and_steer() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("codex");
     trust_codex_preflight_hooks(&env);
     seed_provisional_codex_launch(

@@ -492,6 +492,7 @@ fn doctor_reports_a_legacy_cache_for_deletion_without_blocking_start() {
 #[test]
 fn doctor_json_folds_one_row_per_agent() {
     let env = Env::new();
+    env.record(&env.project_root);
     inject_lifecycle(
         &env,
         "claude",
@@ -1001,6 +1002,7 @@ fn doctor_reports_zellij_server_log_excerpt() {
 #[test]
 fn doctor_json_surfaces_stuck_and_failed_messages() {
     let env = Env::new();
+    env.record(&env.project_root);
     inject_lifecycle(
         &env,
         "codex",
@@ -1075,7 +1077,7 @@ fn doctor_json_surfaces_stuck_and_failed_messages() {
     assert_eq!(stuck_rows.len(), 1, "{stuck_rows:?}");
     assert_eq!(stuck_rows[0]["message_id"], stuck_id);
     assert_eq!(stuck_rows[0]["status"], "queued");
-    assert_eq!(stuck_rows[0]["target"], "@codex#project");
+    assert_eq!(stuck_rows[0]["target"], "@codex#main");
     assert!(
         stuck_rows[0]["problem"]
             .as_str()

@@ -13,6 +13,7 @@ fn background_stacked_wrapper_pane_starts_sized_without_moving_client_focus() {
     require_zellij!();
 
     let env = Env::new();
+    env.record(&env.project_root);
     env.install_agent_hooks("claude");
     let workspace = env.resolve_workspace(&env.project_root);
     let room = LiveZellijSession::from_namespace(

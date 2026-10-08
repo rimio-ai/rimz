@@ -5,6 +5,7 @@ use crate::common::{CommandTimeoutExt, Env};
 #[test]
 fn open_asks_render_as_an_actionable_list() {
     let env = Env::new();
+    env.record(&env.project_root);
     let payload = json!({
         "hook_event_name": "PreToolUse",
         "session_id": "sess-rendered-ask",
@@ -54,6 +55,7 @@ fn open_asks_render_as_an_actionable_list() {
 #[test]
 fn answer_scoped_miss_offers_a_retypeable_root_correction() {
     let env = Env::new();
+    env.record(&env.project_root);
     let mut observation = rimz::agents::AgentLifecycleObservation::new(
         Some("root-coder".into()),
         rimz::agents::LifecycleSignal::Registered,

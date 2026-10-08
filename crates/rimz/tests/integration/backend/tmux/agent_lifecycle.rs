@@ -24,6 +24,7 @@ fn parked_wrapper_holds_under_8_mib() {
     for subagent in [false, true] {
         let env = Env::new();
         init_repo(&env.project_root);
+        env.record(&env.project_root);
         env.rimz()
             .args(["worktree", "new", "park-budget"])
             .assert_success_within_timeout("create budget worktree");
@@ -1154,6 +1155,7 @@ fn self_wait_steers_to_live_consumer_when_idle_and_working() {
     require_tmux!();
     for status in [AgentStatus::Idle, AgentStatus::Running] {
         let env = Env::new();
+        env.record(&env.project_root);
         env.install_agent_hooks("claude");
         let workspace = env.resolve_workspace(&env.project_root);
         let server = TmuxServer::in_runtime_root(&env.runtime_root);
@@ -1305,6 +1307,7 @@ fn self_wait_steers_to_live_consumer_when_idle_and_working() {
 fn resumed_lazy_agent_is_addressable_before_provider_registration() {
     require_tmux!();
     let env = Env::new();
+    env.record(&env.project_root);
     let workspace = env.resolve_workspace(&env.project_root);
     let kind = AgentKind::new_unchecked("codex");
     let agent_id = "sess-reborn-codex";
@@ -1499,6 +1502,7 @@ fn resumed_lazy_agent_is_addressable_before_provider_registration() {
 fn restart_unsupported_profile_skills_retains_old_pane_and_state() {
     require_tmux!();
     let env = Env::new();
+    env.record(&env.project_root);
     let workspace = env.resolve_workspace(&env.project_root);
     let server = TmuxServer::in_runtime_root(&env.runtime_root);
     server
@@ -1607,6 +1611,7 @@ fn cohort_resume_selects_closed_profile_parent_over_live_child_and_dead_placehol
     crate::common::trust_codex_preflight_hooks(&env);
     std::fs::write(env.home_root.join(".zshrc"), "").expect("disable zsh first-run menu");
     init_repo(&env.project_root);
+    env.record(&env.project_root);
     let worktree = env.home_root.join("project-worktrees/resume");
     git(
         &env.project_root,
@@ -1839,6 +1844,7 @@ fn fresh_cohort_relaunch_preserves_dirty_checkout_and_does_not_duplicate_live_ag
     env.install_agent_hooks("claude");
     std::fs::write(env.home_root.join(".zshrc"), "").expect("disable zsh first-run menu");
     init_repo(&env.project_root);
+    env.record(&env.project_root);
     let workspace = env.resolve_workspace(&env.project_root);
     let agent_bin = write_sleeping_agent_shim(&env, "claude");
     let ready = env.home_root.join("cohort-ready");
@@ -2212,6 +2218,7 @@ fn existing_unmanaged_worktree_launch(doorway: &str, spec: &str) {
     env.install_agent_hooks("claude");
     std::fs::write(env.home_root.join(".zshrc"), "").expect("disable zsh first-run menu");
     init_repo(&env.project_root);
+    env.record(&env.project_root);
     let worktree = env.home_root.join("project-worktrees/existing");
     git(
         &env.project_root,
@@ -2507,6 +2514,7 @@ fn closing_agent_tab_records_end_and_disposes_clean_worktree() {
     }
     let env = Env::new();
     init_repo(&env.project_root);
+    env.record(&env.project_root);
     let workspace = env.resolve_workspace(&env.project_root);
     let created = env
         .rimz()
@@ -2615,6 +2623,7 @@ fn closing_agent_tab_records_end_and_disposes_clean_worktree() {
 fn failing_close_pane_agent_drops_to_shell() {
     require_tmux!();
     let env = Env::new();
+    env.record(&env.project_root);
     let config_dir = env.rimz_home();
     std::fs::create_dir_all(&config_dir).expect("config directory");
     std::fs::write(

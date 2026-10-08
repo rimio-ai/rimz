@@ -516,6 +516,7 @@ fn pane_send_delivers_text_keys_then_enter_to_a_pane_in_the_room() {
 fn pane_send_refuses_an_agent_whose_pane_left_the_room() {
     require_tmux!();
     let rooms = TwoRooms::new();
+    rooms.env.record(&rooms.env.project_root);
     let gone = PaneId::from_parts(MuxName::Tmux, "%99");
     let workspace = rooms.env.resolve_workspace(&rooms.env.project_root);
     rooms

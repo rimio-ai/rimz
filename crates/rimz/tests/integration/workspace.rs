@@ -448,6 +448,7 @@ fn workspace_rotate_events_archives_and_preserves_agent_rollup() {
     let env = Env::new();
     let project = env.project_root.join("project");
     std::fs::create_dir_all(&project).expect("mkdir project");
+    env.record(&project);
 
     let workspace_id = WorkspaceId::from_project_root(&canonical(&project));
     let store = env.store_for(&project);
@@ -570,6 +571,8 @@ fn hook_inside_a_nested_repo_lands_in_the_pinned_room() {
     let Some(nested) = init_nested_repo(&env) else {
         return;
     };
+    env.record(&env.project_root);
+    let store = env.store();
 
     let mut cmd = env.hook_command("claude");
     cmd.current_dir(&nested)
@@ -585,10 +588,13 @@ fn hook_inside_a_nested_repo_lands_in_the_pinned_room() {
         String::from_utf8_lossy(&output.stderr),
     );
 
-    let pinned = env.state_path_for(&env.project_root);
     let repo = env.state_path_for(&nested);
     assert!(
-        pinned.events_log.exists(),
+        store
+            .read_events()
+            .unwrap()
+            .iter()
+            .any(|event| event.params_value()["event_name"] == "PermissionRequest"),
         "the pinned room's store holds the hook's event",
     );
     assert!(
@@ -603,6 +609,8 @@ fn corrupt_pin_falls_back_to_the_repo_workspace() {
     let Some(nested) = init_nested_repo(&env) else {
         return;
     };
+    env.record(&nested);
+    let store = env.store_for(&nested);
 
     // An id that does not hash from the pinned root: the verified-pin read
     // rejects it and the hook degrades to the static ladder — the repo's own
@@ -622,9 +630,12 @@ fn corrupt_pin_falls_back_to_the_repo_workspace() {
         String::from_utf8_lossy(&output.stderr),
     );
 
-    let repo = env.state_path_for(&nested);
     assert!(
-        repo.events_log.exists(),
+        store
+            .read_events()
+            .unwrap()
+            .iter()
+            .any(|event| event.params_value()["event_name"] == "PermissionRequest"),
         "the static ladder resolves the nested repo's own workspace",
     );
 }
@@ -723,6 +734,7 @@ fn codex_hook_recovers_pin_from_sibling_process_when_env_pin_absent() {
     #[cfg(target_os = "linux")]
     {
         let env = Env::new();
+        env.record(&env.project_root);
         // The agent's launch dir sits outside the room root, like `$HOME`.
         let elsewhere = env.home_root.join("elsewhere");
         std::fs::create_dir_all(&elsewhere).expect("mkdir elsewhere");
@@ -766,6 +778,7 @@ fn codex_daemon_hook_ignores_valid_inherited_pin_from_another_room() {
     #[cfg(target_os = "linux")]
     {
         let env = Env::new();
+        env.record(&env.project_root);
         let wrong_room = env.home_root.join("wrongroom");
         let elsewhere = env.home_root.join("elsewhere");
         std::fs::create_dir_all(&wrong_room).expect("mkdir wrong room");

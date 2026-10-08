@@ -69,6 +69,7 @@ fn stale_base_warning_is_stderr_only_and_uses_last_fetched_upstream() {
     let env = Env::new();
     let repo = &env.project_root;
     init_repo(repo);
+    env.record(&env.project_root);
     let origin = env.home_root.join("origin.git");
     git(repo, &["clone", "--bare", ".", origin.to_str().unwrap()]);
     git(repo, &["remote", "add", "origin", origin.to_str().unwrap()]);
@@ -167,6 +168,7 @@ fn launch_creation_signals_once_and_reuse_is_silent() {
 fn worktree_hooks_run_and_report_without_streaming_output() {
     let env = Env::new();
     init_repo(&env.project_root);
+    env.record(&env.project_root);
     std::fs::create_dir_all(env.rimz_home()).unwrap();
     std::fs::write(env.rimz_home().join("config.toml"), "[agents.worktree.hooks]\ncreated = 'echo captured; pwd > hook-cwd; echo \"$RIMZ_WORKTREE_PATH\" >> hook-cwd'\nremoved = 'echo removed > hook-removed'\n").unwrap();
     env.write_config(
@@ -222,6 +224,7 @@ fn worktree_hooks_run_and_report_without_streaming_output() {
 fn failed_worktree_hook_reports_output_and_removes_tree_and_branch() {
     let env = Env::new();
     init_repo(&env.project_root);
+    env.record(&env.project_root);
     std::fs::create_dir_all(env.rimz_home()).unwrap();
     std::fs::write(
         env.rimz_home().join("config.toml"),
@@ -250,6 +253,7 @@ fn failed_worktree_hook_reports_output_and_removes_tree_and_branch() {
 fn worktree_reports_unknown_hook_keys() {
     let env = Env::new();
     init_repo(&env.project_root);
+    env.record(&env.project_root);
     std::fs::create_dir_all(env.rimz_home()).unwrap();
     std::fs::write(
         env.rimz_home().join("config.toml"),
@@ -267,6 +271,7 @@ fn worktree_reports_unknown_hook_keys() {
 fn blank_worktree_hook_refuses_creation_before_side_effects() {
     let env = Env::new();
     init_repo(&env.project_root);
+    env.record(&env.project_root);
     std::fs::create_dir_all(env.rimz_home()).unwrap();
     for event in ["created", "removed"] {
         std::fs::write(
@@ -291,6 +296,7 @@ fn worktree_new_list_and_remove_round_trip() {
     }
     let env = Env::new();
     init_repo(&env.project_root);
+    env.record(&env.project_root);
 
     env.rimz()
         .args(["worktree", "new", "demo"])
@@ -360,6 +366,7 @@ fn unmanaged_launch_checkout_preserves_ownership_and_local_work() {
     }
     let env = Env::new();
     init_repo(&env.project_root);
+    env.record(&env.project_root);
     let path = env.home_root.join("project-worktrees/feat-review");
     git_stdout(
         &env.project_root,
@@ -487,6 +494,7 @@ fn worktree_remove_distinguishes_missing_from_unmarked() {
     }
     let env = Env::new();
     init_repo(&env.project_root);
+    env.record(&env.project_root);
 
     env.rimz()
         .args(["worktree", "remove", "ghost"])
@@ -512,6 +520,7 @@ fn worktree_sweep_previews_then_removes_only_safe_checkouts() {
     }
     let env = Env::new();
     init_repo(&env.project_root);
+    env.record(&env.project_root);
     env.rimz()
         .args(["worktree", "new", "landed"])
         .assert()
@@ -551,7 +560,7 @@ fn worktree_sweep_previews_then_removes_only_safe_checkouts() {
 }
 
 #[test]
-fn worktree_sweep_dry_run_skips_an_absent_store_without_failing() {
+fn worktree_sweep_previews_an_absent_room_but_refuses_mutation() {
     if git_missing() {
         return;
     }
@@ -563,12 +572,12 @@ fn worktree_sweep_dry_run_skips_an_absent_store_without_failing() {
         .assert()
         .success()
         .stdout(contains("sweep — skipped · no RimZ store here"));
-
     env.rimz()
         .args(["worktree", "sweep"])
         .assert()
-        .success()
-        .stdout(contains("sweep — nothing to remove · 0 kept"));
+        .failure()
+        .stderr(contains("no room at").and(contains("rimz start")));
+    assert!(!env.state_path_for(&env.project_root).root.exists());
 }
 
 #[cfg(unix)]
@@ -581,6 +590,7 @@ fn worktree_cd_execs_the_user_shell_inside_the_named_checkout() {
     }
     let env = Env::new();
     init_repo(&env.project_root);
+    env.record(&env.project_root);
     env.rimz()
         .args(["worktree", "new", "demo"])
         .assert()
@@ -617,6 +627,7 @@ fn worktree_merge_rebases_then_fast_forwards_main() {
     }
     let env = Env::new();
     init_repo(&env.project_root);
+    env.record(&env.project_root);
     env.rimz()
         .args(["worktree", "new", "demo"])
         .assert()
@@ -653,6 +664,7 @@ fn worktree_merge_refuses_dirty_checkouts() {
     }
     let env = Env::new();
     init_repo(&env.project_root);
+    env.record(&env.project_root);
     env.rimz()
         .args(["worktree", "new", "demo"])
         .assert()
@@ -682,6 +694,7 @@ fn worktree_merge_refuses_a_checkout_with_a_live_agent() {
     }
     let env = Env::new();
     init_repo(&env.project_root);
+    env.record(&env.project_root);
     env.rimz()
         .args(["worktree", "new", "demo"])
         .assert()
@@ -724,6 +737,7 @@ fn worktree_merge_refuses_an_in_progress_git_operation() {
     }
     let env = Env::new();
     init_repo(&env.project_root);
+    env.record(&env.project_root);
     env.rimz()
         .args(["worktree", "new", "demo"])
         .assert()
@@ -747,6 +761,7 @@ fn worktree_merge_aborts_a_conflicting_rebase_without_advancing_main() {
     }
     let env = Env::new();
     init_repo(&env.project_root);
+    env.record(&env.project_root);
     env.rimz()
         .args(["worktree", "new", "demo"])
         .assert()
@@ -789,6 +804,7 @@ fn worktree_remove_leaves_candidate_cwd_before_git_removal() {
     }
     let env = Env::new();
     init_repo(&env.project_root);
+    env.record(&env.project_root);
     env.rimz()
         .args(["worktree", "new", "demo"])
         .assert()
@@ -812,6 +828,7 @@ fn worktree_new_accepts_branch_style_name_and_removes_by_raw_spelling() {
     }
     let env = Env::new();
     init_repo(&env.project_root);
+    env.record(&env.project_root);
 
     env.rimz()
         .args(["worktree", "new", "feat/great"])
@@ -852,6 +869,7 @@ fn worktree_new_explicit_branch_overrides_branch_style_name() {
     }
     let env = Env::new();
     init_repo(&env.project_root);
+    env.record(&env.project_root);
 
     env.rimz()
         .args(["worktree", "new", "feat/great", "--branch", "other"])
@@ -894,6 +912,7 @@ fn worktree_new_refuses_a_name_live_agents_hold_as_a_lane() {
     }
     let env = Env::new();
     init_repo(&env.project_root);
+    env.record(&env.project_root);
 
     env.install_agent_hooks("claude");
     crate::channel::register_idle_lane_agent(&env, "sess-lane", "demo", None);
@@ -912,6 +931,7 @@ fn worktree_new_checks_dashed_lane_for_branch_style_name() {
     }
     let env = Env::new();
     init_repo(&env.project_root);
+    env.record(&env.project_root);
 
     env.install_agent_hooks("claude");
     crate::channel::register_idle_lane_agent(&env, "sess-lane", "feat-great", None);
@@ -930,6 +950,7 @@ fn worktree_new_archives_messages_for_recreated_channel() {
     }
     let env = Env::new();
     init_repo(&env.project_root);
+    env.record(&env.project_root);
     let message_id = queue_channel_message(&env, "demo", "old work");
 
     env.rimz()
@@ -956,6 +977,7 @@ fn worktree_remove_archives_messages_for_removed_channel() {
     }
     let env = Env::new();
     init_repo(&env.project_root);
+    env.record(&env.project_root);
     env.rimz()
         .args(["worktree", "new", "demo", "--branch", "scratch"])
         .assert()
@@ -1020,6 +1042,7 @@ fn worktree_remove_refuses_while_a_live_agent_works_there() {
     }
     let env = Env::new();
     init_repo(&env.project_root);
+    env.record(&env.project_root);
     env.rimz()
         .args(["worktree", "new", "demo", "--branch", "scratch"])
         .assert()
@@ -1069,6 +1092,7 @@ fn worktree_remove_survives_history_append_failure() {
     }
     let env = Env::new();
     init_repo(&env.project_root);
+    env.record(&env.project_root);
     env.rimz()
         .args(["worktree", "new", "demo"])
         .assert()
@@ -1097,6 +1121,7 @@ fn worktree_remove_reports_live_queue_write_failure_after_removal() {
     }
     let env = Env::new();
     init_repo(&env.project_root);
+    env.record(&env.project_root);
     env.rimz()
         .args(["worktree", "new", "demo"])
         .assert()
@@ -1151,6 +1176,7 @@ fn worktree_cleanup_retires_sessions_and_archives_messages_after_removal() {
     }
     let env = Env::new();
     init_repo(&env.project_root);
+    env.record(&env.project_root);
     env.rimz()
         .args(["worktree", "new", "demo", "--branch", "scratch"])
         .assert()
@@ -1227,6 +1253,7 @@ fn worktree_cleanup_survives_history_append_failure() {
     }
     let env = Env::new();
     init_repo(&env.project_root);
+    env.record(&env.project_root);
     env.rimz()
         .args(["worktree", "new", "demo"])
         .assert()
@@ -1256,6 +1283,7 @@ fn worktree_gc_survives_history_append_failure() {
     }
     let env = Env::new();
     init_repo(&env.project_root);
+    env.record(&env.project_root);
     env.rimz()
         .args(["worktree", "new", "demo"])
         .assert()
@@ -1282,6 +1310,7 @@ fn worktree_new_from_pr_fetches_github_style_ref() {
         return;
     }
     let env = Env::new();
+    env.record(&env.project_root);
     let (pr_head, trunk) = publish_pr_ref(&env, "refs/pull/1/head");
     configure_github_origin_rewrite(&env);
     let shim_dir = write_gh_pr_head_shim(&env, gh_same_repo_head());
@@ -1327,6 +1356,7 @@ fn worktree_new_from_pr_url_fetches_gitlab_ref() {
         return;
     }
     let env = Env::new();
+    env.record(&env.project_root);
     let (pr_head, _trunk) = publish_pr_ref(&env, "refs/merge-requests/1/head");
     configure_origin_rewrite(&env, "https://gitlab.com/org/repo.git");
 
@@ -1368,6 +1398,7 @@ fn worktree_new_rejects_pr_url_for_another_repository() {
         return;
     }
     let env = Env::new();
+    env.record(&env.project_root);
     publish_pr_ref(&env, "refs/pull/1/head");
     configure_origin_rewrite(&env, "https://github.com/org/repo.git");
 
@@ -1397,6 +1428,7 @@ fn from_pr_reuse_requires_matching_pr_provenance() {
         return;
     }
     let env = Env::new();
+    env.record(&env.project_root);
     publish_pr_ref_without_branch(&env, "refs/pull/1/head");
     env.rimz()
         .args(["worktree", "new", "review", "--from-pr", "1"])
@@ -1439,6 +1471,7 @@ fn worktree_new_from_pr_adopts_matching_local_branch() {
         return;
     }
     let env = Env::new();
+    env.record(&env.project_root);
     let (pr_head, _) = publish_pr_ref(&env, "refs/pull/1/head");
     git(&env.project_root, &["branch", "feature", pr_head.as_str()]);
     configure_github_origin_rewrite(&env);
@@ -1465,6 +1498,7 @@ fn worktree_new_from_pr_adopts_matching_local_branch_from_tea() {
         return;
     }
     let env = Env::new();
+    env.record(&env.project_root);
     let (pr_head, _) = publish_pr_ref(&env, "refs/pull/1/head");
     git(&env.project_root, &["branch", "feature", pr_head.as_str()]);
     configure_gitea_origin_rewrite(&env);
@@ -1492,6 +1526,7 @@ fn worktree_new_from_pr_fast_forwards_ancestor_local_branch() {
         return;
     }
     let env = Env::new();
+    env.record(&env.project_root);
     let (pr_head, trunk) = publish_pr_ref(&env, "refs/pull/1/head");
     git(&env.project_root, &["branch", "feature", trunk.as_str()]);
     configure_github_origin_rewrite(&env);
@@ -1515,6 +1550,7 @@ fn worktree_new_from_pr_refuses_diverged_local_branch() {
         return;
     }
     let env = Env::new();
+    env.record(&env.project_root);
     publish_pr_ref(&env, "refs/pull/1/head");
     git(&env.project_root, &["checkout", "-b", "feature"]);
     commit_file(&env.project_root, "local.txt", "local\n", "diverge locally");
@@ -1543,6 +1579,7 @@ fn worktree_new_from_pr_refuses_branch_checked_out_elsewhere() {
         return;
     }
     let env = Env::new();
+    env.record(&env.project_root);
     let (pr_head, _) = publish_pr_ref(&env, "refs/pull/1/head");
     git(&env.project_root, &["branch", "feature", pr_head.as_str()]);
     let other = env.home_root.join("other-feature");
@@ -1574,6 +1611,7 @@ fn worktree_new_from_pr_reuses_marked_head_and_preserves_channel() {
         return;
     }
     let env = Env::new();
+    env.record(&env.project_root);
     let (head, _) = publish_pr_ref(&env, "refs/pull/1/head");
     env.rimz()
         .args(["worktree", "new", "feature", "--base", &head])
@@ -1608,6 +1646,7 @@ fn worktree_new_from_pr_named_holder_backfills_and_wrong_name_refuses() {
         return;
     }
     let env = Env::new();
+    env.record(&env.project_root);
     let (head, _) = publish_pr_ref(&env, "refs/pull/1/head");
     env.rimz()
         .args(["worktree", "new", "feature", "--base", &head])
@@ -1645,6 +1684,7 @@ fn worktree_new_from_pr_holder_fast_forward_protects_dirty_files() {
     }
     for dirty in [false, true] {
         let env = Env::new();
+        env.record(&env.project_root);
         let (head, trunk) = publish_pr_ref(&env, "refs/pull/1/head");
         env.rimz()
             .args(["worktree", "new", "feature", "--base", &trunk])
@@ -1693,6 +1733,7 @@ fn worktree_new_from_pr_refuses_main_and_other_pr_holders() {
         return;
     }
     let env = Env::new();
+    env.record(&env.project_root);
     let (head, _) = publish_pr_ref(&env, "refs/pull/1/head");
     git(&env.project_root, &["checkout", "-b", "feature", &head]);
     configure_github_origin_rewrite(&env);
@@ -1726,6 +1767,7 @@ fn worktree_new_from_pr_rebased_and_conflicting_tips_do_not_move() {
     for holder in [false, true] {
         for rebased in [false, true] {
             let env = Env::new();
+            env.record(&env.project_root);
             let (head, trunk) = publish_pr_ref(&env, "refs/pull/1/head");
             git(&env.project_root, &["checkout", "-b", "feature", &trunk]);
             if rebased {
@@ -1781,6 +1823,7 @@ fn worktree_new_from_pr_without_forge_cli_is_review_only() {
         return;
     }
     let env = Env::new();
+    env.record(&env.project_root);
     let (pr_head, _) = publish_pr_ref_without_branch(&env, "refs/pull/1/head");
 
     env.rimz()
@@ -1825,6 +1868,7 @@ fn worktree_new_from_fork_pr_tracks_fork_from_gh() {
         return;
     }
     let env = Env::new();
+    env.record(&env.project_root);
     let (_pr_head, _) = publish_pr_ref(&env, "refs/pull/1/head");
     configure_github_origin_rewrite(&env);
     let shim_dir = write_gh_pr_head_shim(&env, gh_fork_head());
@@ -1871,6 +1915,7 @@ fn worktree_new_from_fork_pr_tracks_fork_from_tea() {
         return;
     }
     let env = Env::new();
+    env.record(&env.project_root);
     let (pr_head, _) = publish_pr_ref(&env, "refs/pull/1/head");
     configure_gitea_origin_rewrite(&env);
     let shim_dir = write_tea_pr_head_shim(&env, tea_fork_head());
@@ -1918,6 +1963,7 @@ fn worktree_new_from_fork_pr_prefixes_local_branch_collision() {
         return;
     }
     let env = Env::new();
+    env.record(&env.project_root);
     publish_pr_ref_without_branch(&env, "refs/pull/1/head");
     configure_github_origin_rewrite(&env);
     git(&env.project_root, &["branch", "feature", "main"]);
@@ -1947,6 +1993,7 @@ fn worktree_new_seeds_files_from_worktreeinclude() {
     }
     let env = Env::new();
     init_repo(&env.project_root);
+    env.record(&env.project_root);
 
     // Untracked files that `git worktree add` would not carry over.
     std::fs::write(env.project_root.join(".env"), "SECRET=1").expect("write .env");
@@ -1982,6 +2029,7 @@ fn worktree_new_without_include_seeds_nothing() {
     }
     let env = Env::new();
     init_repo(&env.project_root);
+    env.record(&env.project_root);
 
     // A pattern that matches nothing still creates the worktree; no seed report.
     std::fs::write(env.project_root.join(".worktreeinclude"), "missing.txt\n")
@@ -2014,6 +2062,7 @@ fn worktree_new_symlinks_dirs_from_worktreelink_without_dirtying_checkout() {
     }
     let env = Env::new();
     init_repo(&env.project_root);
+    env.record(&env.project_root);
     std::fs::create_dir_all(env.project_root.join("node_modules/pkg")).expect("node_modules");
     std::fs::write(
         env.project_root.join("node_modules/pkg/index.js"),
@@ -2069,6 +2118,7 @@ fn worktree_remove_refuses_dirty_without_force() {
     }
     let env = Env::new();
     init_repo(&env.project_root);
+    env.record(&env.project_root);
     env.rimz()
         .args(["worktree", "new", "demo"])
         .assert()
@@ -2096,6 +2146,7 @@ fn worktree_new_with_at_base_keeps_pending_commits() {
     }
     let env = Env::new();
     init_repo(&env.project_root);
+    env.record(&env.project_root);
     env.rimz()
         .args(["worktree", "new", "demo", "--base", "@"])
         .assert()
@@ -2140,6 +2191,7 @@ fn agents_exec_clean_exit_leaves_clean_worktree_until_gc() {
     }
     let env = Env::new();
     init_repo(&env.project_root);
+    env.record(&env.project_root);
     env.rimz()
         .args(["worktree", "new", "demo"])
         .assert()
@@ -2191,6 +2243,7 @@ fn agents_exec_sighup_keeps_worktree_with_inflight_relaunch() {
     }
     let env = Env::new();
     init_repo(&env.project_root);
+    env.record(&env.project_root);
     env.rimz()
         .args(["worktree", "new", "demo"])
         .assert()
@@ -2228,6 +2281,7 @@ fn agents_exec_missing_worktree_path_fails_launch_without_spawning() {
     }
     let env = Env::new();
     init_repo(&env.project_root);
+    env.record(&env.project_root);
     let missing = env.home_root.join("project-worktrees").join("missing");
     let store = env.store();
     let record = rimz::store::run::RunRecord::new(
@@ -2301,6 +2355,7 @@ fn assert_sighup_keeps_worktree(label: &str, setup: impl FnOnce(&Env, &Path)) {
     }
     let env = Env::new();
     init_repo(&env.project_root);
+    env.record(&env.project_root);
     env.rimz()
         .args(["worktree", "new", "demo"])
         .assert()
@@ -2331,6 +2386,7 @@ fn worktree_remove_split_landed_succeeds_without_force() {
     }
     let env = Env::new();
     init_repo(&env.project_root);
+    env.record(&env.project_root);
     env.rimz()
         .args(["worktree", "new", "demo"])
         .assert()
@@ -2377,6 +2433,7 @@ fn worktree_status_rebase_landed_with_shifted_context_is_landed() {
     }
     let env = Env::new();
     init_repo(&env.project_root);
+    env.record(&env.project_root);
     if !git_succeeds(
         &env.project_root,
         &["merge-tree", "--write-tree", "HEAD", "HEAD"],
@@ -2458,6 +2515,7 @@ fn gc_sweeps_merged_worktree() {
     }
     let env = Env::new();
     init_repo(&env.project_root);
+    env.record(&env.project_root);
     env.rimz()
         .args(["worktree", "new", "demo"])
         .assert()
@@ -2488,6 +2546,7 @@ fn gc_sweeps_rewritten_worktree_whose_tip_tree_landed() {
     }
     let env = Env::new();
     init_repo(&env.project_root);
+    env.record(&env.project_root);
     if !git_succeeds(
         &env.project_root,
         &["merge-tree", "--write-tree", "HEAD", "HEAD"],
@@ -2624,6 +2683,7 @@ fn gc_keeps_unlanded_worktree_whose_tip_tree_is_only_shared_history() {
     }
     let env = Env::new();
     init_repo(&env.project_root);
+    env.record(&env.project_root);
     if !git_succeeds(
         &env.project_root,
         &["merge-tree", "--write-tree", "HEAD", "HEAD"],
@@ -2736,6 +2796,7 @@ fn gc_sweeps_merge_landed_worktree() {
     }
     let env = Env::new();
     init_repo(&env.project_root);
+    env.record(&env.project_root);
     env.rimz()
         .args(["worktree", "new", "demo"])
         .assert()
@@ -2792,6 +2853,7 @@ fn gc_sweeps_worktree_whose_base_branch_landed_on_trunk() {
     }
     let env = Env::new();
     init_repo(&env.project_root);
+    env.record(&env.project_root);
     git(&env.project_root, &["branch", "feature"]);
     git(&env.project_root, &["checkout", "feature"]);
     commit_file(&env.project_root, "base.txt", "base\n", "base");
@@ -2862,6 +2924,7 @@ fn auto_remove_force_deletes_branch_merged_into_explicit_base() {
     }
     let env = Env::new();
     init_repo(&env.project_root);
+    env.record(&env.project_root);
     git(&env.project_root, &["branch", "develop"]);
     env.rimz()
         .args(["worktree", "new", "demo", "--base", "develop"])

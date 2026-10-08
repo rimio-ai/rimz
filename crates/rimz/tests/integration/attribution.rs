@@ -808,6 +808,7 @@ fn attribution_counts_only_the_current_worktree_lifetime() {
         return;
     }
     let env = Env::new();
+    env.record(&env.project_root);
     for args in [
         vec!["init", "-b", "main"],
         vec!["config", "user.email", "rimz@example.com"],

@@ -60,6 +60,20 @@ fn sidebar_redraws_at_new_size_on_resize() {
         .rand_bytes(6)
         .tempdir()
         .expect("xdg tempdir");
+    let workspace_id = rimz::WorkspaceId::parse(WORKSPACE_ID).unwrap();
+    let project = xdg.path().join(WORKSPACE_ID);
+    std::fs::create_dir(&project).unwrap();
+    let mut workspace = rimz::WorkspaceResolver::resolve_under(&project, None, xdg.path()).unwrap();
+    workspace.workspace_id = workspace_id.clone();
+    workspace.session_name = "rimz-resize-test".to_owned();
+    let state = rimz::StatePaths::under(workspace_id, xdg.path()).unwrap();
+    let runtime = rimz::RuntimePaths::for_state_under(&state, xdg.path());
+    let instance = rimz::ids::SidebarInstanceId::default();
+    let heartbeat = runtime.sidebar_heartbeat_path(&instance);
+    rimz::Store::open(state, runtime)
+        .unwrap()
+        .record_workspace(&workspace)
+        .unwrap();
 
     let pty = native_pty_system();
     let pair = pty
@@ -73,6 +87,7 @@ fn sidebar_redraws_at_new_size_on_resize() {
 
     let mut cmd = CommandBuilder::new(&bin);
     cmd.scrub_session_env();
+    cmd.env("RIMZ_SIDEBAR_INSTANCE_ID", instance.as_str());
     cmd.args([
         "sidebar",
         "serve",
@@ -118,7 +133,15 @@ fn sidebar_redraws_at_new_size_on_resize() {
         }
     });
 
-    // Let the first (1x1) frame land and the loop settle into its wait.
+    // Wait for the attachment to start before letting its first 1x1 frame settle.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !heartbeat.exists() {
+        assert!(
+            Instant::now() < deadline,
+            "sidebar attachment did not start"
+        );
+        std::thread::sleep(Duration::from_millis(25));
+    }
     std::thread::sleep(Duration::from_millis(500));
     assert!(
         !parser

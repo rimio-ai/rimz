@@ -96,6 +96,7 @@ fn tmux_room_shows_agent_after_hook() {
         crate::common::skip("git unavailable");
         return;
     }
+    env.record(&env.project_root);
 
     let server_dir = TempDir::new().expect("tmux socket dir");
     let runtime = tempfile::Builder::new()
@@ -201,6 +202,7 @@ fn tmux_cell_only_sidebar_bounds_client_bytes() {
     if env.skip_if_sandboxed() {
         return;
     }
+    env.record(&env.project_root);
     const REFRESH_MS: u64 = 100;
     const BYTES_PER_FRAME: u64 = 1024;
     const STATUS_SLACK: u64 = 4096;
@@ -420,6 +422,7 @@ fn tmux_sidebar_keeps_width_when_work_pane_closes() {
     if env.skip_if_sandboxed() {
         return;
     }
+    env.record(&env.project_root);
 
     let runtime = tempfile::Builder::new()
         .prefix("rz")
@@ -556,6 +559,7 @@ fn tmux_sidebar_self_closes_without_full_width_flash() {
     if env.skip_if_sandboxed() {
         return;
     }
+    env.record(&env.project_root);
 
     let server_dir = TempDir::new().expect("tmux socket dir");
     let runtime = tempfile::Builder::new()
@@ -3562,6 +3566,7 @@ fn tmux_rebirth_evidence_keeps_the_events_a_reset_rotated_out() {
         return;
     };
     let env = Env::new();
+    env.record(&env.project_root);
     let fed = env.run_hook(
         "claude",
         &session_start_at(
@@ -3940,6 +3945,7 @@ fn wait_for_rendered_sidebar_width(
 }
 
 fn real_agent_room(env: &Env, agent_session: &str) -> (PathBuf, String, String, TmuxServerGuard) {
+    env.record(&env.project_root);
     let server_dir = TempDir::new().expect("tmux socket dir");
     let socket = managed_socket(&env.runtime_root);
     let agent = server_dir.path().join("codex");

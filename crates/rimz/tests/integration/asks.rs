@@ -15,6 +15,7 @@ const QUESTION_CONTEXT: &str = concat!(
 #[test]
 fn human_question_routes_and_missing_selector_show_options() {
     let env = Env::new();
+    env.record(&env.project_root);
     assert!(
         env.run_hook("claude", &question_payload(&env))
             .status
@@ -39,6 +40,7 @@ fn human_question_routes_and_missing_selector_show_options() {
 #[test]
 fn missing_plan_answer_quotes_the_plan_body() {
     let env = Env::new();
+    env.record(&env.project_root);
     let payload = json!({
         "hook_event_name": "PreToolUse",
         "session_id": "plan-preview",
@@ -67,6 +69,7 @@ fn missing_plan_answer_quotes_the_plan_body() {
 #[test]
 fn missing_free_text_answer_has_no_options_tail() {
     let env = Env::new();
+    env.record(&env.project_root);
     let payload = json!({
         "hook_event_name": "PreToolUse",
         "session_id": "free-text",
@@ -92,6 +95,7 @@ fn missing_free_text_answer_has_no_options_tail() {
 #[test]
 fn permission_duplicate_picks_keep_the_duplicate_error() {
     let env = Env::new();
+    env.record(&env.project_root);
     assert!(
         env.run_hook("claude", &permission_payload("Bash"))
             .status
@@ -114,6 +118,7 @@ fn permission_duplicate_picks_keep_the_duplicate_error() {
 #[test]
 fn permission_json_answer_count_keeps_the_count_error() {
     let env = Env::new();
+    env.record(&env.project_root);
     assert!(
         env.run_hook("claude", &permission_payload("Bash"))
             .status
@@ -139,6 +144,7 @@ fn permission_json_answer_count_keeps_the_count_error() {
 #[test]
 fn permission_show_labels_summary_and_pane_actions() {
     let env = Env::new();
+    env.record(&env.project_root);
     assert!(
         env.run_hook("claude", &permission_payload("Bash"))
             .status
@@ -163,6 +169,7 @@ fn permission_show_labels_summary_and_pane_actions() {
 #[test]
 fn human_table_routes_all_ask_kinds_and_child_to_root() {
     let env = Env::new();
+    env.record(&env.project_root);
     assert!(
         env.run_hook("claude", &question_payload(&env))
             .status
@@ -238,6 +245,7 @@ fn human_table_routes_all_ask_kinds_and_child_to_root() {
 #[test]
 fn not_asking_and_unknown_id_share_wording_but_keep_exit_codes() {
     let env = Env::new();
+    env.record(&env.project_root);
     assert!(
         env.run_hook(
             "claude",
@@ -365,6 +373,7 @@ fn asks_stray_words_redirect_to_show() {
 #[test]
 fn asks_lists_and_shows_structured_question_json() {
     let env = Env::new();
+    env.record(&env.project_root);
     let hook = env.run_hook("claude", &question_payload(&env));
     assert!(
         hook.status.success(),
@@ -442,6 +451,7 @@ fn asks_lists_and_shows_structured_question_json() {
 #[test]
 fn pi_parallel_sibling_completion_keeps_the_keyed_ask_open() {
     let env = Env::new();
+    env.record(&env.project_root);
     let ask = serde_json::to_string(&json!({
         "hook_event_name": "tool_call",
         "session_id": "sess-pi-question",
@@ -631,6 +641,7 @@ fn append_rejected_tool_result(transcript: &std::path::Path, tool_use_id: &str) 
 #[test]
 fn claude_parallel_sibling_tool_keeps_the_keyed_ask_open() {
     let env = Env::new();
+    env.record(&env.project_root);
     let session = "sess-claude-question";
     let transcript = claude_transcript(&env, session);
     let feed = |payload: serde_json::Value| feed_claude_hook(&env, payload);
@@ -680,6 +691,7 @@ fn claude_parallel_sibling_tool_keeps_the_keyed_ask_open() {
 #[test]
 fn claude_resolved_call_releases_the_keyed_ask_on_the_next_tool() {
     let env = Env::new();
+    env.record(&env.project_root);
     let session = "sess-claude-rejected";
     let transcript = claude_transcript(&env, session);
     feed_claude_hook(
@@ -707,6 +719,7 @@ fn claude_resolved_call_releases_the_keyed_ask_on_the_next_tool() {
 #[test]
 fn claude_escape_releases_the_keyed_ask_on_the_next_statusline_push() {
     let env = Env::new();
+    env.record(&env.project_root);
     let session = "sess-claude-escape";
     let transcript = claude_transcript(&env, session);
     feed_claude_hook(
@@ -751,6 +764,7 @@ fn claude_escape_releases_the_keyed_ask_on_the_next_statusline_push() {
 #[test]
 fn asks_ignores_newer_transcript_question_with_a_different_id() {
     let env = Env::new();
+    env.record(&env.project_root);
     let hook = env.run_hook("claude", &question_payload(&env));
     assert!(
         hook.status.success(),
@@ -803,6 +817,7 @@ fn asks_ignores_newer_transcript_question_with_a_different_id() {
 #[test]
 fn permission_request_does_not_replace_its_native_question_ask() {
     let env = Env::new();
+    env.record(&env.project_root);
     let question = env.run_hook("claude", &question_payload(&env));
     assert!(question.status.success());
     let before = env
@@ -836,6 +851,7 @@ fn permission_request_does_not_replace_its_native_question_ask() {
 #[test]
 fn asks_synthesizes_safe_permission_options() {
     let env = Env::new();
+    env.record(&env.project_root);
     let hook = env.run_hook("claude", &permission_payload("Bash"));
     assert!(
         hook.status.success(),
@@ -892,6 +908,7 @@ fn asks_synthesizes_safe_permission_options() {
 #[test]
 fn asks_marks_plan_approval_mode_changes() {
     let env = Env::new();
+    env.record(&env.project_root);
     let payload = serde_json::to_string(&json!({
         "hook_event_name": "PreToolUse",
         "session_id": "sess-plan",
@@ -933,6 +950,7 @@ fn asks_marks_plan_approval_mode_changes() {
 #[test]
 fn asks_synthesizes_safe_plan_approval_without_transcript() {
     let env = Env::new();
+    env.record(&env.project_root);
     let payload = serde_json::to_string(&json!({
         "hook_event_name": "PreToolUse",
         "session_id": "sess-plan-missing-transcript",
@@ -1012,6 +1030,7 @@ fn read_open_ask_rejects_ineligible_state_before_external_reads() {
 #[test]
 fn codex_plan_stop_lists_rollout_plan_as_waiting_ask() {
     let env = Env::new();
+    env.record(&env.project_root);
     let transcript_path = write_codex_plan_rollout(&env);
     let hook = env.run_hook("codex", &codex_plan_payload(&transcript_path));
     assert!(
@@ -1046,6 +1065,7 @@ fn codex_plan_stop_lists_rollout_plan_as_waiting_ask() {
 #[test]
 fn asks_empty_and_stale_answer_are_machine_readable() {
     let env = Env::new();
+    env.record(&env.project_root);
     let output = env
         .rimz()
         .args(["asks", "--json"])
@@ -1069,6 +1089,7 @@ fn asks_empty_and_stale_answer_are_machine_readable() {
 #[test]
 fn answer_keeps_unverified_codex_permissions_in_the_pane() {
     let env = Env::new();
+    env.record(&env.project_root);
     let hook = env.run_hook("codex", &permission_payload("shell"));
     assert!(
         hook.status.success(),
@@ -1119,6 +1140,7 @@ fn answer_refuses_unconfirmable_claude_menu_actions_before_pane_delivery() {
         ),
     ] {
         let env = Env::new();
+        env.record(&env.project_root);
         let hook = env.run_hook("claude", &payload);
         assert!(hook.status.success());
 
@@ -1160,6 +1182,7 @@ fn fake_tmux(env: &Env) -> (std::path::PathBuf, std::path::PathBuf) {
 #[test]
 fn answer_question_sends_to_bound_pane_and_timeout_has_distinct_exit() {
     let env = Env::new();
+    env.record(&env.project_root);
     let hook =
         env.run_installed_hook_in_pane("claude", &question_payload(&env), &[("TMUX_PANE", "%7")]);
     assert!(
@@ -1205,6 +1228,7 @@ fn answer_question_sends_to_bound_pane_and_timeout_has_distinct_exit() {
 #[test]
 fn subagent_ask_lists_with_parent_and_answers_through_parent_pane() {
     let env = Env::new();
+    env.record(&env.project_root);
     let root = serde_json::to_string(&json!({
         "hook_event_name": "SessionStart",
         "session_id": "sess-claude-parent",
@@ -1276,6 +1300,7 @@ fn subagent_ask_lists_with_parent_and_answers_through_parent_pane() {
 #[test]
 fn subagent_ask_without_a_live_parent_has_no_routable_handle() {
     let env = Env::new();
+    env.record(&env.project_root);
     let payload = json!({
         "hook_event_name": "PermissionRequest",
         "session_id": "missing-parent",
@@ -1339,6 +1364,7 @@ fn answer_confirmable_claude_menu_actions_reach_bound_pane() {
         ),
     ] {
         let env = Env::new();
+        env.record(&env.project_root);
         let hook = env.run_installed_hook_in_pane("claude", &payload, &[("TMUX_PANE", "%7")]);
         assert!(
             hook.status.success(),
@@ -1379,6 +1405,7 @@ fn answer_confirmable_claude_menu_actions_reach_bound_pane() {
 #[test]
 fn answer_codex_plan_implement_reaches_bound_pane() {
     let env = Env::new();
+    env.record(&env.project_root);
     let transcript_path = write_codex_plan_rollout(&env);
     let hook = env.run_installed_hook_in_pane(
         "codex",
@@ -1421,6 +1448,7 @@ fn answer_codex_plan_implement_reaches_bound_pane() {
 #[test]
 fn answer_codex_questions_sends_verified_option_choreography() {
     let env = Env::new();
+    env.record(&env.project_root);
     let hook =
         env.run_installed_hook_in_pane("codex", &codex_question_payload(), &[("TMUX_PANE", "%7")]);
     assert!(
@@ -1453,6 +1481,7 @@ fn answer_codex_questions_sends_verified_option_choreography() {
 #[test]
 fn codex_async_asks_list_each_question_and_confirm_native_answers() {
     let env = Env::new();
+    env.record(&env.project_root);
     let payload = json!({"hook_event_name":"PostToolUse", "session_id":"sess-async", "tool_name":"request_user_input_async", "tool_use_id":"call-async", "tool_response":"{\"accepted\":true}", "tool_input":{"questions":[{"title":"First?","options":["A","B"]},{"title":"Second?","options":["X","Y"]},{"title":"Third?"}]}});
     assert!(
         env.run_installed_hook_in_pane("codex", &payload.to_string(), &[("TMUX_PANE", "%7")])
@@ -1537,6 +1566,7 @@ fn codex_async_asks_list_each_question_and_confirm_native_answers() {
 #[test]
 fn asks_says_so_when_no_agent_is_blocked() {
     let env = Env::new();
+    env.record(&env.project_root);
 
     let output = env
         .rimz()

@@ -51,6 +51,12 @@ fn sidebar_self_closes_when_its_tab_empties() {
     let name = room.name().to_owned();
     let cwd = TempDir::new().expect("cwd tempdir");
     let xdg = room.path();
+    record_known_workspace_session(
+        xdg,
+        &WorkspaceId::parse(SELF_CLOSE_WORKSPACE_ID).expect("fixed id"),
+        cwd.path(),
+        &name,
+    );
     seed_presence_permissions(xdg, &wasm);
 
     let layout = self_close_layout(&name, &rimz, xdg);
@@ -237,6 +243,12 @@ fn with_stale_roster_room(
     let name = room.name().to_owned();
     let cwd = TempDir::new().expect("cwd tempdir");
     let xdg = room.path();
+    record_known_workspace_session(
+        xdg,
+        &WorkspaceId::parse(SELF_CLOSE_WORKSPACE_ID).expect("fixed id"),
+        cwd.path(),
+        &name,
+    );
     let start_marker = xdg.join("start-sidebar");
     let layout = stale_roster_layout(&name, &rimz, xdg, &start_marker, sibling_seconds);
     let layout_path = cwd.path().join("layout.kdl");
