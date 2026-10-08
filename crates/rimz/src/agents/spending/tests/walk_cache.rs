@@ -528,6 +528,54 @@ fn spending_walk_observer_checkpoints_on_first_interval() {
 }
 
 #[test]
+fn spending_walk_observer_skips_unchanged_intervals() {
+    #[derive(Default)]
+    struct CaptureObserver {
+        intervals: usize,
+    }
+
+    impl WalkObserver for CaptureObserver {
+        fn on_interval(&mut self, _cache: &SpendingDiskCache) {
+            self.intervals += 1;
+        }
+    }
+
+    let dir = TempDir::new().unwrap();
+    let file = write_jsonl(
+        dir.path(),
+        "claude.jsonl",
+        &[&claude_line(&utc_date(NOW_SECS), 1.0, "msg-1", "req-1")],
+    );
+    let files = vec![spending_file(claude_adapter(), file)];
+    let cache_path = dir.path().join("spending.json");
+    let mut walker = SpendingWalker::new();
+    let mut observer = CaptureObserver::default();
+    walk_spending!(
+        walker,
+        &cache_path,
+        &files,
+        PriceBook::default(),
+        NOW_SECS,
+        &mut observer
+    );
+    assert!(
+        observer.intervals >= 1,
+        "cold walk publishes changed history"
+    );
+
+    observer.intervals = 0;
+    walk_spending!(
+        walker,
+        &cache_path,
+        &files,
+        PriceBook::default(),
+        NOW_SECS,
+        &mut observer
+    );
+    assert_eq!(observer.intervals, 0, "warm walk publishes no interval");
+}
+
+#[test]
 fn parallel_cold_parse_aggregates_deterministically() {
     let dir = TempDir::new().unwrap();
     let today = utc_date(NOW_SECS);

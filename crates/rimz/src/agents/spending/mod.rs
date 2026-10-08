@@ -343,6 +343,7 @@ impl SpendingWalker {
         let mut checkpoint_written = false;
         let mut checkpoint_generation = None;
         {
+            let mut last_checkpoint_generation = prior_generation;
             let mut last_checkpoint = Instant::now()
                 .checked_sub(WALK_CHECKPOINT_INTERVAL)
                 .unwrap_or_else(Instant::now);
@@ -362,7 +363,10 @@ impl SpendingWalker {
                         checkpoint_written = true;
                         checkpoint_generation = Some(cache.generation);
                     }
-                    observer.on_interval(cache);
+                    if cache.generation != last_checkpoint_generation {
+                        observer.on_interval(cache);
+                        last_checkpoint_generation = cache.generation;
+                    }
                     last_checkpoint = Instant::now();
                 }
             };
