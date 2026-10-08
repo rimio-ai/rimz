@@ -367,6 +367,22 @@ mod tests {
             serve_request(&shared, &|| Ok(work.clone()), "initialize", Value::Null).unwrap()["home"],
             work.home().unwrap().to_str().unwrap()
         );
+        lock(&shared).transport.stop_child();
+        assert_eq!(
+            serve_request(
+                &shared,
+                &|| crate::agents::session_login(
+                    &crate::ids::AgentKind::new_unchecked("codex"),
+                    Some(&"removed".parse().unwrap()),
+                    &Default::default(),
+                ),
+                "initialize",
+                Value::Null,
+            )
+            .unwrap()["home"],
+            work.home().unwrap().to_str().unwrap()
+        );
+        assert!(lock(&shared).transport.child_is_live().unwrap());
     }
 
     #[test]

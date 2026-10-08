@@ -4010,6 +4010,54 @@ fn prompt_with_shell_metacharacters_stays_one_argument_after_terminator() {
 
 #[cfg(unix)]
 #[test]
+fn catalog_refresh_failure_is_recorded_before_prompt_compile_failure() {
+    use crate::common::codex_appserver_stub;
+    use rimz::agents::ProviderLogin;
+    use rimz::config::PromptSource;
+    use rimz::diag::record::{DiagEvent, DiagSeverity, ModelCatalogFallback};
+
+    let env = Env::new();
+    env.record(&env.project_root);
+    let missing_prompt = env.home_root.join("missing-system-prompt.md");
+    let mut request = fresh_exec("codex", None);
+    request.identity.params.model = Some("astra".into());
+    request.system_prompt_file = Some(PromptSource::File(missing_prompt.clone()));
+    let output = env
+        .rimz()
+        .args(exec_args(&env, &request))
+        .env("RIMZ_CODEX_BIN", codex_appserver_stub())
+        .bounded_output()
+        .expect("wrapper exits after prompt compile failure");
+    assert!(!output.status.success(), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("cannot read prompt file"), "{stderr}");
+    assert!(
+        stderr.contains(missing_prompt.to_str().unwrap()),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("codex alias astra is using baked fallback gpt-6-astra: fresh catalog has no matching family"),
+        "{stderr}"
+    );
+
+    let workspace = env.resolve_workspace(&env.project_root);
+    let records = env.diag_records(&workspace.session_name);
+    assert_eq!(records.len(), 1, "{records:#?}; stderr: {stderr}");
+    assert_eq!(records[0].severity, DiagSeverity::Warn);
+    assert_eq!(
+        records[0].event,
+        DiagEvent::ModelCatalogRefreshFailed {
+            agent_kind: request.kind.clone(),
+            login: ProviderLogin::default_for(request.kind).key(),
+            alias: "astra".into(),
+            rung: ModelCatalogFallback::Baked,
+            reason: "fresh catalog has no matching family".into(),
+        }
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn launch_prompt_artifact_round_trips_and_missing_file_fails() {
     use rimz::harness::launch::{ExecWireErr, decode_exec_request, exec_argv};
 

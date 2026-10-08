@@ -14,7 +14,7 @@ use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use serde_json::{Value, json};
 
-use crate::common::Env;
+use crate::common::{Env, codex_appserver_stub};
 
 #[test]
 fn old_login_context_refresh_does_not_connect_to_room_broker() {
@@ -82,14 +82,6 @@ fn old_login_context_refresh_does_not_connect_to_room_broker() {
         matches!(listener.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock),
         "old-login refresh must never touch the current-login broker"
     );
-}
-
-/// Absolute path to the built `codex app-server` stub fixture.
-fn codex_appserver_stub() -> std::path::PathBuf {
-    crate::common::cargo_bin(
-        "codex-appserver-stub",
-        env!("CARGO_BIN_EXE_codex-appserver-stub"),
-    )
 }
 
 /// One JSON-RPC round-trip over the broker socket: write a framed request, then
