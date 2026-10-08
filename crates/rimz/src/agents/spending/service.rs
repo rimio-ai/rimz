@@ -526,7 +526,7 @@ fn serve(
     let _socket_guard = crate::sock::SocketGuard::new(socket);
     let busy = Arc::new(AtomicBool::new(false));
     let (sender, receiver) = mpsc::sync_channel(1);
-    if let Err(error) = std::thread::Builder::new()
+    let walker = match std::thread::Builder::new()
         .name("rimz-spending-walker".to_owned())
         .spawn(move || {
             let mut walker = SpendingWalker::new();
@@ -535,17 +535,24 @@ fn serve(
                     tracing::debug!(error = %error, "spending service request failed");
                 }
             }
-        })
-    {
-        tracing::debug!(error = %error, "spending service walker thread unavailable");
-        return;
-    }
+        }) {
+        Ok(walker) => walker,
+        Err(error) => {
+            tracing::debug!(error = %error, "spending service walker thread unavailable");
+            return;
+        }
+    };
     for connection in listener.incoming() {
         let Ok(stream) = connection else {
             continue;
         };
         if let Err(error) = admit_connection(stream, &runtime, &namespace, &sender, &busy) {
             tracing::debug!(error = %error, "spending service connection failed");
+        }
+        // An owner without its walker gives up the socket and the lock, so the next client elects a working one.
+        if walker.is_finished() {
+            tracing::debug!("spending service walker exited; releasing ownership");
+            return;
         }
     }
 }
