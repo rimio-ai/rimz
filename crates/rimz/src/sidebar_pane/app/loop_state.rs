@@ -1507,7 +1507,6 @@ impl LoopState {
         self.health = state.health;
         let prev_good = std::mem::replace(&mut self.current, state.snapshot);
         if self.alert_active() && self.ui.search_draft.take().is_some() {
-            reconcile_selection(&mut self.ui, &self.current, None);
             self.dirty = true;
         }
         prev_good
