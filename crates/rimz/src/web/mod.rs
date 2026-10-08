@@ -22,12 +22,7 @@ mod ttyd;
 
 pub use gate::{GateAuth, RelayTarget};
 
-const TTYD_AMBIENT_CONTEXT_ENV: [&str; 28] = [
-    "ZELLIJ",
-    "ZELLIJ_PANE_ID",
-    "ZELLIJ_SESSION_NAME",
-    "TMUX",
-    "TMUX_PANE",
+const TTYD_AMBIENT_CONTEXT_ENV: [&str; 23] = [
     crate::workspace::ENV_WORKSPACE_ID,
     crate::workspace::ENV_PROJECT_ROOT,
     crate::harness::launch::ENV_RUN_ID,
@@ -56,7 +51,7 @@ const TTYD_AMBIENT_CONTEXT_ENV: [&str; 28] = [
 fn without_ttyd_launch_context(spec: CommandSpec) -> CommandSpec {
     TTYD_AMBIENT_CONTEXT_ENV
         .into_iter()
-        .fold(spec, |spec, key| spec.env_remove(key))
+        .fold(spec.without_mux_context(), |spec, key| spec.env_remove(key))
 }
 
 const WEB_SCHEMA_VERSION: &str = "rimz.web.v2";

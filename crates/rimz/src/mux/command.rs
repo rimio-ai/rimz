@@ -129,6 +129,14 @@ impl CommandSpec {
         self
     }
 
+    /// Remove ambient pane/session identity, leaving endpoint configuration
+    /// inherited. Explicit values supplied by [`Self::env`] still win.
+    pub(crate) fn without_mux_context(self) -> Self {
+        super::AMBIENT_MUX_ENV
+            .into_iter()
+            .fold(self, |spec, key| spec.env_remove(key))
+    }
+
     /// Give the child the `TMPDIR` a launch saved in `saved` (the caller's
     /// [`crate::child_process::USER_TMPDIR_ENV`]), so a mux server started
     /// from an agent's tree never hands panes the agent's temp unit. `None`
@@ -392,6 +400,41 @@ fn kill_by_pid(_pid: u32) {}
 mod tests {
     use super::*;
     use crate::child_process::{TEMP_ROOT_KEYS_ENV, USER_TMPDIR_ENV};
+
+    #[test]
+    fn mux_context_removal_preserves_explicit_env_and_endpoints() {
+        let spec = CommandSpec::new("zellij")
+            .env_remove("ALREADY_REMOVED")
+            .env("ZELLIJ_PANE_ID", "terminal_7")
+            .without_mux_context()
+            .env("TMUX_PANE", "%8");
+        let names = [
+            "TMUX",
+            "TMUX_PANE",
+            "ZELLIJ",
+            "ZELLIJ_PANE_ID",
+            "ZELLIJ_SESSION_NAME",
+        ];
+        assert_eq!(crate::mux::AMBIENT_MUX_ENV, names);
+        for key in names {
+            assert!(spec.env_remove.contains(key), "{key} remains inherited");
+        }
+        assert_eq!(spec.env_remove.len(), names.len() + 1);
+        assert!(spec.env_remove.contains("ALREADY_REMOVED"));
+        for key in ["TMUX_TMPDIR", "ZELLIJ_SOCKET_DIR"] {
+            assert!(!spec.env_remove.contains(key));
+        }
+        for (key, value) in [("ZELLIJ_PANE_ID", "terminal_7"), ("TMUX_PANE", "%8")] {
+            assert_eq!(spec.env.get(key).map(String::as_str), Some(value));
+            assert_eq!(
+                spec.to_command()
+                    .get_envs()
+                    .find(|(name, _)| *name == key)
+                    .and_then(|(_, value)| value),
+                Some(std::ffi::OsStr::new(value)),
+            );
+        }
+    }
 
     #[test]
     fn a_saved_user_tmpdir_replaces_the_inherited_one() {
