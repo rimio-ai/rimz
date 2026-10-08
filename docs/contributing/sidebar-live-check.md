@@ -196,6 +196,51 @@ Three checks cover what a unit test cannot:
 
 A reload is the fourth: after `rimz reload` onto a new build the host's PID changes and every tab repaints once, with no tab left on a worker.
 
+## First frame of a new tab
+
+A new tab's sidebar seeds its first frame from the room's published projection ([state.md](../internals/sidebar/state.md)), so its first non-blank screen already holds the room's cards. No test sees the real first paint; poll the new pane from the moment the tab opens. Save each loop as a script under the room's root and run it with `cargo xtask sandbox in <root> -- <script>`, since both need the room's environment. Each writes one file per non-blank capture, named by the milliseconds since the tab was opened.
+
+tmux, given the room's tmux socket, its session, and an output directory:
+
+```sh
+#!/bin/sh
+T="tmux -S $1"; OUT=$3; mkdir -p "$OUT"
+$T list-panes -a -F '#{pane_id}' | sort > "$OUT/before"
+t0=$(date +%s%N)
+$T new-window -t "$2:"
+i=0
+while [ $i -lt 120 ]; do
+  now=$(( ($(date +%s%N) - t0) / 1000000 ))
+  for p in $($T list-panes -a -F '#{pane_id}' | sort | comm -13 "$OUT/before" -); do
+    f="$OUT/$(printf '%05d' $now)-${p#%}.txt"
+    $T capture-pane -p -t "$p" > "$f" 2>/dev/null
+    grep -q '[^[:space:]]' "$f" || rm -f "$f"
+  done
+  i=$((i+1)); sleep 0.01
+done
+```
+
+Zellij, given the session, the testkit `rimz` binary, an output directory, and the next terminal ids (the highest id in `rimz pane list` plus one onward; a new tab takes two or three):
+
+```sh
+#!/bin/sh
+S=$1; B=$2; OUT=$3; shift 3; mkdir -p "$OUT"
+t0=$(date +%s%N)
+zellij --session "$S" action new-tab
+i=0
+while [ $i -lt 12 ]; do
+  for n in "$@"; do
+    now=$(( ($(date +%s%N) - t0) / 1000000 ))
+    f="$OUT/$(printf '%05d' $now)-$n.txt"
+    "$B" --zellij pane capture "zellij:terminal_$n" > "$f" 2>/dev/null
+    grep -q '[^[:space:]]' "$f" || rm -f "$f"
+  done
+  i=$((i+1))
+done
+```
+
+The earliest file for the sidebar pane must already name the room's agents; a later file shows the correction, the new tab's own row. A tmux capture is a few milliseconds apart, so the first file is close to the first paint. A Zellij capture goes through the session and resolves about 0.2 s, so it proves the first screen seen and bounds the correction only coarsely. Repeat after the room has sat idle for a minute: the seed is refused once the projection is older than its age bound, and a live room must stay inside it.
+
 ## Inspect the data behind a card
 
 A frame shows what the renderer decided; `rimz sidebar snapshot --json` shows what it decided it from. Run it from the binary you built, not the installed one: both the default and `--no-produce` fold the rows in the calling process, so the snapshot is always your code's output, and the only way to see another build's behaviour is to run that build. What the flag trades is the pane truth underneath: the default forks `list-panes` and git for a current roster, while `--no-produce` reuses the pane frame and agent projection the producer already published and forks neither, which makes it the cheap read in a room you would rather not disturb.
@@ -522,4 +567,4 @@ A room built by hand, outside `cargo xtask sandbox`, needs `XDG_RUNTIME_DIR` set
 - Wrapping `sandbox room` in your own `bwrap` (to keep its files in a scratch directory) needs `--dev-bind /dev /dev`; without it the room exits before starting with `starting sandbox cleanup reaper` / `Permission denied (os error 13)`.
 - To live-check a signal emitter from an agent's shell tool, keep the emitting call alive until the run is recorded: `rz events emit <signal>; sleep 2; rz loop show <task> --json` in one call, with `rz` from [Run a command as an agent](#run-a-command-as-an-agent). An emit that ended its call recorded no run at all, while the same emit followed by the two-second wait delivered. The cause is not established; the guess is that the shell tool cleans up the emitter's detached child when the call returns. Judge delivery by the run record or `rimz message show <id>`, never by the emitter's `fired` count, which read the same both times.
 - A supervised loop check (`loop add <name> --in 1m --agent worker …`) needs the stub provider's hooks before the add: run `rimz hooks install claude` through `sandbox in` first. The held room starts without them, and `loop add` refuses an agent task whose provider hooks are missing, which otherwise costs a retry while the room's `--for` timer runs.
-- Stop the room by letting `--for` expire or killing the `xtask sandbox room` PID itself. Ctrl-C or a signal to its whole process group also cleans the room, because the reaper runs outside that group. Killing a wrapper shell leaves the room running. Kill by PID from `pgrep`, not with `pkill -f <pattern>`: the pattern matches the invoking shell's own command line, so `pkill` kills the shell that ran it.
+- Stop the room by letting `--for` expire or killing the `xtask sandbox room` PID itself. Ctrl-C or a signal to its whole process group also cleans the room, because the reaper runs outside that group. Killing a wrapper shell leaves the room running. Kill by PID from `pgrep -x xtask`, not with `pkill -f <pattern>` or a loop over `pgrep -f <pattern>`: the pattern matches the invoking shell's own command line, so either kills the shell that ran it.
