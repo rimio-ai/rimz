@@ -389,7 +389,8 @@ allowed-dependencies = [
 # A session's sidebar host appends its stderr to one classed state log (+1).
 # Receipt monitoring stats the queued-message file through StatePaths::message_queue_file.
 # LaunchPlan delegates the launch-and-PID handoff path to classed temp units (+1).
-surface-budget = 222
+# Room birth and sidebar readers share the classed workspace projection path (+1).
+surface-budget = 223
 
 [[module]]
 path = "crates/rimz/src/forge"

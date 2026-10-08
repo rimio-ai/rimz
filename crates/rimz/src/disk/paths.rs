@@ -841,6 +841,11 @@ impl RuntimePaths {
         self.lane_path("snapshot.json")
     }
 
+    /// Producer-published workspace enrichment for sidebar consumers.
+    pub(crate) fn workspace_projection_path(&self) -> PathBuf {
+        self.lane_path("workspace-projection.json")
+    }
+
     /// Producer-published adapter wiring and provider-local sessions.
     pub fn agent_projection_path(&self) -> PathBuf {
         self.lane_path("agent-projection.json")

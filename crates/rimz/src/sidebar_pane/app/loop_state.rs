@@ -68,6 +68,8 @@ use super::width_control::WidthController;
 use super::{Result, ServeConfig};
 
 const RESIZE_CAPS_SETTLE: Duration = Duration::from_millis(300);
+/// Producer cycles a seed frame may trail the pane frame's own reuse window.
+const PUBLISHED_SEED_CYCLES: u32 = 3;
 
 struct FetchApplication {
     snapshot: std::result::Result<SidebarSnapshot, String>,
@@ -297,12 +299,23 @@ impl LoopState {
     }
 
     pub(super) fn seed_published(&mut self, role: FetchRole) {
-        let Some((workspace, frame)) =
-            read_published_pair(&self.runtime, &self.config.session_name)
-        else {
+        // An idle producer reuses its pane frame for `EVENT_PANE_TTL` and
+        // renews it on the tick after, so a live room's frame is never older.
+        let max_frame_age = crate::sidebar::timing::EVENT_PANE_TTL.saturating_add(
+            tick_for(self.config.tick_seconds).saturating_mul(PUBLISHED_SEED_CYCLES),
+        );
+        let Some((workspace, frame)) = read_published_pair(
+            &self.runtime,
+            &self.config.session_name,
+            max_frame_age,
+            crate::utils::time::unix_now_ms(),
+        ) else {
             return;
         };
-        let snapshot = project_local(workspace, Some(&frame), self.config.own_pane.as_ref());
+        let mut snapshot = project_local(workspace, Some(&frame), self.config.own_pane.as_ref());
+        if let Some(refresh_ms) = self.config.refresh_ms_override {
+            snapshot.theme.display.refresh_ms = refresh_ms;
+        }
         self.apply_latest_snapshot(FetchUpdate::Snapshot {
             snapshot: Box::new(snapshot),
             role,
