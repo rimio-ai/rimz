@@ -14,6 +14,8 @@ use crate::mux::focus_anchor::{
     FocusObservation, FocusObservationOutcome, FocusOrigin, FocusPresentation,
 };
 use crate::observability::SIDEBAR_HEALTH_TARGET;
+use crate::sidebar::consumer::read_published_pair;
+use crate::sidebar::enrich::project_local;
 use crate::sidebar::event_store::EventStore;
 use crate::sidebar::fuse::{focus_intent_confirmed_from, fuse, fuse_owned};
 use crate::sidebar::observe::{self, ObserveMsg};
@@ -292,6 +294,21 @@ impl LoopState {
             tab_emptied: false,
             reload_requested: false,
         }
+    }
+
+    pub(super) fn seed_published(&mut self, role: FetchRole) {
+        let Some((workspace, frame)) =
+            read_published_pair(&self.runtime, &self.config.session_name)
+        else {
+            return;
+        };
+        let snapshot = project_local(workspace, Some(&frame), self.config.own_pane.as_ref());
+        self.apply_latest_snapshot(FetchUpdate::Snapshot {
+            snapshot: Box::new(snapshot),
+            role,
+            phase: FetchPhase::Interim,
+            source: SnapshotSource::Published,
+        });
     }
 
     pub(super) fn frame_timing(&self) -> (bool, Duration) {

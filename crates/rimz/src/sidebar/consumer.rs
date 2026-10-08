@@ -25,10 +25,6 @@ mod tests;
 pub use crate::store::snapshot::RollupCursor;
 
 /// Read a same-session publication without checking its source against the store.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "Used by the attachment seed in the next commit.")
-)]
 pub(crate) fn read_published_pair(
     runtime: &RuntimePaths,
     session: &str,

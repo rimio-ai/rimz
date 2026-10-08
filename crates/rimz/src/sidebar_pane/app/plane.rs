@@ -180,7 +180,6 @@ impl DataPlane {
         }
     }
 
-    #[cfg(test)]
     pub(in crate::sidebar_pane) fn is_producer(&self) -> bool {
         self.election.elder_instance().is_none()
     }

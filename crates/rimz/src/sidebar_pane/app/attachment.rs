@@ -19,7 +19,7 @@ use crate::sidebar_pane::pixel::{PixelLease, PixelRenderCaps};
 use crate::{MuxName, RuntimePaths};
 
 use super::backend::PaneBackend;
-use super::fetch::{FetchDispatcher, FetchRequest};
+use super::fetch::{FetchDispatcher, FetchRequest, FetchRole};
 use super::input::wait_for_wakeup;
 use super::loop_state::{LoopFlow, LoopState};
 use super::plane::DataPlane;
@@ -182,6 +182,11 @@ impl Attachment {
         state.share_width_geometry(plane.geometry.clone());
         state.observe_events = plane.observe_events.clone();
         state.set_probed_aspect(terminal.backend().cell_aspect());
+        state.seed_published(if plane.is_producer() {
+            FetchRole::Producer
+        } else {
+            FetchRole::Consumer
+        });
         // Zellij's percentage template needs a startup trim on capped wide views.
         // tmux births through its live absolute-column hook; its resize wakeups
         // own later convergence, avoiding a startup resize that can reflow the
@@ -217,9 +222,9 @@ impl Attachment {
         // immediately rather than blocking on a synchronous call: the first fetch
         // can take several seconds (Zellij just started, git cold-start), and a
         // blocked main thread delays the self-close watchdog, stalling cleanup.
-        // The placeholder snapshot renders while the first real result is in
-        // flight. Forced, because a worker other panes already share may have
-        // nothing new to fold, and this pane has no frame yet.
+        // The published seed renders while the correction is in flight; only
+        // a room with no valid publication starts with the placeholder. Forced,
+        // because a worker other panes already share may have nothing new to fold.
         fetch.request(FetchRequest::force_fold(), false);
 
         // One fixed-timestep event loop. Events fold into the in-process model and

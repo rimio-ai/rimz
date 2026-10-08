@@ -4,6 +4,127 @@
 use super::*;
 
 #[test]
+fn published_seed_commits_before_delivery_and_keeps_the_final_correction() {
+    let own = pane("terminal_10", "tab_0", false);
+    let mut rig = Rig::with_own_pane(own.pane_id.clone());
+    rig.runtime.ensure_dirs().unwrap();
+    let placeholder =
+        SidebarSnapshot::build_with_agents(rig.ws.clone(), Vec::new(), rig.state.current.now);
+    rig.state.seed_published(FetchRole::Consumer);
+    assert_eq!(
+        serde_json::to_value(&rig.state.current).unwrap(),
+        serde_json::to_value(&placeholder).unwrap(),
+        "no publication preserves today's placeholder",
+    );
+
+    let mut seed = agent_snapshot(&rig.ws);
+    seed.now = Timestamp::now();
+    seed.worktree_groups[0].rows[0].name = "seed-card".into();
+    seed.worktree_groups[0]
+        .rows
+        .push(snapshot_with_panes(&rig.ws, vec![own.clone()]).worktree_groups[0].rows[0].clone());
+    seed.pane_session_name = Some("rimz-test".into());
+    seed.panes_observed_at_ms = Some(42);
+    let agent_pane = seed.worktree_groups[0].rows[0]
+        .pane
+        .as_ref()
+        .unwrap()
+        .pane_id
+        .clone();
+    seed.focused_pane = Some(agent_pane.clone());
+    seed.reflects_log = Some(crate::store::event_log::LogExtent {
+        generation: 0,
+        offset: 0,
+    });
+    let mut frame = crate::sidebar::frame::assemble_frame(
+        seed.rows().filter_map(|row| row.pane.clone()).collect(),
+        42,
+        "rimz-test",
+    );
+    frame.topology_stamp_ms = Some(42);
+    frame.metrics_stamp_ms = Some(42);
+    frame.presence = Some(crate::store::snapshot::PresenceSample {
+        human_clients: 1,
+        last_input_ms: Some(seed.now.as_millisecond() as u64),
+        sampled_at_ms: seed.now.as_millisecond() as u64,
+    });
+    std::fs::write(
+        rig.runtime.pane_frame_path(),
+        serde_json::to_vec(&frame).unwrap(),
+    )
+    .unwrap();
+    crate::sidebar::workspace_projection::WorkspaceProjectionPublisher::default()
+        .publish(
+            &rig.runtime,
+            "rimz-test",
+            &crate::sidebar::enrich::WorkspaceSnapshot(seed),
+            &frame,
+        )
+        .unwrap();
+
+    rig.fetch.request(FetchRequest::force_fold(), false);
+    assert!(rig.next_request().unwrap().forces_fold());
+    rig.fetch
+        .request(FetchRequest::producer_fresh_panes(), true);
+    rig.state.dirty = false;
+    rig.state.seed_published(FetchRole::Consumer);
+
+    assert_eq!(
+        rig.state.current.rows().count(),
+        1,
+        "the seed is projected for this pane before any delivery"
+    );
+    assert_eq!(rig.state.current.rows().next().unwrap().name, "seed-card");
+    assert!(rig.state.dirty, "the seed is paint-pending");
+    assert!(
+        !rig.state.last_known_elder,
+        "the seed carries the plane's role"
+    );
+    assert_eq!(
+        rig.state.current.presence,
+        Some(crate::store::snapshot::SidebarPresence::Active)
+    );
+    assert!(rig.state.current.own_view.is_some());
+    assert!(rig.state.self_close.seen_sibling);
+    assert!(!rig.state.should_exit);
+    assert_eq!(
+        rig.state.last_focus_observation.panes_observed_at_ms,
+        Some(42)
+    );
+    assert_eq!(
+        rig.state
+            .last_focus_observation
+            .pane_session_name
+            .as_deref(),
+        Some("rimz-test")
+    );
+    assert_eq!(rig.state.last_focus_observation.pane_ids, vec![agent_pane]);
+    assert!(rig.state.last_focus_observation.presence_known);
+    assert!(
+        rig.next_request().is_none(),
+        "a seed does not complete the in-flight fetch"
+    );
+
+    let mut correction = agent_snapshot(&rig.ws);
+    correction.worktree_groups[0].rows[0].name = "corrected-card".into();
+    correction.worktree_groups[0].rows[0].pane = Some(pane("terminal_11", "tab_0", false));
+    rig.fold(correction, SnapshotSource::Produced);
+
+    assert_eq!(
+        rig.state.current.rows().next().unwrap().name,
+        "corrected-card"
+    );
+    assert_eq!(
+        rig.state.gate.reject_streak, 0,
+        "the changed pane set commits"
+    );
+    assert!(
+        rig.next_request().unwrap().is_producer_fresh_panes(),
+        "only the final correction completes the fetch"
+    );
+}
+
+#[test]
 fn snapshot_key_rebind_reaches_the_host_resolver() {
     use ratatui::crossterm::event::{KeyCode, KeyModifiers};
     let mut rig = Rig::new();
