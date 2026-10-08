@@ -1,7 +1,7 @@
 use super::*;
 use crate::agents::account::RateLimitsCache;
 use crate::agents::{
-    AgentContext, AgentRateLimits, AgentTurnError, ProviderCapacity, RateLimitWindow,
+    AgentContext, AgentRateLimits, AgentStatus, AgentTurnError, ProviderCapacity, RateLimitWindow,
     TurnErrorClass,
 };
 use crate::ids::{AgentSessionId, MuxName, WorkspaceId};
@@ -944,6 +944,24 @@ fn limit_replies_preserve_pacing_and_retry_cap() {
                 now,
             ));
             activity = now + 1;
+            let before_in_flight = read_park(&park_path(&runtime)).unwrap();
+            snapshot.agents[0].status = AgentStatus::Running;
+            snapshot.agents[0].last_activity = ts(activity);
+            snapshot.agents[0].user_turn_started_at = Some(ts(activity));
+            snapshot.now = ts(activity);
+            assert!(snapshot.agents[0].displayed_turn_error().is_none());
+            resume_parked(
+                &snapshot,
+                &runtime,
+                &crate::agents::RoomLoginSet::native(),
+                &config,
+                &messages,
+            );
+            assert_eq!(
+                read_park(&park_path(&runtime)),
+                Some(before_in_flight),
+                "in-flight turn changed the park"
+            );
         }
         if now == 6_599 {
             assert!(
@@ -952,8 +970,13 @@ fn limit_replies_preserve_pacing_and_retry_cap() {
                     snapshot.agents[0].agent_id.clone()
                 ))
             );
+            let record = read_park(&park_path(&runtime)).unwrap();
+            assert_eq!(record.attempts_since, Some(ts(1_000)));
+            assert_eq!(record.retries, 3);
             // Real progress clears this episode before another limit starts.
             snapshot.agents[0].context = None;
+            snapshot.agents[0].status = AgentStatus::Idle;
+            snapshot.agents[0].last_activity = ts(now);
             resume_parked(
                 &snapshot,
                 &runtime,
@@ -983,6 +1006,148 @@ fn limit_replies_preserve_pacing_and_retry_cap() {
         read_park(&park_path(&runtime)).unwrap().last_nudge_at,
         Some(ts(7_001))
     );
+    assert_eq!(
+        read_park(&park_path(&runtime)).unwrap().attempts_since,
+        None
+    );
+}
+
+#[test]
+fn nudged_turn_real_progress_clears_park_and_starts_fresh_allowance() {
+    for (settled_status, recovered, message_status) in [
+        (AgentStatus::Idle, true, MessageStatus::Sent),
+        (AgentStatus::Waiting, false, MessageStatus::Delivered),
+    ] {
+        let (_dir, runtime) = temp_runtime();
+        let path = park_path(&runtime);
+        if recovered {
+            write_recovered_window(&runtime);
+        }
+        let config = ResumeConfig {
+            auto_continue: true,
+            auto_continue_max_retries: 3,
+            ..ResumeConfig::default()
+        };
+        let logins = crate::agents::RoomLoginSet::native();
+        write_park(&path, &rate_record(5_000, 1_000, None, 0));
+        let mut snapshot = SidebarSnapshot::build_with_agents(
+            runtime.workspace_id.clone(),
+            vec![parked_agent(
+                1_000,
+                1_001,
+                TurnErrorClass::PausedRateLimit,
+                "usage limit",
+            )],
+            ts(6_000),
+        );
+        snapshot.agent_panes = vec![live_pane()];
+        resume_parked(&snapshot, &runtime, &logins, &config, &[]);
+        let nudged = read_park(&path).unwrap();
+        assert_eq!(nudged.last_nudge_at, Some(ts(6_000)));
+        assert_eq!(nudged.retries, 1);
+        let messages = [resume_message(1, message_status, 6_000)];
+
+        snapshot.agents[0].last_activity = ts(6_001);
+        snapshot.agents[0].user_turn_started_at = Some(ts(6_001));
+        snapshot.now = ts(6_001);
+        assert_eq!(snapshot.agents[0].status, AgentStatus::Running);
+        assert!(snapshot.agents[0].displayed_turn_error().is_none());
+        resume_parked(&snapshot, &runtime, &logins, &config, &messages);
+        assert_eq!(
+            read_park(&path),
+            Some(nudged),
+            "in-flight turn lost its park"
+        );
+
+        snapshot.agents[0].status = settled_status;
+        snapshot.agents[0].last_activity = ts(6_100);
+        snapshot.now = ts(6_100);
+        assert!(snapshot.agents[0].displayed_turn_error().is_none());
+        resume_parked(&snapshot, &runtime, &logins, &config, &messages);
+        assert!(read_park(&path).is_none(), "real progress kept the park");
+
+        write_recovered_window(&runtime);
+        snapshot.agents[0] =
+            parked_agent(7_000, 7_001, TurnErrorClass::PausedRateLimit, "usage limit");
+        snapshot.agents[0].user_turn_started_at = Some(ts(7_000));
+        snapshot.now = ts(7_001);
+        resume_parked(&snapshot, &runtime, &logins, &config, &messages);
+        let fresh = read_park(&path).unwrap();
+        assert_eq!(fresh.attempts_since, None);
+        assert_eq!(fresh.parked_at_activity, ts(7_000));
+        assert_eq!(fresh.last_nudge_at, Some(ts(7_001)));
+        assert_eq!(fresh.retries, 1);
+    }
+}
+
+#[test]
+fn overload_replies_preserve_backoff_and_retry_cap() {
+    let (_dir, runtime) = temp_runtime();
+    let path = park_path(&runtime);
+    let config = ResumeConfig {
+        auto_continue: true,
+        auto_continue_max_retries: 3,
+        ..ResumeConfig::default()
+    };
+    let logins = crate::agents::RoomLoginSet::native();
+    let mut messages = Vec::new();
+    let mut nudges = Vec::new();
+    let mut activity = 100;
+    let mut error_at = 1_000;
+    for now in (1_000..=2_100).step_by(10) {
+        let mut agent = parked_agent(
+            activity,
+            error_at,
+            TurnErrorClass::PausedOverloaded,
+            "overloaded",
+        );
+        agent.user_turn_started_at = Some(ts(activity));
+        let mut snapshot =
+            SidebarSnapshot::build_with_agents(runtime.workspace_id.clone(), vec![agent], ts(now));
+        snapshot.agent_panes = vec![live_pane()];
+        resume_parked(&snapshot, &runtime, &logins, &config, &messages);
+        let record = read_park(&path).unwrap();
+        if record.last_nudge_at == Some(ts(now)) {
+            assert!(nudges.len() < 3, "overload reply reset the retry cap");
+            nudges.push(now);
+            assert_eq!(
+                record.retries,
+                nudges.len() as u32,
+                "overload reply reset the backoff index"
+            );
+            messages.push(resume_message(
+                nudges.len() as u64,
+                MessageStatus::Delivered,
+                now,
+            ));
+            activity = now + 1;
+            snapshot.agents[0].last_activity = ts(activity);
+            snapshot.agents[0].user_turn_started_at = Some(ts(activity));
+            snapshot.now = ts(activity);
+            assert!(snapshot.agents[0].displayed_turn_error().is_none());
+            resume_parked(&snapshot, &runtime, &logins, &config, &messages);
+            assert_eq!(
+                read_park(&path),
+                Some(record),
+                "in-flight overload turn lost its park"
+            );
+            error_at = activity + 1;
+        } else if !nudges.is_empty() {
+            assert_eq!(record.attempts_since, Some(ts(100)));
+            assert_eq!(record.parked_at_activity, ts(activity));
+            assert_eq!(record.retries, nudges.len() as u32);
+            assert_eq!(record.last_nudge_at, nudges.last().copied().map(ts));
+        }
+        if now == 2_100 {
+            assert!(
+                exhausted_parks(&snapshot.agents, &runtime, &config, &messages).contains(&(
+                    snapshot.agents[0].kind.clone(),
+                    snapshot.agents[0].agent_id.clone()
+                ))
+            );
+        }
+    }
+    assert_eq!(nudges, vec![1_180, 1_480, 1_780]);
 }
 
 #[test]
