@@ -2,9 +2,81 @@
 
 #![cfg(unix)]
 
+use std::thread::{self, spawn};
 use std::time::{Duration, Instant};
 
 use rimz::mux::{CommandSpec, MuxErr};
+
+fn probe_thread_id() -> u64 {
+    let id = spawn(|| thread::current().id())
+        .join()
+        .expect("probe thread");
+    format!("{id:?}")
+        .strip_prefix("ThreadId(")
+        .and_then(|id| id.strip_suffix(')'))
+        .expect("ThreadId debug format")
+        .parse()
+        .expect("numeric ThreadId")
+}
+
+#[cfg(target_os = "linux")]
+fn thread_count() -> usize {
+    std::fs::read_to_string("/proc/self/status")
+        .expect("process status")
+        .lines()
+        .find_map(|line| line.strip_prefix("Threads:"))
+        .expect("thread count")
+        .trim()
+        .parse()
+        .expect("numeric thread count")
+}
+
+#[test]
+fn bounded_runs_create_no_threads() {
+    #[cfg(target_os = "linux")]
+    let threads = thread_count();
+    // Nextest runs each test in its own process, so only our calls can advance
+    // std's thread-id counter between the two probe threads.
+    let before = probe_thread_id();
+    for _ in 0..4 {
+        let output = CommandSpec::new("sh")
+            .args(["-c", "printf out; printf err >&2"])
+            .run()
+            .expect("plain command");
+        assert_eq!(output.stdout, b"out");
+        assert_eq!(output.stderr, b"err");
+    }
+    let bytes = vec![b'x'; 256 * 1024];
+    let output = CommandSpec::new("cat")
+        .stdin_bytes(bytes.clone())
+        .run()
+        .expect("stdin round trip");
+    assert_eq!(output.stdout, bytes);
+    for script in ["sleep 2 & exec sleep 2", "sleep 2 & exit 0"] {
+        let err = CommandSpec::new("sh")
+            .args(["-c", script])
+            .run_with_timeout(Duration::from_millis(100))
+            .expect_err("descendant holds pipes past the deadline");
+        assert!(matches!(err, MuxErr::Timeout { .. }));
+    }
+    #[cfg(target_os = "linux")]
+    assert_eq!(thread_count(), threads, "bounded runs leave no threads");
+    assert_eq!(
+        probe_thread_id(),
+        before + 1,
+        "bounded runs spawn no threads"
+    );
+}
+
+#[test]
+fn command_stderr_wins_over_an_unwritten_payload_on_failure() {
+    let err = CommandSpec::new("sh")
+        .args(["-c", "echo boom >&2; exit 3"])
+        .stdin_bytes(vec![b'x'; 1024 * 1024])
+        .run()
+        .expect_err("command failed without consuming input");
+    assert!(matches!(err, MuxErr::Command { stderr, .. } if stderr.contains("boom")));
+}
 
 #[test]
 fn command_stdin_round_trips_binary_payload_and_redacts_debug() {

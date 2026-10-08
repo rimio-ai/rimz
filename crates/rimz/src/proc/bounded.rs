@@ -14,10 +14,6 @@ use nix::unistd::Pid;
 
 /// How the deadline kill reaches the child.
 pub(crate) enum KillScope {
-    #[expect(
-        dead_code,
-        reason = "The mux runner adopts this engine in the next commit."
-    )]
     Process,
     Group,
 }
@@ -31,11 +27,8 @@ pub(crate) struct BoundedOutput {
     pub(crate) status: ExitStatus,
     pub(crate) stdout: Vec<u8>,
     pub(crate) stderr: Vec<u8>,
-    /// None without input; otherwise whether the entire payload reached the child.
-    #[expect(
-        dead_code,
-        reason = "The mux runner consumes this result in the next commit."
-    )]
+    /// `None` without input; `Some(Ok(()))` when every byte reached the child.
+    /// `Some(Err(_))` if stdin closed or the run ended with bytes unwritten.
     pub(crate) stdin: Option<io::Result<()>>,
     pub(crate) timed_out: bool,
 }

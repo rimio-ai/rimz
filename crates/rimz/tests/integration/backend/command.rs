@@ -30,7 +30,7 @@ fn run_with_timeout_kills_a_hung_child() {
         matches!(err, MuxErr::Timeout { seconds: 1, .. }),
         "got: {err}"
     );
-    // The kill lands and the waiter reaps promptly — well under the child's
+    // The kill lands and the child is reaped promptly — well under the child's
     // own 30s sleep. Loose bound so a loaded CI box never flakes.
     assert!(
         started.elapsed() < Duration::from_secs(5),
