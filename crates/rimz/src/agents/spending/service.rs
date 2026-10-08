@@ -10,7 +10,9 @@ use std::io::{BufRead, BufReader, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, TryLockError};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, SyncSender};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -523,32 +525,53 @@ fn serve(
         namespace.as_str(),
     );
     let _socket_guard = crate::sock::SocketGuard::new(socket);
-    let walker = Arc::new(Mutex::new(SpendingWalker::new()));
+    let busy = Arc::new(AtomicBool::new(false));
+    let (sender, receiver) = mpsc::sync_channel(1);
+    if let Err(error) = std::thread::Builder::new()
+        .name("rimz-spending-walker".to_owned())
+        .spawn(move || {
+            let mut walker = SpendingWalker::new();
+            for admitted in receiver {
+                if let Err(error) = fulfil_request(admitted, &mut walker) {
+                    tracing::debug!(error = %error, "spending service request failed");
+                }
+            }
+        })
+    {
+        tracing::debug!(error = %error, "spending service walker thread unavailable");
+        return;
+    }
     for connection in listener.incoming() {
         let Ok(stream) = connection else {
             continue;
         };
-        let runtime = runtime.clone();
-        let namespace = namespace.clone();
-        let walker = Arc::clone(&walker);
-        if let Err(error) = std::thread::Builder::new()
-            .name("rimz-spending-request".to_owned())
-            .spawn(move || {
-                if let Err(error) = serve_connection(stream, &runtime, &namespace, &walker) {
-                    tracing::debug!(error = %error, "spending service connection failed");
-                }
-            })
-        {
-            tracing::debug!(error = %error, "spending service request thread unavailable");
+        if let Err(error) = admit_connection(stream, &runtime, &namespace, &sender, &busy) {
+            tracing::debug!(error = %error, "spending service connection failed");
         }
     }
 }
 
-fn serve_connection(
+struct WalkerClaim(Arc<AtomicBool>);
+
+impl Drop for WalkerClaim {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
+}
+
+struct AdmittedRequest {
+    stream: UnixStream,
+    runtime: RuntimePaths,
+    request: SpendingServiceRequest,
+    _claim: WalkerClaim,
+}
+
+fn admit_connection(
     stream: UnixStream,
     owner_runtime: &RuntimePaths,
     owner_namespace: &SpendingServiceNamespace,
-    walker: &Mutex<SpendingWalker>,
+    sender: &SyncSender<AdmittedRequest>,
+    busy: &Arc<AtomicBool>,
 ) -> Result<()> {
     stream.set_read_timeout(Some(CONNECTION_READ_TIMEOUT))?;
     stream.set_write_timeout(Some(REQUEST_TIMEOUT))?;
@@ -594,24 +617,46 @@ fn serve_connection(
         return Ok(());
     }
 
-    let mut walker = match walker.try_lock() {
-        Ok(walker) => walker,
-        Err(TryLockError::WouldBlock) => {
-            write_json_line(
-                &mut writer,
-                &SpendingServiceFrame::Error(SpendingServiceFailure::new(
-                    SpendingServiceErrorCode::Busy,
-                    "spending service refresh already in progress",
-                )),
-            )?;
-            return Ok(());
-        }
-        Err(TryLockError::Poisoned(error)) => {
-            let mut walker = error.into_inner();
-            *walker = SpendingWalker::new();
-            walker
-        }
+    if busy
+        .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+        .is_err()
+    {
+        write_json_line(
+            &mut writer,
+            &SpendingServiceFrame::Error(SpendingServiceFailure::new(
+                SpendingServiceErrorCode::Busy,
+                "spending service refresh already in progress",
+            )),
+        )?;
+        return Ok(());
+    }
+    let admitted = AdmittedRequest {
+        stream: writer,
+        runtime,
+        request,
+        _claim: WalkerClaim(Arc::clone(busy)),
     };
+    // One claimed job fits in the single slot, independent of receiver readiness.
+    if let Err(error) = sender.send(admitted) {
+        let mut admitted = error.0;
+        write_json_line(
+            &mut admitted.stream,
+            &SpendingServiceFrame::Error(SpendingServiceFailure::new(
+                SpendingServiceErrorCode::Unavailable,
+                "spending service walker unavailable",
+            )),
+        )?;
+    }
+    Ok(())
+}
+
+fn fulfil_request(admitted: AdmittedRequest, walker: &mut SpendingWalker) -> Result<()> {
+    let AdmittedRequest {
+        stream: mut writer,
+        runtime,
+        request,
+        _claim,
+    } = admitted;
     if request.workspace_id.is_some()
         && let Err(error) = runtime.ensure_workspace_root()
     {
@@ -627,7 +672,7 @@ fn serve_connection(
 
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let mut ignore_progress = |_| {};
-        super::engine::serve_request(&mut walker, &runtime, &request, &mut ignore_progress)
+        super::engine::serve_request(walker, &runtime, &request, &mut ignore_progress)
     }));
     match result {
         Ok(caches) => {

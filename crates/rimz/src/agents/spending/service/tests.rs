@@ -1,6 +1,7 @@
 use super::*;
 use std::os::unix::fs::FileTypeExt;
 use std::path::Path;
+use std::sync::mpsc;
 use std::sync::{Arc, Barrier};
 
 #[test]
@@ -229,8 +230,12 @@ fn namespace_tracks_sorted_canonical_source_declarations() {
     assert_ne!(default, named);
 }
 
-#[test]
-fn framed_service_matches_direct_global_and_workspace_aggregation() {
+fn spending_fixture() -> (
+    tempfile::TempDir,
+    RuntimePaths,
+    SpendingServiceRequest,
+    super::super::DiscoverSpendingFilesOverride,
+) {
     let dir = tempfile::tempdir().unwrap();
     let project = dir.path().join("project");
     std::fs::create_dir_all(&project).unwrap();
@@ -270,6 +275,12 @@ fn framed_service_matches_direct_global_and_workspace_aggregation() {
         HashMap::from([(transcript, project.clone())]),
         HeadlineSpec::default(),
     );
+    (dir, runtime, request, _discovery)
+}
+
+#[test]
+fn framed_service_matches_direct_global_and_workspace_aggregation() {
+    let (_dir, runtime, request, _discovery) = spending_fixture();
 
     let mut direct_walker = SpendingWalker::new();
     let mut ignore_progress = |_| {};
@@ -280,22 +291,147 @@ fn framed_service_matches_direct_global_and_workspace_aggregation() {
         &mut ignore_progress,
     );
     std::fs::remove_file(runtime.shared_provider_spending_path()).unwrap();
-    let scope = super::super::SpendScope::from_roots(Some(&project), &[]);
+    let scope = super::super::SpendScope::from_roots(request.project_root.as_deref(), &[]);
     std::fs::remove_file(runtime.workspace_spending_path(&scope.hash())).unwrap();
 
-    let (client, server) = UnixStream::pair().unwrap();
-    let service_walker = Mutex::new(SpendingWalker::new());
+    let (sender, receiver) = mpsc::sync_channel(1);
+    let busy = Arc::new(AtomicBool::new(false));
+    let mut service_walker = SpendingWalker::new();
     let namespace = SpendingServiceNamespace::for_runtime(&runtime);
+    let (client, server) = UnixStream::pair().unwrap();
     let actual = std::thread::scope(|scope| {
         let client = scope.spawn(|| transact(client, &request));
-        serve_connection(server, &runtime, &namespace, &service_walker).unwrap();
-        client.join().unwrap().unwrap()
+        admit_connection(server, &runtime, &namespace, &sender, &busy).unwrap();
+        let admitted = receiver.try_recv();
+        assert!(admitted.is_ok(), "idle walker must receive stale work");
+        let admitted = admitted.unwrap();
+        assert!(
+            busy.load(Ordering::Acquire),
+            "admission must claim the walker"
+        );
+        fulfil_request(admitted, &mut service_walker).unwrap();
+        assert!(
+            !busy.load(Ordering::Acquire),
+            "reply must release the walker"
+        );
+        client.join().unwrap()
     });
+    assert!(actual.is_ok(), "admitted request must complete: {actual:?}");
+    let actual = actual.unwrap();
 
     assert_eq!(actual.provider.spending, direct.provider.spending);
     assert_eq!(actual.provider.days, direct.provider.days);
     assert_eq!(actual.workspace.tally, direct.workspace.tally);
     assert!((actual.workspace.tally.year.usd - 2.5).abs() < 1e-9);
+}
+
+#[test]
+fn walk_panic_replies_internal_and_resets_walker() {
+    let (_dir, runtime, request, _discovery) = spending_fixture();
+    let mut walker = SpendingWalker::new();
+    let busy = Arc::new(AtomicBool::new(false));
+    let fulfil = |walker: &mut SpendingWalker| {
+        assert!(!busy.swap(true, Ordering::AcqRel));
+        let (client, server) = UnixStream::pair().unwrap();
+        std::thread::scope(|scope| {
+            let client = scope.spawn(|| transact(client, &request));
+            fulfil_request(
+                AdmittedRequest {
+                    stream: server,
+                    runtime: runtime.clone(),
+                    request: request.clone(),
+                    _claim: WalkerClaim(Arc::clone(&busy)),
+                },
+                walker,
+            )
+            .unwrap();
+            client.join().unwrap()
+        })
+    };
+    super::super::panic_after_next_refresh_for_test();
+    let error = fulfil(&mut walker).unwrap_err();
+    assert!(matches!(
+        error,
+        SpendingServiceClientError::Service(SpendingServiceFailure {
+            code: SpendingServiceErrorCode::Internal,
+            ..
+        })
+    ));
+    assert!(
+        walker.cache.files.is_empty(),
+        "panic must replace the walker"
+    );
+    assert!(walker.memo.is_none());
+    assert!(
+        !busy.load(Ordering::Acquire),
+        "panic reply must release the walker"
+    );
+    std::fs::remove_file(runtime.shared_provider_spending_path()).unwrap();
+    let next = fulfil(&mut walker);
+    assert!(next.is_ok(), "reset walker must serve the next request");
+    assert!((next.unwrap().workspace.tally.year.usd - 2.5).abs() < 1e-9);
+    assert!(!busy.load(Ordering::Acquire));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn sequential_requests_reuse_service_and_walker_threads() {
+    let (_dir, runtime, service_request, _discovery) = spending_fixture();
+    let thread_count = || std::fs::read_dir("/proc/self/task").unwrap().count();
+    let before = thread_count();
+    let first = request(
+        &runtime,
+        service_request.clone(),
+        SpendingServiceStartup::HostEligible,
+    )
+    .unwrap();
+    assert!((first.workspace.tally.year.usd - 2.5).abs() < 1e-9);
+    let after_first = thread_count();
+    assert_eq!(after_first, before + 2, "one service and one walker thread");
+    let walker_threads = std::fs::read_dir("/proc/self/task")
+        .unwrap()
+        .filter(|task| {
+            std::fs::read_to_string(task.as_ref().unwrap().path().join("comm"))
+                .unwrap()
+                .trim()
+                == "rimz-spending-w"
+        })
+        .count();
+    assert_eq!(walker_threads, 1, "owner has one lifetime walker");
+    for _ in 0..4 {
+        std::fs::remove_file(runtime.shared_provider_spending_path()).unwrap();
+        assert!(super::super::engine::fresh_publication(&runtime, &service_request).is_none());
+        let caches = request(
+            &runtime,
+            service_request.clone(),
+            SpendingServiceStartup::HostEligible,
+        )
+        .unwrap();
+        assert!((caches.workspace.tally.year.usd - 2.5).abs() < 1e-9);
+    }
+    assert_eq!(thread_count(), after_first, "requests add no threads");
+}
+
+#[test]
+fn failed_reply_releases_walker() {
+    let (_dir, runtime, request, _discovery) = spending_fixture();
+    let (client, server) = UnixStream::pair().unwrap();
+    drop(client);
+    let busy = Arc::new(AtomicBool::new(true));
+    let result = fulfil_request(
+        AdmittedRequest {
+            stream: server,
+            runtime,
+            request,
+            _claim: WalkerClaim(Arc::clone(&busy)),
+        },
+        &mut SpendingWalker::new(),
+    );
+    assert!(result.is_err(), "closed client must fail the reply write");
+    assert!(
+        !busy.load(Ordering::Acquire),
+        "failed reply must release the walker"
+    );
 }
 
 #[test]
@@ -404,24 +540,44 @@ fn busy_walker_returns_immediately_instead_of_queueing() {
         RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
     let namespace = SpendingServiceNamespace::for_runtime(&runtime);
     let request = SpendingServiceRequest::global(&runtime, HeadlineSpec::default());
-    let walker = Mutex::new(SpendingWalker::new());
-    let held = walker.lock().unwrap();
+    let (sender, receiver) = mpsc::sync_channel(1);
+    let busy = Arc::new(AtomicBool::new(true));
     let (client, server) = UnixStream::pair().unwrap();
+    let deadlines = server.try_clone().unwrap();
 
-    let error = std::thread::scope(|scope| {
+    let (error, read_timeout, write_timeout, queued) = std::thread::scope(|scope| {
         let client = scope.spawn(|| transact(client, &request));
-        serve_connection(server, &runtime, &namespace, &walker).unwrap();
-        client.join().unwrap().unwrap_err()
+        admit_connection(server, &runtime, &namespace, &sender, &busy).unwrap();
+        let read_timeout = deadlines.read_timeout().unwrap();
+        let write_timeout = deadlines.write_timeout().unwrap();
+        drop(deadlines);
+        let admitted = receiver.try_recv().ok();
+        let queued = admitted.is_some();
+        drop(admitted);
+        (
+            client.join().unwrap().unwrap_err(),
+            read_timeout,
+            write_timeout,
+            queued,
+        )
     });
-    drop(held);
 
     assert!(matches!(
-        error,
+        &error,
         SpendingServiceClientError::Service(SpendingServiceFailure {
             code: SpendingServiceErrorCode::Busy,
             ..
         })
     ));
+    assert!(!request_error_is_retryable(&error));
+    assert!(!queued, "busy work must never enter the channel");
+    assert!(busy.load(Ordering::Acquire));
+    assert!(matches!(
+        receiver.try_recv(),
+        Err(mpsc::TryRecvError::Empty)
+    ));
+    assert_eq!(read_timeout, Some(CONNECTION_READ_TIMEOUT));
+    assert_eq!(write_timeout, Some(REQUEST_TIMEOUT));
 }
 
 #[test]
@@ -439,18 +595,24 @@ fn fresh_publication_bypasses_busy_walker() {
     );
     let namespace = SpendingServiceNamespace::for_runtime(&runtime);
     let request = SpendingServiceRequest::global(&runtime, HeadlineSpec::default());
-    let walker = Mutex::new(SpendingWalker::new());
-    let held = walker.lock().unwrap();
+    let (sender, receiver) = mpsc::sync_channel(1);
+    let busy = Arc::new(AtomicBool::new(true));
     let (client, server) = UnixStream::pair().unwrap();
 
     let caches = std::thread::scope(|scope| {
         let client = scope.spawn(|| transact(client, &request));
-        serve_connection(server, &runtime, &namespace, &walker).unwrap();
-        client.join().unwrap().unwrap()
+        admit_connection(server, &runtime, &namespace, &sender, &busy).unwrap();
+        client.join().unwrap()
     });
-    drop(held);
 
+    assert!(caches.is_ok(), "fresh publication must bypass the walker");
+    let caches = caches.unwrap();
     assert!(caches.provider.is_fresh(crate::utils::time::unix_now_ms()));
+    assert!(busy.load(Ordering::Acquire));
+    assert!(matches!(
+        receiver.try_recv(),
+        Err(mpsc::TryRecvError::Empty)
+    ));
 }
 
 #[test]
