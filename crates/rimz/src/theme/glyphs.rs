@@ -135,6 +135,7 @@ const GLYPH_CATALOG: &[GlyphCatalogRow] = &[
     glyph!(ChromeSpineLaneLeft, "▎", None),
     glyph!(ChromeSpineLaneRight, "🮇", None),
     glyph!(ChromeInfinity, "∞", Some("\u{edfe}")),
+    glyph!(ChromeSearch, "/", Some("\u{f002}")),
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -324,6 +325,28 @@ pub fn nerd_font_probe_gradient(width: usize) -> Vec<(u8, u8, u8)> {
 mod tests {
     use super::*;
     use crate::config::{ThemeGlyphsConfig, ThemeStyle};
+
+    #[test]
+    fn search_role_has_configurable_presets() {
+        let role = GlyphRole::from_namespaced("chrome", "search");
+        assert!(
+            role.is_some(),
+            "chrome.search must be a configurable glyph role"
+        );
+        let role = role.unwrap();
+        assert_eq!(unicode_glyph(role), "/");
+        assert_eq!(nerd_font_glyph(role), Some("\u{f002}"));
+        let theme: ThemeConfig = toml::from_str(
+            "[glyphs.unicode.chrome]\nsearch = 's'\n[glyphs.nerd_font.chrome]\nsearch = 'n'",
+        )
+        .unwrap();
+        assert_eq!(GlyphSet::resolve(&theme).glyph(role), "s");
+        let nerd_theme = ThemeConfig {
+            style: Some(ThemeStyle::Modern),
+            ..theme
+        };
+        assert_eq!(GlyphSet::resolve(&nerd_theme).glyph(role), "n");
+    }
 
     /// One walk of the catalog pinning every per-row invariant: the table is
     /// indexed by [`GlyphRole`] discriminant, both presets fit their cell

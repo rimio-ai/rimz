@@ -7,7 +7,6 @@ fn footer_text(snapshot: &SidebarSnapshot, width: usize) -> String {
         snapshot,
         &crate::sidebar_pane::render::theme::Theme::fixed(true),
         width,
-        &UiState::default(),
     )[0]
     .spans
     .iter()
@@ -20,7 +19,6 @@ fn footer_spans(snapshot: &SidebarSnapshot, width: usize) -> Vec<ratatui::text::
         snapshot,
         &crate::sidebar_pane::render::theme::Theme::fixed(false),
         width,
-        &UiState::default(),
     )[0]
     .spans
     .clone()

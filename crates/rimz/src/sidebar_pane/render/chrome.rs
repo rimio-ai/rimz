@@ -1,6 +1,7 @@
 use crate::agents::AgentStatus;
 use crate::config::{GlyphRole, SidebarKeys};
 use crate::sidebar_pane::render::labels::value_seam;
+use crate::sidebar_pane::view::VisibleRoster;
 use crate::store::snapshot::{
     SidebarLinkFreshness, SidebarLinkHealth, SidebarPresence, SidebarSnapshot, TruthNotice,
 };
@@ -155,13 +156,72 @@ fn gate_rule_label(rule: crate::diag::record::GateRule) -> &'static str {
     }
 }
 
+pub(super) fn search_line(
+    theme: &Theme,
+    ui: &UiState,
+    roster: &VisibleRoster<'_>,
+    snapshot: &SidebarSnapshot,
+    cells: usize,
+) -> Option<Line<'static>> {
+    let query = ui
+        .search_draft
+        .as_ref()
+        .or(ui.make_up_filter.query.as_ref())?;
+    let typing = ui.search_draft.is_some();
+    let inner = super::sections::content_width(cells);
+    let lead = format!("{} ", theme.glyph(GlyphRole::ChromeSearch));
+    let left = if typing {
+        vec![
+            Span::styled(lead, theme.body()),
+            Span::styled(query.clone(), theme.body()),
+        ]
+    } else {
+        vec![Span::styled(
+            format!("{lead}{query}"),
+            theme.picked_chip(theme.body_tone(), Modifier::empty()),
+        )]
+    };
+    let total: usize = snapshot
+        .worktree_groups
+        .iter()
+        .map(|group| group.rows.len())
+        .sum();
+    let count = Span::styled(format!("{}/{total}", roster.len()), theme.muted());
+    let count = (!query.is_empty()
+        && layout::spans_width(&left) + usize::from(typing) + 1 + count.width() <= inner)
+        .then_some(count);
+    let mut content = layout::trim_spans_to_width(left, inner.saturating_sub(usize::from(typing)));
+    if typing && inner > 0 {
+        content.push(Span::styled(
+            " ",
+            theme.body().add_modifier(Modifier::REVERSED),
+        ));
+    }
+    let padding =
+        inner.saturating_sub(layout::spans_width(&content) + count.as_ref().map_or(0, Span::width));
+    content.push(Span::raw(" ".repeat(padding)));
+    if let Some(count) = count {
+        content.push(count);
+    }
+    let mut spans = vec![Span::raw(" ".repeat(cells.min(1)))];
+    spans.extend(content);
+    if cells > 1 {
+        spans.push(Span::raw(" "));
+    }
+    if typing && let Some(bg) = theme.selection_band() {
+        for span in &mut spans {
+            span.style = span.style.bg(bg);
+        }
+    }
+    Some(Line::from(spans))
+}
+
 pub(super) fn footer_lines(
     snapshot: &SidebarSnapshot,
     theme: &Theme,
     width: usize,
-    ui: &UiState,
 ) -> Vec<Line<'static>> {
-    vec![footer_line(footer_parts(snapshot, theme, width, ui), width)]
+    vec![footer_line(footer_parts(snapshot, theme, width), width)]
 }
 
 #[derive(Clone)]
@@ -170,12 +230,7 @@ pub(super) struct FooterParts {
     help: Span<'static>,
 }
 
-pub(super) fn footer_parts(
-    snapshot: &SidebarSnapshot,
-    theme: &Theme,
-    width: usize,
-    ui: &UiState,
-) -> FooterParts {
+pub(super) fn footer_parts(snapshot: &SidebarSnapshot, theme: &Theme, width: usize) -> FooterParts {
     const HELP_TEXT: &str = "? for help";
 
     let presence = presence_badge(snapshot.presence, theme, width);
@@ -185,36 +240,6 @@ pub(super) fn footer_parts(
         .map(|link| link_badge(link, theme, width));
     let has_presence = presence.is_some();
     let help = Span::styled(HELP_TEXT, theme.faint());
-
-    let search = if let Some(draft) = &ui.search_draft {
-        Some(vec![
-            Span::styled(format!("/{draft}"), theme.body()),
-            Span::styled(" ", theme.body().add_modifier(Modifier::REVERSED)),
-        ])
-    } else {
-        ui.make_up_filter.query.as_ref().map(|query| {
-            vec![Span::styled(
-                format!("/{query}"),
-                theme.picked_chip(theme.body_tone(), Modifier::empty()),
-            )]
-        })
-    };
-    if let Some(search) = search {
-        let mut left_options = Vec::new();
-        for badges in [
-            footer_left_spans(presence, link.clone()),
-            footer_left_spans(None, link),
-            Vec::new(),
-        ] {
-            let mut left = search.clone();
-            if !badges.is_empty() {
-                left.push(Span::raw("  "));
-                left.extend(badges);
-            }
-            left_options.push(left);
-        }
-        return FooterParts { left_options, help };
-    }
 
     let mut left_options = vec![footer_left_spans(presence.clone(), link.clone())];
     if has_presence {

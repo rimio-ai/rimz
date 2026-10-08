@@ -35,6 +35,7 @@ mod presence;
 mod process;
 mod provider;
 mod scroll;
+mod search;
 mod worktree;
 
 use super::*;
@@ -606,7 +607,14 @@ fn bottom_chrome_texts_with_ui(
     ui: &UiState,
 ) -> (Vec<String>, Vec<HitRegion>) {
     let theme = Theme::fixed(true);
-    let block = build_bottom_chrome(snapshot, alert, &theme, 40, ui);
+    let block = build_bottom_chrome(
+        snapshot,
+        alert,
+        &theme,
+        42,
+        ui,
+        &ui.visible_roster(snapshot),
+    );
     (
         line_texts(&block.lines),
         block.interactions.regions().to_vec(),
