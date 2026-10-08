@@ -394,7 +394,10 @@ allowed-dependencies = [
 # Receipt monitoring stats the queued-message file through StatePaths::message_queue_file.
 # LaunchPlan delegates the launch-and-PID handoff path to classed temp units (+1).
 # Room birth and sidebar readers share the classed workspace projection path (+1).
-surface-budget = 223
+# Hook ingress exposes the drainer's diagnostic log, socket, lifetime lock, and spawn lock (+4).
+# Hook ingress serializes appends independently of lifecycle folds (+1).
+# Hook appenders share a typed, blocking ingress guard (+2).
+surface-budget = 230
 
 [[module]]
 path = "crates/rimz/src/forge"
@@ -761,7 +764,9 @@ path = "crates/rimz/src/store"
 # QUEUED_NOTICE_BUSY_DELAY supplies the sweep's twenty-minute default (+1).
 # QUEUED_NOTICE_BUSY_ENV names its millisecond override (+1).
 # Store::queue_still_queued_notice atomically stamps and enqueues for message/deliver.rs::sweep (+1).
-surface-budget = 396
+# Hook ingress shares its codec module, raw frame, cursor, and five locked-write/read entry points (+8).
+# Ingress readers reuse the frame visitor with a snapshotted byte limit (+1).
+surface-budget = 405
 
 [[module]]
 path = "crates/rimz/src/theme"
@@ -1043,7 +1048,8 @@ allowed-dependencies = [
 # The idle-stop record module (+1).
 # The exec wrapper asks whether its agent is parked for recovery (+1).
 # Explicit audit-row text loading (+1).
-surface-budget = 34
+# The hook ingress and drain cursor codec module (+1).
+surface-budget = 35
 
 [[module]]
 path = "crates/rimz/src/utils/time.rs"

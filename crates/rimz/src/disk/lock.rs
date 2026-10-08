@@ -43,6 +43,32 @@ pub struct WorkspaceLock {
     path: PathBuf,
 }
 
+/// Shared, blocking guard for ingress appends; excludes snapshots and truncation.
+pub struct IngressAppendLock {
+    file: File,
+}
+
+impl IngressAppendLock {
+    /// Lock the current named inode, reopening if GC unlinked it while waiting.
+    pub fn acquire(path: &Path) -> Result<Self> {
+        let mut file = open_lock_file(path)?;
+        lock_current(&mut file, path, |file| {
+            file.lock_shared().map_err(std::fs::TryLockError::Error)
+        })
+        .map_err(|source| LockErr::Acquire {
+            path: path.to_path_buf(),
+            source: io::Error::from(source),
+        })?;
+        Ok(Self { file })
+    }
+}
+
+impl Drop for IngressAppendLock {
+    fn drop(&mut self) {
+        let _ = self.file.unlock();
+    }
+}
+
 impl WorkspaceLock {
     pub fn acquire(path: &Path) -> Result<Self> {
         Self::acquire_with_timeout(path, LOCK_TIMEOUT)
@@ -182,6 +208,63 @@ impl std::fmt::Debug for WorkspaceLock {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ingress_appenders_hold_the_lock_together() {
+        use std::sync::mpsc;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("hook-ingress.lock");
+        let first = IngressAppendLock::acquire(&path).unwrap();
+        let (held_tx, held_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let second = std::thread::spawn(move || {
+            let _second = IngressAppendLock::acquire(&path).unwrap();
+            held_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        });
+        let together = held_rx.recv_timeout(Duration::from_secs(1)).is_ok();
+        drop(first);
+        release_tx.send(()).unwrap();
+        second.join().unwrap();
+        assert!(together, "another appender must not exclude this appender");
+    }
+
+    #[test]
+    fn ingress_appender_excludes_an_exclusive_holder() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("hook-ingress.lock");
+        let appender = IngressAppendLock::acquire(&path).unwrap();
+        let excluded = WorkspaceLock::try_acquire(&path).unwrap().is_none();
+        drop(appender);
+        assert!(
+            excluded,
+            "an appender must exclude snapshots and truncation"
+        );
+        assert!(WorkspaceLock::try_acquire(&path).unwrap().is_some());
+    }
+
+    #[test]
+    fn ingress_exclusive_holder_blocks_an_appender() {
+        use std::sync::mpsc;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("hook-ingress.lock");
+        let exclusive = WorkspaceLock::acquire(&path).unwrap();
+        let (started_tx, started_rx) = mpsc::channel();
+        let (held_tx, held_rx) = mpsc::channel();
+        let appender = std::thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            let _appender = IngressAppendLock::acquire(&path).unwrap();
+            held_tx.send(()).unwrap();
+        });
+        started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        let blocked = held_rx.recv_timeout(Duration::from_millis(100)).is_err();
+        drop(exclusive);
+        held_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        appender.join().unwrap();
+        assert!(blocked, "an exclusive holder must exclude appenders");
+    }
 
     #[test]
     fn waiter_reopens_unlinked_inode_without_overlapping_new_holder() {

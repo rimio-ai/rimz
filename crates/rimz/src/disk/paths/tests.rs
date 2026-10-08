@@ -34,6 +34,10 @@ impl StatePaths {
             self.out_dir.clone(),
             self.skills_dir.clone(),
             self.events_log.clone(),
+            self.hook_ingress_log.clone(),
+            self.hook_ingress_lock.clone(),
+            self.hook_drain_cursor.clone(),
+            self.hook_drainer_log(),
             self.events_archive_dir.clone(),
             self.agents_carryover.clone(),
             self.snapshots_dir.clone(),
@@ -106,6 +110,9 @@ impl RuntimePaths {
             self.focus_anchor_path(),
             self.focus_anchor_lock(),
             self.codex_app_server_socket_path(),
+            self.hook_drainer_socket_path(),
+            self.hook_drainer_lock(),
+            self.hook_drainer_spawn_lock(),
         ]
     }
 }

@@ -8,6 +8,7 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 
@@ -141,7 +142,24 @@ pub fn visit_from_offset(
     start: u64,
     mut visit: impl FnMut(EventEnvelope),
 ) -> Result<u64> {
-    use std::io::{BufRead, BufReader, Seek, SeekFrom};
+    visit_records_from_offset(path, start, |event, _| visit(event))
+}
+
+pub(super) fn visit_records_from_offset<T: DeserializeOwned>(
+    path: &Path,
+    start: u64,
+    visit: impl FnMut(T, u64),
+) -> Result<u64> {
+    visit_records_through_offset(path, start, u64::MAX, visit)
+}
+
+pub(super) fn visit_records_through_offset<T: DeserializeOwned>(
+    path: &Path,
+    start: u64,
+    through: u64,
+    mut visit: impl FnMut(T, u64),
+) -> Result<u64> {
+    use std::io::{BufRead, BufReader, Read as _, Seek, SeekFrom};
 
     let mut file = match std::fs::File::open(path) {
         Ok(file) => file,
@@ -158,7 +176,7 @@ pub fn visit_from_offset(
         source,
     };
     file.seek(SeekFrom::Start(start)).map_err(io_error)?;
-    let mut reader = BufReader::new(file);
+    let mut reader = BufReader::new(file.take(through.saturating_sub(start)));
     let mut bytes = Vec::new();
     let mut end = start;
     loop {
@@ -172,10 +190,10 @@ pub fn visit_from_offset(
         if terminated {
             bytes.pop();
         }
-        match frame::decode_row(end, terminated, &bytes) {
+        match frame::decode_record(end, terminated, &bytes) {
             Ok(event) => {
-                visit(event);
                 end += read as u64;
+                visit(event, end);
             }
             Err(err) if err.is_corruption() && reader.fill_buf().map_err(io_error)?.is_empty() => {
                 if terminated {
