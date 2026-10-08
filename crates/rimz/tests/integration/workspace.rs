@@ -111,6 +111,11 @@ fn transcript_follow_without_a_room_refuses_on_entry() {
 }
 
 #[test]
+fn agents_logs_without_a_room_refuses() {
+    assert_room_view_refuses(&["agents", "logs", "@coder"]);
+}
+
+#[test]
 fn events_follow_without_a_room_refuses_on_entry() {
     assert_room_view_refuses(&["events", "follow", "--replay", "--json"]);
 }
@@ -135,8 +140,14 @@ fn sidebar_supervisor_without_a_room_stops_before_spawning_or_logging() {
         .env("RIMZ_TEST_SIDEBAR_SELF_CLOSE_PROBE", "empty")
         .env("RIMZ_TEST_SIDEBAR_WORKER_STARTED_FILE", &started)
         .bounded_output_within(Duration::from_secs(5));
-    assert!(output.is_ok(), "supervisor must stop: {output:?}");
-    assert!(output.unwrap().status.success());
+    let output = output.expect("supervisor must stop");
+    assert!(output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(&format!("no room for workspace {}", env.workspace_id))
+            && stderr.contains("rimz start"),
+        "the stop names the workspace and the fix: {stderr}"
+    );
     assert!(!env.rimz_home().join("ws").exists());
     assert!(!started.exists(), "no worker should be spawned");
 }

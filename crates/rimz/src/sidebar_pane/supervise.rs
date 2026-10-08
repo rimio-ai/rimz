@@ -176,6 +176,10 @@ pub fn run(config: ServeConfig) -> Result<()> {
 
     let mut record_watch = RecordWatch::new(&config.workspace_id);
     if crate::workspace::record::read(&record_watch.record_path).is_err() {
+        let no_room = crate::workspace::WorkspaceErr::NoRoom {
+            location: format!("for workspace {}", config.workspace_id),
+        };
+        let _ = writeln!(io::stderr(), "rimz sidebar serve: {no_room}; stopping");
         return Ok(());
     }
     let args = env::args_os().skip(1).collect::<Vec<_>>();
