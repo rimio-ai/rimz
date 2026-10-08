@@ -1,7 +1,301 @@
 use super::*;
+use crate::config::GlyphRole;
 use crate::sidebar_pane::pixel::meter::MeterRaster;
 use crate::sidebar_pane::render::theme::Component;
+use crate::store::snapshot::CacheClock;
 use ratatui::text::Span;
+
+fn cache_meter_snapshot(quiet_secs: u64, cache: Option<CacheClock>) -> SidebarSnapshot {
+    let mut parent = agent(
+        "parent",
+        "claude",
+        AgentStatus::Success,
+        Some("/repo/main"),
+        Some("main"),
+        Some("index docs"),
+    );
+    let mut context = claude_context(fixed_now());
+    context.tokens = Some(AgentTokenUsage {
+        context_window_size: Some(100_000),
+        used_percentage: Some(40),
+        current_usage: Some(AgentCurrentUsage {
+            input_tokens: Some(5_000),
+            cache_creation_input_tokens: Some(15_000),
+            cache_read_input_tokens: Some(20_000),
+            ..AgentCurrentUsage::default()
+        }),
+        ..AgentTokenUsage::default()
+    });
+    parent.context = Some(context);
+    parent.last_activity = fixed_now() - Duration::from_secs(quiet_secs);
+    parent.last_seen = parent.last_activity;
+    let mut snapshot = snapshot_with(vec![parent]);
+    snapshot.worktree_groups[0].rows[0]
+        .as_agent_mut()
+        .unwrap()
+        .cache = cache;
+    snapshot
+}
+
+fn half_hour_cache() -> CacheClock {
+    CacheClock {
+        ceiling_secs: 1800,
+        last_request_at: None,
+        warm_until: None,
+        held_since: None,
+    }
+}
+
+fn cache_meter_line(snapshot: &SidebarSnapshot, theme: &Theme) -> Line<'static> {
+    group_lines(snapshot, theme, usize::MAX)
+        .into_iter()
+        .find(|line| {
+            line.to_string()
+                .contains(theme.glyph(GlyphRole::MeterContextFull))
+                || line
+                    .to_string()
+                    .contains(theme.glyph(GlyphRole::MeterContextEmpty))
+        })
+        .expect("the card's context meter")
+}
+
+fn assert_expired_meter(line: &Line<'_>, theme: &Theme) {
+    let filled = line
+        .spans
+        .iter()
+        .filter(|span| {
+            span.content
+                .contains(theme.glyph(GlyphRole::MeterBarFilled))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(filled.len(), 1, "expired fill is one run: {line:?}");
+    assert_eq!(
+        filled[0].style.fg,
+        Some(theme.component(Component::CacheExpired))
+    );
+    assert!(
+        !line
+            .to_string()
+            .contains(theme.glyph(GlyphRole::MeterBarCap))
+    );
+    let glyph = line
+        .spans
+        .iter()
+        .find(|span| {
+            span.content
+                .contains(theme.glyph(GlyphRole::MeterContextFull))
+        })
+        .unwrap();
+    assert_eq!(
+        glyph.style.fg,
+        Some(theme.heat_tone(0.0)),
+        "glyph keeps severity"
+    );
+    assert!(line.to_string().trim_end().ends_with("40.0%"));
+}
+
+#[test]
+fn expired_context_meter_drops_segments_but_keeps_percent_and_glyph() {
+    for theme in [Theme::fixed(false), truecolor_sidebar_theme()] {
+        let expired = cache_meter_snapshot(40 * 60, Some(half_hour_cache()));
+        let warm = cache_meter_snapshot(20 * 60, Some(half_hour_cache()));
+        let expired_line = cache_meter_line(&expired, &theme);
+        let warm_line = cache_meter_line(&warm, &theme);
+        assert_expired_meter(&expired_line, &theme);
+        let percent = |line: &Line<'_>| {
+            let span = line
+                .spans
+                .iter()
+                .find(|span| span.content.contains('%'))
+                .unwrap();
+            (span.content.to_string(), span.style)
+        };
+        assert_eq!(
+            percent(&expired_line),
+            percent(&warm_line),
+            "percent unchanged"
+        );
+        let track = expired_line
+            .spans
+            .iter()
+            .find(|span| span.content.contains(theme.glyph(GlyphRole::MeterBarTrack)))
+            .unwrap();
+        assert_eq!(track.style.fg, theme.faint().fg);
+    }
+}
+
+#[test]
+fn warm_held_and_unknown_lifetime_context_meters_keep_composition() {
+    let theme = Theme::fixed(false);
+    let held = CacheClock {
+        warm_until: Some(fixed_now() + Duration::from_secs(70 * 60)),
+        held_since: Some(fixed_now() - Duration::from_secs(50 * 60)),
+        ..half_hour_cache()
+    };
+    let reference = cache_meter_line(&cache_meter_snapshot(20 * 60, None), &theme);
+    for (quiet_secs, cache) in [
+        (20 * 60, Some(half_hour_cache())),
+        (50 * 60, Some(held)),
+        (120 * 60, None),
+        (30 * 60, Some(half_hour_cache())),
+    ] {
+        assert_eq!(
+            cache_meter_line(&cache_meter_snapshot(quiet_secs, cache), &theme),
+            reference
+        );
+    }
+    let fills = reference
+        .spans
+        .iter()
+        .filter(|span| {
+            span.content
+                .contains(theme.glyph(GlyphRole::MeterBarFilled))
+        })
+        .map(|span| span.style.fg)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        fills,
+        vec![
+            Some(theme.heat_tone(0.0)),
+            Some(theme.component(Component::CacheWrite)),
+            Some(theme.component(Component::Input)),
+        ]
+    );
+    let unknown = cache_meter_snapshot(120 * 60, None);
+    assert!(
+        group_lines(&unknown, &theme, usize::MAX)
+            .iter()
+            .flat_map(|line| &line.spans)
+            .any(|span| span.content == "◉ 2h" && span.style.fg == theme.muted().fg)
+    );
+}
+
+#[test]
+fn lapsed_or_incomplete_hold_uses_the_latest_cache_request() {
+    let theme = Theme::fixed(false);
+    let lapsed = CacheClock {
+        warm_until: Some(fixed_now() - Duration::from_secs(1)),
+        held_since: Some(fixed_now() - Duration::from_secs(60 * 60)),
+        last_request_at: Some(fixed_now() - Duration::from_secs(40 * 60)),
+        ..half_hour_cache()
+    };
+    assert_expired_meter(
+        &cache_meter_line(&cache_meter_snapshot(50 * 60, Some(lapsed)), &theme),
+        &theme,
+    );
+    let pinged = CacheClock {
+        last_request_at: Some(fixed_now() - Duration::from_secs(20 * 60)),
+        ..lapsed
+    };
+    assert_eq!(
+        cache_meter_line(&cache_meter_snapshot(50 * 60, Some(pinged)), &theme),
+        cache_meter_line(
+            &cache_meter_snapshot(20 * 60, Some(half_hour_cache())),
+            &theme
+        ),
+    );
+    let incomplete = CacheClock {
+        warm_until: Some(fixed_now() + Duration::from_secs(70 * 60)),
+        held_since: None,
+        ..half_hour_cache()
+    };
+    assert_expired_meter(
+        &cache_meter_line(&cache_meter_snapshot(50 * 60, Some(incomplete)), &theme),
+        &theme,
+    );
+}
+
+#[test]
+fn expired_empty_context_meter_stays_empty() {
+    let theme = Theme::fixed(false);
+    let mut expired = cache_meter_snapshot(40 * 60, Some(half_hour_cache()));
+    let card = expired.worktree_groups[0].rows[0].as_agent_mut().unwrap();
+    let tokens = card.context.as_mut().unwrap().tokens.as_mut().unwrap();
+    tokens.used_percentage = Some(0);
+    tokens.current_usage = Some(AgentCurrentUsage::default());
+    let empty = cache_meter_line(&expired, &theme);
+    assert!(
+        empty
+            .to_string()
+            .contains(theme.glyph(GlyphRole::MeterContextEmpty))
+    );
+    assert!(
+        !empty
+            .to_string()
+            .contains(theme.glyph(GlyphRole::MeterBarFilled))
+    );
+    assert!(
+        !empty
+            .to_string()
+            .contains(theme.glyph(GlyphRole::MeterBarHalf))
+    );
+    expired.worktree_groups[0].rows[0]
+        .as_agent_mut()
+        .unwrap()
+        .cache = None;
+    assert_eq!(empty, cache_meter_line(&expired, &theme));
+}
+
+#[test]
+fn expired_parent_context_meter_ages_while_children_work() {
+    let theme = Theme::fixed(false);
+    let source = cache_meter_snapshot(40 * 60, None);
+    let mut parent = source.agents[0].clone();
+    parent.status = AgentStatus::Running;
+    let mut child = agent(
+        "child",
+        "claude",
+        AgentStatus::Running,
+        None,
+        None,
+        Some("task"),
+    );
+    child.parent_agent_id = Some("parent".into());
+    child.registered_at = Some(fixed_now() - Duration::from_secs(120));
+    child.last_activity = fixed_now() - Duration::from_secs(5);
+    child.last_seen = child.last_activity;
+    let mut snapshot = snapshot_with(vec![parent, child]);
+    let row = &mut snapshot.worktree_groups[0].rows[0];
+    assert_eq!(row.last_activity, fixed_now() - Duration::from_secs(5));
+    row.as_agent_mut().unwrap().cache = Some(half_hour_cache());
+    assert_expired_meter(&cache_meter_line(&snapshot, &theme), &theme);
+    assert!(
+        group_lines(&snapshot, &theme, usize::MAX)
+            .iter()
+            .any(|line| line.to_string().contains(
+                &crate::sidebar_pane::render::labels::role_glyph(
+                    &theme,
+                    crate::config::AnimationRole::Delegating,
+                    0
+                )
+            ))
+    );
+}
+
+#[test]
+fn expired_truecolor_context_meter_interns_one_flat_raster() {
+    let theme = truecolor_sidebar_theme();
+    let snapshot = cache_meter_snapshot(40 * 60, Some(half_hour_cache()));
+    let cost_rolls = CostRolls::default();
+    let ctx = test_row_ctx(&snapshot, &theme, 44, 0, 0, &cost_rolls);
+    let mut pixels = MeterPixels::new(0x120000);
+    pixels.begin_frame();
+    let lines =
+        worktree_group_block(&ctx, &snapshot.worktree_groups[0], false, Some(&mut pixels)).lines;
+    pixels.observe_visible(&lines);
+    let rasters = pixels.visible_rasters().collect::<Vec<_>>();
+    assert_eq!(rasters.len(), 1);
+    let raster = rasters[0].1;
+    let health = theme
+        .pixel_rgb(theme.component(Component::CacheExpired))
+        .unwrap();
+    assert_eq!(raster.health, health);
+    assert_eq!(
+        *raster,
+        MeterRaster::new(raster.width_cells, 0.4, health, Vec::new(), raster.track),
+        "expired raster has no composition runs and keeps fill geometry"
+    );
+}
 
 #[test]
 fn droid_waiting_card_renders_native_ask_and_last_call_context_fill() {

@@ -517,6 +517,35 @@ fn luminance(color: Color) -> f32 {
 }
 
 #[test]
+fn cache_expired_reads_as_greyed_caution() {
+    for theme in [truecolor_default(), Theme::fixed(false)] {
+        let expired = theme.component(Component::CacheExpired);
+        for tone in [
+            theme.palette.caution,
+            theme.palette.muted,
+            theme.palette.warn,
+            theme.palette.faint,
+        ] {
+            assert_ne!(expired, tone_color(tone), "expired has its own tone");
+        }
+    }
+
+    use crate::theme::oklab::{chroma, hue_angle};
+    use std::f32::consts::{PI, TAU};
+    let theme = truecolor_default();
+    let expired = color_to_rgb(theme.component(Component::CacheExpired)).unwrap();
+    let caution = color_to_rgb(tone_color(theme.palette.caution)).unwrap();
+    let muted = color_to_rgb(tone_color(theme.palette.muted)).unwrap();
+    assert!(
+        chroma(expired) < chroma(caution),
+        "less chromatic than caution"
+    );
+    assert!(chroma(expired) > chroma(muted), "warmer than muted");
+    let arc = (hue_angle(expired) - hue_angle(caution) + PI).rem_euclid(TAU) - PI;
+    assert!(arc.abs() < 0.3, "expired holds caution's hue: {arc:.3}rad");
+}
+
+#[test]
 fn selection_band_recesses_flat_below_selection_bg_at_truecolor() {
     let theme = truecolor_default();
     let band = theme.selection_band().expect("a band at truecolor");

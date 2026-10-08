@@ -80,6 +80,13 @@ pub(crate) fn hue_angle(rgb: Rgb) -> f32 {
     color.b.atan2(color.a)
 }
 
+/// Test-only: perceptual chroma for assertions on derived tones.
+#[cfg(test)]
+pub(crate) fn chroma(rgb: Rgb) -> f32 {
+    let color = Oklab::from_rgb(rgb);
+    color.a.hypot(color.b)
+}
+
 /// Iterations of the chroma-fit bisection: 16 resolves the scale to 1/65536,
 /// far finer than 8-bit sRGB can show.
 const GAMUT_FIT_ITERS: usize = 16;

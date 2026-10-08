@@ -92,12 +92,14 @@ pub(super) fn bar_row(
 /// large-window working ranges stay visible; the displayed percentage remains
 /// the raw measurement. When the statusline reports the per-message token
 /// breakdown, every severity splits the fill into cache-read / cache-write /
-/// fresh-input segments. Components below 0.5% of the filled window fold into
-/// the lead run; each remaining accent starts with a gap-fronted `╺` cap, and
-/// the segmented fill ends flush at a whole cell. The cache-read run carries
-/// severity when present; the `▣` glyph and `▤` line always carry it. The value
-/// prefers a one-decimal precise fraction (`78.2%`) over the integer gauge. An
-/// empty (0%) window reads the hollow `▢`; any usage fills it to `▣`.
+/// fresh-input segments while the prompt cache is warm. An expired cache draws
+/// one flat run in the fixed expired-cache tone. Components below 0.5% of the
+/// filled window fold into the lead run; each remaining accent starts with a
+/// gap-fronted `╺` cap, and the segmented fill ends flush at a whole cell. The
+/// cache-read run carries severity when present; the `▣` glyph and `▤` line
+/// always carry it. The value prefers a one-decimal precise fraction (`78.2%`)
+/// over the integer gauge. An empty (0%) window reads the hollow `▢`; any usage
+/// fills it to `▣`.
 pub(super) fn gauge_line(
     ctx: &RowCtx<'_>,
     row: &SidebarRow,
@@ -121,7 +123,11 @@ pub(super) fn gauge_line(
     // keeps the flat cache-write and fresh-input composition tones.
     let amount = severity_heat_amount(severity, percent, row.context_used_tokens(), bands);
     let color = theme.heat_tone(amount);
-    let segments = gauge_segments(theme, row, color);
+    let (bar_color, segments) = if cache_age(row, ctx.now).expired(ctx.now) {
+        (theme.component(Component::CacheExpired), None)
+    } else {
+        (color, gauge_segments(theme, row, color))
+    };
     let glyph = if percent == 0 {
         theme.glyph(GlyphRole::MeterContextEmpty)
     } else {
@@ -137,7 +143,7 @@ pub(super) fn gauge_line(
                 && let Some(spans) = pixel_gauge_spans(
                     theme,
                     fill,
-                    color,
+                    bar_color,
                     segments
                         .as_ref()
                         .map(|segments| &segments[..])
@@ -149,8 +155,8 @@ pub(super) fn gauge_line(
                 return spans;
             }
             match &segments {
-                Some(segments) => context_gauge_spans(theme, color, segments, fill, bar_width),
-                None => context_gauge_spans(theme, color, &[], fill, bar_width),
+                Some(segments) => context_gauge_spans(theme, bar_color, segments, fill, bar_width),
+                None => context_gauge_spans(theme, bar_color, &[], fill, bar_width),
             }
         },
         width,
@@ -305,6 +311,46 @@ pub(super) fn gauge_segments(
     ])
 }
 
+/// What the card's prompt-cache clock says at the snapshot time.
+enum CacheAge {
+    /// A keep-warm horizon holds the cache, counted from the last real turn.
+    Held {
+        ended: jiff::Timestamp,
+        until: jiff::Timestamp,
+    },
+    /// Count from the later of own activity and the last ping; an unknown TTL has no ceiling.
+    Aging {
+        since: jiff::Timestamp,
+        ceiling: Option<i64>,
+    },
+}
+
+impl CacheAge {
+    /// Past a known ceiling, never held or guessed from an unknown TTL.
+    fn expired(&self, now: jiff::Timestamp) -> bool {
+        matches!(self, Self::Aging { since, ceiling: Some(ceiling) }
+            if age_secs(*since, now) > *ceiling)
+    }
+}
+
+fn cache_age(row: &SidebarRow, now: jiff::Timestamp) -> CacheAge {
+    let cache = row.as_agent().and_then(|agent| agent.cache);
+    if let Some(clock) = cache
+        && let Some(until) = clock.warm_until.filter(|until| now < *until)
+        && let Some(ended) = clock.held_since
+    {
+        return CacheAge::Held { ended, until };
+    }
+    CacheAge::Aging {
+        since: row.own_last_activity().max(
+            cache
+                .and_then(|clock| clock.last_request_at)
+                .unwrap_or_default(),
+        ),
+        ceiling: cache.map(|clock| i64::from(clock.ceiling_secs)),
+    }
+}
+
 /// The card's cache-age pin. While a keep-warm horizon holds the cache it reads
 /// the time since the last real turn ended, the face filling over the horizon
 /// in the steady `good` tone; otherwise the time since the agent's own activity
@@ -312,37 +358,29 @@ pub(super) fn gauge_segments(
 /// face and heat over the card's provider cache TTL, else the hour. Past that
 /// ceiling the full face remains, but the tone becomes muted.
 fn cache_age_pin(theme: &Theme, row: &SidebarRow, now: jiff::Timestamp) -> Option<Span<'static>> {
-    let cache = row.as_agent().and_then(|agent| agent.cache);
-    let held = cache.and_then(|clock| {
-        let until = clock.warm_until.filter(|until| now < *until)?;
-        Some((clock.held_since?, until))
-    });
-    if let Some((ended, until)) = held {
-        let label = activity_short(ended, now)?;
-        let glyph = elapsed_glyph(theme, age_secs(ended, now), age_secs(ended, until));
-        return Some(Span::styled(
-            format!("{glyph} {label}"),
-            theme.good(Modifier::empty()),
-        ));
+    match cache_age(row, now) {
+        CacheAge::Held { ended, until } => {
+            let label = activity_short(ended, now)?;
+            let glyph = elapsed_glyph(theme, age_secs(ended, now), age_secs(ended, until));
+            Some(Span::styled(
+                format!("{glyph} {label}"),
+                theme.good(Modifier::empty()),
+            ))
+        }
+        CacheAge::Aging { since, ceiling } => {
+            let label = activity_short(since, now)?;
+            let secs = age_secs(since, now);
+            let ceiling = ceiling.unwrap_or(ATTENTION_AGE_CEILING_SECS);
+            Some(Span::styled(
+                format!("{} {label}", elapsed_glyph(theme, secs, ceiling)),
+                if secs > ceiling {
+                    theme.muted()
+                } else {
+                    activity_age_style(theme, secs, ceiling)
+                },
+            ))
+        }
     }
-    let quiet_since = row.own_last_activity().max(
-        cache
-            .and_then(|clock| clock.last_request_at)
-            .unwrap_or_default(),
-    );
-    let label = activity_short(quiet_since, now)?;
-    let secs = age_secs(quiet_since, now);
-    let ceiling = cache.map_or(ATTENTION_AGE_CEILING_SECS, |clock| {
-        i64::from(clock.ceiling_secs)
-    });
-    Some(Span::styled(
-        format!("{} {label}", elapsed_glyph(theme, secs, ceiling)),
-        if secs > ceiling {
-            theme.muted()
-        } else {
-            activity_age_style(theme, secs, ceiling)
-        },
-    ))
 }
 
 /// The card's stats line with the last-activity age pinned right. Current-window
