@@ -203,6 +203,8 @@ A provider stub that stays alive answers informational probes such as `--version
 
 When a change adds a verdict, marker, or timer to an existing state machine, enumerate how the new input interacts with each existing one and test the plausible simultaneous cases — at minimum a structural and a geometry change arriving together, and a pending classification against every backstop and retry path. Single-input tests pass on a machine whose bugs all live in the combined states.
 
+A test of a polling consumer holds each state the consumer must observe open for at least three poll intervals: a state that opens and closes between two polls is never seen, and the test then passes on the broken build. The negative control for a regression test is the fix commit's files checked out from its parent, run several times when the test is timing-based, never a hand-made mutant of the fixed code.
+
 ## Dependency budget
 
 The direct-dependency snapshot. Entries move when a better-designed alternative wins on design fit, maintenance, footprint, and security. The full justification for each entry — what it provides, what it replaces, why RimZ does not write the moral equivalent in twenty lines — lives as a comment beside it in the workspace [Cargo.toml](../../Cargo.toml); this table is the policy summary.
