@@ -791,6 +791,66 @@ fn external_only_report_needs_no_server_or_checkout_path() {
 }
 
 #[test]
+fn exact_ignored_paths_resolve_without_joining_suffix_matches() {
+    let root = tempfile::tempdir().unwrap();
+    assert!(
+        std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(root.path())
+            .status()
+            .unwrap()
+            .success()
+    );
+    std::fs::write(root.path().join(".gitignore"), "plan-notes.md\nnotes.md\n").unwrap();
+    std::fs::create_dir(root.path().join("sub")).unwrap();
+    for file in ["plan-notes.md", "tracked.md", "sub/notes.md"] {
+        std::fs::write(root.path().join(file), "one\ntwo\nthree\n").unwrap();
+    }
+    assert!(
+        std::process::Command::new("git")
+            .args(["add", "tracked.md"])
+            .current_dir(root.path())
+            .status()
+            .unwrap()
+            .success()
+    );
+    let notes = root.path().join("anchors.md");
+    std::fs::write(
+        &notes,
+        "`plan-notes.md:~2`\n`tracked.md:~2`\n`plan-notes.md:~99`\n`absent.md:~1`\n`notes.md:~1`\n",
+    )
+    .unwrap();
+    let report = run(&[notes], root.path(), &[], &BTreeMap::new(), Mode::Check)
+        .unwrap()
+        .remove(0)
+        .unwrap();
+    assert_eq!(
+        report
+            .anchors
+            .iter()
+            .map(|anchor| anchor.status)
+            .collect::<Vec<_>>(),
+        [
+            Status::Ok,
+            Status::Ok,
+            Status::LineOutside,
+            Status::MissingPath,
+            Status::MissingPath,
+        ]
+    );
+    assert_eq!(report.anchors[0].path, Some("plan-notes.md".into()));
+    assert_eq!(report.anchors[1].path, Some("tracked.md".into()));
+    assert_eq!(report.anchors[2].detail, "file has 3 lines");
+    for anchor in &report.anchors[3..] {
+        assert_eq!(anchor.detail, "no matching checkout file");
+    }
+    assert_eq!(report.exit_code(), 7);
+    assert_eq!(report.summary.anchors, 5);
+    assert_eq!(report.summary.ok, 2);
+    assert_eq!(report.summary.failed, 3);
+}
+
+#[test]
 fn hint_markers_distinguish_locations_from_ordinary_numbers() {
     for text in ["`a.rs::f` 12 callers", "`a.rs::f 12 callers`"] {
         let anchors = extract(text);
