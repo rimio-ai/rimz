@@ -438,6 +438,110 @@ fn a_room_started_from_an_agent_gives_panes_the_user_tmpdir() {
     }
 }
 
+#[test]
+fn a_nested_room_gives_panes_only_its_own_mux_context() {
+    let scratch = tempfile::tempdir().expect("scratch");
+    let mut failures = Vec::new();
+    let outer_zellij = [
+        ("ZELLIJ", "0"),
+        ("ZELLIJ_SESSION_NAME", "outer"),
+        ("ZELLIJ_PANE_ID", "terminal_1"),
+    ];
+    if let Some(room) = TmuxRoom::start_with(&outer_zellij) {
+        let marker = scratch.path().join("tmux-env");
+        let doctor = scratch.path().join("tmux-doctor");
+        let socket = rimz::mux::tmux::managed_server_socket_path_under(&room.env.runtime_root);
+        let output = Command::new("tmux")
+            .scrub_session_env()
+            .envs(outer_zellij)
+            .arg("-S")
+            .arg(socket)
+            .args(["new-window", "-d", "-t", &room.session_name])
+            .arg(pane_mux_probe(&room.env, &marker, &doctor))
+            .bounded_output()
+            .expect("tmux new-window");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        check_pane_mux("tmux", &marker, &doctor, &mut failures);
+    }
+    let outer_tmux = [("TMUX", "/nonexistent,1,0"), ("TMUX_PANE", "%0")];
+    if let Some(room) = ZellijRoom::start_with(&outer_tmux) {
+        let marker = scratch.path().join("zellij-env");
+        let doctor = scratch.path().join("zellij-doctor");
+        let output = room
+            .zellij()
+            .envs(outer_tmux)
+            .args(["--session", &room.session_name, "run", "--", "sh", "-c"])
+            .arg(pane_mux_probe(&room.env, &marker, &doctor))
+            .bounded_output()
+            .expect("zellij run");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        check_pane_mux("zellij", &marker, &doctor, &mut failures);
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+fn pane_mux_probe(env: &Env, marker: &Path, doctor: &Path) -> String {
+    let command = env.rimz();
+    let pinned_env = command
+        .get_envs()
+        .filter_map(|(key, value)| {
+            value.map(|value| {
+                shlex::try_quote(&format!(
+                    "{}={}",
+                    key.to_string_lossy(),
+                    value.to_string_lossy()
+                ))
+                .expect("shell quote fixture env")
+                .into_owned()
+            })
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    format!(
+        "for key in TMUX TMUX_PANE ZELLIJ ZELLIJ_PANE_ID ZELLIJ_SESSION_NAME; do if value=$(printenv \"$key\"); then printf '%s=%s\\n' \"$key\" \"$value\"; fi; done > {marker}; env {pinned_env} {rimz} doctor --json --no-log-text > {doctor}; printf '|done' >> {marker}; sleep 60",
+        marker = shlex::try_quote(&marker.to_string_lossy()).expect("shell quote marker"),
+        doctor = shlex::try_quote(&doctor.to_string_lossy()).expect("shell quote doctor marker"),
+        rimz =
+            shlex::try_quote(&command.get_program().to_string_lossy()).expect("shell quote rimz"),
+    )
+}
+
+fn check_pane_mux(mux: &str, marker: &Path, doctor: &Path, failures: &mut Vec<String>) {
+    let seen = wait_for_marker(marker);
+    let names = seen
+        .lines()
+        .filter_map(|line| line.split_once('='))
+        .map(|(key, _)| key)
+        .collect::<Vec<_>>();
+    let expected: &[&str] = match mux {
+        "tmux" => &["TMUX", "TMUX_PANE"],
+        "zellij" => &["ZELLIJ", "ZELLIJ_PANE_ID", "ZELLIJ_SESSION_NAME"],
+        _ => unreachable!("the test drives only tmux and Zellij"),
+    };
+    if names != expected {
+        failures.push(format!(
+            "{mux} pane environment: expected {expected:?}, got {seen:?}"
+        ));
+    }
+    let report: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(doctor).expect("doctor marker"))
+            .expect("doctor JSON");
+    let selected = &report["mux"]["ready"]["name"];
+    if selected != mux {
+        failures.push(format!(
+            "{mux} pane resolved backend: expected {mux}, got {selected}"
+        ));
+    }
+}
+
 fn wait_for_marker(marker: &Path) -> String {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     loop {
