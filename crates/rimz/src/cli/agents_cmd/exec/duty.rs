@@ -41,6 +41,15 @@ pub(super) fn command(
     session_name: String,
     duty: Duty,
 ) -> Result<Command> {
+    #[cfg(feature = "testkit")]
+    if let Some(path) = std::env::var_os("RIMZ_TEST_SUPERVISE_DUTY_MARKER")
+        && let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+    {
+        let _ = std::io::Write::write_all(&mut file, b"duty\n");
+    }
     let request = SuperviseDutyRequest {
         workspace_id,
         session_name,

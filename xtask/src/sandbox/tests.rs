@@ -245,6 +245,7 @@ fn test_env_drops_room_session_keys_but_keeps_sandbox_and_build_inputs() {
         "ZELLIJ_CONFIG_DIR",
         "RIMZ_PRICING_JSON_PATH",
         "RIMZ_BUILD_VERSION_OVERRIDE",
+        "RIMZ_TEST_PARK_BUDGET_MIB",
         "CODEX_HOME",
         "CLAUDE_CONFIG_DIR",
         "PI_CODING_AGENT_SESSION_DIR",

@@ -3,6 +3,57 @@ use std::path::{Path, PathBuf};
 use super::*;
 
 #[test]
+fn thin_park_rejects_store_entry_points_but_leaves_event_follower_alone() {
+    let root = temp_repo_root("thin-park");
+    let relatives = [
+        "crates/rimz/src/cli/agents_cmd/exec/supervisor.rs",
+        "crates/rimz/src/harness/parent_watch.rs",
+        "crates/rimz/src/child_process.rs",
+        "crates/rimz/src/store/follow.rs",
+    ];
+    for relative in relatives {
+        let path = root.join(relative);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "// thin\n").unwrap();
+    }
+    for relative in relatives {
+        let path = root.join(relative);
+        for entry in [
+            concat!("Store::", "open"),
+            concat!("open_", "store("),
+            concat!("runtime_", "projection("),
+            concat!("snapshot_", "cached("),
+            concat!("Ctx::", "for_workspace("),
+            concat!("catch_up_", "rollup("),
+            concat!("lifecycle_follow_", "seed("),
+        ] {
+            std::fs::write(&path, format!("// {entry}\n")).unwrap();
+            assert!(
+                ensure_thin_park_image(&root).is_err(),
+                "{relative} admitted {entry}"
+            );
+        }
+        std::fs::write(&path, "// thin\nmod tests { Store::open(); }\n").unwrap();
+    }
+    std::fs::write(
+        root.join(relatives[3]),
+        "// LaunchTail\nstruct FollowState;\nimpl EventFollower {\n    fn open() { Store::open(); }\n}\n",
+    )
+    .unwrap();
+    ensure_thin_park_image(&root).unwrap();
+    std::fs::write(
+        root.join(relatives[3]),
+        "// LaunchTail\nstruct FollowState;\nimpl EventFollower {\n    fn open() {}\n    fn poll() { Store::open(); }\n}\n",
+    )
+    .unwrap();
+    assert!(
+        ensure_thin_park_image(&root).is_err(),
+        "only EventFollower::open may fold"
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn sidebar_fold_requires_caller_state() {
     let root = temp_repo_root("fold-state");
     for relative in [

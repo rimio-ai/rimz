@@ -9,6 +9,312 @@ use rimz::store::writer::AgentLifecycleIntent;
 #[cfg(target_os = "linux")]
 use rimz::testkit::sandbox::{SandboxSpec, sandbox_processes};
 
+#[test]
+fn parked_wrapper_holds_under_8_mib() {
+    if !cfg!(target_os = "linux") {
+        crate::common::skip("Linux smaps_rollup not available");
+        return;
+    }
+    require_tmux!();
+    if git_missing() {
+        return;
+    }
+    let budget_mib = std::env::var("RIMZ_TEST_PARK_BUDGET_MIB")
+        .map_or(8, |value| value.parse::<u64>().expect("park budget in MiB"));
+    for subagent in [false, true] {
+        let env = Env::new();
+        init_repo(&env.project_root);
+        env.rimz()
+            .args(["worktree", "new", "park-budget"])
+            .assert_success_within_timeout("create budget worktree");
+        let worktree = env.home_root.join("project-worktrees/park-budget");
+        env.install_agent_hooks("claude");
+        let workspace = env.resolve_workspace(&env.project_root);
+        let server = TmuxServer::in_runtime_root(&env.runtime_root);
+        server
+            .backend
+            .ensure_session(&session_opts(
+                &workspace.session_name,
+                workspace.workspace_id.clone(),
+                &workspace.project_root,
+                &workspace.worktree_root,
+                Some((160, 40)),
+            ))
+            .expect("ensure budget room");
+        let parent_pane = PaneId::from_parts(
+            MuxName::Tmux,
+            server.display(&workspace.session_name, "#{pane_id}"),
+        );
+        let agent_bin = write_sleeping_agent_shim(&env, "claude");
+        trust_claude_shim_path(&env, &agent_bin);
+        let ready = env.home_root.join("budget-ready");
+        let probes = env.home_root.join("budget-probes");
+        let duties = env.home_root.join("budget-duties");
+        let mut command =
+            tmux_agent_exec_command(&env, &agent_bin, &ready, "budget-provider", &worktree);
+        let request_index = command
+            .iter()
+            .position(|arg| arg == "--request")
+            .expect("request flag")
+            + 1;
+        let mut request = rimz::harness::launch::decode_exec_envelope(
+            "claude",
+            Some(&worktree),
+            &command[request_index],
+        )
+        .expect("budget request")
+        .request()
+        .clone();
+        request.isolation_default = Some(rimz::config::Isolation::Host);
+        request.close_pane_on_exit = false;
+        if subagent {
+            let store = env.store();
+            let kind = AgentKind::new_unchecked("claude");
+            let ancestry = LaunchParams {
+                parent_agent_kind: Some(kind.clone()),
+                parent_agent_id: Some("launch_budget_parent".into()),
+                launch_depth: Some(1),
+                ..Default::default()
+            };
+            for (id, name, pane, launch) in [
+                (
+                    "launch_budget_parent",
+                    "budget-parent",
+                    Some(parent_pane.clone()),
+                    LaunchParams::default(),
+                ),
+                (
+                    "launch_budget_child",
+                    "budget-child",
+                    None,
+                    ancestry.clone(),
+                ),
+            ] {
+                store
+                    .append_event(&EventEnvelope::agent_launched(
+                        workspace.workspace_id.clone(),
+                        &workspace.session_name,
+                        &kind,
+                        AgentLaunchPayload {
+                            agent_id: id.into(),
+                            launch_id: Some(id.into()),
+                            agent_name: name.into(),
+                            agent_name_explicit: false,
+                            launch: launch.clone(),
+                            state: AgentLaunchState::Bound,
+                            run_id: None,
+                            pane_id: pane.clone(),
+                            runtime_owner: None,
+                            worktree_path: Some(env.project_root.display().to_string()),
+                            worktree_branch: None,
+                            prompt: None,
+                            description: None,
+                        },
+                    ))
+                    .expect("seed budget launch");
+                let mut observation =
+                    AgentLifecycleObservation::new(Some(id.into()), LifecycleSignal::Registered);
+                observation.launch = launch;
+                observation.pane_id = pane;
+                store
+                    .append_agent_lifecycle(AgentLifecycleIntent {
+                        session_name: &workspace.session_name,
+                        agent_kind: kind.clone(),
+                        event_name: "budget",
+                        observation: &observation,
+                        spawned_subagents: &[],
+                    })
+                    .expect("register budget launch");
+            }
+            let mut record = rimz::store::run::RunRecord::new(
+                workspace.workspace_id.clone(),
+                kind,
+                rimz::agents::PermissionMode::Auto,
+                "budget".into(),
+                env.project_root.clone(),
+            );
+            record.subagent = true;
+            rimz::harness::run::create(store.paths(), &record).expect("create budget run");
+            request.action = rimz::harness::launch::ExecAction::Launch {
+                prompt: Some("budget".into()),
+                extra_args: Vec::new(),
+            };
+            request.run_id = Some(record.run_id);
+            request.subagent = true;
+            request.identity.launch_id = Some("launch_budget_child".into());
+            request.identity.name = Some("budget-child".into());
+            request.identity.params = ancestry;
+        }
+        command[request_index] = serde_json::to_string(&request).expect("encode budget request");
+        command.splice(
+            1..1,
+            [
+                format!("RIMZ_BIN={}", env.rimz_bin().display()),
+                "RIMZ_TEST_SUBAGENT_PARENT_PROBE_INTERVAL_MS=1000".into(),
+                format!("RIMZ_TEST_PARENT_PROBE_MARKER={}", probes.display()),
+                format!("RIMZ_TEST_SUPERVISE_DUTY_MARKER={}", duties.display()),
+            ],
+        );
+        let (_stub_dir, stub) = sidebar_command_stub();
+        server.tmux(&["set-option", "-g", "remain-on-exit", "on"]);
+        server
+            .backend
+            .open_tab(&TabOptions {
+                env: Default::default(),
+                title: "#park-budget".into(),
+                panes: LayoutPanes {
+                    columns: vec![tiled_column(vec![PaneCmd {
+                        argv: command,
+                        name: None,
+                    }])],
+                    focused_pane: 0,
+                },
+                focus: false,
+                dock_sidebar: false,
+                after: None,
+                sidebar: SidebarPaneOptions {
+                    runtime: env.runtime_paths(),
+                    workspace_id: workspace.workspace_id.clone(),
+                    project_root: workspace.project_root.clone(),
+                    cwd: env.project_root.clone(),
+                    ..sidebar_opts(
+                        server._tempdir.path(),
+                        &workspace.session_name,
+                        stub,
+                        Some(160),
+                    )
+                },
+            })
+            .expect("open parked budget provider");
+        let pane = list_session_panes(&server, &workspace.session_name)
+            .into_iter()
+            .find(|pane| pane.pane_id != parent_pane)
+            .expect("budget provider pane");
+        let deadline = Instant::now() + Duration::from_secs(15);
+        while !ready.exists() {
+            assert!(
+                Instant::now() < deadline,
+                "budget provider did not start: {}",
+                server.stdout(&["capture-pane", "-p", "-t", pane.pane_id.raw(),])
+            );
+            thread::sleep(Duration::from_millis(25));
+        }
+        let pane_pid: u32 = server
+            .display(pane.pane_id.raw(), "#{pane_pid}")
+            .parse()
+            .expect("pane pid");
+        let deadline = Instant::now() + Duration::from_secs(15);
+        let wrapper = loop {
+            let mut descendants = vec![pane_pid];
+            let mut wrapper = None;
+            while let Some(pid) = descendants.pop() {
+                if rimz::proc::argv(pid)
+                    .is_some_and(|argv| argv.iter().any(|arg| arg == "--supervise"))
+                {
+                    wrapper = Some(pid);
+                    break;
+                }
+                descendants.extend(rimz::proc::children(pid));
+            }
+            if let Some(wrapper) = wrapper {
+                break wrapper;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "wrapper never entered thin image"
+            );
+            thread::sleep(Duration::from_millis(25));
+        };
+        if subagent {
+            let argv = rimz::proc::argv(wrapper).expect("parked argv");
+            let state_index = argv.iter().position(|arg| arg == "--supervise").unwrap() + 1;
+            let state: serde_json::Value = serde_json::from_reader(
+                std::fs::File::open(&argv[state_index]).expect("park state"),
+            )
+            .expect("park document");
+            assert!(
+                !state["watchdog"].is_null(),
+                "subagent must seed a watchdog: {state}"
+            );
+        }
+        thread::sleep(Duration::from_secs(5));
+        if subagent {
+            let deadline = Instant::now() + Duration::from_secs(15);
+            while std::fs::read_to_string(&probes).map_or(0, |text| text.lines().count()) < 2 {
+                assert!(
+                    Instant::now() < deadline,
+                    "watchdog must complete at least two real probes"
+                );
+                thread::sleep(Duration::from_millis(25));
+            }
+            let store = env.store();
+            let mut cache: serde_json::Value = serde_json::from_reader(
+                std::fs::File::open(&store.paths().rollup_cache).expect("rollup cache"),
+            )
+            .expect("rollup document");
+            cache.as_object_mut().expect("rollup object").insert(
+                "budget_padding".into(),
+                serde_json::json!("x".repeat(21 * 1024 * 1024)),
+            );
+            rimz::disk::atomic::write_temp_then_rename_cache_compact(
+                &store.paths().rollup_cache,
+                &cache,
+            )
+            .expect("large ignored rollup payload");
+            let baseline = std::fs::read_to_string(&probes)
+                .expect("completed probes")
+                .lines()
+                .count();
+            let deadline = Instant::now() + Duration::from_secs(60);
+            while std::fs::read_to_string(&probes).map_or(0, |text| text.lines().count())
+                < baseline + 3
+            {
+                assert!(
+                    Instant::now() < deadline,
+                    "watchdog must complete three probes after the large rollup publish"
+                );
+                thread::sleep(Duration::from_millis(25));
+            }
+        }
+        assert!(
+            !duties.exists(),
+            "quiet park must spawn no store-owning duty"
+        );
+        let rollup =
+            std::fs::read_to_string(format!("/proc/{wrapper}/smaps_rollup")).expect("wrapper PSS");
+        let field = |key: &str| -> u64 {
+            rollup
+                .lines()
+                .find_map(|line| {
+                    line.strip_prefix(key)
+                        .and_then(|value| value.split_whitespace().next())
+                        .and_then(|value| value.parse().ok())
+                })
+                .expect("smaps_rollup field")
+        };
+        let pss_kib = field("Pss:");
+        let anonymous_kib = field("Pss_Anon:");
+        println!(
+            "parked wrapper {}: {anonymous_kib} KiB Pss_Anon; {pss_kib} KiB Pss",
+            if subagent { "watchdog" } else { "plain" }
+        );
+        if anonymous_kib > budget_mib * 1024 {
+            println!(
+                "wrapper mappings:\n{}",
+                std::fs::read_to_string(format!("/proc/{wrapper}/smaps"))
+                    .expect("wrapper mappings")
+            );
+        }
+        assert!(
+            anonymous_kib <= budget_mib * 1024,
+            "parked wrapper {anonymous_kib} KiB private memory exceeds {budget_mib} MiB; load {}",
+            std::fs::read_to_string("/proc/loadavg")
+                .unwrap_or_default()
+                .trim()
+        );
+    }
+}
+
 fn write_sleeping_agent_shim(env: &Env, agent: &str) -> PathBuf {
     let dir = env.home_root.join("agent-bin");
     std::fs::create_dir_all(&dir).expect("mkdir agent bin");

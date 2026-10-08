@@ -38,6 +38,7 @@ pub(crate) fn invariants(root: &Path) -> Result<()> {
     let files = tracked_text_files(root)?;
     ensure_banned_imports(root, &files)?;
     ensure_classed_paths(root, &files)?;
+    ensure_thin_park_image(root)?;
     ensure_hook_stdio(root, &files)?;
     ensure_normalized_agent_process_decisions(root, &files)?;
     ensure_private_agent_adapter_boundary(root, &files)?;
@@ -77,6 +78,67 @@ pub(crate) fn invariants(root: &Path) -> Result<()> {
     ensure_stable_release_dispatches_docs(root)?;
     ensure_inline_tests_stay_small(&files)?;
     ensure_deep_journeys_name_their_backend(root)?;
+    Ok(())
+}
+
+fn ensure_thin_park_image(root: &Path) -> Result<()> {
+    use syn::spanned::Spanned;
+
+    for relative in [
+        "crates/rimz/src/cli/agents_cmd/exec/supervisor.rs",
+        "crates/rimz/src/harness/parent_watch.rs",
+        "crates/rimz/src/child_process.rs",
+        "crates/rimz/src/store/follow.rs",
+    ] {
+        let path = root.join(relative);
+        let source = fs::read_to_string(&path)
+            .with_context(|| format!("read thin-park source {}", path.display()))?;
+        // EventFollower::open keeps its fold; LaunchTail and shared readers may not fold.
+        let exempt = if relative.ends_with("/follow.rs") {
+            syn::parse_file(&source)?.items.into_iter().find_map(|item| {
+                let syn::Item::Impl(item) = item else {
+                    return None;
+                };
+                if !matches!(item.self_ty.as_ref(), syn::Type::Path(ty) if ty.path.is_ident("EventFollower")) {
+                    return None;
+                }
+                item.items.iter().find_map(|method| match method {
+                    syn::ImplItem::Fn(method) if method.sig.ident == "open" => {
+                        Some(method.span().start().line..=method.span().end().line)
+                    }
+                    _ => None,
+                })
+            })
+        } else {
+            None
+        };
+        for (index, line) in lines_outside_inline_tests(&source) {
+            let line_number = index + 1;
+            if exempt
+                .as_ref()
+                .is_some_and(|range| range.contains(&line_number))
+            {
+                continue;
+            }
+            if [
+                concat!("Store::", "open"),
+                concat!("open_", "store("),
+                concat!("runtime_", "projection("),
+                concat!("snapshot_", "cached("),
+                concat!("Ctx::", "for_workspace("),
+                concat!("catch_up_", "rollup("),
+                concat!("lifecycle_follow_", "seed("),
+            ]
+            .iter()
+            .any(|entry| line.contains(entry))
+            {
+                bail!(
+                    "{}:{line_number}: thin park must not open or fold a store",
+                    path.display()
+                );
+            }
+        }
+    }
     Ok(())
 }
 
