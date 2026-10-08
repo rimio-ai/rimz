@@ -244,6 +244,31 @@ fn failed_fetch_is_throttled_with_and_without_stale_catalog() {
 }
 
 #[test]
+fn absent_family_cooldown_reuses_an_alias_neutral_error() {
+    let mut fixture = Fixture::new(Some(Vec::new()));
+    let first = fixture.resolve("astra", None);
+    assert_eq!(first.rung, ModelAliasRung::Baked);
+    assert_eq!(
+        first.refresh_failure.as_deref(),
+        Some("fresh catalog has no matching family")
+    );
+    assert_eq!(
+        fixture.cache()["failed_error"],
+        "fresh catalog has no matching family"
+    );
+    let second = fixture.resolve("luna", None);
+    assert_eq!(second.rung, ModelAliasRung::Baked);
+    assert!(second.refresh_failure.is_none());
+    assert_eq!(fixture.source.calls, 1);
+    assert_eq!(
+        second.warnings,
+        [
+            "codex alias luna is using baked fallback gpt-6-luna: fresh catalog has no matching family"
+        ]
+    );
+}
+
+#[test]
 fn baked_fallback_names_the_error_without_generic_login_advice() {
     let result = Fixture::new(None).resolve("sol", None);
     assert_eq!(
@@ -408,11 +433,11 @@ fn absent_family_uses_stale_family_before_baked() {
     assert_eq!(baked.rung, ModelAliasRung::Baked);
     assert_eq!(
         stale.refresh_failure.as_deref(),
-        Some("fresh catalog has no sol family")
+        Some("fresh catalog has no matching family")
     );
     assert_eq!(
         baked.refresh_failure.as_deref(),
-        Some("fresh catalog has no sol family")
+        Some("fresh catalog has no matching family")
     );
     assert!(baked.movement.is_none());
 }
