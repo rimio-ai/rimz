@@ -5,7 +5,7 @@ use crate::sidebar_pane::app::fixtures::{agent_snapshot, pane, snapshot, workspa
 fn animation_gate_uses_observed_phase_for_money_and_scrollbar() {
     let ws = workspace();
     let snapshot = snapshot(&ws);
-    let mut ui = UiState::default();
+    let mut ui = selected_ui();
     ui.theme(&snapshot.theme);
     ui.tally.observe(1.0, 0);
     ui.tally.observe(5.0, 1);
@@ -43,6 +43,7 @@ fn pet_cadence_beats_breath_but_yields_to_fast_and_money() {
         .unwrap()
         .status = crate::agents::AgentStatus::Waiting;
     let mut ui = UiState {
+        selected_index: Some(0),
         pet: Some(crate::sidebar_pane::pets::PetView {
             body: None,
             caption: None,
@@ -136,16 +137,16 @@ fn frame_interval_uses_breath_for_pulse_and_fast_for_work() {
         pr_number: None,
         pr_url: None,
     }];
-    assert!(animation_interval(&slow, &UiState::default(), 0, false).is_some());
+    assert!(animation_interval(&slow, &selected_ui(), 0, false).is_some());
     assert_eq!(
-        animation_interval(&slow, &UiState::default(), 0, false).expect("animated"),
+        animation_interval(&slow, &selected_ui(), 0, false).expect("animated"),
         crate::sidebar::timing::animation_frame(
             crate::config::DisplayConfig::default().resolved_refresh_ms()
         ),
         "a cold theme cache stays on the safe base grid until the first paint warms it"
     );
 
-    let mut ui = UiState::default();
+    let mut ui = selected_ui();
     ui.theme(&slow.theme);
 
     assert_eq!(
@@ -184,10 +185,7 @@ fn open_delegation_motion_drives_the_animation_gate_under_a_sleeping_parent() {
             description: None,
             started_at: snapshot.now,
         });
-    let mut ui = UiState {
-        selected_index: 0,
-        ..Default::default()
-    };
+    let mut ui = selected_ui();
     ui.theme(&snapshot.theme);
     let fast = animation_interval(&snapshot, &ui, ui.animation_phase, false).expect("animated");
     assert_eq!(
@@ -206,7 +204,7 @@ fn open_delegation_motion_drives_the_animation_gate_under_a_sleeping_parent() {
     ui.delegation_overrides.insert(row_id.clone(), false);
     assert!(animation_interval(&snapshot, &ui, 0, false).is_none());
     ui.delegation_overrides.clear();
-    ui.selected_index = usize::MAX;
+    ui.selected_index = Some(usize::MAX);
     assert!(animation_interval(&snapshot, &ui, 0, false).is_none());
     ui.delegation_overrides.insert(row_id, true);
     assert!(animation_interval(&snapshot, &ui, 0, false).is_some());
@@ -315,10 +313,7 @@ fn selected_blank_idle_agent_keeps_breath_grid_awake() {
     agent.description = None;
     agent.prompt = None;
 
-    let mut selected = UiState {
-        selected_index: 0,
-        ..Default::default()
-    };
+    let mut selected = selected_ui();
     selected.theme(&snapshot.theme);
     assert!(animation_interval(&snapshot, &selected, 0, false).is_some());
     assert_eq!(
@@ -328,7 +323,7 @@ fn selected_blank_idle_agent_keeps_breath_grid_awake() {
     );
 
     let mut off_selection = UiState {
-        selected_index: 99,
+        selected_index: Some(99),
         ..Default::default()
     };
     off_selection.theme(&snapshot.theme);
@@ -359,10 +354,7 @@ fn expanded_blank_team_member_keeps_breath_grid_awake() {
     teammate_card.prompt = None;
     group.rows.push(teammate);
 
-    let mut ui = UiState {
-        selected_index: 0,
-        ..Default::default()
-    };
+    let mut ui = selected_ui();
     ui.theme(&snapshot.theme);
 
     assert!(animation_interval(&snapshot, &ui, 0, false).is_some());
@@ -377,6 +369,7 @@ fn help_popup_keeps_animation_grid_hot() {
     let ws = workspace();
     let snapshot = snapshot(&ws);
     let mut ui = UiState {
+        selected_index: Some(0),
         help_visible: true,
         ..Default::default()
     };
@@ -397,6 +390,7 @@ fn pet_frame_interval_uses_pet_cadence_and_honours_static_motion() {
     let mut snapshot = snapshot(&ws);
     snapshot.theme.pets.enabled = true;
     let mut ui = UiState {
+        selected_index: Some(0),
         pet: Some(crate::sidebar_pane::pets::PetView {
             body: Some(crate::sidebar_pane::pets::PetBody::Cell(vec![vec![
                 crate::sidebar_pane::pets::PetCell {
@@ -447,6 +441,7 @@ fn active_alert_suppresses_hidden_pet_animation_cadence() {
     let mut snapshot = snapshot(&ws);
     snapshot.theme.pets.enabled = true;
     let mut ui = UiState {
+        selected_index: Some(0),
         pet: Some(crate::sidebar_pane::pets::PetView {
             body: Some(crate::sidebar_pane::pets::PetBody::Cell(vec![vec![
                 crate::sidebar_pane::pets::PetCell {
@@ -637,15 +632,12 @@ fn expanded_row_awaiting_first_prompt_tracks_selected_bare_idle_card() {
 
     assert!(expanded_row_awaiting_first_prompt(
         &bare_idle,
-        &UiState {
-            selected_index: 0,
-            ..Default::default()
-        }
+        &selected_ui()
     ));
     assert!(!expanded_row_awaiting_first_prompt(
         &bare_idle,
         &UiState {
-            selected_index: 99,
+            selected_index: Some(99),
             ..Default::default()
         }
     ));
@@ -660,10 +652,7 @@ fn expanded_row_awaiting_first_prompt_tracks_selected_bare_idle_card() {
     )]);
     assert!(!expanded_row_awaiting_first_prompt(
         &described,
-        &UiState {
-            selected_index: 0,
-            ..Default::default()
-        }
+        &selected_ui()
     ));
 
     let mut used = snapshot_with(vec![agent(
@@ -679,13 +668,7 @@ fn expanded_row_awaiting_first_prompt_tracks_selected_bare_idle_card() {
         .expect("agent row")
         .usage
         .total_tokens = Some(1);
-    assert!(!expanded_row_awaiting_first_prompt(
-        &used,
-        &UiState {
-            selected_index: 0,
-            ..Default::default()
-        }
-    ));
+    assert!(!expanded_row_awaiting_first_prompt(&used, &selected_ui()));
 
     let running = snapshot_with(vec![agent(
         "claude-1",
@@ -697,10 +680,7 @@ fn expanded_row_awaiting_first_prompt_tracks_selected_bare_idle_card() {
     )]);
     assert!(!expanded_row_awaiting_first_prompt(
         &running,
-        &UiState {
-            selected_index: 0,
-            ..Default::default()
-        }
+        &selected_ui()
     ));
 }
 
@@ -733,7 +713,7 @@ fn selected_pet_action_follows_the_focused_card() {
         (AgentStatus::Running, crate::agents::TurnPhase::Acting),
     ]);
     let ui = UiState {
-        selected_index: 0,
+        selected_index: Some(0),
         ..UiState::default()
     };
     assert_eq!(
@@ -741,7 +721,7 @@ fn selected_pet_action_follows_the_focused_card() {
         crate::sidebar_pane::pets::PetAction::Ask
     );
     let ui = UiState {
-        selected_index: 1,
+        selected_index: Some(1),
         ..UiState::default()
     };
     assert_eq!(
@@ -749,7 +729,7 @@ fn selected_pet_action_follows_the_focused_card() {
         crate::sidebar_pane::pets::PetAction::Thinking
     );
     let ui = UiState {
-        selected_index: 2,
+        selected_index: Some(2),
         ..UiState::default()
     };
     assert_eq!(
@@ -763,7 +743,7 @@ fn selected_pet_action_follows_the_focused_card() {
         .expect("agent row")
         .compacting = true;
     assert_eq!(
-        selected_pet_action(&compacting, &UiState::default()),
+        selected_pet_action(&compacting, &selected_ui()),
         crate::sidebar_pane::pets::PetAction::Review
     );
     let mut compacting_waiting =
@@ -773,7 +753,7 @@ fn selected_pet_action_follows_the_focused_card() {
         .expect("agent row")
         .compacting = true;
     assert_eq!(
-        selected_pet_action(&compacting_waiting, &UiState::default()),
+        selected_pet_action(&compacting_waiting, &selected_ui()),
         crate::sidebar_pane::pets::PetAction::Review
     );
 
@@ -806,18 +786,18 @@ fn selected_pet_action_follows_the_focused_card() {
             registered_at: Some(fixed_now()),
         });
     assert_eq!(
-        selected_pet_action(&subagent, &UiState::default()),
+        selected_pet_action(&subagent, &selected_ui()),
         crate::sidebar_pane::pets::PetAction::Waiting
     );
 
     let parked = statuses(&[(AgentStatus::Running, crate::agents::TurnPhase::Parked)]);
     assert_eq!(
-        selected_pet_action(&parked, &UiState::default()),
+        selected_pet_action(&parked, &selected_ui()),
         crate::sidebar_pane::pets::PetAction::Idle
     );
     let sleeping = statuses(&[(AgentStatus::Sleeping, crate::agents::TurnPhase::Parked)]);
     assert_eq!(
-        selected_pet_action(&sleeping, &UiState::default()),
+        selected_pet_action(&sleeping, &selected_ui()),
         crate::sidebar_pane::pets::PetAction::Idle
     );
 }
@@ -851,7 +831,7 @@ fn selected_pet_action_follows_process_cards() {
     }];
 
     assert_eq!(
-        selected_pet_action(&snapshot, &UiState::default()),
+        selected_pet_action(&snapshot, &selected_ui()),
         crate::sidebar_pane::pets::PetAction::Running
     );
     snapshot.worktree_groups[0].rows[0]
@@ -859,7 +839,7 @@ fn selected_pet_action_follows_process_cards() {
         .expect("process row")
         .state = crate::store::snapshot::ProcessState::Stuck;
     assert_eq!(
-        selected_pet_action(&snapshot, &UiState::default()),
+        selected_pet_action(&snapshot, &selected_ui()),
         crate::sidebar_pane::pets::PetAction::Failed
     );
 }

@@ -32,6 +32,7 @@ fn tab_keys_cycle_the_dashboard_and_wrap() {
     let ws = workspace();
     let snapshot = tabbed_snapshot(&ws);
     let mut ui = UiState::default();
+    select_row(&mut ui, &snapshot, 0);
     // Selected row 0 is the claude agent, so the derived tab starts there.
     assert_eq!(
         render::active_dashboard_tab(&snapshot, &ui)

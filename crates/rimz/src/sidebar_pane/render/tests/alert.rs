@@ -98,6 +98,7 @@ fn active_alert_suppresses_truth_degraded_notice() {
 fn render_gate_hold_notice_keeps_room_chrome() {
     let snapshot = snapshot_with(Vec::new());
     let ui = UiState {
+        selected_index: Some(0),
         gate_notice: Some(GateNotice {
             rule: crate::diag::record::GateRule::EmptyStampedFrame,
         }),
@@ -116,6 +117,7 @@ fn render_gate_hold_notice_keeps_room_chrome() {
 fn active_alert_suppresses_gate_hold_notice() {
     let snapshot = snapshot_with(Vec::new());
     let ui = UiState {
+        selected_index: Some(0),
         gate_notice: Some(GateNotice {
             rule: crate::diag::record::GateRule::AgentDemotedToProcess,
         }),

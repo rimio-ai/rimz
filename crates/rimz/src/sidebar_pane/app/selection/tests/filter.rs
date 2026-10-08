@@ -3,8 +3,8 @@ use std::time::Duration;
 
 fn assert_search_selection(ui: &UiState, snapshot: &SidebarSnapshot) {
     assert_eq!(
-        ui.visible_roster(snapshot)
-            .pane_at_ordinal(ui.selected_index),
+        ui.selected_index
+            .and_then(|index| ui.visible_roster(snapshot).pane_at_ordinal(index)),
         ui.selected_pane,
         "Enter must focus the highlighted match"
     );
@@ -125,7 +125,7 @@ fn search_edits_select_first_match_and_commit_focuses_it() {
     use ratatui::crossterm::event::KeyCode;
     let snapshot = clickable_block_snapshot(&workspace());
     let mut ui = UiState {
-        selected_index: 1,
+        selected_index: Some(1),
         selected_pane: Some(PaneId::from_parts(MuxName::Zellij, "terminal_10")),
         manual_scroll: Some(ManualScroll {
             selection_at_start: None,
@@ -138,7 +138,7 @@ fn search_edits_select_first_match_and_commit_focuses_it() {
     }
     let top = PaneId::from_parts(MuxName::Zellij, "terminal_9");
     assert_eq!(ui.selected_pane, Some(top.clone()));
-    assert_eq!(ui.selected_index, 0);
+    assert_eq!(ui.selected_index, Some(0));
     assert_eq!(ui.manual_scroll, None);
     assert_eq!(ui.browse, None);
     assert_eq!(ui.visible_roster(&snapshot).len(), 1);
@@ -180,7 +180,7 @@ fn search_cancel_with_no_committed_query_reanchors_without_a_sync() {
     }
     let matched = PaneId::from_parts(MuxName::Zellij, "terminal_10");
     assert_eq!(ui.selected_pane, Some(matched.clone()));
-    assert_eq!(ui.selected_index, 0);
+    assert_eq!(ui.selected_index, Some(0));
 
     let outcome = search_key(&mut ui, &snapshot, KeyCode::Esc);
     assert!(outcome.redraw);
@@ -191,7 +191,8 @@ fn search_cancel_with_no_committed_query_reanchors_without_a_sync() {
     );
     assert_eq!(ui.selected_pane, Some(baseline));
     assert_eq!(
-        ui.selected_index, 0,
+        ui.selected_index,
+        Some(0),
         "cancel follows the baseline like own-pane unfocus"
     );
 }
@@ -383,18 +384,18 @@ fn search_navigation_click_scroll_and_zero_match_commit() {
                 KeyModifiers::CONTROL
             },
         );
-        assert_eq!(ui.selected_index, 1);
+        assert_eq!(ui.selected_index, Some(1));
         search_press(
             &mut ui,
             &snapshot,
             KeyCode::Char('p'),
             KeyModifiers::CONTROL,
         );
-        assert_eq!(ui.selected_index, 0);
+        assert_eq!(ui.selected_index, Some(0));
     }
     search_key(&mut ui, &snapshot, KeyCode::Down);
     search_key(&mut ui, &snapshot, KeyCode::Up);
-    assert_eq!(ui.selected_index, 0);
+    assert_eq!(ui.selected_index, Some(0));
     assert_eq!(
         search_key(&mut ui, &snapshot, KeyCode::Left),
         InputOutcome::default()
@@ -530,7 +531,7 @@ fn worktree_keys_respect_the_make_up_filter() {
     let snapshot = filterable_snapshot(&ws);
     let failed = PaneId::from_parts(MuxName::Zellij, "terminal_3");
     let mut ui = UiState {
-        selected_index: 0,
+        selected_index: Some(0),
         selected_pane: Some(failed),
         make_up_filter: BodyLens::from(BodyFilter::Status(AgentStatus::Failed)),
         ..Default::default()
@@ -540,7 +541,8 @@ fn worktree_keys_respect_the_make_up_filter() {
 
     assert_eq!(outcome, InputOutcome::default());
     assert_eq!(
-        ui.selected_index, 0,
+        ui.selected_index,
+        Some(0),
         "only one group remains under the failed filter"
     );
     assert_eq!(
@@ -1246,7 +1248,7 @@ fn filtered_out_selection_drops_and_reseats_from_the_held_baseline() {
     assert_eq!(ui.selected_pane, Some(running.clone()));
 
     // Filtering to `failed` leaves the running highlight no row: the visible
-    // pick drops to a clamped index, but the baseline — room membership, not
+    // pick drops its index, but the baseline — room membership, not
     // body membership — holds through every fold.
     toggle_make_up_filter(&mut ui, &snapshot, BodyFilter::Status(AgentStatus::Failed));
     assert_eq!(
@@ -1254,7 +1256,7 @@ fn filtered_out_selection_drops_and_reseats_from_the_held_baseline() {
         BodyLens::from(BodyFilter::Status(AgentStatus::Failed))
     );
     assert_eq!(ui.selected_pane, None);
-    assert_eq!(ui.selected_index, 0);
+    assert_eq!(ui.selected_index, None);
     reconcile_selection(&mut ui, &snapshot, None);
     assert_eq!(ui.baseline_pane, Some(running.clone()));
     assert_eq!(ui.selected_pane, None, "the hidden highlight stays dropped");
@@ -1264,7 +1266,7 @@ fn filtered_out_selection_drops_and_reseats_from_the_held_baseline() {
     assert_eq!(ui.make_up_filter, BodyLens::default());
     reconcile_selection(&mut ui, &snapshot, None);
     assert_eq!(ui.selected_pane, Some(running));
-    assert_eq!(ui.selected_index, 0);
+    assert_eq!(ui.selected_index, Some(0));
 }
 #[test]
 fn focus_jumps_keep_the_make_up_filter() {
@@ -1288,6 +1290,7 @@ fn focus_jumps_keep_the_make_up_filter() {
 
     // Enter focuses the highlighted filtered row with the same pure effect.
     let mut ui = UiState {
+        selected_index: Some(0),
         make_up_filter: BodyLens::from(BodyFilter::Status(AgentStatus::Failed)),
         selected_pane: Some(failed.clone()),
         ..Default::default()
@@ -1298,7 +1301,11 @@ fn focus_jumps_keep_the_make_up_filter() {
         ui.make_up_filter,
         BodyLens::from(BodyFilter::Status(AgentStatus::Failed))
     );
-    assert_eq!(ui.selected_index, 0, "the filtered ordinal stays anchored");
+    assert_eq!(
+        ui.selected_index,
+        Some(0),
+        "the filtered ordinal stays anchored"
+    );
 }
 
 #[test]
@@ -1323,7 +1330,7 @@ fn inbox_jumps_keep_the_make_up_filter_in_both_directions() {
 
     let filter = BodyLens::from(BodyFilter::Unread);
     let mut ui = UiState {
-        selected_index: 0,
+        selected_index: Some(0),
         selected_pane: Some(PaneId::from_parts(MuxName::Zellij, "terminal_1")),
         make_up_filter: filter.clone(),
         ..Default::default()

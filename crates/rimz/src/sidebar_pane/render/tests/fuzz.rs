@@ -27,7 +27,7 @@ proptest! {
     fn adversarial_snapshot_data_does_not_panic(
         width in 0u16..=200,
         height in 0u16..=200,
-        selected_index in 0usize..64,
+        selected_index in prop::option::of(0usize..64),
         scroll_offset in 0usize..400,
         display_name in weird_text(),
         rows in prop::collection::vec(row_spec(), 0..16),

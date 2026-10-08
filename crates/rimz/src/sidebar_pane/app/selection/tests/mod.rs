@@ -123,7 +123,7 @@ fn clickable_block_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
 /// the live draw stores on `UiState`.
 fn interactions_for(snapshot: &SidebarSnapshot, selected: usize) -> render::FrameInteractions {
     let mut ui = UiState {
-        selected_index: selected,
+        selected_index: Some(selected),
         help_visible: false,
         animation_phase: 0,
         ..Default::default()

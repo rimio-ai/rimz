@@ -150,7 +150,7 @@ fn select_to_index_in(ui: &mut UiState, roster: &VisibleRoster<'_>, target: usiz
         return InputOutcome::default();
     }
     let target = target.min(len - 1);
-    if ui.selected_index == target {
+    if ui.selected_index == Some(target) {
         return InputOutcome::default();
     }
     select_row_in(ui, roster, target);
@@ -170,14 +170,17 @@ fn select_screen_edge(ui: &mut UiState, snapshot: &SidebarSnapshot, end: End) ->
 }
 
 fn select_page(ui: &mut UiState, snapshot: &SidebarSnapshot, down: bool) -> InputOutcome {
+    let Some(selected) = ui.selected_index else {
+        return select_to_index(ui, snapshot, 0);
+    };
     let Some((first, last)) = ui.interactions.visible_row_span() else {
         return InputOutcome::default();
     };
     let page = last.saturating_sub(first).saturating_add(1).max(1);
     let target = if down {
-        ui.selected_index.saturating_add(page)
+        selected.saturating_add(page)
     } else {
-        ui.selected_index.saturating_sub(page)
+        selected.saturating_sub(page)
     };
     select_to_index(ui, snapshot, target)
 }
@@ -218,25 +221,16 @@ pub(super) fn handle_key(
             effects: vec![InputEffect::Reload],
             ..InputOutcome::default()
         },
-        KeyAction::Up => {
-            if ui.selected_index > 0 {
-                let roster = ui.visible_roster(snapshot);
-                select_row_in(ui, &roster, ui.selected_index - 1);
-                begin_or_continue_browse(ui);
-                return InputOutcome::redraw();
-            }
-            InputOutcome::default()
-        }
-        KeyAction::Down => {
-            let roster = ui.visible_roster(snapshot);
-            let len = roster.len();
-            if ui.selected_index + 1 < len {
-                select_row_in(ui, &roster, ui.selected_index + 1);
-                begin_or_continue_browse(ui);
-                return InputOutcome::redraw();
-            }
-            InputOutcome::default()
-        }
+        KeyAction::Up => select_to_index(
+            ui,
+            snapshot,
+            ui.selected_index.map_or(0, |index| index.saturating_sub(1)),
+        ),
+        KeyAction::Down => select_to_index(
+            ui,
+            snapshot,
+            ui.selected_index.map_or(0, |index| index.saturating_add(1)),
+        ),
         KeyAction::WorktreeUp => select_adjacent_worktree(ui, snapshot, -1),
         KeyAction::WorktreeDown => select_adjacent_worktree(ui, snapshot, 1),
         KeyAction::Top => select_end_row(ui, snapshot, End::Top),
@@ -266,7 +260,10 @@ pub(super) fn handle_key(
         }
         KeyAction::InboxNext => inbox_jump(ui, snapshot, true),
         KeyAction::InboxPrev => inbox_jump(ui, snapshot, false),
-        KeyAction::MarkToggle => match agent_row_mark_target_at(snapshot, ui, ui.selected_index) {
+        KeyAction::MarkToggle => match ui
+            .selected_index
+            .and_then(|index| agent_row_mark_target_at(snapshot, ui, index))
+        {
             Some(target) if target.unread => InputOutcome::mark_read(target.row_id),
             Some(target) => InputOutcome::mark_unread(target.row_id),
             None => InputOutcome::default(),
@@ -524,7 +521,10 @@ fn select_adjacent_worktree(
     step: isize,
 ) -> InputOutcome {
     let roster = ui.visible_roster(snapshot);
-    let selected = ui.selected_index.min(roster.len().saturating_sub(1));
+    let Some(selected) = ui.selected_index else {
+        return select_to_index_in(ui, &roster, 0);
+    };
+    let selected = selected.min(roster.len().saturating_sub(1));
     let Some(target) = roster.neighboring_group_head(selected, step) else {
         return InputOutcome::default();
     };
@@ -539,8 +539,10 @@ fn select_adjacent_worktree(
 /// roster instead and never move the highlight. An explicit pick ends any
 /// viewport pin, so the viewport snaps back to following the selection.
 fn select_row_in(ui: &mut UiState, roster: &VisibleRoster<'_>, index: usize) {
-    ui.selected_index = index;
     ui.selected_pane = roster.pane_at_ordinal(index);
+    ui.selected_index = (ui.selected_pane.is_some()
+        || (ui.search_draft.is_some() && index < roster.len()))
+    .then_some(index);
     ui.manual_scroll = None;
 }
 
@@ -587,11 +589,14 @@ fn begin_or_continue_browse(ui: &mut UiState) {
 }
 
 fn clamp_selection_in(ui: &mut UiState, roster: &VisibleRoster<'_>) {
+    let Some(index) = ui.selected_index else {
+        return;
+    };
     let len = roster.len();
     if len == 0 {
-        ui.selected_index = 0;
-    } else if ui.selected_index >= len {
-        ui.selected_index = len - 1;
+        ui.selected_index = None;
+    } else if index >= len {
+        ui.selected_index = Some(len - 1);
     }
 }
 
@@ -706,7 +711,7 @@ fn reconcile_dashboard(ui: &mut UiState, snapshot: &SidebarSnapshot) {
 
 /// Re-derive `selected_index` from the identity-keyed `selected_pane`. When the
 /// selected pane has left the room — or the make-up filter hides its row — drop
-/// the dangling identity and clamp the index; the held baseline or the next
+/// the dangling identity and index; the held baseline or the next
 /// pick re-seats it.
 pub(super) fn anchor_selection(ui: &mut UiState, snapshot: &SidebarSnapshot) {
     let roster = ui.visible_roster(snapshot);
@@ -716,15 +721,20 @@ pub(super) fn anchor_selection(ui: &mut UiState, snapshot: &SidebarSnapshot) {
 fn anchor_selection_in(ui: &mut UiState, roster: &VisibleRoster<'_>) {
     if let Some(pane) = ui.selected_pane.clone() {
         if let Some(index) = roster.ordinal_of_pane(&pane) {
-            ui.selected_index = index;
+            ui.selected_index = Some(index);
             return;
         }
         ui.selected_pane = None;
     }
-    clamp_selection_in(ui, roster);
-    if ui.search_draft.is_some() {
-        ui.selected_pane = roster.pane_at_ordinal(ui.selected_index);
+    if ui.search_draft.is_none() {
+        ui.selected_index = None;
+        return;
     }
+    ui.selected_index = Some(ui.selected_index.unwrap_or(0));
+    clamp_selection_in(ui, roster);
+    ui.selected_pane = ui
+        .selected_index
+        .and_then(|index| roster.pane_at_ordinal(index));
 }
 
 /// The visible-row index backing `pane_id` under the lens. Pass an empty lens for room membership regardless of body narrowing, and the active lens for rendered membership.
@@ -741,7 +751,11 @@ pub(super) fn row_index_of_pane(
 /// read actionable rows (oldest first); `forward` wraps to the next, backward to
 /// the previous, and a selection outside the list enters at the first row
 /// forward or the last row backward.
-fn step_attention_in(roster: &VisibleRoster<'_>, selected: usize, forward: bool) -> Option<usize> {
+fn step_attention_in(
+    roster: &VisibleRoster<'_>,
+    selected: Option<usize>,
+    forward: bool,
+) -> Option<usize> {
     let mut candidates = roster
         .rows()
         .iter()
@@ -760,7 +774,7 @@ fn step_attention_in(roster: &VisibleRoster<'_>, selected: usize, forward: bool)
     let len = candidates.len();
     candidates
         .iter()
-        .position(|index| *index == selected)
+        .position(|index| Some(*index) == selected)
         .map(|position| {
             let stepped = if forward {
                 position + 1
@@ -793,7 +807,7 @@ fn step_attention_index(
     forward: bool,
 ) -> Option<usize> {
     let roster = VisibleRoster::new(snapshot, filter, expanded_groups, None);
-    step_attention_in(&roster, selected, forward)
+    step_attention_in(&roster, Some(selected), forward)
 }
 
 #[cfg(test)]

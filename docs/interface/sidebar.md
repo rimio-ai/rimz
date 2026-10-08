@@ -423,7 +423,30 @@ On the right: commits ahead of and behind the trunk with zero counts left out, t
 
 Pristine and merged headers show the marker alone. The trunk's own checkout shows no marker, only its commit and line figures. RimZ takes the trunk from `[sidebar] trunk`, then `main`, `master`, and the remote's default branch ([configuration](../guide/configuration.md#sidebar-rendering)).
 
-The group that holds the selection is drawn as a lane: a dim `▎` down its left edge, `🮇` down its right, and a dotted seal across its header. Inside it the selected card has bright `▌` and `▐` spines over a recessed background, subagent entries included. Other groups have a blank gutter and a header without the seal.
+The group that holds the selection is drawn as a lane: a dim `▎` down its left edge, `🮇` down its right, and a dotted seal across its header. Inside it the selected card has bright `▌` and `▐` spines over a recessed background, subagent entries included. Other groups have a blank gutter and a header without the seal. With no selection, every card rests at its configured density: no card or teammate opens by selection, and no group has a lane, spines, or a header seal. Expanded density still lists delegation entries; where a delegation header is shown, its override still controls the entries.
+
+No selection, compact cards:
+
+```
+ ⌘ query-engine
+
+ ◎ 0                                  ◇ 0 ↘ 0 ↗ 0 ◌ 0
+ ¤ 2                                            $0.00
+ ────────────────────────────────────────────────────
+ ? 0   ! 0   ⏸︎ 0   ✓ 0                ⢿ 0   ☾ 0   ○ 2
+
+ ⑂ main · forge
+ ○ planner · opus
+ ○ coder · opus
+
+
+
+ ────────────────────────────────────────────────────
+  W: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                       $0.00
+  M: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                       $0.00
+
+                                           ? for help
+```
 
 ```
 ▎⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄🮇    ← selected group: lane spine and dotted seal
@@ -679,7 +702,7 @@ These keys work while the sidebar has focus. From any other pane, `Alt+p` focuse
 
 | key | action |
 |-----|--------|
-| `j` / `k`, `↓` / `↑` | select the next or previous row, without changing focus |
+| `j` / `k`, `↓` / `↑` | select the next or previous row, without changing focus; with no selection, select the first visible row |
 | `J` / `K` | select the first row of the next or previous worktree |
 | `g` / `G` | select the first or last row |
 | `Ctrl+f` / `Ctrl+b`, `PageDown` / `PageUp` | move a page; under tmux's default prefix `Ctrl+b` never arrives, so use `PageUp` |
@@ -688,7 +711,7 @@ These keys work while the sidebar has focus. From any other pane, `Alt+p` focuse
 | `1` to `9` | focus the pane of the Nth row, counted from the top of the list |
 | `n`, `Space` | jump to the next card that needs you: unread cards oldest first, then read `?` and `!` cards oldest first |
 | `N` | the same walk, backward |
-| `m` | mark the selected card read or unread, without jumping |
+| `m` | mark the selected card read or unread, without jumping; with no selection, do nothing |
 | `M` | mark every card read |
 | `←` / `→` | switch the dashboard tab |
 | `a` / `d` | make the sidebar one step narrower or wider in every tab of the room; the width holds through terminal resizes, reloads, and reattaches until the session ends ([width rules](../guide/sidebar.md#setting-the-width)) |

@@ -16,9 +16,9 @@ fn render_gallery_draws_delimiters_between_columns() {
     let alpha = gallery_snapshot("alpha-room", "agent-alpha", "claude");
     let bravo = gallery_snapshot("bravo-room", "agent-bravo", "codex");
     let charlie = gallery_snapshot("charlie-room", "agent-charlie", "pi");
-    let mut alpha_ui = UiState::default();
-    let mut bravo_ui = UiState::default();
-    let mut charlie_ui = UiState::default();
+    let mut alpha_ui = selected_ui();
+    let mut bravo_ui = selected_ui();
+    let mut charlie_ui = selected_ui();
     let mut columns = vec![
         GalleryColumn {
             snapshot: &alpha,

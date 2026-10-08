@@ -252,7 +252,7 @@ fn pending_waits_line_counts_armed_waits() {
             &snapshot,
             None,
             &UiState {
-                selected_index: usize::MAX,
+                selected_index: Some(usize::MAX),
                 ..Default::default()
             },
             54,

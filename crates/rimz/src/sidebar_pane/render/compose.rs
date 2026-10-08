@@ -481,12 +481,15 @@ fn resolve_scroll_offset(
     if ui.manual_scroll.is_some() {
         return offset;
     }
+    let Some(selected_index) = ui.selected_index else {
+        return offset;
+    };
     let resolved = if ui.focus_group_reveal
-        && let Some(group_first) = selected_group_first_ordinal(roster, ui.selected_index)
+        && let Some(group_first) = selected_group_first_ordinal(roster, selected_index)
     {
-        auto_scroll_reveal_group(scroll_map, group_first, ui.selected_index, offset, viewport)
+        auto_scroll_reveal_group(scroll_map, group_first, selected_index, offset, viewport)
     } else {
-        auto_scroll_to_selection(scroll_map, ui.selected_index, offset, viewport)
+        auto_scroll_to_selection(scroll_map, selected_index, offset, viewport)
     };
     resolved.min(max_offset)
 }

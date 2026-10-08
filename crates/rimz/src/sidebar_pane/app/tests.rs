@@ -633,7 +633,7 @@ fn help_popup_dismisses_and_consumes_any_user_input() {
     ] {
         let mut ui = UiState {
             help_visible: true,
-            selected_index: 0,
+            selected_index: Some(0),
             scroll_offset: 4,
             interactions: render::FrameInteractions::from_parts(vec![Some(1)], Vec::new()),
             ..Default::default()
@@ -643,7 +643,7 @@ fn help_popup_dismisses_and_consumes_any_user_input() {
 
         assert_eq!(outcome, InputOutcome::redraw());
         assert!(!ui.help_visible);
-        assert_eq!(ui.selected_index, 0, "key input was consumed");
+        assert_eq!(ui.selected_index, Some(0), "key input was consumed");
         assert_eq!(ui.scroll_offset, 4, "scroll input was consumed");
         assert_eq!(ui.manual_scroll, None, "scroll input was consumed");
         assert_eq!(ui.browse, None, "key input was consumed");

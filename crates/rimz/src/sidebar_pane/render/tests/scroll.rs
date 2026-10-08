@@ -1,6 +1,22 @@
 use super::*;
 
 #[test]
+fn no_selection_holds_the_clamped_scroll_even_when_revealing_a_group() {
+    let snapshot = overflowing_fleet();
+    let mut ui = UiState {
+        scroll_offset: 4,
+        focus_group_reveal: true,
+        ..Default::default()
+    };
+    let theme = Theme::fixed(false);
+    let composed = compose_lines(&snapshot, None, &ui, &theme, 38, 20);
+    assert_eq!(composed.scroll_offset, 4);
+    ui.scroll_offset = usize::MAX;
+    let clamped = compose_lines(&snapshot, None, &ui, &theme, 38, 20);
+    assert!(clamped.scroll_offset < usize::MAX);
+}
+
+#[test]
 fn auto_scroll_nudges_the_selection_minimally_into_view() {
     // A hand-built scroll-zone map: a leading gap, row 0 on lines 1-2, row 1
     // on lines 3-4, row 2 an expanded card on lines 5-8.
@@ -89,6 +105,7 @@ fn render_scroll_overflow_shows_bar() {
         &overflowing_fleet(),
         None,
         &UiState {
+            selected_index: Some(0),
             scrollbar: scrolled_fade(0, 0),
             ..Default::default()
         },
@@ -120,6 +137,7 @@ fn help_overlay_floats_over_cards_with_scrollbar() {
         &snapshot,
         None,
         &UiState {
+            selected_index: Some(0),
             help_visible: true,
             ..Default::default()
         },
@@ -158,6 +176,7 @@ fn help_overlay_floats_over_cards_with_scrollbar() {
             &snapshot,
             None,
             &UiState {
+                selected_index: Some(0),
                 help_visible: true,
                 ..Default::default()
             },
@@ -172,7 +191,7 @@ fn render_scroll_offset_follows_selection_to_bottom() {
     // draw establishes the fade's baseline rather than reading as a move, so
     // this frame doubles as the settled witness: no scroll activity, no bar.
     let ui = UiState {
-        selected_index: 5,
+        selected_index: Some(5),
         ..Default::default()
     };
     let rendered = snapshot_to_screen_with_alert_and_ui(&overflowing_fleet(), None, &ui, 38, 29);
@@ -203,7 +222,7 @@ fn focus_group_reveal_brings_selected_worktree_header_on_screen() {
         &overflowing_fleet(),
         None,
         &UiState {
-            selected_index: 1,
+            selected_index: Some(1),
             scroll_offset: 99,
             ..Default::default()
         },
@@ -223,7 +242,7 @@ fn focus_group_reveal_brings_selected_worktree_header_on_screen() {
         &overflowing_fleet(),
         None,
         &UiState {
-            selected_index: 1,
+            selected_index: Some(1),
             scroll_offset: 99,
             focus_group_reveal: true,
             ..Default::default()
@@ -248,7 +267,7 @@ fn focus_group_reveal_falls_back_to_card_follow_for_external_group() {
     // than treating the group's first card as a header surrogate.
     let snapshot = external_overflowing_fleet();
     let mut following_ui = UiState {
-        selected_index: 1,
+        selected_index: Some(1),
         scroll_offset: 99,
         ..Default::default()
     };
@@ -297,8 +316,7 @@ fn render_scroll_pins_tall_expanded_card_top() {
     }
     let snapshot = snapshot_with(agents);
 
-    let rendered =
-        snapshot_to_screen_with_alert_and_ui(&snapshot, None, &UiState::default(), 54, 24);
+    let rendered = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &selected_ui(), 54, 24);
     // The viewport opens below the pinned cockpit separator, so the card
     // block's first line holds one row lower while the subagent list fills down.
     let lines: Vec<&str> = rendered.lines().collect();
@@ -322,6 +340,7 @@ fn render_scroll_manual_offset_holds() {
         &overflowing_fleet(),
         None,
         &UiState {
+            selected_index: Some(0),
             scroll_offset: 6,
             manual_scroll: Some(ManualScroll {
                 selection_at_start: None,
@@ -340,6 +359,7 @@ fn render_scroll_manual_offset_holds() {
 #[test]
 fn scrollbar_modes_control_visibility_without_moving_the_window() {
     let settled_ui = UiState {
+        selected_index: Some(0),
         scrollbar: scrolled_fade(0, 0),
         animation_phase: 11,
         ..Default::default()
@@ -356,7 +376,7 @@ fn scrollbar_modes_control_visibility_without_moving_the_window() {
 
     let mut snapshot = overflowing_fleet();
     snapshot.theme.display.scrollbar = ScrollbarMode::Always;
-    let always = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &UiState::default(), 38, 21);
+    let always = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &selected_ui(), 38, 21);
     assert!(
         line_containing(&always, "⑂ alpha").ends_with('▐'),
         "always mode pins the bar with no activity:\n{always}"
@@ -368,6 +388,7 @@ fn scrollbar_modes_control_visibility_without_moving_the_window() {
         &snapshot,
         None,
         &UiState {
+            selected_index: Some(0),
             scroll_offset: 10,
             manual_scroll: Some(ManualScroll {
                 selection_at_start: None,

@@ -1,6 +1,104 @@
 use super::*;
 use crate::mux::WidthAdjust;
 
+fn assert_no_selection_move(action: KeyAction, target: usize) {
+    let snapshot = clickable_block_snapshot(&workspace());
+    let mut ui = UiState {
+        interactions: interactions_for(&snapshot, 0),
+        ..Default::default()
+    };
+    assert_eq!(
+        handle_key(action, &mut ui, &snapshot),
+        InputOutcome::redraw()
+    );
+    assert_eq!(ui.selected_pane, Some(pane_of(&snapshot, target)));
+    assert_eq!(ui.selected_index, Some(target));
+}
+
+#[test]
+fn no_selection_down_enters_at_the_first_row() {
+    assert_no_selection_move(KeyAction::Down, 0);
+}
+
+#[test]
+fn no_selection_up_enters_at_the_first_row() {
+    assert_no_selection_move(KeyAction::Up, 0);
+}
+
+#[test]
+fn no_selection_worktree_moves_enter_at_the_first_row() {
+    for action in [KeyAction::WorktreeUp, KeyAction::WorktreeDown] {
+        assert_no_selection_move(action, 0);
+    }
+}
+
+#[test]
+fn no_selection_page_moves_enter_at_the_first_row() {
+    for action in [KeyAction::PageDown, KeyAction::PageUp] {
+        assert_no_selection_move(action, 0);
+    }
+}
+
+#[test]
+fn no_selection_absolute_moves_select_their_target() {
+    for (action, target) in [
+        (KeyAction::Top, 0),
+        (KeyAction::Bottom, 1),
+        (KeyAction::ScreenTop, 0),
+        (KeyAction::ScreenBottom, 1),
+    ] {
+        assert_no_selection_move(action, target);
+    }
+}
+
+#[test]
+fn no_selection_mark_is_a_noop_and_inbox_enters_at_the_ends() {
+    let mut snapshot = clickable_block_snapshot(&workspace());
+    let mut last = snapshot.worktree_groups[0].rows[0].clone();
+    last.id = "last-agent".into();
+    last.pane = Some(pane("terminal_11", "tab_0", false));
+    snapshot.worktree_groups[0].rows.push(last);
+    for (index, row) in snapshot.worktree_groups[0].rows.iter_mut().enumerate() {
+        if let Some(card) = row.as_agent_mut() {
+            card.status = crate::agents::AgentStatus::Waiting;
+            row.unread = true;
+            row.last_activity = snapshot.now + std::time::Duration::from_secs(index as u64);
+        }
+    }
+    let mut ui = UiState::default();
+    assert_eq!(
+        handle_key(KeyAction::MarkToggle, &mut ui, &snapshot),
+        InputOutcome::default()
+    );
+    assert_eq!(
+        handle_key(KeyAction::InboxNext, &mut ui, &snapshot),
+        InputOutcome::focus(pane_of(&snapshot, 0))
+    );
+    assert_eq!(
+        handle_key(KeyAction::InboxPrev, &mut ui, &snapshot),
+        InputOutcome::focus(pane_of(&snapshot, 2))
+    );
+    assert_eq!(ui.selected_pane, None);
+    assert_eq!(ui.selected_index, None);
+}
+
+#[test]
+fn search_draft_seats_the_first_match_without_a_baseline() {
+    let mut snapshot = clickable_block_snapshot(&workspace());
+    let mut ui = UiState::default();
+    handle_key(KeyAction::Search, &mut ui, &snapshot);
+    assert!(ui.search_draft.is_some());
+    assert_eq!(ui.selected_pane, Some(pane_of(&snapshot, 0)));
+    assert_eq!(ui.selected_index, Some(0));
+
+    snapshot.worktree_groups[0].rows[0].pane = None;
+    let mut ui = UiState::default();
+    handle_key(KeyAction::Search, &mut ui, &snapshot);
+    reconcile_selection(&mut ui, &snapshot, None);
+    assert_eq!(ui.selected_index, Some(0));
+    assert_eq!(ui.selected_pane, None);
+}
+
 fn delegation_snapshot() -> SidebarSnapshot {
     let mut snapshot = clickable_block_snapshot(&workspace());
     let now = snapshot.now;
@@ -74,7 +172,7 @@ fn delegation_line_click_toggles_entries_without_focus() {
     assert!(!shows(&collapsed.lines, "live-child"));
     click_delegation_header(&mut ui, &snapshot, collapsed.interactions, &row_id, true);
     assert_eq!(ui.selected_pane, Some(other.clone()));
-    assert_eq!(ui.selected_index, 1);
+    assert_eq!(ui.selected_index, Some(1));
     assert_eq!(
         ui.manual_scroll,
         Some(ManualScroll {
@@ -444,7 +542,7 @@ fn focus_keys_fire_without_mutating_selection() {
 
     // A mouse click on terminal_2's row jumps without moving the selection.
     let mut ui = UiState {
-        selected_index: 0,
+        selected_index: Some(0),
         help_visible: false,
         animation_phase: 0,
         interactions: interactions_for(&snapshot, 0),
@@ -454,7 +552,7 @@ fn focus_keys_fire_without_mutating_selection() {
     let outcome = handle_mouse_click(1, screen_row_for(row1), &mut ui, &snapshot);
     assert_eq!(outcome, InputOutcome::focus(target.clone()));
     assert!(!outcome.redraw, "a jump changes nothing to repaint");
-    assert_eq!(ui.selected_index, 0, "the click moves no selection");
+    assert_eq!(ui.selected_index, Some(0), "the click moves no selection");
     assert_eq!(ui.selected_pane, None);
     assert_eq!(ui.browse, None);
 
@@ -462,7 +560,7 @@ fn focus_keys_fire_without_mutating_selection() {
     let mut ui = UiState::default();
     let outcome = handle_key(KeyAction::Digit(2), &mut ui, &snapshot);
     assert_eq!(outcome, InputOutcome::focus(target.clone()));
-    assert_eq!(ui.selected_index, 0, "the digit moves no selection");
+    assert_eq!(ui.selected_index, None, "the digit moves no selection");
     assert_eq!(ui.selected_pane, None);
 
     // An out-of-range ordinal resolves no pane and does nothing.
@@ -471,7 +569,7 @@ fn focus_keys_fire_without_mutating_selection() {
 
     // Enter focuses the selected pane and reads, never writes, the selection.
     let mut ui = UiState {
-        selected_index: 1,
+        selected_index: Some(1),
         selected_pane: Some(target.clone()),
         help_visible: false,
         animation_phase: 0,
@@ -479,7 +577,7 @@ fn focus_keys_fire_without_mutating_selection() {
     };
     let outcome = handle_key(KeyAction::Enter, &mut ui, &snapshot);
     assert_eq!(outcome, InputOutcome::focus(target.clone()));
-    assert_eq!(ui.selected_index, 1);
+    assert_eq!(ui.selected_index, Some(1));
     assert_eq!(
         ui.selected_pane,
         Some(target.clone()),
@@ -488,6 +586,7 @@ fn focus_keys_fire_without_mutating_selection() {
 
     // With nothing selected there is no target and nothing happens.
     ui.selected_pane = None;
+    ui.selected_index = None;
     let outcome = handle_key(KeyAction::Enter, &mut ui, &snapshot);
     assert_eq!(outcome, InputOutcome::default());
 
@@ -511,7 +610,7 @@ fn focus_keys_fire_without_mutating_selection() {
     let mut ui = UiState::default();
     let outcome = handle_key(KeyAction::InboxNext, &mut ui, &snapshot);
     assert_eq!(outcome, InputOutcome::focus(target.clone()));
-    assert_eq!(ui.selected_index, 0, "the triage key moves no selection");
+    assert_eq!(ui.selected_index, None, "the triage key moves no selection");
     assert_eq!(ui.selected_pane, None);
 
     let outcome = handle_key(KeyAction::InboxPrev, &mut ui, &snapshot);
@@ -521,7 +620,7 @@ fn focus_keys_fire_without_mutating_selection() {
         "N walks the inbox in reverse"
     );
     assert_eq!(
-        ui.selected_index, 0,
+        ui.selected_index, None,
         "the reverse triage key moves no selection"
     );
 }
@@ -536,7 +635,7 @@ fn arrow_key_reports_immediate_ui_change() {
         ],
     );
     let mut ui = UiState {
-        selected_index: 0,
+        selected_index: Some(0),
         help_visible: false,
         animation_phase: 0,
         ..Default::default()
@@ -545,7 +644,7 @@ fn arrow_key_reports_immediate_ui_change() {
     let outcome = handle_key(KeyAction::Down, &mut ui, &snapshot);
 
     assert_eq!(outcome, InputOutcome::redraw());
-    assert_eq!(ui.selected_index, 1);
+    assert_eq!(ui.selected_index, Some(1));
     assert!(ui.browse.is_some(), "an arrow begins a browse pick");
 }
 #[test]
@@ -555,7 +654,7 @@ fn worktree_keys_browse_to_neighboring_worktree_heads() {
     let feature = PaneId::from_parts(MuxName::Zellij, "terminal_3");
     let main = PaneId::from_parts(MuxName::Zellij, "terminal_1");
     let mut ui = UiState {
-        selected_index: 0,
+        selected_index: Some(0),
         selected_pane: Some(main.clone()),
         baseline_pane: Some(main.clone()),
         ..Default::default()
@@ -564,17 +663,17 @@ fn worktree_keys_browse_to_neighboring_worktree_heads() {
     let outcome = handle_key(KeyAction::WorktreeDown, &mut ui, &snapshot);
 
     assert_eq!(outcome, InputOutcome::redraw());
-    assert_eq!(ui.selected_index, 2);
+    assert_eq!(ui.selected_index, Some(2));
     assert_eq!(ui.selected_pane, Some(feature));
     assert!(ui.browse.is_some(), "a worktree jump is a browse pick");
 
     let outcome = handle_key(KeyAction::WorktreeDown, &mut ui, &snapshot);
     assert_eq!(outcome, InputOutcome::default(), "no wrap at the end");
-    assert_eq!(ui.selected_index, 2);
+    assert_eq!(ui.selected_index, Some(2));
 
     let outcome = handle_key(KeyAction::WorktreeUp, &mut ui, &snapshot);
     assert_eq!(outcome, InputOutcome::redraw());
-    assert_eq!(ui.selected_index, 0);
+    assert_eq!(ui.selected_index, Some(0));
     assert_eq!(ui.selected_pane, Some(main));
 }
 #[test]
@@ -589,7 +688,7 @@ fn dismiss_key_requests_alert_dismissal() {
     assert_eq!(outcome.effects, vec![InputEffect::DismissAlert]);
     assert!(outcome.redraw);
     // Dismiss never moves the selection.
-    assert_eq!(ui.selected_index, 0);
+    assert_eq!(ui.selected_index, None);
 }
 #[test]
 fn wheel_scroll_pins_the_viewport_and_steps_the_offset() {
@@ -603,7 +702,10 @@ fn wheel_scroll_pins_the_viewport_and_steps_the_offset() {
     assert_eq!(outcome, InputOutcome::redraw());
     assert_eq!(ui.scroll_offset, SCROLL_STEP);
     assert!(ui.manual_scroll.is_some());
-    assert_eq!(ui.selected_index, 0, "the wheel never moves the selection");
+    assert_eq!(
+        ui.selected_index, None,
+        "the wheel never moves the selection"
+    );
 
     handle_scroll(true, &mut ui);
     assert_eq!(ui.scroll_offset, 2 * SCROLL_STEP);
@@ -718,7 +820,7 @@ fn other_key_is_noop_when_help_is_closed() {
     let ws = workspace();
     let snapshot = snapshot_with_panes(&ws, vec![pane("terminal_1", "tab_0", false)]);
     let mut ui = UiState {
-        selected_index: 1,
+        selected_index: Some(1),
         scroll_offset: 6,
         ..Default::default()
     };
@@ -726,7 +828,7 @@ fn other_key_is_noop_when_help_is_closed() {
     let outcome = handle_key(KeyAction::Other, &mut ui, &snapshot);
 
     assert_eq!(outcome, InputOutcome::default());
-    assert_eq!(ui.selected_index, 1);
+    assert_eq!(ui.selected_index, Some(1));
     assert_eq!(ui.scroll_offset, 6);
 }
 
@@ -746,7 +848,7 @@ fn top_and_bottom_keys_browse_to_the_ends() {
     // G jumps to the last visible row as a browse pick — selection only.
     let outcome = handle_key(KeyAction::Bottom, &mut ui, &snapshot);
     assert_eq!(outcome, InputOutcome::redraw());
-    assert_eq!(ui.selected_index, 2);
+    assert_eq!(ui.selected_index, Some(2));
     assert_eq!(outcome.effects, Vec::new(), "the end jump never focuses");
     assert!(ui.browse.is_some(), "G begins a browse pick");
 
@@ -757,7 +859,7 @@ fn top_and_bottom_keys_browse_to_the_ends() {
     // g jumps back to the first row.
     let outcome = handle_key(KeyAction::Top, &mut ui, &snapshot);
     assert_eq!(outcome, InputOutcome::redraw());
-    assert_eq!(ui.selected_index, 0);
+    assert_eq!(ui.selected_index, Some(0));
 }
 
 #[test]
@@ -774,7 +876,7 @@ fn screen_edge_keys_browse_to_the_painted_window_edges() {
         ],
     );
     let mut ui = UiState {
-        selected_index: 2,
+        selected_index: Some(2),
         interactions: render::FrameInteractions::from_parts(
             vec![None, Some(1), Some(1), Some(2), Some(3), None],
             Vec::new(),
@@ -784,7 +886,7 @@ fn screen_edge_keys_browse_to_the_painted_window_edges() {
 
     let outcome = handle_key(KeyAction::ScreenTop, &mut ui, &snapshot);
     assert_eq!(outcome, InputOutcome::redraw());
-    assert_eq!(ui.selected_index, 1);
+    assert_eq!(ui.selected_index, Some(1));
     assert_eq!(
         ui.selected_pane,
         Some(PaneId::from_parts(MuxName::Zellij, "terminal_2"))
@@ -793,7 +895,7 @@ fn screen_edge_keys_browse_to_the_painted_window_edges() {
 
     let outcome = handle_key(KeyAction::ScreenBottom, &mut ui, &snapshot);
     assert_eq!(outcome, InputOutcome::redraw());
-    assert_eq!(ui.selected_index, 3);
+    assert_eq!(ui.selected_index, Some(3));
     assert_eq!(
         ui.selected_pane,
         Some(PaneId::from_parts(MuxName::Zellij, "terminal_4"))
@@ -815,7 +917,7 @@ fn page_keys_step_by_visible_row_count_and_clamp() {
         ],
     );
     let mut ui = UiState {
-        selected_index: 1,
+        selected_index: Some(1),
         interactions: render::FrameInteractions::from_parts(
             vec![None, Some(1), Some(2), Some(3), None],
             Vec::new(),
@@ -825,7 +927,7 @@ fn page_keys_step_by_visible_row_count_and_clamp() {
 
     let outcome = handle_key(KeyAction::PageDown, &mut ui, &snapshot);
     assert_eq!(outcome, InputOutcome::redraw());
-    assert_eq!(ui.selected_index, 4);
+    assert_eq!(ui.selected_index, Some(4));
     assert_eq!(
         ui.selected_pane,
         Some(PaneId::from_parts(MuxName::Zellij, "terminal_5"))
@@ -833,23 +935,31 @@ fn page_keys_step_by_visible_row_count_and_clamp() {
 
     let outcome = handle_key(KeyAction::PageUp, &mut ui, &snapshot);
     assert_eq!(outcome, InputOutcome::redraw());
-    assert_eq!(ui.selected_index, 1);
+    assert_eq!(ui.selected_index, Some(1));
 
-    ui.selected_index = 4;
+    ui.selected_index = Some(4);
     let outcome = handle_key(KeyAction::PageDown, &mut ui, &snapshot);
     assert_eq!(outcome, InputOutcome::redraw());
-    assert_eq!(ui.selected_index, 5, "page down clamps at the last row");
+    assert_eq!(
+        ui.selected_index,
+        Some(5),
+        "page down clamps at the last row"
+    );
 
     let outcome = handle_key(KeyAction::PageDown, &mut ui, &snapshot);
     assert_eq!(outcome, InputOutcome::default(), "already at bottom");
 
     let outcome = handle_key(KeyAction::PageUp, &mut ui, &snapshot);
     assert_eq!(outcome, InputOutcome::redraw());
-    assert_eq!(ui.selected_index, 2);
+    assert_eq!(ui.selected_index, Some(2));
 
     let outcome = handle_key(KeyAction::PageUp, &mut ui, &snapshot);
     assert_eq!(outcome, InputOutcome::redraw());
-    assert_eq!(ui.selected_index, 0, "page up clamps at the first row");
+    assert_eq!(
+        ui.selected_index,
+        Some(0),
+        "page up clamps at the first row"
+    );
 }
 
 #[test]
@@ -863,12 +973,12 @@ fn page_and_screen_edge_keys_noop_before_first_paint() {
         KeyAction::ScreenBottom,
     ] {
         let mut ui = UiState {
-            selected_index: 0,
+            selected_index: Some(0),
             ..Default::default()
         };
         let outcome = handle_key(action, &mut ui, &snapshot);
         assert_eq!(outcome, InputOutcome::default(), "{action:?}");
-        assert_eq!(ui.selected_index, 0);
+        assert_eq!(ui.selected_index, Some(0));
     }
 }
 
@@ -882,7 +992,7 @@ fn mark_keys_name_the_selected_agent_row_without_focus() {
     let mut snapshot = filterable_snapshot(&ws);
     // Index 0 is the running `claude` agent row (the inbox participant).
     let mut ui = UiState {
-        selected_index: 0,
+        selected_index: Some(0),
         ..Default::default()
     };
     let row_id = snapshot.worktree_groups[0].rows[0].id.clone();
@@ -893,13 +1003,21 @@ fn mark_keys_name_the_selected_agent_row_without_focus() {
         vec![InputEffect::MarkUnread(row_id.clone())]
     );
     assert!(!outcome.redraw, "the loop owns the repaint after the write");
-    assert_eq!(ui.selected_index, 0, "marking unread moves no selection");
+    assert_eq!(
+        ui.selected_index,
+        Some(0),
+        "marking unread moves no selection"
+    );
 
     snapshot.worktree_groups[0].rows[0].unread = true;
     let outcome = handle_key(KeyAction::MarkToggle, &mut ui, &snapshot);
     assert_eq!(outcome.effects, vec![InputEffect::MarkRead(row_id.clone())]);
     assert!(!outcome.redraw, "the loop owns the repaint after the write");
-    assert_eq!(ui.selected_index, 0, "marking read moves no selection");
+    assert_eq!(
+        ui.selected_index,
+        Some(0),
+        "marking read moves no selection"
+    );
 
     let outcome = handle_key(KeyAction::MarkAllRead, &mut ui, &snapshot);
     assert_eq!(outcome.effects, vec![InputEffect::MarkAllRead]);
@@ -919,7 +1037,7 @@ fn mark_keys_ignore_process_rows() {
         "fixture index 1 is the statusless process row",
     );
     let mut ui = UiState {
-        selected_index: 1,
+        selected_index: Some(1),
         ..Default::default()
     };
 
@@ -983,7 +1101,7 @@ fn a_fresh_unread_lead_never_steals_the_viewport_from_the_selection() {
     // Selecting the last row keeps it visible in the short viewport while the
     // fresh unread lead stays reachable through the jump banner.
     let mut ui = UiState {
-        selected_index: 9,
+        selected_index: Some(9),
         ..Default::default()
     };
     let theme = ui.theme(&snapshot.theme);

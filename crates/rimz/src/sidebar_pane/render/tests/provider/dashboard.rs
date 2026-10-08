@@ -1,4 +1,30 @@
 use super::*;
+
+#[test]
+fn no_selection_derives_no_provider_and_rests_the_pet() {
+    let mut snapshot = snapshot_with(vec![agent(
+        "running",
+        "claude",
+        AgentStatus::Running,
+        Some("/repo/main"),
+        Some("main"),
+        None,
+    )]);
+    snapshot.providers = two_provider_panels();
+    snapshot.providers.reverse();
+    let mut ui = UiState::default();
+    assert_eq!(selected_agent_kind(&snapshot, &ui), None);
+    assert_eq!(selected_pet_action(&snapshot, &ui), PetAction::Idle);
+    assert_eq!(
+        active_dashboard_tab(&snapshot, &ui).unwrap().kind.as_str(),
+        "codex"
+    );
+    ui.last_agent_kind = Some(crate::ids::AgentKind::new_unchecked("claude"));
+    assert_eq!(
+        active_dashboard_tab(&snapshot, &ui).unwrap().kind.as_str(),
+        "claude"
+    );
+}
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 
@@ -287,6 +313,7 @@ fn render_provider_dashboard_codex_tab_paints_however_derived() {
     // A manual tab pick over a selected Claude row swaps to the Codex block.
     let snapshot = tabbed_provider_snapshot();
     let ui = UiState {
+        selected_index: Some(0),
         dashboard_tab: Some(DashboardTab {
             login: "codex@default".parse().unwrap(),
             derived_at_start: Some(crate::ids::AgentKind::new_unchecked("claude")),
@@ -534,6 +561,7 @@ fn render_provider_dashboard_pixel_pet_buffer_cells_carry_image_id_color() {
     let mut snapshot = tabbed_provider_snapshot();
     snapshot.theme.pets.enabled = true;
     let ui = UiState {
+        selected_index: Some(0),
         pet: Some(pixel_pet()),
         ..Default::default()
     };
@@ -832,6 +860,7 @@ fn render_scroll_keeps_gap_above_provider_dashboard() {
     snapshot.theme.display.provider_tabs = crate::config::ProviderTabsMode::Always;
     let theme = Theme::for_sidebar(&snapshot.theme);
     let ui = UiState {
+        selected_index: Some(0),
         scroll_offset: 6,
         manual_scroll: Some(ManualScroll {
             selection_at_start: None,
