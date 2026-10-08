@@ -5,6 +5,80 @@ use crate::config::TaskEntry;
 
 const NAME: &str = "task";
 
+#[test]
+fn declined_scopes_wait_for_a_new_condition_clock_or_elapsed_recheck() {
+    use super::super::launch_ledger::{DeclineRecord, Declines};
+    let (_root, mut tasks, owned) = worktree_tasks(None);
+    let mut entry = tasks[NAME].entry().clone();
+    entry.check = Some(crate::config::TaskCheck::Agent(crate::config::AgentCheck {
+        agent: "codex".into(),
+        prompt: Some("any work?".into()),
+        prompt_file: None,
+        recheck: None,
+        timeout: None,
+    }));
+    tasks.insert(NAME.into(), loaded(entry.clone()));
+    let now = Timestamp::from_second(1000).unwrap();
+    let since = Timestamp::from_second(800).unwrap();
+    let key = scope_key(NAME, &owned[0]);
+    let mut clocks = BTreeMap::from([(
+        key.clone(),
+        WhenState {
+            fingerprint: Some(("team.stage=Done".into(), None, entry.run_dir())),
+            since,
+            fired: true,
+        },
+    )]);
+    let mut declines = Declines::from([(
+        NAME.into(),
+        BTreeMap::from([(
+            owned[0].clone(),
+            DeclineRecord {
+                at: now,
+                since: Some(since),
+                reason: "No work".into(),
+                profile: "codex".into(),
+                fingerprint: super::super::launch_ledger::check_fingerprint(&entry),
+            },
+        )]),
+    )]);
+    let scopes = scoped_tasks(&tasks, &BTreeMap::new(), &owned, &declines, &clocks, now);
+    assert!(
+        !scopes.contains_key(&key),
+        "holding decline must suppress the helper"
+    );
+    assert_eq!(scopes.len(), 1, "another checkout remains eligible");
+    clocks.get_mut(&key).unwrap().since = now;
+    assert!(
+        scoped_tasks(&tasks, &BTreeMap::new(), &owned, &declines, &clocks, now).contains_key(&key)
+    );
+    clocks.get_mut(&key).unwrap().since = since;
+    if let Some(crate::config::TaskCheck::Agent(check)) = &mut entry.check {
+        check.recheck = Some("1m".into());
+    }
+    declines
+        .get_mut(NAME)
+        .unwrap()
+        .get_mut(&owned[0])
+        .unwrap()
+        .fingerprint = super::super::launch_ledger::check_fingerprint(&entry);
+    tasks.insert(NAME.into(), loaded(entry));
+    for (seconds, expected) in [(1059, false), (1060, true)] {
+        assert_eq!(
+            scoped_tasks(
+                &tasks,
+                &BTreeMap::new(),
+                &owned,
+                &declines,
+                &clocks,
+                Timestamp::from_second(seconds).unwrap()
+            )
+            .contains_key(&key),
+            expected
+        );
+    }
+}
+
 fn worktree_tasks(
     hold: Option<&str>,
 ) -> (
@@ -37,7 +111,14 @@ fn worktree_tasks(
 fn worktree_scopes_normalize_marker_components() {
     let (root, tasks, _) = worktree_tasks(None);
     let owned = vec![root.path().join("b/../a")];
-    let scoped = scoped_tasks(&tasks, &BTreeMap::new(), &owned);
+    let scoped = scoped_tasks(
+        &tasks,
+        &BTreeMap::new(),
+        &owned,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        Timestamp::now(),
+    );
     let scope = scoped.values().next().unwrap();
     assert_eq!(
         scope.checkout.as_deref(),
@@ -56,7 +137,14 @@ fn worktree_conditions_select_the_checkout_and_skip_ledgered_edges() {
         if let Some(stage) = stage {
             std::fs::write(owned[0].join("blackboard.md"), format!("Stage: {stage}\n")).unwrap();
         }
-        let scoped = scoped_tasks(&tasks, &ledger, &owned);
+        let scoped = scoped_tasks(
+            &tasks,
+            &ledger,
+            &owned,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            now.timestamp(),
+        );
         assert_eq!(scoped.len(), if ledger.is_empty() { 2 } else { 1 });
         let planned: BTreeMap<_, _> = scoped
             .iter()
@@ -125,7 +213,14 @@ fn worktree_conditions_select_the_checkout_and_skip_ledgered_edges() {
 fn worktree_retries_use_each_checkouts_last_fire() {
     let (_root, tasks, owned) = worktree_tasks(None);
     let now = zdt(2026, 6, 24, 8, 5, 0);
-    let scoped = scoped_tasks(&tasks, &BTreeMap::new(), &owned);
+    let scoped = scoped_tasks(
+        &tasks,
+        &BTreeMap::new(),
+        &owned,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        Timestamp::now(),
+    );
     let planned = scoped
         .iter()
         .map(|(key, scope)| (key.clone(), scope.task.clone()))
@@ -188,7 +283,14 @@ fn worktree_retries_use_each_checkouts_last_fire() {
 fn worktree_holds_have_independent_clocks() {
     let (_root, tasks, owned) = worktree_tasks(Some("30m"));
     let now = zdt(2026, 6, 24, 8, 0, 0);
-    let scoped = scoped_tasks(&tasks, &BTreeMap::new(), &owned);
+    let scoped = scoped_tasks(
+        &tasks,
+        &BTreeMap::new(),
+        &owned,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        Timestamp::now(),
+    );
     assert_eq!(scoped.len(), 2);
     let planned: BTreeMap<_, _> = scoped
         .iter()

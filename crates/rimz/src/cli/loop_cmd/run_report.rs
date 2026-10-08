@@ -880,6 +880,7 @@ mod tests {
         let mut record =
             LoopRunRecord::new("sweep", LoopRunResult::Launched, LoopRunMode::Scheduled, 0);
         record.condition = Some(run_log::ConditionRecord {
+            since: None,
             when: "pr=open && ci=passed && pr=open".into(),
             hold: None,
             held_ms: 0,

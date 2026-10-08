@@ -510,6 +510,129 @@ fn agent_check_bad_definition_errors_before_execution() {
     }
 }
 
+#[test]
+fn resident_decline_does_not_hold_an_edited_or_in_flight_replacement() {
+    use super::super::super::launch_ledger::{holding_decline, load_declines};
+    let root = tempfile::tempdir().unwrap();
+    let catalog = TaskCatalog::load(Some(root.path())).unwrap();
+    let paths = StatePaths::for_project_root(root.path()).unwrap();
+    let original = entry(root.path(), true);
+    let mut pending = fire(original.clone(), &catalog);
+    pending.check_process = fail;
+    assert!(matches!(
+        pending.prepare(&mut |_| Ok(())),
+        Ok(TaskFirePlan::Done(_))
+    ));
+    drop(pending);
+    let declines = load_declines(&paths).unwrap();
+    assert!(
+        holding_decline(
+            &declines,
+            "headless-guard",
+            &original,
+            root.path(),
+            None,
+            Timestamp::now()
+        )
+        .is_some()
+    );
+    for field in ["prompt", "agent", "on"] {
+        let mut replacement = original.clone();
+        let Some(TaskCheck::Agent(check)) = &mut replacement.check else {
+            unreachable!()
+        };
+        match field {
+            "prompt" => check.prompt = Some("A different question".into()),
+            "agent" => check.agent = "pi".into(),
+            _ => replacement.on = Some(CheckOn::Any),
+        }
+        assert!(
+            holding_decline(
+                &declines,
+                "headless-guard",
+                &replacement,
+                root.path(),
+                None,
+                Timestamp::now()
+            )
+            .is_none(),
+            "old verdict must not hold an edited {field}"
+        );
+        if field == "agent" {
+            let mut next = fire(replacement, &catalog);
+            next.mode = LoopRunMode::Scheduled;
+            let error = next.prepare(&mut |_| Ok(())).unwrap_err();
+            assert!(
+                error.to_string().contains("only claude and codex"),
+                "{error}"
+            );
+            assert_eq!(
+                next.finish_error(&error).record.result,
+                LoopRunResult::Errored
+            );
+        }
+    }
+}
+
+#[test]
+fn legacy_declines_without_a_definition_do_not_hold() {
+    use super::super::super::launch_ledger::{Declines, holding_decline};
+    let root = tempfile::tempdir().unwrap();
+    let declines: Declines = serde_json::from_value(serde_json::json!({
+        "headless-guard": {root.path().display().to_string(): {
+            "at": Timestamp::now(), "since": null, "reason": "old verdict", "profile": "codex"
+        }}
+    }))
+    .unwrap();
+    assert!(
+        holding_decline(
+            &declines,
+            "headless-guard",
+            &entry(root.path(), true),
+            root.path(),
+            None,
+            Timestamp::now()
+        )
+        .is_none(),
+        "an unidentified old verdict cannot suppress a current definition"
+    );
+}
+
+#[test]
+fn manual_firing_verdict_clears_only_its_checkouts_decline() {
+    use super::super::super::launch_ledger::{decline_path, load_declines};
+    let root = tempfile::tempdir().unwrap();
+    let other = tempfile::tempdir().unwrap();
+    let catalog = TaskCatalog::load(Some(root.path())).unwrap();
+    let paths = StatePaths::for_project_root(root.path()).unwrap();
+    let mut first = fire(entry(root.path(), true), &catalog);
+    first.check_process = fail;
+    assert!(matches!(
+        first.prepare(&mut |_| Ok(())),
+        Ok(TaskFirePlan::Done(_))
+    ));
+    drop(first);
+    let mut declines = load_declines(&paths).unwrap();
+    let copy = declines["headless-guard"][root.path()].clone();
+    declines
+        .get_mut("headless-guard")
+        .unwrap()
+        .insert(other.path().into(), copy);
+    crate::disk::atomic::write_temp_then_rename(&decline_path(&paths), &declines).unwrap();
+    let mut next = fire(entry(root.path(), true), &catalog);
+    let plan = next.prepare(&mut |_| Ok(()));
+    assert!(
+        matches!(plan, Ok(TaskFirePlan::Resident { .. })),
+        "{plan:?}"
+    );
+    let declines = load_declines(&paths).unwrap();
+    assert!(
+        !declines["headless-guard"].contains_key(root.path()),
+        "firing hand verdict must clear its old decline before launch"
+    );
+    assert!(declines["headless-guard"].contains_key(other.path()));
+}
+
 fn long_reason(
     adapter: &crate::agents::AgentDefinition,
     plan: &LaunchPlan,
@@ -550,6 +673,111 @@ fn agent_verdict_reason_is_bounded_before_decline_publication() {
     let paths = StatePaths::for_project_root(root.path()).unwrap();
     let declines = super::super::super::launch_ledger::load_declines(&paths).unwrap();
     assert_eq!(&declines["headless-guard"][root.path()].reason, reason);
+}
+
+#[test]
+fn resident_decline_holds_only_scheduled_matching_clocks_until_recheck() {
+    let root = tempfile::tempdir().unwrap();
+    let catalog = TaskCatalog::load(Some(root.path())).unwrap();
+    let paths = StatePaths::for_project_root(root.path()).unwrap();
+    let at = Timestamp::from_second(1000).unwrap();
+    let since = Timestamp::from_second(900).unwrap();
+    let mut memory = serde_json::json!({"headless-guard": {root.path().display().to_string(): {
+        "at": at, "since": since, "reason": "No actionable work.", "profile": "codex"
+    }}});
+    for (mode, clock, recheck, now, held) in [
+        (LoopRunMode::Scheduled, Some(since), None, 1100, true),
+        (LoopRunMode::Manual, Some(since), None, 1100, false),
+        (LoopRunMode::Scheduled, Some(at), None, 1100, false),
+        (LoopRunMode::Scheduled, Some(since), Some("2m"), 1119, true),
+        (LoopRunMode::Scheduled, Some(since), Some("2m"), 1120, false),
+        (LoopRunMode::Scheduled, Some(since), Some("0"), 1000, false),
+    ] {
+        let mut entry = entry(root.path(), true);
+        if let Some(TaskCheck::Agent(check)) = &mut entry.check {
+            check.recheck = recheck.map(str::to_owned);
+        }
+        memory["headless-guard"][root.path().display().to_string()]["fingerprint"] =
+            serde_json::to_value(super::super::super::launch_ledger::check_fingerprint(
+                &entry,
+            ))
+            .unwrap();
+        crate::disk::atomic::write_temp_then_rename(
+            &super::super::super::launch_ledger::decline_path(&paths),
+            &memory,
+        )
+        .unwrap();
+        let mut fire = fire(entry, &catalog).with_condition(Some(
+            super::super::super::when::ConditionEvidence {
+                since: clock,
+                when: "team.stage=Done".into(),
+                hold: None,
+                held_ms: 0,
+                readings: BTreeMap::new(),
+            },
+        ));
+        fire.mode = mode;
+        fire.now = Timestamp::from_second(now).unwrap();
+        fire.check_process = fail;
+        let plan = fire.prepare(&mut |_| Ok(()));
+        if held {
+            assert!(
+                matches!(plan, Ok(TaskFirePlan::DeclineHeld)),
+                "must hold without running or recording: {plan:?}"
+            );
+        } else {
+            assert!(
+                matches!(&plan, Ok(TaskFirePlan::Done(done)) if done.record.result == LoopRunResult::CheckSkipped),
+                "must re-ask: {plan:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn resident_decline_is_durable_and_polarity_based_but_ordinary_checks_have_no_memory() {
+    for (stay, on, process) in [
+        (true, CheckOn::Success, fail as agent_check::ProcessRunner),
+        (true, CheckOn::Fail, pass),
+        (false, CheckOn::Success, fail),
+    ] {
+        if !stay
+            && with_action_hooks(
+                "resident_decline_is_durable_and_polarity_based_but_ordinary_checks_have_no_memory",
+            )
+        {
+            return;
+        }
+        let root = tempfile::tempdir().unwrap();
+        let catalog = TaskCatalog::load(Some(root.path())).unwrap();
+        let mut entry = entry(root.path(), stay);
+        entry.on = Some(on);
+        let mut fire = fire(entry, &catalog);
+        fire.check_process = process;
+        let plan = fire.prepare(&mut |_| Ok(()));
+        assert!(
+            matches!(&plan, Ok(TaskFirePlan::Done(done)) if done.record.result == LoopRunResult::CheckSkipped),
+            "{plan:?}"
+        );
+        assert_eq!(
+            assist_log::recent(&logs_dir(), None)
+                .iter()
+                .filter(|record| matches!(&record.assist, Assist::CheckDecline { task, checkout, .. } if task == "headless-guard" && checkout == root.path()))
+                .count(),
+            1,
+            "every agent decline counts one assist, including ordinary tasks"
+        );
+        let paths = StatePaths::for_project_root(root.path()).unwrap();
+        let declines = super::super::super::launch_ledger::load_declines(&paths).unwrap();
+        assert_eq!(
+            declines.contains_key("headless-guard"),
+            stay,
+            "only resident polarity misses persist"
+        );
+        if stay {
+            assert_eq!(declines["headless-guard"][root.path()].profile, "codex");
+        }
+    }
 }
 
 #[test]

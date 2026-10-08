@@ -50,7 +50,9 @@ pub(super) fn run(
     if check.recheck.is_some() && !fire.entry.stay {
         bail!("agent check recheck requires a resident task");
     }
-    if let Some(recheck) = &check.recheck {
+    if let Some(recheck) = &check.recheck
+        && recheck.trim() != "0"
+    {
         parse_task_timeout(recheck).map_err(anyhow::Error::msg)?;
     }
     let timeout = check
