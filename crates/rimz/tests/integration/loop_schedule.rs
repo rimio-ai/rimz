@@ -827,21 +827,20 @@ fn resident_show_keeps_the_screen_on_room_catalog_failure() {
         .unwrap();
     let shown = String::from_utf8_lossy(&human.stdout);
     assert!(
-        json.status.success() && shown.contains("WORKTREES (0 owned)") && shown.contains("action:"),
-        "JSON: {json:?}\nhuman: {human:?}"
+        shown.contains("WORKTREES (0 owned)") && shown.contains("action:"),
+        "{human:?}"
     );
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&json.stdout).unwrap()["worktrees"],
         json!([])
     );
-    assert!(
-        !human.status.success(),
-        "the base's catalog error must remain an error"
-    );
-    assert!(
-        String::from_utf8_lossy(&human.stderr).contains("loop-instances.json"),
-        "{human:?}"
-    );
+    for output in [&human, &json] {
+        assert!(
+            !output.status.success()
+                && String::from_utf8_lossy(&output.stderr).contains("loop-instances.json"),
+            "an unreadable catalog fails both forms after they print: {output:?}"
+        );
+    }
 }
 
 #[cfg(unix)]
