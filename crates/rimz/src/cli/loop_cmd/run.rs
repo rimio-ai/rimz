@@ -75,10 +75,13 @@ pub(super) fn run_one(
     let check_echo = match mode {
         LoopRunMode::Scheduled => CheckEcho::Capture,
         LoopRunMode::Manual => CheckEcho::Stream {
-            announcement: entry.check.as_ref().map(|cmd| {
+            announcement: entry.check.as_ref().map(|check| {
                 format!(
                     "{}\n",
-                    ui::paint(ui::palette::muted(), &format!("  check: {cmd}"))
+                    ui::paint(
+                        ui::palette::muted(),
+                        &format!("  check: {}", render::check_value(check))
+                    )
                 )
             }),
             prefix: ui::paint(ui::palette::faint(), "  │ "),

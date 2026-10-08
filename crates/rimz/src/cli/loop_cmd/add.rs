@@ -1182,7 +1182,7 @@ fn write_add_feedback(
         }
     }
     if let Some(check @ TaskCheck::Agent(_)) = &entry.check {
-        writeln!(out, "check: {check}")?;
+        writeln!(out, "check: {}", render::check_value(check))?;
     }
     let suffix = if parsed.once { "; then removed" } else { "" };
     if let Some(reset) = after_reset {
