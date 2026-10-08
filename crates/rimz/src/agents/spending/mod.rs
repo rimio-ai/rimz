@@ -87,8 +87,7 @@ pub(in crate::agents) use refresh::{
 pub(in crate::agents) use time::iso_to_unix_secs;
 pub use time::{unix_secs_now, utc_date};
 
-/// Cadence for cursor-cache checkpoints and partial aggregate publishes during
-/// a cold spending-history walk.
+/// Cadence for cursor checkpoints and partial aggregates of changed spending history.
 const WALK_CHECKPOINT_INTERVAL: Duration = Duration::from_secs(1);
 
 const SPENDING_PERSIST_MIN_INTERVAL: u64 = 5 * 60;

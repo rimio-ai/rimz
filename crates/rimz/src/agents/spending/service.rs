@@ -1,9 +1,8 @@
 //! Elected user-scoped service for the warm spending cursor.
 //!
-//! A long-lived sidebar cache refresher or held stats process may win the
-//! namespace-scoped lifetime lock and host the service thread. Durable spending
-//! publications remain authoritative; this socket only coordinates access to
-//! one in-memory [`super::SpendingWalker`].
+//! A long-lived sidebar cache refresher or held stats process may win the namespace-scoped lifetime lock and host the service and walker threads. Durable spending publications remain authoritative; this socket only coordinates access to one in-memory [`super::SpendingWalker`].
+//!
+//! The service thread admits connections and answers fresh publications; one lifetime walker thread fulfils stale requests. A claim held through the reply write rejects busy work immediately, independent of receiver readiness.
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
