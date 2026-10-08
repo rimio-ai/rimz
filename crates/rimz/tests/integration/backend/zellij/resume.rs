@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use rimz::agents::{AgentLifecycleObservation, AgentStatus, LaunchParams, LifecycleSignal};
@@ -39,7 +39,16 @@ fn steer_and_self_wait_reach_the_live_consumer_among_two_sessions() {
         let launch_id = AgentSessionId::from("self-wait-launch");
         let agent_bin = write_sleeping_agent_shim(&env, "claude");
         let ready = env.home_root.join("self-wait-agent-ready");
-        let command = zellij_agent_exec_command(&env, xdg, &agent_bin, &ready, agent_id.as_str());
+        let command = zellij_agent_exec_command(
+            &env,
+            xdg,
+            &agent_bin,
+            &ready,
+            rimz::harness::launch::ExecAction::Resume {
+                session_id: agent_id.to_string(),
+                extra_args: Vec::new(),
+            },
+        );
         let tab_name = "#self-wait";
         backend
             .open_tab(&TabOptions {
@@ -241,7 +250,16 @@ fn closing_agent_pane_records_end_trace_when_session_survives_without_sidebar() 
 
     let agent_bin = write_sleeping_agent_shim(&env, "claude");
     let ready = env.home_root.join("zellij-agent-ready");
-    let command = zellij_agent_exec_command(&env, xdg, &agent_bin, &ready, agent_id);
+    let command = zellij_agent_exec_command(
+        &env,
+        xdg,
+        &agent_bin,
+        &ready,
+        rimz::harness::launch::ExecAction::Resume {
+            session_id: agent_id.to_owned(),
+            extra_args: Vec::new(),
+        },
+    );
     let tab_name = "#rimz-zellij";
     backend
         .open_tab(&TabOptions {
@@ -325,72 +343,6 @@ fn append_registered_agent(
         .expect("append registered agent");
 }
 
-fn write_sleeping_agent_shim(env: &Env, agent: &str) -> PathBuf {
-    let dir = env.home_root.join("zellij-agent-bin");
-    std::fs::create_dir_all(&dir).expect("mkdir agent bin");
-    let path = dir.join(agent);
-    std::fs::write(
-        &path,
-        "#!/bin/sh\n\
-         printf ready > \"$RIMZ_TEST_AGENT_READY\"\n\
-         trap 'exit 0' HUP TERM INT\n\
-         while :; do sleep 1; done\n",
-    )
-    .expect("write agent shim");
-    chmod_executable(&path);
-    dir
-}
-
-fn zellij_agent_exec_command(
-    env: &Env,
-    zellij_runtime: &Path,
-    agent_bin: &Path,
-    ready: &Path,
-    agent_id: &str,
-) -> Vec<String> {
-    let path = path_with_front(agent_bin);
-    let rimz_bin = env.rimz_bin().to_string_lossy().into_owned();
-    let request = rimz::harness::launch::ExecRequest {
-        isolation_default: None,
-        kind: rimz::ids::AgentKind::new_unchecked("claude"),
-        action: rimz::harness::launch::ExecAction::Resume {
-            session_id: agent_id.to_owned(),
-            extra_args: Vec::new(),
-        },
-        system_prompt_file: None,
-        append_system_prompt_files: Vec::new(),
-        team_prompt: None,
-        skills: None,
-        allowed_tools: None,
-        provider_account: rimz::harness::launch::ProviderAccountState::Unbound,
-        run_id: None,
-        worktree_path: None,
-        close_pane_on_exit: true,
-        exit_on_run_completion: false,
-        subagent: false,
-        loop_reminder: None,
-        identity: rimz::harness::launch::ExecIdentity::default(),
-    };
-    let exec = rimz::harness::launch::exec_argv(&env.rimz_bin(), &env.runtime_paths(), &request)
-        .expect("exec argv");
-    let mut argv = vec![
-        "/usr/bin/env".to_owned(),
-        format!("RIMZ_HOME={}", env.rimz_home().display()),
-        format!("XDG_STATE_HOME={}", env.state_root().display()),
-        format!("XDG_RUNTIME_DIR={}", zellij_runtime.display()),
-        format!("XDG_CONFIG_HOME={}", env.config_root().display()),
-        format!("HOME={}", env.home_root.display()),
-        "SHELL=/definitely/not/a/shell".to_owned(),
-        format!("PATH={path}"),
-        format!("RIMZ_TEST_AGENT_READY={}", ready.display()),
-        rimz_bin,
-        "--mux".to_owned(),
-        "zellij".to_owned(),
-    ];
-    argv.extend(exec.into_iter().skip(1));
-    argv
-}
-
 fn close_all_sidebar_panes(session: &LiveZellijSession) {
     let panes = expect_list_panes(session.path(), session.name());
     let sidebar_ids: Vec<String> = panes
@@ -441,26 +393,6 @@ fn wait_for_no_sidebar_panes(xdg: &Path, session: &str) {
         }
         std::thread::sleep(Duration::from_millis(100));
     }
-}
-
-fn chmod_executable(path: &Path) {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = std::fs::metadata(path).expect("metadata").permissions();
-        perms.set_mode(0o755);
-        std::fs::set_permissions(path, perms).expect("chmod");
-    }
-}
-
-fn path_with_front(dir: &Path) -> String {
-    let original = std::env::var_os("PATH").unwrap_or_default();
-    let mut paths = vec![dir.to_path_buf()];
-    paths.extend(std::env::split_paths(&original));
-    std::env::join_paths(paths)
-        .expect("join PATH")
-        .to_string_lossy()
-        .into_owned()
 }
 
 fn wait_for_path(path: &Path, message: &str) {
