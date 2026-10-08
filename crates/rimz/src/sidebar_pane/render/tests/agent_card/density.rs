@@ -3,6 +3,62 @@ use super::*;
 use crate::config::CardDensityMode;
 
 #[test]
+fn no_selection_preserves_expanded_density_and_sticky_delegation_overrides() {
+    let mut agents = Vec::new();
+    for handle in ["first", "second"] {
+        let mut parent = density_agent(handle, "claude", AgentStatus::Idle, None, 0);
+        parent.prompt = Some("delegated sweep".to_owned());
+        parent.pending_waits.push(crate::agents::PendingWait {
+            name: format!("{handle} timer"),
+            trigger: crate::agents::PendingWaitTrigger::Timer {
+                due: fixed_now() + Duration::from_secs(720),
+                delay: Some("30m".to_owned()),
+            },
+            armed_at: Some(fixed_now()),
+        });
+        agents.push(parent);
+        let mut child = density_agent(
+            &format!("{handle}-child"),
+            "claude",
+            AgentStatus::Running,
+            None,
+            12,
+        );
+        child.parent_agent_id = Some(handle.into());
+        child.subagent_description = Some(format!("{handle} delegation"));
+        agents.push(child);
+    }
+    let mut snapshot = snapshot_with(agents);
+    snapshot.theme.display.card_density = CardDensityMode::Expanded;
+    let mut ui = UiState::default();
+    let expanded = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 54, 32);
+    for handle in ["first", "second"] {
+        assert!(
+            expanded.contains(&format!("{handle} delegation")),
+            "{expanded}"
+        );
+    }
+    assert_eq!(expanded.matches("◷ timer").count(), 2, "{expanded}");
+    let first = snapshot.worktree_groups[0]
+        .rows
+        .iter()
+        .find(|row| row.id == "first")
+        .unwrap()
+        .id
+        .clone();
+    ui.delegation_overrides.insert(first.clone(), false);
+    let closed = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 54, 32);
+    assert!(!closed.contains("first delegation"), "{closed}");
+    assert!(closed.contains("second delegation"), "{closed}");
+
+    snapshot.theme.display.card_density = CardDensityMode::Auto;
+    ui.delegation_overrides.insert(first, true);
+    let opened = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 54, 32);
+    assert!(opened.contains("first delegation"), "{opened}");
+    assert!(!opened.contains("second delegation"), "{opened}");
+}
+
+#[test]
 fn compact_density_trims_resting_cards_by_status() {
     let mut selected = density_agent(
         "selected-1",
@@ -59,7 +115,7 @@ fn compact_density_trims_resting_cards_by_status() {
         &snapshot,
         None,
         &UiState {
-            selected_index: 6,
+            selected_index: Some(6),
             ..Default::default()
         },
         54,
@@ -128,7 +184,7 @@ fn compact_density_running_waiting_render_placeholder_meter() {
         &snapshot,
         None,
         &UiState {
-            selected_index: 2,
+            selected_index: Some(2),
             ..Default::default()
         },
         54,
@@ -184,7 +240,7 @@ fn compact_density_selected_card_opens_to_full_form() {
         &snapshot,
         None,
         &UiState {
-            selected_index: usize::MAX,
+            selected_index: Some(usize::MAX),
             ..Default::default()
         },
         54,
@@ -199,7 +255,7 @@ fn compact_density_selected_card_opens_to_full_form() {
         &snapshot,
         None,
         &UiState {
-            selected_index: 0,
+            selected_index: Some(0),
             ..Default::default()
         },
         54,
@@ -262,7 +318,7 @@ fn expanded_density_shows_subagents_on_non_selected_cards() {
         &snapshot,
         None,
         &UiState {
-            selected_index: 0,
+            selected_index: Some(0),
             ..Default::default()
         },
         54,
@@ -307,7 +363,7 @@ fn expanded_density_shows_subagents_on_non_selected_cards() {
     parent.sub_agent_count += 1;
     let turn = parent.user_turn_started_at;
     let mut ui = UiState {
-        selected_index: 0,
+        selected_index: Some(0),
         ..Default::default()
     };
     let folded = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 54, 31);

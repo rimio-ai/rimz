@@ -16,7 +16,7 @@ fn browse_roams_other_tabs_rows() {
         ],
     );
     let mut ui = UiState {
-        selected_index: 0,
+        selected_index: Some(0),
         selected_pane: Some(here.clone()),
         baseline_pane: Some(here.clone()),
         ..Default::default()
@@ -82,7 +82,7 @@ fn browse_survives_a_jump_and_ends_on_baseline_change() {
         ],
     );
     let mut ui = UiState {
-        selected_index: 0,
+        selected_index: Some(0),
         selected_pane: Some(from.clone()),
         baseline_pane: Some(from.clone()),
         interactions: interactions_for(&snapshot, 0),
@@ -152,7 +152,7 @@ fn browse_drops_when_its_pane_leaves_the_room() {
         ],
     );
     let mut ui = UiState {
-        selected_index: 1,
+        selected_index: Some(1),
         selected_pane: Some(gone.clone()),
         baseline_pane: Some(real.clone()),
         browse: Some(browse(&gone, Some(&real))),

@@ -36,7 +36,10 @@ pub fn serve_fixture(snapshot: SidebarSnapshot, refresh_ms: u16) -> super::Resul
     let mut terminal = Terminal::new(backend)?;
     terminal.clear()?;
 
-    let mut ui = UiState::default();
+    let mut ui = UiState {
+        selected_index: Some(0),
+        ..UiState::default()
+    };
     let (caps, wrap_pixels) = detect_pixel_render_env();
     let pixel_lease = lease_demo_slot(&RuntimePaths::shared());
     let mut paint = FramePainter::new(
@@ -89,7 +92,7 @@ pub fn serve_gallery(
             let pixel_lease = lease_demo_slot(&runtime);
             GalleryState {
                 ui: UiState {
-                    selected_index,
+                    selected_index: Some(selected_index),
                     ..UiState::default()
                 },
                 snapshot,

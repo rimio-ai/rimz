@@ -864,6 +864,7 @@ fn unread_jump_banner_shows_only_when_the_lead_is_scrolled_off() {
     );
 
     let ui = UiState {
+        selected_index: Some(0),
         scroll_offset: 99,
         manual_scroll: Some(ManualScroll {
             selection_at_start: None,
@@ -908,6 +909,7 @@ fn render_make_up_filter_narrows_the_body() {
         ),
     });
     let ui = UiState {
+        selected_index: Some(0),
         make_up_filter: BodyLens::from(BodyFilter::Status(crate::agents::AgentStatus::Failed)),
         ..Default::default()
     };
@@ -946,6 +948,7 @@ fn render_unread_filter_narrows_the_body() {
         .expect("failed row");
     failed.unread = true;
     let ui = UiState {
+        selected_index: Some(0),
         make_up_filter: BodyLens::from(BodyFilter::Unread),
         ..Default::default()
     };

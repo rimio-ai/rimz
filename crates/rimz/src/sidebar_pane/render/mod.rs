@@ -336,7 +336,7 @@ fn prune_delegation_state(snapshot: &SidebarSnapshot, ui: &mut UiState) {
 }
 
 fn selected_row<'a>(snapshot: &'a SidebarSnapshot, ui: &UiState) -> Option<&'a SidebarRow> {
-    ui.visible_roster(snapshot).row(ui.selected_index)
+    ui.visible_roster(snapshot).row(ui.selected_index?)
 }
 
 /// Selection expands a bare, not-yet-prompted idle card whose compose
@@ -634,7 +634,15 @@ pub fn render_fixed<W: Write>(
     let viewport = Viewport::Fixed(Rect::new(0, 0, width, height));
     let mut terminal = Terminal::with_options(backend, TerminalOptions { viewport })?;
     Backend::clear_region(terminal.backend_mut(), ClearType::All)?;
-    draw_to_terminal(&mut terminal, snapshot, None, &mut UiState::default())?;
+    draw_to_terminal(
+        &mut terminal,
+        snapshot,
+        None,
+        &mut UiState {
+            selected_index: Some(0),
+            ..UiState::default()
+        },
+    )?;
     Ok(())
 }
 
@@ -651,7 +659,10 @@ pub fn render_fixed_line_ansi<W: Write>(
         &mut terminal,
         snapshot,
         None,
-        &mut UiState::default(),
+        &mut UiState {
+            selected_index: Some(0),
+            ..UiState::default()
+        },
     ));
     write_buffer_line_ansi(&mut writer, terminal.backend().buffer())
 }
@@ -668,6 +679,7 @@ pub fn render_expanded_line_ansi<W: Write>(
     let mut snapshot = snapshot.clone();
     snapshot.theme.display.card_density = CardDensityMode::Expanded;
     let mut ui = UiState {
+        selected_index: Some(0),
         expanded_groups: snapshot
             .worktree_groups
             .iter()

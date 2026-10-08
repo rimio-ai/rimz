@@ -66,7 +66,9 @@ pub(in crate::sidebar_pane::render) fn worktree_group_lines_projected(
     let first_row = range.start;
     let passing = range.len();
     let group_selected = group.kind != SidebarWorktreeKind::External
-        && (first_row..first_row + passing).contains(&ctx.selected_index);
+        && ctx
+            .selected_index
+            .is_some_and(|selected| (first_row..first_row + passing).contains(&selected));
     let lane = if group_selected {
         Gutter::Lane
     } else {
@@ -136,7 +138,7 @@ pub(in crate::sidebar_pane::render) fn worktree_group_lines_projected(
         block.push_with_regions(line, None, target.map(|target| (0..u16::MAX, target)));
     }
     for (this_row, row) in range.zip(visible_group.rows(roster).iter().copied()) {
-        let selected = this_row == ctx.selected_index;
+        let selected = Some(this_row) == ctx.selected_index;
         let expanded = CardExpansion::resolve(
             ctx.delegation_overrides,
             ctx.delegation_history,

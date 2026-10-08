@@ -76,8 +76,11 @@ pub(super) fn row_selection_reach(
     roster: &VisibleRoster<'_>,
     group: &VisibleGroup<'_>,
     row_index: usize,
-    selected_index: usize,
+    selected_index: Option<usize>,
 ) -> SelectionReach {
+    let Some(selected_index) = selected_index else {
+        return SelectionReach::Unreached;
+    };
     let range = group.range();
     if !range.contains(&row_index) {
         return SelectionReach::Unreached;
@@ -142,7 +145,7 @@ pub(in crate::sidebar_pane::render) struct RowCtx<'a> {
     pub(in crate::sidebar_pane::render) tool_repeat_warn_after: u32,
     pub(in crate::sidebar_pane::render) stalled_after_secs: u32,
     pub(in crate::sidebar_pane::render) card_density: CardDensityMode,
-    pub(in crate::sidebar_pane::render) selected_index: usize,
+    pub(in crate::sidebar_pane::render) selected_index: Option<usize>,
     pub(in crate::sidebar_pane::render) animation_phase: u64,
     pub(in crate::sidebar_pane::render) cost_rolls: &'a CostRolls,
     pub(in crate::sidebar_pane::render) lead_unread: Option<&'a str>,

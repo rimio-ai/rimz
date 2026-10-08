@@ -606,7 +606,7 @@ fn input_browse_arms_order_hold_before_next_fold() {
     let second = panes[1].pane_id.clone();
     rig.state.current = snapshot_with_panes(&rig.ws, panes);
     rig.state.ui.selected_pane = Some(first);
-    rig.state.ui.selected_index = 0;
+    rig.state.ui.selected_index = Some(0);
     rig.state.ui.last_order =
         super::super::order_hold::capture_order(&rig.state.current, &rig.state.ui);
 

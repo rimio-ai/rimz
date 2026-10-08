@@ -619,7 +619,7 @@ fn render_enriched_selected_agent_card() {
         &snapshot,
         None,
         &UiState {
-            selected_index: 0,
+            selected_index: Some(0),
             help_visible: false,
             animation_phase: 0,
             ..Default::default()

@@ -734,7 +734,8 @@ fn focused_read_clear_keeps_live_rank_when_unread_clears() {
     );
     assert!(!row_unread_by_id(&a.current, "sess-1"));
     assert_eq!(
-        a.ui.selected_index, 1,
+        a.ui.selected_index,
+        Some(1),
         "selection re-anchors to the focused row's ranked position"
     );
 
@@ -749,7 +750,11 @@ fn focused_read_clear_keeps_live_rank_when_unread_clears() {
         vec!["sess-2", "sess-1"],
         "after the hold expires the live rank stays unchanged"
     );
-    assert_eq!(a.ui.selected_index, 1, "selection follows the same pane");
+    assert_eq!(
+        a.ui.selected_index,
+        Some(1),
+        "selection follows the same pane"
+    );
 }
 
 #[test]

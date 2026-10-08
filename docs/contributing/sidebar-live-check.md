@@ -198,7 +198,7 @@ A reload is the fourth: after `rimz reload` onto a new build the host's PID chan
 
 ## First frame of a new tab
 
-A new tab's sidebar seeds its first frame from the room's published projection ([state.md](../internals/sidebar/state.md)), so its first non-blank screen already holds the room's cards. No test sees the real first paint; poll the new pane from the moment the tab opens. Save each loop as a script under the room's root and run it with `cargo xtask sandbox in <root> -- <script>`, since both need the room's environment. Each writes one file per non-blank capture, named by the milliseconds since the tab was opened.
+A new tab's sidebar seeds its first frame from the room's published projection ([state.md](../internals/sidebar/state.md)), so its first non-blank screen already holds the room's cards. When that projection does not yet list the focused shell, every card rests at its configured density, with no card open by selection, no spines, and no lane. The loop-state regression test checks the seeded paint; poll the new pane from the moment the tab opens to check the live backend too. Save each loop as a script under the room's root and run it with `cargo xtask sandbox in <root> -- <script>`, since both need the room's environment. Each writes one file per non-blank capture, named by the milliseconds since the tab was opened.
 
 tmux, given the room's tmux socket, its session, and an output directory:
 
@@ -239,7 +239,7 @@ while [ $i -lt 12 ]; do
 done
 ```
 
-The earliest file for the sidebar pane must already name the room's agents; a later file shows the correction, the new tab's own row. A tmux capture is a few milliseconds apart, so the first file is close to the first paint. A Zellij capture goes through the session and resolves about 0.2 s, so it proves the first screen seen and bounds the correction only coarsely. Repeat after the room has sat idle for a minute: the seed is refused once the projection is older than its age bound, and a live room must stay inside it.
+The earliest file for the sidebar pane must already name the room's agents, with no selection-open card and no `▌`, `▐`, `▎`, or `🮇` cells. A later file shows the correction: the new tab's shell row is selected and its group has the lane. That single visible change is expected. A tmux capture is a few milliseconds apart, so the first file is close to the first paint. A Zellij capture goes through the session and resolves about 0.2 s, so it proves the first screen seen and bounds the correction only coarsely. Repeat after the room has sat idle for a minute: the seed is refused once the projection is older than its age bound, and a live room must stay inside it.
 
 ## Inspect the data behind a card
 

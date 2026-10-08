@@ -41,6 +41,13 @@ mod worktree;
 use super::*;
 use crate::sidebar_pane::view::BodyLens;
 
+fn selected_ui() -> UiState {
+    UiState {
+        selected_index: Some(0),
+        ..Default::default()
+    }
+}
+
 fn fixed_workspace() -> WorkspaceId {
     WorkspaceId::parse("ws_0123456789abcdef01234567").unwrap()
 }
@@ -163,7 +170,7 @@ fn snapshot_to_screen_with_alert(
     width: u16,
     height: u16,
 ) -> String {
-    snapshot_to_screen_with_alert_and_ui(snapshot, alert, &UiState::default(), width, height)
+    snapshot_to_screen_with_alert_and_ui(snapshot, alert, &selected_ui(), width, height)
 }
 
 fn snapshot_to_screen_with_alert_and_ui(
@@ -314,6 +321,7 @@ fn expanded_line_frame_bypasses_group_cap_and_fits_content() {
     let ui = fixed_theme_ui(
         &measured_snapshot,
         &UiState {
+            selected_index: Some(0),
             expanded_groups: measured_snapshot
                 .worktree_groups
                 .iter()
@@ -492,7 +500,7 @@ fn codex_context(now: Timestamp) -> AgentContext {
 
 fn ui_at_phase(phase: u64) -> UiState {
     UiState {
-        selected_index: 0,
+        selected_index: Some(0),
         help_visible: false,
         animation_phase: phase,
         ..Default::default()
@@ -516,7 +524,7 @@ fn test_row_ctx<'a>(
         tool_repeat_warn_after: snapshot.attention.tool_repeat_warn_after.get(),
         stalled_after_secs: snapshot.attention.stalled_after_secs.get(),
         card_density: snapshot.theme.display.card_density,
-        selected_index,
+        selected_index: Some(selected_index),
         animation_phase,
         cost_rolls,
         lead_unread: lead_unread(&snapshot.worktree_groups).map(|(id, _)| id),
@@ -598,7 +606,7 @@ fn bottom_chrome_texts(
     snapshot: &SidebarSnapshot,
     alert: Option<&Alert>,
 ) -> (Vec<String>, Vec<HitRegion>) {
-    bottom_chrome_texts_with_ui(snapshot, alert, &UiState::default())
+    bottom_chrome_texts_with_ui(snapshot, alert, &selected_ui())
 }
 
 fn bottom_chrome_texts_with_ui(
@@ -1079,6 +1087,7 @@ fn lead_unread_is_none_without_an_actionable_unread_row() {
 fn unread_jump_banner_tracks_lead_visibility_and_maps_inert() {
     let snapshot = overflowing_fleet_with_unread_lead();
     let ui = UiState {
+        selected_index: Some(0),
         scroll_offset: 99,
         manual_scroll: Some(ManualScroll {
             selection_at_start: None,
@@ -1102,7 +1111,7 @@ fn unread_jump_banner_tracks_lead_visibility_and_maps_inert() {
         "banner is structural and carries a typed click target",
     );
 
-    let default_ui = UiState::default();
+    let default_ui = selected_ui();
     let composed = compose_lines(&snapshot, None, &default_ui, &theme, 54, 20);
     assert!(
         composed
@@ -1121,7 +1130,7 @@ fn unread_jump_banner_tracks_lead_visibility_and_maps_inert() {
 
     let overflow = overflowing_fleet();
     let overflow_theme = Theme::for_sidebar(&overflow.theme);
-    let default_ui = UiState::default();
+    let default_ui = selected_ui();
     let composed = compose_lines(&overflow, None, &default_ui, &overflow_theme, 54, 20);
     assert!(
         composed

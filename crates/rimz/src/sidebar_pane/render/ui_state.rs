@@ -16,7 +16,7 @@ pub(in crate::sidebar_pane) use crate::mux::focus_anchor::{FrozenOrder, FrozenRo
 
 #[derive(Clone, Debug, Default)]
 pub(in crate::sidebar_pane) struct UiState {
-    pub(in crate::sidebar_pane) selected_index: usize,
+    pub(in crate::sidebar_pane) selected_index: Option<usize>,
     pub(in crate::sidebar_pane) help_visible: bool,
     /// Wall-clock animation frame counter, advanced by the serve loop's
     /// animation tick. The renderer derives the running-agent spin frame from

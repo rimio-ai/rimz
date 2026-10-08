@@ -1,6 +1,27 @@
 use super::*;
 
 #[test]
+fn unseated_fold_does_not_poison_the_dashboard_before_correction() {
+    let mut snapshot = clickable_block_snapshot(&workspace());
+    snapshot.providers = tabbed_snapshot(&workspace()).providers;
+    let mut ui = UiState::default();
+    reconcile_selection(&mut ui, &snapshot, None);
+    assert_eq!(ui.selected_pane, None);
+    assert_eq!(ui.selected_index, None);
+    assert_eq!(ui.last_agent_kind, None);
+    let selected = snapshot.worktree_groups[0].rows[0]
+        .pane
+        .as_ref()
+        .unwrap()
+        .pane_id
+        .clone();
+    reconcile_selection(&mut ui, &snapshot, Some(selected.clone()));
+    assert_eq!(ui.selected_pane, Some(selected));
+    assert_eq!(ui.selected_index, Some(0));
+    assert_eq!(ui.last_agent_kind.unwrap().as_str(), "claude");
+}
+
+#[test]
 fn cold_start_derives_from_focused_pane_or_holds_unseated() {
     let ws = workspace();
     let active = PaneId::from_parts(MuxName::Zellij, "terminal_2");
@@ -15,7 +36,7 @@ fn cold_start_derives_from_focused_pane_or_holds_unseated() {
 
     reconcile_selection(&mut ui, &active_snapshot, Some(active.clone()));
 
-    assert_eq!(ui.selected_index, 1);
+    assert_eq!(ui.selected_index, Some(1));
     assert_eq!(ui.selected_pane, Some(active.clone()));
     assert_eq!(ui.baseline_pane, Some(active));
 
@@ -31,7 +52,7 @@ fn cold_start_derives_from_focused_pane_or_holds_unseated() {
     reconcile_selection(&mut ui, &snapshot, None);
 
     assert_eq!(ui.selected_pane, None);
-    assert_eq!(ui.selected_index, 0);
+    assert_eq!(ui.selected_index, None);
 }
 #[test]
 fn baseline_changes_move_highlight_while_none_derivations_hold_it() {
@@ -47,7 +68,7 @@ fn baseline_changes_move_highlight_while_none_derivations_hold_it() {
         ],
     );
     let mut ui = UiState {
-        selected_index: 0,
+        selected_index: Some(0),
         selected_pane: Some(was.clone()),
         baseline_pane: Some(was),
         ..Default::default()
@@ -55,7 +76,7 @@ fn baseline_changes_move_highlight_while_none_derivations_hold_it() {
 
     reconcile_selection(&mut ui, &snapshot, Some(now_active.clone()));
 
-    assert_eq!(ui.selected_index, 2);
+    assert_eq!(ui.selected_index, Some(2));
     assert_eq!(ui.selected_pane, Some(now_active.clone()));
     assert_eq!(ui.baseline_pane, Some(now_active));
 
@@ -68,7 +89,7 @@ fn baseline_changes_move_highlight_while_none_derivations_hold_it() {
         ],
     );
     let mut ui = UiState {
-        selected_index: 0,
+        selected_index: Some(0),
         selected_pane: Some(held.clone()),
         baseline_pane: Some(held.clone()),
         ..Default::default()
@@ -93,7 +114,7 @@ fn selection_reanchors_to_its_pane_after_a_reorder() {
         ],
     );
     let mut ui = UiState {
-        selected_index: 1,
+        selected_index: Some(1),
         selected_pane: Some(active.clone()),
         baseline_pane: Some(active.clone()),
         ..Default::default()
@@ -101,7 +122,11 @@ fn selection_reanchors_to_its_pane_after_a_reorder() {
 
     reconcile_selection(&mut ui, &snapshot, Some(active.clone()));
 
-    assert_eq!(ui.selected_index, 0, "re-anchored to the pane's new row");
+    assert_eq!(
+        ui.selected_index,
+        Some(0),
+        "re-anchored to the pane's new row"
+    );
     assert_eq!(ui.selected_pane, Some(active));
 }
 #[test]
@@ -118,7 +143,7 @@ fn selection_drops_when_its_pane_leaves_the_room() {
         ],
     );
     let mut ui = UiState {
-        selected_index: 1,
+        selected_index: Some(1),
         selected_pane: Some(gone.clone()),
         baseline_pane: Some(gone),
         ..Default::default()
@@ -128,5 +153,5 @@ fn selection_drops_when_its_pane_leaves_the_room() {
 
     assert_eq!(ui.selected_pane, None, "dangling identity dropped");
     assert_eq!(ui.baseline_pane, None, "absent baseline cleared");
-    assert!(ui.selected_index < 2, "clamped to a valid row");
+    assert_eq!(ui.selected_index, None, "dangling ordinal dropped");
 }

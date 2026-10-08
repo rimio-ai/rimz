@@ -33,6 +33,47 @@ fn pipeline_snapshot() -> SidebarSnapshot {
 }
 
 #[test]
+fn no_selection_opens_no_card_and_draws_no_lane() {
+    let members = ["planner", "coder"].map(|handle| {
+        let mut member = agent(
+            handle,
+            "claude",
+            AgentStatus::Idle,
+            Some("/repo/main"),
+            Some("main"),
+            Some("folded task"),
+        );
+        member.team = Some("forge".to_owned());
+        member.role = Some(handle.to_owned());
+        member.model = Some("opus".to_owned());
+        member.usage.context_pct = Some(38);
+        member
+    });
+    let mut snapshot = snapshot_with(members.into());
+    snapshot.theme.display.card_density = crate::config::CardDensityMode::Compact;
+    let rendered =
+        snapshot_to_screen_with_alert_and_ui(&snapshot, None, &UiState::default(), 54, 18);
+    assert!(
+        !rendered.contains("folded task"),
+        "both teammates rest:\n{rendered}"
+    );
+    for glyph in ['▌', '▐', '▎', '🮇'] {
+        assert!(
+            !rendered.contains(glyph),
+            "no selection glyph {glyph}:\n{rendered}"
+        );
+    }
+    assert!(
+        !rendered
+            .lines()
+            .find(|line| line.contains("⑂ main"))
+            .unwrap()
+            .contains('┄')
+    );
+    assert_snapshot("no_selection_opens_no_card_and_draws_no_lane", rendered);
+}
+
+#[test]
 fn header_label_parts_keep_styles_only_when_the_full_label_fits() {
     let theme = Theme::fixed(false);
     for finished in [false, true] {
@@ -819,7 +860,7 @@ fn selecting_named_team_member_folds_teammate_entries() {
         &snapshot,
         None,
         &UiState {
-            selected_index,
+            selected_index: Some(selected_index),
             ..UiState::default()
         },
         54,
@@ -906,7 +947,7 @@ fn selecting_inline_cohort_member_expands_only_that_card() {
         &snapshot,
         None,
         &UiState {
-            selected_index,
+            selected_index: Some(selected_index),
             ..UiState::default()
         },
         54,
@@ -1348,7 +1389,7 @@ fn render_pr_badge_is_a_diff_safe_sanitized_hyperlink() {
         "OSC 8 metadata leaves the badge layout unchanged"
     );
 
-    let bytes = snapshot_to_bytes_with_alert_and_ui(&linked, None, &UiState::default(), 44, 14);
+    let bytes = snapshot_to_bytes_with_alert_and_ui(&linked, None, &selected_ui(), 44, 14);
     let raw = String::from_utf8_lossy(&bytes);
     let url = crate::osc::osc_text(unsafe_url);
     let open_hash = format!("\x1b]8;;{url}\x1b\\#");
@@ -1481,13 +1522,8 @@ fn render_pr_badge_link_and_header_fill_follow_admission() {
         // so the bytes are asserted at a realistic width in
         // `render_pr_badge_is_a_diff_safe_sanitized_hyperlink`.
         let links = group_hyperlinks_at_width(&snapshot, &theme, 0, width);
-        let bytes = snapshot_to_bytes_with_alert_and_ui(
-            &snapshot,
-            None,
-            &UiState::default(),
-            width as u16,
-            14,
-        );
+        let bytes =
+            snapshot_to_bytes_with_alert_and_ui(&snapshot, None, &selected_ui(), width as u16, 14);
         let raw = String::from_utf8_lossy(&bytes);
         if width < 16 {
             assert!(links.is_empty(), "no link at width {width}: {links:?}");

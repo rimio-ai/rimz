@@ -3,6 +3,7 @@ use crate::ids::LinkTier;
 
 fn search_ui(query: &str) -> UiState {
     UiState {
+        selected_index: Some(0),
         make_up_filter: BodyLens {
             query: Some(query.to_owned()),
             ..Default::default()
@@ -282,7 +283,7 @@ fn search_line_without_dashboard_reserves_one_row_and_help_stays_above() {
     let mut snapshot = snapshot_with(Vec::new());
     let theme = Theme::fixed(true);
     let ui = search_ui("auth");
-    let empty_baseline = compose_lines(&snapshot, None, &UiState::default(), &theme, 42, 24);
+    let empty_baseline = compose_lines(&snapshot, None, &selected_ui(), &theme, 42, 24);
     assert_eq!(
         compose_lines(&snapshot, None, &ui, &theme, 42, 24).bottom_height,
         empty_baseline.bottom_height + 1
@@ -296,7 +297,7 @@ fn search_line_without_dashboard_reserves_one_row_and_help_stays_above() {
             .to_string()
             .contains(theme.glyph(crate::config::GlyphRole::ChromeHairline))
     );
-    let baseline = compose_lines(&snapshot, None, &UiState::default(), &theme, 42, 24);
+    let baseline = compose_lines(&snapshot, None, &selected_ui(), &theme, 42, 24);
     ui.help_visible = true;
     let composed = compose_lines(&snapshot, None, &ui, &theme, 42, 24);
     assert_eq!(composed.bottom_height, baseline.bottom_height + 1);

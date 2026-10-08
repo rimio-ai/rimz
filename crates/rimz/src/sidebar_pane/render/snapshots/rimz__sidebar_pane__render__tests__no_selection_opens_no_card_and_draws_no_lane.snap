@@ -1,0 +1,22 @@
+---
+source: crates/rimz/src/sidebar_pane/render/tests/mod.rs
+expression: screen
+---
+ ⌘ query-engine
+
+ ◎ 0                                  ◇ 0 ↘ 0 ↗ 0 ◌ 0
+ ¤ 2                                            $0.00
+ ────────────────────────────────────────────────────
+ ? 0   ! 0   ⏸︎ 0   ✓ 0                ⢿ 0   ☾ 0   ○ 2
+
+ ⑂ main · forge
+ ○ planner · opus
+ ○ coder · opus
+
+
+
+ ────────────────────────────────────────────────────
+  W: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                       $0.00
+  M: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                       $0.00
+
+                                           ? for help

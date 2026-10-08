@@ -618,7 +618,7 @@ fn selected_agent_without_context_keeps_bare_token_total() {
         &snapshot,
         None,
         &UiState {
-            selected_index: 0,
+            selected_index: Some(0),
             help_visible: false,
             animation_phase: 0,
             ..Default::default()
@@ -670,7 +670,7 @@ fn codex_card_renders_the_per_call_composition() {
         &snapshot,
         None,
         &UiState {
-            selected_index: 0,
+            selected_index: Some(0),
             help_visible: false,
             animation_phase: 0,
             ..Default::default()
@@ -740,7 +740,7 @@ fn qwen_card_combines_live_gauge_with_correlated_call_split() {
             &snapshot_with(vec![agent]),
             None,
             &UiState {
-                selected_index: 0,
+                selected_index: Some(0),
                 ..Default::default()
             },
             52,
@@ -810,7 +810,7 @@ fn codex_card_fills_bar_from_rich_context_usage_without_reported_percentage() {
         &snapshot,
         None,
         &UiState {
-            selected_index: 0,
+            selected_index: Some(0),
             help_visible: false,
             animation_phase: 0,
             ..Default::default()
@@ -919,7 +919,7 @@ fn copilot_token_only_context_shows_composition_with_placeholder_gauge() {
         &snapshot,
         None,
         &UiState {
-            selected_index: 0,
+            selected_index: Some(0),
             ..Default::default()
         },
         48,
@@ -957,7 +957,7 @@ fn copilot_token_only_context_shows_composition_with_placeholder_gauge() {
         &snapshot_with(vec![copilot.clone()]),
         None,
         &UiState {
-            selected_index: 0,
+            selected_index: Some(0),
             ..Default::default()
         },
         48,
@@ -986,7 +986,7 @@ fn copilot_token_only_context_shows_composition_with_placeholder_gauge() {
         &compact,
         None,
         &UiState {
-            selected_index: 1,
+            selected_index: Some(1),
             ..Default::default()
         },
         48,
@@ -1093,7 +1093,7 @@ fn pi_card_renders_cache_write_in_the_per_call_composition() {
         &snapshot,
         None,
         &UiState {
-            selected_index: 0,
+            selected_index: Some(0),
             help_visible: false,
             animation_phase: 0,
             ..Default::default()
@@ -1482,7 +1482,7 @@ fn codex_app_server_context_links_to_rich_card() {
         &snapshot,
         None,
         &UiState {
-            selected_index: 0,
+            selected_index: Some(0),
             help_visible: false,
             animation_phase: 0,
             ..Default::default()
