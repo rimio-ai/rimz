@@ -1297,7 +1297,7 @@ fn older_ready_blocker_names_claimed_and_sent_prompt_fifo_holds() {
         blocker.status = status;
         blocker.last_attempt_at = Some(now);
         assert_eq!(
-            older_ready_blocker([&queued, &head, &blocker], &head, |message| {
+            older_ready_blocker([&queued, &head, &blocker], &head, now, |message| {
                 message.is_deliverable(now)
             }),
             Some(&blocker)
@@ -1309,7 +1309,7 @@ fn older_ready_blocker_names_claimed_and_sent_prompt_fifo_holds() {
             _ => &queued,
         };
         assert_eq!(
-            older_ready_blocker([&blocker, &queued], &head, |message| {
+            older_ready_blocker([&blocker, &queued], &head, now, |message| {
                 message.is_deliverable(now)
             }),
             Some(expected),
@@ -1319,7 +1319,85 @@ fn older_ready_blocker_names_claimed_and_sent_prompt_fifo_holds() {
     let mut command =
         delivery_message(1, &receiver, DeliveryGate::Done, None).with_body(MessageBody::Command);
     command.status = MessageStatus::Sent;
-    assert!(older_ready_blocker([&command], &head, |_| true).is_none());
+    assert!(older_ready_blocker([&command], &head, now, |_| true).is_none());
+}
+
+#[test]
+fn overdue_sent_prompt_releases_boundary_batch_without_reconciliation() {
+    let now = Timestamp::from_second(1_700_000_100).unwrap();
+    let receiver = agent("receiver", Some("coder"));
+    let head = delivery_message(2, &receiver, DeliveryGate::Done, None);
+    for (sent, held) in sent_hold_cases(now, &receiver) {
+        assert_eq!(
+            delivery_batch_indices(
+                &[sent, head.clone()],
+                &head.message_id,
+                AgentStatus::Idle,
+                now,
+            ),
+            (!held).then_some(vec![1]),
+        );
+    }
+}
+
+#[test]
+fn overdue_sent_prompt_releases_older_ready_blocker_without_reconciliation() {
+    let now = Timestamp::from_second(1_700_000_100).unwrap();
+    let receiver = agent("receiver", Some("coder"));
+    let head = delivery_message(2, &receiver, DeliveryGate::Done, None);
+    for (sent, held) in sent_hold_cases(now, &receiver) {
+        assert_eq!(
+            older_ready_blocker([&sent], &head, now, |message| message.is_deliverable(now)),
+            held.then_some(&sent),
+        );
+    }
+}
+
+#[test]
+fn overdue_sent_prompt_releases_in_flight_claim_without_reconciliation() {
+    let now = Timestamp::from_second(1_700_000_100).unwrap();
+    let receiver = agent("receiver", Some("coder"));
+    for (sent, held) in sent_hold_cases(now, &receiver) {
+        assert_eq!(
+            in_flight_claim(
+                [&sent],
+                &receiver.kind,
+                &receiver.agent_id,
+                receiver.name.as_deref(),
+                now,
+            ),
+            held.then_some(&sent),
+        );
+    }
+}
+
+fn sent_hold_cases(now: Timestamp, receiver: &AgentState) -> Vec<(MessageRecord, bool)> {
+    let mut overdue = delivery_message(1, receiver, DeliveryGate::Done, None).with_sender(
+        MessageSender::Harness {
+            notice: HarnessNotice::Wait,
+        },
+    );
+    overdue.status = MessageStatus::Sent;
+    overdue.updated_at = now - overdue.body.delivery_window() - Duration::from_millis(1);
+    overdue.last_sent_at = Some(overdue.updated_at);
+    let mut fallback = overdue.clone();
+    fallback.last_sent_at = None;
+    let mut at_deadline = overdue.clone();
+    at_deadline.last_sent_at = Some(overdue.updated_at + Duration::from_millis(1));
+    let mut fresh = overdue.clone();
+    fresh.last_sent_at = Some(overdue.updated_at + Duration::from_millis(2));
+    let mut compacting = overdue.clone();
+    compacting.retry_after = Some(now + Duration::from_secs(30));
+    let mut deferral_expired = compacting.clone();
+    deferral_expired.retry_after = Some(now);
+    vec![
+        (overdue, false),
+        (fallback, false),
+        (at_deadline, false),
+        (fresh, true),
+        (compacting, true),
+        (deferral_expired, false),
+    ]
 }
 
 #[test]
