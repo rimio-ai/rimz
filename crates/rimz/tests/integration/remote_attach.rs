@@ -471,9 +471,37 @@ fn web_prep_invocation_count(log: &Path) -> usize {
         .count()
 }
 
-fn reserve_local_port() -> u16 {
-    let listener = TcpListener::bind(("127.0.0.1", 0)).expect("reserve local web port");
-    listener.local_addr().expect("reserved address").port()
+/// Keep the probe below the ephemeral range's low end so a port-0 bind cannot
+/// take it between this probe and the child's auto-forward availability check.
+/// A host whose range starts at or below 20000 leaves no such port, and the
+/// scan then runs inside the range rather than failing the test outright.
+fn available_forward_probe_port() -> u16 {
+    let ceiling = std::fs::read_to_string("/proc/sys/net/ipv4/ip_local_port_range")
+        .ok()
+        .and_then(|range| range.split_whitespace().next()?.parse::<u16>().ok())
+        .filter(|low| *low > 20000)
+        .unwrap_or(32768);
+    let offset = std::process::id() % u32::from(ceiling - 20000);
+    let start = 20000 + u16::try_from(offset).expect("probe offset fits below the ceiling");
+    (start..ceiling)
+        .chain(20000..start)
+        .find(|port| TcpListener::bind(("127.0.0.1", *port)).is_ok())
+        .expect("free auto-forward probe port below the ephemeral range")
+}
+
+fn relay_url(stdout: &str) -> (u16, &str) {
+    let line = stdout.lines().next().unwrap_or_default();
+    let url = url::Url::parse(line)
+        .unwrap_or_else(|error| panic!("invalid relay URL: {error}; stdout:\n{stdout}"));
+    let port = url
+        .port()
+        .unwrap_or_else(|| panic!("relay URL has no port; stdout:\n{stdout}"));
+    assert_eq!(
+        line,
+        format!("http://127.0.0.1:{port}/?room=rimz-project-a1b2c3"),
+        "unexpected relay URL; stdout:\n{stdout}"
+    );
+    (port, line)
 }
 
 fn closed_ssh_endpoint(env: &Env) -> (PathBuf, SocketAddr) {
@@ -516,9 +544,9 @@ fn http_204_probe() -> (String, Arc<AtomicBool>, std::thread::JoinHandle<()>) {
     (format!("http://{address}/generate_204"), stop, join)
 }
 
-fn remote_web_command(env: &Env, log: &Path, port: u16) -> Command {
+fn remote_web_command(env: &Env, log: &Path) -> Command {
     let mut cmd = remote_connect_command(env, log);
-    cmd.args(["--web", "--web-port", &port.to_string()]);
+    cmd.arg("--web");
     cmd
 }
 
@@ -707,7 +735,7 @@ fn link_stats_ingest_keeps_a_newer_publishers_sidecar() {
 fn supervised_connect_opens_new_remote_listener_forwards() {
     let env = Env::new();
     let log = env.project_root.join("ssh-trace.log");
-    let port = reserve_local_port();
+    let port = available_forward_probe_port();
     let out = remote_connect_command(&env, &log)
         .env("RIMZ_REMOTE_PROBE_MS", "10")
         .env("RIMZ_TEST_PROBE_PORT", port.to_string())
@@ -2217,8 +2245,7 @@ fn reachable_host_and_probe_blackout_kill_a_zombie_transport() {
 fn remote_web_missing_binary_points_at_setup_after_supervised_master() {
     let env = Env::new();
     let log = env.project_root.join("ssh-trace.log");
-    let port = reserve_local_port();
-    let out = remote_web_command(&env, &log, port)
+    let out = remote_web_command(&env, &log)
         .env("RIMZ_TEST_SSH_WEB_PREP_STATUS", "127")
         .bounded_output()
         .expect("run remote web prep without rimz");
@@ -2239,13 +2266,35 @@ fn remote_web_missing_binary_points_at_setup_after_supervised_master() {
 }
 
 #[test]
+fn remote_web_explicit_port_in_use_fails_before_any_tunnel() {
+    let env = Env::new();
+    let log = env.project_root.join("ssh-trace.log");
+    let listener = TcpListener::bind(("127.0.0.1", 0)).expect("hold explicit web port");
+    let port = listener.local_addr().expect("held address").port();
+    let out = remote_web_command(&env, &log)
+        .args(["--web-port", &port.to_string()])
+        .bounded_output()
+        .expect("run remote web with an occupied port");
+
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("binding local web tunnel relay"),
+        "{stderr}"
+    );
+    assert!(out.stdout.is_empty(), "no URL on relay bind failure");
+    assert_eq!(tunnel_invocation_count(&log), 0, "no tunnel opens");
+    assert_eq!(master_invocation_count(&log), 1, "one supervised master");
+    assert_eq!(web_prep_invocation_count(&log), 1, "one preparation");
+}
+
+#[test]
 fn remote_web_emits_prep_url_and_browser_only_after_tunnel_readiness() {
     let env = Env::new();
     let log = env.project_root.join("ssh-trace.log");
     let stdout_path = env.project_root.join("stdout.log");
     let tunnel_plan = env.project_root.join("tunnel.plan");
     let master_exit_plan = env.project_root.join("master-exit.plan");
-    let port = reserve_local_port();
     let (browser_bin, browser_log) = write_browser_shim(&env);
     let ambient_path = std::env::var_os("PATH").unwrap_or_default();
     let path = std::env::join_paths(
@@ -2256,7 +2305,7 @@ fn remote_web_emits_prep_url_and_browser_only_after_tunnel_readiness() {
     std::fs::write(&master_exit_plan, "0\n").expect("write master exit plan");
     let stdout = std::fs::File::create(&stdout_path).expect("create stdout log");
 
-    let mut child = remote_web_command(&env, &log, port)
+    let mut child = remote_web_command(&env, &log)
         .env(
             "RIMZ_TEST_SSH_WEB_PREP_STDERR",
             "remote preparation started\n",
@@ -2281,8 +2330,9 @@ fn remote_web_emits_prep_url_and_browser_only_after_tunnel_readiness() {
     );
     assert!(!browser_log.exists(), "browser waits for tunnel readiness");
 
-    let url = format!("http://127.0.0.1:{port}/?room=rimz-project-a1b2c3");
-    let browser = wait_for_notify_log(&browser_log, &[&url]);
+    let stdout = wait_for_notify_log(&stdout_path, &["/?room=rimz-project-a1b2c3\n"]);
+    let (port, url) = relay_url(&stdout);
+    let browser = wait_for_notify_log(&browser_log, &[url]);
     assert_eq!(browser.trim(), url);
     assert!(
         child.try_wait().expect("poll remote web connect").is_none(),
@@ -2324,11 +2374,10 @@ fn remote_web_relay_injects_auth_for_http_and_safari_websockets() {
     let request_log = env.project_root.join("tunnel-http.log");
     let stdout_path = env.project_root.join("stdout.log");
     let plan = env.project_root.join("tunnel.plan");
-    let port = reserve_local_port();
     std::fs::write(&plan, "0\n").expect("write tunnel plan");
     let stdout = std::fs::File::create(&stdout_path).expect("create stdout log");
 
-    let mut child = remote_web_command(&env, &log, port)
+    let mut child = remote_web_command(&env, &log)
         .arg("--no-reconnect")
         .env("RIMZ_TEST_SSH_TUNNEL_HTTP_LOG", &request_log)
         .env("RIMZ_TEST_SSH_TUNNEL_SLEEP_MS", "1200")
@@ -2339,8 +2388,8 @@ fn remote_web_relay_injects_auth_for_http_and_safari_websockets() {
         .expect("spawn remote web relay");
 
     wait_for_tunnel_invocation(&mut child, &log);
-    let url = format!("http://127.0.0.1:{port}/?room=rimz-project-a1b2c3");
-    wait_for_notify_log(&stdout_path, &[&url]);
+    let stdout = wait_for_notify_log(&stdout_path, &["/?room=rimz-project-a1b2c3\n"]);
+    let (port, _) = relay_url(&stdout);
     assert_ne!(tunnel_forward_ports(&log), [port]);
 
     let mut http = TcpStream::connect(("127.0.0.1", port)).expect("connect HTTP relay");
@@ -2399,11 +2448,10 @@ fn remote_web_reconnects_once_after_established_transport_exit() {
     let log = env.project_root.join("ssh-trace.log");
     let tunnel_plan = env.project_root.join("tunnel.plan");
     let master_exit_plan = env.project_root.join("master-exit.plan");
-    let port = reserve_local_port();
     std::fs::write(&tunnel_plan, "0\n0\n").expect("write tunnel plan");
     std::fs::write(&master_exit_plan, "255\n0\n").expect("write master exit plan");
 
-    let out = remote_web_command(&env, &log, port)
+    let out = remote_web_command(&env, &log)
         .env("RIMZ_TEST_SSH_TUNNEL_PLAN", &tunnel_plan)
         .env("RIMZ_TEST_SSH_MASTER_EXIT_MS", "500")
         .env("RIMZ_TEST_SSH_MASTER_EXIT_PLAN", &master_exit_plan)
@@ -2434,7 +2482,7 @@ fn remote_web_recovers_from_prep_transport_failure_after_confirmed_master() {
     let tunnel_plan = env.project_root.join("tunnel.plan");
     std::fs::write(&prep_plan, "255\n0\n").expect("write prep plan");
     std::fs::write(&tunnel_plan, "0\n").expect("write tunnel plan");
-    let out = remote_web_command(&env, &log, reserve_local_port())
+    let out = remote_web_command(&env, &log)
         .env("RIMZ_TEST_SSH_WEB_PREP_PLAN", &prep_plan)
         .env("RIMZ_TEST_SSH_TUNNEL_PLAN", &tunnel_plan)
         .env("RIMZ_TEST_SSH_MASTER_EXIT_MS", "500")
@@ -2460,7 +2508,7 @@ fn remote_web_retries_control_forward_exit_before_readiness() {
     let log = env.project_root.join("ssh-trace.log");
     let tunnel_plan = env.project_root.join("tunnel.plan");
     std::fs::write(&tunnel_plan, "255\n0\n").expect("write tunnel plan");
-    let out = remote_web_command(&env, &log, reserve_local_port())
+    let out = remote_web_command(&env, &log)
         .env("RIMZ_TEST_SSH_TUNNEL_PLAN", &tunnel_plan)
         .env("RIMZ_TEST_SSH_MASTER_EXIT_MS", "500")
         .bounded_output()
@@ -2484,10 +2532,9 @@ fn remote_web_no_reconnect_stays_a_direct_one_shot() {
     let env = Env::new();
     let log = env.project_root.join("ssh-trace.log");
     let plan = env.project_root.join("tunnel.plan");
-    let port = reserve_local_port();
     std::fs::write(&plan, "255\n0\n").expect("write tunnel plan");
 
-    let out = remote_web_command(&env, &log, port)
+    let out = remote_web_command(&env, &log)
         .arg("--no-reconnect")
         .env("RIMZ_TEST_SSH_TUNNEL_LISTEN", "1")
         .env("RIMZ_TEST_SSH_TUNNEL_SLEEP_MS", "80")
@@ -2511,10 +2558,9 @@ fn remote_web_fatal_exit_before_readiness_emits_no_url() {
     let env = Env::new();
     let log = env.project_root.join("ssh-trace.log");
     let plan = env.project_root.join("tunnel.plan");
-    let port = reserve_local_port();
     std::fs::write(&plan, "2\n").expect("write tunnel plan");
 
-    let out = remote_web_command(&env, &log, port)
+    let out = remote_web_command(&env, &log)
         .env("RIMZ_TEST_SSH_TUNNEL_PLAN", &plan)
         .bounded_output()
         .expect("run fatal remote web tunnel");
@@ -2534,10 +2580,9 @@ fn remote_web_direct_clean_exit_before_readiness_is_an_error() {
     let env = Env::new();
     let log = env.project_root.join("ssh-trace.log");
     let plan = env.project_root.join("tunnel.plan");
-    let port = reserve_local_port();
     std::fs::write(&plan, "0\n").expect("write tunnel plan");
 
-    let out = remote_web_command(&env, &log, port)
+    let out = remote_web_command(&env, &log)
         .arg("--no-reconnect")
         .env("RIMZ_TEST_SSH_TUNNEL_PLAN", &plan)
         .bounded_output()
