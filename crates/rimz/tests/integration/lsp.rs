@@ -870,6 +870,7 @@ fn lsp_show_batches_source_and_failures() {
         ])
         .assert()
         .code(5)
+        .stdout(predicates::str::contains("show.rs:210-210\n   210\t  line 210\n"))
         .stdout(predicates::str::contains("show.rs:3-5\n     3\t  line 3\n     4\t  line 4\n     5\t  line 5\n\nshow.rs:208-209\n   208\t  line 208\n   209\t  line 209\n"));
     env.rimz()
         .args([

@@ -71,7 +71,7 @@ rimz lsp show 'crates/rimz/src/lsp/check.rs::run ~20' --full
 
 Each block starts with checkout-relative `path:START-END`, then disk lines numbered with a right-aligned six-character line number and a tab. Blocks follow argument order, separated by one blank line. Items longer than 200 lines show their direct children's name-line snippets and spans instead, under `(outline: N lines; --full prints the body)`. `--full` prints the body; items without children and line-only anchors always print their bodies. An unsaved owning editor adds `(unsaved in editor)` after the header range; the body still comes from disk.
 
-Failures print `<argument>  <status>  <detail>` and do not omit later arguments. Missing files or symbols, external anchors, and lines outside the file exit 5; ambiguous paths exit 6; missing server configuration is `unchecked`, exit 3. Server errors retain query exit codes. Mixed failures use query severity (3, 4, 1, 6, 5, 0). An invalid argument exits 2 before any query. `show` has no `--json` flag.
+An end past the file prints through the last disk line, with the header stating the printed range; outline children whose name lines fall past the file are omitted. Failures print `<argument>  <status>  <detail>` and do not omit later arguments. Missing files or symbols, external anchors, a start of zero or past the file, and a start after the end exit 5; ambiguous paths exit 6; missing server configuration is `unchecked`, exit 3. Server errors retain query exit codes. Mixed failures use query severity (3, 4, 1, 6, 5, 0). An invalid argument exits 2 before any query. `show` has no `--json` flag.
 
 ## Check anchors in a notes file
 
