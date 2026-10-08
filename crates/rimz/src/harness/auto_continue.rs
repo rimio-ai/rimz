@@ -17,7 +17,7 @@
 //!   agent is still idle (`last_activity` has not advanced), the producer
 //!   spawns the detached `rimz agents auto-continue` helper that queues and
 //!   delivers a resume-gated message record.
-//! - **Clear.** Activity or a delivered resume message clears the record, except a nudge's still-limited reply carries the park and its attempt anchor forward. Every retained terminal outcome and the live resume queue evidence exhaustion, while helper spawns only pace retries.
+//! - **Clear.** A rate-limit or overload record is held while a nudged turn is Running with no displayed error. A limit or overload reply within the same park class carries the activity baseline forward, preserving the attempt anchor and retry state; real progress or a delivered message with no turn start clears the record. Every retained terminal outcome and the live resume queue evidence exhaustion, while helper spawns only pace retries.
 //!
 //! This module owns only the durable record, the pane join, and the spawn — the
 //! arm decision is the pure, unit-tested [`resume_park`].
@@ -30,7 +30,7 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use crate::RuntimePaths;
-use crate::agents::{AgentCardRef, AgentState, ProviderCapacity, TurnErrorClass};
+use crate::agents::{AgentCardRef, AgentState, AgentStatus, ProviderCapacity, TurnErrorClass};
 use crate::config::ResumeConfig;
 use crate::disk::atomic::write_temp_then_rename_cache;
 use crate::ids::{AgentKind, AgentSessionId, MessageId, PaneId, WorkspaceId};
@@ -111,9 +111,9 @@ pub struct AutoContinueRequest {
 struct ParkRecord {
     /// The park class and its durable resume facts.
     kind: ParkKind,
-    /// Current activity baseline; a nudge's limit reply advances it without starting a new park.
+    /// Current activity baseline; a nudge's limit or overload reply advances it without starting a new park.
     parked_at_activity: Timestamp,
-    /// Original baseline when a limit reply rebases the activity stamp.
+    /// Original baseline when a limit or overload reply rebases the activity stamp.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     attempts_since: Option<Timestamp>,
     /// When the last auto-continue attempt fired, throttling re-nudges so a nudge
@@ -236,16 +236,26 @@ pub(crate) fn resume_parked(
         }
         clear_budget_park(runtime, &agent.kind, &agent.agent_id);
         if let Some(mut record) = read_park(&path)
-            && matches!(record.kind, ParkKind::RateLimit { .. })
+            && matches!(
+                record.kind,
+                ParkKind::RateLimit { .. } | ParkKind::Overloaded { .. }
+            )
             && !still_parked(&record, agent.last_activity)
-            && limit_marker_active(agent)
             && latest_resume_message(resume_messages, agent, &record).is_some()
         {
-            record
-                .attempts_since
-                .get_or_insert(record.parked_at_activity);
-            record.parked_at_activity = agent.last_activity;
-            write_park(&path, &record);
+            let turn_error = agent.displayed_turn_error();
+            if agent.status == AgentStatus::Running && turn_error.is_none() {
+                continue;
+            }
+            if turn_error.is_some_and(|(class, _)| {
+                class.is_limit() || class == TurnErrorClass::PausedOverloaded
+            }) {
+                record
+                    .attempts_since
+                    .get_or_insert(record.parked_at_activity);
+                record.parked_at_activity = agent.last_activity;
+                write_park(&path, &record);
+            }
         }
         let capacity = provider_capacities.get(&agent.login_key());
         match resume_park(agent, capacity, now) {

@@ -414,7 +414,7 @@ The cause picks the clock:
 
 - A rate-limit or spend-limit park waits for the latest applicable account or model window to reset, including a Fable model limit. If the provider still reports a limit afterward, nudges stay at least two minutes apart; those limit replies do not restart the attempt cap.
 - A daily dollar-cap park resumes at the next local midnight, when the cap reopens.
-- A transient overload or API-error park has no reset clock, so it retries on a lengthening ramp: the first attempt three minutes after the failure, then every five (`resume.auto_continue_backoff_secs`, default `[180, 300]`, last value repeating).
+- A transient overload or API-error park has no reset clock, so it retries on a lengthening ramp: the first attempt three minutes after the failure, then every five (`resume.auto_continue_backoff_secs`, default `[180, 300]`, last value repeating). Overload replies do not restart the attempt cap either.
 
 Each attempt is a keystroke you could have typed: when the clock fires and the agent is still parked, RimZ sends the configured nudge (`continue` by default, `resume.auto_continue_text`) into the agent's pane through the same path as `rimz message --steer`. All causes share one attempt cap (`resume.auto_continue_max_retries`, default 12, just under an hour on the default ramp); when it runs out, the card goes `failed` and routes to you like any other actionable card. Every attempt appends the park time, delivery verdict, and message id to the assist log that `rimz stats --assists` prints.
 
