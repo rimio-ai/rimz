@@ -890,6 +890,7 @@ impl crate::agents::capabilities::LaunchCapability for CodexAdapter {
             "app-server-control",
             "app-server-daemon",
             "packages",
+            "models_cache.json",
         ]
     }
 

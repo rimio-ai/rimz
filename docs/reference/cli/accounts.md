@@ -59,7 +59,7 @@ A `standalone` account links the settings entries; a `shared` account links thos
 
 | Provider | Settings files | Settings directories | Private names |
 | --- | --- | --- | --- |
-| Codex | `config.toml`, `AGENTS.md` | none | `auth.json`, `app-server-control`, `app-server-daemon`, `packages` |
+| Codex | `config.toml`, `AGENTS.md` | none | `auth.json`, `app-server-control`, `app-server-daemon`, `packages`, `models_cache.json` |
 | Claude | `settings.json`, `settings.local.json`, `CLAUDE.md` | `skills/`, `plugins/`, `agents/`, `commands/`, `output-styles/` | `.credentials.json`, `.claude.json`, `.oauth_refresh.lock`, `.last-update-result.json` |
 
 Each entry takes one of four paths, and nothing but a link is ever removed:

@@ -234,6 +234,8 @@ fn private_names_and_their_dotted_siblings_stay_real() {
                 "auth.json.bak",
                 "app-server-control",
                 "packages",
+                "models_cache.json",
+                "models_cache.json.bak",
             ][..],
         ),
         (
@@ -790,18 +792,27 @@ fn a_real_lock_in_both_homes_is_no_conflict_in_either_mode() {
 
 #[test]
 fn a_link_at_an_unshared_name_is_removed_under_any_live_count() {
-    for (shared, agents) in [
-        (true, Some(2)),
-        (true, None),
-        (false, Some(2)),
-        (false, None),
+    for (kind, shared, agents) in [
+        ("claude", true, Some(2)),
+        ("claude", true, None),
+        ("claude", false, Some(2)),
+        ("claude", false, None),
+        ("codex", true, Some(2)),
+        ("codex", true, None),
+        ("codex", false, Some(2)),
+        ("codex", false, None),
     ] {
-        let home = Fixture::new("claude");
+        let home = Fixture::new(kind);
+        let private_name = if kind == "codex" {
+            "models_cache.json"
+        } else {
+            ".last-update-result.json"
+        };
         fs::create_dir_all(home.native.join(".oauth_refresh.lock")).unwrap();
-        fs::write(home.native.join(".last-update-result.json"), "update").unwrap();
+        fs::write(home.native.join(private_name), "update").unwrap();
         let links = [
             (".oauth_refresh.lock", true),
-            (".last-update-result.json", false),
+            (private_name, false),
             (".oauth_refresh.lock.owner", true),
             ("settings.json.tmp.123.ab", false),
         ];
@@ -827,7 +838,7 @@ fn a_link_at_an_unshared_name_is_removed_under_any_live_count() {
                 .iter()
                 .find(|warning| warning.contains(&format!("{slot} ")))
                 .unwrap_or_else(|| panic!("no warning names {slot}: {warnings:?}"));
-            assert!(warning.contains("claude@work"), "{warning}");
+            assert!(warning.contains(&format!("{kind}@work")), "{warning}");
             assert!(
                 warning.contains(&home.native.display().to_string()),
                 "{warning}"
@@ -837,7 +848,7 @@ fn a_link_at_an_unshared_name_is_removed_under_any_live_count() {
         assert!(report.unlinked.is_empty(), "{:?}", report.unlinked);
         assert!(home.native.join(".oauth_refresh.lock").is_dir());
         assert_eq!(
-            fs::read_to_string(home.native.join(".last-update-result.json")).unwrap(),
+            fs::read_to_string(home.native.join(private_name)).unwrap(),
             "update"
         );
 
