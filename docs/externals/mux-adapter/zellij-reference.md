@@ -366,6 +366,8 @@ An initial command after `--` runs in the first pane only when `attach` creates 
 - `--near-current-pane` keeps that anchor for stacked spawns. Combined with `--direction`, it creates nothing while still printing a pane id (observed on 0.44.3).
 - `--no-focus` (0.45.0 and later) opens the pane without moving any client's focus, placed relative to the pane the command came from or the explicit tab.
 
+With `stacked_pane_list false`, a `--stacked --no-focus` insert sends the new PTY no resize, leaving its kernel winsize at 0x0 until a frame pass or focus. Observed on 0.45.1; the omission is present in 0.45.0 and the 0.46.0 tip: [`TiledPanes::add_pane_to_stack_of_pane_id`](https://github.com/zellij-org/zellij/blob/3cfd57f89af9919b9fd87f1d4ec5dfae8fb20336/zellij-server/src/panes/tiled_panes/mod.rs#L501-L539) sets emulator geometry and inserts the pane without resizing its PTY; [`Tab::add_stacked_pane_to_pane_id`](https://github.com/zellij-org/zellij/blob/3cfd57f89af9919b9fd87f1d4ec5dfae8fb20336/zellij-server/src/tab/mod.rs#L8131-L8163) skips the focus/frame pass when `should_focus` is false.
+
 **`list-panes` output.** JSON output is an array of `PaneListEntry` (`zellij-utils/src/data.rs`): every `PaneInfo` field flattened, plus `tab_id`, `tab_position`, `tab_name`, and, for terminal panes, `pane_command` and `pane_cwd`. With `--command`, `--all`, or `--json`, the server fills those last two per terminal pane through `enrich_panes_with_pty_data` in `zellij-server/src/route.rs`, whichever field flags are set:
 
 | Field | Value | When absent |
@@ -376,7 +378,7 @@ An initial command after `--` runs in the first pane only when `attach` creates 
 
 The output has no pid. Each enriched pane costs two sequential round trips to the PTY thread, so a JSON listing of a large session takes time in proportion to its terminal pane count.
 
-Observed on 0.45.1: `list-panes --json` content geometry does not reflect `pane_frames`, so pane frames are observable only in an attached client's rendered output. A pane's inner size does not reflect them either, and a tab holding one framed pane renders no frame at all whatever `pane_frames` says, because `borderless=true` siblings are not framed and so do not lift that count. Measuring `pane_frames` therefore needs two framed panes in the tab and a sized client.
+`pane_content_rows` and `pane_content_columns` follow the pane's applied frame offsets ([`pane_info_for_pane`](https://github.com/zellij-org/zellij/blob/3cfd57f89af9919b9fd87f1d4ec5dfae8fb20336/zellij-server/src/tab/mod.rs#L8927-L8940)). They equal the outer rectangle for a tab's sole framed pane, which renders no frame, and for a stacked `--no-focus` newcomer before a frame pass reaches it. `borderless=true` siblings do not lift the framed-pane count. Measuring frame offsets therefore needs two framed panes in the tab and a sized client; content geometry alone cannot distinguish titles from no frames for an expanded stack member.
 
 **Blocking panes.** `--blocking` waits for the command to exit and its pane to close; `--block-until-exit` waits for any exit; `--block-until-exit-success` and `--block-until-exit-failure` return on that status or when the pane closes. `new-pane` and `zellij run` take all four, and `new-tab` takes the three `--block-until-exit` forms. The exit code reaches the caller, so `zellij action new-pane --block-until-exit-success -- cargo test && next-step` chains.
 
@@ -475,6 +477,8 @@ Top-level KDL options are written `option_name value`. `zellij options --help` e
 | `web_sharing` | `"off"`, `"on"`, `"disabled"` | `disabled` cannot be turned on at runtime |
 | `client_async_worker_tasks` | `4`; `0` means the physical core count | Async workers per active client; used by web clients |
 | `nested_session_handling` | `ask`, `fullscreen`, `descend`, `never` | Policy when a Zellij client runs inside a Zellij pane |
+
+Frame style resolves as follows: `pane_frames false` gives none; otherwise `pane_frame_style full` gives full, and anything else gives titles ([`PaneFrameStyle::from_options`](https://github.com/zellij-org/zellij/blob/3cfd57f89af9919b9fd87f1d4ec5dfae8fb20336/zellij-utils/src/input/options.rs#L93-L100)). The live style is exposed to pane plugins through `ModeInfo::pane_frame_style`, not through a `zellij action` query. `set-pane-frame-style` re-applies frames and resizes every tiled PTY in every tab even when the requested style is unchanged ([`ScreenInstruction::SetPaneFrameStyle`](https://github.com/zellij-org/zellij/blob/3cfd57f89af9919b9fd87f1d4ec5dfae8fb20336/zellij-server/src/screen.rs#L11157-L11164)).
 
 The file also takes `keybinds`, `themes`, `plugins` (aliases), and `load_plugins` blocks. `load_plugins { "file:/path.wasm" }` starts background plugins when a session starts. It is a configuration-file block only; layouts have no `load_plugins` (observed on 0.44.3).
 
