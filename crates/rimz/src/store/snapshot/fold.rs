@@ -43,7 +43,9 @@ struct EventCarryover {
     resume_outcomes: Vec<ResumeOutcome>,
 }
 
-/// Latest terminal resume-gated prompt outcome for one agent card.
+/// One terminal resume-gated prompt outcome, deduplicated by message id.
+///
+/// The rollup retains every terminal outcome within the seven-day retention window.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResumeOutcome {
     pub message_id: MessageId,
@@ -417,7 +419,7 @@ struct FoldedDelta {
 struct FoldDeltaSeed {
     agents: BTreeMap<(AgentKind, AgentSessionId), AgentState>,
     identity: AgentIdentityState,
-    resume_outcomes: BTreeMap<(AgentKind, AgentSessionId), ResumeOutcome>,
+    resume_outcomes: BTreeMap<(AgentKind, AgentSessionId, MessageId), ResumeOutcome>,
     saw_session_rebirth: bool,
 }
 
@@ -657,7 +659,16 @@ fn catch_up_from(
                 .collect();
             let resume_seed = resume_outcomes
                 .into_iter()
-                .map(|outcome| ((outcome.kind.clone(), outcome.agent_id.clone()), outcome))
+                .map(|outcome| {
+                    (
+                        (
+                            outcome.kind.clone(),
+                            outcome.agent_id.clone(),
+                            outcome.message_id.clone(),
+                        ),
+                        outcome,
+                    )
+                })
                 .collect();
             (
                 FoldDeltaSeed {
@@ -708,10 +719,10 @@ fn catch_up_from(
 }
 
 fn reduce_resume_outcomes_seeded(
-    mut seed: BTreeMap<(AgentKind, AgentSessionId), ResumeOutcome>,
+    mut seed: BTreeMap<(AgentKind, AgentSessionId, MessageId), ResumeOutcome>,
     events: &[FoldEvent<'_>],
     now: Timestamp,
-) -> BTreeMap<(AgentKind, AgentSessionId), ResumeOutcome> {
+) -> BTreeMap<(AgentKind, AgentSessionId, MessageId), ResumeOutcome> {
     for event in events {
         let Some(outcome) = resume_outcome_for_event(event) else {
             continue;
@@ -748,7 +759,7 @@ fn merge_resume_outcomes(
     live: &[ResumeOutcome],
     now: Timestamp,
 ) -> Vec<ResumeOutcome> {
-    let mut map: BTreeMap<(AgentKind, AgentSessionId), ResumeOutcome> = BTreeMap::new();
+    let mut map = BTreeMap::new();
     for outcome in carryover.iter().chain(live) {
         upsert_resume_outcome(&mut map, outcome.clone());
     }
@@ -757,10 +768,14 @@ fn merge_resume_outcomes(
 }
 
 fn upsert_resume_outcome(
-    map: &mut BTreeMap<(AgentKind, AgentSessionId), ResumeOutcome>,
+    map: &mut BTreeMap<(AgentKind, AgentSessionId, MessageId), ResumeOutcome>,
     outcome: ResumeOutcome,
 ) {
-    let key = (outcome.kind.clone(), outcome.agent_id.clone());
+    let key = (
+        outcome.kind.clone(),
+        outcome.agent_id.clone(),
+        outcome.message_id.clone(),
+    );
     match map.get(&key) {
         Some(existing) if resume_outcome_cmp(existing, &outcome).is_ge() => {}
         _ => {
@@ -777,7 +792,7 @@ fn resume_outcome_cmp(left: &ResumeOutcome, right: &ResumeOutcome) -> std::cmp::
 }
 
 fn prune_resume_outcomes(
-    map: &mut BTreeMap<(AgentKind, AgentSessionId), ResumeOutcome>,
+    map: &mut BTreeMap<(AgentKind, AgentSessionId, MessageId), ResumeOutcome>,
     now: Timestamp,
 ) {
     map.retain(|_, outcome| {

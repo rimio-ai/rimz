@@ -301,7 +301,7 @@ pub struct SidebarSnapshot {
     /// Stamped by `assemble_snapshot`; the pure reducer path leaves it empty.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub fenced_sessions: BTreeSet<(AgentKind, AgentSessionId)>,
-    /// Latest terminal resume-gated prompt outcome per folded agent card.
+    /// Every terminal resume-gated prompt outcome within retention, one per message id.
     /// `None` means a pre-outcome snapshot and forces a fresh fold before the
     /// auto-continue producer reads it.
     #[serde(default, skip_serializing_if = "Option::is_none")]

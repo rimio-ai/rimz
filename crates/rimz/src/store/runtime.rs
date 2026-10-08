@@ -28,8 +28,9 @@ pub struct RuntimeProjection {
     pub ended: BTreeSet<(AgentKind, AgentSessionId)>,
     pub expelled: BTreeSet<(AgentKind, AgentSessionId)>,
     pub agents: Vec<AgentState>,
-    /// Terminal [`super::snapshot::ResumeOutcome`]s retained by the rollup,
-    /// independent of liveness scope, for durable retry/demotion decisions.
+    /// Every terminal [`super::snapshot::ResumeOutcome`] within retention.
+    ///
+    /// Independent of liveness scope, for durable retry/demotion decisions.
     pub resume_outcomes: Vec<super::snapshot::ResumeOutcome>,
 }
 

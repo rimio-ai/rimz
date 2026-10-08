@@ -907,6 +907,7 @@ fn limit_replies_preserve_pacing_and_retry_cap() {
         auto_continue_max_retries: 3,
         ..ResumeConfig::default()
     };
+    // Accumulating delivered messages mirror the rollup's retained terminal outcomes.
     let mut messages = vec![resume_message(100, MessageStatus::Delivered, 800)];
     let mut nudges = Vec::new();
     let mut activity = 1_000;
@@ -1232,19 +1233,20 @@ fn park_demotion_counts_delivered_outcomes_without_live_messages() {
     let mut record = rate_record(5_000, 6_001, Some(6_000), 0);
     record.attempts_since = Some(ts(1_000));
     write_park(&park_path(&runtime), &record);
-    // The rollup retains only the latest terminal outcome per agent card.
-    let outcomes = [ResumeOutcome {
-        message_id: MessageId::parse("msg_0000000000000001").unwrap(),
-        kind: agent.kind.clone(),
-        agent_id: agent.agent_id.clone(),
-        agent_name: agent.name.clone(),
-        status: MessageStatus::Delivered,
-        enqueued_at: ts(6_000),
-        updated_at: ts(6_000),
-    }];
+    let outcomes = (1..=3)
+        .map(|id| ResumeOutcome {
+            message_id: resume_message(id, MessageStatus::Delivered, 6_000).message_id,
+            kind: agent.kind.clone(),
+            agent_id: agent.agent_id.clone(),
+            agent_name: agent.name.clone(),
+            status: MessageStatus::Delivered,
+            enqueued_at: ts(6_000),
+            updated_at: ts(6_000),
+        })
+        .collect::<Vec<_>>();
     let mut config = crate::config::MachineConfig::default();
     config.resume.auto_continue = true;
-    config.resume.auto_continue_max_retries = 1;
+    config.resume.auto_continue_max_retries = 3;
     let demotion = park_demotion(
         None,
         &state,
@@ -1255,6 +1257,18 @@ fn park_demotion_counts_delivered_outcomes_without_live_messages() {
         ts(6_100),
     );
     assert!(demotion.is_spent(&agent, TurnErrorClass::PausedRateLimit));
+    config.resume.auto_continue_max_retries = 4;
+    let demotion = park_demotion(
+        None,
+        &state,
+        &runtime,
+        &config,
+        std::slice::from_ref(&agent),
+        &outcomes,
+        ts(6_100),
+    );
+    assert!(!demotion.is_spent(&agent, TurnErrorClass::PausedRateLimit));
+    config.resume.auto_continue_max_retries = 3;
     config.resume.auto_continue = false;
     let demotion = park_demotion(
         None,
@@ -1266,4 +1280,77 @@ fn park_demotion_counts_delivered_outcomes_without_live_messages() {
         ts(6_100),
     );
     assert!(!demotion.is_spent(&agent, TurnErrorClass::PausedRateLimit));
+}
+
+#[test]
+fn terminal_resume_outcomes_exhaust_park_through_store_projection() {
+    let (dir, runtime) = temp_runtime();
+    let state =
+        crate::StatePaths::under(runtime.workspace_id.clone(), &dir.path().join("state")).unwrap();
+    let store = crate::Store::open(state.clone(), runtime.clone()).unwrap();
+    let mut agent = parked_agent(6_001, 6_002, TurnErrorClass::PausedRateLimit, "usage limit");
+    agent.user_turn_started_at = Some(ts(6_001));
+    let mut record = rate_record(5_000, 6_001, Some(5_000), 0);
+    record.attempts_since = Some(ts(1_000));
+    write_park(&park_path(&runtime), &record);
+    let mut config = crate::config::MachineConfig::default();
+    config.resume.auto_continue = true;
+    config.resume.auto_continue_max_retries = 3;
+
+    for attempt in 1..=3 {
+        let mut message = MessageRecord::new(
+            runtime.workspace_id.clone(),
+            &agent,
+            "continue".to_owned(),
+            DeliveryGate::Resume,
+        );
+        message.enqueued_at = ts(2_000 + attempt * 120);
+        store.queue_message(&message, "session").unwrap();
+        let claimed = store
+            .claim_message_for_steer(&message.message_id, Timestamp::now())
+            .unwrap()
+            .unwrap();
+        store.record_sent_batch(&[claimed], "session").unwrap();
+        let delivered = store
+            .confirm_delivered_for_card_with(
+                agent.card_ref(),
+                crate::store::writer::DeliveryAck::TurnStarted { prompt: None },
+                "session",
+                |_, _| {},
+            )
+            .unwrap();
+        assert_eq!(delivered.len(), 1);
+        assert_eq!(delivered[0].status, MessageStatus::Delivered);
+        assert!(store.list_messages().unwrap().is_empty());
+
+        let projection = store
+            .runtime_projection(crate::store::runtime::RuntimeScope::Runtime)
+            .unwrap();
+        let demotion = park_demotion(
+            Some(&store),
+            &state,
+            &runtime,
+            &config,
+            std::slice::from_ref(&agent),
+            &projection.resume_outcomes,
+            ts(6_100),
+        );
+        assert_eq!(
+            demotion.is_spent(&agent, TurnErrorClass::PausedRateLimit),
+            attempt == 3,
+            "spent after {attempt} terminal attempts"
+        );
+        let messages =
+            read_resume_messages(Some(&store), &config.resume, &projection.resume_outcomes);
+        assert_eq!(
+            nudge_due(
+                &record,
+                evidenced_attempts(&messages, &agent, &record),
+                ts(6_100),
+                &config.resume
+            ),
+            attempt != 3,
+            "nudge due after {attempt} terminal attempts"
+        );
+    }
 }

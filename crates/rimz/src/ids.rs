@@ -446,7 +446,7 @@ uuid_v7_id!(
 /// 32-bit suffix seeded from UUIDv7 entropy and made process-monotonic. The
 /// fixed big-endian base32hex form preserves enqueue order in filenames while
 /// keeping command output compact.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct MessageId(String);
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
