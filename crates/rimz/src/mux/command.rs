@@ -3,17 +3,17 @@
 //! [`CommandSpec`] builds a `zellij`/`tmux` invocation that either runs to
 //! completion under a deadline ([`CommandSpec::run`]) or hands itself back to
 //! the caller as a [`Command`] for an interactive attach. Pure
-//! process/thread/timeout machinery — no panes, no sessions, no backends.
+//! process/I/O/timeout machinery — no panes, no sessions, no backends.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
-use std::io::{Read as _, Write as _};
 use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
 use super::{MuxErr, Result};
 use crate::child_process::user_temp_env;
+use crate::proc::{KillScope, pump_child};
 
 /// Upper bound on a single control-command round-trip ([`CommandSpec::run`]).
 /// Generous — a real `zellij`/`tmux` control command answers in milliseconds, so
@@ -209,13 +209,11 @@ impl CommandSpec {
 
     /// Run the command with raw exit status and captured output, bounded by
     /// `timeout`. Callers inspect nonzero status themselves. The child's
-    /// stdout/stderr are drained on threads so a full pipe never deadlocks the
-    /// wait, and the wait itself is event-driven: a waiter thread blocks in
-    /// `wait()` and posts the exit status over a channel, so the common (fast)
-    /// path wakes the instant the child exits — no poll step, no added latency.
-    /// On the deadline the child is SIGKILLed by pid, the waiter's `wait()`
-    /// reaps it, and a [`MuxErr::Timeout`] is returned. A [`RefusalRetry`] rule
-    /// reruns a refused command inside the same `timeout`.
+    /// stdout/stderr and optional stdin are polled on the calling thread;
+    /// their I/O and child exit share the same deadline. On the deadline the
+    /// child is SIGKILLed by pid and reaped, and a [`MuxErr::Timeout`] is
+    /// returned. A [`RefusalRetry`] rule reruns a refused command inside the
+    /// same `timeout`.
     pub(crate) fn output_raw_with_timeout(&self, timeout: Duration) -> Result<Output> {
         let started = Instant::now();
         let mut reruns = 0;
@@ -271,7 +269,7 @@ impl CommandSpec {
     /// rerun waits only what is left while the error still names the bound.
     fn run_bounded_inner(&self, timeout: Duration, started: Instant) -> Result<Output> {
         crate::proc::testkit::count_spawn();
-        let mut child = self
+        let child = self
             .to_command()
             .stdin(if self.stdin.is_some() {
                 Stdio::piped()
@@ -282,88 +280,30 @@ impl CommandSpec {
             .stderr(Stdio::piped())
             .spawn()
             .map_err(|err| self.spawn_error(err))?;
-        let drain = |pipe: Option<Box<dyn io::Read + Send>>| {
-            let (tx, rx) = std::sync::mpsc::channel();
-            std::thread::spawn(move || {
-                let mut buf = Vec::new();
-                if let Some(mut pipe) = pipe {
-                    let _ = pipe.read_to_end(&mut buf);
-                }
-                let _ = tx.send(buf);
+        let output = pump_child(
+            child,
+            self.stdin.as_deref(),
+            started + timeout,
+            KillScope::Process,
+        )?;
+        if output.timed_out {
+            return Err(MuxErr::Timeout {
+                program: self.program.clone(),
+                args: self.error_text(self.args.join(" ")),
+                seconds: timeout.as_secs(),
             });
-            rx
-        };
-        let input = self
-            .stdin
-            .as_ref()
-            .zip(child.stdin.take())
-            .map(|(bytes, mut pipe)| {
-                let bytes = bytes.clone();
-                let (tx, rx) = std::sync::mpsc::channel();
-                std::thread::spawn(move || {
-                    let result = pipe.write_all(&bytes);
-                    drop(pipe);
-                    let _ = tx.send(result);
-                });
-                rx
-            });
-        let stdout = drain(
-            child
-                .stdout
-                .take()
-                .map(|p| Box::new(p) as Box<dyn io::Read + Send>),
-        );
-        let stderr = drain(
-            child
-                .stderr
-                .take()
-                .map(|p| Box::new(p) as Box<dyn io::Read + Send>),
-        );
-        // The waiter owns the child handle (`wait()` needs it); the pid stays
-        // here for the deadline kill. The send is best-effort: a receiver that
-        // already timed out is gone, and that is fine.
-        let pid = child.id();
-        let (tx, rx) = std::sync::mpsc::channel();
-        let waiter = std::thread::spawn(move || {
-            let _ = tx.send(child.wait());
-        });
-        let remaining = || timeout.saturating_sub(started.elapsed());
-        let timeout_error = || MuxErr::Timeout {
-            program: self.program.clone(),
-            args: self.error_text(self.args.join(" ")),
-            seconds: timeout.as_secs(),
-        };
-        let status = match rx.recv_timeout(remaining()) {
-            Ok(status) => status?,
-            Err(_) => {
-                kill_by_pid(pid);
-                // Reap the killed child, but do not join pipe workers: a
-                // descendant may still hold their other ends open.
-                #[cfg(unix)]
-                let _ = waiter.join();
-                return Err(timeout_error());
-            }
-        };
-        let stdout = stdout
-            .recv_timeout(remaining())
-            .map_err(|_| timeout_error())?;
-        let stderr = stderr
-            .recv_timeout(remaining())
-            .map_err(|_| timeout_error())?;
-        if let Some(input) = input {
-            let result = input
-                .recv_timeout(remaining())
-                .map_err(|_| timeout_error())?;
-            // Preserve the command's stderr on failure; successful commands
-            // must not silently accept an incomplete input payload.
-            if status.success() {
-                result?;
-            }
+        }
+        // Preserve the command's stderr on failure; successful commands
+        // must not silently accept an incomplete input payload.
+        if output.status.success()
+            && let Some(Err(err)) = output.stdin
+        {
+            return Err(MuxErr::Io(err));
         }
         Ok(Output {
-            status,
-            stdout,
-            stderr,
+            status: output.status,
+            stdout: output.stdout,
+            stderr: output.stderr,
         })
     }
 
@@ -380,21 +320,6 @@ impl CommandSpec {
 fn duration_ms(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
-
-/// SIGKILL a timed-out child by pid. Safe against pid reuse: the waiter thread
-/// still holds the unreaped child handle (blocked in `wait()`), so the pid
-/// cannot be recycled before the signal lands.
-#[cfg(unix)]
-fn kill_by_pid(pid: u32) {
-    use nix::sys::signal::{Signal, kill};
-    use nix::unistd::Pid;
-    let _ = kill(Pid::from_raw(pid as i32), Signal::SIGKILL);
-}
-
-/// Off unix there is no signal to send; the timeout still returns and the
-/// waiter thread reaps the child whenever it eventually exits.
-#[cfg(not(unix))]
-fn kill_by_pid(_pid: u32) {}
 
 #[cfg(test)]
 mod tests {

@@ -14,12 +14,7 @@ mod macos;
 pub(crate) mod memory;
 mod pane_probe;
 
-pub(crate) use bounded::{BoundedOutput, run_bounded_output};
-#[expect(
-    unused_imports,
-    reason = "The mux runner adopts this engine in the next commit."
-)]
-pub(crate) use bounded::{KillScope, pump_child};
+pub(crate) use bounded::{BoundedOutput, KillScope, pump_child, run_bounded_output};
 pub(crate) use command::{command_program_basename, program_label, rimz_exec_worktree_path};
 
 use std::path::{Path, PathBuf};
