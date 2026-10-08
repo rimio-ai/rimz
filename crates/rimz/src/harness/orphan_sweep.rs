@@ -290,6 +290,11 @@ mod tests {
                 assert!(orphans.is_empty());
                 assert!(parents.is_empty());
             }
+            let (_, agents, _) = cursor.fold(&paths).unwrap();
+            assert!(
+                agents.len() >= rows,
+                "the seeded carryover reaches the fold"
+            );
         }
         assert_eq!(
             crate::store::snapshot::fold_testkit::rollup_rows_materialized() - before,
