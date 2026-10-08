@@ -109,7 +109,7 @@ caution = "yellow" # a palette role tracks the active [colors] table
 | --- | --- |
 | `good` | calm and positive: running tallies, low gauges, `+` additions, the `◌` cache-read marker |
 | `warn` | the caution floor: resting `?` waits, the low-mid gauge rung |
-| `caution` | the warm "hot or costly" amber: the gauge mid-band, the age-heat midpoint |
+| `caution` | the warm "hot or costly" amber: the gauge mid-band, the age-heat midpoint, and greyed toward `muted` for an expired context meter |
 | `alarm` | danger: failed `!`, the full-gauge crest, `-` removals (the fresh-input `↘` marker is a deeper red one step past it) |
 | `accent` | data: the `◎` sessions glyph, the `↗` output marker |
 | `cool` | cool informational: large window tags, the `◇` token total, the paused `⏸` glyph |
@@ -121,7 +121,7 @@ caution = "yellow" # a palette role tracks the active [colors] table
 | `selection` | the selected card's bright `▌` spine and the dim `▎` lane bracket |
 | `selection_bg` | the selected card's recessed background band |
 
-Two rules keep the palette honest: `alarm` red marks danger, and one warm `caution` amber means "hot or costly" everywhere.
+Two rules keep the palette honest: `alarm` red marks danger, and one warm `caution` amber means "hot or costly" everywhere. The [expired context meter](./sidebar.md) wears a fixed greyed `caution`, not another tunable slot.
 
 The four health slots also form a ramp, `good → warn → caution → alarm`, green through gold and orange to red, and the live meters slide along it. The context meter, the remote link badge, and the draining provider budget bar ride the whole ramp. Gauges that should stay quiet while healthy ride only the warm tail: the card age clock rests neutral and warms once it leaves its calm zone, and the reset-countdown pace does the same, with a cool green tail of its own once spending runs well under pace.
 

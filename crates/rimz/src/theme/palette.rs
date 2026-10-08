@@ -1,8 +1,8 @@
 //! Layer 2 — palette resolution: the scheme's raw tones (Layer 1) derived
 //! into the depth-resolved semantic slots the renderer paints, plus the
-//! heat/calm ramps and the fresh-input expense tone. Component tokens (Layer 3)
-//! and the Theme facade read these slots; this is the one place depth
-//! quantization and slot overrides are applied.
+//! heat/calm ramps and the derived expense and expired-cache tones. Component
+//! tokens (Layer 3) and the Theme facade read these slots; this is the one
+//! place depth quantization and slot overrides are applied.
 
 use crate::agents::context::PaceReading;
 use crate::config::{
@@ -42,6 +42,13 @@ pub(crate) const HEAT_RAMP_WARM_START: f32 = 1.0 / (HEAT_RAMP_STOPS as f32 - 1.0
 const INPUT_EXPENSE_CHROMA: f32 = 1.30;
 const INPUT_EXPENSE_DEEPEN: f32 = -0.09;
 
+/// Pull `caution` halfway to `muted`: a dull, warm grey for an expired prompt
+/// cache, not the hot bar's amber. `muted` sits nearly opposite `caution` in
+/// hue, so the blend drains chroma fast: past about 0.54 on the default scheme
+/// the tone leaves caution's hue for a pinkish grey no more chromatic than
+/// `muted` itself.
+const CACHE_EXPIRED_GREY: f32 = 0.5;
+
 /// The active palette, one named slot per semantic tone.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Palette {
@@ -58,6 +65,8 @@ pub struct Palette {
     /// hotter than the bar's scaled-to-red health run. Derived like `heat_ramp`,
     /// not a tunable slot.
     pub(crate) expense: Tone,
+    /// The context meter's fixed expired-cache tone; derived, not a tunable slot.
+    pub(crate) cache_expired: Tone,
     pub(crate) accent: Tone,
     pub(crate) cool: Tone,
     pub(crate) meta: Tone,
@@ -131,6 +140,14 @@ impl Palette {
             ),
             depth,
         );
+        let cache_expired = rgb_color(
+            oklab::blend(
+                heat_ramp[2],
+                derived_rgb_slot(theme.muted, tones.muted, &raw),
+                CACHE_EXPIRED_GREY,
+            ),
+            depth,
+        );
         Palette {
             depth,
             raw,
@@ -141,6 +158,7 @@ impl Palette {
             caution: slot(theme.caution, tones.caution),
             alarm: slot(theme.alarm, tones.alarm),
             expense,
+            cache_expired,
             accent: slot(theme.accent, tones.accent),
             cool: slot(theme.cool, tones.cool),
             meta: slot(theme.meta, tones.meta),

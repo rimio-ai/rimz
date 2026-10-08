@@ -112,6 +112,9 @@ pub(crate) enum Component {
     WindowLarge,
     /// Window token, `1M`+ tier — the loudest, an accent (never a brand clay).
     WindowHuge,
+    /// The context meter's expired prompt-cache fill: greyed `caution`, warm
+    /// enough to read as costly without looking like the hot bar.
+    CacheExpired,
 }
 
 #[cfg(test)]
@@ -157,6 +160,7 @@ impl Component {
         Component::WindowMedium,
         Component::WindowLarge,
         Component::WindowHuge,
+        Component::CacheExpired,
     ];
 }
 
@@ -181,6 +185,7 @@ impl Component {
             TeamLabel | SubagentHeader | WaitHeader | ProcIo | CacheWrite => palette.meta,
             RemoteControlDown | WorktreePrClosed | WorktreeCiFailing => palette.alarm,
             Input => palette.expense,
+            CacheExpired => palette.cache_expired,
             WorktreeQualifier | WorktreeMerged | WindowMedium => palette.muted,
         })
     }

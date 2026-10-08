@@ -15,7 +15,7 @@ Layer 1  Raw          theme/raw.rs              the scheme's terminal colors, ve
    │                                            background, foreground, six ANSI hues,
    │                                            bright blue, selection background
    ▼
-Layer 2  Semantic     theme/palette.rs          thirteen named slots, two ramps, the expense tone
+Layer 2  Semantic     theme/palette.rs          thirteen named slots, two ramps, the derived tones
    │                                            good warn caution alarm accent cool meta
    │                                            body muted faint rule selection selection_bg
    ▼
@@ -37,7 +37,7 @@ Each kind of change lands in one layer. A scheme switch replaces Layer 1 and a s
 | --- | --- |
 | [`mod.rs`](../../crates/rimz/src/theme/mod.rs) | The public surface the CLI and sidebar import. |
 | [`raw.rs`](../../crates/rimz/src/theme/raw.rs) | `RawPalette`, the imported scheme colors, and `derive_tones`, the one place raw hues gain semantic meaning. `RawPalette::DEFAULT` holds the default scheme's colors. |
-| [`palette.rs`](../../crates/rimz/src/theme/palette.rs) | `Palette::resolve`: raw palette selection, slot overrides, depth quantization, the heat and calm ramps, the expense tone, and `ramp_tone`. |
+| [`palette.rs`](../../crates/rimz/src/theme/palette.rs) | `Palette::resolve`: raw palette selection, slot overrides, depth quantization, the heat and calm ramps, the expense and cache-expired tones, and `ramp_tone`. |
 | [`tone.rs`](../../crates/rimz/src/theme/tone.rs) | `Tone`, a resolved `Rgb` or `Indexed` color awaiting a renderer. |
 | [`oklab.rs`](../../crates/rimz/src/theme/oklab.rs) | Perceptual color math: `blend`, `lift_lightness`, `warm_toward`, and the gamut fit. |
 | [`glyphs.rs`](../../crates/rimz/src/theme/glyphs.rs) | The glyph catalog (one row per `GlyphRole`), `GlyphSet::resolve`, and the first-run Nerd Font probes. |
@@ -89,19 +89,20 @@ The neutral ladder steps from background toward foreground, which is why it dark
 
 Each slot in `ThemeConfig` is an optional `ThemeColor`: a `PaletteRole` name, an RGB hex, or a raw xterm index. An omitted slot keeps the derived tone. A role or RGB value then passes through `Tone::from_rgb`, which emits `Tone::Rgb` at truecolor depth and the nearest xterm index at indexed depth. A raw index becomes `Tone::Indexed` unchanged at both depths.
 
-### 4. Build the ramps and the expense tone
+### 4. Build the ramps and derived tones
 
-Beside the flat slots, `Palette` carries two ramps and one derived tone:
+Beside the flat slots, `Palette` carries two ramps and two derived tones:
 
 | derived | stops | read by |
 | --- | --- | --- |
 | heat ramp | `good → warn → caution → alarm` | `Palette::budget_tone`, the one mapping from a remaining percent and the `[theme.display.budget_bar]` zones to a tone: the sidebar's provider budget bar and its window label, and the window percentages of `rimz providers`; `Theme::heat_tone`: the context meter, the remote link badge, the Codex reset-credit expiry while auto-redeem is off; `Palette::pace_tone`: the shared burn-rate bands for the sidebar reset marker and CLI pace reading (warm tail); `Theme::warm_heat_tone`: the card age clock |
 | calm ramp | `body → good` | `Palette::pace_tone`: the shared burn-rate bands for the sidebar reset marker and CLI pace reading (cool tail); `Theme::calm_tone`: the Codex reset-credit expiry while auto-redeem is armed or holding |
 | `expense` | `alarm` with chroma scaled by `INPUT_EXPENSE_CHROMA` (1.30), then lightness lowered by `INPUT_EXPENSE_DEEPEN` (0.09) | `Component::Input`, the `↘` fresh-input marker and the reddest tone on screen |
+| `cache_expired` | `caution` blended halfway to `muted` in OKLab (`CACHE_EXPIRED_GREY`, 0.5), then depth-quantized; `muted` sits nearly opposite `caution` in hue, so a deeper blend turns pinkish grey | `Component::CacheExpired`, the context meter's single expired-cache fill |
 
 `ramp_tone(ramp, amount)` interpolates piecewise across any number of stops in OKLab, so a ramp can gain or lose stops without touching the math. `warm_heat_tone` maps its amount into `[HEAT_RAMP_WARM_START, 1.0]`, the tail from `warn` onward, for readers whose low end should rest warm instead of healthy green: an idle agent is stale, not optimal.
 
-Ramp stops resolve through `derived_rgb_slot`, which differs from a flat slot in one case. An override naming a raw xterm index 0 to 15 has a terminal-defined RGB value the core cannot know, so the ramp keeps the derived tone while the flat slot wears the override. An index of 16 or above converts through `xterm_rgb` and joins the ramp. The expense tone derives from the ramp's `alarm` stop and follows the same rule.
+Ramp stops resolve through `derived_rgb_slot`, which differs from a flat slot in one case. An override naming a raw xterm index 0 to 15 has a terminal-defined RGB value the core cannot know, so the ramp keeps the derived tone while the flat slot wears the override. An index of 16 or above converts through `xterm_rgb` and joins the ramp. The expense tone derives from the ramp's `alarm` stop and follows the same rule; `cache_expired` follows it for both `caution` and `muted`. Neither derived tone adds a config slot.
 
 ## Color depth and graceful degradation
 
