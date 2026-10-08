@@ -3649,6 +3649,15 @@ fn message_wait_prints_the_reply_after_the_turn_ends() {
 
 #[test]
 fn message_wait_prints_the_wake_turns_reply() {
+    message_wait_wake_reply_case(false);
+}
+
+#[test]
+fn message_wait_prints_the_fast_wake_turns_reply() {
+    message_wait_wake_reply_case(true);
+}
+
+fn message_wait_wake_reply_case(fast_wake: bool) {
     const POLL_WINDOW: Duration = Duration::from_millis(1500);
 
     let env = Env::new();
@@ -3683,13 +3692,19 @@ fn message_wait_prints_the_wake_turns_reply() {
     assert!(receipt.starts_with("sent to @claude"), "{receipt}");
     agent.start(&env, "did it land?");
     let wake = agent.send_wake(&env);
+    if fast_wake {
+        // Anchor the first turn before skipping the sleeping poll.
+        let _ = finished_rx.recv_timeout(POLL_WINDOW);
+    }
     agent.finish(&env, "pausing until the wake", false);
 
-    std::thread::sleep(POLL_WINDOW);
-    assert!(
-        child.try_wait().expect("poll message --wait").is_none(),
-        "reply wait ended at the sleeping turn boundary"
-    );
+    if !fast_wake {
+        std::thread::sleep(POLL_WINDOW);
+        assert!(
+            child.try_wait().expect("poll message --wait").is_none(),
+            "reply wait ended at the sleeping turn boundary"
+        );
+    }
 
     agent.start_reported(&env, "Type: WAIT\nFrom: @rimz\nContent:\nwake now");
     assert!(
