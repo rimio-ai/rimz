@@ -1,6 +1,6 @@
 //! Per-agent activity liveness heartbeat.
 //!
-//! A latency hint, not store truth. Named or mutating tool observations can enter the durable log; anonymous progress need not. Hooks touch this heartbeat on every progress-proving event, and snapshots fold the freshest touch into `last_activity`. The separate `tool_at` clock records root tool observations and survives turn-boundary touches, providing a best-effort request anchor for cache timers. Missing hints can cost a cache write, never correctness.
+//! A latency hint, not store truth. Named or mutating tool observations can enter the durable log; anonymous progress need not. Hooks touch this heartbeat on every progress-proving event, and snapshots fold the freshest touch into `last_activity`. The separate `tool_at` clock records root tool observations and survives turn-boundary touches, providing a best-effort request anchor for cache timers. Missing hints can cost a cache write, and one decision reads the tool clock: the auto-continue progress test in `harness/auto_continue.rs` grants a nudged turn a fresh retry allowance only when a root tool observation follows the nudge. A lost touch there fails toward the cap: a productive turn reads as a bare reply and spends one attempt, never the reverse, so it cannot cause endless nudging.
 //!
 //! The file is overwritten in place (one per `(kind, agent_id)`), so a live
 //! agent's touch never grows the directory, and a stale touch left by a dead
