@@ -1801,7 +1801,7 @@ fn refresh_app_server_enrichment(
     broker_socket: Option<&Path>,
     login_env: &BTreeMap<String, String>,
 ) -> Option<AppServerObservation> {
-    let mut client = CodexAppServer::connect(broker_socket, login_env, None)?;
+    let mut client = CodexAppServer::connect(broker_socket, login_env)?;
     Some(client.observe("codex", session_id, model_hint, Timestamp::now()))
 }
 

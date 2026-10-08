@@ -593,16 +593,8 @@ fn loaded_threads_follows_next_cursor_pages() {
     assert_eq!(client.transport.params[2], json!({ "cursor": "page-2" }));
 }
 
-fn assert_spawn(attempt: &ConnectAttempt, deadline: Duration) {
-    match attempt {
-        ConnectAttempt::Spawn(got_deadline) => {
-            assert_eq!(*got_deadline, deadline);
-        }
-        ConnectAttempt::Broker(path) => panic!("expected a spawn attempt, got broker {path:?}"),
-        ConnectAttempt::DaemonWs(path) => {
-            panic!("expected a spawn attempt, got daemon websocket {path:?}")
-        }
-    }
+fn assert_spawn(attempt: &ConnectAttempt) {
+    assert!(matches!(attempt, ConnectAttempt::Spawn), "{attempt:?}");
 }
 
 fn assert_daemon_ws(attempt: &ConnectAttempt, expected: &Path) {
@@ -614,33 +606,33 @@ fn assert_daemon_ws(attempt: &ConnectAttempt, expected: &Path) {
 
 #[test]
 fn connection_attempts_prefer_warm_paths_before_cold_spawn() {
-    let attempts = attempts_for(None, None, APP_SERVER_DEADLINE);
+    let attempts = attempts_for(None, None);
     assert_eq!(attempts.len(), 1);
-    assert_spawn(&attempts[0], APP_SERVER_DEADLINE);
+    assert_spawn(&attempts[0]);
 
     let daemon = Path::new("/run/codex/app-server-control.sock");
-    let attempts = attempts_for(None, Some(daemon), APP_SERVER_DEADLINE);
+    let attempts = attempts_for(None, Some(daemon));
     assert_eq!(attempts.len(), 2);
     assert_daemon_ws(&attempts[0], daemon);
-    assert_spawn(&attempts[1], APP_SERVER_DEADLINE);
+    assert_spawn(&attempts[1]);
 
     let broker = Path::new("/run/user/1000/rimz/w/sock/codex-app-server.sock");
-    let attempts = attempts_for(Some(broker), Some(daemon), APP_SERVER_DEADLINE);
+    let attempts = attempts_for(Some(broker), Some(daemon));
     assert_eq!(attempts.len(), 3);
     match &attempts[0] {
         ConnectAttempt::Broker(path) => assert_eq!(path, broker),
         other => panic!("broker must come first, got {other:?}"),
     }
     assert_daemon_ws(&attempts[1], daemon);
-    assert_spawn(&attempts[2], APP_SERVER_DEADLINE);
+    assert_spawn(&attempts[2]);
 
-    let attempts = attempts_for(Some(broker), None, APP_SERVER_DEADLINE);
+    let attempts = attempts_for(Some(broker), None);
     assert_eq!(attempts.len(), 2);
     match &attempts[0] {
         ConnectAttempt::Broker(path) => assert_eq!(path, broker),
         other => panic!("broker must come first, got {other:?}"),
     }
-    assert_spawn(&attempts[1], APP_SERVER_DEADLINE);
+    assert_spawn(&attempts[1]);
 }
 
 #[test]
@@ -680,9 +672,84 @@ fn daemon_socket_defaults_under_codex_home_and_takes_the_override_verbatim() {
 }
 
 #[test]
-fn launch_catalog_allows_a_longer_cold_spawn() {
-    let attempts = attempts_for(None, None, Duration::from_secs(15));
-    assert_spawn(&attempts[0], Duration::from_secs(15));
+fn catalog_falls_through_a_dead_broker_and_uses_the_remaining_budget() {
+    let attempts = attempts_for(Some(Path::new("broker")), None);
+    let mut budgets = Vec::new();
+    let entries = catalog_from_attempts(
+        attempts,
+        Instant::now() + Duration::from_secs(2),
+        |attempt, remaining| {
+            budgets.push(remaining);
+            if matches!(attempt, ConnectAttempt::Broker(_)) {
+                std::thread::sleep(Duration::from_millis(10));
+                Ok(CannedTransport::new().failing("model/list"))
+            } else {
+                Ok(CannedTransport::new().with("model/list", model_list_result()))
+            }
+        },
+    )
+    .unwrap();
+    assert_eq!(entries[0].id, "gpt-5.5-codex");
+    assert_eq!(budgets.len(), 2);
+    assert!(budgets[1] < budgets[0]);
+    assert!(budgets[0] <= Duration::from_secs(2));
+}
+
+#[test]
+fn catalog_stops_at_the_first_success() {
+    let mut opened = 0;
+    let entries = catalog_from_attempts(
+        attempts_for(Some(Path::new("broker")), None),
+        Instant::now() + Duration::from_secs(2),
+        |_, _| {
+            opened += 1;
+            Ok(CannedTransport::new().with("model/list", model_list_result()))
+        },
+    )
+    .unwrap();
+    assert_eq!(entries.len(), 2);
+    assert_eq!(opened, 1);
+}
+
+#[test]
+fn catalog_exhausted_budget_opens_nothing() {
+    let mut opened = 0;
+    let result = catalog_from_attempts(attempts_for(None, None), Instant::now(), |_, _| {
+        opened += 1;
+        Ok(CannedTransport::new())
+    });
+    assert!(matches!(result, Err(AppServerErr::Timeout)));
+    assert_eq!(opened, 0);
+}
+
+#[test]
+fn catalog_budget_exhausted_by_an_attempt_prevents_the_next_open() {
+    let mut opened = 0;
+    let result = catalog_from_attempts(
+        attempts_for(Some(Path::new("broker")), None),
+        Instant::now() + Duration::from_millis(5),
+        |_, _| {
+            opened += 1;
+            std::thread::sleep(Duration::from_millis(10));
+            Err::<CannedTransport, _>(AppServerErr::Closed)
+        },
+    );
+    assert!(matches!(result, Err(AppServerErr::Timeout)));
+    assert_eq!(opened, 1);
+}
+
+#[test]
+fn catalog_error_names_the_last_attempt_tried() {
+    let error = catalog_from_attempts(
+        attempts_for(Some(Path::new("broker")), Some(Path::new("daemon"))),
+        Instant::now() + Duration::from_secs(2),
+        |_, _| Ok(CannedTransport::new().failing("initialize")),
+    )
+    .unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "cold spawn: codex app-server returned error -32000: boom"
+    );
 }
 
 #[test]

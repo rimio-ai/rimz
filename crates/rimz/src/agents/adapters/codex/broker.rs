@@ -17,7 +17,8 @@
 //! - **Serving**: one mutex serializes all child access, so each client request
 //!   is an atomic round-trip — no id demux across in-flight requests is needed
 //!   (enrichment is single-flight per the refresh throttle). A client
-//!   `initialize` is answered from the cached result; `initialized` is swallowed.
+//!   `initialize` is answered from the cached result while the child is live, and
+//!   respawns it first otherwise; `initialized` is swallowed.
 //! - **Child death**: a round-trip that hits EOF/IO respawns the child once and
 //!   retries; a wedged child times out (the client falls back). The child reads
 //!   JSON-RPC on stdin, so when this process dies its stdin pipe closes and the
@@ -136,8 +137,10 @@ fn lock(shared: &Mutex<ChildIo>) -> std::sync::MutexGuard<'_, ChildIo> {
 }
 
 /// Serve one client request against the warm child. `initialize` is answered from
-/// the cache (the amortization — clients skip the handshake). Anything else is a
-/// locked round-trip; an EOF/IO failure respawns the child once and retries.
+/// the cache while the child is live (the amortization — clients skip the
+/// handshake); with the child gone it respawns first, so a dead broker reports
+/// the spawn error instead of a stale handshake. Anything else is a locked
+/// round-trip; an EOF/IO failure respawns the child once and retries.
 fn serve_request(
     shared: &Mutex<ChildIo>,
     resolve_login: &dyn Fn() -> Result<crate::agents::ProviderLogin, crate::agents::RoomLoginErr>,
@@ -146,6 +149,16 @@ fn serve_request(
 ) -> Result<Value, AppServerErr> {
     let mut io = lock(shared);
     if method == "initialize" {
+        if !io.transport.child_is_live()? {
+            let (key, login_env) = match resolve_login() {
+                Ok(login) => (login.key(), login.env(&crate::agents::ambient_env())),
+                Err(error) => {
+                    tracing::warn!(%error, "keeping current codex app-server login");
+                    (io.login_key.clone(), io.login_env.clone())
+                }
+            };
+            io.respawn(key, &login_env)?;
+        }
         return Ok(io.init_result.clone());
     }
     match resolve_login() {
@@ -349,6 +362,35 @@ mod tests {
             .unwrap()["home"],
             next.home().unwrap().to_str().unwrap()
         );
+        lock(&shared).transport.stop_child();
+        assert_eq!(
+            serve_request(&shared, &|| Ok(work.clone()), "initialize", Value::Null).unwrap()["home"],
+            work.home().unwrap().to_str().unwrap()
+        );
+    }
+
+    #[test]
+    fn initialize_reports_a_failed_respawn_instead_of_cached_success() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let program = dir.path().join("codex");
+        std::fs::write(&program, "#!/bin/sh\nwhile read -r line; do\ncase \"$line\" in *'\"id\"'*) printf '{\"id\":1,\"result\":{}}\\n';; esac\ndone\n").unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let next = crate::agents::ProviderLogin::default_for(crate::ids::AgentKind::new_unchecked(
+            "codex",
+        ));
+        let shared =
+            Mutex::new(spawn_and_handshake(&program, next.key(), &BTreeMap::new()).unwrap());
+        lock(&shared).program = dir.path().join("missing-codex");
+        assert!(
+            lock(&shared)
+                .respawn(next.key(), &next.env(&BTreeMap::new()))
+                .is_err()
+        );
+        assert!(matches!(
+            serve_request(&shared, &|| Ok(next.clone()), "initialize", Value::Null),
+            Err(AppServerErr::Spawn(_))
+        ));
     }
 
     #[test]
