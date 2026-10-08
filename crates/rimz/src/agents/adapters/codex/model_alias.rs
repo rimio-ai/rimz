@@ -189,7 +189,7 @@ pub(super) fn resolve(
             Ok(catalog) => {
                 let usable = select(&catalog, baked, request.effort).is_some();
                 if !usable {
-                    reason = format!("fresh catalog has no {} family", request.alias);
+                    reason = "fresh catalog has no matching family".into();
                 }
                 if usable
                     || cache
