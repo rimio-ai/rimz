@@ -154,7 +154,7 @@ Glyphs are grouped by where they appear as you read the sidebar down the column.
 | `card` | the agent card body: subagents, waits, parked background |
 | `process` | the CPU, memory, and IO row |
 | `keys` | the help overlay's action leads |
-| `chrome` | framing, spines, tabs, badges, and the help-box frame |
+| `chrome` | framing, spines, tabs, badges, the search lead, and the help-box frame |
 
 Each glyph must occupy one or two terminal cells; RimZ refuses anything empty or wider. Use the second cell for a trailing space when a Nerd Font icon draws double-width.
 

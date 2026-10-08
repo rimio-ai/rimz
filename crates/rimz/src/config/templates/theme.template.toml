@@ -269,6 +269,7 @@
 ## spine_lane_left = "▎"
 ## spine_lane_right = "🮇"
 ## infinity = "∞"
+## search = "/"
 
 [theme.glyphs.nerd_font.status]
 ## waiting = ""
@@ -395,6 +396,7 @@
 ## spine_lane_left = "▎"
 ## spine_lane_right = "🮇"
 ## infinity = ""
+## search = ""
 
 [theme.providers]
 # Provider styles are keyed by agent kind and every field is optional.

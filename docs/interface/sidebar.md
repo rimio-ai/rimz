@@ -180,6 +180,7 @@ Each declared stage gets one dot; `Done` has no separate slot. These roles live 
 | `┤ Tab ├` | the active dashboard tab under `NO_COLOR` |
 | `zᶻ idle`, `zᶻ away` | you are away from the terminal |
 | `⇄ remote 210ms` | SSH link round-trip time |
+| `/ auth` | the text search, above the dashboard |
 | `⚠` | a pane-source notice or health alert |
 
 `🮇` is from Unicode's Symbols for Legacy Computing block. A font without it may show a placeholder at the lane's right edge; nothing else depends on it.
@@ -602,18 +603,17 @@ Each row reads sessions, total tokens, input including cache creation, output, c
 The footer is the last line, apart from a recovered alert, which sits beneath it. The cards give up space before the dashboard or the footer do, so neither scrolls away.
 
 ```
- /auth  zᶻ away          ? for help
+ zᶻ away                 ? for help
 ```
 
 | mark | when |
 |------|------|
 | `? for help` | always, at the right edge |
-| `/auth` | the search draft with a cursor while typing, then a filled chip (reverse video without color) after `Enter` |
 | `zᶻ idle`, then `zᶻ idle · 17m` | tmux: no input for `[sidebar] afk_after_secs` (15 minutes by default); minutes are added after the first minute |
 | `zᶻ away` | no terminal client is attached; Zellij reports only this state |
 | `⇄ remote 210ms` | the room runs over SSH: the smoothed round-trip time, with packet loss added above 10%; `⇄ remote ?` means the last reading is stale |
 
-With a search active, its segment takes the left edge; the away badge drops first, then the remote badge, and the query clips on the right if it still cannot fit beside help. Otherwise the away badge takes the left edge. The remote badge sits there otherwise, and follows the away badge only when the line has room. The remote badge's color runs from green through yellow and amber to red, bold at the worst, and stays neutral until the link has a first reading.
+The away badge takes the left edge. The remote badge sits there otherwise, and follows the away badge only when the line has room. The remote badge's color runs from green through yellow and amber to red, bold at the worst, and stays neutral until the link has a first reading.
 
 ### Notices and alerts
 
@@ -712,6 +712,26 @@ These keys work while the sidebar has focus. From any other pane, `Alt+p` focuse
 Pressing the active filter's key again clears just that pick; a text search stays active. Movement keys and `a` / `d` can be rebound under `[sidebar.keys]`, and outside search typing a rebound chord takes priority over a fixed key, so it can shadow a filter. The other keys are fixed.
 
 ### Text search
+
+The search has its own pinned line between the cards and the dashboard. It replaces the dashboard's blank separator, so starting a search does not move the cards. Without a dashboard it takes one additional row above the fleet store or other bottom chrome. The committed query stays visible even during a health alert, explaining why the stale cards remain narrowed. The line does not respond to clicks.
+
+Typing (band across the row, cursor after the query):
+
+```
+ / auth                        3/16
+ ──────────────────────────────────
+```
+
+While typing, the whole line carries the selected-card background band, including its gutter and right edge; a reverse-video cursor follows `auth`. After `Enter`, `/ auth` becomes one filled chip and the band disappears. Without color, the reversed cursor distinguishes typing from the reversed committed chip. The leading search glyph is `/` in the Unicode set and a magnifying glass in the Nerd Font set.
+
+Committed (chip around `/ auth`, count outside it):
+
+```
+ / auth                        3/16
+ ──────────────────────────────────
+```
+
+The right-edge count is matching visible rows over all rows, processes included. A status pick narrows only the numerator; a matching group label counts every row it keeps. An empty draft has a cursor but no count. On narrow panes the count disappears before the query clips, and clipping preserves the cursor.
 
 `/` starts typing, seeded with the committed query. Matching is case-insensitive substring over worktree/group names and qualifiers, branches, agent names and handles, teams, and PR numbers (`#123` or `123`). A matching group name, team, or PR keeps all its rows; otherwise only matching rows remain. Search composes with the status, unread, or open-PR pick, hides empty groups, and lifts the fold cap. The cockpit counts still describe the whole fleet.
 

@@ -11,7 +11,7 @@ use ratatui::text::{Line, Span};
 
 use super::chrome::{
     FooterParts, alert_lines, footer_lines, footer_parts, gate_notice_lines, hairline_rule,
-    repo_header_lines, truth_notice_lines,
+    repo_header_lines, search_line, truth_notice_lines,
 };
 use super::layout::pad_line_to;
 use super::sections::{
@@ -29,13 +29,13 @@ use super::{
 /// Lay out the frame as three vertical zones: the top-pinned cockpit (identity,
 /// summary, make-up line, the conditional unread banner, and fixed separator),
 /// a scroll viewport over the agent cards, and the bottom chrome pinned to the
-/// bottom edge like a status bar — the provider dashboard, store, centered
+/// bottom edge like a status bar — the search line, provider dashboard, store, centered
 /// navigation footer, and beneath them the sticky health alert. Space for the
 /// pinned zones is always reserved — including the fixed separators under the
 /// cockpit and above the provider dashboard — so the scroll zone is windowed
 /// before either pinned edge is ever clipped. While an alert is *active* the
 /// body is a stale/empty fetch, so the footer steps aside and the alert speaks
-/// alone.
+/// beneath any committed search.
 ///
 /// The viewport window is `UiState::scroll_offset`, resolved here each frame:
 /// clamped to the zone, then minimally auto-scrolled so the selected card — its
@@ -86,7 +86,6 @@ pub(in crate::sidebar_pane) fn compose_lines_with_meter(
     // The whole sidebar sits inside a one-cell frame: chrome is built to the inner
     // width and opened with a blank gutter, reserving the trailing right rail —
     // the same frame the cards carry (see `with_gutter`).
-    let inner = content_width(cells);
     let roster = ui.visible_roster(snapshot);
     let mut top = top_lines(snapshot, ui, cells, theme);
     let scroll = scroll_lines(
@@ -101,7 +100,7 @@ pub(in crate::sidebar_pane) fn compose_lines_with_meter(
     // The tab hits arrive from the bottom chrome relative to its own lines;
     // they are translated to absolute screen coordinates once the block's final
     // position is known, below.
-    let bottom = build_bottom_chrome(snapshot, alert, theme, inner, ui);
+    let bottom = build_bottom_chrome(snapshot, alert, theme, cells, ui, &roster);
 
     let height = usize::from(height);
     let bottom_height = bottom
@@ -274,13 +273,13 @@ fn visible_scroll_block(
     block
 }
 
-/// Bottom-pinned chrome, top to bottom: a fixed separator when the provider
+/// Bottom-pinned chrome, top to bottom: the search line or a fixed separator when the provider
 /// dashboard is present, the per-provider dashboard (account-scoped budgets +
 /// brand emblem, which opens with its own top hairline — the tab rail when
 /// several accounts register), the fallback fleet store for no-table layouts,
 /// the navigation footer (centered), then the sticky health alert. While an
 /// alert is active the body is a stale/empty fetch, so the panel and footer step
-/// aside and the alert speaks alone. Every chrome line is gutter-padded so it
+/// aside and the alert speaks beneath any committed search. Every chrome line is gutter-padded so it
 /// breathes in the same one-cell frame as the body.
 #[derive(Clone, Copy)]
 enum BottomCorner {
@@ -335,14 +334,22 @@ pub(super) fn build_bottom_chrome(
     snapshot: &SidebarSnapshot,
     alert: Option<&Alert>,
     theme: &Theme,
-    inner: usize,
+    cells: usize,
     ui: &UiState,
+    roster: &VisibleRoster<'_>,
 ) -> RenderedBlock {
     let plan = plan_bottom_chrome(snapshot, alert, ui);
+    let inner = content_width(cells);
+    let mut header = RenderedBlock::default();
+    if let Some(line) = search_line(theme, ui, roster, snapshot, cells) {
+        header.push_inert(line);
+    } else if plan.dashboard.is_some() {
+        header.push_inert(Line::from(""));
+    }
     let mut bottom = RenderedBlock::default();
     let folded_footer = plan
         .folded_footer
-        .then(|| footer_parts(snapshot, theme, inner, ui));
+        .then(|| footer_parts(snapshot, theme, inner));
     bottom.append(dashboard_chrome(
         snapshot,
         theme,
@@ -373,7 +380,7 @@ pub(super) fn build_bottom_chrome(
         bottom.extend_inert(gate_notice_lines(theme, notice).into_iter().map(pad_chrome));
     }
     if plan.footer {
-        let footer = footer_lines(snapshot, theme, inner, ui);
+        let footer = footer_lines(snapshot, theme, inner);
         if !footer.is_empty() {
             // No rule above the footer — it sits quietly under the dashboard's
             // own top rule, with one blank line of breathing room when a
@@ -394,7 +401,8 @@ pub(super) fn build_bottom_chrome(
                 .map(pad_chrome),
         );
     }
-    bottom
+    header.append(bottom);
+    header
 }
 
 fn dashboard_chrome(
@@ -408,10 +416,7 @@ fn dashboard_chrome(
     let Some(mode) = mode else {
         return RenderedBlock::default();
     };
-    // The pinned separator lifts the dashboard off the cards. It is part of
-    // bottom chrome, so the viewport reserves it before windowing.
     let mut block = RenderedBlock::default();
-    block.push_inert(Line::from(""));
     let active_tab = active_dashboard_tab(snapshot, ui);
     let mut panel = dashboard_block(DashboardContext {
         theme,

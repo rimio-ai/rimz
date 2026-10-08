@@ -167,6 +167,7 @@ glyph_roles! {
         ChromeSpineLaneLeft => "spine_lane_left",
         ChromeSpineLaneRight => "spine_lane_right",
         ChromeInfinity => "infinity",
+        ChromeSearch => "search",
     }
 }
 

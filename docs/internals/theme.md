@@ -113,7 +113,7 @@ Several sidebar cues are lightness shifts smaller than one step of the 256-color
 | --- | --- | --- | --- |
 | breathing pulse (`Theme::breathe`) | `lift_lightness` of the tone | base tone plus the sample's `DIM`/`BOLD` modifier | the modifier alone |
 | unread blink and shimmer beam (`Theme::pulse`, `Theme::shimmer_cell`, through `Theme::lifted`) | lifted tone, held bold | base tone, bold toggled by pole or under the beam | the bold toggle alone |
-| selected band and unread wash (`Theme::selection_band`, `Theme::unread_wash`) | `selection_bg` stepped by `highlight_steps.band` down or `.wash` up | `selection_bg` stepped one cube cell by `highlight_steps.indexed` | no fill |
+| selected-card and typing-search band, and unread wash (`Theme::selection_band`, `Theme::unread_wash`) | `selection_bg` stepped by `highlight_steps.band` down or `.wash` up | `selection_bg` stepped one cube cell by `highlight_steps.indexed` | no fill |
 | calm card brand name (`Theme::body_brand`) | brand dimmed by `SOFT_BRAND_DIM` (0.05) | full brand | `body` tone style |
 
 Cues that already span a full color step, such as the neutral ladder and the heat ramp, keep their color at every depth. The `[theme.display.highlight_steps]` units are 0.01 OKLab lightness; the defaults are `band = 5`, `wash = 1`, `indexed = 4`.
