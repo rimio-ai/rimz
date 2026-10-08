@@ -1333,11 +1333,27 @@ pub(crate) fn open_store(workspace: &rimz::ResolvedWorkspace) -> Result<Store> {
 pub(crate) fn open_existing_store(workspace: &rimz::ResolvedWorkspace) -> Result<Option<Store>> {
     let paths =
         StatePaths::for_project_root(&workspace.project_root).context("preparing store paths")?;
-    if !paths.root.is_dir() {
+    open_existing_store_at(paths)
+}
+
+fn open_existing_store_at(paths: StatePaths) -> Result<Option<Store>> {
+    if rimz::workspace::record::read(&paths.workspace_record).is_err() {
         return Ok(None);
     }
     let runtime = RuntimePaths::for_state(&paths).context("preparing runtime paths")?;
     Ok(Store::open_existing(paths, runtime))
+}
+
+fn no_room(location: impl std::fmt::Display) -> String {
+    rimz::workspace::WorkspaceErr::NoRoom {
+        location: location.to_string(),
+    }
+    .to_string()
+}
+
+fn require_existing_store(workspace: &rimz::ResolvedWorkspace) -> Result<Store> {
+    open_existing_store(workspace)?
+        .with_context(|| no_room(format_args!("at {}", workspace.project_root.display())))
 }
 
 pub(crate) fn runtime_paths_for(workspace_id: WorkspaceId) -> Result<RuntimePaths> {

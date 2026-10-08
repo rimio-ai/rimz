@@ -554,8 +554,7 @@ fn use_room_account(
         rimz::workspace::WorkspaceResolver::resolve_participant(".", globals.root.clone())
             .context("resolving current workspace")?;
     let machine = MachineConfig::load_lenient();
-    let store = super::open_existing_store(&workspace)?
-        .context("this room has no store; run `rimz start` first")?;
+    let store = super::require_existing_store(&workspace)?;
     let current = rimz::agents::room_accounts(
         &store.paths().workspace_record,
         Some(&workspace.project_root),

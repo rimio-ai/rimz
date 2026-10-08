@@ -1218,21 +1218,16 @@ fn record_boundary_at(
     workspace_id: &WorkspaceId,
     session_name: &str,
 ) {
-    let store = match Store::open(paths.clone(), runtime) {
-        Ok(store) => Some(store),
-        Err(err) => {
-            tracing::warn!(workspace = %workspace_id, error = %err, "rebirth store unavailable");
-            None
-        }
+    let Some(store) = Store::open_existing(paths.clone(), runtime) else {
+        tracing::warn!(workspace = %workspace_id, "rebirth store unavailable");
+        return;
     };
-    if let Some(store) = store.as_ref()
-        && let Ok(projection) = store.runtime_projection(crate::RuntimeScope::Audit)
-    {
+    if let Ok(projection) = store.runtime_projection(crate::RuntimeScope::Audit) {
         let roster = recovery_roster(&paths, &projection.agents);
         let agents = lost_agent_roster(&projection.agents, &roster);
-        cancel_child_runs(store, &paths, &agents, &roster);
+        cancel_child_runs(&store, &paths, &agents, &roster);
     }
-    close_boundary(store.as_ref(), &paths, session_name);
+    close_boundary(Some(&store), &paths, session_name);
 }
 
 fn archive_crash(

@@ -1,7 +1,6 @@
 //! `rimz gc` — reclaim stale maintenance state through domain assessments.
 
 use std::io::{self, Write};
-#[cfg(test)]
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -269,6 +268,7 @@ fn sweep(
     Ok(GcOutcome {
         scope,
         room_name: paths.dir_name.to_string(),
+        project_root: workspace.project_root.clone(),
         dry_run,
         older_than,
         runtime: report,
@@ -286,6 +286,7 @@ fn sweep(
 struct GcOutcome {
     scope: GcScope,
     room_name: String,
+    project_root: PathBuf,
     dry_run: bool,
     older_than: Duration,
     runtime: gc::GcReport,
@@ -342,11 +343,14 @@ impl StoreMaintenance {
         }
     }
 
-    fn skip_text(&self) -> Option<&'static str> {
+    fn skip_text(&self, root: &std::path::Path) -> Option<String> {
         match self {
             Self::Done { .. } => None,
-            Self::SkippedDryRun => Some("skipped (dry run)"),
-            Self::SkippedNoStore => Some("skipped — no rimz store here"),
+            Self::SkippedDryRun => Some("skipped (dry run)".to_owned()),
+            Self::SkippedNoStore => Some(format!(
+                "skipped — {}",
+                super::no_room(format_args!("at {}", root.display()))
+            )),
         }
     }
 }
@@ -381,12 +385,12 @@ enum WorktreeSkip {
 }
 
 impl WorktreeSkip {
-    fn text(self) -> &'static str {
+    fn text(self, root: &std::path::Path) -> String {
         match self {
-            Self::NotARepo => "not inside a git repo",
-            Self::NoStore => "no rimz store here",
-            Self::RosterUnavailable => "agent roster unavailable",
-            Self::ListFailed => "worktree listing failed",
+            Self::NotARepo => "not inside a git repo".to_owned(),
+            Self::NoStore => super::no_room(format_args!("at {}", root.display())),
+            Self::RosterUnavailable => "agent roster unavailable".to_owned(),
+            Self::ListFailed => "worktree listing failed".to_owned(),
         }
     }
 
@@ -601,7 +605,7 @@ fn render_worktrees(out: &GcOutcome, w: &mut impl Write) -> io::Result<()> {
             w,
             RowVerdict::Skipped,
             "worktrees",
-            &format!("skipped — {}", skip.text()),
+            &format!("skipped — {}", skip.text(&out.project_root)),
         ),
         WorktreeSweepStatus::Swept(sweep) => {
             let removed = sweep.removed.len();
@@ -832,7 +836,10 @@ fn render_messages(out: &GcOutcome, w: &mut impl Write) -> io::Result<()> {
             w,
             RowVerdict::Skipped,
             "messages",
-            skipped.skip_text().unwrap_or("skipped"),
+            skipped
+                .skip_text(&out.project_root)
+                .as_deref()
+                .unwrap_or("skipped"),
         ),
     }
 }
@@ -854,7 +861,10 @@ fn render_event_log(out: &GcOutcome, w: &mut impl Write) -> io::Result<()> {
             w,
             RowVerdict::Skipped,
             "event log",
-            skipped.skip_text().unwrap_or("skipped"),
+            skipped
+                .skip_text(&out.project_root)
+                .as_deref()
+                .unwrap_or("skipped"),
         ),
     }
 }
@@ -878,7 +888,10 @@ fn render_agent_cache(out: &GcOutcome, w: &mut impl Write) -> io::Result<()> {
             w,
             RowVerdict::Skipped,
             "agent cache",
-            skipped.skip_text().unwrap_or("skipped"),
+            skipped
+                .skip_text(&out.project_root)
+                .as_deref()
+                .unwrap_or("skipped"),
         ),
     }
 }
@@ -1630,6 +1643,7 @@ mod tests {
         GcOutcome {
             scope: GcScope::Machine,
             room_name: String::new(),
+            project_root: PathBuf::new(),
             dry_run,
             older_than: Duration::from_secs(3600),
             runtime: gc::GcReport {

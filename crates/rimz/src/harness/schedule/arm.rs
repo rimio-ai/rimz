@@ -676,6 +676,12 @@ mod tests {
         let id = crate::ids::WorkspaceId::from_project_root(dir.path());
         let paths = crate::disk::paths::StatePaths::under(id.clone(), &dir.path().join("state"))
             .expect("state paths");
+        let workspace = crate::workspace::WorkspaceResolver::resolve(dir.path(), None).unwrap();
+        crate::workspace::record::write(
+            &paths,
+            &crate::workspace::record::WorkspaceRecord::from_resolved(&workspace),
+        )
+        .unwrap();
         let runtime = crate::disk::paths::RuntimePaths::under(id, &dir.path().join("runtime"))
             .expect("runtime paths");
         for session in ["stopping", "resting"] {

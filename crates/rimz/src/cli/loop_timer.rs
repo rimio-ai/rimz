@@ -104,8 +104,25 @@ pub(super) fn tick(now: &Zoned) -> Result<()> {
         user_manager_reachable,
     )?;
     for root in task_roots() {
-        let runtime = match RuntimePaths::for_project_root(&root) {
-            Ok(runtime) => runtime,
+        let state = match rimz::StatePaths::for_project_root(&root) {
+            Ok(state) => state,
+            Err(err) => {
+                tracing::warn!(root = %root.display(), error = %err, "loop tick could not resolve state paths");
+                continue;
+            }
+        };
+        let (runtime, existing_room) = match super::open_existing_store_at(state.clone()) {
+            Ok(Some(store)) => (store.runtime_paths().clone(), true),
+            Ok(None) => {
+                let runtime = match rimz::RuntimePaths::for_state(&state) {
+                    Ok(runtime) => runtime,
+                    Err(err) => {
+                        tracing::warn!(root = %root.display(), error = %err, "loop tick could not resolve runtime paths");
+                        continue;
+                    }
+                };
+                (runtime, false)
+            }
             Err(err) => {
                 tracing::warn!(root = %root.display(), error = %err, "loop tick could not resolve runtime paths");
                 continue;
@@ -114,7 +131,12 @@ pub(super) fn tick(now: &Zoned) -> Result<()> {
         if runtime_is_open(&runtime) {
             continue;
         }
-        if let Err(err) = runtime.ensure_dirs() {
+        let prepared = if existing_room {
+            runtime.ensure_dirs()
+        } else {
+            runtime.ensure_runtime_dirs()
+        };
+        if let Err(err) = prepared {
             tracing::warn!(root = %root.display(), error = %err, "loop tick could not prepare runtime paths");
             continue;
         }

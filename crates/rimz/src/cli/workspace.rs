@@ -140,12 +140,9 @@ fn migrate(old_root: PathBuf, new_root: PathBuf) -> Result<()> {
 }
 
 fn rotate_events(args: RotateEventsArgs, globals: &GlobalFlags) -> Result<()> {
-    let workspace = WorkspaceResolver::resolve(".", globals.root.clone())
+    let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())
         .context("resolving current workspace")?;
-    let paths =
-        StatePaths::for_project_root(&workspace.project_root).context("preparing store paths")?;
-    let runtime = RuntimePaths::for_state(&paths).context("preparing runtime paths")?;
-    let store = Store::open(paths, runtime).context("opening store")?;
+    let store = super::require_existing_store(&workspace)?;
     let outcome = store
         .rotate_event_log(args.max_bytes, args.archive_older_than)
         .context("rotating event log")?;

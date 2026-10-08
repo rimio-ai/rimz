@@ -21,6 +21,7 @@ pub(super) fn list_agents(
     globals: &GlobalFlags,
 ) -> Result<()> {
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
+    let store = crate::cli::require_existing_store(&workspace)?;
     let _mux = rimz::room::require_live_mux(globals.mux, &workspace)?;
     let runtime = rimz::RuntimePaths::for_project_root(&workspace.project_root)
         .context("preparing runtime paths")?;
@@ -45,9 +46,8 @@ pub(super) fn list_agents(
         .collect();
     let now = jiff::Timestamp::now();
     let machine_config = crate::cli::machine_config();
-    let store = crate::cli::open_existing_store(&workspace)?;
     let demotion = rimz::harness::park_demotion(
-        store.as_ref(),
+        Some(&store),
         &state,
         &runtime,
         &machine_config,
@@ -57,12 +57,9 @@ pub(super) fn list_agents(
     );
     if json {
         let audit = store
-            .as_ref()
-            .map(|store| store.runtime_projection(rimz::RuntimeScope::Audit))
-            .transpose()
+            .runtime_projection(rimz::RuntimeScope::Audit)
             .context("reading audit agent rollup")?
-            .map(|projection| projection.agents)
-            .unwrap_or_default();
+            .agents;
         let refs = audit.iter().collect::<Vec<_>>();
         let lifetimes = rimz::worktree::lane_lifetimes(refs.iter().copied());
         render::warn_unreadable_lanes(&lifetimes);

@@ -133,6 +133,11 @@ pub(super) fn serve(config: ServeConfig) -> Result<ServeOutcome> {
     crate::build_id::warm();
     reap_inherited_zombies();
     let runtime = RuntimePaths::for_workspace(config.workspace_id.clone())?;
+    let state = crate::StatePaths::for_workspace(config.workspace_id.clone())?;
+    if crate::Store::open_existing(state, runtime.clone()).is_none() {
+        tracing::warn!(workspace = %config.workspace_id, "sidebar worker: no room; run `rimz start` first");
+        return Ok(ServeOutcome::Stopped);
+    }
     runtime.ensure_dirs()?;
     let diag = crate::diag::DiagSink::for_workspace(
         config.workspace_id.clone(),

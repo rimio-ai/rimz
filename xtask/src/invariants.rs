@@ -70,6 +70,7 @@ pub(crate) fn invariants(root: &Path) -> Result<()> {
     ensure_presence_plugin_vendored(root)?;
     ensure_store_durability(root, &files)?;
     ensure_participant_identity(root, &files)?;
+    ensure_room_creators(root, &files)?;
     ensure_integration_fixture_home(root, &files)?;
     ensure_rimz_block_registry(root, &files)?;
     ensure_no_core_pane_auto_use(root, &files)?;
@@ -787,6 +788,53 @@ fn ensure_participant_identity(root: &Path, files: &[PathBuf]) -> Result<()> {
         },
         "participant surfaces resolve identity through the session pin — use resolve_participant",
     )
+}
+
+fn ensure_room_creators(root: &Path, files: &[PathBuf]) -> Result<()> {
+    let src = root.join("crates/rimz/src");
+    let creators = [
+        "cli/mod.rs",
+        "cli/room",
+        "cli/workspace.rs",
+        "cli/supervised/run.rs",
+        "room/birth.rs",
+        "room/mod.rs",
+        "harness/rebirth.rs",
+        "store/mod.rs",
+    ]
+    .map(|path| src.join(path));
+    let mut violations = Vec::new();
+    for path in files {
+        if !path.starts_with(&src)
+            || path.extension().and_then(OsStr::to_str) != Some("rs")
+            || is_test_source_path(root, path)
+            || path == &src.join("testkit.rs")
+            || path.starts_with(src.join("testkit"))
+            || creators.iter().any(|creator| path.starts_with(creator))
+        {
+            continue;
+        }
+        let source = fs::read_to_string(path)?;
+        for (idx, line) in source.lines().enumerate() {
+            if line == "mod tests {" {
+                break;
+            }
+            if !line.trim_start().starts_with("//")
+                && [concat!("open_", "store("), concat!("Store::", "open(")]
+                    .iter()
+                    .any(|needle| line.contains(needle))
+            {
+                violations.push(format!("{}:{}: {}", path.display(), idx + 1, line.trim()));
+            }
+        }
+    }
+    if !violations.is_empty() {
+        bail!(
+            "only room-choosing commands create stores; participants use the existing door\n{}",
+            violations.join("\n")
+        );
+    }
+    Ok(())
 }
 
 fn ensure_integration_fixture_home(root: &Path, files: &[PathBuf]) -> Result<()> {

@@ -77,6 +77,12 @@ mod tests {
         use super::super::{catalog::TaskCatalog, instances};
         let home = tempfile::tempdir().unwrap();
         let paths = crate::StatePaths::for_project_root(home.path()).unwrap();
+        let workspace = crate::workspace::WorkspaceResolver::resolve(home.path(), None).unwrap();
+        crate::workspace::record::write(
+            &paths,
+            &crate::workspace::record::WorkspaceRecord::from_resolved(&workspace),
+        )
+        .unwrap();
         let entry = crate::config::TaskEntry {
             root: home.path().to_owned(),
             stay: true,
@@ -120,6 +126,12 @@ mod tests {
         use super::super::{catalog::TaskCatalog, instances};
         let home = tempfile::tempdir().unwrap();
         let paths = crate::StatePaths::for_project_root(home.path()).unwrap();
+        let workspace = crate::workspace::WorkspaceResolver::resolve(home.path(), None).unwrap();
+        crate::workspace::record::write(
+            &paths,
+            &crate::workspace::record::WorkspaceRecord::from_resolved(&workspace),
+        )
+        .unwrap();
         instances::insert(
             &paths,
             "check",

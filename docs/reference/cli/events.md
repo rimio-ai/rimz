@@ -9,6 +9,8 @@
 
 Both take the [global flags](../cli.md#global-flags); `--root` picks the workspace whose log they use.
 
+Both require an existing room. Outside a room they exit nonzero with `no room at <root>: run \`rimz start\` there, or pass --root <room>`; `follow` refuses before polling.
+
 ## Follow the event stream
 
 ```sh

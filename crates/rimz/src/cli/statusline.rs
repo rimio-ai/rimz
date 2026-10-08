@@ -150,11 +150,12 @@ fn with_cursor(
     context
 }
 
-/// Runtime paths by project root, so a pre-birth workspace resolves the same
-/// dir name its birth mints.
+/// Runtime paths for an existing room, without opening the event log or taking its lock.
 fn runtime_paths_for_root(project_root: &std::path::Path) -> Result<rimz::RuntimePaths> {
-    let runtime =
-        rimz::RuntimePaths::for_project_root(project_root).context("preparing runtime paths")?;
+    let state = rimz::StatePaths::for_project_root(project_root)?;
+    let store = super::open_existing_store_at(state)?
+        .with_context(|| super::no_room(format_args!("at {}", project_root.display())))?;
+    let runtime = store.runtime_paths().clone();
     runtime.ensure_dirs().context("preparing runtime dirs")?;
     Ok(runtime)
 }

@@ -21,6 +21,7 @@ fn candidate(value: impl Into<std::ffi::OsString>, help: impl Into<String>) -> C
 fn room_context() -> Option<RoomContext> {
     let workspace = WorkspaceResolver::resolve_participant(".", None).ok()?;
     let paths = StatePaths::for_project_root(&workspace.project_root).ok()?;
+    rimz::workspace::record::read(&paths.workspace_record).ok()?;
     let runtime = RuntimePaths::for_project_root(&workspace.project_root).ok()?;
     room_context_from(workspace, paths, runtime)
 }

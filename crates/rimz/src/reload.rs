@@ -683,9 +683,8 @@ fn record_live_room_bin_at(
         session_name: record.session_name,
         mux_hint: None,
     };
-    let result = crate::store::Store::open(paths.clone(), runtime.clone()).and_then(|store| {
-        store.record_room_bin(&workspace, staged.path.clone(), staged.build.clone())
-    });
+    let store = crate::store::Store::open_existing(paths.clone(), runtime.clone())?;
+    let result = store.record_room_bin(&workspace, staged.path.clone(), staged.build.clone());
     if let Err(err) = result {
         tracing::debug!(
             workspace = %ws.workspace_id,

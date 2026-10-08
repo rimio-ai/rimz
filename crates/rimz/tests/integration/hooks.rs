@@ -18,6 +18,63 @@ use crate::common::{
     permission_payload, pi_tool_call_payload, tmux_pane,
 };
 
+#[test]
+fn hook_outside_a_room_ignores_the_event() {
+    for (source, event, reply) in [("claude", "Stop", ""), ("cursor", "sessionStart", "{}\n")] {
+        let env = Env::new();
+        let payload = json!({
+            "hook_event_name": event,
+            "session_id": "outside-room",
+            "conversation_id": "outside-room"
+        });
+        let output = env.run_hook(source, &payload.to_string());
+        assert!(output.status.success(), "{source}: {output:?}");
+        assert_eq!(String::from_utf8_lossy(&output.stdout), reply);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(&format!(
+                "rimz hooks feed: no room at {}; ignoring {event} (run `rimz start` there)",
+                crate::common::canonical(&env.project_root).display()
+            )),
+            "{source}: {stderr}"
+        );
+        assert_eq!(stderr.lines().count(), 1, "{source}: {stderr}");
+        let ws = env.rimz_home().join("ws");
+        assert!(!ws.exists() || std::fs::read_dir(ws).unwrap().next().is_none());
+    }
+}
+
+#[test]
+fn hook_with_an_unreadable_room_record_ignores_the_event() {
+    let env = Env::new();
+    let state = env.state_path_for(&env.project_root);
+    std::fs::create_dir_all(&state.root).unwrap();
+    std::fs::write(&state.workspace_record, "not JSON").unwrap();
+    let payload = json!({"hook_event_name": "Stop", "session_id": "outside-room"});
+    let output = env.run_hook("claude", &payload.to_string());
+    assert!(output.status.success(), "{output:?}");
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("rimz hooks feed: no room at"), "{stderr}");
+    assert_eq!(stderr.lines().count(), 1, "{stderr}");
+    assert_eq!(std::fs::read(&state.workspace_record).unwrap(), b"not JSON");
+    assert!(!state.events_log.exists());
+}
+
+#[test]
+fn statusline_outside_a_room_creates_no_locks() {
+    let env = Env::new();
+    let payload = json!({
+        "session_id": "outside-room",
+        "model": {"id": "claude-sonnet-4-5"},
+        "context_window": {"context_window_size": 200_000}
+    });
+    let output = env.run_statusline_feed("claude", &payload.to_string());
+    assert!(output.status.success(), "{output:?}");
+    let ws = env.rimz_home().join("ws");
+    assert!(!ws.exists() || std::fs::read_dir(ws).unwrap().next().is_none());
+}
+
 fn permission_cases() -> [(&'static str, String); 2] {
     [
         ("claude", permission_payload("Bash")),

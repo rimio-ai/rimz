@@ -30,6 +30,7 @@ pub(super) fn resume_lane(
     let workspace =
         rimz::workspace::WorkspaceResolver::resolve_participant(".", globals.root.clone())
             .context("resolving current workspace")?;
+    let store = crate::cli::require_existing_store(&workspace)?;
     let mux = rimz::room::require_live_mux(globals.mux, &workspace)?;
     let machine_config = crate::cli::machine_config();
     let room = RoomContext::from_resolved(
@@ -39,7 +40,6 @@ pub(super) fn resume_lane(
         RoomSizing::OrdinaryTab,
     )?;
     let backend = room.backend();
-    let store = crate::cli::open_store(&workspace)?;
     let projection = store
         .runtime_projection(rimz::RuntimeScope::Audit)
         .context("reading audit agent rollup")?;

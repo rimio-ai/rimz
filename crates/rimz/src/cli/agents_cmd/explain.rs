@@ -55,11 +55,8 @@ pub(super) fn run(args: ExplainArgs, globals: &GlobalFlags) -> Result<()> {
     let channel = cli::current_channel(&workspace, store.as_ref());
     let mut warnings = Vec::new();
     let (request, cwd, action_note) = if args.target.starts_with('@') {
-        let store = store.as_ref().ok_or_else(|| {
-            anyhow::anyhow!(
-                "no room state under {}; @handle needs a room that has run",
-                workspace.project_root.display()
-            )
+        let store = store.as_ref().with_context(|| {
+            cli::no_room(format_args!("at {}", workspace.project_root.display()))
         })?;
         let snapshot = snapshot
             .as_ref()
