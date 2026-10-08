@@ -816,18 +816,20 @@ fn overdue_sent_wake_releases_a_clean_park_without_reconciliation() {
         .is_none()
     );
     let parked = load(store.paths(), &record.run_id).unwrap();
-    let at = parked.parked_at.unwrap();
     wake.updated_at = Timestamp::now() - wake.body.delivery_window() - Duration::from_secs(60);
     wake.last_sent_at = Some(wake.updated_at);
     store.queue_message(&wake, "park-test").unwrap();
+    let ParkCheck::Stranded(at) = settle_stranded_park(&store, &parked, None).unwrap() else {
+        panic!("the overdue wake must release the park");
+    };
+    assert_eq!(Some(at), parked.parked_at);
     assert_eq!(
-        settle_stranded_park(&store, &parked, None).unwrap(),
-        ParkCheck::Stranded(at)
+        settle_stranded_park(&store, &parked, Some(at)).unwrap(),
+        ParkCheck::Settled
     );
-    let settled = settle_lifecycle(&store, &record.run_id, adapter, &ended, None)
-        .unwrap()
-        .unwrap();
-    assert_eq!(settled.status, RunStatus::Completed);
+    let settled = load(store.paths(), &record.run_id).unwrap();
+    assert_eq!(settled.status, RunStatus::Failed);
+    assert_eq!(settled.failure_tail.as_deref(), Some(STRANDED_PARK_REASON));
     assert_eq!(settled.last_message.as_deref(), Some("answer"));
     assert_eq!(settled.parked_at, None);
 }
