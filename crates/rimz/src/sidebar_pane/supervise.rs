@@ -413,7 +413,7 @@ fn connect_to_host(
         let state = crate::StatePaths::for_workspace(config.workspace_id.clone())
             .map_err(io::Error::other)?;
         let log = state.sidebar_host_log(config.mux, &config.session_name);
-        host_link::spawn_host(exe, config, runtime, &log)
+        host_link::spawn_host(exe, config, runtime, &state, &log)
     })
 }
 

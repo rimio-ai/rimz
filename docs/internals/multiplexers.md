@@ -180,7 +180,7 @@ Zellij stores `{version: 1, session_name, tabs: {<stable tab id>: {base, founder
 
 ### The identity pin
 
-Session birth stamps the room's identity (`RIMZ_WORKSPACE_ID` and `RIMZ_PROJECT_ROOT`, through [`pin_env`](../../crates/rimz/src/workspace.rs)) and the registry's adapter-enrichment environment into the session. Every pane inherits it, and so does every agent and every in-pane hook child. A daemon-routed hook that misses the pin recovers it from the in-pane agent process ([adapter.md](./agents/adapter.md#hooks-resolve-the-room-they-live-in)).
+Session birth stamps the room's identity (`RIMZ_WORKSPACE_ID` and `RIMZ_PROJECT_ROOT`, through [`pin_env`](../../crates/rimz/src/workspace.rs)) and the registry's adapter-enrichment environment into the session. Every pane inherits it, and so does every agent and every in-pane hook child. The [room host](./sidebar/state.md#the-room-host-and-its-attachments) is pinned by its spawner from the verified workspace record, not by inheritance. A daemon-routed hook that misses the pin recovers it from the in-pane agent process ([adapter.md](./agents/adapter.md#hooks-resolve-the-room-they-live-in)).
 
 Each backend pins at its own birth seam, and they differ in whether a live session can be updated:
 
