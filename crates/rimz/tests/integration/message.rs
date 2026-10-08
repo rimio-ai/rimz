@@ -1827,6 +1827,64 @@ fn scheduled_message_parks_and_sweep_delivers_due_work() {
 }
 
 #[test]
+fn a_bare_sweep_from_shared_root_uses_the_host_pin_without_a_phantom_workspace() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
+    register_running_agent(&env, "sess-host-pin", "feature-host-pin", pane_env);
+    run_hook(
+        &env,
+        json!({"hook_event_name": "Stop", "session_id": "sess-host-pin", "worktree_branch": "feature-host-pin"}),
+        pane_env,
+    );
+    let store = env.store();
+    let snapshot = store.snapshot_cached().unwrap();
+    let agent = snapshot
+        .agents
+        .iter()
+        .find(|agent| agent.agent_id.as_str() == "sess-host-pin")
+        .unwrap();
+    let due = MessageRecord::new(
+        env.workspace_id.clone(),
+        agent,
+        "due from host".to_owned(),
+        DeliveryGate::Done,
+    )
+    .with_not_before(Some(
+        jiff::Timestamp::now() - jiff::SignedDuration::from_secs(1),
+    ));
+    store.queue_message(&due, "rimz-test").unwrap();
+    let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "claude")]);
+    let runtime = env.runtime_paths();
+    runtime.ensure_dirs().unwrap();
+    let trace = env.project_root.join("host-pin-sweep.log");
+    let mut command = traced_rimz(&env, &trace);
+    command
+        .current_dir(&runtime.shared_root)
+        .envs(rimz::workspace::pin_env(
+            &env.workspace_id,
+            &env.project_root,
+        ))
+        .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+        .args(["message", "sweep"]);
+    run_success(&mut command, "bare host sweep");
+    let roots: Vec<_> = std::fs::read_dir(env.rimz_home().join("ws"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    assert_eq!(
+        roots,
+        vec![store.paths().root.clone()],
+        "the helper must not create a phantom workspace from shared_root"
+    );
+    assert_eq!(
+        message_by_id(&env, &due.message_id).status,
+        MessageStatus::Sent
+    );
+    assert_text_then_enter(&trace, &user_message("due from host"));
+}
+
+#[test]
 fn message_after_rejects_cycles_then_delivers_cross_agent_relay() {
     let env = Env::new();
     env.install_agent_hooks("claude");
