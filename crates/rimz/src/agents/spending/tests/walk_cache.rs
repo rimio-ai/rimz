@@ -1,6 +1,35 @@
 use super::*;
 
 #[test]
+fn spending_discovery_override_reaches_worker_and_restores_prior() {
+    let file = PathBuf::from("/fixture/claude.jsonl");
+    let _discovery = override_discovered_spending_files_for_test(vec![spending_file(
+        claude_adapter(),
+        file.clone(),
+    )]);
+    let discovered = std::thread::scope(|scope| {
+        scope
+            .spawn(|| SpendingWalker::new().discover_spending_files(NOW_SECS))
+            .join()
+            .unwrap()
+    });
+    assert_eq!(discovered.len(), 1);
+    assert_eq!(discovered[0].path, file);
+    {
+        let _empty = override_discovered_spending_files_for_test(Vec::new());
+        assert!(
+            SpendingWalker::new()
+                .discover_spending_files(NOW_SECS)
+                .is_empty()
+        );
+    }
+    assert_eq!(
+        SpendingWalker::new().discover_spending_files(NOW_SECS)[0].path,
+        file
+    );
+}
+
+#[test]
 fn cache_hit_skips_io_and_version_gate_discards_old_entries() {
     assert_eq!(SPENDING_CACHE_VERSION, 25);
     let dir = TempDir::new().unwrap();

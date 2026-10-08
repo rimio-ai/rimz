@@ -26,10 +26,10 @@ mod time;
 pub mod user_input;
 
 use std::cell::Cell;
-#[cfg(any(test, feature = "testkit"))]
-use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
+#[cfg(any(test, feature = "testkit"))]
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use super::pricing::PriceBook;
@@ -156,10 +156,7 @@ pub struct SpendingFile {
 type DiscoveredSpendingFiles = Vec<SpendingFile>;
 
 #[cfg(any(test, feature = "testkit"))]
-thread_local! {
-    static DISCOVER_SPENDING_FILES_OVERRIDE: RefCell<Option<DiscoveredSpendingFiles>> =
-        const { RefCell::new(None) };
-}
+static DISCOVER_SPENDING_FILES_OVERRIDE: Mutex<Option<DiscoveredSpendingFiles>> = Mutex::new(None);
 
 #[cfg(test)]
 thread_local! {
@@ -176,9 +173,9 @@ pub struct DiscoverSpendingFilesOverride {
 impl Drop for DiscoverSpendingFilesOverride {
     fn drop(&mut self) {
         let prior = self.prior.take();
-        DISCOVER_SPENDING_FILES_OVERRIDE.with(|slot| {
-            *slot.borrow_mut() = prior;
-        });
+        *DISCOVER_SPENDING_FILES_OVERRIDE
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = prior;
     }
 }
 
@@ -187,7 +184,10 @@ impl Drop for DiscoverSpendingFilesOverride {
 pub fn override_discovered_spending_files_for_test(
     files: DiscoveredSpendingFiles,
 ) -> DiscoverSpendingFilesOverride {
-    let prior = DISCOVER_SPENDING_FILES_OVERRIDE.with(|slot| slot.replace(Some(files)));
+    let prior = DISCOVER_SPENDING_FILES_OVERRIDE
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .replace(files);
     DiscoverSpendingFilesOverride { prior }
 }
 
@@ -251,7 +251,11 @@ impl SpendingWalker {
     /// process-local directory frontier.
     fn discover_spending_files(&mut self, now_secs: u64) -> Vec<SpendingFile> {
         #[cfg(any(test, feature = "testkit"))]
-        if let Some(files) = DISCOVER_SPENDING_FILES_OVERRIDE.with(|slot| slot.borrow().clone()) {
+        if let Some(files) = DISCOVER_SPENDING_FILES_OVERRIDE
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone()
+        {
             if files.is_empty() {
                 self.discovery.mark_non_authoritative_for_test();
             }
