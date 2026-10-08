@@ -181,8 +181,8 @@ fn a_published_projection_populates_the_first_nonblank_screen() {
         crate::utils::time::unix_now_ms(),
         "rimz-test",
     );
-    frame.topology_stamp_ms = Some(42);
-    frame.metrics_stamp_ms = Some(42);
+    frame.topology_stamp_ms = Some(crate::utils::time::unix_now_ms());
+    frame.metrics_stamp_ms = frame.topology_stamp_ms;
     std::fs::write(
         room.runtime.pane_frame_path(),
         serde_json::to_vec(&frame).unwrap(),

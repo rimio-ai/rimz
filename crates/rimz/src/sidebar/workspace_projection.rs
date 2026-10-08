@@ -3,7 +3,7 @@
 //! The file is disposable runtime truth acceleration. Consumer adoption
 //! validates its source against the live rollup, pane-frame sections, and machine
 //! config. A new pane's pre-paint seed checks schema, session, and the caller's
-//! frame-age bound; its next fold corrects it.
+//! projection-age bound; its next fold corrects it.
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};

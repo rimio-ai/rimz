@@ -24,17 +24,22 @@ mod tests;
 /// behind this module's read-only boundary and never import `crate::store`.
 pub use crate::store::snapshot::RollupCursor;
 
-/// Read a same-session publication within the caller's frame-age bound,
-/// without checking its source against the store.
+/// Read a same-session publication whose projection is within the caller's
+/// age bound, without checking its source against the store. The age is the
+/// projection's own: other commands republish the pane frame with no sidebar
+/// running, so a fresh frame says nothing about the cards beside it.
 pub(crate) fn read_published_pair(
     runtime: &RuntimePaths,
     session: &str,
-    max_frame_age: std::time::Duration,
+    max_age: std::time::Duration,
     now_ms: u64,
 ) -> Option<(WorkspaceSnapshot, std::sync::Arc<super::frame::PaneFrame>)> {
     let (published, frame) = read_publication(runtime, session)?;
-    if std::time::Duration::from_millis(now_ms.saturating_sub(frame.produced_at_ms)) > max_frame_age
-    {
+    let published_at_ms = published
+        .source
+        .frame_topology_stamp
+        .max(published.source.frame_metrics_stamp);
+    if std::time::Duration::from_millis(now_ms.saturating_sub(published_at_ms)) > max_age {
         return None;
     }
     Some((published.projection.clone(), frame))

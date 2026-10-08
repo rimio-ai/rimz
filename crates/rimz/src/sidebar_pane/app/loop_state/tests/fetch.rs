@@ -43,8 +43,8 @@ fn published_seed_commits_before_delivery_and_keeps_the_final_correction() {
         seed.now.as_millisecond() as u64,
         "rimz-test",
     );
-    frame.topology_stamp_ms = Some(42);
-    frame.metrics_stamp_ms = Some(42);
+    frame.topology_stamp_ms = Some(crate::utils::time::unix_now_ms());
+    frame.metrics_stamp_ms = frame.topology_stamp_ms;
     frame.presence = Some(crate::store::snapshot::PresenceSample {
         human_clients: 1,
         last_input_ms: Some(seed.now.as_millisecond() as u64),
@@ -147,11 +147,11 @@ fn published_seed_age_outlasts_the_frame_reuse_window_by_three_ticks() {
         });
         let mut frame = crate::sidebar::frame::assemble_frame(
             seed.rows().filter_map(|row| row.pane.clone()).collect(),
-            crate::utils::time::unix_now_ms() - age_ms,
+            crate::utils::time::unix_now_ms(),
             "rimz-test",
         );
-        frame.topology_stamp_ms = Some(42);
-        frame.metrics_stamp_ms = Some(42);
+        frame.topology_stamp_ms = Some(crate::utils::time::unix_now_ms() - age_ms);
+        frame.metrics_stamp_ms = frame.topology_stamp_ms;
         std::fs::write(
             rig.runtime.pane_frame_path(),
             serde_json::to_vec(&frame).unwrap(),

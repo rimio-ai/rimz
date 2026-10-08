@@ -299,15 +299,16 @@ impl LoopState {
     }
 
     pub(super) fn seed_published(&mut self, role: FetchRole) {
-        // An idle producer reuses its pane frame for `EVENT_PANE_TTL` and
-        // renews it on the tick after, so a live room's frame is never older.
-        let max_frame_age = crate::sidebar::timing::EVENT_PANE_TTL.saturating_add(
+        // An idle producer reuses its pane frame for `EVENT_PANE_TTL`, renews
+        // it on the tick after, and republishes the projection against it, so
+        // a live room's projection is never older.
+        let max_age = crate::sidebar::timing::EVENT_PANE_TTL.saturating_add(
             tick_for(self.config.tick_seconds).saturating_mul(PUBLISHED_SEED_CYCLES),
         );
         let Some((workspace, frame)) = read_published_pair(
             &self.runtime,
             &self.config.session_name,
-            max_frame_age,
+            max_age,
             crate::utils::time::unix_now_ms(),
         ) else {
             return;
