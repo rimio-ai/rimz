@@ -134,6 +134,7 @@ fn wake_in_flight_keeps_a_rested_agent_sleeping() {
                 Timestamp::now(),
             ),
             messages: vec![message],
+            now: Timestamp::now(),
         }
     };
     let wake = |notice| MessageSender::Harness { notice };
@@ -165,6 +166,59 @@ fn wake_in_flight_keeps_a_rested_agent_sleeping() {
             assert_eq!(report.completion(&agent), TurnCompletion::Completed);
             assert!(!report.wake_in_flight(&agent, false));
             assert_eq!(report.wake_in_flight(&agent, true), !status.is_terminal());
+        }
+    }
+}
+
+#[test]
+fn overdue_sent_wake_releases_sleeping_without_reconciliation() {
+    let now = Timestamp::from_second(1_700_000_100).unwrap();
+    let mut agent = crate::testkit::agent_state("claude", "sess-wake", now);
+    agent.turn_started_at = Some(Timestamp::UNIX_EPOCH);
+    let workspace = WorkspaceId::from_project_root(std::path::Path::new("/repo"));
+    for status in [AgentStatus::Success, AgentStatus::Idle] {
+        agent.status = status;
+        for notice in [HarnessNotice::Wait, HarnessNotice::Signal] {
+            let mut message = MessageRecord::new(
+                workspace.clone(),
+                &agent,
+                "wake".to_owned(),
+                DeliveryGate::Done,
+            )
+            .with_sender(MessageSender::Harness { notice });
+            message.status = MessageStatus::Sent;
+            let overdue =
+                now - message.body.delivery_window() - std::time::Duration::from_millis(1);
+            for (sent_at, retry_after, held) in [
+                (overdue, None, false),
+                (now, None, true),
+                (overdue, Some(now + message.body.delivery_window()), true),
+            ] {
+                message.updated_at = sent_at;
+                message.last_sent_at = Some(sent_at);
+                message.retry_after = retry_after;
+                let view = TurnWaitView {
+                    snapshot: SidebarSnapshot::build_with_agents(
+                        workspace.clone(),
+                        vec![agent.clone()],
+                        now,
+                    ),
+                    messages: vec![message.clone()],
+                    now,
+                };
+                assert_eq!(
+                    view.status(&agent),
+                    if held { AgentStatus::Sleeping } else { status }
+                );
+                assert_eq!(
+                    view.completion(&agent),
+                    if held {
+                        TurnCompletion::Open
+                    } else {
+                        TurnCompletion::Completed
+                    }
+                );
+            }
         }
     }
 }
@@ -223,6 +277,7 @@ fn card_identifies_wake_turns_from_the_rollup_prompt() {
                 Timestamp::UNIX_EPOCH,
             ),
             messages: Vec::new(),
+            now: Timestamp::UNIX_EPOCH,
         };
         assert_eq!(
             view.card(&view.snapshot.agents[0]).wake_turn,
@@ -405,6 +460,7 @@ fn parked_reply_reanchors_when_delivery_starts() {
     let running = TurnWaitView {
         snapshot: running,
         messages: vec![message.clone()],
+        now: Timestamp::now(),
     };
     assert!(!advance_leg(&mut leg, &store, &running, DeliveryKind::Boundary).unwrap());
     assert_eq!(leg.last_message, None);
@@ -414,6 +470,7 @@ fn parked_reply_reanchors_when_delivery_starts() {
     let idle = TurnWaitView {
         snapshot: idle,
         messages: vec![message],
+        now: Timestamp::now(),
     };
     assert!(advance_leg(&mut leg, &store, &idle, DeliveryKind::Boundary).unwrap());
     assert_eq!(leg.result().final_message, None);

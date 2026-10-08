@@ -268,6 +268,49 @@ mod tests {
     }
 
     #[test]
+    fn overdue_sent_wake_is_not_owed_without_reconciliation() {
+        let (_dir, store) = fixture();
+        register(&store, "parent", None);
+        let agent = store
+            .snapshot_cached()
+            .unwrap()
+            .agents
+            .into_iter()
+            .find(|agent| agent.agent_id.as_str() == "parent")
+            .unwrap();
+        let now = jiff::Timestamp::now();
+        let mut message = MessageRecord::new(
+            store.paths().workspace_id.clone(),
+            &agent,
+            "wake".to_owned(),
+            DeliveryGate::Done,
+        )
+        .with_sender(MessageSender::Harness {
+            notice: HarnessNotice::Wait,
+        });
+        message.status = MessageStatus::Sent;
+        let overdue = now - message.body.delivery_window() - std::time::Duration::from_secs(60);
+        for (sent_at, retry_after, expected) in [
+            (overdue, None, None),
+            (now, None, Some(OwedWake::WakeInFlight)),
+            (
+                overdue,
+                Some(now + message.body.delivery_window()),
+                Some(OwedWake::WakeInFlight),
+            ),
+        ] {
+            message.updated_at = sent_at;
+            message.last_sent_at = Some(sent_at);
+            message.retry_after = retry_after;
+            store.queue_message(&message, "owed-test").unwrap();
+            assert_eq!(
+                owed_wake(&store, &agent.kind, &agent.agent_id).unwrap(),
+                expected
+            );
+        }
+    }
+
+    #[test]
     fn owed_fleet_includes_ended_unreported_children() {
         for (status, joined, reported, report_to, expected) in [
             (
