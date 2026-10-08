@@ -242,7 +242,10 @@ impl StatePaths {
     }
 
     /// Paths for a workspace known only by id: the dir its record names, else the
-    /// `ws-<24hex>` fallback name. Creates nothing.
+    /// `ws-<24hex>` fallback name. Creates nothing. Use only once the workspace
+    /// record exists: before birth this names the fallback while
+    /// [`Self::for_project_root`] names the room's own dir, and a write under
+    /// each leaves two dirs for one workspace.
     pub fn for_workspace(workspace_id: WorkspaceId) -> Result<Self> {
         Self::under(workspace_id, &rimz_home())
     }
