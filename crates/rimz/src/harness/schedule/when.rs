@@ -254,6 +254,8 @@ impl WhenState {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConditionEvidence {
+    #[serde(default)]
+    pub since: Option<Timestamp>,
     pub when: String,
     pub hold: Option<String>,
     pub held_ms: u64,

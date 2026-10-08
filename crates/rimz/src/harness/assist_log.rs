@@ -16,16 +16,25 @@ use crate::ids::{AgentKind, AgentSessionId};
 const NAME: &str = "assists.log.jsonl";
 const MAX_BYTES: u64 = 4 * 1_048_576;
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AssistRecord {
     pub at: Timestamp,
     #[serde(flatten)]
     pub assist: Assist,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "assist")]
 pub enum Assist {
+    CheckDecline {
+        task: String,
+        checkout: PathBuf,
+        profile: String,
+        kind: AgentKind,
+        reason: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cost_usd: Option<f64>,
+    },
     StallNotice {
         kind: AgentKind,
         agent_id: AgentSessionId,

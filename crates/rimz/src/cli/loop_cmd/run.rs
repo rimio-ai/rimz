@@ -148,7 +148,10 @@ pub(super) fn run_one(
     }
     let finished = match plan {
         Err(err) => record_task_error(&mut fire, name, &entry, err)?,
-        Ok(rimz::harness::schedule::runner::TaskFirePlan::AlreadyLaunched) => return Ok(()),
+        Ok(
+            rimz::harness::schedule::runner::TaskFirePlan::AlreadyLaunched
+            | rimz::harness::schedule::runner::TaskFirePlan::DeclineHeld,
+        ) => return Ok(()),
         Ok(rimz::harness::schedule::runner::TaskFirePlan::Resident {
             root,
             cwd,

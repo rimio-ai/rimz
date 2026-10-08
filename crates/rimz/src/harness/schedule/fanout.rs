@@ -27,6 +27,11 @@ pub enum CheckoutState {
         leader: String,
         at: Timestamp,
     },
+    Declined {
+        at: Timestamp,
+        reason: String,
+        profile: String,
+    },
     Holding {
         since: Timestamp,
         hold: Duration,
@@ -61,6 +66,7 @@ pub fn inspect(
         .remove(name)
         .unwrap_or_default();
     let clocks = fire::last_when_states(runtime);
+    let declines = launch_ledger::load_declines_room(runtime, Some(&root))?;
     let windows = WindowReadings::new(Some(runtime), now);
     let mut rows = Vec::new();
     for worktree in crate::worktree::discover_owned(&root)? {
@@ -85,6 +91,19 @@ pub fn inspect(
             let since = clock.map_or(now, |clock| clock.since);
             if !verdict.ok {
                 CheckoutState::Waiting { verdict }
+            } else if let Some(decline) = launch_ledger::holding_decline(
+                &declines,
+                name,
+                entry,
+                &checkout,
+                clock.map(|clock| clock.since),
+                now,
+            ) {
+                CheckoutState::Declined {
+                    at: decline.at,
+                    reason: decline.reason.clone(),
+                    profile: decline.profile.clone(),
+                }
             } else if let Some(hold) = hold
                 && u128::try_from(now.duration_since(since).as_millis()).unwrap_or(0)
                     < hold.as_millis()

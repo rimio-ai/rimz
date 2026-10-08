@@ -1677,6 +1677,7 @@ fn assists_fold_rolls_up_benefit_and_keeps_failed_attempts_forensics() {
         AssistRollup {
             stall_notices: 0,
             resident_launches: 0,
+            check_declines: 0,
             model_aliases: 0,
             tier_fallbacks: 0,
             redeems: 1,

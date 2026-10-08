@@ -284,6 +284,7 @@ impl TaskCatalog {
             instances::remove(&instance_root, name, None)?;
         }
         let source = TaskSource::from_entry(entry);
+        self.clear_declines(name, &entry.resolved_root())?;
         let key = TaskKey::for_task(name, source, &entry.resolved_root());
         Ok(TaskMutation {
             changed: true,
@@ -298,6 +299,7 @@ impl TaskCatalog {
         entry: &TaskEntry,
     ) -> Result<TaskMutation> {
         config_edit::set_entry(config_edit::TaskStore::Project(project_root), name, entry)?;
+        self.clear_declines(name, project_root)?;
         let source = TaskSource::Project {
             state: crate::trust::status(project_root)?.state,
         };
@@ -311,6 +313,12 @@ impl TaskCatalog {
         let changed = remove_definition(name, task)?;
         if changed && task.entry().stay {
             super::launch_ledger_store::remove(
+                &StatePaths::for_project_root(&task.entry().resolved_root())?,
+                name,
+            )?;
+        }
+        if changed {
+            super::launch_ledger_store::remove_declines(
                 &StatePaths::for_project_root(&task.entry().resolved_root())?,
                 name,
             )?;
@@ -357,6 +365,13 @@ impl TaskCatalog {
             )?,
         };
         let old_key = task.key(name);
+        if changed {
+            super::launch_ledger_store::rename_declines(
+                &StatePaths::for_project_root(&task.entry().resolved_root())?,
+                name,
+                new_name,
+            )?;
+        }
         let new_key = task.key(new_name);
         let cleared_arming = arming::rename(&old_key, &new_key)?;
         let cleared_strikes = strikes::rename(&old_key, &new_key)?;
@@ -377,6 +392,19 @@ impl TaskCatalog {
             changed: remove_definition(name, task)?,
             cleared_overlays: false,
         })
+    }
+
+    fn clear_declines(&self, name: &str, root: &Path) -> Result<()> {
+        super::launch_ledger_store::remove_declines(&StatePaths::for_project_root(root)?, name)?;
+        if let Some(task) = self.visible.get(name)
+            && task.entry().resolved_root() != root
+        {
+            super::launch_ledger_store::remove_declines(
+                &StatePaths::for_project_root(&task.entry().resolved_root())?,
+                name,
+            )?;
+        }
+        Ok(())
     }
 
     pub fn prune_orphan_overlays(&self) -> Result<usize> {

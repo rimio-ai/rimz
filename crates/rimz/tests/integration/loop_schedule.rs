@@ -25,6 +25,164 @@ use rimz::wakeup::heartbeat::SidebarHeartbeat;
 use crate::common::{Env, ScrubSessionEnvExt, canonical};
 #[path = "loop_list.rs"]
 mod list_tests;
+
+#[cfg(unix)]
+#[test]
+fn resident_agent_decline_is_shown_counted_and_held_without_another_check() {
+    let env = Env::new();
+    assert!(init_git_repo(&env.project_root));
+    env.write_config(&env.project_root, "[agents]\nisolation = \"host\"\n");
+    env.record(&env.project_root);
+    loop_ok(&env, &["worktree", "new", "auth"]);
+    let checkout = rimz::utils::path::normalize_path_lexical(
+        &rimz::worktree::discover_owned(&env.project_root)
+            .unwrap()
+            .remove(0)
+            .marker
+            .worktree_path,
+    );
+    env.install_agent_hooks("codex");
+    trust_codex_preflight_hooks(&env);
+    trust_codex_project(&env, &env.project_root);
+    let agent_bin = env.home_root.join("check-bin");
+    write_path_shim(
+        &agent_bin,
+        "codex",
+        r#"
+while [ "$#" -gt 0 ]; do
+    if [ "$1" = '-o' ]; then shift; printf '%s' '{"pass":false,"reason":"No actionable work."}' > "$1"; fi
+    shift
+done
+printf '%s\n' '{"type":"turn.completed","usage":{"input_tokens":10,"output_tokens":5}}'
+"#,
+    );
+    // The checker runs through the fixture's login shell, and a system profile
+    // that assigns PATH (Debian's does) drops the shim directory before it.
+    std::fs::write(
+        env.home_root.join(".profile"),
+        format!("PATH='{}':\"$PATH\"\n", agent_bin.display()),
+    )
+    .unwrap();
+    write_loop_config(
+        &env,
+        &format!(
+            "[tasks.guard]\nagent = \"codex\"\nprompt = \"repair\"\nroot = {:?}\nstay = true\neach-worktree = true\nwhen = [\"team.stage=Done\"]\non = \"success\"\n[tasks.guard.check]\nagent = \"codex\"\nprompt = \"Any work?\"\n",
+            env.project_root
+        ),
+    );
+    std::fs::write(checkout.join("blackboard.md"), "Stage: Done\n").unwrap();
+    let since = Timestamp::now();
+    let evidence = json!({"when":"team.stage=Done", "hold":null, "since":since, "held_ms":0, "readings":{"team.stage":"Done"}});
+    for _ in 0..2 {
+        let output = env
+            .rimz()
+            .env("PATH", path_with_front(&agent_bin))
+            .args(["loop", "run", "guard", "--cwd"])
+            .arg(&checkout)
+            .arg("--condition-json")
+            .arg(evidence.to_string())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    let records = read_loop_run_records(&env);
+    assert_eq!(
+        records.len(),
+        1,
+        "a holding decline must write no second history row"
+    );
+    assert_eq!(records[0].result, LoopRunResult::CheckSkipped);
+    assert_eq!(records[0].condition.as_ref().unwrap().since, Some(since));
+    let runtime = env.runtime_paths();
+    std::fs::create_dir_all(runtime.lane_path("loop-when.json").parent().unwrap()).unwrap();
+    std::fs::write(
+        runtime.lane_path("loop-when.json"),
+        json!({
+            serde_json::to_string(&("guard", checkout.to_string_lossy())).unwrap(): {
+                "since":since, "fired":true, "fingerprint":["team.stage=Done",null,env.project_root]
+            }
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let shown = loop_ok(&env, &["loop", "show", "guard", "--json"]);
+    let shown: serde_json::Value = serde_json::from_str(&shown).unwrap();
+    assert_eq!(shown["worktrees"][0]["state"], "declined", "{shown}");
+    assert_eq!(shown["worktrees"][0]["reason"], "No actionable work.");
+    assert_eq!(shown["worktrees"][0]["profile"], "codex");
+    let text = loop_ok(&env, &["loop", "show", "guard"]);
+    assert!(
+        text.contains("declined") && text.contains("No actionable work."),
+        "{text}"
+    );
+    let stats = loop_ok(&env, &["stats", "--json"]);
+    let stats: serde_json::Value = serde_json::from_str(&stats).unwrap();
+    assert_eq!(stats["assists"]["rollup"]["check_declines"], 1);
+    assert!(loop_ok(&env, &["stats", "--assists"]).contains("No actionable work."));
+    let key = serde_json::to_string(&("guard", checkout.to_string_lossy())).unwrap();
+    let fire_path = runtime.lane_path("loop-fire.json");
+    std::fs::write(
+        &fire_path,
+        json!({key.clone(): since - jiff::SignedDuration::from_secs(600)}).to_string(),
+    )
+    .unwrap();
+    let tick = || {
+        let output = env
+            .rimz()
+            .env("RIMZ_BIN", env.home_root.join("missing-helper"))
+            .args(["loop", "tick"])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+    let clocks = || {
+        serde_json::from_slice::<serde_json::Value>(
+            &std::fs::read(runtime.lane_path("loop-when.json")).unwrap(),
+        )
+        .unwrap()
+    };
+    tick();
+    assert_eq!(
+        clocks()[&key]["since"],
+        serde_json::to_value(since).unwrap(),
+        "a held scope must keep its true clock"
+    );
+    assert_eq!(
+        read_loop_run_records(&env).len(),
+        1,
+        "planner must suppress held helpers"
+    );
+    std::fs::write(checkout.join("blackboard.md"), "Stage: Review\n").unwrap();
+    tick();
+    assert!(
+        clocks().get(&key).is_none(),
+        "false must retire even a declined clock"
+    );
+    std::fs::write(checkout.join("blackboard.md"), "Stage: Done\n").unwrap();
+    tick();
+    assert_ne!(
+        clocks()[&key]["since"],
+        serde_json::to_value(since).unwrap()
+    );
+    let fired = last_loop_record(&env);
+    assert_eq!(
+        fired.result,
+        LoopRunResult::StartFailed,
+        "a new true edge must try the deliberately missing helper"
+    );
+    assert_eq!(
+        serde_json::to_value(fired.condition.unwrap().since).unwrap(),
+        clocks()[&key]["since"]
+    );
+}
 #[cfg(unix)]
 use crate::common::{
     path_with_front, trust_codex_preflight_hooks, trust_codex_project, write_fake_login_shell,

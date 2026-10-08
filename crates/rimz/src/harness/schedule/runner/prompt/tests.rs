@@ -731,6 +731,7 @@ fn builtin_subject_quotes_a_segment_holding_a_line_break() {
 #[test]
 fn condition_readings_print_one_line_each_and_name_a_missing_one() {
     let condition = super::super::super::when::ConditionEvidence {
+        since: None,
         when: "team.stage=Done".to_owned(),
         hold: None,
         held_ms: 0,

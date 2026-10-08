@@ -419,6 +419,7 @@ impl WorktreeRow<'_> {
         }
         match self.condition.state {
             CheckoutState::Launched { .. } => "launched",
+            CheckoutState::Declined { .. } => "declined",
             CheckoutState::Holding { .. } => "holding",
             CheckoutState::Ready { .. } => "ready",
             CheckoutState::Waiting { .. } => "waiting",
@@ -432,10 +433,11 @@ impl WorktreeRow<'_> {
         match self.condition.state {
             CheckoutState::Ready { .. } => 1,
             CheckoutState::Holding { .. } => 2,
-            CheckoutState::Waiting { .. } if self.short.len() <= 1 => 3,
-            CheckoutState::Waiting { .. } => 4,
-            CheckoutState::Launched { .. } if self.leader_status.is_some() => 5,
-            CheckoutState::Launched { .. } => 6,
+            CheckoutState::Declined { .. } => 3,
+            CheckoutState::Waiting { .. } if self.short.len() <= 1 => 4,
+            CheckoutState::Waiting { .. } => 5,
+            CheckoutState::Launched { .. } if self.leader_status.is_some() => 6,
+            CheckoutState::Launched { .. } => 7,
         }
     }
 }
@@ -449,7 +451,7 @@ fn worktree_expr(view: &ShowView) -> Option<&WhenExpr> {
 
 fn worktree_verdict(state: &CheckoutState) -> Option<&Verdict> {
     match state {
-        CheckoutState::Launched { .. } => None,
+        CheckoutState::Launched { .. } | CheckoutState::Declined { .. } => None,
         CheckoutState::Holding { verdict, .. }
         | CheckoutState::Ready { verdict, .. }
         | CheckoutState::Waiting { verdict } => Some(verdict),
@@ -518,7 +520,9 @@ fn write_worktrees(
         return Ok(());
     }
     let mut counts = vec![format!("{} owned", rows.len())];
-    for state in ["blocked", "ready", "holding", "waiting", "launched"] {
+    for state in [
+        "blocked", "ready", "holding", "declined", "waiting", "launched",
+    ] {
         let count = rows.iter().filter(|row| row.state_name() == state).count();
         if count > 0 {
             counts.push(format!("{count} {state}"));
@@ -570,7 +574,7 @@ fn write_worktrees(
     });
     let now = view.now_zoned.timestamp();
     for row in &rows {
-        if !view.all && matches!(row.rank(), 4 | 6) {
+        if !view.all && matches!(row.rank(), 5 | 7) {
             continue;
         }
         let state = if let Some((since, _)) = &row.blocked {
@@ -578,6 +582,7 @@ fn write_worktrees(
         } else {
             match &row.condition.state {
                 CheckoutState::Launched { at, .. } => format!("launched {}", ui::rel_age(*at, now)),
+                CheckoutState::Declined { at, .. } => format!("declined {}", ui::rel_age(*at, now)),
                 CheckoutState::Holding { since, hold, .. } => schedule::TaskTimingState::Holding {
                     elapsed: Duration::from_millis(
                         u64::try_from(now.duration_since(*since).as_millis()).unwrap_or(0),
@@ -616,6 +621,11 @@ fn write_worktrees(
         }
         let leader = if let Some((_, refusal)) = &row.blocked {
             refusal.reason.to_owned()
+        } else if let CheckoutState::Declined {
+            profile, reason, ..
+        } = &row.condition.state
+        {
+            format!("check by {profile}: {}", first_line(reason))
         } else if let CheckoutState::Launched { leader, .. } = &row.condition.state {
             row.leader_status.map_or_else(
                 || format!("@{leader} ended"),
@@ -630,8 +640,8 @@ fn write_worktrees(
     table.render(out)?;
     if !view.all {
         for (rank, label) in [
-            (4, "more waiting on two or more terms"),
-            (6, "launched, leader ended"),
+            (5, "more waiting on two or more terms"),
+            (7, "launched, leader ended"),
         ] {
             let count = rows.iter().filter(|row| row.rank() == rank).count();
             if count > 0 {
@@ -671,6 +681,10 @@ struct WorktreeJson<'a> {
     name: &'a str,
     state: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    profile: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     since: Option<Timestamp>,
     #[serde(skip_serializing_if = "Option::is_none")]
     hold_ms: Option<u128>,
@@ -709,6 +723,8 @@ fn worktrees_json(view: &ShowView) -> Vec<WorktreeJson<'_>> {
                 checkout: &row.condition.checkout,
                 name: &row.condition.name,
                 state: row.state_name(),
+                reason: None,
+                profile: None,
                 since: None,
                 hold_ms: None,
                 held_ms: None,
@@ -720,6 +736,15 @@ fn worktrees_json(view: &ShowView) -> Vec<WorktreeJson<'_>> {
                 blocked: None,
             };
             match &row.condition.state {
+                CheckoutState::Declined {
+                    at,
+                    reason,
+                    profile,
+                } => {
+                    json.since = Some(*at);
+                    json.reason = Some(reason);
+                    json.profile = Some(profile);
+                }
                 CheckoutState::Launched { leader, at } => {
                     json.since = Some(*at);
                     json.leader = Some(leader);

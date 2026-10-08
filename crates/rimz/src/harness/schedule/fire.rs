@@ -51,6 +51,9 @@ fn scoped_tasks(
     tasks: &BTreeMap<String, LoadedTask>,
     ledger: &super::launch_ledger::Ledger,
     owned: &[PathBuf],
+    declines: &super::launch_ledger::Declines,
+    when_states: &BTreeMap<String, WhenState>,
+    now: Timestamp,
 ) -> BTreeMap<String, ScopedTask> {
     let mut scoped = BTreeMap::new();
     for (name, task) in tasks {
@@ -58,7 +61,16 @@ fn scoped_tasks(
         let launches = ledger.get(name);
         if !entry.each_worktree {
             if entry.stay
-                && launches.is_some_and(|launches| launches.contains_key(&entry.run_dir()))
+                && (launches.is_some_and(|launches| launches.contains_key(&entry.run_dir()))
+                    || super::launch_ledger::holding_decline(
+                        declines,
+                        name,
+                        entry,
+                        &entry.run_dir(),
+                        when_states.get(name).map(|state| state.since),
+                        now,
+                    )
+                    .is_some())
             {
                 continue;
             }
@@ -78,6 +90,18 @@ fn scoped_tasks(
                 continue;
             }
             let key = scope_key(name, &checkout);
+            if super::launch_ledger::holding_decline(
+                declines,
+                name,
+                entry,
+                &checkout,
+                when_states.get(&key).map(|state| state.since),
+                now,
+            )
+            .is_some()
+            {
+                continue;
+            }
             scoped.insert(
                 key,
                 ScopedTask {
@@ -155,6 +179,18 @@ fn fire_tasks(
     } else {
         BTreeMap::new()
     };
+    let declines = if tasks.values().any(|task| task.entry().stay) {
+        match super::launch_ledger::load_declines_room(runtime, project_root) {
+            Ok(declines) => declines,
+            Err(error) => {
+                tracing::warn!(%error, "resident loop declines unavailable");
+                tasks.retain(|_, task| !task.entry().stay);
+                BTreeMap::new()
+            }
+        }
+    } else {
+        BTreeMap::new()
+    };
     let owned = tasks
         .values()
         .find(|task| task.entry().each_worktree)
@@ -170,12 +206,20 @@ fn fire_tasks(
         .into_iter()
         .map(|worktree| worktree.marker.worktree_path)
         .collect::<Vec<_>>();
-    let scoped = scoped_tasks(&tasks, &ledger, &owned);
+    let scoped = scoped_tasks(
+        &tasks,
+        &ledger,
+        &owned,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        now.timestamp(),
+    );
     for (key, scope) in &scoped {
         if let Some(record) = arming.get(&scope.task.key(&scope.name)).copied() {
             arming.insert(scope.task.key(key), record);
         }
     }
+    let definitions = tasks;
     let tasks: BTreeMap<_, _> = scoped
         .iter()
         .map(|(key, scope)| (key.clone(), scope.task.clone()))
@@ -210,8 +254,26 @@ fn fire_tasks(
             }
         })
         .collect();
-    let (mut actions, next_state, next_when) =
+    let (mut actions, mut next_state, next_when) =
         plan(&tasks, &state, &arming, now, &when_states, &verdicts);
+    // Declined scopes must still fold false/true edges before suppressing helpers.
+    let eligible = scoped_tasks(
+        &definitions,
+        &ledger,
+        &owned,
+        &declines,
+        &next_when,
+        now.timestamp(),
+    );
+    actions.retain(|(key, action)| {
+        if *action != Action::Fire || eligible.contains_key(key) {
+            return true;
+        }
+        if let Some(at) = state.get(key) {
+            next_state.insert(key.clone(), *at);
+        }
+        false
+    });
     if next_state != state
         && let Err(err) = write_temp_then_rename_cache(&path, &next_state)
     {
@@ -248,6 +310,7 @@ fn fire_tasks(
                     .trigger
                 {
                     Trigger::Condition { expr, .. } => Some(ConditionEvidence {
+                        since: Some(next_when[&name].since),
                         when: expr.to_string(),
                         hold: tasks[&name].entry().hold.clone(),
                         held_ms: u64::try_from(

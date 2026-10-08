@@ -336,6 +336,9 @@ fn validate_add_args(args: &AddArgs) -> Result<TaskActionKind> {
         (args.check_timeout.as_deref(), "--check-timeout"),
     ] {
         if let Some(raw) = raw {
+            if flag == "--check-recheck" && raw.trim() == "0" {
+                continue;
+            }
             let duration = parse_task_timeout(raw)
                 .map_err(anyhow::Error::msg)
                 .with_context(|| format!("invalid {flag}"))?;
@@ -1505,6 +1508,40 @@ mod tests {
                 "any"
             ]))
             .is_ok()
+        );
+    }
+
+    #[test]
+    fn zero_recheck_reasks_without_accepting_a_zero_timeout() {
+        let flags = [
+            "--agent",
+            "claude",
+            "--stay",
+            "--check-agent",
+            "haiku",
+            "--check-prompt",
+            "q",
+            "--check-recheck",
+            "0",
+        ];
+        assert!(
+            validate_add_args(&args(&flags)).is_ok(),
+            "zero recheck must be accepted"
+        );
+        let timeout = [
+            "--agent",
+            "claude",
+            "--stay",
+            "--check-agent",
+            "haiku",
+            "--check-prompt",
+            "q",
+            "--check-timeout",
+            "0",
+        ];
+        assert!(
+            validate_add_args(&args(&timeout)).is_err(),
+            "zero timeout must remain refused"
         );
     }
 }

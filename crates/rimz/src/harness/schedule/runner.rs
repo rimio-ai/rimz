@@ -149,6 +149,7 @@ pub struct PreparedDelivery {
 pub enum TaskFirePlan {
     Done(TaskFireFinished),
     AlreadyLaunched,
+    DeclineHeld,
     Resident {
         root: PathBuf,
         cwd: PathBuf,
@@ -630,6 +631,22 @@ impl<'a> TaskFire<'a> {
             self.finished = true;
             return Ok(TaskFirePlan::AlreadyLaunched);
         }
+        if self.mode == LoopRunMode::Scheduled
+            && super::launch_ledger::holding_decline(
+                &super::launch_ledger::load_declines(&paths)?,
+                &self.name,
+                &self.entry,
+                &cwd,
+                self.condition
+                    .as_ref()
+                    .and_then(|condition| condition.since),
+                self.now,
+            )
+            .is_some()
+        {
+            self.finished = true;
+            return Ok(TaskFirePlan::DeclineHeld);
+        }
         if let Some(done) = self.prepare_resident_scope_gates(&cwd)? {
             return Ok(TaskFirePlan::Done(done));
         }
@@ -1073,6 +1090,43 @@ impl<'a> TaskFire<'a> {
             None
         };
         if let Some((result, consume)) = terminal {
+            if result == LoopRunResult::CheckSkipped
+                && let Some(agent) = &record.agent
+                && let Some(verdict) = &agent.verdict
+            {
+                let checkout = self.launch_checkout();
+                let assist = AssistRecord {
+                    at: Timestamp::now(),
+                    assist: Assist::CheckDecline {
+                        task: self.name.clone(),
+                        checkout: checkout.clone(),
+                        profile: agent.profile.clone(),
+                        kind: agent.kind.clone(),
+                        reason: verdict.reason.clone(),
+                        cost_usd: agent.cost_usd,
+                    },
+                };
+                if self.entry.stay {
+                    super::launch_ledger_store::record_decline(
+                        &StatePaths::for_project_root(&self.entry.resolved_root())?,
+                        &self.name,
+                        &checkout,
+                        super::launch_ledger::DeclineRecord {
+                            at: assist.at,
+                            since: self
+                                .condition
+                                .as_ref()
+                                .and_then(|condition| condition.since),
+                            reason: verdict.reason.clone(),
+                            profile: agent.profile.clone(),
+                            fingerprint: super::launch_ledger::check_fingerprint(&self.entry),
+                        },
+                        || assist_log::try_append(&assist),
+                    )?;
+                } else {
+                    assist_log::try_append(&assist)?;
+                }
+            }
             if self.mode == LoopRunMode::Scheduled && consume {
                 self.remove_schedule()?;
             }
@@ -1090,6 +1144,19 @@ impl<'a> TaskFire<'a> {
                     run.error = outcome.interrupted.then(|| "check interrupted".to_owned());
                 },
             )));
+        }
+        if self.mode == LoopRunMode::Manual
+            && self.entry.stay
+            && record
+                .agent
+                .as_ref()
+                .is_some_and(|agent| agent.verdict.is_some())
+        {
+            super::launch_ledger_store::remove_checkout_decline(
+                &StatePaths::for_project_root(&self.entry.resolved_root())?,
+                &self.name,
+                &self.launch_checkout(),
+            )?;
         }
         if self.mode == LoopRunMode::Manual {
             self.check_trip = Some(CheckTrip {
