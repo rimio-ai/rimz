@@ -38,7 +38,7 @@ use super::fetch::{
 };
 use super::gate::{GateState, apply_gate, gate_remaining};
 use super::health::{Health, degraded_too_long};
-use super::input::{InputMode, Wakeup, resolve_key};
+use super::input::{InputMode, KeyAction, Wakeup, resolve_key};
 use super::lifecycle::{
     PaintHold, SELF_CLOSE_WATCHDOG, SelfCloseState, grow_beyond_legit, resize_grew,
 };
@@ -154,6 +154,7 @@ pub(super) fn handle_wakeup(
     ui: &mut UiState,
     snapshot: &SidebarSnapshot,
     keymap: &super::NavKeymap,
+    alert_active: bool,
 ) -> InputOutcome {
     let wakeup = match wakeup {
         Wakeup::Press { code, mods } => {
@@ -181,6 +182,7 @@ pub(super) fn handle_wakeup(
         return InputOutcome::redraw();
     }
     match wakeup {
+        Wakeup::Key(KeyAction::Search) if alert_active => InputOutcome::default(),
         Wakeup::Key(action) => handle_key(action, ui, snapshot),
         Wakeup::MouseClick { column, row } => {
             let mut outcome = finish_search(ui, snapshot, true);
@@ -1017,7 +1019,14 @@ impl LoopState {
         if self.nav_keys.0 != *keys {
             self.nav_keys = (keys.clone(), super::NavKeymap::from_config(keys));
         }
-        let outcome = handle_wakeup(wakeup, &mut self.ui, &self.current, &self.nav_keys.1);
+        let alert_active = self.alert_active();
+        let outcome = handle_wakeup(
+            wakeup,
+            &mut self.ui,
+            &self.current,
+            &self.nav_keys.1,
+            alert_active,
+        );
         if outcome.effects.contains(&InputEffect::DismissAlert) {
             self.health.alert = None;
         }
@@ -1496,7 +1505,12 @@ impl LoopState {
             warn!(target: SIDEBAR_HEALTH_TARGET, reason = %alert.reason, "sidebar refresh degraded");
         }
         self.health = state.health;
-        std::mem::replace(&mut self.current, state.snapshot)
+        let prev_good = std::mem::replace(&mut self.current, state.snapshot);
+        if self.alert_active() && self.ui.search_draft.take().is_some() {
+            reconcile_selection(&mut self.ui, &self.current, None);
+            self.dirty = true;
+        }
+        prev_good
     }
 
     fn sweep_read_receipts(&mut self, now: Timestamp) -> (Option<PaneId>, bool) {

@@ -635,7 +635,9 @@ Both clear on the next good read. When the sidebar cannot read the room at all, 
  ⚠ Sidebar degraded for 8s: snapshot failed: store not found
 ```
 
-After recovery the alert stays as a dim notice until you press `x`, so a failure that came and went is still visible. A new failure raises it again. `r` reloads the tab.
+While the alert is active, `/` does nothing; `r` reloads the tab, `x` dismisses the alert, and `?` and movement keys keep their usual meanings. If the alert appears while you are typing a search, the draft is discarded and the committed query stays.
+
+After recovery the alert stays as a dim notice until you press `x`, so a failure that came and went is still visible. A new failure raises it again.
 
 ```
  ⚠ last alert 8s ago: snapshot failed: store not found  ·  x dismiss
@@ -715,7 +717,7 @@ Pressing the active filter's key again clears just that pick; a text search stay
 
 Every printable key pressed without `Ctrl` or `Alt` enters the draft, including `n`, `j`, `q`, `r`, `?`, `A`, and digits. `Backspace` removes one character; on an empty draft it cancels. `↑` / `↓` and `Ctrl+p` / `Ctrl+n` move among matches; every other `Ctrl` or `Alt` chord does nothing, whether or not `[sidebar.keys]` binds it. Every edit selects the first match again. `Enter` commits the query and focuses the selected match, or ends typing without focus when the draft is empty. A zero-match query stays set and shows `no match` in the body.
 
-`Esc` ends typing and clears the committed query, leaving any other pick intact. A click commits the draft and then acts normally; the wheel scrolls without ending typing. Focus leaving the sidebar discards only the draft. The committed query follows you across tabs and survives a sidebar reload; the draft is local to the sidebar where you type and does not survive a reload. After `Enter`, ordinary movement stays inside the matches and `n` / `N` keep their needs-you meaning. Clear with `/` then `Esc`, or `A` to clear both narrowings.
+`Esc` ends typing and clears the committed query, leaving any other pick intact. A click commits the draft and then acts normally; the wheel scrolls without ending typing. Focus leaving the sidebar, or the sidebar degrading, discards only the draft. The committed query follows you across tabs and survives a sidebar reload; the draft is local to the sidebar where you type and does not survive a reload. After `Enter`, ordinary movement stays inside the matches and `n` / `N` keep their needs-you meaning. Clear with `/` then `Esc`, or `A` to clear both narrowings.
 
 ### Mouse
 
