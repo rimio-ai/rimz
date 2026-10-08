@@ -41,13 +41,17 @@ fn sidebar_keys_move_selection_between_rendered_agent_rows() {
         ),
     );
 
-    let screen = room.wait_for(
-        |s| s.contains("planner") && s.contains("reviewer") && selected_group(s, "alpha"),
-        SETTLE,
+    let screen = room.wait_for(|s| s.contains("planner") && s.contains("reviewer"), SETTLE);
+    assert!(
+        !selected_group(&screen, "alpha") && !selected_group(&screen, "beta"),
+        "no group is selected before a key pick:\n{screen}"
     );
+
+    room.send_keys(KEY_DOWN);
+    let screen = room.wait_for(|s| selected_group(s, "alpha"), SETTLE);
     assert!(
         selected_group(&screen, "alpha"),
-        "initial selection should sit on the first worktree group:\n{screen}"
+        "the first down key selects the first worktree group:\n{screen}"
     );
 
     let screen = send_until(&room, KEY_DOWN, |s| selected_group(s, "beta"));
