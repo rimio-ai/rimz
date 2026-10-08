@@ -1341,6 +1341,21 @@ impl AdoptionFixture {
         }
     }
 
+    /// The seed read one second after the fixture's projection stamps.
+    fn seed_pair(
+        &self,
+    ) -> Option<(
+        WorkspaceSnapshot,
+        std::sync::Arc<crate::sidebar::frame::PaneFrame>,
+    )> {
+        read_published_pair(
+            &self.runtime,
+            "rimz-test",
+            std::time::Duration::from_secs(10),
+            1_012,
+        )
+    }
+
     fn read(&self) -> (SidebarSnapshot, ConsumerSnapshotSource) {
         let mut reader = PublishedSnapshotReader::new(self.runtime.clone(), "rimz-test", None);
         let snapshot = reader.read_adopting(&self.state).unwrap();
@@ -1356,12 +1371,7 @@ fn published_pair_needs_no_store_or_current_source() {
         .unwrap();
     std::fs::remove_file(&fixture.state.latest_snapshot).unwrap();
 
-    let pair = read_published_pair(
-        &fixture.runtime,
-        "rimz-test",
-        std::time::Duration::from_secs(10),
-        unix_now_ms(),
-    );
+    let pair = fixture.seed_pair();
     assert!(
         pair.is_some(),
         "a same-session publication seeds without live store stamps"
@@ -1375,15 +1385,7 @@ fn published_pair_needs_no_store_or_current_source() {
 #[test]
 fn published_pair_requires_a_valid_same_session_projection_and_frame() {
     let fixture = AdoptionFixture::new();
-    assert!(
-        read_published_pair(
-            &fixture.runtime,
-            "rimz-test",
-            std::time::Duration::from_secs(10),
-            unix_now_ms()
-        )
-        .is_some()
-    );
+    assert!(fixture.seed_pair().is_some());
 
     for (field, value) in [
         ("schema_version", serde_json::json!(5)),
@@ -1396,16 +1398,7 @@ fn published_pair_requires_a_valid_same_session_projection_and_frame() {
             serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         projection[field] = value;
         atomic::write_temp_then_rename_cache(&path, &projection).unwrap();
-        assert!(
-            read_published_pair(
-                &fixture.runtime,
-                "rimz-test",
-                std::time::Duration::from_secs(10),
-                unix_now_ms()
-            )
-            .is_none(),
-            "{field}"
-        );
+        assert!(fixture.seed_pair().is_none(), "{field}");
     }
 
     let fixture = AdoptionFixture::new();
@@ -1414,58 +1407,48 @@ fn published_pair_requires_a_valid_same_session_projection_and_frame() {
         b"{broken projection",
     )
     .unwrap();
-    assert!(
-        read_published_pair(
-            &fixture.runtime,
-            "rimz-test",
-            std::time::Duration::from_secs(10),
-            unix_now_ms()
-        )
-        .is_none()
-    );
+    assert!(fixture.seed_pair().is_none());
 
     for path in [workspace_projection_path, RuntimePaths::pane_frame_path] {
         let fixture = AdoptionFixture::new();
         std::fs::remove_file(path(&fixture.runtime)).unwrap();
-        assert!(
-            read_published_pair(
-                &fixture.runtime,
-                "rimz-test",
-                std::time::Duration::from_secs(10),
-                unix_now_ms()
-            )
-            .is_none()
-        );
+        assert!(fixture.seed_pair().is_none());
     }
 
     let mut fixture = AdoptionFixture::new();
     fixture.frame.session_name = "other-session".to_owned();
     atomic::write_temp_then_rename_cache(&fixture.runtime.pane_frame_path(), &fixture.frame)
         .unwrap();
-    assert!(
-        read_published_pair(
-            &fixture.runtime,
-            "rimz-test",
-            std::time::Duration::from_secs(10),
-            unix_now_ms()
-        )
-        .is_none()
-    );
+    assert!(fixture.seed_pair().is_none());
 }
 
 #[test]
-fn published_seed_age_is_inclusive_and_does_not_restrict_adoption() {
+fn published_seed_age_is_the_projections_and_does_not_restrict_adoption() {
     let mut fixture = AdoptionFixture::new();
-    fixture.frame.produced_at_ms = 50_000;
-    atomic::write_temp_then_rename_cache(&fixture.runtime.pane_frame_path(), &fixture.frame)
-        .unwrap();
     let max_age = std::time::Duration::from_secs(20);
 
-    assert!(read_published_pair(&fixture.runtime, "rimz-test", max_age, 70_000).is_some());
+    assert!(read_published_pair(&fixture.runtime, "rimz-test", max_age, 20_012).is_some());
     assert!(
-        read_published_pair(&fixture.runtime, "rimz-test", max_age, 70_001).is_none(),
-        "an expired publication must not seed"
+        read_published_pair(&fixture.runtime, "rimz-test", max_age, 20_013).is_none(),
+        "an expired projection must not seed"
     );
+
+    // A command outside the sidebar republishes the frame; the projection
+    // beside it is as old as before.
+    fixture.frame.topology_stamp_ms = Some(20_013);
+    fixture.frame.metrics_stamp_ms = Some(20_013);
+    fixture.frame.produced_at_ms = 20_013;
+    atomic::write_temp_then_rename_cache(&fixture.runtime.pane_frame_path(), &fixture.frame)
+        .unwrap();
+    assert!(
+        read_published_pair(&fixture.runtime, "rimz-test", max_age, 20_013).is_none(),
+        "a fresh frame must not carry an old projection"
+    );
+
+    fixture.frame.topology_stamp_ms = Some(11);
+    fixture.frame.metrics_stamp_ms = Some(12);
+    atomic::write_temp_then_rename_cache(&fixture.runtime.pane_frame_path(), &fixture.frame)
+        .unwrap();
     let (snapshot, source) = fixture.read();
     assert_eq!(source, ConsumerSnapshotSource::Adoption);
     assert_eq!(snapshot.display_name, "projected");
