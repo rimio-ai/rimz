@@ -1,6 +1,84 @@
 use super::*;
 
 #[test]
+fn agent_checks_round_trip_toml_and_json() {
+    for prompt in ["prompt = 'Is work needed?'", "prompt-file = 'check.md'"] {
+        let source =
+            format!("[check]\nagent = 'haiku'\n{prompt}\nrecheck = '6h'\ntimeout = '5m'\n");
+        let decoded = toml::from_str::<TaskEntry>(&source);
+        assert!(
+            decoded.is_ok(),
+            "agent check table must be accepted: {decoded:?}"
+        );
+        let entry = decoded.unwrap();
+        let json = serde_json::to_value(&entry).unwrap();
+        assert_eq!(json["check"]["agent"], "haiku");
+        assert_eq!(json["check"]["recheck"], "6h");
+        assert_eq!(json["check"]["timeout"], "5m");
+        assert_eq!(serde_json::from_value::<TaskEntry>(json).unwrap(), entry);
+        assert_eq!(
+            toml::from_str::<TaskEntry>(&toml::to_string(&entry).unwrap()).unwrap(),
+            entry
+        );
+    }
+}
+
+#[test]
+fn agent_checks_require_exactly_one_prompt() {
+    for fields in ["", "prompt = 'question'\nprompt-file = 'check.md'"] {
+        let source = format!("[check]\nagent = 'haiku'\n{fields}\n");
+        assert!(toml::from_str::<TaskEntry>(&source).is_err(), "{source}");
+        let mut json = serde_json::json!({"agent": "haiku"});
+        if !fields.is_empty() {
+            json["prompt"] = "question".into();
+            json["prompt-file"] = "check.md".into();
+        }
+        assert!(
+            serde_json::from_value::<TaskEntry>(serde_json::json!({"check": json, "root": ""}))
+                .is_err()
+        );
+    }
+}
+
+#[test]
+fn agent_checks_reject_unknown_fields() {
+    let source = "[check]\nagent = 'haiku'\nprompt = 'Is work needed?'\nrechek = '6h'\n";
+    let error = toml::from_str::<TaskEntry>(source).unwrap_err();
+    assert!(
+        error.to_string().contains("unknown field `rechek`"),
+        "{error}"
+    );
+    assert!(
+        serde_json::from_value::<TaskEntry>(serde_json::json!({
+            "root": "",
+            "check": {"agent": "haiku", "prompt": "Is work needed?", "rechek": "6h"}
+        }))
+        .is_err(),
+        "JSON check tables must also reject unknown keys"
+    );
+}
+
+#[test]
+fn malformed_agent_checks_preserve_the_cause() {
+    for (source, cause) in [
+        (
+            "check = { agent = 'haiku' }",
+            "exactly one of prompt and prompt-file",
+        ),
+        (
+            "check = { agent = 'haiku', prompt = 'q', rechek = '6h' }",
+            "unknown field `rechek`",
+        ),
+    ] {
+        let error = toml::from_str::<TaskEntry>(source).unwrap_err();
+        assert!(error.to_string().contains(cause), "{error}");
+        let json: serde_json::Value = toml::from_str(source).unwrap();
+        let error = serde_json::from_value::<TaskEntry>(json).unwrap_err();
+        assert!(error.to_string().contains(cause), "{error}");
+    }
+}
+
+#[test]
 fn throttle_has_limits_excludes_pacing_and_wait_deadlines() {
     assert!(!ThrottleConfig::default().has_limits());
     let pacing: ThrottleConfig = toml::from_str("pace = \"1s\"\nmax-wait = \"2m\"").unwrap();
@@ -192,7 +270,7 @@ fn task_entry_check_fields_round_trip_toml_and_json() {
         }),
         watch: Some(WatchSpec::Pid { pid: 16776 }),
         prompt: Some("wait".to_owned()),
-        check: Some("cargo test".to_owned()),
+        check: Some("cargo test".into()),
         verify: Some("cargo xtask gate".to_owned()),
         max_attempts: Some(4),
         max_strikes: Some(5),
@@ -245,8 +323,8 @@ fn task_entry_check_fields_round_trip_toml_and_json() {
             .tasks
             .0
             .get("ci")
-            .and_then(|entry| entry.check.as_deref()),
-        Some("cargo test")
+            .and_then(|entry| entry.check.as_ref()),
+        Some(&TaskCheck::Shell("cargo test".into()))
     );
     assert_eq!(
         toml_round.tasks.0.get("ci").and_then(|entry| entry.on),

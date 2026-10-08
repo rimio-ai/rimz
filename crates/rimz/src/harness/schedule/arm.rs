@@ -14,7 +14,7 @@ use super::catalog::{LoadedTask, TaskSource};
 use super::signal::SignalSelector;
 use super::{ParsedSchedule, Schedule, ScheduleErr};
 use crate::agents::AgentState;
-use crate::config::{CheckOn, TaskEntry, TaskTarget, WaitMeta, WatchSpec};
+use crate::config::{CheckOn, TaskCheck, TaskEntry, TaskTarget, WaitMeta, WatchSpec};
 use crate::ids::TeamInstanceId;
 use crate::workspace::ResolvedWorkspace;
 
@@ -86,7 +86,7 @@ pub enum DeliveryProvenance {
 }
 
 pub struct DeliveryCheck {
-    pub command: String,
+    pub check: TaskCheck,
     pub on: Option<CheckOn>,
     pub timeout: Option<String>,
 }
@@ -547,7 +547,7 @@ fn build_entry(
         DeliveryPrompt::File(path) => entry.prompt_file = Some(path),
     }
     if let Some(check) = spec.check {
-        entry.check = Some(check.command);
+        entry.check = Some(check.check);
         entry.on = check.on;
         entry.timeout = check.timeout;
     }

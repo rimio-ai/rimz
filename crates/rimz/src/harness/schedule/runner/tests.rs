@@ -767,7 +767,7 @@ fn skipped_check_preserves_poll_until_and_consumes_watch() {
     let poll = TaskEntry {
         agent: Some("claude".to_owned()),
         prompt: Some("poll".to_owned()),
-        check: Some("false".to_owned()),
+        check: Some("false".into()),
         on: Some(CheckOn::Success),
         root: dir.path().to_path_buf(),
         every: Some("1m".to_owned()),
@@ -884,7 +884,7 @@ fn check_only_terminals_consume_only_one_shots() {
         ("once-fail", true, "false", LoopRunResult::Failed),
     ] {
         let entry = TaskEntry {
-            check: Some(command.to_owned()),
+            check: Some(command.into()),
             root: dir.path().to_path_buf(),
             at: once.then(|| "07:00".to_owned()),
             every: (!once).then(|| "1m".to_owned()),
@@ -951,7 +951,7 @@ fn a_scheduled_gate_skip_removes_a_fire_at_row_and_leaves_the_rest() {
         ),
     ] {
         let entry = TaskEntry {
-            check: Some("true".to_owned()),
+            check: Some("true".into()),
             root: dir.path().to_path_buf(),
             at: (!fire_at).then(|| "07:00".to_owned()),
             fire_at: fire_at.then_some(Timestamp::UNIX_EPOCH),
@@ -1015,7 +1015,7 @@ fn check_room_hook_precedes_execution_and_pins_loop_identity() {
     let worktree = tempfile::tempdir().unwrap();
     let worktree_root = worktree.path().canonicalize().unwrap();
     let entry = TaskEntry {
-        check: Some("test -f \"$RIMZ_PROJECT_ROOT/room-ready\" && printf '%s|%s|%s|%s|%s|' \"$RIMZ_LOOP_TASK\" \"$RIMZ_PROJECT_ROOT\" \"$RIMZ_WORKSPACE_ID\" \"${RIMZ_AGENT_ID-unset}\" \"$RIMZ_WORKTREE_PATH\" && pwd -P".to_owned()),
+        check: Some("test -f \"$RIMZ_PROJECT_ROOT/room-ready\" && printf '%s|%s|%s|%s|%s|' \"$RIMZ_LOOP_TASK\" \"$RIMZ_PROJECT_ROOT\" \"$RIMZ_WORKSPACE_ID\" \"${RIMZ_AGENT_ID-unset}\" \"$RIMZ_WORKTREE_PATH\" && pwd -P".into()),
         root: project_root.clone(),
         dir: Some(worktree_root.clone()),
         every: Some("1m".to_owned()),
@@ -1065,7 +1065,7 @@ fn check_room_hook_is_after_lock_and_deadline_and_records_failure() {
     let dir = tempfile::tempdir().unwrap();
     let catalog = TaskCatalog::load(Some(dir.path())).unwrap();
     let entry = TaskEntry {
-        check: Some("touch check-ran".to_owned()),
+        check: Some("touch check-ran".into()),
         root: dir.path().to_path_buf(),
         every: Some("1m".to_owned()),
         ..TaskEntry::default()
@@ -1835,7 +1835,7 @@ fn the_account_daily_cap_reads_the_pinned_account_not_the_rooms() {
     let now: Timestamp = "2026-06-02T12:00:00Z".parse().unwrap();
     let claude = AgentKind::new_unchecked("claude");
     let entry = TaskEntry {
-        check: Some("true".to_owned()),
+        check: Some("true".into()),
         root: dir.path().to_path_buf(),
         at: Some("07:00".to_owned()),
         ..TaskEntry::default()
@@ -2185,7 +2185,7 @@ fn only_a_spawning_fire_that_is_not_exempt_takes_a_turn() {
     };
     let check_only = TaskEntry {
         agent: None,
-        check: Some("true".to_owned()),
+        check: Some("true".into()),
         ..spawn.clone()
     };
     for (name, entry) in [
@@ -2320,7 +2320,7 @@ fn ctrl_c_from_the_check_on_ends_a_spawn_the_throttle_then_holds() {
     let checked = TaskEntry {
         agent: Some("claude".to_owned()),
         prompt: Some("repair".to_owned()),
-        check: Some("true".to_owned()),
+        check: Some("true".into()),
         on: Some(CheckOn::Success),
         root: dir.path().to_path_buf(),
         fire_at: Some(Timestamp::UNIX_EPOCH),

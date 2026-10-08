@@ -79,20 +79,24 @@ fn check_summary(entry: &TaskEntry, action: Option<&TaskAction>) -> Option<Strin
             check_on_label(entry.on.unwrap_or_default())
         ))
     } else {
-        Some(check.clone())
+        Some(check.to_string())
     }
 }
 
 pub(super) fn task_run_rule(entry: &TaskEntry, task_action: &TaskAction) -> String {
     let action = action_words(task_action).map(|words| format!("{} {}", words.base, words.subject));
-    let mut rule = match (entry.check.is_some(), action) {
-        (true, Some(action)) => format!(
-            "check, then {action} on {}",
+    let check = entry.check.as_ref().map(|check| match check {
+        TaskCheck::Shell(_) => "check".to_owned(),
+        TaskCheck::Agent(_) => check.to_string(),
+    });
+    let mut rule = match (check, action) {
+        (Some(check), Some(action)) => format!(
+            "{check}, then {action} on {}",
             check_on_label(entry.on.unwrap_or_default())
         ),
-        (true, None) => "check".to_owned(),
-        (false, Some(action)) => action,
-        (false, None) => "run".to_owned(),
+        (Some(check), None) => check,
+        (None, Some(action)) => action,
+        (None, None) => "run".to_owned(),
     };
     if let Some(cmd) = entry.verify.as_deref() {
         let attempts = entry

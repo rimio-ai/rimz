@@ -40,7 +40,7 @@ fn condition_catalog_supplies_pane_free_probe_scopes() {
         root: root.path().to_owned(),
         dir: Some(scope.clone()),
         when: Some(vec!["ci=passed".to_owned()]),
-        check: Some("true".to_owned()),
+        check: Some("true".into()),
         ..TaskEntry::default()
     };
     let tasks = Tasks(BTreeMap::from([

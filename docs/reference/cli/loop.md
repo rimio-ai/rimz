@@ -50,7 +50,7 @@ Every command takes the [global flags](../cli.md#global-flags). `loop show --jso
 
 A resident condition task retries a failed or skipped fire that leaves no launch record after 5 minutes from that checkout's last fire, while the task is enabled, unpaused, and the condition remains true. A recorded launch suppresses further scheduled fires. Failures remain subject to the task's strike limit; budget skips and a blocked takeover add no strike. Strikes are per task, so one checkout that keeps failing disables the task for every checkout.
 
-`--each-worktree` requires both `--stay` and `--when`. Repeatable `--subscribe <SIGNAL>` and `--takeover` require `--stay`; subscriptions also require the prompt leader's installed, trusted registration hooks. CI and PR subscriptions need `--each-worktree` or `--root <worktree>`; team subscriptions need a team layout. Subscriptions cannot use one-shot triggers (`--in`, `--at` without `--every`, or `--after-reset`), because the task disappears before registration. Agent-family subscriptions need a separately scoped `loop add --wait --signal` task. `--stay` refuses `--account`, `--check`, `--verify`, `--max-attempts`, `--budget`, `--budget-per-day`, `--surplus`, `--surplus-after`, `--timeout`, `--system-prompt-file`, `--worktree`, `--once`, `--wait`, and `--project`.
+`--each-worktree` requires both `--stay` and `--when`. Repeatable `--subscribe <SIGNAL>` and `--takeover` require `--stay`; subscriptions also require the prompt leader's installed, trusted registration hooks. CI and PR subscriptions need `--each-worktree` or `--root <worktree>`; team subscriptions need a team layout. Subscriptions cannot use one-shot triggers (`--in`, `--at` without `--every`, or `--after-reset`), because the task disappears before registration. Agent-family subscriptions need a separately scoped `loop add --wait --signal` task. `--stay` refuses `--account`, `--verify`, `--max-attempts`, `--budget`, `--budget-per-day`, `--surplus`, `--surplus-after`, `--timeout`, `--system-prompt-file`, `--worktree`, `--once`, `--wait`, and `--project`.
 
 At registration, the resident prompt leader arms each `--subscribe` as a standing subscription named `loop-<task>-<agent>-<n>`, with an ordinal chosen to avoid name collisions. CI and PR signals match that agent's checkout, not other lanes. Re-registering does not duplicate subscriptions, and ending the session retires them. Removing the launch task before the leader registers arms nothing. After `rimz loop remove NAME`, a live leader keeps the subscriptions it already armed until its session ends; remove one sooner by its own name, `rimz loop remove loop-<task>-<agent>-<n>`.
 
@@ -73,7 +73,7 @@ With `--each-worktree`, each RimZ-owned checkout has its own condition and `--fo
 | Interval | `--every <DUR>`, measured from the last fire | Yes. |
 | Calendar | `--every <DAYS> --at HH:MM` | On each matching day. |
 | Raw cron | `--cron "<5 fields>"` | Per the expression. |
-| Poll-until | `--every <DUR> --until <DUR> --check <CMD>` plus `--agent` or `--wait` | Until the guard fires the action or the deadline passes. |
+| Poll-until | `--every <DUR> --until <DUR>` with `--check` or `--check-agent`, plus `--agent` or `--wait` | Until the guard fires the action or the deadline passes. |
 | Signal | `--signal <NAME\|FAMILY.*>`, narrowed by `--match` | On every delivering signal, or once with `--once`; see [signals](#signals). |
 | Condition | `--when <EXPR>` with optional `--for <DUR>` | Once per continuously true period, except resident retries; `--once` retires after the first fire. |
 
@@ -86,7 +86,7 @@ The trigger values follow these rules:
 | `--every` days | `day`, `weekday`, `weekend`, a list such as `mon,wed,fri`, or a range such as `mon-fri`. Requires `--at`. |
 | `--cron` | Five whitespace-separated fields. |
 | `--in` | A [duration](../cli.md#durations) in `s`, `m`, `h`, or `d`, greater than zero and less than `24h`. It resolves at add time to a one-shot `--at`, rounded up to the next minute. |
-| `--until` | A duration in `s`, `m`, `h`, or `d`, resolved at add time to a deadline. Requires `--check`, `--every`, and `--agent` or `--wait`; refused with `--in`. |
+| `--until` | A duration in `s`, `m`, `h`, or `d`, resolved at add time to a deadline. Requires `--check` or `--check-agent`, `--every`, and `--agent` or `--wait`; refused with `--in` or `--stay`. |
 
 `--every 1d` fires a day after the last fire and drifts with it; `--every day --at 07:00` fires at 07:00. Calendar times, `--in`, and `--until` resolve in the top-level `timezone` setting, or the system zone when it is unset. A clock task arms the first time a clock sees it and fires on the next occurrence after that, so a late room or a new timer never replays missed fires.
 
@@ -131,10 +131,14 @@ The receipt adds `trigger: when <expression>, for <duration>`, `scope: <checkout
 | `--takeover` | `--stay` | Stop the checkout's idle agents before launching; a busy one defers the fire, a failed stop aborts it. |
 | `--prompt <TEXT>`, `--prompt-file <PATH>` | `--agent`, `--wait` | The prompt the action delivers. The two conflict. |
 | `--check <CMD>` | all | Shell command to run; alone it is the action, otherwise the guard. |
+| `--check-agent <PROFILE>` | `--agent`, `--wait` | Profile for a headless guard, resolving to one Claude or Codex agent. Conflicts with `--check`. |
+| `--check-prompt <TEXT>`, `--check-prompt-file <PATH>` | `--check-agent` | Guard question; exactly one is required. |
+| `--check-recheck <DUR>` | `--check-agent --stay` | Re-ask after a decline; no default. Refused on non-resident tasks. |
+| `--check-timeout <DUR>` | `--check-agent` | Guard's own timeout, default `5m`, independent of `--timeout`. |
 | `--when <EXPR>` | all | Repeatable state condition; see [conditions](#conditions). |
 | `--for <DUR>` | `--when` | Continuous hold before firing. |
 | `--once` | `--signal`, `--when` | Retire after the first delivering fire. |
-| `--on fail\|success\|any` | `--check` | Which check outcome fires the action. Default `fail`. |
+| `--on fail\|success\|any` | `--check`, `--check-agent` | Which check outcome fires the action. Default `fail`. |
 | `--verify <CMD>` | `--agent` | Command that must pass after the turn; a failure re-prompts the same session. |
 | `--max-attempts <N>` | `--verify` | Total turns allowed to make `--verify` pass. Default `3`, at least `1`. |
 | `--max-strikes <N>` | all | Consecutive failed fires before the task disables itself. Default `3`; `0` turns the gate off. |
@@ -330,6 +334,8 @@ When the guard fires, the prompt gains ``--- check `<cmd>` exited <code> ---`` a
 A scheduled check-only task opens its root's room before it runs the check, so a check that reads room state finds one. A check guarding an `--agent` or `--wait` action runs with no room open; the action opens it if the guard fires.
 
 `--verify <CMD>` runs after an `--agent` turn and re-prompts the same session with the failure until the command passes or `--max-attempts` turns are spent, then records `verify failed`. `--wait` and check-only tasks refuse it, because they have no supervised session to re-prompt. The retry loop is the one [supervised runs](./agents.md#supervised-runs--p) use.
+
+`--check-agent` requires `--agent` or `--wait`, and exactly one of `--check-prompt` and `--check-prompt-file`. The prompt flags, `--check-recheck`, and `--check-timeout` require `--check-agent`; `--check-recheck` also requires `--stay`. Layouts with multiple cells and kinds other than Claude or Codex are refused at add. Agent checks are stored as a [check table](../../guide/configuration.md#looptoml-scheduled-turns), and receipts, `loop show`, and `loop list` name them as ``check by `<profile>` ``. Both check forms are accepted with `--stay`. Agent checks currently refuse to run with `agent checks are not runnable yet`; resident shell checks are stored but not yet executed.
 
 ## Budgets, gates, and strikes
 

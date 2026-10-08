@@ -258,7 +258,7 @@ fn condition_write_failure_preserves_clock_fires() {
     .unwrap();
     let entry = TaskEntry {
         root: root.path().to_owned(),
-        check: Some("true".to_owned()),
+        check: Some("true".into()),
         ..TaskEntry::default()
     };
     let tasks = BTreeMap::from([
@@ -346,7 +346,7 @@ fn window_condition_reads_the_provider_window_under_the_elder() {
     .unwrap();
     let tasks = one(loaded(TaskEntry {
         root: root.path().to_owned(),
-        check: Some("true".to_owned()),
+        check: Some("true".into()),
         when: Some(vec!["window.5h.left>=40".to_owned()]),
         provider: Some(crate::ids::AgentKind::new_unchecked("claude")),
         ..TaskEntry::default()
@@ -457,7 +457,7 @@ fn condition_replacement_resets_fired_and_hold_state() {
         let (_, _, old) = condition_tick(hold, Some(prior), None, Some(true), false, &now);
         for change in ["expression", "hold", "scope", "legacy"] {
             let mut entry = TaskEntry {
-                check: Some("true".to_owned()),
+                check: Some("true".into()),
                 when: Some(vec!["team.stage=Done".to_owned()]),
                 hold: hold.map(str::to_owned),
                 ..TaskEntry::default()
@@ -504,7 +504,7 @@ fn condition_tick(
     now: &Zoned,
 ) -> PlannedTasks {
     let task = loaded(TaskEntry {
-        check: Some("true".to_owned()),
+        check: Some("true".into()),
         when: Some(vec!["team.stage=Done".to_owned()]),
         hold: hold.map(str::to_owned),
         ..TaskEntry::default()

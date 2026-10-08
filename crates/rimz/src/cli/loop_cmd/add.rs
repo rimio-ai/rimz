@@ -45,6 +45,7 @@ pub(super) fn add(args: AddArgs, _globals: &GlobalFlags) -> Result<()> {
     let workspace = resolve_add_workspace(&args)?;
     let project_root = workspace.project_root.clone();
     condition::validate(&args.when, &project_root)?;
+    let check = resolve_add_check(&args, &workspace)?;
     let action = resolve_add_action(&args, &workspace, action_kind)?;
     let action = match action {
         AddTaskAction::Deliver {
@@ -52,12 +53,12 @@ pub(super) fn add(args: AddArgs, _globals: &GlobalFlags) -> Result<()> {
             selector,
             matches,
         } => {
-            return add_delivery(&args, &workspace, target, selector, matches);
+            return add_delivery(&args, &workspace, target, selector, matches, check);
         }
         action => action,
     };
     let provider_kind = action.provider_kind().map(ToOwned::to_owned);
-    let (mut entry, resolved_for_preflight) = build_task_entry(&args, action, &workspace)?;
+    let (mut entry, resolved_for_preflight) = build_task_entry(&args, action, &workspace, check)?;
     let runtime = rimz::RuntimePaths::for_project_root(&workspace.project_root)?;
     let login = provider_kind
         .as_deref()
@@ -151,6 +152,7 @@ fn add_delivery(
     target: TaskTarget,
     selector: Option<schedule::signal::SignalSelector>,
     matches: BTreeMap<String, String>,
+    check: Option<TaskCheck>,
 ) -> Result<()> {
     let timing = resolve_add_timing(args)?;
     let runtime = rimz::RuntimePaths::for_project_root(&workspace.project_root)?;
@@ -260,8 +262,8 @@ fn add_delivery(
             trigger,
             prompt,
             provenance: DeliveryProvenance::Loop,
-            check: args.check.as_ref().map(|command| DeliveryCheck {
-                command: command.clone(),
+            check: check.map(|check| DeliveryCheck {
+                check,
                 on,
                 timeout: args.timeout.clone(),
             }),
@@ -305,6 +307,43 @@ fn add_delivery(
 
 fn validate_add_args(args: &AddArgs) -> Result<TaskActionKind> {
     schedule::validate_name(&args.name)?;
+    if args.check.is_some() && args.check_agent.is_some() {
+        bail!("--check cannot be combined with --check-agent");
+    }
+    for (used, flag) in [
+        (args.check_prompt.is_some(), "--check-prompt"),
+        (args.check_prompt_file.is_some(), "--check-prompt-file"),
+        (args.check_recheck.is_some(), "--check-recheck"),
+        (args.check_timeout.is_some(), "--check-timeout"),
+    ] {
+        if used && args.check_agent.is_none() {
+            bail!("{flag} requires --check-agent");
+        }
+    }
+    if args.check_agent.is_some() {
+        if args.check_prompt.is_some() == args.check_prompt_file.is_some() {
+            bail!("--check-agent requires exactly one of --check-prompt and --check-prompt-file");
+        }
+        if args.agent.is_none() && args.wait.is_none() {
+            bail!("--check-agent requires --agent or --wait");
+        }
+    }
+    if args.check_recheck.is_some() && !args.stay {
+        bail!("--check-recheck requires --stay");
+    }
+    for (raw, flag) in [
+        (args.check_recheck.as_deref(), "--check-recheck"),
+        (args.check_timeout.as_deref(), "--check-timeout"),
+    ] {
+        if let Some(raw) = raw {
+            let duration = parse_task_timeout(raw)
+                .map_err(anyhow::Error::msg)
+                .with_context(|| format!("invalid {flag}"))?;
+            if flag == "--check-timeout" && duration.is_zero() {
+                bail!("--check-timeout must be greater than zero");
+            }
+        }
+    }
     if args.stay && args.wait.is_some() {
         bail!("--stay cannot use --wait; it launches a new agent layout");
     }
@@ -341,11 +380,6 @@ fn validate_add_args(args: &AddArgs) -> Result<TaskActionKind> {
                 "resident layouts have no per-fire spend accounting",
             ),
             (
-                args.check.is_some(),
-                "--check",
-                "resident launches do not run check commands",
-            ),
-            (
                 args.verify.is_some(),
                 "--verify",
                 "resident layouts are not supervised turns",
@@ -369,6 +403,11 @@ fn validate_add_args(args: &AddArgs) -> Result<TaskActionKind> {
                 args.timeout.is_some(),
                 "--timeout",
                 "resident agents remain open",
+            ),
+            (
+                args.until.is_some(),
+                "--until",
+                "resident launches are not poll-until actions",
             ),
             (
                 args.system_prompt_file.is_some(),
@@ -454,8 +493,8 @@ fn validate_add_args(args: &AddArgs) -> Result<TaskActionKind> {
                 args.name
             )
         })?;
-    if args.on.is_some() && args.check.is_none() {
-        bail!("--on requires --check");
+    if args.on.is_some() && args.check.is_none() && args.check_agent.is_none() {
+        bail!("--on requires --check or --check-agent");
     }
     let matches = parse_matches(&args.matches)?;
     if !args.matches.is_empty() && args.signal.is_none() {
@@ -485,7 +524,10 @@ fn validate_add_args(args: &AddArgs) -> Result<TaskActionKind> {
     }
     let until_error = args.until.as_ref().and_then(|_| {
         [
-            (args.check.is_none(), "--until requires --check"),
+            (
+                args.check.is_none() && args.check_agent.is_none(),
+                "--until requires --check or --check-agent",
+            ),
             (args.every.is_none(), "--until requires --every"),
             (
                 !action_kind.has_effect(),
@@ -500,6 +542,35 @@ fn validate_add_args(args: &AddArgs) -> Result<TaskActionKind> {
         bail!(message);
     }
     Ok(action_kind)
+}
+
+fn resolve_add_check(
+    args: &AddArgs,
+    workspace: &rimz::ResolvedWorkspace,
+) -> Result<Option<TaskCheck>> {
+    let Some(profile) = args.check_agent.as_deref() else {
+        return Ok(args.check.clone().map(TaskCheck::Shell));
+    };
+    let resolved = resolve_single_agent_launch(
+        profile,
+        workspace,
+        &rimz::store::writer::LaunchLogin::RoomDefault,
+    )?;
+    let adapter = rimz::agents::find_definition(resolved.kind())
+        .with_context(|| format!("unknown checker kind `{}`", resolved.kind()))?;
+    if adapter.spec().launch.headless.is_none() {
+        bail!(
+            "{}: only claude and codex run headless checks",
+            resolved.kind()
+        );
+    }
+    Ok(Some(TaskCheck::Agent(AgentCheck {
+        agent: profile.to_owned(),
+        prompt: args.check_prompt.clone(),
+        prompt_file: args.check_prompt_file.clone(),
+        recheck: args.check_recheck.clone(),
+        timeout: args.check_timeout.clone(),
+    })))
 }
 
 fn resolve_add_workspace(args: &AddArgs) -> Result<rimz::ResolvedWorkspace> {
@@ -647,6 +718,7 @@ fn build_task_entry(
     args: &AddArgs,
     action: AddTaskAction,
     workspace: &rimz::ResolvedWorkspace,
+    check: Option<TaskCheck>,
 ) -> Result<(TaskEntry, Option<ResolvedSingleAgentLaunch>)> {
     validate_task_timeout(args.timeout.as_deref())?;
     let budget = args
@@ -712,7 +784,7 @@ fn build_task_entry(
             .collect(),
         prompt: args.prompt.clone(),
         prompt_file: args.prompt_file.clone(),
-        check: args.check.clone(),
+        check,
         max_strikes: args.max_strikes,
         on,
         root: workspace.project_root.clone(),
@@ -1106,6 +1178,9 @@ fn write_add_feedback(
             writeln!(out, "action: runs check in {}", entry.run_dir().display())?;
         }
     }
+    if let Some(check @ TaskCheck::Agent(_)) = &entry.check {
+        writeln!(out, "check: {check}")?;
+    }
     let suffix = if parsed.once { "; then removed" } else { "" };
     if let Some(reset) = after_reset {
         writeln!(
@@ -1289,7 +1364,6 @@ mod tests {
     #[test]
     fn resident_launch_rejects_supervised_and_one_shot_options() {
         for flags in [
-            vec!["--check", "true"],
             vec!["--verify", "true"],
             vec!["--max-attempts", "2", "--verify", "true"],
             vec!["--budget", "$2"],
@@ -1310,5 +1384,127 @@ mod tests {
             assert!(error.to_string().contains(flags[0]), "{error}");
             assert!(error.to_string().contains("--stay"), "{error}");
         }
+        let error = validate_add_args(&args(&[
+            "--agent", "claude", "--stay", "--every", "1m", "--until", "1h", "--check", "true",
+        ]))
+        .expect_err("resident poll-until must be refused");
+        assert!(
+            error.to_string().contains("--stay") && error.to_string().contains("--until"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn agent_check_flags_require_a_profile_prompt_and_action() {
+        for (flags, message) in [
+            (
+                vec![
+                    "--check",
+                    "true",
+                    "--check-agent",
+                    "haiku",
+                    "--check-prompt",
+                    "q",
+                ],
+                "--check cannot",
+            ),
+            (vec!["--check-agent", "haiku"], "--check-prompt"),
+            (
+                vec![
+                    "--check-agent",
+                    "haiku",
+                    "--check-prompt",
+                    "q",
+                    "--check-prompt-file",
+                    "q.md",
+                ],
+                "exactly one",
+            ),
+            (vec!["--check-prompt", "q"], "--check-agent"),
+            (vec!["--check-prompt-file", "q.md"], "--check-agent"),
+            (vec!["--check-recheck", "6h"], "--check-agent"),
+            (vec!["--check-timeout", "5m"], "--check-agent"),
+            (
+                vec![
+                    "--check-agent",
+                    "haiku",
+                    "--check-prompt",
+                    "q",
+                    "--check-recheck",
+                    "6h",
+                ],
+                "--stay",
+            ),
+        ] {
+            let argv = ["--agent", "claude"]
+                .into_iter()
+                .chain(flags)
+                .collect::<Vec<_>>();
+            let result = validate_add_args(&args(&argv));
+            assert!(
+                result.is_err(),
+                "invalid checker flags must be rejected: {argv:?}"
+            );
+            assert!(
+                result.unwrap_err().to_string().contains(message),
+                "{argv:?}"
+            );
+        }
+        let result = validate_add_args(&args(&["--check-agent", "haiku", "--check-prompt", "q"]));
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("--agent or --wait")
+        );
+    }
+
+    #[test]
+    fn resident_checks_and_agent_check_polarity_are_accepted() {
+        for flags in [
+            vec![
+                "--until",
+                "1h",
+                "--every",
+                "1m",
+                "--check-agent",
+                "haiku",
+                "--check-prompt",
+                "q",
+            ],
+            vec!["--stay", "--check", "true", "--on", "success"],
+            vec![
+                "--stay",
+                "--check-agent",
+                "haiku",
+                "--check-prompt",
+                "q",
+                "--check-recheck",
+                "6h",
+                "--check-timeout",
+                "5m",
+                "--on",
+                "success",
+            ],
+        ] {
+            let argv = ["--agent", "claude"]
+                .into_iter()
+                .chain(flags)
+                .collect::<Vec<_>>();
+            assert!(validate_add_args(&args(&argv)).is_ok(), "{argv:?}");
+        }
+        assert!(
+            validate_add_args(&args(&[
+                "--wait",
+                "--check-agent",
+                "haiku",
+                "--check-prompt-file",
+                "q.md",
+                "--on",
+                "any"
+            ]))
+            .is_ok()
+        );
     }
 }

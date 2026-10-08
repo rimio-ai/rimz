@@ -6579,7 +6579,7 @@ fn loop_poll_until_delivers_once_or_expires() {
                     handle: "@claude".to_owned(),
                 }),
                 prompt: Some("too late".to_owned()),
-                check: Some("true".to_owned()),
+                check: Some("true".into()),
                 on: Some(CheckOn::Success),
                 root: expired.project_root.clone(),
                 every: Some("2m".to_owned()),
@@ -8886,6 +8886,51 @@ fn loop_fire_launches_on_the_pinned_account_not_the_rooms() {
         );
         runner.wait().expect("stopped runner exits");
     }
+}
+
+#[test]
+fn loop_add_agent_check_names_the_checker_and_rejects_unsupported_kinds() {
+    let env = Env::new();
+    let flags = [
+        "loop",
+        "add",
+        "guarded",
+        "--agent",
+        "claude",
+        "--stay",
+        "--every",
+        "1h",
+        "--prompt",
+        "work",
+        "--check-agent",
+        "opencode",
+        "--check-prompt",
+        "q",
+    ];
+    let output = env.rimz().args(flags).output().unwrap();
+    assert!(
+        !output.status.success(),
+        "unsupported checker must be rejected"
+    );
+    let error = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        error.contains("opencode") && error.contains("only claude and codex run headless checks"),
+        "{error}"
+    );
+
+    let mut flags = flags;
+    flags[11] = "claude";
+    let receipt = loop_ok(&env, &flags);
+    assert!(receipt.contains("check by `claude`"), "{receipt}");
+    let show = loop_ok(&env, &["loop", "show", "guarded"]);
+    assert!(show.contains("check by `claude`"), "{show}");
+    let list = loop_ok(&env, &["loop", "list"]);
+    assert!(list.contains("check by `claude`"), "{list}");
+    let config: LoopConfig =
+        toml::from_str(&std::fs::read_to_string(loop_config_path(&env)).unwrap()).unwrap();
+    let check = serde_json::to_value(&config.tasks.0["guarded"]).unwrap();
+    assert_eq!(check["check"]["agent"], "claude");
+    assert_eq!(check["check"]["prompt"], "q");
 }
 
 #[test]

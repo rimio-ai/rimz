@@ -305,7 +305,7 @@ fn task_action_from_entry_maps_field_combinations() {
         ),
         (
             TaskEntry {
-                check: Some("true".to_owned()),
+                check: Some("true".into()),
                 ..TaskEntry::default()
             },
             TaskActionKind::CheckOnly,
@@ -333,7 +333,7 @@ fn task_action_from_entry_maps_field_combinations() {
         (
             TaskEntry {
                 verify: Some("true".to_owned()),
-                check: Some("true".to_owned()),
+                check: Some("true".into()),
                 ..TaskEntry::default()
             },
             "loop task `task` sets `verify` without `agent`; verification needs a supervised agent run",
@@ -356,7 +356,7 @@ fn task_action_from_entry_maps_field_combinations() {
         (
             TaskEntry {
                 account: Some("work".parse().expect("login name")),
-                check: Some("true".to_owned()),
+                check: Some("true".into()),
                 ..TaskEntry::default()
             },
             "loop task `task` sets `account` without `agent`; an account pin needs a supervised agent run",
@@ -593,7 +593,7 @@ fn parse_trigger_rejects_conflicting_fields() {
         (
             TaskEntry {
                 watch: Some(WatchSpec::Command("true".to_owned())),
-                check: Some("true".to_owned()),
+                check: Some("true".into()),
                 ..spawn_entry()
             },
             ScheduleErr::WatchWithCheck {

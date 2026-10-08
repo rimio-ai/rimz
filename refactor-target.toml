@@ -319,7 +319,8 @@ upward-dependencies = [
 # AccountHistory carries a named account's history mode to the login catalog and `rimz accounts` (+1).
 # KeepWarm parses the role/profile horizon and the floor for definitions, config edit, harness policy, and `agents validate` (+1).
 # ThrottleConfig::has_limits lets loop show distinguish admission limits from pacing (+1).
-surface-budget = 188
+# TaskCheck and AgentCheck share shell-or-agent guards across config, trust, delivery, and CLI (+2).
+surface-budget = 190
 
 [[module]]
 path = "crates/rimz/src/daemon_content.rs"

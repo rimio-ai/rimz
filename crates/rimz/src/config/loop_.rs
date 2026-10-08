@@ -237,6 +237,109 @@ pub enum ThrottleSwitch {
 #[serde(transparent)]
 pub struct Tasks(pub BTreeMap<String, TaskEntry>);
 
+/// A loop guard: a shell command or a single-agent judgment.
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(untagged)]
+pub enum TaskCheck {
+    Shell(String),
+    Agent(AgentCheck),
+}
+
+impl<'de> Deserialize<'de> for TaskCheck {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct CheckVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for CheckVisitor {
+            type Value = TaskCheck;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("a shell command or an agent check table")
+            }
+
+            fn visit_str<E: serde::de::Error>(self, value: &str) -> Result<Self::Value, E> {
+                Ok(TaskCheck::Shell(value.to_owned()))
+            }
+
+            fn visit_string<E: serde::de::Error>(self, value: String) -> Result<Self::Value, E> {
+                Ok(TaskCheck::Shell(value))
+            }
+
+            fn visit_map<M: serde::de::MapAccess<'de>>(
+                self,
+                map: M,
+            ) -> Result<Self::Value, M::Error> {
+                AgentCheck::deserialize(serde::de::value::MapAccessDeserializer::new(map))
+                    .map(TaskCheck::Agent)
+            }
+        }
+
+        deserializer.deserialize_any(CheckVisitor)
+    }
+}
+
+impl From<String> for TaskCheck {
+    fn from(command: String) -> Self {
+        Self::Shell(command)
+    }
+}
+
+impl From<&str> for TaskCheck {
+    fn from(command: &str) -> Self {
+        Self::Shell(command.to_owned())
+    }
+}
+
+impl std::fmt::Display for TaskCheck {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Shell(command) => f.write_str(command),
+            Self::Agent(check) => write!(f, "check by `{}`", check.agent),
+        }
+    }
+}
+
+/// A headless guard's profile, question, and independent timing options.
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub struct AgentCheck {
+    pub agent: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt_file: Option<PathBuf>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recheck: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timeout: Option<String>,
+}
+
+impl<'de> Deserialize<'de> for AgentCheck {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "kebab-case", deny_unknown_fields)]
+        struct Fields {
+            agent: String,
+            prompt: Option<String>,
+            prompt_file: Option<PathBuf>,
+            recheck: Option<String>,
+            timeout: Option<String>,
+        }
+        let fields = Fields::deserialize(deserializer)?;
+        if fields.prompt.is_some() == fields.prompt_file.is_some() {
+            return Err(D::Error::custom(
+                "agent check requires exactly one of prompt and prompt-file",
+            ));
+        }
+        Ok(Self {
+            agent: fields.agent,
+            prompt: fields.prompt,
+            prompt_file: fields.prompt_file,
+            recheck: fields.recheck,
+            timeout: fields.timeout,
+        })
+    }
+}
+
 /// One triggered loop wake-up. `agent` names a supervised turn or resident
 /// layout; `wait` delivers to a pinned session.
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
@@ -267,7 +370,7 @@ pub struct TaskEntry {
     #[serde(rename = "prompt-file", skip_serializing_if = "Option::is_none")]
     pub prompt_file: Option<PathBuf>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub check: Option<String>,
+    pub check: Option<TaskCheck>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub verify: Option<String>,
     #[serde(rename = "max-attempts", skip_serializing_if = "Option::is_none")]
