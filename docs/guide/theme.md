@@ -110,7 +110,7 @@ caution = "yellow" # a palette role tracks the active [colors] table
 | `good` | calm and positive: running tallies, low gauges, `+` additions, the `◌` cache-read marker |
 | `warn` | the caution floor: resting `?` waits, the low-mid gauge rung |
 | `caution` | the warm "hot or costly" amber: the gauge mid-band and the age-heat midpoint |
-| `alarm` | danger: failed `!`, the full-gauge crest, `-` removals (the fresh-input `↘` marker is a deeper red one step past it) |
+| `alarm` | danger: failed `!`, the full-gauge crest, `-` removals (the fresh-input `↘` marker is a deeper red one step past it), and greyed toward `muted` for an expired context meter |
 | `accent` | data: the `◎` sessions glyph, the `↗` output marker |
 | `cool` | cool informational: large window tags, the `◇` token total, the paused `⏸` glyph |
 | `meta` | delegation and compaction: the `⧉` subagent marker, the `◍` cache-write marker |
