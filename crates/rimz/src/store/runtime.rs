@@ -35,8 +35,9 @@ pub struct RuntimeProjection {
 
 /// Read the durable agent rollup without opening a writer-capable [`crate::Store`].
 ///
-/// Producer-side repair detectors use this entry point so the sidebar import
-/// graph stays read-only while still retaining ended rows.
+/// The one-shot signal emitter (`harness::schedule::signal::audit_agents`)
+/// retains ended rows through this read-only entry point when retiring
+/// subscriptions.
 pub(crate) fn audit_projection(
     paths: &crate::StatePaths,
 ) -> crate::store::snapshot::Result<RuntimeProjection> {

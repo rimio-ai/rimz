@@ -56,9 +56,10 @@ pub(crate) fn enforce(
     runtime: &RuntimePaths,
     runs: &[RunRecord],
     now: Timestamp,
+    rollup: &mut crate::store::snapshot::RollupCursor,
 ) {
-    let orphans = match find_with_runs(paths, runs, now) {
-        Ok(orphans) => orphans,
+    let (orphans, parents) = match scan(paths, runs, now, rollup) {
+        Ok(decisions) => decisions,
         Err(err) => {
             tracing::debug!(
                 workspace = %runtime.workspace_id,
@@ -71,17 +72,6 @@ pub(crate) fn enforce(
     for orphan in orphans {
         spawn_helper(runtime, &orphan);
     }
-    let parents = match digest_parents(paths, runs) {
-        Ok(parents) => parents,
-        Err(err) => {
-            tracing::debug!(
-                workspace = %runtime.workspace_id,
-                error = &err as &dyn std::error::Error,
-                "sidebar: failed to scan for missing subagent digests",
-            );
-            return;
-        }
-    };
     for parent_agent_id in parents {
         spawn_digest_helper(runtime, parent_agent_id);
     }
@@ -94,8 +84,10 @@ pub fn resolve(
     now: Timestamp,
 ) -> Result<Option<OrphanedSubagent>, OrphanSweepErr> {
     let runs = crate::harness::run::list(paths)?;
-    Ok(find_with_runs(paths, &runs, now)?
-        .into_iter()
+    let (_, agents, _) = crate::store::snapshot::RollupCursor::new().fold(paths)?;
+    Ok(agents
+        .iter()
+        .filter_map(|child| orphaned_child(child, agents.iter(), &runs, now))
         .find(|orphan| {
             orphan.child.kind == request.child_kind
                 && orphan.child.agent_id == request.child_agent_id
@@ -103,21 +95,31 @@ pub fn resolve(
         }))
 }
 
-fn find_with_runs(
+/// Decide the orphans and the digest parents from one fold of `rollup`,
+/// walking both rollup layers borrowed so ended history is never copied.
+fn scan(
     paths: &StatePaths,
     runs: &[RunRecord],
     now: Timestamp,
-) -> Result<Vec<OrphanedSubagent>, OrphanSweepErr> {
-    let agents = crate::store::runtime::audit_projection(paths)?.agents;
-    Ok(agents
+    rollup: &mut crate::store::snapshot::RollupCursor,
+) -> Result<(Vec<OrphanedSubagent>, Vec<AgentSessionId>), OrphanSweepErr> {
+    let (_, agents, _) = rollup.fold(paths)?;
+    let orphans = agents
         .iter()
-        .filter_map(|child| orphaned_child(child, &agents, runs, now))
-        .collect())
+        .filter_map(|child| orphaned_child(child, agents.iter(), runs, now))
+        .collect();
+    let waits = std::cell::OnceCell::new();
+    let parents = digest_parents_from(agents.iter(), runs, |kind, session| {
+        waits
+            .get_or_init(|| SessionWaits::load(paths))
+            .contains(kind, session)
+    });
+    Ok((orphans, parents))
 }
 
-fn orphaned_child(
+fn orphaned_child<'a>(
     child: &AgentState,
-    agents: &[AgentState],
+    agents: impl IntoIterator<Item = &'a AgentState> + Clone,
     runs: &[RunRecord],
     now: Timestamp,
 ) -> Option<OrphanedSubagent> {
@@ -145,32 +147,20 @@ fn orphaned_child(
     })
 }
 
-fn digest_parents(
-    paths: &StatePaths,
-    runs: &[RunRecord],
-) -> Result<Vec<AgentSessionId>, OrphanSweepErr> {
-    let agents = crate::store::runtime::audit_projection(paths)?.agents;
-    let waits = std::cell::OnceCell::new();
-    Ok(digest_parents_from(&agents, runs, |kind, session| {
-        waits
-            .get_or_init(|| SessionWaits::load(paths))
-            .contains(kind, session)
-    }))
-}
-
-fn digest_parents_from(
-    agents: &[AgentState],
-    runs: &[RunRecord],
+fn digest_parents_from<'a>(
+    agents: impl IntoIterator<Item = &'a AgentState> + Clone,
+    runs: &'a [RunRecord],
     has_wait: impl Fn(&AgentKind, &AgentSessionId) -> bool,
 ) -> Vec<AgentSessionId> {
     agents
-        .iter()
+        .clone()
+        .into_iter()
         .filter(|parent| parent.ended_at.is_none())
         .filter_map(|parent| {
-            let fleet = FleetRuns::of(agents, runs, parent);
-            let peer_needs_settlement = crate::address::launched_fleet(agents, parent)
+            let fleet = FleetRuns::of(agents.clone(), runs, parent);
+            let peer_needs_settlement = crate::address::launched_fleet(agents.clone(), parent)
                 .into_iter()
-                .filter(|peer| crate::address::is_launch_row(agents, peer))
+                .filter(|peer| crate::address::is_launch_row(agents.clone(), peer))
                 .any(|peer| {
                     newest_run(peer, runs).is_some_and(|run| {
                         run.peer.is_some()
@@ -180,7 +170,7 @@ fn digest_parents_from(
                                     == crate::store::runtime::AgentLiveness::Dead
                                 || (run.parked_at.is_some()
                                     && {
-                                        let owed = FleetRuns::of(agents, runs, peer);
+                                        let owed = FleetRuns::of(agents.clone(), runs, peer);
                                         !owed.any_running() && owed.unreported().is_empty()
                                     }
                                     && !run
@@ -190,7 +180,7 @@ fn digest_parents_from(
                     })
                 });
             (peer_needs_settlement
-                || !super::fleet::ended_team_runs(agents, runs, parent).is_empty()
+                || !super::fleet::ended_team_runs(agents.clone(), runs, parent).is_empty()
                 || (!fleet.is_empty() && !fleet.any_running() && !fleet.unreported().is_empty()))
             .then(|| parent.agent_id.clone())
         })
@@ -281,6 +271,74 @@ mod tests {
         run.agent_name = Some(name.to_owned());
         run.started_at = at;
         run
+    }
+
+    #[test]
+    fn sweep_materializes_no_rows_cold_or_warm_as_carryover_grows() {
+        let before = crate::store::snapshot::fold_testkit::rollup_rows_materialized();
+        for rows in [5, 500] {
+            let dir = tempfile::tempdir().unwrap();
+            let id = WorkspaceId::from_project_root(dir.path());
+            let paths = StatePaths::under(id.clone(), dir.path()).unwrap();
+            let runtime = RuntimePaths::under(id, dir.path()).unwrap();
+            let store = crate::Store::open(paths.clone(), runtime).unwrap();
+            crate::testkit::fleet::seed_ended_carryover(&store, rows).unwrap();
+            crate::testkit::fleet::seed_fleet_store(&paths, 1, 1).unwrap();
+            let mut cursor = crate::store::snapshot::RollupCursor::new();
+            for _ in 0..2 {
+                let (orphans, parents) = scan(&paths, &[], Timestamp::now(), &mut cursor).unwrap();
+                assert!(orphans.is_empty());
+                assert!(parents.is_empty());
+            }
+        }
+        assert_eq!(
+            crate::store::snapshot::fold_testkit::rollup_rows_materialized() - before,
+            0,
+            "cold and warm sweeps must walk both rollup layers borrowed"
+        );
+    }
+
+    #[test]
+    fn sweep_reads_ended_parent_from_carryover_for_a_recent_logged_child() {
+        let dir = tempfile::tempdir().unwrap();
+        let id = WorkspaceId::from_project_root(dir.path());
+        let paths = StatePaths::under(id.clone(), dir.path()).unwrap();
+        let runtime = RuntimePaths::under(id.clone(), dir.path()).unwrap();
+        let store = crate::Store::open(paths.clone(), runtime).unwrap();
+        crate::testkit::fleet::seed_ended_carryover(&store, 1).unwrap();
+        let now = Timestamp::now() + orphan_grace() + Duration::from_secs(1);
+        let mut observation = crate::agents::AgentLifecycleObservation::new(
+            Some("child".into()),
+            crate::agents::LifecycleSignal::Registered,
+        );
+        observation.parent_agent_id = Some("history-0".into());
+        observation.launch.parent_agent_kind = Some(AgentKind::new_unchecked("claude"));
+        observation.launch.launch_depth = Some(1);
+        let mut event = crate::store::event::EventEnvelope::agent_lifecycle(
+            id,
+            "child",
+            "codex",
+            "SessionStart",
+            &observation,
+        );
+        event.timestamp = now;
+        crate::store::event_log::append(&paths.events_log, &event).unwrap();
+        let (orphans, parents) = scan(
+            &paths,
+            &[],
+            now,
+            &mut crate::store::snapshot::RollupCursor::new(),
+        )
+        .unwrap();
+        assert_eq!(
+            orphans.len(),
+            1,
+            "the ended parent, not absence, proves the orphan"
+        );
+        assert_eq!(orphans[0].child.agent_id, "child");
+        assert_eq!(orphans[0].child.registered_at, Some(now));
+        assert!(orphans[0].orphaned_at + orphan_grace() <= now);
+        assert!(parents.is_empty());
     }
 
     #[test]
@@ -399,7 +457,7 @@ mod tests {
             run.subagent = true;
             run
         });
-        let agents = [vec![parent.clone()], children.to_vec()].concat();
+        let agents = [std::slice::from_ref(&parent), &children].concat();
 
         assert_eq!(
             digest_parents_from(&agents, &runs, |_, _| false),
