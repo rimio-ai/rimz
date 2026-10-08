@@ -22,8 +22,8 @@ pub(super) fn has_members(agents: &[AgentState], launcher: &AgentState) -> bool 
 pub struct FleetRuns<'a>(Vec<(&'a AgentState, &'a RunRecord)>);
 
 /// Open team runs report once at Done, separately from the per-member fleet digest.
-fn open_team_runs<'a>(
-    agents: &[AgentState],
+fn open_team_runs<'a, 'agents>(
+    agents: impl IntoIterator<Item = &'agents AgentState> + Clone,
     runs: &'a [RunRecord],
     launcher: &AgentState,
 ) -> Vec<&'a RunRecord> {
@@ -31,7 +31,7 @@ fn open_team_runs<'a>(
         .filter(|run| {
             !run.status.is_terminal()
                 && run.team.as_ref().is_some_and(|team| {
-                    crate::address::launch_row(agents, &run.kind, &team.launch_id)
+                    crate::address::launch_row(agents.clone(), &run.kind, &team.launch_id)
                         .is_some_and(|leader| leader.launcher_is(launcher))
                 })
         })
@@ -49,7 +49,10 @@ pub(super) fn owed_team_runs<'a>(
     owed
 }
 
-fn team_cohort_gone(agents: &[AgentState], instance: &str) -> bool {
+fn team_cohort_gone<'a>(
+    agents: impl IntoIterator<Item = &'a AgentState> + Clone,
+    instance: &str,
+) -> bool {
     crate::address::team_cohorts(agents)
         .into_iter()
         .find(|cohort| format!("{}#{}", cohort.team, cohort.channel) == instance)
@@ -67,23 +70,27 @@ pub(super) fn team_stage_pending(stage: Option<&str>) -> bool {
 }
 
 /// Open runs belonging to this launcher whose whole cohort has ended.
-pub fn ended_team_runs<'a>(
-    agents: &[AgentState],
+pub fn ended_team_runs<'a, 'agents>(
+    agents: impl IntoIterator<Item = &'agents AgentState> + Clone,
     runs: &'a [RunRecord],
     launcher: &AgentState,
 ) -> Vec<&'a RunRecord> {
-    open_team_runs(agents, runs, launcher)
+    open_team_runs(agents.clone(), runs, launcher)
         .into_iter()
         .filter(|run| {
             run.team
                 .as_ref()
-                .is_some_and(|team| team_cohort_gone(agents, &team.instance))
+                .is_some_and(|team| team_cohort_gone(agents.clone(), &team.instance))
         })
         .collect()
 }
 
 impl<'a> FleetRuns<'a> {
-    pub fn of(agents: &'a [AgentState], runs: &'a [RunRecord], launcher: &AgentState) -> Self {
+    pub fn of(
+        agents: impl IntoIterator<Item = &'a AgentState> + Clone,
+        runs: &'a [RunRecord],
+        launcher: &AgentState,
+    ) -> Self {
         let mut seen = HashSet::new();
         Self(
             crate::address::launched_fleet(agents, launcher)
