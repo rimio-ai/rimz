@@ -485,7 +485,7 @@ For an `--agent` task with no configured limit and no run waiting in the start t
 
 `worktrees` is an unfolded array for fan-out tasks (empty for other tasks). Each row has `checkout` (path), `name`, and `state` (`blocked`, `ready`, `holding`, `waiting`, or `launched`). Condition rows include `readings` (key to value or `null`, in expression order) and `short` (unmatched leaf keys). Holding rows add `since`, `hold_ms`, and `held_ms`; ready rows add `since`. A true condition without a matching hold clock starts as holding with `since` set to now and `held_ms` zero when a hold is configured, otherwise ready since now. Blocked rows add `since` and `blocked` (`count`, `since`, `reason`), whose count and age span only the current uninterrupted refusal run. Launched rows add `since` (launch time), `leader`, `leader_status` (`null` when ended), and `armed`. `--all` changes only the human table, not JSON.
 
-In the human table, a condition key used by multiple terms shows its reading without a truth glyph; single-term keys keep their glyph. If the owned worktree list cannot be read, the table prints one explanatory note instead of rows.
+In the human table, a condition key used by multiple terms shows its reading without a truth glyph; single-term keys keep their glyph. If the owned worktree list cannot be read, the table prints one explanatory note instead of rows. If the room's subscription catalog cannot be read, both the screen and `--json` print what they have, with every `armed` count at zero, and then exit nonzero with the error.
 
 A sample is in the [loops guide](../../guide/loops.md#what-a-fire-leaves-behind).
 

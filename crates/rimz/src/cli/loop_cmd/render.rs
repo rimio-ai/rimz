@@ -999,13 +999,10 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
             worktrees: worktrees_json(&view),
         };
         writeln!(ui::out(), "{}", serde_json::to_string_pretty(&json)?)?;
-        return Ok(());
+    } else {
+        render_show(&mut ui::out(), &view, args.runs)?;
     }
-    render_show(&mut ui::out(), &view, args.runs)?;
-    if let Some(error) = subscriptions_error {
-        return Err(error);
-    }
-    Ok(())
+    subscriptions_error.map_or(Ok(()), Err)
 }
 
 fn load_subscriptions(name: &str, root: &Path, now: &jiff::Zoned) -> Result<Vec<SubscriptionView>> {
