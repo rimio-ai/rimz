@@ -3,6 +3,22 @@ use std::time::{Duration, SystemTime};
 use super::*;
 
 #[test]
+fn materialized_rows_count_flattening_but_not_borrowed_iteration() {
+    let rollup = AgentRollup::layered(
+        Arc::new(FoldCarryover::from_raw(EventCarryover {
+            agents: vec![agent("claude", "carried", AgentStatus::Idle, 1_000)],
+            ..EventCarryover::default()
+        })),
+        &[agent("codex", "live", AgentStatus::Idle, 2_000)],
+    );
+    let before = testkit::rollup_rows_materialized();
+    assert_eq!(rollup.iter().count(), 2);
+    assert_eq!(testkit::rollup_rows_materialized(), before);
+    assert_eq!(rollup.to_vec().len(), 2);
+    assert_eq!(testkit::rollup_rows_materialized() - before, 2);
+}
+
+#[test]
 fn pre_rebirth_registration_names_agree_with_a_persisted_checkpoint() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());
