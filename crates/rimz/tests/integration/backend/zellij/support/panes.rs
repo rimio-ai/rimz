@@ -46,6 +46,8 @@ pub(in crate::backend::zellij) struct ListedPane {
     pub(in crate::backend::zellij) pane_y: u64,
     pub(in crate::backend::zellij) pane_columns: u64,
     pub(in crate::backend::zellij) pane_rows: u64,
+    pub(in crate::backend::zellij) pane_content_rows: u64,
+    pub(in crate::backend::zellij) pane_content_columns: u64,
     #[serde(default, alias = "command")]
     pub(in crate::backend::zellij) pane_command: Option<String>,
     #[serde(default)]
