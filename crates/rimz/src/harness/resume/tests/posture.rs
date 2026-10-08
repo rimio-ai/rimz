@@ -306,7 +306,7 @@ fn stamped_alias_resume_replays_the_recorded_session_model() {
     let runtime =
         RuntimePaths::under(WorkspaceId::from_project_root(root.path()), root.path()).unwrap();
     let machine = toml::from_str("[models.codex]\nastra = 'gpt-6.2-astra'").unwrap();
-    let (warnings, movement) = crate::harness::launch_plan::resolve_model(
+    let (warnings, movement, _) = crate::harness::launch_plan::resolve_model(
         &mut request,
         &machine,
         &runtime,

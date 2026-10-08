@@ -554,6 +554,10 @@ pub struct ModelAliasResolution {
     pub rung: ModelAliasRung,
     pub warnings: Vec<String>,
     pub movement: Option<ModelAliasMove>,
+    /// The refresh this resolution attempted and lost: the source's error text,
+    /// or why a fetched catalog was unusable. `None` when no fetch ran (fresh
+    /// cache, cooldown) or the fetch yielded the fresh rung.
+    pub refresh_failure: Option<String>,
 }
 
 #[doc(hidden)]

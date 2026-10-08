@@ -149,7 +149,7 @@ fn model_alias_resolution_at_the_process_boundary() {
             action_with_args(action, vec![format!("--model={requested}")]),
         );
         req.identity.params.model = Some(requested.into());
-        let (warnings, movement) = resolve_model(
+        let (warnings, movement, refresh_failure) = resolve_model(
             &mut req,
             &machine,
             &runtime,
@@ -159,6 +159,7 @@ fn model_alias_resolution_at_the_process_boundary() {
             &ambient,
         )
         .unwrap();
+        assert!(refresh_failure.is_none());
         assert_eq!(req.identity.params.model.as_deref(), Some(expected));
         if requested == "sol" {
             assert_eq!(req.action.extra_args(), ["--model", expected]);
@@ -201,7 +202,7 @@ fn model_alias_resolution_at_the_process_boundary() {
         action_with_args("launch", vec!["--model".into(), "sol".into()]),
     );
     req.identity.params.model = Some("sol".into());
-    let (warnings, movement) = resolve_model(
+    let (warnings, movement, refresh_failure) = resolve_model(
         &mut req,
         &pinned,
         &runtime,
@@ -211,6 +212,7 @@ fn model_alias_resolution_at_the_process_boundary() {
         &ambient,
     )
     .unwrap();
+    assert!(refresh_failure.is_none());
     assert_eq!(req.identity.params.model.as_deref(), Some("gpt-6-sol"));
     assert!(!warnings.is_empty());
     assert!(movement.is_none());
@@ -218,17 +220,17 @@ fn model_alias_resolution_at_the_process_boundary() {
     let cache_path = runtime.shared_model_catalog_path(&login.key());
     let mut cache: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&cache_path).unwrap()).unwrap();
-    cache["fetched_at"] = 0.into();
+    cache["fetched_at"] = (crate::utils::time::unix_now_ms() - 2 * 60 * 60 * 1000).into();
     std::fs::write(&cache_path, serde_json::to_vec(&cache).unwrap()).unwrap();
     catalog.1 = true;
     for (requested, expected, calls, warned) in [
         ("gpt-6-sol", "gpt-6-sol", 1, false),
-        ("sol", "gpt-6.1-sol", 2, true),
+        ("sol", "gpt-6.1-sol", 2, false),
         ("sol", "gpt-6-sol", 3, true),
     ] {
         req.identity.params.model = Some(requested.into());
         *req.action.extra_args_mut() = vec!["--model".into(), requested.into()];
-        let (warnings, movement) = resolve_model(
+        let (warnings, movement, refresh_failure) = resolve_model(
             &mut req,
             &machine,
             &runtime,
@@ -243,6 +245,22 @@ fn model_alias_resolution_at_the_process_boundary() {
         assert_eq!(!warnings.is_empty(), warned);
         assert!(movement.is_none());
         assert_eq!(catalog.0, calls);
+        if requested == "sol" {
+            let failure = refresh_failure.expect("a failed refresh reaches the wrapper");
+            assert_eq!(failure.login, login.key());
+            assert_eq!(failure.alias, "sol");
+            assert_eq!(failure.reason, "offline");
+            assert_eq!(
+                failure.rung,
+                if calls == 2 {
+                    crate::agents::capabilities::ModelAliasRung::CachedCatalog
+                } else {
+                    crate::agents::capabilities::ModelAliasRung::Baked
+                }
+            );
+        } else {
+            assert!(refresh_failure.is_none());
+        }
         if calls == 2 {
             std::fs::remove_file(&cache_path).unwrap();
         }

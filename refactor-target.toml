@@ -341,7 +341,8 @@ path = "crates/rimz/src/diag"
 # are field types of the frozen `AggregateKey` wire, which the sidebar observer
 # constructs once per keyed provider-panel value.
 # Renderer attribution rebinds a sink while retaining its shared rate limiter (+1).
-surface-budget = 83
+# ModelCatalogFallback is the rung field of the model-catalog refresh record, kept in the record vocabulary so it imports nothing from `agents` (+1).
+surface-budget = 84
 
 [[module]]
 path = "crates/rimz/src/disk"
@@ -521,7 +522,8 @@ path = "crates/rimz/src/harness"
 # The parked monitor drains the parent-changed edge through ParentWatch::take_parent_changed (+1).
 # LaunchPlan exposes only the handoff path using its privately resolved temp owner (+1).
 # The supervisor wakes receipt-cadence tail drains through ParentWatch (+1).
-surface-budget = 756
+# ModelRefreshFailure carries actual catalog refresh failures to the exec wrapper (+1).
+surface-budget = 757
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -1173,7 +1175,8 @@ allowed-dependencies = [
 # Compile resolves the temp-unit owner from the parent's launch row (`address`) and pins the wrapper's Zellij socket base (`mux::domain`); `agents show` shares the owner rule (+1).
 # The exec wrapper decides its launch through `prepare_exec` and its `ExecPreparation` outcome; `resolve_model` stays harness-visible for resume tests (+2).
 # The wrapper's handoff path retains the plan's resolved temp owner (+1).
-surface-budget = 12
+# ModelRefreshFailure preserves refresh evidence through a failed launch compile (+1).
+surface-budget = 13
 
 [[module]]
 path = "crates/rimz/src/harness/run.rs"

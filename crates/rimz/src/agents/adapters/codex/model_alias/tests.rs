@@ -105,10 +105,16 @@ impl Fixture {
 
     fn edit_cache(&self, key: &str, value: serde_json::Value) {
         let path = self.paths.shared_model_catalog_path(&self.login.key());
-        let mut cache: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let mut cache = self.cache();
         cache[key] = value;
         std::fs::write(path, serde_json::to_vec(&cache).unwrap()).unwrap();
+    }
+
+    fn cache(&self) -> serde_json::Value {
+        serde_json::from_slice(
+            &std::fs::read(self.paths.shared_model_catalog_path(&self.login.key())).unwrap(),
+        )
+        .unwrap()
     }
 }
 
@@ -190,15 +196,15 @@ fn skips_newest_without_requested_effort() {
 
 #[test]
 fn failed_fetch_is_throttled_with_and_without_stale_catalog() {
-    for stale in [false, true] {
+    for stale in [true, false] {
         let mut fixture = Fixture::new(stale.then(catalog));
         if stale {
             fixture.resolve("sol", None);
-            fixture.edit_cache("fetched_at", 0.into());
+            fixture.edit_cache("fetched_at", (unix_now_ms() - 2 * 60 * 60 * 1000).into());
         }
         fixture.source.entries = None;
         fixture.source.calls = 0;
-        for _ in 0..3 {
+        for attempt in 0..3 {
             let result = fixture.resolve("sol", None);
             assert_eq!(
                 result.rung,
@@ -208,18 +214,121 @@ fn failed_fetch_is_throttled_with_and_without_stale_catalog() {
                     ModelAliasRung::Baked
                 }
             );
-            assert!(!result.warnings.is_empty());
+            assert_eq!(result.warnings.is_empty(), stale, "{:?}", result.warnings);
+            assert_eq!(
+                result.refresh_failure.as_deref(),
+                (attempt == 0).then_some("offline")
+            );
             assert!(result.movement.is_none());
         }
         assert_eq!(fixture.source.calls, 1);
+        assert_eq!(fixture.cache()["failed_error"], "offline");
+        if stale {
+            fixture.edit_cache("fetched_at", (unix_now_ms() - 25 * 60 * 60 * 1000).into());
+            let result = fixture.resolve("sol", None);
+            assert_eq!(result.warnings.len(), 1);
+            assert!(result.warnings[0].contains("using a catalog from"));
+            assert!(result.warnings[0].contains("offline"));
+            assert!(result.refresh_failure.is_none());
+            assert_eq!(fixture.source.calls, 1);
+        }
         fixture.edit_cache("failed_at", 0.into());
         fixture.source.entries = Some(catalog());
-        assert_eq!(
-            fixture.resolve("sol", None).rung,
-            ModelAliasRung::FreshCatalog
-        );
+        let result = fixture.resolve("sol", None);
+        assert_eq!(result.rung, ModelAliasRung::FreshCatalog);
+        assert!(result.refresh_failure.is_none());
         assert_eq!(fixture.source.calls, 2);
+        assert!(fixture.cache()["failed_at"].is_null());
+        assert!(fixture.cache()["failed_error"].is_null());
     }
+}
+
+#[test]
+fn baked_fallback_names_the_error_without_generic_login_advice() {
+    let result = Fixture::new(None).resolve("sol", None);
+    assert_eq!(
+        result.warnings,
+        ["codex alias sol is using baked fallback gpt-6-sol: offline"]
+    );
+    assert_eq!(result.refresh_failure.as_deref(), Some("offline"));
+}
+
+#[test]
+fn cooldown_reads_old_cache_files_without_failure_text() {
+    let mut fixture = Fixture::new(Some(catalog()));
+    fixture.resolve("sol", None);
+    fixture.edit_cache("fetched_at", (unix_now_ms() - 25 * 60 * 60 * 1000).into());
+    fixture.source.entries = None;
+    fixture.resolve("sol", None);
+    let mut cache = fixture.cache();
+    cache.as_object_mut().unwrap().remove("failed_error");
+    std::fs::write(
+        fixture
+            .paths
+            .shared_model_catalog_path(&fixture.login.key()),
+        serde_json::to_vec(&cache).unwrap(),
+    )
+    .unwrap();
+    let result = fixture.resolve("sol", None);
+    assert!(
+        result.warnings[0].ends_with(": recent catalog fetch failed"),
+        "{:?}",
+        result.warnings
+    );
+    assert!(result.refresh_failure.is_none());
+    assert_eq!(fixture.source.calls, 2);
+}
+
+#[test]
+fn lock_failure_warns_even_for_a_young_catalog_without_fetching() {
+    let mut fixture = Fixture::new(Some(catalog()));
+    fixture.resolve("sol", None);
+    let lock_path = fixture
+        .paths
+        .shared_model_catalog_lock(&fixture.login.key());
+    std::fs::remove_file(&lock_path).unwrap();
+    std::fs::create_dir(lock_path).unwrap();
+    let result = fixture.resolve("sol", None);
+    assert_eq!(result.rung, ModelAliasRung::CachedCatalog);
+    assert_eq!(result.warnings.len(), 1);
+    assert!(result.warnings[0].contains("check cache directory permissions"));
+    assert!(result.refresh_failure.is_none());
+    assert_eq!(fixture.source.calls, 1);
+}
+
+#[test]
+fn failed_at_is_measured_after_the_fetch_returns() {
+    struct DelayedFailure(u64);
+    impl ModelCatalogSource for DelayedFailure {
+        fn fetch(
+            &mut self,
+            _: &RuntimePaths,
+            _: &BTreeMap<String, String>,
+        ) -> Result<Vec<ModelCatalogEntry>, ModelCatalogErr> {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            self.0 = unix_now_ms();
+            Err(ModelCatalogErr::Unavailable("offline".into()))
+        }
+    }
+    let fixture = Fixture::new(None);
+    let mut source = DelayedFailure(0);
+    super::resolve(
+        ModelAliasRequest {
+            alias: "sol",
+            effort: None,
+            login: &fixture.login,
+            login_env: &fixture.env,
+            paths: &fixture.paths,
+        },
+        Some(&mut source),
+    )
+    .unwrap();
+    let failed_at = fixture.cache()["failed_at"].as_u64().unwrap();
+    assert!(
+        failed_at >= source.0,
+        "failure stamped at {failed_at}, fetch finished at {}",
+        source.0
+    );
 }
 
 #[test]
@@ -297,6 +406,14 @@ fn absent_family_uses_stale_family_before_baked() {
     assert_eq!(stale.rung, ModelAliasRung::CachedCatalog);
     let baked = Fixture::new(Some(Vec::new())).resolve("sol", None);
     assert_eq!(baked.rung, ModelAliasRung::Baked);
+    assert_eq!(
+        stale.refresh_failure.as_deref(),
+        Some("fresh catalog has no sol family")
+    );
+    assert_eq!(
+        baked.refresh_failure.as_deref(),
+        Some("fresh catalog has no sol family")
+    );
     assert!(baked.movement.is_none());
 }
 
