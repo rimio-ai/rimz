@@ -457,7 +457,7 @@ pub(super) fn assemble_frame_from_inputs(inputs: FrameInputs<'_>) -> (PaneFrame,
         .collect::<HashSet<_>>();
     let (focused_pane, focus_origin) = resolve_session_focus(
         session_focus.as_ref(),
-        prior.and_then(|frame| frame.focused_pane.as_ref()),
+        prior,
         client_viewed,
         client_views,
         client_view_fresh,
@@ -487,7 +487,7 @@ pub(super) fn assemble_frame_from_inputs(inputs: FrameInputs<'_>) -> (PaneFrame,
 
 fn resolve_session_focus(
     session_focus: Option<&PaneId>,
-    prior: Option<&PaneId>,
+    prior: Option<&PaneFrame>,
     client_viewed: &[PaneId],
     client_views: &[crate::pane::ClientPaneView],
     client_view_fresh: bool,
@@ -509,7 +509,17 @@ fn resolve_session_focus(
         return (pane, origin);
     }
 
-    let pane = prior.filter(|prior| live.contains(*prior)).cloned();
+    let pane = prior
+        .filter(|prior| {
+            let prior_live = prior
+                .pane_states()
+                .map(|pane| pane.pane_id.clone())
+                .collect::<HashSet<_>>();
+            &prior_live == live
+        })
+        .and_then(|prior| prior.focused_pane.as_ref())
+        .filter(|prior| live.contains(*prior))
+        .cloned();
     let origin = if pane.is_some() {
         FocusOrigin::Prior
     } else {

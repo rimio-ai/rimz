@@ -265,7 +265,7 @@ Three questions hide behind the word: who is looking at which pane, how RimZ mov
 | --- | --- |
 | Fresh, every attached view names one distinct live terminal | Set to that pane |
 | Fresh, and empty, plugin-only, dead, or distinct | Cleared |
-| Unavailable | May hold the prior live value |
+| Unavailable | May hold the prior live value only when the live pane-ID set is unchanged |
 | Realtime `FocusChanged` between pulls | Updated |
 
 The attached-client sample is the only runtime authority for focus. Hidden tabs carry no RimZ focus state, and the renderer's `UiState::baseline_pane` is only a local highlight and restoration hint. `PaneRef` and pane topology carry no focus bit: `rimz pane list` reports identity and process context without an active mark, hook recovery uses a fresh unique client view to choose among plural candidates, and `rimz sidebar focus --toggle` requires the same unambiguous view. Upstream roster focus marks never enter RimZ's model, diagnostics, binding, or repair decisions.

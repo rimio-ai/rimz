@@ -485,6 +485,47 @@ fn unavailable_client_sample_holds_live_prior_without_raw_fallback() {
 }
 
 #[test]
+fn unavailable_client_sample_clears_prior_when_the_roster_changes() {
+    let prior = PaneFrame {
+        focused_pane: Some(PaneId::from_parts(MuxName::Zellij, "terminal_2")),
+        ..assemble_frame(
+            vec![
+                pane("terminal_1", "tab_0", Some("zsh"), false),
+                pane("terminal_2", "tab_0", Some("codex"), false),
+            ],
+            6,
+            "rimz-test",
+        )
+    };
+    for panes in [
+        vec![
+            pane("terminal_1", "tab_0", Some("zsh"), false),
+            pane("terminal_2", "tab_0", Some("codex"), false),
+            pane("terminal_3", "tab_1", Some("zsh"), false),
+        ],
+        vec![pane("terminal_2", "tab_0", Some("codex"), false)],
+    ] {
+        let (frame, _) = assemble_frame_from_inputs(FrameInputs {
+            panes,
+            views: Vec::new(),
+            produced_at_ms: 7,
+            observed_at_ms: 7,
+            session_name: "rimz-test".to_owned(),
+            session_focus: None,
+            client_viewed: &[],
+            client_views: &[],
+            client_view_fresh: false,
+            prior: Some(&prior),
+        });
+        assert_eq!(
+            frame.focused_pane, None,
+            "a live prior must not survive a changed roster"
+        );
+        assert_eq!(frame.focus_origin, FocusOrigin::None);
+    }
+}
+
+#[test]
 fn detached_ambiguous_raw_marks_clear_without_live_prior() {
     let (frame, _) = assemble_frame_from_inputs(FrameInputs {
         views: Vec::new(),
