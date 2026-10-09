@@ -120,6 +120,7 @@ fn build_adversarial_snapshot(
 fn sub_agents(count: usize, text: &str) -> Vec<SidebarSubAgent> {
     (0..count)
         .map(|idx| SidebarSubAgent {
+            pane: None,
             turn_error_label: None,
             id: format!("sub-{idx}"),
             prior_turn: false,

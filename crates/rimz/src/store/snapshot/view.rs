@@ -69,7 +69,7 @@ fn default_root_class() -> RootClass {
 
 /// Bump when [`SidebarSnapshot`]'s persisted shape changes; old
 /// `latest.json` files read as stale instead of accreting one-off guards.
-pub const SNAPSHOT_VERSION: u32 = 34;
+pub const SNAPSHOT_VERSION: u32 = 35;
 
 /// The first rollup row matching an exact provider and session identity.
 pub fn find_agent<'a>(
@@ -309,6 +309,10 @@ pub struct SidebarSnapshot {
 }
 
 impl SidebarSnapshot {
+    pub fn row_owning_pane(&self, pane: &PaneId) -> Option<&SidebarRow> {
+        self.rows().find(|row| row.pane_ids().any(|id| id == pane))
+    }
+
     pub fn live_agent_pane(&self, kind: &AgentKind, agent_id: &AgentSessionId) -> Option<PaneId> {
         self.agent_panes
             .iter()

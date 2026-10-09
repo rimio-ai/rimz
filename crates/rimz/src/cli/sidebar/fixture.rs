@@ -2239,6 +2239,7 @@ fn sub_agent(spec: SubAgentSpec<'_>, now: jiff::Timestamp) -> SidebarSubAgent {
         until - std::time::Duration::from_secs(secs.max(0) as u64)
     });
     SidebarSubAgent {
+        pane: None,
         turn_error_label: None,
         id: spec.id.to_owned(),
         name: spec.name.to_owned(),

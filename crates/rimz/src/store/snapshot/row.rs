@@ -55,6 +55,18 @@ fn is_zero(value: &u32) -> bool {
 }
 
 impl SidebarRow {
+    pub fn pane_ids(&self) -> impl Iterator<Item = &PaneId> {
+        self.pane
+            .as_ref()
+            .map(|pane| &pane.pane_id)
+            .into_iter()
+            .chain(
+                self.sub_agents()
+                    .iter()
+                    .filter_map(|child| child.pane.as_ref()),
+            )
+    }
+
     pub fn is_agent(&self) -> bool {
         matches!(self.card, RowCard::Agent(_))
     }
@@ -687,6 +699,9 @@ pub enum SubAgentTokens {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SidebarSubAgent {
     pub id: String,
+    /// The child's live pane while it is bound in this frame; absent for provider-native children.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pane: Option<PaneId>,
     /// Finished child from before the parent's current user-authored turn; never `Running`.
     #[serde(default)]
     pub prior_turn: bool,
