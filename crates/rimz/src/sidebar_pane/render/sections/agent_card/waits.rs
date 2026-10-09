@@ -113,6 +113,7 @@ fn entry(
 ) -> Entry {
     let theme = ctx.theme;
     Entry {
+        focused: false,
         lead: Span::styled(lead, theme.styled(Component::WaitHeader, Modifier::empty())),
         kind: kind.to_owned(),
         headline: headline.map(|headline| Span::styled(headline, theme.body())),

@@ -830,6 +830,7 @@ pub(super) fn scroll_lines(
             stalled_after_secs: snapshot.attention.stalled_after_secs.get(),
             card_density: snapshot.theme.display.card_density,
             selected_index: ui.selected_index,
+            focused_pane: snapshot.focused_pane.as_ref(),
             animation_phase: ui.animation_phase,
             cost_rolls: &ui.cost_rolls,
             lead_unread: lead_unread_id,

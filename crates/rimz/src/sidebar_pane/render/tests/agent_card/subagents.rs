@@ -2,6 +2,98 @@ use super::*;
 use crate::agents::{PendingWait, PendingWaitTrigger};
 use crate::sidebar_pane::render::labels::{activity_age_style, elapsed_glyph};
 
+fn focused_child_snapshot() -> SidebarSnapshot {
+    let parent = agent(
+        "parent",
+        "claude",
+        AgentStatus::Running,
+        Some("/repo/main"),
+        None,
+        Some("delegate the scan"),
+    );
+    let mut snapshot = snapshot_with(vec![parent]);
+    let child = PaneId::from_parts(MuxName::Zellij, "terminal_child");
+    let card = snapshot.worktree_groups[0].rows[0].as_agent_mut().unwrap();
+    card.sub_agent_count = 2;
+    card.sub_agents = [
+        ("explorer", Some(child.clone()), "inspect the click seam"),
+        ("reviewer", None, "review the parent card"),
+    ]
+    .into_iter()
+    .map(|(name, pane, description)| {
+        serde_json::from_value(serde_json::json!({
+            "id": name, "name": name, "status": "running", "last_activity": snapshot.now,
+            "pane": pane, "description": description, "model": "Haiku", "phase": "reasoning",
+        }))
+        .unwrap()
+    })
+    .collect();
+    snapshot.focused_pane = Some(child);
+    snapshot
+}
+
+#[test]
+fn selected_parent_marks_both_focused_child_entry_lines() {
+    let snapshot = focused_child_snapshot();
+    for color in [false, true] {
+        let theme = Theme::fixed(color);
+        let lines = group_lines(&snapshot, &theme, 0);
+        let marked = lines
+            .iter()
+            .filter(|line| line.to_string().contains("  ▌ "))
+            .collect::<Vec<_>>();
+        assert_eq!(marked.len(), 2);
+        for line in marked {
+            let marker = line
+                .spans
+                .iter()
+                .skip(1)
+                .find(|span| {
+                    span.content == theme.glyph(crate::config::GlyphRole::ChromeSpineCardLeft)
+                })
+                .unwrap();
+            assert_eq!(marker.style.fg, theme.selection().fg);
+        }
+    }
+    let rendered = snapshot_to_screen_with_alert_and_ui(
+        &snapshot,
+        None,
+        &UiState {
+            selected_index: Some(0),
+            ..Default::default()
+        },
+        54,
+        24,
+    );
+    assert!(
+        rendered
+            .lines()
+            .any(|line| line.starts_with("▌  ▌ ⠁ explorer"))
+    );
+    assert!(
+        rendered
+            .lines()
+            .any(|line| line.starts_with("▌  ▌   Haiku"))
+    );
+    assert!(
+        rendered
+            .lines()
+            .any(|line| line.starts_with("▌    ⠁ reviewer"))
+    );
+    assert_snapshot("focused_child_selected", rendered);
+}
+
+#[test]
+fn unselected_parent_does_not_mark_the_focused_child_entry() {
+    let mut snapshot = focused_child_snapshot();
+    snapshot.theme.display.card_density = crate::config::CardDensityMode::Expanded;
+    let rendered =
+        snapshot_to_screen_with_alert_and_ui(&snapshot, None, &UiState::default(), 54, 24);
+    assert!(rendered.lines().any(|line| line.contains("explorer")));
+    assert!(!rendered.contains("  ▌ "));
+    assert_snapshot("focused_child_unselected", rendered);
+}
+
 #[test]
 fn child_clock_uses_muted_runtime_until_quiet_and_the_configured_stall_scale() {
     let parent = agent(
