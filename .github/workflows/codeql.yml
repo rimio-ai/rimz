@@ -60,7 +60,8 @@ jobs:
           output: sarif-results
 
       # `rust/cleartext-logging` fires on test assertions that Debug-print a
-      # struct with a field named like a secret. Drop it in test files only;
+      # struct with a field named like a secret. Drop it in test files only
+      # (`tests.rs`, `*_tests.rs`, anything under a `tests/` directory);
       # production paths keep the rule. A result goes only when every one of
       # its locations matches, and an inline `mod tests` in a production file
       # is out of a path filter's reach, so it stays scanned.
@@ -71,6 +72,7 @@ jobs:
           patterns: |
             -**/tests.rs:rust/cleartext-logging
             -**/tests/**:rust/cleartext-logging
+            -**/*_tests.rs:rust/cleartext-logging
           input: ${{ env.RUST_SARIF }}
           output: ${{ env.FILTERED_RUST_SARIF }}
 
