@@ -149,11 +149,19 @@ fn all_young_attachments_start_one_successor_after_their_workers_are_stable() {
             .filter(|process| !matched.iter().any(|parent| parent.pid == process.ppid))
             .count()
     };
+    let listing = |matched: &[rimz::proc::ProcInfo]| {
+        matched
+            .iter()
+            .map(|process| format!("{} {} {}\n", process.pid, process.ppid, process.cmdline))
+            .collect::<String>()
+    };
     let no_start_until = Instant::now() + Duration::from_millis(500);
     while Instant::now() < no_start_until {
+        let matched = host_cmdlines();
         assert!(
-            hosts(&host_cmdlines()) == 0,
-            "no successor start before worker stability"
+            hosts(&matched) == 0,
+            "no successor start before worker stability; pid ppid cmdline of every match:\n{}",
+            listing(&matched)
         );
         assert!(
             workers
@@ -193,10 +201,7 @@ fn all_young_attachments_start_one_successor_after_their_workers_are_stable() {
         hosts(&matched),
         1,
         "the stable probes coordinate one successor; pid ppid cmdline of every match:\n{}",
-        matched
-            .iter()
-            .map(|process| format!("{} {} {}\n", process.pid, process.ppid, process.cmdline))
-            .collect::<String>()
+        listing(&matched)
     );
     for (supervisor, _) in &panes {
         assert_eq!(
