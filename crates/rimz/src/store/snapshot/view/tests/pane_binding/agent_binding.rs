@@ -583,6 +583,46 @@ fn live_launched_child_promotes_when_its_parent_has_no_row() {
 }
 
 #[test]
+fn promoted_child_listed_under_its_parent_owns_its_pane() {
+    let mut child = agent("claude", "child", AgentStatus::Running, 1_000)
+        .worktree("/repo/main")
+        .in_pane("%3");
+    child.parent_agent_id = Some("root-gone".into());
+    child.parent_agent_kind = Some(AgentKind::new_unchecked("claude"));
+    child.launch_depth = Some(1);
+    let mut grandchild = agent("claude", "grandchild", AgentStatus::Running, 2_000)
+        .worktree("/repo/main")
+        .in_pane("%2");
+    grandchild.parent_agent_id = Some("child".into());
+    grandchild.parent_agent_kind = Some(AgentKind::new_unchecked("claude"));
+    grandchild.launch_depth = Some(2);
+
+    let mut snapshot = room(vec![child, grandchild]).with_live_panes(
+        vec![
+            pane("%2", "claude", "/repo/main"),
+            pane("%3", "claude", "/repo/main"),
+        ],
+        None,
+    );
+    // Row order is not part of the helper's contract: put the listing card first.
+    snapshot.worktree_groups[0].rows.reverse();
+
+    let grandchild_pane = PaneId::from_parts(MuxName::Tmux, "%2");
+    let rows = rows(&snapshot);
+    assert_eq!(rows[0].id, "child");
+    assert_eq!(
+        rows[0].sub_agents()[0].pane.as_ref(),
+        Some(&grandchild_pane)
+    );
+    assert_eq!(
+        snapshot
+            .row_owning_pane(&grandchild_pane)
+            .map(|row| row.id.as_str()),
+        Some("grandchild")
+    );
+}
+
+#[test]
 fn nested_children_carry_only_frame_bound_launched_panes() {
     for (launched, live) in [(true, true), (true, false), (false, true)] {
         let parent = agent("claude", "parent", AgentStatus::Running, 1_000)

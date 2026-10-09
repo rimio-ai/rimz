@@ -309,8 +309,13 @@ pub struct SidebarSnapshot {
 }
 
 impl SidebarSnapshot {
+    /// The row whose own pane is `pane`, else the row listing it as a child's pane:
+    /// a child promoted to its own card can still be listed under its parent.
     pub fn row_owning_pane(&self, pane: &PaneId) -> Option<&SidebarRow> {
-        self.rows().find(|row| row.pane_ids().any(|id| id == pane))
+        let own = |row: &&SidebarRow| row.pane.as_ref().is_some_and(|own| &own.pane_id == pane);
+        self.rows()
+            .find(own)
+            .or_else(|| self.rows().find(|row| row.pane_ids().any(|id| id == pane)))
     }
 
     pub fn live_agent_pane(&self, kind: &AgentKind, agent_id: &AgentSessionId) -> Option<PaneId> {
