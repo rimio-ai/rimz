@@ -5452,6 +5452,78 @@ fn busy_queue_confirmation_points_to_the_record_steer_command() {
     assert_text_then_enter(&trace_log, &user_message("send this exact record"));
 }
 
+/// Steer skips the FIFO check, so an unacknowledged prompt ahead of the record does not hold it.
+#[test]
+fn steer_sends_a_record_queued_behind_an_unacknowledged_prompt() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.install_agent_hooks("claude");
+    let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
+    register_running_agent(&env, "sess-steer-fifo", "feature-steer-fifo", pane_env);
+    run_hook(
+        &env,
+        json!({
+            "hook_event_name": "Stop",
+            "session_id": "sess-steer-fifo",
+            "worktree_branch": "feature-steer-fifo",
+        }),
+        pane_env,
+    );
+    let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "claude")]);
+    let trace_log = env.project_root.join("zellij-steer-fifo-trace.log");
+    let sent = run_success(
+        traced_rimz(&env, "zellij-steer-fifo-trace.log")
+            .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+            .env("RIMZ_MESSAGE_SETTLE_MS", "0")
+            .args(["message", "@claude", "--", "go"]),
+        "send prompt at open gate",
+    );
+    let prompt_id = MessageId::parse(&sent_id_from_stdout(&sent.stdout)).expect("message id");
+    assert_eq!(message_by_id(&env, &prompt_id).status, MessageStatus::Sent);
+
+    let parked = run_success(
+        traced_rimz(&env, "zellij-steer-fifo-trace.log")
+            .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+            .env("RIMZ_MESSAGE_SETTLE_MS", "0")
+            .args(["message", "@claude", "--", "second"]),
+        "park behind unacknowledged prompt",
+    );
+    let queued_id = queued_id_from_stdout(&parked.stdout);
+    assert_eq!(
+        String::from_utf8_lossy(&parked.stdout).trim(),
+        format!("queued for @claude#feature-steer-fifo ({queued_id}) — behind {prompt_id}")
+    );
+    let lines = trace_lines(&trace_log);
+    assert!(
+        !lines
+            .iter()
+            .any(|line| is_paste(line, &user_message("second"))),
+        "the parked record must not reach the pane before the steer; trace: {lines:?}"
+    );
+
+    let steered = run_success(
+        traced_rimz(&env, "zellij-steer-fifo-trace.log")
+            .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+            .env("RIMZ_MESSAGE_SETTLE_MS", "0")
+            .args(["message", "steer", &queued_id]),
+        "steer the record behind the sent prompt",
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&steered.stdout).trim(),
+        format!("sent to @claude ({queued_id})")
+    );
+    let lines = trace_lines(&trace_log);
+    assert!(
+        lines
+            .iter()
+            .any(|line| is_paste(line, &user_message("second"))),
+        "the steered record reaches the pane; trace: {lines:?}"
+    );
+    let queued_id = MessageId::parse(&queued_id).expect("message id");
+    assert_eq!(message_by_id(&env, &queued_id).status, MessageStatus::Sent);
+    assert_eq!(message_by_id(&env, &prompt_id).status, MessageStatus::Sent);
+}
+
 #[test]
 fn sweep_cancels_joined_subagent_report_without_pane_write() {
     assert_joined_subagent_report_canceled(false);
