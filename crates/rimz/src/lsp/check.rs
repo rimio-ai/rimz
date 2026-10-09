@@ -59,13 +59,19 @@ fn check_file(
     let mut lengths = BTreeMap::new();
     let mut verdicts = Vec::new();
     for anchor in extract(&source) {
-        let (anchor, path) = match context.resolve(anchor) {
+        let (anchor, path, matched) = match context.resolve(anchor) {
             Ok(resolved) => resolved,
             Err(result) => {
                 verdicts.push(*result);
                 continue;
             }
         };
+        if matches!(matched, PathMatch::Suffix(_)) && anchor_path(&path).is_some() {
+            let mut result = verdict(anchor, Some(path.clone()), Status::ShortPath);
+            result.detail = format!("resolves to {}", path.display());
+            verdicts.push(result);
+            continue;
+        }
         if anchor.symbol.is_none() {
             let lines = match lengths.entry(path.clone()) {
                 std::collections::btree_map::Entry::Occupied(entry) => *entry.get(),
@@ -158,13 +164,17 @@ impl<'a> Context<'a> {
         })
     }
 
-    fn resolve(&self, mut anchor: Anchor) -> Result<(Anchor, PathBuf), Box<Verdict>> {
+    fn resolve(&self, mut anchor: Anchor) -> Result<(Anchor, PathBuf, PathMatch), Box<Verdict>> {
         if let Some(qualifier) = anchor.qualifier.take() {
             let mut result = verdict(anchor, None, Status::External);
             result.detail = qualifier;
             return Err(Box::new(result));
         }
-        let matches = resolve(self.checkout, &self.files, &anchor.path);
+        let matched = resolve(self.checkout, &self.files, &anchor.path);
+        let matches = match &matched {
+            PathMatch::Exact(path) => std::slice::from_ref(path),
+            PathMatch::Suffix(paths) => paths.as_slice(),
+        };
         if matches.len() != 1 {
             let status = if matches.is_empty() {
                 Status::MissingPath
@@ -187,10 +197,10 @@ impl<'a> Context<'a> {
                 };
                 format!("{} files: {}{more}", matches.len(), names.join(", "))
             };
-            result.files = matches;
+            result.files = matches.to_vec();
             return Err(Box::new(result));
         }
-        Ok((anchor, matches[0].clone()))
+        Ok((anchor, matches[0].clone(), matched))
     }
 
     fn is_dirty(&self, path: &Path) -> Result<bool, LspErr> {
@@ -340,6 +350,7 @@ struct Verdict {
 #[serde(rename_all = "kebab-case")]
 enum Status {
     Ok,
+    ShortPath,
     External,
     MissingPath,
     AmbiguousPath,
@@ -380,7 +391,8 @@ impl Report {
                 Status::Ok => summary.ok += 1,
                 Status::Unchecked => summary.unchecked += 1,
                 Status::External => summary.external += 1,
-                Status::MissingPath
+                Status::ShortPath
+                | Status::MissingPath
                 | Status::AmbiguousPath
                 | Status::MissingSymbol
                 | Status::LineOutside => summary.failed += 1,
@@ -426,6 +438,7 @@ impl Report {
         for anchor in &self.anchors {
             let status = match anchor.status {
                 Status::Ok | Status::External => continue,
+                Status::ShortPath => "short-path",
                 Status::MissingPath => "missing-path",
                 Status::AmbiguousPath => "ambiguous-path",
                 Status::MissingSymbol => "missing-symbol",
@@ -645,18 +658,34 @@ fn segments(name: &str) -> Vec<String> {
         .collect()
 }
 
-fn resolve(root: &Path, files: &[PathBuf], path: &str) -> Vec<PathBuf> {
+#[derive(Debug, PartialEq, Eq)]
+enum PathMatch {
+    Exact(PathBuf),
+    Suffix(Vec<PathBuf>),
+}
+
+/// A checkout path as an anchor can spell it: `parse_anchor` ends the path at
+/// the first `:` and requires a file head, and a backtick ends the code span.
+/// A file no anchor can name whole is cited by its short path.
+fn anchor_path(path: &Path) -> Option<&str> {
+    path.to_str()
+        .filter(|path| !path.contains([':', '`']) && query::is_file_head(path))
+}
+
+fn resolve(root: &Path, files: &[PathBuf], path: &str) -> PathMatch {
     let Some(path) = query::checkout_relative(root, Path::new(path)) else {
-        return Vec::new();
+        return PathMatch::Suffix(Vec::new());
     };
     if files.contains(&path) || root.join(&path).is_file() {
-        return vec![path];
+        return PathMatch::Exact(path);
     }
-    files
-        .iter()
-        .filter(|file| file.ends_with(&path))
-        .cloned()
-        .collect()
+    PathMatch::Suffix(
+        files
+            .iter()
+            .filter(|file| file.ends_with(&path))
+            .cloned()
+            .collect(),
+    )
 }
 
 fn outline(value: serde_json::Value) -> super::Result<Vec<Candidate>> {

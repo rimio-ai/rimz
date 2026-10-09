@@ -69,7 +69,7 @@ enum Command {
         files: Vec<PathBuf>,
         #[arg(long)]
         json: bool,
-        /// Complete a short path that one file's symbol singles out, and rewrite existing hints for uniquely resolved saved symbols.
+        /// Complete unique short paths or those one file's symbol singles out, and rewrite existing hints for uniquely resolved saved symbols.
         #[arg(long)]
         fix: bool,
         /// With --fix, insert a hint on every symbol anchor that names one item.

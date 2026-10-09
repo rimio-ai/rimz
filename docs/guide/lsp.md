@@ -156,13 +156,13 @@ When a hand-off spans several notes files, check them together; each gets its ow
 rimz lsp check notes.md plan.md
 ```
 
-When a symbol still exists but its line hint has drifted, refresh the hint instead of editing each number by hand. The same pass repairs a common slip: a bare file name such as `install.rs` that several files in the checkout share, which the check otherwise flags as an ambiguous path.
+When a symbol still exists but its line hint has drifted, refresh the hint instead of editing each number by hand. The same pass repairs a common slip: using a bare file name such as `install.rs` where the whole checkout-relative path is needed. The check flags such a suffix whether one file matches (`short-path`) or several do (`ambiguous-path`).
 
 ```sh
 rimz lsp check notes.md --fix
 ```
 
-This rewrites existing hint digits and completes a short path to the full path from the checkout root when exactly one of the files it names defines the anchor's symbol, then checks the updated notes. A short path whose symbol several files define, or none, stays flagged. When several items match a symbol, the hint must select exactly one within three lines; a unique item can be fixed even when its hint has drifted farther, and so can a type whose other matches are its impl blocks. It preserves hint syntax and leaves hints that cannot select one item, line-only anchors, and files with unsaved editor changes alone. Review the notes diff to keep or undo the changed paths and hints. A second run with nothing to change leaves the file untouched.
+This rewrites existing hint digits and completes a unique short path to the full path from the checkout root for symbol and line-only anchors alike, then checks the updated notes. When several files share a short path, completion needs the symbol to single out one file and no candidate with unsaved editor changes; otherwise the path stays flagged. When several items match a symbol, the hint must select exactly one within three lines; a unique item can be fixed even when its hint has drifted farther, and so can a type whose other matches are its impl blocks. It preserves hint syntax and leaves hints that cannot select one item or come from unsaved editor changes alone; completing a unique path does not depend on editor contents. Review the notes diff to keep or undo the changed paths and hints. A second run with nothing to change leaves the file untouched.
 
 Anchors written without a line span can get one in the same pass:
 
@@ -172,7 +172,7 @@ rimz lsp check notes.md --fix --hints
 
 Each symbol anchor that names one item gains its line span after the closing backtick, such as `` `config.rs::ConfigErr` (40-62) ``; a type with impl blocks counts as one item and gets the type's own range. An anchor that matches several items, such as a function and a method of the same name, keeps no span and is listed as `ambiguous-symbol` with every competing item; lengthen its chain (`config.rs::Loader::load`) and rerun. Anchors that already carry hints are only refreshed.
 
-Fix remaining flagged paths, symbols, or lines and rerun. A path suffix that names several files, where `--fix` cannot tell which one is meant, needs more of the path. The summary counts what passed, failed, remained unchecked, or was external; `unchecked` means no server covers that language, so verify those anchors by hand. Cite another repository with `owner/repo@ref:path::Symbol` or `owner/repo@ref:path:~N`: these count as `external`, without being verified or flagged as failures. The [reference](../reference/cli/lsp.md#check-anchors-in-a-notes-file) defines the accepted anchors and JSON output.
+Fix remaining flagged paths, symbols, or lines and rerun. A path suffix that still names several files after `--fix` needs more of the path. The summary counts what passed, failed, remained unchecked, or was external; `unchecked` means no server covers that language, so verify those anchors by hand. Cite another repository with `owner/repo@ref:path::Symbol` or `owner/repo@ref:path:~N`: these count as `external`, without being verified or flagged as failures. The [reference](../reference/cli/lsp.md#check-anchors-in-a-notes-file) defines the accepted anchors and JSON output.
 
 ## See what is running, and stop it
 
