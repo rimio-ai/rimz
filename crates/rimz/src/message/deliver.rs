@@ -648,71 +648,70 @@ pub fn sweep(workspace: &ResolvedWorkspace, store: &Store, mux: Option<MuxName>)
                     snapshot,
                 )?
             };
-            if !matches!(report, DeliveryReport::Sent) {
-                let verdict = match report {
-                    DeliveryReport::Refused(verdict) => Some(verdict),
-                    DeliveryReport::Sent | DeliveryReport::Stopped => None,
-                };
-                let ended_receiver = match &verdict {
-                    Some(DeliveryVerdict::ReceiverEnded) => snapshot
-                        .agents
-                        .iter()
-                        .find(|agent| head.same_agent_card(agent))
-                        .cloned(),
-                    Some(DeliveryVerdict::ReceiverGone) => store
-                        .runtime_projection(crate::RuntimeScope::Audit)?
-                        .agents
-                        .into_iter()
-                        .find(|agent| head.same_agent_card(agent))
-                        .filter(|agent| agent.ended_at.is_some()),
-                    _ => None,
-                };
-                if let Some(receiver) = ended_receiver {
-                    let reason = ended_receiver_reason(
-                        &receiver,
-                        head.address.as_deref(),
-                        &crate::address::addressable_agents(snapshot),
-                    );
-                    store.archive_messages_watching_card(
-                        &receiver.kind,
-                        &receiver.agent_id,
-                        receiver.name.as_deref(),
-                        receiver.ended_at,
-                        &workspace.session_name,
-                    )?;
-                    store.archive_messages_for_card(
-                        &receiver.kind,
-                        &receiver.agent_id,
-                        receiver.name.as_deref(),
-                        receiver.ended_at,
-                        &reason,
-                        &workspace.session_name,
-                    )?;
-                    continue;
-                }
-                if let Some(verdict) = &verdict {
-                    notify_long_queued(
-                        workspace,
-                        store,
-                        &snapshot.agents,
-                        &pending,
-                        head,
-                        verdict,
-                        now,
-                    )?;
-                }
-                let recorded = match verdict {
-                    Some(DeliveryVerdict::NoPane { pinned_pane_id }) => {
-                        Some(no_pane_blocker(pinned_pane_id.as_ref()))
-                    }
-                    _ => None,
-                };
-                let blocker = match recorded.as_deref() {
-                    Some(sentence) => BlockerUpdate::Set(sentence),
-                    None => BlockerUpdate::ClearOwn(is_no_pane_blocker),
-                };
-                store.defer_message_wake(&head.message_id, now + delivery_window, blocker)?;
+            let verdict = match report {
+                DeliveryReport::Sent => continue,
+                DeliveryReport::Refused(verdict) => Some(verdict),
+                DeliveryReport::Stopped => None,
+            };
+            let ended_receiver = match &verdict {
+                Some(DeliveryVerdict::ReceiverEnded) => snapshot
+                    .agents
+                    .iter()
+                    .find(|agent| head.same_agent_card(agent))
+                    .cloned(),
+                Some(DeliveryVerdict::ReceiverGone) => store
+                    .runtime_projection(crate::RuntimeScope::Audit)?
+                    .agents
+                    .into_iter()
+                    .find(|agent| head.same_agent_card(agent))
+                    .filter(|agent| agent.ended_at.is_some()),
+                _ => None,
+            };
+            if let Some(receiver) = ended_receiver {
+                let reason = ended_receiver_reason(
+                    &receiver,
+                    head.address.as_deref(),
+                    &crate::address::addressable_agents(snapshot),
+                );
+                store.archive_messages_watching_card(
+                    &receiver.kind,
+                    &receiver.agent_id,
+                    receiver.name.as_deref(),
+                    receiver.ended_at,
+                    &workspace.session_name,
+                )?;
+                store.archive_messages_for_card(
+                    &receiver.kind,
+                    &receiver.agent_id,
+                    receiver.name.as_deref(),
+                    receiver.ended_at,
+                    &reason,
+                    &workspace.session_name,
+                )?;
+                continue;
             }
+            if let Some(verdict) = &verdict {
+                notify_long_queued(
+                    workspace,
+                    store,
+                    &snapshot.agents,
+                    &pending,
+                    head,
+                    verdict,
+                    now,
+                )?;
+            }
+            let recorded = match verdict {
+                Some(DeliveryVerdict::NoPane { pinned_pane_id }) => {
+                    Some(no_pane_blocker(pinned_pane_id.as_ref()))
+                }
+                _ => None,
+            };
+            let blocker = match recorded.as_deref() {
+                Some(sentence) => BlockerUpdate::Set(sentence),
+                None => BlockerUpdate::ClearOwn(is_no_pane_blocker),
+            };
+            store.defer_message_wake(&head.message_id, now + delivery_window, blocker)?;
         }
     }
     register_message_wake(workspace, store);
