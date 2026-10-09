@@ -1056,6 +1056,84 @@ fn kill_apply_after_locked_phase(env: &Env) {
 }
 
 #[test]
+fn crash_redo_records_the_prompt_after_the_lifecycle_batch() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let mut frame = stop_frame(&env);
+    frame.event = Some("UserPromptSubmit".into());
+    frame.payload =
+        json!({"session_id": "drain-session", "prompt": "keep this prompt"}).to_string();
+    let (frame, _) = append_frame(&env, frame);
+    kill_apply_after_locked_phase(&env);
+    once(&env);
+    let entries = rimz::transcript::read_all(env.store().paths()).unwrap();
+    let prompts: Vec<_> = entries
+        .iter()
+        .filter(|entry| entry.entry == rimz::transcript::TranscriptKind::Prompt)
+        .collect();
+    assert_eq!(prompts.len(), 1, "replay must finish the prompt write");
+    assert_eq!(prompts[0].text, "keep this prompt");
+    assert_eq!(prompts[0].ingress.as_ref(), Some(&frame.event_id));
+    assert_eq!(derived(&env, &frame.event_id).len(), 1);
+}
+
+#[test]
+fn crash_redo_does_not_repeat_the_prompt_after_the_effects() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let mut frame = stop_frame(&env);
+    frame.event = Some("UserPromptSubmit".into());
+    frame.payload =
+        json!({"session_id": "drain-session", "prompt": "keep this prompt"}).to_string();
+    let (frame, _) = append_frame(&env, frame);
+    let (mut drainer, release) = paused_drainer(&env, "RIMZ_TEST_HOOK_DRAIN_AFTER_APPLY");
+    let before = rimz::transcript::read_all(env.store().paths()).unwrap();
+    assert_eq!(before.len(), 1);
+    drainer.kill().unwrap();
+    drainer.wait().unwrap();
+    drop(release);
+    once(&env);
+    let after = rimz::transcript::read_all(env.store().paths()).unwrap();
+    assert_eq!(after, before, "replay must not append its prompt again");
+    assert_eq!(after[0].ingress.as_ref(), Some(&frame.event_id));
+    assert_eq!(derived(&env, &frame.event_id).len(), 1);
+}
+
+#[test]
+fn crash_redo_closes_the_working_span_at_the_ingress_time() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let started = Timestamp::now() - Duration::from_secs(10);
+    let mut prompt = stop_frame(&env);
+    prompt.ts = started;
+    prompt.event = Some("UserPromptSubmit".into());
+    prompt.payload = json!({"session_id": "drain-session", "prompt": "work on this"}).to_string();
+    let mut apply = env.rimz();
+    apply
+        .args(["hooks", "apply"])
+        .stdin(std::process::Stdio::piped());
+    let output = env
+        .spawn_payload(apply, &serde_json::to_string(&prompt).unwrap())
+        .wait_with_output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let mut stop = stop_frame(&env);
+    stop.ts = started + Duration::from_secs(10);
+    let (stop, _) = append_frame(&env, stop);
+    kill_apply_after_locked_phase(&env);
+    once(&env);
+    let store = env.store();
+    let records = rimz::store::active_time::read_for_keys(
+        store.runtime_paths(),
+        [("claude", "drain-session")],
+    );
+    assert_eq!(records.len(), 1);
+    assert!(!records[0].active, "replay must close the working span");
+    assert_eq!(records[0].last_progress, stop.ts);
+    assert_eq!(records[0].credited_ms, 10_000);
+}
+
+#[test]
 fn crash_redo_does_not_repeat_an_envelopeless_cursor_transcript_entry() {
     let env = Env::new();
     env.record(&env.project_root);

@@ -243,6 +243,7 @@ pub(super) fn record_conversation(
         entry.profile = observation.launch.profile.clone();
         entry.role = observation.launch.role.clone();
         stamp_parent(&mut entry, state);
+        entry.ingress = store.hook_ingress_id().cloned();
         entry
     };
 
@@ -274,9 +275,53 @@ pub(super) fn record_conversation(
             rimz::transcript::append_answer_if_missing(store.paths(), &entry)?;
         }
     }
-    if observation.parent_agent_id.is_some() || rimz::harness::hook_drain::is_replay() {
+    if observation.parent_agent_id.is_some() {
         return Ok(());
     }
+    let mut existing = if rimz::harness::hook_drain::frame_attempt()
+        != rimz::harness::hook_drain::FrameAttempt::First
+    {
+        rimz::transcript::read_all(store.paths())?
+    } else {
+        Vec::new()
+    };
+    existing.retain(|entry| {
+        if entry.ingress.as_ref() != store.hook_ingress_id() {
+            return false;
+        }
+        let Some(edit) = observation.ask_queue.as_ref() else {
+            return true;
+        };
+        let Some(id) = entry.id.as_ref() else {
+            return true;
+        };
+        let queue_entry = match entry.entry {
+            rimz::transcript::TranscriptKind::Ask => edit
+                .queued
+                .iter()
+                .any(|question| question.ask_id.as_ref() == Some(id)),
+            rimz::transcript::TranscriptKind::Answer => edit
+                .answered
+                .iter()
+                .any(|answer| answer.ask_id.as_ref() == Some(id)),
+            _ => false,
+        };
+        !queue_entry
+    });
+    let mut recorded_counts = std::collections::HashMap::new();
+    for entry in &existing {
+        *recorded_counts.entry(entry.entry).or_insert(0usize) += 1;
+    }
+    let mut already_recorded = |entry: &rimz::transcript::TranscriptEntry| {
+        let Some(count) = recorded_counts.get_mut(&entry.entry) else {
+            return false;
+        };
+        if *count == 0 {
+            return false;
+        }
+        *count -= 1;
+        true
+    };
     let mut entry = match &observation.signal {
         LifecycleSignal::TurnStarted { .. } => {
             let mut entries = Vec::new();
@@ -284,7 +329,16 @@ pub(super) fn record_conversation(
             let mut open_ask_id = (recorded.receipt.waiting_cleared && !sections.is_empty())
                 .then(|| latest_open_native_ask(store, agent.spec().kind, agent_id.as_str()))
                 .flatten()
-                .and_then(|ask| ask.id);
+                .and_then(|ask| ask.id)
+                .or_else(|| {
+                    existing
+                        .iter()
+                        .find(|entry| {
+                            entry.entry == rimz::transcript::TranscriptKind::Answer
+                                && entry.ingress.as_ref() == store.hook_ingress_id()
+                        })
+                        .and_then(|entry| entry.id.clone())
+                });
             // One read per turn, and none when no section needs it.
             let mut run = None;
             for section in sections {
@@ -350,6 +404,9 @@ pub(super) fn record_conversation(
             }
             replace_turn_opened_by(store, agent, &agent_id, matched_ids);
             for (entry, fallback_prompt) in entries {
+                if already_recorded(&entry) {
+                    continue;
+                }
                 append_turn_entry(store.paths(), &entry, fallback_prompt.as_ref())?;
             }
             return Ok(());
@@ -366,6 +423,9 @@ pub(super) fn record_conversation(
         }
         _ => return Ok(()),
     };
+    if already_recorded(&entry) {
+        return Ok(());
+    }
     entry.reply_to = turn_opened_by(store, agent, &agent_id);
     rimz::transcript::append(store.paths(), &entry)?;
     Ok(())

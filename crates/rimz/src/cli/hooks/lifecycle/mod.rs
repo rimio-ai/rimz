@@ -247,7 +247,7 @@ pub(super) fn handle_lifecycle_frame(
     let context_agent_id = observed_agent_id
         .or_else(|| decoded.context_agent_id().cloned())
         .or_else(|| agent_id.clone());
-    if !ping_edge && !replay {
+    if !ping_edge {
         active_time::record(
             store,
             agent,
