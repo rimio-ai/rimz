@@ -54,11 +54,17 @@ live-tmux = { max-threads = 4 }
 # Browser + ttyd processes are heavy, and every fixture holds the run-wide
 # daemon lock, so one slot avoids spending a second test's lock budget waiting.
 live-web = { max-threads = 1 }
+hook-budget = { max-threads = 1 }
 # Rendered journeys each run a real `rimz sidebar serve` process over a PTY. The
 # full journey sweep now covers the dashboard, rate-limit recovery, selection,
 # remote badge, and resume paths, so cap this tier like the live-mux tier instead
 # of starting every renderer at once.
 rendered-journey = { max-threads = 4 }
+
+[[profile.default.overrides]]
+filter = 'binary(integration) & test(/^performance::hook_budget::/)'
+test-group = 'hook-budget'
+threads-required = "num-test-threads"
 
 [[profile.default.overrides]]
 filter = 'package(rimz) & (test(/^backend::zellij::/) | test(/^backend::single_backend_room::/) | test(/^journey::deep::(room_host::)?zellij/))'

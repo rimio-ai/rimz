@@ -22,6 +22,277 @@ fn main() {
     divan::main();
 }
 
+#[divan::bench(sample_count = 1, sample_size = 1)]
+#[expect(
+    clippy::print_stdout,
+    reason = "benchmark reports paired sequential and burst wall budgets"
+)]
+fn hook_stop_budget(bencher: Bencher) {
+    use std::io::{Read as _, Write as _};
+    use std::os::unix::net::UnixStream;
+    use std::process::{Command, Stdio};
+    use std::sync::Barrier;
+    use std::time::{Duration, Instant};
+
+    fn sample(mut command: Command, payload: &[u8], hook: bool) -> Duration {
+        let start = Instant::now();
+        let mut child = command.spawn().unwrap();
+        let written = child.stdin.take().unwrap().write_all(payload);
+        assert!(
+            written.is_ok() || (!hook && written.unwrap_err().kind() == io::ErrorKind::BrokenPipe)
+        );
+        let status = child.wait().unwrap();
+        let wall = start.elapsed();
+        // These commands have bounded output; collection is outside timing,
+        // without extra reader threads.
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        child
+            .stdout
+            .take()
+            .unwrap()
+            .read_to_end(&mut stdout)
+            .unwrap();
+        child
+            .stderr
+            .take()
+            .unwrap()
+            .read_to_end(&mut stderr)
+            .unwrap();
+        assert!(status.success(), "{status:?}; stderr {stderr:?}");
+        if hook {
+            assert!(stdout.is_empty(), "{stdout:?}");
+        }
+        wall
+    }
+
+    fn p99(mut samples: Vec<Duration>) -> Duration {
+        samples.sort_unstable();
+        samples[(samples.len() * 99).div_ceil(100) - 1]
+    }
+
+    let home_root = tempfile::Builder::new()
+        .prefix("rimz-test-home-")
+        .tempdir()
+        .unwrap();
+    let runtime_root = tempfile::Builder::new().prefix("rr").tempdir().unwrap();
+    let root = home_root.path();
+    let binary = std::env::current_exe()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("rimz");
+    assert!(
+        binary.is_file(),
+        "build rimz in the bench profile before measuring"
+    );
+    let copied_home = std::env::var_os("RIMZ_HOOK_BUDGET_HOME");
+    let home = root.join(if copied_home.is_some() {
+        ".rimz"
+    } else {
+        "state"
+    });
+    let runtime = runtime_root.path();
+    let (project_root, paths) = if let Some(source) = copied_home.as_ref() {
+        assert!(
+            Command::new("cp")
+                .arg("-a")
+                .arg("--")
+                .arg(PathBuf::from(source).join(".rimz"))
+                .arg(&home)
+                .status()
+                .unwrap()
+                .success()
+        );
+        let mut rooms = rimz::workspace::known_workspaces_under(
+            &rimz::disk::paths::workspaces_dir_under(&home),
+        )
+        .unwrap();
+        assert_eq!(rooms.len(), 1, "copied home must contain exactly one room");
+        let room = rooms.remove(0);
+        let paths = rimz::StatePaths::under_named(room.workspace_id, room.dir_name, &home);
+        for queue in [&paths.hook_ingress_log, &paths.hook_drain_cursor] {
+            if queue.exists() {
+                std::fs::remove_file(queue).unwrap();
+            }
+        }
+        (room.project_root, paths)
+    } else {
+        (
+            root.to_path_buf(),
+            rimz::StatePaths::for_project_root_under(root, &home).unwrap(),
+        )
+    };
+    let runtime_paths = rimz::RuntimePaths::for_state_under(&paths, runtime);
+    let _sandbox = rimz::testkit::sandbox::TestSandbox::arm(
+        rimz::testkit::sandbox::SandboxSpec {
+            home_root: root.into(),
+            runtime_root: runtime.into(),
+        },
+        &binary.with_file_name("rimz-test-reaper"),
+    )
+    .unwrap();
+    let store = rimz::Store::open(paths.clone(), runtime_paths).unwrap();
+    if copied_home.is_none() {
+        let resolved =
+            rimz::WorkspaceResolver::resolve_under(root, Some(root.into()), &home).unwrap();
+        store.record_workspace(&resolved).unwrap();
+        rimz::testkit::fleet::seed_fleet_store(&paths, FLEET, HISTORY_EVENTS).unwrap();
+    }
+    store.snapshot().unwrap();
+    let payload = serde_json::json!({
+        "hook_event_name": "Stop", "session_id": "bench-stop", "turn_id": "bench-turn",
+        "cwd": project_root, "last_assistant_message": "done"
+    })
+    .to_string();
+    let command = || {
+        let mut command = Command::new(&binary);
+        command
+            .env_clear()
+            .env("HOME", root)
+            .env("RIMZ_HOME", &home)
+            .env("XDG_RUNTIME_DIR", runtime)
+            .env("PATH", "/usr/bin:/bin")
+            .env("RIMZ_WORKSPACE_ID", paths.workspace_id.as_str())
+            .env("RIMZ_PROJECT_ROOT", &project_root)
+            .env("RIMZ_AGENT_PID", std::process::id().to_string())
+            .current_dir(&project_root)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        command
+    };
+    let burst = |hook| {
+        let barrier = Barrier::new(24);
+        std::thread::scope(|scope| {
+            let workers: Vec<_> = (0..24)
+                .map(|_| {
+                    let barrier = &barrier;
+                    let payload = payload.as_bytes();
+                    let mut command = command();
+                    if hook {
+                        command.args(["hooks", "feed", "--source", "codex"]);
+                    } else {
+                        command.arg("--version");
+                    }
+                    scope.spawn(move || {
+                        barrier.wait();
+                        sample(command, payload, hook)
+                    })
+                })
+                .collect();
+            workers
+                .into_iter()
+                .map(|worker| worker.join().unwrap())
+                .collect::<Vec<_>>()
+        })
+    };
+    let mut worker = command();
+    let mut drainer = worker
+        .args(["hooks", "drain", "--project-root"])
+        .arg(&project_root)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let socket = store.runtime_paths().hook_drainer_socket_path();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let _lease = loop {
+        match UnixStream::connect(&socket) {
+            Ok(lease) => break lease,
+            Err(error) => {
+                assert!(Instant::now() < deadline, "drainer did not listen: {error}");
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        }
+    };
+    let mut warm = command();
+    warm.args(["hooks", "feed", "--source", "codex"]);
+    sample(warm, payload.as_bytes(), true);
+    assert!(
+        command()
+            .args(["hooks", "drain", "--project-root"])
+            .arg(&project_root)
+            .arg("--once")
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    for hook in [true, false] {
+        drop(burst(hook));
+    }
+    let room = if copied_home.is_some() {
+        "live-copy"
+    } else {
+        "seeded"
+    };
+    bencher.bench_local(|| {
+        let mut hooks = Vec::new();
+        let mut versions = Vec::new();
+        for pair in 0usize..48 {
+            for hook_first in [true, false] {
+                let hook = pair.is_multiple_of(2) == hook_first;
+                let mut command = command();
+                if hook {
+                    command.args(["hooks", "feed", "--source", "codex"]);
+                } else {
+                    command.arg("--version");
+                }
+                let measured = sample(command, payload.as_bytes(), hook);
+                if hook {
+                    hooks.push(measured);
+                } else {
+                    versions.push(measured);
+                }
+            }
+        }
+        let hook = p99(hooks);
+        let version = p99(versions);
+        let ceiling = Duration::from_millis(4).max(version * 2);
+        println!("{room} sequential: hook p99 {hook:?}; --version p99 {version:?}; ceiling {ceiling:?}");
+        let mut hook_bursts = Vec::new();
+        let mut version_bursts = Vec::new();
+        for pair in 0..10 {
+            for hook in [true, false] {
+                let samples = burst(hook);
+                println!(
+                    "{room} burst {pair} {}: wall p99 {:?}",
+                    if hook { "hook" } else { "version" },
+                    p99(samples.clone()),
+                );
+                if hook {
+                    hook_bursts.extend(samples);
+                } else {
+                    version_bursts.extend(samples);
+                }
+            }
+        }
+        let hook_burst = p99(hook_bursts);
+        let version_burst = p99(version_bursts);
+        let burst_ceiling = Duration::from_millis(4).max(version_burst * 2);
+        println!("{room} 24-way: hook p99 {hook_burst:?}; --version p99 {version_burst:?}; ceiling {burst_ceiling:?}");
+        assert!(
+            hook <= ceiling,
+            "hook p99 {hook:?} > {ceiling:?}; --version p99 {version:?}"
+        );
+        assert!(
+            hook_burst <= burst_ceiling,
+            "24-way hook p99 {hook_burst:?} > {burst_ceiling:?}; --version p99 {version_burst:?}"
+        );
+    });
+    // Cleanup also includes the unmeasured warm-up; serial apply on the
+    // live-sized copy can outlast the CLI's 30-second wait.
+    let drain_start = Instant::now();
+    rimz::harness::hook_drain::drain_through(&store, 0, None, Duration::from_secs(120)).unwrap();
+    println!("{room} after-return drain: {:?}", drain_start.elapsed());
+    drainer.kill().unwrap();
+    drainer.wait().unwrap();
+}
+
 struct BenchWorkspace {
     _tempdir: TempDir,
     paths: rimz::StatePaths,
