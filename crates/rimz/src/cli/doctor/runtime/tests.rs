@@ -265,6 +265,7 @@ fn presence_plugins_classify_active_rejected_and_inactive_generations() {
         produced_at_ms: now_ms,
         writer: Some(active),
         focused_pane: None,
+        clients_withheld: false,
         clients: None,
         panes: Vec::new(),
     };
@@ -340,6 +341,7 @@ fn presence_plugins_pick_newest_generation_unless_fresh_writer_names_one() {
         produced_at_ms: now_ms,
         writer: Some(identified_topology_writer(7, 100, "old")),
         focused_pane: None,
+        clients_withheld: false,
         clients: None,
         panes: Vec::new(),
     };

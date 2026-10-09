@@ -267,6 +267,7 @@ fn write_zellij_topology_panes(
             produced_at_ms,
             writer: None,
             focused_pane: None,
+            clients_withheld: false,
             clients: None,
             panes: std::iter::once(pane(1, 0, u64::from(sidebar_cols), "rimz-sidebar"))
                 .chain(view_cols.map(|view_cols| {

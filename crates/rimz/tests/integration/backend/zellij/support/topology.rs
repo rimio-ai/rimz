@@ -54,6 +54,7 @@ fn topology_cache(session: &str, snapshot: &PaneSnapshot) -> PaneTopologyCache {
             .unwrap_or(u64::MAX),
         writer: None,
         focused_pane: None,
+        clients_withheld: false,
         clients: None,
         panes: snapshot
             .panes

@@ -240,6 +240,7 @@ impl WakeEnv {
             produced_at_ms,
             writer: None,
             focused_pane: Some(7),
+            clients_withheld: false,
             clients: None,
             panes: vec![
                 PaneTopologyPane {
@@ -310,6 +311,7 @@ impl WakeEnv {
             produced_at_ms,
             writer: None,
             focused_pane: panes.first().map(|(id, _, _)| *id),
+            clients_withheld: false,
             clients: None,
             panes: panes
                 .iter()

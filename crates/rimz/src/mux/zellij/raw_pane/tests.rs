@@ -311,6 +311,7 @@ fn pane_listing_admits_floating_agent_panes_but_not_floating_plugins() {
         produced_at_ms: 1,
         writer: None,
         focused_pane: None,
+        clients_withheld: false,
         clients: None,
         panes: parsed,
     }

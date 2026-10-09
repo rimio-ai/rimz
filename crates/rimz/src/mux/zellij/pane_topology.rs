@@ -39,6 +39,8 @@ pub struct PaneTopologyCache {
     pub focused_pane: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub clients: Option<TopologyClients>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub clients_withheld: bool,
     #[serde(default)]
     pub panes: Vec<PaneTopologyPane>,
 }
@@ -54,6 +56,7 @@ impl PaneTopologyCache {
             produced_at_ms,
             focused_pane,
             clients,
+            clients_withheld,
             panes,
             ..
         } = self;
@@ -94,6 +97,7 @@ impl PaneTopologyCache {
             observed_at_ms: produced_at_ms,
             session_focus,
             client_view,
+            client_sample_withheld: clients_withheld,
         }
     }
 }
@@ -439,12 +443,42 @@ mod tests {
             produced_at_ms: 100,
             writer: None,
             focused_pane: None,
+            clients_withheld: false,
             clients: None,
             panes: Vec::new(),
         };
 
         assert!(pane_topology_cache_is_fresh(&cache, 101, Some(100)));
         assert!(!pane_topology_cache_is_fresh(&cache, 101, Some(101)));
+    }
+
+    #[test]
+    fn withheld_clients_marker_survives_cache_and_listing() {
+        let mut payload = serde_json::json!({
+            "session_name": "rimz-test",
+            "produced_at_ms": 42,
+            "panes": []
+        });
+        let old: PaneTopologyCache = serde_json::from_value(payload.clone()).unwrap();
+        assert!(
+            !old.clone()
+                .into_pane_listing("rimz-test".to_owned())
+                .client_sample_withheld
+        );
+        assert!(
+            serde_json::to_value(old)
+                .unwrap()
+                .get("clients_withheld")
+                .is_none()
+        );
+
+        payload["clients_withheld"] = true.into();
+        let cache: PaneTopologyCache = serde_json::from_value(payload.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&cache).unwrap(), payload);
+        let listing = cache.into_pane_listing("rimz-test".to_owned());
+        assert!(listing.client_sample_withheld);
+        assert!(listing.client_view.is_none());
+        assert!(listing.session_focus.is_none());
     }
 
     #[test]
@@ -457,6 +491,7 @@ mod tests {
             produced_at_ms: floor.saturating_sub(1),
             writer: None,
             focused_pane: None,
+            clients_withheld: false,
             clients: None,
             panes: Vec::new(),
         };
@@ -536,6 +571,7 @@ mod tests {
             produced_at_ms: 42,
             writer: None,
             focused_pane: Some(1),
+            clients_withheld: false,
             clients: Some(TopologyClients {
                 human_clients: None,
                 viewed_panes: None,

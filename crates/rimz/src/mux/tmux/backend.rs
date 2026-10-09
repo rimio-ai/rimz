@@ -326,6 +326,7 @@ impl MuxBackend for TmuxBackend {
             observed_at_ms,
             session_focus: None,
             client_view: None,
+            client_sample_withheld: false,
         })
     }
 

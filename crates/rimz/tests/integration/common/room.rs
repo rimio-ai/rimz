@@ -20,6 +20,7 @@ pub fn seed_live_zellij_room(
             produced_at_ms: rimz::utils::time::unix_now_ms(),
             writer: None,
             focused_pane: None,
+            clients_withheld: false,
             clients: None,
             panes,
         },
@@ -86,6 +87,7 @@ impl ShimRoom {
             produced_at_ms: 0,
             writer: None,
             focused_pane: None,
+            clients_withheld: false,
             clients: None,
             panes: serde_json::from_str(panes).expect("shim room panes"),
         };

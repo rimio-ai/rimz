@@ -298,6 +298,8 @@ pub struct PaneListing {
     /// Client focus/presence carried by the same source as `panes`. `None`
     /// means the caller must sample the backend directly if it needs it.
     pub client_view: Option<ClientView>,
+    /// The source withheld unsettled clients; direct samples need roster fencing.
+    pub client_sample_withheld: bool,
 }
 
 /// The pane's drawable terminal rectangle, excluding backend chrome.

@@ -3867,6 +3867,7 @@ fn write_zellij_topology(
         produced_at_ms: rimz::utils::time::unix_now_ms(),
         writer: None,
         focused_pane: None,
+        clients_withheld: false,
         clients: None,
         panes,
     };

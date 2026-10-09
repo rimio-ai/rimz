@@ -369,6 +369,7 @@ pub fn repaired_pane_frame_for_binding(
             observed_at_ms: unix_now_ms(),
             session_focus: None,
             client_view: None,
+            client_sample_withheld: false,
         },
         None => list_session_panes(
             mux,
@@ -391,6 +392,7 @@ pub fn repaired_pane_frame_for_binding(
         client_viewed: &[],
         client_views: &[],
         client_view_fresh: false,
+        client_sample_withheld: listing.client_sample_withheld,
         prior: prior.as_deref(),
     });
     let diag = crate::diag::DiagSink::for_workspace(
@@ -653,6 +655,7 @@ impl PaneFrameProducer<'_, '_> {
             observed_at_ms,
             session_focus,
             client_view: pushed_client_view,
+            client_sample_withheld,
         } = listing;
         let panes = filter_foreign_session_panes(panes, self.cache.session, self.cache.diag);
         let prior = self.cache.prior();
@@ -710,6 +713,7 @@ impl PaneFrameProducer<'_, '_> {
                 client_viewed: &viewed_panes,
                 client_views: &client_views,
                 client_view_fresh: client_view_resolved,
+                client_sample_withheld,
                 prior: prior.as_deref(),
             });
         frame.presence = presence;
