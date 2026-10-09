@@ -184,7 +184,14 @@ fn rewrite_in(
             })
             .collect(),
     };
-    fix::rewrite(source, &mut context, hints).unwrap()
+    let rewritten = fix::rewrite(source, &mut context, hints).unwrap();
+    assert_eq!(
+        extract(&rewritten.0).len(),
+        extract(source).len(),
+        "a rewrite keeps every anchor an anchor: {}",
+        rewritten.0
+    );
+    rewritten
 }
 
 /// Three `lib.rs` files: `two/` defines `Type::method` at 11-16, `three/`
