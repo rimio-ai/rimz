@@ -524,7 +524,7 @@ Everything it publishes goes one way, as a fire-and-forget `run_command` fork of
 | `alive` | A silent snapshot for keepalives and explicit dumps: refresh the cache without broadcasting. Carries plugin telemetry. |
 | `switch-settled` | The generation-bearing client observation after a tab switch settles, with the active tab. |
 
-Each wake after the first manifest carries the live roster as repeated `--topology` values, at most 64 KiB each and omitted entirely above 1 MiB, while stamp and telemetry delivery continue. `rimz sidebar wake` concatenates the chunks in order and normalizes the payload. The topology payload includes the raw attached-client observations as `clients: [{ client_id, pane_id }]`, from which the host derives attached-client count, terminal views, and unique-live focus. A payload without `clients` falls back to its `focused_pane` field and keeps the producer-side `client_view` fallback active.
+Each wake after the first manifest carries the live roster as repeated `--topology` values, at most 64 KiB each and omitted entirely above 1 MiB, while stamp and telemetry delivery continue. `rimz sidebar wake` concatenates the chunks in order and normalizes the payload. The topology payload includes the raw attached-client observations as `clients: { views: [{ client_id, pane_id }] }`, from which the host derives attached-client count, terminal views, and unique-live focus. A payload without `clients` falls back to its `focused_pane` field and keeps the producer-side `client_view` fallback active.
 
 The first manifest after load names every pre-existing pane, so the host accepts it as a baseline, and an announced baseline emits only one topology nudge.
 
@@ -553,6 +553,8 @@ Unthrottled, a busy room would fork `rimz` on every keystroke-driven event. [`po
 Title-only events are filtered out.
 
 Client sampling has its own coordinator. Every `PaneUpdate` queues a coalesced general client query before topology deduplication, so an upstream update that changes only focus still refreshes attached-client truth. One untagged `ListClients` request is in flight at a time: the coordinator keeps the newest general or switch-settled purpose, expires a missing reply at the keepalive deadline, treats a reply after expiry as a general sample, and re-arms the superseded purpose.
+
+`crates/rimz-presence-zellij/src/engine.rs::FocusSync` invalidates retained clients when canonical pane membership or tab placement changes, including a pane close. A tab switch alone sets no mark and keeps its client sample publishable. Every wake publishes the roster with its existing timing, but omits `clients` while the sample is stale; the payload also carries no legacy `focused_pane`. It carries `clients_withheld: true` while the mark is set; the additive field defaults to false and is omitted when false. The host samples its own clients meanwhile. A reply clears the roster mark only if its query was issued at or after the latest change and the mode is Stable after applying the reply, so a general reply during a switch does not clear it. Clearing the mark republishes once even if the sample is unchanged. Field-only manifests retain the existing timing.
 
 Every host fork runs from `/`, so the session-lifetime plugin does not depend on the cwd of the CLI that loaded it.
 

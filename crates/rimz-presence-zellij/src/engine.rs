@@ -51,6 +51,7 @@ enum ClientQueryPurpose {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct InFlightClientQuery {
     purpose: ClientQueryPurpose,
+    issued_at: u64,
     deadline: u64,
 }
 
@@ -132,6 +133,13 @@ struct RoomState {
 impl RoomState {
     fn has_manifest(&self) -> bool {
         self.manifest_applied
+    }
+
+    fn roster(&self) -> Vec<(PaneKey, Option<usize>)> {
+        self.panes
+            .iter()
+            .map(|(key, state)| (*key, state.tab()))
+            .collect()
     }
 
     fn apply_manifest(
@@ -324,9 +332,15 @@ struct FocusSync {
     stale_replies: u32,
     connected_clients: Option<usize>,
     client_sample: Option<policy::ClientSample>,
+    roster_changed_at: Option<u64>,
 }
 
 impl FocusSync {
+    fn invalidate_client_sample(&mut self, now: u64) {
+        self.roster_changed_at = Some(now);
+        self.request_general_observation();
+    }
+
     fn request_general_observation(&mut self) {
         self.queue(ClientQueryPurpose::General);
     }
@@ -367,12 +381,22 @@ impl FocusSync {
         clients: Vec<ProjectedClientFocus>,
         now: u64,
     ) -> FocusUpdate {
-        let purpose = self.consume_reply(now);
+        let query = self.consume_reply(now);
         let sample = client_sample(&clients);
         let sample_changed = self.client_sample.as_ref() != Some(&sample);
         self.client_sample = Some(sample);
-        let mut update = self.apply_observation(purpose, clients);
-        update.sample_changed = sample_changed;
+        let mut update = self.apply_observation(
+            query.map_or(ClientQueryPurpose::General, |query| query.purpose),
+            clients,
+        );
+        let cleared_roster_mark = self.mode == FocusMode::Stable
+            && self
+                .roster_changed_at
+                .is_some_and(|at| query.is_some_and(|query| query.issued_at >= at));
+        if cleared_roster_mark {
+            self.roster_changed_at = None;
+        }
+        update.sample_changed = sample_changed || cleared_roster_mark;
         update
     }
 
@@ -396,6 +420,7 @@ impl FocusSync {
         let purpose = self.queued.take()?;
         self.in_flight = Some(InFlightClientQuery {
             purpose,
+            issued_at: now,
             deadline: now.saturating_add(policy::KEEPALIVE_MS),
         });
         Some(FocusWork::ListClients)
@@ -423,6 +448,9 @@ impl FocusSync {
     }
 
     fn client_sample(&self) -> Option<&policy::ClientSample> {
+        if self.roster_changed_at.is_some() {
+            return None;
+        }
         self.client_sample.as_ref()
     }
 
@@ -445,7 +473,7 @@ impl FocusSync {
         }
     }
 
-    fn consume_reply(&mut self, now: u64) -> ClientQueryPurpose {
+    fn consume_reply(&mut self, now: u64) -> Option<InFlightClientQuery> {
         self.expire_query(now);
         if self.stale_replies > 0 {
             self.stale_replies -= 1;
@@ -454,11 +482,9 @@ impl FocusSync {
                 // query so either response ordering converges.
                 self.queue(query.purpose);
             }
-            return ClientQueryPurpose::General;
+            return None;
         }
-        self.in_flight
-            .take()
-            .map_or(ClientQueryPurpose::General, |query| query.purpose)
+        self.in_flight.take()
     }
 
     fn apply_observation(
@@ -600,7 +626,12 @@ impl Engine {
         if !stable_unchanged {
             let projected = project(&self.tab_names);
             let baseline = !self.room.has_manifest();
-            if self.room.apply_manifest(projected, host) && !baseline {
+            let roster = self.room.roster();
+            let changed = self.room.apply_manifest(projected, host);
+            if roster != self.room.roster() && (!baseline || self.focus.client_sample.is_some()) {
+                self.focus.invalidate_client_sample(now);
+            }
+            if changed && !baseline {
                 self.signal_change(now);
             }
         }
@@ -704,6 +735,7 @@ impl Engine {
             // A close followed by same-shaped pane ID reuse has the same raw hash;
             // force the replacement manifest through the canonical reducer.
             self.last_raw_stable_hash = None;
+            self.focus.invalidate_client_sample(now);
             self.signal_change(now);
         }
         self.finish_update(now, host, effects)
@@ -992,6 +1024,7 @@ impl Engine {
             now,
             writer,
             self.focus.client_sample(),
+            self.focus.roster_changed_at.is_some(),
             &panes,
         );
         let Some(argv) = wire::wake_argv(&self.wake_context(), request, topology.as_deref()) else {
