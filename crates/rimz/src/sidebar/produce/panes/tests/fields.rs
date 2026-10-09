@@ -27,6 +27,85 @@ fn rotate_from_prior_repairs_plain_shell_empty_command_before_row_gate() {
 }
 
 #[test]
+fn backfill_pane_commands_repairs_pid_only_panes_without_reintroducing_chrome() {
+    for (name, cmdline, comm, expected) in [
+        (
+            "cmdline",
+            Some("/usr/bin/zsh"),
+            Some("zsh"),
+            Some("/usr/bin/zsh"),
+        ),
+        ("comm fallback", None, Some("zsh"), Some("zsh")),
+        ("empty cmdline", Some(""), Some("zsh"), Some("zsh")),
+        ("unreadable root", None, None, None),
+    ] {
+        let mut shell = pane("terminal_1", None, None);
+        shell.pane_pid = Some(100);
+        let mut reported = pane("terminal_2", Some("cargo build"), None);
+        reported.pane_pid = Some(200);
+        let pidless = pane("terminal_3", None, None);
+        let mut chrome = pane("terminal_4", None, None);
+        chrome.pane_pid = Some(400);
+        let mut frame = frame(vec![shell, reported, pidless, chrome]);
+        let comm_reads = std::cell::Cell::new(0);
+
+        backfill_pane_commands(
+            &mut frame,
+            &|pid| match pid {
+                100 => cmdline.map(str::to_owned),
+                400 => Some("/home/me/.cargo/bin/rimz sidebar supervise".to_owned()),
+                _ => panic!("reported and pidless panes must not be probed"),
+            },
+            &|pid| {
+                assert_eq!(pid, 100, "{name}");
+                comm_reads.set(comm_reads.get() + 1);
+                comm.map(str::to_owned)
+            },
+        );
+
+        let commands = frame
+            .pane_states()
+            .map(|pane| pane.current.command.as_deref())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            commands,
+            [expected, Some("cargo build"), None, None],
+            "{name}"
+        );
+        assert_eq!(
+            comm_reads.get(),
+            usize::from(cmdline.is_none_or(str::is_empty)),
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn pid_derived_command_admits_a_zellij_shell_in_its_birth_frame() {
+    let cwd = tempfile::tempdir().unwrap();
+    let mut shell = pane("terminal_1", None, None);
+    shell.pane_pid = Some(100);
+    let mut frame = frame(vec![shell]);
+    backfill_pane_cwds(&mut frame, &|pid| {
+        assert_eq!(pid, 100);
+        Some(cwd.path().to_path_buf())
+    });
+    assert!(live_row_ids(&frame).is_empty(), "cwd alone admits no row");
+
+    backfill_pane_commands(
+        &mut frame,
+        &|pid| {
+            assert_eq!(pid, 100);
+            Some("/usr/bin/zsh".to_owned())
+        },
+        &|_| panic!("a readable cmdline needs no comm fallback"),
+    );
+    backfill_pane_cwds(&mut frame, &|_| Some(cwd.path().to_path_buf()));
+
+    assert_eq!(live_row_ids(&frame), ["zellij:terminal_1"]);
+}
+
+#[test]
 fn backfill_pane_cwds_repairs_missing_or_empty_cwd_from_proc() {
     let dir = tempfile::tempdir().unwrap();
     let cwd = dir.path().to_path_buf();

@@ -288,6 +288,7 @@ fn repair_pane_frame(
     } else {
         super::metrics::backfill_zellij_pane_pids_from_proc(frame, session);
     }
+    backfill_pane_commands(frame, &crate::proc::cmdline, &crate::proc::comm);
     backfill_wrapper_spawn_commands(frame, &crate::proc::cmdline);
     reconcile_active_commands(
         frame,
@@ -320,6 +321,31 @@ fn repair_pane_frame(
     annotate_elevated_agents(frame, &crate::proc::elevated_in_pane_agent);
     stamp_first_seen(frame);
     hosted_carry_drops
+}
+
+/// Name a pane the mux reported with a root pid but no command from that
+/// root's command line, falling back to its base command name. A fresh Zellij
+/// shell arrives this way, and without a command it folds no row until
+/// Zellij's own command probe reports one. A root running RimZ itself stays
+/// commandless: those panes are named by their title or spawn command, and
+/// the launcher's argv is chrome.
+fn backfill_pane_commands(
+    frame: &mut PaneFrame,
+    proc_cmdline: &dyn Fn(u32) -> Option<String>,
+    proc_comm: &dyn Fn(u32) -> Option<String>,
+) {
+    for pane in frame.pane_states_mut() {
+        if pane.current.command.is_some() {
+            continue;
+        }
+        let Some(pid) = pane.current.pid else {
+            continue;
+        };
+        pane.current.command = proc_cmdline(pid)
+            .filter(|cmdline| !cmdline.is_empty())
+            .or_else(|| proc_comm(pid))
+            .filter(|command| crate::proc::program_label(command) != "rimz");
+    }
 }
 
 /// Recover a pane's spawn command from RimZ's supervised agent wrapper when the
