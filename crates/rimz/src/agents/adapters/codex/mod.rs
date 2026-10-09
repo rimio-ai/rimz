@@ -91,10 +91,10 @@ use super::{
 };
 use crate::transcript::{AskOption, AskQuestion};
 
-/// Per-hook timeout written into the Codex config (seconds). Hooks write a
-/// Waiting state and return neutral immediately, so the value is a short guard
-/// for local I/O failures rather than an answer window.
-const CODEX_HOOK_TIMEOUT_SECS: i64 = 10;
+/// Per-hook timeout written into the Codex config (seconds). Hooks append
+/// ingress and nudge the elected drainer; reply-bearing hooks wait within
+/// this budget.
+const CODEX_HOOK_TIMEOUT_SECS: i64 = 2;
 /// Codex awaits `Interrupt` inline and defaults it to one second (with a
 /// three-second ceiling), so keep Ctrl-C responsive and let an overrun fall
 /// back to the flushed rollout's `turn_aborted` record.

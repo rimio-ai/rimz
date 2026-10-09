@@ -105,7 +105,7 @@ Rejecting in the pane with typed feedback ends the same ask a different way and 
 
 Install merges into Claude's `settings.json` through the shared JSON-merge backend ([adapter.md](./adapter.md#hook-install)). The file resolves from the login env: `RIMZ_CLAUDE_SETTINGS` when set, then `settings.json` under the first entry of a comma-separated `CLAUDE_CONFIG_DIR`, then `$HOME/.claude/settings.json`. A named account's hooks therefore land in that account's home.
 
-Install writes one block per event in `CLAUDE_HOOKS`, each marked `_rimz_managed`, with a 10-second timeout. The hooks record state and return at once, so the timeout only guards against local I/O stalls. Only `PermissionRequest` carries `_rimz_sync = true`, and an existing async marker on it is a hard install error. Install also wraps both statusline commands (see [rich context](#rich-context) and [child enrichment](#child-statusline-and-cost)).
+Install writes one block per event in `CLAUDE_HOOKS`, each marked `_rimz_managed`, with a 2-second timeout. Hooks append ingress and nudge the elected drainer; reply-bearing hooks wait within that budget. Only `PermissionRequest` carries `_rimz_sync = true`, and an existing async marker on it is a hard install error. Install also wraps both statusline commands (see [rich context](#rich-context) and [child enrichment](#child-statusline-and-cost)).
 
 ## Launch
 
