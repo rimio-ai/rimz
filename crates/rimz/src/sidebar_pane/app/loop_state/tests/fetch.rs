@@ -217,6 +217,78 @@ fn pre_tab_seed_and_worker_fold_paint_resting_cards_until_correction() {
 }
 
 #[test]
+fn new_tab_shell_row_seats_selection_on_the_first_produced_fold() {
+    let own = pane("terminal_10", "tab_1", false);
+    let shell = pane("terminal_11", "tab_1", true);
+    let mut rig = Rig::with_own_pane(own.pane_id.clone());
+    enable_focus_trace(&mut rig);
+    let mut snapshot = snapshot_with_panes(&rig.ws, vec![shell.clone()]);
+    snapshot.focused_pane = Some(shell.pane_id.clone());
+    snapshot.own_view = Some(crate::store::snapshot::SidebarOwnView {
+        sibling_count: 1,
+        working_pane_ids: vec![shell.pane_id.clone()],
+        own_view_is_daemon: false,
+    });
+
+    rig.fold(snapshot, SnapshotSource::Produced);
+
+    let records = focus_records(&rig);
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0]["source"], "produced");
+    assert_eq!(records[0]["panes_produced_at_ms"], 1);
+    assert_eq!(
+        records[0]["baseline"],
+        serde_json::to_value(&shell.pane_id).unwrap()
+    );
+    assert_eq!(
+        records[0]["selected_after"],
+        serde_json::to_value(&shell.pane_id).unwrap()
+    );
+}
+
+#[test]
+fn new_shell_row_moves_past_cap_selection_without_a_rowless_fold() {
+    let mut rig = Rig::new();
+    enable_focus_trace(&mut rig);
+    let mut panes = (1..=7)
+        .map(|index| pane(&format!("terminal_{index}"), "tab_0", false))
+        .collect::<Vec<_>>();
+    let prior_focus = panes.last().unwrap().pane_id.clone();
+    let mut prior = snapshot_with_panes(&rig.ws, panes.clone());
+    prior.focused_pane = Some(prior_focus.clone());
+    rig.fold(prior, SnapshotSource::Produced);
+    assert_eq!(rig.state.ui.selected_pane, Some(prior_focus.clone()));
+
+    let shell = pane("terminal_11", "tab_1", true);
+    panes.push(shell.clone());
+    let mut snapshot = snapshot_with_panes(&rig.ws, panes);
+    snapshot.panes_produced_at_ms = Some(2);
+    snapshot.focused_pane = Some(shell.pane_id.clone());
+    rig.fold(snapshot, SnapshotSource::Produced);
+
+    let records = focus_records(&rig);
+    assert_eq!(records.len(), 2);
+    assert_eq!(records[1]["panes_produced_at_ms"], 2);
+    assert_eq!(
+        records[1]["selected_before"],
+        serde_json::to_value(&prior_focus).unwrap()
+    );
+    assert_eq!(
+        records[1]["baseline"],
+        serde_json::to_value(&shell.pane_id).unwrap()
+    );
+    assert_eq!(
+        records[1]["selected_after"],
+        serde_json::to_value(&shell.pane_id).unwrap()
+    );
+    assert!(
+        records
+            .iter()
+            .all(|record| record.get("selected_after").is_some())
+    );
+}
+
+#[test]
 fn fused_focus_trace_names_the_event_applied_at_the_paint_decision() {
     let mut rig = Rig::new();
     enable_focus_trace(&mut rig);
