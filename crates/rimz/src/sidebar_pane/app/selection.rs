@@ -624,7 +624,10 @@ fn clamp_selection_in(ui: &mut UiState, roster: &VisibleRoster<'_>) {
 ///    the value captured at browse start; a genuine baseline change ends it.
 /// 3. **Follow the baseline** — the steady state.
 /// 4. **Reanchor.** State whose pane left the room is dropped, and
-///    `anchor_selection` re-derives `selected_index` by identity.
+///    `anchor_selection` re-derives `selected_index` by identity. A frameless
+///    fold (`panes_produced_at_ms == None`) holds the selection, browse pick,
+///    and baseline by pane identity; only the index is withheld until a frame
+///    returns.
 /// 5. **Dashboard hold-last.** A selection-derived provider kind with a
 ///    dashboard panel advances the remembered dashboard default; non-agent
 ///    rows hold it.
@@ -672,19 +675,20 @@ fn reconcile_browse_and_selection(ui: &mut UiState, snapshot: &SidebarSnapshot) 
         ui.selected_pane = Some(pane);
     }
 
-    let baseline = VisibleRoster::baseline(snapshot);
-    if let Some(pane) = ui.baseline_pane.clone()
-        && baseline.ordinal_of_pane(&pane).is_none()
-    {
-        ui.baseline_pane = None;
+    if let Some(roster) = framed_selection_roster(ui, snapshot) {
+        let baseline = VisibleRoster::baseline(snapshot);
+        if let Some(pane) = ui.baseline_pane.clone()
+            && baseline.ordinal_of_pane(&pane).is_none()
+        {
+            ui.baseline_pane = None;
+        }
+        if let Some(browse) = &ui.browse
+            && roster.ordinal_of_pane(&browse.pane).is_none()
+        {
+            ui.browse = None;
+        }
+        anchor_selection_in(ui, &roster);
     }
-    let roster = ui.visible_roster(snapshot);
-    if let Some(browse) = &ui.browse
-        && roster.ordinal_of_pane(&browse.pane).is_none()
-    {
-        ui.browse = None;
-    }
-    anchor_selection_in(ui, &roster);
 
     if let Some(manual) = &ui.manual_scroll
         && ui.selected_pane != manual.selection_at_start
@@ -712,10 +716,23 @@ fn reconcile_dashboard(ui: &mut UiState, snapshot: &SidebarSnapshot) {
 /// Re-derive `selected_index` from the identity-keyed `selected_pane`. When the
 /// selected pane has left the room — or the make-up filter hides its row — drop
 /// the dangling identity and index; the held baseline or the next
-/// pick re-seats it.
+/// pick re-seats it. Without a frame, hold the pane identity and withhold only
+/// the index.
 pub(super) fn anchor_selection(ui: &mut UiState, snapshot: &SidebarSnapshot) {
-    let roster = ui.visible_roster(snapshot);
-    anchor_selection_in(ui, &roster);
+    if let Some(roster) = framed_selection_roster(ui, snapshot) {
+        anchor_selection_in(ui, &roster);
+    }
+}
+
+fn framed_selection_roster<'a>(
+    ui: &mut UiState,
+    snapshot: &'a SidebarSnapshot,
+) -> Option<VisibleRoster<'a>> {
+    if snapshot.panes_produced_at_ms.is_none() {
+        ui.selected_index = None;
+        return None;
+    }
+    Some(ui.visible_roster(snapshot))
 }
 
 fn anchor_selection_in(ui: &mut UiState, roster: &VisibleRoster<'_>) {

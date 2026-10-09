@@ -620,6 +620,52 @@ fn input_browse_arms_order_hold_before_next_fold() {
 }
 
 #[test]
+fn browse_survives_a_frameless_escape_hatch_with_a_live_order_hold() {
+    let mut rig = Rig::new();
+    let framed = agent_snapshot(&rig.ws);
+    let selected = framed.worktree_groups[0].rows[0]
+        .pane
+        .as_ref()
+        .unwrap()
+        .pane_id
+        .clone();
+    rig.fold(framed.clone(), SnapshotSource::Produced);
+    rig.input(KeyAction::Down);
+    let browse = rig.state.ui.browse.clone();
+    assert!(browse.is_some());
+    assert!(rig.state.ui.order_hold.is_some());
+    assert_eq!(rig.state.ui.selected_pane, Some(selected.clone()));
+
+    let mut frameless = framed.clone();
+    frameless.panes_produced_at_ms = None;
+    frameless.worktree_groups.clear();
+    rig.fold(frameless.clone(), SnapshotSource::Published);
+    assert_eq!(rig.state.gate.reject_streak, 1);
+    assert_eq!(rig.state.current.panes_produced_at_ms, Some(1));
+    assert_eq!(rig.state.ui.selected_pane, Some(selected.clone()));
+    assert_eq!(rig.state.ui.browse, browse);
+
+    let now_ms = jiff::Timestamp::now().as_millisecond();
+    rig.state.gate.rejecting_since =
+        Some(jiff::Timestamp::from_millisecond(now_ms - 1_000).unwrap());
+    rig.fold(frameless, SnapshotSource::Published);
+
+    assert_eq!(rig.state.gate.reject_streak, 0);
+    assert_eq!(rig.state.current.panes_produced_at_ms, None);
+    assert!(rig.state.current.worktree_groups.is_empty());
+    assert!(rig.state.ui.order_hold.is_some());
+    assert_eq!(rig.state.ui.selected_pane, Some(selected.clone()));
+    assert_eq!(rig.state.ui.browse, browse);
+    assert_eq!(rig.state.ui.selected_index, None);
+
+    rig.fold(framed, SnapshotSource::Produced);
+
+    assert_eq!(rig.state.ui.selected_pane, Some(selected));
+    assert_eq!(rig.state.ui.browse, browse);
+    assert_eq!(rig.state.ui.selected_index, Some(0));
+}
+
+#[test]
 fn answering_focused_agent_holds_the_pre_answer_order() {
     let mut rig = Rig::new();
     let mut before = agent_snapshot(&rig.ws);

@@ -129,6 +129,110 @@ fn selection_reanchors_to_its_pane_after_a_reorder() {
     );
     assert_eq!(ui.selected_pane, Some(active));
 }
+
+#[test]
+fn frameless_fold_holds_browse_until_its_pane_returns() {
+    let ws = workspace();
+    let selected = PaneId::from_parts(MuxName::Zellij, "terminal_2");
+    let framed = snapshot_with_panes(
+        &ws,
+        vec![
+            pane("terminal_1", "tab_0", false),
+            pane("terminal_2", "tab_0", false),
+        ],
+    );
+    let mut frameless = framed.clone();
+    frameless.panes_produced_at_ms = None;
+    frameless.worktree_groups.clear();
+    let pick = browse(&selected, None);
+    let manual = ManualScroll {
+        selection_at_start: Some(selected.clone()),
+    };
+    let mut ui = UiState {
+        selected_index: Some(1),
+        selected_pane: Some(selected.clone()),
+        browse: Some(pick.clone()),
+        manual_scroll: Some(manual.clone()),
+        ..Default::default()
+    };
+
+    reconcile_selection(&mut ui, &frameless, None);
+
+    assert_eq!(ui.browse, Some(pick.clone()));
+    assert_eq!(ui.selected_pane, Some(selected.clone()));
+    assert_eq!(ui.selected_index, None);
+    assert_eq!(ui.baseline_pane, None);
+    assert_eq!(ui.manual_scroll, Some(manual));
+
+    reconcile_selection(&mut ui, &framed, None);
+
+    assert_eq!(ui.browse, Some(pick));
+    assert_eq!(ui.selected_pane, Some(selected));
+    assert_eq!(ui.selected_index, Some(1));
+}
+
+#[test]
+fn frameless_fold_holds_baseline_until_its_pane_returns() {
+    let ws = workspace();
+    let selected = PaneId::from_parts(MuxName::Zellij, "terminal_2");
+    let framed = snapshot_with_panes(
+        &ws,
+        vec![
+            pane("terminal_1", "tab_0", false),
+            pane("terminal_2", "tab_0", false),
+        ],
+    );
+    let mut frameless = framed.clone();
+    frameless.panes_produced_at_ms = None;
+    frameless.worktree_groups.clear();
+    let mut ui = UiState {
+        selected_index: Some(1),
+        selected_pane: Some(selected.clone()),
+        baseline_pane: Some(selected.clone()),
+        ..Default::default()
+    };
+
+    reconcile_selection(&mut ui, &frameless, None);
+
+    assert_eq!(ui.baseline_pane, Some(selected.clone()));
+    assert_eq!(ui.selected_pane, Some(selected.clone()));
+    assert_eq!(ui.selected_index, None);
+
+    reconcile_selection(&mut ui, &framed, None);
+
+    assert_eq!(ui.baseline_pane, Some(selected.clone()));
+    assert_eq!(ui.selected_pane, Some(selected));
+    assert_eq!(ui.selected_index, Some(1));
+}
+
+#[test]
+fn frameless_anchor_withholds_index_without_dropping_the_pane() {
+    let ws = workspace();
+    let selected = PaneId::from_parts(MuxName::Zellij, "terminal_2");
+    let mut ui = UiState {
+        selected_index: Some(1),
+        selected_pane: Some(selected.clone()),
+        ..Default::default()
+    };
+
+    anchor_selection(&mut ui, &snapshot(&ws));
+
+    assert_eq!(ui.selected_pane, Some(selected.clone()));
+    assert_eq!(ui.selected_index, None);
+
+    let framed = snapshot_with_panes(
+        &ws,
+        vec![
+            pane("terminal_2", "tab_0", false),
+            pane("terminal_1", "tab_0", false),
+        ],
+    );
+    anchor_selection(&mut ui, &framed);
+
+    assert_eq!(ui.selected_pane, Some(selected));
+    assert_eq!(ui.selected_index, Some(0));
+}
+
 #[test]
 fn selection_drops_when_its_pane_leaves_the_room() {
     // The baseline's pane is gone from the snapshot: drop the dangling
@@ -145,7 +249,8 @@ fn selection_drops_when_its_pane_leaves_the_room() {
     let mut ui = UiState {
         selected_index: Some(1),
         selected_pane: Some(gone.clone()),
-        baseline_pane: Some(gone),
+        baseline_pane: Some(gone.clone()),
+        browse: Some(browse(&gone, Some(&gone))),
         ..Default::default()
     };
 
@@ -154,4 +259,5 @@ fn selection_drops_when_its_pane_leaves_the_room() {
     assert_eq!(ui.selected_pane, None, "dangling identity dropped");
     assert_eq!(ui.baseline_pane, None, "absent baseline cleared");
     assert_eq!(ui.selected_index, None, "dangling ordinal dropped");
+    assert_eq!(ui.browse, None, "absent browse pick cleared");
 }
