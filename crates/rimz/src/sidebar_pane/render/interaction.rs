@@ -9,6 +9,7 @@ use crate::sidebar_pane::view::BodyFilter;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(in crate::sidebar_pane) enum HitTarget {
     Row(usize),
+    SubAgentPane(crate::ids::PaneId),
     ProviderTab(crate::ids::LoginKey),
     BodyFilter(BodyFilter),
     ToggleGroup(String),
@@ -188,7 +189,8 @@ fn target_precedence(target: &HitTarget) -> u8 {
         HitTarget::ProviderTab(_) => 0,
         HitTarget::BodyFilter(_) => 1,
         HitTarget::UnreadBanner => 2,
-        HitTarget::ToggleGroup(_)
+        HitTarget::SubAgentPane(_)
+        | HitTarget::ToggleGroup(_)
         | HitTarget::ToggleDelegation { .. }
         | HitTarget::ToggleDelegationHistory(_) => 3,
         HitTarget::Row(_) => 4,
@@ -309,6 +311,22 @@ impl RenderedBlock {
 mod tests {
     use super::*;
     use crate::agents::AgentStatus;
+
+    #[test]
+    fn child_pane_target_outranks_its_card_row() {
+        let child = crate::ids::PaneId::from_parts(crate::MuxName::Zellij, "terminal_child");
+        let interactions = FrameInteractions::from_parts(
+            vec![Some(0)],
+            vec![
+                HitRegion::whole_line(0, HitTarget::Row(0)),
+                HitRegion::whole_line(0, HitTarget::SubAgentPane(child.clone())),
+            ],
+        );
+        assert_eq!(
+            interactions.target_at(53, 0),
+            Some(HitTarget::SubAgentPane(child))
+        );
+    }
 
     #[test]
     fn target_precedence_is_explicit_before_row_fallback() {

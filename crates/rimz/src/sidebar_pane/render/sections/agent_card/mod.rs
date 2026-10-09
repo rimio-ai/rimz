@@ -212,11 +212,12 @@ pub(super) fn row_lines(
                     );
                     let mut shown = bands.live;
                     shown.extend(bands.recent);
-                    inner.extend(
-                        sub_agent_entry_lines(ctx, &agent.sub_agents, &shown)
-                            .into_iter()
-                            .map(CardLine::from),
-                    );
+                    inner.extend(sub_agent_entry_lines(
+                        ctx,
+                        &agent.sub_agents,
+                        &shown,
+                        selected,
+                    ));
                     inner.extend(
                         waits::wait_entry_lines(
                             ctx,
@@ -233,11 +234,12 @@ pub(super) fn row_lines(
                     // only cost a second click, so older rows show directly.
                     let show_older = expanded.history || shown.is_empty();
                     if show_older {
-                        inner.extend(
-                            sub_agent_entry_lines(ctx, &agent.sub_agents, &bands.older)
-                                .into_iter()
-                                .map(CardLine::from),
-                        );
+                        inner.extend(sub_agent_entry_lines(
+                            ctx,
+                            &agent.sub_agents,
+                            &bands.older,
+                            selected,
+                        ));
                     }
                     // The header counts lifetime children, so the rows plus the
                     // tail add up to it; reaped children count here but have no
@@ -343,7 +345,8 @@ fn sub_agent_entry_lines(
     ctx: &RowCtx<'_>,
     grid: &[SidebarSubAgent],
     rows: &[&SidebarSubAgent],
-) -> Vec<Line<'static>> {
+    selected: bool,
+) -> Vec<CardLine> {
     let theme = ctx.theme;
     let animation_phase = ctx.animation_phase;
     let mut lines = Vec::new();
@@ -367,6 +370,11 @@ fn sub_agent_entry_lines(
         .max()
         .unwrap_or(0);
     for sub in rows {
+        let focused = selected
+            && sub
+                .pane
+                .as_ref()
+                .is_some_and(|pane| ctx.focused_pane == Some(pane));
         // The leading cell is the agent-row vocabulary verbatim: a running
         // child thinks (reasoning) or fills (acting) in the live clay, a
         // finished one holds its static `✓`/`!` verdict — one head grammar
@@ -384,7 +392,7 @@ fn sub_agent_entry_lines(
             .or(sub.task.as_deref().filter(|task| *task != sub.name));
         // The clock rides line 2; a metadata-free landed child has no line 2,
         // so it pins its frozen runtime ahead of its cost instead.
-        let detail_line = sub_agent_metadata_line(ctx, sub, token_col, model_col);
+        let detail_line = sub_agent_metadata_line(ctx, sub, token_col, model_col, focused);
         let mut right = Vec::new();
         if detail_line.is_none() && sub_agent_finished(sub) {
             right.extend(sub_agent_clock(ctx, sub));
@@ -398,10 +406,12 @@ fn sub_agent_entry_lines(
                 theme.money_style(Modifier::empty()),
             ));
         }
+        let mut entry_lines = Vec::new();
         push_entry(
             ctx,
-            &mut lines,
+            &mut entry_lines,
             Entry {
+                focused,
                 lead,
                 kind: sub.name.clone(),
                 headline: sub
@@ -414,8 +424,26 @@ fn sub_agent_entry_lines(
                 detail: detail_line,
             },
         );
+        lines.extend(entry_lines.into_iter().map(|line| CardLine {
+            line,
+            target: sub.pane.clone().map(HitTarget::SubAgentPane),
+        }));
     }
     lines
+}
+
+fn entry_indent(theme: &Theme, focused: bool) -> Vec<Span<'static>> {
+    if !focused {
+        return vec![Span::raw("    ")];
+    }
+    vec![
+        Span::raw("  "),
+        Span::styled(
+            theme.glyph(GlyphRole::ChromeSpineCardLeft).to_owned(),
+            theme.selection(),
+        ),
+        Span::raw(" "),
+    ]
 }
 
 fn sub_agent_tokens(sub: &SidebarSubAgent) -> Option<u64> {
@@ -434,6 +462,7 @@ fn sub_agent_metadata_line(
     sub: &SidebarSubAgent,
     token_col: usize,
     model_col: usize,
+    focused: bool,
 ) -> Option<Line<'static>> {
     let theme = ctx.theme;
     let tokens = sub_agent_tokens(sub);
@@ -444,7 +473,8 @@ fn sub_agent_metadata_line(
     if tokens.is_none() && model.is_none() && effort.is_none() && (finished || clock.is_none()) {
         return None;
     }
-    let mut left = vec![Span::raw("      ")];
+    let mut left = entry_indent(theme, focused);
+    left.push(Span::raw("  "));
     let mut prev_rendered = append_sub_agent_tokens(ctx, &mut left, sub, token_col);
     append_sub_agent_model(
         theme,

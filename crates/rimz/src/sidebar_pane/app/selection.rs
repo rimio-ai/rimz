@@ -401,6 +401,7 @@ pub(super) fn handle_mouse_click(
             .visible_roster(snapshot)
             .pane_at_ordinal(index)
             .map_or_else(InputOutcome::default, InputOutcome::focus),
+        Some(HitTarget::SubAgentPane(pane)) => InputOutcome::focus(pane),
         Some(HitTarget::Hyperlink(_)) => InputOutcome::default(),
         None => InputOutcome::default(),
     }

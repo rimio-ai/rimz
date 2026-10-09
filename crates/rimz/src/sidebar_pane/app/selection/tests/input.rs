@@ -124,6 +124,74 @@ fn delegation_snapshot() -> SidebarSnapshot {
     snapshot
 }
 
+#[test]
+fn both_child_entry_lines_focus_the_child_without_moving_selection() {
+    let mut snapshot = delegation_snapshot();
+    let child = PaneId::from_parts(crate::MuxName::Zellij, "terminal_child");
+    let now = snapshot.now;
+    let card = snapshot.worktree_groups[0].rows[0].as_agent_mut().unwrap();
+    card.sub_agents[0].pane = Some(child.clone());
+    card.sub_agents[0].model = Some("Haiku".to_owned());
+    card.sub_agents[1].provider_native = true;
+    card.sub_agents[1].last_activity = now;
+    let parent = pane_of(&snapshot, 0);
+    let other = pane_of(&snapshot, 1);
+    let row_id = snapshot.worktree_groups[0].rows[0].id.clone();
+    let mut ui = UiState {
+        selected_pane: Some(other.clone()),
+        selected_index: Some(1),
+        delegation_overrides: std::collections::BTreeMap::from([(row_id, true)]),
+        ..Default::default()
+    };
+    let theme = ui.theme(&snapshot.theme);
+    let composed = render::compose_lines(&snapshot, None, &ui, theme.as_ref(), 54, 64);
+    let first = composed
+        .lines
+        .iter()
+        .position(|line| line.to_string().contains("live-child"))
+        .unwrap();
+    assert!(composed.lines[first + 1].to_string().contains("Haiku"));
+    let native = composed
+        .lines
+        .iter()
+        .position(|line| line.to_string().contains("old-child"))
+        .unwrap();
+    ui.interactions = composed.interactions;
+    for line in [first, first + 1] {
+        for column in [0, 53] {
+            assert_eq!(
+                handle_mouse_click(column, line as u16, &mut ui, &snapshot),
+                InputOutcome::focus(child.clone())
+            );
+            assert_eq!(ui.selected_pane, Some(other.clone()));
+            assert_eq!(ui.selected_index, Some(1));
+        }
+    }
+    assert_eq!(
+        handle_mouse_click(10, native as u16, &mut ui, &snapshot),
+        InputOutcome::focus(parent.clone())
+    );
+    let card = snapshot.worktree_groups[0].rows[0].as_agent_mut().unwrap();
+    card.sub_agents[0].pane = None;
+    card.sub_agents[0].status = crate::agents::AgentStatus::Success;
+    let composed = render::compose_lines(&snapshot, None, &ui, theme.as_ref(), 54, 64);
+    let closed = composed
+        .lines
+        .iter()
+        .position(|line| line.to_string().contains("live-child"))
+        .unwrap();
+    assert!(composed.lines[closed + 1].to_string().contains("Haiku"));
+    ui.interactions = composed.interactions;
+    for line in [closed, closed + 1] {
+        assert_eq!(
+            handle_mouse_click(10, line as u16, &mut ui, &snapshot),
+            InputOutcome::focus(parent.clone())
+        );
+        assert_eq!(ui.selected_pane, Some(other.clone()));
+        assert_eq!(ui.selected_index, Some(1));
+    }
+}
+
 fn pane_of(snapshot: &SidebarSnapshot, row: usize) -> PaneId {
     snapshot.worktree_groups[0].rows[row]
         .pane

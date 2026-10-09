@@ -20,6 +20,7 @@ use ratatui::style::{Color, Modifier};
 use ratatui::text::{Line, Span};
 
 use crate::config::{CardDensityMode, ContextMeterConfig, GlyphRole};
+use crate::ids::PaneId;
 use crate::sidebar_pane::view::{VisibleGroup, VisibleRoster};
 use crate::store::snapshot::{SidebarRow, SidebarWorktreeKind};
 
@@ -146,6 +147,7 @@ pub(in crate::sidebar_pane::render) struct RowCtx<'a> {
     pub(in crate::sidebar_pane::render) stalled_after_secs: u32,
     pub(in crate::sidebar_pane::render) card_density: CardDensityMode,
     pub(in crate::sidebar_pane::render) selected_index: Option<usize>,
+    pub(in crate::sidebar_pane::render) focused_pane: Option<&'a PaneId>,
     pub(in crate::sidebar_pane::render) animation_phase: u64,
     pub(in crate::sidebar_pane::render) cost_rolls: &'a CostRolls,
     pub(in crate::sidebar_pane::render) lead_unread: Option<&'a str>,
