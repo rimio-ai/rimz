@@ -254,8 +254,8 @@ pub(super) fn handle_key(
             // follows once the derived baseline catches up, identical to a
             // click.
             match ui.selected_pane.clone() {
-                Some(pane) => InputOutcome::focus(pane),
-                None => InputOutcome::default(),
+                Some(pane) if ui.selected_index.is_some() => InputOutcome::focus(pane),
+                _ => InputOutcome::default(),
             }
         }
         KeyAction::InboxNext => inbox_jump(ui, snapshot, true),
