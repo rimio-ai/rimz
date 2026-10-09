@@ -101,7 +101,7 @@ An adapter therefore reads top to bottom as a list of `impl` blocks. Grok is a c
 
 ## The hook path
 
-Hooks are how an agent reports itself. An installed hook runs one command, `rimz hooks feed --source <agent>`, and that process is the whole ingestion path ([`run_feed`](../../../crates/rimz/src/cli/hooks.rs)).
+Hooks are how an agent reports itself. An installed hook runs `rimz hooks feed --source <agent>`; its frontend queues the native payload for the elected workspace drainer ([`run_feed`](../../../crates/rimz/src/cli/hooks.rs), [runtime shape](../../../ARCHITECTURE.md#runtime-shape)).
 
 ```text
 agent fires a hook
@@ -109,11 +109,13 @@ agent fires a hook
   ▼
 hook_ingress(pid)          adapter: is this emitter mine, and is it the agent or its daemon?
   ▼
+resolve the workspace      verified pins or participant resolution (below)
+  ▼
 read stdin as JSON         the native payload
   ▼
-resolve the workspace      participant resolution (below)
+append ingress and nudge   Cursor replies here; Antigravity and prompt context wait for apply
   ▼
-decode_hook(event, json)   adapter: native payload → HookOutput
+rimz hooks apply child     decode_hook(event, json) with the captured emitter environment
   ▼
    ├── lifecycle channel ──► bind identity, record agent.lifecycle, run enrichment
    └── awaiting-user channel ► record the ask when the agent has its own UI
@@ -122,6 +124,8 @@ emit HookReply on stdout   the agent-native neutral reply, and nothing else
 ```
 
 An ingress decision of `Ignore` ends the process before stdin is read. The event name comes from `--event` when the installed command passes one, and otherwise from the payload's `hook_event_name` (or `hookEventName`).
+
+The drainer applies frames serially. Each apply child has a 30-second deadline; `crates/rimz/src/harness/hook_drain.rs::wait_for_apply` uses the bounded subprocess pump to kill and reap that PID on timeout. The drainer logs the apply failure and advances the cursor without retrying the frame, so a hung child cannot stall every later hook in the room. An inline drain's caller deadline only prevents starting the next frame: a started apply keeps its own timeout and completes its cursor write even after the caller deadline.
 
 `decode_hook` returns a [`HookOutput`](../../../crates/rimz/src/agents/hook_types.rs): one canonical event carrying a meaning (lifecycle, an ask of some `AskKind`, or unknown), a list of typed facts, routing, and an explicit `HookReply`. The facts are what the generic path consumes:
 
@@ -148,7 +152,7 @@ Adapters with a hook catalog decode through [`decode_catalog_hook`](../../../cra
 
 Lifecycle hooks are fast and non-blocking. They drive status, turn phase, task, and enrichment, and they return the neutral reply.
 
-Awaiting-user hooks record the waiting state and return neutral. When the agent's spec declares `native_ask_ui`, a permission request, plan approval, or user question becomes an `awaiting_input` signal: the row goes `waiting`, the question text lands as a transcript `Ask` entry, the neutral reply returns at once, and the prompt stays visible in the agent's pane. Without `native_ask_ui` the hook records nothing and returns the same neutral reply, because there is no native prompt a waiting row could route you to. Every built-in declares the flag; a process plugin can declare it off.
+Awaiting-user hooks queue their payload and return neutral before the deferred state write. When the agent's spec declares `native_ask_ui`, the drainer turns a permission request, plan approval, or user question into an `awaiting_input` signal: the row goes `waiting` and the question text lands as a transcript `Ask` entry. The prompt stays visible in the agent's pane throughout. Without `native_ask_ui` the drainer records no ask, because there is no native prompt a waiting row could route you to. Every built-in declares the flag; a process plugin can declare it off.
 
 Blocking decision hooks install synchronous. An async one would ignore the reply printed on stdout, so the installer rejects it as a hard error, reading the adapter's own hook catalog rather than the on-disk config.
 
@@ -166,7 +170,9 @@ What neutral looks like depends on the agent, so verify it for each one. `HookRe
 
 ### Hooks resolve the room they live in
 
-A hook outside a recorded room creates nothing. `rimz hooks feed` still decodes the event and emits the adapter's neutral reply, warns once on stderr with the resolved root and `rimz start` as the fix, and exits 0. Missing RimZ state must not break the agent's turn or put diagnostics on its decision channel.
+A hook outside a recorded room creates nothing. `rimz hooks feed` emits the adapter's payload-only neutral reply without lifecycle decode, warns once on stderr with the resolved root and `rimz start` as the fix, and exits 0. Missing RimZ state must not break the agent's turn or put diagnostics on its decision channel.
+
+After ingress is appended, a failed spawn-fallback drain is also a stderr warning, not a failed hook. `crates/rimz/src/cli/hooks.rs::run_feed` still emits its existing native reply and exits 0.
 
 A hook fires deep inside an agent's process tree, and it has to find the room that agent's pane belongs to. It resolves as a participant ([`WorkspaceResolver`](../../../crates/rimz/src/workspace.rs)): the session's identity pin (`RIMZ_WORKSPACE_ID` and `RIMZ_PROJECT_ROOT`, stamped into the multiplexer environment at room birth) wins over re-deriving identity from the current directory, so an agent working inside a nested repo still writes to the room its pane lives in. The pin is hash-verified. A mismatch falls through to the static ladder (git root, marker file, directory), because a hook on the agent's critical path degrades on identity rather than failing. The `ensure_participant_identity` invariant keeps the create-mode resolver out of participant surfaces; room-choosing commands resolve statically, so a deliberate per-repo room can still be created from inside a parent room.
 
