@@ -178,6 +178,8 @@ On the team's tab, run the sidebar's Look and take a fresh Capture. Count rows f
 
 The recorded row was `row0=8` on both backends. tmux focus moved from `%3` to `%8`, matching `Role: @reviewer#probe  tmux:%8`. On Zellij, `8=forge.reviewer@#probe` joined the focused set, matching `Role: @reviewer#probe  zellij:terminal_8`.
 
+On Zellij the held room's attached client follows no focus sent from outside a pane, so `list-clients` and the active tab stay where they were after any click, a card click included. Prove a pane jump there from the target tab's focused set before and after the click (the sidebar pane leaves it and the target stays) and from the fused `focused_pane` in the renderer's fold trace. The client's tab switch itself needs a real attached session; tmux shows it through `list-clients`.
+
 ## Room host
 
 A room with a terminal on its sidebar panes runs one `rimz sidebar host` for the session and one `rimz sidebar serve` supervisor per tab, with no worker beside them ([state.md](../internals/sidebar/state.md#the-room-host-and-its-attachments)). Take the process shape from inside the room, where the session name is on your card:
