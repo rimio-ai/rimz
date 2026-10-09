@@ -317,6 +317,51 @@ fn published_seed_commits_before_delivery_and_keeps_the_final_correction() {
 }
 
 #[test]
+fn published_seed_listing_the_own_pane_seats_its_focus_at_once() {
+    let own = pane("terminal_10", "tab_0", false);
+    let mut rig = Rig::with_own_pane(own.pane_id.clone());
+    rig.runtime.ensure_dirs().unwrap();
+
+    let mut seed = agent_snapshot(&rig.ws);
+    seed.now = Timestamp::now();
+    seed.pane_session_name = Some("rimz-test".into());
+    let agent = seed.worktree_groups[0].rows[0].pane.clone().unwrap();
+    seed.focused_pane = Some(agent.pane_id.clone());
+    seed.viewed_panes = vec![agent.pane_id.clone()];
+    seed.reflects_log = Some(crate::store::event_log::LogExtent {
+        generation: 0,
+        offset: 0,
+    });
+    let mut frame = crate::sidebar::frame::assemble_frame(
+        vec![own, agent.clone()],
+        seed.now.as_millisecond() as u64,
+        "rimz-test",
+    );
+    frame.topology_stamp_ms = Some(crate::utils::time::unix_now_ms());
+    frame.metrics_stamp_ms = frame.topology_stamp_ms;
+    std::fs::write(
+        rig.runtime.pane_frame_path(),
+        serde_json::to_vec(&frame).unwrap(),
+    )
+    .unwrap();
+    crate::sidebar::workspace_projection::WorkspaceProjectionPublisher::default()
+        .publish(
+            &rig.runtime,
+            "rimz-test",
+            &crate::sidebar::enrich::WorkspaceSnapshot(seed),
+            &frame,
+        )
+        .unwrap();
+
+    rig.state.seed_published(FetchRole::Consumer);
+
+    assert!(rig.state.current.own_view.is_some());
+    assert_eq!(rig.state.ui.selected_pane, Some(agent.pane_id));
+    assert_eq!(rig.state.ui.selected_index, Some(0));
+    assert!(rig.state.self_close.seen_sibling);
+}
+
+#[test]
 fn published_seed_age_outlasts_the_frame_reuse_window_by_three_ticks() {
     for (tick_seconds, age_ms, seeds) in [
         (1, 12_000, true),
