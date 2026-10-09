@@ -25,20 +25,17 @@ fn tab_status_and_rest_only_rename_the_window() {
 
     server
         .backend
-        // The command-builder unit test covers Unicode preservation. Keep the
-        // live seam assertion locale-neutral: tmux replaces non-ASCII with `_`
-        // when the server starts under CI's `LC_ALL=C`.
         .rename_tab(
             session,
             &anchor,
-            "work ?",
+            "work ⢿",
             TabNameIntent::Status {
                 observed: server.display(session, "#{window_name}"),
             },
         )
         .expect("rename pane's window");
 
-    assert_eq!(server.display(session, "#{window_name}"), "work ?");
+    assert_eq!(server.display(session, "#{window_name}"), "work ⢿");
     assert_eq!(server.display(session, "#{automatic-rename}"), "0");
 
     server
@@ -48,7 +45,7 @@ fn tab_status_and_rest_only_rename_the_window() {
             &anchor,
             "work",
             TabNameIntent::Rest {
-                observed: "work ?".to_owned(),
+                observed: "work ⢿".to_owned(),
             },
         )
         .expect("clear pane's window status");

@@ -127,8 +127,6 @@ impl TmuxBackend {
         anchor: &PaneId,
     ) -> Result<Option<(Vec<GridPane>, Vec<GridPane>)>> {
         ensure_pane_backend(anchor, MuxName::Tmux)?;
-        // Non-UTF-8 tmux clients replace tabs with underscores in stdout.
-        // Printable separators keep geometry readable under CI's C locale too.
         let output = self.cmd().args([
             "list-panes", "-t", anchor.raw(), "-F",
             "#{pane_id} #{pane_left} #{pane_width} #{pane_top} #{pane_height}|#{window_zoomed_flag}|#{pane_floating_flag}|#{==:#{pane_title},rimz-sidebar}|#{pane_current_command}|#{pane_start_command}",

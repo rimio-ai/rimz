@@ -957,7 +957,7 @@ mod runs {
             let tmux = bin.path().join("tmux");
             std::fs::write(
                 &tmux,
-                "#!/bin/sh\n[ \"$1\" = '-S' ] || exit 1\nshift 2\n[ \"$*\" = 'capture-pane -p -t %7' ] || exit 1\nprintf 'capture\\n' >> \"$RIMZ_TEST_EXIT_CAPTURE_LOG\"\nprintf 'provider failure evidence\\n'\n",
+                "#!/bin/sh\n[ \"$1\" = '-S' ] || exit 1\nshift 3\n[ \"$*\" = 'capture-pane -p -t %7' ] || exit 1\nprintf 'capture\\n' >> \"$RIMZ_TEST_EXIT_CAPTURE_LOG\"\nprintf 'provider failure evidence\\n'\n",
             )
             .expect("fake tmux");
             std::fs::set_permissions(&tmux, std::fs::Permissions::from_mode(0o755))

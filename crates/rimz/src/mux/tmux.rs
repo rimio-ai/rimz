@@ -140,12 +140,13 @@ pub fn legacy_session_conflict(session: &str) -> Option<LegacySessionConflict> {
     })
 }
 
-/// `tmux -S <socket>` run from a cwd that cannot vanish, with any inherited
+/// `tmux -S <socket> -u` run from a cwd that cannot vanish, with any inherited
 /// `$TMUX` cleared and the user's `TMPDIR` restored. The one place a managed
 /// tmux argv is built.
 pub(crate) fn tmux_cmd(socket: &Path) -> CommandSpec {
     CommandSpec::new("tmux")
         .args(["-S".to_owned(), socket.to_string_lossy().into_owned()])
+        .args(["-u"])
         .redact_arg_in_errors(1, "server")
         .cwd(MANAGED_SERVER_CWD)
         .env_remove("TMUX")
@@ -251,7 +252,7 @@ impl TmuxBackend {
         }
     }
 
-    /// Base `CommandSpec`: `tmux -S <socket>`, run from a cwd that cannot
+    /// Base `CommandSpec`: `tmux -S <socket> -u`, run from a cwd that cannot
     /// vanish and without an inherited `$TMUX`.
     ///
     /// Clearing `$TMUX` keeps an ambient session from capturing a managed

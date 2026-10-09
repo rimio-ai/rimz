@@ -453,7 +453,7 @@ exit 0
 fn fake_tmux_script() -> &'static str {
     r#"#!/bin/sh
 if [ "$1" = "-S" ]; then
-  shift 2
+  shift 3
 fi
 if [ -n "$RIMZ_TEST_TMUX_LOG" ]; then
   printf '%s\n' "$*" >> "$RIMZ_TEST_TMUX_LOG"
