@@ -3082,9 +3082,17 @@ fn verify_reprompt_closed_gate_records_retryable_miss() {
     assert!(message.text.contains("Verification failed"));
     assert_eq!(message.status, rimz::store::message::MessageStatus::Queued);
     assert_eq!(message.pane_id, None);
+    let wake = std::fs::read(env.runtime_paths().lane_path("message-wake.json"))
+        .ok()
+        .and_then(|bytes| {
+            serde_json::from_slice::<Option<Timestamp>>(&bytes).expect("wake stamp json")
+        });
     assert_eq!(
-        message.last_error.as_deref(),
-        Some("verify re-prompt delivery gate closed"),
+        (
+            message.last_error.as_deref(),
+            wake.is_some_and(|wake| wake <= Timestamp::now()),
+        ),
+        (Some("compacting"), true),
     );
 }
 

@@ -191,7 +191,7 @@ impl DeliveryVerdict {
         }
     }
 
-    fn stall_cause(&self) -> String {
+    pub(super) fn reason(&self) -> String {
         match self {
             Self::NoPane { pinned_pane_id } => no_pane_blocker(pinned_pane_id.as_ref()),
             Self::ProviderStarting => "provider is starting".to_owned(),
@@ -211,12 +211,30 @@ impl DeliveryVerdict {
             Self::GateClosed { status: None, .. } => {
                 "gate closed while status is unknown".to_owned()
             }
-            Self::Scheduled { .. }
-            | Self::WaitingOnAfter { .. }
-            | Self::WaitingOnWhen { .. }
-            | Self::BehindFifo { .. }
-            | Self::Expired { .. }
-            | Self::Ready => String::new(),
+            Self::Scheduled {
+                not_before: Some(not_before),
+            } => format!("scheduled for {not_before}"),
+            Self::Scheduled { not_before: None } => "scheduled delivery is not due".to_owned(),
+            Self::WaitingOnAfter { address, .. } => format!("waiting for {address} to finish"),
+            Self::WaitingOnWhen {
+                address,
+                expected,
+                dwell_secs,
+                ..
+            } => format!(
+                "waiting for {address} to be {} for {}",
+                expected.as_str(),
+                crate::store::message::format_dwell(*dwell_secs),
+            ),
+            Self::BehindFifo { blocker } => blocker
+                .as_ref()
+                .map(|blocker| format!("blocked: behind {blocker}"))
+                .unwrap_or_else(|| "blocked: FIFO head unavailable".to_owned()),
+            Self::Expired { .. } => "automatic command expired".to_owned(),
+            Self::Ready => {
+                "delivery conditions pass but the durable condition stamp is not written yet"
+                    .to_owned()
+            }
         }
     }
 }
@@ -239,9 +257,10 @@ fn is_no_pane_blocker(blocker: &str) -> bool {
         || (blocker.starts_with(PINNED_PANE_PREFIX) && blocker.ends_with(PINNED_PANE_SUFFIX))
 }
 
-enum DeliveryReport {
+pub(super) enum DeliveryReport {
     Sent,
-    Stopped(Option<DeliveryVerdict>),
+    Refused(DeliveryVerdict),
+    Stopped,
 }
 
 pub fn deliver_one(
@@ -251,16 +270,30 @@ pub fn deliver_one(
     mux: Option<MuxName>,
     policy: DeliveryPolicy,
 ) -> Result<bool> {
-    let pending = store.list_pending_messages()?;
+    Ok(matches!(
+        deliver_one_report(workspace, store, message_id, mux, policy)?,
+        DeliveryReport::Sent
+    ))
+}
+
+pub(super) fn deliver_one_report(
+    workspace: &ResolvedWorkspace,
+    store: &Store,
+    message_id: &MessageId,
+    mux: Option<MuxName>,
+    policy: DeliveryPolicy,
+) -> Result<DeliveryReport> {
+    let live = store.list_messages()?;
     let mut snapshot = crate::sidebar::produce::resolution_snapshot(workspace, store, mux)?;
     if let Ok(runtime) = RuntimePaths::for_project_root(&workspace.project_root) {
         snapshot = snapshot.with_agent_context(crate::store::agent_context::read_all(&runtime));
     }
-    if matches!(policy, DeliveryPolicy::Interrupt { .. })
-        && let Some(message) = pending
-            .iter()
-            .find(|message| &message.message_id == message_id)
-    {
+    let Some(message) = live.iter().find(|message| {
+        &message.message_id == message_id && message.status == MessageStatus::Queued
+    }) else {
+        return Ok(DeliveryReport::Stopped);
+    };
+    if matches!(policy, DeliveryPolicy::Interrupt { .. }) {
         send::interrupt_key(
             &message.kind,
             &format!(
@@ -272,10 +305,7 @@ pub fn deliver_one(
             ),
         )?;
     }
-    Ok(matches!(
-        attempt_delivery(workspace, store, message_id, policy, &pending, &snapshot)?,
-        DeliveryReport::Sent
-    ))
+    attempt_delivery(workspace, store, message_id, policy, &live, &snapshot)
 }
 
 fn attempt_delivery(
@@ -294,19 +324,19 @@ fn attempt_delivery(
             Ok(false) => {}
             Ok(true) => {
                 register_message_wake(workspace, store);
-                return Ok(DeliveryReport::Stopped(None));
+                return Ok(DeliveryReport::Stopped);
             }
             Err(error) => {
                 tracing::warn!(%message_id, %error, "deferring subagent digest: cannot check or settle joined runs");
-                return Ok(DeliveryReport::Stopped(None));
+                return Ok(DeliveryReport::Stopped);
             }
         }
     }
     let now = Timestamp::now();
     let candidate = match delivery_candidate(pending, snapshot, message_id, policy, now) {
         Candidacy::Ready(candidate) => candidate,
-        Candidacy::Refused(verdict) => return Ok(DeliveryReport::Stopped(Some(verdict))),
-        Candidacy::Gone => return Ok(DeliveryReport::Stopped(None)),
+        Candidacy::Refused(verdict) => return Ok(DeliveryReport::Refused(verdict)),
+        Candidacy::Gone => return Ok(DeliveryReport::Stopped),
     };
     #[cfg(feature = "testkit")]
     crate::testkit::rendezvous("RIMZ_TEST_DELIVERY_BEFORE_CLAIM");
@@ -319,7 +349,7 @@ fn attempt_delivery(
             .map(|message| vec![message]),
     };
     let Some(claimed) = claimed else {
-        return Ok(DeliveryReport::Stopped(None));
+        return Ok(DeliveryReport::Stopped);
     };
     register_message_wake(workspace, store);
     #[cfg(feature = "testkit")]
@@ -328,7 +358,7 @@ fn attempt_delivery(
         Ok(false) => {}
         Ok(true) => {
             register_message_wake(workspace, store);
-            return Ok(DeliveryReport::Stopped(None));
+            return Ok(DeliveryReport::Stopped);
         }
         Err(error) => {
             tracing::warn!(%message_id, %error, "deferring subagent digest: cannot check or settle joined runs");
@@ -338,7 +368,7 @@ fn attempt_delivery(
                 &workspace.session_name,
             )?;
             register_message_wake(workspace, store);
-            return Ok(DeliveryReport::Stopped(None));
+            return Ok(DeliveryReport::Stopped);
         }
     }
     // Hook delivery handles one claimed batch; the caller's settle owns any pre-delivery spacing, so this pacer's first tick stays a no-op.
@@ -371,7 +401,7 @@ fn attempt_delivery(
     Ok(if matches!(outcome, AttemptOutcome::Sent { .. }) {
         DeliveryReport::Sent
     } else {
-        DeliveryReport::Stopped(None)
+        DeliveryReport::Stopped
     })
 }
 
@@ -527,7 +557,7 @@ fn notify_long_queued(
         return Ok(());
     };
     let delay = class.delay();
-    let cause = verdict.stall_cause();
+    let cause = verdict.reason();
     for record in pending.iter().filter(|record| {
         record.same_card(head.card_ref())
             && record.is_deliverable(now)
@@ -607,7 +637,7 @@ pub fn sweep(workspace: &ResolvedWorkspace, store: &Store, mux: Option<MuxName>)
             })
             .is_some()
             {
-                DeliveryReport::Stopped(None)
+                DeliveryReport::Stopped
             } else {
                 attempt_delivery(
                     workspace,
@@ -618,7 +648,11 @@ pub fn sweep(workspace: &ResolvedWorkspace, store: &Store, mux: Option<MuxName>)
                     snapshot,
                 )?
             };
-            if let DeliveryReport::Stopped(verdict) = report {
+            if !matches!(report, DeliveryReport::Sent) {
+                let verdict = match report {
+                    DeliveryReport::Refused(verdict) => Some(verdict),
+                    DeliveryReport::Sent | DeliveryReport::Stopped => None,
+                };
                 let ended_receiver = match &verdict {
                     Some(DeliveryVerdict::ReceiverEnded) => snapshot
                         .agents

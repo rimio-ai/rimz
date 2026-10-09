@@ -843,8 +843,11 @@ impl MessageRecord {
     }
 
     /// Next time the elder should sweep this record, or `None` if it arms nothing.
+    ///
+    /// Queued [`DeliveryGate::Resume`] records arm nothing: [`queue_head`] excludes their control lane, so auto-continue owns their re-drive. Claimed and sent resume records still arm recovery.
     pub fn wake_deadline(&self, now: Timestamp) -> Option<Timestamp> {
         match self.status {
+            MessageStatus::Queued if self.gate == DeliveryGate::Resume => None,
             MessageStatus::Queued => {
                 let deadline = self
                     .not_before
