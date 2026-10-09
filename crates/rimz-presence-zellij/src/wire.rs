@@ -462,15 +462,17 @@ pub fn topology_json(
     produced_at_ms: u64,
     writer: Option<policy::TopologyWriter>,
     clients: Option<&policy::ClientSample>,
+    clients_withheld: bool,
     panes: &[PaneFields],
 ) -> Option<String> {
-    let payload = policy::published_topology_payload(
+    let mut payload = policy::published_topology_payload(
         session_name?,
         produced_at_ms,
         writer,
         clients.cloned(),
         panes,
     )?;
+    payload.clients_withheld = clients_withheld;
     serde_json::to_string(&payload).ok()
 }
 

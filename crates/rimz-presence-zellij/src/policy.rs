@@ -112,6 +112,8 @@ pub struct TopologyPayload {
     pub writer: Option<TopologyWriter>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub clients: Option<ClientSample>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub clients_withheld: bool,
     pub panes: Vec<PaneFields>,
 }
 
@@ -158,6 +160,7 @@ pub fn published_topology_payload(
         produced_at_ms,
         writer,
         clients,
+        clients_withheld: false,
         panes: panes.to_vec(),
     })
 }

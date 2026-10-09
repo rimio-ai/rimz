@@ -718,6 +718,238 @@ fn stable_pane_update_refreshes_clients_without_republishing_topology() {
 }
 
 #[test]
+fn roster_change_publishes_immediately_without_stale_focus() {
+    let host = FakeHost::default();
+    let mut engine = Engine::new(0, config());
+    grant(&mut engine, 10, &host);
+    seed_switch_room(&mut engine, &host);
+    let _ = engine.on_timer(400, &host);
+    let manifest = tabs_by_index(vec![(
+        1,
+        vec![pane_in_tab(10, 1), pane_in_tab(11, 1), pane_in_tab(12, 1)],
+    )]);
+
+    let effects = engine.on_pane_manifest(raw_hash(&manifest), |_| manifest, 1000, &host);
+    assert_eq!(
+        reasons(&effects),
+        vec!["panes-changed"],
+        "the roster cannot wait for clients"
+    );
+    assert!(effects.contains(&Effect::ListClients));
+    let topology = topology_json(run_commands(&effects)[0]);
+    assert_eq!(topology["panes"].as_array().unwrap().len(), 4);
+    assert_eq!(topology["clients_withheld"], true);
+    assert!(topology.get("clients").is_none());
+    assert!(topology.get("focused_pane").is_none());
+
+    let effects =
+        engine.on_list_clients(vec![client(1, ProjectedPaneId::Terminal(12))], 1150, &host);
+    assert_eq!(reasons(&effects), vec!["panes-changed"]);
+    let topology = topology_json(run_commands(&effects)[0]);
+    assert_eq!(topology["clients"]["views"][0]["pane_id"]["id"], 12);
+    assert!(topology.get("clients_withheld").is_none());
+    assert_eq!(topology["panes"].as_array().unwrap().len(), 4);
+}
+
+#[test]
+fn pre_manifest_reply_keeps_clients_omitted_until_a_fresh_unchanged_sample() {
+    let host = FakeHost::default();
+    let mut engine = Engine::new(0, config());
+    grant(&mut engine, 10, &host);
+    seed_switch_room(&mut engine, &host);
+    let _ = engine.on_timer(400, &host);
+    let manifest = tabs_by_index(vec![(
+        1,
+        vec![pane_in_tab(10, 1), pane_in_tab(11, 1), pane_in_tab(12, 1)],
+    )]);
+    assert!(
+        engine
+            .on_session_update(Some(1), 900, &host)
+            .contains(&Effect::ListClients)
+    );
+    let _ = engine.on_pane_manifest(raw_hash(&manifest), |_| manifest, 1000, &host);
+
+    let effects =
+        engine.on_list_clients(vec![client(1, ProjectedPaneId::Terminal(1))], 1010, &host);
+    assert!(
+        run_commands(&effects).is_empty(),
+        "an older query cannot release the roster wake"
+    );
+    assert!(effects.contains(&Effect::ListClients));
+    let effects = engine.on_dump_topology_pipe(1011, &host);
+    let topology = topology_json(run_commands(&effects)[0]);
+    assert!(topology.get("clients").is_none());
+    assert!(topology.get("focused_pane").is_none());
+    let effects =
+        engine.on_list_clients(vec![client(1, ProjectedPaneId::Terminal(1))], 1120, &host);
+    assert_eq!(
+        reasons(&effects),
+        vec!["panes-changed"],
+        "an unchanged fresh sample must republish"
+    );
+    assert_eq!(
+        topology_json(run_commands(&effects)[0])["clients"]["views"][0]["pane_id"]["id"],
+        1
+    );
+    assert!(run_commands(&engine.on_timer(1121, &host)).is_empty());
+}
+
+#[test]
+fn roster_and_tab_switch_omit_clients_until_the_settled_sample() {
+    let host = FakeHost::default();
+    let mut engine = Engine::new(0, config());
+    grant(&mut engine, 10, &host);
+    let names = seed_switch_room(&mut engine, &host);
+    let _ = engine.on_timer(400, &host);
+    let manifest = tabs_by_index(vec![(
+        1,
+        vec![pane_in_tab(10, 1), pane_in_tab(11, 1), pane_in_tab(12, 1)],
+    )]);
+    let _ = engine.on_pane_manifest(raw_hash(&manifest), |_| manifest, 1000, &host);
+    let _ = engine.on_tab_update(Some(1), names, &BTreeMap::new(), 1010, &host);
+
+    let effects =
+        engine.on_list_clients(vec![client(1, ProjectedPaneId::Terminal(1))], 1200, &host);
+    assert_eq!(reasons(&effects), vec!["panes-changed"]);
+    let topology = topology_json(run_commands(&effects)[0]);
+    assert!(
+        topology.get("clients").is_none(),
+        "a general reply during a switch is not settled evidence"
+    );
+    assert_eq!(topology["clients_withheld"], true);
+    assert!(topology.get("focused_pane").is_none());
+    let effects = engine.on_timer(1010 + policy::FOCUS_SETTLE_MS, &host);
+    assert!(run_commands(&effects).is_empty());
+    assert!(effects.contains(&Effect::ListClients));
+    let effects =
+        engine.on_list_clients(vec![client(1, ProjectedPaneId::Terminal(12))], 1360, &host);
+    assert!(reasons(&effects).contains(&"panes-changed"));
+    assert!(reasons(&effects).contains(&"switch-settled"));
+    for argv in run_commands(&effects) {
+        assert!(topology_json(argv).get("clients_withheld").is_none());
+        assert_eq!(
+            topology_json(argv)["clients"]["views"][0]["pane_id"]["id"],
+            12
+        );
+    }
+}
+
+#[test]
+fn roster_settle_poke_keeps_clients_omitted_without_a_reply() {
+    let host = FakeHost::default();
+    let mut engine = Engine::new(0, config());
+    grant(&mut engine, 10, &host);
+    seed_switch_room(&mut engine, &host);
+    let _ = engine.on_timer(400, &host);
+    let manifest = tabs_by_index(vec![(
+        1,
+        vec![pane_in_tab(10, 1), pane_in_tab(11, 1), pane_in_tab(12, 1)],
+    )]);
+    let effects = engine.on_pane_manifest(raw_hash(&manifest), |_| manifest, 1000, &host);
+    assert!(
+        has_timeout(&effects, SETTLE_POKE_MS),
+        "only the ordinary settle deadline is needed"
+    );
+    let effects = engine.on_timer(1000 + SETTLE_POKE_MS, &host);
+    assert_eq!(reasons(&effects), vec!["panes-changed"]);
+    assert!(
+        topology_json(run_commands(&effects)[0])
+            .get("clients")
+            .is_none()
+    );
+    assert!(
+        topology_json(run_commands(&effects)[0])
+            .get("focused_pane")
+            .is_none()
+    );
+    assert!(run_commands(&engine.on_timer(1500, &host)).is_empty());
+    let effects = engine.on_dump_topology_pipe(2000, &host);
+    assert!(
+        topology_json(run_commands(&effects)[0])
+            .get("clients")
+            .is_none()
+    );
+    assert!(
+        topology_json(run_commands(&effects)[0])
+            .get("focused_pane")
+            .is_none()
+    );
+}
+
+#[test]
+fn immediate_dump_omits_the_stale_sample_without_delaying_alive() {
+    let host = FakeHost::default();
+    let mut engine = Engine::new(0, config());
+    grant(&mut engine, 10, &host);
+    seed_switch_room(&mut engine, &host);
+    let _ = engine.on_timer(400, &host);
+    let manifest = tabs_by_index(vec![(
+        1,
+        vec![pane_in_tab(10, 1), pane_in_tab(11, 1), pane_in_tab(12, 1)],
+    )]);
+    let _ = engine.on_pane_manifest(raw_hash(&manifest), |_| manifest, 1000, &host);
+
+    let effects = engine.on_dump_topology_pipe(1001, &host);
+    assert_eq!(reasons(&effects), vec!["alive"]);
+    assert!(
+        topology_json(run_commands(&effects)[0])
+            .get("clients")
+            .is_none(),
+        "an unthrottled dump cannot leak the retained pre-roster sample"
+    );
+    assert!(
+        topology_json(run_commands(&effects)[0])
+            .get("focused_pane")
+            .is_none()
+    );
+}
+
+#[test]
+fn plain_switch_keeps_clients_until_the_settled_observation() {
+    let host = FakeHost::default();
+    let mut engine = Engine::new(0, config());
+    grant(&mut engine, 10, &host);
+    let names = seed_switch_room(&mut engine, &host);
+    let _ = engine.on_timer(400, &host);
+    let _ = engine.on_tab_update(Some(0), names.clone(), &BTreeMap::new(), 500, &host);
+    let _ = engine.on_timer(800, &host);
+    let _ = engine.on_tab_update(Some(1), names, &BTreeMap::new(), 1000, &host);
+    let effects = engine.on_dump_topology_pipe(1100, &host);
+    assert_eq!(reasons(&effects), vec!["alive"]);
+    let topology = topology_json(run_commands(&effects)[0]);
+    assert!(
+        topology.get("clients").is_some(),
+        "a plain switch must retain its client sample in mid-switch wakes"
+    );
+    assert!(topology.get("clients_withheld").is_none());
+    assert_eq!(topology["clients"]["views"][0]["pane_id"]["id"], 1);
+    let _ = engine.on_timer(1000 + policy::FOCUS_SETTLE_MS, &host);
+    let effects =
+        engine.on_list_clients(vec![client(1, ProjectedPaneId::Terminal(1))], 1360, &host);
+    assert_eq!(reasons(&effects), vec!["switch-settled"]);
+    assert_eq!(
+        topology_json(run_commands(&effects)[0])["clients"]["views"][0]["pane_id"]["id"],
+        1
+    );
+}
+
+#[test]
+fn closing_a_pane_publishes_immediately_without_stale_clients() {
+    let host = FakeHost::default();
+    let mut engine = Engine::new(0, config());
+    grant(&mut engine, 10, &host);
+    seed_switch_room(&mut engine, &host);
+    let _ = engine.on_timer(400, &host);
+    let effects = engine.on_pane_closed(ProjectedPaneId::Terminal(10), 1000, &host);
+    assert_eq!(reasons(&effects), vec!["panes-changed"]);
+    assert!(effects.contains(&Effect::ListClients));
+    let topology = topology_json(run_commands(&effects)[0]);
+    assert_eq!(topology["panes"].as_array().unwrap().len(), 2);
+    assert!(topology.get("clients").is_none());
+    assert!(topology.get("focused_pane").is_none());
+}
+
+#[test]
 fn tab_switch_emits_one_settled_observation_at_the_deadline() {
     let host = FakeHost::default();
     let mut engine = Engine::new(0, config());
