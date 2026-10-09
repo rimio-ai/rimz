@@ -17,8 +17,8 @@ use crate::store::snapshot::panes::{
     LazyAgentPairingResult, PaneBindingIndex, pane_admits_card, row_from_frame_pane,
 };
 
-use super::SidebarSnapshot;
 use super::layout::refresh_overlay_group;
+use super::{SidebarRow, SidebarSnapshot};
 
 mod projection;
 
@@ -258,6 +258,14 @@ impl SidebarSnapshot {
                     .is_some_and(|pane| pane.pane_id == *pane_id)
             });
             changed |= group.rows.len() != before;
+            for agent in group.rows.iter_mut().filter_map(SidebarRow::as_agent_mut) {
+                for child in &mut agent.sub_agents {
+                    if child.pane.as_ref() == Some(pane_id) {
+                        child.pane = None;
+                        changed = true;
+                    }
+                }
+            }
             refresh_overlay_group(group);
         }
         self.worktree_groups.retain(|group| !group.rows.is_empty());

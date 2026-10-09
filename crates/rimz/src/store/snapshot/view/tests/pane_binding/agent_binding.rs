@@ -1,5 +1,6 @@
 use super::*;
 use crate::agents::SessionOrigin;
+use crate::ids::{MuxName, PaneId};
 
 #[test]
 fn live_panes_overlay_only_matching_agent_rows() {
@@ -579,6 +580,62 @@ fn live_launched_child_promotes_when_its_parent_has_no_row() {
         Some("child-1"),
         "promotion preserves pane addressing"
     );
+}
+
+#[test]
+fn nested_children_carry_only_frame_bound_launched_panes() {
+    for (launched, live) in [(true, true), (true, false), (false, true)] {
+        let parent = agent("claude", "parent", AgentStatus::Running, 1_000)
+            .worktree("/repo/main")
+            .in_pane("%1");
+        let mut child = child_state("parent", "child", AgentStatus::Running, 5)
+            .worktree("/repo/main")
+            .in_pane("%2");
+        if launched {
+            child.launch_depth = Some(1);
+        }
+        let mut panes = vec![pane("%1", "claude", "/repo/main")];
+        if live {
+            panes.push(pane("%2", "claude", "/repo/main"));
+        }
+        let snapshot = room(vec![parent, child]).with_live_panes(panes, None);
+        let parent = rows(&snapshot)
+            .into_iter()
+            .find(|row| row.id == "parent")
+            .unwrap();
+        assert_eq!(
+            parent.sub_agents()[0].pane,
+            (launched && live).then(|| PaneId::from_parts(MuxName::Tmux, "%2")),
+            "launched={launched}, live={live}",
+        );
+    }
+}
+
+#[test]
+fn closing_a_nested_child_pane_clears_its_binding() {
+    let parent = agent("claude", "parent", AgentStatus::Running, 1_000)
+        .worktree("/repo/main")
+        .in_pane("%1");
+    let mut child = child_state("parent", "child", AgentStatus::Running, 5)
+        .worktree("/repo/main")
+        .in_pane("%2");
+    child.launch_depth = Some(1);
+    let mut snapshot = room(vec![parent, child]).with_live_panes(
+        vec![
+            pane("%1", "claude", "/repo/main"),
+            pane("%2", "claude", "/repo/main"),
+        ],
+        None,
+    );
+    let child_pane = PaneId::from_parts(MuxName::Tmux, "%2");
+    // Isolate the close consumer from projection.
+    snapshot.worktree_groups[0].rows[0]
+        .as_agent_mut()
+        .unwrap()
+        .sub_agents[0]
+        .pane = Some(child_pane.clone());
+    assert!(snapshot.remove_pane_rows(&child_pane));
+    assert_eq!(rows(&snapshot)[0].sub_agents()[0].pane, None);
 }
 
 #[test]

@@ -782,7 +782,8 @@ path = "crates/rimz/src/store"
 # Ingress readers reuse the frame visitor with a snapshotted byte limit (+1).
 # Reset and room teardown retain drainer election/lifetime stop guards (+2).
 # The CLI stamps assistant transcripts with the scoped Store ingress id (+1).
-surface-budget = 411
+# Listed child panes share row membership with the focus seam (+2).
+surface-budget = 413
 
 [[module]]
 path = "crates/rimz/src/theme"

@@ -324,6 +324,7 @@ fn full_entry_has_a_stable_projection() {
             context_severity: Some(ContextSeverity::Yellow),
             sub_agent_count: 1,
             sub_agents: vec![SidebarSubAgent {
+                pane: None,
                 turn_error_label: None,
                 id: "child".to_owned(),
                 prior_turn: false,

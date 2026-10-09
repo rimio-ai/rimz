@@ -5,6 +5,7 @@ use tracing::debug;
 
 use crate::agents::lifecycle::TurnPhase;
 use crate::agents::{AgentSessionUsage, AgentState, AgentStatus, ParkDemotion};
+use crate::ids::PaneId;
 use crate::store::snapshot::row::{SidebarRow, SidebarSubAgent, SubAgentTokens};
 use crate::utils::time::format_duration_coarse;
 
@@ -19,6 +20,7 @@ use super::{AgentKey, AgentProjectionIndex};
 pub(super) fn attach_sub_agents_indexed(
     rows: &mut [SidebarRow],
     index: &AgentProjectionIndex<'_>,
+    live_pane: impl Fn(&AgentState) -> Option<PaneId>,
     now: Timestamp,
     demotion: &ParkDemotion,
     stalled_after_secs: u32,
@@ -93,7 +95,14 @@ pub(super) fn attach_sub_agents_indexed(
                 continue;
             }
             let park = launched_child_park(child, demotion);
-            let entry = project_sub_agent(child, now, prior_turn, demotion, stalled_after_secs);
+            let entry = project_sub_agent(
+                child,
+                live_pane(child),
+                now,
+                prior_turn,
+                demotion,
+                stalled_after_secs,
+            );
             if let Some((status, label)) = park
                 && delegated_parks.get(parent_key).is_none_or(|(current, _)| {
                     *current == AgentStatus::Paused && status == AgentStatus::Failed
@@ -203,6 +212,7 @@ pub(in crate::store::snapshot) fn attach_sub_agents(
     attach_sub_agents_indexed(
         rows,
         &index,
+        |_| None,
         now,
         &ParkDemotion::default(),
         crate::config::AttentionConfig::default()
@@ -256,6 +266,7 @@ pub(super) fn fold_child_activity_onto_parents(rows: &mut [SidebarRow]) {
 /// card paints.
 fn project_sub_agent(
     child: &AgentState,
+    pane: Option<PaneId>,
     now: Timestamp,
     prior_turn: bool,
     demotion: &ParkDemotion,
@@ -320,6 +331,7 @@ fn project_sub_agent(
     });
     SidebarSubAgent {
         id: child.agent_id.to_string(),
+        pane: child.is_launched_child().then_some(pane).flatten(),
         prior_turn,
         name,
         petname: child
@@ -359,6 +371,7 @@ pub(in crate::store::snapshot) fn sub_agent_from_state(
 ) -> SidebarSubAgent {
     project_sub_agent(
         child,
+        None,
         now,
         prior_turn,
         &ParkDemotion::default(),

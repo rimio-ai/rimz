@@ -134,6 +134,7 @@ impl SidebarSnapshot {
         let delegated_parks = subagents::attach_sub_agents_indexed(
             &mut rows,
             &agent_index,
+            |child| self.live_agent_pane(&child.kind, &child.agent_id),
             now,
             demotion,
             windows.stalled_after_secs,
