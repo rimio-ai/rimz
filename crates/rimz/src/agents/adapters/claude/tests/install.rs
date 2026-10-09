@@ -87,7 +87,7 @@ fn assert_managed_hook_entry(entry: &Value, event: &str, matcher: Option<&str>) 
     assert_eq!(commands.len(), 1, "event {event}");
     assert_eq!(commands[0]["type"], "command");
     assert_eq!(commands[0]["command"], RIMZ_HOOK_COMMAND);
-    assert_eq!(commands[0]["timeout"], CLAUDE_HOOK_TIMEOUT_SECS);
+    assert_eq!(commands[0]["timeout"], 2);
 }
 
 fn blocking_event_sync(event: &str, matcher: Option<&str>) -> bool {

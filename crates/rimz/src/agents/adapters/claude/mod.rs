@@ -289,10 +289,10 @@ const CLAUDE_LIFECYCLE_HOOKS: LifecycleAnnotations = LifecycleAnnotations {
     },
 };
 
-/// Per-hook timeout written into the Claude config (seconds). Hooks write a
-/// Waiting state and return neutral immediately, so the value is a short guard
-/// for local I/O failures rather than an answer window.
-const CLAUDE_HOOK_TIMEOUT_SECS: u64 = 10;
+/// Per-hook timeout written into the Claude config (seconds). Hooks append
+/// ingress and nudge the elected drainer; reply-bearing hooks wait within
+/// this budget.
+const CLAUDE_HOOK_TIMEOUT_SECS: u64 = 2;
 
 /// Installed events and classification policy. RimZ installs every event as a
 /// single broad hook with no matcher: the helper classifies

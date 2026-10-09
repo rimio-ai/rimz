@@ -240,7 +240,7 @@ const DROID_LIFECYCLE_HOOKS: LifecycleAnnotations = LifecycleAnnotations {
     },
 };
 
-const DROID_HOOK_TIMEOUT_SECS: u64 = 10;
+const DROID_HOOK_TIMEOUT_SECS: u64 = 2;
 const DROID_HOOKS: &[HookEventSpec] = &[
     HookEventSpec::lifecycle("SessionStart", r#"{"session_id":"sess-1"}"#).progress(),
     HookEventSpec::lifecycle("UserPromptSubmit", r#"{"session_id":"sess-1"}"#).progress(),

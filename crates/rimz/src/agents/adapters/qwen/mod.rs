@@ -251,7 +251,7 @@ const QWEN_LIFECYCLE_HOOKS: LifecycleAnnotations = LifecycleAnnotations {
     },
 };
 
-const QWEN_HOOK_TIMEOUT_MS: u64 = 10_000;
+const QWEN_HOOK_TIMEOUT_MS: u64 = 2_000;
 const QWEN_HOOKS: &[HookEventSpec] = &[
     HookEventSpec::lifecycle("SessionStart", r#"{"session_id":"sess-1"}"#).progress(),
     HookEventSpec::lifecycle("SessionEnd", r#"{"session_id":"sess-1"}"#).session_ended(),

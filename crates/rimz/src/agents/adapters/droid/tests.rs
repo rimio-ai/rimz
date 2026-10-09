@@ -65,6 +65,14 @@ fn install_preview_reclaim_drift_and_uninstall_preserve_user_config() {
     assert!(MANAGED_SOURCE.installed_at(&path));
 
     let mut root: Value = serde_json::from_str(&preview.files[0].candidate).unwrap();
+    for entries in root["hooks"].as_object().unwrap().values() {
+        for entry in entries.as_array().unwrap() {
+            if entry["_rimz_managed"] != true {
+                continue;
+            }
+            assert_eq!(entry["hooks"][0]["timeout"], 2);
+        }
+    }
     let notification = root["hooks"]["Notification"].as_array().unwrap();
     assert_eq!(notification.len(), 2, "one user hook plus one managed hook");
     assert_eq!(root["model"], "custom");
