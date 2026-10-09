@@ -24,6 +24,20 @@ fn workspace() -> ResolvedWorkspace {
     }
 }
 
+fn conversation_frame(workspace: &ResolvedWorkspace) -> rimz::store::ingress::HookIngress {
+    rimz::store::ingress::HookIngress {
+        schema_version: "1".into(),
+        event_id: rimz::ids::EventId::new(),
+        ts: jiff::Timestamp::now(),
+        source: rimz::ids::AgentKind::new_unchecked("claude"),
+        event: Some("UserPromptSubmit".into()),
+        payload: String::new(),
+        cwd: workspace.project_root.clone(),
+        hook_pid: std::process::id(),
+        env: Default::default(),
+    }
+}
+
 fn recorded(signal: LifecycleSignal) -> RecordedLifecycle {
     RecordedLifecycle {
         model_hint: None,
@@ -1134,6 +1148,222 @@ fn duplicate_answer_race_preserves_prompt() {
     assert_eq!(entries.len(), 2);
     assert_eq!(entries[0].entry, rimz::transcript::TranscriptKind::Prompt);
     assert_eq!(entries[1].entry, rimz::transcript::TranscriptKind::Answer);
+}
+
+#[test]
+fn replay_keeps_a_prompt_that_answered_a_native_ask() {
+    let (_dir, store) = store();
+    let workspace = workspace();
+    let agent = rimz::agents::definition_by_kind("claude").unwrap();
+    let mut ask = rimz::transcript::TranscriptEntry::new(
+        jiff::Timestamp::UNIX_EPOCH,
+        agent.spec().kind_id(),
+        "sess-1".into(),
+        rimz::transcript::TranscriptKind::Ask,
+        String::new(),
+    );
+    ask.id = Some(rimz::ids::AskId::parse("ask_0123456789abcdef").unwrap());
+    rimz::transcript::append(store.paths(), &ask).unwrap();
+    let mut started = recorded(LifecycleSignal::TurnStarted { turn_id: None });
+    started.receipt.waiting_cleared = true;
+    started.observation.prompt = rimz::agents::SanitizedPrompt::new(Some("safe"));
+    let frame = conversation_frame(&workspace);
+    let scoped = store.for_hook_ingress(frame.event_id.clone(), frame.ts);
+    for attempt in [
+        rimz::harness::hook_drain::FrameAttempt::First,
+        rimz::harness::hook_drain::FrameAttempt::Replay,
+    ] {
+        rimz::harness::hook_drain::with_frame_env(&frame, attempt, || {
+            record_conversation(
+                &workspace,
+                &scoped,
+                agent,
+                &started,
+                conversation_input(None, &[], &[]),
+            )
+        })
+        .unwrap();
+    }
+    let entries = rimz::transcript::read_all(store.paths()).unwrap();
+    assert_eq!(
+        entries.len(),
+        2,
+        "replay must not turn the answer into a prompt"
+    );
+    assert_eq!(entries[1].entry, rimz::transcript::TranscriptKind::Answer);
+    assert_eq!(entries[1].ingress.as_ref(), Some(&frame.event_id));
+}
+
+#[test]
+fn replay_finishes_a_partially_recorded_prompt_batch() {
+    use rimz::store::message::PromptSection;
+    use rimz::transcript::{SectionOrigin, TranscriptKind};
+
+    let (_dir, store) = store();
+    let workspace = workspace();
+    let agent = rimz::agents::definition_by_kind("claude").unwrap();
+    let frame = conversation_frame(&workspace);
+    let scoped = store.for_hook_ingress(frame.event_id.clone(), frame.ts);
+    let mut first = rimz::transcript::TranscriptEntry::new(
+        frame.ts,
+        agent.spec().kind_id(),
+        "sess-1".into(),
+        TranscriptKind::Prompt,
+        "first".into(),
+    );
+    first.ingress = Some(frame.event_id.clone());
+    rimz::transcript::append(store.paths(), &first).unwrap();
+    let sections = ["first", "second"].map(|text| PromptSection {
+        text: text.into(),
+        origin: SectionOrigin::Human,
+        record: None,
+    });
+    for _ in 0..2 {
+        rimz::harness::hook_drain::with_frame_env(
+            &frame,
+            rimz::harness::hook_drain::FrameAttempt::Replay,
+            || {
+                super::record_conversation(
+                    &workspace,
+                    &scoped,
+                    agent,
+                    &recorded(LifecycleSignal::TurnStarted { turn_id: None }),
+                    ConversationInput {
+                        assistant_message: None,
+                        questions: &[],
+                        sections: &sections,
+                        run_id: None,
+                    },
+                )
+            },
+        )
+        .unwrap();
+    }
+    let entries = rimz::transcript::read_all(store.paths()).unwrap();
+    assert_eq!(
+        entries.len(),
+        2,
+        "replay must append only the missing section"
+    );
+    assert_eq!(entries[0], first);
+    assert_eq!(entries[1].text, "second");
+    assert_eq!(entries[1].entry, TranscriptKind::Prompt);
+    assert_eq!(entries[1].ingress.as_ref(), Some(&frame.event_id));
+}
+
+#[test]
+fn replay_does_not_count_a_queued_answer_as_a_prompt_entry() {
+    let (_dir, store) = store();
+    let workspace = workspace();
+    let agent = rimz::agents::definition_by_kind("claude").unwrap();
+    let frame = conversation_frame(&workspace);
+    let scoped = store.for_hook_ingress(frame.event_id.clone(), frame.ts);
+    let mut started = recorded(LifecycleSignal::TurnStarted { turn_id: None });
+    started.observation.prompt = rimz::agents::SanitizedPrompt::new(Some("new task"));
+    started.observation.ask_queue = Some(rimz::agents::AskQueueEdit {
+        answered: vec![rimz::agents::AnsweredQuestion {
+            ask_id: Some(rimz::ids::AskId::parse("ask_0123456789abcdef").unwrap()),
+            native_key: "queued-question".into(),
+            answer: "safe".into(),
+        }],
+        ..Default::default()
+    });
+    for _ in 0..2 {
+        rimz::harness::hook_drain::with_frame_env(
+            &frame,
+            rimz::harness::hook_drain::FrameAttempt::Replay,
+            || {
+                record_conversation(
+                    &workspace,
+                    &scoped,
+                    agent,
+                    &started,
+                    conversation_input(None, &[], &[]),
+                )
+            },
+        )
+        .unwrap();
+    }
+    let entries = rimz::transcript::read_all(store.paths()).unwrap();
+    assert_eq!(
+        entries.len(),
+        2,
+        "the queued answer must not consume the prompt"
+    );
+    assert_eq!(entries[0].entry, rimz::transcript::TranscriptKind::Answer);
+    assert_eq!(entries[1].entry, rimz::transcript::TranscriptKind::Prompt);
+    assert_eq!(entries[1].text, "new task");
+    assert_eq!(entries[1].ingress.as_ref(), Some(&frame.event_id));
+}
+
+#[test]
+fn replay_does_not_count_a_queued_ask_as_the_blocking_ask() {
+    use rimz::transcript::{AskQuestion, TranscriptKind};
+
+    let (_dir, store) = store();
+    let workspace = workspace();
+    let agent = rimz::agents::definition_by_kind("claude").unwrap();
+    let frame = conversation_frame(&workspace);
+    let scoped = store.for_hook_ingress(frame.event_id.clone(), frame.ts);
+    let queued_id = rimz::ids::AskId::parse("ask_0123456789abcdef").unwrap();
+    let blocking_id = rimz::ids::AskId::parse("ask_fedcba9876543210").unwrap();
+    let question = AskQuestion {
+        question: "Choose?".into(),
+        options: vec![],
+        multi_select: false,
+        has_option_previews: false,
+    };
+    let mut queued = rimz::transcript::TranscriptEntry::new(
+        frame.ts,
+        agent.spec().kind_id(),
+        "sess-1".into(),
+        TranscriptKind::Ask,
+        String::new(),
+    );
+    queued.id = Some(queued_id.clone());
+    queued.ingress = Some(frame.event_id.clone());
+    queued.questions = vec![question.clone()];
+    rimz::transcript::append(store.paths(), &queued).unwrap();
+    let mut waiting = recorded(LifecycleSignal::AwaitingInput {
+        kind: rimz::agents::AskKind::Question,
+        ask_id: Some(blocking_id.clone()),
+        detail: None,
+        native_key: None,
+    });
+    waiting.observation.ask_queue = Some(rimz::agents::AskQueueEdit {
+        queued: vec![rimz::agents::QueuedQuestion {
+            ask_id: Some(queued_id),
+            native_key: "queued-question".into(),
+            detail: String::new(),
+            question: question.clone(),
+        }],
+        ..Default::default()
+    });
+    for _ in 0..2 {
+        rimz::harness::hook_drain::with_frame_env(
+            &frame,
+            rimz::harness::hook_drain::FrameAttempt::Replay,
+            || {
+                record_conversation(
+                    &workspace,
+                    &scoped,
+                    agent,
+                    &waiting,
+                    conversation_input(None, std::slice::from_ref(&question), &[]),
+                )
+            },
+        )
+        .unwrap();
+    }
+    let entries = rimz::transcript::read_all(store.paths()).unwrap();
+    assert_eq!(
+        entries.len(),
+        2,
+        "the queued ask must not consume the blocking ask"
+    );
+    assert_eq!(entries[0], queued);
+    assert_eq!(entries[1].id, Some(blocking_id));
+    assert_eq!(entries[1].ingress.as_ref(), Some(&frame.event_id));
 }
 
 #[test]
