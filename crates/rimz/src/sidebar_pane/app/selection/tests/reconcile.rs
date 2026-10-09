@@ -215,10 +215,16 @@ fn frameless_anchor_withholds_index_without_dropping_the_pane() {
         ..Default::default()
     };
 
-    anchor_selection(&mut ui, &snapshot(&ws));
+    let frameless = snapshot(&ws);
+    anchor_selection(&mut ui, &frameless);
 
     assert_eq!(ui.selected_pane, Some(selected.clone()));
     assert_eq!(ui.selected_index, None);
+    assert_eq!(
+        handle_key(KeyAction::Enter, &mut ui, &frameless),
+        InputOutcome::default(),
+        "Enter focuses nothing while no card shows the held pick"
+    );
 
     let framed = snapshot_with_panes(
         &ws,
