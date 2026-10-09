@@ -116,6 +116,147 @@ fn boundary_topology(produced_at_ms: u64) -> PaneTopologyCache {
     cache
 }
 
+fn focus_topology() -> PaneTopologyCache {
+    let mut cache = topology(unix_now_ms(), Some(writer(1, 100)));
+    cache.panes = vec![topology_pane(1, 1, "work"), topology_pane(2, 1, "work")];
+    cache.clients = Some(crate::mux::zellij::pane_topology::TopologyClients {
+        human_clients: None,
+        viewed_panes: None,
+        views: vec![crate::mux::zellij::pane_topology::TopologyClientView {
+            client_id: 1,
+            pane_id: ZellijPaneId::Terminal(1),
+        }],
+    });
+    cache
+}
+
+fn clientless_roster_wake(state: &StatePaths, runtime: &RuntimePaths) -> ZellijWake {
+    let mut announced = wake(ZellijWakeReason::Announced);
+    announced.topology = Some(focus_topology());
+    ingest_zellij_wake(state, runtime, &announced).unwrap();
+    let cache = announced.topology.as_mut().unwrap();
+    cache.produced_at_ms += 1;
+    cache.clients = None;
+    cache.panes.push(topology_pane(3, 2, "work"));
+    announced
+}
+
+#[test]
+fn clientless_roster_wake_emits_no_focus_transition_or_cached_sample() {
+    let (_dir, state, runtime) = paths();
+    let announced = clientless_roster_wake(&state, &runtime);
+
+    assert_eq!(
+        ingest_zellij_wake(&state, &runtime, &announced).unwrap(),
+        ZellijWakeOutcome::Accepted(vec![SidebarEvent::PaneOpened {
+            pane_id: zellij_pane("terminal_3"),
+            command: None,
+        }]),
+    );
+    let cached = read_pane_topology_cache(&runtime, "rimz-test").unwrap();
+    assert_eq!(cached.clients, None);
+    assert_eq!(cached.focused_pane, None);
+    assert_eq!(cached.projected_session_focus(), None);
+}
+
+#[test]
+fn observed_same_focus_after_clientless_roster_emits_no_focus_transition() {
+    let (_dir, state, runtime) = paths();
+    let mut announced = clientless_roster_wake(&state, &runtime);
+    assert!(!focus_observation_path(&runtime).exists());
+    ingest_zellij_wake(&state, &runtime, &announced).unwrap();
+    let saved = std::fs::read(focus_observation_path(&runtime)).unwrap();
+    ingest_zellij_wake(&state, &runtime, &announced).unwrap();
+    assert_eq!(
+        std::fs::read(focus_observation_path(&runtime)).unwrap(),
+        saved
+    );
+    announced.topology.as_mut().unwrap().clients = focus_topology().clients;
+    announced.topology.as_mut().unwrap().produced_at_ms += 1;
+
+    assert_eq!(
+        ingest_zellij_wake(&state, &runtime, &announced).unwrap(),
+        ZellijWakeOutcome::Accepted(vec![SidebarEvent::PanesChanged]),
+    );
+    assert_eq!(
+        std::fs::read(focus_observation_path(&runtime)).unwrap(),
+        saved
+    );
+}
+
+#[test]
+fn clientless_first_wakes_and_writer_change_do_not_restore_foreign_focus() {
+    let (_dir, state, runtime) = paths();
+    let mut announced = wake(ZellijWakeReason::Announced);
+    let mut cache = focus_topology();
+    cache.clients = None;
+    announced.topology = Some(cache);
+    for _ in 0..2 {
+        assert_eq!(
+            ingest_zellij_wake(&state, &runtime, &announced).unwrap(),
+            ZellijWakeOutcome::Accepted(vec![SidebarEvent::PanesChanged]),
+        );
+    }
+    let mut announced = clientless_roster_wake(&state, &runtime);
+    ingest_zellij_wake(&state, &runtime, &announced).unwrap();
+    announced.topology.as_mut().unwrap().writer = Some(writer(2, 200));
+    ingest_zellij_wake(&state, &runtime, &announced).unwrap();
+    announced.topology.as_mut().unwrap().clients = focus_topology().clients;
+    assert_eq!(
+        ingest_zellij_wake(&state, &runtime, &announced).unwrap(),
+        ZellijWakeOutcome::Accepted(vec![SidebarEvent::FocusChanged {
+            focused: vec![zellij_pane("terminal_1")],
+            unfocused: Vec::new(),
+        }]),
+    );
+}
+
+#[test]
+fn observed_changed_focus_after_clientless_roster_names_last_observed_prior() {
+    let (_dir, state, runtime) = paths();
+    let mut announced = clientless_roster_wake(&state, &runtime);
+    ingest_zellij_wake(&state, &runtime, &announced).unwrap();
+    let mut clients = focus_topology().clients.unwrap();
+    clients.views[0].pane_id = ZellijPaneId::Terminal(2);
+    announced.topology.as_mut().unwrap().clients = Some(clients);
+
+    assert_eq!(
+        ingest_zellij_wake(&state, &runtime, &announced).unwrap(),
+        ZellijWakeOutcome::Accepted(vec![SidebarEvent::FocusChanged {
+            focused: vec![zellij_pane("terminal_2")],
+            unfocused: vec![zellij_pane("terminal_1")],
+        }]),
+    );
+}
+
+#[test]
+fn observed_empty_sample_after_clientless_roster_still_unfocuses() {
+    for viewed in [None, Some(ZellijPaneId::Terminal(99))] {
+        let (_dir, state, runtime) = paths();
+        let mut announced = clientless_roster_wake(&state, &runtime);
+        ingest_zellij_wake(&state, &runtime, &announced).unwrap();
+        let mut clients = focus_topology().clients.unwrap();
+        clients.views = viewed
+            .map(
+                |pane_id| crate::mux::zellij::pane_topology::TopologyClientView {
+                    client_id: 1,
+                    pane_id,
+                },
+            )
+            .into_iter()
+            .collect();
+        announced.topology.as_mut().unwrap().clients = Some(clients);
+
+        assert_eq!(
+            ingest_zellij_wake(&state, &runtime, &announced).unwrap(),
+            ZellijWakeOutcome::Accepted(vec![SidebarEvent::FocusChanged {
+                focused: Vec::new(),
+                unfocused: vec![zellij_pane("terminal_1")],
+            }]),
+        );
+    }
+}
+
 #[test]
 fn zellij_boundary_move_is_emitted_only_for_stable_work_topology() {
     let (_dir, state, runtime) = paths();
@@ -440,7 +581,12 @@ fn one_snapshot_can_open_multiple_card_panes() {
     incoming.panes = vec![existing.panes[0].clone(), working, launch];
 
     assert_eq!(
-        project_presence(derive_zellij_transitions(Some(&existing), &incoming, true,)),
+        project_presence(derive_zellij_transitions(
+            Some(&existing),
+            &incoming,
+            Some(&existing),
+            true,
+        )),
         vec![
             SidebarEvent::PaneOpened {
                 pane_id: zellij_pane("terminal_2"),
