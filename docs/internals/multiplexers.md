@@ -651,7 +651,7 @@ The keepalive carries WASM memory pages, uptime, per-bucket command counts (comp
 
 ### The managed server endpoint
 
-RimZ owns one tmux server per runtime domain, at `<runtime-root>/rimz/tmux/server`, holding one session per workspace, named after its state directory at birth. Every managed command runs `tmux -S <socket> …` through the single [`TmuxBackend::cmd`](../../crates/rimz/src/mux/tmux.rs) chokepoint. The socket is always set, so no command can reach the user's default server, and `cargo xtask invariants` rejects a bare `tmux` argv.
+RimZ owns one tmux server per runtime domain, at `<runtime-root>/rimz/tmux/server`, holding one session per workspace, named after its state directory at birth. Every managed command runs `tmux -S <socket> -u …` through the single [`TmuxBackend::cmd`](../../crates/rimz/src/mux/tmux.rs) chokepoint. The socket is always set, so no command can reach the user's default server, and `cargo xtask invariants` rejects a bare `tmux` argv.
 
 The endpoint derives from the resolved runtime root alone, so any caller reconstructs it without a workspace or `disk::paths::RuntimePaths` argument. Attach, ttyd, presence, pane I/O, list, reload, GC, sidebar, and doctor all address the same path. A disposable `XDG_RUNTIME_DIR` yields a different socket and a private server, which is what isolates sandboxes and tests.
 

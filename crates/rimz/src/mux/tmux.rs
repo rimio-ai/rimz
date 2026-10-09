@@ -1,6 +1,6 @@
 //! tmux `MuxBackend` implementation.
 //!
-//! Every command runs `tmux -S <socket> <verb> ...` against one RimZ-owned
+//! Every command runs `tmux -S <socket> -u <verb> ...` against one RimZ-owned
 //! server per runtime domain ([`managed_server_socket_path`]), holding one
 //! session per workspace. The socket is always set, so no command can reach
 //! the user's default server; integration tests point it at a private path
