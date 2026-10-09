@@ -748,7 +748,18 @@ path = "crates/rimz/src/store"
 # Thin park exports its raw LaunchTail with from_cursor and poll, the streaming visitor, and the generation header (+4 past the one free slot).
 # Automatic-command expiry shares three predicates, two constants, and its validity formatter input (+6).
 # Queue consumers and harness wake readers share the sent-hold deadline (+1).
-surface-budget = 384
+# sender_notice exposes the store-owned composition module to delivery (+1).
+# resolve_sender routes notices to a live sender launch, session, or legacy name (+1).
+# undelivered shares ending prose with the queue transaction (+1).
+# still_queued shares stalled-message prose with the sweep (+1).
+# compose gives both notice kinds the same recorded author and sender-card channel (+1).
+# wants_undelivered_notice selects qualifying endings at QueueTxn::close (+1).
+# wants_queued_notice selects agent-sent non-waiting prompts in the sweep (+1).
+# QUEUED_NOTICE_IDLE_DELAY supplies the sweep's five-minute default (+1).
+# QUEUED_NOTICE_IDLE_ENV names its millisecond override (+1).
+# QUEUED_NOTICE_BUSY_DELAY supplies the sweep's twenty-minute default (+1).
+# QUEUED_NOTICE_BUSY_ENV names its millisecond override (+1).
+surface-budget = 395
 
 [[module]]
 path = "crates/rimz/src/theme"

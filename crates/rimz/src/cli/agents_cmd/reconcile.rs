@@ -178,6 +178,7 @@ fn recreate_or_done(
         "worktree recreated",
         &workspace.session_name,
     );
+    rimz::message::deliver::register_message_wake(workspace, store);
     let session_retirement = retirement
         .session_retirement
         .context("retiring sessions for recreated worktree");

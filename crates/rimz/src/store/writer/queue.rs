@@ -9,8 +9,8 @@ use crate::agents::{AgentCardRef, AgentStatus};
 use crate::ids::{AgentKind, AgentSessionId, MessageId};
 use crate::store::event::{EventEnvelope, MessageEventMethod};
 use crate::store::message::{
-    AutoCompact, DeliveryGate, MAX_DELIVERY_ATTEMPTS, MessageBody, MessageRecord, MessageStatus,
-    claim_expired, delivery_batch_indices, fresh_boundary_blocker,
+    AutoCompact, DeliveryGate, HarnessNotice, MAX_DELIVERY_ATTEMPTS, MessageBody, MessageRecord,
+    MessageStatus, claim_expired, delivery_batch_indices, fresh_boundary_blocker, sender_notice,
 };
 
 use super::super::{Result, Store, message};
@@ -183,6 +183,7 @@ struct QueueTxn<'txn, 'paths> {
     /// `message::write_queue` at the transaction boundary.
     live: Vec<MessageRecord>,
     history: Vec<MessageRecord>,
+    undelivered: Vec<(MessageRecord, Option<String>, String)>,
     events: Vec<EventEnvelope>,
     live_changed: bool,
 }
@@ -198,6 +199,7 @@ impl<'txn, 'paths> QueueTxn<'txn, 'paths> {
             txn,
             live,
             history: Vec::new(),
+            undelivered: Vec::new(),
             events: Vec::new(),
             live_changed: false,
         })
@@ -275,6 +277,13 @@ impl<'txn, 'paths> QueueTxn<'txn, 'paths> {
         now: Timestamp,
     ) -> MessageRecord {
         let message = normalize_terminal(message, status, now, reason);
+        if message.wants_undelivered_notice() {
+            self.undelivered.push((
+                message.clone(),
+                reason.map(ToOwned::to_owned),
+                session_name.to_owned(),
+            ));
+        }
         let method = MessageEventMethod::for_terminal_status(status)
             .expect("terminal message statuses have an event method");
         self.history.push(message.clone());
@@ -528,6 +537,28 @@ impl Store {
         self.commit(|txn| {
             let mut queue = QueueTxn::new(txn)?;
             let result = f(&mut queue)?;
+            if !queue.undelivered.is_empty() {
+                let agents = self.snapshot()?.agents;
+                for (record, reason, session_name) in std::mem::take(&mut queue.undelivered) {
+                    let Some(sender) = sender_notice::resolve_sender(&record.sender, &agents)
+                    else {
+                        continue;
+                    };
+                    let notice = sender_notice::compose(
+                        self.inner.paths.workspace_id.clone(),
+                        sender,
+                        HarnessNotice::MessageUndelivered,
+                        sender_notice::undelivered(&record, reason.as_deref()),
+                    );
+                    queue.stage_event(EventEnvelope::message_event(
+                        &notice,
+                        session_name,
+                        MessageEventMethod::Queued,
+                        None,
+                    ));
+                    queue.upsert(notice);
+                }
+            }
             queue.finish()?;
             Ok(result)
         })

@@ -12,6 +12,7 @@ use crate::ids::{AgentKind, AgentSessionId, MessageId, PaneId, WorkspaceId};
 use crate::transcript::SectionOrigin;
 
 mod codec;
+pub(crate) mod sender_notice;
 
 pub(super) use codec::MessageStoreErr;
 pub(in crate::store) use codec::{
@@ -20,6 +21,10 @@ pub(in crate::store) use codec::{
 
 pub const DEFAULT_DELIVERY_WINDOW: Duration = Duration::from_secs(30);
 pub const DELIVERY_WINDOW_ENV: &str = "RIMZ_MESSAGE_DELIVERY_WINDOW_MS";
+pub const QUEUED_NOTICE_IDLE_DELAY: Duration = Duration::from_secs(5 * 60);
+pub const QUEUED_NOTICE_IDLE_ENV: &str = "RIMZ_MESSAGE_QUEUED_NOTICE_IDLE_MS";
+pub const QUEUED_NOTICE_BUSY_DELAY: Duration = Duration::from_secs(20 * 60);
+pub const QUEUED_NOTICE_BUSY_ENV: &str = "RIMZ_MESSAGE_QUEUED_NOTICE_BUSY_MS";
 pub const DEFAULT_COMMAND_DELIVERY_WINDOW: Duration = Duration::from_secs(180);
 pub const COMMAND_DELIVERY_WINDOW_ENV: &str = "RIMZ_MESSAGE_COMMAND_DELIVERY_WINDOW_MS";
 pub const DEFAULT_COMMAND_VALIDITY: Duration = Duration::from_secs(600);
@@ -74,6 +79,10 @@ pub enum HarnessNotice {
     SubagentPaused,
     /// A launched child silent past the stall window; told to its parent once per run.
     SubagentStalled,
+    /// An agent-sent message ended without delivery.
+    MessageUndelivered,
+    /// An agent-sent message is still queued past its class delay.
+    MessageQueued,
     /// Preserve newer notices verbatim through older queue rewrites and history pruning.
     #[serde(untagged)]
     Other(String),
@@ -92,6 +101,8 @@ impl HarnessNotice {
             Self::TeamReport => "TEAM_REPORT".to_owned(),
             Self::SubagentPaused => "SUBAGENT_PAUSED".to_owned(),
             Self::SubagentStalled => "SUBAGENT_STALLED".to_owned(),
+            Self::MessageUndelivered => "MESSAGE_UNDELIVERED".to_owned(),
+            Self::MessageQueued => "MESSAGE_QUEUED".to_owned(),
             Self::Deadline => "DEADLINE".to_owned(),
             Self::Wait => "WAIT".to_owned(),
             Self::Signal => "SIGNAL".to_owned(),
@@ -123,6 +134,8 @@ impl MessageSender {
                     | HarnessNotice::Stage
                     | HarnessNotice::SubagentPaused
                     | HarnessNotice::SubagentStalled
+                    | HarnessNotice::MessageUndelivered
+                    | HarnessNotice::MessageQueued
                     | HarnessNotice::Other(_),
             } => SectionOrigin::Notice(self.render()),
             Self::System => SectionOrigin::Harness,
@@ -490,6 +503,9 @@ pub struct MessageRecord {
     /// delivery.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retry_after: Option<Timestamp>,
+    /// The once-only sender notice for this message's long-queued state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub queued_notice_at: Option<Timestamp>,
     /// When set, deliver a `/compact` ahead of the text if the agent's context
     /// fill has reached this threshold at delivery time, so the message lands
     /// against a fresh window instead of racing the agent's own auto-compaction.
@@ -508,6 +524,26 @@ pub struct MessageRecord {
 }
 
 impl MessageRecord {
+    /// `Errored` stays out: a send failure errors inside the sender's own `rimz message` call,
+    /// which reports it.
+    pub(crate) fn wants_undelivered_notice(&self) -> bool {
+        matches!(self.sender, MessageSender::Agent { .. })
+            && !self.reply_wait
+            && matches!(
+                self.status,
+                MessageStatus::Archived
+                    | MessageStatus::TimedOut
+                    | MessageStatus::Abandoned
+                    | MessageStatus::Expired
+            )
+    }
+
+    pub(crate) fn wants_queued_notice(&self) -> bool {
+        matches!(self.sender, MessageSender::Agent { .. })
+            && !self.reply_wait
+            && self.status == MessageStatus::Queued
+    }
+
     fn ships_headerless(&self) -> bool {
         match (&self.sender, self.body) {
             (MessageSender::System, _) => true,
@@ -596,6 +632,7 @@ impl MessageRecord {
             after: Vec::new(),
             when: Vec::new(),
             retry_after: None,
+            queued_notice_at: None,
             auto_compact: None,
             compacted_context_tokens: None,
             batch_id: None,

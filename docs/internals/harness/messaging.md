@@ -401,6 +401,8 @@ Content:
 | `TEAM_REPORT` | An agent-launched team's leader, reported when the board flips to `Done` or the cohort ends before `Done`, followed by `Memory: <absolute board path>` as seen by the launcher | `@rimz` |
 | `SUBAGENT_PAUSED` | A launched child parked on a provider limit, sent to its parent once per park ([backstops](./subagents.md#backstops)) | `@rimz` |
 | `SUBAGENT_STALLED` | A launched child silent past the stall window, sent to its parent once per run ([backstops](./subagents.md#backstops)) | `@rimz` |
+| `MESSAGE_UNDELIVERED` | An agent-sent message ended without delivery, sent once to its live sender | `@rimz` |
+| `MESSAGE_QUEUED` | An agent-sent message remains queued past its receiver-class delay, sent once to its live sender | `@rimz` |
 | `DEADLINE` | A deadline-ladder rung steered to the supervised child | `@rimz` |
 | `WAIT` | A timer, command, or clock wait delivery | `@rimz` |
 | `CACHE_KEEPALIVE` | A neutral prompt-cache ping for a sleeping agent ([policy](./loops.md#prompt-cache-keepalive)) | `@rimz` |

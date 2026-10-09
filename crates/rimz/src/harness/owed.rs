@@ -212,6 +212,8 @@ mod tests {
             HarnessNotice::Deadline,
             HarnessNotice::SubagentPaused,
             HarnessNotice::SubagentStalled,
+            HarnessNotice::MessageUndelivered,
+            HarnessNotice::MessageQueued,
         ] {
             for status in [
                 MessageStatus::Queued,
@@ -248,6 +250,8 @@ mod tests {
                             | HarnessNotice::Deadline
                             | HarnessNotice::SubagentPaused
                             | HarnessNotice::SubagentStalled
+                            | HarnessNotice::MessageUndelivered
+                            | HarnessNotice::MessageQueued
                     ))
                 .then_some(OwedWake::WakeInFlight);
                 assert_eq!(

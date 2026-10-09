@@ -46,6 +46,8 @@ fn submitted_sections_cover_every_sender_and_body() {
         HarnessNotice::CacheKeepalive,
         HarnessNotice::SubagentPaused,
         HarnessNotice::SubagentStalled,
+        HarnessNotice::MessageUndelivered,
+        HarnessNotice::MessageQueued,
         HarnessNotice::Other("future".to_owned()),
     ] {
         let origin = if matches!(
@@ -636,6 +638,7 @@ fn message_record_round_trips_current_schema_and_reads_legacy_defaults() {
     record.last_error = Some("pane unavailable".to_owned());
     record.delivered_at = Some(now + jiff::SignedDuration::from_secs(1));
     record.retry_after = Some(now + jiff::SignedDuration::from_secs(30));
+    record.queued_notice_at = Some(now);
     record.compacted_context_tokens = Some(150_000);
     record.batch_id = Some(message_id(1));
 
@@ -664,6 +667,7 @@ fn message_record_round_trips_current_schema_and_reads_legacy_defaults() {
         "after",
         "when",
         "retry_after",
+        "queued_notice_at",
         "auto_compact",
         "compacted_context_tokens",
         "batch_id",
@@ -690,6 +694,7 @@ fn message_record_round_trips_current_schema_and_reads_legacy_defaults() {
     assert!(legacy.after.is_empty());
     assert!(legacy.when.is_empty());
     assert_eq!(legacy.retry_after, None);
+    assert_eq!(legacy.queued_notice_at, None);
     assert_eq!(legacy.auto_compact, None);
     assert_eq!(legacy.compacted_context_tokens, None);
     assert_eq!(legacy.batch_id, None);
@@ -737,6 +742,7 @@ fn requeue_preserves_intent_and_rearms_dependencies() {
     original.last_error = Some("pane closed".to_owned());
     original.delivered_at = Some(now);
     original.retry_after = Some(now + jiff::SignedDuration::from_secs(30));
+    original.queued_notice_at = Some(now);
     original.compacted_context_tokens = Some(120_000);
     original.batch_id = Some(message_id(1));
 
@@ -777,6 +783,7 @@ fn requeue_preserves_intent_and_rearms_dependencies() {
     assert_eq!(requeued.enqueued_at, requeued.updated_at);
     assert_eq!(requeued.attempts, 0);
     assert_eq!(requeued.unconfirmed_sends, 0);
+    assert_eq!(requeued.queued_notice_at, None);
     assert_eq!(requeued.last_attempt_at, None);
     assert_eq!(requeued.last_sent_at, None);
     assert_eq!(requeued.last_error, None);
@@ -1901,6 +1908,8 @@ fn every_named_harness_notice() -> Vec<HarnessNotice> {
         HarnessNotice::TeamReport,
         HarnessNotice::SubagentPaused,
         HarnessNotice::SubagentStalled,
+        HarnessNotice::MessageUndelivered,
+        HarnessNotice::MessageQueued,
     ];
     for notice in &all {
         match notice {
@@ -1913,12 +1922,48 @@ fn every_named_harness_notice() -> Vec<HarnessNotice> {
             | HarnessNotice::Stage
             | HarnessNotice::TeamReport
             | HarnessNotice::SubagentPaused
-            | HarnessNotice::SubagentStalled => {}
+            | HarnessNotice::SubagentStalled
+            | HarnessNotice::MessageUndelivered
+            | HarnessNotice::MessageQueued => {}
             // `Other` preserves unknown future notices; it names no header of its own.
             HarnessNotice::Other(_) => unreachable!("only named notices are listed"),
         }
     }
     all
+}
+
+#[test]
+fn sender_notice_headers_preserve_recorded_origin_and_acknowledgement() {
+    for (notice, wire, header) in [
+        (
+            HarnessNotice::MessageUndelivered,
+            "message_undelivered",
+            "MESSAGE_UNDELIVERED",
+        ),
+        (
+            HarnessNotice::MessageQueued,
+            "message_queued",
+            "MESSAGE_QUEUED",
+        ),
+    ] {
+        assert_eq!(notice.header_type(), header);
+        assert_eq!(serde_json::to_value(&notice).unwrap(), wire);
+        assert_eq!(
+            serde_json::from_value::<HarnessNotice>(serde_json::json!(wire)).unwrap(),
+            notice
+        );
+        let record = delivery_message(1, &agent("sess", None), DeliveryGate::Done, None)
+            .with_sender(MessageSender::Harness { notice });
+        let prompt = format!("Type: {header}\nFrom: @rimz\nContent:\n{}", record.text);
+        let (_, aligned, _) = align_submitted_prompt(&prompt, &[&record]).unwrap();
+        assert_eq!(aligned, vec![prompt.as_str()]);
+        let sections = classify_submitted_prompt(&prompt, &[&record], &[]);
+        assert_eq!(sections[0].origin, SectionOrigin::Notice("@rimz".into()));
+        assert_eq!(
+            sections[0].record.map(|record| &record.message_id),
+            Some(&record.message_id)
+        );
+    }
 }
 
 #[test]
