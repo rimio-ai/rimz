@@ -91,13 +91,12 @@ Reminders are renderer-local and re-ring actionable rows the user has not read. 
 
 The reminder scope is the renderer's unread rows whose status is `waiting` or `failed` (`AgentStatus::is_actionable`); unread `paused` and `success` rows stay emphasized in the sidebar but never remind.
 
-- A pane-backed row counts when its pane is one of the view's working panes.
-- A paneless row counts when the view has working panes that belong to rows in the same worktree path; those panes become the targets. A paneless row with no such pane in any view reminds nowhere and relies on the sidebar and on the producer's handlers.
-- With `suppress_focused`, a pane in `viewed_panes` neither counts nor serves as a paneless row's target.
+- A row counts when its pane is one of the view's working panes.
+- With `suppress_focused`, a row whose pane is in `viewed_panes` does not count.
 
 The clock arms when the scope first becomes non-empty or when a `Notify` event writes bytes, and a reminder fires `remind_secs` (default 60) after the later of the arming and the previous reminder. An empty scope, `enabled = false`, or `remind_secs = 0` clears the clock.
 
-A reminder writes through `emit_terminal_notification` with `recheck_unread: false`, since its scope is already unread; the daemon-view and in-view checks still apply. It then spawns matching handlers with kind `reminder`, title `RimZ: <N> unread rows need you`, and `RIMZ_NOTIFY_UNREAD` set to the count. Pane ownership keeps renderers from double-counting a pane-backed row; a paneless row whose worktree has working panes in two views is counted, and its handlers spawned, by both.
+A reminder writes through `emit_terminal_notification` with `recheck_unread: false`, since its scope is already unread; the daemon-view and in-view checks still apply. It then spawns matching handlers with kind `reminder`, title `RimZ: <N> unread rows need you`, and `RIMZ_NOTIFY_UNREAD` set to the count. Pane ownership keeps renderers from double-counting a row.
 
 ## Remote link alerts
 
