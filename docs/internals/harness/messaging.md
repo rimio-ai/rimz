@@ -86,6 +86,8 @@ These are the producers of queued or launch-time text. Paths are relative to `cr
 | Team report | `cli/agents_cmd/team_report.rs::report_team` | `Harness { notice: TeamReport }` / `Prompt` |
 | Child parked on a provider limit | `cli/agents_cmd/park_notice.rs::run`, text from `harness/park_notice.rs::text`, via `message/synthetic.rs::SyntheticMessage` | `Harness { notice: SubagentPaused }` / `Prompt` |
 | Silent launched child | `cli/agents_cmd/stall_notice.rs::run`, text from `harness/stall_notice.rs::text`, via `message/synthetic.rs::SyntheticMessage` | `Harness { notice: SubagentStalled }` / `Prompt` |
+| Agent-sent message ended undelivered | `crates/rimz/src/store/writer/queue.rs::QueueTxn::close` collects endings; `crates/rimz/src/store/writer/queue.rs::Store::commit_queue` composes through `crates/rimz/src/store/message/sender_notice.rs::undelivered` | `Harness { notice: MessageUndelivered }` / `Prompt` |
+| Agent-sent message still queued | `crates/rimz/src/message/deliver.rs::sweep`, text from `crates/rimz/src/store/message/sender_notice.rs::still_queued` | `Harness { notice: MessageQueued }` / `Prompt` |
 | Prompt-cache keepalive | `cli/agents_cmd/cache_keepalive.rs::run`, text from `harness/cache_keepalive.rs::prompt`, via `message/synthetic.rs::deliver_now` | `Harness { notice: CacheKeepalive }` / `Prompt` |
 | Auto-continue | `cli/agents_cmd/auto_continue.rs::run_auto_continue`, configured resume text via `message/synthetic.rs::SyntheticMessage` and `deliver_now` (or `attempt_now` for a queued id) | `System` / `Prompt` |
 | Supervised verification reprompt | `harness/prompt_compose.rs::verify_reprompt`, delivered by `cli/supervised/verify.rs::deliver_reprompt` via `message/synthetic.rs::SyntheticMessage` and `deliver_now` | `System` / `Prompt` |
@@ -338,6 +340,8 @@ Reconciliation runs in `message sweep` and `gc` (`reconcile_stale_messages`) and
 - **Unconfirmed prompt** (no hook within `RIMZ_MESSAGE_DELIVERY_WINDOW_MS`, 30 s by default). The reconciler clears `pane_id` and `batch_id`, keeps `last_sent_at`, increments `unconfirmed_sends`, records `delivery unconfirmed; re-queued`, and the record retries through the normal FIFO path. A requeued batch member forms a new batch next time. At the cap the record becomes `TimedOut`.
 - **Unconfirmed command** (no hook within `RIMZ_MESSAGE_COMMAND_DELIVERY_WINDOW_MS`, 3 minutes by default). The record becomes `TimedOut` with `delivery unconfirmed; command not resent`. A command reaches the pane at most once, because a duplicate `/compact` can discard context and a missing acknowledgement does not prove the first submit failed.
 
+Sender-notice timing is independent of this delivery window; the [sender-notice delay overrides](../../reference/cli/message.md#the-message-header) change its five- and twenty-minute thresholds.
+
 The hold also expires on read at the same body-specific deadline, even when no sweep runs; readers neither resend nor mutate the record. While the receiver's compaction bracket is open, the reconciler holds a stale `Sent` record in place and pushes `retry_after` one body-specific window ahead. Readers honour that deferral as the hold deadline. A composer queues a paste made during compaction and submits it when compaction ends, so a resend there would become a second turn.
 
 A record whose agent has simply not reached a qualifying boundary is not failing. It stays `Queued` and no counter moves.
@@ -541,6 +545,26 @@ An unmet `when` condition sets `retry_after` to the exact projected trip time, s
 Durations accept `s`, `m`, `h`, and `d`; zero is rejected. Wall-clock `HH:MM` resolves to its next occurrence in the configured `timezone` (today if still ahead, else tomorrow), falling back to the system zone.
 
 `rimz message --schedule` and `rimz wait` feel alike and work differently. A schedule is a floor on a record that already exists: the text is written now and held until its time. A wait is a loop task that holds no message until its trigger fires, then dispatches one as an automated `Harness { notice: Wait }` send with fan-out disabled and no caller attribution. That is why a wait can wait on a signal or a command, and why its text appears in the queue only when it lands ([loops.md § Waits](./loops.md#waits)).
+
+### Sender notices
+
+`crates/rimz/src/store/writer/queue.rs::QueueTxn::close` collects agent-sent, non-`reply_wait` endings in `Archived`, `TimedOut`, `Abandoned`, or `Expired`. `Errored` is left out: a send failure errors inside the sender's own `rimz message` call, which exits non-zero with the reason, so a notice would repeat it. A queued compaction command refused as a repeat also ends `Errored` without a notice. `crates/rimz/src/store/writer/queue.rs::Store::commit_queue` resolves live senders and queues a `MESSAGE_UNDELIVERED` notice and its `message.queued` event in the same commit as the ending. Delivered and deliberately canceled messages do not qualify. A closed record leaves the live queue once, so an ending cannot notify twice; a notice is `Harness`, never `Agent`, so its own ending cannot recurse. The notice quotes the ending reason and attempt evidence, previews the text, and asks the sender to inspect the receiver before deciding whether to resend. The archived receiver's existing resume hint is unchanged.
+
+`crates/rimz/src/store/message/sender_notice.rs::resolve_sender` chooses an unended card of the sender's kind: when the sender has `agent_id`, it must match the card's session id or launch id; otherwise a recorded name must match, and when several live cards share that name, as team roles do across lanes, the one in the sender's recorded channel. It never falls back from a stale id to a recycled name. With no live sender there is no notice, only the ending's original audit. The notices have the sender card's channel, a `Done` gate, no pane pin, and no `in_reply_to` causality. Both are ordinary queued prompts and neither counts as an owed wake. `reply_wait` records get neither notice because their blocked CLI already reports failures and timeout hints.
+
+The sweep classifies a refused receiver through an exhaustive `crates/rimz/src/message/deliver.rs::DeliveryVerdict::stall_class` match:
+
+| Class | Delay | Verdicts |
+| --- | --- | --- |
+| NotWorking | 5 min | `NoPane`, `ProviderStarting`, `ResumeUnrecovered`, `AskWaiting`, `ReceiverGone`, `ReceiverEnded` when not archived, and `GateClosed` with a status other than `Running` (including absent status) |
+| Busy | 20 min | `GateClosed` with `Running`, and `Compacting` |
+| No notice | None | `Scheduled`, `WaitingOnAfter`, `WaitingOnWhen`, `BehindFifo`, `Expired`, `Ready`, or a stop without a verdict |
+
+The [millisecond overrides](../../reference/cli/message.md#the-message-header) use the same `env_ms` convention as the delivery window. Each qualifying pending record on the refused head's card is measured from its own `enqueued_at`, not just the head. Its own schedule and conditions must be met. An unconfirmed-send requeue keeps that clock, while `message requeue` creates a fresh message. `crates/rimz/src/store/writer/queue.rs::Store::queue_still_queued_notice` rechecks `Queued` and absent `queued_notice_at` under the workspace lock, then stamps that field and queues `MESSAGE_QUEUED` with its audit event together. No second call changes either surface. The original message stays queued and the notice names `rimz message cancel <id>` as the withdrawal path.
+
+The sweep's final wake refresh covers notices it queues. Out-of-sweep endings refresh through the lifecycle end reactor, GC after archival and reconciliation, and worktree creation or retirement. The worktree library has no `ResolvedWorkspace`, so its direct and automatic-retirement CLI callers refresh after the operation, including agent recreation and both GC/worktree sweeps. No ending-notice timer is added. Queue truth and the notice record remain authoritative when a wake refresh fails. Notices have no assist record; their ordinary message record and queued audit event are the durable account.
+
+`queued_notice_at` defaults to absent on legacy records, survives queue rewrites and terminal history, and is never cleared on the same message. An older binary rewriting a mixed-version room drops the unknown field, so a later newer sweep can produce a second queued notice. This accepted compatibility limit adds neither a status nor an event method; older readers preserve the new harness-notice strings through `HarnessNotice::Other`.
 
 ## Storage and audit
 

@@ -264,6 +264,8 @@ read plan.md and start
 
 The first token after `From:` is the reply address: here, reply with `rimz message @swift-otter "got it"`. The parenthesized label identifies the sender's profile, or its agent kind when it has no profile; a label that repeats the handle is omitted. A team profile such as `recon.planner` is also omitted when the handle is `@planner`, including when it has a channel suffix.
 
+An agent should not have to wait forever on a handoff that never arrived. RimZ tells a live agent sender when its message ends undelivered, or stays queued for five minutes with a receiver not working or twenty minutes with a receiver busy in a turn. A queued message stays queued; the notice lets the sender check the receiver or withdraw the message, not resend it blindly. Time spent waiting on the sender's schedule or conditions does not trigger a notice while those conditions remain unmet. Senders using `--wait` learn failures from the wait itself instead of a separate notice.
+
 Your sends arrive as `USER_MESSAGE` from `@user`. RimZ's own deliveries come from `@rimz`, with the `Type` naming what produced them:
 
 - `SUBAGENT_REPORT`, the digest sent once an agent's launched subagents have all settled; `AGENT_REPORT` when the fleet includes solo agents.
