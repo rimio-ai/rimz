@@ -164,6 +164,13 @@ Read plan.md when the planner finishes.
 | `SIGNAL` | A [signal-triggered loop](./loop.md#signals) delivery | `@rimz` |
 | `STAGE` | A [team stage](./teams.md) opening | `@rimz` |
 
+Agent senders receive at most one `MESSAGE_UNDELIVERED` and one `MESSAGE_QUEUED` notice per message. `--wait` senders get neither; the wait reports failures directly. A queued notice does not expire or resend the message. Unmet `--schedule`, `--after`, and `--when` conditions suppress queued notices. Notices go to the sender's live card and appear in `rimz message list --system`.
+
+| Environment variable | Default | Controls |
+| --- | --- | --- |
+| `RIMZ_MESSAGE_QUEUED_NOTICE_IDLE_MS` | `300000` (5 min) | Queued-notice delay when the receiver is not working, in milliseconds |
+| `RIMZ_MESSAGE_QUEUED_NOTICE_BUSY_MS` | `1200000` (20 min) | Queued-notice delay when the receiver is busy in a turn or compacting, in milliseconds |
+
 `rimz transcript` hides `@rimz` deliveries from its human view; `rimz transcript --json` keeps them.
 
 ## Wait for replies
