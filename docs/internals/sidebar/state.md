@@ -448,10 +448,10 @@ Fusion is pure over pulled truth, the event store, and `now_ms`. It runs on the 
 
 **Then the overlays apply in precedence order:**
 
-1. `PaneClosed` deletes rows. If it names `focused_pane`, the register clears and the renderer keeps its last highlight.
+1. `PaneClosed` deletes rows and clears a listed child's matching pane binding, returning its entry click to the parent. If it names `focused_pane`, the register clears and the renderer keeps its last highlight.
 2. `CommandChanged` overlays the command on panes that survived step 1 and were already admitted.
 3. The newest `FocusChanged` sets or clears the session register, as in the taxonomy.
-4. A requested focus intent lands last and outranks both the pulled register and `FocusChanged` for `FOCUS_ANCHOR_FRESH` (2.5 seconds), provided its pane still has an admitted row.
+4. A requested focus intent lands last and outranks both the pulled register and `FocusChanged` for `FOCUS_ANCHOR_FRESH` (2.5 seconds), provided its pane is an admitted row's own pane or a listed child's.
 
 `PaneOpened` creates nothing; it asks the producer for a verified frame. Expired events drop by receiver-clock TTL, and any wrong verdict from a missed event or clock skew lasts only until the next producer pull.
 

@@ -315,6 +315,8 @@ A card with waits uses the same entry layout:
 
 Selecting a card opens the section. Clicking the line opens or closes it without focusing the pane, on any card, and that choice outranks selection and `card_density` until the sidebar restarts. In `compact` density, select the card first to reach the line.
 
+Click either line of a launched child's entry to focus its live pane, across tabs when needed. Entries without a live pane, including provider-native children, still focus the parent; a click never resumes an ended child. While a child's pane is focused, the parent card carries the selection band and both lines of that child's entry show `▌` in the indent beside the lead icon. The mark disappears when you browse to another card; with the section closed, only the parent band shows. Focusing a child does not mark the parent read; the parent clears as any card does, by focusing it or dwelling on a tab that shows its pane.
+
 Each entry starts with its live state or wait icon, then a type word and a ` · ` separator before the headline. Without a headline, the separator disappears too. A launched child's displayed error label replaces the description or task in italics, for both paused and failed states. Detail sits on a muted, indented second line.
 
 | entry | lead | type · headline | right side | second line |
@@ -771,6 +773,7 @@ Every printable key pressed without `Ctrl` or `Alt` enters the draft, including 
 | click a make-up bucket, the unread count, or `⑃ N` | filter the cards |
 | click `↑ N need you` | scroll to the top of the cards |
 | click a subagents and waits line | open or close its entries |
+| click either line of a subagent entry | focus the child's live pane, else the parent's pane |
 | click `+K older`, `+K more`, `− less` | unfold or fold rows |
 | click a finished group's header or receipt | show or collapse its cards |
 | click a dashboard tab | switch provider |
