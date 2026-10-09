@@ -23,7 +23,7 @@ fn pane_content_size_reads_dimensions_and_preserves_zero() {
             std::fs::read_to_string(temp.path().join("argv"))
                 .unwrap()
                 .trim(),
-            "-S /test/socket display-message -p -t %7 #{pane_height} #{pane_width}"
+            "-S /test/socket -u display-message -p -t %7 #{pane_height} #{pane_width}"
         );
     }
 }
@@ -80,7 +80,7 @@ fn session_options() -> crate::mux::SessionOptions {
     }
 }
 
-/// Argv past the `-S <socket>` prefix every managed command carries, so a verb
+/// Argv past the `-S <socket> -u` prefix every managed command carries, so a verb
 /// assertion stays about the verb. [`managed_endpoint_prefixes_every_command`]
 /// owns the prefix itself.
 fn verb_args(spec: &CommandSpec) -> &[String] {
@@ -89,7 +89,12 @@ fn verb_args(spec: &CommandSpec) -> &[String] {
         ["-S"],
         "every tmux command must address an explicit socket",
     );
-    &spec.args[2..]
+    assert_eq!(
+        spec.args.get(2).map(String::as_str),
+        Some("-u"),
+        "every tmux command must preserve UTF-8 regardless of the caller's locale",
+    );
+    &spec.args[3..]
 }
 
 #[test]
@@ -98,9 +103,9 @@ fn managed_endpoint_prefixes_every_command() {
     let spec = backend.cmd();
 
     assert_eq!(
-        &spec.args[..2],
-        ["-S", "/run/user/1000/rimz/tmux/server"],
-        "commands address the RimZ-owned server, never the user's default",
+        spec.args,
+        ["-S", "/run/user/1000/rimz/tmux/server", "-u"],
+        "commands address the RimZ-owned server with a UTF-8 client",
     );
     // A tmux server inherits its cwd from the client that births it, and only
     // honours a pane's `-c` while `getcwd()` succeeds. Birth from a directory
@@ -167,11 +172,11 @@ fn ensure_session_repairs_global_mux_context_before_and_after_birth() {
             r#"#!/bin/sh
 dir=$(dirname "$0")
 printf '%s\n' "$*" >> "$dir/argv"
-if [ "$3" = set-environment ] && [ "$4" = -g ] && [ ! -e "$dir/repaired" ]; then
+if [ "$4" = set-environment ] && [ "$5" = -g ] && [ ! -e "$dir/repaired" ]; then
     touch "$dir/repaired"
     if [ -n '{pre_birth_error}' ]; then printf '%s\n' '{pre_birth_error}' >&2; exit 1; fi
 fi
-if [ "$3" = new-session ] && [ '{duplicate}' = true ]; then
+if [ "$4" = new-session ] && [ '{duplicate}' = true ]; then
     printf 'duplicate session: rimz-test\n' >&2
     exit 1
 fi
@@ -204,7 +209,7 @@ fi
 #[test]
 fn ensure_session_does_not_ignore_global_environment_repair_failure() {
     let (temp, shim) = crate::mux::zellij::tests::support::zellij_shim(
-        "#!/bin/sh\nif [ \"$3\" = set-environment ] && [ \"$4\" = -g ]; then printf 'error connecting to server (Permission denied)\\n' >&2; exit 1; fi\n",
+        "#!/bin/sh\nif [ \"$4\" = set-environment ] && [ \"$5\" = -g ]; then printf 'error connecting to server (Permission denied)\\n' >&2; exit 1; fi\n",
     );
     let mut backend = TmuxBackend::with_socket(temp.path().join("server"));
     backend.program = Some(shim);

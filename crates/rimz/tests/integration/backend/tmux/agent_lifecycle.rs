@@ -554,6 +554,9 @@ impl TabNamingRoom {
         let session = env.resolve_workspace(&env.project_root).session_name;
         let server = TmuxServer::in_runtime_root(&env.runtime_root);
         env.rimz()
+            .env("LC_ALL", "C")
+            .env_remove("LANG")
+            .env_remove("LC_CTYPE")
             .env("PATH", path_with_front(&agent_bin))
             .env("RIMZ_TEST_AGENT_READY", &ready)
             .env("RIMZ_TEST_RIMZ_BIN", env.rimz_bin())
@@ -577,6 +580,9 @@ impl TabNamingRoom {
             .collect::<Vec<_>>();
         let mut command = self.env.rimz();
         command
+            .env("LC_ALL", "C")
+            .env_remove("LANG")
+            .env_remove("LC_CTYPE")
             .env("PATH", path_with_front(&self.agent_bin))
             .env("RIMZ_TEST_AGENT_READY", &self.ready)
             .env("RIMZ_TEST_RIMZ_BIN", self.env.rimz_bin())
@@ -721,6 +727,28 @@ fn producer_holds_the_founder_name_then_follows_the_peer() {
     }
     assert_eq!(room.server.display(peer.raw(), "#{@rimz_tab_base}"), "");
     assert_eq!(room.server.display(peer.raw(), "#{automatic-rename}"), "1");
+}
+
+#[test]
+fn producer_clears_a_stale_status_suffix_under_the_c_locale() {
+    require_tmux!();
+    let room = TabNamingRoom::new();
+    let raw = room.server.stdout(&[
+        "new-window",
+        "-d",
+        "-P",
+        "-F",
+        "#{pane_id}",
+        "-t",
+        &room.session,
+        "-n",
+        "my tab",
+        "sh",
+    ]);
+    let anchor = PaneId::from_parts(MuxName::Tmux, raw.trim());
+    room.server
+        .tmux(&["rename-window", "-t", anchor.raw(), "my tab ⢿"]);
+    room.wait_name(&anchor, "my tab", 0);
 }
 
 #[test]

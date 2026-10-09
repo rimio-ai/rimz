@@ -144,7 +144,7 @@ fn tmux_shim(env: &Env) -> (PathBuf, PathBuf) {
     std::fs::write(
         &bin,
         r#"#!/bin/sh
-if [ "$1" = "-S" ]; then shift 2; fi
+if [ "$1" = "-S" ]; then shift 3; fi
 if [ "$1" = "-V" ]; then
   printf 'tmux 3.5\n'
 elif [ "$1" = "list-sessions" ]; then

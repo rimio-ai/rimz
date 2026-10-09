@@ -318,6 +318,7 @@ impl TmuxServer {
             .scrub_session_env()
             .arg("-S")
             .arg(&self.socket)
+            .arg("-u")
             .args(args)
             .bounded_output()
             .unwrap_or_else(|err| panic!("spawn tmux {args:?}: {err}"));
@@ -339,6 +340,7 @@ impl TmuxServer {
             .scrub_session_env()
             .arg("-S")
             .arg(&self.socket)
+            .arg("-u")
             .args(args)
             .bounded_output()
             .map_err(|err| format!("spawn tmux {args:?}: {err}"))?;
@@ -587,6 +589,7 @@ impl AttachedTmuxClient {
         cmd.args([
             "-S",
             socket.to_str().expect("utf8 socket"),
+            "-u",
             "attach",
             "-t",
             session,
