@@ -27,7 +27,7 @@ pub fn show(
     let mut blocks = Vec::new();
     for (argument, (anchor, position)) in arguments.iter().zip(anchors) {
         let needs_outline = anchor.symbol.is_some() || position.is_some();
-        let (anchor, path) = match context.resolve(anchor) {
+        let (anchor, path, _) = match context.resolve(anchor) {
             Ok(resolved) => resolved,
             Err(verdict) => {
                 let (status, code) = match verdict.status {

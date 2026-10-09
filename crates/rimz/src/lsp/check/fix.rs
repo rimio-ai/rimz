@@ -1,6 +1,6 @@
-//! Complete short paths one file's outline singles out, refresh uniquely
-//! resolved hints, and insert missing ones on request, using offsets into the
-//! original notes.
+//! Complete unique short paths or paths one file's outline singles out, refresh
+//! uniquely resolved hints, and insert missing ones on request, using offsets
+//! into the original notes.
 
 use super::*;
 
@@ -29,9 +29,6 @@ pub(super) fn rewrite(
     let mut fixes = Vec::new();
     let mut ambiguous = Vec::new();
     for (index, mut anchor) in extract(source).into_iter().enumerate() {
-        if anchor.symbol.is_none() {
-            continue;
-        }
         let before = anchor.text.clone();
         let mut changed = false;
         if let Some((range, full)) = defining_file(context, &anchor)? {
@@ -68,21 +65,28 @@ pub(super) fn rewrite(
     Ok((updated, fixes, ambiguous))
 }
 
-/// The source range of a symbol anchor's short path and the one checkout file
-/// it completes to: the only file among those the path names whose outline
-/// matches the symbol, when none of them has unsaved changes. The hint never
-/// picks between two defining files, since a drifted hint would pick wrong.
+/// The source range of an anchor's short path and the checkout file it
+/// completes to. A unique suffix needs no outline or editor check. Several
+/// matches require a symbol in exactly one outline and no unsaved candidates;
+/// a hint never chooses between defining files. A file whose whole path no
+/// anchor can spell is never completed.
 fn defining_file(
     context: &mut Context<'_>,
     anchor: &Anchor,
 ) -> Result<Option<(std::ops::Range<usize>, String)>, query::QueryErr> {
-    let (Some(chain), Some(range)) = (&anchor.symbol, &anchor.path_source) else {
+    let Some(range) = &anchor.path_source else {
         return Ok(None);
     };
-    let candidates = resolve(context.checkout, &context.files, &anchor.path);
-    if candidates.len() < 2 {
+    let PathMatch::Suffix(candidates) = resolve(context.checkout, &context.files, &anchor.path)
+    else {
         return Ok(None);
+    };
+    if let [path] = candidates.as_slice() {
+        return Ok(anchor_path(path).map(|full| (range.clone(), full.to_owned())));
     }
+    let Some(chain) = &anchor.symbol else {
+        return Ok(None);
+    };
     let mut defining = None;
     for path in candidates {
         let Some(file) = context.outline(&path)? else {
@@ -98,7 +102,7 @@ fn defining_file(
     let Some(path) = defining else {
         return Ok(None);
     };
-    Ok(path.to_str().map(|full| (range.clone(), full.to_owned())))
+    Ok(anchor_path(&path).map(|full| (range.clone(), full.to_owned())))
 }
 
 /// The hint refresh, or with `hints` the hint insertion, for one anchor: the
@@ -115,7 +119,7 @@ fn hint_edit(
     if anchor.hint_source.is_none() && insert_at.is_none() {
         return Ok(None);
     }
-    let Ok((anchor, path)) = context.resolve(anchor) else {
+    let Ok((anchor, path, _)) = context.resolve(anchor) else {
         return Ok(None);
     };
     let Some(file) = context.outline(&path)? else {

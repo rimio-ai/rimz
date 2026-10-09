@@ -136,7 +136,7 @@ fn rewrite_with(
     dirty: bool,
     hints: bool,
 ) -> (String, Vec<fix::Fix>, Vec<fix::Ambiguous>) {
-    rewrite_in(source, vec![("a.rs", fixed_symbols(), dirty)], hints)
+    rewrite_in(source, vec![("a.rs", Some(fixed_symbols()), dirty)], hints)
 }
 
 fn fixed_symbols() -> Vec<Candidate> {
@@ -148,7 +148,7 @@ fn fixed_symbols() -> Vec<Candidate> {
 
 fn rewrite_in(
     source: &str,
-    files: Vec<(&str, Vec<Candidate>, bool)>,
+    files: Vec<(&str, Option<Vec<Candidate>>, bool)>,
     hints: bool,
 ) -> (String, Vec<fix::Fix>, Vec<fix::Ambiguous>) {
     let servers = BTreeMap::from([(
@@ -158,15 +158,30 @@ fn rewrite_in(
         }))
         .unwrap(),
     )]);
+    let entry: registry::Entry = serde_json::from_value(json!({
+        "root":"/checkout", "server":"rust", "nonce":"test",
+        "broker_pid":0, "broker_start_token":"unused",
+        "state":"ready", "started_at_ms":0, "estimate_bytes":0,
+        "settings_hash":"", "request_count":0, "peak_rss_kb":0, "leases":[],
+        "attached":[{"pid":0,"name":"test","since_ms":0,"open":files.iter()
+            .filter(|(_, _, dirty)| *dirty)
+            .map(|(path, ..)| json!({
+                "uri":url::Url::from_file_path(Path::new("/checkout").join(path)).unwrap().to_string(),
+                "owner":true,"dirty":true
+            })).collect::<Vec<_>>()}]
+    })).unwrap();
+    let entries = [entry];
     let mut context = Context {
         checkout: Path::new("/checkout"),
-        entries: &[],
+        entries: &entries,
         servers: &servers,
         files: files.iter().map(|(path, ..)| path.into()).collect(),
         failures: BTreeMap::new(),
         outlines: files
             .into_iter()
-            .map(|(path, nodes, dirty)| (path.into(), FileOutline { nodes, dirty }))
+            .filter_map(|(path, nodes, dirty)| {
+                nodes.map(|nodes| (path.into(), FileOutline { nodes, dirty }))
+            })
             .collect(),
     };
     fix::rewrite(source, &mut context, hints).unwrap()
@@ -185,11 +200,11 @@ fn complete(source: &str, dirty: [bool; 3], twice: bool, hints: bool) -> (String
     )]))
     .unwrap();
     let files = vec![
-        ("one/lib.rs", other(), dirty[0]),
-        ("two/lib.rs", fixed_symbols(), dirty[1]),
+        ("one/lib.rs", Some(other()), dirty[0]),
+        ("two/lib.rs", Some(fixed_symbols()), dirty[1]),
         (
             "three/lib.rs",
-            if twice { elsewhere } else { other() },
+            Some(if twice { elsewhere } else { other() }),
             dirty[2],
         ),
     ];
@@ -246,6 +261,79 @@ fn fix_completes_a_short_path_one_file_defines() {
         let (again, fixes) = complete(expected, clean, false, hints);
         assert_eq!(again, expected);
         assert!(fixes.is_empty(), "{expected}");
+    }
+}
+
+#[test]
+fn fix_completes_unique_short_paths_without_a_saved_outline() {
+    for (source, expected, file, nodes, dirty, hints) in [
+        (
+            "`lib.rs::Type::method`",
+            "`src/lib.rs::Type::method`",
+            "src/lib.rs",
+            None,
+            true,
+            false,
+        ),
+        (
+            "`lib.rs:~10`",
+            "`src/lib.rs:~10`",
+            "src/lib.rs",
+            None,
+            true,
+            true,
+        ),
+        (
+            "`design.md:~1`",
+            "`docs/design.md:~1`",
+            "docs/design.md",
+            None,
+            false,
+            false,
+        ),
+        (
+            "`lib.rs::Type::method ~90`",
+            "`src/lib.rs::Type::method ~11`",
+            "src/lib.rs",
+            Some(fixed_symbols()),
+            false,
+            false,
+        ),
+        (
+            "`lib.rs::Type::method`",
+            "`src/lib.rs::Type::method` (11-16)",
+            "src/lib.rs",
+            Some(fixed_symbols()),
+            false,
+            true,
+        ),
+        (
+            "`lib.rs::Type::method ~90`",
+            "`src/lib.rs::Type::method ~90`",
+            "src/lib.rs",
+            Some(fixed_symbols()),
+            true,
+            false,
+        ),
+    ] {
+        let files = vec![(file, nodes, dirty)];
+        let (updated, fixes, _) = rewrite_in(source, files.clone(), hints);
+        assert_eq!(updated, expected, "{source}");
+        assert_eq!(fixes.len(), 1, "{source}");
+        assert_eq!(fixes[0].before, extract(source)[0].text);
+        assert_eq!(fixes[0].after, extract(expected)[0].text);
+        let (again, fixes, _) = rewrite_in(expected, files, hints);
+        assert_eq!(again, expected);
+        assert!(fixes.is_empty(), "{expected}");
+    }
+    for (source, file) in [
+        ("`lib.rs::Type::method\n`", "src/lib.rs"),
+        ("`design.md:~1`", "docs/my notes/design.md"),
+        ("`colon.txt:1`", "a:b/colon.txt"),
+    ] {
+        let (updated, fixes, _) = rewrite_in(source, vec![(file, None, true)], true);
+        assert_eq!(updated, source);
+        assert!(fixes.is_empty(), "{source}");
     }
 }
 
@@ -884,19 +972,29 @@ fn paths_use_exact_then_component_suffix_and_reject_outside_root() {
     .map(PathBuf::from);
     let root = Path::new("/abs/root");
     for p in ["src/a.rs", "./src/a.rs", "/abs/root/src/a.rs"] {
-        assert_eq!(resolve(root, &files, p), vec![PathBuf::from("src/a.rs")]);
+        assert_eq!(
+            resolve(root, &files, p),
+            PathMatch::Exact(PathBuf::from("src/a.rs"))
+        );
     }
     assert_eq!(
         resolve(root, &files, "config.rs"),
-        vec![PathBuf::from("config.rs")]
+        PathMatch::Exact(PathBuf::from("config.rs"))
+    );
+    assert_eq!(
+        resolve(root, &[PathBuf::from("other/config.rs")], "config.rs"),
+        PathMatch::Suffix(vec![PathBuf::from("other/config.rs")])
     );
     assert_eq!(
         resolve(root, &files, "definitions/mod.rs"),
-        vec![PathBuf::from("one/definitions/mod.rs")]
+        PathMatch::Suffix(vec![PathBuf::from("one/definitions/mod.rs")])
     );
-    assert_eq!(resolve(root, &files, "mod.rs").len(), 2);
+    assert_eq!(
+        resolve(root, &files, "mod.rs"),
+        PathMatch::Suffix(vec!["one/definitions/mod.rs".into(), "two/mod.rs".into()])
+    );
     for p in ["onfig.rs", "/outside/src/a.rs", "../src/a.rs"] {
-        assert!(resolve(root, &files, p).is_empty());
+        assert_eq!(resolve(root, &files, p), PathMatch::Suffix(Vec::new()));
     }
 }
 
@@ -999,14 +1097,22 @@ fn reports_include_all_json_keys_but_only_non_ok_text_lines() {
     assert_eq!(report.render(false).unwrap().lines().count(), 2);
     let mut anchors = report.anchors;
     anchors.push(check_lines(anchor("a.rs:2"), "a.rs".into(), 1));
+    let mut short = verdict(anchor("b.rs:1"), Some("src/b.rs".into()), Status::ShortPath);
+    short.detail = "resolves to src/b.rs".into();
+    anchors.push(short);
     let report = Report::new(Path::new("notes.md"), Path::new("/root"), anchors);
     assert_eq!(report.exit_code(), 7);
+    assert_eq!(report.summary.failed, 2);
     let text = report.render(false).unwrap();
-    assert_eq!(text.lines().count(), 3);
-    assert!(text.ends_with("3 anchors in notes.md: 1 ok, 1 failed, 1 unchecked, 0 external\n"));
+    assert_eq!(text.lines().count(), 4);
+    assert!(text.ends_with("4 anchors in notes.md: 1 ok, 2 failed, 1 unchecked, 0 external\n"));
     assert!(text.contains("notes.md:1  line-outside  a.rs:2  "));
+    assert!(text.contains("notes.md:1  short-path  b.rs:1  resolves to src/b.rs\n"));
     let value: serde_json::Value = serde_json::from_str(&report.render(true).unwrap()).unwrap();
-    assert_eq!(value["anchors"].as_array().unwrap().len(), 3);
+    assert_eq!(value["anchors"].as_array().unwrap().len(), 4);
+    assert_eq!(value["anchors"][3]["status"], "short-path");
+    assert_eq!(value["anchors"][3]["path"], "src/b.rs");
+    assert_eq!(value["anchors"][3]["files"], json!([]));
     let keys: Vec<_> = value["anchors"][0]
         .as_object()
         .unwrap()
@@ -1030,7 +1136,7 @@ fn reports_include_all_json_keys_but_only_non_ok_text_lines() {
     );
     assert_eq!(
         value["summary"],
-        json!({"anchors":3,"ok":1,"failed":1,"unchecked":1,"external":0})
+        json!({"anchors":4,"ok":1,"failed":2,"unchecked":1,"external":0})
     );
     assert_eq!(
         Report::new(Path::new("empty.md"), Path::new("/root"), vec![]).exit_code(),

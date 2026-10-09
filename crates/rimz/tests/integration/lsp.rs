@@ -903,14 +903,21 @@ fn lsp_check_fixes_hints_without_rewriting_other_notes() {
             .unwrap()
             .success()
     );
-    for file in ["show.rs", "one/dup.rs", "two/dup.rs", "notes.py"] {
+    for file in [
+        "show.rs",
+        "one/dup.rs",
+        "two/dup.rs",
+        "notes.py",
+        "docs/manual.md",
+    ] {
         let path = env.project_root.join(file);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, "line\n".repeat(210)).unwrap();
     }
     let notes = env.project_root.join("notes.md");
     let source = "é `show.rs::Parent::child (~90-99)`\n`show.rs::Parent::child`:90:99\n";
-    std::fs::write(&notes, source).unwrap();
+    let initial = format!("{source}`manual.md:~10`\n");
+    std::fs::write(&notes, &initial).unwrap();
     std::os::unix::fs::symlink("notes.md", env.project_root.join("link.md")).unwrap();
     let (mut broker, _, _) = start_stub_broker(&env, env.project_root.clone());
     let plain = env
@@ -925,7 +932,7 @@ fn lsp_check_fixes_hints_without_rewriting_other_notes() {
             .get("fixes")
             .is_none()
     );
-    assert_eq!(std::fs::read_to_string(&notes).unwrap(), source);
+    assert_eq!(std::fs::read_to_string(&notes).unwrap(), initial);
     let output = env
         .rimz()
         .args(["lsp", "check", "link.md", "--fix"])
@@ -940,12 +947,12 @@ fn lsp_check_fixes_hints_without_rewriting_other_notes() {
     let text = String::from_utf8(output.stdout).unwrap();
     assert_eq!(
         text,
-        "link.md:1  fixed  show.rs::Parent::child (~90-99)  show.rs::Parent::child (~3-5)\nlink.md:2  fixed  show.rs::Parent::child:90:99  show.rs::Parent::child:4:4\n2 anchors in link.md: 2 ok, 0 failed, 0 unchecked, 0 external\n"
+        "link.md:1  fixed  show.rs::Parent::child (~90-99)  show.rs::Parent::child (~3-5)\nlink.md:2  fixed  show.rs::Parent::child:90:99  show.rs::Parent::child:4:4\nlink.md:3  fixed  manual.md:~10  docs/manual.md:~10\n3 anchors in link.md: 3 ok, 0 failed, 0 unchecked, 0 external\n"
     );
     assert!(env.project_root.join("link.md").is_symlink());
     assert_eq!(
         std::fs::read_to_string(&notes).unwrap(),
-        "é `show.rs::Parent::child (~3-5)`\n`show.rs::Parent::child`:4:4\n"
+        "é `show.rs::Parent::child (~3-5)`\n`show.rs::Parent::child`:4:4\n`docs/manual.md:~10`\n"
     );
     let modified = std::fs::metadata(&notes).unwrap().modified().unwrap();
     let output = env
@@ -1246,11 +1253,13 @@ fn lsp_check_reports_anchor_failures_and_coverage() {
         ("lib.rs", "struct Type;\nfn saved() {}\n"),
         ("src/dup.rs", ""),
         ("other/dup.rs", ""),
+        ("src/unique.rs", "fn unique() {}\n"),
+        ("my notes/spaced.txt", "line\n"),
         ("notes.py", ""),
         ("Cargo.toml", ""),
         (
             "notes.md",
-            "`lib.rs::Type::method` (~3)\n`lib.rs::Type.field`\n`lib.rs::nosuch`\n`dup.rs::x`\n`gone.rs::x`\n`lib.rs::saved` (~40)\n`lib.rs:2`\n`notes.py::f`\n`o/r@v1:gone.rs::x`\n",
+            "`lib.rs::Type::method` (~3)\n`lib.rs::Type.field`\n`lib.rs::nosuch`\n`dup.rs::x`\n`gone.rs::x`\n`lib.rs::saved` (~40)\n`lib.rs:2`\n`notes.py::f`\n`o/r@v1:gone.rs::x`\n`unique.rs:1`\n`spaced.txt:1`\n",
         ),
         (
             "ok.md",
@@ -1309,20 +1318,25 @@ fn lsp_check_reports_anchor_failures_and_coverage() {
     );
     assert!(output.stderr.is_empty());
     let text = String::from_utf8(output.stdout).unwrap();
-    assert_eq!(text.lines().count(), 6, "{text}");
+    assert!(
+        text.contains("notes.md:10  short-path  unique.rs:1  resolves to src/unique.rs\n"),
+        "{text}"
+    );
+    assert_eq!(text.lines().count(), 7, "{text}");
     for (line, status) in [
         (3, "missing-symbol"),
         (4, "ambiguous-path"),
         (5, "missing-path"),
         (6, "line-outside"),
         (8, "unchecked"),
+        (10, "short-path"),
     ] {
         assert!(
             text.contains(&format!("notes.md:{line}  {status}  ")),
             "{text}"
         );
     }
-    assert!(text.ends_with("9 anchors in notes.md: 3 ok, 4 failed, 1 unchecked, 1 external\n"));
+    assert!(text.ends_with("11 anchors in notes.md: 4 ok, 5 failed, 1 unchecked, 1 external\n"));
     let output = env
         .rimz()
         .args(["lsp", "check", "notes.md", "--json"])
@@ -1333,7 +1347,7 @@ fn lsp_check_reports_anchor_failures_and_coverage() {
     let value: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(
         value["summary"],
-        json!({"anchors":9,"ok":3,"failed":4,"unchecked":1,"external":1})
+        json!({"anchors":11,"ok":4,"failed":5,"unchecked":1,"external":1})
     );
     let statuses: Vec<_> = value["anchors"]
         .as_array()
@@ -1352,10 +1366,15 @@ fn lsp_check_reports_anchor_failures_and_coverage() {
             "line-outside",
             "ok",
             "unchecked",
-            "external"
+            "external",
+            "short-path",
+            "ok"
         ]
     );
     assert_eq!(value["anchors"][3]["files"].as_array().unwrap().len(), 2);
+    assert_eq!(value["anchors"][9]["path"], "src/unique.rs");
+    assert_eq!(value["anchors"][9]["files"], json!([]));
+    assert_eq!(value["anchors"][9]["detail"], "resolves to src/unique.rs");
     env.rimz()
         .args(["lsp", "check", "ok.md"])
         .assert()
