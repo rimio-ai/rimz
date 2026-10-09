@@ -38,6 +38,7 @@ fn topology(produced_at_ms: u64, writer: Option<TopologyWriter>) -> PaneTopology
         produced_at_ms,
         writer,
         focused_pane: None,
+        clients_withheld: false,
         clients: None,
         panes: Vec::new(),
     }

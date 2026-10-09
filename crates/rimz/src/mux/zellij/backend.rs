@@ -662,6 +662,7 @@ impl ZellijBackend {
             produced_at_ms: observed_at_ms,
             writer: None,
             focused_pane: None,
+            clients_withheld: false,
             clients: None,
             panes: listed.into_iter().map(Into::into).collect(),
         };

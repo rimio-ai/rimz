@@ -260,6 +260,7 @@ impl TestRoom {
                 produced_at_ms,
                 writer: None,
                 focused_pane,
+                clients_withheld: false,
                 clients,
                 panes,
             },

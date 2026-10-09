@@ -47,6 +47,7 @@ fn listing_naming_is_lifted_by_view_and_old_frames_default_to_user() {
         client_viewed: &[],
         client_views: &[],
         client_view_fresh: false,
+        client_sample_withheld: false,
         prior: None,
     });
     assert_eq!(frame.tabs[0].naming, naming);
@@ -153,6 +154,7 @@ fn client_view_sets_session_focus_register() {
         client_viewed: std::slice::from_ref(&viewed),
         client_views: &[],
         client_view_fresh: true,
+        client_sample_withheld: false,
         prior: None,
     });
 
@@ -191,12 +193,165 @@ fn session_focus_wins_when_live() {
         client_viewed: std::slice::from_ref(&stale_client),
         client_views: &[],
         client_view_fresh: true,
+        client_sample_withheld: false,
         prior: Some(&prior),
     });
 
     assert!(diagnostics.is_empty());
     assert_eq!(frame.focused_pane, Some(authoritative));
     assert_eq!(frame.focus_origin, FocusOrigin::SessionFocus);
+}
+
+fn focus_prior() -> PaneFrame {
+    PaneFrame {
+        focused_pane: Some(PaneId::from_parts(MuxName::Zellij, "terminal_1")),
+        ..assemble_frame(
+            vec![
+                pane("terminal_1", "tab_0", Some("zsh"), false),
+                pane("terminal_2", "tab_1", Some("zsh"), false),
+            ],
+            6,
+            "rimz-test",
+        )
+    }
+}
+
+fn focus_after(
+    prior: &PaneFrame,
+    panes: &[&str],
+    viewed: Option<&str>,
+    client_view_fresh: bool,
+    client_sample_withheld: bool,
+) -> PaneFrame {
+    let viewed = viewed.map(|raw| PaneId::from_parts(MuxName::Zellij, raw));
+    assemble_frame_from_inputs(FrameInputs {
+        panes: panes
+            .iter()
+            .map(|raw| pane(raw, "tab_0", Some("zsh"), false))
+            .collect(),
+        views: Vec::new(),
+        produced_at_ms: 7,
+        observed_at_ms: 7,
+        session_name: "rimz-test".to_owned(),
+        session_focus: None,
+        client_viewed: viewed.as_slice(),
+        client_views: &[],
+        client_view_fresh,
+        client_sample_withheld,
+        prior: Some(prior),
+    })
+    .0
+}
+
+#[test]
+fn withheld_sample_admits_a_new_pane() {
+    let frame = focus_after(
+        &focus_prior(),
+        &["terminal_1", "terminal_2", "terminal_3"],
+        Some("terminal_3"),
+        true,
+        true,
+    );
+    assert_eq!(
+        frame.focused_pane,
+        Some(PaneId::from_parts(MuxName::Zellij, "terminal_3"))
+    );
+    assert_eq!(frame.focus_origin, FocusOrigin::ClientView);
+}
+
+#[test]
+fn withheld_sample_keeps_prior_instead_of_a_preexisting_pane() {
+    let prior = focus_after(
+        &focus_prior(),
+        &["terminal_1", "terminal_2", "terminal_3"],
+        Some("terminal_3"),
+        true,
+        false,
+    );
+    let frame = focus_after(
+        &prior,
+        &["terminal_1", "terminal_2", "terminal_3"],
+        Some("terminal_1"),
+        true,
+        true,
+    );
+    assert_eq!(frame.focused_pane, prior.focused_pane);
+    assert_eq!(frame.focus_origin, FocusOrigin::Prior);
+    assert!(frame.client_sample_withheld);
+}
+
+#[test]
+fn withheld_sample_keeps_prior_when_the_roster_grows() {
+    let prior = focus_prior();
+    let frame = focus_after(
+        &prior,
+        &["terminal_1", "terminal_2", "terminal_3"],
+        Some("terminal_1"),
+        true,
+        true,
+    );
+    assert_eq!(frame.focused_pane, prior.focused_pane);
+    assert_eq!(frame.focus_origin, FocusOrigin::Prior);
+}
+
+#[test]
+fn withheld_sample_admits_a_preexisting_pane_when_prior_closed() {
+    let frame = focus_after(
+        &focus_prior(),
+        &["terminal_2"],
+        Some("terminal_2"),
+        true,
+        true,
+    );
+    assert_eq!(
+        frame.focused_pane,
+        Some(PaneId::from_parts(MuxName::Zellij, "terminal_2"))
+    );
+    assert_eq!(frame.focus_origin, FocusOrigin::ClientView);
+}
+
+#[test]
+fn settled_sample_admits_a_preexisting_pane() {
+    let frame = focus_after(
+        &focus_prior(),
+        &["terminal_1", "terminal_2", "terminal_3"],
+        Some("terminal_2"),
+        true,
+        false,
+    );
+    assert_eq!(
+        frame.focused_pane,
+        Some(PaneId::from_parts(MuxName::Zellij, "terminal_2"))
+    );
+    assert_eq!(frame.focus_origin, FocusOrigin::ClientView);
+}
+
+#[test]
+fn withheld_empty_sample_keeps_live_prior() {
+    let prior = focus_prior();
+    let frame = focus_after(
+        &prior,
+        &["terminal_1", "terminal_2", "terminal_3"],
+        None,
+        true,
+        true,
+    );
+    assert_eq!(frame.focused_pane, prior.focused_pane);
+    assert_eq!(frame.focus_origin, FocusOrigin::Prior);
+}
+
+#[test]
+fn withheld_unavailable_sample_keeps_live_prior_across_roster_change() {
+    let prior = focus_prior();
+    let frame = focus_after(
+        &prior,
+        &["terminal_1", "terminal_2", "terminal_3"],
+        None,
+        false,
+        true,
+    );
+    assert_eq!(frame.focused_pane, prior.focused_pane);
+    assert_eq!(frame.focus_origin, FocusOrigin::Prior);
 }
 
 #[test]
@@ -211,6 +366,7 @@ fn dead_session_focus_and_fresh_empty_clients_clear() {
         client_viewed: &[],
         client_views: &[],
         client_view_fresh: true,
+        client_sample_withheld: false,
         prior: None,
     });
 
@@ -247,6 +403,7 @@ fn distinct_client_views_abstain_and_one_fresh_view_wins() {
         client_viewed: &[first.clone(), second.clone()],
         client_views: &[],
         client_view_fresh: true,
+        client_sample_withheld: false,
         prior: Some(&prior),
     });
     assert_eq!(sticky.focused_pane, None);
@@ -264,6 +421,7 @@ fn distinct_client_views_abstain_and_one_fresh_view_wins() {
         client_viewed: std::slice::from_ref(&first),
         client_views: &[],
         client_view_fresh: true,
+        client_sample_withheld: false,
         prior: Some(&prior),
     });
     assert_eq!(freshest.focused_pane, Some(first));
@@ -300,6 +458,7 @@ fn full_client_map_requires_every_client_to_agree_on_one_terminal() {
         client_viewed: std::slice::from_ref(&terminal),
         client_views: &agree,
         client_view_fresh: true,
+        client_sample_withheld: false,
         prior: None,
     });
     assert_eq!(frame.focused_pane, Some(terminal.clone()));
@@ -321,6 +480,7 @@ fn full_client_map_requires_every_client_to_agree_on_one_terminal() {
         client_viewed: std::slice::from_ref(&terminal),
         client_views: &distinct,
         client_view_fresh: true,
+        client_sample_withheld: false,
         prior: None,
     });
     assert_eq!(frame.focused_pane, None);
@@ -350,6 +510,7 @@ fn tmux_client_map_resolves_one_live_pane_and_abstains_on_distinct_views() {
         client_viewed: std::slice::from_ref(&first),
         client_views: std::slice::from_ref(&first_view),
         client_view_fresh: true,
+        client_sample_withheld: false,
         prior: None,
     });
     assert_eq!(single.focused_pane, Some(first.clone()));
@@ -371,6 +532,7 @@ fn tmux_client_map_resolves_one_live_pane_and_abstains_on_distinct_views() {
         client_viewed: &[first, second],
         client_views: &distinct_views,
         client_view_fresh: true,
+        client_sample_withheld: false,
         prior: None,
     });
     assert_eq!(distinct.focused_pane, None);
@@ -407,6 +569,7 @@ fn multiple_client_views_ignore_prior_missing_from_live_frame() {
         client_viewed: &[first.clone(), second, stale],
         client_views: &[],
         client_view_fresh: true,
+        client_sample_withheld: false,
         prior: Some(&prior),
     });
 
@@ -427,6 +590,7 @@ fn summarized_client_view_ignores_dead_panes_when_one_live_pane_remains() {
         client_viewed: &[dead, live.clone()],
         client_views: &[],
         client_view_fresh: true,
+        client_sample_withheld: false,
         prior: None,
     });
 
@@ -460,6 +624,7 @@ fn unavailable_client_sample_holds_live_prior_without_raw_fallback() {
         client_viewed: &[],
         client_views: &[],
         client_view_fresh: false,
+        client_sample_withheld: false,
         prior: Some(&prior),
     });
     assert_eq!(carried.focused_pane, Some(prior_focus));
@@ -479,6 +644,7 @@ fn unavailable_client_sample_holds_live_prior_without_raw_fallback() {
         client_viewed: &[],
         client_views: &[],
         client_view_fresh: false,
+        client_sample_withheld: false,
         prior: None,
     });
     assert_eq!(raw.focused_pane, None);
@@ -515,6 +681,7 @@ fn unavailable_client_sample_clears_prior_when_the_roster_changes() {
             client_viewed: &[],
             client_views: &[],
             client_view_fresh: false,
+            client_sample_withheld: false,
             prior: Some(&prior),
         });
         assert_eq!(
@@ -540,6 +707,7 @@ fn detached_ambiguous_raw_marks_clear_without_live_prior() {
         client_viewed: &[],
         client_views: &[],
         client_view_fresh: false,
+        client_sample_withheld: false,
         prior: None,
     });
 
@@ -562,6 +730,7 @@ fn sidebar_pane_can_be_the_session_focus_register() {
         client_viewed: std::slice::from_ref(&own),
         client_views: &[],
         client_view_fresh: true,
+        client_sample_withheld: false,
         prior: None,
     });
 
@@ -583,6 +752,7 @@ fn duplicate_pane_ids_keep_first_and_report_diagnostic() {
         client_viewed: &[],
         client_views: &[],
         client_view_fresh: false,
+        client_sample_withheld: false,
         prior: None,
     });
 

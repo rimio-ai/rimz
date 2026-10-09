@@ -355,6 +355,7 @@ pub(super) struct FrameInputs<'a> {
     pub client_viewed: &'a [PaneId],
     pub client_views: &'a [crate::pane::ClientPaneView],
     pub client_view_fresh: bool,
+    pub client_sample_withheld: bool,
     pub prior: Option<&'a PaneFrame>,
 }
 
@@ -373,6 +374,7 @@ pub fn assemble_frame(
         client_viewed: &[],
         client_views: &[],
         client_view_fresh: false,
+        client_sample_withheld: false,
         prior: None,
     })
     .0
@@ -389,6 +391,7 @@ pub(super) fn assemble_frame_from_inputs(inputs: FrameInputs<'_>) -> (PaneFrame,
         client_viewed,
         client_views,
         client_view_fresh,
+        client_sample_withheld,
         prior,
     } = inputs;
     let topology_stamp_ms = prior.and_then(|frame| frame.topology_stamp_ms);
@@ -461,6 +464,7 @@ pub(super) fn assemble_frame_from_inputs(inputs: FrameInputs<'_>) -> (PaneFrame,
         client_viewed,
         client_views,
         client_view_fresh,
+        client_sample_withheld,
         &live,
     );
     (
@@ -478,7 +482,7 @@ pub(super) fn assemble_frame_from_inputs(inputs: FrameInputs<'_>) -> (PaneFrame,
             focused_pane,
             focus_origin,
             client_view_fresh,
-            client_sample_withheld: false,
+            client_sample_withheld,
             presence: None,
         },
         diagnostics,
@@ -491,6 +495,7 @@ fn resolve_session_focus(
     client_viewed: &[PaneId],
     client_views: &[crate::pane::ClientPaneView],
     client_view_fresh: bool,
+    client_sample_withheld: bool,
     live: &HashSet<PaneId>,
 ) -> (Option<PaneId>, FocusOrigin) {
     if let Some(pane) = session_focus
@@ -499,8 +504,26 @@ fn resolve_session_focus(
         return (Some(pane.clone()), FocusOrigin::SessionFocus);
     }
 
+    let prior_live = prior
+        .filter(|_| client_sample_withheld || !client_view_fresh)
+        .map(|prior| {
+            prior
+                .pane_states()
+                .map(|pane| pane.pane_id.clone())
+                .collect::<HashSet<_>>()
+        })
+        .unwrap_or_default();
+    let prior_focus = prior
+        .and_then(|prior| prior.focused_pane.as_ref())
+        .filter(|pane| live.contains(*pane));
     if client_view_fresh {
         let pane = crate::mux::ClientView::unique_live_focus(client_views, client_viewed, live);
+        if client_sample_withheld
+            && let Some(prior_focus) = prior_focus
+            && pane.as_ref().is_none_or(|pane| prior_live.contains(pane))
+        {
+            return (Some(prior_focus.clone()), FocusOrigin::Prior);
+        }
         let origin = if pane.is_some() {
             FocusOrigin::ClientView
         } else {
@@ -509,16 +532,8 @@ fn resolve_session_focus(
         return (pane, origin);
     }
 
-    let pane = prior
-        .filter(|prior| {
-            let prior_live = prior
-                .pane_states()
-                .map(|pane| pane.pane_id.clone())
-                .collect::<HashSet<_>>();
-            &prior_live == live
-        })
-        .and_then(|prior| prior.focused_pane.as_ref())
-        .filter(|prior| live.contains(*prior))
+    let pane = prior_focus
+        .filter(|_| client_sample_withheld || &prior_live == live)
         .cloned();
     let origin = if pane.is_some() {
         FocusOrigin::Prior
