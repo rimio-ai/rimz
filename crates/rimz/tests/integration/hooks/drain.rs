@@ -1078,6 +1078,77 @@ fn crash_redo_records_the_prompt_after_the_lifecycle_batch() {
 }
 
 #[test]
+fn reaped_session_is_not_part_of_a_crash_redo() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let store = env.store();
+    let mut dead = rimz::agents::AgentLifecycleObservation::new(
+        Some("dead-reap-session".into()),
+        LifecycleSignal::Registered,
+    );
+    dead.agent_pid = Some(u32::MAX);
+    rimz::store::event_log::append(
+        &store.paths().events_log,
+        &rimz::EventEnvelope::agent_lifecycle(
+            env.workspace_id.clone(),
+            "rimz-test",
+            "claude",
+            "SessionStart",
+            &dead,
+        ),
+    )
+    .unwrap();
+    let stamp = store.paths().cache_dir.join("dead-reap.stamp");
+    if stamp.exists() {
+        std::fs::remove_file(stamp).unwrap();
+    }
+    let mut frame = stop_frame(&env);
+    frame.ts -= Duration::from_secs(10);
+    let (frame, _) = append_frame(&env, frame);
+    let reap_started = Timestamp::now();
+    let (mut drainer, release) = paused_drainer(&env, "RIMZ_TEST_HOOK_DRAIN_AFTER_APPLY");
+    let before = env.read_events();
+    drainer.kill().unwrap();
+    drainer.wait().unwrap();
+    drop(release);
+    let reaped: Vec<_> = before
+        .iter()
+        .filter(|event| {
+            matches!(event.kind(), EventKind::AgentLifecycle(payload)
+                if payload.event_name.as_deref() == Some("ReapedDead")
+                    && payload.observation.agent_id.as_deref() == Some("dead-reap-session"))
+        })
+        .collect();
+    assert_eq!(reaped.len(), 1, "apply must reap the dead session");
+    assert!(reaped[0].ingress.is_none(), "reaping is not a frame effect");
+    assert!(
+        serde_json::to_value(reaped[0])
+            .unwrap()
+            .get("ingress")
+            .is_none()
+    );
+    assert!(
+        reaped[0].timestamp >= reap_started,
+        "reaping must use wall-clock time"
+    );
+    once(&env);
+    assert_eq!(
+        serde_json::to_value(env.read_events()).unwrap(),
+        serde_json::to_value(before).unwrap(),
+        "redo must not append another end"
+    );
+    let own = derived(&env, &frame.event_id);
+    assert_eq!(own.len(), 1);
+    assert!(
+        own.iter().all(|event| {
+            matches!(event.kind(), EventKind::AgentLifecycle(payload)
+            if payload.observation.agent_id.as_deref() == Some("drain-session"))
+        }),
+        "recovery must only find this frame's session"
+    );
+}
+
+#[test]
 fn crash_redo_does_not_repeat_the_prompt_after_the_effects() {
     let env = Env::new();
     env.record(&env.project_root);
