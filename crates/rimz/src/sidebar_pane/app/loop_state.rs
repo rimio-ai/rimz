@@ -1565,7 +1565,9 @@ impl LoopState {
             .is_some_and(|pane| self.current.viewed_panes.contains(pane));
         let focused_row_id = focused_pane
             .as_ref()
-            .filter(|_| viewing_register_pane)
+            .filter(|pane| {
+                viewing_register_pane && self.current.focused_pane.as_ref() == Some(*pane)
+            })
             .and_then(|pane| row_id_of_pane(&self.current, pane));
         let marks = self.fold_inputs.as_ref().map_or_else(
             || self.read_marks.load_merged(),
@@ -1802,7 +1804,11 @@ impl LoopState {
         };
         let now_ms = crate::utils::time::unix_now_ms();
         let presentation_at_ms = anchor.applied_at_ms.unwrap_or(anchor.issued_at_ms);
-        if self.ui.selected_pane.as_ref() == Some(&anchor.pane_id)
+        if self
+            .current
+            .row_owning_pane(&anchor.pane_id)
+            .and_then(|row| row.pane.as_ref())
+            .is_some_and(|pane| self.ui.selected_pane.as_ref() == Some(&pane.pane_id))
             && anchor.issued_at_ms > self.ui.last_focus_anchor_ms
             && crate::mux::focus_anchor::is_fresh(presentation_at_ms, now_ms)
         {

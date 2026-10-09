@@ -314,9 +314,7 @@ pub fn capped_visible_rows<'a>(
 }
 
 fn row_is_focused(row: &SidebarRow, focused_pane: Option<&PaneId>) -> bool {
-    row.pane
-        .as_ref()
-        .is_some_and(|pane| Some(&pane.pane_id) == focused_pane)
+    row.pane_ids().any(|pane| Some(pane) == focused_pane)
 }
 
 fn row_band(row: &SidebarRow) -> u8 {
@@ -439,6 +437,25 @@ mod tests {
             None,
         );
         assert_eq!(ids(&filtered), ["done-unread", "done-focused"]);
+    }
+
+    #[test]
+    fn roster_keeps_an_idle_parent_beyond_the_cap_when_its_child_is_focused() {
+        let mut rows = idle_rows(9);
+        let child = PaneId::from_parts(crate::MuxName::Zellij, "terminal_child");
+        let now = rows[8].last_activity;
+        rows[8].as_agent_mut().unwrap().sub_agents.push(
+            serde_json::from_value(serde_json::json!({
+                "id": "child", "name": "explorer", "status": "running",
+                "last_activity": now, "pane": child,
+            }))
+            .unwrap(),
+        );
+        let mut snapshot = snapshot(vec![group(rows)]);
+        snapshot.focused_pane = Some(child);
+        let roster = VisibleRoster::baseline(&snapshot);
+        assert!(ids(&roster).contains(&"idle-8"));
+        assert!(roster.len() < 9);
     }
 
     #[test]

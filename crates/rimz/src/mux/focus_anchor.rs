@@ -91,10 +91,8 @@ impl FocusObservation {
             panes_observed_at_ms: snapshot.panes_observed_at_ms,
             pane_session_name: snapshot.pane_session_name.clone(),
             pane_ids: snapshot
-                .worktree_groups
-                .iter()
-                .flat_map(|group| &group.rows)
-                .filter_map(|row| row.pane.as_ref().map(|pane| pane.pane_id.clone()))
+                .rows()
+                .flat_map(|row| row.pane_ids().cloned())
                 .collect(),
             presence_known: snapshot.presence.is_some(),
             client_views: snapshot.client_views.clone(),
@@ -742,5 +740,43 @@ mod tests {
                 FocusObservationOutcome::Invalidated,
             );
         }
+    }
+
+    #[test]
+    fn requested_child_intent_survives_until_its_binding_closes() {
+        let parent = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+        let child = PaneId::from_parts(MuxName::Zellij, "terminal_2");
+        let mut snapshot = observed_snapshot(
+            "rimz-test",
+            std::slice::from_ref(&parent),
+            vec![view(7, &parent)],
+        );
+        let row = &mut snapshot.worktree_groups[0].rows[0];
+        row.card = crate::store::snapshot::RowCard::Agent(Box::default());
+        row.as_agent_mut().unwrap().sub_agents.push(
+            serde_json::from_value(serde_json::json!({
+                "id": "child", "name": "explorer", "status": "running",
+                "last_activity": snapshot.now, "pane": child,
+            }))
+            .unwrap(),
+        );
+        let mut intent = anchor(1_000);
+        intent.pane_id = child;
+        intent.state = FocusIntentState::Requested;
+        intent.applied_at_ms = None;
+        intent.pre_action = vec![view(7, &parent)];
+        assert_eq!(
+            observation_outcome(&intent, &snapshot, 1_001),
+            FocusObservationOutcome::Present
+        );
+        snapshot.worktree_groups[0].rows[0]
+            .as_agent_mut()
+            .unwrap()
+            .sub_agents[0]
+            .pane = None;
+        assert_eq!(
+            observation_outcome(&intent, &snapshot, 1_001),
+            FocusObservationOutcome::Invalidated
+        );
     }
 }

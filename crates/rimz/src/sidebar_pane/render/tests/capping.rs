@@ -307,6 +307,28 @@ fn finished_group_collapses_unread_success_until_revealed() {
 }
 
 #[test]
+fn finished_group_reveals_when_a_members_child_is_focused() {
+    let mut group = group(vec![
+        agent_row("parent", AgentStatus::Success),
+        agent_row("sibling", AgentStatus::Success),
+    ]);
+    group.finished = true;
+    let child = PaneId::from_parts(MuxName::Zellij, "terminal_child");
+    let now = group.rows[0].last_activity;
+    group.rows[0].as_agent_mut().unwrap().sub_agents.push(
+        serde_json::from_value(serde_json::json!({
+            "id": "child", "name": "explorer", "status": "running",
+            "last_activity": now, "pane": child,
+        }))
+        .unwrap(),
+    );
+    assert_eq!(
+        visible_ids_with_context(&group, &BodyLens::default(), false, None, Some(&child)),
+        ["parent", "sibling"]
+    );
+}
+
+#[test]
 fn finished_roster_names_keep_soft_provider_brand_tones() {
     let mut planner = agent_row("planner", AgentStatus::Success);
     planner.name = "claude".to_owned();

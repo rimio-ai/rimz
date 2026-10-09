@@ -153,15 +153,7 @@ fn focus_intent_confirmed(
 }
 
 fn snapshot_has_pane(snapshot: &SidebarSnapshot, pane_id: &crate::ids::PaneId) -> bool {
-    snapshot
-        .worktree_groups
-        .iter()
-        .flat_map(|group| &group.rows)
-        .any(|row| {
-            row.pane
-                .as_ref()
-                .is_some_and(|pane| &pane.pane_id == pane_id)
-        })
+    snapshot.row_owning_pane(pane_id).is_some()
 }
 
 fn closes_carried_pane(
@@ -553,6 +545,29 @@ mod tests {
         );
 
         assert_eq!(fused.focused_pane, Some(observed));
+    }
+
+    #[test]
+    fn pending_child_intent_overrides_parent_focus() {
+        let target = PaneId::from_parts(MuxName::Zellij, "terminal_2");
+        let mut snapshot = pulled(vec![pane("terminal_1", "zsh")], 10);
+        snapshot.focused_pane = Some(PaneId::from_parts(MuxName::Zellij, "terminal_1"));
+        let row = &mut snapshot.worktree_groups[0].rows[0];
+        row.card = crate::store::snapshot::RowCard::Agent(Box::default());
+        row.as_agent_mut().unwrap().sub_agents.push(
+            serde_json::from_value(serde_json::json!({
+                "id": "child", "name": "explorer", "status": "running",
+                "last_activity": snapshot.now, "pane": target,
+            }))
+            .unwrap(),
+        );
+        let (fused, _) = fuse(
+            &snapshot,
+            &EventStore::default(),
+            Some(&intent(target.clone(), 11)),
+            11,
+        );
+        assert_eq!(fused.focused_pane, Some(target));
     }
 
     #[test]

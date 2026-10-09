@@ -12,7 +12,6 @@ use crate::sidebar_pane::render::UiState;
 
 use super::gate::{GateState, gate_held_ms};
 use super::health::{Health, next_health};
-use super::selection::row_index_of_pane;
 
 /// Decide what to render next given the latest snapshot outcome.
 /// Pure data, no I/O — extracted so the loop's recovery rules are testable.
@@ -206,13 +205,16 @@ pub(super) fn session_focus_baseline(
     snapshot: &SidebarSnapshot,
     own_pane: Option<&crate::ids::PaneId>,
 ) -> Option<crate::ids::PaneId> {
-    snapshot
+    let focused = snapshot
         .focused_pane
         .as_ref()
         .filter(|_| own_pane.is_none() || snapshot.own_view.is_some())
-        .filter(|pane| own_pane != Some(*pane))
-        .filter(|pane| row_index_of_pane(snapshot, &Default::default(), pane).is_some())
-        .cloned()
+        .filter(|pane| own_pane != Some(*pane))?;
+    snapshot
+        .row_owning_pane(focused)?
+        .pane
+        .as_ref()
+        .map(|pane| pane.pane_id.clone())
 }
 
 pub(super) fn apply_manual_unread_guard(

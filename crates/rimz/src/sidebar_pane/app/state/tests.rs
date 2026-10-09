@@ -164,6 +164,30 @@ fn session_focus_without_own_pane_is_seated() {
     );
 }
 
+#[test]
+fn child_focus_baseline_selects_the_parent_and_requires_own_view() {
+    let mut snapshot = row_snapshot(&workspace(), AgentStatus::Idle, true);
+    let parent = snapshot.focused_pane.clone();
+    let child = PaneId::from_parts(crate::MuxName::Tmux, "%2");
+    snapshot.worktree_groups[0].rows[0]
+        .as_agent_mut()
+        .unwrap()
+        .sub_agents
+        .push(
+            serde_json::from_value(serde_json::json!({
+                "id": "child", "name": "explorer", "status": "running",
+                "last_activity": snapshot.now, "pane": child,
+            }))
+            .unwrap(),
+        );
+    snapshot.focused_pane = Some(child);
+    let own = PaneId::from_parts(crate::MuxName::Tmux, "%sidebar");
+    assert_eq!(session_focus_baseline(&snapshot, Some(&own)), parent);
+    snapshot.own_view = None;
+    assert_eq!(session_focus_baseline(&snapshot, Some(&own)), None);
+    assert_eq!(session_focus_baseline(&snapshot, None), parent);
+}
+
 fn snapshot_in_group(
     kind: crate::store::snapshot::SidebarWorktreeKind,
     key: &str,
@@ -738,6 +762,30 @@ fn focus_writes_read_receipt_and_clears_current_unread_row() {
         "a focused unread row writes a read receipt"
     );
     assert!(!row_unread(&a.current));
+}
+
+#[test]
+fn viewed_child_focus_leaves_parent_unread_without_a_receipt() {
+    let ws = workspace();
+    let (_dir, runtime) = runtime_for(&ws);
+    let instance = SidebarInstanceId::new();
+    let mut harness = ApplyHarness::for_runtime(&ws, runtime.clone(), instance.clone());
+    let mut snapshot = row_snapshot_at(&ws, AgentStatus::Success, true, fixed_time(1_700_000_000));
+    let child = PaneId::from_parts(crate::MuxName::Tmux, "%2");
+    let row = &mut snapshot.worktree_groups[0].rows[0];
+    row.unread = true;
+    row.as_agent_mut().unwrap().sub_agents.push(
+        serde_json::from_value(serde_json::json!({
+            "id": "child", "name": "explorer", "status": "running",
+            "last_activity": snapshot.now, "pane": child,
+        }))
+        .unwrap(),
+    );
+    snapshot.focused_pane = Some(child.clone());
+    snapshot.viewed_panes = vec![child];
+    harness.apply(snapshot);
+    assert!(row_unread(&harness.current));
+    assert!(!runtime.sidebar_read_marks_path(&instance).exists());
 }
 
 #[test]
