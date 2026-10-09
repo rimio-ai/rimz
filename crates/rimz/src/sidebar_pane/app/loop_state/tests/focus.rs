@@ -223,6 +223,7 @@ fn shared_anchor_keeps_selection_and_fresh_nonce_pane_local() {
     let stamp = crate::utils::time::unix_now_ms();
     let old = applied_focus_anchor(zellij("terminal_1"), 7, stamp, None);
     let new = requested_focus_anchor(zellij("terminal_2"), 9, stamp + 1, None);
+    rig.state.current = snapshot_with_focused_pane(&rig.ws, old.pane_id.clone());
     crate::mux::focus_anchor::store(&rig.runtime, &new).unwrap();
     rig.state.fold_inputs = Some(Arc::new(super::super::super::fetch::FoldInputs {
         anchor: Some(old.clone()),
@@ -463,6 +464,54 @@ fn fresh_requested_focus_anchor_installs_shared_hold_once() {
 
     assert_eq!(rig.state.ui.scroll_offset, 4);
     assert!(rig.state.ui.manual_scroll.is_some());
+    assert_eq!(rig.state.ui.last_focus_anchor_ms, stamp_ms);
+}
+
+#[test]
+fn fresh_child_focus_anchor_selects_parent_and_seeds_scroll_and_hold() {
+    let mut rig = Rig::new();
+    let parent = zellij("terminal_2");
+    let first = zellij("terminal_1");
+    let child = zellij("terminal_child");
+    let stamp_ms = crate::utils::time::unix_now_ms();
+    let order = crate::sidebar_pane::render::FrozenOrder {
+        groups: vec!["/repo/main".to_owned()],
+        rows: vec![
+            crate::sidebar_pane::render::FrozenRow {
+                id: parent.to_string(),
+                pane: Some(parent.to_string()),
+            },
+            crate::sidebar_pane::render::FrozenRow {
+                id: first.to_string(),
+                pane: Some(first.to_string()),
+            },
+        ],
+        visible: HashSet::from([parent.to_string()]),
+    };
+    crate::mux::focus_anchor::store(
+        &rig.runtime,
+        &requested_focus_anchor(child.clone(), 7, stamp_ms, Some(order.clone())),
+    )
+    .unwrap();
+    let mut snapshot = snapshot_with_focused_pane(&rig.ws, parent.clone());
+    let row = snapshot.worktree_groups[0]
+        .rows
+        .iter_mut()
+        .find(|row| row.pane.as_ref().unwrap().pane_id == parent)
+        .unwrap();
+    row.card = crate::store::snapshot::RowCard::Agent(Box::default());
+    row.as_agent_mut().unwrap().sub_agents.push(
+        serde_json::from_value(serde_json::json!({
+            "id": "child", "name": "explorer", "status": "running",
+            "last_activity": snapshot.now, "pane": child,
+        }))
+        .unwrap(),
+    );
+    snapshot.focused_pane = Some(child);
+    rig.fold(snapshot, SnapshotSource::Produced);
+    assert_eq!(rig.state.ui.selected_pane, Some(parent));
+    assert_eq!(rig.state.ui.scroll_offset, 7);
+    assert_eq!(rig.state.ui.order_hold.as_ref().unwrap().frozen, order);
     assert_eq!(rig.state.ui.last_focus_anchor_ms, stamp_ms);
 }
 
