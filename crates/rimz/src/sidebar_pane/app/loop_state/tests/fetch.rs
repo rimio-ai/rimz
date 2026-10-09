@@ -18,116 +18,147 @@ impl std::io::Write for FrameOutput {
 }
 
 #[test]
-fn published_seed_without_the_focused_row_paints_resting_cards_until_correction() {
-    for focus_own in [false, true] {
-        let own = pane("terminal_10", "tab_1", false);
-        let shell = pane("terminal_11", "tab_1", true);
-        let focused = if focus_own {
-            own.pane_id.clone()
-        } else {
-            shell.pane_id.clone()
-        };
-        let mut rig = Rig::with_own_pane(own.pane_id.clone());
-        let output = FrameOutput::default();
-        rig.terminal = Terminal::with_options(
-            PaneBackend::headless(output.clone()),
-            ratatui::TerminalOptions {
-                viewport: ratatui::Viewport::Fixed(ratatui::layout::Rect::new(0, 0, 54, 24)),
-            },
-        )
-        .unwrap();
-        rig.runtime.ensure_dirs().unwrap();
-        let mut seed = agent_snapshot(&rig.ws);
-        seed.theme.display.card_density = crate::config::CardDensityMode::Compact;
-        seed.focused_pane = Some(focused.clone());
+fn pre_tab_seed_and_worker_fold_paint_resting_cards_until_correction() {
+    let own = pane("terminal_10", "tab_1", false);
+    let shell = pane("terminal_11", "tab_1", true);
+    let mut rig = Rig::with_own_pane(own.pane_id.clone());
+    let output = FrameOutput::default();
+    rig.terminal = Terminal::with_options(
+        PaneBackend::headless(output.clone()),
+        ratatui::TerminalOptions {
+            viewport: ratatui::Viewport::Fixed(ratatui::layout::Rect::new(0, 0, 54, 24)),
+        },
+    )
+    .unwrap();
+    rig.runtime.ensure_dirs().unwrap();
+    let mut seed = agent_snapshot(&rig.ws);
+    seed.theme.display.card_density = crate::config::CardDensityMode::Compact;
+    seed.focused_pane = Some(
         seed.worktree_groups[0].rows[0]
-            .as_agent_mut()
+            .pane
+            .as_ref()
             .unwrap()
-            .status = crate::agents::AgentStatus::Idle;
-        seed.reflects_log = Some(crate::store::event_log::LogExtent {
-            generation: 0,
-            offset: 0,
-        });
-        let mut frame = crate::sidebar::frame::assemble_frame(
-            seed.rows().filter_map(|row| row.pane.clone()).collect(),
-            crate::utils::time::unix_now_ms(),
+            .pane_id
+            .clone(),
+    );
+    seed.worktree_groups[0].rows[0]
+        .as_agent_mut()
+        .unwrap()
+        .status = crate::agents::AgentStatus::Idle;
+    seed.reflects_log = Some(crate::store::event_log::LogExtent {
+        generation: 0,
+        offset: 0,
+    });
+    let mut frame = crate::sidebar::frame::assemble_frame(
+        seed.rows().filter_map(|row| row.pane.clone()).collect(),
+        crate::utils::time::unix_now_ms(),
+        "rimz-test",
+    );
+    frame.topology_stamp_ms = Some(crate::utils::time::unix_now_ms());
+    frame.metrics_stamp_ms = frame.topology_stamp_ms;
+    std::fs::write(
+        rig.runtime.pane_frame_path(),
+        serde_json::to_vec(&frame).unwrap(),
+    )
+    .unwrap();
+    crate::sidebar::workspace_projection::WorkspaceProjectionPublisher::default()
+        .publish(
+            &rig.runtime,
             "rimz-test",
-        );
-        frame.topology_stamp_ms = Some(crate::utils::time::unix_now_ms());
-        frame.metrics_stamp_ms = frame.topology_stamp_ms;
-        std::fs::write(
-            rig.runtime.pane_frame_path(),
-            serde_json::to_vec(&frame).unwrap(),
+            &crate::sidebar::enrich::WorkspaceSnapshot(seed.clone()),
+            &frame,
         )
         .unwrap();
-        crate::sidebar::workspace_projection::WorkspaceProjectionPublisher::default()
-            .publish(
-                &rig.runtime,
-                "rimz-test",
-                &crate::sidebar::enrich::WorkspaceSnapshot(seed),
-                &frame,
-            )
-            .unwrap();
 
-        rig.state.seed_published(FetchRole::Consumer);
-        assert_eq!(
-            rig.state.current.rows().count(),
-            1,
-            "the published card seeded"
-        );
-        assert_eq!(rig.state.current.focused_pane, Some(focused));
-        assert_eq!(rig.state.ui.selected_pane, None);
-        assert_eq!(rig.state.ui.selected_index, None);
-        rig.state.next_frame = Instant::now();
-        rig.paint(true);
-        let mut parser = vt100::Parser::new(24, 54, 0);
-        parser.process(&output.0.lock().unwrap());
-        let seeded = parser.screen().contents();
+    rig.state.seed_published(FetchRole::Consumer);
+    assert_eq!(
+        rig.state.current.rows().count(),
+        1,
+        "the published card seeded"
+    );
+    rig.state.next_frame = Instant::now();
+    rig.paint(true);
+    let mut parser = vt100::Parser::new(24, 54, 0);
+    parser.process(&output.0.lock().unwrap());
+    let seeded = parser.screen().contents();
+    assert!(
+        seeded.contains("claude"),
+        "first paint is not blank:\n{seeded}"
+    );
+    for glyph in ['▌', '▐', '▎', '🮇'] {
         assert!(
-            seeded.contains("claude"),
-            "first paint is not blank:\n{seeded}"
-        );
-        for glyph in ['▌', '▐', '▎', '🮇'] {
-            assert!(
-                !seeded.contains(glyph),
-                "seed has no selection glyph {glyph}:\n{seeded}"
-            );
-        }
-        let agent_line = seeded
-            .lines()
-            .position(|line| line.contains("claude"))
-            .unwrap();
-        assert!(
-            seeded
-                .lines()
-                .nth(agent_line + 1)
-                .unwrap()
-                .trim()
-                .is_empty(),
-            "the compact idle card rests at one line:\n{seeded}"
-        );
-
-        let mut correction = rig.state.current.clone();
-        correction.worktree_groups[0].rows.push(
-            snapshot_with_panes(&rig.ws, vec![shell.clone()]).worktree_groups[0].rows[0].clone(),
-        );
-        correction.focused_pane = Some(shell.pane_id.clone());
-        rig.fold(correction, SnapshotSource::Produced);
-        assert_eq!(rig.state.ui.selected_pane, Some(shell.pane_id));
-        assert_eq!(rig.state.ui.selected_index, Some(1));
-        rig.state.next_frame = Instant::now();
-        rig.paint(true);
-        parser.process(&output.0.lock().unwrap());
-        let corrected = parser.screen().contents();
-        assert!(
-            corrected.contains('▎') && corrected.contains('🮇'),
-            "correction draws the lane:\n{corrected}"
-        );
-        assert!(
-            corrected.contains('▌') && corrected.contains('▐'),
-            "correction seats the shell:\n{corrected}"
+            !seeded.contains(glyph),
+            "seed has no selection glyph {glyph}:\n{seeded}"
         );
     }
+    let seeded_focus = rig.state.current.focused_pane.clone();
+    assert_eq!(rig.state.ui.selected_pane, None);
+    assert_eq!(rig.state.ui.selected_index, None);
+    assert!(!seeded.contains('┄'), "seed has no header seal:\n{seeded}");
+    let agent_line = seeded
+        .lines()
+        .position(|line| line.contains("claude"))
+        .unwrap();
+    assert!(
+        seeded
+            .lines()
+            .nth(agent_line + 1)
+            .unwrap()
+            .trim()
+            .is_empty(),
+        "the compact idle card rests at one line:\n{seeded}"
+    );
+
+    let published_focus = seed.focused_pane.clone();
+    rig.fold(seed, SnapshotSource::Published);
+    assert_eq!(rig.state.ui.selected_pane, None);
+    assert_eq!(rig.state.ui.selected_index, None);
+    rig.state.next_frame = Instant::now();
+    rig.paint(true);
+    parser.process(&output.0.lock().unwrap());
+    assert_eq!(
+        parser.screen().contents(),
+        seeded,
+        "the cached worker fold holds the resting frame"
+    );
+    assert_eq!(seeded_focus, published_focus);
+    assert_eq!(rig.state.current.focused_pane, published_focus);
+
+    let mut correction = rig.state.current.clone();
+    correction.worktree_groups[0]
+        .rows
+        .push(snapshot_with_panes(&rig.ws, vec![shell.clone()]).worktree_groups[0].rows[0].clone());
+    correction.focused_pane = Some(shell.pane_id.clone());
+    correction.viewed_panes = vec![shell.pane_id.clone()];
+    let correction_frame = crate::sidebar::frame::assemble_frame(
+        correction
+            .rows()
+            .filter_map(|row| row.pane.clone())
+            .chain(std::iter::once(own.clone()))
+            .collect(),
+        crate::utils::time::unix_now_ms(),
+        "rimz-test",
+    );
+    let correction = crate::sidebar::enrich::project_local(
+        crate::sidebar::enrich::WorkspaceSnapshot(correction),
+        Some(&correction_frame),
+        Some(&own.pane_id),
+    );
+    rig.fold(correction, SnapshotSource::Produced);
+    assert_eq!(rig.state.ui.selected_pane, Some(shell.pane_id));
+    assert_eq!(rig.state.ui.selected_index, Some(1));
+    rig.state.next_frame = Instant::now();
+    rig.paint(true);
+    parser.process(&output.0.lock().unwrap());
+    let corrected = parser.screen().contents();
+    assert!(
+        corrected.contains('▎') && corrected.contains('🮇'),
+        "correction draws the lane:\n{corrected}"
+    );
+    assert!(
+        corrected.contains('▌') && corrected.contains('▐'),
+        "correction seats the shell:\n{corrected}"
+    );
 }
 
 #[test]
@@ -149,9 +180,7 @@ fn published_seed_commits_before_delivery_and_keeps_the_final_correction() {
     seed.now = Timestamp::now();
     seed.theme.display.refresh_ms = 100;
     seed.worktree_groups[0].rows[0].name = "seed-card".into();
-    seed.worktree_groups[0]
-        .rows
-        .push(snapshot_with_panes(&rig.ws, vec![own.clone()]).worktree_groups[0].rows[0].clone());
+    seed.worktree_groups[0].rows[0].unread = true;
     seed.pane_session_name = Some("rimz-test".into());
     seed.panes_observed_at_ms = Some(42);
     let agent_pane = seed.worktree_groups[0].rows[0]
@@ -161,6 +190,7 @@ fn published_seed_commits_before_delivery_and_keeps_the_final_correction() {
         .pane_id
         .clone();
     seed.focused_pane = Some(agent_pane.clone());
+    seed.viewed_panes = vec![agent_pane.clone()];
     seed.reflects_log = Some(crate::store::event_log::LogExtent {
         generation: 0,
         offset: 0,
@@ -204,6 +234,15 @@ fn published_seed_commits_before_delivery_and_keeps_the_final_correction() {
         "the seed is projected for this pane before any delivery"
     );
     assert_eq!(rig.state.current.rows().next().unwrap().name, "seed-card");
+    assert_eq!(rig.state.current.focused_pane, Some(agent_pane.clone()));
+    assert!(
+        rig.state.current.rows().next().unwrap().unread,
+        "the projection's stale focus must not read the seeded card"
+    );
+    assert_eq!(
+        rig.state.read_marks.load_merged().cleared_at_ms("agent-1"),
+        None
+    );
     assert_eq!(rig.state.current.theme.display.refresh_ms, 37);
     assert!(rig.state.dirty, "the seed is paint-pending");
     assert!(
@@ -214,8 +253,8 @@ fn published_seed_commits_before_delivery_and_keeps_the_final_correction() {
         rig.state.current.presence,
         Some(crate::store::snapshot::SidebarPresence::Active)
     );
-    assert!(rig.state.current.own_view.is_some());
-    assert!(rig.state.self_close.seen_sibling);
+    assert!(rig.state.current.own_view.is_none());
+    assert!(!rig.state.self_close.seen_sibling);
     assert!(!rig.state.should_exit);
     assert_eq!(
         rig.state.last_focus_observation.panes_observed_at_ms,
@@ -237,12 +276,35 @@ fn published_seed_commits_before_delivery_and_keeps_the_final_correction() {
 
     let mut correction = agent_snapshot(&rig.ws);
     correction.worktree_groups[0].rows[0].name = "corrected-card".into();
-    correction.worktree_groups[0].rows[0].pane = Some(pane("terminal_11", "tab_0", false));
+    let corrected_pane = pane("terminal_11", "tab_0", false);
+    correction.worktree_groups[0].rows[0].pane = Some(corrected_pane.clone());
+    correction.worktree_groups[0].rows[0].unread = true;
+    correction.focused_pane = Some(corrected_pane.pane_id.clone());
+    correction.viewed_panes = vec![corrected_pane.pane_id.clone()];
+    let correction_frame = crate::sidebar::frame::assemble_frame(
+        vec![own.clone(), corrected_pane.clone()],
+        crate::utils::time::unix_now_ms(),
+        "rimz-test",
+    );
+    let correction = crate::sidebar::enrich::project_local(
+        crate::sidebar::enrich::WorkspaceSnapshot(correction),
+        Some(&correction_frame),
+        Some(&own.pane_id),
+    );
     rig.fold(correction, SnapshotSource::Produced);
 
     assert_eq!(
         rig.state.current.rows().next().unwrap().name,
         "corrected-card"
+    );
+    assert_eq!(rig.state.ui.selected_pane, Some(corrected_pane.pane_id));
+    assert!(!rig.state.current.rows().next().unwrap().unread);
+    assert!(
+        rig.state
+            .read_marks
+            .load_merged()
+            .cleared_at_ms("agent-1")
+            .is_some()
     );
     assert_eq!(
         rig.state.gate.reject_streak, 0,

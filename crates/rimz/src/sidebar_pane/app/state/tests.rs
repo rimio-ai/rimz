@@ -132,6 +132,37 @@ fn row_snapshot_at(
     snap
 }
 
+#[test]
+fn session_focus_without_own_view_is_unseated() {
+    let mut snapshot = row_snapshot(&workspace(), AgentStatus::Idle, true);
+    snapshot.own_view = None;
+    let own = PaneId::from_parts(crate::MuxName::Tmux, "%sidebar");
+
+    assert_eq!(session_focus_baseline(&snapshot, Some(&own)), None);
+}
+
+#[test]
+fn session_focus_with_own_view_is_seated() {
+    let snapshot = row_snapshot(&workspace(), AgentStatus::Idle, true);
+    let own = PaneId::from_parts(crate::MuxName::Tmux, "%sidebar");
+
+    assert_eq!(
+        session_focus_baseline(&snapshot, Some(&own)),
+        snapshot.focused_pane
+    );
+}
+
+#[test]
+fn session_focus_without_own_pane_is_seated() {
+    let mut snapshot = row_snapshot(&workspace(), AgentStatus::Idle, true);
+    snapshot.own_view = None;
+
+    assert_eq!(
+        session_focus_baseline(&snapshot, None),
+        snapshot.focused_pane
+    );
+}
+
 fn snapshot_in_group(
     kind: crate::store::snapshot::SidebarWorktreeKind,
     key: &str,
