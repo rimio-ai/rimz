@@ -1143,6 +1143,68 @@ fn receiver_end_archives_open_messages() {
 }
 
 #[test]
+fn receiver_end_tells_the_agent_sender_and_arms_the_wake_stamp() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.install_agent_hooks("claude");
+    register_running_agent(&env, "sess-end-sender", "sender-lane", &[]);
+    register_running_agent(&env, "sess-end-receiver", "receiver-lane", &[]);
+    let store = env.store();
+    let snapshot = store.snapshot_cached().unwrap();
+    let card = |session: &str| {
+        snapshot
+            .agents
+            .iter()
+            .find(|agent| agent.agent_id.as_str() == session)
+            .unwrap()
+    };
+    let (sender, receiver) = (card("sess-end-sender"), card("sess-end-receiver"));
+    let sent = MessageRecord::new(
+        env.workspace_id.clone(),
+        receiver,
+        "handoff".into(),
+        DeliveryGate::Done,
+    )
+    .with_sender(MessageSender::Agent {
+        kind: sender.kind.clone(),
+        agent_id: Some(sender.agent_id.clone()),
+        name: sender.name.clone(),
+        profile: None,
+        role: None,
+        channel: sender.channel(),
+    });
+    store.queue_message(&sent, "rimz-test").unwrap();
+    let _ = std::fs::remove_file(wake_stamp_path(&env));
+
+    run_hook(
+        &env,
+        json!({
+            "hook_event_name": "SessionEnd",
+            "session_id": "sess-end-receiver",
+            "worktree_branch": "receiver-lane",
+        }),
+        &[],
+    );
+
+    let live = store.list_messages().unwrap();
+    assert_eq!(live.len(), 1, "the ending leaves only the sender's notice");
+    let notice = &live[0];
+    assert_eq!(
+        serde_json::to_value(&notice.sender).unwrap()["notice"],
+        "message_undelivered"
+    );
+    assert_eq!(notice.agent_id, sender.agent_id);
+    assert!(notice.text.contains(sent.message_id.as_str()));
+    assert!(notice.text.contains("receiver ended"));
+    let stamp: Option<jiff::Timestamp> =
+        serde_json::from_slice(&std::fs::read(wake_stamp_path(&env)).unwrap()).unwrap();
+    assert!(
+        stamp.is_some_and(|stamp| stamp <= jiff::Timestamp::now()),
+        "the notice is due at the elder's next tick"
+    );
+}
+
+#[test]
 fn watched_agent_end_archives_unmet_when_message() {
     let env = Env::new();
     env.record(&env.project_root);

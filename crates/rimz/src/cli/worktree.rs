@@ -204,6 +204,7 @@ fn new_worktree(
         );
         super::emit_worktree_created(&store, workspace, &created.marker);
         archival.context("archiving messages for recreated worktree channel")?;
+        rimz::message::deliver::register_message_wake(workspace, &store);
     }
     if let Some(stale) = &created.stale_base {
         writeln!(
@@ -426,6 +427,7 @@ fn remove_worktree(
         rimz::worktree::WORKTREE_REMOVED_ARCHIVE_REASON,
         &workspace.session_name,
     );
+    rimz::message::deliver::register_message_wake(workspace, &store);
     let session_retirement = retirement
         .session_retirement
         .context("retiring sessions for removed worktree");
@@ -469,6 +471,9 @@ fn sweep_worktrees(
         dry_run,
         &super::machine_config().agents.worktree.hooks,
     )?;
+    if !dry_run {
+        rimz::message::deliver::register_message_wake(workspace, &store);
+    }
     report_sweep(&sweep, dry_run)?;
     let problems = sweep.failed.len()
         + sweep
@@ -654,6 +659,7 @@ fn remove_for_cleanup(
                 rimz::worktree::WORKTREE_REMOVED_ARCHIVE_REASON,
                 &workspace.session_name,
             );
+            rimz::message::deliver::register_message_wake(workspace, &store);
             if let Err(err) = retirement.session_retirement {
                 tracing::debug!(
                     branch = %marker.branch,
