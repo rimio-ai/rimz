@@ -795,6 +795,39 @@ fn requeue_preserves_intent_and_rearms_dependencies() {
 }
 
 #[test]
+fn queued_resume_arms_no_wake_but_in_flight_recovery_does() {
+    let now = Timestamp::from_second(1_000).unwrap();
+    let mut message = MessageRecord::new(
+        WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-message")),
+        &agent("s1", None),
+        "continue".to_owned(),
+        DeliveryGate::Resume,
+    );
+    message.updated_at = now;
+    for not_before in [None, Some(now + Duration::from_secs(60))] {
+        message.not_before = not_before;
+        for retry_after in [None, Some(now + Duration::from_secs(30))] {
+            message.retry_after = retry_after;
+            assert_eq!(message.wake_deadline(now), None);
+        }
+    }
+
+    message.not_before = None;
+    message.retry_after = None;
+    message.status = MessageStatus::Claimed;
+    message.last_attempt_at = Some(now);
+    assert_eq!(message.wake_deadline(now), Some(now + CLAIM_TTL));
+    message.status = MessageStatus::Sent;
+    message.last_sent_at = Some(now);
+    assert_eq!(
+        message.wake_deadline(now),
+        Some(now + MessageBody::Prompt.delivery_window()),
+    );
+    message.retry_after = Some(now + Duration::from_secs(90));
+    assert_eq!(message.wake_deadline(now), message.retry_after);
+}
+
+#[test]
 fn wait_deadline_arms_queue_retry_schedule_and_sent_reconciliation() {
     let base = MessageRecord::new(
         WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-message")),

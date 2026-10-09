@@ -68,7 +68,7 @@ A record is keyed on a card, the logical agent identity the [rollup](../agents/m
 | `attempts`, `last_attempt_at` | Claim bookkeeping; the cap ends in `Abandoned` |
 | `last_sent_at` | Last pane write; survives a prompt requeue so a late acknowledgement can still settle it |
 | `unconfirmed_sends` | Prompt writes that reached a pane and were never confirmed; the cap ends in `TimedOut` |
-| `last_error` | The most recent delivery or reconciliation failure, or the blocker a `NoPane` back-off recorded |
+| `last_error` | The most recent delivery or reconciliation failure, the verdict a refused synthetic boundary attempt recorded, or the blocker a `NoPane` back-off recorded |
 | `enqueued_at`, `updated_at`, `delivered_at` | Timestamps |
 
 `MessageSender::is_conversation()` splits senders by variant alone. `Human` and `Agent` are conversation traffic; `Harness`, `Subagent`, and `System` are system traffic, which covers nudges, compaction commands, and deliberately unattributed `--no-from` text. The split is a read-side filter for `message list` and other conversation surfaces, and `automated` plays no part in it.
@@ -426,7 +426,7 @@ The receiver's turn-start hook parses the header into transcript entries ([trans
 
 Four callers send a native compact command through a `Command` record: smart compaction ahead of a prompt, idle compaction from the sidebar producer, flip compaction at a team hand-off, and the operator's `rimz agents compact`. Routing the command through a record gives it the same claim, retry, audit, and at-most-once write as any message.
 
-`send_compact` arms the elder's wake stamp whenever it leaves a standalone compaction `Queued`, for operator and automatic callers alike. The sweep retries it at most once per delivery window until it delivers or, for an automatic command, expires.
+`message/synthetic.rs::attempt_now` refreshes the elder's wake stamp after every miss, after recording the refusal verdict or delivery error. A queued `Resume` record contributes no deadline: `queue_head` excludes its control lane, so auto-continue owns its re-drive and a miss on an otherwise idle queue leaves no stamp. Claimed and sent resume records still arm recovery. A retryable post-claim stop preserves the attempt's own reason; only a terminal stop writes the caller's fallback. Standalone compaction uses this shared path for operator and automatic callers alike. The sweep retries queued commands at most once per delivery window until they deliver or, for an automatic command, expire.
 
 An automatic command (`body == Command && automated`) is perishable: while `Queued`, it is valid for ten minutes from `enqueued_at`. The window is derived, not stored; `RIMZ_MESSAGE_COMMAND_VALIDITY_MS` shortens it for tests. `MessageRecord::is_deliverable` excludes an expired record at every FIFO head and blocker decision, even when no sweep runs. The next `Store::reconcile_stale_messages`, called by the sweep or `rimz gc`, alone finalizes it as `Expired`, recording the reason in `last_error` and `message.expired`. `message show` reports expiry before every other blocker; steer and interrupt cannot bypass it. Prompts, harness notices, operator commands (`automated: false`), and non-`Queued` records do not expire. A lapsed claim returns to `Queued` and then ages by its original enqueue time; a human requeue creates a new record with a fresh window. Smart compaction's released prompt can deliver on its own once its compact command expires.
 
@@ -522,13 +522,13 @@ Before polling, the CLI prints each ordinary delivery receipt on stderr, includi
 
 The room's elected sidebar elder notices when a parked message comes due, through a deliberately thin handoff:
 
-1. The CLI writes `message-wake.json` under the runtime root with the earliest time worth a look: a `not_before`, a `Queued` retry floor, a ready-queued backstop, a `Claimed` lease expiry, or an unconfirmed `Sent` reconcile deadline (30 s for prompts, 3 minutes for commands, per [Confirmation and retry](#confirmation-and-retry)). A standalone compaction left `Queued` arms this stamp too, whether operator-requested or automatic, so its sweep does not depend on later message traffic.
+1. The CLI writes `message-wake.json` under the runtime root with the earliest time worth a look: an ordinary-lane `not_before`, `Queued` retry floor or ready-queued backstop, a `Claimed` lease expiry, or an unconfirmed `Sent` reconcile deadline (30 s for prompts, 3 minutes for commands, per [Confirmation and retry](#confirmation-and-retry)). Queued `Resume` records arm nothing because the sweep excludes their control lane; auto-continue re-drives them. A standalone compaction left `Queued` arms this stamp too, whether operator-requested or automatic, so its sweep does not depend on later message traffic.
 2. The elder reads only that file, and when the stamp comes due spawns a detached `rimz --mux <mux> message sweep --workspace-id <id>` ([`fire.rs`](../../../crates/rimz/src/message/fire.rs)), passing its room's workspace id and mux by argv. The elder does no store reads, store writes, or message logic.
 3. The sweep finalizes expired queued automatic commands, reconciles stale `Sent` records and expired `Claimed` records, evaluates unmet conditions, delivers ready FIFO heads, then rewrites or removes the wake stamp.
 
 The sweep is single-flight through a `message-sweep.lock` file lock, so overlapping wakeups collapse into one pass.
 
-A queued perishable command's wake deadline is capped at `expires_at`, even when its schedule or retry floor is later. That wake tightens cleanup latency; read-time expiry releases its FIFO slot without any helper.
+An ordinary-lane queued perishable command's wake deadline is capped at `expires_at`, even when its schedule or retry floor is later. That wake tightens cleanup latency; read-time expiry releases its FIFO slot without any helper.
 
 Condition evaluation inside a sweep is one transaction. It evaluates every unmet condition against one context-enriched snapshot, applies every stamp, retry floor, and watched-agent archive together, reloads the pending records, and delivers newly eligible heads from the same snapshot in the same run unless their card was held in the queue read after reconciliation and before that snapshot. A new stamp emits `message.after_met` or `message.when_met`.
 

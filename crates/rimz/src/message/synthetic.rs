@@ -3,11 +3,11 @@
 use crate::Store;
 use crate::agents::AgentState;
 use crate::ids::{MessageId, PaneId};
-use crate::store::message::{DeliveryGate, MessageRecord, MessageSender};
+use crate::store::message::{DeliveryGate, MessageRecord, MessageSender, MessageStatus};
 use crate::store::writer::DeliveryFailureDisposition;
 use crate::workspace::ResolvedWorkspace;
 
-use super::deliver::{self, DeliveryPolicy, Result};
+use super::deliver::{self, DeliveryPolicy, DeliveryReport, Result};
 
 /// Text RimZ composes for one card. Every synthetic record carries the card's channel, submits (Enter), and optionally pins a pane.
 pub struct SyntheticMessage<'a> {
@@ -43,7 +43,7 @@ pub fn deliver_now(
     store: &Store,
     message: &MessageRecord,
     on_miss: DeliveryFailureDisposition,
-    closed_reason: &str,
+    fallback_reason: &str,
 ) -> Result<bool> {
     store.queue_message(message, &workspace.session_name)?;
     attempt_now(
@@ -52,7 +52,7 @@ pub fn deliver_now(
         &message.message_id,
         message.pane_id.as_ref(),
         on_miss,
-        closed_reason,
+        fallback_reason,
     )
 }
 
@@ -63,9 +63,9 @@ pub fn attempt_now(
     message_id: &MessageId,
     pane: Option<&PaneId>,
     on_miss: DeliveryFailureDisposition,
-    closed_reason: &str,
+    fallback_reason: &str,
 ) -> Result<bool> {
-    let outcome = deliver::deliver_one(
+    let outcome = deliver::deliver_one_report(
         workspace,
         store,
         message_id,
@@ -73,16 +73,29 @@ pub fn attempt_now(
         DeliveryPolicy::Boundary,
     );
     let reason = match &outcome {
-        Ok(true) => return Ok(true),
-        Ok(false) => closed_reason.to_owned(),
-        Err(err) => err.to_string(),
+        Ok(DeliveryReport::Sent) => return Ok(true),
+        Ok(DeliveryReport::Refused(verdict)) => Some(verdict.reason()),
+        Ok(DeliveryReport::Stopped) if on_miss == DeliveryFailureDisposition::Terminal => {
+            Some(fallback_reason.to_owned())
+        }
+        Ok(DeliveryReport::Stopped) => None,
+        Err(err) => Some(err.to_string()),
     };
-    let result =
-        store.record_unheld_delivery_miss(message_id, on_miss, &reason, &workspace.session_name)?;
-    if result.head_sent {
+    let head_sent = match reason {
+        Some(reason) => store
+            .record_unheld_delivery_miss(message_id, on_miss, &reason, &workspace.session_name)
+            .map(|result| result.head_sent),
+        None => store.list_messages().map(|messages| {
+            messages.iter().any(|message| {
+                message.message_id == *message_id && message.status == MessageStatus::Sent
+            })
+        }),
+    };
+    deliver::register_message_wake(workspace, store);
+    if head_sent? {
         return Ok(true);
     }
-    outcome
+    outcome.map(|_| false)
 }
 
 #[cfg(test)]

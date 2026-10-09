@@ -47,6 +47,12 @@ fn stall_classes_cover_every_delivery_verdict() {
             None,
         ),
         (DeliveryVerdict::BehindFifo { blocker: None }, None),
+        (
+            DeliveryVerdict::BehindFifo {
+                blocker: Some(MessageId::new()),
+            },
+            None,
+        ),
         (DeliveryVerdict::Ready, None),
     ];
     for status in [
@@ -73,8 +79,8 @@ fn stall_classes_cover_every_delivery_verdict() {
     }
     for (verdict, expected) in cases {
         assert_eq!(verdict.stall_class(), expected, "{verdict:?}");
+        assert!(!verdict.reason().is_empty(), "{verdict:?}");
         if let Some(class) = expected {
-            assert!(!verdict.stall_cause().is_empty(), "{verdict:?}");
             assert!(class.delay() > Duration::ZERO);
         }
     }

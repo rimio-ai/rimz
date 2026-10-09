@@ -2407,9 +2407,22 @@ fn auto_continue_queues_a_pinned_system_resume_then_defers_on_a_closed_gate() {
     assert_eq!(message.text, "continue");
     assert!(message.enter);
     assert_eq!(message.status, MessageStatus::Queued);
+    let wake_after_miss = wake_stamp_path(&env).exists();
+    assert_eq!(message.last_error.as_deref(), Some("resuming"));
+    let trace = env.project_root.join("queued-resume-sweep.log");
+    run_success(
+        traced_rimz(&env, &trace)
+            .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+            .args(["message", "sweep"]),
+        "sweep queued resume",
+    );
+    let after_sweep = message_by_id(&env, &message.message_id);
+    assert_eq!(after_sweep.status, MessageStatus::Queued);
+    assert_eq!(after_sweep.retry_after, None);
     assert_eq!(
-        message.last_error.as_deref(),
-        Some("resume delivery gate closed (overloaded_backoff_retry)"),
+        (wake_after_miss, wake_stamp_path(&env).exists()),
+        (false, false),
+        "a queued resume cannot arm the elder before or after a sweep",
     );
 
     let request = rimz::harness::AutoContinueRequest {
@@ -2433,6 +2446,11 @@ fn auto_continue_queues_a_pinned_system_resume_then_defers_on_a_closed_gate() {
         .find(|message| message.text == "day reset")
         .expect("day-reset message");
     assert_eq!(message.gate, DeliveryGate::Done);
+    let wake: Option<jiff::Timestamp> = serde_json::from_slice(
+        &std::fs::read(wake_stamp_path(&env)).expect("day-reset message wake"),
+    )
+    .expect("wake stamp json");
+    assert!(wake.is_some_and(|wake| wake <= jiff::Timestamp::now()));
 }
 
 #[test]
@@ -7692,6 +7710,56 @@ fn message_inherits_smart_compact_default() {
 }
 
 #[test]
+fn synthetic_compaction_reports_another_senders_unacknowledged_send() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    run_hook(
+        &env,
+        json!({"hook_event_name": "SessionStart", "session_id": "sess-compact-sibling-sent"}),
+        &[("ZELLIJ_PANE_ID", "3")],
+    );
+    let before = DeliveryRendezvous::new(&env, "compact-sibling-sent");
+    let trace = env.project_root.join("compact-sibling-sent.log");
+    let child = traced_rimz(&env, &trace)
+        .env("RIMZ_TEST_DELIVERY_BEFORE_CLAIM", &before.path)
+        .args(["agents", "compact", "@claude"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut release = before.arrive();
+    let command = env.store().list_messages().unwrap().remove(0);
+    run_success(
+        traced_rimz(&env, &trace).args([
+            "message",
+            "deliver",
+            "--message-id",
+            command.message_id.as_str(),
+        ]),
+        "sibling delivery without acknowledgement",
+    );
+    assert_eq!(
+        message_by_id(&env, &command.message_id).status,
+        MessageStatus::Sent
+    );
+    release.write_all(&[1]).unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert!(String::from_utf8_lossy(&output.stdout).starts_with("compacting @claude"));
+    assert_eq!(
+        message_by_id(&env, &command.message_id).status,
+        MessageStatus::Sent
+    );
+    assert_eq!(
+        trace_lines(&trace)
+            .iter()
+            .filter(|line| is_compact_command(line))
+            .count(),
+        1,
+    );
+}
+
+#[test]
 fn agents_compact_reports_sibling_delivery_and_terminal_reasons() {
     for delivered in [true, false] {
         let env = Env::new();
@@ -7771,6 +7839,65 @@ fn agents_compact_reports_sibling_delivery_and_terminal_reasons() {
                 "{stderr}"
             );
             assert_no_report_pane_write(&trace);
+        }
+    }
+}
+
+#[test]
+fn synthetic_compaction_preserves_post_claim_failure_reasons() {
+    for compacting in [true, false] {
+        let env = Env::new();
+        env.record(&env.project_root);
+        run_hook(
+            &env,
+            json!({"hook_event_name": "SessionStart", "session_id": "sess-synthetic-claim"}),
+            &[("ZELLIJ_PANE_ID", "3")],
+        );
+        let after = DeliveryRendezvous::new(&env, "synthetic-after");
+        let trace = env.project_root.join("synthetic-claim.log");
+        let mut command = traced_rimz(&env, &trace);
+        command.env("RIMZ_TEST_DELIVERY_AFTER_CLAIM", &after.path);
+        if !compacting {
+            command.env("RIMZ_TEST_ZELLIJ_MODE", "fail-write");
+        }
+        let child = command
+            .args(["agents", "compact", "@claude"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut release = after.arrive();
+        let store = env.store();
+        let held = store.list_messages().unwrap().remove(0);
+        assert_eq!(held.status, MessageStatus::Claimed);
+        if compacting {
+            let observation = AgentLifecycleObservation::new(
+                Some("sess-synthetic-claim".into()),
+                LifecycleSignal::Compacting,
+            );
+            store
+                .append_event(&EventEnvelope::agent_lifecycle(
+                    env.workspace_id.clone(),
+                    "rimz-test",
+                    "claude",
+                    "PreCompact",
+                    &observation,
+                ))
+                .unwrap();
+        }
+        release.write_all(&[1]).unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let queued = message_by_id(&env, &held.message_id);
+        assert_eq!(queued.status, MessageStatus::Queued);
+        let reason = queued.last_error.expect("attempt's recorded reason");
+        if compacting {
+            assert_eq!(reason, "parked: waiting for compaction to finish");
+        } else {
+            assert!(
+                reason.contains("simulated zellij write failure"),
+                "{reason}"
+            );
         }
     }
 }
@@ -8238,6 +8365,52 @@ fn agents_compact_uses_native_commands_and_refuses_unsupported_instructions() {
         assert!(writes[0].ends_with(&format!("\t--\t{native}")), "{lines:?}");
         assert_eq!(lines.iter().filter(|line| is_enter_key(line)).count(), 1);
     }
+}
+
+#[test]
+fn synthetic_compaction_refusal_records_the_fifo_blocker() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.install_agent_hooks("claude");
+    run_hook(
+        &env,
+        json!({"hook_event_name": "SessionStart", "session_id": "sess-compact-fifo"}),
+        &[("ZELLIJ_PANE_ID", "3")],
+    );
+    let trace = env.project_root.join("compact-fifo.log");
+    let sent = run_success(
+        traced_rimz(&env, &trace)
+            .env("RIMZ_MESSAGE_DELIVERY_WINDOW_MS", "60000")
+            .args(["message", "@claude", "--", "go"]),
+        "send unacknowledged FIFO head",
+    );
+    let prompt_id = MessageId::parse(&sent_id_from_stdout(&sent.stdout)).expect("message id");
+    assert_eq!(message_by_id(&env, &prompt_id).status, MessageStatus::Sent);
+    let writes_before_compact = trace_lines(&trace).len();
+
+    let output = run_success(
+        traced_rimz(&env, &trace)
+            .env("RIMZ_MESSAGE_DELIVERY_WINDOW_MS", "60000")
+            .args(["agents", "compact", "@claude"]),
+        "queue compaction behind FIFO head",
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).starts_with("queued compaction for @claude"));
+    let messages = env.store().list_messages().expect("messages");
+    let command = messages
+        .iter()
+        .find(|message| message.body == MessageBody::Command)
+        .expect("queued compaction");
+    assert_eq!(command.status, MessageStatus::Queued);
+    assert_eq!(
+        command.last_error.as_deref(),
+        Some(format!("blocked: behind {prompt_id}").as_str()),
+    );
+    assert!(
+        trace_lines(&trace)[writes_before_compact..]
+            .iter()
+            .all(|line| !line.contains("\taction\twrite")),
+        "a refused compaction must not reach the pane",
+    );
 }
 
 #[test]
