@@ -38,6 +38,13 @@ fn backfill_pane_commands_repairs_pid_only_panes_without_reintroducing_chrome() 
         ("comm fallback", None, Some("zsh"), Some("zsh")),
         ("empty cmdline", Some(""), Some("zsh"), Some("zsh")),
         ("unreadable root", None, None, None),
+        (
+            "agent wrapper",
+            Some("/home/me/.cargo/bin/rimz agents exec codex"),
+            Some("rimz"),
+            Some("/home/me/.cargo/bin/rimz agents exec codex"),
+        ),
+        ("rimz comm fallback", Some(""), Some("rimz"), None),
     ] {
         let mut shell = pane("terminal_1", None, None);
         shell.pane_pid = Some(100);
