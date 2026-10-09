@@ -1,0 +1,91 @@
+name: CodeQL
+
+# Advanced setup, replacing the repository's CodeQL default setup, which has to
+# stay disabled: GitHub rejects a workflow's SARIF upload while it is on.
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "0 6 * * 1"
+
+# PRs key on the PR ref, so a newer push cancels stale work. Every other event
+# keys on the commit, so each landed default-branch commit is scanned.
+concurrency:
+  group: codeql-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  analyze:
+    name: analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        # None of the three needs a build: Rust is extracted from source.
+        include:
+          - language: actions
+            build-mode: none
+          - language: javascript-typescript
+            build-mode: none
+          - language: rust
+            build-mode: none
+    env:
+      RUST_SARIF: sarif-results/rust.sarif
+      FILTERED_RUST_SARIF: sarif-results/rust.filtered.sarif
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: github/codeql-action/init@v4
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+
+      - uses: github/codeql-action/analyze@v4
+        with:
+          # Default setup's category, so the alert series and its dismissals
+          # carry over.
+          category: /language:${{ matrix.language }}
+          # The upload happens below, after the filter. `failure-only` still
+          # publishes diagnostics when the analysis itself fails.
+          upload: failure-only
+          # One file per job, named for CodeQL's own language id, which is
+          # not always the matrix alias (`javascript.sarif`).
+          output: sarif-results
+
+      # `rust/cleartext-logging` fires on test assertions that Debug-print a
+      # struct with a field named like a secret. Drop it in test files only;
+      # production paths keep the rule. A result goes only when every one of
+      # its locations matches, and an inline `mod tests` in a production file
+      # is out of a path filter's reach, so it stays scanned.
+      - name: Drop cleartext-logging results in test files
+        if: matrix.language == 'rust'
+        uses: advanced-security/filter-sarif@v1.1
+        with:
+          patterns: |
+            -**/tests.rs:rust/cleartext-logging
+            -**/tests/**:rust/cleartext-logging
+          input: ${{ env.RUST_SARIF }}
+          output: ${{ env.FILTERED_RUST_SARIF }}
+
+      - name: Report dropped results
+        if: matrix.language == 'rust'
+        run: |
+          before=$(jq '[.runs[].results[]] | length' "$RUST_SARIF")
+          after=$(jq '[.runs[].results[]] | length' "$FILTERED_RUST_SARIF")
+          echo "results before filter: $before"
+          echo "results after filter: $after"
+          echo "dropped: $((before - after))"
+
+      - uses: github/codeql-action/upload-sarif@v4
+        with:
+          # Rust names its filtered file: the directory would upload the raw
+          # results beside it. The other jobs' directory holds one file.
+          sarif_file: ${{ matrix.language == 'rust' && env.FILTERED_RUST_SARIF || 'sarif-results' }}
+          category: /language:${{ matrix.language }}
