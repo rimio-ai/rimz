@@ -89,6 +89,8 @@ pub enum ZellijWakeError {
     TopologyLock(#[from] crate::disk::lock::LockErr),
     #[error("could not publish accepted topology: {0}")]
     TopologyWrite(#[source] crate::disk::atomic::AtomicErr),
+    #[error("could not publish topology focus observation: {0}")]
+    FocusObservationWrite(#[source] crate::disk::atomic::AtomicErr),
     #[error("could not publish topology writer conflict: {0}")]
     ConflictWrite(#[source] crate::disk::atomic::AtomicErr),
     #[error("could not clear topology writer conflict {path}: {source}")]
@@ -129,15 +131,32 @@ pub fn ingest_zellij_wake(
             .is_none_or(|existing| incoming.writer != existing.writer);
         let mut cache = incoming.clone();
         sanitize_topology_cache(&mut cache);
+        let saved_observation = existing
+            .as_ref()
+            .filter(|cache| cache.clients.is_none() && cache.focused_pane.is_none())
+            .and_then(|_| read_focus_observation(runtime, &cache));
         transitions = derive_zellij_transitions(
             existing.as_ref(),
             &cache,
+            saved_observation.as_ref().or(existing.as_ref()),
             wake.reason == ZellijWakeReason::Announced,
         );
         let boundary_moves = existing
             .as_ref()
             .map(|existing| derive_work_boundary_moves(existing, &cache))
             .unwrap_or_default();
+        if cache.clients.is_none()
+            && cache.focused_pane.is_none()
+            && let Some(observed) = existing
+                .as_ref()
+                .filter(|cache| cache.clients.is_some() || cache.focused_pane.is_some())
+        {
+            crate::disk::atomic::write_temp_then_rename_cache(
+                &focus_observation_path(runtime),
+                observed,
+            )
+            .map_err(ZellijWakeError::FocusObservationWrite)?;
+        }
         write_pane_topology_cache(runtime, &cache).map_err(ZellijWakeError::TopologyWrite)?;
         if !boundary_moves.is_empty() {
             let diag = DiagSink::under(
@@ -308,6 +327,7 @@ fn zellij_view_cols(panes: &[PaneTopologyPane], tab_position: u64) -> Option<u64
 fn derive_zellij_transitions(
     existing: Option<&PaneTopologyCache>,
     incoming: &PaneTopologyCache,
+    last_observed: Option<&PaneTopologyCache>,
     announced: bool,
 ) -> Vec<PresenceTransition> {
     if !announced {
@@ -355,20 +375,36 @@ fn derive_zellij_transitions(
             });
         }
     }
-    let prior_focus = existing.projected_session_focus();
+    let prior_focus = last_observed.and_then(PaneTopologyCache::projected_session_focus);
     let current_focus = incoming.projected_session_focus();
-    if prior_focus != current_focus {
+    if (incoming.clients.is_some() || incoming.focused_pane.is_some())
+        && prior_focus != current_focus
+    {
         transitions.push(PresenceTransition::PaneFocused {
             focused: current_focus
                 .as_ref()
                 .and_then(|pane| observation_for_id(incoming, pane)),
             prior: prior_focus
                 .as_ref()
-                .and_then(|pane| observation_for_id(existing, pane)),
+                .and_then(|pane| observation_for_id(last_observed?, pane)),
         });
     }
     transitions.push(PresenceTransition::Nudge);
     transitions
+}
+
+fn focus_observation_path(runtime: &RuntimePaths) -> std::path::PathBuf {
+    runtime.lane_path("topology-focus-observation.json")
+}
+
+fn read_focus_observation(
+    runtime: &RuntimePaths,
+    incoming: &PaneTopologyCache,
+) -> Option<PaneTopologyCache> {
+    let bytes = std::fs::read(focus_observation_path(runtime)).ok()?;
+    let observed: PaneTopologyCache = serde_json::from_slice(&bytes).ok()?;
+    (observed.session_name == incoming.session_name && observed.writer == incoming.writer)
+        .then_some(observed)
 }
 
 fn panes_by_native_id(cache: &PaneTopologyCache) -> BTreeMap<ZellijPaneId, &PaneTopologyPane> {
