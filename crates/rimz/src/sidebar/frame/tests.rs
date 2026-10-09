@@ -158,6 +158,8 @@ fn client_view_sets_session_focus_register() {
 
     assert!(diagnostics.is_empty());
     assert_eq!(frame.focused_pane, Some(viewed));
+    assert_eq!(frame.focus_origin, FocusOrigin::ClientView);
+    assert!(frame.client_view_fresh);
 }
 
 #[test]
@@ -194,6 +196,7 @@ fn session_focus_wins_when_live() {
 
     assert!(diagnostics.is_empty());
     assert_eq!(frame.focused_pane, Some(authoritative));
+    assert_eq!(frame.focus_origin, FocusOrigin::SessionFocus);
 }
 
 #[test]
@@ -212,6 +215,7 @@ fn dead_session_focus_and_fresh_empty_clients_clear() {
     });
 
     assert_eq!(frame.focused_pane, None);
+    assert_eq!(frame.focus_origin, FocusOrigin::None);
 }
 
 #[test]
@@ -459,6 +463,8 @@ fn unavailable_client_sample_holds_live_prior_without_raw_fallback() {
         prior: Some(&prior),
     });
     assert_eq!(carried.focused_pane, Some(prior_focus));
+    assert_eq!(carried.focus_origin, FocusOrigin::Prior);
+    assert!(!carried.client_view_fresh);
 
     let (raw, _) = assemble_frame_from_inputs(FrameInputs {
         views: Vec::new(),

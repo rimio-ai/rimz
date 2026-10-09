@@ -13,6 +13,9 @@ fn pane(id: &str) -> PaneRef {
 
 fn frame(name: &str, panes: &[&str]) -> PaneFrame {
     PaneFrame {
+        focus_origin: Default::default(),
+        client_view_fresh: false,
+        client_sample_withheld: false,
         produced_at_ms: 1,
         observed_at_ms: 1,
         topology_stamp_ms: Some(1),

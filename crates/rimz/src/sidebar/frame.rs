@@ -12,6 +12,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
+use crate::diag::focus_trace::FocusOrigin;
 use crate::diag::record::DiagEvent;
 use crate::ids::{AgentKind, AgentSessionId, PaneId, ViewId, ViewKind};
 use crate::pane::{ElevatedAgent, PaneRef};
@@ -56,6 +57,12 @@ pub struct PaneFrame {
     /// a backend register derived from those views.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub focused_pane: Option<PaneId>,
+    #[serde(default)]
+    pub(crate) focus_origin: FocusOrigin,
+    #[serde(default)]
+    pub(crate) client_view_fresh: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub(crate) client_sample_withheld: bool,
     /// Producer-sampled session presence. Absent on fallback paths that could
     /// not read the per-client mux state.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -448,7 +455,7 @@ pub(super) fn assemble_frame_from_inputs(inputs: FrameInputs<'_>) -> (PaneFrame,
         .values()
         .flat_map(|tab| tab.panes.iter().map(|pane| pane.pane_id.clone()))
         .collect::<HashSet<_>>();
-    let focused_pane = resolve_session_focus(
+    let (focused_pane, focus_origin) = resolve_session_focus(
         session_focus.as_ref(),
         prior.and_then(|frame| frame.focused_pane.as_ref()),
         client_viewed,
@@ -469,6 +476,9 @@ pub(super) fn assemble_frame_from_inputs(inputs: FrameInputs<'_>) -> (PaneFrame,
             viewed_panes: client_viewed.to_vec(),
             client_views: client_views.to_vec(),
             focused_pane,
+            focus_origin,
+            client_view_fresh,
+            client_sample_withheld: false,
             presence: None,
         },
         diagnostics,
@@ -482,18 +492,30 @@ fn resolve_session_focus(
     client_views: &[crate::pane::ClientPaneView],
     client_view_fresh: bool,
     live: &HashSet<PaneId>,
-) -> Option<PaneId> {
+) -> (Option<PaneId>, FocusOrigin) {
     if let Some(pane) = session_focus
         && live.contains(pane)
     {
-        return Some(pane.clone());
+        return (Some(pane.clone()), FocusOrigin::SessionFocus);
     }
 
     if client_view_fresh {
-        return crate::mux::ClientView::unique_live_focus(client_views, client_viewed, live);
+        let pane = crate::mux::ClientView::unique_live_focus(client_views, client_viewed, live);
+        let origin = if pane.is_some() {
+            FocusOrigin::ClientView
+        } else {
+            FocusOrigin::None
+        };
+        return (pane, origin);
     }
 
-    prior.filter(|prior| live.contains(*prior)).cloned()
+    let pane = prior.filter(|prior| live.contains(*prior)).cloned();
+    let origin = if pane.is_some() {
+        FocusOrigin::Prior
+    } else {
+        FocusOrigin::None
+    };
+    (pane, origin)
 }
 
 fn pane_is_sidebar_chrome(pane: &PaneState) -> bool {
