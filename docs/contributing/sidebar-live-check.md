@@ -228,7 +228,7 @@ S=$1; B=$2; OUT=$3; shift 3; mkdir -p "$OUT"
 t0=$(date +%s%N)
 zellij --session "$S" action new-tab
 i=0
-while [ $i -lt 12 ]; do
+while [ $i -lt 32 ]; do
   for n in "$@"; do
     now=$(( ($(date +%s%N) - t0) / 1000000 ))
     f="$OUT/$(printf '%05d' $now)-$n.txt"
@@ -239,7 +239,33 @@ while [ $i -lt 12 ]; do
 done
 ```
 
-The earliest file for the sidebar pane must already name the room's agents, with no selection-open card and no `▌`, `▐`, `▎`, or `🮇` cells. A later file shows the correction: the new tab's shell row is selected and its group has the lane. That single visible change is expected. One residual is known and is not a regression: on either backend an occasional run paints a stale selection (the previous tab's focused row, its card open, its group as a lane) for up to about 150 ms before the correction, either as the first frame or between a clean first frame and the correction. It comes from a fold whose frame already lists the new sidebar pane while its focus was observed before the tab opened, which the focus derivation cannot tell from a fresh one. A stale selection that outlasts the correction, or a first frame with a selection on every run, is a regression. A tmux capture is a few milliseconds apart, so the first file is close to the first paint. A Zellij capture goes through the session and resolves about 0.2 s, so it proves the first screen seen and bounds the correction only coarsely. Repeat after the room has sat idle for a minute: the seed is refused once the projection is older than its age bound, and a live room must stay inside it.
+The earliest file for the sidebar pane must already name the room's agents. Any selection must belong to the new tab, never the previous tab's pane. Until the focused shell is a row, expect no selection-open card and no `▌`, `▐`, `▎`, or `🮇` cells. Once it is a row, its selection and group lane can appear; a first capture that already shows the correct selection also passes. What remains is a first frame with no selection: on Zellij the shell becomes a row, and the selection seats, up to a few seconds after the publication that names it, and on tmux within tens of milliseconds of the tab opening. Allow about three seconds per Zellij tab to see the seat; the 32-iteration loop above runs that long.
+
+Attribute the captures with the [focus trace](../internals/diagnostics.md#where-diagnostics-land), not just the final screen. Set `FOCUS_LOG` to the room's persistent `audit/focus.log.jsonl` (the state directory is printed by `rimz paths`), and `INSTANCE_ID` to the new sidebar's instance from the testkit command `rimz sidebar renderers`. Record `START_MS=$(date +%s%3N)` immediately before running the capture script and `END_MS=$(date +%s%3N)` immediately after it. Run this where the log is readable; keep earlier publications in the input so a seed can correlate to its pre-tab frame:
+
+```sh
+jq -s --arg instance "$INSTANCE_ID" --argjson start "$START_MS" --argjson end "$END_MS" '
+  [.[] | select(.event.kind == "frame_published")] as $frames
+  | .[]
+  | select(.event.kind == "fold_decided" and .instance_id == $instance
+      and .at_ms >= $start and .at_ms <= $end)
+  | . as $fold
+  | {
+      at_ms,
+      fold: .event,
+      frame: ([$frames[]
+        | select(.workspace_id == $fold.workspace_id and .session_name == $fold.session_name
+            and .event.produced_at_ms <= ($fold.event.panes_produced_at_ms // 0))]
+        | max_by(.event.produced_at_ms) | .event)
+    }
+' "$FOCUS_LOG"
+```
+
+Each output pairs a `fold_decided` with the latest `frame_published` whose `produced_at_ms` is at or below the fold's `panes_produced_at_ms`. Equality is not required: identical publications and folds append no record. Pass only if every `baseline` and `selected_after` is absent or names a pane in the new tab, and every publication from the roster growing (`pane_count` increases) until the first later one with `focus_origin: session_focus` names the new shell, has no `focused_pane`, or keeps the pre-growth focus with `focus_origin: prior` and `client_sample_withheld: true`. A `client_view` or `session_focus` publication naming the pre-tab pane in that span fails. A seed can rest on a pre-tab publication naming the old pane, but must seat nothing. Read `source`, `phase`, `focus_origin`, and `fused_event_sent_at_ms` beside the captures to distinguish publication truth from an event-fused decision. A missing correlated publication needs the earlier log, not an assumption that the fold was correct.
+
+Two Zellij checks guard the neighbours of that rule, read from the same log. With focus resting on a pane, open and close a pane in another tab without moving focus (`zellij action new-pane --tab-id <n> --no-focus`, then `close-pane --pane-id <id>`): no `frame_published` moves `focused_pane` off the resting pane, and no attachment appends a `fold_decided`. Then switch between two existing tabs (`zellij action go-to-tab <n>`): no publication carries `client_sample_withheld`, and the destination sidebar's seating fold has `fused_event_sent_at_ms` set and lands before the `session_focus` publication that names the destination, under about 100 ms in a small room.
+
+A tmux capture is a few milliseconds apart, so the first file is close to the first paint. A Zellij capture goes through the session and resolves about 0.2 s, so it proves the first screen seen and bounds the correction only coarsely. Repeat after the room has sat idle for a minute: the seed is refused once the projection is older than its age bound, and a live room must stay inside it.
 
 ## Inspect the data behind a card
 
