@@ -17,7 +17,7 @@ Those traits give three goals that pull against each other, so each lives in a d
 | Goal | Where it lives | What it demands |
 | --- | --- | --- |
 | Low perceived latency | The render/input loop | Never block, drop a keystroke, or freeze the spinner. Showing data one tick stale is allowed. |
-| No write contention | The store write path | Tens of concurrent commits cost no felt latency: the lock covers microsecond holds, and durability runs off the lock. |
+| No write contention | The store write path | Hooks share a blocking ingress lock before exit and defer lifecycle work to an elected drainer. Workspace-lock waiters use short retries for brief releases and backoff for long holds. |
 | Near-zero idle work | Every lane | No polling spin, no per-frame fork, no directory rescan. |
 
 One rule sits under all three: correctness lives in the store, never on the render thread. A performance change may leave the UI stale by a tick. It may never make the UI wrong, and it never trades a durability or CAS invariant for latency.
@@ -68,7 +68,7 @@ Every row of the cost map rolls up into one of three paths, each named with its 
 | --- | --- | --- |
 | Keypress to pixel | One in-process paint | Input applies synchronously and paints. Nothing on the path locks, forks, or reads the store. |
 | Pane event to pixel | One fuse plus one off-grid paint | A typed overlay event (`PaneClosed`, `FocusChanged`) lands in the in-memory event store, re-fuses the held frame, and paints at once. The producer's next pull confirms it ([state.md](./sidebar/state.md#fusion-rules)). |
-| Write to pixel | The frame grid | The commit holds the lock for microseconds, the wakeup datagram takes microseconds, the consumer folds the published frame in process (O(1) cached, O(delta) on a race), and the next dirty frame paints. The 100 ms grid dominates. |
+| Write to pixel | The frame grid after apply | Applied events wake the consumer, which folds the published frame in process (O(1) cached, O(delta) on a race) and paints on the next dirty frame. Hook ingress must first pass through the drainer; the 100 ms grid does not bound that queue. |
 
 ## Principles
 
@@ -129,11 +129,13 @@ The choreography and write classes are [store.md → The write path](./store.md#
 
 | Operation | Cost | Bound |
 | --- | --- | --- |
-| Critical section | One event-log `write()`, zero fsyncs, one frame of at most 1 KiB | The lock covers truth mutation only; `store_fsync.rs` and `store_bytes.rs` pin both numbers |
-| Durability | One group `fdatasync` per second per workspace (`LOG_SYNC_INTERVAL`) | Runs on the off-lock tail |
+| Hook ingress | One framed append of raw payload and captured environment under its shared blocking lock, no lifecycle fold | Appenders do not exclude each other; payload-sized, not the derived frame's 1 KiB limit; first creation syncs the parent directory |
+| Derived lifecycle append | One event-log `write()`, zero steady-state fsyncs, one frame of at most 1 KiB | `store_fsync.rs` and `store_bytes.rs` pin the derived append; the drainer's lifecycle batch also folds under the workspace lock |
+| Drain cursor | Two durable cursor publications per applied frame, plus synced truncation and cursor reset when the queue empties | Each publication is a temp file and two fsyncs under the workspace lock; the elected worker applies frames serially in environment-scoped children |
+| Event-log durability | One group `fdatasync` per second per workspace (`LOG_SYNC_INTERVAL`) | Runs on the off-lock tail; cursor and truncation barriers are additional |
 | Snapshot publish | One cache rename per second per workspace | Single-flighted; due after `PUBLISH_INTERVAL` (1 s) or `PUBLISH_BYTE_BUDGET` (64 KiB) of unpublished tail |
 | Wakeup fanout | One heartbeat directory scan plus one datagram per live sidebar | N is live sidebars; the reads are page-cache hot and cost less than the fsync floor |
-| Durable file write | Temp file plus two fsyncs (file, parent directory) | Cold paths only: trust grants, the workspace record, hook installs |
+| Durable file write | Temp file plus two fsyncs (file, parent directory) | Trust grants, the workspace record, hook installs, and the per-frame drain cursor |
 
 ### Everything else
 
@@ -241,26 +243,26 @@ The 2026-10-07 release-profile comparison began at 19:31 UTC with load averages 
 
 RimZ is sized against a single agent, not against the fleet: watching a hundred agents should cost a small and nearly flat fraction of running one of them.
 
-Cost attaches to three units, and only the cheapest grows with agent count.
+Cost attaches to three units. Hook application scales with event volume; moving it out of the foreground does not remove its fold or IO cost.
 
-Per workspace, RimZ pays once. The producer pays the roster and metrics on its fetch worker and git and accounts on its cache refresher, then publishes caches the other tabs fold in process. Every workspace that shares a state root and provider-discovery environment asks the same warm spend walker, so a producer handoff adds no second parsed cursor.
+Per workspace, RimZ pays once. The producer pays the roster and metrics on its fetch worker and git and accounts on its cache refresher, then publishes caches the other tabs fold in process. Every workspace that shares a state root and provider-discovery environment asks the same warm spend walker, so a producer handoff adds no second parsed cursor. One elected hook drainer owns the ingress queue and exits after 60 s without work or connections. When quiet, `crates/rimz/src/harness/hook_drain.rs::run` blocks in poll(2) on its listener and client sockets; a lease prevents idle exit without introducing periodic wakeups. Idle exit unlinks only its own socket and closes the listener before the final drain, so a later hook elects a successor instead of nudging an exiting worker.
 
 Per worktree, cost follows activity. The git input set scales with distinct group roots, not agents; a root drops to its idle TTL once its agents go quiet, and the sweep runs at most 8 roots at once. PR probes scale with origin repositories, each enumerating open PRs once when due. A hundred agents sharing a few checkouts pay for a few hot roots.
 
 Per agent, cost is event-driven. An agent reports through a short-lived `rimz hooks feed` child that appends when something happens and exits. Direct-exec launches leave no wrapper. A surviving Unix wrapper re-execs into a parked image with no store and an 8 MiB private (anonymous) memory budget, guarded by the live `backend::tmux::agent_lifecycle::parked_wrapper_holds_under_8_mib` test and the thin-image invariant. Executable text is shared across wrappers; the test bounds `Pss_Anon` and prints total `Pss` alongside it. Fold-dependent duties run in helper children: strand repair is resident only for its parked nonterminal phase, while receipt, parent confirmation and card evidence are one-shot. A `--keep` subagent's settled linger is outside this budget ([the exec wrapper](./harness/fleet.md#direct-exec-or-resident-wrapper)).
 
-Two costs stay flat in agent count: one group `fdatasync` per second per workspace however many agents append, and one snapshot rename per second per workspace. Both scale with rooms. The hot runtime caches live in `$XDG_RUNTIME_DIR` (tmpfs), so their churn is memory traffic, not disk IO.
+Two debounced costs stay flat in agent count: event-log group `fdatasync` and snapshot publication. Both scale with rooms. Drain cursor publications are separate, per-frame durable writes, not part of either debounce. The hot runtime caches live in `$XDG_RUNTIME_DIR` (tmpfs), so their churn is memory traffic, not disk IO.
 
-Totals across a fleet of 2 to 5 rooms:
+Display-plane CPU and RAM estimates across a fleet of 2 to 5 rooms follow. They exclude the elected hook drainer and its serial apply child, whose cost follows hook volume rather than fleet size.
 
 | Resource | 20 agents | 50 agents | 100 agents | What sets it |
 | --- | --- | --- | --- | --- |
 | CPU, idle | ~0 | ~0 | ~0 | Loops block in `recv`; off-screen animation pauses |
 | CPU, busy | <0.3 core | ~0.3 to 0.8 core | ~0.5 to 1.5 core | One producer per room, bursting toward the 8-root git cap, never on the render thread |
 | RAM, resident | ~80 to 150 MiB | ~100 to 180 MiB | ~120 to 220 MiB | One host per room plus a small supervisor and one snapshot copy per tab, one spend walker, room-local rollups, prepared cell-pet grids |
-| Durable write | ~1 to 3 KiB/s | ~2 to 4 KiB/s | ~2 to 5 KiB/s | Lifecycle frames pinned at 1 KiB or less, summed across rooms |
-| fsync rate | ~rooms/s | ~rooms/s | ~rooms/s | One group `fdatasync` per second per workspace |
-| State on disk | Tens of MiB | Tens of MiB | ~100s of MiB | Rotation-capped event log plus ~5 KiB of snapshot per agent, per workspace |
+| Durable write | Event-volume dependent | Event-volume dependent | Event-volume dependent | Derived lifecycle frames at 1 KiB or less, raw ingress payload and environment, and cursor publications |
+| fsync rate | Event-volume dependent | Event-volume dependent | Event-volume dependent | Group event-log barrier plus four cursor fsyncs per applied frame and three barriers per drained-queue reset |
+| State on disk | Tens of MiB | Tens of MiB | ~100s of MiB | Rotation-capped event log, ~5 KiB of snapshot per agent, and the pending ingress queue, truncated after drain |
 | Network | Weekly pricing fetch, 5-minute OAuth usage probes per metered provider, forge open-set probes per due repo | Same | Same | Pricing is fleet-shared and single-flighted; local datagrams carry the rest |
 
 Against the agents it tracks, that overhead is a rounding error. One developer's week of Claude and Codex sessions produced 1.23 GiB of transcript JSONL (about 177 MiB a day), with each agent process resident at 250 to 340 MiB (Claude) or 50 to 65 MiB (Codex). RimZ watched the same fleet with tens of MiB of durable state, a resident set about the size of one agent process, one fsync a second per room, and one pricing refresh a week.
@@ -301,9 +303,9 @@ The spend walk is incremental in three layers: the walker's directory index stat
 
 Every display figure is display-only by invariant ([DESIGN.md](../../DESIGN.md#triage-at-a-glance)), so each enrichment runs on its own cadence behind stamps stored in the cache file it already writes. Because the stamps live in shared files, every process agrees on freshness across a producer handoff. Account probes carry one stamp per provider, so a failure retries alone. Process sampling keeps per-pane focused and background stamps, independent of the roster clock. Git probes take activity-tiered TTLs whose hotness comes from store activity, with no filesystem watching, and in-process `.git` ref reads skip the ancestry forks when the cached HEAD and trunk pair and the clean verdict are unchanged. The values are [state.md → Cadences](./sidebar/state.md#cadences).
 
-### The write path holds no fsync under the lock
+### Append and drain critical sections
 
-The workspace lock covers durable truth only, so a hold lasts microseconds. The off-lock tail issues one group `fdatasync` per second, which makes every writer's appends in that interval durable at once. Length-plus-CRC32 framing turns a lost suffix into deterministic corruption that repair truncates. Every fsync goes through `disk/atomic.rs`, which the `cargo xtask invariants` check `ensure_store_durability` enforces for `sync_all` and `sync_data` calls. The contract is [store.md → Write classes](./store.md#write-classes).
+The foreground hook appends under a shared, blocking `locks/hook-ingress.lock`, independently of the workspace lock used for lifecycle batches and durable cursor publication. Appenders do not exclude each other or poll in sleep quanta. A due `PostToolUse` deadline rung can still take the workspace lock. The drainer holds ingress exclusively for its repair read, releases it before application, and takes workspace then exclusive ingress for repair, truncation and store reset. Not every workspace-lock hold is a microsecond append or fsync-free. Workspace-lock waiters retry at 1 ms for the first 25 ms, then exponentially back off to 50 ms; the acquisition deadline and inode-reopening rules are unchanged. The event-log off-lock tail retains its group `fdatasync` barrier. Length-plus-CRC32 framing detects corruption; the event log truncates a lost suffix, while ingress skips corrupt terminated rows and truncates an unterminated tail with diagnostic evidence. Every fsync goes through `disk/atomic.rs`, which the `cargo xtask invariants` check `ensure_store_durability` enforces for `sync_all` and `sync_data` calls. The contract is [store.md → Write classes](./store.md#write-classes).
 
 ### Helper processes stay cheap
 
@@ -331,6 +333,37 @@ Each of these has cost RimZ a real regression. They are grouped by the principle
 
 **An atomic reinstall leaves deleted inodes behind.** A long-lived renderer's `current_exe()` resolves to `rimz (deleted)`, so a naive self-spawn fails `execve`, and a supervisor parent holds the deleted inode until session end while its children orphan. `rimz_exe` repairs the suffix, supervisor-owned reload convergence re-execs parents onto the new binary, and supervisor-side reaping clears the orphans.
 
+## Adopted hook drainer
+
+The rejected resident-writer premise was wrong: the foreground hook folded the room and ran lifecycle effects, not merely a microsecond append. `crates/rimz/src/cli/hooks.rs::run_feed` now appends raw ingress before return and nudges an elected, idle-exiting worker. Verified pins avoid git resolution; path discovery and typed validation reuse the same atomically stamped workspace-record bytes. A failed connect spawns without waiting for the spawn lock or listener. Inline apply is the spawn-failure fallback for host callers; sandbox callers use their wrapper-held lease and apply in the caller's view without appending when the host drainer is unreachable or their launch predates the `RIMZ_SANDBOX_HOST_PATHS` mount pin. A missing pin also skips the connect. Hook stdout remains the provider's decision channel and helper children have fresh stdio. Reply-bearing events wait for enrichment, not all hooks.
+
+Release replay used the same frozen room copy (3.7 MB cache, 84 MB log, 9.2 MB records), pinned Codex `Stop`, ten interleaved hook/`--version` pairs and a separate 24-stop burst. Before is `g957778e33d7a`; after is `19c2341e5`, including the elected worker, independent ingress lock, bounded lock retries and workspace-record reuse. The first hook starts without a drainer; steady-state samples follow one hook and drain-through. These are separate measurement windows, not an alternating before/after experiment.
+
+| Release replay (ms) | Before min / mean / max | After min / mean / max |
+| --- | ---: | ---: |
+| Sequential hook | 205.804 / 277.554 / 362.888 | 2.051 / 2.984 / 5.183 |
+| Interleaved `--version` | 1.985 / 2.662 / 3.566 | 1.694 / 2.097 / 2.501 |
+| Python-coordinated 24 concurrent hooks (diagnostic) | 708.053 / 1824.012 / 2992.600 | 14.749 / 32.949 / 38.937 |
+
+The after replay's cold hooks returned in 5.238 and 4.485 ms. Drain-through after the measured returns took another 2.865 s sequentially and 7.176 s after the burst: the serial environment-scoped apply child moves fold and effects off the foreground, not out of the system. Cursor claim, applied and reset publications are additional durability work, not the debounced event-log barrier.
+
+`crates/rimz/tests/integration/performance/hook_budget.rs::concurrent_stops_hold_the_relative_budget` runs 24 concurrent Stops with at least 48 samples per empty and seeded side, an interleaved baseline and an exclusive nextest window. It holds both 2x process-start bounds and the 1.25x seeded/empty bound, which fails only when the ratio exceeds it both raw and with each side taken relative to its own interleaved `rimz --version` baseline: load during one burst moves the raw ratio alone, a quiet baseline burst moves the normalised one alone, and a slower seeded hook moves both. It then proves every derived event reaches the fold. With shared ingress appenders, debug p99 hook/version was 28.514/27.800 ms empty and 29.687/27.003 ms seeded.
+
+`crates/rimz/benches/hotpath.rs::hook_stop_budget` holds the release p99 ceiling of max(4 ms, 2x `--version`) for both sequential and 24-way ingress. Its Rust coordinator prepares commands before one barrier releases 24 threads, each timing spawn through the standard child wait. One unmeasured warm-up burst per side precedes ten hook bursts alternating with ten version bursts; both write and close the same piped stdin, and output collection is outside timing. Sequential samples alternate 48 pairs. Both cases measure a warmed, live draining worker; first-creation directory sync and worker startup remain in the separately measured cold hook.
+
+| Rust release coordinator, shared ingress lock (ms, p99) | Hook wall | Version wall | Ceiling |
+| --- | ---: | ---: | ---: |
+| Seeded, sequential | 2.584 | 2.462 | 4.923 |
+| Seeded, 24-way | 7.834 | 6.907 | 13.814 |
+| Live-sized copy, sequential | 3.389 | 5.414 | 10.828 |
+| Live-sized copy, 24-way | 8.164 | 7.369 | 14.738 |
+
+Burst p99 is over 240 children per side; per-burst wall summaries are printed for replay. Set `RIMZ_HOOK_BUDGET_HOME` to a frozen home containing `.rimz` and exactly one recorded room to run the same bench on a disposable copy; the source stays untouched. Build with `cargo build -p rimz --release --features testkit --bins`, then run `cargo xtask perf -- hook`, with that environment variable for the live-sized case. Cleanup drains the measured frames and warm-up outside the budget with a 120 s wait sized for serial apply. After-return drain took 2.668 s on the fixture and 80.468 s on the live-sized copy.
+
+Both final sequential hook p99 values are below 4 ms, and both 24-way cases satisfy the relative ceiling. Across the native runs the 24-way exec baseline itself was about 7 to 11 ms (6.907/7.369 ms in this final run): 4 ms is the sequential target, not a fixed 24-way wall-time promise. Before shared appenders and parallel warm-up, the fixture missed the same rule at 24.206 ms hook versus 7.909 ms version. Exclusive ingress locking polled with 1 ms sleeps made appenders queue behind each other; sharing a kernel-blocking lock removes that appender contention while excluding length snapshots and truncation. The earlier Python ThreadPoolExecutor burst's 38.937 ms and a separate subsequent version burst's 8.647 ms were not a fair paired comparison and remain diagnostic only. Earlier pinned traces show one workspace-record open, one ingress-lock open, one append and one socket connect, with no workspace-lock, snapshot, rollup, event-log or git access.
+
+The review fixes publish each staged lifecycle batch with one ordered-batch append under the workspace lock, using the existing framed-log write path. The measurements above predate the review fixes; they remain historical evidence, not measurements of the corrected drainer's throughput. The hook's append-and-nudge budget is unchanged.
+
 ## Deferred and rejected
 
 Wins identified but not taken, because each changes a contract or crosses a backend-parity boundary, ranked by expected payoff:
@@ -349,7 +382,6 @@ Evaluated and rejected, recorded so the next pass does not reopen them:
 - **Lock-free `O_APPEND` event appends.** Recovery assumes the lock makes the log single-writer, so only the trailing frame can tear. Concurrent appenders' dirty pages can write back out of order and leave a zeroed frame in the middle, which rebuild correctly treats as a hard error. Making that safe needs per-frame magic for resync, all to shave a lock hold that is already microseconds.
 - **Binary snapshot format.** The parse cache removes re-parsing on delta storms and the `RollupCursor` holds the parsed base in memory, so a binary checkpoint would speed up a parse that does not happen. JSON keeps `rimz sidebar snapshot --json` inspectable.
 - **Caching the wakeup heartbeat scan.** N is live sidebars, the reads are page-cache hot, and the fanout runs after the lock releases, below the write's fsync floor. A cache would have to live across processes and re-validate exactly what the TTL and re-stat already check.
-- **A resident writer daemon behind `rimz hooks feed`.** The agent's hook contract spawns a process per event regardless, so a daemon would remove only RimZ's startup: a page-cache-hot exec, workspace resolution, store open, and a microsecond append. That is single-digit milliseconds per event, roughly 0.1 to 0.3 core at 30 chatty agents and under a core at 100, off every human-facing budget. The spawned child also carries two contracts a daemon would have to re-earn: its synchronous append lands truth inside the agent's hook-execution guarantee, and its stdout is the decision channel. A daemon path would need an ack protocol, a request and response surface, and a direct-append fallback for a dead daemon, which is the current design. Revisit only on measured hook-spawn CPU at fleet scale.
 
 ## Making a performance change
 
