@@ -200,6 +200,7 @@ mod tests {
         working: Vec<&str>,
     ) -> SidebarSnapshot {
         let mut snapshot = snapshot(&workspace());
+        snapshot.panes_produced_at_ms = Some(1);
         snapshot.own_view = Some(SidebarOwnView {
             sibling_count: working.len(),
             working_pane_ids: working

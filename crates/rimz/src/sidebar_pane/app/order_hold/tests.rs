@@ -66,6 +66,7 @@ fn agent_row(id: &str, raw_pane: &str, status: AgentStatus) -> SidebarRow {
 fn snapshot_with_groups(groups: Vec<SidebarWorktreeGroup>) -> SidebarSnapshot {
     let ws = workspace();
     let mut current = snapshot(&ws);
+    current.panes_produced_at_ms = Some(1);
     current.worktree_groups = groups;
     current
 }

@@ -765,9 +765,11 @@ fn roster_narrowing_needs_a_listed_session() {
                 ..crate::testkit::agent_state("claude", id, now)
             })
             .collect();
+        let mut snapshot =
+            SidebarSnapshot::build_with_agents(fixture.workspace_id.clone(), agents, now);
+        snapshot.panes_produced_at_ms = Some(1);
         SnapshotPublication {
-            snapshot: SidebarSnapshot::build_with_agents(fixture.workspace_id.clone(), agents, now)
-                .with_live_panes(panes, None),
+            snapshot: snapshot.with_live_panes(panes, None),
             role,
             phase: FetchPhase::Final,
             source: SnapshotSource::Produced,

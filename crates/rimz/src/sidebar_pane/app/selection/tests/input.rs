@@ -1050,6 +1050,7 @@ fn a_fresh_unread_lead_never_steals_the_viewport_from_the_selection() {
     // A tall room: a lead actionable unread row, then nine calm rows.
     let ws = workspace();
     let mut snapshot = snapshot(&ws);
+    snapshot.panes_produced_at_ms = Some(1);
     let mut lead = filter_row(
         true,
         "agent-lead",

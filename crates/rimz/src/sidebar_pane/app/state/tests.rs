@@ -76,6 +76,7 @@ fn row_snapshot_at(
 ) -> SidebarSnapshot {
     let pane_id = PaneId::from_parts(crate::MuxName::Tmux, "%1");
     let mut snap = snapshot(ws);
+    snap.panes_produced_at_ms = Some(1);
     snap.worktree_groups = vec![SidebarWorktreeGroup {
         pr_stack: Default::default(),
         key: "/repo/main".to_owned(),
@@ -220,6 +221,7 @@ fn snapshot_in_group(
         Vec::new(),
         jiff::Timestamp::from_second(1_000).unwrap(),
     );
+    snapshot.panes_produced_at_ms = Some(1);
     snapshot.worktree_groups = vec![group];
     snapshot
 }

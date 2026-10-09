@@ -43,6 +43,7 @@ fn roster_len(
 /// regression guard.
 fn clickable_block_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
     let mut snapshot = snapshot(ws);
+    snapshot.panes_produced_at_ms = Some(1);
     let agent = crate::store::snapshot::SidebarRow {
         id: "agent-1".to_owned(),
         name: "claude".to_owned(),
@@ -224,6 +225,7 @@ fn filter_row(
 fn filterable_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
     use crate::agents::AgentStatus;
     let mut snapshot = snapshot(ws);
+    snapshot.panes_produced_at_ms = Some(1);
     snapshot.worktree_groups = vec![
         crate::store::snapshot::SidebarWorktreeGroup {
             pr_stack: Default::default(),
