@@ -1,6 +1,6 @@
 //! Renderer-local unread reminder timing, actionable attention scope, and delivery through terminal notifications and configured handlers.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use ratatui::Terminal;
 use tracing::debug;
@@ -56,10 +56,9 @@ impl RemindState {
         }
 
         let notification = unread_reminder_notification(scope.count);
-        // The reminder scope is already unread `waiting`/`failed` rows, and its
-        // paneless path borrows non-unread sibling panes to reach a detached
-        // ask — so ring directly rather than re-checking each borrowed pane's
-        // row. The daemon exclusion in `bell_decision` still applies.
+        // The reminder scope is already unread `waiting`/`failed` rows, so ring
+        // directly rather than re-checking each pane's row. The daemon
+        // exclusion in `bell_decision` still applies.
         if let Err(err) = emit_terminal_notification(
             config,
             terminal,
@@ -110,16 +109,6 @@ impl ReminderScope {
         self.push_pane(pane);
     }
 
-    fn add_paneless_row(&mut self, panes: &[PaneId]) {
-        if panes.is_empty() {
-            return;
-        }
-        self.count += 1;
-        for pane in panes {
-            self.push_pane(pane);
-        }
-    }
-
     fn push_pane(&mut self, pane: &PaneId) {
         if !self.panes.contains(pane) {
             self.panes.push(pane.clone());
@@ -154,7 +143,6 @@ fn unread_reminder_scope(snapshot: &SidebarSnapshot, prefs: &NotificationsPrefs)
         return ReminderScope::default();
     }
     let focused = prefs.suppress_focused.then_some(&snapshot.viewed_panes[..]);
-    let worktree_targets = worktree_target_panes(snapshot, &working, focused);
     let mut scope = ReminderScope::default();
     for row in snapshot
         .worktree_groups
@@ -164,51 +152,16 @@ fn unread_reminder_scope(snapshot: &SidebarSnapshot, prefs: &NotificationsPrefs)
         if !row.unread || !row.status().is_some_and(AgentStatus::is_actionable) {
             continue;
         }
-        if let Some(pane) = row.pane.as_ref() {
-            if working.contains(&pane.pane_id)
-                && !focused.is_some_and(|viewed| viewed.contains(&pane.pane_id))
-            {
-                scope.add_pane_row(&pane.pane_id);
-            }
-            continue;
-        }
-        if let Some(path) = row.worktree_path.as_deref().filter(|path| !path.is_empty())
-            && let Some(panes) = worktree_targets.get(path)
-        {
-            scope.add_paneless_row(panes);
-        }
-    }
-    scope
-}
-
-fn worktree_target_panes(
-    snapshot: &SidebarSnapshot,
-    working: &HashSet<PaneId>,
-    focused: Option<&[PaneId]>,
-) -> HashMap<String, Vec<PaneId>> {
-    let mut targets: HashMap<String, Vec<PaneId>> = HashMap::new();
-    for row in snapshot
-        .worktree_groups
-        .iter()
-        .flat_map(|group| group.rows.iter())
-    {
-        let Some(path) = row.worktree_path.as_deref().filter(|path| !path.is_empty()) else {
-            continue;
-        };
         let Some(pane) = row.pane.as_ref() else {
             continue;
         };
-        if !working.contains(&pane.pane_id)
-            || focused.is_some_and(|viewed| viewed.contains(&pane.pane_id))
+        if working.contains(&pane.pane_id)
+            && !focused.is_some_and(|viewed| viewed.contains(&pane.pane_id))
         {
-            continue;
-        }
-        let panes = targets.entry(path.to_owned()).or_default();
-        if !panes.contains(&pane.pane_id) {
-            panes.push(pane.pane_id.clone());
+            scope.add_pane_row(&pane.pane_id);
         }
     }
-    targets
+    scope
 }
 
 #[cfg(test)]
@@ -239,13 +192,6 @@ mod tests {
                 ..AgentCard::default()
             })),
         }
-    }
-
-    fn paneless_row(raw: &str, status: AgentStatus, unread: bool, worktree: &str) -> SidebarRow {
-        let mut entry = row(raw, status, unread);
-        entry.pane = None;
-        entry.worktree_path = Some(worktree.to_owned());
-        entry
     }
 
     fn snapshot_with(
@@ -402,27 +348,6 @@ mod tests {
                 PaneId::from_parts(crate::MuxName::Zellij, "terminal_1"),
                 PaneId::from_parts(crate::MuxName::Zellij, "terminal_2"),
             ]
-        );
-    }
-
-    #[test]
-    fn reminder_scope_targets_paneless_rows_through_local_worktree_panes() {
-        let snapshot = snapshot_with(
-            vec![
-                row("terminal_1", AgentStatus::Running, false),
-                paneless_row("ask-1", AgentStatus::Waiting, true, "/repo/main"),
-                paneless_row("ask-2", AgentStatus::Failed, true, "/repo/other"),
-            ],
-            None,
-            vec!["terminal_1"],
-        );
-
-        let scope = unread_reminder_scope(&snapshot, &NotificationsPrefs::default());
-
-        assert_eq!(scope.count, 1);
-        assert_eq!(
-            scope.panes,
-            vec![PaneId::from_parts(crate::MuxName::Zellij, "terminal_1")]
         );
     }
 
