@@ -267,6 +267,47 @@ Each output pairs a `fold_decided` with the latest `frame_published` whose `prod
 
 For each new Zellij tab, the new attachment's first `fold_decided` with `panes_produced_at_ms` at or after the roster growth must carry `baseline` and `selected_after` naming the new shell. Also inspect every already-open attachment over the same window: none may append a fold with `selected_before` set and `selected_after` absent, including idle selections past the six-row cap. Read one new shell's `/proc/<pid>/cmdline` to confirm its argv[0] is the shell path rather than a login name starting with `-`, and check `audit/diag.log.jsonl` for `newborn_quarantined`, expected absent for these shells. A missing root pid or unreadable process entry retains the wait for Zellij's command/cwd events. Save the room's whole `audit/` directory beside the run report, not only `focus.log.jsonl`: row admission is recorded in `audit/diag.log.jsonl` and `audit/binding.log.jsonl`, and the focus trace cannot say why a pane had no row. When a record fails the pass rule, repeat the same script on a build of the branch's merge-base and report both runs, so the failure is tagged as introduced or already on the trunk.
 
+A stale seed is a race, so one tab proves little: the recorded tmux failure was 1 tab in 18. Wrap the tmux script in a loop that opens 18 tabs and keeps each tab's window and new pane ids beside its captures. Given the tmux script's path, the socket, the session, and an output directory:
+
+```sh
+#!/bin/sh
+ONE=$1; SOCK=$2; S=$3; OUT=$4
+n=1
+while [ $n -le 18 ]; do
+  D="$OUT/tab$(printf '%02d' $n)"; mkdir -p "$D"
+  date +%s%3N > "$D/start_ms"
+  "$ONE" "$SOCK" "$S" "$D"
+  date +%s%3N > "$D/end_ms"
+  tmux -S "$SOCK" list-panes -a -F 'tmux:#{pane_id}' | sort > "$D/after"
+  sed 's/^/tmux:/' "$D/before" | comm -13 - "$D/after" > "$D/new"
+  sleep 1.5
+  n=$((n+1))
+done
+```
+
+Then judge every `fold_decided` in each tab's window, from every sidebar, with `OUT` that output directory and `FOCUS_LOG` as above:
+
+```sh
+for D in "$OUT"/tab*; do
+  jq -c --argjson start "$(cat "$D/start_ms")" --argjson end "$(cat "$D/end_ms")" \
+    --arg tab "${D##*/}" --rawfile new "$D/new" '
+    ($new | split("\n") | map(select(. != ""))) as $panes
+    | select(.event.kind == "fold_decided" and .at_ms >= $start and .at_ms <= $end)
+    | .event as $fold
+    | {
+        tab: $tab, at_ms, instance_id, fold: $fold,
+        ok: (([$fold.baseline, $fold.selected_after] | map(select(. != null))
+              | all(. as $pane | $panes | index($pane) != null))
+          and ($fold.seed != true or $fold.own_view == false
+              or ($fold.panes_produced_at_ms // 0) >= $start))
+      }
+  ' "$FOCUS_LOG"
+done > "$OUT/folds.jsonl"
+jq -c 'select(.ok | not)' "$OUT/folds.jsonl"
+```
+
+`ok` holds when the fold's `baseline` and `selected_after` are absent or name a pane the tab created, and a seed resting on a projection older than the tab has `own_view: false`. The run passes when the last command prints nothing and `folds.jsonl` holds 18 records with `seed: true`, one per tab. This judges the folds only; the publication half of the pass rule above still reads the `frame_published` records.
+
 Two Zellij checks guard the neighbours of that rule, read from the same log. With focus resting on a pane, open and close a pane in another tab without moving focus (`zellij action new-pane --tab-id <n> --no-focus`, then `close-pane --pane-id <id>`): no `frame_published` moves `focused_pane` off the resting pane, and no attachment appends a `fold_decided`. Then switch between two existing tabs (`zellij action go-to-tab <n>`): no publication carries `client_sample_withheld`, and the destination sidebar's seating fold has `fused_event_sent_at_ms` set and lands before the `session_focus` publication that names the destination, under about 100 ms in a small room.
 
 A tmux capture is a few milliseconds apart, so the first file is close to the first paint. A Zellij capture goes through the session and resolves about 0.2 s, so it proves the first screen seen and bounds the correction only coarsely. Repeat after the room has sat idle for a minute: the seed is refused once the projection is older than its age bound, and a live room must stay inside it.
