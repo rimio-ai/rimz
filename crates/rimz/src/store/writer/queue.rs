@@ -605,6 +605,39 @@ impl Store {
     }
 
     #[must_use = "durability barrier; check the result"]
+    pub fn queue_still_queued_notice(
+        &self,
+        stalled: &MessageId,
+        notice: &MessageRecord,
+        session_name: &str,
+    ) -> Result<bool> {
+        self.commit_queue(|queue| {
+            let now = Timestamp::now();
+            let stamped = queue.apply_all(session_name, now, |record| {
+                if &record.message_id != stalled
+                    || record.status != MessageStatus::Queued
+                    || record.queued_notice_at.is_some()
+                {
+                    return MessageUpdate::Keep;
+                }
+                record.queued_notice_at = Some(now);
+                MessageUpdate::SilentRewrite
+            });
+            if stamped.is_empty() {
+                return Ok(false);
+            }
+            queue.upsert(notice.clone());
+            queue.stage_event(EventEnvelope::message_event(
+                notice,
+                session_name,
+                MessageEventMethod::Queued,
+                None,
+            ));
+            Ok(true)
+        })
+    }
+
+    #[must_use = "durability barrier; check the result"]
     pub fn queue_claimed_message(
         &self,
         message: &MessageRecord,

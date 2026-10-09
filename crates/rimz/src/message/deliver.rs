@@ -12,8 +12,9 @@ use crate::agents::{AgentState, AgentStatus};
 use crate::ids::{MessageId, MuxName, PaneId};
 use crate::message::{gate_open_for_agent, max_delivery_attempts_from_env};
 use crate::store::message::{
-    AfterCondition, DeliveryGate, MessageBody, MessageRecord, MessageSender, MessageStatus,
-    WhenCondition, older_ready_blocker, queue_head,
+    AfterCondition, DeliveryGate, HarnessNotice, MessageBody, MessageRecord, MessageSender,
+    MessageStatus, QUEUED_NOTICE_BUSY_DELAY, QUEUED_NOTICE_BUSY_ENV, QUEUED_NOTICE_IDLE_DELAY,
+    QUEUED_NOTICE_IDLE_ENV, WhenCondition, env_ms, older_ready_blocker, queue_head, sender_notice,
 };
 use crate::store::snapshot::{PaneAgent, SidebarSnapshot};
 use crate::store::writer::BlockerUpdate;
@@ -149,6 +150,75 @@ pub enum DeliveryVerdict {
         pinned_pane_id: Option<PaneId>,
     },
     Ready,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StallClass {
+    NotWorking,
+    Busy,
+}
+
+impl StallClass {
+    fn delay(self) -> Duration {
+        match self {
+            Self::NotWorking => env_ms(QUEUED_NOTICE_IDLE_ENV).unwrap_or(QUEUED_NOTICE_IDLE_DELAY),
+            Self::Busy => env_ms(QUEUED_NOTICE_BUSY_ENV).unwrap_or(QUEUED_NOTICE_BUSY_DELAY),
+        }
+    }
+}
+
+impl DeliveryVerdict {
+    fn stall_class(&self) -> Option<StallClass> {
+        match self {
+            Self::GateClosed {
+                status: Some(AgentStatus::Running),
+                ..
+            }
+            | Self::Compacting => Some(StallClass::Busy),
+            Self::NoPane { .. }
+            | Self::ProviderStarting
+            | Self::ResumeUnrecovered
+            | Self::AskWaiting
+            | Self::ReceiverGone
+            | Self::ReceiverEnded
+            | Self::GateClosed { .. } => Some(StallClass::NotWorking),
+            Self::Scheduled { .. }
+            | Self::WaitingOnAfter { .. }
+            | Self::WaitingOnWhen { .. }
+            | Self::BehindFifo { .. }
+            | Self::Expired { .. }
+            | Self::Ready => None,
+        }
+    }
+
+    fn stall_cause(&self) -> String {
+        match self {
+            Self::NoPane { pinned_pane_id } => no_pane_blocker(pinned_pane_id.as_ref()),
+            Self::ProviderStarting => "provider is starting".to_owned(),
+            Self::ResumeUnrecovered => "resuming".to_owned(),
+            Self::AskWaiting => "waiting on input in its pane".to_owned(),
+            Self::ReceiverGone => "receiver has no current card".to_owned(),
+            Self::ReceiverEnded => "receiver ended".to_owned(),
+            Self::Compacting => "compacting".to_owned(),
+            Self::GateClosed {
+                status: Some(AgentStatus::Running),
+                ..
+            } => "busy in a turn".to_owned(),
+            Self::GateClosed {
+                status: Some(status),
+                ..
+            } => format!("gate closed while {}", status.as_str()),
+            Self::GateClosed { status: None, .. } => {
+                "gate closed while status is unknown".to_owned()
+            }
+            Self::Scheduled { .. }
+            | Self::WaitingOnAfter { .. }
+            | Self::WaitingOnWhen { .. }
+            | Self::BehindFifo { .. }
+            | Self::Expired { .. }
+            | Self::Ready => String::new(),
+        }
+    }
 }
 
 const NO_LIVE_PANE: &str = "stuck: no live pane";
@@ -442,6 +512,47 @@ pub fn ended_receiver_reason(
     format!("receiver ended; rimz message {target} resumes it")
 }
 
+/// Tells each agent sender, once per message, that its condition-met record on `head`'s card has
+/// stayed queued past the delay of the class `verdict` puts the receiver in.
+fn notify_long_queued(
+    workspace: &ResolvedWorkspace,
+    store: &Store,
+    agents: &[AgentState],
+    pending: &[MessageRecord],
+    head: &MessageRecord,
+    verdict: &DeliveryVerdict,
+    now: Timestamp,
+) -> Result<()> {
+    let Some(class) = verdict.stall_class() else {
+        return Ok(());
+    };
+    let delay = class.delay();
+    let cause = verdict.stall_cause();
+    for record in pending.iter().filter(|record| {
+        record.same_card(head.card_ref())
+            && record.is_deliverable(now)
+            && record.queued_notice_at.is_none()
+            && record.wants_queued_notice()
+    }) {
+        let waited =
+            Duration::from_millis(now.duration_since(record.enqueued_at).as_millis().max(0) as u64);
+        if waited < delay {
+            continue;
+        }
+        let Some(sender) = sender_notice::resolve_sender(&record.sender, agents) else {
+            continue;
+        };
+        let notice = sender_notice::compose(
+            workspace.workspace_id.clone(),
+            sender,
+            HarnessNotice::MessageQueued,
+            sender_notice::still_queued(record, &cause, waited),
+        );
+        store.queue_still_queued_notice(&record.message_id, &notice, &workspace.session_name)?;
+    }
+    Ok(())
+}
+
 pub fn sweep(workspace: &ResolvedWorkspace, store: &Store, mux: Option<MuxName>) -> Result<()> {
     let runtime = RuntimePaths::for_project_root(&workspace.project_root)?;
     let Some(_guard) = try_start_sweep(&runtime)? else {
@@ -544,6 +655,17 @@ pub fn sweep(workspace: &ResolvedWorkspace, store: &Store, mux: Option<MuxName>)
                         &workspace.session_name,
                     )?;
                     continue;
+                }
+                if let Some(verdict) = &verdict {
+                    notify_long_queued(
+                        workspace,
+                        store,
+                        &snapshot.agents,
+                        &pending,
+                        head,
+                        verdict,
+                        now,
+                    )?;
                 }
                 let recorded = match verdict {
                     Some(DeliveryVerdict::NoPane { pinned_pane_id }) => {

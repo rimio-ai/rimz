@@ -1536,6 +1536,186 @@ fn sweep_archives_an_ended_receiver_hidden_from_the_runtime_snapshot() {
 }
 
 #[test]
+fn sweep_notifies_agent_senders_once_at_idle_and_busy_thresholds() {
+    for (busy, override_ms, threshold) in [
+        (false, None, 300_u64),
+        (true, None, 1200),
+        (false, Some("5000"), 5),
+        (true, Some("5000"), 5),
+    ] {
+        let env = Env::new();
+        env.record(&env.project_root);
+        env.install_agent_hooks("claude");
+        register_running_agent(&env, "sess-notice-sender", "sender-lane", &[]);
+        register_running_agent(&env, "sess-notice-receiver", "receiver-lane", &[]);
+        if !busy {
+            run_hook(
+                &env,
+                json!({"hook_event_name": "Stop", "session_id": "sess-notice-receiver"}),
+                &[],
+            );
+        }
+        let store = env.store();
+        let snapshot = store.snapshot_cached().unwrap();
+        let sender = snapshot
+            .agents
+            .iter()
+            .find(|agent| agent.agent_id.as_str() == "sess-notice-sender")
+            .unwrap();
+        let receiver = snapshot
+            .agents
+            .iter()
+            .find(|agent| agent.agent_id.as_str() == "sess-notice-receiver")
+            .unwrap();
+        let origin = MessageSender::Agent {
+            kind: sender.kind.clone(),
+            agent_id: Some(sender.agent_id.clone()),
+            name: sender.name.clone(),
+            profile: None,
+            role: None,
+            channel: sender.channel(),
+        };
+        let mut first = MessageRecord::new(
+            env.workspace_id.clone(),
+            receiver,
+            "first task".into(),
+            DeliveryGate::Done,
+        )
+        .with_sender(origin.clone());
+        first.enqueued_at = jiff::Timestamp::now()
+            - Duration::from_secs(if busy && override_ms.is_none() {
+                300
+            } else {
+                threshold.saturating_sub(30)
+            });
+        let mut second = MessageRecord::new(
+            env.workspace_id.clone(),
+            receiver,
+            "second task".into(),
+            DeliveryGate::Done,
+        )
+        .with_sender(origin.clone());
+        second.enqueued_at = first.enqueued_at;
+        for record in [&first, &second] {
+            store.queue_message(record, "rimz-test").unwrap();
+        }
+        let mut conditional = MessageRecord::new(
+            env.workspace_id.clone(),
+            receiver,
+            "wait for my condition".into(),
+            DeliveryGate::Done,
+        )
+        .with_sender(origin.clone())
+        .with_when(vec![WhenCondition {
+            kind: receiver.kind.clone(),
+            agent_id: receiver.agent_id.clone(),
+            agent_name: receiver.name.clone(),
+            address: "@receiver".into(),
+            status: rimz::agents::AgentStatus::Failed,
+            dwell_secs: 60,
+            met_at: None,
+        }]);
+        conditional.enqueued_at = jiff::Timestamp::now() - Duration::from_secs(3600);
+        store.queue_message(&conditional, "rimz-test").unwrap();
+        let after = MessageRecord::requeue_from(&conditional)
+            .with_when(Vec::new())
+            .with_after(vec![rimz::store::message::AfterCondition {
+                kind: sender.kind.clone(),
+                agent_id: sender.agent_id.clone(),
+                agent_name: sender.name.clone(),
+                address: "@sender".into(),
+                met_at: None,
+            }]);
+        let scheduled = MessageRecord::requeue_from(&conditional)
+            .with_when(Vec::new())
+            .with_not_before(Some(jiff::Timestamp::now() + Duration::from_secs(3600)));
+        let waiting = MessageRecord::requeue_from(&conditional)
+            .with_when(Vec::new())
+            .with_reply_wait(true);
+        let human = MessageRecord::requeue_from(&conditional)
+            .with_when(Vec::new())
+            .with_sender(MessageSender::Human);
+        let harness = MessageRecord::requeue_from(&conditional)
+            .with_when(Vec::new())
+            .with_sender(MessageSender::Harness {
+                notice: HarnessNotice::Wait,
+            });
+        for mut record in [after, scheduled, waiting, human, harness] {
+            record.enqueued_at = conditional.enqueued_at;
+            store.queue_message(&record, "rimz-test").unwrap();
+        }
+        let panes = env.write_pane_fixture(&[]);
+        let sweep = || {
+            let mut command = env.rimz();
+            command
+                .env("RIMZ_TEST_PANE_LIST", &panes)
+                .args(["message", "sweep"]);
+            if let Some(value) = override_ms {
+                command.env(
+                    if busy {
+                        "RIMZ_MESSAGE_QUEUED_NOTICE_BUSY_MS"
+                    } else {
+                        "RIMZ_MESSAGE_QUEUED_NOTICE_IDLE_MS"
+                    },
+                    value,
+                );
+            }
+            run_success(&mut command, "sweep sender notices");
+        };
+        let notices = || {
+            store
+                .list_messages()
+                .unwrap()
+                .into_iter()
+                .filter(|record| {
+                    serde_json::to_value(&record.sender).unwrap()["notice"] == "message_queued"
+                })
+                .collect::<Vec<_>>()
+        };
+        sweep();
+        assert!(notices().is_empty(), "no early notices: busy={busy}");
+        for record in [&mut first, &mut second] {
+            record.enqueued_at = jiff::Timestamp::now() - Duration::from_secs(threshold);
+            store.queue_message(record, "rimz-test").unwrap();
+        }
+        sweep();
+        let queued = notices();
+        assert_eq!(
+            queued.len(),
+            2,
+            "each condition-met agent send needs a notice: busy={busy}"
+        );
+        for record in [&first, &second] {
+            let notice = queued
+                .iter()
+                .find(|notice| notice.text.contains(record.message_id.as_str()))
+                .unwrap();
+            assert_eq!(notice.agent_id, sender.agent_id);
+            assert_eq!(notice.channel, sender.channel());
+            assert!(notice.text.contains("stays queued"));
+            assert!(
+                notice
+                    .text
+                    .contains(&format!("rimz message cancel {}", record.message_id))
+            );
+            assert!(notice.text.contains(if busy {
+                "busy in a turn"
+            } else {
+                "no live pane"
+            }));
+            let saved = message_by_id(&env, &record.message_id);
+            assert_eq!(saved.status, MessageStatus::Queued);
+            assert!(!serde_json::to_value(saved).unwrap()["queued_notice_at"].is_null());
+        }
+        let stamp: Option<jiff::Timestamp> =
+            serde_json::from_slice(&std::fs::read(wake_stamp_path(&env)).unwrap()).unwrap();
+        assert!(stamp.is_some_and(|stamp| stamp <= jiff::Timestamp::now()));
+        sweep();
+        assert_eq!(notices().len(), 2, "later sweeps cannot repeat notices");
+    }
+}
+
+#[test]
 fn sweep_clears_a_recorded_no_pane_blocker_once_the_pane_returns() {
     let env = Env::new();
     env.record(&env.project_root);

@@ -759,7 +759,8 @@ path = "crates/rimz/src/store"
 # QUEUED_NOTICE_IDLE_ENV names its millisecond override (+1).
 # QUEUED_NOTICE_BUSY_DELAY supplies the sweep's twenty-minute default (+1).
 # QUEUED_NOTICE_BUSY_ENV names its millisecond override (+1).
-surface-budget = 395
+# Store::queue_still_queued_notice atomically stamps and enqueues for message/deliver.rs::sweep (+1).
+surface-budget = 396
 
 [[module]]
 path = "crates/rimz/src/theme"

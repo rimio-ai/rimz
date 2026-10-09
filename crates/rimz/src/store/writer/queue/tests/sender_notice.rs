@@ -357,3 +357,74 @@ fn queued_notice_stamp_survives_queue_and_history_codecs() {
             .is_none()
     );
 }
+
+#[test]
+fn queued_notice_stamp_and_record_commit_once() {
+    let q = Queue::new();
+    let card = register_sender(&q, false);
+    let original = q.queue_with(1, |record| record.sender = sender());
+    let notice = sender_notice::compose(
+        q.workspace_id.clone(),
+        &card,
+        HarnessNotice::MessageQueued,
+        "still queued".into(),
+    );
+    assert_eq!(q.by_id(&original.message_id).queued_notice_at, None);
+    assert!(
+        q.queue_still_queued_notice(&original.message_id, &notice, "session")
+            .unwrap()
+    );
+    let stamped = q.by_id(&original.message_id);
+    assert!(stamped.queued_notice_at.is_some());
+    assert_eq!(q.by_id(&notice.message_id), notice);
+    assert_eq!(q.count("message.queued"), 2);
+    let events = serde_json::to_value(q.events()).unwrap();
+    let duplicate = sender_notice::compose(
+        q.workspace_id.clone(),
+        &card,
+        HarnessNotice::MessageQueued,
+        "duplicate".into(),
+    );
+    assert!(
+        !q.queue_still_queued_notice(&original.message_id, &duplicate, "session")
+            .unwrap()
+    );
+    assert_eq!(q.by_id(&original.message_id), stamped);
+    assert_eq!(q.live().len(), 2);
+    assert_eq!(serde_json::to_value(q.events()).unwrap(), events);
+}
+
+#[test]
+fn queued_notice_refuses_a_claimed_sent_or_terminal_record() {
+    for status in [
+        MessageStatus::Claimed,
+        MessageStatus::Sent,
+        MessageStatus::Delivered,
+    ] {
+        let q = Queue::new();
+        let card = register_sender(&q, false);
+        let record = q.queue_with(1, |record| {
+            record.sender = sender();
+            if !status.is_terminal() {
+                record.status = status;
+            }
+        });
+        if status.is_terminal() {
+            q.settle(&record.message_id, status, None);
+        }
+        let notice = sender_notice::compose(
+            q.workspace_id.clone(),
+            &card,
+            HarnessNotice::MessageQueued,
+            "not queued".into(),
+        );
+        let live = q.live();
+        let events = serde_json::to_value(q.events()).unwrap();
+        assert!(
+            !q.queue_still_queued_notice(&record.message_id, &notice, "session")
+                .unwrap()
+        );
+        assert_eq!(q.live(), live);
+        assert_eq!(serde_json::to_value(q.events()).unwrap(), events);
+    }
+}
