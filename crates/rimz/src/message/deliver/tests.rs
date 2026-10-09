@@ -1,6 +1,86 @@
 use super::*;
 
 #[test]
+fn stall_classes_cover_every_delivery_verdict() {
+    let now = Timestamp::now();
+    let mut cases = vec![
+        (
+            DeliveryVerdict::NoPane {
+                pinned_pane_id: None,
+            },
+            Some(StallClass::NotWorking),
+        ),
+        (
+            DeliveryVerdict::ProviderStarting,
+            Some(StallClass::NotWorking),
+        ),
+        (
+            DeliveryVerdict::ResumeUnrecovered,
+            Some(StallClass::NotWorking),
+        ),
+        (DeliveryVerdict::AskWaiting, Some(StallClass::NotWorking)),
+        (DeliveryVerdict::ReceiverGone, Some(StallClass::NotWorking)),
+        (DeliveryVerdict::ReceiverEnded, Some(StallClass::NotWorking)),
+        (DeliveryVerdict::Compacting, Some(StallClass::Busy)),
+        (DeliveryVerdict::Expired { expires_at: now }, None),
+        (
+            DeliveryVerdict::Scheduled {
+                not_before: Some(now),
+            },
+            None,
+        ),
+        (
+            DeliveryVerdict::WaitingOnAfter {
+                address: "@peer".into(),
+                agent_present: true,
+            },
+            None,
+        ),
+        (
+            DeliveryVerdict::WaitingOnWhen {
+                address: "@peer".into(),
+                expected: AgentStatus::Idle,
+                current: Some(AgentStatus::Running),
+                dwell_secs: 60,
+                dwell_so_far_secs: None,
+            },
+            None,
+        ),
+        (DeliveryVerdict::BehindFifo { blocker: None }, None),
+        (DeliveryVerdict::Ready, None),
+    ];
+    for status in [
+        None,
+        Some(AgentStatus::Running),
+        Some(AgentStatus::Idle),
+        Some(AgentStatus::Success),
+        Some(AgentStatus::Failed),
+        Some(AgentStatus::Waiting),
+        Some(AgentStatus::Sleeping),
+        Some(AgentStatus::Paused),
+    ] {
+        cases.push((
+            DeliveryVerdict::GateClosed {
+                gate: DeliveryGate::Done,
+                status,
+            },
+            Some(if status == Some(AgentStatus::Running) {
+                StallClass::Busy
+            } else {
+                StallClass::NotWorking
+            }),
+        ));
+    }
+    for (verdict, expected) in cases {
+        assert_eq!(verdict.stall_class(), expected, "{verdict:?}");
+        if let Some(class) = expected {
+            assert!(!verdict.stall_cause().is_empty(), "{verdict:?}");
+            assert!(class.delay() > Duration::ZERO);
+        }
+    }
+}
+
+#[test]
 fn explain_reports_expiry_before_other_blockers() {
     let now = Timestamp::from_second(10_000).unwrap();
     let receiver = agent("session", AgentStatus::Idle);
