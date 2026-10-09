@@ -132,7 +132,7 @@ fn all_young_attachments_start_one_successor_after_their_workers_are_stable() {
                 .unwrap()
         })
         .collect();
-    let hosts = || {
+    let host_cmdlines = || {
         rimz::proc::list_processes()
             .into_iter()
             .filter(|process| {
@@ -141,10 +141,18 @@ fn all_young_attachments_start_one_successor_after_their_workers_are_stable() {
             })
             .collect::<Vec<_>>()
     };
+    // A child the host has forked but not yet exec'd carries the host's cmdline;
+    // a host is never spawned by a host, so parentage tells the two apart.
+    let hosts = |matched: &[rimz::proc::ProcInfo]| {
+        matched
+            .iter()
+            .filter(|process| !matched.iter().any(|parent| parent.pid == process.ppid))
+            .count()
+    };
     let no_start_until = Instant::now() + Duration::from_millis(500);
     while Instant::now() < no_start_until {
         assert!(
-            hosts().is_empty(),
+            hosts(&host_cmdlines()) == 0,
             "no successor start before worker stability"
         );
         assert!(
@@ -180,10 +188,15 @@ fn all_young_attachments_start_one_successor_after_their_workers_are_stable() {
         );
         thread::sleep(Duration::from_millis(5));
     }
+    let matched = host_cmdlines();
     assert_eq!(
-        hosts().len(),
+        hosts(&matched),
         1,
-        "the stable probes coordinate one successor"
+        "the stable probes coordinate one successor; pid ppid cmdline of every match:\n{}",
+        matched
+            .iter()
+            .map(|process| format!("{} {} {}\n", process.pid, process.ppid, process.cmdline))
+            .collect::<String>()
     );
     for (supervisor, _) in &panes {
         assert_eq!(
