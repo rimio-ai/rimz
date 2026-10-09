@@ -51,7 +51,7 @@ The ping interval is long on purpose. libwebsockets closes a socket whose pong m
 | Rooms reachable | Every room with a workspace record and a live session | Rooms on the allowlist |
 | Record | `web-ttyd.json` | `web-ttyd-share.json` |
 | Lock | `web-ttyd.lock` | `web-ttyd-share.lock` |
-| Attach | `tmux -S <socket> attach -t <session>` or `zellij attach <session>` | tmux adds `-r`, and `-f ignore-size` on tmux 3.2 or newer; Zellij attaches normally |
+| Attach | `tmux -S <socket> -u attach -t <session>` or `zellij attach <session>` | tmux adds `-r`, and `-f ignore-size` on tmux 3.2 or newer; Zellij attaches normally |
 
 Every state file lives under `~/.rimz/web/`.
 
