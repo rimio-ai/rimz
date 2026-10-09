@@ -453,9 +453,11 @@ A signal is a name, a JSON object payload, a source, and, for watched commands, 
 | `Forge` | the sidebar's PR-state refresh, which spawns `rimz events emit --source forge` on a transition ([state.md § Push channels](../sidebar/state.md#push-channels)) | `ci.passed`, `ci.failed`, `pr.opened`, `pr.merged`, `pr.closed`, `pr.behind`, `pr.conflicted`, `pr.queued`, `pr.dequeued` |
 | `Git` | the sidebar's project-root trunk lane | `trunk.moved` |
 | `Worktree` | successful managed worktree operations, appended and fired in-process | `worktree.created`, `worktree.removed` |
-| `Lifecycle` | the lifecycle hook, from the events its own store append produced | `agent.started`, `agent.idle`, `agent.waiting`, `agent.failed`, `agent.ended`; `team.idle`, `team.waiting`, `team.failed`, `team.ended` |
+| `Lifecycle` | the elected hook drainer, from the lifecycle events it applies | `agent.started`, `agent.idle`, `agent.waiting`, `agent.failed`, `agent.ended`; `team.idle`, `team.waiting`, `team.failed`, `team.ended` |
 | `Team` | `rimz teams flip` and the stage owner's [resume re-wake](./teams.md#resume-re-wake) | `team.stage` |
 | `Watch` | `rimz wait watch <name>` at a check-in or terminal command, PID, check, or file outcome, and the elder's watch-lost rule | `wait.<task-name>` |
+
+Hook-sourced signals normally fire when `crates/rimz/src/harness/hook_drain.rs::Drainer::drain` applies the ingress frame through its child, not in the hook process. Selection uses the subscriptions armed at that apply instant. A sandbox hook whose host drainer is unreachable applies inline instead. Crash recovery replays keyed durable effects but does not fire lifecycle or team signals again: a fire lost between the lifecycle append and the applied cursor write is not recovered. `rimz events emit` still fires in its own process, with no queue or replay.
 
 GitHub-only `pr.behind` and `pr.conflicted` fire for open PRs on entry (including first sight), or for a changed head while the state persists, without repeating for unchanged heads. Conflict keys use the head where mergeability settled. Their payload is the `pr.merged` context with `state: "open"`, plus `pr_head`, `base` when known, and `behind_by` for `pr.behind` only; `head` stays local. The [PR producer](../sidebar/state.md#push-channels) owns detection and carry-forward. Both names inherit PR-family scoping and `branch`/`path` matching; a matching `pr.merged` subscriber records `SignalSkipped` for either sibling, while a failed match records nothing.
 
