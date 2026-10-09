@@ -241,15 +241,15 @@ impl PaneState {
     /// `cwd`, `started_at`) from the prior read and carries `previous` along.
     /// Foreground command repair is narrower: idle commands and agent hosts may
     /// be restored freely, but active commands require a known same pane-root
-    /// pid. Zellij topology has no pid here, so an exited foreground task does
-    /// not keep rendering as busy when the shell returns and the mux reports no
-    /// fresh command for a tick. tmux's pid is the stable pane root, so this
-    /// still preserves tmux raced-null repair.
+    /// pid. Zellij topology carries the plugin-probed root pid when available,
+    /// and tmux reports its stable pane root. The producer reconciles carried
+    /// active commands against the root process tree so an exited task does
+    /// not keep rendering as busy.
     ///
-    /// `current.pid` is never backfilled here: on Zellij the pid is a
-    /// metrics-layer derivation, and only that layer's `starttime` pid-reuse
-    /// guard may restore it ([`super::produce`]'s metrics module) — a rotation
-    /// carry would republish a stale binding without ever revalidating it.
+    /// `current.pid` is never backfilled here: when the mux supplies no root
+    /// pid, only the metrics layer's `starttime` pid-reuse guard may restore a
+    /// cached binding ([`super::produce`]'s metrics module). A rotation carry
+    /// would republish a stale binding without ever revalidating it.
     fn rotate_on_process_change(&mut self, prior: &PaneState) {
         let spawn_changed = match (
             self.current.spawn_command.as_deref(),
