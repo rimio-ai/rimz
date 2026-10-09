@@ -314,7 +314,8 @@ impl LoopState {
         ) else {
             return;
         };
-        let mut snapshot = project_local(workspace, Some(&frame), self.config.own_pane.as_ref());
+        let mut snapshot =
+            project_local(workspace, frame.as_deref(), self.config.own_pane.as_ref());
         if let Some(refresh_ms) = self.config.refresh_ms_override {
             snapshot.theme.display.refresh_ms = refresh_ms;
         }

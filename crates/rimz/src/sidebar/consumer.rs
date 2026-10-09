@@ -25,7 +25,9 @@ mod tests;
 pub use crate::store::snapshot::RollupCursor;
 
 /// Read a same-session publication whose projection is within the caller's
-/// age bound, without checking its source against the store. The age is the
+/// age bound, without live store-source validation, so a pre-paint seed needs
+/// no store read. Pair the frame only when both its stamps match the projection's
+/// source; a presence-only republish preserves the pairing. The age is the
 /// projection's own: other commands republish the pane frame with no sidebar
 /// running, so a fresh frame says nothing about the cards beside it.
 pub(crate) fn read_published_pair(
@@ -33,7 +35,10 @@ pub(crate) fn read_published_pair(
     session: &str,
     max_age: std::time::Duration,
     now_ms: u64,
-) -> Option<(WorkspaceSnapshot, std::sync::Arc<super::frame::PaneFrame>)> {
+) -> Option<(
+    WorkspaceSnapshot,
+    Option<std::sync::Arc<super::frame::PaneFrame>>,
+)> {
     let (published, frame) = read_publication(runtime, session)?;
     let published_at_ms = published
         .source
@@ -42,6 +47,7 @@ pub(crate) fn read_published_pair(
     if std::time::Duration::from_millis(now_ms.saturating_sub(published_at_ms)) > max_age {
         return None;
     }
+    let frame = published.source.names_frame(&frame).then_some(frame);
     Some((published.projection.clone(), frame))
 }
 

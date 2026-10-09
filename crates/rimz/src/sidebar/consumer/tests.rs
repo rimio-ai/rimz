@@ -1346,7 +1346,7 @@ impl AdoptionFixture {
         &self,
     ) -> Option<(
         WorkspaceSnapshot,
-        std::sync::Arc<crate::sidebar::frame::PaneFrame>,
+        Option<std::sync::Arc<crate::sidebar::frame::PaneFrame>>,
     )> {
         read_published_pair(
             &self.runtime,
@@ -1366,9 +1366,6 @@ impl AdoptionFixture {
 #[test]
 fn published_pair_needs_no_store_or_current_source() {
     let mut fixture = AdoptionFixture::new();
-    fixture.frame.metrics_stamp_ms = Some(99);
-    atomic::write_temp_then_rename_cache(&fixture.runtime.pane_frame_path(), &fixture.frame)
-        .unwrap();
     std::fs::remove_file(&fixture.state.latest_snapshot).unwrap();
 
     let pair = fixture.seed_pair();
@@ -1378,8 +1375,23 @@ fn published_pair_needs_no_store_or_current_source() {
     );
     let (workspace, frame) = pair.unwrap();
     assert_eq!(workspace.snapshot().display_name, "projected");
-    assert_eq!(frame.metrics_stamp_ms, Some(99));
+    let frame = frame.expect("the projection's own frame pairs without live store stamps");
+    assert_eq!(frame.topology_stamp_ms, Some(11));
+    assert_eq!(frame.metrics_stamp_ms, Some(12));
     assert_eq!(frame.session_name, "rimz-test");
+
+    for (topology, metrics) in [(Some(99), Some(12)), (Some(11), Some(99)), (None, None)] {
+        fixture.frame.topology_stamp_ms = topology;
+        fixture.frame.metrics_stamp_ms = metrics;
+        atomic::write_temp_then_rename_cache(&fixture.runtime.pane_frame_path(), &fixture.frame)
+            .unwrap();
+        let (workspace, frame) = fixture.seed_pair().expect("the published cards still seed");
+        assert_eq!(workspace.snapshot().display_name, "projected");
+        assert!(
+            frame.is_none(),
+            "a foreign or legacy frame must not pair: topology={topology:?}, metrics={metrics:?}"
+        );
+    }
 }
 
 #[test]

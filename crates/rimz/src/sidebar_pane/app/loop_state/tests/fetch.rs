@@ -36,6 +36,69 @@ impl std::io::Write for FrameOutput {
 }
 
 #[test]
+fn pre_tab_projection_with_a_newer_own_frame_seeds_without_selection() {
+    let shell = pane("terminal_9", "tab_0", true);
+    let own = pane("terminal_10", "tab_1", false);
+    let mut rig = Rig::with_own_pane(own.pane_id.clone());
+    enable_focus_trace(&mut rig);
+    rig.runtime.ensure_dirs().unwrap();
+    let mut seed = snapshot_with_panes(&rig.ws, vec![shell.clone()]);
+    seed.focused_pane = Some(shell.pane_id.clone());
+    seed.reflects_log = Some(crate::store::event_log::LogExtent {
+        generation: 0,
+        offset: 0,
+    });
+    let now_ms = crate::utils::time::unix_now_ms();
+    let mut frame =
+        crate::sidebar::frame::assemble_frame(vec![shell.clone()], now_ms - 1_000, "rimz-test");
+    frame.topology_stamp_ms = Some(now_ms - 1_000);
+    frame.metrics_stamp_ms = frame.topology_stamp_ms;
+    std::fs::write(
+        rig.runtime.pane_frame_path(),
+        serde_json::to_vec(&frame).unwrap(),
+    )
+    .unwrap();
+    crate::sidebar::workspace_projection::WorkspaceProjectionPublisher::default()
+        .publish(
+            &rig.runtime,
+            "rimz-test",
+            &crate::sidebar::enrich::WorkspaceSnapshot(seed),
+            &frame,
+        )
+        .unwrap();
+
+    let mut frame =
+        crate::sidebar::frame::assemble_frame(vec![shell.clone(), own], now_ms, "rimz-test");
+    frame.topology_stamp_ms = Some(now_ms);
+    frame.metrics_stamp_ms = frame.topology_stamp_ms;
+    std::fs::write(
+        rig.runtime.pane_frame_path(),
+        serde_json::to_vec(&frame).unwrap(),
+    )
+    .unwrap();
+
+    rig.state.seed_published(FetchRole::Consumer);
+    let records = focus_records(&rig);
+    assert_eq!(records.len(), 1, "the seed records its paint decision");
+    assert_eq!(records[0]["seed"], true);
+    assert_eq!(
+        records[0]["own_view"], false,
+        "seed decision: {}",
+        records[0]
+    );
+    assert_eq!(
+        records[0]["snapshot_focused_pane"],
+        serde_json::to_value(&shell.pane_id).unwrap()
+    );
+    assert!(records[0].get("baseline").is_none());
+    assert!(records[0].get("selected_after").is_none());
+    assert_eq!(rig.state.current.rows().count(), 1, "the cards seeded");
+    assert_eq!(rig.state.ui.selected_pane, None);
+    assert_eq!(rig.state.ui.selected_index, None);
+    assert!(rig.state.current.own_view.is_none());
+}
+
+#[test]
 fn pre_tab_seed_and_worker_fold_paint_resting_cards_until_correction() {
     let own = pane("terminal_10", "tab_1", false);
     let shell = pane("terminal_11", "tab_1", true);
