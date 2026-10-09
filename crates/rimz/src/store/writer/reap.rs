@@ -149,7 +149,11 @@ impl Store {
         ) {
             return;
         }
-        if let Err(err) = self.reap_dead_sessions() {
+        let store = Self {
+            ingress: None,
+            ..self.clone()
+        };
+        if let Err(err) = store.reap_dead_sessions() {
             warn!(error = %err, "dead session reap failed after store commit");
         }
     }
