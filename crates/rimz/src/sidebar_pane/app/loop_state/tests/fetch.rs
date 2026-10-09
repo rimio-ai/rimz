@@ -6,6 +6,24 @@ use super::*;
 #[derive(Clone, Default)]
 struct FrameOutput(Arc<std::sync::Mutex<Vec<u8>>>);
 
+fn focus_records(rig: &Rig) -> Vec<serde_json::Value> {
+    std::fs::read_to_string(crate::diag::focus_trace::log_path(rig._dir.path()))
+        .unwrap_or_default()
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap()["event"].clone())
+        .filter(|event| event["kind"] == "fold_decided")
+        .collect()
+}
+
+fn enable_focus_trace(rig: &mut Rig) {
+    rig.state.diag = crate::diag::DiagSink::under(
+        rig._dir.path().to_owned(),
+        rig.ws.clone(),
+        "rimz-test",
+        Some(rig.state.config.instance_id.clone()),
+    );
+}
+
 impl std::io::Write for FrameOutput {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
         self.0.lock().unwrap().extend_from_slice(bytes);
@@ -22,6 +40,7 @@ fn pre_tab_seed_and_worker_fold_paint_resting_cards_until_correction() {
     let own = pane("terminal_10", "tab_1", false);
     let shell = pane("terminal_11", "tab_1", true);
     let mut rig = Rig::with_own_pane(own.pane_id.clone());
+    enable_focus_trace(&mut rig);
     let output = FrameOutput::default();
     rig.terminal = Terminal::with_options(
         PaneBackend::headless(output.clone()),
@@ -71,6 +90,18 @@ fn pre_tab_seed_and_worker_fold_paint_resting_cards_until_correction() {
         .unwrap();
 
     rig.state.seed_published(FetchRole::Consumer);
+    let traced_seed = focus_records(&rig);
+    assert_eq!(traced_seed.len(), 1, "the seed records its paint decision");
+    assert_eq!(traced_seed[0]["source"], "published");
+    assert_eq!(traced_seed[0]["phase"], "interim");
+    assert_eq!(traced_seed[0]["seed"], true);
+    assert_eq!(traced_seed[0]["own_view"], false);
+    assert_eq!(
+        traced_seed[0]["snapshot_focused_pane"],
+        serde_json::to_value(&seed.focused_pane).unwrap()
+    );
+    assert!(traced_seed[0].get("baseline").is_none());
+    assert!(traced_seed[0].get("selected_after").is_none());
     assert_eq!(
         rig.state.current.rows().count(),
         1,
@@ -111,6 +142,11 @@ fn pre_tab_seed_and_worker_fold_paint_resting_cards_until_correction() {
 
     let published_focus = seed.focused_pane.clone();
     rig.fold(seed, SnapshotSource::Published);
+    assert_eq!(
+        focus_records(&rig),
+        traced_seed,
+        "the identical cached fold writes nothing"
+    );
     assert_eq!(rig.state.ui.selected_pane, None);
     assert_eq!(rig.state.ui.selected_index, None);
     rig.state.next_frame = Instant::now();
@@ -145,6 +181,25 @@ fn pre_tab_seed_and_worker_fold_paint_resting_cards_until_correction() {
         Some(&own.pane_id),
     );
     rig.fold(correction, SnapshotSource::Produced);
+    let records = focus_records(&rig);
+    assert_eq!(
+        records.len(),
+        2,
+        "the correction records its paint decision"
+    );
+    assert_eq!(records[1]["source"], "produced");
+    assert_eq!(records[1]["phase"], "final");
+    assert_eq!(records[1]["seed"], false);
+    assert_eq!(records[1]["own_view"], true);
+    assert_eq!(
+        records[1]["baseline"],
+        serde_json::to_value(&shell.pane_id).unwrap()
+    );
+    assert_eq!(
+        records[1]["selected_after"],
+        serde_json::to_value(&shell.pane_id).unwrap()
+    );
+    assert!(records[1].get("selected_before").is_none());
     assert_eq!(rig.state.ui.selected_pane, Some(shell.pane_id));
     assert_eq!(rig.state.ui.selected_index, Some(1));
     rig.state.next_frame = Instant::now();
@@ -159,6 +214,41 @@ fn pre_tab_seed_and_worker_fold_paint_resting_cards_until_correction() {
         corrected.contains('▌') && corrected.contains('▐'),
         "correction seats the shell:\n{corrected}"
     );
+}
+
+#[test]
+fn fused_focus_trace_names_the_event_applied_at_the_paint_decision() {
+    let mut rig = Rig::new();
+    enable_focus_trace(&mut rig);
+    let shell = pane("terminal_11", "tab_1", true);
+    let mut pulled = snapshot_with_panes(&rig.ws, vec![shell.clone()]);
+    let now_ms = crate::utils::time::unix_now_ms();
+    pulled.panes_produced_at_ms = Some(now_ms - 2);
+    pulled.panes_observed_at_ms = Some(now_ms - 2);
+    rig.fold(pulled, SnapshotSource::Published);
+    rig.event(SidebarEvent::FocusChanged {
+        focused: vec![shell.pane_id.clone()],
+        unfocused: Vec::new(),
+    });
+    let records = focus_records(&rig);
+    assert_eq!(
+        records.len(),
+        2,
+        "a synthetic focus fold records its decision"
+    );
+    assert_eq!(
+        records[1]["snapshot_focused_pane"],
+        serde_json::to_value(&shell.pane_id).unwrap()
+    );
+    assert_eq!(
+        records[1]["baseline"],
+        serde_json::to_value(&shell.pane_id).unwrap()
+    );
+    assert_eq!(
+        records[1]["selected_after"],
+        serde_json::to_value(&shell.pane_id).unwrap()
+    );
+    assert!(records[1]["fused_event_sent_at_ms"].as_u64().unwrap() >= now_ms);
 }
 
 #[test]

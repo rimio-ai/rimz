@@ -344,7 +344,8 @@ path = "crates/rimz/src/diag"
 # constructs once per keyed provider-panel value.
 # Renderer attribution rebinds a sink while retaining its shared rate limiter (+1).
 # ModelCatalogFallback is the rung field of the model-catalog refresh record, kept in the record vocabulary so it imports nothing from `agents` (+1).
-surface-budget = 84
+# Focus tracing exposes its vocabulary, sink, and shared log path to producer and attachment evidence (+5).
+surface-budget = 89
 
 [[module]]
 path = "crates/rimz/src/disk"

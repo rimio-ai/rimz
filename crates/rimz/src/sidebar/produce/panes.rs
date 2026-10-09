@@ -128,7 +128,14 @@ impl<'a> PaneFrameCache<'a> {
         frame: &mut PaneFrame,
         publication: crate::wakeup::events::PaneFramePublicationKind,
     ) {
-        publish_frame(self.runtime, &self.cache_path, frame, publication);
+        publish_frame(
+            self.runtime,
+            &self.cache_path,
+            frame,
+            publication,
+            self.own_pane,
+            self.diag,
+        );
     }
 }
 
@@ -1018,6 +1025,8 @@ fn validate_frame_for_publish(
                     cache_path,
                     &mut frame,
                     crate::wakeup::events::PaneFramePublicationKind::Topology,
+                    own_pane,
+                    diag,
                 );
             }
             Ok(frame)
@@ -1036,6 +1045,8 @@ fn validate_frame_for_publish(
                                 cache_path,
                                 &mut frame,
                                 crate::wakeup::events::PaneFramePublicationKind::Topology,
+                                own_pane,
+                                diag,
                             );
                         }
                         Ok(frame)
@@ -1373,11 +1384,38 @@ fn publish_frame(
     cache_path: &Path,
     frame: &mut PaneFrame,
     publication: crate::wakeup::events::PaneFramePublicationKind,
+    own_pane: Option<&PaneId>,
+    diag: &crate::diag::DiagSink,
 ) {
     stamp_publication(frame, publication);
     if let Err(err) = atomic::write_temp_then_rename_cache(cache_path, frame) {
         tracing::warn!(path = %cache_path.display(), error = %err, "sidebar snapshot cache write failed");
-    } else if let Err(err) = crate::wakeup::broadcast(
+        return;
+    }
+    let pane_ids: HashSet<_> = frame
+        .pane_states()
+        .map(|pane| pane.pane_id.clone())
+        .collect();
+    diag.trace_focus(
+        crate::diag::focus_trace::FocusTraceEvent::FramePublished {
+            produced_at_ms: frame.produced_at_ms,
+            observed_at_ms: frame.observed_at_ms,
+            focused_pane: frame.focused_pane.clone(),
+            focus_origin: frame.focus_origin,
+            client_view_fresh: frame.client_view_fresh,
+            client_sample_withheld: frame.client_sample_withheld,
+            own_pane_listed: own_pane.map(|own| pane_ids.contains(own)),
+            pane_count: pane_ids.len(),
+            publication: match publication {
+                crate::wakeup::events::PaneFramePublicationKind::Presence => "presence",
+                crate::wakeup::events::PaneFramePublicationKind::Topology
+                | crate::wakeup::events::PaneFramePublicationKind::Metrics => "topology",
+            }
+            .to_owned(),
+        },
+        pane_ids,
+    );
+    if let Err(err) = crate::wakeup::broadcast(
         runtime,
         None,
         crate::wakeup::events::SidebarEvent::PaneFramePublished { publication },

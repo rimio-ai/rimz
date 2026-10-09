@@ -17,10 +17,10 @@ pub fn fuse(
     events: &EventStore,
     intent: Option<&FocusPresentation>,
     now_ms: u64,
-) -> SidebarSnapshot {
+) -> (SidebarSnapshot, Option<u64>) {
     let active = active_events(pulled, events, now_ms);
     if active.is_empty() && intent.is_none() {
-        return pulled.clone();
+        return (pulled.clone(), None);
     }
     apply_fusion(pulled.clone(), &active, intent)
 }
@@ -33,13 +33,13 @@ pub fn fuse_owned(
     events: &EventStore,
     intent: Option<&FocusPresentation>,
     now_ms: u64,
-) -> (SidebarSnapshot, Option<SidebarSnapshot>) {
+) -> (SidebarSnapshot, Option<SidebarSnapshot>, Option<u64>) {
     let active = active_events(&pulled, events, now_ms);
     if active.is_empty() && intent.is_none() {
-        return (pulled, None);
+        return (pulled, None, None);
     }
-    let fused = apply_fusion(pulled.clone(), &active, intent);
-    (fused, Some(pulled))
+    let (fused, focus_event_sent_at_ms) = apply_fusion(pulled.clone(), &active, intent);
+    (fused, Some(pulled), focus_event_sent_at_ms)
 }
 
 fn active_events<'a>(
@@ -66,7 +66,7 @@ fn apply_fusion(
     mut fused: SidebarSnapshot,
     active: &[&crate::sidebar::event_store::StoredEvent],
     intent: Option<&FocusPresentation>,
-) -> SidebarSnapshot {
+) -> (SidebarSnapshot, Option<u64>) {
     let mut deleted = HashSet::new();
     for event in active {
         if let SidebarEvent::PaneClosed { pane_id } = &event.event {
@@ -84,7 +84,7 @@ fn apply_fusion(
         }
     }
 
-    if let Some(focus) = active
+    let focus = active
         .iter()
         .filter_map(|event| match &event.event {
             SidebarEvent::FocusChanged { focused, unfocused } => {
@@ -92,8 +92,8 @@ fn apply_fusion(
             }
             _ => None,
         })
-        .max_by_key(|(sent_at_ms, _, _)| *sent_at_ms)
-    {
+        .max_by_key(|(sent_at_ms, _, _)| *sent_at_ms);
+    if let Some(focus) = focus {
         fused.overlay_focus(focus.1, focus.2);
     }
 
@@ -105,7 +105,7 @@ fn apply_fusion(
         _ => {}
     }
 
-    fused
+    (fused, focus.map(|focus| focus.0))
 }
 
 pub(crate) fn focus_intent_confirmed_from(
@@ -286,8 +286,9 @@ mod tests {
     fn owned_pull_retains_a_baseline_only_while_fusion_is_active() {
         let snapshot = pulled(vec![pane("terminal_1", "zsh")], 10);
         let empty = EventStore::default();
-        let (moved, baseline) = fuse_owned(snapshot, &empty, None, 11);
+        let (moved, baseline, focus_event_sent_at_ms) = fuse_owned(snapshot, &empty, None, 11);
         assert!(baseline.is_none());
+        assert_eq!(focus_event_sent_at_ms, None);
         assert_eq!(row_ids(&moved).len(), 1);
 
         let mut events = EventStore::default();
@@ -299,7 +300,7 @@ mod tests {
                 command: "claude".to_owned(),
             },
         );
-        let (fused, baseline) = fuse_owned(moved, &events, None, 12);
+        let (fused, baseline, focus_event_sent_at_ms) = fuse_owned(moved, &events, None, 12);
         assert_eq!(
             fused.worktree_groups[0].rows[0]
                 .pane
@@ -308,6 +309,7 @@ mod tests {
             Some("claude")
         );
         assert!(baseline.is_some());
+        assert_eq!(focus_event_sent_at_ms, None);
     }
 
     #[test]
@@ -322,7 +324,7 @@ mod tests {
             SidebarEvent::PaneClosed { pane_id: focused },
         );
 
-        let fused = fuse(&snapshot, &store, None, 11);
+        let (fused, _) = fuse(&snapshot, &store, None, 11);
         assert!(row_ids(&fused).is_empty());
         assert_eq!(fused.focused_pane, None);
     }
@@ -340,7 +342,7 @@ mod tests {
         );
 
         assert_eq!(
-            row_ids(&fuse(&snapshot, &store, None, 20)),
+            row_ids(&fuse(&snapshot, &store, None, 20).0),
             vec!["zellij:terminal_1"]
         );
     }
@@ -365,7 +367,7 @@ mod tests {
             },
         );
 
-        let fused = fuse(&snapshot, &store, None, 21);
+        let (fused, _) = fuse(&snapshot, &store, None, 21);
         assert_eq!(fused.focused_pane, Some(active));
     }
 
@@ -387,7 +389,7 @@ mod tests {
             },
         );
 
-        let fused = fuse(&snapshot, &store, None, 20);
+        let (fused, _) = fuse(&snapshot, &store, None, 20);
         assert!(row_ids(&fused).is_empty());
         assert_eq!(fused.truth_degraded, None);
     }
@@ -405,7 +407,7 @@ mod tests {
             },
         );
 
-        let fused = fuse(&snapshot, &store, None, 11);
+        let (fused, _) = fuse(&snapshot, &store, None, 11);
         let row = &fused.worktree_groups[0].rows[0];
         assert_eq!(row.id, "zellij:terminal_1");
         assert_eq!(row.name, "cargo");
@@ -425,7 +427,7 @@ mod tests {
             },
         );
 
-        let fused = fuse(&snapshot, &store, None, 11);
+        let (fused, _) = fuse(&snapshot, &store, None, 11);
         assert!(row_ids(&fused).is_empty());
     }
 
@@ -456,9 +458,10 @@ mod tests {
             },
         );
 
-        let fused = fuse(&snapshot, &store, None, 12);
+        let (fused, focus_event_sent_at_ms) = fuse(&snapshot, &store, None, 12);
         assert_eq!(fused.focused_pane, Some(active.clone()));
         assert!(fused.viewed_panes.contains(&active));
+        assert_eq!(focus_event_sent_at_ms, Some(12));
     }
 
     #[test]
@@ -485,7 +488,7 @@ mod tests {
             },
         );
 
-        let fused = fuse(&snapshot, &store, None, 11);
+        let (fused, _) = fuse(&snapshot, &store, None, 11);
         assert_eq!(fused.focused_pane, Some(first));
         assert!(!fused.viewed_panes.contains(&second));
         assert!(!fused.viewed_panes.contains(&foreign));
@@ -502,7 +505,7 @@ mod tests {
         snapshot.panes_observed_at_ms = Some(12);
         snapshot.focused_pane = Some(observed);
 
-        let fused = fuse(
+        let (fused, _) = fuse(
             &snapshot,
             &EventStore::default(),
             Some(&intent(target.clone(), 11)),
@@ -530,7 +533,7 @@ mod tests {
             },
         );
 
-        let fused = fuse(&snapshot, &store, Some(&intent(target.clone(), 11)), 12);
+        let (fused, _) = fuse(&snapshot, &store, Some(&intent(target.clone(), 11)), 12);
 
         assert_eq!(fused.focused_pane, Some(target));
     }
@@ -542,7 +545,7 @@ mod tests {
         let mut snapshot = pulled(vec![pane("terminal_1", "zsh")], 10);
         snapshot.focused_pane = Some(observed.clone());
 
-        let fused = fuse(
+        let (fused, _) = fuse(
             &snapshot,
             &EventStore::default(),
             Some(&intent(missing, 11)),

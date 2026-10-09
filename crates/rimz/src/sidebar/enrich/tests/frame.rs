@@ -72,6 +72,9 @@ fn frame_fold_carries_viewed_panes_onto_snapshot() {
         viewed_panes: vec![pane_id.clone()],
         client_views: Vec::new(),
         focused_pane: Some(pane_id.clone()),
+        focus_origin: Default::default(),
+        client_view_fresh: false,
+        client_sample_withheld: false,
         presence: None,
     };
 

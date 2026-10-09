@@ -18,6 +18,7 @@ use crate::ids::{SidebarInstanceId, WorkspaceId};
 
 pub mod binding;
 pub mod focus_repair;
+pub(crate) mod focus_trace;
 pub mod lsp;
 pub mod notify;
 pub mod plugin_presence;
@@ -45,6 +46,7 @@ struct Inner {
     session_name: String,
     instance_id: Option<SidebarInstanceId>,
     limiter: Arc<Mutex<Limiter>>,
+    focus_edges: Mutex<focus_trace::Edges>,
 }
 
 #[derive(Clone, Copy)]
@@ -147,6 +149,39 @@ impl Limiter {
 }
 
 impl DiagSink {
+    pub(crate) fn trace_focus(
+        &self,
+        event: focus_trace::FocusTraceEvent,
+        pane_ids: std::collections::HashSet<crate::ids::PaneId>,
+    ) {
+        self.trace_focus_at_ms(event, pane_ids, crate::utils::time::unix_now_ms());
+    }
+
+    fn trace_focus_at_ms(
+        &self,
+        event: focus_trace::FocusTraceEvent,
+        pane_ids: std::collections::HashSet<crate::ids::PaneId>,
+        at_ms: u64,
+    ) {
+        let Some(inner) = self.inner.as_ref() else {
+            return;
+        };
+        let Ok(mut edges) = inner.focus_edges.lock() else {
+            return;
+        };
+        if !edges.admit(&event, pane_ids) {
+            return;
+        }
+        focus_trace::append(
+            &inner.state_root,
+            inner.workspace_id.clone(),
+            inner.session_name.clone(),
+            inner.instance_id.clone(),
+            at_ms,
+            event,
+        );
+    }
+
     pub fn for_workspace(
         workspace_id: WorkspaceId,
         session_name: impl Into<String>,
@@ -175,6 +210,7 @@ impl DiagSink {
                 session_name: session_name.into(),
                 instance_id,
                 limiter: Arc::new(Mutex::new(Limiter::new(DIAG_RATE_LIMIT_WINDOW))),
+                focus_edges: Mutex::new(focus_trace::Edges::default()),
             })),
         }
     }
@@ -196,6 +232,7 @@ impl DiagSink {
                     session_name: inner.session_name.clone(),
                     instance_id: Some(instance_id),
                     limiter: inner.limiter.clone(),
+                    focus_edges: Mutex::new(focus_trace::Edges::default()),
                 })
             }),
         }

@@ -726,6 +726,9 @@ mod tests {
     #[test]
     fn omitted_tab_is_recreated_from_prior_metadata() {
         let mut prior = PaneFrame {
+            focus_origin: Default::default(),
+            client_view_fresh: false,
+            client_sample_withheld: false,
             topology_stamp_ms: None,
             metrics_stamp_ms: None,
             produced_at_ms: 1,

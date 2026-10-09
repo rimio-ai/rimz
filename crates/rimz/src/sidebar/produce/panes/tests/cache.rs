@@ -1,6 +1,60 @@
 use super::*;
 
 #[test]
+fn published_focus_trace_tracks_roster_edges_and_keeps_frame_stamps() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = crate::ids::WorkspaceId::from_project_root(Path::new("/focus-publication"));
+    let runtime = crate::RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
+    let diag = crate::diag::DiagSink::under(dir.path().to_owned(), workspace, "s", None);
+    let own = pane("terminal_1", Some("rimz sidebar serve"), Some("/repo"));
+    let sibling = pane("terminal_2", Some("zsh"), Some("/repo"));
+    let mut published = frame(vec![own.clone(), sibling]);
+    published.focused_pane = Some(PaneId::from_parts(MuxName::Zellij, "terminal_2"));
+    let cache = PaneFrameCache::new(&runtime, "s", None, Some(&own.pane_id), &diag);
+    cache.publish(
+        &mut published,
+        crate::wakeup::events::PaneFramePublicationKind::Topology,
+    );
+    let mut repeated = published.clone();
+    repeated.produced_at_ms += 1;
+    cache.publish(
+        &mut repeated,
+        crate::wakeup::events::PaneFramePublicationKind::Topology,
+    );
+    let mut changed = frame(vec![
+        own.clone(),
+        pane("terminal_3", Some("zsh"), Some("/repo")),
+    ]);
+    changed.focused_pane = published.focused_pane.clone();
+    changed.produced_at_ms = 3;
+    cache.publish(
+        &mut changed,
+        crate::wakeup::events::PaneFramePublicationKind::Topology,
+    );
+    let rows: Vec<serde_json::Value> =
+        std::fs::read_to_string(crate::diag::focus_trace::log_path(dir.path()))
+            .unwrap_or_default()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+    assert_eq!(
+        rows.len(),
+        2,
+        "identical newer publications are suppressed, not roster edges"
+    );
+    assert_eq!(rows[0]["event"]["produced_at_ms"], published.produced_at_ms);
+    assert_eq!(rows[0]["event"]["observed_at_ms"], published.observed_at_ms);
+    assert_eq!(rows[0]["event"]["own_pane_listed"], true);
+    assert_eq!(rows[0]["event"]["pane_count"], 2);
+    assert_eq!(rows[0]["event"]["publication"], "topology");
+    assert_eq!(rows[1]["event"]["produced_at_ms"], changed.produced_at_ms);
+    assert_eq!(
+        rows[1]["event"]["focused_pane"],
+        rows[0]["event"]["focused_pane"]
+    );
+}
+
+#[test]
 fn snapshot_cache_freshness_matrix() {
     let dir = tempfile::tempdir().unwrap();
     // Keep the freshness cases independent from CI scheduler stalls. The

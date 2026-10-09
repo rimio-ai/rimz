@@ -8,6 +8,7 @@ use std::sync::mpsc::SyncSender;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use crate::diag::focus_trace::FocusTraceEvent;
 use crate::diag::record::{RendererExitCause, SidebarWidthControlTrigger as WidthControlTrigger};
 use crate::ids::PaneId;
 use crate::mux::focus_anchor::{
@@ -317,12 +318,15 @@ impl LoopState {
         if let Some(refresh_ms) = self.config.refresh_ms_override {
             snapshot.theme.display.refresh_ms = refresh_ms;
         }
-        self.apply_latest_snapshot(FetchUpdate::Snapshot {
-            snapshot: Box::new(snapshot),
-            role,
-            phase: FetchPhase::Interim,
-            source: SnapshotSource::Published,
-        });
+        self.apply_latest_snapshot_with_seed(
+            FetchUpdate::Snapshot {
+                snapshot: Box::new(snapshot),
+                role,
+                phase: FetchPhase::Interim,
+                source: SnapshotSource::Published,
+            },
+            true,
+        );
     }
 
     pub(super) fn frame_timing(&self) -> (bool, Duration) {
@@ -489,6 +493,10 @@ impl LoopState {
     }
 
     pub(super) fn apply_latest_snapshot(&mut self, update: FetchUpdate) -> bool {
+        self.apply_latest_snapshot_with_seed(update, false)
+    }
+
+    fn apply_latest_snapshot_with_seed(&mut self, update: FetchUpdate, seed: bool) -> bool {
         let (update, context) = update.into_parts();
         self.fold_inputs = context.as_ref().map(|context| context.inputs.clone());
         if let Some(observation) = context.and_then(|context| context.observation.clone()) {
@@ -503,6 +511,7 @@ impl LoopState {
             return false;
         }
         let snapshot_ok = matches!(update, FetchUpdate::Snapshot { .. });
+        let mut fused_event_sent_at_ms = None;
         let update = match update {
             FetchUpdate::Snapshot {
                 snapshot,
@@ -518,8 +527,9 @@ impl LoopState {
                     self.last_pulled_rows = pulled.rows().count();
                 }
                 let intent = self.pending_focus_intent(now_ms);
-                let (snapshot, baseline) =
+                let (snapshot, baseline, focus_event_sent_at_ms) =
                     fuse_owned(pulled, &self.event_store, intent.as_ref(), now_ms);
+                fused_event_sent_at_ms = focus_event_sent_at_ms;
                 self.overlay_baseline = baseline;
                 FetchUpdate::Snapshot {
                     snapshot: Box::new(snapshot),
@@ -533,7 +543,7 @@ impl LoopState {
             FetchUpdate::Shared { .. } => unreachable!("unwrapped above"),
         };
         self.fetched_at = Instant::now();
-        let rejected = self.fold_outcome(update, true);
+        let rejected = self.fold_outcome(update, true, seed, fused_event_sent_at_ms);
         self.fold_inputs = None;
         if snapshot_ok {
             self.last_self_close_check = Instant::now();
@@ -564,7 +574,7 @@ impl LoopState {
 
     /// Fuse the last pulled snapshot with the overlay event store and any
     /// pending focus intent as of `now_ms`.
-    fn fused_snapshot(&mut self, now_ms: u64) -> SidebarSnapshot {
+    fn fused_snapshot(&mut self, now_ms: u64) -> (SidebarSnapshot, Option<u64>) {
         if self.overlay_baseline.is_none() {
             self.overlay_baseline = Some(self.current.clone());
         }
@@ -582,7 +592,8 @@ impl LoopState {
     /// Fold a synthetic fused frame and snap the frame deadline so this
     /// turn's frame phase paints it now.
     fn fold_fused_now(&mut self) {
-        let fused = self.fused_snapshot(crate::utils::time::unix_now_ms());
+        let (fused, fused_event_sent_at_ms) =
+            self.fused_snapshot(crate::utils::time::unix_now_ms());
         self.fold_outcome(
             FetchUpdate::Snapshot {
                 snapshot: Box::new(fused),
@@ -595,6 +606,8 @@ impl LoopState {
                 },
             },
             false,
+            false,
+            fused_event_sent_at_ms,
         );
         self.next_frame = Instant::now();
     }
@@ -1708,8 +1721,45 @@ impl LoopState {
         );
     }
 
-    fn fold_outcome(&mut self, update: FetchUpdate, allow_shared_filter_sync: bool) -> bool {
+    fn fold_outcome(
+        &mut self,
+        update: FetchUpdate,
+        allow_shared_filter_sync: bool,
+        seed: bool,
+        fused_event_sent_at_ms: Option<u64>,
+    ) -> bool {
+        let trace = match &update {
+            FetchUpdate::Snapshot { source, phase, .. } => Some((*source, *phase)),
+            _ => None,
+        };
+        let selected_before = self.ui.selected_pane.clone();
         let applied = self.apply_fetch_outcome(update, allow_shared_filter_sync);
+        if let Some((source, phase)) = trace {
+            self.diag.trace_focus(
+                FocusTraceEvent::FoldDecided {
+                    source: match source {
+                        SnapshotSource::Produced => "produced",
+                        SnapshotSource::Published => "published",
+                    }
+                    .to_owned(),
+                    phase: match phase {
+                        FetchPhase::Interim => "interim",
+                        FetchPhase::Final => "final",
+                    }
+                    .to_owned(),
+                    seed,
+                    panes_produced_at_ms: self.current.panes_produced_at_ms,
+                    panes_observed_at_ms: self.current.panes_observed_at_ms,
+                    snapshot_focused_pane: self.current.focused_pane.clone(),
+                    fused_event_sent_at_ms,
+                    own_view: self.current.own_view.is_some(),
+                    baseline: session_focus_baseline(&self.current, self.config.own_pane.as_ref()),
+                    selected_before,
+                    selected_after: self.ui.selected_pane.clone(),
+                },
+                HashSet::new(),
+            );
+        }
         self.should_exit = applied.should_exit;
         if applied.should_exit {
             self.exit_cause = Some(if applied.tab_emptied {
