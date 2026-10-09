@@ -98,7 +98,7 @@ impl PresenceWatch {
     /// outside a managed pane.
     pub fn attach(socket: &std::path::Path, session: &str) -> std::io::Result<Self> {
         let mut cmd = std::process::Command::new("tmux");
-        cmd.arg("-S").arg(socket);
+        cmd.arg("-S").arg(socket).arg("-u");
         cmd.args([
             "-C",
             "attach-session",
