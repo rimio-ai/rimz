@@ -12,6 +12,8 @@ use std::time::{Duration, Instant};
 // Writers are short-lived CLI processes; matching the mux command timeout bounds
 // a wedged holder without interrupting legitimate cold snapshot rebuilds.
 pub(crate) const LOCK_TIMEOUT: Duration = Duration::from_secs(30);
+const LOCK_RETRY: Duration = Duration::from_millis(1);
+const FAST_LOCK_WAIT: Duration = Duration::from_millis(25);
 const MAX_LOCK_BACKOFF: Duration = Duration::from_millis(50);
 
 #[derive(Debug, thiserror::Error)]
@@ -95,7 +97,7 @@ impl WorkspaceLock {
         let mut file = open_lock_file(path)?;
 
         let started = Instant::now();
-        let mut backoff = Duration::from_millis(1);
+        let mut backoff = LOCK_RETRY;
         loop {
             match try_lock_file(&mut file, path) {
                 Ok(()) => break,
@@ -107,8 +109,12 @@ impl WorkspaceLock {
                             waited: elapsed,
                         });
                     }
+                    // Catch brief writer releases without polling a long hold
+                    // at the burst rate for the whole acquisition deadline.
                     std::thread::sleep(backoff.min(timeout - elapsed));
-                    backoff = (backoff * 2).min(MAX_LOCK_BACKOFF);
+                    if elapsed >= FAST_LOCK_WAIT {
+                        backoff = (backoff * 2).min(MAX_LOCK_BACKOFF);
+                    }
                 }
                 Err(std::fs::TryLockError::Error(source)) => {
                     return Err(LockErr::Acquire {
