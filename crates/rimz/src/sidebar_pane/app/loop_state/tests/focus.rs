@@ -5,6 +5,46 @@ use super::*;
 use crate::sidebar_pane::app::fixtures::focus_fixture;
 
 #[test]
+fn foreign_strand_has_no_effect_while_own_strand_waits_for_a_working_row() {
+    let own = zellij("terminal_0");
+    let foreign = zellij("terminal_2");
+    let mut rig = Rig::with_own_pane(own.clone());
+    crate::diag::focus_repair::take_appends();
+    let strand = |pane_id: PaneId, generation| SidebarEvent::FocusStranded {
+        clients: vec![crate::pane::ClientPaneView {
+            client_id: crate::ids::MuxClientId::Zellij(1),
+            pane_id: pane_id.clone(),
+        }],
+        pane_id,
+        generation,
+    };
+
+    rig.event(strand(foreign.clone(), 1));
+    assert!(rig.state.pending_focus_repair.is_none());
+    assert!(rig.next_request().is_none());
+    assert_eq!(crate::diag::focus_repair::take_appends(), 0);
+
+    rig.event(strand(own.clone(), 2));
+    let pending = rig.state.pending_focus_repair.as_ref().expect("own repair");
+    assert_eq!(pending.pane_id, own);
+    assert_eq!(pending.generation, 2);
+    assert!(rig.next_request().expect("fresh panes").is_fresh_panes());
+    assert_eq!(crate::diag::focus_repair::take_appends(), 0);
+
+    rig.event(strand(foreign, 3));
+    assert_eq!(
+        rig.state
+            .pending_focus_repair
+            .as_ref()
+            .expect("own repair")
+            .generation,
+        2,
+    );
+    assert!(rig.next_request().is_none());
+    assert_eq!(crate::diag::focus_repair::take_appends(), 0);
+}
+
+#[test]
 fn focus_stranded_targets_recent_own_pane_events_only() {
     let (snapshot, sidebar, _first_work, second_work) = focus_fixture();
     let ui = UiState {
