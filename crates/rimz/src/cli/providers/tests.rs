@@ -54,6 +54,31 @@ fn panel(kind: &str) -> SidebarProviderPanel {
     }
 }
 
+#[test]
+fn lapsed_provider_report_does_not_restore_the_cached_plan() {
+    let mut value = serde_json::to_value(panel("claude")).unwrap();
+    value["plan"] = serde_json::Value::Null;
+    value["entitlement"] = serde_json::json!({"lapsed":{"since_ms":1_700_000_000_000_u64}});
+    let reports = group(
+        "claude",
+        vec![("default", serde_json::from_value(value).unwrap())],
+    );
+    assert_eq!(reports[0].plan_label, None);
+    assert_eq!(
+        serde_json::to_value(&reports[0]).unwrap()["entitlement"],
+        serde_json::json!({"lapsed":{"since_ms":1_700_000_000_000_u64}})
+    );
+    let text = overview(
+        &reports,
+        Timestamp::from_second(1_700_000_000).unwrap(),
+        &BTreeMap::new(),
+        false,
+    );
+    assert!(text.contains("lapsed"));
+    assert!(!text.contains("Claude Pro"));
+    insta::assert_snapshot!(text);
+}
+
 fn account_fixture() -> AccountsCache {
     AccountsCache {
         logins: BTreeMap::from([

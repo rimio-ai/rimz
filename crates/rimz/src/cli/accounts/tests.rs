@@ -259,10 +259,52 @@ const SEVEN_DAYS: u32 = 10_080;
 
 fn logged_in(windows: Vec<RateLimitWindow>) -> LoginReading {
     LoginReading {
+        entitlement: Default::default(),
         reset_credits: None,
         status: ProviderStatus::LoggedIn,
         metered: Some(true),
         windows,
+    }
+}
+
+#[test]
+fn lapsed_account_reports_subscription_access_instead_of_login_or_setup() {
+    let mut reading = logged_in(Vec::new());
+    reading.entitlement = rimz::agents::Entitlement::Lapsed { since_ms: 100 };
+    let readings = BTreeMap::from([(key("claude", "alpha"), reading)]);
+    let (rows, text) = listed(ACCOUNTS, None, &readings);
+    let row = rows
+        .iter()
+        .find(|row| row.kind.as_str() == "claude" && row.name.as_str() == "alpha")
+        .unwrap();
+    assert_eq!(
+        row.problem.as_deref(),
+        Some("plan lapsed: no Claude access")
+    );
+    assert_eq!(
+        serde_json::to_value(row).unwrap()["entitlement"],
+        serde_json::json!({"lapsed":{"since_ms":100}})
+    );
+    let line = text
+        .lines()
+        .find(|line| line.contains("claude") && line.contains("alpha"))
+        .unwrap();
+    assert!(line.contains("lapsed"), "{text}");
+    insta::assert_snapshot!(text);
+}
+
+#[test]
+fn lapsed_account_problem_names_the_delegated_product() {
+    let mut reading = logged_in(Vec::new());
+    reading.entitlement = Entitlement::Lapsed { since_ms: 100 };
+    for (kind, expected) in [
+        ("pi", "plan lapsed: no Pi access"),
+        ("opencode", "plan lapsed: no Open Code access"),
+    ] {
+        let mut row = listed(ACCOUNTS, None, &BTreeMap::new()).0.remove(1);
+        row.kind = AgentKind::new_unchecked(kind);
+        row.read(Some(&reading), String::new);
+        assert_eq!(row.problem.as_deref(), Some(expected));
     }
 }
 
@@ -444,6 +486,7 @@ fn window_cells_read_what_is_left_and_when_it_resets() {
             key("claude", "alpha"),
             LoginReading {
                 status: ProviderStatus::LoggedOut,
+                entitlement: Default::default(),
                 reset_credits: None,
                 metered: Some(true),
                 windows: vec![window(FIVE_HOURS, Some(10), Some(60))],
@@ -457,6 +500,7 @@ fn window_cells_read_what_is_left_and_when_it_resets() {
             key("claude", "gamma"),
             LoginReading {
                 status: ProviderStatus::Unavailable,
+                entitlement: Default::default(),
                 reset_credits: None,
                 metered: None,
                 windows: vec![window(SEVEN_DAYS, Some(50), Some(3_600))],
@@ -466,6 +510,7 @@ fn window_cells_read_what_is_left_and_when_it_resets() {
             key("codex", "default"),
             LoginReading {
                 status: ProviderStatus::LoggedIn,
+                entitlement: Default::default(),
                 reset_credits: None,
                 metered: Some(false),
                 windows: vec![window(FIVE_HOURS, Some(10), Some(60))],
@@ -559,6 +604,7 @@ fn a_logged_out_account_reads_logged_out_unless_its_setup_is_broken() {
 
     let reading = |status| LoginReading {
         status,
+        entitlement: Default::default(),
         reset_credits: None,
         metered: None,
         windows: vec![window(FIVE_HOURS, Some(10), None)],

@@ -550,9 +550,9 @@ With `provider_tabs = "auto"` (the default), two providers stack and three or mo
 
 | line | shows |
 |------|-------|
-| header | In tabs: the plan, then the version. Stacked: the provider and version, then the plan. The version reads `v?` until a source reports it, and the plan is absent until the account names one. `⇅ rc` and the reset-credit marker (`↻ N`, or Codex-only `⟳ N` or `‖ N`) sit on the right. |
+| header | In tabs: the plan, then the version. Stacked: the provider and version, then the plan. The version reads `v?` until a source reports it, and the plan is absent until the account names one or while subscription access is lapsed. `⇅ rc` and the reset-credit marker (`↻ N`, or Codex-only `⟳ N` or `‖ N`) sit on the right; a lapse suppresses reset credits too. |
 | stats | `◎` sessions in the [spend window](#the-cockpit), the `◇ ↘ ↗ ◌` tokens with cache creation counted in `↘`, and the provider's spend. A provider with no usage history keeps the row: `◎` counts its sessions active in this room, and the token and dollar slots show `–`. |
-| budget rows | one bar per budget window: label, bar, and reset countdown |
+| budget rows | one bar per budget window: label, bar, and reset countdown; while lapsed, one bold alarm row replaces every bar |
 
 Stacked blocks (`provider_tabs = "never"`):
 
@@ -580,8 +580,20 @@ Stacked blocks (`provider_tabs = "never"`):
 
 A bar's filled part is the budget left. Every bar starts and ends on the same columns, so the rows compare at a glance.
 
+A lapsed subscription keeps the historical stats but removes the plan label and replaces all bars with one bold alarm row. The first-seen local timestamp is truncated with the row at narrow widths, never wrapped:
+
+```
+────────────────────────────────────────────────────────────────────────────────────────────────────
+Claude Code v2.1.158                                                                            ⇅ rc
+
+ ▐▛███▜▌  ◎ 12  ◇ 498k ↘ 434k ↗ 64k ◌ 68k                                                      $3.50
+▝▜█████▛▘ plan lapsed · no Claude Code access · since <first seen>
+  ▘▘ ▝▝
+```
+
 | you see | meaning |
 |---------|---------|
+| `plan lapsed · no Claude Code access · since …` and no bars | Claude Code subscription access was rejected. The header has no plan label, and the timestamp is when RimZ first saw the rejection, in local time. A successful usage read clears the lapse; it does not age into an unknown track. |
 | a partly filled bar and `↻ 1h47m` | The window is running. The fill slides from green through gold and amber to red as it empties. |
 | a full bar and no countdown | The window has not started. Providers start the clock at your first token, so there is no reset to count down to yet. |
 | an empty track, all red | The window is spent. |

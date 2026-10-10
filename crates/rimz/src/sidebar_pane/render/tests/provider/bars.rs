@@ -2,6 +2,84 @@ use super::*;
 use crate::sidebar_pane::render::labels::mana_style;
 use crate::sidebar_pane::render::layout::text_width;
 
+#[test]
+fn lapsed_provider_replaces_plan_and_bars_with_one_alarm_row() {
+    let theme = Theme::fixed(true);
+    let panel = provider_panel("claude", "Claude Code", 173, true, true, Some((25, 40)));
+    let mut value = serde_json::to_value(panel).unwrap();
+    value["entitlement"] = serde_json::json!({"lapsed":{"since_ms":1_700_000_000_000_u64}});
+    value["plan"] = serde_json::Value::Null;
+    let panel: crate::store::snapshot::SidebarProviderPanel =
+        serde_json::from_value(value).unwrap();
+    for width in [24, 60, 100] {
+        let mut unmetered = panel.clone();
+        unmetered.metered = false;
+        for panel in [&panel, &unmetered] {
+            let lines = Dashboard::stacked(&theme, std::slice::from_ref(panel))
+                .width(width)
+                .lines();
+            let rows: Vec<_> = lines
+                .iter()
+                .filter(|line| {
+                    line.spans
+                        .iter()
+                        .any(|span| span.content.contains("plan lapsed"))
+                })
+                .collect();
+            assert_eq!(rows.len(), 1);
+            assert!(
+                rows[0]
+                    .spans
+                    .iter()
+                    .filter(|span| span.content.contains("plan lapsed"))
+                    .all(|span| span.style == theme.alarm(Modifier::BOLD))
+            );
+            assert!(crate::sidebar_pane::render::layout::spans_width(&rows[0].spans) <= width);
+        }
+    }
+    let lines = Dashboard::stacked(&theme, &[panel]).width(100).lines();
+    let plain: Vec<String> = lines
+        .iter()
+        .map(|line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect()
+        })
+        .collect();
+    let lapse = plain
+        .iter()
+        .position(|line| line.contains("plan lapsed"))
+        .expect("lapse row replaces bars");
+    assert!(plain[lapse].contains("no Claude Code access · since "));
+    assert_eq!(
+        plain
+            .iter()
+            .filter(|line| line.contains("plan lapsed"))
+            .count(),
+        1
+    );
+    assert!(!plain.iter().any(|line| line.contains("Max")
+        || line.contains('▰')
+        || line.contains('▱')
+        || line.contains('▒')));
+    assert!(
+        lines[lapse]
+            .spans
+            .iter()
+            .any(|span| span.content.contains("plan lapsed")
+                && span.style == theme.alarm(Modifier::BOLD))
+    );
+    let first_seen = crate::utils::time::format_local_timestamp(
+        Timestamp::from_millisecond(1_700_000_000_000).unwrap(),
+    );
+    assert!(plain[lapse].contains(&first_seen));
+    assert_snapshot(
+        "provider_lapsed",
+        plain.join("\n").replace(&first_seen, "<first seen>"),
+    );
+}
+
 /// Every provider bar — `5h`, `7d` across blocks, and the API spend row —
 /// shares one front (bar-start) column and one end (bar-end) column, so the
 /// whole dashboard reads as one aligned grid. The structural payoff of the
