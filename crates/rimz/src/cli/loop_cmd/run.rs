@@ -526,6 +526,13 @@ fn execute_prepared_delivery(
         }
     };
     let kind = mode.kind();
+    for message_id in &prepared.supersedes {
+        store.cancel_message(
+            message_id,
+            &workspace.session_name,
+            "superseded by the wait's final outcome",
+        )?;
+    }
     let dispatched = rimz::message::dispatch::dispatch(
         &workspace,
         &store,
