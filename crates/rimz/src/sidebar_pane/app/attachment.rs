@@ -4,7 +4,9 @@
 
 use std::io::Write;
 use std::os::unix::net::UnixDatagram;
-use std::path::{Path, PathBuf};
+#[cfg(test)]
+use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
@@ -101,6 +103,7 @@ impl Attachment {
         })
     }
 
+    #[cfg(test)]
     pub(in crate::sidebar_pane) fn socket_path(&self) -> &Path {
         &self.socket_path
     }

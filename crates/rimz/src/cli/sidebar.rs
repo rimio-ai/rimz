@@ -1044,16 +1044,8 @@ fn serve(
         notification_prefs: machine_config.notifications.clone(),
         own_pane: rimz::mux::own_pane_id(mux),
     };
-    if rimz::sidebar_pane::supervise::is_worker() {
-        match rimz::sidebar_pane::supervise::run_worker(config).context("serving sidebar")? {
-            rimz::sidebar_pane::app::ServeOutcome::Stopped => Ok(()),
-            rimz::sidebar_pane::app::ServeOutcome::SelfCloseRequested => {
-                std::process::exit(rimz::sidebar_pane::supervise::SELF_CLOSE_EXIT_CODE)
-            }
-        }
-    } else {
-        rimz::sidebar_pane::supervise::run(config).context("supervising sidebar")
-    }
+    rimz::sidebar_pane::supervise::run(config)?;
+    Ok(())
 }
 
 fn host(workspace_id: WorkspaceId, mux: MuxName, session_name: String) -> Result<()> {

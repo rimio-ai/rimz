@@ -23,7 +23,8 @@ pub(in crate::sidebar_pane) struct PaneBackend {
 
 enum Geometry {
     Fd(OwnedFd),
-    /// The fallback worker's own terminal, which its output need not be.
+    /// The fixture/gallery terminal, which its output need not be.
+    #[cfg(any(feature = "testkit", test))]
     Ambient(fn() -> io::Result<WindowSize>),
     #[cfg(test)]
     Absent,
@@ -56,8 +57,8 @@ impl PaneBackend {
         Ok(Self::painting(writer, Geometry::Fd(fd)))
     }
 
-    /// Paint into `output`, reading geometry through `read`: the fallback
-    /// worker's own terminal, wherever its output goes.
+    /// Paint a fixture/gallery into `output`, reading geometry through `read`.
+    #[cfg(any(feature = "testkit", test))]
     pub(in crate::sidebar_pane) fn ambient(
         output: OwnedFd,
         read: fn() -> io::Result<WindowSize>,
@@ -124,6 +125,7 @@ impl PaneBackend {
                     pixels: Size::new(size.ws_xpixel, size.ws_ypixel),
                 }
             }
+            #[cfg(any(feature = "testkit", test))]
             Geometry::Ambient(read) => read()?,
             #[cfg(test)]
             Geometry::Absent => return Err(io::Error::other("no terminal behind this backend")),

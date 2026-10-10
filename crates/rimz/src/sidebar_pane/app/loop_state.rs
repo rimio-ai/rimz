@@ -204,7 +204,6 @@ pub(super) fn handle_wakeup(
         Wakeup::Tick
         | Wakeup::Event(_)
         | Wakeup::Reload
-        | Wakeup::SupervisorHandoff
         | Wakeup::Press { .. }
         | Wakeup::Snapshot => InputOutcome::default(),
     }
@@ -476,10 +475,6 @@ impl LoopState {
                 Ok(LoopFlow::Continue)
             }
             Wakeup::Reload => Ok(self.handle_reload(fetch)),
-            Wakeup::SupervisorHandoff => {
-                self.reload_requested = true;
-                Ok(LoopFlow::Exit)
-            }
             wakeup => self.on_input(wakeup, terminal, fetch),
         }
     }

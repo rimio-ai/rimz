@@ -97,7 +97,7 @@ fn output() -> std::fs::File {
 }
 
 #[test]
-fn a_pane_no_host_answers_falls_back_once_the_wait_is_over() {
+fn a_pane_no_host_answers_finishes_once_the_wait_is_over() {
     let room = Room::new();
     let started = AtomicUsize::new(0);
     let began = Instant::now();
@@ -107,7 +107,7 @@ fn a_pane_no_host_answers_falls_back_once_the_wait_is_over() {
         Ok(())
     });
 
-    assert!(stream.is_none());
+    assert!(stream.unwrap().is_none());
     assert_eq!(
         started.load(Ordering::SeqCst),
         1,
@@ -118,7 +118,7 @@ fn a_pane_no_host_answers_falls_back_once_the_wait_is_over() {
 }
 
 #[test]
-fn a_host_that_cannot_start_falls_back_at_once() {
+fn a_host_that_cannot_start_returns_its_error_at_once() {
     let room = Room::new();
     let began = Instant::now();
 
@@ -126,12 +126,12 @@ fn a_host_that_cannot_start_falls_back_at_once() {
         Err(io::ErrorKind::NotFound.into())
     });
 
-    assert!(stream.is_none());
+    assert_eq!(stream.unwrap_err().kind(), io::ErrorKind::NotFound);
     assert!(began.elapsed() < SETTLE);
 }
 
 #[test]
-fn a_rejected_hello_leaves_the_pane_to_a_worker() {
+fn a_rejected_hello_preserves_the_hosts_reason() {
     let room = Room::new();
     answer(
         room.listen(),
@@ -143,16 +143,21 @@ fn a_rejected_hello_leaves_the_pane_to_a_worker() {
     let stream = connect(&room.config, &room.runtime, BRIEF, || {
         panic!("a host is already listening")
     })
+    .unwrap()
     .unwrap();
 
-    assert!(HostLink::open(stream, &room.hello(), output().as_fd(), SETTLE).is_none());
+    assert!(
+        matches!(HostLink::open(stream, &room.hello(), output().as_fd(), SETTLE), Err(AttachFailure::Rejected(reason)) if reason == REJECT_PROTOCOL)
+    );
 }
 
 #[test]
 fn an_accepted_pane_hears_the_hosts_controls_then_its_end() {
     let room = Room::new();
     answer(room.listen(), accept(), vec![Control::SelfClose]);
-    let stream = connect(&room.config, &room.runtime, BRIEF, || Ok(())).unwrap();
+    let stream = connect(&room.config, &room.runtime, BRIEF, || Ok(()))
+        .unwrap()
+        .unwrap();
 
     let mut link = HostLink::open(stream, &room.hello(), output().as_fd(), SETTLE).unwrap();
 
@@ -172,7 +177,9 @@ fn a_quiet_host_is_neither_a_control_nor_lost() {
         attach::write_line(&stream, &accept()).unwrap();
         let _ = release.recv();
     });
-    let stream = connect(&room.config, &room.runtime, BRIEF, || Ok(())).unwrap();
+    let stream = connect(&room.config, &room.runtime, BRIEF, || Ok(()))
+        .unwrap()
+        .unwrap();
     let mut link = HostLink::open(stream, &room.hello(), output().as_fd(), SETTLE).unwrap();
 
     assert_eq!(link.poll(Duration::from_millis(20)), HostEvent::Quiet);
@@ -203,6 +210,7 @@ fn panes_that_lose_their_host_together_start_one_replacement() {
                     });
                     Ok(())
                 })
+                .unwrap()
                 .is_some()
             })
         })
@@ -283,7 +291,6 @@ fn the_host_environment_pins_its_room_and_keeps_the_session_not_the_pane() {
         "ZELLIJ_PANE_ID",
         "RIMZ_CHANNEL",
         "RIMZ_WORKTREE_PATH",
-        "RIMZ_SIDEBAR_WORKER",
         "RIMZ_SIDEBAR_INSTANCE_ID",
     ] {
         assert_eq!(env.get(std::ffi::OsStr::new(name)), Some(&None), "{name}");
@@ -294,7 +301,7 @@ fn the_host_environment_pins_its_room_and_keeps_the_session_not_the_pane() {
             "inherit {name}"
         );
     }
-    assert_eq!(env.len(), 8, "only the pin and pane removals are set");
+    assert_eq!(env.len(), 7, "only the pin and pane removals are set");
 }
 
 /// The log holds one line: when the host was refused, then why.

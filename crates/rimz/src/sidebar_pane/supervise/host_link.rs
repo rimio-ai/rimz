@@ -10,13 +10,13 @@ use std::time::{Duration, Instant};
 
 use tracing::{debug, warn};
 
+use super::AttachFailure;
 use crate::disk::lock::WorkspaceLock;
 use crate::sidebar_pane::app::ServeConfig;
 use crate::sidebar_pane::attach::{self, Control, ControlLine, Hello, PROTOCOL, Reply};
 use crate::{RuntimePaths, StatePaths};
 
-/// How long a pane waits for a host before its own worker paints it: long
-/// enough for a host to start, short enough to read as a slow first frame.
+/// How long a pane waits for a host before showing a retry notice.
 pub(super) const HOST_WAIT: Duration = Duration::from_secs(2);
 /// How long a connected pane waits for the host's answer. It outlasts the
 /// host's wait for the pane's previous attachment to close, so a pane never
@@ -27,8 +27,7 @@ const CONNECT_RETRY: Duration = Duration::from_millis(20);
 /// What a host must not inherit from the pane that happened to start it. It
 /// keeps its session's environment and loses only what belongs to one pane:
 /// the pane ids process attribution reads, the channel and worktree path a
-/// command defaults its lane from, and the markers that would make it a
-/// worker or lend it a supervisor's instance. Its room pin is set from the
+/// command defaults its lane from, and the supervisor's instance. Its room pin is set from the
 /// verified workspace record, never inherited. Helpers that take a room take
 /// it by argv from `host_args`; the environment is the floor.
 const HOST_PANE_ENV_REMOVALS: &[&str] = &[
@@ -36,7 +35,6 @@ const HOST_PANE_ENV_REMOVALS: &[&str] = &[
     "ZELLIJ_PANE_ID",
     crate::workspace::ENV_CHANNEL,
     crate::workspace::ENV_WORKTREE_PATH,
-    super::WORKER_ENV,
     super::INSTANCE_ENV,
 ];
 
@@ -74,7 +72,7 @@ pub(super) fn spawn_host(
         .append(true)
         .open(log)?;
     // A rendered pane's own log sink is off, so the host's log is where a
-    // host that was never started says why. A pane on its worker asks again
+    // host that was never started says why. A pane waiting for a host asks again
     // on every retry, so each line says when.
     let mut command = host_command(exe, config, runtime, state).inspect_err(|err| {
         let _ = writeln!(stderr, "{} {err}", jiff::Timestamp::now());
@@ -117,17 +115,17 @@ fn host_command(
 
 /// Connect to the session's host, starting one when none answers. Every pane
 /// of a new room arrives here together: the one that takes the spawn lock
-/// starts the host and the rest wait for its socket. `None` after `wait`
-/// leaves the pane to its own worker.
+/// starts the host and the rest wait for its socket. `Ok(None)` means the
+/// socket did not answer within `wait`; `Err` preserves the start failure.
 pub(super) fn connect(
     config: &ServeConfig,
     runtime: &RuntimePaths,
     wait: Duration,
     start_host: impl FnOnce() -> io::Result<()>,
-) -> Option<UnixStream> {
+) -> io::Result<Option<UnixStream>> {
     let socket = runtime.sidebar_host_socket_path(config.mux, &config.session_name);
     if let Ok(stream) = UnixStream::connect(&socket) {
-        return Some(stream);
+        return Ok(Some(stream));
     }
     let lock = runtime.sidebar_host_spawn_lock(config.mux, &config.session_name);
     let spawning = WorkspaceLock::try_acquire(&lock).ok().flatten();
@@ -135,21 +133,21 @@ pub(super) fn connect(
         // A host another pane started may have bound between the miss above
         // and the lock.
         if let Ok(stream) = UnixStream::connect(&socket) {
-            return Some(stream);
+            return Ok(Some(stream));
         }
         if let Err(err) = start_host() {
-            warn!(workspace = %config.workspace_id, error = %err, "sidebar host did not start; falling back to a worker");
-            return None;
+            warn!(workspace = %config.workspace_id, error = %err, "sidebar host did not start");
+            return Err(err);
         }
     }
     let deadline = Instant::now() + wait;
     loop {
         if let Ok(stream) = UnixStream::connect(&socket) {
-            return Some(stream);
+            return Ok(Some(stream));
         }
         if Instant::now() >= deadline {
-            debug!(socket = %socket.display(), "no sidebar host answered; falling back to a worker");
-            return None;
+            debug!(socket = %socket.display(), "no sidebar host answered");
+            return Ok(None);
         }
         std::thread::sleep(CONNECT_RETRY);
     }
@@ -186,33 +184,32 @@ pub(super) struct HostLink {
 }
 
 impl HostLink {
-    /// Hand `output` to the host behind `stream`. `None` is a reject or a
-    /// host that went away mid-hello; either leaves the pane to a worker.
+    /// Hand `output` to the host behind `stream`, retaining a rejected reason.
     pub(super) fn open(
         stream: UnixStream,
         hello: &Hello,
         output: BorrowedFd<'_>,
         wait: Duration,
-    ) -> Option<Self> {
+    ) -> Result<Self, AttachFailure> {
         attach::send_hello(&stream, hello, output)
             .and_then(|()| stream.set_read_timeout(Some(wait)))
             .inspect_err(|err| debug!(error = %err, "sidebar host hello failed"))
-            .ok()?;
+            .map_err(|_| AttachFailure::ReplyUnreadable)?;
         let mut replies = BufReader::new(stream);
         match attach::read_line::<Reply>(&mut replies) {
-            Ok(Some(Reply::Accept { build })) => Some(Self {
+            Ok(Some(Reply::Accept { build })) => Ok(Self {
                 replies,
                 partial: String::new(),
                 build,
             }),
             Ok(Some(Reply::Reject { reason })) => {
-                debug!(%reason, "sidebar host rejected this pane; falling back to a worker");
-                None
+                debug!(%reason, "sidebar host rejected this pane");
+                Err(AttachFailure::Rejected(reason))
             }
-            Ok(None) => None,
+            Ok(None) => Err(AttachFailure::ReplyUnreadable),
             Err(err) => {
-                debug!(error = %err, "sidebar host reply unreadable; falling back to a worker");
-                None
+                debug!(error = %err, "sidebar host reply unreadable");
+                Err(AttachFailure::ReplyUnreadable)
             }
         }
     }

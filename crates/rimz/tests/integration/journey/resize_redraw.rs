@@ -38,15 +38,7 @@ const REDRAW_BUDGET: Duration = Duration::from_secs(2);
 /// (ratatui interleaves control codes between glyphs).
 const GRID_ROWS: u16 = 40;
 const GRID_COLS: u16 = 120;
-
-/// The workspace name the sidebar paints into its top-border title on *every*
-/// frame — before any `sidebar snapshot` fetch resolves and regardless of fetch
-/// health. We scan for this rather than the degraded alert banner: the banner is
-/// debounced behind several consecutive failures and so can't appear until a
-/// later tick, whereas the title proves the loop repainted at the new size the
-/// instant the resize redraw runs. At the 1x1 start size it can't fit in the
-/// border, so it stays absent until the resize.
-const WORKSPACE_ID: &str = "ws_0123456789abcdef01234567";
+const PROJECT_NAME: &str = "rimz-resize-project";
 
 #[test]
 fn sidebar_redraws_at_new_size_on_resize() {
@@ -60,13 +52,12 @@ fn sidebar_redraws_at_new_size_on_resize() {
         .rand_bytes(6)
         .tempdir()
         .expect("xdg tempdir");
-    let workspace_id = rimz::WorkspaceId::parse(WORKSPACE_ID).unwrap();
-    let project = xdg.path().join(WORKSPACE_ID);
+    let project = xdg.path().join(PROJECT_NAME);
     std::fs::create_dir(&project).unwrap();
     let mut workspace = rimz::WorkspaceResolver::resolve_under(&project, None, xdg.path()).unwrap();
-    workspace.workspace_id = workspace_id.clone();
     workspace.session_name = "rimz-resize-test".to_owned();
-    let state = rimz::StatePaths::under(workspace_id, xdg.path()).unwrap();
+    let workspace_id = workspace.workspace_id.clone();
+    let state = rimz::StatePaths::under(workspace_id.clone(), xdg.path()).unwrap();
     let runtime = rimz::RuntimePaths::for_state_under(&state, xdg.path());
     let instance = rimz::ids::SidebarInstanceId::default();
     let heartbeat = runtime.sidebar_heartbeat_path(&instance);
@@ -94,7 +85,7 @@ fn sidebar_redraws_at_new_size_on_resize() {
         "--mux",
         "zellij",
         "--workspace-id",
-        WORKSPACE_ID,
+        workspace_id.as_str(),
         "--session-name",
         "rimz-resize-test",
         "--tick-seconds",
@@ -138,18 +129,19 @@ fn sidebar_redraws_at_new_size_on_resize() {
     while !heartbeat.exists() {
         assert!(
             Instant::now() < deadline,
-            "sidebar attachment did not start"
+            "sidebar attachment did not start: {}",
+            parser.lock().unwrap().screen().contents(),
         );
         std::thread::sleep(Duration::from_millis(25));
     }
     std::thread::sleep(Duration::from_millis(500));
+    // The placeholder title is the ID; a fetched frame uses the project name.
+    // Neither fits at 1x1, so either proves a paint at the resized dimensions.
+    let title_visible = |contents: &str| {
+        contents.contains(workspace_id.as_str()) || contents.contains(PROJECT_NAME)
+    };
     assert!(
-        !parser
-            .lock()
-            .unwrap()
-            .screen()
-            .contents()
-            .contains(WORKSPACE_ID),
+        !title_visible(&parser.lock().unwrap().screen().contents()),
         "the title should not fit before the pane is given a usable size",
     );
 
@@ -167,13 +159,7 @@ fn sidebar_redraws_at_new_size_on_resize() {
     let deadline = resized_at + Duration::from_secs(TICK_SECONDS + 3);
     let mut latency = None;
     while Instant::now() < deadline {
-        if parser
-            .lock()
-            .unwrap()
-            .screen()
-            .contents()
-            .contains(WORKSPACE_ID)
-        {
+        if title_visible(&parser.lock().unwrap().screen().contents()) {
             latency = Some(resized_at.elapsed());
             break;
         }
@@ -185,7 +171,12 @@ fn sidebar_redraws_at_new_size_on_resize() {
     drop(pair.master);
     let _ = reader_thread.join();
 
-    let latency = latency.expect("sidebar never rendered content at the resized dimensions");
+    let latency = latency.unwrap_or_else(|| {
+        panic!(
+            "sidebar never rendered content at the resized dimensions: {}",
+            parser.lock().unwrap().screen().contents(),
+        )
+    });
     println!("redrew at new size {latency:?} after resize (tick = {TICK_SECONDS}s)");
     assert!(
         latency < REDRAW_BUDGET,

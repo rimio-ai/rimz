@@ -471,7 +471,6 @@ fn control_words_never_start_with_brace() {
     let mut words = vec![
         "resize".to_owned(),
         RELOAD_CONTROL_WORD.to_owned(),
-        SUPERVISOR_HANDOFF_CONTROL_WORD.to_owned(),
         "scroll:up".to_owned(),
         "scroll:down".to_owned(),
         String::from_utf8(SNAPSHOT_WAKEUP.to_vec()).unwrap(),

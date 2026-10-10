@@ -1212,8 +1212,8 @@ fn classify_diagnostic(
         | DiagEvent::GhostSessionBind { .. }
         | DiagEvent::MixedBuildWriters { .. }
         | DiagEvent::RendererPanic { .. }
-        | DiagEvent::RendererSignalDeath { .. }
-        | DiagEvent::RendererOrphanReaped { .. }
+        | DiagEvent::SidebarHostUnavailable { .. }
+        | DiagEvent::SupervisorPaneGone { .. }
         | DiagEvent::SidebarOrphanReaped { .. }
         | DiagEvent::SubagentOrphanReaped { .. }
         | DiagEvent::SubagentOrphanRepairFailed { .. }

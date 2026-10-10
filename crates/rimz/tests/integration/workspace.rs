@@ -123,7 +123,6 @@ fn events_follow_without_a_room_refuses_on_entry() {
 #[test]
 fn sidebar_supervisor_without_a_room_stops_before_spawning_or_logging() {
     let env = Env::new();
-    let started = env.home_root.join("worker-started");
     let output = env
         .rimz()
         .args([
@@ -136,9 +135,6 @@ fn sidebar_supervisor_without_a_room_stops_before_spawning_or_logging() {
             "--mux",
             "tmux",
         ])
-        .env("RIMZ_TEST_SIDEBAR_WORKER_FAULT", "self_close")
-        .env("RIMZ_TEST_SIDEBAR_SELF_CLOSE_PROBE", "empty")
-        .env("RIMZ_TEST_SIDEBAR_WORKER_STARTED_FILE", &started)
         .bounded_output_within(Duration::from_secs(5));
     let output = output.expect("supervisor must stop");
     assert!(output.status.success());
@@ -149,7 +145,17 @@ fn sidebar_supervisor_without_a_room_stops_before_spawning_or_logging() {
         "the stop names the workspace and the fix: {stderr}"
     );
     assert!(!env.rimz_home().join("ws").exists());
-    assert!(!started.exists(), "no worker should be spawned");
+    assert!(
+        !env.runtime_paths().sock_dir.exists(),
+        "no host socket should be bound"
+    );
+    assert!(
+        !rimz::proc::list_processes()
+            .iter()
+            .any(|process| process.cmdline.contains(" sidebar host ")
+                && process.cmdline.contains(env.workspace_id.as_str())),
+        "no host should be spawned"
+    );
 }
 
 #[test]

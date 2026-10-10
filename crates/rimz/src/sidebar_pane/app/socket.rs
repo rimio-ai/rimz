@@ -52,27 +52,11 @@ pub(super) fn bind_socket(path: &Path) -> io::Result<UnixDatagram> {
     UnixDatagram::bind(path)
 }
 
-/// How long the resize watcher blocks per poll. A resize event wakes it
-/// immediately regardless; this only bounds how often it loops while idle.
-pub(super) const RESIZE_POLL_INTERVAL: Duration = Duration::from_secs(30);
-
 /// How often a stoppable forwarder looks for its stop request. Events still
 /// wake it at once.
 const FORWARDER_STOP_POLL: Duration = Duration::from_millis(250);
 
-/// Watch the terminal for resize and key events and wake the serve loop. Runs
-/// on its own thread for the life of the process; it self-wakes by sending to
-/// `wake_path` (the loop's bound wakeup socket), which keeps redraw and input
-/// on one path. Stops quietly if the event source or socket goes away.
-pub(super) fn spawn_event_waker(wake_path: PathBuf) {
-    std::thread::spawn(move || {
-        forward_events(&wake_path, RESIZE_POLL_INTERVAL, &AtomicBool::new(false));
-    });
-}
-
-/// The same forwarding for a process that hands its pane to another painter
-/// and may take it back: a supervisor reads the tty for the room host, and
-/// must stop reading before a fallback worker starts to.
+/// The supervisor's terminal input forwarding for one host attachment.
 pub(in crate::sidebar_pane) struct EventForwarder {
     stop: Arc<AtomicBool>,
     thread: std::thread::JoinHandle<()>,
