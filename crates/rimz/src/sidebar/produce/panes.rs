@@ -37,13 +37,12 @@ use validate::{
     PublishVerdict, frame_publish_verdict, own_pane_missing, pane_count, shrink_needs_verification,
 };
 
-/// How a non-producing sidebar waits for the single producer's cache write
-/// before giving up and producing locally. ~200ms total (10 × 20ms).
+/// Brief wait for another cache refresh to publish: 10 × 20ms.
 const SNAPSHOT_CACHE_WAIT_STEP: Duration = Duration::from_millis(20);
 const SNAPSHOT_CACHE_WAIT_STEPS: u32 = 10;
 
 /// Pane-frame cache policy for one production cycle. Paths, freshness,
-/// validation, election, publication, and wakeup stay coupled here so every
+/// validation, single-flight, publication, and wakeup stay coupled here so every
 /// topology, metrics, and presence arm makes the same decisions.
 struct PaneFrameCache<'a> {
     runtime: &'a crate::RuntimePaths,
@@ -775,13 +774,10 @@ impl PaneFrameProducer<'_, '_> {
 
 /// Return the live pane frame for `session` — the pane list plus the pane-source
 /// observation stamp that event fusion orders against — sharing one mux roster
-/// read across every sidebar via a short-lived single-flight cache.
+/// read between the host and CLI producers through a single-flight cache.
 ///
-/// Fast path: a fresh same-session cache is read back with no mux work. Slow
-/// path: a non-blocking `try_lock` elects one producer; losers poll briefly for
-/// its write, then hold a usable prior frame before producing locally. That
-/// keeps a wedged mux client from turning every sidebar into its own roster
-/// read.
+/// A fresh same-session frame needs no mux work. On contention, wait briefly
+/// for the lock holder's publication, then use a usable prior or produce locally.
 pub(super) fn cached_panes_or_produce(
     runtime: &crate::RuntimePaths,
     mux: MuxName,
@@ -801,12 +797,11 @@ pub(super) fn cached_panes_or_produce(
         return Ok(refresh_cached_presence(frame, &cache, mux));
     }
 
-    // Slow path: elect one producer for this `(workspace, session)` refresh.
-    // Losers read its write back; if it wedges, they fall back to an uncached
-    // local produce rather than block.
+    // Coalesce this `(workspace, session)` refresh. Contending callers wait for
+    // publication, then prefer a prior frame or produce locally rather than block.
     match cache.elect(|| cache.fresh()) {
         Coalesced::Shared(cache) => Ok(cache),
-        // The producer wedged past the wait. Prefer any usable prior frame over
+        // Coordination failed. Prefer any usable prior frame over
         // a second mux read. Without a prior, produce locally so a cold room
         // still has a chance to recover.
         Coalesced::ProduceLocal => {
@@ -821,8 +816,7 @@ pub(super) fn cached_panes_or_produce(
             let frame = producer.confirm_and_carry(frame, prior.as_deref(), false)?;
             cache.validate_topology(frame, prior.as_ref().map(|prior| (**prior).clone()), false)
         }
-        // We won: read the mux roster and publish it. The guard holds the lock
-        // until this arm returns.
+        // Read and publish the mux roster while the guard holds the lock.
         Coalesced::Produce(_guard) => {
             let prior = cache.prior();
             let frame = producer.candidate(true, None, false)?;
@@ -1291,9 +1285,8 @@ fn excerpt(value: &str, max_bytes: usize) -> String {
 /// The fast path's metrics arm: re-sample process metrics over a topology-fresh cached
 /// frame when some pane's sample is due, and republish. The publish keeps the
 /// frame's `produced_at_ms`, so a metrics-only refresh never masquerades as a
-/// fresh pane listing; election rides the same snapshot lock as the full
-/// produce, so one process samples per window and a loser serves the shared
-/// write back.
+/// fresh pane listing. The topology refresh's lock coalesces sampling and
+/// lets contending callers reuse the publication.
 fn refresh_cached_metrics(frame: PaneFrame, cache: &PaneFrameCache<'_>) -> PaneFrame {
     if !super::metrics::pane_metrics_due(&frame, cache.runtime) {
         return frame;
@@ -1304,9 +1297,7 @@ fn refresh_cached_metrics(frame: PaneFrame, cache: &PaneFrameCache<'_>) -> PaneF
     };
     match cache.elect(fresh) {
         Coalesced::Shared(frame) => frame,
-        // A wedged producer must not block the visible tab. Keep rendering the
-        // cached frame rather than writing shared metrics state outside the
-        // elected producer path.
+        // Keep the cached frame when coordination fails; shared metrics need the lock.
         Coalesced::ProduceLocal => frame,
         Coalesced::Produce(_guard) => {
             let mut latest = cache.fresh().unwrap_or(frame);
@@ -1365,8 +1356,8 @@ fn apply_presence_sample_and_publish(
 
 /// The fast path's presence arm: re-sample attached tmux client activity over a
 /// topology-fresh cached frame. The publish keeps the frame's `produced_at_ms`,
-/// so a presence-only refresh never masquerades as a fresh pane listing; election
-/// rides the same snapshot lock as the full produce.
+/// so a presence-only refresh never masquerades as a fresh pane listing.
+/// Single-flight uses the topology refresh's lock.
 fn refresh_cached_presence(
     frame: PaneFrame,
     cache: &PaneFrameCache<'_>,
@@ -1390,9 +1381,7 @@ fn refresh_cached_presence(
     };
     match cache.elect(fresh) {
         Coalesced::Shared(frame) => frame,
-        // A wedged producer must not block the visible tab. Keep rendering the
-        // cached frame rather than writing shared presence state outside the
-        // elected producer path.
+        // Keep the cached frame when coordination fails; shared presence needs the lock.
         Coalesced::ProduceLocal => frame,
         Coalesced::Produce(_guard) => {
             let mut latest = cache.fresh().unwrap_or(frame);

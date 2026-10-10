@@ -13,16 +13,14 @@ use crate::disk::atomic;
 use crate::disk::paths::RuntimePaths;
 use crate::ids::{MuxName, PaneId, SidebarInstanceId, WorkspaceId};
 
-/// Maximum age of a sidebar heartbeat before launch, election, and wakeup
+/// Maximum age of a sidebar heartbeat before launch and wakeup
 /// fanout treat the instance as dead and skip it.
 pub const SIDEBAR_HEARTBEAT_TTL: Duration = Duration::from_secs(5);
 
 // v5: the snapshot view-model carries explicit named-channel identity on agent
 // rows and panes. v4 carried `root_class`, and the worktree-group kind
 // vocabulary was `worktree`/`root`/`external` (the catch-all renamed from
-// `workspace`). The version gate keeps a mixed-version fleet from honouring
-// each other's elders mid-upgrade; a consumer that cannot parse a published
-// snapshot already falls back to its own produce.
+// `workspace`). Heartbeat readers accept only this protocol version.
 pub const SIDEBAR_PROTOCOL_VERSION: &str = "rimz.plugin.v5";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -110,7 +108,7 @@ impl SidebarHeartbeat {
 
 /// Walk a heartbeat directory, decode every sidebar heartbeat file, and keep
 /// only current-protocol records. Freshness deliberately stays with callers:
-/// launch, election, and reload check mtime TTL; wakeup fanout checks
+/// launch and reload check mtime TTL; wakeup fanout checks
 /// `last_seen` plus a TOCTOU re-stat; session records compare mtimes.
 pub fn read_current_heartbeats(dir: &Path) -> io::Result<Vec<(PathBuf, SidebarHeartbeat)>> {
     let entries = match fs::read_dir(dir) {
@@ -200,9 +198,8 @@ pub fn write_heartbeat(
 }
 
 /// Every fresh, current-protocol sidebar heartbeat in the workspace runtime dir.
-/// The shared scan behind the launch gate, the runtime election, and the reload
-/// liveness set: a stale mtime, unreadable JSON, or mismatched protocol is
-/// skipped (so an old-build sidebar drops out and reload replaces it).
+/// Shared by launch, room admission, reload, and pane geometry reads; stale
+/// mtimes, unreadable JSON, and mismatched protocols are skipped.
 pub(crate) fn fresh_sidebar_heartbeats(rt: &RuntimePaths) -> Vec<SidebarHeartbeat> {
     let heartbeats = match read_current_heartbeats(&rt.heartbeat_dir) {
         Ok(heartbeats) => heartbeats,

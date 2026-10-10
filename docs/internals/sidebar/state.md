@@ -17,37 +17,35 @@ Three rules resolve that, and the rest of this page follows from them.
 3. **Realtime events carry latency, never truth.** A wakeup datagram lets a change paint now instead of at the next poll. A dropped datagram costs staleness bounded by the next producer pull, never a wrong verdict.
 
 ```text
-        durable truth                          expensive external reads
-   ┌──────────────────────┐              ┌──────────────────────────────┐
-   │ store rollup         │              │ mux panes · git · providers  │
-   │ latest.json + log    │              └───────────────┬──────────────┘
-   └──────────┬───────────┘                              │ producer only
-              │ every renderer,                          ▼
-              │ read event-fresh                published lane caches
-              │                            snapshot.json · diff-stats.json · …
-              │                                          │
-              └────────────────────┬─────────────────────┘
-                                   ▼
-                    enrich   the ordered fold spine, pure over files
-                                   │
-    realtime events ──────────────▶│◀────────────── focus intent
-    in-memory overlay store        ▼
-                          fuse(pulled, events, intent, now)
-                          pure: no IO, no subprocess, no clock read past `now`
-                                   │
-                                   ▼
-                            SidebarSnapshot ──▶ paint
+     store rollup                         expensive external reads
+     latest.json + log                    mux panes · git · providers
+           │                                     │ host / CLI production
+           │                             published lane caches
+           │                          snapshot.json · diff-stats.json · …
+           └─────────────────┬───────────────────┘
+                             ▼
+                    host fetch worker
+                    ordered workspace fold (enrich)
+                             │
+                    per-attachment projection
+                             │
+    realtime events ────────▶│◀────────────── focus intent
+    per-attachment overlay   ▼
+                   fuse(pulled, events, intent, now)
+                   pure: no IO, subprocess, or clock read past `now`
+                             │
+                       SidebarSnapshot ──▶ paint
 ```
 
 ## Where the code lives
 
-`crates/rimz/src/sidebar/` is the data plane: it reads, folds, and publishes, and never writes store truth. `crates/rimz/src/sidebar_pane/` is the renderer process that drives it. `crates/rimz/src/wakeup/` holds the wire the data plane shares with every other sender, and `crates/rimz/src/mux/` owns the runtime files the multiplexer writes or dispatches on.
+`crates/rimz/src/sidebar/` is the data plane: it reads, folds, and publishes, and never writes store truth. `crates/rimz/src/sidebar_pane/` holds the pane supervisors and painting host. `crates/rimz/src/wakeup/` holds the wire the data plane shares with every other sender, and `crates/rimz/src/mux/` owns the runtime files the multiplexer writes or dispatches on.
 
 The data plane, in `crates/rimz/src/sidebar/`:
 
 | Module | What it owns |
 | --- | --- |
-| [`mod.rs`](../../../crates/rimz/src/sidebar/mod.rs) | Launch gating and the orphan sweep, decided over heartbeat records. |
+| [`mod.rs`](../../../crates/rimz/src/sidebar/mod.rs) | Heartbeat-based launch gating and pane liveness. |
 | [`consumer.rs`](../../../crates/rimz/src/sidebar/consumer.rs) | The in-process read: event-fresh rollup over the published pane frame, shared by the fetch worker and CLI readers. |
 | [`enrich.rs`](../../../crates/rimz/src/sidebar/enrich.rs) | The ordered fold spine shared by production and published-cache reads. |
 | [`frame.rs`](../../../crates/rimz/src/sidebar/frame.rs), [`cache.rs`](../../../crates/rimz/src/sidebar/cache.rs) | `PaneFrame`, the published pane topology; its cache read, freshness verdict, presence stamp, and the authoritative pane probe. |
@@ -73,6 +71,7 @@ The shared wire and mux files:
 | [`mux/focus_anchor.rs`](../../../crates/rimz/src/mux/focus_anchor.rs) | The two-phase intent behind every RimZ-initiated focus action. |
 | [`mux/width_target.rs`](../../../crates/rimz/src/mux/width_target.rs) | The room-runtime sidebar share and whether a user action pinned it. |
 | [`mux/zellij/pane_topology.rs`](../../../crates/rimz/src/mux/zellij/pane_topology.rs) | The Zellij topology cache, its freshness window, and the desired-presence record. |
+| [`mux/recovery.rs`](../../../crates/rimz/src/mux/recovery.rs) | The scoped orphan-process sweep used by reload and teardown. |
 
 The renderer threads, in `crates/rimz/src/sidebar_pane/`:
 
@@ -224,7 +223,7 @@ Room-local lanes live in the workspace runtime directory beside the store's runt
 
 ### The pane frame
 
-`lanes/snapshot.json` is the topology everything else enriches, and the most important file in the plane. [`PaneFrame`](../../../crates/rimz/src/sidebar/frame.rs) carries tabs and panes, each pane with its current and rotated-out previous process record, child pids, sampled resource metrics, plus `viewed_panes`, the session `focused_pane` register, and client presence. The producer writes it ([`produce/panes.rs`](../../../crates/rimz/src/sidebar/produce/panes.rs)), and every renderer's fold reads it.
+`lanes/snapshot.json` is the topology everything else enriches, and the most important file in the plane. [`PaneFrame`](../../../crates/rimz/src/sidebar/frame.rs) carries tabs and panes, each pane with its current and rotated-out previous process record, child pids, sampled resource metrics, plus `viewed_panes`, the session `focused_pane` register, and client presence. The producer writes it ([`produce/panes.rs`](../../../crates/rimz/src/sidebar/produce/panes.rs)); the host's shared fold and passive CLI readers read it.
 
 Three properties matter downstream:
 
@@ -327,7 +326,7 @@ A present queue entry is `queued`, stamped with its `enqueuedAt`. With no entry,
 
 ### Sidecars
 
-Per-session sidecars (`agent_context/`, `subagent_context/`, `agent-activity/`, `active-time/`) are the one exception to producer ownership. Hook and statusline runs write the context and activity records, hooks update the active-time accumulators under per-record locks, and the host's transcript watcher refreshes transcript-tail context between hooks ([push channels](#push-channels)). Every renderer reads them fresh behind stat-gated parse caches.
+Per-session sidecars (`agent_context/`, `subagent_context/`, `agent-activity/`, `active-time/`) are the one exception to producer ownership. Hook and statusline runs write the context and activity records, hooks update the active-time accumulators under per-record locks, and the host's transcript watcher refreshes transcript-tail context between hooks ([push channels](#push-channels)). The shared host fold reads them fresh behind stat-gated parse caches.
 
 ### Coordination and receipts
 
