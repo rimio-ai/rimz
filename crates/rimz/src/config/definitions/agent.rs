@@ -524,14 +524,7 @@ impl Resolver<'_> {
             .auto_compact
             .clone()
             .or_else(|| {
-                agents::find_definition(kind)
-                    .and_then(|definition| {
-                        definition
-                            .spec()
-                            .launch
-                            .preset_arg_matcher(PresetField::AutoCompact)
-                    })
-                    .map(|_| "258k".to_owned())
+                super::super::agents::native_auto_compact(self.scope.native_auto_compact, kind)
             })
             .map(|value| auto_compact(path, &value))
             .transpose()?;
@@ -598,20 +591,7 @@ fn names(path: &Path, key: &str, listed: &[String]) -> Result<Vec<String>, Defin
 
 pub(super) fn auto_compact(path: &Path, value: &str) -> Result<String, DefinitionErr> {
     let text = value.trim();
-    let (digits, scale) = match text.as_bytes().last() {
-        Some(b'k' | b'K') => (&text[..text.len() - 1], 1_000_u64),
-        Some(b'm' | b'M') => (&text[..text.len() - 1], 1_000_000_u64),
-        _ => (text, 1),
-    };
-    let count = if digits.bytes().all(|byte| byte.is_ascii_digit()) {
-        digits
-            .parse::<u64>()
-            .ok()
-            .and_then(|count| count.checked_mul(scale))
-    } else {
-        None
-    };
-    if !count.is_some_and(|count| (100_000..=1_000_000).contains(&count)) {
+    if crate::store::message::AutoCompact::parse_native_window(text).is_err() {
         return Err(DefinitionErr::new(
             path,
             format!(

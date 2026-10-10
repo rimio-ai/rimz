@@ -362,6 +362,15 @@ pub struct Profile {
     pub args: Option<String>,
 }
 
+pub(super) fn native_auto_compact(window: Option<u64>, kind: &str) -> Option<String> {
+    let tokens = window?;
+    crate::agents::find_definition(kind)?
+        .spec()
+        .launch
+        .preset_arg_matcher(crate::agents::PresetField::AutoCompact)?;
+    Some(tokens.to_string())
+}
+
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(transparent)]
 pub struct TeamsConfig(pub BTreeMap<String, Team>);

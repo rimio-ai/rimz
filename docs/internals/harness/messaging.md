@@ -443,7 +443,7 @@ Delivery re-checks the marker after claiming a command and before writing its pa
 
 An agent compacts on its own only at the context ceiling (Codex around 90%), so a prompt sent near it can be cut in half by a compaction that fires mid-turn. `--smart-compact` compacts first, so the prompt lands against a fresh window.
 
-Thresholds parse as `70%` (a fraction of the window), `120000` (absolute occupied tokens), or `180k` and `1m` (suffixed counts). Dispatch fills an omitted threshold from the [`[harness] smart_compact`](../../guide/configuration.md#smart-compaction) default for every caller, scheduled loop waits included. An unknown fill never triggers: the text sends untouched.
+Thresholds parse as `70%` (a fraction of the window), `120000` (absolute occupied tokens), or `180k` and `1m` (suffixed counts). Dispatch fills an omitted threshold from the [`[harness] smart_compact`](../../guide/configuration.md#smart-compaction) default for every caller, scheduled loop waits included: `258k` when unset, `None` for `"off"`. An explicit per-send threshold overrides either setting. An unknown fill never triggers: the text sends untouched.
 
 A percent threshold reads the same fill gauge the sidebar card renders (`context_fill_pct`). A token threshold reads `occupied_context_tokens`, which prefers the folded statusline breakdown, then the per-call split (cache reads plus cache writes plus fresh input), then the carried `total_tokens` gauge.
 

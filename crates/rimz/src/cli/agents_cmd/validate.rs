@@ -100,7 +100,13 @@ fn load(
     check: SkillCheck<'_>,
     machine: &rimz::config::MachineConfig,
 ) -> LoadedDefinitions {
-    let mut loaded = definitions::load(home, check, &machine.agents.commands, &machine.tiers);
+    let mut loaded = definitions::load(
+        home,
+        check,
+        &machine.agents.commands,
+        &machine.tiers,
+        machine.harness.auto_compact,
+    );
     for error in &machine.notices.definition_errors {
         if !loaded
             .errors

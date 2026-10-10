@@ -7760,6 +7760,44 @@ fn sweep_times_out_unconfirmed_compact_without_writing_it_twice() {
 }
 
 #[test]
+fn message_compacts_at_the_builtin_threshold_unless_disabled() {
+    for disabled in [false, true] {
+        let env = Env::new();
+        env.record(&env.project_root);
+        register_running_agent(
+            &env,
+            "sess-ac-builtin",
+            "feature-ac-builtin",
+            &[("ZELLIJ_PANE_ID", "3")],
+        );
+        seed_context_tokens(&env, "sess-ac-builtin", 258_000, 1_000_000);
+        if disabled {
+            let set = env
+                .rimz()
+                .args(["config", "set", "harness.smart_compact", "off"])
+                .output()
+                .unwrap();
+            assert!(set.status.success(), "{set:?}");
+        }
+        let trace_log = env.project_root.join("zellij-builtin-compact.log");
+        run_success(
+            traced_rimz(&env, &trace_log).args(["message", "--steer", "@claude", "--", "go"]),
+            "default compaction message",
+        );
+        let lines = trace_lines(&trace_log);
+        let compact = lines.iter().position(|line| is_compact_command(line));
+        let paste = lines
+            .iter()
+            .position(|line| is_paste(line, &user_message("go")));
+        assert_eq!(compact.is_some(), !disabled, "{lines:?}");
+        assert!(paste.is_some(), "{lines:?}");
+        if !disabled {
+            assert!(compact < paste, "{lines:?}");
+        }
+    }
+}
+
+#[test]
 fn message_inherits_smart_compact_default() {
     let env = Env::new();
     env.record(&env.project_root);

@@ -133,7 +133,7 @@ Each fan-out delivery starts with the typed selector, such as `@all, ` or `@code
 | `--on done\|any` | Which turn outcomes release a parked message. Default `done`. |
 | `--force` | Deliver even while an open prompt in the agent's pane reserves its input. |
 | `--no-enter` | Type the text and leave it unsubmitted in the composer. |
-| `--smart-compact <PCT\|TOKENS>` | When the agent's context is at least this full, send its compact command first and the message after compaction. Takes a percentage (`70%`, at most 100) or an occupied-token count (`120000`, `180k`, `1m`). A context below the threshold sends the message alone. Unset, [`[harness] smart_compact`](../../guide/configuration.md#smart-compaction) applies, and `[harness] compact_instruction` rides agents whose compact command accepts guidance. |
+| `--smart-compact <PCT\|TOKENS>` | When the agent's context is at least this full, send its compact command first and the message after compaction. Takes a percentage (`70%`, at most 100) or an occupied-token count (`120000`, `180k`, `1m`). A context below the threshold sends the message alone. Unset, [`[harness] smart_compact`](../../guide/configuration.md#smart-compaction) applies (default `258k`; `"off"` disables), and `[harness] compact_instruction` rides agents whose compact command accepts guidance. The flag overrides the machine setting. |
 | `--no-from` | Send the text with no message header. |
 
 ## The message header

@@ -708,6 +708,29 @@ fn remote_control_claude_config_set_keeps_an_explicit_refusal() {
 }
 
 #[test]
+fn config_set_compaction_defaults_accept_off_and_native_windows() {
+    let env = Env::new();
+    for (key, values) in [
+        ("harness.smart_compact", vec!["off"]),
+        ("harness.auto_compact", vec!["off", "272k"]),
+    ] {
+        for raw in values {
+            let set = env
+                .rimz()
+                .args(["config", "set", key, raw])
+                .output()
+                .unwrap();
+            assert!(set.status.success(), "{key} = {raw}: {set:?}");
+            env.rimz()
+                .args(["config", "get", key])
+                .assert()
+                .success()
+                .stdout(contains(raw));
+        }
+    }
+}
+
+#[test]
 fn config_set_rejects_unknown_keys_and_bad_values() {
     let env = Env::new();
 
@@ -739,7 +762,15 @@ fn config_set_rejects_unknown_keys_and_bad_values() {
         .args(["config", "set", "harness.smart_compact", "abc"])
         .assert()
         .failure()
-        .stderr(contains("invalid auto-compact threshold `abc`"));
+        .stderr(contains("harness.smart_compact must be off, a token count"));
+
+    env.rimz()
+        .args(["config", "set", "harness.auto_compact", "abc"])
+        .assert()
+        .failure()
+        .stderr(contains(
+            "harness.auto_compact must be off or a token count from 100k through 1M",
+        ));
 
     env.rimz()
         .args(["config", "set", "loop.default-timeout", "forever"])

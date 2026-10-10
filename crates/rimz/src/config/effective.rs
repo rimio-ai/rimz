@@ -321,6 +321,7 @@ pub fn load_with_roots(
     let set_failure = machine.unattributed_definition_failure();
     let machine_subagent_profiles = &machine.subagents.profiles;
     let mut lsp_servers = machine.lsp.servers.clone();
+    let native_auto_compact = machine.harness.auto_compact;
     let machine = &machine.agents;
     let report = trust::status_with_roots(project_root, config_root)?;
     let config_path = project_root.join(PROJECT_CONFIG_REL);
@@ -401,6 +402,23 @@ pub fn load_with_roots(
     let config_dir = config_path.parent().unwrap_or(project_root);
     agents_spec::resolve_prompt_paths(&mut repo.profiles, &mut repo.teams, config_dir);
     agents_spec::resolve_profile_prompt_paths(&mut repo.subagent_profiles, config_dir);
+    for profiles in [&mut repo.profiles, &mut repo.subagent_profiles] {
+        // A profile chained to another repo profile inherits through `fill_missing`.
+        let chained: BTreeSet<String> = profiles
+            .0
+            .iter()
+            .filter(|(name, profile)| {
+                profile.agent != **name && profiles.0.contains_key(&profile.agent)
+            })
+            .map(|(name, _)| name.clone())
+            .collect();
+        for (name, profile) in &mut profiles.0 {
+            if profile.auto_compact.is_none() && !chained.contains(name) {
+                profile.auto_compact =
+                    super::agents::native_auto_compact(native_auto_compact, &profile.agent);
+            }
+        }
+    }
     for name in repo.profiles.0.keys() {
         if repo.profiles.0[name].isolation.is_some() {
             return Err(EffectiveConfigErr::Agents {

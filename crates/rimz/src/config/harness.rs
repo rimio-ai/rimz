@@ -326,13 +326,11 @@ pub struct HarnessConfig {
     /// Default per-turn dollar cap for every agent in the room.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_budget: Option<TurnCap>,
-    /// Compact before messages and scheduled loop waits when the agent's
-    /// context window has reached this threshold. Unset keeps compaction opt-in.
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        with = "smart_compact_serde"
-    )]
+    /// Native auto-compaction window for capable profiles without `auto-compact`; unset means 272k tokens, `off` passes no window.
+    #[serde(with = "auto_compact_serde")]
+    pub auto_compact: Option<u64>,
+    /// Compact before messages and scheduled loop waits when context reaches this threshold; unset means 258,000 tokens, `off` disables it.
+    #[serde(with = "smart_compact_serde")]
     pub smart_compact: Option<AutoCompact>,
     /// Free text appended to compact commands whose adapters accept it.
     /// Unset sends RimZ's brief for the agent's seat; a set value (an empty
@@ -358,7 +356,8 @@ impl Default for HarnessConfig {
             prompt_cache_ttl: BTreeMap::new(),
             budget: None,
             turn_budget: None,
-            smart_compact: None,
+            auto_compact: Some(272_000),
+            smart_compact: Some(AutoCompact::Tokens(258_000)),
             compact_instruction: None,
             idle_compact: IdleCompactMode::default(),
             flip_compact: None,
@@ -498,6 +497,40 @@ mod keep_warm_min_ttl_serde {
     }
 }
 
+mod auto_compact_serde {
+    use super::*;
+
+    const WINDOW_ERROR: &str =
+        "harness.auto_compact must be off or a token count from 100k through 1M, such as 272k";
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = String::deserialize(deserializer)
+            .map_err(|_| serde::de::Error::custom(WINDOW_ERROR))?;
+        if raw == "off" {
+            return Ok(None);
+        }
+        AutoCompact::parse_native_window(&raw)
+            .map(Some)
+            .map_err(|_| serde::de::Error::custom(WINDOW_ERROR))
+    }
+
+    pub fn serialize<S>(window: &Option<u64>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match window {
+            Some(tokens) if tokens.is_multiple_of(1_000) => {
+                serializer.serialize_str(&format!("{}k", tokens / 1_000))
+            }
+            Some(tokens) => serializer.collect_str(tokens),
+            None => serializer.serialize_str("off"),
+        }
+    }
+}
+
 mod smart_compact_serde {
     use super::*;
 
@@ -505,9 +538,13 @@ mod smart_compact_serde {
     where
         D: Deserializer<'de>,
     {
-        Option::<String>::deserialize(deserializer)?
-            .map(|raw| AutoCompact::parse(&raw).map_err(serde::de::Error::custom))
-            .transpose()
+        let raw = String::deserialize(deserializer)?;
+        if raw == "off" {
+            return Ok(None);
+        }
+        AutoCompact::parse(&raw)
+            .map(Some)
+            .map_err(serde::de::Error::custom)
     }
 
     pub fn serialize<S>(
@@ -520,7 +557,7 @@ mod smart_compact_serde {
         match smart_compact {
             Some(AutoCompact::Percent(pct)) => serializer.serialize_str(&format!("{pct}%")),
             Some(AutoCompact::Tokens(tokens)) => serializer.serialize_str(&tokens.to_string()),
-            None => serializer.serialize_none(),
+            None => serializer.serialize_str("off"),
         }
     }
 }
@@ -656,6 +693,58 @@ mod tests {
     }
 
     #[test]
+    fn compaction_defaults_apply_when_unset() {
+        for config in [HarnessConfig::default(), toml::from_str("").unwrap()] {
+            assert_eq!(config.auto_compact, Some(272_000));
+            assert_eq!(config.smart_compact, Some(AutoCompact::Tokens(258 * 1_000)));
+        }
+    }
+
+    #[test]
+    fn native_compaction_takes_off_or_a_window_and_round_trips() {
+        for (raw, expected, rendered) in [
+            ("off", None, "off"),
+            ("100k", Some(100_000), "100k"),
+            ("272k", Some(272_000), "272k"),
+            ("272000", Some(272_000), "272k"),
+            ("272001", Some(272_001), "272001"),
+            ("1m", Some(1_000_000), "1000k"),
+        ] {
+            let parsed = toml::from_str::<HarnessConfig>(&format!("auto_compact = {raw:?}"));
+            assert!(parsed.is_ok(), "{raw}: {parsed:?}");
+            let config = parsed.unwrap();
+            assert_eq!(config.auto_compact, expected);
+            let encoded = toml::to_string(&config).unwrap();
+            assert!(
+                encoded.contains(&format!("auto_compact = {rendered:?}")),
+                "{encoded}"
+            );
+            assert_eq!(toml::from_str::<HarnessConfig>(&encoded).unwrap(), config);
+        }
+    }
+
+    #[test]
+    fn native_compaction_rejects_invalid_windows_with_the_key() {
+        for raw in ["99k", "1000001", "70%", "abc"] {
+            let error = toml::from_str::<HarnessConfig>(&format!("auto_compact = {raw:?}"))
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("harness.auto_compact must be off or a token count from 100k through 1M, such as 272k"), "{raw}: {error}");
+        }
+    }
+
+    #[test]
+    fn smart_compaction_takes_off_and_round_trips() {
+        let parsed = toml::from_str::<HarnessConfig>("smart_compact = \"off\"");
+        assert!(parsed.is_ok(), "{parsed:?}");
+        let config = parsed.unwrap();
+        assert_eq!(config.smart_compact, None);
+        let encoded = toml::to_string(&config).unwrap();
+        assert!(encoded.contains("smart_compact = \"off\""), "{encoded}");
+        assert_eq!(toml::from_str::<HarnessConfig>(&encoded).unwrap(), config);
+    }
+
+    #[test]
     fn day_cap_requires_day_and_round_trips() {
         let config: HarnessConfig =
             toml::from_str("budget = \"50.25/day\"").expect("parse day cap");
@@ -727,7 +816,6 @@ mod tests {
             let encoded = toml::to_string(&config).unwrap();
             assert_eq!(toml::from_str::<HarnessConfig>(&encoded).unwrap(), config);
         }
-        assert!(toml::from_str::<HarnessConfig>("smart_compact = \"off\"").is_err());
         assert!(toml::from_str::<HarnessConfig>("flip_compact = \"OFF\"").is_err());
     }
 

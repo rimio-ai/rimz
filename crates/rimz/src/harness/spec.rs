@@ -1159,17 +1159,12 @@ fn normalize_auto_compact(value: &mut Option<String>, profile: &str) -> Result<(
     let Some(raw) = value.as_deref() else {
         return Ok(());
     };
-    let tokens = match AutoCompact::parse(raw) {
-        Ok(AutoCompact::Tokens(tokens)) if (100_000..=1_000_000).contains(&tokens) => tokens,
-        _ => {
-            return Err(LayoutErr::InvalidProfile {
-                profile: profile.to_owned(),
-                reason: format!(
-                    "auto-compact must be between 100k and 1M tokens; use a token count like `200k`, got `{raw}`"
-                ),
-            });
-        }
-    };
+    let tokens = AutoCompact::parse_native_window(raw).map_err(|_| LayoutErr::InvalidProfile {
+        profile: profile.to_owned(),
+        reason: format!(
+            "auto-compact must be between 100k and 1M tokens; use a token count like `200k`, got `{raw}`"
+        ),
+    })?;
     *value = Some(tokens.to_string());
     Ok(())
 }

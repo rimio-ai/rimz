@@ -217,6 +217,7 @@ fn resume_preserves_a_stamped_model_after_a_tier_rebind() {
             crate::config::definitions::SkillCheck::Skip,
             &crate::config::CommandsConfig::default(),
             tiers,
+            Some(272_000),
         )
     };
     let initial = load(&crate::config::tiers::TierConfig::default());

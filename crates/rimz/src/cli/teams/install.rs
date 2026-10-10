@@ -447,6 +447,7 @@ mod tests {
                 },
                 &rimz::config::CommandsConfig::default(),
                 &rimz::config::tiers::TierConfig::default(),
+                Some(272_000),
             );
             assert!(loaded.errors.is_empty(), "{name}: {:?}", loaded.errors);
             assert_eq!(loaded.teams.0[&name].roles.len(), seats.len());
