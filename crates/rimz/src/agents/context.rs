@@ -1214,6 +1214,8 @@ pub enum TurnErrorClass {
     /// turn and never arms automatic resume until another evidence channel
     /// proves a resumable class.
     Unknown,
+    /// The provider refuses this login's subscription access.
+    NotEntitled,
     /// Any other provider API error: actionable failure with the upstream text
     /// on the card.
     #[default]
@@ -1248,6 +1250,7 @@ impl TurnErrorClass {
             Self::PausedOverloaded => "provider overloaded",
             Self::Unknown => "unknown error",
             Self::Failed => "provider error",
+            Self::NotEntitled => "plan lapsed",
         }
     }
 

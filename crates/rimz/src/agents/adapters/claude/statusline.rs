@@ -145,8 +145,9 @@ fn current_usage(field: Option<AgentCurrentUsage>) -> Option<AgentCurrentUsage> 
 /// `StopFailure` and the transcript tail both carry Claude's `error` value, so
 /// both paths call this and cannot disagree whichever writes the marker last.
 /// A spend-limit label wins because Claude tags spend caps `rate_limit`/429 too;
-/// otherwise `rate_limit`/429 pauses on the rate window whatever the text says
-/// ("You've reached your Fable limit"), and `overloaded` pauses as transient.
+/// a subscription rejection fails without a resume park; otherwise
+/// `rate_limit`/429 pauses on the rate window whatever the text says ("You've
+/// reached your Fable limit"), and `overloaded` pauses as transient.
 pub(super) fn classify_api_error(
     error: Option<&str>,
     status: Option<u64>,
@@ -157,6 +158,7 @@ pub(super) fn classify_api_error(
         return label_class;
     }
     match (error.map(str::trim), status) {
+        (Some("oauth_org_not_allowed" | "billing_error"), _) => TurnErrorClass::NotEntitled,
         (Some("rate_limit"), _) | (_, Some(429)) => TurnErrorClass::PausedRateLimit,
         (Some("overloaded"), _) => TurnErrorClass::PausedOverloaded,
         _ => label_class,

@@ -1578,9 +1578,9 @@ impl AgentState {
     pub fn rowless_status(&self, demotion: &super::ParkDemotion) -> (AgentStatus, TurnPhase) {
         let class = self.displayed_turn_error().map(|(class, _)| class);
         match class {
-            Some(TurnErrorClass::Unknown | TurnErrorClass::Failed) => {
-                (AgentStatus::Failed, TurnPhase::Idle)
-            }
+            Some(
+                TurnErrorClass::Unknown | TurnErrorClass::Failed | TurnErrorClass::NotEntitled,
+            ) => (AgentStatus::Failed, TurnPhase::Idle),
             Some(
                 class @ (TurnErrorClass::PausedRateLimit
                 | TurnErrorClass::PausedSpendLimit
