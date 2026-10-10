@@ -223,9 +223,12 @@ fn settle(facts: SettleFacts<'_>) -> Settled {
         }
         return Settled::status(AgentStatus::Paused);
     }
-    if let Some((error, _class)) = turn_error
-        .filter(|(_, class)| matches!(class, TurnErrorClass::Unknown | TurnErrorClass::Failed))
-    {
+    if let Some((error, _class)) = turn_error.filter(|(_, class)| {
+        matches!(
+            class,
+            TurnErrorClass::Unknown | TurnErrorClass::Failed | TurnErrorClass::NotEntitled
+        )
+    }) {
         return Settled::with_label(AgentStatus::Failed, error.label.clone());
     }
     if matches!(

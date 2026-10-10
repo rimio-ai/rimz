@@ -171,7 +171,7 @@ fn resume_park(
         TurnErrorClass::PausedOverloaded => Some(ResumeArm::Overloaded {
             overloaded_at: error.at,
         }),
-        TurnErrorClass::Unknown | TurnErrorClass::Failed => None,
+        TurnErrorClass::Unknown | TurnErrorClass::Failed | TurnErrorClass::NotEntitled => None,
     }
 }
 

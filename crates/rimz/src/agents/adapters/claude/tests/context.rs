@@ -315,6 +315,49 @@ fn stop_failure_hook_maps_to_turn_error_marker() {
 }
 
 #[test]
+fn entitlement_turn_death_is_a_typed_actionable_failure() {
+    for error in ["oauth_org_not_allowed", "billing_error"] {
+        let class = super::super::statusline::classify_api_error(
+            Some(error),
+            None,
+            Some("Subscription access denied"),
+        );
+        assert_eq!(serde_json::to_value(class).unwrap(), json!("not_entitled"));
+        assert_eq!(class.words(), "plan lapsed");
+        assert!(!class.pauses_turn());
+        assert!(!class.is_limit());
+        let marker = hook_output(
+            &ClaudeAdapter,
+            "StopFailure",
+            &json!({
+                "session_id": "sess-1", "error": error,
+                "last_assistant_message": "Subscription access denied"
+            }),
+        )
+        .turn_error()
+        .cloned()
+        .unwrap();
+        assert_eq!(marker.class, class);
+    }
+    assert_eq!(
+        super::super::statusline::classify_api_error(
+            Some("account_on_hold"),
+            None,
+            Some("Account on hold")
+        ),
+        TurnErrorClass::Failed
+    );
+    assert_eq!(
+        super::super::statusline::classify_api_error(
+            Some("rate_limit"),
+            None,
+            Some("Subscription access denied")
+        ),
+        TurnErrorClass::PausedRateLimit
+    );
+}
+
+#[test]
 fn transcript_usage_absent_reports_zero_or_unknown() {
     let dir = tempfile::tempdir().unwrap();
 

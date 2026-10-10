@@ -2,6 +2,34 @@ use super::*;
 use crate::agents::TurnErrorClass;
 
 #[test]
+fn entitlement_failure_takes_attention_without_a_resume_park() {
+    let session = agent("claude", "lapsed", AgentStatus::Running, 0)
+        .worktree("/repo/main")
+        .in_pane("%1")
+        .active_ago(60)
+        .turn_error_class(
+            10,
+            "Subscription access denied",
+            TurnErrorClass::NotEntitled,
+        );
+    let snapshot =
+        room(vec![session.clone()]).with_live_panes(vec![pane("%1", "node", "/repo/main")], None);
+    let row = &snapshot.worktree_groups[0].rows[0];
+    assert_eq!(row.status(), Some(AgentStatus::Failed));
+    assert_eq!(row.turn_error_label(), Some("Subscription access denied"));
+    assert!(
+        snapshot.worktree_groups[0]
+            .status_counts
+            .iter()
+            .any(|count| count.status == AgentStatus::Failed && count.count == 1)
+    );
+    assert_eq!(
+        session.rowless_status(&crate::agents::ParkDemotion::default()),
+        (AgentStatus::Failed, crate::agents::TurnPhase::Idle)
+    );
+}
+
+#[test]
 fn api_error_turn_escalates_running_to_attention() {
     // A turn that died on a provider API error fires no Stop hook, so the
     // rollup keeps `running` — but the transcript marker postdates the
