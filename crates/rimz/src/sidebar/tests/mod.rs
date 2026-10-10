@@ -310,7 +310,7 @@ fn purge_rebirth_heartbeats_removes_all_heartbeats_only() {
     make_stale(&stale_path);
     let socket = h.runtime.sock_dir.join("sidebar.keep.sock");
     let read_marks = h.runtime.read_marks_dir.join("sidebar.keep.json");
-    let other = h.runtime.heartbeat_dir.join("producer.json");
+    let other = h.runtime.heartbeat_dir.join("unrelated.json");
     std::fs::write(&socket, b"").expect("write socket");
     std::fs::write(&read_marks, b"{}").expect("write read marks");
     std::fs::write(&other, b"{}").expect("write non-heartbeat");

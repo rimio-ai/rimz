@@ -71,8 +71,7 @@ fn normalize_observed_stamp(frame: &mut PaneFrame) {
 /// cache regardless of which TTL is in effect, so agent birth/death never
 /// waits out [`EVENT_PANE_TTL`]. The age saturates, so a cache stamped by a
 /// clock ahead of this reader serves (age 0) rather than re-producing every
-/// call. Pure over its inputs so every caller — the fast path, the
-/// single-flight `fresh` closure, the loser re-check — applies one verdict.
+/// call. The fast path and single-flight cache rechecks share this verdict.
 pub(crate) fn snapshot_cache_is_fresh(
     cache: &PaneFrame,
     now_ms: u64,
@@ -167,11 +166,7 @@ pub(crate) fn write_presence_stamp(
     }
 }
 
-/// Age of the presence stamp in milliseconds, or `None` when it is absent or
-/// unreadable (read as poll mode). One small read per produce — the producer
-/// is a cold fork per tick, so the stamp lives in the file, never process
-/// memory. Saturating, so a stamp written by a clock ahead of this reader
-/// reads as age 0 (fresh) rather than wrapping into poll mode.
+/// Read the presence stamp; absent or unreadable means poll mode.
 pub fn read_presence_stamp(runtime: &RuntimePaths) -> Option<PresenceStamp> {
     let bytes = std::fs::read(presence_stamp_path(runtime)).ok()?;
     serde_json::from_slice(&bytes).ok()
@@ -191,10 +186,7 @@ pub fn presence_event_mode(stamp_age_ms: Option<u64>) -> bool {
 /// The effective pane-cache TTL for one produce: the event-mode TTL while the
 /// presence channel is alive or the published frame is unwatched, else the
 /// poll-mode TTL. Computed once per `cached_panes_or_produce` call and threaded
-/// through every freshness check — the fast path, the single-flight `fresh`
-/// closure, and the loser re-check — so they agree on one verdict and a loser
-/// never produces what the winner skipped (the diff-stats "one shared stale()
-/// closure" rule).
+/// through the fast path and single-flight cache rechecks so they agree.
 pub(super) fn effective_pane_ttl(stamp_age_ms: Option<u64>, unwatched: bool) -> Duration {
     if unwatched || presence_event_mode(stamp_age_ms) {
         EVENT_PANE_TTL
