@@ -508,9 +508,9 @@ fn an_unreadable_transcript_makes_no_progress() {
         );
     }
 
-    // Claude and Grok fold no cross-line state, so an absent state is theirs to
-    // report; the rest must carry it forward.
-    for kind in ["codex", "pi", "copilot", "kimi"] {
+    // Grok folds no cross-line state, so an absent state is its to report; the
+    // rest must carry it forward.
+    for kind in ["claude", "codex", "pi", "copilot", "kimi"] {
         let adapter = crate::agents::definition_by_kind(kind).unwrap();
         let parsed = adapter.parse_spend(&missing, Some(&resume), &PriceBook::default());
         assert!(
