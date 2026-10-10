@@ -116,6 +116,8 @@ Implement the context source(s) the worksheet found; either alone is valid, and 
 
 The provider half of the integration is [providers.md → Adding a provider](../internals/agents/providers.md#adding-a-provider): `probe_account` (login state, plan, rate-limit windows), the OAuth-usage probe where one exists, and full-history cost through `spending_sources` plus `parse_spend`. Keep `transcript_files` for live transcript/session lookup. Put a positive-cost spend, hook-turn-cost, or context-cost fixture in `conformance` unless the spec declares `RealtimeCost` unsupported.
 
+A matcher on a provider error body (an auth rejection, a lapsed plan) is written against a recorded response and pins the exact key path. Record the body in the adapter's externals reference first, with tokens and request IDs redacted, and pin the unit test to that body. A value scan over an object, or a key guessed from the value alone, does not land: the Claude lapsed-plan matcher guessed its key and missed the live 403 ([adapter_claude.md → OAuth usage probe](../internals/agents/adapter_claude.md#oauth-usage-probe)).
+
 `spend.rs` is sidebar-safe by construction: read-only, and the `ensure_spend_parser_boundaries` invariant grep ([`xtask/src/invariants.rs`](../../xtask/src/invariants.rs)) rejects store-write, run-wake, and broker imports in any spend path.
 
 Spend results are cached per file stat, so a `spend.rs` change reaches only transcripts parsed after it. A change that drops, adds, or reprices entries for transcripts already on disk bumps `SPENDING_CACHE_VERSION` in [`spending/cache.rs`](../../crates/rimz/src/agents/spending/cache.rs) with a one-line reason, and any branch that must clear entries an earlier parse cached returns `replace_entries: true`.
