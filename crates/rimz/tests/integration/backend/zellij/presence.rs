@@ -170,7 +170,7 @@ fn write_poke_shim(dir: &Path, log: &Path, real_rimz: &Path, focus_exec_log: &Pa
              elif [ \"${{1:-}}\" = \"sidebar\" ] && [ \"${{2:-}}\" = \"serve\" ]; then\n\
                exec {real_rimz} \"$@\" 2>> {focus_exec_log}\n\
              else\n\
-               {real_rimz} \"$@\" >/dev/null 2>&1\n\
+               {real_rimz} \"$@\" >/dev/null 2>> {focus_exec_log}\n\
              fi\n",
             log = sh_quote(&log.display().to_string()),
             real_rimz = sh_quote(&real_rimz.display().to_string()),
@@ -274,9 +274,97 @@ fn presence_plugin_panes(xdg: &Path, session: &str) -> Result<Vec<ListedPane>, S
     })
 }
 
+struct FocusRepairLogs<'a> {
+    xdg: &'a Path,
+    trace: &'a Path,
+    renderer: &'a Path,
+    pokes: &'a Path,
+    pokes_before: usize,
+}
+
+impl FocusRepairLogs<'_> {
+    fn dump(&self) -> String {
+        let mut host_logs = std::fs::read_dir(self.xdg.join("ws"))
+            .into_iter()
+            .flatten()
+            .filter_map(Result::ok)
+            .flat_map(|entry| {
+                std::fs::read_dir(entry.path().join("log"))
+                    .into_iter()
+                    .flatten()
+            })
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.starts_with("sidebar-host.") && name.ends_with(".log"))
+            })
+            .collect::<Vec<_>>();
+        host_logs.sort();
+        let host_logs = host_logs
+            .iter()
+            .map(|path| {
+                format!(
+                    "{}:\n{}",
+                    path.display(),
+                    std::fs::read_to_string(path).unwrap_or_else(|error| error.to_string()),
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let pokes = poke_lines(self.pokes)
+            .into_iter()
+            .skip(self.pokes_before)
+            .collect::<Vec<_>>();
+        format!(
+            "trace {}:\n{}\nrenderer/wake stderr {}:\n{}\nhost logs:\n{host_logs}\nfocus repairs: {:#?}; pokes since switch: {pokes:?}",
+            self.trace.display(),
+            std::fs::read_to_string(self.trace).unwrap_or_else(|error| error.to_string()),
+            self.renderer.display(),
+            std::fs::read_to_string(self.renderer).unwrap_or_else(|error| error.to_string()),
+            rimz::diag::focus_repair::recent(&self.xdg.join("logs")),
+        )
+    }
+}
+
+#[test]
+fn focus_repair_timeout_dump_reads_workspace_host_and_renderer_logs() {
+    let xdg = TempDir::new().expect("log home");
+    let mut host_paths = Vec::new();
+    for root in [xdg.path().join("first"), xdg.path().join("second")] {
+        let state = rimz::StatePaths::under(WorkspaceId::from_project_root(&root), xdg.path())
+            .expect("workspace state paths");
+        let log_dir = state.root.join("log");
+        std::fs::create_dir_all(&log_dir).expect("workspace log directory");
+        let host = log_dir.join("sidebar-host.test.log");
+        std::fs::write(&host, "sidebar focus repair deferred").expect("host log");
+        host_paths.push(host);
+    }
+    let trace = xdg.path().join("trace.log");
+    let renderer = xdg.path().join("renderer.log");
+    let pokes = xdg.path().join("pokes.log");
+    std::fs::write(&trace, "shim trace").expect("trace log");
+    std::fs::write(&renderer, "renderer stderr").expect("renderer log");
+    std::fs::write(&pokes, "before switch\nafter switch\n").expect("poke log");
+    let dump = FocusRepairLogs {
+        xdg: xdg.path(),
+        trace: &trace,
+        renderer: &renderer,
+        pokes: &pokes,
+        pokes_before: 1,
+    }
+    .dump();
+    for host in host_paths {
+        assert!(dump.contains(&host.display().to_string()), "{dump}");
+    }
+    assert!(dump.contains("sidebar focus repair deferred"), "{dump}");
+    assert!(dump.contains(&renderer.display().to_string()), "{dump}");
+    assert!(dump.contains("renderer stderr"), "{dump}");
+}
+
 fn wait_for_focus_action(
-    log: &Path,
-    renderer_log: &Path,
+    logs: &FocusRepairLogs<'_>,
     pane: &PaneId,
     prior_count: usize,
     phase: &str,
@@ -285,7 +373,7 @@ fn wait_for_focus_action(
     let numeric = raw.strip_prefix("terminal_").unwrap_or(raw);
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
-        let contents = std::fs::read_to_string(log).unwrap_or_default();
+        let contents = std::fs::read_to_string(logs.trace).unwrap_or_default();
         if contents
             .lines()
             .filter(|line| line.contains("action focus-pane-id"))
@@ -301,8 +389,8 @@ fn wait_for_focus_action(
         }
         if Instant::now() >= deadline {
             panic!(
-                "timed out waiting for {phase} focus action on {pane} (ignoring {prior_count} earlier action(s)); trace: {contents}; renderer: {}",
-                std::fs::read_to_string(renderer_log).unwrap_or_default(),
+                "timed out waiting for {phase} focus action on {pane} (ignoring {prior_count} earlier action(s)); {}",
+                logs.dump(),
             );
         }
         std::thread::sleep(Duration::from_millis(50));
@@ -321,26 +409,32 @@ fn accepted_focus_repairs(xdg: &Path, target_pane: &PaneId) -> usize {
 }
 
 fn wait_for_accepted_focus_repair(
-    xdg: &Path,
+    logs: &FocusRepairLogs<'_>,
     target_pane: &PaneId,
     prior_count: usize,
 ) -> Vec<rimz::diag::focus_repair::FocusRepairRecord> {
-    poll_until(
-        Duration::from_secs(10),
-        || Ok(rimz::diag::focus_repair::recent(&xdg.join("logs"))),
-        |records| {
-            records
-                .iter()
-                .filter(|record| {
-                    record.target == *target_pane
-                        && record.outcome
-                            == rimz::diag::focus_repair::FocusRepairOutcome::AcceptedUnconfirmed
-                })
-                .count()
-                > prior_count
-        },
-        "accepted-unconfirmed focus repair diagnostic",
-    )
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let records = rimz::diag::focus_repair::recent(&logs.xdg.join("logs"));
+        if records
+            .iter()
+            .filter(|record| {
+                record.target == *target_pane
+                    && record.outcome
+                        == rimz::diag::focus_repair::FocusRepairOutcome::AcceptedUnconfirmed
+            })
+            .count()
+            > prior_count
+        {
+            return records;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for accepted-unconfirmed focus repair diagnostic on {target_pane}; {}",
+            logs.dump(),
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
 }
 
 fn wait_for_reload_baseline(log: &Path, prior_lines: usize, pane: &PaneId) -> Vec<String> {
@@ -367,19 +461,20 @@ fn wait_for_reload_baseline(log: &Path, prior_lines: usize, pane: &PaneId) -> Ve
     }
 }
 
-fn wait_for_switch_settled(log: &Path, prior_lines: usize) -> Vec<String> {
+fn wait_for_switch_settled(log: &Path, prior_lines: usize, active_tab: u64) -> Vec<String> {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         let lines = poke_lines(log);
-        if lines[prior_lines..]
-            .iter()
-            .any(|line| line.contains("sidebar wake --reason switch-settled"))
-        {
+        if lines[prior_lines..].iter().any(|line| {
+            line.contains("sidebar wake --reason switch-settled")
+                && logged_arg(line, "--active-tab").and_then(|tab| tab.parse::<u64>().ok())
+                    == Some(active_tab)
+        }) {
             return lines;
         }
         assert!(
             Instant::now() < deadline,
-            "presence plugin emitted no switch-settled wake; pokes: {lines:?}",
+            "presence plugin emitted no switch-settled wake for tab {active_tab}; pokes: {lines:?}",
         );
         std::thread::sleep(Duration::from_millis(50));
     }
@@ -818,8 +913,16 @@ fn tab_switch_repairs_sidebar_focus_from_attached_client_views() {
     let pokes_before = poke_lines(&poke_log).len();
     let actions_before = focus_action_count(&trace_log);
     let repairs_before = accepted_focus_repairs(xdg, &target_work);
+    let logs = FocusRepairLogs {
+        xdg,
+        trace: &trace_log,
+        renderer: &focus_exec_log,
+        pokes: &poke_log,
+        pokes_before,
+    };
     client.go_to_tab(2);
-    let settled = wait_for_switch_settled(&poke_log, pokes_before);
+    // Presence positions are zero-based; the client's tab key is one-based.
+    let settled = wait_for_switch_settled(&poke_log, pokes_before, 1);
     assert!(
         settled[pokes_before..].iter().any(|line| {
             line.contains("--active-tab")
@@ -829,13 +932,12 @@ fn tab_switch_repairs_sidebar_focus_from_attached_client_views() {
         "settled wake lacks tab/generation/client evidence: {settled:?}",
     );
     wait_for_focus_action(
-        &trace_log,
-        &focus_exec_log,
+        &logs,
         &target_work,
         actions_before,
         "first switch-settled repair",
     );
-    let repairs = wait_for_accepted_focus_repair(xdg, &target_work, repairs_before);
+    let repairs = wait_for_accepted_focus_repair(&logs, &target_work, repairs_before);
 
     client.assert_input_reaches(&target_work, "repaired target work pane");
 
@@ -869,16 +971,14 @@ fn tab_switch_repairs_sidebar_focus_from_attached_client_views() {
     let pokes_before = poke_lines(&poke_log).len();
     let actions_before = focus_action_count(&trace_log);
     let repairs_before = accepted_focus_repairs(xdg, &target_work);
+    let logs = FocusRepairLogs {
+        pokes_before,
+        ..logs
+    };
     client.go_to_tab(2);
-    wait_for_switch_settled(&poke_log, pokes_before);
-    wait_for_focus_action(
-        &trace_log,
-        &focus_exec_log,
-        &target_work,
-        actions_before,
-        "post-reload repair",
-    );
-    wait_for_accepted_focus_repair(xdg, &target_work, repairs_before);
+    wait_for_switch_settled(&poke_log, pokes_before, 1);
+    wait_for_focus_action(&logs, &target_work, actions_before, "post-reload repair");
+    wait_for_accepted_focus_repair(&logs, &target_work, repairs_before);
     client.assert_input_reaches(&target_work, "repaired target after plugin reload");
 
     client.press_alt_until(
