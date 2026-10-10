@@ -47,7 +47,7 @@ cp examples/teams/forge/agents/*.md ~/.rimz/agents/
 rimz agents validate
 ```
 
-Launch the team with the task in the same command. `-w` puts every member in a fresh [worktree](./worktrees.md) on its own branch, which is where a team belongs: the three of them edit the same files all day.
+Launch the team with the task in the same command. `-w` puts every member in a fresh [worktree](./worktrees.md) on its own branch, which is where a team belongs: the three of them edit the same files all day. New team worktrees start from the remote default branch fetched at launch, unless you [choose a different base](./configuration.md#worktrees); a failed fetch warns and falls back rather than blocking the launch.
 
 ```console
 $ rimz teams forge -w feat-rate-limits "add rate limiting to the ingest API"

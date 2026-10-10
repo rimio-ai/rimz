@@ -760,12 +760,12 @@ A child's own preset is Markdown, in `subagents/<name>.md`. This table holds onl
 ```toml
 [agents.worktree]
 dir = "../{repo}-worktrees"
-base = "head"
+# base = "head"
 ```
 
 `rimz worktree` and `rimz agents --worktree` create their Git worktrees under `dir`. A relative path resolves from the main checkout's root, and `{repo}` expands to that root's basename.
 
-`base` is the ref a new branch starts from. `head` (the default) branches from the main checkout's `HEAD`, `fresh` branches from `origin/HEAD`, and any other string is handed to Git as a ref. Both defaults read the main checkout, even when you run the command from one of its linked worktrees, so a tree created from inside another tree still branches off the main checkout's `HEAD` rather than that tree's.
+`base` is the ref a new branch starts from. Unset, [team launches](../reference/cli/teams.md#launch-a-team) branch from the remote default branch fetched at launch, while `rimz worktree new` and non-team agent launches use the main checkout's `HEAD`. Explicit `head` selects that local `HEAD` for every launch without fetching. `fresh` selects `origin/HEAD`: team launches fetch it first, other commands use the last-fetched tip. Any other string is handed to Git as a ref without fetching. These settings read the main repository, even when you launch from one of its linked worktrees, so `head` means the main checkout's branch, not the branch under your cursor.
 
 For machine-specific setup that needs a command rather than a file copy, two optional keys live under `[agents.worktree.hooks]`:
 
