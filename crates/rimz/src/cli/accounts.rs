@@ -14,8 +14,8 @@ use rimz::RuntimePaths;
 use rimz::agents::account::{ProviderStatus, RedemptionCode, WindowSpan};
 use rimz::agents::spending::read_provider_spending_cache;
 use rimz::agents::{
-    AccountStatus, BirthLoginErr, LoginCatalog, ProviderLogin, RateLimitWindow, RedeemEffect,
-    ResetCredits,
+    AccountStatus, BirthLoginErr, Entitlement, LoginCatalog, ProviderLogin, RateLimitWindow,
+    RedeemEffect, ResetCredits,
 };
 use rimz::config::{AccountHistory, AccountsConfig, ConfigEditor, MachineConfig, NamedAccount};
 use rimz::harness::assist_log::{Assist, AssistRecord};
@@ -702,10 +702,11 @@ struct AccountRow {
     /// `None` for `default` and for a selected account nothing declares.
     history: Option<AccountHistory>,
     machine_default: bool,
-    /// Why a room cannot launch into this account, with the fix.
+    /// A setup or subscription-access problem, with its fix when available.
     #[serde(skip_serializing_if = "Option::is_none")]
     problem: Option<String>,
     status: AccountStatus,
+    entitlement: Entitlement,
     /// A launch from here uses this account for its kind.
     active: bool,
     default_for: Scopes,
@@ -734,9 +735,17 @@ impl AccountRow {
         let Some(reading) = reading else {
             return;
         };
+        self.entitlement = reading.entitlement;
         self.metered = reading.metered;
         self.windows.clone_from(&reading.windows);
         self.reset_credits.clone_from(&reading.reset_credits);
+        if matches!(self.entitlement, Entitlement::Lapsed { .. }) {
+            self.problem = Some(format!(
+                "plan lapsed: no {} access",
+                render::palette::identity_name(self.kind.as_str())
+            ));
+            return;
+        }
         if self.status == AccountStatus::Ready && status == ProviderStatus::LoggedOut {
             self.status = AccountStatus::LoggedOut;
             self.problem = Some(format!(
@@ -758,6 +767,7 @@ impl AccountRow {
 /// What one run read about a login: its probe record and its panel.
 struct LoginReading {
     status: ProviderStatus,
+    entitlement: Entitlement,
     metered: Option<bool>,
     windows: Vec<RateLimitWindow>,
     reset_credits: Option<ResetCredits>,
@@ -900,6 +910,9 @@ fn login_readings(
                 &spending,
             );
             let reading = LoginReading {
+                entitlement: panel
+                    .as_ref()
+                    .map_or(Entitlement::Ok, |panel| panel.entitlement),
                 reset_credits: panel.as_ref().and_then(|panel| panel.reset_credits.clone()),
                 status: ProviderStatus::from_record(record),
                 metered: panel.as_ref().map(|panel| panel.metered).or(probed_metered),
@@ -934,6 +947,7 @@ fn account_rows(
                 .map(|account| account.history),
             machine_default: accounts.use_accounts.get(kind).cloned().unwrap_or_default() == *name,
             status: AccountStatus::of(problem.as_ref()),
+            entitlement: Entitlement::Ok,
             problem: problem.map(|err| err.to_string()),
             active: standing.active(kind).as_ref() == Some(name),
             default_for: standing.scopes(kind, name),
@@ -1042,7 +1056,11 @@ fn write_accounts(
             },
             render::cell(row.kind.as_str()).fg(render::palette::identity(row.kind.as_str())),
             muted(render::cell(row.name.as_str())),
-            render::cell(row.status.as_str()).fg(render::status::account(row.status)),
+            if matches!(row.entitlement, Entitlement::Lapsed { .. }) {
+                render::cell("lapsed").fg(render::status::role(render::status::StateRole::Failed))
+            } else {
+                render::cell(row.status.as_str()).fg(render::status::account(row.status))
+            },
             five_hour,
             seven_day,
             if row.without_login() {
@@ -1077,8 +1095,16 @@ fn write_accounts(
     if let Some(legend) = legend(rows, deciding) {
         writeln!(w, "{legend}")?;
     }
-    for problem in rows.iter().filter_map(|row| row.problem.as_deref()) {
-        writeln!(w, "{}", render::paint(render::palette::warn(), problem))?;
+    for (row, problem) in rows
+        .iter()
+        .filter_map(|row| row.problem.as_deref().map(|problem| (row, problem)))
+    {
+        let style = if matches!(row.entitlement, Entitlement::Lapsed { .. }) {
+            render::status::role(render::status::StateRole::Failed)
+        } else {
+            render::palette::warn()
+        };
+        writeln!(w, "{}", render::paint(style, problem))?;
     }
     Ok(())
 }
@@ -1090,7 +1116,7 @@ fn unknown_cell() -> render::Cell {
 /// One window's cell in left terms: `–` without a login or a reading, `∞`
 /// for an account without subscription windows or a lifted limit.
 fn window_cell(row: &AccountRow, span: WindowSpan, now: Timestamp) -> render::Cell {
-    if row.without_login() {
+    if row.without_login() || matches!(row.entitlement, Entitlement::Lapsed { .. }) {
         return unknown_cell();
     }
     if row.metered == Some(false) {

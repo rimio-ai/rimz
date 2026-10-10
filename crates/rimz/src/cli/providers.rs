@@ -16,7 +16,9 @@ use super::spinner::Spinner;
 use rimz::RuntimePaths;
 use rimz::agents::account::{AccountsCache, ProviderRecord, ProviderStatus};
 use rimz::agents::spending::{ProviderSpendingCache, read_provider_spending_cache};
-use rimz::agents::{ExtraCredits, ProviderAccountScope, RateLimitWindow, ResetCredits, SpendTally};
+use rimz::agents::{
+    Entitlement, ExtraCredits, ProviderAccountScope, RateLimitWindow, ResetCredits, SpendTally,
+};
 use rimz::agents::{LoginCatalog, ProviderLogin, RoomLoginSet};
 use rimz::config::MachineConfig;
 use rimz::ids::{AgentKind, LoginKey, LoginName};
@@ -201,6 +203,7 @@ struct ProviderReport {
     account: LoginName,
     product_name: String,
     status: ProviderStatus,
+    entitlement: Entitlement,
     probed_at: Option<Timestamp>,
     plan: Option<String>,
     plan_label: Option<String>,
@@ -282,7 +285,12 @@ fn build_report(
     let definition = rimz::agents::spec_by_kind(kind)
         .expect("reports are assembled only for registered provider kinds");
     let account = record.and_then(|record| record.account.as_ref());
-    let raw_plan = account.and_then(|account| account.plan.clone());
+    let entitlement = panel.map_or(Entitlement::Ok, |panel| panel.entitlement);
+    let raw_plan = if matches!(entitlement, Entitlement::Lapsed { .. }) {
+        None
+    } else {
+        account.and_then(|account| account.plan.clone())
+    };
     ProviderReport {
         kind: kind.to_owned(),
         account: login.name().clone(),
@@ -296,6 +304,7 @@ fn build_report(
                 }
             }),
         status: ProviderStatus::from_record(record),
+        entitlement,
         probed_at: record.and_then(|record| timestamp_from_millis(record.probed_at_ms)),
         plan_label: panel.and_then(|panel| panel.plan.clone()).or_else(|| {
             raw_plan
@@ -425,7 +434,9 @@ fn write_comparison(
             } else {
                 cell(report.account.as_str())
             },
-            if report.status == ProviderStatus::LoggedIn {
+            if matches!(report.entitlement, Entitlement::Lapsed { .. }) {
+                cell("lapsed").fg(render::status::role(render::status::StateRole::Failed))
+            } else if report.status == ProviderStatus::LoggedIn {
                 value_cell(report.plan_label.as_deref().map(render::one_line))
             } else {
                 cell(provider_status_label(report.status))
@@ -433,6 +444,9 @@ fn write_comparison(
             },
         ];
         cells.extend(windows.iter().map(|(key, _)| {
+            if matches!(report.entitlement, Entitlement::Lapsed { .. }) {
+                return unknown_cell();
+            }
             if report.metered == Some(false) {
                 return cell("∞");
             }
@@ -569,7 +583,18 @@ fn write_pretty(
             "{} — ",
             render::paint(render::palette::identity(&report.kind).bold(), &name)
         )?;
-        write_optional(out, report.plan_label.as_deref(), "")?;
+        if matches!(report.entitlement, Entitlement::Lapsed { .. }) {
+            write!(
+                out,
+                "{}",
+                render::paint(
+                    render::status::role(render::status::StateRole::Failed),
+                    "lapsed"
+                )
+            )?;
+        } else {
+            write_optional(out, report.plan_label.as_deref(), "")?;
+        }
         write!(
             out,
             " · {}",

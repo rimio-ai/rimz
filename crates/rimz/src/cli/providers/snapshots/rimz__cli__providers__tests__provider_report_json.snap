@@ -8,6 +8,7 @@ expression: json
     "account": "default",
     "product_name": "Claude",
     "status": "logged_in",
+    "entitlement": "ok",
     "probed_at": "2023-11-14T22:13:20Z",
     "plan": "max",
     "plan_label": "Claude Max",

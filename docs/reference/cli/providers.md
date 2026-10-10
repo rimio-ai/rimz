@@ -57,7 +57,7 @@ The heading is the provider and the CLI version of the first account that report
 | --- | --- |
 | (marker) | `●` on the account a launch at the position uses, at most one per provider. `○` on the machine's default for new rooms (`[accounts.use]`, else `default`) when that row is not the `●` one. |
 | `ACCOUNT` | `default` (muted) or the named account. |
-| `PLAN` | The plan label, `–` when unknown, or the status (`logged out`, `unavailable`) when the account is not logged in. |
+| `PLAN` | The plan label, `–` when unknown, `lapsed` in the failure tone when subscription access was rejected, or the status (`logged out`, `unavailable`) when the account is not logged in. A lapse suppresses the cached plan and balances until a successful usage read clears it. |
 | One column per window | Every window any account of the provider reports, labelled as in the block and suffixed `LEFT`. The cell is `N% · 1h23m · 0.9x` (what is left, time to reset, then pace), `100% · ready` before the window's clock starts, `N%` with no known reset, `∞` for a lifted limit or an account without subscription windows, or `–` when unknown. |
 | `EXTRA` | Only when some account reports paid usage: `off` when disabled, `$ left` when the remaining balance is known, else `$ used`, else `–`. |
 | `RESETS` | Only when some account reports reset credits: the count, then `exp` and the time to the soonest expiry (`2 · exp 3d00h`, or `2 · due` once it has passed), the bare count with no known expiry, `-` with none banked, `–` when unknown. |
@@ -127,7 +127,7 @@ A plain run reuses the same caches the sidebar keeps, and refreshes only what is
 | Reading | Plain run | With `--refresh` |
 | --- | --- | --- |
 | Login, plan, account id | Probed when the last result is older than 10 minutes. A probe that could not complete retries after 10 seconds, and the account keeps its facts from the last good probe. | Every login of every provider is probed, whatever `KIND` names. |
-| Windows, paid usage, reset credits | Read from the provider's usage API for each logged-in account whose last read is older than 5 minutes, or 1 hour after a read that failed on missing or rejected credentials. Providers without a usage API show the windows their agents last reported. | Read now for every logged-in account of the selected kinds. |
+| Windows, paid usage, reset credits | Read from the provider's usage API for each logged-in account whose last read is older than 5 minutes, or 1 hour after missing/rejected credentials or subscription access. Providers without a usage API show the windows their agents last reported. | Read now for every logged-in account of the selected kinds. A successful usage read clears a recorded lapse. |
 | Spend | The last published `provider-spending.json`. | Same. |
 
 Setting `RIMZ_OAUTH_USAGE_OFFLINE=1` skips the usage API reads, with or without `--refresh`. Any value but `0`, `false`, or empty turns it on, so `RIMZ_OAUTH_USAGE_OFFLINE=0` leaves the reads running.
@@ -148,8 +148,9 @@ This command never computes spend itself. On a machine where nothing has publish
 | `account` | `default`, or the named account. |
 | `product_name` | Display name; `Claude · work` for a named account. |
 | `status` | `logged_in`, `logged_out` (the probe ran and found no login), or `unavailable` (the probe did not complete). An `unavailable` account can still carry facts from its last good probe. |
+| `entitlement` | `"ok"`, or `{"lapsed":{"since_ms":N}}` when subscription access was rejected; `N` is the first-seen Unix-millisecond timestamp. Independent of `status`. |
 | `probed_at` | RFC 3339 time of the last account probe. |
-| `plan`, `plan_label` | Raw plan tier (`max`) and its display label (`Claude Max`). |
+| `plan`, `plan_label` | Raw plan tier (`max`) and its display label (`Claude Max`); both `null` while lapsed. |
 | `account_id` | Non-secret provider account id. |
 | `sub_provider` | Backing provider name, for agents that run on another provider's account. |
 | `account_scope` | `{"kind": "kind_wide"}`, or `{"kind": "sub_provider", "provider": …, "variant": …}`. |

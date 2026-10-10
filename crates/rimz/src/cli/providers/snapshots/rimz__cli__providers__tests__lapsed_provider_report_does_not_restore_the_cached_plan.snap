@@ -1,0 +1,7 @@
+---
+source: crates/rimz/src/cli/providers/tests.rs
+expression: text
+---
+Claude · v1.2.3
+  ACCOUNT  PLAN    SPEND 7d
+  default  lapsed  -

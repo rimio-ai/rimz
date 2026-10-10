@@ -625,6 +625,7 @@ fn accounts_add_creates_a_hooked_home_and_remove_forgets_only_the_entry() {
             "history": "shared",
             "machine_default": false,
             "status": "ready",
+            "entitlement": "ok",
             "active": false,
             "default_for": [],
             "agents": 0,

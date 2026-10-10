@@ -75,6 +75,8 @@ Three or more providers share the panel under a tab rail, which follows the prov
 
 Reading these figures, and how every one is calculated, is [Token Insight](./insight.md#per-account-the-provider-dashboard). What a full, spent, ticked, or dim bar is telling you is in the [interface reference](../interface/sidebar.md#budget-bars).
 
+If Claude Code subscription access is refused while you are still logged in, the plan label and bars disappear. One bold alarm row replaces them: `plan lapsed · no Claude access · since …`. The time is when RimZ first saw the refusal, not a renewal date. Restore Claude Code access with the provider, then run `rimz providers claude --refresh`; a successful usage read clears the lapse.
+
 ### Bottom chrome
 
 The footer holds `? for help`, which opens the key and filter overlay in place. Search lives on its own line above the dashboard, banded with a cursor while typing and a chip after `Enter`, with a match count at the right. When you have been away from the keyboard, a quiet `zᶻ idle` badge appears in the footer; over SSH, a link-health badge shows the round-trip time. If the sidebar ever cannot read the room, a sticky alert takes the bottom line and says so, because a blank column should never masquerade as an empty room.

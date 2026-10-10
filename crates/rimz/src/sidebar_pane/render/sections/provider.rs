@@ -1,7 +1,7 @@
 //! The pinned provider dashboard — per-provider header, brand emblem, stats and
 //! budget bars — and the W/M fleet store rows.
 
-use crate::agents::{ExtraCredits, RateLimitWindow};
+use crate::agents::{Entitlement, ExtraCredits, RateLimitWindow};
 use crate::config::{BudgetBarConfig, GlyphRole};
 use crate::sidebar_pane::pets::PetView;
 use crate::sidebar_pane::render::labels::value_seam;
@@ -1175,6 +1175,24 @@ fn provider_bar_rows(
     zones: &BudgetBarConfig,
     now: Timestamp,
 ) -> Vec<Vec<Span<'static>>> {
+    if let Entitlement::Lapsed { since_ms } = panel.entitlement {
+        let time = i64::try_from(since_ms)
+            .ok()
+            .and_then(|millis| Timestamp::from_millisecond(millis).ok())
+            .map(crate::utils::time::format_local_timestamp)
+            .unwrap_or_else(|| "unknown".to_owned());
+        let seam = value_seam(theme);
+        return vec![trim_spans_to_width(
+            vec![Span::styled(
+                format!(
+                    "plan lapsed{seam}no {} access{seam}since {time}",
+                    panel.product_name
+                ),
+                theme.alarm(Modifier::BOLD),
+            )],
+            region,
+        )];
+    }
     if !panel.metered {
         return vec![api_credits_bar_row(
             theme,

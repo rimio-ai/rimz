@@ -201,6 +201,7 @@ On a terminal narrower than the table, `HOME` clips with `…` and every other c
 | --- | --- | --- |
 | `ready` | A room can launch into the account. | none |
 | `logged out` | The home and its hooks are in order, but the provider reports no login under it. A setup problem below wins over it. | The provider's login command under the home (`CLAUDE_CONFIG_DIR=<home> claude`, `CODEX_HOME=<home> codex`, or the bare command for `default`) |
+| `lapsed` | Subscription access was rejected, independently of login and setup status. The status and problem use the failure tone. | `plan lapsed: no <product> access` (`no Claude access` for Claude); restore access with the provider, then `rimz providers claude --refresh` |
 | `home missing` | The home is not a directory. | `rimz accounts add <kind> <name>`, or `rimz hooks install <kind>` for `default` |
 | `hooks missing` | The home lacks RimZ hooks. | `rimz accounts add <kind> <name>`, or `rimz hooks install <kind>` for `default` |
 | `hooks untrusted` | The hooks are installed but the provider has not trusted them. Codex gates new hooks behind its own trust step. | Start the provider under the home (`CODEX_HOME=<home> codex`, or plain `codex` for `default`), run `/hooks`, and trust the RimZ hooks |
@@ -218,7 +219,8 @@ On a terminal narrower than the table, `HOME` clips with `…` and every other c
 | `history` | `shared` or `standalone`; `null` for `default` and for a selected account nothing declares. |
 | `machine_default` | Always present: `true` for the machine's selection for new rooms, or the `default` row when no selection is set. |
 | `problem` | The problem line with its fix. Present only when the account has a problem. |
-| `status` | The `STATUS` word in snake case: `ready`, `logged_out`, `home_missing`, `hooks_missing`, `hooks_untrusted`, or `unavailable`. |
+| `status` | Launch setup/login status in snake case: `ready`, `logged_out`, `home_missing`, `hooks_missing`, `hooks_untrusted`, or `unavailable`. A lapse changes the displayed `STATUS`, not this launch-health value. |
+| `entitlement` | Always present: `"ok"`, or `{"lapsed":{"since_ms":N}}` with the first-seen Unix-millisecond timestamp. While lapsed, `problem` is `plan lapsed: no <product> access`, using the same product name as the sidebar, and quota readings are suppressed. |
 | `active` | `true` on the account marked `●`. |
 | `default_for` | Always present: every layer that selects the account, of `this_room` (a room pin only), `this_project`, and `new_rooms`, or `[]`. |
 | `agents` | The `AGENTS` count, `0` for none, or `null` when the rooms or one live room's agents could not be read. |
