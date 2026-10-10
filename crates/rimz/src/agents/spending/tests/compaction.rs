@@ -9,8 +9,16 @@ fn cache_compaction_rolls_old_entries_losslessly_and_is_idempotent() {
     let other_file = dir.path().join("other.jsonl");
     let mut old_project = cached_entry(NOW_SECS - 40 * 86_400, 1.0, "old-project");
     old_project.model = Some("claude-opus-4-8".to_owned());
+    old_project.timing = Some(ResponseTiming {
+        ms: 2_000,
+        output: 100,
+    });
     let mut old_project_same_bucket = cached_entry(NOW_SECS - 40 * 86_400, 2.0, "old-project");
     old_project_same_bucket.model = Some("claude-opus-4-8".to_owned());
+    old_project_same_bucket.timing = Some(ResponseTiming {
+        ms: 4_000,
+        output: 300,
+    });
     let mut old_other = cached_entry(NOW_SECS - 60 * 86_400, 3.0, "old-other");
     old_other.model = Some("claude-sonnet-4-6".to_owned());
     let mut recent = cached_entry(NOW_SECS - RAW_RETAIN_SECS + 86_400, 4.0, "recent");
@@ -83,6 +91,13 @@ fn cache_compaction_rolls_old_entries_losslessly_and_is_idempotent() {
         before_scoped
     );
     let entries = &cache.files[&project_file.to_string_lossy().into_owned()].entries;
+    assert_eq!(
+        entries.iter().find(|entry| entry.rolled).unwrap().timing,
+        Some(ResponseTiming {
+            ms: 6_000,
+            output: 400
+        })
+    );
     assert!(
         entries
             .iter()
@@ -130,6 +145,7 @@ fn cache_compaction_handles_sidechain_replay_edges() {
         has_speed: false,
         model: Some("claude-opus-4-8".to_owned()),
         rolled: false,
+        timing: None,
     };
     let replay_entry = CachedEntry {
         cost_usd: 9.0,
@@ -182,6 +198,7 @@ fn cache_compaction_handles_sidechain_replay_edges() {
         has_speed: false,
         model: Some("claude-opus-4-8".to_owned()),
         rolled: false,
+        timing: None,
     };
     let recent_replay = CachedEntry {
         ts_secs: NOW_SECS - RAW_RETAIN_SECS + 86_400,

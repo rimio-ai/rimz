@@ -2,6 +2,11 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
+pub(in crate::agents) fn iso_to_unix_ms(ts: &str) -> Option<u64> {
+    let timestamp: jiff::Timestamp = ts.parse().ok()?;
+    u64::try_from(timestamp.as_millisecond()).ok()
+}
+
 pub fn unix_secs_now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)

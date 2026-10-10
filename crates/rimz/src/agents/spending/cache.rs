@@ -73,7 +73,26 @@ use super::aggregate::{
 /// Claude sessions whose nested iteration `model` is null rebuild once.
 /// v25 drops Grok child-session transcripts whose usage the parent already
 /// folds, so finalized child sessions cached with priced entries rebuild once.
-pub(crate) const SPENDING_CACHE_VERSION: u32 = 25;
+/// v26: `g` response timing (`m` ms, `o` output tokens) for the per-model tok/s figure.
+pub(crate) const SPENDING_CACHE_VERSION: u32 = 26;
+
+/// Output tokens and elapsed milliseconds for timed responses.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResponseTiming {
+    #[serde(rename = "m")]
+    pub ms: u64,
+    #[serde(rename = "o")]
+    pub output: u64,
+}
+
+const MIN_TIMED_OUTPUT_TOKENS: u64 = 100;
+const MIN_RESPONSE_MS: u64 = 200;
+const MAX_RESPONSE_MS: u64 = 300_000;
+
+pub(in crate::agents) fn response_timing(output: u64, ms: u64) -> Option<ResponseTiming> {
+    (output >= MIN_TIMED_OUTPUT_TOKENS && ms > MIN_RESPONSE_MS && ms <= MAX_RESPONSE_MS)
+        .then_some(ResponseTiming { ms, output })
+}
 
 /// On-disk cache persisted at shared state `spending.json`.
 ///
@@ -135,8 +154,9 @@ pub struct FileCacheEntry {
 /// Where an incremental spend parse left off: the byte offset just past the
 /// last consumed line, plus the adapter's opaque cross-line state (Codex
 /// carries its cumulative token totals and tracked model so a resumed delta
-/// subtraction stays exact). Stored per file in the spending cache; a state
-/// shape change bumps `SPENDING_CACHE_VERSION`.
+/// subtraction stays exact; Claude carries its pricing fingerprint and the
+/// input and in-flight message timestamps). Stored per file in the spending
+/// cache; a state shape change bumps `SPENDING_CACHE_VERSION`.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct SpendCursor {
     #[serde(default, rename = "o", skip_serializing_if = "is_zero")]
@@ -209,6 +229,9 @@ pub struct CachedEntry {
     /// Output tokens (Codex `output_tokens` already includes reasoning).
     #[serde(default, rename = "o", skip_serializing_if = "is_zero")]
     pub output: u64,
+    /// Timed-response counters, summed together when old rows compact.
+    #[serde(default, rename = "g", skip_serializing_if = "Option::is_none")]
+    pub timing: Option<ResponseTiming>,
     /// Cache-write tokens (Claude `cache_creation_input_tokens`, Codex
     /// `cache_write_input_tokens`, Pi `cacheWrite`).
     #[serde(default, rename = "w", skip_serializing_if = "is_zero")]
@@ -458,6 +481,7 @@ fn rolled_entry_from(entry: &CachedEntry) -> CachedEntry {
         cost_usd: entry.cost_usd,
         input: entry.input,
         output: entry.output,
+        timing: entry.timing,
         cache_write: entry.cache_write,
         cache_read: entry.cache_read,
         tool_calls: entry.tool_calls.clone(),
@@ -483,6 +507,13 @@ fn merge_rollup(rollups: &mut BTreeMap<RollupKey, CachedEntry>, entry: CachedEnt
             rolled.output += entry.output;
             rolled.cache_write += entry.cache_write;
             rolled.cache_read += entry.cache_read;
+            if let Some(timing) = entry.timing {
+                let total = rolled
+                    .timing
+                    .get_or_insert(ResponseTiming { ms: 0, output: 0 });
+                total.ms += timing.ms;
+                total.output += timing.output;
+            }
             for (name, count) in &entry.tool_calls {
                 let total = rolled.tool_calls.entry(name.clone()).or_default();
                 *total = total.saturating_add(*count);

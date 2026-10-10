@@ -842,6 +842,7 @@ fn claude_duplicate_dedup_keeps_the_richest_main_thread_record() {
         has_speed: false,
         model: Some("claude-opus-4-8".to_owned()),
         rolled: false,
+        timing: None,
     };
     let small = CachedEntry {
         cost_usd: 1.0,
@@ -1042,6 +1043,7 @@ fn daily_and_model_rollups_share_the_dedup_pass() {
         has_speed: false,
         model: Some("claude-opus-4-8".to_owned()),
         rolled: false,
+        timing: None,
     };
     let replay = CachedEntry {
         is_sidechain: true,
@@ -1066,6 +1068,7 @@ fn daily_and_model_rollups_share_the_dedup_pass() {
         has_speed: false,
         model: Some("gpt-5-codex".to_owned()),
         rolled: false,
+        timing: None,
     };
     let old = CachedEntry {
         ts_secs: NOW_SECS - 40 * 86_400,
@@ -1120,6 +1123,8 @@ fn spend_window_merge_preserves_every_displayed_dimension() {
         tool_calls: 1,
         tools: BTreeMap::from([("shell".to_owned(), 1)]),
         sessions: 1,
+        timed_ms: 2_000,
+        timed_output: 100,
     };
     total.merge(&SpendWindow {
         usd: 2.0,
@@ -1131,6 +1136,8 @@ fn spend_window_merge_preserves_every_displayed_dimension() {
         tool_calls: 2,
         tools: BTreeMap::from([("shell".to_owned(), 1), ("apply_patch".to_owned(), 1)]),
         sessions: 2,
+        timed_ms: 4_000,
+        timed_output: 300,
     });
 
     assert_eq!(total.usd, 3.0);
@@ -1139,4 +1146,93 @@ fn spend_window_merge_preserves_every_displayed_dimension() {
     assert_eq!(total.tools["shell"], 2);
     assert_eq!(total.tools["apply_patch"], 1);
     assert_eq!(total.sessions, 3);
+    assert_eq!(total.timed_ms, 6_000);
+    assert_eq!(total.timed_output, 400);
+    assert_eq!(total.tokens_per_sec(), Some(67));
+}
+
+#[test]
+fn response_timing_filters_boundaries() {
+    for (output, ms) in [(99, 1_000), (100, 0), (100, 200), (100, 300_001)] {
+        assert_eq!(response_timing(output, ms), None);
+    }
+    assert_eq!(
+        response_timing(100, 201),
+        Some(ResponseTiming {
+            ms: 201,
+            output: 100
+        })
+    );
+    assert_eq!(
+        response_timing(100, 300_000),
+        Some(ResponseTiming {
+            ms: 300_000,
+            output: 100
+        })
+    );
+}
+
+#[test]
+fn timed_windows_use_ratio_of_sums() {
+    let path = PathBuf::from("/x/claude.jsonl");
+    let mut first = cached_entry(NOW_SECS, 1.0, "session");
+    first.timing = Some(ResponseTiming {
+        ms: 2_000,
+        output: 100,
+    });
+    let mut second = first.clone();
+    second.timing = Some(ResponseTiming {
+        ms: 4_000,
+        output: 300,
+    });
+    let untimed = cached_entry(NOW_SECS, 2.0, "session");
+    let cache = SpendingDiskCache {
+        files: HashMap::from([cached_file(&path, vec![first, second, untimed])]),
+        ..Default::default()
+    };
+    let files = vec![spending_file(claude_adapter(), path)];
+    let counted = dedup_cached_entries(&files, &cache).into_counted();
+    let spending = aggregate_spending(&files, &cache, &counted, NOW_SECS, &HeadlineSpec::default());
+    assert_eq!(spending.total.year.tokens_per_sec(), Some(67));
+    assert_eq!(SpendWindow::default().tokens_per_sec(), None);
+    assert_eq!(
+        SpendWindow {
+            timed_output: u64::MAX,
+            timed_ms: 1_000,
+            ..Default::default()
+        }
+        .tokens_per_sec(),
+        Some(u64::MAX)
+    );
+}
+
+#[test]
+fn duplicate_timing_breaks_only_usage_ties_in_both_folds() {
+    let mut first = cached_entry(NOW_SECS, 1.0, "session");
+    first.message_id = Some("message".to_owned());
+    let mut timed = first.clone();
+    timed.timing = Some(ResponseTiming {
+        ms: 1_000,
+        output: 100,
+    });
+    let mut latest = timed.clone();
+    latest.timing.as_mut().unwrap().ms = 2_000;
+    let rows = vec![first, timed, latest.clone()];
+    let mut chunk = rows.clone();
+    refresh::dedup_chunk(&mut chunk);
+    assert_eq!(chunk, vec![latest.clone()]);
+    let path = PathBuf::from("/x/claude.jsonl");
+    let cache = SpendingDiskCache {
+        files: HashMap::from([cached_file(&path, rows)]),
+        ..Default::default()
+    };
+    let files = vec![spending_file(claude_adapter(), path)];
+    let counted = dedup_cached_entries(&files, &cache).into_counted();
+    assert_eq!(counted.len(), 1);
+    assert_eq!(aggregate::DedupPayload::entry(&counted[0]), &latest);
+    let mut richer = latest.clone();
+    richer.has_speed = true;
+    richer.timing = None;
+    assert!(aggregate::should_replace_duplicate(&richer, &latest));
+    assert!(!aggregate::should_replace_duplicate(&latest, &richer));
 }

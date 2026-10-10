@@ -206,6 +206,7 @@ fn seed_spending_history(
                     has_speed: false,
                     model: Some("gpt-5.4".to_owned()),
                     rolled: false,
+                    timing: None,
                 }
             })
             .collect();

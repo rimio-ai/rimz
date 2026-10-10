@@ -492,6 +492,7 @@ mod tests {
             has_speed: false,
             model: Some("fixture".to_owned()),
             rolled: false,
+            timing: None,
         }
     }
 

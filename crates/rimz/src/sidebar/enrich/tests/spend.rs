@@ -140,6 +140,7 @@ fn cached_enrich_waits_for_producer_workspace_publication() {
                 has_speed: false,
                 model: None,
                 rolled: false,
+                timing: None,
             }],
             unknown_models: BTreeMap::new(),
         },

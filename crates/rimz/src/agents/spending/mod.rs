@@ -58,10 +58,11 @@ pub(crate) use aggregate::{NO_BURST_CUTOFF, SESSION_GAP_SECS, live_session_keys,
 pub(crate) use aggregate::{RAW_RETAIN_SECS, cold_parse_out_of_window};
 #[cfg(test)]
 pub(crate) use aggregate::{SKIP_PARSE_MARGIN_SECS, WIDEST_SPEND_WINDOW_SECS};
+pub(in crate::agents) use cache::response_timing;
 use cache::{CacheStamp, SPENDING_CACHE_VERSION, cache_stamp};
 pub use cache::{
-    CachedEntry, FileCacheEntry, SpendCursor, SpendParse, SpendingDiskCache, read_spending_cache,
-    write_spending_cache,
+    CachedEntry, FileCacheEntry, ResponseTiming, SpendCursor, SpendParse, SpendingDiskCache,
+    read_spending_cache, write_spending_cache,
 };
 #[cfg(test)]
 pub(crate) use cache::{compact_spending_cache, peek_cache_version};
@@ -80,11 +81,13 @@ pub use publish::{
     ProviderSpendingCache, WorkspaceSpendingCache, read_provider_spending_cache,
     read_workspace_spending_cache, write_provider_spending_cache, write_workspace_spending_cache,
 };
+#[cfg(test)]
+pub(in crate::agents) use refresh::dedup_chunk;
 use refresh::{RefreshCallbacks, recorded_unknown_models, refresh_spending_cache};
 pub(in crate::agents) use refresh::{
     SplitPrice, is_priceable_model_name, lookup_split_price, price_split, record_unknown_model,
 };
-pub(in crate::agents) use time::iso_to_unix_secs;
+pub(in crate::agents) use time::{iso_to_unix_ms, iso_to_unix_secs};
 pub use time::{unix_secs_now, utc_date};
 
 /// Cadence for cursor checkpoints and partial aggregates of changed spending history.
