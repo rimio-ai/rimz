@@ -233,6 +233,8 @@ fn focus_repair_writer_argv_parses_structured_record() {
         session_name: "room".to_owned(),
         generation: 1,
         evidence: Vec::new(),
+        observed: Vec::new(),
+        attempts: 1,
         target: rimz::PaneId::from_parts(rimz::MuxName::Zellij, "terminal_1"),
         outcome: FocusRepairOutcome::AcceptedUnconfirmed,
         error: None,

@@ -784,6 +784,8 @@ impl LoopState {
                 session_name: self.config.session_name.clone(),
                 generation: repair.generation,
                 evidence: repair.clients.clone(),
+                observed: Vec::new(),
+                attempts: 0,
                 target: repair.pane_id.clone(),
                 outcome: FocusRepairOutcome::Failed,
                 error: Some(reason.to_owned()),
@@ -1857,6 +1859,8 @@ impl LoopState {
                 session_name: anchor.session_name.clone(),
                 generation: anchor.repair_generation.unwrap_or_default(),
                 evidence: anchor.pre_action.clone(),
+                observed: Vec::new(),
+                attempts: 0,
                 target: anchor.pane_id.clone(),
                 outcome,
                 error: None,
@@ -1977,6 +1981,13 @@ fn spawn_pane_focus(
                 order: presentation.1,
             },
         );
+        let observed = match &requested {
+            Err(crate::mux::focus_anchor::FocusActionError::PreObservationChanged { observed }) => {
+                observed.clone()
+            }
+            Ok(_) => expected_pre_action.clone().unwrap_or_default(),
+            _ => Vec::new(),
+        };
         let outcome = match requested {
             Ok(nonce) => match crate::mux::focus_anchor::dispatch_action(
                 backend.as_ref(),
@@ -2006,7 +2017,9 @@ fn spawn_pane_focus(
                     workspace_id: runtime.workspace_id.clone(),
                     session_name: session_name.clone(),
                     generation,
-                    evidence: expected_pre_action.unwrap_or_default(),
+                    evidence: expected_pre_action.clone().unwrap_or_default(),
+                    observed: observed.clone(),
+                    attempts: 1,
                     target: pane_id.clone(),
                     outcome: if outcome.1 == "accepted_unconfirmed" {
                         FocusRepairOutcome::AcceptedUnconfirmed
@@ -2018,7 +2031,7 @@ fn spawn_pane_focus(
             );
         }
         if let Some(error) = outcome.2 {
-            debug!(pane = %pane_id, error, "sidebar pane focus failed");
+            debug!(pane = %pane_id, error, expected = ?expected_pre_action, observed = ?observed, "sidebar pane focus failed");
         }
     });
 }

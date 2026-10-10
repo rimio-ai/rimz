@@ -32,10 +32,18 @@ pub struct FocusRepairRecord {
     pub session_name: String,
     pub generation: u64,
     pub evidence: Vec<ClientPaneView>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub observed: Vec<ClientPaneView>,
+    #[serde(default = "default_attempts")]
+    pub attempts: u32,
     pub target: PaneId,
     pub outcome: FocusRepairOutcome,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+}
+
+fn default_attempts() -> u32 {
+    1
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -119,6 +127,8 @@ mod tests {
                 client_id: crate::ids::MuxClientId::Zellij(3),
                 pane_id: PaneId::from_parts(MuxName::Zellij, "terminal_1"),
             }],
+            observed: Vec::new(),
+            attempts: 1,
             target: PaneId::from_parts(MuxName::Zellij, "terminal_2"),
             outcome: FocusRepairOutcome::AcceptedUnconfirmed,
             error: None,
@@ -127,7 +137,9 @@ mod tests {
 
     #[test]
     fn record_round_trips_and_appends() {
-        let record = record();
+        let mut record = record();
+        record.observed = record.evidence.clone();
+        record.attempts = 3;
         let raw = serde_json::to_string(&record).expect("serialize");
         assert_eq!(
             serde_json::from_str::<FocusRepairRecord>(&raw).expect("parse"),
@@ -138,6 +150,26 @@ mod tests {
         append_to(dir.path(), &record);
         assert!(dir.path().join("focus-repairs.log.jsonl").is_file());
         assert_eq!(recent(dir.path()), vec![record]);
+    }
+
+    #[test]
+    fn old_records_deserialize_with_dispatch_defaults() {
+        let mut legacy = serde_json::to_value(record()).expect("record json");
+        let fields = legacy.as_object_mut().expect("record object");
+        fields.remove("observed");
+        fields.remove("attempts");
+        let parsed: FocusRepairRecord =
+            serde_json::from_value(legacy).expect("old records remain readable");
+        assert!(parsed.observed.is_empty());
+        assert_eq!(parsed.attempts, 1);
+        assert_eq!(parsed, record());
+    }
+
+    #[test]
+    fn empty_observed_sample_is_omitted_from_the_wire() {
+        let value = serde_json::to_value(record()).expect("record json");
+        assert!(value.get("observed").is_none());
+        assert_eq!(value["attempts"], 1);
     }
 
     #[test]
