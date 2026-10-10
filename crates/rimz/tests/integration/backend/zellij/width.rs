@@ -1,4 +1,5 @@
 use std::ops::RangeInclusive;
+use std::time::{Duration, Instant};
 
 use rimz::ids::{MuxName, PaneId};
 use rimz::mux::{LayoutPanes, MuxBackend, PaneCmd, TabOptions, ZellijBackend};
@@ -100,31 +101,99 @@ fn renderer_repicks_the_viewport_after_a_wider_attach() {
     let name = room.name().to_owned();
     let cwd = TempDir::new().expect("cwd tempdir");
     let rimz = crate::common::cargo_bin("rimz", env!("CARGO_BIN_EXE_rimz"));
-    let sidebar = sidebar_opts(&name, cwd.path(), rimz, 50);
+    let sidebar = sidebar_opts(&name, cwd.path(), rimz, ATTACHED_VIEW_COLS);
     let backend = ZellijBackend::with_runtime_dir(xdg);
     publish_room_bin(xdg, &sidebar);
     backend.open_sidebar(&sidebar, None).expect("open sidebar");
     wait_for_pane_count(xdg, &name, 2);
 
-    // Seed a detached 50-column topology; it must not become the attached viewport's target.
-    // Prove convergence within half a stop step of the live target and parking there.
-    write_topology_cache_from_list_panes(xdg, &sidebar.workspace_id, &name);
-    let _client = AttachedClient::attach(&room, ATTACHED_VIEW_COLS, ATTACHED_VIEW_ROWS);
-    let _mirror = topology_cache_mirror(xdg, &sidebar.workspace_id, &name);
+    // Outlast the real plugin's 60-second keepalive and the renderer's first backstop.
+    // No synthetic cache or mirror may mask the birth client's departure.
+    std::thread::sleep(Duration::from_secs(65));
+    let runtime =
+        rimz::RuntimePaths::under(sidebar.workspace_id.clone(), xdg).expect("runtime paths");
+    if let Some(cache) = rimz::mux::zellij::pane_topology::read_pane_topology_cache(&runtime, &name)
+    {
+        assert!(
+            cache.panes.iter().all(|pane| !pane.tab_viewed),
+            "the birth client's viewed proof survived its departure: {cache:?}",
+        );
+    }
 
     let target_cols = rimz::mux::SidebarWidth::default().target_cols(u64::from(ATTACHED_VIEW_COLS));
     let stop_step = u64::from(ATTACHED_VIEW_COLS).div_ceil(20);
     let band = settled_band(target_cols, stop_step);
+    let attach_at_ms = rimz::utils::time::unix_now_ms();
+    let mut sampled_widths = Vec::new();
+    let _client = std::thread::scope(|scope| {
+        let attaching =
+            scope.spawn(|| AttachedClient::attach(&room, ATTACHED_VIEW_COLS, ATTACHED_VIEW_ROWS));
+        let mut attached_at = None;
+        loop {
+            let snapshot = list_panes(xdg, &name).expect("list panes during attach");
+            let view_cols = snapshot
+                .panes
+                .iter()
+                .filter(|pane| !pane.is_floating && !pane.is_suppressed)
+                .map(|pane| pane.pane_x + pane.pane_columns)
+                .max();
+            if view_cols == Some(u64::from(ATTACHED_VIEW_COLS)) {
+                let widths: Vec<_> = snapshot
+                    .panes
+                    .iter()
+                    .filter(|pane| pane.is_sidebar())
+                    .map(|pane| pane.pane_columns)
+                    .collect();
+                assert!(
+                    widths.len() == 1 && widths.iter().all(|width| band.contains(width)),
+                    "sidebar walked outside {band:?} after attach: {widths:?}; earlier samples: {sampled_widths:?}",
+                );
+                sampled_widths.extend(widths);
+            }
+            if attaching.is_finished()
+                && attached_at.get_or_insert_with(Instant::now).elapsed() >= SETTLE_WINDOW
+            {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        attaching.join().expect("attached client thread")
+    });
     assert!(
-        wait_for_sidebar_columns(xdg, &name, std::slice::from_ref(&band)),
-        "renderer did not converge against the attached viewport: {:?}",
-        sidebar_columns_by_tab(xdg, &name),
+        !sampled_widths.is_empty(),
+        "no attached sidebar geometry was sampled",
     );
-    std::thread::sleep(SETTLE_WINDOW);
-    let widths = sidebar_columns_by_tab(xdg, &name);
+    let state = rimz::StatePaths::under(sidebar.workspace_id.clone(), xdg).expect("state paths");
+    let diag =
+        rimz::diag::DiagSink::under(state.root.clone(), state.workspace_id.clone(), &name, None);
+    // A room that never nudged may never have written a diagnostic record at all.
+    let records = match std::fs::read_to_string(diag.log_path().expect("diagnostic path")) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        records => records.expect("room diagnostics"),
+    };
+    let premature_nudges: Vec<_> = records
+        .lines()
+        .map(|line| {
+            serde_json::from_str::<rimz::diag::record::DiagEnvelope>(line)
+                .expect("diagnostic record")
+        })
+        .filter(|record| {
+            record.at_ms < attach_at_ms
+                && matches!(
+                    record.event,
+                    rimz::diag::record::DiagEvent::SidebarWidthNudge { .. }
+                )
+        })
+        .collect();
     assert!(
-        widths.len() == 1 && widths.values().all(|width| band.contains(width)),
-        "renderer left the half-step band around {target_cols} after settling: {widths:?}",
+        premature_nudges.is_empty(),
+        "renderer nudged a detached tab before {attach_at_ms}: {premature_nudges:?}",
+    );
+    let cache = rimz::mux::zellij::pane_topology::read_pane_topology_cache(&runtime, &name)
+        .expect("real plugin topology after attach");
+    assert!(cache.writer.is_some() && cache.panes.iter().any(|pane| pane.tab_viewed));
+    eprintln!(
+        "attach_at_ms={attach_at_ms}; no detached nudges; sidebar samples={sampled_widths:?}"
     );
 }
 
