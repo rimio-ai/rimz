@@ -50,6 +50,27 @@ fn streamed_response_timing_survives_interleaved_inputs_and_resume() {
 }
 
 #[test]
+fn sidechain_user_lines_leave_the_response_start_unmoved() {
+    let dir = TempDir::new().unwrap();
+    let path = write_jsonl(
+        dir.path(),
+        "sidechain.jsonl",
+        &[
+            r#"{"type":"user","timestamp":"2026-01-01T10:00:00.000Z","message":{"content":"prompt"}}"#,
+            r#"{"type":"user","isSidechain":true,"timestamp":"2026-01-01T10:00:01.000Z","message":{"content":"child prompt"}}"#,
+            r#"{"timestamp":"2026-01-01T10:00:03.000Z","costUSD":1,"requestId":"req","message":{"id":"msg","usage":{"output_tokens":300}}}"#,
+        ],
+    );
+    assert_eq!(
+        ClaudeAdapter.parse_spend(&path, None, &no_prices()).entries[0].timing,
+        Some(ResponseTiming {
+            ms: 3_000,
+            output: 300
+        })
+    );
+}
+
+#[test]
 fn pricing_fingerprint_shares_an_object_cursor_with_response_timing() {
     let dir = TempDir::new().unwrap();
     let path = write_jsonl(dir.path(), "cursor.jsonl", &[]);

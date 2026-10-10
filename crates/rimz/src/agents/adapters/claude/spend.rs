@@ -358,6 +358,8 @@ struct ClaudeInput {
     #[serde(rename = "type")]
     kind: String,
     timestamp: Option<String>,
+    #[serde(rename = "isSidechain")]
+    is_sidechain: Option<bool>,
 }
 
 /// Parse a Claude JSONL file into raw `CachedEntry` values, resuming from
@@ -365,7 +367,8 @@ struct ClaudeInput {
 /// user timestamp and the in-flight message's fixed start survive suffix parses.
 ///
 /// ### Fast pre-filter
-/// Usage lines are priced; top-level user lines advance the latest input timestamp.
+/// Usage lines are priced; top-level user lines advance the latest input
+/// timestamp, except sidechain (`isSidechain: true`) lines, which are skipped.
 /// Other lines are skipped before deserialization.
 /// Lines carrying `null` at a non-nullable schema path fail deserialization.
 ///
@@ -398,6 +401,9 @@ pub fn parse_claude_spend(
             && let Ok(input) = serde_json::from_slice::<ClaudeInput>(line)
             && input.kind == "user"
         {
+            if input.is_sidechain == Some(true) {
+                continue;
+            }
             if let Some(ms) = input.timestamp.as_deref().and_then(iso_to_unix_ms) {
                 state.latest_user_ms = Some(state.latest_user_ms.map_or(ms, |prior| prior.max(ms)));
             }
