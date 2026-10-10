@@ -183,10 +183,10 @@ One row per module at the granularity `survey` ranks. `holds` carries the review
 | `remote_control` | holds; landed pass-15c | `944c8120e` | 30 | one enable preflight; typed snapshot and batch toggle. |
 | `room` | holds; landed pass-28f | `f4084e548` | 30 | owns live-tab admission and managed birth with source-specific ownership. |
 | `sandbox` | holds; landed pass-28f; pass-31d | `2f84d791a` | 30 | launch preflight admits skills before probing isolation; callers run `plan` then `apply`. |
-| `sidebar` | landed pass-4 | — | — | election, fusion, refresh lanes, own cadences; interiors have rows. |
+| `sidebar` | landed pass-4 | — | — | fusion, host refresh lanes, own cadences; interiors have rows. |
 | `sidebar/(root)` | holds; landed pass-23c | `1830bd0c6` | 30 | one data plane; `pub` items are binary, bench or integration reached, or signature floors. |
 | `sidebar/refresh` | holds; landed pass-29e | `eb03b2204` | 30 | one rate-limit transaction and one `pub` account-cache publish entry, sharing keyed fusion behind one producer/login boundary. |
-| `sidebar/consumer` | holds; landed pass-23c | `1830bd0c6` | 30 | two readers `pub` for the hotpath bench. |
+| `sidebar/consumer` | holds; landed pass-23c | `1830bd0c6` | 30 | published-cache readers; renderer adoption and its bench retired. |
 | `sidebar/frame` | holds; landed pass-23c | `1830bd0c6` | 30 | `PaneFrame` wire public field by field. |
 | `sidebar/produce` | holds; landed pass-17a | `78fa580ea` | 30 | named entries, no fold-mode core. |
 | `sidebar/enrich` | holds; landed pass-20b | `b96a0f293` | 30 | ordered fold spine (fold order is an invariant). |
@@ -253,7 +253,7 @@ One row per module at the granularity `survey` ranks. `holds` carries the review
 | `build_id` | holds; landed pass-8; pass-24c | `e083557ba` | 30 | `current_if_ready` deferred. |
 | `(root)` | holds; landed pass-24c | `e083557ba` | 30 | `lib.rs` declarations and public re-exports. |
 | `channel` | holds; landed pass-24c | `e083557ba` | 30 | record types named by `cli/channel.rs`. |
-| `daemon_content` | holds; landed pass-24c | `e083557ba` | 30 | `resolve_content` at crate reach for the elder. |
+| `daemon_content` | holds; landed pass-24c | `e083557ba` | 30 | `resolve_content` at crate reach for the host. |
 | `lane` | holds; landed pass-24c | `e083557ba` | 30 | counters are the observability lane's vocabulary. |
 | `observability` | holds; landed pass-24c | `e083557ba` | 30 | entry points reached from `main.rs`. |
 | `sock` | holds; landed pass-24c | `e083557ba` | 30 | `SocketPathTooLong` is a `disk::paths` error variant. |
@@ -281,7 +281,7 @@ One row per intended upward edge, `` `from` → `to` `` with an optional `to::{a
 | `agents` → `address` | 1 | keep | `agent_handle` is the canonical routable address |
 | `daemon_view` → `sidebar::timing` | 1 | keep | `EVENT_PANE_TTL` is the sidebar's event-mode cadence |
 | `daemon_view` → `daemon_content` | 1 | keep | slot cardinality and pane policy stay one decision |
-| `daemon_view` → `sidebar::frame` | 1 | keep | the elder reads the published `PaneFrame` as disposable topology truth |
+| `daemon_view` → `sidebar::frame` | 1 | keep | the host reads the published `PaneFrame` as disposable topology truth |
 | `daemon_view` → `sidebar::cache` | 2 | keep | a stale frame never suppresses repair |
 | `room` → `sidebar` | 3 | keep | birth purges rebirth heartbeats; teardown orders the orphan sweep |
 | `room` → `sidebar::body_filter` | 1 | keep | pristine birth resets presentation state (`0e3b80c55`) |

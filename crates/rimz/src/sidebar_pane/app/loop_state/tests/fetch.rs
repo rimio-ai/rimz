@@ -77,7 +77,7 @@ fn pre_tab_projection_with_a_newer_own_frame_seeds_without_selection() {
     )
     .unwrap();
 
-    rig.state.seed_published(FetchRole::Consumer);
+    rig.state.seed_published();
     let records = focus_records(&rig);
     assert_eq!(records.len(), 1, "the seed records its paint decision");
     assert_eq!(records[0]["seed"], true);
@@ -152,7 +152,7 @@ fn pre_tab_seed_and_worker_fold_paint_resting_cards_until_correction() {
         )
         .unwrap();
 
-    rig.state.seed_published(FetchRole::Consumer);
+    rig.state.seed_published();
     let traced_seed = focus_records(&rig);
     assert_eq!(traced_seed.len(), 1, "the seed records its paint decision");
     assert_eq!(traced_seed[0]["source"], "published");
@@ -204,7 +204,7 @@ fn pre_tab_seed_and_worker_fold_paint_resting_cards_until_correction() {
     );
 
     let published_focus = seed.focused_pane.clone();
-    rig.fold(seed, SnapshotSource::Published);
+    rig.fold(seed, SnapshotSource::Cached);
     assert_eq!(
         focus_records(&rig),
         traced_seed,
@@ -360,7 +360,7 @@ fn fused_focus_trace_names_the_event_applied_at_the_paint_decision() {
     let now_ms = crate::utils::time::unix_now_ms();
     pulled.panes_produced_at_ms = Some(now_ms - 2);
     pulled.panes_observed_at_ms = Some(now_ms - 2);
-    rig.fold(pulled, SnapshotSource::Published);
+    rig.fold(pulled, SnapshotSource::Cached);
     rig.event(SidebarEvent::FocusChanged {
         focused: vec![shell.pane_id.clone()],
         unfocused: Vec::new(),
@@ -394,7 +394,7 @@ fn published_seed_commits_before_delivery_and_keeps_the_final_correction() {
     rig.runtime.ensure_dirs().unwrap();
     let placeholder =
         SidebarSnapshot::build_with_agents(rig.ws.clone(), Vec::new(), rig.state.current.now);
-    rig.state.seed_published(FetchRole::Consumer);
+    rig.state.seed_published();
     assert_eq!(
         serde_json::to_value(&rig.state.current).unwrap(),
         serde_json::to_value(&placeholder).unwrap(),
@@ -448,10 +448,9 @@ fn published_seed_commits_before_delivery_and_keeps_the_final_correction() {
 
     rig.fetch.request(FetchRequest::force_fold(), false);
     assert!(rig.next_request().unwrap().forces_fold());
-    rig.fetch
-        .request(FetchRequest::producer_fresh_panes(), true);
+    rig.fetch.request(FetchRequest::fresh_panes(), true);
     rig.state.dirty = false;
-    rig.state.seed_published(FetchRole::Consumer);
+    rig.state.seed_published();
 
     assert_eq!(
         rig.state.current.rows().count(),
@@ -470,10 +469,6 @@ fn published_seed_commits_before_delivery_and_keeps_the_final_correction() {
     );
     assert_eq!(rig.state.current.theme.display.refresh_ms, 37);
     assert!(rig.state.dirty, "the seed is paint-pending");
-    assert!(
-        !rig.state.last_known_elder,
-        "the seed carries the plane's role"
-    );
     assert_eq!(
         rig.state.current.presence,
         Some(crate::store::snapshot::SidebarPresence::Active)
@@ -536,7 +531,7 @@ fn published_seed_commits_before_delivery_and_keeps_the_final_correction() {
         "the changed pane set commits"
     );
     assert!(
-        rig.next_request().unwrap().is_producer_fresh_panes(),
+        rig.next_request().unwrap().is_fresh_panes(),
         "only the final correction completes the fetch"
     );
 }
@@ -578,7 +573,7 @@ fn published_seed_listing_the_own_pane_seats_its_focus_at_once() {
         )
         .unwrap();
 
-    rig.state.seed_published(FetchRole::Consumer);
+    rig.state.seed_published();
 
     assert!(rig.state.current.own_view.is_some());
     assert_eq!(rig.state.ui.selected_pane, Some(agent.pane_id));
@@ -625,7 +620,7 @@ fn published_seed_age_outlasts_the_frame_reuse_window_by_three_ticks() {
             )
             .unwrap();
 
-        rig.state.seed_published(FetchRole::Consumer);
+        rig.state.seed_published();
         assert_eq!(
             rig.state.current.rows().count(),
             usize::from(seeds),
@@ -685,29 +680,18 @@ fn snapshot_key_rebind_reaches_the_host_resolver() {
 }
 
 #[test]
-fn unchanged_after_an_unread_snapshot_keeps_state_context_and_completion() {
-    snapshot_then_terminal(false);
-}
-
-#[test]
 fn failure_after_an_unread_snapshot_keeps_state_context_and_completion() {
-    snapshot_then_terminal(true);
-}
-
-fn snapshot_then_terminal(failed: bool) {
     let mut rig = Rig::new();
     let mut snapshot = agent_snapshot(&rig.ws);
     snapshot.worktree_groups[0].rows[0].name = "unread-snapshot".into();
     rig.fetch.request(FetchRequest::default(), false);
     assert!(rig.next_request().is_some());
-    rig.fetch
-        .request(FetchRequest::producer_fresh_panes(), true);
+    rig.fetch.request(FetchRequest::fresh_panes(), true);
     let filter = BodyLens::from(BodyFilter::Status(crate::agents::AgentStatus::Idle));
     rig.result_tx
         .send(FetchUpdate::Shared {
             update: Box::new(FetchUpdate::Snapshot {
                 snapshot: Box::new(snapshot),
-                role: FetchRole::Producer,
                 phase: FetchPhase::Final,
                 source: SnapshotSource::Produced,
             }),
@@ -721,15 +705,8 @@ fn snapshot_then_terminal(failed: bool) {
         })
         .unwrap();
     rig.result_tx
-        .send(if failed {
-            FetchUpdate::Failed {
-                error: "fold failed".into(),
-                role: FetchRole::Consumer,
-            }
-        } else {
-            FetchUpdate::Unchanged {
-                role: FetchRole::Consumer,
-            }
+        .send(FetchUpdate::Failed {
+            error: "fold failed".into(),
         })
         .unwrap();
     rig.state.on_snapshot(&mut rig.fetch);
@@ -742,15 +719,11 @@ fn snapshot_then_terminal(failed: bool) {
         rig.state.ui.make_up_filter, filter,
         "snapshot context is applied with its snapshot"
     );
-    assert_eq!(rig.state.health.failure_streak, u32::from(failed));
-    assert!(
-        !rig.state.last_known_elder,
-        "the latest outcome carries election state"
-    );
+    assert_eq!(rig.state.health.failure_streak, 1);
     assert!(
         rig.next_request()
             .expect("final outcome releases the queued request")
-            .is_producer_fresh_panes()
+            .is_fresh_panes()
     );
     assert!(rig.next_request().is_none());
 }
@@ -760,20 +733,18 @@ fn a_final_snapshot_never_yields_to_an_interim_or_loses_completion() {
     let mut rig = Rig::new();
     rig.fetch.request(FetchRequest::default(), false);
     assert!(rig.next_request().is_some());
-    rig.fetch
-        .request(FetchRequest::producer_fresh_panes(), true);
-    for (name, phase, role) in [
-        ("final-snapshot", FetchPhase::Final, FetchRole::Producer),
-        ("interim-snapshot", FetchPhase::Interim, FetchRole::Consumer),
+    rig.fetch.request(FetchRequest::fresh_panes(), true);
+    for (name, phase) in [
+        ("final-snapshot", FetchPhase::Final),
+        ("interim-snapshot", FetchPhase::Interim),
     ] {
         let mut snapshot = agent_snapshot(&rig.ws);
         snapshot.worktree_groups[0].rows[0].name = name.into();
         rig.result_tx
             .send(FetchUpdate::Snapshot {
                 snapshot: Box::new(snapshot),
-                role,
                 phase,
-                source: SnapshotSource::Published,
+                source: SnapshotSource::Cached,
             })
             .unwrap();
     }
@@ -783,11 +754,10 @@ fn a_final_snapshot_never_yields_to_an_interim_or_loses_completion() {
         "final-snapshot",
         "an interim must not displace the pending final snapshot"
     );
-    assert!(!rig.state.last_known_elder);
     assert!(
         rig.next_request()
             .expect("completion survives an interim publication")
-            .is_producer_fresh_panes()
+            .is_fresh_panes()
     );
 }
 
@@ -796,20 +766,17 @@ fn a_failed_completion_survives_a_later_interim_snapshot() {
     let mut rig = Rig::new();
     rig.fetch.request(FetchRequest::default(), false);
     assert!(rig.next_request().is_some());
-    rig.fetch
-        .request(FetchRequest::producer_fresh_panes(), true);
+    rig.fetch.request(FetchRequest::fresh_panes(), true);
     rig.result_tx
         .send(FetchUpdate::Failed {
             error: "fold failed".into(),
-            role: FetchRole::Producer,
         })
         .unwrap();
     rig.result_tx
         .send(FetchUpdate::Snapshot {
             snapshot: Box::new(agent_snapshot(&rig.ws)),
-            role: FetchRole::Consumer,
             phase: FetchPhase::Interim,
-            source: SnapshotSource::Published,
+            source: SnapshotSource::Cached,
         })
         .unwrap();
     rig.state.on_snapshot(&mut rig.fetch);
@@ -818,11 +785,10 @@ fn a_failed_completion_survives_a_later_interim_snapshot() {
         "an interim must not erase a pending failure"
     );
     assert_eq!(rig.state.current.rows().count(), 1);
-    assert!(!rig.state.last_known_elder);
     assert!(
         rig.next_request()
             .expect("failed final releases the request")
-            .is_producer_fresh_panes()
+            .is_fresh_panes()
     );
 }
 
@@ -830,7 +796,7 @@ fn a_failed_completion_survives_a_later_interim_snapshot() {
 fn disabled_observer_extracts_no_signature() {
     let mut rig = Rig::new();
     observe::take_extractions();
-    rig.fold(agent_snapshot(&rig.ws), SnapshotSource::Published);
+    rig.fold(agent_snapshot(&rig.ws), SnapshotSource::Cached);
     assert_eq!(
         observe::take_extractions(),
         (0, 0),
@@ -839,168 +805,35 @@ fn disabled_observer_extracts_no_signature() {
 }
 
 #[test]
-fn unchanged_fetch_outcome_clears_in_flight_without_dirtying_frame() {
-    let mut rig = Rig::new();
-    rig.state.dirty = false;
-    rig.state.current.now = jiff::Timestamp::UNIX_EPOCH;
-    rig.fetch.request(FetchRequest::default(), false);
-    assert!(rig.next_request().is_some());
-
-    rig.deliver(FetchUpdate::Unchanged {
-        role: FetchRole::Producer,
-    });
-
-    assert!(!rig.state.dirty);
-    assert!(rig.state.current.now > jiff::Timestamp::UNIX_EPOCH);
-    rig.fetch.request(FetchRequest::default(), false);
-    assert!(
-        rig.next_request().is_some(),
-        "unchanged final outcome must release the single-flight request"
-    );
-}
-
-#[test]
-fn unchanged_consumer_ticks_only_running_pipeline_clocks() {
-    let mut rig = Rig::new();
-    rig.state.current = agent_snapshot(&rig.ws);
-    rig.state.current.worktree_groups[0].pipeline = Some(crate::store::snapshot::SidebarPipeline {
-        stages: vec!["Build".to_owned()],
-        stage: "Build".to_owned(),
-        owner: None,
-        started_at: Some(jiff::Timestamp::UNIX_EPOCH),
-        stage_started_at: Some(jiff::Timestamp::UNIX_EPOCH),
-        stage_prior_secs: 0,
-        visited: Default::default(),
-        done_at: None,
-    });
-    rig.state.dirty = false;
-    rig.state.current.now = jiff::Timestamp::UNIX_EPOCH;
-    assert!(!rig.state.apply_latest_snapshot(FetchUpdate::Unchanged {
-        role: FetchRole::Consumer
-    }));
-    assert!(rig.state.dirty);
-    assert!(rig.state.current.now > jiff::Timestamp::UNIX_EPOCH);
-
-    rig.state.current.worktree_groups[0]
-        .pipeline
-        .as_mut()
-        .unwrap()
-        .stage_started_at = None;
-    rig.state.dirty = false;
-    assert!(!rig.state.apply_latest_snapshot(FetchUpdate::Unchanged {
-        role: FetchRole::Consumer
-    }));
-    assert!(
-        rig.state.dirty,
-        "the total clock alone still needs a repaint"
-    );
-
-    rig.state.current.worktree_groups[0]
-        .pipeline
-        .as_mut()
-        .unwrap()
-        .stage = "Done".to_owned();
-    rig.state.dirty = false;
-    rig.state.current.now = jiff::Timestamp::UNIX_EPOCH;
-    assert!(!rig.state.apply_latest_snapshot(FetchUpdate::Unchanged {
-        role: FetchRole::Consumer
-    }));
-    assert!(!rig.state.dirty);
-    assert!(rig.state.current.now > jiff::Timestamp::UNIX_EPOCH);
-}
-
-#[test]
-fn unchanged_fetch_outcome_dispatches_queued_refetch() {
-    let mut rig = Rig::new();
-    rig.state.dirty = false;
-    rig.fetch.request(FetchRequest::default(), false);
-    assert!(rig.next_request().is_some());
-    rig.fetch
-        .request(FetchRequest::producer_fresh_panes(), true);
-
-    rig.deliver(FetchUpdate::Unchanged {
-        role: FetchRole::Producer,
-    });
-
-    assert!(!rig.state.dirty);
-    assert!(
-        rig.next_request()
-            .expect("pending refetch dispatched")
-            .is_producer_fresh_panes(),
-        "unchanged final outcome must not strand a queued forced refetch"
-    );
-}
-
-#[test]
-fn unwatched_consumer_coalesces_identity_free_fetches_until_clamp_deadline() {
-    let own_pane = pane("terminal_1", "tab_0", false).pane_id;
-    let mut rig = Rig::with_own_pane(own_pane);
-    rig.hide_consumer();
-
-    for event in [store_delta(), SidebarEvent::PanesChanged, store_delta()] {
-        rig.event(event);
-    }
-
-    assert!(
-        rig.next_request().is_none(),
-        "unwatched consumer defers the burst"
-    );
-    assert!(
-        rig.fetch
-            .deferred_request()
-            .expect("pending fetch")
-            .is_producer_fresh_panes(),
-        "coalescing preserves the strongest freshness requirement"
-    );
-    rig.fetch.defer_until(
-        FetchRequest::default(),
-        Instant::now() - Duration::from_millis(1),
-    );
-
-    rig.maintenance();
-
-    assert!(
-        rig.next_request()
-            .expect("one deferred fetch")
-            .is_producer_fresh_panes()
-    );
-    assert!(rig.next_request().is_none(), "burst emits one fetch");
-}
-
-#[test]
 fn store_delta_requests_default_or_panes_changed_freshness() {
     use crate::agents::LifecycleSignal;
 
     for (event, expected) in [
         (store_delta(), FetchRequest::default()),
-        (
-            SidebarEvent::PanesChanged,
-            FetchRequest::producer_fresh_panes(),
-        ),
+        (SidebarEvent::PanesChanged, FetchRequest::fresh_panes()),
         (
             SidebarEvent::StoreDelta {
                 event_method: Some(crate::store::event::AGENT_LIFECYCLE_METHOD.to_owned()),
                 agent_signal: Some(LifecycleSignal::Registered.tag().to_owned()),
             },
-            FetchRequest::producer_fresh_panes(),
+            FetchRequest::fresh_panes(),
         ),
         (
             SidebarEvent::StoreDelta {
                 event_method: Some(crate::store::event::AGENT_LIFECYCLE_METHOD.to_owned()),
                 agent_signal: Some(LifecycleSignal::Ended.tag().to_owned()),
             },
-            FetchRequest::producer_fresh_panes(),
+            FetchRequest::fresh_panes(),
         ),
     ] {
         let mut rig = Rig::new();
-        rig.state.last_known_elder = true;
 
         rig.event(event.clone());
 
         let request = rig.requests.try_recv().expect("immediate event fetch");
         assert_eq!(
-            request.is_producer_fresh_panes(),
-            expected.is_producer_fresh_panes(),
+            request.is_fresh_panes(),
+            expected.is_fresh_panes(),
             "{event:?}",
         );
         assert_eq!(request.forces_fold(), expected.forces_fold(), "{event:?}");
@@ -1015,7 +848,6 @@ fn lifecycle_store_delta_preserves_fresh_pane_verification() {
         crate::agents::LifecycleSignal::Ended.tag(),
     ] {
         let mut rig = Rig::new();
-        rig.state.last_known_elder = true;
 
         rig.event(SidebarEvent::StoreDelta {
             event_method: Some(crate::store::event::AGENT_LIFECYCLE_METHOD.to_owned()),
@@ -1023,70 +855,7 @@ fn lifecycle_store_delta_preserves_fresh_pane_verification() {
         });
 
         let request = rig.next_request().expect("immediate lifecycle fetch");
-        assert!(request.is_producer_fresh_panes(), "signal: {signal}");
-    }
-}
-
-#[test]
-fn repeated_hidden_metrics_publications_fold_once_at_the_background_deadline() {
-    let own_pane = pane("terminal_1", "tab_0", false).pane_id;
-    let mut rig = Rig::with_own_pane(own_pane);
-    rig.hide_consumer();
-
-    for _ in 0..3 {
-        rig.event(pane_publication(
-            crate::wakeup::events::PaneFramePublicationKind::Metrics,
-        ));
-    }
-    assert!(rig.next_request().is_none());
-    let deadline = rig.fetch.next_deadline().expect("one deferred fetch");
-    assert!(
-        deadline.saturating_duration_since(Instant::now())
-            <= crate::sidebar::timing::UNWATCHED_METRICS_FOLD_CLAMP
-    );
-    rig.fetch.defer_until(
-        FetchRequest::default(),
-        Instant::now() - Duration::from_millis(1),
-    );
-
-    rig.maintenance();
-
-    assert!(
-        rig.next_request().is_some(),
-        "the metrics burst emits one fetch at its deadline"
-    );
-    assert!(rig.next_request().is_none());
-    assert!(rig.fetch.next_deadline().is_none());
-}
-
-#[test]
-fn topology_and_store_publications_shorten_a_metrics_deadline() {
-    let own_pane = pane("terminal_1", "tab_0", false).pane_id;
-
-    for shorter in [
-        pane_publication(crate::wakeup::events::PaneFramePublicationKind::Topology),
-        store_delta(),
-    ] {
-        let mut rig = Rig::with_own_pane(own_pane.clone());
-        rig.hide_consumer();
-        rig.event(pane_publication(
-            crate::wakeup::events::PaneFramePublicationKind::Metrics,
-        ));
-        let metrics_due = rig.fetch.next_deadline().expect("metrics pending");
-
-        rig.event(shorter);
-        let shortened = rig.fetch.next_deadline().expect("shortened pending fetch");
-        assert!(shortened < metrics_due);
-
-        rig.event(SidebarEvent::PanesChanged);
-        assert_eq!(rig.fetch.next_deadline(), Some(shortened));
-        assert!(
-            rig.fetch
-                .deferred_request()
-                .expect("merged pending fetch")
-                .is_producer_fresh_panes()
-        );
-        assert!(rig.next_request().is_none());
+        assert!(request.is_fresh_panes(), "signal: {signal}");
     }
 }
 
@@ -1105,7 +874,7 @@ fn watched_metrics_and_hidden_presence_publications_fold_immediately() {
         ),
     ] {
         let mut rig = Rig::with_own_pane(own_pane.clone());
-        rig.hide_consumer();
+        rig.hide();
         if watched {
             rig.watch();
         }
@@ -1118,13 +887,12 @@ fn watched_metrics_and_hidden_presence_publications_fold_immediately() {
 }
 
 #[test]
-fn watched_renderer_and_elder_fetch_identity_free_events_immediately() {
+fn watched_and_hidden_renderers_fetch_identity_free_events_immediately() {
     let own_pane = pane("terminal_1", "tab_0", false).pane_id;
 
-    for (watched, elder) in [(true, false), (false, true)] {
+    for watched in [true, false] {
         let mut rig = Rig::with_own_pane(own_pane.clone());
-        rig.hide_consumer();
-        rig.state.last_known_elder = elder;
+        rig.hide();
         if watched {
             rig.watch();
         }
@@ -1140,10 +908,12 @@ fn watched_renderer_and_elder_fetch_identity_free_events_immediately() {
 fn maintenance_watchdog_absorbs_deferred_unwatched_fetch() {
     let own_pane = pane("terminal_1", "tab_0", false).pane_id;
     let mut rig = Rig::with_own_pane(own_pane);
-    rig.hide_consumer();
+    rig.hide();
 
-    rig.event(store_delta());
-    assert!(rig.fetch.next_deadline().is_some());
+    rig.fetch.defer_until(
+        FetchRequest::default(),
+        Instant::now() + Duration::from_secs(1),
+    );
 
     rig.state.last_self_close_check = Instant::now() - SELF_CLOSE_WATCHDOG;
     rig.maintenance();
@@ -1163,12 +933,12 @@ fn maintenance_watchdog_absorbs_deferred_unwatched_fetch() {
 fn focus_resume_flushes_pending_metrics_fetch() {
     let own_pane = pane("terminal_1", "tab_0", false).pane_id;
     let mut rig = Rig::with_own_pane(own_pane.clone());
-    rig.hide_consumer();
+    rig.hide();
 
-    rig.event(pane_publication(
-        crate::wakeup::events::PaneFramePublicationKind::Metrics,
-    ));
-    assert!(rig.fetch.next_deadline().is_some());
+    rig.fetch.defer_until(
+        FetchRequest::pane_frame_published(),
+        Instant::now() + Duration::from_secs(1),
+    );
 
     rig.event(SidebarEvent::FocusChanged {
         focused: vec![own_pane],
@@ -1179,7 +949,7 @@ fn focus_resume_flushes_pending_metrics_fetch() {
     assert!(
         rig.next_request()
             .expect("focus flushed pending fetch")
-            .is_producer_fresh_panes()
+            .is_fresh_panes()
     );
 }
 
@@ -1345,14 +1115,12 @@ fn active_alert_discards_search_draft_and_preserves_committed_lens() {
     assert_eq!(rig.state.ui.selected_pane, None, "draft has no matches");
     rig.deliver(FetchUpdate::Failed {
         error: "snapshot failed".to_owned(),
-        role: FetchRole::Producer,
     });
     assert!(!rig.state.alert_active());
     assert_eq!(rig.state.ui.search_draft.as_deref(), Some("cla!"));
     rig.state.dirty = false;
     rig.deliver(FetchUpdate::Failed {
         error: "snapshot failed".to_owned(),
-        role: FetchRole::Producer,
     });
     assert_eq!(rig.state.ui.search_draft, None);
     assert_eq!(rig.state.ui.make_up_filter, committed);
@@ -1387,7 +1155,6 @@ fn older_shared_inputs_do_not_undo_a_consumed_body_filter() {
     rig.deliver(FetchUpdate::Shared {
         update: Box::new(FetchUpdate::Snapshot {
             snapshot: Box::new(snapshot),
-            role: FetchRole::Producer,
             phase: FetchPhase::Final,
             source: SnapshotSource::Produced,
         }),
@@ -1457,7 +1224,6 @@ fn failed_or_rowless_birth_fold_does_not_publish_a_filter_clear() {
 
     rig.deliver(FetchUpdate::Failed {
         error: "not ready".to_owned(),
-        role: FetchRole::Producer,
     });
     assert_eq!(rig.state.ui.make_up_filter, BodyLens::default());
     assert_eq!(crate::sidebar::body_filter::load(&rig.runtime), filter);

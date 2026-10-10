@@ -176,7 +176,7 @@ Every managed tmux client passes `-u`, so Unicode names read back intact whateve
 
 Every RimZ-named tab birth records its base and the work panes the birth creates, including command panes, not just agents. In-place `Claim` records the anchor alone. tmux's unnamed first window stays automatic and unowned until claimed. A founder remains active only while it is present in the tab and hosts a live agent (an agent row or `hosted_agent_kind`); exiting into a kept shell counts as leaving.
 
-The elected sidebar producer projects `Status`, `Rest`, `Rebuild`, and `Release` from the tab's contents, without waiting for an agent-exit hook. The status suffix is chrome, rebuilt from projected agent state, and never identity or durable truth. Name-based birth and resume checks strip built-in and configured status suffixes before comparing their idempotency keys.
+The room host projects `Status`, `Rest`, `Rebuild`, and `Release` from the tab's contents, without waiting for an agent-exit hook. The status suffix is chrome, rebuilt from projected agent state, and never identity or durable truth. Name-based birth and resume checks strip built-in and configured status suffixes before comparing their idempotency keys.
 
 While any founder hosts a live agent, the birth base stays. Once all founders leave, the base follows surviving agents every tick: work-pane titles ordered by `first_seen_at_ms` ascending, missing stamps last, canonical pane id as tie-breaker, through the same three-token label helper. An empty survivor label keeps the existing base, with status changes still applied. Rebuild carries its base in the form the view reads back: tmux maps `:` and `.` to `-`, commas to `_`, and trims edge whitespace; Zellij keeps the raw label. Floating agent panes count; sidebar chrome and daemon-host panes do not. Rebuild preserves the original founders. With no surviving agent the producer releases to the shell name (or only clears a glyph if the base already equals it). Scoped `#` and `team:` bases, including tmux's sanitized `team-`, receive status changes only, never rebuild or release. A restart that replaces the founder pane enters follow mode and normally keeps the same profile label.
 
@@ -317,7 +317,7 @@ The renderer applies the same empty-view rule without waiting for reconcile: onc
 
 Replacement is add-before-close. [`mount_proof.rs`](../../crates/rimz/src/mux/mount_proof.rs) reads heartbeats from the room runtime paths supplied in `SidebarPaneOptions`, not from ambient workspace resolution. It waits up to six seconds for the new pane to publish a heartbeat naming the expected build before the old pane closes. A failed add leaves the user with the sidebar they had, and a pane running a stale binary never counts as the repair. After the closes, tmux snaps kept and newly mounted sidebars to their per-window targets. Zellij reads topology newer than the closes and repairs surviving sidebars in replaced tabs under the attached-client gate, within its native stop band. Width handed over by a closed pane therefore does not become the replacement's target.
 
-`SidebarRecovery` tallies the pass (`recovered`, `closed`, `failed`, `deferred`, `redocked`, `misdocked`). `execute_reconcile_plan` stops at the first failed verdict and counts it and every remaining verdict as `failed`. The pass is one best-effort attempt: nothing retries it, and a failure never escalates to a session rebirth. The next elder tick, toggle, or `rimz sidebar repair` runs a fresh pass.
+`SidebarRecovery` tallies the pass (`recovered`, `closed`, `failed`, `deferred`, `redocked`, `misdocked`). `execute_reconcile_plan` stops at the first failed verdict and counts it and every remaining verdict as `failed`. The pass is one best-effort attempt: nothing retries it, and a failure never escalates to a session rebirth. The next host tick, toggle, or `rimz sidebar repair` runs a fresh pass.
 
 ### Width
 
@@ -440,7 +440,7 @@ Live reinjection resolves a stable tab id from an existing work pane and runs `n
 5. Each left move crosses one adjacent pane, the current tiled-pane count bounds the swaps, and every step must strictly decrease the sidebar's `pane_x`.
 6. Width convergence starts only after current geometry verifies a full-height left dock.
 
-A timed-out authoritative read aborts the pass instead of falling back to the topology cache, so stale truth never drives a close or a spawn; the next elder or toggle pass retries.
+A timed-out authoritative read aborts the pass instead of falling back to the topology cache, so stale truth never drives a close or a spawn; the next host or toggle pass retries.
 
 RimZ passes `auto_layout=false` and `stacked_resize=true`, so `Alt+n` uses Zellij's native focused-pane split along the edge that suits the terminal's cell ratio, and closing a pane returns its space to the sibling it split from. It also pins `stacked_pane_list=false`. Zellij 0.45's list mode keeps collapsed stack members in `list-panes` but marks them suppressed and reports the stack's full rectangle for every member; RimZ filters suppressed panes and relies on per-pane geometry, so the classic representation keeps every agent observable with its own rectangle. The birth tree makes the sidebar and compact bar tree siblings. When an add nests the new sidebar into one row, the same transaction stacks every surviving work pane into the right column; repair of an arbitrary pre-existing multi-column layout only reports.
 
@@ -723,7 +723,7 @@ The pane itself is best-effort: a fresh sidebar heartbeat suppresses a relaunch,
 
 ### The control-mode presence watch
 
-The elected producer holds one control-mode client, [`PresenceWatch`](../../crates/rimz/src/mux/tmux/presence.rs), started from `sidebar_pane/app/tmux_watch.rs`, with a single `refresh-client -B` subscription.
+The host holds one control-mode client, [`PresenceWatch`](../../crates/rimz/src/mux/tmux/presence.rs), started from `sidebar_pane/app/tmux_watch.rs`, with a single `refresh-client -B` subscription.
 
 [`TmuxPresenceState`](../../crates/rimz/src/sidebar/presence/tmux.rs) keeps only the stream state needed to normalize out-of-order lines (panes, current windows, pending inactive panes, floating status, seeding) and feeds pane observations, focus, view switches, and incomplete-layout nudges to the shared projector. Which notification becomes which event is in [state.md → what triggers a mux-derived event](./sidebar/state.md#what-triggers-a-mux-derived-event). Each overlay reaches every fresh sidebar immediately, the producer verifies structural changes with a fresh frame, and the watch refreshes the presence stamp on attach and on each classified line, which puts tmux on the same event-mode pane TTL as Zellij while the stream is alive.
 

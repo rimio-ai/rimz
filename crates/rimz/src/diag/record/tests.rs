@@ -958,7 +958,7 @@ fn pane_drop_evidence_defaults_for_legacy_records() {
 }
 
 #[test]
-fn summary_includes_frame_ref_and_producer_peer_ids() {
+fn summary_includes_frame_ref_and_tick_work() {
     let rejected = DiagEvent::FrameRejected {
         reason: FrameRejectReason::MissingOwnPane,
         prior_pane_count: 3,
@@ -967,22 +967,6 @@ fn summary_includes_frame_ref_and_producer_peer_ids() {
     }
     .summary();
     assert!(rejected.contains("frame.42.0.frame_rejected.json"));
-
-    let elder = sidebar("sb_019e8c565bbd708097fce9514f79da04");
-    assert!(
-        DiagEvent::ProducerElected {
-            prior_elder: elder.clone(),
-        }
-        .summary()
-        .contains(elder.as_str())
-    );
-    assert!(
-        DiagEvent::ProducerDemoted {
-            new_elder: elder.clone(),
-        }
-        .summary()
-        .contains(elder.as_str())
-    );
 
     let tick = DiagEvent::TickBudgetBreach {
         tick_loop: TickLoop::Fetch,

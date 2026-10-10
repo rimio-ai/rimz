@@ -7,7 +7,7 @@
 //! shared [`AccountProbe`] outcome the sidebar producer folds onto the provider
 //! dashboard.
 //!
-//! Producer-only: a probe may fork a subprocess, so the elected producer runs
+//! Producer-only: a probe may fork a subprocess, so the room host runs
 //! it and publishes the result to the shared `accounts.json` cache (TTL'd,
 //! single-flighted like the diff stats); consumer tabs read that cache and never
 //! fork. A probe is a pure read — the cross-process memoization lives one layer

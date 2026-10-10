@@ -1,6 +1,6 @@
 //! Producer-owned publication of adapter wiring and provider-local sessions.
 //!
-//! The elected producer probes provider configuration behind an exact-stamp
+//! The room host probes provider configuration behind an exact-stamp
 //! process memo. Renderers consume only the normalized same-session cache.
 
 use std::collections::{BTreeMap, BTreeSet};

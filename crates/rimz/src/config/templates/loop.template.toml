@@ -23,7 +23,7 @@
 ## min-disk = "20GB"                   # hold while the launch checkout's filesystem has less free
 
 # Scheduled loop tasks. Each entry drives one `rimz loop run <name>` wake-up,
-# fired by the sidebar elder while a room for the task's project is open, or by
+# fired by the sidebar host while a room for the task's project is open, or by
 # the OS timer installed with `rimz loop timer install` otherwise. Use either
 # `agent` to spawn a supervised turn or `wait` to wake one pinned live session.
 # Edit entries here or with `rimz loop add`.

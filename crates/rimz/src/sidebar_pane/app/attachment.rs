@@ -21,7 +21,7 @@ use crate::sidebar_pane::pixel::{PixelLease, PixelRenderCaps};
 use crate::{MuxName, RuntimePaths};
 
 use super::backend::PaneBackend;
-use super::fetch::{FetchDispatcher, FetchRequest, FetchRole};
+use super::fetch::{FetchDispatcher, FetchRequest};
 use super::input::wait_for_wakeup;
 use super::loop_state::{LoopFlow, LoopState};
 use super::plane::DataPlane;
@@ -185,11 +185,7 @@ impl Attachment {
         state.share_width_geometry(plane.geometry.clone());
         state.observe_events = plane.observe_events.clone();
         state.set_probed_aspect(terminal.backend().cell_aspect());
-        state.seed_published(if plane.is_producer() {
-            FetchRole::Producer
-        } else {
-            FetchRole::Consumer
-        });
+        state.seed_published();
         // Zellij's percentage template needs a startup trim on capped wide views.
         // tmux births through its live absolute-column hook; its resize wakeups
         // own later convergence, avoiding a startup resize that can reflow the

@@ -1,10 +1,10 @@
-//! Best-effort notification policy for the elected sidebar producer.
+//! Best-effort notification policy for the room host.
 //!
 //! The policy is pure over newly opened unread episodes and caller-owned
 //! memory: durable unread owns dedupe, while this layer applies user push
 //! preferences and returns notifications for the caller to deliver. Side effects
 //! stay at the edge (`spawn_notify_handlers` and sidebar event broadcast), so
-//! duplicate policy decisions stay tied to the producer election.
+//! duplicate policy decisions stay with the room host.
 
 use std::collections::BTreeMap;
 use std::process::{Command, Stdio};

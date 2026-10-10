@@ -1,9 +1,9 @@
 use jiff::Timestamp;
 
 use super::*;
+use crate::StatePaths;
 use crate::agents::AgentStatus;
 use crate::ids::WorkspaceId;
-use crate::sidebar::consumer::PublishedSnapshotReader;
 use crate::sidebar::enrich::{FoldOpts, enrich_workspace};
 use crate::store::snapshot::SidebarSnapshot;
 
@@ -31,33 +31,6 @@ fn fixture() -> (
     frame.topology_stamp_ms = Some(11);
     frame.metrics_stamp_ms = Some(12);
     (dir, runtime, state, WorkspaceSnapshot(snapshot), frame)
-}
-
-#[test]
-fn current_source_requires_fresh_latest_and_section_stamps() {
-    let (_dir, _runtime, state, workspace, mut frame) = fixture();
-    assert_eq!(
-        WorkspaceProjectionSource::current(&state, &frame),
-        WorkspaceProjectionSource::from_fold(&workspace, &frame)
-    );
-
-    frame.metrics_stamp_ms = None;
-    assert!(
-        !WorkspaceProjectionSource::current(&state, &frame)
-            .expect("rollup source")
-            .is_matchable()
-    );
-
-    std::fs::create_dir_all(state.events_log.parent().unwrap()).unwrap();
-    std::fs::write(&state.events_log, b"moved").unwrap();
-    let advanced = WorkspaceProjectionSource::current(&state, &frame).expect("advanced log");
-    assert_eq!(advanced.rollup_generation, 2);
-    assert_eq!(advanced.rollup_offset, 5);
-    assert_ne!(
-        Some(advanced),
-        WorkspaceProjectionSource::from_fold(&workspace, &frame),
-        "a stale latest snapshot still supplies the live log generation, while the live log length supplies its event-fresh offset",
-    );
 }
 
 #[test]
@@ -141,7 +114,7 @@ fn failed_publication_retries_the_same_content() {
 }
 
 #[test]
-fn quiet_time_transition_republishes_and_reaches_a_cached_adopter() {
+fn quiet_time_transition_republishes_for_attachment_seeds() {
     let (_dir, runtime, state, _workspace, _frame) = fixture();
     let last_activity = Timestamp::from_second(1_750_000_000).unwrap();
     let pane = crate::sidebar::test_support::pane(
@@ -221,9 +194,11 @@ fn quiet_time_transition_republishes_and_reaches_a_cached_adopter() {
             .unwrap(),
         WorkspaceProjectionPublish::Published
     );
-    let mut reader = PublishedSnapshotReader::new(runtime.clone(), "rimz-test", None);
-    let first = reader.read_adopting(&state).unwrap();
-    assert_eq!(status(&first), Some(AgentStatus::Running));
+    let first = read_workspace_projection(&runtime).unwrap();
+    assert_eq!(
+        status(first.projection.snapshot()),
+        Some(AgentStatus::Running)
+    );
 
     assert_eq!(
         publisher
@@ -232,6 +207,9 @@ fn quiet_time_transition_republishes_and_reaches_a_cached_adopter() {
         WorkspaceProjectionPublish::Published,
         "the skipped projection clock still changes its serialized verdict",
     );
-    let second = reader.read_adopting(&state).unwrap();
-    assert_eq!(status(&second), Some(AgentStatus::Failed));
+    let second = read_workspace_projection(&runtime).unwrap();
+    assert_eq!(
+        status(second.projection.snapshot()),
+        Some(AgentStatus::Failed)
+    );
 }

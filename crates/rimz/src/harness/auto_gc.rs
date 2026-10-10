@@ -1,7 +1,7 @@
 //! Producer-side automatic garbage collection: sweep stale state once a day
 //! from every open room.
 //!
-//! The elected producer reads the workspace's durable sweep stamp and spawns
+//! The room host reads the workspace's durable sweep stamp and spawns
 //! the detached `rimz gc --unattended` helper when a sweep is due. The helper
 //! owns the sweep, the assist record, and the stamp write.
 

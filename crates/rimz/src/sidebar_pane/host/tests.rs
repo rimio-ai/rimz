@@ -26,7 +26,7 @@ impl Room {
         let runtime = RuntimePaths::under(workspace_id.clone(), dir.path()).unwrap();
         runtime.ensure_dirs().unwrap();
         let template = serve_config(&workspace_id);
-        let plane = DataPlane::detached(&template, &runtime);
+        let plane = DataPlane::detached();
         let socket_path = runtime.sidebar_host_socket_path(template.mux, &template.session_name);
         let host = Host::new(
             template,
@@ -476,9 +476,9 @@ fn a_supervisor_that_goes_away_takes_its_heartbeat_and_socket_with_it() {
         room.heartbeat(&pane.instance_id).is_some()
     });
 
-    assert!(
-        room.host.plane.is_producer(),
-        "the host stands in the election as its one pane"
+    assert_eq!(
+        room.host.plane.subscriber_ids(),
+        std::slice::from_ref(&pane.instance_id)
     );
 
     let instance_id = pane.instance_id.clone();
@@ -490,10 +490,6 @@ fn a_supervisor_that_goes_away_takes_its_heartbeat_and_socket_with_it() {
     eventually("the pane left the host", || {
         lock(&room.host.attachments).is_empty() && room.host.plane.subscriber_ids().is_empty()
     });
-    assert!(
-        !room.host.plane.is_producer(),
-        "a host with no pane has no heartbeat to stand on"
-    );
 }
 
 #[test]

@@ -132,7 +132,7 @@ This indexes what lives where. Runtime shape and the single-binary rationale liv
 - `message/` — message delivery: park-vs-live dispatch, live-pane send, reply waits, scheduled wakeups, synthetic text for a card (composition, boundary attempt, recorded miss).
 - `store/` — durable state engine: `Store` handle, canonical snapshot schema, writer mutation vocabulary/choreography, framed event log, raw hook ingress and drain cursor (`ingress.rs`), message record and queue codec, lifecycle follower, the supervised-run record with its codec and terminal wake sender, GC.
 - `mux/` — Zellij/tmux seam: `MuxBackend`, cross-backend live-session snapshot, subprocess engine, reconcile planner, recovery, focus-intent anchor, room width target, Zellij pane-topology and presence-desired caches, per-pane write lock, pane winsize repair.
-- `sidebar/` — data plane: Zellij presence ingestion, producer election, pulled-truth/event fusion, realtime overlay store, projection fold, heavy-lane refresh.
+- `sidebar/` — data plane: Zellij presence ingestion, shared host production, pulled-truth/event fusion, realtime overlay store, projection fold, heavy-lane refresh.
 - `sidebar_pane/` — native renderer: the per-pane supervisor, the per-session host that paints every pane, the attach wire between them, pets, and the ratatui theme/component edge.
 - `remote/` — SSH grammar, reconnect policy, link health, `remote.toml`.
 - `diag/` — diagnostic-only JSONL append surfaces.

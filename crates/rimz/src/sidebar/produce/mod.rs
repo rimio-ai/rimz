@@ -1,4 +1,4 @@
-//! The sidebar produce pipeline — what the elected producer runs per data tick.
+//! The sidebar produce pipeline — what the room host runs per data tick.
 //!
 //! `produce_workspace_snapshot` resolves the base (the event-fresh store rollup folded through the caller's [`RollupCursor`], plus the live pane frame shared through the single-flight pane cache) and folds the producer enrichments: group roots, context/activity sidecars, the pane overlay, and projection of the cache refresher's published spending/account/git facts. The fetch worker publishes that workspace projection before applying `project_local`. The CLI inspection path uses [`produce_snapshot_with_refresh`] to refresh heavy lanes between two folds over one produced pane frame.
 //!

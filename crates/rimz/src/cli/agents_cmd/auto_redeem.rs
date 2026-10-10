@@ -1,5 +1,5 @@
 //! `rimz agents auto-redeem` — the hidden helper that consumes a Codex reset
-//! credit after the elected producer finds a useful redemption.
+//! credit after the room host finds a useful redemption.
 
 use anyhow::{Context, Result};
 

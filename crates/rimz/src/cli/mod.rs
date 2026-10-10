@@ -711,7 +711,7 @@ enum Subcmd {
     Answer(answer::AnswerArgs),
     /// Schedule supervised agent turns.
     ///
-    /// Runs from the room's sidebar elder.
+    /// Runs from the room's sidebar host.
     #[command(name = "loop")]
     Loop(loop_cmd::LoopArgs),
     /// Reload running sidebars in place.

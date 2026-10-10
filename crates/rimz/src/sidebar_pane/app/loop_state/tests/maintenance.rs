@@ -10,9 +10,8 @@ fn maintenance_drains_ready_snapshot_outcomes_without_snapshot_wakeup() {
 
     rig.maintenance_draining(Some(FetchUpdate::Snapshot {
         snapshot: Box::new(snapshot),
-        role: FetchRole::Producer,
         phase: FetchPhase::Final,
-        source: SnapshotSource::Published,
+        source: SnapshotSource::Cached,
     }));
 
     assert_eq!(rig.state.current.worktree_groups.len(), 1);
@@ -87,7 +86,7 @@ fn rejected_final_defers_one_gate_deadline_reevaluation() {
     rig.state.current = agent_snapshot(&rig.ws);
 
     let fold_started = Instant::now();
-    rig.fold(snapshot(&rig.ws), SnapshotSource::Published);
+    rig.fold(snapshot(&rig.ws), SnapshotSource::Cached);
     let first_fold = fold_started.elapsed();
 
     assert_eq!(
@@ -107,7 +106,7 @@ fn rejected_final_defers_one_gate_deadline_reevaluation() {
         "the reevaluation waits for the gate escape hatch"
     );
 
-    rig.fold(snapshot(&rig.ws), SnapshotSource::Published);
+    rig.fold(snapshot(&rig.ws), SnapshotSource::Cached);
     assert!(
         rig.next_request().is_none(),
         "repeated rejected finals remain one deferred fetch"
@@ -137,7 +136,7 @@ fn rejected_final_defers_one_gate_deadline_reevaluation() {
 }
 
 #[test]
-fn self_close_watchdog_bypasses_unchanged_skip_while_empty_confirming() {
+fn self_close_watchdog_verifies_panes_while_empty_confirming() {
     let mut rig = Rig::new();
     let mut empty = agent_snapshot(&rig.ws);
     empty.own_view = Some(empty_own_view());
@@ -152,8 +151,8 @@ fn self_close_watchdog_bypasses_unchanged_skip_while_empty_confirming() {
     assert!(
         rig.next_request()
             .expect("self-close watchdog fetch")
-            .is_producer_fresh_panes(),
-        "pending empty confirmation must bypass the unchanged consumer memo"
+            .is_fresh_panes(),
+        "pending empty confirmation requires fresh pane truth"
     );
 }
 
@@ -225,7 +224,7 @@ fn frame_timing_resumes_on_own_pane_focus() {
 
     for (focused, resumes) in [(own_pane.clone(), true), (foreign_pane, false)] {
         let mut rig = Rig::with_own_pane(own_pane.clone());
-        rig.hide_consumer();
+        rig.hide();
         rig.state.dirty = false;
 
         rig.event(SidebarEvent::FocusChanged {
@@ -237,7 +236,7 @@ fn frame_timing_resumes_on_own_pane_focus() {
         assert_eq!(rig.state.optimistic_watch_until.is_some(), resumes);
         assert_eq!(rig.frame_active(), resumes);
         assert_eq!(
-            rig.next_request().map(|req| req.is_producer_fresh_panes()),
+            rig.next_request().map(|req| req.is_fresh_panes()),
             resumes.then_some(true)
         );
     }

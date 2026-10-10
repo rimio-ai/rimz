@@ -1,6 +1,6 @@
 //! Elder-owned loop task firing.
 //!
-//! The elected sidebar elder keeps time while a room is open; the opt-in OS
+//! The room host keeps time while a room is open; the opt-in OS
 //! timer runs the same scheduler for roots without one. Durable state arms tasks
 //! on first sight and records each fire before spawning the detached
 //! `rimz loop run <name>` helper, so a hot tick does not spawn the same

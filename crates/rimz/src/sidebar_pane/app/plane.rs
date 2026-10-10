@@ -1,13 +1,11 @@
-//! The data plane a renderer process runs once, however many panes it paints: one fetch worker, one cache refresher, one topology and transcript watch, one election identity.
+//! The data plane the room host runs once for every pane it paints.
 //!
-//! Each pane subscribes for its own projection of the shared fold. The plane stands in the producer election as its eldest subscriber, since that pane's heartbeat is the one the room ranks it by, and abstains while it has none.
+//! Each pane subscribes for its own projection of the shared fold.
 
-use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender, SyncSender};
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use crate::sidebar::ProducerElectionTracker;
 use crate::sidebar::observe::{self, ObserveMsg};
 use crate::{MuxName, RuntimePaths, SidebarInstanceId};
 
@@ -26,7 +24,6 @@ pub(in crate::sidebar_pane) struct DataPlane {
     request_tx: Sender<FetchRequest>,
     subscribers: Subscribers,
     covered: Covered,
-    election: ProducerElectionTracker,
     observe_tx: SyncSender<ObserveMsg>,
     /// The plane's threads, until the first pane starts them.
     lanes: Mutex<Option<Lanes>>,
@@ -35,66 +32,55 @@ pub(in crate::sidebar_pane) struct DataPlane {
 type Lanes = Box<dyn FnOnce() + Send>;
 
 impl DataPlane {
-    /// A plane whose threads start with its first pane and then live as long as the process: the snapshot fetch and optional produce run off every render loop, so animation and input never block on them. Each thread gates on the election at its own poll, so one started before the plane stands for a pane would sit out a whole poll before its first look.
+    /// Threads start with the first pane and live as long as the host. Fetch and production run off every render loop, so animation and input never block on them.
     pub(in crate::sidebar_pane) fn start(
         config: &ServeConfig,
         runtime: &RuntimePaths,
         diag: &crate::diag::DiagSink,
     ) -> Self {
-        let (mut plane, request_rx, observe_rx) = Self::idle(config, runtime);
+        let (mut plane, request_rx, observe_rx) = Self::idle();
         let observer = diag
             .is_enabled()
             .then(|| observe::RoomObserver::new(plane.observe_tx.clone()));
         plane.observe_events = observer.as_ref().map(|observer| observer.events.clone());
         let (config, runtime, diag) = (config.clone(), runtime.clone(), diag.clone());
-        let (election, subscribers) = (plane.election.clone(), plane.subscribers.clone());
+        let subscribers = plane.subscribers.clone();
         let covered = plane.covered.clone();
         let lanes: Lanes = Box::new(move || {
             if diag.is_enabled() {
-                observe::writer::spawn(runtime.clone(), diag.clone(), election.clone(), observe_rx);
+                observe::writer::spawn(runtime.clone(), diag.clone(), observe_rx);
             }
             spawn_fetch_worker(
                 config.clone(),
                 runtime.clone(),
                 diag.clone(),
-                election.clone(),
                 request_rx,
                 subscribers.clone(),
                 covered,
                 observer,
             );
             let template = config.clone();
-            cache_refresh::spawn(
-                config.clone(),
-                runtime.clone(),
-                diag,
-                election.clone(),
-                move || Stand::of(lock(&subscribers).values().next(), &template),
-            );
-            // tmux fast path: the elected producer streams control-mode topology nudges so a pane open/close publishes a fresh pane frame in tens of milliseconds instead of waiting out the poll. Latency only: the poll stays the presence backstop, and Zellij reaches the same publication path through its presence plugin.
+            cache_refresh::spawn(config.clone(), runtime.clone(), diag, move || {
+                lock(&subscribers)
+                    .values()
+                    .next()
+                    .map(|pane| Stand::of(Some(pane), &template))
+            });
+            // tmux fast path: the host streams control-mode topology nudges so a pane open/close publishes a fresh pane frame in tens of milliseconds instead of waiting out the poll. Latency only: the poll stays the presence backstop, and Zellij reaches the same publication path through its presence plugin.
             if config.mux == MuxName::Tmux {
-                tmux_watch::spawn(
-                    runtime.clone(),
-                    config.session_name.clone(),
-                    election.clone(),
-                );
+                tmux_watch::spawn(runtime.clone(), config.session_name.clone());
             }
-            // The elected producer watches every session whose adapter declares transcript-tail context, so mid-turn token and cost updates repaint without waiting for the next hook or tick. Latency only: the tick backstop stays truth.
-            transcript_watch::spawn(runtime, election);
+            // The host watches every session whose adapter declares transcript-tail context, so mid-turn token and cost updates repaint without waiting for the next hook or tick. Latency only: the tick backstop stays truth.
+            transcript_watch::spawn(runtime);
         });
         *lock(&plane.lanes) = Some(lanes);
         plane
     }
 
     /// The plane's channels with no thread behind them.
-    fn idle(
-        config: &ServeConfig,
-        runtime: &RuntimePaths,
-    ) -> (Self, Receiver<FetchRequest>, Receiver<ObserveMsg>) {
+    fn idle() -> (Self, Receiver<FetchRequest>, Receiver<ObserveMsg>) {
         let (request_tx, request_rx) = std::sync::mpsc::channel();
         let (observe_tx, observe_rx) = std::sync::mpsc::sync_channel(64);
-        let election = ProducerElectionTracker::new(runtime.clone(), config.instance_id.clone());
-        election.abstain();
         let plane = Self {
             observe_events: None,
             caps: Arc::default(),
@@ -102,7 +88,6 @@ impl DataPlane {
             request_tx,
             subscribers: Subscribers::default(),
             covered: Covered::default(),
-            election,
             observe_tx,
             lanes: Mutex::new(None),
         };
@@ -111,8 +96,8 @@ impl DataPlane {
 
     /// A plane whose requests go nowhere, for tests that drive panes without a fold.
     #[cfg(test)]
-    pub(in crate::sidebar_pane) fn detached(config: &ServeConfig, runtime: &RuntimePaths) -> Self {
-        Self::idle(config, runtime).0
+    pub(in crate::sidebar_pane) fn detached() -> Self {
+        Self::idle().0
     }
 
     /// Feed one more pane. The pane leaves the plane when the subscription drops.
@@ -133,11 +118,9 @@ impl DataPlane {
         let membership = Membership {
             instance_id: config.instance_id.clone(),
             subscribers: self.subscribers.clone(),
-            election: self.election.clone(),
         };
         let mut subscribers = lock(&self.subscribers);
         subscribers.insert(config.instance_id.as_str().to_owned(), subscriber);
-        membership.stand_as_eldest(&subscribers);
         drop(subscribers);
         if let Some(start) = lock(&self.lanes).take() {
             start();
@@ -171,17 +154,12 @@ impl DataPlane {
                 .tx
                 .send(FetchUpdate::Snapshot {
                     snapshot: Box::new(snapshot),
-                    role: super::fetch::FetchRole::Producer,
                     phase: super::fetch::FetchPhase::Final,
                     source: super::fetch::SnapshotSource::Produced,
                 })
                 .unwrap();
             waker.send_to(b"snapshot", &subscriber.socket_path).unwrap();
         }
-    }
-
-    pub(in crate::sidebar_pane) fn is_producer(&self) -> bool {
-        self.election.elder_instance().is_none()
     }
 }
 
@@ -197,23 +175,12 @@ pub(in crate::sidebar_pane) struct Subscription {
 struct Membership {
     instance_id: SidebarInstanceId,
     subscribers: Subscribers,
-    election: ProducerElectionTracker,
-}
-
-impl Membership {
-    fn stand_as_eldest(&self, subscribers: &BTreeMap<String, Subscriber>) {
-        match subscribers.values().next() {
-            Some(eldest) => self.election.rebind(eldest.instance_id.clone()),
-            None => self.election.abstain(),
-        }
-    }
 }
 
 impl Drop for Membership {
     fn drop(&mut self) {
         let mut subscribers = lock(&self.subscribers);
         subscribers.remove(self.instance_id.as_str());
-        self.stand_as_eldest(&subscribers);
     }
 }
 

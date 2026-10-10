@@ -49,7 +49,7 @@ Every send writes a `queued` record first. The mode decides when RimZ types it i
 | Interrupt | `--interrupt` | Types the text into the live turn, then presses Escape three seconds later so the agent stops that turn and submits the text as a fresh one. Claude Code and Codex only; other agents are refused. Conflicts with `--steer`, `--on`, `--schedule`, `--after`, and `--when`. |
 | Schedule | `--schedule <DUR\|HH:MM>` | Always parks, and the record cannot deliver before that time. After it comes due, the park rules still apply. |
 
-`--schedule` takes a duration with `s`, `m`, `h`, or `d` (`90s`, `60m`, `2h`, `1d`), or a 24-hour `HH:MM` time in the configured timezone. A time already past today means tomorrow. Zero is rejected. The room must be open, because its sidebar elder wakes due messages.
+`--schedule` takes a duration with `s`, `m`, `h`, or `d` (`90s`, `60m`, `2h`, `1d`), or a 24-hour `HH:MM` time in the configured timezone. A time already past today means tomorrow. Zero is rejected. The room must be open, because its sidebar host wakes due messages.
 
 A parked message delivers once all of these hold, checked in this order:
 

@@ -30,7 +30,6 @@ fn snapshot(update: &FetchUpdate) -> &SidebarSnapshot {
     match update {
         FetchUpdate::Shared { update, .. } => snapshot(update),
         FetchUpdate::Snapshot { snapshot, .. } => snapshot,
-        FetchUpdate::Unchanged { .. } => panic!("expected snapshot, got unchanged"),
         FetchUpdate::Failed { error, .. } => panic!("expected snapshot, got: {error}"),
     }
 }
@@ -85,9 +84,8 @@ fn refresh_override_stamps_folded_snapshot() {
 
     sink.publish(FetchUpdate::Snapshot {
         snapshot: Box::new(folded),
-        role: FetchRole::Consumer,
         phase: FetchPhase::Final,
-        source: SnapshotSource::Published,
+        source: SnapshotSource::Cached,
     });
 
     let update = rx.recv().expect("published snapshot");
@@ -119,7 +117,7 @@ fn notification_panes_target_agent_panes() {
 fn notification_reconciliation_reaches_the_younger_pane_before_its_bell() {
     use super::super::notify::{BellDecision, bell_decision};
 
-    let fixture = ConsumerFixture::new();
+    let fixture = FetchFixture::new();
     let dir = tempfile::tempdir_in("/tmp").unwrap();
     let runtime = RuntimePaths::under(fixture.workspace_id.clone(), dir.path()).unwrap();
     runtime.ensure_dirs().unwrap();
@@ -156,12 +154,12 @@ fn notification_reconciliation_reaches_the_younger_pane_before_its_bell() {
         },
         &mut sink,
     );
-    let wake_path = runtime.sidebar_socket_path(&fixture.younger);
+    let wake_path = runtime.sidebar_socket_path(&fixture.instance_id);
     let notices = UnixDatagram::bind(&wake_path).unwrap();
     crate::wakeup::heartbeat::write_heartbeat(
         &runtime,
         fixture.workspace_id.clone(),
-        &fixture.younger,
+        &fixture.instance_id,
         MuxName::Zellij,
         "rimz-test",
         &wake_path,
@@ -176,9 +174,8 @@ fn notification_reconciliation_reaches_the_younger_pane_before_its_bell() {
         &fixture.state,
         SnapshotPublication {
             snapshot: projected,
-            role: FetchRole::Producer,
             phase: FetchPhase::Final,
-            source: SnapshotSource::Published,
+            source: SnapshotSource::Cached,
         },
         &mut sink,
     );
@@ -208,43 +205,10 @@ fn notification_reconciliation_reaches_the_younger_pane_before_its_bell() {
 }
 
 #[test]
-fn diagnostics_name_producer_transitions_and_link_alerts() {
+fn diagnostics_name_link_alerts() {
     let dir = tempfile::tempdir().unwrap();
     let sink =
         crate::diag::DiagSink::under(dir.path().to_path_buf(), workspace(), "rimz-test", None);
-    let elder = SidebarInstanceId::parse("sb_019e8c565bbd708097fce9514f79da04").unwrap();
-    let new_elder = SidebarInstanceId::parse("sb_019e8c565bbd7b22854f93a905e1034c").unwrap();
-
-    let mut last = None;
-    emit_producer_transition(
-        &sink,
-        &mut last,
-        ProducerElection {
-            elder: Some(elder.clone()),
-        },
-    );
-    emit_producer_transition(&sink, &mut last, ProducerElection { elder: None });
-    emit_producer_transition(
-        &sink,
-        &mut last,
-        ProducerElection {
-            elder: Some(new_elder.clone()),
-        },
-    );
-
-    let events = diagnostic_events(&sink);
-    assert_eq!(events.len(), 2);
-    assert!(matches!(
-        &events[0],
-        crate::diag::record::DiagEvent::ProducerElected { prior_elder }
-            if prior_elder == &elder
-    ));
-    assert!(matches!(
-        &events[1],
-        crate::diag::record::DiagEvent::ProducerDemoted { new_elder: observed }
-            if observed == &new_elder
-    ));
-
     emit_link_alert(
         &sink,
         LinkAlert {
@@ -258,7 +222,7 @@ fn diagnostics_name_producer_transitions_and_link_alerts() {
 
     let events = diagnostic_events(&sink);
     assert!(matches!(
-        &events[2],
+        &events[0],
         crate::diag::record::DiagEvent::LinkAlert {
             tier: crate::ids::LinkTier::Degraded,
             rtt_ms: Some(230),
@@ -277,7 +241,7 @@ fn diagnostics_name_producer_transitions_and_link_alerts() {
 /// so no mux), the provider-spending stamp, and the accounts stamp — so the
 /// cycle pays no subprocess and the test is hermetic.
 #[test]
-fn forced_cycle_retains_the_reconciling_produce_for_a_stalled_consumer() {
+fn forced_cycle_retains_the_reconciling_produce_for_a_stalled_renderer() {
     let dir = tempfile::tempdir().unwrap();
     let workspace_id = workspace();
     let state = StatePaths::under(workspace_id.clone(), &dir.path().join("state")).unwrap();
@@ -326,12 +290,11 @@ fn forced_cycle_retains_the_reconciling_produce_for_a_stalled_consumer() {
     .unwrap();
 
     let config = test_config(workspace_id, SidebarInstanceId::new());
-    let election = ProducerElectionTracker::new(runtime.clone(), config.instance_id.clone());
     let request = FetchRequest {
         mode: FetchMode::HardRefresh,
         ..FetchRequest::default()
     };
-    let mut worker = FetchWorker::new(config, runtime, crate::diag::DiagSink::disabled(), election);
+    let mut worker = FetchWorker::new(config, runtime, crate::diag::DiagSink::disabled());
     let outcomes = run_cycle(&mut worker, &state, request);
 
     assert_eq!(
@@ -356,80 +319,39 @@ fn forced_cycle_retains_the_reconciling_produce_for_a_stalled_consumer() {
 }
 
 #[test]
-fn produce_gate_bounds_normal_attempts_and_keeps_consumers_read_only() {
-    // The two-speed/storm-removal contract: the elected producer pays topology
-    // produce at most once per data tick; consumers fold held panes unless the
-    // user asks for a hard recovery refresh.
+fn produce_gate_bounds_normal_attempts_and_forces_refreshes() {
     let tick = Duration::from_secs(1);
     let start = Instant::now();
-    for (name, is_producer, mode, frame_age_ms, expected) in [
+    for (name, mode, frame_age_ms, expected) in [
         (
             "fresh producer frame skips produce",
-            true,
             FetchMode::Normal,
             Some(100),
             false,
         ),
         (
             "stale producer frame produces",
-            true,
             FetchMode::Normal,
             Some(1000),
             true,
         ),
-        (
-            "cold producer produces",
-            true,
-            FetchMode::Normal,
-            None,
-            true,
-        ),
+        ("cold producer produces", FetchMode::Normal, None, true),
         (
             "producer-only freshness stays producer-only",
-            true,
-            FetchMode::ProducerFreshPanes,
+            FetchMode::FreshPanes,
             Some(0),
             true,
-        ),
-        (
-            "consumer skips producer-only freshness",
-            false,
-            FetchMode::ProducerFreshPanes,
-            Some(0),
-            false,
         ),
         (
             "producer hard refresh produces",
-            true,
             FetchMode::HardRefresh,
             Some(0),
             true,
-        ),
-        (
-            "consumer hard refresh produces",
-            false,
-            FetchMode::HardRefresh,
-            Some(0),
-            true,
-        ),
-        (
-            "stale consumer frame waits for election",
-            false,
-            FetchMode::Normal,
-            Some(60_000),
-            false,
-        ),
-        (
-            "cold consumer waits for election",
-            false,
-            FetchMode::Normal,
-            None,
-            false,
         ),
     ] {
         let mut cadence = ProducerCadence::default();
         assert_eq!(
-            cadence.start_attempt_if_due(is_producer, mode, frame_age_ms, tick, start),
+            cadence.start_attempt_if_due(mode, frame_age_ms, tick, start),
             expected,
             "{name}"
         );
@@ -442,10 +364,9 @@ fn produce_gate_throttles_cold_stale_and_failed_attempts_at_tick_boundary() {
     let start = Instant::now();
     let mut cadence = ProducerCadence::default();
 
-    assert!(cadence.start_attempt_if_due(true, FetchMode::Normal, None, tick, start));
+    assert!(cadence.start_attempt_if_due(FetchMode::Normal, None, tick, start));
     assert!(
         !cadence.start_attempt_if_due(
-            true,
             FetchMode::Normal,
             Some(10_000),
             tick,
@@ -453,13 +374,7 @@ fn produce_gate_throttles_cold_stale_and_failed_attempts_at_tick_boundary() {
         ),
         "recording before the produce path throttles a failed cold attempt",
     );
-    assert!(cadence.start_attempt_if_due(
-        true,
-        FetchMode::Normal,
-        Some(10_000),
-        tick,
-        start + tick,
-    ));
+    assert!(cadence.start_attempt_if_due(FetchMode::Normal, Some(10_000), tick, start + tick,));
 }
 
 #[test]
@@ -468,39 +383,18 @@ fn produce_gate_forced_attempts_bypass_and_advance_local_cadence() {
     let start = Instant::now();
     let mut cadence = ProducerCadence::default();
 
-    assert!(cadence.start_attempt_if_due(true, FetchMode::Normal, None, tick, start));
+    assert!(cadence.start_attempt_if_due(FetchMode::Normal, None, tick, start));
     let forced_at = start + Duration::from_millis(10);
+    assert!(cadence.start_attempt_if_due(FetchMode::FreshPanes, Some(0), tick, forced_at,));
     assert!(cadence.start_attempt_if_due(
-        true,
-        FetchMode::ProducerFreshPanes,
-        Some(0),
-        tick,
-        forced_at,
-    ));
-    assert!(cadence.start_attempt_if_due(
-        false,
         FetchMode::HardRefresh,
         Some(0),
         tick,
         forced_at + Duration::from_millis(10),
     ));
-    assert!(!cadence.start_attempt_if_due(
-        true,
-        FetchMode::Normal,
-        Some(10_000),
-        tick,
-        forced_at + tick,
-    ));
-}
-
-#[test]
-fn produce_gate_newly_promoted_consumer_starts_without_cadence_debt() {
-    let tick = Duration::from_secs(1);
-    let now = Instant::now();
-    let mut cadence = ProducerCadence::default();
-
-    assert!(!cadence.start_attempt_if_due(false, FetchMode::Normal, Some(10_000), tick, now,));
-    assert!(cadence.start_attempt_if_due(true, FetchMode::Normal, Some(10_000), tick, now,));
+    assert!(
+        !cadence.start_attempt_if_due(FetchMode::Normal, Some(10_000), tick, forced_at + tick,)
+    );
 }
 
 #[test]
@@ -622,66 +516,12 @@ fn diagnostic_events(sink: &crate::diag::DiagSink) -> Vec<crate::diag::record::D
         .collect()
 }
 
-struct ConsumerFixture {
+struct FetchFixture {
     _dir: tempfile::TempDir,
     workspace_id: WorkspaceId,
     state: StatePaths,
     runtime: RuntimePaths,
-    younger: SidebarInstanceId,
-}
-
-#[test]
-fn roster_publication_rechecks_election_after_the_fetch() {
-    let fixture = ConsumerFixture::new();
-    let elder_path = std::fs::read_dir(&fixture.runtime.heartbeat_dir)
-        .unwrap()
-        .next()
-        .unwrap()
-        .unwrap()
-        .path();
-    let heartbeat = std::fs::read(&elder_path).unwrap();
-    std::fs::remove_file(&elder_path).unwrap();
-    let mut worker = fixture.worker();
-    let role = worker.observe_role();
-    assert!(role.is_producer());
-
-    // The elder appears and publishes while this renderer finishes an older fetch.
-    std::fs::write(&elder_path, &heartbeat).unwrap();
-    let live = [(AgentKind::new_unchecked("claude"), "live".into())]
-        .into_iter()
-        .collect();
-    crate::store::live_roster::publish(&fixture.state.live_roster, live).unwrap();
-    let before = crate::store::live_roster::read(&fixture.state.live_roster).unwrap();
-    let (tx, _rx) = result_channel();
-    let mut sink = ResultSink::new(tx, PathBuf::from("missing.sock"), None);
-    let empty = || SnapshotPublication {
-        snapshot: SidebarSnapshot::build(
-            fixture.workspace_id.clone(),
-            Vec::new(),
-            jiff::Timestamp::UNIX_EPOCH,
-        ),
-        role,
-        phase: FetchPhase::Final,
-        source: SnapshotSource::Produced,
-    };
-    worker.publish_snapshot(&fixture.state, empty(), &mut sink);
-    assert_eq!(
-        crate::store::live_roster::read(&fixture.state.live_roster),
-        Some(before),
-        "rebirth must not read the late non-producer's empty roster",
-    );
-
-    // With no elder and the session still listed, the same empty observation
-    // is a genuine exit, not a race.
-    std::fs::remove_file(&elder_path).unwrap();
-    worker.session_listed = |_, _| true;
-    worker.publish_snapshot(&fixture.state, empty(), &mut sink);
-    assert!(
-        crate::store::live_roster::read(&fixture.state.live_roster)
-            .unwrap()
-            .agents
-            .is_empty()
-    );
+    instance_id: SidebarInstanceId,
 }
 
 #[test]
@@ -692,10 +532,8 @@ fn renderer_gets_the_snapshot_before_a_narrowing_probe() {
         static SENT_BEFORE_PROBE: std::cell::Cell<Option<bool>> =
             const { std::cell::Cell::new(None) };
     }
-    let fixture = ConsumerFixture::new();
-    std::fs::remove_dir_all(&fixture.runtime.heartbeat_dir).unwrap();
+    let fixture = FetchFixture::new();
     let mut worker = fixture.worker();
-    let role = worker.observe_role();
     let lost = [(AgentKind::new_unchecked("claude"), "lost".into())].into();
     crate::store::live_roster::publish(&fixture.state.live_roster, lost).unwrap();
     let (tx, rx) = result_channel();
@@ -721,7 +559,6 @@ fn renderer_gets_the_snapshot_before_a_narrowing_probe() {
                 Vec::new(),
                 jiff::Timestamp::UNIX_EPOCH,
             ),
-            role,
             phase: FetchPhase::Final,
             source: SnapshotSource::Produced,
         },
@@ -733,8 +570,7 @@ fn renderer_gets_the_snapshot_before_a_narrowing_probe() {
 
 #[test]
 fn roster_narrowing_needs_a_listed_session() {
-    let fixture = ConsumerFixture::new();
-    std::fs::remove_dir_all(&fixture.runtime.heartbeat_dir).unwrap();
+    let fixture = FetchFixture::new();
     let diag = crate::diag::DiagSink::under(
         fixture._dir.path().to_path_buf(),
         fixture.workspace_id.clone(),
@@ -743,8 +579,6 @@ fn roster_narrowing_needs_a_listed_session() {
     );
     let mut worker = fixture.worker();
     worker.diag = diag.clone();
-    let role = worker.observe_role();
-    assert!(role.is_producer());
     let roster = |ids: &[&str]| -> std::collections::BTreeSet<(AgentKind, AgentSessionId)> {
         ids.iter()
             .map(|id| (AgentKind::new_unchecked("claude"), (*id).into()))
@@ -770,7 +604,6 @@ fn roster_narrowing_needs_a_listed_session() {
         snapshot.panes_produced_at_ms = Some(1);
         SnapshotPublication {
             snapshot: snapshot.with_live_panes(panes, None),
-            role,
             phase: FetchPhase::Final,
             source: SnapshotSource::Produced,
         }
@@ -816,7 +649,7 @@ fn roster_narrowing_needs_a_listed_session() {
     assert_eq!(on_disk(), roster(&["a"]));
 }
 
-impl ConsumerFixture {
+impl FetchFixture {
     fn new() -> Self {
         let dir = tempfile::tempdir().unwrap();
         let workspace_id = workspace();
@@ -825,37 +658,23 @@ impl ConsumerFixture {
             RuntimePaths::under(workspace_id.clone(), &dir.path().join("runtime")).unwrap();
         state.ensure_dirs().unwrap();
         runtime.ensure_dirs().unwrap();
-        let elder = SidebarInstanceId::parse("sb_019e8c565bbd708097fce9514f79da04").unwrap();
-        let younger = SidebarInstanceId::parse("sb_019e8c565bbd7b22854f93a905e1034c").unwrap();
-        crate::wakeup::heartbeat::write_heartbeat(
-            &runtime,
-            workspace_id.clone(),
-            &elder,
-            MuxName::Zellij,
-            "rimz-test",
-            &runtime.sock_dir.join("elder.sock"),
-            None,
-            None,
-        )
-        .unwrap();
         Self {
             _dir: dir,
             workspace_id,
             state,
             runtime,
-            younger,
+            instance_id: SidebarInstanceId::new(),
         }
     }
 
     fn worker(&self) -> FetchWorker {
-        let config = test_config(self.workspace_id.clone(), self.younger.clone());
-        let election = ProducerElectionTracker::new(self.runtime.clone(), self.younger.clone());
+        let config = test_config(self.workspace_id.clone(), self.instance_id.clone());
         let mut worker = FetchWorker::new(
             config,
             self.runtime.clone(),
             crate::diag::DiagSink::disabled(),
-            election,
         );
+        worker.producer_cadence.last_attempt = Some(Instant::now());
         worker.session_listed = |_, _| panic!("a unit test must not ask a multiplexer");
         worker
     }
@@ -882,108 +701,12 @@ impl ConsumerFixture {
         )
         .unwrap();
     }
-
-    fn publish_projection(&self) {
-        let snapshot: SidebarSnapshot =
-            serde_json::from_slice(&std::fs::read(&self.state.latest_snapshot).unwrap()).unwrap();
-        let frame = crate::sidebar::cache::read_snapshot_cache(
-            &self.runtime.pane_frame_path(),
-            "rimz-test",
-        )
-        .unwrap();
-        crate::sidebar::workspace_projection::WorkspaceProjectionPublisher::default()
-            .publish(
-                &self.runtime,
-                "rimz-test",
-                &crate::sidebar::enrich::WorkspaceSnapshot(snapshot),
-                &frame,
-            )
-            .unwrap();
-    }
-}
-
-#[test]
-fn unchanged_consumer_inputs_skip_the_second_fold() {
-    let fixture = ConsumerFixture::new();
-    fixture.write_pane_frame();
-    let mut rollup = SidebarSnapshot::build(
-        fixture.workspace_id.clone(),
-        Vec::new(),
-        jiff::Timestamp::now(),
-    );
-    rollup.reflects_log = Some(crate::store::event_log::LogExtent {
-        generation: 0,
-        offset: 0,
-    });
-    std::fs::write(
-        &fixture.state.latest_snapshot,
-        serde_json::to_vec(&rollup).unwrap(),
-    )
-    .unwrap();
-
-    let mut worker = fixture.worker();
-    let first = fixture.run_with(FetchRequest::default(), &mut worker);
-    assert_eq!(first.len(), 1);
-    assert!(matches!(first[0], FetchUpdate::Snapshot { .. }));
-
-    let second = fixture.run_with(FetchRequest::default(), &mut worker);
-    assert_eq!(second.len(), 1);
-    assert!(matches!(second[0], FetchUpdate::Unchanged { .. }));
-    assert!(second[0].is_final());
-}
-
-#[test]
-fn failed_consumer_fold_clears_warm_unchanged_memo() {
-    let fixture = ConsumerFixture::new();
-    fixture.write_pane_frame();
-    let mut rollup = SidebarSnapshot::build(
-        fixture.workspace_id.clone(),
-        Vec::new(),
-        jiff::Timestamp::now(),
-    );
-    rollup.reflects_log = Some(crate::store::event_log::LogExtent {
-        generation: 0,
-        offset: 0,
-    });
-    std::fs::write(
-        &fixture.state.latest_snapshot,
-        serde_json::to_vec(&rollup).unwrap(),
-    )
-    .unwrap();
-    let mut worker = fixture.worker();
-
-    assert!(matches!(
-        fixture.run_with(FetchRequest::default(), &mut worker)[0],
-        FetchUpdate::Snapshot { .. }
-    ));
-    assert!(matches!(
-        fixture.run_with(FetchRequest::default(), &mut worker)[0],
-        FetchUpdate::Unchanged { .. }
-    ));
-
-    std::fs::create_dir_all(&fixture.state.events_log).unwrap();
-    assert!(matches!(
-        fixture.run_with(FetchRequest::default(), &mut worker)[0],
-        FetchUpdate::Failed { .. }
-    ));
-    std::fs::remove_dir_all(&fixture.state.events_log).unwrap();
-
-    assert!(matches!(
-        fixture.run_with(FetchRequest::default(), &mut worker)[0],
-        FetchUpdate::Snapshot { .. }
-    ));
-    assert!(matches!(
-        fixture.run_with(FetchRequest::default(), &mut worker)[0],
-        FetchUpdate::Unchanged { .. }
-    ));
 }
 
 #[test]
 fn producer_fast_fold_publishes_workspace_content_without_a_pane_refresh() {
-    let fixture = ConsumerFixture::new();
+    let fixture = FetchFixture::new();
     fixture.write_pane_frame();
-    std::fs::remove_dir_all(&fixture.runtime.heartbeat_dir).unwrap();
-    std::fs::create_dir_all(&fixture.runtime.heartbeat_dir).unwrap();
     let mut rollup = SidebarSnapshot::build(
         fixture.workspace_id.clone(),
         Vec::new(),
@@ -1002,13 +725,7 @@ fn producer_fast_fold_publishes_workspace_content_without_a_pane_refresh() {
     let mut worker = fixture.worker();
 
     let first = fixture.run_with(FetchRequest::default(), &mut worker);
-    assert!(matches!(
-        first[0],
-        FetchUpdate::Snapshot {
-            role: FetchRole::Producer,
-            ..
-        }
-    ));
+    assert!(matches!(first[0], FetchUpdate::Snapshot { .. }));
     let published =
         crate::sidebar::workspace_projection::read_workspace_projection(&fixture.runtime)
             .expect("producer fast-fold projection");
@@ -1022,13 +739,7 @@ fn producer_fast_fold_publishes_workspace_content_without_a_pane_refresh() {
     )
     .unwrap();
     let second = fixture.run_with(FetchRequest::default(), &mut worker);
-    assert!(matches!(
-        second[0],
-        FetchUpdate::Snapshot {
-            role: FetchRole::Producer,
-            ..
-        }
-    ));
+    assert!(matches!(second[0], FetchUpdate::Snapshot { .. }));
     let republished =
         crate::sidebar::workspace_projection::read_workspace_projection(&fixture.runtime)
             .expect("republished producer fast-fold projection");
@@ -1040,209 +751,8 @@ fn producer_fast_fold_publishes_workspace_content_without_a_pane_refresh() {
 }
 
 #[test]
-fn adopted_consumer_uses_slim_stamp_until_truth_moves() {
-    let fixture = ConsumerFixture::new();
-    fixture.write_pane_frame();
-    let mut rollup = SidebarSnapshot::build(
-        fixture.workspace_id.clone(),
-        Vec::new(),
-        jiff::Timestamp::now(),
-    );
-    rollup.reflects_log = Some(crate::store::event_log::LogExtent {
-        generation: 0,
-        offset: 0,
-    });
-    std::fs::write(
-        &fixture.state.latest_snapshot,
-        serde_json::to_vec(&rollup).unwrap(),
-    )
-    .unwrap();
-    fixture.publish_projection();
-    let mut worker = fixture.worker();
-
-    assert!(matches!(
-        fixture.run_with(FetchRequest::default(), &mut worker)[0],
-        FetchUpdate::Snapshot { .. }
-    ));
-
-    std::fs::write(fixture.runtime.diff_stats_path(), b"producer-owned-change").unwrap();
-    assert!(matches!(
-        fixture.run_with(FetchRequest::default(), &mut worker)[0],
-        FetchUpdate::Unchanged { .. }
-    ));
-
-    crate::store::event_log::append(
-        &fixture.state.events_log,
-        &crate::store::event::EventEnvelope::session_rebirth(
-            fixture.workspace_id.clone(),
-            "rimz-test",
-        ),
-    )
-    .unwrap();
-    assert!(matches!(
-        fixture.run_with(FetchRequest::default(), &mut worker)[0],
-        FetchUpdate::Snapshot { .. }
-    ));
-    std::fs::write(
-        fixture.runtime.diff_stats_path(),
-        b"fallback-owned-change-with-longer-content",
-    )
-    .unwrap();
-    assert!(
-        matches!(
-            fixture.run_with(FetchRequest::default(), &mut worker)[0],
-            FetchUpdate::Snapshot { .. }
-        ),
-        "fallback restores full-stamp invalidation",
-    );
-    assert!(matches!(
-        fixture.run_with(FetchRequest::default(), &mut worker)[0],
-        FetchUpdate::Unchanged { .. }
-    ));
-}
-
-#[test]
-fn consumer_stamp_skip_and_record_eligibility_are_separate() {
-    assert!(consumer_stamp_skippable(FetchRequest::default(), false));
-    assert!(consumer_stamp_recordable(FetchRequest::default(), false));
-    assert!(!consumer_stamp_skippable(FetchRequest::default(), true));
-    assert!(!consumer_stamp_recordable(FetchRequest::default(), true));
-    let publication = FetchRequest::pane_frame_published();
-    assert!(!consumer_stamp_skippable(publication, false));
-    assert!(consumer_stamp_recordable(publication, false));
-    for request in [
-        FetchRequest::force_fold(),
-        FetchRequest::producer_fresh_panes(),
-        FetchRequest::hard_refresh(),
-        FetchRequest {
-            min_pane_cache_ms: Some(1),
-            ..FetchRequest::default()
-        },
-    ] {
-        assert!(!consumer_stamp_skippable(request, false));
-        assert!(!consumer_stamp_recordable(request, false));
-    }
-}
-
-#[test]
-fn consumer_stamp_pane_publication_seeds_next_ordinary_skip() {
-    let fixture = ConsumerFixture::new();
-    fixture.write_pane_frame();
-    let mut rollup = SidebarSnapshot::build(
-        fixture.workspace_id.clone(),
-        Vec::new(),
-        jiff::Timestamp::now(),
-    );
-    rollup.reflects_log = Some(crate::store::event_log::LogExtent {
-        generation: 0,
-        offset: 0,
-    });
-    std::fs::write(
-        &fixture.state.latest_snapshot,
-        serde_json::to_vec(&rollup).unwrap(),
-    )
-    .unwrap();
-    let mut worker = fixture.worker();
-
-    assert!(matches!(
-        fixture.run_with(FetchRequest::pane_frame_published(), &mut worker,)[0],
-        FetchUpdate::Snapshot { .. }
-    ),);
-    assert!(
-        matches!(
-            fixture.run_with(FetchRequest::default(), &mut worker)[0],
-            FetchUpdate::Unchanged { .. }
-        ),
-        "the publication fold seeds the ordinary-request memo",
-    );
-}
-
-#[test]
-fn consumer_stamp_other_mandatory_folds_clear_before_ordinary_reseed() {
-    for mandatory in [
-        FetchRequest::force_fold(),
-        FetchRequest::producer_fresh_panes(),
-        FetchRequest {
-            mode: FetchMode::HardRefresh,
-            ..FetchRequest::default()
-        },
-    ] {
-        let fixture = ConsumerFixture::new();
-        fixture.write_pane_frame();
-        let mut rollup = SidebarSnapshot::build(
-            fixture.workspace_id.clone(),
-            Vec::new(),
-            jiff::Timestamp::now(),
-        );
-        rollup.reflects_log = Some(crate::store::event_log::LogExtent {
-            generation: 0,
-            offset: 0,
-        });
-        std::fs::write(
-            &fixture.state.latest_snapshot,
-            serde_json::to_vec(&rollup).unwrap(),
-        )
-        .unwrap();
-        let mut worker = fixture.worker();
-
-        assert!(matches!(
-            fixture.run_with(FetchRequest::default(), &mut worker)[0],
-            FetchUpdate::Snapshot { .. }
-        ));
-        assert!(matches!(
-            fixture.run_with(mandatory, &mut worker)[0],
-            FetchUpdate::Snapshot { .. }
-        ));
-        assert!(
-            matches!(
-                fixture.run_with(FetchRequest::default(), &mut worker)[0],
-                FetchUpdate::Snapshot { .. }
-            ),
-            "the first ordinary request reseeds the cleared memo",
-        );
-        assert!(
-            matches!(
-                fixture.run_with(FetchRequest::default(), &mut worker)[0],
-                FetchUpdate::Unchanged { .. }
-            ),
-            "the next unchanged request skips",
-        );
-    }
-}
-
-#[test]
-fn force_fold_bypasses_consumer_unchanged_skip() {
-    let fixture = ConsumerFixture::new();
-    fixture.write_pane_frame();
-    let mut rollup = SidebarSnapshot::build(
-        fixture.workspace_id.clone(),
-        Vec::new(),
-        jiff::Timestamp::now(),
-    );
-    rollup.reflects_log = Some(crate::store::event_log::LogExtent {
-        generation: 0,
-        offset: 0,
-    });
-    std::fs::write(
-        &fixture.state.latest_snapshot,
-        serde_json::to_vec(&rollup).unwrap(),
-    )
-    .unwrap();
-    let mut worker = fixture.worker();
-    assert!(matches!(
-        fixture.run_with(FetchRequest::default(), &mut worker)[0],
-        FetchUpdate::Snapshot { .. }
-    ));
-
-    let forced = fixture.run_with(FetchRequest::force_fold(), &mut worker);
-
-    assert_eq!(forced.len(), 1);
-    assert!(matches!(forced[0], FetchUpdate::Snapshot { .. }));
-}
-
-#[test]
-fn cold_consumer_posts_frameless_rollup_while_waiting_for_first_publish() {
-    let fixture = ConsumerFixture::new();
+fn fast_fold_posts_frameless_rollup_before_first_publish() {
+    let fixture = FetchFixture::new();
     let mut rollup = SidebarSnapshot::build(
         fixture.workspace_id.clone(),
         Vec::new(),
@@ -1274,8 +784,8 @@ fn cold_consumer_posts_frameless_rollup_while_waiting_for_first_publish() {
 }
 
 #[test]
-fn consumer_miss_posts_the_rollup_error_as_the_final_outcome() {
-    let fixture = ConsumerFixture::new();
+fn fast_fold_miss_posts_the_rollup_error_as_the_final_outcome() {
+    let fixture = FetchFixture::new();
     std::fs::create_dir_all(&fixture.state.events_log).unwrap();
     let mut outcomes = fixture.run(FetchRequest::default());
 
@@ -1284,7 +794,7 @@ fn consumer_miss_posts_the_rollup_error_as_the_final_outcome() {
     assert!(outcome.is_final());
     let reason = match &outcome {
         FetchUpdate::Failed { error, .. } => error,
-        _ => panic!("expected failed consumer read"),
+        _ => panic!("expected failed cache read"),
     };
     assert!(
         reason.contains(&fixture.state.events_log.display().to_string()),
@@ -1296,19 +806,19 @@ fn consumer_miss_posts_the_rollup_error_as_the_final_outcome() {
 fn fetch_dispatcher_sends_idle_and_coalesces_strongest_pending_request() {
     let (tx, rx) = std::sync::mpsc::channel();
     let mut dispatcher = FetchDispatcher::new(tx);
-    let request = FetchRequest::producer_fresh_panes();
+    let request = FetchRequest::fresh_panes();
 
     dispatcher.request(request, true);
 
     assert!(dispatcher.in_flight);
-    assert_eq!(rx.try_recv().unwrap().mode, FetchMode::ProducerFreshPanes);
+    assert_eq!(rx.try_recv().unwrap().mode, FetchMode::FreshPanes);
     assert!(dispatcher.pending_refetch.is_none());
 
     let (tx, rx) = std::sync::mpsc::channel();
     let mut dispatcher = FetchDispatcher::new(tx);
     dispatcher.request(FetchRequest::default(), false);
     dispatcher.request(FetchRequest::default(), true);
-    let request = FetchRequest::producer_fresh_panes();
+    let request = FetchRequest::fresh_panes();
     let min_pane_cache_ms = request.min_pane_cache_ms;
 
     dispatcher.request(request, true);
@@ -1316,13 +826,13 @@ fn fetch_dispatcher_sends_idle_and_coalesces_strongest_pending_request() {
     rx.try_recv().expect("initial request");
     dispatcher.complete(true);
     let pending = rx.try_recv().expect("pending refetch");
-    assert_eq!(pending.mode, FetchMode::ProducerFreshPanes);
+    assert_eq!(pending.mode, FetchMode::FreshPanes);
     assert_eq!(pending.min_pane_cache_ms, min_pane_cache_ms);
 
     let (tx, rx) = std::sync::mpsc::channel();
     let mut dispatcher = FetchDispatcher::new(tx);
     dispatcher.request(FetchRequest::default(), false);
-    dispatcher.request(FetchRequest::producer_fresh_panes(), true);
+    dispatcher.request(FetchRequest::fresh_panes(), true);
     let request = FetchRequest::hard_refresh();
 
     dispatcher.request(request, true);
@@ -1354,14 +864,14 @@ fn fetch_dispatcher_merges_deferred_deadlines_and_absorbs_work() {
     let earlier = later - Duration::from_secs(3);
 
     dispatcher.defer_until(FetchRequest::default(), later);
-    dispatcher.defer_until(FetchRequest::producer_fresh_panes(), earlier);
+    dispatcher.defer_until(FetchRequest::fresh_panes(), earlier);
 
     assert_eq!(dispatcher.next_deadline(), Some(earlier));
     dispatcher.request(FetchRequest::default(), false);
     let request = rx
         .try_recv()
         .expect("immediate request absorbs deferred work");
-    assert!(request.is_producer_fresh_panes());
+    assert!(request.is_fresh_panes());
     assert!(dispatcher.next_deadline().is_none());
 }
 
@@ -1372,7 +882,7 @@ fn fetch_dispatcher_fires_one_strongest_follow_up_after_in_flight_work() {
     dispatcher.request(FetchRequest::default(), false);
     rx.try_recv().expect("initial request");
     let due = Instant::now() + Duration::from_secs(3);
-    dispatcher.defer_until(FetchRequest::producer_fresh_panes(), due);
+    dispatcher.defer_until(FetchRequest::fresh_panes(), due);
 
     dispatcher.fire_due(due);
     assert!(
@@ -1383,7 +893,7 @@ fn fetch_dispatcher_fires_one_strongest_follow_up_after_in_flight_work() {
     let follow_up = rx
         .try_recv()
         .expect("one follow-up dispatches on completion");
-    assert!(follow_up.is_producer_fresh_panes());
+    assert!(follow_up.is_fresh_panes());
     assert!(rx.try_recv().is_err(), "only one follow-up dispatches");
 }
 
@@ -1395,7 +905,7 @@ fn fetch_dispatcher_completion_absorbs_deferred_into_pending_follow_up() {
     rx.try_recv().expect("initial request");
     dispatcher.request(FetchRequest::default(), true);
     dispatcher.defer_until(
-        FetchRequest::producer_fresh_panes(),
+        FetchRequest::fresh_panes(),
         Instant::now() + Duration::from_secs(3),
     );
 
@@ -1404,30 +914,30 @@ fn fetch_dispatcher_completion_absorbs_deferred_into_pending_follow_up() {
     let follow_up = rx
         .try_recv()
         .expect("pending follow-up absorbs deferred work");
-    assert!(follow_up.is_producer_fresh_panes());
+    assert!(follow_up.is_fresh_panes());
     assert!(dispatcher.next_deadline().is_none());
     assert!(rx.try_recv().is_err(), "only one follow-up dispatches");
 }
 
 #[test]
-fn pane_frame_published_refolds_a_consumer_from_cache() {
-    let fixture = ConsumerFixture::new();
+fn pane_frame_published_refolds_from_cache() {
+    let fixture = FetchFixture::new();
     fixture.write_pane_frame();
     let mut outcomes = fixture.run(FetchRequest::pane_frame_published());
 
-    assert_eq!(outcomes.len(), 1, "consumer folds once from cache");
+    assert_eq!(outcomes.len(), 1, "worker folds once from cache");
     let outcome = outcomes.pop().unwrap();
     assert!(outcome.is_final());
     let snapshot = snapshot(&outcome);
     assert!(
         !snapshot.worktree_groups.is_empty(),
-        "published panes are folded into the consumer snapshot"
+        "published panes are folded into the snapshot"
     );
 }
 
 #[test]
 fn one_cycle_projects_the_shared_fold_once_for_each_renderer() {
-    let fixture = ConsumerFixture::new();
+    let fixture = FetchFixture::new();
     let panes = ["terminal_7", "terminal_8", "terminal_9"];
     let frame = crate::sidebar::frame::assemble_frame(
         panes.iter().map(|raw| pane(raw, "tab_1", false)).collect(),
@@ -1480,7 +990,7 @@ fn one_cycle_projects_the_shared_fold_once_for_each_renderer() {
 
 #[test]
 fn a_stalled_subscriber_retains_only_the_latest_projected_fold() {
-    let fixture = ConsumerFixture::new();
+    let fixture = FetchFixture::new();
     let subscribers = Subscribers::default();
     let (stalled, stalled_rx) = subscriber("01", "terminal_7", 60, "missing.sock".into());
     let (advancing, advancing_rx) = subscriber("02", "terminal_8", 60, "missing.sock".into());
@@ -1529,7 +1039,7 @@ fn a_stalled_subscriber_retains_only_the_latest_projected_fold() {
 #[test]
 fn shared_observation_extracts_common_once_and_keeps_each_own_view() {
     use crate::sidebar::observe;
-    let fixture = ConsumerFixture::new();
+    let fixture = FetchFixture::new();
     let frame = crate::sidebar::frame::assemble_frame(
         (0..40)
             .flat_map(|n| {
@@ -1623,7 +1133,7 @@ fn shared_observation_extracts_common_once_and_keeps_each_own_view() {
 fn fold_file_reads_are_shared_across_forty_attachment_threads() {
     use crate::mux::focus_anchor;
     use crate::sidebar::{body_filter, read_marks};
-    let fixture = ConsumerFixture::new();
+    let fixture = FetchFixture::new();
     let frame = crate::sidebar::frame::assemble_frame(
         (0..40)
             .flat_map(|n| {
@@ -1757,7 +1267,7 @@ fn tick_clock() {
 #[test]
 fn staggered_requests_behind_one_fold_cost_at_most_two_folds() {
     const PANES: usize = 8;
-    let fixture = ConsumerFixture::new();
+    let fixture = FetchFixture::new();
     let panes: Vec<String> = (1..=PANES).map(|id| format!("terminal_{id}")).collect();
     let frame = crate::sidebar::frame::assemble_frame(
         panes.iter().map(|id| pane(id, "tab_1", false)).collect(),
@@ -1786,10 +1296,6 @@ fn staggered_requests_behind_one_fold_cost_at_most_two_folds() {
     let captured = first_publications.clone();
     let sink = ResultSink::shared(subscribers, Covered::default());
     let mut worker = fixture.worker();
-    worker.election = crate::sidebar::ProducerElectionTracker::new(
-        fixture.runtime.clone(),
-        sink.cycle[0].instance_id.clone(),
-    );
     let mut sender = Some(tx);
     let mut mid_first = None;
     worker.on_read = Some(Box::new(move || {
@@ -1879,7 +1385,7 @@ fn requests_a_finished_fold_cannot_answer_still_run() {
                 for request in [
                     FetchRequest::hard_refresh(),
                     FetchRequest::force_fold(),
-                    FetchRequest::producer_fresh_panes(),
+                    FetchRequest::fresh_panes(),
                     FetchRequest::pane_frame_published(),
                 ] {
                     tx.send(FetchRequest {
@@ -1956,7 +1462,7 @@ fn a_follow_up_a_finished_fold_answered_is_not_sent() {
 
 #[test]
 fn one_publication_serves_the_renderers_its_cycle_began_with() {
-    let fixture = ConsumerFixture::new();
+    let fixture = FetchFixture::new();
     let frame = crate::sidebar::frame::assemble_frame(
         ["terminal_7", "terminal_8", "terminal_9"]
             .iter()
@@ -1978,10 +1484,7 @@ fn one_publication_serves_the_renderers_its_cycle_began_with() {
     let mut worker = fixture.worker();
     let mut sink = ResultSink::shared(subscribers.clone(), Covered::default());
     sink.begin_cycle();
-    let (workspace, frame) = worker
-        .reader
-        .read_adopting_workspace(&fixture.state)
-        .unwrap();
+    let (workspace, frame) = worker.reader.read_workspace(&fixture.state).unwrap();
     let folded = worker.project_fold(WorkspaceFold { workspace, frame }, &mut sink);
 
     // The eldest leaves and a new pane arrives between fold and publication.
@@ -1990,9 +1493,8 @@ fn one_publication_serves_the_renderers_its_cycle_began_with() {
     subscribe(&subscribers, newcomer);
     sink.publish(FetchUpdate::Snapshot {
         snapshot: Box::new(folded),
-        role: FetchRole::Consumer,
         phase: FetchPhase::Final,
-        source: SnapshotSource::Published,
+        source: SnapshotSource::Cached,
     });
 
     let younger: Vec<_> = younger_rx.try_iter().collect();
@@ -2012,7 +1514,7 @@ fn one_publication_serves_the_renderers_its_cycle_began_with() {
 
 #[test]
 fn the_worker_keeps_the_tick_of_its_eldest_renderer() {
-    let fixture = ConsumerFixture::new();
+    let fixture = FetchFixture::new();
     let subscribers = Subscribers::default();
     let (eldest, _eldest_rx) = subscriber("01", "terminal_7", 60, PathBuf::from("missing.sock"));
     let (younger, _younger_rx) = subscriber("02", "terminal_8", 1, PathBuf::from("missing.sock"));
@@ -2047,8 +1549,8 @@ fn a_full_renderer_inbox_holds_neither_the_worker_nor_another_renderer() {
     let mut sink = ResultSink::shared(subscribers, Covered::default());
     let (done_tx, done_rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        sink.publish(FetchUpdate::Unchanged {
-            role: FetchRole::Consumer,
+        sink.publish(FetchUpdate::Failed {
+            error: "failed fold".into(),
         });
         let _ = done_tx.send(());
     });
@@ -2058,6 +1560,6 @@ fn a_full_renderer_inbox_holds_neither_the_worker_nor_another_renderer() {
         .expect("the publication returns with one inbox full");
     assert!(matches!(
         other_rx.try_recv(),
-        Ok(FetchUpdate::Unchanged { .. })
+        Ok(FetchUpdate::Failed { .. })
     ));
 }

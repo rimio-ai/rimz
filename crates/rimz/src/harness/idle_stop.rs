@@ -1,7 +1,7 @@
 //! Soft stop: end an agent once it has rested for a requested duration with
 //! nothing owed (`rimz agents stop --when-idle`).
 //!
-//! The elected producer reads the durable requests and spawns the detached
+//! The room host reads the durable requests and spawns the detached
 //! `rimz agents idle-stop` helper for each one whose cheap terms are due. The
 //! helper re-runs the whole decision against fresh reads and owns the stop;
 //! this module writes only a disposable spawn-pacing record.

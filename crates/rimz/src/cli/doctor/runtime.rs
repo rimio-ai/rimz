@@ -484,9 +484,8 @@ fn collect_zellij_socket_headroom(ws: &rimz::ResolvedWorkspace) -> model::Zellij
     }
 }
 
-/// Live sidebar sessions that share this workspace. Producer election is
-/// workspace-wide, so an old room for the same workspace can keep producing the
-/// shared pane cache and make the current room's renderer hold updates.
+/// Live sidebar sessions that share this workspace. Multiple sessions can
+/// survive a failed sidebar launch or a pre-lock room, and share runtime caches.
 fn collect_duplicate_sessions(
     ws: &rimz::ResolvedWorkspace,
     selected: MuxName,
@@ -1181,8 +1180,6 @@ fn classify_diagnostic(
         | DiagEvent::WorkPaneBoundaryMoved { .. }
         | DiagEvent::FetchFoldStats { .. }
         | DiagEvent::ToolLoopEscalated { .. }
-        | DiagEvent::ProducerElected { .. }
-        | DiagEvent::ProducerDemoted { .. }
         | DiagEvent::GroupMigration { .. } => model::DoctorState::Expected,
         DiagEvent::ResolutionFallback { .. }
         | DiagEvent::PaneCountDrop { .. }

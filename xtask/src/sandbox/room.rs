@@ -15,7 +15,6 @@ use super::{DEV_BINARY_MISSING, HostSandbox, Panes, RoomRecord, Tab};
 
 #[derive(Deserialize)]
 struct Renderer {
-    role: String,
     pane_id: Option<String>,
 }
 
@@ -494,16 +493,15 @@ fn render_card(
     for (index, tab) in panes.tabs.iter().enumerate() {
         for pane in &tab.panes {
             if pane.kind == "sidebar" {
-                let renderer = renderers
+                renderers
                     .iter()
                     .find(|renderer| renderer.pane_id.as_deref() == Some(&pane.pane_id))
                     .context("sidebar lacks live renderer")?;
                 writeln!(
                     card,
-                    "Sidebar: {}  Tab: {}  {}",
+                    "Sidebar: {}  Tab: {}",
                     pane.pane_id,
                     tab.name.as_deref().unwrap_or("-"),
-                    renderer.role
                 )?;
                 let id = quote(OsStr::new(&pane.pane_id));
                 let look = look_argv(
@@ -596,10 +594,8 @@ mod tests {
     #[test]
     fn room_card_uses_live_roles_and_snapshot_owner() {
         let panes = serde_json::from_str(r##"{"session":"private","tabs":[{"name":"shell","panes":[{"kind":"sidebar","pane_id":"tmux:%1"}]},{"name":"#probe","panes":[{"kind":"sidebar","pane_id":"tmux:%3"},{"kind":"agent","pane_id":"tmux:%4","pid":4242,"agent":{"handle":"@coder#probe"}}]}]}"##).unwrap();
-        let renderers: Vec<Renderer> = serde_json::from_str(
-            r#"[{"role":"producer","pane_id":"tmux:%3"},{"role":"consumer","pane_id":"tmux:%1"}]"#,
-        )
-        .unwrap();
+        let renderers: Vec<Renderer> =
+            serde_json::from_str(r#"[{"pane_id":"tmux:%3"},{"pane_id":"tmux:%1"}]"#).unwrap();
         let snapshot = serde_json::from_str(
             r#"{"worktree_groups":[{"pipeline":{"stage":"Build","owner":"coder"}}]}"#,
         )
@@ -621,8 +617,8 @@ mod tests {
             &snapshot,
         )
         .unwrap();
-        assert!(card.contains("Sidebar: tmux:%1  Tab: shell  consumer"));
-        assert!(card.contains("Sidebar: tmux:%3  Tab: #probe  producer"));
+        assert!(card.contains("Sidebar: tmux:%1  Tab: shell\n"));
+        assert!(card.contains("Sidebar: tmux:%3  Tab: #probe\n"));
         assert!(card.contains("Stage: Build  Owner: coder"));
         assert!(card.contains("Role: @coder#probe  tmux:%4  pid 4242"));
         assert!(card.contains("  As: target/debug/xtask sandbox in '/sandbox' --as '@coder#probe' -- '/dev/rimz' --tmux"));

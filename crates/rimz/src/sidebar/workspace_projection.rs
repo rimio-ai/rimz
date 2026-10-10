@@ -1,23 +1,20 @@
-//! Producer-published workspace enrichment and consumer adoption.
+//! Published workspace enrichment for a new attachment's pre-paint seed.
 //!
-//! The file is disposable runtime truth acceleration. Consumer adoption
-//! validates its source against the live rollup, pane-frame sections, and machine
-//! config. A new pane's pre-paint seed checks schema, session, and the caller's
-//! projection-age bound, and pairs the frame by source stamps; its next fold
-//! corrects it.
+//! Seeds check schema, session, and projection age, and pair frames by source
+//! stamps. The host's next full fold corrects the disposable publication.
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
-use crate::disk::parse_cache::{ParseCache, StampedPath};
+use crate::RuntimePaths;
+use crate::disk::parse_cache::ParseCache;
 use crate::sidebar::enrich::WorkspaceSnapshot;
 use crate::sidebar::frame::PaneFrame;
 use crate::store::event_log::LogExtent;
-use crate::{RuntimePaths, StatePaths};
 
 pub(super) const WORKSPACE_PROJECTION_SCHEMA_VERSION: u32 = 7;
 
@@ -34,26 +31,6 @@ impl WorkspaceProjectionSource {
     fn from_fold(workspace: &WorkspaceSnapshot, frame: &PaneFrame) -> Option<Self> {
         let extent = workspace.snapshot().reflects_log?;
         Some(Self::new(extent, frame))
-    }
-
-    pub(super) fn current(state: &StatePaths, frame: &PaneFrame) -> Option<Self> {
-        let before = StampedPath::of(&state.events_log);
-        let published_extent = read_latest_extent(&state.latest_snapshot)?;
-        let after = StampedPath::of(&state.events_log);
-        if before != after || published_extent.offset > after.stamp.len {
-            return None;
-        }
-        // `latest.json` may trail an active log between debounced publishes;
-        // its generation remains authoritative while the live log length is
-        // the event-fresh offset. Rotation retracts latest before replacing
-        // the log, and the before/after file identity rejects that race.
-        Some(Self::new(
-            LogExtent {
-                generation: published_extent.generation,
-                offset: after.stamp.len,
-            },
-            frame,
-        ))
     }
 
     fn new(extent: LogExtent, frame: &PaneFrame) -> Self {
@@ -161,24 +138,8 @@ pub(crate) fn read_workspace_projection(
         .with(|cache| cache.read_stamped_json(&workspace_projection_path(runtime)))
 }
 
-#[derive(Deserialize)]
-struct LatestExtent {
-    #[serde(default)]
-    snapshot_version: u32,
-    #[serde(default)]
-    reflects_log: Option<LogExtent>,
-}
-
-fn read_latest_extent(path: &Path) -> Option<LogExtent> {
-    let latest = LATEST_EXTENT_PARSE_CACHE.with(|cache| cache.read_stamped_json(path))?;
-    (latest.snapshot_version == crate::store::snapshot::SNAPSHOT_VERSION)
-        .then_some(latest.reflects_log)
-        .flatten()
-}
-
 thread_local! {
     static WORKSPACE_PROJECTION_PARSE_CACHE: ParseCache<PublishedWorkspaceProjection> = const { ParseCache::new() };
-    static LATEST_EXTENT_PARSE_CACHE: ParseCache<LatestExtent> = const { ParseCache::new() };
 }
 
 #[cfg(test)]

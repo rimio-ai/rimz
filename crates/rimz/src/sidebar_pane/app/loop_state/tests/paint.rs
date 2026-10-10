@@ -9,8 +9,8 @@ fn resize_hold_releases_only_on_a_post_engage_pane_stamp() {
     // panes before the grow can land after it still counting the closed
     // sibling; its pre-engage stamp keeps the hold, so no wide frame paints.
     for (observed_at_ms, source, releases) in [
-        (101, SnapshotSource::Published, true),
-        (99, SnapshotSource::Published, false),
+        (101, SnapshotSource::Cached, true),
+        (99, SnapshotSource::Cached, false),
         (101, SnapshotSource::Produced, true),
         (99, SnapshotSource::Produced, false),
     ] {
@@ -39,7 +39,7 @@ fn resize_hold_releases_on_escape_hatch_accepting_post_engage_stamp() {
     rig.state.paint_hold.engage(Instant::now(), 100);
 
     let snapshot = process_snapshot(&rig.ws, 150);
-    rig.fold(snapshot, SnapshotSource::Published);
+    rig.fold(snapshot, SnapshotSource::Cached);
     assert!(
         rig.state.paint_hold.is_engaged(),
         "the rejected fold stays held"
@@ -55,7 +55,7 @@ fn resize_hold_releases_on_escape_hatch_accepting_post_engage_stamp() {
     );
 
     let snapshot = process_snapshot(&rig.ws, 151);
-    rig.fold(snapshot, SnapshotSource::Published);
+    rig.fold(snapshot, SnapshotSource::Cached);
     assert!(
         rig.state.paint_hold.is_engaged(),
         "the second rejected fold still stays held"
@@ -66,7 +66,7 @@ fn resize_hold_releases_on_escape_hatch_accepting_post_engage_stamp() {
         Some(jiff::Timestamp::from_millisecond(now_ms - 1_000).unwrap());
 
     let snapshot = process_snapshot(&rig.ws, 152);
-    rig.fold(snapshot, SnapshotSource::Published);
+    rig.fold(snapshot, SnapshotSource::Cached);
     assert!(
         !rig.state.paint_hold.is_engaged(),
         "the escape-hatch accepted fold releases by pane stamp"
@@ -142,7 +142,7 @@ fn attach_sized_grow_repaints_with_a_seen_sibling() {
     assert!(
         rig.next_request()
             .expect("fresh pane request")
-            .is_producer_fresh_panes()
+            .is_fresh_panes()
     );
 }
 

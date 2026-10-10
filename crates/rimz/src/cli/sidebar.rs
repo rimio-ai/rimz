@@ -5,7 +5,7 @@
 //! `produce_snapshot_with_refresh` (or the in-process consumer read for
 //! `--no-produce`); frame prefers an already-published consumer frame and falls
 //! back to the same producer path. The CLI owns argv, fallback intent, and
-//! stdout alone. The elder renderer produces in process on its fetch worker, so
+//! stdout alone. The room host produces in process on its fetch worker, so
 //! these arms serve inspection and scripting.
 
 #[cfg(feature = "testkit")]
@@ -60,10 +60,7 @@ enum SidebarSubcmd {
         min_pane_cache_ms: Option<u64>,
         #[arg(long)]
         json: bool,
-        /// Render read-only from the producer's published cache: never fork
-        /// `list-panes` or git. A non-producer renderer (one whose workspace
-        /// already has an elder producer) passes this so the per-tab fleet
-        /// pays the mux/git round-trip exactly once, on the elder.
+        /// Render read-only from the published cache: never fork `list-panes` or git.
         #[arg(long)]
         no_produce: bool,
     },
@@ -140,7 +137,7 @@ enum SidebarSubcmd {
         #[arg(long)]
         pets: bool,
     },
-    /// List live sidebar renderers and their election roles.
+    /// List live sidebar renderers.
     #[cfg(feature = "testkit")]
     #[command(hide = true)]
     Renderers {
@@ -715,7 +712,6 @@ fn snapshot(globals: &GlobalFlags, command: SnapshotCommand) -> Result<()> {
 fn renderers(globals: &GlobalFlags, json: bool) -> Result<()> {
     #[derive(serde::Serialize)]
     struct Renderer {
-        role: &'static str,
         #[serde(skip_serializing_if = "Option::is_none")]
         pane_id: Option<PaneId>,
         instance_id: rimz::ids::SidebarInstanceId,
@@ -726,11 +722,6 @@ fn renderers(globals: &GlobalFlags, json: bool) -> Result<()> {
     let renderers: Vec<_> = rimz::sidebar::live_sidebars(&context.runtime)
         .into_iter()
         .map(|sidebar| Renderer {
-            role: if sidebar.producer {
-                "producer"
-            } else {
-                "consumer"
-            },
             pane_id: sidebar.heartbeat.pane_id,
             instance_id: sidebar.heartbeat.instance_id,
             session_name: sidebar.heartbeat.session_name,
@@ -743,8 +734,7 @@ fn renderers(globals: &GlobalFlags, json: bool) -> Result<()> {
     for renderer in renderers {
         writeln!(
             out,
-            "{}  {}  {}",
-            renderer.role,
+            "{}  {}",
             renderer.pane_id.as_ref().map_or("-", PaneId::as_str),
             renderer.instance_id,
         )?;

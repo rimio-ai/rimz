@@ -1,6 +1,6 @@
 //! Producer-side Codex reset-credit policy and its detached helper action.
 //!
-//! The elected producer evaluates cached provider-neutral capacity and credit
+//! The room host evaluates cached provider-neutral capacity and credit
 //! state, gated on an agent of this room stopped on the login's limit, then
 //! spawns a hidden CLI helper only when a redemption is useful. The verdict
 //! branches on what a redemption does to the window's reset (the credit's

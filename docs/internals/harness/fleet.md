@@ -16,7 +16,7 @@ Four rules explain most of the design. When a piece of the code surprises you, o
 
 **One name for one agent.** A member is reachable by an address, `@handle#channel`, and the renderer that prints a handle is the exact inverse of the parser that reads one. Anything RimZ shows you, you can type back.
 
-**No room-wide service.** Scheduled work, message wakeups, and unattended recovery ride the tick of the room's elected sidebar producer, the elder. Roots without an open room can opt into a one-shot OS timer tick, described in [loops.md § The external tick](./loops.md#the-external-tick). An optional [language-server broker](../lsp.md) is a per-server process bounded by agent leases, not a room scheduler.
+**No room-wide service.** Scheduled work, message wakeups, and unattended recovery ride the tick of the room's sidebar host. Roots without an open room can opt into a one-shot OS timer tick, described in [loops.md § The external tick](./loops.md#the-external-tick). An optional [language-server broker](../lsp.md) is a per-server process bounded by agent leases, not a room scheduler.
 
 ## The vocabulary
 
@@ -91,7 +91,7 @@ Every file below is under `harness/` except the top-level `address.rs`, the petn
 | [`scratch.rs`](../../../crates/rimz/src/harness/scratch.rs) | Team memory-file scan and the advisory `blackboard.md` stage parser, shared by launch reminders and cohort reports. See [teams.md](./teams.md). |
 | [`team_stage.rs`](../../../crates/rimz/src/harness/team_stage.rs) | `rimz teams flip`: locked board edits, the durable `team.stage` signal, owner delivery, and hand-off compaction. See [teams.md](./teams.md). |
 | [`ancestry.rs`](../../../crates/rimz/src/harness/ancestry.rs) | Durable caller resolution and launch-chain policy. |
-| [`subagent_policy.rs`](../../../crates/rimz/src/harness/subagent_policy.rs), [`parent_watch.rs`](../../../crates/rimz/src/harness/parent_watch.rs), [`orphan_sweep.rs`](../../../crates/rimz/src/harness/orphan_sweep.rs) | What a subagent caller may launch, the child's parent watchdog, and the elder's backstop when that watchdog fails. See [subagents.md](./subagents.md). |
+| [`subagent_policy.rs`](../../../crates/rimz/src/harness/subagent_policy.rs), [`parent_watch.rs`](../../../crates/rimz/src/harness/parent_watch.rs), [`orphan_sweep.rs`](../../../crates/rimz/src/harness/orphan_sweep.rs) | What a subagent caller may launch, the child's parent watchdog, and the host's backstop when that watchdog fails. See [subagents.md](./subagents.md). |
 | [`address.rs`](../../../crates/rimz/src/address.rs) | The address: parsing `@handle#channel`, resolving it against a snapshot, binding a match to a live pane, rendering the canonical handle back, and launch-instance grouping and lineage. |
 | [`agents/petname.rs`](../../../crates/rimz/src/agents/petname.rs) | Adjective-noun instance names, name legality, and the deterministic fallback for a record with no stored name. |
 | [`resume.rs`](../../../crates/rimz/src/harness/resume.rs) | Resume planning for room rebirth, cohort resume, and lane resume, plus `resolve_posture`, the relaunch posture seam every path shares. |
@@ -101,9 +101,9 @@ Every file below is under `harness/` except the top-level `address.rs`, the petn
 | [`schedule.rs`](../../../crates/rimz/src/harness/schedule.rs), [`schedule/`](../../../crates/rimz/src/harness/schedule) | Loop tasks and their runner. See [loops.md](./loops.md). |
 | [`auto_continue.rs`](../../../crates/rimz/src/harness/auto_continue.rs), [`auto_redeem.rs`](../../../crates/rimz/src/harness/auto_redeem.rs) | Unattended recovery of parked turns and spent windows. See [providers.md § Auto-continue](../agents/providers.md#auto-continue) and [§ Auto-redeem](../agents/providers.md#auto-redeem). |
 | [`assist_log.rs`](../../../crates/rimz/src/harness/assist_log.rs) | The audit trail every unattended intervention appends to. See [loops.md § The assist log](./loops.md#the-assist-log). |
-| [`idle_compact.rs`](../../../crates/rimz/src/harness/idle_compact.rs) | The elder's idle compaction check. See [messaging.md § Idle compaction](./messaging.md#idle-compaction). |
-| [`idle_stop.rs`](../../../crates/rimz/src/harness/idle_stop.rs) | The elder's check of pending `stop --when-idle` requests and the decision its helper re-runs. See [loops.md § Recovery the elder runs](./loops.md#recovery-the-elder-runs). |
-| [`auto_gc.rs`](../../../crates/rimz/src/harness/auto_gc.rs) | The elder's daily gc check and its sweep stamp. See [loops.md § Recovery the elder runs](./loops.md#recovery-the-elder-runs). |
+| [`idle_compact.rs`](../../../crates/rimz/src/harness/idle_compact.rs) | The host's idle compaction check. See [messaging.md § Idle compaction](./messaging.md#idle-compaction). |
+| [`idle_stop.rs`](../../../crates/rimz/src/harness/idle_stop.rs) | The host's check of pending `stop --when-idle` requests and the decision its helper re-runs. See [loops.md § Recovery the host runs](./loops.md#recovery-the-host-runs). |
+| [`auto_gc.rs`](../../../crates/rimz/src/harness/auto_gc.rs) | The host's daily gc check and its sweep stamp. See [loops.md § Recovery the host runs](./loops.md#recovery-the-host-runs). |
 
 The CLI side lives in [`cli/agents_cmd/`](../../../crates/rimz/src/cli/agents_cmd) (launch placement, reconciliation, restart, resume, fork, stop, and the hidden `exec` wrapper), [`cli/supervised/`](../../../crates/rimz/src/cli/supervised) (the run driver both `agents -p` and loop fires call), and [`cli/loop_cmd/`](../../../crates/rimz/src/cli/loop_cmd). Those handlers parse flags, execute effects, and render; the harness keeps provider and durable-state rules.
 
@@ -497,7 +497,7 @@ After the provider exits, the thin image releases any drainer lease, crosses its
 
 - [scripting.md](./scripting.md): supervised `-p` runs: the run record, the wake socket, verify and retry, output formats.
 - [subagents.md](./subagents.md): agent-launched children, their parent stamp, and `--keep`.
-- [loops.md](./loops.md): scheduled tasks: the task catalog, elder firing, the fire gate ladder, signals and waits, and the assist log.
+- [loops.md](./loops.md): scheduled tasks: the task catalog, host firing, the fire gate ladder, signals and waits, and the assist log.
 - [budget.md](./budget.md): dollar caps: the scopes, the ledgers, the verdict, the waiver, and the gate.
 - [messaging.md](./messaging.md): how text reaches a pane.
 - [worktrees.md](./worktrees.md): the Git worktrees a launch can land in.

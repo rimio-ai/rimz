@@ -1,11 +1,6 @@
-//! The off-thread fetch machinery: the two-speed fetch cycle (the in-process
-//! consumer fast lane plus the elder's in-process produce, sharing one warm
-//! [`PublishedSnapshotReader`]), and its single-flight request coalescing.
-//! `FetchWorker` owns cadence, election, request coalescing, notification state,
-//! and typed result publication; the reader owns consumer fold memoization.
-//! Everything here runs on a worker thread so the render/input loop never
-//! blocks on pane production; heavy git/spend/account refreshes run on the
-//! cache refresher.
+//! Off-thread fast folds, pane production, and single-flight request coalescing.
+//! The host shares one warm rollup cursor across both lanes. Heavy cache
+//! refreshes run separately so render and input never block on production.
 
 use std::collections::{BTreeMap, HashMap};
 use std::os::unix::net::UnixDatagram;
@@ -17,7 +12,6 @@ use std::time::{Duration, Instant};
 use crate::config::NotificationsPrefs;
 use crate::diag::record::TickLoop;
 use crate::ids::{PaneId, SidebarInstanceId};
-use crate::sidebar::ProducerElectionTracker;
 use crate::sidebar::consumer::{PublishedSnapshotReader, RollupCursor};
 use crate::sidebar::enrich::{WorkspaceSnapshot, project_local};
 use crate::sidebar::frame::PaneFrame;
@@ -38,7 +32,7 @@ use super::timing::tick_for;
 /// bug anywhere in it must cost one degraded outcome — the loop holds its
 /// last good frame and raises the health line — never the renderer. The
 /// workspace builds with unwinding panics; under a future `panic = "abort"`
-/// this guard degrades to renderer death plus the election handoff, the
+/// this guard degrades to host death and supervisor recovery, the
 /// documented recovery either way.
 ///
 /// `AssertUnwindSafe` is discharged by construction: the only state carried
@@ -69,18 +63,6 @@ fn run_produce_guarded<T>(
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum FetchRole {
-    Producer,
-    Consumer,
-}
-
-impl FetchRole {
-    pub(super) fn is_producer(self) -> bool {
-        self == Self::Producer
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum FetchPhase {
     Interim,
     Final,
@@ -94,18 +76,13 @@ pub(super) enum FetchUpdate {
         update: Box<FetchUpdate>,
         context: Arc<FoldShared>,
     },
-    Unchanged {
-        role: FetchRole,
-    },
     Snapshot {
         snapshot: Box<SidebarSnapshot>,
-        role: FetchRole,
         phase: FetchPhase,
         source: SnapshotSource,
     },
     Failed {
         error: String,
-        role: FetchRole,
     },
 }
 
@@ -146,7 +123,7 @@ impl FoldInputs {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum SnapshotSource {
-    Published,
+    Cached,
     Produced,
 }
 
@@ -158,7 +135,6 @@ struct WorkspaceFold {
 
 struct SnapshotPublication {
     snapshot: SidebarSnapshot,
-    role: FetchRole,
     phase: FetchPhase,
     source: SnapshotSource,
 }
@@ -177,20 +153,11 @@ impl FetchUpdate {
         )
     }
 
-    pub(super) fn role(&self) -> FetchRole {
-        match self {
-            Self::Shared { update, .. } => update.role(),
-            Self::Unchanged { role } | Self::Snapshot { role, .. } | Self::Failed { role, .. } => {
-                *role
-            }
-        }
-    }
-
     fn snapshot_mut(&mut self) -> Option<&mut SidebarSnapshot> {
         match self {
             Self::Shared { update, .. } => update.snapshot_mut(),
             Self::Snapshot { snapshot, .. } => Some(snapshot),
-            Self::Unchanged { .. } | Self::Failed { .. } => None,
+            Self::Failed { .. } => None,
         }
     }
 
@@ -202,18 +169,7 @@ impl FetchUpdate {
     }
 }
 
-/// Decides whether a cycle pays the produce from cheap pre-reads. The producer
-/// runs on a hard refresh, on a producer-only topology refresh, or when the
-/// published frame outlived one data tick (`None` age = no usable frame — cold
-/// start) and its process-local attempt cadence is due. A consumer produces
-/// only for a hard refresh; it never produces for topology freshness or a stale
-/// frame. Staleness recovery is delegated to the election: once the dead
-/// elder's heartbeat ages out (≤ one TTL) the next-eldest renderer *is* the
-/// producer and recovers through the branch above, while everyone else keeps
-/// folding the held panes with the event-fresh rollup. Exactly one producer at
-/// any moment, never a per-consumer produce storm; the lone renderer is its own
-/// next-eldest. This state records every attempt before the produce path, so
-/// errors and forced refreshes cannot start an ordinary storm.
+/// Record every production attempt so errors and forced refreshes bound the next ordinary attempt.
 #[derive(Default)]
 struct ProducerCadence {
     last_attempt: Option<Instant>,
@@ -222,7 +178,6 @@ struct ProducerCadence {
 impl ProducerCadence {
     fn start_attempt_if_due(
         &mut self,
-        is_producer: bool,
         mode: FetchMode,
         frame_age_ms: Option<u64>,
         tick: Duration,
@@ -232,11 +187,10 @@ impl ProducerCadence {
             .last_attempt
             .is_none_or(|last| now.saturating_duration_since(last) >= tick);
         let produce = match mode {
-            FetchMode::Normal if is_producer => {
+            FetchMode::Normal => {
                 normal_attempt_due && frame_age_ms.is_none_or(|age| age >= tick.as_millis() as u64)
             }
-            FetchMode::Normal => false,
-            FetchMode::ProducerFreshPanes => is_producer,
+            FetchMode::FreshPanes => true,
             FetchMode::HardRefresh => true,
         };
         if produce {
@@ -245,17 +199,6 @@ impl ProducerCadence {
             self.last_attempt = Some(now);
         }
         produce
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct ProducerElection {
-    elder: Option<SidebarInstanceId>,
-}
-
-impl ProducerElection {
-    fn is_producer(&self) -> bool {
-        self.elder.is_none()
     }
 }
 
@@ -300,12 +243,10 @@ struct FetchWorker {
     config: ServeConfig,
     runtime: RuntimePaths,
     diag: crate::diag::DiagSink,
-    election: ProducerElectionTracker,
     reader: PublishedSnapshotReader,
     producer_cadence: ProducerCadence,
     notifications: NotificationState,
     link_notifications: LinkNotificationState,
-    last_election: Option<ProducerElection>,
     meter: TickMeter,
     projection_publisher: crate::sidebar::workspace_projection::WorkspaceProjectionPublisher,
     tab_name_memo: TabNameMemo,
@@ -316,17 +257,11 @@ struct FetchWorker {
 
 struct FastFold {
     result: crate::store::snapshot::Result<WorkspaceFold>,
-    role: FetchRole,
     produce: bool,
 }
 
 impl FetchWorker {
-    fn new(
-        config: ServeConfig,
-        runtime: RuntimePaths,
-        diag: crate::diag::DiagSink,
-        election: ProducerElectionTracker,
-    ) -> Self {
+    fn new(config: ServeConfig, runtime: RuntimePaths, diag: crate::diag::DiagSink) -> Self {
         let reader = PublishedSnapshotReader::new(
             runtime.clone(),
             config.session_name.clone(),
@@ -338,12 +273,10 @@ impl FetchWorker {
             config,
             runtime,
             diag,
-            election,
             reader,
             producer_cadence: ProducerCadence::default(),
             notifications: NotificationState::default(),
             link_notifications: LinkNotificationState::default(),
-            last_election: None,
             meter,
             projection_publisher: Default::default(),
             tab_name_memo: TabNameMemo::default(),
@@ -355,58 +288,17 @@ impl FetchWorker {
         }
     }
 
-    /// One fetch cycle, posting one or two outcomes. Runs on the fetch worker
-    /// thread, keeping the produce's `list-panes` + git round-trips off the
-    /// render/input loop so animation never stalls on it. `state` is resolved per
-    /// cycle by the worker loop, so a `workspace migrate` lands without a restart.
-    ///
-    /// **Fast lane (every cycle, producer and consumer alike):** fold the
-    /// event-fresh store rollup over the published pane frame entirely in process
-    /// ([`crate::sidebar::consumer::read_published_snapshot`]) — no `list-panes`,
-    /// no git. This is the paint that lands a status flip or a cost update within
-    /// one wakeup, in single-digit milliseconds — and it runs even over an aged
-    /// pane frame, so a dead producer stales only pane *presence* while status
-    /// keeps flowing. On cold start, before any usable frame exists, this still
-    /// returns a frameless rollup snapshot so startup waits do not read as refresh
-    /// failures; the produce below recovers the pane frame.
-    ///
-    /// **Produce lane (the elder's reconciliation):**
-    /// [`crate::sidebar::produce::produce_workspace_snapshot`] runs in process on this same
-    /// worker — same thread, same warm cursor as the fast lane, so the rollup
-    /// fold stays O(new log bytes) and promotion to producer is warm by
-    /// construction. It refreshes pane truth and roots, then publishes the shared
-    /// frame every other tab reads. One producer per
-    /// workspace — the eldest live instance — and on it the produce is gated to
-    /// the data tick: a store-delta storm paints per delta but produces at most
-    /// once per tick. Heavy git/spend/account lanes are refreshed by the elder's
-    /// cache refresher and projected here, so this worker stays responsible for
-    /// pane truth, roots, notifications, and publish order. Topology freshness is
-    /// producer-only: consumers wait for the
-    /// producer's `PaneFramePublished` event and fold the new cache without
-    /// locally producing. Only a hard refresh (reload/manual recovery) lets a
-    /// consumer produce. Stale-frame recovery belongs to the election, not the
-    /// consumers — a dead elder's heartbeat ages out within one TTL and the
-    /// next-eldest *becomes* the producer, so a wedged producer costs one handoff,
-    /// never an every-consumer produce storm (the old self-heal, whose
-    /// single-flight loser wait was shorter than a `list-panes`, so every loser
-    /// timed out into its own uncached produce). A lone renderer is its own
-    /// next-eldest, so it still self-heals through the producer branch.
+    /// Fold event-fresh truth every cycle and reconcile panes at the data tick.
+    /// Both lanes share the warm cursor; forced topology and hard refreshes
+    /// bypass cadence without blocking any renderer.
     fn run_cycle(&mut self, state: &StatePaths, request: FetchRequest, sink: &mut ResultSink) {
         sink.begin_cycle();
         if sink.cycle.is_empty() {
             return;
         }
-        let role = self.observe_role();
         let now_ms = crate::utils::time::unix_now_ms();
         let frame_stamps =
             crate::sidebar::cache::published_frame_stamps(&self.runtime, &self.config.session_name);
-        let recordable = consumer_stamp_recordable(request, role.is_producer());
-        let unchanged = recordable && self.reader.fold_unchanged(state, now_ms);
-        if consumer_stamp_skippable(request, role.is_producer()) && unchanged {
-            sink.publish(FetchUpdate::Unchanged { role });
-            return;
-        }
-
         tracing::debug!(target: "rimz::sidebar::fold", "sidebar fold");
         #[cfg(test)]
         if let Some(on_read) = &mut self.on_read {
@@ -417,44 +309,22 @@ impl FetchWorker {
             observation: None,
             inputs: sink.inputs.clone(),
         }));
-        let fast = if role.is_producer() {
-            self.read_and_publish_workspace(state)
-        } else {
-            self.reader.read_adopting_workspace(state)
-        }
-        .map(|(workspace, frame)| WorkspaceFold { workspace, frame });
+        let fast = self
+            .read_and_publish_workspace(state)
+            .map(|(workspace, frame)| WorkspaceFold { workspace, frame });
         let tick = self.stand(sink).tick;
-        let produce = self.start_produce_if_due(request, role, frame_stamps, &fast, now_ms, tick);
-        let fast_fold_ok = self.publish_fast_fold(
+        let produce = self.start_produce_if_due(request, frame_stamps, &fast, now_ms, tick);
+        self.publish_fast_fold(
             state,
             FastFold {
                 result: fast,
-                role,
                 produce,
             },
             sink,
         );
-        if fast_fold_ok && recordable {
-            self.reader.record_fold(state, now_ms);
-        } else {
-            self.reader.clear_fold();
-        }
         if produce {
-            self.publish_produced_fold(state, request, role, sink);
+            self.publish_produced_fold(state, request, sink);
         }
-    }
-
-    fn observe_role(&mut self) -> FetchRole {
-        let election = ProducerElection {
-            elder: self.election.elder_instance(),
-        };
-        let role = if election.is_producer() {
-            FetchRole::Producer
-        } else {
-            FetchRole::Consumer
-        };
-        emit_producer_transition(&self.diag, &mut self.last_election, election);
-        role
     }
 
     fn read_and_publish_workspace(
@@ -507,7 +377,6 @@ impl FetchWorker {
     fn start_produce_if_due(
         &mut self,
         request: FetchRequest,
-        role: FetchRole,
         frame_stamps: Option<(u64, u64)>,
         fast: &crate::store::snapshot::Result<WorkspaceFold>,
         now_ms: u64,
@@ -520,21 +389,11 @@ impl FetchWorker {
             .ok()
             .and(frame_stamps.map(|(produced_at_ms, _)| produced_at_ms))
             .map(|produced_at_ms| now_ms.saturating_sub(produced_at_ms));
-        self.producer_cadence.start_attempt_if_due(
-            role.is_producer(),
-            request.mode,
-            frame_age_ms,
-            tick,
-            Instant::now(),
-        )
+        self.producer_cadence
+            .start_attempt_if_due(request.mode, frame_age_ms, tick, Instant::now())
     }
 
-    fn publish_fast_fold(
-        &mut self,
-        state: &StatePaths,
-        fold: FastFold,
-        sink: &mut ResultSink,
-    ) -> bool {
+    fn publish_fast_fold(&mut self, state: &StatePaths, fold: FastFold, sink: &mut ResultSink) {
         match fold.result {
             Ok(fast) => {
                 let snapshot = self.project_fold(fast, sink);
@@ -547,23 +406,19 @@ impl FetchWorker {
                     state,
                     SnapshotPublication {
                         snapshot,
-                        role: fold.role,
                         phase,
-                        source: SnapshotSource::Published,
+                        source: SnapshotSource::Cached,
                     },
                     sink,
                 );
-                true
             }
             Err(err) if !fold.produce => {
                 sink.publish(FetchUpdate::Failed {
                     error: err.to_string(),
-                    role: fold.role,
                 });
-                false
             }
             // Producing cycle reports the produce fold's own error.
-            Err(_) => false,
+            Err(_) => {}
         }
     }
 
@@ -571,7 +426,6 @@ impl FetchWorker {
         &mut self,
         state: &StatePaths,
         request: FetchRequest,
-        role: FetchRole,
         sink: &mut ResultSink,
     ) {
         let opts = crate::sidebar::produce::ProduceOptions {
@@ -585,14 +439,12 @@ impl FetchWorker {
             crate::sidebar::produce::produce_workspace_snapshot(cursor, state, &self.runtime, &opts)
         }) {
             Ok(produced) => {
-                if role.is_producer()
-                    && let Err(err) = self.projection_publisher.publish(
-                        &self.runtime,
-                        &self.config.session_name,
-                        &produced.workspace,
-                        &produced.frame,
-                    )
-                {
+                if let Err(err) = self.projection_publisher.publish(
+                    &self.runtime,
+                    &self.config.session_name,
+                    &produced.workspace,
+                    &produced.frame,
+                ) {
                     tracing::debug!(error = %err, "workspace projection publish failed");
                 }
                 let frame = Arc::new(produced.frame);
@@ -603,21 +455,18 @@ impl FetchWorker {
                     },
                     sink,
                 );
-                if role.is_producer() {
-                    self.update_tab_names(&snapshot, &frame);
-                }
+                self.update_tab_names(&snapshot, &frame);
                 self.publish_snapshot(
                     state,
                     SnapshotPublication {
                         snapshot,
-                        role,
                         phase: FetchPhase::Final,
                         source: SnapshotSource::Produced,
                     },
                     sink,
                 );
             }
-            Err(error) => sink.publish(FetchUpdate::Failed { error, role }),
+            Err(error) => sink.publish(FetchUpdate::Failed { error }),
         }
     }
 
@@ -669,14 +518,13 @@ impl FetchWorker {
     ) {
         let SnapshotPublication {
             mut snapshot,
-            role,
             phase,
             source,
         } = publication;
-        let final_producer = role.is_producer() && phase == FetchPhase::Final;
-        let roster = (final_producer && source == SnapshotSource::Produced)
+        let final_snapshot = phase == FetchPhase::Final;
+        let roster = (final_snapshot && source == SnapshotSource::Produced)
             .then(|| crate::sidebar::produce::live_roster_from_snapshot(&snapshot));
-        let deliveries = if final_producer {
+        let deliveries = if final_snapshot {
             evaluate_notifications(
                 &self.runtime,
                 &self.config.notification_prefs,
@@ -688,7 +536,7 @@ impl FetchWorker {
         } else {
             Vec::new()
         };
-        if final_producer && let Some((fold, _)) = &mut sink.staged {
+        if final_snapshot && let Some((fold, _)) = &mut sink.staged {
             let unread: HashMap<_, _> = snapshot
                 .rows()
                 .map(|row| (row.id.as_str(), row.unread))
@@ -707,15 +555,12 @@ impl FetchWorker {
         }
         sink.publish(FetchUpdate::Snapshot {
             snapshot: Box::new(snapshot),
-            role,
             phase,
             source,
         });
         // After the send: a narrowing write waits on a mux listing, which must
         // not hold the frame.
-        if let Some(roster) = roster
-            && self.election.confirm_producer()
-        {
+        if let Some(roster) = roster {
             self.publish_live_roster(state, roster);
         }
         deliver_notifications(
@@ -752,36 +597,6 @@ impl FetchWorker {
                 "live roster publish failed",
             );
         }
-    }
-}
-
-fn consumer_stamp_skippable(request: FetchRequest, is_producer: bool) -> bool {
-    !is_producer && request.allows_unchanged_skip()
-}
-
-fn consumer_stamp_recordable(request: FetchRequest, is_producer: bool) -> bool {
-    !is_producer
-        && request.mode == FetchMode::Normal
-        && request.min_pane_cache_ms.is_none()
-        && !request.force_fold
-}
-
-fn emit_producer_transition(
-    diag: &crate::diag::DiagSink,
-    last_election: &mut Option<ProducerElection>,
-    election: ProducerElection,
-) {
-    let Some(prior) = last_election.replace(election.clone()) else {
-        return;
-    };
-    match (prior.elder, election.elder) {
-        (Some(prior_elder), None) => {
-            diag.emit_unlimited(crate::diag::record::DiagEvent::ProducerElected { prior_elder })
-        }
-        (None, Some(new_elder)) => {
-            diag.emit_unlimited(crate::diag::record::DiagEvent::ProducerDemoted { new_elder })
-        }
-        _ => {}
     }
 }
 
@@ -913,8 +728,8 @@ fn notification_panes(notification: &Notification) -> Vec<PaneId> {
         .collect()
 }
 
-/// One request to the fetch worker. The mode keeps topology signals producer-
-/// only, while a hard refresh remains available for manual recovery. When a
+/// One request to the fetch worker. The mode distinguishes topology freshness
+/// from manual recovery. When a
 /// request carries `min_pane_cache_ms`, any producing lane ignores a pane cache
 /// older than the signal that asked for fresh topology.
 #[derive(Clone, Copy, Debug)]
@@ -944,7 +759,7 @@ impl Default for FetchRequest {
 pub(super) enum FetchMode {
     #[default]
     Normal,
-    ProducerFreshPanes,
+    FreshPanes,
     HardRefresh,
 }
 
@@ -952,7 +767,7 @@ impl FetchMode {
     fn strength(self) -> u8 {
         match self {
             Self::Normal => 0,
-            Self::ProducerFreshPanes => 1,
+            Self::FreshPanes => 1,
             Self::HardRefresh => 2,
         }
     }
@@ -967,9 +782,9 @@ impl FetchMode {
 }
 
 impl FetchRequest {
-    pub(super) fn producer_fresh_panes() -> Self {
+    pub(super) fn fresh_panes() -> Self {
         Self {
-            mode: FetchMode::ProducerFreshPanes,
+            mode: FetchMode::FreshPanes,
             min_pane_cache_ms: Some(crate::utils::time::unix_now_ms()),
             ..Self::default()
         }
@@ -990,9 +805,7 @@ impl FetchRequest {
         }
     }
 
-    /// Fold from current caches even when the worker's unchanged-input memo
-    /// would skip. Renderer-local timers use this when fold side effects depend
-    /// on local state rather than store or pane-frame inputs.
+    /// Request a new fold for renderer-local state that a prior cycle could not observe.
     pub(super) fn force_fold() -> Self {
         Self {
             force_fold: true,
@@ -1001,8 +814,8 @@ impl FetchRequest {
     }
 
     #[cfg(test)]
-    pub(super) fn is_producer_fresh_panes(self) -> bool {
-        matches!(self.mode, FetchMode::ProducerFreshPanes)
+    pub(super) fn is_fresh_panes(self) -> bool {
+        matches!(self.mode, FetchMode::FreshPanes)
     }
 
     #[cfg(test)]
@@ -1031,13 +844,6 @@ impl FetchRequest {
             ..self
         }
     }
-
-    fn allows_unchanged_skip(self) -> bool {
-        self.mode == FetchMode::Normal
-            && self.min_pane_cache_ms.is_none()
-            && !self.published_frame_hint
-            && !self.force_fold
-    }
 }
 
 #[derive(Default)]
@@ -1045,20 +851,18 @@ pub(super) struct PendingResults {
     pub(super) snapshot: Option<FetchUpdate>,
     pub(super) outcome: Option<FetchUpdate>,
     pub(super) completed: bool,
-    pub(super) role: Option<FetchRole>,
 }
 
 impl PendingResults {
     fn push(&mut self, mut update: FetchUpdate) {
         let is_final = update.is_final();
         self.completed |= is_final;
-        self.role = Some(update.role());
         if update.snapshot_mut().is_none() {
             self.outcome = Some(update);
             return;
         }
         // An unfinished cycle cannot displace a completed one the pane has
-        // not seen. Its role still advances independently of that snapshot.
+        // not seen.
         if !is_final && self.snapshot.as_ref().is_some_and(FetchUpdate::is_final) {
             return;
         }
@@ -1185,7 +989,7 @@ impl Stand {
 }
 
 /// The renderers one fetch worker feeds, keyed by instance id so they iterate
-/// eldest first, in the order the producer election ranks them.
+/// oldest subscriber first, providing a stable representative for each cycle.
 pub(super) type Subscribers = Arc<Mutex<BTreeMap<String, Subscriber>>>;
 
 struct ResultSink {
@@ -1265,11 +1069,10 @@ impl ResultSink {
         // must find its next request unanswered, or the worker would drop it.
         if matches!(
             update,
-            FetchUpdate::Unchanged { .. }
-                | FetchUpdate::Snapshot {
-                    phase: FetchPhase::Final,
-                    ..
-                }
+            FetchUpdate::Snapshot {
+                phase: FetchPhase::Final,
+                ..
+            }
         ) && let Some(cycle) = self.answering.take()
         {
             self.covered.record(cycle);
@@ -1279,15 +1082,7 @@ impl ResultSink {
         };
         for subscriber in others {
             match (&update, &staged) {
-                (
-                    FetchUpdate::Snapshot {
-                        role,
-                        phase,
-                        source,
-                        ..
-                    },
-                    Some((fold, default_pane)),
-                ) => {
+                (FetchUpdate::Snapshot { phase, source, .. }, Some((fold, default_pane))) => {
                     let snapshot = project_local(
                         fold.workspace.clone(),
                         fold.frame.as_deref(),
@@ -1297,7 +1092,6 @@ impl ResultSink {
                         subscriber,
                         FetchUpdate::Snapshot {
                             snapshot: Box::new(snapshot),
-                            role: *role,
                             phase: *phase,
                             source: *source,
                         },
@@ -1367,7 +1161,6 @@ impl FetchWorker {
                     sink.begin_cycle();
                     sink.publish(FetchUpdate::Failed {
                         error: format!("resolving workspace state paths: {err}"),
-                        role: FetchRole::Consumer,
                     });
                 }
             }
@@ -1384,7 +1177,6 @@ pub(super) fn spawn_fetch_worker(
     config: ServeConfig,
     runtime: RuntimePaths,
     diag: crate::diag::DiagSink,
-    election: ProducerElectionTracker,
     request_rx: std::sync::mpsc::Receiver<FetchRequest>,
     subscribers: Subscribers,
     covered: Covered,
@@ -1392,7 +1184,7 @@ pub(super) fn spawn_fetch_worker(
 ) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
         crate::lane::set(crate::lane::WorkLane::Fetch);
-        let mut worker = FetchWorker::new(config, runtime, diag, election);
+        let mut worker = FetchWorker::new(config, runtime, diag);
         worker.observer = observer;
         worker.run(request_rx, ResultSink::shared(subscribers, covered));
     })
@@ -1556,19 +1348,6 @@ impl FetchDispatcher {
         }
     }
 
-    pub(super) fn request_or_defer(
-        &mut self,
-        request: FetchRequest,
-        immediate: bool,
-        defer_for: Duration,
-    ) {
-        if immediate {
-            self.request(request, true);
-        } else {
-            self.defer_until(request, Instant::now() + defer_for);
-        }
-    }
-
     pub(super) fn defer_until(&mut self, request: FetchRequest, due_at: Instant) {
         if let Some(deferred) = &mut self.deferred {
             deferred.request.merge(request);
@@ -1580,11 +1359,6 @@ impl FetchDispatcher {
 
     pub(super) fn next_deadline(&self) -> Option<Instant> {
         self.deferred.map(|deferred| deferred.due_at)
-    }
-
-    #[cfg(test)]
-    pub(super) fn deferred_request(&self) -> Option<FetchRequest> {
-        self.deferred.map(|deferred| deferred.request)
     }
 
     pub(super) fn fire_due(&mut self, now: Instant) {

@@ -96,7 +96,6 @@ impl Rig {
     fn fold(&mut self, snapshot: SidebarSnapshot, source: SnapshotSource) {
         self.deliver(FetchUpdate::Snapshot {
             snapshot: Box::new(snapshot),
-            role: FetchRole::Producer,
             phase: FetchPhase::Final,
             source,
         });
@@ -110,7 +109,6 @@ impl Rig {
         self.deliver(FetchUpdate::Shared {
             update: Box::new(FetchUpdate::Snapshot {
                 snapshot: Box::new(snapshot),
-                role: FetchRole::Producer,
                 phase: FetchPhase::Final,
                 source: SnapshotSource::Produced,
             }),
@@ -158,15 +156,13 @@ impl Rig {
         self.requests.try_recv().ok()
     }
 
-    /// Park the renderer off screen: animating content, no viewed pane, not
-    /// the elder. The unwatched-path fixture.
-    fn hide_consumer(&mut self) {
+    /// Park the renderer off screen with animating content and no viewed pane.
+    fn hide(&mut self) {
         self.state.current = animating_agent_snapshot(&self.ws);
         self.state.current.own_view = Some(own_view());
         self.state.current.viewed_panes.clear();
         let pulled = self.state.current.clone();
         self.set_pulled(&pulled);
-        self.state.last_known_elder = false;
     }
 
     /// Bring the renderer back on screen by viewing a sibling pane.
