@@ -730,19 +730,18 @@ impl LoopState {
             pane = %repair.pane_id,
             generation = repair.generation,
             evidence = ?repair.clients,
-            client_views = ?self.current.client_views,
+            own_view = ?self.current.own_view,
             viewed_panes = ?self.current.viewed_panes,
             age_ms = now_ms.saturating_sub(repair.sent_at_ms),
-            "sidebar focus repair deferred: snapshot disagrees with strand evidence",
+            "sidebar focus repair deferred: no unambiguous working sibling row yet",
         );
         false
     }
 
-    /// Re-attempt a strand the last fold could not yet act on. The first
-    /// snapshot after a strand routinely predates the client sample the plugin
-    /// took, so a single miss says nothing about whether focus is healthy — the
-    /// repair stays viable for the event's whole TTL and retries on each fold
-    /// until the evidence agrees. Past the TTL it is abandoned with a record.
+    /// Re-attempt a strand the last fold could not yet act on: the snapshot may
+    /// still lack the owning view or a visible working sibling row. The repair
+    /// stays viable for the event's whole TTL and retries on each fold. Past
+    /// the TTL it is abandoned with a record.
     fn retry_pending_focus_repair(&mut self) {
         let Some(repair) = self.pending_focus_repair.take() else {
             return;
@@ -754,7 +753,10 @@ impl LoopState {
         if focus_repair_still_viable(repair.sent_at_ms, now_ms) {
             self.pending_focus_repair = Some(repair);
         } else {
-            self.record_abandoned_focus_repair(&repair, "client evidence never converged");
+            self.record_abandoned_focus_repair(
+                &repair,
+                "no unambiguous working sibling row within the strand TTL",
+            );
         }
     }
 
@@ -1902,15 +1904,7 @@ fn focus_stranded_target(
     if now_ms.saturating_sub(sent_at_ms) > duration_millis(FOCUS_STRANDED_EVENT_TTL) {
         return None;
     }
-    let mut current = snapshot.client_views.clone();
-    let mut evidence = evidence.to_vec();
-    current.sort();
-    current.dedup();
-    evidence.sort();
-    evidence.dedup();
-    if stranded_pane_id.mux() == MuxName::Zellij
-        && (snapshot.presence.is_none() || evidence.is_empty() || current != evidence)
-    {
+    if stranded_pane_id.mux() == MuxName::Zellij && evidence.is_empty() {
         return None;
     }
     // `focus-pane-id` is session-global: with clients viewing distinct panes it
