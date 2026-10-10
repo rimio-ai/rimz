@@ -74,6 +74,80 @@ fn focus_repair_retry_window_matches_the_strand_event_ttl() {
 }
 
 #[test]
+fn focus_stranded_uses_evidence_without_snapshot_client_agreement() {
+    let (mut snapshot, sidebar, first_work, second_work) = focus_fixture();
+    let evidence = snapshot.client_views.clone();
+    snapshot.client_views[0].pane_id = first_work;
+    let ui = UiState {
+        baseline_pane: Some(second_work.clone()),
+        ..UiState::default()
+    };
+    for presence in [snapshot.presence, None] {
+        snapshot.presence = presence;
+        assert_eq!(
+            focus_stranded_target(
+                &snapshot,
+                &ui,
+                &sidebar,
+                &evidence,
+                Some(&sidebar),
+                1_000,
+                1_050,
+            ),
+            Some(second_work.clone()),
+            "a settled strand must not wait for the pane frame's client sample",
+        );
+    }
+}
+
+#[test]
+fn focus_stranded_keeps_empty_evidence_and_tmux_ambiguity_guards() {
+    let (mut snapshot, sidebar, _first_work, _second_work) = focus_fixture();
+    assert_eq!(
+        focus_stranded_target(
+            &snapshot,
+            &UiState::default(),
+            &sidebar,
+            &[],
+            Some(&sidebar),
+            1_000,
+            1_050,
+        ),
+        None,
+    );
+    let tmux_sidebar = PaneId::from_parts(MuxName::Tmux, "%10");
+    snapshot.viewed_panes = vec![
+        tmux_sidebar.clone(),
+        PaneId::from_parts(MuxName::Tmux, "%11"),
+    ];
+    assert_eq!(
+        focus_stranded_target(
+            &snapshot,
+            &UiState::default(),
+            &tmux_sidebar,
+            &[],
+            Some(&tmux_sidebar),
+            1_000,
+            1_050,
+        ),
+        None,
+    );
+    snapshot.viewed_panes.clear();
+    assert!(
+        focus_stranded_target(
+            &snapshot,
+            &UiState::default(),
+            &tmux_sidebar,
+            &[],
+            Some(&tmux_sidebar),
+            1_000,
+            1_050,
+        )
+        .is_some()
+    );
+}
+
+#[test]
 fn focus_stranded_falls_back_to_working_sibling_when_baseline_is_missing() {
     let (snapshot, sidebar, first_work, _second_work) = focus_fixture();
     let ui = UiState {
