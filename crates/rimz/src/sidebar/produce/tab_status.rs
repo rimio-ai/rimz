@@ -1,5 +1,5 @@
 //! Pure tab-status projection from the producer's fused agent rows and pane
-//! frame. Mux mutation stays with the elected producer; this module only
+//! frame. Mux mutation stays with the room host; this module only
 //! decides which observed names need a suffix, survivor label, or shell release.
 
 use std::collections::{HashMap, HashSet};

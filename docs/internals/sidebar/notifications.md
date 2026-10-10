@@ -10,7 +10,7 @@ This page owns the push path: who decides a notification, who delivers it on eac
 | --- | --- |
 | [`sidebar/notify.rs`](../../../crates/rimz/src/sidebar/notify.rs) | `NotificationState` push policy over newly opened episodes, title and body rendering, `spawn_notify_handlers`, and `LinkNotificationState` for the link-health record |
 | [`sidebar/unread.rs`](../../../crates/rimz/src/sidebar/unread.rs) | `UnreadEpisodes`: `unread.json`, `reconcile`, and the `OpenedUnread` records the policy consumes |
-| [`sidebar_pane/app/fetch.rs`](../../../crates/rimz/src/sidebar_pane/app/fetch.rs) | `evaluate_notifications` and `deliver_notifications`, run by the elected producer on its fetch cycle |
+| [`sidebar_pane/app/fetch.rs`](../../../crates/rimz/src/sidebar_pane/app/fetch.rs) | `evaluate_notifications` and `deliver_notifications`, run by the host on its fetch cycle |
 | [`sidebar_pane/app/notify.rs`](../../../crates/rimz/src/sidebar_pane/app/notify.rs) | `emit_terminal_notification`: the renderer's desktop targeting and `bell_decision` |
 | [`sidebar_pane/app/remind.rs`](../../../crates/rimz/src/sidebar_pane/app/remind.rs) | `RemindState`: renderer-local unread reminders |
 | [`osc.rs`](../../../crates/rimz/src/osc.rs) | OSC 777 and BEL bytes, the tmux DCS wrap, and the terminal-local variant for processes outside a sidebar pane |
@@ -34,7 +34,7 @@ Five code paths construct a notification, and each sets its `NotificationKind`. 
 
 | Kind | Emitter | Channels |
 | --- | --- | --- |
-| `waiting`, `failed`, `paused`, `success`, `coalesced` | The elected producer, over newly opened unread episodes ([the producer](#the-producer)) | Handlers, then `SidebarEvent::Notify` to every renderer for OSC and bell |
+| `waiting`, `failed`, `paused`, `success`, `coalesced` | The host, over newly opened unread episodes ([the host](#the-host)) | Handlers, then `SidebarEvent::Notify` to every renderer for OSC and bell |
 | `reminder` | Each renderer, over its own unread scope ([reminders](#unread-reminders)) | The renderer's own OSC and bell, and handlers |
 | `link_lost`, `link_restored` | The local `rimz remote connect` supervisor ([remote link alerts](#remote-link-alerts)) | OSC and BEL on the supervisor's stderr, and handlers |
 | `loop_disabled` | `rimz loop` when a task auto-disables after consecutive failed fires (`notify_loop_disabled` in `cli/loop_cmd/run.rs`) | Handlers, then a `Notify` event with no panes |
@@ -42,13 +42,13 @@ Five code paths construct a notification, and each sets its `NotificationKind`. 
 
 Only the producer path applies triggers, debounce, coalescing, and focus suppression, and only the producer writes `notification_emitted` trace records.
 
-## The producer
+## The host
 
-The elected sidebar producer is the one process that decides agent notifications, so a room with several sidebars pushes each event once. Election is [state.md → Renderers, the producer, and consumers](./state.md#renderers-the-producer-and-consumers).
+The room host's fetch worker decides agent notifications once for all its panes ([state.md](./state.md#the-room-data-plane)).
 
 Each fetch cycle, `evaluate_notifications` loads `unread.json` and the merged read receipts and calls `UnreadEpisodes::reconcile`. Reconcile prunes episodes a receipt reaches (silently) and episodes whose row has left the snapshot (an `unread_cleared` record with `cause: row_gone`), then opens an episode for every row whose displayed status needs a look and that has no open episode and no receipt reaching its `last_activity`. The returned `OpenedUnread` list is the only input to push policy. An episode opened by `rimz sidebar mark-unread` or the renderer's `m` key is written directly to `unread.json`, never appears in that list, and pushes nothing.
 
-When `unread.json` is absent at load, every open in that pass is marked `silent`. Attaching to a busy room therefore renders its current attention rows unread without a burst of banners. Once the file exists, the durable set also dedupes across producer handoff and renderer restart: an episode already recorded does not open again.
+When `unread.json` is absent at load, every open in that pass is marked `silent`. Attaching to a busy room therefore renders its current attention rows unread without a burst of banners. Once the file exists, the durable set also dedupes across host replacement and renderer restart: an episode already recorded does not open again.
 
 `NotificationState::evaluate` then applies the user's policy to each opened episode, in this order:
 
@@ -62,7 +62,7 @@ The first addition to an empty batch starts the coalesce window. The batch flush
 
 `[notifications].title` and `.body` then replace the built-in text for the status kinds and `coalesced`; reminders, link alerts, and `loop_disabled` keep their built-in text. A template that fails to render leaves the built-in text in place.
 
-`deliver_notifications` sends each notification three ways, in order: it spawns the matching handlers, appends `notification_emitted` to the trace log, and broadcasts `SidebarEvent::Notify` with the title, body, the agents' pane ids, `recheck_unread: true`, and the kind. The producer writes no terminal bytes itself; its own renderer receives the broadcast like every other.
+`deliver_notifications` sends each notification three ways, in order: it spawns the matching handlers, appends `notification_emitted` to the trace log, and broadcasts `SidebarEvent::Notify` with the title, body, the agents' pane ids, `recheck_unread: true`, and the kind. Notification policy writes no terminal bytes; every attachment receives the broadcast and decides its own OSC and bell.
 
 ## The renderer
 

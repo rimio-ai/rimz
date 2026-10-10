@@ -2,15 +2,8 @@
 //!
 //! The sidebar heartbeat remains a latency hint. A stale, unreadable, or
 //! protocol-mismatched heartbeat never blocks a fresh launch.
+//! One room host owns the data plane and paints every subscribed pane.
 //!
-//! The invariant is one *producer* per workspace, one *renderer* per tab. Every
-//! tab runs its own renderer; the eldest live instance is elected the producer
-//! (UUIDv7 ids sort by birth) and reads the mux/git inputs, while younger
-//! renderers read its published cache read-only. So the mux/git round-trip is
-//! paid once per workspace without any per-tab renderer going dark. A launch
-//! lock keeps concurrent attaches from each spawning a daemon, and the orphan
-//! sweep reaps a SIGKILLed instance's runtime files.
-
 pub mod agent_projection;
 pub(crate) mod body_filter;
 pub mod cache;
@@ -24,8 +17,6 @@ pub mod notify;
 pub mod observe;
 pub mod presence;
 pub mod produce;
-#[cfg(test)]
-mod producer_election_tests;
 pub mod read_marks;
 pub mod refresh;
 #[cfg(test)]
@@ -36,9 +27,8 @@ pub mod workspace_projection;
 
 use std::collections::{BTreeSet, HashSet};
 use std::fs;
-use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime};
+use std::path::Path;
+use std::time::Duration;
 
 use tracing::debug;
 
@@ -46,56 +36,35 @@ use crate::disk::paths::RuntimePaths;
 use crate::disk::single_flight::{self, Coalesced};
 use crate::ids::{MuxName, PaneId, SidebarInstanceId};
 use crate::mux::{DaemonView, MuxBackend, SidebarLiveness, SidebarPaneOptions};
-use crate::sidebar::timing::HEARTBEAT_WRITE_INTERVAL;
 use crate::wakeup::heartbeat::{
-    SIDEBAR_HEARTBEAT_TTL, SIDEBAR_PROTOCOL_VERSION, SidebarHeartbeat, SidebarSize,
-    fresh_sidebar_heartbeats, read_current_heartbeats,
+    SIDEBAR_HEARTBEAT_TTL, SidebarHeartbeat, SidebarSize, fresh_sidebar_heartbeats,
 };
 
 /// Launch-lock poll cadence: the producer holds the election lock while the
 /// daemon it spawned starts and publishes its first heartbeat, and a peer queued
-/// behind it polls this long before giving up to the runtime election. Longer
+/// behind it polls this long before giving up to the runtime reconciliation. Longer
 /// than the diff-stats window because production here is an async process spawn,
 /// not a synchronous git fork. `25ms × 60 ≈ 1.5s`.
 const LAUNCH_WAIT_STEP: Duration = Duration::from_millis(25);
 const LAUNCH_WAIT_STEPS: u32 = 60;
 
-/// One live renderer of this workspace, with the side of the election it fell on.
+/// One live renderer of this workspace.
 #[cfg(feature = "testkit")]
 pub struct LiveSidebar {
     pub heartbeat: SidebarHeartbeat,
-    pub producer: bool,
 }
 
-/// Read the renderer election from outside a renderer: the smallest live instance produces.
-/// It shares `full_scan`'s protocol and TTL filters through `fresh_sidebar_heartbeats`, its
-/// workspace filter, and its instance-id ordering; keep those aligned. It deliberately drops
-/// `full_scan`'s check that a heartbeat's file name matches its own instance id, which the
-/// shared scan does not expose and which only a hand-planted file can trip.
-///
-/// Contributor tooling only — `rimz sidebar renderers` labels a room's tabs with it and
-/// `rimz sidebar click` finds a pane's wakeup socket through it. A renderer decides its own
-/// role through `ProducerElectionTracker`, which memoizes; this rescans every call.
+/// Discover this workspace's live renderers in instance-id order.
 #[cfg(feature = "testkit")]
 pub fn live_sidebars(runtime: &RuntimePaths) -> Vec<LiveSidebar> {
-    order_live_sidebars(
-        fresh_sidebar_heartbeats(runtime)
-            .into_iter()
-            .filter(|heartbeat| heartbeat.workspace_id == runtime.workspace_id)
-            .collect(),
-    )
-}
-
-#[cfg(feature = "testkit")]
-fn order_live_sidebars(mut heartbeats: Vec<SidebarHeartbeat>) -> Vec<LiveSidebar> {
+    let mut heartbeats: Vec<_> = fresh_sidebar_heartbeats(runtime)
+        .into_iter()
+        .filter(|heartbeat| heartbeat.workspace_id == runtime.workspace_id)
+        .collect();
     heartbeats.sort_by(|left, right| left.instance_id.as_str().cmp(right.instance_id.as_str()));
     heartbeats
         .into_iter()
-        .enumerate()
-        .map(|(index, heartbeat)| LiveSidebar {
-            heartbeat,
-            producer: index == 0,
-        })
+        .map(|heartbeat| LiveSidebar { heartbeat })
         .collect()
 }
 
@@ -275,202 +244,6 @@ pub fn fresh_sidebar_present(rt: &RuntimePaths) -> bool {
     !fresh_sidebar_instances(rt).is_empty()
 }
 
-/// Process-local memo of the renderer's producer election.
-///
-/// Heartbeats remain the liveness source and the snapshot single-flight remains
-/// the correctness boundary. This tracker only avoids making every long-lived
-/// renderer thread rescan every renderer heartbeat on every lookup.
-#[derive(Clone)]
-pub(crate) struct ProducerElectionTracker {
-    runtime: RuntimePaths,
-    state: Arc<Mutex<ProducerElectionState>>,
-}
-
-struct ProducerElectionState {
-    own_id: SidebarInstanceId,
-    /// A host with no pane attached renders nothing and must not produce.
-    abstaining: bool,
-    cached: CachedElection,
-    #[cfg(test)]
-    full_scans: u64,
-}
-
-#[derive(Default)]
-enum CachedElection {
-    #[default]
-    Unknown,
-    Elder {
-        id: SidebarInstanceId,
-        path: PathBuf,
-        expires_at: SystemTime,
-    },
-    Producer {
-        rescan_at: SystemTime,
-    },
-}
-
-impl ProducerElectionTracker {
-    pub(crate) fn new(runtime: RuntimePaths, own_id: SidebarInstanceId) -> Self {
-        Self {
-            runtime,
-            state: Arc::new(Mutex::new(ProducerElectionState {
-                own_id,
-                abstaining: false,
-                cached: CachedElection::Unknown,
-                #[cfg(test)]
-                full_scans: 0,
-            })),
-        }
-    }
-
-    /// Stand in the election as `own_id` from now on. The room host renders
-    /// several panes and competes as its eldest one, which changes as panes
-    /// attach and detach; every clone of this tracker follows.
-    pub(crate) fn rebind(&self, own_id: SidebarInstanceId) {
-        let mut state = self.lock();
-        state.abstaining = false;
-        if state.own_id != own_id {
-            state.own_id = own_id;
-            state.cached = CachedElection::Unknown;
-        }
-    }
-
-    /// Leave the election until the next [`Self::rebind`]: a host with no pane
-    /// attached has no heartbeat to stand on, so it never produces. With no
-    /// one else to name, it reports the id it last stood as for the elder.
-    pub(crate) fn abstain(&self) {
-        self.lock().abstaining = true;
-    }
-
-    /// Return the current elder, or `None` when this renderer is the producer.
-    pub(crate) fn elder_instance(&self) -> Option<SidebarInstanceId> {
-        self.elder_instance_at(SystemTime::now())
-    }
-
-    /// A slow fetch may finish after an elder appears. Publication must check
-    /// the same election without relying on the role memo from before the fetch.
-    pub(crate) fn confirm_producer(&self) -> bool {
-        let own_id = {
-            let state = self.lock();
-            if state.abstaining {
-                return false;
-            }
-            state.own_id.clone()
-        };
-        matches!(
-            self.full_scan(&own_id, SystemTime::now()),
-            CachedElection::Producer { .. }
-        )
-    }
-
-    fn elder_instance_at(&self, now: SystemTime) -> Option<SidebarInstanceId> {
-        let mut state = self.lock();
-        if state.abstaining {
-            return Some(state.own_id.clone());
-        }
-        match &state.cached {
-            CachedElection::Elder { id, expires_at, .. } if now < *expires_at => {
-                return Some(id.clone());
-            }
-            CachedElection::Producer { rescan_at } if now < *rescan_at => return None,
-            _ => {}
-        }
-
-        if let CachedElection::Elder { id, path, .. } = &state.cached
-            && let Some(expires_at) = self.validate_cached_elder(&state.own_id, path, id, now)
-        {
-            let id = id.clone();
-            state.cached = CachedElection::Elder {
-                id: id.clone(),
-                path: path.clone(),
-                expires_at,
-            };
-            return Some(id);
-        }
-
-        let scanned = self.full_scan(&state.own_id, now);
-        state.cached = scanned;
-        #[cfg(test)]
-        {
-            state.full_scans = state.full_scans.saturating_add(1);
-        }
-        match &state.cached {
-            CachedElection::Elder { id, .. } => Some(id.clone()),
-            CachedElection::Unknown | CachedElection::Producer { .. } => None,
-        }
-    }
-
-    fn lock(&self) -> std::sync::MutexGuard<'_, ProducerElectionState> {
-        // A poisoned memo cannot invalidate election correctness. Recover its
-        // contents and let the normal validation/rescan path repair it.
-        match self.state.lock() {
-            Ok(state) => state,
-            Err(poisoned) => poisoned.into_inner(),
-        }
-    }
-
-    fn validate_cached_elder(
-        &self,
-        own_id: &SidebarInstanceId,
-        path: &Path,
-        cached_id: &SidebarInstanceId,
-        now: SystemTime,
-    ) -> Option<SystemTime> {
-        let modified = fs::metadata(path).ok()?.modified().ok()?;
-        let expires_at = modified.checked_add(SIDEBAR_HEARTBEAT_TTL)?;
-        if now > expires_at {
-            return None;
-        }
-        let heartbeat = SidebarHeartbeat::read_from(path).ok()?;
-        (heartbeat.protocol_version == SIDEBAR_PROTOCOL_VERSION
-            && heartbeat.workspace_id == self.runtime.workspace_id
-            && heartbeat.instance_id == *cached_id
-            && heartbeat.instance_id.as_str() < own_id.as_str()
-            && self.runtime.sidebar_heartbeat_path(cached_id) == path)
-            .then_some(expires_at)
-    }
-
-    fn full_scan(&self, own_id: &SidebarInstanceId, now: SystemTime) -> CachedElection {
-        let heartbeats = match read_current_heartbeats(&self.runtime.heartbeat_dir) {
-            Ok(heartbeats) => heartbeats,
-            Err(err) => {
-                debug!(path = %self.runtime.heartbeat_dir.display(), error = %err, "sidebar heartbeat dir unreadable");
-                Vec::new()
-            }
-        };
-        let elder = heartbeats
-            .into_iter()
-            .filter_map(|(path, heartbeat)| {
-                if heartbeat.workspace_id != self.runtime.workspace_id
-                    || heartbeat.instance_id.as_str() >= own_id.as_str()
-                    || self.runtime.sidebar_heartbeat_path(&heartbeat.instance_id) != path
-                {
-                    return None;
-                }
-                let modified = fs::metadata(&path).ok()?.modified().ok()?;
-                let expires_at = modified.checked_add(SIDEBAR_HEARTBEAT_TTL)?;
-                (now <= expires_at).then_some((heartbeat.instance_id, path, expires_at))
-            })
-            .min_by(|(left, _, _), (right, _, _)| left.as_str().cmp(right.as_str()));
-
-        match elder {
-            Some((id, path, expires_at)) => CachedElection::Elder {
-                id,
-                path,
-                expires_at,
-            },
-            None => CachedElection::Producer {
-                rescan_at: now.checked_add(HEARTBEAT_WRITE_INTERVAL).unwrap_or(now),
-            },
-        }
-    }
-
-    #[cfg(test)]
-    fn full_scan_count(&self) -> u64 {
-        self.lock().full_scans
-    }
-}
-
 /// Purge sidebar heartbeats at a session rebirth boundary. Call only while the
 /// workspace's mux session is provably absent: heartbeats are incarnation-scoped
 /// liveness claims and must not outlive their session into a rebirth.
@@ -537,7 +310,7 @@ fn launch_sidebar<B: SidebarMux + ?Sized>(
     // two concurrent attaches to one shared session can't both spawn a daemon.
     // A peer that finds a fresh heartbeat while polling skips; the winner holds
     // the lock until its daemon publishes one. No lock dir or a wedged producer
-    // falls to a local launch, and the runtime election reaps the loser.
+    // falls to a local launch, and the reconcile pass reaps the loser.
     let lock_path = runtime.lock_path("sidebar-launch.lock");
     let _guard =
         match single_flight::coalesce(&lock_path, LAUNCH_WAIT_STEP, LAUNCH_WAIT_STEPS, || {
@@ -555,7 +328,7 @@ fn launch_sidebar<B: SidebarMux + ?Sized>(
             // Hold the election lock (`_guard`) until the new daemon publishes
             // its heartbeat, so an attach polling behind us reads it and skips.
             // The daemon writes the heartbeat just after start, well inside the
-            // budget; a slow one falls to the election rather than stalling the
+            // budget; a slow one falls to reconciliation rather than stalling the
             // attach further.
             wait_for_fresh_sidebar(runtime);
             SidebarLaunchOutcome::Opened

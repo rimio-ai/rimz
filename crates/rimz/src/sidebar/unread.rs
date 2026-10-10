@@ -2,7 +2,7 @@
 //!
 //! `unread.json` is the workspace-wide set of open pending-look episodes. The
 //! shared snapshot enrichment folds this set with read receipts to stamp
-//! `SidebarRow::unread`; the elected producer reconciles it against current
+//! `SidebarRow::unread`; the room host reconciles it against current
 //! rows and persists opens/prunes.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -187,8 +187,8 @@ impl UnreadEpisodes {
 /// Open an unread episode for each row and persist `unread.json` — the one
 /// durable mark-unread write path, shared by the `rimz sidebar mark-unread` CLI
 /// and the renderer's `M` key. Each episode opens at `last_activity.max(now_ms)`
-/// so no read receipt can reach it, which keeps the elder's reconcile from
-/// pruning it and makes the write safe from any process, elder or not. Callers
+/// so no read receipt can reach it, which keeps the host's reconcile from
+/// pruning it and makes the write safe from any process. Callers
 /// trace and wake; this owns only the persistence.
 pub fn mark_rows_unread(
     runtime: &RuntimePaths,

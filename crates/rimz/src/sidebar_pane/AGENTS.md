@@ -13,7 +13,7 @@ Local contract for `crates/rimz/src/sidebar_pane/` — the sidebar renderer: the
 - The supervisor forwards raw key presses; the host resolves them against `UiState` before applying configured bindings, so help and search consume keys before normal commands.
 - Snapshots arrive in process on the fetch thread (`FetchWorker`) in [`app/fetch.rs`](./app/fetch.rs), which reads through [`sidebar::consumer`](../sidebar/consumer.rs); a new attachment seeds its first frame from the published pair on its own thread before the fetch thread serves it. `rimz sidebar snapshot` is the inspection and scripting delegate over the same library, never this process's data path.
 - Rendering reads the snapshot clock. `cargo xtask invariants` rejects `Timestamp::now()` in non-test render code, which is what keeps a frame reproducible from its snapshot alone.
-- Only the producer refolds every tick. A consumer sidebar holds its last snapshot, the clock in it included, while its inputs stamp is unchanged, up to a 30-second backstop — so a second tab's sidebar can show a frame that is seconds stale and correct. Check anything time-derived on a consumer, not just on the producer, and give any new runtime cache a place in the inputs stamp in [`sidebar::consumer`](../sidebar/consumer.rs) or a frame fed by it will not refresh.
+- The host's fetch worker refolds shared truth on every cycle and projects it for each pane. Only completed production recovers refresh health; fast cached folds and new-attachment seeds never mask a failed pane read.
 - Renderer-local state — row and group order holds, selection, width control — stays renderer-local and never travels back into the data plane.
 
 ## Read-only on the store

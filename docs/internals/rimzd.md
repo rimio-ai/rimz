@@ -86,7 +86,7 @@ The supervisor watches the directory holding `config.toml`, which catches the at
 
 Termination is a ladder: `SIGTERM`, a 300 ms grace (`CHILD_SIGNAL_GRACE`), then `SIGKILL`. `SIGHUP` and `SIGTERM` to the supervisor terminate its child that way and exit. `SIGINT` sets a flag nothing reads, so `Ctrl-C` in the pane leaves the supervisor running. When the child exits on its own, the supervisor exits with the child's status, the pane closes, and the next repair pass spawns the slot again.
 
-The pane count follows the specification, which only a repair or a birth rebuilds. A `[[daemon.pane]]` entry added to a running room creates a new slot in the next specification, and repair spawns it under the preceding slot: within the elder's 30-second repair interval, or at the next `rimz start`. A removed entry leaves its slot pane outside the specification; repair ignores unmatched panes, and the orphaned supervisor resolves past the end of the list and runs the stats pane until the room is reborn.
+The pane count follows the specification, which only a repair or a birth rebuilds. A `[[daemon.pane]]` entry added to a running room creates a new slot in the next specification, and repair spawns it under the preceding slot: within the host's 30-second repair interval, or at the next `rimz start`. A removed entry leaves its slot pane outside the specification; repair ignores unmatched panes, and the orphaned supervisor resolves past the end of the list and runs the stats pane until the room is reborn.
 
 ## Reconciliation
 
@@ -126,12 +126,12 @@ Three callers drive repair, all best-effort:
 | Caller | When | Scope |
 | --- | --- | --- |
 | Room birth (`room/birth.rs`, `launch_background_view`) | `rimz start` finds the view already running (`BackgroundViewLaunch::AlreadyRunning`) | The whole view, from the specification start just built |
-| Elder tracker (`DaemonRepairTracker`) | The elected sidebar elder's cache-refresh tick, at most every 30 seconds (`DAEMON_VIEW_REPAIR_TTL` in `sidebar_pane/app/cache_refresh.rs`) | The whole view |
+| Host tracker (`DaemonRepairTracker`) | The sidebar host's cache-refresh tick, at most every 30 seconds (`DAEMON_VIEW_REPAIR_TTL` in `sidebar_pane/app/cache_refresh.rs`) | The whole view |
 | Remote-control toggle (`remote_control::apply_runtime_toggle`) | `rimz config set remote_control.claude <bool>`, for every known workspace with a live session | The whole view, through `ensure_daemon_view_with_readiness`, so the Claude host appears or closes at once |
 
-The toggle and the elder each run `remote_control::prepare_hosts` before `ReadinessSnapshot::probe`, so a host precondition the pass can restore is restored before readiness judges it.
+The toggle and the host each run `remote_control::prepare_hosts` before `ReadinessSnapshot::probe`, so a host precondition the pass can restore is restored before readiness judges it.
 
-The elder tracker is built to make the common tick free. Election is in [state.md](./sidebar/state.md#renderers-the-producer-and-consumers). The tracker holds a `DaemonViewInputsStamp` and rebuilds the specification only when the stamp changes:
+The host tracker is built to make the common tick free. The shared data plane is in [state.md](./sidebar/state.md#the-room-data-plane). The tracker holds a `DaemonViewInputsStamp` and rebuilds the specification only when the stamp changes:
 
 | Stamp field | Source |
 | --- | --- |
@@ -146,7 +146,7 @@ A rebuilt specification always gets one authoritative repair. With a stable stam
 
 | File | What it holds |
 | --- | --- |
-| [`daemon_view.rs`](../../crates/rimz/src/daemon_view.rs) | Specification, markers and matching, reconciliation, repair and placement, the elder tracker |
+| [`daemon_view.rs`](../../crates/rimz/src/daemon_view.rs) | Specification, markers and matching, reconciliation, repair and placement, the host tracker |
 | [`daemon_view/tests.rs`](../../crates/rimz/src/daemon_view/tests.rs) | Specification, planner, reconciliation, identity, and tracker tests |
 | [`daemon_content.rs`](../../crates/rimz/src/daemon_content.rs) | Slot resolution, the supervisor loop, config watching, child termination |
 | [`cli/daemon.rs`](../../crates/rimz/src/cli/daemon.rs) | The hidden `rimz daemon content` entry point |
@@ -154,7 +154,7 @@ A rebuilt specification always gets one authoritative repair. With a stable stam
 | [`pane.rs`](../../crates/rimz/src/pane.rs) | `VIEW_NAME`, the host markers, `command_is_host`, `command_is_claude_host`, `pane_runs_daemon_host`, `pane_is_host` |
 | [`remote_control.rs`](../../crates/rimz/src/remote_control.rs) | `ReadinessSnapshot`, `prepare_hosts`, `apply_runtime_toggle` |
 | [`room/mod.rs`](../../crates/rimz/src/room/mod.rs), [`room/birth.rs`](../../crates/rimz/src/room/birth.rs) | The start-time specification and birth-time repair |
-| [`sidebar_pane/app/cache_refresh.rs`](../../crates/rimz/src/sidebar_pane/app/cache_refresh.rs) | The elder tick that calls the tracker |
+| [`sidebar_pane/app/cache_refresh.rs`](../../crates/rimz/src/sidebar_pane/app/cache_refresh.rs) | The host tick that calls the tracker |
 | [`mux/mod.rs`](../../crates/rimz/src/mux/mod.rs) | `DaemonView`, `HostPane`, and `BackgroundViewOptions`, the backend-facing types |
 | [`mux/tmux/backend.rs`](../../crates/rimz/src/mux/tmux/backend.rs), [`mux/zellij/backend.rs`](../../crates/rimz/src/mux/zellij/backend.rs) | `open_background_view` on each backend |
 

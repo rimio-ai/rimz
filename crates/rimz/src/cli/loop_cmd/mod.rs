@@ -1,6 +1,6 @@
 //! `rimz loop` — trigger wake-ups and command checks from schedules or signals.
 //!
-//! The elected sidebar elder keeps time while a room for the task's project is
+//! The room host keeps time while a room for the task's project is
 //! open. An opt-in OS timer invokes the same scheduler for roots without one.
 //! Both fire `rimz loop run <name>`, which runs an optional shell check and then
 //! drives one configured prompt through either the supervised `agents -p` seam
@@ -93,7 +93,7 @@ enum LoopSubcmd {
     Logs(LogsArgs),
     /// Fire one task now in the foreground for testing; one-shots and subscriptions stay put.
     Fire(FireArgs),
-    /// Run one task now. The sidebar elder calls this; humans rarely do.
+    /// Run one task now. The sidebar host calls this; humans rarely do.
     #[command(hide = true)]
     Run(RunArgs),
     /// Execute a check without inheriting its caller's controlling terminal.

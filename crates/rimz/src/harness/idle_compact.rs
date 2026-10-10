@@ -1,7 +1,7 @@
 //! Producer-side idle compaction: condense an inactive team member's context
 //! before its provider prompt cache expires.
 //!
-//! The elected producer and the detached `rimz agents idle-compact` helper
+//! The room host and the detached `rimz agents idle-compact` helper
 //! share one eligibility decision. The helper owns the durable message write;
 //! this module writes only a disposable spawn-pacing record.
 

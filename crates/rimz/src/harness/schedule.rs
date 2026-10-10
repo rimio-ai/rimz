@@ -1,6 +1,6 @@
 //! Scheduled loop task core.
 //!
-//! The elected sidebar elder keeps time while a room is open and an opt-in OS
+//! The room host keeps time while a room is open and an opt-in OS
 //! timer runs the same scheduler for roots without one. Both fire
 //! `rimz loop run <name>`, which drives one configured loop wake-up.
 //! Persisted rows compile once into independent action and timing results; a

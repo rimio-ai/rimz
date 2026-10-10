@@ -7,6 +7,7 @@ use crate::sidebar::enrich::{FoldOpts, WorkspaceSnapshot, enrich};
 use crate::sidebar::frame::{CarriedPane, assemble_frame};
 use crate::sidebar::refresh::git_stats::{DiffStatsCache, DiffStatsCacheEntry};
 use crate::sidebar::test_support::{child_agent, pane, pane_in_tab, root_agent};
+use crate::sidebar::workspace_projection::workspace_projection_path;
 use crate::store::snapshot::{SidebarSnapshot, SidebarWorktreeKind};
 use crate::utils::time::unix_now_ms;
 use crate::{RuntimePaths, StatePaths};
@@ -21,96 +22,6 @@ fn cached_opts() -> FoldOpts<'static> {
         config: None,
         lanes: None,
         agent_projection: Default::default(),
-    }
-}
-
-struct StampFixture {
-    _state_root: tempfile::TempDir,
-    _runtime_root: tempfile::TempDir,
-    state: StatePaths,
-    runtime: RuntimePaths,
-}
-
-impl StampFixture {
-    fn new() -> Self {
-        let state_root = tempfile::tempdir().unwrap();
-        let runtime_root = tempfile::tempdir().unwrap();
-        let workspace = WorkspaceId::from_project_root(state_root.path());
-        let state = StatePaths::under(workspace.clone(), state_root.path()).unwrap();
-        let runtime = RuntimePaths::under(workspace, runtime_root.path()).unwrap();
-        state.ensure_dirs().unwrap();
-        runtime.ensure_dirs().unwrap();
-        std::fs::create_dir_all(&state.messages_dir).unwrap();
-
-        for (name, path) in file_stamp_inputs(&state, &runtime) {
-            write_stamp_file(&path, name);
-        }
-
-        Self {
-            _state_root: state_root,
-            _runtime_root: runtime_root,
-            state,
-            runtime,
-        }
-    }
-}
-
-fn file_stamp_inputs(state: &StatePaths, runtime: &RuntimePaths) -> Vec<(&'static str, PathBuf)> {
-    vec![
-        ("events_log", state.events_log.clone()),
-        ("latest_snapshot", state.latest_snapshot.clone()),
-        ("rollup_cache", state.rollup_cache.clone()),
-        ("agents_carryover", state.agents_carryover.clone()),
-        ("workspace_record", state.workspace_record.clone()),
-        ("message_queue", state.messages_dir.join("messages.jsonl")),
-        ("pane_frame", runtime.pane_frame_path()),
-        ("diff_stats", runtime.diff_stats_path()),
-        ("cohort_spend", runtime.cohort_spend_path()),
-        ("pipeline", runtime.pipeline_path()),
-        ("keep_warm", runtime.keep_warm_path()),
-        ("pr_state", runtime.pr_state_path()),
-        ("unread", runtime.unread_path()),
-        ("link_stats", crate::remote::link::stats_path(runtime)),
-        ("accounts", runtime.shared_accounts_path()),
-        ("rate_limits", runtime.shared_rate_limits_path()),
-        ("credits", runtime.shared_credits_path()),
-        ("provider_spending", runtime.shared_provider_spending_path()),
-        ("agent_projection", runtime.agent_projection_path()),
-        ("metrics_sample", runtime.lane_path("metrics-sample.json")),
-        (
-            "codex_daemon_reap",
-            crate::sidebar::refresh::daemon_reap::codex_daemon_reap_path(runtime),
-        ),
-    ]
-}
-
-fn dir_stamp_inputs(state: &StatePaths, runtime: &RuntimePaths) -> Vec<(&'static str, PathBuf)> {
-    vec![
-        ("messages_dir", state.messages_dir.clone()),
-        ("agent_context_dir", runtime.agent_context_dir.clone()),
-        ("subagent_context_dir", runtime.subagent_context_dir.clone()),
-        ("agent_activity_dir", runtime.agent_activity_dir.clone()),
-        ("read_marks_dir", runtime.read_marks_dir.clone()),
-    ]
-}
-
-fn write_stamp_file(path: &Path, value: &str) {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).unwrap();
-    }
-    std::fs::write(path, format!("{value}-baseline")).unwrap();
-}
-
-#[test]
-fn pipeline_and_keep_warm_publications_change_adoption_stamp() {
-    for path in [RuntimePaths::pipeline_path, RuntimePaths::keep_warm_path] {
-        let fixture = StampFixture::new();
-        let before = consumer_projection_inputs_stamp(&fixture.state, &fixture.runtime);
-        write_stamp_file(&path(&fixture.runtime), "new-publication");
-        assert_ne!(
-            before,
-            consumer_projection_inputs_stamp(&fixture.state, &fixture.runtime)
-        );
     }
 }
 
@@ -406,186 +317,6 @@ fn cached_daemon_reap_forwards_published_live_panes() {
     let snapshot = reap_cached_daemon_sessions(snapshot, &runtime, "rimz-test");
 
     assert_eq!(snapshot.agents[0].agent_id.as_str(), "live-pane");
-}
-
-#[test]
-fn consumer_fold_inputs_stamp_is_stable_for_unchanged_inputs() {
-    let fixture = StampFixture::new();
-
-    assert_eq!(
-        consumer_fold_inputs_stamp(&fixture.state, &fixture.runtime),
-        consumer_fold_inputs_stamp(&fixture.state, &fixture.runtime)
-    );
-}
-
-#[test]
-fn unchanged_backstop_uses_last_successful_fold_time() {
-    let fixture = StampFixture::new();
-    let mut reader = PublishedSnapshotReader::new(fixture.runtime.clone(), "rimz-test", None);
-    let folded_at_ms = 10;
-
-    assert!(!reader.fold_unchanged(&fixture.state, folded_at_ms));
-    reader.record_fold(&fixture.state, folded_at_ms);
-    assert!(reader.fold_unchanged(&fixture.state, folded_at_ms + 29_999));
-    assert!(!reader.fold_unchanged(&fixture.state, folded_at_ms + 30_000));
-}
-
-#[test]
-fn consumer_fold_inputs_stamp_ignores_account_global_spending_cursor() {
-    let fixture = StampFixture::new();
-    let before = consumer_fold_inputs_stamp(&fixture.state, &fixture.runtime);
-
-    std::fs::write(
-        fixture.runtime.shared_spending_cursor_path(),
-        b"replaced account-global cursor with a longer body",
-    )
-    .unwrap();
-
-    assert_eq!(
-        consumer_fold_inputs_stamp(&fixture.state, &fixture.runtime),
-        before,
-    );
-}
-
-#[test]
-fn consumer_fold_inputs_stamp_changes_for_each_file_input() {
-    for name in [
-        "events_log",
-        "latest_snapshot",
-        "rollup_cache",
-        "agents_carryover",
-        "workspace_record",
-        "message_queue",
-        "pane_frame",
-        "diff_stats",
-        "cohort_spend",
-        "pipeline",
-        "keep_warm",
-        "pr_state",
-        "unread",
-        "link_stats",
-        "accounts",
-        "rate_limits",
-        "credits",
-        "provider_spending",
-        "agent_projection",
-        "metrics_sample",
-        "codex_daemon_reap",
-    ] {
-        let fixture = StampFixture::new();
-        let before = consumer_fold_inputs_stamp(&fixture.state, &fixture.runtime);
-        let path = file_stamp_inputs(&fixture.state, &fixture.runtime)
-            .into_iter()
-            .find(|(candidate, _)| *candidate == name)
-            .expect("case path")
-            .1;
-
-        std::fs::write(&path, format!("{name}-changed-with-a-longer-body")).unwrap();
-
-        assert_ne!(
-            consumer_fold_inputs_stamp(&fixture.state, &fixture.runtime),
-            before,
-            "{name} must participate in the consumer fold input stamp",
-        );
-    }
-}
-
-#[test]
-fn consumer_fold_inputs_stamp_changes_for_each_dir_input() {
-    for name in [
-        "messages_dir",
-        "agent_context_dir",
-        "subagent_context_dir",
-        "agent_activity_dir",
-        "read_marks_dir",
-    ] {
-        let fixture = StampFixture::new();
-        let before = consumer_fold_inputs_stamp(&fixture.state, &fixture.runtime);
-        let path = dir_stamp_inputs(&fixture.state, &fixture.runtime)
-            .into_iter()
-            .find(|(candidate, _)| *candidate == name)
-            .expect("case path")
-            .1;
-
-        std::fs::remove_dir_all(&path).unwrap();
-
-        assert_ne!(
-            consumer_fold_inputs_stamp(&fixture.state, &fixture.runtime),
-            before,
-            "{name} must participate in the consumer fold input stamp",
-        );
-    }
-}
-
-#[test]
-fn consumer_fold_inputs_stamp_ignores_unrelated_runtime_churn() {
-    let fixture = StampFixture::new();
-    let baseline = consumer_fold_inputs_stamp(&fixture.state, &fixture.runtime);
-    let unrelated = [
-        fixture.runtime.lock_path("snapshot.lock"),
-        fixture.runtime.live_path("presence.stamp"),
-        fixture.runtime.live_path("client-presence-probe.stamp"),
-        fixture.runtime.lane_path("producer-cache.json"),
-    ];
-    for path in unrelated {
-        std::fs::write(&path, b"churn").unwrap();
-        assert_eq!(
-            consumer_fold_inputs_stamp(&fixture.state, &fixture.runtime),
-            baseline,
-            "{} is not a consumer fold input",
-            path.display(),
-        );
-        std::fs::remove_file(path).unwrap();
-    }
-
-    let temp = fixture.runtime.lane_path(".snapshot.tmp-123");
-    let renamed = fixture.runtime.lane_path("producer-only.cache");
-    std::fs::write(&temp, b"temp").unwrap();
-    std::fs::rename(&temp, &renamed).unwrap();
-    std::fs::remove_file(renamed).unwrap();
-    let heartbeat = fixture.runtime.heartbeat_dir.join("sidebar.unrelated.json");
-    std::fs::write(heartbeat, b"{}").unwrap();
-    assert_eq!(
-        consumer_fold_inputs_stamp(&fixture.state, &fixture.runtime),
-        baseline,
-    );
-}
-
-#[test]
-fn consumer_fold_inputs_stamp_tracks_filtered_dynamic_files() {
-    let fixture = StampFixture::new();
-    for path in [
-        fixture
-            .runtime
-            .lane_path("workspace-spending.0123456789abcdef.json"),
-        fixture.runtime.lane_path("budget.0123456789abcdef.json"),
-        fixture.runtime.lane_path("budget.fleet.json"),
-        fixture.runtime.lane_path("budget.scopes.json"),
-        fixture
-            .runtime
-            .lane_path("auto-continue.0123456789abcdef.json"),
-        fixture
-            .runtime
-            .persistent_shared_root
-            .join("budget.account.codex.json"),
-    ] {
-        let before_create = consumer_fold_inputs_stamp(&fixture.state, &fixture.runtime);
-        write_stamp_file(&path, "created");
-        let after_create = consumer_fold_inputs_stamp(&fixture.state, &fixture.runtime);
-        assert_ne!(after_create, before_create, "create {}", path.display());
-
-        std::fs::write(&path, b"replaced-with-a-longer-payload").unwrap();
-        let after_replace = consumer_fold_inputs_stamp(&fixture.state, &fixture.runtime);
-        assert_ne!(after_replace, after_create, "replace {}", path.display());
-
-        std::fs::remove_file(&path).unwrap();
-        assert_ne!(
-            consumer_fold_inputs_stamp(&fixture.state, &fixture.runtime),
-            after_replace,
-            "remove {}",
-            path.display(),
-        );
-    }
 }
 
 #[test]
@@ -1296,14 +1027,14 @@ fn published_reader_sees_republished_rollup_and_incremental_event_with_one_pane_
     );
 }
 
-struct AdoptionFixture {
+struct PublicationFixture {
     _dir: tempfile::TempDir,
     runtime: RuntimePaths,
     state: StatePaths,
     frame: crate::sidebar::frame::PaneFrame,
 }
 
-impl AdoptionFixture {
+impl PublicationFixture {
     fn new() -> Self {
         let dir = tempfile::tempdir().unwrap();
         let workspace = WorkspaceId::from_project_root(dir.path());
@@ -1355,17 +1086,11 @@ impl AdoptionFixture {
             1_012,
         )
     }
-
-    fn read(&self) -> (SidebarSnapshot, ConsumerSnapshotSource) {
-        let mut reader = PublishedSnapshotReader::new(self.runtime.clone(), "rimz-test", None);
-        let snapshot = reader.read_adopting(&self.state).unwrap();
-        (snapshot, reader.source)
-    }
 }
 
 #[test]
 fn published_pair_needs_no_store_or_current_source() {
-    let mut fixture = AdoptionFixture::new();
+    let mut fixture = PublicationFixture::new();
     std::fs::remove_file(&fixture.state.latest_snapshot).unwrap();
 
     let pair = fixture.seed_pair();
@@ -1396,7 +1121,7 @@ fn published_pair_needs_no_store_or_current_source() {
 
 #[test]
 fn published_pair_requires_a_valid_same_session_projection_and_frame() {
-    let fixture = AdoptionFixture::new();
+    let fixture = PublicationFixture::new();
     assert!(fixture.seed_pair().is_some());
 
     for (field, value) in [
@@ -1404,7 +1129,7 @@ fn published_pair_requires_a_valid_same_session_projection_and_frame() {
         ("schema_version", serde_json::json!(99)),
         ("session", serde_json::json!("other-session")),
     ] {
-        let fixture = AdoptionFixture::new();
+        let fixture = PublicationFixture::new();
         let path = workspace_projection_path(&fixture.runtime);
         let mut projection: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
@@ -1413,7 +1138,7 @@ fn published_pair_requires_a_valid_same_session_projection_and_frame() {
         assert!(fixture.seed_pair().is_none(), "{field}");
     }
 
-    let fixture = AdoptionFixture::new();
+    let fixture = PublicationFixture::new();
     std::fs::write(
         workspace_projection_path(&fixture.runtime),
         b"{broken projection",
@@ -1422,12 +1147,12 @@ fn published_pair_requires_a_valid_same_session_projection_and_frame() {
     assert!(fixture.seed_pair().is_none());
 
     for path in [workspace_projection_path, RuntimePaths::pane_frame_path] {
-        let fixture = AdoptionFixture::new();
+        let fixture = PublicationFixture::new();
         std::fs::remove_file(path(&fixture.runtime)).unwrap();
         assert!(fixture.seed_pair().is_none());
     }
 
-    let mut fixture = AdoptionFixture::new();
+    let mut fixture = PublicationFixture::new();
     fixture.frame.session_name = "other-session".to_owned();
     atomic::write_temp_then_rename_cache(&fixture.runtime.pane_frame_path(), &fixture.frame)
         .unwrap();
@@ -1435,8 +1160,8 @@ fn published_pair_requires_a_valid_same_session_projection_and_frame() {
 }
 
 #[test]
-fn published_seed_age_is_the_projections_and_does_not_restrict_adoption() {
-    let mut fixture = AdoptionFixture::new();
+fn published_seed_age_is_the_projections() {
+    let mut fixture = PublicationFixture::new();
     let max_age = std::time::Duration::from_secs(20);
 
     assert!(read_published_pair(&fixture.runtime, "rimz-test", max_age, 20_012).is_some());
@@ -1456,121 +1181,11 @@ fn published_seed_age_is_the_projections_and_does_not_restrict_adoption() {
         read_published_pair(&fixture.runtime, "rimz-test", max_age, 20_013).is_none(),
         "a fresh frame must not carry an old projection"
     );
-
-    fixture.frame.topology_stamp_ms = Some(11);
-    fixture.frame.metrics_stamp_ms = Some(12);
-    atomic::write_temp_then_rename_cache(&fixture.runtime.pane_frame_path(), &fixture.frame)
-        .unwrap();
-    let (snapshot, source) = fixture.read();
-    assert_eq!(source, ConsumerSnapshotSource::Adoption);
-    assert_eq!(snapshot.display_name, "projected");
-}
-
-#[test]
-fn consumer_adopts_only_an_exact_workspace_projection() {
-    let fixture = AdoptionFixture::new();
-    let (snapshot, read_source) = fixture.read();
-    assert_eq!(read_source, ConsumerSnapshotSource::Adoption);
-    assert_eq!(snapshot.display_name, "projected");
-
-    for (field, value) in [
-        // Version 5 predates fold-derived root-lane flags.
-        ("schema_version", serde_json::json!(5)),
-        ("schema_version", serde_json::json!(99)),
-        ("session", serde_json::json!("other-session")),
-    ] {
-        let fixture = AdoptionFixture::new();
-        let path =
-            crate::sidebar::workspace_projection::workspace_projection_path(&fixture.runtime);
-        let mut projection: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-        projection[field] = value;
-        atomic::write_temp_then_rename_cache(&path, &projection).unwrap();
-        assert_eq!(
-            fixture.read().1,
-            ConsumerSnapshotSource::Fallback,
-            "{field}"
-        );
-    }
-
-    let fixture = AdoptionFixture::new();
-    std::fs::write(
-        crate::sidebar::workspace_projection::workspace_projection_path(&fixture.runtime),
-        b"{broken projection",
-    )
-    .unwrap();
-    assert_eq!(fixture.read().1, ConsumerSnapshotSource::Fallback);
-
-    let fixture = AdoptionFixture::new();
-    std::fs::remove_file(
-        crate::sidebar::workspace_projection::workspace_projection_path(&fixture.runtime),
-    )
-    .unwrap();
-    assert_eq!(fixture.read().1, ConsumerSnapshotSource::Fallback);
-}
-
-#[test]
-fn consumer_falls_back_for_stale_truth_or_legacy_frame() {
-    let fixture = AdoptionFixture::new();
-    crate::store::event_log::append(
-        &fixture.state.events_log,
-        &crate::store::event::EventEnvelope::session_rebirth(
-            fixture.runtime.workspace_id.clone(),
-            "rimz-test",
-        ),
-    )
-    .unwrap();
-    assert_eq!(fixture.read().1, ConsumerSnapshotSource::Fallback);
-
-    let mut fixture = AdoptionFixture::new();
-    fixture.frame.metrics_stamp_ms = Some(99);
-    atomic::write_temp_then_rename_cache(&fixture.runtime.pane_frame_path(), &fixture.frame)
-        .unwrap();
-    assert_eq!(fixture.read().1, ConsumerSnapshotSource::Fallback);
-
-    let mut fixture = AdoptionFixture::new();
-    fixture.frame.topology_stamp_ms = None;
-    fixture.frame.metrics_stamp_ms = None;
-    atomic::write_temp_then_rename_cache(&fixture.runtime.pane_frame_path(), &fixture.frame)
-        .unwrap();
-    assert_eq!(fixture.read().1, ConsumerSnapshotSource::Fallback);
-}
-
-#[test]
-fn consumer_adopts_an_event_fresh_projection_while_latest_publish_trails() {
-    let fixture = AdoptionFixture::new();
-    crate::store::event_log::append(
-        &fixture.state.events_log,
-        &crate::store::event::EventEnvelope::session_rebirth(
-            fixture.runtime.workspace_id.clone(),
-            "rimz-test",
-        ),
-    )
-    .unwrap();
-    let mut projected: SidebarSnapshot =
-        serde_json::from_slice(&std::fs::read(&fixture.state.latest_snapshot).unwrap()).unwrap();
-    projected.display_name = "event-fresh projection".to_owned();
-    projected.reflects_log = Some(crate::store::event_log::LogExtent {
-        generation: 0,
-        offset: std::fs::metadata(&fixture.state.events_log).unwrap().len(),
-    });
-    crate::sidebar::workspace_projection::WorkspaceProjectionPublisher::default()
-        .publish(
-            &fixture.runtime,
-            "rimz-test",
-            &WorkspaceSnapshot(projected),
-            &fixture.frame,
-        )
-        .unwrap();
-
-    let (snapshot, read_source) = fixture.read();
-    assert_eq!(read_source, ConsumerSnapshotSource::Adoption);
-    assert_eq!(snapshot.display_name, "event-fresh projection");
 }
 
 #[test]
 fn presence_only_frame_publication_keeps_projection_match() {
-    let mut fixture = AdoptionFixture::new();
+    let mut fixture = PublicationFixture::new();
     let source = (
         fixture.frame.topology_stamp_ms,
         fixture.frame.metrics_stamp_ms,
@@ -1583,8 +1198,8 @@ fn presence_only_frame_publication_keeps_projection_match() {
     atomic::write_temp_then_rename_cache(&fixture.runtime.pane_frame_path(), &fixture.frame)
         .unwrap();
 
-    let (snapshot, read_source) = fixture.read();
-    assert_eq!(read_source, ConsumerSnapshotSource::Adoption);
+    let (_, frame) = fixture.seed_pair().unwrap();
+    let frame = frame.expect("presence-only publication keeps the seed frame paired");
     assert_eq!(
         (
             fixture.frame.topology_stamp_ms,
@@ -1592,40 +1207,5 @@ fn presence_only_frame_publication_keeps_projection_match() {
         ),
         source
     );
-    assert_eq!(
-        snapshot.presence,
-        Some(crate::store::snapshot::SidebarPresence::Detached)
-    );
-}
-
-#[test]
-fn slim_projection_stamp_detects_store_delta_and_projection_republish() {
-    let fixture = AdoptionFixture::new();
-    let baseline = consumer_projection_inputs_stamp(&fixture.state, &fixture.runtime);
-    crate::store::event_log::append(
-        &fixture.state.events_log,
-        &crate::store::event::EventEnvelope::session_rebirth(
-            fixture.runtime.workspace_id.clone(),
-            "rimz-test",
-        ),
-    )
-    .unwrap();
-    assert_ne!(
-        consumer_projection_inputs_stamp(&fixture.state, &fixture.runtime),
-        baseline,
-        "a durable append invalidates the slim unchanged check"
-    );
-
-    let fixture = AdoptionFixture::new();
-    let baseline = consumer_projection_inputs_stamp(&fixture.state, &fixture.runtime);
-    let path = crate::sidebar::workspace_projection::workspace_projection_path(&fixture.runtime);
-    let mut projection: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-    projection["projection"]["display_name"] = serde_json::json!("time-transition");
-    atomic::write_temp_then_rename_cache(&path, &projection).unwrap();
-    assert_ne!(
-        consumer_projection_inputs_stamp(&fixture.state, &fixture.runtime),
-        baseline,
-        "content republish invalidates the slim unchanged check"
-    );
+    assert_eq!(frame.presence, fixture.frame.presence);
 }

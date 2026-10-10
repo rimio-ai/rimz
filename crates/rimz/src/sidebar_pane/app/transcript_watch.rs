@@ -3,17 +3,12 @@
 //!
 //! Adapters that declare transcript-tail context reach the sidecar through hook
 //! pushes after progress events plus the producer's stat-gated tick backstop.
-//! The elected producer watches each live root session's transcript with a
+//! The host watches each live root session's transcript with a
 //! filesystem watcher and runs the same stat-gated refresh on writes, so meters
 //! move mid-turn. Latency only, never truth: the refresh is idempotent behind
 //! its transcript-stat gate, the tick backstop stays unconditional, and a
 //! watcher that fails to start degrades to the producer cadence.
 //!
-//! One watcher per workspace: only the eldest live instance (the same
-//! election as the produce path) registers paths; the rest sleep on the
-//! election poll. Demotion is rare, so it is re-checked per flush and per
-//! roster rescan rather than mid-block.
-
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::mpsc::{self, RecvTimeoutError};
@@ -25,11 +20,8 @@ use tracing::debug;
 
 use crate::RuntimePaths;
 use crate::agents::context::record::AgentContextRecord;
-use crate::sidebar::ProducerElectionTracker;
 use crate::store::event_log::LogExtent;
 
-/// Idle cadence for the producer-election re-check while not elected.
-const ELECTION_POLL: Duration = Duration::from_secs(5);
 /// Backoff between watcher init attempts, so a platform refusing watches
 /// (inotify limits, an unsupported filesystem) never spins the thread.
 const RESPAWN_BACKOFF: Duration = Duration::from_secs(5);
@@ -84,33 +76,23 @@ fn roster_unchanged(
 }
 
 /// Spawn the watcher manager thread. It runs for the process lifetime; the
-/// watcher handle is dropped (releasing every OS watch) whenever the instance
-/// is not the producer.
-pub(super) fn spawn(runtime: RuntimePaths, election: ProducerElectionTracker) -> JoinHandle<()> {
-    std::thread::spawn(move || watch_loop(&runtime, &election))
+/// watcher handle is dropped (releasing every OS watch) on a respawn.
+pub(super) fn spawn(runtime: RuntimePaths) -> JoinHandle<()> {
+    std::thread::spawn(move || watch_loop(&runtime))
 }
 
-fn watch_loop(runtime: &RuntimePaths, election: &ProducerElectionTracker) {
+fn watch_loop(runtime: &RuntimePaths) {
     loop {
-        if !is_producer(election) {
-            std::thread::sleep(ELECTION_POLL);
-            continue;
-        }
-        if let Err(err) = watch_while_elected(runtime, election) {
+        if let Err(err) = watch_transcripts(runtime) {
             debug!(error = %err, "transcript watch failed; tick backstop remains truth");
         }
         std::thread::sleep(RESPAWN_BACKOFF);
     }
 }
 
-/// Own the watcher while elected: register live transcript paths, coalesce
-/// fs events behind [`DEBOUNCE`], and run the stat-gated sidecar refresh per
-/// flushed session. Returns on demotion (dropping the watcher and its OS
-/// watches) or on a dead event channel (the outer loop respawns with backoff).
-fn watch_while_elected(
-    runtime: &RuntimePaths,
-    election: &ProducerElectionTracker,
-) -> notify::Result<()> {
+/// Register live transcript paths, coalesce filesystem events, and refresh
+/// their sidecars. A dead event channel returns to the respawn backoff.
+fn watch_transcripts(runtime: &RuntimePaths) -> notify::Result<()> {
     let state = crate::StatePaths::for_workspace(runtime.workspace_id.clone())
         .map_err(|error| notify::Error::generic(&error.to_string()))?;
     let mut cursor = crate::sidebar::consumer::RollupCursor::new();
@@ -129,11 +111,6 @@ fn watch_while_elected(
     loop {
         let now = Instant::now();
         if now >= rescan_at {
-            // Demotion check per rescan: a demoted instance releases every
-            // watch by dropping the watcher and returns to the election poll.
-            if !is_producer(election) {
-                return Ok(());
-            }
             reconcile_roster(runtime, &state, &mut cursor, &mut watcher, &mut roster);
             rescan_at = now + ROSTER_RESCAN;
         }
@@ -149,12 +126,6 @@ fn watch_while_elected(
         }
         if flush_at.is_some_and(|flush| Instant::now() >= flush) {
             flush_at = None;
-            // Demotion check per flush, mirroring the rescan: a stray refresh
-            // would be a stat-gated no-op, but a demoted instance should not
-            // keep producing sidecar writes at all.
-            if !is_producer(election) {
-                return Ok(());
-            }
             for target in due_refreshes(&pending, &roster.watched) {
                 crate::sidebar::refresh::refresh_session_transcript_context_from_watch(
                     runtime,
@@ -284,10 +255,6 @@ fn due_refreshes(
         .filter(|target| seen.insert((target.kind.clone(), target.session_id.clone())))
         .cloned()
         .collect()
-}
-
-fn is_producer(election: &ProducerElectionTracker) -> bool {
-    election.elder_instance().is_none()
 }
 
 #[cfg(test)]

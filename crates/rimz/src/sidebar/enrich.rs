@@ -885,7 +885,7 @@ fn fold_machine_config(
     } else {
         let accounts = cached_accounts_for_snapshot(runtime, &snapshot, logins);
         // Consumers read producer publications only. A missing workspace
-        // sidecar stays absent until the elected producer supplies it.
+        // sidecar stays absent until the room host supplies it.
         let spending = super::refresh::consumer_spending_caches(runtime, &snapshot);
         (accounts, spending)
     };

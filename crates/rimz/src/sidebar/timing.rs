@@ -25,11 +25,6 @@ pub(super) const EVENT_STORE_TTL: Duration = Duration::from_secs(EVENT_PANE_TTL.
 /// yanking the user's current pane.
 pub(crate) const FOCUS_STRANDED_EVENT_TTL: Duration = Duration::from_secs(2);
 
-/// Maximum extra staleness an off-screen consumer renderer accepts before
-/// folding identity-free store/pane nudges. Watched renderers and the elected
-/// producer stay immediate.
-pub(crate) const UNWATCHED_FOLD_CLAMP: Duration = Duration::from_secs(1);
-
 /// How long the interactive sidebar keeps its last row/group order after a
 /// jump, tab-switch, browse, or the focused agent's ask being answered before
 /// re-sorting to live rank. Long enough to read the card you landed on, not just
@@ -224,11 +219,6 @@ pub(super) const METRICS_BACKGROUND_SAMPLE_TTL: Duration = Duration::from_secs(3
 /// kernel completes one blocking syscall; the attention verdict belongs to a
 /// sustained stall rather than that ordinary I/O window.
 pub(super) const PROCESS_D_STATE_STUCK_AFTER: Duration = Duration::from_secs(10);
-
-/// Maximum extra staleness a hidden consumer accepts for metrics-only pane
-/// publications. The consumer folds on the same cadence that produces the
-/// underlying background samples.
-pub(crate) const UNWATCHED_METRICS_FOLD_CLAMP: Duration = METRICS_BACKGROUND_SAMPLE_TTL;
 
 /// Minimum gap between out-of-band session context refreshes for one target.
 /// The producer checks every data tick, but budget windows move on the scale of

@@ -1,4 +1,4 @@
-//! Observer writer thread: elder-only real-world cross-checks and emission of
+//! Observer writer thread: room-wide real-world cross-checks and emission of
 //! [`DiagEvent::FrameAnomaly`] records through the shared diagnostics sink,
 //! which owns the rate limit — the render thread never does IO for the observer.
 
@@ -9,7 +9,6 @@ use std::time::Instant;
 use crate::diag::DiagSink;
 use crate::diag::record::DiagEvent;
 use crate::disk::paths::RuntimePaths;
-use crate::sidebar::ProducerElectionTracker;
 use crate::sidebar::cache::read_snapshot_cache;
 use crate::sidebar::frame::PaneFrame;
 use crate::sidebar::timing::{
@@ -23,14 +22,12 @@ use super::{AnomalyDraft, AnomalyKind, ObserveMsg, RosterSig, cap_vec};
 pub(crate) fn spawn(
     runtime: RuntimePaths,
     sink: DiagSink,
-    election: ProducerElectionTracker,
     rx: Receiver<ObserveMsg>,
 ) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
         Writer {
             runtime,
             sink,
-            election,
             latest_roster: None,
             last_crosscheck: Instant::now(),
             dead_pids: DeadPidTracker::default(),
@@ -44,7 +41,6 @@ pub(crate) fn spawn(
 struct Writer {
     runtime: RuntimePaths,
     sink: DiagSink,
-    election: ProducerElectionTracker,
     latest_roster: Option<RosterSig>,
     last_crosscheck: Instant,
     dead_pids: DeadPidTracker,
@@ -53,10 +49,6 @@ struct Writer {
 }
 
 impl Writer {
-    fn is_elder(&self) -> bool {
-        self.election.elder_instance().is_none()
-    }
-
     fn run(&mut self, rx: Receiver<ObserveMsg>) {
         loop {
             match rx.recv_timeout(OBSERVE_CROSSCHECK_TTL) {
@@ -80,12 +72,10 @@ impl Writer {
                     }
                 }
                 Ok(ObserveMsg::OwnAnomaly { draft, renderer }) => {
-                    if self.is_elder() {
-                        let at_ms = draft.at_ms;
-                        self.sink
-                            .for_renderer(renderer)
-                            .emit_at_ms(anomaly_event(*draft), at_ms);
-                    }
+                    let at_ms = draft.at_ms;
+                    self.sink
+                        .for_renderer(renderer)
+                        .emit_at_ms(anomaly_event(*draft), at_ms);
                 }
                 Err(RecvTimeoutError::Timeout) => {}
                 Err(RecvTimeoutError::Disconnected) => break,
@@ -100,17 +90,11 @@ impl Writer {
     /// The sink is the one rate limit: it keys on `identity_key()`, so repeats
     /// on one subject collapse while a fault on a different row reports now.
     fn emit_anomaly(&mut self, draft: AnomalyDraft) {
-        if !self.is_elder() {
-            return;
-        }
         let at_ms = draft.at_ms;
         self.sink.emit_at_ms(anomaly_event(draft), at_ms);
     }
 
     fn run_crosschecks(&mut self) {
-        if !self.is_elder() {
-            return;
-        }
         let Some(roster) = self.latest_roster.clone() else {
             return;
         };
@@ -547,46 +531,6 @@ mod tests {
     }
 
     #[test]
-    fn consumer_writer_drops_frame_anomaly_drafts() {
-        let dir = tempfile::tempdir().unwrap();
-        let workspace = WorkspaceId::from_project_root(dir.path());
-        let runtime = RuntimePaths::under(workspace.clone(), dir.path()).expect("runtime");
-        let elder = SidebarInstanceId::parse("sb_00000000000000000000000000000001").unwrap();
-        let consumer = SidebarInstanceId::parse("sb_00000000000000000000000000000002").unwrap();
-        crate::wakeup::heartbeat::write_heartbeat(
-            &runtime,
-            workspace.clone(),
-            &elder,
-            MuxName::Zellij,
-            "rimz-test",
-            &runtime.sock_dir.join("elder.sock"),
-            None,
-            None,
-        )
-        .unwrap();
-        let sink =
-            crate::diag::DiagSink::under(dir.path().to_path_buf(), workspace, "rimz-test", None);
-        let log_path = sink.log_path().unwrap();
-        let election = ProducerElectionTracker::new(runtime.clone(), consumer);
-        assert_eq!(election.elder_instance(), Some(elder));
-        let (tx, rx) = std::sync::mpsc::sync_channel::<ObserveMsg>(4);
-        let handle = spawn(runtime, sink, election, rx);
-        let draft = AnomalyDraft::from_roster(
-            42,
-            &roster(10, vec![("a", "terminal_1")]),
-            AnomalyKind::DuplicateRowId {
-                row_id: "a".to_owned(),
-                count: 2,
-            },
-        );
-        tx.send(ObserveMsg::Anomaly(Box::new(draft))).unwrap();
-        drop(tx);
-        handle.join().unwrap();
-
-        assert!(!log_path.exists() || std::fs::read_to_string(log_path).unwrap().is_empty());
-    }
-
-    #[test]
     fn room_common_anomaly_names_the_eldest_renderer() {
         let dir = tempfile::tempdir().unwrap();
         let workspace = WorkspaceId::from_project_root(dir.path());
@@ -600,12 +544,7 @@ mod tests {
         );
         let log = sink.log_path().unwrap();
         let (tx, rx) = std::sync::mpsc::sync_channel(4);
-        let handle = spawn(
-            runtime.clone(),
-            sink,
-            ProducerElectionTracker::new(runtime, eldest.clone()),
-            rx,
-        );
+        let handle = spawn(runtime.clone(), sink, rx);
         let row = crate::sidebar::test_support::activity_row(
             true,
             None,
@@ -665,11 +604,8 @@ mod tests {
         let sink =
             crate::diag::DiagSink::under(dir.path().to_path_buf(), workspace, "rimz-test", None);
         let log_path = sink.log_path().unwrap();
-        let instance = SidebarInstanceId::new();
         let (tx, rx) = std::sync::mpsc::sync_channel::<ObserveMsg>(4);
-
-        let election = ProducerElectionTracker::new(runtime.clone(), instance);
-        let handle = spawn(runtime, sink, election, rx);
+        let handle = spawn(runtime, sink, rx);
         let sig_rows = roster(10, vec![("a", "terminal_1")]);
         let mut draft = AnomalyDraft::from_roster(
             42,

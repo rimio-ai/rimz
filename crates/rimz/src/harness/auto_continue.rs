@@ -199,7 +199,7 @@ pub(crate) fn resume_gate_recovered(
 /// empty nudge text or an agent with no live pane waits without consuming a
 /// retry; a spawned helper paces the next attempt even if it dies before
 /// queueing. Producer-only —
-/// one elected producer drives one room, and the records live in that room's
+/// one room host drives one room, and the records live in that room's
 /// runtime dir, so one due condition nudges its agent once per retry.
 pub(crate) fn resume_parked(
     snapshot: &SidebarSnapshot,

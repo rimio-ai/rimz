@@ -1,6 +1,6 @@
 # Sidebar
 
-This page owns the mechanics between the store and the painted sidebar: how a live pane becomes a row, how rows group and rank, which lines a card carries, how the frame composes, and how the renderer process launches, closes itself, recovers, and reloads. Four pages sit beside it. [state.md](./state.md) owns the data plane underneath: producer election, the fetch cycle, the published caches, realtime events, fusion, and cadences. [The interface reference](../../interface/sidebar.md) draws every glyph and frame. [instances.md](../agents/instances.md) owns how a session joins its pane from the session's side, and [DESIGN.md](../../../DESIGN.md) states the product commitments.
+This page owns the mechanics between the store and the painted sidebar: how a live pane becomes a row, how rows group and rank, which lines a card carries, how the frame composes, and how the renderer process launches, closes itself, recovers, and reloads. Four pages sit beside it. [state.md](./state.md) owns the data plane underneath: the fetch cycle, the published caches, realtime events, fusion, and cadences. [The interface reference](../../interface/sidebar.md) draws every glyph and frame. [instances.md](../agents/instances.md) owns how a session joins its pane from the session's side, and [DESIGN.md](../../../DESIGN.md) states the product commitments.
 
 The sidebar is the narrow column pinned beside the work panes, and it answers one question: which pane needs the user now. One renderer paints every state of a room, from a bare shell to a fleet across worktrees, through detach and reattach. Only the snapshot changes between those states.
 
@@ -10,7 +10,7 @@ Every decision is made once, in the snapshot, and painting is a projection of it
 
 That rule splits the code in two. **The producer** folds the store and the live pane roster into one `SidebarSnapshot`: presence, grouping, ranking, and every card field. **The renderer** turns that snapshot into lines for one terminal. `SidebarSnapshot` is the whole contract between them. A behaviour that depends on the viewer (width, color depth, selection, scroll position, the active filter) belongs to the renderer; a fact about the room belongs to the producer.
 
-The sidebar is a client of the store and never a writer of it. Its filesystem writes are runtime display files: its heartbeat, read receipts, `lanes/unread.json`, `lanes/focus-anchor.json`, the body filter, and the producer caches. The elected producer also keeps a best-effort status suffix on mux tab names. None of these is durable truth. `cargo xtask invariants` enforces the boundary with `ensure_sidebar_library_boundaries` for the data plane and `ensure_sidebar_renderer_boundaries` for the renderer.
+The sidebar is a client of the store and never a writer of it. Its filesystem writes are runtime display files: its heartbeat, read receipts, `lanes/unread.json`, `lanes/focus-anchor.json`, the body filter, and the producer caches. The host also keeps a best-effort status suffix on mux tab names. None of these is durable truth. `cargo xtask invariants` enforces the boundary with `ensure_sidebar_library_boundaries` for the data plane and `ensure_sidebar_renderer_boundaries` for the renderer.
 
 ## From store to screen
 
@@ -26,7 +26,7 @@ One pass builds one frame, in this order.
 8. **Serialize** the result as `SidebarSnapshot`.
 9. **Project to lines.** The renderer resolves the visible roster, composes the zones, and paints.
 
-Steps 1 through 8 run in the elected producer and are published once for every renderer in the session; the split, caches, and timings are [state.md](./state.md#one-fetch-cycle). Step 9 runs in each renderer.
+Steps 1 through 8 run in the host and are published once for every renderer in the session; the split, caches, and timings are [state.md](./state.md#one-fetch-cycle). Step 9 runs in each renderer.
 
 Only watched attachments paint. A capture of a hidden sidebar pane shows its last visible frame, including in a detached session; it is not a fresh snapshot. Hidden attachments still apply every delivered projection, refresh heartbeats, drain wakeups, and handle self-close and reload. A fold that lists the pane or its working siblings in `viewed_panes`, or a resize wakeup, paints the current state within one base frame ([the paint clock](./state.md#the-paint-clock)).
 
@@ -61,7 +61,7 @@ The contract types are in [`view.rs`](../../../crates/rimz/src/store/snapshot/vi
 | [`supervise.rs`](../../../crates/rimz/src/sidebar_pane/supervise.rs), [`host.rs`](../../../crates/rimz/src/sidebar_pane/host.rs), [`attach.rs`](../../../crates/rimz/src/sidebar_pane/attach.rs) | the pane supervisor, the session's only painter, and their attach wire |
 | [`app.rs`](../../../crates/rimz/src/sidebar_pane/app.rs) | shared configuration, errors, panic diagnostics, and runtime-file cleanup |
 | [`app/attachment.rs`](../../../crates/rimz/src/sidebar_pane/app/attachment.rs), [`app/loop_state.rs`](../../../crates/rimz/src/sidebar_pane/app/loop_state.rs) | the fixed-timestep attachment loop and its wakeup dispatch |
-| [`app/fetch.rs`](../../../crates/rimz/src/sidebar_pane/app/fetch.rs) | the off-thread fetch worker: cadence, election, request coalescing, notification state, publication ([state.md](./state.md#one-fetch-cycle)) |
+| [`app/fetch.rs`](../../../crates/rimz/src/sidebar_pane/app/fetch.rs) | the off-thread fetch worker: cadence, request coalescing, notification state, publication ([state.md](./state.md#one-fetch-cycle)) |
 | [`app/selection.rs`](../../../crates/rimz/src/sidebar_pane/app/selection.rs) | the identity-keyed highlight, the browse layer, and the key and mouse handlers |
 | [`app/gate.rs`](../../../crates/rimz/src/sidebar_pane/app/gate.rs) | the last-resort hold that refuses a regressive frame |
 | [`app/health.rs`](../../../crates/rimz/src/sidebar_pane/app/health.rs) | failure debounce, the sticky alert, and the give-up rule |
@@ -80,7 +80,7 @@ The contract types are in [`view.rs`](../../../crates/rimz/src/store/snapshot/vi
 | [`render/animation.rs`](../../../crates/rimz/src/sidebar_pane/render/animation.rs), [`odometer.rs`](../../../crates/rimz/src/sidebar_pane/render/odometer.rs), [`scrollbar.rs`](../../../crates/rimz/src/sidebar_pane/render/scrollbar.rs) | motion, driven by the wall-clock animation phase |
 | [`supervise.rs`](../../../crates/rimz/src/sidebar_pane/supervise.rs) | the supervisor process: build convergence, respawn, pane liveness, and self-close confirmation |
 
-**`crates/rimz/src/sidebar/` is the data plane**: producer election, the published caches, the realtime overlay store, and fusion, over the wakeup wire in `crates/rimz/src/wakeup/`. Both are mapped in [state.md](./state.md#where-the-code-lives).
+**`crates/rimz/src/sidebar/` is the data plane**: the published caches, the realtime overlay store, and fusion, over the wakeup wire in `crates/rimz/src/wakeup/`. Both are mapped in [state.md](./state.md#where-the-code-lives).
 
 Where to start reading depends on the question:
 
@@ -249,7 +249,7 @@ The status projection is pinned in [`view/tests/status/`](../../../crates/rimz/s
 
 ### Unread and read receipts
 
-Unread state is a runtime episode set (`lanes/unread.json`) plus runtime read receipts (`live/read-marks/`). The elected producer opens an episode for a row whose displayed status is `success`, `failed`, `waiting`, or `paused` when no read mark reaches the row's `last_activity`, and every fold derives `SidebarRow::unread` from that file and the merged receipts. The cap keeps unread rows visible, so a row that returns to `running` or `idle` stays emphasized until read. Attaching to a busy room opens the current attention rows silently, without a burst of notifications.
+Unread state is a runtime episode set (`lanes/unread.json`) plus runtime read receipts (`live/read-marks/`). The host opens an episode for a row whose displayed status is `success`, `failed`, `waiting`, or `paused` when no read mark reaches the row's `last_activity`, and every fold derives `SidebarRow::unread` from that file and the merged receipts. The cap keeps unread rows visible, so a row that returns to `running` or `idle` stays emphasized until read. Attaching to a busy room opens the current attention rows silently, without a burst of notifications.
 
 | Action | Effect |
 |---|---|
@@ -395,7 +395,7 @@ The renderer-side guards protect paint, not lifetime. A fused `PaneClosed` overl
 
 Give-up is the counterpart of self-close: self-close asks to end the pane when the view empties, and give-up reattaches in place when the view can no longer be read.
 
-The attachment keeps its last committed frame. When a produce fails (a vanished store, a dead mux, a transient error) the loop reuses that frame and absorbs a single failure silently. A failure that persists past the debounce raises a sticky health alert pinned to the bottom edge (`! Sidebar degraded for 8s: snapshot failed: store not found`), truncating the body so the alert cannot scroll off. On recovery the alert stays as a dim dismissable notice. A producer renderer recovers health only from a completed produce, so a paintable fast fold cannot hide repeated pane-read failure; a consumer recovers on its next successful published read. [`health.rs`](../../../crates/rimz/src/sidebar_pane/app/health.rs) folds these outcomes into `Health`.
+The attachment keeps its last committed frame. When a produce fails (a vanished store, a dead mux, a transient error) the loop reuses that frame and absorbs a single failure silently. A failure that persists past the debounce raises a sticky health alert pinned to the bottom edge (`! Sidebar degraded for 8s: snapshot failed: store not found`), truncating the body so the alert cannot scroll off. On recovery the alert stays as a dim dismissable notice. An attachment recovers health only from a completed produce, so a paintable fast fold cannot hide repeated pane-read failure. [`health.rs`](../../../crates/rimz/src/sidebar_pane/app/health.rs) folds these outcomes into `Health`.
 
 A renderer degraded past `GIVE_UP_AFTER_DEGRADED` (30 seconds) records `renderer_exit` with cause `degraded_gave_up` and closes its attachment without a control word. The supervisor observes the stream loss, shows the host-unavailable notice, and retries in the same pane; the host's other attachments stay alive.
 
@@ -429,7 +429,7 @@ On Zellij, repair captures one unique fresh client view before changing structur
 
 When the machine reboots or the mux server crashes, the agent processes are gone but the store remembers them, and RimZ offers to bring back the agents the sidebar producer last saw alive.
 
-1. Every produce cycle, the elected producer writes `records/live-roster.json`: the current pane-backed, full-session set. It rechecks the election immediately before publication, so a renderer finishing an older fetch after an elder appears cannot overwrite the roster using its cached producer role. A publication that would drop an agent named in the roster on disk is written only while the mux still lists the producer's session (`MuxBackend::session_accepts_agent_close`, probed after the snapshot was produced; a failed or timed-out listing counts as not listed). Otherwise the file is left as it was and a rate-limited `live_roster_held` diagnostic names the agents kept: a renderer that outlives its session is elected once its elders' heartbeats lapse and reads an agent-less room from the pane cache, and its view must not replace the set the birth recovers from. A publication that removes nothing is written without a probe. Provider-native subagents ride their parent; pane-backed launched children are independent roster members.
+1. Every produce cycle, the host writes `records/live-roster.json`: the current pane-backed, full-session set. A publication that would drop an agent named in the roster on disk is written only while the mux still lists the host's session (`MuxBackend::session_accepts_agent_close`, probed after the snapshot was produced; a failed or timed-out listing counts as not listed). Otherwise the file is left as it was and a rate-limited `live_roster_held` diagnostic names the agents kept: a host that outlives its session can read an agent-less room from the pane cache, and its view must not replace the set the birth recovers from. A publication that removes nothing is written without a probe. Provider-native subagents ride their parent; pane-backed launched children are independent roster members.
 2. A birth after a reboot or same-boot crash reads the roster and the pending-recovery record, and [`harness/rebirth.rs`](../../../crates/rimz/src/harness/rebirth.rs) intersects them with the audit rollup without writing. An interactive start prompts to recover the root agents, defaulting to yes, and asks separately, defaulting to no, before dropping the roots it cannot resume; [`room`](../../../crates/rimz/src/room/mod.rs) owns the mux birth order.
 3. Before the session is created, the birth parks the roster's agents in `records/pending-recovery.json`. Once the session exists and before the new sidebar starts, settlement records `session.death{cause,lost_agents}`, archives crash caches, allocates fresh team members, settles the root candidates as the user decided, automatically ends non-live children (`rimz.child-not-resumed`), appends `session.rebirth`, and deletes `records/live-roster.json`. A resumed agent leaves the pending record only after the birth confirms its tab open. Only a user decision or a confirmed or live seat refill (`rimz.seat-refilled`) ends a root agent: the other roots stay parked, exempt from the reap, until a later rebirth asks or an explicit resume brings them back. Pending launched children are not exempt from the reap; recovery never resumes them.
 
@@ -441,4 +441,4 @@ This continuity is RimZ-owned and transcript-based. RimZ disables Zellij session
 
 ## Notifications
 
-Notifications are best-effort over the same attention model, and the store stays authoritative. The elected producer opens unread episodes, applies `[notifications].triggers`, debounce, and focus suppression, spawns matching handlers, and broadcasts `SidebarEvent::Notify`. Each renderer re-rings its local unread `waiting` and `failed` rows at the reminder cadence until they clear, and writes terminal-local OSC and BEL bytes outside the draw cycle. The contract is [notifications.md](./notifications.md).
+Notifications are best-effort over the same attention model, and the store stays authoritative. The host opens unread episodes, applies `[notifications].triggers`, debounce, and focus suppression, spawns matching handlers, and broadcasts `SidebarEvent::Notify`. Each renderer re-rings its local unread `waiting` and `failed` rows at the reminder cadence until they clear, and writes terminal-local OSC and BEL bytes outside the draw cycle. The contract is [notifications.md](./notifications.md).

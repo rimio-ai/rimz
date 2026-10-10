@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use tempfile::TempDir;
 
@@ -285,176 +285,6 @@ fn live_sidebar_size_reads_a_fresh_renderer_in_the_session() {
 }
 
 #[test]
-fn younger_yields_to_live_elder_eldest_survives() {
-    let h = Harness::new();
-    let elder = instance("01");
-    let middle = instance("02");
-    let younger = instance("03");
-    h.write_sidebar_for(&elder);
-    h.write_sidebar_for(&middle);
-    h.write_sidebar_for(&younger);
-    let younger_tracker = ProducerElectionTracker::new(h.runtime.clone(), younger);
-    let elder_tracker = ProducerElectionTracker::new(h.runtime.clone(), elder.clone());
-    let now = SystemTime::now();
-    // The younger sees an older live instance and yields; the eldest finds no
-    // elder and stays, so exactly one survives.
-    assert_eq!(younger_tracker.elder_instance_at(now), Some(elder.clone()));
-    assert_eq!(elder_tracker.elder_instance_at(now), None);
-}
-
-#[test]
-fn producer_election_tracker_shares_warm_elder_without_rescanning() {
-    let h = Harness::new();
-    let elder = instance("01");
-    let younger = instance("09");
-    let path = h.write_sidebar_for(&elder);
-    let modified = SystemTime::now() - Duration::from_secs(1);
-    std::fs::File::open(&path)
-        .unwrap()
-        .set_modified(modified)
-        .unwrap();
-    let tracker = ProducerElectionTracker::new(h.runtime.clone(), younger);
-
-    assert_eq!(tracker.elder_instance_at(modified), Some(elder.clone()));
-    assert_eq!(tracker.full_scan_count(), 1);
-    std::fs::remove_file(path).unwrap();
-
-    let clone = tracker.clone();
-    assert_eq!(
-        clone.elder_instance_at(modified + SIDEBAR_HEARTBEAT_TTL - Duration::from_millis(1)),
-        Some(elder),
-    );
-    assert_eq!(clone.full_scan_count(), 1, "clones share the warm memo");
-    assert_eq!(
-        clone.elder_instance_at(modified + SIDEBAR_HEARTBEAT_TTL),
-        None,
-    );
-    assert_eq!(
-        clone.full_scan_count(),
-        2,
-        "missing elder forces one rescan"
-    );
-}
-
-#[test]
-fn producer_election_tracker_refreshes_one_cached_elder_at_expiry() {
-    let h = Harness::new();
-    let elder = instance("01");
-    let younger = instance("09");
-    let path = h.write_sidebar_for(&elder);
-    let first_modified = SystemTime::now() - Duration::from_secs(1);
-    std::fs::File::open(&path)
-        .unwrap()
-        .set_modified(first_modified)
-        .unwrap();
-    let tracker = ProducerElectionTracker::new(h.runtime.clone(), younger);
-    assert_eq!(
-        tracker.elder_instance_at(first_modified),
-        Some(elder.clone())
-    );
-
-    let refreshed_modified = first_modified + HEARTBEAT_WRITE_INTERVAL;
-    h.write_sidebar_for(&elder);
-    std::fs::File::open(&path)
-        .unwrap()
-        .set_modified(refreshed_modified)
-        .unwrap();
-
-    assert_eq!(
-        tracker.elder_instance_at(first_modified + SIDEBAR_HEARTBEAT_TTL),
-        Some(elder),
-    );
-    assert_eq!(
-        tracker.full_scan_count(),
-        1,
-        "expiry validates only the cached heartbeat"
-    );
-}
-
-#[test]
-fn producer_election_tracker_rechecks_producer_on_heartbeat_cadence() {
-    let h = Harness::new();
-    h.ensure_runtime();
-    let older = instance("01");
-    let own = instance("09");
-    let tracker = ProducerElectionTracker::new(h.runtime.clone(), own);
-    let now = SystemTime::now();
-
-    assert_eq!(tracker.elder_instance_at(now), None);
-    h.write_sidebar_for(&older);
-    assert_eq!(
-        tracker.elder_instance_at(now + HEARTBEAT_WRITE_INTERVAL - Duration::from_millis(1)),
-        None,
-    );
-    assert_eq!(tracker.full_scan_count(), 1);
-    assert_eq!(
-        tracker.elder_instance_at(now + HEARTBEAT_WRITE_INTERVAL),
-        Some(older),
-    );
-    assert_eq!(tracker.full_scan_count(), 2);
-}
-
-#[test]
-fn producer_election_tracker_ignores_build_changes_but_liveness_exposes_them() {
-    let h = Harness::new();
-    let elder = instance("01");
-    let own = instance("09");
-    let path = h.write_sidebar_for(&elder);
-    let modified = SystemTime::now() - Duration::from_secs(1);
-    std::fs::File::open(&path)
-        .unwrap()
-        .set_modified(modified)
-        .unwrap();
-    let tracker = ProducerElectionTracker::new(h.runtime.clone(), own);
-    assert_eq!(tracker.elder_instance_at(modified), Some(elder.clone()));
-
-    let mut heartbeat = SidebarHeartbeat::read_from(&path).unwrap();
-    heartbeat.build = Some("new-build".to_owned());
-    std::fs::write(&path, serde_json::to_vec(&heartbeat).unwrap()).unwrap();
-    let refreshed = modified + HEARTBEAT_WRITE_INTERVAL;
-    std::fs::File::open(&path)
-        .unwrap()
-        .set_modified(refreshed)
-        .unwrap();
-
-    assert_eq!(
-        tracker.elder_instance_at(modified + SIDEBAR_HEARTBEAT_TTL),
-        Some(elder),
-    );
-    assert_eq!(tracker.full_scan_count(), 1);
-    assert!(
-        fresh_sidebar_heartbeats(&h.runtime)
-            .iter()
-            .any(|heartbeat| heartbeat.build.as_deref() == Some("new-build"))
-    );
-}
-
-#[test]
-fn no_elder_when_alone() {
-    let h = Harness::new();
-    let only = instance("05");
-    h.write_sidebar_for(&only);
-    let tracker = ProducerElectionTracker::new(h.runtime.clone(), only);
-    let now = SystemTime::now();
-    assert_eq!(tracker.elder_instance_at(now), None);
-}
-
-#[test]
-fn stale_or_wrong_protocol_elder_is_not_honored() {
-    let h = Harness::new();
-    let younger = instance("09");
-    // A stale lower id is a dead elder — ignored, so the survivor does not
-    // yield to a ghost (recovery is bounded by the heartbeat TTL).
-    let stale_elder = instance("07");
-    make_stale(&h.write_sidebar_for(&stale_elder));
-    // A wrong-protocol lower id is not a peer we hand off to.
-    h.write_sidebar("sidebar.0000000000000008.json", "rimz.plugin.v0");
-    let tracker = ProducerElectionTracker::new(h.runtime.clone(), younger);
-    let now = SystemTime::now();
-    assert_eq!(tracker.elder_instance_at(now), None);
-}
-
-#[test]
 fn sweep_removes_stale_heartbeat_keeps_fresh() {
     let h = Harness::new();
     let live = instance("0a");
@@ -559,11 +389,10 @@ fn sweep_removes_orphan_read_marks_keeps_live_and_fresh() {
 }
 
 /// The roster `rimz sidebar renderers` and `rimz sidebar click` read applies the
-/// election rule from outside a renderer: smallest live id produces, a stale
-/// heartbeat is not a renderer at all.
+/// live renderer discovery: a stale heartbeat is not a renderer at all.
 #[cfg(feature = "testkit")]
 #[test]
-fn live_sidebars_elect_the_smallest_live_instance() {
+fn live_sidebars_discovers_fresh_renderers_in_instance_order() {
     use crate::ids::PaneId;
 
     let h = Harness::new();
@@ -578,21 +407,12 @@ fn live_sidebars_elect_the_smallest_live_instance() {
 
     let roster: Vec<_> = live_sidebars(&h.runtime)
         .into_iter()
-        .map(|sidebar| {
-            (
-                sidebar.heartbeat.instance_id,
-                sidebar.heartbeat.pane_id,
-                sidebar.producer,
-            )
-        })
+        .map(|sidebar| (sidebar.heartbeat.instance_id, sidebar.heartbeat.pane_id))
         .collect();
 
     assert_eq!(
         roster,
-        [
-            (elder, Some(elder_pane), true),
-            (younger, Some(younger_pane), false),
-        ],
-        "the stale heartbeat is skipped and the smallest live id produces",
+        [(elder, Some(elder_pane)), (younger, Some(younger_pane)),],
+        "the stale heartbeat is skipped and live ids are sorted",
     );
 }

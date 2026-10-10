@@ -1,7 +1,7 @@
 use super::*;
 use crate::agents::AgentStatus;
 use crate::diag::record::{DiagEvent, GateRule};
-use crate::sidebar_pane::app::fetch::{FetchPhase, FetchRole, FetchUpdate, SnapshotSource};
+use crate::sidebar_pane::app::fetch::{FetchPhase, FetchUpdate, SnapshotSource};
 use crate::sidebar_pane::app::fixtures::{serve_config, snapshot, workspace};
 use crate::sidebar_pane::app::health::ALERT_AFTER_FAILURES;
 use crate::sidebar_pane::app::loop_state::LoopState;
@@ -395,7 +395,6 @@ impl ApplyHarness {
     fn apply(&mut self, snapshot: SidebarSnapshot) -> ApplyOutcome {
         self.apply_outcome(FetchUpdate::Snapshot {
             snapshot: Box::new(snapshot),
-            role: FetchRole::Producer,
             phase: FetchPhase::Final,
             source: SnapshotSource::Produced,
         })
@@ -408,7 +407,6 @@ impl ApplyHarness {
     fn fail(&mut self, reason: &str) -> ApplyOutcome {
         self.apply_outcome(FetchUpdate::Failed {
             error: reason.to_owned(),
-            role: FetchRole::Producer,
         })
     }
 }
@@ -496,7 +494,7 @@ fn moving_between_groups_records_one_migration() {
 }
 
 #[test]
-fn diagnostics_scope_group_migrations_to_elder_only() {
+fn diagnostics_record_group_migrations() {
     let ws = workspace();
     let prev = snapshot_in_group(
         crate::store::snapshot::SidebarWorktreeKind::External,
@@ -521,15 +519,15 @@ fn diagnostics_scope_group_migrations_to_elder_only() {
         alert: Some(Alert::active("snapshot failed", fixed_time(1_700_000_000))),
     };
 
-    let consumer_dir = tempfile::tempdir().unwrap();
-    let consumer_sink = crate::diag::DiagSink::under(
-        consumer_dir.path().to_path_buf(),
+    let diagnostics_dir = tempfile::tempdir().unwrap();
+    let diagnostics_sink = crate::diag::DiagSink::under(
+        diagnostics_dir.path().to_path_buf(),
         ws.clone(),
         "rimz-test",
         None,
     );
     emit_diagnostics(
-        &consumer_sink,
+        &diagnostics_sink,
         FetchDiagnostics {
             prev_snapshot: &prev,
             incoming_panes_produced_at_ms: next.panes_produced_at_ms,
@@ -541,56 +539,28 @@ fn diagnostics_scope_group_migrations_to_elder_only() {
             fetch_failure: Some("pane discovery failed".to_owned()),
             rejected: true,
             released_via_escape_hatch: false,
-            is_elder: false,
             now: fixed_time(1_700_000_000),
         },
     );
-    let consumer_events = diagnostic_events(&consumer_sink);
+    let events = diagnostic_events(&diagnostics_sink);
 
     assert!(
-        consumer_events
+        events
             .iter()
             .any(|event| matches!(event, DiagEvent::FetchFailure { .. }))
     );
     assert!(
-        consumer_events
+        events
             .iter()
             .any(|event| matches!(event, DiagEvent::GateHold { .. }))
     );
     assert!(
-        consumer_events
+        events
             .iter()
             .any(|event| matches!(event, DiagEvent::HealthAlert { .. }))
     );
     assert!(
-        !consumer_events
-            .iter()
-            .any(|event| matches!(event, DiagEvent::GroupMigration { .. }))
-    );
-
-    let elder_dir = tempfile::tempdir().unwrap();
-    let elder_sink =
-        crate::diag::DiagSink::under(elder_dir.path().to_path_buf(), ws, "rimz-test", None);
-    emit_diagnostics(
-        &elder_sink,
-        FetchDiagnostics {
-            prev_snapshot: &prev,
-            incoming_panes_produced_at_ms: next.panes_produced_at_ms,
-            next_snapshot: &next,
-            prev_health: &Health::default(),
-            next_health: &Health::default(),
-            prev_gate: &GateState::default(),
-            next_gate: &GateState::default(),
-            fetch_failure: None,
-            rejected: false,
-            released_via_escape_hatch: false,
-            is_elder: true,
-            now: fixed_time(1_700_000_000),
-        },
-    );
-
-    assert!(
-        diagnostic_events(&elder_sink)
+        events
             .iter()
             .any(|event| matches!(event, DiagEvent::GroupMigration { .. }))
     );
@@ -671,9 +641,8 @@ fn interim_success_does_not_recover_health_and_final_failure_advances_once() {
 
     h.apply_outcome(FetchUpdate::Snapshot {
         snapshot: Box::new(row_snapshot(&ws, AgentStatus::Running, false)),
-        role: FetchRole::Producer,
         phase: FetchPhase::Interim,
-        source: SnapshotSource::Published,
+        source: SnapshotSource::Cached,
     });
     assert_eq!(h.health.failure_streak, ALERT_AFTER_FAILURES);
     assert!(h.health.alert.as_ref().is_some_and(Alert::is_active));
@@ -702,7 +671,6 @@ fn focused_read_clear_survives_failure_without_duplicate_trace() {
 
     h.apply_outcome(FetchUpdate::Snapshot {
         snapshot: Box::new(focused),
-        role: FetchRole::Producer,
         phase: FetchPhase::Final,
         source: SnapshotSource::Produced,
     });
@@ -1106,9 +1074,8 @@ fn frameless_fold_does_not_blip_switch_in() {
     frameless.own_view = None;
     a.apply_outcome(FetchUpdate::Snapshot {
         snapshot: Box::new(frameless),
-        role: FetchRole::Producer,
         phase: FetchPhase::Interim,
-        source: SnapshotSource::Published,
+        source: SnapshotSource::Cached,
     });
     assert_eq!(a.ui.viewing_own_tab, Some(true));
 
@@ -1174,9 +1141,8 @@ fn published_fast_success_keeps_refresh_alert_active() {
 
     let applied = h.apply_outcome(FetchUpdate::Snapshot {
         snapshot: Box::new(snapshot(&ws)),
-        role: FetchRole::Producer,
         phase: FetchPhase::Final,
-        source: SnapshotSource::Published,
+        source: SnapshotSource::Cached,
     });
 
     assert!(!applied.should_exit);
@@ -1190,25 +1156,6 @@ fn published_fast_success_keeps_refresh_alert_active() {
             .is_some_and(|alert| alert.is_active()),
         "only a produced success may mark producer health recovered"
     );
-}
-
-#[test]
-fn consumer_published_success_recovers_refresh_health() {
-    let ws = workspace();
-    let (_dir, mut h) = ApplyHarness::new(&ws);
-    h.health = degraded_health("snapshot failed: consumer read");
-
-    h.apply_outcome(FetchUpdate::Snapshot {
-        snapshot: Box::new(snapshot(&ws)),
-        role: FetchRole::Consumer,
-        phase: FetchPhase::Final,
-        source: SnapshotSource::Published,
-    });
-
-    assert_eq!(h.health.failure_streak, 0);
-    let alert = h.health.alert.as_ref().expect("recovered alert lingers");
-    assert!(!alert.is_active());
-    assert!(alert.recovered_at.is_some());
 }
 
 #[test]
@@ -1269,7 +1216,6 @@ fn diagnostics_record_fetch_and_gate_transitions() {
             fetch_failure: Some("pane discovery failed".to_owned()),
             rejected: false,
             released_via_escape_hatch: false,
-            is_elder: true,
             now: fixed_time(1_700_000_000),
         },
     );
@@ -1286,7 +1232,6 @@ fn diagnostics_record_fetch_and_gate_transitions() {
             fetch_failure: None,
             rejected: true,
             released_via_escape_hatch: false,
-            is_elder: true,
             now: fixed_time(1_700_000_001),
         },
     );
@@ -1303,7 +1248,6 @@ fn diagnostics_record_fetch_and_gate_transitions() {
             fetch_failure: None,
             rejected: false,
             released_via_escape_hatch: true,
-            is_elder: true,
             now: fixed_time(1_700_000_003),
         },
     );

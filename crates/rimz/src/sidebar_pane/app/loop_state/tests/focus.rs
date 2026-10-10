@@ -196,7 +196,6 @@ fn older_shared_inputs_do_not_undo_a_consumed_focus_intent() {
     rig.deliver(FetchUpdate::Shared {
         update: Box::new(FetchUpdate::Snapshot {
             snapshot: Box::new(snapshot),
-            role: FetchRole::Producer,
             phase: FetchPhase::Final,
             source: SnapshotSource::Produced,
         }),
@@ -688,7 +687,7 @@ fn browse_survives_a_frameless_escape_hatch_with_a_live_order_hold() {
     let mut frameless = framed.clone();
     frameless.panes_produced_at_ms = None;
     frameless.worktree_groups.clear();
-    rig.fold(frameless.clone(), SnapshotSource::Published);
+    rig.fold(frameless.clone(), SnapshotSource::Cached);
     assert_eq!(rig.state.gate.reject_streak, 1);
     assert_eq!(rig.state.current.panes_produced_at_ms, Some(1));
     assert_eq!(rig.state.ui.selected_pane, Some(selected.clone()));
@@ -697,7 +696,7 @@ fn browse_survives_a_frameless_escape_hatch_with_a_live_order_hold() {
     let now_ms = jiff::Timestamp::now().as_millisecond();
     rig.state.gate.rejecting_since =
         Some(jiff::Timestamp::from_millisecond(now_ms - 1_000).unwrap());
-    rig.fold(frameless, SnapshotSource::Published);
+    rig.fold(frameless, SnapshotSource::Cached);
 
     assert_eq!(rig.state.gate.reject_streak, 0);
     assert_eq!(rig.state.current.panes_produced_at_ms, None);

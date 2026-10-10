@@ -28,26 +28,9 @@ $ rimz sidebar snapshot --json --no-produce | jq '{agents:(.agents|length), pane
 }
 ```
 
-## Find the producer
+## Find the host
 
-Establish which renderer is the producer before measuring anything. One renderer per workspace pays every external read, and the rest fold its published caches in process ([performance.md](./performance.md#one-producer-many-consumers)), so a capture of a consumer says little about the room's external cost.
-
-The producer is the renderer with the lexically smallest instance id among fresh heartbeats. Ids are `sb_` plus a UUIDv7, so the smallest is the eldest. The election (`ProducerElection::full_scan` in `sidebar/mod.rs`) counts a heartbeat as fresh when its file mtime is within `SIDEBAR_HEARTBEAT_TTL` (5 s) and its protocol version is current; the script below approximates mtime with the `last_seen` field the same write stamps:
-
-```console
-$ rt=$(rimz paths --json | jq -r .runtime_dir)
-$ jq -rs --argjson ttl 5 '
-    (now - $ttl) as $cut
-    | map(select((.last_seen | sub("\\.[0-9]+Z$"; "Z") | fromdate) > $cut))
-    | sort_by(.instance_id) | to_entries[]
-    | "\(if .key == 0 then "producer" else "consumer" end)\t\(.value.instance_id)\t\(.value.pane_id)"
-  ' "$rt"/heartbeat/sidebar.*.json | column -t
-producer  sb_019f7646c9c6772389da7c8a72ea01f1  zellij:terminal_0
-consumer  sb_019f7646c9f47b93a712941e4a0979c0  zellij:terminal_5
-consumer  sb_019f7df9052477e2a65be240d9d4d554  zellij:terminal_345
-consumer  sb_019f7dfe7d767303ae175630ed402576  zellij:terminal_347
-...
-```
+One room host owns the shared reads and every pane's renderer ([performance.md](./performance.md#one-host-many-panes)).
 
 A large heartbeat count in a many-tab room is expected: every tab has its own attachment, but one host paints the session's panes and runs their shared data plane.
 
@@ -57,7 +40,7 @@ Find the session's processes by their subcommands. Each tab's `rimz sidebar serv
 ps -C rimz -o pid,ppid,rss,args
 ```
 
-Inspect the actual subcommand, not a substring in an agent's prompt. The host deliberately has no pane or sidebar-instance environment pin, so a heartbeat's instance identifies an attachment, not a separate painter process. A consumer attachment in the producer host shares that host's external-read cost; only a host in another session can be profiled as a separate consumer process.
+Inspect the actual subcommand, not a substring in an agent's prompt. The host deliberately has no pane or sidebar-instance environment pin, so a heartbeat's instance identifies an attachment, not a separate painter process. All attachments share that host's external-read cost; one held room per workspace admits no second consumer host.
 
 ## Measure the process
 
@@ -83,7 +66,7 @@ pid 2662924  0.043 core
 pid 2662907  0.008 core
 ```
 
-For host-only painting, make this producer/consumer process-level comparison between hosts in separate sessions of one workspace, not attachments sharing one host. The producer carries the room's external reads and consumer hosts cost close to nothing; a consumer near the producer's figure points at the election or the adoption path ([state.md → Adoption and fallback](./sidebar/state.md#adoption-and-fallback)).
+The sample above predates host-only painting. Measure the current host's full process, not a producer/consumer comparison: both shared reads and all pane painting belong to that PID.
 
 `pidstat` needs `-t` to be useful here. Its per-process row reports the main thread only and understates a multi-threaded renderer: one producer read 2.4% as a process row and 38% summed over its `-t` thread rows. Parse its columns by header name, because a 12-hour locale inserts an AM/PM column and shifts the rest.
 
@@ -106,7 +89,7 @@ target/profiling/rimz --version
 
 The profile inherits `release` and adds `debug = "line-tables-only"` and `strip = "none"`; xtask adds frame pointers and v0 symbol mangling through `RUSTFLAGS`. `cargo xtask install-dev` installs the same profile, with the `sentry` feature, to `~/.cargo/bin`, so a dogfooding binary is directly profilable ([rust-conventions.md](../contributing/rust-conventions.md)).
 
-Check which build is running before trusting absolute numbers. Frames such as `core::ub_checks::*` or `precondition_check` mark a debug build, whose absolute CPU overstates release by roughly 5x. Ratios and rates (forks per second, folds per second, the producer and consumer split) stay valid across builds.
+Check which build is running before trusting absolute numbers. Frames such as `core::ub_checks::*` or `precondition_check` mark a debug build, whose absolute CPU overstates release by roughly 5x. Ratios and rates (forks per second, folds per second, shared data work versus per-pane rendering) stay valid across builds.
 
 ## Pick the tool by the question
 
@@ -132,8 +115,8 @@ Treat captures as sensitive. Traces and argv contain project paths and command t
 Check these signals in order; the earlier ones find more for less effort.
 
 1. Fork and exec rate, and outcome. A steady exec rate at idle is a retry loop or a cache that never goes fresh, and failed execs matter as much as the rate. `strace -e trace=execve` together with the published caches locates it.
-2. Refold rate against event rate. Compare the store's events per second with each renderer's fold rate. Every renderer folding at the writer's full event rate multiplies the room's cost by its tab count; only the watched tab and the producer need the full rate.
-3. The producer and consumer split. Sum thread-level CPU per process across the workspace. Producer-heavy cost points at the external-read lanes; consumer-heavy cost points at fold and render work multiplied by renderer count.
+2. Refold rate against event rate. Compare the store's events per second with the host fetch worker's fold rate. Pane requests should coalesce through the shared worker rather than multiply the fold rate by tab count.
+3. The host's thread split. Sum thread-level CPU: fetch and refresher cost points at shared reads; attachment-heavy cost points at rendering multiplied by pane count.
 4. Allocation share. `malloc`, `memmove`, and `clone` frames above 10 to 15% of samples in fold or enrich paths mean deep clones on a hot path, the cost the `Arc` handles from `disk/parse_cache.rs` remove.
 5. Multiplexer server cost. Attribute the multiplexer's own children and resident set separately. Zellij's server-side `ps` runs and scrollback footprint are upstream costs that RimZ bounds but does not own ([performance.md](./performance.md#deferred-and-rejected)).
 
@@ -156,8 +139,8 @@ The symfs tree mirrors the original install path, and the file name keeps the li
 
 Classify a rising resident set before changing allocation policy: it is usually retained state or allocator high-water, and seldom a leak.
 
-1. Sample one role at a fixed cadence. A resident set that keeps rising while the room is idle is a leak candidate; a flat plateau after a role change is retained state or high-water.
-2. Compare roles: an ordinary consumer, the current producer, a demoted former producer, pets disabled, and cell pets enabled. A step the size of one role names the owner even when the allocator keeps freed pages resident.
+1. Sample one host at a fixed cadence. A resident set that keeps rising while the room is idle is a leak candidate; a flat plateau after an attachment change is retained state or high-water.
+2. Compare attachment counts, pets disabled, and cell pets enabled. A step tied to one attachment or feature names the owner even when the allocator keeps freed pages resident.
 3. Attach `heaptrack`. Outstanding Rust allocations that grow cycle over cycle are a leak; bounded freed pages in the one owner are high-water.
 4. Fix the owning feature before tuning malloc. Remove duplicate owners or compact the retained representation first, and revisit allocator policy only when a single correct owner is still a material cost.
 
@@ -171,4 +154,4 @@ Record what the capture taught in [performance.md](./performance.md): a changed 
 
 Reproduce this capture with the steps above and compare against it before each release. Machine-specific figures (absolute core counts, syscall totals, build ids, workspace ids) belong in a change's report; this section holds the shape a healthy room keeps.
 
-On July 20, 2026, a live Zellij room on `xlab-term` held 12 agents across 12 panes, 15 worktree roots, 13 groups, and 14 renderers in one workspace. Scheduler CPU over a 12-second window put the elected producer at 0.043 core and a representative consumer at 0.008 core, well inside the `<0.3 core` busy target for a whole room ([performance.md → Overhead at fleet scale](./performance.md#overhead-at-fleet-scale)). The ratio is the figure to compare: consumers stay near zero because they fold published caches instead of reading the world.
+On July 20, 2026, a live Zellij room on `xlab-term` held 12 agents across 12 panes, 15 worktree roots, 13 groups, and 14 renderers in one workspace. Scheduler CPU over a 12-second window put the host at 0.043 core and a representative consumer at 0.008 core, well inside the `<0.3 core` busy target for a whole room ([performance.md → Overhead at fleet scale](./performance.md#overhead-at-fleet-scale)). This historical measurement predates host-only painting; do not use its producer/consumer ratio as a current architecture check.

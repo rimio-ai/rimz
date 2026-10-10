@@ -1,6 +1,6 @@
 //! Elder-owned scheduled-message wakeups.
 //!
-//! The elected sidebar elder keeps time for queued messages with a future delivery floor while a room is open. The elder reads only the wake cache and spawns the hidden `rimz message sweep` helper with its workspace id and mux in argv; store reads and writes stay in that helper.
+//! The room host keeps time for queued messages with a future delivery floor while a room is open. The host reads only the wake cache and spawns the hidden `rimz message sweep` helper with its workspace id and mux in argv; store reads and writes stay in that helper.
 
 use std::ffi::OsString;
 use std::path::Path;

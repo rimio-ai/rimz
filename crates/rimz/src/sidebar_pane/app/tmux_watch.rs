@@ -1,6 +1,6 @@
 //! tmux presence fast path: forward control-mode overlays to sidebars.
 //!
-//! The elected producer holds one [`PresenceWatch`]
+//! The room host holds one [`PresenceWatch`]
 //! (`crate::mux::tmux`) on the session, subscribes to tmux's per-pane format
 //! stream. tmux state and Zellij observations both flow through the host
 //! projector that emits typed overlays. Identity-free topology lines stay as
@@ -8,11 +8,6 @@
 //! only, never truth: the poll remains the presence backstop
 //! (docs/internals/multiplexers.md), a dead watcher degrades to the
 //! poll, and this thread respawns the client with backoff.
-//!
-//! One control client per workspace: only the eldest live instance (the same
-//! election as the produce fork) attaches; the rest sleep on the election
-//! poll. Demotion is rare (an elder appearing above a live producer), so it
-//! is re-checked per nudge rather than mid-block.
 //!
 //! [`PanesChanged`]: crate::wakeup::events::SidebarEvent::PanesChanged
 
@@ -23,13 +18,10 @@ use crate::RuntimePaths;
 use crate::diag::DiagSink;
 use crate::ids::MuxName;
 use crate::mux::tmux::{PresenceWatch, managed_server_socket_path};
-use crate::sidebar::ProducerElectionTracker;
 use crate::sidebar::presence::projector::project_presence;
 use crate::sidebar::presence::tmux::TmuxPresenceState;
 use tracing::debug;
 
-/// Idle cadence for the producer-election re-check while not attached.
-const ELECTION_POLL: Duration = Duration::from_secs(5);
 /// Backoff between control-client attach attempts, so a refusing tmux (too
 /// old for `-f no-output`, server restarting) never spins the thread.
 const RESPAWN_BACKOFF: Duration = Duration::from_secs(5);
@@ -41,21 +33,13 @@ const SEED_WINDOW: Duration = Duration::from_millis(300);
 /// Spawn the watcher manager thread. It runs for the process lifetime; the
 /// control client child needs no explicit teardown — it exits on stdin EOF,
 /// which process exit guarantees by closing the pipe.
-pub(super) fn spawn(
-    runtime: RuntimePaths,
-    session_name: String,
-    election: ProducerElectionTracker,
-) -> JoinHandle<()> {
-    std::thread::spawn(move || watch_loop(&runtime, &session_name, &election))
+pub(super) fn spawn(runtime: RuntimePaths, session_name: String) -> JoinHandle<()> {
+    std::thread::spawn(move || watch_loop(&runtime, &session_name))
 }
 
-fn watch_loop(runtime: &RuntimePaths, session_name: &str, election: &ProducerElectionTracker) {
+fn watch_loop(runtime: &RuntimePaths, session_name: &str) {
     let control_socket = managed_server_socket_path();
     loop {
-        if !is_producer(election) {
-            std::thread::sleep(ELECTION_POLL);
-            continue;
-        }
         match PresenceWatch::attach(&control_socket, session_name) {
             Ok(mut watch) => {
                 let diag =
@@ -68,11 +52,6 @@ fn watch_loop(runtime: &RuntimePaths, session_name: &str, election: &ProducerEle
                 let mut state = TmuxPresenceState::default();
                 let mut seed_deadline = None;
                 while let Some(line) = watch.next_line() {
-                    // Demotion check per nudge: a demoted instance stops
-                    // forwarding and releases its control client.
-                    if !is_producer(election) {
-                        break;
-                    }
                     let now = Instant::now();
                     let deadline = seed_deadline.get_or_insert(now + SEED_WINDOW);
                     let seeding = now < *deadline;
@@ -96,8 +75,4 @@ fn watch_loop(runtime: &RuntimePaths, session_name: &str, election: &ProducerEle
         }
         std::thread::sleep(RESPAWN_BACKOFF);
     }
-}
-
-fn is_producer(election: &ProducerElectionTracker) -> bool {
-    election.elder_instance().is_none()
 }

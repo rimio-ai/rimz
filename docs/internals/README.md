@@ -28,7 +28,7 @@ The harness spawns the fleet, addresses it, drives it, and reclaims what it leav
 | [fleet.md](./harness/fleet.md) | The area map and the launch core: the rules that shape the design, the vocabulary, one launch end to end, the layout IR, the exec wrapper, the address grammar, resume and rebirth, and pane reclamation. |
 | [scripting.md](./harness/scripting.md) | Supervised `-p` runs: the durable run record and exit codes, the completion fold, the wake socket and deadlines, verification and retry, the output projections, background joins, and run-pane reclamation. |
 | [subagents.md](./harness/subagents.md) | Agent-launched children: the agent-only doorway, what a launch desugars to, fanout, where a child's pane and checkout land, direct-parent stamps, the no-redelegation rule, and the boundary with provider-native subagents. |
-| [loops.md](./harness/loops.md) | Loop scheduling: the task and where tasks live, triggers and schedule shapes, elder firing, one fire, run history, signals, watched commands, waits, and the assist log. |
+| [loops.md](./harness/loops.md) | Loop scheduling: the task and where tasks live, triggers and schedule shapes, host firing, one fire, run history, signals, watched commands, waits, and the assist log. |
 | [budget.md](./harness/budget.md) | Dollar caps: the scopes, where caps and spend come from, the ledgers on disk, the verdict, the human waiver, the park, and the fail-fast gate. |
 | [messaging.md](./harness/messaging.md) | Message delivery: the record and its status lifecycle, sending, the delivery pipeline, the pane write, compaction commands, reply waits, scheduling, the inbox verbs, and channels. |
 | [transcript.md](./harness/transcript.md) | The durable conversation log: entry kinds, writing entries, causality, the `rimz transcript` projection, and the ask records behind `rimz asks` and `rimz answer`. |
@@ -43,7 +43,7 @@ The sidebar spans two source trees. `sidebar/` is the data plane, the view model
 | Page | What it owns |
 | --- | --- |
 | [sidebar.md](./sidebar/sidebar.md) | From store to screen: the presence model and binding ladder, ranking and grouping, the cards, process rows, frame composition, the serve loop, reload and repair, and resume on rebirth. |
-| [state.md](./sidebar/state.md) | The data plane: renderers and producer election, one fetch cycle, the published lanes, realtime events and push channels, fusion rules, focus intent, cadences, and failure modes. |
+| [state.md](./sidebar/state.md) | The data plane: the shared room host, one fetch cycle, the published lanes, realtime events and push channels, fusion rules, focus intent, cadences, and failure modes. |
 | [notifications.md](./sidebar/notifications.md) | Notifications over unread episodes: the producer's policy, the renderer's bell and banner, unread reminders, remote link alerts, handlers, and the trace log. |
 | [pets.md](./sidebar/pets.md) | The dashboard pet: from card state to animation, captions, asset loading and its state machine, the cell-art and pixel render tiers, and `rimz list-pets`. |
 
@@ -71,7 +71,7 @@ These two pages cut across every subsystem above.
 | Page | What it owns |
 | --- | --- |
 | [performance.md](./performance.md) | The cost model: the workload, where work runs, the principles, the cost map, the tick budget, CI counter gates and benchmarks, fleet overhead, anti-patterns, deferred and rejected work, and how to make a performance change. |
-| [profiling.md](./profiling.md) | The field guide for measuring a live fleet: what RimZ already publishes, finding the producer, profiling the process, and turning a finding into a guard. |
+| [profiling.md](./profiling.md) | The field guide for measuring a live fleet: what RimZ already publishes, finding the host, profiling the process, and turning a finding into a guard. |
 
 ## From a source tree to its page
 

@@ -18,7 +18,7 @@ use super::{SidebarSnapshot, trace};
 
 /// Poll cadence and budget for the accounts single-flight: a loser waits up to
 /// `STEP * STEPS` for the elected prober's publish, then serves current cache
-/// truth while the elder finishes.
+/// truth while the prober finishes.
 const ACCOUNTS_WAIT_STEP: Duration = Duration::from_millis(20);
 const ACCOUNTS_WAIT_STEPS: u32 = 15;
 

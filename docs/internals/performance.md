@@ -1,6 +1,6 @@
 # Performance
 
-> This page is the cost model that sits over the mechanisms: what the workload asks for, where each cost lands, which bound holds it down, how the bounds are guarded, and the rules a performance change follows. The mechanisms themselves live on their own pages: the data plane, election, and every cadence value in [state.md](./sidebar/state.md), the write and read paths in [store.md](./store.md), the backend roster in [multiplexers.md](./multiplexers.md), and the spend walker in [spending.md](./agents/spending.md). To measure a running fleet, use [profiling.md](./profiling.md); to read what RimZ recorded about its own faults, use [diagnostics.md](./diagnostics.md).
+> This page is the cost model that sits over the mechanisms: what the workload asks for, where each cost lands, which bound holds it down, how the bounds are guarded, and the rules a performance change follows. The mechanisms themselves live on their own pages: the data plane and every cadence value in [state.md](./sidebar/state.md), the write and read paths in [store.md](./store.md), the backend roster in [multiplexers.md](./multiplexers.md), and the spend walker in [spending.md](./agents/spending.md). To measure a running fleet, use [profiling.md](./profiling.md); to read what RimZ recorded about its own faults, use [diagnostics.md](./diagnostics.md).
 
 ## The workload
 
@@ -32,25 +32,17 @@ Each tab's sidebar pane runs one `rimz sidebar serve` supervisor, and one `rimz 
 
 A render loop spins the animation, applies input, fuses overlay events, and projects a fold the fetch worker finished. It blocks only in `recv` on its own wakeup socket, which receives store and pane wakeups as well as the supervisor's terminal input and resize words. It never forks, never fsyncs, and never reads the pane roster. A mux action the loop starts (a jump, a width nudge) runs on a short-lived detached thread.
 
-The data-plane threads, one set per host, are the fetch worker, the cache refresher, the observer writer, the tmux control-mode watch, and the transcript watch; the terminal event reader lives in each pane's supervisor. What each owns, and which ones stop working when their renderer is not the producer, is the thread table in [state.md](./sidebar/state.md#renderers-the-producer-and-consumers).
+The data-plane threads, one set per host, are the fetch worker, the cache refresher, the observer writer, the tmux control-mode watch, and the transcript watch; the terminal event reader lives in each pane's supervisor. Their responsibilities are in the thread table in [state.md](./sidebar/state.md#the-room-data-plane).
 
-### One producer, many consumers
+### One host, many panes
 
 The external reads a room needs (the pane roster, git, the forge, provider accounts) cost the same whether one tab asks or twenty do, so exactly one renderer per workspace pays them.
 
-The eldest live renderer is the **producer**: it runs the reads and publishes the results as runtime caches. Every other renderer is a **consumer**: it folds those caches in process through [`PublishedSnapshotReader`](../../crates/rimz/src/sidebar/consumer.rs) and applies only what is local to it (its own pane exclusion, its own view, presence). A consumer forks nothing.
+The room host runs one data plane for every pane. CLI readers fold its published caches in process through [`PublishedSnapshotReader`](../../crates/rimz/src/sidebar/consumer.rs) without probing mux, git, or providers.
 
-N tabs therefore cost one set of external reads, and each room's host folds once for all its panes. A wake reaches every pane and each pane asks the shared fetch worker for a fold; a fold answers every request whose cause a pane observed before the fold started, and both the worker and the panes drop a request the last fold answered ([`sidebar_pane::app::fetch`](../../crates/rimz/src/sidebar_pane/app/fetch.rs) `Coverage`). A burst whose wakes all land within one fold costs at most two folds for any tab count; a wake that lands later is indistinguishable from a new change and costs one more. This is the largest lever in the design: in external reads, a 20-tab room costs about what a 2-tab room costs. The election mechanics live in [state.md](./sidebar/state.md#renderers-the-producer-and-consumers), and the account-global spend walker has its own election in [spending.md](./agents/spending.md#one-walk-per-namespace).
+N tabs therefore cost one set of external reads, and each room's host folds once for all its panes. A wake reaches every pane and each pane asks the shared fetch worker for a fold; a fold answers every request whose cause a pane observed before the fold started, and both the worker and the panes drop a request the last fold answered ([`sidebar_pane::app::fetch`](../../crates/rimz/src/sidebar_pane/app/fetch.rs) `Coverage`). A burst whose wakes all land within one fold costs at most two folds for any tab count; a wake that lands later is indistinguishable from a new change and costs one more. This is the largest lever in the design: in external reads, a 20-tab room costs about what a 2-tab room costs. The shared data plane lives in [state.md](./sidebar/state.md#the-room-data-plane), and the account-global spend walker has its own election in [spending.md](./agents/spending.md#one-walk-per-namespace).
 
-### Why the election is safe
-
-The election needs no consensus protocol, because the lock is what actually bounds the cost and the eldest rule only avoids contending for it.
-
-Every shared external read single-flights through [`disk::single_flight::coalesce`](../../crates/rimz/src/disk/single_flight.rs). Two renderers that both believe they are the producer still collapse to one pane-roster read per TTL window, so the room is correct with zero, one, or many self-declared producers.
-
-The eldest rule saves the contention. Renderer ids are UUIDv7 and sort by birth, so a younger renderer skips production without touching the lock. A wrong pick costs one lock wait.
-
-Liveness rides the heartbeat. When the producer dies, the next eldest takes the role within one `SIDEBAR_HEARTBEAT_TTL` (5 s) and produces on its next cycle. Pane discovery lags by those seconds, while agent status keeps flowing, because every renderer reads the store rollup itself and needs no producer for it.
+Shared external reads still single-flight through [`disk::single_flight::coalesce`](../../crates/rimz/src/disk/single_flight.rs): a CLI refresh racing the host pays one read per TTL window.
 
 ### Two clocks
 
@@ -68,7 +60,7 @@ Every row of the cost map rolls up into one of three paths, each named with its 
 | --- | --- | --- |
 | Keypress to pixel | One in-process paint | Input applies synchronously and paints. Nothing on the path locks, forks, or reads the store. |
 | Pane event to pixel | One fuse plus one off-grid paint | A typed overlay event (`PaneClosed`, `FocusChanged`) lands in the in-memory event store, re-fuses the held frame, and paints at once. The producer's next pull confirms it ([state.md](./sidebar/state.md#fusion-rules)). |
-| Write to pixel | The frame grid after apply | Applied events wake the consumer, which folds the published frame in process (O(1) cached, O(delta) on a race) and paints on the next dirty frame. Hook ingress must first pass through the drainer; the 100 ms grid does not bound that queue. |
+| Write to pixel | The frame grid after apply | Applied events wake the panes, which request a shared fold and paint on the next dirty frame. Hook ingress must first pass through the drainer; the 100 ms grid does not bound that queue. |
 
 ## Principles
 
@@ -81,7 +73,7 @@ A performance change follows these rules. An earlier rule outranks a later one w
 5. **Single-flight, then coalesce.** One fetch runs at a time. A burst of requests collapses to one fetch, and a request racing an in-flight fetch leaves exactly one follow-up, never a queue.
 6. **Pay the external read once per window.** A short TTL bounds pane discovery, git, and forge probes, and the last good result is reused. A failed probe backs off and keeps its last known good value. A degraded roster read backfills missing fields per pane instead of painting a corrupt frame.
 7. **Take the cheapest correct read.** Catch-up is O(delta bytes) from the persisted fold base, never O(history). Skip work that cannot matter: unchanged inputs cost a stat, and a room with no agents skips the sidecar scans.
-8. **One producer per workspace, one render loop per tab.** Production is capped, render-loop count is not: every tab keeps its own loop, heartbeat, and wakeup socket so no pane goes dark, and one pane's failure closes that pane alone. Recovering from a stale producer belongs to the election, never to consumers.
+8. **One host per room, one render loop per pane.** The data plane is shared, while every pane keeps its loop, heartbeat, and wakeup socket. Supervisors replace a lost host and reattach without an ownership election.
 
 ## The cost map
 
@@ -103,14 +95,13 @@ Each lane's cost and the bound that holds it down. Reproducible figures come fro
 | --- | --- | --- |
 | Snapshot rollup | O(1) from `cache/snapshots/latest.json`; O(delta bytes) when writes outran the cache | The `(generation, offset)` freshness stamp; a long-lived `RollupCursor` holds the parsed base, and the rotation carryover beneath it is parsed once per file identity per thread and shared, never copied, by every fold |
 | Event-log fold | Warm cursor: one stat of the log and one of the carryover, plus the appended frames; the projection clones only the rows it keeps. Unchanged log: shared handles only | Guard tests `delta_fold_is_o_new_bytes` and `warm_fold_parses_unchanged_carryover_zero_times` |
-| Consumer unchanged check | Metadata stamps on five inputs after an adoption; the full input set after a fallback | A matching stamp skips the fold; `CONSUMER_UNCHANGED_BACKSTOP_MS` forces one anyway ([state.md](./sidebar/state.md#the-skip-memo)) |
-| Workspace projection | Producer: one enrichment and one serialize per changed fold. Consumer: one parse-cached clone plus its local projection | Adoption requires an exact source match; any mismatch falls back to a full local fold with no mux read ([state.md](./sidebar/state.md#adoption-and-fallback)) |
+| Workspace projection | One enrichment and one serialization per changed fold | Published for new-attachment seeds; the fetch worker always runs the full fold |
 | Fold observations | One focus-anchor read, one body-filter read and one merged read-mark observation per real cycle, shared by every attachment | Pane-local application keeps selection, confirmation and receipts; live nonce comparison guards retirement ([state.md](./sidebar/state.md#focus-intent)) |
 | Pane roster (producer) | Zellij: one topology read plus a `zellij pipe` nudge. tmux: one `list-panes` call | `SNAPSHOT_CACHE_TTL` while a client drives it, `EVENT_PANE_TTL` while the presence stamp is fresh; one attempt per data tick |
 | Process metrics (producer) | A due sample reads one metrics record per process | Per-pane focused and background stamps in `lanes/metrics-sample.json`; the full process-table walk runs only on pane churn |
 | Agent projection (producer) | Unchanged tick: metadata stamps only, no directory enumeration | One batched discovery call per kind and one wiring probe per data tick |
 
-### The cache refresher (producer only)
+### The host cache refresher
 
 | Operation | Cost | Bound |
 | --- | --- | --- |
@@ -141,7 +132,7 @@ The choreography and write classes are [store.md → The write path](./store.md#
 
 | Operation | Cost | Bound |
 | --- | --- | --- |
-| Sidebar observer | One O(rows) signature pass per committed fold, microseconds | Pure detection at every renderer's fold commit point; only the elder writes observer records and adds one cross-check pass per `OBSERVE_CROSSCHECK_TTL` (5 s) ([diagnostics.md](./diagnostics.md#the-frame-stream-observer)) |
+| Sidebar observer | One O(rows) signature pass per committed fold, microseconds | Pure detection at every renderer's fold commit point; the host writes observer records and adds one cross-check pass per `OBSERVE_CROSSCHECK_TTL` (5 s) ([diagnostics.md](./diagnostics.md#the-frame-stream-observer)) |
 | Tick meter | Six relaxed counter loads and two clock reads per metered tick | Healthy ticks do no file IO and spawn nothing |
 | Sidebar heartbeat | Temp file plus atomic rename | Every `HEARTBEAT_WRITE_INTERVAL`, inside the liveness TTL |
 | Merged read receipts | Unchanged generation: two metadata stamps and one shared in-memory merge | Keyed on the `generation.json` inode plus the directory stamp |
@@ -210,8 +201,6 @@ Allocation per operation is the steadier regression signal; medians move with ho
 | `hotpath::carryover_fold_cold` 3,300 / 13,200 rows | 58.97 ms / 299.4 ms | 107.9 MB / 420.5 MB | 2026-10-07 |
 | `hotpath::carryover_fold_rebirth_warm` 3,300 / 13,200 rows, one registration delta | 429.8 µs / 4.347 ms | 1.725 MB / 6.746 MB | 2026-10-07 |
 | `hotpath::enrich_cached` 40 agents | 610 µs | 1.21 MB | 2026-07-05 |
-| `hotpath::consumer_adopt_parse_cached` 40 agents | 116 µs | 125.2 KB | 2026-07-18 |
-| `hotpath::consumer_adopt_changed_file` 40 agents | 329 µs | 226.9 KB | 2026-07-18 |
 | `hotpath::render_fixed` 40 agents | 413 µs | 1.09 MB | 2026-07-05 |
 | `hotpath::spending_walk_cold` 20k entries | 19.59 ms | 24.43 MB | 2026-07-15 |
 | `hotpath::spending_walk_warm_no_change` 20k entries | 7.95 ms | 10.78 MB | 2026-07-15 |
@@ -245,7 +234,7 @@ RimZ is sized against a single agent, not against the fleet: watching a hundred 
 
 Cost attaches to three units. Hook application scales with event volume; moving it out of the foreground does not remove its fold or IO cost.
 
-Per workspace, RimZ pays once. The producer pays the roster and metrics on its fetch worker and git and accounts on its cache refresher, then publishes caches the other tabs fold in process. Every workspace that shares a state root and provider-discovery environment asks the same warm spend walker, so a producer handoff adds no second parsed cursor. One elected hook drainer owns the ingress queue and exits after 60 s without work or connections. When quiet, `crates/rimz/src/harness/hook_drain.rs::run` blocks in poll(2) on its listener and client sockets; a lease prevents idle exit without introducing periodic wakeups. Idle exit unlinks only its own socket and closes the listener before the final drain, so a later hook elects a successor instead of nudging an exiting worker.
+Per workspace, RimZ pays once. The host pays the roster and metrics on its fetch worker and git and accounts on its cache refresher, then folds once for all its panes. Every workspace that shares a state root and provider-discovery environment asks the same warm spend walker, so a host restart adds no second parsed cursor. One elected hook drainer owns the ingress queue and exits after 60 s without work or connections. When quiet, `crates/rimz/src/harness/hook_drain.rs::run` blocks in poll(2) on its listener and client sockets; a lease prevents idle exit without introducing periodic wakeups. Idle exit unlinks only its own socket and closes the listener before the final drain, so a later hook elects a successor instead of nudging an exiting worker.
 
 Per worktree, cost follows activity. The git input set scales with distinct group roots, not agents; a root drops to its idle TTL once its agents go quiet, and the sweep runs at most 8 roots at once. PR probes scale with origin repositories, each enumerating open PRs once when due. A hundred agents sharing a few checkouts pay for a few hot roots.
 
@@ -279,19 +268,19 @@ The fetch worker builds snapshots; the render loop blocks in `recv` and folds a 
 
 ### Only the watched tab animates
 
-Each renderer knows its own pane and the latest focus view, so it can tell whether a client is looking at its tab. A watched tab keeps the normal grid. An unwatched or detached tab treats motion as idle, wakes on the data backstop, and clamps its fetch requests to `UNWATCHED_FOLD_CLAMP` for store and topology nudges and `UNWATCHED_METRICS_FOLD_CLAMP` for metrics-only publications. Deferred requests merge the strongest freshness requirement and the earliest deadline, and an immediate fold absorbs any deferred one. Every delivered projection is still applied per attachment, but a hidden attachment retains its dirty frame without rendering cells, diffing, or writing it. Reveal resumes painting within one base frame. When ownership is unknown the renderer counts as watched, so tests, demos, and cold starts keep the responsive path. The hidden paint rules are [state.md → The paint clock](./sidebar/state.md#the-paint-clock).
+Each renderer knows its own pane and the latest focus view, so it can tell whether a client is looking at its tab. A watched tab keeps the normal grid. An unwatched or detached tab treats motion as idle and wakes on the data backstop. Every pane requests event-driven folds immediately; the shared worker coalesces their requests. Every delivered projection is still applied per attachment, but a hidden attachment retains its dirty frame without rendering cells, diffing, or writing it. Reveal resumes painting within one base frame. When ownership is unknown the renderer counts as watched, so tests, demos, and cold starts keep the responsive path. The hidden paint rules are [state.md → The paint clock](./sidebar/state.md#the-paint-clock).
 
-### One producer per workspace
+### One shared fold per room
 
 The producer builds the snapshot in process on its fetch worker ([`produce_workspace_snapshot`](../../crates/rimz/src/sidebar/produce/mod.rs)), with no `rimz sidebar snapshot` fork per tick. The worker's cadence stamp allows one attempt per data tick, and only against a stale published frame, so unrelated wakeups that see the same stale frame cannot multiply production.
 
-The fold spine splits into renderer-independent [`enrich_workspace`](../../crates/rimz/src/sidebar/enrich.rs) and renderer-local `project_local`. The producer publishes the first half as `lanes/workspace-projection.json`, so a consumer's fold is a parse-cached clone plus its own local half. When nothing a consumer reads has changed, a stamp check skips the fold entirely. Adoption, fallback, and the skip memo are [state.md → One fetch cycle](./sidebar/state.md#one-fetch-cycle).
+The fold spine splits into renderer-independent [`enrich_workspace`](../../crates/rimz/src/sidebar/enrich.rs) and renderer-local `project_local`. The host folds the first half once and projects it for every subscribed pane. It publishes `lanes/workspace-projection.json` for new-attachment seeds, not an alternate renderer adoption path. Both lanes are [state.md → One fetch cycle](./sidebar/state.md#one-fetch-cycle).
 
 ### Truth arrives by event, the frame by coalescing
 
-Every `lanes/snapshot.json` publication broadcasts `PaneFramePublished` with the kind of input that changed (topology, metrics, or presence), so hidden consumers coalesce topology and metrics on their clamps while presence stays immediate. A publication from an older build that carries no kind decodes as topology, the conservative bound. The rollup is read event-fresh from `cache/snapshots/latest.json` on every fold, so a status change repaints within one wakeup while pane discovery stays coalesced.
+Every `lanes/snapshot.json` publication broadcasts `PaneFramePublished` with the kind of input that changed (topology, metrics, or presence). Every pane requests the same shared fold immediately; publication kind remains wire evidence, not a renderer-role gate. A publication from an older build that carries no kind decodes as topology. The rollup is read event-fresh from `cache/snapshots/latest.json` on every fold, so a status change repaints within one wakeup while pane discovery stays coalesced.
 
-Every writer that knows about a change pushes: store and sidecar writers post a `StoreDelta`, both backends' presence streams feed one projector that emits typed pane events, and the elder's transcript watcher refreshes context mid-turn for every adapter that declares transcript-tail context ([state.md → Push channels](./sidebar/state.md#push-channels)).
+Every writer that knows about a change pushes: store and sidecar writers post a `StoreDelta`, both backends' presence streams feed one projector that emits typed pane events, and the host's transcript watcher refreshes context mid-turn for every adapter that declares transcript-tail context ([state.md → Push channels](./sidebar/state.md#push-channels)).
 
 ### No reader pays for history
 
@@ -313,7 +302,7 @@ The build id is computed once per process from the linker build identity in the 
 
 ### Codex context stays warm
 
-Codex app-server enrichment connects to the warmest server available, starting with a per-session broker in the `rimzd` tab that holds one handshaked `codex app-server`, and falls back to a cold spawn ([adapter_codex.md → App-server enrichment](./agents/adapter_codex.md#app-server-enrichment)). The elder's transcript watcher debounces file events to one flush per 300 ms for the workspace and refreshes each changed session in that flush. Both are latency hints over the unconditional producer tick: a broker or watcher that never starts costs nothing.
+Codex app-server enrichment connects to the warmest server available, starting with a per-session broker in the `rimzd` tab that holds one handshaked `codex app-server`, and falls back to a cold spawn ([adapter_codex.md → App-server enrichment](./agents/adapter_codex.md#app-server-enrichment)). The host's transcript watcher debounces file events to one flush per 300 ms for the workspace and refreshes each changed session in that flush. Both are latency hints over the unconditional producer tick: a broker or watcher that never starts costs nothing.
 
 ## Anti-patterns
 
@@ -321,11 +310,11 @@ Each of these has cost RimZ a real regression. They are grouped by the principle
 
 **Cosmetics must not drag data (principle 2).** A fixed refetch every 500 ms to keep a working agent's cost figures moving forks a subprocess per frame to move a spinner, and on Zellij its roster read resets unrelated panes' cursor blink. Context-sidecar pushes cover the same need for free.
 
-**Recovery belongs to the election (principle 8).** When every consumer produces on producer staleness, the single-flight losers time out into their own uncached produces: an N-way fork storm on exactly the tick the room is already degraded. Per-tab roster reads pin the mux server with N round trips. Capping renderers instead of production blacks out every tab but one.
+**Recovery belongs to the host and its supervisors (principle 8).** Letting each attachment run its own production on stale data creates an N-way storm on exactly the tick the room is already degraded. Per-tab roster reads pin the mux server with N round trips. Capping renderers instead of production blacks out every tab but one.
 
-**Shared state has one owner (principle 5).** Per-producer spend walkers duplicate the account-global parsed cursor in every promoted workspace and keep it after demotion. Consumers that derive workspace spend from the global cursor make every renderer parse `spending.json`. Per-thread heartbeat scans make each thread decode every renderer heartbeat. The fix in each case is one elected or process-local owner that the others read.
+**Shared state has one owner (principle 5).** Per-host spend walkers duplicate the account-global parsed cursor. Readers that derive workspace spend from the global cursor make every renderer parse `spending.json`. Per-thread heartbeat scans make each thread decode every renderer heartbeat. The fix in each case is one shared service or process-local owner that the others read.
 
-**Unchanged inputs cost nothing (principle 7).** A consumer that refolds every second reloads config, clones published JSON, enriches, and renders with every input unchanged. A pane-frame publication with no input kind makes each background metrics sample force every hidden renderer through a full fold. Scanning a provider-global session tree (`~/.codex/sessions`) once per worktree traverses the same directories many times in one fold.
+**Unchanged inputs cost nothing (principle 7).** Independent attachment folds multiply config reads, enrichment, and published JSON clones with every input unchanged. Background metrics publications must share one fold across attachments, not force a full fold per hidden pane. Scanning a provider-global session tree (`~/.codex/sessions`) once per worktree traverses the same directories many times in one fold.
 
 **Every retry is bounded (principle 6).** A deterministic `gh` or `tea` failure retried on the hot TTL, with no command deadline and the cached map erased each time, turns a forge outage into a permanent per-worktree fork loop. An auth probe whose result is recorded under a different scope than the one requested reads as a new login on the next fold and spawns another helper. Both need backoff that keeps the last known good value.
 
@@ -368,7 +357,7 @@ The review fixes publish each staged lifecycle batch with one ordered-batch appe
 
 Wins identified but not taken, because each changes a contract or crosses a backend-parity boundary, ranked by expected payoff:
 
-1. **tmux `list-panes` over the held control client.** The elder's `tmux -C` client already writes commands and parses reply blocks, so sending `list-panes` over it would remove the producer's per-window fork and connect. The saving is 10 to 30 ms on the already-cheap backend, and the poll must still cover a dead watcher.
+1. **tmux `list-panes` over the held control client.** The host's `tmux -C` client already writes commands and parses reply blocks, so sending `list-panes` over it would remove the producer's per-window fork and connect. The saving is 10 to 30 ms on the already-cheap backend, and the poll must still cover a dead watcher.
 2. **Delta-bearing wakeup datagrams.** `StoreDelta` could carry the appended frames, so a warm consumer folds from the datagram with no file IO. The warm cursor fold is already one stat plus a page-cache-hot read, so the win is microseconds against a second delivery path for state that must never become truth. Build it only above sustained hundreds of events per second.
 3. **A faster workspace-projection codec.** JSON keeps the projection inspectable and tolerant of mixed builds. If a live consumer profile shows projection parsing dominating, replace only this disposable file's codec with postcard behind the same identity, publication, and fallback mechanics.
 

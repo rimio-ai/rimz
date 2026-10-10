@@ -1,7 +1,7 @@
 //! Sidebar frame-stream observer.
 //!
 //! The worker shares one room signature per publication; renderers observe only
-//! their own committed view. The writer detects room-common anomalies once and handles elder-only
+//! their own committed view. The writer detects room-common anomalies once and runs the room-wide
 //! real-world checks and emission into the typed diagnostics channel
 //! ([`crate::diag`]), which owns the one rate limit. The durable record
 //! vocabulary lives in [`crate::diag::record`].

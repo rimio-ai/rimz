@@ -151,7 +151,7 @@ Every same-instance root carries the [launch identity](./instances.md#launch-ide
 
 ### Local session discovery
 
-[`local_sessions.rs`](../../../crates/rimz/src/agents/adapters/codex/local_sessions.rs) reads the first `session_meta` line of recent rollouts under `$CODEX_HOME`, or `~/.codex`. The elected room producer runs one discovery for all admitted Codex workspaces and publishes the observations; consumers never enumerate the rollout store ([local session observations](./instances.md#local-session-observations)).
+[`local_sessions.rs`](../../../crates/rimz/src/agents/adapters/codex/local_sessions.rs) reads the first `session_meta` line of recent rollouts under `$CODEX_HOME`, or `~/.codex`. The room host runs one discovery for all admitted Codex workspaces and publishes the observations; consumers never enumerate the rollout store ([local session observations](./instances.md#local-session-observations)).
 
 | Rule | Value |
 | --- | --- |
@@ -209,8 +209,8 @@ Four callers run it, and all write the runtime sidecar and wake the sidebar with
 
 - `rimz hooks feed` on `SessionStart`, `UserPromptSubmit`, `PostToolUse`, and `Stop`, after the decision is written.
 - The hidden `rimz agents refresh-context` helper, before its app-server work.
-- The elder renderer's transcript watcher, on rollout growth ([state.md](../sidebar/state.md#push-channels)).
-- The elected snapshot producer, as a tick backstop for live root rows.
+- The host renderer's transcript watcher, on rollout growth ([state.md](../sidebar/state.md#push-channels)).
+- The host fetch worker, as a tick backstop for live root rows.
 
 ### App-server enrichment
 

@@ -138,7 +138,7 @@ pub(super) fn stop_agent(
     close_agent_pane(workspace, live_agent)
 }
 
-/// Arm, replace, or withdraw the agent's soft stop; the elected producer and
+/// Arm, replace, or withdraw the agent's soft stop; the room host and
 /// its helper act on it later.
 fn request_idle_stop(reference: &str, when_idle: WhenIdle, globals: &GlobalFlags) -> Result<()> {
     let ctx = Ctx::open(globals)?;

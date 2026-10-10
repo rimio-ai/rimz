@@ -80,7 +80,7 @@ Arming is refused, exit 1, in these cases (an invalid `--label` exits 2 during a
 
 ### Timer: `--in`
 
-A timer fires once. RimZ adds the delay to the current time in the configured timezone and rounds up to the next whole minute, so `rimz wait --in 30m` armed at 14:01:20 fires at 14:32. The list shows it as `once at 14:32` with the state `due 14:32`. Firing needs a clock: the room's sidebar elder, or the [loop timer](./loop.md#timer) when no room is open.
+A timer fires once. RimZ adds the delay to the current time in the configured timezone and rounds up to the next whole minute, so `rimz wait --in 30m` armed at 14:01:20 fires at 14:32. The list shows it as `once at 14:32` with the state `due 14:32`. Firing needs a clock: the room's sidebar host, or the [loop timer](./loop.md#timer) when no room is open.
 
 ### Existing process: `--pid`
 
@@ -209,7 +209,7 @@ Cancel removes each row, then sends SIGTERM to its watcher's process group, whic
 
 A wait is one row in `~/.rimz/ws/<workspace-dir>/records/loop-instances.json`; it never touches `loop.toml` or project config. Its optional `label` stores the trimmed description. Its `watch` is a command string, `{pid}`, `{check, every, on}`, or `{file, grep?, mark?}`. The file mark records size, modification time, device, and inode; an absent mark means the file was absent at arm time. Every watcher runs in its own process group and holds `locks/loop-watch-<name>.lock` in the workspace runtime directory.
 
-The row retires when the timer fires, the watch reaches its final outcome, the wait is canceled, or the target session ends, is lost, or is stopped. A check-in does not retire it. If a watcher dies without reporting, the room's elder notices the missing lock after a 30-second grace and delivers the `watcher died` verdict. `rimz gc` removes rows left behind.
+The row retires when the timer fires, the watch reaches its final outcome, the wait is canceled, or the target session ends, is lost, or is stopped. A check-in does not retire it. If a watcher dies without reporting, the room's host notices the missing lock after a 30-second grace and delivers the `watcher died` verdict. `rimz gc` removes rows left behind.
 
 Every fire writes loop history, so `rimz loop show <name>` and `rimz loop logs <name>` keep working after the wait retires. The mechanics are in [watched commands](../../internals/harness/loops.md#watched-commands) and [waits](../../internals/harness/loops.md#waits).
 

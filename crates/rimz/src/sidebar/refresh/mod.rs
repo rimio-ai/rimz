@@ -1,6 +1,6 @@
 //! Producer-owned heavy lane refresh for the sidebar data plane.
 //!
-//! The elected producer folds pane/sidecar truth first, then this module runs
+//! The room host folds pane/sidecar truth first, then this module runs
 //! the TTL-gated probes and cache publishes that are too expensive for every
 //! renderer. The returned lane values feed a final fold when a caller needs the
 //! freshest view in the same process.

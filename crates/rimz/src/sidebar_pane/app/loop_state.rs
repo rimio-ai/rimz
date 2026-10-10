@@ -36,8 +36,7 @@ use tracing::{debug, warn};
 
 use super::backend::PaneBackend;
 use super::fetch::{
-    FetchDispatcher, FetchPhase, FetchRequest, FetchRole, FetchUpdate, ResultReceiver,
-    SnapshotSource,
+    FetchDispatcher, FetchPhase, FetchRequest, FetchUpdate, ResultReceiver, SnapshotSource,
 };
 use super::gate::{GateState, apply_gate, gate_remaining};
 use super::health::{Health, degraded_too_long};
@@ -74,7 +73,6 @@ const PUBLISHED_SEED_CYCLES: u32 = 3;
 
 struct FetchApplication {
     snapshot: std::result::Result<SidebarSnapshot, String>,
-    role: FetchRole,
     source: Option<SnapshotSource>,
 }
 
@@ -118,7 +116,6 @@ pub(super) struct LoopState {
     retired_anchor: Option<(Instant, u64)>,
     filter_observed_at: Option<Instant>,
     last_pulled_rows: usize,
-    last_known_elder: bool,
     optimistic_watch_until: Option<Instant>,
     /// Deadline for the tab-view read sweep: armed when the own tab comes on
     /// screen, disarmed when it leaves. The sweep fires on the first fold at or
@@ -262,7 +259,6 @@ impl LoopState {
             last_pulled_rows: 0,
             overlay_baseline: None,
             current,
-            last_known_elder: true,
             optimistic_watch_until: None,
             tab_read_dwell_until: None,
             event_store: EventStore::default(),
@@ -298,7 +294,7 @@ impl LoopState {
         }
     }
 
-    pub(super) fn seed_published(&mut self, role: FetchRole) {
+    pub(super) fn seed_published(&mut self) {
         // An idle producer reuses its pane frame for `EVENT_PANE_TTL`, renews
         // it on the tick after, and republishes the projection against it, so
         // a live room's projection is never older.
@@ -321,9 +317,8 @@ impl LoopState {
         self.apply_latest_snapshot_with_seed(
             FetchUpdate::Snapshot {
                 snapshot: Box::new(snapshot),
-                role,
                 phase: FetchPhase::Interim,
-                source: SnapshotSource::Published,
+                source: SnapshotSource::Cached,
             },
             true,
         );
@@ -412,19 +407,12 @@ impl LoopState {
         own_tab_viewed(&self.current, view, own_pane)
     }
 
-    fn identity_free_fetch_immediate(&self) -> bool {
-        self.watched() || self.last_known_elder
-    }
-
     pub(super) fn on_snapshot(&mut self, fetch: &mut FetchDispatcher) {
         let pending = self.result_rx.take();
         let saw_final = pending.completed;
         let mut rejected = false;
         for update in pending.snapshot.into_iter().chain(pending.outcome) {
             rejected |= self.apply_latest_snapshot(update);
-        }
-        if let Some(role) = pending.role {
-            self.last_known_elder = role.is_producer();
         }
         if saw_final {
             fetch.complete(!self.should_exit);
@@ -498,20 +486,11 @@ impl LoopState {
         if let Some(observation) = context.and_then(|context| context.observation.clone()) {
             self.observation = Some(observation);
         }
-        self.last_known_elder = update.role().is_producer();
-        if matches!(update, FetchUpdate::Unchanged { .. }) {
-            self.fetched_at = Instant::now();
-            self.current.now = jiff::Timestamp::now();
-            self.dirty |= self.current.has_running_pipeline_clock();
-            self.fold_inputs = None;
-            return false;
-        }
         let snapshot_ok = matches!(update, FetchUpdate::Snapshot { .. });
         let mut fused_event_sent_at_ms = None;
         let update = match update {
             FetchUpdate::Snapshot {
                 snapshot,
-                role,
                 phase,
                 source,
             } => {
@@ -529,13 +508,11 @@ impl LoopState {
                 self.overlay_baseline = baseline;
                 FetchUpdate::Snapshot {
                     snapshot: Box::new(snapshot),
-                    role,
                     phase,
                     source,
                 }
             }
             failed @ FetchUpdate::Failed { .. } => failed,
-            FetchUpdate::Unchanged { .. } => unreachable!("handled above"),
             FetchUpdate::Shared { .. } => unreachable!("unwrapped above"),
         };
         self.fetched_at = Instant::now();
@@ -594,12 +571,7 @@ impl LoopState {
             FetchUpdate::Snapshot {
                 snapshot: Box::new(fused),
                 phase: FetchPhase::Interim,
-                source: SnapshotSource::Published,
-                role: if self.last_known_elder {
-                    FetchRole::Producer
-                } else {
-                    FetchRole::Consumer
-                },
+                source: SnapshotSource::Cached,
             },
             false,
             false,
@@ -645,28 +617,9 @@ impl LoopState {
                     self.dirty = true;
                 }
             }
-            // A watched renderer and the producer fold every publication now.
-            // Hidden consumers coalesce topology and metrics to the cadence of
-            // the changed input, while presence remains immediate because it
-            // establishes whether the tab is watched.
-            SidebarEvent::PaneFramePublished { publication } => {
-                use crate::wakeup::events::PaneFramePublicationKind;
-
-                match publication {
-                    PaneFramePublicationKind::Presence => {
-                        fetch.request(FetchRequest::pane_frame_published(), true)
-                    }
-                    PaneFramePublicationKind::Topology => fetch.request_or_defer(
-                        FetchRequest::pane_frame_published(),
-                        self.identity_free_fetch_immediate(),
-                        crate::sidebar::timing::UNWATCHED_FOLD_CLAMP,
-                    ),
-                    PaneFramePublicationKind::Metrics => fetch.request_or_defer(
-                        FetchRequest::pane_frame_published(),
-                        self.identity_free_fetch_immediate(),
-                        crate::sidebar::timing::UNWATCHED_METRICS_FOLD_CLAMP,
-                    ),
-                }
+            // Every pane requests the shared fold immediately; the worker coalesces peers.
+            SidebarEvent::PaneFramePublished { .. } => {
+                fetch.request(FetchRequest::pane_frame_published(), true);
             }
             event @ SidebarEvent::Notify { .. } => {
                 self.handle_notification(terminal, event);
@@ -689,7 +642,7 @@ impl LoopState {
                             "superseded by a newer strand",
                         );
                     }
-                    fetch.request(FetchRequest::producer_fresh_panes(), true);
+                    fetch.request(FetchRequest::fresh_panes(), true);
                 }
             }
             SidebarEvent::FocusIntent { .. } => {
@@ -700,14 +653,13 @@ impl LoopState {
             }
             // Identity-free nudges — store deltas, `PanesChanged`, a `PaneOpened` without a command: nothing to fuse, so refetch, bypassing the pane cache when the event says topology moved.
             _ => {
-                fetch.request_or_defer(
+                fetch.request(
                     if requests_verification {
-                        FetchRequest::producer_fresh_panes()
+                        FetchRequest::fresh_panes()
                     } else {
                         FetchRequest::default()
                     },
-                    self.identity_free_fetch_immediate(),
-                    crate::sidebar::timing::UNWATCHED_FOLD_CLAMP,
+                    true,
                 );
             }
         }
@@ -859,7 +811,7 @@ impl LoopState {
         self.event_store.append(event, sent_at_ms, now_ms);
         self.fold_fused_now();
         if !self.should_exit && (requests_verification || own_focused) {
-            fetch.request(FetchRequest::producer_fresh_panes(), true);
+            fetch.request(FetchRequest::fresh_panes(), true);
         }
         if own_focused {
             self.optimistic_watch_until = Some(Instant::now() + FOCUS_RESUME_WATCH_WINDOW);
@@ -913,9 +865,9 @@ impl LoopState {
         // it on this pass rather than a beat later.
         self.last_heartbeat = None;
         // A resize is the mux telling us topology changed. Pull a fresh pane
-        // list through the elected producer and require a cache produced after
+        // list through the host and require a cache produced after
         // this signal.
-        fetch.request(FetchRequest::producer_fresh_panes(), true);
+        fetch.request(FetchRequest::fresh_panes(), true);
         Ok(())
     }
 
@@ -1096,7 +1048,7 @@ impl LoopState {
 
     /// Mark a row read without jumping (`m`): write the durable manual receipt,
     /// clear the row locally for an instant repaint, trace the clear, wake the
-    /// room so the elder prunes the episode and peer tabs converge, and refetch
+    /// room so the host prunes the episode and peer tabs converge, and refetch
     /// so the receipt lands in the pulled snapshot. A no-op when the row is
     /// already read.
     fn mark_row_read(&mut self, fetch: &mut FetchDispatcher, row_id: &str) {
@@ -1252,12 +1204,12 @@ impl LoopState {
         // Self-close watchdog: if no resize or presence event fired, ask the
         // normal snapshot path to refresh so the snapshot's own-view count can
         // close a lone sidebar. Once a zero-sibling verdict is pending, force a
-        // non-skippable fold so consumers do not sit behind the unchanged memo
-        // for the full backstop window before the confirm timer can close them.
+        // new fold so a prior cycle cannot absorb this renderer-local change
+        // before the confirm timer can close it.
         if self.last_self_close_check.elapsed() >= SELF_CLOSE_WATCHDOG {
             self.last_self_close_check = Instant::now();
             let request = if self.self_close.confirming_empty() {
-                FetchRequest::producer_fresh_panes()
+                FetchRequest::fresh_panes()
             } else {
                 FetchRequest::default()
             };
@@ -1397,27 +1349,15 @@ impl LoopState {
         let snapshot_ok = matches!(&update, FetchUpdate::Snapshot { .. });
         let application = match update {
             FetchUpdate::Snapshot {
-                snapshot,
-                role,
-                source,
-                ..
+                snapshot, source, ..
             } => FetchApplication {
                 snapshot: Ok(*snapshot),
-                role,
                 source: Some(source),
             },
-            FetchUpdate::Failed { error, role, .. } => FetchApplication {
+            FetchUpdate::Failed { error, .. } => FetchApplication {
                 snapshot: Err(error),
-                role,
                 source: None,
             },
-            FetchUpdate::Unchanged { .. } => {
-                return ApplyOutcome {
-                    should_exit: false,
-                    tab_emptied: false,
-                    rejected: false,
-                };
-            }
             FetchUpdate::Shared { .. } => unreachable!("unwrapped above"),
         };
         let (prev_good, rejected, now) = self.commit_fetch(application);
@@ -1490,14 +1430,13 @@ impl LoopState {
         &mut self,
         application: FetchApplication,
     ) -> (SidebarSnapshot, bool, Timestamp) {
-        let is_elder = application.role.is_producer();
         // The gate compares the incoming snapshot against the last frame we actually
         // committed; `current` still holds it until we overwrite it below.
         let fetch_was_ok = application.snapshot.is_ok();
         let fetch_failure = application.snapshot.as_ref().err().cloned();
         let producer_verdict = application.source == Some(SnapshotSource::Produced);
         let mut computed = compute_next_state(application.snapshot, &self.current, &self.health);
-        if fetch_was_ok && application.role.is_producer() && !producer_verdict {
+        if fetch_was_ok && !producer_verdict {
             // Published fast folds are paintable data, not a producer-health
             // verdict. Only a completed produce can recover the refresh episode,
             // so frameless/status-only folds cannot mask repeated pane-read failure.
@@ -1523,7 +1462,6 @@ impl LoopState {
                 fetch_failure,
                 rejected,
                 released_via_escape_hatch,
-                is_elder,
                 now,
             },
         );
@@ -1735,7 +1673,7 @@ impl LoopState {
                 FocusTraceEvent::FoldDecided {
                     source: match source {
                         SnapshotSource::Produced => "produced",
-                        SnapshotSource::Published => "published",
+                        SnapshotSource::Cached => "published",
                     }
                     .to_owned(),
                     phase: match phase {
@@ -2122,7 +2060,7 @@ fn reload_or_refetch(
 }
 
 /// Ping every sidebar in the room to refold after a mark read/unread — the
-/// elder prunes or keeps the episode and peer tabs converge on the new state.
+/// host prunes or keeps the episode and peer tabs converge on the new state.
 fn wake_room(runtime: &RuntimePaths) {
     if let Err(err) = crate::wakeup::wake_store_delta(runtime, None, None) {
         debug!(error = %err, "mark read/unread sidebar wake failed");

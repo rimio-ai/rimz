@@ -1,4 +1,4 @@
-//! Producer cache refresher: the elder-owned heavy enrich lanes off the fetch worker.
+//! Host cache refresher: heavy enrichment lanes off the fetch worker.
 //!
 //! The fetch worker still publishes panes and projects caches each data tick.
 //! This thread owns the TTL-gated spending, account, usage, auto-continue, loop
@@ -11,7 +11,6 @@ use std::time::{Duration, Instant};
 use tracing::{debug, error};
 
 use crate::diag::record::TickLoop;
-use crate::sidebar::ProducerElectionTracker;
 use crate::sidebar::consumer::RollupCursor;
 use crate::sidebar::meter::TickMeter;
 use crate::{RuntimePaths, StatePaths};
@@ -28,18 +27,16 @@ pub(super) fn spawn(
     config: ServeConfig,
     runtime: RuntimePaths,
     diag: crate::diag::DiagSink,
-    election: ProducerElectionTracker,
-    stand: impl Fn() -> Stand + Send + 'static,
+    stand: impl Fn() -> Option<Stand> + Send + 'static,
 ) -> JoinHandle<()> {
-    std::thread::spawn(move || refresh_loop(config, runtime, diag, election, stand))
+    std::thread::spawn(move || refresh_loop(config, runtime, diag, stand))
 }
 
 fn refresh_loop(
     config: ServeConfig,
     runtime: RuntimePaths,
     diag: crate::diag::DiagSink,
-    election: ProducerElectionTracker,
-    stand: impl Fn() -> Stand,
+    stand: impl Fn() -> Option<Stand>,
 ) {
     crate::lane::set(crate::lane::WorkLane::CacheRefresh);
     let mut cursor = RollupCursor::new();
@@ -52,21 +49,21 @@ fn refresh_loop(
     let mut daemon_checked_at = Instant::now() - DAEMON_VIEW_REPAIR_TTL;
     let mut refresh_state = crate::sidebar::refresh::ProducerRefreshState::default();
     loop {
-        std::thread::sleep(stand().tick);
-        if election.elder_instance().is_some() {
+        std::thread::sleep(stand().map_or(tick_for(config.tick_seconds), |pane| pane.tick));
+        let Some(stand) = stand() else {
             continue;
-        }
+        };
         let state = match StatePaths::for_workspace(config.workspace_id.clone()) {
             Ok(state) => state,
             Err(err) => {
                 debug!(error = %err, "sidebar cache refresh state paths unavailable");
                 let now = jiff::Timestamp::now().to_zoned(config.timezone.clone());
-                fire_elder_timers(&runtime, config.mux, &now);
+                fire_timers(&runtime, config.mux, &now);
                 continue;
             }
         };
         let tick = meter.begin();
-        let own_pane = stand().own_pane;
+        let own_pane = stand.own_pane;
         let result = refresh_guarded(&mut cursor, |cursor| {
             crate::sidebar::produce::refresh_producer_caches(
                 cursor,
@@ -84,7 +81,7 @@ fn refresh_loop(
             debug!(error = %err, "sidebar cache refresh failed");
         }
         let now = jiff::Timestamp::now().to_zoned(config.timezone.clone());
-        fire_elder_timers(&runtime, config.mux, &now);
+        fire_timers(&runtime, config.mux, &now);
         if daemon_checked_at.elapsed() >= DAEMON_VIEW_REPAIR_TTL {
             daemon_checked_at = Instant::now();
             daemon_tracker.maintain(daemon_backend.as_ref(), &runtime);
@@ -92,7 +89,7 @@ fn refresh_loop(
     }
 }
 
-fn fire_elder_timers(runtime: &RuntimePaths, mux: crate::ids::MuxName, now: &jiff::Zoned) {
+fn fire_timers(runtime: &RuntimePaths, mux: crate::ids::MuxName, now: &jiff::Zoned) {
     let ci_source = crate::harness::schedule::when::CiSource::read(runtime);
     crate::harness::schedule::fire::fire_due_tasks(
         runtime,

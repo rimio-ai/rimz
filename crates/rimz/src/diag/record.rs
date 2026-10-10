@@ -442,12 +442,6 @@ pub enum DiagEvent {
         tool: String,
         count: u32,
     },
-    ProducerElected {
-        prior_elder: SidebarInstanceId,
-    },
-    ProducerDemoted {
-        new_elder: SidebarInstanceId,
-    },
     /// A live-roster publication that would have dropped `dropped` was not
     /// written, because the mux did not list this renderer's session.
     LiveRosterHeld {
@@ -669,8 +663,6 @@ impl DiagEvent {
             | Self::FetchFoldStats { .. }
             | Self::PaneCarryRefuted { .. }
             | Self::GateRelease { .. }
-            | Self::ProducerElected { .. }
-            | Self::ProducerDemoted { .. }
             | Self::HostedCarryDropped {
                 reason:
                     HostedCarryDropReason::ProbeReportsAbsent | HostedCarryDropReason::CarryExpired,
@@ -729,8 +721,6 @@ impl DiagEvent {
             Self::TickBudgetBreach { .. } => "tick_budget_breach",
             Self::FetchFoldStats { .. } => "fetch_fold_stats",
             Self::ToolLoopEscalated { .. } => "tool_loop_escalated",
-            Self::ProducerElected { .. } => "producer_elected",
-            Self::ProducerDemoted { .. } => "producer_demoted",
             Self::LiveRosterHeld { .. } => "live_roster_held",
             Self::RowConflict { .. } => "row_conflict",
             Self::DuplicatePaneId { .. } => "duplicate_pane_id",
@@ -955,10 +945,9 @@ impl DiagEvent {
                 "{}:{loaded_at_ms}:{plugin_id}->{accepted_loaded_at_ms}:{accepted_plugin_id}",
                 self.kind_name()
             ),
-            Self::ProducerElected { .. }
-            | Self::ProducerDemoted { .. }
-            | Self::FrameShrinkVerified { .. }
-            | Self::RendererPanic { .. } => self.kind_name().to_owned(),
+            Self::FrameShrinkVerified { .. } | Self::RendererPanic { .. } => {
+                self.kind_name().to_owned()
+            }
             Self::SidebarHostUnavailable { cause, reason, .. } => {
                 format!("{}:{cause:?}:{reason}", self.kind_name())
             }
@@ -1303,12 +1292,6 @@ impl DiagEvent {
                         )
                     }
                 }
-            }
-            Self::ProducerElected { prior_elder } => {
-                format!("this renderer became producer after {prior_elder} aged out")
-            }
-            Self::ProducerDemoted { new_elder } => {
-                format!("this renderer stopped producing; elder {new_elder}")
             }
             Self::LiveRosterHeld { dropped } => {
                 let dropped = dropped

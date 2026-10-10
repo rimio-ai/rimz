@@ -1,6 +1,6 @@
 # Sidebar live check
 
-Use this before hand-off for a renderer, pipeline line, consumer path, or click-routing change where a unit test cannot show the live frame. For a pixel transport change, [Capture kitty graphics](#capture-kitty-graphics) records what the sidebar sends a kitty-capable client.
+Use this before hand-off for a renderer, pipeline line, shared data plane, or click-routing change where a unit test cannot show the live frame. For a pixel transport change, [Capture kitty graphics](#capture-kitty-graphics) records what the sidebar sends a kitty-capable client.
 
 ## Hold a room and join it
 
@@ -28,7 +28,7 @@ A command run with `--cwd "$ROOT/home/probe2"` resolves the second room. Plain `
 
 ## Room cards
 
-The root identifies the held sandbox; the mux and session identify its private multiplexer, and Worktree names the team's checkout. Each Sidebar block names its pane, tab, and producer or consumer role, followed by Look, Capture, and Click commands. A tab can carry more than one sidebar pane, so read the role labels rather than counting blocks. The Role lines map agent roles to panes and give each pane's process ID (`pid -` when the multiplexer reported none). Each As line is a command prefix for that agent: append a RimZ command, or swap `--as` for `--as-ancestor` to exercise ancestry. Stage and Owner give the initial board state; Flip changes the stage, and Focus reads focus from the multiplexer.
+The root identifies the held sandbox; the mux and session identify its private multiplexer, and Worktree names the team's checkout. Each Sidebar block names its pane and tab, followed by Look, Capture, and Click commands. A tab can carry more than one sidebar pane, so use the pane id rather than counting blocks. The recorded cards below predate host-only painting and include retired producer/consumer labels; current cards omit those labels. The Role lines map agent roles to panes and give each pane's process ID (`pid -` when the multiplexer reported none). Each As line is a command prefix for that agent: append a RimZ command, or swap `--as` for `--as-ancestor` to exercise ancestry. Stage and Owner give the initial board state; Flip changes the stage, and Focus reads focus from the multiplexer.
 
 ### tmux
 
@@ -90,15 +90,15 @@ Run a sidebar's Look first, then capture or click it: an unwatched sidebar can h
 
 Run the sequence on both backends, using each room's own card.
 
-### 1. Producer clock
+### 1. First pane clock
 
-Run Look for the sidebar labelled `producer`, then its Capture twice across a displayed clock-unit boundary: a second apart below a minute, a minute apart below an hour. The compact pipeline clock should advance. The recorded tmux producer advanced `24s -> 26s`, and the Zellij producer `15s -> 17s`.
+Run Look for one sidebar, then its Capture twice across a displayed clock-unit boundary: a second apart below a minute, a minute apart below an hour. The compact pipeline clock should advance. The recorded tmux producer advanced `24s -> 26s`, and the Zellij producer `15s -> 17s`.
 
-### 2. Consumer clock and flip adoption
+### 2. Another pane clock and stage flips
 
-**2a.** Run Look for a sidebar labelled `consumer`, then its Capture twice across a displayed clock-unit boundary. Its pipeline clock should also advance: the recorded tmux consumer showed `40s -> 42s`, and the Zellij consumer `30s -> 33s`. Allow a beat after Look before the first capture, or a sidebar that was cold will read its pre-Look frame.
+**2a.** Run Look for another sidebar, then its Capture twice across a displayed clock-unit boundary. Its pipeline clock should also advance: the recorded tmux consumer showed `40s -> 42s`, and the Zellij consumer `30s -> 33s`. Allow a beat after Look before the first capture, or a sidebar that was cold will read its pre-Look frame.
 
-**2b.** Keep that consumer watched. Run the card's Flip, then repeat that consumer's Capture and measure from the flip to the first frame showing `Review`. It must replace `Build` within 5 s. The real watched-consumer measurements were:
+**2b.** Keep that pane watched. Run the card's Flip, then repeat that pane's Capture and measure from the flip to the first frame showing `Review`. It must replace `Build` within 5 s. The real watched-consumer measurements were:
 
 ```text
    tmux:%3 Build -> Review after 1241 ms
@@ -159,7 +159,7 @@ This is the first `Review` frame read from the watched tmux consumer `tmux:%3`:
                                        ? for help
 ```
 
-**2c.** Keep the consumer watched and record the earlier Build duration from the board ledger. Run the card's Flip with `Build` in place of `Review`, then repeat Capture until the first Build frame. Record the adoption latency, the stage time, and the run total. The Review dot must now be hollow and warm (`warn`), and the stage clock must resume Build's earlier duration plus the time since the return, not restart at zero. Add `--ansi` to Capture to retain the dot's color; a plain capture cannot prove tone. Flip back to `Review` before continuing checks 3 and 4.
+**2c.** Keep the pane watched and record the earlier Build duration from the board ledger. Run the card's Flip with `Build` in place of `Review`, then repeat Capture until the first Build frame. Record the update latency, the stage time, and the run total. The Review dot must now be hollow and warm (`warn`), and the stage clock must resume Build's earlier duration plus the time since the return, not restart at zero. Add `--ansi` to Capture to retain the dot's color; a plain capture cannot prove tone. Flip back to `Review` before continuing checks 3 and 4.
 
 The 2026-09-25 flip-back check used `env -u NO_COLOR cargo xtask sandbox room --mux <backend> --for 15m` with the testkit build. Both ANSI captures retained a hollow Review dot with foreground `38;2;224;175;104` (the warm tone). Earlier Build time below is the ledger interval, also confirmed by the published `stage_prior_secs`; the clock and adoption latency were read from the watched consumer, not inferred from publication.
 
@@ -334,7 +334,7 @@ Two rules for a check whose subject is time:
 
 The sandbox's `claude` is a stub (`xtask/assets/sandbox-room/claude`), so no real Claude child ever starts in a held room. A change to a Claude-native child line (its tokens, model, status, or clock) is still checkable in one pass: copy a real parent and child transcript into the room, then feed the parent's hooks and the child's `subagentStatusLine` payload by hand, in the order Claude would send them.
 
-**Setup.** Hold a tmux room from the testkit build (see [Hold a room and join it](#hold-a-room-and-join-it)). From its card note the root, the `@coder#probe` As prefix, and a `#probe` consumer sidebar. `--as` supplies the agent's session keys and hook owner pid; no process-environment copy is needed.
+**Setup.** Hold a tmux room from the testkit build (see [Hold a room and join it](#hold-a-room-and-join-it)). From its card note the root, the `@coder#probe` As prefix, and a `#probe` sidebar. `--as` supplies the agent's session keys and hook owner pid; no process-environment copy is needed.
 
 **Transcripts.** Pick one Claude session that launched a subagent and copy exactly two files from `~/.claude/projects/<project>/` into the room's `tmp/replay/`, keeping their relative layout: `<session>.jsonl` and `<session>/subagents/agent-<child>.jsonl`. The adapter derives the child directory from the parent transcript's path (`subagents_dir` in `agents/adapters/claude/subagents.rs`), so a flattened copy reads no child. Copy nothing else from `~/.claude`: no credentials, no settings.
 
@@ -377,7 +377,7 @@ target/debug/xtask sandbox in "$ROOT" -- "$PWD/target/debug/rimz" --tmux agents 
 jq -c '.agent.sub_agents[].tokens' /tmp/show.json
 ```
 
-`agents show --json` wraps the card in an `agent` envelope, so a bare `.sub_agents` reads null. The frame comes from the consumer's Look then Capture, as in the four checks. The expected window is the newest assistant request in the child transcript, prompt side only:
+`agents show --json` wraps the card in an `agent` envelope, so a bare `.sub_agents` reads null. The frame comes from the pane's Look then Capture, as in the four checks. The expected window is the newest assistant request in the child transcript, prompt side only:
 
 ```sh
 jq -s '[.[] | select(.type == "assistant") | .message.usage] | last | .input_tokens + .cache_read_input_tokens + .cache_creation_input_tokens' "$ROOT/tmp/replay/$SESSION/subagents/agent-$CHILD.jsonl"
@@ -609,7 +609,7 @@ The first build compiles Ghostty's test binary (1 minute 46 seconds on a machine
 
 ## Check against a real provider login
 
-A held sandbox room replaces `HOME`, so a check that needs a real Claude or Codex turn runs in a host room started from the branch binary. Every `rimz` that room spawns has to be the branch build: the sender's shell, the provider hooks (`rimz hooks feed` resolves from the agent's inherited `PATH`), and the sidebar elder (which reads `RIMZ_BIN`). Start it from a host shell; `rimz start` refuses inside a RimZ sandbox, so an agent cannot start this room for you.
+A held sandbox room replaces `HOME`, so a check that needs a real Claude or Codex turn runs in a host room started from the branch binary. Every `rimz` that room spawns has to be the branch build: the sender's shell, the provider hooks (`rimz hooks feed` resolves from the agent's inherited `PATH`), and the sidebar host (which reads `RIMZ_BIN`). Start it from a host shell; `rimz start` refuses inside a RimZ sandbox, so an agent cannot start this room for you.
 
 ```sh
 cargo build -p rimz --bin rimz
@@ -648,7 +648,7 @@ BIN="$(cargo metadata --format-version 1 --no-deps | jq -r .target_directory)/de
 
 ## Traps
 
-- A live check of anything the elder, a hook, or a loop fire spawns must run in a disposable room built from the worktree. In the real room those children are the installed `rimz`, so the check silently exercises the released binary instead of your change and passes either way. The held room also replaces `HOME`, so no provider login is reachable inside it and a real provider turn cannot be part of such a check.
+- A live check of anything the host, a hook, or a loop fire spawns must run in a disposable room built from the worktree. In the real room those children are the installed `rimz`, so the check silently exercises the released binary instead of your change and passes either way. The held room also replaces `HOME`, so no provider login is reachable inside it and a real provider turn cannot be part of such a check.
 - Look before capturing or clicking: an unwatched sidebar can hold a stale frame, because the renderer suppresses a dirty paint while the attached client is known to be looking elsewhere (`sidebar_pane/app/loop_state.rs` `dirty_paintable`). It is not a reliable negative control, so do not assert it: across runs an unwatched clock froze on tmux and on Zellij, and on one Zellij run it kept ticking.
 - Look is `pane focus` on tmux and `zellij action go-to-tab` on Zellij, and the card prints the right one. `rimz pane focus` never moved the Zellij client: the sidebar stayed ~21 columns wide with its clock stopped at `0:00` until one `go-to-tab`, which widened it to 48 columns and resumed the clock.
 - `sidebar click` is testkit-only. It uses the renderer's wakeup socket, exercising hit testing and focus routing but skipping terminal input and its parsing.

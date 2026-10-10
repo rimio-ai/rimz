@@ -40,8 +40,8 @@ impl SidebarSnapshot {
     }
 
     /// Diagnostic-carrying form used by the shared enrichment spine: the
-    /// elected producer emits the events, while a disabled consumer sink and
-    /// direct snapshot callers discard them.
+    /// room host emits the events; callers with a disabled sink and direct
+    /// snapshot callers discard them.
     pub(crate) fn with_local_sessions_and_diagnostics(
         mut self,
         panes: &[PaneRef],

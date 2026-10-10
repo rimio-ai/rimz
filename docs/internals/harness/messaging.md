@@ -24,7 +24,7 @@ The rest of the module follows from that rule: how a record decides it is ready,
 | [`message/send.rs`](../../../crates/rimz/src/message/send.rs) | The pane write: bracketed paste, the submit barrier, pacing, the compact-first command, and shared wake-stamp maintenance. |
 | [`message/compact.rs`](../../../crates/rimz/src/message/compact.rs) | Standalone compaction for the operator verb and idle compaction: repeat refusal and boundary delivery. |
 | [`message/reply.rs`](../../../crates/rimz/src/message/reply.rs) | `--wait`: leg state machines, transcript anchoring, cycle detection, join settlement. |
-| [`message/fire.rs`](../../../crates/rimz/src/message/fire.rs) | The elder's side of the clock: read the wake stamp and spawn `message sweep`, naming the room by workspace id and mux. |
+| [`message/fire.rs`](../../../crates/rimz/src/message/fire.rs) | The host's side of the clock: read the wake stamp and spawn `message sweep`, naming the room by workspace id and mux. |
 | [`store/message.rs`](../../../crates/rimz/src/store/message.rs) | The record schema and vocabulary, card matching, FIFO, claim, and batch selection, prompt alignment for [confirmation](#confirmation-and-retry), and the read-only submitted-prompt origin classifier. |
 | [`store/message/codec.rs`](../../../crates/rimz/src/store/message/codec.rs) | The JSONL codec for the live queue and terminal history. |
 | [`store/writer/queue.rs`](../../../crates/rimz/src/store/writer/queue.rs) | Every status transition, under the workspace lock, with its audit event where one is written. |
@@ -192,7 +192,7 @@ Delivery gates and `when` conditions read status differently, on purpose. Gates 
 4. **Bind conditions.** Each `after` and `when` address resolves once and pins a card. A condition already satisfied gets `met_at` stamped immediately, so upstream work must be queued before the message that waits on it.
 5. **Decide park or live, per target.** See below.
 6. **Deliver, per target in order.** A parked target first passes the hook preflight; then every target gets its durable record, live targets go straight into a delivery attempt, and parked ones stop at `Queued`.
-7. **Rearm the wake stamp** so the elder knows when to look again. The rearm is best-effort: a stamp that cannot be written warns on stderr and never changes the send's reported outcome.
+7. **Rearm the wake stamp** so the host knows when to look again. The rearm is best-effort: a stamp that cannot be written warns on stderr and never changes the send's reported outcome.
 
 The park-or-live decision (`dispatch_decision`) takes the first rule that applies:
 
@@ -220,7 +220,7 @@ An address that matches nothing, after the durable fallback, writes a terminal `
 | # | Check | Verdict when it fails | What releases it |
 | --- | --- | --- | --- |
 | 1 | A queued automatic command is still within its validity window | `Expired` | Nothing; the next sweep records the terminal outcome |
-| 2 | `not_before` has passed | `Scheduled` | The clock, via the elder sweep |
+| 2 | `not_before` has passed | `Scheduled` | The clock, via the host sweep |
 | 3 | Every `after` condition stamped | `WaitingOnAfter` | The referenced agent reaching its gate with no ready queued work |
 | 4 | Every `when` condition stamped | `WaitingOnWhen` | The watched agent completing its dwell in the raw status |
 | 5 | Oldest holding record for this card and lane: a deliverable `Queued` or `Claimed` record, or a `Sent` prompt still inside its reconcile deadline (including compaction deferral) | `BehindFifo` | The blocking record settling, or the prompt's acknowledgement or hold deadline passing |
@@ -255,7 +255,7 @@ Three paths converge on the same helper.
 
 The same reactor nudges the sweep when the event's agent is referenced by an unmet condition: `after` conditions on `DELIVERY_CHECKPOINT`, and `when` conditions on the wider [`CONDITION_CHECKPOINT`](../../../crates/rimz/src/agents/lifecycle/event.rs), which adds `TurnStarted`, `AwaitingInput`, and the subagent edges because a dwell can start or break on any of them. Both actions run after the `LifecycleEvent` commits, and the helper re-checks durable state before claiming.
 
-**The elder sweep.** The room's elected sidebar elder spawns `rimz --mux <mux> message sweep --workspace-id <id>` when the wake stamp comes due ([Scheduling and wakeups](#scheduling-and-wakeups)). Its argv names the room and mux even though the host inherits no pane environment.
+**The host sweep.** The room's sidebar host spawns `rimz --mux <mux> message sweep --workspace-id <id>` when the wake stamp comes due ([Scheduling and wakeups](#scheduling-and-wakeups)). Its argv names the room and mux even though the host inherits no pane environment.
 
 **Auto-continue.** When a persisted park reaches its reset or backoff condition, the producer spawns `rimz agents auto-continue`, which queues a `Resume` message (or reuses the existing one) and calls the same helper ([providers.md § Auto-continue](../agents/providers.md#auto-continue)).
 
@@ -426,7 +426,7 @@ The receiver's turn-start hook parses the header into transcript entries ([trans
 
 Four callers send a native compact command through a `Command` record: smart compaction ahead of a prompt, idle compaction from the sidebar producer, flip compaction at a team hand-off, and the operator's `rimz agents compact`. Routing the command through a record gives it the same claim, retry, audit, and at-most-once write as any message.
 
-`message/synthetic.rs::attempt_now` refreshes the elder's wake stamp after every miss, after recording the refusal verdict or delivery error. A queued `Resume` record contributes no deadline: `queue_head` excludes its control lane, so auto-continue owns its re-drive and a miss on an otherwise idle queue leaves no stamp. Claimed and sent resume records still arm recovery. A retryable post-claim stop preserves the attempt's own reason; only a terminal stop writes the caller's fallback. Standalone compaction uses this shared path for operator and automatic callers alike. The sweep retries queued commands at most once per delivery window until they deliver or, for an automatic command, expire.
+`message/synthetic.rs::attempt_now` refreshes the host's wake stamp after every miss, after recording the refusal verdict or delivery error. A queued `Resume` record contributes no deadline: `queue_head` excludes its control lane, so auto-continue owns its re-drive and a miss on an otherwise idle queue leaves no stamp. Claimed and sent resume records still arm recovery. A retryable post-claim stop preserves the attempt's own reason; only a terminal stop writes the caller's fallback. Standalone compaction uses this shared path for operator and automatic callers alike. The sweep retries queued commands at most once per delivery window until they deliver or, for an automatic command, expire.
 
 An automatic command (`body == Command && automated`) is perishable: while `Queued`, it is valid for ten minutes from `enqueued_at`. The window is derived, not stored; `RIMZ_MESSAGE_COMMAND_VALIDITY_MS` shortens it for tests. `MessageRecord::is_deliverable` excludes an expired record at every FIFO head and blocker decision, even when no sweep runs. The next `Store::reconcile_stale_messages`, called by the sweep or `rimz gc`, alone finalizes it as `Expired`, recording the reason in `last_error` and `message.expired`. `message show` reports expiry before every other blocker; steer and interrupt cannot bypass it. Prompts, harness notices, operator commands (`automated: false`), and non-`Queued` records do not expire. A lapsed claim returns to `Queued` and then ages by its original enqueue time; a human requeue creates a new record with a fresh window. Smart compaction's released prompt can deliver on its own once its compact command expires.
 
@@ -464,7 +464,7 @@ The default `On` uses `HarnessConfig::prompt_cache_ttl`, resolving a per-provide
 
 Request anchoring excludes final generation from the margin. `cache_timing_reaches_the_request_before_expiry` tests the consumer decision exactly at and one second before both the fire point and the TTL, assuming a 1-second producer tick, 10-second helper spawn, and 10-second keystroke-to-request delay. Those 21 seconds fit inside the margin; they are runtime premises, not measured latency guarantees. The heartbeat and cache timing are best-effort: a slow pass or early eviction costs a cache write, never correctness.
 
-The elected producer requires a bound pane and spawns detached `rimz agents idle-compact`, keeping store writes out of the sidebar's import graph. The request carries `agents::compact_command` for the team seat, including the team brief where supported.
+The host requires a bound pane and spawns detached `rimz agents idle-compact`, keeping store writes out of the sidebar's import graph. The request carries `agents::compact_command` for the team seat, including the team brief where supported.
 
 The helper re-resolves the workspace, session, and pane, applies the shared decision to `Ctx::published_snapshot` (which folds pending waits and the activity heartbeat), and validates the command against the adapter and its configured instruction. Through `message::compact` it queues one automated `System` command with the `Done` gate, pins the pane, stamps `compacted_context_tokens` from its context reading, attempts boundary delivery, and appends an `IdleCompact` assist record. The optional `idle_after_secs` records the resolved threshold; `rimz stats` shows it when present and still accepts older records without it. A closed boundary leaves the command queued through the ordinary retry path.
 
@@ -480,7 +480,7 @@ Adapters without durable turn starts keep only the context-baseline guard.
 
 `rimz agents compact @handle [INSTRUCTION]` resolves one agent with a bound pane and a native compaction command, renders the configured brief or the positional override, and calls `message::compact`. An explicit instruction is refused when the adapter does not accept trailing text; without one, those adapters get the bare command. The verb refuses adapters without native turn-start hooks (plugins that declare no `turn_start`), since the strict no-repeat guard cannot work for them.
 
-`message::compact::refuse_repeat` refuses when any of three states holds: `is_compacting(now)`, a non-terminal `Command` record in the card's live queue, or `compaction_unprompted`. `send_compact` then queues a pane-pinned `Done`-gated command and attempts boundary delivery at once; a closed gate records a retry, so a lifecycle checkpoint or the elder sweep delivers it later. When occupied context is known it also stamps `compacted_context_tokens`. The record carries the human or calling-agent sender with `automated: false`, so it leaves a durable message and audit event but no assist record.
+`message::compact::refuse_repeat` refuses when any of three states holds: `is_compacting(now)`, a non-terminal `Command` record in the card's live queue, or `compaction_unprompted`. `send_compact` then queues a pane-pinned `Done`-gated command and attempts boundary delivery at once; a closed gate records a retry, so a lifecycle checkpoint or the host sweep delivers it later. When occupied context is known it also stamps `compacted_context_tokens`. The record carries the human or calling-agent sender with `automated: false`, so it leaves a durable message and audit event but no assist record.
 
 ## Reply waits
 
@@ -520,10 +520,10 @@ Before polling, the CLI prints each ordinary delivery receipt on stderr, includi
 
 ## Scheduling and wakeups
 
-The room's elected sidebar elder notices when a parked message comes due, through a deliberately thin handoff:
+The room's sidebar host notices when a parked message comes due, through a deliberately thin handoff:
 
 1. The CLI writes `message-wake.json` under the runtime root with the earliest time worth a look: an ordinary-lane `not_before`, `Queued` retry floor or ready-queued backstop, a `Claimed` lease expiry, or an unconfirmed `Sent` reconcile deadline (30 s for prompts, 3 minutes for commands, per [Confirmation and retry](#confirmation-and-retry)). Queued `Resume` records arm nothing because the sweep excludes their control lane; auto-continue re-drives them. A standalone compaction left `Queued` arms this stamp too, whether operator-requested or automatic, so its sweep does not depend on later message traffic.
-2. The elder reads only that file, and when the stamp comes due spawns a detached `rimz --mux <mux> message sweep --workspace-id <id>` ([`fire.rs`](../../../crates/rimz/src/message/fire.rs)), passing its room's workspace id and mux by argv. The elder does no store reads, store writes, or message logic.
+2. The host reads only that file, and when the stamp comes due spawns a detached `rimz --mux <mux> message sweep --workspace-id <id>` ([`fire.rs`](../../../crates/rimz/src/message/fire.rs)), passing its room's workspace id and mux by argv. The host does no store reads, store writes, or message logic.
 3. The sweep finalizes expired queued automatic commands, reconciles stale `Sent` records and expired `Claimed` records, evaluates unmet conditions, delivers ready FIFO heads, then rewrites or removes the wake stamp.
 
 The sweep is single-flight through a `message-sweep.lock` file lock, so overlapping wakeups collapse into one pass.
@@ -532,7 +532,7 @@ An ordinary-lane queued perishable command's wake deadline is capped at `expires
 
 Condition evaluation inside a sweep is one transaction. It evaluates every unmet condition against one context-enriched snapshot, applies every stamp, retry floor, and watched-agent archive together, reloads the pending records, and delivers newly eligible heads from the same snapshot in the same run unless their card was held in the queue read after reconciliation and before that snapshot. A new stamp emits `message.after_met` or `message.when_met`.
 
-The sweep backs off because the elder ticks often. When it cannot deliver a ready head (gate closed, ask waiting, compacting, no pane, behind a `Sent` prompt), it sets `retry_after` one delivery window ahead, so the elder retries at most once per window. On a `Queued` record, `retry_after` is only a wake hint: it does not affect `is_ready`, FIFO position, claim leases, or hook-driven delivery. Its one exception is a compaction deferral on a `Sent` record, which extends the read-side hold, including FIFO and hook-driven boundary delivery.
+The sweep backs off because the host ticks often. When it cannot deliver a ready head (gate closed, ask waiting, compacting, no pane, behind a `Sent` prompt), it sets `retry_after` one delivery window ahead, so the host retries at most once per window. On a `Queued` record, `retry_after` is only a wake hint: it does not affect `is_ready`, FIFO position, claim leases, or hook-driven delivery. Its one exception is a compaction deferral on a `Sent` record, which extends the read-side hold, including FIFO and hook-driven boundary delivery.
 
 A `NoPane` back-off also records the blocker in `last_error`, in the same queue commit and in the words `rimz message show` prints. An ended receiver is terminal instead: the sweep archives open records for the card, plus records with unmet `when` conditions watching it, only when their `enqueued_at` is at or before the observed `ended_at`. The writers apply this cutoff under the workspace lock so a concurrent resume's newer messages survive a stale sweep snapshot; the end-hook reactor keeps its unbounded archive. The receiver reason is `receiver ended; rimz message @<handle> resumes it` for a launched child, or `receiver ended` otherwise. Other refused heads, including a starting provider, move `retry_after` alone. The deferred record stays `Queued` with its pane pin and its `attempts` untouched, and the next claim clears the error.
 
