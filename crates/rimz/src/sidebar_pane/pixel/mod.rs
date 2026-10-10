@@ -29,7 +29,7 @@ pub(super) const IMAGE_ID_COLOR_MASK: u32 = 0x00ff_ffff;
 pub(super) const RESIDENT_REFRESH_MS: u64 = 2000;
 pub(super) const MIN_RESEND_SPACING_MS: u64 = 250;
 
-/// Cross-version image-id layout. Moving it orphans images from older workers.
+/// Cross-version image-id layout. Moving it orphans images from older renderers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct PixelSlot(u8);
 

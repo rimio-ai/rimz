@@ -115,18 +115,18 @@ fn producer_election_tracker_invalid_elder_falls_back_to_next_valid() {
 }
 
 #[test]
-fn a_host_competes_as_its_eldest_pane_against_a_fallback_worker() {
+fn a_host_competes_as_its_eldest_pane_against_another_host() {
     let h = Harness::new();
-    let (worker, eldest, younger) = (instance("01"), instance("02"), instance("03"));
-    let worker_path = h.write(&worker);
+    let (peer, eldest, younger) = (instance("01"), instance("02"), instance("03"));
+    let peer_path = h.write(&peer);
     h.write(&eldest);
     h.write(&younger);
 
-    // The host paints `eldest` and `younger`; the fallback worker is older than both.
+    // The host paints `eldest` and `younger`; a peer host's pane is older than both.
     let host = ProducerElectionTracker::new(h.runtime.clone(), eldest.clone());
-    assert_eq!(host.elder_instance(), Some(worker));
+    assert_eq!(host.elder_instance(), Some(peer));
 
-    std::fs::remove_file(&worker_path).unwrap();
+    std::fs::remove_file(&peer_path).unwrap();
     assert_eq!(
         host.elder_instance_at(SystemTime::now() + SIDEBAR_HEARTBEAT_TTL),
         None,
@@ -137,21 +137,19 @@ fn a_host_competes_as_its_eldest_pane_against_a_fallback_worker() {
 #[test]
 fn rebinding_moves_every_clone_to_the_new_eldest_pane() {
     let h = Harness::new();
-    let (eldest, worker, younger) = (instance("02"), instance("05"), instance("07"));
+    let (eldest, peer, younger) = (instance("02"), instance("05"), instance("07"));
     let eldest_heartbeat = h.write(&eldest);
-    h.write(&worker);
+    h.write(&peer);
     h.write(&younger);
     let host = ProducerElectionTracker::new(h.runtime.clone(), eldest);
     let lane = host.clone();
     assert_eq!(lane.elder_instance(), None);
 
-    // The eldest pane detached, taking its heartbeat: the host now stands as
-    // `younger`, which the worker out-ranks, and the memoized producer
-    // verdict must not survive.
+    // The eldest pane detached, taking its heartbeat: the host now stands as `younger`, which the peer host's pane out-ranks, and the memoized producer verdict must not survive.
     std::fs::remove_file(eldest_heartbeat).unwrap();
     host.rebind(younger);
 
-    assert_eq!(lane.elder_instance(), Some(worker));
+    assert_eq!(lane.elder_instance(), Some(peer));
     assert!(!lane.confirm_producer());
 }
 

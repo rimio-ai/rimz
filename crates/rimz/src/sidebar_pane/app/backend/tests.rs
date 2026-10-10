@@ -197,7 +197,7 @@ fn a_write_to_a_closed_pane_is_an_error() {
 }
 
 #[test]
-fn the_fallback_worker_sizes_from_its_terminal_wherever_its_output_goes() {
+fn the_fixture_sizes_from_its_terminal_wherever_its_output_goes() {
     let output = std::fs::OpenOptions::new()
         .write(true)
         .open("/dev/null")

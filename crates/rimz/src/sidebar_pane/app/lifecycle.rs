@@ -1,7 +1,6 @@
 //! Exit-request latches and the bounded grow-resize paint hold.
 //!
-//! Cache-backed sibling counts decide when the worker requests self-close;
-//! the supervisor owns the authoritative mux confirmation and pane lifetime.
+//! Cache-backed sibling counts decide when the attachment requests self-close; the supervisor owns the authoritative mux confirmation and pane lifetime.
 
 use std::time::Instant;
 

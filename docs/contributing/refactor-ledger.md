@@ -206,7 +206,7 @@ One row per module at the granularity `survey` ranks. `holds` carries the review
 | `sidebar_pane/app` | holds; landed pass-26b | `be91f3434` | 30 | loop clock mechanics consume one render animation answer. |
 | `sidebar_pane/pets` | holds; landed pass-22a | `1b6ece679` | 30 | preview types `pub` for the CLI. |
 | `sidebar_pane/pixel` | holds; landed pass-22a; pass-28b | `83b184ffb` | 30 | placeholder encoding lives in the leaf `pixel_wire`. |
-| `sidebar_pane/supervise` | holds; landed pass-22a | `1b6ece679` | 30 | worker entry points `pub` for the CLI. |
+| `sidebar_pane/supervise` | holds; landed pass-22a | `1b6ece679` | 30 | supervisor entry points `pub` for the CLI. |
 | `sidebar_pane/render/chrome` | holds; landed pass-22a | `1b6ece679` | 30 | bottom-chrome builders are `compose`'s vocabulary. |
 | `sidebar_pane/render/labels` | holds; landed pass-22a | `1b6ece679` | 30 | glyph and meter vocabulary at render reach. |
 | `sidebar_pane/render/theme` | holds; landed pass-22a | `1b6ece679` | 30 | the Layer-3/4 carrier the color invariant exempts. |

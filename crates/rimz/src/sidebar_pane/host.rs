@@ -333,8 +333,7 @@ impl Host {
         );
         watch_for_detach(&stream, live.close.clone());
 
-        // One pane's panic closes that pane: its runtime files go as its
-        // frame loop unwinds, and its supervisor falls back to a worker.
+        // One pane's panic closes that pane: its runtime files go as its frame loop unwinds, and its supervisor shows a notice and reattaches.
         let exit = catch_unwind(AssertUnwindSafe(|| attachment.run(&self.plane, backend)));
         self.release(&hello);
         let control = match exit {

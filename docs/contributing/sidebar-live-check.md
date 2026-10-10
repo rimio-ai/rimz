@@ -182,25 +182,25 @@ On Zellij the held room's attached client follows no focus sent from outside a p
 
 ## Room host
 
-A room with a terminal on its sidebar panes runs one `rimz sidebar host` for the session and one `rimz sidebar serve` supervisor per tab, with no worker beside them ([state.md](../internals/sidebar/state.md#the-room-host-and-its-attachments)). Take the process shape from inside the room, where the session name is on your card:
+A room runs one `rimz sidebar host` for the session and one `rimz sidebar serve` supervisor per tab ([state.md](../internals/sidebar/state.md#the-room-host-and-its-attachments)). The host is the only painter; `serve` refuses non-terminal stdout or unavailable runtime paths before socket or terminal-mode work. Take the process shape from inside the room, where the session name is on your card:
 
 ```sh
 ps -eo pid,ppid,rss,args | grep -E 'rimz sidebar (host|serve)' | grep -v grep
 ```
 
-Expect one `sidebar host` line and one `sidebar serve` line per tab. The host's parent is the `sidebar serve` supervisor that started it, and once that supervisor exits the host is reparented; it runs in its own session either way, so no pane's job control reaches it. A `sidebar serve` pair on one tab, a parent and a child with the same arguments, is a pane on its fallback worker; that is correct right after a host death and wrong in a settled room.
+Expect one `sidebar host` line and one `sidebar serve` line per tab, never a child `serve` painter. The host's parent is the `sidebar serve` supervisor that started it, and once that supervisor exits the host is reparented; it runs in its own session either way, so no pane's job control reaches it.
 
 Three checks cover what a unit test cannot:
 
-1. **Host death.** Kill the host by PID with `kill -9`. Every pane keeps its last frame, then repaints: each supervisor reads the end of its stream and attaches to a host one of them starts, or runs its own worker when its attachment was younger than the stable-run window. Look on each tab, then repeat the `ps` and confirm one host again with no worker: a supervisor on a worker probes for a host once the stable-run window has passed, about a minute, then stops the worker and attaches its pane to that host.
+1. **Host death.** Kill the host by PID with `kill -9`. Each supervisor reads the end of its stream, clears its pane to `sidebar: host went away` and `retrying in 1s`, then attaches to a successor host one of them starts. Check both a young host and one that has painted for over a minute: both follow notice-and-retry, with delays doubling to 60 seconds on repeated failures. Look on each tab, then repeat the `ps` and confirm one new host and the same supervisors. No supervisor paints cards while the host is unavailable.
 2. **Supervisor death.** Kill one tab's `sidebar serve` by PID. The host drops that pane: its heartbeat and wakeup socket leave the room's runtime directory (the testkit build's `rimz sidebar renderers` no longer lists the instance), and the other tabs keep painting.
 3. **Last pane.** Close every tab's sidebar pane, or kill the session. The host exits about ten seconds after its last pane detaches; `ps` shows no `sidebar host` for the session after that.
 
-A reload is the fourth: after `rimz reload` onto a new build the host's PID changes and every tab repaints once, with no tab left on a worker.
+A reload is the fourth: after `rimz reload` onto a new build the host's PID changes and every tab repaints from that host. The old supervisors remain until the new painting build passes the stable window and preflight.
 
 ## First frame of a new tab
 
-A new tab's sidebar seeds its first frame from the room's published projection ([state.md](../internals/sidebar/state.md)), so its first non-blank screen already holds the room's cards. The seed is folded as published. Until a frame lists this new sidebar in its topology, focus derivation seats no selection, on the seed and the first cached worker fold alike: every card rests at its configured density, with no card open by selection, no spines, no lane, and no header seal, even when the projection's focus names an agent in the previous tab. The loop-state regression test checks both paints before the correction; poll the new pane from the moment the tab opens to check the live backend too. Save each loop as a script under the room's root and run it with `cargo xtask sandbox in <root> -- <script>`, since both need the room's environment. Each writes one file per non-blank capture, named by the milliseconds since the tab was opened.
+A new tab's sidebar seeds its first frame from the room's published projection ([state.md](../internals/sidebar/state.md)), so its first non-blank screen already holds the room's cards. The seed is folded as published. Until a frame lists this new sidebar in its topology, focus derivation seats no selection, on the seed and the first cached fetch fold alike: every card rests at its configured density, with no card open by selection, no spines, no lane, and no header seal, even when the projection's focus names an agent in the previous tab. The loop-state regression test checks both paints before the correction; poll the new pane from the moment the tab opens to check the live backend too. Save each loop as a script under the room's root and run it with `cargo xtask sandbox in <root> -- <script>`, since both need the room's environment. Each writes one file per non-blank capture, named by the milliseconds since the tab was opened.
 
 tmux, given the room's tmux socket, its session, and an output directory:
 
@@ -499,7 +499,7 @@ git clone -q --depth 1 --branch v1.3.1 https://github.com/ghostty-org/ghostty "$
 uvx --from ziglang==0.15.2 python -m ziglang version
 ```
 
-The harness is a zig test inside Ghostty's kitty module. It mirrors `src/termio/stream_handler.zig::StreamHandler.apcEnd`: APC bytes go to Ghostty's `apc.Handler`, each completed kitty command runs through `Terminal.kittyGraphics`, and every other action goes to the read-only stream handler. RimZ sends `q=2`, which suppresses the reply an error would produce, so a patch to `graphics_exec.zig` records each response message in a file-scope variable before the quiet check discards it:
+The harness is a zig test inside Ghostty's kitty module. It mirrors `ghostty-org/ghostty@v1.3.1:src/termio/stream_handler.zig::StreamHandler.apcEnd`: APC bytes go to Ghostty's `apc.Handler`, each completed kitty command runs through `Terminal.kittyGraphics`, and every other action goes to the read-only stream handler. RimZ sends `q=2`, which suppresses the reply an error would produce, so a patch to `graphics_exec.zig` records each response message in a file-scope variable before the quiet check discards it:
 
 ```sh
 cd "$G" && git apply <<'EOF'

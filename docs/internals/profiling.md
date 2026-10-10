@@ -49,21 +49,15 @@ consumer  sb_019f7dfe7d767303ae175630ed402576  zellij:terminal_347
 ...
 ```
 
-A large heartbeat count in a many-tab room is expected: every tab runs its own renderer.
+A large heartbeat count in a many-tab room is expected: every tab has its own attachment, but one host paints the session's panes and runs their shared data plane.
 
-Map an instance id to a pid through the process environment. Each tab runs a `rimz sidebar serve` supervisor and a worker, and only the worker, which folds, renders, and writes the heartbeat, is spawned with `RIMZ_SIDEBAR_WORKER` set (`spawn_worker` in `sidebar_pane/supervise.rs`):
+Find the session's processes by their subcommands. Each tab's `rimz sidebar serve` is its supervisor, not its painter. The `rimz sidebar host` for the same `--workspace-id` and `--session-name` folds, paints, and writes every attachment's heartbeat; select that PID to profile rendering and data-plane work:
 
-```bash
-for pid in $(pgrep -x rimz); do
-  env_lines=$(tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null) || continue
-  grep -q '^RIMZ_SIDEBAR_WORKER=' <<< "$env_lines" || continue
-  instance=$(sed -n 's/^RIMZ_SIDEBAR_INSTANCE_ID=//p' <<< "$env_lines" | head -1)
-  workspace=$(sed -n 's/^RIMZ_WORKSPACE_ID=//p' <<< "$env_lines" | head -1)
-  printf '%s\t%s\t%s\n' "$pid" "$workspace" "$instance"
-done | sort -k3
+```sh
+ps -C rimz -o pid,ppid,rss,args
 ```
 
-Select on the environment instead of grepping command lines for `rimz sidebar serve`: the supervisor carries the same arguments, and an agent's prompt can contain the string.
+Inspect the actual subcommand, not a substring in an agent's prompt. The host deliberately has no pane or sidebar-instance environment pin, so a heartbeat's instance identifies an attachment, not a separate painter process. A consumer attachment in the producer host shares that host's external-read cost; only a host in another session can be profiled as a separate consumer process.
 
 ## Measure the process
 
@@ -89,13 +83,13 @@ pid 2662924  0.043 core
 pid 2662907  0.008 core
 ```
 
-The first pid is the producer and the second a consumer, and that split is the healthy shape: the producer carries the room's external reads and consumers cost close to nothing. A consumer near the producer's figure means the election or the adoption path ([state.md → Adoption and fallback](./sidebar/state.md#adoption-and-fallback)) is broken.
+For host-only painting, make this producer/consumer process-level comparison between hosts in separate sessions of one workspace, not attachments sharing one host. The producer carries the room's external reads and consumer hosts cost close to nothing; a consumer near the producer's figure points at the election or the adoption path ([state.md → Adoption and fallback](./sidebar/state.md#adoption-and-fallback)).
 
 `pidstat` needs `-t` to be useful here. Its per-process row reports the main thread only and understates a multi-threaded renderer: one producer read 2.4% as a process row and 38% summed over its `-t` thread rows. Parse its columns by header name, because a 12-hour locale inserts an AM/PM column and shifts the rest.
 
 ### Memory
 
-Read memory from `/proc/<pid>/smaps_rollup`: report `Pss`, and compute USS as `Private_Clean + Private_Dirty + Private_Hugetlb`. Summing RSS across the renderer family double-counts shared mappings. Compare only newly started workers, and only after at least two producer refresh cycles, because glibc arenas keep earlier high-water allocations resident. A rising resident set has its own procedure under [memory growth against allocator high-water](#memory-growth-against-allocator-high-water).
+Read memory from `/proc/<pid>/smaps_rollup`: report `Pss`, and compute USS as `Private_Clean + Private_Dirty + Private_Hugetlb`. Summing RSS across the renderer family double-counts shared mappings. Compare only newly started hosts with the same attachment count, and only after at least two producer refresh cycles, because glibc arenas keep earlier high-water allocations resident. A rising resident set has its own procedure under [memory growth against allocator high-water](#memory-growth-against-allocator-high-water).
 
 ### IO
 
