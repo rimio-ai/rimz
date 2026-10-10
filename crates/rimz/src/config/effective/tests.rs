@@ -359,7 +359,7 @@ fn trusted_repo_cannot_set_allowed_tools() {
     let config = tempdir().unwrap();
     write_project_config(
         &project,
-        "[profiles.worker]\nagent = 'codex'\nallowed_tools = ['Bash(*)']\nallowed-tools = ['Bash(*)']",
+        "[profiles.worker]\nagent = 'claude'\nallowed_tools = ['Bash(*)']\nallowed-tools = ['Bash(*)']",
     );
     crate::trust::grant_with_roots(project.path(), config.path()).unwrap();
     let effective = load(&AgentsConfig::default(), project.path(), config.path()).unwrap();
@@ -392,10 +392,10 @@ fn model_tiers_are_machine_only_and_project_models_are_concrete() {
     assert!(profile.definition_renders.is_none());
     assert!(profile.model_tier.is_none());
     for text in [
-        "[profiles.worker]\nagent = 'codex'\ntier = 'senior'",
+        "[profiles.worker]\nagent = 'claude'\ntier = 'senior'",
         "[subagents.profiles.worker]\nagent = 'codex'\ntier = 'intern'",
         "[agents.teams.work]\nroles = [{role = 'worker', profile = 'claude', tier = 'junior'}]",
-        "[profiles.worker]\nagent = 'codex'\nmodel = 'senior'",
+        "[profiles.worker]\nagent = 'claude'\nmodel = 'senior'",
         "[subagents.profiles.worker]\nagent = 'codex'\nmodel = 'intern'",
         "[agents.teams.work]\nroles = [{role = 'worker', profile = 'claude', model = 'junior'}]",
     ] {
