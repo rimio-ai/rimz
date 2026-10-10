@@ -468,7 +468,7 @@ The host classifies the observation against the accepted topology. A unique live
 
 The renderer keeps its owner, TTL, client-ambiguity, and focus-intent guards, so automatic repair never overrides an explicit cross-tab jump ([sidebar.md → selection and jump](./sidebar/sidebar.md#selection-and-jump)).
 
-The renderer acts on the strand against the live pre-action client sample rather than pane-cache agreement, and a same-writer topology older than the accepted one is not written, though a `switch-settled` wake carrying it still reports its strand against the accepted topology.
+The renderer acts on the strand against the live pre-action client sample rather than pane-cache agreement, re-sampling every 100 ms until the strand's TTL when the live sample disagrees. A same-writer topology older than the accepted one is not written, though a `switch-settled` wake carrying it still reports its strand against the accepted topology.
 
 ### Zellij backend caveats
 
