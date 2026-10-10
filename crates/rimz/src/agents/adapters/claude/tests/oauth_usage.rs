@@ -2,6 +2,52 @@ use super::*;
 use crate::agents::credits::AccountUsageReportable;
 
 #[test]
+fn organization_usage_rejection_is_not_a_credentials_fault() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    for (status, body, expected) in [
+        (
+            403,
+            r#"{"error":{"code":"oauth_not_allowed_for_organization","message":"sentinel-private"}}"#,
+            "NotEntitled",
+        ),
+        (403, "", "NoCredentials"),
+        (403, r#"{"error":{"code":"unrelated"}}"#, "NoCredentials"),
+        (
+            401,
+            r#"{"error":{"code":"oauth_not_allowed_for_organization"}}"#,
+            "NoCredentials",
+        ),
+        (500, "", "Failed"),
+    ] {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/usage", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            for _ in 0..if status == 500 { 3 } else { 1 } {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut request = [0; 4096];
+                assert!(stream.read(&mut request).unwrap() > 0);
+                write!(stream, "HTTP/1.1 {status} Error\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+            }
+        });
+        let error = http_get(&url, "sentinel-token").unwrap_err();
+        assert!(!error.to_string().contains("sentinel-private"));
+        assert!(!format!("{error:?}").contains("sentinel-token"));
+        let probe = crate::agents::credits::map_account_usage_probe::<ClaudeOauthUsageErr>(
+            Err(error),
+            Default::default(),
+            "claude",
+        );
+        server.join().unwrap();
+        assert!(
+            format!("{probe:?}").starts_with(expected),
+            "{status}: {probe:?}"
+        );
+    }
+}
+
+#[test]
 fn usage_credentials_and_birth_key_share_one_secret_choice() {
     for (refresh, kind, secret) in [
         (Some(" refresh "), "refresh-token", "refresh"),
@@ -64,14 +110,16 @@ fn reportable_classifier_treats_unauthorized_as_settled_auth() {
             kind: HttpErrKind::Status(401),
             host: OFFICIAL_HOST.to_owned(),
         }
-        .should_report()
+        .fault()
+        .eq(&AccountUsageFault::Transient)
     );
     assert!(
         !ClaudeOauthUsageErr::Http {
             kind: HttpErrKind::Status(403),
             host: OFFICIAL_HOST.to_owned(),
         }
-        .should_report()
+        .fault()
+        .eq(&AccountUsageFault::Transient)
     );
 }
 
@@ -100,7 +148,7 @@ fn usage_url_override_accepts_only_official_or_loopback_hosts() {
         error,
         ClaudeOauthUsageErr::UntrustedUsageUrl { .. }
     ));
-    assert!(!error.should_report());
+    assert!(!error.fault().eq(&AccountUsageFault::Transient));
     let display = error.to_string();
     assert!(display.contains("evil.example"));
     assert!(!display.contains("/private/path"));

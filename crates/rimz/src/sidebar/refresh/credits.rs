@@ -143,6 +143,7 @@ fn normalize_probe(
     let (mut identity, snapshot, auth_settled, failed) = match probe {
         AccountUsageProbe::Found { identity, snapshot } => (identity, Some(snapshot), false, false),
         AccountUsageProbe::NoCredentials(identity) => (identity, None, true, false),
+        AccountUsageProbe::NotEntitled(identity) => (identity, None, true, false),
         AccountUsageProbe::Failed(identity) => (identity, None, false, true),
         AccountUsageProbe::Unsupported => (claim_identity.clone(), None, false, true),
     };

@@ -28,7 +28,8 @@ use crate::agents::account::{
 use crate::agents::capabilities::LaunchCapability;
 use crate::agents::context::{AgentRateLimits, RateLimitWindow, WindowSource};
 use crate::agents::credits::{
-    oauth_http_get, oauth_http_post_json_once, trusted_usage_url, url_host,
+    AccountUsageFault, OAuthHttpErr, oauth_http_get, oauth_http_post_json_once, trusted_usage_url,
+    url_host,
 };
 use crate::agents::payload::non_empty_trimmed;
 use crate::agents::{AccountUsageSnapshot, ExtraCredits, HttpErrKind};
@@ -57,6 +58,8 @@ pub(crate) enum ClaudeOauthUsageErr {
     UntrustedUsageUrl { host: String },
     #[error("claude OAuth usage HTTP {kind} (host {host})")]
     Http { kind: HttpErrKind, host: String },
+    #[error("claude OAuth usage oauth_not_allowed_for_organization (host {host})")]
+    NotEntitled { host: String },
     #[error("claude OAuth profile HTTP {kind} (host {host})")]
     ProfileHttp { kind: HttpErrKind, host: String },
     #[error("claude OAuth profile organization.uuid is empty")]
@@ -72,21 +75,28 @@ pub(crate) enum ClaudeOauthUsageErr {
 }
 
 impl crate::agents::credits::AccountUsageReportable for ClaudeOauthUsageErr {
-    /// Whether this failure is worth reporting off-box. Absent credentials, an
+    /// Which fault this failure is: only a transient one reports off-box. Absent credentials, an
     /// expired token, a missing usage scope, and a locally refused URL are
-    /// settled states, not faults; a provider 401 is the same settled auth
+    /// settled states, not faults; plain provider 401/403 is the same settled auth
     /// verdict. Parse and other HTTP failures are.
-    fn should_report(&self) -> bool {
-        !matches!(
+    fn fault(&self) -> AccountUsageFault {
+        if matches!(self, Self::NotEntitled { .. }) {
+            return AccountUsageFault::NotEntitled;
+        }
+        if matches!(
             self,
             Self::NoCredentials
                 | Self::TokenExpired
                 | Self::MissingScope
                 | Self::UntrustedUsageUrl { .. }
-        ) && !matches!(
+        ) || matches!(
             self,
             Self::Http { kind, .. } | Self::ProfileHttp { kind, .. } if kind.is_auth_rejected()
-        )
+        ) {
+            AccountUsageFault::NoCredentials
+        } else {
+            AccountUsageFault::Transient
+        }
     }
 }
 
@@ -276,7 +286,10 @@ pub(super) fn prepare_reset_credit(
             &oauth_headers(&credentials.access_token),
             "claude: fetching OAuth account profile",
         )
-        .map_err(|(kind, host)| ClaudeOauthUsageErr::ProfileHttp { kind, host })?,
+        .map_err(|error| ClaudeOauthUsageErr::ProfileHttp {
+            kind: error.kind,
+            host: error.host,
+        })?,
     )?;
     if profile.organization.uuid.trim().is_empty() {
         return Err(ClaudeOauthUsageErr::EmptyOrganization);
@@ -334,7 +347,13 @@ impl ResetCreditAction for ClaudeResetCreditAction {
             &body,
             "claude: claiming a limit reset",
         )
-        .map_err(|(kind, host)| ClaudeOauthUsageErr::ClaimHttp { kind, host }.to_string())?;
+        .map_err(|error| {
+            ClaudeOauthUsageErr::ClaimHttp {
+                kind: error.kind,
+                host: error.host,
+            }
+            .to_string()
+        })?;
         let claim: ClaimWire = serde_json::from_str(&response)
             .map_err(|error| ClaudeOauthUsageErr::ClaimResponse(error).to_string())?;
         let outcome = match claim.result {
@@ -579,7 +598,28 @@ fn http_get(url: &str, token: &str) -> Result<String> {
         &oauth_headers(token),
         "claude: fetching OAuth account usage",
     )
-    .map_err(|(kind, host)| ClaudeOauthUsageErr::Http { kind, host })
+    .map_err(classify_usage_http_error)
+}
+
+fn classify_usage_http_error(error: OAuthHttpErr) -> ClaudeOauthUsageErr {
+    let not_entitled = error.kind == HttpErrKind::Status(403)
+        && serde_json::from_str::<serde_json::Value>(&error.body).is_ok_and(|value| {
+            value
+                .get("error")
+                .and_then(serde_json::Value::as_object)
+                .is_some_and(|object| {
+                    object
+                        .values()
+                        .any(|value| value.as_str() == Some("oauth_not_allowed_for_organization"))
+                })
+        });
+    if not_entitled {
+        return ClaudeOauthUsageErr::NotEntitled { host: error.host };
+    }
+    ClaudeOauthUsageErr::Http {
+        kind: error.kind,
+        host: error.host,
+    }
 }
 
 fn oauth_headers(token: &str) -> [(&'static str, String); 4] {

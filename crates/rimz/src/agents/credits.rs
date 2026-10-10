@@ -52,6 +52,21 @@ impl HttpErrKind {
     }
 }
 
+pub(super) struct OAuthHttpErr {
+    pub kind: HttpErrKind,
+    pub host: String,
+    pub body: String,
+}
+
+impl std::fmt::Debug for OAuthHttpErr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OAuthHttpErr")
+            .field("kind", &self.kind)
+            .field("host", &self.host)
+            .finish_non_exhaustive()
+    }
+}
+
 /// The host authority of `url` — scheme stripped, path/query/fragment and any
 /// `userinfo@` removed — the only part of a request URL safe to attach to an
 /// off-box error. Std-only; never pulls in a URL parser.
@@ -105,26 +120,25 @@ pub(crate) const OAUTH_HTTP_MAX_DURATION: Duration = Duration::from_millis(
 
 /// Bounded GET for provider OAuth usage endpoints: 5s timeout per attempt, 512
 /// KiB body cap, host-only breadcrumb. Returns the body, or the error kind plus
-/// host authority for the caller's provider error enum.
+/// host authority and bounded error body for the adapter's native classifier.
 pub(super) fn oauth_http_get(
     url: &str,
     headers: &[(&str, String)],
     breadcrumb: &str,
-) -> std::result::Result<String, (HttpErrKind, String)> {
+) -> std::result::Result<String, OAuthHttpErr> {
     oauth_http_request(url, headers, None, breadcrumb)
 }
 
 /// Bounded JSON POST for fixed provider account-usage endpoints. Secret-bearing
 /// requests refuse redirects and expose only the destination host and status
-/// class to callers.
+/// class to diagnostics; only the adapter may inspect an error body.
 pub(super) fn oauth_http_post_json<T: Serialize>(
     url: &str,
     headers: &[(&str, String)],
     body: &T,
     breadcrumb: &str,
-) -> std::result::Result<String, (HttpErrKind, String)> {
-    let host = || url_host(url).to_owned();
-    let body = serde_json::to_vec(body).map_err(|_| (HttpErrKind::Body, host()))?;
+) -> std::result::Result<String, OAuthHttpErr> {
+    let body = serde_json::to_vec(body).map_err(|_| http_error(url, HttpErrKind::Body))?;
     oauth_http_request(url, headers, Some(&body), breadcrumb)
 }
 
@@ -134,15 +148,14 @@ pub(super) fn oauth_http_post_json_once<T: Serialize>(
     headers: &[(&str, String)],
     body: &T,
     breadcrumb: &str,
-) -> std::result::Result<String, (HttpErrKind, String)> {
+) -> std::result::Result<String, OAuthHttpErr> {
     tracing::info!(
         target: crate::observability::BREADCRUMB_TARGET,
         host = %url_host(url),
         "{}",
         breadcrumb,
     );
-    let body =
-        serde_json::to_vec(body).map_err(|_| (HttpErrKind::Body, url_host(url).to_owned()))?;
+    let body = serde_json::to_vec(body).map_err(|_| http_error(url, HttpErrKind::Body))?;
     oauth_http_request_once(url, headers, Some(&body))
 }
 
@@ -151,7 +164,7 @@ fn oauth_http_request(
     headers: &[(&str, String)],
     body: Option<&[u8]>,
     breadcrumb: &str,
-) -> std::result::Result<String, (HttpErrKind, String)> {
+) -> std::result::Result<String, OAuthHttpErr> {
     tracing::info!(
         target: crate::observability::BREADCRUMB_TARGET,
         host = %url_host(url),
@@ -162,8 +175,8 @@ fn oauth_http_request(
     let mut result = oauth_http_request_once(url, headers, body);
     for attempt in 1..OAUTH_HTTP_ATTEMPTS {
         match &result {
-            Err((kind, host)) if kind.is_transient() => {
-                tracing::debug!(host, attempt, %kind, "OAuth usage HTTP retry");
+            Err(error) if error.kind.is_transient() => {
+                tracing::debug!(host = %error.host, attempt, kind = %error.kind, "OAuth usage HTTP retry");
                 std::thread::sleep(OAUTH_HTTP_RETRY_BACKOFF * attempt);
                 result = oauth_http_request_once(url, headers, body);
             }
@@ -177,10 +190,11 @@ fn oauth_http_request_once(
     url: &str,
     headers: &[(&str, String)],
     body: Option<&[u8]>,
-) -> std::result::Result<String, (HttpErrKind, String)> {
+) -> std::result::Result<String, OAuthHttpErr> {
     let agent = ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(OAUTH_HTTP_TIMEOUT_SECS)))
         .max_redirects(0)
+        .http_status_as_error(false)
         .build()
         .new_agent();
     let mut request = ureq::http::Request::builder()
@@ -192,42 +206,51 @@ fn oauth_http_request_once(
     if body.is_some() {
         request = request.header("Content-Type", "application/json");
     }
-    let host = || url_host(url).to_owned();
     let response = match body {
         Some(body) => request
             .body(body)
-            .map_err(|_| (HttpErrKind::Transport, host()))
+            .map_err(|_| http_error(url, HttpErrKind::Transport))
             .and_then(|request| {
                 agent
                     .run(request)
-                    .map_err(|error| (error_kind(error), host()))
+                    .map_err(|error| http_error(url, error_kind(error)))
             }),
         None => request
             .body(())
-            .map_err(|_| (HttpErrKind::Transport, host()))
+            .map_err(|_| http_error(url, HttpErrKind::Transport))
             .and_then(|request| {
                 agent
                     .run(request)
-                    .map_err(|error| (error_kind(error), host()))
+                    .map_err(|error| http_error(url, error_kind(error)))
             }),
     };
     let mut response = response?;
     let status = response.status().as_u16();
-    if status != 200 {
-        return Err((HttpErrKind::Status(status), host()));
-    }
-    response
+    let response_body = response
         .body_mut()
         .with_config()
         .limit(OAUTH_HTTP_MAX_BYTES)
         .read_to_string()
-        .map_err(|_| (HttpErrKind::Body, host()))
+        .map_err(|_| http_error(url, HttpErrKind::Body));
+    if status != 200 {
+        return Err(OAuthHttpErr {
+            body: response_body.unwrap_or_default(),
+            ..http_error(url, HttpErrKind::Status(status))
+        });
+    }
+    response_body
+}
+
+fn http_error(url: &str, kind: HttpErrKind) -> OAuthHttpErr {
+    OAuthHttpErr {
+        kind,
+        host: url_host(url).to_owned(),
+        body: String::new(),
+    }
 }
 
 fn error_kind(error: ureq::Error) -> HttpErrKind {
     match error {
-        // ureq surfaces non-2xx responses as `StatusCode`; the explicit status
-        // check above covers success-class responses other than 200.
         ureq::Error::StatusCode(code) => HttpErrKind::Status(code),
         _ => HttpErrKind::Transport,
     }
@@ -433,7 +456,7 @@ fn clean_usd(value: Option<f64>) -> Option<f64> {
 }
 
 /// The outcome of an adapter's direct account-usage query, mirroring the
-/// tri-state discipline of [`AccountProbe`](super::account::AccountProbe) so the
+/// typed discipline of [`AccountProbe`](super::account::AccountProbe) so the
 /// shared refresh driver can key its cache TTL on the arm, not just the value:
 ///
 /// - `Found` — a usage reading to merge.
@@ -442,6 +465,8 @@ fn clean_usd(value: Option<f64>) -> Option<f64> {
 ///   token, a provider with no quota surface). A settled state, logged at debug.
 /// - `Failed` — the probe could not complete (unreadable file, parse error, HTTP
 ///   error). Transient, logged at warn, retried on the short TTL.
+/// - `NotEntitled` — credentials exist but the provider refuses subscription
+///   access. Settled, independent of login health.
 /// - `Unsupported` — the adapter exposes no direct account-usage probe (the trait
 ///   default). Nothing to spawn.
 #[derive(Clone, Debug, PartialEq)]
@@ -451,18 +476,37 @@ pub enum AccountUsageProbe {
         snapshot: AccountUsageSnapshot,
     },
     NoCredentials(AccountUsageIdentity),
+    NotEntitled(AccountUsageIdentity),
     Failed(AccountUsageIdentity),
     Unsupported,
 }
 
-/// Whether an account-usage error is worth reporting off-box. Implemented by each
+/// The fault behind an account-usage error. Implemented by each
 /// adapter's account-usage error so [`map_account_usage_probe`] can fold every
 /// adapter's result through one classifier instead of a hand-rolled match per
 /// adapter. The "report" set (HTTP/IO/parse faults) maps to `Failed`; the silent
 /// set (absent/api-key/expired credentials and locally refused configuration)
-/// maps to `NoCredentials`.
+/// maps to `NoCredentials`; subscription-access rejection maps to `NotEntitled`.
 pub(super) trait AccountUsageReportable {
-    fn should_report(&self) -> bool;
+    fn fault(&self) -> AccountUsageFault;
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum AccountUsageFault {
+    Transient,
+    NoCredentials,
+    NotEntitled,
+}
+
+/// A login's subscription access, independent of whether its credentials exist.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Entitlement {
+    #[default]
+    Ok,
+    Lapsed {
+        since_ms: u64,
+    },
 }
 
 /// Fold an adapter's `Result<AccountUsageSnapshot, E>` into the shared
@@ -481,19 +525,25 @@ where
 {
     match result {
         Ok(snapshot) => AccountUsageProbe::Found { identity, snapshot },
-        Err(err) if !err.should_report() => {
-            tracing::debug!(error = %err, provider, "OAuth account usage unavailable");
-            AccountUsageProbe::NoCredentials(identity)
-        }
-        Err(err) => {
-            tracing::warn!(
-                tags.operation = "oauth_usage",
-                tags.provider = provider,
-                error = &err as &dyn std::error::Error,
-                "OAuth account usage fetch failed",
-            );
-            AccountUsageProbe::Failed(identity)
-        }
+        Err(err) => match err.fault() {
+            AccountUsageFault::Transient => {
+                tracing::warn!(
+                    tags.operation = "oauth_usage",
+                    tags.provider = provider,
+                    error = &err as &dyn std::error::Error,
+                    "OAuth account usage fetch failed",
+                );
+                AccountUsageProbe::Failed(identity)
+            }
+            AccountUsageFault::NoCredentials => {
+                tracing::debug!(error = %err, provider, "OAuth account usage unavailable");
+                AccountUsageProbe::NoCredentials(identity)
+            }
+            AccountUsageFault::NotEntitled => {
+                tracing::debug!(error = %err, provider, "OAuth account usage unavailable");
+                AccountUsageProbe::NotEntitled(identity)
+            }
+        },
     }
 }
 
@@ -585,7 +635,7 @@ mod tests {
         )
     }
 
-    fn oauth_request(post: bool, url: &str) -> std::result::Result<String, (HttpErrKind, String)> {
+    fn oauth_request(post: bool, url: &str) -> std::result::Result<String, OAuthHttpErr> {
         if post {
             oauth_http_post_json(url, &[], &serde_json::json!({"request":"quota"}), "test")
         } else {
@@ -667,7 +717,7 @@ mod tests {
             "test redirect",
         )
         .unwrap_err();
-        assert_eq!(error.0, HttpErrKind::Status(302));
+        assert_eq!(error.kind, HttpErrKind::Status(302));
         assert!(!format!("{error:?}").contains("sentinel-secret"));
         assert!(!format!("{error:?}").contains("sentinel-response-body"));
         server.join().unwrap();
@@ -684,7 +734,7 @@ mod tests {
             "test auth",
         )
         .unwrap_err();
-        assert!(error.0.is_auth_rejected());
+        assert!(error.kind.is_auth_rejected());
         assert!(!format!("{error:?}").contains("sentinel-response-body"));
         server.join().unwrap();
     }
@@ -708,7 +758,7 @@ mod tests {
             .collect();
         let (origin, server) = serve_many(responses);
         let error = oauth_http_get(&format!("{origin}/large"), &[], "test cap").unwrap_err();
-        assert_eq!(error.0, HttpErrKind::Body);
+        assert_eq!(error.kind, HttpErrKind::Body);
         assert_eq!(server.join().unwrap().len(), OAUTH_HTTP_ATTEMPTS as usize);
     }
 
@@ -723,7 +773,7 @@ mod tests {
             assert_eq!(
                 oauth_request(post, &format!("{origin}/redirect"))
                     .unwrap_err()
-                    .0,
+                    .kind,
                 HttpErrKind::Status(302)
             );
             assert_eq!(server.join().unwrap().len(), 1);
@@ -748,7 +798,7 @@ mod tests {
                 assert_eq!(
                     oauth_request(post, &format!("{origin}/status"))
                         .unwrap_err()
-                        .0,
+                        .kind,
                     HttpErrKind::Status(code)
                 );
                 assert_eq!(server.join().unwrap().len(), 1);
@@ -762,7 +812,7 @@ mod tests {
             assert_eq!(
                 oauth_request(post, &format!("{origin}/large"))
                     .unwrap_err()
-                    .0,
+                    .kind,
                 HttpErrKind::Body
             );
             assert_eq!(server.join().unwrap().len(), OAUTH_HTTP_ATTEMPTS as usize);
