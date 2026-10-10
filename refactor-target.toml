@@ -2558,6 +2558,11 @@ reason = "Always-on byte counter the performance tier and the message reply test
 
 [[verdict]]
 kind = "item"
+key = "store::event_log::testkit::bytes_read_under"
+reason = "Testkit-only per-path byte tally the performance tier reads from outside the library crate to prove archived history stays off the write path."
+
+[[verdict]]
+kind = "item"
 key = "store::event_log::testkit::bytes_written"
 reason = "Always-on byte counter the performance tier reads from outside the library crate (341796a) (pass 23a)."
 

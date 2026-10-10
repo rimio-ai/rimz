@@ -4,13 +4,12 @@
 //! all serialized through the workspace flock. The write path's contract:
 //! the critical section is an event append only, the snapshot publishes off
 //! the lock from a resumable fold base, and archive history does not enter
-//! the hot path.
-
-use std::time::{Duration, Instant};
+//! the hot path. The measure is event-log bytes read and written, never time.
 
 use rimz::agents::{AgentLifecycleObservation, LifecycleSignal};
 use rimz::ids::AgentSessionId;
 use rimz::store::event::{EventEnvelope, EventKind};
+use rimz::testkit::{bytes_read, bytes_read_under, bytes_written};
 
 use crate::common::Harness;
 
@@ -34,7 +33,7 @@ fn lifecycle(workspace_id: rimz::WorkspaceId, agent_id: &str) -> EventEnvelope {
 
 /// Seed archived event-log history. Plain writes: the seed is fixture state,
 /// not a durability subject.
-fn seed_archive_history(h: &Harness, count: usize) {
+fn seed_archive_history(h: &Harness, count: usize) -> u64 {
     std::fs::create_dir_all(&h.store.paths().events_archive_dir).expect("mkdir archive");
     let archive = h
         .store
@@ -48,10 +47,21 @@ fn seed_archive_history(h: &Harness, count: usize) {
         )
         .expect("seed archive");
     }
+    std::fs::metadata(&archive).expect("archive meta").len()
 }
 
-fn timed_burst(h: &Harness) -> Duration {
-    let start = Instant::now();
+/// Event-log bytes one burst moves, taken around the writer threads alone.
+struct BurstBytes {
+    read: u64,
+    archive_read: u64,
+    written: u64,
+}
+
+fn burst(h: &Harness) -> BurstBytes {
+    let archive_dir = &h.store.paths().events_archive_dir;
+    let read_before = bytes_read();
+    let archive_read_before = bytes_read_under(archive_dir);
+    let written_before = bytes_written();
     let handles: Vec<_> = (0..WRITERS)
         .map(|w| {
             let store = h.store.clone();
@@ -68,10 +78,14 @@ fn timed_burst(h: &Harness) -> Duration {
     for handle in handles {
         handle.join().expect("writer thread");
     }
-    start.elapsed()
+    BurstBytes {
+        read: bytes_read() - read_before,
+        archive_read: bytes_read_under(archive_dir) - archive_read_before,
+        written: bytes_written() - written_before,
+    }
 }
 
-fn assert_burst_landed(h: &Harness, label: &str) {
+fn assert_burst_landed(h: &Harness, bytes: &BurstBytes, label: &str) {
     let events = h.store.read_events().expect("events");
     assert_eq!(
         events
@@ -90,6 +104,10 @@ fn assert_burst_landed(h: &Harness, label: &str) {
     let log_len = std::fs::metadata(&h.store.paths().events_log)
         .expect("log meta")
         .len();
+    assert_eq!(
+        bytes.written, log_len,
+        "{label}: the burst writes the active log and nothing else"
+    );
     let snapshot = h
         .store
         .snapshot()
@@ -116,23 +134,23 @@ fn assert_burst_landed(h: &Harness, label: &str) {
 #[test]
 fn write_burst_cost_is_independent_of_archived_history() {
     let fresh = Harness::new();
-    let fresh_elapsed = timed_burst(&fresh);
-    assert_burst_landed(&fresh, "fresh workspace");
+    let fresh_bytes = burst(&fresh);
+    assert_burst_landed(&fresh, &fresh_bytes, "fresh workspace");
 
     let seeded = Harness::new();
-    seed_archive_history(&seeded, HISTORY_EVENTS);
-    let seeded_elapsed = timed_burst(&seeded);
-    assert_burst_landed(&seeded, "seeded workspace");
+    let archive_len = seed_archive_history(&seeded, HISTORY_EVENTS);
+    let seeded_bytes = burst(&seeded);
+    assert_burst_landed(&seeded, &seeded_bytes, "seeded workspace");
 
-    let ceiling = fresh_elapsed * 6 + Duration::from_secs(2);
-    assert!(
-        seeded_elapsed <= ceiling,
-        "a {HISTORY_EVENTS}-event archive must not slow the write burst: \
-         fresh {fresh_elapsed:?} vs seeded {seeded_elapsed:?} (ceiling {ceiling:?})"
-    );
-    assert!(
-        seeded_elapsed < Duration::from_secs(20),
-        "absolute backstop: {} writes took {seeded_elapsed:?}",
-        WRITERS * EVENTS_EACH
+    assert_eq!(
+        seeded_bytes.archive_read,
+        0,
+        "a {HISTORY_EVENTS}-event archive ({archive_len} B) must not enter the write path: \
+         seeded read {} B ({} B archived) / wrote {} B, fresh read {} B / wrote {} B",
+        seeded_bytes.read,
+        seeded_bytes.archive_read,
+        seeded_bytes.written,
+        fresh_bytes.read,
+        fresh_bytes.written
     );
 }
