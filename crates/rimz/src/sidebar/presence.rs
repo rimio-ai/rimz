@@ -109,7 +109,10 @@ pub fn ingest_zellij_wake(
 ) -> Result<ZellijWakeOutcome, ZellijWakeError> {
     let mut transitions = Vec::new();
     let mut accepted_topology = None;
-    if let Some(incoming) = wake.topology.as_ref() {
+    'topology: {
+        let Some(incoming) = wake.topology.as_ref() else {
+            break 'topology;
+        };
         let _guard = crate::disk::lock::WorkspaceLock::acquire_with_timeout(
             &runtime.topology_writer_lock(),
             Duration::from_secs(1),
@@ -117,14 +120,23 @@ pub fn ingest_zellij_wake(
         let now_ms = unix_now_ms();
         let existing = read_pane_topology_cache(runtime, &incoming.session_name);
         let desired = read_presence_desired(runtime);
-        if topology_decision(existing.as_ref(), incoming, desired.as_ref(), now_ms)
-            == TopologyDecision::Reject
-        {
-            // Reject is reachable only with a fresh same-session cache.
-            if let Some(existing) = existing.as_ref() {
-                record_topology_write_rejected(state, runtime, incoming, existing, now_ms)?;
+        match topology_decision(existing.as_ref(), incoming, desired.as_ref(), now_ms) {
+            TopologyDecision::Accept => {}
+            TopologyDecision::Reject => {
+                // Reject is reachable only with a fresh same-session cache.
+                if let Some(existing) = existing.as_ref() {
+                    record_topology_write_rejected(state, runtime, incoming, existing, now_ms)?;
+                }
+                return Ok(ZellijWakeOutcome::RejectedStaleWriter);
             }
-            return Ok(ZellijWakeOutcome::RejectedStaleWriter);
+            TopologyDecision::Stale => {
+                tracing::debug!(
+                    produced_at_ms = incoming.produced_at_ms,
+                    "presence poke: ignored older same-writer topology",
+                );
+                // The wake's own evidence (a switch-settled strand) still counts.
+                break 'topology;
+            }
         }
         let writer_changed = existing
             .as_ref()
@@ -515,6 +527,7 @@ fn topology_pane_is_sidebar(pane: &PaneTopologyPane) -> bool {
 enum TopologyDecision {
     Accept,
     Reject,
+    Stale,
 }
 
 fn topology_decision(
@@ -526,14 +539,18 @@ fn topology_decision(
     let Some(existing) = existing else {
         return TopologyDecision::Accept;
     };
-    if !pane_topology_cache_is_fresh(existing, now_ms, None)
-        || writer_rank(incoming.writer.as_ref(), desired)
-            >= writer_rank(existing.writer.as_ref(), desired)
-    {
-        TopologyDecision::Accept
-    } else {
-        TopologyDecision::Reject
+    if !pane_topology_cache_is_fresh(existing, now_ms, None) {
+        return TopologyDecision::Accept;
     }
+    let incoming_rank = writer_rank(incoming.writer.as_ref(), desired);
+    let existing_rank = writer_rank(existing.writer.as_ref(), desired);
+    if incoming_rank < existing_rank {
+        return TopologyDecision::Reject;
+    }
+    if incoming_rank == existing_rank && incoming.produced_at_ms < existing.produced_at_ms {
+        return TopologyDecision::Stale;
+    }
+    TopologyDecision::Accept
 }
 
 fn writer_rank(

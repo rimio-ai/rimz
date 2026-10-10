@@ -363,6 +363,73 @@ fn generation_classification_fences_only_fresh_older_writers() {
 }
 
 #[test]
+fn same_writer_topologies_are_ordered_by_observation_time() {
+    let now_ms = 100_000;
+    let existing = topology(now_ms, Some(writer(2, 200)));
+    let mut incoming = existing.clone();
+    incoming.produced_at_ms -= 1;
+    assert_eq!(
+        topology_decision(Some(&existing), &incoming, None, now_ms),
+        TopologyDecision::Stale,
+    );
+    for produced_at_ms in [now_ms, now_ms + 1] {
+        incoming.produced_at_ms = produced_at_ms;
+        assert_eq!(
+            topology_decision(Some(&existing), &incoming, None, now_ms),
+            TopologyDecision::Accept,
+        );
+    }
+    incoming.produced_at_ms = 0;
+    assert_eq!(
+        topology_decision(Some(&incoming), &incoming, None, now_ms),
+        TopologyDecision::Accept,
+        "expired topology does not fence the next observation",
+    );
+}
+
+#[test]
+fn stale_same_writer_wake_keeps_cache_and_still_reports_its_settled_strand() {
+    let (_dir, state, runtime) = paths();
+    let mut existing = focus_topology();
+    existing.panes[0].title = Some(SIDEBAR_CHROME_TITLE.to_owned());
+    write_pane_topology_cache(&runtime, &existing).unwrap();
+    let mut incoming = wake(ZellijWakeReason::SwitchSettled);
+    incoming.active_tab = Some(1);
+    incoming.focus_generation = Some(8);
+    incoming.focus_clients = vec![crate::pane::ClientPaneView {
+        client_id: crate::ids::MuxClientId::Zellij(1),
+        pane_id: zellij_pane("terminal_1"),
+    }];
+    let mut stale = existing.clone();
+    stale.produced_at_ms -= 1;
+    stale.panes.push(topology_pane(3, 1, "work"));
+    incoming.topology = Some(stale);
+
+    assert!(matches!(
+        ingest_zellij_wake(&state, &runtime, &incoming).unwrap(),
+        ZellijWakeOutcome::Accepted(events) if !events.is_empty()
+    ));
+    assert_eq!(
+        read_pane_topology_cache(&runtime, "rimz-test"),
+        Some(existing.clone()),
+    );
+    assert!(read_topology_writer_conflict(&runtime).is_none());
+    for produced_at_ms in [existing.produced_at_ms, existing.produced_at_ms + 1] {
+        incoming.topology.as_mut().unwrap().produced_at_ms = produced_at_ms;
+        assert!(matches!(
+            ingest_zellij_wake(&state, &runtime, &incoming).unwrap(),
+            ZellijWakeOutcome::Accepted(events) if !events.is_empty()
+        ));
+        assert_eq!(
+            read_pane_topology_cache(&runtime, "rimz-test")
+                .unwrap()
+                .produced_at_ms,
+            produced_at_ms,
+        );
+    }
+}
+
+#[test]
 fn desired_identity_outranks_later_nonmatching_writers() {
     let now_ms = 100_000;
     let desired = desired();
