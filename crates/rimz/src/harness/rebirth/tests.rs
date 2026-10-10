@@ -280,6 +280,7 @@ impl Fixture {
             Vec::new(),
             &self.project,
             machine,
+            None,
             disabled,
             owner_exit_bound,
         )
@@ -1230,6 +1231,7 @@ fn boundary_inspection_offers_an_agent_whose_owner_exits_within_the_bound() {
                 Vec::new(),
                 &project,
                 &MachineConfig::default(),
+                None,
                 false,
                 Duration::from_secs(60),
             )
@@ -1273,6 +1275,7 @@ fn boundary_inspection_classes_an_owner_that_records_its_end_during_the_wait_as_
                 Vec::new(),
                 &project,
                 &MachineConfig::default(),
+                None,
                 false,
                 Duration::from_secs(60),
             )
@@ -1903,6 +1906,7 @@ fn crash_archive_uses_cache_bytes_captured_before_room_birth() {
         vec![source.clone()],
         &fixture.project,
         &MachineConfig::default(),
+        None,
         false,
         OWNER_EXIT_BOUND,
     )

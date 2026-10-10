@@ -5,6 +5,7 @@
 
 use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use clap::Args;
@@ -43,10 +44,21 @@ pub fn run(args: ResetArgs, globals: &GlobalFlags) -> Result<()> {
         &workspace.session_name,
         globals.mux,
     ))?;
-    super::render::room::print_notices(rimz::room::session::ensure_single_backend_room(
-        mux,
-        &workspace.session_name,
-    )?)?;
+    let runtime = rimz::RuntimePaths::for_project_root(&workspace.project_root)?;
+    let claim = if rimz::room::session::session_is_live(mux, &workspace.session_name) {
+        rimz::room::session::claim_listed_room(
+            &runtime,
+            mux,
+            &workspace.session_name,
+            Duration::ZERO,
+        )?
+    } else {
+        Some(rimz::room::session::claim_room(
+            &runtime,
+            &workspace.session_name,
+            Duration::ZERO,
+        )?)
+    };
     // The rebirth takes the state dir name on the backend `start` resolves once
     // the room is gone, which can differ from the owner; refuse before the
     // teardown when that name cannot be born there.
@@ -91,6 +103,7 @@ pub fn run(args: ResetArgs, globals: &GlobalFlags) -> Result<()> {
         )?;
         return Ok(());
     }
+    drop(claim);
     super::room::start(
         StartArgs {
             attach: AttachFlags::default(),

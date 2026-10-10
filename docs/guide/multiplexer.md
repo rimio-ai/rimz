@@ -82,7 +82,7 @@ With both installed, RimZ takes the first of these that answers:
 3. `[mux] default` in `~/.rimz/config.toml`, which makes `rimz start` refuse when it names a backend that is not installed;
 4. whichever one is installed; tmux when both are.
 
-A room that already exists keeps the backend it was born on, whatever that resolution says. The floors are Zellij 0.44.2 and tmux 3.5, with 3.6 or newer preferred; [installation](./installation.md#install-zellij-or-tmux) has the versions and how to get a current build on your platform.
+A room that already exists keeps the backend it was born on, whatever that resolution says. An explicit backend cannot create a second room while the first room is held, even if that backend cannot see the running session. [Opening a room](./setup.md#open-your-first-room) covers the hold, refusal and fixes. The floors are Zellij 0.44.2 and tmux 3.5, with 3.6 or newer preferred; [installation](./installation.md#install-zellij-or-tmux) has the versions and how to get a current build on your platform.
 
 ## Adopt a baseline
 

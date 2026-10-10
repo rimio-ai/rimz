@@ -14,8 +14,8 @@ use anyhow::{Context, Result, bail};
 use rimz::config::ConfigErr;
 use rimz::ids::{MuxName, RoomLogins, WorkspaceId};
 use rimz::room::session::{
-    ensure_single_backend_room, pick_mux_for_session, session_is_live, session_probe_retry_timeout,
-    session_probe_timeout, workspace_record_for_session,
+    pick_mux_for_session, session_is_live, session_probe_retry_timeout, session_probe_timeout,
+    workspace_record_for_session,
 };
 use rimz::room::{
     AttendedRecovery, NormalRebirth, RoomBirth, RoomBirthSource, RoomContext, RoomSizing,
@@ -292,7 +292,6 @@ pub(crate) fn ensure_workspace_room_detached(
         .with_context(|| format!("resolving workspace at {}", path.display()))?;
     let mux =
         render::room::present_mux_pick(pick_mux_for_session(&workspace.session_name, globals.mux))?;
-    render::room::print_notices(ensure_single_backend_room(mux, &workspace.session_name)?)?;
     setup::ensure_default_config()?;
     let ready = prepare_room(
         RoomEntry::StartDetached {
@@ -328,8 +327,7 @@ pub(crate) fn ensure_session_room_for_web(
     no_resume: bool,
     confirm_resume: bool,
 ) -> Result<RoomContext> {
-    let mux = render::room::present_mux_pick(pick_mux_for_session(session, globals.mux))?;
-    let record = workspace_record_for_web_session(session, mux)?;
+    let record = workspace_record_for_web_session(session)?;
     preflight_web_engine()?;
     let ready = prepare_room(
         RoomEntry::WebSession {
@@ -344,7 +342,7 @@ pub(crate) fn ensure_session_room_for_web(
 
 pub(crate) fn web_room_for_session(session: &str, globals: &GlobalFlags) -> Result<RoomContext> {
     let mux = render::room::present_mux_pick(pick_mux_for_session(session, globals.mux))?;
-    let record = workspace_record_for_web_session(session, mux)?;
+    let record = workspace_record_for_web_session(session)?;
     RoomContext::from_record(&record, machine_config(), mux, RoomSizing::OrdinaryTab)
 }
 
@@ -366,7 +364,6 @@ pub(crate) fn existing_web_room_for_path(
     };
     let mux =
         render::room::present_mux_pick(pick_mux_for_session(&record.session_name, globals.mux))?;
-    render::room::print_notices(ensure_single_backend_room(mux, &record.session_name)?)?;
     RoomContext::from_record(&record, machine_config(), mux, RoomSizing::OrdinaryTab)
 }
 
@@ -379,14 +376,13 @@ fn managed_context_from_ready(ready: ReadyRoom) -> Result<RoomContext> {
     }
 }
 
-fn workspace_record_for_web_session(session: &str, mux: MuxName) -> Result<WorkspaceRecord> {
+fn workspace_record_for_web_session(session: &str) -> Result<WorkspaceRecord> {
     let record = workspace_record_for_session(session).context("checking RimZ workspace record")?;
     let Some(record) = record else {
         bail!(
             "session `{session}` is not a known RimZ workspace session; run `rimz list` or open the workspace with `rimz start` first"
         );
     };
-    render::room::print_notices(ensure_single_backend_room(mux, session)?)?;
     Ok(record)
 }
 
@@ -720,6 +716,7 @@ fn birth_managed_room(
     background_view: Option<rimz::remote_control::ReadinessSnapshot>,
     cwd: std::path::PathBuf,
 ) -> Result<()> {
+    context.admit_birth()?;
     let was_live = preflight_health.is_some();
     let rebirth = if was_live {
         tracing::debug!(workspace = %context.workspace_id(), "rebirth: session already live, inspection skipped");
@@ -851,7 +848,6 @@ fn preflight_machine_config(errors: Vec<ConfigErr>) -> Result<()> {
 fn run_room_preflights(entry: &RoomEntry<'_>, mux: MuxName) -> Result<()> {
     match entry {
         RoomEntry::Start { workspace, .. } | RoomEntry::StartDetached { workspace, .. } => {
-            render::room::print_notices(ensure_single_backend_room(mux, &workspace.session_name)?)?;
             rimz_socket_environment_preflight(&workspace.project_root)?;
             mux_environment_preflight(mux, &workspace.session_name)
         }

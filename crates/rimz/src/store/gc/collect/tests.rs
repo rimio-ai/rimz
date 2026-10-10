@@ -112,6 +112,9 @@ fn lock_sweep_keeps_held_files_and_previews_unheld_files() {
     let locks = held_path.parent().unwrap();
     let free_path = locks.join("free.lock");
     let held = crate::disk::lock::IngressAppendLock::acquire(held_path).unwrap();
+    let runtime = RuntimePaths::for_state_under(&paths, temp.path());
+    let room_path = runtime.room_lock();
+    let room = crate::disk::lock::RoomLock::hold(&room_path).unwrap();
     fs::write(&free_path, "old holder").unwrap();
     let mut preview = GcReport::default();
     collect_locks(locks, &mut Sweep::new(true), &mut preview).unwrap();
@@ -120,9 +123,13 @@ fn lock_sweep_keeps_held_files_and_previews_unheld_files() {
     let mut actual = GcReport::default();
     collect_locks(locks, &mut Sweep::new(false), &mut actual).unwrap();
     assert_eq!(preview.sidecar_files_removed, 0);
-    assert_eq!(preview.locks_would_check, 2);
+    assert_eq!(preview.locks_would_check, 3);
     assert_eq!(actual.sidecar_files_removed, 1);
     assert!(held_path.exists());
+    assert!(
+        room_path.exists(),
+        "GC must keep a room held by its supervisor"
+    );
     assert!(!free_path.exists());
     assert!(
         crate::disk::lock::WorkspaceLock::try_acquire(held_path)
@@ -130,8 +137,10 @@ fn lock_sweep_keeps_held_files_and_previews_unheld_files() {
             .is_none()
     );
     drop(held);
+    drop(room);
     collect_locks(locks, &mut Sweep::new(false), &mut actual).unwrap();
     assert!(!held_path.exists());
+    assert!(!room_path.exists());
 }
 
 #[test]

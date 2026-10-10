@@ -405,7 +405,8 @@ allowed-dependencies = [
 # Hook ingress serializes appends independently of lifecycle folds (+1).
 # Apply children inherit the lifetime lock so parent death cannot admit concurrent replay (+1).
 # Hook appenders share a typed, blocking ingress guard (+2).
-surface-budget = 232
+# Birth, reset, supervisors and integration tests share RoomLock's claim/hold/share and its classed path (+5).
+surface-budget = 237
 
 [[module]]
 path = "crates/rimz/src/forge"
@@ -682,7 +683,9 @@ upward-dependencies = [
 # Live entry reconciles parked recovery and returns its notice counts as `ParkedRecoveryOutcome` (+1).
 # Lane resume opens a resume tab through one room entry (+1).
 # A single-kind fresh-room selection and its deciding layer serve account reset (+2).
-surface-budget = 65
+# Admission before CLI recovery inspection carries the room claim through birth (+1).
+# Birth and reset share listed-session heartbeat-or-claim admission (+1).
+surface-budget = 67
 
 [[module]]
 path = "crates/rimz/src/sidebar"
@@ -2177,7 +2180,17 @@ reason = "Owns the batch probe; the borrowed-probe seam lets web reuse one obser
 [[verdict]]
 kind = "item"
 key = "room::session::pick_mux_for_session"
-reason = "Selection, record lookup and the rival guard stay separate: the CLI prints notices between them and orders them differently per entry (pass 15c)."
+reason = "Backend selection stays separate from lock-based admission; the CLI presents selection notices before room preparation."
+
+[[verdict]]
+kind = "item"
+key = "room::session::claim_room"
+reason = "Birth and binary CLI reset share lock admission and its refusal text."
+
+[[verdict]]
+kind = "item"
+key = "room::session::claim_listed_room"
+reason = "Birth and binary CLI reset admit a listed session only by its own heartbeat or an exclusive claim; each caller supplies its wait."
 
 [[verdict]]
 kind = "item"
@@ -3128,6 +3141,31 @@ reason = "The separate integration/performance/store_fsync.rs binary measures th
 kind = "item"
 key = "disk::lock::LockErr"
 reason = "Public WorkspaceLock signatures expose this error to the separate CLI binary; inferred return-type reach is not captured by named-reference narrowing. (pass 19b)."
+
+[[verdict]]
+kind = "item"
+key = "disk::lock::RoomLock"
+reason = "Shared supervisor lifetime holds and exclusive birth/reset claims are the room admission contract; integration tests exercise it across processes."
+
+[[verdict]]
+kind = "item"
+key = "disk::lock::RoomLock::claim"
+reason = "Birth and reset need bounded exclusive admission; integration tests observe contention and release."
+
+[[verdict]]
+kind = "item"
+key = "disk::lock::RoomLock::hold"
+reason = "Pane supervisors hold the room shared; integration fixtures also hold it to prove probe-independent refusal."
+
+[[verdict]]
+kind = "item"
+key = "disk::lock::RoomLock::share"
+reason = "Birth downgrades its exclusive claim before waiting for newborn supervisor attachment."
+
+[[verdict]]
+kind = "item"
+key = "disk::paths::RuntimePaths::room_lock"
+reason = "Birth, reset, supervisors and integration fixtures must resolve the same state-class room lock."
 
 [[verdict]]
 kind = "item"

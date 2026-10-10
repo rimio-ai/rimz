@@ -1,11 +1,12 @@
 //! Room birth, health recovery, and reset transitions.
 
 use std::path::PathBuf;
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 
 use crate::config::Isolation;
-use crate::disk::lock::WorkspaceLock;
+use crate::disk::lock::{RoomLock, WorkspaceLock};
 use crate::harness::rebirth::{RebirthDisposition, RebirthPlan};
 use crate::harness::resume::ResumePlan;
 use crate::mux::{
@@ -116,7 +117,61 @@ pub struct BirthOutcome {
     pub reset: Option<RoomResetReport>,
 }
 
+pub(super) struct BirthAdmission {
+    session_name: String,
+    pre_existed: bool,
+    claim: Option<RoomLock>,
+    recovery_lock: Option<WorkspaceLock>,
+}
+
 impl RoomContext {
+    /// Admit before recovery inspection, carrying any claim through birth.
+    pub fn admit_birth(&mut self) -> Result<()> {
+        if self.birth_admission.is_none() {
+            self.birth_admission = Some(self.claim_birth()?);
+        }
+        Ok(())
+    }
+
+    fn claim_birth(&self) -> Result<BirthAdmission> {
+        let sessions = self.backend.list_sessions();
+        let list_succeeded = sessions.is_ok();
+        let (session_name, pre_existed) = birth_session_name(
+            &self.workspace.session_name,
+            self.runtime.dir_name.as_str(),
+            sessions,
+        );
+        let mut recovery_lock = None;
+        let claim = if !list_succeeded
+            || (pre_existed
+                && super::session::has_sidebar(&self.runtime, self.backend.name(), &session_name))
+        {
+            None
+        } else if pre_existed {
+            recovery_lock = Some(WorkspaceLock::acquire(
+                &self.runtime.lock_path("recovery.lock"),
+            )?);
+            super::session::claim_listed_room(
+                &self.runtime,
+                self.backend.name(),
+                &session_name,
+                Duration::from_secs(2),
+            )?
+        } else {
+            Some(super::session::claim_room(
+                &self.runtime,
+                &self.workspace.session_name,
+                Duration::from_secs(2),
+            )?)
+        };
+        Ok(BirthAdmission {
+            session_name,
+            pre_existed,
+            claim,
+            recovery_lock,
+        })
+    }
+
     /// Execute shared room birth ordering for a normal or supervised caller.
     pub fn birth(&mut self, birth: RoomBirth) -> Result<BirthOutcome> {
         let (cwd, refresh_ms, rebirth, preflight_health, background_view, recovery, supervised) =
@@ -141,13 +196,24 @@ impl RoomContext {
                     (cwd, None, None, None, None, recovery, true)
                 }
             };
-        let (session_name, pre_existed) = birth_session_name(
-            &self.workspace.session_name,
-            self.runtime.dir_name.as_str(),
-            self.backend.list_sessions(),
-        );
+        let BirthAdmission {
+            session_name,
+            pre_existed,
+            mut claim,
+            recovery_lock,
+        } = match self.birth_admission.take() {
+            Some(admission) => admission,
+            None => self.claim_birth()?,
+        };
         let renamed = session_name != self.workspace.session_name;
         self.workspace.session_name = session_name;
+        if matches!(self.birth_owner, super::BirthOwner::Claim) {
+            self.claim_owner()?;
+            self.birth_owner = super::BirthOwner::Preserve;
+        }
+        if let Some(logins) = &self.birth_logins {
+            self.pin_room_logins(logins)?;
+        }
         if !pre_existed {
             if Isolation::ambient(&crate::agents::ambient_env()) == Some(Isolation::Sandbox) {
                 bail!("this pane runs inside a RimZ sandbox; start the room from a host shell");
@@ -207,7 +273,21 @@ impl RoomContext {
             let paths = StatePaths::for_workspace(self.workspace.workspace_id.clone())?;
             crate::harness::rebirth::park_roster(&paths)?;
         }
+        // Resumed agents stay pending until confirmation; the lock keeps an
+        // attended start on the now-live room from settling them a second time.
+        let _recovery = match recovery_lock {
+            Some(lock) => Some(lock),
+            None if claim.is_some() || matches!(rebirth, Some(NormalRebirth::Selected { .. })) => {
+                Some(WorkspaceLock::acquire(
+                    &self.runtime.lock_path("recovery.lock"),
+                )?)
+            }
+            None => None,
+        };
         self.backend.ensure_session(&self.session_options(&cwd))?;
+        if let Some(claim) = &mut claim {
+            claim.share()?;
+        }
         if supervised && pre_existed {
             self.detected_size = None;
         }
@@ -216,14 +296,6 @@ impl RoomContext {
             .as_ref()
             .map(|readiness| self.background_view(readiness, refresh_ms));
 
-        // Resumed agents stay pending until confirmation; the lock keeps an
-        // attended start on the now-live room from settling them a second time.
-        let _recovery = match rebirth {
-            Some(NormalRebirth::Selected { .. }) => Some(WorkspaceLock::acquire(
-                &self.runtime.lock_path("recovery.lock"),
-            )?),
-            _ => None,
-        };
         let seeded = match rebirth {
             Some(rebirth) => match rebirth {
                 NormalRebirth::Live => None,

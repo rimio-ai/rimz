@@ -71,6 +71,8 @@ pub enum SidebarSuperviseErr {
     #[error(transparent)]
     Paths(#[from] crate::disk::paths::PathErr),
     #[error(transparent)]
+    Lock(#[from] crate::disk::lock::LockErr),
+    #[error(transparent)]
     Io(#[from] io::Error),
     #[error("re-executing sidebar supervisor `{program}`: {source}")]
     Spawn {
@@ -114,6 +116,7 @@ pub fn run(config: ServeConfig) -> Result<()> {
     let runtime = crate::RuntimePaths::for_workspace(config.workspace_id.clone())?;
     let state = crate::StatePaths::for_workspace(config.workspace_id.clone())?;
     runtime.ensure_dirs()?;
+    let _room = crate::disk::lock::RoomLock::hold(&runtime.room_lock())?;
     let stopped = Arc::new(AtomicBool::new(false));
     let _signal = StopSignal(signal_hook::flag::register(
         signal_hook::consts::SIGTERM,
