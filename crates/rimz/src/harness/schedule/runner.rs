@@ -52,7 +52,7 @@ use crate::harness::schedule::signal::{
 };
 use crate::harness::schedule::{TaskAction, Trigger};
 use crate::ids::AgentKind;
-use crate::ids::{RunId, WorkspaceId};
+use crate::ids::{MessageId, RunId, WorkspaceId};
 use crate::store::run::RunRecord;
 use crate::store::writer::LaunchLogin;
 use crate::utils::time::{DurationUnit, parse_duration_units};
@@ -142,6 +142,7 @@ pub struct PreparedDelivery {
     pub root: PathBuf,
     pub target: TaskTarget,
     pub prompt: String,
+    pub supersedes: Vec<MessageId>,
     pub intent: DeliveryIntent,
 }
 
@@ -1293,6 +1294,7 @@ impl<'a> TaskFire<'a> {
             root: self.context_root()?,
             target,
             prompt,
+            supersedes: self.superseded_check_ins(),
             intent: if self
                 .task
                 .trigger()
@@ -1338,6 +1340,30 @@ impl<'a> TaskFire<'a> {
         self.signal
             .as_ref()
             .and_then(|signal| signal.watch.as_ref())
+    }
+
+    /// Message ids of this arming's earlier check-ins, which a watch's
+    /// terminal fire makes stale; empty for every other delivery.
+    fn superseded_check_ins(&self) -> Vec<MessageId> {
+        let terminal = self
+            .watch_outcome()
+            .is_some_and(|outcome| outcome.verdict.is_terminal());
+        if self.watch_spec().is_none() || !terminal {
+            return Vec::new();
+        }
+        let armed_at = self.entry.wait_meta.as_ref().map(|meta| meta.armed_at);
+        run_log::task_records(&logs_dir(), &self.name, Some(&self.entry.resolved_root()))
+            .into_iter()
+            .filter(|record| {
+                record.result == LoopRunResult::Delivered
+                    && record
+                        .watch
+                        .as_ref()
+                        .is_some_and(|watch| !watch.is_terminal())
+                    && armed_at.is_none_or(|armed_at| record.at >= armed_at)
+            })
+            .filter_map(|record| record.message_id)
+            .collect()
     }
 
     fn context_root(&self) -> Result<PathBuf> {

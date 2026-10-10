@@ -7,6 +7,7 @@ use crate::common::wait::{
 use crate::common::{Env, canonical, zellij_trace_shim};
 use rimz::agents::{AgentLifecycleObservation, AskKind, LaunchParams, LifecycleSignal};
 use rimz::ids::{AgentKind, AgentSessionId, MuxName, PaneId};
+use rimz::store::event::{EventKind, MessageEventMethod};
 use rimz::store::message::{
     DeliveryGate, HarnessNotice, MessageRecord, MessageSender, MessageStatus,
 };
@@ -648,7 +649,17 @@ fn wait_pid_checks_in_then_delivers_after_process_disappears_without_output_file
     assert_eq!(wait_instances(&env).0.len(), 1);
     process.kill().unwrap();
     process.wait().unwrap();
-    let messages = wait_for_wait_messages(&env, 2);
+    wait_for_wait_records(&env, 2);
+    let (mut messages, history) = env.store().list_messages_and_history().unwrap();
+    messages.extend(history);
+    assert_eq!(
+        messages
+            .iter()
+            .find(|message| message.message_id == checkin[0].message_id)
+            .unwrap()
+            .status,
+        MessageStatus::Canceled
+    );
     let completed = messages
         .iter()
         .find(|message| message.text.contains("\nmet after"))
@@ -660,7 +671,7 @@ fn wait_pid_checks_in_then_delivers_after_process_disappears_without_output_file
     let receipt = wait_ok(&env, &["wait", "--pid", &pid]);
     assert!(receipt.starts_with("armed wait-"), "{receipt}");
     assert!(receipt.contains(&format!(": pid {pid} →")), "{receipt}");
-    assert_eq!(wait_for_wait_messages(&env, 3).len(), 3);
+    assert_eq!(wait_for_wait_messages(&env, 2).len(), 2);
     wait_for_no_wait_instances(&env);
 }
 
@@ -819,7 +830,17 @@ fn wait_check_on_fail_checks_in_with_still_not_met() {
     assert_eq!(wait_instances(&env).0.len(), 1);
 
     std::fs::remove_file(&flag).unwrap();
-    let messages = wait_for_wait_messages(&env, 2);
+    wait_for_wait_records(&env, 2);
+    let (mut messages, history) = env.store().list_messages_and_history().unwrap();
+    messages.extend(history);
+    assert_eq!(
+        messages
+            .iter()
+            .find(|message| message.message_id == checkin[0].message_id)
+            .unwrap()
+            .status,
+        MessageStatus::Canceled
+    );
     assert!(
         messages
             .iter()
@@ -1549,14 +1570,134 @@ fn watch_checkin_parks_at_an_open_prompt_without_consuming_or_killing_command() 
     let records = wait_for_wait_records(&env, 2);
     assert_eq!(records[1].check.as_ref().unwrap().code, Some(0));
     wait_for_no_wait_instances(&env);
-    let messages = wait_for_wait_messages(&env, 2);
+    let (mut messages, history) = env.store().list_messages_and_history().unwrap();
+    messages.extend(history);
     assert_eq!(messages.len(), 2);
-    assert!(
-        messages
-            .iter()
-            .all(|wake| wake.status == MessageStatus::Queued)
-    );
+    let canceled = messages
+        .iter()
+        .find(|message| message.message_id == checkin.message_id)
+        .unwrap();
+    assert_eq!(canceled.status, MessageStatus::Canceled);
+    let wake = messages
+        .iter()
+        .find(|message| Some(&message.message_id) == records[1].message_id.as_ref())
+        .unwrap();
+    assert_eq!(wake.status, MessageStatus::Queued);
+    assert_eq!(wake.gate, DeliveryGate::Any);
     assert_no_wait_paste(&env);
+}
+
+#[test]
+fn watch_checkin_is_canceled_when_the_final_wake_steers_live() {
+    let env = Env::new();
+    let pane_fixture = register_waiting_caller(&env);
+    let release = env.home_root.join("release");
+    let command = format!(
+        "printf checkin-marker; while [ ! -e {} ]; do sleep 0.05; done; printf final-marker",
+        shlex::try_quote(release.to_str().unwrap()).unwrap()
+    );
+    let output = traced_wait(&env, &pane_fixture)
+        .args(["wait", "--timeout", "1s", "--run", &command])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let records = wait_for_wait_records(&env, 1);
+    let checkin = wait_for_wait_messages(&env, 1).pop().unwrap();
+    assert_eq!(checkin.status, MessageStatus::Queued);
+    assert_eq!(records[0].message_id.as_ref(), Some(&checkin.message_id));
+    assert_no_wait_paste(&env);
+
+    let observation = AgentLifecycleObservation::new(
+        Some(AgentSessionId::from("provider-session")),
+        LifecycleSignal::TurnEnded {
+            errored: false,
+            parked_on_background: false,
+            turn_id: None,
+        },
+    );
+    env.store()
+        .append_agent_lifecycle(AgentLifecycleIntent {
+            session_name: "rimz-test",
+            agent_kind: AgentKind::new_unchecked("claude"),
+            event_name: "Stop",
+            observation: &observation,
+            spawned_subagents: &[],
+        })
+        .unwrap();
+    std::fs::write(&release, "").unwrap();
+    let records = wait_for_wait_records(&env, 2);
+    assert!(matches!(
+        records[1].watch.as_ref().unwrap(),
+        rimz::harness::schedule::signal::WatchVerdict::Exited { code: Some(0), .. }
+    ));
+    assert_eq!(records[1].result.label(), "delivered");
+    wait_for_no_wait_instances(&env);
+    let (mut messages, history) = env.store().list_messages_and_history().unwrap();
+    messages.extend(history);
+    assert_eq!(messages.len(), 2);
+    let canceled = messages
+        .iter()
+        .find(|message| message.message_id == checkin.message_id)
+        .unwrap();
+    assert_eq!(canceled.status, MessageStatus::Canceled);
+    let events = env.read_events();
+    assert!(
+        events.iter().any(|event| {
+            matches!(event.kind(), EventKind::Message { method, payload }
+                if method == MessageEventMethod::Canceled
+                    && payload.message_id == checkin.message_id
+                    && payload.reason.as_deref() == Some("superseded by the wait's final outcome"))
+        }),
+        "{events:?}"
+    );
+    let wake = messages
+        .iter()
+        .find(|message| Some(&message.message_id) == records[1].message_id.as_ref())
+        .unwrap();
+    assert_eq!(wake.status, MessageStatus::Sent);
+    assert!(wake.text.contains("exit 0 after"), "{}", wake.text);
+    assert!(!wake.text.contains("still running after"), "{}", wake.text);
+    let trace_path = env.project_root.join("wait-trace.log");
+    let trace = std::fs::read_to_string(&trace_path).unwrap();
+    let writes: Vec<_> = trace
+        .lines()
+        .filter(|line| line.contains("\taction\twrite\t"))
+        .collect();
+    assert_eq!(writes.len(), 2, "{trace}");
+    assert!(
+        writes[0].contains("\taction\twrite\t--pane-id\tterminal_3\t27\t91\t50\t48\t48\t126\t")
+            && writes[0].ends_with("\t27\t91\t50\t48\t49\t126"),
+        "{trace}"
+    );
+    assert!(
+        writes[1].ends_with("\taction\twrite\t--pane-id\tterminal_3\t13"),
+        "{trace}"
+    );
+    let verdict = wake
+        .text
+        .lines()
+        .last()
+        .unwrap()
+        .bytes()
+        .map(|byte| byte.to_string())
+        .collect::<Vec<_>>()
+        .join("\t");
+    assert!(writes[0].contains(&verdict), "{trace}");
+
+    let output = traced_wait(&env, &pane_fixture)
+        .args(["message", "sweep"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let trace = std::fs::read_to_string(trace_path).unwrap();
+    assert_eq!(
+        trace
+            .lines()
+            .filter(|line| line.contains("\taction\twrite\t"))
+            .count(),
+        2,
+        "{trace}"
+    );
 }
 
 fn register_waiting_caller(env: &Env) -> std::path::PathBuf {
@@ -1756,7 +1897,8 @@ fn watch_checkin_delivers_once_without_consuming_or_killing_command() {
                 .unwrap();
         assert_eq!(report["agent"]["status"], "idle");
         assert_eq!(report["agent"]["pending_waits"], serde_json::json!([]));
-        let messages = wait_for_wait_messages(&env, if delivers_exit { 2 } else { 1 });
+        let (mut messages, history) = env.store().list_messages_and_history().unwrap();
+        messages.extend(history);
         assert_eq!(messages.len(), if delivers_exit { 2 } else { 1 });
         assert_eq!(
             messages
@@ -1766,6 +1908,14 @@ fn watch_checkin_delivers_once_without_consuming_or_killing_command() {
             1
         );
         if delivers_exit {
+            assert_eq!(
+                messages
+                    .iter()
+                    .find(|message| message.message_id == notice.message_id)
+                    .unwrap()
+                    .status,
+                MessageStatus::Canceled
+            );
             let final_message = messages
                 .iter()
                 .find(|message| message.message_id != notice.message_id)
@@ -1880,7 +2030,28 @@ fn once_wait_subscriber_is_consumed_by_watcher_checkin() {
                 Some(rimz::harness::schedule::signal::WatchVerdict::Exited { code: Some(0), .. })
             )
     }));
-    assert_eq!(wait_for_wait_messages(&env, 3).len(), 3);
+    assert_eq!(wait_for_wait_messages(&env, 2).len(), 2);
+    let checkin_id = records
+        .iter()
+        .find(|record| {
+            record.task == name
+                && matches!(
+                    record.watch.as_ref(),
+                    Some(rimz::harness::schedule::signal::WatchVerdict::Running { .. })
+                )
+        })
+        .unwrap()
+        .message_id
+        .as_ref()
+        .unwrap();
+    assert!(
+        env.store()
+            .list_message_history()
+            .unwrap()
+            .iter()
+            .any(|message| &message.message_id == checkin_id
+                && message.status == MessageStatus::Canceled)
+    );
 }
 
 /// A watcher fires in its own process, and that fire reconciles before it
