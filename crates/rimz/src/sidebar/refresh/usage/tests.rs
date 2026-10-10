@@ -11,6 +11,55 @@ use crate::sidebar::test_support::{provider_panel, snapshot_with_panels};
 use super::*;
 
 #[test]
+fn entitlement_marker_creates_an_entry_and_keeps_first_seen() {
+    let (_dir, runtime) = account_usage_runtime();
+    let key: LoginKey = "claude@work".parse().unwrap();
+    mark_entitlement_lapsed(&runtime, &key, 100);
+    let cache = super::super::credits::read_credits_cache(&runtime.shared_credits_path());
+    let entry = cache
+        .logins
+        .get(&key)
+        .expect("marker creates the login entry");
+    assert_eq!(
+        serde_json::to_value(entry).unwrap()["entitlement"],
+        serde_json::json!({"lapsed":{"since_ms":100}})
+    );
+    assert_eq!(entry.oauth_read_at_ms, 0);
+    assert!(!entry.auth_settled);
+    assert_eq!(entry.direct_query_claim, None);
+    let mut entry = entry.clone();
+    entry.plan = Some("max".to_owned());
+    entry.ok = true;
+    entry.oauth_read_at_ms = 50;
+    entry.auth_settled = true;
+    entry.direct_query_claim = Some(super::super::credits::DirectQueryClaim {
+        nonce: Uuid::from_u128(1),
+        claimed_at_ms: 50,
+        requested_scope: Default::default(),
+        credentials_stamp: Some(7),
+        preflight_account_key: Some("owner".to_owned()),
+    });
+    super::super::credits::write_credits_cache(
+        &runtime.shared_credits_path(),
+        &CreditsCache {
+            logins: BTreeMap::from([(key.clone(), entry)]),
+            ..Default::default()
+        },
+    );
+    mark_entitlement_lapsed(&runtime, &key, 200);
+    let cache = super::super::credits::read_credits_cache(&runtime.shared_credits_path());
+    assert_eq!(cache.logins[&key].plan.as_deref(), Some("max"));
+    assert!(cache.logins[&key].ok);
+    assert_eq!(cache.logins[&key].oauth_read_at_ms, 0);
+    assert!(!cache.logins[&key].auth_settled);
+    assert_eq!(cache.logins[&key].direct_query_claim, None);
+    assert_eq!(
+        serde_json::to_value(&cache.logins[&key]).unwrap()["entitlement"],
+        serde_json::json!({"lapsed":{"since_ms":100}})
+    );
+}
+
+#[test]
 fn published_usage_preserves_identity_and_only_writes_present_credits() {
     for with_credits in [true, false] {
         let (_dir, runtime) = account_usage_runtime();
@@ -286,6 +335,16 @@ fn usage_windows(percent: u8) -> AgentRateLimits {
 #[test]
 fn account_usage_completion_publishes_complete_realtime_without_fallback() {
     let (_dir, runtime) = account_usage_runtime();
+    let key: LoginKey = "codex@default".parse().unwrap();
+    let mut entry = serde_json::to_value(ProviderCreditsEntry::default()).unwrap();
+    entry["entitlement"] = serde_json::json!({"lapsed":{"since_ms":100}});
+    super::super::credits::write_credits_cache(
+        &runtime.shared_credits_path(),
+        &CreditsCache {
+            logins: BTreeMap::from([(key.clone(), serde_json::from_value(entry).unwrap())]),
+            ..Default::default()
+        },
+    );
     let mut realtime = complete_realtime();
     realtime.rate_limits = Some(usage_windows(12));
 
@@ -298,6 +357,10 @@ fn account_usage_completion_publishes_complete_realtime_without_fallback() {
 
     assert!(wrote);
     let credits = super::super::credits::read_credits_cache(&runtime.shared_credits_path());
+    assert_eq!(
+        serde_json::to_value(&credits.logins[&key]).unwrap()["entitlement"],
+        serde_json::json!({"lapsed":{"since_ms":100}})
+    );
     assert_eq!(
         credits.logins
             [&crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("codex"))]

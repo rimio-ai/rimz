@@ -19,13 +19,13 @@ sources                                    user-scoped caches
               plan · version · budget bars · paid usage · spend headline
 ```
 
-Everything on this path is enrichment. A missing binary, a logged-out account, or an unreachable API degrades to an omitted plan label, a `v?` version placeholder, or an unknown budget track. Two consumers treat the facts as control inputs: [parked turns](#spent-windows-and-paused-rows) read fused windows, and a fresh managed Qwen launch may gate on an exact account binding ([Account scope](#account-scope)). Neither turns a quota reading into a provider billing statement. [Daily dollar caps](#daily-dollar-caps) decide on transcript spend, never on a provider probe.
+Everything on this path is enrichment. A missing binary, a logged-out account, or an unreachable API degrades to an omitted plan label, a `v?` version placeholder, or an unknown budget track. A confirmed subscription-access rejection instead records a persistent lapse and suppresses the cached plan, windows, and credits ([Entitlement](#entitlement)); it is not a credentials failure. Two consumers treat the facts as control inputs: [parked turns](#spent-windows-and-paused-rows) read fused windows, and a fresh managed Qwen launch may gate on an exact account binding ([Account scope](#account-scope)). Neither turns a quota reading into a provider billing statement. [Daily dollar caps](#daily-dollar-caps) decide on transcript spend, never on a provider probe.
 
 The native surfaces each provider reads are in its adapter page ([Per-provider mapping](#per-provider-mapping)); the raw endpoints are in the [upstream references](../../externals/agent-adapter/claude-reference.md#auth-surface). The dashboard on screen is [the interface reference](../../interface/sidebar.md#the-provider-dashboard).
 
 ## The model
 
-Four account-scoped facts feed a panel. Account identity and included balance ride the session's [`AgentContext`](../../../crates/rimz/src/agents/context.rs) ([model.md](./model.md#rich-context)) or the out-of-band probe; the producer lifts them to the account at aggregation time. Paid usage and reset credits ride the shared `credits.json` cache.
+Five account-scoped facts feed a panel. Account identity and included balance ride the session's [`AgentContext`](../../../crates/rimz/src/agents/context.rs) ([model.md](./model.md#rich-context)) or the out-of-band probe; the producer lifts them to the account at aggregation time. Paid usage, reset credits, and entitlement ride the shared `credits.json` cache.
 
 | Fact | Type | Carries |
 | --- | --- | --- |
@@ -33,6 +33,7 @@ Four account-scoped facts feed a panel. Account identity and included balance ri
 | Included balance | [`AgentRateLimits`](../../../crates/rimz/src/agents/context.rs) | ordered [`RateLimitWindow`](../../../crates/rimz/src/agents/context.rs)s, each with `used_percentage`, a typed `resets_at`, `observed_at`, a `source`, and either a `duration_mins` or a provider scope (stable id plus compact label) |
 | Paid usage | [`ExtraCredits`](../../../crates/rimz/src/agents/credits.rs) | used USD, remaining USD, a limit, or a disabled state, each optional |
 | Reset credits | [`ResetCredits`](../../../crates/rimz/src/agents/credits.rs) | Codex and Claude: the banked count, every known valid expiry, and the earliest expiry. Claude's claimability is separate from its banked count ([source and mapping](./adapter_claude.md#oauth-usage-probe)) |
+| Entitlement | [`Entitlement`](../../../crates/rimz/src/agents/credits.rs) | `Ok`, or `Lapsed` with the first-seen Unix-millisecond timestamp; independent of login credentials |
 
 A window's identity is its duration or its scope id. Duration windows sort short to long (`5h`, `7d`) and support reset roll-forward, not-started detection, pace, and surplus; a window with an unknown duration makes each of those claims fail closed. Named provider windows (Copilot's monthly `AIC`, Qwen's Alibaba windows) fuse by scope id, display their real reset, and never roll forward.
 
@@ -128,6 +129,12 @@ A metered panel takes `ExtraCredits` from its `credits.json` entry. An unmetered
 
 A credits entry older than `CREDITS_DISPLAY_MAX_AGE` (24 hours), absent, or scope-mismatched leaves the `ex` row unknown (an `∞` value over a dim empty track). API spend projections are never persisted, since the spending walk and config rebuild them.
 
+### Entitlement
+
+`ProviderCreditsEntry.entitlement` defaults to `Ok` when an older cache omits it. A direct `NotEntitled` completion records `Lapsed { since_ms }` at first observation and keeps that time across repeated rejections. A successful direct `Found` clears it; an account identity change resets it unless that same probe rejects subscription access. Adopting the first identity of a marker-only entry (no account key and no observed reading) does not reset its lapse. No-credentials, failed, unsupported, realtime, invalidation, and claim writes otherwise preserve it. Realtime data preserves the lapse even when its scope changes: only a direct read settles the new account's access.
+
+`apply_credits_cache_with` projects entitlement only for subscription (metered) panels with a login in use and a matching scope. Unmetered panels keep `Ok` and their API spend row even when their cache entry is lapsed. A projected lapse never expires with the credits display TTL: it clears the panel's plan, windows, extra credits, and reset credits, including facts from account probes and live context. `mark_entitlement_lapsed` creates a missing entry under the shared credits lock and resets the OAuth attempt, settled-auth state, and claim so the next direct read can confirm or clear it. Entitlement does not gate launch.
+
 ### Panel order and the cap
 
 With no explicit `provider_list`, a usage rank orders panels: a live room session first, then trailing-week, month, and year session counts, then a qualifying probed account, then the credential file's mtime, with registry order breaking ties. The mtime comes only from file-based probes. The rank decides both paint order and which panels survive the stacked dashboard's `max_provider_blocks` cap (default 3). A tabbed dashboard is bounded by its active block and shows every provider; its tab rail keeps the highest-ranked tabs that fit and always keeps the active one. An explicit `provider_list` sets the set and order and bypasses the cap, and `"all"` expands the remaining providers in rank order ([theme.md](../../guide/theme.md#display)).
@@ -140,7 +147,7 @@ The account, rate-limit, and credits caches live under `~/.rimz/cache/providers/
 | --- | --- | --- |
 | `accounts.json` | `logins` | probed `AgentAccount` per login, and the probe's `login` outcome (`logged_in`, `logged_out`; absent after a failed probe) |
 | `rate_limits.json` | `entries` (login) | fused windows, account scope, bound account key and its authoritative copy, pending refills, the unknown-episode marker; schema gated by `RATE_LIMITS_CACHE_VERSION` |
-| `credits.json` | `logins` | paid usage, Codex plan, Codex and Claude reset credits, the usage owner identity, and the direct-query claim |
+| `credits.json` | `logins` | paid usage, Codex plan, Codex and Claude reset credits, entitlement with its first-seen time, the usage owner identity, and the direct-query claim |
 
 The elected producer publishes all three; consumers read them and never fork. A publication replaces only the probing room's login keys. A cache in an older or kind-keyed shape cold-drops, because every value is rebuildable.
 
@@ -211,7 +218,7 @@ A panel meets its cached entry under the same rule as [session admission](#which
 
 `credits.json` has the same login keying and lock discipline as `rate_limits.json`. It persists provider-reported paid usage, Codex plan, and Codex and Claude reset-credit fields, so partial observations survive idle sessions. Reset credits keep every known valid expiry in ascending order, equal deadlines included; the earliest is the compact summary, and the provider count stays authoritative when detail is absent or malformed.
 
-Identity keeps the cache honest across account changes. Every [`AccountUsageProbe`](../../../crates/rimz/src/agents/credits.rs) result (found, no credentials, or failed) carries one `AccountUsageIdentity`: the non-secret owner and scope of the credentials read. `AccountUsageSnapshot` holds only the normalized plan, windows, paid credits, and reset credits. Pi and OpenCode select their delegated owner once through [`delegated_account.rs`](../../../crates/rimz/src/agents/delegated_account.rs), preferring an OpenAI account id and otherwise hashing the refresh or access token under an adapter-specific domain.
+Identity keeps the cache honest across account changes. Every identity-bearing [`AccountUsageProbe`](../../../crates/rimz/src/agents/credits.rs) result (found, no credentials, not entitled, or failed) carries one `AccountUsageIdentity`: the non-secret owner and scope of the credentials read. `AccountUsageSnapshot` holds only the normalized plan, windows, paid credits, and reset credits. Pi and OpenCode select their delegated owner once through [`delegated_account.rs`](../../../crates/rimz/src/agents/delegated_account.rs), preferring an OpenAI account id and otherwise hashing the refresh or access token under an adapter-specific domain.
 
 Completion compares owners symmetrically. `None` to `Some`, `Some` to `None`, two different identified owners, or two different scopes each block carrying the prior plan, paid usage, and reset credits, and drop the kind's cached windows. A failed read with no known owner change keeps the prior display data; a failed read that proves a new owner drops prior truth without publishing unverified values.
 
@@ -240,7 +247,7 @@ The helper runs two segments. First it folds a realtime account reading when the
 
 Fusion can pull the next read forward. When the producer persists a new reset epoch, parks a new pending refill, or first shows an unknown panel, it clears `oauth_read_at_ms`, the settled state, and any stale claim, so scheduling in the same pass re-probes. An already pending refill does not force another read; a successful authoritative response clears it, so a later contradictory low reading can park and request again.
 
-Direct account-usage HTTP ([`agents/credits.rs`](../../../crates/rimz/src/agents/credits.rs)) retries transport failures, body-read failures, and 5xx responses up to three attempts with a 300 ms backoff. Redirects are disabled, 401 and 403 both count as authentication rejection, and 429 or any other status returns without retry. Errors never include response bodies or request headers. A surfaced failure reports off-box under the one `oauth_usage` operation with a `provider` tag, and the error detail names the request host ([diagnostics.md](../diagnostics.md)).
+Direct account-usage HTTP ([`agents/credits.rs`](../../../crates/rimz/src/agents/credits.rs)) retries transport failures, body-read failures, and 5xx responses up to three attempts with a 300 ms backoff. Redirects are disabled; plain 401 and 403 count as authentication rejection, while Claude's organization-access 403 becomes `NotEntitled`. Status errors carry a bounded response body only to the adapter's classifier, never to diagnostic formatting or off-box fields. 429 or any other status returns without retry. A surfaced transient failure reports off-box under the one `oauth_usage` operation with a `provider` tag, and the error detail names the request host ([diagnostics.md](../diagnostics.md)).
 
 ## Spent windows and paused rows
 

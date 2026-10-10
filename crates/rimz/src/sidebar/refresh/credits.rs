@@ -10,7 +10,7 @@ use uuid::Uuid;
 use crate::RuntimePaths;
 use crate::agents::RoomLoginSet;
 use crate::agents::{
-    AccountUsageIdentity, AccountUsageProbe, AccountUsageSnapshot, ExtraCredits,
+    AccountUsageIdentity, AccountUsageProbe, AccountUsageSnapshot, Entitlement, ExtraCredits,
     ProviderAccountScope, ResetCredits,
 };
 use crate::config::AccountsConfig;
@@ -33,13 +33,15 @@ pub(super) struct CreditsCache {
 pub(super) struct ProviderCreditsEntry {
     #[serde(default)]
     pub scope: ProviderAccountScope,
+    #[serde(default)]
+    pub entitlement: Entitlement,
     pub observed_at_ms: u64,
     /// Last OAuth account-usage attempt. App-server/realtime credit writes
     /// preserve this stamp and its settled-auth state and never advance the
     /// OAuth cadence.
     #[serde(default)]
     pub oauth_read_at_ms: u64,
-    /// Last OAuth attempt settled as an auth failure: retried on the long TTL
+    /// Last OAuth attempt settled as an auth or entitlement rejection: retried on the long TTL
     /// until the credential source changes.
     #[serde(default)]
     pub auth_settled: bool,
@@ -63,6 +65,12 @@ pub(super) struct ProviderCreditsEntry {
 }
 
 impl ProviderCreditsEntry {
+    pub(super) fn invalidate_oauth_read(&mut self) {
+        self.oauth_read_at_ms = 0;
+        self.auth_settled = false;
+        self.direct_query_claim = None;
+    }
+
     /// Complete one matching account-usage claim without I/O or clock reads.
     pub(super) fn complete_account_usage(
         self,
@@ -79,6 +87,7 @@ impl ProviderCreditsEntry {
             account_key: claim.preflight_account_key.clone(),
             credentials_stamp: claim.credentials_stamp,
         };
+        let not_entitled = matches!(&probe, AccountUsageProbe::NotEntitled(_));
         let NormalizedProbe {
             identity,
             snapshot,
@@ -86,9 +95,20 @@ impl ProviderCreditsEntry {
             failed,
         } = normalize_probe(probe, claim_identity);
         let account_changed = account_identity_changed(&self, &identity, failed);
+        let mut entitlement = if snapshot.is_some()
+            || (account_changed && (self.account_key.is_some() || self.observed_at_ms != 0))
+        {
+            Entitlement::Ok
+        } else {
+            self.entitlement
+        };
+        if not_entitled && entitlement == Entitlement::Ok {
+            entitlement = Entitlement::Lapsed { since_ms: now_ms };
+        }
         let (plan, extra_credits, reset_credits) = account_usage_credit_fields(snapshot.as_ref());
         let mut next = Self {
             scope: identity.scope.clone(),
+            entitlement,
             observed_at_ms: now_ms,
             oauth_read_at_ms: now_ms,
             auth_settled,
@@ -259,6 +279,9 @@ pub(super) fn merge_provider_realtime_usage(
         return;
     };
     let mut cache = read_credits_cache(&path);
+    if let Some(prior) = cache.logins.get(key) {
+        entry.entitlement = prior.entitlement;
+    }
     if let Some(prior) = cache
         .logins
         .get(key)
@@ -517,9 +540,7 @@ pub(super) fn invalidate_oauth_read(runtime: &RuntimePaths, key: &LoginKey) {
     let Some(entry) = cache.logins.get_mut(key) else {
         return;
     };
-    entry.oauth_read_at_ms = 0;
-    entry.auth_settled = false;
-    entry.direct_query_claim = None;
+    entry.invalidate_oauth_read();
     cache.refreshed_at_ms = unix_now_ms();
     write_credits_cache(&path, &cache);
 }
@@ -617,14 +638,22 @@ fn apply_credits_cache_with(
 ) {
     let in_use = logins.keys_in_use();
     for panel in &mut snapshot.providers {
+        let entry = in_use
+            .contains(&panel.login_key())
+            .then(|| panel.login_key())
+            .and_then(|key| cache.logins.get(&key))
+            .filter(|entry| panel.metered && entry.scope == panel.account_scope);
+        panel.entitlement = entry.map_or(Entitlement::Ok, |entry| entry.entitlement);
+        if matches!(panel.entitlement, Entitlement::Lapsed { .. }) {
+            panel.plan = None;
+            panel.windows.clear();
+            panel.extra_credits = None;
+            panel.reset_credits = None;
+            continue;
+        }
         let ceiling = accounts.usage_limit(&panel.kind);
         if panel.metered {
-            let displayable_entry = in_use
-                .contains(&panel.login_key())
-                .then(|| panel.login_key())
-                .and_then(|key| cache.logins.get(&key))
-                .filter(|entry| entry.scope == panel.account_scope)
-                .filter(|entry| entry_is_displayable(entry, now_ms));
+            let displayable_entry = entry.filter(|entry| entry_is_displayable(entry, now_ms));
             if panel.plan.is_none() {
                 panel.plan = displayable_entry
                     .and_then(|entry| entry.plan.as_deref())

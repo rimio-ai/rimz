@@ -123,6 +123,7 @@ fn provider_panel(index: usize) -> SidebarProviderPanel {
         account: Default::default(),
         kind: format!("provider{index}"),
         account_scope: Default::default(),
+        entitlement: Default::default(),
         account_key: None,
         product_name: format!("Provider {index}"),
         art: vec!["▐███▌".to_owned(), "▝▜█▛▘".to_owned(), " ▘▝ ".to_owned()],

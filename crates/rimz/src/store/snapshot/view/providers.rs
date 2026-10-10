@@ -198,6 +198,7 @@ impl SidebarSnapshot {
                     kind,
                     account: key.name.clone(),
                     account_scope,
+                    entitlement: Default::default(),
                     account_key,
                     product_name: if key.name.is_default() {
                         identity.product_name

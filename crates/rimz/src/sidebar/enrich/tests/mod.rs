@@ -179,6 +179,67 @@ fn metered_account() -> crate::agents::AgentAccount {
     }
 }
 
+#[test]
+fn entitlement_projection_overrides_cached_max_and_fresh_windows_only_for_its_login() {
+    let (_dir, runtime, _) = runtime();
+    let key: crate::ids::LoginKey = "claude@default".parse().unwrap();
+    let other: crate::ids::LoginKey = "claude@work".parse().unwrap();
+    let account = crate::agents::AgentAccount {
+        plan: Some("max".to_owned()),
+        ..metered_account()
+    };
+    crate::sidebar::refresh::usage::publish_account_usage_snapshot(
+        &runtime,
+        &key,
+        Default::default(),
+        crate::agents::AccountUsageSnapshot {
+            rate_limits: Some(crate::agents::AgentRateLimits {
+                windows: vec![crate::agents::RateLimitWindow {
+                    used_percentage: Some(7),
+                    duration_mins: Some(300),
+                    resets_at: Some(Timestamp::now() + SignedDuration::from_hours(1)),
+                    ..Default::default()
+                }],
+            }),
+            extra_credits: Some(crate::agents::ExtraCredits::Disabled),
+            ..Default::default()
+        },
+    );
+    let entry = serde_json::json!({
+        "observed_at_ms": 0,
+        "ok": false,
+        "entitlement": {"lapsed":{"since_ms":100}},
+    });
+    for (lapsed_key, applies) in [(other, false), (key.clone(), true)] {
+        atomic::write_temp_then_rename_cache(
+            &runtime.shared_credits_path(),
+            &serde_json::json!({"refreshed_at_ms":0,"logins":{lapsed_key.to_string():entry}}),
+        )
+        .unwrap();
+        let panels = provider_panels_from_caches(
+            &runtime,
+            &crate::agents::RoomLoginSet::native(),
+            &Default::default(),
+            BTreeMap::from([(key.clone(), account.clone())]),
+            &Default::default(),
+        );
+        let panel = &panels[0];
+        if applies {
+            assert_eq!(panel.plan, None);
+            assert!(panel.windows.is_empty());
+            assert_eq!(panel.extra_credits, None);
+            assert_eq!(panel.reset_credits, None);
+            assert_eq!(
+                serde_json::to_value(panel).unwrap()["entitlement"],
+                entry["entitlement"]
+            );
+        } else {
+            assert_eq!(panel.plan.as_deref(), Some("Claude Max"));
+            assert_eq!(panel.windows.len(), 1);
+        }
+    }
+}
+
 fn runtime() -> (tempfile::TempDir, RuntimePaths, SidebarSnapshot) {
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());

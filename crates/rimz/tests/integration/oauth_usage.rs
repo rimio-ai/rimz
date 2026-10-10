@@ -18,6 +18,42 @@ fn refresh_usage_argv(env: &Env, kind: &str, claim_id: &str) -> Vec<String> {
 }
 
 #[test]
+fn claude_organization_rejection_records_lapsed_entitlement_without_body_text() {
+    let env = Env::new();
+    let claim_id = env.seed_usage_claim("claude");
+    let home = env.home_root.join(".claude");
+    std::fs::create_dir_all(&home).unwrap();
+    write_claude_credentials(&home, "work");
+    let (origin, server) = serve_http_routes(vec![("GET /api/oauth/usage", 403,
+        r#"{"error":{"code":"oauth_not_allowed_for_organization","message":"sentinel-private-body"}}"#.to_owned())], 1);
+    let output = env
+        .rimz()
+        .args(refresh_usage_argv(&env, "claude", &claim_id))
+        .env(
+            "RIMZ_CLAUDE_OAUTH_USAGE_URL",
+            format!("{origin}/api/oauth/usage"),
+        )
+        .bounded_output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("sentinel-private-body"));
+    assert_eq!(server.join().unwrap().len(), 1);
+    let cache = read_json(env.runtime_paths().shared_credits_path());
+    let entry = &cache["logins"]["claude@default"];
+    assert!(
+        entry["entitlement"]["lapsed"]["since_ms"]
+            .as_u64()
+            .is_some_and(|since| since > 0),
+        "{entry}"
+    );
+    assert_eq!(entry["auth_settled"], true);
+}
+
+#[test]
 fn claude_old_workspace_session_cannot_repaint_switched_account_limits() {
     let env = Env::new();
     let old_project = env.home_root.join("old-project");

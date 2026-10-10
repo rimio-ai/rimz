@@ -644,6 +644,7 @@ fn reset_epoch_invalidates_oauth_usage_throttle() {
                 login_key("codex"),
                 crate::sidebar::refresh::credits::ProviderCreditsEntry {
                     scope: Default::default(),
+                    entitlement: Default::default(),
                     observed_at_ms: 1,
                     oauth_read_at_ms: 1234,
                     auth_settled: false,
@@ -688,6 +689,7 @@ fn seed_settled_credits(runtime: &RuntimePaths, kind: &str, oauth_read_at_ms: u6
                 login_key(kind),
                 crate::sidebar::refresh::credits::ProviderCreditsEntry {
                     scope: Default::default(),
+                    entitlement: Default::default(),
                     observed_at_ms: oauth_read_at_ms,
                     oauth_read_at_ms,
                     auth_settled: true,

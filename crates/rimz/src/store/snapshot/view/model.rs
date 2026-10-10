@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::agents::AgentStatus;
 use crate::agents::{
-    ExtraCredits, ProviderAccountScope, RateLimitWindow, ResetCredits, SpendTally,
+    Entitlement, ExtraCredits, ProviderAccountScope, RateLimitWindow, ResetCredits, SpendTally,
 };
 use crate::config::PaletteRole;
 use crate::ids::LinkTier;
@@ -57,6 +57,8 @@ pub struct SidebarProviderPanel {
     /// Account cache identity selected by the adapter for this panel.
     #[serde(default, skip_serializing_if = "ProviderAccountScope::is_kind_wide")]
     pub account_scope: ProviderAccountScope,
+    #[serde(default)]
+    pub entitlement: Entitlement,
     /// Opaque account fingerprint whose live windows this panel represents.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub account_key: Option<String>,
