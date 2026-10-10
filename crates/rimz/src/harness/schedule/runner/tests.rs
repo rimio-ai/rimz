@@ -739,6 +739,24 @@ fn wait_for_run_lock_release_observes_guard_drop() {
 }
 
 #[test]
+fn wait_for_process_exit_reads_the_holder_dead_within_the_grace() {
+    let mut exited = std::process::Command::new("true")
+        .spawn()
+        .expect("spawn true");
+    exited.wait().expect("reap true");
+    assert!(wait_for_process_exit(exited.id(), Duration::ZERO));
+
+    let mut live = std::process::Command::new("sleep")
+        .arg("30")
+        .spawn()
+        .expect("spawn sleep");
+    let waited = wait_for_process_exit(live.id(), Duration::from_millis(50));
+    live.kill().expect("kill sleep");
+    live.wait().expect("reap sleep");
+    assert!(!waited, "a live process outlasts the grace");
+}
+
+#[test]
 fn check_polarity_truth_table() {
     let outcome = |passed, timed_out, code| CheckOutcome {
         passed,

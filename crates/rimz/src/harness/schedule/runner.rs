@@ -65,6 +65,7 @@ const CHECK_POLL_INTERVAL: Duration = Duration::from_millis(20);
 const CHECK_DRAIN_GRACE: Duration = Duration::from_millis(200);
 const CHECK_INTERRUPT_GRACE: Duration = Duration::from_secs(1);
 const RUN_LOCK_RELEASE_POLL_INTERVAL: Duration = Duration::from_millis(200);
+const HOLDER_EXIT_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const CHECK_OUTPUT_CAP: usize = 16 * 1024;
 const TASK_TIMEOUT_UNITS: &[DurationUnit] = &[
     DurationUnit::Second,
@@ -2049,13 +2050,24 @@ pub fn stop_task(
     }
 
     let signal_error = holder.and_then(|info| signal_run_lock_holder(&info).err());
+    let signal_deadline = Instant::now() + STOP_GRACE;
 
     if signal_error.is_none()
         && let Some(info) = holder
         && wait_for_run_lock_release_path(&lock, STOP_GRACE)?
     {
         append_stopped_record(name, root, info, run.as_ref());
-        // A run stopped while held for its turn dies holding a ticket.
+        // A run stopped while held for its turn dies holding a ticket. The
+        // kernel frees the lock before `/proc` reports the holder dead, and the
+        // sweep removes a ticket only once its owner reads dead, so wait for
+        // that within the same grace. A holder still live past it keeps its
+        // ticket for the next admit's sweep.
+        if !wait_for_process_exit(
+            info.pid,
+            signal_deadline.saturating_duration_since(Instant::now()),
+        ) {
+            tracing::debug!(pid = info.pid, "stopped loop run holder still reads live");
+        }
         throttle::reap();
         return Ok(StopOutcome::Stopped {
             run_id: run.map(|record| record.run_id),
@@ -2333,6 +2345,18 @@ fn wait_for_run_lock_release_path(path: &Path, grace: Duration) -> Result<bool> 
         }
         std::thread::sleep(RUN_LOCK_RELEASE_POLL_INTERVAL.min(remaining));
     }
+}
+
+fn wait_for_process_exit(pid: u32, grace: Duration) -> bool {
+    let deadline = Instant::now() + grace;
+    while crate::proc::process_is_live(pid, None) {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return false;
+        }
+        std::thread::sleep(HOLDER_EXIT_POLL_INTERVAL.min(remaining));
+    }
+    true
 }
 
 fn acquire_run_lock_file(mut file: File, path: &Path) -> Result<RunLockAttempt> {
