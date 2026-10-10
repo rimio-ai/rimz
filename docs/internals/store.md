@@ -159,7 +159,7 @@ Ingress lifecycle payloads retain the recorded transition and ping edge for redo
 
 ### The workspace record
 
-Every writer stamps `layout: 2`; an absent stamp reads as layout 1. `rimz start` and `rimz reset` tear down a layout-1 room and replace it with a fresh room, without carrying over history. `Store::open` refuses it with those commands as the fix. Record scanners skip it, and `rimz gc --all` prunes it with its runtime tree.
+Every writer stamps `layout: 2`; an absent stamp reads as layout 1. `rimz start` and `rimz reset` tear down a layout-1 room and replace it with a fresh room, without carrying over history, and refuse with the held-room error while another running room holds its `room.lock`. `Store::open` refuses it with those commands as the fix. Record scanners skip it, and `rimz gc --all` prunes it with its runtime tree.
 
 `workspace.json` is the index maintenance commands read after a project root moves or vanishes ([`workspace/record.rs`](../../crates/rimz/src/workspace/record.rs)). It records the project root and its class, the active worktree root, the mux session name, the executable the room serves, and the room's provider accounts. Only room creators re-record identity; participant opens leave its bytes and modification time unchanged. Explicit owner and account updates still write their fields, preserving the others.
 
