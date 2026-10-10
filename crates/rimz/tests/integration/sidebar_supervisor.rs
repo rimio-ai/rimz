@@ -458,15 +458,17 @@ fn pane_watchdog_keeps_absence_strikes_across_host_rounds() {
     pane.start(|command| {
         command
             .env("RIMZ_TEST_SIDEBAR_PANE_PROBE", "absent")
-            .env("RIMZ_TEST_SIDEBAR_PANE_PROBE_INTERVAL_MS", "1000");
+            .env("RIMZ_TEST_SIDEBAR_PANE_PROBE_INTERVAL_MS", "1500");
     });
+    // Two strikes land before the reload. Retained, the third closes within
+    // one interval of the new round; reset, three fresh probes need 4.5s.
     let (stream, _) = pane.accept(None);
-    thread::sleep(Duration::from_millis(1250));
+    thread::sleep(Duration::from_millis(3250));
     write_line(&stream, &serde_json::json!({"control": "reload"})).unwrap();
     drop(stream);
     let (_stream, _) = pane.accept(None);
     assert!(
-        wait_child(pane.child.as_mut().unwrap(), Duration::from_millis(2500)).success(),
+        wait_child(pane.child.as_mut().unwrap(), Duration::from_millis(3000)).success(),
         "retained absence strikes must close before three new probes can run"
     );
     assert_eq!(pane.event("supervisor_pane_gone")["pane_id"], "tmux:%11");
