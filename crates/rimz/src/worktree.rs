@@ -34,6 +34,7 @@ pub use pr::{PrBranchChoice, PrBranchDivergence, create_from_pr};
 
 const MARKER_FILE: &str = "rimz-worktree.json";
 const MARKER_VERSION: u32 = 4;
+const TRUNK_FETCH_TIMEOUT: Duration = Duration::from_secs(60);
 const LANDED_BASE_SCAN_CAP: u32 = 500;
 pub const WORKTREE_REMOVED_ARCHIVE_REASON: &str = "worktree removed";
 const AUTO_ADJECTIVES: &[&str] = &[
@@ -226,6 +227,7 @@ impl std::fmt::Display for StaleBase {
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct CreatedWorktree {
     pub stale_base: Option<StaleBase>,
+    pub trunk_fetch: Option<TrunkFetchFailure>,
     pub marker: WorktreeMarker,
     pub reused: bool,
     /// Files copied into the worktree from the project's `.worktreeinclude`.
@@ -250,6 +252,7 @@ pub struct PushDestination {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LaunchCheckout {
     pub stale_base: Option<StaleBase>,
+    pub trunk_fetch: Option<TrunkFetchFailure>,
     /// Present only after a fresh managed creation, including its hook, succeeded.
     pub created: Option<WorktreeMarker>,
     pub cwd: PathBuf,
@@ -632,6 +635,38 @@ pub fn retire_removal(
     }
 }
 
+/// Base policy for a freshly created launch worktree.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LaunchBase {
+    /// Use `agents.worktree.base`, or local `HEAD` when unset.
+    Configured,
+    /// Use the configured base, or the remote default branch when unset. A `fresh` base, set or unset, is fetched before branching.
+    Team,
+}
+
+/// A failed team trunk fetch and the base used instead.
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub struct TrunkFetchFailure {
+    pub remote_ref: String,
+    pub fallback: String,
+    pub error: String,
+}
+
+impl std::fmt::Display for TrunkFetchFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "could not fetch {} for the team worktree ({}); branching from ",
+            self.remote_ref, self.error
+        )?;
+        if self.fallback == self.remote_ref {
+            write!(f, "{} as last fetched", self.fallback)
+        } else {
+            write!(f, "local {}", self.fallback)
+        }
+    }
+}
+
 pub fn create(
     repo_root: &Path,
     config: &WorktreeConfig,
@@ -639,6 +674,7 @@ pub fn create(
     base: Option<WorktreeBase>,
     branch: Option<&str>,
     reuse_existing: bool,
+    launch_base: LaunchBase,
 ) -> Result<CreatedWorktree> {
     config.hooks.validate()?;
     ensure_repo(repo_root)?;
@@ -652,13 +688,37 @@ pub fn create(
     };
     let branch = resolve_branch(branch, derived_branch.as_deref(), &name)?;
 
-    let base = base.unwrap_or_else(|| config.base.clone());
-    let checkout_base_ref = base.as_refspec().to_owned();
+    let configured_base = base.or_else(|| config.base.clone());
+    let defaulted = configured_base.is_none();
+    let mut base = configured_base.unwrap_or(match launch_base {
+        LaunchBase::Configured => WorktreeBase::Head,
+        LaunchBase::Team => WorktreeBase::Fresh,
+    });
+    let mut trunk_fetch = None;
+    let team_trunk = launch_base == LaunchBase::Team && base == WorktreeBase::Fresh;
+    if team_trunk {
+        if git_stdout(repo_root, ["remote", "get-url", "origin"]).is_ok() {
+            (base, trunk_fetch) = fetch_team_trunk(repo_root);
+        } else if defaulted {
+            base = WorktreeBase::Head;
+        }
+    }
+    let remote_trunk = match &base {
+        WorktreeBase::Explicit(remote_ref) if team_trunk => Some(remote_ref),
+        _ => None,
+    };
+    let checkout_base_ref = match remote_trunk {
+        Some(remote_ref) => format!("refs/remotes/{remote_ref}"),
+        None => base.as_refspec().to_owned(),
+    };
     let base_ref = resolve_base_commit(repo_root, &checkout_base_ref)?;
     let base_branch = resolve_base_branch(repo_root, &base);
-    let stale_base = base_branch
-        .as_deref()
-        .and_then(|branch| stale_base(repo_root, branch));
+    let stale_base = match remote_trunk {
+        Some(_) => None,
+        None => base_branch
+            .as_deref()
+            .and_then(|branch| stale_base(repo_root, branch)),
+    };
     let mut created = add_worktree(
         repo_root,
         name,
@@ -673,7 +733,99 @@ pub fn create(
         &config.hooks,
     )?;
     created.stale_base = stale_base;
+    created.trunk_fetch = trunk_fetch;
     Ok(created)
+}
+
+fn fetch_team_trunk(repo_root: &Path) -> (WorktreeBase, Option<TrunkFetchFailure>) {
+    let cached_head = git_stdout(repo_root, ["symbolic-ref", "refs/remotes/origin/HEAD"])
+        .ok()
+        .and_then(|head| {
+            head.strip_prefix("refs/remotes/origin/")
+                .map(|branch| format!("origin/{branch}"))
+        });
+    let mut remote_ref = cached_head.clone().unwrap_or_else(|| {
+        format!(
+            "origin/{}",
+            trunk_ref(repo_root).as_deref().unwrap_or("HEAD")
+        )
+    });
+    let fetched = (|| -> Result<()> {
+        if cached_head.is_none() {
+            let output = git_network_output(
+                repo_root,
+                ["ls-remote", "--symref", "origin", "HEAD"],
+                TRUNK_FETCH_TIMEOUT,
+            )?;
+            let output = String::from_utf8_lossy(&output.stdout);
+            let branch = output
+                .lines()
+                .find_map(|line| {
+                    let (target, name) = line.split_once('\t')?;
+                    if name != "HEAD" {
+                        return None;
+                    }
+                    target.strip_prefix("ref: refs/heads/")
+                })
+                .ok_or_else(|| {
+                    WorktreeErr::Parse("origin did not advertise a default branch".into())
+                })?;
+            remote_ref = format!("origin/{branch}");
+        }
+        let branch = remote_ref
+            .strip_prefix("origin/")
+            .ok_or_else(|| WorktreeErr::Parse("origin/HEAD points outside origin".into()))?;
+        let refspec = format!("+refs/heads/{branch}:refs/remotes/{remote_ref}");
+        git_network_output(
+            repo_root,
+            [
+                "fetch",
+                "--no-tags",
+                "--no-recurse-submodules",
+                "origin",
+                &refspec,
+            ],
+            TRUNK_FETCH_TIMEOUT,
+        )?;
+        if cached_head.is_none() {
+            git_run(
+                repo_root,
+                [
+                    "symbolic-ref",
+                    "refs/remotes/origin/HEAD",
+                    &format!("refs/remotes/{remote_ref}"),
+                ],
+            )?;
+        }
+        Ok(())
+    })();
+    let Err(error) = fetched else {
+        return (WorktreeBase::Explicit(remote_ref), None);
+    };
+    let (base, fallback) =
+        if resolve_base_commit(repo_root, &format!("refs/remotes/{remote_ref}")).is_ok() {
+            (
+                WorktreeBase::Explicit(remote_ref.clone()),
+                remote_ref.clone(),
+            )
+        } else {
+            (
+                WorktreeBase::Head,
+                current_branch(repo_root).unwrap_or_else(|| "HEAD".into()),
+            )
+        };
+    let error = match error {
+        WorktreeErr::Git { stderr, .. } => stderr,
+        error => error.to_string(),
+    };
+    (
+        base,
+        Some(TrunkFetchFailure {
+            remote_ref,
+            fallback,
+            error: error.split_whitespace().collect::<Vec<_>>().join(" "),
+        }),
+    )
 }
 
 /// Resolve the cwd and optional RimZ-owned checkout for an agent launch.
@@ -687,10 +839,12 @@ pub fn resolve_launch_checkout(
     from_pr: Option<&PrTarget>,
     pr_branch: Option<PrBranchChoice>,
     cwd: Option<&Path>,
+    base: LaunchBase,
 ) -> Result<LaunchCheckout> {
     if let Some(cwd) = cwd {
         return Ok(LaunchCheckout {
             stale_base: None,
+            trunk_fetch: None,
             reused: false,
             created: None,
             cwd: cwd.to_path_buf(),
@@ -714,6 +868,7 @@ pub fn resolve_launch_checkout(
         let marker = created.marker;
         return Ok(LaunchCheckout {
             stale_base: None,
+            trunk_fetch: None,
             reused: created.reused,
             created: created_marker,
             branch: current_branch(&marker.worktree_path),
@@ -729,6 +884,7 @@ pub fn resolve_launch_checkout(
     let Some(raw_name) = worktree else {
         return Ok(LaunchCheckout {
             stale_base: None,
+            trunk_fetch: None,
             reused: false,
             created: None,
             branch: current_branch(&workspace.worktree_root),
@@ -751,11 +907,13 @@ pub fn resolve_launch_checkout(
         None,
         None,
         !name.is_empty(),
+        base,
     )?;
     let created_marker = (!created.reused).then(|| created.marker.clone());
     let marker = created.marker;
     Ok(LaunchCheckout {
         stale_base: created.stale_base,
+        trunk_fetch: created.trunk_fetch,
         reused: created.reused,
         created: created_marker,
         branch: current_branch(&marker.worktree_path),
@@ -808,6 +966,7 @@ pub fn resolve_unmanaged_launch_checkout(
     }
     Ok(LaunchCheckout {
         stale_base: None,
+        trunk_fetch: None,
         reused: false,
         created: None,
         branch: current_branch(&path),
@@ -1443,6 +1602,7 @@ fn resolve_fresh_worktree(
             })?;
             return Ok(WorktreeCreateTarget::Reuse(Box::new(CreatedWorktree {
                 stale_base: None,
+                trunk_fetch: None,
                 reused: true,
                 marker,
                 included: 0,
@@ -1485,6 +1645,7 @@ fn add_worktree(
             [
                 "worktree",
                 "add",
+                "--no-track",
                 "-b",
                 branch.as_str(),
                 path_arg.as_str(),
@@ -1562,6 +1723,7 @@ fn finish_worktree(
     }
     Ok(CreatedWorktree {
         stale_base: None,
+        trunk_fetch: None,
         reused: false,
         marker,
         included,

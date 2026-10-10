@@ -1027,6 +1027,7 @@ fn env_reminder_compile_resolves_worktree_from_launch_cwd() {
         None,
         None,
         false,
+        crate::worktree::LaunchBase::Configured,
     )
     .unwrap();
     let cwd = &created.marker.worktree_path;

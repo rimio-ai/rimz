@@ -185,6 +185,7 @@ fn launch_checkout_without_flags_keeps_current_worktree() {
         None,
         None,
         None,
+        LaunchBase::Configured,
     )
     .expect("current checkout");
 
@@ -207,6 +208,7 @@ fn launch_checkout_cwd_override_is_user_owned() {
         None,
         None,
         Some(directory.path()),
+        LaunchBase::Configured,
     )
     .unwrap();
     assert_eq!(checkout.cwd, directory.path());
@@ -243,8 +245,16 @@ fn launch_checkout_reports_non_repository_flags_exactly() {
     let workspace = workspace(RootClass::Directory);
     let config = WorktreeConfig::default();
 
-    let worktree = resolve_launch_checkout(&workspace, &config, Some("demo"), None, None, None)
-        .expect_err("worktree needs repo");
+    let worktree = resolve_launch_checkout(
+        &workspace,
+        &config,
+        Some("demo"),
+        None,
+        None,
+        None,
+        LaunchBase::Configured,
+    )
+    .expect_err("worktree needs repo");
     assert_eq!(
         worktree.to_string(),
         "--worktree requires a git repository-backed room"
@@ -256,8 +266,16 @@ fn launch_checkout_reports_non_repository_flags_exactly() {
         host: None,
         repo: None,
     };
-    let from_pr = resolve_launch_checkout(&workspace, &config, None, Some(&pr), None, None)
-        .expect_err("PR needs repo");
+    let from_pr = resolve_launch_checkout(
+        &workspace,
+        &config,
+        None,
+        Some(&pr),
+        None,
+        None,
+        LaunchBase::Configured,
+    )
+    .expect_err("PR needs repo");
     assert_eq!(
         from_pr.to_string(),
         "--from-pr requires a git repository-backed room"
@@ -280,6 +298,7 @@ fn launch_checkout_creates_from_the_current_repo_root() {
         None,
         None,
         None,
+        LaunchBase::Configured,
     )
     .expect("create from current repo");
 
@@ -318,6 +337,7 @@ fn launch_checkout_reports_actual_branch_not_directory_name() {
         None,
         None,
         None,
+        LaunchBase::Configured,
     )
     .expect("managed checkout");
     git_run(&checkout.cwd, ["checkout", "-b", "actual-branch"]).expect("change branch");
@@ -329,14 +349,23 @@ fn launch_checkout_reports_actual_branch_not_directory_name() {
         None,
         None,
         None,
+        LaunchBase::Configured,
     )
     .expect("existing managed checkout");
     assert_eq!(selected.branch.as_deref(), Some("actual-branch"));
     assert_eq!(selected.worktree_name.as_deref(), Some("directory-name"));
 
     workspace.worktree_root = checkout.cwd.clone();
-    let current = resolve_launch_checkout(&workspace, &config, None, None, None, None)
-        .expect("current checkout");
+    let current = resolve_launch_checkout(
+        &workspace,
+        &config,
+        None,
+        None,
+        None,
+        None,
+        LaunchBase::Configured,
+    )
+    .expect("current checkout");
     assert_eq!(current.branch.as_deref(), Some("actual-branch"));
 
     let unmanaged_path = worktree_path(&repo, &config, "user-checkout").expect("path");
@@ -363,11 +392,20 @@ fn launch_checkout_reports_actual_branch_not_directory_name() {
         None,
         None,
         None,
+        LaunchBase::Configured,
     )
     .expect("detached managed checkout");
     assert_eq!(detached.branch, None);
-    let current = resolve_launch_checkout(&workspace, &config, None, None, None, None)
-        .expect("detached current");
+    let current = resolve_launch_checkout(
+        &workspace,
+        &config,
+        None,
+        None,
+        None,
+        None,
+        LaunchBase::Configured,
+    )
+    .expect("detached current");
     assert_eq!(current.branch, None);
 
     git_run(&unmanaged_path, ["checkout", "--detach"]).expect("detach user checkout");
@@ -391,6 +429,7 @@ fn launch_checkout_falls_back_to_the_room_repo_without_a_current_repo() {
         None,
         None,
         None,
+        LaunchBase::Configured,
     )
     .expect("create from room repo");
 
@@ -405,6 +444,7 @@ fn launch_checkout_falls_back_to_the_room_repo_without_a_current_repo() {
 fn generated_launch_name_is_exposed_only_for_bare_checkout() {
     let generated = LaunchCheckout {
         stale_base: None,
+        trunk_fetch: None,
         reused: false,
         created: None,
         cwd: PathBuf::from("/code/query-engine-worktrees/swift-orbit"),
@@ -766,6 +806,7 @@ fn linked_worktree_resolves_created_base_and_primary() {
         None,
         None,
         false,
+        LaunchBase::Configured,
     )
     .unwrap();
     let mut marker = created.marker;
@@ -858,6 +899,7 @@ fn linked_worktree_omits_unreadable_and_unsupported_metadata() {
         None,
         None,
         false,
+        LaunchBase::Configured,
     )
     .unwrap();
     let worktree = &created.marker.worktree_path;
@@ -955,7 +997,16 @@ fn discovery_returns_owned_identity_before_explicit_inspection() {
     let dir = tempfile::tempdir().expect("tempdir");
     let repo = init_test_repo(dir.path());
     let config = test_worktree_config(dir.path());
-    let created = create(&repo, &config, Some("demo"), None, None, false).expect("create");
+    let created = create(
+        &repo,
+        &config,
+        Some("demo"),
+        None,
+        None,
+        false,
+        LaunchBase::Configured,
+    )
+    .expect("create");
     std::fs::write(
         created.marker.worktree_path.join("feature.txt"),
         "feature\n",
@@ -1000,7 +1051,16 @@ fn remove_refuses_an_occupied_worktree_until_forced() {
     let dir = tempfile::tempdir().expect("tempdir");
     let repo = init_test_repo(dir.path());
     let config = test_worktree_config(dir.path());
-    let created = create(&repo, &config, Some("demo"), None, None, false).expect("create");
+    let created = create(
+        &repo,
+        &config,
+        Some("demo"),
+        None,
+        None,
+        false,
+        LaunchBase::Configured,
+    )
+    .expect("create");
     let occupied = ProtectionSet::from_facts(
         &[PaneProtectionFact {
             pane_id: PaneId::from_parts(crate::ids::MuxName::Zellij, "terminal_1"),
@@ -1048,7 +1108,16 @@ fn remove_accepts_a_clean_worktree_no_one_occupies() {
     let dir = tempfile::tempdir().expect("tempdir");
     let repo = init_test_repo(dir.path());
     let config = test_worktree_config(dir.path());
-    let created = create(&repo, &config, Some("demo"), None, None, false).expect("create");
+    let created = create(
+        &repo,
+        &config,
+        Some("demo"),
+        None,
+        None,
+        false,
+        LaunchBase::Configured,
+    )
+    .expect("create");
 
     remove(
         &repo,
@@ -1078,13 +1147,31 @@ fn reused_worktree_keeps_seeded_and_linked_destinations_unchanged() {
     .expect("link file");
     std::fs::write(repo.join(".worktreelink"), "node_modules\n").expect("link config");
 
-    let first = create(&repo, &config, Some("demo"), None, None, false).expect("fresh create");
+    let first = create(
+        &repo,
+        &config,
+        Some("demo"),
+        None,
+        None,
+        false,
+        LaunchBase::Configured,
+    )
+    .expect("fresh create");
     assert_eq!((first.included, first.linked), (1, 1));
     let seeded = first.marker.worktree_path.join(".env.local");
     let linked = first.marker.worktree_path.join("node_modules");
     std::fs::write(&seeded, "keep\n").expect("change seeded destination");
 
-    let reused = create(&repo, &config, Some("demo"), None, None, true).expect("reuse");
+    let reused = create(
+        &repo,
+        &config,
+        Some("demo"),
+        None,
+        None,
+        true,
+        LaunchBase::Configured,
+    )
+    .expect("reuse");
 
     assert_eq!((reused.included, reused.linked), (0, 0));
     assert_eq!(std::fs::read_to_string(seeded).unwrap(), "keep\n");
@@ -1100,7 +1187,18 @@ fn stale_base_is_reported_only_for_fresh_local_tracking_bases() {
     let dir = tempfile::tempdir().expect("tempdir");
     let repo = init_test_repo(dir.path());
     let config = test_worktree_config(dir.path());
-    let fresh = |name, base| create(&repo, &config, Some(name), base, None, false).unwrap();
+    let fresh = |name, base| {
+        create(
+            &repo,
+            &config,
+            Some(name),
+            base,
+            None,
+            false,
+            LaunchBase::Configured,
+        )
+        .unwrap()
+    };
     assert_eq!(fresh("no-upstream", None).stale_base, None);
     let origin = dir.path().join("origin.git");
     git_run(&repo, ["clone", "--bare", ".", origin.to_str().unwrap()]).unwrap();
@@ -1131,8 +1229,18 @@ fn stale_base_is_reported_only_for_fresh_local_tracking_bases() {
     workspace.project_root = repo.clone();
     workspace.cwd_project_root = Some(repo.clone());
     workspace.worktree_root = repo.clone();
-    let launch =
-        || resolve_launch_checkout(&workspace, &config, Some("launch"), None, None, None).unwrap();
+    let launch = || {
+        resolve_launch_checkout(
+            &workspace,
+            &config,
+            Some("launch"),
+            None,
+            None,
+            None,
+            LaunchBase::Configured,
+        )
+        .unwrap()
+    };
     assert_eq!(launch().stale_base, expected);
     assert_eq!(launch().stale_base, None);
     git_run(&repo, ["checkout", "--detach"]).unwrap();
@@ -1141,6 +1249,396 @@ fn stale_base_is_reported_only_for_fresh_local_tracking_bases() {
     git_run(&repo, ["reset", "--hard", "origin/main"]).unwrap();
     git_run(&repo, ["commit", "--allow-empty", "-m", "ahead"]).unwrap();
     assert_eq!(fresh("ahead", None).stale_base, None);
+}
+
+#[test]
+fn team_worktree_fetches_the_remote_default_when_base_is_unset() {
+    assert_team_worktree_fetch(None, false);
+}
+
+#[test]
+fn team_worktree_fetches_an_explicit_fresh_base() {
+    assert_team_worktree_fetch(Some(WorktreeBase::Fresh), false);
+}
+
+#[test]
+fn team_worktree_fetches_before_establishing_a_never_fetched_default() {
+    assert_team_worktree_fetch(None, true);
+}
+
+#[test]
+fn team_worktree_fetches_the_remote_tip_when_its_short_ref_is_ambiguous() {
+    let dir = tempfile::tempdir().unwrap();
+    let (repo, _, _, tip) = init_remote_test_repo(dir.path());
+    git_run(
+        &repo,
+        [
+            "symbolic-ref",
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/main",
+        ],
+    )
+    .unwrap();
+    git_run(&repo, ["branch", "origin/main"]).unwrap();
+    let created = create(
+        &repo,
+        &test_worktree_config(dir.path()),
+        Some("team"),
+        None,
+        None,
+        false,
+        LaunchBase::Team,
+    )
+    .unwrap();
+    assert!(
+        created.trunk_fetch.is_none(),
+        "a local branch must not make the remote HEAD ambiguous: {:?}",
+        created.trunk_fetch
+    );
+    assert_eq!(created.marker.base_ref, tip);
+    assert_eq!(created.marker.base_branch.as_deref(), Some("origin/main"));
+    assert_eq!(
+        resolve_base_commit(&repo, "refs/remotes/origin/main").unwrap(),
+        tip
+    );
+    assert_eq!(
+        resolve_base_commit(&created.marker.worktree_path, "HEAD").unwrap(),
+        tip
+    );
+}
+
+fn assert_team_worktree_fetch(base: Option<WorktreeBase>, never_fetched: bool) {
+    let dir = tempfile::tempdir().unwrap();
+    let (repo, origin, local, tip) = init_remote_test_repo(dir.path());
+    assert!(origin_head(&repo).is_none());
+    let remote_branch = if never_fetched {
+        git_run(&repo, ["update-ref", "-d", "refs/remotes/origin/main"]).unwrap();
+        git_run(&origin, ["branch", "-m", "main", "trunk"]).unwrap();
+        "origin/trunk"
+    } else {
+        "origin/main"
+    };
+    let mut config = test_worktree_config(dir.path());
+    config.base = base;
+    let created = create(
+        &repo,
+        &config,
+        Some("team"),
+        None,
+        None,
+        false,
+        LaunchBase::Team,
+    );
+    assert!(
+        created.is_ok(),
+        "team creation must fetch and establish origin/HEAD: {created:?}"
+    );
+    let created = created.unwrap();
+    assert_eq!(created.marker.base_ref, tip);
+    assert_eq!(created.marker.base_branch.as_deref(), Some(remote_branch));
+    assert_eq!(resolve_base_commit(&repo, remote_branch).unwrap(), tip);
+    assert_eq!(origin_head(&repo).as_deref(), Some(remote_branch));
+    assert_eq!(resolve_base_commit(&repo, "HEAD").unwrap(), local);
+    assert!(created.trunk_fetch.is_none());
+    assert!(created.stale_base.is_none());
+    assert!(git_stdout(&repo, ["config", "branch.team.remote"]).is_err());
+}
+
+#[test]
+fn configured_and_explicit_team_bases_do_not_fetch() {
+    for (policy, base, expected_ref) in [
+        (LaunchBase::Configured, None, "HEAD"),
+        (LaunchBase::Team, Some(WorktreeBase::Head), "HEAD"),
+        (
+            LaunchBase::Team,
+            Some(WorktreeBase::Explicit("main".into())),
+            "HEAD",
+        ),
+        (
+            LaunchBase::Configured,
+            Some(WorktreeBase::Fresh),
+            "origin/main",
+        ),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let (repo, _, local, _) = init_remote_test_repo(dir.path());
+        git_run(
+            &repo,
+            [
+                "symbolic-ref",
+                "refs/remotes/origin/HEAD",
+                "refs/remotes/origin/main",
+            ],
+        )
+        .unwrap();
+        let mut config = test_worktree_config(dir.path());
+        config.base = base;
+        let created = create(&repo, &config, Some("local"), None, None, false, policy).unwrap();
+        assert_eq!(
+            created.marker.base_ref,
+            resolve_base_commit(&repo, expected_ref).unwrap()
+        );
+        assert_eq!(resolve_base_commit(&repo, "origin/main").unwrap(), local);
+        assert!(created.trunk_fetch.is_none());
+    }
+}
+
+#[test]
+fn new_non_pr_worktrees_do_not_track_the_remote_base() {
+    let dir = tempfile::tempdir().unwrap();
+    let (repo, _, _, _) = init_remote_test_repo(dir.path());
+    let config = test_worktree_config(dir.path());
+    let created = create(
+        &repo,
+        &config,
+        Some("local"),
+        Some(WorktreeBase::Explicit("origin/main".into())),
+        None,
+        false,
+        LaunchBase::Configured,
+    )
+    .unwrap();
+    assert!(
+        git_stdout(
+            &repo,
+            [
+                "config",
+                &format!("branch.{}.remote", created.marker.branch)
+            ]
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn team_worktree_fetch_failure_uses_the_last_fetched_tip() {
+    let dir = tempfile::tempdir().unwrap();
+    let (repo, _, local, _) = init_remote_test_repo(dir.path());
+    git_run(
+        &repo,
+        [
+            "symbolic-ref",
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/main",
+        ],
+    )
+    .unwrap();
+    git_run(
+        &repo,
+        [
+            "remote",
+            "set-url",
+            "origin",
+            dir.path().join("missing.git").to_str().unwrap(),
+        ],
+    )
+    .unwrap();
+    let config = test_worktree_config(dir.path());
+    let created = create(
+        &repo,
+        &config,
+        Some("offline"),
+        None,
+        None,
+        false,
+        LaunchBase::Team,
+    )
+    .unwrap();
+    assert!(
+        created.trunk_fetch.is_some(),
+        "an offline origin must carry a fetch warning"
+    );
+    let failure = created.trunk_fetch.unwrap();
+    assert_eq!(failure.remote_ref, "origin/main");
+    assert_eq!(failure.fallback, "origin/main");
+    assert!(!failure.error.is_empty());
+    assert_eq!(
+        failure.to_string(),
+        format!(
+            "could not fetch origin/main for the team worktree ({}); branching from origin/main as last fetched",
+            failure.error
+        )
+    );
+    assert_eq!(created.marker.base_ref, local);
+    assert_eq!(created.marker.base_branch.as_deref(), Some("origin/main"));
+    assert!(created.stale_base.is_none());
+}
+
+#[test]
+fn team_worktree_fetch_failure_without_cached_refs_uses_local_head() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = init_test_repo(dir.path());
+    git_run(
+        &repo,
+        [
+            "remote",
+            "add",
+            "origin",
+            dir.path().join("missing.git").to_str().unwrap(),
+        ],
+    )
+    .unwrap();
+    let mut workspace = workspace(RootClass::Repo);
+    workspace.project_root = repo.clone();
+    workspace.cwd_project_root = Some(repo.clone());
+    workspace.worktree_root = repo.clone();
+    let config = test_worktree_config(dir.path());
+    let launch = resolve_launch_checkout(
+        &workspace,
+        &config,
+        Some("offline"),
+        None,
+        None,
+        None,
+        LaunchBase::Team,
+    )
+    .unwrap();
+    assert!(
+        launch.trunk_fetch.is_some(),
+        "launch checkout must carry the fetch warning"
+    );
+    let failure = launch.trunk_fetch.unwrap();
+    assert_eq!(failure.remote_ref, "origin/main");
+    assert_eq!(failure.fallback, "main");
+    assert_eq!(
+        failure.to_string(),
+        format!(
+            "could not fetch origin/main for the team worktree ({}); branching from local main",
+            failure.error
+        )
+    );
+    assert_eq!(
+        launch.created.unwrap().base_ref,
+        resolve_base_commit(&repo, "HEAD").unwrap()
+    );
+    assert!(launch.stale_base.is_none());
+}
+
+#[test]
+fn team_worktree_without_origin_keeps_unset_and_explicit_bases_distinct() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = init_test_repo(dir.path());
+    let mut config = test_worktree_config(dir.path());
+    let created = create(
+        &repo,
+        &config,
+        Some("local"),
+        None,
+        None,
+        false,
+        LaunchBase::Team,
+    )
+    .unwrap();
+    assert_eq!(
+        created.marker.base_ref,
+        resolve_base_commit(&repo, "HEAD").unwrap()
+    );
+    assert!(created.trunk_fetch.is_none());
+    config.base = Some(WorktreeBase::Fresh);
+    assert!(
+        create(
+            &repo,
+            &config,
+            Some("explicit"),
+            None,
+            None,
+            false,
+            LaunchBase::Team
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn team_worktree_reuse_does_not_fetch() {
+    let dir = tempfile::tempdir().unwrap();
+    let (repo, _, local, _) = init_remote_test_repo(dir.path());
+    let config = test_worktree_config(dir.path());
+    let created = create(
+        &repo,
+        &config,
+        Some("reuse"),
+        None,
+        None,
+        false,
+        LaunchBase::Configured,
+    )
+    .unwrap();
+    let reused = create(
+        &repo,
+        &config,
+        Some("reuse"),
+        None,
+        None,
+        true,
+        LaunchBase::Team,
+    )
+    .unwrap();
+    assert!(reused.reused);
+    assert_eq!(created.marker, reused.marker);
+    assert_eq!(resolve_base_commit(&repo, "origin/main").unwrap(), local);
+    assert!(reused.trunk_fetch.is_none());
+}
+
+#[test]
+fn team_worktree_without_origin_keeps_the_stale_base_warning() {
+    let dir = tempfile::tempdir().unwrap();
+    let (repo, _, local, _) = init_remote_test_repo(dir.path());
+    git_run(&repo, ["remote", "rename", "origin", "upstream"]).unwrap();
+    git_run(&repo, ["fetch", "upstream"]).unwrap();
+    git_run(&repo, ["branch", "--set-upstream-to=upstream/main", "main"]).unwrap();
+    let created = create(
+        &repo,
+        &test_worktree_config(dir.path()),
+        Some("local"),
+        None,
+        None,
+        false,
+        LaunchBase::Team,
+    )
+    .unwrap();
+    assert_eq!(
+        created.stale_base,
+        Some(StaleBase {
+            branch: "main".into(),
+            upstream: "upstream/main".into(),
+            behind: 2,
+        })
+    );
+    assert!(created.trunk_fetch.is_none());
+    assert_eq!(created.marker.base_ref, local);
+}
+
+fn init_remote_test_repo(parent: &Path) -> (PathBuf, PathBuf, String, String) {
+    let repo = init_test_repo(parent);
+    let origin = parent.join("origin.git");
+    git_run(&repo, ["clone", "--bare", ".", origin.to_str().unwrap()]).unwrap();
+    git_run(&repo, ["remote", "add", "origin", origin.to_str().unwrap()]).unwrap();
+    git_run(&repo, ["fetch", "origin"]).unwrap();
+    git_run(
+        &repo,
+        ["update-ref", "--no-deref", "-d", "refs/remotes/origin/HEAD"],
+    )
+    .unwrap();
+    let local = resolve_base_commit(&repo, "HEAD").unwrap();
+    let upstream = parent.join("upstream");
+    git_run(
+        &repo,
+        [
+            "clone",
+            origin.to_str().unwrap(),
+            upstream.to_str().unwrap(),
+        ],
+    )
+    .unwrap();
+    git_run(&upstream, ["config", "user.email", "rimz@example.test"]).unwrap();
+    git_run(&upstream, ["config", "user.name", "RimZ Test"]).unwrap();
+    for _ in 0..2 {
+        git_run(&upstream, ["commit", "--allow-empty", "-m", "upstream"]).unwrap();
+    }
+    git_run(&upstream, ["push", "origin", "main"]).unwrap();
+    let tip = resolve_base_commit(&origin, "main").unwrap();
+    (repo, origin, local, tip)
 }
 
 fn init_test_repo(parent: &Path) -> PathBuf {
@@ -1186,7 +1684,16 @@ fn created_hook_sees_seeded_tree_and_environment_and_never_runs_on_reuse() {
         "test -f seed && test -L shared && printf '%s\\n' \"$PWD\" \"$RIMZ_HOOK_EVENT\" \"$RIMZ_WORKTREE_NAME\" \"$RIMZ_WORKTREE_PATH\" \"$RIMZ_WORKTREE_BRANCH\" \"$RIMZ_WORKTREE_REPO_ROOT\" >> hook-env",
         ":",
     );
-    let created = create(&repo, &config, Some("feat/demo"), None, None, false).unwrap();
+    let created = create(
+        &repo,
+        &config,
+        Some("feat/demo"),
+        None,
+        None,
+        false,
+        LaunchBase::Configured,
+    )
+    .unwrap();
     let path = &created.marker.worktree_path;
     let expected = format!(
         "{}\nworktree.created\nfeat-demo\n{}\nfeat/demo\n{}\n",
@@ -1198,7 +1705,16 @@ fn created_hook_sees_seeded_tree_and_environment_and_never_runs_on_reuse() {
         std::fs::read_to_string(path.join("hook-env")).unwrap(),
         expected
     );
-    create(&repo, &config, Some("feat/demo"), None, None, true).unwrap();
+    create(
+        &repo,
+        &config,
+        Some("feat/demo"),
+        None,
+        None,
+        true,
+        LaunchBase::Configured,
+    )
+    .unwrap();
     assert_eq!(
         std::fs::read_to_string(path.join("hook-env")).unwrap(),
         expected
@@ -1214,7 +1730,16 @@ fn failed_created_hook_rolls_back_and_fires_removed() {
         "echo stdout-tail; echo stderr-tail >&2; exit 3",
         "test ! -e \"$RIMZ_WORKTREE_PATH\" && printf '%s\\n' \"$RIMZ_HOOK_EVENT\" > removed",
     );
-    let err = create(&repo, &config, Some("demo"), None, None, false).expect_err("hook must fail");
+    let err = create(
+        &repo,
+        &config,
+        Some("demo"),
+        None,
+        None,
+        false,
+        LaunchBase::Configured,
+    )
+    .expect_err("hook must fail");
     assert!(matches!(&err, WorktreeErr::CreatedHook { .. }));
     let message = err.to_string();
     for expected in [
@@ -1244,7 +1769,16 @@ fn removed_hook_uses_repo_cwd_and_failure_is_best_effort() {
         ":",
         "test ! -e \"$RIMZ_WORKTREE_PATH\" && printf '%s\\n' \"$PWD\" \"$RIMZ_HOOK_EVENT\" \"$RIMZ_WORKTREE_NAME\" \"$RIMZ_WORKTREE_PATH\" \"$RIMZ_WORKTREE_BRANCH\" \"$RIMZ_WORKTREE_REPO_ROOT\" > removed; exit 7",
     );
-    let created = create(&repo, &config, Some("demo"), None, None, false).unwrap();
+    let created = create(
+        &repo,
+        &config,
+        Some("demo"),
+        None,
+        None,
+        false,
+        LaunchBase::Configured,
+    )
+    .unwrap();
     remove(
         &repo,
         &config,
@@ -1274,7 +1808,16 @@ fn failed_created_hook_reports_rollback_failure() {
         "git worktree lock \"$RIMZ_WORKTREE_PATH\"; echo hook-failed >&2; exit 3",
         ":",
     );
-    let err = create(&repo, &config, Some("demo"), None, None, false).expect_err("hook must fail");
+    let err = create(
+        &repo,
+        &config,
+        Some("demo"),
+        None,
+        None,
+        false,
+        LaunchBase::Configured,
+    )
+    .expect_err("hook must fail");
     let message = err.to_string();
     for expected in [
         "hook-failed",
@@ -1295,7 +1838,16 @@ fn sweep_runs_removed_hook_only_after_real_removal() {
         ":",
         "test ! -e \"$RIMZ_WORKTREE_PATH\" && printf '%s\\n' \"$PWD\" \"$RIMZ_WORKTREE_PATH\" >> swept",
     );
-    let created = create(&repo, &config, Some("demo"), None, None, false).unwrap();
+    let created = create(
+        &repo,
+        &config,
+        Some("demo"),
+        None,
+        None,
+        false,
+        LaunchBase::Configured,
+    )
+    .unwrap();
     let workspace_id = crate::ids::WorkspaceId::from_project_root(&repo);
     let paths = crate::StatePaths::under(workspace_id.clone(), &dir.path().join("state")).unwrap();
     let runtime = crate::RuntimePaths::under(workspace_id, &dir.path().join("runtime")).unwrap();
@@ -1322,7 +1874,16 @@ fn created_hook_timeout_is_a_failure() {
     let dir = tempfile::tempdir().unwrap();
     let repo = init_test_repo(dir.path());
     let config = test_worktree_config(dir.path());
-    let created = create(&repo, &config, Some("demo"), None, None, false).unwrap();
+    let created = create(
+        &repo,
+        &config,
+        Some("demo"),
+        None,
+        None,
+        false,
+        LaunchBase::Configured,
+    )
+    .unwrap();
     for command in [
         "echo before-timeout >&2; sleep 30",
         "echo before-timeout >&2; sleep 1 & exit 0",
@@ -1350,7 +1911,16 @@ fn created_hook_failure_output_is_a_bounded_tail() {
     let dir = tempfile::tempdir().unwrap();
     let repo = init_test_repo(dir.path());
     let config = test_worktree_config(dir.path());
-    let created = create(&repo, &config, Some("demo"), None, None, false).unwrap();
+    let created = create(
+        &repo,
+        &config,
+        Some("demo"),
+        None,
+        None,
+        false,
+        LaunchBase::Configured,
+    )
+    .unwrap();
     let hooks = crate::config::WorktreeHooks {
         created: Some("echo discarded-prefix; printf '%05000d\\n' 0; echo final-out; echo final-err >&2; exit 2".to_owned()),
         ..Default::default()
@@ -1374,7 +1944,16 @@ fn absent_worktree_hooks_spawn_nothing() {
     let dir = tempfile::tempdir().unwrap();
     let repo = init_test_repo(dir.path());
     let config = test_worktree_config(dir.path());
-    let created = create(&repo, &config, Some("demo"), None, None, false).unwrap();
+    let created = create(
+        &repo,
+        &config,
+        Some("demo"),
+        None,
+        None,
+        false,
+        LaunchBase::Configured,
+    )
+    .unwrap();
     let before = crate::proc::testkit::spawn_count();
     for event in [
         hooks::WorktreeHookEvent::Created,

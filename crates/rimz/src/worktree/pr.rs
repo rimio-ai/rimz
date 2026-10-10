@@ -407,6 +407,7 @@ fn same_repo_checkout(
         }
         return Ok(CreatedWorktree {
             stale_base: None,
+            trunk_fetch: None,
             marker,
             reused: true,
             included: 0,

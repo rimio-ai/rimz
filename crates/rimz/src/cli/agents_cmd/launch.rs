@@ -372,6 +372,11 @@ pub(in crate::cli) fn launch_resolved(
     }
 
     let cells = cohort_cells(&layout);
+    let base = if team_name.is_some() {
+        rimz::worktree::LaunchBase::Team
+    } else {
+        rimz::worktree::LaunchBase::Configured
+    };
     // A choice-less PR lookup discovers the holder without moving its local tip.
     let mut checkout = args.launch.cohort.from_pr.as_ref().map(|pr| {
         rimz::worktree::resolve_launch_checkout(
@@ -381,6 +386,7 @@ pub(in crate::cli) fn launch_resolved(
             Some(pr),
             None,
             cwd.as_deref(),
+            base,
         )
     });
     let cohort_target = if team_name.is_some() || cells.len() >= 2 {
@@ -520,6 +526,7 @@ pub(in crate::cli) fn launch_resolved(
                         args.launch.cohort.worktree.as_deref(),
                         args.launch.cohort.from_pr.as_ref(),
                         cwd.as_deref(),
+                        base,
                         checkout,
                     )?
                     .is_none()
@@ -556,6 +563,7 @@ pub(in crate::cli) fn launch_resolved(
             args.launch.cohort.worktree.as_deref(),
             args.launch.cohort.from_pr.as_ref(),
             cwd.as_deref(),
+            base,
             checkout,
         ),
         None => crate::cli::resolve_launch_checkout(
@@ -564,6 +572,7 @@ pub(in crate::cli) fn launch_resolved(
             args.launch.cohort.worktree.as_deref(),
             args.launch.cohort.from_pr.as_ref(),
             cwd.as_deref(),
+            base,
         ),
     }?;
     let Some(launch) = launch else {

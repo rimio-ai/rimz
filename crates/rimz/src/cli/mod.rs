@@ -980,14 +980,16 @@ fn resolve_launch_checkout(
     worktree: Option<&str>,
     from_pr: Option<&rimz::forge::PrTarget>,
     cwd: Option<&std::path::Path>,
+    base: rimz::worktree::LaunchBase,
 ) -> Result<Option<rimz::worktree::LaunchCheckout>> {
     if worktree.is_some() || from_pr.is_some() {
         require_worktree_config(config)?;
     }
     let config = &config.agents.worktree;
-    let checkout =
-        rimz::worktree::resolve_launch_checkout(workspace, config, worktree, from_pr, None, cwd);
-    settle_launch_checkout(workspace, config, worktree, from_pr, cwd, checkout)
+    let checkout = rimz::worktree::resolve_launch_checkout(
+        workspace, config, worktree, from_pr, None, cwd, base,
+    );
+    settle_launch_checkout(workspace, config, worktree, from_pr, cwd, base, checkout)
 }
 
 fn settle_launch_checkout(
@@ -996,6 +998,7 @@ fn settle_launch_checkout(
     worktree: Option<&str>,
     from_pr: Option<&rimz::forge::PrTarget>,
     cwd: Option<&std::path::Path>,
+    base: rimz::worktree::LaunchBase,
     checkout: rimz::worktree::Result<rimz::worktree::LaunchCheckout>,
 ) -> Result<Option<rimz::worktree::LaunchCheckout>> {
     let launch = match checkout {
@@ -1012,6 +1015,7 @@ fn settle_launch_checkout(
                 from_pr,
                 Some(choice),
                 cwd,
+                base,
             )?
         }
         Err(rimz::worktree::WorktreeErr::Unmarked { name, .. }) if from_pr.is_none() => {
@@ -1061,6 +1065,9 @@ fn settle_launch_checkout(
             "warning: {stale}; fast-forward {} first, or set agents.worktree.base to fresh",
             stale.branch
         )?;
+    }
+    if let Some(failure) = &launch.trunk_fetch {
+        writeln!(render::err(), "warning: {failure}")?;
     }
     Ok(Some(launch))
 }
