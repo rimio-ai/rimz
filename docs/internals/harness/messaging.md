@@ -140,7 +140,7 @@ The seven terminal states are final. A terminal transition removes the record fr
 | An unconfirmed command reaches its delivery deadline | `TimedOut` |
 | An unconfirmed prompt reaches the unconfirmed-send cap | `TimedOut` |
 | The address resolved to no agent, after the durable fallback | `Errored` |
-| A send failure with no retry path: a live pane target with no durable card, a failed compact-first command write, or a fresh steer rejected because the agent is waiting on input | `Errored` |
+| A send failure with no retry path: a live pane target with no durable card, a failed compact-first command write, or a fresh steer rejected because the agent is waiting on input (except a self wait's wake, which stays `Queued`) | `Errored` |
 | A queued compaction command would follow an unprompted compaction ([Manual compaction](#manual-compaction)) | `Errored` |
 | `message cancel`, `message clear`, or the [join guard](#the-subagent-digest-join-guard) | `Canceled` |
 | A retryable failure after `attempts` reached its cap | `Abandoned` |
@@ -171,7 +171,7 @@ Every mode resolves targets through the same parser, writes the same record shap
 
 Steer still writes a `Queued` record first and moves it to `Sent` when the paste lands. When the address resolves only to a durable card with no live pane, steer parks, prints `queued for @handle (msg_...)`, and the retry path delivers once a pane appears.
 
-Internal callers pick a mode too. Self-only timer and watched-command waits use steer; scheduled loop and signal deliveries, team bindings included, use boundary with the `Done` gate. `rimz message @me` resolves the calling agent to its pinned session through the shared CLI resolver and refuses an unidentified, provisional, or ended caller.
+Internal callers pick a mode too. Self-only timer and watched-command waits use steer, but a native prompt open at the pane-write check leaves a `HarnessNotice::Wait` record `Queued` with gate `Any`, for the next turn boundary after the prompt is answered. This also applies to check-ins; human steers and deadline notices retain their waiting-input error. Scheduled loop and signal deliveries, team bindings included, use boundary with the `Done` gate. `rimz message @me` resolves the calling agent to its pinned session through the shared CLI resolver and refuses an unidentified, provisional, or ended caller.
 
 ### Conditions
 
