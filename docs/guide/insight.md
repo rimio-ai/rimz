@@ -36,7 +36,7 @@ Top to bottom:
 
 - **The heatmap** is a contribution graph of tokens per day, one column per week. Your terminal's width sets how far back it reaches, from four weeks up to fifty-two. Shading is relative to the days on screen, with the ceiling at your 90th-percentile active day, so one record-breaking Tuesday does not flatten the rest of the grid into grey. `--dollars` shades by cost instead of tokens.
 - **The window row** (All time, Week, Month, Year) scopes everything below it. The heatmap ignores it. A plain `rimz stats` prints the All-time view; in the held dashboard, `Tab` and `Shift-Tab` cycle the window.
-- **Models** ranks where the dollars went, each model under its friendly name (`gpt-5.5` reads as `GPT 5.5`) with its token split, its cache-hit percentage, and its share of the window's dollars. **Agents** ranks by session count instead and leads each row with dollars. Both fold anything below 1% of their section into a final `Other` row, along with whatever falls past the sixth. An unpriced model keeps its own row as long as nothing in the section has a price, and its tokens count either way.
+- **Models** ranks where the dollars went, each model under its friendly name (`gpt-5.5` reads as `GPT 5.5`) with its token split, its cache-hit percentage, generation throughput in `tok/s`, and its share of the window's dollars. A model with no timed responses shows `-`; if none is timed the column disappears. Narrow terminals keep only dollars. **Agents** ranks by session count instead and leads each row with dollars. Both fold anything below 1% of their section into a final `Other` row, along with whatever falls past the sixth. An unpriced model keeps its own row as long as nothing in the section has a price, and its tokens count either way.
 - **The insight lines** close it:
 
   ```console
@@ -105,6 +105,8 @@ Everything on this page reads; the same numbers can also enforce. A dollar cap o
 ## How the numbers are calculated
 
 Every historical figure comes from the transcript and session files your agents already write to disk. RimZ never scrapes a pane or guesses from the screen. Claude, Codex, Grok, OpenCode, and Pi report spend end to end; Amp, Copilot, Kimi, and Qwen contribute what their own local records carry, and [agent support](../reference/agent-support.md#the-wiring-matrix) names the gap behind each of them. An agent whose CLI keeps no usable local record contributes nothing to history and shows only the live figure its card can read.
+
+The Models `tok/s` figure measures end-to-end response throughput: output tokens divided by wall time from the request being sent to the response landing. For each model it divides the sum of timed output tokens by the sum of those response durations over the selected window, rounded to an integer. Responses under 100 output tokens, lasting 0.2 seconds or less, or longer than five minutes are excluded. Only Claude Code and Codex histories supply timing. This includes time to first token and Codex tool-call responses, so a Codex figure sits well below a pure streaming rate. Tokenizers differ across vendors; compare rates within a vendor rather than treating them as a cross-vendor speed ranking.
 
 How a token becomes a dollar:
 

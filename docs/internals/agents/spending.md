@@ -44,7 +44,7 @@ Parsing is mostly shared. Two concerns differ by provider, and each adapter page
 
 | Provider | Dedup | Cost source |
 | --- | --- | --- |
-| Claude | parent messages replayed into subagent files: exact duplicates keep the richest main-thread record (token count, then speed metadata) before sidechain suppression | tokens through the price book; an older transcript's positive `costUSD` is used as logged |
+| Claude | parent messages replayed into subagent files: exact duplicates keep the richest main-thread record (token count, then speed metadata, then timed duration) before sidechain suppression | tokens through the price book; an older transcript's positive `costUSD` is used as logged |
 | Codex | copied rollouts: a provider-namespaced fingerprint over native timestamp, model, and token split | tokens through the price book |
 | Copilot | each shutdown or model delta keyed by session plus native record id, with a timestamp-and-counters fallback | tokens through the price book; shutdown output already includes reasoning, and AI Credits stay outside USD |
 | Pi | single-file sessions | its non-negative `usage.cost.total` when present, otherwise tokens through the price book |
@@ -90,7 +90,7 @@ The shared `spending.json` cursor cache ([`cache.rs`](../../../crates/rimz/src/a
 
 Append-only stores advance incrementally. Rewind-prone stores return an authoritative replacement: OpenCode ignores resume state for every changed SQLite database, cold-folds the whole mutable table, and replaces that file's cached entries, so in-place row completion never loses spend.
 
-The cursor carries provider resume state where a parser needs it: Codex's cumulative-totals fold and its learned file origin (which survives cold re-parses), Copilot's per-model shutdown baselines and session-start directory, and Pi's session header directory. Rows dedup against retry writes within each parsed chunk. Finalized rows stay exact for 8 days, which covers the trailing week and cross-file retry and sidechain dedup; older rows compact into per-day, per-model, per-thread rollups out to 365 days.
+The cursor carries provider resume state where a parser needs it: Claude's object-shaped pricing fingerprint and response timing, Codex's cumulative-totals fold, response timing, and learned file origin (which survives cold re-parses), Copilot's per-model shutdown baselines and session-start directory, and Pi's session header directory. Rows dedup against retry writes within each parsed chunk. Finalized rows stay exact for 8 days, which covers the trailing week and cross-file retry and sidechain dedup; older rows compact into per-day, per-model, per-thread rollups out to 365 days.
 
 Dirty cursor state persists on the first walk, after `SPENDING_PERSIST_MIN_INTERVAL` (5 minutes), or after cold-sized parse work. During a publishing walk, `WALK_CHECKPOINT_INTERVAL` (1 second) checkpoints cursor progress when the persist gate is open and publishes a current-stamped partial aggregate only when the cache changed since the previous checkpoint and that partial lowers no published figure: the trailing-year dollars of the fleet total, each provider, each login, and the walk's own workspace scope in its current-version sidecar. So the dashboard total climbs during a cold start, a restart resumes from the checkpoint, and a fresh walker whose cursor trails the publication never dips it; a withheld partial leaves `provider-spending.json` and the workspace sidecar untouched, stamp included. Only the finished walk lowers a published figure. The final cursor and aggregate are the authority; write failures log warnings with their paths.
 
@@ -98,12 +98,23 @@ The long-lived walker memo keeps only `(file index, entry index)` locations of d
 
 Two version constants gate schema changes:
 
-| Constant | Bump when | Effect |
-| --- | --- | --- |
-| `SPENDING_CACHE_VERSION` ([`cache.rs`](../../../crates/rimz/src/agents/spending/cache.rs)) | the entry split, store-time dedup, origin metadata, pricing fallback, or logical stamp changes shape or parsed value | every cursor re-parses once |
-| `PROVIDER_SPENDING_VERSION` ([`publish.rs`](../../../crates/rimz/src/agents/spending/publish.rs)) | the published aggregate or its pricing guarantees change without needing a re-parse | `provider-spending.json` recomputes once from the entry cache |
+| Constant | Current version | Bump when | Effect |
+| --- | --- | --- | --- |
+| `SPENDING_CACHE_VERSION` ([`cache.rs`](../../../crates/rimz/src/agents/spending/cache.rs)) | 26: response timing and stateful Claude cursors | the entry split, response timing, cursor state, store-time dedup, origin metadata, pricing fallback, or logical stamp changes shape or parsed value | every cursor re-parses once |
+| `PROVIDER_SPENDING_VERSION` ([`publish.rs`](../../../crates/rimz/src/agents/spending/publish.rs)) | 16: timed window counters | the published aggregate or its pricing guarantees change without needing a re-parse | `provider-spending.json` recomputes once from the entry cache |
 
 Writers refuse a schema downgrade after a cheap leading-version probe. An older long-lived build therefore cannot blank a newer build's aggregate or force cursor cold walks: a bump costs one recompute, and the higher version holds.
+
+### Response timing
+
+`CachedEntry.timing` uses optional cache key `g`, containing `ResponseTiming` as `{"m": milliseconds, "o": output_tokens}`. Compaction copies timing and sums both counters, retaining timing when any constituent row was timed. `SpendWindow` sums these into `timed_ms` and `timed_output`; zero counters are omitted from published JSON. `SpendWindow::tokens_per_sec` rounds the ratio of these sums rather than averaging response rates. Stats reads the published per-model windows, never scans transcripts for timing.
+
+Both timed adapters attach rows only through `response_timing` in `agents/spending/cache.rs`. Its metric-defining constants are `MIN_TIMED_OUTPUT_TOKENS = 100`, `MIN_RESPONSE_MS = 200`, and `MAX_RESPONSE_MS = 300_000`: output must meet the minimum, elapsed time must exceed 200 ms, and 300,000 ms is inclusive. A threshold change requires a cursor-cache version bump.
+
+- Claude: the latest timestamp across top-level user lines fixes the start at a message's first assistant line. User timestamps need not be monotonic, and interleaved tool-result user lines cannot move an in-flight message's start. Each assistant line uses its own millisecond timestamp as the end; after token and speed-metadata ties, `should_replace_duplicate` prefers larger timed duration in both chunk and cross-file dedup. Advisor iteration rows are untimed. The cursor object carries the pricing fingerprint, latest user timestamp, and current message id with its fixed start, so a suffix parse can finish a streaming message.
+- Codex: `task_started` and non-model response items advance the latest input timestamp until the first model item. Model items are reasoning, assistant messages, and function, custom-tool, local-shell, or web-search calls. `token_usage_record` ends the response, filters its output and elapsed time, and resets the input/model state. The next `token_count` consumes the pending timing only when its output count matches. Usage, cost, cumulative totals, and dedup keys still come exclusively from `token_count`. Replayed heads neither produce timing nor retain timing state. The cursor preserves in-flight and pending timing across resume. Histories without response records remain untimed; the count timestamp is not a fallback because it can include tool runtime.
+
+Other adapters supply no timing. The user-facing definition and comparison limits are in the [insight guide](../../guide/insight.md#how-the-numbers-are-calculated).
 
 ## One walk per namespace
 
