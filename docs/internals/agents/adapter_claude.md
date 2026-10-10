@@ -252,7 +252,7 @@ OAuth maps each `limits[]` entry of kind `weekly_scoped` with a non-empty `scope
 
 ### OAuth usage probe
 
-A usage HTTP 403 whose JSON `error` object contains the string value `oauth_not_allowed_for_organization` returns the provider-neutral `AccountUsageProbe::NotEntitled`, not `NoCredentials`. Plain 401 and other 403 responses remain settled credential rejections. The bounded HTTP transport hands the error body only to the adapter; diagnostics keep the status/code and host, never the body. Pi and OpenCode delegated Claude usage reads inherit this classification.
+A usage HTTP 403 whose JSON body carries `oauth_not_allowed_for_organization` at `error.details.error_code` returns the provider-neutral `AccountUsageProbe::NotEntitled`, not `NoCredentials`. Plain 401 and other 403 responses remain settled credential rejections. The bounded HTTP transport hands the error body only to the adapter; diagnostics keep the status/code and host, never the body. Pi and OpenCode delegated Claude usage reads inherit this classification.
 
 The usage probe appends `cedar_ember=1` through `url::Url`, preserving any query on a trusted URL override. Its User-Agent is `claude-cli/<version> (external, cli)`: the trimmed supplied version, then the `claude --version` probe, then `USER_AGENT_FALLBACK_VERSION` (`2.1.283`). Anthropic gates grants on both the exact format and a recent version ([observed protocol](../../externals/agent-adapter/claude-reference.md#oauth-usage-endpoint)). An installed old version is reported honestly and may receive no grants until upgraded. The fallback pin needs maintenance if Anthropic raises that floor; fallback hosts would otherwise silently show zero. Pi and OpenCode delegated Anthropic reads inherit this request and parser.
 

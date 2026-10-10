@@ -6,19 +6,27 @@ fn organization_usage_rejection_is_not_a_credentials_fault() {
     use std::io::{Read, Write};
     use std::net::TcpListener;
 
+    // Captured live on 2026-10-10 from a lapsed login, the message swapped for a sentinel.
+    let live = r#"{"type":"error","error":{"type":"permission_error","message":"sentinel-private","details":{"error_visibility":"user_facing","error_code":"oauth_not_allowed_for_organization"}},"request_id":"req_011CftCyme1gpEBrCRE6WEtu"}"#;
     for (status, body, expected) in [
+        (403, live, "NotEntitled"),
+        (403, "", "NoCredentials"),
         (
             403,
-            r#"{"error":{"code":"oauth_not_allowed_for_organization","message":"sentinel-private"}}"#,
-            "NotEntitled",
+            r#"{"error":{"details":{"error_code":"unrelated"}}}"#,
+            "NoCredentials",
         ),
-        (403, "", "NoCredentials"),
-        (403, r#"{"error":{"code":"unrelated"}}"#, "NoCredentials"),
         (
-            401,
+            403,
             r#"{"error":{"code":"oauth_not_allowed_for_organization"}}"#,
             "NoCredentials",
         ),
+        (
+            403,
+            r#"{"error":{"message":"oauth_not_allowed_for_organization"}}"#,
+            "NoCredentials",
+        ),
+        (401, live, "NoCredentials"),
         (500, "", "Failed"),
     ] {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
