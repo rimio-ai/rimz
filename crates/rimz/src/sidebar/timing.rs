@@ -25,6 +25,10 @@ pub(super) const EVENT_STORE_TTL: Duration = Duration::from_secs(EVENT_PANE_TTL.
 /// yanking the user's current pane.
 pub(crate) const FOCUS_STRANDED_EVENT_TTL: Duration = Duration::from_secs(2);
 
+/// Re-sampling cadence for a live focus fence that disagrees with a settled
+/// strand. The dispatch thread retries only within the strand's original TTL.
+pub(crate) const FOCUS_REPAIR_RETRY_STEP: Duration = Duration::from_millis(100);
+
 /// How long the interactive sidebar keeps its last row/group order after a
 /// jump, tab-switch, browse, or the focused agent's ask being answered before
 /// re-sorting to live rank. Long enough to read the card you landed on, not just

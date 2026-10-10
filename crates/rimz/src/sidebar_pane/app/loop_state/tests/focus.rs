@@ -4,6 +4,153 @@
 use super::*;
 use crate::sidebar_pane::app::fixtures::focus_fixture;
 
+fn fenced_request(
+    rig: &Rig,
+    expected: &[crate::pane::ClientPaneView],
+    sample: Vec<crate::pane::ClientPaneView>,
+) -> std::result::Result<crate::ids::FocusNonce, crate::mux::focus_anchor::FocusActionError> {
+    use crate::mux::focus_anchor::{FocusActionRequest, request_action_with_test_sample};
+    request_action_with_test_sample(
+        &rig.runtime,
+        "rimz-test",
+        FocusActionRequest {
+            pane_id: zellij("terminal_9"),
+            origin: FocusOrigin::AutomaticRepair,
+            repair_generation: Some(3),
+            expected_pre_action: Some(expected),
+            offset: 0,
+            order: None,
+        },
+        || Ok(sample),
+    )
+}
+
+#[test]
+fn focus_request_retries_mismatching_samples_until_the_fence_agrees() {
+    let rig = Rig::new();
+    let (snapshot, _, _, _) = focus_fixture();
+    let expected = snapshot.client_views;
+    let mut moved = expected.clone();
+    moved[0].pane_id = zellij("terminal_77");
+    let now = std::cell::Cell::new(1_000);
+    let samples = std::cell::Cell::new(0);
+    let outcome = request_focus_until(
+        Some(2_000),
+        &expected,
+        || {
+            samples.set(samples.get() + 1);
+            let sample = if samples.get() <= 2 {
+                &moved
+            } else {
+                &expected
+            };
+            fenced_request(&rig, &expected, sample.clone())
+        },
+        || now.get(),
+        |delay| now.set(now.get() + duration_millis(delay)),
+    );
+    assert!(
+        outcome.requested.expect("attempted").is_ok(),
+        "one transient fence disagreement must not end repair"
+    );
+    assert_eq!(outcome.attempts, 3);
+    assert_eq!(samples.get(), 3);
+    assert_eq!(outcome.observed, expected);
+    assert_eq!(now.get(), 1_200);
+    assert_eq!(
+        crate::mux::focus_anchor::load(&rig.runtime)
+            .expect("accepted intent")
+            .pane_id,
+        zellij("terminal_9")
+    );
+}
+
+#[test]
+fn focus_request_deadline_keeps_the_last_mismatching_sample() {
+    let rig = Rig::new();
+    let (snapshot, _, _, _) = focus_fixture();
+    let expected = snapshot.client_views;
+    let now = std::cell::Cell::new(1_000);
+    let samples = std::cell::Cell::new(0);
+    let sample = |number| {
+        let mut view = expected.clone();
+        view[0].pane_id = zellij(&format!("terminal_{number}"));
+        view
+    };
+    let outcome = request_focus_until(
+        Some(1_250),
+        &expected,
+        || {
+            samples.set(samples.get() + 1);
+            fenced_request(&rig, &expected, sample(100 + samples.get()))
+        },
+        || now.get(),
+        |delay| now.set(now.get() + duration_millis(delay)),
+    );
+    assert_eq!(outcome.attempts, 3);
+    assert_eq!(now.get(), 1_250);
+    assert_eq!(outcome.observed, sample(103));
+    assert!(
+        matches!(outcome.requested, Some(Err(crate::mux::focus_anchor::FocusActionError::PreObservationChanged { observed })) if observed == sample(103))
+    );
+    assert!(crate::mux::focus_anchor::load(&rig.runtime).is_none());
+}
+
+#[test]
+fn expired_focus_request_does_not_sample_or_write_an_intent() {
+    let rig = Rig::new();
+    let (snapshot, _, _, _) = focus_fixture();
+    let expected = snapshot.client_views;
+    let samples = std::cell::Cell::new(0);
+    let outcome = request_focus_until(
+        Some(1_000),
+        &expected,
+        || {
+            samples.set(samples.get() + 1);
+            fenced_request(&rig, &expected, expected.clone())
+        },
+        || 1_000,
+        |_| panic!("expired repair must not sleep"),
+    );
+    assert!(outcome.requested.is_none());
+    assert_eq!(outcome.attempts, 0);
+    assert_eq!(samples.get(), 0);
+    assert!(outcome.observed.is_empty());
+    assert!(crate::mux::focus_anchor::load(&rig.runtime).is_none());
+}
+
+#[test]
+fn focus_request_does_not_retry_one_shot_or_other_errors() {
+    use crate::mux::focus_anchor::FocusActionError;
+    for deadline in [None, Some(2_000)] {
+        let outcome = request_focus_until(
+            deadline,
+            &[],
+            || Err(FocusActionError::Superseded),
+            || 1_000,
+            |_| panic!("non-fence errors must not retry"),
+        );
+        assert_eq!(outcome.attempts, 1);
+        assert!(matches!(
+            outcome.requested,
+            Some(Err(FocusActionError::Superseded))
+        ));
+    }
+    let outcome = request_focus_until(
+        None,
+        &[],
+        || {
+            Err(FocusActionError::PreObservationChanged {
+                observed: Vec::new(),
+            })
+        },
+        || 1_000,
+        |_| panic!("one-shot requests must not retry"),
+    );
+    assert_eq!(outcome.attempts, 1);
+    assert!(outcome.requested.expect("attempted").is_err());
+}
+
 #[test]
 fn foreign_strand_has_no_effect_while_own_strand_waits_for_a_working_row() {
     let own = zellij("terminal_0");

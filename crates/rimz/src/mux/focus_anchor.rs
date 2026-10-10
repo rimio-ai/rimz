@@ -228,6 +228,16 @@ pub(crate) fn request_action(
     })
 }
 
+#[cfg(test)]
+pub(crate) fn request_action_with_test_sample(
+    runtime: &RuntimePaths,
+    session_name: &str,
+    request: FocusActionRequest<'_>,
+    sample: impl FnOnce() -> Result<Vec<ClientPaneView>, FocusActionError>,
+) -> Result<FocusNonce, FocusActionError> {
+    request_action_with_client_sample(runtime, session_name, request, sample)
+}
+
 fn request_action_with_client_sample(
     runtime: &RuntimePaths,
     session_name: &str,

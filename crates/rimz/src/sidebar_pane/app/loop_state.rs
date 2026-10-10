@@ -10,9 +10,9 @@ use std::time::{Duration, Instant};
 
 use crate::diag::focus_trace::FocusTraceEvent;
 use crate::diag::record::{RendererExitCause, SidebarWidthControlTrigger as WidthControlTrigger};
-use crate::ids::PaneId;
+use crate::ids::{FocusNonce, PaneId};
 use crate::mux::focus_anchor::{
-    FocusObservation, FocusObservationOutcome, FocusOrigin, FocusPresentation,
+    FocusActionError, FocusObservation, FocusObservationOutcome, FocusOrigin, FocusPresentation,
 };
 use crate::observability::SIDEBAR_HEALTH_TARGET;
 use crate::sidebar::consumer::read_published_pair;
@@ -21,7 +21,7 @@ use crate::sidebar::event_store::EventStore;
 use crate::sidebar::fuse::{focus_intent_confirmed_from, fuse, fuse_owned};
 use crate::sidebar::observe::{self, ObserveMsg};
 use crate::sidebar::read_marks::{ReadMarkStore, ReadMarks, write_manual_read_marks};
-use crate::sidebar::timing::{FOCUS_STRANDED_EVENT_TTL, TAB_READ_DWELL};
+use crate::sidebar::timing::{FOCUS_REPAIR_RETRY_STEP, FOCUS_STRANDED_EVENT_TTL, TAB_READ_DWELL};
 use crate::sidebar::unread::{self, UnreadClearCause};
 use crate::sidebar_pane::pixel::{PixelRenderCaps, PixelSlot};
 use crate::sidebar_pane::render::{self, UiState};
@@ -719,6 +719,14 @@ impl LoopState {
         ) {
             let expected =
                 (repair.pane_id.mux() == MuxName::Zellij).then(|| repair.clients.clone());
+            let dispatch = FocusRepairDispatch {
+                generation: repair.generation,
+                deadline_ms: expected.as_ref().map(|_| {
+                    repair
+                        .sent_at_ms
+                        .saturating_add(duration_millis(FOCUS_STRANDED_EVENT_TTL))
+                }),
+            };
             spawn_pane_focus(
                 target,
                 &self.config.session_name,
@@ -726,7 +734,7 @@ impl LoopState {
                 crate::mux::focus_anchor::FocusOrigin::AutomaticRepair,
                 expected,
                 (self.ui.scroll_offset, Some(self.ui.last_order.clone())),
-                Some(repair.generation),
+                Some(dispatch),
             );
             return true;
         }
@@ -1944,12 +1952,70 @@ fn focus_repair_still_viable(sent_at_ms: u64, now_ms: u64) -> bool {
     now_ms.saturating_sub(sent_at_ms) <= duration_millis(FOCUS_STRANDED_EVENT_TTL)
 }
 
+struct FocusRepairDispatch {
+    generation: u64,
+    deadline_ms: Option<u64>,
+}
+
+struct FocusRequestOutcome {
+    requested: Option<std::result::Result<FocusNonce, FocusActionError>>,
+    observed: Vec<crate::pane::ClientPaneView>,
+    attempts: u32,
+}
+
+fn request_focus_until(
+    deadline_ms: Option<u64>,
+    expected: &[crate::pane::ClientPaneView],
+    mut request: impl FnMut() -> std::result::Result<FocusNonce, FocusActionError>,
+    mut now_ms: impl FnMut() -> u64,
+    mut sleep: impl FnMut(Duration),
+) -> FocusRequestOutcome {
+    let mut outcome = FocusRequestOutcome {
+        requested: None,
+        observed: Vec::new(),
+        attempts: 0,
+    };
+    while deadline_ms.is_none_or(|deadline| now_ms() < deadline) {
+        outcome.attempts += 1;
+        let requested = request();
+        match &requested {
+            Err(FocusActionError::PreObservationChanged { observed }) => {
+                outcome.observed = observed.clone();
+            }
+            Ok(_) | Err(FocusActionError::Store(_)) => {
+                outcome.observed = expected.to_vec();
+                outcome.observed.sort();
+                outcome.observed.dedup();
+            }
+            _ => {}
+        }
+        let retry = matches!(
+            &requested,
+            Err(FocusActionError::PreObservationChanged { .. })
+        );
+        outcome.requested = Some(requested);
+        if !retry {
+            return outcome;
+        }
+        let Some(deadline) = deadline_ms else {
+            return outcome;
+        };
+        let remaining_ms = deadline.saturating_sub(now_ms());
+        if remaining_ms == 0 {
+            return outcome;
+        }
+        sleep(FOCUS_REPAIR_RETRY_STEP.min(Duration::from_millis(remaining_ms)));
+    }
+    outcome
+}
+
 /// Focus the pane on a detached thread so the keypress/click returns instantly:
 /// `focus_pane` forks the mux client (`zellij action focus-pane-id` / the tmux
 /// equivalent), which must never block the loop. The snapshot-bound pane is
 /// focused directly — no `rimz pane focus` child and no per-click pane roster.
 /// The shared intent helper takes a fresh attached-client sample immediately
-/// before dispatch and serializes concurrent focus actions.
+/// before dispatch and serializes concurrent focus actions. An automatic
+/// Zellij repair re-samples a mismatching fence until its strand deadline.
 /// Errors are logged at `debug!`, not surfaced: a pane recycled in the
 /// sub-second window since the snapshot is a benign, self-correcting race, so
 /// the line stays local under `RUST_LOG=debug` and off the off-box error
@@ -1963,33 +2029,39 @@ fn spawn_pane_focus(
     origin: crate::mux::focus_anchor::FocusOrigin,
     expected_pre_action: Option<Vec<crate::pane::ClientPaneView>>,
     presentation: (usize, Option<crate::mux::focus_anchor::FrozenOrder>),
-    repair_generation: Option<u64>,
+    repair: Option<FocusRepairDispatch>,
 ) {
     let session_name = session_name.to_owned();
     std::thread::spawn(move || {
         let backend = crate::mux::backend_for(pane_id.mux());
-        let requested = crate::mux::focus_anchor::request_action(
-            backend.as_ref(),
-            &runtime,
-            &session_name,
-            crate::mux::focus_anchor::FocusActionRequest {
-                pane_id: pane_id.clone(),
-                origin,
-                repair_generation,
-                expected_pre_action: expected_pre_action.as_deref(),
-                offset: presentation.0,
-                order: presentation.1,
+        let repair_generation = repair.as_ref().map(|repair| repair.generation);
+        let FocusRequestOutcome {
+            requested,
+            observed,
+            attempts,
+        } = request_focus_until(
+            repair.as_ref().and_then(|repair| repair.deadline_ms),
+            expected_pre_action.as_deref().unwrap_or_default(),
+            || {
+                crate::mux::focus_anchor::request_action(
+                    backend.as_ref(),
+                    &runtime,
+                    &session_name,
+                    crate::mux::focus_anchor::FocusActionRequest {
+                        pane_id: pane_id.clone(),
+                        origin,
+                        repair_generation,
+                        expected_pre_action: expected_pre_action.as_deref(),
+                        offset: presentation.0,
+                        order: presentation.1.clone(),
+                    },
+                )
             },
+            crate::utils::time::unix_now_ms,
+            std::thread::sleep,
         );
-        let observed = match &requested {
-            Err(crate::mux::focus_anchor::FocusActionError::PreObservationChanged { observed }) => {
-                observed.clone()
-            }
-            Ok(_) => expected_pre_action.clone().unwrap_or_default(),
-            _ => Vec::new(),
-        };
         let outcome = match requested {
-            Ok(nonce) => match crate::mux::focus_anchor::dispatch_action(
+            Some(Ok(nonce)) => match crate::mux::focus_anchor::dispatch_action(
                 backend.as_ref(),
                 &runtime,
                 &session_name,
@@ -2005,7 +2077,12 @@ fn spawn_pane_focus(
                 ),
                 Err(err) => (Some(nonce), "failed", Some(err.to_string())),
             },
-            Err(err) => (None, "failed", Some(err.to_string())),
+            Some(Err(err)) => (None, "failed", Some(err.to_string())),
+            None => (
+                None,
+                "failed",
+                Some("strand TTL expired before focus request".to_owned()),
+            ),
         };
         if let Some(generation) = repair_generation {
             use crate::diag::focus_repair::{FocusRepairOutcome, FocusRepairRecord};
@@ -2019,7 +2096,7 @@ fn spawn_pane_focus(
                     generation,
                     evidence: expected_pre_action.clone().unwrap_or_default(),
                     observed: observed.clone(),
-                    attempts: 1,
+                    attempts,
                     target: pane_id.clone(),
                     outcome: if outcome.1 == "accepted_unconfirmed" {
                         FocusRepairOutcome::AcceptedUnconfirmed
@@ -2031,7 +2108,7 @@ fn spawn_pane_focus(
             );
         }
         if let Some(error) = outcome.2 {
-            debug!(pane = %pane_id, error, expected = ?expected_pre_action, observed = ?observed, "sidebar pane focus failed");
+            debug!(pane = %pane_id, error, expected = ?expected_pre_action, observed = ?observed, attempts, "sidebar pane focus failed");
         }
     });
 }
