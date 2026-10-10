@@ -32,7 +32,7 @@ pub(super) fn refresh(ctx: &LocalContextRefreshCtx<'_>) -> Option<LocalContextRe
 
     let prices = pricing::cached_book(ctx.shared_pricing_cache_path);
     let prices = managed_pricing::overlay(&prices);
-    let parsed = parse_claude_spend(&path, fold.cursor.offset, &prices);
+    let parsed = parse_claude_spend(&path, Some(&fold.cursor), &prices);
     fold.absorb(&parsed.entries);
     fold.cursor = parsed.cursor;
     let session_usage = fold.session_usage();

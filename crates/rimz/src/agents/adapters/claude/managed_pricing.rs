@@ -507,7 +507,8 @@ mod tests {
         };
         let prices = apply(&PriceBook::default(), &managed);
 
-        let SpendParse { entries, .. } = super::super::spend::parse_claude_spend(&path, 0, &prices);
+        let SpendParse { entries, .. } =
+            super::super::spend::parse_claude_spend(&path, None, &prices);
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].cost_usd, 6.0);
         assert_eq!(
