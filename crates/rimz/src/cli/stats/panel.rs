@@ -579,6 +579,7 @@ pub(super) fn model_cells(
         output: String,
         cache_read: String,
         cache_hit: Option<(u8, String)>,
+        rate: Option<String>,
         share_pct: f64,
     }
 
@@ -599,6 +600,7 @@ pub(super) fn model_cells(
                 cache_hit: spend
                     .cache_hit_percent()
                     .map(|percent| (percent, format!("{percent}%"))),
+                rate: spend.tokens_per_sec().map(|rate| rate.to_string()),
                 share_pct: pct,
             }
         })
@@ -634,6 +636,13 @@ pub(super) fn model_cells(
         .unwrap_or(0);
     let sep = render::paint(render::palette::muted(), "·");
 
+    let rate_w = rows
+        .iter()
+        .filter_map(|row| row.rate.as_ref())
+        .map(|rate| display_width(rate) + " tok/s".len())
+        .max()
+        .unwrap_or(0);
+
     rows.iter()
         .map(|row| {
             let name = pad_to(&render::paint(render::palette::muted(), &row.name), name_w);
@@ -658,6 +667,21 @@ pub(super) fn model_cells(
                     " {sep} {}",
                     render::paint(style, &pad_left(cache_hit, cache_hit_w))
                 ));
+            } else if rate_w > 0 && cache_hit_w > 0 {
+                left_full.push_str(&format!(" {sep} {}", " ".repeat(cache_hit_w)));
+            }
+            if rate_w > 0 {
+                let rate = row.rate.as_ref().map_or_else(
+                    || pad_left("-", rate_w),
+                    |rate| {
+                        format!(
+                            "{} {}",
+                            pad_left(rate, rate_w - " tok/s".len()),
+                            render::paint(render::palette::muted(), "tok/s")
+                        )
+                    },
+                );
+                left_full.push_str(&format!(" {sep} {rate}"));
             }
             let left_compact = format!(
                 "{} {name} {}",

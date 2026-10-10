@@ -48,6 +48,8 @@ struct ModelJson {
     tools: BTreeMap<String, u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     cache_hit_pct: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tokens_per_sec: Option<u64>,
     usd: f64,
     share: f64,
 }
@@ -112,6 +114,7 @@ fn stats_json<'a>(
                 tool_calls: spend.tool_calls,
                 tools: spend.tools.clone(),
                 cache_hit_pct: spend.cache_hit_percent(),
+                tokens_per_sec: spend.tokens_per_sec(),
                 usd: spend.usd,
                 share: if total_usd > 0.0 {
                     spend.usd / total_usd
