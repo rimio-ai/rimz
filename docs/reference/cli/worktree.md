@@ -45,18 +45,18 @@ created feat-a
   linked : 1 dir(s) from .worktreelink
 ```
 
-`new` runs `git worktree add -b <branch> <path> <base>`, writes the ownership marker, and seeds the tree from the repository's `.worktreeinclude` and `.worktreelink` files ([seed the tree](../../guide/worktrees.md#seed-the-tree)). It then runs the optional `created` hook; success adds `  hook   : worktree.created ran` to the report, and failure fails the command ([hook lifecycle and errors](../../guide/worktrees.md#prepare-the-tree-with-a-hook)). It launches nothing into the tree. Any open messages still queued on the channel of that name are archived.
+`new` runs `git worktree add --no-track -b <branch> <path> <base>`, writes the ownership marker, and seeds the tree from the repository's `.worktreeinclude` and `.worktreelink` files ([seed the tree](../../guide/worktrees.md#seed-the-tree)). The new branch does not track its base. It then runs the optional `created` hook; success adds `  hook   : worktree.created ran` to the report, and failure fails the command ([hook lifecycle and errors](../../guide/worktrees.md#prepare-the-tree-with-a-hook)). It launches nothing into the tree. Any open messages still queued on the channel of that name are archived.
 
 Seed only paths Git already ignores. A seed Git neither tracks nor ignores lands as an untracked change in every tree it reaches, which is enough for `sweep` to keep that tree with `uncommitted changes` and for `remove` to refuse it. Linked directories need no `.gitignore` entry: `new` adds each one to the exclude file `git rev-parse --git-path info/exclude` names, which for a linked worktree is usually the main checkout's `.git/info/exclude`.
 
-`--base` picks the commit the branch starts from. Without it, `new` uses the `[agents.worktree] base` setting, which defaults to `head`.
+`--base` picks the commit the branch starts from. Without it, `new` uses the `[agents.worktree] base` setting; unset means `head` here.
 
 When a fresh tree's local base branch tracks an upstream and is behind it, creation succeeds with a stderr warning: `warning: base branch main is 4 commits behind origin/main as last fetched; fast-forward main first, or pass --base origin/main` (with the actual branch, upstream, and count; `1 commit` for one). The count uses local upstream refs as last fetched; creation does not fetch. Reused trees, PR checkouts, detached HEADs, bases without an upstream, and failed checks produce no warning.
 
 | `--base` | Branch starts from |
 | --- | --- |
 | `head` | Your local `HEAD` in the main checkout. |
-| `fresh` | `origin/HEAD`, the remote's default branch as last fetched. |
+| `fresh` | `origin/HEAD`, the remote's default branch as last fetched. [`Team launches`](./teams.md#launch-a-team) fetch it first; `new` does not. |
 | any other value | That Git ref, such as `main` or `v2.1.0`. |
 
 `base` is the full commit the tree was cut from, and `base branch` the branch or ref it was cut from; `base branch` is omitted when there is none to name, such as a detached `HEAD`. `seeded` and `linked` print only when nonzero. Whether the tree's work has landed is later measured against that base branch ([choosing the comparison ref](../../internals/harness/worktrees.md#choosing-the-comparison-ref)).

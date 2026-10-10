@@ -210,7 +210,7 @@ A checkout holding another team (a live member, or team history with a board sta
 
 | Flag | Effect |
 | --- | --- |
-| `-w`, `--worktree [NAME]` | Reuse or create the RimZ-owned worktree `NAME`, on lane `#NAME`; bare `-w` generates a name. `team#NAME` is the same selection; give one or the other. Name rules and prompts are on [`rimz agents`](./agents.md#channel-worktree-and-placement). |
+| `-w`, `--worktree [NAME]` | Reuse or create the RimZ-owned worktree `NAME`, on lane `#NAME`; bare `-w` generates a name. New trees branch from the remote default branch, fetched at launch, unless `agents.worktree.base` selects `head` or a literal ref. A configured `fresh` also fetches. The fetch never prompts and gives up after 60 seconds, so an ssh origin whose key needs a passphrase with no agent running waits out that budget. A failed fetch warns and uses the last-fetched tip, or local `HEAD` if none exists; with no `origin`, an unset base uses local `HEAD`. Reuse and `--from-pr` do not fetch. `team#NAME` is the same selection; give one or the other. Name rules and prompts are on [`rimz agents`](./agents.md#channel-worktree-and-placement). |
 | `--channel NAME` | Launch into the durable named lane `NAME` in the room root. Conflicts with `-w` and `team#worktree`. |
 | `--from-pr PR` | Create or reuse a worktree from a pull-request number or URL. |
 | `--description TEXT` | Seed the member cards' description until the agents name their sessions. |

@@ -169,7 +169,7 @@ A launch runs in the current directory's checkout by default. These flags choose
 | `--from-pr <NUMBER\|URL>` | Reuse the marked tree holding a same-repository PR's head branch, or create a tree named `pr-<N>` unless `-w NAME` names it. An explicit name must match an existing holder. |
 | `--channel <NAME>` | Launch into the lane `#NAME` in the selected directory, in a tab named `#NAME`. The lane exists while agents run in it. `NAME` is bare ASCII letters, digits, `_`, or `-` (`--channel '#design'` is refused with `invalid channel name`), and a name a RimZ-owned worktree holds is refused with ``channel `NAME` is backed by a worktree``. |
 
-Fresh worktree launches print the same [stale-base warning](./worktree.md#create-a-worktree) as `worktree new`, with the remedy to fast-forward the base first or set `agents.worktree.base` to `fresh`.
+Fresh worktree launches print the same [stale-base warning](./worktree.md#create-a-worktree) as `worktree new`, with the remedy to fast-forward the base first or set `agents.worktree.base` to `fresh`. Team specs, including a single `team.role`, instead [fetch the remote default branch](./teams.md#launch-a-team) when the base is unset or `fresh`.
 
 Spell the worktree name without the channel's `#`. `-w feat-a` gives channel `#feat-a`; `-w '#feat-a'` fails with `invalid worktree name`; and an unquoted `-w #feat-a` in a shell with comments enabled reaches RimZ as a bare `-w` and generates a name. A branch-style name is accepted: `-w feat/great` creates branch `feat/great` with worktree, channel, and tab `feat-great`.
 

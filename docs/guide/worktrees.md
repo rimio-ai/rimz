@@ -156,7 +156,7 @@ Reusing or resuming an existing tree never runs `created`. Trees made before you
 
 `-w feat-a` runs five steps, each plain Git, a file operation, or your configured shell command:
 
-1. **Add the tree.** `git worktree add -b feat-a ../<repo>-worktrees/feat-a <base>`. The directory template and the base ref are the two knobs below.
+1. **Add the tree.** `git worktree add --no-track -b feat-a ../<repo>-worktrees/feat-a <base>`. The new branch does not track its base. The directory template and the base ref are the two knobs below.
 2. **Mark it.** Write `rimz-worktree.json` into the tree's Git admin directory, at `.git/worktrees/feat-a/rimz-worktree.json` under the main repository, recording the name, branch, and the base branch and commit that cleanup later measures against. That file is the whole of RimZ's claim on the tree: the checkout itself stays free of RimZ metadata, and every verb that can delete something reads the marker first and does nothing without it.
 3. **Seed it.** Copy the `.worktreeinclude` matches, symlink the `.worktreelink` directories, and register each link in the tree's `.git/info/exclude`.
 4. **Prepare it.** Run the optional [`created` hook](#prepare-the-tree-with-a-hook) and wait for success.
@@ -169,9 +169,9 @@ rimz config set agents.worktree.dir "../{repo}-worktrees"   # where sibling tree
 rimz config set agents.worktree.base fresh                  # branch from origin/HEAD, not local HEAD
 ```
 
-`base` is `head` (the default), `fresh`, or any Git ref you name. Both keys read the main repository even when you launch from one of its linked worktrees, so `head` means the branch checked out in your main clone, not the one under your cursor, and `dir` puts the new tree beside that clone. `rimz worktree new --base <ref> --branch <name>` overrides the base and the branch name for one tree; the directory always comes from `dir`. Both fields are written up in [configuration → worktrees](./configuration.md#worktrees).
+Unset, `base` gives a team the remote default branch fetched at launch; non-team launches and `rimz worktree new` keep local `HEAD`. Set it to `head`, `fresh`, or any Git ref to choose explicitly. Both keys read the main repository even when you launch from one of its linked worktrees, so `head` means the branch checked out in your main clone, not the one under your cursor, and `dir` puts the new tree beside that clone. `rimz worktree new --base <ref> --branch <name>` overrides the base and the branch name for one tree; the directory always comes from `dir`. Both fields are written up in [configuration → worktrees](./configuration.md#worktrees).
 
-A stale main checkout gives the whole cohort a stale starting point. The [stale-base warning](../reference/cli/worktree.md#create-a-worktree) tells you when to fast-forward that base or choose `fresh` (`--base origin/main` for a single `worktree new`).
+Team launches [fetch trunk before branching](../reference/cli/teams.md#launch-a-team), warning and falling back if the fetch fails. For an explicitly selected local base, the [stale-base warning](../reference/cli/worktree.md#create-a-worktree) tells you when to fast-forward that base or choose `fresh` (`--base origin/main` for a single `worktree new`).
 
 If the repository you are standing in differs from the active room's, RimZ prints both paths and asks before creating anything, and warns that this room will not list, remove, or garbage-collect a tree made under the other root. A non-interactive caller states the choice with `--root <git-root>` instead of answering.
 
