@@ -127,6 +127,7 @@ pub fn run(config: ServeConfig) -> Result<()> {
     let mut pane_watchdog = PaneWatchdog::from_config(&config);
     let supervisor_build = crate::build_id::current();
     let mut exec_state = PendingExec::default();
+    let diag = diag_sink(&config);
     loop {
         if stopped.load(Ordering::SeqCst) {
             modes.preserve_for_handoff();
@@ -137,7 +138,7 @@ pub fn run(config: ServeConfig) -> Result<()> {
             .as_mut()
             .is_some_and(|watchdog| watchdog.probe_if_due(Instant::now()))
         {
-            record_pane_gone(&config);
+            record_pane_gone(&config, &diag);
             modes.preserve_for_handoff();
             remove_orphan_runtime_files(&config);
             return Ok(());
@@ -172,7 +173,7 @@ pub fn run(config: ServeConfig) -> Result<()> {
             Ok(RoundExit::Stopped) => continue,
             Ok(RoundExit::HostLost) => AttachFailure::Lost,
             Ok(RoundExit::OrphanReaped) => {
-                record_pane_gone(&config);
+                record_pane_gone(&config, &diag);
                 modes.preserve_for_handoff();
                 remove_orphan_runtime_files(&config);
                 return Ok(());
@@ -183,7 +184,7 @@ pub fn run(config: ServeConfig) -> Result<()> {
                     run_duration,
                     respawn_stable_run(),
                 ) {
-                    diag_sink(&config).emit(DiagEvent::SupervisorConvergence {
+                    diag.emit(DiagEvent::SupervisorConvergence {
                         target_build: target.build.clone(),
                     });
                     match preflight_supervisor(&target.path) {
@@ -192,7 +193,7 @@ pub fn run(config: ServeConfig) -> Result<()> {
                             return exec_supervisor(&target.path, &args, &config);
                         }
                         Err(reason) => {
-                            record_preflight_rejected(&config, &target.build, &reason);
+                            record_preflight_rejected(&diag, &target.build, &reason);
                             exec_state.reject(&target.build);
                         }
                     }
@@ -204,11 +205,11 @@ pub fn run(config: ServeConfig) -> Result<()> {
                     SelfCloseConfirmation::Close | SelfCloseConfirmation::PaneGone => {
                         drop(modes);
                         remove_orphan_runtime_files(&config);
-                        record_confirmed_self_close(&config);
+                        record_confirmed_self_close(&diag);
                         return Ok(());
                     }
                     SelfCloseConfirmation::Keep { siblings, reason } => {
-                        record_self_close_rejected(&config, siblings, &reason);
+                        record_self_close_rejected(&diag, siblings, &reason);
                         sleep_respawn_backoff(
                             respawn_delay(RESPAWN_BACKOFF_INITIAL),
                             &mut record_watch,
@@ -228,7 +229,7 @@ pub fn run(config: ServeConfig) -> Result<()> {
         let delay = respawn_delay(delay);
         paint_unavailable_notice(&failure, delay);
         let (cause, reason) = failure.diagnostic();
-        diag_sink(&config).emit(DiagEvent::SidebarHostUnavailable {
+        diag.emit(DiagEvent::SidebarHostUnavailable {
             cause,
             reason,
             attached_ms: attached_duration.map(|duration| duration.as_millis() as u64),
@@ -932,8 +933,8 @@ fn sleep_respawn_backoff(
     }
 }
 
-fn record_pane_gone(config: &ServeConfig) {
-    diag_sink(config).emit(DiagEvent::SupervisorPaneGone {
+fn record_pane_gone(config: &ServeConfig, diag: &crate::diag::DiagSink) {
+    diag.emit(DiagEvent::SupervisorPaneGone {
         pane_id: config
             .own_pane
             .as_ref()
@@ -954,22 +955,22 @@ fn preflight_supervisor(exe: &Path) -> std::result::Result<(), String> {
     }
 }
 
-fn record_preflight_rejected(config: &ServeConfig, target_build: &str, reason: &str) {
-    diag_sink(config).emit(DiagEvent::SupervisorPreflightRejected {
+fn record_preflight_rejected(diag: &crate::diag::DiagSink, target_build: &str, reason: &str) {
+    diag.emit(DiagEvent::SupervisorPreflightRejected {
         target_build: target_build.to_owned(),
         reason: reason.to_owned(),
     });
 }
 
-fn record_self_close_rejected(config: &ServeConfig, siblings: usize, reason: &str) {
-    diag_sink(config).emit(DiagEvent::SelfCloseRejected {
+fn record_self_close_rejected(diag: &crate::diag::DiagSink, siblings: usize, reason: &str) {
+    diag.emit(DiagEvent::SelfCloseRejected {
         siblings,
         reason: reason.to_owned(),
     });
 }
 
-fn record_confirmed_self_close(config: &ServeConfig) {
-    diag_sink(config).emit_unlimited(DiagEvent::RendererExit {
+fn record_confirmed_self_close(diag: &crate::diag::DiagSink) {
+    diag.emit_unlimited(DiagEvent::RendererExit {
         cause: crate::diag::record::RendererExitCause::SelfCloseEmptyTab,
     });
 }
