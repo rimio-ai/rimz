@@ -11,8 +11,6 @@ use crate::common::CommandTimeoutExt;
 use super::presence::{presence_wasm_artifact, seed_presence_permissions};
 use super::support::*;
 
-const SELF_CLOSE_WORKSPACE_ID: &str = "ws_0123456789abcdef01234567";
-
 fn wait_for_serve_processes(session: &str, target: usize, timeout: Duration) {
     poll_until(
         timeout,
@@ -51,15 +49,12 @@ fn sidebar_self_closes_when_its_tab_empties() {
     let name = room.name().to_owned();
     let cwd = TempDir::new().expect("cwd tempdir");
     let xdg = room.path();
-    record_known_workspace_session(
-        xdg,
-        &WorkspaceId::parse(SELF_CLOSE_WORKSPACE_ID).expect("fixed id"),
-        cwd.path(),
-        &name,
-    );
+    let workspace_id =
+        WorkspaceId::from_project_root(&cwd.path().canonicalize().expect("canonical cwd"));
+    record_known_workspace_session(xdg, &workspace_id, cwd.path(), &name);
     seed_presence_permissions(xdg, &wasm);
 
-    let layout = self_close_layout(&name, &rimz, xdg);
+    let layout = self_close_layout(&name, &rimz, xdg, &workspace_id);
     let layout_path = cwd.path().join("layout.kdl");
     std::fs::write(&layout_path, layout).expect("write layout");
 
@@ -79,7 +74,7 @@ fn sidebar_self_closes_when_its_tab_empties() {
     ZellijBackend::with_runtime_dir(xdg)
         .ensure_presence_plugin(&rimz::mux::PresencePluginOptions {
             session_name: name.clone(),
-            workspace_id: WorkspaceId::parse(SELF_CLOSE_WORKSPACE_ID).expect("fixed id"),
+            workspace_id: workspace_id.clone(),
             wasm,
             rimz_bin: rimz,
             focus_key: None,
@@ -92,27 +87,21 @@ fn sidebar_self_closes_when_its_tab_empties() {
     wait_for_no_serve_processes(&name, Duration::from_secs(15));
     wait_for_nonplugin_panes(&room, 0, Duration::from_secs(20));
 
-    let heartbeat_dir = rimz::RuntimePaths::under(
-        WorkspaceId::parse(SELF_CLOSE_WORKSPACE_ID).expect("fixed id"),
-        xdg,
-    )
-    .expect("runtime paths")
-    .heartbeat_dir;
+    let heartbeat_dir = rimz::RuntimePaths::under(workspace_id, xdg)
+        .expect("runtime paths")
+        .heartbeat_dir;
     wait_for_no_sidebar_heartbeat(&heartbeat_dir, Duration::from_secs(15));
 }
 
 #[test]
 fn sidebar_self_closes_when_plugin_roster_omits_its_pane() {
-    with_stale_roster_room("staleclose", 3, |room, name| {
+    with_stale_roster_room("staleclose", 3, |room, name, workspace_id| {
         wait_for_no_serve_processes(name, Duration::from_secs(15));
         wait_for_nonplugin_panes(room, 0, Duration::from_secs(20));
         wait_for_no_sidebar_heartbeat(
-            &rimz::RuntimePaths::under(
-                WorkspaceId::parse(SELF_CLOSE_WORKSPACE_ID).expect("fixed id"),
-                room.path(),
-            )
-            .expect("runtime paths")
-            .heartbeat_dir,
+            &rimz::RuntimePaths::under(workspace_id.clone(), room.path())
+                .expect("runtime paths")
+                .heartbeat_dir,
             Duration::from_secs(15),
         );
     });
@@ -120,7 +109,7 @@ fn sidebar_self_closes_when_plugin_roster_omits_its_pane() {
 
 #[test]
 fn sidebar_keeps_open_with_stale_roster_while_a_sibling_lives() {
-    with_stale_roster_room("stalekeep", 60, |room, name| {
+    with_stale_roster_room("stalekeep", 60, |room, name, _| {
         std::thread::sleep(Duration::from_secs(8));
 
         assert!(
@@ -200,9 +189,9 @@ fn wait_for_no_sidebar_heartbeat(dir: &Path, timeout: Duration) {
     );
 }
 
-fn self_close_layout(session: &str, rimz: &Path, xdg: &Path) -> String {
+fn self_close_layout(session: &str, rimz: &Path, xdg: &Path, workspace_id: &WorkspaceId) -> String {
     let q = |s: String| serde_json::to_string(&s).expect("kdl escape");
-    let serve = sidebar_serve_command_with_tick(session, rimz, xdg, 2);
+    let serve = sidebar_serve_command_with_tick(session, rimz, xdg, workspace_id, 2);
     format!(
         r#"layout {{
     default_tab_template split_direction="vertical" {{
@@ -229,7 +218,7 @@ fn self_close_layout(session: &str, rimz: &Path, xdg: &Path) -> String {
 fn with_stale_roster_room(
     prefix: &str,
     sibling_seconds: u64,
-    check: impl FnOnce(&LiveZellijSession, &str),
+    check: impl FnOnce(&LiveZellijSession, &str, &WorkspaceId),
 ) {
     require_zellij!();
 
@@ -243,14 +232,18 @@ fn with_stale_roster_room(
     let name = room.name().to_owned();
     let cwd = TempDir::new().expect("cwd tempdir");
     let xdg = room.path();
-    record_known_workspace_session(
-        xdg,
-        &WorkspaceId::parse(SELF_CLOSE_WORKSPACE_ID).expect("fixed id"),
-        cwd.path(),
-        &name,
-    );
+    let workspace_id =
+        WorkspaceId::from_project_root(&cwd.path().canonicalize().expect("canonical cwd"));
+    record_known_workspace_session(xdg, &workspace_id, cwd.path(), &name);
     let start_marker = xdg.join("start-sidebar");
-    let layout = stale_roster_layout(&name, &rimz, xdg, &start_marker, sibling_seconds);
+    let layout = stale_roster_layout(
+        &name,
+        &rimz,
+        xdg,
+        &workspace_id,
+        &start_marker,
+        sibling_seconds,
+    );
     let layout_path = cwd.path().join("layout.kdl");
     std::fs::write(&layout_path, layout).expect("write layout");
 
@@ -271,18 +264,35 @@ fn with_stale_roster_room(
     let mut stale_roster = PaneSnapshot::expect(xdg, &name);
     let sidebar = stale_roster.sidebar().expect("sidebar pane").id;
     stale_roster.panes.retain(|pane| pane.id != sidebar);
-    let workspace_id = WorkspaceId::parse(SELF_CLOSE_WORKSPACE_ID).expect("fixed id");
     let _keepalive = stale_topology_keepalive(xdg, &workspace_id, &name, stale_roster);
 
     std::fs::write(&start_marker, []).expect("release sidebar and sibling");
-    wait_for_serve_processes(&name, 2, Duration::from_secs(15));
-    check(&room, &name);
+    let runtime = rimz::RuntimePaths::under(workspace_id.clone(), xdg).expect("runtime paths");
+    poll_until(
+        Duration::from_secs(15),
+        || {
+            Ok::<_, String>(
+                rimz::sidebar::live_sidebars(&runtime)
+                    .into_iter()
+                    .map(|sidebar| sidebar.heartbeat)
+                    .collect::<Vec<_>>(),
+            )
+        },
+        |heartbeats| {
+            heartbeats
+                .iter()
+                .any(|heartbeat| heartbeat.session_name == name)
+        },
+        "attached sidebar heartbeat",
+    );
+    check(&room, &name, &workspace_id);
 }
 
 fn stale_roster_layout(
     session: &str,
     rimz: &Path,
     xdg: &Path,
+    workspace_id: &WorkspaceId,
     start_marker: &Path,
     sibling_seconds: u64,
 ) -> String {
@@ -292,7 +302,7 @@ fn stale_roster_layout(
     let wait = format!("while [ ! -f {marker} ]; do sleep 0.05; done; ");
     let serve = format!(
         "{wait}{}",
-        sidebar_serve_command_with_tick(session, rimz, xdg, 2)
+        sidebar_serve_command_with_tick(session, rimz, xdg, workspace_id, 2)
     );
     let sibling = format!("{wait}exec sleep {sibling_seconds}");
     format!(
@@ -323,6 +333,7 @@ fn sidebar_serve_command_with_tick(
     session: &str,
     rimz: &Path,
     xdg: &Path,
+    workspace_id: &WorkspaceId,
     tick_seconds: u64,
 ) -> String {
     format!(
@@ -332,7 +343,6 @@ fn sidebar_serve_command_with_tick(
          --session-name {session} --tick-seconds {tick_seconds}",
         xdg = xdg.display(),
         rimz = rimz.display(),
-        workspace_id = SELF_CLOSE_WORKSPACE_ID,
     )
 }
 

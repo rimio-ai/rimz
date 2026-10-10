@@ -1,7 +1,7 @@
 use std::ops::RangeInclusive;
 use std::time::{Duration, Instant};
 
-use rimz::ids::{MuxName, PaneId};
+use rimz::ids::{MuxName, PaneId, WorkspaceId};
 use rimz::mux::{LayoutPanes, MuxBackend, PaneCmd, TabOptions, ZellijBackend};
 use tempfile::TempDir;
 
@@ -27,9 +27,13 @@ fn renderer_width_keys_hold_their_live_zellij_step() {
     let name = room.name().to_owned();
     let cwd = TempDir::new().expect("cwd tempdir");
     let rimz = crate::common::cargo_bin("rimz", env!("CARGO_BIN_EXE_rimz"));
-    let sidebar = sidebar_opts(&name, cwd.path(), rimz, VIEW_COLS);
+    let mut sidebar = sidebar_opts(&name, cwd.path(), rimz, VIEW_COLS);
+    sidebar.workspace_id =
+        WorkspaceId::from_project_root(&cwd.path().canonicalize().expect("canonical cwd"));
     let backend = ZellijBackend::with_runtime_dir(xdg);
     publish_room_bin(xdg, &sidebar);
+    sidebar.runtime =
+        rimz::RuntimePaths::under(sidebar.workspace_id.clone(), xdg).expect("runtime paths");
     backend.open_sidebar(&sidebar, None).expect("open sidebar");
     wait_for_pane_count(xdg, &name, 2);
     let _client = AttachedClient::attach(&room, VIEW_COLS, VIEW_ROWS);
@@ -101,9 +105,13 @@ fn renderer_repicks_the_viewport_after_a_wider_attach() {
     let name = room.name().to_owned();
     let cwd = TempDir::new().expect("cwd tempdir");
     let rimz = crate::common::cargo_bin("rimz", env!("CARGO_BIN_EXE_rimz"));
-    let sidebar = sidebar_opts(&name, cwd.path(), rimz, ATTACHED_VIEW_COLS);
+    let mut sidebar = sidebar_opts(&name, cwd.path(), rimz, ATTACHED_VIEW_COLS);
+    sidebar.workspace_id =
+        WorkspaceId::from_project_root(&cwd.path().canonicalize().expect("canonical cwd"));
     let backend = ZellijBackend::with_runtime_dir(xdg);
     publish_room_bin(xdg, &sidebar);
+    sidebar.runtime =
+        rimz::RuntimePaths::under(sidebar.workspace_id.clone(), xdg).expect("runtime paths");
     backend.open_sidebar(&sidebar, None).expect("open sidebar");
     wait_for_pane_count(xdg, &name, 2);
 
