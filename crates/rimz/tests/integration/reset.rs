@@ -14,7 +14,7 @@ use rimz::ids::{AgentKind, AgentSessionId, MuxName, PaneId};
 use rimz::store::event::EventEnvelope;
 use rimz::store::run::{RunRecord, RunStatus};
 
-use crate::common::Env;
+use crate::common::{CommandTimeoutExt, Env};
 
 #[cfg(unix)]
 #[test]
@@ -88,6 +88,58 @@ esac
         recovered["agents"], before["agents"],
         "rebirth must see the pre-teardown roster"
     );
+}
+
+#[test]
+fn reset_refuses_a_held_old_layout_room_even_with_its_sidebar_heartbeat() {
+    let env = Env::new();
+    let workspace = env.resolve_workspace(&env.project_root);
+    let paths = env.state_path_for(&env.project_root);
+    let runtime = env.runtime_paths();
+    crate::common::room::seed_sidebar_heartbeat(
+        &runtime,
+        MuxName::Zellij,
+        &workspace.session_name,
+        "old-room",
+    );
+    fs::create_dir_all(&paths.root).unwrap();
+    let record = serde_json::to_vec(&serde_json::json!({
+        "workspace_id": workspace.workspace_id,
+        "project_root": workspace.project_root,
+        "session_name": workspace.session_name,
+        "updated_at": "2026-01-01T00:00:00Z"
+    }))
+    .unwrap();
+    fs::write(&paths.workspace_record, &record).unwrap();
+    let _held = rimz::disk::lock::RoomLock::hold(&runtime.room_lock()).unwrap();
+    let trace = env.project_root.join("reset-zellij.log");
+
+    for confirm in [vec!["--yes"], vec![]] {
+        let output = env
+            .rimz()
+            .env("RIMZ_ZELLIJ_BIN", crate::common::zellij_trace_shim())
+            .env("RIMZ_TEST_ZELLIJ_LOG", &trace)
+            .env("RIMZ_TEST_ZELLIJ_LIST_SESSIONS", &workspace.session_name)
+            .args(["--mux", "zellij", "reset", "--no-start"])
+            .args(confirm)
+            .bounded_output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!output.status.success(), "held room must refuse: {stderr}");
+        assert!(
+            stderr.contains(
+                "already held by another running room (another multiplexer, or a renamed session)"
+            ),
+            "refusal must precede confirmation: {stderr}"
+        );
+        assert!(stderr.contains(&workspace.session_name), "{stderr}");
+        assert!(!stderr.contains("older RimZ"), "{stderr}");
+        assert!(!stderr.contains("Room torn down"), "{stderr}");
+        assert!(paths.root.exists());
+        assert!(runtime.root.exists());
+        assert_eq!(fs::read(&paths.workspace_record).unwrap(), record);
+    }
+    assert!(!trace.exists(), "refusal must precede any backend call");
 }
 
 #[test]

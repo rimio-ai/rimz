@@ -200,6 +200,73 @@ fn start_refuses_when_rival_backend_runs_room() {
 }
 
 #[test]
+fn start_refuses_a_held_old_layout_room_on_the_rival_backend() {
+    if which::which("zellij").is_err() {
+        crate::common::skip("zellij not on PATH");
+        return;
+    }
+    let Some(room) = TmuxRoom::start() else {
+        return;
+    };
+    let paths = room.env.state_path_for(&room.env.project_root);
+    let runtime = room.env.runtime_paths();
+    let mut record: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&paths.workspace_record).unwrap()).unwrap();
+    record["layout"] = serde_json::json!(1);
+    let record = serde_json::to_vec(&record).unwrap();
+    std::fs::write(&paths.workspace_record, &record).unwrap();
+
+    let mut command = room.rimz();
+    pin_zellij_shared_env(&room.env, &mut command);
+    let started = Instant::now();
+    let output = command
+        .args(["--mux", "zellij", "start"])
+        .bounded_output()
+        .expect("run rival zellij start");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "held room must refuse: {stderr}");
+    assert!(started.elapsed() < Duration::from_secs(4), "{stderr}");
+    assert!(
+        stderr.contains(
+            "already held by another running room (another multiplexer, or a renamed session)"
+        ) && stderr.contains(&room.session_name),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("older RimZ"), "{stderr}");
+    assert!(room.tmux_sessions().contains(&room.session_name));
+    assert!(
+        rimz::disk::lock::RoomLock::claim(&runtime.room_lock(), Duration::ZERO)
+            .unwrap()
+            .is_none(),
+        "the live supervisors must still hold the room"
+    );
+    assert!(paths.root.exists());
+    assert!(runtime.root.exists());
+    assert_eq!(std::fs::read(&paths.workspace_record).unwrap(), record);
+    let mut zellij = Command::new("zellij");
+    pin_zellij_shared_env(&room.env, &mut zellij);
+    let listed = zellij
+        .args(["list-sessions", "--no-formatting"])
+        .bounded_output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&listed.stdout);
+    let stderr = String::from_utf8_lossy(&listed.stderr);
+    assert!(
+        listed.status.success()
+            || stdout.contains("No active zellij sessions found")
+            || stderr.contains("No active zellij sessions found"),
+        "zellij absence must be observed, not a failed query: {stderr}"
+    );
+    assert!(
+        !stdout
+            .lines()
+            .filter_map(live_zellij_session_name)
+            .any(|name| name == room.session_name),
+        "refusal must not birth a zellij session"
+    );
+}
+
+#[test]
 fn start_refuses_when_room_runs_under_another_session_name() {
     let Some(room) = TmuxRoom::start() else {
         return;

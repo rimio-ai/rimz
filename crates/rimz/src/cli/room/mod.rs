@@ -479,10 +479,9 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
     if let RoomEntry::Start { workspace, .. }
     | RoomEntry::StartDetached { workspace, .. }
     | RoomEntry::AttachCwd { workspace, .. } = &entry
-        && let Some(report) =
-            rimz::room::teardown::replace_incompatible_room(backend.as_ref(), workspace)?
+        && let Some(room) = rimz::room::teardown::IncompatibleRoom::claim(workspace)?
     {
-        render::room::print_replaced_room(&report)?;
+        render::room::print_replaced_room(&room.replace(backend.as_ref())?)?;
     }
     // Capture whether this is a plain reattach *before* `ensure_session`, which on
     // tmux would create the session and erase the distinction. A live room never
