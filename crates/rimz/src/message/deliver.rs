@@ -475,6 +475,12 @@ pub(super) fn execute_attempt(
             const WAITING: &str = "agent is waiting on input in its pane";
             if matches!(source, AttemptSource::Fresh { .. })
                 && live_send.kind != DeliveryKind::Boundary
+                && !matches!(
+                    head.sender,
+                    MessageSender::Harness {
+                        notice: HarnessNotice::Wait
+                    }
+                )
             {
                 store.record_send_error(head, WAITING, &workspace.session_name)?;
                 return Ok(AttemptOutcome::SkippedWaiting);

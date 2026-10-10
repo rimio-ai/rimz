@@ -4,10 +4,12 @@ use crate::common::wait::{
     agent_wait, loop_instances_path, register_agent, register_calling_agent,
     register_calling_agent_with_launch, wait_instances, wait_ok,
 };
-use crate::common::{Env, canonical};
-use rimz::agents::{AgentLifecycleObservation, LaunchParams, LifecycleSignal};
-use rimz::ids::{AgentKind, AgentSessionId};
-use rimz::store::message::{DeliveryGate, HarnessNotice, MessageRecord, MessageSender};
+use crate::common::{Env, canonical, zellij_trace_shim};
+use rimz::agents::{AgentLifecycleObservation, AskKind, LaunchParams, LifecycleSignal};
+use rimz::ids::{AgentKind, AgentSessionId, MuxName, PaneId};
+use rimz::store::message::{
+    DeliveryGate, HarnessNotice, MessageRecord, MessageSender, MessageStatus,
+};
 use rimz::store::writer::AgentLifecycleIntent;
 
 #[test]
@@ -1396,6 +1398,233 @@ fn self_wait_queues_with_any_gate_for_working_and_idle_targets() {
             "wait settled while its wake was in flight"
         );
     }
+}
+
+#[test]
+fn self_wait_parks_at_an_open_prompt_then_delivers_at_the_turn_boundary() {
+    let env = Env::new();
+    let pane_fixture = register_waiting_caller(&env);
+    let output = traced_wait(&env, &pane_fixture)
+        .args(["wait", "--run", "printf wake-marker"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+
+    let records = wait_for_wait_records(&env, 1);
+    let mut messages = env.store().list_messages().unwrap();
+    messages.extend(env.store().list_message_history().unwrap());
+    assert_eq!(messages.len(), 1);
+    let wake = &messages[0];
+    assert_eq!(wake.status, MessageStatus::Queued);
+    assert_eq!(wake.agent_id.as_str(), "provider-session");
+    assert_eq!(wake.gate, DeliveryGate::Any);
+    assert_eq!(
+        wake.sender,
+        MessageSender::Harness {
+            notice: HarnessNotice::Wait
+        }
+    );
+    assert_eq!(
+        wake.last_error.as_deref(),
+        Some("agent is waiting on input in its pane")
+    );
+    assert_eq!(wait_for_wait_messages(&env, 1).len(), 1);
+    assert_no_wait_paste(&env);
+    wait_for_no_wait_instances(&env);
+    assert_eq!(records[0].result.label(), "delivered");
+    assert_eq!(records[0].message_id.as_ref(), Some(&wake.message_id));
+    assert_eq!(agents_wait_exit(&env), Some(124));
+
+    let output = traced_wait(&env, &pane_fixture)
+        .args(["message", "sweep"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let parked = env.store().list_pending_messages().unwrap();
+    assert_eq!(parked[0].status, MessageStatus::Queued);
+    assert_eq!(parked[0].attempts, wake.attempts);
+    assert_no_wait_paste(&env);
+
+    let observation = AgentLifecycleObservation::new(
+        Some(AgentSessionId::from("provider-session")),
+        LifecycleSignal::TurnEnded {
+            errored: false,
+            parked_on_background: false,
+            turn_id: None,
+        },
+    );
+    env.store()
+        .append_agent_lifecycle(AgentLifecycleIntent {
+            session_name: "rimz-test",
+            agent_kind: AgentKind::new_unchecked("claude"),
+            event_name: "Stop",
+            observation: &observation,
+            spawned_subagents: &[],
+        })
+        .unwrap();
+    assert_eq!(agents_wait_exit(&env), Some(124), "wake is still owed");
+    let output = traced_wait(&env, &pane_fixture)
+        .args(["message", "sweep"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let sent = env.store().list_messages().unwrap();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].message_id, wake.message_id);
+    assert_eq!(sent[0].status, MessageStatus::Sent);
+    let trace = std::fs::read_to_string(env.project_root.join("wait-trace.log")).unwrap();
+    let marker = "wake-marker"
+        .bytes()
+        .map(|byte| byte.to_string())
+        .collect::<Vec<_>>()
+        .join("\t");
+    assert!(
+        trace.lines().any(|line| {
+            line.contains("\taction\twrite\t--pane-id\tterminal_3\t27\t91\t50\t48\t48\t126\t")
+                && line.contains(&marker)
+                && line.ends_with("\t27\t91\t50\t48\t49\t126")
+        }),
+        "wake was not pasted to the agent's pane: {trace}"
+    );
+}
+
+#[test]
+fn watch_checkin_parks_at_an_open_prompt_without_consuming_or_killing_command() {
+    let env = Env::new();
+    let pane_fixture = register_waiting_caller(&env);
+    let release = env.home_root.join("release");
+    let pid_path = env.home_root.join("command.pid");
+    let command = format!(
+        "printf '%s' \"$$\" > {}; printf checkin-marker; while [ ! -e {} ]; do sleep 0.05; done; printf final-marker",
+        shlex::try_quote(pid_path.to_str().unwrap()).unwrap(),
+        shlex::try_quote(release.to_str().unwrap()).unwrap()
+    );
+    let output = traced_wait(&env, &pane_fixture)
+        .args(["wait", "--json", "--timeout", "1s", "--run", &command])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let receipt: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let name = receipt["name"].as_str().unwrap();
+    let records = wait_for_wait_records(&env, 1);
+    let mut messages = env.store().list_messages().unwrap();
+    messages.extend(env.store().list_message_history().unwrap());
+    assert_eq!(messages.len(), 1);
+    let checkin = &messages[0];
+    assert_eq!(checkin.status, MessageStatus::Queued);
+    assert_eq!(checkin.gate, DeliveryGate::Any);
+    assert_eq!(
+        checkin.sender,
+        MessageSender::Harness {
+            notice: HarnessNotice::Wait
+        }
+    );
+    assert_eq!(
+        checkin.last_error.as_deref(),
+        Some("agent is waiting on input in its pane")
+    );
+    assert!(checkin.text.contains("still running after"));
+    assert_eq!(records[0].result.label(), "delivered");
+    assert_eq!(records[0].message_id.as_ref(), Some(&checkin.message_id));
+    assert_no_wait_paste(&env);
+    let listed: serde_json::Value =
+        serde_json::from_str(&wait_ok(&env, &["wait", "list", "--json"])).unwrap();
+    assert_eq!(listed[0]["name"], name);
+    assert_eq!(listed[0]["state"], "watching");
+    assert!(wait_instances(&env).0.contains_key(name));
+    let mut pid = None;
+    wait_until(&env, "command did not write its pid", || {
+        pid = std::fs::read_to_string(&pid_path)
+            .ok()
+            .and_then(|text| text.parse::<u32>().ok());
+        pid.is_some()
+    });
+    assert!(rimz::proc::process_is_live(pid.unwrap(), None));
+
+    std::fs::write(&release, "").unwrap();
+    let records = wait_for_wait_records(&env, 2);
+    assert_eq!(records[1].check.as_ref().unwrap().code, Some(0));
+    wait_for_no_wait_instances(&env);
+    let messages = wait_for_wait_messages(&env, 2);
+    assert_eq!(messages.len(), 2);
+    assert!(
+        messages
+            .iter()
+            .all(|wake| wake.status == MessageStatus::Queued)
+    );
+    assert_no_wait_paste(&env);
+}
+
+fn register_waiting_caller(env: &Env) -> std::path::PathBuf {
+    env.record(&env.project_root);
+    env.install_agent_hooks("claude");
+    register_calling_agent(env);
+    let pane_id = PaneId::from_parts(MuxName::Zellij, "terminal_3");
+    for signal in [
+        LifecycleSignal::TurnStarted { turn_id: None },
+        LifecycleSignal::AwaitingInput {
+            kind: AskKind::Permission,
+            ask_id: None,
+            detail: None,
+            native_key: None,
+        },
+    ] {
+        let mut observation =
+            AgentLifecycleObservation::new(Some(AgentSessionId::from("provider-session")), signal);
+        observation.pane_id = Some(pane_id.clone());
+        env.store()
+            .append_agent_lifecycle(AgentLifecycleIntent {
+                session_name: "rimz-test",
+                agent_kind: AgentKind::new_unchecked("claude"),
+                event_name: "test",
+                observation: &observation,
+                spawned_subagents: &[],
+            })
+            .unwrap();
+    }
+    env.write_pane_fixture(&[rimz::pane::PaneRef {
+        pane_id,
+        session_name: "rimz-test".to_owned(),
+        view_id: Some("tab_1".to_owned()),
+        view_kind: Some(rimz::ids::ViewKind::Tab),
+        view_name: Some("project".to_owned()),
+        title: None,
+        is_floating: false,
+        command: Some("claude".to_owned()),
+        foreground_cmdline: None,
+        spawn_command: None,
+        cwd: Some(env.project_root.display().to_string()),
+        pane_pid: None,
+        pane_process_start: None,
+        hosted_agent_kind: None,
+        hosted_agent_process_start: None,
+        hosted_agent_lineage: Vec::new(),
+        resumed_session_id: None,
+        elevated_agent: None,
+        first_seen_at_ms: None,
+    }])
+}
+
+fn traced_wait(env: &Env, pane_fixture: &std::path::Path) -> std::process::Command {
+    let mut command = agent_wait(env);
+    command
+        .env("RIMZ_TEST_PANE_LIST", pane_fixture)
+        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+        .env(
+            "RIMZ_TEST_ZELLIJ_LOG",
+            env.project_root.join("wait-trace.log"),
+        );
+    command
+}
+
+fn assert_no_wait_paste(env: &Env) {
+    let trace =
+        std::fs::read_to_string(env.project_root.join("wait-trace.log")).unwrap_or_default();
+    assert!(!trace.contains("\taction\twrite\t"), "{trace}");
 }
 
 #[test]
