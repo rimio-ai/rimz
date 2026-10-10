@@ -1135,6 +1135,61 @@ fn room_logins(env: &Env) -> Option<serde_json::Value> {
 }
 
 #[test]
+fn start_refuses_a_held_old_layout_room_before_replacement() {
+    let env = Env::new();
+    let workspace = env.resolve_workspace(&env.project_root);
+    let paths = env.state_path_for(&env.project_root);
+    let runtime = env.runtime_paths();
+    std::fs::create_dir_all(&runtime.root).unwrap();
+    let old_runtime = runtime.root.join("old-runtime");
+    std::fs::write(&old_runtime, b"old").unwrap();
+    std::fs::create_dir_all(paths.root.join("messages")).unwrap();
+    let record = serde_json::to_vec(&serde_json::json!({
+        "workspace_id": workspace.workspace_id,
+        "project_root": workspace.project_root,
+        "session_name": "rimz-old-name",
+        "updated_at": "2026-01-01T00:00:00Z"
+    }))
+    .unwrap();
+    std::fs::write(&paths.workspace_record, &record).unwrap();
+    let history = paths.root.join("events.log.jsonl");
+    let messages = paths.root.join("messages/messages.jsonl");
+    std::fs::write(&history, b"old history").unwrap();
+    std::fs::write(&messages, b"old messages").unwrap();
+    let _held = rimz::disk::lock::RoomLock::hold(&runtime.room_lock()).unwrap();
+
+    let output = start_with_accounts(&env, "", &[], Some("held room must refuse before birth"));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "held room must refuse: {stderr}");
+    for text in [
+        workspace.session_name.as_str(),
+        "already held by another running room (another multiplexer, or a renamed session)",
+        "RimZ keeps one room per project",
+        "rimz attach",
+        "rimz reset --no-start",
+        "close it from that multiplexer",
+    ] {
+        assert!(stderr.contains(text), "missing {text}: {stderr}");
+    }
+    assert!(!stderr.contains("older RimZ"), "{stderr}");
+    let trace = std::fs::read_to_string(env.project_root.join("zellij-accounts.log")).unwrap();
+    for action in [
+        "delete-session",
+        "kill-session",
+        "new-session",
+        "--create-background",
+    ] {
+        assert!(!trace.contains(action), "replacement ran: {trace}");
+    }
+    assert!(paths.root.exists());
+    assert!(runtime.root.exists());
+    assert_eq!(std::fs::read(&paths.workspace_record).unwrap(), record);
+    assert_eq!(std::fs::read(&history).unwrap(), b"old history");
+    assert_eq!(std::fs::read(&messages).unwrap(), b"old messages");
+    assert_eq!(std::fs::read(&old_runtime).unwrap(), b"old");
+}
+
+#[test]
 fn start_replaces_an_old_layout_room_before_birth() {
     let env = Env::new();
     let workspace = env.resolve_workspace(&env.project_root);

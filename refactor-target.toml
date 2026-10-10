@@ -676,7 +676,7 @@ upward-dependencies = [
     "sidebar",
     "sidebar::body_filter",
 ]
-# ReplacedRoom and replace_incompatible_room share replacement between start and reset.
+# ReplacedRoom and IncompatibleRoom share claimed replacement between start and reset.
 # The account standing, its scopes and deciding layer, and live agents per account serve accounts list, providers, and doctor (+5).
 # Birth-login selection stands apart from the all-account check room entry adds, since a supervised launch checks only its own account (+1).
 # A launch on a named account counts that account's other live agents (+1).

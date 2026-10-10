@@ -44,8 +44,11 @@ pub fn run(args: ResetArgs, globals: &GlobalFlags) -> Result<()> {
         &workspace.session_name,
         globals.mux,
     ))?;
+    let incompatible = rimz::room::teardown::IncompatibleRoom::claim(&workspace)?;
     let runtime = rimz::RuntimePaths::for_project_root(&workspace.project_root)?;
-    let claim = if rimz::room::session::session_is_live(mux, &workspace.session_name) {
+    let claim = if incompatible.is_some() {
+        None
+    } else if rimz::room::session::session_is_live(mux, &workspace.session_name) {
         rimz::room::session::claim_listed_room(
             &runtime,
             mux,
@@ -81,10 +84,8 @@ pub fn run(args: ResetArgs, globals: &GlobalFlags) -> Result<()> {
     }
 
     let backend = rimz::mux::backend_for(mux);
-    if let Some(report) =
-        rimz::room::teardown::replace_incompatible_room(backend.as_ref(), &workspace)?
-    {
-        super::render::room::print_replaced_room(&report)?;
+    if let Some(room) = incompatible {
+        super::render::room::print_replaced_room(&room.replace(backend.as_ref())?)?;
     } else {
         let context = RoomContext::from_resolved(
             &workspace,

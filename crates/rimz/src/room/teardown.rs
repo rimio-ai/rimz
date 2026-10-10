@@ -3,7 +3,9 @@
 //! Multiplexer teardown is proven in the integration tier.
 
 use std::path::PathBuf;
+use std::time::Duration;
 
+use crate::disk::lock::RoomLock;
 use crate::disk::paths::{PathErr, check_workspace_layout};
 use crate::ids::{WorkspaceDirName, WorkspaceId};
 use crate::mux::MuxBackend;
@@ -27,48 +29,73 @@ pub struct ReplacedRoom {
     pub layout: u32,
 }
 
-/// Tear down an incompatible room before birth, removing both whole trees.
-/// Current-layout rooms and rooms without a record are left untouched.
-pub fn replace_incompatible_room(
-    backend: &dyn MuxBackend,
-    workspace: &ResolvedWorkspace,
-) -> Result<Option<ReplacedRoom>, PathErr> {
-    let state = StatePaths::for_project_root(&workspace.project_root)?;
-    let layout = match check_workspace_layout(&state.root) {
-        Err(PathErr::Layout { layout, .. }) => layout,
-        Err(err) => return Err(err),
-        Ok(_) => return Ok(None),
-    };
-    let runtime = RuntimePaths::for_state(&state)?;
-    #[derive(serde::Deserialize)]
-    struct RecordedSession {
-        session_name: String,
+/// An incompatible room exclusively claimed for replacement.
+pub struct IncompatibleRoom {
+    state: StatePaths,
+    runtime: RuntimePaths,
+    session_name: String,
+    layout: u32,
+    _claim: RoomLock,
+}
+
+impl IncompatibleRoom {
+    /// Claim without waiting, then re-check the layout before admitting replacement.
+    /// Current-layout rooms and rooms without a record are left untouched.
+    pub fn claim(workspace: &ResolvedWorkspace) -> anyhow::Result<Option<Self>> {
+        let state = StatePaths::for_project_root(&workspace.project_root)?;
+        match check_workspace_layout(&state.root) {
+            Err(PathErr::Layout { .. }) => {}
+            Err(err) => return Err(err.into()),
+            Ok(_) => return Ok(None),
+        }
+        let runtime = RuntimePaths::for_state(&state)?;
+        let claim = super::session::claim_room(&runtime, &workspace.session_name, Duration::ZERO)?;
+        let layout = match check_workspace_layout(&state.root) {
+            Err(PathErr::Layout { layout, .. }) => layout,
+            Err(err) => return Err(err.into()),
+            Ok(_) => return Ok(None),
+        };
+        Ok(Some(Self {
+            state,
+            runtime,
+            session_name: workspace.session_name.clone(),
+            layout,
+            _claim: claim,
+        }))
     }
-    let recorded = std::fs::read(&state.workspace_record)
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<RecordedSession>(&bytes).ok());
-    teardown_room(
-        backend,
-        &workspace.workspace_id,
-        &workspace.session_name,
-        &runtime,
-    );
-    if let Some(recorded) = recorded
-        && recorded.session_name != workspace.session_name
-    {
+
+    /// Tear down the claimed room and remove both trees before releasing the claim.
+    pub fn replace(self, backend: &dyn MuxBackend) -> Result<ReplacedRoom, PathErr> {
+        #[derive(serde::Deserialize)]
+        struct RecordedSession {
+            session_name: String,
+        }
+        let recorded = std::fs::read(&self.state.workspace_record)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<RecordedSession>(&bytes).ok());
         teardown_room(
             backend,
-            &workspace.workspace_id,
-            &recorded.session_name,
-            &runtime,
+            &self.state.workspace_id,
+            &self.session_name,
+            &self.runtime,
         );
+        if let Some(recorded) = recorded
+            && recorded.session_name != self.session_name
+        {
+            teardown_room(
+                backend,
+                &self.state.workspace_id,
+                &recorded.session_name,
+                &self.runtime,
+            );
+        }
+        self.runtime.remove_root()?;
+        self.state.remove_root()?;
+        Ok(ReplacedRoom {
+            dir_name: self.state.dir_name,
+            layout: self.layout,
+        })
     }
-    runtime.remove_root()?;
-    state.remove_root()?;
-    Ok(Some(ReplacedRoom {
-        dir_name: state.dir_name,
-        layout,
-    }))
 }
 
 /// Tear the room down to a clean slate: delete the session, purge the backend's
