@@ -20,6 +20,7 @@ impl ListedPane {
             exited: self.exited,
             is_suppressed: self.is_suppressed,
             is_floating: self.is_floating,
+            tab_viewed: false,
             stable_tab_id: Some(self.tab_id),
             tab_position: self
                 .tab_position

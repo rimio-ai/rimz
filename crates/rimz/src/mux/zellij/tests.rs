@@ -898,6 +898,7 @@ fn terminal_pane(
         is_suppressed: false,
         is_floating: false,
         tab_position,
+        tab_viewed: true,
         stable_tab_id: None,
         tab_name: Some("work".to_owned()),
         pane_columns: Some(pane_columns),
@@ -2127,7 +2128,7 @@ case " $* " in
   *" --name rimz:dump_topology "*)
     count=$(cat "$state" 2>/dev/null || printf 0); cols=$(({initial} + count * {step})); work=$(({view} - cols))
     now=$(perl -MTime::HiRes=time -e 'printf "%d\n", time()*1000')
-    printf '{{"session_name":"rimz-test","produced_at_ms":%s,"focused_pane":8,"panes":[{{"id":8,"is_plugin":false,"tab_position":1,"title":"rimz-sidebar","pane_x":0,"pane_columns":%s}},{{"id":9,"is_plugin":false,"tab_position":1,"title":"zsh","pane_x":%s,"pane_columns":%s}}]}}\n' "$now" "$cols" "$cols" "$work" > "{cache}"
+    printf '{{"session_name":"rimz-test","produced_at_ms":%s,"focused_pane":8,"panes":[{{"id":8,"is_plugin":false,"tab_position":1,"tab_viewed":true,"title":"rimz-sidebar","pane_x":0,"pane_columns":%s}},{{"id":9,"is_plugin":false,"tab_position":1,"tab_viewed":true,"title":"zsh","pane_x":%s,"pane_columns":%s}}]}}\n' "$now" "$cols" "$cols" "$work" > "{cache}"
     exit 0 ;;
   *" action resize {direction} right --pane-id terminal_8 "*)
     attempt=$(cat "$attempts" 2>/dev/null || printf 0); attempt=$((attempt + 1)); printf '%s\n' "$attempt" > "$attempts"
@@ -2236,7 +2237,7 @@ case " $* " in
     esac
     work=$((213 - cols))
     now=$(perl -MTime::HiRes=time -e 'printf "%d\n", time()*1000')
-    printf '{{"session_name":"rimz-test","produced_at_ms":%s,"focused_pane":8,"panes":[{{"id":8,"is_plugin":false,"tab_position":1,"title":"rimz-sidebar","pane_x":0,"pane_columns":%s}},{{"id":9,"is_plugin":false,"tab_position":1,"title":"zsh","pane_x":%s,"pane_columns":%s}}]}}\n' "$now" "$cols" "$cols" "$work" > "{cache}"
+    printf '{{"session_name":"rimz-test","produced_at_ms":%s,"focused_pane":8,"panes":[{{"id":8,"is_plugin":false,"tab_position":1,"tab_viewed":true,"title":"rimz-sidebar","pane_x":0,"pane_columns":%s}},{{"id":9,"is_plugin":false,"tab_position":1,"tab_viewed":true,"title":"zsh","pane_x":%s,"pane_columns":%s}}]}}\n' "$now" "$cols" "$cols" "$work" > "{cache}"
     exit 0 ;;
   *" action resize increase right --pane-id terminal_8 "*)
     count=$(cat "$state" 2>/dev/null || printf 0); printf '%s\n' "$((count + 1))" > "$state"; sleep 0.01; exit 0 ;;
@@ -2334,7 +2335,7 @@ case " $* " in
   *" action list-panes --all --json "*)
     count=$(cat "$state" 2>/dev/null || printf 0); cols=$((171 - count * 19)); if [ "$cols" -lt 72 ]; then cols=72; fi
     now=$(perl -MTime::HiRes=time -e 'printf "%d\n", time()*1000')
-    printf '{{"session_name":"rimz-test","produced_at_ms":%s,"focused_pane":8,"panes":[{{"id":8,"is_plugin":false,"tab_position":1,"title":"rimz-sidebar","pane_x":0,"pane_columns":72}},{{"id":9,"is_plugin":false,"tab_position":1,"title":"zsh","pane_x":72,"pane_columns":308}}]}}\n' "$now" > "{cache}"
+    printf '{{"session_name":"rimz-test","produced_at_ms":%s,"focused_pane":8,"panes":[{{"id":8,"is_plugin":false,"tab_position":1,"tab_viewed":true,"title":"rimz-sidebar","pane_x":0,"pane_columns":72}},{{"id":9,"is_plugin":false,"tab_position":1,"tab_viewed":true,"title":"zsh","pane_x":72,"pane_columns":308}}]}}\n' "$now" > "{cache}"
     printf '[{{"id":8,"is_plugin":false,"tab_position":1,"title":"rimz-sidebar","pane_x":0,"pane_columns":%s}},{{"id":9,"is_plugin":false,"tab_position":1,"title":"zsh","pane_x":%s,"pane_columns":%s}}]\n' "$cols" "$cols" "$((380 - cols))"; exit 0 ;;
   *" action resize decrease right --pane-id terminal_8 "*)
     count=$(cat "$state" 2>/dev/null || printf 0); printf '%s\n' "$((count + 1))" > "$state"; exit 0 ;;
@@ -2517,9 +2518,9 @@ case " $* " in
     count=$(cat "$state" 2>/dev/null || printf 0)
     now=$(perl -MTime::HiRes=time -e 'printf "%d\n", time()*1000')
     if [ "$count" -ge 2 ]; then
-      printf '{{"session_name":"rimz-test","produced_at_ms":%s,"focused_pane":7,"panes":[{{"id":9,"is_plugin":false,"tab_position":1,"title":"rimz-sidebar","pane_x":0,"pane_columns":30}},{{"id":7,"is_plugin":false,"tab_position":1,"title":"zsh","pane_x":30,"pane_columns":90}}]}}\n' "$now" > "{cache}"
+      printf '{{"session_name":"rimz-test","produced_at_ms":%s,"focused_pane":7,"panes":[{{"id":9,"is_plugin":false,"tab_position":1,"tab_viewed":true,"title":"rimz-sidebar","pane_x":0,"pane_columns":30}},{{"id":7,"is_plugin":false,"tab_position":1,"tab_viewed":true,"title":"zsh","pane_x":30,"pane_columns":90}}]}}\n' "$now" > "{cache}"
     else
-      printf '{{"session_name":"rimz-test","produced_at_ms":%s,"focused_pane":7,"panes":[{{"id":7,"is_plugin":false,"tab_position":1,"title":"zsh","pane_x":0,"pane_columns":90}},{{"id":8,"is_plugin":false,"tab_position":1,"title":"rimz-sidebar","pane_x":90,"pane_columns":30}}]}}\n' "$now" > "{cache}"
+      printf '{{"session_name":"rimz-test","produced_at_ms":%s,"focused_pane":7,"panes":[{{"id":7,"is_plugin":false,"tab_position":1,"tab_viewed":true,"title":"zsh","pane_x":0,"pane_columns":90}},{{"id":8,"is_plugin":false,"tab_position":1,"tab_viewed":true,"title":"rimz-sidebar","pane_x":90,"pane_columns":30}}]}}\n' "$now" > "{cache}"
     fi
     exit 0 ;;
   *" action list-panes --all --json "*)

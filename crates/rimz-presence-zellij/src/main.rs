@@ -157,7 +157,19 @@ mod shell {
                         .map(|tab| (tab.position, tab.tab_id as u64))
                         .collect();
                     let active = tabs.iter().find(|tab| tab.active).map(|tab| tab.position);
-                    engine.on_tab_update(active, tab_names(&tabs), &self.tab_ids, now, &host)
+                    let other_viewed_tabs = tabs
+                        .iter()
+                        .filter(|tab| !tab.other_focused_clients.is_empty())
+                        .map(|tab| tab.tab_id as u64)
+                        .collect();
+                    engine.on_tab_update(
+                        active,
+                        tab_names(&tabs),
+                        &self.tab_ids,
+                        &other_viewed_tabs,
+                        now,
+                        &host,
+                    )
                 }
                 Event::CommandChanged(pane_id, command, is_foreground, _) => engine
                     .on_command_changed(

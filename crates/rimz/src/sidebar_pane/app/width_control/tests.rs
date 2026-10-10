@@ -197,6 +197,7 @@ fn write_zellij_sidebar_only_topology(runtime: &RuntimePaths, sidebar_cols: u16)
         sidebar_cols,
         None,
         crate::utils::time::unix_now_ms(),
+        true,
     );
 }
 
@@ -230,6 +231,7 @@ fn write_zellij_topology_for_view_at(runtime: &RuntimePaths, view_cols: u16, pro
         80.min(view_cols / 2),
         Some(view_cols),
         produced_at_ms,
+        true,
     );
 }
 
@@ -238,6 +240,7 @@ fn write_zellij_topology_panes(
     sidebar_cols: u16,
     view_cols: Option<u16>,
     produced_at_ms: u64,
+    tab_viewed: bool,
 ) {
     use crate::mux::zellij::pane_topology::{PaneTopologyCache, PaneTopologyPane};
 
@@ -250,6 +253,7 @@ fn write_zellij_topology_panes(
         is_suppressed: false,
         is_floating: false,
         tab_position: 0,
+        tab_viewed,
         stable_tab_id: None,
         tab_name: None,
         pane_columns: Some(pane_columns),
@@ -607,6 +611,7 @@ fn width_key_burst_narrower_steps_from_the_target_resolved_on_the_live_view() {
         own_cols,
         Some(view_cols),
         crate::utils::time::unix_now_ms(),
+        true,
     );
     controller.adjust(own_cols, WidthAdjust::Narrower);
     assert_eq!(controller.current_view_cols, Some(view_cols));
@@ -879,15 +884,18 @@ fn missing_backend_geometry_retries_the_baseline_at_most_once_per_second() {
 fn attach_viewport_change_never_converges_against_the_pre_attach_snapshot() {
     let (_dir, runtime, mut controller) = controller(MuxName::Zellij);
     let diag = crate::diag::DiagSink::disabled();
-    write_zellij_topology_for_view_at(&runtime, 50, controller.started_at_ms);
+    write_zellij_topology_panes(&runtime, 25, Some(50), controller.started_at_ms, false);
     controller.backstop(Some(24), Some(1), None, &diag);
-    assert_eq!(controller.convergence.target(), Some(target(24)));
+    assert_eq!(controller.convergence.target(), None);
+    assert_eq!(controller.current_view_cols, None);
+    assert!(!controller.convergence.in_flight());
+    assert!(!runtime.sidebar_width_path().exists());
 
     let structural_at_ms = controller.started_at_ms.saturating_add(10);
-    write_zellij_topology_for_view_at(&runtime, 319, structural_at_ms.saturating_sub(1));
+    write_zellij_topology_panes(&runtime, 80, Some(319), structural_at_ms, false);
     controller.note_structural(structural_at_ms, Some(64), &diag);
 
-    assert_eq!(controller.convergence.target(), Some(target(24)));
+    assert_eq!(controller.convergence.target(), None);
     assert!(!controller.convergence.in_flight());
     assert!(controller.baseline_probe_deadline.is_some());
 
@@ -896,8 +904,8 @@ fn attach_viewport_change_never_converges_against_the_pre_attach_snapshot() {
 
     assert_eq!(
         controller.convergence.target(),
-        Some(target(24)),
-        "the retry must keep the structural event's stronger floor",
+        None,
+        "a fresh unviewed tab still cannot prove a viewport",
     );
     assert!(
         !controller.convergence.in_flight(),
@@ -918,6 +926,8 @@ fn parked_controller_repicks_a_changed_viewport_on_idle_retry() {
     let diag = crate::diag::DiagSink::disabled();
     write_zellij_topology_for_view_at(&runtime, 50, controller.started_at_ms);
     controller.backstop(Some(24), Some(1), None, &diag);
+    assert_eq!(controller.current_view_cols, Some(50));
+    assert_eq!(controller.convergence.target(), Some(target(24)));
     let adopted_share =
         crate::mux::width_target::resolve(&runtime, crate::mux::SidebarWidth::default(), None)
             .share;

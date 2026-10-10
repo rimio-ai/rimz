@@ -39,8 +39,8 @@ fn width_memo_reads_and_derives_once_per_stamp_with_live_freshness() {
     let mut cache: PaneTopologyCache = serde_json::from_value(serde_json::json!({
         "session_name": "rimz-test", "produced_at_ms": stamp,
         "panes": (0..40).flat_map(|n| [
-            serde_json::json!({"id": 2*n, "is_plugin": false, "tab_id": n, "pane_x": 0, "pane_columns": 24}),
-            serde_json::json!({"id": 2*n+1, "is_plugin": false, "tab_id": n, "pane_x": 24, "pane_columns": 176+n, "is_fullscreen": n == 39}),
+            serde_json::json!({"id": 2*n, "is_plugin": false, "tab_id": n, "pane_x": 0, "pane_columns": 24, "tab_viewed": true}),
+            serde_json::json!({"id": 2*n+1, "is_plugin": false, "tab_id": n, "pane_x": 24, "pane_columns": 176+n, "is_fullscreen": n == 39, "tab_viewed": true}),
         ]).collect::<Vec<_>>()
     })).unwrap();
     write_pane_topology_cache(&runtime, &cache).unwrap();
@@ -136,7 +136,7 @@ fn tab_view_width_needs_a_sibling_extent() {
     let panes: Vec<PaneTopologyPane> = serde_json::from_str(
         r#"[
           {"id": 1, "is_plugin": false, "tab_id": 0, "pane_x": 0, "pane_columns": 24,
-           "title": "rimz-sidebar"},
+           "title": "rimz-sidebar", "tab_viewed": true},
           {"id": 2, "is_plugin": false, "tab_id": 0, "pane_x": 24, "pane_columns": 296}
         ]"#,
     )
@@ -148,6 +148,43 @@ fn tab_view_width_needs_a_sibling_extent() {
         "the first sidebar pane cannot prove the tab viewport",
     );
     assert_eq!(tab_view_cols(&panes, 0), Some(320));
+}
+
+#[test]
+fn tab_view_width_needs_a_viewed_tab() {
+    for viewed in [false, true] {
+        let panes: Vec<PaneTopologyPane> = serde_json::from_value(serde_json::json!([
+            {"id": 1, "tab_position": 0, "pane_x": 0, "pane_columns": 24},
+            {"id": 2, "tab_position": 0, "pane_x": 24, "pane_columns": 26,
+             "tab_viewed": viewed},
+            {"id": 3, "tab_position": 1, "tab_viewed": true}
+        ]))
+        .unwrap();
+        assert_eq!(tab_view_cols(&panes, 0), viewed.then_some(50));
+    }
+}
+
+#[test]
+fn off_spec_width_names_only_viewed_tabs() {
+    let panes: Vec<PaneTopologyPane> = serde_json::from_value(serde_json::json!([
+        {"id": 1, "tab_position": 0, "tab_name": "rimzd", "pane_x": 0,
+         "pane_columns": 30, "title": "rimz-sidebar"},
+        {"id": 2, "tab_position": 0, "pane_x": 30, "pane_columns": 20},
+        {"id": 3, "tab_position": 1, "pane_x": 0, "pane_columns": 120,
+         "title": "rimz-sidebar", "tab_viewed": true},
+        {"id": 4, "tab_position": 1, "pane_x": 120, "pane_columns": 119,
+         "tab_viewed": true}
+    ]))
+    .unwrap();
+    let target = crate::mux::SidebarTarget {
+        share: crate::mux::WidthPermille::from_percent(25),
+        max_cols: std::num::NonZeroU16::new(72).unwrap(),
+        pinned: false,
+    };
+    assert_eq!(
+        super::super::backend::off_spec_sidebars(&panes, &[], Some(target)),
+        vec![(1, 3)]
+    );
 }
 
 #[test]
@@ -469,7 +506,10 @@ fn sidebar_geometry_classifies_dock_shapes() {
           {"id": 33, "is_plugin": false, "tab_id": 11, "title": "zsh",
            "pane_x": 87, "pane_columns": 211}
         ]"#;
-    let panes: Vec<PaneTopologyPane> = serde_json::from_str(json).unwrap();
+    let mut panes: Vec<PaneTopologyPane> = serde_json::from_str(json).unwrap();
+    for pane in &mut panes {
+        pane.tab_viewed = true;
+    }
     let target_cols = std::num::NonZeroU16::new(72).expect("nonzero target");
     let target = crate::mux::SidebarTarget {
         share: crate::mux::WidthPermille::from_cols(
