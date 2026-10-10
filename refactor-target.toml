@@ -350,7 +350,8 @@ path = "crates/rimz/src/diag"
 # ModelCatalogFallback is the rung field of the model-catalog refresh record, kept in the record vocabulary so it imports nothing from `agents` (+1).
 # Focus tracing exposes its vocabulary, sink, and shared log path to producer and attachment evidence (+5).
 # Store repair and the drainer share typed hook repair/drop evidence and its sink (+3).
-surface-budget = 92
+# SidebarHostUnavailableCause is the public payload vocabulary of the new diagnostic (+1).
+surface-budget = 93
 
 [[module]]
 path = "crates/rimz/src/disk"
@@ -1631,7 +1632,7 @@ reason = "Drop for FramedTransport stops the child app-server (stop_child) on ev
 [[verdict]]
 kind = "item"
 key = "sidebar_pane::app::SidebarAppErr"
-reason = "Public supervise::run_worker returns app::Result, whose alias names this error; pub is the signature floor (atlas caveat 13, pass 26b)."
+reason = "Public sidebar_pane::host::run returns this error to the CLI binary; pub is the signature floor."
 
 [[verdict]]
 kind = "item"
@@ -2292,6 +2293,11 @@ reason = "Source severity stamped by DiagEnvelope::new; the doctor tests classif
 kind = "item"
 key = "diag::record::DiagEvent"
 reason = "Frozen rimz.diag.v1 wire; every variant payload type stays pub under private_interfaces; kind_name mirrors the serde tag for all 46 variants and stays the allocation-free identity source (pass 16)."
+
+[[verdict]]
+kind = "item"
+key = "diag::record::SidebarHostUnavailableCause"
+reason = "Payload type of public DiagEvent::SidebarHostUnavailable; pub is required by private_interfaces for the diagnostic wire."
 
 [[verdict]]
 kind = "item"
@@ -4821,7 +4827,7 @@ reason = "tests/integration/proc.rs drives the process-domain predicates from th
 [[verdict]]
 kind = "item"
 key = "build_id::warm"
-reason = "Called from main.rs:27; the binary is a separate crate, so crate reach is E0603 there. The library's own caller is sidebar_pane/app.rs:116 (pass 24c)."
+reason = "Called from main.rs; the binary is a separate crate, so crate reach is E0603 there. The library's own caller is sidebar_pane::host::run."
 
 [[verdict]]
 kind = "item"

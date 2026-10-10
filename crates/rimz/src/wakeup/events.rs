@@ -9,9 +9,6 @@ pub const SIDEBAR_EVENT_VERSION: &str = "rimz.sidebar-event.v2";
 /// instead of the typed envelope so an older renderer can still receive the
 /// message that moves it onto the current build.
 pub const RELOAD_CONTROL_WORD: &str = "reload";
-/// Supervisor-only request for a clean worker exit after a replacement build
-/// has served through its stability window.
-pub(crate) const SUPERVISOR_HANDOFF_CONTROL_WORD: &str = "supervisor-handoff";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct SidebarEventEnvelope {

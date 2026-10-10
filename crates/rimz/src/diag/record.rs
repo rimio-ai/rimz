@@ -74,6 +74,16 @@ pub enum DiagSeverity {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+pub enum SidebarHostUnavailableCause {
+    StartFailed,
+    NoAnswer,
+    Rejected,
+    ReplyUnreadable,
+    Lost,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum TickLoop {
     Fetch,
     CacheRefresh,
@@ -501,16 +511,15 @@ pub enum DiagEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         backtrace: Option<String>,
     },
-    RendererSignalDeath {
+    SidebarHostUnavailable {
+        cause: SidebarHostUnavailableCause,
+        reason: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        signal: Option<i32>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        exit_code: Option<i32>,
-        stderr_excerpt: String,
+        attached_ms: Option<u64>,
+        retry_ms: u64,
     },
-    RendererOrphanReaped {
+    SupervisorPaneGone {
         pane_id: String,
-        worker_pid: i32,
     },
     SidebarOrphanReaped {
         pane_id: String,
@@ -626,7 +635,8 @@ impl DiagEvent {
             }
             | Self::ToolLoopEscalated { .. }
             | Self::TopologyWriteRejected { .. }
-            | Self::RendererOrphanReaped { .. }
+            | Self::SidebarHostUnavailable { .. }
+            | Self::SupervisorPaneGone { .. }
             | Self::SidebarOrphanReaped { .. }
             | Self::SubagentOrphanReaped { .. }
             | Self::SubagentOrphanRepairFailed { .. }
@@ -646,7 +656,6 @@ impl DiagEvent {
             } => DiagSeverity::Warn,
             Self::FrameAnomaly { .. } => DiagSeverity::Warn,
             Self::RendererPanic { .. } => DiagSeverity::Error,
-            Self::RendererSignalDeath { .. } => DiagSeverity::Error,
             Self::GhostSessionBind { .. } => DiagSeverity::Error,
             Self::RendererExit {
                 cause: RendererExitCause::DegradedGaveUp,
@@ -734,8 +743,8 @@ impl DiagEvent {
             Self::TopologyWriterChanged { .. } => "topology_writer_changed",
             Self::TopologyWriteRejected { .. } => "topology_write_rejected",
             Self::RendererPanic { .. } => "renderer_panic",
-            Self::RendererSignalDeath { .. } => "renderer_signal_death",
-            Self::RendererOrphanReaped { .. } => "renderer_orphan_reaped",
+            Self::SidebarHostUnavailable { .. } => "sidebar_host_unavailable",
+            Self::SupervisorPaneGone { .. } => "supervisor_pane_gone",
             Self::SidebarOrphanReaped { .. } => "sidebar_orphan_reaped",
             Self::SubagentOrphanReaped { .. } => "subagent_orphan_reaped",
             Self::SubagentDigestBackstopped { .. } => "subagent_digest_backstopped",
@@ -950,12 +959,10 @@ impl DiagEvent {
             | Self::ProducerDemoted { .. }
             | Self::FrameShrinkVerified { .. }
             | Self::RendererPanic { .. } => self.kind_name().to_owned(),
-            Self::RendererSignalDeath {
-                signal, exit_code, ..
-            } => {
-                format!("{}:{signal:?}:{exit_code:?}", self.kind_name())
+            Self::SidebarHostUnavailable { cause, reason, .. } => {
+                format!("{}:{cause:?}:{reason}", self.kind_name())
             }
-            Self::RendererOrphanReaped { pane_id, .. } => {
+            Self::SupervisorPaneGone { pane_id } => {
                 format!("{}:{pane_id}", self.kind_name())
             }
             Self::SidebarOrphanReaped { pane_id, pid, .. }
@@ -1353,23 +1360,17 @@ impl DiagEvent {
                 own_build,
             } => format!("prior frame from build {prior_build}; this producer is {own_build}"),
             Self::RendererPanic { message, .. } => message.clone(),
-            Self::RendererSignalDeath {
-                signal,
-                exit_code,
-                stderr_excerpt,
+            Self::SidebarHostUnavailable {
+                cause,
+                reason,
+                retry_ms,
+                ..
             } => {
-                let reason = match (signal, exit_code) {
-                    (Some(signal), _) => format!("signal {signal}"),
-                    (None, Some(code)) => format!("exit {code}"),
-                    (None, None) => "unknown termination".to_owned(),
-                };
-                let excerpt = stderr_excerpt.lines().last().unwrap_or(stderr_excerpt);
-                format!("render worker died by {reason}: {excerpt}")
+                format!("sidebar host unavailable ({cause:?}): {reason}; retrying in {retry_ms}ms")
             }
-            Self::RendererOrphanReaped {
-                pane_id,
-                worker_pid,
-            } => format!("reaped orphaned renderer {worker_pid} after pane {pane_id} disappeared"),
+            Self::SupervisorPaneGone { pane_id } => {
+                format!("sidebar supervisor stopped after pane {pane_id} disappeared")
+            }
             Self::SidebarOrphanReaped {
                 pane_id,
                 pid,

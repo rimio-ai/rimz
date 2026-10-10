@@ -3186,12 +3186,8 @@ fn zellij_recovery_survives_a_sidebar_that_outlives_its_session() {
             };
             Some((nul_separated("cmdline")?, nul_separated("environ")?))
         })
-        .find(|(argv, environ)| {
-            argv.contains(&session)
-                && argv.windows(2).any(|pair| pair == ["sidebar", "serve"])
-                && !environ
-                    .iter()
-                    .any(|var| var.starts_with("RIMZ_SIDEBAR_WORKER="))
+        .find(|(argv, _)| {
+            argv.contains(&session) && argv.windows(2).any(|pair| pair == ["sidebar", "serve"])
         })
         .expect("a sidebar supervisor of the room");
     let mut survivor = CommandBuilder::from_argv(argv.iter().map(Into::into).collect());

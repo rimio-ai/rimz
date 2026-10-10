@@ -327,19 +327,6 @@ impl TerminalModeGuard {
         })
     }
 
-    /// Consume the guard leaving every terminal mode in place for a reload
-    /// handoff. The replacement process re-enables the same modes, while
-    /// restoring here opens a mouse-reporting gap that outer terminals can
-    /// observe and turn wheel input into arrow keys.
-    pub(crate) fn preserve_for_reexec(self) {
-        // The process exits immediately after this handoff, so keeping the
-        // panic hook installed and skipping the terminal restore are both
-        // intentional.
-        // ponytail: the capture buffer dies with this process; transfer it if
-        // reexec handoffs ever need to preserve diagnostics.
-        std::mem::forget(self);
-    }
-
     /// Leave tty modes in place while this process continues, without
     /// retaining this guard's log capture or panic hook.
     pub(crate) fn preserve_for_handoff(mut self) {

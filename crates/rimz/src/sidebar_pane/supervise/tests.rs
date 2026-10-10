@@ -21,7 +21,7 @@ fn link_to_a_host_saying(controls: Vec<Control>) -> HostLink {
     HostLink::open(pane, &hello, output.as_fd(), Duration::from_secs(10)).unwrap()
 }
 
-fn watch(mut link: HostLink) -> WorkerExit {
+fn watch(mut link: HostLink) -> RoundExit {
     let workspace = crate::sidebar_pane::app::fixtures::workspace();
     watch_host(
         &mut link,
@@ -31,23 +31,24 @@ fn watch(mut link: HostLink) -> WorkerExit {
             supervisor_build: None,
             started: Instant::now(),
             watchdog: &mut None,
+            stopped: &AtomicBool::new(false),
         },
     )
 }
 
 #[test]
-fn a_hosts_self_close_takes_the_workers_confirm_path() {
+fn a_hosts_self_close_requires_confirmation() {
     assert_eq!(
         watch(link_to_a_host_saying(vec![Control::SelfClose])),
-        WorkerExit::ConfirmSelfClose
+        RoundExit::ConfirmSelfClose
     );
 }
 
 #[test]
-fn a_hosts_reload_takes_the_workers_reload_path() {
+fn a_hosts_reload_ends_the_round() {
     assert_eq!(
         watch(link_to_a_host_saying(vec![Control::Reload])),
-        WorkerExit::Reload
+        RoundExit::Reload
     );
 }
 
@@ -55,63 +56,7 @@ fn a_hosts_reload_takes_the_workers_reload_path() {
 fn a_host_that_ends_without_a_word_is_lost_and_attached_to_again() {
     assert_eq!(
         watch(link_to_a_host_saying(Vec::new())),
-        WorkerExit::HostLost
-    );
-}
-
-#[test]
-fn stderr_tail_keeps_bounded_suffix() {
-    let mut tail = StderrTail::new(5);
-
-    tail.push(b"abc");
-    tail.push(b"def");
-
-    assert_eq!(tail.excerpt(), "bcdef");
-}
-
-#[test]
-fn stderr_tail_truncates_large_chunk_to_suffix() {
-    let mut tail = StderrTail::new(4);
-
-    tail.push(b"abcdef");
-
-    assert_eq!(tail.excerpt(), "cdef");
-}
-
-#[test]
-fn worker_exit_classifier_honours_orphan_then_handoff_then_status() {
-    assert_eq!(
-        classify_worker_exit(false, false, Some(RELOAD_EXIT_CODE), None),
-        WorkerExit::Reload
-    );
-    assert_eq!(
-        classify_worker_exit(false, false, Some(PANIC_EXIT_CODE), None),
-        WorkerExit::Respawn {
-            signal: None,
-            exit_code: Some(PANIC_EXIT_CODE)
-        }
-    );
-    assert_eq!(
-        classify_worker_exit(false, false, Some(SELF_CLOSE_EXIT_CODE), None),
-        WorkerExit::ConfirmSelfClose
-    );
-    assert_eq!(
-        classify_worker_exit(false, true, Some(SELF_CLOSE_EXIT_CODE), None),
-        WorkerExit::Reload,
-        "requested handoff outranks an exit code"
-    );
-    assert_eq!(
-        classify_worker_exit(true, true, Some(RELOAD_EXIT_CODE), None),
-        WorkerExit::OrphanReaped,
-        "orphan reap outranks handoff and exit code"
-    );
-    assert_eq!(
-        classify_worker_exit(false, false, None, None),
-        WorkerExit::Respawn {
-            signal: None,
-            exit_code: None
-        },
-        "ECHILD's unknown status is abnormal termination"
+        RoundExit::HostLost
     );
 }
 
@@ -129,135 +74,6 @@ fn respawn_backoff_doubles_caps_and_resets_after_a_stable_run() {
         respawn_backoff(Duration::from_secs(32), RESPAWN_STABLE_RUN),
         (Duration::from_secs(1), Duration::from_secs(2))
     );
-}
-
-#[test]
-fn fallback_probe_waits_for_stability_and_uses_the_session_socket_cadence() {
-    let dir = tempfile::tempdir().unwrap();
-    let config = crate::sidebar_pane::app::fixtures::serve_config(
-        &crate::sidebar_pane::app::fixtures::workspace(),
-    );
-    let runtime = crate::RuntimePaths::under(config.workspace_id.clone(), dir.path()).unwrap();
-    runtime.ensure_dirs().unwrap();
-    let socket = runtime.sidebar_host_socket_path(config.mux, &config.session_name);
-    let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
-    let connect = || UnixStream::connect(&socket).ok();
-    listener.set_nonblocking(true).unwrap();
-    let started = Instant::now();
-    let mut retry = HostRetry::default();
-    retry.worker_started(started, RESPAWN_STABLE_RUN);
-    assert!(!retry.probe_if_due(
-        started + RESPAWN_STABLE_RUN - Duration::from_nanos(1),
-        connect
-    ));
-    assert_eq!(
-        listener.accept().unwrap_err().kind(),
-        io::ErrorKind::WouldBlock
-    );
-    assert!(
-        retry.probe_if_due(started + RESPAWN_STABLE_RUN, connect),
-        "a stable worker must discover the reachable session host"
-    );
-    let (mut probe, _) = listener.accept().unwrap();
-    let mut bytes = [0; 1];
-    assert_eq!(
-        probe.read(&mut bytes).unwrap(),
-        0,
-        "no hello is sent by the probe"
-    );
-    assert!(!retry.probe_if_due(
-        started + RESPAWN_STABLE_RUN + HOST_PROBE_INTERVAL - Duration::from_nanos(1),
-        connect
-    ));
-    assert!(retry.probe_if_due(started + RESPAWN_STABLE_RUN + HOST_PROBE_INTERVAL, connect));
-}
-
-#[test]
-fn failed_host_starts_back_off_without_ending_the_worker_round() {
-    let started = Instant::now();
-    let mut retry = HostRetry::default();
-    retry.worker_started(started, RESPAWN_STABLE_RUN);
-    let attempts = std::cell::Cell::new(0);
-    let connect = || {
-        attempts.set(attempts.get() + 1);
-        None
-    };
-    assert!(!retry.probe_if_due(
-        started + RESPAWN_STABLE_RUN - Duration::from_nanos(1),
-        connect
-    ));
-    assert_eq!(attempts.get(), 0, "no host start before stability");
-    let mut now = started + RESPAWN_STABLE_RUN;
-    for seconds in [60, 120, 240, 300, 300] {
-        assert!(
-            !retry.probe_if_due(now, connect),
-            "failed start/connect must keep the worker"
-        );
-        assert_eq!(retry.interval, Duration::from_secs(seconds));
-        assert!(!retry.after_probe);
-        assert!(!retry.probe_if_due(now + retry.interval - Duration::from_nanos(1), connect));
-        now += retry.interval;
-    }
-    assert_eq!(attempts.get(), 5);
-}
-
-#[test]
-fn rejected_probe_attachments_double_the_interval_up_to_five_minutes() {
-    let mut retry = HostRetry::default();
-    for seconds in [60, 120, 240, 300, 300] {
-        retry.after_probe = true;
-        retry.attach_finished(false);
-        assert_eq!(retry.interval, Duration::from_secs(seconds));
-        let started = Instant::now();
-        retry.worker_started(started, RESPAWN_STABLE_RUN);
-        assert_eq!(
-            retry.next_probe,
-            started + RESPAWN_STABLE_RUN.max(retry.interval)
-        );
-    }
-    retry.attach_finished(true);
-    assert_eq!(
-        retry.interval, HOST_PROBE_INTERVAL,
-        "successful attachment resets rejection debt"
-    );
-}
-
-#[test]
-fn host_available_exit_keeps_reload_and_orphan_priority() {
-    let config = crate::sidebar_pane::app::fixtures::serve_config(
-        &crate::sidebar_pane::app::fixtures::workspace(),
-    );
-    let mut monitor = WorkerMonitor {
-        record_watch: &mut RecordWatch::new(&config.workspace_id),
-        exec_state: &mut PendingExec::default(),
-        worker_build: None,
-        supervisor_build: None,
-        started: Instant::now(),
-        runtime: None,
-        config: &config,
-        watchdog: &mut None,
-        orphan_reap_pending: false,
-        handoff_deadline: None,
-        host_available_deadline: Some(Instant::now()),
-        host_retry: None,
-    };
-    assert_eq!(monitor.terminal(Some(0), None), WorkerExit::HostAvailable);
-    assert_eq!(
-        monitor.terminal(None, Some(nix::sys::signal::Signal::SIGKILL as i32)),
-        WorkerExit::HostAvailable
-    );
-    assert_eq!(
-        monitor.terminal(Some(RELOAD_EXIT_CODE), None),
-        WorkerExit::Reload
-    );
-    assert_eq!(
-        monitor.terminal(Some(SELF_CLOSE_EXIT_CODE), None),
-        WorkerExit::ConfirmSelfClose
-    );
-    monitor.handoff_deadline = Some(Instant::now());
-    assert_eq!(monitor.terminal(Some(0), None), WorkerExit::Reload);
-    monitor.orphan_reap_pending = true;
-    assert_eq!(monitor.terminal(Some(0), None), WorkerExit::OrphanReaped);
 }
 
 #[test]
@@ -544,11 +360,11 @@ fn authoritative_probe_cache_accepts_both_mux_identities() {
 }
 
 #[test]
-fn worker_spawn_prefers_the_durable_target_even_for_matching_bytes() {
+fn host_spawn_prefers_the_durable_target_even_for_matching_bytes() {
     let durable = std::path::PathBuf::from("/state/rimz/builds/same/rimz");
     let ephemeral = std::path::PathBuf::from("/tmp/build/rimz (deleted)");
     assert_eq!(
-        worker_executable(
+        host_executable(
             crate::reload::WorkspaceReexecTarget::Verified(crate::reload::StagedBuild {
                 path: durable.clone(),
                 build: "same".to_owned(),
@@ -594,7 +410,7 @@ fn record_change_requires_a_new_mtime_and_preserves_verification() {
 }
 
 #[test]
-fn pending_exec_waits_for_the_replacement_worker_stability_window() {
+fn pending_exec_waits_for_the_painting_build_stability_window() {
     let target = crate::reload::StagedBuild {
         path: PathBuf::from("/state/builds/new/rimz"),
         build: "new".to_owned(),
@@ -609,7 +425,7 @@ fn pending_exec_waits_for_the_replacement_worker_stability_window() {
         pending
             .promotable(Some("old"), RESPAWN_STABLE_RUN, RESPAWN_STABLE_RUN)
             .is_none(),
-        "the old worker cannot promote the new supervisor",
+        "the old painting build cannot promote the new supervisor",
     );
     assert!(
         pending
@@ -619,7 +435,7 @@ fn pending_exec_waits_for_the_replacement_worker_stability_window() {
                 RESPAWN_STABLE_RUN,
             )
             .is_none(),
-        "the new worker must first serve stably",
+        "the new painting build must first serve stably",
     );
     assert_eq!(
         pending.promotable(Some("new"), RESPAWN_STABLE_RUN, RESPAWN_STABLE_RUN),

@@ -1,42 +1,37 @@
 //! Convergence supervisor for the pane-resident sidebar renderer.
 //!
-//! The worker owns the TUI and its in-process panic diagnostics. The supervisor
-//! owns the pane command PID, polls durable build intent, proves a replacement
-//! worker stable before preflight and self-exec, and preserves the sidebar
-//! instance across failures and reloads. It also confirms worker self-close
-//! requests against authoritative mux truth, proves routine pane liveness from
-//! cached presence before escalating to mux truth, reaps stray children, and
-//! records deaths Rust hooks cannot catch.
+//! The host alone paints. The supervisor owns the pane tty, polls durable build
+//! intent, proves the painting build stable before preflight and self-exec, and
+//! preserves the sidebar instance across failures and reloads. It confirms
+//! self-close against authoritative mux truth, watches pane liveness, reaps
+//! stray children, and shows a notice while an unavailable host is retried.
 
 use std::env;
 use std::ffi::OsString;
-use std::io::{self, Read, Write};
-use std::os::unix::net::UnixStream;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
-use std::sync::{Arc, Mutex};
+use std::process::Command;
+#[cfg(feature = "testkit")]
+use std::process::Stdio;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
 use serde::{Deserialize, Serialize};
 
-use crate::diag::record::DiagEvent;
+use crate::diag::record::{DiagEvent, SidebarHostUnavailableCause};
 use crate::ids::SidebarInstanceId;
 use crate::sidebar_pane::app::{EventForwarder, ServeConfig};
 use crate::sidebar_pane::attach::Control;
-use crate::tui::{MouseCapture, Screen, TerminalModeGuard, restore_terminal};
+use crate::tui::{MouseCapture, Screen, TerminalModeGuard};
 use tracing::debug;
 
 mod host_link;
 
 use self::host_link::{HostEvent, HostLink};
 
-const WORKER_ENV: &str = "RIMZ_SIDEBAR_WORKER";
 const INSTANCE_ENV: &str = "RIMZ_SIDEBAR_INSTANCE_ID";
-#[cfg(feature = "testkit")]
-const TEST_FAULT_ENV: &str = "RIMZ_TEST_SIDEBAR_WORKER_FAULT";
-#[cfg(feature = "testkit")]
-const TEST_EXIT_FILE_ENV: &str = "RIMZ_TEST_SIDEBAR_WORKER_EXIT_FILE";
 #[cfg(feature = "testkit")]
 const TEST_REAP_POLL_MS_ENV: &str = "RIMZ_TEST_SIDEBAR_SUPERVISOR_REAP_POLL_MS";
 #[cfg(feature = "testkit")]
@@ -54,12 +49,7 @@ const TEST_RECORD_POLL_MS_ENV: &str = "RIMZ_TEST_SIDEBAR_RECORD_POLL_MS";
 #[cfg(feature = "testkit")]
 const TEST_STABLE_RUN_MS_ENV: &str = "RIMZ_TEST_SIDEBAR_STABLE_RUN_MS";
 #[cfg(feature = "testkit")]
-const TEST_HANDOFF_GRACE_MS_ENV: &str = "RIMZ_TEST_SIDEBAR_HANDOFF_GRACE_MS";
-#[cfg(feature = "testkit")]
-const TEST_WORKER_STARTED_FILE_ENV: &str = "RIMZ_TEST_SIDEBAR_WORKER_STARTED_FILE";
-#[cfg(feature = "testkit")]
 const TEST_SELF_CLOSE_PROBE_ENV: &str = "RIMZ_TEST_SIDEBAR_SELF_CLOSE_PROBE";
-const STDERR_TAIL_BYTES: usize = 8 * 1024;
 const REAP_POLL_INTERVAL: Duration = Duration::from_secs(1);
 const PANE_PROBE_INTERVAL: Duration = Duration::from_secs(60);
 const PANE_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -67,95 +57,30 @@ const PANE_PROBE_WAIT_STEP: Duration = Duration::from_millis(25);
 const PANE_PROBE_WAIT_STEPS: u32 = 20;
 const PANE_GONE_STRIKES: u8 = 3;
 const SELF_CLOSE_RECONFIRM_DELAY: Duration = Duration::from_millis(500);
-pub(super) const RELOAD_EXIT_CODE: i32 = 100;
-#[cfg(test)]
-const PANIC_EXIT_CODE: i32 = 101;
-pub(super) const RESPAWN_EXIT_CODE: i32 = 102;
-pub const SELF_CLOSE_EXIT_CODE: i32 = 103;
 const RESPAWN_BACKOFF_INITIAL: Duration = Duration::from_secs(1);
 const RESPAWN_BACKOFF_MAX: Duration = Duration::from_secs(60);
 const RESPAWN_STABLE_RUN: Duration = Duration::from_secs(60);
 const RECORD_POLL_INTERVAL: Duration = Duration::from_secs(1);
-const WORKER_HANDOFF_GRACE: Duration = Duration::from_secs(10);
 const SUPERVISOR_PREFLIGHT_TIMEOUT: Duration = Duration::from_secs(5);
-const HOST_PROBE_INTERVAL: Duration = Duration::from_secs(30);
-const HOST_PROBE_MAX: Duration = Duration::from_secs(5 * 60);
-
-struct HostRetry {
-    interval: Duration,
-    next_probe: Instant,
-    after_probe: bool,
-}
-
-impl Default for HostRetry {
-    fn default() -> Self {
-        Self {
-            interval: host_probe_interval(),
-            next_probe: Instant::now(),
-            after_probe: false,
-        }
-    }
-}
-
-impl HostRetry {
-    fn worker_started(&mut self, started: Instant, stable_run: Duration) {
-        self.next_probe = started + stable_run.max(self.interval);
-    }
-
-    fn probe_if_due(&mut self, now: Instant, connect: impl FnOnce() -> Option<UnixStream>) -> bool {
-        if now < self.next_probe {
-            return false;
-        }
-        self.next_probe = now + self.interval;
-        let available = connect().is_some();
-        if !available {
-            self.interval = self.interval.saturating_mul(2).min(HOST_PROBE_MAX);
-            self.next_probe = now + self.interval;
-        }
-        self.after_probe |= available;
-        available
-    }
-
-    fn attach_finished(&mut self, accepted: bool) {
-        if accepted {
-            self.interval = host_probe_interval();
-        } else if self.after_probe {
-            self.interval = self.interval.saturating_mul(2).min(HOST_PROBE_MAX);
-        }
-        self.after_probe = false;
-    }
-}
-
-#[cfg(feature = "testkit")]
-fn host_probe_interval() -> Duration {
-    duration_override(
-        "RIMZ_TEST_SIDEBAR_HOST_PROBE_INTERVAL_MS",
-        HOST_PROBE_INTERVAL,
-    )
-}
-
-#[cfg(not(feature = "testkit"))]
-fn host_probe_interval() -> Duration {
-    HOST_PROBE_INTERVAL
-}
-
 #[derive(Debug, thiserror::Error)]
 pub enum SidebarSuperviseErr {
-    #[error("spawning sidebar render worker `{program}`: {source}")]
+    #[error(
+        "rimz sidebar serve: stdout is not a terminal; the sidebar pane command must run in a pane"
+    )]
+    NotTerminal,
+    #[error(transparent)]
+    Paths(#[from] crate::disk::paths::PathErr),
+    #[error(transparent)]
+    Io(#[from] io::Error),
+    #[error("re-executing sidebar supervisor `{program}`: {source}")]
     Spawn {
         program: String,
         #[source]
         source: io::Error,
     },
-    #[error("waiting for sidebar render worker: {0}")]
-    Wait(#[source] io::Error),
 }
 
 pub type Result<T> = std::result::Result<T, SidebarSuperviseErr>;
-
-pub fn is_worker() -> bool {
-    env::var_os(WORKER_ENV).is_some()
-}
 
 pub fn instance_id() -> SidebarInstanceId {
     env::var(INSTANCE_ENV)
@@ -164,11 +89,12 @@ pub fn instance_id() -> SidebarInstanceId {
         .unwrap_or_default()
 }
 
-pub fn run_worker(
-    config: ServeConfig,
-) -> crate::sidebar_pane::app::Result<crate::sidebar_pane::app::ServeOutcome> {
-    inject_test_fault_if_requested();
-    crate::sidebar_pane::app::serve(config)
+struct StopSignal(signal_hook::SigId);
+
+impl Drop for StopSignal {
+    fn drop(&mut self) {
+        signal_hook::low_level::unregister(self.0);
+    }
 }
 
 pub fn run(config: ServeConfig) -> Result<()> {
@@ -182,129 +108,87 @@ pub fn run(config: ServeConfig) -> Result<()> {
         let _ = writeln!(io::stderr(), "rimz sidebar serve: {no_room}; stopping");
         return Ok(());
     }
+    if !io::stdout().is_terminal() {
+        return Err(SidebarSuperviseErr::NotTerminal);
+    }
+    let runtime = crate::RuntimePaths::for_workspace(config.workspace_id.clone())?;
+    let state = crate::StatePaths::for_workspace(config.workspace_id.clone())?;
+    runtime.ensure_dirs()?;
+    let stopped = Arc::new(AtomicBool::new(false));
+    let _signal = StopSignal(signal_hook::flag::register(
+        signal_hook::consts::SIGTERM,
+        stopped.clone(),
+    )?);
+    // Hold the tty even when no host starts: retry notices use raw-mode lines,
+    // and no mode sequence may land inside an attached host's frame.
+    let modes = TerminalModeGuard::enable(MouseCapture::Stdout, Screen::Main)?;
     let args = env::args_os().skip(1).collect::<Vec<_>>();
     let mut backoff = RESPAWN_BACKOFF_INITIAL;
     let mut pane_watchdog = PaneWatchdog::from_config(&config);
-    let supervisor_build = crate::build_id::current().map(str::to_owned);
-    let runtime = crate::RuntimePaths::for_workspace(config.workspace_id.clone()).ok();
-    let mut host_retry = (runtime.is_some() && io::stdout().is_terminal()).then(HostRetry::default);
+    let supervisor_build = crate::build_id::current();
     let mut exec_state = PendingExec::default();
-    let mut host_allowed = true;
     loop {
-        // Spawn from the durable room target even when its bytes match this
-        // supervisor. The supervisor may still occupy an unlinked temp image;
-        // `RIMZ_BIN` and `current_exe()` would make its next respawn fail.
-        let target = crate::reload::recorded_reexec_target(&config.workspace_id);
-        exec_state.observe(&target, supervisor_build.as_deref());
-        // Atomic installs leave `current_exe()` spelling a deleted inode on
-        // Linux. Resolve its replacement before spawning so a legacy room
-        // without a verified staged target can still complete the handoff.
-        let current = crate::reload::current_reexec_target().unwrap_or_else(crate::proc::rimz_exe);
-        let worker_build = worker_build(&target, supervisor_build.as_deref());
-        let exe = worker_executable(target, current);
-        let attached = match (&runtime, host_allowed) {
-            (Some(runtime), true) => {
-                attach_to_host(&config, runtime, &exe, supervisor_build.as_deref())
-            }
-            _ => None,
-        };
-        if let Some(retry) = host_retry.as_mut() {
-            retry.attach_finished(attached.is_some());
+        if stopped.load(Ordering::SeqCst) {
+            modes.preserve_for_handoff();
+            remove_orphan_runtime_files(&config);
+            return Ok(());
         }
-        let started = Instant::now();
-        let round = match attached {
-            Some(attached) => {
-                let host_build = attached.link.build.clone();
-                let exit = attached.watch(HostMonitor {
-                    record_watch: &mut record_watch,
-                    exec_state: &mut exec_state,
-                    supervisor_build: supervisor_build.as_deref(),
-                    started,
-                    watchdog: &mut pane_watchdog,
-                });
-                // A host that died young may die again: the pane's own
-                // worker paints the next round, and the round after asks
-                // for a host again.
-                host_allowed =
-                    exit != WorkerExit::HostLost || started.elapsed() >= respawn_stable_run();
-                Round {
-                    exit,
-                    build: host_build,
-                    worker_pid: None,
-                    stderr_excerpt: String::new(),
-                }
-            }
-            None => {
-                host_allowed = true;
-                let mut child = spawn_worker(&exe, &args, &config)?;
-                if let Some(retry) = host_retry.as_mut() {
-                    retry.worker_started(started, respawn_stable_run());
-                }
-                let worker_pid = worker_pid(&child);
-                record_test_worker_start(&exe, child.id());
-                spawn_test_stray_if_requested();
-
-                let stderr_tail = Arc::new(Mutex::new(StderrTail::new(STDERR_TAIL_BYTES)));
-                let stderr_handle = child
-                    .stderr
-                    .take()
-                    .map(|stderr| drain_stderr(stderr, stderr_tail.clone()));
-                let worker = wait_for_worker_and_reap_strays(
-                    worker_pid,
-                    WorkerMonitor {
+        if pane_watchdog
+            .as_mut()
+            .is_some_and(|watchdog| watchdog.probe_if_due(Instant::now()))
+        {
+            record_pane_gone(&config);
+            modes.preserve_for_handoff();
+            remove_orphan_runtime_files(&config);
+            return Ok(());
+        }
+        let target = crate::reload::recorded_reexec_target(&config.workspace_id);
+        exec_state.observe(&target, supervisor_build);
+        // Atomic installs can leave this image unlinked. Start the host from
+        // the durable room target, even when its bytes match this supervisor.
+        let current = crate::reload::current_reexec_target().unwrap_or_else(crate::proc::rimz_exe);
+        let exe = host_executable(target, current);
+        let (exit, painting_build, attached_duration) =
+            match attach_to_host(&config, &runtime, &state, &exe, supervisor_build) {
+                Err(failure) => (Err(failure), None, None),
+                Ok(attached) => {
+                    spawn_test_stray_if_requested();
+                    let started = Instant::now();
+                    let build = attached.link.build.clone();
+                    let (exit, duration) = attached.watch(HostMonitor {
                         record_watch: &mut record_watch,
                         exec_state: &mut exec_state,
-                        worker_build: worker_build.as_deref(),
-                        supervisor_build: supervisor_build.as_deref(),
+                        supervisor_build,
                         started,
-                        runtime: runtime.as_ref(),
-                        config: &config,
                         watchdog: &mut pane_watchdog,
-                        orphan_reap_pending: false,
-                        handoff_deadline: None,
-                        host_available_deadline: None,
-                        host_retry: host_retry.as_mut(),
-                    },
-                );
-                drop(child);
-                if let Some(handle) = stderr_handle {
-                    let _ = handle.join();
+                        stopped: &stopped,
+                    });
+                    (Ok(exit), build, Some(duration))
                 }
-                Round {
-                    exit: worker?,
-                    build: worker_build,
-                    worker_pid: Some(worker_pid.as_raw()),
-                    stderr_excerpt: stderr_tail
-                        .lock()
-                        .map(|tail| tail.excerpt())
-                        .unwrap_or_default(),
-                }
-            }
-        };
-        let worker_build = round.build;
-        match round.exit {
-            // The next round attaches again, to a host some pane starts.
-            WorkerExit::HostLost | WorkerExit::HostAvailable => {}
-            WorkerExit::OrphanReaped => {
-                if let Some(worker_pid) = round.worker_pid {
-                    record_orphan_reap(&config, worker_pid);
-                }
+            };
+        let run_duration = attached_duration.unwrap_or_default();
+        let failure = match exit {
+            Err(failure) => failure,
+            Ok(RoundExit::Stopped) => continue,
+            Ok(RoundExit::HostLost) => AttachFailure::Lost,
+            Ok(RoundExit::OrphanReaped) => {
+                record_pane_gone(&config);
+                modes.preserve_for_handoff();
                 remove_orphan_runtime_files(&config);
                 return Ok(());
             }
-            WorkerExit::Reload => {
+            Ok(RoundExit::Reload) => {
                 if let Some(target) = exec_state.promotable(
-                    worker_build.as_deref(),
-                    started.elapsed(),
+                    painting_build.as_deref(),
+                    run_duration,
                     respawn_stable_run(),
                 ) {
+                    diag_sink(&config).emit(DiagEvent::SupervisorConvergence {
+                        target_build: target.build.clone(),
+                    });
                     match preflight_supervisor(&target.path) {
                         Ok(()) => {
-                            debug!(
-                                target = %target.path.display(),
-                                instance = %config.instance_id,
-                                "reload: re-execing proven sidebar supervisor",
-                            );
+                            modes.preserve_for_handoff();
                             return exec_supervisor(&target.path, &args, &config);
                         }
                         Err(reason) => {
@@ -313,90 +197,120 @@ pub fn run(config: ServeConfig) -> Result<()> {
                         }
                     }
                 }
+                continue;
             }
-            WorkerExit::ConfirmSelfClose => match confirm_self_close(&config, &pane_watchdog) {
-                SelfCloseConfirmation::Close | SelfCloseConfirmation::PaneGone => {
-                    restore_terminal(MouseCapture::Stdout, Screen::Main);
-                    remove_orphan_runtime_files(&config);
-                    record_confirmed_self_close(&config);
-                    return Ok(());
+            Ok(RoundExit::ConfirmSelfClose) => {
+                match confirm_self_close(&config, &pane_watchdog) {
+                    SelfCloseConfirmation::Close | SelfCloseConfirmation::PaneGone => {
+                        drop(modes);
+                        remove_orphan_runtime_files(&config);
+                        record_confirmed_self_close(&config);
+                        return Ok(());
+                    }
+                    SelfCloseConfirmation::Keep { siblings, reason } => {
+                        record_self_close_rejected(&config, siblings, &reason);
+                        sleep_respawn_backoff(
+                            respawn_delay(RESPAWN_BACKOFF_INITIAL),
+                            &mut record_watch,
+                            &mut exec_state,
+                            supervisor_build,
+                            &stopped,
+                        );
+                    }
                 }
-                SelfCloseConfirmation::Keep { siblings, reason } => {
-                    record_self_close_rejected(&config, siblings, &reason);
-                    sleep_respawn_backoff(
-                        respawn_delay(RESPAWN_BACKOFF_INITIAL),
-                        &mut record_watch,
-                        &mut exec_state,
-                        supervisor_build.as_deref(),
-                    );
-                }
-            },
-            WorkerExit::Respawn { signal, exit_code } => {
-                restore_terminal(MouseCapture::Stdout, Screen::Main);
-                record_signal_death(&config, signal, exit_code, round.stderr_excerpt);
-                let (delay, next) = respawn_backoff(backoff, started.elapsed());
-                debug!(
-                    delay_ms = delay.as_millis(),
-                    instance = %config.instance_id,
-                    "respawning sidebar worker after abnormal termination",
-                );
-                sleep_respawn_backoff(
-                    respawn_delay(delay),
-                    &mut record_watch,
-                    &mut exec_state,
-                    supervisor_build.as_deref(),
-                );
-                backoff = next;
+                continue;
             }
+        };
+        if stopped.load(Ordering::SeqCst) {
+            continue;
+        }
+        let (delay, next) = respawn_backoff(backoff, run_duration);
+        let delay = respawn_delay(delay);
+        paint_unavailable_notice(&failure, delay);
+        let (cause, reason) = failure.diagnostic();
+        diag_sink(&config).emit(DiagEvent::SidebarHostUnavailable {
+            cause,
+            reason,
+            attached_ms: attached_duration.map(|duration| duration.as_millis() as u64),
+            retry_ms: delay.as_millis() as u64,
+        });
+        sleep_respawn_backoff(
+            delay,
+            &mut record_watch,
+            &mut exec_state,
+            supervisor_build,
+            &stopped,
+        );
+        backoff = next;
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+enum AttachFailure {
+    #[error("host did not start ({error}); see {log}")]
+    StartFailed { error: io::Error, log: PathBuf },
+    #[error("no host answered")]
+    NoAnswer,
+    #[error("host rejected this pane: {0}")]
+    Rejected(String),
+    #[error("host reply unreadable")]
+    ReplyUnreadable,
+    #[error("host went away")]
+    Lost,
+}
+
+impl AttachFailure {
+    fn diagnostic(&self) -> (SidebarHostUnavailableCause, String) {
+        match self {
+            Self::StartFailed { error, log } => (
+                SidebarHostUnavailableCause::StartFailed,
+                format!("({error}); see {}", log.display()),
+            ),
+            Self::NoAnswer => (SidebarHostUnavailableCause::NoAnswer, String::new()),
+            Self::Rejected(reason) => (SidebarHostUnavailableCause::Rejected, reason.clone()),
+            Self::ReplyUnreadable => (SidebarHostUnavailableCause::ReplyUnreadable, String::new()),
+            Self::Lost => (SidebarHostUnavailableCause::Lost, String::new()),
         }
     }
 }
 
-/// One turn of the supervise loop: a host attachment or a worker, from start
-/// to the exit the loop acts on.
-struct Round {
-    exit: WorkerExit,
-    /// The build that painted the pane this round.
-    build: Option<String>,
-    worker_pid: Option<i32>,
-    stderr_excerpt: String,
+fn paint_unavailable_notice(failure: &AttachFailure, delay: Duration) {
+    if let Err(err) = write!(
+        io::stdout(),
+        "\x1b[2J\x1b[1;1Hsidebar: {failure}\r\nretrying in {}s\r\n",
+        delay.as_secs().max(1)
+    )
+    .and_then(|()| io::stdout().flush())
+    {
+        debug!(error = %err, "sidebar host-unavailable notice could not be written");
+    }
 }
 
-/// A pane the room host is painting: the link to the host, and the terminal
-/// this process holds for it.
+/// A pane the room host is painting: its link and input forwarder.
 struct Attached {
     link: HostLink,
-    modes: TerminalModeGuard,
     forwarder: EventForwarder,
 }
 
-/// Hand this pane to the session's host. `None` leaves it to a worker: the
-/// output is not a terminal a host could size, no host answered or could be
-/// started in time, or the host said no.
+/// Hand this pane to the session's host, or explain why it cannot paint yet.
 fn attach_to_host(
     config: &ServeConfig,
     runtime: &crate::RuntimePaths,
+    state: &crate::StatePaths,
     exe: &Path,
     supervisor_build: Option<&str>,
-) -> Option<Attached> {
-    use std::io::IsTerminal;
+) -> std::result::Result<Attached, AttachFailure> {
     use std::os::fd::AsFd;
 
     let stdout = io::stdout();
-    if !stdout.is_terminal() {
-        return None;
-    }
-    let stream = connect_to_host(config, runtime, exe)?;
-    // Set the pane's modes before the host can paint: afterwards the host
-    // owns every byte written to it, and a mode sequence from here would
-    // land inside one of its frames.
-    let modes = TerminalModeGuard::enable(MouseCapture::Stdout, Screen::Main).ok()?;
+    let log = state.sidebar_host_log(config.mux, &config.session_name);
+    let stream = host_link::connect(config, runtime, host_link::HOST_WAIT, || {
+        host_link::spawn_host(exe, config, runtime, state, &log)
+    })
+    .map_err(|error| AttachFailure::StartFailed { error, log })?
+    .ok_or(AttachFailure::NoAnswer)?;
     let hello = host_link::hello_for(config, supervisor_build);
-    let Some(link) = HostLink::open(stream, &hello, stdout.as_fd(), host_link::REPLY_WAIT) else {
-        // The worker that paints instead asserts the same modes.
-        modes.preserve_for_handoff();
-        return None;
-    };
+    let link = HostLink::open(stream, &hello, stdout.as_fd(), host_link::REPLY_WAIT)?;
     let wake_path = runtime.sidebar_socket_path(&config.instance_id);
     // The host sized the pane from its fd at the hello; a resize that raced
     // the handover is settled by one more look.
@@ -404,24 +318,7 @@ fn attach_to_host(
         let _ = waker.send_to(b"resize", &wake_path);
     }
     let forwarder = EventForwarder::start(wake_path);
-    Some(Attached {
-        link,
-        modes,
-        forwarder,
-    })
-}
-
-fn connect_to_host(
-    config: &ServeConfig,
-    runtime: &crate::RuntimePaths,
-    exe: &Path,
-) -> Option<UnixStream> {
-    host_link::connect(config, runtime, host_link::HOST_WAIT, || {
-        let state = crate::StatePaths::for_workspace(config.workspace_id.clone())
-            .map_err(io::Error::other)?;
-        let log = state.sidebar_host_log(config.mux, &config.session_name);
-        host_link::spawn_host(exe, config, runtime, &state, &log)
-    })
+    Ok(Attached { link, forwarder })
 }
 
 struct HostMonitor<'a> {
@@ -430,29 +327,31 @@ struct HostMonitor<'a> {
     supervisor_build: Option<&'a str>,
     started: Instant,
     watchdog: &'a mut Option<PaneWatchdog>,
+    stopped: &'a AtomicBool,
 }
 
 impl Attached {
     /// Stay attached until the host or this pane ends it, then give the tty
     /// back to whichever process paints next.
-    fn watch(mut self, monitor: HostMonitor<'_>) -> WorkerExit {
+    fn watch(mut self, monitor: HostMonitor<'_>) -> (RoundExit, Duration) {
+        let started = monitor.started;
         let exit = watch_host(&mut self.link, monitor);
+        let duration = started.elapsed();
         drop(self.link);
         self.forwarder.stop();
-        // Every way out keeps the pane's modes continuous: a worker or the
-        // next attachment asserts the same ones, and a confirmed close
-        // restores them itself.
-        self.modes.preserve_for_handoff();
-        exit
+        (exit, duration)
     }
 }
 
-fn watch_host(link: &mut HostLink, monitor: HostMonitor<'_>) -> WorkerExit {
+fn watch_host(link: &mut HostLink, monitor: HostMonitor<'_>) -> RoundExit {
     loop {
+        if monitor.stopped.load(Ordering::SeqCst) {
+            return RoundExit::Stopped;
+        }
         match link.poll(reap_poll_interval()) {
-            HostEvent::Control(Control::SelfClose) => return WorkerExit::ConfirmSelfClose,
-            HostEvent::Control(Control::Reload) => return WorkerExit::Reload,
-            HostEvent::Lost => return WorkerExit::HostLost,
+            HostEvent::Control(Control::SelfClose) => return RoundExit::ConfirmSelfClose,
+            HostEvent::Control(Control::Reload) => return RoundExit::Reload,
+            HostEvent::Lost => return RoundExit::HostLost,
             HostEvent::Quiet => {}
         }
         reap_exited_children();
@@ -461,12 +360,7 @@ fn watch_host(link: &mut HostLink, monitor: HostMonitor<'_>) -> WorkerExit {
             // A host on a superseded build leaves by itself and says
             // `reload`; the record only tells this supervisor whether it
             // has a build of its own to move to.
-            let _ = apply_record_change(
-                monitor.exec_state,
-                &change,
-                monitor.supervisor_build,
-                link.build.as_deref(),
-            );
+            apply_record_change(monitor.exec_state, &change, monitor.supervisor_build);
         }
         if monitor
             .exec_state
@@ -477,21 +371,21 @@ fn watch_host(link: &mut HostLink, monitor: HostMonitor<'_>) -> WorkerExit {
             )
             .is_some()
         {
-            return WorkerExit::Reload;
+            return RoundExit::Reload;
         }
         if monitor
             .watchdog
             .as_mut()
             .is_some_and(|watchdog| watchdog.probe_if_due(now))
         {
-            return WorkerExit::OrphanReaped;
+            return RoundExit::OrphanReaped;
         }
     }
 }
 
 /// A host this supervisor started stays its child. One that exits after this
 /// supervisor re-exec'd has no reaper thread left to collect it, so the
-/// attached loop does what the worker wait does on every poll.
+/// attached loop reaps exited children on every poll.
 #[cfg(all(unix, not(test)))]
 fn reap_exited_children() {
     use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
@@ -505,7 +399,7 @@ fn reap_exited_children() {
 #[cfg(any(not(unix), test))]
 fn reap_exited_children() {}
 
-fn worker_executable(
+fn host_executable(
     target: crate::reload::WorkspaceReexecTarget,
     current: std::path::PathBuf,
 ) -> std::path::PathBuf {
@@ -516,25 +410,11 @@ fn worker_executable(
     }
 }
 
-fn spawn_worker(exe: &Path, args: &[OsString], config: &ServeConfig) -> Result<Child> {
-    Command::new(exe)
-        .args(args)
-        .env(WORKER_ENV, "1")
-        .env(INSTANCE_ENV, config.instance_id.as_str())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|source| SidebarSuperviseErr::Spawn {
-            program: render_program(exe),
-            source,
-        })
-}
-
 fn exec_supervisor(exe: &Path, args: &[OsString], config: &ServeConfig) -> Result<()> {
     use std::os::unix::process::CommandExt;
 
     let source = Command::new(exe)
         .args(args)
-        .env_remove(WORKER_ENV)
         .env(INSTANCE_ENV, config.instance_id.as_str())
         .exec();
     Err(SidebarSuperviseErr::Spawn {
@@ -544,35 +424,13 @@ fn exec_supervisor(exe: &Path, args: &[OsString], config: &ServeConfig) -> Resul
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum WorkerExit {
+enum RoundExit {
     Reload,
     ConfirmSelfClose,
-    Respawn {
-        signal: Option<i32>,
-        exit_code: Option<i32>,
-    },
+    Stopped,
     OrphanReaped,
     /// The room host painting this pane went away without a word.
     HostLost,
-    HostAvailable,
-}
-
-fn classify_worker_exit(
-    orphan_reap_pending: bool,
-    handoff_requested: bool,
-    exit_code: Option<i32>,
-    signal: Option<i32>,
-) -> WorkerExit {
-    if orphan_reap_pending {
-        return WorkerExit::OrphanReaped;
-    }
-    if handoff_requested || exit_code == Some(RELOAD_EXIT_CODE) && signal.is_none() {
-        return WorkerExit::Reload;
-    }
-    if exit_code == Some(SELF_CLOSE_EXIT_CODE) && signal.is_none() {
-        return WorkerExit::ConfirmSelfClose;
-    }
-    WorkerExit::Respawn { signal, exit_code }
 }
 
 fn respawn_backoff(current: Duration, run_duration: Duration) -> (Duration, Duration) {
@@ -612,13 +470,13 @@ impl PendingExec {
 
     fn promotable(
         &self,
-        worker_build: Option<&str>,
+        painting_build: Option<&str>,
         run_duration: Duration,
         stable_run: Duration,
     ) -> Option<crate::reload::StagedBuild> {
         self.target
             .as_ref()
-            .filter(|target| worker_build == Some(target.build.as_str()))
+            .filter(|target| painting_build == Some(target.build.as_str()))
             .filter(|_| run_duration >= stable_run)
             .cloned()
     }
@@ -696,17 +554,6 @@ fn record_mtime(path: &Path) -> Option<SystemTime> {
     std::fs::metadata(path)
         .and_then(|metadata| metadata.modified())
         .ok()
-}
-
-fn worker_build(
-    target: &crate::reload::WorkspaceReexecTarget,
-    supervisor_build: Option<&str>,
-) -> Option<String> {
-    match target {
-        crate::reload::WorkspaceReexecTarget::Verified(target) => Some(target.build.clone()),
-        crate::reload::WorkspaceReexecTarget::Absent
-        | crate::reload::WorkspaceReexecTarget::Invalid => supervisor_build.map(str::to_owned),
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1049,171 +896,11 @@ fn pane_probe_for(probe: &AuthoritativePaneProbe, pane: &crate::ids::PaneId) -> 
     }
 }
 
-#[cfg(unix)]
-fn worker_pid(child: &Child) -> nix::unistd::Pid {
-    nix::unistd::Pid::from_raw(child.id() as i32)
-}
-
-#[cfg(unix)]
-struct WorkerMonitor<'a> {
-    record_watch: &'a mut RecordWatch,
-    exec_state: &'a mut PendingExec,
-    worker_build: Option<&'a str>,
-    supervisor_build: Option<&'a str>,
-    started: Instant,
-    runtime: Option<&'a crate::RuntimePaths>,
-    config: &'a ServeConfig,
-    watchdog: &'a mut Option<PaneWatchdog>,
-    orphan_reap_pending: bool,
-    handoff_deadline: Option<Instant>,
-    host_available_deadline: Option<Instant>,
-    host_retry: Option<&'a mut HostRetry>,
-}
-
-#[cfg(unix)]
-impl WorkerMonitor<'_> {
-    fn terminal(&self, exit_code: Option<i32>, signal: Option<i32>) -> WorkerExit {
-        let exit = classify_worker_exit(
-            self.orphan_reap_pending,
-            self.handoff_deadline.is_some(),
-            exit_code,
-            signal,
-        );
-        if self.host_available_deadline.is_some() && matches!(exit, WorkerExit::Respawn { .. }) {
-            return WorkerExit::HostAvailable;
-        }
-        exit
-    }
-
-    fn poll(&mut self, worker_pid: nix::unistd::Pid, now: Instant) -> Result<()> {
-        use nix::sys::signal::Signal;
-
-        if let Some(change) = self.record_watch.poll_if_due(now) {
-            let worker_is_stale = apply_record_change(
-                self.exec_state,
-                &change,
-                self.supervisor_build,
-                self.worker_build,
-            );
-            if worker_is_stale && self.handoff_deadline.is_none() {
-                self.request_handoff(now);
-            }
-        }
-        if self.handoff_deadline.is_none()
-            && self
-                .exec_state
-                .promotable(
-                    self.worker_build,
-                    now.saturating_duration_since(self.started),
-                    respawn_stable_run(),
-                )
-                .is_some()
-        {
-            self.request_handoff(now);
-        }
-        if self
-            .handoff_deadline
-            .is_some_and(|deadline| now >= deadline)
-            || self
-                .host_available_deadline
-                .is_some_and(|deadline| now >= deadline)
-        {
-            kill_worker(worker_pid, Signal::SIGKILL)?;
-        }
-        if !self.orphan_reap_pending
-            && self
-                .watchdog
-                .as_mut()
-                .is_some_and(|watchdog| watchdog.probe_if_due(now))
-        {
-            kill_worker(worker_pid, Signal::SIGKILL)?;
-            self.orphan_reap_pending = true;
-        }
-        if !self.orphan_reap_pending
-            && self.handoff_deadline.is_none()
-            && self.host_available_deadline.is_none()
-            && let (Some(retry), Some(runtime)) = (self.host_retry.as_mut(), self.runtime)
-            && retry.probe_if_due(now, || {
-                let current =
-                    crate::reload::current_reexec_target().unwrap_or_else(crate::proc::rimz_exe);
-                let exe = worker_executable(
-                    crate::reload::recorded_reexec_target(&self.config.workspace_id),
-                    current,
-                );
-                connect_to_host(self.config, runtime, &exe)
-            })
-        {
-            kill_worker(worker_pid, Signal::SIGTERM)?;
-            self.host_available_deadline = Some(now + worker_handoff_grace());
-        }
-        Ok(())
-    }
-
-    fn request_handoff(&mut self, now: Instant) {
-        request_worker_handoff(self.runtime, self.config, self.exec_state.target.as_ref());
-        self.handoff_deadline = Some(now + worker_handoff_grace());
-    }
-}
-
-#[cfg(unix)]
-fn kill_worker(worker_pid: nix::unistd::Pid, signal: nix::sys::signal::Signal) -> Result<()> {
-    match nix::sys::signal::kill(worker_pid, signal) {
-        Ok(()) | Err(nix::errno::Errno::ESRCH) => Ok(()),
-        Err(err) => Err(SidebarSuperviseErr::Wait(wait_error(err))),
-    }
-}
-
-#[cfg(unix)]
-fn wait_for_worker_and_reap_strays(
-    worker_pid: nix::unistd::Pid,
-    mut monitor: WorkerMonitor<'_>,
-) -> Result<WorkerExit> {
-    use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
-    use nix::unistd::Pid;
-
-    loop {
-        match waitpid(Pid::from_raw(-1), Some(WaitPidFlag::WNOHANG)) {
-            Ok(WaitStatus::Exited(pid, status)) if pid == worker_pid => {
-                return Ok(monitor.terminal(Some(status), None));
-            }
-            Ok(WaitStatus::Signaled(pid, signal, _)) if pid == worker_pid => {
-                return Ok(monitor.terminal(None, Some(signal as i32)));
-            }
-            Ok(WaitStatus::Exited(pid, status)) => {
-                debug!(
-                    pid = pid.as_raw(),
-                    status, "reaped stray sidebar supervisor child",
-                );
-            }
-            Ok(WaitStatus::Signaled(pid, signal, _)) => {
-                debug!(
-                    pid = pid.as_raw(),
-                    signal = ?signal,
-                    "reaped stray sidebar supervisor child",
-                );
-            }
-            Ok(WaitStatus::StillAlive) => {
-                monitor.poll(worker_pid, Instant::now())?;
-                thread::sleep(reap_poll_interval());
-            }
-            Ok(status) => {
-                debug!(status = ?status, "observed non-terminal child status");
-            }
-            Err(nix::errno::Errno::ECHILD) => {
-                return Ok(monitor.terminal(None, None));
-            }
-            Err(nix::errno::Errno::EINTR) => continue,
-            Err(err) => return Err(SidebarSuperviseErr::Wait(wait_error(err))),
-        }
-    }
-}
-
 fn apply_record_change(
     exec_state: &mut PendingExec,
     change: &RecordChange,
     supervisor_build: Option<&str>,
-    worker_build: Option<&str>,
-) -> bool {
+) {
     let target = match change {
         RecordChange::Verified(target) => {
             crate::reload::WorkspaceReexecTarget::Verified(target.clone())
@@ -1221,24 +908,6 @@ fn apply_record_change(
         RecordChange::Unavailable => crate::reload::WorkspaceReexecTarget::Invalid,
     };
     exec_state.observe(&target, supervisor_build);
-    matches!(change, RecordChange::Verified(target) if worker_build != Some(target.build.as_str()))
-}
-
-fn request_worker_handoff(
-    runtime: Option<&crate::RuntimePaths>,
-    config: &ServeConfig,
-    target: Option<&crate::reload::StagedBuild>,
-) {
-    if let Some(runtime) = runtime
-        && let Err(err) = crate::wakeup::reload_one(runtime, &config.instance_id)
-    {
-        debug!(error = %err, "sidebar supervisor worker handoff nudge failed");
-    }
-    if let Some(target) = target {
-        diag_sink(config).emit(DiagEvent::SupervisorConvergence {
-            target_build: target.build.clone(),
-        });
-    }
 }
 
 fn sleep_respawn_backoff(
@@ -1246,48 +915,30 @@ fn sleep_respawn_backoff(
     record_watch: &mut RecordWatch,
     exec_state: &mut PendingExec,
     supervisor_build: Option<&str>,
+    stopped: &AtomicBool,
 ) {
     let deadline = Instant::now() + delay;
     loop {
         let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
+        if remaining.is_zero() || stopped.load(Ordering::SeqCst) {
             return;
         }
         thread::sleep(remaining.min(record_poll_interval()));
+        reap_exited_children();
         if let Some(change) = record_watch.poll_now() {
-            let _ = apply_record_change(exec_state, &change, supervisor_build, None);
+            apply_record_change(exec_state, &change, supervisor_build);
             return;
         }
     }
 }
 
-#[cfg(unix)]
-fn wait_error(err: nix::errno::Errno) -> io::Error {
-    io::Error::from_raw_os_error(err as i32)
-}
-
-fn record_signal_death(
-    config: &ServeConfig,
-    signal: Option<i32>,
-    exit_code: Option<i32>,
-    stderr_excerpt: String,
-) {
-    diag_sink(config).emit(DiagEvent::RendererSignalDeath {
-        signal,
-        exit_code,
-        stderr_excerpt: stderr_excerpt.clone(),
-    });
-    report_sentry_signal_death(signal, exit_code, &stderr_excerpt);
-}
-
-fn record_orphan_reap(config: &ServeConfig, worker_pid: i32) {
-    diag_sink(config).emit(DiagEvent::RendererOrphanReaped {
+fn record_pane_gone(config: &ServeConfig) {
+    diag_sink(config).emit(DiagEvent::SupervisorPaneGone {
         pane_id: config
             .own_pane
             .as_ref()
             .map(ToString::to_string)
             .unwrap_or_default(),
-        worker_pid,
     });
 }
 
@@ -1353,85 +1004,6 @@ fn remove_orphan_runtime_files(config: &ServeConfig) {
     }
 }
 
-#[cfg(feature = "sentry")]
-fn report_sentry_signal_death(signal: Option<i32>, exit_code: Option<i32>, stderr_excerpt: &str) {
-    tracing::error!(
-        target: "rimz::sidebar::crash",
-        {
-            tags.operation = "sidebar.render_crash",
-            signal = signal.unwrap_or(0),
-            exit_code = exit_code.unwrap_or(0),
-            stderr = %stderr_excerpt,
-        },
-        "sidebar render worker terminated abnormally",
-    );
-}
-
-#[cfg(not(feature = "sentry"))]
-fn report_sentry_signal_death(
-    _signal: Option<i32>,
-    _exit_code: Option<i32>,
-    _stderr_excerpt: &str,
-) {
-}
-
-fn drain_stderr<R>(mut stderr: R, tail: Arc<Mutex<StderrTail>>) -> thread::JoinHandle<()>
-where
-    R: Read + Send + 'static,
-{
-    thread::spawn(move || {
-        let mut buf = [0_u8; 1024];
-        loop {
-            let n = match stderr.read(&mut buf) {
-                Ok(0) | Err(_) => break,
-                Ok(n) => n,
-            };
-            let chunk = &buf[..n];
-            let _ = io::stderr().write_all(chunk);
-            if let Ok(mut tail) = tail.lock() {
-                tail.push(chunk);
-            }
-        }
-    })
-}
-
-#[derive(Debug)]
-struct StderrTail {
-    bytes: Vec<u8>,
-    cap: usize,
-}
-
-impl StderrTail {
-    fn new(cap: usize) -> Self {
-        Self {
-            bytes: Vec::new(),
-            cap,
-        }
-    }
-
-    fn push(&mut self, chunk: &[u8]) {
-        if chunk.len() >= self.cap {
-            self.bytes.clear();
-            self.bytes
-                .extend_from_slice(&chunk[chunk.len().saturating_sub(self.cap)..]);
-            return;
-        }
-        let overflow = self
-            .bytes
-            .len()
-            .saturating_add(chunk.len())
-            .saturating_sub(self.cap);
-        if overflow > 0 {
-            self.bytes.drain(..overflow);
-        }
-        self.bytes.extend_from_slice(chunk);
-    }
-
-    fn excerpt(&self) -> String {
-        String::from_utf8_lossy(&self.bytes).into_owned()
-    }
-}
-
 fn render_program(exe: &std::path::Path) -> String {
     exe.to_string_lossy().into_owned()
 }
@@ -1464,16 +1036,6 @@ fn respawn_stable_run() -> Duration {
 #[cfg(not(feature = "testkit"))]
 fn respawn_stable_run() -> Duration {
     RESPAWN_STABLE_RUN
-}
-
-#[cfg(feature = "testkit")]
-fn worker_handoff_grace() -> Duration {
-    duration_override(TEST_HANDOFF_GRACE_MS_ENV, WORKER_HANDOFF_GRACE)
-}
-
-#[cfg(not(feature = "testkit"))]
-fn worker_handoff_grace() -> Duration {
-    WORKER_HANDOFF_GRACE
 }
 
 #[cfg(not(feature = "testkit"))]
@@ -1524,50 +1086,6 @@ fn reap_poll_interval() -> Duration {
 }
 
 #[cfg(feature = "testkit")]
-fn inject_test_fault_if_requested() {
-    let Some(fault) = env::var_os(TEST_FAULT_ENV).filter(|value| !value.is_empty()) else {
-        return;
-    };
-    match fault.to_string_lossy().as_ref() {
-        "abort" => {
-            let _ = io::stderr().write_all(b"rimz test sidebar worker abort\n");
-            std::process::abort();
-        }
-        "abort_after_delay" => {
-            thread::sleep(Duration::from_millis(20));
-            let _ = io::stderr().write_all(b"rimz test sidebar worker delayed abort\n");
-            std::process::abort();
-        }
-        "exit_on_file" => exit_when_test_file_appears(),
-        "self_close" => std::process::exit(SELF_CLOSE_EXIT_CODE),
-        _ => {}
-    }
-}
-
-#[cfg(feature = "testkit")]
-fn exit_when_test_file_appears() {
-    let Some(path) = env::var_os(TEST_EXIT_FILE_ENV).filter(|value| !value.is_empty()) else {
-        let _ = io::stderr().write_all(b"rimz test sidebar worker exit file missing\n");
-        std::process::exit(2);
-    };
-    let path = std::path::PathBuf::from(path);
-    let deadline = std::time::Instant::now() + Duration::from_secs(30);
-    loop {
-        if path.exists() {
-            std::process::exit(0);
-        }
-        if std::time::Instant::now() >= deadline {
-            let _ = io::stderr().write_all(b"rimz test sidebar worker exit file timed out\n");
-            std::process::exit(1);
-        }
-        thread::sleep(Duration::from_millis(10));
-    }
-}
-
-#[cfg(not(feature = "testkit"))]
-fn inject_test_fault_if_requested() {}
-
-#[cfg(feature = "testkit")]
 fn spawn_test_stray_if_requested() {
     let Some(path) = env::var_os(TEST_STRAY_PID_FILE_ENV).filter(|value| !value.is_empty()) else {
         return;
@@ -1592,23 +1110,6 @@ fn spawn_test_stray_if_requested() {
 
 #[cfg(not(feature = "testkit"))]
 fn spawn_test_stray_if_requested() {}
-
-#[cfg(feature = "testkit")]
-fn record_test_worker_start(exe: &Path, pid: u32) {
-    use std::fs::OpenOptions;
-
-    let Some(path) = env::var_os(TEST_WORKER_STARTED_FILE_ENV).filter(|value| !value.is_empty())
-    else {
-        return;
-    };
-    let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) else {
-        return;
-    };
-    let _ = writeln!(file, "{pid} {}", exe.display());
-}
-
-#[cfg(not(feature = "testkit"))]
-fn record_test_worker_start(_exe: &Path, _pid: u32) {}
 
 #[cfg(test)]
 mod tests;

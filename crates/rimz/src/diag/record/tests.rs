@@ -552,17 +552,21 @@ fn severity_table_pins_conditional_and_regression_categories() {
             cache_observed_at_ms: Some(900),
             authoritative_observed_at_ms: 1_000,
         },
+        DiagEvent::SidebarHostUnavailable {
+            cause: SidebarHostUnavailableCause::Rejected,
+            reason: "capacity".to_owned(),
+            attached_ms: None,
+            retry_ms: 1_000,
+        },
+        DiagEvent::SupervisorPaneGone {
+            pane_id: "tmux:%11".to_owned(),
+        },
     ];
     let error = [
         ghost_bind(),
         DiagEvent::RendererPanic {
             message: "boom".to_owned(),
             backtrace: None,
-        },
-        DiagEvent::RendererSignalDeath {
-            signal: Some(6),
-            exit_code: None,
-            stderr_excerpt: "memory allocation failed".to_owned(),
         },
     ];
 
@@ -800,21 +804,30 @@ fn identity_keys_partition_episodes_and_subjects() {
         )),
         key(ghost_bind())
     );
-    let renderer_death = |signal, exit_code, stderr: &str| {
-        key(DiagEvent::RendererSignalDeath {
-            signal,
-            exit_code,
-            stderr_excerpt: stderr.to_owned(),
+    let host_unavailable = |cause, reason: &str, retry_ms| {
+        key(DiagEvent::SidebarHostUnavailable {
+            cause,
+            reason: reason.to_owned(),
+            attached_ms: None,
+            retry_ms,
         })
     };
     assert_eq!(
-        renderer_death(Some(6), None, "first"),
-        renderer_death(Some(6), None, "changed"),
-        "stderr detail does not split one renderer death"
+        host_unavailable(SidebarHostUnavailableCause::Rejected, "capacity", 1_000),
+        host_unavailable(SidebarHostUnavailableCause::Rejected, "capacity", 2_000),
+        "retry timing does not split one host-unavailable identity"
     );
     assert_ne!(
-        renderer_death(Some(6), None, "first"),
-        renderer_death(None, Some(6), "first")
+        host_unavailable(SidebarHostUnavailableCause::Rejected, "capacity", 1_000),
+        host_unavailable(SidebarHostUnavailableCause::Lost, "", 1_000)
+    );
+    assert_ne!(
+        key(DiagEvent::SupervisorPaneGone {
+            pane_id: "tmux:%11".to_owned(),
+        }),
+        key(DiagEvent::SupervisorPaneGone {
+            pane_id: "tmux:%12".to_owned(),
+        })
     );
     assert_ne!(
         key(DiagEvent::RendererExit {

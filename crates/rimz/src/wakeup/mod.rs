@@ -24,9 +24,7 @@ use std::time::Duration;
 use jiff::Timestamp;
 use tracing::debug;
 
-use self::events::{
-    RELOAD_CONTROL_WORD, SUPERVISOR_HANDOFF_CONTROL_WORD, SidebarEvent, SidebarEventEnvelope,
-};
+use self::events::{RELOAD_CONTROL_WORD, SidebarEvent, SidebarEventEnvelope};
 use self::heartbeat::{SIDEBAR_HEARTBEAT_TTL, SidebarHeartbeat, read_current_heartbeats};
 use crate::disk::paths::RuntimePaths;
 
@@ -75,16 +73,6 @@ pub fn reload_all(rt: &RuntimePaths) -> std::result::Result<usize, WakeupErr> {
             .map(|heartbeat| heartbeat.wakeup_socket.as_path()),
     );
     Ok(signaled)
-}
-
-/// Ask one known sidebar worker to exit cleanly for a supervisor handoff.
-pub(crate) fn reload_one(
-    rt: &RuntimePaths,
-    instance_id: &crate::ids::SidebarInstanceId,
-) -> std::result::Result<(), WakeupErr> {
-    let target = rt.sidebar_socket_path(instance_id);
-    send_datagram(SUPERVISOR_HANDOFF_CONTROL_WORD.as_bytes(), &target);
-    Ok(())
 }
 
 /// Post one typed event to every fresh, protocol-current sidebar. A session
@@ -170,13 +158,6 @@ fn heartbeat_still_fresh(path: &Path) -> bool {
         }
         Err(_) => true,
     }
-}
-
-fn send_datagram(payload: &[u8], target: &Path) {
-    let Some(sender) = sender_socket() else {
-        return;
-    };
-    send_datagram_with(&sender, payload, target);
 }
 
 fn send_datagrams_with<'a>(
