@@ -221,6 +221,25 @@ struct ResetGrantWire {
     use_requires_limit: bool,
 }
 
+/// The API error envelope, read only at `error.details.error_code`.
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct ErrorEnvelopeWire {
+    error: ApiErrorWire,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct ApiErrorWire {
+    details: ApiErrorDetailsWire,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct ApiErrorDetailsWire {
+    error_code: Option<String>,
+}
+
 #[derive(Deserialize)]
 struct ProfileWire {
     organization: OrganizationWire,
@@ -603,15 +622,9 @@ fn http_get(url: &str, token: &str) -> Result<String> {
 
 fn classify_usage_http_error(error: OAuthHttpErr) -> ClaudeOauthUsageErr {
     let not_entitled = error.kind == HttpErrKind::Status(403)
-        && serde_json::from_str::<serde_json::Value>(&error.body).is_ok_and(|value| {
-            value
-                .get("error")
-                .and_then(serde_json::Value::as_object)
-                .is_some_and(|object| {
-                    object
-                        .values()
-                        .any(|value| value.as_str() == Some("oauth_not_allowed_for_organization"))
-                })
+        && serde_json::from_str::<ErrorEnvelopeWire>(&error.body).is_ok_and(|envelope| {
+            envelope.error.details.error_code.as_deref()
+                == Some("oauth_not_allowed_for_organization")
         });
     if not_entitled {
         return ClaudeOauthUsageErr::NotEntitled { host: error.host };

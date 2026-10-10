@@ -25,7 +25,7 @@ fn claude_organization_rejection_records_lapsed_entitlement_without_body_text() 
     std::fs::create_dir_all(&home).unwrap();
     write_claude_credentials(&home, "work");
     let (origin, server) = serve_http_routes(vec![("GET /api/oauth/usage", 403,
-        r#"{"error":{"code":"oauth_not_allowed_for_organization","message":"sentinel-private-body"}}"#.to_owned())], 1);
+        r#"{"type":"error","error":{"type":"permission_error","message":"sentinel-private-body","details":{"error_visibility":"user_facing","error_code":"oauth_not_allowed_for_organization"}}}"#.to_owned())], 1);
     let output = env
         .rimz()
         .args(refresh_usage_argv(&env, "claude", &claim_id))
