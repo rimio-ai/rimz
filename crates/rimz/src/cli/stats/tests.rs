@@ -945,6 +945,82 @@ fn model_cells_show_usd_and_cache_read_detail() {
 }
 
 #[test]
+fn model_rate_column_is_windowed_optional_and_full_tier_only() {
+    let mut timed = model_tally(1_000, 10.0, 600, 400, 90);
+    timed.year.timed_ms = 6_000;
+    timed.year.timed_output = 400;
+    timed.week = timed.year.clone();
+    timed.week.timed_ms = 4_000;
+    let untimed = model_tally(500, 5.0, 400, 100, 0);
+    let stats = Stats {
+        by_model: BTreeMap::from([
+            ("timed".to_owned(), timed.clone()),
+            ("untimed".to_owned(), untimed.clone()),
+        ]),
+        by_day: BTreeMap::new(),
+        by_agent: BTreeMap::new(),
+        total: SpendTally::default(),
+    };
+    let glyphs = panel_glyphs();
+    let render_rows = |models: &[(String, SpendWindow)], compact| {
+        let cells = model_cells(models, 7, &glyphs);
+        let mut lines = Vec::new();
+        emit_stat_section(
+            &mut lines,
+            "Models",
+            &cells,
+            StatSectionLayout {
+                compact,
+                left_w: stat_left_width(&cells, &[], compact),
+                pct_w: stat_pct_width(&cells, &[]),
+                bar_w: 0,
+            },
+            &glyphs,
+        );
+        lines
+            .into_iter()
+            .map(|line| strip_ansi(&line))
+            .collect::<Vec<_>>()
+    };
+    let models = model_breakdown(&stats, Window::AllTime, MAX_MODELS);
+    let full = render_rows(&models, false);
+    assert!(full.iter().any(|row| row.contains("67 tok/s")));
+    assert!(
+        full.iter()
+            .any(|row| row.contains("Untimed") && row.contains("·        -"))
+    );
+    let compact = render_rows(&models, true);
+    assert!(compact.iter().all(|row| !row.contains("tok/s")));
+    let untimed_models = models
+        .iter()
+        .map(|(name, spend)| {
+            (
+                name.clone(),
+                SpendWindow {
+                    timed_ms: 0,
+                    timed_output: 0,
+                    ..spend.clone()
+                },
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(compact, render_rows(&untimed_models, true));
+    assert!(
+        render_rows(&untimed_models, false)
+            .iter()
+            .all(|row| !row.contains("tok/s"))
+    );
+    let week = render_rows(&model_breakdown(&stats, Window::Week, MAX_MODELS), false);
+    assert!(week.iter().any(|row| row.contains("100 tok/s")));
+    let other = render_rows(&model_breakdown(&stats, Window::AllTime, 1), false);
+    assert!(
+        other
+            .iter()
+            .any(|row| row.contains("Other") && row.contains("67 tok/s"))
+    );
+}
+
+#[test]
 fn stats_json_includes_cache_hit_percent_only_with_input_side_data() {
     let mut claude = tally(100, 1.0, 1);
     claude.year.input = 10;
@@ -954,6 +1030,8 @@ fn stats_json_includes_cache_hit_percent_only_with_input_side_data() {
     let mut claude_model = model_tally(10, 1.0, 10, 0, 90);
     claude_model.year.tool_calls = 3;
     claude_model.year.tools = BTreeMap::from([("Read".to_owned(), 3)]);
+    claude_model.year.timed_ms = 6_000;
+    claude_model.year.timed_output = 400;
     let mut total = SpendTally::default();
     total.week.tool_calls = 1;
     total.week.tools = BTreeMap::from([("Read".to_owned(), 1)]);
@@ -982,6 +1060,8 @@ fn stats_json_includes_cache_hit_percent_only_with_input_side_data() {
         .find(|model| model["model"] == "output-only")
         .unwrap();
     assert_eq!(claude_model["cache_hit_pct"], 90);
+    assert_eq!(claude_model["tokens_per_sec"], 67);
+    assert!(output_only.get("tokens_per_sec").is_none());
     assert!(output_only.get("cache_hit_pct").is_none());
     assert!(output_only.get("tool_calls").is_none());
     assert_eq!(claude_model["tool_calls"], 3);
