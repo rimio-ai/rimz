@@ -1338,14 +1338,16 @@ impl crate::agents::capabilities::SpendingCapability for ClaudeAdapter {
     }
 
     fn spend_pricing_is_current(&self, cursor: &crate::agents::spending::SpendCursor) -> bool {
-        cursor.state.as_ref().and_then(Value::as_str)
-            == managed_pricing::fingerprint_current().as_deref()
+        cursor
+            .state_as::<spend::ClaudeSpendState>()
+            .pricing_fingerprint
+            == managed_pricing::fingerprint_current()
     }
 
     /// Current Claude transcripts log no `costUSD`, so each turn is priced
     /// from its `message.usage` through the book; an older transcript's
-    /// positive `costUSD` is used verbatim. Lines are independent, so a
-    /// resume is a plain offset.
+    /// positive `costUSD` is used verbatim. The cursor carries timing and the
+    /// managed-pricing fingerprint across incremental parses.
     fn parse_spend(
         &self,
         path: &Path,
@@ -1353,10 +1355,7 @@ impl crate::agents::capabilities::SpendingCapability for ClaudeAdapter {
         prices: &PriceBook,
     ) -> crate::agents::spending::SpendParse {
         let prices = managed_pricing::overlay(prices);
-        let mut parsed =
-            spend::parse_claude_spend(path, resume.map_or(0, |cursor| cursor.offset), &prices);
-        parsed.cursor.state = managed_pricing::fingerprint_current().map(Value::String);
-        parsed
+        spend::parse_claude_spend(path, resume, &prices)
     }
 }
 

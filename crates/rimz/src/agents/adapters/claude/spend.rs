@@ -19,8 +19,10 @@
 //! When an older transcript still carries a positive `costUSD`, that authoritative
 //! figure is used verbatim and the table is not consulted.
 //!
-//! Fast pre-filter: skip lines without `"usage":{`, and lines where certain
-//! schema paths carry `null` (rejected by the upstream TypeScript/Zod schema).
+//! Fast pre-filter: only usage lines and top-level user lines (the response
+//! timing starts) are deserialized; other lines are skipped, as are lines where
+//! certain schema paths carry `null` (rejected by the upstream TypeScript/Zod
+//! schema).
 //! Entries are returned raw. Batch consumers apply the shared
 //! `SidechainDedup` policy in the fleet walk, seat fold, or per-session
 //! selector; live folds retain a contiguous-duplicate window. An incremental
@@ -29,11 +31,12 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::agents::pricing::{PriceBook, TokenSplit};
 use crate::agents::spending::{
-    CachedEntry, SpendCursor, SpendParse, iso_to_unix_secs, origin_path, price_split,
+    CachedEntry, SpendCursor, SpendParse, iso_to_unix_ms, iso_to_unix_secs, origin_path,
+    price_split, response_timing,
 };
 
 use crate::agents::transcript_fs::{bytes_contains, read_transcript_lines};
@@ -337,13 +340,33 @@ pub(super) fn priced_entry(line: &[u8]) -> Option<ClaudeEntry> {
     serde_json::from_slice(line).ok()
 }
 
+#[derive(Default, Serialize, Deserialize)]
+pub(super) struct ClaudeSpendState {
+    pub(super) pricing_fingerprint: Option<String>,
+    latest_user_ms: Option<u64>,
+    current_message: Option<ClaudeResponseStart>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct ClaudeResponseStart {
+    message_id: String,
+    start_ms: Option<u64>,
+}
+
+#[derive(Deserialize)]
+struct ClaudeInput {
+    #[serde(rename = "type")]
+    kind: String,
+    timestamp: Option<String>,
+}
+
 /// Parse a Claude JSONL file into raw `CachedEntry` values, resuming from
-/// `from_offset` (0 = the whole file). Lines are independent — no cross-line
-/// state — so the cursor is just the consumed-byte offset.
+/// the cursor's offset and timing state (`None` = the whole file). The latest
+/// user timestamp and the in-flight message's fixed start survive suffix parses.
 ///
 /// ### Fast pre-filter
-/// Lines without `"usage":{` are skipped before deserialization — tool-call,
-/// user-message, and summary lines carry no usage object and no `costUSD`.
+/// Usage lines are priced; top-level user lines advance the latest input timestamp.
+/// Other lines are skipped before deserialization.
 /// Lines carrying `null` at a non-nullable schema path fail deserialization.
 ///
 /// ### Dedup lives downstream
@@ -352,17 +375,18 @@ pub(super) fn priced_entry(line: &[u8]) -> Option<ClaudeEntry> {
 /// walk, seat fold, or per-session selector; live folds retain a
 /// contiguous-duplicate window. A suffix parse therefore never needs the lines
 /// before its resume point.
-pub fn parse_claude_spend(path: &Path, from_offset: u64, prices: &PriceBook) -> SpendParse {
+pub fn parse_claude_spend(
+    path: &Path,
+    resume: Option<&SpendCursor>,
+    prices: &PriceBook,
+) -> SpendParse {
+    let from_offset = resume.map_or(0, |cursor| cursor.offset);
+    let mut state: ClaudeSpendState = resume.map(SpendCursor::state_as).unwrap_or_default();
+    state.pricing_fingerprint = super::managed_pricing::fingerprint_current();
     let Some((content, next_offset)) = read_transcript_lines(path, from_offset) else {
         return SpendParse {
-            entries: Vec::new(),
-            origin: None,
-            cursor: SpendCursor {
-                offset: from_offset,
-                state: None,
-            },
-            unknown_models: BTreeMap::new(),
-            replace_entries: false,
+            cursor: SpendCursor::with_state(from_offset, &state),
+            ..SpendParse::default()
         };
     };
     let mut entries: Vec<CachedEntry> = Vec::new();
@@ -370,6 +394,15 @@ pub fn parse_claude_spend(path: &Path, from_offset: u64, prices: &PriceBook) -> 
     let mut unknown_models = BTreeMap::new();
 
     for line in content.split(|&b| b == b'\n') {
+        if bytes_contains(line, br#""user""#)
+            && let Ok(input) = serde_json::from_slice::<ClaudeInput>(line)
+            && input.kind == "user"
+        {
+            if let Some(ms) = input.timestamp.as_deref().and_then(iso_to_unix_ms) {
+                state.latest_user_ms = Some(state.latest_user_ms.map_or(ms, |prior| prior.max(ms)));
+            }
+            continue;
+        }
         let Some(entry) = priced_entry(line) else {
             continue;
         };
@@ -382,6 +415,21 @@ pub fn parse_claude_spend(path: &Path, from_offset: u64, prices: &PriceBook) -> 
         let Some(ts_secs) = iso_to_unix_secs(ts) else {
             continue;
         };
+        match entry.message.id.as_ref() {
+            Some(message_id)
+                if state
+                    .current_message
+                    .as_ref()
+                    .is_none_or(|current| current.message_id != *message_id) =>
+            {
+                state.current_message = Some(ClaudeResponseStart {
+                    message_id: message_id.clone(),
+                    start_ms: state.latest_user_ms,
+                });
+            }
+            None => state.current_message = None,
+            _ => {}
+        }
         let usage = &entry.message.usage;
         let Some(mut main_entry) = usage_entry(
             usage,
@@ -398,6 +446,12 @@ pub fn parse_claude_spend(path: &Path, from_offset: u64, prices: &PriceBook) -> 
         ) else {
             continue;
         };
+        main_entry.timing = state
+            .current_message
+            .as_ref()
+            .and_then(|current| current.start_ms)
+            .and_then(|start| iso_to_unix_ms(ts)?.checked_sub(start))
+            .and_then(|ms| response_timing(main_entry.output, ms));
         for name in entry
             .message
             .content
@@ -458,10 +512,7 @@ pub fn parse_claude_spend(path: &Path, from_offset: u64, prices: &PriceBook) -> 
     SpendParse {
         entries,
         origin,
-        cursor: SpendCursor {
-            offset: next_offset,
-            state: None,
-        },
+        cursor: SpendCursor::with_state(next_offset, &state),
         unknown_models,
         replace_entries: false,
     }
@@ -540,427 +591,4 @@ pub(super) fn request_split(usage: &ClaudeUsage) -> TokenSplit {
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::io::Write as _;
-    use tempfile::TempDir;
-
-    /// An empty price book: the `costUSD`-bearing fixtures below never consult it,
-    /// so spend is driven entirely by their logged cost.
-    fn no_prices() -> PriceBook {
-        PriceBook::from_litellm_json("{}")
-    }
-
-    fn write_jsonl(dir: &Path, filename: &str, lines: &[&str]) -> PathBuf {
-        let path = dir.join(filename);
-        let mut f = std::fs::File::create(&path).unwrap();
-        for line in lines {
-            writeln!(f, "{line}").unwrap();
-        }
-        path
-    }
-
-    #[test]
-    fn config_dirs_fall_back_to_the_default_roots_when_no_env_root_has_projects() {
-        let dir = TempDir::new().unwrap();
-        let native = dir.path().join(".claude");
-        std::fs::create_dir_all(native.join("projects")).unwrap();
-        let env = BTreeMap::from([
-            ("HOME".to_owned(), dir.path().display().to_string()),
-            (
-                "CLAUDE_CONFIG_DIR".to_owned(),
-                dir.path().join("empty").display().to_string(),
-            ),
-        ]);
-        assert_eq!(claude_config_dirs_from(&env), vec![native]);
-        assert_eq!(claude_config_roots(&env), vec![dir.path().join("empty")]);
-    }
-
-    fn claude_line(date: &str, cost: f64, msg_id: &str, req_id: &str) -> String {
-        format!(
-            r#"{{"timestamp":"{date}T10:00:00.000Z","costUSD":{cost},"requestId":"{req_id}","message":{{"id":"{msg_id}","usage":{{"input_tokens":10,"output_tokens":5,"cache_creation_input_tokens":3,"cache_read_input_tokens":7}}}}}}"#
-        )
-    }
-
-    fn sidechain_line(date: &str, cost: f64, msg_id: &str, req_id: &str) -> String {
-        format!(
-            r#"{{"timestamp":"{date}T10:00:00.000Z","costUSD":{cost},"requestId":"{req_id}","isSidechain":true,"message":{{"id":"{msg_id}","usage":{{"input_tokens":50000}}}}}}"#
-        )
-    }
-
-    #[test]
-    fn skips_lines_without_usage_object_and_captures_token_components() {
-        let dir = TempDir::new().unwrap();
-        let cwd = dir.path().join("repo");
-        let file = write_jsonl(
-            dir.path(),
-            "chat.jsonl",
-            &[
-                r#"{"timestamp":"2026-01-01T10:00:00.000Z","costUSD":99.0}"#,
-                &format!(
-                    r#"{{"timestamp":"2026-01-01T10:00:00.000Z","cwd":"{}","costUSD":0.5,"requestId":"req-1","message":{{"id":"msg-1","usage":{{"input_tokens":10,"output_tokens":5,"cache_creation_input_tokens":3,"cache_read_input_tokens":7}}}}}}"#,
-                    cwd.display()
-                ),
-            ],
-        );
-        let parsed = parse_claude_spend(&file, 0, &no_prices());
-        let entries = parsed.entries;
-        assert_eq!(entries.len(), 1);
-        assert!((entries[0].cost_usd - 0.5).abs() < 1e-9);
-        // The components are kept apart here; window aggregation folds
-        // cache-write into input/total downstream.
-        assert_eq!(entries[0].input, 10);
-        assert_eq!(entries[0].output, 5);
-        assert_eq!(entries[0].cache_write, 3);
-        assert_eq!(entries[0].cache_read, 7);
-        assert_eq!(parsed.origin.as_deref(), Some(cwd.as_path()));
-    }
-
-    #[test]
-    fn captures_named_tool_use_blocks_on_the_priced_response() {
-        let dir = TempDir::new().unwrap();
-        let file = write_jsonl(
-            dir.path(),
-            "tools.jsonl",
-            &[
-                r#"{"timestamp":"2026-01-01T10:00:00.000Z","costUSD":0.5,"requestId":"req-1","message":{"id":"msg-1","content":[{"type":"tool_use","name":"Read"},{"type":"text","text":"working"},{"type":"tool_use","name":"Read"},{"type":"tool_use","name":"Bash"}],"usage":{"input_tokens":10,"output_tokens":5}}}"#,
-            ],
-        );
-
-        let entries = parse_claude_spend(&file, 0, &no_prices()).entries;
-
-        assert_eq!(
-            entries[0].tool_calls,
-            BTreeMap::from([("Bash".to_owned(), 1), ("Read".to_owned(), 2)])
-        );
-    }
-
-    #[test]
-    fn cwd_null_keeps_global_spend_with_unknown_origin() {
-        let dir = TempDir::new().unwrap();
-        let file = write_jsonl(
-            dir.path(),
-            "chat.jsonl",
-            &[
-                r#"{"timestamp":"2026-01-01T10:00:00.000Z","cwd":null,"costUSD":0.5,"requestId":"req-1","message":{"id":"msg-1","usage":{"input_tokens":10,"output_tokens":5}}}"#,
-            ],
-        );
-
-        let parsed = parse_claude_spend(&file, 0, &no_prices());
-        let entries = parsed.entries;
-
-        assert_eq!(entries.len(), 1);
-        assert!((entries[0].cost_usd - 0.5).abs() < 1e-9);
-        assert_eq!(parsed.origin, None);
-    }
-
-    #[test]
-    fn prices_from_tokens_when_cost_usd_absent() {
-        // Current Claude transcripts carry no `costUSD`; cost is reconstructed
-        // from the token usage through the model table.
-        let dir = TempDir::new().unwrap();
-        let file = write_jsonl(
-            dir.path(),
-            "chat.jsonl",
-            &[
-                r#"{"timestamp":"2026-01-01T10:00:00.000Z","requestId":"req-1","message":{"id":"msg-1","model":"claude-test","usage":{"input_tokens":100,"output_tokens":50,"cache_creation_input_tokens":200,"cache_read_input_tokens":800}}}"#,
-            ],
-        );
-        let prices = PriceBook::from_litellm_json(
-            r#"{"claude-test": {"input_cost_per_token": 3e-6, "output_cost_per_token": 15e-6,
-                                "cache_read_input_token_cost": 3e-7,
-                                "cache_creation_input_token_cost": 3.75e-6}}"#,
-        );
-        let entries = parse_claude_spend(&file, 0, &prices).entries;
-        assert_eq!(entries.len(), 1);
-        // 100*3e-6 + 50*15e-6 + 200*3.75e-6 + 800*3e-7
-        //   = 3e-4 + 7.5e-4 + 7.5e-4 + 2.4e-4 = 2.04e-3
-        assert!(
-            (entries[0].cost_usd - 2.04e-3).abs() < 1e-12,
-            "got {}",
-            entries[0].cost_usd
-        );
-        assert_eq!(entries[0].input, 100);
-        assert_eq!(entries[0].output, 50);
-        assert_eq!(entries[0].cache_write, 200);
-        assert_eq!(entries[0].cache_read, 800);
-    }
-
-    #[test]
-    fn counts_advisor_iterations_as_separate_model_usage() {
-        let dir = TempDir::new().unwrap();
-        let file = write_jsonl(
-            dir.path(),
-            "chat.jsonl",
-            &[
-                r#"{"timestamp":"2026-05-22T02:34:40.000Z","version":"1.2.3","sessionId":"session-1","requestId":"req-1","message":{"id":"msg-1","model":"main-model","usage":{"input_tokens":2,"output_tokens":491,"cache_creation_input_tokens":7853,"cache_read_input_tokens":226584,"iterations":[{"type":"message","input_tokens":1,"output_tokens":45},{"type":"advisor_message","model":"advisor-model","input_tokens":159419,"output_tokens":7805,"cache_creation_input_tokens":3,"cache_read_input_tokens":4}]}}}"#,
-            ],
-        );
-        let prices = PriceBook::from_litellm_json(
-            r#"{
-                "main-model": {"input_cost_per_token": 1e-6, "output_cost_per_token": 2e-6},
-                "advisor-model": {"input_cost_per_token": 3e-6, "output_cost_per_token": 4e-6,
-                                  "cache_creation_input_token_cost": 5e-6,
-                                  "cache_read_input_token_cost": 6e-6}
-            }"#,
-        );
-
-        let entries = parse_claude_spend(&file, 0, &prices).entries;
-
-        assert_eq!(entries.len(), 2);
-        assert_eq!(entries[0].model.as_deref(), Some("main-model"));
-        assert_eq!(entries[0].input, 2);
-        assert_eq!(entries[1].model.as_deref(), Some("advisor-model"));
-        assert_eq!(entries[1].input, 159_419);
-        assert_eq!(entries[1].output, 7_805);
-        assert_eq!(entries[1].cache_write, 3);
-        assert_eq!(entries[1].cache_read, 4);
-        assert_eq!(entries[1].message_id.as_deref(), Some("msg-1:advisor:1"));
-        assert_eq!(entries[1].request_id.as_deref(), Some("req-1"));
-        let expected = 159_419.0 * 3e-6 + 7_805.0 * 4e-6 + 3.0 * 5e-6 + 4.0 * 6e-6;
-        assert!((entries[1].cost_usd - expected).abs() < 1e-12);
-    }
-
-    #[test]
-    fn one_hour_cache_creation_uses_twice_input_rate() {
-        let dir = TempDir::new().unwrap();
-        let file = write_jsonl(
-            dir.path(),
-            "chat.jsonl",
-            &[
-                r#"{"timestamp":"2026-01-01T10:00:00.000Z","requestId":"req-1","message":{"id":"msg-1","model":"test-model","usage":{"input_tokens":0,"output_tokens":0,"cache_creation_input_tokens":20,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":20},"cache_read_input_tokens":0}}}"#,
-            ],
-        );
-        let prices = PriceBook::from_litellm_json(
-            r#"{"test-model": {"input_cost_per_token": 1.0, "output_cost_per_token": 10.0,
-                                "cache_creation_input_token_cost": 1.25,
-                                "cache_read_input_token_cost": 0.1}}"#,
-        );
-
-        let entries = parse_claude_spend(&file, 0, &prices).entries;
-
-        assert_eq!(entries.len(), 1);
-        assert!((entries[0].cost_usd - 40.0).abs() < f64::EPSILON);
-        assert_eq!(entries[0].cache_write, 20);
-    }
-
-    #[test]
-    fn mixed_cache_creation_breakdown_matches_ccusage_formula() {
-        let dir = TempDir::new().unwrap();
-        let file = write_jsonl(
-            dir.path(),
-            "chat.jsonl",
-            &[
-                r#"{"timestamp":"2026-01-01T10:00:00.000Z","requestId":"req-1","message":{"id":"msg-1","model":"test-model","usage":{"input_tokens":0,"output_tokens":0,"cache_creation_input_tokens":999,"cache_creation":{"ephemeral_5m_input_tokens":10,"ephemeral_1h_input_tokens":20},"cache_read_input_tokens":30}}}"#,
-            ],
-        );
-        let prices = PriceBook::from_litellm_json(
-            r#"{"test-model": {"input_cost_per_token": 1.0, "output_cost_per_token": 10.0,
-                                "cache_creation_input_token_cost": 1.25,
-                                "cache_read_input_token_cost": 0.1}}"#,
-        );
-
-        let entries = parse_claude_spend(&file, 0, &prices).entries;
-
-        assert_eq!(entries.len(), 1);
-        assert!((entries[0].cost_usd - 55.5).abs() < f64::EPSILON);
-        assert_eq!(entries[0].cache_write, 30);
-    }
-
-    #[test]
-    fn pricing_applies_200k_tiers() {
-        let dir = TempDir::new().unwrap();
-        let file = write_jsonl(
-            dir.path(),
-            "chat.jsonl",
-            &[
-                r#"{"timestamp":"2026-01-01T10:00:00.000Z","requestId":"req-1","message":{"id":"msg-1","model":"test-model","usage":{"input_tokens":200001,"output_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}"#,
-            ],
-        );
-        let prices = PriceBook::from_litellm_json(
-            r#"{"test-model": {"input_cost_per_token": 1.0, "output_cost_per_token": 10.0,
-                                "input_cost_per_token_above_200k_tokens": 2.0}}"#,
-        );
-
-        let entries = parse_claude_spend(&file, 0, &prices).entries;
-
-        assert_eq!(entries.len(), 1);
-        assert!((entries[0].cost_usd - 200_002.0).abs() < f64::EPSILON);
-    }
-
-    #[test]
-    fn pricing_applies_fast_multiplier() {
-        let dir = TempDir::new().unwrap();
-        let file = write_jsonl(
-            dir.path(),
-            "chat.jsonl",
-            &[
-                r#"{"timestamp":"2026-01-01T10:00:00.000Z","requestId":"req-1","message":{"id":"msg-1","model":"test-model","usage":{"input_tokens":10,"output_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"speed":"fast"}}}"#,
-            ],
-        );
-        let prices = PriceBook::from_litellm_json(
-            r#"{"test-model": {"input_cost_per_token": 1.0, "output_cost_per_token": 10.0,
-                                "provider_specific_entry": {"fast": 2.5}}}"#,
-        );
-
-        let entries = parse_claude_spend(&file, 0, &prices).entries;
-
-        assert_eq!(entries.len(), 1);
-        assert!((entries[0].cost_usd - 25.0).abs() < f64::EPSILON);
-    }
-
-    #[test]
-    fn unknown_model_tracking_records_priceable_names_only() {
-        let dir = TempDir::new().unwrap();
-        let timestamp = "2026-01-01T10:00:00.000Z";
-        let unknown = write_jsonl(
-            dir.path(),
-            "unknown.jsonl",
-            &[&format!(
-                r#"{{"timestamp":"{timestamp}","requestId":"req-1","message":{{"id":"msg-1","model":"claude-new-release","usage":{{"input_tokens":100,"output_tokens":50}}}}}}"#
-            )],
-        );
-
-        let parsed = parse_claude_spend(&unknown, 0, &no_prices());
-
-        assert_eq!(parsed.entries.len(), 1);
-        assert_eq!(parsed.entries[0].cost_usd, 0.0);
-        assert_eq!(parsed.entries[0].input, 100);
-        assert_eq!(parsed.entries[0].output, 50);
-        assert_eq!(
-            parsed.unknown_models,
-            BTreeMap::from([(
-                "claude-new-release".to_owned(),
-                crate::agents::spending::iso_to_unix_secs(timestamp).unwrap()
-            )])
-        );
-
-        let synthetic = write_jsonl(
-            dir.path(),
-            "synthetic.jsonl",
-            &[
-                r#"{"timestamp":"2026-01-01T10:00:00.000Z","requestId":"req-1","message":{"id":"msg-1","model":"<synthetic>","usage":{"input_tokens":100,"output_tokens":50}}}"#,
-            ],
-        );
-        let parsed = parse_claude_spend(&synthetic, 0, &no_prices());
-        assert!(parsed.entries.is_empty());
-        assert!(parsed.unknown_models.is_empty());
-
-        let logged_cost = write_jsonl(
-            dir.path(),
-            "logged-cost.jsonl",
-            &[
-                r#"{"timestamp":"2026-01-01T10:00:00.000Z","costUSD":0.25,"requestId":"req-1","message":{"id":"msg-1","model":"claude-new-release","usage":{"input_tokens":100,"output_tokens":50}}}"#,
-            ],
-        );
-        let parsed = parse_claude_spend(&logged_cost, 0, &no_prices());
-        assert_eq!(parsed.entries.len(), 1);
-        assert!(parsed.unknown_models.is_empty());
-    }
-
-    #[test]
-    fn parse_is_raw_and_dedup_lives_downstream() {
-        // Downstream batch consumers and live folds own dedup, so an
-        // incremental suffix parse keeps every copy without earlier lines.
-        let dir = TempDir::new().unwrap();
-
-        // Byte-identical exact-key duplicate: both kept.
-        let line = claude_line("2026-01-01", 1.0, "msg-a", "req-a");
-        let dup = write_jsonl(dir.path(), "dup.jsonl", &[&line, &line]);
-        assert_eq!(parse_claude_spend(&dup, 0, &no_prices()).entries.len(), 2);
-
-        // Sidechain replay sharing a msg_id but a distinct req_id is a separate
-        // exact-key, so both ride through; cross-file suppression is downstream.
-        let file = write_jsonl(
-            dir.path(),
-            "chat.jsonl",
-            &[
-                &sidechain_line("2026-01-01", 5.0, "msg-x", "req-sc"),
-                &claude_line("2026-01-01", 0.05, "msg-x", "req-main"),
-            ],
-        );
-        let entries = parse_claude_spend(&file, 0, &no_prices()).entries;
-        assert_eq!(entries.len(), 2);
-        let sc = entries.iter().find(|e| e.is_sidechain).unwrap();
-        let main = entries.iter().find(|e| !e.is_sidechain).unwrap();
-        assert!((sc.cost_usd - 5.0).abs() < 1e-9);
-        assert!((main.cost_usd - 0.05).abs() < 1e-9);
-    }
-
-    #[test]
-    fn invalid_or_unsupported_cost_lines_are_skipped() {
-        let dir = TempDir::new().unwrap();
-        let file = write_jsonl(
-            dir.path(),
-            "chat.jsonl",
-            &[
-                r#"{"timestamp":"2026-01-01T10:00:00.000Z","costUSD":0.0,"message":{"usage":{"input_tokens":1}}}"#,
-                r#"{"timestamp":"2026-01-01T10:00:00.000Z","costUSD":-1.0,"message":{"usage":{"input_tokens":1}}}"#,
-                r#"{"timestamp":"2026-01-01T10:00:00.000Z","costUSD":null,"message":{"usage":{"input_tokens":1}}}"#,
-                r#"{"timestamp":"2026-01-01T10:00:00.000Z","costUSD":0.1,"message":{"id":"msg-1","model":null,"usage":{"input_tokens":1}}}"#,
-                r#"{"timestamp":"2026-01-01T10:00:00.000Z","costUSD":0.1,"message":{"id":"msg-5","usage":{"input_tokens":1,"cache_read_input_tokens":null}}}"#,
-                r#"{"timestamp":"2026-01-01T10:00:00.000Z","costUSD":0.1,"isApiErrorMessage":null,"message":{"id":"msg-6","usage":{"input_tokens":1}}}"#,
-                r#"{"timestamp":"2026-01-01T10:00:00.000Z","costUSD":0.1,"requestId":"","message":{"id":"msg-2","usage":{"input_tokens":1}}}"#,
-                r#"{"timestamp":"2026-01-01T10:00:00.000Z","costUSD":0.1,"version":"dev","message":{"id":"msg-3","usage":{"input_tokens":1}}}"#,
-                &claude_line("2026-01-01", 0.5, "msg-4", "req-4"),
-            ],
-        );
-        let entries = parse_claude_spend(&file, 0, &no_prices()).entries;
-        assert_eq!(entries.len(), 1);
-        assert!((entries[0].cost_usd - 0.5).abs() < 1e-9);
-    }
-
-    #[test]
-    fn nested_null_iteration_model_keeps_main_model_usage() {
-        // Current Claude Code logs `usage.iterations[].model: null` on the main
-        // response; only the schema's top-level `message.model` may reject it.
-        let dir = TempDir::new().unwrap();
-        let file = write_jsonl(
-            dir.path(),
-            "chat.jsonl",
-            &[
-                r#"{"timestamp":"2026-09-12T16:44:35.983Z","message":{"id":"msg-repro","model":"claude-fable-5-1","usage":{"input_tokens":1,"iterations":[{"type":"message","model":null}]}}}"#,
-            ],
-        );
-        let parsed = parse_claude_spend(&file, 0, &no_prices());
-        assert_eq!(parsed.entries.len(), 1);
-        assert_eq!(parsed.entries[0].model.as_deref(), Some("claude-fable-5-1"));
-        assert_eq!(parsed.entries[0].input, 1);
-        assert!(parsed.unknown_models.contains_key("claude-fable-5-1"));
-    }
-
-    #[test]
-    fn lenient_token_fields_keep_entry_when_a_count_is_mistyped() {
-        // A token count logged as a string or float must not drop the whole
-        // entry: the mistyped field coerces to absent (0) and the rest prices.
-        let dir = TempDir::new().unwrap();
-        let file = write_jsonl(
-            dir.path(),
-            "chat.jsonl",
-            &[
-                r#"{"timestamp":"2026-01-01T10:00:00.000Z","requestId":"req-1","message":{"id":"msg-1","model":"test-model","usage":{"input_tokens":100,"output_tokens":"oops","cache_read_input_tokens":50.5}}}"#,
-            ],
-        );
-        let prices = PriceBook::from_litellm_json(
-            r#"{"test-model": {"input_cost_per_token": 1e-6, "output_cost_per_token": 2e-6,
-                                "cache_read_input_token_cost": 1e-7}}"#,
-        );
-        let entries = parse_claude_spend(&file, 0, &prices).entries;
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].input, 100);
-        assert_eq!(entries[0].output, 0, "mistyped string coerces to absent");
-        assert_eq!(entries[0].cache_read, 0, "mistyped float coerces to absent");
-        assert!((entries[0].cost_usd - 100.0 * 1e-6).abs() < 1e-15);
-    }
-
-    #[test]
-    fn is_semver_prefix_accepts_valid_versions() {
-        assert!(is_semver_prefix("1.0.0"));
-        assert!(is_semver_prefix("12.34.56"));
-        assert!(is_semver_prefix("1.0.0-beta"));
-        assert!(!is_semver_prefix("dev"));
-        assert!(!is_semver_prefix("1.0"));
-        assert!(!is_semver_prefix("v1.0.0"));
-        assert!(!is_semver_prefix(""));
-    }
-}
+mod tests;
