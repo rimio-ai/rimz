@@ -183,6 +183,24 @@ pub(super) fn merge_agent_context_sidecars(input: ContextSidecarInput<'_>) {
             context_agent_id,
             marker,
         );
+        if turn_error_updated
+            && marker.class == rimz::agents::TurnErrorClass::NotEntitled
+            && !rimz::harness::hook_drain::is_replay()
+        {
+            if let Some(state) = agent_state(
+                store,
+                agent,
+                &rimz::ids::AgentSessionId::from(context_agent_id),
+            ) {
+                rimz::sidebar::refresh::usage::mark_entitlement_lapsed(
+                    store.runtime_paths(),
+                    &state.login_key(),
+                    rimz::utils::time::unix_now_ms(),
+                );
+            } else {
+                warn!(agent = agent.spec().kind, session = %context_agent_id, "lifecycle: entitlement marker has no agent row");
+            }
+        }
     }
     if turn_error_updated {
         let _ = rimz::wakeup::wake_store_delta(store.runtime_paths(), None, None);

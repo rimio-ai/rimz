@@ -54,6 +54,76 @@ fn append_frame(env: &Env, frame: HookIngress) -> (HookIngress, u64) {
 }
 
 #[test]
+fn entitlement_marker_marks_the_recorded_login_but_replayed_drain_does_not() {
+    for replay in [false, true] {
+        let env = Env::new();
+        env.record(&env.project_root);
+        crate::common::wait::register_agent(
+            &env,
+            "drain-session",
+            "work-launch",
+            "worker",
+            rimz::agents::LaunchParams {
+                login: Some("work".parse().unwrap()),
+                ..Default::default()
+            },
+        );
+        let row = env
+            .store()
+            .snapshot_cached()
+            .unwrap()
+            .agents
+            .into_iter()
+            .find(|row| row.agent_id.as_str() == "drain-session")
+            .unwrap();
+        assert_eq!(row.login_key().to_string(), "claude@work");
+        let mut frame = stop_frame(&env);
+        frame.event = Some("StopFailure".into());
+        frame.payload = json!({"session_id":"drain-session", "error":"billing_error", "last_assistant_message":"Subscription access denied"}).to_string();
+        if replay {
+            let transcript = env.project_root.join("entitlement-error.jsonl");
+            std::fs::write(
+                &transcript,
+                json!({
+                    "type":"assistant", "isApiErrorMessage":true, "error":"billing_error",
+                    "timestamp":Timestamp::now().to_string(),
+                    "message":{"content":[{"type":"text","text":"Subscription access denied"}]}
+                })
+                .to_string(),
+            )
+            .unwrap();
+            frame.event = Some("Stop".into());
+            frame.payload =
+                json!({"session_id":"drain-session", "transcript_path":transcript}).to_string();
+        }
+        let (frame, _) = append_frame(&env, frame);
+        if replay {
+            kill_apply_after_locked_phase(&env);
+            assert!(
+                !derived(&env, &frame.event_id).is_empty(),
+                "a replay fixture must have a committed lifecycle envelope"
+            );
+        }
+        once(&env);
+        let cache = std::fs::read(env.runtime_paths().shared_credits_path())
+            .ok()
+            .map(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).unwrap());
+        if replay {
+            assert!(cache.is_none(), "replay must not write credits: {cache:?}");
+        } else {
+            let cache = cache.unwrap_or_default();
+            assert!(
+                cache["logins"]["claude@work"]["entitlement"]["lapsed"]["since_ms"]
+                    .as_u64()
+                    .is_some_and(|since| since > 0),
+                "{cache}"
+            );
+            assert!(cache["logins"]["claude@default"].is_null());
+        }
+    }
+}
+
+#[test]
 fn hook_ignores_non_utf8_environment_outside_the_allowlist() {
     use std::os::unix::ffi::OsStringExt;
 
