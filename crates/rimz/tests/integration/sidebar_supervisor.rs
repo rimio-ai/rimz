@@ -299,8 +299,24 @@ fn rejected_host_paints_notice_records_reason_and_retries_after_backoff() {
     assert_eq!(event["reason"], "capacity");
     assert_eq!(event["retry_ms"], 1000);
     assert!(event["attached_ms"].is_null());
-    let (_stream, _) = pane.accept(None);
+    let (stream, _) = pane.connection();
     assert!(rejected.elapsed() >= Duration::from_secs(1));
+    write_line(
+        &stream,
+        &serde_json::json!({"reject": {"reason": "capacity"}}),
+    )
+    .unwrap();
+    drop(stream);
+    let (_stream, _) = pane.accept(None);
+    let events = pane.events();
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event["kind"] == "sidebar_host_unavailable")
+            .count(),
+        1,
+        "identical failures across host rounds must share the rate-limit window: {events:?}"
+    );
 }
 
 #[test]
