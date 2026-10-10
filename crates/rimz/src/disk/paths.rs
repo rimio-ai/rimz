@@ -832,6 +832,11 @@ impl RuntimePaths {
         ))
     }
 
+    /// Shared by room supervisors; claimed exclusively for birth and reset.
+    pub fn room_lock(&self) -> PathBuf {
+        self.lock_path("room.lock")
+    }
+
     /// Held by the one supervisor starting a session's room host.
     pub(crate) fn sidebar_host_spawn_lock(&self, mux: MuxName, session_name: &str) -> PathBuf {
         self.lock_path(format!(

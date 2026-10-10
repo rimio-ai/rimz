@@ -45,6 +45,53 @@ pub struct WorkspaceLock {
     path: PathBuf,
 }
 
+/// Admission claim or lifetime hold for a workspace's room.
+pub struct RoomLock {
+    file: File,
+    path: PathBuf,
+}
+
+impl RoomLock {
+    /// Try an exclusive admission claim within the caller's wait bound.
+    pub fn claim(path: &Path, wait: Duration) -> Result<Option<Self>> {
+        let mut file = open_lock_file(path)?;
+        match acquire_file_with_timeout(&mut file, path, wait, File::try_lock) {
+            Ok(()) => Ok(Some(Self {
+                file,
+                path: path.to_path_buf(),
+            })),
+            Err(LockErr::Timeout { .. }) => Ok(None),
+            Err(err) => Err(err),
+        }
+    }
+
+    /// Hold the room shared while a pane-resident supervisor lives.
+    pub fn hold(path: &Path) -> Result<Self> {
+        let mut file = open_lock_file(path)?;
+        acquire_file_with_timeout(&mut file, path, LOCK_TIMEOUT, File::try_lock_shared)?;
+        Ok(Self {
+            file,
+            path: path.to_path_buf(),
+        })
+    }
+
+    /// Downgrade admission so newborn supervisors can hold the room too.
+    pub fn share(&mut self) -> Result<()> {
+        acquire_file_with_timeout(
+            &mut self.file,
+            &self.path,
+            LOCK_TIMEOUT,
+            File::try_lock_shared,
+        )
+    }
+}
+
+impl Drop for RoomLock {
+    fn drop(&mut self) {
+        let _ = self.file.unlock();
+    }
+}
+
 /// Shared, blocking guard for ingress appends; excludes snapshots and truncation.
 pub struct IngressAppendLock {
     file: File,
@@ -95,39 +142,47 @@ impl WorkspaceLock {
     /// Acquire the lock within a caller-selected bound.
     pub fn acquire_with_timeout(path: &Path, timeout: Duration) -> Result<Self> {
         let mut file = open_lock_file(path)?;
-
-        let started = Instant::now();
-        let mut backoff = LOCK_RETRY;
-        loop {
-            match try_lock_file(&mut file, path) {
-                Ok(()) => break,
-                Err(std::fs::TryLockError::WouldBlock) => {
-                    let elapsed = started.elapsed();
-                    if elapsed >= timeout {
-                        return Err(LockErr::Timeout {
-                            path: path.to_path_buf(),
-                            waited: elapsed,
-                        });
-                    }
-                    // Catch brief writer releases without polling a long hold
-                    // at the burst rate for the whole acquisition deadline.
-                    std::thread::sleep(backoff.min(timeout - elapsed));
-                    if elapsed >= FAST_LOCK_WAIT {
-                        backoff = (backoff * 2).min(MAX_LOCK_BACKOFF);
-                    }
-                }
-                Err(std::fs::TryLockError::Error(source)) => {
-                    return Err(LockErr::Acquire {
-                        path: path.to_path_buf(),
-                        source,
-                    });
-                }
-            }
-        }
+        acquire_file_with_timeout(&mut file, path, timeout, File::try_lock)?;
         Ok(Self {
             file,
             path: path.to_path_buf(),
         })
+    }
+}
+
+fn acquire_file_with_timeout(
+    file: &mut File,
+    path: &Path,
+    timeout: Duration,
+    acquire: impl Fn(&File) -> std::result::Result<(), std::fs::TryLockError>,
+) -> Result<()> {
+    let started = Instant::now();
+    let mut backoff = LOCK_RETRY;
+    loop {
+        match lock_current(file, path, &acquire) {
+            Ok(()) => return Ok(()),
+            Err(std::fs::TryLockError::WouldBlock) => {
+                let elapsed = started.elapsed();
+                if elapsed >= timeout {
+                    return Err(LockErr::Timeout {
+                        path: path.to_path_buf(),
+                        waited: elapsed,
+                    });
+                }
+                // Catch brief writer releases without polling a long hold
+                // at the burst rate for the whole acquisition deadline.
+                std::thread::sleep(backoff.min(timeout - elapsed));
+                if elapsed >= FAST_LOCK_WAIT {
+                    backoff = (backoff * 2).min(MAX_LOCK_BACKOFF);
+                }
+            }
+            Err(std::fs::TryLockError::Error(source)) => {
+                return Err(LockErr::Acquire {
+                    path: path.to_path_buf(),
+                    source,
+                });
+            }
+        }
     }
 }
 
@@ -220,6 +275,36 @@ impl std::fmt::Debug for WorkspaceLock {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn room_lock_hold_excludes_claim_and_drop_releases() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("room.lock");
+        let held = RoomLock::hold(&path).unwrap();
+        assert!(RoomLock::claim(&path, Duration::ZERO).unwrap().is_none());
+        assert!(
+            RoomLock::claim(&path, Duration::from_millis(20))
+                .unwrap()
+                .is_none()
+        );
+        drop(held);
+        assert!(RoomLock::claim(&path, Duration::ZERO).unwrap().is_some());
+    }
+
+    #[test]
+    fn room_lock_claim_downgrades_for_shared_holders() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("room.lock");
+        let mut claim = RoomLock::claim(&path, Duration::ZERO).unwrap().unwrap();
+        assert!(RoomLock::claim(&path, Duration::ZERO).unwrap().is_none());
+        claim.share().unwrap();
+        let hold = RoomLock::hold(&path).unwrap();
+        assert!(RoomLock::claim(&path, Duration::ZERO).unwrap().is_none());
+        drop(claim);
+        assert!(RoomLock::claim(&path, Duration::ZERO).unwrap().is_none());
+        drop(hold);
+        assert!(RoomLock::claim(&path, Duration::ZERO).unwrap().is_some());
+    }
 
     #[test]
     fn ingress_appenders_hold_the_lock_together() {

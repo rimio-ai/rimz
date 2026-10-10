@@ -507,6 +507,13 @@ fn supervisor_sigterm_preserves_tty_modes_and_removes_runtime() {
     pane.seed_runtime();
     pane.start(|_| {});
     let (_stream, _) = pane.accept(None);
+    let room_lock = env.runtime_paths().room_lock();
+    assert!(
+        rimz::disk::lock::RoomLock::claim(&room_lock, Duration::ZERO)
+            .unwrap()
+            .is_none(),
+        "an attached supervisor must hold its room"
+    );
     assert!(
         !nix::sys::termios::tcgetattr(&pane.tty)
             .unwrap()
@@ -521,6 +528,12 @@ fn supervisor_sigterm_preserves_tty_modes_and_removes_runtime() {
     assert!(
         pane.finish().success(),
         "SIGTERM must run supervisor cleanup"
+    );
+    assert!(
+        rimz::disk::lock::RoomLock::claim(&room_lock, Duration::ZERO)
+            .unwrap()
+            .is_some(),
+        "supervisor exit must release its room"
     );
     pane.assert_runtime_removed();
     assert!(

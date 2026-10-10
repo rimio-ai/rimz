@@ -89,6 +89,7 @@ workspace store         ~/.rimz/ws/<basename>-<hex>/
   plus the producer caches that survive a reboot
   log/, records/, audit/, cache/, owned/, tmp/, locks/ group files by lifetime;
   every room flock lives in locks/, never cleared by reset or teardown
+  room.lock: exclusive birth/reset claim, shared pane-supervisor lifetime holds
   workspace.json (layout: 2) and rimz remain room identity at the root
 
 per-workspace runtime   $XDG_RUNTIME_DIR/rimz/ws/<basename>-<hex>/  (or /tmp/rimz-<uid>/…)

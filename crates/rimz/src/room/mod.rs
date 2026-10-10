@@ -155,6 +155,11 @@ pub enum RoomBirthSource<'a> {
     Recorded(&'a WorkspaceRecord),
 }
 
+enum BirthOwner {
+    Preserve,
+    Claim,
+}
+
 /// Owned managed-room identity and runtime configuration.
 pub struct RoomContext {
     workspace: ResolvedWorkspace,
@@ -166,30 +171,31 @@ pub struct RoomContext {
     detected_size: Option<(u16, u16)>,
     rimz_bin: PathBuf,
     runtime: RuntimePaths,
+    birth_owner: BirthOwner,
+    birth_logins: Option<crate::ids::RoomLogins>,
+    birth_admission: Option<birth::BirthAdmission>,
 }
 
 impl RoomContext {
-    /// Prepare birth identity, claiming only freshly resolved workspaces.
+    /// Prepare birth intent; owner and login writes wait for admission.
     pub fn prepare_birth(
         source: RoomBirthSource<'_>,
         machine_config: Arc<MachineConfig>,
         mux: MuxName,
         logins: Option<&crate::ids::RoomLogins>,
     ) -> Result<Self> {
-        let context = match source {
+        let mut context = match source {
             RoomBirthSource::Resolved(workspace) => {
                 let mut context =
                     Self::from_resolved(workspace, machine_config, mux, RoomSizing::Birth)?;
-                context.claim_owner()?;
+                context.birth_owner = BirthOwner::Claim;
                 context
             }
             RoomBirthSource::Recorded(record) => {
                 Self::from_record(record, machine_config, mux, RoomSizing::Birth)?
             }
         };
-        if let Some(logins) = logins {
-            context.pin_room_logins(logins)?;
-        }
+        context.birth_logins = logins.cloned();
         Ok(context)
     }
 
@@ -290,6 +296,9 @@ impl RoomContext {
             detected_size,
             rimz_bin,
             runtime,
+            birth_owner: BirthOwner::Preserve,
+            birth_logins: None,
+            birth_admission: None,
         })
     }
 
@@ -366,12 +375,24 @@ impl RoomContext {
         &self,
         disabled: bool,
     ) -> std::result::Result<RebirthPlan, crate::harness::rebirth::RebirthErr> {
+        let logins = self
+            .birth_logins
+            .as_ref()
+            .map(|requested| {
+                resolve_birth_logins(
+                    &self.workspace.project_root,
+                    &self.machine_config,
+                    requested,
+                )
+            })
+            .transpose()
+            .map_err(crate::harness::rebirth::RebirthErr::Inspect)?;
         RebirthPlan::inspect(
             self.backend.as_ref(),
-            &self.workspace.workspace_id,
             &self.workspace.session_name,
             &self.workspace.project_root,
             &self.machine_config,
+            logins.as_ref(),
             disabled,
         )
     }

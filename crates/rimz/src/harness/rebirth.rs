@@ -21,7 +21,7 @@ use crate::harness::resume::{
 use crate::ids::{AgentKind, AgentSessionId, WorkspaceId};
 use crate::mux::{MuxBackend, ResumeTab};
 use crate::store::event::{LastDeathMarker, SessionDeathAgent, SessionDeathCause};
-use crate::store::runtime::{AgentLiveness, agent_liveness};
+use crate::store::runtime::{AgentLiveness, agent_liveness, audit_projection};
 use crate::store::snapshot::find_agent;
 use crate::store::{live_roster, pending_recovery};
 
@@ -176,15 +176,14 @@ impl RebirthPlan {
     /// persisted live roster, or the pending-recovery record.
     pub(crate) fn inspect(
         backend: &dyn MuxBackend,
-        workspace_id: &WorkspaceId,
         session_name: &str,
         project_root: &Path,
         machine: &MachineConfig,
+        logins: Option<&crate::agents::RoomAccounts>,
         disabled: bool,
     ) -> std::result::Result<Self, RebirthErr> {
-        let paths = StatePaths::for_workspace(workspace_id.clone()).map_err(anyhow::Error::from)?;
-        let runtime =
-            RuntimePaths::for_workspace(workspace_id.clone()).map_err(anyhow::Error::from)?;
+        let paths = StatePaths::for_project_root(project_root).map_err(anyhow::Error::from)?;
+        let runtime = RuntimePaths::for_state(&paths).map_err(anyhow::Error::from)?;
         let boot = boot_token();
         let cache_sources = backend.resurrection_cache_paths(session_name);
         inspect_at(
@@ -194,6 +193,7 @@ impl RebirthPlan {
             cache_sources,
             project_root,
             machine,
+            logins,
             disabled,
             OWNER_EXIT_BOUND,
         )
@@ -603,45 +603,38 @@ fn inspect_at(
     cache_sources: Vec<PathBuf>,
     project_root: &Path,
     machine: &MachineConfig,
+    logins: Option<&crate::agents::RoomAccounts>,
     disabled: bool,
     owner_exit_bound: Duration,
 ) -> Result<RebirthPlan> {
     let owners_exited_by = Instant::now() + owner_exit_bound;
     let previous_boot = read_boot_marker(&paths.boot_marker);
     let reboot = boot_changed(previous_boot.as_deref(), current_boot.as_deref());
-    let audit = Store::open_existing(paths.clone(), runtime.clone()).and_then(|store| {
-        store
-            .runtime_projection(crate::RuntimeScope::Audit)
-            .ok()
-            .map(|projection| (store, projection))
-    });
+    let audit = audit_projection(&paths).ok();
     let roster = audit
         .as_ref()
-        .map(|(_, projection)| recovery_roster(&paths, &projection.agents))
+        .map(|projection| recovery_roster(&paths, &projection.agents))
         .unwrap_or_default();
     if audit.is_none() {
         tracing::debug!(workspace = %paths.workspace_id, "rebirth: no readable store, nothing to recover");
     }
     let recover_agents = reboot || !roster.is_empty();
-    let death = audit
-        .as_ref()
-        .filter(|_| recover_agents)
-        .map(|(_, projection)| {
-            let cause = if reboot {
-                SessionDeathCause::Reboot
-            } else {
-                SessionDeathCause::Crash
-            };
-            LastDeathMarker {
-                cause,
-                lost_agents: lost_agent_summaries(&projection.agents, &roster),
-                at: Timestamp::now(),
-                recovered: None,
-            }
-        });
+    let death = audit.as_ref().filter(|_| recover_agents).map(|projection| {
+        let cause = if reboot {
+            SessionDeathCause::Reboot
+        } else {
+            SessionDeathCause::Crash
+        };
+        LastDeathMarker {
+            cause,
+            lost_agents: lost_agent_summaries(&projection.agents, &roster),
+            at: Timestamp::now(),
+            recovered: None,
+        }
+    });
     let crash_roster = audit
         .as_ref()
-        .map(|(_, projection)| lost_agent_roster(&projection.agents, &roster))
+        .map(|projection| lost_agent_roster(&projection.agents, &roster))
         .unwrap_or_default();
     let crash_cache = if death
         .as_ref()
@@ -658,27 +651,26 @@ fn inspect_at(
     let recovery_off = disabled || !machine.resume.on_rebirth;
     // A provider that dies inside the wait may record its own end meanwhile,
     // so a wait that slept plans from a fresh read of the log.
-    let waited = audit.as_ref().is_some_and(|(_, projection)| {
-        await_owner_exits(&projection.agents, &scope, owners_exited_by)
-    });
+    let waited = audit
+        .as_ref()
+        .is_some_and(|projection| await_owner_exits(&projection.agents, &scope, owners_exited_by));
     let refreshed = audit
         .as_ref()
         .filter(|_| waited)
-        .and_then(|(store, _)| store.runtime_projection(crate::RuntimeScope::Audit).ok());
+        .and_then(|_| audit_projection(&paths).ok());
     let SettlementPlan {
         candidates,
         children,
         ended,
         planned,
     } = plan_settlement(
-        refreshed
-            .as_ref()
-            .or(audit.as_ref().map(|(_, projection)| projection)),
+        refreshed.as_ref().or(audit.as_ref()),
         &paths,
         &runtime,
         &scope,
         project_root,
         machine,
+        logins,
         recovery_off,
     );
     let requires_sandbox = planned.requires_sandbox(machine.agents.isolation);
@@ -759,6 +751,7 @@ fn inspect_live_scope(
         &scope,
         project_root,
         machine,
+        None,
         recovery_off,
     );
     let requires_sandbox = planned.requires_sandbox(machine.agents.isolation);
@@ -782,6 +775,10 @@ fn inspect_live_scope(
 
 /// Lost roots awaiting a decision, non-live children to end, the agents in
 /// `scope` already ended, and the plan that resumes the roots it can.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "read-only recovery inputs and pending birth accounts"
+)]
 fn plan_settlement(
     projection: Option<&crate::RuntimeProjection>,
     paths: &StatePaths,
@@ -789,6 +786,7 @@ fn plan_settlement(
     scope: &BTreeSet<(AgentKind, AgentSessionId)>,
     project_root: &Path,
     machine: &MachineConfig,
+    logins: Option<&crate::agents::RoomAccounts>,
     recovery_off: bool,
 ) -> SettlementPlan {
     let Some(projection) = projection else {
@@ -860,6 +858,7 @@ fn plan_settlement(
         project_root,
         machine,
         &teams_and_profiles,
+        logins,
     );
     candidates.retain(|agent| {
         !planned
@@ -932,6 +931,10 @@ fn effective_teams_and_profiles(
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "recovery config and pending birth accounts"
+)]
 fn plan_recovery(
     projection: &crate::RuntimeProjection,
     paths: &StatePaths,
@@ -940,14 +943,17 @@ fn plan_recovery(
     project_root: &Path,
     machine: &MachineConfig,
     teams_and_profiles: &(TeamsConfig, ProfilesConfig),
+    logins: Option<&crate::agents::RoomAccounts>,
 ) -> RecoveryPlan {
     let (teams, profiles) = teams_and_profiles;
-    let logins = crate::agents::room_accounts(&paths.workspace_record, Some(project_root), machine)
-        .unwrap_or_else(crate::agents::RoomAccounts::unavailable);
+    let recorded_logins =
+        crate::agents::room_accounts(&paths.workspace_record, Some(project_root), machine)
+            .unwrap_or_else(crate::agents::RoomAccounts::unavailable);
+    let logins = logins.unwrap_or(&recorded_logins);
     let catalog = crate::agents::LoginCatalog::room_view(&machine.accounts).0;
     let (team, flat_agents, refilled) = split_team_and_flat(
         agents,
-        &logins,
+        logins,
         &catalog,
         teams,
         profiles,
@@ -974,7 +980,7 @@ fn plan_recovery(
             runtime,
             profiles,
             max: machine.resume.max.saturating_sub(team_panes),
-            logins: &logins,
+            logins,
             catalog: &catalog,
         },
         Path::is_dir,

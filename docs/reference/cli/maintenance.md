@@ -248,7 +248,7 @@ On a room with sandbox isolation, a process an agent left running in the backgro
 
 `rimz accounts use` moves a running room's launch default in place; `reset --account` rebuilds the room under a different account instead.
 
-Reset refuses before prompting or changing anything when `--mux` names a backend other than the one the room runs on. Without `--yes` and without a terminal it fails with `` `rimz reset` deletes the session and sweeps its processes; pass --yes to confirm without a terminal ``. Answering anything but `y` prints `Reset aborted; nothing changed.` and exits 0.
+Reset refuses before prompting or changing anything when `--mux` names a backend other than the one the room runs on. A listed session without its own live sidebar also refuses if another room holds the workspace: close that leftover session from its multiplexer instead. Without `--yes` and without a terminal it fails with `` `rimz reset` deletes the session and sweeps its processes; pass --yes to confirm without a terminal ``. Answering anything but `y` prints `Reset aborted; nothing changed.` and exits 0.
 
 The report goes to stderr before the rebuild:
 

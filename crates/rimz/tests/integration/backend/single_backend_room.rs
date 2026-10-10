@@ -1,7 +1,9 @@
-//! Live regression tests for the one-root/one-backend room invariant.
+//! Live regression tests for the one-root/one-room invariant.
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::{Duration, Instant};
 
 use crate::common::{CommandTimeoutExt, Env, ScrubSessionEnvExt};
 
@@ -10,6 +12,7 @@ fn room_name_tracks_state_dir_without_rebirthing_a_live_old_name() {
     let Some(room) = TmuxRoom::start() else {
         return;
     };
+    room.close_sidebars();
     let paths = room.env.state_path_for(&room.env.project_root);
     let dir_name = paths.dir_name.as_str();
     assert_eq!(room.tmux_sessions(), vec![dir_name]);
@@ -121,12 +124,21 @@ fn room_name_tracks_state_dir_without_rebirthing_a_live_old_name() {
 
 #[test]
 fn start_refuses_when_rival_backend_runs_room() {
+    if which::which("zellij").is_err() {
+        crate::common::skip("zellij not on PATH");
+        return;
+    }
     let Some(room) = TmuxRoom::start() else {
         return;
     };
 
-    let output = room
-        .rimz()
+    seed_recovery_agent(&room, true);
+    let paths = room.env.state_path_for(&room.env.project_root);
+    let record_before = std::fs::read(&paths.workspace_record).unwrap();
+    let mut command = room.rimz();
+    pin_zellij_shared_env(&room.env, &mut command);
+    let started = Instant::now();
+    let output = command
         .args(["--mux", "zellij", "start"])
         .bounded_output()
         .expect("run rival zellij start");
@@ -138,17 +150,226 @@ fn start_refuses_when_rival_backend_runs_room() {
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
+        started.elapsed() < Duration::from_secs(4),
+        "refusal must not wait for the live agent to exit: {stderr}"
+    );
+    assert!(
+        !stderr.contains("previous session ended") && !stderr.contains("Recover "),
+        "a live room must not offer recovery: {stderr}"
+    );
+    assert!(
         stderr.contains(&room.session_name),
         "stderr should name the session, got: {stderr}",
     );
     assert!(
-        stderr.contains("tmux") && stderr.contains("zellij"),
-        "stderr should name both backends, got: {stderr}",
+        stderr.contains(
+            "already held by another running room (another multiplexer, or a renamed session)"
+        ) && stderr.contains("rimz attach")
+            && stderr.contains("rimz reset --no-start"),
+        "stderr should explain the held room and fixes, got: {stderr}",
     );
     assert!(
         room.tmux_sessions().contains(&room.session_name),
         "refusal must leave the tmux room live",
     );
+    assert_eq!(
+        std::fs::read(&paths.workspace_record).unwrap(),
+        record_before
+    );
+    let mut zellij = Command::new("zellij");
+    pin_zellij_shared_env(&room.env, &mut zellij);
+    let listed = zellij
+        .args(["list-sessions", "--no-formatting"])
+        .bounded_output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&listed.stdout);
+    let stderr = String::from_utf8_lossy(&listed.stderr);
+    assert!(
+        listed.status.success()
+            || stdout.contains("No active zellij sessions found")
+            || stderr.contains("No active zellij sessions found"),
+        "zellij absence must be observed, not a failed query: {stderr}"
+    );
+    assert!(
+        !stdout
+            .lines()
+            .filter_map(live_zellij_session_name)
+            .any(|name| name == room.session_name),
+        "refusal must not birth a zellij session"
+    );
+}
+
+#[test]
+fn start_refuses_when_room_runs_under_another_session_name() {
+    let Some(room) = TmuxRoom::start() else {
+        return;
+    };
+    seed_recovery_agent(&room, false);
+    let paths = room.env.state_path_for(&room.env.project_root);
+    let record_before = std::fs::read(&paths.workspace_record).unwrap();
+    let renamed = "rimz-renamed";
+    assert!(
+        tmux_output(
+            &room.env.runtime_root,
+            &["rename-session", "-t", &room.session_name, renamed]
+        )
+        .status
+        .success()
+    );
+
+    let started = Instant::now();
+    let output = room
+        .rimz()
+        .args(["--tmux", "start"])
+        .bounded_output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "an unrecorded rename must not admit another room"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("previous session ended") && !stderr.contains("Recover "),
+        "a live room must not offer recovery: {stderr}"
+    );
+    assert!(started.elapsed() < Duration::from_secs(4), "{stderr}");
+    assert!(
+        stderr.contains(&room.session_name)
+            && stderr.contains(
+                "already held by another running room (another multiplexer, or a renamed session)"
+            )
+            && stderr.contains("rimz attach"),
+        "stderr: {stderr}"
+    );
+    assert_eq!(room.tmux_sessions(), vec![renamed]);
+    assert_eq!(
+        std::fs::read(&paths.workspace_record).unwrap(),
+        record_before
+    );
+}
+
+#[test]
+fn attach_refuses_an_unheld_room_once_a_second_room_holds() {
+    if which::which("zellij").is_err() {
+        crate::common::skip("zellij not on PATH");
+        return;
+    }
+    let Some(room) = TmuxRoom::start() else {
+        return;
+    };
+    room.close_sidebars();
+    let runtime = room.env.runtime_paths();
+    let released = rimz::disk::lock::RoomLock::claim(&runtime.room_lock(), Duration::from_secs(10))
+        .unwrap()
+        .expect("closed sidebars release the room");
+    drop(released);
+
+    let mut zellij = room.rimz();
+    pin_zellij_shared_env(&room.env, &mut zellij);
+    let started = zellij
+        .args(["--mux", "zellij", "start", "--no-attach"])
+        .bounded_output()
+        .unwrap();
+    assert!(
+        started.status.success(),
+        "unheld room admits a second room: {}",
+        String::from_utf8_lossy(&started.stderr)
+    );
+    let paths = room.env.state_path_for(&room.env.project_root);
+    let record_before = std::fs::read(&paths.workspace_record).unwrap();
+    let attaching = Instant::now();
+    let refused = room
+        .rimz()
+        .args(["--mux", "tmux", "attach"])
+        .bounded_output()
+        .unwrap();
+    writeln!(
+        std::io::stderr().lock(),
+        "unheld-room attach refusal took {:?}",
+        attaching.elapsed()
+    )
+    .unwrap();
+    let stderr = String::from_utf8_lossy(&refused.stderr);
+    assert!(
+        !refused.status.success(),
+        "reattach must not relaunch sidebars beside the held second room: {stderr}"
+    );
+    assert!(
+        stderr.contains(&room.session_name)
+            && stderr.contains(
+                "already held by another running room (another multiplexer, or a renamed session)"
+            )
+            && stderr.contains("RimZ keeps one room per project")
+            && stderr.contains("rimz attach")
+            && stderr.contains("rimz reset --no-start"),
+        "{stderr}"
+    );
+    assert!(room.tmux_sessions().contains(&room.session_name));
+    assert!(room.sidebar_panes().is_empty());
+    assert_eq!(
+        std::fs::read(&paths.workspace_record).unwrap(),
+        record_before
+    );
+
+    let mut reset = room.rimz();
+    pin_zellij_shared_env(&room.env, &mut reset);
+    let reset = reset
+        .args(["--mux", "zellij", "reset", "--yes", "--no-start"])
+        .bounded_output()
+        .unwrap();
+    assert!(
+        reset.status.success(),
+        "{}",
+        String::from_utf8_lossy(&reset.stderr)
+    );
+    let attached = room
+        .rimz()
+        .args(["--mux", "tmux", "attach"])
+        .bounded_output()
+        .unwrap();
+    assert!(
+        attached.status.success(),
+        "{}",
+        String::from_utf8_lossy(&attached.stderr)
+    );
+    assert!(
+        !room.sidebar_panes().is_empty(),
+        "attach relaunches the sidebar"
+    );
+}
+
+fn seed_recovery_agent(room: &TmuxRoom, live: bool) {
+    use rimz::agents::{AgentLifecycleObservation, LifecycleSignal};
+
+    let store = room.env.store();
+    let key = (
+        rimz::ids::AgentKind::new_unchecked("claude"),
+        rimz::ids::AgentSessionId::from("recoverable"),
+    );
+    std::fs::write(
+        &store.paths().pending_recovery,
+        serde_json::to_vec(&serde_json::json!({"version": 1, "agents": [key]})).unwrap(),
+    )
+    .unwrap();
+    let mut observation =
+        AgentLifecycleObservation::new(Some(key.1.clone()), LifecycleSignal::Registered);
+    observation.worktree_path = Some(room.env.project_root.display().to_string());
+    if live {
+        observation.runtime_owner = Some(rimz::store::runtime::current_process_owner(
+            rimz::pane::RuntimeOwnerKind::Agent,
+            "recoverable",
+        ));
+    }
+    store
+        .append_event(&rimz::EventEnvelope::agent_lifecycle(
+            room.env.workspace_id.clone(),
+            &room.session_name,
+            "claude",
+            "SessionStart",
+            &observation,
+        ))
+        .unwrap();
+    rimz::store::live_roster::publish(&store.paths().live_roster, [key].into()).unwrap();
 }
 
 #[test]
@@ -204,11 +425,6 @@ fn start_auto_attaches_to_live_zellij_room() {
     assert!(
         stdout.contains("zellij attach") && stdout.contains(&room.session_name),
         "auto start should target the live zellij room, got: {stdout}",
-    );
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        !stderr.contains("already running under"),
-        "auto start should not report a rival backend, got: {stderr}",
     );
 }
 
@@ -270,11 +486,6 @@ fn reset_targets_live_backend_and_rebirths_on_default() {
         output.status,
         String::from_utf8_lossy(&output.stderr),
     );
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        !stderr.contains("already running under"),
-        "auto reset should not report a rival backend, got: {stderr}",
-    );
     assert!(
         !room.zellij_sessions().contains(&room.session_name),
         "reset should tear down the live zellij room",
@@ -306,11 +517,11 @@ fn reset_explicit_rival_refuses_before_teardown() {
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("already running under")
-            && stderr.contains("zellij")
-            && stderr.contains("tmux")
+        stderr.contains(
+            "already held by another running room (another multiplexer, or a renamed session)"
+        ) && stderr.contains("rimz attach")
             && stderr.contains(&room.session_name),
-        "stderr should describe the backend conflict, got: {stderr}",
+        "stderr should describe the held room, got: {stderr}",
     );
     assert!(
         room.zellij_sessions().contains(&room.session_name),
@@ -324,6 +535,161 @@ fn reset_explicit_rival_refuses_before_teardown() {
         archive_count_before,
         archive_entry_count(&paths.events_archive_dir),
         "refused reset must not archive room records",
+    );
+}
+
+#[test]
+fn reset_refuses_a_listed_unheld_room_when_another_room_holds() {
+    use rimz::agents::{AgentLifecycleObservation, LifecycleSignal};
+    use rimz::ids::MuxName;
+
+    let Some(room) = ZellijRoom::start() else {
+        return;
+    };
+    let runtime = room.env.runtime_paths();
+    let sidebars: Vec<_> = rimz::wakeup::heartbeat::read_current_heartbeats(&runtime.heartbeat_dir)
+        .unwrap()
+        .into_iter()
+        .filter(|(_, heartbeat)| {
+            heartbeat.mux == MuxName::Zellij && heartbeat.session_name == room.session_name
+        })
+        .map(|(_, heartbeat)| heartbeat.pane_id.expect("sidebar has a pane"))
+        .collect();
+    assert!(!sidebars.is_empty(), "initial room has a sidebar");
+    for pane in sidebars {
+        let closed = room
+            .zellij()
+            .args([
+                "--session",
+                &room.session_name,
+                "action",
+                "close-pane",
+                "--pane-id",
+                pane.raw(),
+            ])
+            .bounded_output()
+            .unwrap();
+        assert!(closed.status.success(), "{:?}", closed);
+    }
+    let released = rimz::disk::lock::RoomLock::claim(&runtime.room_lock(), Duration::from_secs(10))
+        .unwrap()
+        .expect("closed sidebars release the room");
+    drop(released);
+    assert!(room.zellij_sessions().contains(&room.session_name));
+
+    let started = room
+        .rimz()
+        .args(["--mux", "tmux", "start", "--no-attach"])
+        .bounded_output()
+        .unwrap();
+    assert!(started.status.success(), "{:?}", started);
+    assert!(
+        rimz::disk::lock::RoomLock::claim(&runtime.room_lock(), Duration::ZERO)
+            .unwrap()
+            .is_none(),
+        "second room holds the workspace"
+    );
+    let pane = tmux_output(
+        &room.env.runtime_root,
+        &[
+            "new-window",
+            "-d",
+            "-P",
+            "-F",
+            "#{pane_pid}",
+            "-t",
+            &room.session_name,
+            "/bin/bash -c 'exec -a claude sleep 60'",
+        ],
+    );
+    assert!(pane.status.success(), "{:?}", pane);
+    let pid = String::from_utf8(pane.stdout)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    let owner = rimz::pane::RuntimeOwner::new(
+        rimz::pane::RuntimeOwnerKind::Agent,
+        "survivor",
+        pid,
+        rimz::proc::process_start_token(pid),
+    );
+    assert!(rimz::proc::process_is_live(
+        pid,
+        owner.process_start.as_deref()
+    ));
+    let mut observation =
+        AgentLifecycleObservation::new(Some("survivor".into()), LifecycleSignal::Registered);
+    observation.agent_name = Some("survivor".to_owned());
+    observation.worktree_path = Some(room.env.project_root.display().to_string());
+    observation.runtime_owner = Some(owner.clone());
+    let store = room.env.store();
+    store
+        .append_event(&rimz::EventEnvelope::agent_lifecycle(
+            room.env.workspace_id.clone(),
+            &room.session_name,
+            "claude",
+            "SessionStart",
+            &observation,
+        ))
+        .unwrap();
+    let agents_before = store
+        .runtime_projection(rimz::RuntimeScope::Runtime)
+        .unwrap()
+        .agents;
+    assert_eq!(agents_before.len(), 1, "live agent is visible before reset");
+    let record_before = std::fs::read(&store.paths().workspace_record).unwrap();
+    let archives_before = archive_entry_count(&store.paths().events_archive_dir);
+
+    let resetting = Instant::now();
+    let refused = room
+        .rimz()
+        .args(["reset", "--yes", "--no-start"])
+        .bounded_output()
+        .unwrap();
+    writeln!(
+        std::io::stderr().lock(),
+        "listed-unheld reset refusal took {:?}",
+        resetting.elapsed()
+    )
+    .unwrap();
+    let stderr = String::from_utf8_lossy(&refused.stderr);
+    assert!(
+        !refused.status.success(),
+        "reset must refuse the listed unheld room beside a held second room: {stderr}"
+    );
+    assert!(
+        stderr.contains("already held by another running room"),
+        "{stderr}"
+    );
+    assert!(room.zellij_sessions().contains(&room.session_name));
+    assert!(room.tmux_sessions().contains(&room.session_name));
+    assert!(rimz::proc::process_is_live(
+        pid,
+        owner.process_start.as_deref()
+    ));
+    assert_eq!(
+        store
+            .runtime_projection(rimz::RuntimeScope::Runtime)
+            .unwrap()
+            .agents,
+        agents_before,
+        "refused reset keeps live agent records"
+    );
+    assert_eq!(
+        std::fs::read(&store.paths().workspace_record).unwrap(),
+        record_before
+    );
+    assert_eq!(
+        archive_entry_count(&store.paths().events_archive_dir),
+        archives_before
+    );
+    assert!(
+        stderr.contains(&format!(
+            "If this project's session is still open in another multiplexer, or you renamed it, close it from that multiplexer (or rename it back to `{}`), then run the command again.",
+            room.session_name
+        )),
+        "{stderr}"
     );
 }
 
@@ -742,6 +1108,41 @@ impl TmuxRoom {
         let mut cmd = self.env.rimz();
         cmd.env("TMUX_TMPDIR", &self.tmux_tmpdir);
         cmd
+    }
+
+    fn sidebar_panes(&self) -> Vec<String> {
+        let output = tmux_output(
+            &self.env.runtime_root,
+            &[
+                "list-panes",
+                "-s",
+                "-t",
+                &self.session_name,
+                "-F",
+                "#{pane_id} #{==:#{pane_title},rimz-sidebar}",
+            ],
+        );
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter_map(|line| line.strip_suffix(" 1").map(ToOwned::to_owned))
+            .collect()
+    }
+
+    fn close_sidebars(&self) {
+        let sidebars = self.sidebar_panes();
+        assert!(!sidebars.is_empty(), "initial room must have a sidebar");
+        for pane in sidebars {
+            assert!(
+                tmux_output(&self.env.runtime_root, &["kill-pane", "-t", &pane])
+                    .status
+                    .success()
+            );
+        }
     }
 
     fn tmux_sessions(&self) -> Vec<String> {

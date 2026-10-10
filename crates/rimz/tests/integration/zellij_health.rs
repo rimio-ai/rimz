@@ -289,7 +289,7 @@ fn cold_cwd_attach_claims_recorded_room_owner() {
 }
 
 #[test]
-fn tmux_start_skips_wedged_rival_zellij_session_probe() {
+fn tmux_start_never_probes_the_rival_backend() {
     let env = Env::new();
     let workspace = env.resolve_workspace(&env.project_root);
     let shim = FakeZellij::new().with_tmux();
@@ -308,10 +308,6 @@ fn tmux_start_skips_wedged_rival_zellij_session_probe() {
         .env("RIMZ_ZELLIJ_BIN", &shim.bin)
         .env("RIMZ_TEST_ZELLIJ_LOG", &shim.log)
         .env("RIMZ_TEST_SESSION_NAME", &workspace.session_name)
-        // Keep the shim asleep beyond the outer harness deadline. Returning
-        // from `rimz` with the timeout notice therefore proves the inner mux
-        // deadline fired without comparing whole-process wall time, which is
-        // scheduler-sensitive when nextest runs the gate under load.
         .env("RIMZ_TEST_ZELLIJ_LIST_SESSIONS_SLEEP", "60")
         .env("RIMZ_TEST_SESSION_PROBE_MS", "100")
         .bounded_output()
@@ -325,8 +321,13 @@ fn tmux_start_skips_wedged_rival_zellij_session_probe() {
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("skipping the cross-backend room check"),
-        "stderr should explain skipped rival probe, got: {stderr}",
+        !stderr.contains("skipping"),
+        "an explicit backend must not need a rival probe notice: {stderr}",
+    );
+    let lines = fs::read_to_string(&shim.log).unwrap();
+    assert!(
+        !lines.contains("list-sessions"),
+        "rival was probed: {lines}"
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     // The printed command must name the RimZ socket: a bare `tmux attach -t`
@@ -335,6 +336,55 @@ fn tmux_start_skips_wedged_rival_zellij_session_probe() {
         stdout.contains("tmux -S") && stdout.contains("attach"),
         "start --no-attach should print a socket-scoped tmux attach command, got: {stdout}",
     );
+}
+
+#[test]
+fn start_refuses_a_held_room_even_when_the_rival_probe_would_wedge() {
+    let env = Env::new();
+    let workspace = env.resolve_workspace(&env.project_root);
+    env.record(&env.project_root);
+    let paths = env.state_path_for(&env.project_root);
+    let record_before = fs::read(&paths.workspace_record).unwrap();
+    let _held = rimz::disk::lock::RoomLock::hold(&env.runtime_paths().room_lock()).unwrap();
+    let shim = FakeZellij::new().with_tmux();
+    let tmux_log = env.project_root.join("tmux.log");
+
+    let output = env
+        .rimz()
+        .args(["--tmux", "start", "--no-attach"])
+        .env("RIMZ_TEST_TMUX_LOG", &tmux_log)
+        .env("PATH", shim.bin_dir.path())
+        .env("RIMZ_ZELLIJ_BIN", &shim.bin)
+        .env("RIMZ_TEST_ZELLIJ_LOG", &shim.log)
+        .env("RIMZ_TEST_SESSION_NAME", &workspace.session_name)
+        .env("RIMZ_TEST_ZELLIJ_LIST_SESSIONS_SLEEP", "60")
+        .env("RIMZ_TEST_SESSION_PROBE_MS", "100")
+        .bounded_output_within(Duration::from_secs(10))
+        .expect("held room refusal must beat the wedged rival's deadline");
+
+    assert!(!output.status.success(), "a held room must refuse birth");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(&workspace.session_name)
+            && stderr.contains(
+                "already held by another running room (another multiplexer, or a renamed session)"
+            )
+            && stderr.contains("rimz attach")
+            && stderr.contains("rimz reset --no-start")
+            && stderr.contains(&format!(
+                "If this project's session is still open in another multiplexer, or you renamed it, close it from that multiplexer (or rename it back to `{}`), then run the command again.",
+                workspace.session_name
+            )),
+        "stderr: {stderr}"
+    );
+    let lines = fs::read_to_string(&tmux_log).unwrap();
+    assert!(!lines.contains("new-session"), "birth ran: {lines}");
+    assert!(
+        !fs::read_to_string(&shim.log)
+            .unwrap()
+            .contains("list-sessions")
+    );
+    assert_eq!(fs::read(&paths.workspace_record).unwrap(), record_before);
 }
 
 #[test]

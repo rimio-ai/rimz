@@ -19,7 +19,7 @@ A handler parses, calls the domain, and presents; the knowledge lives in its own
 
 - `harness` — launch compilation and validation vocabulary, placement, resume/rebirth planning, schedule policy, run waits.
 - `message` — dispatch conditions, delivery causality, reply-wait state.
-- `room` — room identity (session→mux resolution, the single-backend guard, session→workspace-record lookup), private room context, the one birth path.
+- `room` — room identity (session→mux resolution, lock-based room admission, session→workspace-record lookup), private room context, the one birth path.
 - `config` — format-preserving config editing and bootstrap.
 - `store` — event construction, rotation policy, pane/session binding eligibility.
 - `sidebar` — presence ingestion, topology fencing, cache publication.

@@ -1,9 +1,10 @@
 //! Live room inventory, session-record lookup, and mux choice.
 
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use super::{LiveRoomErr, LiveRoomResult};
+use crate::disk::lock::RoomLock;
 use crate::ids::MuxName;
 use crate::mux::{LiveSessions, MuxBackend};
 use crate::workspace::{KnownWorkspace, record};
@@ -202,37 +203,46 @@ pub fn pick_mux_for_session(
     })
 }
 
-/// Fail-fast guard for a new-room birth: refuse when the other backend already
-/// runs this path's room. A rival that isn't installed or can't be listed never
-/// blocks — best-effort probe, hard refusal only on a positive. Session identity
-/// is shared across backends, so a matching rival session would share the room's
-/// store while its panes stay unreachable.
-pub fn ensure_single_backend_room(mux: MuxName, session_name: &str) -> Result<Vec<String>> {
-    let rival = mux.other();
-    let backend = crate::mux::backend_for(rival);
-    let sessions = match list_sessions_with_retry(backend.as_ref()) {
-        Ok(sessions) => sessions,
-        Err(crate::mux::MuxErr::NotInstalled { .. }) => return Ok(Vec::new()),
-        Err(err @ crate::mux::MuxErr::Timeout { .. }) => {
-            return Ok(vec![format!(
-                "{err}; skipping the cross-backend room check."
-            )]);
-        }
-        Err(err) => {
-            tracing::warn!(mux = %rival, error = %err, "rival list_sessions failed; allowing start");
-            return Ok(Vec::new());
-        }
-    };
-    if sessions.iter().any(|name| name == session_name) {
-        bail!(
-            "This project's room is already running under {rival} (session `{session_name}`).\n\
-             RimZ keeps one room per project, so opening it under {mux} too would split your \
-             fleet across two multiplexers that can't reach each other's panes.\n\n\
-             Attach to the running room:\n    rimz attach {session_name}\n\n\
-             Or close it, then start under {mux}:\n    rimz --mux {rival} reset --no-start"
-        );
+/// Claim a room before birth or reset, refusing any live shared hold.
+pub fn claim_room(runtime: &RuntimePaths, session_name: &str, wait: Duration) -> Result<RoomLock> {
+    if let Some(claim) = RoomLock::claim(&runtime.room_lock(), wait)? {
+        return Ok(claim);
     }
-    Ok(Vec::new())
+    bail!(
+        "This project's room `{session_name}` is already held by another running room (another multiplexer, or a renamed session).\n\
+         RimZ keeps one room per project.\n\n\
+         Attach to the running room:\n    rimz attach\n\n\
+         Or close it, then start again:\n    rimz reset --no-start\n\n\
+         If this project's session is still open in another multiplexer, or you renamed it, close it from that multiplexer (or rename it back to `{session_name}`), then run the command again."
+    );
+}
+
+pub(super) fn has_sidebar(runtime: &RuntimePaths, mux: MuxName, session_name: &str) -> bool {
+    crate::wakeup::heartbeat::fresh_sidebar_heartbeats(runtime)
+        .iter()
+        .any(|heartbeat| heartbeat.mux == mux && heartbeat.session_name == session_name)
+}
+
+/// Admit a listed session by its own fresh heartbeat or an exclusive room claim.
+pub fn claim_listed_room(
+    runtime: &RuntimePaths,
+    mux: MuxName,
+    session_name: &str,
+    wait: Duration,
+) -> Result<Option<RoomLock>> {
+    let deadline = Instant::now() + wait;
+    loop {
+        if has_sidebar(runtime, mux, session_name) {
+            return Ok(None);
+        }
+        if let Some(claim) = RoomLock::claim(&runtime.room_lock(), Duration::ZERO)? {
+            return Ok(Some(claim));
+        }
+        if Instant::now() >= deadline {
+            return claim_room(runtime, session_name, Duration::ZERO).map(Some);
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
 }
 
 /// Whether `session` is listed by `mux` right now; a probe failure reads as not live.

@@ -3200,7 +3200,7 @@ fn zellij_recovery_survives_a_sidebar_that_outlives_its_session() {
         }
     }
     survivor.cwd(&env.project_root);
-    let _survivor = AttachProcess::on_pty(survivor, &parser);
+    let survivor = AttachProcess::on_pty(survivor, &parser);
 
     ZellijBackend::with_runtime_dir(&env.runtime_root)
         .kill_session(&session)
@@ -3227,6 +3227,23 @@ fn zellij_recovery_survives_a_sidebar_that_outlives_its_session() {
         );
         std::thread::sleep(Duration::from_millis(50));
     }
+
+    let record = env.store().paths().workspace_record.clone();
+    let recorded = std::fs::read(&record).expect("workspace record");
+    let refused = start();
+    let stderr = String::from_utf8_lossy(&refused.stderr);
+    assert!(
+        !refused.status.success(),
+        "a surviving supervisor holds the room"
+    );
+    assert!(
+        stderr.contains(
+            "already held by another running room (another multiplexer, or a renamed session)"
+        ),
+        "{stderr}"
+    );
+    assert_eq!(std::fs::read(&record).unwrap(), recorded);
+    drop(survivor);
 
     let reborn = start();
     let stderr = String::from_utf8_lossy(&reborn.stderr);

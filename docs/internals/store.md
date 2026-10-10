@@ -77,7 +77,7 @@ Room files have one lifetime class per directory, constructed by `disk/paths.rs`
 | `tmp/` | State | Agent temp unit `tmp/<handle>/`: the `owned/` agent-unit rule. `tmp/_unnamed/`, shared by handleless launches, stays until the room directory is pruned. |
 | `shared/` | State | Room-wide files agents hand each other; no sweep. Hard reset removes it; otherwise it goes when the room directory is pruned. |
 | `out/` | State | RimZ-written results under `out/<reader>/`; `out/` and each reader directory are created at mode `0700`. A response file goes once it is older than 7 days and no run record names its agent (the stem before the first `.`); a `wait-` file once it is older than 7 days and its watcher is not live. An empty reader directory goes. |
-| `locks/` | State | Try-lock and unlink while held; keep busy files and every subdirectory, since a reopening waiter recreates only the file. Dry runs only count files as would-check, without locking. Every acquirer checks descriptor/path inode identity after flock and retries on replacement. Reset and teardown never remove this class. |
+| `locks/` | State | Try-lock and unlink while held; keep busy files (including shared supervisor holds on `room.lock`) and every subdirectory, since a reopening waiter recreates only the file. Dry runs only count files as would-check, without locking. Every acquirer checks descriptor/path inode identity after flock and retries on replacement. Reset and teardown never remove this class. |
 | `sock/` | Runtime | Remove sockets whose connect probe is refused, after the sidebar heartbeat TTL startup grace. |
 | `live/` | Runtime | Mtime TTL (`gc.older_than`, default 7 days); renderer-instance claims also expire by heartbeat liveness. Exception: keep agent telemetry while its room is live, because the external exporter holds its inode open. |
 | `lanes/` | Runtime | No age sweep; reset, teardown, room death and reboot reclaim coordination state, including quiet schedules and user choices. |
@@ -122,7 +122,7 @@ tmp/<handle>/, tmp/_unnamed/                  per-agent temp units
 shared/                                       room-wide shared files
 out/<reader>/<name>[.<n>|.<run_id>].output    child and peer responses
 out/<reader>/<wait-name>.output               watched-command output
-locks/*.lock                                 workspace, publish, subagent-zone, loop-instances,
+locks/*.lock                                 room, workspace, publish, subagent-zone, loop-instances,
                                              loop-run-<name>[-<checkout id>], loop-watch-<name>,
                                              message-sweep, sidebar-launch, snapshot,
                                              topology-writer, authoritative-pane-probe, focus-anchor,

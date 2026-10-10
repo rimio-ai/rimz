@@ -122,6 +122,17 @@ rimz
 
 That creates or reattaches the Zellij or tmux session for this project, docks the sidebar down the left, and drops you in a shell. Launch an agent the way you always do, `claude` or `codex` straight into a pane, and its card appears in the sidebar as its first hook fires. To read the zones and the cards, see [the sidebar](./sidebar.md); to drive the fleet, see [agents](./fleet.md).
 
+RimZ keeps one room per project while it is held. If you try to start another on a different backend, or after renaming the session without updating RimZ's record, it refuses: `This project's room ... is already held by another running room (another multiplexer, or a renamed session).` It leaves the running room unchanged and names these two fixes:
+
+```sh
+rimz attach                  # enter the running room
+rimz reset --no-start        # close it, then run rimz start again
+```
+
+If this project's session is still open in another multiplexer, or you renamed it, close it from that multiplexer (or rename it back to the recorded name), then run the command again. Both commands above can refuse while a leftover session is listed beside the held room.
+
+The room is held while a sidebar pane or a live supervisor lives. Once neither lives, the room is unheld and another room can start. Attaching to the old room relaunches its sidebar only if no other room holds the workspace; otherwise, close the other room first. If the sidebar is temporarily restarting, retry the attach once it returns.
+
 `rimz doctor` re-reads the machine at any time. A normal run writes nothing to disk and starts, stops, or moves nothing in the room, so it is the check to run when something looks wrong. Skipping `rimz setup` entirely is also fine: the first `rimz` in a project asks the same hook, color, glyph, pet, and automation questions when it finds no config, and writes the same files.
 
 To take all of it back off the machine, `rimz uninstall --all` names every root, room, hook, and binary it is about to touch and waits for a `y` before removing them; [security and trust](./security.md#what-rimz-changes-on-your-machine) lists what it leaves behind on purpose.

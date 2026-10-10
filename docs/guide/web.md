@@ -33,7 +33,7 @@ rimz web stop     # stop every ttyd daemon RimZ started
 
 `rimz web` is `rimz web open`. It does five things you could do by hand:
 
-1. Resolve the room for the current directory, or for `--session <name>`. A room that is not running is started here, exactly as `rimz start` does without attaching, and recovers the agents it had; `--no-resume` brings it up empty instead.
+1. Resolve the room for the current directory, or for `--session <name>`. A room that is not running is started here, exactly as `rimz start` does without attaching, and recovers the agents it had; `--no-resume` brings it up empty instead. The same [one-room admission](./setup.md#open-your-first-room) refuses a second room while the running room is held.
 2. Wait up to five seconds for the session to appear under Zellij or tmux.
 3. Ensure the shared daemon: one ttyd process on `127.0.0.1:8200` serving every Zellij and tmux room on the machine, so the second room costs nothing.
 4. Print the room's URL on stdout and the browser password on stderr.
