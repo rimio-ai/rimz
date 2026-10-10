@@ -34,6 +34,7 @@ fn workspace_cache_is_current_only_at_the_published_version() {
 
 #[test]
 fn provider_cache_staleness_and_error_cases_are_explicit() {
+    assert_eq!(PROVIDER_SPENDING_VERSION, 16);
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("provider-spending.json");
     let spending = sample_spending();
@@ -277,6 +278,7 @@ fn spending_cursor_cache_wire_shape_uses_short_keys() {
         has_speed: true,
         model: Some("claude-opus-4-8".to_owned()),
         rolled: true,
+        timing: None,
     };
     let codex = CachedEntry {
         ts_secs: 67_890,
@@ -294,8 +296,20 @@ fn spending_cursor_cache_wire_shape_uses_short_keys() {
         has_speed: false,
         model: Some("gpt-5-codex".to_owned()),
         rolled: false,
+        timing: None,
     };
     let entries = vec![full.clone(), codex.clone()];
+    let timed = CachedEntry {
+        output: 300,
+        timing: response_timing(300, 1_000),
+        ..full.clone()
+    };
+    let timed_value = serde_json::to_value(&timed).unwrap();
+    assert_eq!(timed_value["g"], serde_json::json!({"m": 1_000, "o": 300}));
+    assert_eq!(
+        serde_json::from_value::<CachedEntry>(timed_value).unwrap(),
+        timed
+    );
     let value = serde_json::to_value(&entries).unwrap();
 
     insta::assert_json_snapshot!(value, @r###"

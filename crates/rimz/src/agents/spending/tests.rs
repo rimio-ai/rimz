@@ -361,6 +361,7 @@ fn cached_entry(ts_secs: u64, cost_usd: f64, thread_id: &str) -> CachedEntry {
         has_speed: false,
         model: None,
         rolled: false,
+        timing: None,
     }
 }
 

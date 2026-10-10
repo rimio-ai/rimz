@@ -88,6 +88,7 @@ fn cached_entries(count: usize) -> Vec<CachedEntry> {
             has_speed: false,
             model: Some("claude-opus-4-8".to_owned()),
             rolled: false,
+            timing: None,
         })
         .collect()
 }
@@ -347,6 +348,7 @@ fn spending_walk_warm_keeps_trailing_windows_fresh() {
                 has_speed: false,
                 model: Some("claude-opus-4-8".to_owned()),
                 rolled: false,
+                timing: None,
             }],
         ),
     );

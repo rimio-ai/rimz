@@ -160,6 +160,7 @@ mod tests {
             has_speed: false,
             model: None,
             rolled: false,
+            timing: None,
         }
     }
 

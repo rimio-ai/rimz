@@ -30,6 +30,10 @@ pub struct SpendWindow {
     pub input: u64,
     #[serde(default)]
     pub output: u64,
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub timed_ms: u64,
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub timed_output: u64,
     #[serde(default)]
     pub cache_write: u64,
     #[serde(default)]
@@ -50,6 +54,16 @@ fn is_zero_u64(value: &u64) -> bool {
 }
 
 impl SpendWindow {
+    /// Rounded output tokens per second across the window's timed responses.
+    pub fn tokens_per_sec(&self) -> Option<u64> {
+        if self.timed_ms == 0 {
+            return None;
+        }
+        let ms = u128::from(self.timed_ms);
+        let rate = (u128::from(self.timed_output) * 1_000 + ms / 2) / ms;
+        Some(rate.min(u128::from(u64::MAX)) as u64)
+    }
+
     /// Fold one priced entry's spend and token split into the window. `input`
     /// includes cache-write at the window level, so `tokens` stays
     /// `input + output` for the `◇` total; cache-read rides its own field.
@@ -60,6 +74,10 @@ impl SpendWindow {
         self.output += entry.output;
         self.cache_write += entry.cache_write;
         self.cache_read += entry.cache_read;
+        if let Some(timing) = entry.timing {
+            self.timed_ms += timing.ms;
+            self.timed_output += timing.output;
+        }
         for (name, count) in &entry.tool_calls {
             let count = u64::from(*count);
             self.tool_calls = self.tool_calls.saturating_add(count);
@@ -75,6 +93,8 @@ impl SpendWindow {
         self.output += other.output;
         self.cache_write += other.cache_write;
         self.cache_read += other.cache_read;
+        self.timed_ms += other.timed_ms;
+        self.timed_output += other.timed_output;
         self.tool_calls = self.tool_calls.saturating_add(other.tool_calls);
         for (name, count) in &other.tools {
             let total = self.tools.entry(name.clone()).or_default();
@@ -698,10 +718,15 @@ pub(crate) fn should_replace_duplicate(candidate: &CachedEntry, existing: &Cache
         return existing.is_sidechain;
     }
 
+    let candidate_tokens = entry_token_total(candidate);
+    let existing_tokens = entry_token_total(existing);
+    if candidate_tokens == existing_tokens && candidate.has_speed == existing.has_speed {
+        return candidate.timing.map(|timing| timing.ms) > existing.timing.map(|timing| timing.ms);
+    }
     should_replace_usage_duplicate(
-        entry_token_total(candidate),
+        candidate_tokens,
         candidate.has_speed,
-        entry_token_total(existing),
+        existing_tokens,
         existing.has_speed,
     )
 }

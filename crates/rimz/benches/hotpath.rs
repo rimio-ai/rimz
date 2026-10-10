@@ -580,6 +580,7 @@ fn spending_fixture_scaled(
                     has_speed: false,
                     model: Some("claude-opus-4-8".to_owned()),
                     rolled: false,
+                    timing: None,
                 }
             })
             .collect();

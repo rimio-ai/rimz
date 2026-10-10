@@ -33,7 +33,8 @@ use super::{SPENDING_TTL, ScopedSpending, SpendingWalkResult};
 // v14: per-login headline and trailing-window tallies for dashboard panels.
 // v15: per-login maps are keyed by history pool; a shared account's spend is
 // under its kind's `default` key.
-pub(crate) const PROVIDER_SPENDING_VERSION: u32 = 15;
+// v16: response timing counters in per-model windows for the stats tok/s figure.
+pub(crate) const PROVIDER_SPENDING_VERSION: u32 = 16;
 
 /// Aggregate version for the per-workspace cockpit tally cache. This is
 /// independent of the shared raw-entry cache version: a semantic change here

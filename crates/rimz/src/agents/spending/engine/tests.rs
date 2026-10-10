@@ -163,6 +163,7 @@ fn cached_entry(ts_secs: u64, cost_usd: f64, id: &str) -> CachedEntry {
         has_speed: false,
         model: Some("claude-opus-4-8".to_owned()),
         rolled: false,
+        timing: None,
     }
 }
 
@@ -514,6 +515,7 @@ fn publishing_walk_observer_checkpoints_workspace_live_baselines() {
                     has_speed: false,
                     model: None,
                     rolled: false,
+                    timing: None,
                 }],
                 unknown_models: BTreeMap::new(),
             },
@@ -595,6 +597,7 @@ fn workspace_cache_derives_from_shared_entries_while_global_lock_is_held() {
                 has_speed: false,
                 model: None,
                 rolled: false,
+                timing: None,
             }],
             unknown_models: BTreeMap::new(),
         },
@@ -694,6 +697,7 @@ fn workspace_cache_from_shared_entries_publishes_live_exclusions() {
                 has_speed: false,
                 model: None,
                 rolled: false,
+                timing: None,
             }],
             unknown_models: BTreeMap::new(),
         },
@@ -779,6 +783,7 @@ fn producer_missing_scope_applies_live_origin_before_reusing_warm_memo() {
                 has_speed: false,
                 model: None,
                 rolled: false,
+                timing: None,
             }],
             unknown_models: BTreeMap::new(),
         },
@@ -1037,6 +1042,7 @@ fn producer_publishes_compacted_shared_spending_cache() {
         has_speed: false,
         model: Some("claude-opus-4-8".to_owned()),
         rolled: false,
+        timing: None,
     };
     let old_b = CachedEntry {
         cost_usd: 2.0,

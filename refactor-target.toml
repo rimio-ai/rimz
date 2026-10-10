@@ -255,7 +255,8 @@ surface-budget = 15
 [[module]]
 path = "crates/rimz/src/agents/spending"
 # Parser wire, walker, and cache records stay public for the adapters, bench, perf and example crates.
-surface-budget = 84
+# ResponseTiming and the timed window counters/rate cross the adapter and stats seams.
+surface-budget = 87
 
 [[module]]
 path = "crates/rimz/src/bin"
