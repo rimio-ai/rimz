@@ -1,8 +1,8 @@
 # Sidebar
 
-This page owns the mechanics between the store and the painted sidebar: how a live pane becomes a row, how rows group and rank, which lines a card carries, how the frame composes, and how the renderer process launches, closes itself, recovers, and reloads. Four pages sit beside it. [state.md](./state.md) owns the data plane underneath: the fetch cycle, the published caches, realtime events, fusion, and cadences. [The interface reference](../../interface/sidebar.md) draws every glyph and frame. [instances.md](../agents/instances.md) owns how a session joins its pane from the session's side, and [DESIGN.md](../../../DESIGN.md) states the product commitments.
+This page owns the mechanics between the store and the painted sidebar: how a live pane becomes a row, how rows group and rank, which lines a card carries, how the frame composes, and how rendering launches, closes, recovers, and reloads. Four pages sit beside it. [state.md](./state.md) owns the data plane underneath: the fetch cycle, the published caches, realtime events, fusion, and cadences. [The interface reference](../../interface/sidebar.md) draws every glyph and frame. [instances.md](../agents/instances.md) owns how a session joins its pane from the session's side, and [DESIGN.md](../../../DESIGN.md) states the product commitments.
 
-The sidebar is the narrow column pinned beside the work panes, and it answers one question: which pane needs the user now. One renderer paints every state of a room, from a bare shell to a fleet across worktrees, through detach and reattach. Only the snapshot changes between those states.
+The sidebar is the narrow column pinned beside the work panes, and it answers one question: which pane needs the user now. One host paints every state of a room, from a bare shell to a fleet across worktrees, through detach and reattach. Only the snapshot changes between those states.
 
 ## The producer and the renderer
 
@@ -14,7 +14,7 @@ The sidebar is a client of the store and never a writer of it. Its filesystem wr
 
 ## From store to screen
 
-One pass builds one frame, in this order.
+A shared fold feeds per-attachment frames in this order.
 
 1. **Fold the event log** into the rollup, every durable fact the store holds about the room.
 2. **Reduce lifecycle events** into one `AgentState` per agent, carrying turn, phase, subagents, and model.
@@ -23,18 +23,17 @@ One pass builds one frame, in this order.
 5. **Reap** ghosts, relaunches, and stale sessions the rollup still carries.
 6. **Group and rank.** Rows fold into groups, each row and group gets a score, and the roster sorts.
 7. **Enrich.** Unread state, git stats, provider panels, subagent lists, and value tallies attach to the ordered roster.
-8. **Serialize** the result as `SidebarSnapshot`.
-9. **Project to lines.** The renderer resolves the visible roster, composes the zones, and paints.
+8. **Project to lines.** Each attachment resolves the visible roster, composes the zones, and paints.
 
-Steps 1 through 8 run in the host and are published once for every renderer in the session; the split, caches, and timings are [state.md](./state.md#one-fetch-cycle). Step 9 runs in each renderer.
+Steps 1 through 7 run once per host fold. The host projects a typed `SidebarSnapshot` per attachment and delivers it through memory mailboxes; each attachment fuses its own events and focus intent before step 8. Disk publication still feeds CLI reads and new-attachment seeds ([state.md](./state.md#one-fetch-cycle)).
 
 Only watched attachments paint. A capture of a hidden sidebar pane shows its last visible frame, including in a detached session; it is not a fresh snapshot. Hidden attachments still apply every delivered projection, refresh heartbeats, drain wakeups, and handle self-close and reload. A fold that lists the pane or its working siblings in `viewed_panes`, or a resize wakeup, paints the current state within one base frame ([the paint clock](./state.md#the-paint-clock)).
 
-Two commands split a bug between the halves. `rimz sidebar snapshot --json` runs steps 1 through 8 and prints the result: if the wrong answer is already in the JSON, the bug is in the producer. `rimz sidebar frame` renders that snapshot without capturing through the mux, so a correct snapshot with a wrong frame points at `sidebar_pane/`. Both take `--workspace-id`; an id with no state on this machine and no `--session-name` names no room, so both skip the producer and render the empty rollup under the machine config, creating nothing under the state or runtime roots.
+Two commands split a bug between the halves. `rimz sidebar snapshot --json` runs steps 1 through 7 and prints the result: if the wrong answer is already in the JSON, the bug is in the producer. `rimz sidebar frame` renders that snapshot without capturing through the mux, so a correct snapshot with a wrong frame points at `sidebar_pane/`. Both take `--workspace-id`; an id with no state on this machine and no `--session-name` names no room, so both skip the producer and render the empty rollup under the machine config, creating nothing under the state or runtime roots.
 
 ## Where the code lives
 
-The sidebar spans three module trees: the producer's view-model builder, the renderer process, and the data plane.
+The sidebar spans three module trees: the producer's view-model builder, the pane supervisors and painting host, and the data plane.
 
 **`crates/rimz/src/store/snapshot/` builds the view-model**, in the order of the stages above.
 
@@ -54,7 +53,7 @@ The sidebar spans three module trees: the producer's view-model builder, the ren
 
 The contract types are in [`view.rs`](../../../crates/rimz/src/store/snapshot/view.rs) and [`view/model.rs`](../../../crates/rimz/src/store/snapshot/view/model.rs) (`SidebarSnapshot` and its `Sidebar*` members) and [`row.rs`](../../../crates/rimz/src/store/snapshot/row.rs) (`SidebarRow` with its `AgentCard` and `ProcessCard` payloads). `SNAPSHOT_VERSION` gates cross-version adoption.
 
-**`crates/rimz/src/sidebar_pane/` is the renderer process.** `app/` runs the loop and `render/` paints.
+**`crates/rimz/src/sidebar_pane/` holds the supervisors and painting host.** `app/` runs attachment loops and `render/` paints.
 
 | Module | Owns |
 |---|---|
