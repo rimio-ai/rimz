@@ -226,7 +226,7 @@ aggressive_resize = true
 
 # [agents.worktree]
 # dir = "../{repo}-worktrees"          # where RimZ-owned Git worktrees live; {repo} is the root basename
-# base = "head"                        # "head", "fresh", or any Git ref for new worktrees
+## base = "head"                       # "head", "fresh", or any Git ref; unset, teams branch from the fetched remote default branch
 # Project files .worktreeinclude and .worktreelink seed copied files and shared symlink dirs.
 ## [agents.worktree.hooks]
 ## created = "~/bin/rimz-init-target"  # after seeding; failure rolls back the tree

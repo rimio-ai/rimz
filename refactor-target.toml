@@ -854,7 +854,8 @@ path = "crates/rimz/src/worktree"
 # PR branch choices and divergence facts cross the domain/CLI boundary.
 # Stale-base observations let the CLI warn without domain output.
 # LinkedWorktree and linked_worktree carry creation records into launch reminders (+2).
-surface-budget = 62
+# LaunchBase and TrunkFetchFailure carry team checkout policy and fetch warnings (+2).
+surface-budget = 64
 
 # Ratchet CLI-to-CLI surfaces for future workflow rehomes out of the CLI.
 [[module]]
@@ -4280,6 +4281,16 @@ reason = "Error type of pub orphan_sweep::resolve (orphan_sweep.rs:85-97); atlas
 kind = "item"
 key = "worktree::StaleBase"
 reason = "Creation and launch results carry the stale-base observation for CLI warnings."
+
+[[verdict]]
+kind = "item"
+key = "worktree::LaunchBase"
+reason = "The binary selects checkout base policy from the resolved launch's team identity."
+
+[[verdict]]
+kind = "item"
+key = "worktree::TrunkFetchFailure"
+reason = "Creation and launch results carry trunk fetch failure and fallback facts for CLI warnings."
 
 [[verdict]]
 kind = "item"

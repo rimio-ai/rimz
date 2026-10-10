@@ -389,7 +389,8 @@ fn unmanaged_launch_checkout_preserves_ownership_and_local_work() {
             Some("feat/review"),
             None,
             None,
-            None
+            None,
+            rimz::worktree::LaunchBase::Configured,
         ),
         Err(rimz::worktree::WorktreeErr::Unmarked { .. })
     ));

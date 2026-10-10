@@ -913,6 +913,13 @@ fn worktree_hooks_parse_and_default_to_absent() {
     assert_eq!(value["hooks"]["removed"], "echo removed");
     let defaults = load_no_fragments(&write(&dir, "")).unwrap();
     assert_eq!(defaults.agents.worktree, WorktreeConfig::default());
+    assert!(
+        serde_json::to_value(&defaults.agents.worktree)
+            .unwrap()
+            .get("base")
+            .is_none(),
+        "default worktree config must omit base"
+    );
     assert_eq!(
         serde_json::to_value(defaults.agents.worktree).unwrap()["hooks"],
         serde_json::json!({})
@@ -944,7 +951,18 @@ fn worktree_config_defaults_and_parses() {
     let defaults_dir = tempdir().expect("tempdir");
     let defaults = load_no_fragments(&write(&defaults_dir, "")).expect("load");
     assert_eq!(defaults.agents.worktree.dir, "../{repo}-worktrees");
-    assert_eq!(defaults.agents.worktree.base, WorktreeBase::Head);
+    assert_eq!(defaults.agents.worktree.base, None);
+    assert!(
+        serde_json::to_value(&defaults.agents.worktree)
+            .unwrap()
+            .get("base")
+            .is_none(),
+        "an absent base must stay absent on round trip"
+    );
+
+    let head: WorktreeConfig = toml::from_str("base = 'head'").unwrap();
+    assert_eq!(head.base, Some(WorktreeBase::Head));
+    assert_eq!(serde_json::to_value(head).unwrap()["base"], "head");
 
     let config = load_no_fragments(&write_named(
         &dir,
@@ -955,7 +973,7 @@ fn worktree_config_defaults_and_parses() {
     ))
     .expect("load");
     assert_eq!(config.agents.worktree.dir, "../wt-{repo}");
-    assert_eq!(config.agents.worktree.base, WorktreeBase::Fresh);
+    assert_eq!(config.agents.worktree.base, Some(WorktreeBase::Fresh));
 
     let explicit = load_no_fragments(&write_named(
         &dir,
@@ -965,7 +983,7 @@ fn worktree_config_defaults_and_parses() {
     .expect("load");
     assert_eq!(
         explicit.agents.worktree.base,
-        WorktreeBase::Explicit("main".to_owned())
+        Some(WorktreeBase::Explicit("main".to_owned()))
     );
     assert!(
         load_no_fragments(&write_named(
@@ -995,7 +1013,7 @@ fn worktree_config_defaults_and_parses() {
 
     let serde_config: WorktreeConfig =
         toml::from_str("base = \"  fresh  \"").expect("whitespace-trimmed worktree base");
-    assert_eq!(serde_config.base, WorktreeBase::Fresh);
+    assert_eq!(serde_config.base, Some(WorktreeBase::Fresh));
     let serde_error =
         toml::from_str::<WorktreeConfig>("base = \"   \"").expect_err("empty serde worktree base");
     assert!(

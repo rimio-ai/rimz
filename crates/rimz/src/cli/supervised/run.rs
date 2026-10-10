@@ -503,6 +503,11 @@ fn prepare_supervised(
         request.worktree.as_deref(),
         request.from_pr.as_ref(),
         cwd.as_deref(),
+        if team_name.is_some() {
+            rimz::worktree::LaunchBase::Team
+        } else {
+            rimz::worktree::LaunchBase::Configured
+        },
     )?
     else {
         return Ok(None);

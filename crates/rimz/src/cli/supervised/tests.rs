@@ -440,6 +440,7 @@ fn subagent_launch_anchors_at_the_parent_checkout() {
         None,
         None,
         None,
+        rimz::worktree::LaunchBase::Configured,
     )
     .expect("launch checkout");
     assert_eq!(launch.cwd, expected);
@@ -461,6 +462,7 @@ fn subagent_launch_anchors_at_the_parent_checkout() {
         None,
         None,
         None,
+        rimz::worktree::LaunchBase::Configured,
     )
     .expect("subdirectory launch checkout");
     assert_eq!(launch.cwd, subdir.canonicalize().expect("canonical subdir"));

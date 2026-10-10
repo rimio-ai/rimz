@@ -194,6 +194,7 @@ fn new_worktree(
             base,
             branch.as_deref(),
             false,
+            rimz::worktree::LaunchBase::Configured,
         )?
     };
     if !created.reused {

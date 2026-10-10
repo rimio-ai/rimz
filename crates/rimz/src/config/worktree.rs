@@ -9,9 +9,9 @@ pub struct WorktreeConfig {
     /// Directory template for RimZ-owned worktrees. Relative paths resolve from
     /// the repository root; `{repo}` expands to the root directory basename.
     pub dir: String,
-    /// Base ref for new worktrees: local `HEAD`, remote `origin/HEAD`, or an
-    /// explicit ref string.
-    pub base: WorktreeBase,
+    /// Base ref for new worktrees. Unset, teams fetch the remote default branch and other callers use local `HEAD`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base: Option<WorktreeBase>,
     pub hooks: WorktreeHooks,
 }
 
@@ -19,7 +19,7 @@ impl Default for WorktreeConfig {
     fn default() -> Self {
         Self {
             dir: "../{repo}-worktrees".to_owned(),
-            base: WorktreeBase::Head,
+            base: None,
             hooks: WorktreeHooks::default(),
         }
     }

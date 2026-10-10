@@ -3694,6 +3694,142 @@ fn team_worktree_launch_refuses_a_live_lane_name() {
 }
 
 #[cfg(unix)]
+#[test]
+fn team_worktree_launch_warns_and_continues_when_origin_is_offline() {
+    use crate::common::git::git;
+
+    let env = team_worktree_launch_env();
+    git(
+        &env.project_root,
+        &[
+            "remote",
+            "add",
+            "origin",
+            env.home_root.join("missing.git").to_str().unwrap(),
+        ],
+    );
+    let output = launch_team_worktree(&env, &["teams", "solo", "-w", "demo"]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("warning: could not fetch origin/main for the team worktree"),
+        "{stderr}"
+    );
+    assert_eq!(stderr.matches("warning: could not fetch").count(), 1);
+    assert!(output.status.success(), "{stderr}");
+    assert!(env.home_root.join("project-worktrees/demo").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn team_worktree_launch_doorways_cut_from_the_remote_tip() {
+    use crate::common::git::{git, git_stdout};
+
+    for args in [
+        vec!["teams", "solo", "-w", "demo"],
+        vec!["teams", "launch", "solo", "-w", "demo"],
+        vec!["agents", "solo", "-w", "demo"],
+        vec!["agents", "solo.lead", "-w", "demo"],
+        vec![
+            "agents",
+            "solo.lead",
+            "-p",
+            "complete the work",
+            "--bg",
+            "--detach",
+            "-w",
+            "demo",
+        ],
+    ] {
+        let env = team_worktree_launch_env();
+        let origin = env.home_root.join("origin.git");
+        git(
+            &env.project_root,
+            &["clone", "--bare", ".", origin.to_str().unwrap()],
+        );
+        git(
+            &env.project_root,
+            &["remote", "add", "origin", origin.to_str().unwrap()],
+        );
+        let tip = git_stdout(
+            &origin,
+            &[
+                "-c",
+                "user.email=rimz@example.test",
+                "-c",
+                "user.name=RimZ Test",
+                "commit-tree",
+                "HEAD^{tree}",
+                "-p",
+                "HEAD",
+                "-m",
+                "upstream",
+            ],
+        );
+        git(&origin, &["update-ref", "refs/heads/main", &tip]);
+        let output = launch_team_worktree(&env, &args);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "{args:?}: {stderr}");
+        let tree = env.home_root.join("project-worktrees/demo");
+        assert_eq!(git_stdout(&tree, &["rev-parse", "HEAD"]), tip, "{args:?}");
+        assert_eq!(
+            git_stdout(&env.project_root, &["rev-parse", "origin/main"]),
+            tip
+        );
+        assert!(!crate::common::git::git_succeeds(
+            &tree,
+            &["config", "branch.demo.remote"]
+        ));
+    }
+}
+
+#[cfg(unix)]
+fn team_worktree_launch_env() -> Env {
+    let env = Env::new();
+    assert!(init_launch_repo(&env.project_root));
+    env.record(&env.project_root);
+    env.install_agent_hooks("claude");
+    std::fs::write(
+        env.rimz_home().join("config.toml"),
+        "[agents]\nisolation = 'host'\n",
+    )
+    .unwrap();
+    crate::common::write_definition(
+        &env,
+        "agents",
+        "worker",
+        "description: Worker\nagent: claude\ntools: []",
+        "",
+    );
+    crate::common::write_definition(
+        &env,
+        "teams",
+        "solo",
+        "layout: lead\nleader: lead\nstages: [Build]\nroles:\n  - {role: lead, agent: worker, owns: [Build]}",
+        "Complete the work.",
+    );
+    env
+}
+
+#[cfg(unix)]
+fn launch_team_worktree(env: &Env, args: &[&str]) -> std::process::Output {
+    let shim = write_env_dump_shim(env, "claude");
+    let workspace = env.resolve_workspace(&env.project_root);
+    env.rimz().args(["--mux", "zellij"]).args(args)
+        .env("SHELL", write_fake_login_shell(env, "rimz-test-sh", &[]))
+        .env("ZELLIJ_PANE_ID", "1")
+        .env("ZELLIJ_SESSION_NAME", &workspace.session_name)
+        .env("PATH", path_with_front(&shim))
+        .env("RIMZ_TEST_AGENT_ENV_DUMP", env.home_root.join("agent-env"))
+        .env("RIMZ_ZELLIJ_BIN", crate::common::zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", env.home_root.join("mux.log"))
+        .env("RIMZ_TEST_ZELLIJ_VERSION", "0.45.1")
+        .env("RIMZ_TEST_ZELLIJ_LIST_CLIENTS", "1 terminal_3 claude\n")
+        .env("RIMZ_TEST_ZELLIJ_LIST_PANES", r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"sh"},{"id":3,"is_plugin":false,"tab_id":2,"title":"claude"}]"#)
+        .env("RIMZ_TEST_ZELLIJ_LIST_SESSIONS", format!("{} [Created 1s ago]\n", workspace.session_name))
+        .bounded_output().unwrap()
+}
+
+#[cfg(unix)]
 fn assert_worktree_launch_lane_admission(args: &[&str], lane: &str, reuse: bool) {
     let env = Env::new();
     if !init_launch_repo(&env.project_root) {
