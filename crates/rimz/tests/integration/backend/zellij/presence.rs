@@ -168,7 +168,7 @@ fn write_poke_shim(dir: &Path, log: &Path, real_rimz: &Path, focus_exec_log: &Pa
                {real_rimz} \"$@\" >> {focus_exec_log} 2>&1\n\
                printf 'exit=%s\\n' \"$?\" >> {focus_exec_log}\n\
              elif [ \"${{1:-}}\" = \"sidebar\" ] && [ \"${{2:-}}\" = \"serve\" ]; then\n\
-               {real_rimz} \"$@\" >/dev/null 2>> {focus_exec_log}\n\
+               exec {real_rimz} \"$@\" 2>> {focus_exec_log}\n\
              else\n\
                {real_rimz} \"$@\" >/dev/null 2>&1\n\
              fi\n",
@@ -744,6 +744,8 @@ fn tab_switch_repairs_sidebar_focus_from_attached_client_views() {
 
     let wasm = zellij::ensure_presence_plugin_artifact().expect("materialized presence plugin");
     let mut sidebar = sidebar_opts(&name, cwd.path(), rimz_shim.clone(), 160);
+    sidebar.workspace_id =
+        WorkspaceId::from_project_root(&cwd.path().canonicalize().expect("canonical cwd"));
     sidebar.extra_env.insert(
         "RIMZ_ZELLIJ_BIN".to_owned(),
         zellij_shim.display().to_string(),
@@ -757,6 +759,8 @@ fn tab_switch_repairs_sidebar_focus_from_attached_client_views() {
         .insert("RUST_LOG".to_owned(), "rimz=debug".to_owned());
     let backend = ZellijBackend::with_runtime_dir(xdg);
     publish_room_bin(xdg, &sidebar);
+    sidebar.runtime =
+        rimz::RuntimePaths::under(sidebar.workspace_id.clone(), xdg).expect("runtime paths");
     backend.open_sidebar(&sidebar, None).expect("open sidebar");
     wait_for_pane_count(xdg, &name, 2);
 
