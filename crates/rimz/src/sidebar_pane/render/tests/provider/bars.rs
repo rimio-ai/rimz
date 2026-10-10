@@ -5,7 +5,7 @@ use crate::sidebar_pane::render::layout::text_width;
 #[test]
 fn lapsed_provider_replaces_plan_and_bars_with_one_alarm_row() {
     let theme = Theme::fixed(true);
-    let panel = provider_panel("claude", "Claude Code", 173, true, true, Some((25, 40)));
+    let panel = provider_panel("claude", "Claude · work", 173, true, true, Some((25, 40)));
     let mut value = serde_json::to_value(panel).unwrap();
     value["entitlement"] = serde_json::json!({"lapsed":{"since_ms":1_700_000_000_000_u64}});
     value["plan"] = serde_json::Value::Null;
@@ -51,7 +51,7 @@ fn lapsed_provider_replaces_plan_and_bars_with_one_alarm_row() {
         .iter()
         .position(|line| line.contains("plan lapsed"))
         .expect("lapse row replaces bars");
-    assert!(plain[lapse].contains("no Claude Code access · since "));
+    assert!(plain[lapse].contains("no Claude access · since "));
     assert_eq!(
         plain
             .iter()
