@@ -692,7 +692,8 @@ path = "crates/rimz/src/sidebar"
 # One login's projected panel serves providers and accounts list (+1).
 # Room/own observation boundaries, shared signatures, native focus queries and retained-own receipt merging (+8).
 # The attachment's pre-paint seed reads the validated published pair without store access (+1).
-surface-budget = 238
+# Hook lifecycle records subscription rejection through the shared credits lock (+1).
+surface-budget = 239
 
 [[verdict]]
 kind = "item"

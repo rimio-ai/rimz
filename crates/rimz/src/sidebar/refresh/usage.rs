@@ -12,7 +12,9 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::RuntimePaths;
-use crate::agents::{AccountUsageIdentity, AccountUsageSnapshot, ProviderLogin, RoomLoginSet};
+use crate::agents::{
+    AccountUsageIdentity, AccountUsageSnapshot, Entitlement, ProviderLogin, RoomLoginSet,
+};
 use crate::ids::{LoginKey, WorkspaceId};
 use crate::store::snapshot::SidebarSnapshot;
 
@@ -20,11 +22,31 @@ use super::accounts::cached_account_usage_hint;
 use super::credits::{
     account_usage_claim_matches, cancel_provider_account_usage_claim, claim_idle_account_usage,
     claim_provider_account_usage, complete_provider_account_usage, merge_provider_realtime_usage,
-    renew_provider_account_usage_claim,
+    read_credits_cache, renew_provider_account_usage_claim, write_credits_cache,
 };
 use super::rate_limits::{drop_login_rate_limits, merge_account_rate_limits};
 use super::trace;
 use super::trace::{TraceEvent, duration_ms};
+
+/// Record subscription-access rejection for a login and make its next direct read due.
+pub fn mark_entitlement_lapsed(runtime: &RuntimePaths, key: &LoginKey, at_ms: u64) {
+    let _guard = match crate::disk::lock::WorkspaceLock::acquire(&runtime.shared_credits_lock()) {
+        Ok(guard) => guard,
+        Err(err) => {
+            tracing::warn!(login = %key, error = %err, "entitlement marker could not lock credits cache");
+            return;
+        }
+    };
+    let path = runtime.shared_credits_path();
+    let mut cache = read_credits_cache(&path);
+    let entry = cache.logins.entry(key.clone()).or_default();
+    if entry.entitlement == Entitlement::Ok {
+        entry.entitlement = Entitlement::Lapsed { since_ms: at_ms };
+    }
+    entry.invalidate_oauth_read();
+    cache.refreshed_at_ms = crate::utils::time::unix_now_ms();
+    write_credits_cache(&path, &cache);
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AccountUsageRefreshRequest {

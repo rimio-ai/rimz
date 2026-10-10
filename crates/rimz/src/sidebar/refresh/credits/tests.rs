@@ -89,6 +89,302 @@ fn claimed_entry(nonce: Uuid, scope: ProviderAccountScope) -> ProviderCreditsEnt
     }
 }
 
+fn with_lapse(entry: ProviderCreditsEntry, since_ms: u64) -> ProviderCreditsEntry {
+    let mut value = serde_json::to_value(entry).unwrap();
+    value["entitlement"] = serde_json::json!({"lapsed":{"since_ms":since_ms}});
+    serde_json::from_value(value).unwrap()
+}
+
+fn entitlement(entry: &ProviderCreditsEntry) -> serde_json::Value {
+    serde_json::to_value(entry).unwrap()["entitlement"].clone()
+}
+
+#[test]
+fn not_entitled_completion_keeps_first_seen_until_direct_recovery() {
+    let claim_nonce = nonce(201);
+    let owner = identity(Some(7), Some("owner"), ProviderAccountScope::KindWide);
+    let prior = claimed_entry(claim_nonce, owner.scope.clone());
+    let (mut next, _) = prior
+        .clone()
+        .complete_account_usage(
+            claim_nonce,
+            AccountUsageProbe::NotEntitled(owner.clone()),
+            500,
+        )
+        .unwrap();
+    assert_eq!(
+        entitlement(&next),
+        serde_json::json!({"lapsed":{"since_ms":500}})
+    );
+    assert!(next.auth_settled);
+    assert_eq!(next.plan, prior.plan);
+    next.direct_query_claim = prior.direct_query_claim.clone();
+    let (mut next, _) = next
+        .complete_account_usage(
+            claim_nonce,
+            AccountUsageProbe::NotEntitled(owner.clone()),
+            600,
+        )
+        .unwrap();
+    assert_eq!(
+        entitlement(&next),
+        serde_json::json!({"lapsed":{"since_ms":500}})
+    );
+    next.direct_query_claim = prior.direct_query_claim;
+    let (next, _) = next
+        .complete_account_usage(
+            claim_nonce,
+            AccountUsageProbe::Found {
+                identity: owner,
+                snapshot: AccountUsageSnapshot::default(),
+            },
+            700,
+        )
+        .unwrap();
+    assert_eq!(entitlement(&next), serde_json::json!("ok"));
+}
+
+#[test]
+fn non_authoritative_completions_preserve_lapse_but_account_change_resets_it() {
+    let claim_nonce = nonce(202);
+    let owner = identity(Some(7), Some("owner"), ProviderAccountScope::KindWide);
+    let prior = with_lapse(claimed_entry(claim_nonce, owner.scope.clone()), 100);
+    for probe in [
+        AccountUsageProbe::NoCredentials(owner.clone()),
+        AccountUsageProbe::Failed(owner),
+        AccountUsageProbe::Unsupported,
+    ] {
+        let (next, _) = prior
+            .clone()
+            .complete_account_usage(claim_nonce, probe, 500)
+            .unwrap();
+        assert_eq!(
+            entitlement(&next),
+            serde_json::json!({"lapsed":{"since_ms":100}})
+        );
+    }
+    for (probe, expected) in [
+        (
+            AccountUsageProbe::NoCredentials(identity(
+                Some(8),
+                Some("other"),
+                ProviderAccountScope::KindWide,
+            )),
+            serde_json::json!("ok"),
+        ),
+        (
+            AccountUsageProbe::NotEntitled(identity(
+                Some(8),
+                Some("other"),
+                ProviderAccountScope::KindWide,
+            )),
+            serde_json::json!({"lapsed":{"since_ms":500}}),
+        ),
+    ] {
+        let (next, completion) = prior
+            .clone()
+            .complete_account_usage(claim_nonce, probe, 500)
+            .unwrap();
+        assert!(completion.account_changed);
+        assert_eq!(entitlement(&next), expected);
+    }
+}
+
+#[test]
+fn realtime_invalidation_and_claim_writers_preserve_lapse() {
+    let (_dir, runtime) = runtime();
+    let key: LoginKey = "claude@default".parse().unwrap();
+    let path = runtime.shared_credits_path();
+    let prior = with_lapse(
+        claimed_entry(nonce(203), ProviderAccountScope::KindWide),
+        100,
+    );
+    write_credits_cache(
+        &path,
+        &CreditsCache {
+            refreshed_at_ms: 100,
+            logins: BTreeMap::from([(key.clone(), prior)]),
+        },
+    );
+    let check = || {
+        assert_eq!(
+            entitlement(&read_credits_cache(&path).logins[&key]),
+            serde_json::json!({"lapsed":{"since_ms":100}})
+        )
+    };
+    for scope in [
+        ProviderAccountScope::KindWide,
+        ProviderAccountScope::sub_provider("anthropic", "oauth"),
+    ] {
+        merge_provider_realtime_usage(
+            &runtime,
+            &key,
+            scope,
+            AccountUsageSnapshot {
+                plan: Some("max".to_owned()),
+                ..Default::default()
+            },
+        );
+        check();
+    }
+    invalidate_oauth_read(&runtime, &key);
+    check();
+    let claim_nonce = nonce(204);
+    assert_eq!(
+        claim_provider_account_usage_at(
+            &runtime,
+            &key,
+            AccountUsageIdentity::default(),
+            500,
+            claim_nonce
+        ),
+        Some(claim_nonce)
+    );
+    check();
+    assert!(renew_provider_account_usage_claim_at(
+        &runtime,
+        &key,
+        claim_nonce,
+        600
+    ));
+    check();
+    assert!(cancel_provider_account_usage_claim(
+        &runtime,
+        &key,
+        claim_nonce
+    ));
+    check();
+}
+
+#[test]
+fn credits_projection_suppresses_stale_plan_windows_and_credits_only_in_use() {
+    let key: LoginKey = "claude@default".parse().unwrap();
+    let cache = CreditsCache {
+        refreshed_at_ms: 1,
+        logins: BTreeMap::from([(
+            key,
+            with_lapse(
+                claimed_entry(nonce(205), ProviderAccountScope::KindWide),
+                100,
+            ),
+        )]),
+    };
+    let mut panel = panel("claude", true);
+    panel.plan = Some("Claude Max".to_owned());
+    panel.windows = vec![crate::agents::RateLimitWindow {
+        used_percentage: Some(7),
+        ..Default::default()
+    }];
+    let (_dir, runtime) = runtime();
+    let mut snapshot = crate::sidebar::test_support::snapshot_with_panels(
+        runtime.workspace_id.clone(),
+        vec![panel.clone()],
+    );
+    apply_credits_cache_with(
+        &mut snapshot,
+        &cache,
+        &AccountsConfig::default(),
+        &RoomLoginSet::native(),
+        u64::MAX,
+    );
+    let projected = &snapshot.providers[0];
+    assert_eq!(projected.plan, None);
+    assert!(projected.windows.is_empty());
+    assert_eq!(projected.extra_credits, None);
+    assert_eq!(projected.reset_credits, None);
+    assert_eq!(
+        serde_json::to_value(projected).unwrap()["entitlement"],
+        serde_json::json!({"lapsed":{"since_ms":100}})
+    );
+    snapshot.providers[0] = panel.clone();
+    apply_credits_cache_with(
+        &mut snapshot,
+        &cache,
+        &AccountsConfig::default(),
+        &RoomLoginSet::new(None, None, BTreeMap::new()),
+        u64::MAX,
+    );
+    assert_eq!(snapshot.providers[0].plan, panel.plan);
+    assert_eq!(snapshot.providers[0].windows, panel.windows);
+}
+
+#[test]
+fn unmetered_projection_ignores_cached_entitlement_and_keeps_api_spend() {
+    let key: LoginKey = "claude@default".parse().unwrap();
+    let cache = CreditsCache {
+        logins: BTreeMap::from([(
+            key,
+            with_lapse(
+                claimed_entry(nonce(207), ProviderAccountScope::KindWide),
+                100,
+            ),
+        )]),
+        ..Default::default()
+    };
+    let mut panel = panel("claude", false);
+    panel.entitlement = Entitlement::Lapsed { since_ms: 100 };
+    panel.plan = Some("Claude API".to_owned());
+    let (_dir, runtime) = runtime();
+    let mut snapshot = crate::sidebar::test_support::snapshot_with_panels(
+        runtime.workspace_id.clone(),
+        vec![panel.clone()],
+    );
+    let mut accounts = AccountsConfig::default();
+    accounts.usage_limit_usd.insert(
+        "claude".to_owned(),
+        crate::config::UsageLimitUsd::from_usd(25.0),
+    );
+    apply_credits_cache_with(
+        &mut snapshot,
+        &cache,
+        &accounts,
+        &RoomLoginSet::native(),
+        u64::MAX,
+    );
+    let projected = &snapshot.providers[0];
+    assert_eq!(projected.entitlement, Entitlement::Ok);
+    assert!(!projected.metered);
+    assert_eq!(projected.plan, panel.plan);
+    assert_eq!(projected.spending, panel.spending);
+    assert_eq!(
+        projected.extra_credits,
+        Some(ExtraCredits::known(Some(12.5), None, Some(25.0)))
+    );
+}
+
+#[test]
+fn non_found_completion_preserves_identityless_turn_death_lapse() {
+    let owner = identity(Some(7), Some("owner"), ProviderAccountScope::KindWide);
+    for probe in [
+        AccountUsageProbe::Failed(owner.clone()),
+        AccountUsageProbe::NoCredentials(owner.clone()),
+    ] {
+        let (_dir, runtime) = runtime();
+        let key: LoginKey = "claude@work".parse().unwrap();
+        super::super::usage::mark_entitlement_lapsed(&runtime, &key, 100);
+        let claim_nonce = nonce(208);
+        assert_eq!(
+            claim_provider_account_usage_at(&runtime, &key, owner.clone(), 200, claim_nonce),
+            Some(claim_nonce)
+        );
+        assert!(complete_provider_account_usage(&runtime, &key, claim_nonce, probe).is_some());
+        let cache = read_credits_cache(&runtime.shared_credits_path());
+        assert_eq!(
+            cache.logins[&key].entitlement,
+            Entitlement::Lapsed { since_ms: 100 }
+        );
+    }
+}
+
+#[test]
+fn old_credits_json_defaults_entitlement_to_ok() {
+    let mut value =
+        serde_json::to_value(claimed_entry(nonce(206), ProviderAccountScope::KindWide)).unwrap();
+    value.as_object_mut().unwrap().remove("entitlement");
+    let entry: ProviderCreditsEntry = serde_json::from_value(value).unwrap();
+    assert_eq!(entitlement(&entry), serde_json::json!("ok"));
+}
+
 #[test]
 fn no_credentials_completion_preserves_same_account_display_and_settles_auth() {
     let claim_nonce = nonce(41);
@@ -198,6 +494,7 @@ fn panel(kind: &str, metered: bool) -> SidebarProviderPanel {
         account: Default::default(),
         kind: kind.to_owned(),
         account_scope: Default::default(),
+        entitlement: Default::default(),
         account_key: None,
         product_name: kind.to_owned(),
         art: Vec::new(),

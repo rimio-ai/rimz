@@ -43,6 +43,7 @@ fn provider(
         account: Default::default(),
         kind: kind.to_owned(),
         account_scope: Default::default(),
+        entitlement: Default::default(),
         account_key: None,
         product_name: kind.to_owned(),
         art: Vec::new(),

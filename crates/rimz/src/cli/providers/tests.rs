@@ -28,6 +28,7 @@ fn panel(kind: &str) -> SidebarProviderPanel {
         account: Default::default(),
         kind: kind.to_owned(),
         account_scope: ProviderAccountScope::KindWide,
+        entitlement: Default::default(),
         account_key: None,
         product_name: rimz::agents::spec_by_kind(kind)
             .unwrap()
