@@ -65,6 +65,7 @@ pub(in crate::store) fn read_rows(path: &Path, start: u64) -> Result<Vec<(u64, b
         offset += read as u64;
     }
     testkit::count_bytes_read(offset - start);
+    testkit::count_path_bytes_read(path, offset - start);
     Ok(rows)
 }
 

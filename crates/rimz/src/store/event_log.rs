@@ -184,13 +184,15 @@ pub(super) fn visit_records_through_offset<T: DeserializeOwned>(
     let mut reader = BufReader::new(file.take(through.saturating_sub(start)));
     let mut bytes = Vec::new();
     let mut end = start;
-    loop {
+    let mut scanned = 0;
+    let mut scan = || loop {
         bytes.clear();
         let read = reader.read_until(b'\n', &mut bytes).map_err(io_error)?;
         if read == 0 {
             return Ok(end);
         }
         testkit::count_bytes_read(read as u64);
+        scanned += read as u64;
         let terminated = bytes.last() == Some(&b'\n');
         if terminated {
             bytes.pop();
@@ -210,7 +212,10 @@ pub(super) fn visit_records_through_offset<T: DeserializeOwned>(
             }
             Err(err) => return Err(err),
         }
-    }
+    };
+    let scanned_through = scan();
+    testkit::count_path_bytes_read(path, scanned);
+    scanned_through
 }
 
 /// Always-on observability seam: bytes the row scan actually read, so the
@@ -220,6 +225,9 @@ pub(super) fn visit_records_through_offset<T: DeserializeOwned>(
 /// [`crate::sidebar::meter`].
 #[doc(hidden)]
 pub mod testkit {
+    use std::path::Path;
+    #[cfg(feature = "testkit")]
+    use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static BYTES_READ: AtomicU64 = AtomicU64::new(0);
@@ -242,6 +250,38 @@ pub mod testkit {
 
     pub(super) fn count_bytes_written(n: u64) {
         BYTES_WRITTEN.fetch_add(n, Ordering::Relaxed);
+    }
+
+    #[cfg(feature = "testkit")]
+    static PATH_BYTES_READ: std::sync::Mutex<std::collections::BTreeMap<PathBuf, u64>> =
+        std::sync::Mutex::new(std::collections::BTreeMap::new());
+
+    /// Event-log bytes scanned since process start from files under `dir`,
+    /// charged in the same amounts as [`bytes_read`].
+    #[cfg(feature = "testkit")]
+    pub fn bytes_read_under(dir: &Path) -> u64 {
+        PATH_BYTES_READ
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .filter(|(path, _)| path.starts_with(dir))
+            .map(|(_, n)| n)
+            .sum()
+    }
+
+    /// Charged once per scan call, off the row loop, so the per-row path
+    /// pays nothing for the per-path tally.
+    pub(super) fn count_path_bytes_read(path: &Path, n: u64) {
+        #[cfg(feature = "testkit")]
+        if n > 0 {
+            *PATH_BYTES_READ
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .entry(path.to_path_buf())
+                .or_default() += n;
+        }
+        #[cfg(not(feature = "testkit"))]
+        let _ = (path, n);
     }
 }
 
