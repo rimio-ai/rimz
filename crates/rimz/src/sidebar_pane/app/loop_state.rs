@@ -32,7 +32,7 @@ use crate::{MuxName, RuntimePaths};
 
 use jiff::Timestamp;
 use ratatui::Terminal;
-use tracing::{debug, warn};
+use tracing::{debug, trace, warn};
 
 use super::backend::PaneBackend;
 use super::fetch::{
@@ -629,6 +629,10 @@ impl LoopState {
                 generation,
                 clients,
             } => {
+                if self.config.own_pane.as_ref() != Some(&pane_id) {
+                    trace!(pane = %pane_id, own_pane = ?self.config.own_pane, generation, "sidebar ignored foreign strand");
+                    return LoopFlow::Continue;
+                }
                 let repair = PendingFocusRepair {
                     pane_id,
                     generation,
@@ -728,6 +732,7 @@ impl LoopState {
         }
         debug!(
             pane = %repair.pane_id,
+            own_pane = ?own_pane,
             generation = repair.generation,
             evidence = ?repair.clients,
             own_view = ?self.current.own_view,

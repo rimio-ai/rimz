@@ -13,6 +13,16 @@ use crate::pane::ClientPaneView;
 const NAME: &str = "focus-repairs.log.jsonl";
 const MAX_BYTES: u64 = 4 * 1_048_576;
 
+#[cfg(test)]
+thread_local! {
+    static APPENDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn take_appends() -> usize {
+    APPENDS.with(|appends| appends.replace(0))
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FocusRepairRecord {
     pub at: Timestamp,
@@ -49,6 +59,8 @@ fn append_to(state_root: &Path, record: &FocusRepairRecord) {
 /// Hand focus-repair evidence to a detached CLI writer so the renderer stays
 /// read-only on user-global diagnostic history.
 pub(crate) fn spawn_append(runtime: &RuntimePaths, record: &FocusRepairRecord) {
+    #[cfg(test)]
+    APPENDS.with(|appends| appends.set(appends.get() + 1));
     let Ok(record_json) = serde_json::to_string(record) else {
         tracing::debug!("sidebar: failed to serialize focus-repair diagnostic");
         return;
