@@ -1,19 +1,14 @@
-//! Worker reload requests (`rimz reload` or the `r` keypress).
+//! Attachment reload requests (`rimz reload` or the `r` keypress).
 //!
-//! Resolve the digest-verified workspace target, compare it to the running
-//! worker image, and hand control back to the supervisor only when the build
-//! changed. The supervisor owns worker-first promotion and its own later exec.
+//! Resolve the digest-verified workspace target, compare it to the running host image, and request a host drain only when the build changed. The supervisor owns host-first promotion and its own later exec.
 
 use std::io;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-/// What a reload (`rimz reload` or the `r` keypress) does this tick: request a
-/// worker handoff onto a changed on-disk binary, refetch when it is
-/// byte-identical, or keep serving when nothing usable is on disk.
+/// What a reload (`rimz reload` or the `r` keypress) does this tick: request a host drain onto a changed on-disk binary, refetch when it is byte-identical, or keep serving when nothing usable is on disk.
 pub(super) enum ReloadAction {
-    /// The on-disk binary differs from the running image — the worker exits so
-    /// the supervisor can spawn the target while keeping the pane PID.
+    /// The on-disk binary differs from the running image: the attachment asks the host to drain so supervisors can start the target with pane PIDs kept.
     Reexec(PathBuf),
     /// The on-disk binary is byte-identical to the running image — skip the
     /// re-exec churn and refetch in place instead.

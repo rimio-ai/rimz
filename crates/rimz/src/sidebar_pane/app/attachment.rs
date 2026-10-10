@@ -1,6 +1,6 @@
 //! One sidebar pane's renderer: its wakeup socket, heartbeat, loop state, and frame loop over the pane's own output.
 //!
-//! The fallback worker runs one attachment over its stdout; the room host runs one per pane it was handed. Neither path reads the process terminal here: geometry comes from the [`PaneBackend`], input and resize words from the wakeup socket.
+//! The room host runs one attachment per pane it was handed. Nothing here reads the process terminal: geometry comes from the [`PaneBackend`], input and resize words from the supervisor through the wakeup socket.
 
 use std::io::Write;
 use std::os::unix::net::UnixDatagram;

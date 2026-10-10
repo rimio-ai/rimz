@@ -57,8 +57,7 @@ pub fn wake_store_delta(
     Ok(())
 }
 
-/// Tell every fresh sidebar to re-exec its own binary. Reload uses the bare
-/// control word so it reaches renderers whose typed-event schema is older.
+/// Nudge every fresh sidebar to observe the durable build target. The host drains attachments on a changed build; supervisors own their later exec. Reload uses the bare control word to reach older typed-event schemas.
 pub fn reload_all(rt: &RuntimePaths) -> std::result::Result<usize, WakeupErr> {
     let sidebars = collect_fresh_sidebars(rt)?;
     let signaled = sidebars.len();

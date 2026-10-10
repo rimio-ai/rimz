@@ -73,7 +73,7 @@ The emitter is the triage pointer. Producer kinds describe pane-source truth, re
 | `group_migration` | `sidebar_pane::app::state` (elder only) | A pane whose group changed between committed snapshots, with cwd before and after |
 | `renderer_panic`, `renderer_exit` | `sidebar_pane::app`; `renderer_exit` also `sidebar_pane::supervise` | Panics that would otherwise vanish with the pane; self-close and give-up exits with their cause |
 | `sidebar_width_intent`, `sidebar_width_nudge`, `sidebar_width_settle` | `sidebar_pane::app::width_control` | Intent verdicts, controller nudges, learned feedback, and terminal outcomes for `a`/`d` width control |
-| `renderer_signal_death`, `renderer_orphan_reaped`, `supervisor_convergence`, `supervisor_preflight_rejected`, `self_close_rejected` | `sidebar_pane::supervise` | A signal or non-panic worker exit with its stderr tail; a worker reaped after fresh mux listings omit its pane; a re-exec onto a target build, or a preflight that refused one with its reason; a declined self-close with the sibling count |
+| `sidebar_host_unavailable`, `supervisor_pane_gone`, `supervisor_convergence`, `supervisor_preflight_rejected`, `self_close_rejected`, `renderer_exit` | `sidebar_pane::supervise` | A failed host round with its cause and retry delay; a watchdog-confirmed missing pane; a stable target about to be preflighted, or a preflight that refused one with its reason; a declined self-close with the sibling count; a confirmed self-close |
 | `work_pane_boundary_moved` | `sidebar::presence` (Zellij), `sidebar::presence::tmux` | Before and after horizontal geometry for a stable work-pane set whose view and sidebar widths did not change |
 | `topology_writer_changed`, `topology_write_rejected` | `sidebar::presence` | Zellij topology writer generation flips and rejected stale writers, with plugin id, loaded-at generation, accepted writer, and reject count |
 | `tick_budget_breach` | `sidebar::meter` | Sustained over-budget producer ticks: last and worst wall time, mux wait, fold bytes, spawns, declared budgets, streak length, episode `since_ms`, and recovery ([performance.md](./performance.md#the-tick-budget)) |
@@ -91,6 +91,12 @@ The emitter is the triage pointer. Producer kinds describe pane-source truth, re
 
 The schema also keeps `fetch_fold_stats`, which no current code path emits; Doctor still reads retained records of it as expected.
 
+The host-only supervisor no longer records child-renderer signal deaths or child-renderer orphan reaps. Its replacement kinds have new tags rather than repurposing the old shapes (`crates/rimz/src/diag/record.rs::DiagEvent`):
+
+- `sidebar_host_unavailable` is `warn`: `cause` is `start_failed`, `no_answer`, `rejected`, `reply_unreadable`, or `lost`; `reason` is the raw rejection text, the start error/log suffix, or empty for the fixed-message causes. `attached_ms` is present only for a lost accepted attachment, measured before detach cleanup; `retry_ms` is the delay about to be slept. Each failed round emits through the identity-rate-limited sink ([notice and retry](./sidebar/state.md#host-unavailable)).
+- `supervisor_pane_gone` is `warn` and carries `pane_id` when the watchdog confirms the pane is gone and supervision ends.
+- `supervisor_convergence` carries `target_build` before preflight, not proof that exec succeeded; a refusal follows as `supervisor_preflight_rejected`.
+
 The carry kinds attribute a pane-source fault precisely, and the distinction matters when reading a log:
 
 - `pane_carry_forward` marks a mux omission that survived a forced direct re-pull while process liveness proved the omitted panes alive. The source under-reported, the producer carried the panes, and the frame pair is captured.
@@ -106,8 +112,8 @@ Severity follows the event, and for a few kinds the event's own fields. `DiagEve
 
 | Severity | Events |
 | --- | --- |
-| `error` | `renderer_panic`, `renderer_signal_death`, `ghost_session_bind` |
-| `warn` | `frame_rejected`, `pane_count_drop`, `pane_carry_forward`, `carry_forward_expired`, `duplicate_pane_id`, `foreign_session_pane`, `row_conflict`, `live_roster_held`, `gate_hold`, `fetch_failure`, `frame_anomaly`, `tool_loop_escalated`, `topology_write_rejected`, `renderer_orphan_reaped`, `sidebar_orphan_reaped`, `subagent_orphan_reaped`, `subagent_orphan_repair_failed`, `pane_cache_divergence`, `supervisor_preflight_rejected`, `self_close_rejected`, `provider_startup_exit` |
+| `error` | `renderer_panic`, `ghost_session_bind` |
+| `warn` | `frame_rejected`, `pane_count_drop`, `pane_carry_forward`, `carry_forward_expired`, `duplicate_pane_id`, `foreign_session_pane`, `row_conflict`, `live_roster_held`, `gate_hold`, `fetch_failure`, `frame_anomaly`, `tool_loop_escalated`, `topology_write_rejected`, `sidebar_host_unavailable`, `supervisor_pane_gone`, `sidebar_orphan_reaped`, `subagent_orphan_reaped`, `subagent_orphan_repair_failed`, `pane_cache_divergence`, `supervisor_preflight_rejected`, `self_close_rejected`, `provider_startup_exit` |
 | `warn` while active, `info` on recovery | `health_alert`, `link_alert`, `tick_budget_breach` (recovery sets `recovered_after_ms`) |
 | `info` on cached resolution, `warn` on baked fallback | `model_catalog_refresh_failed`: `cached_catalog` resolved the alias; `baked` used only the compiled-in id |
 | depends on a field | `client_reaped`: `warn` unless `settled`. `hosted_carry_dropped`: `warn` for `start_regressed` and `foreground_kind_mismatch`. `renderer_exit`: `warn` for `degraded_gave_up`. Each is `info` otherwise |
@@ -251,7 +257,7 @@ $ jq -r '.event.kind' "$DIAG" | sort | uniq -c | sort -rn | head
 jq -r '[(.at_ms|tostring), .severity, .event.kind, (.instance_id // "-")] | join(" ")' "$DIAG"  # episode timeline
 jq 'select(.at_ms > 1781070540000 and .at_ms < 1781070550000)' "$DIAG"                          # window slice
 jq 'select(.event.kind == "frame_anomaly") | .event.anomaly' "$DIAG"                            # observer evidence
-jq 'select(.event.kind == "renderer_signal_death") | .event.stderr_excerpt' "$DIAG"             # crash tail
+jq 'select(.event.kind == "sidebar_host_unavailable") | .event' "$DIAG"                        # host retry
 jq 'select(.event.kind == "renderer_exit") | .event.cause' "$DIAG"                              # exit cause
 ```
 
@@ -312,7 +318,7 @@ Off-box error reporting sends RimZ's warnings, errors, and panics to a Sentry pr
 
 The code compiles only under the dev-only `sentry` cargo feature. A shipped binary omits it and ignores any `[sentry]` config. Without the feature, [`observability`](../../crates/rimz/src/observability.rs) is a no-op with the same surface, so `main.rs` and the CLI dispatch are identical in both builds; with it, [`observability/reporting.rs`](../../crates/rimz/src/observability/reporting.rs) is the live implementation.
 
-An opted-in build reports the `warn!` and `error!` events RimZ raises, the panics it hits, sidebar render-worker signal deaths the supervisor observes, and the agent conditions it observes (rate limits, spend limits, provider overload, and other turn-ending API failures) at warning level.
+An opted-in build reports the `warn!` and `error!` events RimZ raises, the panics it hits, and the agent conditions it observes (rate limits, spend limits, provider overload, and other turn-ending API failures) at warning level.
 
 ### Opting in
 
@@ -340,7 +346,7 @@ Breadcrumbs work by allowlist. Each deliberate seed is an `info!` on the `rimz::
 
 Agent-generated conditions ride the same path. When `merge_turn_error_marker` in [`transcript.rs`](../../crates/rimz/src/cli/hooks/lifecycle/transcript.rs) reports that a fresh turn-error marker changed state, the hook lifecycle emits one `warn!` on `rimz::agent::turn_error` with the agent kind and the [`TurnErrorClass`](../../crates/rimz/src/agents/context.rs). Gating on the transition keeps it to one event per condition rather than one per poll.
 
-The sidebar crash path uses the bridge too. A render panic records `renderer_panic` locally and reaches Sentry through its panic integration from inside the worker. A signal or abort death makes the supervisor write `renderer_signal_death` locally and emit one `error!` on `rimz::sidebar::crash` with the `sidebar.render_crash` operation tag, the signal or exit code, and the worker stderr tail ([`supervise.rs`](../../crates/rimz/src/sidebar_pane/supervise.rs)). Without the feature the supervisor still writes the local record and sends nothing.
+The host's render panic hook records `renderer_panic` locally and reaches Sentry through its panic integration. A lost attachment is not proof of a host-process crash: its supervisor writes the local `sidebar_host_unavailable` record with cause `lost`, shows the retry notice, and sends no separate Sentry crash event ([`supervise.rs`](../../crates/rimz/src/sidebar_pane/supervise.rs)).
 
 `before_send` shapes every bridge event from its tracing target before it leaves the box:
 

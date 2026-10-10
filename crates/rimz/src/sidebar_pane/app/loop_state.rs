@@ -1443,9 +1443,7 @@ impl LoopState {
     }
 
     fn exit_verdict(&mut self, rejected: bool) -> ApplyOutcome {
-        // A renderer degraded this long is non-functional. Ask the pane-resident
-        // supervisor to respawn the worker in place; the pane remains stable
-        // while a transient mux/store outage clears.
+        // A renderer degraded this long is non-functional. Close the attachment so the supervisor reattaches in place while the mux/store outage clears.
         if degraded_too_long(&self.health, Timestamp::now()) {
             warn!(
                 target: SIDEBAR_HEALTH_TARGET,
@@ -2088,12 +2086,7 @@ fn spawn_pane_focus(
     });
 }
 
-/// Resolve a reload request — the `r` keypress and the typed `Reload` event
-/// share this. `true` means a differing on-disk binary: the caller exits with
-/// the supervisor reload code so the pane command converges onto the new
-/// binary. A byte-identical or missing binary skips reload but still honours
-/// the intent with an immediate producing refetch, so a reload always pulls
-/// live data and un-sticks a tab whose producer has stalled.
+/// Resolve a reload request: the `r` keypress and the typed `Reload` event share this. `true` means a differing on-disk binary: the attachment ends with a reload request so the host drains and supervisors start the new build. A byte-identical or missing binary skips reload but still honours the intent with an immediate producing refetch, so a reload always pulls live data and un-sticks a tab whose producer has stalled.
 fn reload_or_refetch(
     workspace_id: &crate::ids::WorkspaceId,
     session_name: &str,

@@ -20,6 +20,8 @@ RimZ does act on agents from behind the column, in one place for its configured 
 
 A card exists because a pane runs right now, so when the agent exits its card goes with it. The history stays in the store, behind `rimz agents show`, `rimz agents logs`, and [`rimz transcript`](../reference/cli/agents.md).
 
+If the sidebar cannot paint, the column shows the reason and a retry delay instead of incomplete cards. It retries automatically without closing your work panes. If the notice names a log file, read it for the startup error.
+
 ## The layout
 
 Top to bottom, the column stacks three zones plus pinned chrome:

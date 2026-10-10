@@ -23,8 +23,7 @@ struct GalleryState {
     _pixel_lease: Option<PixelLease>,
 }
 
-/// Demo painters lease like live workers, so a demo never sweeps a live
-/// sidebar's slot on a shared terminal surface.
+/// Demo painters lease like live attachments, so a demo never sweeps a live sidebar's slot on a shared terminal surface.
 fn lease_demo_slot(runtime: &RuntimePaths) -> Option<PixelLease> {
     PixelLease::acquire(runtime).ok().flatten()
 }

@@ -385,7 +385,7 @@ allowed-dependencies = [
 # Daily machine GC shares its stamp and election-lock paths with the harness.
 # StatePaths::remove_root and RuntimePaths::remove_root let room replacement remove both whole trees.
 # Checked executable copying shares the durable publication funnel.
-# Sidebar workers lease account-global pixel slots through one classed lock accessor.
+# Sidebar attachments lease account-global pixel slots through one classed lock accessor.
 # Assist logging exposes the checked rotating append for launch-time warnings (+1).
 # The trunk signal lane owns a separate classed runtime cache path.
 # A named account's home is linked under one machine-wide lock path (+1).
