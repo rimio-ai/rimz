@@ -102,6 +102,7 @@ impl From<RawListedPane> for PaneTopologyPane {
             is_suppressed: pane.is_suppressed,
             is_floating: pane.is_floating,
             tab_position: pane.tab_position.or(pane.tab_id).unwrap_or_default(),
+            tab_viewed: false,
             stable_tab_id: pane.tab_id,
             tab_name: pane.tab_name,
             pane_columns: pane.pane_columns,
@@ -157,14 +158,17 @@ fn merge_topology_enrichment(cache: &mut PaneTopologyCache, prior: PaneTopologyC
                     pane.pane_pid,
                     pane.pane_columns,
                     pane.pane_x,
+                    pane.tab_viewed,
                 ),
             )
         })
         .collect::<HashMap<_, _>>();
     for pane in &mut cache.panes {
-        let Some((command, cwd, pid, columns, x)) = enrichment.get(&pane.native_id()) else {
+        let Some((command, cwd, pid, columns, x, tab_viewed)) = enrichment.get(&pane.native_id())
+        else {
             continue;
         };
+        pane.tab_viewed |= *tab_viewed;
         if pane.pane_command.is_none() {
             pane.pane_command.clone_from(command);
         }
@@ -2269,5 +2273,36 @@ pub(super) fn execute_focus_restoration(
         Ok(())
     } else {
         Err(crate::mux::focus_anchor::FocusActionError::Superseded)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn native_listing_preserves_tab_viewed_by_native_identity() {
+        let cache = |panes| {
+            serde_json::from_value(serde_json::json!({
+                "session_name": "room", "produced_at_ms": 42, "panes": panes
+            }))
+            .unwrap()
+        };
+        let mut listed = cache(serde_json::json!([
+            {"id": 1, "tab_position": 0},
+            {"id": 2, "tab_position": 0, "tab_viewed": true},
+            {"id": 3, "tab_position": 0},
+            {"id": 1, "is_plugin": true, "tab_position": 0}
+        ]));
+        let prior = cache(serde_json::json!([
+            {"id": 1, "tab_position": 0, "tab_viewed": true},
+            {"id": 2, "tab_position": 0, "tab_viewed": false}
+        ]));
+        merge_topology_enrichment(&mut listed, prior);
+        let encoded = serde_json::to_value(listed).unwrap();
+        assert_eq!(encoded["panes"][0]["tab_viewed"], true);
+        assert_eq!(encoded["panes"][1]["tab_viewed"], true);
+        assert!(encoded["panes"][2].get("tab_viewed").is_none());
+        assert!(encoded["panes"][3].get("tab_viewed").is_none());
     }
 }

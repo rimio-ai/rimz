@@ -271,6 +271,8 @@ pub struct PaneTopologyPane {
     pub is_floating: bool,
     #[serde(alias = "tab_id")]
     pub tab_position: u64,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub tab_viewed: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stable_tab_id: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -531,6 +533,7 @@ mod tests {
             is_suppressed: false,
             is_floating: false,
             tab_position,
+            tab_viewed: false,
             stable_tab_id: None,
             tab_name: None,
             pane_columns: None,
@@ -618,7 +621,18 @@ mod tests {
                     ("/clients", None),
                     ("/panes/0/pane_pid", None),
                     ("/panes/0/pane_cwd", None),
+                    ("/panes/0/tab_viewed", None),
                 ],
+            ),
+            (
+                "a viewed tab round-trips",
+                r#"{"session_name":"rimz-test","produced_at_ms":42,"panes":[{"id":7,"tab_position":0,"tab_viewed":true}]}"#,
+                &[("/panes/0/tab_viewed", Some(json!(true)))],
+            ),
+            (
+                "an unviewed tab omits the field",
+                r#"{"session_name":"rimz-test","produced_at_ms":42,"panes":[{"id":7,"tab_position":0,"tab_viewed":false}]}"#,
+                &[("/panes/0/tab_viewed", None)],
             ),
             (
                 "the focused pane round-trips",

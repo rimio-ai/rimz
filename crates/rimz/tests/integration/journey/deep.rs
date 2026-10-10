@@ -3861,6 +3861,10 @@ fn write_zellij_topology(
             .expect("startup fixture needs a tiled pane");
         panes.retain(|pane| !pane.is_plugin && pane.id == sidebar_id);
         assert_eq!(panes.len(), 1, "startup fixture needs one sidebar pane");
+    } else {
+        for pane in &mut panes {
+            pane.tab_viewed = true;
+        }
     }
     let cache = rimz::mux::zellij::pane_topology::PaneTopologyCache {
         session_name: session.to_owned(),

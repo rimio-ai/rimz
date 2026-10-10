@@ -537,6 +537,7 @@ pub struct Engine {
     room: RoomState,
     last_raw_stable_hash: Option<u64>,
     tab_names: BTreeMap<usize, String>,
+    viewed_tabs: BTreeSet<u64>,
     focus: FocusSync,
     granted: bool,
     pending_pregrant_change: bool,
@@ -557,6 +558,7 @@ impl Engine {
             room: RoomState::default(),
             last_raw_stable_hash: None,
             tab_names: BTreeMap::new(),
+            viewed_tabs: BTreeSet::new(),
             focus: FocusSync::default(),
             granted: false,
             pending_pregrant_change: false,
@@ -643,6 +645,7 @@ impl Engine {
         active: Option<usize>,
         tab_names: BTreeMap<usize, String>,
         tab_ids: &BTreeMap<usize, u64>,
+        other_viewed_tabs: &BTreeSet<u64>,
         now: u64,
         host: &impl Host,
     ) -> Vec<Effect> {
@@ -652,6 +655,13 @@ impl Engine {
         let mut effects = Vec::new();
         self.mark_granted(now, host, &mut effects);
         self.tab_names = tab_names;
+        let prior_viewed = self.viewed_tabs.clone();
+        self.viewed_tabs
+            .retain(|id| tab_ids.values().any(|tab_id| tab_id == id));
+        self.viewed_tabs.extend(other_viewed_tabs);
+        if let Some(id) = active.and_then(|position| tab_ids.get(&position)) {
+            self.viewed_tabs.insert(*id);
+        }
         let mut identity_changed = false;
         for pane in self
             .room
@@ -665,7 +675,7 @@ impl Engine {
                 identity_changed = true;
             }
         }
-        if identity_changed {
+        if identity_changed || self.viewed_tabs != prior_viewed {
             self.signal_change(now);
         }
         self.focus.accept_tab_update(active, now);
@@ -761,6 +771,10 @@ impl Engine {
         let mut effects = Vec::new();
         self.mark_granted(now, host, &mut effects);
         self.focus.accept_connected_clients(connected_clients);
+        if connected_clients == Some(0) && !self.viewed_tabs.is_empty() {
+            self.viewed_tabs.clear();
+            self.signal_change(now);
+        }
         self.finish_update(now, host, effects)
     }
 
@@ -1018,7 +1032,12 @@ impl Engine {
                 build: self.config.plugin_build.clone(),
                 config: self.config.plugin_config.clone(),
             });
-        let panes = self.room.published_panes();
+        let mut panes = self.room.published_panes();
+        for pane in &mut panes {
+            pane.tab_viewed = pane
+                .stable_tab_id
+                .is_some_and(|id| self.viewed_tabs.contains(&id));
+        }
         let topology = wire::topology_json(
             self.config.session_name.as_deref(),
             now,

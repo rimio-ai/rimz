@@ -22,6 +22,7 @@ fn pane(id: u32) -> PaneFields {
         exited: false,
         is_held: false,
         tab_position: 0,
+        tab_viewed: false,
         stable_tab_id: Some(0),
         tab_name: Some("main".to_owned()),
         pane_x: Some(0),

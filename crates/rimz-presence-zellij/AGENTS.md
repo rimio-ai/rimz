@@ -15,4 +15,5 @@ Local contract for `crates/rimz-presence-zellij/` — the headless wasm bridge b
 
 - `main.rs` projects Zellij types and executes effects; host-testable decisions stay in `engine.rs`, `policy.rs`, and `wire.rs`.
 - Keep one canonical pane map. Reducers retain partial manifests, patch event enrichment in place, and publish panes in deterministic tab/key order.
+- Publish the viewed-tab observation as `panes[].tab_viewed`, true only, uniformly across each tab's panes. Latch stable tab ids from `active` or `other_focused_clients`, prune ids absent from `TabUpdate`, and clear all on a current-session zero-client `SessionUpdate`. Every latch change schedules a publish even without a changed manifest. The clear excludes the transient detached-birth viewer; the host owns viewport proof and width policy.
 - Treat host forks as fire-and-forget facts. Hook stdout and plugin command results remain protocol channels; diagnostics stay off them.

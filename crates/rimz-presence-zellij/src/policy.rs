@@ -44,6 +44,8 @@ pub struct PaneFields {
     pub exited: bool,
     pub is_held: bool,
     pub tab_position: u64,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub tab_viewed: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stable_tab_id: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -176,6 +178,7 @@ impl PaneFields {
             exited: stable.exited,
             is_held: stable.is_held,
             tab_position: stable.tab_position,
+            tab_viewed: false,
             stable_tab_id: stable.stable_tab_id,
             tab_name: stable.tab_name.map(str::to_owned),
             pane_x: stable.pane_x,
