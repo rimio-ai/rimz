@@ -1242,6 +1242,7 @@ impl MuxBackend for ZellijBackend {
             .zellij_action(&session)
             .arg("list-clients")
             .run_with_timeout(timeout)?;
+        tracing::debug!(session = %session, stdout = ?String::from_utf8_lossy(&output.stdout), "zellij list-clients sample");
         Ok(parse_client_view(&output.stdout))
     }
 

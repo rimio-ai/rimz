@@ -138,7 +138,7 @@ pub enum FocusActionError {
     #[error("sampling attached clients before focus: {0}")]
     ClientSample(#[source] crate::mux::MuxErr),
     #[error("attached-client focus changed before repair dispatch")]
-    PreObservationChanged,
+    PreObservationChanged { observed: Vec<ClientPaneView> },
     #[error("serializing focus action intent: {0}")]
     Lock(#[from] crate::disk::lock::LockErr),
     #[error("writing focus action intent: {0}")]
@@ -249,7 +249,9 @@ fn request_action_with_client_sample(
         let mut expected = expected.to_vec();
         normalize_views(&mut expected);
         if pre_action != expected {
-            return Err(FocusActionError::PreObservationChanged);
+            return Err(FocusActionError::PreObservationChanged {
+                observed: pre_action,
+            });
         }
     }
     let nonce = FocusNonce::new();
@@ -651,6 +653,34 @@ mod tests {
             load(&runtime).expect("stored anchor").state,
             FocusIntentState::Requested
         );
+    }
+
+    #[test]
+    fn repair_fence_returns_the_observed_sample_without_replacing_an_intent() {
+        let (_dir, runtime) = runtime();
+        let prior = anchor(1_000);
+        store(&runtime, &prior).expect("prior intent");
+        let stranded = PaneId::from_parts(MuxName::Zellij, "terminal_0");
+        let moved = PaneId::from_parts(MuxName::Zellij, "terminal_3");
+        let expected = vec![view(1, &stranded)];
+        let observed = vec![view(1, &moved)];
+        let result = request_action_with_client_sample(
+            &runtime,
+            "rimz-test",
+            FocusActionRequest {
+                pane_id: PaneId::from_parts(MuxName::Zellij, "terminal_2"),
+                origin: FocusOrigin::AutomaticRepair,
+                repair_generation: Some(3),
+                expected_pre_action: Some(&expected),
+                offset: 0,
+                order: None,
+            },
+            || Ok(observed.clone()),
+        );
+        assert!(
+            matches!(result, Err(FocusActionError::PreObservationChanged { observed: sample }) if sample == observed)
+        );
+        assert_eq!(load(&runtime), Some(prior));
     }
 
     #[test]
