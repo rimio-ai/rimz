@@ -149,6 +149,7 @@ pub(crate) enum RolloutKind<'a> {
     SessionMeta(CodexSessionMetaPayload<'a>),
     TurnContext(CodexTurnContext<'a>),
     TokenCount(CodexTokenCount<'a>),
+    TokenUsageRecord(Option<CodexRawUsage>),
     UserMessage,
     AgentMessage,
     TaskStarted,
@@ -156,6 +157,8 @@ pub(crate) enum RolloutKind<'a> {
     TaskComplete(CodexTaskComplete<'a>),
     ItemCompleted(CodexItemCompleted<'a>),
     ToolCall(Cow<'a, str>),
+    ModelItem,
+    InputItem,
     Other,
 }
 
@@ -266,6 +269,15 @@ pub(crate) fn decode_line(line: &[u8]) -> Option<RolloutRecord<'_>> {
             })
         }
         "event_msg" => decode_event(timestamp, envelope.payload.raw()),
+        "token_usage_record" => {
+            let payload = parse_raw::<TokenUsagePayload>(envelope.payload.raw())?;
+            Some(RolloutRecord {
+                timestamp,
+                kind: RolloutKind::TokenUsageRecord(payload.usage),
+                error: top_level_error,
+                message: None,
+            })
+        }
         "response_item" => {
             let payload = parse_raw::<ResponseItemPayload<'_>>(envelope.payload.raw())?;
             let named = || {
@@ -282,9 +294,24 @@ pub(crate) fn decode_line(line: &[u8]) -> Option<RolloutRecord<'_>> {
                 Some("web_search_call") => Some(Cow::Borrowed("web_search")),
                 _ => None,
             };
+            let model_item = match payload.payload_type.as_deref() {
+                Some(
+                    "reasoning" | "function_call" | "custom_tool_call" | "local_shell_call"
+                    | "web_search_call",
+                ) => true,
+                Some("message") => payload.role.as_deref() == Some("assistant"),
+                _ => false,
+            };
             Some(RolloutRecord {
                 timestamp,
-                kind: name.map_or(RolloutKind::Other, RolloutKind::ToolCall),
+                kind: name.map_or(
+                    if model_item {
+                        RolloutKind::ModelItem
+                    } else {
+                        RolloutKind::InputItem
+                    },
+                    RolloutKind::ToolCall,
+                ),
                 error: top_level_error,
                 message: None,
             })
@@ -383,6 +410,14 @@ struct ResponseItemPayload<'a> {
     payload_type: Option<Cow<'a, str>>,
     #[serde(borrow, default, deserialize_with = "deserialize_optional_cow_str")]
     name: Option<Cow<'a, str>>,
+    #[serde(default)]
+    role: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct TokenUsagePayload {
+    #[serde(default, deserialize_with = "deserialize_optional_object_lossy")]
+    usage: Option<CodexRawUsage>,
 }
 
 #[derive(Default, Deserialize)]

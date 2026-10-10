@@ -147,6 +147,7 @@ pub(crate) fn parse_codex_spend(
             dedup_key: Some(codex_event_dedup_key(&event.timestamp, model, &event)),
             model: Some(model.to_owned()),
             tool_calls: event.tool_calls,
+            timing: event.timing,
             ..CachedEntry::new(ts_secs, cost, &split)
         });
     }

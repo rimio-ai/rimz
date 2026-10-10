@@ -2,7 +2,258 @@ use super::*;
 
 use std::io::Write as _;
 
+use crate::agents::spending::ResponseTiming;
 use tempfile::TempDir;
+
+fn timing_line(ms: u64, kind: &str, payload: serde_json::Value) -> String {
+    serde_json::json!({
+        "timestamp": format!("2026-01-01T10:00:{:02}.{:03}Z", ms / 1_000, ms % 1_000),
+        "type": kind,
+        "payload": payload,
+    })
+    .to_string()
+}
+
+fn timed_response_lines() -> Vec<String> {
+    use serde_json::json;
+    vec![
+        timing_line(0, "turn_context", json!({"model":"gpt-5"})),
+        timing_line(0, "event_msg", json!({"type":"task_started"})),
+        timing_line(
+            1_000,
+            "response_item",
+            json!({"type":"message","role":"user"}),
+        ),
+        timing_line(
+            2_000,
+            "response_item",
+            json!({"type":"function_call_output"}),
+        ),
+        timing_line(3_000, "response_item", json!({"type":"reasoning"})),
+        timing_line(
+            4_000,
+            "response_item",
+            json!({"type":"message","role":"developer"}),
+        ),
+        timing_line(
+            5_500,
+            "token_usage_record",
+            json!({"usage":{"output_tokens":200}}),
+        ),
+        timing_line(
+            20_000,
+            "event_msg",
+            json!({"type":"token_count","info":{
+                "last_token_usage":{"input_tokens":100,"output_tokens":200},
+                "total_token_usage":{"input_tokens":100,"output_tokens":200}
+            }}),
+        ),
+    ]
+}
+
+#[test]
+fn response_records_time_inputs_to_completion_without_changing_usage_or_cost() {
+    let lines = timed_response_lines();
+    let (_dir, path) = write_session(
+        "timed.jsonl",
+        &lines.iter().map(String::as_str).collect::<Vec<_>>(),
+    );
+    let timed = parse_codex_spend(&path, None, &gpt5_book());
+    assert_eq!(timed.entries.len(), 1);
+    assert_eq!(
+        timed.entries[0].timing,
+        Some(ResponseTiming {
+            ms: 3_500,
+            output: 200
+        })
+    );
+    let stripped = lines
+        .iter()
+        .filter(|line| !line.contains("token_usage_record"))
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    let (_dir, path) = write_session("untimed.jsonl", &stripped);
+    let untimed = parse_codex_spend(&path, None, &gpt5_book());
+    let mut entries = timed.entries.clone();
+    for entry in &mut entries {
+        entry.timing = None;
+    }
+    assert_eq!(entries, untimed.entries);
+    assert_eq!(
+        timed.cursor.state.as_ref().unwrap()["previous_totals"],
+        untimed.cursor.state.as_ref().unwrap()["previous_totals"]
+    );
+    assert!(untimed.entries.iter().all(|entry| entry.timing.is_none()));
+}
+
+#[test]
+fn response_input_and_model_item_kinds_each_define_the_boundary() {
+    use serde_json::json;
+    for (kind, input) in [
+        ("event_msg", json!({"type":"task_started"})),
+        ("response_item", json!({"type":"message","role":"user"})),
+        (
+            "response_item",
+            json!({"type":"message","role":"developer"}),
+        ),
+        ("response_item", json!({"type":"function_call_output"})),
+        ("response_item", json!({"type":"future_input"})),
+    ] {
+        for model in [
+            json!({"type":"reasoning"}),
+            json!({"type":"message","role":"assistant"}),
+            json!({"type":"function_call"}),
+            json!({"type":"custom_tool_call"}),
+            json!({"type":"local_shell_call"}),
+            json!({"type":"web_search_call"}),
+        ] {
+            let mut lines = timed_response_lines();
+            lines.splice(
+                1..6,
+                [
+                    timing_line(1_000, kind, input.clone()),
+                    timing_line(2_000, "response_item", model),
+                ],
+            );
+            let (_dir, path) = write_session(
+                "kinds.jsonl",
+                &lines.iter().map(String::as_str).collect::<Vec<_>>(),
+            );
+            assert_eq!(
+                parse_codex_spend(&path, None, &gpt5_book()).entries[0].timing,
+                Some(ResponseTiming {
+                    ms: 4_500,
+                    output: 200
+                })
+            );
+        }
+    }
+}
+
+#[test]
+fn response_timing_cursor_round_trips_before_and_after_the_record() {
+    let lines = timed_response_lines();
+    for split in [4, 7] {
+        let (_dir, path) = write_session(
+            "resume.jsonl",
+            &lines[..split]
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+        );
+        let first = parse_codex_spend(&path, None, &gpt5_book());
+        let cursor: SpendCursor =
+            serde_json::from_value(serde_json::to_value(&first.cursor).unwrap()).unwrap();
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        for line in &lines[split..] {
+            writeln!(file, "{line}").unwrap();
+        }
+        let resumed = parse_codex_spend(&path, Some(&cursor), &gpt5_book());
+        assert_eq!(
+            resumed.entries[0].timing,
+            Some(ResponseTiming {
+                ms: 3_500,
+                output: 200
+            })
+        );
+        let cold = parse_codex_spend(&path, None, &gpt5_book());
+        assert_eq!(resumed.entries, cold.entries);
+        assert_eq!(resumed.cursor, cold.cursor);
+    }
+}
+
+#[test]
+fn response_record_timing_is_consumed_only_by_matching_counts() {
+    let lines = timed_response_lines();
+    let (_dir, path) = write_session(
+        "matched.jsonl",
+        &lines.iter().map(String::as_str).collect::<Vec<_>>(),
+    );
+    assert!(
+        parse_codex_spend(&path, None, &gpt5_book()).entries[0]
+            .timing
+            .is_some()
+    );
+    for replacement in [
+        timing_line(
+            5_500,
+            "token_usage_record",
+            serde_json::json!({"usage":{"output_tokens":201}}),
+        ),
+        timing_line(
+            5_500,
+            "token_usage_record",
+            serde_json::json!({"usage":{"output_tokens":99}}),
+        ),
+    ] {
+        let mut changed = lines.clone();
+        changed[6] = replacement;
+        changed.push(lines[7].clone());
+        let (_dir, path) = write_session(
+            "mismatch.jsonl",
+            &changed.iter().map(String::as_str).collect::<Vec<_>>(),
+        );
+        assert!(
+            parse_codex_spend(&path, None, &gpt5_book())
+                .entries
+                .iter()
+                .all(|entry| entry.timing.is_none())
+        );
+    }
+    let mut replaced = lines.clone();
+    replaced.insert(
+        7,
+        timing_line(
+            6_000,
+            "token_usage_record",
+            serde_json::json!({"usage":{"output_tokens":200}}),
+        ),
+    );
+    let (_dir, path) = write_session(
+        "replaced.jsonl",
+        &replaced.iter().map(String::as_str).collect::<Vec<_>>(),
+    );
+    assert_eq!(
+        parse_codex_spend(&path, None, &gpt5_book()).entries[0].timing,
+        None
+    );
+}
+
+#[test]
+fn copied_head_does_not_leak_response_timing_into_real_usage() {
+    let mut lines = timed_response_lines();
+    lines.insert(
+        0,
+        r#"{"type":"session_meta","payload":{"forked_from_id":"parent"}}"#.to_owned(),
+    );
+    for line in &mut lines[1..] {
+        *line = line
+            .replace("10:00:01", "10:00:00")
+            .replace("10:00:02", "10:00:00")
+            .replace("10:00:03", "10:00:00")
+            .replace("10:00:04", "10:00:00")
+            .replace("10:00:05", "10:00:00")
+            .replace("10:00:20", "10:00:00");
+    }
+    lines.push(lines.last().unwrap().clone());
+    lines.extend(timed_response_lines().into_iter().skip(1));
+    let (_dir, path) = write_session(
+        "replay.jsonl",
+        &lines.iter().map(String::as_str).collect::<Vec<_>>(),
+    );
+    let parsed = parse_codex_spend(&path, None, &gpt5_book());
+    assert_eq!(parsed.entries.len(), 1);
+    assert_eq!(
+        parsed.entries[0].timing,
+        Some(ResponseTiming {
+            ms: 3_500,
+            output: 200
+        })
+    );
+}
 
 /// The line classifier feeding `parse_codex_session` — exercised here
 /// through the kind probe so each accepted/skipped shape stays pinned.
@@ -280,6 +531,7 @@ fn dedup_key_separates_events_differing_only_in_reasoning_or_total() {
         reasoning_output_tokens: 5,
         total_tokens: 155,
         tool_calls: BTreeMap::new(),
+        timing: None,
     };
     let key = |event: &parse::CodexTokenEvent| {
         codex_event_dedup_key(&event.timestamp, &event.model, event)

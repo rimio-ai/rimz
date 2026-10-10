@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::agents::spending::origin_path;
+use crate::agents::spending::{ResponseTiming, origin_path, response_timing};
 use crate::agents::transcript_fs::{
     bytes_contains, deserialize_optional_object_lossy, read_transcript_lines,
 };
@@ -47,6 +47,7 @@ pub(super) struct CodexTokenEvent {
     /// the same reason as `reasoning_output_tokens`.
     pub(super) total_tokens: u64,
     pub(super) tool_calls: BTreeMap<String, u32>,
+    pub(super) timing: Option<ResponseTiming>,
 }
 
 // ── Typed structs — headless format ──────────────────────────────────────────
@@ -126,9 +127,9 @@ struct CodexResultFields<'a> {
 pub(super) enum CodexLineKind {
     /// Rollout header: `"type":"session_meta"`, carrying the session `cwd`.
     SessionMeta,
-    /// Structured session log: `turn_context` or `event_msg` + `token_count`.
+    /// Structured session log: context, usage counts, and response timing markers.
     Session,
-    /// Provider response item carrying a named tool call.
+    /// Provider response item carrying input, model output, or a named tool call.
     ResponseItem,
     /// Headless/exec log: flat `usage`, `input_tokens`, or `prompt_tokens` field.
     Headless,
@@ -148,8 +149,11 @@ pub(super) fn codex_line_kind(line: &[u8]) -> Option<CodexLineKind> {
     let has_turn_ctx = bytes_contains(line, br#""type":"turn_context""#);
     let has_event_msg = bytes_contains(line, br#""type":"event_msg""#);
     let has_token_count = bytes_contains(line, br#""type":"token_count""#);
+    let has_task_started = bytes_contains(line, br#""type":"task_started""#);
+    let has_usage_record = bytes_contains(line, br#""type":"token_usage_record""#);
 
-    if has_turn_ctx || (has_event_msg && has_token_count) {
+    if has_turn_ctx || has_usage_record || (has_event_msg && (has_token_count || has_task_started))
+    {
         return Some(CodexLineKind::Session);
     }
 
@@ -194,6 +198,18 @@ pub(super) struct CodexSpendState {
     skipping_replay: bool,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pending_tool_calls: BTreeMap<String, u32>,
+    #[serde(default)]
+    response_boundary: ResponseBoundary,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pending_timing: Option<ResponseTiming>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
+enum ResponseBoundary {
+    #[default]
+    AwaitingInput,
+    Inputs(u64),
+    InFlight(Option<u64>),
 }
 
 /// Parse a Codex session JSONL file into `CodexTokenEvent` values from
@@ -248,7 +264,15 @@ pub(super) fn parse_codex_session(
                     continue;
                 };
                 if suppress_replayed_entry(&record, state) {
+                    state.response_boundary = ResponseBoundary::default();
+                    state.pending_timing = None;
                     continue;
+                }
+                if suppress_replayed_tool(&record, state) {
+                    state.response_boundary = ResponseBoundary::default();
+                    state.pending_timing = None;
+                } else {
+                    visit_response_timing(&record, state);
                 }
                 visit_session_entry(record, state, &mut out);
             }
@@ -257,8 +281,11 @@ pub(super) fn parse_codex_session(
                     continue;
                 };
                 if suppress_replayed_tool(&record, state) {
+                    state.response_boundary = ResponseBoundary::default();
+                    state.pending_timing = None;
                     continue;
                 }
+                visit_response_timing(&record, state);
                 if let RolloutKind::ToolCall(name) = record.kind {
                     let count = state
                         .pending_tool_calls
@@ -369,6 +396,38 @@ fn timestamp_second(timestamp: Option<&CodexTimestamp<'_>>) -> Option<String> {
     normalize_timestamp(timestamp).and_then(|timestamp| timestamp.get(..19).map(ToOwned::to_owned))
 }
 
+fn visit_response_timing(record: &RolloutRecord<'_>, state: &mut CodexSpendState) {
+    let ms = record
+        .event_timestamp()
+        .and_then(|ts| u64::try_from(ts.as_millisecond()).ok());
+    match &record.kind {
+        RolloutKind::InputItem | RolloutKind::TaskStarted => {
+            let Some(ms) = ms else { return };
+            state.response_boundary = match state.response_boundary {
+                ResponseBoundary::AwaitingInput => ResponseBoundary::Inputs(ms),
+                ResponseBoundary::Inputs(prior) => ResponseBoundary::Inputs(prior.max(ms)),
+                ResponseBoundary::InFlight(_) => return,
+            };
+        }
+        RolloutKind::ModelItem | RolloutKind::ToolCall(_) => {
+            state.response_boundary = ResponseBoundary::InFlight(match state.response_boundary {
+                ResponseBoundary::Inputs(start) => Some(start),
+                ResponseBoundary::AwaitingInput => None,
+                ResponseBoundary::InFlight(_) => return,
+            });
+        }
+        RolloutKind::TokenUsageRecord(usage) => {
+            state.pending_timing = match (std::mem::take(&mut state.response_boundary), usage, ms) {
+                (ResponseBoundary::InFlight(Some(start)), Some(usage), Some(end)) => end
+                    .checked_sub(start)
+                    .and_then(|gap| response_timing(usage.output_tokens, gap)),
+                _ => None,
+            };
+        }
+        _ => {}
+    }
+}
+
 fn visit_session_entry(
     record: RolloutRecord<'_>,
     state: &mut CodexSpendState,
@@ -383,6 +442,7 @@ fn visit_session_entry(
     let RolloutKind::TokenCount(token_count) = &record.kind else {
         return;
     };
+    let pending_timing = state.pending_timing.take();
     let Some(ts) = normalize_timestamp(record.timestamp.as_ref()) else {
         return;
     };
@@ -396,7 +456,8 @@ fn visit_session_entry(
     }
     let Some(raw) = raw_usage else { return };
     let parsed_model = token_count.model().map(ToOwned::to_owned);
-    push_usage(raw, ts, parsed_model, state, out);
+    let timing = pending_timing.filter(|timing| timing.output == raw.output_tokens);
+    push_usage(raw, ts, parsed_model, timing, state, out);
 }
 
 fn visit_headless_entry(
@@ -409,7 +470,7 @@ fn visit_headless_entry(
         return;
     };
     let ts = headless_timestamp(entry).unwrap_or_else(|| fallback_timestamp.to_string());
-    push_usage(raw, ts, headless_model(entry), state, out);
+    push_usage(raw, ts, headless_model(entry), None, state, out);
 }
 
 /// Emit one non-zero usage entry under the event's model: its own hint, else
@@ -418,6 +479,7 @@ fn push_usage(
     raw: CodexRawUsage,
     timestamp: String,
     parsed_model: Option<String>,
+    timing: Option<ResponseTiming>,
     state: &mut CodexSpendState,
     out: &mut Vec<CodexTokenEvent>,
 ) {
@@ -438,6 +500,7 @@ fn push_usage(
         reasoning_output_tokens: raw.reasoning_output_tokens,
         total_tokens: raw.total_tokens,
         tool_calls: std::mem::take(&mut state.pending_tool_calls),
+        timing,
     });
 }
 
