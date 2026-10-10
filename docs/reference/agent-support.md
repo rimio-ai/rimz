@@ -50,6 +50,8 @@ A few cells need more than the table says:
 - Answering is separate from Ask. Every agent takes its answer in its own UI, and `rimz answer` adds an out-of-band path for Claude, Codex, and Pi ([what each agent accepts](./cli/asks.md#what-each-agent-accepts)).
 - Claude Code children also carry a running token count and an elapsed clock. The child row shows both for any agent that reports them.
 
+Claude Code and Codex history also times responses for the Models `tok/s` figure in [`rimz stats`](./cli/stats.md). Other adapters retain their history coverage but supply no response timing.
+
 ## The compatibility matrix
 
 One row per agent, in tier order. Run `rimz coverage` for the limit behind every ◐ and ✗.

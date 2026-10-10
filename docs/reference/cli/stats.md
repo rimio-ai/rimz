@@ -28,12 +28,14 @@ The panel prints these blocks top to bottom:
 | Wordmark | The RimZ logo and tagline. Omitted when the terminal is too short to fit it beside the breakdowns. |
 | `Token activity` | One cell per UTC day, one column per week, shaded `· ░ ▒ ▓ █` from no use to heavy use. The terminal width sets the span, from 4 weeks up to 52. |
 | Windows row | Total tokens for `All time`, `Week`, `Month`, and `Year`. |
-| `Models` | Up to six models ranked by dollars, with input, output, cache-read tokens, cache-hit percentage, and share of the window's dollars. |
+| `Models` | Up to six models ranked by dollars, with input, output, cache-read tokens, cache-hit percentage, generation throughput (`tok/s`), and share of the window's dollars. |
 | `Agents` | Up to six agent kinds ranked by sessions, with dollars, tokens, cache-hit percentage, and share of sessions. |
 | Insights | Sessions, spend, cost per session, active days, most active day, streaks, and daily average. |
 | `Assists` | Counts of auto-continues, auto-compactions, credit redemptions, restored rooms, and automatic gc sweeps, one row per category with a non-zero count. |
 
 A breakdown entry under 1% of its section, and any entry past the row cap, folds into a final `Other` row. A machine with no recorded usage prints the wordmark and `No token usage recorded yet - run an agent and check back.`
+
+The full Models row ends with rounded output tokens per second for the selected window, or `-` when it has no timed responses. Only Claude Code and Codex histories time responses; other adapters show `-`. The column is omitted when no row is timed, and the compact row keeps only dollars. `Other` combines the timed responses of its models. The [guide](../../guide/insight.md#how-the-numbers-are-calculated) defines the metric and its limits.
 
 `All time` covers the trailing 365 days, because the history RimZ keeps spans one year, so its figures match `Year`. The two differ in the insights and assists: All time reports active days out of the last 28 (`Active days: N/28`), reads streaks across every cached day, and counts every assist on record. A one-shot run always shows All time; only the held dashboard selects another window, and the heatmap ignores the selection. The [guide](../../guide/insight.md#the-full-picture-rimz-stats) explains each insight line.
 
@@ -68,38 +70,23 @@ Week and Month add a spend comparison with the preceding week or month when that
 
 ## JSON output
 
-`rimz stats --json` prints one pretty-printed object describing the All time window. Breakdowns carry every entry, with no `Other` folding and no row cap. A captured run, cut to one element per array:
+`rimz stats --json` prints one pretty-printed object describing the All time window. Breakdowns carry every entry, with no `Other` folding and no row cap. A timed model from a captured run, with its per-tool map removed:
 
 ```console
-$ rimz stats --json
+$ rimz stats --json | jq 'first(.models[] | select(has("tokens_per_sec"))) | del(.tools)'
 {
-  "unit": "tokens",
-  "sessions": 6860,
-  "active_days_28": 27,
-  "longest_streak": 72,
-  "current_streak": 26,
-  "most_active_day": "2026-07-18",
-  "windows": {
-    "week": {
-      "tokens": 3634976121,
-      "usd": 4228.222269640006,
-      "tool_calls": 19853,
-      ...
-  "models": [
-    {
-      "model": "gpt-5.6-sol",
-      "name": "GPT 5.6 Sol",
-      "tokens": 25050389458,
-      "input": 627793642,
-      "output": 66083304,
-      "cache_read": 24356512512,
-      "tool_calls": 211015,
-      ...
-      "cache_hit_pct": 97,
-      "usd": 13628.711094200002,
-      "share": 0.383862868254068
-    },
-  ...
+  "model": "gpt-5.6-sol",
+  "name": "GPT 5.6 Sol",
+  "tokens": 25445145571,
+  "input": 640431451,
+  "output": 67362952,
+  "cache_read": 24737351168,
+  "tool_calls": 214967,
+  "cache_hit_pct": 97,
+  "tokens_per_sec": 41,
+  "usd": 13857.190752600001,
+  "share": 0.2677802690397501
+}
 ```
 
 | Field | Contents |
@@ -110,12 +97,14 @@ $ rimz stats --json
 | `longest_streak`, `current_streak` | Consecutive days with usage. |
 | `most_active_day` | `YYYY-MM-DD` of the heaviest day. Omitted when there is no usage. |
 | `windows` | `week`, `month`, and `year`, each with `tokens`, `usd`, `tool_calls`, and a `tools` map of calls by tool name. |
-| `models` | One object per model, sorted by `usd`: `model` id, display `name`, `tokens`, `input`, `output`, `cache_read`, `tool_calls`, `tools`, `cache_hit_pct`, `usd`, and `share` of the total dollars as a fraction. |
+| `models` | One object per model, sorted by `usd`: `model` id, display `name`, `tokens`, `input`, `output`, `cache_read`, `tool_calls`, `tools`, `cache_hit_pct`, `tokens_per_sec`, `usd`, and `share` of the total dollars as a fraction. |
 | `agents` | One object per agent kind with usage, sorted by sessions: `kind`, display `name`, `tokens`, `usd`, `sessions`, `tool_calls`, `tools`, `cache_hit_pct`, and `share` of sessions as a fraction. |
 | `days` | One object per UTC day with usage, oldest first: `date`, `tokens`, `usd`. |
 | `assists` | `window` (`all`), a `rollup` of counts, and `events`, newest first. |
 
 `tokens` is always input plus output plus cache-read tokens, and `input` includes cache writes. `tool_calls` and `tools` are omitted when zero or empty; `cache_hit_pct` is omitted when there is no input to measure.
+
+`tokens_per_sec` is a rounded integer from the All time (trailing-year) tally, omitted when the model has no timed responses.
 
 An `auto_gc` event carries `scope` (`room` or `machine`); records written before scopes existed read as `machine`. Totals cover the whole sweep's scope. The durable assist record additionally holds own-room `class_bytes`, which this JSON projection does not expose ([GC report](./maintenance.md#the-report)).
 

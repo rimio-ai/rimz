@@ -112,7 +112,7 @@ The Models and Agents sections share one row shape: a bullet, the name, a left c
 
 | | Models | Agents |
 | --- | --- | --- |
-| Left column | dollars, `↘` input, `↗` output, `◌` cache read, cache hit | dollars, `◎` sessions, `◇` display tokens, cache hit |
+| Left column | dollars, `↘` input, `↗` output, `◌` cache read, cache hit, `tok/s` | dollars, `◎` sessions, `◇` display tokens, cache hit |
 | Sort | dollars, then tokens | sessions, then tokens |
 | Share | the row's dollars over the window's model dollars | the row's sessions over all sessions in the window |
 | Folds into `Other` | an empty model id, or under 1.0% of the window's model dollars | under 1.0% of the window's sessions |
@@ -121,6 +121,8 @@ The Models and Agents sections share one row shape: a bullet, the name, a left c
 Entries with zero tokens in the window are dropped. The 1.0% fold (`MIN_BREAKDOWN_SHARE`) applies first and does nothing when its denominator is zero. The row cap (`MAX_MODELS`, `MAX_AGENTS`, 6 each, or fewer when the terminal is short) then folds the tail into the same final `Other` row. Model names go through `model_display::display_model`, agent names through the adapter's display name.
 
 The cache-hit column is `SpendWindow::cache_hit_percent`: `cache_read / (cache_read + input)`, where `input` already includes cache writes, rounded half up and absent for a zero denominator. `CacheHealth::classify` colors it green at 90% and above, yellow from 70% to 89%, and red below.
+
+The final Models column uses `SpendWindow::tokens_per_sec`: rounded `timed_output * 1000 / timed_ms` for the selected window. An untimed row shows `-`; when every row is untimed the column disappears. `SpendWindow::merge` sums both counters, so `Other` keeps the ratio of sums. The number uses the row's normal foreground and `tok/s` the muted unit tone. Timing boundaries and filters belong to [spending](./agents/spending.md#response-timing).
 
 Both sections share one column layout (`stat_section_layout`), chosen by what fits the panel width:
 
@@ -182,7 +184,7 @@ Reload re-execs `reload::current_reexec_target()` with the original arguments. T
 | `sessions` | the 365-day session count |
 | `active_days_28`, `longest_streak`, `current_streak`, `most_active_day` | the All time insights; `most_active_day` omitted when there is none |
 | `windows` | `week`, `month`, `year`, each with display `tokens` and `usd` |
-| `models` | every model in the cache, unfolded and uncapped, sorted by dollars: id, display name, token split, `usd`, `share` as a fraction |
+| `models` | every model in the cache, unfolded and uncapped, sorted by dollars: id, display name, token split, optional integer `tokens_per_sec` from the trailing-year tally, `usd`, `share` as a fraction |
 | `agents` | every agent with tokens, unfolded and uncapped, sorted by sessions: kind, name, tokens, `usd`, `sessions`, `share` |
 | `days` | per-day `date`, `tokens`, `usd` |
 | `assists` | the window label, the rollup, and every event |
