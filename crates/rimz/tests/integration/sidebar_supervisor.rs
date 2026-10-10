@@ -346,15 +346,13 @@ fn lost_host_paints_notice_and_record_update_cuts_backoff_short() {
 fn sidebar_supervisor_pulls_a_record_update_without_external_wakeup() {
     let env = Env::new();
     let mut pane = Pane::new(&env);
+    let proxy = proxy_rimz(&env);
+    let build = rimz::build_id::of_file(&proxy).unwrap();
     pane.start(|command| {
         command.env("RIMZ_TEST_SIDEBAR_STABLE_RUN_MS", "30");
     });
-    let (stream, _) = pane.accept(None);
-    let proxy = proxy_rimz(&env);
-    let build = record_target(&env, &proxy);
-    write_line(&stream, &serde_json::json!({"control": "reload"})).unwrap();
-    drop(stream);
     let (stream, _) = pane.accept(Some(build.clone()));
+    record_target(&env, &proxy);
     assert_eq!(pane.event("supervisor_convergence")["target_build"], build);
     drop(stream);
     let (_stream, _) = pane.accept(None);
