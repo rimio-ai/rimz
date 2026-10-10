@@ -1186,7 +1186,7 @@ fn provider_bar_rows(
             vec![Span::styled(
                 format!(
                     "plan lapsed{seam}no {} access{seam}since {time}",
-                    panel.product_name
+                    theme.provider_product_name(&panel.kind)
                 ),
                 theme.alarm(Modifier::BOLD),
             )],

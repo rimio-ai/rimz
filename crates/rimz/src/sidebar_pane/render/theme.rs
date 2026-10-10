@@ -21,7 +21,7 @@ use crate::config::{
 pub(crate) use crate::theme::Palette;
 use crate::theme::{
     GlyphSet, GlyphSetKind, HEAT_RAMP_WARM_START, Identity, Tone, oklab, ramp_tone,
-    resolve_provider_brand,
+    resolve_provider_brand, resolve_provider_identity,
 };
 use ratatui::style::{Color, Modifier, Style};
 
@@ -496,6 +496,11 @@ impl Theme {
     /// Resolve provider brand independently of dashboard panel visibility.
     pub(crate) fn provider_brand_tone(&self, kind: &str) -> Color {
         tone_color(resolve_provider_brand(kind, &self.provider_styles).tone(&self.palette))
+    }
+
+    /// The kind's product name, without the account a panel title appends.
+    pub(crate) fn provider_product_name(&self, kind: &str) -> String {
+        resolve_provider_identity(kind, &self.provider_styles).product_name
     }
 }
 
