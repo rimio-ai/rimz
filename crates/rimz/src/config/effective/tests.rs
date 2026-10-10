@@ -39,6 +39,7 @@ fn definition_routing_overlay_keeps_load_choice_and_provider_fields() {
         crate::config::definitions::SkillCheck::Skip,
         &CommandsConfig::default(),
         &machine.tiers,
+        machine.harness.auto_compact,
     );
     assert!(definitions.errors.is_empty(), "{:?}", definitions.errors);
     machine.agents.profiles = definitions.agent_profiles;
@@ -228,6 +229,7 @@ fn team_cli_models_route_each_markdown_role() {
         crate::config::definitions::SkillCheck::Skip,
         &machine.agents.commands,
         &machine.tiers,
+        machine.harness.auto_compact,
     );
     assert!(definitions.errors.is_empty(), "{:?}", definitions.errors);
     machine.agents.profiles = definitions.agent_profiles;
@@ -357,7 +359,7 @@ fn trusted_repo_cannot_set_allowed_tools() {
     let config = tempdir().unwrap();
     write_project_config(
         &project,
-        "[profiles.worker]\nagent = 'claude'\nallowed_tools = ['Bash(*)']\nallowed-tools = ['Bash(*)']",
+        "[profiles.worker]\nagent = 'codex'\nallowed_tools = ['Bash(*)']\nallowed-tools = ['Bash(*)']",
     );
     crate::trust::grant_with_roots(project.path(), config.path()).unwrap();
     let effective = load(&AgentsConfig::default(), project.path(), config.path()).unwrap();
@@ -390,10 +392,10 @@ fn model_tiers_are_machine_only_and_project_models_are_concrete() {
     assert!(profile.definition_renders.is_none());
     assert!(profile.model_tier.is_none());
     for text in [
-        "[profiles.worker]\nagent = 'claude'\ntier = 'senior'",
+        "[profiles.worker]\nagent = 'codex'\ntier = 'senior'",
         "[subagents.profiles.worker]\nagent = 'codex'\ntier = 'intern'",
         "[agents.teams.work]\nroles = [{role = 'worker', profile = 'claude', tier = 'junior'}]",
-        "[profiles.worker]\nagent = 'claude'\nmodel = 'senior'",
+        "[profiles.worker]\nagent = 'codex'\nmodel = 'senior'",
         "[subagents.profiles.worker]\nagent = 'codex'\nmodel = 'intern'",
         "[agents.teams.work]\nroles = [{role = 'worker', profile = 'claude', model = 'junior'}]",
     ] {
@@ -643,6 +645,53 @@ fn load_project_tasks(
     config_root: &std::path::Path,
 ) -> Result<ProjectTasks> {
     project_tasks(project_root, config_root).map(|tasks| tasks.expect("project tasks"))
+}
+
+#[test]
+fn trusted_repo_profiles_inherit_native_compaction_defaults() {
+    let project = tempdir().unwrap();
+    let config = tempdir().unwrap();
+    write_project_config(
+        &project,
+        "[profiles.worker]\nagent = 'codex'\n[profiles.parent]\nagent = 'codex'\nauto-compact = '200k'\n[profiles.child]\nagent = 'parent'\n[profiles.pi]\nagent = 'pi'\n[profiles.claude]\nagent = 'claude'\nauto-compact = '200k'\n[profiles.planner]\nagent = 'claude'\n[subagents.profiles.worker]\nagent = 'codex'\n[subagents.profiles.codex]\nagent = 'codex'",
+    );
+    crate::trust::grant_with_roots(project.path(), config.path()).unwrap();
+    for window in [Some(272_000), None] {
+        let mut machine = MachineConfig::default();
+        machine.harness.auto_compact = window;
+        let effective = load_with_roots(&machine, project.path(), config.path()).unwrap();
+        for profiles in [&effective.profiles, &effective.subagent_profiles] {
+            assert_eq!(
+                agents_spec::resolve_profile("worker", profiles)
+                    .unwrap()
+                    .auto_compact,
+                window.map(|n| n.to_string())
+            );
+        }
+        assert_eq!(
+            agents_spec::resolve_profile("codex", &effective.subagent_profiles)
+                .unwrap()
+                .auto_compact,
+            window.map(|n| n.to_string())
+        );
+        for name in ["parent", "child", "claude", "planner"] {
+            assert_eq!(
+                agents_spec::resolve_profile(name, &effective.profiles)
+                    .unwrap()
+                    .auto_compact
+                    .as_deref(),
+                Some("200000")
+            );
+        }
+        for name in ["pi", "codex"] {
+            assert_eq!(
+                agents_spec::resolve_profile(name, &effective.profiles)
+                    .unwrap()
+                    .auto_compact,
+                None
+            );
+        }
+    }
 }
 
 #[test]

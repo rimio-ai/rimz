@@ -210,6 +210,7 @@ pub(super) fn load_catalog(
         rimz::config::definitions::SkillCheck::Skip,
         &machine.agents.commands,
         &machine.tiers,
+        machine.harness.auto_compact,
     )
     .sources;
     Ok(build_catalog(

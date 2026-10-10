@@ -65,6 +65,7 @@ fn unknown_model_cannot_invent_a_family_from_a_tier_only_parent() {
         SkillCheck::Skip,
         &CommandsConfig::default(),
         &crate::config::tiers::TierConfig::default(),
+        Some(272_000),
     );
     assert!(loaded.errors.iter().any(|error| error.path.ends_with("child.md") && error.message.contains("set `agent:`")), "{:?}", loaded.errors);
 }
@@ -96,6 +97,7 @@ fn tier_frontmatter_refusals_explain_the_fix() {
             SkillCheck::Skip,
             &CommandsConfig::default(),
             &crate::config::tiers::TierConfig::default(),
+            Some(272_000),
         );
         let message = loaded
             .errors
@@ -127,6 +129,7 @@ fn tiers_skip_unrenderable_families_before_choosing_a_profile() {
         SkillCheck::Skip,
         &CommandsConfig::default(),
         &crate::config::tiers::TierConfig::default(),
+        Some(272_000),
     );
     assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
     assert_eq!(loaded.agent_profiles.0["probe"].agent, "claude");
@@ -136,6 +139,7 @@ fn tiers_skip_unrenderable_families_before_choosing_a_profile() {
         SkillCheck::Skip,
         &CommandsConfig::default(),
         &crate::config::tiers::TierConfig::default(),
+        Some(272_000),
     );
     assert!(!loaded.agent_profiles.0.contains_key("probe"));
     let message = loaded
@@ -198,6 +202,7 @@ fn tier_key_and_concrete_model_choose_the_nearest_runtime() {
             SkillCheck::Skip,
             &CommandsConfig::default(),
             &crate::config::tiers::TierConfig::default(),
+            Some(272_000),
         );
         assert!(loaded.errors.is_empty(), "{child}: {:?}", loaded.errors);
         let profile = &loaded.agent_profiles.0["child"];
@@ -288,6 +293,7 @@ fn allowed_tools_refuse_malformed_rules_with_shape_and_rule() {
             SkillCheck::Skip,
             &CommandsConfig::default(),
             &crate::config::tiers::TierConfig::default(),
+            Some(272_000),
         );
         let error = loaded
             .errors
@@ -661,7 +667,7 @@ fn team_seats_materialize_launch_settings_and_route_questions_to_leader() {
         let profile = &loaded.agent_profiles.0[&role.profile];
         assert_eq!(profile.agent, "claude");
         assert_eq!(profile.model.as_deref(), Some("opus"));
-        assert_eq!(profile.auto_compact.as_deref(), Some("258k"));
+        assert_eq!(profile.auto_compact.as_deref(), Some("272000"));
         assert_eq!(
             profile
                 .skills
@@ -824,6 +830,7 @@ fn team_signal_wildcards_preserve_branch_scope_but_reject_self_wakes() {
                 SkillCheck::Skip,
                 &CommandsConfig::default(),
                 &crate::config::tiers::TierConfig::default(),
+                Some(272_000),
             );
             assert!(
                 loaded
@@ -993,6 +1000,7 @@ fn invalid_teams_publish_neither_roster_nor_seats() {
             SkillCheck::Skip,
             &CommandsConfig::default(),
             &crate::config::tiers::TierConfig::default(),
+            Some(272_000),
         );
         assert!(loaded.teams.0.is_empty(), "{needle}");
         assert!(
@@ -1048,7 +1056,8 @@ fn malformed_signals_fail_before_the_team_can_be_published() {
                 root.path(),
                 SkillCheck::Skip,
                 &CommandsConfig::default(),
-                &crate::config::tiers::TierConfig::default()
+                &crate::config::tiers::TierConfig::default(),
+                Some(272_000),
             )
             .errors
             .iter()
@@ -1059,7 +1068,8 @@ fn malformed_signals_fail_before_the_team_can_be_published() {
                 root.path(),
                 SkillCheck::Skip,
                 &CommandsConfig::default(),
-                &crate::config::tiers::TierConfig::default()
+                &crate::config::tiers::TierConfig::default(),
+                Some(272_000),
             )
             .teams
             .0
@@ -1121,6 +1131,7 @@ fn unsupported_preset_fields_fail_at_the_definition() {
             SkillCheck::Skip,
             &CommandsConfig::default(),
             &crate::config::tiers::TierConfig::default(),
+            Some(272_000),
         );
         let expected =
             crate::agents::PresetErr::UnsupportedField { agent: kind, field }.to_string();
@@ -1152,6 +1163,7 @@ fn duplicate_team_names_remove_all_seats_and_sources() {
         SkillCheck::Skip,
         &CommandsConfig::default(),
         &crate::config::tiers::TierConfig::default(),
+        Some(272_000),
     );
     assert!(loaded.teams.0.is_empty());
     assert!(loaded.sources.team("probe").is_none());
@@ -1192,6 +1204,7 @@ fn failed_teams_record_names_and_roles_and_name_each_bad_seat() {
         SkillCheck::Skip,
         &CommandsConfig::default(),
         &crate::config::tiers::TierConfig::default(),
+        Some(272_000),
     );
     let path = root.path().join("teams/probe.md");
     for name in ["renamed", "renamed.lead", "renamed.judge"] {
@@ -1210,6 +1223,7 @@ fn failed_teams_record_names_and_roles_and_name_each_bad_seat() {
         SkillCheck::Skip,
         &CommandsConfig::default(),
         &crate::config::tiers::TierConfig::default(),
+        Some(272_000),
     );
     assert_eq!(loaded.failed["probe"], BTreeSet::from([path]));
 }
@@ -1224,6 +1238,7 @@ fn team_roles_distinguish_failed_agents_from_unknown_agents() {
         SkillCheck::Skip,
         &CommandsConfig::default(),
         &crate::config::tiers::TierConfig::default(),
+        Some(272_000),
     );
     let errors: Vec<_> = loaded
         .errors
@@ -1258,6 +1273,7 @@ fn duplicate_agent_names_record_both_sources_in_one_namespace() {
         SkillCheck::Skip,
         &CommandsConfig::default(),
         &crate::config::tiers::TierConfig::default(),
+        Some(272_000),
     );
     assert!(!loaded.agent_profiles.0.contains_key("duplicate"));
     assert_eq!(
@@ -1320,6 +1336,7 @@ fn even_a_bodyless_seat_needs_its_runtime_base() {
         SkillCheck::Skip,
         &CommandsConfig::default(),
         &crate::config::tiers::TierConfig::default(),
+        Some(272_000),
     );
     assert!(!loaded.agent_profiles.0.contains_key("worker"));
     assert!(loaded.teams.0.is_empty());
@@ -1355,6 +1372,7 @@ fn load_checked(root: &Path) -> LoadedDefinitions {
         },
         &CommandsConfig::default(),
         &crate::config::tiers::TierConfig::default(),
+        Some(272_000),
     )
 }
 
@@ -1378,6 +1396,7 @@ fn clean(root: &Path) -> LoadedDefinitions {
         SkillCheck::Skip,
         &CommandsConfig::default(),
         &crate::config::tiers::TierConfig::default(),
+        Some(272_000),
     );
     assert!(loaded.errors.is_empty(), "{:#?}", loaded.errors);
     loaded
@@ -1389,6 +1408,7 @@ fn error(root: &Path, needle: &str) {
         SkillCheck::Skip,
         &CommandsConfig::default(),
         &crate::config::tiers::TierConfig::default(),
+        Some(272_000),
     );
     assert!(
         loaded
@@ -1517,7 +1537,7 @@ fn runtime_resolution_aliases_and_defaults() {
         assert_eq!(profile.effort.as_deref(), Some(effort));
         assert_eq!(
             profile.auto_compact.as_deref(),
-            if kind == "pi" { None } else { Some("258k") }
+            if kind == "pi" { None } else { Some("272000") }
         );
         assert!(profile.append_system_prompt_files.is_empty());
         if kind == "claude" {
@@ -1576,6 +1596,7 @@ fn failed_parents_exclude_dependents_and_keep_independent_profiles() {
         SkillCheck::Skip,
         &CommandsConfig::default(),
         &crate::config::tiers::TierConfig::default(),
+        Some(272_000),
     );
     assert_eq!(loaded.errors.len(), 2);
     assert!(loaded.errors.iter().any(|error| error.message
@@ -1677,7 +1698,8 @@ fn names_and_kind_bases_are_validated() {
                 root.path(),
                 SkillCheck::Skip,
                 &CommandsConfig::default(),
-                &crate::config::tiers::TierConfig::default()
+                &crate::config::tiers::TierConfig::default(),
+                Some(272_000),
             )
             .errors
             .is_empty()
@@ -1700,6 +1722,7 @@ fn names_and_kind_bases_are_validated() {
         SkillCheck::Skip,
         &CommandsConfig::default(),
         &crate::config::tiers::TierConfig::default(),
+        Some(272_000),
     );
     assert!(
         loaded
@@ -1733,6 +1756,7 @@ fn names_and_kind_bases_are_validated() {
         SkillCheck::Skip,
         &CommandsConfig::default(),
         &crate::config::tiers::TierConfig::default(),
+        Some(272_000),
     );
     assert_eq!(
         loaded.failed["claude"],
@@ -1791,6 +1815,7 @@ fn agents_and_seats_allow_loaded_subagents_and_commands() {
         SkillCheck::Skip,
         &commands,
         &crate::config::tiers::TierConfig::default(),
+        Some(272_000),
     );
     assert!(loaded.errors.is_empty(), "{:#?}", loaded.errors);
     assert!(loaded.agent_profiles.0.contains_key("worker"));
@@ -1813,6 +1838,7 @@ fn an_agent_allowing_a_failed_subagent_fails_on_its_own_file() {
         SkillCheck::Skip,
         &CommandsConfig::default(),
         &crate::config::tiers::TierConfig::default(),
+        Some(272_000),
     );
     assert!(!loaded.agent_profiles.0.contains_key("planner"));
     assert!(loaded.errors.iter().any(|error| {
@@ -1862,6 +1888,70 @@ fn traits_deduplicate_and_preserve_unrelated_placeholders() {
     );
     assert!(render("${traits}", &["missing"]).is_err());
     assert!(render("${traits}", &["../outside"]).is_err());
+}
+
+#[test]
+fn native_compaction_default_is_configurable_and_preserves_inheritance() {
+    let root = fixture();
+    for kind in ["claude", "codex", "pi", "amp", "kiro"] {
+        let tools = if matches!(kind, "claude" | "codex") {
+            "\ntools: []"
+        } else {
+            ""
+        };
+        definition(
+            root.path(),
+            &format!("agents/{kind}-worker.md"),
+            &format!("agent: {kind}{tools}"),
+            "",
+        );
+    }
+    definition(
+        root.path(),
+        "agents/parent.md",
+        "agent: claude\ntools: []\nauto-compact: 200k",
+        "",
+    );
+    definition(root.path(), "agents/child.md", "agent: parent", "");
+    for window in [Some(272_000), Some(300_000), None] {
+        let loaded = load(
+            root.path(),
+            SkillCheck::Skip,
+            &CommandsConfig::default(),
+            &crate::config::tiers::TierConfig::default(),
+            window,
+        );
+        assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
+        for kind in ["claude", "codex", "pi", "amp", "kiro"] {
+            let expected = if matches!(kind, "claude" | "codex") {
+                window.map(|n| n.to_string())
+            } else {
+                None
+            };
+            assert_eq!(
+                loaded.agent_profiles.0[&format!("{kind}-worker")].auto_compact,
+                expected
+            );
+        }
+        assert_eq!(
+            loaded.agent_profiles.0["child"].auto_compact.as_deref(),
+            Some("200k")
+        );
+        assert_eq!(loaded.agent_profiles.0["claude"].auto_compact, None);
+    }
+    let root = team_fixture();
+    team_definition(root.path(), TEAM_STAGES, TEAM_ROLES, "Pipeline.");
+    let loaded = load(
+        root.path(),
+        SkillCheck::Skip,
+        &CommandsConfig::default(),
+        &crate::config::tiers::TierConfig::default(),
+        None,
+    );
+    assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
+    for role in &loaded.teams.0["probe"].roles {
+        assert_eq!(loaded.agent_profiles.0[&role.profile].auto_compact, None);
+    }
 }
 
 #[test]

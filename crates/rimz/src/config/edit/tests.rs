@@ -170,6 +170,7 @@ const LEGACY_SET_KEYS: &[&str] = &[
     "agents.worktree.hooks.removed",
     "agents.placement",
     "harness.smart_compact",
+    "harness.auto_compact",
     "harness.flip_compact",
     "harness.compact_instruction",
     "harness.idle_compact",
@@ -361,6 +362,7 @@ fn validates_config_key_read_and_write_surfaces() {
         "notifications.title",
         "notifications.body",
         "harness.smart_compact",
+        "harness.auto_compact",
         "harness.flip_compact",
         "harness.compact_instruction",
         "harness.idle_compact",
@@ -1428,6 +1430,36 @@ fn harness_smart_compact_values_are_parsed_as_strings() {
     assert_eq!(parse_set_value(&key, "70%").as_str(), Some("70%"));
     assert_eq!(parse_set_value(&key, "120000").as_str(), Some("120000"));
     assert_eq!(parse_set_value(&key, "180k").as_str(), Some("180k"));
+    for raw in ["off", "272k", "272000"] {
+        assert_eq!(parse_set_value(&key, raw).as_str(), Some(raw));
+    }
+}
+
+#[test]
+fn harness_auto_compact_values_are_parsed_as_strings() {
+    let key = parse_key("harness.auto_compact").unwrap();
+    for raw in ["off", "272k", "272000"] {
+        assert_eq!(parse_set_value(&key, raw).as_str(), Some(raw));
+    }
+}
+
+#[test]
+fn harness_auto_compact_validation_accepts_off_and_native_windows() {
+    let key = parse_key("harness.auto_compact").unwrap();
+    for raw in ["off", "100k", "272000", "1m"] {
+        validate_set_value(&key, &Value::from(raw)).unwrap();
+    }
+    for value in [
+        Value::from("70%"),
+        Value::from("99k"),
+        Value::from("abc"),
+        Value::from(272000),
+    ] {
+        assert_eq!(
+            validate_set_value(&key, &value).unwrap_err().to_string(),
+            "harness.auto_compact must be off or a token count from 100k through 1M, such as 272k"
+        );
+    }
 }
 
 #[test]
@@ -1536,12 +1568,13 @@ fn harness_smart_compact_validation_rejects_bad_values() {
     validate_set_value(&key, &Value::from("70%")).expect("percent threshold");
     validate_set_value(&key, &Value::from("120000")).expect("token threshold");
     validate_set_value(&key, &Value::from("180k")).expect("k suffix");
+    assert!(validate_set_value(&key, &Value::from("off")).is_ok());
 
     let err = validate_set_value(&key, &Value::from("abc"))
         .expect_err("invalid smart-compact threshold")
         .to_string();
     assert!(
-        err.contains("invalid auto-compact threshold `abc`"),
+        err == "harness.smart_compact must be off, a token count such as 180k, or a percentage such as 70%",
         "unexpected error: {err}"
     );
 }

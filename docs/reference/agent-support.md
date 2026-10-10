@@ -265,6 +265,8 @@ The `auto-compact` field on a profile or team role sets the agent's native auto-
 | Codex | ✓ | `-c model_auto_compact_token_limit=<tokens>`; Codex clamps it to 90% of the model window |
 | Every other agent and process plugins | ✗ | refused at launch |
 
+Profiles without an explicit or inherited `auto-compact` use the machine [`[harness] auto_compact`](../guide/configuration.md#native-auto-compaction) default, `272k`, on Claude and Codex. This covers Markdown definitions and trusted project TOML profiles; bare-kind launches are unchanged. `"off"` passes no native window, leaving the provider's own default. The clamps above still apply.
+
 ## The wiring matrix
 
 The wiring matrix is the mechanism under the six capabilities: nineteen integration concerns, each naming one thing an adapter reads from or drives in its agent. Use it to find why a capability reads partial, or when [building an adapter](../contributing/agent-adapters.md).

@@ -2843,6 +2843,7 @@ fn tier_override_changes_the_supervised_launch_runtime() {
         crate::config::definitions::SkillCheck::Skip,
         &machine.agents.commands,
         &machine.tiers,
+        machine.harness.auto_compact,
     );
     assert!(definitions.errors.is_empty(), "{:?}", definitions.errors);
     machine.agents.profiles = definitions.agent_profiles;

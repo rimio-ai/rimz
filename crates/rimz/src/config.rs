@@ -739,7 +739,13 @@ impl MachineConfig {
         } else {
             definitions::SkillCheck::Skip
         };
-        let loaded = definitions::load(agents_home, check, &self.agents.commands, &self.tiers);
+        let loaded = definitions::load(
+            agents_home,
+            check,
+            &self.agents.commands,
+            &self.tiers,
+            self.harness.auto_compact,
+        );
         self.agents.profiles = loaded.agent_profiles;
         self.subagents.profiles = loaded.subagent_profiles;
         self.agents.teams.0.extend(loaded.teams.0);

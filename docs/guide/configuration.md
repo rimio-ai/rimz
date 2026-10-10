@@ -222,6 +222,17 @@ A daily cap runs from local midnight in your [`timezone`](#sidebar-rendering) an
 
 The daily keys are the on-switch. `rimz budget` inspects and adjusts a cap that is already armed without touching the file, and refuses to arm one the file never set; it shows `harness.turn_budget` read-only, so change that standing per-turn cap with `rimz config set harness.turn_budget 3` or delete the key. The cap model (the [five scopes](./budget.md#one-model-five-scopes), what a park does, and what resumes it) is the [budgets guide](./budget.md).
 
+### Native auto-compaction
+
+Claude and Codex compact automatically when a conversation reaches their native ceiling. `auto_compact` sets the window RimZ passes to profiles that have no `auto-compact` of their own:
+
+```toml
+[harness]
+auto_compact = "272k"
+```
+
+The built-in default is `272k`. The value takes a token count from `100k` through `1M` inclusive (`"272k"`, `"272000"`, or `"1m"`), never a percentage. Set it to `"off"` to pass no window and leave the provider's default alone. It applies to Markdown definitions and trusted project TOML profiles on Claude and Codex; other providers and bare-kind launches such as `rimz agents claude` are unchanged. A profile's own `auto-compact`, inherited values, and explicit team role overrides still win. Claude caps the native window at the model's context window; Codex clamps it to 90% ([provider support](../reference/agent-support.md#auto-compaction-window)). On any model whose window is at or below `258k` (a 200k Claude model, or Codex GPT-5.5 after its 90% clamp), the native ceiling sits below the built-in smart threshold, so smart compaction never fires there unless you lower it.
+
 ### Smart compaction
 
 ```toml
@@ -230,7 +241,7 @@ smart_compact = "200k"
 compact_instruction = "preserve the open questions and exact decisions"
 ```
 
-`smart_compact` sets the default threshold for compact-first `rimz message` sends and scheduled loop waits, as an occupied-token count (`"200k"` or `"120000"`) or a percentage of the window (`"70%"`). Once an agent's context has reached the threshold, RimZ submits its compact command ahead of the text so the prompt lands against a fresh window. Left unset, compaction stays opt-in through `rimz message --smart-compact`, which overrides this value when both are present.
+`smart_compact` sets the default threshold for compact-first `rimz message` sends and scheduled loop waits, as an occupied-token count (`"200k"` or `"120000"`) or a percentage of the window (`"70%"`). Once an agent's context has reached the threshold, RimZ submits its compact command ahead of the text so the prompt lands against a fresh window. Left unset, it defaults to `258k`; `"off"` disables it. `rimz message --smart-compact` overrides the machine value for that send, including when the machine setting is `"off"`.
 
 `compact_instruction` is the brief that rides the compact command, for smart, idle, and hand-off compaction alike; [`rimz agents compact`](../reference/cli/agents.md#compact) uses it too unless you pass an instruction on the command line. Unset, RimZ picks a built-in brief by the agent's seat: a solo agent is asked to preserve decisions, problems, alternatives, exact details, current state, and next steps, while a [team](./teams.md) member's brief points at the board, the stage files, and git by path and section and keeps only what its own window knows plus what is in flight. Set the key to another string to replace both briefs, or to `""` to send the bare command. Only adapters whose native command accepts trailing text receive it: Claude, Grok, and Droid do; every other adapter gets its bare command.
 
@@ -599,7 +610,7 @@ A profile is a named agent preset, loaded from `agents/<name>.md` for one you la
 
 `subagents: [explorer, designer]` on a direct definition limits which children RimZ will delegate to; drop the native `Agent` tool at the same time. Omitting the field leaves delegation unrestricted, `[]` permits none, and a child definition cannot set it at all. The launch reminder names the available children and, for solo agents and subagents, the selected model by default; `model-reminder: false` removes only that model line. Team members never show model names, regardless of this setting.
 
-`auto-compact` sets the provider's own native compaction window, a token count from `100k` through `1M`, never a percentage. Markdown definitions default it to `258k` on the kinds that support it ([provider support](../reference/agent-support.md#auto-compaction-window)). A role's `flip-compact` is a different field, covered under [hand-off compaction](#hand-off-compaction).
+`auto-compact` sets the provider's own native compaction window, a token count from `100k` through `1M`, never a percentage. Profiles without a value inherit the machine [`auto_compact`](#native-auto-compaction) default on the kinds that support it ([provider support](../reference/agent-support.md#auto-compaction-window)). A role's `flip-compact` is a different field, covered under [hand-off compaction](#hand-off-compaction).
 
 On the command line, `--model`, `--effort`, `--budget`, and `--system-prompt-file` override the resolved profile, and repeated `--append-system-prompt-file` values replace its fragment list for that launch while leaving the team layer intact. `--agent <PROFILE|KIND>` swaps the engine and keeps the seat identity; the carry-over rules are in the [launch reference](../reference/cli/agents.md#shared-launch-params). Markdown definitions accept no raw `args` and no prompt-path keys: tools generate the arguments, and bodies supply the prompt.
 

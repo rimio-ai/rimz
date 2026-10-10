@@ -1120,6 +1120,7 @@ fn parse_set_value(path: &[String], raw: &str) -> Value {
         || matches!(path, [root, child, _] if root == "accounts" && child == "use")
         || matches!(path, [root, _, _] if root == "models")
         || is_harness_smart_compact_edit(path)
+        || is_harness_auto_compact_edit(path)
         || is_harness_flip_compact_edit(path)
         || is_harness_compact_instruction_edit(path)
         || is_harness_idle_compact_edit(path)
@@ -1176,13 +1177,23 @@ fn validate_set_value(path: &[String], value: &Value) -> Result<()> {
         raw.parse::<super::harness::TurnCap>()
             .map_err(|err| ConfigEditErr::InvalidValue(err.to_string()))?;
     }
-    if is_harness_smart_compact_edit(path) {
-        let Some(threshold) = value.as_str() else {
-            invalid_value!("harness.smart_compact must be a string");
-        };
-        if let Err(err) = crate::store::message::AutoCompact::parse(threshold) {
-            invalid_value!("{err}");
-        }
+    if is_harness_auto_compact_edit(path)
+        && !value.as_str().is_some_and(|raw| {
+            raw == "off" || crate::store::message::AutoCompact::parse_native_window(raw).is_ok()
+        })
+    {
+        invalid_value!(
+            "harness.auto_compact must be off or a token count from 100k through 1M, such as 272k"
+        );
+    }
+    if is_harness_smart_compact_edit(path)
+        && !value.as_str().is_some_and(|raw| {
+            raw == "off" || crate::store::message::AutoCompact::parse(raw).is_ok()
+        })
+    {
+        invalid_value!(
+            "harness.smart_compact must be off, a token count such as 180k, or a percentage such as 70%"
+        );
     }
     if is_harness_flip_compact_edit(path)
         && !value.as_str().is_some_and(|raw| {
@@ -1256,6 +1267,10 @@ fn is_sidebar_theme_scheme_edit(path: &[String]) -> bool {
 
 fn is_harness_smart_compact_edit(path: &[String]) -> bool {
     matches!(path, [root, child] if root == "harness" && child == "smart_compact")
+}
+
+fn is_harness_auto_compact_edit(path: &[String]) -> bool {
+    matches!(path, [root, child] if root == "harness" && child == "auto_compact")
 }
 
 fn is_harness_compact_instruction_edit(path: &[String]) -> bool {

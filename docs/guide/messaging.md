@@ -179,7 +179,7 @@ A long turn can hit the context limit mid-message. An agent compacts by itself o
 rimz message --smart-compact 70% @claude "now write the migration guide"   # compact first if context ≥ 70% full
 ```
 
-Give a percentage of the window (`70%`) or an occupied-token count (`120000`, `180k`). Omit the flag and RimZ uses the `[harness] smart_compact` default, so you can set the behavior once and let every message inherit it ([loops → smart compaction](./loops.md#smart-compaction), [configuration → smart compaction](./configuration.md#smart-compaction)).
+Give a percentage of the window (`70%`) or an occupied-token count (`120000`, `180k`). Omit the flag and RimZ uses `[harness] smart_compact`, which defaults to `258k`; set it to `"off"` to disable compact-first sends. The flag overrides that machine value ([loops → smart compaction](./loops.md#smart-compaction), [configuration → smart compaction](./configuration.md#smart-compaction)).
 
 ## Ask and wait for the reply
 

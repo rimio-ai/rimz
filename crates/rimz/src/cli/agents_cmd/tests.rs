@@ -1269,6 +1269,7 @@ mod launch_options {
             rimz::config::definitions::SkillCheck::Skip,
             &machine.agents.commands,
             &machine.tiers,
+            machine.harness.auto_compact,
         );
         assert!(definitions.errors.is_empty(), "{:?}", definitions.errors);
         machine.agents.profiles = definitions.agent_profiles;

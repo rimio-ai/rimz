@@ -212,6 +212,7 @@ struct LoadScope<'a> {
     bases: &'a BTreeSet<String>,
     skills: &'a SkillCatalog<'a>,
     tiers: &'a super::tiers::TierConfig,
+    native_auto_compact: Option<u64>,
 }
 
 /// Non-empty, and only ASCII alphanumerics, `_`, and `-`.
@@ -228,6 +229,7 @@ pub fn load(
     skills: SkillCheck<'_>,
     commands: &CommandsConfig,
     tiers: &super::tiers::TierConfig,
+    native_auto_compact: Option<u64>,
 ) -> LoadedDefinitions {
     let catalog = SkillCatalog::new(skills);
     let mut loaded = LoadedDefinitions::default();
@@ -374,6 +376,7 @@ pub fn load(
         bases: &bases,
         skills: &catalog,
         tiers,
+        native_auto_compact,
     };
     // Children resolve first so an agent's `subagents:` checks against what loaded.
     agent::resolve_namespace(

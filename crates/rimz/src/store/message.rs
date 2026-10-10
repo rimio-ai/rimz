@@ -242,6 +242,14 @@ impl AutoCompact {
         }
     }
 
+    /// Parse a native auto-compaction window: 100k through 1M tokens, never a percentage.
+    pub fn parse_native_window(raw: &str) -> Result<u64, String> {
+        match Self::parse(raw)? {
+            Self::Tokens(tokens) if (100_000..=1_000_000).contains(&tokens) => Ok(tokens),
+            _ => Err("auto-compact must be a token count from 100k through 1M".to_owned()),
+        }
+    }
+
     /// Whether the occupied tokens reach this threshold. Percentages require a nonzero window.
     pub(crate) fn reached(self, occupied: u64, window: Option<u64>) -> bool {
         match self {
