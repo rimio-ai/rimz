@@ -12,7 +12,7 @@ use sha2::{Digest, Sha256};
 use crate::utils::time::unix_now_ms;
 
 use super::account::{AccountProbe, file_mtime_ms};
-use super::credits::AccountUsageReportable;
+use super::credits::{AccountUsageFault, AccountUsageReportable};
 use super::{AccountUsageIdentity, AccountUsageProbe, AgentAccount, ProviderAccountScope};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -98,15 +98,15 @@ enum Error {
 }
 
 impl AccountUsageReportable for Error {
-    fn should_report(&self) -> bool {
+    fn fault(&self) -> AccountUsageFault {
         match self {
             Self::NoCredentials { .. }
             | Self::ApiKeyOnly { .. }
             | Self::TokenExpired { .. }
-            | Self::UnsupportedProvider { .. } => false,
-            Self::Io { .. } | Self::Parse { .. } => true,
-            Self::Claude { source, .. } => source.should_report(),
-            Self::Codex { source, .. } => source.should_report(),
+            | Self::UnsupportedProvider { .. } => AccountUsageFault::NoCredentials,
+            Self::Io { .. } | Self::Parse { .. } => AccountUsageFault::Transient,
+            Self::Claude { source, .. } => source.fault(),
+            Self::Codex { source, .. } => source.fault(),
         }
     }
 }

@@ -73,35 +73,47 @@ fn named_login_env_reads_account_credentials_under_the_named_home() {
 
 #[test]
 fn reportable_classifier_treats_unauthorized_as_settled_auth() {
-    assert!(!CodexOauthUsageErr::NoCredentials.should_report());
-    assert!(!CodexOauthUsageErr::ApiKeyOnly.should_report());
+    assert!(
+        !CodexOauthUsageErr::NoCredentials
+            .fault()
+            .eq(&AccountUsageFault::Transient)
+    );
+    assert!(
+        !CodexOauthUsageErr::ApiKeyOnly
+            .fault()
+            .eq(&AccountUsageFault::Transient)
+    );
     assert!(
         !CodexOauthUsageErr::Http {
             kind: HttpErrKind::Status(401),
             host: "chatgpt.com".to_owned(),
         }
-        .should_report()
+        .fault()
+        .eq(&AccountUsageFault::Transient)
     );
     assert!(
         !CodexOauthUsageErr::Http {
             kind: HttpErrKind::Status(403),
             host: "chatgpt.com".to_owned(),
         }
-        .should_report()
+        .fault()
+        .eq(&AccountUsageFault::Transient)
     );
     assert!(
         CodexOauthUsageErr::Http {
             kind: HttpErrKind::Status(500),
             host: "chatgpt.com".to_owned(),
         }
-        .should_report()
+        .fault()
+        .eq(&AccountUsageFault::Transient)
     );
     assert!(
         CodexOauthUsageErr::Http {
             kind: HttpErrKind::Transport,
             host: "chatgpt.com".to_owned(),
         }
-        .should_report()
+        .fault()
+        .eq(&AccountUsageFault::Transient)
     );
 }
 
@@ -178,7 +190,7 @@ fn configured_base_url_accepts_only_official_or_loopback_hosts() {
     .unwrap();
     let error = configured_base_url(dir.path()).unwrap_err();
     assert!(matches!(error, CodexOauthUsageErr::UntrustedBaseUrl { .. }));
-    assert!(!error.should_report());
+    assert!(!error.fault().eq(&AccountUsageFault::Transient));
 }
 
 #[test]

@@ -8,7 +8,7 @@ use serde_json::Value;
 
 use crate::agents::account::file_mtime_ms;
 use crate::agents::context::{AgentRateLimits, RateLimitWindow, WindowSource};
-use crate::agents::credits::oauth_http_get;
+use crate::agents::credits::{AccountUsageFault, oauth_http_get};
 use crate::agents::{AccountUsageSnapshot, ExtraCredits, HttpErrKind};
 
 const MAINLAND_USAGE_URL: &str = "https://api.kimi.com/coding/v1/usages";
@@ -31,9 +31,14 @@ enum Error {
 }
 
 impl crate::agents::credits::AccountUsageReportable for Error {
-    fn should_report(&self) -> bool {
-        !matches!(self, Self::NoCredentials | Self::Unavailable)
-            && !matches!(self, Self::Http { kind, .. } if kind.is_auth_rejected())
+    fn fault(&self) -> AccountUsageFault {
+        if matches!(self, Self::NoCredentials | Self::Unavailable)
+            || matches!(self, Self::Http { kind, .. } if kind.is_auth_rejected())
+        {
+            AccountUsageFault::NoCredentials
+        } else {
+            AccountUsageFault::Transient
+        }
     }
 }
 
@@ -111,14 +116,16 @@ fn load_token(path: &Path) -> Result<String, Error> {
 
 fn fetch_with(url: &str, token: &str) -> Result<AccountUsageSnapshot, Error> {
     let headers = usage_headers(token);
-    let body =
-        oauth_http_get(url, &headers, "Kimi OAuth usage fetch").map_err(|(kind, host)| {
-            if matches!(kind, HttpErrKind::Status(404)) {
-                Error::Unavailable
-            } else {
-                Error::Http { kind, host }
+    let body = oauth_http_get(url, &headers, "Kimi OAuth usage fetch").map_err(|error| {
+        if matches!(error.kind, HttpErrKind::Status(404)) {
+            Error::Unavailable
+        } else {
+            Error::Http {
+                kind: error.kind,
+                host: error.host,
             }
-        })?;
+        }
+    })?;
     parse_response(&body)
 }
 

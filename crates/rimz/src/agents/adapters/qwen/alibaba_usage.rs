@@ -66,11 +66,14 @@ fn fetch(region: AlibabaRegion, api_key: &str) -> Result<AccountUsageSnapshot, E
         &body,
         "Qwen Alibaba Coding Plan quota fetch",
     )
-    .map_err(|(kind, host)| match kind {
+    .map_err(|error| match error.kind {
         kind if kind.is_auth_rejected() => Error::AuthRejected,
         HttpErrKind::Status(404) => Error::Unsupported,
         HttpErrKind::Status(429) => Error::Throttled,
-        kind => Error::Http { kind, host },
+        kind => Error::Http {
+            kind,
+            host: error.host,
+        },
     })?;
     parse_response(&response, region)
 }

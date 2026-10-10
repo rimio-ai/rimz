@@ -8,7 +8,7 @@ use sha2::{Digest, Sha256};
 use crate::agents::context::{
     AgentRateLimits, RateLimitWindow, RateLimitWindowScope, WindowSource, clamp_pct,
 };
-use crate::agents::credits::oauth_http_get;
+use crate::agents::credits::{AccountUsageFault, oauth_http_get};
 use crate::agents::{AccountUsageIdentity, AccountUsageSnapshot, HttpErrKind};
 
 const ACCOUNT_KEY_DOMAIN: &[u8] = b"rimz/copilot-account-key/v1";
@@ -35,14 +35,18 @@ pub(super) enum CopilotUsageErr {
 }
 
 impl crate::agents::credits::AccountUsageReportable for CopilotUsageErr {
-    fn should_report(&self) -> bool {
-        !matches!(
+    fn fault(&self) -> AccountUsageFault {
+        if matches!(
             self,
             Self::NoCredentials | Self::ConfigUnavailable | Self::InvalidHost
-        ) && !matches!(
+        ) || matches!(
             self,
             Self::Http { kind, .. } if kind.is_auth_rejected()
-        )
+        ) {
+            AccountUsageFault::NoCredentials
+        } else {
+            AccountUsageFault::Transient
+        }
     }
 }
 
@@ -213,8 +217,13 @@ fn fetch_usage_with_url(url: &str, token: &str) -> Result<AccountUsageSnapshot> 
         ("Editor-Plugin-Version", PLUGIN_VERSION.to_owned()),
         ("User-Agent", USER_AGENT.to_owned()),
     ];
-    let body = oauth_http_get(url, &headers, "copilot: fetching account usage")
-        .map_err(|(kind, host)| CopilotUsageErr::Http { kind, host })?;
+    let body =
+        oauth_http_get(url, &headers, "copilot: fetching account usage").map_err(|error| {
+            CopilotUsageErr::Http {
+                kind: error.kind,
+                host: error.host,
+            }
+        })?;
     parse_usage_response(&body)
 }
 
@@ -732,7 +741,7 @@ mod tests {
                 host: "api.github.com".to_owned(),
             },
         ] {
-            assert!(!error.should_report(), "{error}");
+            assert!(!error.fault().eq(&AccountUsageFault::Transient), "{error}");
         }
         for error in [
             CopilotUsageErr::Http {
@@ -741,7 +750,7 @@ mod tests {
             },
             CopilotUsageErr::UnusableSchema,
         ] {
-            assert!(error.should_report(), "{error}");
+            assert!(error.fault().eq(&AccountUsageFault::Transient), "{error}");
         }
     }
 

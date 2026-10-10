@@ -264,6 +264,7 @@ fn account_usage_outcome(probe: &crate::agents::AccountUsageProbe) -> &'static s
     match probe {
         crate::agents::AccountUsageProbe::Found { .. } => "success",
         crate::agents::AccountUsageProbe::NoCredentials(_) => "no_credentials",
+        crate::agents::AccountUsageProbe::NotEntitled(_) => "not_entitled",
         crate::agents::AccountUsageProbe::Failed(_) => "failed",
         crate::agents::AccountUsageProbe::Unsupported => "unsupported",
     }

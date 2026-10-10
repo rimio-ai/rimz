@@ -14,7 +14,7 @@ use std::path::Path;
 
 use crate::agents::account::file_mtime_ms;
 use crate::agents::context::WindowSource;
-use crate::agents::credits::{oauth_http_get, trusted_usage_url, url_host};
+use crate::agents::credits::{AccountUsageFault, oauth_http_get, trusted_usage_url, url_host};
 use crate::agents::payload::non_empty_trimmed;
 use crate::agents::{AccountUsageSnapshot, HttpErrKind, RedeemEffect, ResetCredits};
 
@@ -43,21 +43,25 @@ pub(crate) enum CodexOauthUsageErr {
 }
 
 impl crate::agents::credits::AccountUsageReportable for CodexOauthUsageErr {
-    /// Whether this failure is worth reporting off-box. Absent or API-key-only
+    /// Which fault this failure is: only a transient one reports off-box. Absent or API-key-only
     /// credentials and a locally refused base URL are settled states, not
     /// faults; provider 401 and 403 responses are settled auth verdicts too.
     /// Parse and other HTTP failures are.
-    fn should_report(&self) -> bool {
-        !matches!(
+    fn fault(&self) -> AccountUsageFault {
+        if matches!(
             self,
             Self::NoCredentials | Self::ApiKeyOnly | Self::UntrustedBaseUrl { .. }
-        ) && !matches!(
+        ) || matches!(
             self,
             Self::Http {
                 kind: HttpErrKind::Status(401 | 403),
                 ..
             }
-        )
+        ) {
+            AccountUsageFault::NoCredentials
+        } else {
+            AccountUsageFault::Transient
+        }
     }
 }
 
@@ -269,8 +273,12 @@ pub(super) fn fetch_usage_with_url(
 
 fn http_get(url: &str, credentials: &CodexOauthCredentials) -> Result<String> {
     let headers = http_headers(credentials);
-    oauth_http_get(url, &headers, "codex: fetching OAuth account usage")
-        .map_err(|(kind, host)| CodexOauthUsageErr::Http { kind, host })
+    oauth_http_get(url, &headers, "codex: fetching OAuth account usage").map_err(|error| {
+        CodexOauthUsageErr::Http {
+            kind: error.kind,
+            host: error.host,
+        }
+    })
 }
 
 fn http_headers(credentials: &CodexOauthCredentials) -> Vec<(&'static str, String)> {
@@ -416,7 +424,10 @@ pub(super) fn consume_reset_credit(
         },
         "codex: consuming rate-limit reset credit",
     )
-    .map_err(|(kind, host)| CodexOauthUsageErr::Http { kind, host })?;
+    .map_err(|error| CodexOauthUsageErr::Http {
+        kind: error.kind,
+        host: error.host,
+    })?;
     Ok(serde_json::from_str(&body)?)
 }
 
