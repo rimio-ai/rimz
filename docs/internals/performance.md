@@ -95,7 +95,7 @@ Each lane's cost and the bound that holds it down. Reproducible figures come fro
 | --- | --- | --- |
 | Snapshot rollup | O(1) from `cache/snapshots/latest.json`; O(delta bytes) when writes outran the cache | The `(generation, offset)` freshness stamp; a long-lived `RollupCursor` holds the parsed base, and the rotation carryover beneath it is parsed once per file identity per thread and shared, never copied, by every fold |
 | Event-log fold | Warm cursor: one stat of the log and one of the carryover, plus the appended frames; the projection clones only the rows it keeps. Unchanged log: shared handles only | Guard tests `delta_fold_is_o_new_bytes` and `warm_fold_parses_unchanged_carryover_zero_times` |
-| Workspace projection | One enrichment and one serialization per changed fold | Published for new-attachment seeds; the fetch worker always runs the full fold |
+| Workspace fold | One enrichment, cloned for each pane's projection; no seed serialization | The host retains its last delivered fold for new-attachment seeds |
 | Fold observations | One focus-anchor read, one body-filter read and one merged read-mark observation per real cycle, shared by every attachment | Pane-local application keeps selection, confirmation and receipts; live nonce comparison guards retirement ([state.md](./sidebar/state.md#focus-intent)) |
 | Pane roster (producer) | Zellij: one topology read plus a `zellij pipe` nudge. tmux: one `list-panes` call | `SNAPSHOT_CACHE_TTL` while a client drives it, `EVENT_PANE_TTL` while the presence stamp is fresh; one attempt per data tick |
 | Process metrics (producer) | A due sample reads one metrics record per process | Per-pane focused and background stamps in `lanes/metrics-sample.json`; the full process-table walk runs only on pane churn |
@@ -274,7 +274,7 @@ Each renderer knows its own pane and the latest focus view, so it can tell wheth
 
 The producer builds the snapshot in process on its fetch worker ([`produce_workspace_snapshot`](../../crates/rimz/src/sidebar/produce/mod.rs)), with no `rimz sidebar snapshot` fork per tick. The worker's cadence stamp allows one attempt per data tick, and only against a stale published frame, so unrelated wakeups that see the same stale frame cannot multiply production.
 
-The fold spine splits into renderer-independent [`enrich_workspace`](../../crates/rimz/src/sidebar/enrich.rs) and renderer-local `project_local`. The host folds the first half once and projects it for every subscribed pane. It publishes `lanes/workspace-projection.json` for new-attachment seeds, not an alternate renderer adoption path. Both lanes are [state.md → One fetch cycle](./sidebar/state.md#one-fetch-cycle).
+The fold spine splits into renderer-independent [`enrich_workspace`](../../crates/rimz/src/sidebar/enrich.rs) and renderer-local `project_local`. The host folds the first half once and projects it for every subscribed pane. It remembers the last delivered fold for new-attachment seeds. Both lanes are [state.md → One fetch cycle](./sidebar/state.md#one-fetch-cycle).
 
 ### Truth arrives by event, the frame by coalescing
 
@@ -359,7 +359,6 @@ Wins identified but not taken, because each changes a contract or crosses a back
 
 1. **tmux `list-panes` over the held control client.** The host's `tmux -C` client already writes commands and parses reply blocks, so sending `list-panes` over it would remove the producer's per-window fork and connect. The saving is 10 to 30 ms on the already-cheap backend, and the poll must still cover a dead watcher.
 2. **Delta-bearing wakeup datagrams.** `StoreDelta` could carry the appended frames, so a warm consumer folds from the datagram with no file IO. The warm cursor fold is already one stat plus a page-cache-hot read, so the win is microseconds against a second delivery path for state that must never become truth. Build it only above sustained hundreds of events per second.
-3. **A faster workspace-projection codec.** JSON keeps the projection inspectable and tolerant of mixed builds. If a live consumer profile shows projection parsing dominating, replace only this disposable file's codec with postcard behind the same identity, publication, and fallback mechanics.
 
 Two costs belong upstream, and RimZ only bounds them:
 
