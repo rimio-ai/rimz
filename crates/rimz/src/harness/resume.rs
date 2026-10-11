@@ -112,6 +112,7 @@ impl<'a> LaneResumeRequest<'a> {
     /// its members replay posture from.
     fn context(&self, profiles: &'a ProfilesConfig) -> ResumeContext<'a> {
         ResumeContext {
+            in_place: false,
             project_root: Some(self.project_root),
             workspace_id: self.workspace_id,
             rimz_bin: self.rimz_bin,
@@ -2064,6 +2065,7 @@ fn newest_cmp(
 /// profiles its members replay their posture from.
 #[derive(Clone, Copy)]
 pub struct ResumeContext<'a> {
+    pub in_place: bool,
     pub project_root: Option<&'a Path>,
     pub workspace_id: &'a WorkspaceId,
     pub rimz_bin: &'a Path,
@@ -2209,6 +2211,7 @@ fn plan_resume_candidates_detailed(
             &candidate.identity,
             channel.as_deref(),
             &posture.launch,
+            !ctx.in_place,
         );
         let tab_label = channel_label(channel.as_deref(), &candidate.cwd);
         let isolation = (

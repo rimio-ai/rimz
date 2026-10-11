@@ -1338,6 +1338,7 @@ pub(super) fn resume_command(
     identity: &ResumeLaunchIdentity,
     fallback_channel: Option<&str>,
     posture: &ResumeLaunchPosture,
+    close_pane_on_exit: bool,
 ) -> Vec<String> {
     let channel = identity
         .channel
@@ -1367,7 +1368,7 @@ pub(super) fn resume_command(
         rimz_bin,
         runtime,
         &crate::harness::launch::ExecRequest {
-            close_pane_on_exit: true,
+            close_pane_on_exit,
             identity: crate::harness::launch::ExecIdentity {
                 resume_model_override: posture.resume_model_override,
                 name: identity.name.clone(),
@@ -1461,6 +1462,7 @@ pub fn compile_layout_panes(
                                         &ResumeLaunchIdentity::from(agent.as_ref()),
                                         params.fallback_channel,
                                         &ResumeLaunchPosture::from(cell),
+                                        !params.in_place,
                                     )
                                 },
                                 Some(CohortSeed::Fresh) | None => {

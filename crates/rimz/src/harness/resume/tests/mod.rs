@@ -205,6 +205,7 @@ fn ctx<'a>(
     profiles: &'a ProfilesConfig,
 ) -> ResumeContext<'a> {
     ResumeContext {
+        in_place: false,
         project_root,
         workspace_id: &WORKSPACE,
         rimz_bin: Path::new(RIMZ_BIN),

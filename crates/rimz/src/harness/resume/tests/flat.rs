@@ -4,6 +4,26 @@
 use super::*;
 
 #[test]
+fn one_ended_solo_session_can_resume_in_place() {
+    let mut saved = agent("codex", "saved", "/code/project", 0);
+    saved.ended_at = Some(saved.last_seen);
+    let profiles = no_profiles();
+    let plan = plan_resume(
+        &[saved],
+        &BTreeSet::new(),
+        ResumeContext {
+            in_place: true,
+            ..ctx(1, Some(Path::new("/code/project")), &profiles)
+        },
+        |_| true,
+        |_| true,
+    );
+    assert_eq!(plan.tabs.len(), 1);
+    let request = decode_exec_request(&first_argv(&plan.tabs[0]));
+    assert!(!request.close_pane_on_exit);
+}
+
+#[test]
 fn resumes_root_agents_most_recent_first() {
     let agents = vec![
         agent("codex", "c1", "/code/query-engine", 30),
@@ -433,6 +453,7 @@ fn resume_command_replays_launch_identity() {
         &crate::harness::plan::ResumeLaunchIdentity::from(&agent),
         agent.channel.as_deref(),
         &crate::harness::plan::ResumeLaunchPosture::default(),
+        true,
     );
     assert_eq!(&argv[..4], [RIMZ_BIN, "agents", "exec", "claude"]);
     let request = decode_exec_request(&argv);

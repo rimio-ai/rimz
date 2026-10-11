@@ -2403,6 +2403,54 @@ fn matched_resume_isolation_overrides_without_stamping_one_shot_values() {
 }
 
 #[test]
+fn resume_command_can_return_to_the_existing_shell() {
+    let root = Path::new("/code/project");
+    let runtime = RuntimePaths::under(
+        crate::WorkspaceId::from_project_root(root),
+        Path::new("/runtime"),
+    )
+    .unwrap();
+    let agent = crate::testkit::agent_state("codex", "saved", Timestamp::UNIX_EPOCH);
+    let argv = resume_command(
+        Path::new("/bin/rimz"),
+        &runtime,
+        &ResumeLaunchIdentity::from(&agent),
+        None,
+        &ResumeLaunchPosture::default(),
+        false,
+    );
+    assert!(!exec_request(&argv).close_pane_on_exit);
+}
+
+#[test]
+fn in_place_resume_layout_returns_to_the_existing_shell() {
+    let root = Path::new("/code/project");
+    let runtime = RuntimePaths::under(
+        crate::WorkspaceId::from_project_root(root),
+        Path::new("/runtime"),
+    )
+    .unwrap();
+    let agent = crate::testkit::agent_state("codex", "saved", Timestamp::UNIX_EPOCH);
+    let layout = LayoutSpec::single(Cell::agent(agent.kind.clone()));
+    let seeds = [CohortSeed::Resume(Box::new(agent))];
+    let panes = compile_layout_panes(
+        &layout,
+        LayoutPaneParams {
+            runtime: &runtime,
+            cwd: root,
+            cleanup_worktree: false,
+            in_place: true,
+            resume_seeds: Some(&seeds),
+            launch_identities: &[],
+            fallback_channel: None,
+            loop_reminder: None,
+        },
+    )
+    .unwrap();
+    assert!(!exec_request(&panes.columns[0].panes[0].argv).close_pane_on_exit);
+}
+
+#[test]
 fn mixed_resume_and_fresh_panes_stay_aligned_in_layout_order() {
     let dir = tempfile::tempdir().expect("temp dir");
     let runtime = RuntimePaths::under(
