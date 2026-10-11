@@ -1,24 +1,213 @@
-//! CLI boundary for place-first lane recovery in a live room.
+//! CLI boundary for single-session and place-first lane recovery in a live room.
 //!
 //! Harness resume policy resolves and qualifies lanes. This module gathers
 //! machine facts, preflights providers, applies mux/store actions, and renders
 //! their user-facing result.
 
+use std::collections::BTreeSet;
 use std::io::Write;
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use jiff::Timestamp;
 use rimz::agents::LocalSessionObservation;
 use rimz::harness::ancestry::{LaunchFocus, resolve_caller};
 use rimz::harness::resume::{
     LaneRestoreConfig, LaneResumeAction, LaneResumeError, LaneResumeRequest, LaneResumeSelector,
-    LaneSummary, LaneWorktree, MaterializedRecovery, ResumeSkip, plan_lane_resume,
-    resume_session_present,
+    LaneSummary, LaneWorktree, MaterializedRecovery, ResumeContext, ResumeSkip, ResumeSkipReason,
+    plan_lane_resume, plan_resume, resume_session_present,
 };
 use rimz::mux::{ResumeTab, SplitPaneOptions, SplitPlacement, SplitTarget};
 
+use super::placement::{self, Placement, PlacementErrors, PlacementRequest};
 use super::{GlobalFlags, RoomContext, RoomSizing};
+
+pub(super) fn resume_agent(reference: &str, bg: bool, globals: &GlobalFlags) -> Result<()> {
+    let ctx = crate::cli::ctx::Ctx::open(globals)?;
+    let workspace = &ctx.workspace;
+    let store = &ctx.store;
+    let snapshot = ctx.alive_snapshot()?;
+    let agent = match super::resolve_live_or_audit(
+        store,
+        workspace,
+        ctx.runtime(),
+        &snapshot,
+        reference,
+        &ctx.address_context(),
+    ) {
+        Ok((agent, _)) => agent,
+        Err(error) if crate::cli::resolution_missed(&error) => {
+            // Provider-native children are deliberately not ordinary addresses.
+            // Resolve them only to give this command's child refusal.
+            let audit = store.runtime_projection(rimz::RuntimeScope::Audit)?;
+            let children: Vec<_> = audit
+                .agents
+                .iter()
+                .filter(|agent| agent.is_provider_subagent())
+                .collect();
+            let unscoped = crate::cli::CurrentChannel::Unscoped.address_context();
+            if let Ok(child) = rimz::address::resolve_agent(reference, None, &unscoped, &children) {
+                bail!(
+                    "@{} is a provider subagent; use `rimz subagents` instead",
+                    child.name.as_deref().unwrap_or(child.agent_id.as_str())
+                );
+            }
+            return Err(error);
+        }
+        Err(error) => return Err(error),
+    };
+    let name = agent.name.as_deref().unwrap_or(agent.agent_id.as_str());
+    if matches!(
+        rimz::store::runtime::agent_liveness(&agent),
+        rimz::store::runtime::AgentLiveness::Live { .. }
+    ) {
+        bail!(
+            "agent `{}:{name}` is still live; `rimz agents focus @{name}` reaches it",
+            agent.kind
+        );
+    }
+    if let (Some(team), Some(role)) = (&agent.team, &agent.role) {
+        bail!(
+            "@{name} is a member of team `{team}`; reopen it with `rimz agents {team}.{role} --resume`"
+        );
+    }
+    if agent.parent_agent_id.is_some() || agent.launch_depth.is_some_and(|depth| depth > 0) {
+        bail!("@{name} is a child session; use `rimz subagents` instead");
+    }
+    let cwd = agent
+        .worktree_path
+        .as_deref()
+        .filter(|path| !path.is_empty())
+        .map(Path::new)
+        .with_context(|| format!("cannot resume @{name}: no saved working directory"))?;
+    let mux = rimz::room::require_live_mux(globals.mux, workspace)?;
+    let machine = crate::cli::machine_config();
+    let room =
+        RoomContext::from_resolved(workspace, machine.clone(), mux, RoomSizing::OrdinaryTab)?;
+    let focus = LaunchFocus::resolve(bg, resolve_caller(&snapshot.agents).as_ref());
+    let outside_launch_dir = placement::resume_outside_launch_dir(
+        agent.channel.as_deref(),
+        cwd,
+        &workspace.project_root,
+        &workspace.worktree_root,
+        std::env::current_dir().ok().as_deref(),
+    );
+    let placement = placement::apply_in_place_downgrade(
+        placement::resolve_placement(
+            false,
+            false,
+            machine.agents.placement,
+            outside_launch_dir,
+            true,
+            rimz::mux::ambient_pane_id().is_some(),
+        )?,
+        focus,
+        true,
+    );
+    let logins = rimz::agents::room_accounts(
+        &store.paths().workspace_record,
+        Some(&workspace.project_root),
+        &machine,
+    )?;
+    let catalog = rimz::agents::LoginCatalog::room_view(&machine.accounts).0;
+    let availability = rimz::harness::plan::LaunchAvailability::read(
+        ctx.runtime(),
+        store.paths(),
+        &machine,
+        Timestamp::now(),
+    );
+    let config = LaneRestoreConfig::load(&machine, &workspace.project_root, |kind, model| {
+        availability.unavailable(kind, model)
+    })?;
+    let plan = plan_resume(
+        std::slice::from_ref(&agent),
+        &BTreeSet::new(),
+        ResumeContext {
+            in_place: placement == Placement::SamePane,
+            project_root: Some(&workspace.project_root),
+            workspace_id: &workspace.workspace_id,
+            rimz_bin: &rimz::proc::rimz_exe(),
+            runtime: ctx.runtime(),
+            profiles: &config.profiles,
+            max: machine.resume.max,
+            logins: &logins,
+            catalog: &catalog,
+        },
+        Path::is_dir,
+        resume_session_present,
+    );
+    report_posture_warnings(&plan.warnings)?;
+    for (kind, agent_id) in &plan.agents_to_end {
+        let observation = rimz::agents::AgentLifecycleObservation::new(
+            Some(agent_id.clone()),
+            rimz::agents::LifecycleSignal::Ended,
+        );
+        store.append_event(&rimz::EventEnvelope::agent_lifecycle(
+            workspace.workspace_id.clone(),
+            &workspace.session_name,
+            kind.as_str(),
+            "rimz.worktree-gone",
+            &observation,
+        ))?;
+    }
+    let Some(tab) = plan.tabs.into_iter().next() else {
+        let reason = plan
+            .skipped
+            .first()
+            .map_or(ResumeSkipReason::WorktreeGone.label(), |skip| {
+                skip.reason.label()
+            });
+        bail!("cannot resume @{name}: {reason}");
+    };
+    crate::cli::lsp_admission::admit(&tab.cwd, &machine)?;
+    rimz::harness::launch::preflight_agent_kind(
+        &workspace.project_root,
+        agent.kind.as_str(),
+        &tab.cwd,
+    )?;
+    logins
+        .login(&agent.kind, &machine.accounts)?
+        .health(&catalog.native_ambient(&agent.kind, &rimz::agents::ambient_env()))?;
+    let receipt = format!("resumed {}:{name} ({})", agent.kind, agent.agent_id);
+    if placement == Placement::NewTab {
+        room.open_resume_tab(tab, focus.takes_focus())?;
+        writeln!(std::io::stdout().lock(), "{receipt}")?;
+        return Ok(());
+    }
+    let batch = store.begin_agent_launch_batch(
+        &[],
+        rimz::store::writer::AgentLaunchScope {
+            session_name: workspace.session_name.clone(),
+            cwd: tab.cwd.clone(),
+            branch: None,
+            description: None,
+        },
+    )?;
+    let sidebar = room.sidebar_options(&tab.cwd);
+    placement::execute(
+        room.backend(),
+        store,
+        &batch,
+        PlacementRequest {
+            placement,
+            mux,
+            cwd: tab.cwd,
+            title: tab.label,
+            panes: tab.layout,
+            sidebar,
+            identity_env: tab.env,
+            focus,
+            errors: PlacementErrors {
+                new_tab: "opening resumed agent tab",
+                new_pane: "splitting the resumed agent into a new pane",
+                same_pane: "resuming the agent in the current pane",
+            },
+        },
+        || {
+            let _ = writeln!(std::io::stdout().lock(), "{receipt}");
+        },
+    )
+}
 
 pub(super) fn resume_lane(
     scope: Option<String>,

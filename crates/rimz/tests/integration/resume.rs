@@ -148,6 +148,431 @@ fn lifecycle(
     EventEnvelope::agent_lifecycle(h.workspace_id.clone(), "rimz-test", kind, event, obs)
 }
 
+#[cfg(unix)]
+mod agent_ref {
+    use super::*;
+    use crate::common::room::seed_live_zellij_room;
+    use crate::common::{
+        CommandTimeoutExt, Env, path_with_front, write_definition, write_env_dump_shim,
+        write_fake_login_shell, zellij_trace_shim,
+    };
+    use rimz::agents::PermissionMode;
+    use rimz::store::event::{AgentLaunchPayload, AgentLaunchState};
+    use std::path::PathBuf;
+    use std::process::{Command, Output};
+
+    const SESSION: &str = "saved-session";
+    const NAME: &str = "bright-otter";
+    const PANES: &str = r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"rimz-sidebar"},{"id":2,"is_plugin":false,"tab_id":1,"title":"sh"}]"#;
+
+    struct Fixture {
+        env: Env,
+        cwd: PathBuf,
+        transcript: PathBuf,
+        trace: PathBuf,
+        shim: PathBuf,
+        shell: PathBuf,
+    }
+
+    impl Fixture {
+        fn new(launch: LaunchParams, live: bool, parent: Option<&str>) -> Self {
+            let env = Env::new();
+            env.install_agent_hooks("claude");
+            std::fs::write(
+                env.rimz_home().join("config.toml"),
+                "[agents]\nisolation = 'host'\n",
+            )
+            .unwrap();
+            write_definition(
+                &env,
+                "agents",
+                "worker",
+                "description: Worker\nagent: claude\nmode: ask\nmodel: sonnet\ntools: []",
+                "Work.",
+            );
+            let shim = write_env_dump_shim(&env, "claude");
+            let shell = write_fake_login_shell(&env, "resume-shell", &[]);
+            let cwd = env.project_root.join("checkout");
+            std::fs::create_dir_all(&cwd).unwrap();
+            let transcript = cwd.join("saved.jsonl");
+            std::fs::write(&transcript, "{}\n").unwrap();
+            let trace = env.home_root.join("resume-mux.log");
+            let workspace = env.resolve_workspace(&env.project_root);
+            let store = env.store();
+            store.record_workspace(&workspace).unwrap();
+            let owner = live.then(|| {
+                rimz::store::runtime::current_process_owner(
+                    rimz::pane::RuntimeOwnerKind::Agent,
+                    SESSION,
+                )
+            });
+            store
+                .append_event(&EventEnvelope::agent_launched(
+                    workspace.workspace_id.clone(),
+                    &workspace.session_name,
+                    &AgentKind::new_unchecked("claude"),
+                    AgentLaunchPayload {
+                        agent_id: SESSION.into(),
+                        launch_id: Some("saved-launch".into()),
+                        agent_name: NAME.into(),
+                        agent_name_explicit: true,
+                        launch: LaunchParams {
+                            profile: Some("worker".into()),
+                            channel: Some("saved".into()),
+                            mode: Some(PermissionMode::Auto),
+                            isolation: Some(rimz::config::Isolation::Host),
+                            record: Some(rimz::agents::LaunchRecord::replay_or_new(
+                                None,
+                                Some("sonnet"),
+                                None,
+                            )),
+                            parent_agent_id: parent.map(Into::into),
+                            ..launch
+                        },
+                        state: AgentLaunchState::Bound,
+                        run_id: None,
+                        pane_id: Some(PaneId::from_parts(MuxName::Zellij, "terminal_2")),
+                        runtime_owner: owner.clone(),
+                        worktree_path: Some(cwd.display().to_string()),
+                        worktree_branch: None,
+                        prompt: None,
+                        description: None,
+                    },
+                ))
+                .unwrap();
+            let mut observation = AgentLifecycleObservation::new(
+                Some(SESSION.into()),
+                if live {
+                    LifecycleSignal::Registered
+                } else {
+                    LifecycleSignal::Ended
+                },
+            );
+            observation.runtime_owner = owner;
+            observation.transcript_path = Some(transcript.display().to_string());
+            store
+                .append_event(&EventEnvelope::agent_lifecycle(
+                    workspace.workspace_id.clone(),
+                    &workspace.session_name,
+                    "claude",
+                    "SessionEnd",
+                    &observation,
+                ))
+                .unwrap();
+            seed_live_zellij_room(
+                &env.runtime_paths(),
+                &workspace.session_name,
+                serde_json::from_str(PANES).unwrap(),
+            );
+            std::fs::write(env.home_root.join("presence.wasm"), b"test-presence").unwrap();
+            Self {
+                env,
+                cwd,
+                transcript,
+                trace,
+                shim,
+                shell,
+            }
+        }
+
+        fn command(&self, reference: &str) -> Command {
+            let workspace = self.env.resolve_workspace(&self.env.project_root);
+            let mut command = self.env.rimz();
+            command
+                .args(["--mux", "zellij", "agents", "resume", reference])
+                .envs(rimz::workspace::pin_env(
+                    &workspace.workspace_id,
+                    &self.env.project_root,
+                ))
+                .env("SHELL", &self.shell)
+                .env("PATH", path_with_front(&self.shim))
+                .env(
+                    "RIMZ_TEST_AGENT_ENV_DUMP",
+                    self.env.home_root.join("agent.env"),
+                )
+                .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+                .env("RIMZ_TEST_ZELLIJ_LOG", &self.trace)
+                .env("RIMZ_TEST_ZELLIJ_LOG_LAYOUTS", "1")
+                .env(
+                    "RIMZ_PRESENCE_PLUGIN",
+                    self.env.home_root.join("presence.wasm"),
+                )
+                .env(
+                    "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
+                    format!("{} [Created 1s ago]\n", workspace.session_name),
+                )
+                .env("RIMZ_TEST_ZELLIJ_LIST_PANES", PANES);
+            command.env("ZELLIJ_SESSION_NAME", workspace.session_name);
+            command
+        }
+
+        fn output(&self, reference: &str) -> Output {
+            self.command(reference).bounded_output().unwrap()
+        }
+
+        fn trace(&self) -> String {
+            std::fs::read_to_string(&self.trace).unwrap_or_default()
+        }
+    }
+
+    fn resumed_pane(document: &kdl::KdlDocument) -> Option<(&kdl::KdlNode, Vec<String>)> {
+        for node in document.nodes() {
+            if node.name().value() == "pane"
+                && let Some(args) = node.children().and_then(|children| children.get("args"))
+            {
+                let argv: Vec<String> = args
+                    .entries()
+                    .iter()
+                    .map(|entry| entry.value().as_string().unwrap().to_owned())
+                    .collect();
+                if argv.iter().any(|arg| arg == "--request") {
+                    return Some((node, argv));
+                }
+            }
+            if let Some(pane) = node.children().and_then(resumed_pane) {
+                return Some(pane);
+            }
+        }
+        None
+    }
+
+    #[test]
+    fn ended_solo_name_and_session_prefix_restore_the_recorded_session() {
+        for reference in ["@bright-otter", "@saved-sess"] {
+            let fixture = Fixture::new(LaunchParams::default(), false, None);
+            let store = fixture.env.store();
+            let mut newer = store
+                .read_events()
+                .unwrap()
+                .into_iter()
+                .find_map(|event| match event.kind() {
+                    rimz::store::event::EventKind::AgentLaunch(payload) => Some(payload),
+                    _ => None,
+                })
+                .unwrap();
+            newer.agent_id = "newer-session".into();
+            newer.launch_id = Some("newer-launch".into());
+            newer.agent_name = "newer-fox".into();
+            newer.runtime_owner = Some(rimz::store::runtime::current_process_owner(
+                rimz::pane::RuntimeOwnerKind::Agent,
+                "newer-session",
+            ));
+            let workspace = fixture.env.resolve_workspace(&fixture.env.project_root);
+            store
+                .append_event(&EventEnvelope::agent_launched(
+                    workspace.workspace_id,
+                    &workspace.session_name,
+                    &AgentKind::new_unchecked("claude"),
+                    newer,
+                ))
+                .unwrap();
+            let output = fixture.output(reference);
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(
+                String::from_utf8_lossy(&output.stdout),
+                "resumed claude:bright-otter (saved-session)\n"
+            );
+            let trace = fixture.trace();
+            assert_eq!(
+                trace
+                    .lines()
+                    .filter(|line| line.contains("action\tnew-tab"))
+                    .count(),
+                1,
+                "{trace}"
+            );
+            let layout: String = serde_json::from_str(
+                trace
+                    .lines()
+                    .find_map(|line| line.strip_prefix("layout-json\t"))
+                    .unwrap(),
+            )
+            .unwrap();
+            let layout: kdl::KdlDocument = layout.parse().unwrap();
+            let (pane, argv) = resumed_pane(&layout).unwrap();
+            assert_eq!(
+                pane.get("cwd").unwrap().value().as_string(),
+                Some(fixture.cwd.to_str().unwrap())
+            );
+            let payload = argv.windows(2).find(|pair| pair[0] == "--request").unwrap();
+            let request =
+                rimz::harness::launch::decode_exec_request("claude", None, &payload[1]).unwrap();
+            assert!(
+                matches!(&request.action, ExecAction::Resume { session_id, .. } if session_id == SESSION)
+            );
+            assert_eq!(request.identity.name.as_deref(), Some(NAME));
+            assert_eq!(request.identity.params.channel.as_deref(), Some("saved"));
+            assert_eq!(request.identity.params.profile.as_deref(), Some("worker"));
+            assert_eq!(request.identity.params.mode, Some(PermissionMode::Auto));
+            assert_eq!(request.identity.params.model.as_deref(), Some("sonnet"));
+            assert!(request.close_pane_on_exit);
+        }
+    }
+
+    #[test]
+    fn live_session_in_another_channel_is_refused_with_focus() {
+        let fixture = Fixture::new(LaunchParams::default(), true, None);
+        let output = fixture.output("@bright-otter");
+        assert_eq!(output.status.code(), Some(1));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("claude:bright-otter")
+                && stderr.contains("still live")
+                && stderr.contains("rimz agents focus @bright-otter"),
+            "{stderr}"
+        );
+        assert!(!fixture.trace().contains("action\tnew-tab"));
+    }
+
+    #[test]
+    fn closed_team_member_is_refused_with_role_resume() {
+        let fixture = Fixture::new(
+            LaunchParams {
+                team: Some("forge".into()),
+                role: Some("coder".into()),
+                ..Default::default()
+            },
+            false,
+            None,
+        );
+        let output = fixture.output("@bright-otter");
+        assert_eq!(output.status.code(), Some(1));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("member of team `forge`")
+                && stderr.contains("rimz agents forge.coder --resume"),
+            "{stderr}"
+        );
+    }
+
+    #[test]
+    fn children_are_refused_with_subagents() {
+        for (launch, parent) in [
+            (LaunchParams::default(), Some("parent-session")),
+            (
+                LaunchParams {
+                    launch_depth: Some(1),
+                    ..Default::default()
+                },
+                None,
+            ),
+        ] {
+            let fixture = Fixture::new(launch, false, parent);
+            let output = fixture.output("@bright-otter");
+            assert_eq!(output.status.code(), Some(1));
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(stderr.contains("rimz subagents"), "{stderr}");
+        }
+    }
+
+    #[test]
+    fn fresh_with_an_agent_reference_is_a_usage_error() {
+        let fixture = Fixture::new(LaunchParams::default(), false, None);
+        let output = fixture
+            .command("@bright-otter")
+            .arg("--fresh")
+            .bounded_output()
+            .unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    fn background_resume_in_the_saved_directory_splits_without_focus() {
+        let fixture = Fixture::new(LaunchParams::default(), false, None);
+        let output = fixture
+            .command("@bright-otter")
+            .current_dir(&fixture.cwd)
+            .env("ZELLIJ_PANE_ID", "2")
+            .env("RIMZ_TEST_ZELLIJ_VERSION", "0.45.1")
+            .arg("--bg")
+            .bounded_output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let trace = fixture.trace();
+        assert!(!trace.contains("action\tnew-tab"), "{trace}");
+        assert!(
+            trace
+                .lines()
+                .any(|line| line.contains("action\tnew-pane") && line.contains("\t--no-focus")),
+            "{trace}"
+        );
+    }
+
+    #[test]
+    fn in_place_resume_returns_without_an_idle_shell() {
+        let fixture = Fixture::new(LaunchParams::default(), false, None);
+        let marker = fixture.env.home_root.join("idle-shell");
+        let output = fixture
+            .command("@bright-otter")
+            .current_dir(&fixture.cwd)
+            .env("ZELLIJ_PANE_ID", "2")
+            .env("RIMZ_TEST_IDLE_SHELL_MARKER", &marker)
+            .bounded_output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            !marker.exists(),
+            "in-place resume must return to the existing shell"
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stdout)
+                .contains("resumed claude:bright-otter (saved-session)")
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("rimz agents resume @bright-otter")
+        );
+        let trace = fixture.trace();
+        assert!(
+            !trace.contains("action\tnew-tab") && !trace.contains("action\tnew-pane"),
+            "{trace}"
+        );
+    }
+
+    #[test]
+    fn missing_conversation_and_worktree_use_planner_skip_labels() {
+        for gone in [false, true] {
+            let fixture = Fixture::new(LaunchParams::default(), false, None);
+            if gone {
+                std::fs::remove_dir_all(&fixture.cwd).unwrap();
+            } else {
+                std::fs::remove_file(&fixture.transcript).unwrap();
+            }
+            let output = fixture.output("@bright-otter");
+            assert_eq!(output.status.code(), Some(1));
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let label = if gone {
+                "worktree gone"
+            } else {
+                "no saved conversation"
+            };
+            assert!(
+                stderr.contains(&format!("cannot resume @bright-otter: {label}")),
+                "{stderr}"
+            );
+            if gone {
+                assert!(fixture.env.store().read_events().unwrap().iter().any(|event| matches!(event.kind(), rimz::store::event::EventKind::AgentLifecycle(payload) if payload.event_name.as_deref() == Some("rimz.worktree-gone"))));
+            }
+        }
+    }
+}
+
 #[test]
 fn resumes_an_agent_stamped_in_the_real_rollup() {
     // The regression case: under the old session-name filter this rollup yields

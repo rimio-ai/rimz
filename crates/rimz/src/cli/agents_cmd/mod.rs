@@ -578,9 +578,9 @@ enum AgentsSubcmd {
         #[arg(allow_hyphen_values = true)]
         instruction: Option<String>,
     },
-    /// Resume a lane's closed agents where they left off.
+    /// Resume a closed agent or a lane's closed agents where they left off.
     Resume {
-        /// Lane to resume: `#channel`, worktree, branch, or directory name.
+        /// Lane: `#channel`, worktree, branch, or directory; `@handle` for one closed session.
         #[arg(
             value_name = "SCOPE",
             conflicts_with_all = ["from_pr", "worktree"],
@@ -838,6 +838,14 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
             bg,
             fresh,
         }) => {
+            if let Some(reference) = scope.as_deref().filter(|scope| scope.starts_with('@')) {
+                if fresh {
+                    return Err(UsageError::new(
+                        "--fresh takes a lane scope, not an agent reference; drop --fresh to resume this session".to_owned(),
+                    ).into());
+                }
+                return resume::resume_agent(reference, bg, globals);
+            }
             return resume_lane(scope.or(worktree), from_pr, bg, fresh, globals);
         }
         Some(AgentsSubcmd::Refresh(args)) => return run_refresh(args, globals),

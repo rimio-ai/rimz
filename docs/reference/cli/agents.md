@@ -8,7 +8,7 @@ Why you would launch through RimZ instead of the bare CLI is the [agents guide](
 | --- | --- | --- |
 | Launch agents, a layout, or a team role | `rimz agents <SPEC>`, `launch` | [Launch agents](#launch-agents) |
 | Run one scripted, exit-coded turn | `rimz agents <SPEC> <PROMPT> -p` | [Supervised runs](#supervised-runs--p) |
-| Reopen closed agents | `--resume`, `resume` | [Resume agents](#resume-agents) |
+| Reopen closed agents | `resume @<ref>`, `--resume`, `resume [SCOPE]` | [Resume agents](#resume-agents) |
 | See what a launch would run | `profiles`, `explain` | [Inspect profiles and launch plans](#inspect-profiles-and-launch-plans) |
 | Check machine definitions | `validate` | [Validate definitions](#validate-definitions) |
 | Add a third-party agent kind | `register`, `check` | [Register a third-party kind](#register-a-third-party-kind) |
@@ -277,30 +277,47 @@ The same launches warn, but continue, when the selected account has no folder-tr
 
 ## Resume agents
 
-A closed agent's session files stay where its CLI wrote them, so RimZ can reopen it with the provider's own resume. There are two entry points: `--resume` when you know the spec you launched, and `resume` when you know the lane.
+A closed agent's session files stay where its CLI wrote them, so RimZ can reopen it with the provider's own resume. Use `resume @<ref>` for one closed solo session, `--resume` when you know the spec you launched, or `resume` when you know the lane.
+
+### Resume one closed session
+
+`rimz agents resume @<ref>` reopens one retained solo root session by handle or session-id prefix:
+
+```sh
+rimz agents resume @bright-otter
+rimz agents resume @a1b2c3d4 --bg
+```
+
+Resolution checks live agents in the current channel first, then retained agents across the room. An ambiguous reference refuses and names the candidates. A live session refuses with `rimz agents focus @<name>`; a team member points to `rimz agents <team>.<role> --resume`; a child or provider subagent points to `rimz subagents`. `--fresh`, `--from-pr`, and `--worktree` take lane scopes only, not an `@ref`.
+
+The session keeps its provider, working directory, channel, and saved launch posture, with its profile rendered from current definitions. Account selection is the same as lane resume: the room's selected account must share the session's history pool. Missing worktrees, unsupported resume CLIs, absent saved conversations, resume caps, unsupported prompt replacement, and unavailable or mismatched accounts refuse rather than launching fresh. A missing worktree also records the session ended. Success prints `resumed <kind>:<name> (<session-id>)` on stdout.
+
+From the session's recorded directory inside the room, default placement takes over the current pane and returns to its existing shell on exit. From elsewhere it opens a focused tab. The configured placement policy still applies; `--bg` and agent callers keep focus, turning an in-place resume into a split instead. See [placement](#channel-worktree-and-placement).
+
+A closed session's record is retained for at least 14 days after it ended; `rimz agents list --all` and `rimz agents show @<name>` still find it. Resuming also needs its working directory and the provider's saved conversation. A resumable solo exit prints `resume with rimz agents resume @<name>`, naming that exact session rather than matching a newer one by profile.
 
 ### Resume a cohort
 
 `--resume` (alias `--continue`) relaunches the prior cohort that matches the spec, taking identity, working directory, and channel from the store:
 
 ```sh
-rimz agents forge --resume                           # the newest closed forge cohort
+rimz agents forge --resume                           # the newest forge cohort
 rimz agents forge -w restore-living-team --resume    # that worktree's forge cohort
 rimz agents claude,codex --resume                    # the newest matching inline cohort
-rimz agents claude --resume                          # the freshest closed Claude session
-rimz agents astra --resume                           # the freshest closed session of profile astra
+rimz agents claude --resume                          # the newest matching Claude root session
+rimz agents astra --resume                           # the newest root session of profile astra
 ```
 
 | Spec | Matches |
 | --- | --- |
 | a team | the cohort by team name, member by role |
 | an inline multi-agent spec | the saved launch group, member by cell order |
-| a single kind | the freshest closed root session of that kind |
-| a profile | the freshest closed root session launched from that profile |
+| a single kind | the newest root session of that kind, live or closed |
+| a profile | the newest root session launched from that profile, live or closed |
 
 Scope follows the worktree. `-w NAME` resumes that worktree's cohort; bare `-w`, or no flag while you stand in a worktree, scopes to the current worktree; from the project root, the newest match anywhere in the room wins.
 
-A matched member that is still live refuses the command, so an address is never duplicated. Cleanly closed members still match while their worktree exists, and a cell with no resumable member launches fresh in the cohort's directory and channel. A spec that matches nothing fails and names the specs the same scope can resume.
+A matched member that is still live refuses the command, so an address is never duplicated. `rimz agents resume @<ref>` can reopen an older closed solo session even when the newest matching root is live. Cleanly closed members still match while their worktree exists, and a cell with no resumable member launches fresh in the cohort's directory and channel. A spec that matches nothing fails and names the specs the same scope can resume.
 
 A single-cell resume run from the cohort's own directory takes over the current pane, so the hint an exiting team member leaves (`resume with rimz agents forge.coder --resume`) works from the shell it dropped into. An agent caller or `--bg` makes that a split instead, under the [focus rule](#channel-worktree-and-placement). Run from anywhere else, a lane-scoped resume opens its own tab.
 
@@ -323,7 +340,7 @@ rimz agents resume --from-pr 69   # the local worktree created from PR 69
 rimz agents resume                # in a worktree: that lane; at the project root: list resumable lanes
 ```
 
-`SCOPE` takes a `#channel`, worktree name, branch, directory name, or path, as `agents list` does. `--from-pr <NUMBER|URL>` finds the worktree by its recorded pull-request provenance, then by the name `pr-<N>`. Resolution is local: no network request, no worktree creation.
+`SCOPE` takes a `#channel`, worktree name, branch, directory name, or path, as `agents list` does. An `@ref` instead selects [one closed session](#resume-one-closed-session). `--from-pr <NUMBER|URL>` finds the worktree by its recorded pull-request provenance, then by the name `pr-<N>`. Resolution is local: no network request, no worktree creation.
 
 Members are root sessions: subagent children never come back through resume; their parent relaunches what it still needs. The durable lane listing's `MEMBERS` and `LIVE` counts exclude children.
 
