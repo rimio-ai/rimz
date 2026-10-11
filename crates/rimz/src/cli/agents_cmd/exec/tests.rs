@@ -503,7 +503,7 @@ mod pane_exec {
     use super::*;
 
     #[test]
-    fn wrapper_lifetime_policy_preserves_recoverable_sessions() {
+    fn exit_hint_policy_covers_every_interactive_wrapper() {
         let mut run_owned = bare_exec_args();
         run_owned.run_id = Some(rimz::RunId::new());
         let mut worktree_owned = bare_exec_args();
@@ -517,10 +517,10 @@ mod pane_exec {
         let mut close_owned = bare_exec_args();
         close_owned.close_pane_on_exit = true;
 
-        for (name, args, direct, record_end, drop_to_shell) in [
-            ("bare", bare_exec_args(), cfg!(unix), true, false),
+        for (name, args, hint, record_end, drop_to_shell) in [
+            ("bare", bare_exec_args(), true, true, false),
             ("supervised run", run_owned, false, true, false),
-            ("worktree", worktree_owned, false, true, true),
+            ("worktree", worktree_owned, true, true, true),
             ("completion", completion_owned, false, false, false),
             (
                 "subagent completion",
@@ -529,18 +529,18 @@ mod pane_exec {
                 true,
                 false,
             ),
-            ("close", close_owned, false, true, true),
+            ("close", close_owned, true, true, true),
         ] {
-            assert_eq!(should_exec_agent_directly(&args, 0), direct, "{name}");
-            assert!(!should_exec_agent_directly(&args, 3), "{name}");
+            assert_eq!(should_print_exit_hint(&args, false, false), hint, "{name}");
+            assert!(!should_print_exit_hint(&args, true, false), "{name}");
+            assert!(!should_print_exit_hint(&args, false, true), "{name}");
             assert_eq!(should_record_end_trace(&args), record_end, "{name}");
             assert_eq!(should_drop_to_shell(&args, false), drop_to_shell, "{name}");
             assert!(!should_drop_to_shell(&args, true), "{name}");
         }
 
-        // Only a fresh launch can be relaunched, so only it trades direct
-        // exec for a wrapper.
         for action in [
+            bare_exec_args().action,
             ExecAction::Resume {
                 session_id: "sess-source".to_owned(),
                 extra_args: Vec::new(),
@@ -552,9 +552,7 @@ mod pane_exec {
         ] {
             let mut args = bare_exec_args();
             args.action = action;
-            for cap in [0, 3] {
-                assert_eq!(should_exec_agent_directly(&args, cap), cfg!(unix));
-            }
+            assert!(should_print_exit_hint(&args, false, false));
         }
     }
 
@@ -697,7 +695,18 @@ mod pane_exec {
 
         park(serde_json::json!([]));
         let closed = stamp_own_end_if_deliberate(&invocation, &request, true, false, || true);
-        assert_eq!(closed, (true, Some((kind, session))), "a pane close ends");
+        assert_eq!(
+            closed,
+            (
+                true,
+                Some(EndedSession {
+                    kind,
+                    agent_id: session,
+                    name: None
+                })
+            ),
+            "a pane close ends"
+        );
         assert_eq!(ends(), 1);
     }
 
@@ -714,14 +723,7 @@ mod pane_exec {
         assert_eq!(relaunch_command(&bare_exec_args()), "rimz agents codex");
 
         let status = exit_status(0);
-        let message = exit_hint(
-            "codex",
-            &status,
-            false,
-            "rimz agents codex-plan",
-            false,
-            None,
-        );
+        let message = exit_hint(&profile, &status, false, false, None, None);
         assert_eq!(
             message,
             format!(
@@ -732,15 +734,11 @@ mod pane_exec {
 
     #[test]
     fn exit_hint_teaches_resume_for_a_redeemable_session() {
+        let mut request = bare_exec_args();
+        request.identity.params.team = Some("forge".into());
+        request.identity.params.role = Some("coder".into());
         let status = exit_status(0);
-        let message = exit_hint(
-            "codex",
-            &status,
-            false,
-            "rimz agents forge.coder",
-            true,
-            None,
-        );
+        let message = exit_hint(&request, &status, false, true, None, None);
         assert_eq!(
             message,
             format!(
@@ -750,16 +748,34 @@ mod pane_exec {
 
         // A startup failure never advertises resume: there is no conversation.
         let failed = exit_status(1);
-        let message = exit_hint(
-            "codex",
-            &failed,
-            true,
-            "rimz agents forge.coder",
-            true,
-            None,
+        let message = exit_hint(&request, &failed, true, true, None, None);
+        assert_eq!(
+            message,
+            format!(
+                "rimz: agent `codex` failed to start ({failed}); relaunch with `rimz agents forge.coder`\r\n"
+            )
         );
-        assert!(message.contains("failed to start"), "{message}");
-        assert!(!message.contains("--resume"), "{message}");
+    }
+
+    #[test]
+    fn solo_exit_hint_prefers_stamped_name_then_request_then_session() {
+        let mut request = bare_exec_args();
+        request.identity.name = Some("requested-pet".into());
+        let session = AgentSessionId::from("019f796b-f60b-7ab0-9adb-35be6e6904b7");
+        let status = exit_status(0);
+        for (stamped, requested, expected) in [
+            (Some("folded-pet"), Some("requested-pet"), "folded-pet"),
+            (None, Some("requested-pet"), "requested-pet"),
+            (None, None, session.as_str()),
+        ] {
+            request.identity.name = requested.map(str::to_owned);
+            assert_eq!(
+                exit_hint(&request, &status, false, true, stamped, Some(&session)),
+                format!(
+                    "rimz: agent `codex` exited ({status}); resume with `rimz agents resume @{expected}`\r\n"
+                )
+            );
+        }
     }
 
     #[test]
@@ -768,27 +784,23 @@ mod pane_exec {
         // so the input carries the `..` the printed line must not.
         let path = Path::new("/code/query-engine/../query-engine-worktrees/feat-a");
         let display = crate::cli::render::home_relative("/code/query-engine-worktrees/feat-a");
+        let mut request = bare_exec_args();
+        request.identity.params.profile = Some("codex-plan".into());
+        request.identity.name = Some("bright-otter".into());
+        request.worktree_path = Some(path.to_owned());
         for (startup_failure, resumable, code, action) in [
             (false, false, 0, "exited"),
             (false, true, 0, "exited"),
             (true, true, 1, "failed to start"),
         ] {
             let status = exit_status(code);
-            let relaunch = "rimz agents codex-plan";
             let command = if resumable && !startup_failure {
-                "resume with `rimz agents codex-plan --resume`"
+                "resume with `rimz agents resume @bright-otter`"
             } else {
                 "relaunch with `rimz agents codex-plan`"
             };
             assert_eq!(
-                exit_hint(
-                    "codex",
-                    &status,
-                    startup_failure,
-                    relaunch,
-                    resumable,
-                    Some(path)
-                ),
+                exit_hint(&request, &status, startup_failure, resumable, None, None,),
                 format!(
                     "rimz: agent `codex` {action} ({status}); {command}\r\nrimz: worktree {display} kept; `rimz worktree sweep` reclaims it once its work lands\r\n"
                 )
@@ -799,16 +811,18 @@ mod pane_exec {
     #[test]
     fn exited_session_resumable_requires_real_id_and_resume_cli() {
         let cwd = Path::new("/code/feature");
-        let codex = (
-            rimz::ids::AgentKind::new_unchecked("codex"),
-            rimz::ids::AgentSessionId::from("019f796b-f60b-7ab0-9adb-35be6e6904b7"),
-        );
+        let codex = EndedSession {
+            kind: rimz::ids::AgentKind::new_unchecked("codex"),
+            agent_id: rimz::ids::AgentSessionId::from("019f796b-f60b-7ab0-9adb-35be6e6904b7"),
+            name: None,
+        };
         assert!(exited_session_resumable(Some(&codex), cwd));
 
-        let provisional = (
-            rimz::ids::AgentKind::new_unchecked("codex"),
-            rimz::ids::AgentSessionId::from("launch_019f2cecea067320b667c5946d266e64"),
-        );
+        let provisional = EndedSession {
+            kind: rimz::ids::AgentKind::new_unchecked("codex"),
+            agent_id: rimz::ids::AgentSessionId::from("launch_019f2cecea067320b667c5946d266e64"),
+            name: None,
+        };
         assert!(!exited_session_resumable(Some(&provisional), cwd));
         assert!(!exited_session_resumable(None, cwd));
     }

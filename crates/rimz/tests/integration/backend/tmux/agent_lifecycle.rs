@@ -951,7 +951,7 @@ fn tmux_agent_exec_command(
     argv
 }
 
-fn tmux_direct_resume_command(
+fn tmux_resume_command(
     env: &Env,
     agent_bin: &Path,
     ready: &Path,
@@ -1204,7 +1204,7 @@ fn self_wait_steers_to_live_consumer_when_idle_and_working() {
         let launch_id = "self-wait-launch";
         let agent_bin = write_sleeping_agent_shim(&env, "claude");
         let ready = env.home_root.join("self-wait-ready");
-        let command = tmux_direct_resume_command(&env, &agent_bin, &ready, "claude", agent_id);
+        let command = tmux_resume_command(&env, &agent_bin, &ready, "claude", agent_id);
         let (_stub_dir, stub) = sidebar_command_stub();
         server
             .backend
@@ -1416,7 +1416,7 @@ fn resumed_lazy_agent_is_addressable_before_provider_registration() {
         .expect("ensure reborn session");
     let agent_bin = write_sleeping_agent_shim(&env, "codex");
     let ready = env.home_root.join("reborn-codex-ready");
-    let command = tmux_direct_resume_command(&env, &agent_bin, &ready, "codex", agent_id);
+    let command = tmux_resume_command(&env, &agent_bin, &ready, "codex", agent_id);
     let (_stub_dir, stub) = sidebar_command_stub();
     // The recovering settlement takes the resumed agent out of the record.
     std::fs::remove_file(&store.paths().pending_recovery).expect("settle resumed agent");
@@ -1466,8 +1466,14 @@ fn resumed_lazy_agent_is_addressable_before_provider_registration() {
         .pane_id
         .clone();
     assert_eq!(
-        attached.pane.as_ref().and_then(|pane| pane.pane_pid),
-        attached.runtime_owner.as_ref().map(|owner| owner.pid)
+        attached
+            .pane
+            .as_ref()
+            .and_then(|pane| pane.pane_pid)
+            .and_then(rimz::proc::hosted_agent_process_for_root)
+            .map(|hosted| hosted.pid),
+        attached.runtime_owner.as_ref().map(|owner| owner.pid),
+        "the runtime owner is the provider the pane's wrapper hosts"
     );
 
     let mut panes = server

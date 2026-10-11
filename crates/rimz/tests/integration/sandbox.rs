@@ -1906,6 +1906,8 @@ fn launch_warnings_reach_agents_show_and_clean_relaunch_clears_them() {
         let warnings: Vec<_> = stderr
             .lines()
             .filter_map(|line| line.strip_prefix("rimz: "))
+            // The exit hint shares the prefix but is no launch warning.
+            .filter(|text| !text.starts_with("agent "))
             .collect();
         if request.skills.is_some() {
             assert!(
@@ -1964,6 +1966,8 @@ fn unseen_resume_launch_warnings_reach_agents_show() {
     let warnings: Vec<_> = stderr
         .lines()
         .filter_map(|line| line.strip_prefix("rimz: "))
+        // The exit hint shares the prefix but is no launch warning.
+        .filter(|text| !text.starts_with("agent "))
         .collect();
     assert!(
         warnings
