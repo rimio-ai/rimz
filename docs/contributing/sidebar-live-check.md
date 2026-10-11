@@ -192,7 +192,7 @@ Expect one `sidebar host` line and one `sidebar serve` line per tab, never a chi
 
 Three checks cover what a unit test cannot:
 
-1. **Host death.** Kill the host by PID with `kill -9`. Each supervisor reads the end of its stream, clears its pane to `sidebar: host went away` and `retrying in 1s`, then attaches to a successor host one of them starts. Check both a young host and one that has painted for over a minute: both follow notice-and-retry, with delays doubling to 60 seconds on repeated failures. Look on each tab, then repeat the `ps` and confirm one new host and the same supervisors. No supervisor paints cards while the host is unavailable.
+1. **Host death.** Kill the host by PID with `kill -9`. Each supervisor reads the end of its stream, clears its pane to `sidebar: host went away` and `retrying in 1s`, then attaches to a successor host one of them starts. Check both a young host and one that has painted for over a minute: both follow notice-and-retry, with delays doubling to 60 seconds on repeated failures. Look on each tab, then repeat the `ps` and confirm one new host and the same supervisors. No supervisor paints cards while the host is unavailable. The successor host starts with no fold, so each sidebar paints the placeholder until its first fold arrives.
 2. **Supervisor death.** Kill one tab's `sidebar serve` by PID. The host drops that pane: its heartbeat and wakeup socket leave the room's runtime directory (the testkit build's `rimz sidebar renderers` no longer lists the instance), and the other tabs keep painting.
 3. **Last pane.** Close every tab's sidebar pane, or kill the session. The host exits about ten seconds after its last pane detaches; `ps` shows no `sidebar host` for the session after that.
 
@@ -200,7 +200,7 @@ A reload is the fourth: after `rimz reload` onto a new build the host's PID chan
 
 ## First frame of a new tab
 
-A new tab's sidebar seeds its first frame from the room's published projection ([state.md](../internals/sidebar/state.md)), so its first non-blank screen already holds the room's cards. The seed is folded as published. Until a frame lists this new sidebar in its topology, focus derivation seats no selection, on the seed and the first cached fetch fold alike: every card rests at its configured density, with no card open by selection, no spines, no lane, and no header seal, even when the projection's focus names an agent in the previous tab. The loop-state regression test checks both paints before the correction; poll the new pane from the moment the tab opens to check the live backend too. Save each loop as a script under the room's root and run it with `cargo xtask sandbox in <root> -- <script>`, since both need the room's environment. Each writes one file per non-blank capture, named by the milliseconds since the tab was opened.
+A new tab's sidebar seeds its first frame from the warm host's last delivered fold in memory ([state.md](../internals/sidebar/state.md)), so its first non-blank screen already holds the room's cards. A cold host has no seed and paints the placeholder until its first fold. The seed is projected for the new pane. Until a frame lists this new sidebar in its topology, focus derivation seats no selection, on the seed and the first cached fetch fold alike: every card rests at its configured density, with no card open by selection, no spines, no lane, and no header seal, even when the fold's focus names an agent in the previous tab. The loop-state regression test checks both paints before the correction; poll the new pane from the moment the tab opens to check the live backend too. Save each loop as a script under the room's root and run it with `cargo xtask sandbox in <root> -- <script>`, since both need the room's environment. Each writes one file per non-blank capture, named by the milliseconds since the tab was opened.
 
 tmux, given the room's tmux socket, its session, and an output directory:
 
@@ -306,11 +306,11 @@ done > "$OUT/folds.jsonl"
 jq -c 'select(.ok | not)' "$OUT/folds.jsonl"
 ```
 
-`ok` holds when the fold's `baseline` and `selected_after` are absent or name a pane the tab created, and a seed resting on a projection older than the tab has `own_view: false`. The run passes when the last command prints nothing and `folds.jsonl` holds 18 records with `seed: true`, one per tab. This judges the folds only; the publication half of the pass rule above still reads the `frame_published` records.
+`ok` holds when the fold's `baseline` and `selected_after` are absent or name a pane the tab created, and a seed resting on a fold older than the tab has `own_view: false`. The run passes when the last command prints nothing and a warm host's `folds.jsonl` holds 18 records with `seed: true`, one per tab. This judges the folds only; the publication half of the pass rule above still reads the `frame_published` records.
 
 Two Zellij checks guard the neighbours of that rule, read from the same log. With focus resting on a pane, open and close a pane in another tab without moving focus (`zellij action new-pane --tab-id <n> --no-focus`, then `close-pane --pane-id <id>`): no `frame_published` moves `focused_pane` off the resting pane, and no attachment appends a `fold_decided`. Then switch between two existing tabs (`zellij action go-to-tab <n>`): no publication carries `client_sample_withheld`, and the destination sidebar's seating fold has `fused_event_sent_at_ms` set and lands before the `session_focus` publication that names the destination, under about 100 ms in a small room.
 
-A tmux capture is a few milliseconds apart, so the first file is close to the first paint. A Zellij capture goes through the session and resolves about 0.2 s, so it proves the first screen seen and bounds the correction only coarsely. Repeat after the room has sat idle for a minute: the seed is refused once the projection is older than its age bound, and a live room must stay inside it.
+A tmux capture is a few milliseconds apart, so the first file is close to the first paint. A Zellij capture goes through the session and resolves about 0.2 s, so it proves the first screen seen and bounds the correction only coarsely.
 
 ## Inspect the data behind a card
 
