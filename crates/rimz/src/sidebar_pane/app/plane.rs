@@ -12,8 +12,8 @@ use crate::{MuxName, RuntimePaths, SidebarInstanceId};
 #[cfg(test)]
 use super::fetch::FetchUpdate;
 use super::fetch::{
-    Covered, FetchRequest, ResultReceiver, Stand, Subscriber, Subscribers, result_channel,
-    spawn_fetch_worker,
+    Covered, FetchRequest, LastFold, ResultReceiver, Stand, Subscriber, Subscribers, WorkspaceFold,
+    result_channel, spawn_fetch_worker,
 };
 use super::{ServeConfig, cache_refresh, tmux_watch, transcript_watch};
 
@@ -23,6 +23,7 @@ pub(in crate::sidebar_pane) struct DataPlane {
     pub(super) geometry: Arc<Mutex<crate::mux::zellij::WidthMemo>>,
     request_tx: Sender<FetchRequest>,
     subscribers: Subscribers,
+    last_fold: LastFold,
     covered: Covered,
     observe_tx: SyncSender<ObserveMsg>,
     /// The plane's threads, until the first pane starts them.
@@ -46,6 +47,7 @@ impl DataPlane {
         let (config, runtime, diag) = (config.clone(), runtime.clone(), diag.clone());
         let subscribers = plane.subscribers.clone();
         let covered = plane.covered.clone();
+        let last_fold = plane.last_fold.clone();
         let lanes: Lanes = Box::new(move || {
             if diag.is_enabled() {
                 observe::writer::spawn(runtime.clone(), diag.clone(), observe_rx);
@@ -57,6 +59,7 @@ impl DataPlane {
                 request_rx,
                 subscribers.clone(),
                 covered,
+                last_fold,
                 observer,
             );
             let template = config.clone();
@@ -87,6 +90,7 @@ impl DataPlane {
             geometry: Arc::default(),
             request_tx,
             subscribers: Subscribers::default(),
+            last_fold: LastFold::default(),
             covered: Covered::default(),
             observe_tx,
             lanes: Mutex::new(None),
@@ -130,8 +134,14 @@ impl DataPlane {
             covered: self.covered.clone(),
             results,
             observe: self.observe_tx.clone(),
+            seed: lock(&self.last_fold).clone(),
             _membership: membership,
         }
+    }
+
+    #[cfg(test)]
+    pub(super) fn remember(&self, fold: WorkspaceFold) {
+        *lock(&self.last_fold) = Some(fold);
     }
 
     #[cfg(test)]
@@ -169,6 +179,11 @@ pub(in crate::sidebar_pane) struct Subscription {
     pub(super) covered: Covered,
     pub(super) results: ResultReceiver,
     pub(super) observe: SyncSender<ObserveMsg>,
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "attachment adoption follows next")
+    )]
+    pub(super) seed: Option<WorkspaceFold>,
     _membership: Membership,
 }
 
@@ -185,9 +200,12 @@ impl Drop for Membership {
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    // The subscriber set is only inserted into and removed from, and the lanes are only taken, so a panic elsewhere while either was held leaves it whole.
+    // The subscriber set is only inserted into and removed from, the fold is only replaced, and the lanes are only taken, so a panic elsewhere while a lock was held leaves it whole.
     match mutex.lock() {
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
     }
 }
+
+#[cfg(test)]
+mod tests;

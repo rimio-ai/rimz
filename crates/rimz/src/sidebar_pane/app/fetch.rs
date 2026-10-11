@@ -128,10 +128,13 @@ pub(super) enum SnapshotSource {
 }
 
 /// One fold before its per-renderer projection.
-struct WorkspaceFold {
-    workspace: WorkspaceSnapshot,
-    frame: Option<Arc<PaneFrame>>,
+#[derive(Clone)]
+pub(super) struct WorkspaceFold {
+    pub(super) workspace: WorkspaceSnapshot,
+    pub(super) frame: Option<Arc<PaneFrame>>,
 }
+
+pub(super) type LastFold = Arc<Mutex<Option<WorkspaceFold>>>;
 
 struct SnapshotPublication {
     snapshot: SidebarSnapshot,
@@ -362,9 +365,6 @@ impl FetchWorker {
             inputs: sink.inputs.clone(),
         }));
         let own_pane = self.stand(sink).own_pane;
-        if sink.cycle.len() < 2 {
-            return project_local(fold.workspace, fold.frame.as_deref(), own_pane.as_ref());
-        }
         let snapshot = project_local(
             fold.workspace.clone(),
             fold.frame.as_deref(),
@@ -995,6 +995,7 @@ pub(super) type Subscribers = Arc<Mutex<BTreeMap<String, Subscriber>>>;
 struct ResultSink {
     waker: Option<UnixDatagram>,
     subscribers: Subscribers,
+    last_fold: LastFold,
     /// The renderers this cycle serves, taken once as it starts.
     cycle: Vec<Subscriber>,
     covered: Covered,
@@ -1026,13 +1027,15 @@ impl ResultSink {
                 subscriber,
             )]))),
             Covered::default(),
+            LastFold::default(),
         )
     }
 
-    fn shared(subscribers: Subscribers, covered: Covered) -> Self {
+    fn shared(subscribers: Subscribers, covered: Covered, last_fold: LastFold) -> Self {
         let mut sink = Self {
             waker: nonblocking_waker(),
             subscribers,
+            last_fold,
             cycle: Vec::new(),
             covered,
             answering: None,
@@ -1065,6 +1068,7 @@ impl ResultSink {
     /// or as a copy (anything else).
     fn publish(&mut self, update: FetchUpdate) {
         let staged = self.staged.take();
+        let is_snapshot = matches!(update, FetchUpdate::Snapshot { .. });
         // Before the first send: a pane that reads this answer and asks again
         // must find its next request unanswered, or the worker would drop it.
         if matches!(
@@ -1103,6 +1107,12 @@ impl ResultSink {
             }
         }
         self.send(eldest, update);
+        if is_snapshot && let Some((fold, _)) = staged {
+            *self
+                .last_fold
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(fold);
+        }
     }
 
     fn send(&self, subscriber: &Subscriber, mut update: FetchUpdate) {
@@ -1180,13 +1190,17 @@ pub(super) fn spawn_fetch_worker(
     request_rx: std::sync::mpsc::Receiver<FetchRequest>,
     subscribers: Subscribers,
     covered: Covered,
+    last_fold: LastFold,
     observer: Option<crate::sidebar::observe::RoomObserver>,
 ) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
         crate::lane::set(crate::lane::WorkLane::Fetch);
         let mut worker = FetchWorker::new(config, runtime, diag);
         worker.observer = observer;
-        worker.run(request_rx, ResultSink::shared(subscribers, covered));
+        worker.run(
+            request_rx,
+            ResultSink::shared(subscribers, covered, last_fold),
+        );
     })
 }
 
