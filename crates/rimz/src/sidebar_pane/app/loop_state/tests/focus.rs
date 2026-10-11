@@ -575,6 +575,17 @@ fn shared_focus_cut_converges_missed_intents_and_confirmation() {
 #[test]
 fn older_shared_inputs_do_not_renew_an_observed_receipt() {
     let mut rig = Rig::new();
+    rig.state.diag = crate::diag::DiagSink::under(
+        rig._dir.path().to_path_buf(),
+        rig.ws.clone(),
+        "rimz-test",
+        None,
+    );
+    let trace = crate::StatePaths::class_path(
+        rig._dir.path(),
+        crate::disk::paths::Class::Audit,
+        "notify.log.jsonl",
+    );
     let mut snapshot = agent_snapshot(&rig.ws);
     let row = &mut snapshot.worktree_groups[0].rows[0];
     row.last_activity = jiff::Timestamp::UNIX_EPOCH;
@@ -585,24 +596,29 @@ fn older_shared_inputs_do_not_renew_an_observed_receipt() {
     snapshot.focused_pane = Some(pane.clone());
     snapshot.viewed_panes = vec![pane];
     let inputs = Arc::default();
-    rig.state.read_marks.observe_fold(
-        vec!["agent-1".to_owned()],
-        1_000,
-        &HashSet::from(["agent-1".to_owned()]),
-    );
-    crate::sidebar::read_marks::take_store_reads();
+    crate::sidebar::read_marks::write_read_marks(&rig.runtime, ["agent-1".to_owned()], 1_000)
+        .unwrap();
     rig.shared_fold(snapshot.clone(), inputs);
-    assert_eq!(crate::sidebar::read_marks::take_store_reads(), 0);
+    assert!(
+        !trace.exists(),
+        "a stale cut must not emit another clear trace"
+    );
     assert_eq!(
-        rig.state.read_marks.load_merged().cleared_at_ms("agent-1"),
+        crate::sidebar::read_marks::ReadMarks::load(&rig.runtime).cleared_at_ms("agent-1"),
         Some(1_000),
         "a stale shared receipt baseline must not renew a pane's existing clear"
     );
     snapshot.worktree_groups[0].rows[0].last_activity = jiff::Timestamp::now();
+    snapshot.worktree_groups[0].rows[0].unread = true;
     rig.shared_fold(snapshot, Arc::default());
     assert!(
-        rig.state.read_marks.load_merged().cleared_at_ms("agent-1") > Some(1_000),
+        crate::sidebar::read_marks::ReadMarks::load(&rig.runtime).cleared_at_ms("agent-1")
+            > Some(1_000),
         "a new attention episode still receives a new receipt"
+    );
+    assert!(
+        trace.exists(),
+        "the later attention episode emits its clear trace"
     );
 }
 
@@ -1053,7 +1069,7 @@ fn mark_all_read_clears_every_unread_row_and_writes_receipts() {
         "all unread bits clear locally"
     );
     assert_eq!(rig.state.ui.unread_guard, None);
-    let marks = rig.state.read_marks.load_merged();
+    let marks = crate::sidebar::read_marks::ReadMarks::load(&rig.runtime);
     assert!(marks.cleared_at_ms("agent-1").is_some());
     assert!(marks.cleared_at_ms("agent-2").is_some());
     assert!(rig.state.dirty);

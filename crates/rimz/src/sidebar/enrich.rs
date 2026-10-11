@@ -589,7 +589,7 @@ fn enrich_core(
     }
 
     let episodes = super::unread::UnreadEpisodes::load(runtime);
-    let read_marks = super::read_marks::ReadMarks::load_merged(runtime);
+    let read_marks = super::read_marks::ReadMarks::load(runtime);
     let unread_row_ids = episodes.unread_row_ids(&read_marks);
 
     // Reap daemon-mode Codex ghosts the app-server no longer holds. The cache

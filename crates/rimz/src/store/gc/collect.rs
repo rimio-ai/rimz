@@ -103,7 +103,6 @@ fn collect_live(
 ) -> Result<()> {
     let dir = Class::Live.path_under(workspace_root);
     let heartbeat = dir.join("heartbeat");
-    let read_marks = dir.join("read-marks");
     let telemetry = dir.join("agent-telemetry");
     let protocol_ttl = crate::wakeup::heartbeat::SIDEBAR_HEARTBEAT_TTL;
     let live = fresh_sidebar_instance_ids(&heartbeat, class_ttl.unwrap_or(protocol_ttl))?;
@@ -116,12 +115,6 @@ fn collect_live(
             Some(ttl) => ttl,
             None if path.parent() == Some(heartbeat.as_path())
                 && SidebarHeartbeat::is_heartbeat_file(&path) =>
-            {
-                protocol_ttl
-            }
-            None if path.parent() == Some(read_marks.as_path())
-                && sidebar_instance_id_from_json_name(&path)
-                    .is_some_and(|id| !live.contains(id.as_str())) =>
             {
                 protocol_ttl
             }

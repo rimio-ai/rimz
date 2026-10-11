@@ -248,7 +248,7 @@ The status projection is pinned in [`view/tests/status/`](../../../crates/rimz/s
 
 ### Unread and read receipts
 
-Unread state is a runtime episode set (`lanes/unread.json`) plus runtime read receipts (`live/read-marks/`). The host opens an episode for a row whose displayed status is `success`, `failed`, `waiting`, or `paused` when no read mark reaches the row's `last_activity`, and every fold derives `SidebarRow::unread` from that file and the merged receipts. The cap keeps unread rows visible, so a row that returns to `running` or `idle` stays emphasized until read. Attaching to a busy room opens the current attention rows silently, without a burst of notifications.
+Unread state is a runtime episode set (`lanes/unread.json`) plus one room read-mark record (`live/read-marks/marks.json`). The host opens an episode for a row whose displayed status is `success`, `failed`, `waiting`, or `paused` when no read mark reaches the row's `last_activity`, and every fold derives `SidebarRow::unread` from that file and the current marks. The cap keeps unread rows visible, so a row that returns to `running` or `idle` stays emphasized until read. Attaching to a busy room opens the current attention rows silently, without a burst of notifications.
 
 | Action | Effect |
 |---|---|
@@ -258,7 +258,7 @@ Unread state is a runtime episode set (`lanes/unread.json`) plus runtime read re
 | `M` | writes manual receipts for every readable row |
 | `m` on a read row, or `rimz sidebar mark-unread` | opens a fresh episode through [`sidebar::unread::mark_rows_unread`](../../../crates/rimz/src/sidebar/unread.rs), stamped at `max(last_activity, now)` so no existing receipt reaches it |
 
-Every fold merges the latest clear time per row, and a receipt clears an episode only when its clear time is at or after the episode, so an old focus cannot erase a later turn. Receipt files are disposable and are swept once their owning heartbeat expires.
+Every writer max-updates the latest clear time per row under `read-marks.lock`, and a receipt clears an episode only when its clear time is at or after the episode, so an old focus cannot erase a later turn. Marks outlive the pane that wrote them, including manual marks, until the fetch worker prunes their rows against a produced room frame. Writes use cache-class temp-and-rename without fsync. If `marks.json` is absent, readers import the maximum of legacy `manual.json` and valid `sidebar.<instance>.json` receipts with their original timestamps; the first changed write materializes that import. Legacy receipts are reclaimed only by class-TTL GC, not heartbeat expiry.
 
 ### Sub-agent lists
 

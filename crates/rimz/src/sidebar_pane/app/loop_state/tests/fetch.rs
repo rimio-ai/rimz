@@ -396,7 +396,7 @@ fn seed_commits_before_delivery_and_keeps_the_final_correction() {
         "the projection's stale focus must not read the seeded card"
     );
     assert_eq!(
-        rig.state.read_marks.load_merged().cleared_at_ms("agent-1"),
+        crate::sidebar::read_marks::ReadMarks::load(&rig.runtime).cleared_at_ms("agent-1"),
         None
     );
     assert_eq!(rig.state.current.theme.display.refresh_ms, 37);
@@ -452,9 +452,7 @@ fn seed_commits_before_delivery_and_keeps_the_final_correction() {
     assert_eq!(rig.state.ui.selected_pane, Some(corrected_pane.pane_id));
     assert!(!rig.state.current.rows().next().unwrap().unread);
     assert!(
-        rig.state
-            .read_marks
-            .load_merged()
+        crate::sidebar::read_marks::ReadMarks::load(&rig.runtime)
             .cleared_at_ms("agent-1")
             .is_some()
     );

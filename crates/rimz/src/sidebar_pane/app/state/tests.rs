@@ -726,7 +726,7 @@ fn focus_writes_read_receipt_and_clears_current_unread_row() {
 
     a.apply(focused);
     assert!(
-        runtime.sidebar_read_marks_path(&instance_a).exists(),
+        runtime.read_marks_path().exists(),
         "a focused unread row writes a read receipt"
     );
     assert!(!row_unread(&a.current));
@@ -753,7 +753,7 @@ fn viewed_child_focus_leaves_parent_unread_without_a_receipt() {
     snapshot.viewed_panes = vec![child];
     harness.apply(snapshot);
     assert!(row_unread(&harness.current));
-    assert!(!runtime.sidebar_read_marks_path(&instance).exists());
+    assert!(!runtime.read_marks_path().exists());
 }
 
 #[test]
@@ -818,7 +818,7 @@ fn focus_clears_sticky_unread_after_status_returns_to_running() {
     a.apply(focused);
 
     assert!(
-        runtime.sidebar_read_marks_path(&instance_a).exists(),
+        runtime.read_marks_path().exists(),
         "viewing a sticky unread row writes a read receipt even after status recovery"
     );
     assert!(!row_unread(&a.current));
@@ -830,7 +830,7 @@ fn background_register_pane_does_not_focus_clear_until_viewed() {
     let (_dir, runtime) = runtime_for(&ws);
     let instance_a = SidebarInstanceId::new();
     let mut a = ApplyHarness::for_runtime(&ws, runtime.clone(), instance_a.clone());
-    let read_marks = runtime.sidebar_read_marks_path(&instance_a);
+    let read_marks = runtime.read_marks_path();
     let mut background =
         row_snapshot_at(&ws, AgentStatus::Waiting, true, fixed_time(1_700_000_000));
     background.worktree_groups[0].rows[0].unread = true;
@@ -860,7 +860,7 @@ fn tab_switch_in_arms_sibling_read_dwell() {
     let ws = workspace();
     let (_dir, runtime) = runtime_for(&ws);
     let instance_a = SidebarInstanceId::new();
-    let mut a = ApplyHarness::for_runtime(&ws, runtime, instance_a);
+    let mut a = ApplyHarness::for_runtime(&ws, runtime.clone(), instance_a);
     let (mut background, first, _) =
         two_pane_snapshot(&ws, PaneId::from_parts(crate::MuxName::Tmux, "%1"));
     set_all_rows_unread(&mut background);
@@ -888,7 +888,7 @@ fn tab_switch_in_arms_sibling_read_dwell() {
         row_unread_by_id(&a.current, "sess-2"),
         "the sibling waits for dwell"
     );
-    let marks = a.read_marks.load_merged();
+    let marks = crate::sidebar::read_marks::ReadMarks::load(&runtime);
     assert!(marks.cleared_at_ms("sess-1").is_some());
     assert!(marks.cleared_at_ms("sess-2").is_none());
 }
@@ -898,7 +898,7 @@ fn tab_dwell_elapsed_while_viewing_sweeps_siblings() {
     let ws = workspace();
     let (_dir, runtime) = runtime_for(&ws);
     let instance_a = SidebarInstanceId::new();
-    let mut a = ApplyHarness::for_runtime(&ws, runtime, instance_a);
+    let mut a = ApplyHarness::for_runtime(&ws, runtime.clone(), instance_a);
     let (mut background, first, _) =
         two_pane_snapshot(&ws, PaneId::from_parts(crate::MuxName::Tmux, "%1"));
     set_all_rows_unread(&mut background);
@@ -915,7 +915,7 @@ fn tab_dwell_elapsed_while_viewing_sweeps_siblings() {
     assert_eq!(a.tab_read_dwell_until, None);
     assert!(!row_unread_by_id(&a.current, "sess-1"));
     assert!(!row_unread_by_id(&a.current, "sess-2"));
-    let marks = a.read_marks.load_merged();
+    let marks = crate::sidebar::read_marks::ReadMarks::load(&runtime);
     assert!(marks.cleared_at_ms("sess-1").is_some());
     assert!(marks.cleared_at_ms("sess-2").is_some());
 }
@@ -956,7 +956,7 @@ fn tab_switch_out_before_dwell_leaves_siblings_unread() {
     let ws = workspace();
     let (_dir, runtime) = runtime_for(&ws);
     let instance_a = SidebarInstanceId::new();
-    let mut a = ApplyHarness::for_runtime(&ws, runtime, instance_a);
+    let mut a = ApplyHarness::for_runtime(&ws, runtime.clone(), instance_a);
     let (mut background, first, _) =
         two_pane_snapshot(&ws, PaneId::from_parts(crate::MuxName::Tmux, "%1"));
     set_all_rows_unread(&mut background);
@@ -975,7 +975,7 @@ fn tab_switch_out_before_dwell_leaves_siblings_unread() {
     assert_eq!(a.tab_read_dwell_until, None);
     assert!(!row_unread_by_id(&a.current, "sess-1"));
     assert!(row_unread_by_id(&a.current, "sess-2"));
-    let marks = a.read_marks.load_merged();
+    let marks = crate::sidebar::read_marks::ReadMarks::load(&runtime);
     assert!(marks.cleared_at_ms("sess-1").is_some());
     assert!(marks.cleared_at_ms("sess-2").is_none());
 }
@@ -1043,7 +1043,8 @@ fn new_ranked_first_unread_splices_at_front_during_order_hold() {
 #[test]
 fn attach_to_viewed_tab_keeps_unread_siblings() {
     let ws = workspace();
-    let (_dir, mut a) = ApplyHarness::new(&ws);
+    let (_dir, runtime) = runtime_for(&ws);
+    let mut a = ApplyHarness::for_runtime(&ws, runtime.clone(), SidebarInstanceId::new());
     let (mut viewed, _, _) = two_pane_snapshot(&ws, PaneId::from_parts(crate::MuxName::Tmux, "%1"));
     set_all_rows_unread(&mut viewed);
 
@@ -1052,7 +1053,7 @@ fn attach_to_viewed_tab_keeps_unread_siblings() {
     assert_eq!(a.ui.viewing_own_tab, Some(true));
     assert!(!row_unread_by_id(&a.current, "sess-1"));
     assert!(row_unread_by_id(&a.current, "sess-2"));
-    let marks = a.read_marks.load_merged();
+    let marks = crate::sidebar::read_marks::ReadMarks::load(&runtime);
     assert!(marks.cleared_at_ms("sess-1").is_some());
     assert!(marks.cleared_at_ms("sess-2").is_none());
 }
@@ -1094,7 +1095,7 @@ fn manual_unread_guard_suppresses_focused_read_until_revisit() {
     let (_dir, runtime) = runtime_for(&ws);
     let instance_a = SidebarInstanceId::new();
     let mut a = ApplyHarness::for_runtime(&ws, runtime.clone(), instance_a.clone());
-    let read_marks = runtime.sidebar_read_marks_path(&instance_a);
+    let read_marks = runtime.read_marks_path();
 
     a.ui.unread_guard = Some("sess-1".to_owned());
     let mut still_focused =

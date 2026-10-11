@@ -860,12 +860,14 @@ impl RuntimePaths {
         self.lock_path("hook-drainer-spawn.lock")
     }
 
-    /// Path of a sidebar instance's read-mark receipt file. Receipts outlive the
-    /// writer so peer renderers can consume them on their next fold; the orphan
-    /// sweep reaps stale files once the owning heartbeat has expired.
-    pub fn sidebar_read_marks_path(&self, instance_id: &SidebarInstanceId) -> PathBuf {
-        self.read_marks_dir
-            .join(format!("sidebar.{}.json", instance_id.as_str()))
+    /// Room read marks, retained until their rows leave the produced frame.
+    pub(crate) fn read_marks_path(&self) -> PathBuf {
+        self.read_marks_dir.join("marks.json")
+    }
+
+    /// Serializes read-mark updates by panes, the fetch worker, and the CLI.
+    pub(crate) fn read_marks_lock_path(&self) -> PathBuf {
+        self.lock_path("read-marks.lock")
     }
 
     /// Room-runtime sidebar width selected by the renderer.

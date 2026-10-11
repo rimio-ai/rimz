@@ -19,7 +19,7 @@ use crate::sidebar::enrich::project_local;
 use crate::sidebar::event_store::EventStore;
 use crate::sidebar::fuse::{focus_intent_confirmed_from, fuse, fuse_owned};
 use crate::sidebar::observe::{self, ObserveMsg};
-use crate::sidebar::read_marks::{ReadMarkStore, ReadMarks, write_manual_read_marks};
+use crate::sidebar::read_marks::{ReadMarks, write_read_marks};
 use crate::sidebar::timing::{FOCUS_REPAIR_RETRY_STEP, FOCUS_STRANDED_EVENT_TTL, TAB_READ_DWELL};
 use crate::sidebar::unread::{self, UnreadClearCause};
 use crate::sidebar_pane::pixel::{PixelRenderCaps, PixelSlot};
@@ -132,7 +132,6 @@ pub(super) struct LoopState {
     pub(super) ui: UiState,
     paint: FramePainter,
     pub(super) room_caps: Arc<Mutex<crate::sidebar_pane::pixel::probe::RoomCaps>>,
-    pub(super) read_marks: ReadMarkStore,
     remind: RemindState,
     dirty: bool,
     paint_hold: PaintHold,
@@ -225,12 +224,11 @@ impl LoopState {
         );
         let now = Instant::now();
         let pixel_wrap = config.mux == MuxName::Tmux;
-        let read_marks = ReadMarkStore::new(runtime.clone(), config.instance_id.clone());
         let width = crate::mux::SidebarWidth::from_config(
             &crate::config::MachineConfig::load_lenient().theme,
         );
         let width_control = WidthController::new(
-            read_marks.runtime().clone(),
+            runtime.clone(),
             config.session_name.clone(),
             config.own_pane.clone(),
             config.mux,
@@ -274,7 +272,6 @@ impl LoopState {
             },
             paint: FramePainter::new(pet_render_caps, pixel_wrap, pixel_slot),
             room_caps: Arc::default(),
-            read_marks,
             remind: RemindState::default(),
             dirty: true,
             paint_hold: PaintHold::default(),
@@ -1050,7 +1047,7 @@ impl LoopState {
         Ok(outcome)
     }
 
-    /// Mark a row read without jumping (`m`): write the durable manual receipt,
+    /// Mark a row read without jumping (`m`): write the room receipt,
     /// clear the row locally for an instant repaint, trace the clear, wake the
     /// room so the host prunes the episode and peer tabs converge, and refetch
     /// so the receipt lands in the pulled snapshot. A no-op when the row is
@@ -1060,7 +1057,7 @@ impl LoopState {
             self.ui.unread_guard = None;
         }
         let now = jiff::Timestamp::now();
-        let marks = self.read_marks.load_merged();
+        let marks = ReadMarks::load(&self.runtime);
         let clear = read_receipt_for_row(
             &self.current,
             Some(row_id),
@@ -1080,9 +1077,7 @@ impl LoopState {
         if clear.ids.is_empty() {
             return;
         }
-        if let Err(err) =
-            write_manual_read_marks(&self.runtime, clear.ids.clone(), now.as_millisecond())
-        {
+        if let Err(err) = write_read_marks(&self.runtime, clear.ids.clone(), now.as_millisecond()) {
             warn!(error = %err, "mark-read receipt write failed");
             return;
         }
@@ -1091,13 +1086,13 @@ impl LoopState {
         self.commit_local_mark(fetch);
     }
 
-    /// Mark every readable row read without jumping (`M`): write manual receipts
+    /// Mark every readable row read without jumping (`M`): write room receipts
     /// for every unread or needs-a-look row, clear local unread bits, and refetch
     /// so peers converge through the producer.
     fn mark_all_read(&mut self, fetch: &mut FetchDispatcher) {
         self.ui.unread_guard = None;
         let now = jiff::Timestamp::now();
-        let marks = self.read_marks.load_merged();
+        let marks = ReadMarks::load(&self.runtime);
         let clear = read_receipts_for_all(&self.current, UnreadClearCause::MarkRead, &marks, now);
         self.apply_read_clear(clear, now, fetch);
     }
@@ -1505,11 +1500,7 @@ impl LoopState {
                 viewing_register_pane && self.current.focused_pane.as_ref() == Some(*pane)
             })
             .and_then(|pane| row_id_of_pane(&self.current, pane));
-        let marks = self.fold_inputs.as_ref().map_or_else(
-            || self.read_marks.load_merged(),
-            |inputs| inputs.marks.clone(),
-        );
-        let marks = self.read_marks.include_own(marks);
+        let marks = ReadMarks::load(&self.runtime);
         let live: HashSet<String> = self.current.rows().map(|row| row.id.clone()).collect();
         let mut clear = read_receipt_for_row(
             &self.current,
@@ -1520,8 +1511,13 @@ impl LoopState {
         );
         self.sweep_tab_read_receipts(focused_row_id.as_deref(), &marks, now, &mut clear);
         apply_manual_unread_guard(&mut self.ui, focused_row_id.as_deref(), &mut clear);
-        self.read_marks
-            .observe_fold(clear.ids.clone(), now.as_millisecond(), &live);
+        if let Err(err) = write_read_marks(
+            &self.runtime,
+            clear.ids.iter().filter(|id| live.contains(*id)).cloned(),
+            now.as_millisecond(),
+        ) {
+            debug!(error = %err, "sidebar read-mark write failed");
+        }
         set_rows_unread(&mut self.current, &clear.ids, false);
         emit_unread_cleared_trace(&self.diag, &clear.trace);
         (focused_pane, !clear.ids.is_empty())
