@@ -6,7 +6,7 @@ use crate::cli::{machine_config, render, report_unknown_config_keys};
 use rimz::harness::ancestry::{self, LaunchFocus};
 use std::collections::HashSet;
 
-use super::placement::{PlacementErrors, PlacementRequest};
+use super::placement::{PlacementErrors, PlacementRequest, resume_outside_launch_dir};
 
 const LAUNCH_PLACEMENT_ERRORS: PlacementErrors = PlacementErrors {
     new_tab: "opening agent tab",
@@ -1322,24 +1322,6 @@ fn resume_worktree_scope_with(
         None if worktree_root != project_root => Ok(Some(worktree_root.to_owned())),
         None => Ok(None),
     }
-}
-
-/// Whether a resolved resume lands outside the pane the command runs in. A
-/// launch pane already sitting in the cohort's working directory is the origin
-/// pane — an agent that dropped to a shell there resumes in place instead of
-/// opening a lane tab.
-fn resume_outside_launch_dir(
-    channel: Option<&str>,
-    cwd: &Path,
-    project_root: &Path,
-    worktree_root: &Path,
-    launch_dir: Option<&Path>,
-) -> bool {
-    let target = rimz::utils::path::normalize_path_lexical(cwd);
-    if launch_dir.is_some_and(|dir| rimz::utils::path::normalize_path_lexical(dir) == target) {
-        return false;
-    }
-    channel.is_some() || (cwd != project_root && cwd != worktree_root)
 }
 
 fn worktree_scope_label(path: &Path) -> Option<String> {

@@ -648,53 +648,6 @@ fn resume_hint_uses_the_first_resumed_member_without_fresh_identities() {
 }
 
 #[test]
-fn resume_in_the_lane_directory_stays_in_the_origin_pane() {
-    let project = Path::new("/repo");
-    let worktree = Path::new("/repo-worktrees/single-card");
-
-    // The dropped-to-shell origin pane: launch dir is the cohort cwd, so
-    // in-place placement stays available despite the lane channel.
-    assert!(!resume_outside_launch_dir(
-        Some("single-card"),
-        worktree,
-        project,
-        worktree,
-        Some(worktree),
-    ));
-
-    // From anywhere else the lane resume still opens its own tab.
-    assert!(resume_outside_launch_dir(
-        Some("single-card"),
-        worktree,
-        project,
-        project,
-        Some(project),
-    ));
-    assert!(resume_outside_launch_dir(
-        Some("single-card"),
-        worktree,
-        project,
-        worktree,
-        None,
-    ));
-}
-
-#[test]
-fn resume_launch_dir_comparison_is_lexically_normalized() {
-    let project = Path::new("/repo");
-    let worktree = Path::new("/repo-worktrees/single-card");
-    let launch_dir = Path::new("/repo-worktrees/../repo-worktrees/single-card");
-
-    assert!(!resume_outside_launch_dir(
-        Some("single-card"),
-        worktree,
-        project,
-        worktree,
-        Some(launch_dir),
-    ));
-}
-
-#[test]
 fn worktree_filter_matches_normalized_agent_paths() {
     let target = rimz::utils::path::normalize_path_lexical(Path::new("/repo-worktrees/demo"));
     let mut agent = test_agent("sess-demo");

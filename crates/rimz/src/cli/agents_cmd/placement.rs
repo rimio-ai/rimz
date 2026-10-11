@@ -98,6 +98,24 @@ fn feasible_or_new(target: Placement, single_cell: bool, has_launching_pane: boo
     }
 }
 
+/// Whether a resolved resume lands outside the pane the command runs in. A
+/// launch pane already sitting in the cohort's working directory is the origin
+/// pane — an agent that dropped to a shell there resumes in place instead of
+/// opening a lane tab.
+pub(super) fn resume_outside_launch_dir(
+    channel: Option<&str>,
+    cwd: &Path,
+    project_root: &Path,
+    worktree_root: &Path,
+    launch_dir: Option<&Path>,
+) -> bool {
+    let target = rimz::utils::path::normalize_path_lexical(cwd);
+    if launch_dir.is_some_and(|dir| rimz::utils::path::normalize_path_lexical(dir) == target) {
+        return false;
+    }
+    channel.is_some() || (cwd != project_root && cwd != worktree_root)
+}
+
 pub(super) struct PlacementRequest {
     pub placement: Placement,
     pub mux: MuxName,
@@ -271,6 +289,53 @@ mod tests {
     use super::*;
     use rimz::ids::WorkspaceId;
     use rimz::mux::{LayoutColumn, PaneCmd};
+
+    #[test]
+    fn resume_in_the_lane_directory_stays_in_the_origin_pane() {
+        let project = Path::new("/repo");
+        let worktree = Path::new("/repo-worktrees/single-card");
+
+        // The dropped-to-shell origin pane: launch dir is the cohort cwd, so
+        // in-place placement stays available despite the lane channel.
+        assert!(!resume_outside_launch_dir(
+            Some("single-card"),
+            worktree,
+            project,
+            worktree,
+            Some(worktree),
+        ));
+
+        // From anywhere else the lane resume still opens its own tab.
+        assert!(resume_outside_launch_dir(
+            Some("single-card"),
+            worktree,
+            project,
+            project,
+            Some(project),
+        ));
+        assert!(resume_outside_launch_dir(
+            Some("single-card"),
+            worktree,
+            project,
+            worktree,
+            None,
+        ));
+    }
+
+    #[test]
+    fn resume_launch_dir_comparison_is_lexically_normalized() {
+        let project = Path::new("/repo");
+        let worktree = Path::new("/repo-worktrees/single-card");
+        let launch_dir = Path::new("/repo-worktrees/../repo-worktrees/single-card");
+
+        assert!(!resume_outside_launch_dir(
+            Some("single-card"),
+            worktree,
+            project,
+            worktree,
+            Some(launch_dir),
+        ));
+    }
 
     fn request(placement: Placement) -> PlacementRequest {
         PlacementRequest {

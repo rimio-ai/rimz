@@ -380,17 +380,20 @@ Message headers instead use `agents::petname::sender_handle` (role, name, kind) 
 
 The store remembers agents whose processes are gone, and resume turns those records back into panes.
 
-### Three entry points
+### Resume entry points
 
 | Path | Trigger | Scope |
 | --- | --- | --- |
 | Room rebirth | a machine reboot or mux crash, at the next `rimz start` | root sessions from the producer's persisted live roster and the pending-recovery record, intersected with the audit rollup, seeding one tab per live-at-death lane or worktree after the new mux session is created; entry into an already-running room repairs settled seats and reports the agents still parked without opening tabs |
 | Cohort resume | `rimz agents <spec> --resume` (`--continue` is the visible alias) in a live room | one prior cohort matched from the spec, after its tab or pane was closed |
 | Lane resume | `rimz agents resume <scope>` | one lane, resolved by `harness::resume` |
+| Session resume | `rimz agents resume @<ref>` | one retained closed solo root, qualified by `plan_resume` without cohort matching |
 
 Rebirth restores a named team in its declared layout, resuming members that can resume and fresh-launching missing or unsupported agent cells so the shape stays whole; other lanes restore as one column. Cohort resume scopes to one exact worktree with `-w <NAME>` or the caller's current worktree, while a resume from the project root takes the newest match for the spec.
 
 The CLI applies `LaunchFocus` to every lane action: `Keep` reports an already-live lane without a jump and opens restored tabs and splits unfocused.
+
+Session resume uses the same account and conversation checks as lane resume, including the room's same-history-pool account selection. Its placement uses the single-cell cohort policy: an origin pane in the saved cwd can resume in place, `Keep` downgrades that to a split, and a launch from elsewhere opens a tab. Provider-native children are not ordinary addresses; the CLI checks them separately only to give the child refusal, never to launch them through this path.
 
 Lane resume picks one of four `LaneResumeAction` variants: `List` when no scope was given, `Focus` on the freshest pane when every member is live, `SplitClosed` to plan flat resume commands beside a surviving live member, and `RestoreClosed` to reuse the rebirth team and flat split when every member is closed. Discovery drops sessions the store records as children before selecting the newest concurrent set, for both listing and restoration. In every case the CLI runs the compile preflight and the [login health check](#every-path-that-builds-a-launch-layout) on the planned provider kinds through `LaneResumeAction::agent_kinds_needing_preflight` before `LaneRestorePlan::materialize` allocates fresh team identities or any mux action runs, so an untrusted launch environment or an account without hooks fails the whole command before it half-rebuilds a room.
 
@@ -489,11 +492,11 @@ Before any settlement, a surviving wrapper records a non-successful provider exi
 
 After the provider exits, the thin image releases any drainer lease, crosses its settlement boundary and opens the store for the trace and cleanup. Run settlement drains queued hooks before deciding whether the provider exited before its terminal hook. A kept subagent's settled linger retains that store and is outside the parked-image memory budget. After the trace, the wrapper settles in one of three ways, depending on what the launch asked for.
 
-**Drop to a shell.** A clean exit from a close-pane or worktree pane that is not a supervised run prints one hint and execs the user's shell in that pane, so the pane stays usable and any worktree stays inspectable. The hint is a runnable command rebuilt from the stored identity (`rimz agents forge.reviewer`). It teaches `--resume` when the ended session can be redeemed, meaning a real provider session id whose adapter compiles a resume command for this directory, and a bare relaunch otherwise. Running the resume takes that same pane back over instead of opening a lane tab.
+**Drop to a shell.** A clean exit from a close-pane or worktree pane that is not a supervised run prints one hint and execs the user's shell in that pane, so the pane stays usable and any worktree stays inspectable. A resumable solo session's hint is `rimz agents resume @<name>`; a team member keeps `rimz agents <team>.<role> --resume`. Resumable means a real provider session id whose adapter compiles a resume command for this directory; otherwise the hint names a bare relaunch. Running the resume takes that same pane back over instead of opening a lane tab. An in-place wrapper prints the same hint but returns to its existing shell.
 
 **Reclaim the worktree.** An agent launched with `--worktree-path` triggers worktree cleanup on supervised-run completion or on a deliberate signal or tab-close exit; the cleanup proves the branch's work landed before removing the tree and deleting its branch. A clean interactive quit does *not* reclaim: it drops to the idle shell and leaves reclamation to `rimz gc`. A signal exit starts the cleanup helper with null stdio in its own process group, so it can finish after the closing pane disappears. The helper, its decision table, and the `gc` sweep are [worktrees.md § Who triggers removal](./worktrees.md#who-triggers-removal).
 
-**Close the pane.** A pane closes itself on provider exit when the launch set `close_pane_on_exit`, or when a non-kept subagent's parent has ended. An interactive subagent normally stays alive through its parent's receiving turn before cleanup stops it. The supervised-run side of pane reclamation, including background runs and cancellation, is [scripting.md § Reclaiming the run pane](./scripting.md#reclaiming-the-run-pane).
+**Close the pane.** When it does not drop to a shell or linger, a wrapper closes its pane if `close_pane_on_exit` is set or its parent ended. An interactive subagent normally stays alive through its parent's receiving turn before cleanup stops it. The supervised-run side of pane reclamation, including background runs and cancellation, is [scripting.md § Reclaiming the run pane](./scripting.md#reclaiming-the-run-pane).
 
 ## See also
 
