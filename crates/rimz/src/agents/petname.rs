@@ -104,12 +104,15 @@ fn basic_valid_name(name: &str) -> bool {
         && !RESERVED_AGENT_WORDS.contains(&name)
 }
 
+// Prefer fresh word pairs before falling back to suffixes in a crowded namespace.
+const UNSUFFIXED_ATTEMPTS: u32 = 64;
+
 fn mint_from_seed(seed: &str, taken: impl Fn(&str) -> bool) -> String {
     for attempt in 0u32.. {
         let value = hash_u64(seed, attempt);
         let adjective = ADJECTIVES[(value as usize) % ADJECTIVES.len()];
         let noun = NOUNS[((value >> 16) as usize) % NOUNS.len()];
-        let candidate = if attempt == 0 {
+        let candidate = if attempt < UNSUFFIXED_ATTEMPTS {
             format!("{adjective}-{noun}")
         } else {
             format!("{adjective}-{noun}-{attempt}")
@@ -180,6 +183,8 @@ mod tests {
         assert_eq!(first, mint_for_session(&agent_id, |_| false));
         let second = mint_for_session(&agent_id, |name| name == first);
         assert_ne!(first, second);
+        assert_eq!(second.split('-').count(), 2);
+        assert_eq!(second, mint_for_session(&agent_id, |name| name == first));
     }
 
     #[test]
@@ -187,13 +192,31 @@ mod tests {
         assert_eq!(mint_from_seed("session-a", |_| false), "ideal-flare");
         assert_eq!(
             mint_from_seed("session-a", |name| name == "ideal-flare"),
-            "valid-glyph-1"
+            "valid-glyph"
         );
         for seed in HEADER_PSEUDO_HANDLES {
             let name = mint_from_seed(seed, |_| false);
             assert!(valid_agent_name(&name));
             assert!(!HEADER_PSEUDO_HANDLES.contains(&name.as_str()));
         }
+    }
+
+    #[test]
+    fn crowded_namespace_falls_back_to_suffixes_and_checks_collisions() {
+        let attempts = std::cell::Cell::new(0);
+        let first_suffixed = mint_from_seed("session-a", |name| {
+            attempts.set(attempts.get() + 1);
+            name.split('-').count() == 2
+        });
+        assert_eq!(attempts.get(), 65);
+        assert!(first_suffixed.ends_with("-64"));
+        assert!(valid_agent_name(&first_suffixed));
+
+        let next = mint_from_seed("session-a", |name| {
+            name.split('-').count() == 2 || name == first_suffixed
+        });
+        assert!(next.ends_with("-65"));
+        assert!(valid_agent_name(&next));
     }
 
     #[test]
