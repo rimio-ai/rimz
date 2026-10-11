@@ -217,6 +217,84 @@ fn notification_reconciliation_reaches_the_younger_pane_before_its_bell() {
 }
 
 #[test]
+fn a_worker_notification_reaches_every_subscribed_pane_after_its_snapshot() {
+    let fixture = FetchFixture::new();
+    let dir = tempfile::tempdir_in("/tmp").unwrap();
+    let runtime = RuntimePaths::under(fixture.workspace_id.clone(), dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    UnreadEpisodes::default().persist(&runtime).unwrap();
+    let mut worker = fixture.worker();
+    worker.runtime = runtime.clone();
+    worker.config.notification_prefs.coalesce_ms = 0;
+    worker.config.notification_prefs.enabled = true;
+    let subscribers = Subscribers::default();
+    let mut receivers = Vec::new();
+    for (id, own) in [("01", "terminal_7"), ("02", "terminal_8")] {
+        let (mut sub, rx) = subscriber(id, own, 2, PathBuf::new());
+        sub.socket_path = runtime.sidebar_socket_path(&sub.instance_id);
+        let socket = UnixDatagram::bind(&sub.socket_path).unwrap();
+        socket
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .unwrap();
+        crate::wakeup::heartbeat::write_heartbeat(
+            &runtime,
+            fixture.workspace_id.clone(),
+            &sub.instance_id,
+            MuxName::Zellij,
+            "rimz-test",
+            &sub.socket_path,
+            None,
+            None,
+        )
+        .unwrap();
+        receivers.push((socket, rx));
+        subscribe(&subscribers, sub);
+    }
+    let mut sink = ResultSink::shared(subscribers, Covered::default(), LastFold::default());
+    let mut shared = crate::sidebar_pane::app::fixtures::agent_snapshot(&fixture.workspace_id);
+    shared.worktree_groups[0].rows[0]
+        .as_agent_mut()
+        .unwrap()
+        .status = crate::agents::AgentStatus::Waiting;
+    let frame = Arc::new(crate::sidebar::frame::assemble_frame(
+        vec![
+            pane("terminal_7", "tab_1", false),
+            pane("terminal_8", "tab_2", false),
+        ],
+        crate::utils::time::unix_now_ms(),
+        "rimz-test",
+    ));
+    let projected = worker.project_fold(
+        WorkspaceFold {
+            workspace: WorkspaceSnapshot(shared),
+            frame: Some(frame),
+        },
+        &mut sink,
+    );
+    worker.publish_snapshot(
+        &fixture.state,
+        SnapshotPublication {
+            snapshot: projected,
+            phase: FetchPhase::Final,
+            source: SnapshotSource::Cached,
+        },
+        &mut sink,
+    );
+    for (socket, rx) in receivers {
+        let mut bytes = [0; 4096];
+        let len = socket.recv(&mut bytes).unwrap();
+        assert_eq!(&bytes[..len], b"snapshot");
+        assert!(snapshot(&rx.recv().unwrap()).rows().any(|row| row.unread));
+        let len = socket.recv(&mut bytes).unwrap();
+        let envelope: crate::wakeup::events::SidebarEventEnvelope =
+            serde_json::from_slice(&bytes[..len]).unwrap();
+        assert_eq!(envelope.workspace_id, fixture.workspace_id);
+        assert_eq!(envelope.session_name.as_deref(), Some("rimz-test"));
+        assert!(matches!(envelope.event, SidebarEvent::Notify { .. }));
+    }
+}
+
+#[test]
 fn diagnostics_name_link_alerts() {
     let dir = tempfile::tempdir().unwrap();
     let sink =
