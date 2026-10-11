@@ -30,8 +30,6 @@ mod notify;
 mod order_hold;
 mod paint;
 mod plane;
-#[path = "host/reload.rs"]
-mod reload;
 mod remind;
 mod selection;
 mod socket;

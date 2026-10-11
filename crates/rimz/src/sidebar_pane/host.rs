@@ -17,6 +17,8 @@ use std::time::{Duration, Instant};
 
 use tracing::{debug, warn};
 
+mod reload;
+
 use crate::RuntimePaths;
 use crate::sidebar_pane::app::{
     Attachment, AttachmentExit, CloseHandle, DataPlane, PaneBackend, ServeConfig, SidebarAppErr,
@@ -137,6 +139,7 @@ impl Default for Timing {
 
 enum Event {
     Connection(UnixStream),
+    Reload,
     /// A pane asked the host to leave; look now rather than at the next poll.
     Wake,
 }
@@ -226,17 +229,44 @@ impl Host {
 
         let mut unattached_since = Some(Instant::now());
         while !self.draining.load(Ordering::SeqCst) {
-            match inbox.recv_timeout(self.timing.poll) {
-                Ok(Event::Connection(stream)) => {
-                    self.connections.fetch_add(1, Ordering::SeqCst);
-                    let host = self.clone();
-                    std::thread::spawn(move || {
-                        host.serve_connection(stream);
-                        host.connections.fetch_sub(1, Ordering::SeqCst);
-                    });
-                }
-                Ok(Event::Wake) | Err(RecvTimeoutError::Timeout) => {}
+            let first = match inbox.recv_timeout(self.timing.poll) {
+                Ok(event) => Some(event),
+                Err(RecvTimeoutError::Timeout) => None,
                 Err(RecvTimeoutError::Disconnected) => break,
+            };
+            let mut requested_reload = false;
+            for event in first.into_iter().chain(inbox.try_iter()) {
+                match event {
+                    Event::Connection(stream) => {
+                        self.connections.fetch_add(1, Ordering::SeqCst);
+                        let host = self.clone();
+                        std::thread::spawn(move || {
+                            host.serve_connection(stream);
+                            host.connections.fetch_sub(1, Ordering::SeqCst);
+                        });
+                    }
+                    Event::Reload => requested_reload = true,
+                    Event::Wake => {}
+                }
+            }
+            if requested_reload {
+                match reload::reload_action(&self.template.workspace_id) {
+                    reload::ReloadAction::Reexec(target) => {
+                        debug!(session = %self.template.session_name, target = %target.display(),
+                            "reload: on-disk binary differs; asking supervisor to re-exec");
+                        self.begin_drain();
+                    }
+                    reload::ReloadAction::AlreadyCurrent => {
+                        debug!(session = %self.template.session_name,
+                            "reload: binary unchanged; refetching in place without re-exec");
+                        self.plane.hard_refresh();
+                    }
+                    reload::ReloadAction::Missing => {
+                        warn!(session = %self.template.session_name,
+                            "reload requested but no renderer binary is on disk; refetching in place");
+                        self.plane.hard_refresh();
+                    }
+                }
             }
             if let (Some(recorded), Some(own)) = (recorded_build(), self.build.as_ref())
                 && recorded != *own
@@ -334,14 +364,16 @@ impl Host {
         watch_for_detach(&stream, live.close.clone());
 
         // One pane's panic closes that pane: its runtime files go as its frame loop unwinds, and its supervisor shows a notice and reattaches.
-        let exit = catch_unwind(AssertUnwindSafe(|| attachment.run(&self.plane, backend)));
+        let events = self.events.clone();
+        let reload = Box::new(move || {
+            let _ = events.send(Event::Reload);
+        });
+        let exit = catch_unwind(AssertUnwindSafe(|| {
+            attachment.run(&self.plane, backend, reload)
+        }));
         self.release(&hello);
         let control = match exit {
             Ok(Ok(AttachmentExit::SelfClose)) => Some(Control::SelfClose),
-            Ok(Ok(AttachmentExit::Reload)) => {
-                self.begin_drain();
-                Some(Control::Reload)
-            }
             Ok(Ok(AttachmentExit::Closed)) if live.leaving.load(Ordering::SeqCst) => {
                 Some(Control::Reload)
             }

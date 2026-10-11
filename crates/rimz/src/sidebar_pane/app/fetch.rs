@@ -20,7 +20,7 @@ use crate::sidebar::notify::{LinkAlert, LinkNotificationState, Notification, Not
 use crate::sidebar::read_marks::{ReadMarks, prune_read_marks};
 use crate::sidebar::unread::{ClearedUnread, OpenedUnread, UnreadEpisodes};
 use crate::store::snapshot::SidebarSnapshot;
-use crate::wakeup::events::SidebarEvent;
+use crate::wakeup::events::{SidebarEvent, SidebarEventEnvelope};
 use crate::{RuntimePaths, StatePaths};
 
 use super::ServeConfig;
@@ -1099,13 +1099,12 @@ impl ResultSink {
         session_name: &str,
         event: SidebarEvent,
     ) -> serde_json::Result<()> {
-        let envelope = crate::wakeup::events::SidebarEventEnvelope::new(
+        let bytes = serde_json::to_vec(&SidebarEventEnvelope::new(
             workspace_id.clone(),
             Some(session_name.to_owned()),
             crate::utils::time::unix_now_ms(),
             event,
-        );
-        let bytes = serde_json::to_vec(&envelope)?;
+        ))?;
         if let Some(waker) = &self.waker {
             for subscriber in self.subscribers() {
                 let _ = waker.send_to(&bytes, &subscriber.socket_path);

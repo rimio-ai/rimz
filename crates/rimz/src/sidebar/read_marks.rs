@@ -28,11 +28,9 @@ pub(crate) struct ReadMarks {
 
 impl ReadMarks {
     pub(crate) fn load(runtime: &RuntimePaths) -> Arc<Self> {
-        READ_MARKS_CACHE.with(|cache| {
-            cache
-                .read_stamped_json(&runtime.read_marks_path())
-                .unwrap_or_else(|| Arc::new(load_legacy(runtime)))
-        })
+        READ_MARKS_CACHE
+            .with(|cache| cache.read_stamped_json(&runtime.read_marks_path()))
+            .unwrap_or_else(|| Arc::new(load_legacy(runtime)))
     }
 
     pub(crate) fn cleared_at_ms(&self, row_id: &str) -> Option<i64> {

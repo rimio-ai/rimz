@@ -5,7 +5,7 @@ use std::path::PathBuf;
 #[cfg(test)]
 use std::sync::mpsc::Receiver;
 use std::sync::mpsc::SyncSender;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 use crate::diag::focus_trace::FocusTraceEvent;
@@ -47,7 +47,6 @@ use super::lifecycle::{
 use super::notify::{BellNotice, emit_terminal_notification};
 use super::order_hold;
 use super::paint::FramePainter;
-use super::reload::{ReloadAction, reload_action};
 use super::remind::RemindState;
 use super::selection::{
     InputEffect, InputOutcome, finish_search, handle_key, handle_mouse_click, handle_scroll,
@@ -144,7 +143,7 @@ pub(super) struct LoopState {
     pub(super) should_exit: bool,
     pub(super) exit_cause: Option<RendererExitCause>,
     pub(super) tab_emptied: bool,
-    pub(super) reload_requested: bool,
+    pub(super) request_reload: Box<dyn Fn() + Send>,
 }
 
 pub(super) fn handle_wakeup(
@@ -283,7 +282,7 @@ impl LoopState {
             should_exit: false,
             exit_cause: None,
             tab_emptied: false,
-            reload_requested: false,
+            request_reload: Box::new(|| {}),
         }
     }
 
@@ -451,10 +450,7 @@ impl LoopState {
 
     fn handle_reload(&mut self, fetch: &mut FetchDispatcher) -> LoopFlow {
         fetch.clear_deferred();
-        if reload_or_refetch(&self.config.workspace_id, &self.config.session_name, fetch) {
-            self.reload_requested = true;
-            return LoopFlow::Exit;
-        }
+        (self.request_reload)();
         LoopFlow::Continue
     }
 
@@ -1851,10 +1847,8 @@ impl LoopState {
         );
     }
 
-    fn events(&self) -> std::sync::MutexGuard<'_, EventStore> {
-        self.events
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    fn events(&self) -> MutexGuard<'_, EventStore> {
+        self.events.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     fn observe_commit(&mut self) {
@@ -2094,41 +2088,6 @@ fn spawn_pane_focus(
     });
 }
 
-/// Resolve a reload request: the `r` keypress and the typed `Reload` event share this. `true` means a differing on-disk binary: the attachment ends with a reload request so the host drains and supervisors start the new build. A byte-identical or missing binary skips reload but still honours the intent with an immediate producing refetch, so a reload always pulls live data and un-sticks a tab whose producer has stalled.
-fn reload_or_refetch(
-    workspace_id: &crate::ids::WorkspaceId,
-    session_name: &str,
-    fetch: &mut FetchDispatcher,
-) -> bool {
-    match reload_action(workspace_id) {
-        ReloadAction::Reexec(target) => {
-            debug!(
-                session = %session_name,
-                target = %target.display(),
-                "reload: on-disk binary differs; asking supervisor to re-exec",
-            );
-            return true;
-        }
-        ReloadAction::AlreadyCurrent => {
-            debug!(
-                session = %session_name,
-                "reload: binary unchanged; refetching in place without re-exec",
-            );
-        }
-        // A reload that cannot find its replacement (a partial or in-flight
-        // install) must never make the sidebar vanish — keep serving the
-        // current build and refetch.
-        ReloadAction::Missing => {
-            warn!(
-                session = %session_name,
-                "reload requested but no renderer binary is on disk; refetching in place",
-            );
-        }
-    }
-    fetch.request(FetchRequest::hard_refresh(), true);
-    false
-}
-
 /// Ping every sidebar in the room to refold after a mark read/unread — the
 /// host prunes or keeps the episode and peer tabs converge on the new state.
 fn wake_room(runtime: &RuntimePaths) {
@@ -2144,5 +2103,4 @@ mod tests;
 pub(super) enum LoopFlow {
     Continue,
     Repoll,
-    Exit,
 }
