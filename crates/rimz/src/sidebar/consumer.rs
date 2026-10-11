@@ -3,6 +3,11 @@
 //! The host's fast lane and CLI readers share this in-process fold: no mux,
 //! git, or provider probe, and no durable store writes.
 
+#![cfg_attr(
+    not(test),
+    expect(dead_code, reason = "legacy disk seed reader is removed next")
+)]
+
 use crate::ids::PaneId;
 use crate::store::snapshot::SidebarSnapshot;
 use crate::{RuntimePaths, StatePaths, Store};
