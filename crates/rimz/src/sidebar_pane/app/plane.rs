@@ -179,10 +179,6 @@ pub(in crate::sidebar_pane) struct Subscription {
     pub(super) covered: Covered,
     pub(super) results: ResultReceiver,
     pub(super) observe: SyncSender<ObserveMsg>,
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "attachment adoption follows next")
-    )]
     pub(super) seed: Option<WorkspaceFold>,
     _membership: Membership,
 }

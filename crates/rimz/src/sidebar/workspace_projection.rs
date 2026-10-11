@@ -3,6 +3,11 @@
 //! Seeds check schema, session, and projection age, and pair frames by source
 //! stamps. The host's next full fold corrects the disposable publication.
 
+#![cfg_attr(
+    not(test),
+    expect(dead_code, reason = "legacy disk seed reader is removed next")
+)]
+
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;

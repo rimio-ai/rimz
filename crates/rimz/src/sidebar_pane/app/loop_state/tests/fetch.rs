@@ -36,7 +36,7 @@ impl std::io::Write for FrameOutput {
 }
 
 #[test]
-fn pre_tab_projection_with_a_newer_own_frame_seeds_without_selection() {
+fn pre_tab_fold_seeds_without_selection() {
     let shell = pane("terminal_9", "tab_0", true);
     let own = pane("terminal_10", "tab_1", false);
     let mut rig = Rig::with_own_pane(own.pane_id.clone());
@@ -44,40 +44,13 @@ fn pre_tab_projection_with_a_newer_own_frame_seeds_without_selection() {
     rig.runtime.ensure_dirs().unwrap();
     let mut seed = snapshot_with_panes(&rig.ws, vec![shell.clone()]);
     seed.focused_pane = Some(shell.pane_id.clone());
-    seed.reflects_log = Some(crate::store::event_log::LogExtent {
-        generation: 0,
-        offset: 0,
-    });
     let now_ms = crate::utils::time::unix_now_ms();
-    let mut frame =
+    let frame =
         crate::sidebar::frame::assemble_frame(vec![shell.clone()], now_ms - 1_000, "rimz-test");
-    frame.topology_stamp_ms = Some(now_ms - 1_000);
-    frame.metrics_stamp_ms = frame.topology_stamp_ms;
-    std::fs::write(
-        rig.runtime.pane_frame_path(),
-        serde_json::to_vec(&frame).unwrap(),
-    )
-    .unwrap();
-    crate::sidebar::workspace_projection::WorkspaceProjectionPublisher::default()
-        .publish(
-            &rig.runtime,
-            "rimz-test",
-            &crate::sidebar::enrich::WorkspaceSnapshot(seed),
-            &frame,
-        )
-        .unwrap();
-
-    let mut frame =
-        crate::sidebar::frame::assemble_frame(vec![shell.clone(), own], now_ms, "rimz-test");
-    frame.topology_stamp_ms = Some(now_ms);
-    frame.metrics_stamp_ms = frame.topology_stamp_ms;
-    std::fs::write(
-        rig.runtime.pane_frame_path(),
-        serde_json::to_vec(&frame).unwrap(),
-    )
-    .unwrap();
-
-    rig.state.seed_published();
+    rig.state.seed(WorkspaceFold {
+        workspace: crate::sidebar::enrich::WorkspaceSnapshot(seed),
+        frame: Some(Arc::new(frame)),
+    });
     let records = focus_records(&rig);
     assert_eq!(records.len(), 1, "the seed records its paint decision");
     assert_eq!(records[0]["seed"], true);
@@ -127,32 +100,15 @@ fn pre_tab_seed_and_worker_fold_paint_resting_cards_until_correction() {
         .as_agent_mut()
         .unwrap()
         .status = crate::agents::AgentStatus::Idle;
-    seed.reflects_log = Some(crate::store::event_log::LogExtent {
-        generation: 0,
-        offset: 0,
-    });
-    let mut frame = crate::sidebar::frame::assemble_frame(
+    let frame = crate::sidebar::frame::assemble_frame(
         seed.rows().filter_map(|row| row.pane.clone()).collect(),
         crate::utils::time::unix_now_ms(),
         "rimz-test",
     );
-    frame.topology_stamp_ms = Some(crate::utils::time::unix_now_ms());
-    frame.metrics_stamp_ms = frame.topology_stamp_ms;
-    std::fs::write(
-        rig.runtime.pane_frame_path(),
-        serde_json::to_vec(&frame).unwrap(),
-    )
-    .unwrap();
-    crate::sidebar::workspace_projection::WorkspaceProjectionPublisher::default()
-        .publish(
-            &rig.runtime,
-            "rimz-test",
-            &crate::sidebar::enrich::WorkspaceSnapshot(seed.clone()),
-            &frame,
-        )
-        .unwrap();
-
-    rig.state.seed_published();
+    rig.state.seed(WorkspaceFold {
+        workspace: crate::sidebar::enrich::WorkspaceSnapshot(seed.clone()),
+        frame: Some(Arc::new(frame)),
+    });
     let traced_seed = focus_records(&rig);
     assert_eq!(traced_seed.len(), 1, "the seed records its paint decision");
     assert_eq!(traced_seed[0]["source"], "published");
@@ -387,20 +343,11 @@ fn fused_focus_trace_names_the_event_applied_at_the_paint_decision() {
 }
 
 #[test]
-fn published_seed_commits_before_delivery_and_keeps_the_final_correction() {
+fn seed_commits_before_delivery_and_keeps_the_final_correction() {
     let own = pane("terminal_10", "tab_0", false);
     let mut rig = Rig::with_own_pane(own.pane_id.clone());
     rig.state.config.refresh_ms_override = Some(37);
     rig.runtime.ensure_dirs().unwrap();
-    let placeholder =
-        SidebarSnapshot::build_with_agents(rig.ws.clone(), Vec::new(), rig.state.current.now);
-    rig.state.seed_published();
-    assert_eq!(
-        serde_json::to_value(&rig.state.current).unwrap(),
-        serde_json::to_value(&placeholder).unwrap(),
-        "no publication preserves today's placeholder",
-    );
-
     let mut seed = agent_snapshot(&rig.ws);
     seed.now = Timestamp::now();
     seed.theme.display.refresh_ms = 100;
@@ -416,41 +363,26 @@ fn published_seed_commits_before_delivery_and_keeps_the_final_correction() {
         .clone();
     seed.focused_pane = Some(agent_pane.clone());
     seed.viewed_panes = vec![agent_pane.clone()];
-    seed.reflects_log = Some(crate::store::event_log::LogExtent {
-        generation: 0,
-        offset: 0,
-    });
     let mut frame = crate::sidebar::frame::assemble_frame(
         seed.rows().filter_map(|row| row.pane.clone()).collect(),
         seed.now.as_millisecond() as u64,
         "rimz-test",
     );
-    frame.topology_stamp_ms = Some(crate::utils::time::unix_now_ms());
-    frame.metrics_stamp_ms = frame.topology_stamp_ms;
     frame.presence = Some(crate::store::snapshot::PresenceSample {
         human_clients: 1,
         last_input_ms: Some(seed.now.as_millisecond() as u64),
         sampled_at_ms: seed.now.as_millisecond() as u64,
     });
-    std::fs::write(
-        rig.runtime.pane_frame_path(),
-        serde_json::to_vec(&frame).unwrap(),
-    )
-    .unwrap();
-    crate::sidebar::workspace_projection::WorkspaceProjectionPublisher::default()
-        .publish(
-            &rig.runtime,
-            "rimz-test",
-            &crate::sidebar::enrich::WorkspaceSnapshot(seed),
-            &frame,
-        )
-        .unwrap();
+    let fold = WorkspaceFold {
+        workspace: crate::sidebar::enrich::WorkspaceSnapshot(seed),
+        frame: Some(Arc::new(frame)),
+    };
 
     rig.fetch.request(FetchRequest::force_fold(), false);
     assert!(rig.next_request().unwrap().forces_fold());
     rig.fetch.request(FetchRequest::fresh_panes(), true);
     rig.state.dirty = false;
-    rig.state.seed_published();
+    rig.state.seed(fold);
 
     assert_eq!(
         rig.state.current.rows().count(),
@@ -537,7 +469,7 @@ fn published_seed_commits_before_delivery_and_keeps_the_final_correction() {
 }
 
 #[test]
-fn published_seed_listing_the_own_pane_seats_its_focus_at_once() {
+fn seed_listing_the_own_pane_seats_its_focus_at_once() {
     let own = pane("terminal_10", "tab_0", false);
     let mut rig = Rig::with_own_pane(own.pane_id.clone());
     rig.runtime.ensure_dirs().unwrap();
@@ -548,85 +480,20 @@ fn published_seed_listing_the_own_pane_seats_its_focus_at_once() {
     let agent = seed.worktree_groups[0].rows[0].pane.clone().unwrap();
     seed.focused_pane = Some(agent.pane_id.clone());
     seed.viewed_panes = vec![agent.pane_id.clone()];
-    seed.reflects_log = Some(crate::store::event_log::LogExtent {
-        generation: 0,
-        offset: 0,
-    });
-    let mut frame = crate::sidebar::frame::assemble_frame(
+    let frame = crate::sidebar::frame::assemble_frame(
         vec![own, agent.clone()],
         seed.now.as_millisecond() as u64,
         "rimz-test",
     );
-    frame.topology_stamp_ms = Some(crate::utils::time::unix_now_ms());
-    frame.metrics_stamp_ms = frame.topology_stamp_ms;
-    std::fs::write(
-        rig.runtime.pane_frame_path(),
-        serde_json::to_vec(&frame).unwrap(),
-    )
-    .unwrap();
-    crate::sidebar::workspace_projection::WorkspaceProjectionPublisher::default()
-        .publish(
-            &rig.runtime,
-            "rimz-test",
-            &crate::sidebar::enrich::WorkspaceSnapshot(seed),
-            &frame,
-        )
-        .unwrap();
-
-    rig.state.seed_published();
+    rig.state.seed(WorkspaceFold {
+        workspace: crate::sidebar::enrich::WorkspaceSnapshot(seed),
+        frame: Some(Arc::new(frame)),
+    });
 
     assert!(rig.state.current.own_view.is_some());
     assert_eq!(rig.state.ui.selected_pane, Some(agent.pane_id));
     assert_eq!(rig.state.ui.selected_index, Some(0));
     assert!(rig.state.self_close.seen_sibling);
-}
-
-#[test]
-fn published_seed_age_outlasts_the_frame_reuse_window_by_three_ticks() {
-    for (tick_seconds, age_ms, seeds) in [
-        (1, 12_000, true),
-        (1, 14_000, false),
-        (60, 189_000, true),
-        (60, 191_000, false),
-        (3600, 10_809_000, true),
-        (3600, 10_811_000, false),
-    ] {
-        let mut rig = Rig::new();
-        rig.runtime.ensure_dirs().unwrap();
-        rig.state.config.tick_seconds = tick_seconds;
-        let mut seed = agent_snapshot(&rig.ws);
-        seed.reflects_log = Some(crate::store::event_log::LogExtent {
-            generation: 0,
-            offset: 0,
-        });
-        let mut frame = crate::sidebar::frame::assemble_frame(
-            seed.rows().filter_map(|row| row.pane.clone()).collect(),
-            crate::utils::time::unix_now_ms(),
-            "rimz-test",
-        );
-        frame.topology_stamp_ms = Some(crate::utils::time::unix_now_ms() - age_ms);
-        frame.metrics_stamp_ms = frame.topology_stamp_ms;
-        std::fs::write(
-            rig.runtime.pane_frame_path(),
-            serde_json::to_vec(&frame).unwrap(),
-        )
-        .unwrap();
-        crate::sidebar::workspace_projection::WorkspaceProjectionPublisher::default()
-            .publish(
-                &rig.runtime,
-                "rimz-test",
-                &crate::sidebar::enrich::WorkspaceSnapshot(seed),
-                &frame,
-            )
-            .unwrap();
-
-        rig.state.seed_published();
-        assert_eq!(
-            rig.state.current.rows().count(),
-            usize::from(seeds),
-            "tick={tick_seconds}, age={age_ms}"
-        );
-    }
 }
 
 #[test]

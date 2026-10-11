@@ -36,6 +36,17 @@ pub(crate) fn workspace() -> WorkspaceId {
     WorkspaceId::parse("ws_0123456789abcdef01234567").unwrap()
 }
 
+pub(in crate::sidebar_pane) fn remember_fold(
+    plane: &super::DataPlane,
+    snapshot: SidebarSnapshot,
+    frame: crate::sidebar::frame::PaneFrame,
+) {
+    plane.remember(super::fetch::WorkspaceFold {
+        workspace: crate::sidebar::enrich::WorkspaceSnapshot(snapshot),
+        frame: Some(std::sync::Arc::new(frame)),
+    });
+}
+
 pub(crate) fn serve_config(ws: &WorkspaceId) -> ServeConfig {
     ServeConfig {
         workspace_id: ws.clone(),

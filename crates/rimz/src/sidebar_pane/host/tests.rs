@@ -168,34 +168,16 @@ fn painted(pty: &mut Pty) -> Vec<u8> {
 }
 
 #[test]
-fn a_published_projection_populates_the_first_nonblank_screen() {
+fn a_warm_plane_populates_the_first_nonblank_screen() {
     let room = Room::new();
     let mut seed = crate::sidebar_pane::app::fixtures::agent_snapshot(&workspace());
     seed.worktree_groups[0].rows[0].name = "seed-card".into();
-    seed.reflects_log = Some(crate::store::event_log::LogExtent {
-        generation: 0,
-        offset: 0,
-    });
-    let mut frame = crate::sidebar::frame::assemble_frame(
+    let frame = crate::sidebar::frame::assemble_frame(
         seed.rows().filter_map(|row| row.pane.clone()).collect(),
         crate::utils::time::unix_now_ms(),
         "rimz-test",
     );
-    frame.topology_stamp_ms = Some(crate::utils::time::unix_now_ms());
-    frame.metrics_stamp_ms = frame.topology_stamp_ms;
-    std::fs::write(
-        room.runtime.pane_frame_path(),
-        serde_json::to_vec(&frame).unwrap(),
-    )
-    .unwrap();
-    crate::sidebar::workspace_projection::WorkspaceProjectionPublisher::default()
-        .publish(
-            &room.runtime,
-            "rimz-test",
-            &crate::sidebar::enrich::WorkspaceSnapshot(seed),
-            &frame,
-        )
-        .unwrap();
+    crate::sidebar_pane::app::fixtures::remember_fold(&room.host.plane, seed, frame);
 
     let mut pty = Pty::open(40, 30);
     let _pane = room.attach(&pty);
@@ -207,7 +189,7 @@ fn a_published_projection_populates_the_first_nonblank_screen() {
     let first = parser.screen().contents();
     assert!(
         first.contains("seed-card"),
-        "the first screen must contain the published card, not just chrome:\n{first}"
+        "the first screen must contain the remembered card, not just chrome:\n{first}"
     );
 }
 

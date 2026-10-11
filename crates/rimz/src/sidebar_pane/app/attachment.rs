@@ -185,7 +185,9 @@ impl Attachment {
         state.share_width_geometry(plane.geometry.clone());
         state.observe_events = plane.observe_events.clone();
         state.set_probed_aspect(terminal.backend().cell_aspect());
-        state.seed_published();
+        if let Some(seed) = subscription.seed {
+            state.seed(seed);
+        }
         // Zellij's percentage template needs a startup trim on capped wide views.
         // tmux births through its live absolute-column hook; its resize wakeups
         // own later convergence, avoiding a startup resize that can reflow the
@@ -221,8 +223,8 @@ impl Attachment {
         // immediately rather than blocking on a synchronous call: the first fetch
         // can take several seconds (Zellij just started, git cold-start), and a
         // blocked main thread delays the self-close watchdog, stalling cleanup.
-        // The published seed renders while the correction is in flight; only
-        // a room with no valid publication starts with the placeholder. Forced,
+        // The plane's last fold renders while the correction is in flight; a
+        // host with no fold yet starts with the placeholder. Forced,
         // because a worker other panes already share may have nothing new to fold.
         fetch.request(FetchRequest::force_fold(), false);
 
