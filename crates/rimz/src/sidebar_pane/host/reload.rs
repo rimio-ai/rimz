@@ -108,4 +108,5 @@ fn fill(reader: &mut impl Read, buf: &mut [u8]) -> io::Result<usize> {
 }
 
 #[cfg(test)]
+#[path = "reload/tests.rs"]
 mod tests;
