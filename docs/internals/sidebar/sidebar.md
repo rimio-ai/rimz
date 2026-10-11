@@ -440,4 +440,4 @@ This continuity is RimZ-owned and transcript-based. RimZ disables Zellij session
 
 ## Notifications
 
-Notifications are best-effort over the same attention model, and the store stays authoritative. The host opens unread episodes, applies `[notifications].triggers`, debounce, and focus suppression, spawns matching handlers, and broadcasts `SidebarEvent::Notify`. Each renderer re-rings its local unread `waiting` and `failed` rows at the reminder cadence until they clear, and writes terminal-local OSC and BEL bytes outside the draw cycle. The contract is [notifications.md](./notifications.md).
+Notifications are best-effort over the same attention model, and the store stays authoritative. The host opens unread episodes, applies `[notifications].triggers`, debounce, and focus suppression, spawns matching handlers, and sends `SidebarEvent::Notify` directly to its subscribed panes after their snapshots. Each renderer re-rings its local unread `waiting` and `failed` rows at the reminder cadence until they clear, and writes terminal-local OSC and BEL bytes outside the draw cycle. The contract is [notifications.md](./notifications.md).

@@ -127,7 +127,12 @@ fn notification_reconciliation_reaches_the_younger_pane_before_its_bell() {
     worker.config.notification_prefs.coalesce_ms = 0;
     let subscribers = Subscribers::default();
     let (elder, elder_rx) = subscriber("01", "terminal_7", 2, "missing.sock".into());
-    let (younger, younger_rx) = subscriber("02", "terminal_8", 2, "missing.sock".into());
+    let (younger, younger_rx) = subscriber(
+        "02",
+        "terminal_8",
+        2,
+        runtime.sidebar_socket_path(&fixture.instance_id),
+    );
     subscribe(&subscribers, elder);
     subscribe(&subscribers, younger);
     let mut sink = ResultSink::shared(subscribers, Covered::default(), LastFold::default());
@@ -203,6 +208,7 @@ fn notification_reconciliation_reaches_the_younger_pane_before_its_bell() {
         "a new attachment gets the post-notification unread fold too"
     );
     let mut bytes = [0; 4096];
+    notices.recv(&mut bytes).unwrap();
     let len = notices.recv(&mut bytes).unwrap();
     let notice: crate::wakeup::events::SidebarEventEnvelope =
         serde_json::from_slice(&bytes[..len]).unwrap();
@@ -248,6 +254,7 @@ fn a_worker_notification_reaches_every_subscribed_pane_after_its_snapshot() {
         )
         .unwrap();
         receivers.push((socket, rx));
+        std::fs::remove_file(runtime.sidebar_heartbeat_path(&sub.instance_id)).unwrap();
         subscribe(&subscribers, sub);
     }
     let mut sink = ResultSink::shared(subscribers, Covered::default(), LastFold::default());

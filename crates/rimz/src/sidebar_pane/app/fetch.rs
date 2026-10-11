@@ -534,8 +534,9 @@ impl FetchWorker {
             self.publish_live_roster(state, roster);
         }
         deliver_notifications(
-            &self.config,
-            &self.runtime,
+            sink,
+            &self.config.workspace_id,
+            &self.config.session_name,
             &self.config.notification_prefs,
             &self.diag,
             deliveries,
@@ -615,8 +616,9 @@ fn evaluate_notifications(
 }
 
 fn deliver_notifications(
-    config: &ServeConfig,
-    runtime: &RuntimePaths,
+    sink: &ResultSink,
+    workspace_id: &crate::WorkspaceId,
+    session_name: &str,
     prefs: &NotificationsPrefs,
     diag: &crate::diag::DiagSink,
     deliveries: Vec<NotificationDelivery>,
@@ -627,9 +629,9 @@ fn deliver_notifications(
             crate::sidebar::notify::spawn_notify_handlers(prefs, &notification);
         }
         diag.trace_notify(notification_emitted_trace(&notification, &delivery.panes));
-        if let Err(err) = crate::wakeup::broadcast(
-            runtime,
-            Some(&config.session_name),
+        if let Err(err) = sink.notify(
+            workspace_id,
+            session_name,
             SidebarEvent::Notify {
                 title: notification.title,
                 body: notification.body,
@@ -638,7 +640,7 @@ fn deliver_notifications(
                 notification_kind: Some(delivery.notification_kind),
             },
         ) {
-            tracing::debug!(error = %err, "notification event broadcast failed");
+            tracing::debug!(error = %err, "notification event serialization failed");
         }
     }
 }
@@ -1089,6 +1091,27 @@ impl ResultSink {
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(fold);
         }
+    }
+
+    fn notify(
+        &self,
+        workspace_id: &crate::WorkspaceId,
+        session_name: &str,
+        event: SidebarEvent,
+    ) -> serde_json::Result<()> {
+        let envelope = crate::wakeup::events::SidebarEventEnvelope::new(
+            workspace_id.clone(),
+            Some(session_name.to_owned()),
+            crate::utils::time::unix_now_ms(),
+            event,
+        );
+        let bytes = serde_json::to_vec(&envelope)?;
+        if let Some(waker) = &self.waker {
+            for subscriber in self.subscribers() {
+                let _ = waker.send_to(&bytes, &subscriber.socket_path);
+            }
+        }
+        Ok(())
     }
 
     fn send(&self, subscriber: &Subscriber, mut update: FetchUpdate) {
