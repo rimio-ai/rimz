@@ -1,7 +1,6 @@
-//! Producer-owned publication of adapter wiring and provider-local sessions.
+//! Private probes and host-owned publication of wiring and provider-local sessions.
 //!
-//! The room host probes provider configuration behind an exact-stamp
-//! process memo. Renderers consume only the normalized same-session cache.
+//! Configuration probes use an exact-stamp memo. The host compares against its last successful publication in memory; retained and passive folds share the same input-intersection filter.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};

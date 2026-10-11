@@ -314,7 +314,7 @@ A tmux capture is a few milliseconds apart, so the first file is close to the fi
 
 ## Inspect the data behind a card
 
-A frame shows what the renderer decided; `rimz sidebar snapshot --json` shows what it decided it from. Run it from the binary you built, not the installed one: both the default and `--no-produce` fold the rows in the calling process, so the snapshot is always your code's output, and the only way to see another build's behaviour is to run that build. What the flag trades is the pane truth underneath: the default forks `list-panes` and git for a current roster, while `--no-produce` reuses the pane frame and agent projection the producer already published and forks neither, which makes it the cheap read in a room you would rather not disturb.
+A frame shows what the renderer decided; `rimz sidebar snapshot --json` computes the same view-model in the calling process. Run the binary you built, not the installed one. The default invokes a private mux listing (a fresh Zellij pushed topology can answer without a subprocess), probes agent projection privately, and refreshes heavy lanes. It does not publish the host's pane frame, agent projection, or metrics history and cannot nudge the host with a pane-publication wake. `--no-produce` passively reuses the host's publications and forks neither mux nor git, making it the cheap read in a room you would rather not disturb.
 
 One rendered card is a row in a worktree group, and its clocks and card fields live there:
 

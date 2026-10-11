@@ -1,8 +1,6 @@
-//! Pane-frame runtime cache and presence/topology hints for the sidebar data plane.
+//! Passive pane-frame decoding and presence/topology hints for the sidebar data plane.
 //!
-//! These files live under the workspace runtime directory and are cache-class.
-//! Producers publish them with temp-file-plus-rename, consumers read them
-//! opportunistically, and every value can be rebuilt from live mux state.
+//! The host publishes the pane frame atomically in the workspace runtime directory. Passive readers consume it opportunistically; presence hints and the authoritative liveness probe keep their separate writers.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -18,27 +16,15 @@ use crate::sidebar::frame::PaneFrame;
 use crate::sidebar::timing::{EVENT_PANE_TTL, SNAPSHOT_CACHE_TTL};
 use crate::utils::time::unix_now_ms;
 
-// The shared pane frame cache is keyed to one `(workspace, session)`: the
-// per-workspace runtime root scopes the workspace, and `session_name` prevents
-// serving one session's panes to another during detach or session rotation. It
-// caches only the expensive pane roster read; the store rollup stays
-// event-fresh and is folded over this frame by producer and consumer reads.
+// The runtime root scopes the workspace; `session_name` prevents cross-session reuse during detach or rotation. Store rollups remain event-fresh independently of the pane publication.
 thread_local! {
-    /// This thread's last `snapshot.json` parse ([`ParseCache`]). The consumer
-    /// fetch worker calls [`read_snapshot_cache`] every fetch (~0.75–2s), but
-    /// the producer only republishes when something changed — so most reads
-    /// hit an unchanged file and skip the 100–500 KB deserialize.
+    /// Passive readers reuse this thread's last `snapshot.json` parse ([`ParseCache`]) while the atomic file identity is unchanged. The host seeds once and retains its own inputs thereafter.
     static SNAPSHOT_PARSE_CACHE: ParseCache<PaneFrame> = const { ParseCache::new() };
 }
 
-/// Read a same-session cache entry regardless of coalescing freshness. `None`
-/// when it is absent, for another session, or unreadable. Used as the
-/// hold-last-good base for a consumer read and the degraded-read fallback.
+/// Read a same-session publication regardless of host freshness. Absent, unreadable, and wrong-session files return `None`; passive reads, host startup, and private degraded reads share this entry.
 ///
-/// Skips the JSON parse when this thread already parsed the same atomic file
-/// identity. On a stat miss it re-reads and re-caches; a
-/// file replaced (atomic rename) between the stat and the read just costs one
-/// redundant parse next call, never a stale or torn value.
+/// An unchanged atomic file identity skips parsing. A rename between stat and read costs at most one redundant parse next call, never a torn value.
 pub fn read_snapshot_cache(cache_path: &Path, session: &str) -> Option<Arc<PaneFrame>> {
     let stamped = StampedPath::of(cache_path);
 
@@ -64,14 +50,7 @@ fn normalize_observed_stamp(frame: &mut PaneFrame) {
     }
 }
 
-/// Whether a same-session cache entry is young enough to serve without a
-/// produce: younger than `ttl` *and* at or past the caller's forced-freshness
-/// floor. The floor clause is load-bearing for event mode — a lifecycle or
-/// resize signal carries `min_produced_at_ms`, which rejects any pre-signal
-/// cache regardless of which TTL is in effect, so agent birth/death never
-/// waits out [`EVENT_PANE_TTL`]. The age saturates, so a cache stamped by a
-/// clock ahead of this reader serves (age 0) rather than re-producing every
-/// call. The fast path and single-flight cache rechecks share this verdict.
+/// Whether the host may reuse a retained frame: publication age at most `ttl`, with `observed_at_ms` at or after the freshness floor. Lifecycle and resize floors bypass even [`EVENT_PANE_TTL`]; saturating age treats a future clock stamp as age zero.
 pub(crate) fn snapshot_cache_is_fresh(
     cache: &PaneFrame,
     now_ms: u64,
@@ -139,10 +118,7 @@ pub fn presence_event_mode(stamp_age_ms: Option<u64>) -> bool {
     stamp_age_ms.is_some_and(|age| age <= PRESENCE_STAMP_FRESH.as_millis() as u64)
 }
 
-/// The effective pane-cache TTL for one produce: the event-mode TTL while the
-/// presence channel is alive or the published frame is unwatched, else the
-/// poll-mode TTL. Computed once per `cached_panes_or_produce` call and threaded
-/// through the fast path and single-flight cache rechecks so they agree.
+/// The host's pane TTL: event mode while presence is alive or its retained prior is unwatched, otherwise poll mode. An absent prior counts as watched.
 pub(super) fn effective_pane_ttl(stamp_age_ms: Option<u64>, unwatched: bool) -> Duration {
     if unwatched || presence_event_mode(stamp_age_ms) {
         EVENT_PANE_TTL

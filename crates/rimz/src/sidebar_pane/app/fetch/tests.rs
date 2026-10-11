@@ -335,13 +335,7 @@ fn diagnostics_name_link_alerts() {
     ));
 }
 
-/// One forced cycle over a tempdir workspace, end to end and entirely in
-/// process: the fast lane folds the published frame and posts a non-final
-/// outcome, then the produce arm runs `produce_workspace_snapshot` on the same warm
-/// cursor and posts the final reconciling outcome. Every forked enrichment is
-/// pre-published fresh — the pane frame (the single-flight cache's fast path,
-/// so no mux), the provider-spending stamp, and the accounts stamp — so the
-/// cycle pays no subprocess and the test is hermetic.
+/// One forced cycle folds retained inputs, then produces on the same warm cursor and delivers the final reconciling outcome. The pane producer is seeded in memory and heavy lanes are pre-published fresh, so the hermetic cycle forks nothing.
 #[test]
 fn forced_cycle_retains_the_reconciling_produce_for_a_stalled_renderer() {
     let dir = tempfile::tempdir().unwrap();

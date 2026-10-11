@@ -1,11 +1,6 @@
-//! Native pane-resident sidebar process: the serve loop ([`app`]) and the
-//! snapshot renderer ([`render`]).
+//! Native sidebar supervisors, the shared room host, and snapshot rendering.
 //!
-//! `app` owns the fixed-timestep serve loop, two-speed fetch, last-known-good
-//! gate, health/give-up, selection, input codec, reload-in-place, and producer
-//! election. `render` projects [`crate::store::snapshot::SidebarSnapshot`] into the terminal
-//! frame. Neither owns store decisions; those stay in [`crate::sidebar`] and
-//! [`crate::store`].
+//! [`app`] owns attachment loops, retained host inputs, fetch, last-known-good gates, health, selection, input, and reload. [`render`] projects [`crate::store::snapshot::SidebarSnapshot`] into terminal cells. Neither owns store decisions; those stay in [`crate::sidebar`] and [`crate::store`].
 
 pub mod app;
 mod attach;

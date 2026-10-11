@@ -1,8 +1,6 @@
 //! Producer-owned live-session context refresh.
 //!
-//! The elected sidebar producer asks each live root session's adapter for cheap
-//! transcript-tail refreshes and optional detached rich-context helpers through
-//! the same trigger seams hooks use.
+//! Heavy-lane refresh asks each live root session's adapter for cheap transcript-tail refreshes and optional detached rich-context helpers through the same trigger seams hooks use.
 
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime};

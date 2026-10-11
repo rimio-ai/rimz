@@ -58,7 +58,7 @@ The file primitives sit one level down, in `disk/`, which imports nothing from t
 | [`disk/lock.rs`](../../crates/rimz/src/disk/lock.rs) | `WorkspaceLock`, the advisory flock, bounded by `LOCK_TIMEOUT` (30 seconds); the timeout error names `fuser` to find the holder. |
 | [`disk/rotating.rs`](../../crates/rimz/src/disk/rotating.rs) | Best-effort rotating JSONL append and decoded visits. |
 | [`disk/parse_cache.rs`](../../crates/rimz/src/disk/parse_cache.rs) | The per-thread parse memo ([Truth and cache](#truth-and-cache)). |
-| [`disk/single_flight.rs`](../../crates/rimz/src/disk/single_flight.rs) | Cross-process producer election: shared reuse, exclusive production, or local-only fallback. The sidebar imports it, so it stays free of every writer module; callers own freshness and publication. |
+| [`disk/single_flight.rs`](../../crates/rimz/src/disk/single_flight.rs) | Cross-process cache election: shared reuse, exclusive production, or local-only fallback. Sidebar heavy lanes and launch gating still use it; host-owned pane production does not. It stays free of every writer module; callers own freshness and publication. |
 | [`disk/usage.rs`](../../crates/rimz/src/disk/usage.rs), [`disk/summary.rs`](../../crates/rimz/src/disk/summary.rs) | Symlink-safe, hardlink-aware byte walks for `doctor`, `uninstall`, and `gc`, and text-file measurement. |
 
 Start at `writer.rs` for how a fact gets in, at `snapshot/fold.rs` for how it comes back out, and at `disk/atomic.rs` for what durability costs.
@@ -188,7 +188,7 @@ live/prompt/{task,sys}.<digest>.md     launch artifacts
 live/agent-telemetry/copilot-otel.jsonl metadata-only Copilot export
 live/idle-compact/<digest>.json       idle-compaction fire records
 live/idle-stop/<digest>.json          idle-stop helper pacing records
-live/{presence,client-presence-probe}.stamp probe freshness
+live/presence.stamp                      mux/presence liveness hint
 lanes/{snapshot,agent-projection}.json projections
 lanes/{sidebar-width,sidebar-filter,unread}.json renderer state
 lanes/{pane-topology,presence-desired,topology-writer-conflict}.json topology

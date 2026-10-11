@@ -1,6 +1,4 @@
-//! The live pane frame: the single-flight pane-roster cache, the raced-read
-//! process rotation, and the process-start stamp — everything the
-//! producer publishes to `snapshot.json` for consumers to fold in process.
+//! Retained host pane production and private CLI reads share raced-read repair, confirmation, carry, and acceptance. Only the host publishes `snapshot.json` and metrics history.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -236,11 +234,8 @@ struct FrameContext<'a> {
     sampled: bool,
 }
 
-/// The session's live panes from the mux — the roster read the snapshot cache
-/// amortizes across the fleet. The store rollup is read separately (fresh from
-/// `latest.json`), so this enumerates only the pane set.
-/// Zellij topology may carry client focus/presence from the plugin; other paths
-/// keep the direct backend sample fallback.
+/// Enumerate only the session's panes; the store rollup is read separately. The host amortizes this read across the fleet, while private CLI calls always invoke it.
+/// Zellij topology may carry plugin focus/presence; other paths retain the direct backend sample fallback.
 fn list_session_panes(
     mux: MuxName,
     session: &str,
