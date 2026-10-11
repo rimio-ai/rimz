@@ -2874,8 +2874,8 @@ fn agent_fork_refuses_untrusted_hooks_before_any_launch() {
 #[test]
 fn resume_exec_attaches_only_the_resumed_session_to_its_pane() {
     let kind = AgentKind::new_unchecked("codex");
-    // (wrapped, subagent): a direct-exec resume, a wrapped root resume, a wrapped subagent resume.
-    for (wrapped, subagent) in [(false, false), (true, false), (true, true)] {
+    // An in-place root, a shell-dropping root, and a supervised child.
+    for (drop_to_shell, subagent) in [(false, false), (true, false), (true, true)] {
         let env = Env::new();
         env.record(&env.project_root);
         let shim_dir = write_env_dump_shim(&env, "codex");
@@ -2939,7 +2939,7 @@ fn resume_exec_attaches_only_the_resumed_session_to_its_pane() {
             skipped: Vec::new(),
         }));
         resume.identity.params.mode = Some(rimz::agents::PermissionMode::Yolo);
-        resume.close_pane_on_exit = wrapped && !subagent;
+        resume.close_pane_on_exit = drop_to_shell && !subagent;
         if subagent {
             let mut run = rimz::store::run::RunRecord::new(
                 env.workspace_id.clone(),
@@ -2990,14 +2990,12 @@ fn resume_exec_attaches_only_the_resumed_session_to_its_pane() {
                 _ => None,
             })
             .collect::<Vec<_>>();
-        // Every resume revives its card, root or child, wrapped or direct, before its provider
+        // Every resume revives its card, root or child, before its provider
         // starts, so the stamp precedes the attach to the spawned provider.
-        let expected = if wrapped {
-            vec!["attach", "rimz.agent-resumed", "attach", "rimz.agent-ended"]
-        } else {
-            vec!["attach", "rimz.agent-resumed"]
-        };
-        assert_eq!(lifecycle, expected);
+        assert_eq!(
+            lifecycle,
+            ["attach", "rimz.agent-resumed", "attach", "rimz.agent-ended"]
+        );
         let attaches = store
             .read_events()
             .expect("read events")
@@ -3007,7 +3005,20 @@ fn resume_exec_attaches_only_the_resumed_session_to_its_pane() {
                 _ => None,
             })
             .collect::<Vec<_>>();
-        assert_eq!(attaches.len(), if wrapped { 2 } else { 1 });
+        assert_eq!(attaches.len(), 2);
+        let ended = store.runtime_projection(rimz::RuntimeScope::Audit).unwrap();
+        let ended = ended
+            .agents
+            .iter()
+            .find(|agent| agent.agent_id == session_id)
+            .unwrap();
+        assert!(
+            !matches!(
+                rimz::store::runtime::agent_liveness(ended),
+                rimz::store::runtime::AgentLiveness::Live { .. }
+            ),
+            "an exited provider's stamped row is not live"
+        );
         for attach in &attaches {
             assert_eq!(
                 attach.record.as_ref(),

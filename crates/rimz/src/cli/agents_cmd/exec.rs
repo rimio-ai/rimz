@@ -300,15 +300,10 @@ fn launch_and_supervise(
         return Ok(());
     }
     // A supervising wrapper owes the store an end from its first binding on,
-    // so a hangup after that binding must reach the settle path. A direct exec
-    // keeps the default dispositions its provider would see.
-    let exec_directly = isolation != rimz::config::Isolation::Sandbox
-        && should_exec_agent_directly(request, relaunch_cap);
-    if !exec_directly {
-        reset_cleanup_signal_flag();
-        install_cleanup_signal_handlers().context("installing cleanup signal handlers")?;
-        install_interrupt_signal_handler().context("installing interrupt signal handler")?;
-    }
+    // so a hangup after that binding must reach the settle path.
+    reset_cleanup_signal_flag();
+    install_cleanup_signal_handlers().context("installing cleanup signal handlers")?;
+    install_interrupt_signal_handler().context("installing interrupt signal handler")?;
     if let Some(context) = run_context {
         record_own_run_pane(context);
     }
@@ -376,12 +371,6 @@ fn launch_and_supervise(
             AGENT_RESUMED_EVENT,
             "agent resume start stamp",
         );
-    }
-    if exec_directly {
-        if let Some(target) = attach_target.as_ref() {
-            rewake_resumed(invocation, target, globals.mux, resume_since);
-        }
-        return exec_agent_command(program, rest, &process.env, &process.unset);
     }
     let mut command = Command::new(program);
     command.args(rest);
@@ -621,23 +610,38 @@ fn settle_after_exit(
         stamp_own_end_if_deliberate(invocation, request, abrupt, linger, || {
             session_accepts_agent_close(globals, session_name)
         });
-    if let Some((kind, agent_id)) = &ended_session {
+    if let Some(ended) = &ended_session {
         // The stamp above is a durable end no hook will ever report; its
         // subscriptions die with it here rather than waiting for gc. A wrapper
         // whose session has moved to another pane stamps nothing and so reaches
         // none of this (`resolve_own_agent_end_trace`).
         if let Err(err) = rimz::harness::schedule::arm::retire_session(
             &invocation.workspace.project_root,
-            kind,
-            agent_id,
+            &ended.kind,
+            &ended.agent_id,
             rimz::harness::schedule::arm::RetireScope::Session,
         ) {
             tracing::warn!(error = %err, "could not retire the exiting session's deliveries");
         }
     }
-    if should_drop_to_shell(request, abrupt) {
+    if should_print_exit_hint(request, abrupt, linger) {
+        let resumable = std::env::current_dir()
+            .is_ok_and(|cwd| exited_session_resumable(ended_session.as_ref(), &cwd));
+        let hint = exit_hint(
+            request,
+            &status,
+            startup_failure,
+            resumable,
+            ended_session
+                .as_ref()
+                .and_then(|ended| ended.name.as_deref()),
+            ended_session.as_ref().map(|ended| &ended.agent_id),
+        );
+        let _ = write!(std::io::stderr().lock(), "{hint}");
+    }
+    if !linger && should_drop_to_shell(request, abrupt) {
         // The trace above stamps the agent ended; gc reclaims any worktree later.
-        drop_to_shell_after_agent_exit(request, &status, startup_failure, ended_session.as_ref());
+        drop_to_shell_after_agent_exit();
     }
     if let Some(path) = entered_worktree
         && deliberate
@@ -689,6 +693,13 @@ fn report_settled_child_or_log(context: &RunExecContext) {
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct EndedSession {
+    kind: AgentKind,
+    agent_id: AgentSessionId,
+    name: Option<String>,
+}
+
 /// Whether this exit closes the agent deliberately, and the session it then
 /// stamped ended. A lingering subagent or a request that records no end
 /// stamps nothing.
@@ -698,7 +709,7 @@ fn stamp_own_end_if_deliberate(
     abrupt: bool,
     linger: bool,
     session_accepts_close: impl FnOnce() -> bool,
-) -> (bool, Option<(AgentKind, AgentSessionId)>) {
+) -> (bool, Option<EndedSession>) {
     let deliberate = close_is_deliberate(abrupt, session_accepts_close, || {
         own_agent_pending_recovery(invocation, request)
     });
@@ -814,21 +825,12 @@ impl ProviderTerminal {
     fn restore(&self) {}
 }
 
-fn should_exec_agent_directly(
+fn should_print_exit_hint(
     request: &rimz::harness::launch::ExecRequest,
-    relaunch_cap: u8,
+    abrupt: bool,
+    linger: bool,
 ) -> bool {
-    let relaunchable = relaunch_cap > 0
-        && matches!(
-            request.action,
-            rimz::harness::launch::ExecAction::Launch { .. }
-        );
-    cfg!(unix)
-        && !relaunchable
-        && request.run_id.is_none()
-        && request.worktree_path.is_none()
-        && !request.exit_on_run_completion
-        && !request.close_pane_on_exit
+    request.run_id.is_none() && !abrupt && !linger
 }
 
 fn should_record_end_trace(request: &rimz::harness::launch::ExecRequest) -> bool {
@@ -856,30 +858,43 @@ fn relaunch_command(request: &rimz::harness::launch::ExecRequest) -> String {
 /// Whether the pane's ended session is one `--resume` can redeem: a real
 /// provider session id whose adapter compiles a resume command for this
 /// directory. The hint then teaches resume; anything else relaunches fresh.
-fn exited_session_resumable(ended: Option<&(AgentKind, AgentSessionId)>, cwd: &Path) -> bool {
-    ended.is_some_and(|(kind, agent_id)| {
-        !agent_id.is_provisional()
-            && rimz::agents::find_definition(kind.as_str())
-                .is_some_and(|adapter| adapter.resume_command(agent_id, cwd).is_some())
+fn exited_session_resumable(ended: Option<&EndedSession>, cwd: &Path) -> bool {
+    ended.is_some_and(|ended| {
+        !ended.agent_id.is_provisional()
+            && rimz::agents::find_definition(ended.kind.as_str())
+                .is_some_and(|adapter| adapter.resume_command(&ended.agent_id, cwd).is_some())
     })
 }
 
 fn exit_hint(
-    kind: &str,
+    request: &rimz::harness::launch::ExecRequest,
     status: &ExitStatus,
     startup_failure: bool,
-    relaunch: &str,
     resumable: bool,
-    worktree: Option<&Path>,
+    ended_name: Option<&str>,
+    session_id: Option<&AgentSessionId>,
 ) -> String {
+    let kind = request.kind.as_str();
+    let relaunch = relaunch_command(request);
     let mut hint = if startup_failure {
         format!("rimz: agent `{kind}` failed to start ({status}); relaunch with `{relaunch}`\r\n")
     } else if resumable {
-        format!("rimz: agent `{kind}` exited ({status}); resume with `{relaunch} --resume`\r\n")
+        let resume =
+            if request.identity.params.team.is_some() && request.identity.params.role.is_some() {
+                format!("{relaunch} --resume")
+            } else {
+                // Resumability requires an ended provider session id.
+                let name = ended_name
+                    .or(request.identity.name.as_deref())
+                    .or(session_id.map(AgentSessionId::as_str))
+                    .expect("a resumable session has a provider session id");
+                format!("rimz agents resume @{name}")
+            };
+        format!("rimz: agent `{kind}` exited ({status}); resume with `{resume}`\r\n")
     } else {
         format!("rimz: agent `{kind}` exited ({status}); relaunch with `{relaunch}`\r\n")
     };
-    if let Some(path) = worktree {
+    if let Some(path) = request.worktree_path.as_deref() {
         let path = crate::cli::render::home_relative_path(path);
         hint.push_str(&format!(
             "rimz: worktree {path} kept; `rimz worktree sweep` reclaims it once its work lands\r\n"
@@ -889,37 +904,16 @@ fn exit_hint(
 }
 
 #[cfg(unix)]
-fn drop_to_shell_after_agent_exit(
-    request: &rimz::harness::launch::ExecRequest,
-    status: &ExitStatus,
-    startup_failure: bool,
-    ended: Option<&(AgentKind, AgentSessionId)>,
-) {
+fn drop_to_shell_after_agent_exit() {
     use std::os::unix::process::CommandExt;
 
-    let resumable = std::env::current_dir().is_ok_and(|cwd| exited_session_resumable(ended, &cwd));
-    let hint = exit_hint(
-        request.kind.as_str(),
-        status,
-        startup_failure,
-        &relaunch_command(request),
-        resumable,
-        request.worktree_path.as_deref(),
-    );
-    let _ = write!(std::io::stderr().lock(), "{hint}");
     let shell = rimz::proc::user_shell_program();
     let err = Command::new(&shell).exec();
     tracing::debug!(shell = %shell, error = %err, "could not exec idle shell after agent exit");
 }
 
 #[cfg(not(unix))]
-fn drop_to_shell_after_agent_exit(
-    _request: &rimz::harness::launch::ExecRequest,
-    _status: &ExitStatus,
-    _startup_failure: bool,
-    _ended: Option<&(AgentKind, AgentSessionId)>,
-) {
-}
+fn drop_to_shell_after_agent_exit() {}
 
 /// Non-abrupt exits are deliberate. Abrupt exits are deliberate only while the
 /// mux session still accepts live pane closes; if the mux is gone or wedged,
@@ -1465,18 +1459,18 @@ fn mark_launch_failed_if_provisional(
 fn record_own_agent_end_trace(
     invocation: &ExecInvocationContext<'_>,
     request: &rimz::harness::launch::ExecRequest,
-) -> Option<(AgentKind, AgentSessionId)> {
+) -> Option<EndedSession> {
     match resolve_own_agent_end_trace(invocation, request) {
-        Ok(Some((kind, agent_id))) => {
+        Ok(Some(ended)) => {
             append_agent_lifecycle_trace(
                 invocation,
-                kind.clone(),
-                agent_id.clone(),
+                ended.kind.clone(),
+                ended.agent_id.clone(),
                 rimz::agents::LifecycleSignal::Ended,
                 AGENT_ENDED_EVENT,
                 "agent exit end stamp",
             );
-            Some((kind, agent_id))
+            Some(ended)
         }
         Ok(None) => {
             tracing::debug!("agent exit produced no pane binding to stamp ended");
@@ -1496,18 +1490,18 @@ fn own_agent_pending_recovery(
     invocation: &ExecInvocationContext<'_>,
     request: &rimz::harness::launch::ExecRequest,
 ) -> bool {
-    let Ok(Some((kind, agent_id))) = resolve_own_agent_end_trace(invocation, request) else {
+    let Ok(Some(ended)) = resolve_own_agent_end_trace(invocation, request) else {
         return false;
     };
     invocation
         .store()
-        .is_ok_and(|store| store.is_pending_recovery(&kind, &agent_id))
+        .is_ok_and(|store| store.is_pending_recovery(&ended.kind, &ended.agent_id))
 }
 
 fn resolve_own_agent_end_trace(
     invocation: &ExecInvocationContext<'_>,
     request: &rimz::harness::launch::ExecRequest,
-) -> Result<Option<(AgentKind, AgentSessionId)>> {
+) -> Result<Option<EndedSession>> {
     let own_pane = rimz::mux::ambient_pane_id();
     let attach_target = exec_attach_target(request);
     if own_pane.is_none() && attach_target.is_none() {
@@ -1533,13 +1527,21 @@ fn resolve_own_agent_end_trace(
                 && agent.launch_id.as_ref() == Some(&launch_id)
                 && !agent.agent_id.is_empty()
             {
-                return Ok(Some((agent.kind.clone(), agent.agent_id.clone())));
+                return Ok(Some(EndedSession {
+                    kind: agent.kind.clone(),
+                    agent_id: agent.agent_id.clone(),
+                    name: agent.name.clone(),
+                }));
             }
         }
         if let Some(agent) = owner
             && !agent.agent_id.is_empty()
         {
-            return Ok(Some((agent.kind.clone(), agent.agent_id.clone())));
+            return Ok(Some(EndedSession {
+                kind: agent.kind.clone(),
+                agent_id: agent.agent_id.clone(),
+                name: agent.name.clone(),
+            }));
         }
     }
     // A resumed pane owns the resumed session and can safely fall back to the
@@ -1555,7 +1557,13 @@ fn resolve_own_agent_end_trace(
     if session_bound_to_another_pane(&projection.agents, &kind, &session, own_pane.as_ref()) {
         return Ok(None);
     }
-    Ok(Some((kind, session)))
+    let name = find_agent(&projection.agents, kind.as_str(), &session)
+        .and_then(|agent| agent.name.clone());
+    Ok(Some(EndedSession {
+        kind,
+        agent_id: session,
+        name,
+    }))
 }
 
 /// Whether `agents` binds `(kind, session)` to a pane that is not `own_pane`.
