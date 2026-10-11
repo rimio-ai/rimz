@@ -828,6 +828,30 @@ fn once_fails_with_the_unanswered_error_at_its_deadline() {
 }
 
 #[test]
+fn once_names_a_drainer_that_accepted_without_a_receipt() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let store = env.store();
+    append_stop(&env);
+    let _lifetime = WorkspaceLock::acquire(&store.runtime_paths().hook_drainer_lock()).unwrap();
+    let _silent =
+        std::os::unix::net::UnixListener::bind(store.runtime_paths().hook_drainer_socket_path())
+            .unwrap();
+    let output = drain_command(&env)
+        .arg("--once")
+        .env("RIMZ_TEST_HOOK_DRAIN_ONCE_WAIT_MS", "1000")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("hook drainer accepted the request but sent no receipt within"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("fuser"), "{stderr}");
+}
+
+#[test]
 fn stop_drainer_sends_stop_to_a_drainer_that_binds_late() {
     use std::io::{BufRead as _, BufReader};
 

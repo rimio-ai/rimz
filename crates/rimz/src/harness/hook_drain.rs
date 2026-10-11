@@ -243,6 +243,8 @@ pub enum HookDrainErr {
         waited: Duration,
         path: std::path::PathBuf,
     },
+    #[error("hook drainer accepted the request but sent no receipt within {waited:?}")]
+    NoReceipt { waited: Duration },
     #[error(transparent)]
     Io(#[from] io::Error),
     #[error(transparent)]
@@ -441,8 +443,12 @@ pub fn drain_through(
     if stream.is_none() {
         let _ = spawn(store);
     }
+    let mut accepted = false;
     loop {
         let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() && accepted {
+            return Err(HookDrainErr::NoReceipt { waited: wait });
+        }
         if remaining.is_zero() {
             return Err(HookDrainErr::Unanswered {
                 waited: wait,
@@ -450,6 +456,7 @@ pub fn drain_through(
             });
         }
         if let Some(mut stream) = stream.take().or_else(|| UnixStream::connect(&socket).ok()) {
+            accepted = true;
             stream.set_read_timeout(Some(remaining))?;
             stream.set_write_timeout(Some(remaining))?;
             if write_line(&mut stream, &request).is_ok()
