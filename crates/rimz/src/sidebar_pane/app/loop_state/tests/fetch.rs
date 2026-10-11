@@ -744,9 +744,33 @@ fn watched_metrics_and_hidden_presence_publications_fold_immediately() {
             rig.watch();
         }
 
-        rig.event(pane_publication(publication));
+        let mut folded = process_snapshot(&rig.ws, crate::utils::time::unix_now_ms());
+        folded.own_view = rig.state.current.own_view.clone();
+        folded.viewed_panes = rig.state.current.viewed_panes.clone();
+        rig.state.current = folded.clone();
+        rig.set_pulled(&folded);
+        let crate::store::snapshot::RowCard::Process(card) =
+            &mut folded.worktree_groups[0].rows[0].card
+        else {
+            panic!("process fixture");
+        };
+        card.cpu_pct = Some(73);
+        folded.presence = Some(crate::store::snapshot::SidebarPresence::Detached);
+        rig.fold(folded, SnapshotSource::Produced);
 
-        assert!(rig.next_request().is_some());
+        assert!(matches!(
+            &rig.state.current.worktree_groups[0].rows[0].card,
+            crate::store::snapshot::RowCard::Process(card) if card.cpu_pct == Some(73)
+        ));
+        assert_eq!(
+            rig.state.current.presence,
+            Some(crate::store::snapshot::SidebarPresence::Detached)
+        );
+        rig.event(pane_publication(publication));
+        assert!(
+            rig.next_request().is_none(),
+            "legacy publications do not refetch"
+        );
         assert!(rig.fetch.next_deadline().is_none());
     }
 }
@@ -801,7 +825,7 @@ fn focus_resume_flushes_pending_metrics_fetch() {
     rig.hide();
 
     rig.fetch.defer_until(
-        FetchRequest::pane_frame_published(),
+        FetchRequest::default(),
         Instant::now() + Duration::from_secs(1),
     );
 

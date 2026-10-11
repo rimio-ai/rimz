@@ -1080,15 +1080,9 @@ fn fetch_dispatcher_sends_idle_and_coalesces_strongest_pending_request() {
     assert_eq!(pending.mode, FetchMode::HardRefresh);
     assert!(pending.min_pane_cache_ms.is_some());
 
-    let request = FetchRequest::pane_frame_published();
-    assert_eq!(request.mode, FetchMode::Normal);
-    assert!(request.published_frame_hint);
-    assert!(!request.force_fold);
-
     let request = FetchRequest::force_fold();
     assert_eq!(request.mode, FetchMode::Normal);
     assert!(request.force_fold);
-    assert!(!request.published_frame_hint);
     assert!(request.min_pane_cache_ms.is_none());
 }
 
@@ -1153,22 +1147,6 @@ fn fetch_dispatcher_completion_absorbs_deferred_into_pending_follow_up() {
     assert!(follow_up.is_fresh_panes());
     assert!(dispatcher.next_deadline().is_none());
     assert!(rx.try_recv().is_err(), "only one follow-up dispatches");
-}
-
-#[test]
-fn pane_frame_published_refolds_from_cache() {
-    let fixture = FetchFixture::new();
-    fixture.write_pane_frame();
-    let mut outcomes = fixture.run(FetchRequest::pane_frame_published());
-
-    assert_eq!(outcomes.len(), 1, "worker folds once from cache");
-    let outcome = outcomes.pop().unwrap();
-    assert!(outcome.is_final());
-    let snapshot = snapshot(&outcome);
-    assert!(
-        !snapshot.worktree_groups.is_empty(),
-        "published panes are folded into the snapshot"
-    );
 }
 
 #[test]
@@ -1592,7 +1570,6 @@ fn requests_a_finished_fold_cannot_answer_still_run() {
                     FetchRequest::hard_refresh(),
                     FetchRequest::force_fold(),
                     FetchRequest::fresh_panes(),
-                    FetchRequest::pane_frame_published(),
                 ] {
                     tx.send(FetchRequest {
                         observed_at,
@@ -1608,7 +1585,7 @@ fn requests_a_finished_fold_cannot_answer_still_run() {
     assert_eq!(cycles.len(), 3, "every stronger request runs");
     let last = cycles[2];
     assert_eq!(last.mode, FetchMode::HardRefresh);
-    assert!(last.force_fold && last.published_frame_hint);
+    assert!(last.force_fold);
 }
 
 #[test]
