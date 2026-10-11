@@ -974,6 +974,7 @@ fn plan_recovery(
         &flat_agents,
         &projection.ended,
         crate::harness::resume::ResumeContext {
+            in_place: false,
             project_root: Some(project_root),
             workspace_id: &paths.workspace_id,
             rimz_bin: &crate::proc::rimz_exe(),

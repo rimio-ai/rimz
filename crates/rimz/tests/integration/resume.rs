@@ -70,6 +70,7 @@ fn plan_from_rollup(h: &Harness) -> rimz::harness::resume::ResumePlan {
         &projection.agents,
         &projection.ended,
         rimz::harness::resume::ResumeContext {
+            in_place: false,
             project_root: None,
             workspace_id: &h.workspace_id,
             rimz_bin: Path::new("/bin/rimz"),
@@ -367,6 +368,7 @@ fn soft_reset_preserves_dead_paneless_resume_identity() {
         &projection.agents,
         &projection.ended,
         rimz::harness::resume::ResumeContext {
+            in_place: false,
             project_root: None,
             workspace_id: &h.workspace_id,
             rimz_bin: Path::new("/bin/rimz"),
@@ -479,6 +481,7 @@ fn missing_worktree_candidate_is_stamped_ended_not_reported() {
         &projection.agents,
         &projection.ended,
         rimz::harness::resume::ResumeContext {
+            in_place: false,
             project_root: None,
             workspace_id: &h.workspace_id,
             rimz_bin: Path::new("/bin/rimz"),

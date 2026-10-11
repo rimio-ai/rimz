@@ -436,6 +436,7 @@ fn plan_from_env(env: &Env) -> rimz::harness::resume::ResumePlan {
         &projection.agents,
         &projection.ended,
         rimz::harness::resume::ResumeContext {
+            in_place: false,
             project_root: Some(&env.project_root),
             workspace_id: &env.workspace_id,
             rimz_bin: &env.rimz_bin(),
