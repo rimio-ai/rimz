@@ -56,14 +56,7 @@ pub(crate) const TAB_READ_DWELL: Duration = Duration::from_millis(2500);
 /// alone decays so an old completion never reads as current indefinitely.
 pub(super) const TAB_SUCCESS_STATUS_TTL: SignedDuration = SignedDuration::from_mins(5);
 
-/// Coalescing window for the shared snapshot cache — the **poll-mode** pane
-/// TTL, in effect whenever the presence push channel is dead or absent. Just
-/// under the default 1s data tick: when one store-delta wakeup wakes every
-/// sidebar at once, the first produces the heavy snapshot and the rest read it
-/// back within this window instead of each running their own mux roster read.
-/// Short enough that live pane/git drift (which fires no store delta) still
-/// surfaces inside one tick. While the presence stamp is fresh the producer
-/// uses [`EVENT_PANE_TTL`] instead.
+/// Poll-mode TTL for the host's retained pane frame, just below the default 1s data tick so unannounced pane drift surfaces within a tick. Fresh presence or an unwatched prior selects [`EVENT_PANE_TTL`]; carried panes remain capped here.
 pub(super) const SNAPSHOT_CACHE_TTL: Duration = Duration::from_millis(750);
 
 /// Pane-cache TTL while the presence push channel is alive (the presence stamp

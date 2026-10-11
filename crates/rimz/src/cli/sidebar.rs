@@ -42,7 +42,7 @@ pub struct SidebarArgs {
 
 #[derive(Debug, Subcommand)]
 enum SidebarSubcmd {
-    /// Render the current snapshot. The sidebar process reads this.
+    /// Render a one-shot room snapshot.
     Snapshot {
         #[arg(long)]
         workspace_id: Option<String>,

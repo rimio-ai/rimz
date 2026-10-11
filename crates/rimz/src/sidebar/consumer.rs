@@ -1,7 +1,6 @@
-//! Snapshot reads: fresh store rollup over the published pane cache.
+//! Passive snapshot reads: fresh store rollup over host-published panes and projection.
 //!
-//! The host's fast lane and CLI readers share this in-process fold: no mux,
-//! git, or provider probe, and no durable store writes.
+//! The host's retained-input fold shares the enrichment core, not publication reads. Neither fold probes mux, git, or providers or writes durable store truth.
 
 use crate::ids::PaneId;
 use crate::store::snapshot::SidebarSnapshot;

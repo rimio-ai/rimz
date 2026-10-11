@@ -140,7 +140,7 @@ The host tracker is built to make the common tick free. The shared data plane is
 | `rimz_bin`, `claude_bin`, `codex_bin` | Stamped paths of the RimZ executable and of `claude` and `codex` as resolved on `PATH` |
 | `claude_settings` | Stamped path of Claude's settings file under the room's Claude login |
 
-A rebuilt specification always gets one authoritative repair. With a stable stamp and no repair outstanding, the tracker reads the sidebar's published pane frame instead of the backend: a frame for this session, fresh within `EVENT_PANE_TTL` (10 seconds), that already satisfies the specification ends the tick with no work and no child processes. A missing, stale, or unsatisfied frame escalates to `repair_daemon_view`, and a `Retry` outcome keeps the repair outstanding until a later tick converges. When the workspace's state paths or record cannot be read, the tick is skipped.
+A rebuilt specification always gets one authoritative repair. With a stable stamp and no repair outstanding, the tracker receives the host's retained pane frame instead of reading its publication or the backend: a frame for this session, fresh within `EVENT_PANE_TTL` (10 seconds), that already satisfies the specification ends the tick with no work and no child processes. A missing, stale, or unsatisfied frame escalates to `repair_daemon_view`, and a `Retry` outcome keeps the repair outstanding until a later tick converges. When the workspace's state paths or record cannot be read, the tick is skipped.
 
 ## Where the code lives
 

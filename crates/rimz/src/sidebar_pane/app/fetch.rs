@@ -28,19 +28,9 @@ use super::ServeConfig;
 use super::input::SNAPSHOT_WAKEUP;
 use super::timing::tick_for;
 
-/// Run one in-process produce behind a panic guard. The produce pipeline
-/// folds store truth, runtime caches, and `/proc` on this worker thread; a
-/// bug anywhere in it must cost one degraded outcome — the loop holds its
-/// last good frame and raises the health line — never the renderer. The
-/// workspace builds with unwinding panics; under a future `panic = "abort"`
-/// this guard degrades to host death and supervisor recovery, the
-/// documented recovery either way.
+/// Run one produce behind a panic guard. An unwind keeps the renderer alive on its last good frame and degrades health; `panic = "abort"` falls back to host death and supervisor recovery.
 ///
-/// `AssertUnwindSafe` is discharged by construction: the only state carried
-/// across the unwind boundary is the cursor, and the panic arm replaces it —
-/// a panic can interrupt the fold mid-update, so the next cycle refolds cold
-/// rather than trusting a torn base. Everything else the closure captures is
-/// read-only paths and options.
+/// The cursor may be torn and is reset. Producer attempts and accepted inputs remain committed in memory; metrics replace their history only after a completed sample, and projection publication records success only after the atomic write.
 fn run_produce_guarded<T>(
     cursor: &mut RollupCursor,
     produce: impl FnOnce(&mut RollupCursor) -> crate::sidebar::produce::Result<T>,

@@ -1,19 +1,11 @@
 //! Cross-process single-flight election.
 //!
-//! Several short-lived processes (one sidebar per tab) periodically refresh the
-//! *same* external data — the store rollup + `list-panes`, and the
-//! per-worktree git diff-stats. Left alone, each process refetches every tick,
-//! multiplying subprocess forks and IPC against shared servers (the Zellij
-//! server, `git`). This helper elects ONE producer per refresh window so the
-//! rest read its result back instead of stampeding.
+//! Host and CLI heavy-lane refreshes can ask for the same git or provider data. This helper elects one producer per refresh window so peers reuse its publication instead of stampeding. Sidebar launch gating also uses the election; host-only pane production does not.
 //!
 //! It owns only the lock-and-poll dance — open an advisory lock, `try_lock` it,
 //! and either win (produce + write the shared cache) or lose (poll briefly for
 //! the winner's write, then fall back to producing locally without caching).
-//! The *freshness predicate*, the *production*, and the *cache write* belong to
-//! each call site, which differ too much to share (a single `(session)`-keyed
-//! value with carry-forward vs a multi-key, per-entry-TTL map). Only the
-//! election is common, so only the election lives here.
+//! Freshness, production, and publication belong to each caller; only the election is shared.
 //!
 //! Pure `std`: it imports no store-writer module, so it is safe to call
 //! from any subtree (including the sidebar's read-only import graph) and is

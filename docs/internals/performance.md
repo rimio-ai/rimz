@@ -36,13 +36,13 @@ The data-plane threads, one set per host, are the fetch worker, the cache refres
 
 ### One host, many panes
 
-The external reads a room needs (the pane roster, git, the forge, provider accounts) cost the same whether one tab asks or twenty do, so exactly one renderer per workspace pays them.
+The external reads a room needs (the pane roster, git, the forge, provider accounts) cost the same whether one tab asks or twenty do, so one room host pays them for the fleet.
 
-The room host runs one data plane for every pane. CLI readers fold its published caches in process through [`PublishedSnapshotReader`](../../crates/rimz/src/sidebar/consumer.rs) without probing mux, git, or providers.
+The room host runs one data plane for every pane, retaining panes, agent projection, and metrics history rather than reading its own publications back each cycle. Passive CLI readers fold the published caches through [`PublishedSnapshotReader`](../../crates/rimz/src/sidebar/consumer.rs) without probing mux, git, or providers. Default inspection and recipient resolution invoke private mux reads; inspection also refreshes heavy lanes, but neither publishes the host-owned inputs.
 
 N tabs therefore cost one set of external reads, and each room's host folds once for all its panes. A wake reaches every pane and each pane asks the shared fetch worker for a fold; a fold answers every request whose cause a pane observed before the fold started, and both the worker and the panes drop a request the last fold answered ([`sidebar_pane::app::fetch`](../../crates/rimz/src/sidebar_pane/app/fetch.rs) `Coverage`). A burst whose wakes all land within one fold costs at most two folds for any tab count; a wake that lands later is indistinguishable from a new change and costs one more. This is the largest lever in the design: in external reads, a 20-tab room costs about what a 2-tab room costs. The shared data plane lives in [state.md](./sidebar/state.md#the-room-data-plane), and the account-global spend walker has its own election in [spending.md](./agents/spending.md#one-walk-per-namespace).
 
-Shared external reads still single-flight through [`disk::single_flight::coalesce`](../../crates/rimz/src/disk/single_flight.rs): a CLI refresh racing the host pays one read per TTL window.
+Heavy-lane external reads still single-flight through [`disk::single_flight::coalesce`](../../crates/rimz/src/disk/single_flight.rs), so a CLI refresh racing the host shares that lane's TTL window. Pane-frame production has no cross-process election: the host alone publishes, while CLI callers compute privately.
 
 ### Two clocks
 
@@ -272,13 +272,13 @@ Each renderer knows its own pane and the latest focus view, so it can tell wheth
 
 ### One shared fold per room
 
-The producer builds the snapshot in process on its fetch worker ([`produce_workspace_snapshot`](../../crates/rimz/src/sidebar/produce/mod.rs)), with no `rimz sidebar snapshot` fork per tick. The worker's cadence stamp allows one attempt per data tick, and only against a stale published frame, so unrelated wakeups that see the same stale frame cannot multiply production.
+The producer builds the snapshot in process on its fetch worker ([`produce_workspace_snapshot`](../../crates/rimz/src/sidebar/produce/mod.rs)), with no `rimz sidebar snapshot` fork per tick. The worker's cadence stamp allows one attempt per data tick, and only against a stale retained frame, so unrelated wakeups cannot multiply production.
 
 The fold spine splits into renderer-independent [`enrich_workspace`](../../crates/rimz/src/sidebar/enrich.rs) and renderer-local `project_local`. The host folds the first half once and projects it for every subscribed pane. It remembers the last delivered fold for new-attachment seeds. Both lanes are [state.md → One fetch cycle](./sidebar/state.md#one-fetch-cycle).
 
 ### Truth arrives by event, the frame by coalescing
 
-Every `lanes/snapshot.json` publication broadcasts `PaneFramePublished` with the kind of input that changed (topology, metrics, or presence). Every pane requests the same shared fold immediately; publication kind remains wire evidence, not a renderer-role gate. A publication from an older build that carries no kind decodes as topology. The rollup is read event-fresh from `cache/snapshots/latest.json` on every fold, so a status change repaints within one wakeup while pane discovery stays coalesced.
+The host delivers produced folds directly, without a `PaneFramePublished` self-wake. The legacy event and publication kinds stay on the wire, but renderers ignore that event rather than refetch. The rollup is read event-fresh from `cache/snapshots/latest.json` on every fold, so a status change repaints within one wakeup while the host retains and shares its pane inputs.
 
 Every writer that knows about a change pushes: store and sidecar writers post a `StoreDelta`, both backends' presence streams feed one projector that emits typed pane events, and the host's transcript watcher refreshes context mid-turn for every adapter that declares transcript-tail context ([state.md → Push channels](./sidebar/state.md#push-channels)).
 

@@ -1,16 +1,9 @@
-//! The sidebar produce pipeline — what the room host runs per data tick.
+//! Host-owned production and private one-shot inspection.
 //!
-//! `produce_workspace_snapshot` resolves the base (the event-fresh store rollup folded through the caller's [`RollupCursor`], plus the live pane frame shared through the single-flight pane cache) and folds the producer enrichments: group roots, context/activity sidecars, the pane overlay, and projection of the cache refresher's published spending/account/git facts. The fetch worker projects that workspace for each pane with `project_local` and retains it to seed new attachments. The CLI inspection path uses [`produce_snapshot_with_refresh`] to refresh heavy lanes between two folds over one produced pane frame.
+//! `produce_workspace_snapshot` folds the event-fresh store rollup over the host's retained pane frame and agent projection, plus group roots, sidecars, and published heavy lanes. The fetch worker shares these inputs with its fast fold and refresher, and retains delivered folds to seed attachments. [`produce_snapshot_with_refresh`] computes a private pane frame and projection, refreshing heavy lanes between two folds without publishing the host-owned inputs.
 //!
-//! The module is read-only on store truth: the rollup arrives through the
-//! cursor fold, and every write is cache-class
-//! (`snapshot.json`, `diff-stats.json`, `metrics-sample.json`,
-//! shared provider/account/spending caches, or the persistent live roster) via
-//! `write_temp_then_rename_cache` — rebuilt from truth on the next read, never
-//! truth itself. `cargo xtask invariants` pins the boundary: no store-writer,
-//! run-wake, or broker imports under `crates/rimz/src/sidebar/`.
-//! The consumer-side read lives in [`super::consumer`]; performance model in
-//! [docs/internals/performance.md](../../../../../docs/internals/performance.md).
+//! The module is read-only on store truth. Every write is cache-class via `write_temp_then_rename_cache`, rebuilt from truth rather than truth itself. `cargo xtask invariants` rejects store-writer, run-wake, and broker imports under this subtree.
+//! Passive publication reads and the shared fold core live in [`super::consumer`]; the performance model is in [docs/internals/performance.md](../../../../../docs/internals/performance.md).
 
 pub(crate) mod git;
 mod metrics;
@@ -61,10 +54,7 @@ pub enum ProduceErr {
 
 pub(crate) type Result<T> = std::result::Result<T, ProduceErr>;
 
-/// What one produce targets: the session whose panes are read, the caller's
-/// own-pane exclusion, and the pane-freshness floor a lifecycle/resize signal
-/// carries (`min_pane_cache_ms` rejects any pane cache or root enumeration
-/// older than the signal).
+/// The host's session, own-pane exclusion, and lifecycle/resize freshness floor. `min_pane_cache_ms` rejects an older retained pane observation or root enumeration.
 #[derive(Clone, Debug)]
 pub struct ProduceOptions {
     pub mux: MuxName,
@@ -144,7 +134,7 @@ pub(crate) fn publish_test_pane_frame(
     crate::disk::atomic::write_temp_then_rename_cache(&runtime.pane_frame_path(), frame)
 }
 
-/// Bench/performance façade over `produce_workspace_snapshot` followed by `project_local`, matching the fetch worker's produce and local projection without its publication step.
+/// Retained bench/performance producer for the real host pipeline, without renderer delivery.
 #[cfg(feature = "testkit")]
 pub struct SnapshotProducer {
     panes: PaneProducer,
@@ -280,9 +270,7 @@ pub(crate) fn live_roster_from_snapshot(
         .collect()
 }
 
-/// Produce a one-shot inspection snapshot with freshly refreshed heavy lanes:
-/// pane frame once, fold once to derive lane inputs, refresh, then fold the
-/// original rollup and same frame again with the returned lane values.
+/// Inspect privately: read panes once, fold to derive heavy-lane inputs, refresh, then refold the original rollup and same frame with the returned lane values.
 pub fn produce_snapshot_with_refresh(
     cursor: &mut RollupCursor,
     state: &StatePaths,
@@ -312,11 +300,7 @@ pub fn produce_snapshot_with_refresh(
     Ok(enrich_with_refresh(snapshot, frame, state, runtime, opts))
 }
 
-/// Produce the snapshot used by commands that resolve message recipients. It
-/// folds a fresh pane frame into the event-fresh rollup without the render
-/// spine, so just-started sessionless panes are addressable while the command
-/// pays only one pane enumeration. When no mux is available, or pane discovery
-/// fails, it falls back to the rollup's stamped panes.
+/// Resolve recipients over a private fresh pane read and the event-fresh rollup, without the render spine. Just-started sessionless panes are addressable after one enumeration; unavailable muxes or failed discovery fall back to stamped panes.
 pub fn resolution_snapshot(
     workspace: &ResolvedWorkspace,
     store: &Store,
@@ -394,9 +378,7 @@ fn rollup_resolution_snapshot(store: &Store) -> Result<SidebarSnapshot> {
     Ok(snapshot)
 }
 
-/// Refresh the producer-owned heavy caches from the last published pane frame.
-/// The live fetch worker projects these caches; this entry owns their
-/// time-driven refresh without re-running the full pane/enrich spine.
+/// Refresh heavy caches from the host's retained inputs, or a frameless rollup before its first produce, without another pane read.
 pub fn refresh_producer_caches(
     cursor: &mut RollupCursor,
     state: &StatePaths,
