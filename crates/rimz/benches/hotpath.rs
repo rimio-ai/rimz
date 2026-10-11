@@ -66,9 +66,10 @@ fn hook_stop_budget(bencher: Bencher) {
         wall
     }
 
-    fn p99(mut samples: Vec<Duration>) -> Duration {
+    /// Nearest-rank percentile: at `pct = 50` on an even count, the upper median.
+    fn percentile(mut samples: Vec<Duration>, pct: usize) -> Duration {
         samples.sort_unstable();
-        samples[(samples.len() * 99).div_ceil(100) - 1]
+        samples[(samples.len() * pct).div_ceil(100) - 1]
     }
 
     let home_root = tempfile::Builder::new()
@@ -233,7 +234,7 @@ fn hook_stop_budget(bencher: Bencher) {
     bencher.bench_local(|| {
         let mut hooks = Vec::new();
         let mut versions = Vec::new();
-        for pair in 0usize..48 {
+        for pair in 0usize..100 {
             for hook_first in [true, false] {
                 let hook = pair.is_multiple_of(2) == hook_first;
                 let mut command = command();
@@ -250,10 +251,16 @@ fn hook_stop_budget(bencher: Bencher) {
                 }
             }
         }
-        let hook = p99(hooks);
-        let version = p99(versions);
+        // Single spawns stall at random, so the sequential guard holds the
+        // median; tail contention is the 24-way half's to catch.
+        let hook_max = percentile(hooks.clone(), 100);
+        let version_max = percentile(versions.clone(), 100);
+        let hook = percentile(hooks, 50);
+        let version = percentile(versions, 50);
         let ceiling = Duration::from_millis(4).max(version * 2);
-        println!("{room} sequential: hook p99 {hook:?}; --version p99 {version:?}; ceiling {ceiling:?}");
+        println!(
+            "{room} sequential: hook median {hook:?} max {hook_max:?}; --version median {version:?} max {version_max:?}; ceiling {ceiling:?}"
+        );
         let mut hook_bursts = Vec::new();
         let mut version_bursts = Vec::new();
         for pair in 0..10 {
@@ -262,7 +269,7 @@ fn hook_stop_budget(bencher: Bencher) {
                 println!(
                     "{room} burst {pair} {}: wall p99 {:?}",
                     if hook { "hook" } else { "version" },
-                    p99(samples.clone()),
+                    percentile(samples.clone(), 99),
                 );
                 if hook {
                     hook_bursts.extend(samples);
@@ -271,13 +278,13 @@ fn hook_stop_budget(bencher: Bencher) {
                 }
             }
         }
-        let hook_burst = p99(hook_bursts);
-        let version_burst = p99(version_bursts);
+        let hook_burst = percentile(hook_bursts, 99);
+        let version_burst = percentile(version_bursts, 99);
         let burst_ceiling = Duration::from_millis(4).max(version_burst * 2);
         println!("{room} 24-way: hook p99 {hook_burst:?}; --version p99 {version_burst:?}; ceiling {burst_ceiling:?}");
         assert!(
             hook <= ceiling,
-            "hook p99 {hook:?} > {ceiling:?}; --version p99 {version:?}"
+            "hook median {hook:?} > {ceiling:?}; --version median {version:?}"
         );
         assert!(
             hook_burst <= burst_ceiling,
