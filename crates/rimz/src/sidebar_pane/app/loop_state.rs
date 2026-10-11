@@ -595,9 +595,8 @@ impl LoopState {
                     self.dirty = true;
                 }
             }
-            // Every pane requests the shared fold immediately; the worker coalesces peers.
             SidebarEvent::PaneFramePublished { .. } => {
-                fetch.request(FetchRequest::pane_frame_published(), true);
+                // Older builds may still send this wire event; the host delivers folds directly.
             }
             event @ SidebarEvent::Notify { .. } => {
                 self.handle_notification(terminal, event);

@@ -752,7 +752,6 @@ fn notification_panes(notification: &Notification) -> Vec<PaneId> {
 pub(super) struct FetchRequest {
     mode: FetchMode,
     min_pane_cache_ms: Option<u64>,
-    published_frame_hint: bool,
     force_fold: bool,
     /// When the renderer learned of what this request asks to fold. A cycle
     /// that started later already read it.
@@ -764,7 +763,6 @@ impl Default for FetchRequest {
         Self {
             mode: FetchMode::Normal,
             min_pane_cache_ms: None,
-            published_frame_hint: false,
             force_fold: false,
             observed_at: Instant::now(),
         }
@@ -814,13 +812,6 @@ impl FetchRequest {
         }
     }
 
-    pub(super) fn pane_frame_published() -> Self {
-        Self {
-            published_frame_hint: true,
-            ..Self::default()
-        }
-    }
-
     /// Request a new fold for renderer-local state that a prior cycle could not observe.
     pub(super) fn force_fold() -> Self {
         Self {
@@ -841,7 +832,6 @@ impl FetchRequest {
 
     pub(super) fn merge(&mut self, other: Self) {
         self.mode = self.mode.strongest(other.mode);
-        self.published_frame_hint |= other.published_frame_hint;
         self.force_fold |= other.force_fold;
         self.observed_at = self.observed_at.max(other.observed_at);
         self.min_pane_cache_ms = match (self.min_pane_cache_ms, other.min_pane_cache_ms) {
@@ -1271,7 +1261,6 @@ impl Coverage {
             && request.mode != FetchMode::HardRefresh
             && !request.force_fold
             && request.mode.strength() <= cycle.mode.strength()
-            && (!request.published_frame_hint || cycle.published_frame_hint)
             && cache_floor_met
     }
 }
