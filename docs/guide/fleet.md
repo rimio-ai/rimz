@@ -39,6 +39,8 @@ rimz agents slim,codex        # two agents, side by side in one line
 
 Every agent answers to a handle, and the launcher decides it. `@claude` names a kind, `@planner` names a profile, and `forge.reviewer` names one role of a team. RimZ gives each launch a stable pet name as well (`@swift-otter`), and `--name writer` pins your own (`@writer`). A `#channel` suffix scopes a handle to one channel: every worktree has one, named channels and teams have their own, and a bare handle means the channel you are standing in.
 
+When a generated pet name is already taken, RimZ tries other word pairs before adding a number. Existing stored names stay unchanged.
+
 ```sh
 rimz agents focus @swift-otter#feat-a # jump to a specific agent's pane
 rimz agents show swift-otter         # its activity, context, placement, and transcript tail
