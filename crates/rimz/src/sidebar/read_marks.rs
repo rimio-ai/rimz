@@ -1,7 +1,8 @@
 //! One room-runtime read-mark record shared by panes and hostless CLI writers.
 //!
 //! Locked max-updates preserve clear timestamps across pane exits. Produced
-//! room frames prune departed rows; absent records import legacy receipts.
+//! room frames prune departed rows; absent records import legacy receipts,
+//! and the first prune materializes that import.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -118,10 +119,11 @@ pub fn write_read_marks(
 }
 
 pub(crate) fn prune_read_marks(runtime: &RuntimePaths, live: &BTreeSet<String>) {
-    if ReadMarks::load(runtime)
-        .marks
-        .keys()
-        .all(|row_id| live.contains(row_id))
+    if runtime.read_marks_path().exists()
+        && ReadMarks::load(runtime)
+            .marks
+            .keys()
+            .all(|row_id| live.contains(row_id))
     {
         return;
     }
@@ -209,7 +211,7 @@ mod tests {
     }
 
     #[test]
-    fn absent_record_imports_legacy_maxima_and_first_write_materializes_them() {
+    fn absent_record_imports_legacy_maxima_and_first_prune_materializes_them() {
         let (_dir, runtime) = runtime();
         runtime.ensure_dirs().unwrap();
         for (name, bytes) in [
@@ -234,8 +236,12 @@ mod tests {
         assert!(!runtime.read_marks_path().exists());
         assert!(!write_read_marks(&runtime, ["row-a".to_owned()], 1_000).unwrap());
         assert!(!runtime.read_marks_path().exists());
-        assert!(write_read_marks(&runtime, ["row-c".to_owned()], 1_000).unwrap());
+        prune_read_marks(
+            &runtime,
+            &BTreeSet::from(["row-a".to_owned(), "row-b".to_owned()]),
+        );
         assert!(runtime.read_marks_path().exists());
+        assert_eq!(*ReadMarks::load(&runtime), *marks);
         fs::write(
             runtime.read_marks_dir.join("manual.json"),
             r#"{"marks":{"row-a":9999}}"#,
