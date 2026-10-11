@@ -1260,7 +1260,7 @@ fn shared_observation_extracts_common_once_and_keeps_each_own_view() {
 #[test]
 fn fold_file_reads_are_shared_across_forty_attachment_threads() {
     use crate::mux::focus_anchor;
-    use crate::sidebar::{body_filter, read_marks};
+    use crate::sidebar::body_filter;
     let fixture = FetchFixture::new();
     let frame = crate::sidebar::frame::assemble_frame(
         (0..40)
@@ -1310,15 +1310,10 @@ fn fold_file_reads_are_shared_across_forty_attachment_threads() {
             );
             focus_anchor::take_reads();
             body_filter::take_reads();
-            read_marks::take_store_reads();
             ready.send(()).unwrap();
             drop(ready);
             state.apply_latest_snapshot(rx.recv().unwrap());
-            (
-                focus_anchor::take_reads(),
-                body_filter::take_reads(),
-                read_marks::take_store_reads(),
-            )
+            (focus_anchor::take_reads(), body_filter::take_reads())
         }));
     }
     drop(ready_tx);
@@ -1329,12 +1324,11 @@ fn fold_file_reads_are_shared_across_forty_attachment_threads() {
     body_filter::take_reads();
     let mut sink = ResultSink::shared(subscribers, Covered::default(), LastFold::default());
     worker.run_cycle(&fixture.state, FetchRequest::force_fold(), &mut sink);
-    let mut reads = (focus_anchor::take_reads(), body_filter::take_reads(), 0);
+    let mut reads = (focus_anchor::take_reads(), body_filter::take_reads());
     for pane in panes {
         let own = pane.join().unwrap();
         reads.0 += own.0;
         reads.1 += own.1;
-        reads.2 += own.2;
     }
     assert_eq!(
         reads.0, 1,
@@ -1343,10 +1337,6 @@ fn fold_file_reads_are_shared_across_forty_attachment_threads() {
     assert_eq!(
         reads.1, 1,
         "body-filter observation is one room file read per fold"
-    );
-    assert_eq!(
-        reads.2, 0,
-        "attachments use the shared merged receipt baseline"
     );
 }
 

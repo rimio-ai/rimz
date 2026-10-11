@@ -17,7 +17,7 @@ use crate::sidebar::enrich::{WorkspaceSnapshot, project_local};
 use crate::sidebar::frame::PaneFrame;
 use crate::sidebar::meter::TickMeter;
 use crate::sidebar::notify::{LinkAlert, LinkNotificationState, Notification, NotificationState};
-use crate::sidebar::read_marks::ReadMarks;
+use crate::sidebar::read_marks::{ReadMarks, prune_read_marks};
 use crate::sidebar::unread::{ClearedUnread, OpenedUnread, UnreadEpisodes};
 use crate::store::snapshot::SidebarSnapshot;
 use crate::wakeup::events::SidebarEvent;
@@ -96,7 +96,6 @@ pub(super) struct FoldInputs {
     pub sampled_at: Instant,
     pub anchor: Option<crate::mux::focus_anchor::FocusAnchor>,
     pub filter: crate::sidebar::body_filter::BodyLens,
-    pub marks: Arc<ReadMarks>,
 }
 
 impl Default for FoldInputs {
@@ -105,7 +104,6 @@ impl Default for FoldInputs {
             sampled_at: Instant::now(),
             anchor: None,
             filter: Default::default(),
-            marks: Arc::default(),
         }
     }
 }
@@ -116,7 +114,6 @@ impl FoldInputs {
             sampled_at: Instant::now(),
             anchor: crate::mux::focus_anchor::load(runtime),
             filter: crate::sidebar::body_filter::load(runtime),
-            marks: ReadMarks::load_merged(runtime),
         }
     }
 }
@@ -584,7 +581,13 @@ fn evaluate_notifications(
     let now_ms = crate::utils::time::unix_now_ms();
     let mut episodes = UnreadEpisodes::load(runtime);
     let silent_opens = episodes.was_absent_on_load();
-    let marks = ReadMarks::load_merged(runtime);
+    let marks = ReadMarks::load(runtime);
+    if snapshot.panes_produced_at_ms.is_some() {
+        prune_read_marks(
+            runtime,
+            &snapshot.rows().map(|row| row.id.clone()).collect(),
+        );
+    }
     let unread = episodes.reconcile(snapshot, &marks, silent_opens);
     emit_unread_reconcile_trace(diag, &unread.opened, &unread.cleared);
     if (episodes.was_absent_on_load() || unread.changed)

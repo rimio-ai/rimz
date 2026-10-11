@@ -361,33 +361,6 @@ fn sweep_removes_orphan_socket_keeps_live_and_starting() {
     assert!(!orphan_sock.exists(), "dead owner's socket swept");
 }
 
-#[test]
-fn sweep_removes_orphan_read_marks_keeps_live_and_fresh() {
-    let h = Harness::new();
-    h.ensure_runtime();
-    let live = instance("0f");
-    h.write_sidebar_for(&live);
-    let dead = instance("10");
-    let fresh = instance("11");
-    let live_marks = h.runtime.sidebar_read_marks_path(&live);
-    let dead_marks = h.runtime.sidebar_read_marks_path(&dead);
-    let fresh_marks = h.runtime.sidebar_read_marks_path(&fresh);
-    let manual_marks = h.runtime.read_marks_dir.join("manual.json");
-    for path in [&live_marks, &dead_marks, &fresh_marks, &manual_marks] {
-        std::fs::write(path, br#"{"marks":{"row-a":1000}}"#).expect("write read marks");
-    }
-    make_stale(&live_marks);
-    make_stale(&dead_marks);
-    make_stale(&manual_marks);
-
-    crate::harness::auto_gc::sweep_runtime_claims(&h.runtime);
-
-    assert!(live_marks.exists(), "live owner's read marks kept");
-    assert!(fresh_marks.exists(), "fresh startup-window read marks kept");
-    assert!(manual_marks.exists(), "manual API read marks kept");
-    assert!(!dead_marks.exists(), "dead owner's read marks swept");
-}
-
 /// The roster `rimz sidebar renderers` and `rimz sidebar click` read applies the
 /// live renderer discovery: a stale heartbeat is not a renderer at all.
 #[cfg(feature = "testkit")]

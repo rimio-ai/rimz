@@ -295,7 +295,9 @@ fn gc_removes_stale_sidebar_read_marks() {
     let rt = env.runtime_paths();
     rt.ensure_dirs().expect("runtime dirs");
 
-    let read_marks_path = rt.sidebar_read_marks_path(&SidebarInstanceId::new());
+    let read_marks_path = rt
+        .read_marks_dir
+        .join(format!("sidebar.{}.json", SidebarInstanceId::new()));
     std::fs::write(&read_marks_path, br#"{"marks":{"row-a":1000}}"#).expect("write read marks");
     let old = SystemTime::now() - Duration::from_secs(7200);
     std::fs::File::open(&read_marks_path)

@@ -184,7 +184,7 @@ fn runtime_gc_reaps_sidecars_and_unblocks_the_workspace_root() {
     let rt = RuntimePaths::under(workspace_id, temp.path()).unwrap();
     rt.ensure_dirs().unwrap();
 
-    let stale_read_marks = rt.sidebar_read_marks_path(&SidebarInstanceId::new());
+    let stale_read_marks = rt.read_marks_path();
     fs::write(&stale_read_marks, br#"{"marks":{"row-a":1000}}"#).unwrap();
     let stale_activity = rt.agent_activity_dir.join("deadbeefdeadbeef.json");
     fs::write(
@@ -498,7 +498,7 @@ fn runtime_gc_expires_read_marks_at_class_ttl_even_with_a_fresh_owner() {
     rt.ensure_dirs().unwrap();
 
     let instance_id = SidebarInstanceId::new();
-    let read_marks = rt.sidebar_read_marks_path(&instance_id);
+    let read_marks = rt.read_marks_path();
     fs::write(&read_marks, br#"{"marks":{"row-a":1000}}"#).unwrap();
     fs::File::open(&read_marks)
         .unwrap()

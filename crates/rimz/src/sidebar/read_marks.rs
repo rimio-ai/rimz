@@ -1,116 +1,38 @@
-//! Runtime read receipts for sidebar unread rows.
+//! One room-runtime read-mark record shared by panes and hostless CLI writers.
 //!
-//! Each renderer owns one disposable receipt file. A focus clear writes the row
-//! id and the clear time to that renderer's file. CLI/API clears write the
-//! room-runtime `manual.json` receipt, which is not tied to a renderer heartbeat.
-//! Every fold reads both forms and treats the max clear time per row as the
-//! workspace-wide read mark.
+//! Locked max-updates preserve clear timestamps across pane exits. Produced
+//! room frames prune departed rows; absent records import legacy receipts.
 
-use std::cell::RefCell;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 
-use crate::disk::parse_cache::StampedPath;
+use crate::disk::lock::WorkspaceLock;
+use crate::disk::parse_cache::ParseCache;
 use crate::disk::{atomic, paths::RuntimePaths};
 use crate::ids::SidebarInstanceId;
 
-const MANUAL_READ_MARKS_FILE: &str = "manual.json";
-const READ_MARKS_GENERATION_FILE: &str = "generation.json";
-
 thread_local! {
-    /// One renderer/fetch thread serves one room repeatedly. Read-mark writers
-    /// publish a fresh generation inode by atomic rename; the directory stamp
-    /// covers a receipt that landed before a crashed writer could publish it.
-    static MERGED_READ_MARKS_CACHE: RefCell<Option<MergedReadMarksCache>> = const { RefCell::new(None) };
-    #[cfg(test)]
-    static MERGED_READ_MARKS_SCANS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
-    #[cfg(test)]
-    static STORE_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static READ_MARKS_CACHE: ParseCache<ReadMarks> = const { ParseCache::new() };
 }
 
-#[cfg(test)]
-pub(crate) fn take_store_reads() -> usize {
-    STORE_READS.with(|reads| reads.replace(0))
-}
-
-struct MergedReadMarksCache {
-    directory: StampedPath,
-    generation: StampedPath,
-    value: Arc<ReadMarks>,
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 pub(crate) struct ReadMarks {
-    marks: HashMap<String, i64>,
+    #[serde(default)]
+    marks: BTreeMap<String, i64>,
 }
 
 impl ReadMarks {
-    pub(crate) fn load_merged(runtime: &RuntimePaths) -> Arc<Self> {
-        let directory = StampedPath::of(&runtime.read_marks_dir);
-        let generation = StampedPath::of(&read_marks_generation_path(runtime));
-        if let Some(cached) = MERGED_READ_MARKS_CACHE.with(|cache| {
-            cache.borrow().as_ref().and_then(|cached| {
-                (cached.directory == directory && cached.generation == generation)
-                    .then(|| Arc::clone(&cached.value))
-            })
-        }) {
-            return cached;
-        }
-        let merged = Arc::new(Self::load_merged_uncached(runtime));
-        MERGED_READ_MARKS_CACHE.with(|cache| {
-            *cache.borrow_mut() = Some(MergedReadMarksCache {
-                directory,
-                generation,
-                value: Arc::clone(&merged),
-            });
-        });
-        merged
-    }
-
-    fn load_merged_uncached(runtime: &RuntimePaths) -> Self {
-        #[cfg(test)]
-        MERGED_READ_MARKS_SCANS.with(|scans| scans.set(scans.get().saturating_add(1)));
-        let entries = match fs::read_dir(&runtime.read_marks_dir) {
-            Ok(entries) => entries,
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Self::default(),
-            Err(err) => {
-                debug!(
-                    path = %runtime.read_marks_dir.display(),
-                    error = %err,
-                    "sidebar read-mark dir unreadable",
-                );
-                return Self::default();
-            }
-        };
-
-        let mut marks: HashMap<String, i64> = HashMap::new();
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if !is_read_mark_file(&path) && !is_manual_read_mark_file(&path) {
-                continue;
-            }
-            let file = match read_file(&path) {
-                Some(file) => file,
-                None => continue,
-            };
-            for (row_id, cleared_at_ms) in file.marks {
-                marks
-                    .entry(row_id)
-                    .and_modify(|seen| *seen = (*seen).max(cleared_at_ms))
-                    .or_insert(cleared_at_ms);
-            }
-        }
-        Self { marks }
-    }
-
-    #[cfg(test)]
-    fn merged_scans_for_test() -> u64 {
-        MERGED_READ_MARKS_SCANS.with(std::cell::Cell::get)
+    pub(crate) fn load(runtime: &RuntimePaths) -> Arc<Self> {
+        READ_MARKS_CACHE.with(|cache| {
+            cache
+                .read_stamped_json(&runtime.read_marks_path())
+                .unwrap_or_else(|| Arc::new(load_legacy(runtime)))
+        })
     }
 
     pub(crate) fn cleared_at_ms(&self, row_id: &str) -> Option<i64> {
@@ -125,182 +47,95 @@ impl ReadMarks {
     }
 }
 
-pub fn write_manual_read_marks(
+fn load_legacy(runtime: &RuntimePaths) -> ReadMarks {
+    let path = runtime.read_marks_path();
+    if !matches!(fs::metadata(&path), Err(err) if err.kind() == std::io::ErrorKind::NotFound) {
+        return ReadMarks::default();
+    }
+    let mut merged = ReadMarks::default();
+    let Ok(entries) = fs::read_dir(&runtime.read_marks_dir) else {
+        return merged;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        let legacy = name == "manual.json"
+            || name
+                .strip_prefix("sidebar.")
+                .and_then(|id| id.strip_suffix(".json"))
+                .is_some_and(|id| SidebarInstanceId::parse(id).is_ok());
+        if !legacy {
+            continue;
+        }
+        let Some(file) = fs::read(&path)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<ReadMarks>(&bytes).ok())
+        else {
+            continue;
+        };
+        for (row_id, cleared_at_ms) in file.marks {
+            merged
+                .marks
+                .entry(row_id)
+                .and_modify(|seen| *seen = (*seen).max(cleared_at_ms))
+                .or_insert(cleared_at_ms);
+        }
+    }
+    merged
+}
+
+fn read_marks_lock(runtime: &RuntimePaths) -> atomic::Result<WorkspaceLock> {
+    let path = runtime.read_marks_lock_path();
+    WorkspaceLock::acquire_with_timeout(&path, Duration::from_millis(250)).map_err(|err| {
+        atomic::AtomicErr::Io {
+            path,
+            source: std::io::Error::other(err),
+        }
+    })
+}
+
+pub fn write_read_marks(
     runtime: &RuntimePaths,
     row_ids: impl IntoIterator<Item = String>,
     cleared_at_ms: i64,
-) -> atomic::Result<()> {
-    let path = manual_read_marks_path(runtime);
-    let mut marks = read_file(&path).map(|file| file.marks).unwrap_or_default();
-    let mut changed = false;
+) -> atomic::Result<bool> {
+    let current = ReadMarks::load(runtime);
+    let row_ids: Vec<String> = row_ids
+        .into_iter()
+        .filter(|id| current.cleared_at_ms(id) < Some(cleared_at_ms))
+        .collect();
+    if row_ids.is_empty() {
+        return Ok(false);
+    }
+    let _lock = read_marks_lock(runtime)?;
+    let mut file = (*ReadMarks::load(runtime)).clone();
     for row_id in row_ids {
-        match marks.get(&row_id) {
-            Some(existing) if *existing >= cleared_at_ms => {}
-            _ => {
-                marks.insert(row_id, cleared_at_ms);
-                changed = true;
-            }
-        }
+        let mark = file.marks.entry(row_id).or_insert(cleared_at_ms);
+        *mark = (*mark).max(cleared_at_ms);
     }
-    if changed {
-        atomic::write_temp_then_rename_cache(&path, &ReadMarksFile { marks })?;
-        publish_read_marks_generation(runtime)?;
+    atomic::write_temp_then_rename_cache(&runtime.read_marks_path(), &file)?;
+    Ok(true)
+}
+
+pub(crate) fn prune_read_marks(runtime: &RuntimePaths, live: &BTreeSet<String>) {
+    if ReadMarks::load(runtime)
+        .marks
+        .keys()
+        .all(|row_id| live.contains(row_id))
+    {
+        return;
     }
-    Ok(())
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct ReadMarkStore {
-    runtime: RuntimePaths,
-    instance_id: SidebarInstanceId,
-    own: BTreeMap<String, i64>,
-}
-
-impl ReadMarkStore {
-    pub(crate) fn new(runtime: RuntimePaths, instance_id: SidebarInstanceId) -> Self {
-        let own = read_file(&runtime.sidebar_read_marks_path(&instance_id))
-            .map(|file| file.marks)
-            .unwrap_or_default();
-        Self {
-            runtime,
-            instance_id,
-            own,
-        }
-    }
-
-    pub(crate) fn runtime(&self) -> &RuntimePaths {
-        &self.runtime
-    }
-
-    pub(crate) fn load_merged(&self) -> Arc<ReadMarks> {
-        #[cfg(test)]
-        STORE_READS.with(|reads| reads.set(reads.get() + 1));
-        ReadMarks::load_merged(&self.runtime)
-    }
-
-    pub(crate) fn include_own(&self, mut marks: Arc<ReadMarks>) -> Arc<ReadMarks> {
-        for (row_id, cleared_at_ms) in &self.own {
-            if marks
-                .cleared_at_ms(row_id)
-                .is_none_or(|seen| seen < *cleared_at_ms)
-            {
-                Arc::make_mut(&mut marks)
-                    .marks
-                    .insert(row_id.clone(), *cleared_at_ms);
-            }
-        }
-        marks
-    }
-
-    pub(crate) fn observe_fold(
-        &mut self,
-        cleared: Vec<String>,
-        cleared_at_ms: i64,
-        live: &HashSet<String>,
-    ) {
-        let mut changed = false;
-        for row_id in cleared {
-            if !live.contains(&row_id) {
-                continue;
-            }
-            match self.own.get(&row_id) {
-                Some(existing) if *existing >= cleared_at_ms => {}
-                _ => {
-                    self.own.insert(row_id, cleared_at_ms);
-                    changed = true;
-                }
-            }
-        }
-
-        let before = self.own.len();
-        self.own.retain(|row_id, _| live.contains(row_id));
-        changed |= self.own.len() != before;
-
-        if !changed {
-            return;
-        }
-
-        let path = self.runtime.sidebar_read_marks_path(&self.instance_id);
-        let file = ReadMarksFile {
-            marks: self.own.clone(),
-        };
-        match atomic::write_temp_then_rename_cache(&path, &file) {
-            Ok(()) => {
-                if let Err(err) = publish_read_marks_generation(&self.runtime) {
-                    debug!(error = %err, "sidebar read-mark generation write failed");
-                }
-            }
-            Err(err) => {
-                debug!(
-                    path = %path.display(),
-                    error = %err,
-                    "sidebar read-mark write failed",
-                );
-            }
-        }
-    }
-}
-
-pub(super) fn read_mark_file_instance_id(path: &Path) -> Option<SidebarInstanceId> {
-    let name = path.file_name()?.to_str()?;
-    let id = name.strip_prefix("sidebar.")?.strip_suffix(".json")?;
-    SidebarInstanceId::parse(id).ok()
-}
-
-fn is_read_mark_file(path: &Path) -> bool {
-    read_mark_file_instance_id(path).is_some()
-}
-
-fn manual_read_marks_path(runtime: &RuntimePaths) -> std::path::PathBuf {
-    runtime.read_marks_dir.join(MANUAL_READ_MARKS_FILE)
-}
-
-fn read_marks_generation_path(runtime: &RuntimePaths) -> std::path::PathBuf {
-    runtime.read_marks_dir.join(READ_MARKS_GENERATION_FILE)
-}
-
-fn publish_read_marks_generation(runtime: &RuntimePaths) -> atomic::Result<()> {
-    atomic::write_temp_then_rename_cache(
-        &read_marks_generation_path(runtime),
-        &ReadMarksGeneration {
-            nonce: uuid::Uuid::now_v7(),
-        },
-    )
-}
-
-fn is_manual_read_mark_file(path: &Path) -> bool {
-    path.file_name()
-        .and_then(|name| name.to_str())
-        .is_some_and(|name| name == MANUAL_READ_MARKS_FILE)
-}
-
-fn read_file(path: &Path) -> Option<ReadMarksFile> {
-    let bytes = match fs::read(path) {
-        Ok(bytes) => bytes,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return None,
-        Err(err) => {
-            debug!(path = %path.display(), error = %err, "sidebar read-mark unreadable");
-            return None;
-        }
+    let prune = || -> atomic::Result<()> {
+        let _lock = read_marks_lock(runtime)?;
+        let mut file = (*ReadMarks::load(runtime)).clone();
+        file.marks.retain(|row_id, _| live.contains(row_id));
+        atomic::write_temp_then_rename_cache(&runtime.read_marks_path(), &file)
     };
-    match serde_json::from_slice(&bytes) {
-        Ok(file) => Some(file),
-        Err(err) => {
-            debug!(path = %path.display(), error = %err, "sidebar read-mark invalid");
-            None
-        }
+    if let Err(err) = prune() {
+        debug!(error = %err, "sidebar read-mark prune failed");
     }
-}
-
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
-struct ReadMarksFile {
-    #[serde(default)]
-    marks: BTreeMap<String, i64>,
-}
-
-#[derive(Serialize)]
-struct ReadMarksGeneration {
-    nonce: uuid::Uuid,
 }
 
 #[cfg(test)]
@@ -316,140 +151,120 @@ mod tests {
         (dir, runtime)
     }
 
-    fn instance(hex_tail: &str) -> SidebarInstanceId {
-        SidebarInstanceId::parse(&format!("sb_{hex_tail:0>32}")).expect("instance id")
-    }
-
-    fn live(ids: &[&str]) -> HashSet<String> {
-        ids.iter().map(|id| (*id).to_owned()).collect()
+    #[test]
+    fn writes_max_update_and_never_lower_a_mark() {
+        let (_dir, runtime) = runtime();
+        assert!(write_read_marks(&runtime, ["row-a".to_owned()], 2_000).unwrap());
+        assert!(!write_read_marks(&runtime, ["row-a".to_owned()], 1_000).unwrap());
+        assert!(write_read_marks(&runtime, ["row-b".to_owned()], 1_000).unwrap());
+        let marks = ReadMarks::load(&runtime);
+        assert_eq!(marks.cleared_at_ms("row-a"), Some(2_000));
+        assert_eq!(marks.cleared_at_ms("row-b"), Some(1_000));
+        let barrier = Arc::new(std::sync::Barrier::new(8));
+        let writers: Vec<_> = (0..8)
+            .map(|n| {
+                let runtime = runtime.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    write_read_marks(&runtime, [format!("row-{n}")], n).unwrap();
+                })
+            })
+            .collect();
+        for writer in writers {
+            writer.join().unwrap();
+        }
+        let marks = ReadMarks::load(&runtime);
+        for n in 0..8 {
+            assert_eq!(marks.cleared_at_ms(&format!("row-{n}")), Some(n));
+        }
     }
 
     #[test]
-    fn writes_and_reads_one_instances_marks() {
+    fn load_reuses_the_parse_and_observes_atomic_writes() {
         let (_dir, runtime) = runtime();
-        let mut store = ReadMarkStore::new(runtime.clone(), instance("01"));
-        store.observe_fold(vec!["row-a".to_owned()], 1_000, &live(&["row-a"]));
-
-        let merged = store.load_merged();
-        assert_eq!(merged.cleared_at_ms("row-a"), Some(1_000));
-        let text = fs::read_to_string(runtime.sidebar_read_marks_path(&instance("01")))
-            .expect("read mark file");
-        assert!(text.contains("\"marks\""));
-        assert!(text.contains("\"row-a\""));
-    }
-
-    #[test]
-    fn merge_takes_the_max_receipt_per_row() {
-        let (_dir, runtime) = runtime();
-        let mut first = ReadMarkStore::new(runtime.clone(), instance("01"));
-        let mut second = ReadMarkStore::new(runtime.clone(), instance("02"));
-        first.observe_fold(vec!["row-a".to_owned()], 1_000, &live(&["row-a"]));
-        second.observe_fold(
-            vec!["row-a".to_owned(), "row-b".to_owned()],
-            2_000,
-            &live(&["row-a", "row-b"]),
+        write_read_marks(&runtime, ["row-a".to_owned()], 1_000).unwrap();
+        assert_eq!(
+            ReadMarks::load(&runtime).cleared_at_ms("row-a"),
+            Some(1_000)
         );
-
-        let merged = first.load_merged();
-        assert_eq!(merged.cleared_at_ms("row-a"), Some(2_000));
-        assert_eq!(merged.cleared_at_ms("row-b"), Some(2_000));
+        let cached = READ_MARKS_CACHE
+            .with(|cache| cache.read_stamped_json(&runtime.read_marks_path()))
+            .unwrap();
+        assert_eq!(
+            ReadMarks::load(&runtime).cleared_at_ms("row-a"),
+            Some(1_000)
+        );
+        let reused = READ_MARKS_CACHE
+            .with(|cache| cache.read_stamped_json(&runtime.read_marks_path()))
+            .unwrap();
+        assert!(Arc::ptr_eq(&cached, &reused));
+        write_read_marks(&runtime, ["row-a".to_owned()], 2_000).unwrap();
+        assert_eq!(
+            ReadMarks::load(&runtime).cleared_at_ms("row-a"),
+            Some(2_000)
+        );
+        let replaced = READ_MARKS_CACHE
+            .with(|cache| cache.read_stamped_json(&runtime.read_marks_path()))
+            .unwrap();
+        assert!(!Arc::ptr_eq(&cached, &replaced));
     }
 
     #[test]
-    fn manual_marks_merge_and_are_not_instance_files() {
+    fn absent_record_imports_legacy_maxima_and_first_write_materializes_them() {
         let (_dir, runtime) = runtime();
-        runtime.ensure_dirs().expect("runtime dirs");
-        write_manual_read_marks(&runtime, ["row-a".to_owned()], 2_000).expect("manual mark");
-        let mut store = ReadMarkStore::new(runtime.clone(), instance("01"));
-        store.observe_fold(
-            vec!["row-a".to_owned(), "row-b".to_owned()],
-            1_000,
-            &live(&["row-a", "row-b"]),
+        runtime.ensure_dirs().unwrap();
+        for (name, bytes) in [
+            ("manual.json", r#"{"marks":{"row-a":2000}}"#),
+            (
+                "sidebar.sb_00000000000000000000000000000001.json",
+                r#"{"marks":{"row-a":1000,"row-b":1000}}"#,
+            ),
+            (
+                "sidebar.sb_00000000000000000000000000000002.json",
+                r#"{"marks":{"row-b":3000}}"#,
+            ),
+            ("sidebar.invalid.json", r#"{"marks":{"row-a":9999}}"#),
+            ("generation.json", r#"{"marks":{"row-a":9999}}"#),
+            ("notes.txt", r#"{"marks":{"row-a":9999}}"#),
+        ] {
+            fs::write(runtime.read_marks_dir.join(name), bytes).unwrap();
+        }
+        let marks = ReadMarks::load(&runtime);
+        assert_eq!(marks.cleared_at_ms("row-a"), Some(2_000));
+        assert_eq!(marks.cleared_at_ms("row-b"), Some(3_000));
+        assert!(!runtime.read_marks_path().exists());
+        assert!(!write_read_marks(&runtime, ["row-a".to_owned()], 1_000).unwrap());
+        assert!(!runtime.read_marks_path().exists());
+        assert!(write_read_marks(&runtime, ["row-c".to_owned()], 1_000).unwrap());
+        assert!(runtime.read_marks_path().exists());
+        fs::write(
+            runtime.read_marks_dir.join("manual.json"),
+            r#"{"marks":{"row-a":9999}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            ReadMarks::load(&runtime).cleared_at_ms("row-a"),
+            Some(2_000)
         );
+    }
 
-        let merged = store.load_merged();
-
-        assert_eq!(merged.cleared_at_ms("row-a"), Some(2_000));
-        assert_eq!(merged.cleared_at_ms("row-b"), Some(1_000));
-        assert!(!is_read_mark_file(&manual_read_marks_path(&runtime)));
+    #[test]
+    fn prune_drops_departed_rows_and_keeps_live_marks() {
+        let (_dir, runtime) = runtime();
+        write_read_marks(&runtime, ["row-a".to_owned(), "row-b".to_owned()], 1_000).unwrap();
+        prune_read_marks(&runtime, &BTreeSet::from(["row-b".to_owned()]));
+        let marks = ReadMarks::load(&runtime);
+        assert_eq!(marks.cleared_at_ms("row-a"), None);
+        assert_eq!(marks.cleared_at_ms("row-b"), Some(1_000));
     }
 
     #[test]
     fn missing_or_garbage_read_marks_read_empty() {
-        let (_missing_dir, missing_runtime) = runtime();
-        let missing_store = ReadMarkStore::new(missing_runtime, instance("01"));
-        assert_eq!(*missing_store.load_merged(), ReadMarks::default());
-
         let (_dir, runtime) = runtime();
-        runtime.ensure_dirs().expect("runtime dirs");
-        fs::write(
-            runtime.sidebar_read_marks_path(&instance("02")),
-            b"{ not json",
-        )
-        .expect("garbage");
-        fs::write(runtime.read_marks_dir.join("notes.txt"), b"not a mark").expect("other file");
-        let garbage_store = ReadMarkStore::new(runtime, instance("01"));
-
-        assert_eq!(*garbage_store.load_merged(), ReadMarks::default());
-    }
-
-    #[test]
-    fn merged_cache_reuses_the_generation_and_observes_atomic_writes() {
-        let (_dir, runtime) = runtime();
-        runtime.ensure_dirs().expect("runtime dirs");
-        let mut first = ReadMarkStore::new(runtime.clone(), instance("01"));
-        first.observe_fold(vec!["row-a".to_owned()], 1_000, &live(&["row-a"]));
-        let before = ReadMarks::merged_scans_for_test();
-
-        assert_eq!(first.load_merged().cleared_at_ms("row-a"), Some(1_000));
-        assert_eq!(first.load_merged().cleared_at_ms("row-a"), Some(1_000));
-        assert_eq!(ReadMarks::merged_scans_for_test() - before, 1);
-
-        let mut second = ReadMarkStore::new(runtime, instance("02"));
-        second.observe_fold(vec!["row-b".to_owned()], 2_000, &live(&["row-b"]));
-        let merged = second.load_merged();
-        assert_eq!(merged.cleared_at_ms("row-a"), Some(1_000));
-        assert_eq!(merged.cleared_at_ms("row-b"), Some(2_000));
-        assert_eq!(ReadMarks::merged_scans_for_test() - before, 2);
-    }
-
-    #[test]
-    fn departed_rows_are_pruned_from_the_own_file() {
-        let (_dir, runtime) = runtime();
-        let id = instance("01");
-        let mut store = ReadMarkStore::new(runtime.clone(), id.clone());
-        store.observe_fold(
-            vec!["row-a".to_owned(), "row-b".to_owned()],
-            1_000,
-            &live(&["row-a", "row-b"]),
-        );
-        store.observe_fold(Vec::new(), 2_000, &live(&["row-b"]));
-
-        let file: ReadMarksFile = serde_json::from_slice(
-            &fs::read(runtime.sidebar_read_marks_path(&id)).expect("read file"),
-        )
-        .expect("json");
-        assert_eq!(
-            file.marks.keys().cloned().collect::<Vec<_>>(),
-            vec!["row-b"]
-        );
-    }
-
-    #[test]
-    fn reexec_keeps_prior_own_marks_on_the_next_write() {
-        let (_dir, runtime) = runtime();
-        let id = instance("01");
-        let mut before = ReadMarkStore::new(runtime.clone(), id.clone());
-        before.observe_fold(vec!["row-a".to_owned()], 1_000, &live(&["row-a"]));
-
-        let mut after = ReadMarkStore::new(runtime.clone(), id.clone());
-        after.observe_fold(vec!["row-b".to_owned()], 2_000, &live(&["row-a", "row-b"]));
-
-        let file: ReadMarksFile = serde_json::from_slice(
-            &fs::read(runtime.sidebar_read_marks_path(&id)).expect("read file"),
-        )
-        .expect("json");
-        assert_eq!(file.marks.get("row-a"), Some(&1_000));
-        assert_eq!(file.marks.get("row-b"), Some(&2_000));
+        assert_eq!(*ReadMarks::load(&runtime), ReadMarks::default());
+        runtime.ensure_dirs().unwrap();
+        fs::write(runtime.read_marks_path(), b"{ not json").unwrap();
+        assert_eq!(*ReadMarks::load(&runtime), ReadMarks::default());
     }
 }

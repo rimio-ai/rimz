@@ -693,7 +693,7 @@ path = "crates/rimz/src/sidebar"
 # Account-cache types and status projection now belong to agents.
 # Consumers import those types directly; the refresh re-exports are gone.
 # One login's projected panel serves providers and accounts list (+1).
-# Room/own observation boundaries, shared signatures, native focus queries and retained-own receipt merging (+8).
+# Room/own observation boundaries, shared signatures and native focus queries.
 # The attachment's pre-paint seed reads the validated published pair without store access (+1).
 # Hook lifecycle records subscription rejection through the shared credits lock (+1).
 surface-budget = 239
@@ -3301,11 +3301,6 @@ reason = "Tmux and Zellij session/launch integration assertions inspect the room
 kind = "item"
 key = "disk::paths::sidebar_heartbeat_path"
 reason = "Loop-schedule and sidebar-supervisor integration tests publish renderer heartbeats. (pass 19b)."
-
-[[verdict]]
-kind = "item"
-key = "disk::paths::sidebar_read_marks_path"
-reason = "GC integration tests seed sidebar read marks. (pass 19b)."
 
 [[verdict]]
 kind = "item"

@@ -1267,7 +1267,7 @@ fn mark_read(globals: &GlobalFlags, target: String, worktree: Option<String>) ->
         .map(|row| row.id.clone())
         .collect::<Vec<_>>();
     let now_ms = unix_now_ms_i64();
-    rimz::sidebar::read_marks::write_manual_read_marks(&resolved.runtime, ids, now_ms)
+    rimz::sidebar::read_marks::write_read_marks(&resolved.runtime, ids, now_ms)
         .context("writing manual read marks")?;
     let mut episodes = rimz::sidebar::unread::UnreadEpisodes::load(&resolved.runtime);
     let mut cleared = Vec::new();

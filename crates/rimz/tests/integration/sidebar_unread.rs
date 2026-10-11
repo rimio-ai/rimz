@@ -64,12 +64,11 @@ fn sidebar_mark_unread_and_mark_read_drive_snapshot_unread_bit() {
         unread_file["episodes"]["sess-unread"].is_null(),
         "mark-read removes the open episode immediately: {unread_file}"
     );
-    let manual_marks =
-        std::fs::read_to_string(env.runtime_paths().read_marks_dir.join("manual.json"))
-            .expect("manual read mark");
+    let marks = std::fs::read_to_string(env.runtime_paths().read_marks_dir.join("marks.json"))
+        .expect("room read mark");
     assert!(
-        manual_marks.contains("sess-unread"),
-        "mark-read writes a durable manual receipt: {manual_marks}"
+        marks.contains("sess-unread"),
+        "mark-read writes a room receipt: {marks}"
     );
 }
 

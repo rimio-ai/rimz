@@ -180,7 +180,7 @@ sock/run.<short_run_id>.sock          per-run wakeup socket, bound by a supervis
 sock/sidebar.<short_instance_id>.sock per-instance wakeup socket, bound by each live sidebar
 sock/codex-app-server.sock            the per-session Codex broker socket
 live/heartbeat/sidebar.*.json         renderer liveness
-live/read-marks/{sidebar.<id>,manual}.json read receipts
+live/read-marks/marks.json              room read marks
 live/{agent_context,subagent_context}/ enrichment
 live/agent-activity/                  activity hints
 live/active-time/                     active-time accumulators
