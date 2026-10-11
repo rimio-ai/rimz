@@ -208,7 +208,12 @@ fn notification_reconciliation_reaches_the_younger_pane_before_its_bell() {
         "a new attachment gets the post-notification unread fold too"
     );
     let mut bytes = [0; 4096];
-    notices.recv(&mut bytes).unwrap();
+    let len = notices.recv(&mut bytes).unwrap();
+    assert_eq!(
+        &bytes[..len],
+        b"snapshot",
+        "the snapshot word precedes the notice"
+    );
     let len = notices.recv(&mut bytes).unwrap();
     let notice: crate::wakeup::events::SidebarEventEnvelope =
         serde_json::from_slice(&bytes[..len]).unwrap();

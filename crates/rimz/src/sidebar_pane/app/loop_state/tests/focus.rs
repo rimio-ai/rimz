@@ -609,12 +609,21 @@ fn older_shared_inputs_do_not_renew_an_observed_receipt() {
         "a stale shared receipt baseline must not renew a pane's existing clear"
     );
     snapshot.worktree_groups[0].rows[0].last_activity = jiff::Timestamp::now();
+    rig.shared_fold(snapshot.clone(), Arc::default());
+    let renewed =
+        crate::sidebar::read_marks::ReadMarks::load(&rig.runtime).cleared_at_ms("agent-1");
+    assert!(
+        renewed > Some(1_000),
+        "a new needs-a-look episode still receives a new receipt"
+    );
+    std::thread::sleep(Duration::from_millis(2));
+    snapshot.worktree_groups[0].rows[0].last_activity = jiff::Timestamp::now();
     snapshot.worktree_groups[0].rows[0].unread = true;
     rig.shared_fold(snapshot, Arc::default());
     assert!(
         crate::sidebar::read_marks::ReadMarks::load(&rig.runtime).cleared_at_ms("agent-1")
-            > Some(1_000),
-        "a new attention episode still receives a new receipt"
+            > renewed,
+        "a new unread episode still receives a new receipt"
     );
     assert!(
         trace.exists(),
