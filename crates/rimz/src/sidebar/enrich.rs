@@ -21,7 +21,7 @@ use crate::store::snapshot::{
 };
 use crate::{RuntimePaths, StatePaths};
 use jiff::Timestamp;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use super::frame::{PaneFrame, PaneMetrics};
 use super::refresh::accounts::cached_accounts_for_snapshot;
@@ -394,8 +394,7 @@ static LOGGED_LAZY_PAIRINGS: OnceLock<Mutex<HashMap<LazyPairingLogKey, u64>>> = 
 
 /// Renderer-independent sidebar projection. Call `project_local` before a
 /// snapshot reaches rendering or notification evaluation.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(transparent)]
+#[derive(Clone, Debug)]
 pub struct WorkspaceSnapshot(pub(crate) SidebarSnapshot);
 
 impl WorkspaceSnapshot {

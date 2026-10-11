@@ -23,7 +23,6 @@ pub mod refresh;
 pub(crate) mod test_support;
 pub mod timing;
 pub mod unread;
-pub mod workspace_projection;
 
 use std::collections::{BTreeSet, HashSet};
 use std::fs;

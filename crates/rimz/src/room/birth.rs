@@ -40,16 +40,12 @@ fn clear_birth_publications(runtime: &crate::RuntimePaths, pre_existed: bool) ->
     if pre_existed {
         return Ok(());
     }
-    for path in [
-        runtime.workspace_projection_path(),
-        runtime.pane_frame_path(),
-    ] {
-        if let Err(err) = std::fs::remove_file(&path)
-            && err.kind() != std::io::ErrorKind::NotFound
-        {
-            return Err(err)
-                .with_context(|| format!("clearing previous room publication {}", path.display()));
-        }
+    let path = runtime.pane_frame_path();
+    if let Err(err) = std::fs::remove_file(&path)
+        && err.kind() != std::io::ErrorKind::NotFound
+    {
+        return Err(err)
+            .with_context(|| format!("clearing previous room publication {}", path.display()));
     }
     Ok(())
 }
@@ -638,24 +634,17 @@ mod tests {
             crate::utils::time::unix_now_ms(),
             "room",
         );
-        let pair = [
-            runtime.pane_frame_path(),
-            runtime.lane_path("workspace-projection.json"),
-        ];
-        std::fs::write(&pair[0], serde_json::to_vec(&frame).unwrap()).unwrap();
-        std::fs::write(&pair[1], b"{\"session\":\"room\"}").unwrap();
+        let path = runtime.pane_frame_path();
+        std::fs::write(&path, serde_json::to_vec(&frame).unwrap()).unwrap();
         let unrelated = runtime.unread_path();
         std::fs::write(&unrelated, b"{}").unwrap();
 
         clear_birth_publications(&runtime, true).unwrap();
-        assert!(
-            pair.iter().all(|path| path.exists()),
-            "live birth keeps the publication"
-        );
+        assert!(path.exists(), "live birth keeps the publication");
         clear_birth_publications(&runtime, false).unwrap();
         assert!(
-            pair.iter().all(|path| !path.exists()),
-            "a prior incarnation cannot seed, even at age zero"
+            !path.exists(),
+            "a prior incarnation cannot supply a pane frame, even at age zero"
         );
         assert!(unrelated.exists(), "other runtime lanes are preserved");
         clear_birth_publications(&runtime, false).unwrap();
