@@ -62,7 +62,7 @@ The first addition to an empty batch starts the coalesce window. The batch flush
 
 `[notifications].title` and `.body` then replace the built-in text for the status kinds and `coalesced`; reminders, link alerts, and `loop_disabled` keep their built-in text. A template that fails to render leaves the built-in text in place.
 
-`deliver_notifications` sends each notification three ways, in order: it spawns the matching handlers, appends `notification_emitted` to the trace log, and broadcasts `SidebarEvent::Notify` with the title, body, the agents' pane ids, `recheck_unread: true`, and the kind. Notification policy writes no terminal bytes; every attachment receives the broadcast and decides its own OSC and bell.
+`deliver_notifications` sends each notification three ways, in order: it spawns the matching handlers, appends `notification_emitted` to the trace log, and sends `SidebarEvent::Notify` with the title, body, the agents' pane ids, `recheck_unread: true`, and the kind directly to the host's current subscriber sockets. Each pane's snapshot word precedes its notice on the same nonblocking datagram socket; internal delivery does not scan heartbeats. External notices from CLI commands and loops still use broadcast. Notification policy writes no terminal bytes; every attachment decides its own OSC and bell.
 
 ## The renderer
 
