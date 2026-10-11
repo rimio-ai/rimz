@@ -15,6 +15,7 @@ Local contract for `crates/rimz/src/sidebar_pane/` — the sidebar renderer: the
 - Rendering reads the snapshot clock. `cargo xtask invariants` rejects `Timestamp::now()` in non-test render code, which is what keeps a frame reproducible from its snapshot alone.
 - The host's fetch worker refolds shared truth on every cycle and projects it for each pane. Only completed production recovers refresh health; fast cached folds and new-attachment seeds never mask a failed pane read.
 - Renderer-local state — row and group order holds, selection, width control — stays renderer-local and never travels back into the data plane.
+- Room-owned state — the shared overlay, locked read marks, internal notification delivery and reload decisions — stays with the host. Pane reload triggers post to its inbox; one decision drains every pane or refreshes the shared plane in place.
 
 ## Read-only on the store
 

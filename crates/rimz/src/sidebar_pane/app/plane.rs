@@ -103,6 +103,10 @@ impl DataPlane {
         Self::idle().0
     }
 
+    pub(in crate::sidebar_pane) fn hard_refresh(&self) {
+        let _ = self.request_tx.send(FetchRequest::hard_refresh());
+    }
+
     /// Feed one more pane. The pane leaves the plane when the subscription drops.
     pub(in crate::sidebar_pane) fn subscribe(
         &self,

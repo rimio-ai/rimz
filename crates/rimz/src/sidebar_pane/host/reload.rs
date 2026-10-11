@@ -1,6 +1,6 @@
-//! Attachment reload requests (`rimz reload` or the `r` keypress).
+//! Host-coalesced reload decisions (`rimz reload` or the `r` keypress).
 //!
-//! Resolve the digest-verified workspace target, compare it to the running host image, and request a host drain only when the build changed. The supervisor owns host-first promotion and its own later exec.
+//! Resolve the digest-verified workspace target and compare it to the running host image once per queued request batch. A changed image drains the host; otherwise the plane refreshes in place. The supervisor owns host-first promotion and its own later exec.
 
 use std::io;
 use std::io::Read;
@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 /// What a reload (`rimz reload` or the `r` keypress) does this tick: request a host drain onto a changed on-disk binary, refetch when it is byte-identical, or keep serving when nothing usable is on disk.
 pub(super) enum ReloadAction {
-    /// The on-disk binary differs from the running image: the attachment asks the host to drain so supervisors can start the target with pane PIDs kept.
+    /// The on-disk binary differs from the running image: the host drains so supervisors can start the target with pane PIDs kept.
     Reexec(PathBuf),
     /// The on-disk binary is byte-identical to the running image — skip the
     /// re-exec churn and refetch in place instead.
@@ -108,5 +108,4 @@ fn fill(reader: &mut impl Read, buf: &mut [u8]) -> io::Result<usize> {
 }
 
 #[cfg(test)]
-#[path = "reload/tests.rs"]
 mod tests;

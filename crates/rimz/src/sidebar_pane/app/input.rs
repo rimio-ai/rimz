@@ -24,8 +24,8 @@ pub(super) enum Wakeup {
     /// channel. Keeps the fetch subprocess off the render thread.
     Snapshot,
     Resize,
-    /// `rimz reload` asks the renderer to re-exec its own binary in place so a
-    /// freshly-installed build takes effect without a session rebirth.
+    /// `rimz reload` asks the host to compare its target image: drain for a
+    /// changed build, otherwise refresh without blanking the pane.
     Reload,
     Press {
         code: KeyCode,

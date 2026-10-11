@@ -35,8 +35,6 @@ pub(in crate::sidebar_pane) enum AttachmentExit {
     Closed,
     /// The pane's tab looks empty; the supervisor confirms against the mux.
     SelfClose,
-    /// A different build is recorded for the room.
-    Reload,
     /// The fold stayed degraded past the renderer's patience.
     GaveUp,
 }
@@ -122,6 +120,7 @@ impl Attachment {
         self,
         plane: &DataPlane,
         backend: PaneBackend,
+        request_reload: Box<dyn Fn() + Send>,
     ) -> Result<AttachmentExit> {
         let Self {
             config,
@@ -184,6 +183,7 @@ impl Attachment {
         state.room_caps = plane.caps.clone();
         state.share_width_geometry(plane.geometry.clone());
         state.events = plane.events.clone();
+        state.request_reload = request_reload;
         state.set_probed_aspect(terminal.backend().cell_aspect());
         if let Some(seed) = subscription.seed {
             state.seed(seed);
@@ -251,7 +251,6 @@ impl Attachment {
                 match state.on_wakeup(&mut fetch, &mut terminal, wait_for_wakeup(&socket)?)? {
                     LoopFlow::Continue => {}
                     LoopFlow::Repoll => continue,
-                    LoopFlow::Exit => break,
                 }
                 // A pane the mux had not laid out at attach gets its title
                 // with its first size.
@@ -268,8 +267,7 @@ impl Attachment {
         })();
         state.clear_pixel(&mut terminal);
         loop_result?;
-        if !state.reload_requested
-            && !state.tab_emptied
+        if !state.tab_emptied
             && let Some(cause) = state.exit_cause
         {
             diag.emit_unlimited(DiagEvent::RendererExit { cause });
@@ -277,8 +275,6 @@ impl Attachment {
         Ok(
             if state.exit_cause == Some(RendererExitCause::DegradedGaveUp) {
                 AttachmentExit::GaveUp
-            } else if state.reload_requested {
-                AttachmentExit::Reload
             } else if state.tab_emptied {
                 AttachmentExit::SelfClose
             } else {
