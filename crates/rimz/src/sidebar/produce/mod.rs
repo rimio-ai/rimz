@@ -378,7 +378,7 @@ fn rollup_resolution_snapshot(store: &Store) -> Result<SidebarSnapshot> {
     Ok(snapshot)
 }
 
-/// Refresh heavy caches from the host's retained inputs, or a frameless rollup before its first produce, without another pane read.
+/// Refresh heavy caches from the host's retained inputs, or, in a room with no previous publication, a frameless rollup before its first produce, without another pane read.
 pub fn refresh_producer_caches(
     cursor: &mut RollupCursor,
     state: &StatePaths,
