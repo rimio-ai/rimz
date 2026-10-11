@@ -109,7 +109,7 @@ struct PaneTreeSample {
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Default)]
-struct MetricsSampleCache {
+pub(super) struct MetricsSampleCache {
     /// Unix ms of the last process sample written by this cache shape. The
     /// per-pane entry stamps own the cadence gate; this top-level stamp stays
     /// as a cheap diagnostic and a stable field for older cache readers.
@@ -124,25 +124,33 @@ pub(super) struct PaneRootBinding {
     pub(super) start_ticks: u64,
 }
 
-fn read_metrics_sample_cache(path: &Path) -> MetricsSampleCache {
+pub(super) fn read_metrics_sample_cache(path: &Path) -> MetricsSampleCache {
     let Ok(bytes) = std::fs::read(path) else {
         return MetricsSampleCache::default();
     };
     serde_json::from_slice(&bytes).unwrap_or_default()
 }
 
+pub(super) fn write_metrics_sample_cache(
+    runtime: &crate::RuntimePaths,
+    history: &MetricsSampleCache,
+) {
+    if let Err(err) =
+        atomic::write_temp_then_rename_cache(&runtime.lane_path("metrics-sample.json"), history)
+    {
+        tracing::warn!(error = %err, "metrics sample cache write failed");
+    }
+}
+
 /// The cached pane-root bindings the pane producer can use as a pid-reuse
 /// guard when the mux source drops a pane. Entries without a root pid or
 /// recorded start ticks are omitted rather than guessed.
-pub(super) fn pane_root_bindings(
-    runtime: &crate::RuntimePaths,
-) -> HashMap<PaneId, PaneRootBinding> {
-    let prior = read_metrics_sample_cache(&runtime.lane_path("metrics-sample.json"));
-    prior
+pub(super) fn pane_root_bindings(history: &MetricsSampleCache) -> HashMap<PaneId, PaneRootBinding> {
+    history
         .entries
-        .into_iter()
+        .iter()
         .filter_map(|(pane_id, entry)| {
-            let pane_id = PaneId::parse(&pane_id).ok()?;
+            let pane_id = PaneId::parse(pane_id).ok()?;
             Some((
                 pane_id,
                 PaneRootBinding {
@@ -157,8 +165,7 @@ pub(super) fn pane_root_bindings(
 /// Whether any pane in `frame` needs a fresh process sample. Used by the pane
 /// cache fast path so metrics can refresh from a topology-fresh frame without
 /// paying another mux roster read.
-pub(super) fn pane_metrics_due(frame: &PaneFrame, runtime: &crate::RuntimePaths) -> bool {
-    let prior = read_metrics_sample_cache(&runtime.lane_path("metrics-sample.json"));
+pub(super) fn pane_metrics_due(frame: &PaneFrame, prior: &MetricsSampleCache) -> bool {
     let now_ms = unix_now_ms();
     let viewed: HashSet<&PaneId> = frame.viewed_panes.iter().collect();
     frame.pane_states().any(|pane| {
@@ -192,10 +199,8 @@ pub(super) fn pane_metrics_due(frame: &PaneFrame, runtime: &crate::RuntimePaths)
 pub(super) fn enrich_pane_metrics(
     frame: &mut PaneFrame,
     session_name: &str,
-    runtime: &crate::RuntimePaths,
+    prior: &mut MetricsSampleCache,
 ) -> bool {
-    let cache_path = runtime.lane_path("metrics-sample.json");
-    let prior = read_metrics_sample_cache(&cache_path);
     let now_ms = unix_now_ms();
     let viewed: HashSet<PaneId> = frame.viewed_panes.iter().cloned().collect();
 
@@ -223,7 +228,7 @@ pub(super) fn enrich_pane_metrics(
     }
 
     // Published backend pids are authoritative. Restore each due pidless pane's root pid from the prior tick's starttime-guarded binding before falling back to the process-table walk.
-    let needs_walk = restore_cached_bindings(frame, &prior, &due, &|pid| {
+    let needs_walk = restore_cached_bindings(frame, prior, &due, &|pid| {
         crate::proc::stat_metrics(pid).map(|stat| stat.start_ticks)
     });
 
@@ -246,20 +251,17 @@ pub(super) fn enrich_pane_metrics(
             continue;
         }
         let entry = sample_due_pane(
-            pane, &prior, &pane_key, &children, needs_walk, clk_tck, now_ms,
+            pane, prior, &pane_key, &children, needs_walk, clk_tck, now_ms,
         );
         new_entries.insert(pane_key, entry);
     }
 
     // Every due key names a frame pane, so a non-empty `due` always sampled
     // at least one entry: stamp the cache and report the change.
-    let new_cache = MetricsSampleCache {
+    *prior = MetricsSampleCache {
         sampled_at_ms: now_ms,
         entries: new_entries,
     };
-    if let Err(err) = atomic::write_temp_then_rename_cache(&cache_path, &new_cache) {
-        tracing::warn!(error = %err, "metrics sample cache write failed");
-    }
     true
 }
 

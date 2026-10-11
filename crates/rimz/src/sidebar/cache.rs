@@ -83,22 +83,6 @@ pub(crate) fn snapshot_cache_is_fresh(
     fresh && new_enough
 }
 
-/// The producer and observation timestamps of the published same-session pane
-/// frame. `None` when no usable same-session frame exists.
-pub(crate) fn published_frame_stamps(runtime: &RuntimePaths, session: &str) -> Option<(u64, u64)> {
-    let cache_path = runtime.pane_frame_path();
-    read_snapshot_cache(&cache_path, session)
-        .map(|cache| (cache.produced_at_ms, cache.observed_at_ms))
-}
-
-/// Whether the published same-session frame shows no attached client viewing any
-/// pane. An absent frame reads as watched so cold starts keep the responsive
-/// poll-mode cadence until a producer publishes real focus state.
-pub(super) fn published_frame_unwatched(runtime: &RuntimePaths, session: &str) -> bool {
-    let cache_path = runtime.pane_frame_path();
-    read_snapshot_cache(&cache_path, session).is_some_and(|cache| cache.viewed_panes.is_empty())
-}
-
 /// The presence liveness stamp refreshed by the Zellij presence plugin through
 /// `rimz sidebar wake` and by the tmux control-mode watch. Its freshness gates
 /// the producer's pane TTL: fresh → event mode (`EVENT_PANE_TTL`), stale or absent → poll mode
@@ -114,37 +98,9 @@ pub struct PresenceStamp {
     pub session_name: Option<String>,
 }
 
-/// Timestamp of the latest tmux presence probe attempt. This cache-class hint
-/// throttles external `list-clients` calls; pane presence remains sourced from
-/// the published frame.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct PresenceProbeStamp {
-    pub written_at_ms: u64,
-}
-
 /// Path of the presence stamp, beside the pane cache it gates.
 pub fn presence_stamp_path(runtime: &RuntimePaths) -> PathBuf {
     runtime.live_path("presence.stamp")
-}
-
-fn presence_probe_stamp_path(runtime: &RuntimePaths) -> PathBuf {
-    runtime.live_path("client-presence-probe.stamp")
-}
-
-pub(super) fn write_presence_probe_stamp(
-    runtime: &RuntimePaths,
-    written_at_ms: u64,
-) -> crate::disk::atomic::Result<()> {
-    crate::disk::atomic::write_temp_then_rename_cache(
-        &presence_probe_stamp_path(runtime),
-        &PresenceProbeStamp { written_at_ms },
-    )
-}
-
-pub(super) fn read_presence_probe_stamp(runtime: &RuntimePaths) -> Option<u64> {
-    let bytes = std::fs::read(presence_probe_stamp_path(runtime)).ok()?;
-    let stamp: PresenceProbeStamp = serde_json::from_slice(&bytes).ok()?;
-    Some(stamp.written_at_ms)
 }
 
 /// Refresh the presence stamp. Best-effort and cache-class (rename atomicity,

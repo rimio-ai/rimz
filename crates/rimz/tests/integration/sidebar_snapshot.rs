@@ -610,6 +610,30 @@ fn kiro_local_store_bootstraps_live_state_and_history_without_events() {
     )
     .expect("publish Kiro pane frame");
 
+    let created_at: jiff::Timestamp = "2025-01-01T00:00:00Z".parse().unwrap();
+    let observation = rimz::agents::LocalSessionObservation {
+        login: Some("default".parse().unwrap()),
+        kind: rimz::ids::AgentKind::new_unchecked("kiro"),
+        session_id: session_id.into(),
+        workspace: env.project_root.clone(),
+        transcript_path: transcript.clone(),
+        created_at,
+        fresh_binding_at: Some(created_at),
+        first_event_at: Some("2025-01-01T00:00:01Z".parse().unwrap()),
+        last_activity: "2025-01-01T00:00:08.100Z".parse().unwrap(),
+        projection: rimz::agents::LocalSessionProjection::IdentityOnly,
+    };
+    rimz::disk::atomic::write_temp_then_rename_cache(
+        &env.runtime_paths().agent_projection_path(),
+        &serde_json::json!({
+            "session_name": session_name,
+            "wiring": { "kinds": ["kiro"], "default_models": {} },
+            "inputs": { "by_kind": { "kiro": [env.project_root] } },
+            "observations": [observation],
+        }),
+    )
+    .expect("publish Kiro local-session projection");
+
     let history = env
         .rimz()
         .args(["agents", "history", session_id, "--json"])

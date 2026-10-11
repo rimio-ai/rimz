@@ -135,10 +135,17 @@ fn warm_produce_folds_o_new_bytes() {
     let mut cursor = RollupCursor::new();
 
     h.publish_fresh_produce_inputs(SESSION_NAME, synthetic_panes(1));
+    let mut producer =
+        rimz::sidebar::produce::SnapshotProducer::seeded(&h.runtime_paths, SESSION_NAME);
     let cold_before = bytes_read();
-    let cold =
-        rimz::sidebar::produce::produce_snapshot(&mut cursor, paths, &h.runtime_paths, &opts)
-            .expect("cold produce");
+    let cold = rimz::sidebar::produce::produce_snapshot(
+        &mut cursor,
+        paths,
+        &h.runtime_paths,
+        &opts,
+        &mut producer,
+    )
+    .expect("cold produce");
     let cold_bytes = bytes_read() - cold_before;
     assert_eq!(
         cold_bytes, log_len,
@@ -159,9 +166,14 @@ fn warm_produce_folds_o_new_bytes() {
 
     h.publish_fresh_produce_inputs(SESSION_NAME, synthetic_panes(1));
     let warm_before = bytes_read();
-    let warm =
-        rimz::sidebar::produce::produce_snapshot(&mut cursor, paths, &h.runtime_paths, &opts)
-            .expect("warm produce");
+    let warm = rimz::sidebar::produce::produce_snapshot(
+        &mut cursor,
+        paths,
+        &h.runtime_paths,
+        &opts,
+        &mut producer,
+    )
+    .expect("warm produce");
     let warm_bytes = bytes_read() - warm_before;
     assert_eq!(
         warm_bytes, appended,

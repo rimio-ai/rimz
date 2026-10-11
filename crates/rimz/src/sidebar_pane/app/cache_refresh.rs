@@ -5,6 +5,7 @@
 //! task firing, and diff-stats cache refreshes so a status flip never waits
 //! behind them.
 
+use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -16,7 +17,7 @@ use crate::sidebar::meter::TickMeter;
 use crate::{RuntimePaths, StatePaths};
 
 use super::ServeConfig;
-use super::fetch::Stand;
+use super::fetch::{HostData, Stand};
 use super::timing::tick_for;
 
 const DAEMON_VIEW_REPAIR_TTL: Duration = Duration::from_secs(30);
@@ -27,15 +28,17 @@ pub(super) fn spawn(
     config: ServeConfig,
     runtime: RuntimePaths,
     diag: crate::diag::DiagSink,
+    data: Arc<Mutex<HostData>>,
     stand: impl Fn() -> Option<Stand> + Send + 'static,
 ) -> JoinHandle<()> {
-    std::thread::spawn(move || refresh_loop(config, runtime, diag, stand))
+    std::thread::spawn(move || refresh_loop(config, runtime, diag, data, stand))
 }
 
 fn refresh_loop(
     config: ServeConfig,
     runtime: RuntimePaths,
     diag: crate::diag::DiagSink,
+    data: Arc<Mutex<HostData>>,
     stand: impl Fn() -> Option<Stand>,
 ) {
     crate::lane::set(crate::lane::WorkLane::CacheRefresh);
@@ -64,12 +67,17 @@ fn refresh_loop(
         };
         let tick = meter.begin();
         let own_pane = stand.own_pane;
+        let inputs = data
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .inputs
+            .clone();
         let result = refresh_guarded(&mut cursor, |cursor| {
             crate::sidebar::produce::refresh_producer_caches(
                 cursor,
                 &state,
                 &runtime,
-                &config.session_name,
+                inputs.as_ref(),
                 own_pane.as_ref(),
                 &mut refresh_state,
             )
@@ -84,7 +92,10 @@ fn refresh_loop(
         fire_timers(&runtime, config.mux, &now);
         if daemon_checked_at.elapsed() >= DAEMON_VIEW_REPAIR_TTL {
             daemon_checked_at = Instant::now();
-            daemon_tracker.maintain(daemon_backend.as_ref(), &runtime);
+            daemon_tracker.maintain(
+                daemon_backend.as_ref(),
+                inputs.as_ref().map(|inputs| inputs.frame.as_ref()),
+            );
         }
     }
 }

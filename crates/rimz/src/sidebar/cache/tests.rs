@@ -78,22 +78,6 @@ fn presence_stamp_age_handles_clock_skew_and_bad_files() {
     assert!(!presence_event_mode(presence_stamp_age_ms(&bad_runtime)));
 }
 
-#[test]
-fn presence_probe_stamp_round_trips_and_rejects_bad_files() {
-    let dir = tempfile::tempdir().unwrap();
-    let workspace = WorkspaceId::from_project_root(dir.path());
-    let runtime = RuntimePaths::under(workspace, dir.path()).unwrap();
-    runtime.ensure_dirs().unwrap();
-
-    assert_eq!(read_presence_probe_stamp(&runtime), None);
-    let future = unix_now_ms() + 60_000;
-    write_presence_probe_stamp(&runtime, future).unwrap();
-    assert_eq!(read_presence_probe_stamp(&runtime), Some(future));
-
-    std::fs::write(presence_probe_stamp_path(&runtime), b"{ not json").unwrap();
-    assert_eq!(read_presence_probe_stamp(&runtime), None);
-}
-
 fn cache_produced_at(produced_at_ms: u64) -> PaneFrame {
     assemble_frame(Vec::new(), produced_at_ms, "rimz-test")
 }
@@ -183,25 +167,6 @@ fn read_snapshot_cache_normalizes_missing_observed_stamp() {
     let frame = read_snapshot_cache(&path, "rimz-test").expect("same-session frame");
 
     assert_eq!(frame.observed_at_ms, 42);
-}
-
-#[test]
-fn published_frame_unwatched_is_session_scoped() {
-    let dir = tempfile::tempdir().unwrap();
-    let workspace = WorkspaceId::from_project_root(dir.path());
-    let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
-    runtime.ensure_dirs().unwrap();
-
-    assert!(!published_frame_unwatched(&runtime, "rimz-test"));
-
-    let mut cache = assemble_frame(Vec::new(), 1_700_000_000_000, "rimz-test");
-    atomic::write_temp_then_rename_cache(&runtime.pane_frame_path(), &cache).unwrap();
-    assert!(published_frame_unwatched(&runtime, "rimz-test"));
-    assert!(!published_frame_unwatched(&runtime, "other-session"));
-
-    cache.viewed_panes = vec![pane("terminal_9", "zsh", "/tmp").pane_id];
-    atomic::write_temp_then_rename_cache(&runtime.pane_frame_path(), &cache).unwrap();
-    assert!(!published_frame_unwatched(&runtime, "rimz-test"));
 }
 
 #[test]

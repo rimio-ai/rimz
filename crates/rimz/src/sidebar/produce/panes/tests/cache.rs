@@ -1,4 +1,133 @@
 use super::*;
+use crate::sidebar::produce::metrics;
+
+fn diagnostic_events(sink: &crate::diag::DiagSink) -> Vec<crate::diag::record::DiagEvent> {
+    std::fs::read_to_string(sink.log_path().unwrap())
+        .expect("diagnostic log")
+        .lines()
+        .map(|line| {
+            serde_json::from_str::<crate::diag::record::DiagEnvelope>(line)
+                .expect("diagnostic envelope")
+                .event
+        })
+        .collect()
+}
+
+#[test]
+fn cached_pid_restoration_does_not_rotate_a_pidless_fresh_pane() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = crate::RuntimePaths::under(
+        crate::WorkspaceId::from_project_root(dir.path()),
+        dir.path(),
+    )
+    .unwrap();
+    runtime.ensure_dirs().unwrap();
+    let now = unix_now_ms();
+    let topology = serde_json::from_value(serde_json::json!({
+        "session_name": "s",
+        "produced_at_ms": now.saturating_add(60_000),
+        "focused_pane": 7,
+        "clients": { "human_clients": 1, "viewed_panes": [7] },
+        "panes": [{
+            "id": 7,
+            "tab_position": 0,
+            "pane_command": "zsh",
+            "pane_cwd": "/repo",
+            "terminal_command": "zsh"
+        }]
+    }))
+    .unwrap();
+    crate::mux::zellij::pane_topology::write_pane_topology_cache(&runtime, &topology).unwrap();
+    let mut prior = frame(vec![pane("terminal_7", Some("zsh"), Some("/repo"))]);
+    first_mut(&mut prior).current.pid = Some(u32::MAX - 1);
+    first_mut(&mut prior).first_seen_at_ms = Some(7);
+    let mut history = serde_json::from_value(serde_json::json!({
+        "entries": {
+            "zellij:terminal_7": {
+                "sample_version": 3,
+                "sampled_at_ms": now.saturating_add(60_000),
+                "stats_pid": u32::MAX,
+                "pane_pid": u32::MAX,
+                "cpu_ticks": 0,
+                "io_bytes": 0,
+                "command": "zsh"
+            }
+        }
+    }))
+    .unwrap();
+    let mut context = FrameContext {
+        runtime: &runtime,
+        mux: MuxName::Zellij,
+        session: "s",
+        own_pane: None,
+        diag: &crate::diag::DiagSink::disabled(),
+        metrics: &mut history,
+        sampled: false,
+    };
+    let fresh = context.candidate(Some(&prior), true, None, false).unwrap();
+
+    assert_eq!(first(&fresh).current.pid, Some(u32::MAX));
+    assert_eq!(
+        first(&fresh).previous,
+        None,
+        "a cached pid restored after rotation is not a mux-reported tenant change"
+    );
+    assert_eq!(first(&fresh).first_seen_at_ms, Some(7));
+}
+
+#[test]
+fn unwatched_prior_selects_event_ttl_and_absent_prior_stays_watched() {
+    for (prior_session, viewed, expected_calls) in [
+        (None, false, 1),
+        (Some("s"), false, 0),
+        (Some("s"), true, 1),
+        (Some("other"), false, 1),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = crate::RuntimePaths::under(
+            crate::WorkspaceId::from_project_root(dir.path()),
+            dir.path(),
+        )
+        .unwrap();
+        runtime.ensure_dirs().unwrap();
+        if let Some(session) = prior_session {
+            let mut prior = crate::sidebar::frame::assemble_frame(
+                vec![pane("terminal_1", None, Some("/repo"))],
+                unix_now_ms().saturating_sub(5_000),
+                session,
+            );
+            if viewed {
+                prior.viewed_panes = vec![PaneId::from_parts(MuxName::Zellij, "terminal_1")];
+            }
+            atomic::write_temp_then_rename_cache(&runtime.pane_frame_path(), &prior).unwrap();
+        }
+        let calls = std::cell::Cell::new(0);
+        PaneProducer::seeded(&runtime, "s")
+            .tick_with(
+                &runtime,
+                MuxName::Zellij,
+                "s",
+                None,
+                None,
+                &crate::diag::DiagSink::disabled(),
+                &mut |_, _| {
+                    calls.set(calls.get() + 1);
+                    Ok(Accepted::Fresh(frame(vec![pane(
+                        "terminal_1",
+                        None,
+                        Some("/repo"),
+                    )])))
+                },
+                &|_, _| None,
+            )
+            .unwrap();
+        assert_eq!(
+            calls.get(),
+            expected_calls,
+            "session={prior_session:?}, viewed={viewed}"
+        );
+    }
+}
 
 #[test]
 fn published_focus_trace_tracks_roster_edges_and_keeps_frame_stamps() {
@@ -10,16 +139,21 @@ fn published_focus_trace_tracks_roster_edges_and_keeps_frame_stamps() {
     let sibling = pane("terminal_2", Some("zsh"), Some("/repo"));
     let mut published = frame(vec![own.clone(), sibling]);
     published.focused_pane = Some(PaneId::from_parts(MuxName::Zellij, "terminal_2"));
-    let cache = PaneFrameCache::new(&runtime, "s", None, Some(&own.pane_id), &diag);
-    cache.publish(
+    publish_frame(
+        &runtime.pane_frame_path(),
         &mut published,
         crate::wakeup::events::PaneFramePublicationKind::Topology,
+        Some(&own.pane_id),
+        &diag,
     );
     let mut repeated = published.clone();
     repeated.produced_at_ms += 1;
-    cache.publish(
+    publish_frame(
+        &runtime.pane_frame_path(),
         &mut repeated,
         crate::wakeup::events::PaneFramePublicationKind::Topology,
+        Some(&own.pane_id),
+        &diag,
     );
     let mut changed = frame(vec![
         own.clone(),
@@ -27,9 +161,12 @@ fn published_focus_trace_tracks_roster_edges_and_keeps_frame_stamps() {
     ]);
     changed.focused_pane = published.focused_pane.clone();
     changed.produced_at_ms = 3;
-    cache.publish(
+    publish_frame(
+        &runtime.pane_frame_path(),
         &mut changed,
         crate::wakeup::events::PaneFramePublicationKind::Topology,
+        Some(&own.pane_id),
+        &diag,
     );
     let rows: Vec<serde_json::Value> =
         std::fs::read_to_string(crate::diag::focus_trace::log_path(dir.path()))
@@ -153,18 +290,6 @@ fn snapshot_cache_freshness_matrix() {
             SNAPSHOT_CACHE_TTL,
             false,
         ),
-        (
-            "carried panes clamp event ttl",
-            CacheEntry::Valid {
-                session: "rimz-query-engine",
-                produced_at_ms: stale,
-                carried: true,
-            },
-            "rimz-query-engine",
-            None,
-            crate::sidebar::timing::EVENT_PANE_TTL,
-            false,
-        ),
     ] {
         let path = dir.path().join(format!("{name}.json"));
         match entry {
@@ -177,7 +302,14 @@ fn snapshot_cache_freshness_matrix() {
             CacheEntry::Absent => {}
         }
         assert_eq!(
-            fresh_snapshot_cache(&path, requested, min_produced_at_ms, ttl).is_some(),
+            read_snapshot_cache(&path, requested)
+                .filter(|frame| snapshot_cache_is_fresh(
+                    frame,
+                    unix_now_ms(),
+                    min_produced_at_ms,
+                    ttl
+                ))
+                .is_some(),
             expected_hit,
             "{name}"
         );
@@ -190,13 +322,9 @@ fn snapshot_cache_freshness_matrix() {
     let consumer_path = dir.path().join("consumer-stale.json");
     write_snapshot_cache(&consumer_path, "rimz-query-engine", stale, false);
     assert!(
-        fresh_snapshot_cache(
-            &consumer_path,
-            "rimz-query-engine",
-            None,
-            SNAPSHOT_CACHE_TTL
-        )
-        .is_none(),
+        read_snapshot_cache(&consumer_path, "rimz-query-engine")
+            .filter(|frame| snapshot_cache_is_fresh(frame, unix_now_ms(), None, SNAPSHOT_CACHE_TTL))
+            .is_none(),
         "the producer's fresh-only fast path skips a stale entry"
     );
     assert!(
@@ -259,15 +387,27 @@ fn carried_prior_expires_at_poll_ttl_in_event_mode() {
         .unwrap();
         crate::mux::zellij::pane_topology::write_pane_topology_cache(&runtime, &topology).unwrap();
 
-        let returned = cached_panes_or_produce(
-            &runtime,
-            MuxName::Zellij,
-            "s",
-            None,
-            None,
-            &crate::diag::DiagSink::disabled(),
-        )
-        .expect("event-mode produce uses pushed topology after a carried prior expires");
+        let calls = std::cell::Cell::new(0);
+        let returned = PaneProducer::seeded(&runtime, "s")
+            .tick_with(
+                &runtime,
+                MuxName::Zellij,
+                "s",
+                None,
+                None,
+                &crate::diag::DiagSink::disabled(),
+                &mut |ctx, prior| {
+                    calls.set(calls.get() + 1);
+                    ctx.produce(prior)
+                },
+                &|_, _| None,
+            )
+            .expect("event-mode produce uses pushed topology after a carried prior expires");
+        assert_eq!(
+            calls.get(),
+            usize::from(carried),
+            "an ordinary event-mode prior lists no panes"
+        );
 
         assert_eq!(
             returned.observed_at_ms,
@@ -334,15 +474,16 @@ fn producer_verification_trusts_event_carried_topology_without_topology_floor() 
     )
     .expect("write topology cache");
 
-    let frame = cached_panes_or_produce(
-        &runtime,
-        MuxName::Zellij,
-        "s",
-        Some(now),
-        None,
-        &crate::diag::DiagSink::disabled(),
-    )
-    .expect("event-carried topology satisfies verification");
+    let frame = PaneProducer::seeded(&runtime, "s")
+        .tick(
+            &runtime,
+            MuxName::Zellij,
+            "s",
+            Some(now),
+            None,
+            &crate::diag::DiagSink::disabled(),
+        )
+        .expect("event-carried topology satisfies verification");
 
     assert_eq!(pane_count(&frame), 1);
     assert_eq!(
@@ -366,7 +507,6 @@ fn pane_frame_cache_rejects_invalid_cached_frames() {
     .unwrap();
     runtime.ensure_dirs().unwrap();
     let diag = crate::diag::DiagSink::disabled();
-    let cache = PaneFrameCache::new(&runtime, "s", None, Some(&own), &diag);
     // A future stamp keeps both frames inside the freshness TTL across CI
     // scheduler stalls (freshness saturates future stamps to age 0), so the
     // negative assertion below exercises the missing-own validation rather
@@ -384,7 +524,20 @@ fn pane_frame_cache_rejects_invalid_cached_frames() {
     );
     atomic::write_temp_then_rename_cache(&runtime.pane_frame_path(), &missing_own).unwrap();
     assert!(
-        cache.fresh().is_none(),
+        PaneProducer::seeded(&runtime, "s")
+            .tick_with(
+                &runtime,
+                MuxName::Zellij,
+                "s",
+                None,
+                Some(&own),
+                &diag,
+                &mut |_, _| Err(crate::sidebar::produce::ProduceErr::FrameRejected(
+                    FrameRejectReason::MissingOwnPane
+                )),
+                &|_, _| None
+            )
+            .is_err(),
         "a cache missing the renderer's own pane must not short-circuit produce"
     );
 
@@ -394,7 +547,20 @@ fn pane_frame_cache_rejects_invalid_cached_frames() {
         "s",
     );
     atomic::write_temp_then_rename_cache(&runtime.pane_frame_path(), &valid).unwrap();
-    assert!(cache.fresh().is_some());
+    assert!(
+        PaneProducer::seeded(&runtime, "s")
+            .tick_with(
+                &runtime,
+                MuxName::Zellij,
+                "s",
+                None,
+                Some(&own),
+                &diag,
+                &mut |_, _| panic!("valid fresh frame must not produce"),
+                &|_, _| None
+            )
+            .is_ok()
+    );
 }
 
 #[test]
@@ -420,42 +586,28 @@ fn zombie_stat_metrics_do_not_prove_liveness() {
 
 #[test]
 fn rejected_frame_holds_only_a_publishable_prior() {
-    let dir = tempfile::tempdir().unwrap();
-    let workspace_id = crate::ids::WorkspaceId::from_project_root(std::path::Path::new(
-        "/tmp/rejected-frame-prior",
-    ));
-    let runtime = crate::RuntimePaths::under(workspace_id, dir.path()).unwrap();
-    runtime.ensure_dirs().unwrap();
-    let cache_path = runtime.pane_frame_path();
-
     let valid_prior = crate::sidebar::frame::assemble_frame(
         vec![pane("terminal_1", Some("zsh"), Some("/repo"))],
         unix_now_ms(),
         "s",
     );
     let empty_fresh = crate::sidebar::frame::assemble_frame(Vec::new(), unix_now_ms(), "s");
-    let held = validate_frame_for_publish(
+    let held = accept(
         empty_fresh,
         Some(valid_prior),
         None,
         &crate::diag::DiagSink::disabled(),
-        false,
-        &runtime,
-        &cache_path,
     )
     .expect("valid prior is held over rejected fresh frame");
-    assert_eq!(pane_count(&held), 1);
+    assert!(matches!(held, Accepted::Held(ref frame) if pane_count(frame) == 1));
 
     let invalid_prior = crate::sidebar::frame::assemble_frame(Vec::new(), unix_now_ms(), "s");
     let empty_fresh = crate::sidebar::frame::assemble_frame(Vec::new(), unix_now_ms(), "s");
-    let err = validate_frame_for_publish(
+    let err = accept(
         empty_fresh,
         Some(invalid_prior),
         None,
         &crate::diag::DiagSink::disabled(),
-        false,
-        &runtime,
-        &cache_path,
     )
     .expect_err("invalid prior must not be returned as last good");
     assert!(
@@ -477,7 +629,6 @@ fn missing_own_rejection_captures_prior_and_offending_frames() {
     ));
     let runtime = crate::RuntimePaths::under(workspace_id.clone(), dir.path()).unwrap();
     runtime.ensure_dirs().unwrap();
-    let cache_path = runtime.pane_frame_path();
     let state_root = dir.path().join("state");
     let sink = crate::diag::DiagSink::under(state_root.clone(), workspace_id, "s", None);
     let own = crate::ids::PaneId::from_parts(crate::ids::MuxName::Zellij, "terminal_1");
@@ -493,18 +644,10 @@ fn missing_own_rejection_captures_prior_and_offending_frames() {
         "s",
     );
 
-    let held = validate_frame_for_publish(
-        fresh,
-        Some(prior),
-        Some(&own),
-        &sink,
-        false,
-        &runtime,
-        &cache_path,
-    )
-    .expect("missing-own rejection holds the prior frame");
+    let held = accept(fresh, Some(prior), Some(&own), &sink)
+        .expect("missing-own rejection holds the prior frame");
 
-    assert_eq!(pane_count(&held), 1);
+    assert!(matches!(held, Accepted::Held(ref frame) if pane_count(frame) == 1));
     let event = diagnostic_events(&sink).pop().expect("diagnostic event");
     let crate::diag::record::DiagEvent::FrameRejected {
         reason: crate::diag::record::FrameRejectReason::MissingOwnPane,
@@ -538,16 +681,25 @@ fn missing_own_pane_without_prior_publishes() {
         "s",
     );
 
-    let published = validate_frame_for_publish(
-        fresh,
-        None,
-        Some(&own),
-        &crate::diag::DiagSink::disabled(),
-        true,
-        &runtime,
-        &cache_path,
-    )
-    .expect("missing-own frame without prior remains publishable");
+    let published = PaneProducer::seeded(&runtime, "s")
+        .tick_with(
+            &runtime,
+            MuxName::Zellij,
+            "s",
+            None,
+            Some(&own),
+            &crate::diag::DiagSink::disabled(),
+            &mut |_, _| {
+                accept(
+                    fresh.clone(),
+                    None,
+                    Some(&own),
+                    &crate::diag::DiagSink::disabled(),
+                )
+            },
+            &|_, _| None,
+        )
+        .expect("missing-own frame without prior remains publishable");
 
     assert_eq!(pane_count(&published), 1);
     let cached = read_snapshot_cache(&cache_path, "s").expect("published frame");
@@ -600,7 +752,7 @@ fn degraded_first_read_publishes_verified_repull_result() {
             raced,
             Some(&prior),
             None,
-            &|enrich_metrics, min_topology_produced_at_ms, authoritative| {
+            &mut |enrich_metrics, min_topology_produced_at_ms, authoritative| {
                 assert!(enrich_metrics, "{name}");
                 assert!(min_topology_produced_at_ms.is_some(), "{name}");
                 assert!(authoritative, "{name}");
@@ -609,23 +761,34 @@ fn degraded_first_read_publishes_verified_repull_result() {
             },
             &crate::diag::DiagSink::disabled(),
             true,
-            &runtime,
+            &metrics::pane_root_bindings(&read_metrics_sample_cache(
+                &runtime.lane_path("metrics-sample.json"),
+            )),
         )
         .expect("re-pull succeeds");
 
         assert_eq!(calls.get(), 1, "{name}");
         assert_eq!(pane_count(&repulled), expected_count, "{name}");
         assert!(repulled.carried_panes.is_empty(), "{name}");
-        let published = validate_frame_for_publish(
-            repulled,
-            Some(prior),
-            None,
-            &crate::diag::DiagSink::disabled(),
-            true,
-            &runtime,
-            &cache_path,
-        )
-        .expect("verified frame publishes");
+        let published = PaneProducer::seeded(&runtime, "s")
+            .tick_with(
+                &runtime,
+                MuxName::Zellij,
+                "s",
+                None,
+                None,
+                &crate::diag::DiagSink::disabled(),
+                &mut |_, _| {
+                    accept(
+                        repulled.clone(),
+                        Some(prior.clone()),
+                        None,
+                        &crate::diag::DiagSink::disabled(),
+                    )
+                },
+                &|_, _| None,
+            )
+            .expect("verified frame publishes");
         assert_eq!(pane_count(&published), expected_count, "{name}");
         let cached = read_snapshot_cache(&cache_path, "s").expect("published frame");
         assert_eq!(
@@ -665,7 +828,7 @@ fn missing_own_pane_controls_authoritative_repull() {
             initial,
             None,
             Some(&own),
-            &|enrich_metrics, min_topology_produced_at_ms, authoritative| {
+            &mut |enrich_metrics, min_topology_produced_at_ms, authoritative| {
                 assert!(enrich_metrics, "{name}");
                 assert!(min_topology_produced_at_ms.is_some(), "{name}");
                 assert!(authoritative, "{name}");
@@ -674,7 +837,9 @@ fn missing_own_pane_controls_authoritative_repull() {
             },
             &crate::diag::DiagSink::disabled(),
             true,
-            &runtime,
+            &metrics::pane_root_bindings(&read_metrics_sample_cache(
+                &runtime.lane_path("metrics-sample.json"),
+            )),
         )
         .expect("pane frame confirmation");
 
@@ -717,7 +882,7 @@ fn ambiguous_plain_process_absence_repull_matrix() {
             fresh,
             Some(&prior),
             None,
-            &|enrich_metrics, min_topology_produced_at_ms, authoritative| {
+            &mut |enrich_metrics, min_topology_produced_at_ms, authoritative| {
                 assert!(enrich_metrics, "{name}");
                 assert!(min_topology_produced_at_ms.is_some(), "{name}");
                 assert!(authoritative, "{name}");
@@ -726,7 +891,9 @@ fn ambiguous_plain_process_absence_repull_matrix() {
             },
             &crate::diag::DiagSink::disabled(),
             true,
-            &runtime,
+            &metrics::pane_root_bindings(&read_metrics_sample_cache(
+                &runtime.lane_path("metrics-sample.json"),
+            )),
         )
         .expect("ambiguous process loss re-pulls");
 
@@ -769,7 +936,7 @@ fn refuted_initial_carry_records_diagnostic() {
         fresh,
         Some(&prior),
         None,
-        &|enrich_metrics, min_topology_produced_at_ms, authoritative| {
+        &mut |enrich_metrics, min_topology_produced_at_ms, authoritative| {
             assert!(enrich_metrics);
             assert!(min_topology_produced_at_ms.is_some());
             assert!(authoritative);
@@ -777,7 +944,9 @@ fn refuted_initial_carry_records_diagnostic() {
         },
         &sink,
         true,
-        &runtime,
+        &metrics::pane_root_bindings(&read_metrics_sample_cache(
+            &runtime.lane_path("metrics-sample.json"),
+        )),
     )
     .expect("confirm succeeds");
 
@@ -836,7 +1005,7 @@ fn confirmed_partial_frame_carries_live_dropped_pane_and_records_diagnostic() {
         fresh.clone(),
         Some(&prior),
         None,
-        &|enrich_metrics, min_topology_produced_at_ms, authoritative| {
+        &mut |enrich_metrics, min_topology_produced_at_ms, authoritative| {
             assert!(enrich_metrics);
             assert!(min_topology_produced_at_ms.is_some());
             assert!(authoritative);
@@ -845,7 +1014,9 @@ fn confirmed_partial_frame_carries_live_dropped_pane_and_records_diagnostic() {
         },
         &sink,
         true,
-        &runtime,
+        &metrics::pane_root_bindings(&read_metrics_sample_cache(
+            &runtime.lane_path("metrics-sample.json"),
+        )),
     )
     .expect("carry confirmation succeeds");
 
@@ -875,84 +1046,6 @@ fn confirmed_partial_frame_carries_live_dropped_pane_and_records_diagnostic() {
 }
 
 #[test]
-fn prior_frame_from_another_build_records_mixed_writers() {
-    let dir = tempfile::tempdir().unwrap();
-    let workspace_id =
-        crate::ids::WorkspaceId::from_project_root(std::path::Path::new("/tmp/mixed-builds"));
-    let runtime = crate::RuntimePaths::under(workspace_id.clone(), dir.path()).unwrap();
-    runtime.ensure_dirs().unwrap();
-    let cache_path = runtime.pane_frame_path();
-    let sink = crate::diag::DiagSink::under(dir.path().join("state"), workspace_id, "s", None);
-    let own = crate::ids::PaneId::from_parts(crate::ids::MuxName::Zellij, "terminal_1");
-    let now = unix_now_ms();
-    let mut prior = crate::sidebar::frame::assemble_frame(
-        vec![pane("terminal_1", Some("zsh"), Some("/repo"))],
-        now,
-        "s",
-    );
-    prior.build = Some("0000aaaa0000".to_owned());
-    let fresh = crate::sidebar::frame::assemble_frame(
-        vec![pane("terminal_1", Some("zsh"), Some("/repo"))],
-        now.saturating_add(1),
-        "s",
-    );
-
-    validate_frame_for_publish(
-        fresh.clone(),
-        Some(prior),
-        Some(&own),
-        &sink,
-        false,
-        &runtime,
-        &cache_path,
-    )
-    .expect("a valid fresh frame publishes despite the build mismatch");
-    // A prior frame from this very build stays silent.
-    validate_frame_for_publish(
-        fresh.clone(),
-        Some(fresh),
-        Some(&own),
-        &sink,
-        false,
-        &runtime,
-        &cache_path,
-    )
-    .expect("same-build prior publishes");
-
-    let mixed = diagnostic_events(&sink)
-        .into_iter()
-        .filter_map(|event| match event {
-            crate::diag::record::DiagEvent::MixedBuildWriters {
-                prior_build,
-                own_build,
-            } => Some((prior_build, own_build)),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(
-        mixed,
-        vec![(
-            "0000aaaa0000".to_owned(),
-            crate::build_id::current()
-                .expect("test binary build id")
-                .to_owned()
-        )]
-    );
-}
-
-fn diagnostic_events(sink: &crate::diag::DiagSink) -> Vec<crate::diag::record::DiagEvent> {
-    std::fs::read_to_string(sink.log_path().unwrap())
-        .expect("diagnostic log")
-        .lines()
-        .map(|line| {
-            serde_json::from_str::<crate::diag::record::DiagEnvelope>(line)
-                .expect("diagnostic envelope")
-                .event
-        })
-        .collect()
-}
-
-#[test]
 fn metrics_only_refresh_preserves_the_pane_frame_timestamp() {
     let dir = tempfile::tempdir().unwrap();
     let runtime = crate::RuntimePaths::under(
@@ -969,9 +1062,9 @@ fn metrics_only_refresh_preserves_the_pane_frame_timestamp() {
     let cache_path = runtime.pane_frame_path();
     atomic::write_temp_then_rename_cache(&cache_path, &frame).unwrap();
     let diag = crate::diag::DiagSink::disabled();
-    let cache = PaneFrameCache::new(&runtime, "s", None, None, &diag);
-
-    let refreshed = refresh_cached_metrics(frame, &cache);
+    let refreshed = PaneProducer::seeded(&runtime, "s")
+        .tick(&runtime, MuxName::Zellij, "s", None, None, &diag)
+        .unwrap();
 
     assert_eq!(refreshed.produced_at_ms, produced_at_ms);
     let published = read_snapshot_cache(&cache_path, "s").unwrap();
@@ -1008,59 +1101,21 @@ fn fresh_cache_hit_skips_election_mux_and_publication() {
     atomic::write_temp_then_rename_cache(&path, &cached).unwrap();
     let before = std::fs::read(&path).unwrap();
 
-    let returned = cached_panes_or_produce(
-        &runtime,
-        MuxName::Zellij,
-        "s",
-        None,
-        None,
-        &crate::diag::DiagSink::disabled(),
-    )
-    .expect("fresh frame bypasses unavailable mux");
+    let returned = PaneProducer::seeded(&runtime, "s")
+        .tick(
+            &runtime,
+            MuxName::Zellij,
+            "s",
+            None,
+            None,
+            &crate::diag::DiagSink::disabled(),
+        )
+        .expect("fresh frame bypasses unavailable mux");
 
     assert_eq!(returned.produced_at_ms, cached.produced_at_ms);
     assert_eq!(
         std::fs::read(&path).unwrap(),
         before,
         "cache is not republished"
-    );
-}
-
-#[test]
-fn wedged_snapshot_producer_serves_prior_without_local_mux_fork() {
-    let dir = tempfile::tempdir().unwrap();
-    let runtime = crate::RuntimePaths::under(
-        crate::ids::WorkspaceId::from_project_root(std::path::Path::new("/tmp/wedged-producer")),
-        dir.path(),
-    )
-    .unwrap();
-    runtime.ensure_dirs().unwrap();
-
-    let prior = frame(vec![pane("terminal_1", Some("zsh"), Some("/repo"))]);
-    atomic::write_temp_then_rename_cache(&runtime.pane_frame_path(), &prior).unwrap();
-    let lock_path = runtime.lock_path("snapshot.lock");
-    let lock = std::fs::OpenOptions::new()
-        .create(true)
-        .read(true)
-        .write(true)
-        .truncate(false)
-        .open(&lock_path)
-        .unwrap();
-    lock.try_lock().unwrap();
-
-    let held = cached_panes_or_produce(
-        &runtime,
-        crate::ids::MuxName::Zellij,
-        "s",
-        Some(unix_now_ms()),
-        None,
-        &crate::diag::DiagSink::disabled(),
-    )
-    .expect("stale prior should be held while producer is wedged");
-
-    assert_eq!(
-        held.to_pane_refs(),
-        prior.to_pane_refs(),
-        "a lock loser should not start another Zellij list-panes client when a prior frame is usable"
     );
 }

@@ -23,10 +23,7 @@ use rimz::sidebar::notify::{Notification, NotificationAgent, NotificationKind};
 use rimz::sidebar::presence::{
     ZellijPluginTelemetry, ZellijWake, ZellijWakeOutcome, ZellijWakeReason, ingest_zellij_wake,
 };
-use rimz::sidebar::produce::{
-    ProduceOptions, pane_fixture_active, produce_rollup_snapshot_with_refresh,
-    produce_snapshot_with_refresh,
-};
+use rimz::sidebar::produce::{InspectOptions, pane_fixture_active, produce_snapshot_with_refresh};
 use rimz::store::snapshot::{PaneAgent, SidebarRow, SidebarSnapshot};
 use rimz::wakeup::events::SidebarEvent;
 use rimz::workspace::{WorkspaceResolver, record};
@@ -927,40 +924,16 @@ fn producer_snapshot(
     let mux = mux
         .or(globals.mux)
         .or_else(|| rimz::mux::auto_detect_backend(None).ok());
-    let (Some(session_name), Some(mux)) = (context.session_name.clone(), mux) else {
-        return rollup_snapshot_fallback(context, None);
-    };
-    let opts = ProduceOptions {
-        mux,
-        session_name,
+    let opts = InspectOptions {
+        target: mux.zip(context.session_name.clone()),
         exclude: context.exclude.clone(),
         min_pane_cache_ms: context.min_pane_cache_ms,
-        diag: rimz::diag::DiagSink::disabled(),
     };
-    match produce_snapshot_with_refresh(
+    produce_snapshot_with_refresh(
         &mut RollupCursor::new(),
         &context.state,
         &context.runtime,
         &opts,
-    ) {
-        Ok(snapshot) => Ok(snapshot),
-        Err(err) => rollup_snapshot_fallback(context, Some(&err)),
-    }
-}
-
-fn rollup_snapshot_fallback(
-    context: &SnapshotContext,
-    reason: Option<&dyn std::fmt::Display>,
-) -> Result<SidebarSnapshot> {
-    if let Some(error) = reason {
-        tracing::warn!(%error, "pane discovery failed; falling back to the frameless rollup");
-    }
-    produce_rollup_snapshot_with_refresh(
-        &mut RollupCursor::new(),
-        &context.state,
-        &context.runtime,
-        context.exclude.as_ref(),
-        context.min_pane_cache_ms,
     )
     .map_err(Into::into)
 }
