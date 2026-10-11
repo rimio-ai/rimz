@@ -720,6 +720,174 @@ fn derived(env: &Env, id: &EventId) -> Vec<rimz::EventEnvelope> {
         .collect()
 }
 
+fn late_drainer_client(
+    listener: &std::os::unix::net::UnixListener,
+    deadline: Instant,
+) -> Option<std::os::unix::net::UnixStream> {
+    listener.set_nonblocking(true).unwrap();
+    while Instant::now() < deadline {
+        match listener.accept() {
+            Ok((stream, _)) => return Some(stream),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            Err(error) => panic!("accept late drainer client: {error}"),
+        }
+    }
+    None
+}
+
+#[test]
+fn once_is_served_by_a_drainer_that_binds_after_the_connect_window() {
+    use std::io::{BufRead as _, BufReader};
+
+    let env = Env::new();
+    env.record(&env.project_root);
+    let store = env.store();
+    append_stop(&env);
+    let _lifetime = WorkspaceLock::acquire(&store.runtime_paths().hook_drainer_lock()).unwrap();
+    let started = Instant::now();
+    let mut child = drain_command(&env)
+        .arg("--once")
+        .env("RIMZ_BIN", "/bin/true")
+        .spawn()
+        .unwrap();
+    std::thread::sleep(Duration::from_millis(500));
+    let listener =
+        std::os::unix::net::UnixListener::bind(store.runtime_paths().hook_drainer_socket_path())
+            .unwrap();
+    let client = late_drainer_client(&listener, started + Duration::from_secs(5));
+    if let Some(mut client) = client {
+        client
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .unwrap();
+        let mut line = String::new();
+        BufReader::new(&client).read_line(&mut line).unwrap();
+        let request: Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(request["stop"], false);
+        writeln!(client, "{}", json!({"applied":1,"epoch":null,"reply":null})).unwrap();
+    } else {
+        child.kill().unwrap();
+    }
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "late socket was not served within 5 s: {output:?}"
+    );
+    assert!(output.status.success(), "{output:?}");
+    assert!(output.stdout.is_empty(), "{output:?}");
+}
+
+#[test]
+fn once_drains_inline_when_a_lock_holder_without_a_socket_releases() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let store = env.store();
+    let (frame, _) = append_stop(&env);
+    let lifetime = WorkspaceLock::acquire(&store.runtime_paths().hook_drainer_lock()).unwrap();
+    let _spawning =
+        WorkspaceLock::acquire(&store.runtime_paths().hook_drainer_spawn_lock()).unwrap();
+    let started = Instant::now();
+    let child = drain_command(&env).arg("--once").spawn().unwrap();
+    std::thread::sleep(Duration::from_millis(500));
+    drop(lifetime);
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert!(started.elapsed() < Duration::from_secs(5));
+    let events = derived(&env, &frame.event_id);
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event.kind(), EventKind::AgentLifecycle(_))),
+        "{events:?}"
+    );
+}
+
+#[test]
+fn once_fails_with_the_unanswered_error_at_its_deadline() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let store = env.store();
+    append_stop(&env);
+    let _lifetime = WorkspaceLock::acquire(&store.runtime_paths().hook_drainer_lock()).unwrap();
+    let started = Instant::now();
+    let output = drain_command(&env)
+        .arg("--once")
+        .env("RIMZ_BIN", "/bin/true")
+        .env("RIMZ_TEST_HOOK_DRAIN_ONCE_WAIT_MS", "1000")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("hook drainer did not answer within"),
+        "{stderr}"
+    );
+    assert!(started.elapsed() >= Duration::from_secs(1));
+    assert!(started.elapsed() < Duration::from_secs(5));
+}
+
+#[test]
+fn stop_drainer_sends_stop_to_a_drainer_that_binds_late() {
+    use std::io::{BufRead as _, BufReader};
+
+    let env = Env::new();
+    env.record(&env.project_root);
+    let store = env.store();
+    let lifetime = WorkspaceLock::acquire(&store.runtime_paths().hook_drainer_lock()).unwrap();
+    let started = Instant::now();
+    let child = env
+        .rimz()
+        .args(["reset", "--yes", "--no-start"])
+        .spawn()
+        .unwrap();
+    std::thread::sleep(Duration::from_millis(500));
+    let listener =
+        std::os::unix::net::UnixListener::bind(store.runtime_paths().hook_drainer_socket_path())
+            .unwrap();
+    let client = late_drainer_client(&listener, started + Duration::from_secs(5));
+    let mut line = String::new();
+    if let Some(client) = client {
+        client
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .unwrap();
+        BufReader::new(client).read_line(&mut line).unwrap();
+    }
+    drop(lifetime);
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "late drainer did not receive stop within 5 s: {output:?}"
+    );
+    let request: Value = serde_json::from_str(&line).unwrap();
+    assert_eq!(request["stop"], true);
+    assert!(output.status.success(), "{output:?}");
+}
+
+#[test]
+fn drainer_lease_waits_for_a_late_socket() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let store = env.store();
+    let _lifetime = WorkspaceLock::acquire(&store.runtime_paths().hook_drainer_lock()).unwrap();
+    let _spawning =
+        WorkspaceLock::acquire(&store.runtime_paths().hook_drainer_spawn_lock()).unwrap();
+    let socket = store.runtime_paths().hook_drainer_socket_path();
+    let binder = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(500));
+        std::os::unix::net::UnixListener::bind(socket).unwrap()
+    });
+    let started = Instant::now();
+    let lease = rimz::harness::hook_drain::DrainerLease::acquire(&store, Duration::from_secs(5));
+    let _listener = binder.join().unwrap();
+    assert!(
+        lease.is_ok(),
+        "lease did not wait for a late socket: {:?}",
+        lease.err()
+    );
+    assert!(started.elapsed() < Duration::from_secs(5));
+}
+
 fn paused_drainer(
     env: &Env,
     failpoint: &str,
@@ -918,7 +1086,8 @@ fn reset_stops_a_leased_drainer_and_allows_a_successor() {
         .wait_with_output()
         .unwrap();
     assert!(output.status.success(), "{output:?}");
-    let _successor = rimz::harness::hook_drain::DrainerLease::acquire(&store).unwrap();
+    let _successor =
+        rimz::harness::hook_drain::DrainerLease::acquire(&store, Duration::from_secs(30)).unwrap();
     let (frame, through) = append_stop(&env);
     rimz::harness::hook_drain::drain_through(&store, through, None, Duration::from_secs(5))
         .unwrap();
@@ -1519,6 +1688,13 @@ fn drained_log_is_truncated_and_cursor_reset() {
         // Both frames are queued before one drainer observes either environment.
         assert!(derived(&env, &frame.event_id).is_empty());
     }
+    let store = env.store();
+    let mut drainer = drain_command(&env)
+        .env("RIMZ_TEST_HOOK_DRAIN_IDLE_MS", "1000")
+        .env("CLAUDE_CODE_ENVIRONMENT_KIND", "bridge")
+        .spawn()
+        .unwrap();
+    let _lease = drainer_connection(&store);
     let output = drain_command(&env)
         .arg("--once")
         .env("RIMZ_TEST_HOOK_DRAIN_IDLE_MS", "1000")
@@ -1536,7 +1712,6 @@ fn drained_log_is_truncated_and_cursor_reset() {
         2,
         "accepted frames must not inherit the drainer's ingress policy"
     );
-    let store = env.store();
     let agents = store
         .runtime_projection(rimz::RuntimeScope::Audit)
         .unwrap()
@@ -1622,6 +1797,8 @@ fn drained_log_is_truncated_and_cursor_reset() {
             .len(),
         0
     );
+    drainer.kill().unwrap();
+    drainer.wait().unwrap();
     let fallback = Env::new();
     fallback.record(&fallback.project_root);
     let (frame, _) = append_stop(&fallback);
@@ -1838,6 +2015,9 @@ fn user_prompt_submit_reply_arrives_through_the_drainer() {
         let env = Env::new();
         crate::common::git::init_repo(&env.project_root);
         env.record(&env.project_root);
+        let store = env.store();
+        let mut drainer = drain_command(&env).spawn().unwrap();
+        let _lease = drainer_connection(&store);
         let mut command = env.hook_command(source);
         command.env("RIMZ_RUNTIME_ENV", "1");
         let output = env.spawn_payload(command, &json!({
@@ -1863,6 +2043,8 @@ fn user_prompt_submit_reply_arrives_through_the_drainer() {
                 .iter()
                 .any(|event| event.ingress.is_some())
         );
+        drainer.kill().unwrap();
+        drainer.wait().unwrap();
     }
 }
 
@@ -2039,6 +2221,9 @@ fn leased_drainer_does_not_retain_unrequested_replies() {
 fn antigravity_hook_reply_arrives_through_the_drainer() {
     let env = Env::new();
     env.record(&env.project_root);
+    let store = env.store();
+    let mut drainer = drain_command(&env).spawn().unwrap();
+    let _lease = drainer_connection(&store);
     let output = env.spawn_hook("antigravity", &json!({"hook_event_name": "Stop", "conversation_id": "native-reply", "invocationNum": 0}).to_string()).wait_with_output().unwrap();
     assert!(output.status.success(), "{output:?}");
     assert_eq!(
@@ -2052,6 +2237,8 @@ fn antigravity_hook_reply_arrives_through_the_drainer() {
             .exists(),
         "Antigravity must wait for its provider-reading decode"
     );
+    drainer.kill().unwrap();
+    drainer.wait().unwrap();
 }
 
 #[test]
