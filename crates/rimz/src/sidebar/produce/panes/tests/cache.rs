@@ -206,6 +206,83 @@ fn snapshot_cache_freshness_matrix() {
 }
 
 #[test]
+fn carried_prior_expires_at_poll_ttl_in_event_mode() {
+    for carried in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = crate::RuntimePaths::under(
+            crate::ids::WorkspaceId::from_project_root(Path::new("/carried-event-ttl")),
+            dir.path(),
+        )
+        .unwrap();
+        runtime.ensure_dirs().unwrap();
+        let now = unix_now_ms();
+        let produced_at_ms = now.saturating_sub(5_000);
+        let topology_at_ms = now.saturating_add(60_000);
+        let pane_id = PaneId::from_parts(MuxName::Zellij, "terminal_7");
+        let mut prior = crate::sidebar::frame::assemble_frame(
+            vec![pane("terminal_7", None, Some("/repo"))],
+            produced_at_ms,
+            "s",
+        );
+        prior.viewed_panes = vec![pane_id.clone()];
+        if carried {
+            prior.carried_panes = vec![crate::sidebar::frame::CarriedPane {
+                pane_id,
+                pid: None,
+                start_ticks: None,
+                carried_since_ms: produced_at_ms,
+            }];
+        }
+        atomic::write_temp_then_rename_cache(&runtime.pane_frame_path(), &prior).unwrap();
+        atomic::write_temp_then_rename_cache(
+            &crate::sidebar::cache::presence_stamp_path(&runtime),
+            &crate::sidebar::cache::PresenceStamp {
+                written_at_ms: topology_at_ms,
+                mux: Some(MuxName::Zellij),
+                session_name: Some("s".to_owned()),
+            },
+        )
+        .unwrap();
+        let topology = serde_json::from_value(serde_json::json!({
+            "session_name": "s",
+            "produced_at_ms": topology_at_ms,
+            "focused_pane": 7,
+            "clients": { "human_clients": 1, "viewed_panes": [7] },
+            "panes": [{
+                "id": 7,
+                "tab_position": 0,
+                "pane_command": "zsh",
+                "pane_cwd": "/repo",
+                "terminal_command": "zsh"
+            }]
+        }))
+        .unwrap();
+        crate::mux::zellij::pane_topology::write_pane_topology_cache(&runtime, &topology).unwrap();
+
+        let returned = cached_panes_or_produce(
+            &runtime,
+            MuxName::Zellij,
+            "s",
+            None,
+            None,
+            &crate::diag::DiagSink::disabled(),
+        )
+        .expect("event-mode produce uses pushed topology after a carried prior expires");
+
+        assert_eq!(
+            returned.observed_at_ms,
+            if carried {
+                topology_at_ms
+            } else {
+                produced_at_ms
+            },
+            "only a carried prior expires before the event TTL: carried={carried}",
+        );
+        assert!(returned.carried_panes.is_empty());
+    }
+}
+
+#[test]
 fn producer_verification_trusts_event_carried_topology_without_topology_floor() {
     let dir = tempfile::tempdir().unwrap();
     let workspace_id = crate::ids::WorkspaceId::from_project_root(std::path::Path::new(
