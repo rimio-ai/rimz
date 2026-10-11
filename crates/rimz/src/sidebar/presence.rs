@@ -547,7 +547,11 @@ fn topology_decision(
     if incoming_rank < existing_rank {
         return TopologyDecision::Reject;
     }
-    if incoming_rank == existing_rank && incoming.produced_at_ms < existing.produced_at_ms {
+    // A future-stamped cache (the wall clock stepped back) fences nothing.
+    if incoming_rank == existing_rank
+        && incoming.produced_at_ms < existing.produced_at_ms
+        && existing.produced_at_ms <= now_ms
+    {
         return TopologyDecision::Stale;
     }
     TopologyDecision::Accept

@@ -385,6 +385,13 @@ fn same_writer_topologies_are_ordered_by_observation_time() {
         TopologyDecision::Accept,
         "expired topology does not fence the next observation",
     );
+    let future = topology(now_ms + 5_000, Some(writer(2, 200)));
+    incoming.produced_at_ms = now_ms;
+    assert_eq!(
+        topology_decision(Some(&future), &incoming, None, now_ms),
+        TopologyDecision::Accept,
+        "a cache stamped ahead of a stepped-back clock does not fence",
+    );
 }
 
 #[test]
