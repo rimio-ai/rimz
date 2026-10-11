@@ -23,8 +23,7 @@ Local contract for `crates/rimz/src/sidebar/` — the view-model the renderer dr
 - [`produce/`](./produce/mod.rs) is the per-tick pipeline the host runs: group roots, sidecars, pane overlay, refresh-lane projection.
 - [`refresh/`](./refresh/mod.rs) owns the heavy lanes — git, provider accounts, credits, pull requests, rate limits, sessions, live spend, team pipelines. Each lane gates on its own TTL, except the pipeline lane, whose one board read per team group runs every pass and publishes only on change; all publish through the cache temp-then-rename helper.
 - [`consumer.rs`](./consumer.rs) reads a fresh rollup over the producer's pane cache and calls no mux, git, or provider.
-- Projections published for consumers — [`agent_projection.rs`](./agent_projection.rs), [`workspace_projection.rs`](./workspace_projection.rs) — are disposable and re-validated before use.
-- A snapshot field that only [`enrich.rs`](./enrich.rs) sets reaches disk in `workspace-projection.json` alone; `latest.json` is written before enrichment and never carries it. Renaming or retyping such a field bumps `WORKSPACE_PROJECTION_SCHEMA_VERSION`, which prevents a mixed-build attachment from seeding; `SNAPSHOT_VERSION` is for fields the store itself writes.
+- The agent projection published for consumers ([`agent_projection.rs`](./agent_projection.rs)) is disposable and re-validated before use.
 
 ## Boundaries
 

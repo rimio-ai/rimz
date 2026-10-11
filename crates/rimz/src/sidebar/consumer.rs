@@ -3,20 +3,12 @@
 //! The host's fast lane and CLI readers share this in-process fold: no mux,
 //! git, or provider probe, and no durable store writes.
 
-#![cfg_attr(
-    not(test),
-    expect(dead_code, reason = "legacy disk seed reader is removed next")
-)]
-
 use crate::ids::PaneId;
 use crate::store::snapshot::SidebarSnapshot;
 use crate::{RuntimePaths, StatePaths, Store};
 
 use super::cache::read_snapshot_cache;
 use super::enrich::{FoldOpts, WorkspaceSnapshot, enrich_workspace, project_local};
-use super::workspace_projection::{
-    PublishedWorkspaceProjection, WORKSPACE_PROJECTION_SCHEMA_VERSION, read_workspace_projection,
-};
 
 #[cfg(test)]
 mod tests;
@@ -24,50 +16,6 @@ mod tests;
 /// Re-exported for long-lived consumers (the sidebar fetch worker), which sit
 /// behind this module's read-only boundary and never import `crate::store`.
 pub use crate::store::snapshot::RollupCursor;
-
-/// Read a same-session publication whose projection is within the caller's
-/// age bound, without live store-source validation, so a pre-paint seed needs
-/// no store read. Pair the frame only when both its stamps match the projection's
-/// source; a presence-only republish preserves the pairing. The age is the
-/// projection's own: other commands republish the pane frame with no sidebar
-/// running, so a fresh frame says nothing about the cards beside it.
-pub(crate) fn read_published_pair(
-    runtime: &RuntimePaths,
-    session: &str,
-    max_age: std::time::Duration,
-    now_ms: u64,
-) -> Option<(
-    WorkspaceSnapshot,
-    Option<std::sync::Arc<super::frame::PaneFrame>>,
-)> {
-    let (published, frame) = read_publication(runtime, session)?;
-    let published_at_ms = published
-        .source
-        .frame_topology_stamp
-        .max(published.source.frame_metrics_stamp);
-    if std::time::Duration::from_millis(now_ms.saturating_sub(published_at_ms)) > max_age {
-        return None;
-    }
-    let frame = published.source.names_frame(&frame).then_some(frame);
-    Some((published.projection.clone(), frame))
-}
-
-fn read_publication(
-    runtime: &RuntimePaths,
-    session: &str,
-) -> Option<(
-    std::sync::Arc<PublishedWorkspaceProjection>,
-    std::sync::Arc<super::frame::PaneFrame>,
-)> {
-    let frame = read_snapshot_cache(&runtime.pane_frame_path(), session)?;
-    let published = read_workspace_projection(runtime)?;
-    if published.schema_version != WORKSPACE_PROJECTION_SCHEMA_VERSION
-        || published.session != session
-    {
-        return None;
-    }
-    Some((published, frame))
-}
 
 /// Published-cache reader and incremental store-rollup state.
 pub struct PublishedSnapshotReader {

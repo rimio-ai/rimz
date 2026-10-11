@@ -401,13 +401,12 @@ allowed-dependencies = [
 # A session's sidebar host appends its stderr to one classed state log (+1).
 # Receipt monitoring stats the queued-message file through StatePaths::message_queue_file.
 # LaunchPlan delegates the launch-and-PID handoff path to classed temp units (+1).
-# Room birth and sidebar readers share the classed workspace projection path (+1).
 # Hook ingress exposes the drainer's diagnostic log, socket, lifetime lock, and spawn lock (+4).
 # Hook ingress serializes appends independently of lifecycle folds (+1).
 # Apply children inherit the lifetime lock so parent death cannot admit concurrent replay (+1).
 # Hook appenders share a typed, blocking ingress guard (+2).
 # Birth, reset, supervisors and integration tests share RoomLock's claim/hold/share and its classed path (+5).
-surface-budget = 237
+surface-budget = 236
 
 [[module]]
 path = "crates/rimz/src/forge"
@@ -2696,7 +2695,7 @@ reason = "Stays pub: it is the #[from] payload of DeliverErr::Produce and Dispat
 [[verdict]]
 kind = "item"
 key = "sidebar::produce::ProducedWorkspaceSnapshot"
-reason = "Two outputs on purpose: the fetch worker publishes the workspace projection before project_local and needs the same frame for both (pass 17a)."
+reason = "Two outputs on purpose: the fetch worker retains the workspace fold and its frame for per-pane projection and new-attachment seeds."
 
 [[verdict]]
 kind = "item"
@@ -3456,12 +3455,12 @@ reason = "benches/hotpath.rs measures the renderer-independent fold from outside
 [[verdict]]
 kind = "item"
 key = "sidebar::enrich::WorkspaceSnapshot"
-reason = "Return type of bench-reached enrich_workspace and the field of pub WorkspaceProjection.projection; private_interfaces floors it at pub (pass 20b)."
+reason = "Return type of bench-reached enrich_workspace; private_interfaces floors it at pub (pass 20b)."
 
 [[verdict]]
 kind = "item"
 key = "sidebar::enrich::snapshot"
-reason = "sidebar_pane fetch tests read the published projection through it; pub(super) would only move their reach onto the pub(crate) tuple field (pass 20b, user decision)."
+reason = "sidebar_pane fetch and plane tests inspect retained folds through it; pub(super) would only move their reach onto the pub(crate) tuple field."
 
 [[verdict]]
 kind = "item"
@@ -3832,26 +3831,6 @@ reason = "Called by the hotpath bench (pass 23c)."
 kind = "item"
 key = "sidebar::consumer::rollup_snapshot"
 reason = "Called by the hotpath bench; read_published_snapshot narrowed to the sidebar instead (pass 23c)."
-
-[[verdict]]
-kind = "item"
-key = "sidebar::workspace_projection::WorkspaceProjectionPublisher"
-reason = "The hotpath bench publishes through it, which floors publish and its WorkspaceProjectionPublish return; the read side narrowed to the crate (pass 23c)."
-
-[[verdict]]
-kind = "item"
-key = "sidebar::workspace_projection::publish"
-reason = "Called by the hotpath bench (pass 23c)."
-
-[[verdict]]
-kind = "item"
-key = "sidebar::workspace_projection::WorkspaceProjectionPublish"
-reason = "The return type of the bench-reached pub publish (pass 23c)."
-
-[[verdict]]
-kind = "item"
-key = "sidebar::workspace_projection::read_workspace_projection"
-reason = "Renderer fetch tests read the published projection through it; narrowing to the sidebar would strand tests in a module pass 23c does not own, so it stays pub(crate) and floors PublishedWorkspaceProjection there (pass 23c)."
 
 [[verdict]]
 kind = "item"

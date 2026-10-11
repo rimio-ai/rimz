@@ -251,7 +251,6 @@ struct FetchWorker {
     notifications: NotificationState,
     link_notifications: LinkNotificationState,
     meter: TickMeter,
-    projection_publisher: crate::sidebar::workspace_projection::WorkspaceProjectionPublisher,
     tab_name_memo: TabNameMemo,
     session_listed: fn(crate::MuxName, &str) -> bool,
     #[cfg(test)]
@@ -281,7 +280,6 @@ impl FetchWorker {
             notifications: NotificationState::default(),
             link_notifications: LinkNotificationState::default(),
             meter,
-            projection_publisher: Default::default(),
             tab_name_memo: TabNameMemo::default(),
             session_listed: |mux, session| {
                 crate::mux::backend_for(mux).session_accepts_agent_close(session)
@@ -313,7 +311,8 @@ impl FetchWorker {
             inputs: sink.inputs.clone(),
         }));
         let fast = self
-            .read_and_publish_workspace(state)
+            .reader
+            .read_workspace(state)
             .map(|(workspace, frame)| WorkspaceFold { workspace, frame });
         let tick = self.stand(sink).tick;
         let produce = self.start_produce_if_due(request, frame_stamps, &fast, now_ms, tick);
@@ -328,24 +327,6 @@ impl FetchWorker {
         if produce {
             self.publish_produced_fold(state, request, sink);
         }
-    }
-
-    fn read_and_publish_workspace(
-        &mut self,
-        state: &StatePaths,
-    ) -> crate::store::snapshot::Result<(WorkspaceSnapshot, Option<Arc<PaneFrame>>)> {
-        let (workspace, frame) = self.reader.read_workspace(state)?;
-        if let Some(frame) = frame.as_deref()
-            && let Err(err) = self.projection_publisher.publish(
-                &self.runtime,
-                &self.config.session_name,
-                &workspace,
-                frame,
-            )
-        {
-            tracing::debug!(error = %err, "workspace projection publish failed");
-        }
-        Ok((workspace, frame))
     }
 
     /// The eldest renderer of the cycle in hand, which stands for the worker
@@ -439,14 +420,6 @@ impl FetchWorker {
             crate::sidebar::produce::produce_workspace_snapshot(cursor, state, &self.runtime, &opts)
         }) {
             Ok(produced) => {
-                if let Err(err) = self.projection_publisher.publish(
-                    &self.runtime,
-                    &self.config.session_name,
-                    &produced.workspace,
-                    &produced.frame,
-                ) {
-                    tracing::debug!(error = %err, "workspace projection publish failed");
-                }
                 let frame = Arc::new(produced.frame);
                 let snapshot = self.project_fold(
                     WorkspaceFold {
