@@ -683,7 +683,11 @@ impl DaemonRepairTracker {
         }
     }
 
-    pub fn maintain(&mut self, backend: &dyn MuxBackend, runtime: &crate::RuntimePaths) {
+    pub fn maintain(
+        &mut self,
+        backend: &dyn MuxBackend,
+        frame: Option<&crate::sidebar::frame::PaneFrame>,
+    ) {
         let state = match StatePaths::for_workspace(self.workspace_id.clone()) {
             Ok(state) => state,
             Err(err) => {
@@ -708,15 +712,11 @@ impl DaemonRepairTracker {
         };
         let machine = crate::config::MachineConfig::load_lenient();
         let resolved = ResolvedDaemonInputs::read(&record, &state.workspace_record, &machine);
-        let frame = crate::sidebar::cache::read_snapshot_cache(
-            &runtime.pane_frame_path(),
-            &self.session_name,
-        );
         let workspace_id = self.workspace_id.clone();
         let session_name = self.session_name.clone();
         self.maintain_with(
             resolved.stamp,
-            frame.as_deref(),
+            frame,
             crate::utils::time::unix_now_ms(),
             || {
                 // Repair keeps an enabled host serving, so it refills the host's

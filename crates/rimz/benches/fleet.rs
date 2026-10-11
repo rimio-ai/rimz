@@ -16,6 +16,7 @@ struct ProduceFixture {
     paths: rimz::StatePaths,
     runtime: rimz::RuntimePaths,
     cursor: rimz::sidebar::consumer::RollupCursor,
+    producer: rimz::sidebar::produce::SnapshotProducer,
     store_bytes: u64,
 }
 
@@ -29,11 +30,16 @@ impl ProduceFixture {
             .len();
         rimz::testkit::fleet::publish_fresh_produce_inputs(&runtime, fleet)
             .expect("publish produce inputs");
+        let producer = rimz::sidebar::produce::SnapshotProducer::seeded(
+            &runtime,
+            rimz::testkit::fleet::SESSION_NAME,
+        );
         Self {
             _tempdir: tempdir,
             paths,
             runtime,
             cursor: rimz::sidebar::consumer::RollupCursor::new(),
+            producer,
             store_bytes,
         }
     }
@@ -45,11 +51,16 @@ impl ProduceFixture {
         rimz::testkit::fleet::publish_fresh_produce_inputs(&runtime, fleet)
             .expect("publish produce inputs");
         let mut cursor = rimz::sidebar::consumer::RollupCursor::new();
+        let mut producer = rimz::sidebar::produce::SnapshotProducer::seeded(
+            &runtime,
+            rimz::testkit::fleet::SESSION_NAME,
+        );
         rimz::sidebar::produce::produce_snapshot(
             &mut cursor,
             &paths,
             &runtime,
             &rimz::testkit::fleet::produce_options(),
+            &mut producer,
         )
         .expect("cold produce");
 
@@ -72,6 +83,7 @@ impl ProduceFixture {
             paths,
             runtime,
             cursor,
+            producer,
             store_bytes,
         }
     }
@@ -102,6 +114,7 @@ fn produce_cold(bencher: Bencher, fleet: usize) {
                     &fixture.paths,
                     &fixture.runtime,
                     &rimz::testkit::fleet::produce_options(),
+                    &mut fixture.producer,
                 )
                 .expect("cold produce"),
             );
@@ -120,6 +133,7 @@ fn produce_warm(bencher: Bencher, fleet: usize) {
                     &fixture.paths,
                     &fixture.runtime,
                     &rimz::testkit::fleet::produce_options(),
+                    &mut fixture.producer,
                 )
                 .expect("warm produce"),
             );

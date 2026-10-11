@@ -255,55 +255,70 @@ fn stamp_inputs(paths: &[PathBuf]) -> Vec<InputStamp> {
         .collect()
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub(super) struct AgentProjectionPublication {
-    pub session_name: String,
-    pub wiring: WiredAgentProjection,
-    pub inputs: LocalSessionInputs,
-    pub observations: Vec<LocalSessionObservation>,
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub(crate) struct AgentProjectionPublication {
+    pub(super) session_name: String,
+    pub(super) wiring: WiredAgentProjection,
+    pub(super) inputs: LocalSessionInputs,
+    pub(super) observations: Vec<LocalSessionObservation>,
 }
 
 thread_local! {
     static AGENT_PROJECTION_PARSE_CACHE: ParseCache<AgentProjectionPublication> = const { ParseCache::new() };
 }
 
-/// Probe wiring and provider sessions once, publish one semantic cache, and
-/// return fresh values even when its disposable write fails.
-pub(super) fn refresh_published(
+/// Probe wiring and account-scoped local sessions without publishing.
+pub(super) fn probe(
     state: &StatePaths,
-    runtime: &RuntimePaths,
     session_name: &str,
     panes: &[PaneRef],
-) -> AgentProjection {
-    let wiring = probe_current();
+) -> AgentProjectionPublication {
     let inputs = LocalSessionInputs::from_panes(panes);
     let observations = inputs.discover(state);
-    let published = AgentProjectionPublication {
+    AgentProjectionPublication {
         session_name: session_name.to_owned(),
-        wiring: wiring.clone(),
+        wiring: probe_current(),
         inputs,
-        observations: observations.clone(),
-    };
-    match publish_if_changed(&runtime.agent_projection_path(), &published, || {
-        if let Err(err) = crate::wakeup::wake_store_delta(runtime, None, None) {
-            tracing::debug!(
-                workspace = %runtime.workspace_id,
-                error = &err as &dyn std::error::Error,
-                "agent-projection publication could not wake sidebars",
-            );
-        }
-    }) {
-        Ok(_) => {}
-        Err(err) => tracing::debug!(
+        observations,
+    }
+}
+
+pub(super) fn publish_if_changed(
+    runtime: &RuntimePaths,
+    fresh: &AgentProjectionPublication,
+    last_published: &mut Option<AgentProjectionPublication>,
+) {
+    if let Err(err) = publish_with(
+        &runtime.agent_projection_path(),
+        fresh,
+        last_published,
+        || {
+            if let Err(err) = crate::wakeup::wake_store_delta(runtime, None, None) {
+                tracing::debug!(
+                    workspace = %runtime.workspace_id,
+                    error = %err,
+                    "agent-projection publication could not wake sidebars"
+                );
+            }
+        },
+    ) {
+        tracing::debug!(
             workspace = %runtime.workspace_id,
-            error = &err as &dyn std::error::Error,
-            "agent-projection publication failed",
-        ),
+            error = %err,
+            "agent-projection publication failed"
+        );
     }
-    AgentProjection {
-        wiring,
-        local_sessions: observations,
-    }
+}
+
+/// Read a same-session publication passively, without invoking an adapter.
+pub(crate) fn read_publication(
+    runtime: &RuntimePaths,
+    session_name: &str,
+) -> Option<AgentProjectionPublication> {
+    AGENT_PROJECTION_PARSE_CACHE
+        .with(|cache| cache.read_stamped_json(&runtime.agent_projection_path()))
+        .filter(|published| published.session_name == session_name)
+        .map(|published| published.as_ref().clone())
 }
 
 /// Read one same-session publication and filter observations through current
@@ -314,16 +329,13 @@ pub(super) fn read_published(
     panes: &[PaneRef],
 ) -> AgentProjection {
     let inputs = LocalSessionInputs::from_panes(panes);
-    let Some(published) = AGENT_PROJECTION_PARSE_CACHE
-        .with(|cache| cache.read_stamped_json(&runtime.agent_projection_path()))
-        .filter(|published| published.session_name == session_name)
-    else {
+    let Some(published) = read_publication(runtime, session_name) else {
         return AgentProjection::default();
     };
     project_published(&published, &inputs)
 }
 
-fn project_published(
+pub(super) fn project_published(
     published: &AgentProjectionPublication,
     inputs: &LocalSessionInputs,
 ) -> AgentProjection {
@@ -350,20 +362,17 @@ fn project_published(
     }
 }
 
-fn publish_if_changed(
+fn publish_with(
     path: &Path,
     published: &AgentProjectionPublication,
+    last_published: &mut Option<AgentProjectionPublication>,
     on_changed: impl FnOnce(),
 ) -> crate::disk::atomic::Result<bool> {
-    if std::fs::read(path)
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<AgentProjectionPublication>(&bytes).ok())
-        .as_ref()
-        == Some(published)
-    {
+    if last_published.as_ref() == Some(published) {
         return Ok(false);
     }
     crate::disk::atomic::write_temp_then_rename_cache(path, published)?;
+    *last_published = Some(published.clone());
     on_changed();
     Ok(true)
 }
@@ -486,7 +495,13 @@ mod tests {
     #[test]
     fn semantic_publication_wakes_after_visible_write() {
         let temp = tempfile::tempdir().unwrap();
-        let path = temp.path().join("agent-projection.json");
+        let runtime = RuntimePaths::under(
+            crate::WorkspaceId::from_project_root(temp.path()),
+            temp.path(),
+        )
+        .unwrap();
+        runtime.ensure_dirs().unwrap();
+        let path = runtime.agent_projection_path();
         let published = AgentProjectionPublication {
             session_name: "room".to_owned(),
             wiring: projection("codex"),
@@ -494,14 +509,22 @@ mod tests {
             observations: Vec::new(),
         };
         let wakes = Cell::new(0);
-        publish_if_changed(&path, &published, || {
+        let mut last_published = None;
+        publish_with(&path, &published, &mut last_published, || {
             let visible: AgentProjectionPublication =
                 serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
             assert_eq!(visible, published);
             wakes.set(wakes.get() + 1);
         })
         .unwrap();
-        assert!(!publish_if_changed(&path, &published, || wakes.set(99)).unwrap());
+        assert!(!publish_with(&path, &published, &mut last_published, || wakes.set(99)).unwrap());
+        assert_eq!(wakes.get(), 1);
+
+        let mut restarted = read_publication(&runtime, "room");
+        assert!(
+            !publish_with(&path, &published, &mut restarted, || wakes.set(99)).unwrap(),
+            "the unchanged first probe after restart does not publish or wake"
+        );
         assert_eq!(wakes.get(), 1);
     }
 
@@ -563,7 +586,7 @@ mod tests {
             inputs: local_inputs(dir.path()),
             observations: Vec::new(),
         };
-        publish_if_changed(&path, &publication, || {}).unwrap();
+        crate::disk::atomic::write_temp_then_rename_cache(&path, &publication).unwrap();
 
         let first = AGENT_PROJECTION_PARSE_CACHE
             .with(|cache| cache.read_stamped_json(&path))

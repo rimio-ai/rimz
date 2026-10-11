@@ -2,17 +2,6 @@ use super::*;
 
 // ── Metrics sampling cadence ───────────────────────────────────────────────────
 
-fn metrics_runtime(name: &str) -> (tempfile::TempDir, crate::RuntimePaths) {
-    let dir = tempfile::TempDir::new().unwrap();
-    let runtime = crate::RuntimePaths::under(
-        crate::ids::WorkspaceId::from_project_root(std::path::Path::new(name)),
-        dir.path(),
-    )
-    .unwrap();
-    std::fs::create_dir_all(&runtime.lanes_dir).unwrap();
-    (dir, runtime)
-}
-
 #[test]
 fn metric_entry_due_samples_missing_changed_and_legacy_entries_immediately() {
     let command = Some("zsh".to_owned());
@@ -99,23 +88,19 @@ fn cached_entry_publishes_resource_stats_only_when_complete() {
 
 #[test]
 fn unbound_idle_panes_back_off_on_the_idle_ttl() {
-    let (_dir, runtime) = metrics_runtime("/tmp/metrics-unbound");
-
+    let mut cache = MetricsSampleCache::default();
     let mut frame = frame_from_panes(vec![pane("terminal_1", Some("zsh"), Some("/repo"))]);
     assert!(enrich_pane_metrics(
         &mut frame,
         "rimz-test-no-such-session-for-metrics",
-        &runtime
+        &mut cache
     ));
     assert!(
-        !pane_metrics_due(&frame, &runtime),
+        !pane_metrics_due(&frame, &cache),
         "an unbound idle pane records a sample attempt instead of retrying the \
          table walk every produce"
     );
 
-    let cache_path = runtime.lane_path("metrics-sample.json");
-    let cache: MetricsSampleCache =
-        serde_json::from_slice(&std::fs::read(&cache_path).unwrap()).unwrap();
     let entry = cache
         .entries
         .get(&state(&frame, "terminal_1").pane_id.to_string())
@@ -129,7 +114,6 @@ fn unbound_idle_panes_back_off_on_the_idle_ttl() {
 /// natively-pidded pane keeps its live pid.
 #[test]
 fn metrics_within_ttl_carries_matching_display_values_and_binding() {
-    let (_dir, runtime) = metrics_runtime("/tmp/metrics-carry");
     let mut panes = vec![
         pane("terminal_1", Some("zsh"), Some("/repo")),
         pane("terminal_4", Some("zsh"), Some("/repo")),
@@ -153,14 +137,12 @@ fn metrics_within_ttl_carries_matching_display_values_and_binding() {
         panes[1].pane_id.to_string(),
         fresh_entry(44, 702, "zsh", now_ms),
     );
-    let cache_path = runtime.lane_path("metrics-sample.json");
-    std::fs::write(&cache_path, serde_json::to_vec(&cache).unwrap()).unwrap();
     let mut frame = frame_from_panes(panes);
 
     assert!(!enrich_pane_metrics(
         &mut frame,
         "rimz-query-engine",
-        &runtime
+        &mut cache
     ));
 
     assert_eq!(
@@ -187,7 +169,6 @@ fn metrics_within_ttl_carries_matching_display_values_and_binding() {
 /// the prior values belong to the old tenant; an uncached pane also warms up.
 #[test]
 fn metrics_within_ttl_warms_changed_or_uncached_panes() {
-    let (_dir, runtime) = metrics_runtime("/tmp/metrics-warmup");
     let mut panes = vec![
         pane("terminal_2", Some("cargo build"), Some("/repo")),
         pane("terminal_3", Some("zsh"), Some("/repo")),
@@ -207,14 +188,12 @@ fn metrics_within_ttl_warms_changed_or_uncached_panes() {
             ..fresh_entry(43, 701, "zsh", now_ms)
         },
     );
-    let cache_path = runtime.lane_path("metrics-sample.json");
-    std::fs::write(&cache_path, serde_json::to_vec(&cache).unwrap()).unwrap();
     let mut frame = frame_from_panes(panes);
 
     assert!(enrich_pane_metrics(
         &mut frame,
         "rimz-query-engine",
-        &runtime
+        &mut cache
     ));
 
     assert_eq!(
@@ -227,8 +206,7 @@ fn metrics_within_ttl_warms_changed_or_uncached_panes() {
         None,
         "uncached pane warms up next window"
     );
-    let rewritten: MetricsSampleCache =
-        serde_json::from_slice(&std::fs::read(&cache_path).unwrap()).unwrap();
+    let rewritten = cache;
     assert_eq!(
         rewritten
             .entries
@@ -243,15 +221,11 @@ fn metrics_within_ttl_warms_changed_or_uncached_panes() {
 /// next produce inside the new window skips again.
 #[test]
 fn metrics_due_path_resamples_and_restamps() {
-    let (_dir, runtime) = metrics_runtime("/tmp/metrics-due");
-
     let stale_ms = unix_now_ms() - METRICS_BACKGROUND_SAMPLE_TTL.as_millis() as u64 - 1_000;
-    let cache = MetricsSampleCache {
+    let mut cache = MetricsSampleCache {
         sampled_at_ms: stale_ms,
         entries: HashMap::new(),
     };
-    let cache_path = runtime.lane_path("metrics-sample.json");
-    std::fs::write(&cache_path, serde_json::to_vec(&cache).unwrap()).unwrap();
 
     let mut pidded = pane("terminal_1", Some("zsh"), Some("/repo"));
     pidded.pane_pid = Some(std::process::id());
@@ -259,11 +233,10 @@ fn metrics_due_path_resamples_and_restamps() {
     assert!(enrich_pane_metrics(
         &mut frame,
         "rimz-query-engine",
-        &runtime
+        &mut cache
     ));
 
-    let rewritten: MetricsSampleCache =
-        serde_json::from_slice(&std::fs::read(&cache_path).unwrap()).unwrap();
+    let rewritten = cache;
     assert!(
         rewritten.sampled_at_ms > stale_ms,
         "a due produce re-samples and re-stamps the cache"

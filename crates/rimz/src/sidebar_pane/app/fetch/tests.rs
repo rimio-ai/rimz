@@ -4,23 +4,22 @@ use crate::sidebar::notify::{LinkAlert, Notification, NotificationAgent, Notific
 use crate::sidebar_pane::app::fixtures::{pane, workspace};
 use crate::{MuxName, SidebarInstanceId, WorkspaceId};
 
-fn guarded_reader() -> (tempfile::TempDir, PublishedSnapshotReader) {
+fn guarded_reader() -> (tempfile::TempDir, RollupCursor) {
     let dir = tempfile::tempdir().unwrap();
     let runtime = RuntimePaths::under(workspace(), dir.path()).unwrap();
     runtime.ensure_dirs().unwrap();
-    (
-        dir,
-        PublishedSnapshotReader::new(runtime, "rimz-test", None),
-    )
+    (dir, RollupCursor::new())
 }
 
 fn run_cycle(
     worker: &mut FetchWorker,
     state: &StatePaths,
     request: FetchRequest,
+    host_data: Arc<Mutex<HostData>>,
 ) -> Vec<FetchUpdate> {
     let (tx, rx) = result_channel();
     let mut sink = ResultSink::new(tx, PathBuf::from("/nonexistent/rimz-test.sock"), None);
+    sink.host_data = host_data;
     worker.run_cycle(state, request, &mut sink);
     drop(sink);
     rx.try_iter().map(|update| update.into_parts().0).collect()
@@ -135,7 +134,7 @@ fn notification_reconciliation_reaches_the_younger_pane_before_its_bell() {
     );
     subscribe(&subscribers, elder);
     subscribe(&subscribers, younger);
-    let mut sink = ResultSink::shared(subscribers, Covered::default(), LastFold::default());
+    let mut sink = ResultSink::shared(subscribers, Covered::default(), fixture.host_data.clone());
     let mut shared = crate::sidebar_pane::app::fixtures::agent_snapshot(&fixture.workspace_id);
     shared.worktree_groups[0].rows[0]
         .as_agent_mut()
@@ -196,9 +195,10 @@ fn notification_reconciliation_reaches_the_younger_pane_before_its_bell() {
         "this publication must carry the newly reconciled episode"
     );
     assert!(
-        sink.last_fold
+        sink.host_data
             .lock()
             .unwrap()
+            .last_fold
             .as_ref()
             .unwrap()
             .workspace
@@ -262,7 +262,7 @@ fn a_worker_notification_reaches_every_subscribed_pane_after_its_snapshot() {
         std::fs::remove_file(runtime.sidebar_heartbeat_path(&sub.instance_id)).unwrap();
         subscribe(&subscribers, sub);
     }
-    let mut sink = ResultSink::shared(subscribers, Covered::default(), LastFold::default());
+    let mut sink = ResultSink::shared(subscribers, Covered::default(), fixture.host_data.clone());
     let mut shared = crate::sidebar_pane::app::fixtures::agent_snapshot(&fixture.workspace_id);
     shared.worktree_groups[0].rows[0]
         .as_agent_mut()
@@ -357,11 +357,6 @@ fn forced_cycle_retains_the_reconciling_produce_for_a_stalled_renderer() {
         now_ms,
         "rimz-test",
     );
-    std::fs::write(
-        runtime.pane_frame_path(),
-        serde_json::to_vec(&frame).unwrap(),
-    )
-    .unwrap();
     crate::agents::spending::write_provider_spending_cache(
         &runtime.shared_provider_spending_path(),
         &crate::agents::spending::ProviderSpendingCache {
@@ -396,8 +391,25 @@ fn forced_cycle_retains_the_reconciling_produce_for_a_stalled_renderer() {
         mode: FetchMode::HardRefresh,
         ..FetchRequest::default()
     };
-    let mut worker = FetchWorker::new(config, runtime, crate::diag::DiagSink::disabled());
-    let outcomes = run_cycle(&mut worker, &state, request);
+    let producer = PaneProducer::seeded(&runtime, &config.session_name);
+    let mut worker = FetchWorker::new(
+        config,
+        runtime,
+        crate::diag::DiagSink::disabled(),
+        producer,
+        None,
+    );
+    let inputs = HostInputs::from_frame(frame);
+    worker.producer.seed_test_frame(Some(inputs.frame.clone()));
+    let outcomes = run_cycle(
+        &mut worker,
+        &state,
+        request,
+        Arc::new(Mutex::new(HostData {
+            inputs: Some(inputs),
+            ..Default::default()
+        })),
+    );
 
     assert_eq!(
         outcomes.len(),
@@ -624,6 +636,7 @@ struct FetchFixture {
     state: StatePaths,
     runtime: RuntimePaths,
     instance_id: SidebarInstanceId,
+    host_data: Arc<Mutex<HostData>>,
 }
 
 #[test]
@@ -641,7 +654,7 @@ fn renderer_gets_the_snapshot_before_a_narrowing_probe() {
     let (tx, rx) = result_channel();
     UPDATES.set(Some(rx));
     let mut sink = ResultSink::new(tx, PathBuf::from("missing.sock"), None);
-
+    sink.host_data = fixture.host_data.clone();
     // The listing can take its whole timeout on a wedged server.
     worker.session_listed = |_, _| {
         let sent = UPDATES.with_borrow(|updates| {
@@ -717,6 +730,7 @@ fn roster_narrowing_needs_a_listed_session() {
     };
     let (tx, _rx) = result_channel();
     let mut sink = ResultSink::new(tx, PathBuf::from("missing.sock"), None);
+    sink.host_data = fixture.host_data.clone();
     crate::store::live_roster::publish(&fixture.state.live_roster, roster(&["a", "b"])).unwrap();
     let before = std::fs::read(&fixture.state.live_roster).unwrap();
 
@@ -766,15 +780,27 @@ impl FetchFixture {
             state,
             runtime,
             instance_id: SidebarInstanceId::new(),
+            host_data: Arc::default(),
         }
     }
 
     fn worker(&self) -> FetchWorker {
         let config = test_config(self.workspace_id.clone(), self.instance_id.clone());
+        let producer = PaneProducer::seeded(&self.runtime, &config.session_name);
         let mut worker = FetchWorker::new(
             config,
             self.runtime.clone(),
             crate::diag::DiagSink::disabled(),
+            producer,
+            None,
+        );
+        worker.producer.seed_test_frame(
+            self.host_data
+                .lock()
+                .unwrap()
+                .inputs
+                .as_ref()
+                .map(|inputs| inputs.frame.clone()),
         );
         worker.producer_cadence.last_attempt = Some(Instant::now());
         worker.session_listed = |_, _| panic!("a unit test must not ask a multiplexer");
@@ -786,7 +812,7 @@ impl FetchFixture {
     }
 
     fn run_with(&self, request: FetchRequest, worker: &mut FetchWorker) -> Vec<FetchUpdate> {
-        run_cycle(worker, &self.state, request)
+        run_cycle(worker, &self.state, request, self.host_data.clone())
     }
 
     fn write_pane_frame(&self) {
@@ -797,12 +823,79 @@ impl FetchFixture {
         );
         frame.topology_stamp_ms = Some(11);
         frame.metrics_stamp_ms = Some(12);
-        std::fs::write(
-            self.runtime.pane_frame_path(),
-            serde_json::to_vec(&frame).unwrap(),
-        )
-        .unwrap();
+        self.host_data.lock().unwrap().inputs = Some(HostInputs::from_frame(frame));
     }
+}
+
+#[test]
+fn host_start_fast_fold_uses_publications_before_the_first_produce() {
+    let fixture = FetchFixture::new();
+    let session = "rimz-test";
+    let producer = PaneProducer::seeded(&fixture.runtime, session);
+    assert!(HostInputs::seeded(&producer, session, None).is_none());
+
+    let frame =
+        crate::sidebar::frame::assemble_frame(vec![pane("terminal_7", "tab_1", false)], 1, session);
+    let projection = serde_json::from_value(serde_json::json!({
+        "session_name": session,
+        "wiring": { "kinds": ["codex"], "default_models": {} },
+        "inputs": { "by_kind": {} },
+        "observations": []
+    }))
+    .unwrap();
+    std::fs::write(
+        fixture.runtime.pane_frame_path(),
+        serde_json::to_vec(&frame).unwrap(),
+    )
+    .unwrap();
+    std::fs::write(
+        fixture.runtime.agent_projection_path(),
+        serde_json::to_vec(&projection).unwrap(),
+    )
+    .unwrap();
+    let producer = PaneProducer::seeded(&fixture.runtime, session);
+    let last_projection =
+        crate::sidebar::agent_projection::read_publication(&fixture.runtime, session);
+    fixture.host_data.lock().unwrap().inputs =
+        HostInputs::seeded(&producer, session, last_projection.clone());
+    assert!(
+        fixture.host_data.lock().unwrap().inputs.is_some(),
+        "a previous publication seeds both host folds before the first produce"
+    );
+    let mut worker = FetchWorker::new(
+        test_config(fixture.workspace_id.clone(), fixture.instance_id.clone()),
+        fixture.runtime.clone(),
+        crate::diag::DiagSink::disabled(),
+        producer,
+        last_projection,
+    );
+    assert_eq!(worker.last_projection, Some(projection));
+    worker.producer_cadence.last_attempt = Some(Instant::now());
+    worker.session_listed = |_, _| panic!("the fast fold must not query a mux");
+    std::fs::remove_file(fixture.runtime.pane_frame_path()).unwrap();
+    std::fs::remove_file(fixture.runtime.agent_projection_path()).unwrap();
+
+    let outcomes = fixture.run_with(FetchRequest::default(), &mut worker);
+    assert_eq!(outcomes.len(), 1, "the first produce is deferred");
+    let folded = snapshot(&outcomes[0]);
+    assert_eq!(folded.panes_produced_at_ms, Some(1));
+    assert!(
+        folded.rows().next().is_some(),
+        "the first fast fold has rows"
+    );
+    assert!(folded.wired_kinds.contains(&"codex".to_owned()));
+    assert_eq!(
+        fixture
+            .host_data
+            .lock()
+            .unwrap()
+            .last_fold
+            .as_ref()
+            .unwrap()
+            .frame
+            .as_deref(),
+        Some(&frame)
+    );
 }
 
 #[test]
@@ -827,7 +920,7 @@ fn fast_fold_retains_its_fold_for_new_attachments() {
     let mut worker = fixture.worker();
     let (tx, rx) = result_channel();
     let mut sink = ResultSink::new(tx, PathBuf::from("missing.sock"), None);
-
+    sink.host_data = fixture.host_data.clone();
     worker.run_cycle(&fixture.state, FetchRequest::default(), &mut sink);
     assert!(matches!(
         rx.recv().unwrap().into_parts().0,
@@ -835,9 +928,10 @@ fn fast_fold_retains_its_fold_for_new_attachments() {
     ));
     assert_eq!(sink.cycle.len(), 1);
     assert_eq!(
-        sink.last_fold
+        sink.host_data
             .lock()
             .unwrap()
+            .last_fold
             .as_ref()
             .unwrap()
             .workspace
@@ -858,9 +952,10 @@ fn fast_fold_retains_its_fold_for_new_attachments() {
         FetchUpdate::Snapshot { .. }
     ));
     assert_eq!(
-        sink.last_fold
+        sink.host_data
             .lock()
             .unwrap()
+            .last_fold
             .as_ref()
             .unwrap()
             .workspace
@@ -877,9 +972,10 @@ fn fast_fold_retains_its_fold_for_new_attachments() {
         source: SnapshotSource::Cached,
     });
     assert_eq!(
-        sink.last_fold
+        sink.host_data
             .lock()
             .unwrap()
+            .last_fold
             .as_ref()
             .unwrap()
             .workspace
@@ -1084,11 +1180,7 @@ fn one_cycle_projects_the_shared_fold_once_for_each_renderer() {
         crate::utils::time::unix_now_ms(),
         "rimz-test",
     );
-    std::fs::write(
-        fixture.runtime.pane_frame_path(),
-        serde_json::to_vec(&frame).unwrap(),
-    )
-    .unwrap();
+    fixture.host_data.lock().unwrap().inputs = Some(HostInputs::from_frame(frame));
 
     // Two panes of one host, eldest first; each excludes only itself.
     let subscribers = Subscribers::default();
@@ -1110,7 +1202,7 @@ fn one_cycle_projects_the_shared_fold_once_for_each_renderer() {
         updates.push((own, rx));
     }
     let mut worker = fixture.worker();
-    let mut sink = ResultSink::shared(subscribers, Covered::default(), LastFold::default());
+    let mut sink = ResultSink::shared(subscribers, Covered::default(), fixture.host_data.clone());
     worker.run_cycle(&fixture.state, FetchRequest::force_fold(), &mut sink);
 
     for (own, rx) in updates {
@@ -1137,7 +1229,7 @@ fn a_stalled_subscriber_retains_only_the_latest_projected_fold() {
     subscribe(&subscribers, stalled);
     subscribe(&subscribers, advancing);
     let mut worker = fixture.worker();
-    let mut sink = ResultSink::shared(subscribers, Covered::default(), LastFold::default());
+    let mut sink = ResultSink::shared(subscribers, Covered::default(), fixture.host_data.clone());
     let now = crate::utils::time::unix_now_ms();
     for fold in 0..64 {
         tick_clock();
@@ -1150,11 +1242,7 @@ fn a_stalled_subscriber_retains_only_the_latest_projected_fold() {
             now + fold,
             "rimz-test",
         );
-        std::fs::write(
-            fixture.runtime.pane_frame_path(),
-            serde_json::to_vec(&frame).unwrap(),
-        )
-        .unwrap();
+        fixture.host_data.lock().unwrap().inputs = Some(HostInputs::from_frame(frame));
         worker.run_cycle(&fixture.state, FetchRequest::force_fold(), &mut sink);
         let update = advancing_rx
             .try_recv()
@@ -1192,11 +1280,7 @@ fn shared_observation_extracts_common_once_and_keeps_each_own_view() {
         crate::utils::time::unix_now_ms(),
         "rimz-test",
     );
-    std::fs::write(
-        fixture.runtime.pane_frame_path(),
-        serde_json::to_vec(&frame).unwrap(),
-    )
-    .unwrap();
+    fixture.host_data.lock().unwrap().inputs = Some(HostInputs::from_frame(frame));
     let subscribers = Subscribers::default();
     let mut receivers = Vec::new();
     for n in 0..40 {
@@ -1212,7 +1296,7 @@ fn shared_observation_extracts_common_once_and_keeps_each_own_view() {
     let (tx, _rx) = std::sync::mpsc::sync_channel(64);
     let mut worker = fixture.worker();
     worker.observer = Some(observe::RoomObserver::new(tx.clone(), Arc::default()));
-    let mut sink = ResultSink::shared(subscribers, Covered::default(), LastFold::default());
+    let mut sink = ResultSink::shared(subscribers, Covered::default(), fixture.host_data.clone());
     observe::take_extractions();
     worker.run_cycle(&fixture.state, FetchRequest::force_fold(), &mut sink);
     assert_eq!(
@@ -1286,11 +1370,7 @@ fn fold_file_reads_are_shared_across_forty_attachment_threads() {
         crate::utils::time::unix_now_ms(),
         "rimz-test",
     );
-    std::fs::write(
-        fixture.runtime.pane_frame_path(),
-        serde_json::to_vec(&frame).unwrap(),
-    )
-    .unwrap();
+    fixture.host_data.lock().unwrap().inputs = Some(HostInputs::from_frame(frame));
     let subscribers = Subscribers::default();
     let mut worker = fixture.worker();
     let (ready_tx, ready_rx) = std::sync::mpsc::channel();
@@ -1334,7 +1414,7 @@ fn fold_file_reads_are_shared_across_forty_attachment_threads() {
     }
     focus_anchor::take_reads();
     body_filter::take_reads();
-    let mut sink = ResultSink::shared(subscribers, Covered::default(), LastFold::default());
+    let mut sink = ResultSink::shared(subscribers, Covered::default(), fixture.host_data.clone());
     worker.run_cycle(&fixture.state, FetchRequest::force_fold(), &mut sink);
     let mut reads = (focus_anchor::take_reads(), body_filter::take_reads());
     for pane in panes {
@@ -1404,11 +1484,7 @@ fn staggered_requests_behind_one_fold_cost_at_most_two_folds() {
         crate::utils::time::unix_now_ms(),
         "rimz-test",
     );
-    std::fs::write(
-        fixture.runtime.pane_frame_path(),
-        serde_json::to_vec(&frame).unwrap(),
-    )
-    .unwrap();
+    fixture.host_data.lock().unwrap().inputs = Some(HostInputs::from_frame(frame));
     let subscribers = Subscribers::default();
     let mut receivers = Vec::new();
     for (index, own) in panes.iter().enumerate() {
@@ -1424,7 +1500,7 @@ fn staggered_requests_behind_one_fold_cost_at_most_two_folds() {
     let draining = receivers.clone();
     let first_publications = Arc::new(Mutex::new(Vec::new()));
     let captured = first_publications.clone();
-    let sink = ResultSink::shared(subscribers, Covered::default(), LastFold::default());
+    let sink = ResultSink::shared(subscribers, Covered::default(), fixture.host_data.clone());
     let mut worker = fixture.worker();
     let mut sender = Some(tx);
     let mut mid_first = None;
@@ -1601,20 +1677,28 @@ fn one_publication_serves_the_renderers_its_cycle_began_with() {
         crate::utils::time::unix_now_ms(),
         "rimz-test",
     );
-    std::fs::write(
-        fixture.runtime.pane_frame_path(),
-        serde_json::to_vec(&frame).unwrap(),
-    )
-    .unwrap();
+    fixture.host_data.lock().unwrap().inputs = Some(HostInputs::from_frame(frame));
     let subscribers = Subscribers::default();
     let (eldest, eldest_rx) = subscriber("01", "terminal_7", 2, PathBuf::from("missing.sock"));
     let (younger, younger_rx) = subscriber("02", "terminal_8", 2, PathBuf::from("missing.sock"));
     subscribe(&subscribers, eldest);
     subscribe(&subscribers, younger);
     let mut worker = fixture.worker();
-    let mut sink = ResultSink::shared(subscribers.clone(), Covered::default(), LastFold::default());
+    let mut sink = ResultSink::shared(
+        subscribers.clone(),
+        Covered::default(),
+        fixture.host_data.clone(),
+    );
     sink.begin_cycle();
-    let (workspace, frame) = worker.reader.read_workspace(&fixture.state).unwrap();
+    let inputs = fixture.host_data.lock().unwrap().inputs.clone().unwrap();
+    let workspace = HostInputs::fold(
+        Some(&inputs),
+        &mut worker.cursor,
+        &fixture.state,
+        &fixture.runtime,
+    )
+    .unwrap();
+    let frame = Some(inputs.frame);
     let folded = worker.project_fold(WorkspaceFold { workspace, frame }, &mut sink);
 
     // The eldest leaves and a new pane arrives between fold and publication.
@@ -1651,7 +1735,11 @@ fn the_worker_keeps_the_tick_of_its_eldest_renderer() {
     subscribe(&subscribers, eldest);
     subscribe(&subscribers, younger);
     let worker = fixture.worker();
-    let mut sink = ResultSink::shared(subscribers.clone(), Covered::default(), LastFold::default());
+    let mut sink = ResultSink::shared(
+        subscribers.clone(),
+        Covered::default(),
+        fixture.host_data.clone(),
+    );
 
     assert_eq!(worker.stand(&sink).tick, Duration::from_secs(60));
     unsubscribe(&subscribers, "01");
@@ -1676,7 +1764,7 @@ fn a_full_renderer_inbox_holds_neither_the_worker_nor_another_renderer() {
     for subscriber in [eldest, stalled, other] {
         subscribe(&subscribers, subscriber);
     }
-    let mut sink = ResultSink::shared(subscribers, Covered::default(), LastFold::default());
+    let mut sink = ResultSink::shared(subscribers, Covered::default(), Arc::default());
     let (done_tx, done_rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         sink.publish(FetchUpdate::Failed {

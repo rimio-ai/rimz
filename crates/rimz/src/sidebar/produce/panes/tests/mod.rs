@@ -203,25 +203,54 @@ fn presence_sample_due_requires_idle_capable_attached_stale_sample() {
 #[test]
 fn failed_presence_attempt_stamp_suppresses_retries_until_ttl() {
     let dir = tempfile::tempdir().unwrap();
-    let workspace = crate::WorkspaceId::from_project_root(dir.path());
-    let runtime = crate::RuntimePaths::under(workspace, dir.path()).unwrap();
+    let runtime = crate::RuntimePaths::under(
+        crate::WorkspaceId::from_project_root(dir.path()),
+        dir.path(),
+    )
+    .unwrap();
     runtime.ensure_dirs().unwrap();
-    let frame = frame_with_presence(Some(presence_sample(1, Some(1), 1)));
-    let attempted_at_ms = 10_000;
+    let mut frame = crate::sidebar::frame::assemble_frame(
+        vec![pane("terminal_1", None, Some("/repo"))],
+        unix_now_ms() + 60_000,
+        "s",
+    );
+    frame.presence = Some(presence_sample(1, Some(1), 1));
+    let mut producer = PaneProducer {
+        prior: Some(Arc::new(frame)),
+        metrics: Default::default(),
+        presence_probed_at_ms: None,
+    };
+    let calls = std::cell::Cell::new(0);
+    for _ in 0..2 {
+        producer
+            .tick_with(
+                &runtime,
+                MuxName::Tmux,
+                "s",
+                None,
+                None,
+                &crate::diag::DiagSink::disabled(),
+                &mut |_, _| panic!("fresh prior must not list panes"),
+                &|_, _| {
+                    calls.set(calls.get() + 1);
+                    None
+                },
+            )
+            .unwrap();
+    }
+    assert_eq!(calls.get(), 1, "failed presence sampling is throttled");
+    let attempted_at_ms = producer.presence_probed_at_ms.unwrap();
     let ttl = crate::sidebar::timing::PRESENCE_SAMPLE_TTL.as_millis() as u64;
-
-    assert!(presence_sample_due(&frame, None, attempted_at_ms));
-    crate::sidebar::cache::write_presence_probe_stamp(&runtime, attempted_at_ms).unwrap();
-    let probe_at_ms = crate::sidebar::cache::read_presence_probe_stamp(&runtime);
+    let frame = producer.prior.as_ref().unwrap();
     assert!(!presence_sample_due(
-        &frame,
-        probe_at_ms,
-        attempted_at_ms + ttl - 1,
+        frame,
+        producer.presence_probed_at_ms,
+        attempted_at_ms + ttl - 1
     ));
     assert!(presence_sample_due(
-        &frame,
-        probe_at_ms,
-        attempted_at_ms + ttl,
+        frame,
+        producer.presence_probed_at_ms,
+        attempted_at_ms + ttl
     ));
 }
 
@@ -265,59 +294,63 @@ fn unchanged_presence_updates_returned_sample_without_selecting_publish() {
 
 #[test]
 fn unchanged_presence_preserves_pane_frame_and_sends_no_wakeup() {
-    use std::os::unix::net::UnixDatagram;
-
     let dir = tempfile::tempdir().unwrap();
-    let workspace = crate::WorkspaceId::from_project_root(dir.path());
-    let runtime = crate::RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
-    runtime.ensure_dirs().unwrap();
-    let socket_path = runtime.sock_dir.join("sidebar.test.sock");
-    let socket = UnixDatagram::bind(&socket_path).unwrap();
-    socket.set_nonblocking(true).unwrap();
-    let instance = crate::SidebarInstanceId::new();
-    crate::wakeup::heartbeat::write_heartbeat(
-        &runtime,
-        workspace,
-        &instance,
-        crate::MuxName::Tmux,
-        "rimz-test",
-        &socket_path,
-        None,
-        None,
+    let runtime = crate::RuntimePaths::under(
+        crate::WorkspaceId::from_project_root(dir.path()),
+        dir.path(),
     )
     .unwrap();
+    runtime.ensure_dirs().unwrap();
     let cache_path = runtime.pane_frame_path();
-    let mut frame = frame_with_presence(Some(presence_sample(1, Some(1_000), 1_000)));
+    let mut frame = crate::sidebar::frame::assemble_frame(
+        vec![pane("terminal_1", None, Some("/repo"))],
+        unix_now_ms() + 60_000,
+        "s",
+    );
+    frame.presence = Some(presence_sample(1, Some(1_000), 1_000));
     frame.topology_stamp_ms = Some(10);
     frame.metrics_stamp_ms = Some(11);
     let produced_at_ms = frame.produced_at_ms;
     atomic::write_temp_then_rename_cache(&cache_path, &frame).unwrap();
-    let diag = crate::diag::DiagSink::disabled();
-    let cache = PaneFrameCache::new(&runtime, "s", None, None, &diag);
-
-    apply_presence_sample_and_publish(&mut frame, presence_sample(1, Some(1_000), 2_000), &cache);
-
-    let published: PaneFrame =
-        serde_json::from_slice(&std::fs::read(&cache_path).unwrap()).unwrap();
-    assert_eq!(published.presence.unwrap().sampled_at_ms, 1_000);
-    assert_eq!(published.produced_at_ms, produced_at_ms);
-    assert_eq!(published.topology_stamp_ms, Some(10));
-    assert_eq!(published.metrics_stamp_ms, Some(11));
-    assert_eq!(frame.presence.unwrap().sampled_at_ms, 2_000);
-    let mut buffer = [0; 256];
+    let before = std::fs::read(&cache_path).unwrap();
+    let mut producer = PaneProducer::seeded(&runtime, "s");
+    let returned = producer
+        .tick_with(
+            &runtime,
+            MuxName::Tmux,
+            "s",
+            None,
+            None,
+            &crate::diag::DiagSink::disabled(),
+            &mut |_, _| panic!("fresh prior must not list panes"),
+            &|_, _| Some(presence_sample(1, Some(1_000), 2_000)),
+        )
+        .unwrap();
     assert_eq!(
-        socket.recv(&mut buffer).unwrap_err().kind(),
-        std::io::ErrorKind::WouldBlock,
+        std::fs::read(&cache_path).unwrap(),
+        before,
+        "an unchanged sample writes nothing"
     );
-
-    apply_presence_sample_and_publish(&mut frame, presence_sample(2, Some(1_000), 3_000), &cache);
+    assert_eq!(returned.presence.unwrap().sampled_at_ms, 2_000);
+    producer.presence_probed_at_ms = None;
+    producer
+        .tick_with(
+            &runtime,
+            MuxName::Tmux,
+            "s",
+            None,
+            None,
+            &crate::diag::DiagSink::disabled(),
+            &mut |_, _| panic!("fresh prior must not list panes"),
+            &|_, _| Some(presence_sample(2, Some(1_000), 3_000)),
+        )
+        .unwrap();
     let published: PaneFrame =
         serde_json::from_slice(&std::fs::read(&cache_path).unwrap()).unwrap();
     assert_eq!(published.presence.unwrap().human_clients, 2);
     assert_eq!(published.produced_at_ms, produced_at_ms);
     assert_eq!(published.topology_stamp_ms, Some(10));
     assert_eq!(published.metrics_stamp_ms, Some(11));
-    assert!(socket.recv(&mut buffer).unwrap() > 0);
 }
 
 #[test]

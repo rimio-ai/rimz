@@ -119,13 +119,16 @@ fn cache_refresher_publishes_diff_stats_project_matches_refresh() {
         },
     );
 
+    let frame: rimz::sidebar::frame::PaneFrame =
+        serde_json::from_slice(&std::fs::read(runtime.pane_frame_path()).unwrap()).unwrap();
+    let inputs = rimz::sidebar::produce::HostInputs::from_frame(frame.clone());
     let mut cursor = RollupCursor::new();
     let mut refresh_state = rimz::sidebar::refresh::ProducerRefreshState::default();
     rimz::sidebar::produce::refresh_producer_caches(
         &mut cursor,
         &state,
         &runtime,
-        &session,
+        Some(&inputs),
         None,
         &mut refresh_state,
     )
@@ -162,7 +165,7 @@ fn cache_refresher_publishes_diff_stats_project_matches_refresh() {
         &mut cursor,
         &state,
         &runtime,
-        &session,
+        Some(&inputs),
         None,
         &mut refresh_state,
     )
@@ -195,13 +198,41 @@ fn cache_refresher_publishes_diff_stats_project_matches_refresh() {
         &state,
         &runtime,
         &project_opts,
+        &mut rimz::sidebar::produce::SnapshotProducer::seeded(&runtime, &session),
     )
     .expect("project produce");
+    let panes = frame
+        .to_pane_refs()
+        .into_iter()
+        .enumerate()
+        .map(|(id, pane)| {
+            serde_json::json!({
+                "id": id,
+                "tab_position": 0,
+                "pane_command": pane.command,
+                "pane_cwd": pane.cwd,
+            })
+        })
+        .collect::<Vec<_>>();
+    std::fs::write(
+        runtime.lane_path("pane-topology.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "session_name": session,
+            "produced_at_ms": unix_now_ms(),
+            "panes": panes,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
     let refresh = rimz::sidebar::produce::produce_snapshot_with_refresh(
         &mut RollupCursor::new(),
         &state,
         &runtime,
-        &project_opts,
+        &rimz::sidebar::produce::InspectOptions {
+            target: Some((project_opts.mux, project_opts.session_name.clone())),
+            exclude: None,
+            min_pane_cache_ms: None,
+        },
     )
     .expect("refresh produce");
 
@@ -224,12 +255,15 @@ fn cache_refresher_publishes_diff_stats_project_matches_refresh() {
         assert_eq!(project_group.landed, refresh_group.landed);
     }
 
-    let frameless = rimz::sidebar::produce::produce_rollup_snapshot_with_refresh(
+    let frameless = rimz::sidebar::produce::produce_snapshot_with_refresh(
         &mut RollupCursor::new(),
         &state,
         &runtime,
-        None,
-        None,
+        &rimz::sidebar::produce::InspectOptions {
+            target: None,
+            exclude: None,
+            min_pane_cache_ms: None,
+        },
     )
     .expect("frameless refresh produce");
     assert_eq!(frameless.providers, refresh.providers);

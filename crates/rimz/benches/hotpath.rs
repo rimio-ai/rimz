@@ -389,6 +389,10 @@ fn snapshot_fixture() -> SnapshotFixture {
         &workspace.paths,
         &workspace.runtime,
         &rimz::testkit::fleet::produce_options(),
+        &mut rimz::sidebar::produce::SnapshotProducer::seeded(
+            &workspace.runtime,
+            rimz::testkit::fleet::SESSION_NAME,
+        ),
     )
     .expect("produce snapshot");
     SnapshotFixture {

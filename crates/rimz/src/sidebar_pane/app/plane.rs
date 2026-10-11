@@ -7,12 +7,13 @@ use std::sync::mpsc::{Receiver, Sender, SyncSender};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use crate::sidebar::observe::{self, ObserveMsg};
+use crate::sidebar::produce::{HostInputs, PaneProducer};
 use crate::{MuxName, RuntimePaths, SidebarInstanceId};
 
 #[cfg(test)]
 use super::fetch::FetchUpdate;
 use super::fetch::{
-    Covered, FetchRequest, LastFold, ResultReceiver, Stand, Subscriber, Subscribers, WorkspaceFold,
+    Covered, FetchRequest, HostData, ResultReceiver, Stand, Subscriber, Subscribers, WorkspaceFold,
     result_channel, spawn_fetch_worker,
 };
 use super::{ServeConfig, cache_refresh, tmux_watch, transcript_watch};
@@ -23,7 +24,7 @@ pub(in crate::sidebar_pane) struct DataPlane {
     pub(super) geometry: Arc<Mutex<crate::mux::zellij::WidthMemo>>,
     request_tx: Sender<FetchRequest>,
     subscribers: Subscribers,
-    last_fold: LastFold,
+    host_data: Arc<Mutex<HostData>>,
     covered: Covered,
     observe_tx: SyncSender<ObserveMsg>,
     /// The plane's threads, until the first pane starts them.
@@ -46,8 +47,14 @@ impl DataPlane {
         let (config, runtime, diag) = (config.clone(), runtime.clone(), diag.clone());
         let subscribers = plane.subscribers.clone();
         let covered = plane.covered.clone();
-        let last_fold = plane.last_fold.clone();
+        let host_data = plane.host_data.clone();
         let lanes: Lanes = Box::new(move || {
+            let producer = PaneProducer::seeded(&runtime, &config.session_name);
+            let last_projection =
+                crate::sidebar::agent_projection::read_publication(&runtime, &config.session_name);
+            let inputs =
+                HostInputs::seeded(&producer, &config.session_name, last_projection.clone());
+            lock(&host_data).inputs = inputs;
             if diag.is_enabled() {
                 observe::writer::spawn(runtime.clone(), diag.clone(), observe_rx);
             }
@@ -55,19 +62,27 @@ impl DataPlane {
                 config.clone(),
                 runtime.clone(),
                 diag.clone(),
+                producer,
+                last_projection,
                 request_rx,
                 subscribers.clone(),
                 covered,
-                last_fold,
+                host_data.clone(),
                 observer,
             );
             let template = config.clone();
-            cache_refresh::spawn(config.clone(), runtime.clone(), diag, move || {
-                lock(&subscribers)
-                    .values()
-                    .next()
-                    .map(|pane| Stand::of(Some(pane), &template))
-            });
+            cache_refresh::spawn(
+                config.clone(),
+                runtime.clone(),
+                diag,
+                host_data,
+                move || {
+                    lock(&subscribers)
+                        .values()
+                        .next()
+                        .map(|pane| Stand::of(Some(pane), &template))
+                },
+            );
             // tmux fast path: the host streams control-mode topology nudges so a pane open/close publishes a fresh pane frame in tens of milliseconds instead of waiting out the poll. Latency only: the poll stays the presence backstop, and Zellij reaches the same publication path through its presence plugin.
             if config.mux == MuxName::Tmux {
                 tmux_watch::spawn(runtime.clone(), config.session_name.clone());
@@ -89,7 +104,7 @@ impl DataPlane {
             geometry: Arc::default(),
             request_tx,
             subscribers: Subscribers::default(),
-            last_fold: LastFold::default(),
+            host_data: Arc::default(),
             covered: Covered::default(),
             observe_tx,
             lanes: Mutex::new(None),
@@ -137,14 +152,14 @@ impl DataPlane {
             covered: self.covered.clone(),
             results,
             observe: self.observe_tx.clone(),
-            seed: lock(&self.last_fold).clone(),
+            seed: lock(&self.host_data).last_fold.clone(),
             _membership: membership,
         }
     }
 
     #[cfg(test)]
     pub(super) fn remember(&self, fold: WorkspaceFold) {
-        *lock(&self.last_fold) = Some(fold);
+        lock(&self.host_data).last_fold = Some(fold);
     }
 
     #[cfg(test)]

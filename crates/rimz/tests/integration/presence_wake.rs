@@ -190,15 +190,6 @@ impl WakeEnv {
             .unwrap_or_default()
     }
 
-    /// Seed the shared pane cache with a publishable shell frame produced
-    /// `age` ago — fresh under the event-mode TTL, stale under the default TTL.
-    fn seed_pane_cache(&self, age: Duration) {
-        self.seed_pane_cache_with_shell(
-            "terminal_7",
-            unix_now_ms().saturating_sub(age.as_millis() as u64),
-        );
-    }
-
     fn seed_pane_cache_with_shell(&self, pane_id: &str, produced_at_ms: u64) {
         let pane = PaneId::from_parts(MuxName::Zellij, pane_id);
         let mut cache = assemble_frame(
@@ -857,7 +848,8 @@ fn malformed_topology_is_best_effort_while_wake_stamps_and_broadcasts() {
 #[test]
 fn snapshot_producer_uses_topology_cache_without_list_panes_fork() {
     let env = WakeEnv::new();
-    let topology = env.topology_cache(unix_now_ms());
+    let mut topology = env.topology_cache(unix_now_ms());
+    topology.panes[1].pane_cwd = Some(env.project_root.display().to_string());
     let topology_json = serde_json::to_string(&topology).expect("serialize topology");
     let wake = env.wake_with(
         "alive",
@@ -886,20 +878,25 @@ fn snapshot_producer_uses_topology_cache_without_list_panes_fork() {
             .any(|line| line.contains("list-clients")),
         "topology-served producer must still refresh client focus",
     );
-    let cached = read_snapshot_cache(&env.runtime.pane_frame_path(), SESSION_NAME)
-        .expect("snapshot cache published from topology");
+    assert!(
+        !env.runtime.pane_frame_path().exists(),
+        "CLI reads must not publish a pane frame"
+    );
+    let cached: rimz::store::snapshot::SidebarSnapshot =
+        serde_json::from_slice(&output.stdout).expect("snapshot JSON");
     assert_eq!(
         cached.viewed_panes,
         vec![PaneId::from_parts(MuxName::Zellij, "terminal_6")],
         "topology cache avoids zellij list-panes but refreshes viewed panes even when the sample lags",
     );
     assert_eq!(
-        cached.presence.map(|presence| presence.human_clients),
-        Some(1),
+        cached.presence,
+        Some(rimz::store::snapshot::SidebarPresence::Active),
         "client focus sample carries attached-client presence",
     );
     assert_eq!(
-        cached.observed_at_ms, topology.produced_at_ms,
+        cached.panes_observed_at_ms.unwrap(),
+        topology.produced_at_ms,
         "topology cache production time is the frame observation time"
     );
     assert_eq!(
@@ -907,7 +904,10 @@ fn snapshot_producer_uses_topology_cache_without_list_panes_fork() {
         Some("terminal_7"),
         "topology authoritative focus should win over a stale client-view sample"
     );
-    let panes = cached.to_pane_refs();
+    let panes = cached
+        .rows()
+        .filter_map(|row| row.pane.as_ref())
+        .collect::<Vec<_>>();
     assert!(
         panes.iter().any(|pane| pane.pane_id.raw() == "terminal_7"
             && pane.command.as_deref() == Some("zsh")
@@ -1014,8 +1014,12 @@ fn focus_changed_wake_publishes_authoritative_topology_focus_without_list_panes_
         String::from_utf8_lossy(&output.stderr),
     );
     env.assert_no_list_panes_fork("fresh focus-changed topology");
-    let cached = read_snapshot_cache(&env.runtime.pane_frame_path(), SESSION_NAME)
-        .expect("snapshot cache published from focus-changed topology");
+    assert!(
+        !env.runtime.pane_frame_path().exists(),
+        "CLI reads must not publish a pane frame"
+    );
+    let cached: rimz::store::snapshot::SidebarSnapshot =
+        serde_json::from_slice(&output.stdout).expect("snapshot JSON");
     assert_eq!(
         cached.focused_pane.as_ref().map(PaneId::raw),
         Some("terminal_8"),
@@ -1026,7 +1030,10 @@ fn focus_changed_wake_publishes_authoritative_topology_focus_without_list_panes_
 #[test]
 fn pane_closed_pruned_topology_publishes_without_a_list_panes_fork() {
     let env = WakeEnv::new();
-    let full = env.topology_cache_for_tabs(unix_now_ms(), &[(7, 0, "main"), (8, 1, "agent")]);
+    let mut full = env.topology_cache_for_tabs(unix_now_ms(), &[(7, 0, "main"), (8, 1, "agent")]);
+    for pane in &mut full.panes {
+        pane.pane_cwd = Some(env.project_root.display().to_string());
+    }
     let full_json = serde_json::to_string(&full).expect("serialize full topology");
     let wake = env.wake_with(
         "alive",
@@ -1045,13 +1052,21 @@ fn pane_closed_pruned_topology_publishes_without_a_list_panes_fork() {
         "snapshot failed: stderr={}",
         String::from_utf8_lossy(&output.stderr),
     );
-    let cached = read_snapshot_cache(&env.runtime.pane_frame_path(), SESSION_NAME)
-        .expect("snapshot cache published from full topology");
-    let panes = cached.to_pane_refs();
+    assert!(
+        !env.runtime.pane_frame_path().exists(),
+        "CLI reads must not publish a pane frame"
+    );
+    let cached: rimz::store::snapshot::SidebarSnapshot =
+        serde_json::from_slice(&output.stdout).expect("snapshot JSON");
+    let panes = cached
+        .rows()
+        .filter_map(|row| row.pane.as_ref())
+        .collect::<Vec<_>>();
     assert!(panes.iter().any(|pane| pane.pane_id.raw() == "terminal_7"));
     assert!(panes.iter().any(|pane| pane.pane_id.raw() == "terminal_8"));
 
-    let pruned = env.topology_cache_for_tabs(unix_now_ms(), &[(7, 0, "main")]);
+    let mut pruned = env.topology_cache_for_tabs(unix_now_ms(), &[(7, 0, "main")]);
+    pruned.panes[0].pane_cwd = Some(env.project_root.display().to_string());
     let pruned_json = serde_json::to_string(&pruned).expect("serialize pruned topology");
     let wake = env.wake_with(
         "alive",
@@ -1067,7 +1082,6 @@ fn pane_closed_pruned_topology_publishes_without_a_list_panes_fork() {
         wake.status.success(),
         "PaneClosed-pruned topology wake must succeed"
     );
-    std::fs::remove_file(env.runtime.pane_frame_path()).expect("drop old pane frame");
 
     let output = env.snapshot();
     assert!(
@@ -1076,9 +1090,16 @@ fn pane_closed_pruned_topology_publishes_without_a_list_panes_fork() {
         String::from_utf8_lossy(&output.stderr),
     );
     env.assert_no_list_panes_fork("fresh PaneClosed-pruned topology");
-    let cached = read_snapshot_cache(&env.runtime.pane_frame_path(), SESSION_NAME)
-        .expect("snapshot cache published from pruned topology");
-    let panes = cached.to_pane_refs();
+    assert!(
+        !env.runtime.pane_frame_path().exists(),
+        "CLI reads must not publish a pane frame"
+    );
+    let cached: rimz::store::snapshot::SidebarSnapshot =
+        serde_json::from_slice(&output.stdout).expect("snapshot JSON");
+    let panes = cached
+        .rows()
+        .filter_map(|row| row.pane.as_ref())
+        .collect::<Vec<_>>();
     assert!(panes.iter().any(|pane| pane.pane_id.raw() == "terminal_7"));
     assert!(
         !panes.iter().any(|pane| pane.pane_id.raw() == "terminal_8"),
@@ -1232,30 +1253,6 @@ fn wake_without_live_sidebars_still_stamps_via_cwd_resolution() {
     let stamp = env.read_stamp().expect("stamp written with no sidebars");
     assert!(stamp.written_at_ms > 0);
     env.assert_no_mux_fork();
-}
-
-#[test]
-fn presence_stamp_extends_the_pane_cache_ttl() {
-    let event_env = WakeEnv::new();
-    let wake = event_env.wake("alive", false);
-    assert!(
-        wake.status.success(),
-        "stamp write must succeed: status={:?}, stderr={}",
-        wake.status,
-        String::from_utf8_lossy(&wake.stderr),
-    );
-    event_env.seed_pane_cache(Duration::from_secs(5));
-    let output = event_env.snapshot();
-    assert!(
-        output.status.success(),
-        "snapshot failed: stderr={}",
-        String::from_utf8_lossy(&output.stderr),
-    );
-    assert_eq!(
-        event_env.trace_lines(),
-        Vec::<String>::new(),
-        "event mode must serve the default-stale cache without a mux fork",
-    );
 }
 
 fn trace_shim_path() -> PathBuf {

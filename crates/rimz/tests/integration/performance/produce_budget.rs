@@ -39,8 +39,16 @@ fn warm_fleet_produce_forks_zero_subprocesses() {
     // The cold produce pays the one-time history fold; uncounted, like the
     // first frame after attach.
     h.publish_fresh_produce_inputs(SESSION_NAME, panes.clone());
-    rimz::sidebar::produce::produce_snapshot(&mut cursor, paths, &h.runtime_paths, &opts)
-        .expect("cold produce");
+    let mut producer =
+        rimz::sidebar::produce::SnapshotProducer::seeded(&h.runtime_paths, SESSION_NAME);
+    rimz::sidebar::produce::produce_snapshot(
+        &mut cursor,
+        paths,
+        &h.runtime_paths,
+        &opts,
+        &mut producer,
+    )
+    .expect("cold produce");
 
     // Steady state: one delta per tick, every stamp young — the elder's
     // common case. Inputs re-publish before each produce.
@@ -49,9 +57,14 @@ fn warm_fleet_produce_forks_zero_subprocesses() {
         let event = registered_lifecycle(&paths.workspace_id, round as usize % FLEET);
         event_log::append(&paths.events_log, &event).expect("append delta");
         h.publish_fresh_produce_inputs(SESSION_NAME, panes.clone());
-        let snapshot =
-            rimz::sidebar::produce::produce_snapshot(&mut cursor, paths, &h.runtime_paths, &opts)
-                .expect("warm produce");
+        let snapshot = rimz::sidebar::produce::produce_snapshot(
+            &mut cursor,
+            paths,
+            &h.runtime_paths,
+            &opts,
+            &mut producer,
+        )
+        .expect("warm produce");
         assert_eq!(snapshot.agents.len(), FLEET);
     }
     assert_eq!(
@@ -81,10 +94,17 @@ fn project_produce_over_stale_heavy_caches_forks_zero_subprocesses() {
     };
     let mut cursor = RollupCursor::new();
 
+    let mut producer =
+        rimz::sidebar::produce::SnapshotProducer::seeded(&h.runtime_paths, SESSION_NAME);
     let spawns_before = spawn_count();
-    let snapshot =
-        rimz::sidebar::produce::produce_snapshot(&mut cursor, paths, &h.runtime_paths, &opts)
-            .expect("project produce");
+    let snapshot = rimz::sidebar::produce::produce_snapshot(
+        &mut cursor,
+        paths,
+        &h.runtime_paths,
+        &opts,
+        &mut producer,
+    )
+    .expect("project produce");
     assert_eq!(snapshot.agents.len(), FLEET);
     assert_eq!(
         spawn_count() - spawns_before,

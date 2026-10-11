@@ -44,26 +44,6 @@ impl PublishedSnapshotReader {
             self.exclude.as_ref(),
         )
     }
-
-    pub(crate) fn read_workspace(
-        &mut self,
-        state: &StatePaths,
-    ) -> crate::store::snapshot::Result<(
-        WorkspaceSnapshot,
-        Option<std::sync::Arc<super::frame::PaneFrame>>,
-    )> {
-        read_published_workspace_snapshot(&mut self.cursor, state, &self.runtime, &self.session)
-    }
-
-    /// Producer lane escape hatch for sharing the warm rollup with pane production.
-    pub(crate) fn cursor_mut(&mut self) -> &mut RollupCursor {
-        &mut self.cursor
-    }
-
-    /// Discard possibly-partial incremental state after a caught producer unwind.
-    pub(crate) fn reset_after_unwind(&mut self) {
-        self.cursor = RollupCursor::new();
-    }
 }
 
 /// Read the event-fresh store rollup through a warm incremental cursor.
@@ -114,10 +94,21 @@ fn read_published_workspace_snapshot(
         .map(|frame| base.card_admitted_live_panes(frame.to_pane_refs(), None))
         .unwrap_or_default();
     let agent_projection = super::agent_projection::read_published(runtime, session, &panes);
+    let workspace = fold_workspace(base, cache.as_deref(), agent_projection, state, runtime);
+    Ok((workspace, cache))
+}
+
+pub(crate) fn fold_workspace(
+    base: SidebarSnapshot,
+    frame: Option<&super::frame::PaneFrame>,
+    agent_projection: super::agent_projection::AgentProjection,
+    state: &StatePaths,
+    runtime: &RuntimePaths,
+) -> WorkspaceSnapshot {
     let store = Store::open_existing(state.clone(), runtime.clone());
-    let workspace = enrich_workspace(
+    enrich_workspace(
         base,
-        cache.as_deref(),
+        frame,
         state,
         runtime,
         store.as_ref(),
@@ -129,8 +120,7 @@ fn read_published_workspace_snapshot(
             agent_projection,
         },
         &crate::diag::DiagSink::disabled(),
-    );
-    Ok((workspace, cache))
+    )
 }
 
 /// Apply cheap producer-published liveness to a cached store rollup.

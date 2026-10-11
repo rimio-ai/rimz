@@ -17,19 +17,22 @@ mod metrics;
 mod panes;
 pub(crate) mod tab_status;
 
+pub(crate) use panes::PaneProducer;
 pub use panes::repaired_pane_frame_for_binding;
 
 use std::collections::{BTreeSet, HashSet};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use crate::ids::{AgentKind, AgentSessionId, MuxName, PaneId};
-use crate::sidebar::agent_projection::{AgentProjection, WiredAgentProjection};
-use crate::sidebar::consumer::{RollupCursor, read_published_snapshot, rollup_snapshot};
+use crate::sidebar::agent_projection::{
+    AgentProjection, AgentProjectionPublication, LocalSessionInputs, WiredAgentProjection,
+};
+use crate::sidebar::consumer::{RollupCursor, fold_workspace, rollup_snapshot};
 use crate::sidebar::enrich::{FoldOpts, WorkspaceSnapshot, enrich, enrich_workspace};
-use crate::sidebar::frame::{PaneFrame, assemble_frame};
+use crate::sidebar::frame::PaneFrame;
 use crate::sidebar::refresh::refresh_heavy_lanes;
 use crate::store::snapshot::{PaneAgent, RowCard, SidebarSnapshot, SnapshotErr};
-use crate::utils::time::unix_now_ms;
 use crate::{ResolvedWorkspace, RuntimePaths, StatePaths, Store};
 
 #[derive(Debug, thiserror::Error)]
@@ -71,13 +74,66 @@ pub struct ProduceOptions {
     pub diag: crate::diag::DiagSink,
 }
 
-struct ProducerEnrich<'a> {
-    runtime: &'a RuntimePaths,
-    state: &'a StatePaths,
-    store: Option<&'a Store>,
-    exclude: Option<&'a PaneId>,
-    min_pane_cache_ms: Option<u64>,
-    diag: &'a crate::diag::DiagSink,
+#[derive(Clone, Debug)]
+pub struct InspectOptions {
+    pub target: Option<(MuxName, String)>,
+    pub exclude: Option<PaneId>,
+    pub min_pane_cache_ms: Option<u64>,
+}
+
+#[derive(Clone)]
+pub struct HostInputs {
+    pub(crate) frame: Arc<PaneFrame>,
+    projection: Arc<AgentProjectionPublication>,
+}
+
+impl HostInputs {
+    pub(crate) fn seeded(
+        producer: &PaneProducer,
+        session: &str,
+        projection: Option<AgentProjectionPublication>,
+    ) -> Option<Self> {
+        Some(Self {
+            frame: Arc::clone(producer.prior.as_ref()?),
+            projection: Arc::new(projection.unwrap_or_else(|| AgentProjectionPublication {
+                session_name: session.to_owned(),
+                ..Default::default()
+            })),
+        })
+    }
+
+    #[cfg(feature = "testkit")]
+    pub fn from_frame(frame: PaneFrame) -> Self {
+        Self {
+            projection: Arc::new(AgentProjectionPublication {
+                session_name: frame.session_name.clone(),
+                ..Default::default()
+            }),
+            frame: Arc::new(frame),
+        }
+    }
+    pub(crate) fn fold(
+        inputs: Option<&Self>,
+        cursor: &mut RollupCursor,
+        state: &StatePaths,
+        runtime: &RuntimePaths,
+    ) -> Result<WorkspaceSnapshot> {
+        let base = rollup_snapshot(state, cursor)?;
+        let projection = inputs.map_or_else(AgentProjection::default, |inputs| {
+            let panes = base.card_admitted_live_panes(inputs.frame.to_pane_refs(), None);
+            crate::sidebar::agent_projection::project_published(
+                &inputs.projection,
+                &LocalSessionInputs::from_panes(&panes),
+            )
+        });
+        Ok(fold_workspace(
+            base,
+            inputs.map(|inputs| inputs.frame.as_ref()),
+            projection,
+            state,
+            runtime,
+        ))
+    }
 }
 
 #[cfg(feature = "testkit")]
@@ -90,23 +146,48 @@ pub(crate) fn publish_test_pane_frame(
 
 /// Bench/performance façade over `produce_workspace_snapshot` followed by `project_local`, matching the fetch worker's produce and local projection without its publication step.
 #[cfg(feature = "testkit")]
+pub struct SnapshotProducer {
+    panes: PaneProducer,
+    projection: Option<AgentProjectionPublication>,
+}
+
+#[cfg(feature = "testkit")]
+impl SnapshotProducer {
+    pub fn seeded(runtime: &RuntimePaths, session: &str) -> Self {
+        Self {
+            panes: PaneProducer::seeded(runtime, session),
+            projection: None,
+        }
+    }
+}
+
+#[cfg(feature = "testkit")]
 pub fn produce_snapshot(
     cursor: &mut RollupCursor,
     state: &StatePaths,
     runtime: &RuntimePaths,
     opts: &ProduceOptions,
+    producer: &mut SnapshotProducer,
 ) -> Result<SidebarSnapshot> {
-    let produced = produce_workspace_snapshot(cursor, state, runtime, opts)?;
+    let produced = produce_workspace_snapshot(
+        cursor,
+        state,
+        runtime,
+        opts,
+        &mut producer.panes,
+        &mut producer.projection,
+        &mut None,
+    )?;
     Ok(crate::sidebar::enrich::project_local(
         produced.workspace,
-        Some(&produced.frame),
+        Some(&produced.inputs.frame),
         opts.exclude.as_ref(),
     ))
 }
 
 pub(crate) struct ProducedWorkspaceSnapshot {
     pub(crate) workspace: WorkspaceSnapshot,
-    pub(crate) frame: PaneFrame,
+    pub(crate) inputs: HostInputs,
 }
 
 /// Assemble the producer inputs and run the shared enrichment spine. This owns the root enumeration; heavy refreshes live in [`crate::sidebar::refresh`].
@@ -118,29 +199,53 @@ pub(crate) fn produce_workspace_snapshot(
     state: &StatePaths,
     runtime: &RuntimePaths,
     opts: &ProduceOptions,
+    producer: &mut PaneProducer,
+    last_projection: &mut Option<AgentProjectionPublication>,
+    inputs: &mut Option<HostInputs>,
 ) -> Result<ProducedWorkspaceSnapshot> {
-    let frame = produce_pane_frame(runtime, opts)?;
+    let frame = producer.tick(
+        runtime,
+        opts.mux,
+        &opts.session_name,
+        opts.min_pane_cache_ms,
+        opts.exclude.as_ref(),
+        &opts.diag,
+    )?;
+    let retained = inputs.get_or_insert_with(|| HostInputs {
+        frame: Arc::clone(&frame),
+        projection: Arc::new(last_projection.clone().unwrap_or_default()),
+    });
+    retained.frame = frame;
     let snapshot = rollup_snapshot(state, cursor)?;
+    let panes = snapshot.card_admitted_live_panes(retained.frame.to_pane_refs(), None);
+    let projection = crate::sidebar::agent_projection::probe(state, &opts.session_name, &panes);
+    crate::sidebar::agent_projection::publish_if_changed(runtime, &projection, last_projection);
+    retained.projection = Arc::new(projection);
     let store = Store::open_existing(state.clone(), runtime.clone());
-    let config = crate::config::MachineConfig::load_lenient();
     let roots = producer_roots(&snapshot, runtime, opts.min_pane_cache_ms);
-    let agent_projection = refresh_agent_projection(&snapshot, Some(&frame), state, runtime);
+    let agent_projection = crate::sidebar::agent_projection::project_published(
+        &retained.projection,
+        &LocalSessionInputs::from_panes(&panes),
+    );
     let workspace = enrich_workspace(
         snapshot,
-        Some(&frame),
+        Some(&retained.frame),
         state,
         runtime,
         store.as_ref(),
         FoldOpts {
             producing: true,
             fresh_roots: roots,
-            config: Some(config),
+            config: Some(crate::config::MachineConfig::load_lenient()),
             lanes: None,
             agent_projection,
         },
         &opts.diag,
     );
-    Ok(ProducedWorkspaceSnapshot { workspace, frame })
+    Ok(ProducedWorkspaceSnapshot {
+        workspace,
+        inputs: retained.clone(),
+    })
 }
 
 pub(crate) fn live_roster_from_snapshot(
@@ -182,45 +287,29 @@ pub fn produce_snapshot_with_refresh(
     cursor: &mut RollupCursor,
     state: &StatePaths,
     runtime: &RuntimePaths,
-    opts: &ProduceOptions,
+    opts: &InspectOptions,
 ) -> Result<SidebarSnapshot> {
-    let frame = produce_pane_frame(runtime, opts)?;
-    let snapshot = rollup_snapshot(state, cursor)?;
-    let store = Store::open_existing(state.clone(), runtime.clone());
-    Ok(enrich_with_refresh(
-        snapshot,
-        Some(frame),
-        ProducerEnrich {
+    let framed: Option<Result<_>> = opts.target.as_ref().map(|(mux, session)| {
+        let frame = panes::read_pane_frame(
             runtime,
-            state,
-            store: store.as_ref(),
-            exclude: opts.exclude.as_ref(),
-            min_pane_cache_ms: opts.min_pane_cache_ms,
-            diag: &opts.diag,
-        },
-    ))
-}
-
-/// Produce the resolution snapshot: event-fresh rollup plus the live pane frame,
-/// and no render spine. Talk/resolve commands need bound and sessionless agent
-/// pane targets; they do not read group roots, spending, accounts, provider
-/// dashboards, or git facts, so this path pays one pane enumeration and stops
-/// there.
-fn produce_resolution_snapshot(
-    cursor: &mut RollupCursor,
-    state: &StatePaths,
-    runtime: &RuntimePaths,
-    opts: &ProduceOptions,
-) -> Result<SidebarSnapshot> {
-    let frame = produce_pane_frame(runtime, opts)?;
-    let snapshot = rollup_snapshot(state, cursor)?;
-    Ok(fold_resolution_frame(
-        snapshot,
-        frame,
-        opts.exclude.as_ref(),
-        crate::sidebar::agent_projection::probe_current(),
-        runtime,
-    ))
+            *mux,
+            session,
+            opts.exclude.as_ref(),
+            &crate::diag::DiagSink::disabled(),
+        )?;
+        Ok((rollup_snapshot(state, cursor)?, frame))
+    });
+    let (snapshot, frame) = match framed.transpose() {
+        Ok(Some((snapshot, frame))) => (snapshot, Some(frame)),
+        fallback => {
+            if let Err(error) = fallback {
+                tracing::warn!(%error, "pane discovery failed; falling back to the frameless rollup");
+            }
+            *cursor = RollupCursor::new();
+            (rollup_snapshot(state, cursor)?, None)
+        }
+    };
+    Ok(enrich_with_refresh(snapshot, frame, state, runtime, opts))
 }
 
 /// Produce the snapshot used by commands that resolve message recipients. It
@@ -243,26 +332,30 @@ pub fn resolution_snapshot(
     };
     let state = StatePaths::for_project_root(&workspace.project_root)?;
     let runtime = RuntimePaths::for_project_root(&workspace.project_root)?;
-    let opts = ProduceOptions {
-        mux,
-        session_name: workspace.session_name.clone(),
-        exclude: None,
-        min_pane_cache_ms: Some(crate::utils::time::unix_now_ms()),
-        diag: crate::diag::DiagSink::for_workspace(
-            workspace.workspace_id.clone(),
-            workspace.session_name.clone(),
-            None,
-        ),
-    };
-    match produce_resolution_snapshot(&mut RollupCursor::new(), &state, &runtime, &opts) {
+    let diag = crate::diag::DiagSink::for_workspace(
+        workspace.workspace_id.clone(),
+        workspace.session_name.clone(),
+        None,
+    );
+    let result = panes::read_pane_frame(&runtime, mux, &workspace.session_name, None, &diag)
+        .and_then(|frame| {
+            let snapshot = rollup_snapshot(&state, &mut RollupCursor::new())?;
+            Ok(fold_resolution_frame(
+                snapshot,
+                frame,
+                None,
+                crate::sidebar::agent_projection::probe_current(),
+                &runtime,
+            ))
+        });
+    match result {
         Ok(snapshot) => Ok(snapshot),
         // No live session / pane discovery failed: fall back to the rollup's own
         // stamped panes so a bound agent still resolves, exactly as before.
         Err(err) => {
-            opts.diag
-                .emit(crate::diag::record::DiagEvent::ResolutionFallback {
-                    reason: err.to_string(),
-                });
+            diag.emit(crate::diag::record::DiagEvent::ResolutionFallback {
+                reason: err.to_string(),
+            });
             rollup_resolution_snapshot(store)
         }
     }
@@ -301,29 +394,6 @@ fn rollup_resolution_snapshot(store: &Store) -> Result<SidebarSnapshot> {
     Ok(snapshot)
 }
 
-pub fn produce_rollup_snapshot_with_refresh(
-    cursor: &mut RollupCursor,
-    state: &StatePaths,
-    runtime: &RuntimePaths,
-    exclude: Option<&PaneId>,
-    min_pane_cache_ms: Option<u64>,
-) -> Result<SidebarSnapshot> {
-    let snapshot = rollup_snapshot(state, cursor)?;
-    let store = Store::open_existing(state.clone(), runtime.clone());
-    Ok(enrich_with_refresh(
-        snapshot,
-        None,
-        ProducerEnrich {
-            runtime,
-            state,
-            store: store.as_ref(),
-            exclude,
-            min_pane_cache_ms,
-            diag: &crate::diag::DiagSink::disabled(),
-        },
-    ))
-}
-
 /// Refresh the producer-owned heavy caches from the last published pane frame.
 /// The live fetch worker projects these caches; this entry owns their
 /// time-driven refresh without re-running the full pane/enrich spine.
@@ -331,11 +401,16 @@ pub fn refresh_producer_caches(
     cursor: &mut RollupCursor,
     state: &StatePaths,
     runtime: &RuntimePaths,
-    session: &str,
+    inputs: Option<&HostInputs>,
     exclude: Option<&PaneId>,
     refresh_state: &mut crate::sidebar::refresh::ProducerRefreshState,
 ) -> Result<()> {
-    let base = read_published_snapshot(cursor, state, runtime, session, exclude)?;
+    let workspace = HostInputs::fold(inputs, cursor, state, runtime)?;
+    let base = crate::sidebar::enrich::project_local(
+        workspace,
+        inputs.map(|inputs| inputs.frame.as_ref()),
+        exclude,
+    );
     let config = crate::config::MachineConfig::load_lenient();
     let _ = refresh_heavy_lanes(
         &base,
@@ -351,29 +426,9 @@ pub fn refresh_producer_caches(
 
 /// Whether the deterministic pane fixture is active. The `--no-produce`
 /// consumer read defers to the produce path while a fixture stands in for the
-/// mux, so deterministic tests neither poison nor read the shared pane cache.
+/// mux, so deterministic tests never read the shared pane cache.
 pub fn pane_fixture_active() -> bool {
     std::env::var_os("RIMZ_TEST_PANE_LIST").is_some_and(|value| !value.is_empty())
-}
-
-fn produce_pane_frame(runtime: &RuntimePaths, opts: &ProduceOptions) -> Result<PaneFrame> {
-    match pane_list_fixture()? {
-        // A test fixture stands in for the mux; never touch the shared cache
-        // so deterministic tests can neither poison nor read it.
-        Some(fixture) => Ok(assemble_frame(
-            fixture,
-            unix_now_ms(),
-            opts.session_name.clone(),
-        )),
-        None => Ok(panes::cached_panes_or_produce(
-            runtime,
-            opts.mux,
-            &opts.session_name,
-            opts.min_pane_cache_ms,
-            opts.exclude.as_ref(),
-            &opts.diag,
-        )?),
-    }
 }
 
 fn fold_resolution_frame(
@@ -415,19 +470,36 @@ fn pane_list_fixture() -> Result<Option<Vec<crate::pane::PaneRef>>> {
 fn enrich_with_refresh(
     snapshot: SidebarSnapshot,
     frame: Option<PaneFrame>,
-    opts: ProducerEnrich<'_>,
+    state: &StatePaths,
+    runtime: &RuntimePaths,
+    opts: &InspectOptions,
 ) -> SidebarSnapshot {
     let config = crate::config::MachineConfig::load_lenient();
-    let roots = producer_roots(&snapshot, opts.runtime, opts.min_pane_cache_ms);
-    let agent_projection =
-        refresh_agent_projection(&snapshot, frame.as_ref(), opts.state, opts.runtime);
+    let roots = producer_roots(&snapshot, runtime, opts.min_pane_cache_ms);
+    let store = Store::open_existing(state.clone(), runtime.clone());
+    let diag = crate::diag::DiagSink::disabled();
+    let agent_projection = match frame.as_ref() {
+        Some(frame) => {
+            let panes = snapshot.card_admitted_live_panes(frame.to_pane_refs(), None);
+            let publication =
+                crate::sidebar::agent_projection::probe(state, &frame.session_name, &panes);
+            crate::sidebar::agent_projection::project_published(
+                &publication,
+                &LocalSessionInputs::from_panes(&panes),
+            )
+        }
+        None => AgentProjection {
+            wiring: crate::sidebar::agent_projection::probe_current(),
+            local_sessions: Vec::new(),
+        },
+    };
     let folded = enrich(
         snapshot.clone(),
         frame.as_ref(),
-        opts.state,
-        opts.runtime,
-        opts.store,
-        opts.exclude,
+        state,
+        runtime,
+        store.as_ref(),
+        opts.exclude.as_ref(),
         FoldOpts {
             producing: false,
             fresh_roots: roots.clone(),
@@ -435,7 +507,7 @@ fn enrich_with_refresh(
             lanes: None,
             agent_projection: agent_projection.clone(),
         },
-        opts.diag,
+        &diag,
     );
     // The intermediate fold applies the published daemon-reap cache. Probe from
     // the unreaped rollup so one-shot CLI refresh keeps the pre-split semantics:
@@ -444,8 +516,8 @@ fn enrich_with_refresh(
     let refreshed = refresh_heavy_lanes(
         &folded,
         &snapshot.agents,
-        opts.state,
-        opts.runtime,
+        state,
+        runtime,
         &config,
         crate::agents::spending::service::SpendingServiceStartup::OneShot,
         &mut Default::default(),
@@ -453,10 +525,10 @@ fn enrich_with_refresh(
     enrich(
         snapshot,
         frame.as_ref(),
-        opts.state,
-        opts.runtime,
-        opts.store,
-        opts.exclude,
+        state,
+        runtime,
+        store.as_ref(),
+        opts.exclude.as_ref(),
         FoldOpts {
             producing: true,
             fresh_roots: roots,
@@ -464,24 +536,8 @@ fn enrich_with_refresh(
             lanes: Some(&refreshed),
             agent_projection,
         },
-        opts.diag,
+        &diag,
     )
-}
-
-fn refresh_agent_projection(
-    snapshot: &SidebarSnapshot,
-    frame: Option<&PaneFrame>,
-    state: &StatePaths,
-    runtime: &RuntimePaths,
-) -> AgentProjection {
-    let Some(frame) = frame else {
-        return AgentProjection {
-            wiring: crate::sidebar::agent_projection::probe_current(),
-            local_sessions: Vec::new(),
-        };
-    };
-    let panes = snapshot.card_admitted_live_panes(frame.to_pane_refs(), None);
-    crate::sidebar::agent_projection::refresh_published(state, runtime, &frame.session_name, &panes)
 }
 
 fn producer_roots(
@@ -530,6 +586,7 @@ mod tests {
     use crate::agents::{AgentContext, AgentState, AgentStatus, AgentTurnError, TurnErrorClass};
     use crate::ids::WorkspaceId;
     use crate::pane::RuntimeOwnerKind;
+    use crate::sidebar::frame::assemble_frame;
     use jiff::Timestamp;
 
     #[test]

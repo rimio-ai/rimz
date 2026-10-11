@@ -12,11 +12,12 @@ use std::time::{Duration, Instant};
 use crate::config::NotificationsPrefs;
 use crate::diag::record::TickLoop;
 use crate::ids::{PaneId, SidebarInstanceId};
-use crate::sidebar::consumer::{PublishedSnapshotReader, RollupCursor};
+use crate::sidebar::consumer::RollupCursor;
 use crate::sidebar::enrich::{WorkspaceSnapshot, project_local};
 use crate::sidebar::frame::PaneFrame;
 use crate::sidebar::meter::TickMeter;
 use crate::sidebar::notify::{LinkAlert, LinkNotificationState, Notification, NotificationState};
+use crate::sidebar::produce::{HostInputs, PaneProducer};
 use crate::sidebar::read_marks::{ReadMarks, prune_read_marks};
 use crate::sidebar::unread::{ClearedUnread, OpenedUnread, UnreadEpisodes};
 use crate::store::snapshot::SidebarSnapshot;
@@ -41,19 +42,17 @@ use super::timing::tick_for;
 /// rather than trusting a torn base. Everything else the closure captures is
 /// read-only paths and options.
 fn run_produce_guarded<T>(
-    reader: &mut PublishedSnapshotReader,
+    cursor: &mut RollupCursor,
     produce: impl FnOnce(&mut RollupCursor) -> crate::sidebar::produce::Result<T>,
 ) -> std::result::Result<T, String> {
     let result = super::with_produce_panic_diagnostic_suppressed(|| {
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            produce(reader.cursor_mut())
-        }))
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| produce(cursor)))
     });
     match result {
         Ok(Ok(snapshot)) => Ok(snapshot),
         Ok(Err(err)) => Err(err.to_string()),
         Err(payload) => {
-            reader.reset_after_unwind();
+            *cursor = RollupCursor::new();
             Err(format!(
                 "sidebar produce panicked: {}",
                 super::panic_payload_message(payload.as_ref(), "unknown panic payload")
@@ -131,7 +130,11 @@ pub(super) struct WorkspaceFold {
     pub(super) frame: Option<Arc<PaneFrame>>,
 }
 
-pub(super) type LastFold = Arc<Mutex<Option<WorkspaceFold>>>;
+#[derive(Default)]
+pub(super) struct HostData {
+    pub(super) last_fold: Option<WorkspaceFold>,
+    pub(super) inputs: Option<HostInputs>,
+}
 
 struct SnapshotPublication {
     snapshot: SidebarSnapshot,
@@ -243,7 +246,9 @@ struct FetchWorker {
     config: ServeConfig,
     runtime: RuntimePaths,
     diag: crate::diag::DiagSink,
-    reader: PublishedSnapshotReader,
+    cursor: RollupCursor,
+    producer: PaneProducer,
+    last_projection: Option<crate::sidebar::agent_projection::AgentProjectionPublication>,
     producer_cadence: ProducerCadence,
     notifications: NotificationState,
     link_notifications: LinkNotificationState,
@@ -255,24 +260,27 @@ struct FetchWorker {
 }
 
 struct FastFold {
-    result: crate::store::snapshot::Result<WorkspaceFold>,
+    result: crate::sidebar::produce::Result<WorkspaceFold>,
     produce: bool,
 }
 
 impl FetchWorker {
-    fn new(config: ServeConfig, runtime: RuntimePaths, diag: crate::diag::DiagSink) -> Self {
-        let reader = PublishedSnapshotReader::new(
-            runtime.clone(),
-            config.session_name.clone(),
-            config.own_pane.clone(),
-        );
+    fn new(
+        config: ServeConfig,
+        runtime: RuntimePaths,
+        diag: crate::diag::DiagSink,
+        producer: PaneProducer,
+        last_projection: Option<crate::sidebar::agent_projection::AgentProjectionPublication>,
+    ) -> Self {
         let meter = TickMeter::new(TickLoop::Fetch, tick_for(config.tick_seconds));
         Self {
             observer: None,
             config,
             runtime,
             diag,
-            reader,
+            cursor: RollupCursor::new(),
+            producer,
+            last_projection,
             producer_cadence: ProducerCadence::default(),
             notifications: NotificationState::default(),
             link_notifications: LinkNotificationState::default(),
@@ -295,8 +303,15 @@ impl FetchWorker {
             return;
         }
         let now_ms = crate::utils::time::unix_now_ms();
-        let frame_stamps =
-            crate::sidebar::cache::published_frame_stamps(&self.runtime, &self.config.session_name);
+        let inputs = sink
+            .host_data
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .inputs
+            .clone();
+        let frame_stamps = inputs
+            .as_ref()
+            .map(|inputs| (inputs.frame.produced_at_ms, inputs.frame.observed_at_ms));
         tracing::debug!(target: "rimz::sidebar::fold", "sidebar fold");
         #[cfg(test)]
         if let Some(on_read) = &mut self.on_read {
@@ -307,10 +322,12 @@ impl FetchWorker {
             observation: None,
             inputs: sink.inputs.clone(),
         }));
-        let fast = self
-            .reader
-            .read_workspace(state)
-            .map(|(workspace, frame)| WorkspaceFold { workspace, frame });
+        let fast = HostInputs::fold(inputs.as_ref(), &mut self.cursor, state, &self.runtime).map(
+            |workspace| WorkspaceFold {
+                workspace,
+                frame: inputs.as_ref().map(|inputs| Arc::clone(&inputs.frame)),
+            },
+        );
         let tick = self.stand(sink).tick;
         let produce = self.start_produce_if_due(request, frame_stamps, &fast, now_ms, tick);
         self.publish_fast_fold(
@@ -356,7 +373,7 @@ impl FetchWorker {
         &mut self,
         request: FetchRequest,
         frame_stamps: Option<(u64, u64)>,
-        fast: &crate::store::snapshot::Result<WorkspaceFold>,
+        fast: &crate::sidebar::produce::Result<WorkspaceFold>,
         now_ms: u64,
         tick: Duration,
     ) -> bool {
@@ -413,11 +430,32 @@ impl FetchWorker {
             min_pane_cache_ms: request.min_pane_cache_ms,
             diag: self.diag.clone(),
         };
-        match run_produce_guarded(&mut self.reader, |cursor| {
-            crate::sidebar::produce::produce_workspace_snapshot(cursor, state, &self.runtime, &opts)
-        }) {
+        let mut inputs = sink
+            .host_data
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .inputs
+            .clone();
+        let result = run_produce_guarded(&mut self.cursor, |cursor| {
+            crate::sidebar::produce::produce_workspace_snapshot(
+                cursor,
+                state,
+                &self.runtime,
+                &opts,
+                &mut self.producer,
+                &mut self.last_projection,
+                &mut inputs,
+            )
+        });
+        if let Some(inputs) = inputs {
+            sink.host_data
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .inputs = Some(inputs);
+        }
+        match result {
             Ok(produced) => {
-                let frame = Arc::new(produced.frame);
+                let frame = produced.inputs.frame;
                 let snapshot = self.project_fold(
                     WorkspaceFold {
                         workspace: produced.workspace,
@@ -973,7 +1011,7 @@ pub(super) type Subscribers = Arc<Mutex<BTreeMap<String, Subscriber>>>;
 struct ResultSink {
     waker: Option<UnixDatagram>,
     subscribers: Subscribers,
-    last_fold: LastFold,
+    host_data: Arc<Mutex<HostData>>,
     /// The renderers this cycle serves, taken once as it starts.
     cycle: Vec<Subscriber>,
     covered: Covered,
@@ -1005,15 +1043,15 @@ impl ResultSink {
                 subscriber,
             )]))),
             Covered::default(),
-            LastFold::default(),
+            Arc::default(),
         )
     }
 
-    fn shared(subscribers: Subscribers, covered: Covered, last_fold: LastFold) -> Self {
+    fn shared(subscribers: Subscribers, covered: Covered, host_data: Arc<Mutex<HostData>>) -> Self {
         let mut sink = Self {
             waker: nonblocking_waker(),
             subscribers,
-            last_fold,
+            host_data,
             cycle: Vec::new(),
             covered,
             answering: None,
@@ -1086,10 +1124,10 @@ impl ResultSink {
         }
         self.send(eldest, update);
         if is_snapshot && let Some((fold, _)) = staged {
-            *self
-                .last_fold
+            self.host_data
                 .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(fold);
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .last_fold = Some(fold);
         }
     }
 
@@ -1185,19 +1223,21 @@ pub(super) fn spawn_fetch_worker(
     config: ServeConfig,
     runtime: RuntimePaths,
     diag: crate::diag::DiagSink,
+    producer: PaneProducer,
+    last_projection: Option<crate::sidebar::agent_projection::AgentProjectionPublication>,
     request_rx: std::sync::mpsc::Receiver<FetchRequest>,
     subscribers: Subscribers,
     covered: Covered,
-    last_fold: LastFold,
+    host_data: Arc<Mutex<HostData>>,
     observer: Option<crate::sidebar::observe::RoomObserver>,
 ) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
         crate::lane::set(crate::lane::WorkLane::Fetch);
-        let mut worker = FetchWorker::new(config, runtime, diag);
+        let mut worker = FetchWorker::new(config, runtime, diag, producer, last_projection);
         worker.observer = observer;
         worker.run(
             request_rx,
-            ResultSink::shared(subscribers, covered, last_fold),
+            ResultSink::shared(subscribers, covered, host_data),
         );
     })
 }
