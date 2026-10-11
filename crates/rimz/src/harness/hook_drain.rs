@@ -1,4 +1,6 @@
 //! Elected hook ingress draining, recovery, and the local drain-through wire.
+//!
+//! Drain-through callers poll the socket and lifetime lock until their deadline, requesting the elected drainer's result or applying inline as soon as the lock is free.
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
@@ -23,7 +25,7 @@ use crate::store::event_log::LogExtent;
 use crate::store::ingress::{self, HookIngress};
 
 const DRAINER_IDLE: Duration = Duration::from_secs(60);
-const SPAWN_RETRY: Duration = Duration::from_millis(200);
+const SOCKET_WAIT: Duration = Duration::from_millis(200);
 const RETRY: Duration = Duration::from_millis(5);
 const LOCK_WAIT: Duration = Duration::from_secs(30);
 const WIRE_LIMIT: u64 = 1024 * 1024;
@@ -234,6 +236,13 @@ pub fn frame_timestamp() -> jiff::Timestamp {
 
 #[derive(Debug, thiserror::Error)]
 pub enum HookDrainErr {
+    #[error(
+        "hook drainer did not answer within {waited:?}: its socket never accepted and its lifetime lock {path} stayed held (run `fuser {path}` to find the holder)"
+    )]
+    Unanswered {
+        waited: Duration,
+        path: std::path::PathBuf,
+    },
     #[error(transparent)]
     Io(#[from] io::Error),
     #[error(transparent)]
@@ -278,7 +287,7 @@ impl Connection {
     }
 
     pub fn nudge(mut self, through: u64) -> Result<(), HookDrainErr> {
-        self.stream.set_write_timeout(Some(SPAWN_RETRY))?;
+        self.stream.set_write_timeout(Some(SOCKET_WAIT))?;
         write_line(
             &mut self.stream,
             &Request {
@@ -312,8 +321,8 @@ pub struct DrainerLease {
 }
 
 impl DrainerLease {
-    pub fn acquire(store: &Store) -> Result<Self, HookDrainErr> {
-        let deadline = Instant::now() + SPAWN_RETRY;
+    pub fn acquire(store: &Store, wait: Duration) -> Result<Self, HookDrainErr> {
+        let deadline = Instant::now() + wait;
         spawn(store)?;
         let connection = loop {
             match Connection::connect(store) {
@@ -333,7 +342,7 @@ impl DrainerLease {
         match self.connection.stream.read(&mut [0]) {
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => Ok(()),
             _ => {
-                *self = Self::acquire(&self.store)?;
+                *self = Self::acquire(&self.store, SOCKET_WAIT)?;
                 Ok(())
             }
         }
@@ -342,7 +351,7 @@ impl DrainerLease {
 
 pub fn nudge(store: &Store, through: u64) -> Result<(), HookDrainErr> {
     if let Ok(mut stream) = UnixStream::connect(store.runtime_paths().hook_drainer_socket_path()) {
-        stream.set_write_timeout(Some(SPAWN_RETRY))?;
+        stream.set_write_timeout(Some(SOCKET_WAIT))?;
         return write_line(
             &mut stream,
             &Request {
@@ -427,20 +436,20 @@ pub fn drain_through(
         stop: false,
     };
     let socket = store.runtime_paths().hook_drainer_socket_path();
+    let lifetime_path = store.runtime_paths().hook_drainer_lock();
     let mut stream = UnixStream::connect(&socket).ok();
-    if stream.is_none() && spawn(store).is_ok() {
-        let connect_until = deadline.min(Instant::now() + SPAWN_RETRY);
-        while Instant::now() < connect_until {
-            if let Ok(connected) = UnixStream::connect(&socket) {
-                stream = Some(connected);
-                break;
-            }
-            std::thread::sleep(RETRY);
-        }
+    if stream.is_none() {
+        let _ = spawn(store);
     }
-    if let Some(mut stream) = stream {
+    loop {
         let remaining = deadline.saturating_duration_since(Instant::now());
-        if !remaining.is_zero() {
+        if remaining.is_zero() {
+            return Err(HookDrainErr::Unanswered {
+                waited: wait,
+                path: lifetime_path,
+            });
+        }
+        if let Some(mut stream) = stream.take().or_else(|| UnixStream::connect(&socket).ok()) {
             stream.set_read_timeout(Some(remaining))?;
             stream.set_write_timeout(Some(remaining))?;
             if write_line(&mut stream, &request).is_ok()
@@ -449,22 +458,20 @@ pub fn drain_through(
                 return Ok(receipt);
             }
         }
+        if let Some(lifetime) = WorkspaceLock::try_acquire(&lifetime_path)? {
+            request.through = inline_through;
+            let mut drain = Drainer::default();
+            drain.drain(store, &lifetime, None, Some(deadline), |drain| {
+                request.epoch = Some(drain.position(&request).0);
+                let lock =
+                    WorkspaceLock::acquire_with_timeout(&store.paths().workspace_lock, LOCK_WAIT)?;
+                drain.finish_if_drained(store, &lock)?;
+                Ok(drain.position(&request).1 >= request.through)
+            })?;
+            return Ok(drain.receipt(&request, None));
+        }
+        std::thread::sleep(RETRY.min(remaining));
     }
-    request.through = inline_through;
-    let _lifetime = WorkspaceLock::acquire_with_timeout(
-        &store.runtime_paths().hook_drainer_lock(),
-        deadline
-            .saturating_duration_since(Instant::now())
-            .min(LOCK_WAIT),
-    )?;
-    let mut drain = Drainer::default();
-    drain.drain(store, &_lifetime, None, Some(deadline), |drain| {
-        request.epoch = Some(drain.position(&request).0);
-        let lock = WorkspaceLock::acquire_with_timeout(&store.paths().workspace_lock, LOCK_WAIT)?;
-        drain.finish_if_drained(store, &lock)?;
-        Ok(drain.position(&request).1 >= request.through)
-    })?;
-    Ok(drain.receipt(&request, None))
 }
 
 struct Client {
@@ -583,7 +590,7 @@ fn answer_clients(
             continue;
         }
         client.stream.set_nonblocking(false)?;
-        client.stream.set_write_timeout(Some(SPAWN_RETRY))?;
+        client.stream.set_write_timeout(Some(SOCKET_WAIT))?;
         let _ = write_line(&mut client.stream, &drain.receipt(request, None));
         clients.swap_remove(index);
     }

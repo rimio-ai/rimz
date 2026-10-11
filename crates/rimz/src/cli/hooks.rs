@@ -409,12 +409,14 @@ fn run_drain(project_root: PathBuf, once: bool) -> Result<()> {
     let store =
         open_existing_store(&workspace)?.context("hook drainer requires an existing room")?;
     if once {
-        rimz::harness::hook_drain::drain_through(
-            &store,
-            0,
-            None,
-            std::time::Duration::from_secs(30),
-        )?;
+        let wait = std::time::Duration::from_secs(30);
+        #[cfg(feature = "testkit")]
+        let wait = std::env::var("RIMZ_TEST_HOOK_DRAIN_ONCE_WAIT_MS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .map(std::time::Duration::from_millis)
+            .unwrap_or(wait);
+        rimz::harness::hook_drain::drain_through(&store, 0, None, wait)?;
     } else {
         rimz::harness::hook_drain::run(&store)?;
     }

@@ -25,20 +25,40 @@ pub(crate) struct DrainerStop {
 }
 
 pub(crate) fn stop_drainer(runtime: &RuntimePaths) -> Result<DrainerStop, EventLogErr> {
+    use crate::disk::lock::{LOCK_TIMEOUT, LockErr};
     use std::io::Write as _;
     use std::os::unix::net::UnixStream;
+    use std::time::{Duration, Instant};
 
     let spawn = WorkspaceLock::acquire(&runtime.hook_drainer_spawn_lock())
         .map_err(|error| io_error(&runtime.hook_drainer_spawn_lock(), io::Error::other(error)))?;
-    if let Ok(mut stream) = UnixStream::connect(runtime.hook_drainer_socket_path()) {
-        stream
-            .set_write_timeout(Some(std::time::Duration::from_millis(200)))
-            .map_err(|error| io_error(&runtime.hook_drainer_socket_path(), error))?;
-        let request = serde_json::json!({"through": 0, "reply_for": null, "stop": true});
-        let _ = writeln!(stream, "{request}");
-    }
-    let lifetime = WorkspaceLock::acquire(&runtime.hook_drainer_lock())
-        .map_err(|error| io_error(&runtime.hook_drainer_lock(), io::Error::other(error)))?;
+    let path = runtime.hook_drainer_lock();
+    let started = Instant::now();
+    let lifetime = loop {
+        if let Some(lock) = WorkspaceLock::try_acquire(&path)
+            .map_err(|error| io_error(&path, io::Error::other(error)))?
+        {
+            break lock;
+        }
+        let remaining = LOCK_TIMEOUT.saturating_sub(started.elapsed());
+        if remaining.is_zero() {
+            return Err(io_error(
+                &path,
+                io::Error::other(LockErr::Timeout {
+                    path: path.clone(),
+                    waited: started.elapsed(),
+                }),
+            ));
+        }
+        if let Ok(mut stream) = UnixStream::connect(runtime.hook_drainer_socket_path()) {
+            stream
+                .set_write_timeout(Some(Duration::from_millis(200)))
+                .map_err(|error| io_error(&runtime.hook_drainer_socket_path(), error))?;
+            let request = serde_json::json!({"through": 0, "reply_for": null, "stop": true});
+            let _ = writeln!(stream, "{request}");
+        }
+        std::thread::sleep(Duration::from_millis(5).min(remaining));
+    };
     Ok(DrainerStop {
         _spawn: spawn,
         _lifetime: lifetime,

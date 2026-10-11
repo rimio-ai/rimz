@@ -20,7 +20,7 @@ pub(super) fn drainer_lease(
     let store = crate::cli::open_existing_store(workspace)?
         .context("sandbox hook drainer requires an existing room")?;
     Ok(Some(
-        rimz::harness::hook_drain::DrainerLease::acquire(&store)
+        rimz::harness::hook_drain::DrainerLease::acquire(&store, HOOK_DRAIN_WAIT)
             .context("starting host hook drainer for sandboxed provider")?,
     ))
 }
