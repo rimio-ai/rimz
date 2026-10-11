@@ -917,6 +917,70 @@ fn snapshot_producer_uses_topology_cache_without_list_panes_fork() {
 }
 
 #[test]
+fn snapshot_json_preserves_topology_agent_panes_and_roster() {
+    let env = WakeEnv::new();
+    let mut topology = env.topology_cache(unix_now_ms());
+    let mut shell = topology.panes[1].clone();
+    shell.id = 8;
+    shell.pane_cwd = Some(env.project_root.display().to_string());
+    topology.panes[1].pane_command = Some("codex".to_owned());
+    topology.panes[1].terminal_command = Some("codex".to_owned());
+    topology.panes[1].pane_cwd = shell.pane_cwd.clone();
+    topology.panes.push(shell);
+    let topology_json = serde_json::to_string(&topology).expect("serialize topology");
+    let wake = env.wake_with(
+        "alive",
+        true,
+        &[
+            "--session-name",
+            SESSION_NAME,
+            "--topology",
+            topology_json.as_str(),
+        ],
+    );
+    assert!(wake.status.success(), "topology wake must succeed");
+
+    let output = env.snapshot_with_list_clients(Some(
+        "CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND\n1 terminal_6 rimz-sidebar\n",
+    ));
+    assert!(
+        output.status.success(),
+        "snapshot failed: stderr={}",
+        String::from_utf8_lossy(&output.stderr),
+    );
+    env.assert_no_list_panes_fork("fresh topology JSON snapshot");
+    let snapshot: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("snapshot JSON");
+    let agent_panes = snapshot["agent_panes"].as_array().expect("agent panes");
+    assert_eq!(agent_panes.len(), 1);
+    assert_eq!(agent_panes[0]["kind"], "codex");
+    assert_eq!(agent_panes[0]["pane_id"], "zellij:terminal_7");
+    assert_eq!(snapshot["focused_pane"], "zellij:terminal_7");
+    let mut rows = snapshot["worktree_groups"]
+        .as_array()
+        .expect("worktree groups")
+        .iter()
+        .flat_map(|group| group["rows"].as_array().expect("rows"))
+        .map(|row| {
+            (
+                row["pane"]["pane_id"].as_str().expect("row pane"),
+                row["row_kind"].as_str().expect("row kind"),
+                row["name"].as_str().expect("row name"),
+            )
+        })
+        .collect::<Vec<_>>();
+    rows.sort_unstable();
+    assert_eq!(
+        rows,
+        vec![
+            ("zellij:terminal_7", "agent", "codex"),
+            ("zellij:terminal_8", "process", "zsh"),
+        ],
+        "the CLI roster includes both working panes and excludes sidebar chrome",
+    );
+}
+
+#[test]
 fn focus_changed_wake_publishes_authoritative_topology_focus_without_list_panes_fork() {
     let env = WakeEnv::new();
     let mut topology =
