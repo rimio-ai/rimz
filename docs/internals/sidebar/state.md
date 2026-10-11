@@ -30,7 +30,7 @@ Three rules resolve that, and the rest of this page follows from them.
                     per-attachment projection
                              │
     realtime events ────────▶│◀────────────── focus intent
-    per-attachment overlay   ▼
+    room-shared overlay     ▼
                    fuse(pulled, events, intent, now)
                    pure: no IO, subprocess, or clock read past `now`
                              │
@@ -359,7 +359,7 @@ Events divide by what the receiver does with them:
 - **Overlay events** land in the in-memory event store and change what the next fuse paints. Exactly four qualify: `PaneClosed`, `CommandChanged`, `FocusChanged`, and a `PaneOpened` that carries a command.
 - **Nudges and actions** are consumed on arrival. Some ask the producer for a verifying pull, some drive a renderer action, and none touch the overlay store.
 
-The overlay store ([`event_store.rs`](../../../crates/rimz/src/sidebar/event_store.rs)) keeps one slot per key (per pane per event kind, plus one focus slot), latest stamp wins, capped at 256 entries. Each entry records `sent_at_ms`, used for supersession against the pane frame, and its receive time, used for expiry after `EVENT_STORE_TTL` (12 seconds) on the receiver's clock. A skewed sender clock can briefly mis-order an overlay but can never pin one.
+The host owns one overlay store ([`event_store.rs`](../../../crates/rimz/src/sidebar/event_store.rs)), shared by its attachments and diagnostic observer. Each pane fuses its own projected baseline against it. It keeps one slot per key (per pane per event kind, plus one focus slot), latest stamp wins, capped at 256 entries. Each entry records `sent_at_ms`, used for supersession against the pane frame, and its receive time, used for expiry after `EVENT_STORE_TTL` (12 seconds) on the receiver's clock. A skewed sender clock can briefly mis-order an overlay but can never pin one.
 
 ### Event taxonomy
 

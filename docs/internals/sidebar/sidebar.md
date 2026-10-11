@@ -25,7 +25,7 @@ A shared fold feeds per-attachment frames in this order.
 7. **Enrich.** Unread state, git stats, provider panels, subagent lists, and value tallies attach to the ordered roster.
 8. **Project to lines.** Each attachment resolves the visible roster, composes the zones, and paints.
 
-Steps 1 through 7 run once per host fold. The host projects a typed `SidebarSnapshot` per attachment and delivers it through memory mailboxes; each attachment fuses its own events and focus intent before step 8. Runtime caches feed CLI reads; the host's remembered fold seeds new attachments ([state.md](./state.md#one-fetch-cycle)).
+Steps 1 through 7 run once per host fold. The host projects a typed `SidebarSnapshot` per attachment and delivers it through memory mailboxes; each attachment fuses the room's shared events and its own focus intent before step 8. Runtime caches feed CLI reads; the host's remembered fold seeds new attachments ([state.md](./state.md#one-fetch-cycle)).
 
 Only watched attachments paint. A capture of a hidden sidebar pane shows its last visible frame, including in a detached session; it is not a fresh snapshot. Hidden attachments still apply every delivered projection, refresh heartbeats, drain wakeups, and handle self-close and reload. A fold that lists the pane or its working siblings in `viewed_panes`, or a resize wakeup, paints the current state within one base frame ([the paint clock](./state.md#the-paint-clock)).
 

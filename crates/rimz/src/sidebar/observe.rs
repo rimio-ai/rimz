@@ -42,15 +42,15 @@ pub(crate) enum ObserveMsg {
 
 pub(crate) struct RoomObserver {
     tx: SyncSender<ObserveMsg>,
-    pub(crate) events: Arc<Mutex<EventStore>>,
+    events: Arc<Mutex<EventStore>>,
     dropped_msgs: u32,
 }
 
 impl RoomObserver {
-    pub(crate) fn new(tx: SyncSender<ObserveMsg>) -> Self {
+    pub(crate) fn new(tx: SyncSender<ObserveMsg>, events: Arc<Mutex<EventStore>>) -> Self {
         Self {
             tx,
-            events: Arc::default(),
+            events,
             dropped_msgs: 0,
         }
     }

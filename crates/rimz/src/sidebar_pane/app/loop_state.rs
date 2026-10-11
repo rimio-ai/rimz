@@ -120,11 +120,10 @@ pub(super) struct LoopState {
     /// past it while the tab is still viewed, so a pass-through never clears
     /// siblings. `None` when no dwell is pending.
     pub(super) tab_read_dwell_until: Option<Instant>,
-    event_store: EventStore,
+    pub(super) events: Arc<Mutex<EventStore>>,
     pending_focus_repair: Option<PendingFocusRepair>,
     confirmed_focus_intent_ms: u64,
     observer: observe::OwnObserver,
-    pub(super) observe_events: Option<Arc<Mutex<EventStore>>>,
     observe_tx: SyncSender<ObserveMsg>,
     pub(super) health: Health,
     gate: GateState,
@@ -257,11 +256,10 @@ impl LoopState {
             current,
             optimistic_watch_until: None,
             tab_read_dwell_until: None,
-            event_store: EventStore::default(),
+            events: Arc::default(),
             pending_focus_repair: None,
             confirmed_focus_intent_ms: 0,
             observer: observe::OwnObserver::default(),
-            observe_events: None,
             observe_tx,
             health: Health::default(),
             gate: GateState::default(),
@@ -479,7 +477,7 @@ impl LoopState {
                 source,
             } => {
                 let now_ms = crate::utils::time::unix_now_ms();
-                self.event_store.prune(now_ms);
+                self.events().prune(now_ms);
                 let pulled = *snapshot;
                 self.last_focus_observation = FocusObservation::from_snapshot(&pulled);
                 if self.observation.is_some() {
@@ -487,7 +485,7 @@ impl LoopState {
                 }
                 let intent = self.pending_focus_intent(now_ms);
                 let (snapshot, baseline, focus_event_sent_at_ms) =
-                    fuse_owned(pulled, &self.event_store, intent.as_ref(), now_ms);
+                    fuse_owned(pulled, &self.events(), intent.as_ref(), now_ms);
                 fused_event_sent_at_ms = focus_event_sent_at_ms;
                 self.overlay_baseline = baseline;
                 FetchUpdate::Snapshot {
@@ -540,7 +538,7 @@ impl LoopState {
             self.overlay_baseline
                 .as_ref()
                 .expect("overlay baseline installed"),
-            &self.event_store,
+            &self.events(),
             intent.as_ref(),
             now_ms,
         )
@@ -803,13 +801,7 @@ impl LoopState {
             if own.is_some_and(|pane| unfocused.contains(pane)));
         let requests_verification = event.requests_producer_verification();
         let now_ms = crate::utils::time::unix_now_ms();
-        if let Some(events) = &self.observe_events {
-            events
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .append(event.clone(), sent_at_ms, now_ms);
-        }
-        self.event_store.append(event, sent_at_ms, now_ms);
+        self.events().append(event, sent_at_ms, now_ms);
         self.fold_fused_now();
         if !self.should_exit && (requests_verification || own_focused) {
             fetch.request(FetchRequest::fresh_panes(), true);
@@ -1781,14 +1773,14 @@ impl LoopState {
                         .as_ref()
                         .is_some_and(|(retired, issued_at_ms)| {
                             inputs.sampled_at <= *retired
-                                && !self.event_store.has_focus_since(*issued_at_ms, now_ms)
+                                && !self.events().has_focus_since(*issued_at_ms, now_ms)
                         })
                 })
                 .map(|_| FocusPresentation::Fence);
         };
         let outcome = if focus_intent_confirmed_from(
             &self.last_focus_observation,
-            &self.event_store,
+            &self.events(),
             &anchor,
             now_ms,
         ) {
@@ -1859,6 +1851,12 @@ impl LoopState {
         );
     }
 
+    fn events(&self) -> std::sync::MutexGuard<'_, EventStore> {
+        self.events
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     fn observe_commit(&mut self) {
         let Some(common) = &self.observation else {
             return;
@@ -1867,7 +1865,7 @@ impl LoopState {
         let sig = observe::OwnFrameSig::extract(
             &self.current,
             (self.last_pulled_rows, common.pulled_panes_produced_at_ms),
-            &self.event_store,
+            &self.events(),
             self.gate.reject_streak,
             self.health.failure_streak,
             now_ms,
