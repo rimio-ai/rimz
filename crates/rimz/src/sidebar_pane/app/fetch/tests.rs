@@ -1199,7 +1199,7 @@ fn shared_observation_extracts_common_once_and_keeps_each_own_view() {
     }
     let (tx, _rx) = std::sync::mpsc::sync_channel(64);
     let mut worker = fixture.worker();
-    worker.observer = Some(observe::RoomObserver::new(tx.clone()));
+    worker.observer = Some(observe::RoomObserver::new(tx.clone(), Arc::default()));
     let mut sink = ResultSink::shared(subscribers, Covered::default(), LastFold::default());
     observe::take_extractions();
     worker.run_cycle(&fixture.state, FetchRequest::force_fold(), &mut sink);

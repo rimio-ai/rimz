@@ -18,7 +18,7 @@ use super::fetch::{
 use super::{ServeConfig, cache_refresh, tmux_watch, transcript_watch};
 
 pub(in crate::sidebar_pane) struct DataPlane {
-    pub(super) observe_events: Option<Arc<Mutex<crate::sidebar::event_store::EventStore>>>,
+    pub(super) events: Arc<Mutex<crate::sidebar::event_store::EventStore>>,
     pub(super) caps: Arc<Mutex<crate::sidebar_pane::pixel::probe::RoomCaps>>,
     pub(super) geometry: Arc<Mutex<crate::mux::zellij::WidthMemo>>,
     request_tx: Sender<FetchRequest>,
@@ -39,11 +39,10 @@ impl DataPlane {
         runtime: &RuntimePaths,
         diag: &crate::diag::DiagSink,
     ) -> Self {
-        let (mut plane, request_rx, observe_rx) = Self::idle();
+        let (plane, request_rx, observe_rx) = Self::idle();
         let observer = diag
             .is_enabled()
-            .then(|| observe::RoomObserver::new(plane.observe_tx.clone()));
-        plane.observe_events = observer.as_ref().map(|observer| observer.events.clone());
+            .then(|| observe::RoomObserver::new(plane.observe_tx.clone(), plane.events.clone()));
         let (config, runtime, diag) = (config.clone(), runtime.clone(), diag.clone());
         let subscribers = plane.subscribers.clone();
         let covered = plane.covered.clone();
@@ -85,7 +84,7 @@ impl DataPlane {
         let (request_tx, request_rx) = std::sync::mpsc::channel();
         let (observe_tx, observe_rx) = std::sync::mpsc::sync_channel(64);
         let plane = Self {
-            observe_events: None,
+            events: Arc::default(),
             caps: Arc::default(),
             geometry: Arc::default(),
             request_tx,

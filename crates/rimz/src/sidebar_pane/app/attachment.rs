@@ -183,7 +183,7 @@ impl Attachment {
         );
         state.room_caps = plane.caps.clone();
         state.share_width_geometry(plane.geometry.clone());
-        state.observe_events = plane.observe_events.clone();
+        state.events = plane.events.clone();
         state.set_probed_aspect(terminal.backend().cell_aspect());
         if let Some(seed) = subscription.seed {
             state.seed(seed);
