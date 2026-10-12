@@ -352,20 +352,33 @@ fn control_command(
 ) -> Option<Command> {
     let (program, args) = argv.split_first()?;
     let mut command = Command::new(program);
-    command.args(args).current_dir(home);
-    crate::agents::adapters::codex::forward_login_env(&mut command, login_env);
+    configure_control_command(&mut command, args, home, login_env);
     Some(command)
+}
+
+fn configure_control_command(
+    command: &mut Command,
+    args: &[String],
+    home: &Path,
+    login_env: &BTreeMap<String, String>,
+) {
+    command.args(args).current_dir(home);
+    crate::agents::adapters::codex::forward_login_env(command, login_env);
 }
 
 fn spawn(bin: &Path, home: &Path, login_env: &BTreeMap<String, String>) {
     let argv = command(bin, true);
-    let Some(mut cmd) = control_command(&argv, home, login_env) else {
+    let Some((program, args)) = argv.split_first() else {
         return;
     };
-    cmd.stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    if let Err(err) = crate::child_process::spawn_detached_reaped(&mut cmd, "codex-daemon") {
+    if let Err(err) = crate::child_process::spawn_detached_reaped(
+        program,
+        |cmd| {
+            configure_control_command(cmd, args, home, login_env);
+            Ok(())
+        },
+        "codex-daemon",
+    ) {
         tracing::warn!(error = %err, "failed to spawn the codex app-server daemon");
     }
 }

@@ -98,6 +98,7 @@ pub struct AgentsConfig {
     pub shell: Option<PathBuf>,
     pub worktree: WorktreeConfig,
     pub attention: AttentionConfig,
+    pub hibernate: HibernateConfig,
     #[serde(default)]
     pub subagents: SubagentsConfig,
     #[serde(default, skip_deserializing)]
@@ -122,6 +123,7 @@ impl Default for AgentsConfig {
             shell: None,
             worktree: WorktreeConfig::default(),
             attention: AttentionConfig::default(),
+            hibernate: HibernateConfig::default(),
             subagents: SubagentsConfig::default(),
             profiles: ProfilesConfig::default(),
             commands: CommandsConfig::default(),
@@ -172,6 +174,54 @@ pub struct StartupRelaunchWaitErr {
 
 const fn default_max_chain_length() -> u8 {
     3
+}
+
+/// Machine-local agent hibernation policy, validated at use.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct HibernateConfig {
+    pub enabled: bool,
+    pub after: String,
+}
+
+impl Default for HibernateConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            after: "10m".into(),
+        }
+    }
+}
+
+impl HibernateConfig {
+    pub fn after(&self) -> Result<Duration, HibernateAfterErr> {
+        use crate::utils::time::{DurationUnit, parse_duration_units};
+        let refuse = |reason: String| HibernateAfterErr {
+            value: self.after.clone(),
+            reason,
+        };
+        let duration = parse_duration_units(
+            &self.after,
+            &[
+                DurationUnit::Second,
+                DurationUnit::Minute,
+                DurationUnit::Hour,
+                DurationUnit::Day,
+            ],
+        )
+        .map_err(|error| refuse(error.to_string()))?;
+        if duration > Duration::from_secs(24 * 60 * 60) {
+            return Err(refuse("longer than 24h".into()));
+        }
+        Ok(duration)
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("invalid agents.hibernate.after `{value}`: {reason}; use a duration from 0s through 24h")]
+pub struct HibernateAfterErr {
+    value: String,
+    reason: String,
 }
 
 /// Defaults applied by the agent-only `rimz subagents` launch doorway.

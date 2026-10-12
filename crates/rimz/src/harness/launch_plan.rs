@@ -39,6 +39,7 @@ pub struct LaunchPlanInputs<'a> {
     /// The machine's `[agents] shell`, read from machine config directly since
     /// `effective` is absent when the effective config fails to load.
     pub agent_shell: Option<&'a Path>,
+    pub hibernate: bool,
 }
 
 pub struct LaunchPlan {
@@ -293,6 +294,7 @@ pub fn prepare_exec(
             agents: agents.as_deref().map_err(String::as_str),
             ambient_env: &ambient_env,
             agent_shell: machine.agents.shell.as_deref(),
+            hibernate: machine.agents.hibernate.enabled,
         })?;
         Ok((plan, isolation))
     };
@@ -691,6 +693,16 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
         } else {
             None
         };
+    if cfg!(target_os = "linux")
+        && inputs.hibernate
+        && let AgentProcessStage::Ready(process) = &mut stage
+    {
+        process.argv = super::hibernate::scope_argv(
+            &inputs.state.workspace_id,
+            request.kind.as_str(),
+            &process.argv,
+        );
+    }
     Ok(LaunchPlan {
         request,
         cwd: inputs.cwd.to_path_buf(),
@@ -893,6 +905,7 @@ pub mod testkit {
             agents: Ok(&[]),
             ambient_env: &BTreeMap::new(),
             agent_shell: None,
+            hibernate: false,
         })
         .unwrap();
         assert_eq!(plan.login.name().as_str(), expected.unwrap_or("default"));

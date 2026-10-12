@@ -2348,3 +2348,37 @@ fn model_aliases_reject_alias_targets() {
         );
     }
 }
+#[test]
+fn hibernate_duration_is_validated_at_use() {
+    let mut config = HibernateConfig::default();
+    assert_eq!(config.after().unwrap(), std::time::Duration::from_secs(600));
+    for value in ["oops", "25h"] {
+        config.after = value.into();
+        assert!(
+            config
+                .after()
+                .unwrap_err()
+                .to_string()
+                .contains("agents.hibernate.after")
+        );
+    }
+    config.after = "24h".into();
+    assert_eq!(
+        config.after().unwrap(),
+        std::time::Duration::from_secs(86400)
+    );
+}
+
+#[test]
+fn hibernate_off_linux_warns_once_and_disables() {
+    let mut config: MachineConfig = toml::from_str("[agents.hibernate]\nenabled = true").unwrap();
+    let mut notices = ConfigNotices::default();
+    config.disable_unavailable_hibernation(true, &mut notices);
+    assert!(config.agents.hibernate.enabled);
+    assert!(notices.hibernate_unavailable.is_empty());
+    config.disable_unavailable_hibernation(false, &mut notices);
+    config.disable_unavailable_hibernation(false, &mut notices);
+    assert!(!config.agents.hibernate.enabled);
+    assert_eq!(notices.hibernate_unavailable.len(), 1);
+    assert!(notices.hibernate_unavailable[0].contains("agents.hibernate.enabled"));
+}

@@ -7,7 +7,6 @@
 //! duplicate policy decisions stay with the room host.
 
 use std::collections::BTreeMap;
-use std::process::{Command, Stdio};
 
 use crate::agents::AgentStatus;
 use crate::child_process;
@@ -420,23 +419,25 @@ pub fn spawn_notify_handlers(prefs: &NotificationsPrefs, notification: &Notifica
 }
 
 fn spawn_notify_command(command: &str, notification: &Notification) -> std::io::Result<u32> {
-    let mut cmd = Command::new("sh");
-    cmd.args(["-c", command])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .env("RIMZ_NOTIFY_TITLE", &notification.title)
-        .env("RIMZ_NOTIFY_BODY", &notification.body)
-        .env("RIMZ_NOTIFY_AGENT", notification.agent_env())
-        .env("RIMZ_NOTIFY_KIND", notification.kind_env())
-        .env("RIMZ_NOTIFY_ASK", notify_ask_env(notification));
-    let (pane, root) = notify_pane_env(notification);
-    cmd.env("RIMZ_NOTIFY_PANE", pane)
-        .env("RIMZ_NOTIFY_ROOT", root);
-    if let Some(unread_count) = notification.unread_count {
-        cmd.env("RIMZ_NOTIFY_UNREAD", unread_count.to_string());
-    }
-    child_process::spawn_detached_reaped(&mut cmd, "notify-command")
+    child_process::spawn_detached_reaped(
+        "sh",
+        |cmd| {
+            cmd.args(["-c", command])
+                .env("RIMZ_NOTIFY_TITLE", &notification.title)
+                .env("RIMZ_NOTIFY_BODY", &notification.body)
+                .env("RIMZ_NOTIFY_AGENT", notification.agent_env())
+                .env("RIMZ_NOTIFY_KIND", notification.kind_env())
+                .env("RIMZ_NOTIFY_ASK", notify_ask_env(notification));
+            let (pane, root) = notify_pane_env(notification);
+            cmd.env("RIMZ_NOTIFY_PANE", pane)
+                .env("RIMZ_NOTIFY_ROOT", root);
+            if let Some(unread_count) = notification.unread_count {
+                cmd.env("RIMZ_NOTIFY_UNREAD", unread_count.to_string());
+            }
+            Ok(())
+        },
+        "notify-command",
+    )
 }
 
 fn notification_template_vars(notification: &Notification) -> TemplateVars {

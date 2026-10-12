@@ -1,6 +1,5 @@
 use super::*;
 use rimz::store::snapshot::find_agent;
-use std::process::{Command, Stdio};
 
 #[cfg(test)]
 use rimz::agents::AgentState;
@@ -375,16 +374,19 @@ pub(super) fn handle_lifecycle_frame(
 /// ignored; durable queue work remains pending for a later transition.
 fn spawn_refresh_detached(spawn: &rimz::agents::RefreshSpawn) {
     let exe = rimz::proc::rimz_exe();
-    let mut cmd = Command::new(exe);
-    for name in rimz::harness::hook_drain::HOOK_ENV_NAMES {
-        cmd.env_remove(name);
-    }
-    cmd.args(&spawn.args)
-        .envs(rimz::harness::hook_drain::capture_env())
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    if let Err(err) = rimz::child_process::spawn_detached_reaped(&mut cmd, "adapter-refresh") {
+    let result = rimz::child_process::spawn_detached_reaped(
+        exe,
+        |cmd| {
+            for name in rimz::harness::hook_drain::HOOK_ENV_NAMES {
+                cmd.env_remove(name);
+            }
+            cmd.args(&spawn.args)
+                .envs(rimz::harness::hook_drain::capture_env());
+            Ok(())
+        },
+        "adapter-refresh",
+    );
+    if let Err(err) = result {
         warn!(error = %err, "lifecycle: failed to spawn the adapter refresh helper");
     }
 }

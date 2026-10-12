@@ -160,6 +160,7 @@ pub(super) fn report_start_notices(workspace: &rimz::ResolvedWorkspace) -> Resul
         )
     }));
     notices.extend(machine.notices.host_isolation_fallback.iter().cloned());
+    notices.extend(machine.notices.hibernate_unavailable.iter().cloned());
     notices.extend(root_class_notice(workspace));
     if notices.is_empty() {
         return Ok(());

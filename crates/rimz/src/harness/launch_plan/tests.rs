@@ -34,6 +34,138 @@ fn request(kind: &str, action: ExecAction) -> ExecRequest {
     }
 }
 
+#[test]
+#[cfg(target_os = "linux")]
+fn hibernation_scopes_ready_providers_outside_bwrap() {
+    let project = tempfile::tempdir().unwrap();
+    let id = crate::WorkspaceId::from_project_root(project.path());
+    let runtime = RuntimePaths::under(id.clone(), project.path()).unwrap();
+    let state = StatePaths::under(id, project.path()).unwrap();
+    let machine = crate::config::MachineConfig::default();
+    let request = request("claude", action_with_args("launch", vec![]));
+    for bwrap in [None, Some(Path::new("/usr/bin/bwrap"))] {
+        for enabled in [false, true] {
+            let plan = compile(LaunchPlanInputs {
+                request: &request,
+                cwd: project.path(),
+                project_root: project.path(),
+                rimz_bin: Path::new("/bin/rimz"),
+                runtime: &runtime,
+                state: &state,
+                effective: None,
+                commands: &machine.agents.commands,
+                accounts: &machine.accounts,
+                bwrap,
+                agents: Ok(&[]),
+                ambient_env: &BTreeMap::new(),
+                agent_shell: None,
+                hibernate: enabled,
+            })
+            .unwrap();
+            let argv = &plan.process().argv;
+            assert_eq!(argv[0] == "systemd-run", enabled);
+            if enabled {
+                assert!(
+                    argv[8]
+                        .starts_with(&super::super::hibernate::scope_prefix(&state.workspace_id))
+                );
+                if let Some(bwrap) = bwrap {
+                    assert_eq!(argv[12], bwrap.to_str().unwrap());
+                }
+            }
+        }
+    }
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn hibernation_leaves_qwen_reentry_outside_the_final_provider_scope() {
+    let project = tempfile::tempdir().unwrap();
+    let home = project.path().join("qwen-work");
+    std::fs::create_dir(&home).unwrap();
+    std::fs::write(home.join("settings.json"), r#"{
+        "security":{"auth":{"selectedType":"openai"}},
+        "model":{"name":"qwen3-coder-plus"},
+        "modelProviders":{"openai":[{"id":"qwen3-coder-plus","baseUrl":"https://coding-intl.dashscope.aliyuncs.com/v1","envKey":"BAILIAN_CODING_PLAN_API_KEY"}]},
+        "env":{"BAILIAN_CODING_PLAN_API_KEY":"test-credential"}
+    }"#).unwrap();
+    if std::env::var_os("RIMZ_TEST_QWEN_HIBERNATION").is_none() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "harness::launch_plan::tests::hibernation_leaves_qwen_reentry_outside_the_final_provider_scope", "--nocapture"])
+            .env("RIMZ_TEST_QWEN_HIBERNATION", "1")
+            .env("QWEN_HOME", &home)
+            .env_remove("RIMZ_QWEN_SETTINGS")
+            .output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    let machine = crate::config::MachineConfig::default();
+    let state = StatePaths::under(
+        crate::WorkspaceId::from_project_root(project.path()),
+        project.path(),
+    )
+    .unwrap();
+    let runtime = RuntimePaths::under(state.workspace_id.clone(), project.path()).unwrap();
+    let env = BTreeMap::from([("QWEN_HOME".into(), home.display().to_string())]);
+    let binding = crate::agents::find_definition("qwen")
+        .unwrap()
+        .resolve_managed_launch(
+            project.path(),
+            &env,
+            Some("qwen3-coder-plus"),
+            &["qwen".into()],
+        )
+        .binding()
+        .unwrap()
+        .clone();
+    let mut request = request("qwen", action_with_args("launch", vec![]));
+    request.identity.params.model = Some("qwen3-coder-plus".into());
+    for enabled in [false, true] {
+        for finalized in [false, true] {
+            request.provider_account = if finalized {
+                ProviderAccountState::Finalized {
+                    binding: binding.clone(),
+                }
+            } else {
+                ProviderAccountState::Pending {
+                    binding: binding.clone(),
+                }
+            };
+            let plan = compile(LaunchPlanInputs {
+                request: &request,
+                cwd: project.path(),
+                project_root: project.path(),
+                rimz_bin: Path::new("/bin/rimz"),
+                runtime: &runtime,
+                state: &state,
+                effective: None,
+                commands: &machine.agents.commands,
+                accounts: &machine.accounts,
+                bwrap: None,
+                agents: Ok(&[]),
+                ambient_env: &env,
+                agent_shell: None,
+                hibernate: enabled,
+            })
+            .unwrap();
+            match plan.stage {
+                AgentProcessStage::LoginShellReentry { argv, .. } => {
+                    assert!(!finalized);
+                    assert!(!argv.iter().any(|arg| arg == "systemd-run"));
+                }
+                AgentProcessStage::Ready(process) => {
+                    assert!(finalized);
+                    assert_eq!(process.argv[0] == "systemd-run", enabled);
+                }
+            }
+        }
+    }
+}
+
 fn action_with_args(action: &str, args: Vec<String>) -> ExecAction {
     match action {
         "launch" => ExecAction::Launch {
@@ -185,6 +317,7 @@ fn model_alias_resolution_at_the_process_boundary() {
             agents: Ok(&[]),
             ambient_env: &ambient,
             agent_shell: None,
+            hibernate: false,
         })
         .unwrap();
         assert_eq!(
@@ -329,6 +462,7 @@ fn routine_permissions_cover_actions_children_and_isolations() {
                         agents: Ok(&[]),
                         ambient_env: &ambient,
                         agent_shell: None,
+                        hibernate: false,
                     })
                     .unwrap();
                     let settings = plan
@@ -422,6 +556,7 @@ fn sandbox_settings_artifact_is_written_only_on_apply() {
         agents: Ok(&[]),
         ambient_env: &BTreeMap::new(),
         agent_shell: None,
+        hibernate: false,
     })
     .unwrap();
     let args = &plan.process().provider_argv;
@@ -462,6 +597,7 @@ fn allowed_tools_warn_on_unsupported_kind_without_changing_argv() {
             agents: Ok(&[]),
             ambient_env: &ambient,
             agent_shell: None,
+            hibernate: false,
         })
         .unwrap()
     };
@@ -530,6 +666,7 @@ fn host_settings_are_private_artifacts_written_only_on_apply() {
         agents: Ok(&[]),
         ambient_env: &BTreeMap::new(),
         agent_shell: None,
+        hibernate: false,
     })
     .unwrap();
     let process = plan.process();
@@ -928,6 +1065,7 @@ fn prompt_environment_reaches_qwen_without_entering_argv() {
             agents: Ok(&[]),
             ambient_env: &BTreeMap::new(),
             agent_shell: None,
+            hibernate: false,
         })
         .unwrap();
         assert!(!root.exists(), "{kind} compilation must not write");
@@ -1055,6 +1193,7 @@ fn env_reminder_compile_resolves_worktree_from_launch_cwd() {
                 agents: Ok(&[]),
                 ambient_env: &BTreeMap::new(),
                 agent_shell: None,
+                hibernate: false,
             })
             .unwrap();
             let reminder = &plan.process().reminder;
@@ -1104,6 +1243,7 @@ fn env_reminder_compile_uses_launch_cwd_and_effective_switch_for_children_too() 
                     agents: Ok(&[]),
                     ambient_env: &BTreeMap::new(),
                     agent_shell: None,
+                    hibernate: false,
                 })
                 .unwrap();
                 assert_eq!(
@@ -1209,6 +1349,7 @@ fn runtime_env_compile_stamps_the_switch_and_moves_the_listing_out_of_the_remind
             agents: Ok(&[]),
             ambient_env: &ambient,
             agent_shell: None,
+            hibernate: false,
         })
         .unwrap();
         let process = plan.process();
@@ -1298,6 +1439,7 @@ fn the_stamped_account_sets_the_provider_home_after_the_room_switches() {
             agents: Ok(&[]),
             ambient_env: &BTreeMap::new(),
             agent_shell: None,
+            hibernate: false,
         })
         .expect("compile");
 
@@ -1340,6 +1482,7 @@ fn the_default_account_leaves_the_provider_home_to_the_provider() {
             agents: Ok(&[]),
             ambient_env: &BTreeMap::new(),
             agent_shell: None,
+            hibernate: false,
         })
         .expect("compile");
 
@@ -1383,6 +1526,7 @@ fn a_stamped_account_the_config_no_longer_declares_fails_the_launch() {
         agents: Ok(&[]),
         ambient_env: &BTreeMap::new(),
         agent_shell: None,
+        hibernate: false,
     });
 
     let error = match error {
@@ -1440,6 +1584,7 @@ fn the_sandbox_binds_and_pins_the_stamped_account_home() {
                 project.path().display().to_string(),
             )]),
             agent_shell: None,
+            hibernate: false,
         })
         .expect("compile cwd");
         assert_eq!(plan.cwd, cwd);
@@ -1472,6 +1617,7 @@ fn the_sandbox_binds_and_pins_the_stamped_account_home() {
             ),
         ]),
         agent_shell: None,
+        hibernate: false,
     })
     .expect("compile");
 
@@ -1559,6 +1705,7 @@ fn a_launch_saves_the_user_tmpdir_it_replaces() {
             commands: &machine.agents.commands,
             accounts: &machine.accounts,
             agent_shell: None,
+            hibernate: false,
             bwrap: None,
             agents: Ok(&[]),
             ambient_env: &ambient,
@@ -1631,6 +1778,7 @@ fn a_provider_temp_root_follows_tmpdir() {
             commands: &machine.agents.commands,
             accounts: &machine.accounts,
             agent_shell: None,
+            hibernate: false,
             bwrap: None,
             agents: Ok(&[]),
             ambient_env: &ambient,
@@ -1689,6 +1837,7 @@ fn a_launched_child_shares_its_parent_unit_across_restart() {
             commands: &machine.agents.commands,
             accounts: &machine.accounts,
             agent_shell: None,
+            hibernate: false,
             bwrap: None,
             agents,
             ambient_env: &ambient,
@@ -1815,6 +1964,7 @@ fn a_shared_codex_account_points_its_databases_at_the_default_home_without_touch
             agents: Ok(&[]),
             ambient_env: &ambient,
             agent_shell: None,
+            hibernate: false,
         })
         .expect("compile");
         assert_eq!(

@@ -180,6 +180,7 @@ pub(super) fn render_human(report: &DoctorReport, w: &mut impl Write) -> io::Res
     render_home(w, &report.home, &mut tally)?;
     render_machine_config(w, &report.machine_config, &mut tally)?;
     render_sandbox(w, &report.sandbox, &mut tally)?;
+    render_hibernate(w, &report.hibernate, &mut tally)?;
     render_hooks(w, report, &mut tally)?;
     if let Some(trust) = &report.folder_trust {
         render_folder_trust(w, trust, &mut tally)?;
@@ -204,6 +205,26 @@ pub(super) fn render_human(report: &DoctorReport, w: &mut impl Write) -> io::Res
     render_last_incident(w, report, &mut tally)?;
     render_tally(w, &tally)?;
     Ok(())
+}
+
+fn render_hibernate(
+    w: &mut impl Write,
+    report: &rimz::harness::hibernate::PreflightReport,
+    tally: &mut Tally,
+) -> io::Result<()> {
+    use rimz::harness::hibernate::CheckStatus;
+    section(w, tally, "HIBERNATE")?;
+    let mut kv = KeyVals::new().indent(2);
+    kv.push("enabled", cell(report.enabled.to_string()));
+    for check in &report.checks {
+        let health = match check.status {
+            CheckStatus::Ok => Health::Ok,
+            CheckStatus::Warning => Health::Warn,
+            CheckStatus::Error => Health::Alarm,
+        };
+        kv.push(check.name, verdict(tally, health, &check.detail));
+    }
+    kv.render(w)
 }
 
 fn render_lsp(

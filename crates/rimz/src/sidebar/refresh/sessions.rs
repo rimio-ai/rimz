@@ -455,18 +455,20 @@ fn spawn_session_context_refresh(
     session_id: &str,
     spawn: RefreshSpawn,
 ) {
-    let exe = crate::proc::rimz_exe();
-    let mut cmd = crate::child_process::detached_rimz_command(exe, runtime);
-    cmd.args(spawn.args);
     tracing::info!(
         target: crate::observability::BREADCRUMB_TARGET,
         kind,
         session = %session_id,
         "sidebar: spawning session context refresh",
     );
-    if let Err(err) =
-        crate::child_process::spawn_detached_reaped(&mut cmd, "session-refresh-context")
-    {
+    if let Err(err) = crate::child_process::spawn_detached_reaped(
+        crate::proc::rimz_exe(),
+        |cmd| {
+            crate::child_process::anchor_detached_command(cmd, runtime).args(&spawn.args);
+            Ok(())
+        },
+        "session-refresh-context",
+    ) {
         // Best-effort enrichment on a per-frame path. The CWD anchor clears the
         // gc'd-worktree ENOENT; a bad RIMZ_BIN/PATH is an environment fact, not
         // a RimZ fault. Keep it at debug! so it never reaches Sentry.

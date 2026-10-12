@@ -305,8 +305,8 @@ fn a_host_that_fails_to_start_says_why_in_its_log() {
 #[test]
 fn the_host_environment_pins_its_room_and_keeps_the_session_not_the_pane() {
     let (room, state, root) = Room::recorded();
-    let command =
-        host_command(Path::new("/bin/true"), &room.config, &room.runtime, &state).unwrap();
+    let mut command = Command::new("/bin/true");
+    configure_host_command(&mut command, &room.config, &room.runtime, &state).unwrap();
     let env: std::collections::BTreeMap<_, _> = command.get_envs().collect();
     for (name, value) in crate::workspace::pin_env(&room.config.workspace_id, &root) {
         assert_eq!(

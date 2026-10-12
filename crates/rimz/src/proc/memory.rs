@@ -5,6 +5,8 @@
 pub(crate) struct Memory {
     pub total_bytes: u64,
     pub available_bytes: u64,
+    pub swap_total_bytes: u64,
+    pub swap_free_bytes: u64,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -17,7 +19,7 @@ pub(crate) enum MemoryErr {
 
 type Result<T> = std::result::Result<T, MemoryErr>;
 
-fn parse_meminfo(text: &str) -> Result<Memory> {
+pub(crate) fn parse_meminfo(text: &str) -> Result<Memory> {
     let read = |key: &str| -> Result<u64> {
         text.lines()
             .find_map(|line| {
@@ -32,6 +34,8 @@ fn parse_meminfo(text: &str) -> Result<Memory> {
     Ok(Memory {
         total_bytes: read("MemTotal")?,
         available_bytes: read("MemAvailable")?,
+        swap_total_bytes: read("SwapTotal")?,
+        swap_free_bytes: read("SwapFree")?,
     })
 }
 
@@ -78,10 +82,15 @@ mod tests {
     #[test]
     fn meminfo_requires_available_and_converts_kib() {
         assert_eq!(
-            parse_meminfo("MemTotal: 100 kB\nMemAvailable: 20 kB\n").unwrap(),
+            parse_meminfo(
+                "MemTotal: 100 kB\nMemAvailable: 20 kB\nSwapTotal: 50 kB\nSwapFree: 30 kB\n"
+            )
+            .unwrap(),
             Memory {
                 total_bytes: 102400,
-                available_bytes: 20480
+                available_bytes: 20480,
+                swap_total_bytes: 51200,
+                swap_free_bytes: 30720,
             }
         );
         assert!(parse_meminfo("MemTotal: 100 kB\n").is_err());

@@ -62,8 +62,9 @@ pub(crate) use accounts::UsageLimitUsd;
 pub use accounts::{AccountBudgetConfigError, AccountHistory, AccountsConfig, NamedAccount};
 use agents::{AgentsConfig, SubagentProfilesConfig};
 pub use agents::{
-    CommandsConfig, DONE_STAGE, Isolation, LaunchPlacement, Profile, ProfilesConfig, PromptSource,
-    RoleBinding, SubagentsConfig, Team, TeamSignalBinding, TeamsConfig,
+    CommandsConfig, DONE_STAGE, HibernateAfterErr, HibernateConfig, Isolation, LaunchPlacement,
+    Profile, ProfilesConfig, PromptSource, RoleBinding, SubagentsConfig, Team, TeamSignalBinding,
+    TeamsConfig,
 };
 pub(crate) use agents::{FlipCompact, retired_agents_key};
 use animation::validate_glyph_cells;
@@ -399,6 +400,7 @@ pub struct ConfigNotices {
     pub failed_definitions: BTreeMap<String, BTreeSet<PathBuf>>,
     /// One warning per setting that asked for sandbox isolation on a machine without it, now running on the host.
     pub host_isolation_fallback: Vec<String>,
+    pub hibernate_unavailable: Vec<String>,
 }
 
 /// A key ignored while loading a per-machine config file.
@@ -726,6 +728,7 @@ impl MachineConfig {
         notices: &mut ConfigNotices,
     ) -> AgentSpecSources {
         let host_only = !cfg!(target_os = "linux");
+        self.disable_unavailable_hibernation(!host_only, notices);
         if host_only {
             self.fall_back_to_host_isolation(notices);
         }
@@ -795,6 +798,16 @@ impl MachineConfig {
                 warn(&format!("profile `{name}` isolation"));
             }
         }
+    }
+
+    fn disable_unavailable_hibernation(&mut self, linux: bool, notices: &mut ConfigNotices) {
+        if linux || !self.agents.hibernate.enabled {
+            return;
+        }
+        self.agents.hibernate.enabled = false;
+        notices.hibernate_unavailable.push(
+            "warning: agents.hibernate.enabled requires Linux cgroup freezing; hibernation is disabled".into(),
+        );
     }
 
     pub fn time_zone(&self) -> jiff::tz::TimeZone {

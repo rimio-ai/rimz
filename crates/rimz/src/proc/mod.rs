@@ -8,6 +8,7 @@
 //! seams the perf guards count and the user's login-shell selection.
 
 mod bounded;
+pub mod cgroup;
 pub(crate) mod command;
 #[cfg(target_os = "macos")]
 mod macos;

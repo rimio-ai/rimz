@@ -1442,6 +1442,7 @@ fn ensure_config_template_sections(root: &Path) -> Result<()> {
                 "[agents.attention]",
                 "[agents.commands]",
                 "[agents.subagents]",
+                "[agents.hibernate]",
             ][..],
         ),
         (
