@@ -330,6 +330,10 @@ pub trait LaunchCapability: CoreCapability {
         None
     }
 
+    fn version_upgrade_fix(&self) -> Option<&'static str> {
+        None
+    }
+
     fn is_model_alias(&self, name: &str) -> bool {
         self.spec()
             .launch

@@ -1260,9 +1260,19 @@ fn process_compiler_locks_down_opencode_subagent_environment() {
     );
     assert!(!process.provider_argv.iter().any(|arg| arg == "--"));
     assert_eq!(
-        serde_json::from_str::<serde_json::Value>(&process.env["OPENCODE_PERMISSION"])
-            .expect("permission JSON"),
-        serde_json::json!({ "task": "deny" })
+        process
+            .env
+            .get("OPENCODE_CONFIG_CONTENT")
+            .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok()),
+        Some(
+            serde_json::json!({ "permissions": [{ "action": "subagent", "resource": "*", "effect": "deny" }] })
+        )
+    );
+    assert!(
+        process
+            .provider_argv
+            .iter()
+            .any(|arg| arg == "--standalone")
     );
 }
 

@@ -604,6 +604,27 @@ fn hooks_section_renders_glyph_status_and_fix() {
 }
 
 #[test]
+fn hooks_section_renders_blocked_upgrade_fix() {
+    let report = DoctorReport {
+        hooks: vec![HookRow {
+            kind: "opencode".to_owned(),
+            detected: true,
+            status: HookStatus::Blocked {
+                fix: "run `opencode upgrade --major`".to_owned(),
+            },
+        }],
+        ..report_fixture()
+    };
+    let out = strip(|w| {
+        let mut tally = Tally::default();
+        render_hooks(w, &report, &mut tally)
+    });
+    assert!(out.contains("blocked"), "{out}");
+    assert!(out.contains("opencode upgrade --major"), "{out}");
+    assert!(out.contains('✗'), "{out}");
+}
+
+#[test]
 fn accounts_section_alarms_only_for_the_room_account_it_cannot_launch_into() {
     let row = |name: &str, room: bool, problem: Option<&str>| AccountRow {
         kind: "claude".to_owned(),

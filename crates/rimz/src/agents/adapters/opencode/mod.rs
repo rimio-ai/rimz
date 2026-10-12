@@ -99,21 +99,18 @@ static OPENCODE_DESCRIPTOR: AgentSpec = AgentSpec {
     launch: super::LaunchSpec {
         definitions: crate::agents::definition::DefinitionSpec::EMPTY,
         program: Some("opencode"),
-        fixed_args: &[],
+        fixed_args: &["--standalone"],
         prompt: super::PromptStyle::Flag("--prompt"),
         resume: Some(super::SessionCommand {
             before_id: &["opencode", "--session"],
-            after_id: &[],
+            after_id: &["--standalone"],
         }),
-        fork: Some(super::SessionCommand {
-            before_id: &["opencode", "--session"],
-            after_id: &["--fork"],
-        }),
+        fork: None,
         permission: super::LaunchPermissionArgs {
             ask: &[],
             auto: &[],
             yolo: &["--auto"],
-            plan: &["--agent", "plan"],
+            plan: &[],
         },
         max_turn_flag: None,
         interrupt_key: None,
@@ -121,10 +118,7 @@ static OPENCODE_DESCRIPTOR: AgentSpec = AgentSpec {
             command: "/compact",
             instruction: super::CompactInstruction::Unsupported,
         }),
-        presets: super::PresetMatchers {
-            model: Some(super::StaticPresetMatcher::Flag(&["--model", "-m"])),
-            ..super::PresetMatchers::EMPTY
-        },
+        presets: super::PresetMatchers::EMPTY,
         ..super::LaunchSpec::EMPTY
     },
 };
@@ -140,7 +134,7 @@ const OPENCODE_COVERAGE: CoverageAnnotations = CoverageAnnotations {
         via: "session_idle + resting plan-agent turn",
     },
     user_question: ConcernCoverage::Wired {
-        via: "question.asked",
+        via: "form.created",
     },
     answer: ConcernCoverage::Unsupported {
         reason: "native answers are observed; RimZ-to-OpenCode answer transport is not mapped",
@@ -152,7 +146,7 @@ const OPENCODE_COVERAGE: CoverageAnnotations = CoverageAnnotations {
         via: "SubagentStart/SubagentStop",
     },
     launch_reminders: ConcernCoverage::Wired {
-        via: "plugin experimental.chat.system.transform",
+        via: "plugin session context hook",
     },
     background_parking: ConcernCoverage::Unsupported {
         reason: "no background-task parking",
@@ -164,26 +158,26 @@ const OPENCODE_COVERAGE: CoverageAnnotations = CoverageAnnotations {
         via: "session_ended (session.deleted + dispose sweep)",
     },
     idle_notification: ConcernCoverage::Partial {
-        via: "turn-end + permission.asked/question.asked + stall window",
+        via: "turn-end + permission.asked/form.created + stall window",
         gap: "no idle Notification hook; no idle-timeout nudge",
     },
     context_usage: ConcernCoverage::Wired {
-        via: "message.updated token split",
+        via: "session.step.ended token split",
     },
     realtime_cost: ConcernCoverage::Wired {
         via: "authoritative per-session SQLite message spend sum, reconciled at each turn boundary",
     },
     rich_context: ConcernCoverage::Wired {
-        via: "in-process plugin client session metadata + model catalog",
+        via: "in-process plugin session metadata + model catalog",
     },
     hook_install: ConcernCoverage::Wired {
         via: "~/.config/opencode/plugin/rimz.ts",
     },
     account_spend: ConcernCoverage::Wired {
-        via: "SQLite message store + auth.json OAuth usage probe",
+        via: "SQLite session_message + credential OAuth usage probe",
     },
     tool_stats: ConcernCoverage::Wired {
-        via: "tool_after names + SQLite tool parts",
+        via: "tool_after names + SQLite inline tool content",
     },
     remote_control: ConcernCoverage::Unsupported {
         reason: "no remote-control surface",
@@ -354,6 +348,14 @@ impl crate::agents::capabilities::CoreCapability for OpencodeAdapter {
 }
 
 impl crate::agents::capabilities::LaunchCapability for OpencodeAdapter {
+    fn min_version(&self) -> Option<super::version::CliVersion> {
+        Some(super::version::CliVersion::new(2, 0, 0))
+    }
+
+    fn version_upgrade_fix(&self) -> Option<&'static str> {
+        Some("run `opencode upgrade --major`")
+    }
+
     fn config_home(&self, env: &BTreeMap<String, String>) -> Option<PathBuf> {
         opencode_config_home(
             env.get("XDG_CONFIG_HOME").map(std::ffi::OsStr::new),
@@ -366,19 +368,22 @@ impl crate::agents::capabilities::LaunchCapability for OpencodeAdapter {
     }
 
     fn lockdown_subagent_env(&self, env: &mut std::collections::BTreeMap<String, String>) {
-        const PERMISSION_ENV: &str = "OPENCODE_PERMISSION";
-
-        let mut permissions = env
-            .get(PERMISSION_ENV)
+        const CONFIG_ENV: &str = "OPENCODE_CONFIG_CONTENT";
+        let mut config = env
+            .get(CONFIG_ENV)
             .and_then(|value| {
-                serde_json::from_str::<std::collections::BTreeMap<String, Value>>(value).ok()
+                crate::agents::jsonc::from_slice::<serde_json::Map<String, Value>>(value.as_bytes())
+                    .ok()
             })
             .unwrap_or_default();
-        permissions.insert("task".to_owned(), Value::String("deny".to_owned()));
-        env.insert(
-            PERMISSION_ENV.to_owned(),
-            Value::Object(permissions.into_iter().collect()).to_string(),
-        );
+        let mut permissions = config
+            .remove("permissions")
+            .and_then(|value| value.as_array().cloned())
+            .unwrap_or_default();
+        permissions
+            .push(serde_json::json!({ "action": "subagent", "resource": "*", "effect": "deny" }));
+        config.insert("permissions".to_owned(), Value::Array(permissions));
+        env.insert(CONFIG_ENV.to_owned(), Value::Object(config).to_string());
     }
 }
 
@@ -568,7 +573,66 @@ impl crate::agents::capabilities::HookCapability for OpencodeAdapter {
 
 impl crate::agents::capabilities::InstallationCapability for OpencodeAdapter {
     fn managed_integration(&self) -> Option<&'static dyn super::ManagedIntegration> {
-        Some(&OPENCODE_MANAGED_SOURCE)
+        Some(&OpencodeManagedIntegration)
+    }
+}
+
+fn install_blocker_at(path: &Path) -> Option<String> {
+    let agent = crate::agents::find_definition("opencode")?;
+    super::version::check_launch_version_floor(agent, path)
+        .err()
+        .map(|error| error.to_string())
+}
+
+struct OpencodeManagedIntegration;
+
+impl super::ManagedIntegration for OpencodeManagedIntegration {
+    fn install(&self, env: &BTreeMap<String, String>) -> Result<super::HookInstallReport> {
+        if let Some(reason) = self.install_blocker() {
+            return Err(AgentErr::Install {
+                agent: "opencode",
+                reason,
+            });
+        }
+        OPENCODE_MANAGED_SOURCE.install(env)
+    }
+
+    fn preview(&self, env: &BTreeMap<String, String>) -> Result<super::HookInstallPreview> {
+        if let Some(reason) = self.install_blocker() {
+            return Err(AgentErr::Install {
+                agent: "opencode",
+                reason,
+            });
+        }
+        OPENCODE_MANAGED_SOURCE.preview(env)
+    }
+
+    fn uninstall(&self, env: &BTreeMap<String, String>) -> Result<super::HookUninstallReport> {
+        OPENCODE_MANAGED_SOURCE.uninstall(env)
+    }
+
+    fn installed(&self, env: &BTreeMap<String, String>) -> bool {
+        OPENCODE_MANAGED_SOURCE.installed(env)
+    }
+
+    fn upgrade_available(&self, env: &BTreeMap<String, String>) -> bool {
+        OPENCODE_MANAGED_SOURCE.upgrade_available(env)
+    }
+
+    fn managed_artifacts_present(&self, env: &BTreeMap<String, String>) -> bool {
+        OPENCODE_MANAGED_SOURCE.managed_artifacts_present(env)
+    }
+
+    fn wiring_input_paths(
+        &self,
+        descriptor: &AgentSpec,
+        env: &BTreeMap<String, String>,
+    ) -> Vec<PathBuf> {
+        OPENCODE_MANAGED_SOURCE.wiring_input_paths(descriptor, env)
+    }
+
+    fn install_blocker(&self) -> Option<String> {
+        install_blocker_at(&crate::agents::locate_binary(&OPENCODE_DESCRIPTOR)?)
     }
 }
 
