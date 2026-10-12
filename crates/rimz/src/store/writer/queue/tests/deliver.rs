@@ -1026,6 +1026,7 @@ fn stale_command_times_out_without_resend_regardless_of_counter() {
             timed_out: 1,
             abandoned: 0,
             expired: 0,
+            held_on_ingress: 0,
         }
     );
     assert!(q.live().is_empty());
@@ -1092,13 +1093,24 @@ fn check_ingress_hold(body: MessageBody, frame_secs: i64, other_kind: bool, appl
         assert_eq!(message.status, MessageStatus::Queued);
         assert_eq!(message.unconfirmed_sends, 1);
         assert_eq!(report.requeued, 1);
+        assert_eq!(report.held_on_ingress, 0);
     } else {
         assert_eq!(message.status, MessageStatus::Sent);
         assert_eq!(message.unconfirmed_sends, 0);
         assert_eq!(message.attempts, sent.attempts);
         assert_eq!(message.retry_after, Some(now + window));
         assert_eq!(message.wake_deadline(now), Some(now + window));
-        assert_eq!(report, ReconcileReport::default());
+        assert_eq!(
+            report,
+            ReconcileReport {
+                held_on_ingress: 1,
+                ..Default::default()
+            }
+        );
+        assert_eq!(
+            message.last_error.as_deref(),
+            Some("delivery held: hook drain is lagging behind the acknowledgement window")
+        );
         assert_eq!(
             std::fs::read(&q.inner.paths.events_log).unwrap(),
             events_before

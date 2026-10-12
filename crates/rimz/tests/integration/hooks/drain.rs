@@ -1,6 +1,7 @@
 use super::*;
+use crate::common::append_frame;
 use rimz::agents::LifecycleSignal;
-use rimz::disk::lock::{IngressAppendLock, WorkspaceLock};
+use rimz::disk::lock::WorkspaceLock;
 use rimz::ids::{AgentKind, EventId};
 use rimz::store::event::EventKind;
 use rimz::store::ingress::{self, HookDrainCursor, HookIngress};
@@ -44,13 +45,6 @@ fn stop_frame(env: &Env) -> HookIngress {
 
 fn append_stop(env: &Env) -> (HookIngress, u64) {
     append_frame(env, stop_frame(env))
-}
-
-fn append_frame(env: &Env, frame: HookIngress) -> (HookIngress, u64) {
-    let store = env.store();
-    let lock = IngressAppendLock::acquire(&store.paths().hook_ingress_lock).unwrap();
-    let end = ingress::append(store.paths(), &frame, &lock).unwrap();
-    (frame, end)
 }
 
 #[test]

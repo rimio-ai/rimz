@@ -323,9 +323,16 @@ pub(super) fn sweep_messages(
     workspace_id: Option<WorkspaceId>,
     globals: &GlobalFlags,
 ) -> Result<()> {
+    let nudge = |store: &rimz::Store| {
+        if let Err(error) = rimz::harness::hook_drain::nudge(store, 0) {
+            tracing::warn!(%error, "could not wake hook drainer for held messages");
+        }
+    };
     if let Some(workspace_id) = workspace_id {
         let ctx = Ctx::for_workspace(workspace_id, globals.mux)?;
-        deliver::sweep(&ctx.workspace, &ctx.store, globals.mux)?;
+        deliver::sweep(&ctx.workspace, &ctx.store, globals.mux, || {
+            nudge(&ctx.store)
+        })?;
         return Ok(());
     }
     let workspace =
@@ -337,6 +344,6 @@ pub(super) fn sweep_messages(
             super::super::no_room(format_args!("at {}", workspace.project_root.display()))
         )
     })?;
-    deliver::sweep(&workspace, &store, globals.mux)?;
+    deliver::sweep(&workspace, &store, globals.mux, || nudge(&store))?;
     Ok(())
 }

@@ -6561,6 +6561,136 @@ fn mixed_submit_confirms_record_and_never_resends() {
 }
 
 #[test]
+fn sweep_starts_drainer_for_pending_confirmation() {
+    recover_pending_confirmation(&["message", "sweep"]);
+}
+
+#[test]
+fn gc_starts_drainer_for_pending_confirmation() {
+    recover_pending_confirmation(&["gc"]);
+}
+
+fn recover_pending_confirmation(recovery_command: &[&str]) {
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.write_config(&env.project_root, "");
+    env.install_agent_hooks("claude");
+    let pane_env: &[(&str, &str)] = &[
+        ("ZELLIJ_PANE_ID", "3"),
+        ("RIMZ_TEST_HOOK_DRAIN_IDLE_MS", "50"),
+    ];
+    let owner_pid = env.agent_owner_pid();
+    register_running_agent_owned_by(
+        &env,
+        "claude",
+        "sess-ingress-recovery",
+        "feature-ingress-recovery",
+        pane_env,
+        owner_pid,
+    );
+    run_hook_for_owner(
+        &env,
+        "claude",
+        json!({
+            "hook_event_name": "Stop", "session_id": "sess-ingress-recovery",
+            "worktree_branch": "feature-ingress-recovery",
+        }),
+        pane_env,
+        owner_pid,
+    );
+    let store = env.store();
+    // The setup hooks' detached drainer can outlive the lock's 30 s acquire under suite load.
+    let deadline = std::time::Instant::now() + Duration::from_secs(120);
+    let lifetime = loop {
+        if let Some(lock) =
+            rimz::disk::lock::WorkspaceLock::try_acquire(&store.runtime_paths().hook_drainer_lock())
+                .unwrap()
+        {
+            break lock;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "setup drainer never exited"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "claude")]);
+    let sent = run_success(
+        traced_rimz(&env, "ingress-recovery-send-trace.log")
+            .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+            .args(["message", "@claude", "--", "arrived once"]),
+        "send prompt",
+    );
+    assert_text_then_enter(
+        &env.project_root.join("ingress-recovery-send-trace.log"),
+        &user_message("arrived once"),
+    );
+    let message_id = MessageId::parse(&sent_id_from_stdout(&sent.stdout)).unwrap();
+    let last_sent_at = message_by_id(&env, &message_id).last_sent_at.unwrap();
+    let mut command = env.hook_command("claude");
+    scrub_launch_identity(&mut command);
+    command.envs([
+        ("ZELLIJ_PANE_ID", "3".to_owned()),
+        ("RIMZ_AGENT_PID", owner_pid.to_string()),
+        ("RIMZ_WORKSPACE_ID", env.workspace_id.to_string()),
+        ("RIMZ_PROJECT_ROOT", env.project_root.display().to_string()),
+    ]);
+    crate::common::append_frame(
+        &env,
+        rimz::store::ingress::HookIngress {
+            schema_version: "1".into(),
+            event_id: rimz::ids::EventId::new(),
+            ts: last_sent_at,
+            source: AgentKind::new_unchecked("claude"),
+            event: Some("UserPromptSubmit".into()),
+            payload: json!({
+                "session_id": "sess-ingress-recovery", "prompt": user_message("arrived once"),
+                "worktree_branch": "feature-ingress-recovery",
+            })
+            .to_string(),
+            cwd: env.project_root.clone(),
+            hook_pid: std::process::id(),
+            env: command
+                .get_envs()
+                .filter_map(|(key, value)| {
+                    value.map(|value| {
+                        (
+                            key.to_string_lossy().into_owned(),
+                            value.to_string_lossy().into_owned(),
+                        )
+                    })
+                })
+                .collect(),
+        },
+    );
+    std::thread::sleep(
+        (last_sent_at + Duration::from_millis(500))
+            .duration_since(jiff::Timestamp::now())
+            .try_into()
+            .unwrap_or_default(),
+    );
+    drop(lifetime);
+    assert!(!store.runtime_paths().hook_drainer_socket_path().exists());
+    run_success(
+        traced_rimz(&env, "ingress-recovery-recovery-trace.log")
+            .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+            .env("RIMZ_MESSAGE_DELIVERY_WINDOW_MS", "500")
+            .args(recovery_command),
+        "recover pending confirmation without a drainer",
+    );
+    wait_for_message_event(&env, "message.delivered", Duration::from_secs(30));
+    let delivered = store
+        .list_message_history()
+        .unwrap()
+        .into_iter()
+        .find(|record| record.message_id == message_id)
+        .unwrap();
+    assert_eq!(delivered.status, MessageStatus::Delivered);
+    assert_eq!(delivered.unconfirmed_sends, 0);
+    assert!(trace_lines(&env.project_root.join("ingress-recovery-recovery-trace.log")).is_empty());
+}
+
+#[test]
 fn late_ack_after_reconcile_window_still_settles_without_resend() {
     let env = Env::new();
     env.record(&env.project_root);
