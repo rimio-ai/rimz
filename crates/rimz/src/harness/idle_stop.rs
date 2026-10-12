@@ -72,7 +72,7 @@ pub enum Verdict {
 }
 
 /// The terms the rollup alone answers: the producer's whole view of an agent.
-fn resting(agent: &AgentState) -> Result<(), Hold> {
+pub(super) fn resting(agent: &AgentState) -> Result<(), Hold> {
     if agent.ended_at.is_some() {
         return Err(Hold::Ended);
     }
@@ -90,7 +90,7 @@ fn resting(agent: &AgentState) -> Result<(), Hold> {
     }
     if !matches!(
         agent.effective_status(),
-        AgentStatus::Idle | AgentStatus::Success
+        AgentStatus::Idle | AgentStatus::Success | AgentStatus::Hibernating
     ) || agent.phase == TurnPhase::Parked
         || !agent.background_shells.is_empty()
     {
@@ -102,7 +102,7 @@ fn resting(agent: &AgentState) -> Result<(), Hold> {
 /// Rest runs from the latest of the request, the turn end, the provider
 /// marker that settled a turn no hook closed, and the session's last event:
 /// a failed compaction returns to rest without a new turn end.
-fn rested_since(agent: &AgentState, stop: &IdleStop) -> Timestamp {
+pub(super) fn rested_since(agent: &AgentState, not_before: Timestamp) -> Timestamp {
     let context = agent.context.as_ref();
     let marker = settled_outcome(agent.status, context, agent.last_activity)
         .and_then(|_| context?.settle)
@@ -110,7 +110,7 @@ fn rested_since(agent: &AgentState, stop: &IdleStop) -> Timestamp {
     [agent.turn_ended_at, marker, Some(agent.last_activity)]
         .into_iter()
         .flatten()
-        .fold(stop.requested_at, Timestamp::max)
+        .fold(not_before, Timestamp::max)
 }
 
 /// The live `rimz subagents` descendants a stop of `agent` closes with it.
@@ -131,7 +131,7 @@ pub fn closing_with<'a>(agents: &'a [AgentState], agent: &AgentState) -> Vec<&'a
 }
 
 /// What `agent` is still owed, beyond what its own rollup row shows.
-fn debt(
+pub(super) fn debt(
     store: &Store,
     messages: &[MessageRecord],
     runs: &[RunRecord],
@@ -160,7 +160,7 @@ fn debt(
 pub fn due_at(agent: &AgentState, stop: &IdleStop) -> Option<Timestamp> {
     resting(agent).ok()?;
     let after = i64::try_from(stop.after_secs).unwrap_or(i64::MAX);
-    rested_since(agent, stop)
+    rested_since(agent, stop.requested_at)
         .checked_add(jiff::SignedDuration::from_secs(after))
         .ok()
 }
@@ -195,7 +195,9 @@ pub fn decide(
     if agent.is_team_seat() && !board_done(agent) {
         return Ok(Verdict::Hold(Hold::Board));
     }
-    let idle = now.duration_since(rested_since(agent, stop)).as_secs();
+    let idle = now
+        .duration_since(rested_since(agent, stop.requested_at))
+        .as_secs();
     Ok(Verdict::Stop {
         idle_secs: u64::try_from(idle).unwrap_or(0),
     })

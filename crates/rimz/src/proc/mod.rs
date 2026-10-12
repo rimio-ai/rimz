@@ -1302,6 +1302,8 @@ Uid:\t1000\t1000\t1000\t1000
             let zombie = parse_stat_metrics(&stat('Z'), 4).expect("zombie stat");
             let dead = parse_stat_metrics(&stat('X'), 4).expect("dead stat");
             assert!(stat_metrics_is_live(running, None));
+            let frozen = parse_stat_metrics(&stat('D'), 4).expect("frozen stat");
+            assert!(stat_metrics_is_live(frozen, Some("100")));
             assert!(!stat_metrics_is_live(zombie, Some("100")));
             assert!(!stat_metrics_is_live(dead, Some("100")));
         }

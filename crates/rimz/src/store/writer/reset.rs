@@ -156,6 +156,7 @@ impl Store {
             // Reset ends every agent, and a soft reset leaves them resumable:
             // a surviving request would stop the resumed session.
             remove_file_if_exists(&paths.idle_stop_requests)?;
+            remove_file_if_exists(&paths.hibernation)?;
             {
                 let _ingress = crate::disk::lock::WorkspaceLock::acquire(&paths.hook_ingress_lock)?;
                 remove_file_if_exists(&paths.hook_ingress_log)?;
@@ -299,6 +300,36 @@ mod tests {
             assert!(
                 crate::store::idle_stop::read(&paths).is_empty(),
                 "hard={hard}: a resumed agent must not inherit a stop"
+            );
+        }
+    }
+
+    #[test]
+    fn reset_drops_hibernation_records() {
+        for hard in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let id = WorkspaceId::from_project_root(dir.path());
+            let paths = StatePaths::under(id.clone(), dir.path()).unwrap();
+            let runtime = RuntimePaths::under(id, dir.path()).unwrap();
+            let store = Store::open(paths.clone(), runtime).unwrap();
+            crate::store::hibernate::record(
+                &paths,
+                crate::store::hibernate::Entry {
+                    kind: crate::ids::AgentKind::new_unchecked("claude"),
+                    agent_id: "resting".into(),
+                    pane_id: "tmux:%3".parse().unwrap(),
+                    scope: "/scope".into(),
+                    provider_pid: 1234,
+                    frozen_at: Timestamp::UNIX_EPOCH,
+                    reclaimed_bytes: 200,
+                },
+            )
+            .unwrap();
+            assert_eq!(crate::store::hibernate::read(&paths).len(), 1);
+            store.reset_records(hard).unwrap();
+            assert!(
+                crate::store::hibernate::read(&paths).is_empty(),
+                "hard={hard}"
             );
         }
     }

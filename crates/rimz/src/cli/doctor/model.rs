@@ -710,6 +710,7 @@ pub(super) struct AgentCounts {
     pub(super) failed: usize,
     pub(super) paused: usize,
     pub(super) sleeping: usize,
+    pub(super) hibernating: usize,
 }
 
 impl AgentCounts {
@@ -722,6 +723,7 @@ impl AgentCounts {
             AgentStatus::Failed => self.failed += 1,
             AgentStatus::Paused => self.paused += 1,
             AgentStatus::Sleeping => self.sleeping += 1,
+            AgentStatus::Hibernating => self.hibernating += 1,
         }
     }
 
@@ -733,6 +735,7 @@ impl AgentCounts {
             + self.failed
             + self.paused
             + self.sleeping
+            + self.hibernating
     }
 }
 

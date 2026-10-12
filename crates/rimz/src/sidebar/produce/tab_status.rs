@@ -39,7 +39,10 @@ impl TabStatus {
             AgentStatus::Paused => Some(Self::Paused),
             AgentStatus::Running => Some(Self::Running),
             AgentStatus::Success if fresh_success => Some(Self::Success),
-            AgentStatus::Success | AgentStatus::Idle | AgentStatus::Sleeping => None,
+            AgentStatus::Success
+            | AgentStatus::Idle
+            | AgentStatus::Sleeping
+            | AgentStatus::Hibernating => None,
         }
     }
 

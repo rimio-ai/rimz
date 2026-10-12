@@ -228,6 +228,7 @@ pub(super) fn status_counts(rows: &[SidebarRow]) -> Vec<SidebarStatusCount> {
         AgentStatus::Success,
         AgentStatus::Running,
         AgentStatus::Sleeping,
+        AgentStatus::Hibernating,
         AgentStatus::Idle,
     ]
     .into_iter()
@@ -510,7 +511,9 @@ fn rank_cohort_blocks<'a>(
                 block.has_success = true;
                 block.observe_calm(&facts);
             }
-            Some(AgentStatus::Sleeping | AgentStatus::Idle) | None => block.observe_calm(&facts),
+            Some(AgentStatus::Sleeping | AgentStatus::Hibernating | AgentStatus::Idle) | None => {
+                block.observe_calm(&facts)
+            }
         }
     }
     blocks
@@ -761,7 +764,9 @@ fn member_blocks_finish(status: Option<AgentStatus>) -> bool {
 fn group_member_calm(status: Option<AgentStatus>) -> GroupCalm {
     match status {
         Some(AgentStatus::Success) => GroupCalm::Finished,
-        Some(AgentStatus::Sleeping | AgentStatus::Idle) => GroupCalm::Idle,
+        Some(AgentStatus::Sleeping | AgentStatus::Hibernating | AgentStatus::Idle) => {
+            GroupCalm::Idle
+        }
         None => GroupCalm::Processes,
         Some(_) => GroupCalm::Working,
     }

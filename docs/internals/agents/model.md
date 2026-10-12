@@ -34,7 +34,7 @@ Everything on this page is provider-neutral. An integration that emits well-form
 
 A session's lifecycle state is a status, the running turn's phase, and a transient compacting head painted over both ([`LifecycleState`](../../../crates/rimz/src/agents/lifecycle.rs)). The glyph, animation, and color for each value are [the interface legend](../../interface/sidebar.md#reading-the-glyphs); this page owns what the values mean and how they move.
 
-The statuses rank by a base weight, most attention-hungry first ([`status_weight`](../../../crates/rimz/src/store/snapshot/view/score.rs)). The rollup stores only `waiting`, `failed`, `success`, `running`, and `idle`; `paused` and `sleeping` exist only in the [displayed status](#displayed-status).
+The statuses rank by a base weight, most attention-hungry first ([`status_weight`](../../../crates/rimz/src/store/snapshot/view/score.rs)). The rollup stores only `waiting`, `failed`, `success`, `running`, and `idle`; `paused`, `sleeping`, and `hibernating` exist only in the [displayed status](#displayed-status).
 
 | Status | Weight | Meaning |
 | --- | --- | --- |
@@ -44,6 +44,7 @@ The statuses rank by a base weight, most attention-hungry first ([`status_weight
 | `success` | 300 | the last turn completed cleanly |
 | `running` | 200 | working a turn |
 | `sleeping` | 150 | at rest with a pending one-shot wait armed (display only) |
+| `hibernating` | 100 | at rest with the provider frozen and memory reclaimed (display only) |
 | `idle` | 100 | wired in, nothing in flight |
 
 `waiting` and `failed` sit close enough that the time curve can lift an older failure above a fresh ask, and the lowest attention weight still starts above the highest calm one. A finished `success` outranks a working `running` row because a result deserves one look and work in progress does not. The time curve that multiplies the base weight is [sidebar.md](../sidebar/sidebar.md#attention-ranking-and-the-cap).
@@ -236,7 +237,7 @@ The rollup holds the agent-reported lifecycle status, and `rimz sidebar snapshot
 3. A `waiting` row with an interruption marker reads `idle`.
 4. A `running` or `failed` row with a qualifying turn-error marker of a pausing class reads `paused`.
 5. A `running` row with a completion marker reads `success`; with an interruption marker, `idle`; in the `parked` phase, `success`.
-6. An `idle` or `success` result with a pending wait reads `sleeping`.
+6. An `idle` or `success` result with a hibernation record reads `hibernating`; otherwise a pending wait makes it `sleeping`.
 
 That pending wait also holds a supervised run open at a clean turn end. Agent status and run status remain separate: a sleeping card can have a `Running` run with `parked_at` set.
 
@@ -281,6 +282,8 @@ Each rung leaves the rollup's lifecycle status untouched. Claude transcript-deat
 A projection to any status other than `running` drops the phase, except `success` or `sleeping` over `parked`, the settled shapes that keep pending background work visible. The compaction head pulses over any displayed status.
 
 ### Sleeping
+
+[Hibernation](../harness/hibernate.md) takes precedence over sleeping for resting rows, uses the same calm tone family, and ranks with idle. Like sleeping, it holds interactive turn-completion waits open and never opens an attention episode.
 
 After the ladder settles, an `idle` or `success` result with `pending_waits` displays `sleeping`; `running`, `waiting`, `failed`, and `paused` never do. Running-child delegation and delegated parks take precedence over sleep. A parked clean turn can therefore display `sleeping` while keeping its `parked` phase. Enrichment reads pending waits from instance-sourced, one-shot delivery rows in the loop catalog that match the workspace root and the target kind and session, without writing a store event. Timers, PID waits, watched commands, polled checks, file watches, and one-shot signal deliveries count; standing subscriptions and recurring clocks do not, even when a recurring row has a deadline.
 

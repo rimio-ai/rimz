@@ -104,6 +104,7 @@ pub(in crate::sidebar_pane::render) fn agent_glyph(
         | AgentStatus::Success
         | AgentStatus::Paused
         | AgentStatus::Sleeping
+        | AgentStatus::Hibernating
         | AgentStatus::Waiting
         | AgentStatus::Failed => frame_at(theme.animations.status(status), animation_phase),
     }

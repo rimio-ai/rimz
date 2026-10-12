@@ -50,6 +50,21 @@ fn verdict(store: &Store, agent: &AgentState, stop: &IdleStop, now: i64) -> Verd
 }
 
 #[test]
+fn hibernating_agent_is_due_for_idle_stop() {
+    let (_dir, store) = fixture();
+    let (mut agent, stop) = rested();
+    agent.hibernation = Some(crate::agents::state::Hibernation {
+        frozen_at: ts(1_100),
+        reclaimed_bytes: 100,
+    });
+    assert_eq!(
+        verdict(&store, &agent, &stop, DUE),
+        Verdict::Stop { idle_secs: 180 }
+    );
+    assert_eq!(due_at(&agent, &stop), Some(ts(DUE)));
+}
+
+#[test]
 fn each_rollup_term_holds_the_stop_alone_and_a_clear_agent_stops() {
     let (_dir, store) = fixture();
     let (clear, stop) = rested();

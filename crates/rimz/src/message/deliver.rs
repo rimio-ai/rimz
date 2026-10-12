@@ -1150,6 +1150,7 @@ pub(super) fn evaluate_when_condition(
             AgentStatus::Idle
             | AgentStatus::Success
             | AgentStatus::Sleeping
+            | AgentStatus::Hibernating
             | AgentStatus::Failed => None,
             AgentStatus::Paused => None,
         }

@@ -1,5 +1,24 @@
 use super::*;
 
+#[test]
+fn hibernating_fleet_keeps_its_nonzero_bucket() {
+    let mut sleeper = agent(
+        "cold",
+        "claude",
+        AgentStatus::Success,
+        Some("/repo/main"),
+        Some("main"),
+        Some("finished work"),
+    );
+    sleeper.hibernation = Some(crate::agents::state::Hibernation {
+        frozen_at: fixed_now(),
+        reclaimed_bytes: 300,
+    });
+    let screen = snapshot_to_screen(&snapshot_with(vec![sleeper]), 50, 20);
+    assert!(screen.lines().nth(5).unwrap().contains("❄ 1"), "{screen}");
+    assert_snapshot("hibernating_fleet", screen);
+}
+
 fn body_filter_hit(hit: &HitRegion) -> Option<&BodyFilter> {
     match &hit.target {
         HitTarget::BodyFilter(filter) => Some(filter),
@@ -48,7 +67,7 @@ fn fleet_header_is_fixed_and_splits_the_make_up() {
     // pre-edit turn still tallies as working.
     reasoning.phase = crate::agents::TurnPhase::Reasoning;
     let snapshot = snapshot_with(vec![working, reasoning]);
-    let screen = snapshot_to_screen(&snapshot, 40, 15);
+    let screen = snapshot_to_screen(&snapshot, 44, 15);
     // Row 2 is the `◎` summary, row 3 the `¤` summary; row 5 is the bucket
     // make-up (row 1 is the blank line, row 4 the hairline rule).
     assert!(screen.lines().nth(3).unwrap().contains("¤ 2"), "{screen}");
@@ -64,6 +83,7 @@ fn fleet_header_is_fixed_and_splits_the_make_up() {
     assert!(buckets.contains("⢿ 2"), "{buckets}");
     let sleeping_bucket = format!("{} 0", Theme::fixed(false).glyph(GlyphRole::StatusSleeping));
     assert!(buckets.contains(&sleeping_bucket), "{buckets}");
+    assert!(!buckets.contains("❄ 0"), "{buckets}");
     assert!(buckets.contains("○ 0"), "{buckets}");
     let bucket_positions = [
         buckets.find("? 0").expect("waiting bucket"),
@@ -76,7 +96,7 @@ fn fleet_header_is_fixed_and_splits_the_make_up() {
     ];
     assert!(
         bucket_positions.windows(2).all(|pair| pair[0] < pair[1]),
-        "make-up order is waiting failed paused success | running sleeping idle: {buckets}"
+        "make-up order is waiting failed paused success | running sleeping hibernating idle: {buckets}"
     );
     assert!(!buckets.contains('⠁'), "no thinking bucket: {buckets}");
     // The default selection lands on the first row, so its worktree reads as
@@ -411,7 +431,7 @@ fn selected_idle_filter_preserves_soft_gray_with_reverse_video() {
         snapshot.now,
         &BodyLens::from(BodyFilter::Status(AgentStatus::Idle)),
         0,
-        38,
+        44,
         None,
     );
     let active = lines[0]
@@ -510,7 +530,7 @@ fn make_up_buckets_pulse_only_while_unread() {
             snapshot.now,
             &BodyLens::default(),
             animation_phase,
-            38,
+            44,
             lead_unread(&snapshot.worktree_groups).map(|(_, status)| status),
         )
         .0

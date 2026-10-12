@@ -1,5 +1,6 @@
 use super::panel::{kv, two_column};
 use super::*;
+use std::collections::BTreeMap;
 
 use rimz::harness::assist_log::{self, Assist, AssistRecord, AssistWindowReset};
 use rimz::harness::auto_redeem::RedeemReason;
@@ -30,6 +31,9 @@ pub(super) struct AssistRollup {
     pub(super) compacts: usize,
     pub(super) keepalives: usize,
     pub(super) idle_stops: usize,
+    pub(super) hibernations: usize,
+    pub(super) hibernate_reclaimed_bytes: u64,
+    pub(super) hibernate_holds: BTreeMap<String, String>,
     pub(super) launch_retries: usize,
     pub(super) restores: usize,
     pub(super) restored_sessions: usize,
@@ -182,6 +186,20 @@ pub(super) enum AssistEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
+    Hibernate {
+        at: Timestamp,
+        kind: AgentKind,
+        agent_id: AgentSessionId,
+        label: String,
+        idle_secs: u64,
+        frozen: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        reclaimed_bytes: Option<u64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        hold: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
     LaunchRetry {
         at: Timestamp,
         kind: AgentKind,
@@ -288,6 +306,25 @@ impl AssistStats {
                     rollup.keepalives += usize::from(*delivered)
                 }
                 AssistEvent::IdleStop { stopped, .. } => rollup.idle_stops += usize::from(*stopped),
+                AssistEvent::Hibernate {
+                    kind,
+                    agent_id,
+                    frozen,
+                    reclaimed_bytes,
+                    hold,
+                    ..
+                } => {
+                    if *frozen {
+                        rollup.hibernations += 1;
+                        rollup.hibernate_reclaimed_bytes += reclaimed_bytes.unwrap_or(0);
+                    }
+                    if let Some(hold) = hold {
+                        rollup
+                            .hibernate_holds
+                            .entry(format!("{kind}/{agent_id}"))
+                            .or_insert_with(|| hold.clone());
+                    }
+                }
                 AssistEvent::LaunchRetry { relaunched, .. } => {
                     rollup.launch_retries += usize::from(*relaunched);
                 }
@@ -512,6 +549,26 @@ impl AssistEvent {
                 stopped,
                 error,
             },
+            Assist::Hibernate {
+                kind,
+                agent_id,
+                label,
+                idle_secs,
+                frozen,
+                reclaimed_bytes,
+                hold,
+                error,
+            } => Self::Hibernate {
+                at: record.at,
+                kind,
+                agent_id,
+                label,
+                idle_secs,
+                frozen,
+                reclaimed_bytes,
+                hold,
+                error,
+            },
             Assist::LaunchRetry {
                 kind,
                 label,
@@ -631,6 +688,7 @@ impl AssistEvent {
             | Self::Compact { at, .. }
             | Self::IdleCompact { at, .. }
             | Self::IdleStop { at, .. }
+            | Self::Hibernate { at, .. }
             | Self::LaunchRetry { at, .. }
             | Self::CacheKeepalive { at, .. }
             | Self::FlipCompact { at, .. }
@@ -737,6 +795,16 @@ fn category_entries(rollup: &AssistRollup) -> Vec<(&'static str, String)> {
     }
     if rollup.idle_stops > 0 {
         rows.push(("Idle stop:", rollup.idle_stops.to_string()));
+    }
+    if rollup.hibernations > 0 {
+        rows.push((
+            "Hibernate:",
+            format!(
+                "{} ({} reclaimed)",
+                rollup.hibernations,
+                render::fmt_bytes(rollup.hibernate_reclaimed_bytes)
+            ),
+        ));
     }
     if rollup.launch_retries > 0 {
         rows.push(("Launch retry:", rollup.launch_retries.to_string()));
@@ -944,6 +1012,26 @@ pub(super) fn benefit_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> St
                 compact(*idle_secs),
                 compact(*idle_after_secs),
             )
+        }
+        AssistEvent::Hibernate {
+            label,
+            frozen,
+            reclaimed_bytes,
+            hold,
+            error,
+            ..
+        } => {
+            if *frozen {
+                format!(
+                    "{time} {label} hibernated, {} reclaimed",
+                    render::fmt_bytes(reclaimed_bytes.unwrap_or(0))
+                )
+            } else {
+                format!(
+                    "{time} {label} hibernation held: {}",
+                    hold.as_deref().or(error.as_deref()).unwrap_or("unknown")
+                )
+            }
         }
         AssistEvent::LaunchRetry {
             kind,
@@ -1178,6 +1266,9 @@ pub(super) fn forensic_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> S
         AssistEvent::IdleStop {
             agent_id, stopped, ..
         } => format!("{at} {benefit} · agent {agent_id} · stopped {stopped}"),
+        AssistEvent::Hibernate {
+            agent_id, frozen, ..
+        } => format!("{at} {benefit} · agent {agent_id} · frozen {frozen}"),
         AssistEvent::LaunchRetry {
             run_id, relaunched, ..
         } => {
@@ -1539,6 +1630,56 @@ mod tests {
         assert!(
             lines.contains("@coder idle stop failed after 200s (threshold 3m) — requested by @lead (no bound pane)"),
             "{lines}"
+        );
+    }
+
+    #[test]
+    fn hibernation_stats_sum_reclaim_and_keep_the_last_hold_per_agent() {
+        let records = [
+            (true, None),
+            (false, Some("NoScope")),
+            (false, Some("ForeignProcess")),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(index, (frozen, hold))| AssistRecord {
+            at: Timestamp::from_second(index as i64).unwrap(),
+            assist: Assist::Hibernate {
+                kind: AgentKind::new_unchecked("claude"),
+                agent_id: "session".into(),
+                label: "@coder".into(),
+                idle_secs: 600,
+                frozen,
+                reclaimed_bytes: frozen.then_some(2048),
+                hold: hold.map(str::to_owned),
+                error: None,
+            },
+        })
+        .collect();
+        let stats = AssistStats::from_records("all", records);
+        let json = serde_json::to_value(&stats).unwrap();
+        assert_eq!(json["rollup"]["hibernations"], 1);
+        assert_eq!(json["rollup"]["hibernate_reclaimed_bytes"], 2048);
+        assert_eq!(json["rollup"]["reclaimed_bytes"], 0);
+        assert_eq!(
+            json["rollup"]["hibernate_holds"]["claude/session"],
+            "ForeignProcess"
+        );
+        let lines = stats
+            .events
+            .iter()
+            .map(|event| forensic_line(event, &jiff::tz::TimeZone::UTC))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            lines.contains("@coder hibernated, 2 KB reclaimed"),
+            "{lines}"
+        );
+        assert!(lines.contains("ForeignProcess"), "{lines}");
+        assert!(
+            category_rows(&stats.rollup)
+                .iter()
+                .any(|row| row.contains("Hibernate:"))
         );
     }
 

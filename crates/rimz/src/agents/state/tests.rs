@@ -13,6 +13,48 @@ fn recent_prompts_truncate_multibyte_text_before_deduplication() {
 }
 
 #[test]
+fn hibernation_projects_resting_rows_before_armed_waits_but_not_running_rows() {
+    for status in [
+        AgentStatus::Idle,
+        AgentStatus::Success,
+        AgentStatus::Running,
+    ] {
+        let mut agent = test_agent(status, 1_000);
+        agent.pending_waits.push(PendingWait {
+            name: "watch".into(),
+            trigger: PendingWaitTrigger::Command {
+                command: "true".into(),
+            },
+            armed_at: None,
+        });
+        let mut wire = serde_json::to_value(&agent).unwrap();
+        wire["hibernation"] = serde_json::json!({
+            "frozen_at": "1970-01-01T00:20:00Z", "reclaimed_bytes": 200
+        });
+        let projected: AgentState = serde_json::from_value(wire).unwrap();
+        let expected = if status == AgentStatus::Running {
+            "running"
+        } else {
+            "hibernating"
+        };
+        assert_eq!(projected.effective_status().as_str(), expected);
+        assert!(!projected.effective_status().is_attention());
+    }
+}
+
+#[test]
+fn hibernating_status_round_trips() {
+    let decoded = serde_json::from_str::<AgentStatus>("\"hibernating\"");
+    assert!(decoded.is_ok(), "hibernating is a projected wire state");
+    let status = decoded.unwrap();
+    assert_eq!(status.as_str(), "hibernating");
+    assert_eq!(serde_json::to_string(&status).unwrap(), "\"hibernating\"");
+    assert!(!status.is_attention());
+    assert!(!status.is_actionable());
+    assert!(!status.needs_a_look());
+}
+
+#[test]
 fn observe_prompt_sets_first_prompt_once_skips_control_text_and_caps_recent() {
     let mut agent = test_agent(AgentStatus::Running, 1_000);
     let initial = agent.clone();

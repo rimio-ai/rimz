@@ -597,6 +597,7 @@ fn enrich_core(
             &machine_config,
         );
         crate::harness::idle_stop::project_requests(&mut snapshot, state);
+        crate::harness::hibernate::project_hibernation(&mut snapshot, state);
     }
 
     let episodes = super::unread::UnreadEpisodes::load(runtime);

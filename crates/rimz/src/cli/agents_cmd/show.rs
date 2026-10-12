@@ -392,6 +392,16 @@ pub(super) fn render_activity_section(
             render::cell(format!("{}{requester}", pending.label(now))),
         );
     }
+    if let Some(hibernation) = &agent.hibernation {
+        kv.push(
+            "hibernation",
+            render::cell(format!(
+                "hibernating since {}, {} reclaimed",
+                hibernation.frozen_at,
+                render::fmt_bytes(hibernation.reclaimed_bytes)
+            )),
+        );
+    }
     if let Some(ask) = ask {
         kv.push(
             "ask",
@@ -950,6 +960,33 @@ mod tests {
             "codex@work"
         );
         insta::assert_json_snapshot!("show_agent_report", report);
+    }
+
+    #[test]
+    fn activity_shows_hibernation_time_and_reclaimed_bytes() {
+        let mut state =
+            rimz::testkit::agent_state("claude", "hibernating", jiff::Timestamp::UNIX_EPOCH);
+        state.status = rimz::agents::AgentStatus::Idle;
+        state.hibernation = Some(rimz::agents::state::Hibernation {
+            frozen_at: jiff::Timestamp::UNIX_EPOCH,
+            reclaimed_bytes: 2048,
+        });
+        let entry = build_entry(
+            &rimz::agents::ParkDemotion::default(),
+            &state,
+            None,
+            None,
+            &[&state],
+            None,
+            jiff::Timestamp::UNIX_EPOCH,
+            ReportOverrides::default(),
+        );
+        let text =
+            strip(|w| render_activity_section(w, &entry, None, false, jiff::Timestamp::UNIX_EPOCH));
+        assert!(
+            text.contains("hibernating since 1970-01-01T00:00:00Z, 2 KB reclaimed"),
+            "{text}"
+        );
     }
 
     #[test]
