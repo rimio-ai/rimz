@@ -1911,9 +1911,10 @@ fn idle_exit_closes_the_socket_before_the_final_drain() {
 fn idle_drainer_exits_and_the_next_hook_spawns_a_successor() {
     let env = Env::new();
     env.record(&env.project_root);
-    let feed = |session| {
-        let mut command = env.hook_command("claude");
-        command.env("RIMZ_TEST_HOOK_DRAIN_IDLE_MS", "1000");
+    let store = env.store();
+    let paths = store.runtime_paths();
+    let wait = || Instant::now() + Duration::from_secs(30);
+    let fire = |command: Command, session: &str| {
         let output = env
             .spawn_payload(
                 command,
@@ -1922,32 +1923,59 @@ fn idle_drainer_exits_and_the_next_hook_spawns_a_successor() {
             .wait_with_output()
             .unwrap();
         assert!(output.status.success(), "{output:?}");
-        env.drain_hooks();
-        let event = env
-            .read_events()
-            .into_iter()
-            .find(|event| {
-                event.method == "agent.lifecycle" && event.params_value()["agent_id"] == session
-            })
-            .unwrap();
-        assert!(
-            event.ingress.is_some(),
-            "the hook queues its frame before the drainer applies it"
-        );
-        event.ingress.unwrap()
     };
-    let first = feed("idle-first");
-    assert_eq!(derived(&env, &first).len(), 1);
-    let socket = env.store().runtime_paths().hook_drainer_socket_path();
-    assert!(socket.exists(), "the first drain must elect a resident");
-    let deadline = Instant::now() + Duration::from_secs(3);
-    while socket.exists() && Instant::now() < deadline {
+    // The test never drains: a frame applied here was applied by the resident the hook elected.
+    let applied = |session: &str| {
+        let deadline = wait();
+        loop {
+            let events = env.read_events();
+            if let Some(ingress) = events.iter().find_map(|event| {
+                (event.method == "agent.lifecycle" && event.params_value()["agent_id"] == session)
+                    .then(|| event.ingress.clone())
+                    .flatten()
+            }) {
+                let derived = derived(&env, &ingress);
+                assert_eq!(derived.len(), 1, "{derived:#?}");
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "resident never applied {session}: {events:#?}"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    };
+
+    let mut first = env.hook_command("claude");
+    first.env("RIMZ_TEST_HOOK_DRAIN_IDLE_MS", "1000");
+    fire(first, "idle-first");
+    applied("idle-first");
+
+    // The resident holds its lifetime lock until after it has unlinked its socket.
+    let deadline = wait();
+    while WorkspaceLock::try_acquire(&paths.hook_drainer_lock())
+        .unwrap()
+        .is_none()
+    {
+        assert!(
+            Instant::now() < deadline,
+            "idle drainer never released its lifetime lock"
+        );
         std::thread::sleep(Duration::from_millis(10));
     }
+    let socket = paths.hook_drainer_socket_path();
     assert!(!socket.exists(), "idle drainer must unlink its socket");
-    let next = feed("idle-next");
-    assert!(!derived(&env, &next).is_empty());
-    assert!(socket.exists(), "the next frame starts a successor");
+
+    fire(env.hook_command("claude"), "idle-next");
+    applied("idle-next");
+    let deadline = wait();
+    while let Err(error) = std::os::unix::net::UnixStream::connect(&socket) {
+        assert!(
+            Instant::now() < deadline,
+            "successor never bound its socket: {error}"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
 }
 
 #[test]
