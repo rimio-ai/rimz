@@ -162,6 +162,19 @@ pub enum Assist {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
+    Hibernate {
+        kind: AgentKind,
+        agent_id: AgentSessionId,
+        label: String,
+        idle_secs: u64,
+        frozen: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reclaimed_bytes: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        hold: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
     /// A fresh launch whose provider exited before opening a session, and one
     /// relaunch the exec wrapper answered it with.
     LaunchRetry {
@@ -424,6 +437,14 @@ mod tests {
 
     #[test]
     fn variants_round_trip_through_the_wire_shape() {
+        let hibernated = serde_json::json!({
+            "at": "2026-06-02T12:00:00Z", "assist": "hibernate",
+            "kind": "claude", "agent_id": "session-1", "label": "@coder",
+            "idle_secs": 600, "frozen": true, "reclaimed_bytes": 200
+        });
+        let decoded = serde_json::from_value::<AssistRecord>(hibernated.clone());
+        assert!(decoded.is_ok(), "hibernation is an assist: {decoded:?}");
+        assert_eq!(serde_json::to_value(decoded.unwrap()).unwrap(), hibernated);
         let stalled = serde_json::json!({
             "at": "2026-06-02T12:00:00Z", "assist": "stall_notice",
             "kind": "codex", "agent_id": "session-1", "label": "@still-silver",

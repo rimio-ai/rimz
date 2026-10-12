@@ -13,6 +13,31 @@ fn pending_wait() -> PendingWait {
 }
 
 #[test]
+fn hibernation_is_calm_in_consumer_tallies_and_ranking() {
+    let mut resting = agent("claude", "frozen", AgentStatus::Success, 0).worktree("/repo/main");
+    resting.hibernation = Some(crate::agents::state::Hibernation {
+        frozen_at: ago(30),
+        reclaimed_bytes: 200,
+    });
+    resting.pending_waits = vec![pending_wait()];
+    let idle = agent("claude", "idle", AgentStatus::Idle, 1).worktree("/repo/main");
+    let snapshot = room_with_agent_panes(vec![resting, idle]);
+    let frozen = row(&snapshot, "frozen");
+    assert_eq!(frozen.status(), Some(AgentStatus::Hibernating));
+    assert!(!frozen.status().unwrap().is_attention());
+    assert_eq!(
+        frozen.attention_score,
+        row(&snapshot, "idle").attention_score
+    );
+    assert!(
+        snapshot.worktree_groups[0]
+            .status_counts
+            .iter()
+            .any(|count| count.status == AgentStatus::Hibernating && count.count == 1)
+    );
+}
+
+#[test]
 fn parked_pending_wait_projects_sleeping_and_keeps_phase() {
     for age_secs in [60, default_stall_secs() + 60] {
         let mut session = agent("claude", "sleeper", AgentStatus::Running, 0)

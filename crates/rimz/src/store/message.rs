@@ -900,11 +900,18 @@ pub fn gate_open(gate: DeliveryGate, status: AgentStatus) -> bool {
     match gate {
         DeliveryGate::Done => matches!(
             status,
-            AgentStatus::Idle | AgentStatus::Success | AgentStatus::Sleeping
+            AgentStatus::Idle
+                | AgentStatus::Success
+                | AgentStatus::Sleeping
+                | AgentStatus::Hibernating
         ),
         DeliveryGate::Any => matches!(
             status,
-            AgentStatus::Idle | AgentStatus::Success | AgentStatus::Sleeping | AgentStatus::Failed
+            AgentStatus::Idle
+                | AgentStatus::Success
+                | AgentStatus::Sleeping
+                | AgentStatus::Hibernating
+                | AgentStatus::Failed
         ),
         DeliveryGate::Resume => status == AgentStatus::Paused,
     }

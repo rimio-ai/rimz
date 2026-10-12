@@ -1959,6 +1959,7 @@ fn agent_counts_line(counts: &AgentCounts) -> String {
     push_count(&mut parts, counts.failed, "failed");
     push_count(&mut parts, counts.paused, "paused");
     push_count(&mut parts, counts.sleeping, "sleeping");
+    push_count(&mut parts, counts.hibernating, "hibernating");
     if parts.is_empty() {
         "0 live".to_owned()
     } else {
@@ -2282,7 +2283,7 @@ fn status_health(status: AgentStatus) -> Health {
         AgentStatus::Running | AgentStatus::Success => Health::Ok,
         AgentStatus::Waiting | AgentStatus::Paused => Health::Warn,
         AgentStatus::Failed => Health::Alarm,
-        AgentStatus::Idle | AgentStatus::Sleeping => Health::Neutral,
+        AgentStatus::Idle | AgentStatus::Sleeping | AgentStatus::Hibernating => Health::Neutral,
     }
 }
 

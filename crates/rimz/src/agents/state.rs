@@ -330,8 +330,15 @@ impl PendingWaitTrigger {
 /// default inactive window below which a card sinks beneath live work.
 pub const ATTENTION_AGE_CEILING_SECS: i64 = 3_600;
 
+/// Enrich-only projection of the durable hibernation record.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Hibernation {
+    pub frozen_at: Timestamp,
+    pub reclaimed_bytes: u64,
+}
+
 /// Agent status as the sidebar reads it. The first five are the lifecycle
-/// rollup the agent owns and RimZ observes; `Paused` and `Sleeping` are
+/// rollup the agent owns and RimZ observes; `Paused`, `Sleeping`, and `Hibernating` are
 /// RimZ-derived projections, never emitted by a hook. They live in the one
 /// status enum so they share the cockpit tally,
 /// ranking, and glyph machinery the lifecycle states flow through.
@@ -352,6 +359,8 @@ pub enum AgentStatus {
     /// catalog: a wait timer, watched command, or one-shot subscription.
     /// Projected from `pending_waits`, never reported by a hook.
     Sleeping,
+    /// Resting with a durable hibernation entry; projected, never emitted by hooks.
+    Hibernating,
 }
 
 impl AgentStatus {
@@ -364,6 +373,7 @@ impl AgentStatus {
             Self::Failed => "failed",
             Self::Paused => "paused",
             Self::Sleeping => "sleeping",
+            Self::Hibernating => "hibernating",
         }
     }
 
@@ -414,6 +424,7 @@ impl TurnCompletion {
             AgentStatus::Idle
             | AgentStatus::Success
             | AgentStatus::Sleeping
+            | AgentStatus::Hibernating
             | AgentStatus::Running
             | AgentStatus::Waiting
             | AgentStatus::Paused => Self::Open,
@@ -878,6 +889,8 @@ pub struct AgentState {
     /// durable record and never reduced from events.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub idle_stop: Option<PendingIdleStop>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hibernation: Option<Hibernation>,
     /// Background shells this session is running, folded from adapter hook
     /// reports and carried forward; cleared when the session ends or
     /// re-registers. Independent of the `Parked` phase.
@@ -1137,6 +1150,7 @@ impl AgentState {
             context: None,
             budget_park: None,
             pending_waits: Vec::new(),
+            hibernation: None,
             idle_stop: None,
             background_shells: Vec::new(),
             subagent_description: None,
@@ -1389,6 +1403,10 @@ impl AgentState {
     }
 
     pub fn sleeping_over(&self, status: AgentStatus) -> AgentStatus {
+        if matches!(status, AgentStatus::Idle | AgentStatus::Success) && self.hibernation.is_some()
+        {
+            return AgentStatus::Hibernating;
+        }
         if matches!(status, AgentStatus::Idle | AgentStatus::Success)
             && !self.pending_waits.is_empty()
         {
@@ -1469,7 +1487,8 @@ impl AgentState {
             | AgentStatus::Success
             | AgentStatus::Failed
             | AgentStatus::Paused
-            | AgentStatus::Sleeping => false,
+            | AgentStatus::Sleeping
+            | AgentStatus::Hibernating => false,
         }
     }
 

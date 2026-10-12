@@ -65,6 +65,7 @@ A running or waiting card with async questions adds a yellow `?` line below its 
 | `✓` | done | the turn finished cleanly | a look |
 | `⢿` | working | running a turn; the cell animates through braille frames (`⣾`, `⣽`, ...), and any of them reads as working | no |
 | `☾` | sleeping | resting until an armed one-shot wait fires | no |
+| `❄` | hibernating | provider frozen after an idle interval, with memory reclaimed | no |
 | `○` | idle | alive, nothing in flight | no |
 
 `?` is always yellow, `!` always red, and `⏸︎` always blue, whatever the card's age. What each status means in an agent's life is [the agent lifecycle](../guide/sidebar.md#the-agent-lifecycle). The mux tab bar reuses `!`, `?`, `⏸︎`, `⢿`, and `✓` as a static suffix on the tab name ([the sidebar guide](../guide/sidebar.md#glance-jump-answer)). A suffix always draws in these compact Unicode shapes, even when the column runs a configured [glyph set](../guide/theme.md#glyphs). A tab RimZ named after its agents goes back to the shell's name once they all exit; a tab you named yourself keeps its name.
@@ -217,11 +218,11 @@ The `⑃ N` colour reads each worktree's own pull request, since stacked pull re
 
 ### The make-up line
 
-The left cluster counts agents that may want you: `?` waiting, `!` failed, `⏸︎` paused, `✓` done. The right cluster counts the rest: `⢿` working, `☾` sleeping, `○` idle. Every bucket shows even at zero, and the counts always cover the whole room.
+The left cluster counts agents that may want you: `?` waiting, `!` failed, `⏸︎` paused, `✓` done. The right cluster counts the rest: `⢿` working, `☾` sleeping, `❄` hibernating, `○` idle. The hibernating bucket appears only when nonzero; every other bucket shows even at zero. The counts always cover the whole room.
 
 Click a non-zero bucket, the unread count, or the `⑃` count to filter the cards to it. The filter applies in every tab of the room and stays on while you move between matching cards. The active filter is drawn as a filled chip, or in reverse video under `NO_COLOR`. To clear it, click it again, press its key again, press `A`, or pick another filter. It also clears when its count reaches zero. The filter keys are in [Keys and mouse](#keys-and-mouse).
 
-With single-digit counts, all seven buckets fit from 39 columns. Below that the idle bucket is dropped, and at 34 columns the sleeping count goes too. The filter keys still work for a dropped bucket.
+At narrow widths the right-hand buckets clip from the idle end. A bucket without room for its full click target is not clickable; existing filter keys still work when their bucket is clipped.
 
 ### The unread banner
 
@@ -287,7 +288,7 @@ Selecting a card only appends lines below it. When the selected agent belongs to
 |-------|---------------|
 | `auto` (default) | the shapes above |
 | `expanded` | every engaged card lists its subagent and wait entries |
-| `compact` | idle: identity. Running and waiting: identity, description, meter. Paused, done, sleeping, failed: identity and description. Selecting a card restores its full shape. |
+| `compact` | idle: identity. Running and waiting: identity, description, meter. Paused, done, sleeping, hibernating, failed: identity and description. Selecting a card restores its full shape. |
 
 ### Subagents and waits
 
@@ -385,6 +386,8 @@ A sleeping card names its first pending wait in the description:
 Subagent waits draw no separate entry and do not count in `⧖`: the child is already visible, as a row under `⧉` or, for a peer launched with `rimz agents`, as its own root card. A team wait counts in `⧖` and draws a static `team · stage Review` entry with its elapsed age, or `stage unknown` when its board is unavailable.
 
 `☾` replaces only an idle or done status. Working, waiting, failed, paused (including a launched child's provider park), and waiting on running subagents all take precedence, and a standing subscription does not make an agent sleep. Sleeping opens no unread mark and sends no notification, and an earlier unread result stays unread through the sleep.
+
+`❄` takes precedence over `☾` when that resting agent has a hibernation record. It uses the same calm tone family, ranks with idle, and opens no attention episode or notification. Hibernation is opt-in and applies only after the idle result has been seen and the pane is unfocused.
 
 ### Process rows
 

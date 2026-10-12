@@ -40,6 +40,7 @@ pub mod event;
 pub mod event_log;
 pub mod follow;
 pub mod gc;
+pub mod hibernate;
 pub mod idle_stop;
 pub mod ingress;
 pub mod live_roster;

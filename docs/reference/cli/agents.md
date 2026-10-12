@@ -528,10 +528,11 @@ Under each row, the agent's activity description (the line the sidebar card show
 | `failed` | The last turn failed, or a live launched child's provider park can no longer resume. |
 | `paused` | Parked by a provider limit, overload, or budget cap, or by a live launched child with a provider park. |
 | `sleeping` | At rest with a one-shot delivery armed for its session in this workspace: a timer, PID, watched command, polled check, file watch, or a one-shot signal. Standing subscriptions do not count, and running, waiting, failed, paused, or a live child take precedence. |
+| `hibernating` | At rest with its provider frozen and memory reclaimed by opt-in hibernation. Takes precedence over sleeping, but not running, waiting, failed, or paused. |
 
-The status is derived for display. [`rimz message --when`](./message.md) matches the raw lifecycle statuses (`running`, `waiting`, `idle`, `success`, `failed`) and never `paused` or `sleeping`. `show` adds the turn phase.
+The status is derived for display. [`rimz message --when`](./message.md) matches the raw lifecycle statuses (`running`, `waiting`, `idle`, `success`, `failed`) and never `paused`, `sleeping`, or `hibernating`. `show` adds the turn phase and, while hibernating, `hibernating since <t>, <bytes> reclaimed`.
 
-`--json` emits `{"schema":1,"agents":[...]}`. Each entry is the card the table renders, not the store's provider-shaped record. Except for `login`, every key is always present: an unknown scalar or object is `null`, a count is `0`, and a collection is empty.
+`--json` emits `{"schema":1,"agents":[...]}`. Each entry is the card the table renders, not the store's provider-shaped record. Except for `login`, `idle_stop`, and `hibernation`, every key is always present: an unknown scalar or object is `null`, a count is `0`, and a collection is empty.
 
 | Field | Contents |
 | --- | --- |
@@ -541,6 +542,7 @@ The status is derived for display. [`rimz message --when`](./message.md) matches
 | `status`, `phase`, `turn_error`, `ask`, `unread`, `attention_score`, `description` | Projected activity. `turn_error` describes the agent's own turn; it remains `null` when only a child's park pauses or fails the parent card. |
 | `pending_waits` | Armed one-shot deliveries, each with its name, trigger, and optional arm timestamp. Trigger kinds include `check` with `command` and `file` with `path` and `grep`, alongside timers, PIDs, commands, and signals. Timers come first by due time, then watches and signals; names break ties. |
 | `idle_stop` | The pending [`stop --when-idle`](#stop) request: `after_secs`, `requested_at`, `requested_by` (the asking agent's handle, omitted from a user shell), and `due_at` while the agent is resting and its clock runs. Omitted when none is pending. |
+| `hibernation` | `frozen_at` and `reclaimed_bytes`; omitted unless the displayed status is `hibernating`. |
 | `launch_warnings` | Warnings the launch wrapper printed for the current launch, in print order; empty after a clean launch. |
 | `background_shells` | Background shells the session is running, each with its `id`, optional `command` and `description`, and `started_at`, when RimZ first saw it. Only Claude reports them; other agents leave the list empty. |
 | `model` | `id`, `effort`, and the rendered `label`. |
@@ -711,7 +713,7 @@ Other kinds, including OpenCode and plugins, cannot fork.
 
 Immediately after a prompted peer launch, `rimz agents wait @peer` resolves the pending launch run even before provider registration. After a later launcher message, it retains the ordinary turn wait until a prompt-correlated turn-start hook enrolls the new run. Use `rimz message --wait @peer '<text>'` for a message-correlated reply wait. A turn-start hook without prompt text acknowledges delivery but opens no reportable turn.
 
-`rimz agents wait <REF>...` blocks until supervised runs finish or interactive agents finish a turn: `idle`, `success`, or `failed` after a turn has opened. A sleeping agent (one with an armed one-shot wait) and a freshly registered agent that never opened a turn keep the wait blocked. A reference is a run id, a pet name, or any address.
+`rimz agents wait <REF>...` blocks until supervised runs finish or interactive agents finish a turn: `idle`, `success`, or `failed` after a turn has opened. A sleeping agent (one with an armed one-shot wait), a hibernating agent, and a freshly registered agent that never opened a turn keep the wait blocked. A reference is a run id, a pet name, or any address.
 
 With one reference, `wait` prints the final assistant message: a run's answer, or the message that closed an interactive agent's turn. When a completed turn left no message, stderr says so and stdout stays empty. `--json` prints a run's full record, or for an interactive agent one `{status, exit, cost, transcript_path, last_message}` entry, omitting fields that have no value. `--stream` tails assistant text as it lands, `--stream --json` emits NDJSON run events, and `--from-start` replays the transcript from the top before tailing.
 

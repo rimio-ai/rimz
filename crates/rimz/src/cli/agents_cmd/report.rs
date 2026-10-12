@@ -43,6 +43,8 @@ pub(super) struct AgentReportEntry {
     pub pending_waits: Vec<rimz::agents::state::PendingWait>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub idle_stop: Option<rimz::agents::PendingIdleStop>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hibernation: Option<rimz::agents::state::Hibernation>,
     pub background_shells: Vec<rimz::agents::BackgroundShell>,
     pub phase: TurnPhase,
     pub turn_error: Option<TurnErrorReport>,
@@ -337,6 +339,9 @@ pub(super) fn build_entry(
         status,
         pending_waits: agent.pending_waits.clone(),
         idle_stop: agent.idle_stop.clone(),
+        hibernation: (agent.effective_status() == AgentStatus::Hibernating)
+            .then(|| agent.hibernation.clone())
+            .flatten(),
         background_shells: agent.background_shells.clone(),
         phase,
         turn_error,

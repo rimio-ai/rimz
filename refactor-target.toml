@@ -551,7 +551,8 @@ path = "crates/rimz/src/harness"
 # FrameAttempt tells an apply whether a crashed attempt preceded it, so only a redo scans for its own transcript entry (+2).
 # Host readers share the crate-private cached run listing (+1).
 # Hibernation admission reports and scope naming cross launch and CLI seams (+9).
-surface-budget = 794
+# Hibernation decision, helper request, producer and projection share the CLI/sidebar seam and idle-stop predicates (+12).
+surface-budget = 806
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -799,7 +800,8 @@ path = "crates/rimz/src/store"
 # The CLI stamps assistant transcripts with the scoped Store ingress id (+1).
 # Listed child panes share row membership with the focus seam (+2).
 # RunListing and listing share cached run slices with host readers (+2).
-surface-budget = 415
+# Durable hibernation codec and record operations serve the producer and freeze/wake helpers.
+surface-budget = 418
 
 [[module]]
 path = "crates/rimz/src/theme"
@@ -1089,7 +1091,8 @@ allowed-dependencies = [
 # Explicit audit-row text loading (+1).
 # The hook ingress and drain cursor codec module (+1).
 # The CLI reads a scoped handle's hook ingress id to key assistant transcripts (+1).
-surface-budget = 36
+# The durable hibernation record module (+1).
+surface-budget = 37
 
 [[module]]
 path = "crates/rimz/src/utils/time.rs"
