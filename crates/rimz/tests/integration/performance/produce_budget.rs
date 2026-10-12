@@ -33,6 +33,7 @@ fn scale_room_preserves_agent_pane_and_fence_dimensions() {
                 agents,
                 panes,
                 ended_sessions,
+                orphan_contexts: 0,
             },
         )
         .expect("scale room");

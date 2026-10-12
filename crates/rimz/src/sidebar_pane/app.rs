@@ -51,6 +51,8 @@ pub(super) use self::socket::EventForwarder;
 
 #[cfg(feature = "testkit")]
 pub use demo::{serve_fixture, serve_gallery};
+#[cfg(feature = "testkit")]
+pub use fetch::IdleCycleFixture;
 pub use keymap::NavKeymap;
 
 /// Send a pane-addressed left-button press through the host's room socket.

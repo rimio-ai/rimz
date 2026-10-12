@@ -252,6 +252,142 @@ struct FastFold {
     produce: bool,
 }
 
+/// A retained fetch worker and subscriber mailboxes, without a live multiplexer.
+#[cfg(feature = "testkit")]
+pub struct IdleCycleFixture {
+    worker: FetchWorker,
+    sink: ResultSink,
+    state: StatePaths,
+    receivers: Vec<ResultReceiver>,
+    renderers: Vec<(super::loop_state::LoopState, FetchDispatcher)>,
+}
+
+#[cfg(feature = "testkit")]
+impl IdleCycleFixture {
+    pub fn new(
+        state: StatePaths,
+        runtime: RuntimePaths,
+        frame: PaneFrame,
+        subscribers: usize,
+    ) -> Self {
+        let config = ServeConfig {
+            workspace_id: state.workspace_id.clone(),
+            mux: crate::MuxName::Zellij,
+            session_name: frame.session_name.clone(),
+            instance_id: SidebarInstanceId::new(),
+            tick_seconds: 1,
+            refresh_ms_override: None,
+            timezone: jiff::tz::TimeZone::UTC,
+            notification_prefs: NotificationsPrefs::default(),
+            own_pane: None,
+        };
+        let producer = PaneProducer::seeded(&runtime, &config.session_name);
+        let worker = FetchWorker::new(
+            config,
+            runtime,
+            crate::diag::DiagSink::disabled(),
+            producer,
+            None,
+        );
+        let host_data = Arc::new(Mutex::new(HostData {
+            inputs: Some(HostInputs::from_frame(frame)),
+            ..Default::default()
+        }));
+        let mut receivers = Vec::new();
+        let mut subscriptions = BTreeMap::new();
+        for index in 0..subscribers {
+            let (tx, rx) = result_channel();
+            let (wake, _) = std::sync::mpsc::sync_channel(1);
+            let instance_id = SidebarInstanceId::new();
+            subscriptions.insert(
+                instance_id.as_str().to_owned(),
+                Subscriber {
+                    instance_id,
+                    own_pane: Some(PaneId::from_parts(
+                        crate::MuxName::Zellij,
+                        format!("sidebar_{index}"),
+                    )),
+                    tick_seconds: 1,
+                    refresh_override: None,
+                    tx,
+                    wake,
+                },
+            );
+            receivers.push(rx);
+        }
+        Self {
+            worker,
+            sink: ResultSink::shared(
+                Arc::new(Mutex::new(subscriptions)),
+                Covered::default(),
+                host_data,
+            ),
+            state,
+            receivers,
+            renderers: Vec::new(),
+        }
+    }
+
+    /// Include each subscriber's real renderer application, but no painting.
+    pub fn enable_renderer_apply(&mut self) {
+        self.sink.begin_cycle();
+        self.renderers = self
+            .receivers
+            .drain(..)
+            .map(|rx| {
+                let subscriber = self
+                    .sink
+                    .cycle
+                    .iter()
+                    .find(|subscriber| subscriber.tx.0.ptr_eq(&Arc::downgrade(&rx.0)))
+                    .expect("every receiver has a subscriber");
+                let mut config = self.worker.config.clone();
+                config.instance_id = subscriber.instance_id.clone();
+                config.own_pane = subscriber.own_pane.clone();
+                (
+                    super::loop_state::LoopState::new(
+                        config,
+                        None,
+                        self.worker.runtime.clone(),
+                        std::path::PathBuf::new(),
+                        crate::diag::DiagSink::disabled(),
+                        rx,
+                        None,
+                        std::sync::mpsc::sync_channel(1).0,
+                        Default::default(),
+                        None,
+                    ),
+                    FetchDispatcher::for_plane(std::sync::mpsc::channel().0, Covered::default()),
+                )
+            })
+            .collect();
+    }
+
+    /// Fold and deliver once with production not due; retain the cursor and delivery state.
+    pub fn run_cycle(&mut self) {
+        self.worker.producer_cadence.last_attempt = Some(Instant::now());
+        self.worker
+            .run_cycle(&self.state, FetchRequest::default(), &mut self.sink);
+        for receiver in &self.receivers {
+            let update = receiver
+                .take()
+                .pop()
+                .expect("cycle delivers to every subscriber");
+            assert!(update.is_final(), "idle cycle completes without production");
+            let (update, context) = update.into_parts();
+            if let FetchUpdate::Failed { error } = &update {
+                panic!("idle fold failed: {error}");
+            }
+            std::hint::black_box((update, context));
+        }
+        for (renderer, dispatcher) in &mut self.renderers {
+            let before = renderer.current.now;
+            renderer.on_snapshot(dispatcher);
+            assert!(renderer.current.now > before, "renderer applies the cycle");
+        }
+    }
+}
+
 impl FetchWorker {
     fn new(
         config: ServeConfig,
@@ -869,7 +1005,7 @@ impl PendingResults {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testkit"))]
     fn pop(&mut self) -> Option<FetchUpdate> {
         self.snapshot.take().or_else(|| self.outcome.take())
     }

@@ -20,22 +20,39 @@ use sha2::{Digest, Sha256};
 use crate::disk::atomic;
 use crate::disk::paths::RuntimePaths;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "testkit"))]
 pub(crate) mod testkit {
     use std::cell::Cell;
 
     thread_local! {
         static PARSE_READS: Cell<usize> = const { Cell::new(0) };
+        static STATS: Cell<usize> = const { Cell::new(0) };
+        static ENUMERATIONS: Cell<usize> = const { Cell::new(0) };
+    }
+
+    pub(crate) fn record_stat() {
+        STATS.set(STATS.get() + 1);
+    }
+
+    pub(crate) fn record_enumeration() {
+        ENUMERATIONS.set(ENUMERATIONS.get() + 1);
+    }
+
+    /// This thread's cumulative (stats, directory enumerations, parses).
+    pub fn read_counts() -> (usize, usize, usize) {
+        (STATS.get(), ENUMERATIONS.get(), PARSE_READS.get())
     }
 
     pub(crate) fn record_parse_read() {
         PARSE_READS.set(PARSE_READS.get() + 1);
     }
 
+    #[cfg(test)]
     pub(crate) fn reset_parse_reads() {
         PARSE_READS.set(0);
     }
 
+    #[cfg(test)]
     pub(crate) fn parse_reads() -> usize {
         PARSE_READS.get()
     }
@@ -172,6 +189,8 @@ pub(super) fn remove_locked<R: SidecarRecord>(
 }
 
 pub(super) fn read_all<R: SidecarRecord>(dir: &Path, cache: &ParseCache<R>) -> Vec<R> {
+    #[cfg(any(test, feature = "testkit"))]
+    testkit::record_enumeration();
     let Ok(entries) = fs::read_dir(dir) else {
         return Vec::new();
     };
@@ -183,6 +202,8 @@ pub(super) fn read_all<R: SidecarRecord>(dir: &Path, cache: &ParseCache<R>) -> V
         if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
             continue;
         }
+        #[cfg(any(test, feature = "testkit"))]
+        testkit::record_stat();
         let Ok(meta) = entry.metadata() else { continue };
         let Ok(mtime) = meta.modified() else { continue };
         let len = meta.len();
@@ -190,7 +211,7 @@ pub(super) fn read_all<R: SidecarRecord>(dir: &Path, cache: &ParseCache<R>) -> V
         let record = match cache.get(&path) {
             Some(parsed) if parsed.mtime == mtime && parsed.len == len => parsed.record.clone(),
             _ => {
-                #[cfg(test)]
+                #[cfg(any(test, feature = "testkit"))]
                 testkit::record_parse_read();
                 let record = fs::read(&path)
                     .ok()
@@ -230,6 +251,8 @@ pub(super) fn read_for_keys<'a, R: SidecarRecord>(
             if !seen.insert(record_path.clone()) {
                 return None;
             }
+            #[cfg(any(test, feature = "testkit"))]
+            testkit::record_stat();
             let Ok(meta) = fs::metadata(&record_path) else {
                 cache.remove(&record_path);
                 return None;
@@ -242,7 +265,7 @@ pub(super) fn read_for_keys<'a, R: SidecarRecord>(
             let record = match cache.get(&record_path) {
                 Some(parsed) if parsed.mtime == mtime && parsed.len == len => parsed.record.clone(),
                 _ => {
-                    #[cfg(test)]
+                    #[cfg(any(test, feature = "testkit"))]
                     testkit::record_parse_read();
                     let record = fs::read(&record_path)
                         .ok()
