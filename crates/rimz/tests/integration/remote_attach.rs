@@ -37,7 +37,7 @@ fn stdout_line(out: &Output) -> String {
 }
 
 #[test]
-fn remote_setup_missing_pinned_release_names_latest_under_sh_and_zsh() {
+fn remote_setup_snippet_installs_or_names_latest_under_sh_and_zsh() {
     let env = Env::new();
     let bin = env.home_root.join("setup-bin");
     // ssh runs the snippet through the host login shell, which may be zsh.
@@ -46,12 +46,35 @@ fn remote_setup_missing_pinned_release_names_latest_under_sh_and_zsh() {
         "ssh",
         r#"for arg; do snippet=$arg; done; exec "$SETUP_TEST_SHELL" -c "$snippet""#,
     );
-    crate::common::write_path_shim(&bin, "curl", "exit 22");
+    // An empty release directory stands in for an unpublished release.
+    crate::common::write_path_shim(
+        &bin,
+        "curl",
+        r#"for arg; do url=$arg; done; cp "$SETUP_TEST_RELEASE/${url##*/}" . 2>/dev/null || exit 22"#,
+    );
     crate::common::write_path_shim(
         &bin,
         "uname",
         r#"if [ "$1" = -s ]; then echo Linux; else echo x86_64; fi"#,
     );
+    let published = env.home_root.join("release-published");
+    let unpublished = env.home_root.join("release-unpublished");
+    std::fs::create_dir_all(&unpublished).expect("create empty release");
+    let packaged = Command::new("sh")
+        .args([
+            "-c",
+            r#"set -e
+mkdir -p "$1/rimz-x86_64-unknown-linux-gnu"
+cd "$1"
+printf '#!/bin/sh\necho rimz 0.0.0-test\n' > rimz-x86_64-unknown-linux-gnu/rimz
+tar -czf rimz-x86_64-unknown-linux-gnu.tar.gz rimz-x86_64-unknown-linux-gnu
+sha256sum rimz-x86_64-unknown-linux-gnu.tar.gz > SHA256SUMS"#,
+            "sh",
+        ])
+        .arg(&published)
+        .status()
+        .expect("package fake release");
+    assert!(packaged.success(), "package fake release: {packaged}");
     let path = format!(
         "{}:{}",
         bin.display(),
@@ -64,14 +87,27 @@ fn remote_setup_missing_pinned_release_names_latest_under_sh_and_zsh() {
             .is_ok_and(|status| status.success())
     });
     for shell in shells {
-        let out = env
-            .rimz()
-            .args(["remote", "setup", "dev-box"])
-            .env("RIMZ_SSH_BIN", &ssh)
-            .env("SETUP_TEST_SHELL", shell)
-            .env("PATH", &path)
-            .bounded_output()
-            .expect("run remote setup");
+        let setup = |release: &Path| {
+            env.rimz()
+                .args(["remote", "setup", "dev-box"])
+                .env("RIMZ_SSH_BIN", &ssh)
+                .env("SETUP_TEST_SHELL", shell)
+                .env("SETUP_TEST_RELEASE", release)
+                .env("PATH", &path)
+                .bounded_output()
+                .expect("run remote setup")
+        };
+
+        let out = setup(&published);
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(out.status.success(), "{shell}: {stdout}\n{stderr}");
+        assert!(
+            stdout.contains("rimz 0.0.0-test installed on dev-box at ~/.local/bin/rimz"),
+            "{shell}: {stdout}\n{stderr}"
+        );
+
+        let out = setup(&unpublished);
         let stderr = String::from_utf8_lossy(&out.stderr);
         assert_eq!(out.status.code(), Some(1), "{shell}: {stderr}");
         assert!(
