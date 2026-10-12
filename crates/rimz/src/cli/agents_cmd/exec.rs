@@ -1884,6 +1884,16 @@ fn close_own_pane(globals: &GlobalFlags, session_name: &str) {
     let Some(own) = own_pane_id(mux) else {
         return;
     };
+    let wake = (|| -> Result<()> {
+        if let Some(room) = rimz::room::session::workspace_record_for_session(session_name)? {
+            let paths = rimz::StatePaths::for_workspace(room.workspace_id)?;
+            rimz::harness::hibernate::wake_pane_at(&paths, &own)?;
+        }
+        Ok(())
+    })();
+    if let Err(error) = wake {
+        tracing::warn!(%error, pane = %own, "could not wake provider before closing pane");
+    }
     let backend = rimz::mux::backend_for(mux);
     if let Err(err) = backend.close_pane(session_name, &own) {
         tracing::debug!(

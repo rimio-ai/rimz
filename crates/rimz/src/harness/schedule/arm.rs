@@ -274,7 +274,15 @@ pub fn retire_session(
         .map_err(RetireFailure::before_removal)?;
     let runtime = crate::disk::paths::RuntimePaths::for_project_root(project_root)
         .map_err(RetireFailure::before_removal)?;
-    retire_session_in(&paths, &runtime, project_root, kind, session, scope)
+    retire_session_in(
+        &paths,
+        &runtime,
+        project_root,
+        kind,
+        session,
+        scope,
+        Path::new("/sys/fs/cgroup"),
+    )
 }
 
 fn retire_session_in(
@@ -284,7 +292,18 @@ fn retire_session_in(
     kind: &crate::ids::AgentKind,
     session: &crate::ids::AgentSessionId,
     scope: RetireScope,
+    cgroup_root: &Path,
 ) -> Result<usize, RetireFailure> {
+    for entry in crate::store::hibernate::read(paths)
+        .into_iter()
+        .filter(|entry| &entry.kind == kind && &entry.agent_id == session)
+    {
+        if let Err(error) =
+            crate::harness::hibernate::wake_pane_in(paths, &entry.pane_id, cgroup_root)
+        {
+            tracing::warn!(%error, "retire: waking hibernating session");
+        }
+    }
     let retired = super::instances::retire_session(paths, kind, session, scope)
         .map_err(RetireFailure::before_removal)?;
     let mut dropped = 0;
@@ -349,6 +368,11 @@ fn retire_ended_sessions_in<'a>(
             .into_iter()
             .map(|request| (request.kind, request.agent_id)),
     );
+    pinned.extend(
+        crate::store::hibernate::read(paths)
+            .into_iter()
+            .map(|entry| (entry.kind, entry.agent_id)),
+    );
     if pinned.is_empty() {
         return Ok(0);
     }
@@ -362,6 +386,7 @@ fn retire_ended_sessions_in<'a>(
             kind,
             session,
             RetireScope::Session,
+            Path::new("/sys/fs/cgroup"),
         ) {
             Ok(count) => dropped += count,
             Err(err) => {
@@ -709,6 +734,46 @@ mod tests {
             .collect()
     }
 
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn retiring_hibernating_session_thaws_and_withdraws() {
+        for retirement in [RetireScope::Session, RetireScope::UnrestorableOnly] {
+            let (dir, paths, runtime) = idle_stop_fixture();
+            let uid = nix::unistd::Uid::current().as_raw();
+            let scope = dir.path().join(format!(
+                "user.slice/user-{uid}.slice/user@{uid}.service/app.slice/rimz-agent-test.scope"
+            ));
+            std::fs::create_dir_all(&scope).unwrap();
+            std::fs::write(scope.join("cgroup.freeze"), "1").unwrap();
+            let entry = crate::store::hibernate::Entry {
+                kind: crate::ids::AgentKind::new_unchecked("claude"),
+                agent_id: "stopping".into(),
+                pane_id: "tmux:%3".parse().unwrap(),
+                scope: scope.clone(),
+                provider_pid: 10,
+                frozen_at: Timestamp::UNIX_EPOCH,
+                reclaimed_bytes: 100,
+            };
+            crate::store::hibernate::record(&paths, entry.clone()).unwrap();
+            retire_session_in(
+                &paths,
+                &runtime,
+                dir.path(),
+                &entry.kind,
+                &entry.agent_id,
+                retirement,
+                dir.path(),
+            )
+            .unwrap();
+            assert_eq!(
+                std::fs::read_to_string(scope.join("cgroup.freeze")).unwrap(),
+                "0",
+                "retirement thaws before forgetting the entry"
+            );
+            assert!(crate::store::hibernate::read(&paths).is_empty());
+        }
+    }
+
     /// Hard stop, a fresh restart, and a durable end retire under `Session`; a
     /// resumed restart under `UnrestorableOnly`. Each takes the idle-stop request.
     #[test]
@@ -722,6 +787,7 @@ mod tests {
                 &crate::ids::AgentKind::new_unchecked("claude"),
                 &"stopping".into(),
                 scope,
+                Path::new("/sys/fs/cgroup"),
             )
             .expect("retire");
             assert_eq!(dropped, 0, "a request is not a wait row");

@@ -598,6 +598,20 @@ To try one launch the other way, pass `--isolation host` or `--isolation sandbox
 
 Every launched agent carries three variables, so a script or skill inside the pane can read them instead of guessing: `RIMZ_ISOLATION` is `sandbox` or `host`, `TMPDIR` names the agent's temp directory, which its subagents share (`/tmp` in the sandbox, a host path otherwise), and `RIMZ_SHARED` names the directory the whole room shares for files agents hand each other (the same host path in both). A process that outlives the agent's command, such as a language server, a notification handler, or a room started from the pane, gets your own `TMPDIR` back; a `rimz wait --run` command is the agent's own work and keeps the agent's. What the sandbox does and does not hide is [security → sandbox isolation](./security.md#sandbox-isolation).
 
+### Agent hibernation
+
+Many idle agents can fill a small machine's RAM. On Linux, opt-in hibernation trades wake latency for memory: RimZ freezes an eligible provider's systemd user scope and asks the kernel to reclaim its memory to swap. Edit `~/.rimz/config.toml`:
+
+```toml
+[agents.hibernate]
+enabled = true
+after = "10m"
+```
+
+The defaults are `enabled = false` and `after = "10m"`; `after` accepts CLI duration syntax up to 24 hours. Newly launched providers receive scopes in both host and sandbox isolation. Already-open providers without a scope do not hibernate. Turn `enabled` back off to stop new hibernations; focus a hibernating pane to wake it.
+
+Linux needs systemd's user manager, delegated memory controls, and swap visible in `/proc/meminfo`. In LXC, give the container a swap allowance too: an unlimited visible cgroup setting alone does not prove swap is available. `rimz start` refuses an enabled capability that cannot work; `rimz doctor` lists the checks and fixes. Off Linux, enabling it warns and does nothing. See [the sidebar lifecycle](./sidebar.md#the-agent-lifecycle) for eligibility and waking.
+
 ### Agent profiles, commands, and teams
 
 Four directories under `~/.rimz/` hold the definitions: `agents/` for the profiles you launch directly, `subagents/` for supervised children, `teams/` for rosters and their pipelines, and `traits/` for prompt fragments several definitions share. One file is one definition, named after it, and deleting the file removes the definition; agents already running keep the launch they started with.

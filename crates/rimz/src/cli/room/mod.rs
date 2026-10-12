@@ -230,6 +230,8 @@ pub(crate) fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
                 .with_context(|| format!("resolving workspace at {}", args.path.display()));
         }
     };
+    let paths = rimz::StatePaths::for_project_root(&workspace.project_root)?;
+    rimz::harness::hibernate::reconcile_at(&paths, &workspace.workspace_id)?;
     // A live room owns this path's session, so attach on its backend rather
     // than the auto-selected default. An explicit rival `--mux` still flows to
     // the birth guard below and refuses the cross-backend split.
@@ -725,7 +727,7 @@ fn birth_managed_room(
                 }
                 let disposition = prompt_disposition(&preview, resume_prompt)?;
                 tracing::debug!(workspace = %context.workspace_id(), candidates = preview.candidate_count(), panes = preview.pane_count(), ?disposition, "rebirth: inspected");
-                preflight_recovery(&plan, disposition)?;
+                preflight_recovery(&plan, disposition, context.workspace_id())?;
                 NormalRebirth::Selected {
                     plan: Box::new(plan),
                     disposition,
@@ -803,6 +805,7 @@ fn recover_parked_agents(context: &RoomContext, no_resume: bool, attended: bool)
 fn preflight_recovery(
     plan: &rimz::harness::rebirth::RebirthPlan,
     disposition: RebirthDisposition,
+    workspace_id: &rimz::WorkspaceId,
 ) -> Result<()> {
     if !disposition.recovers() {
         return Ok(());
@@ -811,6 +814,8 @@ fn preflight_recovery(
     if plan.preview().requires_sandbox() {
         rimz::sandbox::preflight(rimz::config::Isolation::Sandbox)?;
     }
+    let paths = rimz::StatePaths::for_workspace(workspace_id.clone())?;
+    rimz::harness::hibernate::reconcile_at(&paths, workspace_id)?;
     for root in plan.checkout_roots() {
         if let Err(error) = crate::cli::lsp_admission::admit(root, &machine_config()) {
             tracing::warn!(%error, "language-server admission skipped; recovering without it");

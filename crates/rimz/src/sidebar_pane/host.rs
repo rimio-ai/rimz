@@ -535,6 +535,7 @@ impl Host {
                 let _ = self.events.send(Event::Reload);
                 return;
             }
+            crate::harness::hibernate::wake_focused(&self.runtime, &envelope.event);
             for live in lock(&self.attachments).values() {
                 let _ = live.close.wake.try_send(Wakeup::Event(envelope.clone()));
             }

@@ -39,6 +39,7 @@ pub fn repair_orphan(request: OrphanSubagentRequest, globals: &super::GlobalFlag
                 .pane
                 .as_ref()
                 .context("orphaned subagent has no pane or run record")?;
+            rimz::harness::hibernate::wake_pane(&ctx.store, &pane.pane_id)?;
             rimz::mux::backend_for(pane.pane_id.mux())
                 .close_pane(&ctx.workspace.session_name, &pane.pane_id)
                 .context("reclaiming orphaned subagent pane")

@@ -50,6 +50,66 @@ fn user_app_slice_in(root: &Path, uid: u32) -> PathBuf {
     ))
 }
 
+pub(crate) fn thaw_workspace(workspace: &crate::ids::WorkspaceId) -> Result<()> {
+    thaw_workspace_in(Path::new(ROOT), workspace)
+}
+
+pub(crate) fn thaw_workspace_in(root: &Path, workspace: &crate::ids::WorkspaceId) -> Result<()> {
+    for scope in workspace_scopes_in(root, workspace)? {
+        match thaw(&scope) {
+            Err(CgroupErr::Io(error)) if error.kind() == io::ErrorKind::NotFound => {}
+            result => result?,
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn workspace_scopes_in(
+    root: &Path,
+    workspace: &crate::ids::WorkspaceId,
+) -> Result<Vec<ScopePath>> {
+    if !cfg!(target_os = "linux") {
+        return Ok(Vec::new());
+    }
+    let uid = nix::unistd::Uid::current().as_raw();
+    let slice = user_app_slice_in(root, uid);
+    let entries = match std::fs::read_dir(slice) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error.into()),
+    };
+    let prefix = scope_prefix(workspace);
+    let mut scopes = Vec::new();
+    for entry in entries {
+        let entry = entry?;
+        let name = entry.file_name();
+        if entry.file_type()?.is_dir()
+            && name
+                .to_str()
+                .is_some_and(|name| name.starts_with(&prefix) && name.ends_with(".scope"))
+        {
+            scopes.push(ScopePath(entry.path()));
+        }
+    }
+    Ok(scopes)
+}
+
+/// Prefix shared by launch and workspace-scoped reconciliation.
+pub fn scope_prefix(workspace: &crate::ids::WorkspaceId) -> String {
+    let id: String = workspace
+        .as_str()
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '_' | '-') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    format!("rimz-agent-{id}-")
+}
+
 fn app_slice_in(root: &Path, text: &str, uid: u32) -> Option<PathBuf> {
     let group = text.lines().find_map(|line| line.strip_prefix("0::"))?;
     let relative = Path::new(group.strip_prefix('/')?);

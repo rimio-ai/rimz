@@ -30,7 +30,7 @@ The harness spawns the fleet, addresses it, drives it, and reclaims what it leav
 | [subagents.md](./harness/subagents.md) | Agent-launched children: the agent-only doorway, what a launch desugars to, fanout, where a child's pane and checkout land, direct-parent stamps, the no-redelegation rule, and the boundary with provider-native subagents. |
 | [loops.md](./harness/loops.md) | Loop scheduling: the task and where tasks live, triggers and schedule shapes, host firing, one fire, run history, signals, watched commands, waits, and the assist log. |
 | [budget.md](./harness/budget.md) | Dollar caps: the scopes, where caps and spend come from, the ledgers on disk, the verdict, the human waiver, the park, and the fail-fast gate. |
-| [hibernate.md](./harness/hibernate.md) | Agent hibernation: preflight, provider scopes, eligibility vetoes, paced helpers, freeze/reclaim records, and status projection. |
+| [hibernate.md](./harness/hibernate.md) | Agent hibernation: preflight, provider scopes, eligibility vetoes, paced helpers, freeze/reclaim records, status projection, input waking, and crash reconciliation. |
 | [messaging.md](./harness/messaging.md) | Message delivery: the record and its status lifecycle, sending, the delivery pipeline, the pane write, compaction commands, reply waits, scheduling, the inbox verbs, and channels. |
 | [transcript.md](./harness/transcript.md) | The durable conversation log: entry kinds, writing entries, causality, the `rimz transcript` projection, and the ask records behind `rimz asks` and `rimz answer`. |
 | [worktrees.md](./harness/worktrees.md) | RimZ-owned Git worktrees: the ownership marker, creation and seeding, dirty and landed status, landing on main, removal, and every caller that triggers it. |

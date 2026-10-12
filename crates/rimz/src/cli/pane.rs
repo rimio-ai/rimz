@@ -679,6 +679,8 @@ fn focus(
     let workspace_id = rimz::room::session::workspace_record_for_session(session_name)?
         .map(|record| record.workspace_id)
         .ok_or_else(|| anyhow::anyhow!("pane focus requires a managed RimZ room session"))?;
+    let paths = rimz::StatePaths::for_workspace(workspace_id.clone())?;
+    rimz::harness::hibernate::wake_pane_at(&paths, pane)?;
     let runtime = rimz::RuntimePaths::for_workspace(workspace_id)?;
     rimz::mux::focus_anchor::execute_action(backend, &runtime, session_name, pane.clone())?;
     Ok(())
@@ -738,6 +740,8 @@ fn zoom(
         let workspace = rimz::room::session::workspace_record_for_session(&session_name)?
             .ok_or_else(|| anyhow::anyhow!("pane zoom requires a managed RimZ room session"))?;
         let runtime = rimz::RuntimePaths::for_project_root(&workspace.project_root)?;
+        let paths = rimz::StatePaths::for_workspace(workspace.workspace_id)?;
+        rimz::harness::hibernate::wake_pane_at(&paths, &sibling.pane_id)?;
         rimz::mux::focus_anchor::execute_action(
             backend,
             &runtime,
@@ -834,6 +838,10 @@ fn send(
     // (`message`) take the bracketed `submit_message` path instead.
     if text.is_none_or(str::is_empty) && keys.is_empty() && !enter {
         bail!("expected text, --key, or --enter");
+    }
+    if let Some(room) = rimz::room::session::workspace_record_for_session(session_name)? {
+        let paths = rimz::StatePaths::for_workspace(room.workspace_id)?;
+        rimz::harness::hibernate::wake_pane_at(&paths, pane)?;
     }
     let writer = PaneWriter::open(runtime, pane, session_name)?;
     if let Some(text) = text.filter(|text| !text.is_empty()) {

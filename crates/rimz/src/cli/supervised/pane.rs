@@ -455,6 +455,7 @@ pub(super) fn close_run_pane(
 ) -> rimz::mux::Result<()> {
     let mut recorded = Ok(());
     if let Some(pane_id) = record.pane_id.as_ref() {
+        rimz::harness::hibernate::wake_pane(store, pane_id).map_err(std::io::Error::other)?;
         match backend.close_pane(session_name, pane_id) {
             Ok(()) => return Ok(()),
             Err(err) => {
@@ -471,6 +472,7 @@ pub(super) fn close_run_pane(
     let Some(pane) = resolve_run_pane_from_snapshot(store, session_name, record) else {
         return recorded;
     };
+    rimz::harness::hibernate::wake_pane(store, &pane.pane_id).map_err(std::io::Error::other)?;
     backend.close_pane(&pane.session_name, &pane.pane_id)
 }
 

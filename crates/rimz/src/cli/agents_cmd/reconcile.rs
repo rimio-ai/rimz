@@ -35,6 +35,7 @@ pub(super) fn reconcile_cohort_launch(
                 && let Some(pane_id) = focus_pane
             {
                 let runtime = rimz::RuntimePaths::for_project_root(&workspace.project_root)?;
+                rimz::harness::hibernate::wake_pane(store, &pane_id)?;
                 rimz::mux::focus_anchor::execute_action(
                     backend,
                     &runtime,

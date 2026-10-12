@@ -135,7 +135,7 @@ pub(super) fn stop_agent(
         return Ok(());
     }
     let live_agent = live_agent_result.map_err(|err| stop_resolve_error(err, &reference))?;
-    close_agent_pane(workspace, live_agent)
+    close_agent_pane(workspace, store, live_agent)
 }
 
 /// Arm, replace, or withdraw the agent's soft stop; the room host and
@@ -244,7 +244,7 @@ fn stop_live_agent(
             workspace, store, globals, &run,
         )?)
     } else {
-        close_agent_pane(workspace, agent)
+        close_agent_pane(workspace, store, agent)
     }
 }
 
@@ -325,11 +325,16 @@ fn stop_live_agent_tree(
     Ok(stop)
 }
 
-fn close_agent_pane(workspace: &rimz::ResolvedWorkspace, agent: &AgentState) -> Result<()> {
+fn close_agent_pane(
+    workspace: &rimz::ResolvedWorkspace,
+    store: &rimz::Store,
+    agent: &AgentState,
+) -> Result<()> {
     let pane = agent
         .pane
         .as_ref()
         .ok_or_else(|| anyhow::anyhow!("agent {} has no bound pane", agent_name(agent)))?;
+    rimz::harness::hibernate::wake_pane(store, &pane.pane_id)?;
     let backend = rimz::mux::backend_for(pane.pane_id.mux());
     backend
         .close_pane(&workspace.session_name, &pane.pane_id)

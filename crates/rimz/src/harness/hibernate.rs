@@ -13,6 +13,10 @@ use crate::{Store, store::StoreErr};
 
 mod execute;
 pub use execute::run_request;
+mod wake;
+pub use crate::proc::cgroup::scope_prefix;
+pub(crate) use wake::wake_pane_in;
+pub use wake::{ReconcileReport, Woken, reconcile, reconcile_at, wake_pane, wake_pane_at};
 
 pub struct Policy {
     after: std::time::Duration,
@@ -37,6 +41,85 @@ pub struct HibernateHelperRequest {
     pub label: String,
     pub root_pid: u32,
     pub idle_secs: u64,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct WakeHelperRequest {
+    pub workspace_id: WorkspaceId,
+    pub pane_id: PaneId,
+}
+
+pub(crate) fn spawn_wake(runtime: &crate::RuntimePaths, pane: &PaneId) {
+    let request = WakeHelperRequest {
+        workspace_id: runtime.workspace_id.clone(),
+        pane_id: pane.clone(),
+    };
+    let args = crate::child_process::agent_helper_argv("wake", &request);
+    if let Err(error) = crate::child_process::spawn_detached_rimz(runtime, args, "agent-wake") {
+        tracing::warn!(%error, %pane, "failed to spawn hibernation wake helper");
+    }
+}
+
+pub(crate) fn wake_focused(
+    runtime: &crate::RuntimePaths,
+    event: &crate::wakeup::events::SidebarEvent,
+) {
+    if !matches!(
+        event,
+        crate::wakeup::events::SidebarEvent::FocusChanged { .. }
+    ) {
+        return;
+    }
+    let Ok(paths) = crate::StatePaths::for_workspace(runtime.workspace_id.clone()) else {
+        return;
+    };
+    let entries = crate::store::hibernate::read(&paths);
+    let now = crate::utils::time::unix_now_ms();
+    wake_focused_with(runtime, event, &entries, now, |pane| {
+        spawn_wake(runtime, pane)
+    });
+}
+
+fn wake_focused_with(
+    runtime: &crate::RuntimePaths,
+    event: &crate::wakeup::events::SidebarEvent,
+    entries: &[crate::store::hibernate::Entry],
+    now: u64,
+    mut spawn: impl FnMut(&PaneId),
+) {
+    let path = runtime.live_path("hibernate").join("wake.json");
+    let mut pacing: std::collections::HashMap<PaneId, u64> = std::fs::read(&path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default();
+    for pane in focus_wake_targets(event, entries, &pacing, now) {
+        pacing.insert(pane.clone(), now);
+        if let Err(error) = crate::disk::atomic::write_temp_then_rename_cache(&path, &pacing) {
+            tracing::debug!(%error, "failed to record wake pacing");
+        }
+        spawn(&pane);
+    }
+}
+
+fn focus_wake_targets(
+    event: &crate::wakeup::events::SidebarEvent,
+    entries: &[crate::store::hibernate::Entry],
+    pacing: &std::collections::HashMap<PaneId, u64>,
+    now: u64,
+) -> Vec<PaneId> {
+    let crate::wakeup::events::SidebarEvent::FocusChanged { focused, .. } = event else {
+        return Vec::new();
+    };
+    focused
+        .iter()
+        .filter(|pane| {
+            entries.iter().any(|entry| &entry.pane_id == *pane)
+                && pacing
+                    .get(*pane)
+                    .is_none_or(|last| now.saturating_sub(*last) >= 5_000)
+        })
+        .cloned()
+        .collect()
 }
 
 #[derive(Clone, Debug)]
@@ -90,6 +173,20 @@ pub fn decide(
     }
     if let Some(hold) = cheap_hold(agent, config, now, scope.seen, scope.focused) {
         return Ok(Verdict::Hold(hold));
+    }
+    let woke_at = [
+        read_wake_stamp(store.runtime_paths(), None),
+        agent
+            .pane
+            .as_ref()
+            .and_then(|pane| read_wake_stamp(store.runtime_paths(), Some(&pane.pane_id))),
+    ]
+    .into_iter()
+    .flatten()
+    .max();
+    if woke_at.is_some_and(|at| now.duration_since(at).as_nanos() < config.after.as_nanos() as i128)
+    {
+        return Ok(Verdict::Hold(Hold::Clock));
     }
     let Some(path) = &scope.scope else {
         return Ok(Verdict::Hold(Hold::NoScope));
@@ -258,16 +355,24 @@ pub fn hibernate_idle_agents(
     config: &MachineConfig,
     seen: &dyn Fn(&AgentState) -> bool,
 ) {
-    hibernate_idle_agents_with(snapshot, paths, runtime, config, seen, |request| {
-        let args = crate::child_process::agent_helper_argv("hibernate", request);
-        match crate::child_process::spawn_detached_rimz(runtime, args, "agent-hibernate") {
-            Ok(_) => true,
-            Err(error) => {
-                tracing::debug!(%error, "failed to spawn hibernation helper");
-                false
+    hibernate_idle_agents_with(
+        snapshot,
+        paths,
+        runtime,
+        config,
+        seen,
+        |request| {
+            let args = crate::child_process::agent_helper_argv("hibernate", request);
+            match crate::child_process::spawn_detached_rimz(runtime, args, "agent-hibernate") {
+                Ok(_) => true,
+                Err(error) => {
+                    tracing::debug!(%error, "failed to spawn hibernation helper");
+                    false
+                }
             }
-        }
-    });
+        },
+        |pane| spawn_wake(runtime, pane),
+    );
 }
 
 fn hibernate_idle_agents_with(
@@ -277,8 +382,26 @@ fn hibernate_idle_agents_with(
     config: &MachineConfig,
     seen: &dyn Fn(&AgentState) -> bool,
     mut spawn: impl FnMut(&HibernateHelperRequest) -> bool,
+    wake: impl FnMut(&PaneId),
 ) {
-    if !cfg!(target_os = "linux") || !config.agents.hibernate.enabled {
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    let entries = crate::store::hibernate::read(paths);
+    if let Some(pane) = &snapshot.focused_pane {
+        let event = crate::wakeup::events::SidebarEvent::FocusChanged {
+            focused: vec![pane.clone()],
+            unfocused: vec![],
+        };
+        wake_focused_with(
+            runtime,
+            &event,
+            &entries,
+            snapshot.now.as_millisecond().max(0) as u64,
+            wake,
+        );
+    }
+    if !config.agents.hibernate.enabled {
         return;
     }
     let policy = match Policy::new(config) {
@@ -288,7 +411,6 @@ fn hibernate_idle_agents_with(
             return;
         }
     };
-    let entries = crate::store::hibernate::read(paths);
     for agent in snapshot.agents.iter() {
         if entries
             .iter()
@@ -357,6 +479,28 @@ struct FireRecord {
     hold: Option<String>,
 }
 
+fn wake_stamp_path(runtime: &crate::RuntimePaths, pane: Option<&PaneId>) -> PathBuf {
+    let name = pane.map_or_else(
+        || "woke-workspace.json".to_owned(),
+        |pane| {
+            format!(
+                "woke-{}.json",
+                crate::store::sidecar::digest("pane", &pane.to_string())
+            )
+        },
+    );
+    runtime.live_path("hibernate").join(name)
+}
+
+fn read_wake_stamp(
+    runtime: &crate::RuntimePaths,
+    pane: Option<&PaneId>,
+) -> Option<jiff::Timestamp> {
+    std::fs::read(wake_stamp_path(runtime, pane))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+}
+
 fn fire_record_path(
     runtime: &crate::RuntimePaths,
     kind: &AgentKind,
@@ -407,6 +551,8 @@ pub(crate) fn project_hibernation(
 
 #[derive(Debug, thiserror::Error)]
 pub enum HibernateErr {
+    #[error(transparent)]
+    Cache(#[from] crate::disk::atomic::AtomicErr),
     #[error(transparent)]
     Store(#[from] StoreErr),
     #[error(transparent)]
@@ -613,22 +759,6 @@ fn inspect_with(config: &HibernateConfig, host: &impl Host) -> PreflightReport {
         });
     }
     report
-}
-
-/// Prefix shared by launch and workspace-scoped reconciliation.
-pub fn scope_prefix(workspace: &WorkspaceId) -> String {
-    let id: String = workspace
-        .as_str()
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || matches!(c, '_' | '-') {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    format!("rimz-agent-{id}-")
 }
 
 pub(crate) fn scope_argv(workspace: &WorkspaceId, kind: &str, argv: &[String]) -> Vec<String> {

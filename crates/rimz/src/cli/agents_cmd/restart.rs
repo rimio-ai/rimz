@@ -95,6 +95,7 @@ pub(in crate::cli) fn restart_resolved(
             Some(store.runtime_paths()),
         )?;
     }
+    rimz::harness::hibernate::wake_pane(store, &old_pane)?;
     let fresh_batch = if fresh_reason.is_some() {
         Some(append_fresh_launch(
             store,
@@ -170,6 +171,7 @@ pub(in crate::cli) fn restart_resolved(
             "warning: could not settle the peer's open turn before restart: {err:#}"
         );
     }
+    rimz::harness::hibernate::wake_pane(store, &old_pane)?;
     backend
         .close_pane(&workspace.session_name, &old_pane)
         .context("closing the replaced agent pane")?;

@@ -218,7 +218,7 @@ pub fn repair_daemon_view(
     let reconciliation = managed_pane_reconciliation(view, &listing.panes);
     let missing_count = reconciliation.spawn.len();
 
-    if !close_surplus_panes(backend, session_name, &reconciliation.close) {
+    if !close_surplus_panes(backend, session_name, workspace_id, &reconciliation.close) {
         return RepairOutcome::Retry;
     }
     listing
@@ -290,19 +290,58 @@ fn list_daemon_panes(
     }
 }
 
-fn close_surplus_panes(backend: &dyn MuxBackend, session_name: &str, pane_ids: &[PaneId]) -> bool {
+fn close_surplus_panes(
+    backend: &dyn MuxBackend,
+    session_name: &str,
+    workspace_id: &WorkspaceId,
+    pane_ids: &[PaneId],
+) -> bool {
+    if pane_ids.is_empty() {
+        return true;
+    }
+    let Ok(paths) = StatePaths::for_workspace(workspace_id.clone()) else {
+        return false;
+    };
+    close_surplus_panes_with(
+        &paths,
+        pane_ids,
+        |pane| match crate::harness::hibernate::wake_pane_at(&paths, pane) {
+            Ok(_) => true,
+            Err(error) => {
+                tracing::warn!(%error, %pane, "could not wake surplus pane before closing");
+                false
+            }
+        },
+        |pane_id| {
+            if let Err(err) = backend.close_pane(session_name, pane_id) {
+                tracing::warn!(
+                    session = %session_name,
+                    view = VIEW_NAME,
+                    pane = %pane_id,
+                    error = &err as &dyn std::error::Error,
+                    "daemon view repair could not close a surplus managed pane",
+                );
+                return false;
+            }
+            true
+        },
+    )
+}
+
+fn close_surplus_panes_with(
+    paths: &StatePaths,
+    pane_ids: &[PaneId],
+    mut wake: impl FnMut(&PaneId) -> bool,
+    mut close: impl FnMut(&PaneId) -> bool,
+) -> bool {
     let mut converged = true;
-    for pane_id in pane_ids {
-        if let Err(err) = backend.close_pane(session_name, pane_id) {
+    let entries = crate::store::hibernate::read(paths);
+    for pane in pane_ids {
+        if entries.iter().any(|entry| &entry.pane_id == pane) && !wake(pane) {
             converged = false;
-            tracing::warn!(
-                session = %session_name,
-                view = VIEW_NAME,
-                pane = %pane_id,
-                error = &err as &dyn std::error::Error,
-                "daemon view repair could not close a surplus managed pane",
-            );
+            continue;
         }
+        converged &= close(pane);
     }
     converged
 }

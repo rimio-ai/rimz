@@ -142,6 +142,8 @@ This indexes what lives where. Runtime shape and the single-binary rationale liv
 
 **Top-level modules** in `crates/rimz/src/`, by purpose:
 
+Agent hibernation spans `harness/hibernate.rs` (read-only selection and wake-helper pacing), `harness/hibernate/` (freeze, wake, and recovery mutations), and `proc/cgroup.rs` (validated Linux scope controls).
+
 - Durable file mechanics — `disk` atomic publish and fsync, the RimZ home and workspace-dir path resolution, rotating JSONL append, workspace lock, single-flight election, stat-keyed parse cache; `disk::usage` disk-usage measurement; `disk::summary` output-file measurement (bytes, lines, estimated tokens).
 - Identity and reach — `address` agent-address grammar, renderer, pane binding, launch-instance grouping and lineage; `workspace` resolution, its durable `workspace.json` record, and the room identity pin (`RIMZ_*` env keys); `web`; `channel`; `worktree`; `forge` and the PR-state record (`forge::pr_state`).
 - Transcript, panes, and seams — `transcript`; `pane` identity, sidebar-chrome and daemon-host classification, named keys; `pixel_wire`, the kitty placeholder encoding shared by native and browser renderers; `sock`; `ids`; `trust`; `wakeup`, the sidebar wire of renderer heartbeat records, event vocabulary, and best-effort datagram fanout.

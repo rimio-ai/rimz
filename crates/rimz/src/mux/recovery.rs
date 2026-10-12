@@ -151,6 +151,11 @@ pub(crate) fn sweep_orphan_processes(
     session_name: &str,
     scope: SweepScope,
 ) -> KillOutcome {
+    if let Ok(workspace) = crate::ids::WorkspaceId::parse(workspace_id)
+        && let Err(error) = crate::proc::cgroup::thaw_workspace(&workspace)
+    {
+        tracing::warn!(%error, "could not thaw workspace before process sweep");
+    }
     let procs = crate::proc::list_processes();
     let protected = protected_pids(&procs, std::process::id());
     let own_domain = ProcessDomain::current();
@@ -384,6 +389,11 @@ pub(crate) fn kill_pids(targets: &[u32], grace: Duration) -> KillOutcome {
         .map(|&pid| (pid, crate::proc::process_start_token(pid)))
         .collect::<Vec<_>>();
     for &pid in targets {
+        if let Some(scope) = crate::proc::cgroup::scope_of(pid)
+            && let Err(error) = crate::proc::cgroup::thaw(&scope)
+        {
+            tracing::warn!(%error, pid, "could not thaw process scope before termination");
+        }
         signal(pid, Signal::SIGTERM);
     }
     wait_for_exit(&mut live, grace);
