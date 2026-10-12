@@ -7,7 +7,7 @@
 //! name = "prod"
 //! target = "agent@prod-box:query-engine"
 //! reconnect = true
-//! no_resume = false
+//! resume = true
 //! mux = "tmux"
 //! auto_forward = false
 //! ```
@@ -60,6 +60,7 @@ pub enum AliasErr {
 type Result<T> = std::result::Result<T, AliasErr>;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RemoteAlias {
     pub name: String,
     pub target: String,
@@ -68,8 +69,8 @@ pub struct RemoteAlias {
         skip_serializing_if = "is_default_reconnect"
     )]
     pub reconnect: bool,
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub no_resume: bool,
+    #[serde(default = "default_resume", skip_serializing_if = "is_resume")]
+    pub resume: bool,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub mux: Option<MuxName>,
     #[serde(
@@ -237,8 +238,12 @@ fn is_default_reconnect(value: &bool) -> bool {
     *value
 }
 
-fn is_false(value: &bool) -> bool {
-    !*value
+fn default_resume() -> bool {
+    true
+}
+
+fn is_resume(value: &bool) -> bool {
+    *value
 }
 
 fn default_auto_forward() -> bool {
@@ -259,7 +264,7 @@ mod tests {
             name: name.to_owned(),
             target: target.to_owned(),
             reconnect: true,
-            no_resume: false,
+            resume: true,
             mux: None,
             auto_forward: true,
         }
@@ -302,9 +307,38 @@ mod tests {
         let entry = list.get("prod").unwrap();
         assert_eq!(entry.target, "agent@prod-box:query-engine");
         assert!(entry.reconnect);
-        assert!(!entry.no_resume);
+        assert!(entry.resume);
         assert_eq!(entry.mux, Some(MuxName::Tmux));
         assert!(!entry.auto_forward);
+    }
+
+    #[test]
+    fn positive_resume_round_trips_and_old_or_unknown_keys_refuse() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("remote.toml");
+        let base = "[[remote]]\nname = 'dev'\ntarget = 'dev-box:room'\n";
+        std::fs::write(&path, format!("{base}resume = false\n")).unwrap();
+        let aliases = RemoteAliases::load_from(&path).unwrap();
+        aliases.save_to(&path).unwrap();
+        assert!(
+            std::fs::read_to_string(&path)
+                .unwrap()
+                .contains("resume = false")
+        );
+        assert_eq!(
+            serde_json::to_value(aliases.get("dev").unwrap()).unwrap()["resume"],
+            false
+        );
+        for key in ["no_resume", "resuem"] {
+            std::fs::write(&path, format!("{base}{key} = true\n")).unwrap();
+            let error = RemoteAliases::load_from(&path).expect_err("unknown alias key must refuse");
+            assert!(
+                std::error::Error::source(&error)
+                    .unwrap()
+                    .to_string()
+                    .contains(key)
+            );
+        }
     }
 
     #[test]
@@ -319,7 +353,7 @@ mod tests {
         list.save_to(&path).unwrap();
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(!text.contains("reconnect = true"), "{text}");
-        assert!(!text.contains("no_resume = false"), "{text}");
+        assert!(!text.contains("resume = true"), "{text}");
         assert!(!text.contains("mux ="), "{text}");
         assert!(text.contains("auto_forward = false"), "{text}");
 
@@ -341,7 +375,7 @@ mod tests {
         .unwrap();
         let entry = parsed.get("prod").unwrap();
         assert!(entry.reconnect);
-        assert!(!entry.no_resume);
+        assert!(entry.resume);
         assert_eq!(entry.mux, None);
         assert!(entry.auto_forward);
     }

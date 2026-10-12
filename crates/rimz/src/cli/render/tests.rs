@@ -2,6 +2,20 @@ use super::*;
 use serde::ser::Error as _;
 
 #[test]
+fn headerless_tables_align_rows_without_padding_absent_options() {
+    let mut table = Table::new(["LONG NAME", "LONG TARGET", "OPTIONS"])
+        .without_headers()
+        .indent(2);
+    table.row([cell("a"), cell("short")]);
+    table.row([cell("long"), cell("longer"), cell("no-resume")]);
+    table.row([cell("b"), cell("x"), cell("tmux")]);
+    assert_eq!(
+        strip(|out| table.render(out)),
+        "  a     short\n  long  longer  no-resume\n  b     x       tmux\n"
+    );
+}
+
+#[test]
 fn lsp_labels_share_registry_vocabulary() {
     use rimz::lsp::registry::{State, StopReason};
     for (state, expected) in [

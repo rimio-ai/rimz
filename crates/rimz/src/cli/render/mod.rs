@@ -712,6 +712,7 @@ const CARD_DETAIL_MAX_LINES: usize = 3;
 /// column-aligned.
 pub(crate) struct Table {
     headers: Vec<String>,
+    show_headers: bool,
     align: Vec<Align>,
     rows: Vec<Body>,
     indent: usize,
@@ -728,11 +729,18 @@ impl Table {
         let align = vec![Align::Left; headers.len()];
         Table {
             headers,
+            show_headers: true,
             align,
             rows: Vec::new(),
             indent: 0,
             max_width: None,
         }
+    }
+
+    /// Hide headers and omit missing trailing cells, without trailing padding.
+    pub(crate) fn without_headers(mut self) -> Self {
+        self.show_headers = false;
+        self
     }
 
     /// Mark these column indexes right-aligned, for numeric columns.
@@ -794,7 +802,9 @@ impl Table {
             .iter()
             .map(|h| cell(h.clone()).fg(palette::header()))
             .collect();
-        self.write_row(w, &header_cells, &widths)?;
+        if self.show_headers {
+            self.write_row(w, &header_cells, &widths)?;
+        }
         let mut previous_was_card = false;
         for body in &self.rows {
             self.write_body(w, body, &widths, previous_was_card)?;
@@ -805,7 +815,11 @@ impl Table {
 
     fn column_widths(&self) -> Vec<usize> {
         let cols = self.headers.len();
-        let mut widths: Vec<usize> = self.headers.iter().map(|h| h.width()).collect();
+        let mut widths: Vec<usize> = self
+            .headers
+            .iter()
+            .map(|h| if self.show_headers { h.width() } else { 0 })
+            .collect();
         for row in self.rows.iter().filter_map(Body::row_cells) {
             for (col, cell) in row.iter().enumerate().take(cols) {
                 widths[col] = widths[col].max(cell.width());
@@ -900,10 +914,14 @@ impl Table {
         cells: &[Cell],
         widths: &[usize],
     ) -> std::io::Result<()> {
-        let cols = self.headers.len();
+        let cols = if self.show_headers {
+            self.headers.len()
+        } else {
+            cells.len().min(self.headers.len())
+        };
         let blank = cell("");
         write!(w, "{:indent$}", "", indent = self.indent)?;
-        for (col, (&width, &align)) in widths.iter().zip(&self.align).enumerate() {
+        for (col, (&width, &align)) in widths.iter().zip(&self.align).take(cols).enumerate() {
             if col > 0 {
                 write!(w, "  ")?;
             }

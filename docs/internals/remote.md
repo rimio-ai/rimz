@@ -67,7 +67,7 @@ Aliases persist per machine at `~/.rimz/remote.toml`, one `[[remote]]` table per
 | `name` | required | 1 to 64 ASCII alphanumerics, `-`, or `_`, never leading `-`; checked on every add, update, and load. |
 | `target` | required | Parsed through `RemoteTarget::parse` on add and update. Load checks names only, so a hand-edited bad target fails when `rimz remote connect` resolves it. |
 | `reconnect` | `true` | `false` hands the link to a single `ssh` run with no supervisor. |
-| `no_resume` | `false` | Passes `--no-resume` to the remote room. |
+| `resume` | `true` | `false` passes `--no-resume` to the remote room. Unknown alias fields fail the load. |
 | `mux` | unset | Pins `--mux` for this alias. |
 | `auto_forward` | `true` | `false` disables listener forwarding for this alias. |
 

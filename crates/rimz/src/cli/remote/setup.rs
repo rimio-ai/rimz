@@ -61,7 +61,7 @@ mod tests {
             name: name.to_owned(),
             target: target.to_owned(),
             reconnect: true,
-            no_resume: false,
+            resume: true,
             mux: None,
             auto_forward: true,
         }
