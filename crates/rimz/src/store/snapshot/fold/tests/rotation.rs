@@ -252,6 +252,69 @@ fn cursor_reloads_on_an_offset_regression() {
 }
 
 #[test]
+fn cursor_drops_rows_pruned_from_the_carryover_on_an_unchanged_log() {
+    // GC prunes the carryover without touching the log; the cursor's
+    // "nothing appended" fast path must still see the carryover change.
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+    paths.ensure_dirs().unwrap();
+    let mut carried = agent("claude", "carried", AgentStatus::Idle, 1_000);
+    carried.last_seen = recent(1);
+    write_carryover(
+        &paths.agents_carryover,
+        &EventCarryover {
+            agents: vec![carried],
+            agent_identity: Default::default(),
+            resume_outcomes: Vec::new(),
+        },
+    )
+    .unwrap();
+    event_log::append(
+        &paths.events_log,
+        &lifecycle_at(
+            &workspace,
+            "codex",
+            "SessionStart",
+            "live",
+            lifecycle::LifecycleSignal::Registered,
+        ),
+    )
+    .unwrap();
+
+    let mut cursor = RollupCursor::new();
+    let ids = |rollup: &AgentRollup| {
+        let mut ids: Vec<String> = rollup
+            .iter()
+            .map(|a| a.agent_id.as_str().to_owned())
+            .collect();
+        ids.sort_unstable();
+        ids
+    };
+    let (_, before, _) = cursor.fold(&paths).unwrap();
+    assert_eq!(ids(&before), ["carried", "live"]);
+
+    let log_len = std::fs::metadata(&paths.events_log).unwrap().len();
+    write_carryover(
+        &paths.agents_carryover,
+        &EventCarryover {
+            agents: Vec::new(),
+            agent_identity: Default::default(),
+            resume_outcomes: Vec::new(),
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        std::fs::metadata(&paths.events_log).unwrap().len(),
+        log_len,
+        "the log must stand still for this test to bite"
+    );
+
+    let (_, after, _) = cursor.fold(&paths).unwrap();
+    assert_eq!(ids(&after), ["live"], "the pruned carryover row is gone");
+}
+
+#[test]
 fn reseed_for_rotation_bumps_generation_and_starts_an_empty_fold() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());
