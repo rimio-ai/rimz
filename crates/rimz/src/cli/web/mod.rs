@@ -218,13 +218,7 @@ fn open(args: WebOpenArgs, globals: &GlobalFlags) -> Result<()> {
             "rimz: authentication is delegated to the reverse proxy (trusted header `{header}`)"
         );
     }
-    write_web_credential(
-        outcome
-            .payload
-            .credential
-            .as_ref()
-            .context("shared ttyd daemon returned no credential")?,
-    );
+    write_web_credential(&rimz::web::token_credential("rimz")?);
     if !args.print {
         open_browser_best_effort(&outcome.payload.url);
     }

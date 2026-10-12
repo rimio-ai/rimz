@@ -836,7 +836,8 @@ surface-budget = 6
 [[module]]
 path = "crates/rimz/src/web"
 # Layer 5 keeps web below sidebar_pane: pixel_wire owns their shared encoding.
-surface-budget = 48
+# Named-token reads keep the public password separate from the upstream credential.
+surface-budget = 49
 
 [[module]]
 path = "crates/rimz/src/workspace.rs"
@@ -4049,6 +4050,11 @@ reason = "Returned by a pub web entry point (pass 23c)."
 kind = "item"
 key = "web::preflight"
 reason = "The six delegating entries (preflight, inspect_session, credential_summary, gate_authorization, serve_tunnel_relay, unshare_session) are web's public domain facade over the ttyd and gate interiors; collapsing them would publish those interiors instead (pass 23c)."
+
+[[verdict]]
+kind = "item"
+key = "web::token_credential"
+reason = "The CLI reads a named browser token through the web facade without exposing token-store internals."
 
 [[verdict]]
 kind = "item"
