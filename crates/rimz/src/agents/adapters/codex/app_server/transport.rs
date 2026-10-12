@@ -24,6 +24,7 @@ use tungstenite::{Message, WebSocket};
 /// file, so tests point it at a stub or at a missing path. Unset or empty, the
 /// binary is the first `codex` on `PATH`. Agent launch does not read it.
 const CODEX_BIN_ENV: &str = "RIMZ_CODEX_BIN";
+const MAX_FRAME_BYTES: u64 = 4 * 1024 * 1024;
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum AppServerErr {
@@ -99,23 +100,32 @@ fn installed_codex_bin_from(configured: Option<OsString>) -> Option<PathBuf> {
     which::which(named).ok()
 }
 
-/// Spawn a thread draining newline-framed lines from `reader` into a channel, so
-/// a request can wait with its remaining deadline.
-fn spawn_frame_reader<R: BufRead + Send + 'static>(reader: R) -> Receiver<String> {
-    let (tx, rx) = std::sync::mpsc::channel();
+/// Drain bounded newline frames, forwarding only responses so notifications
+/// cannot accumulate between requests.
+fn spawn_frame_reader<R: BufRead + Send + 'static>(reader: R) -> Receiver<Value> {
+    // Sequential requests normally leave at most one response pending; bound
+    // late responses from timed-out requests as well.
+    let (tx, rx) = std::sync::mpsc::sync_channel(16);
     std::thread::spawn(move || {
         let mut reader = reader;
         let mut line = String::new();
         loop {
             line.clear();
-            match reader.read_line(&mut line) {
-                Ok(0) => break,
-                Ok(_) => {
-                    if tx.send(std::mem::take(&mut line)).is_err() {
-                        break;
-                    }
-                }
-                Err(_) => break,
+            let mut limited = std::io::Read::take(&mut reader, MAX_FRAME_BYTES + 1);
+            let Ok(read) = limited.read_line(&mut line) else {
+                break;
+            };
+            if read as u64 > MAX_FRAME_BYTES || !line.ends_with('\n') {
+                break;
+            }
+            let Ok(value) = serde_json::from_str::<Value>(&line) else {
+                continue;
+            };
+            if value.get("id").is_none() || value.get("method").is_some() {
+                continue;
+            }
+            if tx.send(value).is_err() {
+                break;
             }
         }
     });
@@ -131,21 +141,16 @@ pub(crate) fn write_frame(writer: &mut dyn Write, frame: &Value) -> Result<(), A
     writer.flush().map_err(AppServerErr::Io)
 }
 
-/// Wait for the response frame matching `id`, skipping non-JSON noise,
-/// server notifications, and server-initiated requests (a different id or none),
-/// until `deadline`.
-fn recv_response(rx: &Receiver<String>, deadline: Instant, id: i64) -> Result<Value, AppServerErr> {
+/// Wait for the response frame matching `id`, skipping late responses until `deadline`.
+fn recv_response(rx: &Receiver<Value>, deadline: Instant, id: i64) -> Result<Value, AppServerErr> {
     loop {
         let remaining = deadline
             .checked_duration_since(Instant::now())
             .ok_or(AppServerErr::Timeout)?;
-        let line = rx.recv_timeout(remaining).map_err(|err| match err {
+        let value = rx.recv_timeout(remaining).map_err(|err| match err {
             RecvTimeoutError::Timeout => AppServerErr::Timeout,
             RecvTimeoutError::Disconnected => AppServerErr::Closed,
         })?;
-        let Ok(value) = serde_json::from_str::<Value>(line.trim()) else {
-            continue;
-        };
         if let Some(response) = response_for(&value, id) {
             return response;
         }
@@ -220,7 +225,7 @@ fn map_ws_handshake_err(err: HandshakeError<ClientHandshake<UnixStream>>) -> App
 /// owns a process to reap.
 pub(crate) struct FramedTransport {
     writer: Box<dyn Write + Send>,
-    rx: Receiver<String>,
+    rx: Receiver<Value>,
     next_id: i64,
     deadline: Instant,
     /// `Some` when we spawned a `codex` child — killed and reaped on drop. `None`
@@ -465,6 +470,41 @@ mod tests {
     use std::thread;
 
     use super::*;
+
+    #[test]
+    fn frame_reader_keeps_only_responses() {
+        let mut input = "{\"method\":\"notice\"}\n".repeat(1000);
+        input.push_str("{\"id\":9,\"method\":\"server-request\"}\nnot JSON\n");
+        input.push_str("{\"id\":1,\"result\":\"ok\"}\n");
+        let frames: Vec<_> = spawn_frame_reader(std::io::Cursor::new(input))
+            .into_iter()
+            .collect();
+        assert_eq!(frames.len(), 1);
+        assert_eq!(
+            serde_json::to_value(frames).unwrap(),
+            json!([{ "id": 1, "result": "ok" }])
+        );
+    }
+
+    #[test]
+    fn frame_reader_closes_on_an_oversized_line() {
+        let mut input = "x".repeat(MAX_FRAME_BYTES as usize + 1);
+        input.push_str("\n{\"id\":1,\"result\":\"ok\"}\n");
+        let rx = spawn_frame_reader(std::io::Cursor::new(input));
+        assert!(matches!(
+            rx.recv_timeout(Duration::from_secs(5)),
+            Err(RecvTimeoutError::Disconnected)
+        ));
+    }
+
+    #[test]
+    fn frame_reader_closes_on_an_unterminated_line() {
+        let rx = spawn_frame_reader(std::io::Cursor::new("{\"id\":1,\"result\":\"ok\"}"));
+        assert!(matches!(
+            rx.recv_timeout(Duration::from_secs(5)),
+            Err(RecvTimeoutError::Disconnected)
+        ));
+    }
 
     #[cfg(target_os = "linux")]
     #[test]
