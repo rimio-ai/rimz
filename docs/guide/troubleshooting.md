@@ -309,7 +309,7 @@ If ttyd is installed but `rimz web open` times out, run `rimz web status`, then 
 
 ### A room link opens the session manager
 
-Every room link lands in the session manager instead of its room when RimZ could not build its own browser page. The shared ttyd daemon says so on stderr as it starts (`rimz: skipping browser terminal fixes: ...`), and ttyd then serves its own stock page, which ignores the `?room=` in the link. The theme, the provisioned font, and the key handling go with it. Pick the room from the manager meanwhile, and run `rimz web restart` once you have fixed whatever the warning named. [Browser appearance and input](./web.md#browser-appearance-and-input) lists what the RimZ page adds.
+Every room link lands in the session manager instead of its room when RimZ could not build its own browser page. The writable browser daemon says so on stderr as it starts (`rimz: skipping browser terminal fixes: ...`), and ttyd then serves its own stock page, which ignores the `?room=` in the link. The theme, the provisioned font, and the key handling go with it. Pick the room from the manager meanwhile, and run `rimz web restart` once you have fixed whatever the warning named. [Browser appearance and input](./web.md#browser-appearance-and-input) lists what the RimZ page adds.
 
 ### The remote link keeps dropping
 

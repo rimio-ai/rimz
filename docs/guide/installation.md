@@ -192,7 +192,7 @@ docker run --rm -it \
 
 Codex keeps per-hook trust behind its own UI, so the image leaves that consent to you: after the first Codex launch, run `/hooks` inside Codex and trust the RimZ hooks. Until then `rimz doctor` reports them as installed but untrusted.
 
-The image takes a command as its argument. With none it opens a shell; `web` opens the `/workspace` room, binds RimZ to every container interface, and leaves the authenticated ttyd daemon online; anything else runs as an ordinary command in the container:
+The image takes a command as its argument. With none it opens a shell; `web` opens the `/workspace` room, binds RimZ to every container interface, and leaves the authenticated writable daemon online. The entrypoint then runs `rimz web token show rimz`, so that password remains available in the container log. If you revoked `rimz` while keeping another token, it lists the remaining token names instead and stays running. Anything else runs as an ordinary command in the container:
 
 ```sh
 docker run -d --name rimz-web \
@@ -200,7 +200,7 @@ docker run -d --name rimz-web \
   -v "$PWD":/workspace \
   -v rimz-home:/home/rimz \
   ghcr.io/rimio-ai/rimz web
-docker logs rimz-web              # the room URL and its generated Basic credential
+docker logs rimz-web              # the room URL and rimz password, or remaining token names
 docker rm -f rimz-web             # stop and remove it
 ```
 

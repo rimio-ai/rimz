@@ -28,34 +28,43 @@ The commands that start or use the daemon (`rimz web open`, `share`, `start`, `r
 rimz web          # open this directory's room in a browser
 rimz web url      # print a room's URL without starting anything
 rimz web status   # what is listening, and which rooms are shared
-rimz web stop     # stop every ttyd daemon RimZ started
+rimz web stop     # stop the writable and broadcast browser daemons
 ```
 
 `rimz web` is `rimz web open`. It does five things you could do by hand:
 
 1. Resolve the room for the current directory, or for `--session <name>`. A room that is not running is started here, exactly as `rimz start` does without attaching, and recovers the agents it had; `--no-resume` brings it up empty instead. The same [one-room admission](./setup.md#open-your-first-room) refuses a second room while the running room is held.
 2. Wait up to five seconds for the session to appear under Zellij or tmux.
-3. Ensure the shared daemon: one ttyd process on `127.0.0.1:8200` serving every Zellij and tmux room on the machine, so the second room costs nothing.
-4. Print the room's URL on stdout and the browser password on stderr.
-5. Open your browser.
+3. Ensure the writable daemon: a sign-in gate on `127.0.0.1:8200` in front of one private ttyd process serving every Zellij and tmux room on the machine, so the second room costs nothing.
+4. Print the room's URL on stdout and how to retrieve your password on stderr.
+5. Launch your browser and report the result. Over SSH without a display, leave the URL for you to open instead.
 
 `--print` stops before the last step, which is how you capture the URL:
 
 ```console
 $ rimz web open --print
 http://127.0.0.1:8200/?room=rimz-query-engine-a1b2c3
-ttyd basic auth for this machine: user rimz, password <secret>
+rimz: sign in as user rimz; password: rimz web token show rimz
 ```
 
-The browser then asks for Basic credentials: the user is `rimz`, and the password is the one on that stderr line. There is one credential per machine, minted the first time the shared daemon starts and kept under `~/.rimz/web/` with mode 0600, and it never appears in a URL.
+The browser asks for a username and password. Run `rimz web token show rimz` to read the default password; `open` never prints it. The default token is minted when the writable daemon first starts. Tokens are kept under `~/.rimz/web/` with mode 0600 and never appear in URLs.
 
-Rotate it with `rimz web token create`, which restarts the daemon, so open tabs drop and come back asking for the new password. `rimz web token revoke-all` stops the daemon and deletes the credential; the next `rimz web` mints a fresh one.
+Use a separate named token for each person or device so you can revoke one without changing everyone's password:
+
+```sh
+rimz web token create laptop
+rimz web token list
+rimz web token show laptop
+rimz web token revoke laptop
+```
+
+The name is the Basic-auth username. Creating or revoking a token restarts an online writable daemon, disconnecting its tabs; remaining tokens keep working. An existing name cannot be overwritten: revoke it first, then create it again. Revoking the last token, or `rimz web token revoke-all`, stops the daemon. The next `rimz web` creates a fresh `rimz` token when none remain.
 
 Editing `?room=` in the address bar is how you switch rooms. RimZ validates that argument before attaching and accepts only a live session with a RimZ workspace record, so no value of it can run an arbitrary command; an unrecognized name lands in the [session manager](#session-manager). The browser attaches as one more client on the session, so a terminal already attached to that room stays attached and both see the same panes.
 
 Safari can load the direct local page but never attaches the terminal: WebKit omits Basic credentials from WebSocket upgrades. Open the URL in Chrome, or reach the room through [`rimz remote connect --web`](#open-a-remote-room) or a [reverse proxy](#behind-a-reverse-proxy), both of which supply the credential before the browser has to.
 
-`rimz web stop` stops every ttyd daemon RimZ started and touches nothing else: the rooms keep running, and the credential and the list of shared rooms both survive. To end browser access rather than pause it, revoke the credential as well and set `enabled = false` under `[web]`. The key refuses `open`, `share`, `start`, and `restart`, but does not stop an already-running daemon: use `rimz web stop` for that. `status`, `stop`, and all `token` operations, including revocation, remain usable while disabled. With the default `enabled = true`, every `rimz start` also brings the shared daemon up best-effort; a missing ttyd, an occupied port, or a daemon error warns on stderr and leaves the room usable in the terminal.
+`rimz web stop` stops the writable and broadcast daemons and names which were running. The rooms keep running, and the tokens and share list survive. To end browser access rather than pause it, revoke all tokens and set `enabled = false` under `[web]`. The key refuses `open`, `share`, `start`, and `restart`, but does not stop an already-running daemon: use `rimz web stop` for that. `status`, `stop`, and all `token` operations remain usable while disabled. With the default `enabled = true`, every `rimz start` also brings the writable daemon up best-effort; a missing ttyd, an occupied port, or a daemon error warns on stderr and leaves the room usable in the terminal.
 
 ## Session manager
 
@@ -84,12 +93,13 @@ rimz remote connect dev --web --web-port 8443
 ```console
 $ rimz remote connect dev --web
 http://127.0.0.1:8368/?room=rimz-query-engine-a1b2c3
+rimz: launched xdg-open
 rimz: tunnel up — reconnects automatically; Ctrl-C stops
 ```
 
-One SSH call starts or resumes the remote room and ensures the host's shared daemon. RimZ then opens an ephemeral SSH forward to the host's ttyd listener and serves the local URL through a relay that adds the host's credential to every page and WebSocket request. The browser sees no password prompt, which is also why Safari works on this path. Nothing new listens on the host, and the local port binds `127.0.0.1` only.
+One SSH call starts or resumes the remote room and ensures the host's writable daemon. RimZ then opens an ephemeral SSH forward to the host's ttyd listener and serves the local URL through a relay that adds the host's credential to every page and WebSocket request. The browser sees no password prompt, which is also why Safari works on this path. Nothing new listens on the host, and the local port binds `127.0.0.1` only.
 
-The command holds the foreground until Ctrl-C and follows the same recovery as a terminal connection: a reconnect repeats the preparation, so a stopped daemon comes back and a rotated credential reaches the relay, and the local URL does not change. Without `--web-port`, the local port derives from the session name within 8300-8399 and moves to the next free one when it is busy, so a room keeps its URL between runs. The exact steps, the refusals, and what `--web` gives up are in the [remote reference](../reference/cli/remote.md#open-a-remote-room-in-the-browser).
+The command holds the foreground until Ctrl-C and follows the same recovery as a terminal connection: a reconnect repeats the preparation, so a stopped daemon comes back and the relay refreshes its upstream target, and the local URL does not change. Without `--web-port`, the local port derives from the session name within 8300-8399 and moves to the next free one when it is busy, so a room keeps its URL between runs. The exact steps, the refusals, and what `--web` gives up are in the [remote reference](../reference/cli/remote.md#open-a-remote-room-in-the-browser).
 
 ## Share a read-only broadcast
 
@@ -130,9 +140,9 @@ rimz web restart
 
 ## Behind a reverse proxy
 
-Handing out the machine password does not scale past yourself. Put an authenticating proxy in front instead: it terminates HTTPS, applies your identity provider's decision, and passes RimZ a header naming the user it let through.
+For centralized sign-in, put an authenticating proxy in front: it terminates HTTPS, applies your identity provider's decision, and passes RimZ a header naming the user it let through.
 
-Setting `auth_header` changes the shape of what RimZ runs. ttyd moves to an ephemeral loopback port with its Basic Auth intact, and a small RimZ gate takes over the configured listener. The gate is the only thing your proxy talks to.
+The RimZ gate always owns the configured listener, with ttyd on a private loopback port. Setting `auth_header` changes sign-in from named tokens to the proxy's identity header. The gate is the only thing your proxy talks to.
 
 ```toml
 [web]
@@ -164,7 +174,7 @@ Run `rimz web restart` after any of these changes. `rimz remote connect --web` i
 
 ## Security boundary
 
-The credential is machine-wide. It authenticates the shared daemon rather than a room, so whoever holds it reaches every live RimZ room on the machine and has a shell as the serving user. Treat it like an SSH private key for the whole box, and treat an identity the gate admits the same way.
+Each token is machine-wide. It authenticates the writable daemon rather than a room, so whoever holds one reaches every live RimZ room on the machine and has a shell as the serving user. Treat it like an SSH private key for the whole box, and treat an identity the gate admits the same way.
 
 The broadcast listener has no authentication at all, and terminal output can carry secrets. Loopback or a reverse proxy, always.
 

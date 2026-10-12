@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-/// Browser-access preferences for the machine-wide ttyd daemon.
+/// Browser-access preferences for the writable and broadcast daemons.
 ///
 /// These are per-machine preferences: the interface and port select the
 /// writable and broadcast listeners, trusted-header authentication, user

@@ -14,7 +14,7 @@ To find a command's page by its name, use the command map in [cli.md](./cli.md).
 | --- | --- |
 | [getting-started.md](./cli/getting-started.md) | Opening, reaching, and diagnosing a local room: `rimz`, `start`, `attach`, `sessions`, `list`, `setup`, and `doctor`. |
 | [remote.md](./cli/remote.md) | `rimz remote`: connecting to a room on another host over SSH, saved aliases, installing RimZ on the host, port forwarding, and opening a remote room in the browser. |
-| [web.md](./cli/web.md) | `rimz web`: opening a room in the browser, read-only broadcasts, the ttyd daemons, the machine credential, and the JSON payloads. |
+| [web.md](./cli/web.md) | `rimz web`: opening a room in the browser, read-only broadcasts, the writable and broadcast daemons, named tokens, and the JSON payloads. |
 | [agents.md](./cli/agents.md) | `rimz agents`: launching layouts and team roles, supervised `-p` runs, resume, launch plans, registering a third-party kind, agent cards and the verbs that drive one agent, attribution, and the address grammar every agent-facing command shares. |
 | [subagents.md](./cli/subagents.md) | `rimz subagents`: launching supervised children from an agent, fanout, the fleet report, waits, list and stop, profiles, and pane placement. |
 | [teams.md](./cli/teams.md) | `rimz teams`: listing, inspecting, launching, resuming, and driving named teams, stage flips, and installing team bundles. |
