@@ -996,15 +996,15 @@ fn search_commit_writes_and_broadcasts_the_lens() {
     use ratatui::crossterm::event::{KeyCode, KeyModifiers};
     let mut rig = Rig::new();
     rig.state.current = agent_snapshot(&rig.ws);
-    std::fs::create_dir_all(rig.state.socket_path.parent().unwrap()).unwrap();
-    let socket = std::os::unix::net::UnixDatagram::bind(&rig.state.socket_path).unwrap();
+    std::fs::create_dir_all(rig.state.host_wake_path.parent().unwrap()).unwrap();
+    let socket = crate::sidebar_pane::host::bind_wake_socket(&rig.state.host_wake_path).unwrap();
     socket
         .set_read_timeout(Some(Duration::from_secs(1)))
         .unwrap();
     write_heartbeat(
         &rig.state.config,
         &rig.runtime,
-        &rig.state.socket_path,
+        &rig.state.host_wake_path,
         None,
     )
     .unwrap();

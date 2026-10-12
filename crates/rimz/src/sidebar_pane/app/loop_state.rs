@@ -100,7 +100,7 @@ pub(super) struct LoopState {
     nav_keys: (crate::config::SidebarKeys, super::NavKeymap),
     config: ServeConfig,
     runtime: RuntimePaths,
-    socket_path: PathBuf,
+    host_wake_path: PathBuf,
     diag: crate::diag::DiagSink,
     result_rx: ResultReceiver,
     anim_start: Instant,
@@ -196,12 +196,10 @@ pub(super) fn handle_wakeup(
         Wakeup::Resize => InputOutcome::redraw(),
         // The serve loop intercepts these before dispatching here: a tick, a
         // typed sidebar event is a re-fetch trigger, worker completions are
-        // folded, and a reload re-execs.
-        Wakeup::Tick
-        | Wakeup::Event(_)
-        | Wakeup::Reload
-        | Wakeup::Press { .. }
-        | Wakeup::Snapshot => InputOutcome::default(),
+        // folded, and raw presses are resolved against the current UI mode.
+        Wakeup::Tick | Wakeup::Event(_) | Wakeup::Press { .. } | Wakeup::Snapshot => {
+            InputOutcome::default()
+        }
     }
 }
 
@@ -211,7 +209,7 @@ impl LoopState {
         config: ServeConfig,
         baseline_pane: Option<PaneId>,
         runtime: RuntimePaths,
-        socket_path: PathBuf,
+        host_wake_path: PathBuf,
         diag: crate::diag::DiagSink,
         result_rx: ResultReceiver,
         initial_width: Option<u16>,
@@ -245,7 +243,7 @@ impl LoopState {
             ),
             config,
             runtime,
-            socket_path,
+            host_wake_path,
             diag,
             result_rx,
             anim_start: now,
@@ -442,32 +440,28 @@ impl LoopState {
         fetch: &mut FetchDispatcher,
         terminal: &mut Terminal<PaneBackend>,
         wakeup: Wakeup,
-    ) -> Result<LoopFlow> {
+    ) -> Result<()> {
         match wakeup {
             Wakeup::Snapshot => {
                 self.on_snapshot(fetch);
-                Ok(LoopFlow::Continue)
+                Ok(())
             }
-            Wakeup::Event(envelope) => Ok(self.on_event(fetch, terminal, envelope)),
+            Wakeup::Event(envelope) => {
+                self.on_event(fetch, terminal, envelope);
+                Ok(())
+            }
             // A recv timeout: the active grid reached a frame boundary, or the
             // idle backstop interval elapsed. It carries no state of its own —
             // the frame phase below advances the spin and paints, and the
             // backstop poll runs there too.
-            Wakeup::Tick => Ok(LoopFlow::Continue),
+            Wakeup::Tick => Ok(()),
             Wakeup::Resize => {
                 let settled_width = terminal.size().map(|s| s.width).ok();
                 self.on_resize(fetch, terminal, settled_width)?;
-                Ok(LoopFlow::Continue)
+                Ok(())
             }
-            Wakeup::Reload => Ok(self.handle_reload(fetch)),
             wakeup => self.on_input(wakeup, terminal, fetch),
         }
-    }
-
-    fn handle_reload(&mut self, fetch: &mut FetchDispatcher) -> LoopFlow {
-        fetch.clear_deferred();
-        (self.request_reload)();
-        LoopFlow::Continue
     }
 
     pub(super) fn apply_latest_snapshot(&mut self, update: FetchUpdate) -> bool {
@@ -579,10 +573,7 @@ impl LoopState {
         fetch: &mut FetchDispatcher,
         terminal: &mut Terminal<PaneBackend>,
         envelope: SidebarEventEnvelope,
-    ) -> LoopFlow {
-        if !event_targets_this_renderer(&envelope, &self.config) {
-            return LoopFlow::Repoll;
-        }
+    ) {
         let requests_verification = envelope.event.requests_producer_verification();
         let sent_at_ms = envelope.sent_at_ms;
         if matches!(
@@ -596,9 +587,6 @@ impl LoopState {
                 .note_structural(sent_at_ms, measured, &self.diag);
         }
         match envelope.event {
-            SidebarEvent::Reload => {
-                return self.handle_reload(fetch);
-            }
             SidebarEvent::WidthTargetChanged => {
                 let measured = terminal.size().ok().map(|size| size.width);
                 self.width_control
@@ -624,7 +612,7 @@ impl LoopState {
             } => {
                 if self.config.own_pane.as_ref() != Some(&pane_id) {
                     trace!(pane = %pane_id, own_pane = ?self.config.own_pane, generation, "sidebar ignored foreign strand");
-                    return LoopFlow::Continue;
+                    return;
                 }
                 let repair = PendingFocusRepair {
                     pane_id,
@@ -660,7 +648,6 @@ impl LoopState {
                 );
             }
         }
-        LoopFlow::Continue
     }
 
     fn handle_notification(&mut self, terminal: &mut Terminal<PaneBackend>, event: SidebarEvent) {
@@ -942,7 +929,7 @@ impl LoopState {
         wakeup: Wakeup,
         terminal: &mut Terminal<PaneBackend>,
         fetch: &mut FetchDispatcher,
-    ) -> Result<LoopFlow> {
+    ) -> Result<()> {
         let applied = self.apply_input(wakeup, terminal)?;
         if applied.redraw && self.watched() {
             // Key/mouse input paints synchronously for instant feedback; a
@@ -968,7 +955,7 @@ impl LoopState {
                 }
                 InputEffect::Width(dir) => {
                     let Ok(size) = terminal.size() else {
-                        return Ok(LoopFlow::Continue);
+                        return Ok(());
                     };
                     self.width_control.adjust(size.width, dir);
                 }
@@ -976,11 +963,11 @@ impl LoopState {
                 InputEffect::MarkUnread(row_id) => self.mark_row_unread(fetch, &row_id),
                 InputEffect::MarkAllRead => self.mark_all_read(fetch),
                 InputEffect::SyncFilter(filter) => self.persist_body_filter(filter),
-                InputEffect::Reload => return Ok(self.handle_reload(fetch)),
+                InputEffect::Reload => (self.request_reload)(),
                 InputEffect::DismissAlert => {}
             }
         }
-        Ok(LoopFlow::Continue)
+        Ok(())
     }
 
     fn persist_body_filter(&mut self, filter: BodyLens) {
@@ -1192,7 +1179,7 @@ impl LoopState {
             if let Err(err) = write_heartbeat(
                 &self.config,
                 &self.runtime,
-                &self.socket_path,
+                &self.host_wake_path,
                 terminal.backend().pane_size(),
             ) {
                 warn!(
@@ -1884,17 +1871,6 @@ impl LoopState {
     }
 }
 
-/// A workspace-scoped envelope (`session_name: None`) targets every renderer
-/// of the workspace; a session-scoped one only the renderers of that session
-/// — pane ids are meaningless outside the session that issued them.
-fn event_targets_this_renderer(envelope: &SidebarEventEnvelope, config: &ServeConfig) -> bool {
-    envelope.workspace_id == config.workspace_id
-        && envelope
-            .session_name
-            .as_deref()
-            .is_none_or(|session| session == config.session_name)
-}
-
 fn focus_stranded_target(
     snapshot: &SidebarSnapshot,
     ui: &UiState,
@@ -2113,9 +2089,3 @@ fn wake_room(runtime: &RuntimePaths) {
 
 #[cfg(test)]
 mod tests;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum LoopFlow {
-    Continue,
-    Repoll,
-}

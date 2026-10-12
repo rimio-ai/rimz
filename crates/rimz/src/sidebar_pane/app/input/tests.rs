@@ -1,4 +1,5 @@
 use super::*;
+use crate::wakeup::events::RELOAD_CONTROL_WORD;
 
 fn default_keymap() -> NavKeymap {
     NavKeymap::from_config(&crate::config::SidebarKeys::default())
@@ -129,18 +130,6 @@ fn malformed_press_words_decode_as_ticks() {
 }
 
 #[test]
-#[cfg(feature = "testkit")]
-fn injected_click_decodes_as_mouse_press() {
-    let wire = encode_click(4, 7);
-    let press = encode_mouse(MouseEventKind::Down(MouseButton::Left), 4, 7).unwrap();
-    assert_eq!(wire, press);
-    assert_eq!(
-        decode_wakeup(wire.as_bytes()),
-        Wakeup::MouseClick { column: 4, row: 7 }
-    );
-}
-
-#[test]
 fn mouse_events_encode_clicks_and_scrolls() {
     let encoded = encode_mouse(MouseEventKind::Down(MouseButton::Left), 4, 7)
         .expect("left button down is encoded");
@@ -184,10 +173,7 @@ fn r_key_triggers_a_reload() {
         resolve_wakeup(encoded.as_bytes()),
         Wakeup::Key(KeyAction::Reload)
     );
-    assert_eq!(
-        resolve_wakeup(RELOAD_CONTROL_WORD.as_bytes()),
-        Wakeup::Reload
-    );
+    assert_eq!(resolve_wakeup(RELOAD_CONTROL_WORD.as_bytes()), Wakeup::Tick);
 }
 
 #[test]
@@ -460,8 +446,8 @@ fn keys_round_trip_through_the_wire() {
         KeyAction::Other,
         "modified fixed keys do not fall back to bare actions"
     );
-    // The literal reload control word also decodes to a reload on its own.
-    assert_eq!(resolve_wakeup(b"reload"), Wakeup::Reload);
+    // The host consumes reload controls, not an attachment's input decoder.
+    assert_eq!(resolve_wakeup(b"reload"), Wakeup::Tick);
 }
 
 #[test]
@@ -473,7 +459,7 @@ fn control_words_never_start_with_brace() {
         RELOAD_CONTROL_WORD.to_owned(),
         "scroll:up".to_owned(),
         "scroll:down".to_owned(),
-        String::from_utf8(SNAPSHOT_WAKEUP.to_vec()).unwrap(),
+        "snapshot".to_owned(),
     ];
     for (code, mods) in [
         (KeyCode::Up, KeyModifiers::NONE),

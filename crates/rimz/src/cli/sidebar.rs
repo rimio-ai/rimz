@@ -758,8 +758,13 @@ fn click(globals: &GlobalFlags, pane_id: PaneId, column: u16, row: u16) -> Resul
                 if panes.is_empty() { "(none)" } else { &panes },
             )
         })?;
-    rimz::sidebar_pane::app::send_click(&sidebar.heartbeat.wakeup_socket, column, row)
-        .with_context(|| format!("sending click to sidebar {pane_id}"))
+    rimz::sidebar_pane::app::send_click(
+        &sidebar.heartbeat.wakeup_socket,
+        &sidebar.heartbeat.instance_id,
+        column,
+        row,
+    )
+    .with_context(|| format!("sending click to sidebar {pane_id}"))
 }
 
 fn frame(globals: &GlobalFlags, command: FrameCommand) -> Result<()> {

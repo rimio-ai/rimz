@@ -45,6 +45,7 @@ pub(super) use self::attachment::{Attachment, AttachmentExit, CloseHandle};
 pub(super) use self::backend::PaneBackend;
 #[cfg(test)]
 pub(super) use self::backend::tests::Pty;
+pub(super) use self::input::{Wakeup, decode_wakeup};
 pub(super) use self::plane::DataPlane;
 pub(super) use self::socket::EventForwarder;
 
@@ -52,10 +53,15 @@ pub(super) use self::socket::EventForwarder;
 pub use demo::{serve_fixture, serve_gallery};
 pub use keymap::NavKeymap;
 
-/// Send a left-button press through the renderer's ordinary input wakeup path.
+/// Send a pane-addressed left-button press through the host's room socket.
 #[cfg(feature = "testkit")]
-pub fn send_click(wakeup_socket: &std::path::Path, column: u16, row: u16) -> io::Result<()> {
-    let wire = input::encode_click(column, row);
+pub fn send_click(
+    wakeup_socket: &std::path::Path,
+    instance_id: &SidebarInstanceId,
+    column: u16,
+    row: u16,
+) -> io::Result<()> {
+    let wire = format!("click:{instance_id}:{column}:{row}");
     std::os::unix::net::UnixDatagram::unbound()?.send_to(wire.as_bytes(), wakeup_socket)?;
     Ok(())
 }

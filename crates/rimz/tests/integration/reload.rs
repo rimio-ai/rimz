@@ -146,6 +146,19 @@ fn reload_signals_fresh_sidebars_and_skips_stale() {
             SidebarInstanceId::new(),
             MuxName::Tmux,
             SESSION_NAME,
+            fresh_sock.clone(),
+            None,
+        ),
+    );
+
+    write_heartbeat(
+        &runtime,
+        "sidebar.sibling.json",
+        SidebarHeartbeat::new(
+            workspace_id.clone(),
+            SidebarInstanceId::new(),
+            MuxName::Tmux,
+            SESSION_NAME,
             fresh_sock,
             None,
         ),
@@ -167,7 +180,7 @@ fn reload_signals_fresh_sidebars_and_skips_stale() {
     write_heartbeat(&runtime, "sidebar.stale.json", stale);
 
     let signaled = reload_all(&runtime).expect("reload_sidebars");
-    assert_eq!(signaled, 1, "only the fresh sidebar should be signaled");
+    assert_eq!(signaled, 2, "count fresh panes even when they share a host");
 
     recv.set_read_timeout(Some(Duration::from_secs(2)))
         .expect("set read timeout");
@@ -177,6 +190,12 @@ fn reload_signals_fresh_sidebars_and_skips_stale() {
         &buf[..n],
         RELOAD_CONTROL_WORD.as_bytes(),
         "reload must not ride the version-gated sidebar event envelope",
+    );
+    recv.set_nonblocking(true).expect("nonblocking receive");
+    assert_eq!(
+        recv.recv(&mut buf).unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock,
+        "one host receives only one reload for its two panes",
     );
 
     // The stale sidebar must not have received anything.

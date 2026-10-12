@@ -2,7 +2,6 @@
 //!
 //! Each pane subscribes for its own projection of the shared fold.
 
-use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender, SyncSender};
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -16,6 +15,7 @@ use super::fetch::{
     Covered, FetchRequest, HostData, ResultReceiver, Stand, Subscriber, Subscribers, WorkspaceFold,
     result_channel, spawn_fetch_worker,
 };
+use super::input::Wakeup;
 use super::{ServeConfig, cache_refresh, tmux_watch, transcript_watch};
 
 pub(in crate::sidebar_pane) struct DataPlane {
@@ -126,7 +126,7 @@ impl DataPlane {
     pub(in crate::sidebar_pane) fn subscribe(
         &self,
         config: &ServeConfig,
-        socket_path: PathBuf,
+        wake: SyncSender<Wakeup>,
     ) -> Subscription {
         let (tx, results) = result_channel();
         let subscriber = Subscriber {
@@ -135,7 +135,7 @@ impl DataPlane {
             tick_seconds: config.tick_seconds,
             refresh_override: config.refresh_ms_override,
             tx,
-            socket_path,
+            wake,
         };
         let membership = Membership {
             instance_id: config.instance_id.clone(),
@@ -176,7 +176,6 @@ impl DataPlane {
         instance_id: &SidebarInstanceId,
         snapshot: crate::store::snapshot::SidebarSnapshot,
     ) {
-        let waker = std::os::unix::net::UnixDatagram::unbound().unwrap();
         if let Some(subscriber) = lock(&self.subscribers).get(instance_id.as_str()) {
             subscriber
                 .tx
@@ -186,7 +185,7 @@ impl DataPlane {
                     source: super::fetch::SnapshotSource::Produced,
                 })
                 .unwrap();
-            waker.send_to(b"snapshot", &subscriber.socket_path).unwrap();
+            let _ = subscriber.wake.try_send(Wakeup::Snapshot);
         }
     }
 }

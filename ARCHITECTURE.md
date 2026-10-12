@@ -45,7 +45,7 @@ terminal emulator
       elected user-scoped spending service and walker threads (disposable warm cache)
     shells, scripts, agents, CI helpers
                 │
-                │  per-instance sidebar socket   (typed wakeup events of record)
+                │  host room socket              (typed wakeup events of record)
                 │  hook stdin/stdout             (the decision channel)
                 ▼
 rimz CLI and hook subprocesses

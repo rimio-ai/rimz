@@ -824,6 +824,18 @@ impl RuntimePaths {
             .join(format!("host.{}.sock", sidebar_host_key(mux, session_name)))
     }
 
+    /// Room events for the host that paints one session's sidebar panes.
+    pub(crate) fn sidebar_host_wake_socket_path(
+        &self,
+        mux: MuxName,
+        session_name: &str,
+    ) -> PathBuf {
+        self.sock_dir.join(format!(
+            "host.{}.wake.sock",
+            sidebar_host_key(mux, session_name)
+        ))
+    }
+
     /// Held by a session's room host for its whole life: one host per session.
     pub(crate) fn sidebar_host_lock(&self, mux: MuxName, session_name: &str) -> PathBuf {
         self.lock_path(format!(

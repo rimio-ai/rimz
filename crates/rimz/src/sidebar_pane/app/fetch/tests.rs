@@ -3,6 +3,11 @@ use crate::ids::{AgentKind, AgentSessionId, PaneId};
 use crate::sidebar::notify::{LinkAlert, Notification, NotificationAgent, NotificationKind};
 use crate::sidebar_pane::app::fixtures::{pane, workspace};
 use crate::{MuxName, SidebarInstanceId, WorkspaceId};
+use std::path::PathBuf;
+
+fn wake_channel() -> (SyncSender<Wakeup>, std::sync::mpsc::Receiver<Wakeup>) {
+    std::sync::mpsc::sync_channel(64)
+}
 
 fn guarded_reader() -> (tempfile::TempDir, RollupCursor) {
     let dir = tempfile::tempdir().unwrap();
@@ -18,7 +23,7 @@ fn run_cycle(
     host_data: Arc<Mutex<HostData>>,
 ) -> Vec<FetchUpdate> {
     let (tx, rx) = result_channel();
-    let mut sink = ResultSink::new(tx, PathBuf::from("/nonexistent/rimz-test.sock"), None);
+    let mut sink = ResultSink::new(tx, wake_channel().0, None);
     sink.host_data = host_data;
     worker.run_cycle(state, request, &mut sink);
     drop(sink);
@@ -79,7 +84,7 @@ fn refresh_override_stamps_folded_snapshot() {
     );
     folded.theme.display.refresh_ms = 250;
     let (tx, rx) = result_channel();
-    let mut sink = ResultSink::new(tx, PathBuf::from("missing.sock"), Some(50));
+    let mut sink = ResultSink::new(tx, wake_channel().0, Some(50));
 
     sink.publish(FetchUpdate::Snapshot {
         snapshot: Box::new(folded),
@@ -125,13 +130,9 @@ fn notification_reconciliation_reaches_the_younger_pane_before_its_bell() {
     worker.runtime = runtime.clone();
     worker.config.notification_prefs.coalesce_ms = 0;
     let subscribers = Subscribers::default();
-    let (elder, elder_rx) = subscriber("01", "terminal_7", 2, "missing.sock".into());
-    let (younger, younger_rx) = subscriber(
-        "02",
-        "terminal_8",
-        2,
-        runtime.sidebar_socket_path(&fixture.instance_id),
-    );
+    let (elder, elder_rx) = subscriber("01", "terminal_7", 2, wake_channel().0);
+    let (wake, notices) = wake_channel();
+    let (younger, younger_rx) = subscriber("02", "terminal_8", 2, wake);
     subscribe(&subscribers, elder);
     subscribe(&subscribers, younger);
     let mut sink = ResultSink::shared(subscribers, Covered::default(), fixture.host_data.clone());
@@ -158,22 +159,6 @@ fn notification_reconciliation_reaches_the_younger_pane_before_its_bell() {
         },
         &mut sink,
     );
-    let wake_path = runtime.sidebar_socket_path(&fixture.instance_id);
-    let notices = UnixDatagram::bind(&wake_path).unwrap();
-    crate::wakeup::heartbeat::write_heartbeat(
-        &runtime,
-        fixture.workspace_id.clone(),
-        &fixture.instance_id,
-        MuxName::Zellij,
-        "rimz-test",
-        &wake_path,
-        None,
-        None,
-    )
-    .unwrap();
-    notices
-        .set_read_timeout(Some(Duration::from_secs(1)))
-        .unwrap();
     worker.publish_snapshot(
         &fixture.state,
         SnapshotPublication {
@@ -207,16 +192,14 @@ fn notification_reconciliation_reaches_the_younger_pane_before_its_bell() {
             .any(|row| row.unread),
         "a new attachment gets the post-notification unread fold too"
     );
-    let mut bytes = [0; 4096];
-    let len = notices.recv(&mut bytes).unwrap();
     assert_eq!(
-        &bytes[..len],
-        b"snapshot",
-        "the snapshot word precedes the notice"
+        notices.recv_timeout(Duration::from_secs(1)).unwrap(),
+        Wakeup::Snapshot,
+        "the snapshot wake precedes the notice"
     );
-    let len = notices.recv(&mut bytes).unwrap();
-    let notice: crate::wakeup::events::SidebarEventEnvelope =
-        serde_json::from_slice(&bytes[..len]).unwrap();
+    let Wakeup::Event(notice) = notices.recv_timeout(Duration::from_secs(1)).unwrap() else {
+        panic!("expected notification");
+    };
     let notice = notice.event;
     assert!(
         matches!(notice, SidebarEvent::Notify { ref panes, recheck_unread: true, .. } if panes.as_slice() == std::slice::from_ref(&target))
@@ -241,25 +224,9 @@ fn a_worker_notification_reaches_every_subscribed_pane_after_its_snapshot() {
     let subscribers = Subscribers::default();
     let mut receivers = Vec::new();
     for (id, own) in [("01", "terminal_7"), ("02", "terminal_8")] {
-        let (mut sub, rx) = subscriber(id, own, 2, PathBuf::new());
-        sub.socket_path = runtime.sidebar_socket_path(&sub.instance_id);
-        let socket = UnixDatagram::bind(&sub.socket_path).unwrap();
-        socket
-            .set_read_timeout(Some(Duration::from_secs(1)))
-            .unwrap();
-        crate::wakeup::heartbeat::write_heartbeat(
-            &runtime,
-            fixture.workspace_id.clone(),
-            &sub.instance_id,
-            MuxName::Zellij,
-            "rimz-test",
-            &sub.socket_path,
-            None,
-            None,
-        )
-        .unwrap();
-        receivers.push((socket, rx));
-        std::fs::remove_file(runtime.sidebar_heartbeat_path(&sub.instance_id)).unwrap();
+        let (wake, inbox) = wake_channel();
+        let (sub, rx) = subscriber(id, own, 2, wake);
+        receivers.push((inbox, rx));
         subscribe(&subscribers, sub);
     }
     let mut sink = ResultSink::shared(subscribers, Covered::default(), fixture.host_data.clone());
@@ -292,14 +259,15 @@ fn a_worker_notification_reaches_every_subscribed_pane_after_its_snapshot() {
         },
         &mut sink,
     );
-    for (socket, rx) in receivers {
-        let mut bytes = [0; 4096];
-        let len = socket.recv(&mut bytes).unwrap();
-        assert_eq!(&bytes[..len], b"snapshot");
+    for (inbox, rx) in receivers {
+        assert_eq!(
+            inbox.recv_timeout(Duration::from_secs(1)).unwrap(),
+            Wakeup::Snapshot
+        );
         assert!(snapshot(&rx.recv().unwrap()).rows().any(|row| row.unread));
-        let len = socket.recv(&mut bytes).unwrap();
-        let envelope: crate::wakeup::events::SidebarEventEnvelope =
-            serde_json::from_slice(&bytes[..len]).unwrap();
+        let Wakeup::Event(envelope) = inbox.recv_timeout(Duration::from_secs(1)).unwrap() else {
+            panic!("expected notification");
+        };
         assert_eq!(envelope.workspace_id, fixture.workspace_id);
         assert_eq!(envelope.session_name.as_deref(), Some("rimz-test"));
         assert!(matches!(envelope.event, SidebarEvent::Notify { .. }));
@@ -647,7 +615,7 @@ fn renderer_gets_the_snapshot_before_a_narrowing_probe() {
     crate::store::live_roster::publish(&fixture.state.live_roster, lost).unwrap();
     let (tx, rx) = result_channel();
     UPDATES.set(Some(rx));
-    let mut sink = ResultSink::new(tx, PathBuf::from("missing.sock"), None);
+    let mut sink = ResultSink::new(tx, wake_channel().0, None);
     sink.host_data = fixture.host_data.clone();
     // The listing can take its whole timeout on a wedged server.
     worker.session_listed = |_, _| {
@@ -723,7 +691,7 @@ fn roster_narrowing_needs_a_listed_session() {
             .agents
     };
     let (tx, _rx) = result_channel();
-    let mut sink = ResultSink::new(tx, PathBuf::from("missing.sock"), None);
+    let mut sink = ResultSink::new(tx, wake_channel().0, None);
     sink.host_data = fixture.host_data.clone();
     crate::store::live_roster::publish(&fixture.state.live_roster, roster(&["a", "b"])).unwrap();
     let before = std::fs::read(&fixture.state.live_roster).unwrap();
@@ -913,7 +881,7 @@ fn fast_fold_retains_its_fold_for_new_attachments() {
     .unwrap();
     let mut worker = fixture.worker();
     let (tx, rx) = result_channel();
-    let mut sink = ResultSink::new(tx, PathBuf::from("missing.sock"), None);
+    let mut sink = ResultSink::new(tx, wake_channel().0, None);
     sink.host_data = fixture.host_data.clone();
     worker.run_cycle(&fixture.state, FetchRequest::default(), &mut sink);
     assert!(matches!(
@@ -1168,7 +1136,7 @@ fn one_cycle_projects_the_shared_fold_once_for_each_renderer() {
                 tick_seconds: 2,
                 refresh_override: None,
                 tx,
-                socket_path: PathBuf::from("missing.sock"),
+                wake: wake_channel().0,
             },
         );
         updates.push((own, rx));
@@ -1196,8 +1164,8 @@ fn one_cycle_projects_the_shared_fold_once_for_each_renderer() {
 fn a_stalled_subscriber_retains_only_the_latest_projected_fold() {
     let fixture = FetchFixture::new();
     let subscribers = Subscribers::default();
-    let (stalled, stalled_rx) = subscriber("01", "terminal_7", 60, "missing.sock".into());
-    let (advancing, advancing_rx) = subscriber("02", "terminal_8", 60, "missing.sock".into());
+    let (stalled, stalled_rx) = subscriber("01", "terminal_7", 60, wake_channel().0);
+    let (advancing, advancing_rx) = subscriber("02", "terminal_8", 60, wake_channel().0);
     subscribe(&subscribers, stalled);
     subscribe(&subscribers, advancing);
     let mut worker = fixture.worker();
@@ -1260,7 +1228,7 @@ fn shared_observation_extracts_common_once_and_keeps_each_own_view() {
             &format!("{n:02}"),
             &format!("terminal_{n}"),
             2,
-            PathBuf::from("missing.sock"),
+            wake_channel().0,
         );
         receivers.push((sub.clone(), rx));
         subscribe(&subscribers, sub);
@@ -1353,7 +1321,7 @@ fn fold_file_reads_are_shared_across_forty_attachment_threads() {
             &format!("{n:02}"),
             &format!("terminal_{n}"),
             2,
-            PathBuf::from("missing.sock"),
+            wake_channel().0,
         );
         let mut config = worker.config.clone();
         config.instance_id = sub.instance_id.clone();
@@ -1410,7 +1378,7 @@ fn subscriber(
     id: &str,
     own: &str,
     tick_seconds: u64,
-    socket_path: PathBuf,
+    wake: SyncSender<Wakeup>,
 ) -> (Subscriber, ResultReceiver) {
     let (tx, rx) = result_channel();
     let subscriber = Subscriber {
@@ -1419,7 +1387,7 @@ fn subscriber(
         tick_seconds,
         refresh_override: None,
         tx,
-        socket_path,
+        wake,
     };
     (subscriber, rx)
 }
@@ -1462,7 +1430,7 @@ fn staggered_requests_behind_one_fold_cost_at_most_two_folds() {
     let subscribers = Subscribers::default();
     let mut receivers = Vec::new();
     for (index, own) in panes.iter().enumerate() {
-        let (subscriber, rx) = subscriber(&(index + 1).to_string(), own, 60, "missing.sock".into());
+        let (subscriber, rx) = subscriber(&(index + 1).to_string(), own, 60, wake_channel().0);
         subscribe(&subscribers, subscriber);
         receivers.push(rx);
     }
@@ -1652,8 +1620,8 @@ fn one_publication_serves_the_renderers_its_cycle_began_with() {
     );
     fixture.host_data.lock().unwrap().inputs = Some(HostInputs::from_frame(frame));
     let subscribers = Subscribers::default();
-    let (eldest, eldest_rx) = subscriber("01", "terminal_7", 2, PathBuf::from("missing.sock"));
-    let (younger, younger_rx) = subscriber("02", "terminal_8", 2, PathBuf::from("missing.sock"));
+    let (eldest, eldest_rx) = subscriber("01", "terminal_7", 2, wake_channel().0);
+    let (younger, younger_rx) = subscriber("02", "terminal_8", 2, wake_channel().0);
     subscribe(&subscribers, eldest);
     subscribe(&subscribers, younger);
     let mut worker = fixture.worker();
@@ -1676,7 +1644,7 @@ fn one_publication_serves_the_renderers_its_cycle_began_with() {
 
     // The eldest leaves and a new pane arrives between fold and publication.
     unsubscribe(&subscribers, "01");
-    let (newcomer, newcomer_rx) = subscriber("03", "terminal_9", 2, PathBuf::from("missing.sock"));
+    let (newcomer, newcomer_rx) = subscriber("03", "terminal_9", 2, wake_channel().0);
     subscribe(&subscribers, newcomer);
     sink.publish(FetchUpdate::Snapshot {
         snapshot: Box::new(folded),
@@ -1703,8 +1671,8 @@ fn one_publication_serves_the_renderers_its_cycle_began_with() {
 fn the_worker_keeps_the_tick_of_its_eldest_renderer() {
     let fixture = FetchFixture::new();
     let subscribers = Subscribers::default();
-    let (eldest, _eldest_rx) = subscriber("01", "terminal_7", 60, PathBuf::from("missing.sock"));
-    let (younger, _younger_rx) = subscriber("02", "terminal_8", 1, PathBuf::from("missing.sock"));
+    let (eldest, _eldest_rx) = subscriber("01", "terminal_7", 60, wake_channel().0);
+    let (younger, _younger_rx) = subscriber("02", "terminal_8", 1, wake_channel().0);
     subscribe(&subscribers, eldest);
     subscribe(&subscribers, younger);
     let worker = fixture.worker();
@@ -1726,14 +1694,12 @@ fn the_worker_keeps_the_tick_of_its_eldest_renderer() {
 
 #[test]
 fn a_full_renderer_inbox_holds_neither_the_worker_nor_another_renderer() {
-    let dir = tempfile::tempdir().unwrap();
-    let full = dir.path().join("full.sock");
-    let _stalled = std::os::unix::net::UnixDatagram::bind(&full).unwrap();
-    crate::sidebar_pane::app::fixtures::fill_inbox(&full);
+    let (full, _stalled) = std::sync::mpsc::sync_channel(1);
+    full.send(Wakeup::Tick).unwrap();
     let subscribers = Subscribers::default();
-    let (eldest, _eldest_rx) = subscriber("01", "terminal_7", 2, dir.path().join("a.sock"));
+    let (eldest, _eldest_rx) = subscriber("01", "terminal_7", 2, wake_channel().0);
     let (stalled, _stalled_rx) = subscriber("02", "terminal_8", 2, full);
-    let (other, other_rx) = subscriber("03", "terminal_9", 2, dir.path().join("c.sock"));
+    let (other, other_rx) = subscriber("03", "terminal_9", 2, wake_channel().0);
     for subscriber in [eldest, stalled, other] {
         subscribe(&subscribers, subscriber);
     }
