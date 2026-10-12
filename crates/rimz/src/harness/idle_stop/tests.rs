@@ -291,7 +291,7 @@ fn a_failed_compaction_restarts_the_clock() {
     ] {
         observe(&store, "session-1", None, signal);
     }
-    let agent = store.snapshot_cached().expect("snapshot").agents.remove(0);
+    let agent = store.snapshot_cached().expect("snapshot").agents[0].clone();
     let ended = agent.turn_ended_at.expect("turn end");
     assert!(
         resting(&agent).is_ok(),

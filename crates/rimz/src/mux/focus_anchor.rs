@@ -792,7 +792,7 @@ mod tests {
             vec![view(7, &parent)],
         );
         let row = &mut snapshot.worktree_groups[0].rows[0];
-        row.card = crate::store::snapshot::RowCard::Agent(Box::default());
+        row.card = crate::store::snapshot::RowCard::Agent(std::sync::Arc::default());
         row.as_agent_mut().unwrap().sub_agents.push(
             serde_json::from_value(serde_json::json!({
                 "id": "child", "name": "explorer", "status": "running",

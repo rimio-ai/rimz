@@ -28,7 +28,7 @@ pub(super) fn run(args: RecordArgs, globals: &GlobalFlags) -> Result<()> {
     let ctx = Ctx::open(globals)?;
     let snapshot = ctx.resolution_snapshot_with_context()?;
     let caller = board_context::caller(&snapshot.agents)?;
-    let cohorts = rimz::address::team_cohorts(&snapshot.agents);
+    let cohorts = rimz::address::team_cohorts(snapshot.agents.iter());
     let member = caller.filter(|caller| cohorts.iter().any(|cohort| cohort.contains(caller)));
     let by = if let Some(member) = member {
         let local = cohorts

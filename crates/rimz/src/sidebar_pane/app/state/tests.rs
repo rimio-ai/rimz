@@ -99,7 +99,7 @@ fn row_snapshot_at(
             archived: false,
             attention_score: 0,
             last_activity,
-            card: RowCard::Agent(Box::new(AgentCard {
+            card: RowCard::Agent(std::sync::Arc::new(AgentCard {
                 status,
                 phase: crate::agents::TurnPhase::Idle,
                 ..AgentCard::default()

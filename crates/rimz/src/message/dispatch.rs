@@ -270,7 +270,7 @@ pub fn dispatch(
         snapshot = snapshot.with_agent_context(context);
     }
     // Ended children linger on their parent's card for presentation, not delivery.
-    snapshot.agents.retain(|agent| agent.ended_at.is_none());
+    std::sync::Arc::make_mut(&mut snapshot.agents).retain(|agent| agent.ended_at.is_none());
 
     let durable_agents = durable_target_agents(store)?;
     let resolution = ResolutionView {

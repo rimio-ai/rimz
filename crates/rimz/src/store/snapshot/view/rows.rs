@@ -26,7 +26,7 @@ pub(in crate::store::snapshot) fn row_from_agent(agent: &AgentState, now: Timest
         archived: false,
         attention_score: 0,
         last_activity: agent.last_activity,
-        card: RowCard::Agent(Box::new(AgentCard {
+        card: RowCard::Agent(std::sync::Arc::new(AgentCard {
             status,
             queued_asks: agent.queued_asks.clone(),
             pending_waits: agent.pending_waits.clone(),

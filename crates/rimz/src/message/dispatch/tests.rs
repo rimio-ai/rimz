@@ -156,7 +156,7 @@ fn dispatch_park_causes_follow_schedule_conditions_readiness_and_fifo() {
     }
     mode.kind = DeliveryKind::Boundary;
     let mut busy = snapshot;
-    busy.agents[0].status = AgentStatus::Running;
+    std::sync::Arc::make_mut(&mut busy.agents)[0].status = AgentStatus::Running;
     actual.push(dispatch_decision(&busy, &[blocker], &target, &mode, now()));
     expected.push(parked(ParkReason::Status(AgentStatus::Running)));
     assert_eq!(actual, expected);
@@ -213,13 +213,13 @@ fn resumed_provider_parks_until_registration_or_the_window() {
     }
     mode.kind = DeliveryKind::Boundary;
     let mut registered = snapshot.clone();
-    registered.agents[0].resumed_at = None;
+    std::sync::Arc::make_mut(&mut registered.agents)[0].resumed_at = None;
     assert_eq!(
         dispatch_decision(&registered, &[], &target, &mode, now()),
         DispatchDecision::Live
     );
     let mut lazy = snapshot;
-    lazy.agents[0].kind = AgentKind::new_unchecked("codex");
+    std::sync::Arc::make_mut(&mut lazy.agents)[0].kind = AgentKind::new_unchecked("codex");
     lazy.agent_panes[0].kind = lazy.agents[0].kind.clone();
     let target = ResolvedTarget {
         pane: Some(lazy.agent_panes[0].clone()),

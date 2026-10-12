@@ -1072,8 +1072,9 @@ fn grok_child_session_hooks_resolve_children_under_the_spawning_parent() {
             .snapshot_cached()
             .unwrap()
             .agents
-            .into_iter()
+            .iter()
             .find(|state| state.agent_id == agent_id)
+            .cloned()
             .unwrap()
     };
     let root = |extra: serde_json::Value| {
@@ -1176,8 +1177,9 @@ fn correlated_antigravity_children_keep_independent_lifecycle_and_root_parent() 
         .snapshot_cached()
         .unwrap()
         .agents
-        .into_iter()
+        .iter()
         .find(|state| state.agent_id == "child-clean")
+        .cloned()
         .unwrap();
     assert_eq!(child.parent_agent_id.as_deref(), Some("root"));
     assert_eq!(child.name.as_deref(), Some("name-child-clean"));
@@ -1202,8 +1204,9 @@ fn correlated_antigravity_children_keep_independent_lifecycle_and_root_parent() 
         .snapshot_cached()
         .unwrap()
         .agents
-        .into_iter()
+        .iter()
         .find(|state| state.agent_id == "child-clean")
+        .cloned()
         .unwrap();
     assert_eq!(child.status, rimz::agents::AgentStatus::Success);
     assert_eq!(child.parent_agent_id.as_deref(), Some("root"));
@@ -1225,8 +1228,9 @@ fn correlated_antigravity_children_keep_independent_lifecycle_and_root_parent() 
         .snapshot_cached()
         .unwrap()
         .agents
-        .into_iter()
+        .iter()
         .find(|state| state.agent_id == "child-parked")
+        .cloned()
         .unwrap();
     assert_eq!(parked_state.status, rimz::agents::AgentStatus::Running);
     assert_eq!(parked_state.phase, rimz::agents::TurnPhase::Parked);
@@ -1326,8 +1330,9 @@ fn copilot_child_metadata_reconciles_at_the_parent_checkpoint() {
         .snapshot_cached()
         .unwrap()
         .agents
-        .into_iter()
+        .iter()
         .find(|state| state.agent_id == "toolu_alpha")
+        .cloned()
         .unwrap();
     assert_eq!(
         child_before_completion.parent_agent_id.as_deref(),
@@ -1369,8 +1374,9 @@ fn copilot_child_metadata_reconciles_at_the_parent_checkpoint() {
         .snapshot_cached()
         .unwrap()
         .agents
-        .into_iter()
+        .iter()
         .find(|state| state.agent_id == "toolu_alpha")
+        .cloned()
         .unwrap();
     assert_eq!(child.parent_agent_id.as_deref(), Some("parent-session"));
     assert_eq!(child.name.as_deref(), Some("researcher"));
@@ -1484,8 +1490,9 @@ fn copilot_uuid_child_hooks_join_through_the_start_record_agent_id() {
             .snapshot_cached()
             .unwrap()
             .agents
-            .into_iter()
+            .iter()
             .find(|state| state.agent_id == agent_id)
+            .cloned()
     };
 
     parent("sessionStart", serde_json::json!({"source":"new"}));

@@ -214,7 +214,7 @@ fn board_done(agent: &AgentState) -> bool {
 /// durable record stays the truth.
 pub(crate) fn project_requests(snapshot: &mut SidebarSnapshot, paths: &StatePaths) {
     let requests = crate::store::idle_stop::read(paths);
-    for agent in &mut snapshot.agents {
+    for agent in std::sync::Arc::make_mut(&mut snapshot.agents) {
         agent.idle_stop = requests
             .iter()
             .find(|request| {

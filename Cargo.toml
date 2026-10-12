@@ -28,7 +28,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
 # Serialization
-serde = { version = "1", features = ["derive"] }
+serde = { version = "1", features = ["derive", "rc"] }
 serde-saphyr = { version = "1.2", default-features = false, features = ["deserialize"] }
 serde_json = { version = "1", features = ["raw_value"] }
 syn = { version = "3", features = ["full", "visit"] }

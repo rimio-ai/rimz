@@ -55,7 +55,7 @@ fn group(key: &str, rows: Vec<SidebarRow>) -> SidebarWorktreeGroup {
 
 fn agent_row(id: &str, raw_pane: &str, status: AgentStatus) -> SidebarRow {
     SidebarRow {
-        card: RowCard::Agent(Box::new(AgentCard {
+        card: RowCard::Agent(std::sync::Arc::new(AgentCard {
             status,
             ..AgentCard::default()
         })),

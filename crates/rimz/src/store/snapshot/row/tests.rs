@@ -52,7 +52,7 @@ fn serde_keeps_cards_flat_with_row_kind_key() {
         archived: false,
         attention_score: 0,
         last_activity: row_time(),
-        card: RowCard::Agent(Box::new(AgentCard {
+        card: RowCard::Agent(std::sync::Arc::new(AgentCard {
             status: AgentStatus::Running,
             prompt: Some("fix auth flow".to_owned()),
             user_turn_started_at: Some(row_time()),
@@ -173,7 +173,7 @@ fn serde_keeps_cards_flat_with_row_kind_key() {
         archived: false,
         attention_score: 0,
         last_activity: row_time(),
-        card: RowCard::Agent(Box::new(AgentCard {
+        card: RowCard::Agent(std::sync::Arc::new(AgentCard {
             status: AgentStatus::Success,
             ..AgentCard::default()
         })),
@@ -199,7 +199,7 @@ fn own_last_activity_falls_back_to_the_row_clock_and_stays_off_an_untouched_card
         archived: false,
         attention_score: 0,
         last_activity: row_time(),
-        card: RowCard::Agent(Box::default()),
+        card: RowCard::Agent(std::sync::Arc::default()),
     };
 
     // A row the child fold never raised keeps the old shape on the wire, and
@@ -232,7 +232,7 @@ fn display_name_prefers_agent_handle_and_falls_back_to_row_name() {
         archived: false,
         attention_score: 0,
         last_activity: row_time(),
-        card: RowCard::Agent(Box::new(AgentCard {
+        card: RowCard::Agent(std::sync::Arc::new(AgentCard {
             handle: Some("planner".to_owned()),
             team: None,
             launch_group: None,

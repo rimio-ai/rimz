@@ -131,7 +131,10 @@ pub fn cached_alive_snapshot(
     let frame_panes =
         read_snapshot_cache(&runtime.pane_frame_path(), session).map(|frame| frame.to_pane_refs());
     reap_cached_daemon_sessions_with(&mut base, runtime, frame_panes.as_deref());
-    crate::store::agent_context::attach_rest_certificates(runtime, &mut base.agents);
+    crate::store::agent_context::attach_rest_certificates(
+        runtime,
+        std::sync::Arc::make_mut(&mut base.agents),
+    );
     if let Some(frame_panes) = frame_panes {
         let (panes, projection) =
             read_published_agent_projection(&base, frame_panes, runtime, session, None);

@@ -252,7 +252,7 @@ fn keepalive_producers_share_pacing_even_during_spawn() {
                 .is_some()
         );
         let mut changed = snapshot.clone();
-        changed.agents[0].last_tool_at = Some(ts(1));
+        std::sync::Arc::make_mut(&mut changed.agents)[0].last_tool_at = Some(ts(1));
         assert!(
             request
                 .target(&changed, &config, &policy, ts(3541))
@@ -260,7 +260,9 @@ fn keepalive_producers_share_pacing_even_during_spawn() {
             "moved anchor"
         );
         changed = snapshot.clone();
-        changed.agents[0].pending_waits.clear();
+        std::sync::Arc::make_mut(&mut changed.agents)[0]
+            .pending_waits
+            .clear();
         assert!(
             request
                 .target(&changed, &config, &policy, ts(3540))
@@ -285,8 +287,8 @@ fn keepalive_producers_share_pacing_even_during_spawn() {
         panic!("repeated anchor")
     });
     let stale = snapshot.clone();
-    snapshot.agents[0].turn_started_at = Some(ts(3545));
-    snapshot.agents[0].turn_ended_at = Some(ts(3550));
+    std::sync::Arc::make_mut(&mut snapshot.agents)[0].turn_started_at = Some(ts(3545));
+    std::sync::Arc::make_mut(&mut snapshot.agents)[0].turn_ended_at = Some(ts(3550));
     snapshot.now = ts(7085);
     keepalive_agents_with(&snapshot, &runtime, &config, &policy, |_| {
         count += 1;
@@ -710,7 +712,7 @@ fn helper_rechecks_the_horizon_before_pinging() {
         "keep-warm removed from the definition since the producer fired"
     );
     let mut shortened = snapshot.clone();
-    shortened.agents[0].turn_ended_at = Some(ts(-7200));
+    std::sync::Arc::make_mut(&mut shortened.agents)[0].turn_ended_at = Some(ts(-7200));
     assert!(
         requests[0]
             .target(&shortened, &config, &held, ts(3540))

@@ -25,7 +25,7 @@ fn silent_native_child_is_labelled_and_recovers_on_a_fresh_heartbeat() {
     assert_eq!(projected.elapsed_secs, Some(200));
 
     let recovered = snapshot.with_agent_activity(&[heartbeat]);
-    let recovered = room_with_agent_panes(recovered.agents);
+    let recovered = room_with_agent_panes(std::sync::Arc::unwrap_or_clone(recovered.agents));
     let projected = &row(&recovered, "root").sub_agents()[0];
     assert_eq!(projected.status, AgentStatus::Running);
     assert_eq!(projected.phase, TurnPhase::Reasoning);
@@ -57,7 +57,7 @@ fn silent_launched_child_is_labelled_and_recovers_on_a_fresh_heartbeat() {
     assert_eq!(serde_json::to_value(projected).unwrap()["stalled"], true);
 
     let recovered = snapshot.with_agent_activity(&[heartbeat]);
-    let recovered = room_with_agent_panes(recovered.agents);
+    let recovered = room_with_agent_panes(std::sync::Arc::unwrap_or_clone(recovered.agents));
     let projected = &row(&recovered, "root").sub_agents()[0];
     assert_eq!(projected.status, AgentStatus::Running);
     assert_eq!(projected.phase, TurnPhase::Reasoning);
@@ -842,7 +842,7 @@ fn host_pane_reap_drops_launch_linked_children_but_not_other_kinds() {
         frame_panes: Some(&panes),
         exclude_pane: None,
     });
-    assert_eq!(snapshot.agents, vec![unrelated]);
+    assert_eq!(*snapshot.agents, vec![unrelated]);
 }
 
 #[test]

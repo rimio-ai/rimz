@@ -15,7 +15,7 @@ pub(super) fn run(args: FlipArgs, globals: &GlobalFlags) -> Result<()> {
     let ctx = Ctx::open(globals)?;
     let snapshot = ctx.resolution_snapshot_with_context()?;
     let worktree = super::board_context::worktree()?;
-    let cohorts = rimz::address::team_cohorts(&snapshot.agents);
+    let cohorts = rimz::address::team_cohorts(snapshot.agents.iter());
     let candidates = cohorts
         .iter()
         .filter(|cohort| args.team.as_deref().is_none_or(|team| cohort.team == team))

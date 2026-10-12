@@ -437,7 +437,7 @@ fn launched_parent_handle(
     child_channel: Option<&str>,
 ) -> Option<String> {
     let (kind, id) = child.launcher()?;
-    let sender = match rimz::address::launch_row(&snapshot.agents, kind, id) {
+    let sender = match rimz::address::launch_row(snapshot.agents.iter(), kind, id) {
         Some(parent) => rimz::store::message::MessageSender::Agent {
             agent_id: None,
             kind: parent.kind.clone(),

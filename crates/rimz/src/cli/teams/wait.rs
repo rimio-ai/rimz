@@ -198,7 +198,7 @@ fn poll(ctx: &Ctx, targets: &mut [Target]) -> Result<Vec<usize>> {
                     Some(snapshot) => snapshot,
                     None => snapshot.insert(ctx.alive_snapshot()?),
                 };
-                Ok(rimz::address::team_cohorts(&snapshot.agents)
+                Ok(rimz::address::team_cohorts(snapshot.agents.iter())
                     .iter()
                     .any(|cohort| cohort.team == target.team && cohort.channel == target.channel))
             },

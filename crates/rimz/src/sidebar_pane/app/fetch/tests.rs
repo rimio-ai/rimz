@@ -1161,6 +1161,64 @@ fn one_cycle_projects_the_shared_fold_once_for_each_renderer() {
 }
 
 #[test]
+fn one_cycle_shares_rosters_and_cards_across_renderers() {
+    let fixture = FetchFixture::new();
+    let mut agent_pane = pane("terminal_9", "tab_1", false);
+    agent_pane.command = Some("codex".into());
+    let frame = crate::sidebar::frame::assemble_frame(
+        vec![
+            pane("terminal_7", "tab_1", false),
+            pane("terminal_8", "tab_1", false),
+            agent_pane,
+        ],
+        crate::utils::time::unix_now_ms(),
+        "rimz-test",
+    );
+    let projection = serde_json::from_value(serde_json::json!({
+        "session_name": "rimz-test",
+        "wiring": { "kinds": ["codex"], "default_models": {} },
+        "inputs": { "by_kind": {} },
+        "observations": []
+    }))
+    .unwrap();
+    let mut producer = PaneProducer::seeded(&fixture.runtime, "rimz-test");
+    producer.seed_test_frame(Some(Arc::new(frame)));
+    fixture.host_data.lock().unwrap().inputs =
+        HostInputs::seeded(&producer, "rimz-test", Some(projection));
+    let subscribers = Subscribers::default();
+    let (first, first_rx) = subscriber("01", "terminal_7", 60, wake_channel().0);
+    let (second, second_rx) = subscriber("02", "terminal_8", 60, wake_channel().0);
+    subscribe(&subscribers, first);
+    subscribe(&subscribers, second);
+    let mut worker = fixture.worker();
+    let mut sink = ResultSink::shared(subscribers, Covered::default(), fixture.host_data.clone());
+    worker.run_cycle(&fixture.state, FetchRequest::force_fold(), &mut sink);
+    let first = first_rx.try_recv().unwrap();
+    let second = second_rx.try_recv().unwrap();
+    let host = fixture.host_data.lock().unwrap();
+    let remembered = host.last_fold.as_ref().unwrap().workspace.snapshot();
+    assert!(remembered.rows().any(|row| row.is_agent()));
+    for projected in [snapshot(&first), snapshot(&second)] {
+        assert!(Arc::ptr_eq(&projected.agents, &remembered.agents));
+        assert!(Arc::ptr_eq(
+            &projected.fenced_sessions,
+            &remembered.fenced_sessions
+        ));
+        for row in projected.rows().filter(|row| row.is_agent()) {
+            let prior = remembered.rows().find(|prior| prior.id == row.id).unwrap();
+            let (
+                crate::store::snapshot::RowCard::Agent(card),
+                crate::store::snapshot::RowCard::Agent(prior),
+            ) = (&row.card, &prior.card)
+            else {
+                panic!("agent cards")
+            };
+            assert!(Arc::ptr_eq(card, prior));
+        }
+    }
+}
+
+#[test]
 fn a_stalled_subscriber_retains_only_the_latest_projected_fold() {
     let fixture = FetchFixture::new();
     let subscribers = Subscribers::default();

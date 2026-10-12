@@ -556,7 +556,7 @@ fn collapsing_the_selected_group_pins_on_the_cleared_selection() {
         ],
     );
     for row in &mut snapshot.worktree_groups[0].rows {
-        row.card = crate::store::snapshot::RowCard::Agent(Box::default());
+        row.card = crate::store::snapshot::RowCard::Agent(std::sync::Arc::default());
     }
     snapshot.worktree_groups[0].finished = true;
     let group_key = snapshot.worktree_groups[0].key.clone();
@@ -669,12 +669,13 @@ fn focus_keys_fire_without_mutating_selection() {
         ],
     );
     snapshot.worktree_groups[0].rows[1].name = "claude".to_owned();
-    snapshot.worktree_groups[0].rows[1].card =
-        crate::store::snapshot::RowCard::Agent(Box::new(crate::store::snapshot::AgentCard {
+    snapshot.worktree_groups[0].rows[1].card = crate::store::snapshot::RowCard::Agent(
+        std::sync::Arc::new(crate::store::snapshot::AgentCard {
             status: crate::agents::AgentStatus::Waiting,
             phase: crate::agents::TurnPhase::Idle,
             ..crate::store::snapshot::AgentCard::default()
-        }));
+        }),
+    );
     let mut ui = UiState::default();
     let outcome = handle_key(KeyAction::InboxNext, &mut ui, &snapshot);
     assert_eq!(outcome, InputOutcome::focus(target.clone()));

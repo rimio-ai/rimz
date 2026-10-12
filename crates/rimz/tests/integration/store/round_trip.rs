@@ -101,8 +101,12 @@ fn runtime_and_audit_projections_retain_snapshot_resume_outcomes() {
     assert_eq!(outcomes[0].message_id, message.message_id);
     for scope in [rimz::RuntimeScope::Audit, rimz::RuntimeScope::Runtime] {
         assert_eq!(
-            h.store.runtime_projection(scope).unwrap().resume_outcomes,
-            outcomes
+            h.store
+                .runtime_projection(scope)
+                .unwrap()
+                .resume_outcomes
+                .as_slice(),
+            outcomes.as_ref()
         );
     }
 }

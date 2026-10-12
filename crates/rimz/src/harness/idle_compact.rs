@@ -148,7 +148,7 @@ fn compact_idle_agents_with(
     policy: &KeepWarmPolicy,
     mut spawn: impl FnMut(&IdleCompactRequest) -> bool,
 ) {
-    for agent in &snapshot.agents {
+    for agent in snapshot.agents.iter() {
         if !eligible_seat(agent) {
             continue;
         }
@@ -501,7 +501,7 @@ mod tests {
             candidate.last_request_at()
         );
         std::fs::remove_file(&path).unwrap();
-        snapshot.agents[0].team = None;
+        std::sync::Arc::make_mut(&mut snapshot.agents)[0].team = None;
         compact_idle_agents_with(
             &snapshot,
             &runtime,
@@ -647,7 +647,7 @@ mod tests {
             "a horizon no ping maintains does not defer compaction"
         );
         // Past the horizon, the window runs from the last ping's request.
-        snapshot.agents[0].pinged_at = Some(ts(7_100));
+        std::sync::Arc::make_mut(&mut snapshot.agents)[0].pinged_at = Some(ts(7_100));
         snapshot.now = ts(7_100 + 3_540);
         compact_idle_agents_with(&snapshot, &runtime, &config, &policy, |_| {
             spawned += 1;

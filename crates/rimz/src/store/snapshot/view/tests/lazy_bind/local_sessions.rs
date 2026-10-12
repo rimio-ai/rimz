@@ -889,7 +889,7 @@ fn ended_session_cannot_adopt_a_provisional_launch_identity() {
     provisional.channel = Some("auth".to_owned());
     let pane = pane("%1", "codex", "/repo/main");
     let mut snapshot = room(vec![provisional]);
-    snapshot.fenced_sessions.insert((
+    std::sync::Arc::make_mut(&mut snapshot.fenced_sessions).insert((
         AgentKind::new_unchecked("codex"),
         AgentSessionId::from("session-dead"),
     ));
@@ -968,7 +968,7 @@ fn exact_resume_can_bind_an_ended_session() {
     let mut pane = pane("%1", "codex", "/repo/main");
     pane.resumed_session_id = Some(AgentSessionId::from("session-ended"));
     let mut snapshot = room(Vec::new());
-    snapshot.fenced_sessions.insert((
+    std::sync::Arc::make_mut(&mut snapshot.fenced_sessions).insert((
         AgentKind::new_unchecked("codex"),
         AgentSessionId::from("session-ended"),
     ));

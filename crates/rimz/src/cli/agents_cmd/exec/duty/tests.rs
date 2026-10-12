@@ -340,8 +340,9 @@ fn terminal_child_waits_for_its_receiving_parent_turn() {
         .snapshot_cached()
         .unwrap()
         .agents
-        .into_iter()
+        .iter()
         .find(|agent| agent.agent_id.as_str() == "child")
+        .cloned()
         .unwrap();
     let message = rimz::store::message::MessageRecord::new(
         record.workspace_id.clone(),

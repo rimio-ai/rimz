@@ -728,7 +728,7 @@ pub(crate) fn project_parks(
     let day_cutoff = local_day_cutoff_secs(now, &zone);
     let catalog = account_catalog(config);
     let mut accounts = BTreeMap::new();
-    for agent in &mut snapshot.agents {
+    for agent in std::sync::Arc::make_mut(&mut snapshot.agents) {
         agent.budget_park = ledger_for_agent(runtime, agent)
             .and_then(|ledger| agent_scope_park(agent, &ledger, now, &zone));
         if agent.budget_park.is_some() {

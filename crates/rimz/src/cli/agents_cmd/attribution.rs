@@ -37,7 +37,7 @@ pub(super) fn attribution(
     let mut roots = Vec::new();
     let mut children = Vec::new();
     let mut subagents = Vec::new();
-    for agent in &snapshot.agents {
+    for agent in snapshot.agents.iter() {
         if agent.is_provider_subagent() {
             subagents.push(agent);
         } else if agent.is_launched_child() {

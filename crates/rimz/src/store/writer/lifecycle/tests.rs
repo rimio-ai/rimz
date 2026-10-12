@@ -1204,8 +1204,9 @@ fn spawned_child_reconciliation_closes_running_then_dedupes_by_metadata() {
         .snapshot_cached()
         .unwrap()
         .agents
-        .into_iter()
+        .iter()
         .find(|state| state.agent_id == "child")
+        .cloned()
         .unwrap();
     assert_eq!(state.model.as_deref(), Some("new-model"));
     assert_eq!(state.usage.run_total_tokens, Some(20));

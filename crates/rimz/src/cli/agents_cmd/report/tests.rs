@@ -149,7 +149,7 @@ fn projected_row_status_wins_and_rowless_error_falls_back_to_failed() {
         archived: false,
         attention_score: 0,
         last_activity: now,
-        card: RowCard::Agent(Box::new(AgentCard {
+        card: RowCard::Agent(std::sync::Arc::new(AgentCard {
             status: AgentStatus::Paused,
             phase: TurnPhase::Idle,
             ..AgentCard::default()
@@ -246,7 +246,7 @@ fn report_cost_includes_delegated_spend() {
         archived: false,
         attention_score: 0,
         last_activity: now,
-        card: RowCard::Agent(Box::new(AgentCard {
+        card: RowCard::Agent(std::sync::Arc::new(AgentCard {
             context: Some(context),
             delegated_cost_usd: Some(0.60),
             ..AgentCard::default()
@@ -317,7 +317,7 @@ fn full_entry_has_a_stable_projection() {
         archived: false,
         attention_score: 42,
         last_activity: now,
-        card: RowCard::Agent(Box::new(AgentCard {
+        card: RowCard::Agent(std::sync::Arc::new(AgentCard {
             status: AgentStatus::Running,
             phase: TurnPhase::Acting,
             context: Some(context),

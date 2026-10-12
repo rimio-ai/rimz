@@ -156,7 +156,7 @@ fn launch_and_supervise(
         invocation
             .store()
             .and_then(|store| Ok(store.snapshot_cached()?))
-            .map(|snapshot| snapshot.agents.clone())
+            .map(|snapshot| std::sync::Arc::unwrap_or_clone(snapshot.agents))
             .map_err(|err| format!("{err:#}"))
     };
     let prepared = rimz::harness::launch_plan::prepare_exec(
@@ -1169,8 +1169,10 @@ impl RunExecContext {
         {
             return Ok(false);
         }
-        Ok(!rimz::address::launched_parent(&snapshot.agents, child)
-            .is_some_and(|parent| parent.ended_at.is_none() && parent.holds_open_turn()))
+        Ok(
+            !rimz::address::launched_parent(snapshot.agents.iter(), child)
+                .is_some_and(|parent| parent.ended_at.is_none() && parent.holds_open_turn()),
+        )
     }
 
     fn load_record(&self) -> Option<rimz::store::run::RunRecord> {

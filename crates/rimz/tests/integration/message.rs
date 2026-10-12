@@ -1488,7 +1488,7 @@ fn sweep_archives_an_ended_receiver_hidden_from_the_runtime_snapshot() {
         |_| {},
     );
     let store = env.store();
-    let receiver = store.snapshot_cached().unwrap().agents.remove(0);
+    let receiver = store.snapshot_cached().unwrap().agents[0].clone();
     let message = MessageRecord::new(
         env.workspace_id.clone(),
         &receiver,
@@ -2581,7 +2581,7 @@ fn idle_stop_holds_while_a_message_is_owed_then_stops_without_canceling_the_run(
         };
         match owed {
             Some("message") => {
-                let agent = store.snapshot_cached().unwrap().agents.remove(0);
+                let agent = store.snapshot_cached().unwrap().agents[0].clone();
                 let message = MessageRecord::new(
                     env.workspace_id.clone(),
                     &agent,
@@ -2594,7 +2594,7 @@ fn idle_stop_holds_while_a_message_is_owed_then_stops_without_canceling_the_run(
             // Another kind's newer run under this agent's name is the run a
             // stop of this agent would select and cancel.
             Some(_) => {
-                let agent = store.snapshot_cached().unwrap().agents.remove(0);
+                let agent = store.snapshot_cached().unwrap().agents[0].clone();
                 let mut other = RunRecord::new(
                     env.workspace_id.clone(),
                     AgentKind::new_unchecked("codex"),
@@ -4734,8 +4734,7 @@ fn message_me_rejects_unidentified_shell_and_snapshot_only_owner() {
     caller.start(&env, "work");
     let store = env.store();
     let mut snapshot = store.snapshot_cached().expect("snapshot");
-    let agent = snapshot
-        .agents
+    let agent = std::sync::Arc::make_mut(&mut snapshot.agents)
         .iter_mut()
         .find(|agent| agent.agent_id == caller.session_id)
         .expect("caller row");
@@ -7309,7 +7308,7 @@ fn delivery_releases_remaining_claims_when_a_batch_member_is_canceled_before_wri
         json!({"hook_event_name": "SessionStart", "session_id": "sess-lost-batch"}),
         &[("ZELLIJ_PANE_ID", "3")],
     );
-    let agent = env.store().snapshot_cached().unwrap().agents.remove(0);
+    let agent = env.store().snapshot_cached().unwrap().agents[0].clone();
     let first = MessageRecord::new(
         env.workspace_id.clone(),
         &agent,
@@ -7378,7 +7377,7 @@ fn sweep_recovers_a_lane_containing_only_an_expired_claim() {
         }),
         pane_env,
     );
-    let agent = env.store().snapshot_cached().unwrap().agents.remove(0);
+    let agent = env.store().snapshot_cached().unwrap().agents[0].clone();
     let queued = MessageRecord::new(
         env.workspace_id.clone(),
         &agent,
@@ -8274,7 +8273,7 @@ fn command_delivery_parks_without_spending_an_attempt_when_compaction_starts_aft
         &[("ZELLIJ_PANE_ID", "3")],
     );
     let store = env.store();
-    let agent = store.snapshot_cached().unwrap().agents.remove(0);
+    let agent = store.snapshot_cached().unwrap().agents[0].clone();
     let mut command = MessageRecord::new(
         env.workspace_id.clone(),
         &agent,
@@ -8836,7 +8835,7 @@ fn expired_automatic_command_releases_fifo_without_a_sweep_and_is_audited() {
     let panes = env.write_pane_fixture(&[agent_pane(&env, "claude")]);
     let trace = env.project_root.join("command-expiry.log");
     let store = env.store();
-    let receiver = store.snapshot_cached().unwrap().agents.remove(0);
+    let receiver = store.snapshot_cached().unwrap().agents[0].clone();
     let mut command = MessageRecord::new(
         env.workspace_id.clone(),
         &receiver,
@@ -9001,7 +9000,7 @@ fn expired_automatic_command_cannot_be_forced_into_the_pane() {
     );
     let panes = env.write_pane_fixture(&[agent_pane(&env, "claude")]);
     let trace = env.project_root.join("forced-expiry.log");
-    let receiver = env.store().snapshot_cached().unwrap().agents.remove(0);
+    let receiver = env.store().snapshot_cached().unwrap().agents[0].clone();
     let mut command = MessageRecord::new(
         env.workspace_id.clone(),
         &receiver,
@@ -10173,8 +10172,9 @@ impl ReplyAgentFixture {
             .snapshot()
             .expect("snapshot")
             .agents
-            .into_iter()
+            .iter()
             .find(|agent| agent.agent_id.as_str() == self.session_id)
+            .cloned()
             .expect("reply card");
         let workspace = env.resolve_workspace(&env.project_root);
         let message = MessageRecord::new(

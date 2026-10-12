@@ -547,7 +547,7 @@ mod tests {
             archived: false,
             attention_score: 0,
             last_activity: jiff::Timestamp::UNIX_EPOCH,
-            card: RowCard::Agent(Box::new(AgentCard {
+            card: RowCard::Agent(std::sync::Arc::new(AgentCard {
                 status: rimz::agents::AgentStatus::Idle,
                 ..AgentCard::default()
             })),

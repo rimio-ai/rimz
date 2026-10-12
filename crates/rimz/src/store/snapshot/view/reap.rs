@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 use crate::agents::AgentState;
 use crate::ids::PaneId;
@@ -72,7 +73,7 @@ impl SidebarSnapshot {
                 .map(|pane| pane.pane_id.clone())
                 .collect::<Vec<_>>()
         });
-        self.agents.retain(|agent| {
+        Arc::make_mut(&mut self.agents).retain(|agent| {
             let absent_from_daemon =
                 is_daemon_owned(agent, daemon_pids) && !loaded.contains(agent.agent_id.as_str());
             let pane_absent = match agent.pane.as_ref() {
@@ -133,7 +134,7 @@ impl SidebarSnapshot {
             })
             .map(|agent| (agent.kind.clone(), agent.agent_id.clone()))
             .collect::<BTreeSet<_>>();
-        self.agents
+        Arc::make_mut(&mut self.agents)
             .retain(|agent| !dropped.contains(&(agent.kind.clone(), agent.agent_id.clone())));
     }
 
@@ -160,8 +161,8 @@ impl SidebarSnapshot {
     ///     `Forked` lineage and survives; unknown lineage keeps both sessions.
     pub fn reap_stale_sessions(&mut self) {
         let now = self.now;
-        retain_unsuperseded(&mut self.agents, session_death::supersedes);
-        self.agents.retain(|agent| {
+        retain_unsuperseded(Arc::make_mut(&mut self.agents), session_death::supersedes);
+        Arc::make_mut(&mut self.agents).retain(|agent| {
             // Provider-native subagents are kept until their parent leaves.
             // Pane-backed launched children follow ordinary session liveness.
             if agent.is_provider_subagent() {

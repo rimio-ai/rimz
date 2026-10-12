@@ -222,7 +222,7 @@ pub(crate) fn resume_parked(
         config,
         resume_messages,
     };
-    for agent in &snapshot.agents {
+    for agent in snapshot.agents.iter() {
         if agent.is_provider_subagent() || agent.agent_id.is_empty() {
             continue;
         }

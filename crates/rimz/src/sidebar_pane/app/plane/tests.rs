@@ -32,6 +32,16 @@ fn a_warm_plane_returns_its_fold_before_later_delivery() {
         "seed"
     );
     assert!(subscription.results.take().snapshot.is_none());
+    assert!(Arc::ptr_eq(
+        &subscription
+            .seed
+            .as_ref()
+            .unwrap()
+            .workspace
+            .snapshot()
+            .agents,
+        &remembered.agents,
+    ));
 
     let mut newer = remembered;
     newer.display_name = "correction".into();

@@ -1096,8 +1096,9 @@ impl Store {
             let compacting_agents = if stale_sent {
                 self.snapshot()?
                     .agents
-                    .into_iter()
+                    .iter()
                     .filter(|agent| agent.compacting_since.is_some())
+                    .cloned()
                     .collect::<Vec<_>>()
             } else {
                 Vec::new()

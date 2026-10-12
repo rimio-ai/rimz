@@ -170,7 +170,7 @@ fn cached_enrich_waits_for_producer_workspace_publication() {
     let mut agent = root_agent("claude", "new-session", None);
     agent.worktree_path = Some(project.display().to_string());
     agent.transcript_path = Some(transcript.display().to_string());
-    snapshot.agents = vec![agent];
+    snapshot.agents = vec![agent].into();
     snapshot.worktree_groups = vec![worktree_group(
         &project,
         vec![cost_row_at(

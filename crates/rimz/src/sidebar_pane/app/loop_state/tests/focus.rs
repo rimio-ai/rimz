@@ -589,7 +589,7 @@ fn older_shared_inputs_do_not_renew_an_observed_receipt() {
     let mut snapshot = agent_snapshot(&rig.ws);
     let row = &mut snapshot.worktree_groups[0].rows[0];
     row.last_activity = jiff::Timestamp::UNIX_EPOCH;
-    if let crate::store::snapshot::RowCard::Agent(agent) = &mut row.card {
+    if let Some(agent) = row.as_agent_mut() {
         agent.status = crate::agents::AgentStatus::Waiting;
     }
     let pane = row.pane.as_ref().unwrap().pane_id.clone();
@@ -784,7 +784,7 @@ fn fresh_child_focus_anchor_selects_parent_and_seeds_scroll_and_hold() {
         .iter_mut()
         .find(|row| row.pane.as_ref().unwrap().pane_id == parent)
         .unwrap();
-    row.card = crate::store::snapshot::RowCard::Agent(Box::default());
+    row.card = crate::store::snapshot::RowCard::Agent(std::sync::Arc::default());
     row.as_agent_mut().unwrap().sub_agents.push(
         serde_json::from_value(serde_json::json!({
             "id": "child", "name": "explorer", "status": "running",

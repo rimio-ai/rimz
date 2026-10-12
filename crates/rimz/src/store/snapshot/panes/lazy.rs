@@ -777,7 +777,7 @@ fn idle_agent_row(
         archived: false,
         attention_score: 0,
         last_activity: pane.pane_process_start.unwrap_or(now),
-        card: RowCard::Agent(Box::new(AgentCard {
+        card: RowCard::Agent(std::sync::Arc::new(AgentCard {
             model: default_model.map(ToOwned::to_owned),
             usage: crate::agents::AgentUsageSummary {
                 context_window: definition.default_context_window,

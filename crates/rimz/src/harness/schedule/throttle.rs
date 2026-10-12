@@ -244,10 +244,12 @@ impl Host for SystemHost {
         let runtime = RuntimePaths::for_state(&state).map_err(|err| unreadable(&err))?;
         let store = crate::store::Store::open_existing(state, runtime)
             .ok_or_else(|| unreadable(&"unsupported state layout"))?;
-        Ok(store
-            .snapshot_cached()
-            .map_err(|err| unreadable(&format!("{err:#}")))?
-            .agents)
+        Ok(std::sync::Arc::unwrap_or_clone(
+            store
+                .snapshot_cached()
+                .map_err(|err| unreadable(&format!("{err:#}")))?
+                .agents,
+        ))
     }
 
     fn task_runs(&self, workspace: &WorkspaceId, task: &str) -> Result<Vec<RunRecord>, String> {

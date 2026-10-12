@@ -153,11 +153,13 @@ pub(crate) fn activity_row(
         attention_score: 0,
         last_activity,
         card: if is_agent {
-            crate::store::snapshot::RowCard::Agent(Box::new(crate::store::snapshot::AgentCard {
-                status: status.unwrap_or(AgentStatus::Idle),
-                phase: TurnPhase::Idle,
-                ..crate::store::snapshot::AgentCard::default()
-            }))
+            crate::store::snapshot::RowCard::Agent(std::sync::Arc::new(
+                crate::store::snapshot::AgentCard {
+                    status: status.unwrap_or(AgentStatus::Idle),
+                    phase: TurnPhase::Idle,
+                    ..crate::store::snapshot::AgentCard::default()
+                },
+            ))
         } else {
             crate::store::snapshot::RowCard::Process(crate::store::snapshot::ProcessCard::default())
         },

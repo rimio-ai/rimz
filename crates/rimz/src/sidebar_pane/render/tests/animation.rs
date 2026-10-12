@@ -112,7 +112,7 @@ fn frame_interval_uses_breath_for_pulse_and_fast_for_work() {
             archived: false,
             attention_score: 0,
             last_activity: Timestamp::now(),
-            card: crate::store::snapshot::RowCard::Agent(Box::new(
+            card: crate::store::snapshot::RowCard::Agent(std::sync::Arc::new(
                 crate::store::snapshot::AgentCard {
                     status: crate::agents::AgentStatus::Waiting,
                     phase: crate::agents::TurnPhase::Idle,

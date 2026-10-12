@@ -2,6 +2,7 @@
 use std::collections::BTreeMap;
 use std::collections::{BTreeSet, HashSet};
 use std::path::Path;
+use std::sync::Arc;
 
 use crate::agent_activity::AgentActivity;
 #[cfg(test)]
@@ -181,7 +182,11 @@ impl SidebarSnapshot {
         drop(binding_index);
 
         for (observation_index, pane) in bindings {
-            merge_bound_local_session(&mut self.agents, &observations[observation_index], &pane);
+            merge_bound_local_session(
+                Arc::make_mut(&mut self.agents),
+                &observations[observation_index],
+                &pane,
+            );
         }
         (self, diagnostics)
     }
@@ -258,7 +263,19 @@ impl SidebarSnapshot {
                     .is_some_and(|pane| pane.pane_id == *pane_id)
             });
             changed |= group.rows.len() != before;
-            for agent in group.rows.iter_mut().filter_map(SidebarRow::as_agent_mut) {
+            for agent in group
+                .rows
+                .iter_mut()
+                .filter(|row| {
+                    row.as_agent().is_some_and(|agent| {
+                        agent
+                            .sub_agents
+                            .iter()
+                            .any(|child| child.pane.as_ref() == Some(pane_id))
+                    })
+                })
+                .filter_map(SidebarRow::as_agent_mut)
+            {
                 for child in &mut agent.sub_agents {
                     if child.pane.as_ref() == Some(pane_id) {
                         child.pane = None;
@@ -362,7 +379,7 @@ impl SidebarSnapshot {
     }
 
     pub fn with_agent_activity(mut self, activity: &[AgentActivity]) -> Self {
-        for agent in &mut self.agents {
+        for agent in Arc::make_mut(&mut self.agents) {
             let Some(touch) = activity
                 .iter()
                 .filter(|a| a.kind == agent.kind && a.agent_id == agent.agent_id)

@@ -177,7 +177,7 @@ fn tab_pick_holds_until_the_derived_kind_genuinely_changes() {
     let mut other_account = tabbed_snapshot(&ws);
     let mut agent = crate::testkit::agent_state("claude", "agent-1", Timestamp::now());
     agent.login = Some("work".parse().unwrap());
-    other_account.agents.push(agent);
+    std::sync::Arc::make_mut(&mut other_account.agents).push(agent);
     reconcile_selection(&mut ui, &other_account, Some(agent_pane.clone()));
     assert!(
         ui.dashboard_tab.is_some(),
