@@ -203,7 +203,7 @@ impl Store {
     }
 
     /// Build a fresh snapshot in memory (no disk write). Lock-free and
-    /// O(delta): the rollup resumes from this thread's held fold base.
+    /// O(delta): the rollup resumes from the persisted fold base.
     pub fn snapshot(&self) -> Result<SidebarSnapshot> {
         if self.hook_transaction.is_some() {
             return Ok(snapshot::build_from_pending(
