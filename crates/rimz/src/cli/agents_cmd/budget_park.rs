@@ -28,6 +28,7 @@ pub fn run_budget_park(request: BudgetParkRequest) -> Result<()> {
         rimz::harness::budget::read_ledger(store.runtime_paths(), &request.kind, &request.agent_id)
             .and_then(|ledger| ledger.parked.map(|park| park.at_cost))
     });
+    rimz::harness::hibernate::wake_pane(store, &request.pane_id)?;
     let interrupted = PaneWriter::open(
         store.runtime_paths(),
         &request.pane_id,

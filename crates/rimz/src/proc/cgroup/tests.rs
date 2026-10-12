@@ -19,6 +19,34 @@ fn login_session_membership_does_not_change_user_manager_slice() {
 }
 
 #[test]
+fn workspace_sweep_thaws_only_this_rooms_scopes() {
+    let root = tempfile::tempdir().unwrap();
+    let workspace = crate::ids::WorkspaceId::from_project_root(root.path());
+    let uid = nix::unistd::Uid::current().as_raw();
+    let slice = root.path().join(format!(
+        "user.slice/user-{uid}.slice/user@{uid}.service/app.slice"
+    ));
+    let own = slice.join(format!("rimz-agent-{}-a.scope", workspace.as_str()));
+    let other = slice.join("rimz-agent-another-room.scope");
+    let helper = slice.join("rimz-helper-a.scope");
+    for scope in [&own, &other, &helper] {
+        std::fs::create_dir_all(scope).unwrap();
+        std::fs::write(scope.join("cgroup.freeze"), "1").unwrap();
+    }
+    thaw_workspace_in(root.path(), &workspace).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(own.join("cgroup.freeze")).unwrap(),
+        "0"
+    );
+    for scope in [&other, &helper] {
+        assert_eq!(
+            std::fs::read_to_string(scope.join("cgroup.freeze")).unwrap(),
+            "1"
+        );
+    }
+}
+
+#[test]
 fn scope_resolution_requires_own_app_slice_and_agent_unit() {
     let root = Path::new("/fake-cgroup");
     let group = "/user.slice/user-1000.slice/user@1000.service/app.slice/rimz-agent-w-n.scope";

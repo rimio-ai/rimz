@@ -356,7 +356,8 @@ path = "crates/rimz/src/diag"
 # Focus tracing exposes its vocabulary, sink, and shared log path to producer and attachment evidence (+5).
 # Store repair and the drainer share typed hook repair/drop evidence and its sink (+3).
 # SidebarHostUnavailableCause is the public payload vocabulary of the new diagnostic (+1).
-surface-budget = 93
+# Hibernation timeout repair exposes its diagnostic module and append sink (+2).
+surface-budget = 95
 
 [[module]]
 path = "crates/rimz/src/disk"
@@ -552,7 +553,8 @@ path = "crates/rimz/src/harness"
 # Host readers share the crate-private cached run listing (+1).
 # Hibernation admission reports and scope naming cross launch and CLI seams (+9).
 # Hibernation decision, helper request, producer and projection share the CLI/sidebar seam and idle-stop predicates (+12).
-surface-budget = 806
+# Wake requests, synchronous thaw, and recovery cross the CLI/sidebar/retirement seams (+10).
+surface-budget = 816
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -578,6 +580,7 @@ upward-dependencies = [
     "harness::ancestry",
     "harness::assist_log",
     "harness::auto_continue",
+    "harness::hibernate",
     "harness::run",
     "harness::schedule::pending",
     "sidebar::produce",
@@ -651,7 +654,9 @@ upward-dependencies = [
 # The calling-thread bounded pump and its kill scope are shared with mux (+2).
 # Headless loop guards use cancellable bounded capture; existing probes keep the non-cancellable wrapper (+1).
 # Cgroup scope identity, freezer/reclaim operations and meminfo parsing serve hibernation (+14).
-surface-budget = 129
+# Workspace scope enumeration and thaw share naming with launch and recovery (+3).
+# Timeout wake uses the injected-root workspace thaw entry point (+1).
+surface-budget = 133
 
 [[module]]
 path = "crates/rimz/src/reload.rs"
@@ -984,6 +989,7 @@ allowed-dependencies = [
     "config",
     "disk::atomic",
     "harness::assist_log",
+    "harness::hibernate",
     "address",
     "ids",
     "message",

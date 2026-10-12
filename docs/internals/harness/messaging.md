@@ -227,7 +227,7 @@ An address that matches nothing, after the durable fallback, writes a terminal `
 | 6 | The receiver card exists in the snapshot | `ReceiverGone` | The agent reappearing, or GC archiving the record |
 | 7 | The receiver has not ended | `ReceiverEnded` | The sweep archives open records for the card and unmet `when` conditions watching it |
 | 8 | Not inside the compaction window | `Compacting` | `CompactionEnded`, or the 90 s window expiring |
-| 9 | The gate is open for the effective status | `GateClosed` | The agent reaching `Idle`, `Success`, or `Sleeping`, plus `Failed` under `--on any` |
+| 9 | The gate is open for the effective status | `GateClosed` | The agent reaching `Idle`, `Success`, `Sleeping`, or `Hibernating`, plus `Failed` under `--on any` |
 | 10 | The resumed provider has started | `ProviderStarting` | Its next lifecycle observation, normally `Registered`, or one delivery window elapsing; lazy-registering providers skip this check |
 | 11 | A `Resume` gate's park is recoverable | `ResumeUnrecovered` | The budget window resetting or the overload marker clearing |
 | 12 | No open blocking prompt reserving input | `AskWaiting` | Answering the ask, or `--force` |
@@ -239,7 +239,7 @@ A pane is bindable when it reaches `agent_panes`, which the snapshot builds from
 
 The compaction window at check 8 closes every gate, `Resume` included. A receiver with a `compacting_since` marker less than 90 seconds old takes nothing. The window expires so a lost compaction-end signal costs a delay instead of a wedged queue. Stale-`Sent` reconciliation uses the full compaction bracket instead ([model.md § The compaction bracket](../agents/model.md#the-compaction-bracket)).
 
-`DeliveryGate::Resume` has no flag. Auto-continue stamps it on its own nudge, and check 11 re-verifies at delivery time that the park is still resumable. `Done` and `Any` records stay parked while an agent is paused, so a rate-limited agent does not receive a pile of user text the moment it waits. Both open for `Sleeping`, so a resting agent with an armed one-shot wait can receive a message without consuming that wait; `Resume` does not open for `Sleeping`.
+`DeliveryGate::Resume` has no flag. Auto-continue stamps it on its own nudge, and check 11 re-verifies at delivery time that the park is still resumable. `Done` and `Any` records stay parked while an agent is paused, so a rate-limited agent does not receive a pile of user text the moment it waits. Both open for `Sleeping`, so a resting agent with an armed one-shot wait can receive a message without consuming that wait; `Resume` does not open for `Sleeping`. Both also open for `Hibernating`; delivery thaws the provider before writing to its pane.
 
 Scheduled, condition-blocked, and `Resume`-gated records are left out of the FIFO scan, so they never block a later record that could deliver now. Resume nudges also live in their own lane, so a wakeup never queues behind user text that cannot deliver until after it.
 

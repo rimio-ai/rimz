@@ -4,6 +4,50 @@ use crate::config::DaemonConfig;
 use crate::ids::MuxName;
 use std::path::PathBuf;
 
+#[test]
+#[cfg(target_os = "linux")]
+fn recorded_surplus_pane_is_awake_when_close_runs() {
+    let dir = tempfile::tempdir().unwrap();
+    let id = WorkspaceId::from_project_root(dir.path());
+    let paths = StatePaths::under(id, dir.path()).unwrap();
+    let uid = nix::unistd::Uid::current().as_raw();
+    let scope = dir.path().join(format!(
+        "user.slice/user-{uid}.slice/user@{uid}.service/app.slice/rimz-agent-test.scope"
+    ));
+    std::fs::create_dir_all(&scope).unwrap();
+    std::fs::write(scope.join("cgroup.freeze"), "1").unwrap();
+    let pane: PaneId = "tmux:%3".parse().unwrap();
+    crate::store::hibernate::record(
+        &paths,
+        crate::store::hibernate::Entry {
+            kind: crate::ids::AgentKind::new_unchecked("claude"),
+            agent_id: "test".into(),
+            pane_id: pane.clone(),
+            scope: scope.clone(),
+            provider_pid: 10,
+            frozen_at: jiff::Timestamp::UNIX_EPOCH,
+            reclaimed_bytes: 0,
+        },
+    )
+    .unwrap();
+    assert!(close_surplus_panes_with(
+        &paths,
+        std::slice::from_ref(&pane),
+        |pane| {
+            crate::harness::hibernate::wake_pane_in(&paths, pane, dir.path()).unwrap();
+            true
+        },
+        |_| {
+            assert_eq!(
+                std::fs::read_to_string(scope.join("cgroup.freeze")).unwrap(),
+                "0"
+            );
+            assert!(crate::store::hibernate::read(&paths).is_empty());
+            true
+        }
+    ));
+}
+
 fn pane(command: Option<&str>, view_name: Option<&str>) -> PaneRef {
     pane_with_id("%1", command, view_name)
 }

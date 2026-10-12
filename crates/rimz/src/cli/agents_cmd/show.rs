@@ -862,6 +862,7 @@ pub(in crate::cli) fn focus_resolved(ctx: &Ctx, agent: &AgentState) -> Result<()
         .as_ref()
         .ok_or_else(|| anyhow::anyhow!("agent {} has no bound pane", agent_name(agent)))?;
     let backend = rimz::mux::backend_for(pane.pane_id.mux());
+    rimz::harness::hibernate::wake_pane(&ctx.store, &pane.pane_id)?;
     rimz::mux::focus_anchor::execute_action(
         backend.as_ref(),
         ctx.runtime(),

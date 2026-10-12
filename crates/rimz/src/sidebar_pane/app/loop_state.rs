@@ -1993,6 +1993,7 @@ fn spawn_pane_focus(
 ) {
     let session_name = session_name.to_owned();
     std::thread::spawn(move || {
+        crate::harness::hibernate::spawn_wake(&runtime, &pane_id);
         let backend = crate::mux::backend_for(pane_id.mux());
         let repair_generation = repair.as_ref().map(|repair| repair.generation);
         let FocusRequestOutcome {

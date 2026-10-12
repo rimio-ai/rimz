@@ -1,5 +1,48 @@
 use super::*;
 
+#[test]
+fn focus_consumer_wakes_both_backends_and_paces_repeated_events() {
+    use crate::wakeup::events::SidebarEvent;
+    for raw in ["tmux:%3", "zellij:terminal_3"] {
+        let pane: PaneId = raw.parse().unwrap();
+        let entry = crate::store::hibernate::Entry {
+            kind: AgentKind::new_unchecked("claude"),
+            agent_id: "session".into(),
+            pane_id: pane.clone(),
+            scope: PathBuf::new(),
+            provider_pid: 10,
+            frozen_at: jiff::Timestamp::UNIX_EPOCH,
+            reclaimed_bytes: 0,
+        };
+        let event = SidebarEvent::FocusChanged {
+            focused: vec![pane.clone()],
+            unfocused: vec![],
+        };
+        let entries = [entry];
+        let mut pacing = std::collections::HashMap::new();
+        assert_eq!(
+            focus_wake_targets(&event, &entries, &pacing, 10_000),
+            std::slice::from_ref(&pane)
+        );
+        pacing.insert(pane.clone(), 5_001);
+        assert!(focus_wake_targets(&event, &entries, &pacing, 10_000).is_empty());
+        pacing.insert(pane.clone(), 5_000);
+        assert_eq!(
+            focus_wake_targets(&event, &entries, &pacing, 10_000),
+            std::slice::from_ref(&pane)
+        );
+        assert!(focus_wake_targets(&event, &[], &pacing, 10_000).is_empty());
+        let unfocused = SidebarEvent::FocusChanged {
+            focused: vec![],
+            unfocused: vec![pane],
+        };
+        assert!(focus_wake_targets(&unfocused, &entries, &pacing, 10_000).is_empty());
+        assert!(
+            focus_wake_targets(&SidebarEvent::PanesChanged, &entries, &pacing, 10_000).is_empty()
+        );
+    }
+}
+
 fn decision_fixture() -> (tempfile::TempDir, Store, AgentState, Policy, ScopeView) {
     let dir = tempfile::tempdir().unwrap();
     let id = WorkspaceId::from_project_root(dir.path());
@@ -37,6 +80,55 @@ fn decision_fixture() -> (tempfile::TempDir, Store, AgentState, Policy, ScopeVie
         focused: false,
     };
     (dir, store, agent, Policy::new(&config).unwrap(), scope)
+}
+
+#[test]
+fn waking_restarts_grace_for_a_queued_helper_and_after_a_glance() {
+    for recorded in [false, true] {
+        let (dir, store, mut agent, config, scope) = decision_fixture();
+        let pane: PaneId = "tmux:%3".parse().unwrap();
+        agent.pane = Some(crate::pane::PaneRef::from_id(pane.clone()));
+        let path = scope.scope.as_ref().unwrap().as_path();
+        std::fs::create_dir_all(path).unwrap();
+        std::fs::write(path.join("cgroup.freeze"), "1").unwrap();
+        drop(
+            crate::disk::lock::WorkspaceLock::acquire(&store.paths().lock_path("hibernate.lock"))
+                .unwrap(),
+        );
+        if recorded {
+            crate::store::hibernate::record(
+                store.paths(),
+                crate::store::hibernate::Entry {
+                    kind: agent.kind.clone(),
+                    agent_id: agent.agent_id.clone(),
+                    pane_id: pane.clone(),
+                    scope: path.into(),
+                    provider_pid: 10,
+                    frozen_at: agent.last_activity,
+                    reclaimed_bytes: 0,
+                },
+            )
+            .unwrap();
+        }
+        let now = jiff::Timestamp::now().as_second();
+        super::wake::wake_pane_with_timeout(
+            store.paths(),
+            store.runtime_paths(),
+            &pane,
+            dir.path(),
+            std::time::Duration::ZERO,
+        )
+        .unwrap();
+        assert_eq!(
+            decision(&store, &agent, &config, &scope, now),
+            Verdict::Hold(Hold::Clock),
+            "recorded={recorded}"
+        );
+        assert!(matches!(
+            decision(&store, &agent, &config, &scope, now + 181),
+            Verdict::Hibernate { .. }
+        ));
+    }
 }
 
 #[test]
@@ -339,10 +431,18 @@ fn producer_requires_seen_unfocused_due_pane_and_paces_without_recording() {
     });
     let spawned = |snapshot: &crate::store::snapshot::SidebarSnapshot, seen: bool| {
         let mut requests = Vec::new();
-        hibernate_idle_agents_with(snapshot, paths, runtime, &config, &|_| seen, |request| {
-            requests.push(request.clone());
-            true
-        });
+        hibernate_idle_agents_with(
+            snapshot,
+            paths,
+            runtime,
+            &config,
+            &|_| seen,
+            |request| {
+                requests.push(request.clone());
+                true
+            },
+            |_| {},
+        );
         requests
     };
     assert!(spawned(&snapshot, false).is_empty());
@@ -388,6 +488,66 @@ fn decision_does_not_refreeze_a_recorded_session() {
     assert_eq!(
         decision(&store, &agent, &config, &scope, 1_180),
         Verdict::Hibernate { idle_secs: 180 }
+    );
+}
+
+#[test]
+fn producer_repairs_lost_focus_events_and_focus_during_freeze() {
+    let (_dir, store, agent, _policy, scope) = decision_fixture();
+    let mut config = MachineConfig::default();
+    config.agents.hibernate.enabled = true;
+    let pane: PaneId = "tmux:%3".parse().unwrap();
+    let mut snapshot = crate::store::snapshot::SidebarSnapshot::build_with_agents(
+        store.paths().workspace_id.clone(),
+        vec![agent.clone()],
+        jiff::Timestamp::from_second(1_180).unwrap(),
+    );
+    snapshot.focused_pane = Some(pane.clone());
+    let mut wakes = Vec::new();
+    let mut produce = |snapshot: &crate::store::snapshot::SidebarSnapshot| {
+        hibernate_idle_agents_with(
+            snapshot,
+            store.paths(),
+            store.runtime_paths(),
+            &config,
+            &|_| true,
+            |_| panic!("focused pane must not freeze"),
+            |pane| wakes.push(pane.clone()),
+        );
+    };
+    produce(&snapshot);
+    crate::store::hibernate::record(
+        store.paths(),
+        crate::store::hibernate::Entry {
+            kind: agent.kind,
+            agent_id: agent.agent_id,
+            pane_id: pane.clone(),
+            scope: scope.scope.unwrap().as_path().into(),
+            provider_pid: 10,
+            frozen_at: snapshot.now,
+            reclaimed_bytes: 0,
+        },
+    )
+    .unwrap();
+    produce(&snapshot);
+    produce(&snapshot);
+    snapshot.now = jiff::Timestamp::from_second(1_185).unwrap();
+    produce(&snapshot);
+    config.agents.hibernate.enabled = false;
+    snapshot.now = jiff::Timestamp::from_second(1_190).unwrap();
+    hibernate_idle_agents_with(
+        &snapshot,
+        store.paths(),
+        store.runtime_paths(),
+        &config,
+        &|_| true,
+        |_| panic!("disabled hibernation must not freeze"),
+        |pane| wakes.push(pane.clone()),
+    );
+    assert_eq!(
+        wakes,
+        [pane.clone(), pane.clone(), pane],
+        "pulled focus must repair a missing event or a record published after focus, with pacing"
     );
 }
 

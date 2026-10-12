@@ -195,7 +195,9 @@ impl SupervisedChild {
     /// Ask the child to terminate.
     pub fn signal_term(&mut self) {
         #[cfg(unix)]
-        signal_child(self.pid, ChildSignal::Term);
+        signal_term_with_scope(self.pid, crate::proc::cgroup::scope_of(self.pid), |pid| {
+            signal_child(pid, ChildSignal::Term)
+        });
         #[cfg(not(unix))]
         let _ = self.child.kill();
     }
@@ -207,6 +209,20 @@ impl SupervisedChild {
         #[cfg(not(unix))]
         let _ = self.child.kill();
     }
+}
+
+#[cfg(unix)]
+fn signal_term_with_scope(
+    pid: u32,
+    scope: Option<crate::proc::cgroup::ScopePath>,
+    signal: impl FnOnce(u32),
+) {
+    if let Some(scope) = scope
+        && let Err(error) = crate::proc::cgroup::thaw(&scope)
+    {
+        tracing::warn!(pid, %error, "could not thaw supervised child before SIGTERM");
+    }
+    signal(pid);
 }
 
 #[cfg(unix)]
@@ -1023,6 +1039,31 @@ mod tests {
                 assert!(status.signal().is_some());
             }
         }
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn supervised_term_thaws_before_delivering_the_signal() {
+        let dir = tempfile::tempdir().unwrap();
+        let uid = nix::unistd::Uid::current().as_raw();
+        let scope = crate::proc::cgroup::ScopePath::from_cgroup(
+            dir.path(),
+            &format!(
+                "0::/user.slice/user-{uid}.slice/user@{uid}.service/app.slice/rimz-agent-test.scope"
+            ),
+        )
+        .unwrap();
+        std::fs::create_dir_all(scope.as_path()).unwrap();
+        let freeze = scope.as_path().join("cgroup.freeze");
+        std::fs::write(&freeze, "1").unwrap();
+        signal_term_with_scope(10, Some(scope), |pid| {
+            assert_eq!(pid, 10);
+            assert_eq!(
+                std::fs::read_to_string(&freeze).unwrap(),
+                "0",
+                "SIGTERM must observe an unfrozen scope"
+            );
+        });
     }
 
     #[test]

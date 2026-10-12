@@ -118,6 +118,7 @@ pub fn run(args: AnswerArgs, globals: &GlobalFlags) -> Result<()> {
     let target = live
         .live_agent_pane(&owner.kind, &owner.agent_id)
         .unwrap_or_else(|| answer_exit(2, &format!("{handle} has no live bound pane")));
+    rimz::harness::hibernate::wake_pane(store, &target)?;
     let writer = PaneWriter::open(store.runtime_paths(), &target, &ctx.workspace.session_name)
         .unwrap_or_else(|err| answer_exit(2, &format!("sending answer to {handle}: {err}")));
 

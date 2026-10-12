@@ -32,7 +32,7 @@ The pet acts out the selected card, one steady animation per state. Change which
 | an agent paused on a rate limit, or waiting on its own subagent | stands by | `waiting on work` |
 | an agent in its reasoning phase | paces back and forth | `thinking it through` |
 | an agent otherwise running, or a busy process | runs | `room is moving` |
-| an agent idle, finished, or sleeping, or no selection at all | rests | `all caught up` |
+| an agent idle, finished, sleeping, or hibernating, or no selection at all | rests | `all caught up` |
 
 The first matching row wins, so an agent compacting while it waits on your answer reviews rather than waves.
 

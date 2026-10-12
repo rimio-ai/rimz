@@ -11,6 +11,7 @@ pub fn run_request(
     request: &HibernateHelperRequest,
     config: &MachineConfig,
     seen: &dyn Fn(&AgentState) -> bool,
+    mut refresh: impl FnMut() -> crate::store::snapshot::Result<crate::store::snapshot::SidebarSnapshot>,
 ) -> Result<(), HibernateErr> {
     if !cfg!(target_os = "linux") || !config.agents.hibernate.enabled {
         return Ok(());
@@ -33,7 +34,7 @@ pub fn run_request(
         &agent.kind,
         request.root_pid,
         seen(agent),
-        snapshot.focused_pane.as_ref() == Some(&request.pane_id),
+        pane_focused(store.runtime_paths(), snapshot, &request.pane_id),
     );
     let verdict = decide(store, agent, &policy, jiff::Timestamp::now(), &scope)?;
     let idle_secs = match verdict {
@@ -49,6 +50,7 @@ pub fn run_request(
         .scope
         .as_ref()
         .expect("Hibernate verdict requires a scope");
+    let provider_pid = scope.provider_pid;
     let entry = Entry {
         kind: request.kind.clone(),
         agent_id: request.agent_id.clone(),
@@ -58,9 +60,36 @@ pub fn run_request(
         frozen_at: jiff::Timestamp::now(),
         reclaimed_bytes: 0,
     };
-    let result = freeze_and_record_with(store.paths(), entry, path, || cgroup::reclaim(path));
+    let result = freeze_and_record_with(
+        store.paths(),
+        entry,
+        path,
+        || {
+            let fresh = refresh().map_err(StoreErr::from)?;
+            let Some(agent) =
+                crate::store::snapshot::find_agent(&fresh.agents, &request.kind, &request.agent_id)
+            else {
+                return Ok(false);
+            };
+            let scope = ScopeView::probe(
+                &agent.kind,
+                request.root_pid,
+                seen(agent),
+                pane_focused(store.runtime_paths(), &fresh, &request.pane_id),
+            );
+            if scope.scope.as_ref() != Some(path) || scope.provider_pid != provider_pid {
+                return Ok(false);
+            }
+            Ok(matches!(
+                decide(store, agent, &policy, jiff::Timestamp::now(), &scope)?,
+                Verdict::Hibernate { .. }
+            ))
+        },
+        || cgroup::reclaim(path),
+    );
     match result {
-        Ok(report) => {
+        Ok(None) => Ok(()),
+        Ok(Some(report)) => {
             let record_path =
                 fire_record_path(store.runtime_paths(), &request.kind, &request.agent_id);
             let mut pacing = read_fire_record(&record_path);
@@ -102,6 +131,21 @@ pub fn run_request(
     }
 }
 
+fn pane_focused(
+    runtime: &crate::RuntimePaths,
+    snapshot: &crate::store::snapshot::SidebarSnapshot,
+    pane: &PaneId,
+) -> bool {
+    snapshot.focused_pane.as_ref() == Some(pane)
+        || crate::mux::focus_anchor::load(runtime).is_some_and(|anchor| {
+            &anchor.pane_id == pane
+                && crate::mux::focus_anchor::is_fresh(
+                    anchor.applied_at_ms.unwrap_or(anchor.issued_at_ms),
+                    crate::utils::time::unix_now_ms(),
+                )
+        })
+}
+
 fn report_hold(
     runtime: &crate::RuntimePaths,
     request: &HibernateHelperRequest,
@@ -130,15 +174,21 @@ fn freeze_and_record_with(
     paths: &crate::StatePaths,
     mut entry: Entry,
     scope: &ScopePath,
+    recheck: impl FnOnce() -> Result<bool, HibernateErr>,
     reclaim: impl FnOnce() -> Result<ReclaimReport, CgroupErr>,
-) -> Result<ReclaimReport, HibernateErr> {
+) -> Result<Option<ReclaimReport>, HibernateErr> {
+    let _guard = crate::disk::lock::WorkspaceLock::acquire(&paths.lock_path("hibernate.lock"))
+        .map_err(StoreErr::from)?;
+    if !recheck()? {
+        return Ok(None);
+    }
     cgroup::freeze(scope)?;
     let result = (|| {
         let report = reclaim()?;
         entry.reclaimed_bytes = report.before.saturating_sub(report.after);
         entry.frozen_at = jiff::Timestamp::now();
         crate::store::hibernate::record(paths, entry)?;
-        Ok(report)
+        Ok(Some(report))
     })();
     if result.is_err()
         && let Err(error) = cgroup::thaw(scope)
@@ -168,6 +218,39 @@ fn hold_changed(
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn current_focus_intent_holds_before_the_published_frame_catches_up() {
+        use crate::mux::focus_anchor::{FocusAnchor, FocusIntentState, FocusOrigin};
+        let dir = tempfile::tempdir().unwrap();
+        let id = WorkspaceId::from_project_root(dir.path());
+        let runtime = crate::RuntimePaths::under(id.clone(), dir.path()).unwrap();
+        let pane: PaneId = "tmux:%3".parse().unwrap();
+        let now = crate::utils::time::unix_now_ms();
+        let snapshot = crate::store::snapshot::SidebarSnapshot::build_with_agents(
+            id,
+            vec![],
+            jiff::Timestamp::now(),
+        );
+        let anchor = FocusAnchor {
+            nonce: crate::ids::FocusNonce::new(),
+            session_name: "room".into(),
+            pane_id: pane.clone(),
+            origin: FocusOrigin::User,
+            repair_generation: None,
+            issued_at_ms: now,
+            applied_at_ms: None,
+            state: FocusIntentState::Requested,
+            pre_action: vec![],
+            offset: 0,
+            order: None,
+        };
+        crate::mux::focus_anchor::store(&runtime, &anchor).unwrap();
+        assert!(
+            pane_focused(&runtime, &snapshot, &pane),
+            "locked decision must see focus intent absent from the raw store snapshot"
+        );
+    }
 
     fn fixture() -> (
         tempfile::TempDir,
@@ -215,19 +298,72 @@ mod tests {
     }
 
     #[test]
+    fn wake_during_reclaim_waits_for_publication_and_thaws() {
+        let (dir, paths, _runtime, scope, entry, _request) = fixture();
+        std::thread::scope(|threads| {
+            let (started_tx, started_rx) = std::sync::mpsc::channel();
+            let (done_tx, done_rx) = std::sync::mpsc::channel();
+            let pane = entry.pane_id.clone();
+            freeze_and_record_with(
+                &paths,
+                entry,
+                &scope,
+                || Ok(true),
+                || {
+                    let paths = &paths;
+                    let root = dir.path();
+                    threads.spawn(move || {
+                        started_tx.send(()).unwrap();
+                        let result = super::super::wake::wake_pane_in(paths, &pane, root);
+                        done_tx.send(result).unwrap();
+                    });
+                    started_rx.recv().unwrap();
+                    // Let the wake reach the transaction while reclaim is still in flight.
+                    assert!(
+                        done_rx
+                            .recv_timeout(std::time::Duration::from_millis(100))
+                            .is_err()
+                    );
+                    Ok(ReclaimReport {
+                        before: 400,
+                        after: 100,
+                    })
+                },
+            )
+            .unwrap();
+            assert!(matches!(
+                done_rx.recv().unwrap().unwrap(),
+                super::super::wake::Woken::Thawed { .. }
+            ));
+        });
+        assert_eq!(
+            std::fs::read_to_string(scope.as_path().join("cgroup.freeze")).unwrap(),
+            "0"
+        );
+        assert!(crate::store::hibernate::read(&paths).is_empty());
+    }
+
+    #[test]
     fn record_is_published_only_after_freeze_and_successful_reclaim() {
         let (_dir, paths, _runtime, scope, entry, _request) = fixture();
-        let report = freeze_and_record_with(&paths, entry, &scope, || {
-            assert_eq!(
-                std::fs::read_to_string(scope.as_path().join("cgroup.freeze")).unwrap(),
-                "1"
-            );
-            assert!(crate::store::hibernate::read(&paths).is_empty());
-            Ok(ReclaimReport {
-                before: 400,
-                after: 100,
-            })
-        })
+        let report = freeze_and_record_with(
+            &paths,
+            entry,
+            &scope,
+            || Ok(true),
+            || {
+                assert_eq!(
+                    std::fs::read_to_string(scope.as_path().join("cgroup.freeze")).unwrap(),
+                    "1"
+                );
+                assert!(crate::store::hibernate::read(&paths).is_empty());
+                Ok(ReclaimReport {
+                    before: 400,
+                    after: 100,
+                })
+            },
+        )
+        .unwrap()
         .unwrap();
         let records = crate::store::hibernate::read(&paths);
         assert_eq!(records.len(), 1);
@@ -249,16 +385,22 @@ mod tests {
             if publication {
                 std::fs::create_dir_all(&paths.hibernation).unwrap();
             }
-            let result = freeze_and_record_with(&paths, entry, &scope, || {
-                if publication {
-                    Ok(ReclaimReport {
-                        before: 400,
-                        after: 100,
-                    })
-                } else {
-                    Err(std::io::Error::other("reclaim failed").into())
-                }
-            });
+            let result = freeze_and_record_with(
+                &paths,
+                entry,
+                &scope,
+                || Ok(true),
+                || {
+                    if publication {
+                        Ok(ReclaimReport {
+                            before: 400,
+                            after: 100,
+                        })
+                    } else {
+                        Err(std::io::Error::other("reclaim failed").into())
+                    }
+                },
+            );
             assert!(result.is_err());
             assert_eq!(
                 std::fs::read_to_string(scope.as_path().join("cgroup.freeze")).unwrap(),

@@ -24,6 +24,8 @@ type Result<T> = std::result::Result<T, SendErr>;
 #[derive(Debug, thiserror::Error)]
 pub enum SendErr {
     #[error(transparent)]
+    Hibernate(#[from] crate::harness::hibernate::HibernateErr),
+    #[error(transparent)]
     Store(#[from] crate::store::StoreErr),
     #[error(transparent)]
     Atomic(#[from] crate::disk::atomic::AtomicErr),
@@ -119,6 +121,7 @@ pub(super) fn send_batch_to_live_pane(
     let head = batch
         .first()
         .expect("send_batch_to_live_pane requires at least one message");
+    crate::harness::hibernate::wake_pane(store, &target.pane_id)?;
     let writer = PaneWriter::open(
         store.runtime_paths(),
         &target.pane_id,

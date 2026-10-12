@@ -22,6 +22,8 @@ A room running Copilot gets one more file. RimZ points Copilot's own telemetry e
 
 `rimz uninstall` removes RimZ from the machine. It prints every root, room, hook, skill-link root, and binary it is about to touch, waits for a `y`, and then reports each removal; `--state` and `--config` add the durable stores and the per-machine config to that list. Two things it never removes, whatever flags you pass: your provider account homes under `~/.rimz/accounts/` and your skill library under `~/.rimz/skills/`. Your credentials are in the first of those, so clearing them is yours to do by hand. The preview names each declared account home that exists and gives the removal command. The full table of what goes and what stays is in the [maintenance reference](../reference/cli/maintenance.md#uninstall-rimz).
 
+Opt-in [agent hibernation](./configuration.md#agent-hibernation) freezes provider processes and reclaims memory through delegated Linux cgroup controls. These scopes manage resources, not access: another process running as your user can write their freeze and reclaim controls. Hibernation does not add a security boundary to host or sandbox isolation.
+
 ## What can run a command
 
 Inside a workspace, plenty already runs as you: hooks, postinstall scripts, generated binaries, test runners, and the agents themselves. Same-user isolation is no real boundary there, so RimZ does not lean on it. Instead it makes command execution an explicit choice, and three things in your configuration can make that choice for you: a repository's config, which stays inert until you trust it, and your own notification handlers and worktree hooks, which a repository cannot supply.
