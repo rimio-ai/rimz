@@ -159,9 +159,11 @@ Where the provider exposes a verified native restriction, the exec compiler also
 | --- | --- |
 | Claude | merges the profile's disallowed tools into one final `--disallowedTools` occurrence that denies `Agent` |
 | Codex | replaces every `features.multi_agent` override with one final false override |
-| OpenCode | merges `"task":"deny"` into `OPENCODE_PERMISSION`, preserving the profile's other rules |
+| OpenCode | appends `{"action":"subagent","resource":"*","effect":"deny"}` to `OPENCODE_CONFIG_CONTENT.permissions`, preserving the configured object and earlier rules |
 | Pi | prompt-only: Pi has no built-in subagents, and disabling all third-party extensions would remove unrelated tools |
 | Other adapters | prompt-only until a native restriction is verified |
+
+OpenCode applies agent-specific permissions after global permissions, so an `agents.<id>.permissions` allow can override this deny. Invalid or non-object config content is replaced with the deny-only permissions object.
 
 The restriction follows the request's `subagent` flag, not the launch generation, so a peer or team member launched with `rimz agents` keeps its normal provider tools.
 

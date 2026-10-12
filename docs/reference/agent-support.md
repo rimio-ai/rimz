@@ -168,6 +168,8 @@ Under `agents.isolation = "sandbox"` (Linux), RimZ binds each agent's config hom
 
 RimZ launches each agent with the provider's own flags. A typed profile field or `rimz agents` flag that an agent cannot express fails the launch before any pane opens, with an error that the agent "does not support profile field" and names the field. Raw profile `args` pass any other provider flag through unchanged, as do CLI arguments after `--`. The one exception is Codex `--remote X` or `--remote=X`, from either source, which is refused because managed panes run embedded with `--no-daemon`; remove `--remote` to launch. Codex requires 0.156.0 or newer for that flag on every launch, resume and fork. RimZ checks the resolved launch binary before opening a pane where possible, otherwise in the exec wrapper; an unreadable version passes without a verdict.
 
+OpenCode requires 2.0.0 or newer and runs with `--standalone` on every launch and resume. Launch, setup/install, and doctor refuse an older readable version with `opencode upgrade --major`; an unreadable version passes without a verdict. Fork and model presets are unsupported. Plan adds no arguments; select the plan agent interactively with Shift+Tab. The plan-approval gate in the wiring matrix still works for those interactive turns.
+
 ### Permission modes
 
 A permission mode comes from the `mode` profile field, the `--ask` and `--yolo` flags, or a `<kind>-<mode>` cell such as `claude-plan`. RimZ appends the arguments below. `none` means the mode adds no arguments, so the agent keeps its own default; for Auto and Yolo, the `<kind>-auto` and `<kind>-yolo` cells do not exist ([permission-mode cells](./cli/agents.md#permission-mode-cells)).
@@ -177,7 +179,7 @@ A permission mode comes from the `mode` profile field, the `--ask` and `--yolo` 
 | Claude Code | none | `--permission-mode auto` | `--permission-mode plan` | `--dangerously-skip-permissions` |
 | Codex | none | `--ask-for-approval never --sandbox workspace-write` | none | `--dangerously-bypass-approvals-and-sandbox` |
 | Pi | none | none | none | none |
-| OpenCode | none | none | `--agent plan` | `--auto` |
+| OpenCode | none | none | none | `--auto` |
 | Antigravity | none | `--mode accept-edits` | `--mode plan` | `--dangerously-skip-permissions` |
 | Copilot | none | `--autopilot` | `--plan` | `--allow-all` |
 | Droid | none | `--auto medium` | `--use-spec` | none |
@@ -217,7 +219,7 @@ Grok Plan adds no arguments because Grok's `/plan` is an interactive command, an
 | Claude Code | `--model <model>` | `--effort <level>` |
 | Codex | `--model <model>` | `-c model_reasoning_effort=<level>` |
 | Pi | `--model <model>` | `--thinking <level>` |
-| OpenCode | `--model <model>` | refused |
+| OpenCode | refused | refused |
 | Antigravity | `--model <model>` | refused |
 | Copilot | `--model <model>` | `--effort <level>` |
 | Droid | refused | refused |

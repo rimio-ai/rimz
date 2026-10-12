@@ -1,18 +1,19 @@
-//! OpenCode hook adapter.
+//! OpenCode 2 hook adapter.
 //!
-//! OpenCode loads TypeScript plugins in-process. RimZ ships one plugin
-//! (`plugin.ts`) that reads session and model context through the in-process
-//! client, then shells out to
+//! RimZ launches OpenCode with `--standalone`. Its private serve child loads
+//! `plugin.ts` through `{ id, setup }`; the plugin reads session and model
+//! context through the v2 context API, stamps its parent PID as the pane TUI,
+//! then shells out to
 //! `rimz hooks feed --source opencode`, posts a RimZ-owned snake_case payload
 //! on stdin. Current permission and question prompts arrive through
-//! `permission.asked` and `question.asked` bus events, and the plugin never
+//! `permission.asked` and `form.created` events, and the plugin never
 //! reads RimZ's stdout. Native reply bus events record
 //! answers and clear waiting after the user responds in OpenCode's own TUI.
 //! A root `session_idle` after a plan-agent turn derives a native plan-approval
 //! wait that the next prompt clears after the user switches modes in the TUI.
 //! `/new` registers a fresh root inside the same live process; follow-latest
 //! succession hands pane and card ownership to the new conversation.
-//! `session.deleted` and the server-scoped `dispose` sweep normalize to one
+//! `session.deleted` and the activation cleanup sweep normalize to one
 //! per-session `session_ended` event, with pane liveness as the crash backstop.
 
 mod account;
