@@ -12,7 +12,7 @@ pub(crate) const AF_UNIX_PATH_LIMIT: usize = 104;
 #[cfg(not(target_os = "macos"))]
 pub(crate) const AF_UNIX_PATH_LIMIT: usize = 108;
 
-const LONGEST_SOCKET_FILENAME: &str = "sidebar.123456789012.sock";
+const LONGEST_SOCKET_FILENAME: &str = "host.123456789012.wake.sock";
 pub const XDG_REMEDY: &str = "export XDG_RUNTIME_DIR=/tmp/rimz-$(id -u)";
 
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -809,13 +809,6 @@ impl RuntimePaths {
             .join(format!("sidebar.{}.json", instance_id.as_str()))
     }
 
-    /// Wakeup socket owned by one sidebar attachment in the room host.
-    pub(crate) fn sidebar_socket_path(&self, instance_id: &SidebarInstanceId) -> PathBuf {
-        // The short id keeps the bound path inside the platform AF_UNIX budget.
-        self.sock_dir
-            .join(format!("sidebar.{}.sock", instance_id.short()))
-    }
-
     /// Attach socket of the room host that paints one session's sidebar panes.
     pub(crate) fn sidebar_host_socket_path(&self, mux: MuxName, session_name: &str) -> PathBuf {
         // A digest keeps the bound path inside the platform AF_UNIX budget

@@ -111,6 +111,13 @@ impl<'a> Pane<'a> {
     fn accept(&mut self, build: Option<String>) -> (UnixStream, Value) {
         let (stream, hello) = self.connection();
         write_line(&stream, &serde_json::json!({"accept": {"build": build}})).unwrap();
+        stream.set_read_timeout(Some(WAIT)).unwrap();
+        let mut word = String::new();
+        let read = std::io::BufReader::new(&stream).read_line(&mut word);
+        assert!(
+            read.is_ok() && word == "resize\n",
+            "accept must be followed by resize, got {read:?} {word:?}"
+        );
         (stream, hello)
     }
 
@@ -173,24 +180,11 @@ impl<'a> Pane<'a> {
     fn seed_runtime(&self) {
         let runtime = self.env.runtime_paths();
         std::fs::write(runtime.sidebar_heartbeat_path(&self.instance), b"heartbeat").unwrap();
-        std::fs::write(
-            runtime
-                .sock_dir
-                .join(format!("sidebar.{}.sock", self.instance.short())),
-            b"socket",
-        )
-        .unwrap();
     }
 
     fn assert_runtime_removed(&self) {
         let runtime = self.env.runtime_paths();
         assert!(!runtime.sidebar_heartbeat_path(&self.instance).exists());
-        assert!(
-            !runtime
-                .sock_dir
-                .join(format!("sidebar.{}.sock", self.instance.short()))
-                .exists()
-        );
     }
 
     fn finish(&mut self) -> ExitStatus {

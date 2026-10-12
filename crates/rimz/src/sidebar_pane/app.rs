@@ -181,7 +181,7 @@ fn produce_panic_diagnostic_suppressed() -> bool {
 #[cfg(test)]
 pub(crate) static PANIC_HOOK_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-/// Removes a per-instance runtime file (wakeup socket, heartbeat)
+/// Removes a per-instance heartbeat
 /// when the sidebar exits, so a later `rimz` launch sees an honest "no sidebar
 /// here" and rebirths one rather than trusting a stale artifact.
 struct RuntimeFileGuard {

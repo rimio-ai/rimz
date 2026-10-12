@@ -331,14 +331,9 @@ fn attach_to_host(
     .map_err(|error| AttachFailure::StartFailed { error, log })?
     .ok_or(AttachFailure::NoAnswer)?;
     let hello = host_link::hello_for(config, supervisor_build, baseline_pane);
+    let input = stream.try_clone().map_err(|_| AttachFailure::Lost)?;
     let link = HostLink::open(stream, &hello, stdout.as_fd(), host_link::REPLY_WAIT)?;
-    let wake_path = runtime.sidebar_socket_path(&config.instance_id);
-    // The host sized the pane from its fd at the hello; a resize that raced
-    // the handover is settled by one more look.
-    if let Ok(waker) = std::os::unix::net::UnixDatagram::unbound() {
-        let _ = waker.send_to(b"resize", &wake_path);
-    }
-    let forwarder = EventForwarder::start(wake_path);
+    let forwarder = EventForwarder::start(input);
     Ok(Attached { link, forwarder })
 }
 
@@ -1024,16 +1019,12 @@ fn remove_orphan_runtime_files(config: &ServeConfig) {
             return;
         }
     };
-    for path in [
-        runtime.sidebar_heartbeat_path(&config.instance_id),
-        runtime.sidebar_socket_path(&config.instance_id),
-    ] {
-        match std::fs::remove_file(&path) {
-            Ok(()) => {}
-            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
-            Err(err) => {
-                debug!(path = %path.display(), error = %err, "sidebar supervisor orphan runtime cleanup failed");
-            }
+    let path = runtime.sidebar_heartbeat_path(&config.instance_id);
+    match std::fs::remove_file(&path) {
+        Ok(()) => {}
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+        Err(err) => {
+            debug!(path = %path.display(), error = %err, "sidebar supervisor orphan runtime cleanup failed");
         }
     }
 }

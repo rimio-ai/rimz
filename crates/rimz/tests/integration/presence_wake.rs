@@ -448,11 +448,11 @@ fn wake_panes_changed_broadcasts_topology_nudge_and_stamps() {
         crate::common::skip(crate::common::AF_UNIX_SANDBOXED);
         return;
     }
-    let recv_eldest = env.bind_socket("sidebar.eldest.sock");
-    let recv_younger = env.bind_socket("sidebar.younger.sock");
+    let recv_eldest = env.bind_socket("event.eldest.sock");
+    let recv_younger = env.bind_socket("event.younger.sock");
     // Plant younger first so the eldest pick is the id order, never file order.
-    env.plant_heartbeat("sidebar.younger.json", YOUNGER_ID, "sidebar.younger.sock");
-    env.plant_heartbeat("sidebar.eldest.json", ELDEST_ID, "sidebar.eldest.sock");
+    env.plant_heartbeat("sidebar.younger.json", YOUNGER_ID, "event.younger.sock");
+    env.plant_heartbeat("sidebar.eldest.json", ELDEST_ID, "event.eldest.sock");
 
     // The plugin's generic topology poke carries no session or pane id — the
     // identity-free nudge must still reach every fresh sidebar so the producer
@@ -482,8 +482,8 @@ fn wake_pane_opened_and_closed_broadcast_card_events() {
         crate::common::skip(crate::common::AF_UNIX_SANDBOXED);
         return;
     }
-    let recv_eldest = env.bind_socket("sidebar.eldest.sock");
-    env.plant_heartbeat("sidebar.eldest.json", ELDEST_ID, "sidebar.eldest.sock");
+    let recv_eldest = env.bind_socket("event.eldest.sock");
+    env.plant_heartbeat("sidebar.eldest.json", ELDEST_ID, "event.eldest.sock");
 
     let baseline = env.topology_cache(unix_now_ms());
     let baseline_json = serde_json::to_string(&baseline).expect("serialize baseline topology");
@@ -556,8 +556,8 @@ fn wake_switch_settled_classifies_and_broadcasts_focus_repair() {
         crate::common::skip(crate::common::AF_UNIX_SANDBOXED);
         return;
     }
-    let recv = env.bind_socket("sidebar.eldest.sock");
-    env.plant_heartbeat("sidebar.eldest.json", ELDEST_ID, "sidebar.eldest.sock");
+    let recv = env.bind_socket("event.eldest.sock");
+    env.plant_heartbeat("sidebar.eldest.json", ELDEST_ID, "event.eldest.sock");
     let mut topology = env.topology_cache(unix_now_ms());
     topology.focused_pane = Some(6);
     let topology_json = serde_json::to_string(&topology).expect("serialize topology");
@@ -601,8 +601,8 @@ fn wake_alive_stamps_without_a_datagram() {
         crate::common::skip(crate::common::AF_UNIX_SANDBOXED);
         return;
     }
-    let recv_eldest = env.bind_socket("sidebar.eldest.sock");
-    env.plant_heartbeat("sidebar.eldest.json", ELDEST_ID, "sidebar.eldest.sock");
+    let recv_eldest = env.bind_socket("event.eldest.sock");
+    env.plant_heartbeat("sidebar.eldest.json", ELDEST_ID, "event.eldest.sock");
 
     let output = env.wake("alive", true);
     assert!(
@@ -687,8 +687,8 @@ fn stale_topology_writer_rejects_the_whole_poke_and_throttles_diagnostics() {
         crate::common::skip(crate::common::AF_UNIX_SANDBOXED);
         return;
     }
-    let recv = env.bind_socket("sidebar.eldest.sock");
-    env.plant_heartbeat("sidebar.eldest.json", ELDEST_ID, "sidebar.eldest.sock");
+    let recv = env.bind_socket("event.eldest.sock");
+    env.plant_heartbeat("sidebar.eldest.json", ELDEST_ID, "event.eldest.sock");
 
     let accepted = env.topology_cache_with_writer(unix_now_ms(), 2, 200);
     let accepted_json = serde_json::to_string(&accepted).expect("serialize accepted topology");
@@ -817,8 +817,8 @@ fn malformed_topology_is_best_effort_while_wake_stamps_and_broadcasts() {
         crate::common::skip(crate::common::AF_UNIX_SANDBOXED);
         return;
     }
-    let recv = env.bind_socket("sidebar.eldest.sock");
-    env.plant_heartbeat("sidebar.eldest.json", ELDEST_ID, "sidebar.eldest.sock");
+    let recv = env.bind_socket("event.eldest.sock");
+    env.plant_heartbeat("sidebar.eldest.json", ELDEST_ID, "event.eldest.sock");
 
     let output = env.wake_with(
         "panes-changed",
@@ -1116,10 +1116,10 @@ fn wake_command_changed_broadcasts_event_without_patching_pane_frame() {
     }
     let produced_at_ms = unix_now_ms().saturating_sub(5_000);
     env.seed_pane_cache_with_shell("terminal_7", produced_at_ms);
-    let recv_eldest = env.bind_socket("sidebar.eldest.sock");
-    let recv_younger = env.bind_socket("sidebar.younger.sock");
-    env.plant_heartbeat("sidebar.eldest.json", ELDEST_ID, "sidebar.eldest.sock");
-    env.plant_heartbeat("sidebar.younger.json", YOUNGER_ID, "sidebar.younger.sock");
+    let recv_eldest = env.bind_socket("event.eldest.sock");
+    let recv_younger = env.bind_socket("event.younger.sock");
+    env.plant_heartbeat("sidebar.eldest.json", ELDEST_ID, "event.eldest.sock");
+    env.plant_heartbeat("sidebar.younger.json", YOUNGER_ID, "event.younger.sock");
 
     let baseline = env.topology_cache(unix_now_ms());
     let baseline_json = serde_json::to_string(&baseline).expect("serialize baseline topology");
@@ -1197,8 +1197,8 @@ fn wake_command_changed_treats_agents_launch_as_nudge_and_strips_topology_comman
         .expect("fixture working pane exists")
         .pane_command = Some(launch.to_owned());
     let topology_json = serde_json::to_string(&topology).expect("serialize topology");
-    let recv = env.bind_socket("sidebar.eldest.sock");
-    env.plant_heartbeat("sidebar.eldest.json", ELDEST_ID, "sidebar.eldest.sock");
+    let recv = env.bind_socket("event.eldest.sock");
+    env.plant_heartbeat("sidebar.eldest.json", ELDEST_ID, "event.eldest.sock");
 
     let output = env.wake_with(
         "command-changed",

@@ -45,8 +45,8 @@ fn sidebar_redraws_at_new_size_on_resize() {
     let bin = crate::common::cargo_bin("rimz", env!("CARGO_BIN_EXE_rimz"));
     assert!(bin.exists(), "rimz binary missing: {}", bin.display());
 
-    // One short XDG root keeps the per-instance wakeup socket path under the
-    // 108-byte AF_UNIX limit (workspace id + 35-char instance id + dirs).
+    // One short XDG root keeps the runtime socket paths under the 108-byte
+    // AF_UNIX limit.
     let xdg = tempfile::Builder::new()
         .prefix("rz")
         .rand_bytes(6)

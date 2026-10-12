@@ -1661,7 +1661,7 @@ fn doctor_reports_cross_backend_room_conflicts_and_duplicate_groups() {
             SidebarInstanceId::new(),
             mux,
             &session,
-            runtime.sock_dir.join(format!("sidebar.{name}.sock")),
+            runtime.sock_dir.join(format!("event.{name}.sock")),
             Some(PaneId::parse(pane).expect("pane id")),
         );
         rimz::disk::atomic::write_temp_then_rename(
@@ -1845,7 +1845,7 @@ fn doctor_json_reports_protocol_version_mismatches() {
         SidebarInstanceId::new(),
         MuxName::Tmux,
         "rimz-test",
-        rt.sock_dir.join("sidebar.old.sock"),
+        rt.sock_dir.join("event.old.sock"),
         None,
     );
     sidebar.protocol_version = "rimz.plugin.v0".to_owned();
@@ -1896,7 +1896,7 @@ fn doctor_reports_mixed_build_writers() {
             SidebarInstanceId::new(),
             MuxName::Tmux,
             "rimz-test",
-            rt.sock_dir.join(format!("sidebar.{name}.sock")),
+            rt.sock_dir.join(format!("event.{name}.sock")),
             Some(PaneId::from_parts(MuxName::Tmux, pane)),
         );
         sidebar.build = Some(build.to_owned());

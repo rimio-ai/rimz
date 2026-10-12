@@ -136,7 +136,7 @@ fn reload_signals_fresh_sidebars_and_skips_stale() {
         return;
     }
 
-    let fresh_sock = runtime.sock_dir.join("sidebar.fresh.sock");
+    let fresh_sock = runtime.sock_dir.join("event.fresh.sock");
     let recv = UnixDatagram::bind(&fresh_sock).expect("bind fresh sock");
     write_heartbeat(
         &runtime,
@@ -166,7 +166,7 @@ fn reload_signals_fresh_sidebars_and_skips_stale() {
 
     // A heartbeat whose `last_seen` is well past the TTL must be skipped even
     // though its socket is bound and listening.
-    let stale_sock = runtime.sock_dir.join("sidebar.stale.sock");
+    let stale_sock = runtime.sock_dir.join("event.stale.sock");
     let stale_recv = UnixDatagram::bind(&stale_sock).expect("bind stale sock");
     let mut stale = SidebarHeartbeat::new(
         workspace_id.clone(),

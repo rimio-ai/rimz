@@ -132,9 +132,9 @@ fn bind_wakeup_receivers(
     std::os::unix::net::UnixDatagram,
     std::os::unix::net::UnixDatagram,
 ) {
-    let sock_a = runtime.sock_dir.join("sidebar.a.sock");
+    let sock_a = runtime.sock_dir.join("event.a.sock");
     let recv_a = bind_receiver(&sock_a, "sock_a");
-    let sock_b = runtime.sock_dir.join("sidebar.b.sock");
+    let sock_b = runtime.sock_dir.join("event.b.sock");
     let recv_b = bind_receiver(&sock_b, "sock_b");
     write_sidebar_heartbeat(runtime, "sidebar.a.json", workspace_id, sock_a);
     write_sidebar_heartbeat(runtime, "sidebar.b.json", workspace_id, sock_b);

@@ -1,11 +1,11 @@
 //! The room host: one detached process that paints every sidebar pane of a mux session.
 //!
-//! Each pane's supervisor keeps the pane's tty, holding its modes and reading its input, and hands the host only the pane's output fd over the attach wire (`attach.rs`). The host runs one attachment per pane on its own thread over one shared data plane, so a room's tabs cost one fold between them. It holds no terminal: geometry comes from each fd. One room socket receives external events; the host filters their scope and routes them to bounded attachment channels.
+//! Each pane's supervisor keeps the pane's tty, holding its modes and reading its input, and hands the host the pane's output fd over the attach wire (`attach.rs`), then forwards input words on that stream. The host runs one attachment per pane on its own thread over one shared data plane, so a room's tabs cost one fold between them. It holds no terminal: geometry comes from each fd. One room socket receives external events; the host filters their scope and routes them to bounded attachment channels.
 //!
 //! The host lives as long as panes are attached. It leaves when none has been for a grace period, and when the room records a build other than its own, after telling every supervisor to attach again.
 
 use std::collections::BTreeMap;
-use std::io;
+use std::io::{self, BufRead, BufReader, ErrorKind};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixDatagram, UnixListener, UnixStream};
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -216,6 +216,27 @@ impl Host {
         })
     }
 
+    fn receive_room(self: &Arc<Self>, wake: UnixDatagram) {
+        let receiver = self.clone();
+        std::thread::spawn(move || {
+            let mut bytes = [0; 16 * 1024];
+            while !receiver.draining.load(Ordering::SeqCst) {
+                match wake.recv(&mut bytes) {
+                    Ok(len) => receiver.room_wakeup(&bytes[..len]),
+                    Err(err)
+                        if matches!(
+                            err.kind(),
+                            ErrorKind::WouldBlock | ErrorKind::TimedOut | ErrorKind::Interrupted
+                        ) => {}
+                    Err(err) => {
+                        debug!(error = %err, "sidebar host room receive failed");
+                        break;
+                    }
+                }
+            }
+        });
+    }
+
     /// Accept panes until the host has reason to leave: no pane for the
     /// grace, or `recorded_build` naming a build other than this one.
     fn serve(
@@ -227,26 +248,7 @@ impl Host {
         let Some(inbox) = lock(&self.inbox).take() else {
             return;
         };
-        let receiver = self.clone();
-        std::thread::spawn(move || {
-            let mut bytes = [0; 16 * 1024];
-            while !receiver.draining.load(Ordering::SeqCst) {
-                match wake.recv(&mut bytes) {
-                    Ok(len) => receiver.room_wakeup(&bytes[..len]),
-                    Err(err)
-                        if matches!(
-                            err.kind(),
-                            io::ErrorKind::WouldBlock
-                                | io::ErrorKind::TimedOut
-                                | io::ErrorKind::Interrupted
-                        ) => {}
-                    Err(err) => {
-                        debug!(error = %err, "sidebar host room receive failed");
-                        break;
-                    }
-                }
-            }
-        });
+        self.receive_room(wake);
         let acceptor = self.clone();
         std::thread::spawn(move || {
             for stream in listener.incoming() {
@@ -413,7 +415,7 @@ impl Host {
                 return;
             }
         };
-        watch_for_detach(&stream, live.close.clone());
+        read_input(&stream, live.close.clone());
 
         // One pane's panic closes that pane: its runtime files go as its frame loop unwinds, and its supervisor shows a notice and reattaches.
         let events = self.events.clone();
@@ -571,16 +573,19 @@ impl Host {
     }
 }
 
-/// The supervisor sends nothing after its hello, so the stream only ever
-/// reads its end: the supervisor closed, or died. Either way the pane is no
-/// longer this host's to paint.
-fn watch_for_detach(stream: &UnixStream, close: CloseHandle) {
-    let Ok(mut stream) = stream.try_clone() else {
+/// Input words share the attach stream; EOF still releases the pane.
+fn read_input(stream: &UnixStream, close: CloseHandle) {
+    let Ok(stream) = stream.try_clone() else {
         return;
     };
     std::thread::spawn(move || {
-        let mut sink = [0u8; 64];
-        while matches!(io::Read::read(&mut stream, &mut sink), Ok(read) if read > 0) {}
+        for line in BufReader::new(stream).lines() {
+            let Ok(line) = line else { break };
+            let wake = decode_wakeup(line.as_bytes());
+            if !matches!(wake, Wakeup::Tick | Wakeup::Event(_)) && close.wake.send(wake).is_err() {
+                break;
+            }
+        }
         close.close();
     });
 }

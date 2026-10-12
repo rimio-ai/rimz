@@ -1,6 +1,6 @@
-//! Wire of the pane-to-host attach: a supervisor hands its pane's output to the room host over a stream socket and then only listens.
+//! Wire of the pane-to-host attach: a supervisor hands its pane's output to the room host over a stream socket, then forwards input words on it.
 //!
-//! One connection is one pane. The supervisor sends a hello line with the pane's output fd riding the same message, the host answers accept or reject, and from there the host alone writes, one control line at a time. End of stream from either side detaches the pane. The contract lives in `docs/internals/sidebar/state.md`.
+//! One connection is one pane. The supervisor sends a hello line with the pane's output fd riding the same message and the host answers accept or reject. After acceptance the host writes JSON control lines and the supervisor writes bare input word lines on the attach stream. End of stream from either side detaches the pane. The contract lives in `docs/internals/sidebar/state.md`.
 
 use std::io::{self, BufRead, IoSlice, IoSliceMut, Write};
 use std::mem::MaybeUninit;

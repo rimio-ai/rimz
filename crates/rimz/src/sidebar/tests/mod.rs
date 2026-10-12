@@ -72,7 +72,7 @@ impl Harness {
             "session",
             self.runtime
                 .sock_dir
-                .join(format!("sidebar.{}.sock", id.short())),
+                .join(format!("event.{}.sock", id.short())),
             pane_id,
         );
         heartbeat.build = Some("current".to_owned());
@@ -212,7 +212,7 @@ fn in_process_write_heartbeat_is_fresh_and_round_trips() {
     let h = Harness::new();
     h.ensure_runtime();
     let instance = SidebarInstanceId::new();
-    let socket = h.runtime.sock_dir.join("sidebar.test.sock");
+    let socket = h.runtime.sock_dir.join("event.test.sock");
 
     write_heartbeat(
         &h.runtime,
@@ -308,7 +308,7 @@ fn purge_rebirth_heartbeats_removes_all_heartbeats_only() {
     let live_path = h.write_sidebar_for(&live);
     let stale_path = h.write_sidebar_for(&stale);
     make_stale(&stale_path);
-    let socket = h.runtime.sock_dir.join("sidebar.keep.sock");
+    let socket = h.runtime.sock_dir.join("event.keep.sock");
     let read_marks = h.runtime.read_marks_dir.join("sidebar.keep.json");
     let other = h.runtime.heartbeat_dir.join("unrelated.json");
     std::fs::write(&socket, b"").expect("write socket");
@@ -346,9 +346,9 @@ fn sweep_removes_orphan_socket_keeps_live_and_starting() {
     let live_sock = h
         .runtime
         .sock_dir
-        .join(format!("sidebar.{}.sock", live.short()));
-    let orphan_sock = h.runtime.sock_dir.join("sidebar.ffffffffffff.sock");
-    let starting_sock = h.runtime.sock_dir.join("sidebar.eeeeeeeeeeee.sock");
+        .join(format!("event.{}.sock", live.short()));
+    let orphan_sock = h.runtime.sock_dir.join("event.ffffffffffff.sock");
+    let starting_sock = h.runtime.sock_dir.join("event.eeeeeeeeeeee.sock");
     let _live = std::os::unix::net::UnixDatagram::bind(&live_sock).unwrap();
     let _starting = std::os::unix::net::UnixDatagram::bind(&starting_sock).unwrap();
     drop(std::os::unix::net::UnixDatagram::bind(&orphan_sock).unwrap());
