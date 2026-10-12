@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 
+use rimz::child_process::StderrTail;
 use rimz::remote::forward::{PortAction, PortSync, cancel_spec, open_spec};
 use rimz::remote::link::{
     LinkAck, LinkEvent, LinkMonitor, LinkProbe, SessionLinkAction, SessionLinkState,
@@ -1274,9 +1275,17 @@ impl Drop for MasterAttempt {
 fn drain_stderr(child: &mut Child) -> Option<std::thread::JoinHandle<String>> {
     child.stderr.take().map(|mut stderr| {
         std::thread::spawn(move || {
-            let mut output = String::new();
-            let _ = stderr.read_to_string(&mut output);
-            output
+            let mut tail = StderrTail::default();
+            let mut bytes = [0; 4096];
+            loop {
+                match stderr.read(&mut bytes) {
+                    Ok(0) => break,
+                    Ok(count) => tail.append(&bytes[..count]),
+                    Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                    Err(_) => break,
+                }
+            }
+            tail.text()
         })
     })
 }

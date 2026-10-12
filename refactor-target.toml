@@ -279,7 +279,8 @@ path = "crates/rimz/src/child_process.rs"
 # the unrestored reaping entry serves the wait watcher alone (+2).
 # Same-PID wrapper re-exec adopts its existing provider by pid (+1).
 # The wrapper and worker creation share the native cleanup-signal mask (+3).
-surface-budget = 24
+# LSP and SSH supervisors share the bounded stderr tail and its two methods (+3).
+surface-budget = 27
 
 [[module]]
 path = "crates/rimz/src/cli"
@@ -912,6 +913,8 @@ surface-budget = 3
 [[module]]
 path = "crates/rimz/src/cli/remote/supervisor.rs"
 allowed-dependencies = [
+    # Shared bounded stderr capture for SSH children.
+    "child_process",
     "cli",
     "cli::remote",
     "cli::remote::outage_ui",

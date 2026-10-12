@@ -8,46 +8,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
-const TAIL_BYTES: usize = 8 * 1024;
-
-#[derive(Default)]
-struct StderrTail {
-    bytes: Vec<u8>,
-    cut: bool,
-}
-
-impl StderrTail {
-    fn append(&mut self, bytes: &[u8]) {
-        self.bytes.extend_from_slice(bytes);
-        if self.bytes.len() > TAIL_BYTES {
-            let excess = self.bytes.len() - TAIL_BYTES;
-            self.cut = self.bytes[excess - 1] != b'\n';
-            self.bytes.drain(..excess);
-        }
-    }
-
-    fn text(&self) -> String {
-        let start = if self.cut {
-            self.bytes
-                .iter()
-                .position(|&byte| byte == b'\n')
-                .map_or(self.bytes.len(), |index| index + 1)
-        } else {
-            0
-        };
-        let text = String::from_utf8_lossy(&self.bytes[start..]);
-        if text.len() <= TAIL_BYTES {
-            return text.into_owned();
-        }
-        // Lossy replacement can expand invalid bytes beyond the byte budget.
-        let excess = text.len() - TAIL_BYTES;
-        let start = text.as_bytes()[excess..]
-            .iter()
-            .position(|&byte| byte == b'\n')
-            .map_or(text.len(), |index| excess + index + 1);
-        text[start..].to_owned()
-    }
-}
+use crate::child_process::StderrTail;
 
 pub(crate) struct Server {
     pub(crate) child: Child,
@@ -130,31 +91,5 @@ impl Server {
 impl Drop for Server {
     fn drop(&mut self) {
         self.stop();
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn stderr_tail_keeps_complete_lines_within_eight_kib() {
-        let mut tail = StderrTail::default();
-        tail.append(b"first\n");
-        assert_eq!(tail.text(), "first\n");
-        for _ in 0..2000 {
-            tail.append(b"discarded\n");
-        }
-        tail.append(b"last line\n");
-        let text = tail.text();
-        assert!(text.len() <= 8192);
-        assert!(!text.contains("first"));
-        assert!(text.starts_with("discarded\n"));
-        assert!(text.ends_with("last line\n"));
-        tail.append(&vec![b'x'; 9000]);
-        tail.append(b"end of oversized line\nkept\n");
-        assert_eq!(tail.text(), "kept\n");
-        tail.append(b"invalid: \xff\n");
-        assert_eq!(tail.text(), "kept\ninvalid: \u{fffd}\n");
     }
 }

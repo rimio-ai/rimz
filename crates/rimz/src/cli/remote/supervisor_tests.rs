@@ -3,6 +3,23 @@ use std::time::{Duration, Instant};
 use super::*;
 
 #[test]
+fn stderr_drain_keeps_a_bounded_tail_and_the_final_ssh_line() {
+    let mut child = std::process::Command::new("sh")
+        .args(["-c", "i=0; while [ \"$i\" -lt 12000 ]; do printf 'discarded\\n' >&2; i=$((i + 1)); done; printf 'Killed by signal 2.\\n' >&2"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let drain = drain_stderr(&mut child).unwrap();
+    assert!(child.wait().unwrap().success());
+    let text = drain.join().unwrap();
+    assert!(text.len() <= 8192, "retained {} stderr bytes", text.len());
+    assert!(text.starts_with("discarded\n"));
+    assert!(text.ends_with("Killed by signal 2.\n"));
+}
+
+#[test]
 fn parked_port_forward_notice_reaches_terminal_with_retry() {
     let (title, body) = parked_port_forward_notice(3000);
     assert_eq!(title, "RimZ: port forward skipped");
