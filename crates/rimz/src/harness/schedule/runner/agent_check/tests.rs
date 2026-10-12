@@ -925,6 +925,7 @@ fn headless_compile_maps_artifacts_and_clears_agent_identity_in_both_isolations(
             agents: Err("no room"),
             ambient_env: &ambient,
             agent_shell: None,
+            hibernate: false,
         })
         .unwrap();
         let view = crate::sandbox::TmpView::current(isolation, Some("headless-test"), &state);

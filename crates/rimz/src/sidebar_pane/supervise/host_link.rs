@@ -75,19 +75,26 @@ pub(super) fn spawn_host(
     // A rendered pane's own log sink is off, so the host's log is where a
     // host that was never started says why. A pane waiting for a host asks again
     // on every retry, so each line says when.
-    let mut command = host_command(exe, config, runtime, state).inspect_err(|err| {
-        let _ = writeln!(stderr, "{} {err}", jiff::Timestamp::now());
-    })?;
-    command.stderr(stderr);
-    crate::child_process::spawn_detached_reaped(&mut command, "sidebar-host").map(drop)
+    crate::child_process::spawn_detached_reaped(
+        exe,
+        |command| {
+            configure_host_command(command, config, runtime, state).inspect_err(|err| {
+                let _ = writeln!(stderr, "{} {err}", jiff::Timestamp::now());
+            })?;
+            command.stderr(stderr.try_clone()?);
+            Ok(())
+        },
+        "sidebar-host",
+    )
+    .map(drop)
 }
 
-fn host_command(
-    exe: &Path,
+fn configure_host_command(
+    command: &mut Command,
     config: &ServeConfig,
     runtime: &RuntimePaths,
     state: &StatePaths,
-) -> io::Result<Command> {
+) -> io::Result<()> {
     let record = crate::workspace::record::read(&state.workspace_record).map_err(|err| {
         io::Error::other(format!(
             "sidebar host for workspace {}: {err}",
@@ -105,13 +112,12 @@ fn host_command(
                 ),
             )
         })?;
-    let mut command = crate::child_process::detached_rimz_command(exe.to_path_buf(), runtime);
-    command.args(host_args(config));
+    crate::child_process::anchor_detached_command(command, runtime).args(host_args(config));
     for name in HOST_PANE_ENV_REMOVALS {
         command.env_remove(name);
     }
     command.envs(crate::workspace::pin_env(&config.workspace_id, &root));
-    Ok(command)
+    Ok(())
 }
 
 /// Connect to the session's host, starting one when none answers. Every pane

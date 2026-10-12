@@ -217,6 +217,7 @@ pub(crate) fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
     refuse_legacy_only_home()?;
     let machine = crate::cli::machine_config();
     rimz::sandbox::preflight(machine.agents.isolation)?;
+    rimz::harness::hibernate::preflight(&machine.agents.hibernate)?;
     rimz::harness::schedule::throttle::preflight(&machine.r#loop.throttle)?;
     if let Some(shell) = &machine.agents.shell {
         rimz::harness::launch::validate_agent_shell(shell)?;
@@ -806,6 +807,7 @@ fn preflight_recovery(
     if !disposition.recovers() {
         return Ok(());
     }
+    rimz::harness::hibernate::preflight(&machine_config().agents.hibernate)?;
     if plan.preview().requires_sandbox() {
         rimz::sandbox::preflight(rimz::config::Isolation::Sandbox)?;
     }

@@ -454,24 +454,26 @@ fn publish_account_usage_windows(
 }
 
 fn spawn_usage_refresh(runtime: &RuntimePaths, key: &LoginKey, claim_id: Uuid) -> bool {
-    let exe = crate::proc::rimz_exe();
-    let mut cmd = crate::child_process::detached_rimz_command(exe, runtime);
     let request = AccountUsageRefreshRequest {
         workspace_id: runtime.workspace_id.clone(),
         login: key.clone(),
         claim_id,
     };
-    cmd.args(crate::child_process::agent_helper_argv(
-        "refresh-usage",
-        &request,
-    ));
+    let argv = crate::child_process::agent_helper_argv("refresh-usage", &request);
     tracing::info!(
         target: crate::observability::BREADCRUMB_TARGET,
         workspace = %runtime.workspace_id,
         kind = key.kind.as_str(),
         "sidebar: spawning account usage refresh",
     );
-    match crate::child_process::spawn_detached_reaped(&mut cmd, "agents-refresh-usage") {
+    match crate::child_process::spawn_detached_reaped(
+        crate::proc::rimz_exe(),
+        |cmd| {
+            crate::child_process::anchor_detached_command(cmd, runtime).args(&argv);
+            Ok(())
+        },
+        "agents-refresh-usage",
+    ) {
         Ok(_) => true,
         Err(err) => {
             tracing::debug!(

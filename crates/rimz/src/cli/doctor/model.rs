@@ -36,6 +36,7 @@ pub(super) struct DoctorReport {
     pub(super) home: Home,
     pub(super) machine_config: MachineConfigHealth,
     pub(super) sandbox: Sandbox,
+    pub(super) hibernate: rimz::harness::hibernate::PreflightReport,
     pub(super) hooks: Vec<HookRow>,
     pub(super) accounts: Probe<Accounts>,
     pub(super) plugins: Vec<PluginRow>,

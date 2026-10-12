@@ -280,7 +280,8 @@ path = "crates/rimz/src/child_process.rs"
 # Same-PID wrapper re-exec adopts its existing provider by pid (+1).
 # The wrapper and worker creation share the native cleanup-signal mask (+3).
 # LSP and SSH supervisors share the bounded stderr tail and its two methods (+3).
-surface-budget = 27
+# Detached helper callers share the cwd anchor (+1).
+surface-budget = 28
 
 [[module]]
 path = "crates/rimz/src/cli"
@@ -328,7 +329,8 @@ upward-dependencies = [
 # KeepWarm parses the role/profile horizon and the floor for definitions, config edit, harness policy, and `agents validate` (+1).
 # ThrottleConfig::has_limits lets loop show distinguish admission limits from pacing (+1).
 # TaskCheck and AgentCheck share shell-or-agent guards across config, trust, delivery, and CLI (+2).
-surface-budget = 190
+# Machine hibernation policy and its duration validation serve admission (+1 net).
+surface-budget = 191
 
 [[module]]
 path = "crates/rimz/src/daemon_content.rs"
@@ -548,7 +550,8 @@ path = "crates/rimz/src/harness"
 # Active-time ingress shares the captured frame timestamp with lifecycle application (+1).
 # FrameAttempt tells an apply whether a crashed attempt preceded it, so only a redo scans for its own transcript entry (+2).
 # Host readers share the crate-private cached run listing (+1).
-surface-budget = 785
+# Hibernation admission reports and scope naming cross launch and CLI seams (+9).
+surface-budget = 794
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -646,7 +649,8 @@ upward-dependencies = [
 # `memory` is the host and cgroup memory reading that `lsp` and the loop throttle share: module, reading, error, sampler (+4).
 # The calling-thread bounded pump and its kill scope are shared with mux (+2).
 # Headless loop guards use cancellable bounded capture; existing probes keep the non-cancellable wrapper (+1).
-surface-budget = 115
+# Cgroup scope identity, freezer/reclaim operations and meminfo parsing serve hibernation (+14).
+surface-budget = 129
 
 [[module]]
 path = "crates/rimz/src/reload.rs"
@@ -1218,6 +1222,7 @@ allowed-dependencies = [
     "config::effective",
     "disk::atomic",
     "disk::paths",
+    "harness::hibernate",
     "harness::launch",
     "harness::launch_reminders",
     "harness::prompt_compose",

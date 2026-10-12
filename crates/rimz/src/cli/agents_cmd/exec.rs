@@ -1011,7 +1011,11 @@ fn cleanup_worktree_via_ondisk(
     }
 
     if detached {
-        return spawn_detached_worktree_cleanup(command);
+        let args: Vec<_> = command
+            .get_args()
+            .map(std::ffi::OsStr::to_os_string)
+            .collect();
+        return spawn_detached_worktree_cleanup(&bin, &args);
     }
 
     match command.status() {
@@ -1036,23 +1040,31 @@ fn cleanup_worktree_via_ondisk(
 }
 
 #[cfg(unix)]
-fn spawn_detached_worktree_cleanup(mut command: Command) -> Result<()> {
+fn spawn_detached_worktree_cleanup(program: &Path, args: &[std::ffi::OsString]) -> Result<()> {
     use std::os::unix::process::CommandExt;
 
-    command
+    rimz::child_process::spawn_detached_reaped(
+        program,
+        |command| {
+            command.args(args)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         // Keep cleanup outside the pane's foreground process group; null stdio
         // removes the remaining terminal dependency.
         .process_group(0);
-    rimz::child_process::spawn_detached_reaped(&mut command, "worktree-cleanup-detached")
-        .map(|_| ())
-        .context("spawning detached worktree cleanup")
+            Ok(())
+        },
+        "worktree-cleanup-detached",
+    )
+    .map(|_| ())
+    .context("spawning detached worktree cleanup")
 }
 
 #[cfg(not(unix))]
-fn spawn_detached_worktree_cleanup(mut command: Command) -> Result<()> {
+fn spawn_detached_worktree_cleanup(program: &Path, args: &[std::ffi::OsString]) -> Result<()> {
+    let mut command = Command::new(program);
+    command.args(args);
     command
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())

@@ -5,7 +5,6 @@ use std::fs;
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 use jiff::Timestamp;
@@ -1074,21 +1073,29 @@ fn spawn_ttyd_process(
 }
 
 fn spawn_detached(spec: CommandSpec) -> Result<u32> {
-    let mut command = spec.to_command();
-    command
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        command.process_group(0);
-    }
-    crate::child_process::spawn_detached_reaped(&mut command, "ttyd-web").map_err(|source| {
-        WebErr::Io {
-            path: PathBuf::from(&spec.program),
-            source,
-        }
+    crate::child_process::spawn_detached_reaped(
+        &spec.program,
+        |command| {
+            command.args(&spec.args);
+            for key in &spec.env_remove {
+                command.env_remove(key);
+            }
+            command.envs(&spec.env);
+            if let Some(cwd) = &spec.cwd {
+                command.current_dir(cwd);
+            }
+            #[cfg(unix)]
+            {
+                use std::os::unix::process::CommandExt;
+                command.process_group(0);
+            }
+            Ok(())
+        },
+        "ttyd-web",
+    )
+    .map_err(|source| WebErr::Io {
+        path: PathBuf::from(&spec.program),
+        source,
     })
 }
 

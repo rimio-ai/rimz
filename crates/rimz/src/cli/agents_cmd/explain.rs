@@ -238,6 +238,7 @@ pub(super) fn run(args: ExplainArgs, globals: &GlobalFlags) -> Result<()> {
         agents: Ok(snapshot.as_ref().map_or(&[], |snapshot| &snapshot.agents)),
         ambient_env: &ambient_env,
         agent_shell: machine.agents.shell.as_deref(),
+        hibernate: machine.agents.hibernate.enabled,
     })?;
     warnings.extend(plan.warnings.iter().map(ToString::to_string));
     let report = ExplainReport::new(

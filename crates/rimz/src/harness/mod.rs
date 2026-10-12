@@ -10,6 +10,7 @@ pub mod budget;
 pub mod cache_keepalive;
 pub mod deadline;
 pub mod fleet;
+pub mod hibernate;
 pub mod hook_drain;
 pub mod idle_compact;
 pub mod idle_stop;

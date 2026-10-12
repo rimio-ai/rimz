@@ -73,16 +73,19 @@ pub(crate) fn spawn_append(runtime: &RuntimePaths, record: &FocusRepairRecord) {
         tracing::debug!("sidebar: failed to serialize focus-repair diagnostic");
         return;
     };
-    let mut command = crate::child_process::detached_rimz_command(crate::proc::rimz_exe(), runtime);
-    command.args([
-        "sidebar",
-        "record-focus-repair",
-        "--record-json",
-        &record_json,
-    ]);
-    if let Err(err) =
-        crate::child_process::spawn_detached_reaped(&mut command, "focus-repair-diagnostic")
-    {
+    if let Err(err) = crate::child_process::spawn_detached_reaped(
+        crate::proc::rimz_exe(),
+        |command| {
+            crate::child_process::anchor_detached_command(command, runtime).args([
+                "sidebar",
+                "record-focus-repair",
+                "--record-json",
+                &record_json,
+            ]);
+            Ok(())
+        },
+        "focus-repair-diagnostic",
+    ) {
         tracing::debug!(
             workspace = %runtime.workspace_id,
             error = &err as &dyn std::error::Error,

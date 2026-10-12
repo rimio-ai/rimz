@@ -94,6 +94,9 @@ fn collect_report(globals: &GlobalFlags, audit: bool, log_text: mux_log::LogText
         home: collect_home(),
         machine_config: collect_machine_config(),
         sandbox: runtime::collect_sandbox(),
+        hibernate: rimz::harness::hibernate::inspect(
+            &crate::cli::machine_config().agents.hibernate,
+        ),
         hooks: agents::collect_hooks(),
         accounts: agents::collect_accounts(ws),
         plugins: agents::collect_plugins(),

@@ -426,21 +426,18 @@ fn apply_user_temp_env(cmd: &mut Command, saved: Option<&str>, temp_root_keys: O
 /// shared disk usage so a deleted launch CWD cannot ENOENT the spawn.
 pub(crate) fn detached_rimz_command(exe: PathBuf, runtime: &RuntimePaths) -> Command {
     let mut cmd = Command::new(exe);
-    cmd.current_dir(&runtime.shared_root)
+    anchor_detached_command(&mut cmd, runtime)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     cmd
 }
 
-fn detached_rimz_helper_command<I, S>(runtime: &RuntimePaths, args: I) -> Command
-where
-    I: IntoIterator<Item = S>,
-    S: AsRef<OsStr>,
-{
-    let mut cmd = detached_rimz_command(crate::proc::rimz_exe(), runtime);
-    cmd.args(args);
-    cmd
+pub(crate) fn anchor_detached_command<'a>(
+    cmd: &'a mut Command,
+    runtime: &RuntimePaths,
+) -> &'a mut Command {
+    cmd.current_dir(&runtime.shared_root)
 }
 
 /// Render one typed hidden-agent-helper request as a single JSON argv value.
@@ -468,15 +465,25 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
-    let cmd = detached_rimz_helper_command(runtime, args);
+    let args: Vec<_> = args
+        .into_iter()
+        .map(|arg| arg.as_ref().to_os_string())
+        .collect();
     #[cfg(not(test))]
     {
-        let mut cmd = cmd;
-        spawn_detached_reaped(&mut cmd, label).map(drop)
+        spawn_detached_reaped(
+            crate::proc::rimz_exe(),
+            |cmd| {
+                anchor_detached_command(cmd, runtime).args(&args);
+                Ok(())
+            },
+            label,
+        )
+        .map(drop)
     }
     #[cfg(test)]
     {
-        let _ = (cmd, label);
+        let _ = (runtime, args, label);
         Ok(())
     }
 }
@@ -489,33 +496,147 @@ pub(crate) fn spawn_detached_program(
     runtime: &RuntimePaths,
     label: &'static str,
 ) -> io::Result<Option<u32>> {
-    let mut cmd = detached_rimz_command(PathBuf::from(program), runtime);
-    cmd.args(args);
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        cmd.process_group(0);
-    }
     #[cfg(not(test))]
     {
-        spawn_detached_reaped(&mut cmd, label).map(Some)
+        spawn_detached_reaped(
+            program,
+            |cmd| {
+                anchor_detached_command(cmd, runtime).args(args);
+                #[cfg(unix)]
+                {
+                    use std::os::unix::process::CommandExt;
+                    cmd.process_group(0);
+                }
+                Ok(())
+            },
+            label,
+        )
+        .map(Some)
     }
     #[cfg(test)]
     {
-        let _ = (cmd, label);
+        let _ = (program, args, runtime, label);
         Ok(None)
     }
 }
 
-/// Spawn `cmd` detached and hand its `Child` to the global reaper thread so the
+/// Spawn a configured command and hand its `Child` to the global reaper so the
 /// exited helper is `wait()`ed and never lingers as a zombie under a long-lived
-/// parent. Fire-and-forget: callers null stdio and set their own argv/timeouts.
+/// parent. Stdio starts null; `configure` sets arguments, environment and logs.
+/// It may run twice when a scope spawn fails, preserving configuration on retry.
 /// `label` is a static tag for tracing. Returns the spawned pid. The child
 /// gets the user's temp environment ([`restore_user_temp_env`]), since it
 /// outlives the call that starts it.
-pub fn spawn_detached_reaped(cmd: &mut Command, label: &'static str) -> io::Result<u32> {
-    restore_user_temp_env(cmd);
-    spawn_detached_reaped_as_agent(cmd, label)
+pub fn spawn_detached_reaped(
+    program: impl AsRef<OsStr>,
+    configure: impl FnMut(&mut Command) -> io::Result<()>,
+    label: &'static str,
+) -> io::Result<u32> {
+    let prefix = cfg!(target_os = "linux")
+        .then(|| std::fs::read_to_string("/proc/self/cgroup").ok())
+        .flatten()
+        .and_then(|text| helper_scope_argv(&text));
+    spawn_detached_with(program.as_ref(), configure, label, prefix.as_deref())
+}
+
+fn spawn_detached_with(
+    program: &OsStr,
+    mut configure: impl FnMut(&mut Command) -> io::Result<()>,
+    label: &'static str,
+    prefix: Option<&[String]>,
+) -> io::Result<u32> {
+    let mut command = match prefix.and_then(|argv| argv.split_first()) {
+        Some((wrapper, args)) => {
+            let mut command = Command::new(wrapper);
+            command.args(args).arg(program);
+            command
+        }
+        None => Command::new(program),
+    };
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    configure(&mut command)?;
+    restore_user_temp_env(&mut command);
+    let sender = reaper_sender()?;
+    match command.spawn() {
+        Ok(mut child) => {
+            if prefix.is_some()
+                && !wait_for_helper_scope(&mut child).unwrap_or_else(|error| {
+                    tracing::debug!(label, %error, "could not confirm helper scope handoff");
+                    false
+                })
+            {
+                let _ = child.kill();
+                child.wait()?;
+                tracing::debug!(
+                    label,
+                    "helper scope handoff failed; spawning without scope escape"
+                );
+                return spawn_detached_with(program, configure, label, None);
+            }
+            Ok(reap_child(child, sender, label))
+        }
+        Err(error) if prefix.is_some() => {
+            tracing::debug!(label, %error, "helper scope spawn failed; spawning without scope escape");
+            spawn_detached_with(program, configure, label, None)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn wait_for_helper_scope(child: &mut Child) -> io::Result<bool> {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let membership = format!("/proc/{}/cgroup", child.id());
+    loop {
+        if std::fs::read_to_string(&membership).is_ok_and(|text| {
+            text.lines()
+                .filter_map(|line| line.strip_prefix("0::"))
+                .any(|group| {
+                    std::path::Path::new(group)
+                        .file_name()
+                        .and_then(OsStr::to_str)
+                        .is_some_and(|name| {
+                            name.starts_with("rimz-helper-") && name.ends_with(".scope")
+                        })
+                })
+        }) {
+            return Ok(true);
+        }
+        if let Some(status) = child.try_wait()? {
+            return Ok(status.success());
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Ok(false);
+        }
+        std::thread::sleep(remaining.min(WAIT_STEP));
+    }
+}
+
+fn helper_scope_argv(cgroup: &str) -> Option<Vec<String>> {
+    let group = cgroup.lines().find_map(|line| line.strip_prefix("0::"))?;
+    let name = std::path::Path::new(group).file_name()?.to_str()?;
+    if !name.starts_with("rimz-agent-") || !name.ends_with(".scope") {
+        return None;
+    }
+    let mut argv: Vec<_> = [
+        "systemd-run",
+        "--user",
+        "--scope",
+        "--quiet",
+        "--collect",
+        "--unit",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect();
+    argv.extend([
+        format!("rimz-helper-{}.scope", uuid::Uuid::now_v7().simple()),
+        "--".into(),
+    ]);
+    Some(argv)
 }
 
 /// [`spawn_detached_reaped`] without the temp restore, for a child that runs
@@ -526,6 +647,10 @@ pub(crate) fn spawn_detached_reaped_as_agent(
 ) -> io::Result<u32> {
     let sender = reaper_sender()?;
     let child = cmd.spawn()?;
+    Ok(reap_child(child, sender, label))
+}
+
+fn reap_child(child: Child, sender: &Sender<Child>, label: &'static str) -> u32 {
     let pid = child.id();
 
     match sender.send(child) {
@@ -542,7 +667,7 @@ pub(crate) fn spawn_detached_reaped_as_agent(
         }
     }
 
-    Ok(pid)
+    pid
 }
 
 fn reaper_sender() -> io::Result<&'static Sender<Child>> {
@@ -658,7 +783,6 @@ fn log_wait_result(result: io::Result<std::process::ExitStatus>, label: &'static
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
-    use std::process::Stdio;
     use std::time::{Duration, Instant};
 
     const WAIT_TIMEOUT: Duration = Duration::from_secs(3);
@@ -765,7 +889,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let workspace = crate::ids::WorkspaceId::from_project_root(dir.path());
         let runtime = RuntimePaths::under(workspace, dir.path()).unwrap();
-        let cmd = detached_rimz_helper_command(&runtime, ["agents", "auto-continue"]);
+        let mut cmd = Command::new(crate::proc::rimz_exe());
+        anchor_detached_command(&mut cmd, &runtime).args(["agents", "auto-continue"]);
 
         assert_eq!(cmd.get_program(), crate::proc::rimz_exe());
         assert_eq!(cmd.get_current_dir(), Some(runtime.shared_root.as_path()));
@@ -944,12 +1069,101 @@ mod tests {
     }
 
     fn spawn_fast_child(label: &'static str) -> io::Result<u32> {
-        let mut cmd = Command::new("sh");
-        cmd.args(["-c", "exit 0"])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
-        spawn_detached_reaped(&mut cmd, label)
+        spawn_detached_reaped(
+            "sh",
+            |cmd| {
+                cmd.args(["-c", "exit 0"]);
+                Ok(())
+            },
+            label,
+        )
+    }
+
+    #[test]
+    fn helper_scope_nonzero_exit_retries_plain() {
+        let root = tempfile::tempdir().unwrap();
+        let output = root.path().join("ran");
+        let prefix = vec!["sh".into(), "-c".into(), "exit 1".into(), "--".into()];
+        let pid = spawn_detached_with(
+            OsStr::new("sh"),
+            |cmd| {
+                cmd.args(["-c", "printf ran > \"$1\"", "--"]).arg(&output);
+                Ok(())
+            },
+            "helper-exit-fallback-test",
+            Some(&prefix),
+        )
+        .unwrap();
+        wait_until_reaped(pid);
+        assert_eq!(std::fs::read_to_string(output).ok().as_deref(), Some("ran"));
+    }
+
+    #[test]
+    fn helper_scope_spawn_failure_preserves_configuration_on_plain_retry() {
+        let root = tempfile::tempdir().unwrap();
+        let log = std::fs::File::create(root.path().join("helper.log")).unwrap();
+        let prefix = vec![
+            root.path()
+                .join("missing-systemd-run")
+                .display()
+                .to_string(),
+            "--".into(),
+        ];
+        let pid = spawn_detached_with(
+            OsStr::new("sh"),
+            |cmd| {
+                cmd.current_dir(root.path())
+                    .env("RIMZ_TEST_HELPER", "preserved")
+                    .args(["-c", "printf '%s' \"$RIMZ_TEST_HELPER\" >&2; pwd > cwd"])
+                    .stderr(log.try_clone()?);
+                Ok(())
+            },
+            "helper-fallback-test",
+            Some(&prefix),
+        );
+        assert!(pid.is_ok(), "{pid:?}");
+        wait_until_reaped(pid.unwrap());
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("helper.log")).unwrap(),
+            "preserved"
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("cwd"))
+                .unwrap()
+                .trim(),
+            root.path().to_str().unwrap()
+        );
+    }
+
+    #[test]
+    fn detached_helpers_escape_only_agent_scopes() {
+        let prefix = helper_scope_argv(
+            "0::/user.slice/user-1000.slice/user@1000.service/app.slice/rimz-agent-x-y.scope\n",
+        );
+        assert!(prefix.is_some());
+        let prefix = prefix.unwrap();
+        assert_eq!(
+            &prefix[..6],
+            [
+                "systemd-run",
+                "--user",
+                "--scope",
+                "--quiet",
+                "--collect",
+                "--unit"
+            ]
+        );
+        assert!(prefix[6].starts_with("rimz-helper-"));
+        assert!(prefix[6].ends_with(".scope"));
+        assert_eq!(prefix[7], "--");
+        for text in [
+            "0::/app.slice/rimz-helper-z.scope",
+            "0::/session-3.scope",
+            "0::/app.slice/rimz-agent-x.scope/child",
+            "1:memory:/app.slice/rimz-agent-x.scope",
+        ] {
+            assert!(helper_scope_argv(text).is_none());
+        }
     }
 
     fn wake_after(wake: Sender<()>, delay: Duration) {
