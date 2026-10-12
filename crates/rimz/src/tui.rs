@@ -136,7 +136,7 @@ impl<'a> MakeWriter<'a> for TuiLogWriter {
         if captured {
             Box::new(CapturedLogOutput)
         } else {
-            Box::new(io::stderr())
+            Box::new(anstream::AutoStream::auto(io::stderr()))
         }
     }
 }

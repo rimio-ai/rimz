@@ -308,8 +308,9 @@ fn workspace_record_for_session_under(
     record_paths.sort();
     let mut matches = Vec::new();
     for path in record_paths {
-        let record = match record::read(&path) {
-            Ok(record) => record,
+        let record = match record::read_optional(&path) {
+            Ok(Some(record)) => record,
+            Ok(None) => continue,
             Err(err) => {
                 tracing::warn!(path = %path.display(), error = %err, "skipping unreadable workspace record");
                 continue;
