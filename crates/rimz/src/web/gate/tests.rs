@@ -260,7 +260,10 @@ fn idle_client_times_out_without_connecting_upstream() {
             &[],
             "Basic upstream",
             Some(&[]),
-            Duration::from_millis(30),
+            HeadLimits {
+                deadline: Duration::from_millis(30),
+                slot: None,
+            },
         );
     });
     client
@@ -277,6 +280,108 @@ fn idle_client_times_out_without_connecting_upstream() {
         !observed.load(Ordering::SeqCst),
         "idle client must not connect upstream"
     );
+}
+
+#[test]
+fn dripping_client_closes_at_the_whole_head_deadline() {
+    let (mut client, gate_client) = tcp_pair();
+    let gate = std::thread::spawn(move || {
+        relay_authorized(
+            gate_client,
+            || panic!("a head that never completes must not connect upstream"),
+            None,
+            &[],
+            "Basic upstream",
+            Some(&[]),
+            HeadLimits {
+                deadline: Duration::from_millis(100),
+                slot: None,
+            },
+        );
+    });
+    let mut dripper = client.try_clone().expect("clone client");
+    let drip = std::thread::spawn(move || {
+        for byte in b"GET / HTTP/1.1\r\nX-Pad: "
+            .iter()
+            .chain(std::iter::repeat(&b'a'))
+        {
+            if dripper.write_all(&[*byte]).is_err() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    });
+    client
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .expect("timeout");
+    let started = Instant::now();
+    let result = client.read(&mut [0]);
+    let elapsed = started.elapsed();
+    gate.join().expect("gate");
+    client.shutdown(Shutdown::Both).expect("close");
+    drip.join().expect("drip");
+    assert!(
+        matches!(result, Ok(0)),
+        "dripping client must close at the head deadline: {result:?}"
+    );
+    assert!(elapsed < Duration::from_secs(1), "closed after {elapsed:?}");
+}
+
+#[test]
+fn unauthenticated_slots_cap_until_released() {
+    let slots = UnauthenticatedSlots::new(2);
+    let first = slots.acquire().expect("first slot");
+    let _second = slots.acquire().expect("second slot");
+    assert!(slots.acquire().is_none(), "a third peer is refused");
+    drop(first);
+    assert!(slots.acquire().is_some(), "a released slot is reusable");
+}
+
+#[test]
+fn authorized_request_releases_its_unauthenticated_slot() {
+    let slots = UnauthenticatedSlots::new(1);
+    let tokens = [WebCredential {
+        username: "alice".to_owned(),
+        secret: "secret".to_owned(),
+    }];
+    let (mut client, gate_client) = tcp_pair();
+    let (gate_upstream, mut upstream) = tcp_pair();
+    let slot = slots.acquire().expect("slot");
+    let gate = std::thread::spawn(move || {
+        let mut gate_upstream = Some(gate_upstream);
+        relay_authorized(
+            gate_client,
+            || {
+                gate_upstream
+                    .take()
+                    .ok_or(io::ErrorKind::NotConnected.into())
+            },
+            None,
+            &[],
+            "Basic upstream",
+            Some(&tokens),
+            HeadLimits {
+                deadline: Duration::from_secs(30),
+                slot: Some(slot),
+            },
+        );
+    });
+    client
+        .write_all(b"GET / HTTP/1.1\r\nAuthorization: Basic YWxpY2U6c2VjcmV0\r\n\r\n")
+        .expect("write request");
+    let mut reader = BufReader::new(upstream.try_clone().expect("clone upstream"));
+    read_request_head(&mut reader)
+        .expect("read forwarded head")
+        .expect("forwarded head");
+    assert!(
+        slots.acquire().is_some(),
+        "an authorized connection frees its slot while it stays open"
+    );
+    upstream
+        .write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n")
+        .expect("write response");
+    client.shutdown(Shutdown::Both).expect("close client");
+    gate.join().expect("gate");
 }
 
 #[test]
@@ -297,7 +402,10 @@ fn unauthorized_client_does_not_connect_upstream() {
             &[],
             "Basic upstream",
             Some(&[]),
-            Duration::from_millis(30),
+            HeadLimits {
+                deadline: Duration::from_millis(30),
+                slot: None,
+            },
         );
     });
     client
@@ -326,7 +434,10 @@ fn missing_trusted_header_returns_unauthorized() {
             &auth.allowed_users,
             &auth.authorization,
             None,
-            Duration::from_secs(30),
+            HeadLimits {
+                deadline: Duration::from_secs(30),
+                slot: None,
+            },
         );
     });
     client
@@ -357,7 +468,10 @@ fn keep_alive_requests_are_each_rewritten() {
             &auth.allowed_users,
             &auth.authorization,
             None,
-            Duration::from_secs(30),
+            HeadLimits {
+                deadline: Duration::from_secs(30),
+                slot: None,
+            },
         );
     });
     let upstream_thread = std::thread::spawn(move || {
@@ -409,7 +523,10 @@ fn tunnel_relay_rewrites_each_keep_alive_request() {
             &[],
             &auth().authorization,
             None,
-            Duration::from_secs(30),
+            HeadLimits {
+                deadline: Duration::from_secs(30),
+                slot: None,
+            },
         );
     });
     let upstream_thread = std::thread::spawn(move || {
@@ -452,7 +569,10 @@ fn rejected_websocket_upgrade_keeps_rewriting_requests() {
             &auth.allowed_users,
             &auth.authorization,
             None,
-            Duration::from_secs(30),
+            HeadLimits {
+                deadline: Duration::from_secs(30),
+                slot: None,
+            },
         );
     });
     let upstream_thread = std::thread::spawn(move || {
@@ -514,7 +634,10 @@ fn safari_websocket_without_authorization_is_injected_and_spliced() {
             &[],
             &auth().authorization,
             None,
-            Duration::from_secs(30),
+            HeadLimits {
+                deadline: Duration::from_secs(30),
+                slot: None,
+            },
         );
     });
     let upstream_thread = std::thread::spawn(move || {

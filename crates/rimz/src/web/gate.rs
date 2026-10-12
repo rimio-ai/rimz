@@ -2,8 +2,9 @@
 
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::{IpAddr, Shutdown, SocketAddr, TcpListener, TcpStream};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 
@@ -13,6 +14,8 @@ const MAX_REQUEST_HEAD: usize = 64 * 1024;
 const MAX_HEADERS: usize = 128;
 const MAX_CHUNK_LINE: usize = 8 * 1024;
 const UPSTREAM_CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
+const HEAD_DEADLINE: Duration = Duration::from_secs(30);
+const MAX_UNAUTHENTICATED: usize = 64;
 const UNAUTHORIZED: &[u8] =
     b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
 const BASIC_UNAUTHORIZED: &[u8] = b"HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Basic realm=\"RimZ\"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
@@ -176,6 +179,7 @@ pub(super) fn serve(
         action: "binding its listener",
         source,
     })?;
+    let unauthenticated = UnauthenticatedSlots::new(MAX_UNAUTHENTICATED);
     loop {
         let (client, peer) = match listener.accept() {
             Ok(connection) => connection,
@@ -190,6 +194,9 @@ pub(super) fn serve(
         if !public_peer_allowed(peer.ip(), &allow, auth.is_some()) {
             continue;
         }
+        let Some(slot) = unauthenticated.acquire() else {
+            continue;
+        };
         if let Some(auth) = auth.clone() {
             let _ = std::thread::Builder::new().spawn(move || {
                 relay_authorized(
@@ -199,7 +206,10 @@ pub(super) fn serve(
                     &auth.allowed_users,
                     &auth.authorization,
                     None,
-                    Duration::from_secs(30),
+                    HeadLimits {
+                        deadline: HEAD_DEADLINE,
+                        slot: Some(slot),
+                    },
                 );
             });
         } else {
@@ -213,7 +223,10 @@ pub(super) fn serve(
                     &[],
                     &authorization,
                     Some(&tokens),
-                    Duration::from_secs(30),
+                    HeadLimits {
+                        deadline: HEAD_DEADLINE,
+                        slot: Some(slot),
+                    },
                 );
             });
         }
@@ -221,6 +234,7 @@ pub(super) fn serve(
 }
 
 pub(super) fn serve_tunnel(listener: TcpListener, target: Arc<Mutex<RelayTarget>>) -> Result<()> {
+    let unauthenticated = UnauthenticatedSlots::new(MAX_UNAUTHENTICATED);
     loop {
         let (client, peer) = match listener.accept() {
             Ok(connection) => connection,
@@ -235,6 +249,9 @@ pub(super) fn serve_tunnel(listener: TcpListener, target: Arc<Mutex<RelayTarget>
         if !peer_allowed(peer.ip(), &[]) {
             continue;
         }
+        let Some(slot) = unauthenticated.acquire() else {
+            continue;
+        };
         let target = target
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -247,9 +264,46 @@ pub(super) fn serve_tunnel(listener: TcpListener, target: Arc<Mutex<RelayTarget>
                 &[],
                 &target.authorization,
                 None,
-                Duration::from_secs(30),
+                HeadLimits {
+                    deadline: HEAD_DEADLINE,
+                    slot: Some(slot),
+                },
             );
         });
+    }
+}
+
+/// Bounds the connections that have not yet sent an authorized request head,
+/// so peers that never authenticate cannot pin unbounded gate threads.
+struct UnauthenticatedSlots(Arc<AtomicUsize>, usize);
+
+impl UnauthenticatedSlots {
+    fn new(limit: usize) -> Self {
+        Self(Arc::new(AtomicUsize::new(0)), limit)
+    }
+
+    fn acquire(&self) -> Option<UnauthenticatedSlot> {
+        self.0
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |held| {
+                (held < self.1).then_some(held + 1)
+            })
+            .ok()
+            .map(|_| UnauthenticatedSlot(self.0.clone()))
+    }
+}
+
+struct UnauthenticatedSlot(Arc<AtomicUsize>);
+
+/// How long each request head may take, and the unauthenticated slot the
+/// connection holds until its first request is authorized.
+struct HeadLimits {
+    deadline: Duration,
+    slot: Option<UnauthenticatedSlot>,
+}
+
+impl Drop for UnauthenticatedSlot {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
     }
 }
 
@@ -272,7 +326,7 @@ fn relay_authorized(
     allowed_users: &[String],
     authorization: &str,
     tokens: Option<&[WebCredential]>,
-    head_timeout: Duration,
+    mut limits: HeadLimits,
 ) {
     let _ = client.set_nodelay(true);
     let Ok(client_read) = client.try_clone() else {
@@ -282,10 +336,14 @@ fn relay_authorized(
     let mut connection = None;
 
     loop {
-        if client.set_read_timeout(Some(head_timeout)).is_err() {
-            break;
-        }
-        let action = match read_request_head(&mut client_read) {
+        let deadline = Instant::now() + limits.deadline;
+        let action = match read_head_until(&mut client_read, || {
+            let remaining = deadline
+                .checked_duration_since(Instant::now())
+                .filter(|remaining| !remaining.is_zero())
+                .ok_or(io::ErrorKind::TimedOut)?;
+            client.set_read_timeout(Some(remaining))
+        }) {
             Ok(Some(head)) => {
                 rewrite_request_head(&head, required_header, allowed_users, authorization, tokens)
             }
@@ -312,6 +370,7 @@ fn relay_authorized(
             }
             break;
         };
+        drop(limits.slot.take());
         let Ok((upstream, upstream_read)) = connection.get_or_insert_with(|| {
             let upstream = connect_upstream()?;
             let _ = upstream.set_nodelay(true);
@@ -543,8 +602,18 @@ fn splice_buffered(
 }
 
 fn read_request_head(reader: &mut impl BufRead) -> io::Result<Option<Vec<u8>>> {
+    read_head_until(reader, || Ok(()))
+}
+
+/// Read one head, calling `before_fill` before each buffer refill so a caller
+/// can bound the whole head rather than each socket read.
+fn read_head_until(
+    reader: &mut impl BufRead,
+    mut before_fill: impl FnMut() -> io::Result<()>,
+) -> io::Result<Option<Vec<u8>>> {
     let mut head = Vec::new();
     loop {
+        before_fill()?;
         let available = reader.fill_buf()?;
         if available.is_empty() {
             return Ok((!head.is_empty()).then_some(head));
