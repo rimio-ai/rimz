@@ -488,6 +488,8 @@ A held room draws cell bars, never pixel meters or pixel pets, because no kitty-
 
 Start the room with `env -u NO_COLOR`: with `NO_COLOR` set, pets and meters are suppressed by design. Zellij renders pets and meters on the cell tier only, so pixel checks are tmux-only.
 
+A held room shows no pet until one is configured. To check pixel pets, turn one on in the room's theme file, `$ROOT/home/.rimz/theme.toml`, under its `[theme.pets]` table (pets are a theme setting, so a `[pets]` table in `config.toml` does nothing): set `enabled = true`, `glyphs = "pixel"`, and `pet` to the path of a local 1536x1872 PNG sheet, which avoids a network fetch. The running sidebar picks the change up within a few seconds.
+
 Take `ROOT` and the session from your card (`Mux: tmux  Session: room-e5ac`). The machine usually has no `xterm-kitty` terminfo, so alias one from `xterm-256color` under the room's tmp. Then detach the room's rendering client (control-mode `1` lines are RimZ's own link; leave them), and attach a `script`-recorded client for 30 seconds, long enough for the sidebar's 10-second caps refresh to see it:
 
 ```sh
