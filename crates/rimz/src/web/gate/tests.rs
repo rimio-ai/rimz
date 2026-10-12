@@ -322,7 +322,7 @@ fn dripping_client_closes_at_the_whole_head_deadline() {
     // A reset is the gate closing with an unread drip byte in its queue.
     assert!(
         matches!(&result, Ok(0))
-            || matches!(&result, Err(e) if e.kind() == std::io::ErrorKind::ConnectionReset),
+            || matches!(&result, Err(e) if e.kind() == io::ErrorKind::ConnectionReset),
         "dripping client must close at the head deadline: {result:?}"
     );
     assert!(elapsed < Duration::from_secs(1), "closed after {elapsed:?}");
