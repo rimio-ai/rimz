@@ -3,6 +3,114 @@ use crate::config::{PetsGlyphMode, PixelMode};
 
 const REFRESH_MS: u16 = 100;
 
+fn local_sheet() -> (tempfile::TempDir, PetsConfig) {
+    let dir = tempfile::tempdir().expect("pet directory");
+    let path = dir.path().join("sheet.png");
+    let png = crate::sidebar_pane::pixel::encode_png(1536, 1872, &vec![255; 1536 * 1872 * 4]);
+    std::fs::write(&path, png).expect("pet sheet");
+    let config = config_for(path.to_str().expect("path"));
+    (dir, config)
+}
+
+fn finish_load(assets: &mut PetAssets) {
+    let PetLoadState::Loading { receiver, .. } = &mut assets.load_state else {
+        panic!("expected loader");
+    };
+    let result = receiver
+        .recv_timeout(std::time::Duration::from_secs(20))
+        .expect("loader completed");
+    let (sender, pending) = mpsc::channel();
+    assert!(sender.send(result).is_ok());
+    *receiver = pending;
+    assets.poll_loader(0);
+}
+
+fn loaded_asset(assets: &PetAssets) -> &Arc<LoadedPetAsset> {
+    let PetLoadState::Loaded { asset, .. } = &assets.load_state else {
+        panic!("expected loaded sheet");
+    };
+    asset
+}
+
+#[test]
+fn panes_share_sheets_and_late_panes_load_without_a_worker() {
+    for tier in [PetRenderTier::Pixel, PetRenderTier::Cell] {
+        let (_dir, config) = local_sheet();
+        let frame = frame(PetAction::Idle, 0, REFRESH_MS, Some(tier), true, false);
+        let mut first = PetAssets::default();
+        let mut second = PetAssets::default();
+        first.view(&config, frame);
+        second.view(&config, frame);
+        finish_load(&mut first);
+        if matches!(second.load_state, PetLoadState::Loading { .. }) {
+            finish_load(&mut second);
+        }
+        assert!(
+            Arc::ptr_eq(loaded_asset(&first), loaded_asset(&second)),
+            "concurrent loads converge"
+        );
+        if tier == PetRenderTier::Pixel {
+            let png = first.pixel_frame(&config.pet, 0).expect("shared PNG");
+            assert!(png.starts_with(b"\x89PNG\r\n\x1a\n"));
+            assert!(Arc::ptr_eq(
+                &png,
+                &second.pixel_frame(&config.pet, 0).unwrap()
+            ));
+        }
+        let mut late = PetAssets::default();
+        assert!(
+            late.view(&config, frame).unwrap().body.is_some(),
+            "cache hit paints on first view"
+        );
+        assert!(Arc::ptr_eq(loaded_asset(&first), loaded_asset(&late)));
+    }
+}
+
+#[test]
+fn shared_sheets_release_on_disable_switch_and_drop() {
+    let (_dir, config) = local_sheet();
+    let frame = cell_frame(PetAction::Idle, 0);
+    let mut first = PetAssets::default();
+    first.view(&config, frame);
+    finish_load(&mut first);
+    let weak = Arc::downgrade(loaded_asset(&first));
+    let mut second = PetAssets::default();
+    assert!(
+        second.view(&config, frame).unwrap().body.is_some(),
+        "a live sheet is reused immediately"
+    );
+    assert!(Arc::ptr_eq(loaded_asset(&first), loaded_asset(&second)));
+    first.view(&PetsConfig::default(), frame);
+    assert!(weak.upgrade().is_some());
+    second.view(&config_for(""), frame);
+    assert!(weak.upgrade().is_none());
+    first.view(&config, frame);
+    finish_load(&mut first);
+    let weak = Arc::downgrade(loaded_asset(&first));
+    drop(first);
+    assert!(weak.upgrade().is_none());
+}
+
+#[test]
+fn cell_sheets_share_only_matching_aspects() {
+    let (_dir, config) = local_sheet();
+    let mut first = PetAssets::default();
+    let mut second = PetAssets::default();
+    let mut frame = cell_frame(PetAction::Idle, 0);
+    first.view(&config, frame);
+    finish_load(&mut first);
+    frame.cell_aspect = CellAspect::from_ratio(2.5).expect("valid aspect");
+    second.view(&config, frame);
+    finish_load(&mut second);
+    assert!(!Arc::ptr_eq(loaded_asset(&first), loaded_asset(&second)));
+    let mut matching = PetAssets::default();
+    assert!(
+        matching.view(&config, frame).unwrap().body.is_some(),
+        "matching aspects reuse the sheet immediately"
+    );
+    assert!(Arc::ptr_eq(loaded_asset(&second), loaded_asset(&matching)));
+}
+
 fn frame(
     action: PetAction,
     phase: u64,
@@ -347,11 +455,8 @@ fn pixel_view_resolves_sprite_without_cell_grid() {
             .is_some()
     );
     assert!(matches!(
-        assets.load_state,
-        PetLoadState::Loaded {
-            asset: LoadedPetAsset::Pixel(_),
-            ..
-        }
+        &assets.load_state,
+        PetLoadState::Loaded { asset, .. } if matches!(asset.as_ref(), LoadedPetAsset::Pixel(_))
     ));
 }
 
@@ -364,7 +469,7 @@ fn prepared_grids_are_invalidated_on_size_or_aspect_change() {
                 id: "codex".to_owned(),
                 key,
             },
-            asset: LoadedPetAsset::Cell(vec![vec![]; catalog::FRAME_COUNT]),
+            asset: Arc::new(LoadedPetAsset::Cell(vec![vec![]; catalog::FRAME_COUNT])),
         },
         ..PetAssets::default()
     };
@@ -384,7 +489,7 @@ fn prepared_grids_are_invalidated_on_size_or_aspect_change() {
             id: "codex".to_owned(),
             key,
         },
-        asset: LoadedPetAsset::Cell(vec![vec![]; catalog::FRAME_COUNT]),
+        asset: Arc::new(LoadedPetAsset::Cell(vec![vec![]; catalog::FRAME_COUNT])),
     };
     assets.clear_mismatched_pet(
         "codex",
@@ -451,7 +556,7 @@ fn loaded_cell_assets(previous_action: Option<PetAction>) -> PetAssets {
                 id: "codex".to_owned(),
                 key: cell_key(),
             },
-            asset: LoadedPetAsset::Cell(vec![vec![]; catalog::FRAME_COUNT]),
+            asset: Arc::new(LoadedPetAsset::Cell(vec![vec![]; catalog::FRAME_COUNT])),
         },
         previous_action,
         ..PetAssets::default()
@@ -459,11 +564,7 @@ fn loaded_cell_assets(previous_action: Option<PetAction>) -> PetAssets {
 }
 
 fn loaded_pixel_assets(previous_action: Option<PetAction>) -> PetAssets {
-    let frame = RgbaImage {
-        width: 1,
-        height: 1,
-        data: vec![255, 0, 0, 255],
-    };
+    let frame = Arc::from(encode_png(1, 1, &[255, 0, 0, 255]));
     PetAssets {
         load_state: PetLoadState::Loaded {
             request: PetLoadRequest {
@@ -474,7 +575,7 @@ fn loaded_pixel_assets(previous_action: Option<PetAction>) -> PetAssets {
                     aspect: CellAspect::NEUTRAL,
                 },
             },
-            asset: LoadedPetAsset::Pixel(vec![frame; catalog::FRAME_COUNT]),
+            asset: Arc::new(LoadedPetAsset::Pixel(vec![frame; catalog::FRAME_COUNT])),
         },
         previous_action,
         ..PetAssets::default()

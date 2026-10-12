@@ -17,7 +17,7 @@ User-facing setup is the [pets guide](../../guide/pets.md). This page is the mec
 | [`pets/cellart.rs`](../../../crates/rimz/src/sidebar_pane/pets/cellart.rs) | sextant downsampling from RGBA into terminal cells, and the cell-aspect probe |
 | [`pets/model.rs`](../../../crates/rimz/src/sidebar_pane/pets/model.rs) | pet actions, animation tracks, composed tracks, and per-track cadence |
 | [`pets/voice.rs`](../../../crates/rimz/src/sidebar_pane/pets/voice.rs) | canned captions, keyed by action transition |
-| [`pets/painter.rs`](../../../crates/rimz/src/sidebar_pane/pets/painter.rs) | pixel-sprite residency: PNG memoization, transmit, and re-send |
+| [`pets/painter.rs`](../../../crates/rimz/src/sidebar_pane/pets/painter.rs) | pixel-sprite residency: transmit and re-send of the shared sheet's PNGs |
 | [`pets/preview.rs`](../../../crates/rimz/src/sidebar_pane/pets/preview.rs) | `rimz list-pets` preview loading for both tiers |
 | [`pixel/`](../../../crates/rimz/src/sidebar_pane/pixel/) | the shared kitty graphics transport: payloads, tmux passthrough, image ids, placeholders, residency, and the pixel context meter |
 | [`pixel/probe.rs`](../../../crates/rimz/src/sidebar_pane/pixel/probe.rs) | terminal and tmux capability probes |
@@ -122,7 +122,9 @@ Setting `RIMZ_PETS_OFFLINE=1` makes built-ins and URLs cache-only (`0`, `false`,
 `PetAssets` holds one `PetLoadState` for the current pet, plus the previous action, the jump start, the unread row set, and the caption. A load runs on a thread named `rimz-pet-assets` and reports through an `mpsc` channel that the serve loop polls with `try_recv`, so it never blocks.
 
 ```text
-            ┌─────────┐  spawn   ┌─────────┐   Ok    ┌────────┐
+                 ┌────────────── cache hit ──────────────┐
+                 │                                       ▼
+            ┌────┴────┐  spawn   ┌─────────┐   Ok    ┌────────┐
    (none) ─►│  Empty  │─────────►│ Loading │────────►│ Loaded │
             └─────────┘          └────┬────┘         └────────┘
                  ▲                    │ Err                ▲
@@ -135,11 +137,13 @@ Setting `RIMZ_PETS_OFFLINE=1` makes built-ins and URLs cache-only (`0`, `false`,
                      spawn retry   └─────┘
 ```
 
-A load is keyed by the pet id and a `PreparationKey` of `(tier, footprint, cell aspect)`. `clear_mismatched_pet` drops any state whose pet id or key differs from this frame's, so changing the pet, flipping tiers, or a probe that changes the cell aspect starts a fresh load. The aspect is part of the key only for the cell tier; the pixel tier pins it to neutral. Disabling pets clears the load state, action, jump, caption, and unread rows in one step, and `PixelPainter::release_process_payload` drops the memoized PNGs.
+A load is keyed by the pet id and a `PreparationKey` of `(tier, footprint, cell aspect)`. `clear_mismatched_pet` drops any state whose pet id or key differs from this frame's. A process-wide weak cache shares prepared sheets across panes for both tiers: a live cache hit enters `Loaded` immediately without a loader thread, from `Empty` or from a `Failed` state whose retry is due. Concurrent misses may decode twice, but adopt the first live result when they finish. Dead cache entries are pruned on insertion. The aspect is part of the key only for the cell tier; the pixel tier pins it to neutral.
+
+Changing pets, tiers, or cell aspect releases the pane's sheet; disabling pets clears the load state, action, jump, caption, and unread rows. The last holder dropping its sheet frees it, including when a pane closes. An edited local or petdex sheet is read again only after all holders release it, not when another pane attaches while it is still held. `PixelPainter::release_process_payload` invalidates transmission residency while keeping terminal IDs for deletion on the next paint.
 
 A failed load retries after `RETRY_COOLDOWN_MS` (20 seconds), measured in animation phases. A first fetch can fail transiently (a cold network the moment pets are switched on, a CDN blip), and latching forever would leave `pet unavailable` up for the session. The retry thread runs while the state stays `Failed`, so the caption stays `pet unavailable` while the frame interval switches to the loading grid. A retry that fails restarts the cooldown.
 
-The two tiers keep different things in memory. The cell tier converts all 72 frames on the loader thread and keeps only the `PetCellGrid`s (character, foreground, and background per cell); the decoded RGBA is dropped before the result is sent. The pixel tier keeps the 72 RGBA frames, because the painter encodes each to PNG when it first transmits it.
+The two tiers keep different things in memory. The cell tier converts all 72 frames on the loader thread and keeps only the `PetCellGrid`s (character, foreground, and background per cell). The pixel tier encodes all 72 frames to shared PNG byte arrays on that thread; painters transmit those bytes without a pane-local PNG cache. Both tiers drop decoded RGBA before sending the result.
 
 ## Render tiers
 

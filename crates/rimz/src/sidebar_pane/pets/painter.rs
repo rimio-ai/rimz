@@ -1,13 +1,11 @@
 //! Tracks pane-local pixel-pet image residency so dropped or evicted sprites self-heal.
+//! PNG payloads come from the shared prepared sheet, not a pane-local cache.
 
-use std::collections::BTreeMap;
 use std::io::{self, Write};
 use std::sync::Arc;
 
 use super::PetPixelView;
-use crate::sidebar_pane::pixel::{
-    ImageRequest, ImageResidency, PixelSlot, RgbaImage, encode_png, sprite_image_id,
-};
+use crate::sidebar_pane::pixel::{ImageRequest, ImageResidency, PixelSlot, sprite_image_id};
 
 const _: () =
     assert!(super::catalog::FRAME_COUNT <= crate::sidebar_pane::pixel::METER_ID_OFFSET as usize);
@@ -18,7 +16,6 @@ const _: () =
 pub(crate) struct PixelPainter {
     id_base: u32,
     pub(crate) pet_id: Option<String>,
-    pub(crate) png: BTreeMap<usize, Arc<[u8]>>,
     residency: ImageResidency<usize, String>,
 }
 
@@ -27,7 +24,6 @@ impl PixelPainter {
         Self {
             id_base: slot.base(),
             pet_id: None,
-            png: BTreeMap::new(),
             residency: ImageResidency::new(wrap),
         }
     }
@@ -40,7 +36,7 @@ impl PixelPainter {
         &mut self,
         writer: &mut W,
         pixel: &PetPixelView,
-        frame: &RgbaImage,
+        png: Arc<[u8]>,
         now_ms: u64,
     ) -> io::Result<()> {
         let pet_changed = self.pet_id.as_deref() != Some(pixel.pet_id.as_str());
@@ -48,13 +44,11 @@ impl PixelPainter {
             // The same sprite ids are re-transmitted with the new sheet and
             // replace image data in place; no delete APC is emitted mid-session.
             self.residency.invalidate();
-            self.png.clear();
             self.pet_id = Some(pixel.pet_id.clone());
         }
 
         let image_id = pixel.image_id;
         debug_assert_eq!(image_id, self.image_id(pixel.sprite_index));
-        let png = &mut self.png;
         self.residency.ensure(
             writer,
             ImageRequest {
@@ -65,13 +59,7 @@ impl PixelPainter {
                 cols: pixel.size.cols,
                 rows: pixel.size.rows,
             },
-            || {
-                png.entry(pixel.sprite_index)
-                    .or_insert_with(|| {
-                        Arc::from(encode_png(frame.width, frame.height, &frame.data))
-                    })
-                    .clone()
-            },
+            || png,
         )?;
         Ok(())
     }
@@ -79,16 +67,14 @@ impl PixelPainter {
     pub(crate) fn clear<W: Write>(&mut self, writer: &mut W) -> io::Result<()> {
         self.residency.clear(writer)?;
         self.pet_id = None;
-        self.png.clear();
         Ok(())
     }
 
-    /// Release compressed payloads immediately; the next paint retires the
-    /// resident ids through `clear`, once a terminal writer is available.
+    /// Invalidate transmissions; the next paint retires resident ids through
+    /// `clear`, once a terminal writer is available. Payloads belong to the sheet.
     pub(crate) fn release_process_payload(&mut self) {
         self.pet_id = None;
         self.residency.invalidate();
-        self.png.clear();
     }
 
     pub(crate) fn image_id(&self, sprite_index: usize) -> u32 {
@@ -117,15 +103,9 @@ impl PixelPainter {
     }
 
     #[cfg(test)]
-    pub(crate) fn mark_resident_for_test(
-        &mut self,
-        pet_id: &str,
-        sprite_index: usize,
-        png: Vec<u8>,
-    ) {
+    pub(crate) fn mark_resident_for_test(&mut self, pet_id: &str, sprite_index: usize) {
         let image_id = self.image_id(sprite_index);
         self.pet_id = Some(pet_id.to_owned());
-        self.png.insert(sprite_index, Arc::from(png));
         self.residency
             .mark_resident(sprite_index, image_id, pet_id.to_owned(), 0);
     }
@@ -139,12 +119,8 @@ mod tests {
         BEGIN_SYNC, MIN_RESEND_SPACING_MS, RESIDENT_REFRESH_MS, sprite_image_id,
     };
 
-    fn image() -> RgbaImage {
-        RgbaImage {
-            width: 1,
-            height: 1,
-            data: vec![0, 1, 2, 3],
-        }
+    fn image() -> Arc<[u8]> {
+        Arc::from(crate::sidebar_pane::pixel::encode_png(1, 1, &[0, 1, 2, 3]))
     }
 
     fn view(pet_id: &str, sprite_index: usize) -> PetPixelView {
@@ -166,19 +142,17 @@ mod tests {
         let pixel = view("codex", 0);
         let mut first = Vec::new();
         painter
-            .ensure_transmitted(&mut first, &pixel, &image(), 0)
+            .ensure_transmitted(&mut first, &pixel, image(), 0)
             .expect("first transmit");
 
         assert!(contains(&first, b"a=t,f=100,i=5373952,q=2"));
         assert!(contains(&first, b"a=p,U=1,i=5373952,p=1,c=2,r=1,q=2"));
         assert!(!first.starts_with(BEGIN_SYNC));
-        let png = painter.png.get(&0).expect("lazy PNG").clone();
         let mut repeat = Vec::new();
         painter
-            .ensure_transmitted(&mut repeat, &pixel, &image(), 1)
+            .ensure_transmitted(&mut repeat, &pixel, image(), 1)
             .expect("repeat transmit");
         assert!(repeat.is_empty());
-        assert!(Arc::ptr_eq(&png, painter.png.get(&0).expect("cached PNG")));
     }
 
     #[test]
@@ -189,14 +163,14 @@ mod tests {
         let third = view("codex", 2);
         for pixel in [&first, &second, &third] {
             painter
-                .ensure_transmitted(&mut Vec::new(), pixel, &image(), 0)
+                .ensure_transmitted(&mut Vec::new(), pixel, image(), 0)
                 .expect("initial transmit");
         }
 
         for pixel in [&first, &second] {
             let mut stale = Vec::new();
             painter
-                .ensure_transmitted(&mut stale, pixel, &image(), RESIDENT_REFRESH_MS)
+                .ensure_transmitted(&mut stale, pixel, image(), RESIDENT_REFRESH_MS)
                 .expect("same-frame resend");
             assert!(!stale.is_empty());
         }
@@ -205,7 +179,7 @@ mod tests {
             .ensure_transmitted(
                 &mut too_soon,
                 &third,
-                &image(),
+                image(),
                 RESIDENT_REFRESH_MS + MIN_RESEND_SPACING_MS - 1,
             )
             .expect("throttled resend");
@@ -215,7 +189,7 @@ mod tests {
             .ensure_transmitted(
                 &mut spaced,
                 &third,
-                &image(),
+                image(),
                 RESIDENT_REFRESH_MS + MIN_RESEND_SPACING_MS,
             )
             .expect("spaced resend");
@@ -227,12 +201,12 @@ mod tests {
         let mut painter = PixelPainter::with_slot(PixelSlot::new(0), true);
         for pixel in [view("codex", 0), view("codex", 1)] {
             painter
-                .ensure_transmitted(&mut Vec::new(), &pixel, &image(), 0)
+                .ensure_transmitted(&mut Vec::new(), &pixel, image(), 0)
                 .expect("initial pet");
         }
         let mut changed = Vec::new();
         painter
-            .ensure_transmitted(&mut changed, &view("claude", 0), &image(), 0)
+            .ensure_transmitted(&mut changed, &view("claude", 0), image(), 0)
             .expect("pet change");
         assert!(!contains(&changed, b"a=d,d=I"));
         assert!(painter.transmitted_contains(0));
@@ -252,13 +226,12 @@ mod tests {
     #[test]
     fn disabled_pets_release_payload_but_keep_terminal_ids() {
         let mut painter = PixelPainter::with_slot(PixelSlot::new(0), true);
-        painter.mark_resident_for_test("codex", 3, vec![1]);
+        painter.mark_resident_for_test("codex", 3);
 
         painter.release_process_payload();
 
         assert!(painter.pet_id.is_none());
         assert!(painter.transmitted_is_empty());
-        assert!(painter.png.is_empty());
         assert!(painter.resident_contains(3));
     }
 }

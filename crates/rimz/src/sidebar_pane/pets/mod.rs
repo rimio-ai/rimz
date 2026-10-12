@@ -2,7 +2,8 @@
 //! animation track selection, and canned captions.
 //!
 //! The renderer receives only `PetView` data. Network, disk, decode, and
-//! memoized cell-art work stays here, owned by the serve loop.
+//! memoized cell-art work stays here, owned by the serve loop; prepared
+//! sheets are shared across the host's panes through a process-wide weak cache.
 
 mod asset;
 mod catalog;
@@ -13,8 +14,9 @@ mod painter;
 mod preview;
 mod voice;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, Weak};
 use std::thread;
 
 use crate::config::{CellAspect, PetsConfig, PetsGlyphMode, PixelMode};
@@ -31,7 +33,7 @@ pub use preview::{
     load_cell_previews, load_pixel_preview, load_pixel_previews,
 };
 
-use crate::sidebar_pane::pixel::{PixelRenderCaps, RgbaImage};
+use crate::sidebar_pane::pixel::{PixelRenderCaps, encode_png};
 use asset::PetSource;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -135,7 +137,7 @@ enum PetLoadState {
     },
     Loaded {
         request: PetLoadRequest,
-        asset: LoadedPetAsset,
+        asset: Arc<LoadedPetAsset>,
     },
     Failed {
         request: PetLoadRequest,
@@ -171,7 +173,7 @@ impl PetLoadState {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 struct PetLoadRequest {
     id: String,
     key: PreparationKey,
@@ -223,10 +225,18 @@ impl PreparationKey {
 
 enum LoadedPetAsset {
     Cell(Vec<PetCellGrid>),
-    Pixel(Vec<RgbaImage>),
+    Pixel(Vec<Arc<[u8]>>),
 }
 
-type LoadResult = Result<LoadedPetAsset, String>;
+type LoadResult = Result<Arc<LoadedPetAsset>, String>;
+
+fn prepared_pets() -> MutexGuard<'static, HashMap<PetLoadRequest, Weak<LoadedPetAsset>>> {
+    static CACHE: OnceLock<Mutex<HashMap<PetLoadRequest, Weak<LoadedPetAsset>>>> = OnceLock::new();
+    CACHE
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct SelectedTrack {
@@ -255,11 +265,7 @@ struct TrackSelection {
 impl PetAssets {
     #[cfg(test)]
     pub(super) fn test_loaded_pixel_frame(pet_id: &str) -> Self {
-        let frame = RgbaImage {
-            width: 1,
-            height: 1,
-            data: vec![255, 0, 0, 255],
-        };
+        let frame = Arc::from(encode_png(1, 1, &[255, 0, 0, 255]));
         Self {
             load_state: PetLoadState::Loaded {
                 request: PetLoadRequest {
@@ -270,7 +276,7 @@ impl PetAssets {
                         CellAspect::NEUTRAL,
                     ),
                 },
-                asset: LoadedPetAsset::Pixel(vec![frame; catalog::FRAME_COUNT]),
+                asset: Arc::new(LoadedPetAsset::Pixel(vec![frame; catalog::FRAME_COUNT])),
             },
             ..Self::default()
         }
@@ -387,15 +393,15 @@ impl PetAssets {
         })
     }
 
-    pub(super) fn pixel_frame(&self, pet_id: &str, sprite_index: usize) -> Option<&RgbaImage> {
+    pub(super) fn pixel_frame(&self, pet_id: &str, sprite_index: usize) -> Option<Arc<[u8]>> {
         let PetLoadState::Loaded { request, asset } = &self.load_state else {
             return None;
         };
         if request.id != pet_id {
             return None;
         }
-        match asset {
-            LoadedPetAsset::Pixel(frames) => frames.get(sprite_index),
+        match asset.as_ref() {
+            LoadedPetAsset::Pixel(frames) => frames.get(sprite_index).cloned(),
             LoadedPetAsset::Cell(_) => None,
         }
     }
@@ -496,6 +502,14 @@ impl PetAssets {
             }
             _ => None,
         };
+        let request = PetLoadRequest {
+            id: id.to_owned(),
+            key,
+        };
+        if let Some(asset) = prepared_pets().get(&request).and_then(Weak::upgrade) {
+            self.load_state = PetLoadState::Loaded { request, asset };
+            return;
+        }
         let (sender, receiver) = mpsc::channel();
         let source = source.clone();
         let spawned = thread::Builder::new()
@@ -506,10 +520,6 @@ impl PetAssets {
             });
         match spawned {
             Ok(_) => {
-                let request = PetLoadRequest {
-                    id: id.to_owned(),
-                    key,
-                };
                 self.load_state = match retrying {
                     Some(failed_at_phase) => PetLoadState::Failed {
                         request,
@@ -521,10 +531,7 @@ impl PetAssets {
             }
             Err(err) => {
                 self.load_state = PetLoadState::Failed {
-                    request: PetLoadRequest {
-                        id: id.to_owned(),
-                        key,
-                    },
+                    request,
                     failed_at_phase: phase,
                     retry_receiver: None,
                 };
@@ -545,7 +552,7 @@ impl PetAssets {
         if request.id != pet_id || request.key != key {
             return None;
         }
-        match asset {
+        match asset.as_ref() {
             LoadedPetAsset::Cell(grids) => grids.get(sprite_index).cloned(),
             LoadedPetAsset::Pixel(_) => None,
         }
@@ -588,7 +595,7 @@ impl PetAssets {
         if request.id != pet_id {
             return None;
         }
-        let frame_count = match asset {
+        let frame_count = match asset.as_ref() {
             LoadedPetAsset::Cell(grids) => grids.len(),
             LoadedPetAsset::Pixel(frames) => frames.len(),
         };
@@ -642,8 +649,8 @@ impl PetAssets {
 fn load_prepared_pet(
     source: PetSource,
     key: PreparationKey,
-) -> Result<LoadedPetAsset, asset::AssetErr> {
-    asset::resolve_and_decode(&source, |bytes| match key.tier {
+) -> Result<Arc<LoadedPetAsset>, asset::AssetErr> {
+    let asset = asset::resolve_and_decode(&source, |bytes| match key.tier {
         PetRenderTier::Cell => Ok(LoadedPetAsset::Cell(
             frames::decode_sheet(bytes)?
                 .into_iter()
@@ -652,8 +659,25 @@ fn load_prepared_pet(
                 })
                 .collect(),
         )),
-        PetRenderTier::Pixel => frames::decode_sheet(bytes).map(LoadedPetAsset::Pixel),
-    })
+        PetRenderTier::Pixel => Ok(LoadedPetAsset::Pixel(
+            frames::decode_sheet(bytes)?
+                .into_iter()
+                .map(|frame| Arc::from(encode_png(frame.width, frame.height, &frame.data)))
+                .collect(),
+        )),
+    })?;
+    let request = PetLoadRequest {
+        id: source.id().into_owned(),
+        key,
+    };
+    let mut cache = prepared_pets();
+    if let Some(shared) = cache.get(&request).and_then(Weak::upgrade) {
+        return Ok(shared);
+    }
+    cache.retain(|_, asset| asset.strong_count() > 0);
+    let asset = Arc::new(asset);
+    cache.insert(request, Arc::downgrade(&asset));
+    Ok(asset)
 }
 
 #[cfg(test)]
