@@ -129,11 +129,11 @@ pub(super) fn conventional_cli_version(stdout: &str, stderr: &str) -> Option<Str
 
 #[derive(Debug, thiserror::Error)]
 #[error(
-    "{kind} {found} at {path} is older than {minimum}, the first release with {flags}, which RimZ passes on every launch; upgrade {display_name}"
+    "{kind} {found} at {path} is older than {minimum}, the first release with {flags}, which RimZ passes on every launch; {fix}"
 )]
 pub struct LaunchVersionErr {
     kind: &'static str,
-    display_name: &'static str,
+    fix: Box<str>,
     path: std::path::PathBuf,
     found: CliVersion,
     minimum: CliVersion,
@@ -162,7 +162,10 @@ fn check_launch_version(
     {
         return Err(LaunchVersionErr {
             kind: adapter.spec().kind,
-            display_name: adapter.spec().display_name,
+            fix: adapter.version_upgrade_fix().map_or_else(
+                || format!("upgrade {}", adapter.spec().display_name).into_boxed_str(),
+                Into::into,
+            ),
             path: path.to_owned(),
             found,
             minimum,
@@ -175,6 +178,25 @@ fn check_launch_version(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn opencode_version_floor_names_the_major_upgrade() {
+        let agent = crate::agents::find_definition("opencode").unwrap();
+        let path = std::path::Path::new("/opt/bin/opencode");
+        let result = check_launch_version(agent, path, Some(CliVersion::new(1, 19, 0)));
+        assert!(result.is_err(), "OpenCode 1 must refuse standalone launch");
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "opencode 1.19.0 at /opt/bin/opencode is older than 2.0.0, the first release with --standalone, which RimZ passes on every launch; run `opencode upgrade --major`"
+        );
+        for found in [
+            None,
+            Some(CliVersion::new(2, 0, 0)),
+            Some(CliVersion::new(2, 0, 27)),
+        ] {
+            assert!(check_launch_version(agent, path, found).is_ok());
+        }
+    }
 
     #[test]
     fn launch_version_floor_refuses_only_known_old_versions() {

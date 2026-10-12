@@ -559,6 +559,7 @@ pub(super) enum HookStatus {
     Installed,
     InstalledUntrusted { events: Vec<String>, fix: String },
     NotInstalled { fix: String },
+    Blocked { fix: String },
     NotDetected,
     Unsupported { reason: String },
 }
@@ -570,6 +571,7 @@ impl HookStatus {
             Self::Installed => "installed",
             Self::InstalledUntrusted { .. } => "installed, untrusted",
             Self::NotInstalled { .. } => "not installed",
+            Self::Blocked { .. } => "blocked",
             Self::NotDetected => "not detected",
             Self::Unsupported { .. } => "unsupported",
         }

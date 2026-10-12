@@ -232,6 +232,11 @@ pub(super) fn collect_hooks() -> Vec<HookRow> {
                         .unwrap_or("hook install is not supported for this adapter")
                         .to_owned(),
                 }
+            } else if let Some(fix) = agent
+                .managed_integration()
+                .and_then(|integration| integration.install_blocker())
+            {
+                HookStatus::Blocked { fix }
             } else if agent.hooks_installed(&login_env) {
                 let untrusted = agent.untrusted_installed_hooks(&login_env);
                 if untrusted.is_empty() {

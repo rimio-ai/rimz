@@ -33,25 +33,19 @@ fn opencode_activity_filter_and_launch_commands_build() {
             "opencode".to_owned(),
             "--session".to_owned(),
             "ses_123".to_owned(),
+            "--standalone".to_owned(),
         ])
     );
-    assert_eq!(
-        OpencodeAdapter.spec().launch.fork_command("ses_123"),
-        Some(vec![
-            "opencode".to_owned(),
-            "--session".to_owned(),
-            "ses_123".to_owned(),
-            "--fork".to_owned(),
-        ])
-    );
+    assert_eq!(OpencodeAdapter.spec().launch.fork_command("ses_123"), None);
     assert_eq!(
         OpencodeAdapter.launch_command(&[], None),
-        Some(vec!["opencode".to_owned()])
+        Some(vec!["opencode".to_owned(), "--standalone".to_owned()])
     );
     assert_eq!(
         OpencodeAdapter.launch_command(&["--pure".to_owned()], Some("review this")),
         Some(vec![
             "opencode".to_owned(),
+            "--standalone".to_owned(),
             "--pure".to_owned(),
             "--prompt".to_owned(),
             "review this".to_owned(),
@@ -76,7 +70,7 @@ fn opencode_activity_filter_and_launch_commands_build() {
             .spec()
             .launch
             .permission_args(PermissionMode::Plan),
-        vec!["--agent", "plan"]
+        Vec::<String>::new()
     );
     assert_eq!(
         OpencodeAdapter
@@ -89,35 +83,57 @@ fn opencode_activity_filter_and_launch_commands_build() {
 
 #[test]
 fn subagent_lockdown_merges_opencode_permissions() {
-    let mut absent = std::collections::BTreeMap::new();
-    OpencodeAdapter.lockdown_subagent_env(&mut absent);
-    assert_eq!(
-        serde_json::from_str::<serde_json::Value>(&absent["OPENCODE_PERMISSION"])
-            .expect("permission JSON"),
-        json!({ "task": "deny" })
-    );
-
-    let mut existing = std::collections::BTreeMap::from([(
-        "OPENCODE_PERMISSION".to_owned(),
-        r#"{"bash":"ask","edit":"allow","task":"allow"}"#.to_owned(),
+    let deny = json!({ "action": "subagent", "resource": "*", "effect": "deny" });
+    for value in [None, Some(""), Some("not JSON"), Some("[]"), Some("null")] {
+        let mut env = BTreeMap::new();
+        if let Some(value) = value {
+            env.insert("OPENCODE_CONFIG_CONTENT".to_owned(), value.to_owned());
+        }
+        OpencodeAdapter.lockdown_subagent_env(&mut env);
+        assert_eq!(
+            env.get("OPENCODE_CONFIG_CONTENT")
+                .and_then(|raw| serde_json::from_str::<Value>(raw).ok()),
+            Some(json!({ "permissions": [deny] })),
+            "invalid or absent config must become the deny object"
+        );
+    }
+    let allow = json!({ "action": "subagent", "resource": "review", "effect": "allow" });
+    let mut env = BTreeMap::from([(
+        "OPENCODE_CONFIG_CONTENT".to_owned(),
+        "{/* preserve this config */\"theme\":\"dark\",\"permissions\":[{\"action\":\"subagent\",\"resource\":\"review\",\"effect\":\"allow\"},],}".to_owned(),
     )]);
-    OpencodeAdapter.lockdown_subagent_env(&mut existing);
+    OpencodeAdapter.lockdown_subagent_env(&mut env);
     assert_eq!(
-        serde_json::from_str::<serde_json::Value>(&existing["OPENCODE_PERMISSION"])
-            .expect("permission JSON"),
-        json!({ "bash": "ask", "edit": "allow", "task": "deny" })
+        serde_json::from_str::<Value>(&env["OPENCODE_CONFIG_CONTENT"]).unwrap(),
+        json!({ "theme": "dark", "permissions": [allow, deny] })
     );
+}
 
-    let mut invalid = std::collections::BTreeMap::from([(
-        "OPENCODE_PERMISSION".to_owned(),
-        "not JSON".to_owned(),
-    )]);
-    OpencodeAdapter.lockdown_subagent_env(&mut invalid);
-    assert_eq!(
-        serde_json::from_str::<serde_json::Value>(&invalid["OPENCODE_PERMISSION"])
-            .expect("permission JSON"),
-        json!({ "task": "deny" })
-    );
+#[test]
+#[cfg(unix)]
+fn install_blocker_refuses_only_old_opencode() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = tempfile::tempdir().unwrap();
+    let binary = dir.path().join("opencode");
+    for (banner, blocked) in [
+        ("opencode v1.19.0", true),
+        ("opencode v2.0.27", false),
+        ("unknown", false),
+    ] {
+        std::fs::write(&binary, format!("#!/bin/sh\nprintf '%s\\n' '{banner}'\n")).unwrap();
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let reason = install_blocker_at(&binary);
+        assert_eq!(reason.is_some(), blocked, "{banner}");
+        if let Some(reason) = reason {
+            assert_eq!(
+                reason,
+                format!(
+                    "opencode 1.19.0 at {} is older than 2.0.0, the first release with --standalone, which RimZ passes on every launch; run `opencode upgrade --major`",
+                    binary.display()
+                )
+            );
+        }
+    }
 }
 
 #[test]

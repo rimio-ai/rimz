@@ -1421,7 +1421,9 @@ fn render_hooks(w: &mut impl Write, report: &DoctorReport, tally: &mut Tally) ->
     for row in &report.hooks {
         match &row.status {
             HookStatus::Installed => installed.push(row.kind.as_str()),
-            HookStatus::InstalledUntrusted { .. } | HookStatus::NotInstalled { .. } => {
+            HookStatus::InstalledUntrusted { .. }
+            | HookStatus::NotInstalled { .. }
+            | HookStatus::Blocked { .. } => {
                 needs_action.push(row);
             }
             HookStatus::Unsupported { reason } if row.detected => {
@@ -1466,7 +1468,9 @@ fn render_hooks(w: &mut impl Write, report: &DoctorReport, tally: &mut Tally) ->
                         events.join(", ")
                     ),
                 ),
-                HookStatus::NotInstalled { fix } => (Health::Alarm, fix.clone()),
+                HookStatus::NotInstalled { fix } | HookStatus::Blocked { fix } => {
+                    (Health::Alarm, fix.clone())
+                }
                 _ => unreachable!("only actionable statuses reach the table"),
             };
             table.row([
