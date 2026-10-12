@@ -13,7 +13,7 @@ use crate::store::message::{
     MessageStatus, claim_expired, delivery_batch_indices, fresh_boundary_blocker, sender_notice,
 };
 
-use super::super::{Result, Store, message};
+use super::super::{Result, Store, ingress, message};
 use super::Txn;
 use super::UnresolvedMessage;
 
@@ -1076,6 +1076,7 @@ impl Store {
     /// or time out stale pane writes after their acknowledgement window. An open receiver compaction bracket holds a `Sent` record
     /// without a time limit because the composer queues the original write and
     /// submits it when compaction ends; resending would duplicate the turn.
+    /// Pending same-kind ingress stamped between the write and its deadline also holds it until applied.
     #[must_use = "durability barrier; check the result"]
     pub fn reconcile_stale_messages(
         &self,
@@ -1096,6 +1097,19 @@ impl Store {
                     .into_iter()
                     .filter(|agent| agent.compacting_since.is_some())
                     .collect::<Vec<_>>()
+            } else {
+                Vec::new()
+            };
+            let pending_ingress = if stale_sent {
+                ingress::read_cursor(&self.inner.paths)
+                    .and_then(|cursor| {
+                        ingress::read_from_offset(&self.inner.paths, cursor.applied)
+                    })
+                    .map(|(frames, _)| frames)
+                    .unwrap_or_else(|error| {
+                        tracing::warn!(%error, "cannot read pending ingress for message reconciliation");
+                        Vec::new()
+                    })
             } else {
                 Vec::new()
             };
@@ -1139,6 +1153,11 @@ impl Store {
                 if compacting_agents
                     .iter()
                     .any(|agent| message.same_agent_card(agent))
+                    || pending_ingress.iter().any(|(frame, _)| {
+                        frame.source == message.kind
+                            && (message.last_sent_at.unwrap_or(message.updated_at)..deadline)
+                                .contains(&frame.ts)
+                    })
                 {
                     message.retry_after = Some(now + message.body.delivery_window());
                     return MessageUpdate::SilentRewrite;

@@ -6171,6 +6171,128 @@ fn sweep_requeues_unconfirmed_send_now_message_and_redelivers() {
 }
 
 #[test]
+fn sweep_holds_unconfirmed_prompt_while_ingress_is_pending() {
+    use rimz::disk::lock::{IngressAppendLock, WorkspaceLock};
+    use rimz::store::ingress::{self, HookIngress};
+
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.write_config(&env.project_root, "");
+    env.install_agent_hooks("claude");
+    let pane_env = &[("ZELLIJ_PANE_ID", "3")];
+    register_running_agent(&env, "sess-ingress", "feature-ingress", pane_env);
+    run_hook(
+        &env,
+        json!({"hook_event_name": "Stop", "session_id": "sess-ingress"}),
+        pane_env,
+    );
+    let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "claude")]);
+    let trace = env.project_root.join("ingress-reconcile.log");
+    let output = run_success(
+        traced_rimz(&env, &trace)
+            .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+            .args(["message", "@claude", "--", "hold me"]),
+        "send message",
+    );
+    let message_id = MessageId::parse(&sent_id_from_stdout(&output.stdout)).unwrap();
+    assert_text_then_enter(&trace, &user_message("hold me"));
+    let store = env.store();
+    let runtime = store.runtime_paths();
+    let spawn = WorkspaceLock::acquire(&runtime.hook_drainer_spawn_lock()).unwrap();
+    if let Ok(mut socket) =
+        std::os::unix::net::UnixStream::connect(runtime.hook_drainer_socket_path())
+    {
+        writeln!(
+            socket,
+            "{}",
+            json!({"through": 0, "reply_for": null, "stop": true})
+        )
+        .unwrap();
+    }
+    let lifetime = WorkspaceLock::acquire(&runtime.hook_drainer_lock()).unwrap();
+    let mut captured = env
+        .hook_command("claude")
+        .get_envs()
+        .filter_map(|(key, value)| {
+            value.map(|value| {
+                (
+                    key.to_string_lossy().into_owned(),
+                    value.to_string_lossy().into_owned(),
+                )
+            })
+        })
+        .collect::<std::collections::BTreeMap<_, _>>();
+    captured.insert("RIMZ_AGENT_PID".into(), env.agent_owner_pid().to_string());
+    captured.insert("RIMZ_WORKSPACE_ID".into(), env.workspace_id.to_string());
+    captured.insert(
+        "RIMZ_PROJECT_ROOT".into(),
+        env.project_root.display().to_string(),
+    );
+    captured.insert("ZELLIJ_PANE_ID".into(), "3".into());
+    let sent_at = message_by_id(&env, &message_id).last_sent_at.unwrap();
+    let frame = HookIngress {
+        schema_version: "1".into(),
+        event_id: rimz::ids::EventId::new(),
+        ts: sent_at,
+        source: AgentKind::new_unchecked("claude"),
+        event: Some("UserPromptSubmit".into()),
+        payload: json!({"session_id": "sess-ingress", "prompt": user_message("hold me")})
+            .to_string(),
+        cwd: env.project_root.clone(),
+        hook_pid: std::process::id(),
+        env: captured,
+    };
+    {
+        let lock = IngressAppendLock::acquire(&store.paths().hook_ingress_lock).unwrap();
+        ingress::append(store.paths(), &frame, &lock).unwrap();
+    }
+    let window = std::time::Duration::from_millis(500);
+    std::thread::sleep(
+        (sent_at + window)
+            .duration_since(jiff::Timestamp::now())
+            .try_into()
+            .unwrap_or_default(),
+    );
+    run_success(
+        traced_rimz(&env, &trace)
+            .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+            .env("RIMZ_MESSAGE_DELIVERY_WINDOW_MS", "500")
+            .args(["message", "sweep"]),
+        "sweep pending ingress",
+    );
+    assert_eq!(message_by_id(&env, &message_id).status, MessageStatus::Sent);
+    assert_eq!(
+        trace_lines(&trace)
+            .iter()
+            .filter(|line| is_paste(line, &user_message("hold me")))
+            .count(),
+        1
+    );
+    drop(lifetime);
+    drop(spawn);
+    run_success(
+        env.rimz()
+            .args(["hooks", "drain", "--once", "--project-root"])
+            .arg(&env.project_root),
+        "drain confirmation",
+    );
+    let delivered = store
+        .list_message_history()
+        .unwrap()
+        .into_iter()
+        .find(|message| message.message_id == message_id)
+        .expect("delivered record in history");
+    assert_eq!(delivered.status, MessageStatus::Delivered);
+    assert_eq!(
+        trace_lines(&trace)
+            .iter()
+            .filter(|line| is_paste(line, &user_message("hold me")))
+            .count(),
+        1
+    );
+}
+
+#[test]
 fn sweep_holds_unconfirmed_prompt_while_compaction_bracket_is_open() {
     let env = Env::new();
     env.record(&env.project_root);
