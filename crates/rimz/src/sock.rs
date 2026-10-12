@@ -12,6 +12,11 @@ pub(crate) const AF_UNIX_PATH_LIMIT: usize = 104;
 #[cfg(not(target_os = "macos"))]
 pub(crate) const AF_UNIX_PATH_LIMIT: usize = 108;
 
+/// The longest socket file name RimZ binds under a socket directory.
+///
+/// A change here moves the socket budget for every fixture that binds under
+/// `tempfile::tempdir()`; grep `tempdir()` callers that reach
+/// `validate_socket_path` and give them a short root before running the gate.
 const LONGEST_SOCKET_FILENAME: &str = "host.123456789012.wake.sock";
 pub const XDG_REMEDY: &str = "export XDG_RUNTIME_DIR=/tmp/rimz-$(id -u)";
 
