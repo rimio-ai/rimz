@@ -241,7 +241,7 @@ pub fn read_all(runtime: &RuntimePaths) -> Vec<AgentContextRecord> {
 }
 
 /// Read context only for identities already present in the snapshot.
-pub(super) fn read_for_keys<'a>(
+pub(crate) fn read_for_keys<'a>(
     runtime: &RuntimePaths,
     keys: impl IntoIterator<Item = (&'a str, &'a str)>,
 ) -> Vec<AgentContextRecord> {

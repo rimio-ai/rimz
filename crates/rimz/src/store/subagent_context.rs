@@ -105,6 +105,15 @@ pub fn read_all(runtime: &RuntimePaths) -> Vec<SubagentContextRecord> {
     SUBAGENT_PARSE_CACHE.with(|cache| sidecar::read_all(&runtime.subagent_context_dir, cache))
 }
 
+/// Read child context only for identities already present in the snapshot.
+pub(crate) fn read_for_keys<'a>(
+    runtime: &RuntimePaths,
+    keys: impl IntoIterator<Item = (&'a str, &'a str)>,
+) -> Vec<SubagentContextRecord> {
+    SUBAGENT_PARSE_CACHE
+        .with(|cache| sidecar::read_for_keys(&runtime.subagent_context_dir, keys, cache))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

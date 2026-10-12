@@ -809,7 +809,8 @@ path = "crates/rimz/src/store"
 # Listed child panes share row membership with the focus seam (+2).
 # RunListing and listing share cached run slices with host readers (+2).
 # Durable hibernation codec and record operations serve the producer and freeze/wake helpers.
-surface-budget = 418
+# Sidebar enrichment reads context sidecars only for its agent keys (`read_for_keys`, +2).
+surface-budget = 420
 
 [[module]]
 path = "crates/rimz/src/theme"

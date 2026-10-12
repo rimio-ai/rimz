@@ -565,23 +565,23 @@ fn enrich_core(
 
     // Fold each session's rich statusline context onto its agent state
     // (read-only; CLI producers write it). Both the context sidecar
-    // and the per-tool activity heartbeats fold only onto existing agents, so
-    // an empty room skips both directory scans — the common idle case.
+    // and the per-tool activity heartbeats read only existing agent keys,
+    // never enumerating historical sidecars. An empty room skips the reads.
     // Activity lands before the pane overlay so age, ranking, waiting guards,
     // and the stall window all see the truer per-tool value rather than
     // the turn-grained event timestamp.
     if !snapshot.agents.is_empty() {
-        snapshot = snapshot.with_agent_context(crate::store::agent_context::read_all(runtime));
-        snapshot =
-            snapshot.with_subagent_context(crate::store::subagent_context::read_all(runtime));
-        let activity = crate::agent_activity::read_for_keys(
-            runtime,
-            snapshot
-                .agents
-                .iter()
-                .map(|agent| (agent.kind.as_str(), agent.agent_id.as_str())),
-        );
-        snapshot = snapshot.with_agent_activity(&activity);
+        let keys = snapshot
+            .agents
+            .iter()
+            .map(|agent| (agent.kind.as_str(), agent.agent_id.as_str()));
+        let context = crate::store::agent_context::read_for_keys(runtime, keys.clone());
+        let subagent_context = crate::store::subagent_context::read_for_keys(runtime, keys.clone());
+        let activity = crate::agent_activity::read_for_keys(runtime, keys);
+        snapshot = snapshot
+            .with_agent_context(context)
+            .with_subagent_context(subagent_context)
+            .with_agent_activity(&activity);
         crate::harness::budget::project_parks(
             &mut snapshot,
             runtime,
