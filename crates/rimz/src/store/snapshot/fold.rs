@@ -1,8 +1,6 @@
 //! The resumable event-log fold: the persisted rollup cache, its extent
 //! stamp, and the carryover that survives log rotation.
-//! One-shot reads share a per-thread cursor, reset when the carryover or workspace identity changes.
 
-use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::fs;
@@ -601,18 +599,8 @@ pub(crate) fn load_full_agent(paths: &StatePaths, agent: &AgentState) -> Result<
     Ok(loaded)
 }
 
-#[derive(Default)]
-struct OneShotCursor {
-    source: Option<(StampedPath, StampedPath)>,
-    cursor: RollupCursor,
-}
-
-thread_local! {
-    static ONE_SHOT_CURSOR: RefCell<OneShotCursor> = RefCell::new(OneShotCursor::default());
-}
-
-/// Catch the rollup up to the live log: resume this thread's held fold
-/// (initially from `snapshots/rollup.json`), fold only frames past its extent,
+/// Catch the rollup up to the live log: resume the fold from
+/// `snapshots/rollup.json`, fold only the frames appended since its extent,
 /// and return the refreshed cache beside the carryover-merged rollup.
 ///
 /// O(delta bytes) on the common path. Any miss — an absent or
@@ -624,33 +612,8 @@ thread_local! {
 pub(crate) fn catch_up_rollup(
     paths: &StatePaths,
 ) -> Result<(RollupCache, Vec<AgentState>, Vec<ResumeOutcome>)> {
-    ONE_SHOT_CURSOR.with(|slot| {
-        let source = (
-            StampedPath::of(&paths.agents_carryover),
-            StampedPath::of(&paths.workspace_record),
-        );
-        let mut held = slot.borrow_mut();
-        if held.source.as_ref() != Some(&source) {
-            held.cursor = RollupCursor::new();
-            held.source = Some(source);
-        }
-        let (_, merged, mut resume_outcomes) = held.cursor.fold(paths)?;
-        // Every successful fold installs or restores its held cache.
-        let mut cache = held
-            .cursor
-            .held
-            .as_ref()
-            .expect("successful fold holds its cache")
-            .cache
-            .clone();
-        let now = Timestamp::now();
-        let retained = |outcome: &ResumeOutcome| {
-            now.duration_since(outcome.updated_at).as_secs() <= RESUME_OUTCOME_RETENTION_SECS
-        };
-        cache.resume_outcomes.retain(retained);
-        resume_outcomes.retain(retained);
-        Ok((cache, merged.to_vec(), resume_outcomes))
-    })
+    let (cache, merged, resume_outcomes) = catch_up_rollup_layered(paths)?;
+    Ok((cache, merged.to_vec(), resume_outcomes))
 }
 
 pub(in crate::store) fn catch_up_with_pending(
@@ -689,7 +652,7 @@ fn catch_up_rollup_layered(
 /// The base-parameterized fold core every entry point shares: resume from
 /// `base` (a fold cold from offset zero when `None`), fold only the frames
 /// appended past it, and return the refreshed cache beside the
-/// carryover-merged rollup. The one-shot wrapper ([`catch_up_rollup`]) and
+/// carryover-merged rollup. The disk-backed wrapper ([`catch_up_rollup`]) and
 /// the in-memory [`RollupCursor`] both delegate here — one implementation, so
 /// the keystone fold equivalence holds for every reader by construction.
 /// `base.extent.offset` must not exceed the live log; callers filter.
@@ -958,7 +921,7 @@ pub(crate) fn reseed_rollup_cache_for_rotation(paths: &StatePaths) -> Result<()>
 /// one `stat` each of the log and the carryover, parsing neither base — and
 /// an unchanged log returns the held rollup without opening a file. One
 /// cursor per reader thread (the sidebar fetch worker owns one across its
-/// loop); one-shot readers share a thread-local cursor through `catch_up_rollup`.
+/// loop); one-shot readers stay on the disk-backed wrapper.
 ///
 /// Staleness is structural, not best-effort: a swapped log file — rotation's
 /// rename-and-recreate, the identity rewrite's rename-over — changes the
