@@ -23,6 +23,48 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 const POLL_INTERVAL: Duration = Duration::from_millis(500);
 const WAIT_STEP: Duration = Duration::from_millis(25);
 
+const TAIL_BYTES: usize = 8 * 1024;
+
+/// A line-boundary stderr tail with an 8 KiB text budget.
+#[derive(Default)]
+pub struct StderrTail {
+    bytes: Vec<u8>,
+    cut: bool,
+}
+
+impl StderrTail {
+    pub fn append(&mut self, bytes: &[u8]) {
+        self.bytes.extend_from_slice(bytes);
+        if self.bytes.len() > TAIL_BYTES {
+            let excess = self.bytes.len() - TAIL_BYTES;
+            self.cut = self.bytes[excess - 1] != b'\n';
+            self.bytes.drain(..excess);
+        }
+    }
+
+    pub fn text(&self) -> String {
+        let start = if self.cut {
+            self.bytes
+                .iter()
+                .position(|&byte| byte == b'\n')
+                .map_or(self.bytes.len(), |index| index + 1)
+        } else {
+            0
+        };
+        let text = String::from_utf8_lossy(&self.bytes[start..]);
+        if text.len() <= TAIL_BYTES {
+            return text.into_owned();
+        }
+        // Lossy replacement can expand invalid bytes beyond the byte budget.
+        let excess = text.len() - TAIL_BYTES;
+        let start = text.as_bytes()[excess..]
+            .iter()
+            .position(|&byte| byte == b'\n')
+            .map_or(text.len(), |index| excess + index + 1);
+        text[start..].to_owned()
+    }
+}
+
 static REAPER: OnceLock<Sender<Child>> = OnceLock::new();
 static REAPER_INIT: Mutex<()> = Mutex::new(());
 
@@ -621,6 +663,27 @@ mod tests {
 
     const WAIT_TIMEOUT: Duration = Duration::from_secs(3);
     const REAP_WAIT_STEP: Duration = Duration::from_millis(25);
+
+    #[test]
+    fn stderr_tail_keeps_complete_lines_within_eight_kib() {
+        let mut tail = StderrTail::default();
+        tail.append(b"first\n");
+        assert_eq!(tail.text(), "first\n");
+        for _ in 0..12000 {
+            tail.append(b"discarded\n");
+        }
+        tail.append(b"last line\n");
+        let text = tail.text();
+        assert!(text.len() <= 8192);
+        assert!(!text.contains("first"));
+        assert!(text.starts_with("discarded\n"));
+        assert!(text.ends_with("last line\n"));
+        tail.append(&vec![b'x'; 9000]);
+        tail.append(b"end of oversized line\nkept\n");
+        assert_eq!(tail.text(), "kept\n");
+        tail.append(b"invalid: \xff\n");
+        assert_eq!(tail.text(), "kept\ninvalid: \u{fffd}\n");
+    }
 
     #[test]
     fn user_temp_env_follows_the_saved_tmpdir() {
