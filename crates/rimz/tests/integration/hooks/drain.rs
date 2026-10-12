@@ -260,6 +260,38 @@ fn drainer_resyncs_corrupt_ingress_and_applies_following_frames() {
 }
 
 #[test]
+fn delayed_apply_records_lag_and_remaining_ingress_bytes() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let mut first = stop_frame(&env);
+    first.ts = Timestamp::now() - std::time::Duration::from_secs(60);
+    let (first, first_end) = append_frame(&env, first);
+    let mut second = stop_frame(&env);
+    second.ts = first.ts;
+    let (second, log_end) = append_frame(&env, second);
+    once(&env);
+    let path = env.store().paths().audit_path("hook-drain.log.jsonl");
+    assert!(path.is_file(), "delayed apply needs durable lag evidence");
+    let records: Vec<serde_json::Value> = std::fs::read_to_string(path)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(records.len(), 2, "{records:?}");
+    for (record, frame, pending_bytes) in [
+        (&records[0], &first, log_end),
+        (&records[1], &second, log_end - first_end),
+    ] {
+        assert_eq!(record["event"], "lag");
+        assert_eq!(record["ingress"], frame.event_id.as_str());
+        assert_eq!(record["hook_event"], "Stop");
+        assert_eq!(record["pending_bytes"], pending_bytes);
+        assert!(record["lag_ms"].as_i64().unwrap() >= 60_000);
+        assert!(!derived(&env, &frame.event_id).is_empty());
+    }
+}
+
+#[test]
 fn failed_apply_leaves_a_durable_diagnostic() {
     let env = Env::new();
     env.record(&env.project_root);
