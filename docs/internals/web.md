@@ -121,7 +121,7 @@ Stopping sends SIGTERM to the gate and ttyd, polls the process table for up to o
 
 `rimz web gate` (`gate::serve`) always stands on the writable public listener. It parses its `--allow` entries as bare IPs or IPv4 and IPv6 CIDRs, and `desired_spec` has already parsed them before any process changed.
 
-Each request-head read has a 30-second idle timeout, cleared before relaying a body or upgraded WebSocket. The gate connects to ttyd only after the first request is authorized. Failure to spawn a connection thread drops that connection rather than terminating the gate.
+Each request head must arrive whole within 30 seconds (`HEAD_DEADLINE`), measured across every read so a peer dripping bytes cannot extend it; the deadline is cleared before relaying a body or upgraded WebSocket. At most 64 connections (`MAX_UNAUTHENTICATED`) may be open without an authorized request; the listener closes further peers at once, and a connection frees its slot when its first request is authorized. The gate connects to ttyd only after the first request is authorized. Failure to spawn a connection thread drops that connection rather than terminating the gate.
 
 For each connection the gate first checks the peer. Basic auth with an empty proxy list admits every peer, preserving the reach of the former direct listener. With a nonempty list, or in trusted-header mode, it maps an IPv4-mapped IPv6 address back to IPv4, accepts loopback and any address inside a same-family allowlist entry, and closes everything else without a response.
 
