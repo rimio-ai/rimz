@@ -486,6 +486,49 @@ fn start_inside_another_session_reports_the_live_room_without_writing() {
 }
 
 #[test]
+fn session_lookup_skips_unrecorded_siblings_and_obeys_log_color() {
+    let env = Env::new();
+    let siblings = env.rimz_home().join("ws");
+    let unrecorded = siblings.join("unrecorded");
+    let corrupt = siblings.join("corrupt").join("workspace.json");
+    std::fs::create_dir_all(&unrecorded).unwrap();
+    std::fs::create_dir_all(corrupt.parent().unwrap()).unwrap();
+    std::fs::write(&corrupt, "not JSON").unwrap();
+    for (color, ansi) in [("auto", false), ("always", true), ("never", false)] {
+        let mut command = env.rimz();
+        command
+            .args([
+                "--color", color, "--mux", "zellij", "attach", "nosuch", "--print",
+            ])
+            .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+            .env("RIMZ_TEST_ZELLIJ_LOG", env.home_root.join("zellij.log"))
+            .env_remove("CLICOLOR_FORCE")
+            .env_remove("NO_COLOR");
+        if color == "always" {
+            command.env("NO_COLOR", "1");
+        }
+        let output = command
+            .bounded_output()
+            .expect("unknown session with sibling records");
+        assert_eq!(output.status.code(), Some(1));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(stderr.contains('\x1b'), ansi, "{color}: {stderr}");
+        assert_eq!(
+            stderr
+                .matches("skipping unreadable workspace record")
+                .count(),
+            1,
+            "{stderr}"
+        );
+        assert!(stderr.contains(&corrupt.display().to_string()), "{stderr}");
+        assert!(
+            !stderr.contains(&unrecorded.display().to_string()),
+            "{stderr}"
+        );
+    }
+}
+
+#[test]
 fn attach_unknown_name_refuses_without_emitting_an_attach_command() {
     let env = Env::new();
     let log = env.home_root.join("zellij.log");
