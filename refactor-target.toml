@@ -701,6 +701,7 @@ path = "crates/rimz/src/sidebar"
 # The attachment's pre-paint seed reads the validated published pair without store access (+1).
 # Hook lifecycle records subscription rejection through the shared credits lock (+1).
 # HostInputs, PaneProducer, and private inspection replace the reader escape hatches and cache election within the existing surface budget.
+# project_local is public for the fleet publish benchmark, within existing headroom.
 surface-budget = 239
 
 [[verdict]]

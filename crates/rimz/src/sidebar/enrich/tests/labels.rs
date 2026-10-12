@@ -16,7 +16,8 @@ fn colliding_labels_use_the_shortest_distinguishing_path_suffix() {
         group("/b/.agents", "main"),
         group("/x/work/app", "release"),
         group("/y/oss/app", "release"),
-    ];
+    ]
+    .into();
 
     disambiguate_group_labels(&mut snapshot);
 
@@ -47,7 +48,8 @@ fn unambiguous_channels_and_redundant_qualifiers_stay_quiet() {
         group("/repo/feature", "feature"),
         group("/repo/other", "feature"),
         channel,
-    ];
+    ]
+    .into();
 
     disambiguate_group_labels(&mut snapshot);
 
@@ -64,7 +66,7 @@ fn unambiguous_channels_and_redundant_qualifiers_stay_quiet() {
 #[test]
 fn pass_preserves_identity_and_clears_stale_qualifiers() {
     let (_, _, mut snapshot) = runtime();
-    snapshot.worktree_groups = vec![group("/a/rimz", "main"), group("/b/.agents", "main")];
+    snapshot.worktree_groups = vec![group("/a/rimz", "main"), group("/b/.agents", "main")].into();
     let keys = snapshot
         .worktree_groups
         .iter()
@@ -72,7 +74,7 @@ fn pass_preserves_identity_and_clears_stale_qualifiers() {
         .collect::<Vec<_>>();
 
     disambiguate_group_labels(&mut snapshot);
-    snapshot.worktree_groups[1].label = "develop".to_owned();
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[1].label = "develop".to_owned();
     disambiguate_group_labels(&mut snapshot);
 
     assert_eq!(snapshot.worktree_groups.len(), 2);
@@ -99,7 +101,7 @@ fn identical_paths_under_split_keys_get_no_qualifier() {
     first.key.push_str("\nold-main");
     let mut second = group("/repo/app", "main");
     second.key.push_str("\nnew-main");
-    snapshot.worktree_groups = vec![first, second];
+    snapshot.worktree_groups = vec![first, second].into();
 
     disambiguate_group_labels(&mut snapshot);
 

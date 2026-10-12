@@ -169,7 +169,7 @@ fn session_pane(
     let snapshot = rimz::sidebar::produce::resolution_snapshot(&workspace, &store, None).ok()?;
     snapshot
         .agent_panes
-        .into_iter()
+        .iter()
         .find(|pane| {
             pane.kind.as_str() == kind
                 && pane
@@ -177,5 +177,5 @@ fn session_pane(
                     .as_ref()
                     .is_some_and(|agent_id| agent_id.as_str() == session_id)
         })
-        .map(|pane| (pane.pane_id, workspace.session_name))
+        .map(|pane| (pane.pane_id.clone(), workspace.session_name))
 }

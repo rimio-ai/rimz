@@ -539,7 +539,9 @@ mod tests {
         let target = PaneId::from_parts(MuxName::Zellij, "terminal_2");
         let mut snapshot = pulled(vec![pane("terminal_1", "zsh")], 10);
         snapshot.focused_pane = Some(PaneId::from_parts(MuxName::Zellij, "terminal_1"));
-        let row = &mut snapshot.worktree_groups[0].rows[0];
+        let row = &mut std::sync::Arc::make_mut(
+            &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+        )[0];
         row.card = crate::store::snapshot::RowCard::Agent(std::sync::Arc::default());
         row.as_agent_mut().unwrap().sub_agents.push(
             serde_json::from_value(serde_json::json!({

@@ -78,7 +78,7 @@ fn git_rung_orders_calm_worktree_groups() {
         agent_in("dirty", "/repo/dirty", AgentStatus::Idle, 1_000),
         agent_in("clean", "/repo/clean", AgentStatus::Idle, 1_000),
     ]);
-    for group in &mut snapshot.worktree_groups {
+    for group in std::sync::Arc::make_mut(&mut snapshot.worktree_groups) {
         match group.label.as_str() {
             "dirty" => group.clean = Some(false),
             "clean" => {
@@ -109,7 +109,7 @@ fn calm_activity_precedes_git_for_working_and_success_groups() {
         agent_in("running", "/repo/working", AgentStatus::Running, 2_000),
         agent_in("idle", "/repo/working", AgentStatus::Idle, 3_000),
     ]);
-    for group in &mut snapshot.worktree_groups {
+    for group in std::sync::Arc::make_mut(&mut snapshot.worktree_groups) {
         match group.label.as_str() {
             "success" => group.clean = Some(false),
             "working" => {
@@ -134,7 +134,7 @@ fn sleeping_group_uses_idle_calm_tier() {
         agent_in("sleeping", "/repo/sleeping", AgentStatus::Sleeping, 1_000),
         agent_in("idle", "/repo/idle", AgentStatus::Idle, 1_000),
     ]);
-    for group in &mut snapshot.worktree_groups {
+    for group in std::sync::Arc::make_mut(&mut snapshot.worktree_groups) {
         group.clean = Some(group.label == "sleeping");
     }
     snapshot.sort_groups_for_presentation();
@@ -148,7 +148,7 @@ fn clean_success_group_leads_merged_success_group() {
         agent_in("merged", "/repo/merged", AgentStatus::Success, 1_000),
         agent_in("clean", "/repo/clean", AgentStatus::Success, 2_000),
     ]);
-    for group in &mut snapshot.worktree_groups {
+    for group in std::sync::Arc::make_mut(&mut snapshot.worktree_groups) {
         group.clean = Some(true);
         if group.label == "merged" {
             group.trunk_sync = Some(WorktreeTrunkSync::Merged);
@@ -173,8 +173,7 @@ fn merged_success_archives_immediately_and_attention_revives_it() {
             ) + 1,
         ),
     ]);
-    let done = snapshot
-        .worktree_groups
+    let done = std::sync::Arc::make_mut(&mut snapshot.worktree_groups)
         .iter_mut()
         .find(|group| group.label == "done")
         .expect("done group present");
@@ -194,20 +193,24 @@ fn merged_success_archives_immediately_and_attention_revives_it() {
         "the group archives from its terminal verdict, not its activity clock"
     );
 
-    let done = snapshot
-        .worktree_groups
+    let done = std::sync::Arc::make_mut(&mut snapshot.worktree_groups)
         .iter_mut()
         .find(|group| group.label == "done")
         .expect("done group present");
-    done.rows[0].as_agent_mut().expect("agent row").status = AgentStatus::Running;
+    std::sync::Arc::make_mut(&mut done.rows)[0]
+        .as_agent_mut()
+        .expect("agent row")
+        .status = AgentStatus::Running;
     snapshot.sort_groups_for_presentation();
     assert_eq!(labels(&snapshot), vec!["done", "warm"]);
     assert!(!snapshot.worktree_groups[0].finished);
 
-    snapshot.worktree_groups[0].rows[0]
-        .as_agent_mut()
-        .expect("agent row")
-        .status = AgentStatus::Waiting;
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[0]
+    .as_agent_mut()
+    .expect("agent row")
+    .status = AgentStatus::Waiting;
     snapshot.sort_groups_for_presentation();
     assert_eq!(labels(&snapshot), vec!["done", "warm"]);
     assert!(
@@ -222,7 +225,7 @@ fn pristine_landed_fork_stays_clean_until_work_is_finished() {
         agent_in("merged", "/repo/merged", AgentStatus::Success, 1_000),
         agent_in("pristine", "/repo/pristine", AgentStatus::Success, 2_000),
     ]);
-    for group in &mut snapshot.worktree_groups {
+    for group in std::sync::Arc::make_mut(&mut snapshot.worktree_groups) {
         group.clean = Some(true);
         group.landed = Some(true);
         match group.label.as_str() {
@@ -244,12 +247,12 @@ fn process_only_group_tails_calm_agent_groups() {
         agent_in("process", "/repo/process", AgentStatus::Idle, 1_000),
         agent_in("idle", "/repo/idle", AgentStatus::Idle, 2_000),
     ]);
-    let process = snapshot
-        .worktree_groups
+    let process = std::sync::Arc::make_mut(&mut snapshot.worktree_groups)
         .iter_mut()
         .find(|group| group.label == "process")
         .expect("process group present");
-    process.rows[0].card = RowCard::Process(crate::store::snapshot::ProcessCard::default());
+    std::sync::Arc::make_mut(&mut process.rows)[0].card =
+        RowCard::Process(crate::store::snapshot::ProcessCard::default());
     process.status_counts.clear();
     snapshot.sort_groups_for_presentation();
 
@@ -262,7 +265,7 @@ fn merged_pr_sinks_calm_worktree_group() {
         agent_in("done-idle", "/repo/done", AgentStatus::Idle, 1_000),
         agent_in("working-idle", "/repo/working", AgentStatus::Idle, 1_000),
     ]);
-    for group in &mut snapshot.worktree_groups {
+    for group in std::sync::Arc::make_mut(&mut snapshot.worktree_groups) {
         group.clean = Some(true);
         group.landed = Some(false);
         match group.label.as_str() {
@@ -282,7 +285,7 @@ fn closed_pr_sinks_calm_worktree_group() {
         agent_in("done-idle", "/repo/done", AgentStatus::Idle, 1_000),
         agent_in("working-idle", "/repo/working", AgentStatus::Idle, 1_000),
     ]);
-    for group in &mut snapshot.worktree_groups {
+    for group in std::sync::Arc::make_mut(&mut snapshot.worktree_groups) {
         group.clean = Some(true);
         group.landed = Some(false);
         match group.label.as_str() {
@@ -303,7 +306,7 @@ fn open_pr_does_not_sink_calm_worktree_group() {
         agent_in("working-idle", "/repo/working", AgentStatus::Idle, 1_000),
         agent_in("done-idle", "/repo/done", AgentStatus::Idle, 1_000),
     ]);
-    for group in &mut snapshot.worktree_groups {
+    for group in std::sync::Arc::make_mut(&mut snapshot.worktree_groups) {
         group.clean = Some(true);
         group.landed = Some(false);
         match group.label.as_str() {
@@ -329,7 +332,7 @@ fn merged_pr_sinks_git_backed_channel_group() {
             1_000,
         ),
     ]);
-    for group in &mut snapshot.worktree_groups {
+    for group in std::sync::Arc::make_mut(&mut snapshot.worktree_groups) {
         group.kind = SidebarWorktreeKind::Channel;
         group.clean = Some(true);
         group.landed = Some(false);
@@ -350,7 +353,7 @@ fn attention_member_overrides_git_rung() {
         agent_in("dirty-idle", "/repo/dirty", AgentStatus::Idle, 1_000),
         agent_in("merged-wait", "/repo/merged", AgentStatus::Waiting, 1_000),
     ]);
-    for group in &mut snapshot.worktree_groups {
+    for group in std::sync::Arc::make_mut(&mut snapshot.worktree_groups) {
         match group.label.as_str() {
             "dirty" => group.clean = Some(false),
             "merged" => {
@@ -375,8 +378,7 @@ fn external_group_tails_even_merged_project_work() {
         agent_in("merged-idle", "/repo/merged", AgentStatus::Idle, 1_000),
         agent("claude", "external-fail", AgentStatus::Failed, 1_000),
     ]);
-    let merged = snapshot
-        .worktree_groups
+    let merged = std::sync::Arc::make_mut(&mut snapshot.worktree_groups)
         .iter_mut()
         .find(|group| group.label == "merged")
         .expect("merged group present");

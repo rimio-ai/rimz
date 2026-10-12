@@ -224,7 +224,7 @@ mod tests {
             cohort_effort: None,
             pipeline: None,
             status_counts: Vec::new(),
-            rows,
+            rows: rows.into(),
             diff_added: None,
             diff_removed: None,
             commits_ahead: None,
@@ -240,7 +240,8 @@ mod tests {
             ci: None,
             pr_number: None,
             pr_url: None,
-        }];
+        }]
+        .into();
         snapshot
     }
 

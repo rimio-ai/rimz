@@ -17,18 +17,19 @@ fn pipeline_snapshot() -> SidebarSnapshot {
         member
     });
     let mut snapshot = snapshot_with(agents.into());
-    snapshot.worktree_groups[0].pipeline = Some(crate::store::snapshot::SidebarPipeline {
-        stages: ["Explore", "Plan", "Implement", "Review", "Ship"]
-            .map(str::to_owned)
-            .into(),
-        stage: "Implement".to_owned(),
-        owner: Some("coder".to_owned()),
-        started_at: Some(fixed_now() - Duration::from_secs(2_832)),
-        stage_started_at: Some(fixed_now() - Duration::from_secs(2_832)),
-        stage_prior_secs: 0,
-        visited: Default::default(),
-        done_at: None,
-    });
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].pipeline =
+        Some(crate::store::snapshot::SidebarPipeline {
+            stages: ["Explore", "Plan", "Implement", "Review", "Ship"]
+                .map(str::to_owned)
+                .into(),
+            stage: "Implement".to_owned(),
+            owner: Some("coder".to_owned()),
+            started_at: Some(fixed_now() - Duration::from_secs(2_832)),
+            stage_started_at: Some(fixed_now() - Duration::from_secs(2_832)),
+            stage_prior_secs: 0,
+            visited: Default::default(),
+            done_at: None,
+        });
     snapshot
 }
 
@@ -83,7 +84,7 @@ fn header_label_parts_keep_styles_only_when_the_full_label_fits() {
             (None, Some("t"), "x · t", "x ·…"),
         ] {
             let mut snapshot = pristine_worktree_with_pr_state(None);
-            let group = &mut snapshot.worktree_groups[0];
+            let group = &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0];
             group.kind = crate::store::snapshot::SidebarWorktreeKind::Root;
             group.label = "x".to_owned();
             group.label_qualifier = qualifier.map(str::to_owned);
@@ -135,7 +136,7 @@ fn selected_header_seal_fill_thresholds() {
     for root in [false, true] {
         let mut snapshot =
             pristine_worktree_with_pr_state(Some(crate::store::snapshot::WorktreePrState::Open));
-        let group = &mut snapshot.worktree_groups[0];
+        let group = &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0];
         group.label = "x".to_owned();
         if root {
             group.kind = crate::store::snapshot::SidebarWorktreeKind::Root;
@@ -171,7 +172,8 @@ fn empty_pipeline_is_inert_and_expanded_less_tail_toggles_without_ordinal() {
     let theme = Theme::fixed(false);
     let cost_rolls = CostRolls::default();
     let mut snapshot = pipeline_snapshot();
-    snapshot.worktree_groups[0].rows.clear();
+    std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows)
+        .clear();
     let ctx = test_row_ctx(&snapshot, &theme, 54, 0, 0, &cost_rolls);
     let block = worktree_group_block(&ctx, &snapshot.worktree_groups[0], false, None);
     assert!(line_texts(&block.lines)[1].contains("Implement"));
@@ -198,7 +200,7 @@ fn empty_pipeline_is_inert_and_expanded_less_tail_toggles_without_ordinal() {
             })
             .collect(),
     );
-    snapshot.worktree_groups[0].finished = false;
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].finished = false;
     let ctx = test_row_ctx(&snapshot, &theme, 54, 0, 0, &cost_rolls);
     let group = &snapshot.worktree_groups[0];
     let block = worktree_group_block(&ctx, group, true, None);
@@ -226,7 +228,7 @@ fn pr_stack_orders_multiple_levels_and_leaves_url_less_members_unlinked() {
     use crate::store::snapshot::StackPr;
     let theme = Theme::fixed(false);
     let mut snapshot = pristine_worktree_with_pr_state(None);
-    let group = &mut snapshot.worktree_groups[0];
+    let group = &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0];
     group.pr_number = Some(2);
     group.pr_url = Some("https://example.com/2".to_owned());
     group.pr_stack.below = vec![StackPr {
@@ -272,7 +274,10 @@ fn render_pipeline_states() {
         ("pipeline_narrow", "Implement", true, false, 22),
     ] {
         let mut snapshot = pipeline_snapshot();
-        let pipeline = snapshot.worktree_groups[0].pipeline.as_mut().unwrap();
+        let pipeline = std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0]
+            .pipeline
+            .as_mut()
+            .unwrap();
         pipeline.stage = stage.to_owned();
         if stage == "Done" {
             pipeline.done_at = Some(fixed_now() - Duration::from_secs(12));
@@ -299,10 +304,10 @@ fn render_pipeline_states() {
 #[test]
 fn render_pipeline_folded_stage() {
     let mut snapshot = pipeline_snapshot();
-    let group = &mut snapshot.worktree_groups[0];
+    let group = &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0];
     group.finished = true;
     group.pipeline.as_mut().unwrap().stage = "Done".to_owned();
-    for row in &mut group.rows {
+    for row in std::sync::Arc::make_mut(&mut group.rows) {
         row.as_agent_mut().unwrap().status = AgentStatus::Success;
     }
     let rendered = snapshot_to_screen(&snapshot, 54, 20);
@@ -324,14 +329,17 @@ fn pipeline_click_and_status_style_follow_visible_owner() {
     let theme = Theme::fixed(false);
     let cost_rolls = CostRolls::default();
     for owner in [Some("coder"), Some("absent"), None] {
-        let group = &mut snapshot.worktree_groups[0];
+        let group = &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0];
         group.pipeline.as_mut().unwrap().owner = owner.map(str::to_owned);
         let owner_index = group
             .rows
             .iter()
             .position(|row| row.display_name() == "coder")
             .unwrap();
-        group.rows[owner_index].as_agent_mut().unwrap().status = AgentStatus::Waiting;
+        std::sync::Arc::make_mut(&mut group.rows)[owner_index]
+            .as_agent_mut()
+            .unwrap()
+            .status = AgentStatus::Waiting;
         let ctx = test_row_ctx(&snapshot, &theme, 54, 0, 7, &cost_rolls);
         let block = worktree_group_block(&ctx, &snapshot.worktree_groups[0], false, None);
         assert_eq!(
@@ -366,7 +374,11 @@ fn pipeline_completion_styles_and_width_admission() {
     let mut snapshot = pipeline_snapshot();
     let theme = Theme::fixed(false);
     for stage in ["Implement", "Done"] {
-        snapshot.worktree_groups[0].pipeline.as_mut().unwrap().stage = stage.to_owned();
+        std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0]
+            .pipeline
+            .as_mut()
+            .unwrap()
+            .stage = stage.to_owned();
         let lines = group_lines_at_width(&snapshot, &theme, 0, 54);
         let line = &lines[1];
         for role in [GlyphRole::PipelinePassed, GlyphRole::PipelineDone] {
@@ -404,7 +416,10 @@ fn pipeline_completion_styles_and_width_admission() {
             theme.styled(Component::TeamLabel, Modifier::empty())
         );
     }
-    let pipeline = snapshot.worktree_groups[0].pipeline.as_mut().unwrap();
+    let pipeline = std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0]
+        .pipeline
+        .as_mut()
+        .unwrap();
     pipeline.stage = "Implement".to_owned();
     pipeline.stage_started_at = Some(fixed_now() - Duration::from_secs(7));
     for (width, expected) in [
@@ -448,7 +463,11 @@ fn pipeline_completion_styles_and_width_admission() {
     }
     // An undeclared stage has no track to drop, so it keeps its badge at a
     // width where a tracked stage has lost its badge.
-    snapshot.worktree_groups[0].pipeline.as_mut().unwrap().stage = "Investigate".to_owned();
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0]
+        .pipeline
+        .as_mut()
+        .unwrap()
+        .stage = "Investigate".to_owned();
     let lines = group_lines_at_width(&snapshot, &theme, 0, 32);
     let text = lines[1]
         .spans
@@ -456,8 +475,12 @@ fn pipeline_completion_styles_and_width_admission() {
         .map(|span| span.content.as_ref())
         .collect::<String>();
     assert!(text.contains("forge · Investigate"), "{text}");
-    snapshot.worktree_groups[0].pipeline.as_mut().unwrap().stage = "Implement".to_owned();
-    snapshot.worktree_groups[0].label = "pipeline/forge".to_owned();
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0]
+        .pipeline
+        .as_mut()
+        .unwrap()
+        .stage = "Implement".to_owned();
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].label = "pipeline/forge".to_owned();
     let lines = group_lines_at_width(&snapshot, &theme, 0, 54);
     assert!(
         lines[1]
@@ -479,7 +502,10 @@ fn pipeline_revisited_future_dots_are_warm_and_hollow() {
         ("Done", vec!["Review"], 0),
         ("Investigate", vec!["Review"], 0),
     ] {
-        let pipeline = snapshot.worktree_groups[0].pipeline.as_mut().unwrap();
+        let pipeline = std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0]
+            .pipeline
+            .as_mut()
+            .unwrap();
         pipeline.stage = stage.to_owned();
         pipeline.visited = visited.into_iter().map(str::to_owned).collect();
         let lines = group_lines_at_width(&snapshot, &theme, 0, 54);
@@ -538,7 +564,10 @@ fn pipeline_clocks_are_independent_and_pinned_right() {
         ("Implement", 0, Some(15120), Some(17460), "4h12m", "4h51m"),
         ("Investigate", 0, Some(1080), Some(3720), "18m", "1h02m"),
     ] {
-        let pipeline = snapshot.worktree_groups[0].pipeline.as_mut().unwrap();
+        let pipeline = std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0]
+            .pipeline
+            .as_mut()
+            .unwrap();
         pipeline.stage = stage.to_owned();
         pipeline.stage_prior_secs = prior;
         pipeline.stage_started_at = stage_secs.map(|s| fixed_now() - Duration::from_secs(s));
@@ -596,7 +625,10 @@ fn pipeline_clocks_are_independent_and_pinned_right() {
 #[test]
 fn pipeline_duration_shapes_survive_nerd_font_and_no_color() {
     let mut snapshot = pipeline_snapshot();
-    let pipeline = snapshot.worktree_groups[0].pipeline.as_mut().unwrap();
+    let pipeline = std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0]
+        .pipeline
+        .as_mut()
+        .unwrap();
     pipeline.stage_started_at = Some(fixed_now() - Duration::from_secs(15_120));
     pipeline.started_at = Some(fixed_now() - Duration::from_secs(17_460));
     for (modern, no_color, name) in [
@@ -618,16 +650,21 @@ fn pipeline_duration_shapes_survive_nerd_font_and_no_color() {
 fn pipeline_does_not_change_attention_or_animation() {
     let mut snapshot = pipeline_snapshot();
     // Isolate row rendering from the team badge's header/pipeline hand-off.
-    snapshot.worktree_groups[0].team = None;
-    snapshot.worktree_groups[0].rows[0].unread = true;
-    snapshot.worktree_groups[0].rows[0]
-        .as_agent_mut()
-        .unwrap()
-        .status = AgentStatus::Waiting;
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].team = None;
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[0]
+    .unread = true;
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[0]
+    .as_agent_mut()
+    .unwrap()
+    .status = AgentStatus::Waiting;
     let cadence = animation_cadence_for_test(&snapshot);
     let unread = lead_unread(&snapshot.worktree_groups).map(|(id, status)| (id.to_owned(), status));
     let with = snapshot_to_screen(&snapshot, 54, 24);
-    snapshot.worktree_groups[0].pipeline = None;
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].pipeline = None;
     assert_eq!(cadence, animation_cadence_for_test(&snapshot));
     assert_eq!(
         unread,
@@ -667,8 +704,7 @@ fn render_directory_room_root_pod_is_name_only() {
         .with_root_class(crate::workspace::RootClass::Directory)
         .with_project_root(Some("/srv/agents".into()))
         .with_live_panes(vec![stamped, shell], None);
-    let child = snapshot
-        .worktree_groups
+    let child = std::sync::Arc::make_mut(&mut snapshot.worktree_groups)
         .iter_mut()
         .find(|group| group.kind == crate::store::snapshot::SidebarWorktreeKind::Worktree)
         .expect("the git-backed worktree pod");
@@ -733,7 +769,7 @@ fn render_active_team_header_tolerates_strays_and_yields_to_git_facts() {
         None,
     );
     let mut snapshot = snapshot_with(vec![planner, stray]);
-    let group = &mut snapshot.worktree_groups[0];
+    let group = &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0];
     assert_eq!(group.team.as_deref(), Some("forge"));
     assert_eq!(
         serde_json::to_value(&*group).unwrap()["team"],
@@ -771,7 +807,8 @@ fn render_active_team_header_tolerates_strays_and_yields_to_git_facts() {
         narrow.contains("⑂ main"),
         "git verdict stays pinned: {narrow}"
     );
-    snapshot.worktree_groups[0].pipeline = pipeline_snapshot().worktree_groups[0].pipeline.clone();
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].pipeline =
+        pipeline_snapshot().worktree_groups[0].pipeline.clone();
     assert!(
         group_lines_at_width(&snapshot, &theme, 0, 48)[0]
             .spans
@@ -981,7 +1018,7 @@ fn render_colliding_group_qualifiers_are_muted_and_ellipsize_with_the_label() {
             None,
         ),
     ]);
-    for group in &mut snapshot.worktree_groups {
+    for group in std::sync::Arc::make_mut(&mut snapshot.worktree_groups) {
         group.label_qualifier = group.key.rsplit('/').next().map(ToOwned::to_owned);
     }
 
@@ -1031,11 +1068,12 @@ fn render_worktree_channel_leads_with_merge_glyph() {
     );
     design.channel = Some("codex-resets".to_owned());
     let mut snapshot = snapshot_with(vec![design]);
-    snapshot.worktree_groups[0].worktree_backed = true;
-    snapshot.worktree_groups[0].trunk = Some("main".to_owned());
-    snapshot.worktree_groups[0].trunk_sync =
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].worktree_backed = true;
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].trunk = Some("main".to_owned());
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].trunk_sync =
         Some(crate::store::snapshot::WorktreeTrunkSync::Pristine);
-    snapshot.worktree_groups[0].pr_state = Some(crate::store::snapshot::WorktreePrState::Merged);
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].pr_state =
+        Some(crate::store::snapshot::WorktreePrState::Merged);
 
     let rendered = snapshot_to_screen(&snapshot, 44, 14);
 
@@ -1059,7 +1097,7 @@ fn render_worktree_channel_uses_fork_glyph_before_git_facts() {
     );
     design.channel = Some("codex-resets".to_owned());
     let mut snapshot = snapshot_with(vec![design]);
-    snapshot.worktree_groups[0].worktree_backed = true;
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].worktree_backed = true;
 
     let rendered = snapshot_to_screen(&snapshot, 44, 14);
 
@@ -1085,8 +1123,8 @@ fn render_worktree_channel_carries_pr_badge() {
     );
     design.channel = Some("codex-resets".to_owned());
     let mut snapshot = snapshot_with(vec![design]);
-    snapshot.worktree_groups[0].worktree_backed = true;
-    snapshot.worktree_groups[0].pr_number = Some(91);
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].worktree_backed = true;
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].pr_number = Some(91);
 
     let rendered = snapshot_to_screen(&snapshot, 44, 14);
 
@@ -1108,11 +1146,11 @@ fn render_worktree_channel_leads_with_fork_glyph() {
     );
     design.channel = Some("codex-resets".to_owned());
     let mut snapshot = snapshot_with(vec![design]);
-    snapshot.worktree_groups[0].worktree_backed = true;
-    snapshot.worktree_groups[0].trunk = Some("main".to_owned());
-    snapshot.worktree_groups[0].trunk_sync =
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].worktree_backed = true;
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].trunk = Some("main".to_owned());
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].trunk_sync =
         Some(crate::store::snapshot::WorktreeTrunkSync::Diverged);
-    snapshot.worktree_groups[0].pr_state = None;
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].pr_state = None;
 
     let rendered = snapshot_to_screen(&snapshot, 44, 14);
 
@@ -1136,16 +1174,16 @@ fn pristine_worktree_with_pr_state(
     );
     codex.last_activity = fixed_now() - Duration::from_secs(30);
     let mut snapshot = snapshot_with(vec![codex]);
-    snapshot.worktree_groups[0].diff_added = Some(0);
-    snapshot.worktree_groups[0].diff_removed = Some(0);
-    snapshot.worktree_groups[0].commits_ahead = Some(0);
-    snapshot.worktree_groups[0].commits_behind = Some(0);
-    snapshot.worktree_groups[0].trunk = Some("main".to_owned());
-    snapshot.worktree_groups[0].clean = Some(true);
-    snapshot.worktree_groups[0].landed = Some(true);
-    snapshot.worktree_groups[0].trunk_sync =
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].diff_added = Some(0);
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].diff_removed = Some(0);
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].commits_ahead = Some(0);
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].commits_behind = Some(0);
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].trunk = Some("main".to_owned());
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].clean = Some(true);
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].landed = Some(true);
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].trunk_sync =
         Some(crate::store::snapshot::WorktreeTrunkSync::Pristine);
-    snapshot.worktree_groups[0].pr_state = pr_state;
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].pr_state = pr_state;
     snapshot
 }
 
@@ -1159,7 +1197,7 @@ fn render_pr_badge_keeps_identity_style_across_states() {
         Some(crate::store::snapshot::WorktreePrState::Closed),
     ] {
         let mut snapshot = pristine_worktree_with_pr_state(pr_state);
-        snapshot.worktree_groups[0].pr_number = Some(91);
+        std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].pr_number = Some(91);
         let lines = group_lines(&snapshot, &theme, 0);
         let header = &lines[0];
         let name = header
@@ -1187,7 +1225,7 @@ fn render_pr_stack_links_and_width_fallback() {
     let theme = Theme::fixed(false);
     let mut snapshot =
         pristine_worktree_with_pr_state(Some(crate::store::snapshot::WorktreePrState::Open));
-    let group = &mut snapshot.worktree_groups[0];
+    let group = &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0];
     group.pr_number = Some(530);
     group.pr_url = Some("https://github.com/org/repo/pull/530".to_owned());
     group.ci = Some(crate::store::snapshot::WorktreeCi::Passing);
@@ -1197,7 +1235,7 @@ fn render_pr_stack_links_and_width_fallback() {
     });
     let plain = {
         let mut plain = snapshot.clone();
-        plain.worktree_groups[0].pr_stack = Default::default();
+        std::sync::Arc::make_mut(&mut plain.worktree_groups)[0].pr_stack = Default::default();
         plain
     };
     // Gutter + full label + CI + badge + gap + right cluster + edge.
@@ -1214,14 +1252,17 @@ fn render_pr_stack_links_and_width_fallback() {
     }
     for fork in [false, true] {
         if fork {
-            snapshot.worktree_groups[0].pr_stack.above.push(
-                [540, 541]
-                    .map(|number| crate::store::snapshot::StackPr {
-                        number,
-                        url: Some(format!("https://github.com/org/repo/pull/{number}")),
-                    })
-                    .into(),
-            );
+            std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0]
+                .pr_stack
+                .above
+                .push(
+                    [540, 541]
+                        .map(|number| crate::store::snapshot::StackPr {
+                            number,
+                            url: Some(format!("https://github.com/org/repo/pull/{number}")),
+                        })
+                        .into(),
+                );
         }
         let text = line_texts(&group_lines_at_width(&snapshot, &theme, 0, 72))[0].clone();
         assert!(
@@ -1261,14 +1302,15 @@ fn render_open_and_merged_pr_badges_carry_ci_glyph_and_tone() {
     let theme = Theme::fixed(false);
     let mut snapshot =
         pristine_worktree_with_pr_state(Some(crate::store::snapshot::WorktreePrState::Open));
-    snapshot.worktree_groups[0].pr_number = Some(91);
-    snapshot.worktree_groups[0].ci = Some(crate::store::snapshot::WorktreeCi::Failing);
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].pr_number = Some(91);
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].ci =
+        Some(crate::store::snapshot::WorktreeCi::Failing);
 
     for state in [
         crate::store::snapshot::WorktreePrState::Open,
         crate::store::snapshot::WorktreePrState::Merged,
     ] {
-        snapshot.worktree_groups[0].pr_state = Some(state);
+        std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].pr_state = Some(state);
         let lines = group_lines(&snapshot, &theme, 0);
         let ci = lines[0]
             .spans
@@ -1289,14 +1331,14 @@ fn render_merge_queue_marker_replaces_the_open_pr_glyph() {
     for (set, glyph) in [("unicode", "⇉"), ("nerd_font", "\u{f4db}")] {
         snapshot.theme.glyphs.set = Some(set.to_owned());
         let theme = Theme::fixed_for_theme(false, &snapshot.theme);
-        let group = &mut snapshot.worktree_groups[0];
+        let group = &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0];
         group.trunk_sync = Some(WorktreeTrunkSync::Pristine);
         group.pr_state = Some(WorktreePrState::Open);
         for (queue, component) in [
             (WorktreePrQueue::Queued, Component::WorktreePrOpen),
             (WorktreePrQueue::Dequeued, Component::WorktreeCiFailing),
         ] {
-            snapshot.worktree_groups[0].pr_queue = Some(queue);
+            std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].pr_queue = Some(queue);
             let lines = group_lines(&snapshot, &theme, 0);
             let marker = lines[0]
                 .spans
@@ -1315,11 +1357,13 @@ fn render_merge_queue_marker_replaces_the_open_pr_glyph() {
                 .collect::<String>()
         };
         for state in [WorktreePrState::Merged, WorktreePrState::Closed] {
-            snapshot.worktree_groups[0].pr_state = Some(state);
+            std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].pr_state = Some(state);
             assert!(!header(&snapshot).contains(glyph), "{set} {state:?}");
         }
-        snapshot.worktree_groups[0].pr_state = Some(WorktreePrState::Open);
-        snapshot.worktree_groups[0].trunk_sync = Some(WorktreeTrunkSync::Reconciling);
+        std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].pr_state =
+            Some(WorktreePrState::Open);
+        std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].trunk_sync =
+            Some(WorktreeTrunkSync::Reconciling);
         let reconciling = header(&snapshot);
         assert!(!reconciling.contains(glyph), "{set}: {reconciling}");
         assert!(
@@ -1333,7 +1377,8 @@ fn render_merge_queue_marker_replaces_the_open_pr_glyph() {
 fn render_branch_ci_without_a_pr_badge() {
     let theme = Theme::fixed(false);
     let mut snapshot = pristine_worktree_with_pr_state(None);
-    snapshot.worktree_groups[0].ci = Some(crate::store::snapshot::WorktreeCi::Passing);
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].ci =
+        Some(crate::store::snapshot::WorktreeCi::Passing);
 
     let lines = group_lines(&snapshot, &theme, 0);
     let header = &lines[0];
@@ -1357,8 +1402,9 @@ fn render_branch_ci_without_a_pr_badge() {
 fn render_pr_badge_leads_with_ci_glyph() {
     let mut snapshot =
         pristine_worktree_with_pr_state(Some(crate::store::snapshot::WorktreePrState::Open));
-    snapshot.worktree_groups[0].pr_number = Some(888);
-    snapshot.worktree_groups[0].ci = Some(crate::store::snapshot::WorktreeCi::Passing);
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].pr_number = Some(888);
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].ci =
+        Some(crate::store::snapshot::WorktreeCi::Passing);
 
     let rendered = snapshot_to_screen(&snapshot, 44, 14);
 
@@ -1376,12 +1422,13 @@ fn render_pr_badge_leads_with_ci_glyph() {
 fn render_pr_badge_is_a_diff_safe_sanitized_hyperlink() {
     let mut linked =
         pristine_worktree_with_pr_state(Some(crate::store::snapshot::WorktreePrState::Open));
-    linked.worktree_groups[0].pr_number = Some(91);
-    linked.worktree_groups[0].ci = Some(crate::store::snapshot::WorktreeCi::Passing);
+    std::sync::Arc::make_mut(&mut linked.worktree_groups)[0].pr_number = Some(91);
+    std::sync::Arc::make_mut(&mut linked.worktree_groups)[0].ci =
+        Some(crate::store::snapshot::WorktreeCi::Passing);
     let unsafe_url = "https://github.com/org/repo/pull/91\x1b]8;;https://evil.test\u{7}";
-    linked.worktree_groups[0].pr_url = Some(unsafe_url.to_owned());
+    std::sync::Arc::make_mut(&mut linked.worktree_groups)[0].pr_url = Some(unsafe_url.to_owned());
     let mut plain = linked.clone();
-    plain.worktree_groups[0].pr_url = None;
+    std::sync::Arc::make_mut(&mut plain.worktree_groups)[0].pr_url = None;
 
     assert_eq!(
         snapshot_to_screen(&linked, 44, 14),
@@ -1420,7 +1467,7 @@ fn render_finished_header_dims_the_label_while_live_header_stays_full_tone() {
     let theme = Theme::fixed(false);
     let mut snapshot =
         pristine_worktree_with_pr_state(Some(crate::store::snapshot::WorktreePrState::Merged));
-    snapshot.worktree_groups[0].finished = true;
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].finished = true;
 
     let finished = group_lines(&snapshot, &theme, 0);
     let finished_label = finished[0]
@@ -1433,7 +1480,7 @@ fn render_finished_header_dims_the_label_while_live_header_stays_full_tone() {
         theme.muted().add_modifier(Modifier::BOLD)
     );
 
-    snapshot.worktree_groups[0].finished = false;
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].finished = false;
     let live = group_lines(&snapshot, &theme, 0);
     let live_label = live[0]
         .spans
@@ -1451,8 +1498,9 @@ fn render_pr_badge_drops_before_ci_as_the_name_shortens() {
     let theme = Theme::fixed(false);
     let mut snapshot =
         pristine_worktree_with_pr_state(Some(crate::store::snapshot::WorktreePrState::Open));
-    snapshot.worktree_groups[0].pr_number = Some(91);
-    snapshot.worktree_groups[0].ci = Some(crate::store::snapshot::WorktreeCi::Passing);
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].pr_number = Some(91);
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].ci =
+        Some(crate::store::snapshot::WorktreeCi::Passing);
 
     let admitted: Vec<_> = (1..=54)
         .map(|width| {
@@ -1494,10 +1542,11 @@ fn render_pr_badge_link_and_header_fill_follow_admission() {
     let theme = Theme::fixed(false);
     let mut snapshot =
         pristine_worktree_with_pr_state(Some(crate::store::snapshot::WorktreePrState::Open));
-    snapshot.worktree_groups[0].pr_number = Some(91);
-    snapshot.worktree_groups[0].ci = Some(crate::store::snapshot::WorktreeCi::Passing);
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].pr_number = Some(91);
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].ci =
+        Some(crate::store::snapshot::WorktreeCi::Passing);
     let url = "https://github.com/org/repo/pull/91";
-    snapshot.worktree_groups[0].pr_url = Some(url.to_owned());
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].pr_url = Some(url.to_owned());
     let open = format!("\x1b]8;;{url}\x1b\\");
     for width in 11..=17 {
         for selected in [0, usize::MAX] {
@@ -1554,7 +1603,8 @@ fn render_pr_badge_link_and_header_fill_follow_admission() {
 fn render_bare_branch_ci_yields_to_the_name_at_extreme_width() {
     let theme = Theme::fixed(false);
     let mut snapshot = pristine_worktree_with_pr_state(None);
-    snapshot.worktree_groups[0].ci = Some(crate::store::snapshot::WorktreeCi::Passing);
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].ci =
+        Some(crate::store::snapshot::WorktreeCi::Passing);
 
     for width in [11, 12, 13] {
         let text = line_texts(&group_lines_at_width(&snapshot, &theme, 0, width))[0].clone();
@@ -1568,7 +1618,7 @@ fn render_bare_pr_number_yields_to_the_name_at_extreme_width() {
     let theme = Theme::fixed(false);
     let mut snapshot =
         pristine_worktree_with_pr_state(Some(crate::store::snapshot::WorktreePrState::Open));
-    snapshot.worktree_groups[0].pr_number = Some(91);
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].pr_number = Some(91);
 
     for width in [13, 14, 15] {
         let text = line_texts(&group_lines_at_width(&snapshot, &theme, 0, width))[0].clone();
@@ -1623,7 +1673,8 @@ fn render_pristine_worktree_pr_state_outranks_equal_marker() {
     assert!(rendered.contains("⑃ main"), "header:\n{rendered}");
     assert!(!rendered.contains("≡ main"), "header:\n{rendered}");
 
-    snapshot.worktree_groups[0].pr_state = Some(crate::store::snapshot::WorktreePrState::Closed);
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].pr_state =
+        Some(crate::store::snapshot::WorktreePrState::Closed);
     let rendered = snapshot_to_screen(&snapshot, 38, 14);
     assert!(rendered.contains("✕ main"), "header:\n{rendered}");
     assert!(!rendered.contains("≡ main"), "header:\n{rendered}");
@@ -1644,14 +1695,14 @@ fn render_worktree_clear_removable() {
     );
     codex.last_activity = fixed_now() - Duration::from_secs(30);
     let mut snapshot = snapshot_with(vec![codex]);
-    snapshot.worktree_groups[0].diff_added = Some(0);
-    snapshot.worktree_groups[0].diff_removed = Some(0);
-    snapshot.worktree_groups[0].commits_ahead = Some(0);
-    snapshot.worktree_groups[0].commits_behind = Some(5);
-    snapshot.worktree_groups[0].trunk = Some("main".to_owned());
-    snapshot.worktree_groups[0].clean = Some(true);
-    snapshot.worktree_groups[0].landed = Some(true);
-    snapshot.worktree_groups[0].trunk_sync =
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].diff_added = Some(0);
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].diff_removed = Some(0);
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].commits_ahead = Some(0);
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].commits_behind = Some(5);
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].trunk = Some("main".to_owned());
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].clean = Some(true);
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].landed = Some(true);
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].trunk_sync =
         Some(crate::store::snapshot::WorktreeTrunkSync::Merged);
 
     let rendered = snapshot_to_screen(&snapshot, 38, 14);
@@ -1678,7 +1729,7 @@ fn render_merged_worktree_pr_open_or_closed_outranks_merge_marker() {
         None,
     );
     let mut snapshot = snapshot_with(vec![codex]);
-    let group = &mut snapshot.worktree_groups[0];
+    let group = &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0];
     group.trunk = Some("main".to_owned());
     group.clean = Some(true);
     group.landed = Some(true);
@@ -1695,7 +1746,8 @@ fn render_merged_worktree_pr_open_or_closed_outranks_merge_marker() {
         "local merge marker is gone:\n{rendered}"
     );
 
-    snapshot.worktree_groups[0].pr_state = Some(crate::store::snapshot::WorktreePrState::Closed);
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].pr_state =
+        Some(crate::store::snapshot::WorktreePrState::Closed);
     let rendered = snapshot_to_screen(&snapshot, 38, 14);
     assert!(
         rendered.contains("✕ main"),
@@ -1723,14 +1775,14 @@ fn render_content_landed_worktree_uses_marker_over_ancestry_delta() {
     );
     codex.last_activity = fixed_now() - Duration::from_secs(30);
     let mut snapshot = snapshot_with(vec![codex]);
-    snapshot.worktree_groups[0].diff_added = Some(14);
-    snapshot.worktree_groups[0].diff_removed = Some(3);
-    snapshot.worktree_groups[0].commits_ahead = Some(2);
-    snapshot.worktree_groups[0].commits_behind = Some(5);
-    snapshot.worktree_groups[0].trunk = Some("main".to_owned());
-    snapshot.worktree_groups[0].clean = Some(true);
-    snapshot.worktree_groups[0].landed = Some(true);
-    snapshot.worktree_groups[0].trunk_sync =
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].diff_added = Some(14);
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].diff_removed = Some(3);
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].commits_ahead = Some(2);
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].commits_behind = Some(5);
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].trunk = Some("main".to_owned());
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].clean = Some(true);
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].landed = Some(true);
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].trunk_sync =
         Some(crate::store::snapshot::WorktreeTrunkSync::Merged);
 
     let rendered = snapshot_to_screen(&snapshot, 38, 14);
@@ -1758,14 +1810,14 @@ fn render_worktree_dirty_tree_keeps_the_cluster() {
     );
     codex.last_activity = fixed_now() - Duration::from_secs(30);
     let mut snapshot = snapshot_with(vec![codex]);
-    snapshot.worktree_groups[0].diff_added = Some(0);
-    snapshot.worktree_groups[0].diff_removed = Some(0);
-    snapshot.worktree_groups[0].commits_ahead = Some(0);
-    snapshot.worktree_groups[0].commits_behind = Some(5);
-    snapshot.worktree_groups[0].trunk = Some("main".to_owned());
-    snapshot.worktree_groups[0].clean = Some(false);
-    snapshot.worktree_groups[0].landed = Some(true);
-    snapshot.worktree_groups[0].trunk_sync =
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].diff_added = Some(0);
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].diff_removed = Some(0);
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].commits_ahead = Some(0);
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].commits_behind = Some(5);
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].trunk = Some("main".to_owned());
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].clean = Some(false);
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].landed = Some(true);
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].trunk_sync =
         Some(crate::store::snapshot::WorktreeTrunkSync::Diverged);
 
     let rendered = snapshot_to_screen(&snapshot, 38, 14);
@@ -1792,14 +1844,14 @@ fn render_trunk_worktree_skips_the_landed_marker() {
     );
     codex.last_activity = fixed_now() - Duration::from_secs(30);
     let mut snapshot = snapshot_with(vec![codex]);
-    snapshot.worktree_groups[0].diff_added = Some(0);
-    snapshot.worktree_groups[0].diff_removed = Some(0);
-    snapshot.worktree_groups[0].commits_ahead = Some(0);
-    snapshot.worktree_groups[0].commits_behind = Some(0);
-    snapshot.worktree_groups[0].trunk = Some("main".to_owned());
-    snapshot.worktree_groups[0].clean = Some(true);
-    snapshot.worktree_groups[0].landed = Some(true);
-    snapshot.worktree_groups[0].trunk_sync = None;
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].diff_added = Some(0);
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].diff_removed = Some(0);
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].commits_ahead = Some(0);
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].commits_behind = Some(0);
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].trunk = Some("main".to_owned());
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].clean = Some(true);
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].landed = Some(true);
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].trunk_sync = None;
 
     let rendered = snapshot_to_screen(&snapshot, 38, 14);
 
@@ -1822,7 +1874,7 @@ fn render_trunk_worktree_pr_state_keeps_plain_cluster() {
     );
     codex.last_activity = fixed_now() - Duration::from_secs(30);
     let mut snapshot = snapshot_with(vec![codex]);
-    let group = &mut snapshot.worktree_groups[0];
+    let group = &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0];
     group.diff_added = Some(3);
     group.diff_removed = Some(1);
     group.commits_ahead = Some(2);
@@ -1851,8 +1903,8 @@ fn render_merged_worktree_uses_merge_glyph_on_left() {
         None,
     );
     let mut snapshot = snapshot_with(vec![codex]);
-    snapshot.worktree_groups[0].trunk = Some("main".to_owned());
-    snapshot.worktree_groups[0].trunk_sync =
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].trunk = Some("main".to_owned());
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].trunk_sync =
         Some(crate::store::snapshot::WorktreeTrunkSync::Merged);
 
     let rendered = snapshot_to_screen(&snapshot, 38, 14);
@@ -1878,12 +1930,12 @@ fn render_reconciling_worktree_keeps_stats_and_reconciling_marker() {
         None,
     );
     let mut snapshot = snapshot_with(vec![codex]);
-    snapshot.worktree_groups[0].diff_added = Some(3);
-    snapshot.worktree_groups[0].diff_removed = Some(1);
-    snapshot.worktree_groups[0].commits_ahead = Some(1);
-    snapshot.worktree_groups[0].commits_behind = Some(0);
-    snapshot.worktree_groups[0].trunk = Some("main".to_owned());
-    snapshot.worktree_groups[0].trunk_sync =
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].diff_added = Some(3);
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].diff_removed = Some(1);
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].commits_ahead = Some(1);
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].commits_behind = Some(0);
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].trunk = Some("main".to_owned());
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].trunk_sync =
         Some(crate::store::snapshot::WorktreeTrunkSync::Reconciling);
 
     let rendered = snapshot_to_screen(&snapshot, 48, 14);
@@ -1904,17 +1956,19 @@ fn render_diverged_worktree_uses_pr_state_marker() {
         None,
     );
     let mut snapshot = snapshot_with(vec![codex]);
-    snapshot.worktree_groups[0].trunk = Some("main".to_owned());
-    snapshot.worktree_groups[0].trunk_sync =
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].trunk = Some("main".to_owned());
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].trunk_sync =
         Some(crate::store::snapshot::WorktreeTrunkSync::Diverged);
-    snapshot.worktree_groups[0].commits_ahead = Some(2);
-    snapshot.worktree_groups[0].pr_state = Some(crate::store::snapshot::WorktreePrState::Open);
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].commits_ahead = Some(2);
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].pr_state =
+        Some(crate::store::snapshot::WorktreePrState::Open);
 
     let rendered = snapshot_to_screen(&snapshot, 42, 14);
     assert!(rendered.contains("⇡2"), "header:\n{rendered}");
     assert!(rendered.contains("⑃ main"), "header:\n{rendered}");
 
-    snapshot.worktree_groups[0].pr_state = Some(crate::store::snapshot::WorktreePrState::Closed);
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].pr_state =
+        Some(crate::store::snapshot::WorktreePrState::Closed);
     let rendered = snapshot_to_screen(&snapshot, 42, 14);
     assert!(rendered.contains("✕ main"), "header:\n{rendered}");
 }
@@ -1930,7 +1984,7 @@ fn render_diverged_merged_pr_drops_spent_stats_but_closed_keeps_them() {
         None,
     );
     let mut snapshot = snapshot_with(vec![codex]);
-    let group = &mut snapshot.worktree_groups[0];
+    let group = &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0];
     group.trunk = Some("main".to_owned());
     group.trunk_sync = Some(crate::store::snapshot::WorktreeTrunkSync::Diverged);
     group.commits_ahead = Some(2);
@@ -1946,7 +2000,8 @@ fn render_diverged_merged_pr_drops_spent_stats_but_closed_keeps_them() {
         "a merged verdict leaves only its marker:\n{merged}"
     );
 
-    snapshot.worktree_groups[0].pr_state = Some(crate::store::snapshot::WorktreePrState::Closed);
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].pr_state =
+        Some(crate::store::snapshot::WorktreePrState::Closed);
     let closed = snapshot_to_screen(&snapshot, 48, 14);
     assert!(closed.contains("✕ main"), "header:\n{closed}");
     assert!(closed.contains("⇡2"), "header:\n{closed}");

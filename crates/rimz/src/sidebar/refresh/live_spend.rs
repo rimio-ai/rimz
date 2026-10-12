@@ -221,7 +221,8 @@ mod tests {
                     cost_row_at("baselined", Some(2.00), Some(before), &wt, None),
                     cost_row_at("external", Some(9.00), Some(before), external, None),
                 ],
-            )];
+            )]
+            .into();
             snapshot
         };
         let config = crate::config::MachineConfig::load_lenient();
@@ -317,7 +318,8 @@ mod tests {
                     None,
                 )],
             ),
-        ];
+        ]
+        .into();
 
         let mut tally = crate::agents::spending::SpendTally::default();
         tally.headline.usd = 10.0;
@@ -399,7 +401,8 @@ mod tests {
                 cost_row_at("external-new", Some(2.00), Some(after), other, None),
                 cost_row_at("external-baselined", Some(5.50), Some(before), other, None),
             ],
-        )];
+        )]
+        .into();
 
         let workspace = WorkspaceSpendingCache {
             refreshed_at_ms: published_ms,
@@ -432,7 +435,7 @@ mod tests {
             agent_state("current-usage", project, &transcript("current-usage"), now);
         antigravity.kind = crate::ids::AgentKind::new_unchecked("antigravity");
         snapshot.agents = vec![antigravity].into();
-        snapshot.worktree_groups = vec![worktree_group(project, vec![row])];
+        snapshot.worktree_groups = vec![worktree_group(project, vec![row])].into();
 
         assert!(live_card_sessions(&snapshot).is_empty());
         apply_live_today_spend(&mut snapshot, &WorkspaceSpendingCache::default());
@@ -464,7 +467,7 @@ mod tests {
         );
         droid.kind = crate::ids::AgentKind::new_unchecked("droid");
         snapshot.agents = vec![droid].into();
-        snapshot.worktree_groups = vec![worktree_group(project, vec![row])];
+        snapshot.worktree_groups = vec![worktree_group(project, vec![row])].into();
 
         let cards = live_card_sessions(&snapshot);
         assert_eq!(cards.len(), 1);

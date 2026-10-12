@@ -179,7 +179,8 @@ fn cached_enrich_waits_for_producer_workspace_publication() {
             Some(registered_after_publish),
             &project,
         )],
-    )];
+    )]
+    .into();
     let mut config = crate::config::MachineConfig::default();
     config.sidebar.spend_window = crate::agents::spending::SpendWindowMode::Today;
     let missing = fold(

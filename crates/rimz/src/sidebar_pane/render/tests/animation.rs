@@ -38,10 +38,12 @@ fn pet_cadence_beats_breath_but_yields_to_fast_and_money() {
     snapshot.theme.pets.enabled = true;
     snapshot.theme.animations.waiting =
         Some(toml::from_str("effect = \"breathe\"\n").expect("animation spec"));
-    snapshot.worktree_groups[0].rows[0]
-        .as_agent_mut()
-        .unwrap()
-        .status = crate::agents::AgentStatus::Waiting;
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[0]
+    .as_agent_mut()
+    .unwrap()
+    .status = crate::agents::AgentStatus::Waiting;
     let mut ui = UiState {
         selected_index: Some(0),
         pet: Some(crate::sidebar_pane::pets::PetView {
@@ -56,18 +58,22 @@ fn pet_cadence_beats_breath_but_yields_to_fast_and_money() {
         animation_interval(&snapshot, &ui, ui.animation_phase, false).expect("animated"),
         Duration::from_millis(625)
     );
-    snapshot.worktree_groups[0].rows[0]
-        .as_agent_mut()
-        .unwrap()
-        .status = crate::agents::AgentStatus::Running;
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[0]
+    .as_agent_mut()
+    .unwrap()
+    .status = crate::agents::AgentStatus::Running;
     assert_eq!(
         animation_interval(&snapshot, &ui, ui.animation_phase, false).expect("animated"),
         crate::sidebar::timing::animation_frame(snapshot.theme.display.resolved_refresh_ms())
     );
-    snapshot.worktree_groups[0].rows[0]
-        .as_agent_mut()
-        .unwrap()
-        .status = crate::agents::AgentStatus::Waiting;
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[0]
+    .as_agent_mut()
+    .unwrap()
+    .status = crate::agents::AgentStatus::Waiting;
     ui.tally.observe(1.0, 0);
     ui.tally.observe(5.0, 1);
     ui.animation_phase = 1;
@@ -120,7 +126,8 @@ fn frame_interval_uses_breath_for_pulse_and_fast_for_work() {
                     ..crate::store::snapshot::AgentCard::default()
                 },
             )),
-        }],
+        }]
+        .into(),
         diff_added: None,
         diff_removed: None,
         commits_ahead: None,
@@ -136,7 +143,8 @@ fn frame_interval_uses_breath_for_pulse_and_fast_for_work() {
         ci: None,
         pr_number: None,
         pr_url: None,
-    }];
+    }]
+    .into();
     assert!(animation_interval(&slow, &selected_ui(), 0, false).is_some());
     assert_eq!(
         animation_interval(&slow, &selected_ui(), 0, false).expect("animated"),
@@ -154,7 +162,7 @@ fn frame_interval_uses_breath_for_pulse_and_fast_for_work() {
         crate::sidebar::timing::BREATH_ANIMATION_FRAME
     );
 
-    slow.worktree_groups[0].rows[0]
+    std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut slow.worktree_groups)[0].rows)[0]
         .as_agent_mut()
         .unwrap()
         .status = crate::agents::AgentStatus::Running;
@@ -174,7 +182,11 @@ fn open_delegation_motion_drives_the_animation_gate_under_a_sleeping_parent() {
     let ws = workspace();
     let mut snapshot = agent_snapshot(&ws);
     let row_id = snapshot.worktree_groups[0].rows[0].id.clone();
-    let agent = snapshot.worktree_groups[0].rows[0].as_agent_mut().unwrap();
+    let agent = std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[0]
+    .as_agent_mut()
+    .unwrap();
     agent.status = crate::agents::AgentStatus::Sleeping;
     agent.user_turn_started_at = Some(snapshot.now);
     agent
@@ -209,7 +221,11 @@ fn open_delegation_motion_drives_the_animation_gate_under_a_sleeping_parent() {
     ui.delegation_overrides.insert(row_id, true);
     assert!(animation_interval(&snapshot, &ui, 0, false).is_some());
 
-    let agent = snapshot.worktree_groups[0].rows[0].as_agent_mut().unwrap();
+    let agent = std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[0]
+    .as_agent_mut()
+    .unwrap();
     agent.background_shells.clear();
     for (trigger, moves) in [
         (
@@ -260,7 +276,11 @@ fn open_delegation_motion_drives_the_animation_gate_under_a_sleeping_parent() {
             false,
         ),
     ] {
-        let agent = snapshot.worktree_groups[0].rows[0].as_agent_mut().unwrap();
+        let agent = std::sync::Arc::make_mut(
+            &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+        )[0]
+        .as_agent_mut()
+        .unwrap();
         agent.pending_waits = vec![crate::agents::PendingWait {
             name: "wait".to_owned(),
             trigger,
@@ -272,7 +292,11 @@ fn open_delegation_motion_drives_the_animation_gate_under_a_sleeping_parent() {
         );
     }
 
-    let agent = snapshot.worktree_groups[0].rows[0].as_agent_mut().unwrap();
+    let agent = std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[0]
+    .as_agent_mut()
+    .unwrap();
     agent.pending_waits.clear();
     agent.sub_agent_count = 1;
     agent.sub_agents = vec![
@@ -292,10 +316,12 @@ fn open_delegation_motion_drives_the_animation_gate_under_a_sleeping_parent() {
         crate::agents::AgentStatus::Paused,
         crate::agents::AgentStatus::Success,
     ] {
-        snapshot.worktree_groups[0].rows[0]
-            .as_agent_mut()
-            .unwrap()
-            .sub_agents[0]
+        std::sync::Arc::make_mut(
+            &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+        )[0]
+        .as_agent_mut()
+        .unwrap()
+        .sub_agents[0]
             .status = status;
         assert!(
             animation_interval(&snapshot, &ui, 0, false).is_none(),
@@ -308,7 +334,11 @@ fn open_delegation_motion_drives_the_animation_gate_under_a_sleeping_parent() {
 fn selected_blank_idle_agent_keeps_breath_grid_awake() {
     let ws = workspace();
     let mut snapshot = agent_snapshot(&ws);
-    let agent = snapshot.worktree_groups[0].rows[0].as_agent_mut().unwrap();
+    let agent = std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[0]
+    .as_agent_mut()
+    .unwrap();
     agent.task = None;
     agent.description = None;
     agent.prompt = None;
@@ -329,10 +359,12 @@ fn selected_blank_idle_agent_keeps_breath_grid_awake() {
     off_selection.theme(&snapshot.theme);
     assert!(animation_interval(&snapshot, &off_selection, 0, false).is_none());
 
-    snapshot.worktree_groups[0].rows[0]
-        .as_agent_mut()
-        .unwrap()
-        .task = Some("warm up".to_owned());
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[0]
+    .as_agent_mut()
+    .unwrap()
+    .task = Some("warm up".to_owned());
     selected.theme(&snapshot.theme);
     assert!(animation_interval(&snapshot, &selected, 0, false).is_none());
 }
@@ -341,8 +373,11 @@ fn selected_blank_idle_agent_keeps_breath_grid_awake() {
 fn expanded_blank_team_member_keeps_breath_grid_awake() {
     let ws = workspace();
     let mut snapshot = agent_snapshot(&ws);
-    let group = &mut snapshot.worktree_groups[0];
-    group.rows[0].as_agent_mut().unwrap().team = Some("forge".to_owned());
+    let group = &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0];
+    std::sync::Arc::make_mut(&mut group.rows)[0]
+        .as_agent_mut()
+        .unwrap()
+        .team = Some("forge".to_owned());
 
     let mut teammate = group.rows[0].clone();
     teammate.id = "agent-2".to_owned();
@@ -352,7 +387,7 @@ fn expanded_blank_team_member_keeps_breath_grid_awake() {
     teammate_card.task = None;
     teammate_card.description = None;
     teammate_card.prompt = None;
-    group.rows.push(teammate);
+    std::sync::Arc::make_mut(&mut group.rows).push(teammate);
 
     let mut ui = selected_ui();
     ui.theme(&snapshot.theme);
@@ -564,7 +599,8 @@ fn animation_cadence_separates_fast_work_from_breath_motion() {
     // static bright crest, asking nothing of the breath grid. A static unread
     // row keeping the grid warm forever was the whole perf cost the lead-row
     // reservation removes.
-    calm.worktree_groups[0].rows[0].unread = true;
+    std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut calm.worktree_groups)[0].rows)[0]
+        .unread = true;
     assert_eq!(
         animation_cadence_for_test(&calm),
         AnimationCadence::None,
@@ -581,7 +617,8 @@ fn animation_cadence_separates_fast_work_from_breath_motion() {
         Some("main"),
         Some("allow cargo fmt"),
     )]);
-    lead.worktree_groups[0].rows[0].unread = true;
+    std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut lead.worktree_groups)[0].rows)[0]
+        .unread = true;
     assert_eq!(
         animation_cadence_for_test(&lead),
         AnimationCadence::Breath,
@@ -663,7 +700,7 @@ fn expanded_row_awaiting_first_prompt_tracks_selected_bare_idle_card() {
         Some("main"),
         None,
     )]);
-    used.worktree_groups[0].rows[0]
+    std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut used.worktree_groups)[0].rows)[0]
         .as_agent_mut()
         .expect("agent row")
         .usage
@@ -738,54 +775,59 @@ fn selected_pet_action_follows_the_focused_card() {
     );
 
     let mut compacting = statuses(&[(AgentStatus::Running, crate::agents::TurnPhase::Acting)]);
-    compacting.worktree_groups[0].rows[0]
-        .as_agent_mut()
-        .expect("agent row")
-        .compacting = true;
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut compacting.worktree_groups)[0].rows,
+    )[0]
+    .as_agent_mut()
+    .expect("agent row")
+    .compacting = true;
     assert_eq!(
         selected_pet_action(&compacting, &selected_ui()),
         crate::sidebar_pane::pets::PetAction::Review
     );
     let mut compacting_waiting =
         statuses(&[(AgentStatus::Waiting, crate::agents::TurnPhase::Idle)]);
-    compacting_waiting.worktree_groups[0].rows[0]
-        .as_agent_mut()
-        .expect("agent row")
-        .compacting = true;
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut compacting_waiting.worktree_groups)[0].rows,
+    )[0]
+    .as_agent_mut()
+    .expect("agent row")
+    .compacting = true;
     assert_eq!(
         selected_pet_action(&compacting_waiting, &selected_ui()),
         crate::sidebar_pane::pets::PetAction::Review
     );
 
     let mut subagent = statuses(&[(AgentStatus::Running, crate::agents::TurnPhase::Acting)]);
-    subagent.worktree_groups[0].rows[0]
-        .as_agent_mut()
-        .expect("agent row")
-        .sub_agents
-        .push(crate::store::snapshot::SidebarSubAgent {
-            pane: None,
-            turn_error_label: None,
-            id: "child-1".to_owned(),
-            prior_turn: false,
-            name: "Explore".to_owned(),
-            petname: None,
-            provider_native: true,
-            stalled: false,
-            status: AgentStatus::Running,
-            phase: crate::agents::TurnPhase::Reasoning,
-            task: None,
-            profile: None,
-            model: None,
-            effort: None,
-            description: None,
-            tokens: None,
-            context_window: None,
-            cost_usd: None,
-            elapsed_secs: None,
-            started_at: None,
-            last_activity: fixed_now(),
-            registered_at: Some(fixed_now()),
-        });
+    std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut subagent.worktree_groups)[0].rows)
+        [0]
+    .as_agent_mut()
+    .expect("agent row")
+    .sub_agents
+    .push(crate::store::snapshot::SidebarSubAgent {
+        pane: None,
+        turn_error_label: None,
+        id: "child-1".to_owned(),
+        prior_turn: false,
+        name: "Explore".to_owned(),
+        petname: None,
+        provider_native: true,
+        stalled: false,
+        status: AgentStatus::Running,
+        phase: crate::agents::TurnPhase::Reasoning,
+        task: None,
+        profile: None,
+        model: None,
+        effort: None,
+        description: None,
+        tokens: None,
+        context_window: None,
+        cost_usd: None,
+        elapsed_secs: None,
+        started_at: None,
+        last_activity: fixed_now(),
+        registered_at: Some(fixed_now()),
+    });
     assert_eq!(
         selected_pet_action(&subagent, &selected_ui()),
         crate::sidebar_pane::pets::PetAction::Waiting
@@ -813,32 +855,36 @@ fn selected_pet_action_follows_process_cards() {
         Some("main"),
         None,
     )]);
-    snapshot.worktree_groups[0].rows = vec![crate::store::snapshot::SidebarRow {
-        id: "process-1".to_owned(),
-        name: "cargo".to_owned(),
-        pane: None,
-        worktree_path: Some("/repo/main".to_owned()),
-        worktree_branch: Some("main".to_owned()),
-        channel: None,
-        unread: false,
-        inactive: false,
-        archived: false,
-        attention_score: 0,
-        last_activity: fixed_now(),
-        card: crate::store::snapshot::RowCard::Process(crate::store::snapshot::ProcessCard {
-            state: crate::store::snapshot::ProcessState::Busy,
-            ..crate::store::snapshot::ProcessCard::default()
-        }),
-    }];
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows =
+        vec![crate::store::snapshot::SidebarRow {
+            id: "process-1".to_owned(),
+            name: "cargo".to_owned(),
+            pane: None,
+            worktree_path: Some("/repo/main".to_owned()),
+            worktree_branch: Some("main".to_owned()),
+            channel: None,
+            unread: false,
+            inactive: false,
+            archived: false,
+            attention_score: 0,
+            last_activity: fixed_now(),
+            card: crate::store::snapshot::RowCard::Process(crate::store::snapshot::ProcessCard {
+                state: crate::store::snapshot::ProcessState::Busy,
+                ..crate::store::snapshot::ProcessCard::default()
+            }),
+        }]
+        .into();
 
     assert_eq!(
         selected_pet_action(&snapshot, &selected_ui()),
         crate::sidebar_pane::pets::PetAction::Running
     );
-    snapshot.worktree_groups[0].rows[0]
-        .as_process_mut()
-        .expect("process row")
-        .state = crate::store::snapshot::ProcessState::Stuck;
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[0]
+    .as_process_mut()
+    .expect("process row")
+    .state = crate::store::snapshot::ProcessState::Stuck;
     assert_eq!(
         selected_pet_action(&snapshot, &selected_ui()),
         crate::sidebar_pane::pets::PetAction::Failed

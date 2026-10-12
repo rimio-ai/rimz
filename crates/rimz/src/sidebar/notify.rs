@@ -513,7 +513,7 @@ fn notification_keys(snapshot: &SidebarSnapshot) -> BTreeMap<AgentKey, ()> {
     snapshot
         .worktree_groups
         .iter()
-        .flat_map(|group| &group.rows)
+        .flat_map(|group| group.rows.iter())
         .filter(|row| row.status().is_some())
         .map(|row| {
             (
@@ -618,7 +618,7 @@ fn row_is_unread(snapshot: &SidebarSnapshot, row_id: &str) -> bool {
     snapshot
         .worktree_groups
         .iter()
-        .flat_map(|group| &group.rows)
+        .flat_map(|group| group.rows.iter())
         .any(|row| row.id == row_id && row.unread)
 }
 

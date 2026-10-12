@@ -365,7 +365,8 @@ mod tests {
                 worktree_path: None,
                 worktree_branch: None,
             },
-        ];
+        ]
+        .into();
 
         let kept: Vec<&str> = snapshot
             .pane_bound_roots()
@@ -386,7 +387,7 @@ mod tests {
             vec![live, historical],
             jiff::Timestamp::UNIX_EPOCH,
         );
-        snapshot.agent_panes = vec![test_pane_agent("sess-live", "terminal_1")];
+        snapshot.agent_panes = vec![test_pane_agent("sess-live", "terminal_1")].into();
 
         let peers: Vec<&AgentState> = snapshot.pane_bound_roots().collect();
         let report = build_list_report(
@@ -466,7 +467,7 @@ mod tests {
                 .unwrap();
             (group.key, group.label, group.kind)
         };
-        snapshot.worktree_groups.push(
+        std::sync::Arc::make_mut(&mut snapshot.worktree_groups).push(
             serde_json::from_value(serde_json::json!({
                 "key": linked_key,
                 "label": linked_label,
@@ -535,7 +536,7 @@ mod tests {
             "ci": "passing"
         }))
         .unwrap();
-        group.rows.push(SidebarRow {
+        std::sync::Arc::make_mut(&mut group.rows).push(SidebarRow {
             id: "linked".to_owned(),
             name: "codex".to_owned(),
             pane: None,
@@ -552,7 +553,7 @@ mod tests {
                 ..AgentCard::default()
             })),
         });
-        snapshot.worktree_groups.push(group);
+        std::sync::Arc::make_mut(&mut snapshot.worktree_groups).push(group);
 
         assert_eq!(
             agent_pr(&snapshot, &snapshot.agents[0]),

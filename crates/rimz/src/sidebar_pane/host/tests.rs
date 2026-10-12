@@ -211,17 +211,23 @@ fn a_replacement_host_seats_only_the_carried_live_baseline() {
     let own = PaneId::from_parts(MuxName::Tmux, "%7");
     let selected = PaneId::from_parts(MuxName::Tmux, "%6");
     let mut snapshot = agent_snapshot(&workspace());
-    snapshot.worktree_groups[0].rows[0].name = "selected-card".into();
-    snapshot.worktree_groups[0].rows[0]
-        .pane
-        .as_mut()
-        .unwrap()
-        .pane_id = selected.clone();
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[0]
+    .name = "selected-card".into();
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[0]
+    .pane
+    .as_mut()
+    .unwrap()
+    .pane_id = selected.clone();
     let mut other = snapshot.worktree_groups[0].rows[0].clone();
     other.id = "agent-2".into();
     other.name = "other-card".into();
     other.pane.as_mut().unwrap().pane_id = PaneId::from_parts(MuxName::Tmux, "%5");
-    snapshot.worktree_groups[0].rows.push(other);
+    std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows)
+        .push(other);
     snapshot.own_view = Some(crate::store::snapshot::SidebarOwnView {
         sibling_count: 2,
         working_pane_ids: snapshot
@@ -317,7 +323,8 @@ fn a_replacement_host_seats_only_the_carried_live_baseline() {
 fn a_warm_plane_populates_the_first_nonblank_screen() {
     let room = Room::new();
     let mut seed = crate::sidebar_pane::app::fixtures::agent_snapshot(&workspace());
-    seed.worktree_groups[0].rows[0].name = "seed-card".into();
+    std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut seed.worktree_groups)[0].rows)[0]
+        .name = "seed-card".into();
     let frame = crate::sidebar::frame::assemble_frame(
         seed.rows().filter_map(|row| row.pane.clone()).collect(),
         crate::utils::time::unix_now_ms(),
@@ -368,7 +375,10 @@ fn an_accepted_pane_is_painted_through_its_fd_and_reports_its_size() {
     pty.resize(40, 30);
     room.wake(&pane, b"resize");
     let mut snapshot = crate::sidebar_pane::app::fixtures::agent_snapshot(&workspace());
-    snapshot.worktree_groups[0].rows[0].name = "paint-proof".into();
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[0]
+    .name = "paint-proof".into();
     room.host
         .plane
         .publish_snapshot(&pane.instance_id, snapshot);
@@ -722,11 +732,16 @@ fn hidden_reveal(presence: crate::store::snapshot::SidebarPresence, reveal_by_re
         ("hidden-two", crate::agents::AgentStatus::Waiting),
         ("hidden-latest", crate::agents::AgentStatus::Idle),
     ] {
-        snapshot.worktree_groups[0].rows[0].name = name.to_owned();
-        snapshot.worktree_groups[0].rows[0]
-            .as_agent_mut()
-            .unwrap()
-            .status = status;
+        std::sync::Arc::make_mut(
+            &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+        )[0]
+        .name = name.to_owned();
+        std::sync::Arc::make_mut(
+            &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+        )[0]
+        .as_agent_mut()
+        .unwrap()
+        .status = status;
         publish(&snapshot);
         std::thread::sleep(Duration::from_millis(600));
         assert!(

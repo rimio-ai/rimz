@@ -14,7 +14,7 @@ fn condition_scopes_union_with_panes_without_duplicates() {
         vec![],
         Timestamp::now(),
     );
-    snapshot.worktree_groups = vec![worktree_group(pane_dir.path(), vec![])];
+    snapshot.worktree_groups = vec![worktree_group(pane_dir.path(), vec![])].into();
     let scopes = BTreeSet::from([
         pane_dir.path().display().to_string(),
         condition_dir.path().display().to_string(),
@@ -298,7 +298,8 @@ fn hot_worktree_paths_keys_on_running_or_recent_agent_rows() {
             &dead,
             vec![activity_row(true, Some(AgentStatus::Running), now, &dead)],
         ),
-    ];
+    ]
+    .into();
 
     let hot = hot_worktree_paths(&snapshot);
 
@@ -335,7 +336,8 @@ fn hot_worktree_paths_treats_future_activity_as_hot() {
             now + SignedDuration::from_secs(120),
             dir.path(),
         )],
-    )];
+    )]
+    .into();
 
     assert!(hot_worktree_paths(&snapshot).contains(&dir.path().display().to_string()));
 }
@@ -378,7 +380,8 @@ fn focused_worktree_paths_keys_on_viewed_row_panes() {
             group
         },
         worktree_group(&dead, vec![row("terminal_4", &dead)]),
-    ];
+    ]
+    .into();
 
     let focused_paths = focused_worktree_paths(&snapshot);
     let needed: std::collections::BTreeSet<_> =
@@ -583,7 +586,7 @@ fn channel_group(label: &str, path: &Path) -> SidebarWorktreeGroup {
         cohort_effort: None,
         pipeline: None,
         status_counts: Vec::new(),
-        rows: vec![activity_row(false, None, Timestamp::now(), path)],
+        rows: vec![activity_row(false, None, Timestamp::now(), path)].into(),
         diff_added: None,
         diff_removed: None,
         commits_ahead: None,

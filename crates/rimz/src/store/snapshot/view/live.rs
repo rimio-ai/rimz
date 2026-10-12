@@ -270,23 +270,37 @@ impl SidebarSnapshot {
         if let Some(unread_row_ids) = unread_row_ids {
             stamp_unread_rows(&mut projection.rows, unread_row_ids);
         }
-        self.agent_panes = projection.agent_panes;
-        self.worktree_groups = self.build_worktree_groups(projection.rows, demotion);
+        self.agent_panes = Arc::new(projection.agent_panes);
+        self.worktree_groups = Arc::new(self.build_worktree_groups(projection.rows, demotion));
         projection.diagnostics
     }
 
     pub(crate) fn remove_pane_rows(&mut self, pane_id: &PaneId) -> bool {
         let mut changed = false;
-        for group in &mut self.worktree_groups {
+        for index in 0..self.worktree_groups.len() {
+            let group = &self.worktree_groups[index];
+            if !group.rows.iter().any(|row| {
+                row.pane
+                    .as_ref()
+                    .is_some_and(|pane| pane.pane_id == *pane_id)
+                    || row.as_agent().is_some_and(|agent| {
+                        agent
+                            .sub_agents
+                            .iter()
+                            .any(|child| child.pane.as_ref() == Some(pane_id))
+                    })
+            }) {
+                continue;
+            }
+            let group = &mut Arc::make_mut(&mut self.worktree_groups)[index];
             let before = group.rows.len();
-            group.rows.retain(|row| {
+            Arc::make_mut(&mut group.rows).retain(|row| {
                 !row.pane
                     .as_ref()
                     .is_some_and(|pane| pane.pane_id == *pane_id)
             });
             changed |= group.rows.len() != before;
-            for agent in group
-                .rows
+            for agent in Arc::make_mut(&mut group.rows)
                 .iter_mut()
                 .filter(|row| {
                     row.as_agent().is_some_and(|agent| {
@@ -307,7 +321,13 @@ impl SidebarSnapshot {
             }
             refresh_overlay_group(group);
         }
-        self.worktree_groups.retain(|group| !group.rows.is_empty());
+        if self
+            .worktree_groups
+            .iter()
+            .any(|group| group.rows.is_empty())
+        {
+            Arc::make_mut(&mut self.worktree_groups).retain(|group| !group.rows.is_empty());
+        }
         if self
             .focused_pane
             .as_ref()
@@ -321,8 +341,17 @@ impl SidebarSnapshot {
 
     pub(crate) fn overlay_pane_command(&mut self, pane_id: &PaneId, command: &str) -> bool {
         let mut changed = false;
-        for group in &mut self.worktree_groups {
-            for row in &mut group.rows {
+        for index in 0..self.worktree_groups.len() {
+            let group = &self.worktree_groups[index];
+            if !group.rows.iter().any(|row| {
+                row.pane
+                    .as_ref()
+                    .is_some_and(|pane| pane.pane_id == *pane_id)
+            }) {
+                continue;
+            }
+            let group = &mut Arc::make_mut(&mut self.worktree_groups)[index];
+            for row in Arc::make_mut(&mut group.rows) {
                 let Some(pane) = row.pane.as_mut() else {
                     continue;
                 };

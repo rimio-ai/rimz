@@ -184,7 +184,11 @@ fn pixel_meter_only_frame_brackets_draw_sweep_and_transmit() {
         let mut snapshot = agent_snapshot(&workspace());
         snapshot.theme.mode = crate::config::ThemeMode::Truecolor;
         snapshot.theme.pets.enabled = false;
-        let card = snapshot.worktree_groups[0].rows[0].as_agent_mut().unwrap();
+        let card = std::sync::Arc::make_mut(
+            &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+        )[0]
+        .as_agent_mut()
+        .unwrap();
         card.usage.context_pct = Some(50);
         card.usage.context_window = Some(200_000);
         let mut ui = UiState::default();
@@ -1048,7 +1052,8 @@ fn bell_rings_only_for_unread_owned_panes_off_daemon_views() {
                         ..crate::store::snapshot::AgentCard::default()
                     },
                 )),
-            }],
+            }]
+            .into(),
             diff_added: None,
             diff_removed: None,
             commits_ahead: None,
@@ -1064,7 +1069,8 @@ fn bell_rings_only_for_unread_owned_panes_off_daemon_views() {
             ci: None,
             pr_number: None,
             pr_url: None,
-        }];
+        }]
+        .into();
         snap
     };
 

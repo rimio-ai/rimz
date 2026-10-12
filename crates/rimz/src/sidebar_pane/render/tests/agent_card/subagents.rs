@@ -13,7 +13,11 @@ fn focused_child_snapshot() -> SidebarSnapshot {
     );
     let mut snapshot = snapshot_with(vec![parent]);
     let child = PaneId::from_parts(MuxName::Zellij, "terminal_child");
-    let card = snapshot.worktree_groups[0].rows[0].as_agent_mut().unwrap();
+    let card = std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[0]
+    .as_agent_mut()
+    .unwrap();
     card.sub_agent_count = 2;
     card.sub_agents = [
         ("explorer", Some(child.clone()), "inspect the click seam"),
@@ -377,17 +381,18 @@ fn delegation_bands_keep_live_children_and_fold_older_ones() {
     let mut snapshot = snapshot_with(agents);
     // A pending wait sits between the recent band and the folded tail, so the
     // history rows must land after it.
-    snapshot.worktree_groups[0].rows[0]
-        .as_agent_mut()
-        .unwrap()
-        .pending_waits
-        .push(PendingWait {
-            name: "deploy".to_owned(),
-            trigger: PendingWaitTrigger::Signal {
-                selector: "deploy.done".to_owned(),
-            },
-            armed_at: Some(fixed_now()),
-        });
+    std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows)
+        [0]
+    .as_agent_mut()
+    .unwrap()
+    .pending_waits
+    .push(PendingWait {
+        name: "deploy".to_owned(),
+        trigger: PendingWaitTrigger::Signal {
+            selector: "deploy.done".to_owned(),
+        },
+        armed_at: Some(fixed_now()),
+    });
     let row = &snapshot.worktree_groups[0].rows[0];
     let turn = row.as_agent().unwrap().user_turn_started_at;
     let entries = |rendered: &str| {
@@ -937,10 +942,12 @@ fn subagent_metadata_blank_fills_the_per_card_grid() {
     total.agent_id = "child-3".into();
     total.model = Some("claude-sonnet-4-6".to_owned());
     let mut snapshot = snapshot_with(vec![parent, spender, quiet, total]);
-    for child in &mut snapshot.worktree_groups[0].rows[0]
-        .as_agent_mut()
-        .unwrap()
-        .sub_agents
+    for child in &mut std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[0]
+    .as_agent_mut()
+    .unwrap()
+    .sub_agents
     {
         child.tokens = match child.id.as_str() {
             "child-1" => Some(crate::store::snapshot::SubAgentTokens::Window(12_400)),
@@ -1064,10 +1071,12 @@ fn subagent_window_glyph_heats_like_the_parent_context() {
         child
     });
     let mut snapshot = snapshot_with([vec![parent], children.to_vec()].concat());
-    for child in &mut snapshot.worktree_groups[0].rows[0]
-        .as_agent_mut()
-        .unwrap()
-        .sub_agents
+    for child in &mut std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[0]
+    .as_agent_mut()
+    .unwrap()
+    .sub_agents
     {
         let window = tokens
             .iter()
@@ -1093,10 +1102,12 @@ fn subagent_window_glyph_heats_like_the_parent_context() {
     assert_eq!(glyph_style("400k"), Some(theme.heat_tone(1.0)));
 
     for (window, percent) in [(Some(200_000), 95), (None, 0), (Some(0), 0)] {
-        for child in &mut snapshot.worktree_groups[0].rows[0]
-            .as_agent_mut()
-            .unwrap()
-            .sub_agents
+        for child in &mut std::sync::Arc::make_mut(
+            &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+        )[0]
+        .as_agent_mut()
+        .unwrap()
+        .sub_agents
         {
             child.tokens = Some(crate::store::snapshot::SubAgentTokens::Window(190_000));
             child.context_window = window;

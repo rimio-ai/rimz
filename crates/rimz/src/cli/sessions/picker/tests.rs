@@ -125,7 +125,7 @@ fn room_agents_count_only_pane_bound_root_sessions() {
         vec![live.clone(), departed],
         now,
     );
-    snapshot.agent_panes.push(rimz::store::snapshot::PaneAgent {
+    std::sync::Arc::make_mut(&mut snapshot.agent_panes).push(rimz::store::snapshot::PaneAgent {
         root_lane: false,
         kind: live.kind.clone(),
         kind_ordinal: None,

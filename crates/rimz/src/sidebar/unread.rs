@@ -117,7 +117,7 @@ impl UnreadEpisodes {
         for row in snapshot
             .worktree_groups
             .iter()
-            .flat_map(|group| &group.rows)
+            .flat_map(|group| group.rows.iter())
         {
             rows.insert(row.id.clone(), row);
         }
@@ -215,15 +215,21 @@ pub fn mark_rows_unread(
 }
 
 pub(super) fn derive(snapshot: &mut SidebarSnapshot, episodes: &UnreadEpisodes, marks: &ReadMarks) {
-    for row in snapshot
-        .worktree_groups
-        .iter_mut()
-        .flat_map(|group| group.rows.iter_mut())
-    {
-        row.unread = episodes
+    let unread = |row: &SidebarRow| {
+        episodes
             .episodes
             .get(&row.id)
-            .is_some_and(|episode_ms| !receipt_reaches_ms(marks, &row.id, *episode_ms));
+            .is_some_and(|episode_ms| !receipt_reaches_ms(marks, &row.id, *episode_ms))
+    };
+    for index in 0..snapshot.worktree_groups.len() {
+        let group = &snapshot.worktree_groups[index];
+        if !group.rows.iter().any(|row| row.unread != unread(row)) {
+            continue;
+        }
+        let group = &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[index];
+        for row in std::sync::Arc::make_mut(&mut group.rows) {
+            row.unread = unread(row);
+        }
     }
 }
 
@@ -464,7 +470,7 @@ mod tests {
             cohort_effort: None,
             pipeline: None,
             status_counts,
-            rows,
+            rows: rows.into(),
             diff_added: None,
             diff_removed: None,
             commits_ahead: None,
@@ -480,7 +486,8 @@ mod tests {
             ci: None,
             pr_number: None,
             pr_url: None,
-        }];
+        }]
+        .into();
         snapshot
     }
 

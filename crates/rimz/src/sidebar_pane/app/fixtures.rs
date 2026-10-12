@@ -121,7 +121,8 @@ pub(crate) fn snapshot_with_panes(ws: &WorkspaceId, panes: Vec<PaneRef>) -> Side
                     crate::store::snapshot::ProcessCard::default(),
                 ),
             })
-            .collect(),
+            .collect::<Vec<_>>()
+            .into(),
         diff_added: None,
         diff_removed: None,
         commits_ahead: None,
@@ -137,7 +138,8 @@ pub(crate) fn snapshot_with_panes(ws: &WorkspaceId, panes: Vec<PaneRef>) -> Side
         ci: None,
         pr_number: None,
         pr_url: None,
-    }];
+    }]
+    .into();
     snapshot
 }
 
@@ -179,7 +181,7 @@ pub(crate) fn agent_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
             status: crate::agents::AgentStatus::Idle,
             count: 1,
         }],
-        rows: vec![row],
+        rows: vec![row].into(),
         diff_added: None,
         diff_removed: None,
         commits_ahead: None,
@@ -195,6 +197,7 @@ pub(crate) fn agent_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
         ci: None,
         pr_number: None,
         pr_url: None,
-    }];
+    }]
+    .into();
     snapshot
 }

@@ -143,7 +143,7 @@ fn frameless_fold_holds_browse_until_its_pane_returns() {
     );
     let mut frameless = framed.clone();
     frameless.panes_produced_at_ms = None;
-    frameless.worktree_groups.clear();
+    std::sync::Arc::make_mut(&mut frameless.worktree_groups).clear();
     let pick = browse(&selected, None);
     let manual = ManualScroll {
         selection_at_start: Some(selected.clone()),
@@ -184,7 +184,7 @@ fn frameless_fold_holds_baseline_until_its_pane_returns() {
     );
     let mut frameless = framed.clone();
     frameless.panes_produced_at_ms = None;
-    frameless.worktree_groups.clear();
+    std::sync::Arc::make_mut(&mut frameless.worktree_groups).clear();
     let mut ui = UiState {
         selected_index: Some(1),
         selected_pane: Some(selected.clone()),

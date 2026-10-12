@@ -422,8 +422,8 @@ fn ends_with_rail(line: &str) -> bool {
 
 fn external_overflowing_fleet() -> SidebarSnapshot {
     let mut snapshot = overflowing_fleet();
-    let mut group = snapshot.worktree_groups.remove(0);
-    let beta = snapshot.worktree_groups.remove(0);
+    let mut group = std::sync::Arc::make_mut(&mut snapshot.worktree_groups).remove(0);
+    let beta = std::sync::Arc::make_mut(&mut snapshot.worktree_groups).remove(0);
     group.key = "external".to_owned();
     group.label = "external".to_owned();
     group.kind = crate::store::snapshot::SidebarWorktreeKind::External;
@@ -431,7 +431,7 @@ fn external_overflowing_fleet() -> SidebarSnapshot {
         status: AgentStatus::Running,
         count: group.rows.len() + beta.rows.len(),
     }];
-    group.rows.extend(beta.rows);
+    std::sync::Arc::make_mut(&mut group.rows).extend(std::sync::Arc::unwrap_or_clone(beta.rows));
     group.diff_added = None;
     group.diff_removed = None;
     group.commits_ahead = None;
@@ -441,6 +441,6 @@ fn external_overflowing_fleet() -> SidebarSnapshot {
     group.landed = None;
     group.trunk_sync = None;
     group.pr_state = None;
-    snapshot.worktree_groups = vec![group];
+    snapshot.worktree_groups = vec![group].into();
     snapshot
 }

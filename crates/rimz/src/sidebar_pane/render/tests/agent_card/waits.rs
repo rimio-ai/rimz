@@ -309,17 +309,18 @@ fn pending_waits_line_counts_armed_waits() {
         );
     }
 
-    snapshot.worktree_groups[0].rows[0]
-        .as_agent_mut()
-        .unwrap()
-        .pending_waits
-        .push(PendingWait {
-            name: "signal".to_owned(),
-            trigger: PendingWaitTrigger::Signal {
-                selector: "pr.merged".to_owned(),
-            },
-            armed_at: Some(fixed_now()),
-        });
+    std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows)
+        [0]
+    .as_agent_mut()
+    .unwrap()
+    .pending_waits
+    .push(PendingWait {
+        name: "signal".to_owned(),
+        trigger: PendingWaitTrigger::Signal {
+            selector: "pr.merged".to_owned(),
+        },
+        armed_at: Some(fixed_now()),
+    });
     let with_signal = group_lines(&snapshot, &theme, 0);
     let with_signal_text = line_texts(&with_signal);
     assert!(with_signal_text[stats].contains("⧖ waits (3)"));
@@ -344,11 +345,12 @@ fn pending_waits_line_counts_armed_waits() {
             .all(|line| !line.contains(theme.glyph(GlyphRole::CardWaits)))
     );
 
-    snapshot.worktree_groups[0].rows[0]
-        .as_agent_mut()
-        .unwrap()
-        .pending_waits
-        .clear();
+    std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows)
+        [0]
+    .as_agent_mut()
+    .unwrap()
+    .pending_waits
+    .clear();
     let cleared = line_texts(&group_lines(&snapshot, &theme, 0));
     assert!(cleared[stats].contains("⧉ subagents (1)"));
     assert!(!cleared.iter().any(|line| line.contains("⧖")));
@@ -483,10 +485,12 @@ fn wait_entries_show_trigger_program_and_command() {
     assert!(advanced[start + 1].ends_with("15m▐"));
     assert!(advanced[start + 4].ends_with("1h▐"));
     assert!(advanced[start + 2].ends_with("16m▐"));
-    snapshot.worktree_groups[0].rows[0]
-        .as_agent_mut()
-        .unwrap()
-        .pending_waits[0]
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[0]
+    .as_agent_mut()
+    .unwrap()
+    .pending_waits[0]
         .trigger = PendingWaitTrigger::Timer {
         due: snapshot.now,
         delay: None,
@@ -496,10 +500,12 @@ fn wait_entries_show_trigger_program_and_command() {
         ("env A=b /usr/bin/cargo build", "env A=b cargo build"),
         ("sh -c '/usr/bin/cargo build'", "sh -c 'cargo build'"),
     ] {
-        snapshot.worktree_groups[0].rows[0]
-            .as_agent_mut()
-            .unwrap()
-            .pending_waits[2]
+        std::sync::Arc::make_mut(
+            &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+        )[0]
+        .as_agent_mut()
+        .unwrap()
+        .pending_waits[2]
             .trigger = PendingWaitTrigger::Command {
             command: command.to_owned(),
         };
@@ -781,11 +787,13 @@ fn background_shells_join_the_shell_jobs_and_the_count() {
     );
 
     let mut shells_only = snapshot.clone();
-    shells_only.worktree_groups[0].rows[0]
-        .as_agent_mut()
-        .unwrap()
-        .pending_waits
-        .clear();
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut shells_only.worktree_groups)[0].rows,
+    )[0]
+    .as_agent_mut()
+    .unwrap()
+    .pending_waits
+    .clear();
     let rows = line_texts(&group_lines(&shells_only, &theme, 0));
     let stats = rows
         .iter()

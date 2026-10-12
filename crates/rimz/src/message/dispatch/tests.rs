@@ -220,7 +220,7 @@ fn resumed_provider_parks_until_registration_or_the_window() {
     );
     let mut lazy = snapshot;
     std::sync::Arc::make_mut(&mut lazy.agents)[0].kind = AgentKind::new_unchecked("codex");
-    lazy.agent_panes[0].kind = lazy.agents[0].kind.clone();
+    std::sync::Arc::make_mut(&mut lazy.agent_panes)[0].kind = lazy.agents[0].kind.clone();
     let target = ResolvedTarget {
         pane: Some(lazy.agent_panes[0].clone()),
         agent: Some(lazy.agents[0].clone()),
@@ -576,7 +576,7 @@ fn context(channel: Option<&str>) -> AddressContext {
 
 fn snapshot_with_panes(agents: Vec<AgentState>, panes: Vec<PaneAgent>) -> SidebarSnapshot {
     let mut snapshot = SidebarSnapshot::build_with_agents(workspace_id(), agents, now());
-    snapshot.agent_panes = panes;
+    snapshot.agent_panes = panes.into();
     snapshot
 }
 

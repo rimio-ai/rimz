@@ -1,6 +1,7 @@
 use std::cmp::{Ordering, Reverse};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use crate::agents::{AgentState, AgentStatus};
 use crate::store::snapshot::row::SidebarRow;
@@ -241,17 +242,35 @@ pub(super) fn status_counts(rows: &[SidebarRow]) -> Vec<SidebarStatusCount> {
 }
 
 pub(super) fn refresh_overlay_group(group: &mut SidebarWorktreeGroup) {
-    sort_rows(&mut group.rows);
+    sort_rows(Arc::make_mut(&mut group.rows).as_mut_slice());
     group.status_counts = status_counts(&group.rows);
     group.finished = group_finished(group);
 }
 
-pub(super) fn sort_groups_for_presentation(groups: &mut [SidebarWorktreeGroup]) {
-    for group in groups.iter_mut() {
-        sort_rows(&mut group.rows);
-        group.finished = group_finished(group);
+pub(super) fn sort_groups_for_presentation(groups: &mut Arc<Vec<SidebarWorktreeGroup>>) {
+    for index in 0..groups.len() {
+        let group = &groups[index];
+        let cohorts = rank_cohort_blocks(group.rows.iter().map(row_rank_facts));
+        let rows_sorted = group
+            .rows
+            .iter()
+            .is_sorted_by_key(|row| rank_key(row_rank_facts(row), &cohorts));
+        let finished = group_finished(group);
+        if rows_sorted && group.finished == finished {
+            continue;
+        }
+        let group = &mut Arc::make_mut(groups)[index];
+        if !rows_sorted {
+            sort_rows(Arc::make_mut(&mut group.rows).as_mut_slice());
+        }
+        group.finished = finished;
     }
-    groups.sort_by(compare_groups);
+    if !groups
+        .iter()
+        .is_sorted_by(|a, b| compare_groups(a, b).is_le())
+    {
+        Arc::make_mut(groups).sort_by(compare_groups);
+    }
 }
 
 pub(super) fn sort_rows(rows: &mut [SidebarRow]) {

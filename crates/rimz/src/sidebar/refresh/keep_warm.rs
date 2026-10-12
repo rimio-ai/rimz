@@ -144,7 +144,8 @@ mod tests {
             .collect();
         let mut snapshot =
             SidebarSnapshot::build_with_agents(runtime.workspace_id.clone(), agents, now);
-        snapshot.worktree_groups = vec![crate::sidebar::test_support::worktree_group(root, rows)];
+        snapshot.worktree_groups =
+            vec![crate::sidebar::test_support::worktree_group(root, rows)].into();
         snapshot
     }
 

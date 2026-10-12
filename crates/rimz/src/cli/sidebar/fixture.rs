@@ -31,11 +31,11 @@ pub(super) fn sidebar_fixture_snapshot(state: SidebarFixtureState) -> Result<Sid
         presence: None,
         truth_degraded: None,
         now,
-        worktree_groups: Vec::new(),
+        worktree_groups: Vec::new().into(),
         agents: Default::default(),
         wired_kinds: vec!["codex".to_owned()],
         wired_default_models: std::collections::BTreeMap::new(),
-        agent_panes: Vec::new(),
+        agent_panes: Vec::new().into(),
         own_view: None,
         only_daemon_view_remains: false,
         project_root: Some(PathBuf::from("/srv/code/query-engine")),
@@ -77,8 +77,8 @@ pub(super) fn sidebar_fixture_snapshot(state: SidebarFixtureState) -> Result<Sid
         }
     }
     snapshot.sort_groups_for_presentation();
-    for group in &mut snapshot.worktree_groups {
-        move_fixture_overflow_to_tail(&mut group.rows);
+    for group in std::sync::Arc::make_mut(&mut snapshot.worktree_groups) {
+        move_fixture_overflow_to_tail(std::sync::Arc::make_mut(&mut group.rows));
         group.status_counts = status_counts_from_rows(&group.rows);
     }
     if matches!(state, SidebarFixtureState::Provider) {
@@ -255,7 +255,7 @@ fn add_clock_fixture(
         visited: Default::default(),
         done_at: done.then_some(now),
     });
-    snapshot.worktree_groups = vec![group];
+    snapshot.worktree_groups = vec![group].into();
     snapshot.wired_kinds = vec!["claude".to_owned()];
 }
 
@@ -306,7 +306,7 @@ fn worktree_group(spec: WorktreeGroupSpec) -> SidebarWorktreeGroup {
         cohort_effort: None,
         pipeline: None,
         status_counts: Vec::new(),
-        rows: spec.rows,
+        rows: spec.rows.into(),
         diff_added: spec.diff_added,
         diff_removed: spec.diff_removed,
         commits_ahead: spec.commits_ahead,
@@ -461,7 +461,8 @@ fn add_fleet_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
     ]
     .into_iter()
     .map(worktree_group)
-    .collect();
+    .collect::<Vec<_>>()
+    .into();
     snapshot.value_tally = Some(spend_tally(9.42, 712_000, 8));
     snapshot.workspace_value_tally = Some(spend_tally(6.84, 481_000, 5));
     snapshot.today_spend_live_usd = Some(10.08);
@@ -803,7 +804,8 @@ fn add_cockpit_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
     ]
     .into_iter()
     .map(worktree_group)
-    .collect();
+    .collect::<Vec<_>>()
+    .into();
     let mut codex_panel = provider_panel(
         "codex",
         Some("0.135.0"),
@@ -1229,7 +1231,8 @@ fn add_focus_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
     ]
     .into_iter()
     .map(worktree_group)
-    .collect();
+    .collect::<Vec<_>>()
+    .into();
     let mut codex_panel = provider_panel(
         "codex",
         Some("0.135.0"),
@@ -1589,7 +1592,8 @@ fn add_economy_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
     ]
     .into_iter()
     .map(worktree_group)
-    .collect();
+    .collect::<Vec<_>>()
+    .into();
     let mut codex_panel = provider_panel(
         "codex",
         Some("0.135.0"),
@@ -1933,7 +1937,8 @@ fn add_reach_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
     ]
     .into_iter()
     .map(worktree_group)
-    .collect();
+    .collect::<Vec<_>>()
+    .into();
     snapshot.providers = vec![
         provider_panel(
             "claude",
@@ -2376,8 +2381,7 @@ fn status_counts_from_rows(rows: &[SidebarRow]) -> Vec<SidebarStatusCount> {
 
 fn add_provider_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
     // The selected row picks the provider tab, so keep Claude first to show its sub-cap tick.
-    snapshot.worktree_groups[0]
-        .rows
+    std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows)
         .sort_by_key(|row| row.name != "claude");
     snapshot.theme.display.provider_tabs = rimz::config::ProviderTabsMode::Always;
     snapshot.providers = vec![

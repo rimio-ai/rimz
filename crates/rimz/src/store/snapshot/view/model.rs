@@ -301,7 +301,7 @@ pub struct SidebarWorktreeGroup {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pipeline: Option<SidebarPipeline>,
     pub status_counts: Vec<SidebarStatusCount>,
-    pub rows: Vec<SidebarRow>,
+    pub rows: std::sync::Arc<Vec<SidebarRow>>,
     /// Total insertions and deletions relative to trunk.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub diff_added: Option<u32>,
@@ -394,7 +394,7 @@ pub struct SidebarStatusCount {
 pub fn lead_unread_row(groups: &[SidebarWorktreeGroup]) -> Option<&SidebarRow> {
     groups
         .iter()
-        .flat_map(|group| &group.rows)
+        .flat_map(|group| group.rows.iter())
         .filter(|row| row.unread)
         .filter(|row| {
             row.attention_status()
@@ -422,7 +422,7 @@ pub(crate) fn triage_key(row: &SidebarRow) -> Option<(u8, jiff::Timestamp)> {
 pub(crate) fn actionable_unread_count(groups: &[SidebarWorktreeGroup]) -> usize {
     groups
         .iter()
-        .flat_map(|group| &group.rows)
+        .flat_map(|group| group.rows.iter())
         .filter(|row| {
             row.unread
                 && row
@@ -549,7 +549,7 @@ mod tests {
             cohort_effort: None,
             pipeline: None,
             status_counts: Vec::new(),
-            rows,
+            rows: rows.into(),
             diff_added: None,
             diff_removed: None,
             commits_ahead: None,

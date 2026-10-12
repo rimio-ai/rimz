@@ -57,8 +57,14 @@ fn no_selection_mark_is_a_noop_and_inbox_enters_at_the_ends() {
     let mut last = snapshot.worktree_groups[0].rows[0].clone();
     last.id = "last-agent".into();
     last.pane = Some(pane("terminal_11", "tab_0", false));
-    snapshot.worktree_groups[0].rows.push(last);
-    for (index, row) in snapshot.worktree_groups[0].rows.iter_mut().enumerate() {
+    std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows)
+        .push(last);
+    for (index, row) in std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )
+    .iter_mut()
+    .enumerate()
+    {
         if let Some(card) = row.as_agent_mut() {
             card.status = crate::agents::AgentStatus::Waiting;
             row.unread = true;
@@ -91,7 +97,10 @@ fn search_draft_seats_the_first_match_without_a_baseline() {
     assert_eq!(ui.selected_pane, Some(pane_of(&snapshot, 0)));
     assert_eq!(ui.selected_index, Some(0));
 
-    snapshot.worktree_groups[0].rows[0].pane = None;
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[0]
+    .pane = None;
     let mut ui = UiState::default();
     handle_key(KeyAction::Search, &mut ui, &snapshot);
     reconcile_selection(&mut ui, &snapshot, None);
@@ -102,7 +111,11 @@ fn search_draft_seats_the_first_match_without_a_baseline() {
 fn delegation_snapshot() -> SidebarSnapshot {
     let mut snapshot = clickable_block_snapshot(&workspace());
     let now = snapshot.now;
-    let card = snapshot.worktree_groups[0].rows[0].as_agent_mut().unwrap();
+    let card = std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[0]
+    .as_agent_mut()
+    .unwrap();
     card.user_turn_started_at = Some(now);
     card.sub_agent_count = 2;
     card.sub_agents = [
@@ -129,7 +142,11 @@ fn both_child_entry_lines_focus_the_child_without_moving_selection() {
     let mut snapshot = delegation_snapshot();
     let child = PaneId::from_parts(crate::MuxName::Zellij, "terminal_child");
     let now = snapshot.now;
-    let card = snapshot.worktree_groups[0].rows[0].as_agent_mut().unwrap();
+    let card = std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[0]
+    .as_agent_mut()
+    .unwrap();
     card.sub_agents[0].pane = Some(child.clone());
     card.sub_agents[0].model = Some("Haiku".to_owned());
     card.sub_agents[1].provider_native = true;
@@ -171,7 +188,11 @@ fn both_child_entry_lines_focus_the_child_without_moving_selection() {
         handle_mouse_click(10, native as u16, &mut ui, &snapshot),
         InputOutcome::focus(parent.clone())
     );
-    let card = snapshot.worktree_groups[0].rows[0].as_agent_mut().unwrap();
+    let card = std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[0]
+    .as_agent_mut()
+    .unwrap();
     card.sub_agents[0].pane = None;
     card.sub_agents[0].status = crate::agents::AgentStatus::Success;
     let composed = render::compose_lines(&snapshot, None, &ui, theme.as_ref(), 54, 64);
@@ -309,10 +330,12 @@ fn delegation_history_expires_on_the_parents_next_prompt_while_the_override_stay
     let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(54, 64)).unwrap();
     render::draw_to_terminal(&mut terminal, &snapshot, None, &mut ui).unwrap();
     assert!(ui.delegation_history.contains_key(&row_id));
-    snapshot.worktree_groups[0].rows[0]
-        .as_agent_mut()
-        .unwrap()
-        .user_turn_started_at = Some(snapshot.now + std::time::Duration::from_secs(1));
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[0]
+    .as_agent_mut()
+    .unwrap()
+    .user_turn_started_at = Some(snapshot.now + std::time::Duration::from_secs(1));
     let theme = ui.theme(&snapshot.theme);
     let stale = render::compose_lines(&snapshot, None, &ui, theme.as_ref(), 54, 64);
     assert!(
@@ -326,7 +349,8 @@ fn delegation_history_expires_on_the_parents_next_prompt_while_the_override_stay
     assert!(!ui.delegation_history.contains_key(&row_id));
     assert_eq!(ui.delegation_overrides.get(&row_id), Some(&true));
     toggle_delegation_history(&mut ui, &snapshot, row_id.clone());
-    snapshot.worktree_groups[0].rows.remove(0);
+    std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows)
+        .remove(0);
     render::draw_to_terminal(&mut terminal, &snapshot, None, &mut ui).unwrap();
     assert!(!ui.delegation_history.contains_key(&row_id));
     assert!(!ui.delegation_overrides.contains_key(&row_id));
@@ -555,10 +579,12 @@ fn collapsing_the_selected_group_pins_on_the_cleared_selection() {
             pane("terminal_1", "tab_0", false),
         ],
     );
-    for row in &mut snapshot.worktree_groups[0].rows {
+    for row in std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    ) {
         row.card = crate::store::snapshot::RowCard::Agent(std::sync::Arc::default());
     }
-    snapshot.worktree_groups[0].finished = true;
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].finished = true;
     let group_key = snapshot.worktree_groups[0].key.clone();
     let mut ui = UiState {
         baseline_pane: Some(selected.clone()),
@@ -668,14 +694,20 @@ fn focus_keys_fire_without_mutating_selection() {
             pane("terminal_2", "tab_0", false),
         ],
     );
-    snapshot.worktree_groups[0].rows[1].name = "claude".to_owned();
-    snapshot.worktree_groups[0].rows[1].card = crate::store::snapshot::RowCard::Agent(
-        std::sync::Arc::new(crate::store::snapshot::AgentCard {
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[1]
+    .name = "claude".to_owned();
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[1]
+    .card = crate::store::snapshot::RowCard::Agent(std::sync::Arc::new(
+        crate::store::snapshot::AgentCard {
             status: crate::agents::AgentStatus::Waiting,
             phase: crate::agents::TurnPhase::Idle,
             ..crate::store::snapshot::AgentCard::default()
-        }),
-    );
+        },
+    ));
     let mut ui = UiState::default();
     let outcome = handle_key(KeyAction::InboxNext, &mut ui, &snapshot);
     assert_eq!(outcome, InputOutcome::focus(target.clone()));
@@ -1078,7 +1110,10 @@ fn mark_keys_name_the_selected_agent_row_without_focus() {
         "marking unread moves no selection"
     );
 
-    snapshot.worktree_groups[0].rows[0].unread = true;
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[0]
+    .unread = true;
     let outcome = handle_key(KeyAction::MarkToggle, &mut ui, &snapshot);
     assert_eq!(outcome.effects, vec![InputEffect::MarkRead(row_id.clone())]);
     assert!(!outcome.redraw, "the loop owns the repaint after the write");
@@ -1150,7 +1185,7 @@ fn a_fresh_unread_lead_never_steals_the_viewport_from_the_selection() {
         cohort_effort: None,
         pipeline: None,
         status_counts: Vec::new(),
-        rows,
+        rows: rows.into(),
         diff_added: None,
         diff_removed: None,
         commits_ahead: None,
@@ -1166,7 +1201,8 @@ fn a_fresh_unread_lead_never_steals_the_viewport_from_the_selection() {
         ci: None,
         pr_number: None,
         pr_url: None,
-    }];
+    }]
+    .into();
 
     // Selecting the last row keeps it visible in the short viewport while the
     // fresh unread lead stays reachable through the jump banner.

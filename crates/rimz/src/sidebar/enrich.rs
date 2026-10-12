@@ -82,7 +82,7 @@ fn fold_link_stats(snapshot: &mut SidebarSnapshot, runtime: &RuntimePaths, now_m
 /// exact channel marker classifications; consumers project that cache without
 /// git subprocesses or checkout metadata reads.
 fn project_diff_stats(snapshot: &mut SidebarSnapshot, cache: &DiffStatsCache) {
-    for group in &mut snapshot.worktree_groups {
+    for group in Arc::make_mut(&mut snapshot.worktree_groups) {
         if group.kind == SidebarWorktreeKind::Channel {
             group.worktree_backed = false;
         }
@@ -149,7 +149,10 @@ fn project_diff_stats(snapshot: &mut SidebarSnapshot, cache: &DiffStatsCache) {
 fn disambiguate_group_labels(snapshot: &mut SidebarSnapshot) {
     let mut by_label = BTreeMap::<String, Vec<(usize, Vec<String>, usize)>>::new();
 
-    for (index, group) in snapshot.worktree_groups.iter_mut().enumerate() {
+    for (index, group) in Arc::make_mut(&mut snapshot.worktree_groups)
+        .iter_mut()
+        .enumerate()
+    {
         group.label_qualifier = None;
         if group.kind == SidebarWorktreeKind::Channel {
             continue;
@@ -207,7 +210,7 @@ fn disambiguate_group_labels(snapshot: &mut SidebarSnapshot) {
             }
             let suffix = trailing_path_suffix(&components, depth);
             if suffix != label {
-                snapshot.worktree_groups[index].label_qualifier = Some(suffix);
+                Arc::make_mut(&mut snapshot.worktree_groups)[index].label_qualifier = Some(suffix);
             }
         }
     }
@@ -218,7 +221,7 @@ fn trailing_path_suffix(components: &[String], depth: usize) -> String {
 }
 
 fn project_cohort_effort(snapshot: &mut SidebarSnapshot, cache: &CohortSpendCache) {
-    for group in &mut snapshot.worktree_groups {
+    for group in Arc::make_mut(&mut snapshot.worktree_groups) {
         group.cohort_effort = cache.groups.get(&group.key).cloned();
     }
 }
@@ -251,7 +254,7 @@ fn project_pr_state_map(
     branch_ci: &BTreeMap<String, WorktreeCi>,
     diff_cache: &DiffStatsCache,
 ) {
-    for group in &mut snapshot.worktree_groups {
+    for group in Arc::make_mut(&mut snapshot.worktree_groups) {
         group.pr_stack = Default::default();
         let Some(path) = cached_git_backed_worktree_path(
             group.kind,
@@ -394,6 +397,8 @@ static LOGGED_LAZY_PAIRINGS: OnceLock<Mutex<HashMap<LazyPairingLogKey, u64>>> = 
 
 /// Renderer-independent sidebar projection. Call `project_local` before a
 /// snapshot reaches rendering or notification evaluation.
+///
+/// Clones share agent-scaled collections, the group vector, and group rows. Local projection owns pane metadata and detaches only collections changed by an exclusion.
 #[derive(Clone, Debug)]
 pub struct WorkspaceSnapshot(pub(crate) SidebarSnapshot);
 
@@ -449,7 +454,7 @@ pub fn enrich_workspace(
 }
 
 /// Apply the renderer-owned pane exclusion, own-view, and presence verdict.
-pub(crate) fn project_local(
+pub fn project_local(
     workspace: WorkspaceSnapshot,
     frame: Option<&PaneFrame>,
     exclude: Option<&PaneId>,
@@ -468,16 +473,22 @@ pub(crate) fn project_local(
         .map(|sample| SidebarPresence::classify(sample, now_ms, idle_threshold_ms));
     snapshot.own_view = exclude.and_then(|own| SidebarOwnView::from_frame(own, frame));
     if let Some(excluded) = exclude {
-        snapshot
+        if snapshot
             .agent_panes
-            .retain(|agent| agent.pane_id != *excluded);
+            .iter()
+            .any(|agent| agent.pane_id == *excluded)
+        {
+            Arc::make_mut(&mut snapshot.agent_panes).retain(|agent| agent.pane_id != *excluded);
+        }
         // `remove_pane_rows` also clears the session focus register when the
         // excluded pane owns it. Exclusion has always hidden only the row, so
         // retain the pre-exclusion focus truth for fusion and watched-state.
         let focused_pane = snapshot.focused_pane.clone();
-        snapshot.remove_pane_rows(excluded);
+        let changed = snapshot.remove_pane_rows(excluded);
         snapshot.focused_pane = focused_pane;
-        snapshot.sort_groups_for_presentation();
+        if changed {
+            snapshot.sort_groups_for_presentation();
+        }
     }
     snapshot
 }
@@ -707,7 +718,7 @@ fn enrich_core(
     project_diff_stats(&mut folded, &diff_cache);
     disambiguate_group_labels(&mut folded);
     project_cohort_effort(&mut folded, &cohort_spend_cache);
-    for group in &mut folded.worktree_groups {
+    for group in Arc::make_mut(&mut folded.worktree_groups) {
         group.pipeline = pipeline_cache.groups.get(&group.key).cloned();
     }
     super::refresh::keep_warm::project_cache_clocks(
@@ -846,8 +857,8 @@ fn apply_pane_metrics(snapshot: &mut SidebarSnapshot, metrics: Vec<(PaneId, Pane
         return;
     }
     let metrics: HashMap<PaneId, PaneMetrics> = metrics.into_iter().collect();
-    for group in &mut snapshot.worktree_groups {
-        for row in &mut group.rows {
+    for group in Arc::make_mut(&mut snapshot.worktree_groups) {
+        for row in Arc::make_mut(&mut group.rows) {
             let Some(pane) = row.pane.as_ref() else {
                 continue;
             };
@@ -1008,7 +1019,10 @@ pub(super) fn fold_machine_config_with(
     // producer and consumer fold, so the renderer's color ramp and any future
     // signal emitter read one authority instead of re-deriving the tier.
     let bands = snapshot.theme.display.context_meter.clone();
-    stamp_context_severity(&mut snapshot.worktree_groups, &bands);
+    stamp_context_severity(
+        Arc::make_mut(&mut snapshot.worktree_groups).as_mut_slice(),
+        &bands,
+    );
 
     // The `⇅ rc` flag per provider comes from either RimZ's auto-launch toggle
     // or the provider's own pane-session auto-enable setting.
@@ -1076,7 +1090,7 @@ fn stamp_context_severity(
     bands: &crate::config::ContextMeterConfig,
 ) {
     for group in groups {
-        for row in &mut group.rows {
+        for row in Arc::make_mut(&mut group.rows) {
             if row.is_agent() {
                 let severity = crate::agents::ContextSeverity::classify(
                     row.context_gauge_percent().unwrap_or(0),

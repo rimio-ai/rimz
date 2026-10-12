@@ -101,7 +101,7 @@ fn clickable_block_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
             status: crate::agents::AgentStatus::Running,
             count: 1,
         }],
-        rows: vec![agent, process],
+        rows: vec![agent, process].into(),
         diff_added: None,
         diff_removed: None,
         commits_ahead: None,
@@ -117,7 +117,8 @@ fn clickable_block_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
         ci: None,
         pr_number: None,
         pr_url: None,
-    }];
+    }]
+    .into();
     snapshot
 }
 
@@ -255,7 +256,8 @@ fn filterable_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
                     "/repo/main",
                 ),
                 filter_row(false, "terminal_2", "zsh", None, "terminal_2", "/repo/main"),
-            ],
+            ]
+            .into(),
             diff_added: None,
             diff_removed: None,
             commits_ahead: None,
@@ -292,7 +294,8 @@ fn filterable_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
                 Some(AgentStatus::Failed),
                 "terminal_3",
                 "/repo/feature",
-            )],
+            )]
+            .into(),
             diff_added: None,
             diff_removed: None,
             commits_ahead: None,
@@ -309,6 +312,7 @@ fn filterable_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
             pr_number: None,
             pr_url: None,
         },
-    ];
+    ]
+    .into();
     snapshot
 }

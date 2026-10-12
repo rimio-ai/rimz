@@ -226,23 +226,21 @@ fn keepalive_producers_share_pacing_even_during_spawn() {
     keepalive_agents_with(&snapshot, &runtime, &config, &policy, |_| {
         panic!("no live pane")
     });
-    snapshot
-        .agent_panes
-        .push(crate::store::snapshot::PaneAgent {
-            root_lane: false,
-            kind: agent.kind.clone(),
-            kind_ordinal: None,
-            name: None,
-            name_explicit: false,
-            profile: None,
-            role: None,
-            channel: None,
-            agent_id: Some(agent.agent_id.clone()),
-            pane_id: PaneId::parse("tmux:%1").unwrap(),
-            pane_pid: None,
-            worktree_path: None,
-            worktree_branch: None,
-        });
+    std::sync::Arc::make_mut(&mut snapshot.agent_panes).push(crate::store::snapshot::PaneAgent {
+        root_lane: false,
+        kind: agent.kind.clone(),
+        kind_ordinal: None,
+        name: None,
+        name_explicit: false,
+        profile: None,
+        role: None,
+        channel: None,
+        agent_id: Some(agent.agent_id.clone()),
+        pane_id: PaneId::parse("tmux:%1").unwrap(),
+        pane_pid: None,
+        worktree_path: None,
+        worktree_branch: None,
+    });
     let mut count = 0;
     keepalive_agents_with(&snapshot, &runtime, &config, &policy, |request| {
         assert_eq!(request.anchor, ts(0));
@@ -270,7 +268,7 @@ fn keepalive_producers_share_pacing_even_during_spawn() {
             "wait completed"
         );
         changed = snapshot.clone();
-        changed.agent_panes.clear();
+        std::sync::Arc::make_mut(&mut changed.agent_panes).clear();
         assert!(
             request
                 .target(&changed, &config, &policy, ts(3540))
@@ -670,23 +668,21 @@ fn helper_rechecks_the_horizon_before_pinging() {
     agent.profile = Some("warm".into());
     let mut snapshot =
         SidebarSnapshot::build_with_agents(workspace_id, vec![agent.clone()], ts(3540));
-    snapshot
-        .agent_panes
-        .push(crate::store::snapshot::PaneAgent {
-            root_lane: false,
-            kind: agent.kind.clone(),
-            kind_ordinal: None,
-            name: None,
-            name_explicit: false,
-            profile: None,
-            role: None,
-            channel: None,
-            agent_id: Some(agent.agent_id.clone()),
-            pane_id: PaneId::parse("tmux:%1").unwrap(),
-            pane_pid: None,
-            worktree_path: None,
-            worktree_branch: None,
-        });
+    std::sync::Arc::make_mut(&mut snapshot.agent_panes).push(crate::store::snapshot::PaneAgent {
+        root_lane: false,
+        kind: agent.kind.clone(),
+        kind_ordinal: None,
+        name: None,
+        name_explicit: false,
+        profile: None,
+        role: None,
+        channel: None,
+        agent_id: Some(agent.agent_id.clone()),
+        pane_id: PaneId::parse("tmux:%1").unwrap(),
+        pane_pid: None,
+        worktree_path: None,
+        worktree_branch: None,
+    });
     let config = HarnessConfig::default();
     let held = policy(Some(KeepWarm::For(TWO_HOURS)), None);
     keepalive_agents_with(

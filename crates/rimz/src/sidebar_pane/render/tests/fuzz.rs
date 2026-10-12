@@ -82,13 +82,19 @@ fn build_adversarial_snapshot(
         .collect::<Vec<_>>();
     let mut snapshot = snapshot_with(agents);
     snapshot.display_name = display_name;
-    for (idx, group) in snapshot.worktree_groups.iter_mut().enumerate() {
+    for (idx, group) in std::sync::Arc::make_mut(&mut snapshot.worktree_groups)
+        .iter_mut()
+        .enumerate()
+    {
         if let Some(row) = rows.get(idx % rows.len().max(1)) {
             group.key = row.text.clone();
             group.label = row.text.clone();
             group.kind = SidebarWorktreeKind::Worktree;
         }
-        for (row_idx, rendered) in group.rows.iter_mut().enumerate() {
+        for (row_idx, rendered) in std::sync::Arc::make_mut(&mut group.rows)
+            .iter_mut()
+            .enumerate()
+        {
             let Some(spec) = rows.get(row_idx % rows.len().max(1)) else {
                 continue;
             };

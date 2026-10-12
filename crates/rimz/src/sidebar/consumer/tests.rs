@@ -428,7 +428,7 @@ fn read_published_snapshot_folds_caches_without_forking() {
         snapshot
             .worktree_groups
             .iter()
-            .flat_map(|group| &group.rows)
+            .flat_map(|group| group.rows.iter())
             .all(|row| {
                 row.pane
                     .as_ref()
@@ -649,7 +649,7 @@ fn read_published_snapshot_folds_subagent_context() {
     let parent = snapshot
         .worktree_groups
         .iter()
-        .flat_map(|group| &group.rows)
+        .flat_map(|group| group.rows.iter())
         .find(|row| row.id == "parent-1")
         .expect("parent row");
 

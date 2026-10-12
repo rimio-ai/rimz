@@ -31,7 +31,7 @@ fn pane_identity_wins_over_launch_identity() {
         vec![first, second],
         Timestamp::UNIX_EPOCH,
     );
-    snapshot.agent_panes = vec![pane_agent("first", "%1"), pane_agent("second", "%2")];
+    snapshot.agent_panes = vec![pane_agent("first", "%1"), pane_agent("second", "%2")].into();
     let identity = SelfIdentity {
         pane: Some(PaneId::from_parts(rimz::MuxName::Tmux, "%2")),
         kind: Some(AgentKind::new_unchecked("codex")),

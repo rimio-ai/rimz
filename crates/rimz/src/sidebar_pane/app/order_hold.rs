@@ -126,15 +126,14 @@ fn reorder_to_frozen(current: &mut SidebarSnapshot, frozen: &FrozenOrder) {
         .map(|(index, row)| (row.id.as_str(), index))
         .collect();
 
-    current.worktree_groups.sort_by_key(|group| {
+    std::sync::Arc::make_mut(&mut current.worktree_groups).sort_by_key(|group| {
         group_pos
             .get(group.key.as_str())
             .copied()
             .unwrap_or(usize::MAX)
     });
-    for group in &mut current.worktree_groups {
-        group
-            .rows
+    for group in std::sync::Arc::make_mut(&mut current.worktree_groups) {
+        std::sync::Arc::make_mut(&mut group.rows)
             .sort_by_key(|row| row_pos.get(row.id.as_str()).copied().unwrap_or(usize::MAX));
     }
 }
@@ -184,7 +183,7 @@ fn admit_new_items(current: &SidebarSnapshot, frozen: &mut FrozenOrder) {
     // Held and producer order can disagree mid-hold; never walk the cursor
     // backward past a known producer predecessor.
     let mut cursor = 0;
-    for group in &current.worktree_groups {
+    for group in current.worktree_groups.iter() {
         if let Some(position) = frozen.groups.iter().position(|key| key == &group.key) {
             cursor = cursor.max(position + 1);
         } else {
@@ -194,7 +193,11 @@ fn admit_new_items(current: &SidebarSnapshot, frozen: &mut FrozenOrder) {
     }
 
     cursor = 0;
-    for row in current.worktree_groups.iter().flat_map(|group| &group.rows) {
+    for row in current
+        .worktree_groups
+        .iter()
+        .flat_map(|group| group.rows.iter())
+    {
         if let Some(position) = frozen.rows.iter().position(|frozen| frozen.id == row.id) {
             cursor = cursor.max(position + 1);
         } else {

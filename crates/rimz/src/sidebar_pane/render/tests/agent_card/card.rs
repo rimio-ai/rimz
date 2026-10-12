@@ -608,12 +608,12 @@ fn render_enriched_selected_agent_card() {
     claude.usage.total_tokens = Some(12_400);
     claude.context = Some(claude_context(fixed_now()));
     let mut snapshot = snapshot_with(vec![claude]);
-    snapshot.worktree_groups[0].diff_added = Some(127);
-    snapshot.worktree_groups[0].diff_removed = Some(43);
-    snapshot.worktree_groups[0].commits_ahead = Some(3);
-    snapshot.worktree_groups[0].commits_behind = Some(1);
-    snapshot.worktree_groups[0].trunk = Some("main".to_owned());
-    snapshot.worktree_groups[0].clean = Some(true);
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].diff_added = Some(127);
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].diff_removed = Some(43);
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].commits_ahead = Some(3);
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].commits_behind = Some(1);
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].trunk = Some("main".to_owned());
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].clean = Some(true);
 
     let rendered = snapshot_to_screen_with_alert_and_ui(
         &snapshot,
@@ -747,7 +747,10 @@ fn unread_result_card_rests_on_a_uniform_unread_wash() {
     );
     done.last_activity = fixed_now() - Duration::from_secs(60);
     let mut snapshot = snapshot_with(vec![done]);
-    snapshot.worktree_groups[0].rows[0].unread = true;
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[0]
+    .unread = true;
     // Truecolor: the wash is a fine sub-cell tint above the panel.
     let theme = super::super::truecolor_sidebar_theme();
     let wash = theme
@@ -774,7 +777,10 @@ fn unread_result_card_rests_on_a_uniform_unread_wash() {
     );
 
     // The look clears on read: a read result carries no wash.
-    snapshot.worktree_groups[0].rows[0].unread = false;
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[0]
+    .unread = false;
     let read = group_lines(&snapshot, &theme, 99);
     let read_name = read
         .iter()

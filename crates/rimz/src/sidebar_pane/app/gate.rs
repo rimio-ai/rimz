@@ -101,7 +101,7 @@ fn pane_id_set(snapshot: &SidebarSnapshot) -> HashSet<&PaneId> {
     snapshot
         .worktree_groups
         .iter()
-        .flat_map(|group| &group.rows)
+        .flat_map(|group| group.rows.iter())
         .filter_map(|row| row.pane.as_ref().map(|pane| &pane.pane_id))
         .collect()
 }
@@ -113,7 +113,7 @@ fn demotes_agentish_to_process(prev: &SidebarSnapshot, incoming: &SidebarSnapsho
     let agentish: HashMap<&PaneId, Option<&str>> = prev
         .worktree_groups
         .iter()
-        .flat_map(|group| &group.rows)
+        .flat_map(|group| group.rows.iter())
         .filter(|row| row.is_agent())
         .filter_map(|row| {
             row.pane
@@ -124,7 +124,7 @@ fn demotes_agentish_to_process(prev: &SidebarSnapshot, incoming: &SidebarSnapsho
     incoming
         .worktree_groups
         .iter()
-        .flat_map(|group| &group.rows)
+        .flat_map(|group| group.rows.iter())
         .filter(|row| row.is_process())
         .filter_map(|row| row.pane.as_ref())
         .any(|pane| {

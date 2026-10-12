@@ -8,7 +8,7 @@ fn pr_stack_projection_matches_cache_and_clears_stale_groups() {
     let (dir, runtime, mut snapshot) = runtime();
     let worktree = dir.path().join("feature");
     std::fs::create_dir_all(&worktree).unwrap();
-    snapshot.worktree_groups = vec![worktree_group(&worktree, Vec::new())];
+    snapshot.worktree_groups = vec![worktree_group(&worktree, Vec::new())].into();
     let path = worktree.display().to_string();
     let stack = crate::store::snapshot::PrStack {
         below: vec![crate::store::snapshot::StackPr {
@@ -73,8 +73,8 @@ fn pr_state_projection_uses_the_given_map() {
         Vec::new(),
         Timestamp::now(),
     );
-    snapshot.worktree_groups = vec![worktree_group(&worktree, Vec::new())];
-    snapshot.worktree_groups[0].pr_number = Some(69);
+    snapshot.worktree_groups = vec![worktree_group(&worktree, Vec::new())].into();
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].pr_number = Some(69);
 
     let branch_ci = BTreeMap::from([(
         worktree.display().to_string(),
@@ -177,7 +177,7 @@ fn pr_state_projection_uses_the_given_map() {
     );
     assert_eq!(snapshot.worktree_groups[0].pr_queue, None);
 
-    snapshot.worktree_groups[0].pr_number = Some(69);
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].pr_number = Some(69);
     project_pr_state_map(
         &mut snapshot,
         &BTreeMap::new(),
@@ -262,7 +262,8 @@ fn pr_state_projection_keeps_trunk_pr_free_but_projects_branch_ci() {
     snapshot.worktree_groups = vec![
         worktree_group(&trunk, Vec::new()),
         worktree_group(&feature, Vec::new()),
-    ];
+    ]
+    .into();
     let mut states = BTreeMap::new();
     for (path, branch, number) in [(&trunk, "old-feature", 90), (&feature, "feature", 91)] {
         states.insert(
@@ -363,7 +364,7 @@ fn diff_projection_marks_worktree_channel_before_git_facts_arrive() {
 #[test]
 fn diff_projection_requires_an_exact_channel_marker_name() {
     let (_dir, worktree, mut snapshot) = channel_snapshot("codex-resets", false);
-    snapshot.worktree_groups[0].worktree_backed = true;
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].worktree_backed = true;
 
     project_diff_stats(
         &mut snapshot,
@@ -390,7 +391,8 @@ fn cached_enrich_resorts_groups_after_git_projection() {
             &dirty,
             vec![activity_row(true, Some(AgentStatus::Idle), now, &dirty)],
         ),
-    ];
+    ]
+    .into();
 
     let mut cache = DiffStatsCache::default();
     let mut dirty_entry = diff_entry(false, false, Some(true), 0, 0);

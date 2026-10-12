@@ -517,7 +517,7 @@ fn provider_child_attention_matches_declared_status_count() {
     let mut snapshot =
         SidebarSnapshot::build(WorkspaceId::from_project_root(path), Vec::new(), now);
     snapshot.panes_produced_at_ms = Some(1);
-    snapshot.worktree_groups = vec![group];
+    snapshot.worktree_groups = vec![group].into();
     let frame = extract_sig(
         &snapshot,
         &PulledFrameSig::from_snapshot(&snapshot),

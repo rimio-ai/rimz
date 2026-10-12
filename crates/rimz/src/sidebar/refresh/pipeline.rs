@@ -165,7 +165,7 @@ mod tests {
         let mut normalized = group.clone();
         let mut duplicate = normalized.rows[0].clone();
         duplicate.worktree_path = Some(dir.path().join("sub/..").display().to_string());
-        normalized.rows.push(duplicate);
+        std::sync::Arc::make_mut(&mut normalized.rows).push(duplicate);
         assert_eq!(compute(normalized, &teams), result);
 
         assert!(compute(group.clone(), &TeamsConfig::default()).is_empty());
@@ -174,13 +174,13 @@ mod tests {
         let mut ambiguous = group.clone();
         let mut other = ambiguous.rows[0].clone();
         other.worktree_path = Some(dir.path().join("other").display().to_string());
-        ambiguous.rows.push(other);
+        std::sync::Arc::make_mut(&mut ambiguous.rows).push(other);
         assert!(compute(ambiguous, &teams).is_empty());
         let mut unteamed = group.clone();
         unteamed.team = None;
         assert!(compute(unteamed, &teams).is_empty());
         let mut empty = group.clone();
-        empty.rows[0].worktree_path = Some(String::new());
+        std::sync::Arc::make_mut(&mut empty.rows)[0].worktree_path = Some(String::new());
         assert!(compute(empty, &teams).is_empty());
         std::fs::remove_file(dir.path().join("blackboard.md")).unwrap();
         assert!(compute(group, &teams).is_empty());
@@ -196,7 +196,7 @@ mod tests {
         let mut snapshot =
             SidebarSnapshot::build_with_agents(workspace, Vec::new(), jiff::Timestamp::UNIX_EPOCH);
         snapshot.project_root = None;
-        snapshot.worktree_groups = vec![group(dir.path())];
+        snapshot.worktree_groups = vec![group(dir.path())].into();
         let mut config = MachineConfig::default();
         config.agents.teams = teams();
         refresh_pipeline_for(&snapshot, &runtime, &config, &config.agents.teams);
@@ -221,7 +221,7 @@ mod tests {
         refresh_pipeline_for(&snapshot, &runtime, &config, &config.agents.teams);
         assert_eq!(read_pipeline_cache(&path), cache);
         // A team that leaves the snapshot must not keep projecting its old entry.
-        snapshot.worktree_groups[0].team = None;
+        std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].team = None;
         refresh_pipeline_for(&snapshot, &runtime, &config, &config.agents.teams);
         assert!(read_pipeline_cache(&path).groups.is_empty());
     }

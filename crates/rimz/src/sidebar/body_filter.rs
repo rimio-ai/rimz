@@ -70,7 +70,7 @@ impl BodyFilter {
                 .sum(),
             Self::Unread => groups
                 .iter()
-                .flat_map(|group| &group.rows)
+                .flat_map(|group| group.rows.iter())
                 .filter(|row| row.unread)
                 .count(),
             Self::OpenPr => groups

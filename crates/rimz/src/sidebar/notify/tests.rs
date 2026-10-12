@@ -65,10 +65,9 @@ fn evaluate_no_open(
 }
 
 fn mark_unread_rows(snapshot: &mut SidebarSnapshot, ids: &[&str]) {
-    for row in snapshot
-        .worktree_groups
+    for row in std::sync::Arc::make_mut(&mut snapshot.worktree_groups)
         .iter_mut()
-        .flat_map(|group| group.rows.iter_mut())
+        .flat_map(|group| std::sync::Arc::make_mut(&mut group.rows).iter_mut())
     {
         if ids.iter().any(|id| *id == row.id) {
             row.unread = true;
@@ -79,10 +78,9 @@ fn mark_unread_rows(snapshot: &mut SidebarSnapshot, ids: &[&str]) {
 fn opened_rows(snapshot: &mut SidebarSnapshot, ids: &[&str]) -> Vec<OpenedUnread> {
     let mut opened = Vec::new();
     let viewed = snapshot.viewed_panes.clone();
-    for row in snapshot
-        .worktree_groups
+    for row in std::sync::Arc::make_mut(&mut snapshot.worktree_groups)
         .iter_mut()
-        .flat_map(|group| group.rows.iter_mut())
+        .flat_map(|group| std::sync::Arc::make_mut(&mut group.rows).iter_mut())
     {
         if ids.iter().any(|id| *id == row.id) {
             row.unread = true;

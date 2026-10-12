@@ -34,7 +34,7 @@ fn group(key: &str, rows: Vec<SidebarRow>) -> SidebarWorktreeGroup {
         cohort_effort: None,
         pipeline: None,
         status_counts: Vec::<SidebarStatusCount>::new(),
-        rows,
+        rows: rows.into(),
         diff_added: None,
         diff_removed: None,
         commits_ahead: None,
@@ -67,7 +67,7 @@ fn snapshot_with_groups(groups: Vec<SidebarWorktreeGroup>) -> SidebarSnapshot {
     let ws = workspace();
     let mut current = snapshot(&ws);
     current.panes_produced_at_ms = Some(1);
-    current.worktree_groups = groups;
+    current.worktree_groups = groups.into();
     current
 }
 
@@ -406,11 +406,13 @@ fn apply_order_hold_arms_holds_and_expires() {
     );
     assert_eq!(row_ids(&current, "a"), vec!["a2", "a1"]);
 
-    current.worktree_groups[0].rows.reverse();
+    std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut current.worktree_groups)[0].rows)
+        .reverse();
     apply_order_hold(&mut ui, &mut current, false, expires_ms - 1);
     assert_eq!(row_ids(&current, "a"), vec!["a2", "a1"]);
 
-    current.worktree_groups[0].rows.reverse();
+    std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut current.worktree_groups)[0].rows)
+        .reverse();
     apply_order_hold(&mut ui, &mut current, false, expires_ms);
     assert!(ui.order_hold.is_none());
     assert_eq!(row_ids(&current, "a"), vec!["a1", "a2"]);

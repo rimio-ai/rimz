@@ -605,7 +605,8 @@ fn promoted_child_listed_under_its_parent_owns_its_pane() {
         None,
     );
     // Row order is not part of the helper's contract: put the listing card first.
-    snapshot.worktree_groups[0].rows.reverse();
+    std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows)
+        .reverse();
 
     let grandchild_pane = PaneId::from_parts(MuxName::Tmux, "%2");
     let rows = rows(&snapshot);
@@ -669,10 +670,12 @@ fn closing_a_nested_child_pane_clears_its_binding() {
     );
     let child_pane = PaneId::from_parts(MuxName::Tmux, "%2");
     // Isolate the close consumer from projection.
-    snapshot.worktree_groups[0].rows[0]
-        .as_agent_mut()
-        .unwrap()
-        .sub_agents[0]
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[0]
+    .as_agent_mut()
+    .unwrap()
+    .sub_agents[0]
         .pane = Some(child_pane.clone());
     assert!(snapshot.remove_pane_rows(&child_pane));
     assert_eq!(rows(&snapshot)[0].sub_agents()[0].pane, None);

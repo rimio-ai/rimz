@@ -461,7 +461,7 @@ mod tests {
         candidate.team = Some("probe".to_owned());
         let mut snapshot =
             SidebarSnapshot::build_with_agents(workspace_id, vec![candidate.clone()], ts(10_000));
-        snapshot.agent_panes.push(PaneAgent {
+        std::sync::Arc::make_mut(&mut snapshot.agent_panes).push(PaneAgent {
             root_lane: false,
             kind: candidate.kind.clone(),
             kind_ordinal: None,
@@ -590,7 +590,7 @@ mod tests {
         seat.role = Some("coder".to_owned());
         let mut snapshot =
             SidebarSnapshot::build_with_agents(workspace_id, vec![seat.clone()], ts(3_540));
-        snapshot.agent_panes.push(PaneAgent {
+        std::sync::Arc::make_mut(&mut snapshot.agent_panes).push(PaneAgent {
             root_lane: false,
             kind: seat.kind.clone(),
             kind_ordinal: None,

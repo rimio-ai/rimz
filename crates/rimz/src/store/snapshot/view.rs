@@ -72,6 +72,10 @@ fn fenced_sessions_is_empty(sessions: &Arc<BTreeSet<(AgentKind, AgentSessionId)>
     sessions.is_empty()
 }
 
+fn agent_panes_is_empty(panes: &Arc<Vec<PaneAgent>>) -> bool {
+    panes.is_empty()
+}
+
 /// Bump when [`SidebarSnapshot`]'s persisted shape changes; old
 /// `latest.json` files read as stale instead of accreting one-off guards.
 pub const SNAPSHOT_VERSION: u32 = 35;
@@ -93,7 +97,7 @@ pub fn find_agent<'a>(
 /// caps, status tallies, and row metadata are resolved here so renderers only
 /// paint semantics into glyphs.
 ///
-/// The `agents`, `fenced_sessions`, and `resume_outcomes` rosters and each agent card are shared by reference across projections, seeds, and baselines. Each pane owns its row list and pane-local fields.
+/// Agent-scaled rosters, pane bindings, the group vector, group rows, and agent cards are shared by reference across projections, seeds, and baselines. Pane-local writers check for changes before detaching a shared collection through `Arc::make_mut`; local metadata and worktree roots remain owned.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SidebarSnapshot {
     #[serde(default)]
@@ -142,7 +146,7 @@ pub struct SidebarSnapshot {
     /// rebuilds against the read, not the long-gone produce.
     #[serde(skip, default = "Timestamp::now")]
     pub now: Timestamp,
-    pub worktree_groups: Vec<SidebarWorktreeGroup>,
+    pub worktree_groups: Arc<Vec<SidebarWorktreeGroup>>,
     pub agents: Arc<Vec<AgentState>>,
     /// The agent kinds with an active observation path: installed hooks or
     /// declared local-session discovery. Gates the idle synthesis in
@@ -165,8 +169,8 @@ pub struct SidebarSnapshot {
     /// producer saw. Holds bound sessions (with their pane, even when the session's own
     /// `agent_id` carries no stamped pane) and wired panes with no session yet.
     /// Frame-derived: the pure rollup leaves it empty.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub agent_panes: Vec<PaneAgent>,
+    #[serde(default, skip_serializing_if = "agent_panes_is_empty")]
+    pub agent_panes: Arc<Vec<PaneAgent>>,
     /// The calling sidebar's own-view summary: how many sibling panes share its
     /// tab/window and which non-sidebar siblings are working panes. The renderer's
     /// self-close, notification targeting, and stranded-focus repair read it
@@ -370,11 +374,11 @@ impl SidebarSnapshot {
             presence: None,
             truth_degraded: None,
             now,
-            worktree_groups: Vec::new(),
+            worktree_groups: Vec::new().into(),
             agents: Arc::new(agents),
             wired_kinds: Vec::new(),
             wired_default_models: BTreeMap::new(),
-            agent_panes: Vec::new(),
+            agent_panes: Vec::new().into(),
             own_view: None,
             only_daemon_view_remains: false,
             project_root: None,
@@ -434,10 +438,12 @@ impl SidebarSnapshot {
     }
 
     /// Every mutable row across every worktree group, in group order.
+    ///
+    /// Detaches the shared group vector and each shared row collection; pane-local writers must check for a change before mutating individual groups instead.
     pub fn rows_mut(&mut self) -> impl Iterator<Item = &mut SidebarRow> {
-        self.worktree_groups
+        Arc::make_mut(&mut self.worktree_groups)
             .iter_mut()
-            .flat_map(|group| group.rows.iter_mut())
+            .flat_map(|group| Arc::make_mut(&mut group.rows).iter_mut())
     }
 
     /// Record the project root so a frame-admitted row whose cwd is neither

@@ -74,7 +74,7 @@ fn snapshot(rows: Vec<(AgentStatus, &str, Timestamp)>, now: Timestamp) -> Sideba
             row
         })
         .collect();
-    snapshot.worktree_groups = vec![worktree_group(std::path::Path::new("/repo"), rows)];
+    snapshot.worktree_groups = vec![worktree_group(std::path::Path::new("/repo"), rows)].into();
     snapshot
 }
 

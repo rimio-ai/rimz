@@ -180,7 +180,7 @@ pub(crate) fn worktree_group(
         cohort_effort: None,
         pipeline: None,
         status_counts: Vec::new(),
-        rows,
+        rows: rows.into(),
         diff_added: None,
         diff_removed: None,
         commits_ahead: None,
