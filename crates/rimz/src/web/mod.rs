@@ -55,6 +55,7 @@ fn without_ttyd_launch_context(spec: CommandSpec) -> CommandSpec {
 }
 
 const WEB_SCHEMA_VERSION: &str = "rimz.web.v2";
+const WEB_TOKENS_VERSION: &str = "rimz.web.tokens.v1";
 const TTYD_SESSION_OSC: u16 = 7717;
 pub(crate) const TTYD_PIXEL_PROTOCOL: u32 = 3;
 
@@ -423,6 +424,10 @@ pub fn restart_if_online(config: &MachineConfig) -> Result<WebReloadOutcome> {
 
 pub fn credential_summary() -> Result<Option<CredentialSummary>> {
     ttyd::credential_summary()
+}
+
+pub fn token_credential(name: &str) -> Result<WebCredential> {
+    ttyd::token_credential(name)
 }
 
 pub fn rotate_credential(config: &MachineConfig, read_only: bool) -> Result<CredentialRotation> {

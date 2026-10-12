@@ -5,7 +5,9 @@ use std::net::{IpAddr, Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
-use super::{Result, WebErr};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
+
+use super::{Result, WebCredential, WebErr};
 
 const MAX_REQUEST_HEAD: usize = 64 * 1024;
 const MAX_HEADERS: usize = 128;
@@ -13,6 +15,7 @@ const MAX_CHUNK_LINE: usize = 8 * 1024;
 const UPSTREAM_CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 const UNAUTHORIZED: &[u8] =
     b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+const BASIC_UNAUTHORIZED: &[u8] = b"HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Basic realm=\"RimZ\"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GateAuth {
@@ -114,12 +117,61 @@ pub(super) fn peer_allowed(peer: IpAddr, allow: &[Cidr]) -> bool {
     peer.is_loopback() || allow.iter().any(|cidr| cidr.contains(peer))
 }
 
+fn public_peer_allowed(peer: IpAddr, allow: &[Cidr], trusted_header: bool) -> bool {
+    (!trusted_header && allow.is_empty()) || peer_allowed(peer, allow)
+}
+
+fn basic_authenticated(headers: &[httparse::Header<'_>], tokens: &[WebCredential]) -> bool {
+    let mut authorization = headers
+        .iter()
+        .filter(|header| header.name.eq_ignore_ascii_case("Authorization"));
+    let Some(header) = authorization.next() else {
+        return false;
+    };
+    if authorization.next().is_some() {
+        return false;
+    }
+    let Ok(value) = std::str::from_utf8(trim_ascii(header.value)) else {
+        return false;
+    };
+    let Some((scheme, encoded)) = value.split_once(' ') else {
+        return false;
+    };
+    if !scheme.eq_ignore_ascii_case("Basic") {
+        return false;
+    }
+    let Ok(decoded) = STANDARD.decode(encoded.trim()) else {
+        return false;
+    };
+    let Ok(decoded) = std::str::from_utf8(&decoded) else {
+        return false;
+    };
+    let Some((name, secret)) = decoded.split_once(':') else {
+        return false;
+    };
+    tokens.iter().fold(false, |matched, token| {
+        matched
+            | (constant_time_equal(name.as_bytes(), token.username.as_bytes())
+                & constant_time_equal(secret.as_bytes(), token.secret.as_bytes()))
+    })
+}
+
+fn constant_time_equal(left: &[u8], right: &[u8]) -> bool {
+    let mut difference = left.len() ^ right.len();
+    for (index, byte) in right.iter().enumerate() {
+        difference |= usize::from(left.get(index).copied().unwrap_or(0) ^ byte);
+    }
+    difference == 0
+}
+
 pub(super) fn serve(
     listen: SocketAddr,
     upstream: SocketAddr,
     allow: Vec<Cidr>,
     auth: Option<GateAuth>,
 ) -> Result<()> {
+    let (credential, tokens) = super::ttyd::gate_credentials()?;
+    let authorization = credential.authorization();
     let listener = TcpListener::bind(listen).map_err(|source| WebErr::GateIo {
         action: "binding its listener",
         source,
@@ -135,24 +187,35 @@ pub(super) fn serve(
                 });
             }
         };
-        if !peer_allowed(peer.ip(), &allow) {
+        if !public_peer_allowed(peer.ip(), &allow, auth.is_some()) {
             continue;
         }
-        let Ok(upstream) = TcpStream::connect_timeout(&upstream, UPSTREAM_CONNECT_TIMEOUT) else {
-            continue;
-        };
         if let Some(auth) = auth.clone() {
-            std::thread::spawn(move || {
+            let _ = std::thread::Builder::new().spawn(move || {
                 relay_authorized(
                     client,
-                    upstream,
+                    || TcpStream::connect_timeout(&upstream, UPSTREAM_CONNECT_TIMEOUT),
                     Some(&auth.header_name),
                     &auth.allowed_users,
                     &auth.authorization,
+                    None,
+                    Duration::from_secs(30),
                 );
             });
         } else {
-            splice(client, upstream);
+            let tokens = tokens.clone();
+            let authorization = authorization.clone();
+            let _ = std::thread::Builder::new().spawn(move || {
+                relay_authorized(
+                    client,
+                    || TcpStream::connect_timeout(&upstream, UPSTREAM_CONNECT_TIMEOUT),
+                    None,
+                    &[],
+                    &authorization,
+                    Some(&tokens),
+                    Duration::from_secs(30),
+                );
+            });
         }
     }
 }
@@ -176,12 +239,16 @@ pub(super) fn serve_tunnel(listener: TcpListener, target: Arc<Mutex<RelayTarget>
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clone();
-        let Ok(upstream) = TcpStream::connect_timeout(&target.upstream, UPSTREAM_CONNECT_TIMEOUT)
-        else {
-            continue;
-        };
-        std::thread::spawn(move || {
-            relay_authorized(client, upstream, None, &[], &target.authorization);
+        let _ = std::thread::Builder::new().spawn(move || {
+            relay_authorized(
+                client,
+                || TcpStream::connect_timeout(&target.upstream, UPSTREAM_CONNECT_TIMEOUT),
+                None,
+                &[],
+                &target.authorization,
+                None,
+                Duration::from_secs(30),
+            );
         });
     }
 }
@@ -200,27 +267,34 @@ enum RequestAction {
 
 fn relay_authorized(
     mut client: TcpStream,
-    mut upstream: TcpStream,
+    mut connect_upstream: impl FnMut() -> io::Result<TcpStream>,
     required_header: Option<&str>,
     allowed_users: &[String],
     authorization: &str,
+    tokens: Option<&[WebCredential]>,
+    head_timeout: Duration,
 ) {
     let _ = client.set_nodelay(true);
-    let _ = upstream.set_nodelay(true);
-    let (Ok(client_read), Ok(upstream_read)) = (client.try_clone(), upstream.try_clone()) else {
+    let Ok(client_read) = client.try_clone() else {
         return;
     };
     let mut client_read = BufReader::new(client_read);
-    let mut upstream_read = BufReader::new(upstream_read);
+    let mut connection = None;
 
     loop {
+        if client.set_read_timeout(Some(head_timeout)).is_err() {
+            break;
+        }
         let action = match read_request_head(&mut client_read) {
             Ok(Some(head)) => {
-                rewrite_request_head(&head, required_header, allowed_users, authorization)
+                rewrite_request_head(&head, required_header, allowed_users, authorization, tokens)
             }
             Ok(None) => break,
             Err(_) => RequestAction::Close,
         };
+        if client.set_read_timeout(None).is_err() {
+            break;
+        }
         let RequestAction::Forward {
             head,
             content_length,
@@ -229,26 +303,42 @@ fn relay_authorized(
         } = action
         else {
             if action == RequestAction::Unauthorized {
-                let _ = client.write_all(UNAUTHORIZED);
+                let _ = client.write_all(if tokens.is_some() {
+                    BASIC_UNAUTHORIZED
+                } else {
+                    UNAUTHORIZED
+                });
                 let _ = client.shutdown(Shutdown::Both);
             }
             break;
         };
+        let Ok((upstream, upstream_read)) = connection.get_or_insert_with(|| {
+            let upstream = connect_upstream()?;
+            let _ = upstream.set_nodelay(true);
+            let reader = BufReader::new(upstream.try_clone()?);
+            Ok::<_, io::Error>((upstream, reader))
+        }) else {
+            break;
+        };
         if upstream.write_all(&head).is_err()
-            || copy_exact(&mut client_read, &mut upstream, content_length).is_err()
+            || copy_exact(&mut client_read, upstream, content_length).is_err()
         {
             break;
         }
-        match relay_response(&mut upstream_read, &mut client, head_request, upgrade) {
+        match relay_response(upstream_read, &mut client, head_request, upgrade) {
             Ok(ResponseAction::NextRequest) => {}
             Ok(ResponseAction::Upgrade) => {
-                splice_buffered(client_read, upstream_read, client, upstream);
+                if let Some(Ok((upstream, upstream_read))) = connection.take() {
+                    splice_buffered(client_read, upstream_read, client, upstream);
+                }
                 return;
             }
             Ok(ResponseAction::Close) | Err(_) => break,
         }
     }
-    let _ = upstream.shutdown(Shutdown::Write);
+    if let Some(Ok((upstream, _))) = connection {
+        let _ = upstream.shutdown(Shutdown::Write);
+    }
     let _ = client.shutdown(Shutdown::Read);
 }
 
@@ -487,6 +577,7 @@ fn rewrite_request_head(
     required_header: Option<&str>,
     allowed_users: &[String],
     authorization: &str,
+    tokens: Option<&[WebCredential]>,
 ) -> RequestAction {
     let mut headers = [httparse::EMPTY_HEADER; MAX_HEADERS];
     let mut request = httparse::Request::new(&mut headers);
@@ -500,6 +591,9 @@ fn rewrite_request_head(
     else {
         return RequestAction::Close;
     };
+    if tokens.is_some_and(|tokens| !basic_authenticated(request.headers, tokens)) {
+        return RequestAction::Unauthorized;
+    }
     if let Some(required_header) = required_header {
         let mut identity_header_count = 0_usize;
         let mut identity = None;
@@ -584,415 +678,5 @@ fn header_tokens(value: &[u8]) -> impl Iterator<Item = &[u8]> {
     value.split(|byte| *byte == b',').map(trim_ascii)
 }
 
-fn splice(client: TcpStream, upstream: TcpStream) {
-    let _ = client.set_nodelay(true);
-    let _ = upstream.set_nodelay(true);
-    let (Ok(mut client_read), Ok(mut upstream_write)) = (client.try_clone(), upstream.try_clone())
-    else {
-        return;
-    };
-    std::thread::spawn(move || {
-        let _ = io::copy(&mut client_read, &mut upstream_write);
-        let _ = upstream_write.shutdown(Shutdown::Write);
-    });
-    std::thread::spawn(move || {
-        let mut upstream_read = upstream;
-        let mut client_write = client;
-        let _ = io::copy(&mut upstream_read, &mut client_write);
-        let _ = client_write.shutdown(Shutdown::Write);
-    });
-}
-
 #[cfg(test)]
-mod tests {
-    use std::sync::mpsc;
-
-    use super::*;
-
-    fn parse(value: &str) -> Cidr {
-        Cidr::parse(value).expect("valid CIDR")
-    }
-
-    fn auth() -> GateAuth {
-        GateAuth {
-            header_name: "X-Forwarded-User".to_owned(),
-            allowed_users: Vec::new(),
-            authorization: "Basic cmltejphYmNk".to_owned(),
-        }
-    }
-
-    fn rewrite_trusted(head: &[u8]) -> RequestAction {
-        let auth = auth();
-        rewrite_request_head(
-            head,
-            Some(&auth.header_name),
-            &auth.allowed_users,
-            &auth.authorization,
-        )
-    }
-
-    #[test]
-    fn cidrs_match_their_address_family_and_prefix() {
-        assert!(parse("10.20.0.0/16").contains("10.20.4.5".parse().expect("IP")));
-        assert!(!parse("10.20.0.0/16").contains("10.21.4.5".parse().expect("IP")));
-        assert!(parse("fd00::/8").contains("fd12::1".parse().expect("IP")));
-        assert!(!parse("fd00::/8").contains("fe80::1".parse().expect("IP")));
-        assert!(!parse("10.0.0.0/8").contains("::ffff:10.0.0.1".parse().expect("IP")));
-    }
-
-    #[test]
-    fn bare_ips_and_zero_prefixes_parse() {
-        assert!(parse("192.0.2.4").contains("192.0.2.4".parse().expect("IP")));
-        assert!(!parse("192.0.2.4").contains("192.0.2.5".parse().expect("IP")));
-        assert!(parse("2001:db8::1").contains("2001:db8::1".parse().expect("IP")));
-        assert!(parse("0.0.0.0/0").contains("203.0.113.2".parse().expect("IP")));
-        assert!(parse("::/0").contains("2001:db8::2".parse().expect("IP")));
-    }
-
-    #[test]
-    fn invalid_cidrs_return_typed_errors() {
-        for value in ["", "10.0.0.0/33", "2001:db8::/129", "10.0.0.0/nope"] {
-            assert!(matches!(
-                Cidr::parse(value),
-                Err(WebErr::InvalidTrustedProxy { value: actual, .. }) if actual == value
-            ));
-        }
-    }
-
-    #[test]
-    fn peers_require_a_match_except_for_loopback() {
-        let allow = [parse("10.0.0.0/8")];
-        assert!(peer_allowed("10.2.3.4".parse().expect("IP"), &allow));
-        assert!(!peer_allowed("192.0.2.1".parse().expect("IP"), &allow));
-        assert!(peer_allowed("127.0.0.1".parse().expect("IP"), &[]));
-        assert!(peer_allowed("::1".parse().expect("IP"), &[]));
-        assert!(peer_allowed("::ffff:127.0.0.1".parse().expect("IP"), &[]));
-        assert!(peer_allowed("::ffff:10.2.3.4".parse().expect("IP"), &allow));
-    }
-
-    #[test]
-    fn trusted_header_rewrites_authorization_and_rejects_missing_or_chunked() {
-        let RequestAction::Forward {
-            head,
-            content_length,
-            head_request,
-            upgrade,
-        } = rewrite_trusted(
-            b"POST /x HTTP/1.1\r\nHost: local\r\nX-Forwarded-User: alice\r\nAuthorization: Bearer attacker\r\nContent-Length: 4\r\n\r\n",
-        ) else {
-            panic!("trusted request forwards");
-        };
-        let head = String::from_utf8(head).expect("rewritten head");
-        assert!(head.contains("Authorization: Basic cmltejphYmNk\r\n"));
-        assert!(!head.contains("Bearer attacker"));
-        assert_eq!(content_length, 4);
-        assert!(!head_request);
-        assert!(!upgrade);
-
-        assert_eq!(
-            rewrite_trusted(b"GET / HTTP/1.1\r\nHost: local\r\n\r\n"),
-            RequestAction::Unauthorized
-        );
-        assert_eq!(
-            rewrite_trusted(
-                b"POST / HTTP/1.1\r\nX-Forwarded-User: alice\r\nTransfer-Encoding: chunked\r\n\r\n",
-            ),
-            RequestAction::Close
-        );
-    }
-
-    #[test]
-    fn trusted_header_enforces_the_user_allowlist_and_single_occurrence() {
-        let mut allowlisted = auth();
-        allowlisted.allowed_users = vec!["alice".to_owned()];
-
-        assert!(matches!(
-            rewrite_request_head(
-                b"GET / HTTP/1.1\r\nX-Forwarded-User:  alice \t\r\n\r\n",
-                Some(&allowlisted.header_name),
-                &allowlisted.allowed_users,
-                &allowlisted.authorization,
-            ),
-            RequestAction::Forward { .. }
-        ));
-        assert_eq!(
-            rewrite_request_head(
-                b"GET / HTTP/1.1\r\nX-Forwarded-User: Alice\r\n\r\n",
-                Some(&allowlisted.header_name),
-                &allowlisted.allowed_users,
-                &allowlisted.authorization,
-            ),
-            RequestAction::Unauthorized
-        );
-
-        for auth in [auth(), allowlisted] {
-            assert_eq!(
-                rewrite_request_head(
-                    b"GET / HTTP/1.1\r\nX-Forwarded-User: alice\r\nX-Forwarded-User: alice\r\n\r\n",
-                    Some(&auth.header_name),
-                    &auth.allowed_users,
-                    &auth.authorization,
-                ),
-                RequestAction::Unauthorized
-            );
-        }
-    }
-
-    #[test]
-    fn tunnel_relay_replaces_client_authorization_without_a_trusted_header() {
-        let ignored_allowlist = ["nobody".to_owned()];
-        let RequestAction::Forward { head, .. } = rewrite_request_head(
-            b"GET / HTTP/1.1\r\nHost: local\r\nX-Forwarded-User: alice\r\nX-Forwarded-User: alice\r\nAuthorization: Bearer attacker\r\n\r\n",
-            None,
-            &ignored_allowlist,
-            &auth().authorization,
-        ) else {
-            panic!("tunnel request forwards");
-        };
-        let head = String::from_utf8(head).expect("rewritten head");
-        assert!(head.contains("Authorization: Basic cmltejphYmNk\r\n"));
-        assert!(!head.contains("Bearer attacker"));
-    }
-
-    #[test]
-    fn chunked_response_framing_is_relayed_without_rewriting() {
-        let chunked = b"4\r\nWiki\r\n5;kind=test\r\npedia\r\n0\r\nTrailer: yes\r\n\r\n";
-        let mut input = BufReader::new(std::io::Cursor::new(
-            [chunked.as_slice(), b"next-response"].concat(),
-        ));
-        let mut output = Vec::new();
-
-        relay_chunked(&mut input, &mut output).expect("relay chunked body");
-
-        assert_eq!(output, chunked);
-        let mut remaining = String::new();
-        input
-            .read_to_string(&mut remaining)
-            .expect("read remaining response");
-        assert_eq!(remaining, "next-response");
-    }
-
-    #[test]
-    fn missing_trusted_header_returns_unauthorized() {
-        let (mut client, gate_client) = tcp_pair();
-        let (gate_upstream, upstream) = tcp_pair();
-        let gate = std::thread::spawn(move || {
-            let auth = auth();
-            relay_authorized(
-                gate_client,
-                gate_upstream,
-                Some(&auth.header_name),
-                &auth.allowed_users,
-                &auth.authorization,
-            );
-        });
-        client
-            .write_all(b"GET / HTTP/1.1\r\nHost: local\r\n\r\n")
-            .expect("write unauthenticated request");
-        client
-            .shutdown(Shutdown::Write)
-            .expect("finish unauthenticated request");
-        let mut response = String::new();
-        client
-            .read_to_string(&mut response)
-            .expect("read unauthorized response");
-        assert_eq!(response, String::from_utf8_lossy(UNAUTHORIZED));
-        gate.join().expect("gate thread");
-        drop(upstream);
-    }
-
-    #[test]
-    fn keep_alive_requests_are_each_rewritten() {
-        let (mut client, gate_client) = tcp_pair();
-        let (gate_upstream, mut upstream) = tcp_pair();
-        let gate = std::thread::spawn(move || {
-            let auth = auth();
-            relay_authorized(
-                gate_client,
-                gate_upstream,
-                Some(&auth.header_name),
-                &auth.allowed_users,
-                &auth.authorization,
-            );
-        });
-        let upstream_thread = std::thread::spawn(move || {
-            let mut reader = BufReader::new(upstream.try_clone().expect("clone upstream"));
-            for path in ["/one", "/two"] {
-                let head = read_request_head(&mut reader)
-                    .expect("read request")
-                    .expect("request head");
-                let text = String::from_utf8(head).expect("request text");
-                assert!(
-                    text.starts_with(&format!("GET {path} HTTP/1.1\r\n")),
-                    "{text}"
-                );
-                assert!(
-                    text.contains("Authorization: Basic cmltejphYmNk\r\n"),
-                    "{text}"
-                );
-                upstream
-                    .write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n")
-                    .expect("write response");
-            }
-        });
-        let mut reader = BufReader::new(client.try_clone().expect("clone client"));
-        for path in ["/one", "/two"] {
-            write!(
-                client,
-                "GET {path} HTTP/1.1\r\nHost: local\r\nX-Forwarded-User: alice\r\n\r\n"
-            )
-            .expect("write request");
-            let response = read_request_head(&mut reader)
-                .expect("read response")
-                .expect("response head");
-            assert!(response.starts_with(b"HTTP/1.1 204 No Content"));
-        }
-        client.shutdown(Shutdown::Both).expect("close client");
-        upstream_thread.join().expect("upstream thread");
-        gate.join().expect("gate thread");
-    }
-
-    #[test]
-    fn tunnel_relay_rewrites_each_keep_alive_request() {
-        let (mut client, gate_client) = tcp_pair();
-        let (gate_upstream, mut upstream) = tcp_pair();
-        let gate = std::thread::spawn(move || {
-            relay_authorized(gate_client, gate_upstream, None, &[], &auth().authorization);
-        });
-        let upstream_thread = std::thread::spawn(move || {
-            let mut reader = BufReader::new(upstream.try_clone().expect("clone upstream"));
-            for path in ["/one", "/two"] {
-                let head = read_request_head(&mut reader)
-                    .expect("read request")
-                    .expect("request head");
-                let text = String::from_utf8(head).expect("request text");
-                assert!(text.starts_with(&format!("GET {path} HTTP/1.1\r\n")));
-                assert!(text.contains("Authorization: Basic cmltejphYmNk\r\n"));
-                upstream
-                    .write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n")
-                    .expect("write response");
-            }
-        });
-        let mut reader = BufReader::new(client.try_clone().expect("clone client"));
-        for path in ["/one", "/two"] {
-            write!(client, "GET {path} HTTP/1.1\r\nHost: local\r\n\r\n").expect("write request");
-            let response = read_request_head(&mut reader)
-                .expect("read response")
-                .expect("response head");
-            assert!(response.starts_with(b"HTTP/1.1 204 No Content"));
-        }
-        client.shutdown(Shutdown::Both).expect("close client");
-        upstream_thread.join().expect("upstream thread");
-        gate.join().expect("gate thread");
-    }
-
-    #[test]
-    fn rejected_websocket_upgrade_keeps_rewriting_requests() {
-        let (mut client, gate_client) = tcp_pair();
-        let (gate_upstream, mut upstream) = tcp_pair();
-        let gate = std::thread::spawn(move || {
-            let auth = auth();
-            relay_authorized(
-                gate_client,
-                gate_upstream,
-                Some(&auth.header_name),
-                &auth.allowed_users,
-                &auth.authorization,
-            );
-        });
-        let upstream_thread = std::thread::spawn(move || {
-            let mut reader = BufReader::new(upstream.try_clone().expect("clone upstream"));
-            let upgrade = read_request_head(&mut reader)
-                .expect("read upgrade request")
-                .expect("upgrade request");
-            assert!(
-                upgrade
-                    .windows(b"Upgrade: websocket".len())
-                    .any(|bytes| bytes == b"Upgrade: websocket")
-            );
-            upstream
-                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
-                .expect("reject upgrade");
-            let second = read_request_head(&mut reader)
-                .expect("read second request")
-                .expect("second request");
-            let second = String::from_utf8(second).expect("second request text");
-            assert!(second.starts_with("GET /two HTTP/1.1\r\n"), "{second}");
-            assert!(
-                second.contains("Authorization: Basic cmltejphYmNk\r\n"),
-                "{second}"
-            );
-            upstream
-                .write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n")
-                .expect("write second response");
-        });
-        let mut reader = BufReader::new(client.try_clone().expect("clone client"));
-        client
-            .write_all(b"GET /ws HTTP/1.1\r\nHost: local\r\nX-Forwarded-User: alice\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n")
-            .expect("write upgrade request");
-        let rejected = read_request_head(&mut reader)
-            .expect("read rejected upgrade")
-            .expect("rejected upgrade response");
-        assert!(rejected.starts_with(b"HTTP/1.1 200 OK"));
-        client
-            .write_all(b"GET /two HTTP/1.1\r\nHost: local\r\nX-Forwarded-User: alice\r\n\r\n")
-            .expect("write second request");
-        let response = read_request_head(&mut reader)
-            .expect("read second response")
-            .expect("second response");
-        assert!(response.starts_with(b"HTTP/1.1 204 No Content"));
-        client.shutdown(Shutdown::Both).expect("close client");
-        upstream_thread.join().expect("upstream thread");
-        gate.join().expect("gate thread");
-    }
-
-    #[test]
-    fn safari_websocket_without_authorization_is_injected_and_spliced() {
-        let (mut client, gate_client) = tcp_pair();
-        let (gate_upstream, mut upstream) = tcp_pair();
-        let (sent, received) = mpsc::channel();
-        let gate = std::thread::spawn(move || {
-            relay_authorized(gate_client, gate_upstream, None, &[], &auth().authorization);
-        });
-        let upstream_thread = std::thread::spawn(move || {
-            let mut reader = BufReader::new(upstream.try_clone().expect("clone upstream"));
-            let head = read_request_head(&mut reader)
-                .expect("read upgrade")
-                .expect("upgrade head");
-            let head = String::from_utf8(head).expect("upgrade text");
-            assert!(head.contains("Upgrade: websocket\r\n"), "{head}");
-            assert!(
-                head.contains("Authorization: Basic cmltejphYmNk\r\n"),
-                "{head}"
-            );
-            upstream
-                .write_all(b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\nserver-frame")
-                .expect("write upgrade response");
-            let mut raw = [0_u8; 12];
-            reader.read_exact(&mut raw).expect("read raw client frame");
-            sent.send(raw).expect("report raw frame");
-        });
-        client
-            .write_all(b"GET /ws HTTP/1.1\r\nHost: local\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\nclient-frame")
-            .expect("write upgrade");
-        assert_eq!(received.recv().expect("raw client frame"), *b"client-frame");
-        client
-            .shutdown(Shutdown::Write)
-            .expect("finish client frames");
-        let mut response = String::new();
-        client
-            .read_to_string(&mut response)
-            .expect("read raw response");
-        assert!(response.ends_with("server-frame"), "{response:?}");
-        upstream_thread.join().expect("upstream thread");
-        gate.join().expect("gate thread");
-    }
-
-    fn tcp_pair() -> (TcpStream, TcpStream) {
-        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind pair listener");
-        let address = listener.local_addr().expect("pair address");
-        let first = TcpStream::connect(address).expect("connect pair");
-        let (second, _) = listener.accept().expect("accept pair");
-        (first, second)
-    }
-}
+mod tests;

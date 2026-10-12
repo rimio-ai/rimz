@@ -347,10 +347,9 @@ impl LiveWebFixture {
             .bounded_output()
             .expect("open real ttyd web daemon");
         let payload: rimz::web::WebOpenPayload = success_json(&output, "web open");
-        let credential = payload.credential.expect("web open credential");
         OpenedWeb {
             url: payload.url,
-            secret: credential.secret,
+            secret: browser_password(&self.env),
         }
     }
 
@@ -660,10 +659,9 @@ impl LiveZellijWebFixture {
             .bounded_output()
             .expect("open real ttyd Zellij daemon");
         let payload: rimz::web::WebOpenPayload = success_json(&output, "Zellij web open");
-        let credential = payload.credential.expect("Zellij web open credential");
         OpenedWeb {
             url: payload.url,
-            secret: credential.secret,
+            secret: browser_password(&self.env),
         }
     }
 
@@ -878,6 +876,22 @@ fn workspace_display_name(workspace: &rimz::ResolvedWorkspace) -> String {
         .file_name()
         .and_then(OsStr::to_str)
         .unwrap_or(&workspace.session_name)
+        .to_owned()
+}
+
+fn browser_password(env: &Env) -> String {
+    let store: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(env.rimz_home().join("web/web-tokens.json")).expect("browser tokens"),
+    )
+    .expect("token store JSON");
+    store["tokens"]
+        .as_array()
+        .expect("tokens")
+        .iter()
+        .find(|token| token["name"] == "rimz")
+        .expect("default browser token")["secret"]
+        .as_str()
+        .expect("password")
         .to_owned()
 }
 

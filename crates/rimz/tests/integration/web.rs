@@ -331,11 +331,7 @@ fn offline_url_and_status_use_configured_shared_port_without_spawning() {
     );
     assert!(url.get("credential").is_none());
     assert!(
-        !fixture
-            .env
-            .rimz_home()
-            .join("web/web-ttyd-credential.json")
-            .exists(),
+        !fixture.env.rimz_home().join("web/web-tokens.json").exists(),
         "URL inspection persisted a credential"
     );
 
@@ -358,7 +354,7 @@ fn offline_token_operations_keep_one_singular_credential() {
     fixture
         .room
         .allow_no_trigger("offline credentials never start a room");
-    let credential_path = fixture.env.rimz_home().join("web/web-ttyd-credential.json");
+    let credential_path = fixture.env.rimz_home().join("web/web-tokens.json");
     let daemon_path = fixture.env.rimz_home().join("web/web-ttyd.json");
 
     let empty = fixture
@@ -384,7 +380,7 @@ fn offline_token_operations_keep_one_singular_credential() {
     let saved: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&credential_path).expect("saved credential"))
             .expect("credential JSON");
-    assert_eq!(saved["name"], "rimz");
+    assert_eq!(saved["tokens"][0]["name"], "rimz");
     assert!(!daemon_path.exists());
 
     let list = fixture
@@ -397,7 +393,9 @@ fn offline_token_operations_keep_one_singular_credential() {
         String::from_utf8_lossy(&list.stdout),
         format!(
             "rimz: {}\n",
-            saved["created_at"].as_str().expect("timestamp")
+            saved["tokens"][0]["created_at"]
+                .as_str()
+                .expect("timestamp")
         )
     );
 
@@ -427,7 +425,10 @@ fn offline_token_operations_keep_one_singular_credential() {
         .expect("revoke named offline token");
     assert_success(&revoke_named, "offline named revoke");
     assert_eq!(revoke_named.stdout, revoke_all.stdout);
-    assert!(!credential_path.exists());
+    let saved: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&credential_path).expect("store after revoke"))
+            .expect("JSON");
+    assert_eq!(saved["tokens"], serde_json::json!([]));
     assert!(!daemon_path.exists());
 }
 
@@ -544,7 +545,7 @@ fn two_rooms_reuse_one_shared_daemon_and_rotate_restarts_it() {
                 fixture.web_port, workspace.session_name
             )
         );
-        assert_eq!(payload["credential"]["username"], "rimz");
+        assert_eq!(payload["credential"]["username"], "rimz-upstream");
         let secret = payload["credential"]["secret"]
             .as_str()
             .expect("shared credential secret");
@@ -566,18 +567,13 @@ fn two_rooms_reuse_one_shared_daemon_and_rotate_restarts_it() {
         .find(|line| line.contains("\tweb\texec"))
         .expect("shared daemon argv");
     assert!(
-        daemon_argv.contains("-W\t-O\t-a\t-P\t3600\t-c\trimz:"),
+        daemon_argv.contains("-W\t-O\t-a\t-P\t3600\t-c\trimz-upstream:"),
         "{daemon_argv}"
     );
     assert!(!daemon_argv.contains("\t-b\t"), "{daemon_argv}");
     assert!(daemon_argv.contains("\t-I\t"), "{daemon_argv}");
     assert!(!daemon_argv.contains("fontFamily="), "{daemon_argv}");
     assert!(!daemon_argv.contains("theme="), "{daemon_argv}");
-    assert!(
-        daemon_argv.contains(&format!("\t-p\t{}\t", fixture.web_port)),
-        "{daemon_argv}"
-    );
-
     let status = fixture
         .command_with_sessions(&sessions)
         .args(["web", "status", "--json"])
@@ -588,12 +584,20 @@ fn two_rooms_reuse_one_shared_daemon_and_rotate_restarts_it() {
     assert_eq!(status["port"], fixture.web_port);
     assert!(status["pid"].as_u64().is_some());
 
-    let credential_path = fixture.env.rimz_home().join("web/web-ttyd-credential.json");
+    let credential_path = fixture.env.rimz_home().join("web/web-tokens.json");
     let daemon_path = fixture.env.rimz_home().join("web/web-ttyd.json");
     let daemon: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&daemon_path).expect("read capable daemon record"))
             .expect("parse capable daemon record");
     assert_eq!(daemon["pixel_protocol"], 3);
+    let upstream_port = daemon["gate"]["upstream_port"]
+        .as_u64()
+        .expect("upstream port");
+    assert_ne!(upstream_port, u64::from(fixture.web_port));
+    assert!(
+        daemon_argv.contains(&format!("\t-p\t{upstream_port}\t")),
+        "{daemon_argv}"
+    );
     assert!(
         daemon["index_key"]
             .as_str()
@@ -643,7 +647,7 @@ fn two_rooms_reuse_one_shared_daemon_and_rotate_restarts_it() {
         &format!("[web]\nport = {}\n", fixture.web_port),
     );
 
-    std::fs::remove_file(fixture.env.rimz_home().join("web/web-ttyd-credential.json"))
+    std::fs::remove_file(fixture.env.rimz_home().join("web/web-tokens.json"))
         .expect("remove shared credential");
     let no_start = fixture
         .command_with_sessions(&sessions)
@@ -993,7 +997,7 @@ fn read_only_token_error_points_to_broadcast_sharing() {
 
 #[cfg(unix)]
 #[test]
-fn trusted_header_open_uses_a_basic_upstream_and_migrates_stale_records() {
+fn trusted_header_open_uses_a_token_auth_and_migrates_stale_records() {
     let _guard = daemon_test_guard();
     let fixture = WebFixture::new("ttyd-trusted-header.log");
     write_machine_config(
@@ -1031,13 +1035,9 @@ fn trusted_header_open_uses_a_basic_upstream_and_migrates_stale_records() {
     let payload = success_json(&json, "trusted-header JSON open");
     assert_eq!(payload["auth"]["mode"], "trusted_header");
     assert_eq!(payload["auth"]["header"], "X-Authentik-Username");
-    assert_eq!(payload["credential"]["username"], "rimz");
+    assert_eq!(payload["credential"]["username"], "rimz-upstream");
     assert!(
-        fixture
-            .env
-            .rimz_home()
-            .join("web/web-ttyd-credential.json")
-            .exists(),
+        fixture.env.rimz_home().join("web/web-tokens.json").exists(),
         "trusted-header mode did not mint its upstream credential"
     );
 
@@ -1045,7 +1045,7 @@ fn trusted_header_open_uses_a_basic_upstream_and_migrates_stale_records() {
     let mut record: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&daemon_path).expect("trusted-header daemon record"))
             .expect("trusted-header daemon JSON");
-    assert_eq!(record["basic_upstream"], true);
+    assert_eq!(record["token_auth"], true);
     assert_eq!(record["launch_context_scrubbed"], true);
     let initial_pid = record["pid"].as_u64().expect("initial ttyd pid");
     let gate_pid = record["gate"]["pid"].as_u64().expect("gate pid") as u32;
@@ -1076,13 +1076,16 @@ fn trusted_header_open_uses_a_basic_upstream_and_migrates_stale_records() {
         .lines()
         .find(|line| line.contains("\tweb\texec"))
         .expect("trusted-header daemon argv");
-    assert!(daemon_argv.contains("\t-c\trimz:"), "{daemon_argv}");
+    assert!(
+        daemon_argv.contains("\t-c\trimz-upstream:"),
+        "{daemon_argv}"
+    );
     assert!(!daemon_argv.contains("\t-H\t"), "{daemon_argv}");
 
     record
         .as_object_mut()
         .expect("daemon object")
-        .remove("basic_upstream");
+        .remove("token_auth");
     record
         .as_object_mut()
         .expect("daemon object")
@@ -1102,7 +1105,7 @@ fn trusted_header_open_uses_a_basic_upstream_and_migrates_stale_records() {
         serde_json::from_slice(&std::fs::read(&daemon_path).expect("migrated daemon record"))
             .expect("migrated daemon JSON");
     assert_ne!(migrated["pid"], initial_pid, "stale record reused ttyd");
-    assert_eq!(migrated["basic_upstream"], true);
+    assert_eq!(migrated["token_auth"], true);
     assert_eq!(migrated["launch_context_scrubbed"], true);
 
     let token = fixture
@@ -1134,7 +1137,7 @@ fn trusted_header_open_uses_a_basic_upstream_and_migrates_stale_records() {
         .expect("restart daemon in Basic-Auth mode");
     let payload = success_json(&basic, "Basic-Auth restart");
     assert_eq!(payload["auth"]["mode"], "basic");
-    assert_eq!(payload["credential"]["username"], "rimz");
+    assert_eq!(payload["credential"]["username"], "rimz-upstream");
     let after: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&daemon_path).expect("Basic daemon record"))
             .expect("Basic daemon JSON");
@@ -1150,7 +1153,160 @@ fn trusted_header_open_uses_a_basic_upstream_and_migrates_stale_records() {
 
 #[cfg(unix)]
 #[test]
+fn legacy_web_credential_is_adopted_without_changing_the_password() {
+    let mut fixture = WebFixture::new("ttyd-adoption.log");
+    fixture.room.allow_no_trigger("offline token read");
+    let legacy = fixture.env.rimz_home().join("web/web-ttyd-credential.json");
+    std::fs::create_dir_all(legacy.parent().expect("web directory")).expect("mkdir");
+    std::fs::write(
+        &legacy,
+        r#"{"name":"rimz","created_at":"2024-01-01T00:00:00Z","secret":"saved-password"}"#,
+    )
+    .expect("legacy credential");
+    let list = fixture
+        .command()
+        .args(["web", "token", "list"])
+        .bounded_output()
+        .expect("list");
+    assert_success(&list, "read legacy token");
+    assert!(
+        !legacy.exists(),
+        "adoption removes the legacy file after publishing the store"
+    );
+    let store_path = fixture.env.rimz_home().join("web/web-tokens.json");
+    let store: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&store_path).expect("store")).expect("JSON");
+    assert_eq!(store["tokens"][0]["name"], "rimz");
+    assert_eq!(store["tokens"][0]["secret"], "saved-password");
+    assert_eq!(store["upstream"]["username"], "rimz-upstream");
+    assert_ne!(store["upstream"]["secret"], "saved-password");
+    use std::os::unix::fs::PermissionsExt as _;
+    assert_eq!(
+        std::fs::metadata(store_path)
+            .expect("metadata")
+            .permissions()
+            .mode()
+            & 0o777,
+        0o600
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn empty_token_store_is_reseeded_when_ensuring_an_online_daemon() {
+    let _guard = daemon_test_guard();
+    let mut fixture = WebFixture::new("ttyd-empty-tokens.log");
+    fixture.room.allow_no_trigger("daemon lifecycle only");
+    let start = fixture
+        .command()
+        .args(["web", "start"])
+        .bounded_output()
+        .expect("start");
+    assert_success(&start, "start");
+    let store_path = fixture.env.rimz_home().join("web/web-tokens.json");
+    let mut store: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&store_path).expect("store")).expect("JSON");
+    store["tokens"] = serde_json::json!([]);
+    std::fs::write(&store_path, serde_json::to_vec(&store).expect("JSON")).expect("empty store");
+    let ensure = fixture
+        .command()
+        .args(["web", "start"])
+        .bounded_output()
+        .expect("ensure");
+    assert_success(&ensure, "ensure with empty tokens");
+    let saved: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&store_path).expect("store")).expect("JSON");
+    assert_eq!(
+        saved["tokens"][0]["name"], "rimz",
+        "ensure must mint a default token even when a daemon is already online"
+    );
+    assert_eq!(
+        saved["upstream"], store["upstream"],
+        "upstream credential is stable"
+    );
+    let stop = fixture
+        .command()
+        .args(["web", "stop"])
+        .bounded_output()
+        .expect("stop");
+    assert_success(&stop, "stop");
+}
+
+#[cfg(unix)]
+#[test]
+fn basic_daemon_uses_a_private_upstream_and_authenticates_at_the_gate() {
+    use base64::Engine as _;
+
+    let _guard = daemon_test_guard();
+    let mut fixture = WebFixture::new("ttyd-basic-gate.log");
+    fixture.room.allow_no_trigger("daemon lifecycle only");
+    let start = fixture
+        .command()
+        .args(["web", "start"])
+        .bounded_output()
+        .expect("start");
+    assert_success(&start, "start basic daemon");
+    let record: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(fixture.env.rimz_home().join("web/web-ttyd.json")).expect("record"),
+    )
+    .expect("record JSON");
+    assert!(
+        record["gate"].is_object(),
+        "Basic mode must run the public gate"
+    );
+    let store: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(fixture.env.rimz_home().join("web/web-tokens.json")).expect("token store"),
+    )
+    .expect("store JSON");
+    assert_eq!(store["version"], "rimz.web.tokens.v1");
+    assert_eq!(store["upstream"]["username"], "rimz-upstream");
+    assert_eq!(store["tokens"][0]["name"], "rimz");
+    assert_ne!(store["tokens"][0]["secret"], store["upstream"]["secret"]);
+    let password = store["tokens"][0]["secret"].as_str().expect("password");
+    let valid = base64::engine::general_purpose::STANDARD.encode(format!("rimz:{password}"));
+    for (header, status) in [
+        (String::new(), "401 Unauthorized"),
+        (
+            "Authorization: Basic cmltejpiYWQ=\r\n".to_owned(),
+            "401 Unauthorized",
+        ),
+        (format!("Authorization: Basic {valid}\r\n"), "200 OK"),
+    ] {
+        let mut stream =
+            std::net::TcpStream::connect(("127.0.0.1", fixture.web_port)).expect("connect");
+        stream
+            .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+            .expect("timeout");
+        write!(
+            stream,
+            "GET / HTTP/1.1\r\nHost: localhost\r\n{header}Connection: close\r\n\r\n"
+        )
+        .expect("request");
+        let mut response = String::new();
+        stream.read_to_string(&mut response).expect("response");
+        assert!(
+            response.starts_with(&format!("HTTP/1.1 {status}")),
+            "{response}"
+        );
+        if status == "401 Unauthorized" {
+            assert!(
+                response.contains("WWW-Authenticate: Basic realm=\"RimZ\""),
+                "{response}"
+            );
+        }
+    }
+    let stop = fixture
+        .command()
+        .args(["web", "stop"])
+        .bounded_output()
+        .expect("stop");
+    assert_success(&stop, "stop basic daemon");
+}
+
+#[cfg(unix)]
+#[test]
 fn trusted_proxy_gate_forwards_loopback_and_stops_both_processes() {
+    use base64::Engine as _;
     let _guard = daemon_test_guard();
     let mut fixture = WebFixture::new("ttyd-trusted-proxy.log");
     fixture
@@ -1192,7 +1348,7 @@ fn trusted_proxy_gate_forwards_loopback_and_stops_both_processes() {
     let payload = success_json(&url, "gated web payload");
     assert_eq!(payload["port"], fixture.web_port);
     assert_eq!(payload["tunnel_port"], upstream_port);
-    assert_eq!(payload["credential"]["username"], "rimz");
+    assert_eq!(payload["credential"]["username"], "rimz-upstream");
 
     let log = std::fs::read_to_string(&fixture.ttyd_log).expect("read gated ttyd log");
     let daemon_argv = log
@@ -1207,8 +1363,16 @@ fn trusted_proxy_gate_forwards_loopback_and_stops_both_processes() {
 
     let mut stream = std::net::TcpStream::connect(("127.0.0.1", fixture.web_port))
         .expect("connect through gate");
+    let store: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(fixture.env.rimz_home().join("web/web-tokens.json")).expect("token store"),
+    )
+    .expect("JSON");
+    let credential = base64::engine::general_purpose::STANDARD.encode(format!(
+        "rimz:{}",
+        store["tokens"][0]["secret"].as_str().expect("token")
+    ));
     stream
-        .write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+        .write_all(format!("GET / HTTP/1.1\r\nHost: localhost\r\nAuthorization: Basic {credential}\r\nConnection: close\r\n\r\n").as_bytes())
         .expect("write through gate");
     let mut response = String::new();
     stream
@@ -1403,6 +1567,32 @@ fn no_start_requires_an_online_daemon() {
     assert!(!output.status.success(), "offline ttyd should fail");
     assert!(String::from_utf8_lossy(&output.stderr).contains("shared ttyd daemon is offline"));
     assert!(!fixture.ttyd_log.exists(), "--no-start must not spawn ttyd");
+
+    assert_success(
+        &fixture
+            .command()
+            .args(["web", "start"])
+            .bounded_output()
+            .expect("start"),
+        "start daemon",
+    );
+    let path = fixture.env.rimz_home().join("web/web-ttyd.json");
+    let mut record: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).expect("record")).expect("JSON");
+    record.as_object_mut().expect("object").remove("token_auth");
+    std::fs::write(&path, serde_json::to_vec(&record).expect("JSON")).expect("legacy record");
+    let output = fixture
+        .command()
+        .args(["web", "open", "--session"])
+        .arg(&fixture.workspace.session_name)
+        .args(["--no-start", "--json"])
+        .bounded_output()
+        .expect("open legacy daemon");
+    assert!(
+        !output.status.success(),
+        "--no-start must refuse a pre-token-auth daemon"
+    );
+    assert!(String::from_utf8_lossy(&output.stderr).contains("daemon is offline"));
 }
 
 #[cfg(unix)]
