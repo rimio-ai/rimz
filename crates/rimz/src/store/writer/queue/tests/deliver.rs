@@ -1115,6 +1115,19 @@ fn check_ingress_hold(body: MessageBody, frame_secs: i64, other_kind: bool, appl
             std::fs::read(&q.inner.paths.events_log).unwrap(),
             events_before
         );
+        let ack = match body {
+            MessageBody::Prompt => DeliveryAck::TurnStarted { prompt: None },
+            MessageBody::Command => DeliveryAck::Compaction,
+        };
+        let delivered = q
+            .confirm_delivered_for_card(&sent.kind, &sent.agent_id, None, ack, "session")
+            .unwrap();
+        assert_eq!(delivered.len(), 1);
+        assert_eq!(delivered[0].status, MessageStatus::Delivered);
+        assert_eq!(
+            delivered[0].last_error, None,
+            "a confirmed record must not keep the hold reason"
+        );
     }
 }
 
