@@ -34,15 +34,15 @@ arch="$(uname -m)"
 case "$os:$arch" in
   Linux:x86_64)
     asset="{LINUX_X86_64_ARCHIVE}"
-    verify="sha256sum -c --ignore-missing SHA256SUMS"
+    verify() {{ sha256sum -c --ignore-missing SHA256SUMS; }}
     ;;
   Darwin:arm64|Darwin:aarch64)
     asset="{DARWIN_AARCH64_ARCHIVE}"
-    verify="shasum -a 256 -c --ignore-missing SHA256SUMS"
+    verify() {{ shasum -a 256 -c --ignore-missing SHA256SUMS; }}
     ;;
   Darwin:x86_64)
     asset="{DARWIN_X86_64_ARCHIVE}"
-    verify="shasum -a 256 -c --ignore-missing SHA256SUMS"
+    verify() {{ shasum -a 256 -c --ignore-missing SHA256SUMS; }}
     ;;
   *)
     echo "rimz: no prebuilt for $os/$arch; install rimz manually: https://github.com/rimio-ai/rimz/blob/main/docs/guide/installation.md" >&2
@@ -63,7 +63,7 @@ download() {{
 }}
 download "${{base}}${{asset}}"
 download "${{base}}SHA256SUMS"
-$verify
+verify
 tar -xzf "$asset"
 install -m 0755 "${{asset%.tar.gz}}/rimz" "$HOME/.local/bin/rimz"
 installed_version="$("$HOME/.local/bin/rimz" --version)"
