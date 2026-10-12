@@ -1202,10 +1202,9 @@ fn sidebar_host_paths_are_per_session_and_fit_the_socket_budget() {
     assert!(crate::sock::validate_socket_path(&wake).is_ok());
 
     assert_eq!(socket.parent(), Some(runtime.sock_dir.as_path()));
-    let instance = runtime.sidebar_socket_path(&SidebarInstanceId::new());
-    assert!(
-        socket.file_name().unwrap().len() <= instance.file_name().unwrap().len(),
-        "the host socket stays inside the budget the pane sockets are checked against"
+    assert_eq!(
+        crate::sock::SockBudget::for_sock_dir(&runtime.sock_dir).used,
+        wake.as_os_str().len() + 1
     );
     assert_ne!(
         socket,

@@ -1,7 +1,7 @@
 use super::*;
 use crate::ids::{SidebarInstanceId, WorkspaceId};
+use crate::sidebar_pane::host::bind_wake_socket;
 use crate::wakeup::events::{SidebarEvent, SidebarEventEnvelope};
-use std::os::unix::net::UnixDatagram;
 
 fn target(cols: u16) -> NonZeroU16 {
     NonZeroU16::new(cols).expect("nonzero target")
@@ -467,7 +467,7 @@ fn width_target_pin_broadcasts_without_a_producer_fetch() {
     let (dir, runtime, _controller) = controller(MuxName::Tmux);
     let instance = SidebarInstanceId::new();
     let socket_path = runtime.sock_dir.join("width-target-test.sock");
-    let socket = UnixDatagram::bind(&socket_path).expect("bind wakeup socket");
+    let socket = bind_wake_socket(&socket_path).expect("bind host room socket");
     socket
         .set_read_timeout(Some(Duration::from_secs(1)))
         .expect("set socket timeout");
@@ -693,7 +693,7 @@ fn width_key_burst_saves_and_broadcasts_only_the_last_target_once() {
         .convergence
         .seed_native_step(native_step(10, true));
     let socket_path = runtime.sock_dir.join("burst.sock");
-    let socket = UnixDatagram::bind(&socket_path).unwrap();
+    let socket = bind_wake_socket(&socket_path).unwrap();
     socket.set_nonblocking(true).unwrap();
     crate::wakeup::heartbeat::write_heartbeat(
         &runtime,

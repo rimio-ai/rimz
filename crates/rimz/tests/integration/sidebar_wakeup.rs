@@ -14,7 +14,7 @@ fn wake_sidebars_drops_datagrams_when_receiver_queue_is_full() {
         return;
     }
 
-    let sock_path = h.runtime_paths.sock_dir.join("sidebar.full.sock");
+    let sock_path = h.runtime_paths.sock_dir.join("event.full.sock");
     let recv = UnixDatagram::bind(&sock_path).expect("bind full receiver");
     recv.set_read_timeout(Some(Duration::from_secs(2)))
         .expect("set read timeout");
@@ -50,7 +50,7 @@ fn wake_sidebars_dispatches_to_fresh_heartbeats_and_skips_stale_or_wrong_protoco
         return;
     }
 
-    let fresh_sock_path = h.runtime_paths.sock_dir.join("sidebar.fresh.sock");
+    let fresh_sock_path = h.runtime_paths.sock_dir.join("event.fresh.sock");
     let fresh_recv = UnixDatagram::bind(&fresh_sock_path).expect("bind fresh");
     fresh_recv
         .set_read_timeout(Some(Duration::from_secs(2)))
@@ -77,7 +77,7 @@ fn wake_sidebars_dispatches_to_fresh_heartbeats_and_skips_stale_or_wrong_protoco
     )
     .expect("write sibling hb");
 
-    let stale_sock_path = h.runtime_paths.sock_dir.join("sidebar.stale.sock");
+    let stale_sock_path = h.runtime_paths.sock_dir.join("event.stale.sock");
     let stale_recv = UnixDatagram::bind(&stale_sock_path).expect("bind stale");
     // The wakeup walk runs synchronously inside the writer, so a wrongly sent
     // datagram would already be buffered by the time we read — a short timeout
@@ -100,7 +100,7 @@ fn wake_sidebars_dispatches_to_fresh_heartbeats_and_skips_stale_or_wrong_protoco
     )
     .expect("write stale hb");
 
-    let wrong_protocol_sock_path = h.runtime_paths.sock_dir.join("sidebar.wrong-protocol.sock");
+    let wrong_protocol_sock_path = h.runtime_paths.sock_dir.join("event.wrong-protocol.sock");
     let wrong_protocol_recv =
         UnixDatagram::bind(&wrong_protocol_sock_path).expect("bind wrong protocol");
     wrong_protocol_recv
@@ -182,7 +182,7 @@ fn wake_sidebars_restat_skips_when_mtime_aged_past_ttl() {
         return;
     }
 
-    let sock_path = h.runtime_paths.sock_dir.join("sidebar.toctou.sock");
+    let sock_path = h.runtime_paths.sock_dir.join("event.toctou.sock");
     let recv = UnixDatagram::bind(&sock_path).expect("bind toctou");
     // Synchronous walk (see the stale/wrong-protocol test): a short timeout is
     // enough to prove the re-stat blocked the send.

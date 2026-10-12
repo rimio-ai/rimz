@@ -459,7 +459,6 @@ fn control_words_never_start_with_brace() {
         RELOAD_CONTROL_WORD.to_owned(),
         "scroll:up".to_owned(),
         "scroll:down".to_owned(),
-        "snapshot".to_owned(),
     ];
     for (code, mods) in [
         (KeyCode::Up, KeyModifiers::NONE),

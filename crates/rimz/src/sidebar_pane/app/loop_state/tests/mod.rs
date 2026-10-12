@@ -51,16 +51,16 @@ impl Rig {
 
     fn with_baseline(own_pane: Option<PaneId>, filter: BodyLens, baseline: Option<PaneId>) -> Self {
         let ws = workspace();
-        let dir = tempfile::TempDir::new().expect("tempdir");
+        let dir = tempfile::tempdir_in("/tmp").expect("tempdir");
         let runtime = RuntimePaths::under(ws.clone(), dir.path()).expect("runtime");
         crate::sidebar::body_filter::write(&runtime, &filter).expect("write initial filter");
         let instance_id = SidebarInstanceId::new();
-        let socket_path = runtime.sidebar_socket_path(&instance_id);
         let mut config = serve_config(&ws);
         config.mux = own_pane.as_ref().map_or(MuxName::Tmux, PaneId::mux);
         config.own_pane = own_pane;
         config.instance_id = instance_id;
         config.tick_seconds = 60;
+        let socket_path = runtime.sidebar_host_wake_socket_path(config.mux, &config.session_name);
         let (observe_tx, _observe_rx) = std::sync::mpsc::sync_channel(64);
         let (request_tx, requests) = std::sync::mpsc::channel();
         let (result_tx, result_rx) = super::super::fetch::result_channel();

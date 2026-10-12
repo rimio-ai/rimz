@@ -1,5 +1,6 @@
-use std::io::{BufReader, Read};
+use std::io::{BufReader, Read, Write};
 use std::os::fd::AsFd;
+use std::sync::mpsc::TryRecvError::Empty;
 
 use super::*;
 use crate::sidebar_pane::app::Pty;
@@ -108,15 +109,23 @@ impl Room {
         self.runtime.sidebar_heartbeat_path(instance_id).exists()
     }
 
-    fn wake(&self, instance_id: &SidebarInstanceId, word: &[u8]) {
+    fn wake(&self, pane: &Pane, word: &[u8]) {
         if word.first() == Some(&b'{') {
-            self.host.room_wakeup(word);
-        } else {
-            lock(&self.host.attachments)[instance_id.as_str()]
-                .close
-                .wake
-                .send(decode_wakeup(word))
+            let path = self.runtime.sidebar_host_wake_socket_path(
+                self.host.template.mux,
+                &self.host.template.session_name,
+            );
+            if !path.exists() {
+                self.host.receive_room(bind_wake_socket(&path).unwrap());
+            }
+            bind_wake_socket(&self._dir.path().join("sender.sock"))
+                .unwrap()
+                .send_to(word, path)
                 .unwrap();
+        } else {
+            let mut stream = pane.replies.get_ref();
+            stream.write_all(word).unwrap();
+            stream.write_all(b"\n").unwrap();
         }
     }
 }
@@ -357,7 +366,7 @@ fn an_accepted_pane_is_painted_through_its_fd_and_reports_its_size() {
     );
 
     pty.resize(40, 30);
-    room.wake(&pane.instance_id, b"resize");
+    room.wake(&pane, b"resize");
     let mut snapshot = crate::sidebar_pane::app::fixtures::agent_snapshot(&workspace());
     snapshot.worktree_groups[0].rows[0].name = "paint-proof".into();
     room.host
@@ -384,7 +393,7 @@ fn a_pane_the_mux_has_not_sized_draws_nothing_until_its_resize_word() {
     assert_eq!(pty.drain(), b"", "an unsized pane is not drawn");
 
     pty.resize(39, 20);
-    room.wake(&pane.instance_id, b"resize");
+    room.wake(&pane, b"resize");
     assert!(!painted(&mut pty).is_empty());
 }
 
@@ -520,7 +529,7 @@ fn attachment_diagnostics_name_the_renderer_and_share_the_limiter() {
             notification_kind: Some("baseline".to_owned()),
         },
     );
-    room.wake(&id, &serde_json::to_vec(&notify).unwrap());
+    room.wake(&pane, &serde_json::to_vec(&notify).unwrap());
     let trace = crate::StatePaths::class_path(
         room._dir.path(),
         crate::disk::paths::Class::Audit,
@@ -625,7 +634,7 @@ fn a_closed_pane_detaches_on_the_failed_write_without_a_control() {
     // The mux closing the pane: its side of the pty goes, and the host's
     // next write to the fd it was handed fails.
     drop(pty);
-    room.wake(&instance_id, b"resize");
+    room.wake(&pane, b"resize");
 
     assert_eq!(pane.controls(), Vec::new(), "a bare end of stream");
     assert!(!room.has_runtime_files(&instance_id));
@@ -735,14 +744,14 @@ fn hidden_reveal(presence: crate::store::snapshot::SidebarPresence, reveal_by_re
     });
     assert_eq!(hidden.drain(), b"", "heartbeat maintenance does not paint");
     for word in [b"press:-:char:?".as_slice(), b"press:-:esc".as_slice()] {
-        room.wake(&hidden_pane.instance_id, word);
+        room.wake(&hidden_pane, word);
         std::thread::sleep(Duration::from_millis(600));
         assert_eq!(hidden.drain(), b"", "hidden input drains without painting");
     }
 
     let revealed = Instant::now();
     if reveal_by_resize {
-        room.wake(&hidden_pane.instance_id, b"resize");
+        room.wake(&hidden_pane, b"resize");
     } else {
         snapshot.viewed_panes.push(hidden_id.clone());
         publish(&snapshot);
@@ -963,6 +972,25 @@ fn a_pane_that_stopped_reading_does_not_hold_the_host_leaving() {
 }
 
 #[test]
+fn stream_input_ignores_unknown_lines_and_delivers_keys() {
+    use std::io::Write;
+    let room = Room::new();
+    let (attachment, live) = room.host.admit(&hello(&SidebarInstanceId::new())).unwrap();
+    let (mut supervisor, host) = UnixStream::pair().unwrap();
+    read_input(&host, live.close);
+    supervisor
+        .write_all(b"unknown\nsnapshot\nreload\npress:-:char:q\nresize\n")
+        .unwrap();
+    assert_eq!(
+        attachment.inbox.recv_timeout(SETTLE),
+        Ok(decode_wakeup(b"press:-:char:q"))
+    );
+    assert_eq!(attachment.inbox.recv_timeout(SETTLE), Ok(Wakeup::Resize));
+    drop(supervisor);
+    assert_eq!(attachment.inbox.recv_timeout(SETTLE), Ok(Wakeup::Tick));
+}
+
+#[test]
 fn room_events_are_scoped_once_before_reaching_each_attachment() {
     use crate::wakeup::events::{SidebarEvent, SidebarEventEnvelope};
     let room = Room::new();
@@ -977,10 +1005,7 @@ fn room_events_are_scoped_once_before_reaching_each_attachment() {
     room.host
         .room_wakeup(&serde_json::to_vec(&envelope).unwrap());
     for pane in [&first, &second] {
-        assert_eq!(
-            pane.inbox.try_recv(),
-            Err(std::sync::mpsc::TryRecvError::Empty)
-        );
+        assert_eq!(pane.inbox.try_recv(), Err(Empty));
     }
     envelope.session_name = None;
     room.host
@@ -992,10 +1017,7 @@ fn room_events_are_scoped_once_before_reaching_each_attachment() {
     room.host
         .room_wakeup(&serde_json::to_vec(&envelope).unwrap());
     for pane in [&first, &second] {
-        assert_eq!(
-            pane.inbox.try_recv(),
-            Err(std::sync::mpsc::TryRecvError::Empty)
-        );
+        assert_eq!(pane.inbox.try_recv(), Err(Empty));
     }
 }
 
@@ -1012,10 +1034,7 @@ fn a_room_click_reaches_only_the_named_attachment() {
         first.inbox.try_recv(),
         Ok(Wakeup::MouseClick { column: 4, row: 7 })
     );
-    assert_eq!(
-        second.inbox.try_recv(),
-        Err(std::sync::mpsc::TryRecvError::Empty)
-    );
+    assert_eq!(second.inbox.try_recv(), Err(Empty));
 }
 
 #[test]
@@ -1030,9 +1049,6 @@ fn room_reload_words_and_envelopes_request_the_host_not_the_panes() {
             lock(&room.host.inbox).as_ref().unwrap().try_recv(),
             Ok(Event::Reload)
         ));
-        assert_eq!(
-            pane.inbox.try_recv(),
-            Err(std::sync::mpsc::TryRecvError::Empty)
-        );
+        assert_eq!(pane.inbox.try_recv(), Err(Empty));
     }
 }

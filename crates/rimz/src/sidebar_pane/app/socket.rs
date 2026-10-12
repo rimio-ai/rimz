@@ -1,8 +1,8 @@
-//! Liveness heartbeat refresh and the supervisor's terminal event forwarding.
+//! Liveness heartbeat refresh and terminal input words on the attach stream.
 
-use std::io;
-use std::os::unix::net::UnixDatagram;
-use std::path::{Path, PathBuf};
+use std::io::{self, Write};
+use std::os::unix::net::UnixStream;
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -46,6 +46,11 @@ pub(super) fn write_heartbeat(
 /// wake it at once.
 const FORWARDER_STOP_POLL: Duration = Duration::from_millis(250);
 
+pub(super) fn send_input(stream: &mut UnixStream, word: &str) -> io::Result<()> {
+    stream.set_write_timeout(Some(FORWARDER_STOP_POLL))?;
+    stream.write_all(format!("{word}\n").as_bytes())
+}
+
 /// The supervisor's terminal input forwarding for one host attachment.
 pub(in crate::sidebar_pane) struct EventForwarder {
     stop: Arc<AtomicBool>,
@@ -53,11 +58,13 @@ pub(in crate::sidebar_pane) struct EventForwarder {
 }
 
 impl EventForwarder {
-    pub(in crate::sidebar_pane) fn start(wake_path: PathBuf) -> Self {
+    pub(in crate::sidebar_pane) fn start(mut stream: UnixStream) -> Self {
+        // Settle any resize that raced the fd handover before forwarding input.
+        let _ = send_input(&mut stream, "resize");
         let stop = Arc::new(AtomicBool::new(false));
         let stopped = stop.clone();
         let thread = std::thread::spawn(move || {
-            forward_events(&wake_path, FORWARDER_STOP_POLL, &stopped);
+            forward_events(stream, FORWARDER_STOP_POLL, &stopped);
         });
         Self { stop, thread }
     }
@@ -69,14 +76,7 @@ impl EventForwarder {
     }
 }
 
-fn forward_events(wake_path: &Path, poll: Duration, stop: &AtomicBool) {
-    let waker = match forwarding_socket() {
-        Ok(socket) => socket,
-        Err(err) => {
-            warn!(error = %err, "event waker disabled; input waits for the tick");
-            return;
-        }
-    };
+fn forward_events(mut stream: UnixStream, poll: Duration, stop: &AtomicBool) {
     while !stop.load(Ordering::SeqCst) {
         let encoded = match event::poll(poll) {
             Ok(true) => match event::read() {
@@ -98,41 +98,13 @@ fn forward_events(wake_path: &Path, poll: Duration, stop: &AtomicBool) {
             }
         };
         if let Some(encoded) = encoded
-            && !forward(&waker, encoded.as_bytes(), wake_path, stop)
+            && let Err(err) = send_input(&mut stream, &encoded)
+            && !matches!(
+                err.kind(),
+                io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+            )
         {
             return;
-        }
-    }
-}
-
-/// The forwarder's sending end. A send into a full inbox gives up after
-/// [`FORWARDER_STOP_POLL`], so a renderer that stopped reading cannot hold the
-/// forwarder past its stop.
-pub(super) fn forwarding_socket() -> io::Result<UnixDatagram> {
-    let socket = UnixDatagram::unbound()?;
-    socket.set_write_timeout(Some(FORWARDER_STOP_POLL))?;
-    Ok(socket)
-}
-
-/// Send one word, waiting for room in the inbox until `stop`. `false` when the
-/// word cannot be sent: the inbox is gone, or the forwarder was stopped.
-pub(super) fn forward(
-    waker: &UnixDatagram,
-    word: &[u8],
-    wake_path: &Path,
-    stop: &AtomicBool,
-) -> bool {
-    loop {
-        match waker.send_to(word, wake_path) {
-            Ok(_) => return true,
-            Err(err)
-                if matches!(
-                    err.kind(),
-                    io::ErrorKind::WouldBlock
-                        | io::ErrorKind::TimedOut
-                        | io::ErrorKind::Interrupted
-                ) && !stop.load(Ordering::SeqCst) => {}
-            Err(_) => return false,
         }
     }
 }

@@ -1,6 +1,6 @@
 //! Strongly-typed identifiers.
 //!
-//! Every ID that travels through the store, the wakeup socket, or the agent
+//! Every ID that travels through the store, the host's room socket, or the agent
 //! hook protocol is a newtype. RimZ-minted long IDs (`RunId`, `EventId`,
 //! `SidebarInstanceId`) use UUIDv7, while message IDs use a shorter
 //! time-sortable token. IDs derived from external truth (`WorkspaceId`,
@@ -345,8 +345,7 @@ macro_rules! uuid_v7_id {
             /// wasteful. The tail is the v7 UUID's random field, so two ids minted
             /// in the same millisecond still differ — unlike the leading 48 bits,
             /// which are the shared `now_v7` timestamp and would collide for
-            /// sidebars launched together, letting one `bind` steal the other's
-            /// path and strand a renderer with no wakeup socket.
+            /// concurrent requests binding their own sockets.
             pub fn short(&self) -> &str {
                 // `new`/`parse` guarantee `<prefix>_<32 hex>`, so the last 12
                 // chars are always hex and this slice is always in bounds.

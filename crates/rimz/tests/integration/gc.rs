@@ -257,7 +257,7 @@ fn gc_expires_stale_live_entries_including_unknown_heartbeat_names() {
         SidebarInstanceId::new(),
         MuxName::Tmux,
         "rimz-test",
-        rt.sock_dir.join("sidebar.old.sock"),
+        rt.sock_dir.join("event.old.sock"),
         None,
     );
     let heartbeat_path = rt.heartbeat_dir.join("sidebar.old.json");

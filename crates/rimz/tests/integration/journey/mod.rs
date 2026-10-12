@@ -64,8 +64,8 @@ pub const SETTLE: Duration = Duration::from_secs(45);
 /// `portable-pty`, reading the [`Env`] store that hooks mutate.
 ///
 /// The renderer shares the `Env` *state* (the store, via `XDG_STATE_HOME`) but
-/// gets its own short `XDG_RUNTIME_DIR`: the per-instance wakeup socket
-/// (`sock/sidebar.<35-char-id>.sock`) must stay under the 108-byte AF_UNIX
+/// gets its own short `XDG_RUNTIME_DIR`: the host's room socket
+/// (`sock/host.<digest>.wake.sock`) must stay under the 108-byte AF_UNIX
 /// limit. Workspace spending fixtures are copied into that runtime before the
 /// child starts; later runtime sidecars go through the harness.
 pub struct RoomHarness<'a> {

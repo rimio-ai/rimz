@@ -236,7 +236,7 @@ fn spending_fixture() -> (
     SpendingServiceRequest,
     super::super::DiscoverSpendingFilesOverride,
 ) {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir_in("/tmp").unwrap();
     let project = dir.path().join("project");
     std::fs::create_dir_all(&project).unwrap();
     let workspace_id = WorkspaceId::from_project_root(&project);

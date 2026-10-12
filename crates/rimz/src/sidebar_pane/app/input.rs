@@ -205,7 +205,6 @@ pub(in crate::sidebar_pane) fn decode_wakeup(bytes: &[u8]) -> Wakeup {
         return press;
     }
     match raw {
-        "snapshot" => Wakeup::Snapshot,
         "resize" => Wakeup::Resize,
         "scroll:up" => Wakeup::Scroll { down: false },
         "scroll:down" => Wakeup::Scroll { down: true },

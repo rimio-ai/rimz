@@ -419,7 +419,7 @@ fn runtime_gc_does_not_unlink_a_live_room_exporter() {
         instance_id.clone(),
         MuxName::Tmux,
         "rimz-live",
-        rt.sock_dir.join("sidebar.live.sock"),
+        rt.sock_dir.join("event.live.sock"),
         None,
     );
     write_json(&rt.sidebar_heartbeat_path(&instance_id), &heartbeat);
@@ -446,7 +446,7 @@ fn runtime_gc_expires_all_live_entries_and_probes_socket_listeners() {
     let rt = RuntimePaths::under(workspace_id.clone(), temp.path()).unwrap();
     rt.ensure_dirs().unwrap();
 
-    let stale_socket = rt.sock_dir.join("sidebar.stale.sock");
+    let stale_socket = rt.sock_dir.join("event.stale.sock");
     drop(std::os::unix::net::UnixDatagram::bind(&stale_socket).unwrap());
     age_socket(&stale_socket);
     let run_socket = rt.sock_dir.join("run.123456789abc.sock");
@@ -507,7 +507,7 @@ fn runtime_gc_expires_read_marks_at_class_ttl_even_with_a_fresh_owner() {
 
     let socket = rt
         .sock_dir
-        .join(format!("sidebar.{}.sock", instance_id.short()));
+        .join(format!("event.{}.sock", instance_id.short()));
     let heartbeat = SidebarHeartbeat::new(
         workspace_id,
         instance_id.clone(),

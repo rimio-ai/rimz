@@ -1108,43 +1108,29 @@ fn bell_rings_only_for_unread_owned_panes_off_daemon_views() {
 
 #[test]
 fn a_stopped_forwarder_gives_up_on_a_full_inbox() {
-    use super::socket::{forward, forwarding_socket};
-    use std::sync::atomic::AtomicBool;
-
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("inbox.sock");
-    let inbox = std::os::unix::net::UnixDatagram::bind(&path).unwrap();
-    super::fixtures::fill_inbox(&path);
+    use std::io::{ErrorKind, Write};
+    use std::os::unix::net::UnixStream;
+    let (mut writer, _inbox) = UnixStream::pair().unwrap();
+    writer.set_nonblocking(true).unwrap();
+    loop {
+        match writer.write(&[b'x'; 4096]) {
+            Ok(_) => {}
+            Err(err) if err.kind() == ErrorKind::WouldBlock => break,
+            Err(err) => panic!("filling stream: {err}"),
+        }
+    }
+    writer.set_nonblocking(false).unwrap();
     let (tx, rx) = std::sync::mpsc::channel();
-    let target = path.clone();
     std::thread::spawn(move || {
-        let waker = forwarding_socket().unwrap();
-        let _ = tx.send(forward(
-            &waker,
-            b"press:-:char:j",
-            &target,
-            &AtomicBool::new(true),
-        ));
+        let _ = tx.send(
+            super::socket::send_input(&mut writer, "press:-:char:j").map_err(|err| err.kind()),
+        );
     });
-    assert_eq!(
-        rx.recv_timeout(Duration::from_secs(5)),
-        Ok(false),
-        "a stop is not held up by a renderer that stopped reading"
+    assert!(
+        matches!(
+            rx.recv_timeout(Duration::from_secs(5)),
+            Ok(Err(ErrorKind::WouldBlock | ErrorKind::TimedOut))
+        ),
+        "a full stream drops the word within the forwarder's stop bound"
     );
-
-    // Running, it waits for room rather than drop the word.
-    let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let waker = forwarding_socket().unwrap();
-        let _ = tx.send(forward(
-            &waker,
-            b"press:-:char:j",
-            &path,
-            &AtomicBool::new(false),
-        ));
-    });
-    std::thread::sleep(Duration::from_millis(400));
-    let mut word = [0u8; 16];
-    inbox.recv(&mut word).unwrap();
-    assert_eq!(rx.recv_timeout(Duration::from_secs(5)), Ok(true));
 }
