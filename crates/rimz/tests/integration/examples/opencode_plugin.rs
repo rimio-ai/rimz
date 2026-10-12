@@ -1,6 +1,4 @@
-//! Node-driven coverage for the embedded OpenCode plugin. OpenCode loads the
-//! TypeScript source in-process, so this suite drives the exported factory and
-//! captures the `rimz hooks feed` envelopes it spawns.
+//! Node-driven coverage for the installed OpenCode 2 plugin.
 
 #[test]
 #[cfg(unix)]
@@ -23,391 +21,267 @@ fn plugin_preserves_usage_and_announces_child_models() {
         crate::common::skip("node cannot strip TypeScript syntax");
         return;
     }
-
-    const PLUGIN_SOURCE: &str = include_str!("../../../src/agents/adapters/opencode/plugin.ts");
-
     let dir = tempfile::tempdir().unwrap();
     let plugin_path = dir.path().join("rimz.ts");
     let capture_path = dir.path().join("capture.jsonl");
     let stub_path = dir.path().join("rimz-capture");
-    std::fs::write(&plugin_path, PLUGIN_SOURCE).unwrap();
     std::fs::write(
-        &stub_path,
-        "#!/bin/sh\npayload=$(cat)\nprintf '%s\\n' \"$payload\" >> \"$RIMZ_CAPTURE\"\n",
+        &plugin_path,
+        include_str!("../../../src/agents/adapters/opencode/plugin.ts"),
     )
     .unwrap();
-    let mut permissions = std::fs::metadata(&stub_path).unwrap().permissions();
-    permissions.set_mode(0o755);
-    std::fs::set_permissions(&stub_path, permissions).unwrap();
-
+    std::fs::write(&stub_path, "#!/bin/sh\npayload=$(cat)\nprintf '{\"pid\":\"%s\",\"envelope\":%s}\\n' \"$RIMZ_AGENT_PID\" \"$payload\" >> \"$RIMZ_CAPTURE\"\n").unwrap();
+    std::fs::set_permissions(&stub_path, std::fs::Permissions::from_mode(0o755)).unwrap();
     let harness = dir.path().join("harness.mjs");
-    std::fs::write(
-        &harness,
-        format!(
-            r#"
+    std::fs::write(&harness, r#"
+import assert from "node:assert/strict";
 import fs from "node:fs/promises";
+import {pathToFileURL} from "node:url";
+import childProcess from "node:child_process";
+import {syncBuiltinESMExports} from "node:module";
+let spawns = 0;
+const spawn = childProcess.spawn;
+childProcess.spawn = (...args) => { spawns++; return spawn(...args); };
+syncBuiltinESMExports();
+const [pluginPath, capturePath, binary, directory] = process.argv.slice(2);
+process.env.RIMZ_BIN = binary;
+process.env.RIMZ_CAPTURE = capturePath;
+delete process.env.RIMZ_WORKSPACE_ID;
+const reminders = "<system_reminder>room rules</system_reminder>";
+process.env.RIMZ_LAUNCH_REMINDERS = reminders;
+const {default: plugin} = await import(pathToFileURL(pluginPath));
+assert.equal(plugin.id, "rimz");
+assert.equal(typeof plugin.setup, "function", "v2 loader requires setup");
+assert.equal("server" in plugin, false);
+assert.equal(await plugin.setup({}), undefined, "outside-room setup must be inert");
+assert.equal(process.env.RIMZ_LAUNCH_REMINDERS, reminders);
+process.env.RIMZ_WORKSPACE_ID = "workspace";
+process.env.RIMZ_BIN = directory + "/missing-rimz";
+assert.equal(await plugin.setup({}), undefined, "missing executable must be inert");
+process.env.RIMZ_BIN = binary;
 
-process.env.RIMZ_BIN = {};
-process.env.RIMZ_CAPTURE = {};
-const launchReminders = "<system_reminder>\nroom rules\n</system_reminder>";
-process.env.RIMZ_LAUNCH_REMINDERS = launchReminders;
-
-const {{ RimzPlugin }} = await import({});
-let sessionReads = 0;
-const plugin = await RimzPlugin({{
-  directory: {},
-  worktree: {},
-  client: {{
-    config: {{
-      providers: async () => ({{
-        providers: [
-          {{
-            id: "openai",
-            models: {{
-              "gpt-5": {{ name: "GPT-5", limit: {{ input: 200000, context: 400000 }} }},
-              "gpt-5-mini": {{ name: "GPT-5 Mini", limit: {{ context: 128000 }} }},
-            }},
-          }},
-          {{
-            id: "anthropic",
-            models: {{
-              "claude-sonnet-4-5": {{ name: "Claude Sonnet 4.5", limit: {{ context: 200000 }} }},
-            }},
-          }},
-        ],
-      }})
-    }},
-    session: {{
-      get: async () => {{
-        sessionReads += 1;
-        return {{
-          data: {{
-            title: sessionReads === 1
-              ? "New session - 2026-08-27T05:12:33.123Z"
-              : "Fix OpenCode metadata",
-            version: "1.18.23",
-          }},
-        }};
-      }},
-    }},
+const hooks = new Map();
+let subscriptions = 0, catalogReads = 0, deliver, handled;
+let metadata = {title: "New session - 2026-08-27T05:12:33.123Z", agent: "plan"};
+let stalled = false;
+async function register(name, callback) {
+  assert.equal(hooks.has(name), false, "duplicate hook registration: " + name);
+  hooks.set(name, callback);
+  return {dispose: async () => hooks.delete(name)};
+}
+const ctx = {
+  location: {directory},
+  session: {get: async () => stalled ? await new Promise(() => {}) : metadata, hook: register},
+  tool: {hook: register},
+  model: {list: async () => {
+    catalogReads++;
+    return {data: [
+      {id: "gpt-5", providerID: "openai", name: "GPT-5", limit: {input: 200000, context: 400000}},
+      {id: "gpt-5-mini", providerID: "openai", name: "GPT-5 Mini", limit: {context: 128000}},
+      {id: "negative-input", providerID: "openai", name: "Fallback", limit: {input: -1, context: 100}},
+      {id: "negative-context", providerID: "openai", name: "Unknown", limit: {context: -1}},
+    ]};
   }},
-}});
-
-const createRoot = async () => await plugin.event({{
-  event: {{
-    type: "session.created",
-    properties: {{ info: {{ id: "ses-1", directory: {} }} }},
+  event: {subscribe: async function* ({signal}) {
+    subscriptions++;
+    while (!signal.aborted) {
+      const event = await new Promise(resolve => {
+        deliver = resolve;
+        signal.addEventListener("abort", () => resolve(undefined), {once: true});
+      });
+      if (!event) return;
+      yield event;
+      handled?.();
+      handled = undefined;
+    }
   }},
-}});
-const update = async (info) => await plugin.event({{
-  event: {{ type: "message.updated", properties: {{ info }} }},
-}});
-const updateSession = async () => await plugin.event({{
-  event: {{ type: "session.updated", properties: {{ info: {{ id: "ses-1" }} }} }},
-}});
-const idle = async () => await plugin.event({{
-  event: {{ type: "session.idle", properties: {{ sessionID: "ses-1" }} }},
-}});
-const fail = async () => await plugin.event({{
-  event: {{
-    type: "session.error",
-    properties: {{
-      sessionID: "ses-1",
-      error: {{
-        name: "ProviderAuthError",
-        data: {{ message: "Anthropic credentials expired", providerID: "anthropic" }},
-      }},
-    }},
-  }},
-}});
-const failWithoutMessage = async () => await plugin.event({{
-  event: {{
-    type: "session.error",
-    properties: {{
-      sessionID: "ses-1",
-      error: {{
-        name: "MessageOutputLengthError",
-        message: "MessageOutputLengthError",
-        data: {{}},
-      }},
-    }},
-  }},
-}});
-const createChild = async () => await plugin.event({{
-  event: {{
-    type: "session.created",
-    properties: {{
-      info: {{
-        id: "ses-child",
-        parentID: "ses-parent",
-        directory: {},
-        title: "review auth",
-      }},
-    }},
-  }},
-}});
-const stepFinish = async (part) => await plugin.event({{
-  event: {{ type: "message.part.updated", properties: {{ part }} }},
-}});
-const readPayloads = async () => {{
-  try {{
-    const text = await fs.readFile({}, "utf8");
-    return text.trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
-  }} catch {{
-    return [];
-  }}
-}};
-const waitForPayloads = async (count) => {{
-  let payloads = [];
-  for (let i = 0; i < 250; i += 1) {{
-    payloads = await readPayloads();
-    if (payloads.length >= count) return payloads;
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  }}
-  throw new Error(`expected ${{count}} payloads, captured ${{JSON.stringify(payloads)}}`);
-}};
-const assertTokens = (payload, expected) => {{
-  for (const [field, value] of Object.entries(expected)) {{
-    if (payload[field] !== value) {{
-      throw new Error(`${{field}} was ${{payload[field]}}, captured ${{JSON.stringify(payload)}}`);
-    }}
-  }}
-}};
+};
+async function eventually(check) {
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    const value = await check();
+    if (value) return value;
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+  throw new Error("timed out waiting for plugin output: " + JSON.stringify(await payloads()));
+}
+async function payloads() {
+  try {
+    return (await fs.readFile(capturePath, "utf8")).trim().split("\n").filter(Boolean).map(line => {
+      const record = JSON.parse(line);
+      assert.equal(record.pid, String(process.ppid));
+      return record.envelope;
+    });
+  } catch (error) {
+    if (error.code === "ENOENT") return [];
+    throw error;
+  }
+}
+async function emit(type, data, location = directory) {
+  await eventually(() => deliver);
+  const done = new Promise(resolve => { handled = resolve; });
+  const send = deliver;
+  deliver = undefined;
+  send({type, data, created: Date.now(), location: {directory: location}});
+  await done;
+}
+async function envelope(name, session = "root", count = 1) {
+  return eventually(async () => {
+    const found = (await payloads()).filter(p => p.hook_event_name === name && p.session_id === session);
+    return found.length >= count && found[count - 1];
+  });
+}
+const regressions = [];
+function check(name, test) {
+  try { test(); } catch (error) { regressions.push(name + ": " + error.message); }
+}
+const cleanup = await plugin.setup(ctx);
+await plugin.setup(ctx);
+assert.equal(subscriptions, 1);
+assert.equal(hooks.size, 3);
+assert.equal(process.env.RIMZ_LAUNCH_REMINDERS, undefined);
+await emit("session.created", {sessionID: "root", location: {directory}, version: "2.0.27", agent: "plan"});
+const root = await envelope("session_created");
+assert.equal(root.cwd, directory);
+assert.equal(root.agent_version, "2.0.27");
+assert.equal(root.session_name, undefined);
 
-if ("RIMZ_LAUNCH_REMINDERS" in process.env) {{
-  throw new Error("launch reminders stayed in the inheritable environment");
-}}
-const transformSystem = async (sessionID) => {{
-  const output = {{ system: ["base"] }};
-  await plugin["experimental.chat.system.transform"]({{ sessionID, model: {{}} }}, output);
-  return output.system;
-}};
+const system = [];
+await hooks.get("context")({sessionID: "root", system});
+assert.deepEqual(system, [{type: "text", text: reminders}]);
+metadata = {title: "Fix OpenCode metadata", agent: "plan", model: {id: "gpt-5", providerID: "openai"}};
+await hooks.get("prompt")({sessionID: "root", prompt: {text: "fix it"}});
+assert.equal((await envelope("chat_message")).prompt, "fix it");
+await envelope("session_updated");
+await emit("session.step.started", {sessionID: "root", assistantMessageID: "m1", agent: "plan", model: {id: "gpt-5", providerID: "openai"}});
+await emit("session.step.ended", {sessionID: "root", assistantMessageID: "m1", tokens: {input: 100, output: 20, reasoning: 5, cache: {read: 30, write: 40}}});
+await emit("session.execution.succeeded", {sessionID: "root"});
+const idle = await envelope("session_idle");
+for (const [field, expected] of Object.entries({input_tokens:100, output_tokens:25, cache_read_input_tokens:30, cache_write_input_tokens:40, total_tokens:195, context_window:200000, plan_proposed:true})) {
+  assert.equal(idle[field], expected, field);
+}
+assert.equal(idle.session_name, "Fix OpenCode metadata");
+assert.equal(idle.agent_version, "2.0.27");
+assert.equal(idle.model_display_name, "GPT-5");
 
-await createRoot();
-const root = (await waitForPayloads(1))[0];
-const rootSystem = await transformSystem("ses-1");
-if (rootSystem.length !== 2 || rootSystem[1] !== launchReminders) {{
-  throw new Error(`root system prompt lost the launch reminders: ${{JSON.stringify(rootSystem)}}`);
-}}
-if ((await transformSystem(undefined)).length !== 1) {{
-  throw new Error("a sessionless request received launch reminders");
-}}
-if (
-  root.hook_event_name !== "session_created" ||
-  root.session_name !== undefined ||
-  root.agent_version !== undefined
-) {{
-  throw new Error(`placeholder metadata leaked: ${{JSON.stringify(root)}}`);
-}}
+await emit("session.step.started", {sessionID:"root", assistantMessageID:"failed", agent:"plan", model:{id:"gpt-5-mini", providerID:"openai"}});
+await emit("session.step.failed", {sessionID:"root", assistantMessageID:"failed", tokens:{input:7, output:3}});
+await emit("session.execution.interrupted", {sessionID:"root"});
+const failedStep = await envelope("session_idle", "root", 2);
+check("A2 failed step usage", () => assert.equal(failedStep.total_tokens, 10));
+// A later unmatched terminal must not recover a stale failed step's model.
+await emit("session.model.selected", {sessionID:"root", model:{id:"negative-input", providerID:"openai"}});
+await emit("session.step.ended", {sessionID:"root", assistantMessageID:"failed", tokens:{input:1}});
+await hooks.get("execute.after")({sessionID:"root", tool:"probe", status:"completed"});
+const fallback = await envelope("tool_after");
+check("A2 failed step cleanup", () => assert.equal(fallback.model, "negative-input"));
+check("A3 positive context fallback", () => assert.equal(fallback.context_window, 100));
+await emit("session.model.selected", {sessionID:"root", model:{id:"negative-context", providerID:"openai"}});
+await hooks.get("execute.after")({sessionID:"root", tool:"probe", status:"completed"});
+const invalidWindow = await envelope("tool_after", "root", 2);
+check("A3 invalid context omitted", () => assert.equal(invalidWindow.context_window, undefined));
 
-await updateSession();
-const refreshed = (await waitForPayloads(2))[1];
-if (
-  refreshed.hook_event_name !== "session_updated" ||
-  refreshed.session_name !== "Fix OpenCode metadata" ||
-  refreshed.agent_version !== "1.18.23"
-) {{
-  throw new Error(`updated metadata missing: ${{JSON.stringify(refreshed)}}`);
-}}
+metadata = {parentID:"root", title:"existing child", model:{id:"gpt-5-mini", providerID:"openai"}};
+const resumedChildSystem = [];
+await hooks.get("context")({sessionID:"resumed-child", system:resumedChildSystem});
+await hooks.get("prompt")({sessionID:"early-child", prompt:{text:"child prompt"}});
+check("A5 resumed child reminders", () => assert.deepEqual(resumedChildSystem, []));
+metadata = {title:"Fix OpenCode metadata", agent:"plan", model:{id:"gpt-5", providerID:"openai"}};
 
-await update({{
-  sessionID: "ses-1",
-  modelID: "gpt-5",
-  providerID: "openai",
-  variant: "high",
-  tokens: {{ input: 2627, output: 8, cache: {{ read: 5632, write: 0 }}, total: 8267 }},
-}});
-await update({{
-  sessionID: "ses-1",
-  modelID: "gpt-5-mini",
-  providerID: "openai",
-  variant: "low",
-  tokens: {{ input: 0, output: 0, cache: {{ read: 0, write: 0 }} }},
-}});
-await idle();
-const first = (await waitForPayloads(3))[2];
-assertTokens(first, {{
-  input_tokens: 2627,
-  output_tokens: 8,
-  cache_read_input_tokens: 5632,
-  cache_write_input_tokens: 0,
-  total_tokens: 8267,
-}});
-if (first.model !== "gpt-5-mini" || first.effort !== "low") {{
-  throw new Error(`zero-only update lost metadata: ${{JSON.stringify(first)}}`);
-}}
-if (
-  first.session_name !== "Fix OpenCode metadata" ||
-  first.agent_version !== "1.18.23" ||
-  first.model_display_name !== "GPT-5 Mini" ||
-  first.context_window !== 128000
-) {{
-  throw new Error(`rich context missing: ${{JSON.stringify(first)}}`);
-}}
+await emit("session.created", {sessionID: "child", parentID: "root", title: "review auth", location: {directory}, version: "2.0.27"});
+assert.equal((await envelope("SubagentStart", "child")).prompt, "review auth");
+const childSystem = [];
+await hooks.get("context")({sessionID: "child", system: childSystem});
+assert.deepEqual(childSystem, []);
+await emit("session.step.started", {sessionID: "child", assistantMessageID: "c1", agent: "build", model: {id: "gpt-5-mini", providerID: "openai"}});
+await emit("session.step.ended", {sessionID: "child", assistantMessageID: "c1", tokens: {input: 2, output: 1, cache: {read: 0, write: 0}}});
+assert.equal((await envelope("SubagentStart", "child", 2)).model, "gpt-5-mini");
+await emit("session.model.selected", {sessionID: "child", model: {id: "gpt-5-mini", providerID: "openai"}});
+await hooks.get("execute.after")({sessionID: "child", tool: "bash", status: "completed"});
+await emit("session.execution.failed", {sessionID: "child", error: {type:"ApiError", message:"failed"}});
+assert.equal((await envelope("SubagentStop", "child")).is_error, true);
 
-await fail();
-const failed = (await waitForPayloads(4))[3];
-if (
-  failed.error_class !== "ProviderAuthError" ||
-  failed.error_message !== "Anthropic credentials expired"
-) {{
-  throw new Error(`structured error was not flattened: ${{JSON.stringify(failed)}}`);
-}}
+await hooks.get("execute.after")({sessionID:"root", tool:"edit", status:"error"});
+assert.equal((await envelope("tool_after", "root", 3)).is_error, true);
+await emit("form.created", {form: {id:"form", sessionID:"root", title:"Choose", fields:[
+  {key:"q0", type:"multiselect", title:"Options", description:"Which options should we use?", options:[{value:"A", label:"A", description:"First option"}], custom:true},
+  {key:"q1", type:"string", title:"Proceed", description:"Should we continue?", options:[], custom:true},
+  {key:"q2", type:"string", title:"Note", description:"Any notes?", options:[], custom:true},
+]}});
+const question = await envelope("question_ask");
+assert.equal(question.title, "Choose");
+assert.equal(question.questions[0].multiple, true);
+assert.equal(question.questions[0].options[0].label, "A");
+check("B2 question", () => assert.equal(question.questions[0].question, "Which options should we use?"));
+check("B2 header", () => assert.equal(question.questions[0].header, "Options"));
+assert.deepEqual(question.questions[0].options[0], {value:"A", label:"A", description:"First option"});
+await emit("form.replied", {id:"form", sessionID:"root", answer:{q1:"yes", q0:["A","B"]}});
+assert.deepEqual((await envelope("question_replied")).answers, [["A","B"],["yes"],[]]);
+await emit("form.cancelled", {id:"cancelled", sessionID:"root"});
+await envelope("question_rejected");
+await emit("permission.asked", {id:"permission", sessionID:"root", action:"bash", resources:["git status"], message:"Run command"});
+const permission = await envelope("permission_ask");
+assert.equal(permission.tool_name, "bash");
+assert.deepEqual(permission.patterns, ["git status"]);
+await emit("permission.replied", {requestID:"permission", sessionID:"root", reply:"once"});
+assert.equal((await envelope("permission_replied")).reply, "once");
+await emit("session.compaction.started", {sessionID:"root"});
+await envelope("session_compacting");
+await emit("session.compaction.failed", {sessionID:"root"});
+assert.equal((await envelope("session_compacted")).is_error, true);
+await emit("session.execution.failed", {sessionID:"root", error:{type:"ProviderAuthError", message:"expired"}});
+const failure = await envelope("session_error");
+assert.equal(failure.error_class, "ProviderAuthError");
+assert.equal(failure.error_message, "expired");
+stalled = true;
+await emit("session.created", {sessionID:"stalled", location:{directory}, version:"2.0.27"});
+await envelope("session_created", "stalled");
+await emit("session.execution.interrupted", {sessionID:"stalled"});
+await envelope("session_idle", "stalled");
+await emit("session.deleted", {sessionID:"stalled"});
+assert.equal((await envelope("session_ended", "stalled")).reason, "deleted");
+await emit("session.created", {sessionID:"foreign", location:{directory:"/elsewhere"}, version:"2.0.27"}, "/elsewhere");
+await cleanup();
+await envelope("session_ended");
+const all = await payloads();
+assert.equal(all.filter(p => p.hook_event_name === "SubagentStart" && p.session_id === "child").length, 2, JSON.stringify(all));
+assert.equal(all.some(p => p.hook_event_name === "tool_after" && p.session_id === "child"), false);
+assert.equal(all.some(p => p.session_id === "foreign"), false);
+assert.equal(catalogReads, 1);
+assert.equal(hooks.size, 0);
+check("A5 early child prompt", () => assert.equal(all.some(p => p.session_id === "early-child" && p.hook_event_name === "chat_message"), false));
 
-await failWithoutMessage();
-const messageLess = (await waitForPayloads(5))[4];
-if (
-  messageLess.error_class !== "MessageOutputLengthError" ||
-  messageLess.error_message !== undefined
-) {{
-  throw new Error(`message-less error grew fake text: ${{JSON.stringify(messageLess)}}`);
-}}
+// A catalog lookup already in flight must not announce a child after disposal.
+stalled = false;
+let releaseCatalog;
+ctx.model.list = () => new Promise(resolve => {releaseCatalog = resolve;});
+const cleanupDelayed = await plugin.setup(ctx);
+const delayed = emit("session.created", {sessionID:"delayed", parentID:"root", location:{directory}, model:{id:"gpt-5", providerID:"openai"}});
+await eventually(() => releaseCatalog);
+await cleanupDelayed();
+const spawnsAfterDispose = spawns;
+releaseCatalog({data:[]});
+await delayed;
+check("A6 no post-dispose child", () => assert.equal(spawns, spawnsAfterDispose));
 
-await update({{
-  sessionID: "ses-1",
-  modelID: "gpt-5-mini",
-  providerID: "openai",
-  variant: "low",
-  tokens: {{ input: 23, output: 0, cache: {{ read: 0, write: 0 }}, total: 23 }},
-}});
-await idle();
-const second = (await waitForPayloads(6))[5];
-assertTokens(second, {{
-  input_tokens: 23,
-  output_tokens: 0,
-  cache_read_input_tokens: 0,
-  cache_write_input_tokens: 0,
-  total_tokens: 23,
-}});
-
-await createChild();
-const created = (await waitForPayloads(7))[6];
-if ((await transformSystem("ses-child")).length !== 1) {{
-  throw new Error("a child session received launch reminders");
-}}
-if (
-  created.hook_event_name !== "SubagentStart" ||
-  created.session_id !== "ses-child" ||
-  created.parent_session_id !== "ses-parent" ||
-  created.prompt !== "review auth" ||
-  created.model !== undefined
-) {{
-  throw new Error(`unexpected child creation: ${{JSON.stringify(created)}}`);
-}}
-
-await update({{
-  sessionID: "ses-child",
-  modelID: "claude-sonnet-4-5",
-  providerID: "anthropic",
-  tokens: {{ input: 100, output: 20, cache: {{ read: 30, write: 0 }}, total: 150 }},
-}});
-const announced = (await waitForPayloads(8))[7];
-if (
-  announced.hook_event_name !== "SubagentStart" ||
-  announced.session_id !== "ses-child" ||
-  announced.parent_session_id !== "ses-parent" ||
-  announced.model !== "claude-sonnet-4-5" ||
-  announced.prompt !== undefined
-) {{
-  throw new Error(`unexpected child model announcement: ${{JSON.stringify(announced)}}`);
-}}
-assertTokens(announced, {{
-  input_tokens: 100,
-  output_tokens: 20,
-  cache_read_input_tokens: 30,
-  cache_write_input_tokens: 0,
-  total_tokens: 150,
-}});
-
-await update({{
-  sessionID: "ses-child",
-  modelID: "claude-sonnet-4-5",
-  providerID: "anthropic",
-  tokens: {{ input: 200, output: 40, cache: {{ read: 60, write: 0 }}, total: 300 }},
-}});
-await stepFinish({{
-  type: "step-finish",
-  sessionID: "ses-child",
-  modelID: "gpt-5-mini",
-  providerID: "openai",
-  tokens: {{ input: 40, output: 10, cache: {{ read: 5, write: 0 }}, total: 55 }},
-}});
-const switched = (await waitForPayloads(9))[8];
-if (switched.model !== "gpt-5-mini" || switched.prompt !== undefined) {{
-  throw new Error(`unexpected child model switch: ${{JSON.stringify(switched)}}`);
-}}
-await new Promise((resolve) => setTimeout(resolve, 250));
-const finalPayloads = await readPayloads();
-if (finalPayloads.length !== 9) {{
-  throw new Error(`child model was announced more than once: ${{JSON.stringify(finalPayloads)}}`);
-}}
-
-for (const [sessionID, session] of [
-  ["ses-no-session-client", undefined],
-  ["ses-session-error", {{ get: async () => {{ throw new Error("unavailable"); }} }}],
-]) {{
-  const resilientPlugin = await RimzPlugin({{
-    directory: {},
-    worktree: {},
-    client: {{ config: {{ providers: async () => ({{ providers: [] }}) }}, session }},
-  }});
-  await resilientPlugin.event({{
-    event: {{ type: "session.created", properties: {{ info: {{ id: sessionID }} }} }},
-  }});
-}}
-const resilient = await waitForPayloads(11);
-for (const payload of resilient.slice(9)) {{
-  if (payload.session_name !== undefined || payload.agent_version !== undefined) {{
-    throw new Error(`failed session metadata read leaked fields: ${{JSON.stringify(payload)}}`);
-  }}
-}}
-
-const stalledPlugin = await RimzPlugin({{
-  directory: {},
-  worktree: {},
-  client: {{
-    config: {{ providers: async () => ({{ providers: [] }}) }},
-    session: {{ get: async () => await new Promise(() => {{}}) }},
-  }},
-}});
-await stalledPlugin.event({{
-  event: {{ type: "session.created", properties: {{ info: {{ id: "ses-stalled" }} }} }},
-}});
-await waitForPayloads(12);
-await stalledPlugin.event({{
-  event: {{ type: "session.idle", properties: {{ sessionID: "ses-stalled" }} }},
-}});
-await waitForPayloads(13);
-await stalledPlugin.event({{
-  event: {{ type: "session.deleted", properties: {{ info: {{ id: "ses-stalled" }} }} }},
-}});
-const stalled = (await waitForPayloads(14)).slice(11);
-if (
-  stalled.map((payload) => payload.hook_event_name).join(",") !==
-  "session_created,session_idle,session_ended"
-) {{
-  throw new Error(`stalled metadata read reordered lifecycle: ${{JSON.stringify(stalled)}}`);
-}}
-"#,
-            serde_json::to_string(stub_path.to_str().unwrap()).unwrap(),
-            serde_json::to_string(capture_path.to_str().unwrap()).unwrap(),
-            serde_json::to_string(&format!("file://{}", plugin_path.display())).unwrap(),
-            serde_json::to_string(dir.path().to_str().unwrap()).unwrap(),
-            serde_json::to_string(dir.path().to_str().unwrap()).unwrap(),
-            serde_json::to_string(dir.path().to_str().unwrap()).unwrap(),
-            serde_json::to_string(dir.path().to_str().unwrap()).unwrap(),
-            serde_json::to_string(capture_path.to_str().unwrap()).unwrap(),
-            serde_json::to_string(dir.path().to_str().unwrap()).unwrap(),
-            serde_json::to_string(dir.path().to_str().unwrap()).unwrap(),
-            serde_json::to_string(dir.path().to_str().unwrap()).unwrap(),
-            serde_json::to_string(dir.path().to_str().unwrap()).unwrap(),
-        ),
-    )
-    .unwrap();
-
+ctx.model.list = () => { throw new Error("catalog unavailable"); };
+deliver = undefined;
+const cleanupErrors = await plugin.setup(ctx);
+await eventually(() => deliver);
+deliver({type:"session.model.selected", data:{sessionID:"root", model:{id:"gpt-5", providerID:"openai"}}});
+deliver = undefined;
+try {
+  await eventually(() => deliver);
+  await emit("session.execution.interrupted", {sessionID:"root"});
+  await envelope("session_idle", "root", 3);
+} catch (error) { regressions.push("A4 event failure must not end subscription: " + error.message); }
+await cleanupErrors();
+assert.deepEqual(regressions, [], regressions.join("\n"));
+"#).unwrap();
     let output = std::process::Command::new("node")
         .arg("--experimental-strip-types")
         .arg(&harness)
+        .args([&plugin_path, &capture_path, &stub_path, dir.path()])
         .output()
         .unwrap();
     assert!(

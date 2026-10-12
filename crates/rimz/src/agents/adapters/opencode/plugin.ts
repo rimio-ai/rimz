@@ -1,7 +1,10 @@
 // _rimz_managed: OpenCode plugin owned by RimZ. Do not edit by hand.
 import { spawn } from "node:child_process";
-import type { Plugin, PluginModule } from "@opencode-ai/plugin";
+import { accessSync, constants, statSync } from "node:fs";
+import { delimiter, resolve } from "node:path";
+import type { Context } from "@opencode/plugin/promise/plugin";
 
+type ModelRef = { id: string; providerID: string; variant?: string };
 type Gauge = {
   model?: string;
   providerID?: string;
@@ -14,524 +17,367 @@ type Gauge = {
   contextWindow?: number;
   modelDisplayName?: string;
 };
+type SessionInfo = { title?: string; version?: string; directory?: string };
+type Envelope = Record<string, unknown> & { hook_event_name: string; session_id: string; cwd: string };
+type Cleanup = () => Promise<void>;
 
-type CatalogEntry = {
-  contextWindow?: number;
-  displayName?: string;
-};
-
-type SessionInfo = {
-  title?: string;
-  version?: string;
-};
-
-type Envelope = Record<string, unknown> & {
-  hook_event_name: string;
-  session_id?: string;
-  cwd?: string;
-};
-
-const RIMZ = process.env.RIMZ_BIN || "rimz";
-const RIMZ_ARGS = ["hooks", "feed", "--source", "opencode"];
-const LAUNCH_REMINDERS_ENV = "RIMZ_LAUNCH_REMINDERS";
+const activations = new WeakMap<Context, Promise<Cleanup>>();
 const LAUNCH_REMINDERS = Symbol.for("rimz.launch-reminders");
-const DEFAULT_SESSION_TITLE =
-  /^(?:New session|Child session) - \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+const DEFAULT_SESSION_TITLE = /^(?:New session|Child session) - /;
 
-// RimZ launch reminders ride the launch env. The first plugin instance in a
-// process claims them off `process.env`, so tool subprocesses and nested agents
-// never inherit a root's reminders.
 function claimLaunchReminders(): string | undefined {
   const claimed = globalThis as Record<symbol, string | undefined>;
   if (!(LAUNCH_REMINDERS in claimed)) {
-    claimed[LAUNCH_REMINDERS] = process.env[LAUNCH_REMINDERS_ENV] || undefined;
-    delete process.env[LAUNCH_REMINDERS_ENV];
+    claimed[LAUNCH_REMINDERS] = process.env.RIMZ_LAUNCH_REMINDERS || undefined;
+    delete process.env.RIMZ_LAUNCH_REMINDERS;
   }
   return claimed[LAUNCH_REMINDERS];
 }
 
-export const RimzPlugin: Plugin = async (input) => {
-  const launchReminders = claimLaunchReminders();
-  const children = new Map<string, string>();
-  const childModels = new Map<string, string>();
-  const gauge = new Map<string, Gauge>();
-  const agents = new Map<string, string>();
-  const roots = new Set<string>();
-  const sessions = new Map<string, SessionInfo>();
-
-  function cwd(sessionDirectory?: unknown): string {
-    if (typeof sessionDirectory === "string" && sessionDirectory.length > 0) {
-      return sessionDirectory;
-    }
-    return input.worktree || input.directory;
-  }
-
-  function base(hookEventName: string, sessionID?: string, extra: Record<string, unknown> = {}): Envelope {
-    const currentGauge = sessionID ? gauge.get(sessionID) : undefined;
-    return {
-      hook_event_name: hookEventName,
-      session_id: sessionID,
-      cwd: cwd(extra.cwd),
-      session_name: sessionID ? sessions.get(sessionID)?.title : undefined,
-      agent_version: sessionID ? sessions.get(sessionID)?.version : undefined,
-      model: currentGauge?.model,
-      model_display_name: currentGauge?.modelDisplayName,
-      provider_id: currentGauge?.providerID,
-      effort: currentGauge?.effort,
-      input_tokens: currentGauge?.input,
-      output_tokens: currentGauge?.output,
-      cache_read_input_tokens: currentGauge?.cacheRead,
-      cache_write_input_tokens: currentGauge?.cacheWrite,
-      total_tokens: currentGauge?.total,
-      context_window: currentGauge?.contextWindow,
-      ...extra,
-    };
-  }
-
-  function spawnRimz(payload: Envelope): Promise<void> {
-    const child = spawn(RIMZ, RIMZ_ARGS, {
-      cwd: payload.cwd,
-      env: {
-        ...process.env,
-        RIMZ_AGENT_PID: String(process.pid),
-      },
-      stdio: ["pipe", "ignore", "ignore"],
-    });
-    child.on("error", () => {});
-    child.stdin.on("error", () => {});
-    child.stdin.end(`${JSON.stringify(payload)}\n`);
-
-    return new Promise((resolve) => {
-      child.on("error", () => resolve());
-      child.on("close", () => resolve());
-    });
-  }
-
-  function send(payload: Envelope): void {
-    void spawnRimz(payload);
-  }
-
-  function endRoot(sessionID: string, reason: "deleted" | "dispose"): Promise<void> {
-    const payload = base("session_ended", sessionID, { reason });
-    roots.delete(sessionID);
-    gauge.delete(sessionID);
-    agents.delete(sessionID);
-    sessions.delete(sessionID);
-    return spawnRimz(payload);
-  }
-
-  async function refreshSessionInfo(sessionID: string): Promise<boolean> {
-    const client = input.client as any;
-    if (typeof client?.session?.get !== "function") return false;
+function executable(): string | undefined {
+  const candidates = process.env.RIMZ_BIN
+    ? [process.env.RIMZ_BIN]
+    : (process.env.PATH || "").split(delimiter).map((dir) => resolve(dir, "rimz"));
+  return candidates.find((path) => {
     try {
-      const res: any = await client.session.get({ path: { id: sessionID } });
-      if (!roots.has(sessionID)) return false;
-      const session = res?.data ?? res;
-      const title =
-        typeof session?.title === "string" && !DEFAULT_SESSION_TITLE.test(session.title)
-          ? session.title
-          : undefined;
-      const version = typeof session?.version === "string" ? session.version : undefined;
-      const prior = sessions.get(sessionID);
-      const next = {
-        title: title ?? prior?.title,
-        version: version ?? prior?.version,
-      };
-      if (next.title === prior?.title && next.version === prior?.version) return false;
-      sessions.set(sessionID, next);
-      return true;
+      accessSync(path, constants.X_OK);
+      return statSync(path).isFile();
     } catch {
-      // best-effort: session metadata remains absent until a later event retries
       return false;
     }
+  });
+}
+
+function setup(ctx: Context): Promise<Cleanup> | undefined {
+  if (!process.env.RIMZ_WORKSPACE_ID) return;
+  const rimz = executable();
+  if (!rimz) return;
+  const existing = activations.get(ctx);
+  if (existing) return existing;
+  const activation = activate(ctx, resolve(rimz)).catch((error) => {
+    activations.delete(ctx);
+    throw error;
+  });
+  activations.set(ctx, activation);
+  return activation;
+}
+
+async function activate(ctx: Context, rimz: string): Promise<Cleanup> {
+  const reminders = claimLaunchReminders();
+  const controller = new AbortController();
+  const children = new Map<string, string>();
+  const childModels = new Map<string, string>();
+  const roots = new Set<string>();
+  const sessions = new Map<string, SessionInfo>();
+  const agents = new Map<string, string>();
+  const gauges = new Map<string, Gauge>();
+  const steps = new Map<string, { sessionID: string; model: ModelRef }>();
+  const forms = new Map<string, string[]>();
+  const pending = new Set<Promise<void>>();
+  const registrations: Array<{ dispose(): Promise<void> }> = [];
+  let disposed = false;
+  let catalog: Promise<Map<string, { contextWindow?: number; modelDisplayName?: string }>> | undefined;
+
+  function base(name: string, sessionID: string, extra: Record<string, unknown> = {}): Envelope {
+    const gauge = gauges.get(sessionID);
+    const info = sessions.get(sessionID);
+    const directory = info?.directory || ctx.location.directory;
+    return {
+      hook_event_name: name, session_id: sessionID, cwd: directory, worktree_path: directory,
+      session_name: info?.title, agent_version: info?.version,
+      model: gauge?.model, provider_id: gauge?.providerID, effort: gauge?.effort,
+      model_display_name: gauge?.modelDisplayName, context_window: gauge?.contextWindow,
+      input_tokens: gauge?.input, output_tokens: gauge?.output,
+      cache_read_input_tokens: gauge?.cacheRead, cache_write_input_tokens: gauge?.cacheWrite,
+      total_tokens: gauge?.total, ...extra,
+    };
   }
 
-  // The model's context window is the gauge's divisor, and the gauge counts
-  // input-side tokens only (input + cache, never output), so the divisor is the
-  // model's max *input* tokens — the uniform context-window meaning across
-  // agents. OpenCode carries no window on a message, so resolve it from the
-  // OpenCode's own model catalog: prefer models.dev `Model.limit.input`, falling
-  // back to the total `Model.limit.context` for a model that lists no separate
-  // input cap. Key it `${providerID}/${modelID}` and by bare model id. The
-  // catalog is static per plugin launch, so fetch it once; a failed or empty
-  // read clears the memo so a later event retries, and until it resolves the
-  // field is simply omitted (the Rust fallback covers Claude).
-  let catalogPromise: Promise<Map<string, CatalogEntry>> | undefined;
+  function send(payload: Envelope): Promise<void> {
+    const done = new Promise<void>((finish) => {
+      const child = spawn(rimz, ["hooks", "feed", "--source", "opencode"], {
+        cwd: payload.cwd,
+        env: { ...process.env, RIMZ_AGENT_PID: String(process.ppid) },
+        stdio: ["pipe", "ignore", "ignore"],
+      });
+      child.on("error", () => finish());
+      child.on("close", () => finish());
+      child.stdin.on("error", () => {});
+      child.stdin.end(JSON.stringify(payload) + "\n");
+    });
+    pending.add(done);
+    void done.then(() => pending.delete(done));
+    return done;
+  }
 
-  async function loadCatalog(): Promise<Map<string, CatalogEntry>> {
-    const catalog = new Map<string, CatalogEntry>();
-    try {
-      // The client may be built with throwOnError on (payload returned directly)
-      // or off (wrapped in `{ data }`); accept either shape.
-      const res: any = await input.client.config.providers();
-      const providers = (res?.data ?? res)?.providers ?? [];
-      for (const provider of providers) {
-        const models = provider.models ?? {};
-        for (const modelID of Object.keys(models)) {
-          const model = models[modelID];
-          const limit = model?.limit;
-          const cap = limit?.input ?? limit?.context;
-          const contextWindow =
-            typeof cap === "number" && Number.isFinite(cap) && cap > 0 ? cap : undefined;
-          const displayName = typeof model?.name === "string" ? model.name : undefined;
-          if (contextWindow !== undefined || displayName !== undefined) {
-            const entry = { contextWindow, displayName };
-            catalog.set(`${provider.id}/${modelID}`, entry);
-            catalog.set(modelID, entry);
-          }
+  function rememberTitle(sessionID: string, title: unknown): boolean {
+    if (typeof title !== "string" || DEFAULT_SESSION_TITLE.test(title)) return false;
+    const prior = sessions.get(sessionID) || {};
+    if (prior.title === title) return false;
+    sessions.set(sessionID, { ...prior, title });
+    return true;
+  }
+
+  async function rememberModel(sessionID: string, model: ModelRef): Promise<void> {
+    const prior = gauges.get(sessionID) || {};
+    const same = prior.model === model.id && prior.providerID === model.providerID;
+    gauges.set(sessionID, {
+      ...prior, model: model.id, providerID: model.providerID, effort: model.variant,
+      contextWindow: same ? prior.contextWindow : undefined,
+      modelDisplayName: same ? prior.modelDisplayName : undefined,
+    });
+    if (!catalog) {
+      catalog = ctx.model.list().then((result) => {
+        const entries = new Map<string, { contextWindow?: number; modelDisplayName?: string }>();
+        for (const item of result.data) {
+          const contextWindow = [item.limit.input, item.limit.context].find((limit) => limit !== undefined && limit > 0);
+          const entry = { contextWindow, modelDisplayName: item.name };
+          entries.set(item.providerID + "/" + item.id, entry);
+          entries.set(item.id, entry);
         }
-      }
-    } catch {
-      // best-effort: an unreachable catalog leaves the window to the Rust fallback
-    }
-    return catalog;
-  }
-
-  function ensureCatalog(): Promise<Map<string, CatalogEntry>> {
-    if (!catalogPromise) {
-      catalogPromise = loadCatalog().then((catalog) => {
-        if (catalog.size === 0) catalogPromise = undefined; // allow a later retry
-        return catalog;
+        if (!entries.size) catalog = undefined;
+        return entries;
+      }).catch(() => {
+        catalog = undefined;
+        return new Map();
       });
     }
-    return catalogPromise;
+    const entries = await catalog;
+    const entry = entries?.get(model.providerID + "/" + model.id) ?? entries?.get(model.id);
+    const current = gauges.get(sessionID);
+    if (!disposed && current?.model === model.id && current.providerID === model.providerID && entry) {
+      gauges.set(sessionID, { ...current, ...entry });
+    }
   }
 
-  async function resolveWindow(sessionID: string, providerID?: string, modelID?: string): Promise<void> {
-    if (!modelID) return;
-    const catalog = await ensureCatalog();
-    const entry =
-      (providerID ? catalog.get(`${providerID}/${modelID}`) : undefined) ?? catalog.get(modelID);
-    const prior = gauge.get(sessionID);
-    if (!entry || !prior || prior.model !== modelID) return;
-    gauge.set(sessionID, {
-      ...prior,
-      contextWindow: entry.contextWindow,
-      modelDisplayName: entry.displayName,
-    });
-  }
-
-  async function updateGauge(info: any): Promise<void> {
-    const sessionID = info?.sessionID;
-    if (typeof sessionID !== "string" || sessionID.length === 0) {
-      return;
-    }
-    const tokens = info?.tokens;
-    if (!tokens) {
-      return;
-    }
-    const cache = tokens.cache || {};
-    const tokenGauge = {
-      input: numberOrUndefined(tokens.input),
-      output: numberOrUndefined(tokens.output),
-      cacheRead: numberOrUndefined(cache.read),
-      cacheWrite: numberOrUndefined(cache.write),
-      total: numberOrUndefined(tokens.total),
-    };
-    const hasMeasuredUsage = Object.values(tokenGauge).some((value) => (value ?? 0) > 0);
-    const prior = gauge.get(sessionID);
-    const model = info?.modelID ?? prior?.model;
-    const providerID = info?.providerID ?? prior?.providerID;
-    gauge.set(sessionID, {
-      ...(hasMeasuredUsage ? tokenGauge : prior),
-      model,
-      providerID,
-      effort: info?.variant ?? prior?.effort,
-      // keep the resolved window across token updates; re-resolve on a model switch
-      contextWindow: prior?.model === model ? prior?.contextWindow : undefined,
-      modelDisplayName: prior?.model === model ? prior?.modelDisplayName : undefined,
-    });
-    await resolveWindow(sessionID, providerID, model);
+  // Metadata is enrichment: a stalled lookup must not hold a terminal event.
+  function refreshSession(sessionID: string): void {
+    void ctx.session.get({ sessionID }).then(async (info) => {
+      if (disposed || !roots.has(sessionID)) return;
+      const changed = rememberTitle(sessionID, info.title);
+      if (info.agent) agents.set(sessionID, info.agent);
+      if (info.model) await rememberModel(sessionID, info.model);
+      if (changed && !disposed && roots.has(sessionID)) void send(base("session_updated", sessionID));
+    }).catch(() => {});
   }
 
   function announceChildModel(sessionID: string): void {
-    const parentID = children.get(sessionID);
-    if (!parentID) return;
-    const model = gauge.get(sessionID)?.model;
-    if (typeof model !== "string" || model.length === 0) return;
-    if (childModels.get(sessionID) === model) return;
+    const parent = children.get(sessionID);
+    const model = gauges.get(sessionID)?.model;
+    if (!parent || !model || childModels.get(sessionID) === model) return;
     childModels.set(sessionID, model);
-    send(base("SubagentStart", sessionID, { parent_session_id: parentID }));
+    void send(base("SubagentStart", sessionID, { parent_session_id: parent }));
   }
 
-  function numberOrUndefined(value: unknown): number | undefined {
-    return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  function forget(sessionID: string): void {
+    roots.delete(sessionID);
+    children.delete(sessionID);
+    childModels.delete(sessionID);
+    sessions.delete(sessionID);
+    agents.delete(sessionID);
+    gauges.delete(sessionID);
+    for (const [id, step] of steps) if (step.sessionID === sessionID) steps.delete(id);
   }
 
-  function userMessageText(message: any, parts: any[]): string | undefined {
-    if (typeof message?.text === "string") {
-      return message.text;
+  async function classifySession(sessionID: string): Promise<void> {
+    if (disposed || roots.has(sessionID) || children.has(sessionID)) return;
+    try {
+      const info = await ctx.session.get({ sessionID });
+      if (disposed) return;
+      if (info.parentID) children.set(sessionID, info.parentID);
+      else roots.add(sessionID);
+    } catch {
+      // Do not attribute an unknown child to the root when lookup fails.
     }
-    const content = message?.content;
-    if (typeof content === "string") {
-      return content;
-    }
-    if (Array.isArray(content)) {
-      const joined = content
-        .map((part) => (typeof part?.text === "string" ? part.text : ""))
-        .filter(Boolean)
-        .join("\n");
-      if (joined.length > 0) return joined;
-    }
-    const joined = parts
-      .map((part) => (typeof part?.text === "string" ? part.text : ""))
-      .filter(Boolean)
-      .join("\n");
-    return joined.length > 0 ? joined : undefined;
   }
 
-  return {
-    event: async ({ event }) => {
-      const type = (event as any)?.type;
-      const properties = (event as any)?.properties || {};
+  function endRoot(sessionID: string, reason: string): Promise<void> {
+    const payload = base("session_ended", sessionID, { reason });
+    forget(sessionID);
+    return send(payload);
+  }
 
-      if (type === "session.created") {
-        const info = properties.info || {};
-        const sessionID = info.id;
-        const parentID = info.parentID;
-        if (typeof sessionID !== "string") return;
-        if (typeof parentID === "string" && parentID.length > 0) {
-          children.set(sessionID, parentID);
-          send(base("SubagentStart", sessionID, {
-            parent_session_id: parentID,
-            cwd: info.directory,
-            prompt: info.title,
-          }));
-          return;
-        }
+  async function onEvent(event: any): Promise<void> {
+    if (event.location?.directory && event.location.directory !== ctx.location.directory) return;
+    const data = event.data;
+    if (event.type === "form.created") {
+      const form = data.form;
+      if (form.sessionID === "global") return;
+      await classifySession(form.sessionID);
+      if (disposed || !roots.has(form.sessionID)) return;
+      forms.set(form.id, form.fields.map((field: any) => field.key));
+      void send(base("question_ask", form.sessionID, {
+        request_id: form.id, title: form.title,
+        questions: form.fields.map((field: any) => ({
+          question: field.description || field.title || field.key,
+          header: field.title || undefined, options: field.options || [],
+          multiple: field.type === "multiselect", custom: field.custom === true,
+        })),
+      }));
+      return;
+    }
+    const sessionID = data?.sessionID;
+    if (typeof sessionID !== "string") return;
+    if (event.type === "session.created") {
+      sessions.set(sessionID, { version: data.version, directory: data.location.directory });
+      rememberTitle(sessionID, data.title);
+      if (data.agent) agents.set(sessionID, data.agent);
+      if (data.parentID) children.set(sessionID, data.parentID);
+      else roots.add(sessionID);
+      if (data.model) await rememberModel(sessionID, data.model);
+      if (disposed) return;
+      if (data.parentID) {
+        if (data.model) childModels.set(sessionID, data.model.id);
+        void send(base("SubagentStart", sessionID, {
+          parent_session_id: data.parentID,
+          prompt: typeof data.title === "string" ? data.title.replace(/[\u0000-\u001f\u007f]/g, " ").trim() : undefined,
+        }));
+      } else {
+        void send(base("session_created", sessionID));
+        refreshSession(sessionID);
+      }
+      return;
+    }
+    if (sessionID === "global") return;
+    await classifySession(sessionID);
+    if (disposed || (!roots.has(sessionID) && !children.has(sessionID))) return;
+    if (event.type === "session.step.started") {
+      steps.set(data.assistantMessageID, { sessionID, model: data.model });
+      agents.set(sessionID, data.agent);
+      return;
+    }
+    if (event.type === "session.step.ended" || event.type === "session.step.failed") {
+      const step = steps.get(data.assistantMessageID);
+      steps.delete(data.assistantMessageID);
+      const tokens = data.tokens || {};
+      const input = tokens.input || 0, output = (tokens.output || 0) + (tokens.reasoning || 0);
+      const cacheRead = tokens.cache?.read || 0, cacheWrite = tokens.cache?.write || 0;
+      const total = input + output + cacheRead + cacheWrite;
+      if (total > 0) gauges.set(sessionID, { ...gauges.get(sessionID), input, output, cacheRead, cacheWrite, total });
+      if (step) await rememberModel(sessionID, step.model);
+      if (disposed) return;
+      announceChildModel(sessionID);
+      return;
+    }
+    if (event.type === "session.model.selected") {
+      await rememberModel(sessionID, data.model);
+      if (disposed) return;
+      announceChildModel(sessionID);
+      return;
+    }
+    if (event.type === "session.agent.selected") {
+      agents.set(sessionID, data.agent);
+      return;
+    }
+    if (event.type === "session.deleted") {
+      if (children.has(sessionID)) forget(sessionID);
+      else void endRoot(sessionID, "deleted");
+      return;
+    }
+    if (event.type === "session.execution.started") {
+      if (!children.has(sessionID)) {
         roots.add(sessionID);
-        void refreshSessionInfo(sessionID);
-        send(base("session_created", sessionID, { cwd: info.directory }));
-        return;
+        refreshSession(sessionID);
       }
-
-      if (type === "session.updated") {
-        const info = properties.info || {};
-        const sessionID = info.id;
-        if (typeof sessionID !== "string" || !roots.has(sessionID)) return;
-        const changed = await refreshSessionInfo(sessionID);
-        if (changed && roots.has(sessionID)) send(base("session_updated", sessionID));
-        return;
-      }
-
-      if (type === "session.idle") {
-        const sessionID = properties.sessionID;
-        if (typeof sessionID !== "string") return;
-        const parentID = children.get(sessionID);
-        if (!parentID) roots.add(sessionID);
-        if (!parentID) void refreshSessionInfo(sessionID);
-        send(base(parentID ? "SubagentStop" : "session_idle", sessionID, {
-          parent_session_id: parentID,
-          plan_proposed: !parentID && agents.get(sessionID) === "plan" ? true : undefined,
+      return;
+    }
+    if (["session.execution.succeeded", "session.execution.interrupted", "session.execution.failed"].includes(event.type)) {
+      const parent = children.get(sessionID);
+      const failed = event.type === "session.execution.failed";
+      if (!parent) roots.add(sessionID);
+      void send(base(parent ? "SubagentStop" : failed ? "session_error" : "session_idle", sessionID, {
+        parent_session_id: parent, is_error: failed,
+        error_class: data.error?.type, error_message: data.error?.message,
+        plan_proposed: !parent && !failed && agents.get(sessionID) === "plan" ? true : undefined,
+      }));
+      if (!parent) refreshSession(sessionID);
+      return;
+    }
+    if (children.has(sessionID) || sessionID === "global") return;
+    switch (event.type) {
+      case "session.renamed":
+        if (rememberTitle(sessionID, data.title)) void send(base("session_updated", sessionID));
+        break;
+      case "session.compaction.started":
+        void send(base("session_compacting", sessionID));
+        break;
+      case "session.compaction.ended":
+      case "session.compaction.failed":
+        void send(base("session_compacted", sessionID, { is_error: event.type === "session.compaction.failed" }));
+        break;
+      case "permission.asked":
+        void send(base("permission_ask", sessionID, {
+          request_id: data.id, tool_name: data.action, patterns: data.resources,
+          title: data.message || data.action,
         }));
-        return;
-      }
-
-      if (type === "session.error") {
-        const sessionID = properties.sessionID;
-        if (typeof sessionID !== "string") return;
-        const error = properties.error || {};
-        const parentID = children.get(sessionID);
-        if (!parentID) roots.add(sessionID);
-        if (!parentID) void refreshSessionInfo(sessionID);
-        send(base(parentID ? "SubagentStop" : "session_error", sessionID, {
-          parent_session_id: parentID,
-          is_error: true,
-          error_class: error.name || error.type,
-          error_message: error.data?.message,
-        }));
-        return;
-      }
-
-      if (type === "session.compacted") {
-        const sessionID = properties.sessionID;
-        if (typeof sessionID === "string") {
-          send(base("session_compacted", sessionID));
-        }
-        return;
-      }
-
-      // OpenCode's current bus publishes the question tool's native blocking
-      // prompt as `question.asked`. The legacy SDK Event union omits this
-      // member, so keep the event boundary tolerant and read the runtime wire.
-      if (type === "question.asked") {
-        const sessionID = properties.sessionID;
-        if (typeof sessionID !== "string") return;
-        const questions = Array.isArray(properties.questions) ? properties.questions : [];
-        const detail = questions
-          .map((question) => (typeof question?.question === "string" ? question.question : ""))
-          .filter(Boolean)
-          .join("\n");
-        send(base("question_ask", sessionID, {
-          request_id: properties.id,
-          title: detail || undefined,
-          questions: questions.map((question) => ({
-            question: typeof question?.question === "string" ? question.question : undefined,
-            header: typeof question?.header === "string" ? question.header : undefined,
-            options: Array.isArray(question?.options)
-              ? question.options.map((option) => ({
-                  label: typeof option?.label === "string" ? option.label : undefined,
-                  description:
-                    typeof option?.description === "string" ? option.description : undefined,
-                }))
-              : [],
-            multiple: question?.multiple === true,
-            custom: question?.custom === true,
-          })),
-        }));
-        return;
-      }
-
-      // OpenCode publishes native permission prompts on the bus. The typed
-      // `permission.ask` plugin hook last fired in 1.0.223, below every release
-      // RimZ supports, so the bus event is the only permission source.
-      if (type === "permission.asked") {
-        const sessionID = properties.sessionID;
-        if (typeof sessionID !== "string") return;
-        const permission = typeof properties.permission === "string" ? properties.permission : undefined;
-        const patterns = Array.isArray(properties.patterns)
-          ? properties.patterns.filter((pattern) => typeof pattern === "string")
-          : [];
-        const title = [permission, patterns.join(", ")].filter(Boolean).join(": ");
-        send(base("permission_ask", sessionID, {
-          request_id: properties.id,
-          tool_name: permission,
-          permission_type: permission,
-          title: title || undefined,
-        }));
-        return;
-      }
-
-      if (type === "permission.replied") {
-        const sessionID = properties.sessionID;
-        if (typeof sessionID !== "string" || children.has(sessionID)) return;
-        send(base("permission_replied", sessionID, {
-          request_id: properties.requestID,
-          reply: properties.reply,
-        }));
-        return;
-      }
-
-      if (type === "question.replied") {
-        const sessionID = properties.sessionID;
-        if (typeof sessionID !== "string" || children.has(sessionID)) return;
-        send(base("question_replied", sessionID, {
-          request_id: properties.requestID,
-          answers: properties.answers,
-        }));
-        return;
-      }
-
-      if (type === "question.rejected") {
-        const sessionID = properties.sessionID;
-        if (typeof sessionID !== "string" || children.has(sessionID)) return;
-        send(base("question_rejected", sessionID, {
-          request_id: properties.requestID,
-        }));
-        return;
-      }
-
-      if (type === "session.deleted") {
-        const info = properties.info || {};
-        const sessionID = info.id;
-        if (typeof sessionID !== "string") return;
-        if (children.has(sessionID) || (typeof info.parentID === "string" && info.parentID.length > 0)) {
-          children.delete(sessionID);
-          childModels.delete(sessionID);
-          gauge.delete(sessionID);
-          agents.delete(sessionID);
-          sessions.delete(sessionID);
-          return;
-        }
-        void endRoot(sessionID, "deleted");
-        return;
-      }
-
-      if (type === "message.updated") {
-        const info = properties.info;
-        const sessionID = info?.sessionID;
-        const agent = info?.mode ?? info?.agent;
-        if (typeof sessionID === "string" && sessionID.length > 0 && typeof agent === "string") {
-          agents.set(sessionID, agent);
-        }
-        await updateGauge(info);
-        if (typeof sessionID === "string") announceChildModel(sessionID);
-        return;
-      }
-
-      if (type === "message.part.updated") {
-        const part = properties.part || {};
-        if (part.type === "step-finish") {
-          await updateGauge(part);
-          if (typeof part.sessionID === "string") announceChildModel(part.sessionID);
-        }
-      }
-    },
-
-    "chat.message": async (hookInput, output) => {
-      const sessionID = hookInput.sessionID;
-      if (!children.has(sessionID)) roots.add(sessionID);
-      if (typeof hookInput.agent === "string") agents.set(sessionID, hookInput.agent);
-      if (hookInput.model) {
-        const prior = gauge.get(sessionID) || {};
-        const modelID = hookInput.model.modelID;
-        const providerID = hookInput.model.providerID;
-        gauge.set(sessionID, {
-          ...prior,
-          model: modelID,
-          providerID,
-          effort: hookInput.variant,
-          contextWindow: prior.model === modelID ? prior.contextWindow : undefined,
-          modelDisplayName: prior.model === modelID ? prior.modelDisplayName : undefined,
+        break;
+      case "permission.replied":
+        void send(base("permission_replied", sessionID, { request_id: data.requestID, reply: data.reply }));
+        break;
+      case "form.replied": {
+        const answers = (forms.get(data.id) || []).map((key) => {
+          const value = data.answer[key];
+          return value === undefined ? [] : (Array.isArray(value) ? value : [value]).map(String);
         });
-        await resolveWindow(sessionID, providerID, modelID);
+        forms.delete(data.id);
+        void send(base("question_replied", sessionID, { request_id: data.id, answers }));
+        break;
       }
-      send(base("chat_message", sessionID, {
-        prompt: userMessageText(output.message, output.parts),
-        model: hookInput.model?.modelID,
-        provider_id: hookInput.model?.providerID,
-        effort: hookInput.variant,
-      }));
-    },
+      case "form.cancelled":
+        forms.delete(data.id);
+        void send(base("question_rejected", sessionID, { request_id: data.id }));
+        break;
+    }
+  }
 
-    "tool.execute.after": async (hookInput, output) => {
-      if (children.has(hookInput.sessionID)) {
-        return;
+  registrations.push(await ctx.session.hook("prompt", async (input) => {
+    await classifySession(input.sessionID);
+    if (disposed || !roots.has(input.sessionID)) return;
+    void send(base("chat_message", input.sessionID, { prompt: input.prompt.text }));
+    refreshSession(input.sessionID);
+  }));
+  registrations.push(await ctx.session.hook("context", async (input) => {
+    await classifySession(input.sessionID);
+    if (disposed) return;
+    if (reminders && roots.has(input.sessionID)) {
+      input.system.push({ type: "text", text: reminders });
+    }
+  }));
+  registrations.push(await ctx.tool.hook("execute.after", async (input) => {
+    await classifySession(input.sessionID);
+    if (disposed) return;
+    if (roots.has(input.sessionID)) {
+      void send(base("tool_after", input.sessionID, { tool_name: input.tool, is_error: input.status === "error" }));
+    }
+  }));
+  void (async () => {
+    try {
+      for await (const event of ctx.event.subscribe({ signal: controller.signal })) {
+        if (disposed) break;
+        try {
+          await onEvent(event);
+        } catch {
+          // A failed enrichment or handler must not end event delivery.
+        }
       }
-      send(base("tool_after", hookInput.sessionID, {
-        tool_name: hookInput.tool,
-        is_error: Boolean(output.metadata?.error || output.metadata?.isError),
-      }));
-    },
+    } catch {
+      // The subscription ends when OpenCode tears down this activation.
+    }
+  })();
 
-    "experimental.chat.system.transform": async (hookInput, output) => {
-      const sessionID = hookInput.sessionID;
-      if (!launchReminders || !sessionID || children.has(sessionID)) return;
-      output.system.push(launchReminders);
-    },
-
-    "experimental.session.compacting": async (hookInput) => {
-      send(base("session_compacting", hookInput.sessionID));
-    },
-
-    dispose: async () => {
-      const pending = [...roots].map((sessionID) => endRoot(sessionID, "dispose"));
-      if (pending.length === 0) return;
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      await Promise.race([
-        Promise.allSettled(pending),
-        new Promise<void>((resolve) => {
-          timer = setTimeout(resolve, 1500);
-        }),
-      ]);
-      if (timer) clearTimeout(timer);
-    },
+  return async () => {
+    if (disposed) return;
+    disposed = true;
+    activations.delete(ctx);
+    controller.abort();
+    for (const sessionID of [...roots]) void endRoot(sessionID, "dispose");
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([
+      Promise.allSettled([...pending, ...registrations.map((registration) => registration.dispose())]),
+      new Promise<void>((finish) => { timer = setTimeout(finish, 1500); }),
+    ]);
+    if (timer) clearTimeout(timer);
   };
-};
+}
 
-const module: PluginModule = {
-  id: "rimz",
-  server: RimzPlugin,
-};
-
-export default module;
+export default { id: "rimz", setup };
