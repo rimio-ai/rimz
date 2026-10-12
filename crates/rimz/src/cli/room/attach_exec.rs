@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use rimz::ids::{MuxName, WorkspaceId};
 
-use super::{AttachAction, AttachMode, RoomSituation};
+use super::{AttachAction, AttachMode, PrintCause, RoomSituation};
 
 // The local recovery panel parks its cursor on the Multiplexer symbol cell;
 // this in-band marker lands there immediately before the mux paints.
@@ -111,7 +111,18 @@ pub(super) fn run_attach_action(
         std::io::stdout().is_terminal(),
         inside_selected_mux(mux),
     ) {
-        AttachAction::Print => {
+        AttachAction::Print(cause) => {
+            match cause {
+                PrintCause::Explicit => {}
+                PrintCause::NoTerminal => writeln!(
+                    crate::cli::render::err(),
+                    "rimz: no terminal here: the room is open but not entered; printed the attach command instead (same as --print). Pass --attach to enter it anyway."
+                )?,
+                PrintCause::InsideMux => writeln!(
+                    crate::cli::render::err(),
+                    "rimz: already inside {mux}: the room is open but not entered; printed the attach command instead (same as --print). Detach from {mux}, then run it again."
+                )?,
+            }
             print_attach_command(spec);
             Ok(())
         }
@@ -220,11 +231,12 @@ pub(crate) fn attach_action(
 ) -> AttachAction {
     match mode {
         AttachMode::Attach => AttachAction::Launch,
-        AttachMode::Print => AttachAction::Print,
+        AttachMode::Print => AttachAction::Print(PrintCause::Explicit),
         AttachMode::Auto if stdin_is_tty && stdout_is_tty && !inside_target_mux => {
             AttachAction::Launch
         }
-        AttachMode::Auto => AttachAction::Print,
+        AttachMode::Auto if inside_target_mux => AttachAction::Print(PrintCause::InsideMux),
+        AttachMode::Auto => AttachAction::Print(PrintCause::NoTerminal),
     }
 }
 
@@ -479,21 +491,38 @@ mod tests {
 
     #[test]
     fn attach_action_matrix_and_nested_report_policy() {
+        for (stdin, stdout, inside) in [
+            (true, true, false),
+            (false, true, false),
+            (true, false, false),
+            (false, false, false),
+            (true, true, true),
+            (false, false, true),
+        ] {
+            assert_eq!(
+                attach_action(AttachMode::Attach, stdin, stdout, inside),
+                AttachAction::Launch
+            );
+            assert_eq!(
+                attach_action(AttachMode::Print, stdin, stdout, inside),
+                AttachAction::Print(PrintCause::Explicit)
+            );
+        }
         assert_eq!(
             attach_action(AttachMode::Auto, true, true, false),
             AttachAction::Launch,
         );
         assert_eq!(
             attach_action(AttachMode::Auto, false, true, false),
-            AttachAction::Print,
+            AttachAction::Print(PrintCause::NoTerminal),
         );
         assert_eq!(
             attach_action(AttachMode::Auto, true, false, false),
-            AttachAction::Print,
+            AttachAction::Print(PrintCause::NoTerminal),
         );
         assert_eq!(
             attach_action(AttachMode::Auto, true, true, true),
-            AttachAction::Print,
+            AttachAction::Print(PrintCause::InsideMux),
         );
         assert_eq!(
             attach_action(AttachMode::Attach, false, false, true),
@@ -501,7 +530,7 @@ mod tests {
         );
         assert_eq!(
             attach_action(AttachMode::Print, true, true, false),
-            AttachAction::Print,
+            AttachAction::Print(PrintCause::Explicit),
         );
 
         assert!(should_report_already_inside(AttachMode::Auto, true));

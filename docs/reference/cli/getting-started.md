@@ -42,13 +42,13 @@ Bare `rimz` is `rimz start .`. `rimz start [PATH]` resolves the room for `PATH` 
 
 ### Attach or print
 
-Without an explicit attach flag, RimZ attaches only when both stdin and stdout are terminals and you are not already inside the selected backend. Outside that backend, a missing terminal makes it print the attach command on stdout, which is what a script or shell wrapper wants. Inside the selected backend, `rimz` and `rimz start` report the room situation instead, without opening a room or writing its state. When RimZ attaches, it exits with the multiplexer client's exit code once you detach.
+Without an explicit attach flag, RimZ attaches only when both stdin and stdout are terminals and you are not already inside the selected backend. Outside that backend, a missing terminal makes it print the attach command on stdout and a notice on stderr: the room is open but not entered; pass `--attach` to enter anyway. Inside the selected backend, `rimz` and `rimz start` report the room situation instead, without opening a room or writing its state. `rimz attach` prints the command and a notice to detach from that backend before retrying. Explicit `--print` or `--no-attach` adds no fallback notice. When RimZ attaches, it exits with the multiplexer client's exit code once you detach.
 
 | Situation | `rimz` and `rimz start` | `rimz attach` |
 | --- | --- | --- |
 | Terminal, outside the backend | Attach | Attach |
-| Outside the backend, stdin or stdout is not a terminal | Print the attach command | Print the attach command |
-| Inside a session of the selected backend | Report the room situation on stderr and exit 0 | Print the attach command |
+| Outside the backend, stdin or stdout is not a terminal | Print the attach command and explain the fallback on stderr | Print the attach command and explain the fallback on stderr |
+| Inside a session of the selected backend | Report the room situation on stderr and exit 0 | Print the attach command and explain the fallback on stderr |
 | `--attach` | Attach | Attach |
 | `--no-attach` or `--print` | Print the attach command | Print the attach command |
 
