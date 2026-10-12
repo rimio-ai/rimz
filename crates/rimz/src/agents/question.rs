@@ -62,13 +62,36 @@ fn decode_inner(
     preview_policy: PreviewPolicy,
     header_fallback: bool,
 ) -> Option<Vec<NormalizedQuestion>> {
-    let input: QuestionInput = serde_json::from_value(input.clone()).ok()?;
+    let mut input = input.clone();
+    if let Some(questions) = input.get_mut("questions") {
+        decode_container_string(questions);
+        for question in questions.as_array_mut().into_iter().flatten() {
+            decode_container_string(question);
+            let Some(options) = question.get_mut("options") else {
+                continue;
+            };
+            decode_container_string(options);
+            for option in options.as_array_mut().into_iter().flatten() {
+                decode_container_string(option);
+            }
+        }
+    }
+    let input: QuestionInput = serde_json::from_value(input).ok()?;
     let questions = input
         .questions
         .into_iter()
         .filter_map(|question| normalize(question, preview_policy, header_fallback))
         .collect::<Vec<_>>();
     (!questions.is_empty()).then_some(questions)
+}
+
+fn decode_container_string(value: &mut Value) {
+    if let Some(encoded) = value.as_str()
+        && let Ok(parsed) = serde_json::from_str::<Value>(encoded)
+        && (parsed.is_array() || parsed.is_object())
+    {
+        *value = parsed;
+    }
 }
 
 pub(super) fn questions_with_header_fallback(
@@ -223,6 +246,53 @@ mod tests {
         assert!(!strings[2].has_option_previews);
         assert_eq!(questions(&input, PreviewPolicy::None).unwrap().len(), 2);
         assert!(questions(&json!({"questions": []}), PreviewPolicy::None).is_none());
+    }
+
+    #[test]
+    fn decodes_json_strings_at_questionnaire_container_levels() {
+        let input = json!({"questions": [{
+            "question": "Pick?", "options": [{"label": "A"}], "multiSelect": true
+        }]});
+        let expected = decode(&input, PreviewPolicy::None);
+        for pointer in [
+            "/questions",
+            "/questions/0",
+            "/questions/0/options",
+            "/questions/0/options/0",
+        ] {
+            let mut encoded = input.clone();
+            let value = encoded.pointer_mut(pointer).unwrap();
+            *value = Value::String(value.to_string());
+            assert_eq!(decode(&encoded, PreviewPolicy::None), expected, "{pointer}");
+        }
+        let nested = json!({"questions": serde_json::to_string(&vec![
+            json!({"question": "Pick?", "options": serde_json::to_string(&vec![
+                json!({"label": "A"}).to_string()
+            ]).unwrap(), "multiSelect": true}).to_string()
+        ]).unwrap()});
+        assert_eq!(decode(&nested, PreviewPolicy::None), expected);
+    }
+
+    #[test]
+    fn rejects_invalid_strings_at_questionnaire_container_levels() {
+        let input = json!({"questions": [{"question": "Pick?", "options": [{"label": "A"}]}]});
+        for pointer in [
+            "/questions",
+            "/questions/0",
+            "/questions/0/options",
+            "/questions/0/options/0",
+        ] {
+            for invalid in ["not json", "null", "42", "true", "\"text\""] {
+                let mut encoded = input.clone();
+                *encoded.pointer_mut(pointer).unwrap() = json!(invalid);
+                assert_eq!(
+                    decode(&encoded, PreviewPolicy::None),
+                    None,
+                    "{pointer}: {invalid}"
+                );
+            }
+        }
+        assert_eq!(decode(&json!(input.to_string()), PreviewPolicy::None), None);
     }
 
     #[test]
