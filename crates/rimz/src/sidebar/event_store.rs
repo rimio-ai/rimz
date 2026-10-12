@@ -144,7 +144,6 @@ fn event_key(event: &SidebarEvent) -> Option<EventKey> {
         | SidebarEvent::StoreDelta { .. }
         | SidebarEvent::WidthTargetChanged
         | SidebarEvent::BodyFilterChanged
-        | SidebarEvent::PaneFramePublished { .. }
         | SidebarEvent::Notify { .. }
         | SidebarEvent::Reload => None,
     }

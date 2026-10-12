@@ -822,16 +822,7 @@ fn lifecycle_store_delta_preserves_fresh_pane_verification() {
 fn watched_metrics_and_hidden_presence_publications_fold_immediately() {
     let own_pane = pane("terminal_1", "tab_0", false).pane_id;
 
-    for (publication, watched) in [
-        (
-            crate::wakeup::events::PaneFramePublicationKind::Metrics,
-            true,
-        ),
-        (
-            crate::wakeup::events::PaneFramePublicationKind::Presence,
-            false,
-        ),
-    ] {
+    for watched in [true, false] {
         let mut rig = Rig::with_own_pane(own_pane.clone());
         rig.hide();
         if watched {
@@ -860,12 +851,6 @@ fn watched_metrics_and_hidden_presence_publications_fold_immediately() {
             rig.state.current.presence,
             Some(crate::store::snapshot::SidebarPresence::Detached)
         );
-        rig.event(pane_publication(publication));
-        assert!(
-            rig.next_request().is_none(),
-            "legacy publications do not refetch"
-        );
-        assert!(rig.fetch.next_deadline().is_none());
     }
 }
 

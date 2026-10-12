@@ -599,9 +599,6 @@ impl LoopState {
                     self.dirty = true;
                 }
             }
-            SidebarEvent::PaneFramePublished { .. } => {
-                // Older builds may still send this wire event; the host delivers folds directly.
-            }
             event @ SidebarEvent::Notify { .. } => {
                 self.handle_notification(terminal, event);
             }

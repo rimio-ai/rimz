@@ -4753,11 +4753,6 @@ reason = "Pass 24a: narrowing produced `type heartbeat::HeartbeatWriteErr is pri
 
 [[verdict]]
 kind = "item"
-key = "wakeup::events::PaneFramePublicationKind"
-reason = "Pass 24a: types the public SidebarEvent::PaneFramePublished::publication field (events.rs:111), so narrowing trips private_interfaces, which lint denies (caveat 13)."
-
-[[verdict]]
-kind = "item"
 key = "wakeup::heartbeat::SidebarHeartbeat"
 reason = "Pass 24a: representative of the heartbeat surface the integration suite names — is_heartbeat_file and read_from (backend/tmux/sidebar.rs:235,157), write_heartbeat (:647 via support.rs:21), SidebarHeartbeat::new, reload_all and RELOAD_CONTROL_WORD (reload.rs:144,169,178), SIDEBAR_EVENT_VERSION (wakeup_pipe.rs:206)."
 

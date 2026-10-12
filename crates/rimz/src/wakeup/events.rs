@@ -16,8 +16,7 @@ pub(crate) struct SidebarEventEnvelope {
     pub workspace_id: WorkspaceId,
     /// `Some` scopes the event to one mux session — pane ids are only
     /// meaningful inside the session that issued them. `None` is
-    /// workspace-scoped: store deltas, reloads, and pane-frame publications
-    /// apply to every session renderer of the workspace.
+    /// workspace-scoped: store deltas and reloads apply to every session renderer of the workspace.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_name: Option<String>,
     /// Sender wall clock. Fusion compares this against the pulled frame's pane
@@ -101,12 +100,6 @@ pub enum SidebarEvent {
     /// The shared cockpit lens changed. Renderers re-read the atomically
     /// replaced room-runtime filter file.
     BodyFilterChanged,
-    PaneFramePublished {
-        /// The producer-side change written into the shared pane frame. Older
-        /// publishers omitted this field, which safely decodes as topology.
-        #[serde(default)]
-        publication: PaneFramePublicationKind,
-    },
     Notify {
         title: String,
         body: String,
@@ -129,16 +122,6 @@ pub enum SidebarEvent {
     /// Reload request. Current renderers also accept [`RELOAD_CONTROL_WORD`] so
     /// reload survives sidebar-event envelope version skew.
     Reload,
-}
-
-/// Which producer-owned input changed in a published pane frame.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PaneFramePublicationKind {
-    #[default]
-    Topology,
-    Metrics,
-    Presence,
 }
 
 fn default_recheck_unread() -> bool {
@@ -199,15 +182,6 @@ mod tests {
             },
             SidebarEvent::WidthTargetChanged,
             SidebarEvent::BodyFilterChanged,
-            SidebarEvent::PaneFramePublished {
-                publication: PaneFramePublicationKind::Topology,
-            },
-            SidebarEvent::PaneFramePublished {
-                publication: PaneFramePublicationKind::Metrics,
-            },
-            SidebarEvent::PaneFramePublished {
-                publication: PaneFramePublicationKind::Presence,
-            },
             SidebarEvent::Notify {
                 title: "RimZ: claude needs you".to_owned(),
                 body: "claude sess-1 is waiting for input".to_owned(),
@@ -281,36 +255,6 @@ mod tests {
         };
         assert_eq!(first.cmp(&second), std::cmp::Ordering::Less);
         assert!(first < second);
-    }
-
-    #[test]
-    fn legacy_pane_frame_published_decodes_as_topology() {
-        let decoded: SidebarEvent =
-            serde_json::from_str(r#"{"kind":"pane_frame_published"}"#).unwrap();
-
-        assert_eq!(
-            decoded,
-            SidebarEvent::PaneFramePublished {
-                publication: PaneFramePublicationKind::Topology,
-            }
-        );
-    }
-
-    #[test]
-    fn typed_pane_frame_published_decodes_for_a_legacy_unit_consumer() {
-        #[derive(Deserialize)]
-        #[serde(tag = "kind", rename_all = "snake_case")]
-        enum LegacySidebarEvent {
-            PaneFramePublished,
-        }
-
-        let encoded = serde_json::to_vec(&SidebarEvent::PaneFramePublished {
-            publication: PaneFramePublicationKind::Metrics,
-        })
-        .unwrap();
-        let decoded: LegacySidebarEvent = serde_json::from_slice(&encoded).unwrap();
-
-        assert!(matches!(decoded, LegacySidebarEvent::PaneFramePublished));
     }
 
     #[test]

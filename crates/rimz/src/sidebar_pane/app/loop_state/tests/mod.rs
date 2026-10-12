@@ -267,10 +267,6 @@ fn store_delta() -> SidebarEvent {
     }
 }
 
-fn pane_publication(publication: crate::wakeup::events::PaneFramePublicationKind) -> SidebarEvent {
-    SidebarEvent::PaneFramePublished { publication }
-}
-
 /// An armed gate whose reevaluation deadline sits `age_ms` in the past.
 fn armed_gate(reject_streak: u32, age_ms: i64) -> GateState {
     let now_ms = jiff::Timestamp::now().as_millisecond();

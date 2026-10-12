@@ -278,7 +278,7 @@ The fold spine splits into renderer-independent [`enrich_workspace`](../../crate
 
 ### Truth arrives by event, the frame by coalescing
 
-The host delivers produced folds directly, without a `PaneFramePublished` self-wake. The legacy event and publication kinds stay on the wire, but renderers ignore that event rather than refetch. The rollup is read event-fresh from `cache/snapshots/latest.json` on every fold, so a status change repaints within one wakeup while the host retains and shares its pane inputs.
+The host delivers produced folds directly; renderers never refetch on a self-wake. The rollup is read event-fresh from `cache/snapshots/latest.json` on every fold, so a status change repaints within one wakeup while the host retains and shares its pane inputs.
 
 Every writer that knows about a change pushes: store and sidecar writers post a `StoreDelta`, both backends' presence streams feed one projector that emits typed pane events, and the host's transcript watcher refreshes context mid-turn for every adapter that declares transcript-tail context ([state.md → Push channels](./sidebar/state.md#push-channels)).
 
