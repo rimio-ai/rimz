@@ -408,7 +408,8 @@ allowed-dependencies = [
 # Apply children inherit the lifetime lock so parent death cannot admit concurrent replay (+1).
 # Hook appenders share a typed, blocking ingress guard (+2).
 # Birth, reset, supervisors and integration tests share RoomLock's claim/hold/share and its classed path (+5).
-surface-budget = 236
+# Run listings construct full stamps from their single metadata read (+1).
+surface-budget = 237
 
 [[module]]
 path = "crates/rimz/src/forge"
@@ -546,7 +547,8 @@ path = "crates/rimz/src/harness"
 # The CLI apply-child wait reuses the bounded subprocess pump through the drainer (+1).
 # Active-time ingress shares the captured frame timestamp with lifecycle application (+1).
 # FrameAttempt tells an apply whether a crashed attempt preceded it, so only a redo scans for its own transcript entry (+2).
-surface-budget = 784
+# Host readers share the crate-private cached run listing (+1).
+surface-budget = 785
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -791,7 +793,8 @@ path = "crates/rimz/src/store"
 # Reset and room teardown retain drainer election/lifetime stop guards (+2).
 # The CLI stamps assistant transcripts with the scoped Store ingress id (+1).
 # Listed child panes share row membership with the focus seam (+2).
-surface-budget = 413
+# RunListing and listing share cached run slices with host readers (+2).
+surface-budget = 415
 
 [[module]]
 path = "crates/rimz/src/theme"
@@ -1271,7 +1274,8 @@ allowed-dependencies = [
 # `provider_startup_exit` shares the diagnostic window independently of relaunch eligibility (+1).
 # A silent-child notice is claimed once per run and released only after a failed queue write (+2).
 # Thin exec supervision cancels runs through paths without a Store (+1).
-surface-budget = 55
+# Host readers share the crate-private cached listing wrapper (+1).
+surface-budget = 56
 
 [[module]]
 path = "crates/rimz/src/harness/run/report.rs"

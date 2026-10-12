@@ -83,7 +83,7 @@ pub fn resolve(
     request: &OrphanSubagentRequest,
     now: Timestamp,
 ) -> Result<Option<OrphanedSubagent>, OrphanSweepErr> {
-    let runs = crate::harness::run::list(paths)?;
+    let runs = crate::harness::run::listing(paths)?;
     let (_, agents, _) = crate::store::snapshot::RollupCursor::new().fold(paths)?;
     Ok(agents
         .iter()

@@ -20,6 +20,8 @@ Cache the parse, never a verdict. [`disk/parse_cache.rs`](../../crates/rimz/src/
 
 Measure freshness by log extent. A derived rollup records the `LogExtent` it reflects: the rotation generation and the byte offset after the last folded frame. Comparing that pair against the live log is one `stat`, with none of mtime's granularity or write-ordering hazards.
 
+Run listings keep a per-thread, per-directory parse cache and share a sorted slice. Every listing scans the directory and stats each JSON record; only a changed `(len, mtime, device, inode)` stamp causes another parse. Atomic rename gives even equal-length, equal-timestamp replacements a new inode. Neither terminal status (a run can reopen) nor directory mtime (writes can share a timestamp tick) is a freshness key. Deleted records disappear, temporary siblings are ignored, and files lost to concurrent GC are skipped; other read errors and corrupt records fail the listing without updating its cache. `RunListing::generation` starts at one and changes only when the record set or a file stamp changes, giving same-thread consumers a cheap change signal.
+
 ## Where the code lives
 
 `Store` ([`mod.rs`](../../crates/rimz/src/store/mod.rs)) is a cloneable handle around an `Arc` holding the workspace's `StatePaths` and `RuntimePaths`. `mod.rs` carries the handle, the core errors, and the lock-free reads; its mutations live under [`writer.rs`](../../crates/rimz/src/store/writer.rs) and take the workspace lock. Ingress appends take a caller-owned ingress lock; cursor and run writes take the caller-owned workspace lock. A mutation needing both takes workspace, then ingress, never the reverse.
