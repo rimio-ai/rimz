@@ -1591,6 +1591,54 @@ fn pi_bridge_adopts_an_existing_rich_root_with_the_live_signal() {
 }
 
 #[test]
+fn pi_compaction_failure_without_open_bracket_preserves_the_turn() {
+    let (_dir, store) = hooks_test_store();
+    let adapter = rimz::agents::definition_by_kind("pi").unwrap();
+    feed_pi(
+        &store,
+        adapter,
+        "session_start",
+        pi_session_payload("compact-session"),
+    );
+    feed_pi(
+        &store,
+        adapter,
+        "before_agent_start",
+        serde_json::json!({
+            "session_id": "compact-session", "prompt": "continue"
+        }),
+    );
+    let running = store.snapshot_cached().unwrap();
+    let before = running
+        .agents
+        .iter()
+        .find(|state| state.agent_id == "compact-session")
+        .unwrap();
+    assert_eq!(before.status, rimz::agents::AgentStatus::Running);
+    assert!(before.turn_started_at.is_some());
+
+    feed_pi(
+        &store,
+        adapter,
+        "session_compact_failed",
+        serde_json::json!({
+            "session_id": "compact-session", "compaction_reason": "overflow"
+        }),
+    );
+    let failed = store.snapshot_cached().unwrap();
+    let after = failed
+        .agents
+        .iter()
+        .find(|state| state.agent_id == "compact-session")
+        .unwrap();
+    assert_eq!(after.status, rimz::agents::AgentStatus::Running);
+    assert!(after.compacting_since.is_none());
+    assert_eq!(after.compaction_count, 0);
+    assert_eq!(after.turn_started_at, before.turn_started_at);
+    assert_eq!(after.turn_ended_at, before.turn_ended_at);
+}
+
+#[test]
 fn pi_compaction_failure_closes_the_active_bracket() {
     let (_dir, store) = hooks_test_store();
     let adapter = rimz::agents::definition_by_kind("pi").unwrap();
