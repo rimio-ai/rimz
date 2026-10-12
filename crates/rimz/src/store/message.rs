@@ -832,7 +832,7 @@ impl MessageRecord {
             .then_some(self.last_sent_at.unwrap_or(self.updated_at) + self.body.delivery_window())
     }
 
-    /// Read-side mirror of the reconciler's deadline, including a compaction deferral.
+    /// Read-side mirror of the reconciler's deadline, including a compaction or ingress deferral.
     pub(crate) fn sent_hold_expired(&self, now: Timestamp) -> bool {
         self.status == MessageStatus::Sent
             && self

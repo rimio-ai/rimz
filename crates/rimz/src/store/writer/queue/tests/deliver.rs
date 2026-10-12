@@ -1039,6 +1039,104 @@ fn stale_command_times_out_without_resend_regardless_of_counter() {
     );
 }
 
+fn check_ingress_hold(body: MessageBody, frame_secs: i64, other_kind: bool, applied: bool) {
+    use crate::disk::lock::{IngressAppendLock, WorkspaceLock};
+    use crate::ids::EventId;
+    use crate::store::ingress::{self, HookDrainCursor, HookIngress};
+
+    let q = Queue::new();
+    let sent = q.sent_with(1, |message| message.body = body);
+    let sent_at = sent.last_sent_at.unwrap();
+    let window = sent.body.delivery_window();
+    let now = sent_at + window;
+    let frame = HookIngress {
+        schema_version: "1".into(),
+        event_id: EventId::new(),
+        ts: sent_at + jiff::SignedDuration::from_secs(frame_secs),
+        source: if other_kind {
+            AgentKind::new_unchecked("codex")
+        } else {
+            sent.kind.clone()
+        },
+        event: Some("UserPromptSubmit".into()),
+        payload: "{}".into(),
+        cwd: q._dir.path().to_owned(),
+        hook_pid: std::process::id(),
+        env: Default::default(),
+    };
+    let end = {
+        let lock = IngressAppendLock::acquire(&q.inner.paths.hook_ingress_lock).unwrap();
+        ingress::append(&q.inner.paths, &frame, &lock).unwrap()
+    };
+    let lock = WorkspaceLock::acquire(&q.inner.paths.workspace_lock).unwrap();
+    ingress::write_cursor(
+        &q.inner.paths,
+        &HookDrainCursor {
+            applied: if applied { end } else { 0 },
+            applied_event_id: applied.then(|| frame.event_id.clone()),
+            claimed: end,
+            claimed_event_id: Some(frame.event_id),
+            ..Default::default()
+        },
+        &lock,
+    )
+    .unwrap();
+    drop(lock);
+    let events_before = std::fs::read(&q.inner.paths.events_log).unwrap();
+    let report = q.reconcile_stale_messages("session", now, 3).unwrap();
+    let messages = q.live();
+    assert_eq!(messages.len(), 1, "reconcile must retain the record");
+    let message = &messages[0];
+    let window_secs = i64::try_from(window.as_secs()).unwrap();
+    if !(0..window_secs).contains(&frame_secs) || other_kind || applied {
+        assert_eq!(message.status, MessageStatus::Queued);
+        assert_eq!(message.unconfirmed_sends, 1);
+        assert_eq!(report.requeued, 1);
+    } else {
+        assert_eq!(message.status, MessageStatus::Sent);
+        assert_eq!(message.unconfirmed_sends, 0);
+        assert_eq!(message.attempts, sent.attempts);
+        assert_eq!(message.retry_after, Some(now + window));
+        assert_eq!(message.wake_deadline(now), Some(now + window));
+        assert_eq!(report, ReconcileReport::default());
+        assert_eq!(
+            std::fs::read(&q.inner.paths.events_log).unwrap(),
+            events_before
+        );
+    }
+}
+
+#[test]
+fn stale_sent_ingress_holds_prompt() {
+    check_ingress_hold(MessageBody::Prompt, 0, false, false);
+}
+
+#[test]
+fn stale_sent_ingress_holds_command() {
+    check_ingress_hold(MessageBody::Command, 0, false, false);
+}
+
+#[test]
+fn stale_sent_ingress_ignores_older_frame() {
+    check_ingress_hold(MessageBody::Prompt, -1, false, false);
+}
+
+#[test]
+fn stale_sent_ingress_ignores_frame_stamped_at_deadline() {
+    let window = i64::try_from(MessageBody::Prompt.delivery_window().as_secs()).unwrap();
+    check_ingress_hold(MessageBody::Prompt, window, false, false);
+}
+
+#[test]
+fn stale_sent_ingress_ignores_other_kind() {
+    check_ingress_hold(MessageBody::Prompt, 0, true, false);
+}
+
+#[test]
+fn stale_sent_ingress_ignores_applied_frame() {
+    check_ingress_hold(MessageBody::Prompt, 0, false, true);
+}
+
 #[test]
 fn stale_sent_message_is_deferred_while_receiver_compacts() {
     let q = Queue::new();
