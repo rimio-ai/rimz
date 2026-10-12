@@ -37,6 +37,7 @@ enum RemoteSubcmd {
         after_help = "With `remote add`, --mux <name> pins the saved alias. --no-auto-forward disables listener forwarding for it."
     )]
     Add {
+        /// Name to save for this remote target.
         name: String,
         #[command(flatten)]
         args: SavedAliasArgs,
@@ -46,6 +47,7 @@ enum RemoteSubcmd {
         after_help = "--mux <name> pins the saved alias; --no-mux clears the pin. Omitted settings stay unchanged."
     )]
     Update {
+        /// Saved alias whose target or settings to change.
         #[arg(add = clap_complete::ArgValueCandidates::new(
             crate::cli::complete::remote_aliases
         ))]
@@ -60,6 +62,7 @@ enum RemoteSubcmd {
     },
     /// Install rimz on a remote alias, `[user@]host:<session-or-path>` target, or `[user@]host`.
     Setup {
+        /// Saved alias, `[user@]host:<session-or-path>` target, or `[user@]host` to install on.
         #[arg(add = clap_complete::ArgValueCandidates::new(
             crate::cli::complete::remote_aliases
         ))]
@@ -70,6 +73,7 @@ enum RemoteSubcmd {
     },
     /// Delete a saved remote alias.
     Rm {
+        /// Saved alias to remove from this machine.
         #[arg(add = clap_complete::ArgValueCandidates::new(
             crate::cli::complete::remote_aliases
         ))]
@@ -77,15 +81,18 @@ enum RemoteSubcmd {
     },
     /// Rename a saved remote alias.
     Rename {
+        /// Existing saved alias name.
         #[arg(add = clap_complete::ArgValueCandidates::new(
             crate::cli::complete::remote_aliases
         ))]
         old: String,
+        /// New name for the saved alias.
         new: String,
     },
     /// List saved remote aliases.
     #[clap(visible_alias = "ls")]
     List {
+        /// Print saved aliases and their settings as JSON.
         #[arg(long)]
         json: bool,
     },
@@ -237,10 +244,10 @@ struct ConnectionArgs {
     /// Attach despite a minor version mismatch with the host.
     #[arg(long)]
     force_version: bool,
-    /// Open the remote Zellij room in the local browser through an SSH tunnel.
+    /// Open the remote room in the local browser through an SSH tunnel.
     #[arg(long)]
     web: bool,
-    /// Local tunnel port for `--web`.
+    /// Local browser port for `--web`; by default derived from the session name in 8300..8399.
     #[arg(long, requires = "web")]
     web_port: Option<u16>,
     #[command(flatten)]
@@ -541,6 +548,30 @@ fn run_infocmp(term: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn help_describes_every_positional_and_json_output() {
+        use clap::CommandFactory;
+        let cli = crate::cli::Cli::command();
+        let remote = cli.find_subcommand("remote").unwrap();
+        for command in remote
+            .get_subcommands()
+            .filter(|command| !command.is_hide_set())
+        {
+            for arg in command
+                .get_arguments()
+                .filter(|arg| arg.is_positional() || arg.get_id() == "json")
+            {
+                assert!(
+                    arg.get_help()
+                        .is_some_and(|help| !help.to_string().is_empty()),
+                    "remote {} {} has no help",
+                    command.get_name(),
+                    arg.get_id()
+                );
+            }
+        }
+    }
 
     #[test]
     fn settings_pairs_and_update_surface() {

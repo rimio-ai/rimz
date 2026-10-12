@@ -46,7 +46,7 @@ By default the connection is supervised: RimZ keeps an SSH ControlMaster open, r
 | `--force-version` | Attach despite a minor version difference with the host, for this invocation only. See [Version checks](#version-checks). |
 | `--auto-forward`, `--no-auto-forward` | Enable or disable forwarding new remote listeners for this connection. |
 | `--web` | Open the room in your local browser instead of this terminal. See [Open a remote room in the browser](#open-a-remote-room-in-the-browser). |
-| `--web-port <port>` | The local browser port for `--web`. Requires `--web`. |
+| `--web-port <port>` | The local browser port for `--web`, by default derived from the session name in `8300..8399`. Requires `--web`. |
 | `--attach` | Connect even when stdin or stdout is not a terminal. |
 | `--no-attach`, `--print` | Print the `ssh` command instead of running it, to inspect or wrap it. |
 | `--mux <zellij\|tmux>`, `--zellij`, `--tmux` | Backend the host's `rimz` uses, overriding the alias's saved `mux`. |

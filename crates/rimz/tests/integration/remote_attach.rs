@@ -156,6 +156,18 @@ fn remote_connect_help_describes_printing_without_opening_a_room() {
         .expect("remote connect help");
     let help = stdout_line(&output);
     assert!(
+        help.contains("Open the remote room in the local browser"),
+        "{help}"
+    );
+    assert!(help.contains("8300..8399"), "{help}");
+    assert!(
+        help.split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .contains("session name"),
+        "{help}"
+    );
+    assert!(
         help.contains("Print the SSH command instead of connecting; opens nothing"),
         "{help}"
     );
