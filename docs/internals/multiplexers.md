@@ -466,7 +466,7 @@ On a `Some(old) → Some(new)` tab switch, the plugin waits the focus settle win
 
 The host classifies the observation against the accepted topology. A unique live work view in the active tab is healthy. A plugin view, the active tab's sidebar, or a live terminal in another tab is stranded, but only when the active tab has exactly one sidebar owner and a work sibling. Missing, detached, dead, superseded, foreign, and distinct-pane observations abstain. The same accepted sample also feeds host-side unique-live focus.
 
-The renderer keeps its owner, TTL, client-ambiguity, and focus-intent guards, so automatic repair never overrides an explicit cross-tab jump ([sidebar.md → selection and jump](./sidebar/sidebar.md#selection-and-jump)).
+The renderer keeps its owner, TTL, client-ambiguity, and focus-intent guards, so automatic repair never overrides an explicit cross-tab jump ([sidebar.md → selection and jump](./sidebar/sidebar.md#selection-and-jump)). On Zellij, client ambiguity means the settled evidence names distinct panes; several clients viewing one pane agree, even when the fused pane cache still lists a pre-switch view. On tmux, the ambiguity guard still reads the pane cache.
 
 The renderer acts on the strand against the live pre-action client sample rather than pane-cache agreement, re-sampling every 100 ms until the strand's TTL when the live sample disagrees. A same-writer topology older than the accepted one is not written, though a `switch-settled` wake carrying it still reports its strand against the accepted topology.
 

@@ -682,7 +682,7 @@ impl LoopState {
     fn handle_focus_stranded(&mut self, repair: &PendingFocusRepair) -> bool {
         let now_ms = crate::utils::time::unix_now_ms();
         let own_pane = self.config.own_pane.clone();
-        if let Some(target) = focus_stranded_target(
+        let verdict = focus_stranded_target(
             &self.current,
             &self.ui,
             &repair.pane_id,
@@ -690,39 +690,43 @@ impl LoopState {
             own_pane.as_ref(),
             repair.sent_at_ms,
             now_ms,
-        ) {
-            let expected =
-                (repair.pane_id.mux() == MuxName::Zellij).then(|| repair.clients.clone());
-            let dispatch = FocusRepairDispatch {
-                generation: repair.generation,
-                deadline_ms: expected.as_ref().map(|_| {
-                    repair
-                        .sent_at_ms
-                        .saturating_add(duration_millis(FOCUS_STRANDED_EVENT_TTL))
-                }),
-            };
-            spawn_pane_focus(
-                target,
-                &self.config.session_name,
-                self.runtime.clone(),
-                crate::mux::focus_anchor::FocusOrigin::AutomaticRepair,
-                expected,
-                (self.ui.scroll_offset, Some(self.ui.last_order.clone())),
-                Some(dispatch),
-            );
-            return true;
-        }
-        debug!(
-            pane = %repair.pane_id,
-            own_pane = ?own_pane,
-            generation = repair.generation,
-            evidence = ?repair.clients,
-            own_view = ?self.current.own_view,
-            viewed_panes = ?self.current.viewed_panes,
-            age_ms = now_ms.saturating_sub(repair.sent_at_ms),
-            "sidebar focus repair deferred: no unambiguous working sibling row yet",
         );
-        false
+        let target = match verdict {
+            Ok(target) => target,
+            Err(reason) => {
+                debug!(
+                    pane = %repair.pane_id,
+                    own_pane = ?own_pane,
+                    generation = repair.generation,
+                    evidence = ?repair.clients,
+                    own_view = ?self.current.own_view,
+                    viewed_panes = ?self.current.viewed_panes,
+                    age_ms = now_ms.saturating_sub(repair.sent_at_ms),
+                    reason,
+                    "sidebar focus repair deferred",
+                );
+                return false;
+            }
+        };
+        let expected = (repair.pane_id.mux() == MuxName::Zellij).then(|| repair.clients.clone());
+        let dispatch = FocusRepairDispatch {
+            generation: repair.generation,
+            deadline_ms: expected.as_ref().map(|_| {
+                repair
+                    .sent_at_ms
+                    .saturating_add(duration_millis(FOCUS_STRANDED_EVENT_TTL))
+            }),
+        };
+        spawn_pane_focus(
+            target,
+            &self.config.session_name,
+            self.runtime.clone(),
+            crate::mux::focus_anchor::FocusOrigin::AutomaticRepair,
+            expected,
+            (self.ui.scroll_offset, Some(self.ui.last_order.clone())),
+            Some(dispatch),
+        );
+        true
     }
 
     /// Re-attempt a strand the last fold could not yet act on: the snapshot may
@@ -1887,35 +1891,43 @@ fn focus_stranded_target(
     own_pane_id: Option<&PaneId>,
     sent_at_ms: u64,
     now_ms: u64,
-) -> Option<PaneId> {
-    let own_pane_id = own_pane_id?;
+) -> std::result::Result<PaneId, &'static str> {
+    let Some(own_pane_id) = own_pane_id else {
+        return Err("missing owner pane");
+    };
     if own_pane_id != stranded_pane_id {
-        return None;
+        return Err("foreign owner pane");
     }
     if now_ms.saturating_sub(sent_at_ms) > duration_millis(FOCUS_STRANDED_EVENT_TTL) {
-        return None;
-    }
-    if stranded_pane_id.mux() == MuxName::Zellij && evidence.is_empty() {
-        return None;
+        return Err("strand TTL expired");
     }
     // `focus-pane-id` is session-global: with clients viewing distinct panes it
-    // would yank a client looking elsewhere, switching tabs when the target
-    // lives in another tab. Leave the repair pending while focus ownership is
-    // ambiguous.
-    if snapshot.viewed_panes.len() > 1 {
-        return None;
+    // would yank a client looking elsewhere. Zellij checks settled evidence,
+    // fenced by a live sample at dispatch; tmux still checks the pane cache.
+    if stranded_pane_id.mux() == MuxName::Zellij {
+        let Some(first) = evidence.first() else {
+            return Err("empty settled evidence");
+        };
+        if evidence.iter().any(|view| view.pane_id != first.pane_id) {
+            return Err("distinct panes in settled evidence");
+        }
+    } else if snapshot.viewed_panes.len() > 1 {
+        return Err("distinct panes in pane cache");
     }
-    let view = snapshot.own_view.as_ref()?;
+    let Some(view) = snapshot.own_view.as_ref() else {
+        return Err("missing own view");
+    };
     if let Some(baseline) = ui.baseline_pane.as_ref()
         && view.working_pane_ids.contains(baseline)
         && row_index_of_pane(snapshot, &BodyLens::default(), baseline).is_some()
     {
-        return Some(baseline.clone());
+        return Ok(baseline.clone());
     }
     view.working_pane_ids
         .iter()
         .find(|pane| row_index_of_pane(snapshot, &BodyLens::default(), pane).is_some())
         .cloned()
+        .ok_or("no visible working sibling row")
 }
 
 /// Whether a strand the renderer could not yet act on is still worth retrying.

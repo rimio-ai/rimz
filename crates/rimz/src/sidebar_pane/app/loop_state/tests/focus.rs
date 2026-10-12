@@ -208,7 +208,8 @@ fn focus_stranded_targets_recent_own_pane_events_only() {
             Some(&sidebar),
             1_000,
             1_050,
-        ),
+        )
+        .ok(),
         Some(second_work.clone()),
     );
 
@@ -226,7 +227,8 @@ fn focus_stranded_targets_recent_own_pane_events_only() {
             Some(&foreign),
             1_000,
             1_050,
-        ),
+        )
+        .ok(),
         None,
     );
 
@@ -240,7 +242,8 @@ fn focus_stranded_targets_recent_own_pane_events_only() {
             Some(&sidebar),
             1_000,
             now,
-        ),
+        )
+        .ok(),
         None,
     );
 }
@@ -280,7 +283,8 @@ fn focus_stranded_uses_evidence_without_snapshot_client_agreement() {
                 Some(&sidebar),
                 1_000,
                 1_050,
-            ),
+            )
+            .ok(),
             Some(second_work.clone()),
             "a settled strand must not wait for the pane frame's client sample",
         );
@@ -299,7 +303,8 @@ fn focus_stranded_keeps_empty_evidence_and_tmux_ambiguity_guards() {
             Some(&sidebar),
             1_000,
             1_050,
-        ),
+        )
+        .ok(),
         None,
     );
     let tmux_sidebar = PaneId::from_parts(MuxName::Tmux, "%10");
@@ -316,7 +321,8 @@ fn focus_stranded_keeps_empty_evidence_and_tmux_ambiguity_guards() {
             Some(&tmux_sidebar),
             1_000,
             1_050,
-        ),
+        )
+        .ok(),
         None,
     );
     snapshot.viewed_panes.clear();
@@ -330,6 +336,7 @@ fn focus_stranded_keeps_empty_evidence_and_tmux_ambiguity_guards() {
             1_000,
             1_050,
         )
+        .ok()
         .is_some()
     );
 }
@@ -351,7 +358,8 @@ fn focus_stranded_falls_back_to_working_sibling_when_baseline_is_missing() {
             Some(&sidebar),
             1_000,
             1_050,
-        ),
+        )
+        .ok(),
         Some(first_work),
     );
 
@@ -369,20 +377,18 @@ fn focus_stranded_falls_back_to_working_sibling_when_baseline_is_missing() {
             Some(&sidebar),
             1_000,
             1_050,
-        ),
+        )
+        .ok(),
         None,
     );
 }
 
 #[test]
-fn focus_stranded_skips_when_client_focus_is_ambiguous() {
-    let (mut snapshot, sidebar, _first_work, second_work) = focus_fixture();
-    snapshot.viewed_panes = vec![
-        sidebar.clone(),
-        PaneId::from_parts(MuxName::Zellij, "terminal_42"),
-    ];
+fn focus_stranded_uses_settled_evidence_despite_stale_viewed_panes() {
+    let (mut snapshot, sidebar, first_work, second_work) = focus_fixture();
+    snapshot.viewed_panes = vec![sidebar.clone(), first_work];
     let ui = UiState {
-        baseline_pane: Some(second_work),
+        baseline_pane: Some(second_work.clone()),
         ..UiState::default()
     };
 
@@ -395,9 +401,56 @@ fn focus_stranded_skips_when_client_focus_is_ambiguous() {
             Some(&sidebar),
             1_000,
             1_050,
-        ),
-        None,
+        )
+        .ok(),
+        Some(second_work.clone()),
     );
+    snapshot.client_views.push(crate::pane::ClientPaneView {
+        client_id: crate::ids::MuxClientId::Zellij(2),
+        pane_id: sidebar.clone(),
+    });
+    assert_eq!(
+        focus_stranded_target(
+            &snapshot,
+            &ui,
+            &sidebar,
+            &snapshot.client_views,
+            Some(&sidebar),
+            1_000,
+            1_050,
+        )
+        .ok(),
+        Some(second_work),
+    );
+}
+
+#[test]
+fn focus_stranded_refuses_distinct_panes_in_settled_evidence() {
+    let (mut snapshot, sidebar, first_work, _) = focus_fixture();
+    snapshot.client_views.push(crate::pane::ClientPaneView {
+        client_id: crate::ids::MuxClientId::Zellij(2),
+        pane_id: first_work.clone(),
+    });
+    for viewed_panes in [
+        vec![],
+        vec![sidebar.clone()],
+        vec![sidebar.clone(), first_work],
+    ] {
+        snapshot.viewed_panes = viewed_panes;
+        assert_eq!(
+            focus_stranded_target(
+                &snapshot,
+                &UiState::default(),
+                &sidebar,
+                &snapshot.client_views,
+                Some(&sidebar),
+                1_000,
+                1_050,
+            )
+            .ok(),
+            None,
+        );
+    }
 }
 
 fn zellij(raw: &str) -> PaneId {
