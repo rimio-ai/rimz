@@ -12,8 +12,8 @@
 //! CLI fallback.
 //!
 //! No live Zellij needed; the `zellij-trace` shim stands in for every mux
-//! fork and its log is the proof either way. `unsafe_code = "forbid"` is
-//! workspace-wide including tests, so env is seeded onto the `rimz`
+//! fork and its log is the proof either way. `unsafe_code = "deny"` includes
+//! tests with no admitted sites, so env is seeded onto the `rimz`
 //! subprocess rather than mutated in-process (the `wakeup_pipe` discipline).
 
 #![allow(clippy::print_stdout)]

@@ -16,6 +16,8 @@ Match the size of the change to the size of the ask. A refactor you noticed on t
 
 The house style is explicit Rust, and [rust-conventions.md](./docs/contributing/rust-conventions.md) is its authority: typed IDs across module boundaries, structured parsers over ad-hoc string work, state machines where a bool would drift, typed `Result` errors at library boundaries. `unwrap`, `expect`, and panics belong in tests, build scripts, and provably impossible states; leave a comment naming why the state is impossible.
 
+Unsafe code is denied; the one admitted site is the glibc arena cap in `crates/rimz/src/main.rs`, annotated with `#[expect(unsafe_code, reason = "...")]`, and a second site is a design decision.
+
 An event or timing fix is proven at the consumer's decision point. That the producer emitted, or that a timestamp is fresh, is not evidence that the consumer saw it in time.
 
 Three invariants sit underneath that style:

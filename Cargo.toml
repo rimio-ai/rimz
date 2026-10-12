@@ -19,9 +19,11 @@ print_stdout = "deny"
 print_stderr = "deny"
 
 [workspace.lints.rust]
-unsafe_code = "forbid"
+unsafe_code = "deny"
 
 [workspace.dependencies]
+# glibc arena cap; already transitive via nix and trusted in supply-chain.
+libc = "0.2"
 # Core runtime
 tokio = { version = "1", features = ["rt", "net", "time", "sync", "macros"] }
 tracing = "0.1"

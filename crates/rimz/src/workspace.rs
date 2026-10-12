@@ -363,7 +363,7 @@ enum ResolveMode {
 }
 
 /// Process-environment lookup, injected so the pin and `$HOME` reads unit-test
-/// without mutating real env (which `forbid(unsafe_code)` rules out anyway).
+/// without mutating real env (which the workspace's `unsafe_code` deny rules out anyway).
 type EnvReader<'a> = &'a dyn Fn(&str) -> Option<std::ffi::OsString>;
 
 /// Verified pin roots harvested from sibling agent processes at a cwd,
