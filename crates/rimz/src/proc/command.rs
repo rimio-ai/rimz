@@ -2,6 +2,11 @@
 
 use std::ops::Range;
 
+#[cfg(test)]
+thread_local! {
+    pub(crate) static TOKENIZE_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// The base name of the program a command runs, seeing past a `sudo` wrapper
 /// and through known wrappers to the real command: `npm` for `sudo npm install
 /// …`, `codex` for `node /usr/bin/codex`, `opencode` for `bun
@@ -198,6 +203,8 @@ const WRAPPERS: &[(&str, Wrapper)] = &[
 ];
 
 fn tokenize(source: &str, range: Range<usize>) -> Option<Vec<Token<'_>>> {
+    #[cfg(test)]
+    TOKENIZE_CALLS.set(TOKENIZE_CALLS.get() + 1);
     let mut tokens = Vec::new();
     let mut chars = source[range.clone()].char_indices().peekable();
     while let Some((offset, ch)) = chars.next() {
