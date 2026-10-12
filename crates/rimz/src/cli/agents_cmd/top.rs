@@ -96,8 +96,7 @@ fn sample(
                 .map(|id| (id, pane_agent.pane_pid))
         })
         .collect();
-    let agents: Vec<AgentState> = snapshot
-        .agents
+    let agents: Vec<AgentState> = std::sync::Arc::unwrap_or_clone(snapshot.agents)
         .into_iter()
         .filter(|agent| !agent.is_provider_subagent())
         .filter(|agent| in_room.contains_key(&agent.agent_id))

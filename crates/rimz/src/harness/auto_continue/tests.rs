@@ -998,9 +998,10 @@ fn limit_replies_preserve_pacing_and_retry_cap() {
             ));
             activity = now + 1;
             let before_in_flight = read_park(&park_path(&runtime)).unwrap();
-            snapshot.agents[0].status = AgentStatus::Running;
-            snapshot.agents[0].last_activity = ts(activity);
-            snapshot.agents[0].user_turn_started_at = Some(ts(activity));
+            std::sync::Arc::make_mut(&mut snapshot.agents)[0].status = AgentStatus::Running;
+            std::sync::Arc::make_mut(&mut snapshot.agents)[0].last_activity = ts(activity);
+            std::sync::Arc::make_mut(&mut snapshot.agents)[0].user_turn_started_at =
+                Some(ts(activity));
             snapshot.now = ts(activity);
             assert!(snapshot.agents[0].displayed_turn_error().is_none());
             resume_parked(
@@ -1027,9 +1028,9 @@ fn limit_replies_preserve_pacing_and_retry_cap() {
             assert_eq!(record.attempts_since, Some(ts(1_000)));
             assert_eq!(record.retries, 3);
             // Real progress clears this episode before another limit starts.
-            snapshot.agents[0].context = None;
-            snapshot.agents[0].status = AgentStatus::Idle;
-            snapshot.agents[0].last_activity = ts(now);
+            std::sync::Arc::make_mut(&mut snapshot.agents)[0].context = None;
+            std::sync::Arc::make_mut(&mut snapshot.agents)[0].status = AgentStatus::Idle;
+            std::sync::Arc::make_mut(&mut snapshot.agents)[0].last_activity = ts(now);
             resume_parked(
                 &snapshot,
                 &runtime,
@@ -1100,8 +1101,8 @@ fn nudged_turn_real_progress_clears_park_and_starts_fresh_allowance() {
         assert_eq!(nudged.retries, 1);
         let messages = [resume_message(1, message_status, 6_000)];
 
-        snapshot.agents[0].last_activity = ts(6_001);
-        snapshot.agents[0].user_turn_started_at = Some(ts(6_001));
+        std::sync::Arc::make_mut(&mut snapshot.agents)[0].last_activity = ts(6_001);
+        std::sync::Arc::make_mut(&mut snapshot.agents)[0].user_turn_started_at = Some(ts(6_001));
         snapshot.now = ts(6_001);
         assert_eq!(snapshot.agents[0].status, AgentStatus::Running);
         assert!(snapshot.agents[0].displayed_turn_error().is_none());
@@ -1112,17 +1113,17 @@ fn nudged_turn_real_progress_clears_park_and_starts_fresh_allowance() {
             "in-flight turn lost its park"
         );
 
-        snapshot.agents[0].status = settled_status;
-        snapshot.agents[0].last_activity = ts(6_100);
+        std::sync::Arc::make_mut(&mut snapshot.agents)[0].status = settled_status;
+        std::sync::Arc::make_mut(&mut snapshot.agents)[0].last_activity = ts(6_100);
         snapshot.now = ts(6_100);
         assert!(snapshot.agents[0].displayed_turn_error().is_none());
         resume_parked(&snapshot, &runtime, &logins, &config, &messages);
         assert!(read_park(&path).is_none(), "real progress kept the park");
 
         write_recovered_window(&runtime);
-        snapshot.agents[0] =
+        std::sync::Arc::make_mut(&mut snapshot.agents)[0] =
             parked_agent(7_000, 7_001, TurnErrorClass::PausedRateLimit, "usage limit");
-        snapshot.agents[0].user_turn_started_at = Some(ts(7_000));
+        std::sync::Arc::make_mut(&mut snapshot.agents)[0].user_turn_started_at = Some(ts(7_000));
         snapshot.now = ts(7_001);
         resume_parked(&snapshot, &runtime, &logins, &config, &messages);
         let fresh = read_park(&path).unwrap();
@@ -1174,8 +1175,9 @@ fn overload_replies_preserve_backoff_and_retry_cap() {
                 now,
             ));
             activity = now + 1;
-            snapshot.agents[0].last_activity = ts(activity);
-            snapshot.agents[0].user_turn_started_at = Some(ts(activity));
+            std::sync::Arc::make_mut(&mut snapshot.agents)[0].last_activity = ts(activity);
+            std::sync::Arc::make_mut(&mut snapshot.agents)[0].user_turn_started_at =
+                Some(ts(activity));
             snapshot.now = ts(activity);
             assert!(snapshot.agents[0].displayed_turn_error().is_none());
             resume_parked(&snapshot, &runtime, &logins, &config, &messages);
@@ -1260,7 +1262,7 @@ fn productive_nudged_turns_start_fresh_allowances_before_limit_stops() {
             hooks.push(("StopFailure", payload.clone(), nudge_at + 101));
             let mut stopped = folded_hook_frames(&runtime, kind, &hooks);
             assert_eq!(stopped.agents[0].status, stopped_status);
-            stopped.agents[0].context = parked_agent(
+            std::sync::Arc::make_mut(&mut stopped.agents)[0].context = parked_agent(
                 1_000,
                 nudge_at + 101,
                 TurnErrorClass::PausedRateLimit,
@@ -1360,7 +1362,7 @@ fn failed_turn_holds_park_until_its_limit_marker_is_visible() {
         Some(record.clone()),
         "unclassified failed frame lost the park"
     );
-    snapshot.agents[0].context =
+    std::sync::Arc::make_mut(&mut snapshot.agents)[0].context =
         parked_agent(1_000, 6_002, TurnErrorClass::PausedRateLimit, "usage limit").context;
     assert!(snapshot.agents[0].displayed_turn_error().is_some());
     resume_parked(&snapshot, &runtime, &logins, &config, &messages);
@@ -1462,7 +1464,7 @@ fn bare_limit_replies_preserve_allowances_from_folded_provider_hooks() {
         if stopped_status == AgentStatus::Failed {
             assert!(snapshot.agents[0].last_activity > snapshot.agents[0].turn_started_at.unwrap());
         }
-        snapshot.agents[0].context =
+        std::sync::Arc::make_mut(&mut snapshot.agents)[0].context =
             parked_agent(1_000, 6_002, TurnErrorClass::PausedRateLimit, "usage limit").context;
         let record = rate_record(5_000, 1_000, Some(6_000), 2);
         write_park(&path, &record);
@@ -1517,7 +1519,7 @@ fn background_wake_bare_limit_reply_keeps_episode_anchor() {
     assert_eq!(snapshot.agents[0].turn_started_at, Some(ts(1_000)));
     assert_eq!(snapshot.agents[0].last_tool_at, Some(ts(1_001)));
     assert_eq!(snapshot.agents[0].last_activity, ts(6_001));
-    snapshot.agents[0].context =
+    std::sync::Arc::make_mut(&mut snapshot.agents)[0].context =
         parked_agent(1_500, 6_002, TurnErrorClass::PausedRateLimit, "usage limit").context;
     let mut record = rate_record(5_000, 1_500, Some(6_000), 2);
     record.attempts_since = Some(ts(900));

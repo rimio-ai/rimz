@@ -156,13 +156,15 @@ pub(crate) fn agent_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
         archived: false,
         attention_score: 0,
         last_activity: Timestamp::now(),
-        card: crate::store::snapshot::RowCard::Agent(Box::new(crate::store::snapshot::AgentCard {
-            status: crate::agents::AgentStatus::Idle,
-            phase: crate::agents::TurnPhase::Idle,
-            task: Some("inspect auth".to_owned()),
-            model: Some("Opus".to_owned()),
-            ..crate::store::snapshot::AgentCard::default()
-        })),
+        card: crate::store::snapshot::RowCard::Agent(std::sync::Arc::new(
+            crate::store::snapshot::AgentCard {
+                status: crate::agents::AgentStatus::Idle,
+                phase: crate::agents::TurnPhase::Idle,
+                task: Some("inspect auth".to_owned()),
+                model: Some("Opus".to_owned()),
+                ..crate::store::snapshot::AgentCard::default()
+            },
+        )),
     };
     snapshot.worktree_groups = vec![crate::store::snapshot::SidebarWorktreeGroup {
         pr_stack: Default::default(),

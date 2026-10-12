@@ -287,7 +287,7 @@ mod tests {
             archived: false,
             attention_score: 0,
             last_activity: now() - std::time::Duration::from_secs(age_secs as u64),
-            card: RowCard::Agent(Box::new(AgentCard {
+            card: RowCard::Agent(std::sync::Arc::new(AgentCard {
                 status: AgentStatus::Idle,
                 ..Default::default()
             })),
@@ -370,7 +370,7 @@ mod tests {
                 archived: false,
                 attention_score: 0,
                 last_activity: aged,
-                card: RowCard::Agent(Box::new(AgentCard {
+                card: RowCard::Agent(std::sync::Arc::new(AgentCard {
                     status: AgentStatus::Idle,
                     ..Default::default()
                 })),

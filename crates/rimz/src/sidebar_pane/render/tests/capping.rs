@@ -1121,10 +1121,12 @@ fn agent_row(id: &str, status: AgentStatus) -> crate::store::snapshot::SidebarRo
         archived: false,
         attention_score: 0,
         last_activity: fixed_now(),
-        card: crate::store::snapshot::RowCard::Agent(Box::new(crate::store::snapshot::AgentCard {
-            status,
-            ..crate::store::snapshot::AgentCard::default()
-        })),
+        card: crate::store::snapshot::RowCard::Agent(std::sync::Arc::new(
+            crate::store::snapshot::AgentCard {
+                status,
+                ..crate::store::snapshot::AgentCard::default()
+            },
+        )),
     }
 }
 

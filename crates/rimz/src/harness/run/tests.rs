@@ -729,8 +729,9 @@ fn stranded_park_requires_two_checks_and_preserves_racing_turns() {
         .snapshot_cached()
         .unwrap()
         .agents
-        .into_iter()
+        .iter()
         .find(|agent| Some(&agent.agent_id) == record.agent_id.as_ref())
+        .cloned()
         .expect("the parked run's card");
     let wake = crate::store::message::MessageRecord::new(
         record.workspace_id.clone(),
@@ -783,8 +784,9 @@ fn overdue_sent_wake_releases_a_clean_park_without_reconciliation() {
         .snapshot_cached()
         .unwrap()
         .agents
-        .into_iter()
+        .iter()
         .find(|agent| Some(&agent.agent_id) == record.agent_id.as_ref())
+        .cloned()
         .unwrap();
     let mut wake = MessageRecord::new(
         record.workspace_id.clone(),

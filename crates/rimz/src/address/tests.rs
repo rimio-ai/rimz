@@ -26,7 +26,7 @@ fn resolve_prefers_name_ordinal_kind_then_session_prefix() {
     let mut beta = agent("claude", "session-beta", Some("feature/x.y"), "terminal_2");
     beta.name = Some("bright-beacon".to_owned());
     beta.kind_ordinal = Some(2);
-    snapshot.agents = vec![alpha, beta];
+    snapshot.agents = vec![alpha, beta].into();
 
     assert_eq!(
         resolve_one(&snapshot, "@lucid-atlas", None, &context(None))
@@ -88,7 +88,7 @@ fn provisional_launch_id_is_not_a_session_prefix() {
     let mut launch = agent("codex", "launch_queued", Some("main"), "terminal_1");
     launch.name = Some("swift-otter".to_owned());
     launch.kind_ordinal = Some(1);
-    snapshot.agents = vec![launch];
+    snapshot.agents = vec![launch].into();
 
     assert!(matches!(
         resolve_one(&snapshot, "@launch_queued", None, &context(None)),
@@ -133,7 +133,7 @@ fn broadcast_and_group_prefix_selectors() {
 fn pane_id_bypasses_sigils() {
     let mut snapshot = empty_snapshot();
     let agent = agent("claude", "session-pane", Some("main"), "terminal_7");
-    snapshot.agents = vec![agent];
+    snapshot.agents = vec![agent].into();
     assert_eq!(
         resolve_one(
             &snapshot,
@@ -153,7 +153,7 @@ fn at_kind_ordinal_never_falls_through_to_session_prefix() {
     let mut snapshot = empty_snapshot();
     let mut agent = agent("codex", "claude-1-session", Some("main"), "terminal_1");
     agent.name = Some("solid-lumen".to_owned());
-    snapshot.agents = vec![agent];
+    snapshot.agents = vec![agent].into();
 
     assert!(matches!(
         resolve_one(&snapshot, "@claude-1", None, &context(None)),
@@ -169,7 +169,7 @@ fn at_kind_fans_out_but_resolve_one_is_ambiguous() {
     let mut two = agent("claude", "session-2", Some("main"), "terminal_2");
     two.kind_ordinal = Some(2);
     let codex = agent("codex", "session-3", Some("main"), "terminal_3");
-    snapshot.agents = vec![one, two, codex];
+    snapshot.agents = vec![one, two, codex].into();
 
     let many = resolve_many(&snapshot, "@claude", None, &context(None)).unwrap();
     assert_eq!(many.len(), 2);
@@ -202,7 +202,7 @@ fn ambiguity_lists_round_tripping_addresses_and_full_count() {
         if n == 0 {
             peer.channel = Some("docs".to_owned());
         }
-        snapshot.agents.push(peer);
+        std::sync::Arc::make_mut(&mut snapshot.agents).push(peer);
     }
     let error = resolve_one(&snapshot, "@coder", None, &context(None)).unwrap_err();
     let message = error.to_string();
@@ -245,7 +245,7 @@ fn ambiguity_uses_the_search_pool_not_only_the_matches() {
         let mut peer = agent(kind, id, Some("main"), id);
         peer.name = Some(id.to_owned());
         peer.role = Some(role.to_owned());
-        snapshot.agents.push(peer);
+        std::sync::Arc::make_mut(&mut snapshot.agents).push(peer);
     }
     let error = resolve_one(&snapshot, "@coder", None, &context(None)).unwrap_err();
     assert_eq!(
@@ -292,7 +292,7 @@ fn at_all_fans_to_the_channel_only() {
     let feat_claude = agent("claude", "session-a", Some("feat"), "terminal_1");
     let feat_codex = agent("codex", "session-b", Some("feat"), "terminal_2");
     let main_claude = agent("claude", "session-c", Some("main"), "terminal_3");
-    snapshot.agents = vec![feat_claude, feat_codex, main_claude];
+    snapshot.agents = vec![feat_claude, feat_codex, main_claude].into();
 
     let ids: Vec<&str> = resolve_many(&snapshot, "@all", None, &context(Some("feat")))
         .unwrap()
@@ -320,7 +320,7 @@ fn pane_owner_shadows_co_resident_session_from_every_address() {
     hidden_fork.kind_ordinal = Some(3);
     hidden_fork.role = Some("coder".to_owned());
     hidden_fork.origin = Some(crate::agents::SessionOrigin::Forked);
-    snapshot.agents = vec![older, owner, hidden_fork];
+    snapshot.agents = vec![older, owner, hidden_fork].into();
     let mut pane = bound_pane("codex", 2, "owner", "session-owner", "main", "terminal_1");
     pane.role = Some("coder".to_owned());
     snapshot.agent_panes = vec![pane];
@@ -374,7 +374,7 @@ fn pane_shadowing_preserves_distinct_and_closed_agents() {
     second.role = Some("coder".to_owned());
     let mut closed = agent("codex", "session-closed", Some("main"), "terminal_closed");
     closed.role = Some("coder".to_owned());
-    snapshot.agents = vec![first, second, closed];
+    snapshot.agents = vec![first, second, closed].into();
     snapshot.agent_panes = vec![
         bound_pane("codex", 1, "first", "session-first", "main", "terminal_1"),
         bound_pane("codex", 2, "second", "session-second", "main", "terminal_2"),
@@ -401,7 +401,7 @@ fn current_channel_scoping_rules() {
     let mut snapshot = empty_snapshot();
     let feat = agent("claude", "session-feat", Some("feat"), "terminal_1");
     let main = agent("claude", "session-main", Some("main"), "terminal_2");
-    snapshot.agents = vec![feat, main];
+    snapshot.agents = vec![feat, main].into();
 
     assert_eq!(
         resolve_one(&snapshot, "@claude", None, &context(Some("feat")))
@@ -436,7 +436,7 @@ fn stamped_in_place_team_channel_scopes_without_team_fallback() {
     let mut other = agent("codex", "session-other", None, "terminal_3");
     other.worktree_path = Some("/code/team-channel".to_owned());
     other.channel = Some("team-channel/docs".to_owned());
-    snapshot.agents = vec![planner, coder, other];
+    snapshot.agents = vec![planner, coder, other].into();
 
     assert_eq!(
         snapshot.agents[0].channel().as_deref(),
@@ -548,7 +548,7 @@ fn explicit_named_channel_wins_over_worktree_and_team() {
 fn zero_in_channel_but_matches_elsewhere() {
     let mut snapshot = empty_snapshot();
     let main_codex = agent("codex", "session-codex", Some("main"), "terminal_1");
-    snapshot.agents = vec![main_codex];
+    snapshot.agents = vec![main_codex].into();
 
     let err = resolve_one(&snapshot, "@codex#cli-docs", None, &context(None)).unwrap_err();
     let message = err.to_string();
@@ -571,7 +571,7 @@ fn main_addresses_the_unstamped_project_root() {
     let mut stamped = agent("codex", "stamped-session", Some("checkout"), "terminal_2");
     stamped.channel = Some("design".into());
     let other = agent("codex", "other-session", Some("auth"), "terminal_3");
-    snapshot.agents = vec![root, stamped, other];
+    snapshot.agents = vec![root, stamped, other].into();
     let scope = context(Some("scratch"));
     assert_eq!(
         resolve_one(&snapshot, "@root-reader#main", None, &scope)
@@ -586,7 +586,7 @@ fn main_addresses_the_unstamped_project_root() {
             .collect::<Vec<_>>(),
         ["root-session"]
     );
-    snapshot.agents[1].channel = Some("main".into());
+    std::sync::Arc::make_mut(&mut snapshot.agents)[1].channel = Some("main".into());
     assert_eq!(
         resolve_many(&snapshot, "@all#main", None, &scope)
             .unwrap()
@@ -640,7 +640,7 @@ fn explicit_root_alias_misses_use_the_main_header() {
     snapshot.project_root = Some(std::path::PathBuf::from("/repo/project"));
     let mut fox = agent("claude", "fox-session", Some("feature"), "terminal_1");
     fox.name = Some("fox".to_owned());
-    snapshot.agents = vec![fox];
+    snapshot.agents = vec![fox].into();
     for alias in ["main", "project", "/repo/project"] {
         for (raw, flag) in [
             (format!("@fox#{alias}"), None),
@@ -665,7 +665,7 @@ fn channel_miss_names_origin_root_and_resolving_correction() {
     design.agent_id = "design-session".into();
     design.channel = Some("design".into());
     design.root_lane = false;
-    snapshot.agents = vec![root, design];
+    snapshot.agents = vec![root, design].into();
     let mut scope = context(Some("scratchpad"));
     for (origin, note) in [
         (ChannelOrigin::Directory, "taken from a directory's name"),
@@ -694,9 +694,9 @@ fn channel_miss_names_origin_root_and_resolving_correction() {
             "root-session"
         );
     }
-    snapshot.agents.pop();
-    snapshot.agents[0].worktree_path = None;
-    snapshot.agents[0].root_lane = false;
+    std::sync::Arc::make_mut(&mut snapshot.agents).pop();
+    std::sync::Arc::make_mut(&mut snapshot.agents)[0].worktree_path = None;
+    std::sync::Arc::make_mut(&mut snapshot.agents)[0].root_lane = false;
     let message = resolve_one(&snapshot, "@root-reader", None, &scope)
         .unwrap_err()
         .to_string();
@@ -713,7 +713,7 @@ fn channel_miss_drops_ambient_origin_for_explicit_scopes() {
     let mut root = agent("codex", "root-session", Some("checkout"), "terminal_1");
     root.name = Some("root-reader".into());
     root.root_lane = true;
-    snapshot.agents = vec![root];
+    snapshot.agents = vec![root].into();
     let mut scope = context(Some("ambient"));
     scope.origin = ChannelOrigin::Directory;
     for (target, flag) in [
@@ -773,7 +773,8 @@ fn no_match_points_to_the_list_without_dumping_the_roster() {
             agent.name = Some((*name).to_owned());
             agent
         })
-        .collect();
+        .collect::<Vec<_>>()
+        .into();
 
     let err = resolve_one(&snapshot, "@missing-name", None, &context(None)).unwrap_err();
     let message = err.to_string();
@@ -794,7 +795,7 @@ fn no_match_suggests_close_pet_names() {
     close.name = Some("otter-swift".to_owned());
     let mut far = agent("claude", "session-2", Some("main"), "terminal_2");
     far.name = Some("calm-fox".to_owned());
-    snapshot.agents = vec![close, far];
+    snapshot.agents = vec![close, far].into();
 
     let message = resolve_one(&snapshot, "@swift-otter", None, &context(None))
         .unwrap_err()
@@ -820,7 +821,7 @@ fn handle_is_shortest_unambiguous_and_round_trips() {
     let mut b = agent("claude", "session-b", Some("main"), "terminal_3");
     b.kind_ordinal = Some(2);
     b.name = Some("bright-lark".to_owned());
-    snapshot.agents = vec![solo, a, b];
+    snapshot.agents = vec![solo, a, b].into();
     let peers: Vec<&AgentState> = snapshot.agents.iter().collect();
 
     // The only claude in `docs` reads as the bare kind; two claudes sharing
@@ -885,7 +886,7 @@ fn handle_falls_back_to_petname_without_an_ordinal() {
     a.name = Some("swift-otter".to_owned());
     let mut b = agent("codex", "session-b", Some("main"), "terminal_2");
     b.name = Some("brave-lark".to_owned());
-    snapshot.agents = vec![a, b];
+    snapshot.agents = vec![a, b].into();
     let peers: Vec<&AgentState> = snapshot.agents.iter().collect();
 
     assert_eq!(agent_handle(peers[0], &peers, false), "@swift-otter");
@@ -1057,7 +1058,7 @@ fn channelless_handle_disambiguates_against_same_kind_elsewhere() {
     loose.kind_ordinal = Some(1);
     let mut in_main = agent("claude", "session-main", Some("main"), "terminal_2");
     in_main.kind_ordinal = Some(2);
-    snapshot.agents = vec![loose, in_main];
+    snapshot.agents = vec![loose, in_main].into();
     let peers: Vec<&AgentState> = snapshot.agents.iter().collect();
 
     assert_eq!(agent_handle(peers[0], &peers, true), "@lucid-atlas");
@@ -1083,7 +1084,7 @@ fn channelless_handle_falls_back_to_session_without_a_petname() {
     // address left that still names exactly the loose agent.
     let loose = agent("claude", "session-loose", None, "terminal_1");
     let in_main = agent("claude", "session-main", Some("main"), "terminal_2");
-    snapshot.agents = vec![loose, in_main];
+    snapshot.agents = vec![loose, in_main].into();
     let peers: Vec<&AgentState> = snapshot.agents.iter().collect();
 
     let handle = agent_handle(peers[0], &peers, true);
@@ -1106,7 +1107,7 @@ fn profile_resolves_as_a_profile_handle_and_renders_first() {
     let mut explorer = agent("claude", "session-explorer", Some("auth"), "terminal_2");
     explorer.profile = Some("explorer".to_owned());
     explorer.kind_ordinal = Some(2);
-    snapshot.agents = vec![planner, explorer];
+    snapshot.agents = vec![planner, explorer].into();
     let peers: Vec<&AgentState> = snapshot.agents.iter().collect();
 
     // The profile names exactly its agent; the shared kind names both, so it is
@@ -1146,7 +1147,7 @@ fn explicit_name_renders_and_round_trips_before_profile() {
     named.profile = Some("docs".to_owned());
     let mut profiled = agent("codex", "session-profile", Some("auth"), "terminal_2");
     profiled.profile = Some("writer".to_owned());
-    snapshot.agents = vec![named, profiled];
+    snapshot.agents = vec![named, profiled].into();
     let peers: Vec<&AgentState> = snapshot.agents.iter().collect();
 
     let handle = agent_handle(peers[0], &peers, true);
@@ -1178,7 +1179,7 @@ fn minted_name_stays_fallback_for_solo_agent() {
     let mut snapshot = empty_snapshot();
     let mut minted = agent("claude", "session-claude", Some("auth"), "terminal_1");
     minted.name = Some("lucid-atlas".to_owned());
-    snapshot.agents = vec![minted];
+    snapshot.agents = vec![minted].into();
     let peers: Vec<&AgentState> = snapshot.agents.iter().collect();
 
     assert_eq!(agent_handle(peers[0], &peers, true), "@claude#auth");
@@ -1199,7 +1200,7 @@ fn kind_name_profile_handle_uses_round_tripping_disambiguator() {
     let mut profiled = agent("claude", "session-profile", Some("main"), "terminal_2");
     profiled.profile = Some("claude".to_owned());
     profiled.kind_ordinal = Some(2);
-    snapshot.agents = vec![bare, profiled];
+    snapshot.agents = vec![bare, profiled].into();
     let peers: Vec<&AgentState> = snapshot.agents.iter().collect();
 
     assert!(matches!(
@@ -1228,7 +1229,7 @@ fn shared_profile_degrades_to_the_kind_ordinal_handle() {
     let mut b = agent("claude", "session-b", Some("auth"), "terminal_2");
     b.profile = Some("planner".to_owned());
     b.kind_ordinal = Some(2);
-    snapshot.agents = vec![a, b];
+    snapshot.agents = vec![a, b].into();
     let peers: Vec<&AgentState> = snapshot.agents.iter().collect();
 
     assert!(matches!(
@@ -1260,7 +1261,7 @@ fn role_resolves_before_profile_and_renders_first_when_unique() {
     coder.profile = Some("codex-coder".to_owned());
     coder.role = Some("coder".to_owned());
     coder.kind_ordinal = Some(1);
-    snapshot.agents = vec![planner, coder];
+    snapshot.agents = vec![planner, coder].into();
     let peers: Vec<&AgentState> = snapshot.agents.iter().collect();
 
     assert_eq!(
@@ -1285,7 +1286,7 @@ fn shared_role_requires_fanout_and_degrades_to_profile_or_ordinal() {
     b.profile = Some("planner-b".to_owned());
     b.role = Some("planner".to_owned());
     b.kind_ordinal = Some(2);
-    snapshot.agents = vec![a, b];
+    snapshot.agents = vec![a, b].into();
     let peers: Vec<&AgentState> = snapshot.agents.iter().collect();
 
     assert_eq!(
@@ -1308,7 +1309,7 @@ fn message_header_uses_live_handle_and_channel_only_when_crossing_channels() {
     let mut sender = agent("claude", "session-sender", Some("docs"), "terminal_1");
     sender.name = Some("lucid-atlas".to_owned());
     let target = agent("codex", "session-target", Some("docs"), "terminal_2");
-    snapshot.agents = vec![sender, target];
+    snapshot.agents = vec![sender, target].into();
     let peers: Vec<&AgentState> = snapshot.agents.iter().collect();
     let sender = crate::store::message::MessageSender::Agent {
         agent_id: None,
@@ -1336,7 +1337,7 @@ fn message_header_uses_explicit_live_handle() {
     sender.name = Some("writer".to_owned());
     sender.name_explicit = true;
     let target = agent("codex", "session-target", Some("docs"), "terminal_2");
-    snapshot.agents = vec![sender, target];
+    snapshot.agents = vec![sender, target].into();
     let peers: Vec<&AgentState> = snapshot.agents.iter().collect();
     let sender = crate::store::message::MessageSender::Agent {
         agent_id: None,
@@ -1417,7 +1418,7 @@ fn message_header_live_handle_disambiguates_same_kind_peers() {
     let mut two = agent("claude", "session-b", Some("main"), "terminal_2");
     two.name = Some("bright-lark".to_owned());
     two.kind_ordinal = Some(2);
-    snapshot.agents = vec![one, two];
+    snapshot.agents = vec![one, two].into();
     let peers: Vec<&AgentState> = snapshot.agents.iter().collect();
     let sender = crate::store::message::MessageSender::Agent {
         agent_id: None,
@@ -1508,7 +1509,7 @@ fn message_header_uses_live_petname_and_profile_label() {
     let mut live = agent("claude", "session-sender", Some("auth"), "terminal_1");
     live.name = Some("calm-fox".to_owned());
     live.profile = Some("planner".to_owned());
-    snapshot.agents = vec![other_planner, live];
+    snapshot.agents = vec![other_planner, live].into();
     let peers: Vec<&AgentState> = snapshot.agents.iter().collect();
     let sender = crate::store::message::MessageSender::Agent {
         agent_id: None,
@@ -1531,7 +1532,7 @@ fn pane_binding_distinguishes_exact_provisional_and_lazy_targets() {
     let exact = agent("codex", "session-exact", Some("auth"), "terminal_1");
     let mut provisional = agent("claude", "launch_pending", Some("docs"), "terminal_2");
     provisional.name = Some("fresh-launch".to_owned());
-    snapshot.agents = vec![exact, provisional];
+    snapshot.agents = vec![exact, provisional].into();
 
     let exact_pane = bound_pane("codex", 1, "exact", "session-exact", "auth", "terminal_1");
     let provisional_pane = lazy_pane("claude", "/repo/docs", "terminal_2");
@@ -1558,7 +1559,7 @@ fn pane_binding_distinguishes_exact_provisional_and_lazy_targets() {
 fn pane_binding_rejects_wrong_channel_stale_and_wrong_pinned_panes() {
     let mut snapshot = empty_snapshot();
     let provisional = agent("claude", "launch_pending", Some("docs"), "terminal_1");
-    snapshot.agents = vec![provisional];
+    snapshot.agents = vec![provisional].into();
 
     let wrong_channel = lazy_pane("claude", "/repo/auth", "terminal_1");
     assert!(
@@ -1909,7 +1910,7 @@ fn launch_role_follows_the_current_conversation_without_a_pane_frame() {
         Some("agent-start".to_owned()),
     ));
     let mut snapshot = empty_snapshot();
-    snapshot.agents = vec![primary.clone(), fork.clone()];
+    snapshot.agents = vec![primary.clone(), fork.clone()].into();
 
     let resolved = resolve_one(&snapshot, "@coder", None, &context(Some("auth"))).unwrap();
     assert_eq!(resolved.agent_id.as_str(), "fork");
@@ -1937,7 +1938,7 @@ fn launch_role_follows_the_current_conversation_without_a_pane_frame() {
 
     primary.status = AgentStatus::Running;
     primary.last_activity = Timestamp::from_second(3_000).unwrap();
-    snapshot.agents = vec![primary, fork];
+    snapshot.agents = vec![primary, fork].into();
     let resolved = resolve_one(&snapshot, "@coder", None, &context(Some("auth"))).unwrap();
     assert_eq!(resolved.agent_id.as_str(), "primary");
 }
@@ -1967,7 +1968,7 @@ fn closed_launch_keeps_its_role_handle_and_pane_address() {
     latest.last_activity = Timestamp::from_second(2_000).unwrap();
     latest.runtime_owner = Some(owner("latest"));
     let mut snapshot = empty_snapshot();
-    snapshot.agents = vec![older, latest];
+    snapshot.agents = vec![older, latest].into();
 
     assert_eq!(
         resolve_one(&snapshot, "@coder", None, &context(Some("auth")))
@@ -2010,7 +2011,7 @@ fn ordinal_fallback_does_not_widen_launch_delivery_tiers() {
     occupant.status = AgentStatus::Running;
     occupant.runtime_owner = Some(owner("occupant"));
     let mut snapshot = empty_snapshot();
-    snapshot.agents = vec![sibling, occupant];
+    snapshot.agents = vec![sibling, occupant].into();
 
     assert_eq!(
         resolve_one(&snapshot, "@codex-1", None, &context(Some("auth")))
@@ -2270,7 +2271,7 @@ fn claimed_and_unclaimed_reviewers() -> (AgentState, AgentState) {
 fn role_handle_survives_an_unclaimed_launch_card_in_the_lane() {
     let mut snapshot = empty_snapshot();
     let (registered, unclaimed) = claimed_and_unclaimed_reviewers();
-    snapshot.agents = vec![registered, unclaimed];
+    snapshot.agents = vec![registered, unclaimed].into();
     let peers = addressable_agents(&snapshot);
 
     for raw in ["@reviewer", "@reviewer#attribution-counts"] {
@@ -2323,7 +2324,7 @@ fn role_handle_survives_an_unclaimed_launch_card_in_the_lane() {
 fn a_role_with_no_claimed_holder_keeps_every_match() {
     let mut snapshot = empty_snapshot();
     let (_, unclaimed) = claimed_and_unclaimed_reviewers();
-    snapshot.agents = vec![unclaimed.clone()];
+    snapshot.agents = vec![unclaimed.clone()].into();
     assert_eq!(
         resolve_one(
             &snapshot,
@@ -2343,7 +2344,7 @@ fn a_role_with_no_claimed_holder_keeps_every_match() {
     second.launch_id = Some(AgentSessionId::from("launch_01a0bc81e2"));
     second.kind_ordinal = Some(77);
     second.name = Some("keen-lantern".to_owned());
-    snapshot.agents = vec![unclaimed, second];
+    snapshot.agents = vec![unclaimed, second].into();
     assert_eq!(
         resolve_many(
             &snapshot,
@@ -2366,7 +2367,7 @@ fn a_bound_launch_card_still_rivals_a_registered_holder_of_the_role() {
         MuxName::Zellij,
         "terminal_66",
     )));
-    snapshot.agents = vec![registered, bound];
+    snapshot.agents = vec![registered, bound].into();
 
     assert_eq!(
         resolve_many(
@@ -2411,7 +2412,7 @@ fn the_yield_never_crosses_lanes() {
     let (registered, mut elsewhere) = claimed_and_unclaimed_reviewers();
     elsewhere.channel = Some("other-lane".to_owned());
     elsewhere.worktree_path = Some("/repo/other-lane".to_owned());
-    snapshot.agents = vec![registered, elsewhere];
+    snapshot.agents = vec![registered, elsewhere].into();
 
     assert_eq!(
         resolve_many(&snapshot, "@reviewer", None, &context(None))

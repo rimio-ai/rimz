@@ -420,7 +420,10 @@ fn fold_resolution_frame(
     wired: WiredAgentProjection,
     runtime: &RuntimePaths,
 ) -> SidebarSnapshot {
-    crate::store::agent_context::attach_rest_certificates(runtime, snapshot.agents.iter_mut());
+    crate::store::agent_context::attach_rest_certificates(
+        runtime,
+        Arc::make_mut(&mut snapshot.agents).iter_mut(),
+    );
     snapshot.wired_kinds = wired.kinds;
     snapshot.wired_default_models = wired.default_models;
     snapshot.panes_produced_at_ms = Some(frame.produced_at_ms);

@@ -102,7 +102,7 @@ mod tests {
 
     fn group(path: &Path) -> SidebarWorktreeGroup {
         let mut row = activity_row(true, None, jiff::Timestamp::UNIX_EPOCH, path);
-        if let crate::store::snapshot::RowCard::Agent(card) = &mut row.card {
+        if let Some(card) = row.as_agent_mut() {
             card.team = Some("forge".to_owned());
         }
         let mut group = worktree_group(path, vec![row]);

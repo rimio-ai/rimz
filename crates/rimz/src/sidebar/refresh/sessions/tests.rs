@@ -16,12 +16,16 @@ fn live_session_refreshes_target_live_root_sessions() {
         workspace.clone(),
         vec![provider_panel("codex", vec![rl_window(42, None)])],
     );
-    active_with_windows
-        .agents
-        .push(root_agent("codex", "sess-active", Some("gpt-5.5-codex")));
-    active_with_windows
-        .agents
-        .push(root_agent("claude", "claude-active", Some("opus")));
+    std::sync::Arc::make_mut(&mut active_with_windows.agents).push(root_agent(
+        "codex",
+        "sess-active",
+        Some("gpt-5.5-codex"),
+    ));
+    std::sync::Arc::make_mut(&mut active_with_windows.agents).push(root_agent(
+        "claude",
+        "claude-active",
+        Some("opus"),
+    ));
     assert_eq!(
         live_session_refreshes(&active_with_windows),
         vec![
@@ -52,9 +56,11 @@ fn live_session_refreshes_target_live_root_sessions() {
 
     let mut active_no_model =
         snapshot_with_panels(workspace, vec![provider_panel("codex", Vec::new())]);
-    active_no_model
-        .agents
-        .push(root_agent("codex", "sess-active", None));
+    std::sync::Arc::make_mut(&mut active_no_model.agents).push(root_agent(
+        "codex",
+        "sess-active",
+        None,
+    ));
     assert_eq!(
         live_session_refreshes(&active_no_model),
         vec![LiveSessionRefresh {

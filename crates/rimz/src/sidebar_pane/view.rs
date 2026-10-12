@@ -380,7 +380,7 @@ mod tests {
     fn roster_keeps_attention_focus_unread_and_only_live_process_beyond_cap() {
         let mut rows = idle_rows(9);
         rows[6].unread = true;
-        rows[8].card = RowCard::Agent(Box::new(AgentCard {
+        rows[8].card = RowCard::Agent(std::sync::Arc::new(AgentCard {
             status: AgentStatus::Failed,
             ..AgentCard::default()
         }));
@@ -501,7 +501,7 @@ mod tests {
         let mut rows = idle_rows(9);
         rows[0].name = "Auth helper".to_owned();
         rows[7].worktree_branch = Some("feature/AUTH".to_owned());
-        if let RowCard::Agent(card) = &mut rows[8].card {
+        if let Some(card) = rows[8].as_agent_mut() {
             card.handle = Some("AuthScout".to_owned());
         }
         rows.push(process_row("unrelated"));
@@ -633,7 +633,7 @@ mod tests {
             archived: false,
             attention_score: 0,
             last_activity: Timestamp::now(),
-            card: RowCard::Agent(Box::new(AgentCard {
+            card: RowCard::Agent(std::sync::Arc::new(AgentCard {
                 status,
                 ..AgentCard::default()
             })),

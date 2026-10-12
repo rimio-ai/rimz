@@ -523,7 +523,7 @@ fn merge_context_versions(
 /// when one of its sessions reports a non-empty version.
 fn context_versions(snapshot: &SidebarSnapshot) -> BTreeMap<LoginKey, String> {
     let mut reported = BTreeMap::<LoginKey, Vec<&str>>::new();
-    for agent in &snapshot.agents {
+    for agent in snapshot.agents.iter() {
         if agent.is_provider_subagent() {
             continue;
         }

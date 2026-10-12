@@ -2047,8 +2047,9 @@ mod parked {
                 .snapshot()
                 .expect("parent snapshot")
                 .agents
-                .into_iter()
+                .iter()
                 .find(|agent| agent.agent_id.as_str() == "provider-session")
+                .cloned()
                 .expect("parent card");
             let message = MessageRecord::new(
                 self.env.workspace_id.clone(),
@@ -3324,9 +3325,9 @@ fn end_retry_agents(env: &Env, store: &rimz::Store) {
         if agents.is_empty() {
             return;
         }
-        for agent in agents {
+        for agent in agents.iter() {
             let observation = rimz::agents::AgentLifecycleObservation::new(
-                Some(agent.agent_id),
+                Some(agent.agent_id.clone()),
                 LifecycleSignal::Ended,
             );
             store

@@ -342,7 +342,7 @@ fn explain_reports_actionable_delivery_blockers() {
     let mut upstream = agent("sess-planner", AgentStatus::Running);
     upstream.role = Some("planner".to_owned());
     let mut dependency = live;
-    dependency.agents.push(upstream.clone());
+    std::sync::Arc::make_mut(&mut dependency.agents).push(upstream.clone());
     let after = message(&receiver, 1, "wait for plan").with_after(vec![AfterCondition {
         kind: upstream.kind.clone(),
         agent_id: upstream.agent_id.clone(),
@@ -363,7 +363,7 @@ fn explain_reports_actionable_delivery_blockers() {
         }
     );
 
-    dependency.agents[1].status = AgentStatus::Idle;
+    std::sync::Arc::make_mut(&mut dependency.agents)[1].status = AgentStatus::Idle;
     let check = explain(&after, std::slice::from_ref(&after), &dependency, now);
     assert!(check.after[0].met);
 }
@@ -469,7 +469,7 @@ fn candidate_uses_shared_evaluation_but_requires_durable_condition_stamp() {
     let receiver = agent("sess-receiver", AgentStatus::Idle);
     let upstream = agent("sess-upstream", AgentStatus::Idle);
     let mut live = snapshot(receiver.clone(), true, now);
-    live.agents.push(upstream.clone());
+    std::sync::Arc::make_mut(&mut live.agents).push(upstream.clone());
     let mut candidate = message(&receiver, 1, "after upstream").with_after(vec![AfterCondition {
         kind: upstream.kind.clone(),
         agent_id: upstream.agent_id.clone(),

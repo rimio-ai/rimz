@@ -14,8 +14,7 @@ pub(super) fn live_agents(store: Option<&rimz::Store>) -> Vec<LiveAgent> {
     store
         .and_then(|store| store.snapshot_cached().ok())
         .map(|snapshot| {
-            snapshot
-                .agents
+            std::sync::Arc::unwrap_or_clone(snapshot.agents)
                 .into_iter()
                 .filter(|agent| !agent.is_provider_subagent())
                 .map(|agent| {

@@ -1,6 +1,37 @@
 use super::*;
 use crate::store::snapshot::DailyBudgetView;
 
+#[test]
+fn shared_snapshot_fields_keep_their_json_shape() {
+    let mut snapshot =
+        room_with_agent_panes(vec![agent("claude", "parent", AgentStatus::Running, 0)]);
+    snapshot.fenced_sessions =
+        BTreeSet::from([(AgentKind::new_unchecked("claude"), "ended".into())]).into();
+    snapshot.resume_outcomes = Some(
+        vec![crate::store::snapshot::fold::ResumeOutcome {
+            message_id: crate::ids::MessageId::new(),
+            kind: AgentKind::new_unchecked("claude"),
+            agent_id: "parent".into(),
+            agent_name: None,
+            status: crate::store::message::MessageStatus::Delivered,
+            enqueued_at: epoch(),
+            updated_at: epoch(),
+        }]
+        .into(),
+    );
+    let bytes = serde_json::to_vec(&snapshot).unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    for field in ["agents", "fenced_sessions", "resume_outcomes"] {
+        assert_eq!(value[field].as_array().unwrap().len(), 1);
+    }
+    let row = &value["worktree_groups"][0]["rows"][0];
+    assert_eq!(row["row_kind"], "agent");
+    assert!(row.get("card").is_none());
+    assert!(row.get("status").is_some());
+    let decoded: SidebarSnapshot = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(serde_json::to_vec(&decoded).unwrap(), bytes);
+}
+
 // ── Rate-limit window fusion: the live half (the dashboard bars) ─────────────
 
 /// One session's reading — a set of windows that age out together.

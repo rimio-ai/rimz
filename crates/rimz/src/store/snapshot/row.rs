@@ -2,6 +2,7 @@
 //! payload the renderer paints.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -82,9 +83,10 @@ impl SidebarRow {
         }
     }
 
+    /// Return a writable agent card, cloning it if it is shared.
     pub fn as_agent_mut(&mut self) -> Option<&mut AgentCard> {
         match &mut self.card {
-            RowCard::Agent(card) => Some(card.as_mut()),
+            RowCard::Agent(card) => Some(Arc::make_mut(card)),
             RowCard::Process(_) => None,
         }
     }
@@ -318,7 +320,7 @@ impl PaneAgent {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "row_kind", rename_all = "snake_case")]
 pub enum RowCard {
-    Agent(Box<AgentCard>),
+    Agent(Arc<AgentCard>),
     Process(ProcessCard),
 }
 

@@ -1108,12 +1108,13 @@ fn next_attention_jump_targets_unread_before_read_attention() {
 
     let unread_success = &mut snapshot.worktree_groups[0].rows[1];
     unread_success.name = "claude".to_owned();
-    unread_success.card =
-        crate::store::snapshot::RowCard::Agent(Box::new(crate::store::snapshot::AgentCard {
+    unread_success.card = crate::store::snapshot::RowCard::Agent(std::sync::Arc::new(
+        crate::store::snapshot::AgentCard {
             status: AgentStatus::Success,
             phase: crate::agents::TurnPhase::Idle,
             ..crate::store::snapshot::AgentCard::default()
-        }));
+        },
+    ));
     unread_success.unread = true;
     unread_success.last_activity = snapshot.now - Duration::from_secs(900);
 
@@ -1144,12 +1145,13 @@ fn next_attention_jump_orders_unread_episodes_by_age() {
 
     let success = &mut snapshot.worktree_groups[0].rows[1];
     success.name = "claude".to_owned();
-    success.card =
-        crate::store::snapshot::RowCard::Agent(Box::new(crate::store::snapshot::AgentCard {
+    success.card = crate::store::snapshot::RowCard::Agent(std::sync::Arc::new(
+        crate::store::snapshot::AgentCard {
             status: AgentStatus::Success,
             phase: crate::agents::TurnPhase::Idle,
             ..crate::store::snapshot::AgentCard::default()
-        }));
+        },
+    ));
     success.unread = true;
     success.last_activity = snapshot.now - Duration::from_secs(3_600);
 
@@ -1192,12 +1194,13 @@ fn step_attention_index_reverses_the_inbox_walk() {
 
     let unread_success = &mut snapshot.worktree_groups[0].rows[1];
     unread_success.name = "claude".to_owned();
-    unread_success.card =
-        crate::store::snapshot::RowCard::Agent(Box::new(crate::store::snapshot::AgentCard {
+    unread_success.card = crate::store::snapshot::RowCard::Agent(std::sync::Arc::new(
+        crate::store::snapshot::AgentCard {
             status: AgentStatus::Success,
             phase: crate::agents::TurnPhase::Idle,
             ..crate::store::snapshot::AgentCard::default()
-        }));
+        },
+    ));
     unread_success.unread = true;
     unread_success.last_activity = snapshot.now - Duration::from_secs(900);
 
@@ -1317,12 +1320,13 @@ fn inbox_jumps_keep_the_make_up_filter_in_both_directions() {
     snapshot.worktree_groups[0].rows[0].unread = true;
     let success = &mut snapshot.worktree_groups[0].rows[1];
     success.name = "claude".to_owned();
-    success.card =
-        crate::store::snapshot::RowCard::Agent(Box::new(crate::store::snapshot::AgentCard {
+    success.card = crate::store::snapshot::RowCard::Agent(std::sync::Arc::new(
+        crate::store::snapshot::AgentCard {
             status: AgentStatus::Success,
             phase: crate::agents::TurnPhase::Idle,
             ..crate::store::snapshot::AgentCard::default()
-        }));
+        },
+    ));
     success.unread = true;
     success.last_activity = snapshot.now - Duration::from_secs(3_600);
     snapshot.worktree_groups[1].rows[0].unread = true;

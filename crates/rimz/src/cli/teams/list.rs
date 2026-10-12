@@ -489,7 +489,7 @@ fn live_instances(
     catalog: LiveCatalog<'_>,
 ) -> BTreeMap<String, Vec<LiveInstance>> {
     let snapshot = catalog.snapshot;
-    let cohorts = rimz::address::team_cohorts(&snapshot.agents)
+    let cohorts = rimz::address::team_cohorts(snapshot.agents.iter())
         .into_iter()
         .filter(|cohort| {
             catalog

@@ -56,19 +56,21 @@ fn clickable_block_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
         archived: false,
         attention_score: 0,
         last_activity: Timestamp::now(),
-        card: crate::store::snapshot::RowCard::Agent(Box::new(crate::store::snapshot::AgentCard {
-            status: crate::agents::AgentStatus::Running,
-            phase: crate::agents::TurnPhase::Idle,
-            task: Some("inspect auth".to_owned()),
-            model: Some("Opus".to_owned()),
-            effort: Some("high".to_owned()),
-            usage: crate::agents::AgentUsageSummary {
-                context_pct: Some(38),
-                total_tokens: Some(12_400),
-                ..crate::agents::AgentUsageSummary::default()
+        card: crate::store::snapshot::RowCard::Agent(std::sync::Arc::new(
+            crate::store::snapshot::AgentCard {
+                status: crate::agents::AgentStatus::Running,
+                phase: crate::agents::TurnPhase::Idle,
+                task: Some("inspect auth".to_owned()),
+                model: Some("Opus".to_owned()),
+                effort: Some("high".to_owned()),
+                usage: crate::agents::AgentUsageSummary {
+                    context_pct: Some(38),
+                    total_tokens: Some(12_400),
+                    ..crate::agents::AgentUsageSummary::default()
+                },
+                ..crate::store::snapshot::AgentCard::default()
             },
-            ..crate::store::snapshot::AgentCard::default()
-        })),
+        )),
     };
     let process = crate::store::snapshot::SidebarRow {
         id: "terminal_10".to_owned(),
@@ -208,11 +210,13 @@ fn filter_row(
         attention_score: 0,
         last_activity: Timestamp::now(),
         card: if is_agent {
-            crate::store::snapshot::RowCard::Agent(Box::new(crate::store::snapshot::AgentCard {
-                status: status.unwrap_or(crate::agents::AgentStatus::Idle),
-                phase: crate::agents::TurnPhase::Idle,
-                ..crate::store::snapshot::AgentCard::default()
-            }))
+            crate::store::snapshot::RowCard::Agent(std::sync::Arc::new(
+                crate::store::snapshot::AgentCard {
+                    status: status.unwrap_or(crate::agents::AgentStatus::Idle),
+                    phase: crate::agents::TurnPhase::Idle,
+                    ..crate::store::snapshot::AgentCard::default()
+                },
+            ))
         } else {
             crate::store::snapshot::RowCard::Process(crate::store::snapshot::ProcessCard::default())
         },

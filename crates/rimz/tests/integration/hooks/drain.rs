@@ -67,8 +67,9 @@ fn entitlement_marker_marks_the_recorded_login_but_replayed_drain_does_not() {
             .snapshot_cached()
             .unwrap()
             .agents
-            .into_iter()
+            .iter()
             .find(|row| row.agent_id.as_str() == "drain-session")
+            .cloned()
             .unwrap();
         assert_eq!(row.login_key().to_string(), "claude@work");
         let mut frame = stop_frame(&env);

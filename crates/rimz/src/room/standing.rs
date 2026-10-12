@@ -236,7 +236,7 @@ fn live_room_agents() -> Result<Vec<Vec<crate::agents::AgentState>>, super::Live
                 .zip(RuntimePaths::for_workspace(room.workspace_id.clone()).ok())
                 .and_then(|(paths, runtime)| Store::open_existing(paths, runtime))
                 .and_then(|store| store.snapshot_cached().ok())
-                .map(|snapshot| snapshot.agents)
+                .map(|snapshot| std::sync::Arc::unwrap_or_clone(snapshot.agents))
                 .ok_or(super::LiveRoomErr::RoomAgents {
                     session_name: room.session_name,
                     project_root: room.project_root,

@@ -84,8 +84,8 @@ fn assemble_snapshot<'a>(
         resume_outcomes,
     } = RuntimeProjection::runtime_from_refs(agents, resume_outcomes);
     let mut snapshot = SidebarSnapshot::build_with_agents(paths.workspace_id.clone(), agents, now);
-    snapshot.fenced_sessions = ended;
-    snapshot.fenced_sessions.extend(expelled);
+    snapshot.fenced_sessions = Arc::new(ended);
+    Arc::make_mut(&mut snapshot.fenced_sessions).extend(expelled);
     snapshot.reap_stale_sessions();
     let identity = WorkspaceSnapshotIdentity::from_paths(paths);
     snapshot.display_name = identity.display_name.clone();
@@ -96,7 +96,7 @@ fn assemble_snapshot<'a>(
     // against the live log length, so a racing append can never pass a
     // stale rollup off as current.
     snapshot.reflects_log = Some(extent);
-    snapshot.resume_outcomes = Some(resume_outcomes);
+    snapshot.resume_outcomes = Some(resume_outcomes.into());
     Ok(snapshot)
 }
 

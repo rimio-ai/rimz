@@ -679,6 +679,25 @@ fn closing_a_nested_child_pane_clears_its_binding() {
 }
 
 #[test]
+fn closing_an_unrelated_pane_preserves_shared_cards() {
+    let mut snapshot =
+        room_with_agent_panes(vec![agent("claude", "parent", AgentStatus::Running, 0)]);
+    let before = snapshot.clone();
+    assert!(!snapshot.remove_pane_rows(&PaneId::from_parts(MuxName::Tmux, "%absent")));
+    assert!(snapshot.rows().next().is_some());
+    for (row, prior) in snapshot.rows().zip(before.rows()) {
+        let (
+            crate::store::snapshot::RowCard::Agent(card),
+            crate::store::snapshot::RowCard::Agent(prior),
+        ) = (&row.card, &prior.card)
+        else {
+            panic!("agent cards")
+        };
+        assert!(std::sync::Arc::ptr_eq(card, prior));
+    }
+}
+
+#[test]
 fn seat_relaunched_from_its_leftover_shell_shows_before_the_first_turn() {
     // The wrapper typed into the seat's shell is a child of the pane root, and
     // its Bound event predates the provider CLI it execs into. The hosted

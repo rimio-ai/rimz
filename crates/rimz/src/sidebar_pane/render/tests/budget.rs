@@ -83,7 +83,7 @@ fn agent_row(group: usize, index: usize) -> SidebarRow {
         archived: false,
         attention_score: 0,
         last_activity: super::fixed_now(),
-        card: RowCard::Agent(Box::new(AgentCard {
+        card: RowCard::Agent(std::sync::Arc::new(AgentCard {
             status: crate::agents::AgentStatus::Running,
             phase: crate::agents::TurnPhase::Acting,
             task: Some(format!("refactor module {index} of worktree {group}")),
@@ -223,7 +223,7 @@ fn fleet(groups: usize, per_group: usize, providers: usize) -> SidebarSnapshot {
                 pr_url: None,
             })
             .collect(),
-        agents: Vec::new(),
+        agents: Default::default(),
         wired_kinds: Vec::new(),
         wired_default_models: std::collections::BTreeMap::new(),
         agent_panes: Vec::new(),
@@ -246,8 +246,8 @@ fn fleet(groups: usize, per_group: usize, providers: usize) -> SidebarSnapshot {
         fleet_budget: None,
         link: None,
         reflects_log: None,
-        fenced_sessions: std::collections::BTreeSet::new(),
-        resume_outcomes: Some(Vec::new()),
+        fenced_sessions: Default::default(),
+        resume_outcomes: Some(Default::default()),
     }
 }
 

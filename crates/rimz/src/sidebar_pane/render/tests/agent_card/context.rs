@@ -1620,8 +1620,8 @@ fn completed_compaction_empties_the_gauge_until_a_fresh_reading() {
     ];
     let folded =
         SidebarSnapshot::build_with_carryover(fixed_workspace(), events, Vec::new(), fixed_now())
-            .agents
-            .remove(0);
+            .agents[0]
+            .clone();
     let mut claude = agent(
         "claude-1",
         "claude",

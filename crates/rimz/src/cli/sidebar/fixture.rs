@@ -32,7 +32,7 @@ pub(super) fn sidebar_fixture_snapshot(state: SidebarFixtureState) -> Result<Sid
         truth_degraded: None,
         now,
         worktree_groups: Vec::new(),
-        agents: Vec::new(),
+        agents: Default::default(),
         wired_kinds: vec!["codex".to_owned()],
         wired_default_models: std::collections::BTreeMap::new(),
         agent_panes: Vec::new(),
@@ -55,8 +55,8 @@ pub(super) fn sidebar_fixture_snapshot(state: SidebarFixtureState) -> Result<Sid
         fleet_budget: None,
         link: None,
         reflects_log: None,
-        fenced_sessions: std::collections::BTreeSet::new(),
-        resume_outcomes: Some(Vec::new()),
+        fenced_sessions: Default::default(),
+        resume_outcomes: Some(Default::default()),
     };
     snapshot.theme.scheme = Some("TokyoNight Night".to_owned());
 
@@ -2139,7 +2139,7 @@ fn agent_row(spec: AgentRowSpec<'_>, now: jiff::Timestamp) -> SidebarRow {
         archived: false,
         attention_score: 0,
         last_activity: activity_at,
-        card: RowCard::Agent(Box::new(card)),
+        card: RowCard::Agent(std::sync::Arc::new(card)),
     }
 }
 

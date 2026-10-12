@@ -271,7 +271,7 @@ fn keepalive_agents_with(
     else {
         return;
     };
-    for agent in &snapshot.agents {
+    for agent in snapshot.agents.iter() {
         let holding = policy.holding(agent, config, snapshot.now);
         if !should_keepalive(agent, config, holding, snapshot.now) {
             continue;

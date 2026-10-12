@@ -448,7 +448,7 @@ impl PaneRoster {
         let Ok(snapshot) = env.store().snapshot() else {
             return roster;
         };
-        for agent in snapshot.agents {
+        for agent in snapshot.agents.iter() {
             let Some(cwd) = agent.worktree_path.as_deref() else {
                 continue;
             };

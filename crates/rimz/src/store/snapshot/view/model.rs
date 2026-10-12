@@ -529,7 +529,7 @@ mod tests {
             attention_score: 0,
             last_activity: jiff::Timestamp::now(),
             card: if agent {
-                crate::store::snapshot::RowCard::Agent(Box::default())
+                crate::store::snapshot::RowCard::Agent(std::sync::Arc::default())
             } else {
                 crate::store::snapshot::RowCard::Process(
                     crate::store::snapshot::ProcessCard::default(),

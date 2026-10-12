@@ -117,7 +117,9 @@ fn list_panes(
 }
 
 fn alive_agents(workspace: &ResolvedWorkspace, store: &rimz::Store) -> Result<Vec<AgentState>> {
-    Ok(super::alive_snapshot(store, &workspace.session_name)?.agents)
+    Ok(std::sync::Arc::unwrap_or_clone(
+        super::alive_snapshot(store, &workspace.session_name)?.agents,
+    ))
 }
 
 fn assemble(

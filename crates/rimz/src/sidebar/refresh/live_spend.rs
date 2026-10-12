@@ -213,7 +213,8 @@ mod tests {
             snapshot.agents = vec![
                 agent_state("baselined", &wt, &transcript("baselined"), published),
                 agent_state("external", external, &transcript("external"), published),
-            ];
+            ]
+            .into();
             snapshot.worktree_groups = vec![worktree_group(
                 &wt,
                 vec![
@@ -292,7 +293,8 @@ mod tests {
             let path = if id == "linked-newborn" { linked } else { wt };
             agent_state(id, path, &transcript(id), published)
         })
-        .collect();
+        .collect::<Vec<_>>()
+        .into();
         snapshot.worktree_groups = vec![
             worktree_group(
                 wt,
@@ -389,7 +391,8 @@ mod tests {
                 &transcript("external-baselined"),
                 published,
             ),
-        ];
+        ]
+        .into();
         snapshot.worktree_groups = vec![worktree_group(
             other,
             vec![
@@ -428,7 +431,7 @@ mod tests {
         let mut antigravity =
             agent_state("current-usage", project, &transcript("current-usage"), now);
         antigravity.kind = crate::ids::AgentKind::new_unchecked("antigravity");
-        snapshot.agents = vec![antigravity];
+        snapshot.agents = vec![antigravity].into();
         snapshot.worktree_groups = vec![worktree_group(project, vec![row])];
 
         assert!(live_card_sessions(&snapshot).is_empty());
@@ -460,7 +463,7 @@ mod tests {
             now,
         );
         droid.kind = crate::ids::AgentKind::new_unchecked("droid");
-        snapshot.agents = vec![droid];
+        snapshot.agents = vec![droid].into();
         snapshot.worktree_groups = vec![worktree_group(project, vec![row])];
 
         let cards = live_card_sessions(&snapshot);

@@ -3,6 +3,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -65,6 +66,10 @@ pub struct TruthNotice {
 /// snapshot (and the pure reducer path) on the prior repo-room grouping.
 fn default_root_class() -> RootClass {
     RootClass::Repo
+}
+
+fn fenced_sessions_is_empty(sessions: &Arc<BTreeSet<(AgentKind, AgentSessionId)>>) -> bool {
+    sessions.is_empty()
 }
 
 /// Bump when [`SidebarSnapshot`]'s persisted shape changes; old
@@ -137,7 +142,7 @@ pub struct SidebarSnapshot {
     #[serde(skip, default = "Timestamp::now")]
     pub now: Timestamp,
     pub worktree_groups: Vec<SidebarWorktreeGroup>,
-    pub agents: Vec<AgentState>,
+    pub agents: Arc<Vec<AgentState>>,
     /// The agent kinds with an active observation path: installed hooks or
     /// declared local-session discovery. Gates the idle synthesis in
     /// `rows_from_panes`: a launched-but-unbound pane for an observable agent
@@ -299,13 +304,13 @@ pub struct SidebarSnapshot {
     /// ended (`ended_at`, including every reap variant and graceful end) or
     /// expelled from the runtime projection for a known-dead owner process.
     /// Stamped by `assemble_snapshot`; the pure reducer path leaves it empty.
-    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
-    pub fenced_sessions: BTreeSet<(AgentKind, AgentSessionId)>,
+    #[serde(default, skip_serializing_if = "fenced_sessions_is_empty")]
+    pub fenced_sessions: Arc<BTreeSet<(AgentKind, AgentSessionId)>>,
     /// Every terminal resume-gated prompt outcome within retention, one per message id.
     /// `None` means a pre-outcome snapshot and forces a fresh fold before the
     /// auto-continue producer reads it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub resume_outcomes: Option<Vec<ResumeOutcome>>,
+    pub resume_outcomes: Option<Arc<[ResumeOutcome]>>,
 }
 
 impl SidebarSnapshot {
@@ -365,7 +370,7 @@ impl SidebarSnapshot {
             truth_degraded: None,
             now,
             worktree_groups: Vec::new(),
-            agents,
+            agents: Arc::new(agents),
             wired_kinds: Vec::new(),
             wired_default_models: BTreeMap::new(),
             agent_panes: Vec::new(),
@@ -388,8 +393,8 @@ impl SidebarSnapshot {
             fleet_budget: None,
             link: None,
             reflects_log: None,
-            fenced_sessions: BTreeSet::new(),
-            resume_outcomes: Some(Vec::new()),
+            fenced_sessions: Arc::default(),
+            resume_outcomes: Some(Arc::default()),
         }
     }
 
@@ -507,7 +512,7 @@ impl SidebarSnapshot {
             .into_iter()
             .map(|record| ((record.kind, record.agent_id), record.context))
             .collect();
-        for agent in &mut self.agents {
+        for agent in Arc::make_mut(&mut self.agents) {
             if let Some(context) = by_key.remove(&(agent.kind.clone(), agent.agent_id.clone())) {
                 agent.attach_context(Some(context));
             }
@@ -534,7 +539,7 @@ impl SidebarSnapshot {
             .into_iter()
             .map(|record| ((record.kind, record.agent_id), record.context))
             .collect();
-        for agent in &mut self.agents {
+        for agent in Arc::make_mut(&mut self.agents) {
             if let Some(context) = by_key.remove(&(agent.kind.clone(), agent.agent_id.clone())) {
                 // Back-fill the type label when the lifecycle hook never provided one.
                 // Fork agents carry no `agent_type` in `SubagentStart`, so `task`

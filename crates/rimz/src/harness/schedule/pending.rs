@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 use std::path::Path;
+use std::sync::Arc;
 
 use crate::agents::{PendingWait, PendingWaitTrigger};
 use crate::config::{MachineConfig, WatchSpec};
@@ -157,7 +158,7 @@ fn project_run_waits(snapshot: &mut SidebarSnapshot, paths: &crate::StatePaths) 
         .agents
         .iter()
         .map(|agent| {
-            let mut waits: Vec<_> = FleetRuns::of(&snapshot.agents, &runs, agent)
+            let mut waits: Vec<_> = FleetRuns::of(snapshot.agents.iter(), &runs, agent)
                 .unsettled()
                 .into_iter()
                 .map(|(child, run)| PendingWait {
@@ -189,7 +190,10 @@ fn project_run_waits(snapshot: &mut SidebarSnapshot, paths: &crate::StatePaths) 
             waits
         })
         .collect();
-    for (agent, mut waits) in snapshot.agents.iter_mut().zip(projected) {
+    for (agent, mut waits) in Arc::make_mut(&mut snapshot.agents)
+        .iter_mut()
+        .zip(projected)
+    {
         waits.append(&mut agent.pending_waits);
         agent.pending_waits = waits;
     }
@@ -236,7 +240,7 @@ impl SessionWaits {
     }
 
     pub(crate) fn attach(mut self, snapshot: &mut SidebarSnapshot) {
-        for agent in &mut snapshot.agents {
+        for agent in Arc::make_mut(&mut snapshot.agents) {
             agent.pending_waits = self
                 .0
                 .remove(&(agent.kind.clone(), agent.agent_id.clone()))
@@ -372,7 +376,7 @@ mod tests {
             },
             armed_at: None,
         };
-        snapshot.agents[0].pending_waits = vec![catalog_wait.clone()];
+        Arc::make_mut(&mut snapshot.agents)[0].pending_waits = vec![catalog_wait.clone()];
         project_run_waits(&mut snapshot, &paths);
         assert_eq!(
             snapshot.agents[0].pending_waits[2].trigger,
@@ -382,7 +386,7 @@ mod tests {
         );
         assert_eq!(snapshot.agents[0].pending_waits[3], catalog_wait);
         std::fs::write(dir.path().join("blackboard.md"), "Stage: Done\n").unwrap();
-        snapshot.agents[0].pending_waits.clear();
+        Arc::make_mut(&mut snapshot.agents)[0].pending_waits.clear();
         project_run_waits(&mut snapshot, &paths);
         assert!(
             snapshot.agents[0]
@@ -396,7 +400,7 @@ mod tests {
             run.report_to = run::ReportTo::Nobody;
             run::write(&paths.runs_dir, run).unwrap();
         }
-        snapshot.agents[0].pending_waits.clear();
+        Arc::make_mut(&mut snapshot.agents)[0].pending_waits.clear();
         project_run_waits(&mut snapshot, &paths);
         assert_eq!(
             snapshot.agents[0].pending_waits,

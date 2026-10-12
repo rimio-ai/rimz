@@ -229,8 +229,9 @@ mod tests {
                     .snapshot_cached()
                     .unwrap()
                     .agents
-                    .into_iter()
+                    .iter()
                     .find(|agent| agent.agent_id.as_str() == "parent")
+                    .cloned()
                     .unwrap();
                 let mut message = MessageRecord::new(
                     store.paths().workspace_id.clone(),
@@ -279,8 +280,9 @@ mod tests {
             .snapshot_cached()
             .unwrap()
             .agents
-            .into_iter()
+            .iter()
             .find(|agent| agent.agent_id.as_str() == "parent")
+            .cloned()
             .unwrap();
         let now = jiff::Timestamp::now();
         let mut message = MessageRecord::new(
