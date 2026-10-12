@@ -5,7 +5,7 @@ Local contract for `crates/rimz/src/diag/` — append-only JSONL evidence. Exten
 ## Evidence, not input
 
 - **Diagnostics are for a human.** Correctness reads the store, the CAS rules, and the caches. No correctness path reads a diagnostic record back, and nothing here gates product behaviour.
-- **Records are anomaly-only.** A steady-state tick writes nothing, which is what keeps the log readable when something does go wrong.
+- **Records are anomaly-first.** A steady-state tick writes nothing. The fetch worker emits one aggregate delivery window per minute, not a record per tick or pane.
 - **Writes are best-effort.** A failed append logs at debug and returns; the calling path continues unchanged.
 - **Only the sink touches disk.** Pure projection layers return diagnostics as data and hand them to `DiagSink`, so a fold stays testable and quiet.
 - Rate limiting lives with the sink: an identity window plus a per-kind ceiling bounds a loop that would otherwise flood the log.

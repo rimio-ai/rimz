@@ -1,8 +1,8 @@
 use super::*;
 use rimz::diag::record::{
-    AnomalyKind, DiagEnvelope, DiagEvent, EventsSig, FetchFoldCause, FetchFoldCauseStats,
-    FrameStamp, HostedCarryDropReason, LocalSessionBindRejectReason, PaneDropEvidence,
-    PaneDropViewEvidence, TickLoop, WorkPaneBoundaryMove,
+    AnomalyKind, DiagEnvelope, DiagEvent, EventsSig, FrameStamp, HostedCarryDropReason,
+    LocalSessionBindRejectReason, PaneDropEvidence, PaneDropViewEvidence, TickLoop,
+    WorkPaneBoundaryMove,
 };
 use rimz::ids::LinkTier;
 
@@ -699,16 +699,12 @@ fn diagnostic_classification_covers_retained_and_reason_sensitive_events() {
             model::DoctorImpact::Warn,
         ),
         (
-            DiagEvent::FetchFoldStats {
+            DiagEvent::FetchDeliveryStats {
                 interval_ms: 30_000,
-                causes: vec![FetchFoldCauseStats {
-                    cause: FetchFoldCause::Backstop,
-                    memo_skips: 1,
-                    full_folds: 0,
-                    adoptions: 0,
-                    fallbacks: 0,
-                    fold_ms: 0,
-                }],
+                cycles: 1,
+                content_deliveries: 0,
+                unchanged_deliveries: 1,
+                fold_ms: 0,
             },
             model::DoctorState::Expected,
             model::DoctorImpact::Info,

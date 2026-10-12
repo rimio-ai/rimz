@@ -453,7 +453,7 @@ pub struct PresenceSample {
 #[serde(rename_all = "snake_case", tag = "state")]
 pub enum SidebarPresence {
     Active,
-    Idle { idle_ms: u64 },
+    Idle { last_input_ms: u64 },
     Detached,
 }
 
@@ -470,7 +470,7 @@ impl SidebarPresence {
             Some(last_input_ms) => {
                 let idle_ms = now_ms.saturating_sub(last_input_ms);
                 if idle_ms >= idle_threshold_ms {
-                    Self::Idle { idle_ms }
+                    Self::Idle { last_input_ms }
                 } else {
                     Self::Active
                 }
@@ -778,6 +778,16 @@ mod tests {
     fn presence_classifies_detached_active_idle_boundary_and_unknown_idle() {
         let now = 1_700_000_000_000;
         let threshold_ms = 15 * 60 * 1_000;
+        let idle_sample = PresenceSample {
+            human_clients: 1,
+            last_input_ms: Some(now - threshold_ms),
+            sampled_at_ms: now,
+        };
+        assert_eq!(
+            SidebarPresence::classify(idle_sample, now, threshold_ms),
+            SidebarPresence::classify(idle_sample, now + 60_000, threshold_ms),
+            "idle presence content must stay stable as the snapshot clock advances",
+        );
 
         assert_eq!(
             SidebarPresence::classify(
@@ -814,7 +824,7 @@ mod tests {
                 threshold_ms,
             ),
             SidebarPresence::Idle {
-                idle_ms: threshold_ms,
+                last_input_ms: now - threshold_ms,
             },
         );
         assert_eq!(
@@ -840,7 +850,7 @@ mod tests {
                 threshold_ms,
             ),
             SidebarPresence::Idle {
-                idle_ms: threshold_ms + 5_000,
+                last_input_ms: now - threshold_ms,
             },
         );
     }

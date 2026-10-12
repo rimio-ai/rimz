@@ -233,7 +233,7 @@ pub(super) struct FooterParts {
 pub(super) fn footer_parts(snapshot: &SidebarSnapshot, theme: &Theme, width: usize) -> FooterParts {
     const HELP_TEXT: &str = "? for help";
 
-    let presence = presence_badge(snapshot.presence, theme, width);
+    let presence = presence_badge(snapshot.presence, snapshot.now, theme, width);
     let link = snapshot
         .link
         .as_ref()
@@ -313,6 +313,7 @@ fn footer_left_spans(
 
 fn presence_badge(
     presence: Option<SidebarPresence>,
+    now: jiff::Timestamp,
     theme: &Theme,
     width: usize,
 ) -> Option<Span<'static>> {
@@ -320,8 +321,9 @@ fn presence_badge(
     let glyph = theme.glyph(GlyphRole::ChromePresenceAway);
     let mut text = match presence {
         SidebarPresence::Active => return None,
-        SidebarPresence::Idle { idle_ms } => {
-            let minutes = idle_ms / 60_000;
+        SidebarPresence::Idle { last_input_ms } => {
+            let minutes =
+                (now.as_millisecond().max(0) as u64).saturating_sub(last_input_ms) / 60_000;
             if minutes == 0 {
                 format!("{glyph} idle")
             } else {

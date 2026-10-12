@@ -371,7 +371,9 @@ fn bench_idle_cycle(bencher: Bencher, orphans: usize, apply: bool) {
             (tempdir, cycle)
         })
         .bench_local_refs(|(_, cycle)| {
-            counts = counted(|| cycle.run_cycle());
+            counts = counted(|| {
+                cycle.run_cycle();
+            });
         });
     writeln!(
         std::io::stderr(),

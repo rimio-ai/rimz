@@ -1,6 +1,7 @@
 //! Off-thread fast folds, pane production, and single-flight request coalescing.
 //! The host shares one warm rollup cursor across both lanes. Heavy cache
 //! refreshes run separately so render and input never block on production.
+//! Every admitted request folds; acknowledged equal content delivers only clocks.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::mpsc::{Sender, SyncSender};
@@ -68,6 +69,11 @@ pub(super) enum FetchUpdate {
         phase: FetchPhase,
         source: SnapshotSource,
     },
+    Unchanged {
+        clock: SnapshotClock,
+        phase: FetchPhase,
+        source: SnapshotSource,
+    },
     Failed {
         error: String,
     },
@@ -130,6 +136,32 @@ struct SnapshotPublication {
     source: SnapshotSource,
 }
 
+#[derive(Clone, Copy)]
+pub(super) struct SnapshotClock {
+    now: jiff::Timestamp,
+    generated_at: jiff::Timestamp,
+    panes_produced_at_ms: Option<u64>,
+    panes_observed_at_ms: Option<u64>,
+}
+
+impl SnapshotClock {
+    fn of(snapshot: &SidebarSnapshot) -> Self {
+        Self {
+            now: snapshot.now,
+            generated_at: snapshot.generated_at,
+            panes_produced_at_ms: snapshot.panes_produced_at_ms,
+            panes_observed_at_ms: snapshot.panes_observed_at_ms,
+        }
+    }
+
+    pub(super) fn apply(self, snapshot: &mut SidebarSnapshot) {
+        snapshot.now = self.now;
+        snapshot.generated_at = self.generated_at;
+        snapshot.panes_produced_at_ms = self.panes_produced_at_ms;
+        snapshot.panes_observed_at_ms = self.panes_observed_at_ms;
+    }
+}
+
 impl FetchUpdate {
     pub(super) fn is_final(&self) -> bool {
         if let Self::Shared { update, .. } = self {
@@ -140,6 +172,9 @@ impl FetchUpdate {
             Self::Snapshot {
                 phase: FetchPhase::Interim,
                 ..
+            } | Self::Unchanged {
+                phase: FetchPhase::Interim,
+                ..
             }
         )
     }
@@ -148,7 +183,91 @@ impl FetchUpdate {
         match self {
             Self::Shared { update, .. } => update.snapshot_mut(),
             Self::Snapshot { snapshot, .. } => Some(snapshot),
-            Self::Failed { .. } => None,
+            Self::Unchanged { .. } | Self::Failed { .. } => None,
+        }
+    }
+
+    fn is_success(&self) -> bool {
+        match self {
+            Self::Shared { update, .. } => update.is_success(),
+            Self::Failed { .. } => false,
+            _ => true,
+        }
+    }
+
+    fn is_unchanged(&self) -> bool {
+        match self {
+            Self::Shared { update, .. } => update.is_unchanged(),
+            Self::Unchanged { .. } => true,
+            _ => false,
+        }
+    }
+
+    fn same_content(&self, previous: &Self) -> bool {
+        match (self, previous) {
+            (
+                Self::Shared { update, context },
+                Self::Shared {
+                    update: prior,
+                    context: prior_context,
+                },
+            ) => {
+                context.inputs.anchor == prior_context.inputs.anchor
+                    && context.inputs.filter == prior_context.inputs.filter
+                    && update.same_content(prior)
+            }
+            (
+                Self::Snapshot { snapshot, .. },
+                Self::Snapshot {
+                    snapshot: prior, ..
+                },
+            ) => same_snapshot_content(snapshot, prior),
+            _ => false,
+        }
+    }
+
+    fn into_unchanged(self) -> Self {
+        match self {
+            Self::Shared { update, context } => Self::Shared {
+                update: Box::new(update.into_unchanged()),
+                context,
+            },
+            Self::Snapshot {
+                snapshot,
+                phase,
+                source,
+            } => Self::Unchanged {
+                clock: SnapshotClock::of(&snapshot),
+                phase,
+                source,
+            },
+            update => update,
+        }
+    }
+
+    fn restore_content(&mut self, previous: &Self) {
+        match (self, previous) {
+            (Self::Shared { update, .. }, Self::Shared { update: prior, .. }) => {
+                update.restore_content(prior)
+            }
+            (update @ Self::Unchanged { .. }, Self::Snapshot { snapshot, .. }) => {
+                let Self::Unchanged {
+                    clock,
+                    phase,
+                    source,
+                } = *update
+                else {
+                    unreachable!()
+                };
+                let mut snapshot = snapshot.clone();
+                clock.apply(&mut snapshot);
+                *update = Self::Snapshot {
+                    snapshot,
+                    phase,
+                    source,
+                };
+            }
+            _ => {}
         }
     }
 
@@ -158,6 +277,105 @@ impl FetchUpdate {
             update => (update, None),
         }
     }
+}
+
+fn shared_eq<T: PartialEq + ?Sized>(left: &Arc<T>, right: &Arc<T>) -> bool {
+    Arc::ptr_eq(left, right) || left == right
+}
+
+fn reuse_shared<T: PartialEq + ?Sized>(shared: &mut Arc<T>, local: &mut Arc<T>, prior: &Arc<T>) {
+    if Arc::ptr_eq(shared, prior) || shared != prior {
+        return;
+    }
+    let local_shares = Arc::ptr_eq(shared, local);
+    *shared = prior.clone();
+    if local_shares {
+        *local = prior.clone();
+    }
+}
+
+fn same_snapshot_content(left: &SidebarSnapshot, right: &SidebarSnapshot) -> bool {
+    // Exhaustive: a new snapshot field must join equality or explicitly be a clock.
+    let SidebarSnapshot {
+        snapshot_version,
+        workspace_id,
+        display_name,
+        generated_at: _,
+        panes_produced_at_ms: _,
+        panes_observed_at_ms: _,
+        now: _,
+        viewed_panes,
+        client_views,
+        pane_session_name,
+        focused_pane,
+        presence,
+        truth_degraded,
+        worktree_groups,
+        agents,
+        wired_kinds,
+        wired_default_models,
+        agent_panes,
+        own_view,
+        only_daemon_view_remains,
+        project_root,
+        worktree_roots,
+        worktree_home,
+        root_class,
+        sidebar,
+        theme,
+        attention,
+        providers,
+        value_tally,
+        workspace_value_tally,
+        today_spend_live_usd,
+        today_spend_epoch_secs,
+        fleet_day_spend_usd,
+        fleet_day_spend_epoch_secs,
+        fleet_budget,
+        link,
+        reflects_log,
+        fenced_sessions,
+        resume_outcomes,
+    } = left;
+    shared_eq(worktree_groups, &right.worktree_groups)
+        && shared_eq(agents, &right.agents)
+        && shared_eq(agent_panes, &right.agent_panes)
+        && shared_eq(fenced_sessions, &right.fenced_sessions)
+        && match (resume_outcomes, &right.resume_outcomes) {
+            (Some(left), Some(right)) => shared_eq(left, right),
+            (None, None) => true,
+            _ => false,
+        }
+        && snapshot_version == &right.snapshot_version
+        && workspace_id == &right.workspace_id
+        && display_name == &right.display_name
+        && viewed_panes == &right.viewed_panes
+        && client_views == &right.client_views
+        && pane_session_name == &right.pane_session_name
+        && focused_pane == &right.focused_pane
+        && presence == &right.presence
+        && truth_degraded == &right.truth_degraded
+        && wired_kinds == &right.wired_kinds
+        && wired_default_models == &right.wired_default_models
+        && own_view == &right.own_view
+        && only_daemon_view_remains == &right.only_daemon_view_remains
+        && project_root == &right.project_root
+        && worktree_roots == &right.worktree_roots
+        && worktree_home == &right.worktree_home
+        && root_class == &right.root_class
+        && sidebar == &right.sidebar
+        && theme == &right.theme
+        && attention == &right.attention
+        && providers == &right.providers
+        && value_tally == &right.value_tally
+        && workspace_value_tally == &right.workspace_value_tally
+        && today_spend_live_usd == &right.today_spend_live_usd
+        && today_spend_epoch_secs == &right.today_spend_epoch_secs
+        && fleet_day_spend_usd == &right.fleet_day_spend_usd
+        && fleet_day_spend_epoch_secs == &right.fleet_day_spend_epoch_secs
+        && fleet_budget == &right.fleet_budget
+        && link == &right.link
+        && reflects_log == &right.reflects_log
 }
 
 /// Record every production attempt so errors and forced refreshes bound the next ordinary attempt.
@@ -241,6 +459,7 @@ struct FetchWorker {
     notifications: NotificationState,
     link_notifications: LinkNotificationState,
     meter: TickMeter,
+    window: FetchWindow,
     tab_name_memo: TabNameMemo,
     session_listed: fn(crate::MuxName, &str) -> bool,
     #[cfg(test)]
@@ -363,28 +582,29 @@ impl IdleCycleFixture {
             .collect();
     }
 
-    /// Fold and deliver once with production not due; retain the cursor and delivery state.
-    pub fn run_cycle(&mut self) {
+    /// Fold once without production; return clock-only mailbox deliveries unless renderer application is enabled.
+    pub fn run_cycle(&mut self) -> usize {
         self.worker.producer_cadence.last_attempt = Some(Instant::now());
         self.worker
             .run_cycle(&self.state, FetchRequest::default(), &mut self.sink);
+        let mut unchanged = 0;
         for receiver in &self.receivers {
             let update = receiver
                 .take()
                 .pop()
                 .expect("cycle delivers to every subscriber");
             assert!(update.is_final(), "idle cycle completes without production");
-            let (update, context) = update.into_parts();
-            if let FetchUpdate::Failed { error } = &update {
-                panic!("idle fold failed: {error}");
-            }
-            std::hint::black_box((update, context));
+            assert!(update.is_success(), "idle fold succeeds");
+            unchanged += usize::from(update.is_unchanged());
+            std::hint::black_box(&update);
+            receiver.acknowledge(update, true);
         }
         for (renderer, dispatcher) in &mut self.renderers {
             let before = renderer.current.now;
             renderer.on_snapshot(dispatcher);
             assert!(renderer.current.now > before, "renderer applies the cycle");
         }
+        unchanged
     }
 }
 
@@ -409,6 +629,7 @@ impl FetchWorker {
             notifications: NotificationState::default(),
             link_notifications: LinkNotificationState::default(),
             meter,
+            window: FetchWindow::default(),
             tab_name_memo: TabNameMemo::default(),
             session_listed: |mux, session| {
                 crate::mux::backend_for(mux).session_accepts_agent_close(session)
@@ -425,6 +646,18 @@ impl FetchWorker {
         sink.begin_cycle();
         if sink.cycle.is_empty() {
             return;
+        }
+        self.window.cycles += 1;
+        if request.force_fold {
+            for subscriber in &sink.cycle {
+                if let Some(mailbox) = subscriber.tx.0.upgrade() {
+                    mailbox
+                        .delivery
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .reusable = false;
+                }
+            }
         }
         let now_ms = crate::utils::time::unix_now_ms();
         let inputs = sink
@@ -446,12 +679,14 @@ impl FetchWorker {
             observation: None,
             inputs: sink.inputs.clone(),
         }));
+        let fold_started = Instant::now();
         let fast = HostInputs::fold(inputs.as_ref(), &mut self.cursor, state, &self.runtime).map(
             |workspace| WorkspaceFold {
                 workspace,
                 frame: inputs.as_ref().map(|inputs| Arc::clone(&inputs.frame)),
             },
         );
+        self.window.fold_time += fold_started.elapsed();
         let tick = self.stand(sink).tick;
         let produce = self.start_produce_if_due(request, frame_stamps, &fast, now_ms, tick);
         self.publish_fast_fold(
@@ -464,6 +699,9 @@ impl FetchWorker {
         );
         if produce {
             self.publish_produced_fold(state, request, sink);
+        }
+        if let Some(event) = self.window.finish(&sink.deliveries, Instant::now()) {
+            self.diag.emit_unlimited(event);
         }
     }
 
@@ -560,6 +798,7 @@ impl FetchWorker {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .inputs
             .clone();
+        let fold_started = Instant::now();
         let result = run_produce_guarded(&mut self.cursor, |cursor| {
             crate::sidebar::produce::produce_workspace_snapshot(
                 cursor,
@@ -571,6 +810,7 @@ impl FetchWorker {
                 &mut inputs,
             )
         });
+        self.window.fold_time += fold_started.elapsed();
         if let Some(inputs) = inputs {
             sink.host_data
                 .lock()
@@ -987,10 +1227,10 @@ pub(super) struct PendingResults {
 }
 
 impl PendingResults {
-    fn push(&mut self, mut update: FetchUpdate) {
+    fn push(&mut self, update: FetchUpdate) {
         let is_final = update.is_final();
         self.completed |= is_final;
-        if update.snapshot_mut().is_none() {
+        if !update.is_success() {
             self.outcome = Some(update);
             return;
         }
@@ -1014,8 +1254,64 @@ impl PendingResults {
 #[derive(Default)]
 struct ResultMailbox {
     pending: Mutex<PendingResults>,
+    delivery: Mutex<DeliveryMemo>,
     #[cfg(test)]
     ready: std::sync::Condvar,
+}
+
+#[derive(Default)]
+struct DeliveryMemo {
+    accepted: Option<Arc<FetchUpdate>>,
+    reusable: bool,
+    counts: Option<Arc<Mutex<DeliveryCounts>>>,
+}
+
+#[derive(Default)]
+struct DeliveryCounts {
+    content: u64,
+    unchanged: u64,
+}
+
+struct FetchWindow {
+    started: Instant,
+    cycles: u64,
+    fold_time: Duration,
+}
+
+impl Default for FetchWindow {
+    fn default() -> Self {
+        Self {
+            started: Instant::now(),
+            cycles: 0,
+            fold_time: Duration::ZERO,
+        }
+    }
+}
+
+impl FetchWindow {
+    fn finish(
+        &mut self,
+        counts: &Mutex<DeliveryCounts>,
+        now: Instant,
+    ) -> Option<crate::diag::record::DiagEvent> {
+        let interval = now.saturating_duration_since(self.started);
+        if interval < Duration::from_secs(60) {
+            return None;
+        }
+        let counts = std::mem::take(
+            &mut *counts
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+        );
+        self.started = now;
+        Some(crate::diag::record::DiagEvent::FetchDeliveryStats {
+            interval_ms: interval.as_millis() as u64,
+            cycles: std::mem::take(&mut self.cycles),
+            content_deliveries: counts.content,
+            unchanged_deliveries: counts.unchanged,
+            fold_ms: std::mem::take(&mut self.fold_time).as_millis() as u64,
+        })
+    }
 }
 
 #[derive(Clone)]
@@ -1032,18 +1328,56 @@ pub(super) fn result_channel() -> (ResultSender, ResultReceiver) {
 }
 
 impl ResultSender {
+    #[cfg(test)]
     pub(super) fn send(
         &self,
         update: FetchUpdate,
     ) -> Result<(), std::sync::mpsc::SendError<FetchUpdate>> {
+        self.send_tracked(update, None)
+    }
+
+    fn send_tracked(
+        &self,
+        mut update: FetchUpdate,
+        counts: Option<Arc<Mutex<DeliveryCounts>>>,
+    ) -> Result<(), std::sync::mpsc::SendError<FetchUpdate>> {
         let Some(mailbox) = self.0.upgrade() else {
             return Err(std::sync::mpsc::SendError(update));
         };
-        mailbox
+        let prior = {
+            let delivery = mailbox
+                .delivery
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            delivery
+                .accepted
+                .as_ref()
+                .filter(|_| delivery.reusable)
+                .cloned()
+        };
+        let unchanged = prior
+            .as_ref()
+            .is_some_and(|prior| update.same_content(prior));
+        let mut pending = mailbox
             .pending
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .push(update);
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut delivery = mailbox
+            .delivery
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        delivery.counts = counts;
+        // Fence the off-lock comparison against acknowledgement or invalidation.
+        if unchanged
+            && delivery.reusable
+            && prior
+                .as_ref()
+                .zip(delivery.accepted.as_ref())
+                .is_some_and(|(prior, accepted)| Arc::ptr_eq(prior, accepted))
+        {
+            update = update.into_unchanged();
+        }
+        pending.push(update);
         #[cfg(test)]
         mailbox.ready.notify_one();
         Ok(())
@@ -1052,13 +1386,70 @@ impl ResultSender {
 
 impl ResultReceiver {
     pub(super) fn take(&self) -> PendingResults {
-        std::mem::take(
-            &mut *self
-                .0
-                .pending
+        let mut pending = self
+            .0
+            .pending
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if pending.snapshot.is_some() || pending.outcome.is_some() {
+            self.0
+                .delivery
                 .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner()),
-        )
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .reusable = false;
+        }
+        std::mem::take(&mut *pending)
+    }
+
+    pub(super) fn acknowledge(&self, mut update: FetchUpdate, reusable: bool) {
+        let mut delivery = self
+            .0
+            .delivery
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if update.is_success()
+            && let Some(counts) = &delivery.counts
+        {
+            let mut counts = counts
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if update.is_unchanged() {
+                counts.unchanged += 1;
+            } else {
+                counts.content += 1;
+            }
+        }
+        if update.snapshot_mut().is_some() || !update.is_success() {
+            delivery.accepted = update.is_success().then(|| Arc::new(update));
+        }
+        delivery.reusable = reusable;
+    }
+
+    pub(super) fn allow_unchanged(&self, reusable: bool) {
+        self.0
+            .delivery
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .reusable = reusable;
+    }
+
+    pub(super) fn invalidate(&self) {
+        let mut pending = self
+            .0
+            .pending
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut delivery = self
+            .0
+            .delivery
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        delivery.reusable = false;
+        // Local input or fusion may have changed the consumer after this send.
+        // Keep the queued clock, but give it content to reconcile again.
+        if let (Some(update), Some(prior)) = (&mut pending.snapshot, &delivery.accepted) {
+            update.restore_content(prior);
+        }
     }
 
     #[cfg(test)]
@@ -1139,6 +1530,7 @@ struct ResultSink {
     staged: Option<(WorkspaceFold, Option<PaneId>)>,
     context: Option<Arc<FoldShared>>,
     inputs: Arc<FoldInputs>,
+    deliveries: Arc<Mutex<DeliveryCounts>>,
 }
 
 impl ResultSink {
@@ -1173,6 +1565,7 @@ impl ResultSink {
             staged: None,
             context: None,
             inputs: Arc::default(),
+            deliveries: Arc::default(),
         };
         sink.begin_cycle();
         sink
@@ -1197,8 +1590,43 @@ impl ResultSink {
     /// Deliver one update: to the eldest renderer as given, and to every
     /// other renderer as its own projection of the staged fold (a snapshot)
     /// or as a copy (anything else).
-    fn publish(&mut self, update: FetchUpdate) {
-        let staged = self.staged.take();
+    fn publish(&mut self, mut update: FetchUpdate) {
+        let mut staged = self.staged.take();
+        if let (Some((fold, _)), Some(local)) = (&mut staged, update.snapshot_mut()) {
+            let prior = self
+                .host_data
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .last_fold
+                .as_ref()
+                .map(|fold| fold.workspace.clone());
+            if let Some(prior) = prior {
+                let shared = &mut fold.workspace.0;
+                reuse_shared(
+                    &mut shared.worktree_groups,
+                    &mut local.worktree_groups,
+                    &prior.0.worktree_groups,
+                );
+                reuse_shared(&mut shared.agents, &mut local.agents, &prior.0.agents);
+                reuse_shared(
+                    &mut shared.agent_panes,
+                    &mut local.agent_panes,
+                    &prior.0.agent_panes,
+                );
+                reuse_shared(
+                    &mut shared.fenced_sessions,
+                    &mut local.fenced_sessions,
+                    &prior.0.fenced_sessions,
+                );
+                if let (Some(shared), Some(local), Some(prior)) = (
+                    &mut shared.resume_outcomes,
+                    &mut local.resume_outcomes,
+                    &prior.0.resume_outcomes,
+                ) {
+                    reuse_shared(shared, local, prior);
+                }
+            }
+        }
         let is_snapshot = matches!(update, FetchUpdate::Snapshot { .. });
         // Before the first send: a pane that reads this answer and asks again
         // must find its next request unanswered, or the worker would drop it.
@@ -1272,7 +1700,11 @@ impl ResultSink {
         }
         // A renderer that already closed removes itself from the set. A full
         // inbox already holds a wake, so a dropped one loses nothing.
-        if subscriber.tx.send(update).is_ok() {
+        if subscriber
+            .tx
+            .send_tracked(update, Some(self.deliveries.clone()))
+            .is_ok()
+        {
             let _ = subscriber.wake.try_send(Wakeup::Snapshot);
         }
     }

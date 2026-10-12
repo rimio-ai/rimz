@@ -95,6 +95,8 @@ struct PendingFocusRepair {
 }
 
 pub(super) struct LoopState {
+    #[cfg(test)]
+    pub(super) content_applications: u64,
     pub(super) current: SidebarSnapshot,
     /// The keymap beside the `[sidebar.keys]` table it was built from, rebuilt only when the snapshot's table differs.
     nav_keys: (crate::config::SidebarKeys, super::NavKeymap),
@@ -237,6 +239,8 @@ impl LoopState {
         );
         let make_up_filter = crate::sidebar::body_filter::load(&runtime);
         Self {
+            #[cfg(test)]
+            content_applications: 0,
             nav_keys: (
                 current.sidebar.keys.clone(),
                 super::NavKeymap::from_config(&current.sidebar.keys),
@@ -404,10 +408,24 @@ impl LoopState {
 
     pub(super) fn on_snapshot(&mut self, fetch: &mut FetchDispatcher) {
         let pending = self.result_rx.take();
+        let delivered = pending.snapshot.is_some() || pending.outcome.is_some();
         let saw_final = pending.completed;
         let mut rejected = false;
         for update in pending.snapshot.into_iter().chain(pending.outcome) {
             rejected |= self.apply_latest_snapshot(update);
+        }
+        if delivered {
+            self.result_rx.allow_unchanged(
+                !self.should_exit
+                    && !rejected
+                    && self.overlay_baseline.is_none()
+                    && self.gate == GateState::default()
+                    && self.health.failure_streak == 0
+                    && self.ui.order_hold.is_none()
+                    && self.tab_read_dwell_until.is_none()
+                    && !self.self_close.confirming_empty()
+                    && self.pending_focus_repair.is_none(),
+            );
         }
         if saw_final {
             fetch.complete(!self.should_exit);
@@ -469,10 +487,22 @@ impl LoopState {
     }
 
     fn apply_latest_snapshot_with_seed(&mut self, update: FetchUpdate, seed: bool) -> bool {
+        let delivered = update.clone();
         let (update, context) = update.into_parts();
         self.fold_inputs = context.as_ref().map(|context| context.inputs.clone());
         if let Some(observation) = context.and_then(|context| context.observation.clone()) {
             self.observation = Some(observation);
+        }
+        if let FetchUpdate::Unchanged { clock, .. } = update {
+            clock.apply(&mut self.current);
+            self.last_focus_observation.panes_observed_at_ms = self.current.panes_observed_at_ms;
+            self.fetched_at = Instant::now();
+            self.last_self_close_check = Instant::now();
+            self.dirty = true;
+            self.fold_inputs = None;
+            self.result_rx.acknowledge(delivered, false);
+            self.release_paint_hold_after_snapshot(false);
+            return false;
         }
         let snapshot_ok = matches!(update, FetchUpdate::Snapshot { .. });
         let mut fused_event_sent_at_ms = None;
@@ -482,6 +512,10 @@ impl LoopState {
                 phase,
                 source,
             } => {
+                #[cfg(test)]
+                {
+                    self.content_applications += 1;
+                }
                 let now_ms = crate::utils::time::unix_now_ms();
                 self.events().prune(now_ms);
                 let pulled = *snapshot;
@@ -501,10 +535,12 @@ impl LoopState {
                 }
             }
             failed @ FetchUpdate::Failed { .. } => failed,
+            FetchUpdate::Unchanged { .. } => unreachable!("clock-only delivery handled above"),
             FetchUpdate::Shared { .. } => unreachable!("unwrapped above"),
         };
         self.fetched_at = Instant::now();
         let rejected = self.fold_outcome(update, true, seed, fused_event_sent_at_ms);
+        self.result_rx.acknowledge(delivered, false);
         self.fold_inputs = None;
         if snapshot_ok {
             self.last_self_close_check = Instant::now();
@@ -550,6 +586,7 @@ impl LoopState {
     /// Fold a synthetic fused frame and snap the frame deadline so this
     /// turn's frame phase paints it now.
     fn fold_fused_now(&mut self) {
+        self.result_rx.invalidate();
         let (fused, fused_event_sent_at_ms) =
             self.fused_snapshot(crate::utils::time::unix_now_ms());
         self.fold_outcome(
@@ -572,6 +609,7 @@ impl LoopState {
         envelope: SidebarEventEnvelope,
     ) {
         let requests_verification = envelope.event.requests_producer_verification();
+        self.result_rx.invalidate();
         let sent_at_ms = envelope.sent_at_ms;
         if matches!(
             &envelope.event,
@@ -937,6 +975,7 @@ impl LoopState {
         terminal: &mut Terminal<PaneBackend>,
         fetch: &mut FetchDispatcher,
     ) -> Result<()> {
+        self.result_rx.invalidate();
         let applied = self.apply_input(wakeups, terminal)?;
         if applied.redraw && self.watched() {
             // Key/mouse input paints synchronously for instant feedback; a
@@ -1360,6 +1399,9 @@ impl LoopState {
                 source: None,
             },
             FetchUpdate::Shared { .. } => unreachable!("unwrapped above"),
+            FetchUpdate::Unchanged { .. } => {
+                unreachable!("clock-only delivery bypasses the content path")
+            }
         };
         let (prev_good, rejected, now) = self.commit_fetch(application);
         let authoritative_filter_fold = allow_shared_filter_sync
