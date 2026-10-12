@@ -703,6 +703,26 @@ fn refresh_result_carries_success_error_and_panic() {
 }
 
 #[test]
+fn refresh_worker_reuses_one_background_thread() {
+    let (threads, observed) = mpsc::channel();
+    let worker = hold::RefreshWorker::new(move || {
+        threads.send(thread::current().id()).unwrap();
+        Err(anyhow!("injected load failure"))
+    });
+    assert!(worker.is_ok(), "refresh worker must start");
+    let worker = worker.unwrap();
+    let mut ids = Vec::new();
+    for _ in 0..3 {
+        worker.requests.send(()).unwrap();
+        let result = worker.results.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(result.err().unwrap().to_string(), "injected load failure");
+        ids.push(observed.recv_timeout(Duration::from_secs(5)).unwrap());
+    }
+    assert!(ids.iter().all(|id| *id == ids[0]));
+    assert_ne!(ids[0], thread::current().id());
+}
+
+#[test]
 fn progress_bar_tracks_file_count() {
     assert_eq!(progress_bar(0, 10), "░".repeat(PROGRESS_BAR_WIDTH));
     assert_eq!(

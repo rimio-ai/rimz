@@ -3,6 +3,28 @@ use super::panel::{
 };
 use super::*;
 
+pub(super) struct RefreshWorker {
+    pub(super) requests: mpsc::SyncSender<()>,
+    pub(super) results: mpsc::Receiver<Result<Stats>>,
+}
+
+impl RefreshWorker {
+    pub(super) fn new(load: impl Fn() -> Result<Stats> + Send + 'static) -> Result<Self> {
+        let (requests, rx) = mpsc::sync_channel(1);
+        let (tx, results) = mpsc::sync_channel(1);
+        thread::Builder::new()
+            .name("rimz-stats-refresh".to_owned())
+            .spawn(move || {
+                for () in rx {
+                    if tx.send(refresh_result(&load)).is_err() {
+                        break;
+                    }
+                }
+            })?;
+        Ok(Self { requests, results })
+    }
+}
+
 pub(super) fn run_refresh(dollars: bool, hold: bool) -> Result<()> {
     install_reload_signal()?;
     let glyphs = resolve_panel_glyphs(&super::super::machine_config().theme);
@@ -13,14 +35,13 @@ pub(super) fn run_refresh(dollars: bool, hold: bool) -> Result<()> {
     // typed events that the loop drains instead of echoing them.
     let _input = TerminalModeGuard::enable(MouseCapture::Off, Screen::Alternate)?;
     let mut state = HeldStats::new(dollars, glyphs, hold);
+    let worker = RefreshWorker::new(move || load_or_refresh_stats_via_service(&paths))?;
     loop {
-        let (tx, rx) = mpsc::channel();
-        let worker_paths = paths.clone();
-        thread::spawn(move || {
-            let result = refresh_result(|| load_or_refresh_stats_via_service(&worker_paths));
-            let _ = tx.send(result);
-        });
-        match hold_cycle(&mut state, &rx)? {
+        worker
+            .requests
+            .send(())
+            .map_err(|_| anyhow!("stats refresh worker exited"))?;
+        match hold_cycle(&mut state, &worker.results)? {
             CycleExit::Refresh => {}
             CycleExit::Reload => {
                 if let Some(target) = rimz::reload::current_reexec_target() {
@@ -215,10 +236,9 @@ pub(super) fn hold_cycle(
                 deadline = deadline_after_refresh(deadline, Instant::now(), state.has_frame());
             }
             Err(mpsc::TryRecvError::Empty) => {}
-            Err(mpsc::TryRecvError::Disconnected) if !refresh_finished => {
-                return Ok(CycleExit::Refresh);
+            Err(mpsc::TryRecvError::Disconnected) => {
+                return Err(anyhow!("stats refresh worker exited"));
             }
-            Err(mpsc::TryRecvError::Disconnected) => {}
         }
         let now = Instant::now();
         if now >= deadline && refresh_finished {
