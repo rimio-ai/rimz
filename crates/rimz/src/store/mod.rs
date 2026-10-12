@@ -203,7 +203,7 @@ impl Store {
     }
 
     /// Build a fresh snapshot in memory (no disk write). Lock-free and
-    /// O(delta): the rollup resumes from the persisted fold base.
+    /// O(delta): the rollup resumes from this thread's held fold base.
     pub fn snapshot(&self) -> Result<SidebarSnapshot> {
         if self.hook_transaction.is_some() {
             return Ok(snapshot::build_from_pending(
@@ -219,7 +219,7 @@ impl Store {
     /// falling back to a re-projection on a miss. The fast path is lock-free
     /// — it reads no event log and takes no lock — so a hot fleet's snapshot
     /// fetches never contend with the agent hooks appending events.
-    /// `latest.json` is published after every mutation's lock releases and
+    /// `latest.json` publication is cadence-gated; the cached view
     /// carries the same runtime liveness expel as [`Self::snapshot`], so the
     /// served rollup matches the live read; the extent stamp catches a fetch
     /// racing a just-appended event and re-projects instead. Cached snapshots
