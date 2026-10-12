@@ -119,6 +119,9 @@ impl Drop for IngressAppendLock {
 }
 
 impl WorkspaceLock {
+    /// Block until the lock is held, creating the lock file and its parent
+    /// directories. A caller that may run before room birth checks that the
+    /// room root exists first, or this call creates it.
     pub fn acquire(path: &Path) -> Result<Self> {
         Self::acquire_with_timeout(path, LOCK_TIMEOUT)
     }

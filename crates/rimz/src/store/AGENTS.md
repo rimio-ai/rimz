@@ -16,6 +16,7 @@ Store folds the agent model, so `store` imports `agents` and nothing under `agen
 ## Reads
 
 - `snapshot/` reducers stay pure over the event log plus caller-supplied inputs. The sidebar's produce module ([`src/sidebar/produce/`](../sidebar/produce/mod.rs)) supplies the live pane list; nothing under `snapshot/` calls the mux.
+- `Store::snapshot` folds the event log alone: its `focused_pane` and pane enrichment stay empty, since only the sidebar's producer fuses them in. A decision that needs focus reads the published sidebar snapshot or the mux focus anchor, never a fresh store snapshot.
 - The fold stays resumable: carryover plus the rollup cache and its extent stamp preserve continuing and ended rows across rotation, so a rebuild never silently drops launch identity or a resumable session.
 - Agent and subagent enrichment scans go through [`sidecar.rs`](./sidecar.rs), which gates each scan on stat. Its record trait, parse cache and read/write entry points serve store records only and stay inside the store; the file-name digest is the one name it shares upward.
 - A card name stays owned by its row, ended or live, until that row leaves the fold ([`snapshot/project/identity.rs`](./snapshot/project/identity.rs)). A same-kind registration under an owned name adopts the owner's row instead of registering beside it when the owner is provisional or has no pane.
