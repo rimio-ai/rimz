@@ -319,23 +319,11 @@ fn file_change_cache_paths_parse_suffix_or_reparse_cold() {
 fn opencode_wal_commit_refreshes_spending() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("opencode.db");
-    let connection = rusqlite::Connection::open(&path).unwrap();
-    connection
-        .execute_batch(
-            "PRAGMA journal_mode = WAL;\
-             PRAGMA wal_autocheckpoint = 0;\
-             CREATE TABLE message (id TEXT, session_id TEXT, data TEXT);",
-        )
-        .unwrap();
-    let initial = r#"{"cost":1.25,"modelID":"gpt","providerID":"openai","time":{"created":1750000000000},"tokens":{"input":10,"output":5}}"#;
-    let updated = r#"{"cost":9.75,"modelID":"gpt","providerID":"openai","time":{"created":1750000000000},"tokens":{"input":10,"output":5}}"#;
+    let connection = crate::testkit::opencode::OpenCodeDb::new(&path, true, false);
+    let initial = r#"{"cost":1.25,"model":{"id":"gpt","providerID":"openai"},"time":{"created":1750000000000},"tokens":{"input":10,"output":5}}"#;
+    let updated = r#"{"cost":9.75,"model":{"id":"gpt","providerID":"openai"},"time":{"created":1750000000000},"tokens":{"input":10,"output":5}}"#;
     assert_eq!(initial.len(), updated.len());
-    connection
-        .execute(
-            "INSERT INTO message (id, session_id, data) VALUES ('msg', 'ses', ?1)",
-            [initial],
-        )
-        .unwrap();
+    connection.message("msg", "ses", "assistant", 1_750_000_000_000, initial);
 
     let files = [spending_file(opencode_adapter(), path.clone())];
     let mut cache = SpendingDiskCache::default();
@@ -345,9 +333,7 @@ fn opencode_wal_commit_refreshes_spending() {
     let logical_before = opencode_adapter().transcript_stat(&path).unwrap();
     assert!(logical_before.companion.is_some());
 
-    connection
-        .execute("UPDATE message SET data = ?1 WHERE id = 'msg'", [updated])
-        .unwrap();
+    connection.update_message("msg", 1_750_000_000_000, updated);
 
     let main_after = crate::agents::TranscriptStat::from_path(&path).unwrap();
     let logical_after = opencode_adapter().transcript_stat(&path).unwrap();

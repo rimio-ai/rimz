@@ -401,22 +401,16 @@ fn cached_file_with_origin(
 fn session_token_totals_sum_and_scope_fresh_tokens() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("opencode.db");
-    let conn = rusqlite::Connection::open(&path).unwrap();
-    conn.execute_batch("CREATE TABLE message (id TEXT, session_id TEXT, data TEXT)")
-        .unwrap();
+    let conn = crate::testkit::opencode::OpenCodeDb::new(&path, false, false);
     for (id, session_id, input, output) in [
         ("msg-1", "sess-1", 100, 20),
         ("msg-2", "sess-2", 900, 90),
         ("msg-3", "sess-1", 50, 10),
     ] {
         let data = format!(
-            r#"{{"cost":0.10,"modelID":"gpt","providerID":"openai","time":{{"created":1780394400000}},"tokens":{{"input":{input},"output":{output},"cache":{{"read":80,"write":40}}}}}}"#
+            r#"{{"cost":0.10,"model":{{"id":"gpt","providerID":"openai"}},"time":{{"created":1780394400000}},"tokens":{{"input":{input},"output":{output},"cache":{{"read":80,"write":40}}}}}}"#
         );
-        conn.execute(
-            "INSERT INTO message (id, session_id, data) VALUES (?1, ?2, ?3)",
-            (id, session_id, data),
-        )
-        .unwrap();
+        conn.message(id, session_id, "assistant", 1_780_394_400_000, &data);
     }
     drop(conn);
 

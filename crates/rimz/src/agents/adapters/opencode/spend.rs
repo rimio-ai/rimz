@@ -3,22 +3,21 @@
 //! OpenCode stores sessions and messages in one WAL-mode SQLite database under
 //! the XDG data root. The dashboard reads it directly through a read-only
 //! connection: positive stored `cost` values are authoritative, while zero-cost
-//! token rows are priced through RimZ's [`PriceBook`]. Older flat JSON disk_usage
-//! is intentionally skipped; OpenCode 1.15's SQLite store is the current source
-//! of truth.
+//! token rows are priced through RimZ's [`PriceBook`]. Only OpenCode 2's
+//! session-message store is read.
 //!
 //! Rows are mutable — a streaming assistant message is updated in place when it
 //! completes — so each refresh cold-folds the whole table and replaces this
 //! database's cache set rather than resuming from a cursor. See [`parse`].
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-#[cfg(test)]
-use rusqlite::Connection;
 use serde::Deserialize;
+#[cfg(test)]
+use std::path::PathBuf;
 
-use super::database::{MessageTime, open_readonly, tool_calls_by_message};
+use super::database::{MessageTime, open_readonly};
 use crate::agents::pricing::{PriceBook, TokenSplit};
 use crate::agents::spending::{
     CachedEntry, SpendCursor, SpendParse, origin_path, record_unknown_model,
@@ -34,20 +33,10 @@ use crate::agents::transcript_fs::{
 struct MessageData {
     #[serde(default, deserialize_with = "deserialize_optional_f64_lossy")]
     cost: Option<f64>,
-    #[serde(
-        rename = "modelID",
-        default,
-        deserialize_with = "deserialize_optional_string_lossy"
-    )]
-    model_id: Option<String>,
-    #[serde(
-        rename = "providerID",
-        default,
-        deserialize_with = "deserialize_optional_string_lossy"
-    )]
-    provider_id: Option<String>,
     #[serde(default, deserialize_with = "deserialize_optional_object_lossy")]
-    path: Option<MessagePath>,
+    model: Option<MessageModel>,
+    #[serde(default)]
+    content: Vec<MessageContent>,
     #[serde(default, deserialize_with = "deserialize_optional_object_lossy")]
     time: Option<MessageTime>,
     #[serde(default, deserialize_with = "deserialize_optional_object_lossy")]
@@ -55,14 +44,30 @@ struct MessageData {
 }
 
 #[derive(Deserialize)]
-struct MessagePath {
+struct MessageModel {
     #[serde(default, deserialize_with = "deserialize_optional_string_lossy")]
-    cwd: Option<String>,
-    #[serde(default, deserialize_with = "deserialize_optional_string_lossy")]
-    root: Option<String>,
+    id: Option<String>,
+    #[serde(
+        rename = "providerID",
+        default,
+        deserialize_with = "deserialize_optional_string_lossy"
+    )]
+    provider_id: Option<String>,
 }
 
 #[derive(Deserialize)]
+struct MessageContent {
+    #[serde(
+        rename = "type",
+        default,
+        deserialize_with = "deserialize_optional_string_lossy"
+    )]
+    kind: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional_string_lossy")]
+    name: Option<String>,
+}
+
+#[derive(Default, Deserialize)]
 struct MessageTokens {
     #[serde(default, deserialize_with = "deserialize_optional_u64_lossy")]
     total: Option<u64>,
@@ -70,6 +75,8 @@ struct MessageTokens {
     input: Option<u64>,
     #[serde(default, deserialize_with = "deserialize_optional_u64_lossy")]
     output: Option<u64>,
+    #[serde(default, deserialize_with = "deserialize_optional_u64_lossy")]
+    reasoning: Option<u64>,
     #[serde(default, deserialize_with = "deserialize_optional_object_lossy")]
     cache: Option<MessageCache>,
 }
@@ -82,7 +89,7 @@ struct MessageCache {
     write: Option<u64>,
 }
 
-/// Cold-fold the whole `message` table each refresh and atomically replace this
+/// Cold-fold assistant and compaction `session_message` rows each refresh and atomically replace this
 /// database's cache set.
 ///
 /// OpenCode rows are mutable: an assistant message is inserted before its
@@ -98,10 +105,14 @@ pub(super) fn parse(path: &Path, _resume: Option<&SpendCursor>, prices: &PriceBo
     let Some(conn) = open_readonly(path) else {
         return empty_parse(0);
     };
-    let mut tool_calls = tool_calls_by_message(&conn);
     let mut stmt = match conn
-        .prepare("SELECT id, session_id, data FROM message ORDER BY rowid")
-        .or_else(|_| conn.prepare("SELECT id, NULL, data FROM message ORDER BY rowid"))
+        .prepare("SELECT m.session_id, m.data, s.directory, m.type, m.time_created,
+            CASE WHEN m.type = 'compaction' THEN (SELECT json_extract(a.data, '$.model') FROM session_message a
+             WHERE a.session_id = m.session_id AND a.type = 'assistant' AND json_valid(a.data)
+               AND json_type(a.data, '$.model') = 'object'
+             ORDER BY a.time_created DESC, a.rowid DESC LIMIT 1) END
+            FROM session_message m LEFT JOIN session_v2 s ON s.id = m.session_id
+            WHERE m.type IN ('assistant', 'compaction') ORDER BY m.rowid")
     {
         Ok(stmt) => stmt,
         Err(_) => return empty_parse(0),
@@ -119,31 +130,46 @@ pub(super) fn parse(path: &Path, _resume: Option<&SpendCursor>, prices: &PriceBo
             Ok(None) => break,
             Err(_) => break,
         };
-        let message_id = row
+        let thread_id = row
             .get::<_, Option<String>>(0)
             .ok()
             .flatten()
             .map(|value| value.trim().to_owned())
             .filter(|value| !value.is_empty());
-        let thread_id = row
-            .get::<_, Option<String>>(1)
-            .ok()
-            .flatten()
-            .map(|value| value.trim().to_owned())
-            .filter(|value| !value.is_empty());
-        let Ok(data) = row.get::<_, String>(2) else {
+        let Ok(data) = row.get::<_, String>(1) else {
             continue;
         };
-        if let Some((mut entry, entry_origin)) =
-            parse_message_entry(&data, thread_id, prices, &mut unknown_models)
-        {
-            if let Some(message_id) = message_id
-                && let Some(calls) = tool_calls.remove(&message_id)
-            {
-                entry.tool_calls = calls;
+        let Ok(mut message) = serde_json::from_str::<MessageData>(&data) else {
+            continue;
+        };
+        let compaction = row.get::<_, String>(3).ok().as_deref() == Some("compaction");
+        if compaction {
+            if message.tokens.is_none() && message.cost.unwrap_or(0.0) <= 0.0 {
+                continue;
             }
+            if message.model.is_none() {
+                message.model = row
+                    .get::<_, String>(5)
+                    .ok()
+                    .and_then(|model| serde_json::from_str(&model).ok());
+            }
+            message.tokens.get_or_insert_with(MessageTokens::default);
+            message.time = Some(MessageTime {
+                created: row
+                    .get::<_, i64>(4)
+                    .ok()
+                    .and_then(|value| u64::try_from(value).ok()),
+            });
+        }
+        if let Some(entry) =
+            parse_message_entry(message, thread_id, compaction, prices, &mut unknown_models)
+        {
             if origin.is_none() {
-                origin = entry_origin;
+                origin = row
+                    .get::<_, Option<String>>(2)
+                    .ok()
+                    .flatten()
+                    .and_then(|directory| origin_path(Some(&directory)));
             }
             entries.push(entry);
         }
@@ -172,18 +198,22 @@ fn empty_parse(offset: u64) -> SpendParse {
 }
 
 fn parse_message_entry(
-    data: &str,
+    message: MessageData,
     thread_id: Option<String>,
+    allow_cost_only: bool,
     prices: &PriceBook,
     unknown_models: &mut BTreeMap<String, u64>,
-) -> Option<(CachedEntry, Option<PathBuf>)> {
-    let message: MessageData = serde_json::from_str(data).ok()?;
+) -> Option<CachedEntry> {
     let tokens = message.tokens.as_ref()?;
-    let model = non_empty(message.model_id.as_deref())?;
-    let provider = non_empty(message.provider_id.as_deref())?;
+    let model_info = message.model.as_ref()?;
+    let model = non_empty(model_info.id.as_deref())?;
+    let provider = non_empty(model_info.provider_id.as_deref())?;
 
     let input = tokens.input.unwrap_or(0);
-    let mut output = tokens.output.unwrap_or(0);
+    let mut output = tokens
+        .output
+        .unwrap_or(0)
+        .saturating_add(tokens.reasoning.unwrap_or(0));
     let cache_read = tokens
         .cache
         .as_ref()
@@ -203,7 +233,12 @@ fn parse_message_entry(
         .saturating_add(cache_read)
         .saturating_add(cache_write);
     output = output.saturating_add(tokens.total.unwrap_or(0).saturating_sub(known));
-    if input == 0 && output == 0 && cache_read == 0 && cache_write == 0 {
+    if input == 0
+        && output == 0
+        && cache_read == 0
+        && cache_write == 0
+        && (!allow_cost_only || message.cost.unwrap_or(0.0) <= 0.0)
+    {
         return None;
     }
 
@@ -225,19 +260,22 @@ fn parse_message_entry(
         };
     }
 
-    let origin = message
-        .path
-        .as_ref()
-        .and_then(|path| origin_path(path.cwd.as_deref().or(path.root.as_deref())));
-
-    Some((
-        CachedEntry {
-            thread_id,
-            model: Some(model.to_owned()),
-            ..CachedEntry::new(ts_secs, cost, &split)
-        },
-        origin,
-    ))
+    let mut tool_calls = BTreeMap::<String, u32>::new();
+    for part in message.content {
+        if part.kind.as_deref() != Some("tool") {
+            continue;
+        }
+        if let Some(name) = non_empty(part.name.as_deref()) {
+            let count = tool_calls.entry(name.to_owned()).or_default();
+            *count = count.saturating_add(1);
+        }
+    }
+    Some(CachedEntry {
+        thread_id,
+        model: Some(model.to_owned()),
+        tool_calls,
+        ..CachedEntry::new(ts_secs, cost, &split)
+    })
 }
 
 fn non_empty(value: Option<&str>) -> Option<&str> {
@@ -295,19 +333,96 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
+    #[test]
+    fn compaction_rows_contribute_usage_with_own_or_latest_assistant_model() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("opencode.db");
+        let db = crate::testkit::opencode::OpenCodeDb::new(&path, false, false);
+        db.session("ses", dir.path());
+        db.message(
+            "a",
+            "ses",
+            "assistant",
+            1000,
+            r#"{"model":{"id":"gpt-priced","providerID":"openai"}}"#,
+        );
+        db.message("c", "ses", "compaction", 2000, r#"{"status":"completed","cost":0.5,"model":{"id":"gpt-provider","providerID":"openai"},"tokens":{"input":10,"output":2,"reasoning":3}}"#);
+        db.message(
+            "f",
+            "ses",
+            "compaction",
+            3000,
+            r#"{"status":"failed","cost":0,"tokens":{"input":20,"output":4}}"#,
+        );
+        db.message(
+            "cost",
+            "ses",
+            "compaction",
+            4000,
+            r#"{"status":"failed","cost":0.25}"#,
+        );
+        db.message(
+            "running",
+            "ses",
+            "compaction",
+            5000,
+            r#"{"status":"running"}"#,
+        );
+        let parsed = parse(&path, None, &prices());
+        assert_eq!(parsed.entries.len(), 3);
+        let entry = &parsed.entries[0];
+        assert_eq!((entry.input, entry.output, entry.ts_secs), (10, 5, 2));
+        assert_eq!(entry.cost_usd, 0.5);
+        assert_eq!(entry.model.as_deref(), Some("gpt-provider"));
+        assert_eq!(entry.thread_id.as_deref(), Some("ses"));
+        assert_eq!(parsed.entries[1].model.as_deref(), Some("gpt-priced"));
+        assert!((parsed.entries[1].cost_usd - 0.000028).abs() < 1e-12);
+        assert_eq!(parsed.entries[2].cost_usd, 0.25);
+        assert!(
+            super::super::transcript::read_messages(
+                &path,
+                Some(&crate::ids::AgentSessionId::from("ses"))
+            )
+            .unwrap()
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn v2_rows_price_reasoning_and_count_inline_tools() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("opencode.db");
+        let db = crate::testkit::opencode::OpenCodeDb::new(&path, false, false);
+        db.session("ses", dir.path());
+        let data = r#"{"model":{"id":"gpt-priced","providerID":"openai"},"cost":0,"time":{"created":2000},"tokens":{"input":10,"output":20,"reasoning":5,"cache":{"read":30,"write":40}},"content":[{"type":"tool","name":"read"},{"type":"tool","name":"read"},{"type":"text","text":"answer"}]}"#;
+        db.message("assistant", "ses", "assistant", 2000, data);
+        db.message("user", "ses", "user", 3000, data);
+        let parsed = parse(&path, None, &prices());
+        assert_eq!(parsed.entries.len(), 1);
+        let entry = &parsed.entries[0];
+        assert_eq!(
+            (
+                entry.input,
+                entry.output,
+                entry.cache_read,
+                entry.cache_write
+            ),
+            (10, 25, 30, 40)
+        );
+        assert!(
+            (entry.cost_usd
+                - (10.0 * 0.000001 + 25.0 * 0.000002 + 30.0 * 0.0000001 + 40.0 * 0.0000005))
+                .abs()
+                < 1e-12
+        );
+        assert_eq!(entry.tool_calls.get("read"), Some(&2));
+        assert_eq!(entry.ts_secs, 2);
+        assert_eq!(parsed.origin.as_deref(), Some(dir.path()));
+    }
+
     fn create_db(dir: &Path, name: &str) -> PathBuf {
         let path = dir.join(name);
-        let conn = Connection::open(&path).unwrap();
-        conn.execute(
-            "CREATE TABLE message (id TEXT, session_id TEXT, data TEXT)",
-            [],
-        )
-        .unwrap();
-        conn.execute(
-            "CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT, data TEXT)",
-            [],
-        )
-        .unwrap();
+        crate::testkit::opencode::OpenCodeDb::new(&path, false, false);
         path
     }
 
@@ -316,39 +431,33 @@ mod tests {
     }
 
     fn insert_message_for_session(path: &Path, session_id: &str, data: &str) {
-        let conn = Connection::open(path).unwrap();
-        conn.execute(
-            "INSERT INTO message (id, session_id, data) VALUES ('msg', ?1, ?2)",
-            (session_id, data),
-        )
-        .unwrap();
-    }
-
-    fn insert_tool_part(path: &Path, message_id: &str, tool: &str) {
-        let conn = Connection::open(path).unwrap();
-        let index: i64 = conn
-            .query_row("SELECT COUNT(*) FROM part", [], |row| row.get(0))
+        let db = crate::testkit::opencode::OpenCodeDb::new(path, false, false);
+        let index: i64 = db
+            .connection()
+            .query_row("SELECT COUNT(*) FROM session_message", [], |row| row.get(0))
             .unwrap();
-        conn.execute(
-            "INSERT INTO part (id, message_id, data) VALUES (?1, ?2, ?3)",
-            (
-                format!("part-{index}"),
-                message_id,
-                format!(r#"{{"type":"tool","tool":"{tool}"}}"#),
-            ),
-        )
-        .unwrap();
+        db.message(
+            &format!("msg-{index}"),
+            session_id,
+            "assistant",
+            index,
+            data,
+        );
     }
 
     /// Rewrite the newest row's `data` in place, as OpenCode does when a
     /// streaming assistant message completes.
     fn update_last_message(path: &Path, data: &str) {
-        let conn = Connection::open(path).unwrap();
-        conn.execute(
-            "UPDATE message SET data = ?1 WHERE rowid = (SELECT MAX(rowid) FROM message)",
-            [data],
-        )
-        .unwrap();
+        let db = crate::testkit::opencode::OpenCodeDb::new(path, false, false);
+        let id: String = db
+            .connection()
+            .query_row(
+                "SELECT id FROM session_message ORDER BY rowid DESC LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        db.update_message(&id, 0, data);
     }
 
     fn prices() -> PriceBook {
@@ -377,23 +486,19 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let cwd = dir.path().join("repo");
         let path = create_db(dir.path(), "opencode.db");
+        crate::testkit::opencode::OpenCodeDb::new(&path, false, false).session("ses", &cwd);
         insert_message(
             &path,
-            &format!(
-                r#"{{
+            r#"{
                     "cost": 0.42,
-                    "modelID": "gpt-priced",
-                    "providerID": "openai",
-                    "path": {{ "cwd": "{}" }},
-                    "time": {{ "created": 1780590149011 }},
-                    "tokens": {{
+                    "model":{"id":"gpt-priced","providerID":"openai"},
+                    "time": { "created": 1780590149011 },
+                    "tokens": {
                         "input": 100,
                         "output": 20,
-                        "cache": {{ "read": 30, "write": 40 }}
-                    }}
-                }}"#,
-                cwd.display()
-            ),
+                        "cache": { "read": 30, "write": 40 }
+                    }
+                }"#,
         );
 
         let parsed = parse(&path, None, &prices());
@@ -411,22 +516,19 @@ mod tests {
     }
 
     #[test]
-    fn attaches_tool_parts_to_their_message_entry() {
+    fn attaches_tool_content_to_its_message_entry() {
         let dir = TempDir::new().unwrap();
         let path = create_db(dir.path(), "opencode.db");
         insert_message(
             &path,
             r#"{
                 "cost": 0.42,
-                "modelID": "gpt-priced",
-                "providerID": "openai",
+                "model":{"id":"gpt-priced","providerID":"openai"},
                 "time": { "created": 1780590149011 },
-                "tokens": { "input": 100, "output": 20 }
+                "tokens": { "input": 100, "output": 20 },
+                "content": [{"type":"tool","name":"bash"},{"type":"tool","name":"read"},{"type":"tool","name":"read"}]
             }"#,
         );
-        insert_tool_part(&path, "msg", "bash");
-        insert_tool_part(&path, "msg", "read");
-        insert_tool_part(&path, "msg", "read");
 
         let parsed = parse(&path, None, &prices());
 
@@ -444,8 +546,7 @@ mod tests {
             &path,
             r#"{
                 "cost": 0,
-                "modelID": "gpt-priced",
-                "providerID": "openai",
+                "model":{"id":"gpt-priced","providerID":"openai"},
                 "time": { "created": 2000 },
                 "tokens": {
                     "input": 10,
@@ -458,8 +559,7 @@ mod tests {
             &path,
             r#"{
                 "cost": 0,
-                "modelID": "unknown-future",
-                "providerID": "openai",
+                "model":{"id":"unknown-future","providerID":"openai"},
                 "time": { "created": 3000 },
                 "tokens": { "input": 10, "output": 20 }
             }"#,
@@ -482,16 +582,14 @@ mod tests {
         insert_message(
             &path,
             r#"{
-                "modelID": "gpt-provider",
-                "providerID": "openai",
+                "model":{"id":"gpt-provider","providerID":"openai"},
                 "tokens": { "total": 50 }
             }"#,
         );
         insert_message(
             &path,
             r#"{
-                "modelID": "claude-sonnet-4.5",
-                "providerID": "anthropic",
+                "model":{"id":"claude-sonnet-4.5","providerID":"anthropic"},
                 "tokens": { "input": 10, "output": 10 }
             }"#,
         );
@@ -511,8 +609,7 @@ mod tests {
             &path,
             r#"{
                 "cost": "0.42",
-                "modelID": "gpt-priced",
-                "providerID": "openai",
+                "model":{"id":"gpt-priced","providerID":"openai"},
                 "time": { "created": "1780590149011" },
                 "tokens": {
                     "input": "100",
@@ -525,9 +622,7 @@ mod tests {
             &path,
             r#"{
                 "cost": 0.21,
-                "modelID": "gpt-priced",
-                "providerID": "openai",
-                "path": { "cwd": 42 },
+                "model":{"id":"gpt-priced","providerID":"openai"},
                 "time": "unknown",
                 "tokens": {
                     "input": true,
@@ -560,10 +655,10 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = create_db(dir.path(), "opencode.db");
         for data in [
-            r#"{"modelID":"gpt-priced","providerID":"openai"}"#,
-            r#"{"modelID":"gpt-priced","providerID":"openai","tokens":{"input":0}}"#,
-            r#"{"providerID":"openai","tokens":{"input":1}}"#,
-            r#"{"modelID":"gpt-priced","tokens":{"input":1}}"#,
+            r#"{"model":{"id":"gpt-priced","providerID":"openai"}}"#,
+            r#"{"model":{"id":"gpt-priced","providerID":"openai"},"tokens":{"input":0}}"#,
+            r#"{"model":{"providerID":"openai"},"tokens":{"input":1}}"#,
+            r#"{"model":{"id":"gpt-priced"},"tokens":{"input":1}}"#,
         ] {
             insert_message(&path, data);
         }
@@ -576,7 +671,7 @@ mod tests {
 
         insert_message(
             &path,
-            r#"{"modelID":"gpt-priced","providerID":"openai","tokens":{"input":1,"output":1}}"#,
+            r#"{"model":{"id":"gpt-priced","providerID":"openai"},"tokens":{"input":1,"output":1}}"#,
         );
         let second = parse(&path, Some(&first.cursor), &prices());
         assert_eq!(second.entries.len(), 1);
@@ -594,7 +689,7 @@ mod tests {
         let path = create_db(dir.path(), "opencode.db");
         insert_message(
             &path,
-            r#"{"role":"assistant","modelID":"gpt-priced","providerID":"openai"}"#,
+            r#"{"model":{"id":"gpt-priced","providerID":"openai"}}"#,
         );
         let mid_stream = parse(&path, None, &prices());
         assert!(mid_stream.entries.is_empty());
@@ -604,11 +699,11 @@ mod tests {
         // the lossy resume path.
         update_last_message(
             &path,
-            r#"{"role":"assistant","modelID":"gpt-priced","providerID":"openai","cost":0.5,"tokens":{"input":10,"output":5}}"#,
+            r#"{"model":{"id":"gpt-priced","providerID":"openai"},"cost":0.5,"tokens":{"input":10,"output":5}}"#,
         );
         insert_message(
             &path,
-            r#"{"role":"assistant","modelID":"gpt-priced","providerID":"openai","tokens":{"input":1,"output":1}}"#,
+            r#"{"model":{"id":"gpt-priced","providerID":"openai"},"tokens":{"input":1,"output":1}}"#,
         );
         let completed = parse(&path, Some(&mid_stream.cursor), &prices());
         assert_eq!(completed.entries.len(), 2);
@@ -623,7 +718,7 @@ mod tests {
         let path = create_db(dir.path(), "opencode.db");
         insert_message(
             &path,
-            r#"{"modelID":"gpt-priced","providerID":"openai","tokens":{"input":100,"output":20,"cache":{"read":30},"total":200}}"#,
+            r#"{"model":{"id":"gpt-priced","providerID":"openai"},"tokens":{"input":100,"output":20,"cache":{"read":30},"total":200}}"#,
         );
         let parsed = parse(&path, None, &prices());
         assert_eq!(parsed.entries.len(), 1);

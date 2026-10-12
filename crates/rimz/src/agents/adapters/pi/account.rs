@@ -13,7 +13,12 @@ const ACCOUNT_KEY_DOMAIN: &[u8] = b"rimz/pi-oauth-account-key/v1";
 fn config() -> Config {
     Config {
         adapter: Adapter::Pi,
-        auth_path: Some(pi_config_dir().join("auth.json")),
+        load_credentials: Box::new(|| {
+            crate::agents::delegated_account::load_auth_file(
+                &pi_config_dir().join("auth.json"),
+                Adapter::Pi,
+            )
+        }),
         used_provider,
         api_key_types: &["api_key"],
         account_key_domain: ACCOUNT_KEY_DOMAIN,

@@ -4,6 +4,7 @@
 //! out of the shipped binary while integration tests and benches can share the
 //! same event and pane shapes.
 
+pub mod opencode;
 pub mod sandbox;
 
 pub use crate::disk::atomic::testkit::fsync_count;

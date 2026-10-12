@@ -224,15 +224,11 @@ mod tests {
         let runtime = RuntimePaths::under(workspace, dir.path()).unwrap();
         runtime.ensure_dirs().unwrap();
         let transcript = dir.path().join("opencode.db");
-        let connection = rusqlite::Connection::open(&transcript).unwrap();
-        connection
-            .execute_batch("CREATE TABLE message (id TEXT, session_id TEXT, data TEXT)")
-            .unwrap();
+        let connection = crate::testkit::opencode::OpenCodeDb::new(&transcript, false, false);
         for (id, session_id, input) in [("one", "planner", 10), ("two", "coder", 20)] {
             let data = serde_json::json!({
                 "cost": 0.25,
-                "modelID": "gpt",
-                "providerID": "openai",
+                "model":{"id":"gpt","providerID":"openai"},
                 "time": {"created": 1_780_394_400_000_u64},
                 "tokens": {
                     "input": input,
@@ -241,12 +237,7 @@ mod tests {
                 }
             })
             .to_string();
-            connection
-                .execute(
-                    "INSERT INTO message (id, session_id, data) VALUES (?1, ?2, ?3)",
-                    (id, session_id, data),
-                )
-                .unwrap();
+            connection.message(id, session_id, "assistant", 1_780_394_400_000, &data);
         }
         drop(connection);
         let checkout = dir.path().join("planner-lane");
@@ -353,10 +344,7 @@ mod tests {
         let marker_path = git_dir.join("rimz-worktree.json");
         crate::disk::atomic::write_temp_then_rename(&marker_path, &marker).unwrap();
         let transcript = dir.path().join("opencode.db");
-        let connection = rusqlite::Connection::open(&transcript).unwrap();
-        connection
-            .execute_batch("CREATE TABLE message (id TEXT, session_id TEXT, data TEXT)")
-            .unwrap();
+        let connection = crate::testkit::opencode::OpenCodeDb::new(&transcript, false, false);
         let mut agents = Vec::new();
         let mut rows = Vec::new();
         for (session_id, parent, registered_at, cost, input) in [
@@ -377,18 +365,18 @@ mod tests {
             .unwrap();
             let data = serde_json::json!({
                 "cost": cost,
-                "modelID": "gpt",
-                "providerID": "openai",
+                "model":{"id":"gpt","providerID":"openai"},
                 "time": {"created": 1_780_394_400_000_u64},
                 "tokens": {"input": input, "output": 2, "cache": {"read": 3, "write": 4}}
             })
             .to_string();
-            connection
-                .execute(
-                    "INSERT INTO message (id, session_id, data) VALUES (?1, ?1, ?2)",
-                    (session_id, data),
-                )
-                .unwrap();
+            connection.message(
+                session_id,
+                session_id,
+                "assistant",
+                1_780_394_400_000,
+                &data,
+            );
             let mut agent = AgentState::stub("opencode", session_id, AgentStatus::Success);
             agent.team = Some("forge".to_owned());
             agent.role = Some("planner".to_owned());

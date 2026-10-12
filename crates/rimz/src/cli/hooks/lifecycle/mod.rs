@@ -928,23 +928,11 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let transcript = dir.path().join("opencode.db");
         let pricing_cache_path = dir.path().join("pricing-cache.json");
-        let connection = rusqlite::Connection::open(&transcript).unwrap();
-        connection
-            .execute_batch(
-                "PRAGMA journal_mode = WAL;\
-                 PRAGMA wal_autocheckpoint = 0;\
-                 CREATE TABLE message (id TEXT, session_id TEXT, data TEXT);",
-            )
-            .unwrap();
-        let initial = r#"{"cost":1.25,"modelID":"gpt","providerID":"openai","time":{"created":1750000000000},"tokens":{"input":10,"output":5}}"#;
-        let updated = r#"{"cost":9.75,"modelID":"gpt","providerID":"openai","time":{"created":1750000000000},"tokens":{"input":10,"output":5}}"#;
+        let connection = rimz::testkit::opencode::OpenCodeDb::new(&transcript, true, false);
+        let initial = r#"{"cost":1.25,"model":{"id":"gpt","providerID":"openai"},"time":{"created":1750000000000},"tokens":{"input":10,"output":5}}"#;
+        let updated = r#"{"cost":9.75,"model":{"id":"gpt","providerID":"openai"},"time":{"created":1750000000000},"tokens":{"input":10,"output":5}}"#;
         assert_eq!(initial.len(), updated.len());
-        connection
-            .execute(
-                "INSERT INTO message (id, session_id, data) VALUES ('msg', 'sess-1', ?1)",
-                [initial],
-            )
-            .unwrap();
+        connection.message("msg", "sess-1", "assistant", 1_750_000_000_000, initial);
 
         let adapter = rimz::agents::definition_by_kind("opencode").unwrap();
         let initial_stat = adapter.transcript_stat(&transcript).unwrap();
@@ -974,9 +962,7 @@ mod tests {
         );
         assert!(unchanged.is_none(), "an exact logical stat is a fast hit");
 
-        connection
-            .execute("UPDATE message SET data = ?1 WHERE id = 'msg'", [updated])
-            .unwrap();
+        connection.update_message("msg", 1_750_000_000_000, updated);
         let main_after = rimz::agents::TranscriptStat::from_path(&transcript).unwrap();
         let updated_stat = adapter.transcript_stat(&transcript).unwrap();
         assert_eq!(main_after, main_before, "the commit stayed in the held WAL");

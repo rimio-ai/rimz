@@ -370,15 +370,11 @@ mod tests {
     fn slot_effort_selects_sessions_from_one_store_and_reuses_its_parse() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("opencode.db");
-        let connection = rusqlite::Connection::open(&path).unwrap();
-        connection
-            .execute_batch("CREATE TABLE message (id TEXT, session_id TEXT, data TEXT)")
-            .unwrap();
+        let connection = crate::testkit::opencode::OpenCodeDb::new(&path, false, false);
         for (id, session_id, input) in [("one", "s1", 10), ("two", "s2", 100)] {
             let data = serde_json::json!({
                 "cost": 0.25,
-                "modelID": "gpt",
-                "providerID": "openai",
+                "model":{"id":"gpt","providerID":"openai"},
                 "time": {"created": 1_780_394_400_000_u64},
                 "tokens": {
                     "input": input,
@@ -387,12 +383,7 @@ mod tests {
                 }
             })
             .to_string();
-            connection
-                .execute(
-                    "INSERT INTO message (id, session_id, data) VALUES (?1, ?2, ?3)",
-                    (id, session_id, data),
-                )
-                .unwrap();
+            connection.message(id, session_id, "assistant", 1_780_394_400_000, &data);
         }
         drop(connection);
         let path = path.to_string_lossy().into_owned();
