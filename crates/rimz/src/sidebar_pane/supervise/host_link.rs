@@ -36,6 +36,7 @@ const HOST_PANE_ENV_REMOVALS: &[&str] = &[
     crate::workspace::ENV_CHANNEL,
     crate::workspace::ENV_WORKTREE_PATH,
     super::INSTANCE_ENV,
+    super::BASELINE_ENV,
 ];
 
 pub(super) fn host_args(config: &ServeConfig) -> Vec<OsString> {
@@ -153,11 +154,16 @@ pub(super) fn connect(
     }
 }
 
-pub(super) fn hello_for(config: &ServeConfig, supervisor_build: Option<&str>) -> Hello {
+pub(super) fn hello_for(
+    config: &ServeConfig,
+    supervisor_build: Option<&str>,
+    baseline_pane: Option<&crate::ids::PaneId>,
+) -> Hello {
     Hello {
         protocol: PROTOCOL.to_owned(),
         instance_id: config.instance_id.clone(),
         pane_id: config.own_pane.clone(),
+        baseline_pane: baseline_pane.cloned(),
         supervisor_build: supervisor_build.map(str::to_owned),
         tick_seconds: Some(config.tick_seconds),
         refresh_ms: config.refresh_ms_override,
@@ -165,7 +171,7 @@ pub(super) fn hello_for(config: &ServeConfig, supervisor_build: Option<&str>) ->
 }
 
 /// What the host said, as far as the supervisor acts on it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum HostEvent {
     Control(Control),
     /// End of stream with no control: the host died, or dropped this pane.

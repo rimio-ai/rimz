@@ -379,6 +379,7 @@ impl ApplyHarness {
         let (_result_tx, result_rx) = super::super::fetch::result_channel();
         let mut state = LoopState::new(
             config,
+            None,
             runtime,
             socket_path,
             diag,

@@ -26,6 +26,8 @@ pub(super) struct Hello {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) pane_id: Option<PaneId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) baseline_pane: Option<PaneId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) supervisor_build: Option<String>,
     /// The pane's launch-argv cadence overrides, which the host's own argv
     /// cannot carry for it.
@@ -53,18 +55,20 @@ pub(super) const REJECT_PROTOCOL: &str = "protocol";
 pub(super) const REJECT_BUILD: &str = "build";
 pub(super) const REJECT_CAPACITY: &str = "capacity";
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(super) struct ControlLine {
     pub(super) control: Control,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub(super) enum Control {
     /// The pane's tab looks empty: confirm against the mux and close.
     SelfClose,
     /// The host is leaving for a newer build: attach again.
     Reload,
+    /// The pane's selection baseline changed: carry it into the next hello.
+    Baseline(Option<PaneId>),
 }
 
 /// Send the hello and the pane's output fd as one message.
@@ -176,6 +180,7 @@ mod tests {
             protocol: PROTOCOL.to_owned(),
             instance_id: SidebarInstanceId::new(),
             pane_id: Some(PaneId::from_parts(crate::MuxName::Tmux, "%7")),
+            baseline_pane: Some(PaneId::from_parts(crate::MuxName::Tmux, "%6")),
             supervisor_build: Some("build-a".to_owned()),
             tick_seconds: Some(2),
             refresh_ms: Some(250),
@@ -194,6 +199,7 @@ mod tests {
         assert_eq!(
             fields,
             std::collections::BTreeSet::from([
+                "baseline_pane",
                 "instance_id",
                 "pane_id",
                 "protocol",
@@ -279,6 +285,20 @@ mod tests {
             }),
             r#"{"control":"reload"}"#
         );
+        for (baseline, expected) in [
+            (
+                Some(PaneId::from_parts(crate::MuxName::Tmux, "%6")),
+                r#"{"control":{"baseline":"tmux:%6"}}"#,
+            ),
+            (None, r#"{"control":{"baseline":null}}"#),
+        ] {
+            assert_eq!(
+                wire(&ControlLine {
+                    control: Control::Baseline(baseline)
+                }),
+                expected
+            );
+        }
     }
 
     #[test]

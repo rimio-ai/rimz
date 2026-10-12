@@ -221,6 +221,29 @@ fn stop_child(child: &mut Child) {
 }
 
 #[test]
+fn baseline_survives_host_loss_and_can_be_forgotten() {
+    let env = Env::new();
+    let mut pane = Pane::new(&env);
+    pane.start(|command| {
+        command.env("RIMZ_TEST_SIDEBAR_SUPERVISOR_RESPAWN_BACKOFF_MS", "10");
+    });
+    let (stream, hello) = pane.accept(None);
+    assert!(hello.get("baseline_pane").is_none());
+    write_line(
+        &stream,
+        &serde_json::json!({"control": {"baseline": "tmux:%6"}}),
+    )
+    .unwrap();
+    drop(stream);
+    let (stream, hello) = pane.accept(None);
+    assert_eq!(hello["baseline_pane"], "tmux:%6");
+    write_line(&stream, &serde_json::json!({"control": {"baseline": null}})).unwrap();
+    drop(stream);
+    let (_stream, hello) = pane.accept(None);
+    assert!(hello.get("baseline_pane").is_none());
+}
+
+#[test]
 fn non_terminal_stdout_refuses_without_spawning_or_binding() {
     let env = Env::new();
     env.record(&env.project_root);
@@ -352,10 +375,16 @@ fn sidebar_supervisor_pulls_a_record_update_without_external_wakeup() {
         command.env("RIMZ_TEST_SIDEBAR_STABLE_RUN_MS", "30");
     });
     let (stream, _) = pane.accept(Some(build.clone()));
+    write_line(
+        &stream,
+        &serde_json::json!({"control": {"baseline": "tmux:%6"}}),
+    )
+    .unwrap();
     record_target(&env, &proxy);
     assert_eq!(pane.event("supervisor_convergence")["target_build"], build);
     drop(stream);
-    let (_stream, _) = pane.accept(None);
+    let (_stream, hello) = pane.accept(None);
+    assert_eq!(hello["baseline_pane"], "tmux:%6");
     assert!(
         env.home_root.join("proxy-started").exists(),
         "supervisor must self-exec the proven build"

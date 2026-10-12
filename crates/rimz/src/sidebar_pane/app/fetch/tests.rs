@@ -1294,6 +1294,7 @@ fn shared_observation_extracts_common_once_and_keeps_each_own_view() {
         let own = config.own_pane.clone().unwrap();
         let mut state = super::super::loop_state::LoopState::new(
             config,
+            None,
             fixture.runtime.clone(),
             PathBuf::from("missing.sock"),
             crate::diag::DiagSink::disabled(),
@@ -1363,6 +1364,7 @@ fn fold_file_reads_are_shared_across_forty_attachment_threads() {
         panes.push(std::thread::spawn(move || {
             let mut state = super::super::loop_state::LoopState::new(
                 config,
+                None,
                 runtime,
                 PathBuf::from("missing.sock"),
                 crate::diag::DiagSink::disabled(),

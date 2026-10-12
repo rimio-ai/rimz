@@ -361,6 +361,14 @@ impl Host {
             supervisor_build = ?hello.supervisor_build,
             "sidebar host attached a pane",
         );
+        let report_stream = match stream.try_clone() {
+            Ok(stream) => stream,
+            Err(err) => {
+                debug!(error = %err, "sidebar attach stream could not be cloned");
+                self.release(&hello);
+                return;
+            }
+        };
         watch_for_detach(&stream, live.close.clone());
 
         // One pane's panic closes that pane: its runtime files go as its frame loop unwinds, and its supervisor shows a notice and reattaches.
@@ -368,8 +376,22 @@ impl Host {
         let reload = Box::new(move || {
             let _ = events.send(Event::Reload);
         });
+        let baseline_changed = Box::new(move |pane: Option<&crate::ids::PaneId>| {
+            let _ = attach::write_line(
+                &report_stream,
+                &ControlLine {
+                    control: Control::Baseline(pane.cloned()),
+                },
+            );
+        });
         let exit = catch_unwind(AssertUnwindSafe(|| {
-            attachment.run(&self.plane, backend, reload)
+            attachment.run(
+                &self.plane,
+                backend,
+                reload,
+                hello.baseline_pane.clone(),
+                baseline_changed,
+            )
         }));
         self.release(&hello);
         let control = match exit {

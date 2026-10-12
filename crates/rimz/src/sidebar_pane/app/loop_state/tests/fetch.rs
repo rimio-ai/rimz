@@ -36,6 +36,100 @@ impl std::io::Write for FrameOutput {
 }
 
 #[test]
+fn carried_baseline_seats_while_the_sidebar_has_focus() {
+    carried_baseline_fold("own");
+}
+
+#[test]
+fn carried_baseline_yields_to_real_focus() {
+    carried_baseline_fold("other");
+}
+
+#[test]
+fn carried_baseline_drops_when_its_pane_departed() {
+    carried_baseline_fold("departed");
+}
+
+#[test]
+fn carried_baseline_holds_without_a_frame() {
+    carried_baseline_fold("frameless");
+}
+
+fn carried_baseline_fold(case: &str) {
+    let own = pane("terminal_10", "tab_0", false).pane_id;
+    let selected = pane("terminal_9", "tab_0", false).pane_id;
+    let other = pane("terminal_11", "tab_0", false).pane_id;
+    let mut rig = Rig::with_baseline(
+        Some(own.clone()),
+        BodyLens::default(),
+        Some(selected.clone()),
+    );
+    assert_eq!(
+        rig.state.ui.baseline_pane,
+        Some(selected.clone()),
+        "the carried identity is seated before any fold"
+    );
+    let output = FrameOutput::default();
+    rig.terminal = Terminal::with_options(
+        PaneBackend::headless(output.clone()),
+        ratatui::TerminalOptions {
+            viewport: ratatui::Viewport::Fixed(ratatui::layout::Rect::new(0, 0, 54, 24)),
+        },
+    )
+    .unwrap();
+    let mut snapshot = agent_snapshot(&rig.ws);
+    snapshot.worktree_groups[0].rows[0].name = "baseline-card".into();
+    let mut second = snapshot.worktree_groups[0].rows[0].clone();
+    second.id = "agent-2".into();
+    second.name = "other-card".into();
+    second.pane.as_mut().unwrap().pane_id = other.clone();
+    snapshot.worktree_groups[0].rows.push(second);
+    snapshot.own_view = Some(crate::store::snapshot::SidebarOwnView {
+        sibling_count: 2,
+        working_pane_ids: vec![selected.clone(), other.clone()],
+        own_view_is_daemon: false,
+    });
+    snapshot.viewed_panes = vec![own.clone()];
+    snapshot.focused_pane = Some(if case == "other" { other.clone() } else { own });
+    if case == "departed" {
+        snapshot.worktree_groups[0].rows.remove(0);
+    }
+    if case == "frameless" {
+        snapshot.panes_produced_at_ms = None;
+    }
+    rig.fold(snapshot, SnapshotSource::Produced);
+    let expected = match case {
+        "departed" => None,
+        "other" => Some(other),
+        _ => Some(selected),
+    };
+    assert_eq!(rig.state.ui.baseline_pane, expected);
+    assert_eq!(rig.state.ui.selected_pane, expected);
+    if case == "frameless" {
+        assert_eq!(rig.state.ui.selected_index, None);
+        return;
+    }
+    rig.state.next_frame = Instant::now();
+    rig.paint(true);
+    let mut parser = vt100::Parser::new(24, 54, 0);
+    parser.process(&output.0.lock().unwrap());
+    let screen = parser.screen().contents();
+    assert!(screen.contains("other-card"), "{screen}");
+    for (name, is_selected) in [
+        ("baseline-card", case == "own"),
+        ("other-card", case == "other"),
+    ] {
+        assert_eq!(
+            screen
+                .lines()
+                .any(|line| line.contains(name) && line.contains('▌')),
+            is_selected,
+            "{screen}"
+        );
+    }
+}
+
+#[test]
 fn pre_tab_fold_seeds_without_selection() {
     let shell = pane("terminal_9", "tab_0", true);
     let own = pane("terminal_10", "tab_1", false);

@@ -16,7 +16,7 @@ fn link_to_a_host_saying(controls: Vec<Control>) -> HostLink {
             attach::write_line(&host, &ControlLine { control }).unwrap();
         }
     });
-    let hello = host_link::hello_for(&config, None);
+    let hello = host_link::hello_for(&config, None, None);
     let output = std::fs::File::create("/dev/null").unwrap();
     HostLink::open(pane, &hello, output.as_fd(), Duration::from_secs(10)).unwrap()
 }
@@ -28,6 +28,7 @@ fn watch(mut link: HostLink) -> RoundExit {
         HostMonitor {
             record_watch: &mut RecordWatch::new(&workspace),
             exec_state: &mut PendingExec::default(),
+            baseline_pane: &mut None,
             supervisor_build: None,
             started: Instant::now(),
             watchdog: &mut None,
