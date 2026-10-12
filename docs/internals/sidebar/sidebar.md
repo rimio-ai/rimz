@@ -356,8 +356,6 @@ Provider budgets are account-scoped: every session of a provider shares one acco
 
 A pane the host is painting reaches its supervisor over the attach stream ([`supervise.rs`](../../../crates/rimz/src/sidebar_pane/supervise.rs)):
 
-The `baseline` control updates the supervisor's remembered selection baseline without ending the round. It survives host replacement and supervisor re-exec, but no other UI state does ([attach wire](./state.md#the-attach-wire)).
-
 | Round ends with | Supervisor action |
 |---|---|
 | `self-close` | Confirm the tab is empty with the mux, then restore the tty and end the pane, or reject and reattach ([self-close](#self-close)). |
@@ -365,6 +363,8 @@ The `baseline` control updates the supervisor's remembered selection baseline wi
 | Failed attach or stream ending without a control word | Show the cause and retry delay, record `sidebar_host_unavailable`, and retry. |
 | Confirmed pane absence | Record `supervisor_pane_gone`, remove runtime files, and stop supervision. |
 | SIGTERM | Detach, preserve tty modes for handoff, remove runtime files, and stop supervision. |
+
+The `baseline` control updates the supervisor's remembered selection baseline without ending the round. It survives host replacement and supervisor re-exec, but no other UI state does ([attach wire](./state.md#the-attach-wire)).
 
 The host is the only painter. All failed starts, unanswered sockets, rejected or unreadable replies, and lost attachments use the same plain-text notice and exponential retry from one second to 60 seconds, resetting after a stable minute; a workspace-record change interrupts the wait. Non-terminal stdout or unavailable runtime paths refuse before socket or terminal-mode work ([state.md → Host unavailable](./state.md#host-unavailable)).
 
