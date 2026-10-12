@@ -23,6 +23,53 @@ use rimz::store::agent_context;
 
 const FLEET: usize = 20;
 
+#[test]
+fn warm_fetch_reads_only_agent_keys_despite_orphan_contexts() {
+    let harness = crate::common::Harness::new();
+    let paths = harness.store.paths();
+    let runtime = &harness.runtime_paths;
+    let frame = rimz::testkit::fleet::seed_scale_room(
+        paths,
+        runtime,
+        rimz::testkit::fleet::ScaleRoom {
+            agents: 200,
+            panes: 100,
+            ended_sessions: 0,
+            orphan_contexts: 3_000,
+        },
+    )
+    .expect("scale room");
+    let now: Timestamp = "2026-01-01T00:00:00Z".parse().unwrap();
+    for slot in 0..200 {
+        let id = format!("sess-{slot}");
+        agent_context::write(runtime, "claude", &id, &context_at(now)).unwrap();
+        rimz::store::subagent_context::update(runtime, "claude", &id, |_| {
+            (
+                serde_json::from_value(serde_json::json!({
+                    "description": "child context",
+                    "observed_at": now.to_string(),
+                }))
+                .unwrap(),
+                None,
+            )
+        })
+        .unwrap();
+    }
+    let mut cycle =
+        rimz::sidebar_pane::app::IdleCycleFixture::new(paths.clone(), runtime.clone(), frame, 100);
+    cycle.run_cycle();
+    let before = rimz::testkit::sidecar_read_counts();
+    cycle.run_cycle();
+    let after = rimz::testkit::sidecar_read_counts();
+    assert_eq!(after.2 - before.2, 0, "warm contexts must not reparse");
+    assert_eq!(after.1 - before.1, 0, "fetch must not enumerate sidecars");
+    assert!(
+        after.0 - before.0 <= 400,
+        "at most one stat per agent key in each context store, got {}",
+        after.0 - before.0,
+    );
+}
+
 fn context_at(now: Timestamp) -> AgentContext {
     serde_json::from_value(serde_json::json!({
         "source": "claude",
