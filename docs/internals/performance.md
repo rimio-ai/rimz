@@ -84,7 +84,7 @@ Each lane's cost and the bound that holds it down. Reproducible figures come fro
 | Operation | Cost | Bound |
 | --- | --- | --- |
 | Frame redraw | Sub-millisecond in process; 413 µs at 40 agents | The fixed `refresh_ms` grid; off-screen animation relaxes to the data backstop; a frame never starts a fetch |
-| Overlay fuse | 75 µs owned, 100 µs with an active overlay, at 40 agents | Pure: no IO, no subprocess, no clock read |
+| Overlay fuse | 75 µs with no active overlay, at 40 agents | Pure: no IO, no subprocess, no clock read |
 | Jump to a pane | One mux client fork, tens to hundreds of ms | Detached thread; the focus intent it writes reaches the frame through the fold ([state.md](./sidebar/state.md#focus-intent)) |
 | Tmux graphics capabilities | One room-wide client/process/version sample and one pane-option listing | Ten-second plane cadence; a missing pane or unavailable listing uses a targeted permission query; escalation remains per pane |
 | Zellij width observation | One topology parse and pane geometry table per changed file stamp; a metadata check and lookup thereafter | Shared per plane; freshness and each pane's observation floor stay live ([multiplexers.md](./multiplexers.md#width)) |
@@ -191,7 +191,6 @@ Allocation per operation is the steadier regression signal; medians move with ho
 | --- | ---: | ---: | --- |
 | `fleet::produce_cold` 20 / 50 / 100 agents | 4.65 ms / 7.61 ms / 13.45 ms | 4.52 MB / 9.26 MB / 17.36 MB | 2026-07-05 |
 | `fleet::produce_warm` 20 / 50 / 100 agents | 520 µs / 792 µs / 1.32 ms | 1.53 MB / 2.09 MB / 2.98 MB | 2026-07-05 |
-| `hotpath::fuse` 40 agents | 99.9 µs | 80.9 KB | 2026-07-05 |
 | `hotpath::fuse_owned_no_overlay` 40 agents | 74.7 µs | 819 B | not recorded |
 | `hotpath::rollup_fold_warm` 40 agents | 129 µs | 637.1 KB | 2026-07-05 |
 | `hotpath::rollup_fold_warm` 40 agents, 0 / 1,500 carryover rows, re-parsing carryover | 70.8 µs / 16.52 ms | 989 KB / 90.11 MB | 2026-09-14 |

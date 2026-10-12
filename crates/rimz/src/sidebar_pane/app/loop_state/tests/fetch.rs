@@ -3,6 +3,53 @@
 
 use super::*;
 
+#[test]
+fn synthetic_fold_releases_baseline_after_overlay_expires() {
+    let mut rig = Rig::new();
+    let mut process = pane("terminal_9", "tab_0", false);
+    process.command = Some("sh".to_owned());
+    let pane_id = process.pane_id.clone();
+    rig.fold(
+        snapshot_with_panes(&rig.ws, vec![process]),
+        SnapshotSource::Produced,
+    );
+    assert!(rig.state.overlay_baseline.is_none());
+
+    rig.event(SidebarEvent::CommandChanged {
+        pane_id: pane_id.clone(),
+        command: "vim".to_owned(),
+    });
+    assert!(rig.state.overlay_baseline.is_some());
+    assert_eq!(
+        rig.state
+            .current
+            .row_owning_pane(&pane_id)
+            .unwrap()
+            .pane
+            .as_ref()
+            .unwrap()
+            .command
+            .as_deref(),
+        Some("vim")
+    );
+
+    *rig.state.events() = EventStore::default();
+    rig.state.fold_fused_now();
+    assert!(rig.state.overlay_baseline.is_none());
+    assert_eq!(
+        rig.state
+            .current
+            .row_owning_pane(&pane_id)
+            .unwrap()
+            .pane
+            .as_ref()
+            .unwrap()
+            .command
+            .as_deref(),
+        Some("sh")
+    );
+}
+
 #[derive(Clone, Default)]
 struct FrameOutput(Arc<std::sync::Mutex<Vec<u8>>>);
 
