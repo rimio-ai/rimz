@@ -2,6 +2,17 @@ use super::*;
 use crate::agents::TurnSettle;
 
 #[test]
+fn recent_prompts_truncate_multibyte_text_before_deduplication() {
+    let mut agent = test_agent(AgentStatus::Running, 1_000);
+    let prompt = "🦀".repeat(10_000);
+    agent.observe_prompt(&prompt);
+    agent.observe_prompt(&prompt);
+    assert_eq!(agent.recent_prompts, vec!["🦀".repeat(512)]);
+    agent.observe_prompt(&format!("{prompt}different suffix"));
+    assert_eq!(agent.recent_prompts.len(), 1);
+}
+
+#[test]
 fn observe_prompt_sets_first_prompt_once_skips_control_text_and_caps_recent() {
     let mut agent = test_agent(AgentStatus::Running, 1_000);
     let initial = agent.clone();
