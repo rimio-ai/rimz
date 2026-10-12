@@ -401,6 +401,7 @@ fn normalize_terminal(
     }
     if status == MessageStatus::Delivered {
         message.delivered_at = Some(now);
+        message.last_error = None;
     }
     message
 }
