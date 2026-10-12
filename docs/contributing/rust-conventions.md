@@ -169,6 +169,12 @@ Rules:
 
 When a long-lived process *does* arrive (watcher daemon, scheduler host), it gets the actor shape: `tokio::mpsc` for commands, `oneshot::Sender` per durability barrier, terminal-failure cell captured behind `Arc<Mutex<Option<Arc<Err>>>>` so subsequent callers learn *why* the actor died. That process will already be async-shaped at every call site.
 
+## Long-lived processes
+
+A process that outlives one command (the sidebar host, `stats --refresh`, the Codex broker, `lsp serve`, the exec wrapper, supervisors, and followers) reuses one named worker instead of calling `thread::spawn` in a loop. Every collection it holds across iterations carries a bound or an eviction rule stated beside it.
+
+glibc can create malloc arenas for new threads, and freed arena memory can stay resident after a thread exits. The process-start arena cap in `crates/rimz/src/main.rs` limits that cost but does not remove it; reuse workers and bound retained state rather than relying on allocator tuning.
+
 ## Atomic writes
 
 Two write shapes in `disk/atomic.rs` cover every disk write in the project:
