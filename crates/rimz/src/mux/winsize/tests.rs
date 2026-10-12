@@ -1,3 +1,4 @@
+use std::cell::{Cell, RefCell};
 use std::os::fd::AsFd;
 use std::time::Duration;
 
@@ -18,14 +19,43 @@ fn pty(rows: u16, cols: u16) -> nix::pty::OpenptyResult {
     .expect("openpty")
 }
 
+/// Time passes only when the loop sleeps, so the poll schedule is independent of machine load.
+struct FakeClock {
+    now: Cell<Instant>,
+    slept: RefCell<Vec<Duration>>,
+}
+
+impl FakeClock {
+    fn new() -> Self {
+        Self {
+            now: Cell::new(Instant::now()),
+            slept: RefCell::default(),
+        }
+    }
+}
+
+impl Clock for FakeClock {
+    fn now(&self) -> Instant {
+        self.now.get()
+    }
+
+    fn sleep(&self, duration: Duration) {
+        self.now.set(self.now.get() + duration);
+        self.slept.borrow_mut().push(duration);
+    }
+}
+
 #[test]
 fn sized_tty_is_untouched_without_a_geometry_read() {
     let pty = pty(24, 80);
     let before = rustix::termios::tcgetwinsize(&pty.slave).unwrap();
     assert_eq!(
-        repair_with_size(pty.slave.as_fd(), Duration::from_secs(1), |_| panic!(
-            "sized tty must not query geometry"
-        )),
+        repair_with_size(
+            &FakeClock::new(),
+            pty.slave.as_fd(),
+            Duration::from_secs(1),
+            |_| panic!("sized tty must not query geometry")
+        ),
         WinsizeRepair::Sized
     );
     assert_eq!(rustix::termios::tcgetwinsize(&pty.slave).unwrap(), before);
@@ -35,12 +65,17 @@ fn sized_tty_is_untouched_without_a_geometry_read() {
 fn zero_tty_is_sized_from_content_geometry() {
     for (rows, cols) in [(0, 0), (0, 80), (24, 0)] {
         let pty = pty(rows, cols);
-        let result = repair_with_size(pty.slave.as_fd(), Duration::from_secs(1), |_| {
-            Ok(Some(PaneContentSize {
-                rows: 38,
-                cols: 118,
-            }))
-        });
+        let result = repair_with_size(
+            &FakeClock::new(),
+            pty.slave.as_fd(),
+            Duration::from_secs(1),
+            |_| {
+                Ok(Some(PaneContentSize {
+                    rows: 38,
+                    cols: 118,
+                }))
+            },
+        );
         assert_eq!(
             result,
             WinsizeRepair::Repaired {
@@ -65,17 +100,32 @@ fn absent_or_zero_geometry_times_out_without_writing() {
     ] {
         let pty = pty(0, 0);
         let before = rustix::termios::tcgetwinsize(&pty.slave).unwrap();
-        let mut queries = 0;
-        let result = repair_with_size(pty.slave.as_fd(), Duration::from_millis(60), |remaining| {
-            assert!(remaining <= Duration::from_millis(60));
-            queries += 1;
-            Ok(content)
-        });
-        assert!(
-            queries >= 2,
+        let clock = FakeClock::new();
+        let mut remaining_per_query = Vec::new();
+        let result = repair_with_size(
+            &clock,
+            pty.slave.as_fd(),
+            Duration::from_millis(60),
+            |remaining| {
+                remaining_per_query.push(remaining);
+                Ok(content)
+            },
+        );
+        assert_eq!(
+            remaining_per_query,
+            [Duration::from_millis(60), Duration::from_millis(10)],
             "geometry must be polled until the budget expires"
         );
-        assert!(matches!(result, WinsizeRepair::Unavailable(_)));
+        assert_eq!(
+            *clock.slept.borrow(),
+            [Duration::from_millis(50), Duration::from_millis(10)]
+        );
+        assert_eq!(
+            result,
+            WinsizeRepair::Unavailable(
+                "pane content geometry unavailable before deadline".to_owned()
+            )
+        );
         assert_eq!(rustix::termios::tcgetwinsize(&pty.slave).unwrap(), before);
     }
 }
@@ -83,22 +133,27 @@ fn absent_or_zero_geometry_times_out_without_writing() {
 #[test]
 fn backend_sizing_during_a_geometry_read_is_not_overwritten() {
     let pty = pty(0, 0);
-    let result = repair_with_size(pty.slave.as_fd(), Duration::from_secs(1), |_| {
-        rustix::termios::tcsetwinsize(
-            &pty.master,
-            rustix::termios::Winsize {
-                ws_row: 24,
-                ws_col: 80,
-                ws_xpixel: 800,
-                ws_ypixel: 600,
-            },
-        )
-        .unwrap();
-        Ok(Some(PaneContentSize {
-            rows: 38,
-            cols: 118,
-        }))
-    });
+    let result = repair_with_size(
+        &FakeClock::new(),
+        pty.slave.as_fd(),
+        Duration::from_secs(1),
+        |_| {
+            rustix::termios::tcsetwinsize(
+                &pty.master,
+                rustix::termios::Winsize {
+                    ws_row: 24,
+                    ws_col: 80,
+                    ws_xpixel: 800,
+                    ws_ypixel: 600,
+                },
+            )
+            .unwrap();
+            Ok(Some(PaneContentSize {
+                rows: 38,
+                cols: 118,
+            }))
+        },
+    );
     assert_eq!(result, WinsizeRepair::Sized);
     let size = rustix::termios::tcgetwinsize(&pty.slave).unwrap();
     assert_eq!(
@@ -110,17 +165,23 @@ fn backend_sizing_during_a_geometry_read_is_not_overwritten() {
 #[test]
 fn read_and_geometry_errors_are_unavailable() {
     let pty = pty(0, 0);
-    let result = repair_with_size(pty.slave.as_fd(), Duration::from_secs(1), |_| {
-        Err(super::super::MuxErr::NoSessionToAddress)
-    });
+    let result = repair_with_size(
+        &FakeClock::new(),
+        pty.slave.as_fd(),
+        Duration::from_secs(1),
+        |_| Err(super::super::MuxErr::NoSessionToAddress),
+    );
     assert!(
         matches!(result, WinsizeRepair::Unavailable(ref reason) if reason.contains("session")),
         "{result:?}"
     );
     let file = tempfile::tempfile().unwrap();
-    let result = repair_with_size(file.as_fd(), Duration::from_secs(1), |_| {
-        panic!("non-tty must not query geometry")
-    });
+    let result = repair_with_size(
+        &FakeClock::new(),
+        file.as_fd(),
+        Duration::from_secs(1),
+        |_| panic!("non-tty must not query geometry"),
+    );
     assert!(
         matches!(result, WinsizeRepair::Unavailable(ref reason) if reason.contains("tty winsize")),
         "{result:?}"
