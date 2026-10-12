@@ -212,6 +212,9 @@ nix.workspace = true
 rustix.workspace = true
 signal-hook.workspace = true
 
+[target.'cfg(all(target_os = "linux", target_env = "gnu"))'.dependencies]
+libc.workspace = true
+
 [target.'cfg(target_os = "macos")'.dependencies]
 sysinfo = { version = "0.39", default-features = false, features = ["system"] }
 

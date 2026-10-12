@@ -19,6 +19,7 @@ const DEFAULT_LOG_FILTER: &str = "warn";
 const RENDERED_PANE_LOG_FILTER: &str = "off";
 
 fn main() -> std::process::ExitCode {
+    cap_malloc_arenas();
     // Completion runs before observability and build-id startup: every TAB is
     // latency-sensitive, and clap_complete owns stdout for this request.
     cli::complete_env();
@@ -47,6 +48,15 @@ fn main() -> std::process::ExitCode {
             cli::report(&error);
             std::process::ExitCode::from(error_exit_code(&error))
         }
+    }
+}
+
+fn cap_malloc_arenas() {
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    #[expect(unsafe_code, reason = "cap glibc arenas before starting any threads")]
+    // SAFETY: mallopt takes two integer arguments; no threads exist yet.
+    unsafe {
+        libc::mallopt(libc::M_ARENA_MAX, 2);
     }
 }
 

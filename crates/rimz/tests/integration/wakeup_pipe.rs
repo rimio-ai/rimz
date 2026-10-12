@@ -11,7 +11,7 @@
 //! `crates/rimz/tests/fixtures/zellij-trace/main.rs`. The shim logs its
 //! argv to `RIMZ_TEST_ZELLIJ_LOG` and exits 0; we assert it is never invoked.
 //!
-//! `unsafe_code = "forbid"` is workspace-wide and includes test targets, so
+//! `unsafe_code = "deny"` includes test targets with no admitted sites, so
 //! we cannot mutate process env from inside this test. Instead we run the
 //! whole store write through a `rimz hooks feed` subprocess and seed its
 //! env. The subprocess constructs its own `Store` rooted at the test's
