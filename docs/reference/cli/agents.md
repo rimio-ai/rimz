@@ -123,7 +123,7 @@ A `<kind>-<mode>` cell launches that kind with one permission posture. RimZ rend
 | Cell | Available for | Launch posture |
 | --- | --- | --- |
 | `<kind>-ask` | every kind | the agent asks before tool use |
-| `<kind>-plan` | every kind | native plan mode where the CLI has a flag for it (Claude, Antigravity, Copilot, Cursor, Droid, Kimi, OpenCode, Qwen); the default posture otherwise (Codex, Grok, Pi, Amp, Kiro) |
+| `<kind>-plan` | every kind | native plan mode where the CLI has a flag for it (Claude, Antigravity, Copilot, Cursor, Droid, Kimi, Qwen); the default posture otherwise (Codex, Grok, Pi, Amp, Kiro, OpenCode) |
 | `<kind>-auto` | every kind except `opencode`, `amp`, `kiro`, and `pi` | the adapter's automatic-approval flags |
 | `<kind>-yolo` | every kind except `droid`, `amp`, `kiro`, and `pi` | the adapter's bypass flags |
 
@@ -702,11 +702,10 @@ The fork always opens in the source agent's worktree. From a user shell it takes
 | Codex | `codex fork <id>` |
 | Droid | `droid --fork <id>` |
 | Grok | `grok --resume <id> --fork-session` |
-| OpenCode | `opencode --session <id> --fork` |
 | Pi | `pi --fork <id>` |
 | Qwen | `qwen --resume <id> --fork-session` |
 
-Other kinds, including plugins, cannot fork.
+Other kinds, including OpenCode and plugins, cannot fork.
 
 #### `wait`
 
