@@ -315,6 +315,8 @@ impl Env {
             .env_remove("BASH_ENV")
             .env_remove("ZDOTDIR")
             .env_remove("RUST_LOG")
+            .env_remove("SSH_CONNECTION")
+            .env_remove("SSH_TTY")
             .env_remove("RIMZ_GROK_HOOKS")
             .env_remove("XAI_API_KEY")
             .current_dir(&self.project_root);
@@ -344,6 +346,8 @@ impl Env {
         cmd.env_remove("BASH_ENV");
         cmd.env_remove("ZDOTDIR");
         cmd.env_remove("RUST_LOG");
+        cmd.env_remove("SSH_CONNECTION");
+        cmd.env_remove("SSH_TTY");
     }
 
     // --- hooks ---

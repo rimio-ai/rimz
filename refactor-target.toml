@@ -837,7 +837,7 @@ surface-budget = 6
 path = "crates/rimz/src/web"
 # Layer 5 keeps web below sidebar_pane: pixel_wire owns their shared encoding.
 # Named-token reads keep the public password separate from the upstream credential.
-surface-budget = 49
+surface-budget = 55
 
 [[module]]
 path = "crates/rimz/src/workspace.rs"
@@ -3989,7 +3989,7 @@ reason = "The payload of UnreadAnim::Shimmer (pass 23c)."
 [[verdict]]
 kind = "item"
 key = "web::WebStatusPayload"
-reason = "Web's payload and outcome types (WebStatusPayload, WebShareStatus, WebSharePayload, WebAccessOutcome, WebDaemonOutcome, WebShareOutcome, WebUnshareOutcome, WebRestartOutcome, WebReloadOutcome, CredentialSummary, CredentialRotation, TtydDiagnostic) are all returned by the module's pub entry points, so every narrowing trips private_interfaces; WebSharePayload is read by the integration crate too (pass 23c)."
+reason = "Web's payload and outcome types (WebStatusPayload, WebShareStatus, WebSharePayload, WebAccessOutcome, WebDaemonOutcome, WebShareOutcome, WebUnshareOutcome, WebRestartOutcome, WebReloadOutcome, CredentialSummary, TokenCreated, TtydDiagnostic) are all returned by the module's pub entry points, so every narrowing trips private_interfaces; WebSharePayload is read by the integration crate too (pass 23c)."
 
 [[verdict]]
 kind = "item"
@@ -4038,8 +4038,38 @@ reason = "Returned by a pub web entry point (pass 23c)."
 
 [[verdict]]
 kind = "item"
-key = "web::CredentialRotation"
-reason = "A pub field of CredentialSummary (pass 23c)."
+key = "web::TokenCreated"
+reason = "The public named-token creation outcome carries the password and daemon restart result to the CLI."
+
+[[verdict]]
+kind = "item"
+key = "web::WebUrlPayload"
+reason = "Credential-free URL payload returned by the public web facade."
+
+[[verdict]]
+kind = "item"
+key = "web::WebWritableStatus"
+reason = "Public writable block of the versioned browser status payload."
+
+[[verdict]]
+kind = "item"
+key = "web::WebTokenListPayload"
+reason = "Public token listing payload excludes passwords."
+
+[[verdict]]
+kind = "item"
+key = "web::TokenDaemonChange"
+reason = "Public revocation outcome distinguishes offline, restarted, and stopped daemons."
+
+[[verdict]]
+kind = "item"
+key = "web::TokenRevoked"
+reason = "Public revocation outcome reports the token count and daemon change."
+
+[[verdict]]
+kind = "item"
+key = "web::WebStopOutcome"
+reason = "Public stop outcome names which browser daemons were stopped."
 
 [[verdict]]
 kind = "item"
@@ -4049,7 +4079,7 @@ reason = "Returned by a pub web entry point (pass 23c)."
 [[verdict]]
 kind = "item"
 key = "web::preflight"
-reason = "The six delegating entries (preflight, inspect_session, credential_summary, gate_authorization, serve_tunnel_relay, unshare_session) are web's public domain facade over the ttyd and gate interiors; collapsing them would publish those interiors instead (pass 23c)."
+reason = "The six delegating entries (preflight, inspect_session, tokens, gate_authorization, serve_tunnel_relay, unshare_session) are web's public domain facade over the ttyd and gate interiors; collapsing them would publish those interiors instead (pass 23c)."
 
 [[verdict]]
 kind = "item"

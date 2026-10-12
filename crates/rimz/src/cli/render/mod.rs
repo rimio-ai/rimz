@@ -89,7 +89,7 @@ pub(crate) fn warn_unreadable_lanes(lifetimes: &rimz::agents::attribution::LaneL
     }
 }
 
-/// Render best-effort browser client customization warnings on stderr.
+/// Render browser customization, authentication and lifecycle warnings on stderr.
 pub(crate) fn web_warnings(warnings: &[rimz::web::WebWarning]) {
     let mut stderr = err();
     for warning in warnings {
@@ -103,7 +103,8 @@ pub(crate) fn web_warnings(warnings: &[rimz::web::WebWarning]) {
                 let _ = writeln!(stderr, "rimz: warning: {detail}");
                 None
             }
-            rimz::web::WebWarning::BroadcastUnauthenticated(detail) => {
+            rimz::web::WebWarning::BroadcastUnauthenticated(detail)
+            | rimz::web::WebWarning::DaemonRestartFailed(detail) => {
                 let _ = writeln!(stderr, "rimz: warning: {detail}");
                 None
             }

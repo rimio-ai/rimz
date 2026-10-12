@@ -153,7 +153,7 @@ fn run_direct_web(remote: &RemoteConnect, client_size: Option<(u16, u16)>) -> Re
     }
     let url = payload.local_url(local_port);
     writeln!(std::io::stdout().lock(), "{url}")?;
-    super::super::open_browser_best_effort(&url);
+    super::super::open_browser(&url);
     report_web_tunnel_up(remote.target.host_display(), false);
     match tunnel.wait_for_exit()? {
         Some(0) => Ok(()),
@@ -297,7 +297,7 @@ impl WebRounds {
         if self.first_round {
             let url = payload.local_url(*local_port);
             writeln!(std::io::stdout().lock(), "{url}")?;
-            super::super::open_browser_best_effort(&url);
+            super::super::open_browser(&url);
             report_web_tunnel_up(host, true);
             self.first_round = false;
         } else {

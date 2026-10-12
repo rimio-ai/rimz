@@ -320,7 +320,7 @@ fn offline_url_and_status_use_configured_shared_port_without_spawning() {
         .bounded_output()
         .expect("print web URL");
     let url = success_json(&url, "offline web URL");
-    assert_eq!(url["version"], "rimz.web.v2");
+    assert_eq!(url["version"], "rimz.web.url.v1");
     assert_eq!(url["port"], 9123);
     assert_eq!(
         url["url"],
@@ -341,95 +341,269 @@ fn offline_url_and_status_use_configured_shared_port_without_spawning() {
         .bounded_output()
         .expect("status web daemon");
     let status = success_json(&status, "offline web status");
-    assert_eq!(status["version"], "rimz.web.v2");
-    assert_eq!(status["online"], false);
-    assert_eq!(status["port"], 9123);
+    assert_eq!(status["version"], "rimz.web.status.v1");
+    assert_eq!(status["writable"]["online"], false);
+    assert_eq!(status["writable"]["port"], 9123);
+    assert_eq!(status["writable"]["url"], "https://devbox.example/rimz");
+    assert_eq!(status["writable"]["tokens"], serde_json::json!([]));
+    assert!(status["writable"]["gate_pid"].is_null());
+    assert!(status.get("credential").is_none());
     assert!(!fixture.ttyd_log.exists(), "url/status must not spawn ttyd");
 }
 
 #[cfg(unix)]
 #[test]
-fn offline_token_operations_keep_one_singular_credential() {
-    let mut fixture = WebFixture::new("ttyd-offline-token.log");
+fn named_tokens_are_sorted_shown_and_revoked_with_daemon_restarts() {
+    let _guard = daemon_test_guard();
+    let mut fixture = WebFixture::new("ttyd-named-tokens.log");
     fixture
         .room
-        .allow_no_trigger("offline credentials never start a room");
-    let credential_path = fixture.env.rimz_home().join("web/web-tokens.json");
-    let daemon_path = fixture.env.rimz_home().join("web/web-ttyd.json");
-
-    let empty = fixture
+        .allow_no_trigger("token and daemon lifecycle only");
+    for name in ["b", "a"] {
+        let create = fixture
+            .command()
+            .args(["web", "token", "create", name])
+            .bounded_output()
+            .expect("create");
+        assert_success(&create, "create named token");
+        assert_eq!(
+            String::from_utf8_lossy(&create.stdout),
+            format!("created token {name}; the writable daemon is offline\n")
+        );
+    }
+    let list = fixture
         .command()
-        .args(["web", "token", "list"])
+        .args(["web", "token", "list", "--json"])
         .bounded_output()
-        .expect("list offline token");
-    assert_success(&empty, "empty offline token list");
-    assert!(empty.stdout.is_empty());
-    assert!(!credential_path.exists());
-    assert!(!daemon_path.exists());
-
-    let create = fixture
-        .command()
-        .args(["web", "token", "create"])
-        .bounded_output()
-        .expect("create offline token");
-    assert_success(&create, "offline token creation");
+        .expect("list");
+    let list = success_json(&list, "list named tokens");
+    assert_eq!(list["version"], "rimz.web.tokens.v1");
     assert_eq!(
-        String::from_utf8_lossy(&create.stdout),
-        "rotated ttyd credential and restarted 0 daemon(s)\n"
+        list["tokens"]
+            .as_array()
+            .expect("tokens")
+            .iter()
+            .map(|token| token["name"].as_str().expect("name"))
+            .collect::<Vec<_>>(),
+        ["a", "b"]
     );
-    let saved: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(&credential_path).expect("saved credential"))
-            .expect("credential JSON");
-    assert_eq!(saved["tokens"][0]["name"], "rimz");
-    assert!(!daemon_path.exists());
+    assert!(!String::from_utf8_lossy(&serde_json::to_vec(&list).expect("JSON")).contains("secret"));
+    let duplicate = fixture
+        .command()
+        .args(["web", "token", "create", "a"])
+        .bounded_output()
+        .expect("duplicate");
+    assert!(!duplicate.status.success());
+    assert!(
+        String::from_utf8_lossy(&duplicate.stderr)
+            .contains("token `a` already exists; revoke it first or pick another name")
+    );
+    let store_path = fixture.env.rimz_home().join("web/web-tokens.json");
+    let store: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&store_path).expect("store")).expect("JSON");
+    let show = fixture
+        .command()
+        .args(["web", "token", "show", "b"])
+        .bounded_output()
+        .expect("show");
+    assert_success(&show, "show b");
+    assert_eq!(
+        String::from_utf8_lossy(&show.stdout),
+        format!(
+            "{}\n",
+            store["tokens"][1]["secret"].as_str().expect("secret")
+        )
+    );
+    assert!(show.stderr.is_empty());
 
+    let start = fixture
+        .command()
+        .args(["web", "start"])
+        .bounded_output()
+        .expect("start");
+    assert_success(&start, "start with named tokens");
+    let daemon_path = fixture.env.rimz_home().join("web/web-ttyd.json");
+    let before: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&daemon_path).expect("record")).expect("JSON");
+    let revoke = fixture
+        .command()
+        .args(["web", "token", "revoke", "a"])
+        .bounded_output()
+        .expect("revoke");
+    assert_success(&revoke, "revoke a");
+    assert_eq!(
+        String::from_utf8_lossy(&revoke.stdout),
+        "revoked token a and restarted the writable daemon\n"
+    );
+    let after: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&daemon_path).expect("record")).expect("JSON");
+    assert_ne!(before["pid"], after["pid"]);
+    assert_ne!(before["gate"]["pid"], after["gate"]["pid"]);
+    let restarted_store: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&store_path).expect("store")).expect("JSON");
+    assert_ne!(
+        restarted_store["upstream"], store["upstream"],
+        "token restart must rotate upstream credentials"
+    );
+    let missing = fixture
+        .command()
+        .args(["web", "token", "show", "a"])
+        .bounded_output()
+        .expect("missing");
+    assert!(!missing.status.success());
+    assert!(
+        String::from_utf8_lossy(&missing.stderr)
+            .contains("token `a` does not exist; existing tokens: b")
+    );
+    let revoke = fixture
+        .command()
+        .args(["web", "token", "revoke", "b"])
+        .bounded_output()
+        .expect("revoke");
+    assert_success(&revoke, "revoke last token");
+    assert_eq!(
+        String::from_utf8_lossy(&revoke.stdout),
+        "revoked token b and stopped the writable daemon (no tokens remain)\n"
+    );
+    assert!(!daemon_path.exists());
     let list = fixture
         .command()
         .args(["web", "token", "list"])
         .bounded_output()
-        .expect("list saved offline token");
-    assert_success(&list, "saved offline token list");
+        .expect("empty list");
+    assert_success(&list, "empty list");
     assert_eq!(
         String::from_utf8_lossy(&list.stdout),
-        format!(
-            "rimz: {}\n",
-            saved["tokens"][0]["created_at"]
-                .as_str()
-                .expect("timestamp")
-        )
+        "no tokens; run rimz web token create <name>\n"
     );
-
-    let revoke_all = fixture
+    let saved: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(store_path).expect("store")).expect("JSON");
+    assert_ne!(
+        saved["upstream"], restarted_store["upstream"],
+        "last-token stop must rotate upstream credentials"
+    );
+    for name in ["a", "b"] {
+        let create = fixture
+            .command()
+            .args(["web", "token", "create", name])
+            .bounded_output()
+            .expect("recreate");
+        assert_success(&create, "recreate offline tokens");
+    }
+    let offline_store: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(fixture.env.rimz_home().join("web/web-tokens.json")).expect("store"),
+    )
+    .expect("JSON");
+    assert_ne!(
+        offline_store["upstream"], saved["upstream"],
+        "offline changes must not revive an old upstream credential on the next start"
+    );
+    let list = fixture
+        .command()
+        .args(["web", "token", "list"])
+        .bounded_output()
+        .expect("human list");
+    assert_success(&list, "human list");
+    let list = String::from_utf8_lossy(&list.stdout);
+    assert!(
+        list.starts_with("a  created ") && list.contains("\nb  created ") && list.contains(" ago)"),
+        "{list}"
+    );
+    let revoke = fixture
         .command()
         .args(["web", "token", "revoke-all"])
         .bounded_output()
-        .expect("revoke all offline tokens");
-    assert_success(&revoke_all, "offline revoke-all");
+        .expect("revoke all");
+    assert_success(&revoke, "revoke all offline");
     assert_eq!(
-        String::from_utf8_lossy(&revoke_all.stdout),
-        "revoked ttyd credential and stopped 0 daemon(s)\n"
+        String::from_utf8_lossy(&revoke.stdout),
+        "revoked 2 tokens; the writable daemon is offline\n"
     );
-
-    assert_success(
-        &fixture
-            .command()
-            .args(["web", "token", "create"])
-            .bounded_output()
-            .expect("recreate offline token"),
-        "offline token recreation",
-    );
-    let revoke_named = fixture
+    let empty = fixture
         .command()
+        .args(["web", "token", "revoke-all"])
+        .bounded_output()
+        .expect("empty revoke");
+    assert_success(&empty, "empty revoke");
+    assert_eq!(
+        String::from_utf8_lossy(&empty.stdout),
+        "no tokens to revoke\n"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn token_revocation_stops_before_a_failed_restart() {
+    let _guard = daemon_test_guard();
+    let mut fixture = WebFixture::new("ttyd-revoke-preflight.log");
+    fixture.room.allow_no_trigger("token lifecycle only");
+    for args in [
+        vec!["web", "start"],
+        vec!["web", "token", "create", "alice"],
+    ] {
+        assert_success(
+            &fixture
+                .command()
+                .args(args)
+                .bounded_output()
+                .expect("prepare"),
+            "prepare tokens",
+        );
+    }
+    let store_path = fixture.env.rimz_home().join("web/web-tokens.json");
+    let before: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&store_path).expect("store")).expect("JSON");
+    let output = fixture
+        .command()
+        .env("RIMZ_TTYD_BIN", fixture.bin_dir.join("missing-ttyd"))
         .args(["web", "token", "revoke", "rimz"])
         .bounded_output()
-        .expect("revoke named offline token");
-    assert_success(&revoke_named, "offline named revoke");
-    assert_eq!(revoke_named.stdout, revoke_all.stdout);
-    let saved: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(&credential_path).expect("store after revoke"))
-            .expect("JSON");
-    assert_eq!(saved["tokens"], serde_json::json!([]));
-    assert!(!daemon_path.exists());
+        .expect("revoke without ttyd");
+    assert!(
+        !fixture.env.rimz_home().join("web/web-ttyd.json").exists(),
+        "failed restart must not leave the old gate running"
+    );
+    assert!(std::net::TcpStream::connect(("127.0.0.1", fixture.web_port)).is_err());
+    assert_success(&output, "revoke succeeds even when restart fails");
+    let after: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&store_path).expect("store")).expect("JSON");
+    assert_eq!(after["tokens"].as_array().expect("tokens").len(), 1);
+    assert_eq!(after["tokens"][0]["name"], "alice");
+    assert_ne!(before["upstream"], after["upstream"]);
+    assert!(
+        String::from_utf8_lossy(&output.stdout)
+            .contains("stopped the writable daemon (restart failed)")
+    );
+    assert!(String::from_utf8_lossy(&output.stderr).contains("ttyd"));
+}
+
+#[cfg(unix)]
+#[test]
+fn web_start_does_not_read_the_broadcast_allowlist_for_its_url() {
+    let _guard = daemon_test_guard();
+    let mut fixture = WebFixture::new("ttyd-start-url.log");
+    fixture.room.allow_no_trigger("daemon lifecycle only");
+    write_machine_config(
+        &fixture.env,
+        &format!(
+            "[web]\nport = {}\nbase_url = \"https://terminal.example/room\"\nstyle_client = false\n",
+            fixture.web_port
+        ),
+    );
+    let directory = fixture.env.rimz_home().join("web");
+    std::fs::create_dir_all(&directory).expect("directory");
+    std::fs::write(directory.join("web-share.json"), "not json")
+        .expect("broken unrelated share list");
+    let output = fixture
+        .command()
+        .args(["web", "start"])
+        .bounded_output()
+        .expect("start");
+    assert_success(&output, "start ignores unrelated broadcast state");
+    assert!(
+        String::from_utf8_lossy(&output.stdout)
+            .contains("writable daemon online at https://terminal.example/room")
+    );
 }
 
 #[cfg(unix)]
@@ -452,7 +626,7 @@ fn web_restart_starts_offline_and_replaces_online_daemons_with_the_current_profi
         .expect("restart offline web daemon");
     assert_success(&offline, "offline web restart");
     let stdout = String::from_utf8_lossy(&offline.stdout);
-    assert!(stdout.contains("ttyd: was offline; started a fresh daemon"));
+    assert!(stdout.contains("writable daemon was offline; started fresh"));
     let daemon_path = fixture.env.rimz_home().join("web/web-ttyd.json");
     let before: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&daemon_path).expect("initial daemon record"))
@@ -580,9 +754,13 @@ fn two_rooms_reuse_one_shared_daemon_and_rotate_restarts_it() {
         .bounded_output()
         .expect("status shared daemon");
     let status = success_json(&status, "shared daemon status");
-    assert_eq!(status["online"], true);
-    assert_eq!(status["port"], fixture.web_port);
-    assert!(status["pid"].as_u64().is_some());
+    assert_eq!(status["version"], "rimz.web.status.v1");
+    assert_eq!(status["writable"]["online"], true);
+    assert_eq!(status["writable"]["port"], fixture.web_port);
+    assert!(status["writable"]["pid"].as_u64().is_some());
+    assert!(status["writable"]["gate_pid"].as_u64().is_some());
+    assert_eq!(status["writable"]["tokens"], serde_json::json!(["rimz"]));
+    assert_eq!(status["writable"]["auth"]["mode"], "basic");
 
     let credential_path = fixture.env.rimz_home().join("web/web-tokens.json");
     let daemon_path = fixture.env.rimz_home().join("web/web-ttyd.json");
@@ -612,10 +790,7 @@ fn two_rooms_reuse_one_shared_daemon_and_rotate_restarts_it() {
         .bounded_output()
         .expect("reject unknown credential name");
     assert!(!bad_revoke.status.success());
-    assert!(
-        String::from_utf8_lossy(&bad_revoke.stderr)
-            .contains("ttyd credential `other` does not exist")
-    );
+    assert!(String::from_utf8_lossy(&bad_revoke.stderr).contains("token `other` does not exist"));
     assert_eq!(
         std::fs::read(&credential_path).expect("credential after bad revoke"),
         credential_before
@@ -638,10 +813,8 @@ fn two_rooms_reuse_one_shared_daemon_and_rotate_restarts_it() {
         url["port"], fixture.web_port,
         "live port wins over changed config"
     );
-    assert_eq!(
-        url["credential"]["secret"],
-        shared_secret.expect("first shared credential")
-    );
+    assert_eq!(url["version"], "rimz.web.url.v1");
+    assert!(url.get("credential").is_none());
     write_machine_config(
         &fixture.env,
         &format!("[web]\nport = {}\n", fixture.web_port),
@@ -658,20 +831,20 @@ fn two_rooms_reuse_one_shared_daemon_and_rotate_restarts_it() {
         .expect("open live daemon without credential");
     assert!(!no_start.status.success());
     assert!(
-        String::from_utf8_lossy(&no_start.stderr).contains("daemon credential is missing"),
+        String::from_utf8_lossy(&no_start.stderr).contains("browser token store is missing"),
         "{}",
         String::from_utf8_lossy(&no_start.stderr)
     );
 
     let rotate = fixture
         .command_with_sessions(&sessions)
-        .args(["web", "token", "create"])
+        .args(["web", "token", "create", "rimz"])
         .bounded_output()
         .expect("rotate shared credential");
     assert_success(&rotate, "shared credential rotation");
     assert!(
         String::from_utf8_lossy(&rotate.stdout)
-            .contains("rotated ttyd credential and restarted 1 daemon(s)")
+            .contains("created token rimz and restarted the writable daemon")
     );
     let log = std::fs::read_to_string(&fixture.ttyd_log).expect("read rotated log");
     assert_eq!(
@@ -688,7 +861,7 @@ fn two_rooms_reuse_one_shared_daemon_and_rotate_restarts_it() {
     assert_success(&stop, "revoke shared credential");
     assert_eq!(
         String::from_utf8_lossy(&stop.stdout),
-        "revoked ttyd credential and stopped 1 daemon(s)\n"
+        "revoked token rimz and stopped the writable daemon (no tokens remain)\n"
     );
 }
 
@@ -795,9 +968,9 @@ fn read_only_broadcast_allowlist_reuses_restarts_and_stops_its_daemon() {
         .bounded_output()
         .expect("broadcast status");
     let status = success_json(&status, "broadcast status");
-    assert_eq!(status["share"]["online"], true);
-    assert_eq!(status["share"]["port"], fixture.share_port);
-    assert_eq!(status["share"]["sessions"], allowlist["sessions"]);
+    assert_eq!(status["broadcast"]["online"], true);
+    assert_eq!(status["broadcast"]["port"], fixture.share_port);
+    assert_eq!(status["broadcast"]["sessions"], allowlist["sessions"]);
 
     let attach = fixture
         .command_with_sessions(&sessions)
@@ -829,6 +1002,13 @@ fn read_only_broadcast_allowlist_reuses_restarts_and_stops_its_daemon() {
         .bounded_output()
         .expect("unshare first room");
     assert_success(&unshare_first, "unshare first room");
+    assert_eq!(
+        String::from_utf8_lossy(&unshare_first.stdout),
+        format!(
+            "stopped sharing `{}`; viewers of 1 other shared room were disconnected and will reconnect\n",
+            fixture.workspace.session_name
+        )
+    );
     let restarted_daemon: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&daemon_path).expect("restarted share record"))
             .expect("restarted share JSON");
@@ -963,7 +1143,7 @@ fn web_stop_stops_writable_and_broadcast_daemons() {
     assert_success(&stop, "stop both daemons");
     assert_eq!(
         String::from_utf8_lossy(&stop.stdout),
-        "stopped 2 ttyd daemons\n"
+        "stopped the writable daemon and the broadcast daemon; the share list is kept\n"
     );
     assert!(!fixture.env.rimz_home().join("web/web-ttyd.json").exists());
     assert!(
@@ -975,24 +1155,231 @@ fn web_stop_stops_writable_and_broadcast_daemons() {
     );
 }
 
+#[cfg(unix)]
 #[test]
-fn read_only_token_error_points_to_broadcast_sharing() {
+fn basic_open_prints_a_password_pointer_and_status_has_two_daemon_blocks() {
+    let _guard = daemon_test_guard();
+    let fixture = WebFixture::new("ttyd-human-open.log");
+    let open = fixture
+        .command()
+        .args(["--mux", "tmux", "web", "open", "--session"])
+        .arg(&fixture.workspace.session_name)
+        .arg("--print")
+        .bounded_output()
+        .expect("open");
+    assert_success(&open, "open");
+    assert_eq!(String::from_utf8_lossy(&open.stdout).lines().count(), 1);
+    assert!(
+        String::from_utf8_lossy(&open.stderr)
+            .contains("rimz: sign in as user rimz; password: rimz web token show rimz")
+    );
+    let store: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(fixture.env.rimz_home().join("web/web-tokens.json")).expect("store"),
+    )
+    .expect("JSON");
+    let json = fixture
+        .command()
+        .args(["--mux", "tmux", "web", "open", "--session"])
+        .arg(&fixture.workspace.session_name)
+        .arg("--json")
+        .bounded_output()
+        .expect("JSON open");
+    let payload = success_json(&json, "JSON open");
+    assert_eq!(payload["version"], "rimz.web.v2");
+    assert_eq!(payload["credential"], store["upstream"]);
+    let record: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(fixture.env.rimz_home().join("web/web-ttyd.json")).expect("record"),
+    )
+    .expect("JSON");
+    assert_eq!(payload["tunnel_port"], record["gate"]["upstream_port"]);
+    for secret in [&store["tokens"][0]["secret"], &store["upstream"]["secret"]] {
+        assert!(!String::from_utf8_lossy(&open.stderr).contains(secret.as_str().expect("secret")));
+    }
+    let show = fixture
+        .command()
+        .args(["web", "token", "show"])
+        .bounded_output()
+        .expect("default show");
+    assert_success(&show, "default show");
+    assert_eq!(
+        String::from_utf8_lossy(&show.stdout),
+        format!(
+            "{}\n",
+            store["tokens"][0]["secret"].as_str().expect("secret")
+        )
+    );
+    let status = fixture
+        .command()
+        .args(["web", "status", "--json"])
+        .bounded_output()
+        .expect("status");
+    let status = success_json(&status, "status");
+    assert_eq!(status["version"], "rimz.web.status.v1");
+    assert_eq!(status["writable"]["tokens"], serde_json::json!(["rimz"]));
+    assert_eq!(
+        status["writable"]["url"],
+        format!("http://127.0.0.1:{}", fixture.web_port)
+    );
+    assert_eq!(
+        status["broadcast"]["url"],
+        format!("http://127.0.0.1:{}", fixture.share_port)
+    );
+    assert!(status["writable"]["gate_pid"].is_number());
+    let human = fixture
+        .command()
+        .args(["web", "status"])
+        .bounded_output()
+        .expect("human status");
+    assert_success(&human, "human status");
+    let human = String::from_utf8_lossy(&human.stdout);
+    assert_eq!(human.lines().count(), 4);
+    assert!(
+        human.contains("sign-in: tokens rimz (rimz web token show rimz)"),
+        "{human}"
+    );
+    let stop = fixture
+        .command()
+        .args(["web", "stop"])
+        .bounded_output()
+        .expect("stop");
+    assert_success(&stop, "stop");
+}
+
+#[cfg(unix)]
+#[test]
+fn sharing_a_stopped_room_names_the_start_command() {
+    let mut fixture = WebFixture::new("ttyd-stopped-share.log");
+    fixture.room.allow_no_trigger("stopped room must not start");
+    let share = fixture
+        .command_with_sessions("")
+        .args(["--mux", "tmux", "web", "share", "--session"])
+        .arg(&fixture.workspace.session_name)
+        .arg("--print")
+        .bounded_output()
+        .expect("share");
+    assert!(!share.status.success());
+    assert!(String::from_utf8_lossy(&share.stderr).contains(&format!("{} is not running, and only a running room can be shared; start it with `rimz start`, then retry", fixture.workspace.session_name)), "{}", String::from_utf8_lossy(&share.stderr));
+}
+
+#[cfg(unix)]
+fn browser_launch_case(shim: Option<&str>, ssh: bool) -> (Output, Option<String>) {
+    let _guard = daemon_test_guard();
+    let fixture = WebFixture::new("ttyd-browser-launch.log");
+    let browser_log = fixture.env.project_root.join("browser.log");
+    let opener = if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    };
+    if let Some(shim) = shim {
+        use std::os::unix::fs::PermissionsExt as _;
+        let path = fixture.bin_dir.join(opener);
+        std::fs::write(&path, shim).expect("write browser shim");
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    }
+    let mut command = fixture.command();
+    command
+        .env_remove("SSH_CONNECTION")
+        .env_remove("SSH_TTY")
+        .env_remove("DISPLAY")
+        .env_remove("WAYLAND_DISPLAY")
+        .env("RIMZ_TEST_BROWSER_LOG", &browser_log);
+    if ssh {
+        command.env("SSH_CONNECTION", "192.0.2.1 1234 192.0.2.2 22");
+    }
+    let output = command
+        .args(["--mux", "tmux", "web", "open", "--session"])
+        .arg(&fixture.workspace.session_name)
+        .bounded_output()
+        .expect("open");
+    let stop = fixture
+        .command()
+        .args(["web", "stop"])
+        .bounded_output()
+        .expect("stop");
+    assert_success(&stop, "stop");
+    if shim.is_some_and(|shim| shim.starts_with("#!/bin/sh")) && !ssh {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while !browser_log.exists() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+    (output, std::fs::read_to_string(browser_log).ok())
+}
+
+#[cfg(unix)]
+#[test]
+fn browser_launch_reports_the_opener_and_passes_the_url() {
+    let (output, log) = browser_launch_case(
+        Some("#!/bin/sh\nprintf '%s\\n' \"$1\" > \"$RIMZ_TEST_BROWSER_LOG\"\n"),
+        false,
+    );
+    assert_success(&output, "open with browser");
+    let opener = if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    };
+    assert!(String::from_utf8_lossy(&output.stderr).contains(&format!("rimz: launched {opener}")));
+    assert_eq!(
+        log.expect("browser log"),
+        String::from_utf8_lossy(&output.stdout)
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn browser_launch_skips_ssh_without_a_display() {
+    let (output, log) = browser_launch_case(
+        Some("#!/bin/sh\nprintf '%s\\n' \"$1\" > \"$RIMZ_TEST_BROWSER_LOG\"\n"),
+        true,
+    );
+    assert_success(&output, "open over SSH");
+    assert!(String::from_utf8_lossy(&output.stderr).contains(
+        "no browser launched (this is an SSH session with no display); open the URL above"
+    ));
+    assert!(log.is_none());
+}
+
+#[cfg(unix)]
+#[test]
+fn browser_launch_reports_a_missing_opener() {
+    let (output, _) = browser_launch_case(None, false);
+    assert_success(&output, "open without browser");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("is not installed); open the URL above")
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn browser_launch_reports_a_spawn_failure() {
+    let (output, _) = browser_launch_case(Some("#!/missing-rimz-test-interpreter\n"), false);
+    assert_success(&output, "open with broken opener");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("failed to start:"));
+}
+
+#[test]
+fn invalid_token_names_report_the_username_rule() {
     let mut fixture = WebFixture::new("ttyd-read-only-token.log");
     fixture
         .room
         .allow_no_trigger("invalid token arguments refuse before room birth");
-    let output = fixture
-        .command()
-        .args(["web", "token", "create", "--read-only"])
-        .bounded_output()
-        .expect("reject read-only token");
+    for name in ["-alice", ".alice", "_alice", "bad:name"] {
+        let output = fixture
+            .command()
+            .args(["web", "token", "create", "--", name])
+            .bounded_output()
+            .expect("reject read-only token");
 
-    assert!(!output.status.success());
-    assert!(
-        String::from_utf8_lossy(&output.stderr).contains("use `rimz web share`"),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+        assert!(!output.status.success());
+        assert!(
+            String::from_utf8_lossy(&output.stderr)
+                .contains("1-64 characters of [A-Za-z0-9._-], starting with a letter or digit"),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 }
 
 #[cfg(unix)]
@@ -1018,12 +1405,10 @@ fn trusted_header_open_uses_a_token_auth_and_migrates_stale_records() {
     assert_success(&human, "trusted-header web open");
     let stderr = String::from_utf8_lossy(&human.stderr);
     assert!(
-        stderr.contains(
-            "authentication is delegated to the reverse proxy (trusted header `X-Authentik-Username`)"
-        ),
+        stderr.contains("rimz: sign in through your reverse proxy (header X-Authentik-Username)"),
         "{stderr}"
     );
-    assert!(stderr.contains("user rimz, password "), "{stderr}");
+    assert!(!stderr.contains("password"), "{stderr}");
 
     let json = fixture
         .command()
@@ -1110,15 +1495,15 @@ fn trusted_header_open_uses_a_token_auth_and_migrates_stale_records() {
 
     let token = fixture
         .command()
-        .args(["web", "token", "create"])
+        .args(["web", "token", "create", "alice"])
         .bounded_output()
         .expect("rotate trusted-header credential");
     assert_success(&token, "trusted-header credential rotation");
     let stderr = String::from_utf8_lossy(&token.stderr);
-    assert!(stderr.contains("user rimz, password "), "{stderr}");
+    assert!(stderr.contains("rimz: token alice: password "), "{stderr}");
     assert!(
         String::from_utf8_lossy(&token.stdout)
-            .contains("rotated ttyd credential and restarted 1 daemon(s)")
+            .contains("created token alice and restarted the writable daemon")
     );
 
     let before: serde_json::Value =
@@ -1348,7 +1733,8 @@ fn trusted_proxy_gate_forwards_loopback_and_stops_both_processes() {
     let payload = success_json(&url, "gated web payload");
     assert_eq!(payload["port"], fixture.web_port);
     assert_eq!(payload["tunnel_port"], upstream_port);
-    assert_eq!(payload["credential"]["username"], "rimz-upstream");
+    assert_eq!(payload["version"], "rimz.web.url.v1");
+    assert!(payload.get("credential").is_none());
 
     let log = std::fs::read_to_string(&fixture.ttyd_log).expect("read gated ttyd log");
     let daemon_argv = log
@@ -1448,7 +1834,7 @@ fn stale_gated_daemon_terminates_its_surviving_gate_and_can_restart() {
         .bounded_output()
         .expect("reconcile stale gated daemon");
     let status = success_json(&status, "stale gated daemon status");
-    assert_eq!(status["online"], false);
+    assert_eq!(status["writable"]["online"], false);
     assert!(!daemon_path.exists(), "stale daemon record survived");
     assert!(
         !rimz::proc::list_processes()
@@ -1565,7 +1951,7 @@ fn no_start_requires_an_online_daemon() {
         .expect("open web without start");
 
     assert!(!output.status.success(), "offline ttyd should fail");
-    assert!(String::from_utf8_lossy(&output.stderr).contains("shared ttyd daemon is offline"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("writable browser daemon is offline"));
     assert!(!fixture.ttyd_log.exists(), "--no-start must not spawn ttyd");
 
     assert_success(
@@ -1626,7 +2012,7 @@ fn stale_daemon_record_never_signals_a_reused_non_ttyd_pid() {
         .bounded_output()
         .expect("stop stale daemon record");
     assert_success(&stop, "discard stale daemon record");
-    assert!(String::from_utf8_lossy(&stop.stdout).contains("stopped 0 ttyd daemons"));
+    assert!(String::from_utf8_lossy(&stop.stdout).contains("no browser daemon was running"));
     assert!(
         unrelated
             .try_wait()
