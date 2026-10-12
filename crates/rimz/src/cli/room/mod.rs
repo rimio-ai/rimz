@@ -687,28 +687,14 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
 
 fn unknown_session_message(mux: MuxName, session: &str) -> String {
     let known = rimz::workspace::known_workspaces().unwrap_or_default();
-    let nearest = known
-        .iter()
-        .map(|workspace| {
-            let name = &workspace.session_name;
-            let mut row: Vec<_> = (0..=name.chars().count()).collect();
-            for (i, left) in session.chars().enumerate() {
-                let mut diagonal = row[0];
-                row[0] = i + 1;
-                for (j, right) in name.chars().enumerate() {
-                    let above = row[j + 1];
-                    row[j + 1] = (diagonal + usize::from(left != right))
-                        .min(above + 1)
-                        .min(row[j] + 1);
-                    diagonal = above;
-                }
-            }
-            (row[name.chars().count()], name)
-        })
-        .min()
-        .filter(|(distance, _)| *distance <= 2);
+    let nearest = rimz::utils::suggest::nearest_name(
+        session,
+        known
+            .iter()
+            .map(|workspace| workspace.session_name.as_str()),
+    );
     let hint = nearest
-        .map(|(_, name)| format!("did you mean `{name}`?   "))
+        .map(|name| format!("did you mean `{name}`?   "))
         .unwrap_or_default();
     format!("no room or {mux} session named `{session}`\n{hint}all rooms: rimz list --all")
 }
@@ -803,6 +789,11 @@ fn recover_parked_agents(context: &RoomContext, no_resume: bool, attended: bool)
             "rimz: ended {} parked agent{} (--no-resume)",
             outcome.ended,
             if outcome.ended == 1 { "" } else { "s" },
+        )?;
+    } else if no_resume {
+        writeln!(
+            crate::cli::render::err(),
+            "rimz: --no-resume changed nothing: the room was already running with no parked agents"
         )?;
     }
     Ok(())

@@ -334,7 +334,7 @@ pub struct SshAttachOptions {
     pub lineage: String,
     pub supervised: bool,
     pub force_version: bool,
-    pub no_resume: bool,
+    pub resume: bool,
     pub mux: Option<MuxName>,
     pub term: TermPlan,
     pub truecolor: bool,
@@ -611,7 +611,7 @@ fn guarded_snippet(
     outer_scroll_bracket: bool,
 ) -> String {
     let mut flags = String::from("--attach");
-    if options.no_resume {
+    if !options.resume {
         flags.push_str(" --no-resume");
     }
     if let Some(mux) = options.mux {

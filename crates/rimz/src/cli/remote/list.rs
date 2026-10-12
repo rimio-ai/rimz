@@ -75,7 +75,7 @@ fn write_human_table(entries: &[RemoteAlias], out: &mut impl Write) -> std::io::
     Ok(())
 }
 
-fn settings(entry: &RemoteAlias) -> String {
+pub(super) fn settings(entry: &RemoteAlias) -> String {
     let mut words = Vec::new();
     if let Some(mux) = entry.mux {
         words.push(mux.as_str());

@@ -3,17 +3,16 @@
 `rimz remote` attaches to a room on another host over SSH. The local `rimz` builds an `ssh` command and runs the host's own `rimz` at the far end, so your `~/.ssh/config`, keys, ports, and jump hosts apply as they do for any `ssh`. The room, its agents, and its store stay on the host. Only `remote setup` writes files there outside the room; saved aliases live on your machine in `~/.rimz/remote.toml` (under `$RIMZ_HOME` when it is set). Why you attach this way, the reconnecting link, and the link badge are in the [remote guide](../../guide/remote.md).
 
 ```sh
-rimz remote connect <alias-or-target> [--reset] [--no-reconnect] [--force-version] [--no-auto-forward] [--web [--web-port <port>]] [--attach | --no-attach | --print]
-rimz remote reset <alias-or-target> [same flags as connect, without --reset]
+rimz remote connect <alias-or-target> [--resume | --no-resume] [--reconnect | --no-reconnect] [--auto-forward | --no-auto-forward] [--force-version] [--web [--web-port <port>]] [--attach | --no-attach | --print]
 rimz remote setup <alias-or-target-or-host>
-rimz remote add <name> <target> [--no-reconnect] [--no-resume] [--no-auto-forward]
-rimz remote update <name> <target> [--no-reconnect] [--no-resume] [--no-auto-forward]
+rimz remote add <name> <target> [--resume | --no-resume] [--reconnect | --no-reconnect] [--auto-forward | --no-auto-forward]
+rimz remote update <name> [target] [same pairs as add] [--no-mux]
 rimz remote rename <old> <new>
 rimz remote rm <name>
 rimz remote list [--json]            # alias: ls
 ```
 
-Every subcommand also takes the [global flags](../cli.md#global-flags). `--mux`, `--zellij`, and `--tmux` matter on `connect`, `reset`, `add`, and `update` only.
+Every subcommand also takes the [global flags](../cli.md#global-flags). `--mux`, `--zellij`, and `--tmux` matter on `connect`, `add`, and `update` only.
 
 ## Targets
 
@@ -35,17 +34,17 @@ Relative paths are anchored to the remote `HOME`, whatever directory the SSH log
 rimz remote connect dev                                  # a saved alias
 rimz remote connect agent@prod-box:/srv/query-engine     # a raw target
 rimz remote connect dev --no-reconnect                   # one ssh run, no supervisor
-rimz remote reset dev                                    # same as connect --reset
+rimz remote connect dev --no-resume                      # do not recover prior agents
 ```
 
 By default the connection is supervised: RimZ keeps an SSH ControlMaster open, reconnects after a drop, measures the link for the sidebar badge, and forwards new dev-server ports. It ends when you detach or the remote room ends. `--no-reconnect` hands the terminal to a single `ssh` run with none of that.
 
 | Flag | Effect |
 | --- | --- |
-| `--reset` | Pass `--no-resume` to the host's `rimz`: a room born by this connect comes up without its prior agents. A room that is already running is attached as it is. `rimz remote reset` is the same command. |
-| `--no-reconnect` | Run `ssh` once, with no reconnect, link badge, or port forwarding. |
+| `--resume`, `--no-resume` | Recover prior agents, or pass `--no-resume` to the host: a newly born room comes up without prior agents; an already-running room's parked agents are ended. The host reports the count, or that nothing changed. |
+| `--reconnect`, `--no-reconnect` | Supervise the link, or run `ssh` once with no reconnect, link badge, or port forwarding. |
 | `--force-version` | Attach despite a minor version difference with the host, for this invocation only. See [Version checks](#version-checks). |
-| `--no-auto-forward` | Do not forward new remote listeners for this connection. |
+| `--auto-forward`, `--no-auto-forward` | Enable or disable forwarding new remote listeners for this connection. |
 | `--web` | Open the room in your local browser instead of this terminal. See [Open a remote room in the browser](#open-a-remote-room-in-the-browser). |
 | `--web-port <port>` | The local browser port for `--web`. Requires `--web`. |
 | `--attach` | Connect even when stdin or stdout is not a terminal. |
@@ -54,7 +53,7 @@ By default the connection is supervised: RimZ keeps an SSH ControlMaster open, r
 
 Without `--attach` or `--print`, `connect` runs `ssh` only when both stdin and stdout are terminals; otherwise it prints the command on stdout and one notice on stderr explaining that nothing was connected and suggesting `--attach`. Explicit `--print` or `--no-attach` adds no fallback notice. The printed command runs directly in a shell without a local reconnect supervisor or an outer terminal bracket. `--web` has no command to print: without a terminal, pass `--attach` to run the tunnel; with `--print`, drop that flag.
 
-A flag on the command line can only switch a saved default off. An alias saved with `--no-reconnect`, `--no-resume`, or `--no-auto-forward` keeps that setting on every connect; change it with [`remote update`](#saved-aliases).
+Each setting starts from the saved alias (or `true` for a raw target). An explicit positive or negative flag overrides it for this invocation; within each pair the last flag wins. Use [`remote update`](#saved-aliases) to save a change. An unknown alias error suggests a nearby name, lists up to eight saved names, and shows how to connect directly to a host.
 
 ### Version checks
 
@@ -94,7 +93,8 @@ An alias names a target and its connection defaults, so `rimz remote connect dev
 
 ```sh
 rimz remote add dev dev-box:~/code/query-engine --tmux    # save target and backend
-rimz remote update dev dev-box:~/code/query-engine        # replace; unset flags return to defaults
+rimz remote update dev dev-box:~/code/query-engine        # change target, keep settings
+rimz remote update dev --resume --no-mux                  # enable recovery, clear backend pin
 rimz remote rename dev devbox
 rimz remote rm devbox
 ```
@@ -102,21 +102,21 @@ rimz remote rm devbox
 | Subcommand | Effect |
 | --- | --- |
 | `add <name> <target>` | Save a new alias. When the name is taken and stdin is a terminal, it asks whether to update the existing alias; without a terminal, or when you decline, it fails with `remote alias ... already exists`. Use `update` in scripts. |
-| `update <name> <target>` | Replace an existing alias's target and settings. Settings you do not pass, `mux` included, return to their defaults. Fails when the alias does not exist. |
+| `update <name> [target]` | Merge explicit settings and an optional target into an existing alias. Omitted values stay unchanged. `--no-mux` clears the pin and conflicts with backend flags. Fails when the alias does not exist. |
 | `rename <old> <new>` | Rename an alias. Fails when `<old>` does not exist or `<new>` is taken. |
 | `rm <name>` | Delete an alias. Fails when it does not exist. |
 | `list` | Print aliases grouped by SSH destination, each with its full target. |
 
-None of these contact the host. `add` and `update` check the name and parse the target before saving. Each alias is one `[[remote]]` table in `remote.toml`:
+None of these contact the host. `add` and `update` check the name and parse the target before saving. `add` defines a whole alias from defaults, including when you confirm replacing an existing one; without a terminal, a duplicate names `rimz remote update <name> <target>` as the fix. Successful writes print one stdout receipt: `saved <name> -> <target>; connect: rimz remote connect <name>`, `updated <name> -> <target>`, `renamed <old> -> <new>`, or `removed <name> (was <target>)`. Saved and updated targets gain parenthesized non-default settings using the same words as `list`. Each alias is one `[[remote]]` table in `remote.toml`:
 
 | Field | Default | Set by | Meaning |
 | --- | --- | --- | --- |
 | `name` | required | `<name>` | 1 to 64 ASCII letters, digits, `-`, or `_`, not starting with `-`. |
 | `target` | required | `<target>` | A [target](#targets). |
-| `reconnect` | `true` | `--no-reconnect` saves `false` | Supervise and reconnect the link. |
-| `resume` | `true` | `--no-resume` saves `false` | `false` passes `--no-resume` to the host. |
+| `reconnect` | `true` | `--reconnect`, `--no-reconnect` | Supervise and reconnect the link. |
+| `resume` | `true` | `--resume`, `--no-resume` | `false` passes `--no-resume` to the host. |
 | `mux` | unset | `--mux`, `--zellij`, or `--tmux` | Backend the host's `rimz` uses. |
-| `auto_forward` | `true` | `--no-auto-forward` saves `false` | Forward new remote listeners. |
+| `auto_forward` | `true` | `--auto-forward`, `--no-auto-forward` | Forward new remote listeners. |
 
 Unknown alias fields, including the old `no_resume` key, fail the load rather than being ignored.
 

@@ -41,9 +41,9 @@ enum RemoteSubcmd {
         #[command(flatten)]
         args: SavedAliasArgs,
     },
-    /// Replace a saved remote target.
+    /// Change a saved remote target or settings, keeping omitted values.
     #[command(
-        after_help = "Like `remote add`, --mux <name> pins the saved alias. Flags not passed reset to their defaults."
+        after_help = "--mux <name> pins the saved alias; --no-mux clears the pin. Omitted settings stay unchanged."
     )]
     Update {
         #[arg(add = clap_complete::ArgValueCandidates::new(
@@ -51,13 +51,10 @@ enum RemoteSubcmd {
         ))]
         name: String,
         #[command(flatten)]
-        args: SavedAliasArgs,
+        args: UpdateAliasArgs,
     },
     /// Connect to a remote alias or raw `[user@]host:<session-or-path>` target.
     Connect {
-        /// Force a fresh remote room by passing `--no-resume` to the remote rimz.
-        #[arg(long)]
-        reset: bool,
         #[command(flatten)]
         args: ConnectionArgs,
     },
@@ -67,11 +64,6 @@ enum RemoteSubcmd {
             crate::cli::complete::remote_aliases
         ))]
         alias_or_host: String,
-    },
-    /// Connect to a remote alias or raw target with `--no-resume`.
-    Reset {
-        #[command(flatten)]
-        args: ConnectionArgs,
     },
     /// Delete a saved remote alias.
     Rm {
@@ -112,28 +104,118 @@ enum LinkStatsSubcmd {
 struct SavedAliasArgs {
     /// `[user@]host:<session-or-path>`; use `host:session:<name>` to force a session.
     target: String,
+    #[command(flatten)]
+    settings: SettingFlags,
+}
+
+#[derive(Debug, Args)]
+struct UpdateAliasArgs {
+    /// Replacement `[user@]host:<session-or-path>`; omit to keep the saved target.
+    target: Option<String>,
+    #[command(flatten)]
+    settings: SettingFlags,
+    /// Clear the saved backend pin.
+    #[arg(long, conflicts_with_all = ["mux", "tmux", "zellij"])]
+    no_mux: bool,
+}
+
+#[derive(Debug, Default, Args)]
+struct SettingFlags {
+    /// Supervise the link and reconnect after drops.
+    #[arg(long, overrides_with = "no_reconnect")]
+    reconnect: bool,
     /// Hand the link to a single ssh run instead of supervising reconnects.
-    #[arg(long)]
+    #[arg(long, overrides_with = "reconnect")]
     no_reconnect: bool,
-    /// Come up empty when this alias births a remote room.
-    #[arg(long)]
+    /// Recover prior agents when the remote room is born.
+    #[arg(long, overrides_with = "no_resume")]
+    resume: bool,
+    /// A newly born room has no prior agents; a running room's parked agents are ended. The host reports either count.
+    #[arg(long, overrides_with = "resume")]
     no_resume: bool,
+    /// Automatically forward new remote listeners.
+    #[arg(long, overrides_with = "no_auto_forward")]
+    auto_forward: bool,
     /// Disable automatic forwarding of new remote listeners.
-    #[arg(long)]
+    #[arg(long, overrides_with = "auto_forward")]
     no_auto_forward: bool,
+}
+
+impl SettingFlags {
+    fn apply(&self, entry: &mut RemoteAlias) {
+        for (value, positive, negative) in [
+            (&mut entry.resume, self.resume, self.no_resume),
+            (&mut entry.reconnect, self.reconnect, self.no_reconnect),
+            (
+                &mut entry.auto_forward,
+                self.auto_forward,
+                self.no_auto_forward,
+            ),
+        ] {
+            if let Some(setting) = positive.then_some(true).or(negative.then_some(false)) {
+                *value = setting;
+            }
+        }
+    }
 }
 
 impl SavedAliasArgs {
     fn into_alias(self, name: String, mux: Option<MuxName>) -> RemoteAlias {
-        RemoteAlias {
+        let mut entry = RemoteAlias {
             name,
             target: self.target,
-            reconnect: !self.no_reconnect,
-            resume: !self.no_resume,
+            reconnect: true,
+            resume: true,
             mux,
-            auto_forward: !self.no_auto_forward,
-        }
+            auto_forward: true,
+        };
+        self.settings.apply(&mut entry);
+        entry
     }
+}
+
+fn resolve_update(entry: &RemoteAlias, args: UpdateAliasArgs, mux: Option<MuxName>) -> RemoteAlias {
+    let mut entry = entry.clone();
+    if let Some(target) = args.target {
+        entry.target = target;
+    }
+    args.settings.apply(&mut entry);
+    entry.mux = if args.no_mux { None } else { mux.or(entry.mux) };
+    entry
+}
+
+fn unknown_alias_message(input: &str, aliases: &RemoteAliases) -> String {
+    let names: Vec<_> = aliases
+        .entries()
+        .iter()
+        .map(|entry| entry.name.as_str())
+        .collect();
+    let suggestion = rimz::utils::suggest::nearest_name(input, names.iter().copied())
+        .map(|name| format!("; did you mean `{name}`?"))
+        .unwrap_or_default();
+    let saved = if names.is_empty() {
+        "none saved; save one with: rimz remote add <name> [user@]host:<session-or-path>".to_owned()
+    } else {
+        let mut saved = format!(
+            "saved: {}",
+            names.iter().take(8).copied().collect::<Vec<_>>().join(", ")
+        );
+        if names.len() > 8 {
+            saved.push_str(&format!(", … and {} more", names.len() - 8));
+        }
+        saved
+    };
+    format!("no such remote alias `{input}`{suggestion}\n{saved}")
+}
+
+fn alias_receipt(verb: &str, entry: &RemoteAlias) -> String {
+    let settings = list::settings(entry);
+    let suffix = if settings.is_empty() {
+        String::new()
+    } else {
+        format!(" ({settings})")
+    };
+    format!("{verb} {} -> {}{suffix}", entry.name, entry.target)
 }
 
 #[derive(Debug, Args)]
@@ -147,9 +229,8 @@ struct ConnectionArgs {
         crate::cli::complete::remote_aliases
     ))]
     alias_or_target: String,
-    /// Hand the link to a single ssh run instead of supervising reconnects.
-    #[arg(long)]
-    no_reconnect: bool,
+    #[command(flatten)]
+    settings: SettingFlags,
     /// Attach despite a minor version mismatch with the host.
     #[arg(long)]
     force_version: bool,
@@ -159,9 +240,6 @@ struct ConnectionArgs {
     /// Local tunnel port for `--web`.
     #[arg(long, requires = "web")]
     web_port: Option<u16>,
-    /// Disable automatic forwarding of new remote listeners.
-    #[arg(long)]
-    no_auto_forward: bool,
     #[command(flatten)]
     attach: AttachFlags,
 }
@@ -174,7 +252,6 @@ impl RemoteArgs {
             RemoteSubcmd::Update { .. } => "remote update",
             RemoteSubcmd::Connect { .. } => "remote connect",
             RemoteSubcmd::Setup { .. } => "remote setup",
-            RemoteSubcmd::Reset { .. } => "remote reset",
             RemoteSubcmd::Rm { .. } => "remote rm",
             RemoteSubcmd::Rename { .. } => "remote rename",
             RemoteSubcmd::List { .. } => "remote list",
@@ -188,6 +265,17 @@ pub fn run(args: RemoteArgs, globals: &GlobalFlags) -> Result<()> {
         RemoteSubcmd::Add { name, args } => {
             let mut aliases = RemoteAliases::load().context("loading remote aliases")?;
             let entry = args.into_alias(name, globals.mux);
+            let receipt = format!(
+                "{}; connect: rimz remote connect {}",
+                alias_receipt("saved", &entry),
+                entry.name
+            );
+            if aliases.contains(&entry.name) && !std::io::stdin().is_terminal() {
+                bail!(
+                    "remote alias `{0}` already exists; replace it with `rimz remote update {0} <target>`",
+                    entry.name
+                );
+            }
             if aliases.contains(&entry.name)
                 && std::io::stdin().is_terminal()
                 && super::confirm(&format!(
@@ -200,27 +288,41 @@ pub fn run(args: RemoteArgs, globals: &GlobalFlags) -> Result<()> {
                 aliases.add(entry)?;
             }
             aliases.save().context("saving remote aliases")?;
+            writeln!(super::render::out(), "{receipt}")?;
             Ok(())
         }
         RemoteSubcmd::Update { name, args } => {
             let mut aliases = RemoteAliases::load().context("loading remote aliases")?;
-            aliases.update(args.into_alias(name, globals.mux))?;
+            let entry = aliases
+                .get(&name)
+                .ok_or_else(|| anyhow::anyhow!(unknown_alias_message(&name, &aliases)))?;
+            let entry = resolve_update(entry, args, globals.mux);
+            let receipt = alias_receipt("updated", &entry);
+            aliases.update(entry)?;
             aliases.save().context("saving remote aliases")?;
+            writeln!(super::render::out(), "{receipt}")?;
             Ok(())
         }
-        RemoteSubcmd::Connect { reset, args } => connect(args, reset, globals),
+        RemoteSubcmd::Connect { args } => connect(args, globals),
         RemoteSubcmd::Setup { alias_or_host } => setup::run(alias_or_host, globals),
-        RemoteSubcmd::Reset { args } => connect(args, true, globals),
         RemoteSubcmd::Rm { name } => {
             let mut aliases = RemoteAliases::load().context("loading remote aliases")?;
+            let target = aliases.get(&name).map(|entry| entry.target.clone());
             aliases.remove(&name)?;
             aliases.save().context("saving remote aliases")?;
+            // Successful removal proves the entry existed.
+            writeln!(
+                super::render::out(),
+                "removed {name} (was {})",
+                target.expect("removed entry existed")
+            )?;
             Ok(())
         }
         RemoteSubcmd::Rename { old, new } => {
             let mut aliases = RemoteAliases::load().context("loading remote aliases")?;
-            aliases.rename(&old, new)?;
+            aliases.rename(&old, new.clone())?;
             aliases.save().context("saving remote aliases")?;
+            writeln!(super::render::out(), "renamed {old} -> {new}")?;
             Ok(())
         }
         RemoteSubcmd::List { json } => {
@@ -239,7 +341,7 @@ struct RemoteConnect {
     origin: String,
     target: RemoteTarget,
     reconnect: bool,
-    no_resume: bool,
+    resume: bool,
     force_version: bool,
     mux: Option<MuxName>,
     web: web::RemoteWebOptions,
@@ -253,7 +355,7 @@ impl RemoteConnect {
             lineage: local_remote_lineage(&self.target)?,
             supervised: self.reconnect,
             force_version: self.force_version,
-            no_resume: self.no_resume,
+            resume: self.resume,
             mux: self.mux,
             term: remote_term_plan(),
             truecolor: rimz::tui::truecolor(),
@@ -264,36 +366,34 @@ impl RemoteConnect {
 
 fn resolve_connect(
     input: &str,
-    reset: bool,
-    no_reconnect: bool,
-    no_auto_forward: bool,
+    settings: &SettingFlags,
     cli_mux: Option<MuxName>,
     aliases: &RemoteAliases,
 ) -> Result<RemoteConnect> {
-    if input.contains(':') {
-        return Ok(RemoteConnect {
-            origin: input.to_owned(),
-            target: RemoteTarget::parse(input)?,
-            reconnect: !no_reconnect,
-            no_resume: reset,
-            force_version: false,
-            mux: cli_mux,
-            web: web::RemoteWebOptions::default(),
-            auto_forward: !no_auto_forward,
-        });
-    }
-    let Some(alias) = aliases.get(input) else {
-        bail!("no such remote alias `{input}`; run `rimz remote list`");
+    let mut entry = if input.contains(':') {
+        SavedAliasArgs {
+            target: input.to_owned(),
+            settings: SettingFlags::default(),
+        }
+        .into_alias(input.to_owned(), None)
+    } else {
+        aliases.get(input).cloned().ok_or_else(|| {
+            anyhow::anyhow!(
+                "{}\nor connect straight to a host: rimz remote connect {input}:<session-or-path>",
+                unknown_alias_message(input, aliases)
+            )
+        })?
     };
+    settings.apply(&mut entry);
     Ok(RemoteConnect {
         origin: input.to_owned(),
-        target: RemoteTarget::parse(&alias.target)?,
-        reconnect: alias.reconnect && !no_reconnect,
-        no_resume: !alias.resume || reset,
+        target: RemoteTarget::parse(&entry.target)?,
+        reconnect: entry.reconnect,
+        resume: entry.resume,
         force_version: false,
-        mux: cli_mux.or(alias.mux),
+        mux: cli_mux.or(entry.mux),
         web: web::RemoteWebOptions::default(),
-        auto_forward: alias.auto_forward && !no_auto_forward,
+        auto_forward: entry.auto_forward,
     })
 }
 
@@ -310,25 +410,17 @@ fn resolve_setup_destination(input: &str, aliases: &RemoteAliases) -> Result<Ssh
     }
 }
 
-fn connect(args: ConnectionArgs, reset: bool, globals: &GlobalFlags) -> Result<()> {
+fn connect(args: ConnectionArgs, globals: &GlobalFlags) -> Result<()> {
     let ConnectionArgs {
         alias_or_target,
-        no_reconnect,
+        settings,
         force_version,
         web,
         web_port,
-        no_auto_forward,
         attach,
     } = args;
     let aliases = RemoteAliases::load().context("loading remote aliases")?;
-    let mut remote = resolve_connect(
-        &alias_or_target,
-        reset,
-        no_reconnect,
-        no_auto_forward,
-        globals.mux,
-        &aliases,
-    )?;
+    let mut remote = resolve_connect(&alias_or_target, &settings, globals.mux, &aliases)?;
     remote.force_version = force_version;
     remote.web = web::RemoteWebOptions {
         enabled: web,
@@ -444,6 +536,32 @@ fn run_infocmp(term: &str) -> Option<String> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn settings_pairs_and_update_surface() {
+        use clap::Parser;
+        for verb in ["add", "update", "connect"] {
+            for pair in [
+                ["--resume", "--no-resume"],
+                ["--reconnect", "--no-reconnect"],
+                ["--auto-forward", "--no-auto-forward"],
+            ] {
+                for flags in [pair, [pair[1], pair[0]]] {
+                    let mut argv = vec!["rimz", "remote", verb, "dev"];
+                    if verb == "add" {
+                        argv.push("dev-box:room");
+                    }
+                    argv.extend(flags);
+                    assert!(crate::cli::Cli::try_parse_from(&argv).is_ok(), "{argv:?}");
+                }
+            }
+        }
+        assert!(crate::cli::Cli::try_parse_from(["rimz", "remote", "reset", "dev"]).is_err());
+        assert!(
+            crate::cli::Cli::try_parse_from(["rimz", "remote", "connect", "dev", "--reset"])
+                .is_err()
+        );
+    }
+
     fn alias(
         name: &str,
         target: &str,
@@ -461,84 +579,112 @@ mod tests {
         }
     }
 
+    fn parsed_settings(flags: &[&str]) -> SettingFlags {
+        use clap::Parser;
+        let argv = ["rimz", "remote", "connect", "dev"]
+            .into_iter()
+            .chain(flags.iter().copied());
+        let cli = crate::cli::Cli::try_parse_from(argv).unwrap();
+        let Some(crate::cli::Subcmd::Remote(RemoteArgs {
+            command: RemoteSubcmd::Connect { args },
+        })) = cli.subcommand
+        else {
+            panic!("connect");
+        };
+        args.settings
+    }
+
     #[test]
     fn connect_resolution_applies_alias_cli_overrides() {
-        let globals = GlobalFlags {
-            mux: Some(MuxName::Tmux),
-            zellij: false,
-            tmux: false,
-            root: None,
-            color: super::super::ColorWhen::Auto,
-        };
-
-        let built_alias = SavedAliasArgs {
-            target: "prod-box:query-engine".to_owned(),
-            no_reconnect: false,
-            no_resume: false,
-            no_auto_forward: true,
+        for saved in [false, true] {
+            let mut aliases = RemoteAliases::default();
+            let mut entry = alias("dev", "dev-box:room", saved, !saved, Some(MuxName::Tmux));
+            entry.auto_forward = saved;
+            aliases.add(entry).unwrap();
+            for (positive, negative, index) in [
+                ("--resume", "--no-resume", 0),
+                ("--reconnect", "--no-reconnect", 1),
+                ("--auto-forward", "--no-auto-forward", 2),
+            ] {
+                for (flags, expected) in [
+                    (vec![], saved),
+                    (vec![positive], true),
+                    (vec![negative], false),
+                    (vec![positive, negative], false),
+                    (vec![negative, positive], true),
+                ] {
+                    let settings = parsed_settings(&flags);
+                    let resolved = resolve_connect("dev", &settings, None, &aliases).unwrap();
+                    assert_eq!(
+                        [resolved.resume, resolved.reconnect, resolved.auto_forward][index],
+                        expected,
+                        "{flags:?}, saved={saved}"
+                    );
+                    assert_eq!(resolved.mux, Some(MuxName::Tmux));
+                    let raw =
+                        resolve_connect("raw:room", &settings, Some(MuxName::Zellij), &aliases)
+                            .unwrap();
+                    assert_eq!(
+                        [raw.resume, raw.reconnect, raw.auto_forward][index],
+                        if flags.is_empty() { true } else { expected }
+                    );
+                    assert_eq!(raw.mux, Some(MuxName::Zellij));
+                }
+            }
         }
-        .into_alias("prod".to_owned(), globals.mux);
+    }
 
-        assert_eq!(built_alias.mux, Some(MuxName::Tmux));
-        assert!(!built_alias.auto_forward);
+    #[test]
+    fn update_merges_only_explicit_values() {
+        let original = alias("dev", "dev-box:room", false, true, Some(MuxName::Tmux));
+        let args = |target, no_mux| UpdateAliasArgs {
+            target,
+            no_mux,
+            settings: SettingFlags::default(),
+        };
+        assert_eq!(resolve_update(&original, args(None, false), None), original);
+        let changed = resolve_update(&original, args(Some("other:room".to_owned()), false), None);
+        assert_eq!(changed.target, "other:room");
+        assert_eq!(changed.resume, original.resume);
+        assert_eq!(changed.reconnect, original.reconnect);
+        assert_eq!(changed.mux, original.mux);
+        assert_eq!(resolve_update(&original, args(None, true), None).mux, None);
+        assert_eq!(
+            resolve_update(&original, args(None, false), Some(MuxName::Zellij)).mux,
+            Some(MuxName::Zellij)
+        );
+        let mut overrides = args(None, false);
+        overrides.settings = parsed_settings(&["--resume", "--reconnect", "--no-auto-forward"]);
+        let changed = resolve_update(&original, overrides, None);
+        assert!(changed.resume && changed.reconnect && !changed.auto_forward);
+    }
 
+    #[test]
+    fn unknown_alias_lists_suggestions_and_bounded_saved_names() {
         let mut aliases = RemoteAliases::default();
-        let mut prod = alias("prod", "prod-box:query-engine", true, false, None);
-        prod.auto_forward = false;
-        aliases.add(prod).unwrap();
-        aliases
-            .add(alias("fresh", "fresh-box:query-engine", true, true, None))
-            .unwrap();
-        aliases
-            .add(alias(
-                "tmuxed",
-                "tmux-box:query-engine",
-                true,
-                false,
-                Some(MuxName::Tmux),
-            ))
-            .unwrap();
-
-        let raw = resolve_connect("prod:raw-session", false, false, false, None, &aliases).unwrap();
-        assert_eq!(raw.target.ssh_destination().as_str(), "prod");
-        assert_eq!(raw.origin, "prod:raw-session");
-        assert!(raw.reconnect);
-        assert!(!raw.no_resume);
-        assert!(raw.auto_forward);
-
-        let named = resolve_connect("prod", false, false, false, None, &aliases).unwrap();
-        assert_eq!(named.target.ssh_destination().as_str(), "prod-box");
-        assert_eq!(named.origin, "prod");
-        assert!(named.reconnect);
-        assert!(!named.no_resume);
-        assert!(!named.auto_forward);
-
-        let fresh = resolve_connect("fresh", false, false, false, None, &aliases).unwrap();
-        assert!(fresh.no_resume);
-        assert!(fresh.auto_forward);
-
-        let reset = resolve_connect("prod", true, false, false, None, &aliases).unwrap();
-        assert!(reset.no_resume);
-
-        let remote = resolve_connect("prod", false, true, false, None, &aliases).unwrap();
-        assert!(!remote.reconnect);
-
-        let alias_mux = resolve_connect("tmuxed", false, false, false, None, &aliases).unwrap();
-        assert_eq!(alias_mux.mux, Some(MuxName::Tmux));
-
-        let cli_mux = resolve_connect(
-            "tmuxed",
-            false,
-            false,
-            false,
-            Some(MuxName::Zellij),
-            &aliases,
-        )
-        .unwrap();
-        assert_eq!(cli_mux.mux, Some(MuxName::Zellij));
-
-        let disabled = resolve_connect("fresh", false, false, true, None, &aliases).unwrap();
-        assert!(!disabled.auto_forward);
+        assert_eq!(
+            unknown_alias_message("dve", &aliases),
+            "no such remote alias `dve`\nnone saved; save one with: rimz remote add <name> [user@]host:<session-or-path>"
+        );
+        for name in ["prod", "dev"] {
+            aliases
+                .add(alias(name, "box:room", true, false, None))
+                .unwrap();
+        }
+        assert_eq!(
+            unknown_alias_message("dve", &aliases),
+            "no such remote alias `dve`; did you mean `dev`?\nsaved: dev, prod"
+        );
+        assert!(!unknown_alias_message("unrelated", &aliases).contains("did you mean"));
+        for name in ["a", "b", "c", "d", "e", "f", "g"] {
+            aliases
+                .add(alias(name, "box:room", true, false, None))
+                .unwrap();
+        }
+        assert!(
+            unknown_alias_message("unrelated", &aliases)
+                .contains("saved: a, b, c, d, dev, e, f, g, … and 1 more")
+        );
     }
 
     #[test]

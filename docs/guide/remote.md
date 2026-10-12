@@ -45,12 +45,12 @@ Save the target once and the trip is one word. An alias carries the target and i
 rimz remote add dev dev-box:~/code/query-engine   # save the target as `dev`
 rimz remote connect dev                           # open it, reconnecting link and all
 rimz remote list                                  # every saved alias (alias: ls)
-rimz remote update dev dev-box:~/code/api         # replace one alias's target and settings
+rimz remote update dev dev-box:~/code/api         # change the target, keep saved settings
 rimz remote rename dev devbox                     # rename one
 rimz remote rm devbox                             # forget one
 ```
 
-Aliases live on your machine in `~/.rimz/remote.toml`, and none of these commands contacts the host. `rimz remote list` groups them under their SSH destination, so the same host under two users reads as two groups, and prints each alias's full target and only its non-default settings; `--json` prints one flat array instead. `update` rewrites the whole record, so a setting you leave off returns to its default. The field table is in the [alias reference](../reference/cli/remote.md#saved-aliases).
+Aliases live on your machine in `~/.rimz/remote.toml`, and none of these commands contacts the host. `rimz remote list` groups them under their SSH destination, so the same host under two users reads as two groups, and prints each alias's full target and only its non-default settings; `--json` prints one flat array instead. `update` changes only the target and settings you pass and keeps the rest. The field table is in the [alias reference](../reference/cli/remote.md#saved-aliases).
 
 ## A link that heals itself
 
@@ -70,10 +70,10 @@ Two flags tune the posture:
 
 ```sh
 rimz remote connect dev --no-reconnect   # one ssh run, no supervisor, no health probe
-rimz remote connect dev --reset          # a room born by this connect comes up empty
+rimz remote connect dev --no-resume      # no prior agents on birth; end parked agents in a running room
 ```
 
-`rimz remote reset dev` is the shorthand for the second. Save either choice on an alias with `rimz remote add ... --no-reconnect`, or with `--no-resume`, which is the alias spelling of `--reset`.
+Save either choice with the same flags on `rimz remote add` or `rimz remote update`. `--resume`, `--reconnect`, and `--auto-forward` turn a saved opt-out back on for a connect; the last flag in each pair wins. With `--no-resume`, the host reports how many parked agents it ended, or says the running room had none.
 
 ## Reading the link badge
 

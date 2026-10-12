@@ -30,6 +30,28 @@ fn attach_inside_tmux_prints_with_a_notice() {
 }
 
 #[test]
+fn no_resume_reports_an_unchanged_running_room() {
+    let Some(room) = TmuxRoom::start() else {
+        return;
+    };
+    let output = room
+        .rimz()
+        .args([
+            "--mux",
+            "tmux",
+            "attach",
+            &room.session_name,
+            "--no-resume",
+            "--print",
+        ])
+        .bounded_output()
+        .expect("attach");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+    assert_eq!(stderr.lines().filter(|line| *line == "rimz: --no-resume changed nothing: the room was already running with no parked agents").count(), 1, "{stderr}");
+}
+
+#[test]
 fn room_name_tracks_state_dir_without_rebirthing_a_live_old_name() {
     let Some(room) = TmuxRoom::start() else {
         return;

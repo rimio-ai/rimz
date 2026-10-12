@@ -394,7 +394,7 @@ fn remote_dispatch_cases() -> [(&'static str, &'static str, bool); 10] {
 }
 
 #[test]
-fn remote_print_and_saved_alias_dispatch_from_home_with_mux_and_reset() {
+fn remote_print_and_saved_alias_dispatch_from_home_with_mux_and_no_resume() {
     let local = Env::new();
     let remote = remote_dispatch_env();
     std::fs::create_dir_all(local.home_root.join("absent")).expect("mkdir local decoy");
@@ -415,7 +415,7 @@ fn remote_print_and_saved_alias_dispatch_from_home_with_mux_and_reset() {
                 "--",
                 &expected_target,
             ];
-            let raw = printed_remote_snippet(&local, &target, &["--mux", mux, "--reset"]);
+            let raw = printed_remote_snippet(&local, &target, &["--mux", mux, "--no-resume"]);
             assert_eq!(
                 remote_argv(&run_remote_snippet(&remote, &raw)),
                 expected,
@@ -2706,7 +2706,7 @@ fn remote_web_direct_clean_exit_before_readiness_is_an_error() {
 }
 
 #[test]
-fn remote_alias_update_drives_connect_and_reset() {
+fn remote_alias_update_drives_connect_and_no_resume() {
     let env = Env::new();
 
     let add = env
@@ -2719,6 +2719,10 @@ fn remote_alias_update_drives_connect_and_reset() {
         "add succeeds\nstderr:\n{}",
         String::from_utf8_lossy(&add.stderr),
     );
+    assert_eq!(
+        String::from_utf8_lossy(&add.stdout),
+        "saved prod -> agent@prod-box:query-engine; connect: rimz remote connect prod\n"
+    );
 
     let update = env
         .rimz()
@@ -2729,6 +2733,10 @@ fn remote_alias_update_drives_connect_and_reset() {
         update.status.success(),
         "update succeeds\nstderr:\n{}",
         String::from_utf8_lossy(&update.stderr),
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&update.stdout),
+        "updated prod -> agent@prod-box:other-engine\n"
     );
 
     let printed = env
@@ -2749,13 +2757,13 @@ fn remote_alias_update_drives_connect_and_reset() {
 
     let reset = env
         .rimz()
-        .args(["remote", "reset", "prod", "--print"])
+        .args(["remote", "connect", "prod", "--no-resume", "--print"])
         .env("TERM", "xterm-256color")
         .bounded_output()
-        .expect("run rimz remote reset --print");
+        .expect("run rimz remote connect --no-resume --print");
     let line = stdout_line(&reset);
     assert!(
         line.contains("--no-resume"),
-        "remote reset injects --no-resume: {line}"
+        "remote connect --no-resume injects --no-resume: {line}"
     );
 }
