@@ -548,6 +548,10 @@ const BUILD_INPUT_ENV: [&str; 4] = [
     "RIMZ_BUILD_VERSION_OVERRIDE",
 ];
 
+/// Test-suite knobs that share the `RIMZ_` prefix but tune the tests, never a
+/// room session: the park budget and the live web tier's Chromium override.
+const TEST_INPUT_ENV: [&str; 2] = ["RIMZ_TEST_PARK_BUDGET_MIB", "RIMZ_TEST_BROWSER"];
+
 fn test_removed_env(
     ambient: impl Iterator<Item = std::ffi::OsString>,
     sandbox: &BTreeMap<&'static str, PathBuf>,
@@ -560,7 +564,7 @@ fn test_removed_env(
             .filter(|key| {
                 !sandbox.contains_key(key.as_str())
                     && !BUILD_INPUT_ENV.contains(&key.as_str())
-                    && key != "RIMZ_TEST_PARK_BUDGET_MIB"
+                    && !TEST_INPUT_ENV.contains(&key.as_str())
             }),
     );
     removed
