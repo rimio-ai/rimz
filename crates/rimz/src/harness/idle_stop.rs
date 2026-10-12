@@ -183,7 +183,7 @@ pub fn decide(
         return Ok(Verdict::Hold(Hold::Clock));
     }
     let messages = store.list_messages()?;
-    let runs = super::run::list(store.paths())?;
+    let runs = super::run::listing(store.paths())?;
     if let Some(hold) = debt(store, &messages, &runs, agent)? {
         return Ok(Verdict::Hold(hold));
     }

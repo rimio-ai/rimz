@@ -329,6 +329,10 @@ pub fn list(paths: &StatePaths) -> Result<Vec<RunRecord>> {
     crate::store::run::list(&paths.runs_dir)
 }
 
+pub(crate) fn listing(paths: &StatePaths) -> Result<crate::store::run::RunListing> {
+    crate::store::run::listing(&paths.runs_dir)
+}
+
 enum RecordMutation<T> {
     Keep(T),
     Write(T),

@@ -54,6 +54,10 @@ impl FileStamp {
                 inode: 0,
             };
         };
+        Self::from_metadata(&meta)
+    }
+
+    pub(crate) fn from_metadata(meta: &std::fs::Metadata) -> Self {
         let modified = meta
             .modified()
             .ok()

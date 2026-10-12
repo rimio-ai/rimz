@@ -146,7 +146,7 @@ fn project_run_waits(snapshot: &mut SidebarSnapshot, paths: &crate::StatePaths) 
     if !has_launched_work(&snapshot.agents) {
         return;
     }
-    let runs = match run::list(&paths.runs_dir) {
+    let runs = match run::listing(&paths.runs_dir) {
         Ok(runs) => runs,
         Err(error) => {
             tracing::debug!(%error, "failed to read pending launched runs");

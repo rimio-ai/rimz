@@ -43,7 +43,7 @@ pub fn owed_wake(
             .iter()
             .any(|agent| agent.is_team_seat() && agent.launcher_is(launcher));
         if has_members || launched_team {
-            let runs = super::run::list(store.paths())?;
+            let runs = super::run::listing(store.paths())?;
             if has_members {
                 let fleet = FleetRuns::of(&projection.agents, &runs, launcher);
                 if fleet.any_running() || !fleet.unreported().is_empty() {

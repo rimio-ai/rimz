@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use super::deadline::{kill_due, stop_due_by_pane};
 use crate::ids::{RunId, WorkspaceId};
-use crate::store::run::RunRecord;
+use crate::store::run::{RunListing, RunRecord};
 use crate::{RuntimePaths, StatePaths};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -23,8 +23,8 @@ pub(crate) fn enforce(
     paths: &StatePaths,
     runtime: &RuntimePaths,
     now: Timestamp,
-) -> Option<Vec<RunRecord>> {
-    let records = match crate::harness::run::list(paths) {
+) -> Option<RunListing> {
+    let records = match crate::harness::run::listing(paths) {
         Ok(records) => records,
         Err(err) => {
             tracing::debug!(

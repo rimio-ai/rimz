@@ -4,11 +4,15 @@
 //! inspect the result later with `rimz agents show`, and the final assistant text
 //! is the product output. Writes therefore use fsyncing temp-file-plus-rename,
 //! unlike cache sidecars whose correctness rides the event log.
+//! Listings share a per-thread sorted view, re-parsing only records whose full file stamp changed.
 
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::fs;
 use std::io;
 use std::os::unix::net::UnixDatagram as StdUnixDatagram;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 use jiff::Timestamp;
@@ -17,6 +21,7 @@ use tracing::debug;
 
 use crate::agents::PermissionMode;
 use crate::disk::atomic::write_temp_then_rename;
+use crate::disk::parse_cache::FileStamp;
 use crate::disk::paths::RuntimePaths;
 use crate::ids::{AgentKind, AgentSessionId, PaneId, RunId, WorkspaceId};
 
@@ -551,6 +556,30 @@ pub fn wake_run(rt: &RuntimePaths, record: &RunRecord) {
 
 type Result<T> = std::result::Result<T, RunStoreErr>;
 
+#[derive(Clone)]
+pub(crate) struct RunListing {
+    records: Arc<[RunRecord]>,
+    pub(crate) generation: u64,
+}
+
+impl std::ops::Deref for RunListing {
+    type Target = [RunRecord];
+
+    fn deref(&self) -> &Self::Target {
+        &self.records
+    }
+}
+
+#[derive(Default)]
+struct RunListingCache {
+    files: HashMap<PathBuf, (FileStamp, Arc<RunRecord>)>,
+    listing: Option<RunListing>,
+}
+
+thread_local! {
+    static RUN_LISTINGS: RefCell<HashMap<PathBuf, RunListingCache>> = RefCell::new(HashMap::new());
+}
+
 pub(super) fn run_path(runs_dir: &Path, run_id: &RunId) -> PathBuf {
     runs_dir.join(format!("{run_id}.json"))
 }
@@ -574,36 +603,88 @@ pub(crate) fn load(runs_dir: &Path, run_id: &RunId) -> Result<RunRecord> {
 }
 
 pub(crate) fn list(runs_dir: &Path) -> Result<Vec<RunRecord>> {
-    if !runs_dir.exists() {
-        return Ok(Vec::new());
-    }
-    let entries = fs::read_dir(runs_dir).map_err(|source| RunStoreErr::Io {
-        path: runs_dir.to_path_buf(),
-        source,
-    })?;
-    let mut records = Vec::new();
-    for entry in entries {
-        let entry = entry.map_err(|source| RunStoreErr::Io {
-            path: runs_dir.to_path_buf(),
-            source,
-        })?;
-        let path = entry.path();
-        if path.extension().and_then(|value| value.to_str()) != Some("json") {
-            continue;
-        }
-        let bytes = fs::read(&path).map_err(|source| RunStoreErr::Io {
-            path: path.clone(),
-            source,
-        })?;
-        records.push(
-            serde_json::from_slice::<RunRecord>(&bytes).map_err(|source| RunStoreErr::Json {
-                path: path.clone(),
+    Ok(listing(runs_dir)?.to_vec())
+}
+
+pub(crate) fn listing(runs_dir: &Path) -> Result<RunListing> {
+    RUN_LISTINGS.with(|caches| {
+        let mut caches = caches.borrow_mut();
+        let cache = caches.entry(runs_dir.to_path_buf()).or_default();
+        cache.refresh(runs_dir)
+    })
+}
+
+impl RunListingCache {
+    fn refresh(&mut self, runs_dir: &Path) -> Result<RunListing> {
+        let entries = match fs::read_dir(runs_dir) {
+            Ok(entries) => Some(entries),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+            Err(source) => {
+                return Err(RunStoreErr::Io {
+                    path: runs_dir.to_path_buf(),
+                    source,
+                });
+            }
+        };
+        let mut files = HashMap::new();
+        let mut changed = false;
+        for entry in entries.into_iter().flatten() {
+            let entry = entry.map_err(|source| RunStoreErr::Io {
+                path: runs_dir.to_path_buf(),
                 source,
-            })?,
-        );
+            })?;
+            let path = entry.path();
+            if path.extension().and_then(|value| value.to_str()) != Some("json") {
+                continue;
+            }
+            let metadata = match fs::metadata(&path) {
+                Ok(metadata) => metadata,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+                Err(source) => return Err(RunStoreErr::Io { path, source }),
+            };
+            let stamp = FileStamp::from_metadata(&metadata);
+            if let Some((old_stamp, record)) = self.files.get(&path)
+                && *old_stamp == stamp
+            {
+                files.insert(path, (stamp, Arc::clone(record)));
+                continue;
+            }
+            let bytes = match fs::read(&path) {
+                Ok(bytes) => bytes,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+                Err(source) => return Err(RunStoreErr::Io { path, source }),
+            };
+            #[cfg(test)]
+            super::sidecar::testkit::record_parse_read();
+            let record = serde_json::from_slice::<RunRecord>(&bytes).map_err(|source| {
+                RunStoreErr::Json {
+                    path: path.clone(),
+                    source,
+                }
+            })?;
+            files.insert(path, (stamp, Arc::new(record)));
+            changed = true;
+        }
+        changed |= files.len() != self.files.len();
+        if !changed && let Some(listing) = &self.listing {
+            return Ok(listing.clone());
+        }
+        let mut records: Vec<_> = files
+            .values()
+            .map(|(_, record)| record.as_ref().clone())
+            .collect();
+        records.sort_by_key(|record| std::cmp::Reverse(record.updated_at));
+        let listing = RunListing {
+            records: records.into(),
+            generation: self
+                .listing
+                .as_ref()
+                .map_or(1, |listing| listing.generation + 1),
+        };
+        self.files = files;
+        self.listing = Some(listing.clone());
+        Ok(listing)
     }
-    records.sort_by_key(|record| std::cmp::Reverse(record.updated_at));
-    Ok(records)
 }
 
 #[cfg(test)]
@@ -612,6 +693,83 @@ mod tests {
     use crate::agents::PermissionMode;
     use crate::ids::{AgentKind, WorkspaceId};
     use tempfile::tempdir;
+
+    fn listing_record() -> RunRecord {
+        RunRecord::new(
+            WorkspaceId::from_project_root(Path::new("/repo")),
+            AgentKind::new_unchecked("codex"),
+            PermissionMode::Auto,
+            "task".into(),
+            "/repo".into(),
+        )
+    }
+
+    #[test]
+    fn run_listing_reuses_unchanged_records_per_directory() {
+        let first = tempdir().unwrap();
+        let second = tempdir().unwrap();
+        write(first.path(), &listing_record()).unwrap();
+        let cold = listing(first.path()).unwrap();
+        listing(second.path()).unwrap();
+        super::super::sidecar::testkit::reset_parse_reads();
+        let warm = listing(first.path()).unwrap();
+        assert_eq!(super::super::sidecar::testkit::parse_reads(), 0);
+        assert_eq!(cold.generation, 1);
+        assert_eq!(warm.generation, cold.generation);
+        assert!(std::sync::Arc::ptr_eq(&cold.records, &warm.records));
+    }
+
+    #[test]
+    fn run_listing_reloads_reopened_terminal_record() {
+        let dir = tempdir().unwrap();
+        let mut record = listing_record();
+        record.status = RunStatus::Completed;
+        write(dir.path(), &record).unwrap();
+        let cold = listing(dir.path()).unwrap();
+        record.status = RunStatus::Running;
+        write(dir.path(), &record).unwrap();
+        super::super::sidecar::testkit::reset_parse_reads();
+        let reopened = listing(dir.path()).unwrap();
+        assert_eq!(reopened.generation, cold.generation + 1);
+        assert_eq!(reopened[0].status, RunStatus::Running);
+        assert_eq!(super::super::sidecar::testkit::parse_reads(), 1);
+    }
+
+    #[test]
+    fn run_listing_detects_equal_length_and_timestamp_replacement() {
+        let dir = tempdir().unwrap();
+        let mut record = listing_record();
+        write(dir.path(), &record).unwrap();
+        let path = run_path(dir.path(), &record.run_id);
+        let metadata = fs::metadata(&path).unwrap();
+        let cold = listing(dir.path()).unwrap();
+        record.prompt = "work".into();
+        write(dir.path(), &record).unwrap();
+        fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_times(fs::FileTimes::new().set_modified(metadata.modified().unwrap()))
+            .unwrap();
+        assert_eq!(fs::metadata(&path).unwrap().len(), metadata.len());
+        let changed = listing(dir.path()).unwrap();
+        assert_eq!(changed.generation, cold.generation + 1);
+        assert_eq!(changed[0].prompt, "work");
+    }
+
+    #[test]
+    fn run_listing_drops_deleted_records_and_ignores_temps() {
+        let dir = tempdir().unwrap();
+        let record = listing_record();
+        write(dir.path(), &record).unwrap();
+        let cold = listing(dir.path()).unwrap();
+        fs::write(dir.path().join("run.json.tmp.1.2"), "invalid").unwrap();
+        assert_eq!(listing(dir.path()).unwrap().generation, cold.generation);
+        fs::remove_file(run_path(dir.path(), &record.run_id)).unwrap();
+        let empty = listing(dir.path()).unwrap();
+        assert_eq!(empty.generation, cold.generation + 1);
+        assert!(empty.is_empty());
+    }
 
     #[test]
     fn status_label_is_the_wire_form_with_spaces() {
