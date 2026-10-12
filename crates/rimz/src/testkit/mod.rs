@@ -263,6 +263,14 @@ pub mod fleet {
     /// Representative retained history: 98% ended, 39% with pane argv, unique
     /// names and ids, and compact row sizes of about 4.8/13.2/35.9 kB (p50/p90/max).
     pub fn seed_ended_carryover(store: &crate::Store, rows: usize) -> crate::store::Result<()> {
+        seed_carryover(store, rows, false)
+    }
+
+    fn seed_carryover(
+        store: &crate::Store,
+        rows: usize,
+        all_ended: bool,
+    ) -> crate::store::Result<()> {
         let at = jiff::Timestamp::now();
         let mut names = std::collections::BTreeMap::new();
         let agents: Vec<_> = (0..rows)
@@ -272,7 +280,7 @@ pub mod fleet {
                 names.insert(name.clone(), (agent.kind.clone(), agent.agent_id.clone()));
                 agent.name = Some(name);
                 agent.kind_ordinal = Some(u32::try_from(index + 1).expect("fixture ordinal"));
-                agent.ended_at = ((index % 100 * 37) % 100 < 98).then_some(at);
+                agent.ended_at = (all_ended || (index % 100 * 37) % 100 < 98).then_some(at);
                 agent.task = Some("history task".to_owned());
                 agent.first_prompt = Some(String::new());
                 agent.prompt = Some(String::new());
@@ -312,6 +320,40 @@ pub mod fleet {
         )
         .map_err(crate::store::snapshot::SnapshotErr::from)?;
         Ok(())
+    }
+
+    /// Independent live-agent, live-pane, and ended-history dimensions.
+    #[derive(Clone, Copy, Debug)]
+    pub struct ScaleRoom {
+        pub agents: usize,
+        pub panes: usize,
+        pub ended_sessions: usize,
+    }
+
+    /// Seed a room with fresh producer inputs and return its live pane frame.
+    pub fn seed_scale_room(
+        paths: &StatePaths,
+        runtime: &RuntimePaths,
+        room: ScaleRoom,
+    ) -> io::Result<sidebar::frame::PaneFrame> {
+        let store = crate::Store::open(paths.clone(), runtime.clone()).map_err(io::Error::other)?;
+        seed_carryover(&store, room.ended_sessions, true).map_err(io::Error::other)?;
+        let panes = synthetic_panes(room.panes);
+        let bound = room.agents.min(room.panes);
+        seed_fleet_store_with_panes(paths, &panes[..bound], bound).map_err(io::Error::other)?;
+        for slot in bound..room.agents {
+            event_log::append(
+                &paths.events_log,
+                &registered_lifecycle(&paths.workspace_id, slot),
+            )
+            .map_err(io::Error::other)?;
+        }
+        publish_fresh_produce_inputs_for_panes(runtime, panes.clone())?;
+        Ok(sidebar::frame::assemble_frame(
+            panes,
+            crate::utils::time::unix_now_ms(),
+            SESSION_NAME,
+        ))
     }
 
     /// Append lifecycle frames bound to synthetic panes with real worktree paths.

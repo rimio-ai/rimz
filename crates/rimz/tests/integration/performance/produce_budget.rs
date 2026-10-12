@@ -22,6 +22,48 @@ const HISTORY_EVENTS: usize = 2_000;
 const ROUNDS: u32 = 20;
 
 #[test]
+fn scale_room_preserves_agent_pane_and_fence_dimensions() {
+    for (agents, panes, ended_sessions) in [(51, 24, 4_600), (200, 100, 5_000)] {
+        let h = Harness::new();
+        let paths = h.store.paths();
+        let frame = rimz::testkit::fleet::seed_scale_room(
+            paths,
+            &h.runtime_paths,
+            rimz::testkit::fleet::ScaleRoom {
+                agents,
+                panes,
+                ended_sessions,
+            },
+        )
+        .expect("scale room");
+        let mut cursor = RollupCursor::new();
+        let mut producer =
+            rimz::sidebar::produce::SnapshotProducer::seeded(&h.runtime_paths, SESSION_NAME);
+        let snapshot = rimz::sidebar::produce::produce_snapshot(
+            &mut cursor,
+            paths,
+            &h.runtime_paths,
+            &rimz::testkit::fleet::produce_options(),
+            &mut producer,
+        )
+        .expect("produce scale room");
+        assert_eq!(frame.to_pane_refs().len(), panes);
+        assert_eq!(snapshot.agents.len(), agents);
+        assert_eq!(snapshot.agent_panes.len(), panes);
+        assert_eq!(snapshot.worktree_groups.len(), panes);
+        assert!(snapshot.fenced_sessions.len() >= ended_sessions);
+        assert_eq!(
+            snapshot
+                .worktree_groups
+                .iter()
+                .map(|group| group.rows.len())
+                .sum::<usize>(),
+            panes
+        );
+    }
+}
+
+#[test]
 fn warm_fleet_produce_forks_zero_subprocesses() {
     let h = Harness::new();
     let paths = h.store.paths();
