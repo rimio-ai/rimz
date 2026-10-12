@@ -31,7 +31,7 @@ Three rules resolve that, and the rest of this page follows from them.
                              │
     realtime events ────────▶│◀────────────── focus intent
     room-shared overlay     ▼
-                   fuse(pulled, events, intent, now)
+                fuse_owned(pulled, events, intent, now)
                    pure: no IO, subprocess, or clock read past `now`
                              │
                        SidebarSnapshot ──▶ paint
@@ -110,6 +110,8 @@ The supervisor forwards raw key presses. The host resolves them against each att
 An attachment never touches the host's own terminal state, because the host has none. Geometry comes from `tcgetwinsize` on the pane fd and is read again on every `resize` word. A pane the mux has not laid out yet reports `0x0`: its heartbeat carries no `size` and nothing is drawn until the first resize sizes it. A write error on the fd, which is how a closed pane first shows, closes the attachment exactly as the supervisor's end of stream does. A panic in one attachment closes that attachment alone.
 
 One fold serves every pane. The fetch worker folds the renderer-independent workspace once per cycle, then projects it once per attachment, excluding that attachment's own pane. Tab names, the live roster, and notification delivery are decided once per fold, on the eldest attachment's view; each attachment still decides for itself whether a notification rings in its tab.
+
+Room rosters (`agents`, `fenced_sessions`, and `resume_outcomes`) and each agent card are shared by reference across projections, seeds, and baselines. Each pane owns its row list and pane-local fields. Pane-side code takes a mutable agent card only after a read shows the write changes it, preserving sharing for unchanged cards.
 
 Before its first paint, an attachment subscribes to the plane, then clones its last delivered fold from memory. It projects the fold for its own pane, applies its refresh override, and commits through the normal fusion and gate path as an interim cached snapshot before draining its inbox. A seed never completes a fetch or enters the result mailbox; the forced first fold still corrects it. The snapshot's `focused_pane` stays as folded for fusion and watched-state. A frame predating this attachment's pane yields `own_view: None`: `session_focus_baseline` withholds that focus. Neither the seed nor a subsequent cached fold of that frame derives selection or clears unread from that withheld focus; an established selection holds its last baseline. A warm host seeds from its last fold, with no age bound, stamp pairing, or incarnation guard. A cold host has no fold and paints the placeholder until its first delivery. Both backends share this rule.
 
@@ -358,6 +360,8 @@ Events divide by what the receiver does with them:
 - **Nudges and actions** are consumed on arrival. Some ask the producer for a verifying pull, some drive a renderer action, and none touch the overlay store.
 
 The host owns one overlay store ([`event_store.rs`](../../../crates/rimz/src/sidebar/event_store.rs)), shared by its attachments and diagnostic observer. Each pane fuses its own projected baseline against it. It keeps one slot per key (per pane per event kind, plus one focus slot), latest stamp wins, capped at 256 entries. Each entry records `sent_at_ms`, used for supersession against the pane frame, and its receive time, used for expiry after `EVENT_STORE_TTL` (12 seconds) on the receiver's clock. A skewed sender clock can briefly mis-order an overlay but can never pin one.
+
+A pane retains its baseline only while a fold applies an overlay or focus intent, or while the gate holds a rejected pull. The next pull or synthetic fold that finds neither overlay nor intent releases the baseline; event expiry alone does not trigger a fold or repaint.
 
 ### Event taxonomy
 

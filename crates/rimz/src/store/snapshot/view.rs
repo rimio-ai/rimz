@@ -93,6 +93,7 @@ pub fn find_agent<'a>(
 /// caps, status tallies, and row metadata are resolved here so renderers only
 /// paint semantics into glyphs.
 ///
+/// The `agents`, `fenced_sessions`, and `resume_outcomes` rosters and each agent card are shared by reference across projections, seeds, and baselines. Each pane owns its row list and pane-local fields.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SidebarSnapshot {
     #[serde(default)]

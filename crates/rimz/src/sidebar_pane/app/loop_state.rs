@@ -17,7 +17,7 @@ use crate::mux::focus_anchor::{
 use crate::observability::SIDEBAR_HEALTH_TARGET;
 use crate::sidebar::enrich::project_local;
 use crate::sidebar::event_store::EventStore;
-use crate::sidebar::fuse::{focus_intent_confirmed_from, fuse, fuse_owned};
+use crate::sidebar::fuse::{focus_intent_confirmed_from, fuse_owned};
 use crate::sidebar::observe::{self, ObserveMsg};
 use crate::sidebar::read_marks::{ReadMarks, write_read_marks};
 use crate::sidebar::timing::{FOCUS_REPAIR_RETRY_STEP, FOCUS_STRANDED_EVENT_TTL, TAB_READ_DWELL};
@@ -536,18 +536,15 @@ impl LoopState {
     /// Fuse the last pulled snapshot with the overlay event store and any
     /// pending focus intent as of `now_ms`.
     fn fused_snapshot(&mut self, now_ms: u64) -> (SidebarSnapshot, Option<u64>) {
-        if self.overlay_baseline.is_none() {
-            self.overlay_baseline = Some(self.current.clone());
-        }
+        let pulled = self
+            .overlay_baseline
+            .take()
+            .unwrap_or_else(|| self.current.clone());
         let intent = self.pending_focus_intent(now_ms);
-        fuse(
-            self.overlay_baseline
-                .as_ref()
-                .expect("overlay baseline installed"),
-            &self.events(),
-            intent.as_ref(),
-            now_ms,
-        )
+        let (fused, baseline, focus_event_sent_at_ms) =
+            fuse_owned(pulled, &self.events(), intent.as_ref(), now_ms);
+        self.overlay_baseline = baseline;
+        (fused, focus_event_sent_at_ms)
     }
 
     /// Fold a synthetic fused frame and snap the frame deadline so this

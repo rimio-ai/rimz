@@ -408,33 +408,6 @@ fn snapshot_fixture() -> SnapshotFixture {
     }
 }
 
-fn fuse_fixture() -> FuseFixture {
-    let SnapshotFixture {
-        _workspace,
-        snapshot,
-    } = snapshot_fixture();
-    let mut events = rimz::sidebar::event_store::EventStore::default();
-    let pane_id = rimz::PaneId::from_parts(rimz::MuxName::Zellij, "terminal_0");
-    let now_ms = snapshot
-        .panes_produced_at_ms
-        .unwrap_or_else(rimz::utils::time::unix_now_ms)
-        .saturating_add(1);
-    events.append(
-        rimz::wakeup::events::SidebarEvent::CommandChanged {
-            pane_id,
-            command: "claude".to_owned(),
-        },
-        now_ms,
-        now_ms,
-    );
-    FuseFixture {
-        _workspace,
-        snapshot,
-        events,
-        now_ms,
-    }
-}
-
 fn owned_fuse_fixture() -> FuseFixture {
     let SnapshotFixture {
         _workspace,
@@ -654,20 +627,6 @@ fn spending_discovery_fixture(warm: bool) -> SpendingFixture {
         );
     }
     fixture
-}
-
-#[divan::bench(sample_count = 20, sample_size = 1, skip_ext_time)]
-fn fuse(bencher: Bencher) {
-    bencher
-        .with_inputs(fuse_fixture)
-        .bench_local_values(|fixture| {
-            divan::black_box(rimz::sidebar::fuse::fuse(
-                &fixture.snapshot,
-                &fixture.events,
-                None,
-                fixture.now_ms,
-            ));
-        });
 }
 
 #[divan::bench(sample_count = 20, sample_size = 1, skip_ext_time)]
