@@ -11,6 +11,6 @@
 ## name = "prod"
 ## target = "agent@prod-box:query-engine"
 ## reconnect = true
-## no_resume = false
+## resume = true
 ## mux = "tmux"
 ## auto_forward = false

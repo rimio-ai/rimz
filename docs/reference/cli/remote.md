@@ -114,21 +114,22 @@ None of these contact the host. `add` and `update` check the name and parse the 
 | `name` | required | `<name>` | 1 to 64 ASCII letters, digits, `-`, or `_`, not starting with `-`. |
 | `target` | required | `<target>` | A [target](#targets). |
 | `reconnect` | `true` | `--no-reconnect` saves `false` | Supervise and reconnect the link. |
-| `no_resume` | `false` | `--no-resume` saves `true` | Pass `--no-resume` when a connect births the room. |
+| `resume` | `true` | `--no-resume` saves `false` | `false` passes `--no-resume` to the host. |
 | `mux` | unset | `--mux`, `--zellij`, or `--tmux` | Backend the host's `rimz` uses. |
 | `auto_forward` | `true` | `--no-auto-forward` saves `false` | Forward new remote listeners. |
 
-`remote list` prints one section per SSH destination (`[user@]host`), so the same host under two users gives two sections. Sections and the aliases in them sort by name; an alias whose target no longer parses appears first, under `Invalid targets`. With no aliases, it prints nothing.
+Unknown alias fields, including the old `no_resume` key, fail the load rather than being ignored.
+
+`remote list` prints one section per SSH destination (`[user@]host`), so the same host under two users gives two sections. Sections and the aliases in them sort by name; an alias whose target no longer parses appears first, under `Invalid targets`. Rows show the full target and only non-default settings, ordered as backend, `no-reconnect`, `no-resume`, `no-auto-forward`. With no aliases, it prints `no saved remotes; save one with: rimz remote add <name> [user@]host:<session-or-path>`.
 
 ```console
 $ rimz remote list
-  NAME  TARGET                              RECONNECT     RESUME     MUX   FORWARD
 
 agent@prod-box
-  prod  agent@prod-box:~/code/query-engine  no-reconnect  no-resume  tmux  off
+  prod  agent@prod-box:~/code/query-engine  tmux, no-reconnect, no-resume, no-auto-forward
 
 dev-box
-  dev   dev-box:query-engine                reconnect     resume     -     auto
+  dev  dev-box:query-engine
 ```
 
 `remote list --json` prints every alias in one flat array:
@@ -140,8 +141,8 @@ dev-box
       "auto_forward": true,
       "mux": null,
       "name": "dev",
-      "no_resume": false,
       "reconnect": true,
+      "resume": true,
       "target": "dev-box:query-engine"
     }
   ]

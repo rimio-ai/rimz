@@ -50,7 +50,7 @@ rimz remote rename dev devbox                     # rename one
 rimz remote rm devbox                             # forget one
 ```
 
-Aliases live on your machine in `~/.rimz/remote.toml`, and none of these commands contacts the host. `rimz remote list` groups them under their SSH destination, so the same host under two users reads as two groups, and prints each alias's full target and its settings; `--json` prints one flat array instead. `update` rewrites the whole record, so a setting you leave off returns to its default. The field table is in the [alias reference](../reference/cli/remote.md#saved-aliases).
+Aliases live on your machine in `~/.rimz/remote.toml`, and none of these commands contacts the host. `rimz remote list` groups them under their SSH destination, so the same host under two users reads as two groups, and prints each alias's full target and only its non-default settings; `--json` prints one flat array instead. `update` rewrites the whole record, so a setting you leave off returns to its default. The field table is in the [alias reference](../reference/cli/remote.md#saved-aliases).
 
 ## A link that heals itself
 

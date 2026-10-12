@@ -129,7 +129,7 @@ impl SavedAliasArgs {
             name,
             target: self.target,
             reconnect: !self.no_reconnect,
-            no_resume: self.no_resume,
+            resume: !self.no_resume,
             mux,
             auto_forward: !self.no_auto_forward,
         }
@@ -289,7 +289,7 @@ fn resolve_connect(
         origin: input.to_owned(),
         target: RemoteTarget::parse(&alias.target)?,
         reconnect: alias.reconnect && !no_reconnect,
-        no_resume: alias.no_resume || reset,
+        no_resume: !alias.resume || reset,
         force_version: false,
         mux: cli_mux.or(alias.mux),
         web: web::RemoteWebOptions::default(),
@@ -455,7 +455,7 @@ mod tests {
             name: name.to_owned(),
             target: target.to_owned(),
             reconnect,
-            no_resume,
+            resume: !no_resume,
             mux,
             auto_forward: true,
         }

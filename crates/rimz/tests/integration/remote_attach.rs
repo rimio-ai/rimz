@@ -37,6 +37,20 @@ fn stdout_line(out: &Output) -> String {
 }
 
 #[test]
+fn remote_list_empty_state_names_the_save_command() {
+    let env = Env::new();
+    let out = env
+        .rimz()
+        .args(["remote", "list"])
+        .bounded_output()
+        .unwrap();
+    assert_eq!(
+        stdout_line(&out),
+        "no saved remotes; save one with: rimz remote add <name> [user@]host:<session-or-path>"
+    );
+}
+
+#[test]
 fn remote_print_distinguishes_auto_fallback_from_explicit_print() {
     let env = Env::new();
     for flag in [None, Some("--print"), Some("--no-attach")] {
