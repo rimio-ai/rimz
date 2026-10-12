@@ -640,6 +640,7 @@ pub const COMPACTING_WINDOW_SECS: i64 = 90;
 
 /// How many user prompts a session rollup retains, newest last.
 const RECENT_PROMPTS_LIMIT: usize = 16;
+const RECENT_PROMPT_MAX_CHARS: usize = 512;
 
 /// Borrowed identity for one logical agent card.
 ///
@@ -674,6 +675,10 @@ impl<'a> AgentCardRef<'a> {
 
 /// Append one concrete prompt without duplicating a repeated observation.
 fn append_recent_prompt(recent_prompts: &mut Vec<String>, prompt: &str) {
+    let prompt = prompt
+        .char_indices()
+        .nth(RECENT_PROMPT_MAX_CHARS)
+        .map_or(prompt, |(end, _)| &prompt[..end]);
     if prompt.is_empty() || recent_prompts.last().is_some_and(|prior| prior == prompt) {
         return;
     }
