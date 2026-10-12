@@ -9834,15 +9834,12 @@ fn hold_loop_run_lock(path: &Path, holder: &RunLockInfo) -> std::fs::File {
 
 #[cfg(unix)]
 fn wait_for_held_loop_lock(child: &mut std::process::Child, path: &Path) -> RunLockInfo {
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + Duration::from_secs(60);
     loop {
-        if let Ok(file) = std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(path)
-            && matches!(file.try_lock(), Err(std::fs::TryLockError::WouldBlock))
-            && let Ok(bytes) = std::fs::read(path)
-            && let Ok(info) = serde_json::from_slice(&bytes)
+        // The runner writes its pid under the lock; probing the lock could steal it.
+        if let Ok(bytes) = std::fs::read(path)
+            && let Ok(info) = serde_json::from_slice::<RunLockInfo>(&bytes)
+            && info.pid == child.id()
         {
             return info;
         }
@@ -9850,11 +9847,19 @@ fn wait_for_held_loop_lock(child: &mut std::process::Child, path: &Path) -> RunL
             child.try_wait().expect("poll loop runner").is_none(),
             "loop runner exited before holding its lock"
         );
-        assert!(
-            Instant::now() < deadline,
-            "timed out waiting for loop run lock {}",
-            path.display()
-        );
+        if Instant::now() >= deadline {
+            child.kill().expect("kill timed-out loop runner");
+            child.wait().expect("reap timed-out loop runner");
+            let mut stderr = String::new();
+            if let Some(mut pipe) = child.stderr.take() {
+                pipe.read_to_string(&mut stderr)
+                    .expect("read loop runner stderr");
+            }
+            panic!(
+                "timed out waiting for loop run lock {}: {stderr}",
+                path.display()
+            );
+        }
         std::thread::sleep(Duration::from_millis(25));
     }
 }

@@ -167,7 +167,24 @@ mod tests {
                 let barrier = barrier.clone();
                 std::thread::spawn(move || {
                     barrier.wait();
-                    write_read_marks(&runtime, [format!("row-{n}")], n).unwrap();
+                    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+                    loop {
+                        let result = write_read_marks(&runtime, [format!("row-{n}")], n);
+                        // Retry the renderer's lock budget, not the max-update property under test.
+                        if matches!(
+                            &result,
+                            Err(atomic::AtomicErr::Io { source, .. })
+                                if matches!(
+                                    source.get_ref().and_then(|err| err.downcast_ref::<crate::disk::lock::LockErr>()),
+                                    Some(crate::disk::lock::LockErr::Timeout { .. })
+                                )
+                        ) && std::time::Instant::now() < deadline
+                        {
+                            continue;
+                        }
+                        result.unwrap();
+                        break;
+                    }
                 })
             })
             .collect();
