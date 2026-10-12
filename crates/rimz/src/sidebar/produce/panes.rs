@@ -140,7 +140,7 @@ impl PaneProducer {
                 publish_frame(
                     &runtime.pane_frame_path(),
                     Arc::make_mut(&mut frame),
-                    crate::wakeup::events::PaneFramePublicationKind::Metrics,
+                    PaneFramePublicationKind::Metrics,
                     own_pane,
                     diag,
                 );
@@ -153,7 +153,7 @@ impl PaneProducer {
                     publish_frame(
                         &runtime.pane_frame_path(),
                         Arc::make_mut(&mut frame),
-                        crate::wakeup::events::PaneFramePublicationKind::Presence,
+                        PaneFramePublicationKind::Presence,
                         own_pane,
                         diag,
                     );
@@ -179,7 +179,7 @@ impl PaneProducer {
                     publish_frame(
                         &runtime.pane_frame_path(),
                         &mut frame,
-                        crate::wakeup::events::PaneFramePublicationKind::Topology,
+                        PaneFramePublicationKind::Topology,
                         own_pane,
                         diag,
                     );
@@ -1264,7 +1264,7 @@ fn apply_presence_sample(frame: &mut PaneFrame, sample: PresenceSample) -> bool 
 fn publish_frame(
     cache_path: &Path,
     frame: &mut PaneFrame,
-    publication: crate::wakeup::events::PaneFramePublicationKind,
+    publication: PaneFramePublicationKind,
     own_pane: Option<&PaneId>,
     diag: &crate::diag::DiagSink,
 ) {
@@ -1288,9 +1288,10 @@ fn publish_frame(
             own_pane_listed: own_pane.map(|own| pane_ids.contains(own)),
             pane_count: pane_ids.len(),
             publication: match publication {
-                crate::wakeup::events::PaneFramePublicationKind::Presence => "presence",
-                crate::wakeup::events::PaneFramePublicationKind::Topology
-                | crate::wakeup::events::PaneFramePublicationKind::Metrics => "topology",
+                PaneFramePublicationKind::Presence => "presence",
+                PaneFramePublicationKind::Topology | PaneFramePublicationKind::Metrics => {
+                    "topology"
+                }
             }
             .to_owned(),
         },
@@ -1298,12 +1299,15 @@ fn publish_frame(
     );
 }
 
-fn stamp_publication(
-    frame: &mut PaneFrame,
-    publication: crate::wakeup::events::PaneFramePublicationKind,
-) {
-    use crate::wakeup::events::PaneFramePublicationKind;
+/// Which producer-owned input changed in a published pane frame.
+#[derive(Clone, Copy)]
+enum PaneFramePublicationKind {
+    Topology,
+    Metrics,
+    Presence,
+}
 
+fn stamp_publication(frame: &mut PaneFrame, publication: PaneFramePublicationKind) {
     let next =
         |current: Option<u64>| unix_now_ms().max(current.unwrap_or_default().saturating_add(1));
     match publication {

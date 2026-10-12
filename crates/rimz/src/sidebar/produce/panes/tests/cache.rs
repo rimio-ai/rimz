@@ -142,7 +142,7 @@ fn published_focus_trace_tracks_roster_edges_and_keeps_frame_stamps() {
     publish_frame(
         &runtime.pane_frame_path(),
         &mut published,
-        crate::wakeup::events::PaneFramePublicationKind::Topology,
+        PaneFramePublicationKind::Topology,
         Some(&own.pane_id),
         &diag,
     );
@@ -151,7 +151,7 @@ fn published_focus_trace_tracks_roster_edges_and_keeps_frame_stamps() {
     publish_frame(
         &runtime.pane_frame_path(),
         &mut repeated,
-        crate::wakeup::events::PaneFramePublicationKind::Topology,
+        PaneFramePublicationKind::Topology,
         Some(&own.pane_id),
         &diag,
     );
@@ -164,7 +164,7 @@ fn published_focus_trace_tracks_roster_edges_and_keeps_frame_stamps() {
     publish_frame(
         &runtime.pane_frame_path(),
         &mut changed,
-        crate::wakeup::events::PaneFramePublicationKind::Topology,
+        PaneFramePublicationKind::Topology,
         Some(&own.pane_id),
         &diag,
     );

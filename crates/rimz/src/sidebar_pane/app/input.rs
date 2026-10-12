@@ -11,7 +11,7 @@ use super::NavKeymap;
 pub(in crate::sidebar_pane) enum Wakeup {
     Tick,
     /// A typed sidebar event posted by the store, presence CLI, reload path,
-    /// or pane-frame publisher.
+    /// or the host's own notification delivery.
     Event(SidebarEventEnvelope),
     /// The background fetch worker finished a snapshot; fold the waiting result.
     Snapshot,

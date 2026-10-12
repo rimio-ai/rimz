@@ -350,7 +350,7 @@ Heartbeats are bounded by TTL while the session lives and by purge at rebirth: a
 
 Wakeup datagrams carry `SidebarEventEnvelope` ([`wakeup/events.rs`](../../../crates/rimz/src/wakeup/events.rs)): a schema version, the workspace id, an optional session scope, a sender timestamp, and the typed event.
 
-`session_name` is the scope. `Some` targets the one mux session whose pane ids the event names; `None` reaches every renderer of the workspace, which is how store deltas, reloads, and pane-frame publications travel. The host drops an event for another workspace or session once, before fanning it out to attachment channels. Reload words and envelopes instead reach the host inbox directly; other events keep their per-attachment effects, including the idempotent overlay-store append.
+`session_name` is the scope. `Some` targets the one mux session whose pane ids the event names; `None` reaches every renderer of the workspace, which is how store deltas and reloads travel. The host drops an event for another workspace or session once, before fanning it out to attachment channels. Reload words and envelopes instead reach the host inbox directly; other events keep their per-attachment effects, including the idempotent overlay-store append.
 
 Events divide by what the receiver does with them:
 
@@ -369,7 +369,6 @@ The host owns one overlay store ([`event_store.rs`](../../../crates/rimz/src/sid
 | `PaneOpened` | `pane_id`, optional `command` | Nudge a producer verification pull. Admits no card on its own. | Host presence projector |
 | `PanesChanged` | none | Nudge a producer pull: topology moved, identity unknown. | Projector fallback, or an incomplete tmux layout |
 | `StoreDelta` | optional event method and lifecycle signal | Refetch the rollup. A session start or end also requests fresh panes. | Store and context-sidecar writers ([store.md → wakeups](../store.md#wakeups)) |
-| `PaneFramePublished` | publication kind (topology, metrics, or presence) | Ignored legacy event; the host delivers folds directly. The wire variant remains compatible with older senders. | Older builds only |
 | `FocusIntent` | target `pane_id`, nonce | Fold the durable focus anchor now, so hidden peer tabs adopt the target before the mux switch reveals them. | Renderer jumps |
 | `FocusStranded` | owning sidebar `pane_id`, generation, client views | Focus repair in the matching renderer: keep its baseline if that is a live visible work sibling, otherwise pick the leftmost sibling; other renderers ignore it. Distinct client views leave focus alone, because `focus-pane-id` is session-global. Dropped after `FOCUS_STRANDED_EVENT_TTL` (2 seconds) so late delivery cannot yank focus. | Host presence projector, from a settled Zellij switch or a tmux window switch |
 | `WidthTargetChanged` | none | Re-read the room-runtime width share, resolve it against this renderer's view, and converge only its own pane. | The resolver or renderer that published a new target |

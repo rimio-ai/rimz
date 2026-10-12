@@ -355,8 +355,6 @@ fn unchanged_presence_preserves_pane_frame_and_sends_no_wakeup() {
 
 #[test]
 fn publication_stamps_only_workspace_affecting_sections() {
-    use crate::wakeup::events::PaneFramePublicationKind;
-
     let mut frame = frame(Vec::new());
     stamp_publication(&mut frame, PaneFramePublicationKind::Topology);
     let topology = frame.topology_stamp_ms.expect("topology stamp");

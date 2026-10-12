@@ -1044,11 +1044,13 @@ fn room_events_of_an_unknown_kind_reach_no_attachment() {
     let (first, _) = room.host.admit(&hello(&SidebarInstanceId::new())).unwrap();
     let (second, _) = room.host.admit(&hello(&SidebarInstanceId::new())).unwrap();
     let envelope = SidebarEventEnvelope::new(workspace(), None, 1, SidebarEvent::PanesChanged);
-    let mut value = serde_json::to_value(&envelope).unwrap();
-    value["event"]["kind"] = "retired_event".into();
-    room.host.room_wakeup(&serde_json::to_vec(&value).unwrap());
-    for pane in [&first, &second] {
-        assert_eq!(pane.inbox.try_recv(), Err(Empty));
+    for kind in ["retired_event", "pane_frame_published"] {
+        let mut value = serde_json::to_value(&envelope).unwrap();
+        value["event"]["kind"] = kind.into();
+        room.host.room_wakeup(&serde_json::to_vec(&value).unwrap());
+        for pane in [&first, &second] {
+            assert_eq!(pane.inbox.try_recv(), Err(Empty), "kind: {kind}");
+        }
     }
 }
 
