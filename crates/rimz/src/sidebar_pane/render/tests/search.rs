@@ -150,13 +150,12 @@ fn search_line_count_uses_all_rows_and_live_projection() {
     let mut snapshot = snapshot_with(agents);
     let process = snapshot_with(Vec::new())
         .with_live_panes(vec![pane("%shell", "auth-shell", "/repo/main")], None);
-    let group = snapshot
-        .worktree_groups
+    let group = std::sync::Arc::make_mut(&mut snapshot.worktree_groups)
         .iter_mut()
         .find(|g| g.rows.len() == 9)
         .unwrap();
     group.label = "group-label".to_owned();
-    group.rows.push(process.worktree_groups[0].rows[0].clone());
+    std::sync::Arc::make_mut(&mut group.rows).push(process.worktree_groups[0].rows[0].clone());
     let theme = Theme::fixed(true);
     for (query, filter, matches) in [
         ("auth-8", None, 1),

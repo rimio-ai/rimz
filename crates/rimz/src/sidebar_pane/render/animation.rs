@@ -69,7 +69,7 @@ pub(super) fn animation_cadence(
     for row in snapshot
         .worktree_groups
         .iter()
-        .flat_map(|group| &group.rows)
+        .flat_map(|group| group.rows.iter())
     {
         if row.is_agent() {
             if row.status() == Some(AgentStatus::Running) {

@@ -345,14 +345,15 @@ fn expanded_density_shows_subagents_on_non_selected_cards() {
     assert!(subagent_line.contains("· ⧖ waits (1)"));
     assert_snapshot("card_density_expanded_non_selected_subagents", rendered);
 
-    let row = snapshot.worktree_groups[0]
-        .rows
-        .iter_mut()
-        .find(|row| {
-            row.as_agent()
-                .is_some_and(|agent| !agent.sub_agents.is_empty())
-        })
-        .unwrap();
+    let row = std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )
+    .iter_mut()
+    .find(|row| {
+        row.as_agent()
+            .is_some_and(|agent| !agent.sub_agents.is_empty())
+    })
+    .unwrap();
     let row_id = row.id.clone();
     let parent = row.as_agent_mut().unwrap();
     let mut older = parent.sub_agents[0].clone();

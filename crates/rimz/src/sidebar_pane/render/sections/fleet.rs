@@ -255,7 +255,7 @@ pub(in crate::sidebar_pane::render) fn fleet_size(
         .sum();
     let subs = groups
         .iter()
-        .flat_map(|group| &group.rows)
+        .flat_map(|group| group.rows.iter())
         .filter_map(|row| row.as_agent())
         .map(|agent| agent.current_sub_agents().count())
         .sum();
@@ -298,7 +298,7 @@ fn bucket_style(
     let (rest_style, color) = tone;
     let oldest_unread = groups
         .iter()
-        .flat_map(|group| &group.rows)
+        .flat_map(|group| group.rows.iter())
         .filter(|row| row.status() == Some(status) && row.unread)
         .map(|row| age_secs(row.last_activity, now))
         .max();

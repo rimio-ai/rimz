@@ -604,7 +604,8 @@ fn snapshot(agent: AgentState, with_pane: bool, now: Timestamp) -> SidebarSnapsh
             pane_pid: None,
             worktree_path: agent.worktree_path.clone(),
             worktree_branch: agent.worktree_branch.clone(),
-        }];
+        }]
+        .into();
     }
     snapshot
 }

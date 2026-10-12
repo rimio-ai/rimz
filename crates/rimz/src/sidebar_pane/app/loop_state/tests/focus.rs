@@ -587,7 +587,9 @@ fn older_shared_inputs_do_not_renew_an_observed_receipt() {
         "notify.log.jsonl",
     );
     let mut snapshot = agent_snapshot(&rig.ws);
-    let row = &mut snapshot.worktree_groups[0].rows[0];
+    let row = &mut std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[0];
     row.last_activity = jiff::Timestamp::UNIX_EPOCH;
     if let Some(agent) = row.as_agent_mut() {
         agent.status = crate::agents::AgentStatus::Waiting;
@@ -608,7 +610,10 @@ fn older_shared_inputs_do_not_renew_an_observed_receipt() {
         Some(1_000),
         "a stale shared receipt baseline must not renew a pane's existing clear"
     );
-    snapshot.worktree_groups[0].rows[0].last_activity = jiff::Timestamp::now();
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[0]
+    .last_activity = jiff::Timestamp::now();
     rig.shared_fold(snapshot.clone(), Arc::default());
     let renewed =
         crate::sidebar::read_marks::ReadMarks::load(&rig.runtime).cleared_at_ms("agent-1");
@@ -617,8 +622,14 @@ fn older_shared_inputs_do_not_renew_an_observed_receipt() {
         "a new needs-a-look episode still receives a new receipt"
     );
     std::thread::sleep(Duration::from_millis(2));
-    snapshot.worktree_groups[0].rows[0].last_activity = jiff::Timestamp::now();
-    snapshot.worktree_groups[0].rows[0].unread = true;
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[0]
+    .last_activity = jiff::Timestamp::now();
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[0]
+    .unread = true;
     rig.shared_fold(snapshot, Arc::default());
     assert!(
         crate::sidebar::read_marks::ReadMarks::load(&rig.runtime).cleared_at_ms("agent-1")
@@ -644,7 +655,10 @@ fn older_shared_inputs_preserve_a_consumed_native_focus_event() {
         unfocused: vec![first],
     });
     assert_eq!(rig.state.current.focused_pane, Some(target.clone()));
-    snapshot.worktree_groups[0].rows[0].name = "updated by pull".to_owned();
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[0]
+    .name = "updated by pull".to_owned();
     rig.shared_fold(snapshot, inputs);
     assert!(
         rig.state
@@ -779,11 +793,12 @@ fn fresh_child_focus_anchor_selects_parent_and_seeds_scroll_and_hold() {
     )
     .unwrap();
     let mut snapshot = snapshot_with_focused_pane(&rig.ws, parent.clone());
-    let row = snapshot.worktree_groups[0]
-        .rows
-        .iter_mut()
-        .find(|row| row.pane.as_ref().unwrap().pane_id == parent)
-        .unwrap();
+    let row = std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )
+    .iter_mut()
+    .find(|row| row.pane.as_ref().unwrap().pane_id == parent)
+    .unwrap();
     row.card = crate::store::snapshot::RowCard::Agent(std::sync::Arc::default());
     row.as_agent_mut().unwrap().sub_agents.push(
         serde_json::from_value(serde_json::json!({
@@ -972,7 +987,7 @@ fn browse_survives_a_frameless_escape_hatch_with_a_live_order_hold() {
 
     let mut frameless = framed.clone();
     frameless.panes_produced_at_ms = None;
-    frameless.worktree_groups.clear();
+    std::sync::Arc::make_mut(&mut frameless.worktree_groups).clear();
     rig.fold(frameless.clone(), SnapshotSource::Cached);
     assert_eq!(rig.state.gate.reject_streak, 1);
     assert_eq!(rig.state.current.panes_produced_at_ms, Some(1));
@@ -1013,10 +1028,13 @@ fn answering_focused_agent_holds_the_pre_answer_order() {
     other.id = "agent-2".to_owned();
     other.pane = Some(pane("terminal_1", "tab_0", false));
     other.attention_score = 200;
-    before.worktree_groups[0].rows[0].attention_score = 600;
+    std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut before.worktree_groups)[0].rows)
+        [0]
+    .attention_score = 600;
     set_agent_status(&mut before, crate::agents::AgentStatus::Waiting);
     other.as_agent_mut().expect("agent row").status = crate::agents::AgentStatus::Running;
-    before.worktree_groups[0].rows.push(other);
+    std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut before.worktree_groups)[0].rows)
+        .push(other);
     before.focused_pane = Some(selected.clone());
     // Keep this fold independent of the existing focus-read hold trigger.
     before.viewed_panes.clear();
@@ -1029,7 +1047,9 @@ fn answering_focused_agent_holds_the_pre_answer_order() {
 
     let mut after = before;
     after.panes_produced_at_ms = Some(2);
-    after.worktree_groups[0].rows[0].attention_score = 200;
+    std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut after.worktree_groups)[0].rows)
+        [0]
+    .attention_score = 200;
     set_agent_status(&mut after, crate::agents::AgentStatus::Running);
     let mut ranked = after.clone();
     ranked.sort_groups_for_presentation();
@@ -1056,11 +1076,18 @@ fn mark_all_read_clears_every_unread_row_and_writes_receipts() {
     let mut rig = Rig::new();
     let mut snapshot = agent_snapshot(&rig.ws);
     let mut second = snapshot.worktree_groups[0].rows[0].clone();
-    snapshot.worktree_groups[0].rows[0].id = "agent-1".to_owned();
-    snapshot.worktree_groups[0].rows[0].unread = true;
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[0]
+    .id = "agent-1".to_owned();
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[0]
+    .unread = true;
     second.id = "agent-2".to_owned();
     second.unread = true;
-    snapshot.worktree_groups[0].rows.push(second);
+    std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows)
+        .push(second);
     rig.state.current = snapshot;
     rig.state.ui.unread_guard = Some("agent-1".to_owned());
     rig.state.ui.last_order =

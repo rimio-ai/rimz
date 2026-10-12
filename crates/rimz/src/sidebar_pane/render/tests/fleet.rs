@@ -529,10 +529,9 @@ fn make_up_buckets_pulse_only_while_unread() {
         "read buckets stay static phase to phase"
     );
 
-    snapshot
-        .worktree_groups
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)
         .iter_mut()
-        .flat_map(|group| group.rows.iter_mut())
+        .flat_map(|group| std::sync::Arc::make_mut(&mut group.rows).iter_mut())
         .find(|row| row.status() == Some(AgentStatus::Failed))
         .expect("failed row")
         .unread = true;
@@ -581,7 +580,10 @@ fn make_up_buckets_pulse_only_while_unread() {
             .all(|style| style == &labels::status_rest_style(&theme, AgentStatus::Success))
     );
 
-    success_snapshot.worktree_groups[0].rows[0].unread = true;
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut success_snapshot.worktree_groups)[0].rows,
+    )[0]
+    .unread = true;
     let unread_success: Vec<_> = (0..32)
         .map(|phase| bucket_style(&success_snapshot, "✓ 1", phase))
         .collect();
@@ -602,10 +604,9 @@ fn make_up_buckets_pulse_only_while_unread() {
     );
 
     let mut running_snapshot = make_up_snapshot();
-    running_snapshot
-        .worktree_groups
+    std::sync::Arc::make_mut(&mut running_snapshot.worktree_groups)
         .iter_mut()
-        .flat_map(|group| group.rows.iter_mut())
+        .flat_map(|group| std::sync::Arc::make_mut(&mut group.rows).iter_mut())
         .find(|row| row.status() == Some(AgentStatus::Running))
         .expect("running row")
         .unread = true;
@@ -629,7 +630,10 @@ fn make_up_buckets_pulse_only_while_unread() {
     );
     idle.last_activity = fixed_now() - Duration::from_secs(5 * 60);
     let mut idle_snapshot = snapshot_with(vec![idle]);
-    idle_snapshot.worktree_groups[0].rows[0].unread = true;
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut idle_snapshot.worktree_groups)[0].rows,
+    )[0]
+    .unread = true;
     let unread_idle: Vec<_> = (0..32)
         .map(|phase| bucket_style(&idle_snapshot, "○ 1", phase))
         .collect();
@@ -644,11 +648,11 @@ fn make_up_buckets_pulse_only_while_unread() {
 #[test]
 fn render_cockpit_unread_count() {
     let mut snapshot = make_up_snapshot();
-    snapshot.worktree_groups[0].pr_state = Some(crate::store::snapshot::WorktreePrState::Open);
-    snapshot
-        .worktree_groups
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].pr_state =
+        Some(crate::store::snapshot::WorktreePrState::Open);
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)
         .iter_mut()
-        .flat_map(|group| group.rows.iter_mut())
+        .flat_map(|group| std::sync::Arc::make_mut(&mut group.rows).iter_mut())
         .find(|row| row.status() == Some(AgentStatus::Failed))
         .expect("failed row")
         .unread = true;
@@ -667,14 +671,20 @@ fn render_cockpit_unread_count() {
     let mut sibling = snapshot.worktree_groups[unread_group].rows[0].clone();
     sibling.id.push_str("-sibling");
     sibling.name.push_str("-sibling");
-    snapshot.worktree_groups[unread_group].rows.push(sibling);
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[unread_group].rows,
+    )
+    .push(sibling);
     let screen = snapshot_to_screen(&snapshot, 38, 20);
     assert!(
         screen.lines().any(|line| line.contains("¤ 2 (1) ⑃ 1")),
         "two unread cards in one worktree count once:\n{screen}"
     );
 
-    snapshot.worktree_groups[1 - unread_group].rows[0].unread = true;
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[1 - unread_group].rows,
+    )[0]
+    .unread = true;
     let screen = snapshot_to_screen(&snapshot, 38, 20);
     assert!(
         screen.lines().any(|line| line.contains("¤ 2 (2) ⑃ 1")),
@@ -690,12 +700,14 @@ fn render_cockpit_counts_open_prs_including_finished_lanes() {
     merged.label.push_str("-merged");
     merged.pr_state = Some(crate::store::snapshot::WorktreePrState::Merged);
     merged.pr_number = Some(303);
-    snapshot.worktree_groups[0].pr_state = Some(crate::store::snapshot::WorktreePrState::Open);
-    snapshot.worktree_groups[0].pr_number = Some(101);
-    snapshot.worktree_groups[0].finished = true;
-    snapshot.worktree_groups[1].pr_state = Some(crate::store::snapshot::WorktreePrState::Open);
-    snapshot.worktree_groups[1].pr_number = Some(202);
-    snapshot.worktree_groups.push(merged);
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].pr_state =
+        Some(crate::store::snapshot::WorktreePrState::Open);
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].pr_number = Some(101);
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].finished = true;
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[1].pr_state =
+        Some(crate::store::snapshot::WorktreePrState::Open);
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[1].pr_number = Some(202);
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups).push(merged);
 
     let screen = snapshot_to_screen(&snapshot, 38, 20);
     let spend = screen
@@ -741,7 +753,7 @@ fn render_cockpit_counts_stacked_prs() {
     phase2.pr_stack.below = vec![stack_pr(552), stack_pr(553)];
     let docs = open_group(&snapshot, "docs", Some(569));
     let cockpit = open_group(&snapshot, "cockpit", Some(559));
-    snapshot.worktree_groups = vec![phase2, docs, cockpit];
+    snapshot.worktree_groups = vec![phase2, docs, cockpit].into();
 
     let screen = snapshot_to_screen(&snapshot, 38, 20);
     let spend = screen
@@ -799,24 +811,30 @@ fn open_pr_total_counts_distinct_open_prs() {
 #[test]
 fn cockpit_pr_ci_uses_worst_known_open_verdict() {
     let mut snapshot = make_up_snapshot();
-    snapshot.worktree_groups[0].pr_state = Some(crate::store::snapshot::WorktreePrState::Open);
-    snapshot.worktree_groups[0].ci = Some(crate::store::snapshot::WorktreeCi::Passing);
-    snapshot.worktree_groups[1].pr_state = Some(crate::store::snapshot::WorktreePrState::Open);
-    snapshot.worktree_groups[1].ci = Some(crate::store::snapshot::WorktreeCi::Passing);
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].pr_state =
+        Some(crate::store::snapshot::WorktreePrState::Open);
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].ci =
+        Some(crate::store::snapshot::WorktreeCi::Passing);
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[1].pr_state =
+        Some(crate::store::snapshot::WorktreePrState::Open);
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[1].ci =
+        Some(crate::store::snapshot::WorktreeCi::Passing);
     assert_eq!(
         open_pr_worst_ci(&snapshot.worktree_groups),
         Some(crate::store::snapshot::WorktreeCi::Passing)
     );
 
-    snapshot.worktree_groups[1].ci = None;
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[1].ci = None;
     assert_eq!(open_pr_worst_ci(&snapshot.worktree_groups), None);
 
-    snapshot.worktree_groups[1].ci = Some(crate::store::snapshot::WorktreeCi::Pending);
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[1].ci =
+        Some(crate::store::snapshot::WorktreeCi::Pending);
     assert_eq!(
         open_pr_worst_ci(&snapshot.worktree_groups),
         Some(crate::store::snapshot::WorktreeCi::Pending)
     );
-    snapshot.worktree_groups[0].ci = Some(crate::store::snapshot::WorktreeCi::Failing);
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].ci =
+        Some(crate::store::snapshot::WorktreeCi::Failing);
     assert_eq!(
         open_pr_worst_ci(&snapshot.worktree_groups),
         Some(crate::store::snapshot::WorktreeCi::Failing)
@@ -826,7 +844,8 @@ fn cockpit_pr_ci_uses_worst_known_open_verdict() {
 #[test]
 fn render_cockpit_uses_dedicated_nerd_font_pr_glyph() {
     let mut snapshot = make_up_snapshot();
-    snapshot.worktree_groups[0].pr_state = Some(crate::store::snapshot::WorktreePrState::Open);
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].pr_state =
+        Some(crate::store::snapshot::WorktreePrState::Open);
     snapshot.theme.glyphs.set = Some("nerd_font".to_owned());
 
     let screen = snapshot_to_screen(&snapshot, 38, 20);
@@ -887,12 +906,11 @@ fn unread_jump_banner_shows_only_when_the_lead_is_scrolled_off() {
 #[test]
 fn render_make_up_filter_narrows_the_body() {
     let mut snapshot = make_up_snapshot();
-    let main_group = snapshot
-        .worktree_groups
+    let main_group = std::sync::Arc::make_mut(&mut snapshot.worktree_groups)
         .iter_mut()
         .find(|group| group.label == "main")
         .expect("the fixture groups by worktree");
-    main_group.rows.push(crate::store::snapshot::SidebarRow {
+    std::sync::Arc::make_mut(&mut main_group.rows).push(crate::store::snapshot::SidebarRow {
         id: "%9".to_owned(),
         name: "zsh".to_owned(),
         pane: Some(pane("%9", "zsh", "/home/me/query-engine")),
@@ -940,10 +958,9 @@ fn render_make_up_filter_narrows_the_body() {
 #[test]
 fn render_unread_filter_narrows_the_body() {
     let mut snapshot = make_up_snapshot();
-    let failed = snapshot
-        .worktree_groups
+    let failed = std::sync::Arc::make_mut(&mut snapshot.worktree_groups)
         .iter_mut()
-        .flat_map(|group| group.rows.iter_mut())
+        .flat_map(|group| std::sync::Arc::make_mut(&mut group.rows).iter_mut())
         .find(|row| row.status() == Some(AgentStatus::Failed))
         .expect("failed row");
     failed.unread = true;

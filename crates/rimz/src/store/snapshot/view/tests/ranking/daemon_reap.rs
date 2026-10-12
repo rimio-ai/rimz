@@ -226,7 +226,7 @@ fn daemon_view_agent_survives_reap_and_live_pane_fold() {
         snapshot
             .worktree_groups
             .iter()
-            .flat_map(|group| &group.rows)
+            .flat_map(|group| group.rows.iter())
             .any(|row| {
                 row.is_agent()
                     && row

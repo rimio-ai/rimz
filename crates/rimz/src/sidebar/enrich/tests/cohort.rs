@@ -9,11 +9,13 @@ fn cohort_effort_projects_by_group_key_and_clears_misses() {
     snapshot.worktree_groups = vec![
         worktree_group(&first, Vec::new()),
         worktree_group(&second, Vec::new()),
-    ];
-    snapshot.worktree_groups[1].cohort_effort = Some(crate::store::snapshot::SidebarCohortEffort {
-        cost_usd: Some(99.0),
-        ..crate::store::snapshot::SidebarCohortEffort::default()
-    });
+    ]
+    .into();
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[1].cohort_effort =
+        Some(crate::store::snapshot::SidebarCohortEffort {
+            cost_usd: Some(99.0),
+            ..crate::store::snapshot::SidebarCohortEffort::default()
+        });
     let expected = crate::store::snapshot::SidebarCohortEffort {
         cost_usd: Some(1.25),
         tokens: crate::agents::spending::EffortTokens {

@@ -326,7 +326,7 @@ fn prune_delegation_state(snapshot: &SidebarSnapshot, ui: &mut UiState) {
         snapshot
             .worktree_groups
             .iter()
-            .flat_map(|group| &group.rows)
+            .flat_map(|group| group.rows.iter())
             .find(|row| row.id == id)
             .and_then(SidebarRow::as_agent)
     };
@@ -688,7 +688,7 @@ pub fn render_expanded_line_ansi<W: Write>(
         delegation_history: snapshot
             .worktree_groups
             .iter()
-            .flat_map(|group| &group.rows)
+            .flat_map(|group| group.rows.iter())
             .filter_map(|row| {
                 row.as_agent()
                     .filter(|agent| agent.sub_agent_count > 0)

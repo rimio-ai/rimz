@@ -247,17 +247,21 @@ fn snapshot_with_focused_pane(ws: &WorkspaceId, active: PaneId) -> SidebarSnapsh
 }
 
 fn set_agent_status(snapshot: &mut SidebarSnapshot, status: crate::agents::AgentStatus) {
-    snapshot.worktree_groups[0].rows[0]
-        .as_agent_mut()
-        .expect("agent row")
-        .status = status;
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[0]
+    .as_agent_mut()
+    .expect("agent row")
+    .status = status;
 }
 
 fn set_agent_phase(snapshot: &mut SidebarSnapshot, phase: crate::agents::TurnPhase) {
-    snapshot.worktree_groups[0].rows[0]
-        .as_agent_mut()
-        .expect("agent row")
-        .phase = phase;
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[0]
+    .as_agent_mut()
+    .expect("agent row")
+    .phase = phase;
 }
 
 fn store_delta() -> SidebarEvent {

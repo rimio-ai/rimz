@@ -437,7 +437,7 @@ fn gallery_columns_follow_requested_order_and_selection() {
         let selected = snapshot
             .worktree_groups
             .iter()
-            .flat_map(|group| &group.rows)
+            .flat_map(|group| group.rows.iter())
             .nth(selected_index)
             .expect("selected row");
         if !matches!(
@@ -596,7 +596,7 @@ fn gallery_fixtures_build_with_coherent_context() {
     let statuses = cockpit
         .worktree_groups
         .iter()
-        .flat_map(|group| &group.rows)
+        .flat_map(|group| group.rows.iter())
         .filter_map(|row| row.status())
         .collect::<Vec<_>>();
     assert!(statuses.contains(&rimz::agents::AgentStatus::Running));
@@ -626,8 +626,8 @@ fn gallery_fixtures_build_with_coherent_context() {
 
     let all_statuses = states
         .iter()
-        .flat_map(|snapshot| &snapshot.worktree_groups)
-        .flat_map(|group| &group.rows)
+        .flat_map(|snapshot| snapshot.worktree_groups.iter())
+        .flat_map(|group| group.rows.iter())
         .filter_map(|row| row.status())
         .collect::<Vec<_>>();
     for status in [
@@ -649,7 +649,7 @@ fn gallery_fixtures_build_with_coherent_context() {
             .map(|count| count.count)
             .sum::<usize>();
         assert!((10..=42).contains(&live), "live count {live}");
-        for group in &snapshot.worktree_groups {
+        for group in snapshot.worktree_groups.iter() {
             let rendered_idle = group
                 .rows
                 .iter()
@@ -675,8 +675,8 @@ fn gallery_fixtures_build_with_coherent_context() {
     }));
     for row in states
         .iter()
-        .flat_map(|snapshot| &snapshot.worktree_groups)
-        .flat_map(|group| &group.rows)
+        .flat_map(|snapshot| snapshot.worktree_groups.iter())
+        .flat_map(|group| group.rows.iter())
     {
         let Some(card) = row.as_agent() else { continue };
         if row.status() == Some(rimz::agents::AgentStatus::Idle) {
@@ -823,7 +823,7 @@ fn agent_card_by_id<'a>(
     snapshot
         .worktree_groups
         .iter()
-        .flat_map(|group| &group.rows)
+        .flat_map(|group| group.rows.iter())
         .find_map(|row| match &row.card {
             rimz::store::snapshot::RowCard::Agent(card) if row.id == id => Some(card.as_ref()),
             _ => None,
@@ -838,7 +838,7 @@ fn agent_cards(
     snapshot
         .worktree_groups
         .iter()
-        .flat_map(|group| &group.rows)
+        .flat_map(|group| group.rows.iter())
         .filter_map(|row| row.as_agent())
         .collect()
 }

@@ -205,7 +205,8 @@ fn fleet(groups: usize, per_group: usize, providers: usize) -> SidebarSnapshot {
                 }],
                 rows: (0..per_group)
                     .map(|index| agent_row(group, index))
-                    .collect(),
+                    .collect::<Vec<_>>()
+                    .into(),
                 diff_added: Some(120),
                 diff_removed: Some(40),
                 commits_ahead: Some(3),
@@ -222,11 +223,12 @@ fn fleet(groups: usize, per_group: usize, providers: usize) -> SidebarSnapshot {
                 pr_number: None,
                 pr_url: None,
             })
-            .collect(),
+            .collect::<Vec<_>>()
+            .into(),
         agents: Default::default(),
         wired_kinds: Vec::new(),
         wired_default_models: std::collections::BTreeMap::new(),
-        agent_panes: Vec::new(),
+        agent_panes: Vec::new().into(),
         own_view: None,
         only_daemon_view_remains: false,
         project_root: Some(std::path::PathBuf::from("/repo")),

@@ -194,7 +194,9 @@ fn tab_pick_holds_until_the_derived_kind_genuinely_changes() {
     // The selected agent row turning into another provider's ends it: the
     // derived kind genuinely changed, so the derived default takes over.
     let mut moved = tabbed_snapshot(&ws);
-    moved.worktree_groups[0].rows[0].name = "pi".to_owned();
+    std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut moved.worktree_groups)[0].rows)
+        [0]
+    .name = "pi".to_owned();
     reconcile_selection(&mut ui, &moved, Some(agent_pane));
     assert!(
         ui.dashboard_tab.is_none(),
@@ -212,7 +214,10 @@ fn tab_pick_holds_until_the_derived_kind_genuinely_changes() {
 fn dashboard_holds_the_last_agent_across_a_non_agent_selection() {
     let ws = workspace();
     let mut snapshot = tabbed_snapshot(&ws);
-    snapshot.worktree_groups[0].rows[0].name = "codex".to_owned();
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[0]
+    .name = "codex".to_owned();
     let agent_pane = PaneId::from_parts(MuxName::Zellij, "terminal_9");
     let process_pane = PaneId::from_parts(MuxName::Zellij, "terminal_10");
     let mut ui = UiState::default();
@@ -239,7 +244,10 @@ fn dashboard_holds_the_last_agent_across_a_non_agent_selection() {
 fn dashboard_ignores_agent_kinds_without_a_panel_for_hold_last() {
     let ws = workspace();
     let mut snapshot = tabbed_snapshot(&ws);
-    snapshot.worktree_groups[0].rows[0].name = "codex".to_owned();
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[0]
+    .name = "codex".to_owned();
     let agent_pane = PaneId::from_parts(MuxName::Zellij, "terminal_9");
     let mut ui = UiState::default();
 
@@ -252,7 +260,10 @@ fn dashboard_ignores_agent_kinds_without_a_panel_for_hold_last() {
     );
 
     let mut unpanelled = tabbed_snapshot(&ws);
-    unpanelled.worktree_groups[0].rows[0].name = "opencode".to_owned();
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut unpanelled.worktree_groups)[0].rows,
+    )[0]
+    .name = "opencode".to_owned();
     reconcile_selection(&mut ui, &unpanelled, Some(agent_pane));
 
     assert_eq!(

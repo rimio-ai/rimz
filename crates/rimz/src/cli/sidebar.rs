@@ -1172,7 +1172,7 @@ fn gallery_selected_index(snapshot: &SidebarSnapshot, selector: fn(&SidebarRow) 
     snapshot
         .worktree_groups
         .iter()
-        .flat_map(|group| &group.rows)
+        .flat_map(|group| group.rows.iter())
         .position(selector)
         .unwrap_or(0)
 }
@@ -1249,7 +1249,7 @@ fn mark_read(globals: &GlobalFlags, target: String, worktree: Option<String>) ->
         .context("writing manual read marks")?;
     let mut episodes = rimz::sidebar::unread::UnreadEpisodes::load(&resolved.runtime);
     let mut cleared = Vec::new();
-    for row in &resolved.rows {
+    for row in resolved.rows.iter() {
         if episodes.remove_reached_for_row(row, now_ms) {
             cleared.push(row);
         }
@@ -1523,7 +1523,7 @@ fn rows_for_targets(snapshot: &SidebarSnapshot, targets: &[&PaneAgent]) -> Resul
         let Some(row) = snapshot
             .worktree_groups
             .iter()
-            .flat_map(|group| &group.rows)
+            .flat_map(|group| group.rows.iter())
             .find(|row| {
                 row.pane
                     .as_ref()

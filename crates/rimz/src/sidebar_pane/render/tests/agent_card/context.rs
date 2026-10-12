@@ -30,10 +30,12 @@ fn cache_meter_snapshot(quiet_secs: u64, cache: Option<CacheClock>) -> SidebarSn
     parent.last_activity = fixed_now() - Duration::from_secs(quiet_secs);
     parent.last_seen = parent.last_activity;
     let mut snapshot = snapshot_with(vec![parent]);
-    snapshot.worktree_groups[0].rows[0]
-        .as_agent_mut()
-        .unwrap()
-        .cache = cache;
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[0]
+    .as_agent_mut()
+    .unwrap()
+    .cache = cache;
     snapshot
 }
 
@@ -209,7 +211,11 @@ fn lapsed_or_incomplete_hold_uses_the_latest_cache_request() {
 fn expired_empty_context_meter_stays_empty() {
     let theme = Theme::fixed(false);
     let mut expired = cache_meter_snapshot(40 * 60, Some(half_hour_cache()));
-    let card = expired.worktree_groups[0].rows[0].as_agent_mut().unwrap();
+    let card = std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut expired.worktree_groups)[0].rows,
+    )[0]
+    .as_agent_mut()
+    .unwrap();
     let tokens = card.context.as_mut().unwrap().tokens.as_mut().unwrap();
     tokens.used_percentage = Some(0);
     tokens.current_usage = Some(AgentCurrentUsage::default());
@@ -229,10 +235,11 @@ fn expired_empty_context_meter_stays_empty() {
             .to_string()
             .contains(theme.glyph(GlyphRole::MeterBarHalf))
     );
-    expired.worktree_groups[0].rows[0]
-        .as_agent_mut()
-        .unwrap()
-        .cache = None;
+    std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut expired.worktree_groups)[0].rows)
+        [0]
+    .as_agent_mut()
+    .unwrap()
+    .cache = None;
     assert_eq!(empty, cache_meter_line(&expired, &theme));
 }
 
@@ -255,7 +262,9 @@ fn expired_parent_context_meter_ages_while_children_work() {
     child.last_activity = fixed_now() - Duration::from_secs(5);
     child.last_seen = child.last_activity;
     let mut snapshot = snapshot_with(vec![parent, child]);
-    let row = &mut snapshot.worktree_groups[0].rows[0];
+    let row = &mut std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[0];
     assert_eq!(row.last_activity, fixed_now() - Duration::from_secs(5));
     row.as_agent_mut().unwrap().cache = Some(half_hour_cache());
     assert_expired_meter(&cache_meter_line(&snapshot, &theme), &theme);

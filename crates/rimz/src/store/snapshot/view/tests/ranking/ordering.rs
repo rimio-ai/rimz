@@ -95,8 +95,7 @@ fn calm_order_uses_pane_ordinal_not_label() {
 
     // A paneless idle row has no ordinal and tails the bucket, below every
     // pane-backed calm row.
-    snapshot.worktree_groups[0]
-        .rows
+    std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows)
         .push(idle_agent_row("paneless", None));
     snapshot.sort_groups_for_presentation();
     let row_order = snapshot.worktree_groups[0]
@@ -285,8 +284,7 @@ fn agent_cards_lead_process_rows_even_when_inactive() {
         agent_in("old-done", "/repo/main", AgentStatus::Success, 1_000)
             .active_ago(ATTENTION_AGE_CEILING_SECS + 1),
     ]);
-    snapshot.worktree_groups[0]
-        .rows
+    std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows)
         .push(process_row("zsh", "/repo/main"));
     snapshot.sort_groups_for_presentation();
 
@@ -322,7 +320,7 @@ fn inactive_groups_sink_below_process_groups() {
             .active_ago(ATTENTION_AGE_CEILING_SECS + 1),
         agent_in("fresh-idle", "/repo/c", AgentStatus::Idle, 2_000),
     ]);
-    snapshot.worktree_groups.push(SidebarWorktreeGroup {
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups).push(SidebarWorktreeGroup {
         pr_stack: Default::default(),
         key: "/repo/b".to_owned(),
         label: "b".to_owned(),
@@ -332,7 +330,7 @@ fn inactive_groups_sink_below_process_groups() {
         cohort_effort: None,
         pipeline: None,
         status_counts: Vec::new(),
-        rows: vec![process_row("zsh", "/repo/b")],
+        rows: vec![process_row("zsh", "/repo/b")].into(),
         diff_added: None,
         diff_removed: None,
         commits_ahead: None,
@@ -367,13 +365,14 @@ fn live_process_keeps_mixed_group_above_inactive_groups() {
             .active_ago(ATTENTION_AGE_CEILING_SECS + 1),
         agent_in("fresh-c", "/repo/c", AgentStatus::Idle, 3_000),
     ]);
-    snapshot
-        .worktree_groups
-        .iter_mut()
-        .find(|group| group.label == "b")
-        .expect("group b present")
-        .rows
-        .push(process_row("zsh", "/repo/b"));
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)
+            .iter_mut()
+            .find(|group| group.label == "b")
+            .expect("group b present")
+            .rows,
+    )
+    .push(process_row("zsh", "/repo/b"));
     snapshot.sort_groups_for_presentation();
 
     assert_eq!(
@@ -666,7 +665,8 @@ fn listing_roster_order_matches_row_order_when_rows_have_no_sidebar_state() {
                 stamp_lifted_attention(&mut row);
                 row
             })
-            .collect(),
+            .collect::<Vec<_>>()
+            .into(),
         diff_added: None,
         diff_removed: None,
         commits_ahead: None,
@@ -682,7 +682,8 @@ fn listing_roster_order_matches_row_order_when_rows_have_no_sidebar_state() {
         ci: None,
         pr_number: None,
         pr_url: None,
-    }];
+    }]
+    .into();
     row_snapshot.sort_groups_for_presentation();
     let row_order = row_snapshot.worktree_groups[0]
         .rows
@@ -734,10 +735,9 @@ fn stamp_lifted_attention(row: &mut SidebarRow) {
 }
 
 fn row_mut<'a>(snapshot: &'a mut SidebarSnapshot, id: &str) -> &'a mut SidebarRow {
-    snapshot
-        .worktree_groups
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)
         .iter_mut()
-        .flat_map(|group| group.rows.iter_mut())
+        .flat_map(|group| std::sync::Arc::make_mut(&mut group.rows).iter_mut())
         .find(|row| row.id == id)
         .unwrap_or_else(|| panic!("row {id} present"))
 }

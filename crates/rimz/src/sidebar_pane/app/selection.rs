@@ -462,7 +462,7 @@ fn toggle_delegation_history(ui: &mut UiState, snapshot: &SidebarSnapshot, row_i
     let Some(agent) = snapshot
         .worktree_groups
         .iter()
-        .flat_map(|group| &group.rows)
+        .flat_map(|group| group.rows.iter())
         .find(|row| row.id == row_id)
         .and_then(|row| row.as_agent())
     else {

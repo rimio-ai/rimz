@@ -19,7 +19,7 @@ fn agents_on_different_branches_in_one_path_form_two_groups() {
         2,
         "two branches under one path split into two groups"
     );
-    for group in &snapshot.worktree_groups {
+    for group in snapshot.worktree_groups.iter() {
         assert_eq!(group.rows.len(), 1);
         assert_eq!(
             group.rows[0].worktree_branch.as_deref(),

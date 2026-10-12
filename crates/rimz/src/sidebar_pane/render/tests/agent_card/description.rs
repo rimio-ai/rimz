@@ -36,10 +36,12 @@ fn sleeping_card_describes_its_wait_using_the_snapshot_clock() {
     snapshot.now += jiff::SignedDuration::from_mins(12);
     assert!(snapshot_to_screen(&snapshot, 44, 20).contains("wakes now"));
 
-    snapshot.worktree_groups[0].rows[0]
-        .as_agent_mut()
-        .unwrap()
-        .pending_waits[0]
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[0]
+    .as_agent_mut()
+    .unwrap()
+    .pending_waits[0]
         .trigger = crate::agents::PendingWaitTrigger::Signal {
         selector: "pr.merged".to_owned(),
     };
@@ -53,10 +55,12 @@ fn sleeping_card_describes_its_wait_using_the_snapshot_clock() {
     assert_eq!(headline.style.fg, theme.body().fg);
     assert!(headline.style.add_modifier.contains(Modifier::ITALIC));
 
-    snapshot.worktree_groups[0].rows[0]
-        .as_agent_mut()
-        .unwrap()
-        .turn_error_label = Some("api error".to_owned());
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[0]
+    .as_agent_mut()
+    .unwrap()
+    .turn_error_label = Some("api error".to_owned());
     let screen = snapshot_to_screen(&snapshot, 44, 20);
     assert!(screen.contains("api error"));
     assert!(!screen.contains("wakes"));
@@ -66,7 +70,11 @@ fn sleeping_card_describes_its_wait_using_the_snapshot_clock() {
         AgentStatus::Waiting,
         AgentStatus::Failed,
     ] {
-        let card = snapshot.worktree_groups[0].rows[0].as_agent_mut().unwrap();
+        let card = std::sync::Arc::make_mut(
+            &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+        )[0]
+        .as_agent_mut()
+        .unwrap();
         card.turn_error_label = None;
         card.status = status;
         let screen = snapshot_to_screen(&snapshot, 44, 20);
@@ -379,7 +387,9 @@ fn unread_descriptor_grows_bold_without_dimming() {
         Some("done"),
     );
     let mut unread = snapshot_with(vec![agent.clone()]);
-    unread.worktree_groups[0].rows[0].unread = true;
+    std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut unread.worktree_groups)[0].rows)
+        [0]
+    .unread = true;
     // Under NO_COLOR the blink unread definition shares the lead glyph/name
     // 2-pole toggle through a grow-only weight: plain on the off-pole, bold on
     // the on-pole, never dim.
@@ -420,7 +430,10 @@ fn unread_descriptor_holds_bold_while_colored_pulse_brightens() {
         Some("done"),
     );
     let mut snapshot = snapshot_with(vec![agent]);
-    snapshot.worktree_groups[0].rows[0].unread = true;
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[0]
+    .unread = true;
 
     let styles: Vec<_> = (0..32)
         .map(|phase| span_for(&rendered_group_lines_with(&snapshot, &theme, phase), "done").style)
@@ -454,7 +467,9 @@ fn unread_turn_error_label_pulses_and_stays_italic() {
         Some("done"),
     );
     let mut snapshot = snapshot_with(vec![agent]);
-    let row = &mut snapshot.worktree_groups[0].rows[0];
+    let row = &mut std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[0];
     row.unread = true;
     row.as_agent_mut().unwrap().turn_error_label = Some("api error".to_owned());
 

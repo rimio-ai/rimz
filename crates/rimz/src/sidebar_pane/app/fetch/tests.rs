@@ -5,6 +5,216 @@ use crate::sidebar_pane::app::fixtures::{pane, workspace};
 use crate::{MuxName, SidebarInstanceId, WorkspaceId};
 use std::path::PathBuf;
 
+fn assert_shared_fields(shown: &SidebarSnapshot, original: &SidebarSnapshot) {
+    assert!(Arc::ptr_eq(
+        &shown.worktree_groups,
+        &original.worktree_groups
+    ));
+    assert!(Arc::ptr_eq(&shown.agents, &original.agents));
+    assert!(Arc::ptr_eq(
+        &shown.fenced_sessions,
+        &original.fenced_sessions
+    ));
+    assert!(Arc::ptr_eq(&shown.agent_panes, &original.agent_panes));
+    for (group, original) in shown
+        .worktree_groups
+        .iter()
+        .zip(original.worktree_groups.iter())
+    {
+        assert!(Arc::ptr_eq(&group.rows, &original.rows));
+    }
+    if let (Some(shown), Some(original)) = (&shown.resume_outcomes, &original.resume_outcomes) {
+        assert!(Arc::ptr_eq(shown, original));
+    }
+}
+
+#[test]
+fn steady_state_fusion_and_gate_preserve_shared_fields() {
+    use crate::sidebar_pane::app::{gate, state::RenderState};
+    let fixture = FetchFixture::new();
+    let shared = crate::sidebar_pane::app::fixtures::agent_snapshot(&fixture.workspace_id);
+    let frame = crate::sidebar::frame::assemble_frame(Vec::new(), 1, "rimz-test");
+    let own = PaneId::from_parts(MuxName::Zellij, "sidebar_absent");
+    let projected = project_local(WorkspaceSnapshot(shared.clone()), Some(&frame), Some(&own));
+    let (fused, baseline, _) =
+        crate::sidebar::fuse::fuse_owned(projected, &Default::default(), None, 1);
+    assert!(baseline.is_none());
+    assert_shared_fields(&fused, &shared);
+    let (state, _, rejected, escaped, _) = gate::apply_gate(
+        RenderState {
+            snapshot: fused,
+            health: Default::default(),
+        },
+        true,
+        &shared,
+        &Default::default(),
+        shared.now,
+    );
+    assert!(!rejected && !escaped);
+    assert_shared_fields(&state.snapshot, &shared);
+}
+
+#[test]
+fn publication_shares_agent_scaled_fields_at_room_scale() {
+    for count in [24, 100] {
+        let fixture = FetchFixture::new();
+        let mut shared = crate::sidebar_pane::app::fixtures::agent_snapshot(&fixture.workspace_id);
+        let template = shared.worktree_groups[0].clone();
+        Arc::make_mut(&mut shared.worktree_groups).clear();
+        for group_index in 0..4 {
+            let mut group = template.clone();
+            Arc::make_mut(&mut group.rows).clear();
+            for index in 0..50 {
+                let mut row = template.rows[0].clone();
+                row.id = format!("row-{group_index}-{index}");
+                Arc::make_mut(&mut group.rows).push(row);
+            }
+            Arc::make_mut(&mut shared.worktree_groups).push(group);
+        }
+        Arc::make_mut(&mut shared.agents).clear();
+        for index in 0..200 {
+            Arc::make_mut(&mut shared.agents).push(crate::testkit::agent_state(
+                "claude",
+                &format!("agent-{index}"),
+                jiff::Timestamp::UNIX_EPOCH,
+            ));
+        }
+        for index in 0..4000 {
+            Arc::make_mut(&mut shared.fenced_sessions).insert((
+                AgentKind::new_unchecked("claude"),
+                AgentSessionId::from(format!("ended-{index}")),
+            ));
+        }
+        let retained = shared.clone();
+        let subscribers = Subscribers::default();
+        let mut receivers = Vec::new();
+        for index in 0..count {
+            let (sub, rx) = subscriber(
+                &format!("{index:02}"),
+                &format!("sidebar_{index}"),
+                2,
+                wake_channel().0,
+            );
+            subscribe(&subscribers, sub);
+            receivers.push(rx);
+        }
+        let mut worker = fixture.worker();
+        let mut sink =
+            ResultSink::shared(subscribers, Covered::default(), fixture.host_data.clone());
+
+        let projected = worker.project_fold(
+            WorkspaceFold {
+                workspace: WorkspaceSnapshot(shared),
+                frame: Some(Arc::new(crate::sidebar::frame::assemble_frame(
+                    Vec::new(),
+                    1,
+                    "rimz-test",
+                ))),
+            },
+            &mut sink,
+        );
+        sink.publish(FetchUpdate::Snapshot {
+            snapshot: Box::new(projected),
+            phase: FetchPhase::Final,
+            source: SnapshotSource::Cached,
+        });
+        let delivered: Vec<_> = receivers.iter().map(|rx| rx.try_recv().unwrap()).collect();
+        for update in &delivered {
+            let shown = snapshot(update);
+            assert_eq!(shown.rows().count(), 200);
+            assert_eq!(shown.agents.len(), 200);
+            assert_eq!(shown.fenced_sessions.len(), 4000);
+            assert_shared_fields(shown, &retained);
+        }
+    }
+}
+
+#[test]
+fn unchanged_pane_overlays_keep_group_vector_shared() {
+    let fixture = FetchFixture::new();
+    let shared = crate::sidebar_pane::app::fixtures::agent_snapshot(&fixture.workspace_id);
+    let mut local = shared.clone();
+
+    let missing = PaneId::from_parts(MuxName::Zellij, "sidebar_absent");
+    local.remove_pane_rows(&missing);
+    local.overlay_pane_command(&missing, "zsh");
+    local.sort_groups_for_presentation();
+    crate::sidebar_pane::app::state::set_rows_unread(&mut local, &["absent".into()], false);
+    assert_shared_fields(&local, &shared);
+}
+
+#[test]
+fn unread_write_back_copies_only_the_changed_group() {
+    let fixture = FetchFixture::new();
+    let subscribers = Subscribers::default();
+    let (elder, elder_rx) = subscriber("01", "sidebar_1", 2, wake_channel().0);
+    let (younger, younger_rx) = subscriber("02", "sidebar_2", 2, wake_channel().0);
+    subscribe(&subscribers, elder);
+    subscribe(&subscribers, younger);
+    let mut sink = ResultSink::shared(subscribers, Covered::default(), fixture.host_data.clone());
+    let mut shared = crate::sidebar_pane::app::fixtures::agent_snapshot(&fixture.workspace_id);
+    let mut second = shared.worktree_groups[0].rows[0].clone();
+    second.id = "second".into();
+    Arc::make_mut(&mut Arc::make_mut(&mut shared.worktree_groups)[0].rows).push(second);
+    for row in Arc::make_mut(&mut Arc::make_mut(&mut shared.worktree_groups)[0].rows) {
+        row.unread = true;
+        row.as_agent_mut().unwrap().status = crate::agents::AgentStatus::Idle;
+    }
+    let mut unchanged = shared.worktree_groups[0].clone();
+    Arc::make_mut(&mut unchanged.rows).truncate(1);
+    Arc::make_mut(&mut unchanged.rows)[0].id = "unchanged".into();
+    Arc::make_mut(&mut unchanged.rows)[0].unread = false;
+    Arc::make_mut(&mut shared.worktree_groups).push(unchanged);
+    let retained = shared.clone();
+    let mut worker = fixture.worker();
+    let mut projected = worker.project_fold(
+        WorkspaceFold {
+            workspace: WorkspaceSnapshot(shared),
+            frame: None,
+        },
+        &mut sink,
+    );
+    for row in Arc::make_mut(&mut Arc::make_mut(&mut projected.worktree_groups)[0].rows) {
+        row.unread = false;
+    }
+
+    worker.publish_snapshot(
+        &fixture.state,
+        SnapshotPublication {
+            snapshot: projected,
+            phase: FetchPhase::Final,
+            source: SnapshotSource::Cached,
+        },
+        &mut sink,
+    );
+    for rx in [elder_rx, younger_rx] {
+        let update = rx.try_recv().unwrap();
+        let shown = snapshot(&update);
+        assert!(shown.rows().all(|row| !row.unread));
+        assert!(!Arc::ptr_eq(
+            &shown.worktree_groups,
+            &retained.worktree_groups
+        ));
+        assert!(Arc::ptr_eq(&shown.agents, &retained.agents));
+        assert!(Arc::ptr_eq(
+            &shown.fenced_sessions,
+            &retained.fenced_sessions
+        ));
+        assert!(Arc::ptr_eq(&shown.agent_panes, &retained.agent_panes));
+        for group in shown.worktree_groups.iter() {
+            let unchanged = group.rows.iter().any(|row| row.id == "unchanged");
+            let original = &retained.worktree_groups[usize::from(unchanged)];
+            assert_eq!(Arc::ptr_eq(&group.rows, &original.rows), unchanged);
+        }
+    }
+    assert!(
+        retained.worktree_groups[0]
+            .rows
+            .iter()
+            .all(|row| row.unread)
+    );
+}
+
 fn wake_channel() -> (SyncSender<Wakeup>, std::sync::mpsc::Receiver<Wakeup>) {
     std::sync::mpsc::sync_channel(64)
 }
@@ -137,11 +347,14 @@ fn notification_reconciliation_reaches_the_younger_pane_before_its_bell() {
     subscribe(&subscribers, younger);
     let mut sink = ResultSink::shared(subscribers, Covered::default(), fixture.host_data.clone());
     let mut shared = crate::sidebar_pane::app::fixtures::agent_snapshot(&fixture.workspace_id);
-    shared.worktree_groups[0].rows[0]
-        .as_agent_mut()
-        .unwrap()
-        .status = crate::agents::AgentStatus::Waiting;
-    shared.worktree_groups[0].rows[0].pane = Some(pane("terminal_9", "tab_2", false));
+    std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut shared.worktree_groups)[0].rows)
+        [0]
+    .as_agent_mut()
+    .unwrap()
+    .status = crate::agents::AgentStatus::Waiting;
+    std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut shared.worktree_groups)[0].rows)
+        [0]
+    .pane = Some(pane("terminal_9", "tab_2", false));
     let target = PaneId::from_parts(MuxName::Zellij, "terminal_9");
     let frame = Arc::new(crate::sidebar::frame::assemble_frame(
         vec![
@@ -231,10 +444,11 @@ fn a_worker_notification_reaches_every_subscribed_pane_after_its_snapshot() {
     }
     let mut sink = ResultSink::shared(subscribers, Covered::default(), fixture.host_data.clone());
     let mut shared = crate::sidebar_pane::app::fixtures::agent_snapshot(&fixture.workspace_id);
-    shared.worktree_groups[0].rows[0]
-        .as_agent_mut()
-        .unwrap()
-        .status = crate::agents::AgentStatus::Waiting;
+    std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut shared.worktree_groups)[0].rows)
+        [0]
+    .as_agent_mut()
+    .unwrap()
+    .status = crate::agents::AgentStatus::Waiting;
     let frame = Arc::new(crate::sidebar::frame::assemble_frame(
         vec![
             pane("terminal_7", "tab_1", false),

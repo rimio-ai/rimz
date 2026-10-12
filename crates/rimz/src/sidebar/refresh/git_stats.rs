@@ -248,7 +248,7 @@ pub(super) fn needed_worktree_paths(
     condition_scopes: BTreeSet<String>,
 ) -> Vec<String> {
     let mut needed: Vec<String> = condition_scopes.into_iter().collect();
-    for group in &snapshot.worktree_groups {
+    for group in snapshot.worktree_groups.iter() {
         let Some(path) = git_backed_worktree_path(group) else {
             continue;
         };
@@ -289,7 +289,7 @@ pub(super) fn hot_worktree_paths(snapshot: &SidebarSnapshot) -> BTreeSet<String>
     let window = SignedDuration::try_from(crate::sidebar::timing::GIT_ACTIVITY_WINDOW)
         .unwrap_or(SignedDuration::MAX);
     let mut hot = BTreeSet::new();
-    for group in &snapshot.worktree_groups {
+    for group in snapshot.worktree_groups.iter() {
         let Some(path) = git_backed_worktree_path(group) else {
             continue;
         };
@@ -310,7 +310,7 @@ pub(super) fn hot_worktree_paths(snapshot: &SidebarSnapshot) -> BTreeSet<String>
 pub(super) fn focused_worktree_paths(snapshot: &SidebarSnapshot) -> BTreeSet<String> {
     let viewed: HashSet<&PaneId> = snapshot.viewed_panes.iter().collect();
     let mut focused = BTreeSet::new();
-    for group in &snapshot.worktree_groups {
+    for group in snapshot.worktree_groups.iter() {
         let Some(path) = git_backed_worktree_path(group) else {
             continue;
         };

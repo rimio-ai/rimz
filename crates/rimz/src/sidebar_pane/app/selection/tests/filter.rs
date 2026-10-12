@@ -202,8 +202,11 @@ fn search_fold_removing_selected_row_reseats_enter_target() {
     use crate::agents::AgentStatus;
     use ratatui::crossterm::event::KeyCode;
     let mut snapshot = clickable_block_snapshot(&workspace());
-    snapshot.worktree_groups[0].rows[1].card = snapshot.worktree_groups[0].rows[0].card.clone();
-    snapshot.worktree_groups[0].status_counts[0].count = 2;
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[1]
+    .card = snapshot.worktree_groups[0].rows[0].card.clone();
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].status_counts[0].count = 2;
     let mut ui = UiState::default();
     search_key(&mut ui, &snapshot, KeyCode::Char('w'));
     search_key(&mut ui, &snapshot, KeyCode::Char('/'));
@@ -212,11 +215,13 @@ fn search_fold_removing_selected_row_reseats_enter_target() {
     }
     assert_search_selection(&ui, &snapshot);
 
-    snapshot.worktree_groups[0].rows[0]
-        .as_agent_mut()
-        .unwrap()
-        .status = AgentStatus::Success;
-    snapshot.worktree_groups[0].status_counts[0].count = 1;
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[0]
+    .as_agent_mut()
+    .unwrap()
+    .status = AgentStatus::Success;
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].status_counts[0].count = 1;
     reconcile_selection(&mut ui, &snapshot, None);
     assert_search_selection(&ui, &snapshot);
     let target = PaneId::from_parts(MuxName::Zellij, "terminal_10");
@@ -229,7 +234,10 @@ fn search_fold_removing_selected_row_reseats_enter_target() {
 fn search_peer_lens_hiding_selected_row_reseats_enter_target() {
     use ratatui::crossterm::event::KeyCode;
     let mut snapshot = clickable_block_snapshot(&workspace());
-    snapshot.worktree_groups[0].rows[1].unread = true;
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[1]
+    .unread = true;
     let mut ui = UiState::default();
     search_key(&mut ui, &snapshot, KeyCode::Char('/'));
     for ch in "main".chars() {
@@ -257,7 +265,10 @@ fn search_zero_match_then_fold_reseats_enter_target() {
     reconcile_selection(&mut ui, &snapshot, None);
     assert_search_selection(&ui, &snapshot);
     assert_eq!(ui.selected_pane, None);
-    snapshot.worktree_groups[0].rows[1].name = "incoming".to_owned();
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[1]
+    .name = "incoming".to_owned();
     reconcile_selection(&mut ui, &snapshot, None);
     assert_search_selection(&ui, &snapshot);
     let target = PaneId::from_parts(MuxName::Zellij, "terminal_10");
@@ -457,7 +468,8 @@ fn search_composes_with_status_and_n_keeps_needs_you_meaning() {
     outside.id = "outside".to_owned();
     outside.name = "other".to_owned();
     outside.pane = Some(pane("terminal_12", "tab_0", false));
-    snapshot.worktree_groups[0].rows.extend([waiting, outside]);
+    std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows)
+        .extend([waiting, outside]);
     let mut ui = UiState::default();
     search_key(&mut ui, &snapshot, KeyCode::Char('/'));
     for ch in "cla".chars() {
@@ -741,8 +753,14 @@ fn make_up_hits_land_on_the_painted_buckets_through_the_real_frame() {
 fn unread_count_click_toggles_the_unread_lens() {
     let ws = workspace();
     let mut snapshot = filterable_snapshot(&ws);
-    snapshot.worktree_groups[0].rows[0].unread = true;
-    snapshot.worktree_groups[1].rows[0].unread = true;
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[0]
+    .unread = true;
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[1].rows,
+    )[0]
+    .unread = true;
     let mut ui = UiState::default();
     let theme = ui.theme(&snapshot.theme);
     let composed = render::compose_lines(&snapshot, None, &ui, theme.as_ref(), 54, 64);
@@ -808,10 +826,9 @@ fn unread_count_click_toggles_the_unread_lens() {
     assert_eq!(outcome, InputOutcome::sync_filter(BodyLens::default()));
     assert_eq!(ui.make_up_filter, BodyLens::default());
 
-    for row in snapshot
-        .worktree_groups
+    for row in std::sync::Arc::make_mut(&mut snapshot.worktree_groups)
         .iter_mut()
-        .flat_map(|group| group.rows.iter_mut())
+        .flat_map(|group| std::sync::Arc::make_mut(&mut group.rows).iter_mut())
     {
         row.unread = false;
     }
@@ -832,8 +849,9 @@ fn unread_count_click_toggles_the_unread_lens() {
 fn pr_count_click_toggles_the_open_pr_lens() {
     let ws = workspace();
     let mut snapshot = filterable_snapshot(&ws);
-    snapshot.worktree_groups[1].pr_state = Some(crate::store::snapshot::WorktreePrState::Open);
-    snapshot.worktree_groups[1].pr_number = Some(91);
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[1].pr_state =
+        Some(crate::store::snapshot::WorktreePrState::Open);
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[1].pr_number = Some(91);
     let mut ui = UiState::default();
     let theme = ui.theme(&snapshot.theme);
     let composed = render::compose_lines(&snapshot, None, &ui, theme.as_ref(), 54, 64);
@@ -901,8 +919,8 @@ fn pr_count_click_toggles_the_open_pr_lens() {
     assert_eq!(outcome, InputOutcome::sync_filter(BodyLens::default()));
     assert_eq!(ui.make_up_filter, BodyLens::default());
 
-    snapshot.worktree_groups[1].pr_state = None;
-    snapshot.worktree_groups[1].pr_number = None;
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[1].pr_state = None;
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[1].pr_number = None;
     let mut ui = UiState::default();
     let theme = ui.theme(&snapshot.theme);
     let composed = render::compose_lines(&snapshot, None, &ui, theme.as_ref(), 54, 64);
@@ -1041,8 +1059,14 @@ fn next_attention_jump_respects_the_filter() {
 fn unread_filter_narrows_to_unread_rows() {
     let ws = workspace();
     let mut snapshot = filterable_snapshot(&ws);
-    snapshot.worktree_groups[0].rows[0].unread = true;
-    snapshot.worktree_groups[1].rows[0].unread = true;
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[0]
+    .unread = true;
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[1].rows,
+    )[0]
+    .unread = true;
     let filter = BodyLens::from(BodyFilter::Unread);
 
     assert_eq!(
@@ -1078,10 +1102,9 @@ fn unread_filter_narrows_to_unread_rows() {
     assert_eq!(outcome, InputOutcome::sync_filter(BodyLens::default()));
     assert_eq!(ui.make_up_filter, BodyLens::default());
 
-    for row in snapshot
-        .worktree_groups
+    for row in std::sync::Arc::make_mut(&mut snapshot.worktree_groups)
         .iter_mut()
-        .flat_map(|group| group.rows.iter_mut())
+        .flat_map(|group| std::sync::Arc::make_mut(&mut group.rows).iter_mut())
     {
         row.unread = false;
     }
@@ -1099,14 +1122,20 @@ fn next_attention_jump_targets_unread_before_read_attention() {
     use crate::agents::AgentStatus;
     let ws = workspace();
     let mut snapshot = filterable_snapshot(&ws);
-    let read_failed = &mut snapshot.worktree_groups[1].rows[0];
+    let read_failed = &mut std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[1].rows,
+    )[0];
     read_failed.last_activity = snapshot.now - Duration::from_secs(3_600);
 
-    let unread_running = &mut snapshot.worktree_groups[0].rows[0];
+    let unread_running = &mut std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[0];
     unread_running.unread = true;
     unread_running.last_activity = snapshot.now - Duration::from_secs(7_200);
 
-    let unread_success = &mut snapshot.worktree_groups[0].rows[1];
+    let unread_success = &mut std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[1];
     unread_success.name = "claude".to_owned();
     unread_success.card = crate::store::snapshot::RowCard::Agent(std::sync::Arc::new(
         crate::store::snapshot::AgentCard {
@@ -1140,10 +1169,18 @@ fn next_attention_jump_orders_unread_episodes_by_age() {
     use crate::agents::AgentStatus;
     let ws = workspace();
     let mut snapshot = filterable_snapshot(&ws);
-    snapshot.worktree_groups[0].rows[0].unread = true;
-    snapshot.worktree_groups[0].rows[0].last_activity = snapshot.now - Duration::from_secs(7_200);
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[0]
+    .unread = true;
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[0]
+    .last_activity = snapshot.now - Duration::from_secs(7_200);
 
-    let success = &mut snapshot.worktree_groups[0].rows[1];
+    let success = &mut std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[1];
     success.name = "claude".to_owned();
     success.card = crate::store::snapshot::RowCard::Agent(std::sync::Arc::new(
         crate::store::snapshot::AgentCard {
@@ -1155,18 +1192,31 @@ fn next_attention_jump_orders_unread_episodes_by_age() {
     success.unread = true;
     success.last_activity = snapshot.now - Duration::from_secs(3_600);
 
-    snapshot.worktree_groups[1].rows.push(filter_row(
-        true,
-        "agent-3",
-        "pi",
-        Some(AgentStatus::Paused),
-        "terminal_4",
-        "/repo/feature",
-    ));
-    snapshot.worktree_groups[1].rows[1].unread = true;
-    snapshot.worktree_groups[1].rows[1].last_activity = snapshot.now - Duration::from_secs(1_800);
-    snapshot.worktree_groups[1].rows[0].unread = true;
-    snapshot.worktree_groups[1].rows[0].last_activity = snapshot.now - Duration::from_secs(600);
+    std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[1].rows)
+        .push(filter_row(
+            true,
+            "agent-3",
+            "pi",
+            Some(AgentStatus::Paused),
+            "terminal_4",
+            "/repo/feature",
+        ));
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[1].rows,
+    )[1]
+    .unread = true;
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[1].rows,
+    )[1]
+    .last_activity = snapshot.now - Duration::from_secs(1_800);
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[1].rows,
+    )[0]
+    .unread = true;
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[1].rows,
+    )[0]
+    .last_activity = snapshot.now - Duration::from_secs(600);
 
     assert_eq!(
         next_attention_index(&snapshot, &BodyLens::default(), 0),
@@ -1189,10 +1239,14 @@ fn step_attention_index_reverses_the_inbox_walk() {
     use crate::agents::AgentStatus;
     let ws = workspace();
     let mut snapshot = filterable_snapshot(&ws);
-    let read_failed = &mut snapshot.worktree_groups[1].rows[0];
+    let read_failed = &mut std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[1].rows,
+    )[0];
     read_failed.last_activity = snapshot.now - Duration::from_secs(3_600);
 
-    let unread_success = &mut snapshot.worktree_groups[0].rows[1];
+    let unread_success = &mut std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[1];
     unread_success.name = "claude".to_owned();
     unread_success.card = crate::store::snapshot::RowCard::Agent(std::sync::Arc::new(
         crate::store::snapshot::AgentCard {
@@ -1317,8 +1371,13 @@ fn inbox_jumps_keep_the_make_up_filter_in_both_directions() {
     let ws = workspace();
     let mut snapshot = filterable_snapshot(&ws);
 
-    snapshot.worktree_groups[0].rows[0].unread = true;
-    let success = &mut snapshot.worktree_groups[0].rows[1];
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[0]
+    .unread = true;
+    let success = &mut std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[1];
     success.name = "claude".to_owned();
     success.card = crate::store::snapshot::RowCard::Agent(std::sync::Arc::new(
         crate::store::snapshot::AgentCard {
@@ -1329,8 +1388,14 @@ fn inbox_jumps_keep_the_make_up_filter_in_both_directions() {
     ));
     success.unread = true;
     success.last_activity = snapshot.now - Duration::from_secs(3_600);
-    snapshot.worktree_groups[1].rows[0].unread = true;
-    snapshot.worktree_groups[1].rows[0].last_activity = snapshot.now - Duration::from_secs(1_800);
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[1].rows,
+    )[0]
+    .unread = true;
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[1].rows,
+    )[0]
+    .last_activity = snapshot.now - Duration::from_secs(1_800);
 
     let filter = BodyLens::from(BodyFilter::Unread);
     let mut ui = UiState {
@@ -1359,8 +1424,14 @@ fn inbox_jumps_keep_the_make_up_filter_in_both_directions() {
 fn make_up_filter_survives_repeated_row_clicks_and_keeps_frame_ordinals() {
     let ws = workspace();
     let mut snapshot = filterable_snapshot(&ws);
-    snapshot.worktree_groups[0].rows[0].unread = true;
-    snapshot.worktree_groups[1].rows[0].unread = true;
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[0]
+    .unread = true;
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[1].rows,
+    )[0]
+    .unread = true;
 
     let mut ui = UiState::default();
     assert_eq!(

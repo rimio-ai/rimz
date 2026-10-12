@@ -524,6 +524,50 @@ mod tests {
         let published = read_fresh_latest(&paths).expect("published snapshot is fresh");
         assert!(published.fenced_sessions.contains(&ended_key));
         assert!(!published.fenced_sessions.contains(&live_key));
+        assert_eq!(published.agents, snapshot.agents);
+        assert_eq!(published.agent_panes, snapshot.agent_panes);
+        assert_eq!(published.resume_outcomes, snapshot.resume_outcomes);
+    }
+
+    #[test]
+    fn populated_snapshot_preserves_json_round_trip() {
+        use crate::store::snapshot::testkit::{epoch, room_with_agent_panes};
+        let mut snapshot =
+            room_with_agent_panes(vec![crate::testkit::agent_state("claude", "live", epoch())]);
+        snapshot.resume_outcomes = Some(
+            vec![ResumeOutcome {
+                message_id: crate::ids::MessageId::new(),
+                kind: AgentKind::new_unchecked("claude"),
+                agent_id: AgentSessionId::from("ended"),
+                agent_name: Some("ended".into()),
+                status: crate::store::message::MessageStatus::Delivered,
+                enqueued_at: epoch(),
+                updated_at: epoch(),
+            }]
+            .into(),
+        );
+        Arc::make_mut(&mut snapshot.fenced_sessions).insert((
+            AgentKind::new_unchecked("claude"),
+            AgentSessionId::from("ended"),
+        ));
+        snapshot.worktree_roots.push(PathBuf::from("/tmp/x"));
+        assert!(!snapshot.agent_panes.is_empty());
+        assert_eq!(snapshot.rows().count(), 1);
+        let bytes = serde_json::to_vec(&snapshot).unwrap();
+        let decoded: SidebarSnapshot = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(bytes, serde_json::to_vec(&decoded).unwrap());
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        for name in [
+            "agents",
+            "agent_panes",
+            "resume_outcomes",
+            "fenced_sessions",
+            "worktree_roots",
+        ] {
+            assert!(json[name].is_array(), "{name} keeps its array wire shape");
+            assert_eq!(json[name].as_array().unwrap().len(), 1);
+        }
+        assert!(json["worktree_groups"][0]["rows"].is_array());
     }
 
     #[test]

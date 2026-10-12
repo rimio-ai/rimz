@@ -166,12 +166,12 @@ struct RowLocation {
 
 fn rows_by_pane(snapshot: &SidebarSnapshot) -> HashMap<PaneId, RowLocation> {
     let mut rows = HashMap::new();
-    for group in &snapshot.worktree_groups {
+    for group in snapshot.worktree_groups.iter() {
         let identity = GroupIdentity {
             kind: worktree_kind_name(group.kind).to_owned(),
             key: group.key.clone(),
         };
-        for row in &group.rows {
+        for row in group.rows.iter() {
             let Some(pane) = row.pane.as_ref() else {
                 continue;
             };
@@ -358,9 +358,20 @@ pub(super) fn set_rows_unread(snapshot: &mut SidebarSnapshot, ids: &[String], un
     if ids.is_empty() {
         return;
     }
-    for row in snapshot.rows_mut() {
-        if ids.iter().any(|id| id == &row.id) {
-            row.unread = unread;
+    for index in 0..snapshot.worktree_groups.len() {
+        let group = &snapshot.worktree_groups[index];
+        if !group
+            .rows
+            .iter()
+            .any(|row| row.unread != unread && ids.contains(&row.id))
+        {
+            continue;
+        }
+        let group = &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[index];
+        for row in std::sync::Arc::make_mut(&mut group.rows) {
+            if ids.contains(&row.id) {
+                row.unread = unread;
+            }
         }
     }
 }

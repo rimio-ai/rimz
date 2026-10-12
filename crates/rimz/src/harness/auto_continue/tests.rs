@@ -406,7 +406,7 @@ fn launched_child_arms_and_fires_resume_but_native_child_does_not() {
             },
         );
         assert_eq!(read_park(&path), Some(armed));
-        snapshot.agent_panes = vec![live_pane()];
+        snapshot.agent_panes = vec![live_pane()].into();
         fire_if_due(
             &child,
             &path,
@@ -837,7 +837,7 @@ fn stalled_stream_park_uses_default_three_minute_retry() {
             ts(now),
         );
         snapshot.now = ts(now);
-        snapshot.agent_panes = vec![live_pane()];
+        snapshot.agent_panes = vec![live_pane()].into();
         snapshot
     };
 
@@ -898,7 +898,7 @@ fn model_limit_waits_for_scoped_reset() {
             vec![agent],
             ts(6_000),
         );
-        snapshot.agent_panes = vec![live_pane()];
+        snapshot.agent_panes = vec![live_pane()].into();
         let config = ResumeConfig {
             auto_continue: true,
             ..ResumeConfig::default()
@@ -974,7 +974,7 @@ fn limit_replies_preserve_pacing_and_retry_cap() {
         agent.user_turn_started_at = Some(ts(activity));
         let mut snapshot =
             SidebarSnapshot::build_with_agents(runtime.workspace_id.clone(), vec![agent], ts(now));
-        snapshot.agent_panes = vec![live_pane()];
+        snapshot.agent_panes = vec![live_pane()].into();
         resume_parked(
             &snapshot,
             &runtime,
@@ -1046,7 +1046,7 @@ fn limit_replies_preserve_pacing_and_retry_cap() {
     agent.user_turn_started_at = Some(ts(7_000));
     let mut snapshot =
         SidebarSnapshot::build_with_agents(runtime.workspace_id.clone(), vec![agent], ts(7_001));
-    snapshot.agent_panes = vec![live_pane()];
+    snapshot.agent_panes = vec![live_pane()].into();
     for _ in 0..2 {
         resume_parked(
             &snapshot,
@@ -1094,7 +1094,7 @@ fn nudged_turn_real_progress_clears_park_and_starts_fresh_allowance() {
             )],
             ts(6_000),
         );
-        snapshot.agent_panes = vec![live_pane()];
+        snapshot.agent_panes = vec![live_pane()].into();
         resume_parked(&snapshot, &runtime, &logins, &config, &[]);
         let nudged = read_park(&path).unwrap();
         assert_eq!(nudged.last_nudge_at, Some(ts(6_000)));
@@ -1158,7 +1158,7 @@ fn overload_replies_preserve_backoff_and_retry_cap() {
         agent.user_turn_started_at = Some(ts(activity));
         let mut snapshot =
             SidebarSnapshot::build_with_agents(runtime.workspace_id.clone(), vec![agent], ts(now));
-        snapshot.agent_panes = vec![live_pane()];
+        snapshot.agent_panes = vec![live_pane()].into();
         resume_parked(&snapshot, &runtime, &logins, &config, &messages);
         let record = read_park(&path).unwrap();
         if record.last_nudge_at == Some(ts(now)) {
@@ -1560,7 +1560,7 @@ fn recovered_budget_fires_due_rate_limit_record_before_clearing() {
         ts(6_000),
     );
     snapshot.now = ts(6_000);
-    snapshot.agent_panes = vec![live_pane()];
+    snapshot.agent_panes = vec![live_pane()].into();
     resume_parked(
         &snapshot,
         &runtime,
@@ -1594,7 +1594,7 @@ fn recovered_budget_rearms_a_lost_limit_park() {
         ts(6_000),
     );
     snapshot.now = ts(6_000);
-    snapshot.agent_panes = vec![live_pane()];
+    snapshot.agent_panes = vec![live_pane()].into();
     resume_parked(
         &snapshot,
         &runtime,
@@ -1659,7 +1659,7 @@ fn fire_with_resume_message(status: MessageStatus) -> Option<ParkRecord> {
         ts(6_000),
     );
     snapshot.now = ts(6_000);
-    snapshot.agent_panes = vec![live_pane()];
+    snapshot.agent_panes = vec![live_pane()].into();
     let config = ResumeConfig {
         auto_continue_max_retries: 3,
         ..ResumeConfig::default()

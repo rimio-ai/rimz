@@ -996,7 +996,10 @@ fn overflowing_fleet_with_unread_lead() -> SidebarSnapshot {
         agents.push(codex);
     }
     let mut snapshot = snapshot_with(agents);
-    snapshot.worktree_groups[0].rows[0].unread = true;
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[0]
+    .unread = true;
     snapshot
 }
 
@@ -1052,10 +1055,9 @@ fn lead_unread_picks_the_oldest_actionable_row() {
     );
     result.last_activity = now - Duration::from_secs(60 * 60);
     let mut snapshot = snapshot_with(vec![newer, older, result]);
-    for row in snapshot
-        .worktree_groups
+    for row in std::sync::Arc::make_mut(&mut snapshot.worktree_groups)
         .iter_mut()
-        .flat_map(|group| group.rows.iter_mut())
+        .flat_map(|group| std::sync::Arc::make_mut(&mut group.rows).iter_mut())
     {
         row.unread = true;
     }
@@ -1077,7 +1079,10 @@ fn lead_unread_is_none_without_an_actionable_unread_row() {
         Some("c"),
     );
     let mut snapshot = snapshot_with(vec![result]);
-    snapshot.worktree_groups[0].rows[0].unread = true;
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[0]
+    .unread = true;
     assert_eq!(
         lead_unread(&snapshot.worktree_groups),
         None,

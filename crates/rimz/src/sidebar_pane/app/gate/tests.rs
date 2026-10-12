@@ -203,11 +203,13 @@ fn in_place_exit_commits_but_same_command_flicker_holds() {
 fn missing_foreground_command_keeps_demotion_protective() {
     let ws = workspace();
     let mut agent_without_command = agent_snapshot(&ws);
-    agent_without_command.worktree_groups[0].rows[0]
-        .pane
-        .as_mut()
-        .unwrap()
-        .command = None;
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut agent_without_command.worktree_groups)[0].rows,
+    )[0]
+    .pane
+    .as_mut()
+    .unwrap()
+    .command = None;
     assert_eq!(
         gate_commit(
             &agent_snapshot(&ws),

@@ -216,7 +216,7 @@ fn catalog_projects_cohort_observability_by_worktree() {
             "pr_number": number, "ci": "passing"
         }))
         .unwrap();
-        group.rows.push(SidebarRow {
+        std::sync::Arc::make_mut(&mut group.rows).push(SidebarRow {
             id: agent.agent_id.to_string(),
             name: lane.into(),
             pane: None,
@@ -237,7 +237,7 @@ fn catalog_projects_cohort_observability_by_worktree() {
         agents.push(agent);
     }
     let mut snapshot = snapshot(agents);
-    snapshot.worktree_groups = groups;
+    snapshot.worktree_groups = groups.into();
     let flip = |instance: &str, to: &str, second: i64| StageSignal {
         team: "forge".into(),
         instance: instance.into(),
@@ -383,7 +383,7 @@ fn catalog_reports_no_pull_request_for_a_trunk_lane() {
         Some(rimz::store::snapshot::WorktreeCi::Passing),
         "the trunk group must carry the CI verdict this test is about"
     );
-    group.rows.push(SidebarRow {
+    std::sync::Arc::make_mut(&mut group.rows).push(SidebarRow {
         id: agent.agent_id.to_string(),
         name: "main".into(),
         pane: None,
@@ -398,7 +398,7 @@ fn catalog_reports_no_pull_request_for_a_trunk_lane() {
         card: RowCard::Agent(std::sync::Arc::default()),
     });
     let mut snapshot = snapshot(vec![agent]);
-    snapshot.worktree_groups = vec![group];
+    snapshot.worktree_groups = vec![group].into();
     let reports = build_catalog(
         &TeamsConfig(BTreeMap::from([("forge".into(), team())])),
         &ProfilesConfig::default(),

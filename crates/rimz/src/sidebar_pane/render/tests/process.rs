@@ -42,7 +42,9 @@ fn process_row_resource_stats_follow_busy_state() {
     ] {
         let pane = pane("%1", command, "/repo/main");
         let mut snapshot = snapshot_with(Vec::new()).with_live_panes(vec![pane], None);
-        let row = &mut snapshot.worktree_groups[0].rows[0];
+        let row = &mut std::sync::Arc::make_mut(
+            &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+        )[0];
         let process = row.as_process_mut().unwrap();
         process.cpu_pct = Some(cpu);
         process.rss_kb = Some(512 * 1_024);
@@ -81,7 +83,9 @@ fn proc_stats_hold_a_fixed_dim_grid() {
 
     let busy = pane("%1", "cargo build --release", "/repo/main");
     let mut snapshot = snapshot_with(Vec::new()).with_live_panes(vec![busy], None);
-    let row = &mut snapshot.worktree_groups[0].rows[0];
+    let row = &mut std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[0];
     let process = row.as_process_mut().unwrap();
     process.cpu_pct = Some(34);
     process.rss_kb = Some(512 * 1_024);

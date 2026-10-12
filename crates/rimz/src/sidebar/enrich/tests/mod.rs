@@ -476,7 +476,7 @@ fn channel_snapshot(name: &str, marked: bool) -> (tempfile::TempDir, PathBuf, Si
         Vec::new(),
         Timestamp::now(),
     );
-    snapshot.worktree_groups = vec![channel_group(name, &worktree)];
+    snapshot.worktree_groups = vec![channel_group(name, &worktree)].into();
     (dir, worktree, snapshot)
 }
 

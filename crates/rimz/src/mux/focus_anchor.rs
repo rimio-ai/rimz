@@ -534,7 +534,8 @@ mod tests {
         snapshot.worktree_groups = vec![crate::sidebar::test_support::worktree_group(
             Path::new("/tmp"),
             rows,
-        )];
+        )]
+        .into();
         snapshot.pane_session_name = Some(session_name.to_owned());
         snapshot.presence = Some(if client_views.is_empty() {
             crate::store::snapshot::SidebarPresence::Detached
@@ -791,7 +792,9 @@ mod tests {
             std::slice::from_ref(&parent),
             vec![view(7, &parent)],
         );
-        let row = &mut snapshot.worktree_groups[0].rows[0];
+        let row = &mut std::sync::Arc::make_mut(
+            &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+        )[0];
         row.card = crate::store::snapshot::RowCard::Agent(std::sync::Arc::default());
         row.as_agent_mut().unwrap().sub_agents.push(
             serde_json::from_value(serde_json::json!({
@@ -809,10 +812,12 @@ mod tests {
             observation_outcome(&intent, &snapshot, 1_001),
             FocusObservationOutcome::Present
         );
-        snapshot.worktree_groups[0].rows[0]
-            .as_agent_mut()
-            .unwrap()
-            .sub_agents[0]
+        std::sync::Arc::make_mut(
+            &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+        )[0]
+        .as_agent_mut()
+        .unwrap()
+        .sub_agents[0]
             .pane = None;
         assert_eq!(
             observation_outcome(&intent, &snapshot, 1_001),

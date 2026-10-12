@@ -323,7 +323,7 @@ fn pane_owner_shadows_co_resident_session_from_every_address() {
     snapshot.agents = vec![older, owner, hidden_fork].into();
     let mut pane = bound_pane("codex", 2, "owner", "session-owner", "main", "terminal_1");
     pane.role = Some("coder".to_owned());
-    snapshot.agent_panes = vec![pane];
+    snapshot.agent_panes = vec![pane].into();
 
     let matches = resolve_many(&snapshot, "@coder", None, &context(Some("main"))).unwrap();
     assert_eq!(
@@ -379,7 +379,8 @@ fn pane_shadowing_preserves_distinct_and_closed_agents() {
         bound_pane("codex", 1, "first", "session-first", "main", "terminal_1"),
         bound_pane("codex", 2, "second", "session-second", "main", "terminal_2"),
         lazy_pane("codex", "/repo/main", "terminal_lazy"),
-    ];
+    ]
+    .into();
 
     assert_eq!(
         resolve_many(&snapshot, "@coder", None, &context(Some("main")))
@@ -599,7 +600,7 @@ fn main_addresses_the_unstamped_project_root() {
     assert_eq!(
         resolve_targets(
             &SidebarSnapshot {
-                agent_panes: vec![root_pane],
+                agent_panes: vec![root_pane].into(),
                 ..empty_snapshot()
             },
             "@codex#main",
@@ -1698,7 +1699,7 @@ fn bound_pane(
 fn at_kind_matches_a_lazy_agent_pane() {
     // A bare codex pane (no session yet) is a steer target by kind.
     let mut snapshot = empty_snapshot();
-    snapshot.agent_panes = vec![lazy_pane("codex", "/repo/shimmer-effect", "terminal_170")];
+    snapshot.agent_panes = vec![lazy_pane("codex", "/repo/shimmer-effect", "terminal_170")].into();
 
     let targets =
         resolve_targets(&snapshot, "@codex", None, &context(Some("shimmer-effect"))).unwrap();
@@ -1713,7 +1714,7 @@ fn lazy_panes_skip_ordinal_pet_name_and_session_selectors() {
     // A lazy pane carries no ordinal, pet name, or session id — only
     // `@kind`/`@all` reach it.
     let mut snapshot = empty_snapshot();
-    snapshot.agent_panes = vec![lazy_pane("codex", "/repo/shimmer-effect", "terminal_170")];
+    snapshot.agent_panes = vec![lazy_pane("codex", "/repo/shimmer-effect", "terminal_170")].into();
 
     assert!(matches!(
         resolve_targets(
@@ -1748,7 +1749,8 @@ fn bound_pane_reaches_its_producer_bound_pane_by_petname_and_ordinal() {
         "session-x",
         "shimmer-effect",
         "terminal_5",
-    )];
+    )]
+    .into();
 
     for raw in ["@swift-otter", "@codex-1", "@session-x"] {
         let targets =
@@ -1767,7 +1769,7 @@ fn bound_pane_reaches_its_producer_bound_pane_by_petname_and_ordinal() {
 fn management_resolution_never_sees_agent_panes() {
     // resolve_many resolves the rollup; agent_panes never leaks into it.
     let mut snapshot = empty_snapshot();
-    snapshot.agent_panes = vec![lazy_pane("codex", "/repo/shimmer-effect", "terminal_170")];
+    snapshot.agent_panes = vec![lazy_pane("codex", "/repo/shimmer-effect", "terminal_170")].into();
 
     assert!(matches!(
         resolve_many(&snapshot, "@codex", None, &context(Some("shimmer-effect"))),
@@ -1789,7 +1791,8 @@ fn at_all_fans_to_in_channel_panes_only() {
         ),
         lazy_pane("codex", "/repo/shimmer-effect", "terminal_170"),
         lazy_pane("codex", "/repo/other", "terminal_9"),
-    ];
+    ]
+    .into();
 
     let kinds: Vec<String> =
         resolve_targets(&snapshot, "@all", None, &context(Some("shimmer-effect")))

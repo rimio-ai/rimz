@@ -537,16 +537,26 @@ impl FetchWorker {
                 .rows()
                 .map(|row| (row.id.as_str(), row.unread))
                 .collect();
-            for row in fold
-                .workspace
-                .0
-                .worktree_groups
-                .iter_mut()
-                .flat_map(|group| &mut group.rows)
-            {
-                if let Some(unread) = unread.get(row.id.as_str()) {
-                    row.unread = *unread;
+            let mut changed = false;
+            for index in 0..fold.workspace.0.worktree_groups.len() {
+                let group = &fold.workspace.0.worktree_groups[index];
+                if !group.rows.iter().any(|row| {
+                    unread
+                        .get(row.id.as_str())
+                        .is_some_and(|unread| row.unread != *unread)
+                }) {
+                    continue;
                 }
+                let group = &mut Arc::make_mut(&mut fold.workspace.0.worktree_groups)[index];
+                for row in Arc::make_mut(&mut group.rows) {
+                    if let Some(unread) = unread.get(row.id.as_str()) {
+                        row.unread = *unread;
+                    }
+                }
+                changed = true;
+            }
+            if changed {
+                fold.workspace.0.sort_groups_for_presentation();
             }
         }
         sink.publish(FetchUpdate::Snapshot {

@@ -68,7 +68,7 @@ impl<'a> VisibleRoster<'a> {
     ) -> Self {
         let mut rows = Vec::new();
         let mut groups = Vec::with_capacity(snapshot.worktree_groups.len());
-        for group in &snapshot.worktree_groups {
+        for group in snapshot.worktree_groups.iter() {
             let expanded = expanded_groups.contains(&group.key);
             let start = rows.len();
             let projection =
@@ -411,7 +411,7 @@ mod tests {
         ]);
         finished.key = "finished".to_owned();
         finished.finished = true;
-        finished.rows[0].unread = true;
+        std::sync::Arc::make_mut(&mut finished.rows)[0].unread = true;
 
         let mut active = group(vec![agent_row("active", AgentStatus::Running)]);
         active.key = "active".to_owned();
@@ -475,7 +475,7 @@ mod tests {
     fn open_pr_filter_keeps_every_row_in_open_pr_groups() {
         let mut open = group(idle_rows(8));
         open.key = "open".to_owned();
-        open.rows.push(process_row("open-shell"));
+        std::sync::Arc::make_mut(&mut open.rows).push(process_row("open-shell"));
         open.pr_state = Some(WorktreePrState::Open);
         open.pr_number = Some(91);
 
@@ -580,7 +580,7 @@ mod tests {
     fn snapshot(groups: Vec<SidebarWorktreeGroup>) -> SidebarSnapshot {
         let workspace = WorkspaceId::parse("ws_0123456789abcdef01234567").unwrap();
         let mut snapshot = SidebarSnapshot::build(workspace, Vec::new(), Timestamp::now());
-        snapshot.worktree_groups = groups;
+        snapshot.worktree_groups = groups.into();
         snapshot
     }
 
@@ -595,7 +595,7 @@ mod tests {
             cohort_effort: None,
             pipeline: None,
             status_counts: Vec::new(),
-            rows,
+            rows: rows.into(),
             diff_added: None,
             diff_removed: None,
             commits_ahead: None,

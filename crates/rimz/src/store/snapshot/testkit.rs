@@ -107,7 +107,7 @@ pub(super) fn rows(snapshot: &SidebarSnapshot) -> Vec<&SidebarRow> {
     snapshot
         .worktree_groups
         .iter()
-        .flat_map(|group| &group.rows)
+        .flat_map(|group| group.rows.iter())
         .collect()
 }
 

@@ -1229,7 +1229,7 @@ fn refresh_targets_honor_channel_filter() {
         worktree_path: owner.worktree_path.clone(),
         worktree_branch: owner.worktree_branch.clone(),
     };
-    snapshot.agent_panes = vec![owner_pane];
+    snapshot.agent_panes = vec![owner_pane].into();
 
     let scoped: Vec<&str> = super::refresh::refresh_targets(&snapshot, Some("auth-refresh"))
         .into_iter()
@@ -1987,7 +1987,7 @@ mod render {
                 .unwrap();
             (group.key, group.label, group.kind)
         };
-        snapshot.worktree_groups.push(
+        std::sync::Arc::make_mut(&mut snapshot.worktree_groups).push(
             serde_json::from_value(serde_json::json!({
                 "key": auth_key,
                 "label": auth_label,

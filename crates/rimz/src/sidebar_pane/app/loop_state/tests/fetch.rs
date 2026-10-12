@@ -125,12 +125,16 @@ fn carried_baseline_fold(case: &str) {
     )
     .unwrap();
     let mut snapshot = agent_snapshot(&rig.ws);
-    snapshot.worktree_groups[0].rows[0].name = "baseline-card".into();
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[0]
+    .name = "baseline-card".into();
     let mut second = snapshot.worktree_groups[0].rows[0].clone();
     second.id = "agent-2".into();
     second.name = "other-card".into();
     second.pane.as_mut().unwrap().pane_id = other.clone();
-    snapshot.worktree_groups[0].rows.push(second);
+    std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows)
+        .push(second);
     snapshot.own_view = Some(crate::store::snapshot::SidebarOwnView {
         sibling_count: 2,
         working_pane_ids: vec![selected.clone(), other.clone()],
@@ -139,7 +143,10 @@ fn carried_baseline_fold(case: &str) {
     snapshot.viewed_panes = vec![own.clone()];
     snapshot.focused_pane = Some(if case == "other" { other.clone() } else { own });
     if case == "departed" {
-        snapshot.worktree_groups[0].rows.remove(0);
+        std::sync::Arc::make_mut(
+            &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+        )
+        .remove(0);
     }
     if case == "frameless" {
         snapshot.panes_produced_at_ms = None;
@@ -237,7 +244,7 @@ fn pre_tab_seed_and_worker_fold_paint_resting_cards_until_correction() {
             .pane_id
             .clone(),
     );
-    seed.worktree_groups[0].rows[0]
+    std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut seed.worktree_groups)[0].rows)[0]
         .as_agent_mut()
         .unwrap()
         .status = crate::agents::AgentStatus::Idle;
@@ -321,9 +328,10 @@ fn pre_tab_seed_and_worker_fold_paint_resting_cards_until_correction() {
     assert_eq!(rig.state.current.focused_pane, published_focus);
 
     let mut correction = rig.state.current.clone();
-    correction.worktree_groups[0]
-        .rows
-        .push(snapshot_with_panes(&rig.ws, vec![shell.clone()]).worktree_groups[0].rows[0].clone());
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut correction.worktree_groups)[0].rows,
+    )
+    .push(snapshot_with_panes(&rig.ws, vec![shell.clone()]).worktree_groups[0].rows[0].clone());
     correction.focused_pane = Some(shell.pane_id.clone());
     correction.viewed_panes = vec![shell.pane_id.clone()];
     let correction_frame = crate::sidebar::frame::assemble_frame(
@@ -492,8 +500,10 @@ fn seed_commits_before_delivery_and_keeps_the_final_correction() {
     let mut seed = agent_snapshot(&rig.ws);
     seed.now = Timestamp::now();
     seed.theme.display.refresh_ms = 100;
-    seed.worktree_groups[0].rows[0].name = "seed-card".into();
-    seed.worktree_groups[0].rows[0].unread = true;
+    std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut seed.worktree_groups)[0].rows)[0]
+        .name = "seed-card".into();
+    std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut seed.worktree_groups)[0].rows)[0]
+        .unread = true;
     seed.pane_session_name = Some("rimz-test".into());
     seed.panes_observed_at_ms = Some(42);
     let agent_pane = seed.worktree_groups[0].rows[0]
@@ -568,10 +578,19 @@ fn seed_commits_before_delivery_and_keeps_the_final_correction() {
     );
 
     let mut correction = agent_snapshot(&rig.ws);
-    correction.worktree_groups[0].rows[0].name = "corrected-card".into();
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut correction.worktree_groups)[0].rows,
+    )[0]
+    .name = "corrected-card".into();
     let corrected_pane = pane("terminal_11", "tab_0", false);
-    correction.worktree_groups[0].rows[0].pane = Some(corrected_pane.clone());
-    correction.worktree_groups[0].rows[0].unread = true;
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut correction.worktree_groups)[0].rows,
+    )[0]
+    .pane = Some(corrected_pane.clone());
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut correction.worktree_groups)[0].rows,
+    )[0]
+    .unread = true;
     correction.focused_pane = Some(corrected_pane.pane_id.clone());
     correction.viewed_panes = vec![corrected_pane.pane_id.clone()];
     let correction_frame = crate::sidebar::frame::assemble_frame(
@@ -689,7 +708,10 @@ fn snapshot_key_rebind_reaches_the_host_resolver() {
 fn failure_after_an_unread_snapshot_keeps_state_context_and_completion() {
     let mut rig = Rig::new();
     let mut snapshot = agent_snapshot(&rig.ws);
-    snapshot.worktree_groups[0].rows[0].name = "unread-snapshot".into();
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[0]
+    .name = "unread-snapshot".into();
     rig.fetch.request(FetchRequest::default(), false);
     assert!(rig.next_request().is_some());
     rig.fetch.request(FetchRequest::fresh_panes(), true);
@@ -745,7 +767,10 @@ fn a_final_snapshot_never_yields_to_an_interim_or_loses_completion() {
         ("interim-snapshot", FetchPhase::Interim),
     ] {
         let mut snapshot = agent_snapshot(&rig.ws);
-        snapshot.worktree_groups[0].rows[0].name = name.into();
+        std::sync::Arc::make_mut(
+            &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+        )[0]
+        .name = name.into();
         rig.result_tx
             .send(FetchUpdate::Snapshot {
                 snapshot: Box::new(snapshot),
@@ -881,8 +906,10 @@ fn watched_metrics_and_hidden_presence_publications_fold_immediately() {
         folded.viewed_panes = rig.state.current.viewed_panes.clone();
         rig.state.current = folded.clone();
         rig.set_pulled(&folded);
-        let crate::store::snapshot::RowCard::Process(card) =
-            &mut folded.worktree_groups[0].rows[0].card
+        let crate::store::snapshot::RowCard::Process(card) = &mut std::sync::Arc::make_mut(
+            &mut std::sync::Arc::make_mut(&mut folded.worktree_groups)[0].rows,
+        )[0]
+        .card
         else {
             panic!("process fixture");
         };

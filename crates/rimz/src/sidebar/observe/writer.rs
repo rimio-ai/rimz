@@ -559,7 +559,8 @@ mod tests {
         snapshot.worktree_groups = vec![crate::sidebar::test_support::worktree_group(
             dir.path(),
             vec![row.clone(), row],
-        )];
+        )]
+        .into();
         let sig = super::super::extract_sig(
             &snapshot,
             &super::super::PulledFrameSig::from_snapshot(&snapshot),

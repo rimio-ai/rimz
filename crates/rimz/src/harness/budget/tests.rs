@@ -327,7 +327,8 @@ fn turn_budget_clears_midnight_auto_continue_parks() {
         pane_pid: None,
         worktree_path: None,
         worktree_branch: None,
-    }];
+    }]
+    .into();
     enforce(&snapshot, &runtime, None, &config);
     assert!(
         read_scope_state(&runtime)
@@ -589,7 +590,8 @@ fn fleet_enforcement_arms_resume_after_interrupting_a_running_agent() {
         pane_pid: None,
         worktree_path: None,
         worktree_branch: None,
-    }];
+    }]
+    .into();
 
     enforce(&snapshot, &runtime, None, &config);
     assert!(scope_interrupted(&read_scope_state(&runtime), &running));

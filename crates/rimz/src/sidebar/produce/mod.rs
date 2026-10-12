@@ -374,7 +374,8 @@ fn rollup_resolution_snapshot(store: &Store) -> Result<SidebarSnapshot> {
                 worktree_branch: agent.worktree_branch.clone(),
             })
         })
-        .collect();
+        .collect::<Vec<_>>()
+        .into();
     Ok(snapshot)
 }
 

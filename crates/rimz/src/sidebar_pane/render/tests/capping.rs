@@ -237,7 +237,7 @@ fn finished_group_collapses_unread_success_until_revealed() {
         focused_map.iter().skip(1).all(Option::is_some),
         "every line after the header belongs to a revealed card: {focused_map:?}"
     );
-    group.rows[0]
+    std::sync::Arc::make_mut(&mut group.rows)[0]
         .as_agent_mut()
         .expect("agent row")
         .usage
@@ -315,13 +315,17 @@ fn finished_group_reveals_when_a_members_child_is_focused() {
     group.finished = true;
     let child = PaneId::from_parts(MuxName::Zellij, "terminal_child");
     let now = group.rows[0].last_activity;
-    group.rows[0].as_agent_mut().unwrap().sub_agents.push(
-        serde_json::from_value(serde_json::json!({
-            "id": "child", "name": "explorer", "status": "running",
-            "last_activity": now, "pane": child,
-        }))
-        .unwrap(),
-    );
+    std::sync::Arc::make_mut(&mut group.rows)[0]
+        .as_agent_mut()
+        .unwrap()
+        .sub_agents
+        .push(
+            serde_json::from_value(serde_json::json!({
+                "id": "child", "name": "explorer", "status": "running",
+                "last_activity": now, "pane": child,
+            }))
+            .unwrap(),
+        );
     assert_eq!(
         visible_ids_with_context(&group, &BodyLens::default(), false, None, Some(&child)),
         ["parent", "sibling"]
@@ -340,7 +344,7 @@ fn finished_roster_names_keep_soft_provider_brand_tones() {
     finished.finished = true;
 
     let mut snapshot = snapshot_with(Vec::new());
-    snapshot.worktree_groups = vec![finished];
+    snapshot.worktree_groups = vec![finished].into();
     let theme = Theme::fixed(false);
     let lines = group_lines(&snapshot, &theme, 0);
     let receipt = lines
@@ -412,7 +416,7 @@ fn body_keeps_collapsed_finished_group_until_filter_empties_it() {
     live.label = "live-pod".to_owned();
 
     let mut snapshot = snapshot_with(Vec::new());
-    snapshot.worktree_groups = vec![finished, live];
+    snapshot.worktree_groups = vec![finished, live].into();
 
     let screen = snapshot_to_screen(&snapshot, 54, 30);
     assert!(
@@ -483,7 +487,7 @@ fn finished_roster_pins_the_member_cost() {
         cost_usd: Some(total),
         ..crate::store::snapshot::SidebarCohortEffort::default()
     });
-    for row in &mut finished.rows {
+    for row in std::sync::Arc::make_mut(&mut finished.rows) {
         row.last_activity = fixed_now() - Duration::from_secs(2 * 60 * 60);
     }
 
@@ -803,7 +807,7 @@ fn finished_receipt_pins_cost_then_tokens_and_muted_active_duration() {
         ..crate::store::snapshot::SidebarCohortEffort::default()
     });
     let mut snapshot = snapshot_with(Vec::new());
-    snapshot.worktree_groups = vec![finished];
+    snapshot.worktree_groups = vec![finished].into();
     let theme = Theme::fixed(true);
     let lines = group_lines_at_width(&snapshot, &theme, 0, 80);
     let texts = line_texts(&lines);
@@ -1083,7 +1087,7 @@ fn group(
         cohort_effort: None,
         pipeline: None,
         status_counts: Vec::new(),
-        rows,
+        rows: rows.into(),
         diff_added: None,
         diff_removed: None,
         commits_ahead: None,

@@ -104,7 +104,8 @@ fn row_snapshot_at(
                 phase: crate::agents::TurnPhase::Idle,
                 ..AgentCard::default()
             })),
-        }],
+        }]
+        .into(),
         diff_added: None,
         diff_removed: None,
         commits_ahead: None,
@@ -120,7 +121,8 @@ fn row_snapshot_at(
         ci: None,
         pr_number: None,
         pr_url: None,
-    }];
+    }]
+    .into();
     if focused {
         snap.own_view = Some(crate::store::snapshot::SidebarOwnView {
             sibling_count: 2,
@@ -169,17 +171,18 @@ fn child_focus_baseline_selects_the_parent_and_requires_own_view() {
     let mut snapshot = row_snapshot(&workspace(), AgentStatus::Idle, true);
     let parent = snapshot.focused_pane.clone();
     let child = PaneId::from_parts(crate::MuxName::Tmux, "%2");
-    snapshot.worktree_groups[0].rows[0]
-        .as_agent_mut()
-        .unwrap()
-        .sub_agents
-        .push(
-            serde_json::from_value(serde_json::json!({
-                "id": "child", "name": "explorer", "status": "running",
-                "last_activity": snapshot.now, "pane": child,
-            }))
-            .unwrap(),
-        );
+    std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows)
+        [0]
+    .as_agent_mut()
+    .unwrap()
+    .sub_agents
+    .push(
+        serde_json::from_value(serde_json::json!({
+            "id": "child", "name": "explorer", "status": "running",
+            "last_activity": snapshot.now, "pane": child,
+        }))
+        .unwrap(),
+    );
     snapshot.focused_pane = Some(child);
     let own = PaneId::from_parts(crate::MuxName::Tmux, "%sidebar");
     assert_eq!(session_focus_baseline(&snapshot, Some(&own)), parent);
@@ -223,7 +226,7 @@ fn snapshot_in_group(
         cohort_effort: None,
         pipeline: None,
         status_counts: Vec::new(),
-        rows: vec![row],
+        rows: vec![row].into(),
         diff_added: None,
         diff_removed: None,
         commits_ahead: None,
@@ -246,7 +249,7 @@ fn snapshot_in_group(
         jiff::Timestamp::from_second(1_000).unwrap(),
     );
     snapshot.panes_produced_at_ms = Some(1);
-    snapshot.worktree_groups = vec![group];
+    snapshot.worktree_groups = vec![group].into();
     snapshot
 }
 
@@ -281,10 +284,9 @@ fn row_ids(snapshot: &SidebarSnapshot) -> Vec<String> {
 }
 
 fn set_row_status(snapshot: &mut SidebarSnapshot, row_id: &str, status: AgentStatus) {
-    let row = snapshot
-        .worktree_groups
+    let row = std::sync::Arc::make_mut(&mut snapshot.worktree_groups)
         .iter_mut()
-        .flat_map(|group| group.rows.iter_mut())
+        .flat_map(|group| std::sync::Arc::make_mut(&mut group.rows).iter_mut())
         .find(|row| row.id == row_id)
         .expect("row exists");
     row.as_agent_mut().expect("agent row").status = status;
@@ -306,14 +308,14 @@ fn append_agent_row(
     )));
     row.unread = unread;
     row.as_agent_mut().expect("agent row").status = status;
-    snapshot.worktree_groups[0].rows.push(row);
+    std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows)
+        .push(row);
 }
 
 fn set_all_rows_unread(snapshot: &mut SidebarSnapshot) {
-    for row in snapshot
-        .worktree_groups
+    for row in std::sync::Arc::make_mut(&mut snapshot.worktree_groups)
         .iter_mut()
-        .flat_map(|group| group.rows.iter_mut())
+        .flat_map(|group| std::sync::Arc::make_mut(&mut group.rows).iter_mut())
     {
         row.unread = true;
     }
@@ -434,8 +436,9 @@ fn two_pane_snapshot(ws: &WorkspaceId, active: PaneId) -> (SidebarSnapshot, Pane
     second_row.id = "sess-2".to_owned();
     second_row.name = "codex".to_owned();
     second_row.pane = Some(crate::pane::PaneRef::from_id(second.clone()));
-    snap.worktree_groups[0].rows.push(second_row);
-    snap.worktree_groups[0].status_counts[0].count = 2;
+    std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut snap.worktree_groups)[0].rows)
+        .push(second_row);
+    std::sync::Arc::make_mut(&mut snap.worktree_groups)[0].status_counts[0].count = 2;
     snap.own_view = Some(crate::store::snapshot::SidebarOwnView {
         sibling_count: 2,
         working_pane_ids: vec![first.clone(), second.clone()],
@@ -610,7 +613,10 @@ fn accepted_final_then_failed_final_keeps_rendered_facts() {
     let ws = workspace();
     let (_dir, mut h) = ApplyHarness::new(&ws);
     let mut accepted = row_snapshot(&ws, AgentStatus::Waiting, false);
-    accepted.worktree_groups[0].rows[0].unread = true;
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut accepted.worktree_groups)[0].rows,
+    )[0]
+    .unread = true;
     append_agent_row(&mut accepted, "sess-2", "%2", AgentStatus::Running, false);
 
     h.apply(accepted);
@@ -668,7 +674,9 @@ fn focused_read_clear_survives_failure_without_duplicate_trace() {
     );
     let mut h = ApplyHarness::for_runtime_with_diag(&ws, runtime, instance_id, diag.clone());
     let mut focused = row_snapshot(&ws, AgentStatus::Waiting, true);
-    focused.worktree_groups[0].rows[0].unread = true;
+    std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut focused.worktree_groups)[0].rows)
+        [0]
+    .unread = true;
 
     h.apply_outcome(FetchUpdate::Snapshot {
         snapshot: Box::new(focused),
@@ -723,7 +731,9 @@ fn focus_writes_read_receipt_and_clears_current_unread_row() {
     let instance_a = SidebarInstanceId::new();
     let mut a = ApplyHarness::for_runtime(&ws, runtime.clone(), instance_a.clone());
     let mut focused = row_snapshot_at(&ws, AgentStatus::Success, true, fixed_time(1_700_000_000));
-    focused.worktree_groups[0].rows[0].unread = true;
+    std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut focused.worktree_groups)[0].rows)
+        [0]
+    .unread = true;
 
     a.apply(focused);
     assert!(
@@ -741,7 +751,9 @@ fn viewed_child_focus_leaves_parent_unread_without_a_receipt() {
     let mut harness = ApplyHarness::for_runtime(&ws, runtime.clone(), instance.clone());
     let mut snapshot = row_snapshot_at(&ws, AgentStatus::Success, true, fixed_time(1_700_000_000));
     let child = PaneId::from_parts(crate::MuxName::Tmux, "%2");
-    let row = &mut snapshot.worktree_groups[0].rows[0];
+    let row = &mut std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[0];
     row.unread = true;
     row.as_agent_mut().unwrap().sub_agents.push(
         serde_json::from_value(serde_json::json!({
@@ -765,7 +777,10 @@ fn focused_read_clear_keeps_live_rank_when_unread_clears() {
         two_pane_snapshot(&ws, PaneId::from_parts(crate::MuxName::Tmux, "%1"));
     set_row_status(&mut background, "sess-1", AgentStatus::Success);
     set_row_status(&mut background, "sess-2", AgentStatus::Waiting);
-    background.worktree_groups[0].rows[0].unread = true;
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut background.worktree_groups)[0].rows,
+    )[0]
+    .unread = true;
     set_viewed(&mut background, false);
 
     a.apply(background);
@@ -774,7 +789,9 @@ fn focused_read_clear_keeps_live_rank_when_unread_clears() {
     let (mut viewed, _, _) = two_pane_snapshot(&ws, first.clone());
     set_row_status(&mut viewed, "sess-1", AgentStatus::Success);
     set_row_status(&mut viewed, "sess-2", AgentStatus::Waiting);
-    viewed.worktree_groups[0].rows[0].unread = true;
+    std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut viewed.worktree_groups)[0].rows)
+        [0]
+    .unread = true;
     a.apply(viewed.clone());
 
     assert_eq!(
@@ -790,7 +807,9 @@ fn focused_read_clear_keeps_live_rank_when_unread_clears() {
     );
 
     let mut settled = viewed;
-    settled.worktree_groups[0].rows[0].unread = false;
+    std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut settled.worktree_groups)[0].rows)
+        [0]
+    .unread = false;
     a.ui.order_hold.as_mut().expect("hold armed").expires_ms =
         jiff::Timestamp::now().as_millisecond() - 1;
     a.apply(settled);
@@ -814,7 +833,9 @@ fn focus_clears_sticky_unread_after_status_returns_to_running() {
     let instance_a = SidebarInstanceId::new();
     let mut a = ApplyHarness::for_runtime(&ws, runtime.clone(), instance_a.clone());
     let mut focused = row_snapshot_at(&ws, AgentStatus::Running, true, fixed_time(1_700_000_100));
-    focused.worktree_groups[0].rows[0].unread = true;
+    std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut focused.worktree_groups)[0].rows)
+        [0]
+    .unread = true;
 
     a.apply(focused);
 
@@ -834,7 +855,10 @@ fn background_register_pane_does_not_focus_clear_until_viewed() {
     let read_marks = runtime.read_marks_path();
     let mut background =
         row_snapshot_at(&ws, AgentStatus::Waiting, true, fixed_time(1_700_000_000));
-    background.worktree_groups[0].rows[0].unread = true;
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut background.worktree_groups)[0].rows,
+    )[0]
+    .unread = true;
     background.viewed_panes.clear();
 
     a.apply(background);
@@ -846,7 +870,9 @@ fn background_register_pane_does_not_focus_clear_until_viewed() {
     );
 
     let mut viewed = row_snapshot_at(&ws, AgentStatus::Waiting, true, fixed_time(1_700_000_000));
-    viewed.worktree_groups[0].rows[0].unread = true;
+    std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut viewed.worktree_groups)[0].rows)
+        [0]
+    .unread = true;
     a.apply(viewed);
 
     assert!(
@@ -995,8 +1021,14 @@ fn staying_on_tab_does_not_sweep_new_unread() {
     a.apply(viewed);
 
     let (mut still_viewed, _, _) = two_pane_snapshot(&ws, first);
-    still_viewed.worktree_groups[0].rows[1].unread = true;
-    still_viewed.worktree_groups[0].rows[1].last_activity = fixed_time(1_700_000_200);
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut still_viewed.worktree_groups)[0].rows,
+    )[1]
+    .unread = true;
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut still_viewed.worktree_groups)[0].rows,
+    )[1]
+    .last_activity = fixed_time(1_700_000_200);
     a.apply(still_viewed);
 
     assert!(!row_unread_by_id(&a.current, "sess-1"));
@@ -1011,14 +1043,19 @@ fn new_ranked_first_unread_splices_at_front_during_order_hold() {
         two_pane_snapshot(&ws, PaneId::from_parts(crate::MuxName::Tmux, "%1"));
     set_row_status(&mut background, "sess-1", AgentStatus::Success);
     set_row_status(&mut background, "sess-2", AgentStatus::Running);
-    background.worktree_groups[0].rows[0].unread = true;
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut background.worktree_groups)[0].rows,
+    )[0]
+    .unread = true;
     set_viewed(&mut background, false);
     a.apply(background);
 
     let (mut viewed, _, _) = two_pane_snapshot(&ws, first.clone());
     set_row_status(&mut viewed, "sess-1", AgentStatus::Success);
     set_row_status(&mut viewed, "sess-2", AgentStatus::Running);
-    viewed.worktree_groups[0].rows[0].unread = true;
+    std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut viewed.worktree_groups)[0].rows)
+        [0]
+    .unread = true;
     a.apply(viewed);
 
     let (mut with_new_unread, _, _) = two_pane_snapshot(&ws, first);
@@ -1082,8 +1119,14 @@ fn frameless_fold_does_not_blip_switch_in() {
     assert_eq!(a.ui.viewing_own_tab, Some(true));
 
     let (mut still_viewed, _, _) = two_pane_snapshot(&ws, first);
-    still_viewed.worktree_groups[0].rows[1].unread = true;
-    still_viewed.worktree_groups[0].rows[1].last_activity = fixed_time(1_700_000_200);
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut still_viewed.worktree_groups)[0].rows,
+    )[1]
+    .unread = true;
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut still_viewed.worktree_groups)[0].rows,
+    )[1]
+    .last_activity = fixed_time(1_700_000_200);
     a.apply(still_viewed);
 
     assert!(!row_unread_by_id(&a.current, "sess-1"));
@@ -1101,7 +1144,10 @@ fn manual_unread_guard_suppresses_focused_read_until_revisit() {
     a.ui.unread_guard = Some("sess-1".to_owned());
     let mut still_focused =
         row_snapshot_at(&ws, AgentStatus::Success, true, fixed_time(1_700_000_000));
-    still_focused.worktree_groups[0].rows[0].unread = true;
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut still_focused.worktree_groups)[0].rows,
+    )[0]
+    .unread = true;
 
     a.apply(still_focused);
 
@@ -1114,7 +1160,10 @@ fn manual_unread_guard_suppresses_focused_read_until_revisit() {
 
     let mut focus_left =
         row_snapshot_at(&ws, AgentStatus::Success, false, fixed_time(1_700_000_000));
-    focus_left.worktree_groups[0].rows[0].unread = true;
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut focus_left.worktree_groups)[0].rows,
+    )[0]
+    .unread = true;
     a.apply(focus_left);
 
     assert!(row_unread(&a.current));
@@ -1125,7 +1174,10 @@ fn manual_unread_guard_suppresses_focused_read_until_revisit() {
     );
 
     let mut refocused = row_snapshot_at(&ws, AgentStatus::Success, true, fixed_time(1_700_000_000));
-    refocused.worktree_groups[0].rows[0].unread = true;
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut refocused.worktree_groups)[0].rows,
+    )[0]
+    .unread = true;
     a.apply(refocused);
 
     assert!(
