@@ -1,5 +1,10 @@
 //! Client/host version-skew classification for remote attaches.
 
+/// Release version without prerelease or build suffixes.
+pub fn core_version(input: &str) -> &str {
+    input.split(['-', '+']).next().unwrap_or(input)
+}
+
 /// The numeric components RimZ uses to judge remote compatibility.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Version {
@@ -10,7 +15,7 @@ struct Version {
 
 impl Version {
     fn parse(input: &str) -> Option<Self> {
-        let core = input.split(['-', '+']).next()?;
+        let core = core_version(input);
         let mut components = core.split('.');
         let version = Self {
             major: components.next()?.parse().ok()?,
@@ -52,6 +57,13 @@ pub fn classify(client: &str, host: &str) -> Skew {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn release_core_drops_build_and_prerelease_suffixes() {
+        for version in ["0.4.3-dev", "0.4.3+abc", "0.4.3-dev+abc", "0.4.3"] {
+            assert_eq!(core_version(version), "0.4.3");
+        }
+    }
 
     #[test]
     fn classifies_the_first_differing_numeric_component() {

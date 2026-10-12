@@ -64,6 +64,9 @@ enum RemoteSubcmd {
             crate::cli::complete::remote_aliases
         ))]
         alias_or_host: String,
+        /// Install the latest release instead of matching this client's release.
+        #[arg(long)]
+        latest: bool,
     },
     /// Delete a saved remote alias.
     Rm {
@@ -304,7 +307,10 @@ pub fn run(args: RemoteArgs, globals: &GlobalFlags) -> Result<()> {
             Ok(())
         }
         RemoteSubcmd::Connect { args } => connect(args, globals),
-        RemoteSubcmd::Setup { alias_or_host } => setup::run(alias_or_host, globals),
+        RemoteSubcmd::Setup {
+            alias_or_host,
+            latest,
+        } => setup::run(alias_or_host, latest, globals),
         RemoteSubcmd::Rm { name } => {
             let mut aliases = RemoteAliases::load().context("loading remote aliases")?;
             let target = aliases.get(&name).map(|entry| entry.target.clone());

@@ -6,7 +6,7 @@ use crate::cli::GlobalFlags;
 use rimz::remote::RemoteTarget;
 use rimz::remote::aliases::RemoteAliases;
 
-pub(super) fn run(alias_or_host: String, _globals: &GlobalFlags) -> Result<()> {
+pub(super) fn run(alias_or_host: String, latest: bool, _globals: &GlobalFlags) -> Result<()> {
     let aliases = RemoteAliases::load().context("loading remote aliases")?;
     let destination = super::resolve_setup_destination(&alias_or_host, &aliases)?;
     let connect_hint = connect_hint(&alias_or_host, &aliases);
@@ -17,13 +17,21 @@ pub(super) fn run(alias_or_host: String, _globals: &GlobalFlags) -> Result<()> {
         )
     })?;
 
+    let version = (!latest).then(|| rimz::remote::version::core_version(rimz::build_id::VERSION));
+    let release = version.map_or_else(
+        || "the latest rimz release".to_owned(),
+        |version| format!("rimz {version}"),
+    );
     let _ = writeln!(
         std::io::stderr().lock(),
-        "rimz: installing rimz on {} over ssh…",
+        "rimz: installing {release} on {} over ssh…",
         destination.host_display()
     );
-    let spec =
-        rimz::remote::setup::setup_install_spec(destination.as_str(), destination.host_display());
+    let spec = rimz::remote::setup::setup_install_spec(
+        destination.as_str(),
+        destination.host_display(),
+        version,
+    );
     let status = spec
         .to_command()
         .status()

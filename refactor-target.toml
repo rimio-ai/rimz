@@ -651,7 +651,7 @@ surface-budget = 10
 
 [[module]]
 path = "crates/rimz/src/remote"
-surface-budget = 175
+surface-budget = 176
 
 [[module]]
 path = "crates/rimz/src/remote_control.rs"

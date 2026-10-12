@@ -10,15 +10,23 @@ use super::{sh_quote, ssh_program};
 
 const RELEASE_BASE: &str = "https://github.com/rimio-ai/rimz/releases/latest/download/";
 
-pub fn setup_install_spec(destination: &str, host: &str) -> CommandSpec {
+pub fn setup_install_spec(destination: &str, host: &str, version: Option<&str>) -> CommandSpec {
     CommandSpec::new(ssh_program())
         .args(["-o", "ConnectTimeout=10", "-t", "--"])
         .arg(destination)
-        .arg(install_snippet(host))
+        .arg(install_snippet(host, version))
 }
 
-fn install_snippet(host: &str) -> String {
-    let success = sh_quote(&format!("rimz installed on {host} at ~/.local/bin/rimz"));
+fn install_snippet(host: &str, version: Option<&str>) -> String {
+    let success = sh_quote(&format!("installed on {host} at ~/.local/bin/rimz"));
+    let base = sh_quote(&version.map_or_else(
+        || RELEASE_BASE.to_owned(),
+        |version| format!("https://github.com/rimio-ai/rimz/releases/download/v{version}/"),
+    ));
+    let download_failure = version.map(|version| {
+        let notice = sh_quote(&format!("rimz: no release v{version} on GitHub (your rimz is ahead of the latest release); rerun with --latest to install the newest release"));
+        format!("if [ \"$rc\" -eq 22 ]; then printf '%s\\n' {notice} >&2; fi")
+    }).unwrap_or_default();
     format!(
         r#"set -e
 os="$(uname -s)"
@@ -45,14 +53,21 @@ mkdir -p "$HOME/.local/bin"
 dir="$(mktemp -d)"
 trap 'rm -rf "$dir"' EXIT
 cd "$dir"
-base="{RELEASE_BASE}"
-curl -fLO "${{base}}${{asset}}"
-curl -fLO "${{base}}SHA256SUMS"
+base={base}
+download() {{
+  curl -fLO "$1" || {{
+    rc=$?
+    {download_failure}
+    exit "$rc"
+  }}
+}}
+download "${{base}}${{asset}}"
+download "${{base}}SHA256SUMS"
 $verify
 tar -xzf "$asset"
 install -m 0755 "${{asset%.tar.gz}}/rimz" "$HOME/.local/bin/rimz"
-"$HOME/.local/bin/rimz" --version
-echo {success}
+installed_version="$("$HOME/.local/bin/rimz" --version)"
+printf '%s %s\n' "$installed_version" {success}
 "#
     )
 }
@@ -63,7 +78,7 @@ mod tests {
 
     #[test]
     fn setup_install_spec_builds_ssh_pty_installer() {
-        let spec = setup_install_spec("alice@dev-box", "dev-box");
+        let spec = setup_install_spec("alice@dev-box", "dev-box", Some("0.4.3"));
         assert_eq!(spec.program, "ssh");
         assert_eq!(
             spec.args[0..5],
@@ -72,7 +87,7 @@ mod tests {
         assert_eq!(spec.args.len(), 6);
         let snippet = spec.args.last().expect("snippet");
         for needle in [
-            RELEASE_BASE,
+            "https://github.com/rimio-ai/rimz/releases/download/v0.4.3/",
             LINUX_X86_64_ARCHIVE,
             DARWIN_AARCH64_ARCHIVE,
             DARWIN_X86_64_ARCHIVE,
@@ -80,9 +95,13 @@ mod tests {
             "shasum -a 256 -c --ignore-missing SHA256SUMS",
             "install -m 0755",
             "$HOME/.local/bin/rimz",
-            "rimz installed on dev-box at ~/.local/bin/rimz",
+            "installed on dev-box at ~/.local/bin/rimz",
+            "rimz: no release v0.4.3 on GitHub (your rimz is ahead of the latest release); rerun with --latest to install the newest release",
         ] {
             assert!(snippet.contains(needle), "missing {needle}: {snippet}");
         }
+        let latest = setup_install_spec("alice@dev-box", "dev-box", None);
+        assert!(latest.args.last().unwrap().contains(RELEASE_BASE));
+        assert!(!latest.args.last().unwrap().contains("no release v"));
     }
 }
