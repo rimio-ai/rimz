@@ -125,14 +125,14 @@ The plugin's code, argv, and configuration are all RimZ-owned, never your `confi
 
 ## Browser listener
 
-Browser access defaults to a loopback ttyd listener with one machine-wide Basic-Auth credential. That credential authenticates the shared daemon rather than a room, so whoever holds it reaches every live RimZ room on the machine and has a shell as the serving user. Handle it like a machine-wide SSH key.
+Browser access defaults to a loopback listener with named sign-in tokens. Each token authenticates the writable daemon rather than a room, so whoever holds one reaches every live RimZ room on the machine and has a shell as the serving user. Handle each like a machine-wide SSH key. `rimz web open` points at `rimz web token show` rather than printing a password; create and revoke named tokens with `rimz web token`.
 
-`[web] auth_header` delegates the public decision to an authenticating reverse proxy, and RimZ's gate stands in front of ttyd. Every request that reaches the gate passes four checks:
+RimZ's gate always stands in front of a private ttyd listener. In Basic mode it checks the supplied token; with an empty `trusted_proxies` list any peer may attempt sign-in, while a nonempty list limits peers to loopback and those networks. `[web] auth_header` instead delegates sign-in to an authenticating reverse proxy. In that mode every request passes four checks:
 
 1. The source address is loopback, or inside a `[web] trusted_proxies` CIDR. Anything else is dropped without a reply; an empty list leaves only loopback.
 2. The named identity header is present exactly once and is not empty. Zero copies, two copies, or an empty value are refused.
 3. When `[web] auth_users` is set, the header's trimmed value matches an entry exactly and case-sensitively.
-4. Any `Authorization` header the client sent is stripped, and the machine's own Basic credential is injected before the request is forwarded.
+4. Any `Authorization` header the client sent is stripped, and a separate private upstream credential is injected before the request is forwarded.
 
 The identity provider's application policy remains the primary access control; `auth_users` is defense in depth, using canonical username spellings. On its side, the proxy has to strip client-supplied copies of the identity header, inject its own value after authentication, and remain the only non-loopback source that can reach the gate. Pair the CIDRs with the host firewall, and account for the source address that container or host networking produces. Loopback bypasses only the source-address check: a trusted-header request from loopback still needs the header, and the private ttyd listener still needs Basic Auth. On a multi-user host, host-level user isolation is what keeps another local user from reading the serving user's credential or executing as that user.
 

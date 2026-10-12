@@ -56,7 +56,7 @@ rimz CLI and hook subprocesses
 workspace store (a directory of flat files)
 ```
 
-When browser access is enabled, one authenticated ttyd daemon binds the configured loopback port for every Zellij and tmux room. A second no-auth daemon binds its own port only after `rimz web share` allowlists a live room, and it omits ttyd's write flag. Each connection supplies a session argument to a hidden `rimz web exec` shim. The writable shim validates durable workspace ownership and live mux state; the broadcast shim also validates the durable per-room allowlist. ttyd owns transport but no session authority ([web.md](./docs/internals/web.md)).
+When browser access is enabled, a RimZ gate binds the configured writable port for every Zellij and tmux room. It authenticates named tokens or a trusted proxy header, then forwards to ttyd on a private loopback port with a separate upstream credential. A second no-auth daemon binds its own port only after `rimz web share` allowlists a live room, and it omits ttyd's write flag. Each connection supplies a session argument to a hidden `rimz web exec` shim. The writable shim validates durable workspace ownership and live mux state; the broadcast shim also validates the durable per-room allowlist. ttyd owns transport but no session authority ([web.md](./docs/internals/web.md)).
 
 The spending service runs private service and walker threads inside whichever host-eligible long-lived RimZ process wins its persistent/discovery-namespace lifetime lock; one-shot inspection commands connect or fall back directly without becoming the warm owner. Its schema- and namespace-versioned Unix socket admits clients on the service thread while one lifetime walker fulfils stale work; a claim held through the reply write rejects busy stale requests immediately rather than queueing another workspace's refresh tick. `spending.json`, the provider/workspace publications, and their atomic-write and downgrade guards remain truth. Process exit discards the service and the next eligible client re-elects an owner, so this warm cache introduces no RimZ daemon.
 
@@ -105,7 +105,7 @@ language-server runtime $XDG_RUNTIME_DIR/rimz/lsp/
 machine-wide persistent ~/.rimz/{accounts,builds,loops,logs,web,cache}/
   accounts/<kind>/<name>/ provider homes RimZ placed, builds/<build_id>/rimz
   immutable executable generations, the loop registry, append-only logs, the
-  browser daemon pid/port records and credential, the broadcast room allowlist,
+  browser daemon pid/port records and token store, the broadcast room allowlist,
   and cache/ for downloaded assets, the presence plugin, and cache/providers/
   (accounts, rate limits, credits, spend, pricing, and account budget ledgers)
   ~/.rimz/lsp-history.jsonl holds learned peaks; logs/lsp.log.jsonl holds evidence

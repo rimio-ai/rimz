@@ -1,8 +1,8 @@
 # Web access
 
-RimZ serves its rooms to a browser through two machine-wide ttyd daemons. The writable daemon reaches every live Zellij and tmux room behind one Basic-auth credential. The broadcast daemon has no authentication, drops browser input, and reaches only rooms on its allowlist. Both bind loopback by default.
+RimZ serves its rooms to a browser through a writable daemon and a broadcast daemon. The writable gate reaches every live Zellij and tmux room behind named Basic-auth tokens or trusted-header authentication, forwarding to a private ttyd listener. The broadcast daemon has no authentication, drops browser input, and reaches only rooms on its allowlist. Both public listeners bind loopback by default.
 
-ttyd owns the HTTP and WebSocket transport and the xterm.js page. RimZ owns everything around it: validating the room a URL names, the attach argv, the credential, the optional authorization gate in front of ttyd, the generated browser page, the daemon records, and remote SSH forwarding. A browser client is one more multiplexer client: the store, hooks, sidebar, and waits see nothing different, and RimZ proxies no pane I/O.
+ttyd owns the HTTP and WebSocket transport and the xterm.js page. RimZ owns everything around it: validating the room a URL names, the attach argv, the token store, the always-on writable authorization gate, the generated browser page, the daemon records, and remote SSH forwarding. A browser client is one more multiplexer client: the store, hooks, sidebar, and waits see nothing different, and RimZ proxies no pane I/O.
 
 The [web guide](../guide/web.md) shows what a user sees, and the [web CLI reference](../reference/cli/web.md) lists every subcommand and flag.
 
@@ -10,9 +10,9 @@ The [web guide](../guide/web.md) shows what a user sees, and the [web CLI refere
 
 | File | Owns |
 | --- | --- |
-| [`web/mod.rs`](../../crates/rimz/src/web/mod.rs) | The public entry points, `WebErr`, the `rimz.web.v2` payloads, session validation, room URLs, the OSC 7717 sequence, and the launch-context scrub list. |
-| [`web/ttyd.rs`](../../crates/rimz/src/web/ttyd.rs) | ttyd resolution and the version floor, the credential, both daemon records and locks, spawn, reuse, stop, and the broadcast allowlist. |
-| [`web/gate.rs`](../../crates/rimz/src/web/gate.rs) | The source-address and trusted-header gate, and the remote tunnel relay. |
+| [`web/mod.rs`](../../crates/rimz/src/web/mod.rs) | The public entry points, `WebErr`, per-verb payloads, session validation, room URLs, the OSC 7717 sequence, and the launch-context scrub list. |
+| [`web/ttyd.rs`](../../crates/rimz/src/web/ttyd.rs) | ttyd resolution and the version floor, the token store, both daemon records and locks, spawn, reuse, stop, and the broadcast allowlist. |
+| [`web/gate.rs`](../../crates/rimz/src/web/gate.rs) | The source-address, named-token and trusted-header gate, and the remote tunnel relay. |
 | [`web/ttyd/client.rs`](../../crates/rimz/src/web/ttyd/client.rs) | ttyd client options, theme projection, font resolution, and the generated index page with its bootstrap script. |
 | `web/ttyd/*.js` | The bootstrap modules: `ws_url.js` (room to `arg`), `mouse_flow.js` (motion pacing and drag re-arm), `input_guard.js` (Option chords and Shift+Enter), `pixel_layer.js` (Kitty graphics). |
 | [`cli/web/mod.rs`](../../crates/rimz/src/cli/web/mod.rs) | The `rimz web` handlers, including the hidden `exec` and `gate` subcommands. |
@@ -26,7 +26,7 @@ The [web guide](../guide/web.md) shows what a user sees, and the [web CLI refere
 Both daemons run the current `rimz` binary under ttyd, with different flags:
 
 ```text
-writable:  ttyd -W -O -a -P 3600 -c rimz:<secret> -i <interface> -p <port> [-t <option>...] [-I <index>] <rimz> web exec
+writable:  ttyd -W -O -a -P 3600 -c rimz-upstream:<secret> -i 127.0.0.1 -p <ephemeral> [-t <option>...] [-I <index>] <rimz> web exec
 broadcast: ttyd    -O -a -P 3600                  -i <interface> -p <share_port> [-t <option>...] [-I <index>] <rimz> web exec --share
 ```
 
@@ -38,8 +38,8 @@ broadcast: ttyd    -O -a -P 3600                  -i <interface> -p <share_port>
 | `-O` | Enforces WebSocket origin checks. |
 | `-a` | Appends the URL's `arg` query values to the command, which is how the session name reaches `rimz web exec`. |
 | `-P 3600` | Pings each WebSocket once an hour. See below. |
-| `-c rimz:<secret>` | Basic auth with the machine credential. Only the writable daemon has it. |
-| `-i`, `-p` | The listener. For a gated writable daemon this is `127.0.0.1` and an ephemeral port; otherwise it is the configured interface and port. |
+| `-c rimz-upstream:<secret>` | Basic auth with the private upstream credential. Only the writable daemon has it. |
+| `-i`, `-p` | The writable upstream is always `127.0.0.1` and an ephemeral port; its gate uses the configured interface and port. Broadcast uses the configured interface and share port directly. |
 | `-t`, `-I` | Client options and the generated index page (see [the browser client](#the-browser-client)). |
 
 The ping interval is long on purpose. libwebsockets closes a socket whose pong misses a grace window of seven seconds past the interval, and a browser that has stopped draining a saturated stream can miss it; at ttyd's five-second default a busy terminal closes and silently reattaches. `-P 0` pings continuously and starves ttyd's output pump instead of disabling the check. ttyd stores the interval plus seven in a `uint16_t`, so the value must stay at or below 65528.
@@ -47,7 +47,7 @@ The ping interval is long on purpose. libwebsockets closes a socket whose pong m
 | | Writable | Broadcast |
 | --- | --- | --- |
 | Port | `[web] port` (8200) | `[web] share_port` (8201) |
-| Authentication | Basic auth, optionally behind the gate | None |
+| Authentication | Named Basic tokens or trusted header at the gate | None |
 | Rooms reachable | Every room with a workspace record and a live session | Rooms on the allowlist |
 | Record | `web-ttyd.json` | `web-ttyd-share.json` |
 | Lock | `web-ttyd.lock` | `web-ttyd-share.lock` |
@@ -64,9 +64,9 @@ Every state file lives under `~/.rimz/web/`.
 3. Take `web-ttyd.lock`, so concurrent room starts converge on one process and a credential rotation cannot race stale-record cleanup.
 4. Read the record and check it is live (see [the record](#the-record)). A stale record is removed, and any of its processes still running are terminated.
 5. Build the client profile, which may generate the index page, and check that the configured listener is free unless the live record already holds it. An occupied port is `ConfiguredPortInUse`, which points at `[web] port`.
-6. Reuse the live daemon if its record matches the desired shape. Otherwise stop it, create the credential if none exists, and start fresh.
+6. Reuse the live daemon if its record matches the desired shape and the token store is nonempty. Otherwise stop it, mint the default token if none exists, and start fresh.
 
-A fresh start has two shapes. With Basic auth and an empty `trusted_proxies` list, ttyd binds `<interface>:<port>` directly. With trusted-header auth or any trusted proxy, ttyd binds `127.0.0.1:<ephemeral>` and RimZ spawns the hidden `rimz web gate` on the configured listener, pointed at that upstream. Either way RimZ waits up to 5 seconds (`START_TIMEOUT`) for the public listener, writes the record only after it accepts, and stops every process it started when a later step fails.
+A fresh start always binds ttyd to `127.0.0.1:<ephemeral>` and spawns the hidden `rimz web gate` on the configured listener, pointed at that upstream. RimZ waits up to 5 seconds (`START_TIMEOUT`) for the public listener, writes the record only after it accepts, and stops every process it started when a later step fails.
 
 Both ttyd processes and the gate spawn with null stdio in their own process group. Before spawning ttyd, `without_ttyd_launch_context` removes multiplexer membership through `CommandSpec::without_mux_context`, then the launching pane's room, worktree, and agent variables, the client size, and remote-attach markers through `TTYD_AMBIENT_CONTEXT_ENV`. Machine environment such as `HOME`, `XDG_*`, `PATH`, locale, logging, and the `RIMZ_*_BIN` overrides passes through, so every browser attach sees the machine and none sees the pane that happened to start the daemon.
 
@@ -82,8 +82,8 @@ The broadcast path is the same without the gate or the credential. It validates 
 | `auth` | `{"mode":"basic"}` or `{"mode":"trusted_header","header":"<name>"}`. |
 | `auth_users` | The trimmed identity allowlist; omitted when empty. |
 | `trusted_proxies` | The proxy list as configured. |
-| `gate` | `{pid, upstream_port}` when the gate runs. |
-| `basic_upstream` | ttyd itself requires the Basic credential in every mode. |
+| `gate` | `{pid, upstream_port}`, present in every new writable record. |
+| `token_auth` | The gate supports the token store and ttyd requires its separate upstream credential. |
 | `launch_context_scrubbed` | ttyd was spawned without the launch pane's environment. |
 | `pixel_protocol` | Present only when ttyd serves the generated page with the current `TTYD_PIXEL_PROTOCOL`. |
 | `index_key` | The generated page's cache key. |
@@ -92,7 +92,7 @@ The broadcast path is the same without the gate or the credential. It validates 
 
 A record is live only while its pid names `ttyd`, its listener accepts a TCP connection, and, for a gated daemon, the gate pid is a `rimz web gate` process. A reader that finds any of these false terminates what survives and removes the record.
 
-A live record is reused only when every desired value matches: the listener, the auth mode, `auth_users`, `trusted_proxies`, whether a gate runs, both markers set, and the `index_key` of the page the current binary would generate. Missing markers deserialize as false, so a record without them is always replaced. Any drift stops the old processes and starts the desired shape; an upgrade, font change, or ttyd version that changes the page therefore replaces the daemon at the next ensure. Reuse fails with `TtydCredentialMissing` when the credential file is gone. The broadcast record compares the listener, its marker, and `index_key`.
+A live record is reused only when every desired value matches: the listener, the auth mode, `auth_users`, `trusted_proxies`, a gate is present, both markers are set, and the `index_key` matches the page the current binary would generate. Missing markers deserialize as false, so legacy direct and gated records are both replaced. Any drift stops the old processes and starts the desired shape; an upgrade, font change, or ttyd version that changes the page therefore replaces the daemon at the next ensure. A missing or empty token store also forces replacement and default-token creation. The broadcast record compares the listener, its marker, and `index_key`.
 
 ### Who starts and stops them
 
@@ -100,14 +100,15 @@ A live record is reused only when every desired value matches: the listener, the
 | --- | --- | --- |
 | `rimz start` with `[web] enabled = true` | Ensures it after the room is ready. Any failure, including a missing or old ttyd, prints `rimz: browser daemon was not started: …` and the room starts anyway. | Untouched. |
 | `rimz web open` | Preflights ttyd before birthing the room, waits up to 5 seconds for the session to be addressable, then ensures the daemon. | Untouched. |
-| `rimz web open --no-start` | Requires a live record and the credential, and fails with `TtydOffline` otherwise. It skips the config-drift comparison; the ttyd version is still checked before the room is resolved. | Untouched. |
-| `rimz web url` | Reads the record and credential; changes nothing beyond stale-record cleanup. | Untouched. |
+| `rimz web open --no-start` | Requires a live token-auth record and the credential. A legacy record fails with `TtydOffline` rather than returning an incompatible upstream pair. It skips the config-drift comparison; the ttyd version is still checked before the room is resolved. | Untouched. |
+| `rimz web url` | Reads the record without credentials; changes nothing beyond stale-record cleanup. | Untouched. |
 | `rimz web start` | Refuses when `[web] enabled = false`; otherwise ensures it. | Untouched. |
 | `rimz web restart` | Refuses when `[web] enabled = false`; otherwise starts a fresh process, stopping the live one first. | Untouched when disabled; otherwise restarts it when the allowlist is non-empty, or stops it. |
 | `rimz web stop` | Stops it. | Stops it; the allowlist stays. |
 | `rimz reload` | Restarts it only when it is online. | Restarts it only when online, or stops it when the allowlist is empty. |
-| `rimz web token create` | Restarts it when online. | Untouched. |
-| `rimz web token revoke`, `revoke-all` | Stops it. | Untouched. |
+| `rimz web token create <NAME>` | Restarts it when online. | Untouched. |
+| `rimz web token revoke <NAME>` | Restarts it when online, or stops it when no tokens remain. | Untouched. |
+| `rimz web token revoke-all` | Stops it. | Untouched. |
 | `rimz web share` | Untouched. | Ensures it. |
 | `rimz web unshare` | Untouched. | Restarts it, or stops it when the list becomes empty. |
 | `rimz web unshare --all` | Untouched. | Stops it. |
@@ -118,14 +119,16 @@ Stopping sends SIGTERM to the gate and ttyd, polls the process table for up to o
 
 ## The gate
 
-`rimz web gate` (`gate::serve`) stands on the public listener whenever ttyd cannot be exposed directly. It parses its `--allow` entries as bare IPs or IPv4 and IPv6 CIDRs, and `desired_spec` has already parsed them before any process changed.
+`rimz web gate` (`gate::serve`) always stands on the writable public listener. It parses its `--allow` entries as bare IPs or IPv4 and IPv6 CIDRs, and `desired_spec` has already parsed them before any process changed.
 
-For each connection the gate first checks the peer. It maps an IPv4-mapped IPv6 address back to IPv4, accepts loopback and any address inside a same-family allowlist entry, and closes everything else without a response. With Basic auth, an accepted connection is spliced to ttyd byte for byte, and the browser answers ttyd's Basic challenge itself.
+Each request-head read has a 30-second idle timeout, cleared before relaying a body or upgraded WebSocket. The gate connects to ttyd only after the first request is authorized. Failure to spawn a connection thread drops that connection rather than terminating the gate.
 
-With trusted-header auth, the gate reads the machine credential once at startup, keeping the secret off its argv, and rewrites each HTTP request head before forwarding it:
+For each connection the gate first checks the peer. Basic auth with an empty proxy list admits every peer, preserving the reach of the former direct listener. With a nonempty list, or in trusted-header mode, it maps an IPv4-mapped IPv6 address back to IPv4, accepts loopback and any address inside a same-family allowlist entry, and closes everything else without a response.
+
+The gate reads the tokens and upstream credential once at startup, keeping secrets off its argv, and rewrites each HTTP request head before forwarding it. In Basic mode exactly one `Authorization` header must decode as a token name and matching secret, compared without an early return on a mismatching byte. Otherwise the response is `401 Unauthorized` with `WWW-Authenticate: Basic realm="RimZ"`, zero content length, and a closed connection. Trusted-header mode instead requires the configured identity:
 
 1. The configured header must appear exactly once, with a non-empty value after trimming. When `auth_users` is non-empty, that value must equal one entry byte for byte, case-sensitively. Otherwise the client gets `401 Unauthorized` and the connection closes.
-2. Every client `Authorization` header is dropped and `Authorization: Basic <machine-credential>` is added.
+2. In either mode every client `Authorization` header is dropped and `Authorization: Basic <upstream-credential>` is added.
 3. A body with `Content-Length` is forwarded unchanged. A chunked request, a malformed head, or conflicting lengths close the connection.
 4. The response is relayed with its framing intact. Keep-alive requests on one connection are each checked independently, and a WebSocket upgrade that ttyd accepts with `101` turns the connection into a raw splice.
 
@@ -170,18 +173,19 @@ The share shim, `rimz web exec --share <session>`, re-reads the allowlist on eve
 
 Revocation disconnects viewers by restarting the process. `unshare` of one room rewrites the allowlist, stops the daemon, and starts a fresh one if rooms remain; viewers of still-shared rooms reconnect through ttyd. Removing the last room, or `unshare --all`, stops it.
 
-## The credential
+## Tokens
 
-The one credential, named `rimz`, lives at `web-ttyd-credential.json` with `name`, `created_at`, and a 24-character `secret`, written mode 0600 through `write_private_temp_then_rename`. ttyd requires it in every auth mode. `ensure_daemon` creates it on first start.
+`web-tokens.json` has version `rimz.web.tokens.v1`, an `upstream` username/secret pair, and `tokens` sorted by unique name, each with `name`, `created_at`, and a 24-character `secret`. It is written mode 0600 through `write_private_temp_then_rename`. Names are 1-64 ASCII letters, digits, dots, underscores, or hyphens, starting with a letter or digit. The upstream username is `rimz-upstream`; its secret is minted with the store and rotated on every token change, including while offline. ttyd's `/token` endpoint supplies that credential to signed-in browser clients, so rotation also invalidates a revoked user's saved upstream credential. If only legacy `web-ttyd-credential.json` exists, its password is adopted as token `rimz`, the new store is published, then the legacy file is removed. Invalid content reports `TtydJson` with the path. `ensure_daemon` mints `rimz` whenever the token list is empty, in either auth mode.
 
 | Command | Effect |
 | --- | --- |
-| `token create` | Mints a new secret. When the writable daemon is online, restarts ttyd and any gate so the old secret stops working and the gate reads the new one. |
-| `token create --read-only` | Refused with `TtydReadOnlyCredential`: ttyd's read-only mode belongs to the whole process, and the error points at `rimz web share`. |
-| `token list` | Prints `rimz: <created_at>`. |
-| `token revoke rimz`, `revoke-all` | Stops the writable daemon and deletes the file. Any other name is `TtydCredentialNotFound`. |
+| `token create <NAME>` | Refuses duplicates, creates a secret, and restarts the online writable daemon so its gate reads the new token set. |
+| `token show [NAME]` | Prints only that password; defaults to `rimz`. |
+| `token list` | Prints sorted names and creation times; JSON includes no secrets. |
+| `token revoke <NAME>` | Refuses a missing name; restarts an online writable daemon with remaining tokens, or stops it when none remain. |
+| `token revoke-all` | Stops the writable daemon and clears the token list. |
 
-These commands behave the same in Basic and trusted-header modes.
+These commands behave the same in Basic and trusted-header modes. An online token change stops the old daemon before publishing the new token set, then attempts a restart. If restart preflight or startup fails, the change remains saved and the daemon stays stopped; the command reports a warning. Neither a configuration error nor a missing ttyd can leave the old gate accepting a revoked token.
 
 ## The browser client
 
@@ -253,9 +257,9 @@ The sidebar only sends Kitty graphics to a tmux client it trusts to render them.
 | `share_port` | `8201` | Broadcast listener. |
 | `base_url` | unset | Public prefix for writable URLs; unset means `http://127.0.0.1:<port>`. RimZ appends `/?room=<session>`. |
 | `share_base_url` | unset | The same for broadcast URLs, with `share_port`. |
-| `auth_header` | unset | A non-empty trimmed value selects trusted-header auth and starts the gate. |
+| `auth_header` | unset | A non-empty trimmed value selects trusted-header sign-in at the always-on gate. |
 | `auth_users` | empty | Identity allowlist for trusted-header auth; empty accepts any single non-empty identity. |
-| `trusted_proxies` | empty | IPs or CIDRs the gate admits besides loopback; non-empty starts the gate even with Basic auth. |
+| `trusted_proxies` | empty | IPs or CIDRs admitted besides loopback. An empty list admits all peers in Basic mode, but only loopback in trusted-header mode. |
 | `font` | `JetBrainsMono Nerd Font Mono` | Browser font family. |
 | `font_source` | unset | Local path or HTTPS URL of a custom face. |
 | `style_client` | `true` | Projects the theme and font into the browser. |
@@ -266,7 +270,7 @@ The sidebar only sends Kitty graphics to a tmux client it trusts to render them.
 
 Each round prepares the remote side with one non-PTY `rimz web open --print --json`. The `rimz.web.v2` payload (`WebOpenPayload`) carries `url`, `session`, `port`, `tunnel_port`, `auth`, and `credential: {username, secret}`. A payload without `auth` reads as Basic, and one without `tunnel_port` tunnels to `port`. Any other `version` fails with an error telling the user to upgrade the remote binary. A trusted-header payload without a credential fails before any tunnel is set up and points at its reverse-proxy URL.
 
-`tunnel_port` is the gate's upstream port for a gated daemon and the public `port` otherwise, so the tunnel always lands on ttyd's Basic-authenticated listener and never on the gate.
+New daemons always return the private upstream `tunnel_port` and its upstream credential, so the tunnel lands on ttyd's Basic-authenticated listener and never on the gate. The public-port fallback remains for older remote payloads.
 
 The local side runs two loopback ports:
 
@@ -281,8 +285,8 @@ The relay stays bound across recovery rounds. Each round repeats prep, so it can
 
 The browser session is shell access as the serving user. The defaults keep it on loopback behind Basic auth, and a deployment that exposes it puts HTTPS and rate limiting in a reverse proxy in front.
 
-- ttyd always requires the machine credential. Trusted-header auth changes only what stands in front of it: the [gate](#the-gate) accepts a proxy's identity header only from an admitted peer and presents the credential to ttyd itself.
-- Loopback peers pass the gate's address check but never bypass the header requirement.
+- ttyd always requires the separate upstream credential. The [gate](#the-gate) authenticates named tokens or a proxy's identity header, then presents the upstream credential to ttyd itself.
+- Loopback peers pass the gate's address check but never bypass token or header authentication.
 - The remote tunnel relay accepts unauthenticated requests on local loopback and presents the remote credential. That matches the trust boundary of a raw `ssh -L`: any process that can connect as, or run as, the tunnel owner can use it, so shared hosts need user isolation.
-- The credential stays out of URLs, store events, workspace records, and logs. It is printed only where a user asked for it: `rimz web open` writes `ttyd basic auth for this machine: user rimz, password <secret>` to stderr, `open --json` and `url --json` include it in the payload, and `token create` prints the new one. The remote tunnel holds it in memory and does not print it.
+- Secrets stay out of URLs, store events, workspace records, and logs. Human-facing passwords appear only in `token create` and `token show`; `open` points at `token show`. Only `open --json` includes the private upstream pair for the remote relay; URL, status and token-list payloads contain no secrets. The remote tunnel holds its credential in memory and does not print it.
 - The broadcast listener has no authentication by design. Its allowlist limits which rooms are served, not who watches: anyone who reaches `share_port` can read every allowlisted room. RimZ warns each time it ensures or restarts the broadcast daemon on a non-loopback interface, and a public deployment puts HTTPS, viewer authentication, and network filtering in front of `share_port`.

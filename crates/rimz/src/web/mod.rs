@@ -1,4 +1,4 @@
-//! Browser access through one machine-wide ttyd daemon.
+//! Browser access through writable and broadcast daemons, with named tokens at the writable gate.
 
 use std::io::{self, Write as _};
 use std::net::{SocketAddr, TcpListener};

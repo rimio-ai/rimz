@@ -141,7 +141,7 @@ The workflow is in the [accounts guide](../../guide/accounts.md).
 
 ### Browser access at start
 
-When `[web] enabled = true`, `rimz start` also starts the shared ttyd browser daemon. This is best-effort: a missing ttyd or an occupied `[web] port` prints a warning (`rimz: browser daemon was not started: ...`) and the room opens anyway. `rimz attach` does not start the daemon. [`rimz web`](./web.md) inspects and controls browser access.
+When `[web] enabled = true`, `rimz start` also starts the writable browser daemon. This is best-effort: a missing ttyd or an occupied `[web] port` prints a warning (`rimz: browser daemon was not started: ...`) and the room opens anyway. `rimz attach` does not start the daemon. [`rimz web`](./web.md) inspects and controls browser access.
 
 ## Pick a session
 

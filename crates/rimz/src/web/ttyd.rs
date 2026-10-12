@@ -1,4 +1,4 @@
-//! Shared ttyd daemon for browser access to every RimZ room.
+//! Writable and broadcast browser daemons, token storage, and process lifecycle.
 
 use std::fmt;
 use std::fs;

@@ -1,4 +1,4 @@
-//! Browser-client profile generation for the shared ttyd daemon.
+//! Browser-client profile generation for writable and broadcast daemons.
 
 use std::fs;
 use std::io;

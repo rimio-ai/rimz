@@ -1,4 +1,4 @@
-//! Source-address and trusted-header authorization gate for shared ttyd.
+//! Always-on writable gate for named tokens or trusted headers, and the loopback tunnel relay.
 
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::{IpAddr, Shutdown, SocketAddr, TcpListener, TcpStream};
