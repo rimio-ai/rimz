@@ -415,7 +415,7 @@ fn run_web_prep(
         && let Some(message) =
             super::supervisor::known_remote_exit_message(code, host, remote_path, setup_hint)
     {
-        bail!("{message}");
+        return Err(crate::cli::ExitCodeError { code, message }.into());
     }
     bail!("{label} failed with {status}");
 }

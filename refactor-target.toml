@@ -290,7 +290,8 @@ path = "crates/rimz/src/cli"
 # The `accounts use` line is built once for both commands' switch hints (+1).
 # The position's standing and its in-room check serve providers and accounts list (+1).
 # Ctx shares cached channel provenance with create-on-miss; current_channel stays CLI-private.
-surface-budget = 32
+# Explicit child statuses reach main through the shared exit-code error.
+surface-budget = 33
 
 [[module]]
 path = "crates/rimz/src/config"
@@ -910,6 +911,7 @@ surface-budget = 3
 [[module]]
 path = "crates/rimz/src/cli/remote/supervisor.rs"
 allowed-dependencies = [
+    "cli",
     "cli::remote",
     "cli::remote::outage_ui",
     "cli::remote::tty",

@@ -9,6 +9,14 @@ use clap::CommandFactory;
 #[error("{0}")]
 pub struct UsageError(String);
 
+/// A command failure whose process status must survive unwinding and cleanup.
+#[derive(Debug, thiserror::Error)]
+#[error("{message}")]
+pub(crate) struct ExitCodeError {
+    pub(crate) code: i32,
+    pub(crate) message: String,
+}
+
 impl UsageError {
     pub(super) fn new(message: String) -> Self {
         Self(message)

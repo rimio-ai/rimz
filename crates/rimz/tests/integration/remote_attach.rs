@@ -1018,7 +1018,11 @@ fn supervised_missing_remote_path_fails_before_attach() {
         .bounded_output()
         .expect("run missing-path remote connect");
 
-    assert!(!out.status.success(), "missing path must fail");
+    assert_eq!(
+        out.status.code(),
+        Some(67),
+        "missing path must preserve its code"
+    );
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
         stderr.contains("remote path does not exist on dev-box: workspace/query-engine"),
@@ -2355,7 +2359,7 @@ fn remote_web_missing_binary_points_at_setup_after_supervised_master() {
         .bounded_output()
         .expect("run remote web prep without rimz");
 
-    assert!(!out.status.success());
+    assert_eq!(out.status.code(), Some(127));
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
         stderr.contains("rimz is not installed on dev-box"),

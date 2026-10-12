@@ -153,7 +153,7 @@ supervise_remote
      │                            │
      │                            ▼
      │                       Verdict::CleanExit → return to the caller
-     │                       Verdict::Fatal     → bail with the mapped message
+     │                       Verdict::Fatal     → typed error with mapped message and status
      │                       Verdict::Retry     → LinkSupervisor::recover
      │                       Verdict::Reattach  → new ssh -t on the live master
      │
@@ -205,7 +205,7 @@ An attach over a confirmed master pipes and drains SSH stderr so control-client 
 | --- | --- | --- |
 | `255` with OpenSSH's `Killed by signal 2.` | any | Explicit Ctrl-C: return to the caller without retrying. |
 | `0` | any | `CleanExit`: return to the caller. |
-| remote RimZ precondition sentinel (`65`, `66`, `67`, `127`) | any | `Fatal`: surface the version, path, or install fix. |
+| remote RimZ precondition sentinel (`65`, `66`, `67`, `127`) | any | `Fatal`: surface the version, path, or install fix and preserve the status through the typed CLI error. |
 | session-loss sentinel (`68`) | any | `CleanExit`: report `remote room on <host> ended` and return. |
 | `255` | established | `Retry`: enter background recovery. |
 | other nonzero | established, master ended | `Retry`: SSH liveness outranks the attach status. |
