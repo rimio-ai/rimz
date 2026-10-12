@@ -884,6 +884,20 @@ impl Drainer {
                 let processor = PROCESSOR.get().ok_or_else(|| {
                     io::Error::other("hook processor was not registered by the CLI")
                 })?;
+                let lag = jiff::Timestamp::now().duration_since(frame.ts);
+                if lag > jiff::SignedDuration::from_secs(10)
+                    && let Ok(metadata) = fs::metadata(&store.paths().hook_ingress_log)
+                {
+                    crate::diag::hook_drain::append(
+                        store.paths(),
+                        crate::diag::hook_drain::HookDrainEvent::Lag {
+                            ingress: frame.event_id.clone(),
+                            hook_event: frame.event.clone(),
+                            lag_ms: lag.as_millis(),
+                            pending_bytes: metadata.len().saturating_sub(expected.applied),
+                        },
+                    );
+                }
                 let reply = match processor(
                     store,
                     &frame,

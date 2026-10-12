@@ -19,6 +19,7 @@ Diagnostic logs live in persistent state because an investigation starts after t
 | `audit/plugin-presence.log.jsonl` | workspace state dir | Zellij presence-plugin keepalive samples | [below](#zellij-presence-plugin-telemetry) |
 | `focus-repairs.log.jsonl` | account-global `~/.rimz/logs/`, beside the assist history | automatic focus-repair evidence and outcomes | [state.md](./sidebar/state.md) |
 | `audit/binding.log.jsonl` | workspace state dir | pane-binding decisions | [sidebar.md](./sidebar/sidebar.md) |
+| `audit/hook-drain.log.jsonl` | workspace state dir | ingress repair, failed apply, and drain lag | [below](#hook-drain-evidence) |
 | `lsp.log.jsonl` | machine `~/.rimz/logs/` | shared-server refusals, queue timeouts, watch errors, kills, evictions, and crashes | [lsp.md](./lsp.md#visibility) |
 | `lanes/topology-writer-conflict.json` | workspace runtime dir | latest Zellij topology writer conflict | [multiplexers.md](./multiplexers.md#the-zellij-presence-plugin) |
 
@@ -29,6 +30,12 @@ The LSP log rotates at 4 MiB and carries timestamp, checkout root, server name, 
 The first three surfaces carry workspace identity through one [`DiagSink`](../../crates/rimz/src/diag.rs). A disabled sink keeps the same methods and does nothing, so emitting callsites need no `#[cfg]` or branch. The notification trace and the binding log belong to their own subsystems and share only the rotating helper; the rest of this page is `audit/diag.log.jsonl` and its captures.
 
 The focus trace ([`focus_trace.rs`](../../crates/rimz/src/diag/focus_trace.rs), schema `rimz.focus_trace.v1`) uses the notification envelope and sink identity, without rate limiting. `frame_published` records changes in focus, its origin, client-sample freshness, own-pane membership, roster, or publication class; metrics-only writes use the topology class. It also records `client_sample_withheld: true` while the plugin withholds unsettled clients, omitted when false, and a change in that flag is a publication edge. `fold_decided` records changes in snapshot focus, own-view availability, baseline, or selected pane separately for each attachment, including seeds and event-fused folds. Identical publications and folds append nothing; comparison is per host process, so a replacement host's first publication starts a new trace baseline. Private CLI reads append no publication trace. Correlate a fold with the latest producer record whose `produced_at_ms` is at or below its `panes_produced_at_ms`; unchanged newer publications need no duplicate record. Neither correctness nor rendering reads this log back.
+
+### Hook drain evidence
+
+`crates/rimz/src/diag/hook_drain.rs::HookDrainEvent` records ingress tail truncation (`truncate_tail`), corrupt records (`skip_record`), failed application (`apply_failed`), and delayed application (`lag`). Each record carries `at` and `workspace_id` through the existing rotating, best-effort append sink.
+
+`crates/rimz/src/harness/hook_drain.rs::Drainer::drain` emits `lag` immediately before applying a frame when apply start minus its ingress timestamp exceeds 10 seconds. The record carries `ingress` (the frame's event ID), `hook_event` (its optional event name), `lag_ms`, and `pending_bytes` (current ingress log length minus the applied cursor, including this frame). Frames at or below the threshold emit no lag record. This is diagnostic evidence, not an assist record or a delivery decision input.
 
 ### Zellij presence-plugin telemetry
 

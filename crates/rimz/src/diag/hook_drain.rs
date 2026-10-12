@@ -1,4 +1,4 @@
-//! Durable anomaly evidence for ingress repair and dropped hook frames.
+//! Durable anomaly evidence for ingress repair, dropped hook frames, and drain lag.
 
 use crate::disk::paths::StatePaths;
 use crate::ids::EventId;
@@ -6,9 +6,25 @@ use crate::ids::EventId;
 #[derive(serde::Serialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub(crate) enum HookDrainEvent {
-    TruncateTail { start: u64, end: u64 },
-    SkipRecord { start: u64, end: u64, error: String },
-    ApplyFailed { ingress: EventId, error: String },
+    TruncateTail {
+        start: u64,
+        end: u64,
+    },
+    SkipRecord {
+        start: u64,
+        end: u64,
+        error: String,
+    },
+    ApplyFailed {
+        ingress: EventId,
+        error: String,
+    },
+    Lag {
+        ingress: EventId,
+        hook_event: Option<String>,
+        lag_ms: i128,
+        pending_bytes: u64,
+    },
 }
 
 pub(crate) fn append(paths: &StatePaths, event: HookDrainEvent) {
