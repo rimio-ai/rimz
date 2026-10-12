@@ -1,7 +1,7 @@
 #[cfg(test)]
 use std::collections::BTreeMap;
 use std::collections::{BTreeSet, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::agent_activity::AgentActivity;
@@ -12,7 +12,7 @@ use crate::agents::{
     ParkDemotion, TurnPhase,
 };
 use crate::diag::record::{DiagEvent, LocalSessionBindRejectReason};
-use crate::ids::PaneId;
+use crate::ids::{AgentKind, PaneId};
 use crate::pane::PaneRef;
 use crate::store::snapshot::panes::{
     LazyAgentPairingResult, PaneBindingIndex, pane_admits_card, row_from_frame_pane,
@@ -48,6 +48,9 @@ impl SidebarSnapshot {
         panes: &[PaneRef],
         mut observations: Vec<LocalSessionObservation>,
     ) -> (Self, Vec<DiagEvent>) {
+        if observations.is_empty() {
+            return (self, Vec::new());
+        }
         observations.sort_by(|left, right| {
             left.created_at
                 .cmp(&right.created_at)
@@ -58,6 +61,23 @@ impl SidebarSnapshot {
         let mut bindings = Vec::new();
         let mut diagnostics = Vec::new();
         let binding_index = PaneBindingIndex::new(&self.agents);
+        let kinds: BTreeSet<_> = observations
+            .iter()
+            .map(|observation| &observation.kind)
+            .collect();
+        let pane_facts: Vec<_> = panes
+            .iter()
+            .map(|pane| LocalPaneFacts {
+                kinds: kinds
+                    .iter()
+                    .filter(|kind| pane_may_host_kind(pane, kind.as_str()))
+                    .map(|kind| (*kind).clone())
+                    .collect(),
+                workspace: crate::store::snapshot::process::pane_worktree_path(pane).map(
+                    |workspace| crate::utils::path::normalize_path_lexical(Path::new(workspace)),
+                ),
+            })
+            .collect();
 
         for (observation_index, observation) in observations.iter().enumerate() {
             // A hook-bound session already carries stronger identity than a
@@ -65,15 +85,15 @@ impl SidebarSnapshot {
             // exact live pane with the same `(kind, session id)`. Use that
             // authority before command-line resume discovery, then leave the
             // fresh-cache path below for sessions that registered no hook.
-            let stamped = panes.iter().find(|pane| {
+            let stamped = panes.iter().enumerate().find(|(index, pane)| {
                 binding_index.stamped_agent(pane).is_some_and(|agent| {
                     agent.kind == observation.kind
                         && agent.agent_id == observation.session_id
-                        && local_pane_matches(pane, observation)
+                        && pane_facts[*index].matches(observation)
                         && !used_panes.contains(&pane.pane_id)
                 })
             });
-            if let Some(pane) = stamped {
+            if let Some((_, pane)) = stamped {
                 diagnostics.extend(ghost_session_bind(&binding_index, pane, observation));
                 // Exact durable identity consumes both sides before lifecycle
                 // freshness is considered, so a stale provider fold cannot
@@ -82,20 +102,20 @@ impl SidebarSnapshot {
                 bindings.push((observation_index, pane.clone()));
                 continue;
             }
-            if let Some(pane) = panes.iter().find(|pane| {
+            if let Some((_, pane)) = panes.iter().enumerate().find(|(index, pane)| {
                 pane.resumed_session_id.as_ref() == Some(&observation.session_id)
-                    && local_pane_matches(pane, observation)
+                    && pane_facts[*index].matches(observation)
                     && !used_panes.contains(&pane.pane_id)
             }) {
                 used_panes.insert(pane.pane_id.clone());
                 bindings.push((observation_index, pane.clone()));
                 continue;
             }
-            if let Some(pane) = panes.iter().find(|pane| {
+            if let Some((_, pane)) = panes.iter().enumerate().find(|(index, pane)| {
                 binding_index
                     .stamped_agent_for_session(pane, &observation.kind, &observation.session_id)
                     .is_some()
-                    && local_pane_matches(pane, observation)
+                    && pane_facts[*index].matches(observation)
             }) {
                 diagnostics.extend(ghost_session_bind(&binding_index, pane, observation));
                 // This durable identity is co-resident but does not own the
@@ -146,9 +166,11 @@ impl SidebarSnapshot {
             let mut legacy_viable = Vec::new();
             for pane in panes
                 .iter()
-                .filter(|pane| !used_panes.contains(&pane.pane_id))
-                .filter(|pane| pane.resumed_session_id.is_none())
-                .filter(|pane| local_pane_matches(pane, observation))
+                .enumerate()
+                .filter(|(_, pane)| !used_panes.contains(&pane.pane_id))
+                .filter(|(_, pane)| pane.resumed_session_id.is_none())
+                .filter(|(index, _)| pane_facts[*index].matches(observation))
+                .map(|(_, pane)| pane)
             {
                 if legacy_fresh_pane_allows_bind(pane, observation, fresh_binding_at) {
                     legacy_viable.push(pane);
@@ -456,12 +478,16 @@ fn ghost_session_bind(
         })
 }
 
-fn local_pane_matches(pane: &PaneRef, observation: &LocalSessionObservation) -> bool {
-    pane_may_host_kind(pane, observation.kind.as_str())
-        && crate::store::snapshot::process::pane_worktree_path(pane).is_some_and(|workspace| {
-            crate::utils::path::normalize_path_lexical(Path::new(workspace))
-                == observation.workspace
-        })
+struct LocalPaneFacts {
+    kinds: BTreeSet<AgentKind>,
+    workspace: Option<PathBuf>,
+}
+
+impl LocalPaneFacts {
+    fn matches(&self, observation: &LocalSessionObservation) -> bool {
+        self.kinds.contains(&observation.kind)
+            && self.workspace.as_ref() == Some(&observation.workspace)
+    }
 }
 
 /// Provider-local observations cannot create a card without stronger binding

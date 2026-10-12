@@ -73,6 +73,48 @@ fn identity_observation(kind: &str, id: &str, last_secs_ago: i64) -> LocalSessio
 }
 
 #[test]
+fn local_session_tokenizing_is_bounded_per_simple_pane_and_kind() {
+    let panes: Vec<_> = (0..8)
+        .map(|index| pane(&format!("%{index}"), "kiro-cli chat", "/repo/main"))
+        .collect();
+    let observations = (0..32)
+        .map(|index| {
+            let kind = if index % 2 == 0 { "kiro" } else { "claude" };
+            let mut observation = identity_observation(kind, &format!("sess-{index}"), 10);
+            observation.workspace = PathBuf::from("/elsewhere");
+            observation
+        })
+        .collect();
+    crate::proc::command::TOKENIZE_CALLS.set(0);
+    let (snapshot, _) = room(Vec::new()).with_local_sessions_and_diagnostics(&panes, observations);
+    let calls = crate::proc::command::TOKENIZE_CALLS.get();
+    assert!(
+        calls > 0 && calls <= panes.len() * (2 + 1),
+        "{calls} tokenizations"
+    );
+    assert!(snapshot.agents.is_empty());
+}
+
+#[test]
+fn local_session_tokenizing_is_independent_of_observation_count() {
+    let mut pane = pane("%1", "bash -lc 'kiro-cli chat'", "");
+    pane.spawn_command = Some("sh -c 'echo warmup'".to_owned());
+    let calls = |count| {
+        let observations = (0..count)
+            .map(|index| identity_observation("kiro", &format!("sess-{index}"), 10))
+            .collect();
+        crate::proc::command::TOKENIZE_CALLS.set(0);
+        let (snapshot, _) = room(Vec::new())
+            .with_local_sessions_and_diagnostics(std::slice::from_ref(&pane), observations);
+        assert!(snapshot.agents.is_empty());
+        crate::proc::command::TOKENIZE_CALLS.get()
+    };
+    let one = calls(1);
+    assert!(one > 0);
+    assert_eq!(calls(32), one);
+}
+
+#[test]
 fn stock_kiro_session_bootstraps_only_when_a_live_pane_binds() {
     let mut pane = pane("%1", "kiro-cli chat --v3", "/repo/main");
     pane.pane_process_start = Some(ago(21));
