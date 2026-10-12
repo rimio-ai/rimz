@@ -900,8 +900,8 @@ surface-budget = 20
 
 [[module]]
 path = "crates/rimz/src/cli/room"
-# Hidden deferred-recovery arguments and dispatch entry (+2).
-surface-budget = 14
+# Hidden deferred-recovery arguments, dispatch entry, and shared print cause.
+surface-budget = 15
 
 [[module]]
 path = "crates/rimz/src/cli/remote.rs"

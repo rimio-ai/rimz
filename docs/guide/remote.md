@@ -19,6 +19,8 @@ The target is `[user@]host:<session-or-path>`, spelled like an `scp` destination
 
 A connect that fails prints its own fix on stderr: a missing `rimz` on the host names the `rimz remote setup` command to run, and a path that does not exist names the target to correct.
 
+If stdin or stdout is not a terminal, RimZ prints an SSH command instead and tells you that nothing was connected. Run the printed command in a terminal, or pass `--attach` to connect anyway. To inspect the command deliberately without that notice, use `--print` ([attach flags](../reference/cli/remote.md#connect-to-a-remote-room)).
+
 Because you attach to the session the host is already running, everything you left is there: every agent in its `#channel` tab, every question still waiting in the sidebar, plus whatever finished while you were gone.
 
 ### Install rimz on the host

@@ -176,6 +176,41 @@ fn start_refuses_a_legacy_only_host_without_creating_the_home() {
 }
 
 #[test]
+fn start_auto_fallback_reports_the_open_room() {
+    let env = Env::new();
+    let bin_dir = seed_actionable_agent(&env);
+    let trace = env.project_root.join("zellij-fallback.log");
+    let _room = ShimRoom::watch(&env, &trace, MATERIALIZED_ROOM_PANES);
+    let mut command = env.rimz();
+    configure_actionable_hooks(&mut command, &env, &bin_dir, &trace, "");
+    // Remove the fixture's explicit print flag without changing its environment.
+    let args: Vec<_> = command
+        .get_args()
+        .filter(|arg| *arg != "--no-attach")
+        .map(|arg| arg.to_owned())
+        .collect();
+    let mut auto = std::process::Command::new(command.get_program());
+    auto.args(args).current_dir(&env.project_root);
+    for (key, value) in command.get_envs() {
+        if let Some(value) = value {
+            auto.env(key, value);
+        } else {
+            auto.env_remove(key);
+        }
+    }
+    let output = auto.bounded_output().expect("auto start");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+    assert_eq!(String::from_utf8_lossy(&output.stdout).lines().count(), 1);
+    let notice = "rimz: no terminal here: the room is open but not entered; printed the attach command instead (same as --print). Pass --attach to enter it anyway.";
+    assert_eq!(
+        stderr.lines().filter(|line| *line == notice).count(),
+        1,
+        "{stderr}"
+    );
+}
+
+#[test]
 fn start_names_a_broken_definition_and_still_opens_the_room() {
     let env = Env::new();
     let broken = crate::common::write_definition(

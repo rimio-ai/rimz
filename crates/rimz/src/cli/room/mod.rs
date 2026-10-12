@@ -47,7 +47,14 @@ pub(crate) enum AttachMode {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum AttachAction {
     Launch,
-    Print,
+    Print(PrintCause),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PrintCause {
+    Explicit,
+    NoTerminal,
+    InsideMux,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

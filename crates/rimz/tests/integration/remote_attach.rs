@@ -37,6 +37,53 @@ fn stdout_line(out: &Output) -> String {
 }
 
 #[test]
+fn remote_print_distinguishes_auto_fallback_from_explicit_print() {
+    let env = Env::new();
+    for flag in [None, Some("--print"), Some("--no-attach")] {
+        let mut command = env.rimz();
+        command.args(["remote", "connect", "dev-box:query-engine"]);
+        command.args(flag);
+        let out = command.bounded_output().expect("print remote command");
+        let line = stdout_line(&out);
+        assert_eq!(line.lines().count(), 1);
+        assert!(!line.contains("RIMZ_REMOTE_SUPERVISED"), "{line}");
+        assert!(!line.contains("RIMZ_OUTER_SCROLL_BRACKET"), "{line}");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(
+            stderr,
+            if flag.is_none() {
+                "rimz: no terminal here, so nothing was connected; printed the ssh command instead (same as --print). Pass --attach to connect anyway.\n"
+            } else {
+                ""
+            }
+        );
+    }
+}
+
+#[test]
+fn remote_web_print_refusal_names_the_cause() {
+    let env = Env::new();
+    for (flag, message) in [
+        (
+            None,
+            "--web needs a terminal to run the tunnel and has no ssh command to print; pass --attach to run it anyway",
+        ),
+        (
+            Some("--print"),
+            "--web opens a browser tunnel and has no ssh command to print; drop --print",
+        ),
+    ] {
+        let mut command = env.rimz();
+        command.args(["remote", "connect", "dev-box:query-engine", "--web"]);
+        command.args(flag);
+        let out = command.bounded_output().expect("web print refusal");
+        assert_eq!(out.status.code(), Some(1));
+        assert!(out.stdout.is_empty());
+        assert!(String::from_utf8_lossy(&out.stderr).contains(message));
+    }
+}
+
+#[test]
 fn remote_connect_help_describes_printing_without_opening_a_room() {
     let env = Env::new();
     let output = env

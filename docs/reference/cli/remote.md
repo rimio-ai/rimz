@@ -52,7 +52,7 @@ By default the connection is supervised: RimZ keeps an SSH ControlMaster open, r
 | `--no-attach`, `--print` | Print the `ssh` command instead of running it, to inspect or wrap it. |
 | `--mux <zellij\|tmux>`, `--zellij`, `--tmux` | Backend the host's `rimz` uses, overriding the alias's saved `mux`. |
 
-Without `--attach` or `--print`, `connect` runs `ssh` only when both stdin and stdout are terminals; otherwise it prints the command, as `--print` does.
+Without `--attach` or `--print`, `connect` runs `ssh` only when both stdin and stdout are terminals; otherwise it prints the command on stdout and one notice on stderr explaining that nothing was connected and suggesting `--attach`. Explicit `--print` or `--no-attach` adds no fallback notice. The printed command runs directly in a shell without a local reconnect supervisor or an outer terminal bracket. `--web` has no command to print: without a terminal, pass `--attach` to run the tunnel; with `--print`, drop that flag.
 
 A flag on the command line can only switch a saved default off. An alias saved with `--no-reconnect`, `--no-resume`, or `--no-auto-forward` keeps that setting on every connect; change it with [`remote update`](#saved-aliases).
 
@@ -183,6 +183,6 @@ It runs these steps:
 4. Relay browser traffic from the browser port to the forward, adding the host's Basic credential to each request. The credential is never printed and the browser shows no password prompt.
 5. Print the URL on stdout, open your browser best-effort, and print `rimz: tunnel up` on stderr.
 
-A supervised `--web` connection repeats steps 1 and 3 after a dropped link, prints `rimz: tunnel to <host> restored`, and keeps the same URL. With `--no-reconnect`, the command exits when the tunnel drops. `--web` does not forward dev-server ports, and it cannot be combined with `--print` or run without a terminal unless you pass `--attach`; both fail with `--web is web-only and has no SSH attach command; drop --print`.
+A supervised `--web` connection repeats steps 1 and 3 after a dropped link, prints `rimz: tunnel to <host> restored`, and keeps the same URL. With `--no-reconnect`, the command exits when the tunnel drops. `--web` does not forward dev-server ports. It refuses `--print` because a browser tunnel has no SSH command to print, and asks you to drop that flag. Without a terminal it instead asks you to pass `--attach` to run the tunnel anyway.
 
 The browser room itself, and the host's `[web]` settings it needs, are [`rimz web`](./web.md). The relay and tunnel mechanics are in [web internals](../../internals/web.md#remote-rooms) and [remote internals](../../internals/remote.md#web-tunnels).

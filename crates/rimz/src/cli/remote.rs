@@ -1,12 +1,14 @@
 //! `rimz remote` — named SSH room aliases and remote attach.
 
-use std::io::IsTerminal;
+use std::io::{IsTerminal, Write};
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
 
 use super::{AttachFlags, GlobalFlags};
-use crate::cli::room::{AttachAction, AttachMode, attach_action, launch_attach_command};
+use crate::cli::room::{
+    AttachAction, AttachMode, PrintCause, attach_action, launch_attach_command,
+};
 use rimz::ids::MuxName;
 use rimz::remote::aliases::{RemoteAlias, RemoteAliases};
 use rimz::remote::{
@@ -349,12 +351,29 @@ fn attach_remote(remote: RemoteConnect, mode: AttachMode) -> Result<()> {
         std::io::stdout().is_terminal(),
         false,
     ) {
-        AttachAction::Print => {
+        AttachAction::Print(cause) => {
             if remote.web.enabled {
-                bail!("--web is web-only and has no SSH attach command; drop --print");
+                if cause == PrintCause::Explicit {
+                    bail!(
+                        "--web opens a browser tunnel and has no ssh command to print; drop --print"
+                    );
+                }
+                bail!(
+                    "--web needs a terminal to run the tunnel and has no ssh command to print; pass --attach to run it anyway"
+                );
             }
+            let remote = RemoteConnect {
+                reconnect: false,
+                ..remote
+            };
             let plan = remote.attach_plan(client_size)?;
             let plain_spec = plan.initial().plain();
+            if cause == PrintCause::NoTerminal {
+                writeln!(
+                    crate::cli::render::err(),
+                    "rimz: no terminal here, so nothing was connected; printed the ssh command instead (same as --print). Pass --attach to connect anyway."
+                )?;
+            }
             supervisor::print_remote_command(&plain_spec);
             Ok(())
         }
