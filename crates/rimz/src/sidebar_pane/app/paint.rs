@@ -221,10 +221,10 @@ impl FramePainter {
             self.sweep_if_pending(writer)?;
         }
         if let Some(PetBody::Pixel(pixel)) = ui.pet.as_ref().and_then(|view| view.body.as_ref())
-            && let Some(frame) = self.assets.pixel_frame(&pixel.pet_id, pixel.sprite_index)
+            && let Some(png) = self.assets.pixel_frame(&pixel.pet_id, pixel.sprite_index)
         {
             self.painter
-                .ensure_transmitted(writer, pixel, frame, now_ms)?;
+                .ensure_transmitted(writer, pixel, png, now_ms)?;
         }
         Ok(())
     }
