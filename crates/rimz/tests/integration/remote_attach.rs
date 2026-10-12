@@ -37,6 +37,55 @@ fn stdout_line(out: &Output) -> String {
 }
 
 #[test]
+fn remote_setup_missing_pinned_release_names_latest_under_sh_and_zsh() {
+    let env = Env::new();
+    let bin = env.home_root.join("setup-bin");
+    // ssh runs the snippet through the host login shell, which may be zsh.
+    let ssh = crate::common::write_path_shim(
+        &bin,
+        "ssh",
+        r#"for arg; do snippet=$arg; done; exec "$SETUP_TEST_SHELL" -c "$snippet""#,
+    );
+    crate::common::write_path_shim(&bin, "curl", "exit 22");
+    crate::common::write_path_shim(
+        &bin,
+        "uname",
+        r#"if [ "$1" = -s ]; then echo Linux; else echo x86_64; fi"#,
+    );
+    let path = format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let shells = ["sh", "zsh"].into_iter().filter(|shell| {
+        Command::new(shell)
+            .args(["-c", "true"])
+            .status()
+            .is_ok_and(|status| status.success())
+    });
+    for shell in shells {
+        let out = env
+            .rimz()
+            .args(["remote", "setup", "dev-box"])
+            .env("RIMZ_SSH_BIN", &ssh)
+            .env("SETUP_TEST_SHELL", shell)
+            .env("PATH", &path)
+            .bounded_output()
+            .expect("run remote setup");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(1), "{shell}: {stderr}");
+        assert!(
+            stderr.contains("rerun with --latest to install the newest release"),
+            "{shell}: {stderr}"
+        );
+        assert!(
+            stderr.contains("failed with exit status: 22"),
+            "{shell}: {stderr}"
+        );
+    }
+}
+
+#[test]
 fn remote_list_empty_state_names_the_save_command() {
     let env = Env::new();
     let out = env

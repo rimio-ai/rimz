@@ -4,7 +4,7 @@
 
 ```sh
 rimz remote connect <alias-or-target> [--resume | --no-resume] [--reconnect | --no-reconnect] [--auto-forward | --no-auto-forward] [--force-version] [--web [--web-port <port>]] [--attach | --no-attach | --print]
-rimz remote setup <alias-or-target-or-host>
+rimz remote setup <alias-or-target-or-host> [--latest]
 rimz remote add <name> <target> [--resume | --no-resume] [--reconnect | --no-reconnect] [--auto-forward | --no-auto-forward]
 rimz remote update <name> [target] [same pairs as add] [--no-mux]
 rimz remote rename <old> <new>
@@ -151,7 +151,7 @@ dev-box
 
 ## Install rimz on the host
 
-`rimz remote setup` installs the latest RimZ release on a host over SSH. It takes a saved alias, a raw target, or a bare `[user@]host`, and needs only `ssh` locally.
+`rimz remote setup` installs this client's release on a host over SSH, dropping any prerelease or build suffix from the version to select its release tag. `--latest` selects the newest release instead. It takes a saved alias, a raw target, or a bare `[user@]host`, and needs only `ssh` locally.
 
 ```sh
 rimz remote setup dev-box
@@ -160,11 +160,11 @@ rimz remote setup dev-box
 On the host it runs these steps, and stops at the first that fails:
 
 1. Detect the platform with `uname`. Prebuilt releases exist for Linux x86_64 and macOS (arm64 and x86_64); any other platform fails with `no prebuilt for <os>/<arch>`.
-2. Download the release archive and `SHA256SUMS` from the project's latest GitHub release with `curl`, into a temporary directory.
+2. Download the release archive and `SHA256SUMS` from `releases/download/v<X.Y.Z>/` with `curl`, into a temporary directory (`releases/latest/download/` with `--latest`).
 3. Check the archive against `SHA256SUMS`.
 4. Install the binary to `~/.local/bin/rimz` with mode `0755`, replacing any binary there, and run `rimz --version`.
 
-On success it prints `rimz installed on <host>` and the `rimz remote connect` command to run next. A failure exits `1` and points at the [installation guide](../../guide/installation.md). Because it installs the latest release, `setup` is also how you upgrade the host after a version refusal. `connect` adds `~/.local/bin` to the `PATH` it runs `rimz` with, so the next connect finds the binary.
+Before connecting, stderr names the version being installed (or the latest release). On success the host prints `rimz <version> installed on <host> at ~/.local/bin/rimz`, using the installed binary's version, and the client names the `rimz remote connect` command to run next. A failure exits `1` and points at the [installation guide](../../guide/installation.md). If the pinned release does not exist (a development build ahead of releases), the download error names the missing tag and suggests rerunning with `--latest`. The default pin matches the host to your client after a version refusal. `connect` adds `~/.local/bin` to the `PATH` it runs `rimz` with, so the next connect finds the binary.
 
 ## Open a remote room in the browser
 
