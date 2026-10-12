@@ -26,14 +26,15 @@ fn footer_spans(snapshot: &SidebarSnapshot, width: usize) -> Vec<ratatui::text::
 
 fn with_presence(presence: Option<crate::store::snapshot::SidebarPresence>) -> SidebarSnapshot {
     let mut snapshot = snapshot_with(Vec::new());
+    snapshot.now = Timestamp::from_millisecond(3_600_000).unwrap();
     snapshot.presence = presence;
     snapshot
 }
 
 #[test]
 fn idle_presence_badge_renders_muted_elapsed_time() {
-    let snapshot = with_presence(Some(crate::store::snapshot::SidebarPresence::Idle {
-        idle_ms: 17 * 60_000,
+    let mut snapshot = with_presence(Some(crate::store::snapshot::SidebarPresence::Idle {
+        last_input_ms: 3_600_000 - 17 * 60_000,
     }));
 
     let text = footer_text(&snapshot, 32);
@@ -46,12 +47,14 @@ fn idle_presence_badge_renders_muted_elapsed_time() {
         .find(|span| span.content.contains("idle"))
         .unwrap();
     assert_eq!(badge.style.fg, Some(Color::Indexed(102)));
+    snapshot.now += jiff::SignedDuration::from_secs(60);
+    assert!(footer_text(&snapshot, 32).starts_with("zᶻ idle · 18m"));
 }
 
 #[test]
 fn idle_presence_badge_omits_sub_minute_elapsed_time() {
     let snapshot = with_presence(Some(crate::store::snapshot::SidebarPresence::Idle {
-        idle_ms: 17_000,
+        last_input_ms: 3_600_000 - 17_000,
     }));
 
     let text = footer_text(&snapshot, 32);
@@ -64,7 +67,7 @@ fn idle_presence_badge_omits_sub_minute_elapsed_time() {
 #[test]
 fn idle_presence_badge_floors_elapsed_time_to_minutes() {
     let snapshot = with_presence(Some(crate::store::snapshot::SidebarPresence::Idle {
-        idle_ms: 90_000,
+        last_input_ms: 3_600_000 - 90_000,
     }));
 
     let text = footer_text(&snapshot, 32);
@@ -130,7 +133,7 @@ fn presence_badge_drops_remote_link_when_footer_is_narrow() {
 #[test]
 fn link_badge_does_not_replace_presence_when_only_link_fits() {
     let mut snapshot = with_presence(Some(crate::store::snapshot::SidebarPresence::Idle {
-        idle_ms: 17 * 60_000,
+        last_input_ms: 3_600_000 - 17 * 60_000,
     }));
     snapshot.link = Some(crate::store::snapshot::SidebarLinkHealth {
         rtt_ms: None,

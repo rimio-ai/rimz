@@ -2,8 +2,384 @@ use super::*;
 use crate::ids::{AgentKind, AgentSessionId, PaneId};
 use crate::sidebar::notify::{LinkAlert, Notification, NotificationAgent, NotificationKind};
 use crate::sidebar_pane::app::fixtures::{pane, workspace};
+use crate::sidebar_pane::app::loop_state::LoopState;
 use crate::{MuxName, SidebarInstanceId, WorkspaceId};
 use std::path::PathBuf;
+
+#[test]
+fn fetch_window_records_consumed_deliveries_once_per_window() {
+    let fixture = FetchFixture::new();
+    let diag = crate::diag::DiagSink::under(
+        fixture.state.root.clone(),
+        fixture.workspace_id.clone(),
+        "rimz-test",
+        None,
+    );
+    let frame = crate::testkit::fleet::seed_scale_room(
+        &fixture.state,
+        &fixture.runtime,
+        crate::testkit::fleet::ScaleRoom {
+            agents: 2,
+            panes: 2,
+            ended_sessions: 0,
+            orphan_contexts: 0,
+        },
+    )
+    .unwrap();
+    let mut cycles =
+        IdleCycleFixture::new(fixture.state.clone(), fixture.runtime.clone(), frame, 2);
+    cycles.worker.diag = diag.clone();
+    assert_eq!(cycles.run_cycle(), 0);
+    assert_eq!(cycles.run_cycle(), 2);
+    assert!(
+        !diag.log_path().unwrap().exists(),
+        "ordinary ticks write no record"
+    );
+    cycles.worker.window.started -= Duration::from_secs(60);
+    assert_eq!(cycles.run_cycle(), 2);
+    assert!(
+        diag.log_path().unwrap().exists(),
+        "the worker must emit its elapsed delivery window"
+    );
+    let records = diagnostic_events(&diag);
+    assert_eq!(records.len(), 1);
+    assert!(
+        matches!(
+            records[0],
+            crate::diag::record::DiagEvent::FetchDeliveryStats {
+                cycles: 3,
+                content_deliveries: 2,
+                unchanged_deliveries: 2,
+                ..
+            }
+        ),
+        "counts describe consumed deliveries, not sends still waiting in mailboxes"
+    );
+    cycles.run_cycle();
+    assert_eq!(diagnostic_events(&diag).len(), 1);
+}
+
+#[test]
+fn idle_scale_cycles_advance_renderer_clocks_without_content_application() {
+    let fixture = FetchFixture::new();
+    let mut frame = crate::testkit::fleet::seed_scale_room(
+        &fixture.state,
+        &fixture.runtime,
+        crate::testkit::fleet::ScaleRoom {
+            agents: 200,
+            panes: 100,
+            ended_sessions: 5_000,
+            orphan_contexts: 0,
+        },
+    )
+    .unwrap();
+    // A live room's plain shell: no agent, no derived process start, and the
+    // producer's first-seen stamp.
+    let mut panes = frame.to_pane_refs();
+    let mut shell = panes[0].clone();
+    shell.pane_id = PaneId::from_parts(MuxName::Zellij, "terminal_shell");
+    shell.cwd = Some("/repo".to_owned());
+    shell.first_seen_at_ms = Some(frame.produced_at_ms - 60_000);
+    panes.push(shell);
+    frame = crate::sidebar::frame::assemble_frame(
+        panes,
+        frame.produced_at_ms,
+        frame.session_name.clone(),
+    );
+    let now_ms = crate::utils::time::unix_now_ms();
+    frame.presence = Some(crate::store::snapshot::PresenceSample {
+        human_clients: 1,
+        last_input_ms: Some(now_ms - 3_600_000),
+        sampled_at_ms: now_ms,
+    });
+    let mut cycles =
+        IdleCycleFixture::new(fixture.state.clone(), fixture.runtime.clone(), frame, 100);
+    let mut renderers = consumers(&mut cycles);
+    assert_eq!(renderers.len(), 100);
+    let mut previous: Option<WorkspaceFold> = None;
+    for cycle in 0..3 {
+        cycles.run_cycle();
+        let fold = cycles
+            .sink
+            .host_data
+            .lock()
+            .unwrap()
+            .last_fold
+            .clone()
+            .unwrap();
+        assert!(
+            fold.workspace.0.rows().any(|row| row.is_process()),
+            "the room carries a plain shell row"
+        );
+        if let Some(previous) = &previous {
+            let current = &fold.workspace.0;
+            let previous = &previous.workspace.0;
+            assert!(
+                Arc::ptr_eq(&current.worktree_groups, &previous.worktree_groups),
+                "equal groups must be shared across idle cycles"
+            );
+            assert!(Arc::ptr_eq(&current.agents, &previous.agents));
+            assert!(Arc::ptr_eq(&current.agent_panes, &previous.agent_panes));
+            assert!(Arc::ptr_eq(
+                &current.fenced_sessions,
+                &previous.fenced_sessions
+            ));
+            assert!(Arc::ptr_eq(
+                current.resume_outcomes.as_ref().unwrap(),
+                previous.resume_outcomes.as_ref().unwrap()
+            ));
+        }
+        previous = Some(fold);
+        for (renderer, dispatcher) in &mut renderers {
+            let before = renderer.current.now;
+            renderer.on_snapshot(dispatcher);
+            assert!(
+                renderer.current.now > before,
+                "clock advances on cycle {cycle}"
+            );
+            assert!(matches!(
+                renderer.current.presence,
+                Some(crate::store::snapshot::SidebarPresence::Idle { .. })
+            ));
+            assert_eq!(
+                renderer.content_applications, 1,
+                "only the first idle delivery applies content (cycle {cycle})"
+            );
+        }
+    }
+}
+
+fn consumer(
+    config: ServeConfig,
+    runtime: RuntimePaths,
+    rx: ResultReceiver,
+) -> (LoopState, FetchDispatcher) {
+    (
+        LoopState::new(
+            config,
+            None,
+            runtime,
+            PathBuf::new(),
+            crate::diag::DiagSink::disabled(),
+            rx,
+            None,
+            std::sync::mpsc::sync_channel(1).0,
+            Default::default(),
+            None,
+        ),
+        FetchDispatcher::new(std::sync::mpsc::channel().0),
+    )
+}
+
+fn consumers(cycles: &mut IdleCycleFixture) -> Vec<(LoopState, FetchDispatcher)> {
+    cycles.sink.begin_cycle();
+    cycles
+        .receivers
+        .drain(..)
+        .map(|rx| {
+            let subscriber = cycles
+                .sink
+                .cycle
+                .iter()
+                .find(|subscriber| subscriber.tx.0.ptr_eq(&Arc::downgrade(&rx.0)))
+                .unwrap();
+            let mut config = cycles.worker.config.clone();
+            config.instance_id = subscriber.instance_id.clone();
+            config.own_pane = subscriber.own_pane.clone();
+            consumer(config, cycles.worker.runtime.clone(), rx)
+        })
+        .collect()
+}
+
+#[test]
+fn event_context_and_shared_input_changes_reach_every_idle_consumer() {
+    let fixture = FetchFixture::new();
+    let frame = crate::testkit::fleet::seed_scale_room(
+        &fixture.state,
+        &fixture.runtime,
+        crate::testkit::fleet::ScaleRoom {
+            agents: 2,
+            panes: 2,
+            ended_sessions: 0,
+            orphan_contexts: 0,
+        },
+    )
+    .unwrap();
+    let target = frame.to_pane_refs()[0].pane_id.clone();
+    crate::store::agent_context::write(
+        &fixture.runtime,
+        "claude",
+        "agent-0",
+        &serde_json::from_value(serde_json::json!({
+            "source": "claude", "model_id": "claude-opus-4-8", "observed_at": jiff::Timestamp::now()
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let mut cycles =
+        IdleCycleFixture::new(fixture.state.clone(), fixture.runtime.clone(), frame, 100);
+    let mut renderers = consumers(&mut cycles);
+    for _ in 0..2 {
+        cycles.run_cycle();
+        for (renderer, dispatcher) in &mut renderers {
+            renderer.on_snapshot(dispatcher);
+            assert_eq!(renderer.content_applications, 1);
+        }
+    }
+
+    let (new_subscriber, rx) = subscriber("99", "sidebar_new", 1, wake_channel().0);
+    let mut config = cycles.worker.config.clone();
+    config.instance_id = new_subscriber.instance_id.clone();
+    config.own_pane = new_subscriber.own_pane.clone();
+    subscribe(&cycles.sink.subscribers, new_subscriber);
+    renderers.push(consumer(config, fixture.runtime.clone(), rx));
+    cycles.run_cycle();
+    for (renderer, dispatcher) in &mut renderers {
+        renderer.on_snapshot(dispatcher);
+        assert_eq!(
+            renderer.content_applications, 1,
+            "new subscriber gets content while established consumers stay idle"
+        );
+    }
+
+    for (index, change) in ["event", "context", "anchor", "filter"]
+        .into_iter()
+        .enumerate()
+    {
+        match change {
+            "event" => crate::store::event_log::append(&fixture.state.events_log, &crate::testkit::fleet::registered_lifecycle(&fixture.workspace_id, 2)).unwrap(),
+            "context" => crate::store::agent_context::write(&fixture.runtime, "claude", "agent-0", &serde_json::from_value(serde_json::json!({
+                "source": "claude", "model_id": "claude-sonnet-4-6", "observed_at": jiff::Timestamp::now()
+            })).unwrap()).unwrap(),
+            "anchor" => crate::mux::focus_anchor::store(&fixture.runtime, &crate::mux::focus_anchor::FocusAnchor {
+                nonce: crate::ids::FocusNonce::new(),
+                session_name: crate::testkit::fleet::SESSION_NAME.to_owned(),
+                pane_id: target.clone(),
+                origin: crate::mux::focus_anchor::FocusOrigin::User,
+                repair_generation: None,
+                issued_at_ms: crate::utils::time::unix_now_ms(),
+                applied_at_ms: None,
+                state: crate::mux::focus_anchor::FocusIntentState::Requested,
+                pre_action: Vec::new(), offset: 0, order: None,
+            }).unwrap(),
+            "filter" => crate::sidebar::body_filter::write(&fixture.runtime, &crate::sidebar::body_filter::BodyLens { query: Some("claude".into()), ..Default::default() }).unwrap(),
+            _ => unreachable!(),
+        }
+        cycles.run_cycle();
+        for (renderer, dispatcher) in &mut renderers {
+            renderer.on_snapshot(dispatcher);
+            if change == "context" {
+                let agent = renderer
+                    .current
+                    .agents
+                    .iter()
+                    .find(|agent| agent.agent_id.as_str() == "agent-0")
+                    .expect("seeded session remains visible");
+                assert_eq!(
+                    agent
+                        .context
+                        .as_ref()
+                        .and_then(|context| context.model_id.as_deref()),
+                    Some("claude-sonnet-4-6")
+                );
+            }
+            assert_eq!(
+                renderer.content_applications,
+                index as u64 + 2,
+                "{change} reaches each consumer on the next cycle"
+            );
+        }
+    }
+}
+
+#[test]
+fn clock_thresholds_reach_every_consumer_as_content() {
+    let fixture = FetchFixture::new();
+    let start = jiff::Timestamp::from_second(1_750_000_000).unwrap();
+    for presence in [true, false] {
+        let mut live_pane = pane("terminal_7", "tab_1", false);
+        live_pane.command = Some("claude".into());
+        let mut frame = crate::sidebar::frame::assemble_frame(
+            vec![live_pane.clone()],
+            start.as_millisecond() as u64,
+            "rimz-test",
+        );
+        frame.presence = Some(crate::store::snapshot::PresenceSample {
+            human_clients: 1,
+            last_input_ms: Some(start.as_millisecond() as u64),
+            sampled_at_ms: start.as_millisecond() as u64,
+        });
+        let frame = Arc::new(frame);
+        let mut cycles = IdleCycleFixture::new(
+            fixture.state.clone(),
+            fixture.runtime.clone(),
+            (*frame).clone(),
+            100,
+        );
+        let mut renderers = consumers(&mut cycles);
+        let mut agent = crate::testkit::agent_state("claude", "stall", start);
+        agent.status = crate::agents::AgentStatus::Running;
+        agent.pane = Some(live_pane.clone());
+        let threshold = if presence {
+            SidebarSnapshot::build_with_agents(fixture.workspace_id.clone(), Vec::new(), start)
+                .sidebar
+                .afk_after_ms()
+                / 1_000
+        } else {
+            120
+        };
+        for (step, seconds) in [threshold - 1, threshold].into_iter().enumerate() {
+            let now = start + jiff::SignedDuration::from_secs(seconds as i64);
+            let mut snapshot = SidebarSnapshot::build_with_agents(
+                fixture.workspace_id.clone(),
+                if presence {
+                    Vec::new()
+                } else {
+                    vec![agent.clone()]
+                },
+                now,
+            );
+            if !presence {
+                snapshot.attention.stalled_after_secs = std::num::NonZeroU32::new(120).unwrap();
+                snapshot = snapshot.with_live_panes(vec![live_pane.clone()], None);
+            }
+            let projected = cycles.worker.project_fold(
+                WorkspaceFold {
+                    workspace: WorkspaceSnapshot(snapshot),
+                    frame: Some(frame.clone()),
+                },
+                &mut cycles.sink,
+            );
+            cycles.sink.publish(FetchUpdate::Snapshot {
+                snapshot: Box::new(projected),
+                phase: FetchPhase::Final,
+                source: SnapshotSource::Cached,
+            });
+            for (renderer, dispatcher) in &mut renderers {
+                renderer.on_snapshot(dispatcher);
+                assert_eq!(renderer.content_applications, step as u64 + 1);
+                if presence {
+                    assert_eq!(
+                        matches!(
+                            renderer.current.presence,
+                            Some(crate::store::snapshot::SidebarPresence::Idle { .. })
+                        ),
+                        step == 1
+                    );
+                } else {
+                    assert_eq!(
+                        renderer.current.rows().next().unwrap().status(),
+                        Some(if step == 0 {
+                            crate::agents::AgentStatus::Running
+                        } else {
+                            crate::agents::AgentStatus::Failed
+                        })
+                    );
+                }
+            }
+        }
+    }
+}
 
 fn assert_shared_fields(shown: &SidebarSnapshot, original: &SidebarSnapshot) {
     assert!(Arc::ptr_eq(
@@ -244,6 +620,7 @@ fn snapshot(update: &FetchUpdate) -> &SidebarSnapshot {
     match update {
         FetchUpdate::Shared { update, .. } => snapshot(update),
         FetchUpdate::Snapshot { snapshot, .. } => snapshot,
+        FetchUpdate::Unchanged { .. } => panic!("expected content, got clock-only delivery"),
         FetchUpdate::Failed { error, .. } => panic!("expected snapshot, got: {error}"),
     }
 }
@@ -1690,14 +2067,42 @@ fn tick_clock() {
 
 #[test]
 fn staggered_requests_behind_one_fold_cost_at_most_two_folds() {
+    staggered_requests(false);
+}
+
+#[test]
+fn staggered_idle_requests_behind_one_fold_cost_at_most_two_folds() {
+    staggered_requests(true);
+}
+
+fn staggered_requests(idle: bool) {
     const PANES: usize = 8;
     let fixture = FetchFixture::new();
     let panes: Vec<String> = (1..=PANES).map(|id| format!("terminal_{id}")).collect();
-    let frame = crate::sidebar::frame::assemble_frame(
-        panes.iter().map(|id| pane(id, "tab_1", false)).collect(),
-        crate::utils::time::unix_now_ms(),
-        "rimz-test",
-    );
+    let frame = if idle {
+        crate::testkit::fleet::seed_scale_room(
+            &fixture.state,
+            &fixture.runtime,
+            crate::testkit::fleet::ScaleRoom {
+                agents: PANES,
+                panes: PANES,
+                ended_sessions: 0,
+                orphan_contexts: 0,
+            },
+        )
+        .unwrap()
+    } else {
+        crate::sidebar::frame::assemble_frame(
+            panes.iter().map(|id| pane(id, "tab_1", false)).collect(),
+            crate::utils::time::unix_now_ms(),
+            "rimz-test",
+        )
+    };
+    let panes: Vec<_> = frame
+        .to_pane_refs()
+        .iter()
+        .map(|pane| pane.pane_id.raw().to_owned())
+        .collect();
     fixture.host_data.lock().unwrap().inputs = Some(HostInputs::from_frame(frame));
     let subscribers = Subscribers::default();
     let mut receivers = Vec::new();
@@ -1733,8 +2138,16 @@ fn staggered_requests_behind_one_fold_cost_at_most_two_folds() {
                 }
             }
             2 => {
-                *captured.lock().unwrap() =
-                    draining.iter().map(|rx| rx.try_recv().unwrap()).collect();
+                *captured.lock().unwrap() = draining
+                    .iter()
+                    .map(|rx| {
+                        let update = rx.try_recv().unwrap();
+                        if idle {
+                            rx.acknowledge(update.clone(), true);
+                        }
+                        update
+                    })
+                    .collect();
                 for _ in 0..PANES {
                     sender
                         .as_ref()
@@ -1765,7 +2178,15 @@ fn staggered_requests_behind_one_fold_cost_at_most_two_folds() {
             2,
             "every subscriber receives both real publications"
         );
-        for update in updates {
+        for (index, update) in updates.into_iter().enumerate() {
+            if idle && index == 1 {
+                assert!(
+                    update.is_unchanged(),
+                    "covered idle requests deliver only clocks"
+                );
+                assert!(update.is_final());
+                continue;
+            }
             assert_eq!(
                 shown_panes(&update),
                 panes
@@ -1780,15 +2201,50 @@ fn staggered_requests_behind_one_fold_cost_at_most_two_folds() {
 
 #[test]
 fn requests_a_finished_fold_cannot_answer_still_run() {
+    requests_beyond_finished_fold(false);
+}
+
+#[test]
+fn requests_a_finished_idle_fold_cannot_answer_still_run() {
+    requests_beyond_finished_fold(true);
+}
+
+fn requests_beyond_finished_fold(idle: bool) {
+    let fixture = FetchFixture::new();
+    let frame = crate::sidebar::frame::assemble_frame(
+        Vec::new(),
+        crate::utils::time::unix_now_ms(),
+        "rimz-test",
+    );
+    let mut delivery =
+        IdleCycleFixture::new(fixture.state.clone(), fixture.runtime.clone(), frame, 1);
     let (tx, rx) = std::sync::mpsc::channel();
     let covered = Covered::default();
+    delivery.sink.covered = covered.clone();
     tx.send(FetchRequest::default()).unwrap();
     let mut sender = Some(tx);
     let mut cycles = Vec::new();
     let mut mid_first = None;
     drive(&rx, &covered, |cycle| {
         cycles.push(cycle.request);
-        covered.record(cycle);
+        if idle {
+            delivery.sink.begin_cycle();
+            delivery.sink.answering = Some(cycle);
+            delivery.sink.publish(FetchUpdate::Snapshot {
+                snapshot: Box::new(SidebarSnapshot::build_with_agents(
+                    fixture.workspace_id.clone(),
+                    Vec::new(),
+                    jiff::Timestamp::now(),
+                )),
+                phase: FetchPhase::Final,
+                source: SnapshotSource::Cached,
+            });
+            let update = delivery.receivers[0].take().pop().unwrap();
+            assert_eq!(update.is_unchanged(), cycles.len() > 1);
+            delivery.receivers[0].acknowledge(update, true);
+        } else {
+            covered.record(cycle);
+        }
         let Some(tx) = sender.as_ref() else {
             return;
         };

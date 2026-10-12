@@ -1,7 +1,7 @@
 //! Durable sidebar diagnostic record schema.
 //!
-//! Diagnostics are evidence, not correctness input. Records are anomaly-only
-//! JSONL entries under the workspace state directory.
+//! Diagnostics are evidence, not correctness input. Anomalies, bounded traces,
+//! and fetch-window totals are JSONL entries under the workspace state directory.
 
 use std::borrow::Cow;
 
@@ -87,29 +87,6 @@ pub enum SidebarHostUnavailableCause {
 pub enum TickLoop {
     Fetch,
     CacheRefresh,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum FetchFoldCause {
-    StoreDelta,
-    Topology,
-    Metrics,
-    Presence,
-    Backstop,
-    WatchTransition,
-    HardRefresh,
-    Recovery,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct FetchFoldCauseStats {
-    pub cause: FetchFoldCause,
-    pub memo_skips: u64,
-    pub full_folds: u64,
-    pub adoptions: u64,
-    pub fallbacks: u64,
-    pub fold_ms: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -432,9 +409,12 @@ pub enum DiagEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         recovered_after_ms: Option<u64>,
     },
-    FetchFoldStats {
+    FetchDeliveryStats {
         interval_ms: u64,
-        causes: Vec<FetchFoldCauseStats>,
+        cycles: u64,
+        content_deliveries: u64,
+        unchanged_deliveries: u64,
+        fold_ms: u64,
     },
     ToolLoopEscalated {
         agent_kind: AgentKind,
@@ -660,7 +640,7 @@ impl DiagEvent {
             | Self::SidebarWidthNudge { .. }
             | Self::SidebarWidthSettle { .. }
             | Self::WorkPaneBoundaryMoved { .. }
-            | Self::FetchFoldStats { .. }
+            | Self::FetchDeliveryStats { .. }
             | Self::PaneCarryRefuted { .. }
             | Self::GateRelease { .. }
             | Self::HostedCarryDropped {
@@ -719,7 +699,7 @@ impl DiagEvent {
             Self::SidebarWidthSettle { .. } => "sidebar_width_settle",
             Self::WorkPaneBoundaryMoved { .. } => "work_pane_boundary_moved",
             Self::TickBudgetBreach { .. } => "tick_budget_breach",
-            Self::FetchFoldStats { .. } => "fetch_fold_stats",
+            Self::FetchDeliveryStats { .. } => "fetch_delivery_stats",
             Self::ToolLoopEscalated { .. } => "tool_loop_escalated",
             Self::LiveRosterHeld { .. } => "live_roster_held",
             Self::RowConflict { .. } => "row_conflict",
@@ -863,7 +843,7 @@ impl DiagEvent {
                 };
                 format!("{}:{tick_loop:?}:{phase}:{since_ms}", self.kind_name())
             }
-            Self::FetchFoldStats { .. } => self.kind_name().to_owned(),
+            Self::FetchDeliveryStats { .. } => self.kind_name().to_owned(),
             Self::ToolLoopEscalated {
                 agent_kind,
                 agent_id,
@@ -1430,12 +1410,14 @@ impl DiagEvent {
             Self::PaneWinsizeRepaired { pane, rows, cols } => {
                 format!("{pane} tty winsize repaired to {rows} rows, {cols} columns")
             }
-            Self::FetchFoldStats {
+            Self::FetchDeliveryStats {
                 interval_ms,
-                causes,
+                cycles,
+                content_deliveries,
+                unchanged_deliveries,
+                fold_ms,
             } => format!(
-                "fetch fold totals over {interval_ms}ms across {} causes",
-                causes.len()
+                "fetch over {interval_ms}ms: {cycles} cycles, {content_deliveries} content / {unchanged_deliveries} unchanged deliveries, {fold_ms}ms folding"
             ),
             Self::ToolLoopEscalated {
                 agent_kind,

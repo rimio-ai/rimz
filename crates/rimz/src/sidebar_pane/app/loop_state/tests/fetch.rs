@@ -4,21 +4,96 @@
 use super::*;
 
 #[test]
+fn coalesced_idle_interim_and_final_complete_without_reapplying_content() {
+    let mut rig = Rig::new();
+    let mut snapshot = agent_snapshot(&rig.ws);
+    rig.fold(snapshot.clone(), SnapshotSource::Produced);
+    rig.fetch.request(FetchRequest::default(), false);
+    assert!(rig.next_request().is_some());
+    for phase in [FetchPhase::Interim, FetchPhase::Final] {
+        snapshot.now += jiff::SignedDuration::from_secs(1);
+        rig.result_tx
+            .send(FetchUpdate::Snapshot {
+                snapshot: Box::new(snapshot.clone()),
+                phase,
+                source: SnapshotSource::Produced,
+            })
+            .unwrap();
+    }
+    rig.state.on_snapshot(&mut rig.fetch);
+    assert_eq!(rig.state.current.now, snapshot.now);
+    assert_eq!(
+        rig.state.content_applications, 1,
+        "coalescing must retain clock-only delivery"
+    );
+    rig.fetch.request(FetchRequest::default(), false);
+    assert!(
+        rig.next_request().is_some(),
+        "unchanged final completed the prior request"
+    );
+}
+
+#[test]
+fn idle_delivery_skips_content_but_changes_reach_the_renderer() {
+    let mut rig = Rig::new();
+    let mut snapshot = agent_snapshot(&rig.ws);
+    rig.fold(snapshot.clone(), SnapshotSource::Produced);
+    snapshot.now += jiff::SignedDuration::from_secs(1);
+    rig.fold(snapshot.clone(), SnapshotSource::Produced);
+    assert_eq!(
+        rig.state.content_applications, 1,
+        "idle delivery skips content"
+    );
+    assert_eq!(rig.state.current.now, snapshot.now);
+
+    snapshot.display_name = "renamed room".into();
+    rig.fold(snapshot.clone(), SnapshotSource::Produced);
+    assert_eq!(rig.state.current.display_name, "renamed room");
+    assert_eq!(rig.state.content_applications, 2);
+
+    let sample = crate::store::snapshot::PresenceSample {
+        human_clients: 1,
+        last_input_ms: Some(100),
+        sampled_at_ms: 100,
+    };
+    snapshot.presence = Some(crate::store::snapshot::SidebarPresence::classify(
+        sample, 199, 100,
+    ));
+    rig.fold(snapshot.clone(), SnapshotSource::Produced);
+    snapshot.presence = Some(crate::store::snapshot::SidebarPresence::classify(
+        sample, 200, 100,
+    ));
+    rig.fold(snapshot.clone(), SnapshotSource::Produced);
+    assert_eq!(rig.state.current.presence, snapshot.presence);
+    assert_eq!(rig.state.content_applications, 4);
+}
+
+#[test]
 fn synthetic_fold_releases_baseline_after_overlay_expires() {
     let mut rig = Rig::new();
     let mut process = pane("terminal_9", "tab_0", false);
     process.command = Some("sh".to_owned());
     let pane_id = process.pane_id.clone();
-    rig.fold(
-        snapshot_with_panes(&rig.ws, vec![process]),
-        SnapshotSource::Produced,
-    );
+    let snapshot = snapshot_with_panes(&rig.ws, vec![process]);
+    rig.fold(snapshot.clone(), SnapshotSource::Produced);
     assert!(rig.state.overlay_baseline.is_none());
+    rig.result_tx
+        .send(FetchUpdate::Snapshot {
+            snapshot: Box::new(snapshot),
+            phase: FetchPhase::Final,
+            source: SnapshotSource::Produced,
+        })
+        .unwrap();
 
     rig.event(SidebarEvent::CommandChanged {
         pane_id: pane_id.clone(),
         command: "vim".to_owned(),
     });
+    rig.state.on_snapshot(&mut rig.fetch);
+    assert_eq!(
+        rig.state.content_applications, 2,
+        "a local event promotes queued clocks back to content for fusion"
+    );
     assert!(rig.state.overlay_baseline.is_some());
     assert_eq!(
         rig.state

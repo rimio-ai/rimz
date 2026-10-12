@@ -192,7 +192,9 @@ fn presence_reads_idle_from_the_snapshot_clock_on_local_and_remote_rooms() {
 
         assert_eq!(
             snapshot.presence,
-            Some(crate::store::snapshot::SidebarPresence::Idle { idle_ms: 999_000 }),
+            Some(crate::store::snapshot::SidebarPresence::Idle {
+                last_input_ms: now_ms - 999_000
+            }),
             "{label}"
         );
     }

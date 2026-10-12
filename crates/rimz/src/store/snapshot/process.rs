@@ -94,7 +94,15 @@ pub(super) fn row_from_process(pane: &PaneRef, now: Timestamp) -> SidebarRow {
         inactive: false,
         archived: false,
         attention_score: 0,
-        last_activity: pane.pane_process_start.unwrap_or(now),
+        // A stable stamp before the fold clock: a clock here makes every idle
+        // fold differ and defeats clock-only delivery.
+        last_activity: pane
+            .pane_process_start
+            .or_else(|| {
+                let ms = i64::try_from(pane.first_seen_at_ms?).ok()?;
+                Timestamp::from_millisecond(ms).ok()
+            })
+            .unwrap_or(now),
         card: RowCard::Process(ProcessCard {
             state,
             command_detail,

@@ -1178,7 +1178,7 @@ fn classify_diagnostic(
         | DiagEvent::SidebarWidthNudge { .. }
         | DiagEvent::SidebarWidthSettle { .. }
         | DiagEvent::WorkPaneBoundaryMoved { .. }
-        | DiagEvent::FetchFoldStats { .. }
+        | DiagEvent::FetchDeliveryStats { .. }
         | DiagEvent::ToolLoopEscalated { .. }
         | DiagEvent::GroupMigration { .. } => model::DoctorState::Expected,
         DiagEvent::ResolutionFallback { .. }
