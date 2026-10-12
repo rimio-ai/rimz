@@ -29,6 +29,7 @@ impl MessageRecord {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ReconcileReport {
+    pub held_on_ingress: usize,
     pub requeued: usize,
     pub timed_out: usize,
     pub abandoned: usize,
@@ -1153,13 +1154,21 @@ impl Store {
                 if compacting_agents
                     .iter()
                     .any(|agent| message.same_agent_card(agent))
-                    || pending_ingress.iter().any(|(frame, _)| {
-                        frame.source == message.kind
-                            && (message.last_sent_at.unwrap_or(message.updated_at)..deadline)
-                                .contains(&frame.ts)
-                    })
                 {
                     message.retry_after = Some(now + message.body.delivery_window());
+                    return MessageUpdate::SilentRewrite;
+                }
+                if pending_ingress.iter().any(|(frame, _)| {
+                    frame.source == message.kind
+                        && (message.last_sent_at.unwrap_or(message.updated_at)..deadline)
+                            .contains(&frame.ts)
+                }) {
+                    message.retry_after = Some(now + message.body.delivery_window());
+                    message.last_error = Some(
+                        "delivery held: hook drain is lagging behind the acknowledgement window"
+                            .to_owned(),
+                    );
+                    report.held_on_ingress += 1;
                     return MessageUpdate::SilentRewrite;
                 }
                 if !message.body.resends_unconfirmed() {

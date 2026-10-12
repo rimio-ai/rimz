@@ -589,18 +589,27 @@ fn notify_long_queued(
     Ok(())
 }
 
-pub fn sweep(workspace: &ResolvedWorkspace, store: &Store, mux: Option<MuxName>) -> Result<()> {
+/// Run a sweep, asking the caller to wake hook processing immediately after any ingress hold commits.
+pub fn sweep(
+    workspace: &ResolvedWorkspace,
+    store: &Store,
+    mux: Option<MuxName>,
+    on_ingress_hold: impl FnOnce(),
+) -> Result<()> {
     let runtime = RuntimePaths::for_project_root(&workspace.project_root)?;
     let Some(_guard) = try_start_sweep(&runtime)? else {
         return Ok(());
     };
     let now = Timestamp::now();
     let delivery_window = MessageBody::Prompt.delivery_window();
-    store.reconcile_stale_messages(
+    let reconcile = store.reconcile_stale_messages(
         &workspace.session_name,
         now,
         max_delivery_attempts_from_env(),
     )?;
+    if reconcile.held_on_ingress > 0 {
+        on_ingress_hold();
+    }
     // An acknowledgement after this queue read must not free a card in a snapshot that still has it idle.
     let live = store.list_messages()?;
     let needs_snapshot = live

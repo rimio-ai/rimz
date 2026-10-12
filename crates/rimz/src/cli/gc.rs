@@ -209,6 +209,11 @@ fn sweep(
                         rimz::message::max_delivery_attempts_from_env(),
                     )
                     .context("reconciling stale messages")?;
+                if reconcile.held_on_ingress > 0
+                    && let Err(error) = rimz::harness::hook_drain::nudge(&store, 0)
+                {
+                    tracing::warn!(%error, "could not wake hook drainer for held messages");
+                }
                 rimz::message::deliver::register_message_wake(workspace, &store);
                 spinner.set("pruning store caches...");
                 let carryover_pruned = store

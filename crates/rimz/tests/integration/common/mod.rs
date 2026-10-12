@@ -56,6 +56,17 @@ pub use shim::{
 pub use skip::{AF_UNIX_SANDBOXED, skip};
 pub use zellij::ZellijNamespace;
 
+pub(crate) fn append_frame(
+    env: &Env,
+    frame: rimz::store::ingress::HookIngress,
+) -> (rimz::store::ingress::HookIngress, u64) {
+    let store = env.store();
+    let lock =
+        rimz::disk::lock::IngressAppendLock::acquire(&store.paths().hook_ingress_lock).unwrap();
+    let end = rimz::store::ingress::append(store.paths(), &frame, &lock).unwrap();
+    (frame, end)
+}
+
 pub fn write_definition(
     env: &Env,
     namespace: &str,
