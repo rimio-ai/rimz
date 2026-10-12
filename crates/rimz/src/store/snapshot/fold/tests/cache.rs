@@ -2,6 +2,120 @@ use std::time::{Duration, SystemTime};
 
 use super::*;
 
+fn one_shot_store() -> (tempfile::TempDir, crate::store::Store) {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+    let runtime = crate::disk::paths::RuntimePaths::under(workspace, dir.path()).unwrap();
+    let store = crate::store::Store::open(paths, runtime).unwrap();
+    (dir, store)
+}
+
+#[test]
+fn one_shot_fold_reuses_unchanged_log_across_read_entry_points() {
+    let (_dir, store) = one_shot_store();
+    let paths = store.paths();
+    event_log::append(
+        &paths.events_log,
+        &lifecycle_at(
+            &paths.workspace_id,
+            "claude",
+            "SessionStart",
+            "a",
+            lifecycle::LifecycleSignal::Registered,
+        ),
+    )
+    .unwrap();
+    let first = store.snapshot().unwrap();
+    let read = event_log::testkit::bytes_read_under(&paths.root);
+    assert!(read > 0);
+    let second = store.snapshot().unwrap();
+    assert_eq!(event_log::testkit::bytes_read_under(&paths.root), read);
+    assert_eq!(first.agents, second.agents);
+    store
+        .runtime_projection(runtime::RuntimeScope::Audit)
+        .unwrap();
+    assert_eq!(event_log::testkit::bytes_read_under(&paths.root), read);
+
+    let (_other_dir, other) = one_shot_store();
+    assert!(other.snapshot().unwrap().agents.is_empty());
+    assert_eq!(store.snapshot().unwrap().agents, first.agents);
+}
+
+#[test]
+fn one_shot_fold_reads_only_the_appended_frame_and_matches_cold() {
+    let (_dir, store) = one_shot_store();
+    let paths = store.paths();
+    event_log::append(
+        &paths.events_log,
+        &lifecycle_at(
+            &paths.workspace_id,
+            "claude",
+            "SessionStart",
+            "a",
+            lifecycle::LifecycleSignal::Registered,
+        ),
+    )
+    .unwrap();
+    store.snapshot().unwrap();
+    let before = event_log::testkit::bytes_read_under(&paths.root);
+    let start = fs::metadata(&paths.events_log).unwrap().len();
+    event_log::append(
+        &paths.events_log,
+        &lifecycle_at(
+            &paths.workspace_id,
+            "claude",
+            "SessionStart",
+            "b",
+            lifecycle::LifecycleSignal::Registered,
+        ),
+    )
+    .unwrap();
+    let end = fs::metadata(&paths.events_log).unwrap().len();
+    let mut warm = store.snapshot().unwrap();
+    assert_eq!(
+        event_log::testkit::bytes_read_under(&paths.root) - before,
+        end - start
+    );
+    let cold = crate::store::snapshot::build_with_cursor(paths, &mut RollupCursor::new()).unwrap();
+    warm.now = cold.now;
+    warm.generated_at = cold.generated_at;
+    assert_eq!(
+        serde_json::to_value(warm).unwrap(),
+        serde_json::to_value(cold).unwrap()
+    );
+}
+
+#[test]
+fn one_shot_fold_refreshes_pruned_carryover_without_a_log_append() {
+    let (_dir, store) = one_shot_store();
+    let paths = store.paths();
+    event_log::append(
+        &paths.events_log,
+        &lifecycle_at(
+            &paths.workspace_id,
+            "claude",
+            "SessionStart",
+            "live",
+            lifecycle::LifecycleSignal::Registered,
+        ),
+    )
+    .unwrap();
+    write_carryover(
+        &paths.agents_carryover,
+        &EventCarryover {
+            agents: vec![agent("claude", "carried", AgentStatus::Idle, 1_000)],
+            ..EventCarryover::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(catch_up_rollup(paths).unwrap().1.len(), 2);
+    assert_eq!(prune_carryover(paths, Duration::from_secs(1)).unwrap(), 1);
+    let (_, agents, _) = catch_up_rollup(paths).unwrap();
+    assert_eq!(agents.len(), 1);
+    assert_eq!(agents[0].agent_id, "live");
+}
+
 #[test]
 fn materialized_rows_count_flattening_but_not_borrowed_iteration() {
     let rollup = AgentRollup::layered(
