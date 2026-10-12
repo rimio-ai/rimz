@@ -47,6 +47,8 @@ use crate::agents::transcript_fs::{
 #[derive(Deserialize)]
 struct PiEntry {
     #[serde(default, deserialize_with = "deserialize_optional_string_lossy")]
+    model: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional_string_lossy")]
     timestamp: Option<String>,
     #[serde(
         rename = "type",
@@ -245,6 +247,7 @@ pub(super) fn parse(path: &Path, resume: Option<&SpendCursor>, prices: &PriceBoo
                 }
             }
             Some("compaction" | "branch_summary") => (entry.usage.as_ref(), None, None),
+            Some("usage") => (entry.usage.as_ref(), entry.model.as_ref(), None),
             _ => continue,
         };
         let Some(usage) = usage else { continue };
@@ -371,19 +374,35 @@ mod tests {
             r#"{"type":"message","timestamp":"2026-06-02T10:01:00.000Z","message":{"role":"toolResult","usage":{"output":20,"cost":{"total":0.2}}}}"#,
             r#"{"type":"compaction","timestamp":"2026-06-02T10:02:00.000Z","usage":{"cacheRead":30,"cost":{"total":0.3}}}"#,
             r#"{"type":"branch_summary","timestamp":"2026-06-02T10:03:00.000Z","usage":{"cacheWrite":40,"cost":{"total":0.4}}}"#,
+            r#"{"type":"usage","kind":"cache_warming","model":"pi-priced-model","timestamp":"2026-06-02T10:04:00.000Z","usage":{"input":50,"cost":{"total":0.5}}}"#,
         ] {
             writeln!(f, "{line}").unwrap();
         }
 
         let entries = parse(&path, None, &prices()).entries;
 
-        assert_eq!(entries.len(), 4);
+        assert_eq!(entries.len(), 5);
         assert_eq!(entries[0].model.as_deref(), Some("response-model"));
-        assert!(entries[1..].iter().all(|entry| entry.model.is_none()));
-        assert_eq!(entries.iter().map(|entry| entry.cost_usd).sum::<f64>(), 1.0);
+        assert!(entries[1..4].iter().all(|entry| entry.model.is_none()));
+        assert_eq!(entries[4].model.as_deref(), Some("pi-priced-model"));
+        assert_eq!(entries.iter().map(|entry| entry.cost_usd).sum::<f64>(), 1.5);
         assert_eq!(entries[1].output, 20);
         assert_eq!(entries[2].cache_read, 30);
         assert_eq!(entries[3].cache_write, 40);
+    }
+
+    #[test]
+    fn prices_standalone_usage_by_its_model() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("session.jsonl");
+        std::fs::write(&path, concat!(
+            r#"{"type":"usage","kind":"future-kind","model":"pi-priced-model","timestamp":"2026-06-02T10:00:00.000Z","usage":{"input":100,"output":50}}"#,
+            "\n"
+        )).unwrap();
+        let entries = parse(&path, None, &prices()).entries;
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].model.as_deref(), Some("pi-priced-model"));
+        assert!((entries[0].cost_usd - 0.0002).abs() < 1e-12);
     }
 
     #[test]
