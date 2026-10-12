@@ -1132,6 +1132,73 @@ fn copilot_native_order_routes_camel_case_identity_context_and_cleanup() {
 }
 
 #[test]
+fn opencode_native_envelopes_record_the_database_for_history() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.install_agent_hooks("opencode");
+    let directory = env.data_root().join("opencode");
+    std::fs::create_dir_all(&directory).unwrap();
+    let path = directory.join("opencode.db");
+    let older_directory = env.data_root().join("a-opencode");
+    std::fs::create_dir_all(&older_directory).unwrap();
+    let older_path = older_directory.join("opencode.db");
+    rimz::testkit::opencode::OpenCodeDb::new(&older_path, false, false);
+    std::fs::File::options()
+        .write(true)
+        .open(&older_path)
+        .unwrap()
+        .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1))
+        .unwrap();
+    let data_dirs = format!("{},{}", older_directory.display(), directory.display());
+    let db = rimz::testkit::opencode::OpenCodeDb::new(&path, true, false);
+    let session = "ses-history";
+    db.session(session, &env.project_root);
+    db.message(
+        "user",
+        session,
+        "user",
+        1780394400000,
+        r#"{"text":"integration prompt","time":{"created":1780394400000}}"#,
+    );
+    db.message("assistant", session, "assistant", 1780394401000,
+        r#"{"model":{"id":"gpt-5","providerID":"openai"},"content":[{"type":"text","text":"integration answer"}],"time":{"created":1780394401000,"completed":1780394402000},"finish":"stop","cost":0.42,"tokens":{"input":100,"output":20,"reasoning":5}}"#);
+    for event in ["session_created", "chat_message", "session_idle"] {
+        let mut command = env.hook_command("opencode");
+        command.env("RIMZ_OPENCODE_DATA_DIR", &data_dirs);
+        assert_hook_succeeded_neutral(
+            "opencode",
+            env.spawn_payload(
+                command,
+                &json!({
+                    "hook_event_name": event, "session_id": session, "cwd": env.project_root,
+                    "prompt": "integration prompt"
+                })
+                .to_string(),
+            )
+            .wait_with_output()
+            .unwrap(),
+        );
+        env.drain_hooks();
+    }
+    let history = env
+        .rimz()
+        .args(["agents", "history", session, "--json"])
+        .output()
+        .unwrap();
+    assert!(
+        history.status.success(),
+        "native envelopes must make history readable: {}",
+        String::from_utf8_lossy(&history.stderr)
+    );
+    let history: Value = serde_json::from_slice(&history.stdout).unwrap();
+    assert_eq!(history[0]["prompt"], "integration prompt");
+    assert_eq!(history[0]["outcome"], "done");
+    assert_eq!(history[0]["fresh_input"], 100);
+    assert_eq!(history[0]["output"], 25);
+    assert_eq!(history[0]["cost_usd"], 0.42);
+}
+
+#[test]
 fn cursor_lifecycle_hook_writes_state_and_returns_json_neutral() {
     let env = Env::new();
     env.record(&env.project_root);
