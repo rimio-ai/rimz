@@ -1,9 +1,68 @@
 use divan::Bencher;
 use divan::counter::BytesCount;
+use std::alloc::{GlobalAlloc, Layout, System};
+use std::cell::Cell;
+use std::io::Write as _;
 use tempfile::TempDir;
 
 #[global_allocator]
-static ALLOC: divan::AllocProfiler = divan::AllocProfiler::system();
+static ALLOC: divan::AllocProfiler<CountingAllocator> =
+    divan::AllocProfiler::new(CountingAllocator);
+
+struct CountingAllocator;
+
+thread_local! {
+    static ALLOCATIONS: Cell<(usize, usize)> = const { Cell::new((0, 0)) };
+}
+
+fn record_allocation(bytes: usize) {
+    let _ = ALLOCATIONS.try_with(|counts| {
+        let (allocations, allocated_bytes) = counts.get();
+        counts.set((allocations + 1, allocated_bytes + bytes));
+    });
+}
+
+// Benchmark-only instrumentation: forward each allocation unchanged to System.
+#[expect(
+    unsafe_code,
+    reason = "GlobalAlloc requires unsafe delegation; only the fleet bench links this wrapper"
+)]
+unsafe impl GlobalAlloc for CountingAllocator {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        let ptr = unsafe { System.alloc(layout) };
+        if !ptr.is_null() {
+            record_allocation(layout.size());
+        }
+        ptr
+    }
+
+    unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+        let ptr = unsafe { System.alloc_zeroed(layout) };
+        if !ptr.is_null() {
+            record_allocation(layout.size());
+        }
+        ptr
+    }
+
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        unsafe { System.dealloc(ptr, layout) };
+    }
+
+    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, size: usize) -> *mut u8 {
+        let ptr = unsafe { System.realloc(ptr, layout, size) };
+        if !ptr.is_null() {
+            record_allocation(size);
+        }
+        ptr
+    }
+}
+
+fn counted(run: impl FnOnce()) -> (usize, usize) {
+    let before = ALLOCATIONS.get();
+    run();
+    let after = ALLOCATIONS.get();
+    (after.0 - before.0, after.1 - before.1)
+}
 
 const EVENTS_PER_AGENT: usize = 50;
 
@@ -137,6 +196,10 @@ mod publish {
 
     impl Fixture {
         fn new(panes: usize) -> Self {
+            Self::with_orphans(panes, 0)
+        }
+
+        fn with_orphans(panes: usize, orphan_contexts: usize) -> Self {
             let (tempdir, paths, runtime) = workspace();
             let (agents, ended_sessions) = match panes {
                 24 => (51, 4_600),
@@ -150,6 +213,7 @@ mod publish {
                     agents,
                     panes,
                     ended_sessions,
+                    orphan_contexts,
                 },
             )
             .expect("scale room");
@@ -204,6 +268,30 @@ mod publish {
         }
     }
 
+    #[divan::bench(args = [0, 3_000], sample_count = 10, sample_size = 1, skip_ext_time)]
+    fn scale_with_orphans(bencher: Bencher, orphans: usize) {
+        let mut counts = (0, 0);
+        bencher
+            .with_inputs(|| {
+                let fixture = Fixture::with_orphans(100, orphans);
+                fixture.fold();
+                fixture
+            })
+            .bench_local_refs(|fixture| {
+                counts = counted(|| {
+                    let workspace = fixture.fold();
+                    fixture.project(&workspace, false);
+                });
+            });
+        writeln!(
+            std::io::stderr(),
+            "publish orphans={orphans}: allocations={} bytes={}",
+            counts.0,
+            counts.1
+        )
+        .expect("benchmark counts");
+    }
+
     #[divan::bench(args = [24, 100], sample_count = 10, sample_size = 1, skip_ext_time)]
     fn fold_and_project(bencher: Bencher, panes: usize) {
         bencher
@@ -246,6 +334,52 @@ mod publish {
             })
             .bench_local_refs(|(fixture, workspace)| fixture.project(workspace, false));
     }
+}
+
+#[divan::bench(args = [0, 3_000], sample_count = 10, sample_size = 1, skip_ext_time)]
+fn idle_cycle(bencher: Bencher, orphans: usize) {
+    bench_idle_cycle(bencher, orphans, true);
+}
+
+#[divan::bench(args = [0, 3_000], sample_count = 10, sample_size = 1, skip_ext_time)]
+fn idle_cycle_worker(bencher: Bencher, orphans: usize) {
+    bench_idle_cycle(bencher, orphans, false);
+}
+
+fn bench_idle_cycle(bencher: Bencher, orphans: usize, apply: bool) {
+    let mut counts = (0, 0);
+    bencher
+        .with_inputs(|| {
+            let (tempdir, paths, runtime) = workspace();
+            let frame = rimz::testkit::fleet::seed_scale_room(
+                &paths,
+                &runtime,
+                rimz::testkit::fleet::ScaleRoom {
+                    agents: 200,
+                    panes: 100,
+                    ended_sessions: 5_000,
+                    orphan_contexts: orphans,
+                },
+            )
+            .expect("scale room");
+            let mut cycle =
+                rimz::sidebar_pane::app::IdleCycleFixture::new(paths, runtime, frame, 100);
+            if apply {
+                cycle.enable_renderer_apply();
+            }
+            cycle.run_cycle();
+            (tempdir, cycle)
+        })
+        .bench_local_refs(|(_, cycle)| {
+            counts = counted(|| cycle.run_cycle());
+        });
+    writeln!(
+        std::io::stderr(),
+        "idle_cycle apply={apply} orphans={orphans}: allocations={} bytes={}",
+        counts.0,
+        counts.1
+    )
+    .expect("benchmark counts");
 }
 
 #[divan::bench(args = [20, 50, 100], sample_count = 10, sample_size = 1, skip_ext_time)]

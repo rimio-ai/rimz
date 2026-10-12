@@ -10,6 +10,7 @@ pub mod sandbox;
 pub use crate::disk::atomic::testkit::fsync_count;
 pub use crate::proc::testkit::spawn_count;
 pub use crate::store::event_log::testkit::{bytes_read, bytes_read_under, bytes_written};
+pub use crate::store::sidecar::testkit::read_counts as sidecar_read_counts;
 pub use crate::store::snapshot::fold_testkit::carryover_bytes_parsed;
 
 /// Stop a test subprocess at an I/O boundary until its controller releases it.
@@ -329,6 +330,7 @@ pub mod fleet {
         pub agents: usize,
         pub panes: usize,
         pub ended_sessions: usize,
+        pub orphan_contexts: usize,
     }
 
     /// Seed a room with fresh producer inputs and return its live pane frame.
@@ -346,6 +348,20 @@ pub mod fleet {
             event_log::append(
                 &paths.events_log,
                 &registered_lifecycle(&paths.workspace_id, slot),
+            )
+            .map_err(io::Error::other)?;
+        }
+        for slot in 0..room.orphan_contexts {
+            crate::store::agent_context::write(
+                runtime,
+                "claude",
+                &format!("orphan-{slot}"),
+                &serde_json::from_value(serde_json::json!({
+                    "source": "claude",
+                    "model_id": "claude-opus-4-8",
+                    "observed_at": "2026-01-01T00:00:00Z",
+                }))
+                .map_err(io::Error::other)?,
             )
             .map_err(io::Error::other)?;
         }
