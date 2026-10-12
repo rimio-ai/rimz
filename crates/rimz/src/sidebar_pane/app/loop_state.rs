@@ -68,6 +68,8 @@ use super::{Result, ServeConfig};
 
 const RESIZE_CAPS_SETTLE: Duration = Duration::from_millis(300);
 
+pub(super) type BaselineReporter = Box<dyn Fn(Option<&PaneId>) + Send>;
+
 struct FetchApplication {
     snapshot: std::result::Result<SidebarSnapshot, String>,
     source: Option<SnapshotSource>,
@@ -144,6 +146,8 @@ pub(super) struct LoopState {
     pub(super) exit_cause: Option<RendererExitCause>,
     pub(super) tab_emptied: bool,
     pub(super) request_reload: Box<dyn Fn() + Send>,
+    pub(super) baseline_changed: BaselineReporter,
+    last_reported_baseline: Option<PaneId>,
 }
 
 pub(super) fn handle_wakeup(
@@ -205,6 +209,7 @@ impl LoopState {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn new(
         config: ServeConfig,
+        baseline_pane: Option<PaneId>,
         runtime: RuntimePaths,
         socket_path: PathBuf,
         diag: crate::diag::DiagSink,
@@ -265,6 +270,7 @@ impl LoopState {
             self_close: SelfCloseState::default(),
             ui: UiState {
                 make_up_filter,
+                baseline_pane: baseline_pane.clone(),
                 ..UiState::default()
             },
             paint: FramePainter::new(pet_render_caps, pixel_wrap, pixel_slot),
@@ -283,6 +289,16 @@ impl LoopState {
             exit_cause: None,
             tab_emptied: false,
             request_reload: Box::new(|| {}),
+            baseline_changed: Box::new(|_| {}),
+            last_reported_baseline: baseline_pane,
+        }
+    }
+
+    pub(super) fn report_baseline(&mut self) {
+        if self.ui.baseline_pane != self.last_reported_baseline {
+            (self.baseline_changed)(self.ui.baseline_pane.as_ref());
+            self.last_reported_baseline
+                .clone_from(&self.ui.baseline_pane);
         }
     }
 

@@ -23,7 +23,7 @@ use crate::{MuxName, RuntimePaths};
 use super::backend::PaneBackend;
 use super::fetch::{FetchDispatcher, FetchRequest};
 use super::input::wait_for_wakeup;
-use super::loop_state::{LoopFlow, LoopState};
+use super::loop_state::{BaselineReporter, LoopFlow, LoopState};
 use super::plane::DataPlane;
 use super::socket::{bind_socket, write_heartbeat};
 use super::{Result, RuntimeFileGuard, ServeConfig, fetch_deadline_timeout};
@@ -121,6 +121,8 @@ impl Attachment {
         plane: &DataPlane,
         backend: PaneBackend,
         request_reload: Box<dyn Fn() + Send>,
+        baseline_pane: Option<crate::ids::PaneId>,
+        baseline_changed: BaselineReporter,
     ) -> Result<AttachmentExit> {
         let Self {
             config,
@@ -171,6 +173,7 @@ impl Attachment {
         };
         let mut state = LoopState::new(
             config.clone(),
+            baseline_pane,
             runtime.clone(),
             socket_path.clone(),
             diag.clone(),
@@ -184,6 +187,7 @@ impl Attachment {
         state.share_width_geometry(plane.geometry.clone());
         state.events = plane.events.clone();
         state.request_reload = request_reload;
+        state.baseline_changed = baseline_changed;
         state.set_probed_aspect(terminal.backend().cell_aspect());
         if let Some(seed) = subscription.seed {
             state.seed(seed);
@@ -245,6 +249,7 @@ impl Attachment {
         // off-thread.
         let loop_result: Result<()> = (|| {
             while !state.should_exit && !close_requested.load(Ordering::SeqCst) {
+                state.report_baseline();
                 let (active, mut timeout) = state.frame_timing();
                 timeout = fetch_deadline_timeout(timeout, fetch.next_deadline(), Instant::now());
                 socket.set_read_timeout(Some(timeout))?;
@@ -265,6 +270,7 @@ impl Attachment {
             }
             Ok(())
         })();
+        state.report_baseline();
         state.clear_pixel(&mut terminal);
         loop_result?;
         if !state.tab_emptied

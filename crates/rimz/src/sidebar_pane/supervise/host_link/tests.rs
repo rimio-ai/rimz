@@ -37,7 +37,7 @@ impl Room {
     }
 
     fn hello(&self) -> Hello {
-        hello_for(&self.config, Some("build-a"))
+        hello_for(&self.config, Some("build-a"), None)
     }
 
     fn recorded() -> (Self, crate::StatePaths, std::path::PathBuf) {
@@ -167,6 +167,35 @@ fn an_accepted_pane_hears_the_hosts_controls_then_its_end() {
 }
 
 #[test]
+fn baseline_controls_round_trip_and_unknown_controls_stay_quiet() {
+    let room = Room::new();
+    let listener = room.listen();
+    std::thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        let _hello = attach::recv_hello(&stream).unwrap().unwrap();
+        attach::write_line(&stream, &accept()).unwrap();
+        for value in [
+            serde_json::json!({"control": {"baseline": "tmux:%6"}}),
+            serde_json::json!({"control": "future-control"}),
+        ] {
+            attach::write_line(&stream, &value).unwrap();
+        }
+    });
+    let stream = connect(&room.config, &room.runtime, BRIEF, || Ok(()))
+        .unwrap()
+        .unwrap();
+    let mut link = HostLink::open(stream, &room.hello(), output().as_fd(), SETTLE).unwrap();
+    assert_eq!(
+        link.poll(SETTLE),
+        HostEvent::Control(Control::Baseline(Some(crate::ids::PaneId::from_parts(
+            crate::MuxName::Tmux,
+            "%6"
+        ))))
+    );
+    assert_eq!(link.poll(SETTLE), HostEvent::Quiet);
+}
+
+#[test]
 fn a_quiet_host_is_neither_a_control_nor_lost() {
     let room = Room::new();
     let listener = room.listen();
@@ -292,6 +321,7 @@ fn the_host_environment_pins_its_room_and_keeps_the_session_not_the_pane() {
         "RIMZ_CHANNEL",
         "RIMZ_WORKTREE_PATH",
         "RIMZ_SIDEBAR_INSTANCE_ID",
+        super::super::BASELINE_ENV,
     ] {
         assert_eq!(env.get(std::ffi::OsStr::new(name)), Some(&None), "{name}");
     }
@@ -301,7 +331,7 @@ fn the_host_environment_pins_its_room_and_keeps_the_session_not_the_pane() {
             "inherit {name}"
         );
     }
-    assert_eq!(env.len(), 7, "only the pin and pane removals are set");
+    assert_eq!(env.len(), 8, "only the pin and pane removals are set");
 }
 
 /// The log holds one line: when the host was refused, then why.

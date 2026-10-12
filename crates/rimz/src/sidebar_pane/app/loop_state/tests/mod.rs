@@ -46,6 +46,10 @@ impl Rig {
     }
 
     fn build(own_pane: Option<PaneId>, filter: BodyLens) -> Self {
+        Self::with_baseline(own_pane, filter, None)
+    }
+
+    fn with_baseline(own_pane: Option<PaneId>, filter: BodyLens, baseline: Option<PaneId>) -> Self {
         let ws = workspace();
         let dir = tempfile::TempDir::new().expect("tempdir");
         let runtime = RuntimePaths::under(ws.clone(), dir.path()).expect("runtime");
@@ -63,6 +67,7 @@ impl Rig {
         Self {
             state: LoopState::new(
                 config,
+                baseline,
                 runtime.clone(),
                 socket_path,
                 crate::diag::DiagSink::disabled(),

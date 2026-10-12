@@ -21,7 +21,7 @@ use std::time::{Duration, Instant, SystemTime};
 use serde::{Deserialize, Serialize};
 
 use crate::diag::record::{DiagEvent, SidebarHostUnavailableCause};
-use crate::ids::SidebarInstanceId;
+use crate::ids::{PaneId, SidebarInstanceId};
 use crate::sidebar_pane::app::{EventForwarder, ServeConfig};
 use crate::sidebar_pane::attach::Control;
 use crate::tui::{MouseCapture, Screen, TerminalModeGuard};
@@ -32,6 +32,7 @@ mod host_link;
 use self::host_link::{HostEvent, HostLink};
 
 const INSTANCE_ENV: &str = "RIMZ_SIDEBAR_INSTANCE_ID";
+const BASELINE_ENV: &str = "RIMZ_SIDEBAR_BASELINE_PANE";
 #[cfg(feature = "testkit")]
 const TEST_REAP_POLL_MS_ENV: &str = "RIMZ_TEST_SIDEBAR_SUPERVISOR_REAP_POLL_MS";
 #[cfg(feature = "testkit")]
@@ -130,6 +131,9 @@ pub fn run(config: ServeConfig) -> Result<()> {
     let mut pane_watchdog = PaneWatchdog::from_config(&config);
     let supervisor_build = crate::build_id::current();
     let mut exec_state = PendingExec::default();
+    let mut baseline_pane = env::var(BASELINE_ENV)
+        .ok()
+        .and_then(|raw| PaneId::parse(&raw).ok());
     let diag = diag_sink(&config);
     loop {
         if stopped.load(Ordering::SeqCst) {
@@ -152,24 +156,31 @@ pub fn run(config: ServeConfig) -> Result<()> {
         // the durable room target, even when its bytes match this supervisor.
         let current = crate::reload::current_reexec_target().unwrap_or_else(crate::proc::rimz_exe);
         let exe = host_executable(target, current);
-        let (exit, painting_build, attached_duration) =
-            match attach_to_host(&config, &runtime, &state, &exe, supervisor_build) {
-                Err(failure) => (Err(failure), None, None),
-                Ok(attached) => {
-                    spawn_test_stray_if_requested();
-                    let started = Instant::now();
-                    let build = attached.link.build.clone();
-                    let (exit, duration) = attached.watch(HostMonitor {
-                        record_watch: &mut record_watch,
-                        exec_state: &mut exec_state,
-                        supervisor_build,
-                        started,
-                        watchdog: &mut pane_watchdog,
-                        stopped: &stopped,
-                    });
-                    (Ok(exit), build, Some(duration))
-                }
-            };
+        let (exit, painting_build, attached_duration) = match attach_to_host(
+            &config,
+            &runtime,
+            &state,
+            &exe,
+            supervisor_build,
+            baseline_pane.as_ref(),
+        ) {
+            Err(failure) => (Err(failure), None, None),
+            Ok(attached) => {
+                spawn_test_stray_if_requested();
+                let started = Instant::now();
+                let build = attached.link.build.clone();
+                let (exit, duration) = attached.watch(HostMonitor {
+                    record_watch: &mut record_watch,
+                    exec_state: &mut exec_state,
+                    baseline_pane: &mut baseline_pane,
+                    supervisor_build,
+                    started,
+                    watchdog: &mut pane_watchdog,
+                    stopped: &stopped,
+                });
+                (Ok(exit), build, Some(duration))
+            }
+        };
         let run_duration = attached_duration.unwrap_or_default();
         let failure = match exit {
             Err(failure) => failure,
@@ -193,7 +204,12 @@ pub fn run(config: ServeConfig) -> Result<()> {
                     match preflight_supervisor(&target.path) {
                         Ok(()) => {
                             modes.preserve_for_handoff();
-                            return exec_supervisor(&target.path, &args, &config);
+                            return exec_supervisor(
+                                &target.path,
+                                &args,
+                                &config,
+                                baseline_pane.as_ref(),
+                            );
                         }
                         Err(reason) => {
                             record_preflight_rejected(&diag, &target.build, &reason);
@@ -303,6 +319,7 @@ fn attach_to_host(
     state: &crate::StatePaths,
     exe: &Path,
     supervisor_build: Option<&str>,
+    baseline_pane: Option<&PaneId>,
 ) -> std::result::Result<Attached, AttachFailure> {
     use std::os::fd::AsFd;
 
@@ -313,7 +330,7 @@ fn attach_to_host(
     })
     .map_err(|error| AttachFailure::StartFailed { error, log })?
     .ok_or(AttachFailure::NoAnswer)?;
-    let hello = host_link::hello_for(config, supervisor_build);
+    let hello = host_link::hello_for(config, supervisor_build, baseline_pane);
     let link = HostLink::open(stream, &hello, stdout.as_fd(), host_link::REPLY_WAIT)?;
     let wake_path = runtime.sidebar_socket_path(&config.instance_id);
     // The host sized the pane from its fd at the hello; a resize that raced
@@ -328,6 +345,7 @@ fn attach_to_host(
 struct HostMonitor<'a> {
     record_watch: &'a mut RecordWatch,
     exec_state: &'a mut PendingExec,
+    baseline_pane: &'a mut Option<PaneId>,
     supervisor_build: Option<&'a str>,
     started: Instant,
     watchdog: &'a mut Option<PaneWatchdog>,
@@ -355,6 +373,7 @@ fn watch_host(link: &mut HostLink, monitor: HostMonitor<'_>) -> RoundExit {
         match link.poll(reap_poll_interval()) {
             HostEvent::Control(Control::SelfClose) => return RoundExit::ConfirmSelfClose,
             HostEvent::Control(Control::Reload) => return RoundExit::Reload,
+            HostEvent::Control(Control::Baseline(pane)) => *monitor.baseline_pane = pane,
             HostEvent::Lost => return RoundExit::HostLost,
             HostEvent::Quiet => {}
         }
@@ -414,13 +433,24 @@ fn host_executable(
     }
 }
 
-fn exec_supervisor(exe: &Path, args: &[OsString], config: &ServeConfig) -> Result<()> {
+fn exec_supervisor(
+    exe: &Path,
+    args: &[OsString],
+    config: &ServeConfig,
+    baseline_pane: Option<&PaneId>,
+) -> Result<()> {
     use std::os::unix::process::CommandExt;
 
-    let source = Command::new(exe)
+    let mut command = Command::new(exe);
+    command
         .args(args)
-        .env(INSTANCE_ENV, config.instance_id.as_str())
-        .exec();
+        .env(INSTANCE_ENV, config.instance_id.as_str());
+    if let Some(pane) = baseline_pane {
+        command.env(BASELINE_ENV, pane.as_str());
+    } else {
+        command.env_remove(BASELINE_ENV);
+    }
+    let source = command.exec();
     Err(SidebarSuperviseErr::Spawn {
         program: render_program(exe),
         source,

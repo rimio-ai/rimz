@@ -52,6 +52,22 @@ impl Room {
         supervisor
     }
 
+    fn replace_host(&mut self) {
+        self.host.leave();
+        eventually("old attachments released", || {
+            lock(&self.host.attachments).is_empty()
+        });
+        self.host = Host::new(
+            self.host.template.clone(),
+            self.runtime.clone(),
+            crate::diag::DiagSink::disabled(),
+            DataPlane::detached(),
+            self.host.socket_path.clone(),
+            Some("build-a".to_owned()),
+            Timing::default(),
+        );
+    }
+
     fn attach(&self, pty: &Pty) -> Pane {
         self.attach_as(pty, None)
     }
@@ -64,6 +80,11 @@ impl Room {
             hello.refresh_ms = Some(500);
         }
         hello.pane_id = pane_id;
+        self.attach_hello(pty, hello, stream)
+    }
+
+    fn attach_hello(&self, pty: &Pty, hello: Hello, stream: UnixStream) -> Pane {
+        let instance_id = hello.instance_id.clone();
         attach::send_hello(&stream, &hello, pty.slave().as_fd()).unwrap();
         let mut replies = BufReader::new(stream);
         let reply = attach::read_line::<Reply>(&mut replies).unwrap();
@@ -122,6 +143,7 @@ fn hello(instance_id: &SidebarInstanceId) -> Hello {
         instance_id: instance_id.clone(),
         // No pane id: nothing in the attachment may ask a multiplexer.
         pane_id: None,
+        baseline_pane: None,
         supervisor_build: Some("build-a".to_owned()),
         tick_seconds: None,
         refresh_ms: None,
@@ -165,6 +187,117 @@ fn painted(pty: &mut Pty) -> Vec<u8> {
         has_frame_content(&bytes, size.ws_row, size.ws_col)
     });
     bytes
+}
+
+#[test]
+fn a_replacement_host_seats_only_the_carried_live_baseline() {
+    use crate::ids::PaneId;
+    use crate::sidebar_pane::app::fixtures::agent_snapshot;
+
+    let mut room = Room::new();
+    let own = PaneId::from_parts(MuxName::Tmux, "%7");
+    let selected = PaneId::from_parts(MuxName::Tmux, "%6");
+    let mut snapshot = agent_snapshot(&workspace());
+    snapshot.worktree_groups[0].rows[0].name = "selected-card".into();
+    snapshot.worktree_groups[0].rows[0]
+        .pane
+        .as_mut()
+        .unwrap()
+        .pane_id = selected.clone();
+    let mut other = snapshot.worktree_groups[0].rows[0].clone();
+    other.id = "agent-2".into();
+    other.name = "other-card".into();
+    other.pane.as_mut().unwrap().pane_id = PaneId::from_parts(MuxName::Tmux, "%5");
+    snapshot.worktree_groups[0].rows.push(other);
+    snapshot.own_view = Some(crate::store::snapshot::SidebarOwnView {
+        sibling_count: 2,
+        working_pane_ids: snapshot
+            .rows()
+            .map(|row| row.pane.as_ref().unwrap().pane_id.clone())
+            .collect(),
+        own_view_is_daemon: false,
+    });
+    snapshot.focused_pane = Some(selected.clone());
+    snapshot.viewed_panes = vec![own.clone()];
+    let mut pty = Pty::open(54, 30);
+    let mut pane = room.attach_as(&pty, Some(own.clone()));
+    painted(&mut pty);
+    room.host
+        .plane
+        .publish_snapshot(&pane.instance_id, snapshot.clone());
+    let mut parser = vt100::Parser::new(30, 54, 0);
+    eventually("focused card selected", || {
+        parser.process(&pty.drain());
+        parser
+            .screen()
+            .contents()
+            .lines()
+            .any(|line| line.contains("selected-card") && line.contains('▌'))
+    });
+    pane.replies
+        .get_ref()
+        .set_read_timeout(Some(SETTLE))
+        .unwrap();
+    let report = attach::read_line::<serde_json::Value>(&mut pane.replies);
+    assert!(
+        report.is_ok(),
+        "a baseline change must reach the supervisor: {report:?}"
+    );
+    let report = report.unwrap();
+    assert_eq!(
+        report,
+        Some(serde_json::json!({"control": {"baseline": "tmux:%6"}}))
+    );
+    let instance = pane.instance_id.clone();
+    room.replace_host();
+    drop(pane);
+    snapshot.focused_pane = Some(own.clone());
+
+    for baseline in [Some("tmux:%6"), None, Some("tmux:%9")] {
+        let mut greeting = hello(&instance);
+        greeting.pane_id = Some(own.clone());
+        greeting.baseline_pane = baseline.map(|pane| PaneId::parse(pane).unwrap());
+        let mut pty = Pty::open(54, 30);
+        let mut pane = room.attach_hello(&pty, greeting, room.connect());
+        painted(&mut pty);
+        room.host
+            .plane
+            .publish_snapshot(&instance, snapshot.clone());
+        let mut parser = vt100::Parser::new(30, 54, 0);
+        eventually("successor cards painted", || {
+            parser.process(&pty.drain());
+            parser.screen().contents().contains("selected-card")
+        });
+        let screen = parser.screen().contents();
+        assert_eq!(
+            screen
+                .lines()
+                .any(|line| line.contains("selected-card") && line.contains('▌')),
+            baseline == Some("tmux:%6"),
+            "{baseline:?}:\n{screen}"
+        );
+        assert!(
+            !screen
+                .lines()
+                .any(|line| line.contains("other-card") && line.contains('▌')),
+            "{screen}"
+        );
+        if baseline == Some("tmux:%9") {
+            pane.replies
+                .get_ref()
+                .set_read_timeout(Some(SETTLE))
+                .unwrap();
+            assert_eq!(
+                attach::read_line::<serde_json::Value>(&mut pane.replies).unwrap(),
+                Some(serde_json::json!({"control": {"baseline": null}})),
+                "a departed baseline is forgotten by the supervisor too"
+            );
+        }
+        drop(pane);
+        eventually("successor attachment released", || {
+            lock(&room.host.attachments).is_empty()
+        });
+    }
 }
 
 #[test]
