@@ -7,9 +7,9 @@ use std::path::PathBuf;
 use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
 
-use super::{GlobalFlags, machine_config, open_browser_best_effort};
+use super::{GlobalFlags, machine_config, open_browser};
 use crate::cli::room;
-use rimz::web::{WebAuth, WebCredential};
+use rimz::web::{TokenDaemonChange, WebAuth};
 
 #[derive(Debug, Args)]
 pub struct WebArgs {
@@ -27,15 +27,16 @@ enum WebSubcmd {
     Share(WebShareArgs),
     /// Stop sharing one room or every room.
     Unshare(WebUnshareArgs),
-    /// Report the shared ttyd daemon's status.
+    /// Show whether the browser daemons are up, their URLs, and who can sign in.
     Status(WebStatusArgs),
-    /// Start the shared ttyd daemon.
+    /// Start the writable browser daemon.
     Start,
-    /// Restart the shared ttyd daemon and apply the current config.
+    /// Restart the browser daemons and apply the current config.
     Restart,
-    /// Stop the shared ttyd daemon.
+    /// Stop both browser daemons (the share list is kept).
     Stop,
-    /// Manage the machine-wide browser credential.
+    /// Manage the browser sign-in tokens (each is a Basic-auth user and password).
+    #[command(after_help = "Read-only viewing is a per-room broadcast: see `rimz web share`.")]
     Token {
         #[command(subcommand)]
         command: WebTokenSubcmd,
@@ -48,7 +49,7 @@ enum WebSubcmd {
         #[arg(long)]
         share: bool,
     },
-    /// Restrict and forward connections to the shared ttyd daemon.
+    /// Check sign-in and forward connections to ttyd.
     #[command(hide = true)]
     Gate {
         #[arg(long)]
@@ -75,7 +76,7 @@ struct WebOpenArgs {
     /// Print the URL without launching a browser.
     #[arg(long)]
     print: bool,
-    /// Require the shared ttyd daemon to already be online.
+    /// Require the writable daemon to already be online.
     #[arg(long)]
     no_start: bool,
     /// Come up empty: skip recovering prior agents when the room is reborn.
@@ -84,7 +85,7 @@ struct WebOpenArgs {
     /// Prompt for resume even when stdin is not a terminal. Internal remote-web helper.
     #[arg(long, hide = true)]
     confirm_resume: bool,
-    /// Emit the versioned `rimz.web.v2` payload.
+    /// Emit the rimz.web.v2 payload, including the credential the tunnel relay presents to ttyd.
     #[arg(long)]
     json: bool,
 }
@@ -97,7 +98,7 @@ struct WebUrlArgs {
     /// Existing RimZ session name to print instead of resolving a path.
     #[arg(long, conflicts_with = "path")]
     session: Option<String>,
-    /// Emit the versioned `rimz.web.v2` payload.
+    /// Emit the rimz.web.url.v1 payload, without credentials.
     #[arg(long)]
     json: bool,
 }
@@ -140,17 +141,24 @@ struct WebStatusArgs {
 
 #[derive(Debug, Subcommand)]
 enum WebTokenSubcmd {
-    /// Rotate the browser credential.
-    Create {
-        /// Read-only credentials are unsupported by ttyd.
-        #[arg(long)]
-        read_only: bool,
+    /// Mint a token named NAME and restart the writable daemon.
+    Create { name: String },
+    /// Print a token's password (default: rimz).
+    Show {
+        #[arg(default_value = "rimz")]
+        name: String,
     },
-    /// List the machine credential and creation date.
-    List,
-    /// Revoke the machine credential by name.
-    Revoke { name: String },
-    /// Revoke the machine credential.
+    /// List tokens and when each was created.
+    List {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Delete a token and restart the writable daemon so its sessions end; the last token stops the daemon.
+    Revoke {
+        /// Token name, as listed by `rimz web token list`.
+        name: String,
+    },
+    /// Delete every token and stop the writable daemon.
     RevokeAll,
 }
 
@@ -212,15 +220,29 @@ fn open(args: WebOpenArgs, globals: &GlobalFlags) -> Result<()> {
         return crate::cli::render::json(&outcome.payload);
     }
     print_url(&outcome.payload.url)?;
-    if let WebAuth::TrustedHeader { header } = &outcome.payload.auth {
-        let _ = writeln!(
-            std::io::stderr().lock(),
-            "rimz: authentication is delegated to the reverse proxy (trusted header `{header}`)"
-        );
-    }
-    write_web_credential(&rimz::web::token_credential("rimz")?);
+    let sign_in = match &outcome.payload.auth {
+        WebAuth::TrustedHeader { header } => {
+            format!("sign in through your reverse proxy (header {header})")
+        }
+        WebAuth::Basic => {
+            let names = rimz::web::tokens()?
+                .tokens
+                .into_iter()
+                .map(|token| token.name)
+                .collect::<Vec<_>>();
+            if let [name] = names.as_slice() {
+                format!("sign in as user {name}; password: rimz web token show {name}")
+            } else {
+                format!(
+                    "sign in as one of {}; password: rimz web token show <name>",
+                    names.join(", ")
+                )
+            }
+        }
+    };
+    let _ = writeln!(std::io::stderr().lock(), "rimz: {sign_in}");
     if !args.print {
-        open_browser_best_effort(&outcome.payload.url);
+        open_browser(&outcome.payload.url);
     }
     Ok(())
 }
@@ -256,7 +278,7 @@ fn share(args: WebShareArgs, globals: &GlobalFlags) -> Result<()> {
     }
     print_url(&outcome.payload.url)?;
     if !args.print {
-        open_browser_best_effort(&outcome.payload.url);
+        open_browser(&outcome.payload.url);
     }
     Ok(())
 }
@@ -292,7 +314,13 @@ fn unshare(args: WebUnshareArgs, globals: &GlobalFlags) -> Result<()> {
         std::io::stdout().lock(),
         "{}",
         if outcome.changed {
-            format!("stopped sharing `{session}`")
+            match outcome.sessions.len() {
+                0 => format!("stopped sharing `{session}`; the broadcast daemon is stopped"),
+                count => format!(
+                    "stopped sharing `{session}`; viewers of {count} other shared room{} were disconnected and will reconnect",
+                    if count == 1 { "" } else { "s" }
+                ),
+            }
         } else {
             format!("`{session}` was not shared")
         }
@@ -305,43 +333,88 @@ fn status(args: WebStatusArgs) -> Result<()> {
     if args.json {
         return crate::cli::render::json(&status);
     }
-    let mut stdout = std::io::stdout().lock();
-    if let Some(pid) = status.pid {
+    let mut stdout = crate::cli::render::out();
+    let writable = &status.writable;
+    let sign_in = match &writable.auth {
+        WebAuth::TrustedHeader { header } => format!("reverse proxy (header {header})"),
+        WebAuth::Basic => match writable.tokens.as_slice() {
+            [] => "no token (rimz web token create <name>)".to_owned(),
+            [name] => format!("tokens {name} (rimz web token show {name})"),
+            names => format!("tokens {} (rimz web token show <name>)", names.join(", ")),
+        },
+    };
+    writeln!(
+        stdout,
+        "writable   {:<7}   {}   sign-in: {sign_in}",
+        if writable.online { "online" } else { "offline" },
+        writable.url
+    )?;
+    let listener = listener_display(&writable.interface, writable.port);
+    if let Some(pid) = writable.pid {
+        let gate = writable
+            .gate_pid
+            .map(|pid| format!("gate pid {pid}, "))
+            .unwrap_or_default();
         writeln!(
             stdout,
-            "ttyd: online on {} (pid {pid})",
-            listener_display(&status.interface, status.port)
+            "                     listening on {listener} ({gate}ttyd pid {pid})"
         )?;
     } else {
-        writeln!(
-            stdout,
-            "ttyd: offline (configured listener {})",
-            listener_display(&status.interface, status.port)
-        )?;
+        writeln!(stdout, "                     would listen on {listener}")?;
     }
-    if let Some(pid) = status.share.pid {
-        let sessions = if status.share.sessions.is_empty() {
-            "(none)".to_owned()
+    let broadcast = &status.broadcast;
+    let rooms = match broadcast.sessions.len() {
+        0 => "no rooms shared".to_owned(),
+        count => format!(
+            "{count} room{} shared: {}",
+            if count == 1 { "" } else { "s" },
+            broadcast.sessions.join(", ")
+        ),
+    };
+    let url = if broadcast.online {
+        format!("   {}", broadcast.url)
+    } else {
+        String::new()
+    };
+    writeln!(
+        stdout,
+        "broadcast  {:<7}   {rooms}{url}",
+        if broadcast.online {
+            "online"
         } else {
-            status.share.sessions.join(", ")
-        };
+            "offline"
+        }
+    )?;
+    let listener = listener_display(&broadcast.interface, broadcast.port);
+    if let Some(pid) = broadcast.pid {
         writeln!(
             stdout,
-            "share: online on {} (pid {pid}), sharing: {sessions}",
-            listener_display(&status.share.interface, status.share.port)
+            "                     listening on {listener} with no password, pid {pid}"
         )?;
     } else {
         writeln!(
             stdout,
-            "share: offline (configured listener {}), sharing: {}",
-            listener_display(&status.share.interface, status.share.port),
-            if status.share.sessions.is_empty() {
-                "(none)".to_owned()
-            } else {
-                status.share.sessions.join(", ")
-            }
+            "                     would listen on {listener} with no password"
         )?;
     }
+    Ok(())
+}
+
+fn write_writable_online(
+    url: &str,
+    interface: &str,
+    port: u16,
+    pid: u32,
+    gate_pid: Option<u32>,
+) -> Result<()> {
+    let gate = gate_pid
+        .map(|pid| format!("gate pid {pid}, "))
+        .unwrap_or_default();
+    writeln!(
+        crate::cli::render::out(),
+        "writable daemon online at {url} (listening on {}, {gate}ttyd pid {pid})",
+        listener_display(interface, port)
+    )?;
     Ok(())
 }
 
@@ -350,13 +423,13 @@ fn start() -> Result<()> {
     ensure_web_enabled(&config)?;
     let outcome = rimz::web::ensure_daemon(&config)?;
     crate::cli::render::web_warnings(&outcome.warnings);
-    writeln!(
-        std::io::stdout().lock(),
-        "ttyd: online on {} (pid {})",
-        listener_display(&outcome.interface, outcome.port),
-        outcome.pid
-    )?;
-    Ok(())
+    write_writable_online(
+        &outcome.url,
+        &outcome.interface,
+        outcome.port,
+        outcome.pid,
+        outcome.gate_pid,
+    )
 }
 
 fn restart() -> Result<()> {
@@ -364,24 +437,25 @@ fn restart() -> Result<()> {
     ensure_web_enabled(&config)?;
     let outcome = rimz::web::restart_daemon(&config)?;
     crate::cli::render::web_warnings(&outcome.warnings);
-    writeln!(
-        std::io::stdout().lock(),
-        "ttyd: online on {} (pid {})",
-        listener_display(&outcome.interface, outcome.port),
-        outcome.pid
+    write_writable_online(
+        &outcome.url,
+        &outcome.interface,
+        outcome.port,
+        outcome.pid,
+        outcome.gate_pid,
     )?;
     if !outcome.was_online {
         writeln!(
-            std::io::stdout().lock(),
-            "ttyd: was offline; started a fresh daemon"
+            crate::cli::render::out(),
+            "writable daemon was offline; started fresh"
         )?;
     }
     if let Some(share) = outcome.share {
         crate::cli::render::web_warnings(&share.warnings);
         writeln!(
-            std::io::stdout().lock(),
-            "share: online on {} (pid {})",
-            listener_display(&share.interface, share.port),
+            crate::cli::render::out(),
+            "broadcast daemon online at {} (pid {})",
+            share.url,
             share.pid
         )?;
     }
@@ -390,49 +464,100 @@ fn restart() -> Result<()> {
 
 fn stop() -> Result<()> {
     let stopped = rimz::web::stop_daemons()?;
-    writeln!(
-        std::io::stdout().lock(),
-        "stopped {} ttyd daemon{}",
-        stopped,
-        if stopped == 1 { "" } else { "s" }
-    )?;
+    let message = match (stopped.writable, stopped.broadcast) {
+        (true, true) => {
+            "stopped the writable daemon and the broadcast daemon; the share list is kept"
+        }
+        (true, false) => "stopped the writable daemon",
+        (false, true) => "stopped the broadcast daemon; the share list is kept",
+        (false, false) => "no browser daemon was running",
+    };
+    writeln!(crate::cli::render::out(), "{message}")?;
     Ok(())
 }
 
 fn token(command: WebTokenSubcmd) -> Result<()> {
     match command {
-        WebTokenSubcmd::Create { read_only } => {
-            let outcome = rimz::web::rotate_credential(&machine_config(), read_only)?;
-            let restarted = usize::from(outcome.restarted);
+        WebTokenSubcmd::Create { name } => {
+            let outcome = rimz::web::create_token(&machine_config(), &name)?;
             crate::cli::render::web_warnings(&outcome.warnings);
-            write_web_credential(&outcome.credential);
             writeln!(
-                std::io::stdout().lock(),
-                "rotated ttyd credential and restarted {restarted} daemon(s)"
+                std::io::stderr().lock(),
+                "rimz: token {name}: password {}",
+                outcome.credential.secret
+            )?;
+            writeln!(
+                crate::cli::render::out(),
+                "created token {name}{}",
+                if outcome.restarted {
+                    " and restarted the writable daemon"
+                } else {
+                    "; the writable daemon is offline"
+                }
             )?;
         }
-        WebTokenSubcmd::List => {
-            if let Some(credential) = rimz::web::credential_summary()? {
-                let mut stdout = std::io::stdout().lock();
-                writeln!(stdout, "{}: {}", credential.name, credential.created_at)?;
+        WebTokenSubcmd::Show { name } => {
+            writeln!(
+                std::io::stdout().lock(),
+                "{}",
+                rimz::web::token_credential(&name)?.secret
+            )?;
+        }
+        WebTokenSubcmd::List { json } => {
+            let payload = rimz::web::tokens()?;
+            if json {
+                return crate::cli::render::json(&payload);
+            }
+            let mut stdout = crate::cli::render::out();
+            if payload.tokens.is_empty() {
+                writeln!(stdout, "no tokens; run rimz web token create <name>")?;
+            }
+            for token in payload.tokens {
+                let age = (jiff::Timestamp::now().as_second() - token.created_at.as_second())
+                    .max(0)
+                    .unsigned_abs();
+                writeln!(
+                    stdout,
+                    "{}  created {} ({} ago)",
+                    token.name,
+                    rimz::utils::time::format_local_timestamp(token.created_at),
+                    rimz::utils::time::format_duration_compact(std::time::Duration::from_secs(age))
+                )?;
             }
         }
         WebTokenSubcmd::Revoke { name } => {
-            render_revoked(rimz::web::revoke_credential(Some(&name))?)?;
+            render_revoked(
+                Some(&name),
+                rimz::web::revoke_token(&machine_config(), Some(&name))?,
+            )?;
         }
         WebTokenSubcmd::RevokeAll => {
-            render_revoked(rimz::web::revoke_credential(None)?)?;
+            render_revoked(None, rimz::web::revoke_token(&machine_config(), None)?)?;
         }
     }
     Ok(())
 }
 
-fn render_revoked(stopped: bool) -> Result<()> {
-    let stopped = usize::from(stopped);
-    writeln!(
-        std::io::stdout().lock(),
-        "revoked ttyd credential and stopped {stopped} daemon(s)"
-    )?;
+fn render_revoked(name: Option<&str>, outcome: rimz::web::TokenRevoked) -> Result<()> {
+    crate::cli::render::web_warnings(&outcome.warnings);
+    if outcome.count == 0 {
+        writeln!(crate::cli::render::out(), "no tokens to revoke")?;
+        return Ok(());
+    }
+    let subject = name.map_or_else(
+        || format!("{} tokens", outcome.count),
+        |name| format!("token {name}"),
+    );
+    let change = match outcome.daemon {
+        TokenDaemonChange::Offline => "; the writable daemon is offline",
+        TokenDaemonChange::Restarted => " and restarted the writable daemon",
+        TokenDaemonChange::RestartFailed => " and stopped the writable daemon (restart failed)",
+        TokenDaemonChange::Stopped if name.is_some() => {
+            " and stopped the writable daemon (no tokens remain)"
+        }
+        TokenDaemonChange::Stopped => " and stopped the writable daemon",
+    };
+    writeln!(crate::cli::render::out(), "revoked {subject}{change}")?;
     Ok(())
 }
 
@@ -482,15 +607,6 @@ fn ensure_web_enabled(config: &rimz::config::MachineConfig) -> Result<()> {
         );
     }
     Ok(())
-}
-
-fn write_web_credential(credential: &WebCredential) {
-    let _ = writeln!(
-        std::io::stderr().lock(),
-        "ttyd basic auth for this machine: user {}, password {}",
-        credential.username,
-        credential.secret
-    );
 }
 
 fn print_url(url: &str) -> Result<()> {

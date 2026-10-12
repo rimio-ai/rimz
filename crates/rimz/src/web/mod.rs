@@ -56,6 +56,9 @@ fn without_ttyd_launch_context(spec: CommandSpec) -> CommandSpec {
 
 const WEB_SCHEMA_VERSION: &str = "rimz.web.v2";
 const WEB_TOKENS_VERSION: &str = "rimz.web.tokens.v1";
+const WEB_URL_VERSION: &str = "rimz.web.url.v1";
+const WEB_STATUS_VERSION: &str = "rimz.web.status.v1";
+const WEB_SHARE_VERSION: &str = "rimz.web.share.v1";
 const TTYD_SESSION_OSC: u16 = 7717;
 pub(crate) const TTYD_PIXEL_PROTOCOL: u32 = 3;
 
@@ -112,13 +115,11 @@ pub enum WebErr {
     Atomic(#[from] atomic::AtomicErr),
     #[error(transparent)]
     DaemonLock(#[from] crate::disk::lock::LockErr),
-    #[error("the shared ttyd daemon is offline; run `rimz web start` or omit `--no-start`")]
+    #[error("the writable browser daemon is offline; run `rimz web start` or omit `--no-start`")]
     TtydOffline,
-    #[error(
-        "the shared ttyd daemon credential is missing; run `rimz web token create`, then retry"
-    )]
+    #[error("the browser token store is missing; run `rimz web token create <name>`, then retry")]
     TtydCredentialMissing,
-    #[error("the shared ttyd daemon did not accept connections on {address} within 5 seconds")]
+    #[error("the writable browser daemon did not accept connections on {address} within 5 seconds")]
     TtydStartTimeout { address: SocketAddr },
     #[error(
         "[web] port {port} is already in use by another process; choose a free port in `rimz config path`"
@@ -128,14 +129,8 @@ pub enum WebErr {
         "[web] share_port {port} is already in use by another process; choose a free port in `rimz config path`"
     )]
     ConfiguredSharePortInUse { port: u16 },
-    #[error(
-        "the read-only broadcast ttyd daemon did not accept connections on {address} within 5 seconds"
-    )]
+    #[error("the broadcast daemon did not accept connections on {address} within 5 seconds")]
     ShareStartTimeout { address: SocketAddr },
-    #[error(
-        "ttyd read-only access is per process, not per credential; use `rimz web share` for a read-only broadcast"
-    )]
-    TtydReadOnlyCredential,
     #[error(
         "[web] interface `{value}` is not an IP address; set it to an IPv4 or IPv6 address in `rimz config path`"
     )]
@@ -158,8 +153,18 @@ pub enum WebErr {
         #[source]
         source: io::Error,
     },
-    #[error("ttyd credential `{name}` does not exist (the single credential is `rimz`)")]
-    TtydCredentialNotFound { name: String },
+    #[error("token `{name}` already exists; revoke it first or pick another name")]
+    TokenExists { name: String },
+    #[error("token `{name}` does not exist; {hint}", hint = if .existing.is_empty() { "no tokens exist".to_owned() } else { format!("existing tokens: {}", .existing.join(", ")) })]
+    TokenNotFound { name: String, existing: Vec<String> },
+    #[error(
+        "invalid token name `{name}`; use 1-64 characters of [A-Za-z0-9._-], starting with a letter or digit"
+    )]
+    InvalidTokenName { name: String },
+    #[error(
+        "{session} is not running, and only a running room can be shared; start it with `rimz start`, then retry"
+    )]
+    RoomNotRunning { session: String },
     #[error(
         "{mux} session `{session}` is not addressable after web preparation. Run `rimz reset` from the workspace, then retry `rimz web open`."
     )]
@@ -178,7 +183,7 @@ pub enum WebErr {
         "the remote serves browser access behind a reverse proxy (trusted-header auth) — open `{url}` directly; no SSH tunnel applies"
     )]
     TrustedHeaderTunnel { url: String },
-    #[error("remote `rimz web open --json` omitted the ttyd credential")]
+    #[error("remote `rimz web open --json` omitted the credential")]
     TunnelCredentialMissing,
     #[error(transparent)]
     LiveRoom(#[from] crate::room::LiveRoomErr),
@@ -271,19 +276,38 @@ impl WebOpenPayload {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WebUrlPayload {
+    pub version: String,
+    pub url: String,
+    pub session: String,
+    pub port: u16,
+    pub tunnel_port: Option<u16>,
+    pub auth: WebAuth,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WebStatusPayload {
     pub version: String,
+    pub writable: WebWritableStatus,
+    pub broadcast: WebShareStatus,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WebWritableStatus {
     pub online: bool,
+    pub url: String,
+    pub auth: WebAuth,
     pub pid: Option<u32>,
+    pub gate_pid: Option<u32>,
     pub interface: String,
     pub port: u16,
-    #[serde(default)]
-    pub share: WebShareStatus,
+    pub tokens: Vec<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WebShareStatus {
     pub online: bool,
+    pub url: String,
     pub pid: Option<u32>,
     pub interface: String,
     pub port: u16,
@@ -306,6 +330,7 @@ pub enum WebWarning {
     BrowserThemeSkipped(String),
     HeaderAuthUnprotected(String),
     BroadcastUnauthenticated(String),
+    DaemonRestartFailed(String),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -316,7 +341,9 @@ pub struct WebAccessOutcome {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WebDaemonOutcome {
+    pub url: String,
     pub pid: u32,
+    pub gate_pid: Option<u32>,
     pub interface: String,
     pub port: u16,
     pub warnings: Vec<WebWarning>,
@@ -338,7 +365,9 @@ pub struct WebUnshareOutcome {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WebRestartOutcome {
+    pub url: String,
     pub pid: u32,
+    pub gate_pid: Option<u32>,
     pub interface: String,
     pub port: u16,
     pub was_online: bool,
@@ -352,17 +381,43 @@ pub struct WebReloadOutcome {
     pub share: Option<WebDaemonOutcome>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CredentialSummary {
     pub name: String,
     pub created_at: Timestamp,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct CredentialRotation {
+pub struct TokenCreated {
     pub credential: WebCredential,
     pub restarted: bool,
     pub warnings: Vec<WebWarning>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WebTokenListPayload {
+    pub version: String,
+    pub tokens: Vec<CredentialSummary>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TokenDaemonChange {
+    Offline,
+    Restarted,
+    Stopped,
+    RestartFailed,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TokenRevoked {
+    pub count: usize,
+    pub daemon: TokenDaemonChange,
+    pub warnings: Vec<WebWarning>,
+}
+
+pub struct WebStopOutcome {
+    pub writable: bool,
+    pub broadcast: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -395,7 +450,7 @@ pub fn open_session(
     })
 }
 
-pub fn inspect_session(session: &str, config: &MachineConfig) -> Result<WebOpenPayload> {
+pub fn inspect_session(session: &str, config: &MachineConfig) -> Result<WebUrlPayload> {
     ttyd::inspect_session(session, config)
 }
 
@@ -407,7 +462,9 @@ pub fn restart_daemon(config: &MachineConfig) -> Result<WebRestartOutcome> {
     let (daemon, was_online) = ttyd::restart_daemon(config)?;
     let share = ttyd::restart_broadcast_if_shared(config)?;
     Ok(WebRestartOutcome {
+        url: daemon.outcome.url,
         pid: daemon.outcome.pid,
+        gate_pid: daemon.outcome.gate_pid,
         port: daemon.outcome.port,
         was_online,
         warnings: daemon.outcome.warnings,
@@ -422,19 +479,19 @@ pub fn restart_if_online(config: &MachineConfig) -> Result<WebReloadOutcome> {
     Ok(WebReloadOutcome { writable, share })
 }
 
-pub fn credential_summary() -> Result<Option<CredentialSummary>> {
-    ttyd::credential_summary()
+pub fn tokens() -> Result<WebTokenListPayload> {
+    Ok(WebTokenListPayload {
+        version: WEB_TOKENS_VERSION.to_owned(),
+        tokens: ttyd::token_summaries()?,
+    })
 }
 
 pub fn token_credential(name: &str) -> Result<WebCredential> {
     ttyd::token_credential(name)
 }
 
-pub fn rotate_credential(config: &MachineConfig, read_only: bool) -> Result<CredentialRotation> {
-    if read_only {
-        return Err(WebErr::TtydReadOnlyCredential);
-    }
-    ttyd::rotate_credential(config)
+pub fn create_token(config: &MachineConfig, name: &str) -> Result<TokenCreated> {
+    ttyd::create_token(config, name)
 }
 
 pub fn gate_authorization() -> Result<String> {
@@ -458,32 +515,25 @@ pub fn serve_tunnel_relay(listener: TcpListener, target: Arc<Mutex<RelayTarget>>
     gate::serve_tunnel(listener, target)
 }
 
-pub fn revoke_credential(name: Option<&str>) -> Result<bool> {
-    if let Some(name) = name
-        && name != "rimz"
-    {
-        return Err(WebErr::TtydCredentialNotFound {
-            name: name.to_owned(),
-        });
-    }
-    ttyd::revoke_credential()
+pub fn revoke_token(config: &MachineConfig, name: Option<&str>) -> Result<TokenRevoked> {
+    ttyd::revoke_token(config, name)
 }
 
 pub fn status(config: &MachineConfig) -> Result<WebStatusPayload> {
-    let daemon = ttyd::daemon_status()?;
+    let writable = ttyd::writable_status(config)?;
     let share_daemon = ttyd::broadcast_status()?;
     let shared_sessions = ttyd::shared_sessions()?;
     Ok(WebStatusPayload {
-        version: WEB_SCHEMA_VERSION.to_owned(),
-        online: daemon.is_some(),
-        pid: daemon.as_ref().map(|record| record.process.pid),
-        interface: daemon.as_ref().map_or_else(
-            || config.web.interface.clone(),
-            |record| record.process.interface.clone(),
-        ),
-        port: daemon.map_or(config.web.port, |record| record.process.port),
-        share: WebShareStatus {
+        version: WEB_STATUS_VERSION.to_owned(),
+        writable,
+        broadcast: WebShareStatus {
             online: share_daemon.is_some(),
+            url: normalized_base_url(
+                config.web.share_base_url.as_deref(),
+                share_daemon
+                    .as_ref()
+                    .map_or(config.web.share_port, |record| record.port),
+            ),
             pid: share_daemon.as_ref().map(|record| record.pid),
             interface: share_daemon.as_ref().map_or_else(
                 || config.web.interface.clone(),
@@ -495,13 +545,18 @@ pub fn status(config: &MachineConfig) -> Result<WebStatusPayload> {
     })
 }
 
-pub fn stop_daemons() -> Result<usize> {
-    Ok(usize::from(ttyd::stop_daemon()?) + usize::from(ttyd::stop_broadcast()?))
+pub fn stop_daemons() -> Result<WebStopOutcome> {
+    Ok(WebStopOutcome {
+        writable: ttyd::stop_daemon()?,
+        broadcast: ttyd::stop_broadcast()?,
+    })
 }
 
 pub fn share_session(session: &str, config: &MachineConfig) -> Result<WebShareOutcome> {
     if live_session_target(Some(session)).is_none() {
-        return Err(WebErr::InvalidSession("this room is not shared".to_owned()));
+        return Err(WebErr::RoomNotRunning {
+            session: session.to_owned(),
+        });
     }
     ttyd::add_shared_session(session, config)
 }
@@ -803,21 +858,22 @@ mod tests {
     }
 
     #[test]
-    fn status_share_block_is_additive_to_v2() {
-        let old: WebStatusPayload = serde_json::from_str(
-            r#"{"version":"rimz.web.v2","online":false,"pid":null,"interface":"127.0.0.1","port":8200}"#,
-        )
-        .expect("old status payload");
-        assert_eq!(old.share, WebShareStatus::default());
-
+    fn status_payload_roundtrips_named_daemon_blocks() {
         let status = WebStatusPayload {
-            version: WEB_SCHEMA_VERSION.to_owned(),
-            online: true,
-            pid: Some(10),
-            interface: "127.0.0.1".to_owned(),
-            port: 8200,
-            share: WebShareStatus {
+            version: WEB_STATUS_VERSION.to_owned(),
+            writable: WebWritableStatus {
                 online: true,
+                url: "http://127.0.0.1:8200".to_owned(),
+                auth: WebAuth::Basic,
+                pid: Some(10),
+                gate_pid: Some(11),
+                interface: "127.0.0.1".to_owned(),
+                port: 8200,
+                tokens: vec!["rimz".to_owned()],
+            },
+            broadcast: WebShareStatus {
+                online: true,
+                url: "http://127.0.0.1:8201".to_owned(),
                 pid: Some(20),
                 interface: "127.0.0.1".to_owned(),
                 port: 8201,

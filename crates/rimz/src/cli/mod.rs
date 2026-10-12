@@ -75,14 +75,32 @@ pub(crate) use ctx::Ctx;
 pub(crate) use usage::ExitCodeError;
 pub use usage::UsageError;
 
-pub(crate) fn open_browser_best_effort(url: &str) {
+enum BrowserLaunch {
+    Launched(&'static str),
+    NotInstalled(&'static str),
+    Failed {
+        opener: &'static str,
+        error: std::io::Error,
+    },
+    SshWithoutDisplay,
+}
+
+fn launch_browser(url: &str) -> BrowserLaunch {
+    let ssh = std::env::var_os("SSH_CONNECTION").is_some() || std::env::var_os("SSH_TTY").is_some();
+    if ssh
+        && (cfg!(target_os = "macos")
+            || (std::env::var_os("DISPLAY").is_none()
+                && std::env::var_os("WAYLAND_DISPLAY").is_none()))
+    {
+        return BrowserLaunch::SshWithoutDisplay;
+    }
     let opener = if cfg!(target_os = "macos") {
         "open"
     } else {
         "xdg-open"
     };
     if which::which(opener).is_err() {
-        return;
+        return BrowserLaunch::NotInstalled(opener);
     }
     let mut command = std::process::Command::new(opener);
     command
@@ -91,7 +109,27 @@ pub(crate) fn open_browser_best_effort(url: &str) {
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
     rimz::child_process::restore_user_temp_env(&mut command);
-    let _ = command.spawn();
+    match command.spawn() {
+        Ok(_) => BrowserLaunch::Launched(opener),
+        Err(error) => BrowserLaunch::Failed { opener, error },
+    }
+}
+
+fn open_browser(url: &str) {
+    let message = match launch_browser(url) {
+        BrowserLaunch::Launched(opener) => format!("launched {opener}"),
+        BrowserLaunch::NotInstalled(opener) => {
+            format!("no browser launched ({opener} is not installed); open the URL above")
+        }
+        BrowserLaunch::Failed { opener, error } => {
+            format!("no browser launched ({opener} failed to start: {error}); open the URL above")
+        }
+        BrowserLaunch::SshWithoutDisplay => {
+            "no browser launched (this is an SSH session with no display); open the URL above"
+                .to_owned()
+        }
+    };
+    let _ = writeln!(std::io::stderr().lock(), "rimz: {message}");
 }
 
 /// Render a command failure at the binary boundary.
@@ -657,7 +695,10 @@ enum Subcmd {
     Sessions(sessions::SessionsArgs),
     /// Manage and connect to SSH remote rooms.
     Remote(remote::RemoteArgs),
-    /// Open a Zellij room in the browser.
+    /// Open a room (Zellij or tmux) in the browser.
+    #[command(
+        after_help = "A room on another host opens with `rimz remote connect <alias> --web`."
+    )]
     Web(web::WebArgs),
     /// Workspace identity helpers.
     Workspace(workspace::WorkspaceArgs),

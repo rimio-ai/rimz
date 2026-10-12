@@ -16,9 +16,9 @@ use crate::disk::{atomic, paths};
 use crate::mux::CommandSpec;
 
 use super::{
-    CredentialRotation, CredentialSummary, Result, WebAuth, WebCredential, WebDaemonOutcome,
-    WebErr, WebOpenPayload, WebShareOutcome, WebSharePayload, WebUnshareOutcome, WebWarning,
-    gate::Cidr,
+    CredentialSummary, Result, TokenCreated, TokenDaemonChange, TokenRevoked, WebAuth,
+    WebCredential, WebDaemonOutcome, WebErr, WebShareOutcome, WebSharePayload, WebUnshareOutcome,
+    WebUrlPayload, WebWarning, WebWritableStatus, gate::Cidr,
 };
 
 mod client;
@@ -127,7 +127,9 @@ fn read_tokens() -> Result<Option<TokenStore>> {
 }
 
 fn valid_token_name(name: &str) -> bool {
-    !name.is_empty()
+    name.as_bytes()
+        .first()
+        .is_some_and(u8::is_ascii_alphanumeric)
         && name.len() <= 64
         && name
             .bytes()
@@ -327,11 +329,11 @@ pub(super) fn open_daemon(config: &MachineConfig, may_start: bool) -> Result<Wri
             return Err(WebErr::TtydOffline);
         }
         let credential = required_credential()?;
-        Ok(running_daemon(record, credential, Vec::new()))
+        Ok(running_daemon(config, record, credential, Vec::new()))
     }
 }
 
-pub(super) fn inspect_session(session: &str, config: &MachineConfig) -> Result<WebOpenPayload> {
+pub(super) fn inspect_session(session: &str, config: &MachineConfig) -> Result<WebUrlPayload> {
     let _guard = acquire_lock(DAEMON_LOCK_FILE)?;
     let daemon = daemon_status_locked()?;
     let port = daemon
@@ -340,27 +342,28 @@ pub(super) fn inspect_session(session: &str, config: &MachineConfig) -> Result<W
     let auth = daemon
         .as_ref()
         .map_or_else(|| auth_from_config(config), |record| record.auth.clone());
-    let credential = read_credential()?;
     let tunnel_port = daemon.as_ref().map(tunnel_port);
     let base_url = super::normalized_base_url(config.web.base_url.as_deref(), port);
-    Ok(WebOpenPayload::for_session(
-        session,
-        base_url,
+    Ok(WebUrlPayload {
+        version: super::WEB_URL_VERSION.to_owned(),
+        session: session.to_owned(),
+        url: super::join_session_url(&base_url, session),
         port,
         tunnel_port,
         auth,
-        credential,
-    ))
+    })
 }
 
-pub(super) fn credential_summary() -> Result<Option<CredentialSummary>> {
+pub(super) fn token_summaries() -> Result<Vec<CredentialSummary>> {
     let _guard = acquire_lock(DAEMON_LOCK_FILE)?;
     Ok(read_tokens()?
-        .and_then(|store| store.tokens.into_iter().next())
+        .into_iter()
+        .flat_map(|store| store.tokens)
         .map(|credential| CredentialSummary {
             name: credential.name,
             created_at: credential.created_at,
-        }))
+        })
+        .collect())
 }
 
 pub(super) fn token_credential(name: &str) -> Result<WebCredential> {
@@ -369,12 +372,19 @@ pub(super) fn token_credential(name: &str) -> Result<WebCredential> {
 }
 
 fn token_credential_locked(name: &str) -> Result<WebCredential> {
-    read_tokens()?
-        .and_then(|store| store.tokens.into_iter().find(|token| token.name == name))
-        .map(|token| basic_auth(&token))
-        .ok_or_else(|| WebErr::TtydCredentialNotFound {
-            name: name.to_owned(),
-        })
+    let tokens = read_tokens()?.map_or_else(Vec::new, |store| store.tokens);
+    tokens
+        .iter()
+        .find(|token| token.name == name)
+        .map(basic_auth)
+        .ok_or_else(|| token_not_found(name, &tokens))
+}
+
+fn token_not_found(name: &str, tokens: &[TtydCredential]) -> WebErr {
+    WebErr::TokenNotFound {
+        name: name.to_owned(),
+        existing: tokens.iter().map(|token| token.name.clone()).collect(),
+    }
 }
 
 fn basic_auth(credential: &TtydCredential) -> WebCredential {
@@ -412,16 +422,6 @@ fn ensure_credential() -> Result<WebCredential> {
     }
 }
 
-fn clear_credential() -> Result<bool> {
-    let Some(mut store) = read_tokens()? else {
-        return Ok(false);
-    };
-    let changed = !store.tokens.is_empty();
-    store.tokens.clear();
-    write_tokens(&store)?;
-    Ok(changed)
-}
-
 pub(super) fn ensure_daemon(config: &MachineConfig) -> Result<WritableDaemon> {
     let desired = desired_spec(config)?;
     let (program, version) = required_program_with_version()?;
@@ -434,13 +434,19 @@ pub(super) fn ensure_daemon(config: &MachineConfig) -> Result<WritableDaemon> {
     {
         let mut warnings = auth_warnings(&desired);
         warnings.extend(prepared.2.warnings.clone());
-        return Ok(running_daemon(record.clone(), store.upstream, warnings));
+        return Ok(running_daemon(
+            config,
+            record.clone(),
+            store.upstream,
+            warnings,
+        ));
     }
     let credential = ensure_credential()?;
-    start_fresh_locked(&desired, daemon, credential, prepared)
+    start_fresh_locked(config, &desired, daemon, credential, prepared)
 }
 
 fn running_daemon(
+    config: &MachineConfig,
     record: WritableDaemonRecord,
     credential: WebCredential,
     warnings: Vec<WebWarning>,
@@ -448,7 +454,9 @@ fn running_daemon(
     let tunnel_port = tunnel_port(&record);
     WritableDaemon {
         outcome: WebDaemonOutcome {
+            url: super::normalized_base_url(config.web.base_url.as_deref(), record.process.port),
             pid: record.process.pid,
+            gate_pid: record.gate.as_ref().map(|gate| gate.pid),
             port: record.process.port,
             interface: record.process.interface,
             warnings,
@@ -643,30 +651,64 @@ fn spawn_gate(
     spawn_detached(spec)
 }
 
-pub(super) fn rotate_credential(config: &MachineConfig) -> Result<CredentialRotation> {
+pub(super) fn create_token(config: &MachineConfig, name: &str) -> Result<TokenCreated> {
+    if !valid_token_name(name) {
+        return Err(WebErr::InvalidTokenName {
+            name: name.to_owned(),
+        });
+    }
     let _guard = acquire_lock(DAEMON_LOCK_FILE)?;
-    rotate_credential_locked(config)
+    let mut store = read_tokens()?.unwrap_or_else(|| TokenStore::new(Vec::new()));
+    if store.tokens.iter().any(|token| token.name == name) {
+        return Err(WebErr::TokenExists {
+            name: name.to_owned(),
+        });
+    }
+    let token = TtydCredential {
+        name: name.to_owned(),
+        created_at: Timestamp::now(),
+        secret: random_secret(),
+    };
+    let credential = basic_auth(&token);
+    store.tokens.push(token);
+    store.tokens.sort_by(|a, b| a.name.cmp(&b.name));
+    let (daemon, warnings) = apply_tokens_locked(config, &mut store)?;
+    Ok(TokenCreated {
+        credential,
+        restarted: daemon == TokenDaemonChange::Restarted,
+        warnings,
+    })
 }
 
-fn rotate_credential_locked(config: &MachineConfig) -> Result<CredentialRotation> {
-    let desired = desired_spec(config)?;
+fn apply_tokens_locked(
+    config: &MachineConfig,
+    store: &mut TokenStore,
+) -> Result<(TokenDaemonChange, Vec<WebWarning>)> {
+    store.upstream.secret = random_secret();
     let Some(daemon) = daemon_status_locked()? else {
-        mint_credential()?;
-        return Ok(CredentialRotation {
-            credential: token_credential_locked("rimz")?,
-            restarted: false,
-            warnings: Vec::new(),
-        });
+        write_tokens(store)?;
+        return Ok((TokenDaemonChange::Offline, Vec::new()));
     };
-    let (program, version) = required_program_with_version()?;
-    let prepared = prepare_writable_start(config, &desired, Some(&daemon), program, &version)?;
-    let credential = mint_credential()?;
-    let running = start_fresh_locked(&desired, Some(daemon), credential.clone(), prepared)?;
-    Ok(CredentialRotation {
-        credential: token_credential_locked("rimz")?,
-        restarted: true,
-        warnings: running.outcome.warnings,
-    })
+    stop_record(&daemon)?;
+    write_tokens(store)?;
+    if store.tokens.is_empty() {
+        return Ok((TokenDaemonChange::Stopped, Vec::new()));
+    }
+    let restart = (|| {
+        let desired = desired_spec(config)?;
+        let (program, version) = required_program_with_version()?;
+        let prepared = prepare_writable_start(config, &desired, None, program, &version)?;
+        start_fresh_locked(config, &desired, None, store.upstream.clone(), prepared)
+    })();
+    match restart {
+        Ok(running) => Ok((TokenDaemonChange::Restarted, running.outcome.warnings)),
+        Err(err) => Ok((
+            TokenDaemonChange::RestartFailed,
+            vec![WebWarning::DaemonRestartFailed(format!(
+                "tokens saved; the writable daemon is stopped because restart failed: {err}"
+            ))],
+        )),
+    }
 }
 
 pub(super) fn restart_daemon(config: &MachineConfig) -> Result<(WritableDaemon, bool)> {
@@ -677,7 +719,8 @@ pub(super) fn restart_daemon(config: &MachineConfig) -> Result<(WritableDaemon, 
     let was_online = daemon.is_some();
     let prepared = prepare_writable_start(config, &desired, daemon.as_ref(), program, &version)?;
     let credential = ensure_credential()?;
-    start_fresh_locked(&desired, daemon, credential, prepared).map(|daemon| (daemon, was_online))
+    start_fresh_locked(config, &desired, daemon, credential, prepared)
+        .map(|daemon| (daemon, was_online))
 }
 
 pub(super) fn restart_if_online(config: &MachineConfig) -> Result<Option<WritableDaemon>> {
@@ -689,7 +732,7 @@ pub(super) fn restart_if_online(config: &MachineConfig) -> Result<Option<Writabl
     let (program, version) = required_program_with_version()?;
     let prepared = prepare_writable_start(config, &desired, Some(&daemon), program, &version)?;
     let credential = ensure_credential()?;
-    start_fresh_locked(&desired, Some(daemon), credential, prepared).map(Some)
+    start_fresh_locked(config, &desired, Some(daemon), credential, prepared).map(Some)
 }
 
 type FreshStart = (PathBuf, SocketAddr, ClientProfile);
@@ -730,6 +773,7 @@ fn prepare_fresh_start(
 }
 
 fn start_fresh_locked(
+    config: &MachineConfig,
     desired: &WritableDaemonSpec,
     daemon: Option<WritableDaemonRecord>,
     credential: WebCredential,
@@ -742,19 +786,71 @@ fn start_fresh_locked(
     let record = start_daemon_with_profile(&program, desired, &credential, &profile)?;
     let mut warnings = auth_warnings(desired);
     warnings.extend(profile.warnings);
-    Ok(running_daemon(record, credential, warnings))
+    Ok(running_daemon(config, record, credential, warnings))
 }
 
-pub(super) fn revoke_credential() -> Result<bool> {
+pub(super) fn revoke_token(config: &MachineConfig, name: Option<&str>) -> Result<TokenRevoked> {
     let _guard = acquire_lock(DAEMON_LOCK_FILE)?;
-    let stopped = stop_daemon_locked()?;
-    clear_credential()?;
-    Ok(stopped)
+    let Some(mut store) = read_tokens()? else {
+        if let Some(name) = name {
+            return Err(token_not_found(name, &[]));
+        }
+        let daemon = if stop_daemon_locked()? {
+            TokenDaemonChange::Stopped
+        } else {
+            TokenDaemonChange::Offline
+        };
+        return Ok(TokenRevoked {
+            count: 0,
+            daemon,
+            warnings: Vec::new(),
+        });
+    };
+    let count = if let Some(name) = name {
+        let Some(index) = store.tokens.iter().position(|token| token.name == name) else {
+            return Err(token_not_found(name, &store.tokens));
+        };
+        store.tokens.remove(index);
+        1
+    } else {
+        let count = store.tokens.len();
+        store.tokens.clear();
+        count
+    };
+    let (daemon, warnings) = apply_tokens_locked(config, &mut store)?;
+    Ok(TokenRevoked {
+        count,
+        daemon,
+        warnings,
+    })
 }
 
-pub(super) fn daemon_status() -> Result<Option<WritableDaemonRecord>> {
+pub(super) fn writable_status(config: &MachineConfig) -> Result<WebWritableStatus> {
     let _guard = acquire_lock(DAEMON_LOCK_FILE)?;
-    daemon_status_locked()
+    let daemon = daemon_status_locked()?;
+    let port = daemon
+        .as_ref()
+        .map_or(config.web.port, |record| record.process.port);
+    Ok(WebWritableStatus {
+        online: daemon.is_some(),
+        url: super::normalized_base_url(config.web.base_url.as_deref(), port),
+        auth: daemon
+            .as_ref()
+            .map_or_else(|| auth_from_config(config), |record| record.auth.clone()),
+        pid: daemon.as_ref().map(|record| record.process.pid),
+        gate_pid: daemon
+            .as_ref()
+            .and_then(|record| record.gate.as_ref().map(|gate| gate.pid)),
+        interface: daemon.as_ref().map_or_else(
+            || config.web.interface.clone(),
+            |record| record.process.interface.clone(),
+        ),
+        port,
+        tokens: read_tokens()?
+            .into_iter()
+            .flat_map(|store| store.tokens.into_iter().map(|token| token.name))
+            .collect(),
+    })
 }
 
 pub(super) fn pixel_daemon_record() -> Option<(u32, u32)> {
@@ -1164,7 +1260,7 @@ pub(super) fn add_shared_session(session: &str, config: &MachineConfig) -> Resul
     let base_url = super::normalized_base_url(config.web.share_base_url.as_deref(), daemon.port);
     Ok(WebShareOutcome {
         payload: WebSharePayload {
-            version: "rimz.web.share.v1".to_owned(),
+            version: super::WEB_SHARE_VERSION.to_owned(),
             url: super::join_session_url(&base_url, session),
             session: session.to_owned(),
             port: daemon.port,
@@ -1288,12 +1384,13 @@ fn ensure_broadcast_locked(
         && record.matches(desired, &prepared.2)
     {
         return Ok(running_broadcast(
+            config,
             record.clone(),
             desired,
             prepared.2.warnings.clone(),
         ));
     }
-    start_broadcast_prepared(desired, daemon, prepared)
+    start_broadcast_prepared(config, desired, daemon, prepared)
 }
 
 fn restart_broadcast_locked(
@@ -1310,7 +1407,7 @@ fn replace_broadcast_locked(
     daemon: Option<TtydProcessRecord>,
 ) -> Result<WebDaemonOutcome> {
     let prepared = prepare_broadcast_start(config, desired, daemon.as_ref())?;
-    start_broadcast_prepared(desired, daemon, prepared)
+    start_broadcast_prepared(config, desired, daemon, prepared)
 }
 
 fn prepare_broadcast_start(
@@ -1330,6 +1427,7 @@ fn prepare_broadcast_start(
 }
 
 fn start_broadcast_prepared(
+    config: &MachineConfig,
     desired: &ListenerSpec,
     daemon: Option<TtydProcessRecord>,
     (program, address, profile): FreshStart,
@@ -1357,10 +1455,11 @@ fn start_broadcast_prepared(
         let _ = stop_broadcast_record(&record);
         return Err(err);
     }
-    Ok(running_broadcast(record, desired, profile.warnings))
+    Ok(running_broadcast(config, record, desired, profile.warnings))
 }
 
 fn running_broadcast(
+    config: &MachineConfig,
     record: TtydProcessRecord,
     desired: &ListenerSpec,
     mut warnings: Vec<WebWarning>,
@@ -1376,7 +1475,9 @@ fn running_broadcast(
         )));
     }
     WebDaemonOutcome {
+        url: super::normalized_base_url(config.web.share_base_url.as_deref(), record.port),
         pid: record.pid,
+        gate_pid: None,
         port: record.port,
         interface: record.interface,
         warnings,
