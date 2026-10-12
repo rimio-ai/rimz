@@ -5,6 +5,7 @@
 //! before the tail. Progress is therefore the set of printed entry identities, not a count.
 
 use std::collections::HashSet;
+use std::hash::{DefaultHasher, Hash, Hasher};
 
 use super::*;
 
@@ -98,33 +99,33 @@ fn write_json_line(value: &impl serde::Serialize) -> std::io::Result<()> {
 }
 
 #[derive(PartialEq, Eq, Hash)]
-enum EntryKey {
+enum EntryKey<'a> {
     Log {
-        agent: AgentKey,
+        agent: &'a AgentKey,
         kind: TranscriptKind,
         at: Option<jiff::Timestamp>,
         delivered_at: Option<jiff::Timestamp>,
-        message_id: Option<String>,
-        text: String,
+        message_id: Option<&'a str>,
+        text: &'a str,
     },
     Stage {
         at: Option<jiff::Timestamp>,
-        team: String,
-        to: String,
-        by: String,
+        team: &'a str,
+        to: &'a str,
+        by: &'a str,
     },
 }
 
-impl EntryKey {
-    fn for_entry(entry: &RenderEntry) -> Self {
+impl<'a> EntryKey<'a> {
+    fn for_entry(entry: &'a RenderEntry) -> Self {
         match &entry.source {
             LineSource::Log { kind, agent, .. } => Self::Log {
-                agent: agent.clone(),
+                agent,
                 kind: *kind,
                 at: entry.chat.at,
                 delivered_at: entry.chat.delivered_at,
-                message_id: entry.chat.message_id.clone(),
-                text: entry.chat.text.clone(),
+                message_id: entry.chat.message_id.as_deref(),
+                text: &entry.chat.text,
             },
             LineSource::Stage => {
                 // render_entry_for_flip always pairs LineSource::Stage with Some(StageLine).
@@ -135,23 +136,35 @@ impl EntryKey {
                     .expect("stage entries carry stage metadata");
                 Self::Stage {
                     at: entry.chat.at,
-                    team: team.clone(),
-                    to: to.clone(),
-                    by: by.clone(),
+                    team,
+                    to,
+                    by,
                 }
             }
         }
     }
+
+    fn fingerprint(self) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        self.hash(&mut hasher);
+        hasher.finish()
+    }
 }
 
 pub(super) struct FollowCursor {
-    seen: HashSet<EntryKey>,
+    // Remember every printed identity without retaining its text. A 64-bit
+    // collision can suppress one line; that tradeoff keeps each entry small.
+    seen: HashSet<u64>,
 }
 
 impl FollowCursor {
     pub(super) fn seed(view: &RenderedChat) -> Self {
         Self {
-            seen: view.entries.iter().map(EntryKey::for_entry).collect(),
+            seen: view
+                .entries
+                .iter()
+                .map(|entry| EntryKey::for_entry(entry).fingerprint())
+                .collect(),
         }
     }
 
@@ -161,7 +174,7 @@ impl FollowCursor {
             .enumerate()
             .filter_map(|(index, entry)| {
                 self.seen
-                    .insert(EntryKey::for_entry(entry))
+                    .insert(EntryKey::for_entry(entry).fingerprint())
                     .then_some(index)
             })
             .collect()
