@@ -133,7 +133,7 @@ pub(super) fn probe_account(config: &Config) -> AccountProbe {
     };
     let kind = credential.kind.as_deref();
     let scope = (kind == Some("oauth"))
-        .then(|| oauth_scope(provider))
+        .then(|| oauth_scope(config.adapter, provider))
         .flatten()
         .unwrap_or_default();
     AccountProbe::Found(AgentAccount {
@@ -173,15 +173,15 @@ pub(super) fn probe_account_usage(config: &Config) -> AccountUsageProbe {
         account_key: Some(selected.account_key.clone()),
         credentials_stamp: stamp,
     };
-    let result = match selected.provider.as_str() {
-        "anthropic" => {
+    let result = match quota_surface(config.adapter, &selected.provider) {
+        Some(QuotaSurface::Anthropic) => {
             super::adapters::claude::oauth_usage::fetch_usage_with_token(&selected.access_token)
                 .map_err(|source| Error::Claude {
                     adapter: config.adapter.name(),
                     source,
                 })
         }
-        "openai" | "openai-codex" => super::adapters::codex::oauth_usage::fetch_usage_with_token(
+        Some(QuotaSurface::Codex) => super::adapters::codex::oauth_usage::fetch_usage_with_token(
             &selected.access_token,
             selected.account_id.as_deref(),
         )
@@ -189,9 +189,9 @@ pub(super) fn probe_account_usage(config: &Config) -> AccountUsageProbe {
             adapter: config.adapter.name(),
             source,
         }),
-        provider => Err(Error::UnsupportedProvider {
+        None => Err(Error::UnsupportedProvider {
             adapter: config.adapter.name(),
-            provider: provider.to_owned(),
+            provider: selected.provider,
         }),
     };
     super::credits::map_account_usage_probe(result, identity, config.adapter.name())
@@ -280,7 +280,7 @@ fn select_usage(bytes: &[u8], config: &Config) -> Result<SelectedCredential, Err
         .refresh
         .as_deref()
         .filter(|token| !token.is_empty());
-    let scope = oauth_scope(provider).unwrap_or_default();
+    let scope = oauth_scope(config.adapter, provider).unwrap_or_default();
     let fallback = hashed_account_key(
         config.account_key_domain,
         refresh_token
@@ -302,12 +302,24 @@ fn select_usage(bytes: &[u8], config: &Config) -> Result<SelectedCredential, Err
     })
 }
 
-fn oauth_scope(provider: &str) -> Option<ProviderAccountScope> {
-    match provider {
-        "openai" | "openai-codex" => Some(ProviderAccountScope::sub_provider("openai", "oauth")),
-        "anthropic" => Some(ProviderAccountScope::sub_provider("anthropic", "oauth")),
+enum QuotaSurface {
+    Anthropic,
+    Codex,
+}
+
+fn quota_surface(adapter: Adapter, provider: &str) -> Option<QuotaSurface> {
+    match (adapter, provider) {
+        (_, "anthropic") => Some(QuotaSurface::Anthropic),
+        (_, "openai-codex") | (Adapter::OpenCode, "openai") => Some(QuotaSurface::Codex),
         _ => None,
     }
+}
+
+fn oauth_scope(adapter: Adapter, provider: &str) -> Option<ProviderAccountScope> {
+    quota_surface(adapter, provider).map(|surface| match surface {
+        QuotaSurface::Anthropic => ProviderAccountScope::sub_provider("anthropic", "oauth"),
+        QuotaSurface::Codex => ProviderAccountScope::sub_provider("openai", "oauth"),
+    })
 }
 
 fn provider_label(config: &Config, provider: &str, kind: Option<&str>) -> String {
@@ -430,9 +442,29 @@ mod tests {
         );
         let pi =
             select_usage(json.as_bytes(), &config(Adapter::Pi, Some("openai"), b"pi")).unwrap();
-        assert_eq!(pi.account_key, "acct");
         assert_eq!(
-            pi.scope,
+            pi.account_key,
+            hashed_account_key(b"pi", "access-token", "o")
+        );
+        assert_eq!(pi.scope, ProviderAccountScope::default());
+        let opencode = select_usage(
+            json.as_bytes(),
+            &config(Adapter::OpenCode, Some("openai"), b"open"),
+        )
+        .unwrap();
+        assert_eq!(opencode.account_key, "acct");
+        assert_eq!(
+            opencode.scope,
+            ProviderAccountScope::sub_provider("openai", "oauth")
+        );
+        let codex = format!(
+            r#"{{"openai-codex":{{"type":"oauth","access":"c","expires":{},"accountId":"codex-acct"}}}}"#,
+            future_ms()
+        );
+        let codex = select_usage(codex.as_bytes(), &config(Adapter::Pi, None, b"pi")).unwrap();
+        assert_eq!(codex.account_key, "codex-acct");
+        assert_eq!(
+            codex.scope,
             ProviderAccountScope::sub_provider("openai", "oauth")
         );
 
@@ -512,6 +544,31 @@ mod tests {
         assert_eq!(account.plan.as_deref(), Some("OpenAI API Key"));
         assert_eq!(account.metered, Some(false));
         assert!(account.credentials_updated_at_ms.is_some());
+
+        std::fs::write(
+            &path,
+            format!(
+                r#"{{"openai":{{"type":"oauth","access":"o","expires":{},"accountId":"acct"}}}}"#,
+                future_ms()
+            ),
+        )
+        .unwrap();
+        let AccountProbe::Found(account) = probe_account(&pi) else {
+            panic!("pi OAuth account")
+        };
+        assert_eq!(account.plan.as_deref(), Some("OpenAI OAuth"));
+        assert_eq!(account.metered, Some(true));
+        assert_eq!(account.scope, ProviderAccountScope::default());
+
+        std::fs::write(
+            &path,
+            br#"{
+                "anthropic":{"type":"oauth"},
+                "openai":{"type":"api_key"},
+                "opencode":{"type":"wellknown"}
+            }"#,
+        )
+        .unwrap();
 
         let mut opencode = config(Adapter::OpenCode, Some("opencode"), b"open");
         opencode.auth_path = Some(path);
