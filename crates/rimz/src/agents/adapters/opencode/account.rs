@@ -9,9 +9,9 @@ const ACCOUNT_KEY_DOMAIN: &[u8] = b"rimz/opencode-oauth-account-key/v1";
 fn config() -> Config {
     Config {
         adapter: Adapter::OpenCode,
-        auth_path: database::auth_path(),
+        load_credentials: Box::new(database::load_credentials),
         used_provider: database::latest_message_provider,
-        api_key_types: &["api", "api_key"],
+        api_key_types: &["key"],
         account_key_domain: ACCOUNT_KEY_DOMAIN,
     }
 }

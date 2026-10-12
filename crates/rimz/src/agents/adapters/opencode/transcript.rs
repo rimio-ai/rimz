@@ -1,7 +1,7 @@
 //! OpenCode SQLite conversation normalization.
 //!
-//! OpenCode stores message metadata and ordered content parts in separate
-//! tables. Reads stay scoped to one session because every OpenCode agent on a
+//! OpenCode stores text and ordered content in each session-message row.
+//! Reads stay scoped to one session because every OpenCode agent on a
 //! machine shares the same database. Incremental output advances only across
 //! completed assistant messages, so an in-place update that completes a live
 //! message remains visible to the next poll.
@@ -12,7 +12,6 @@ use std::path::Path;
 use jiff::Timestamp;
 use rusqlite::{Connection, Rows, params};
 use serde::Deserialize;
-use serde_json::Value;
 
 use super::database::{MessageTime, open_readonly};
 use crate::agents::sanitize_user_prompt;
@@ -24,15 +23,16 @@ use crate::agents::transcript_fs::{
 };
 use crate::ids::AgentSessionId;
 
-const COMPLETE_ASSISTANT: &str = "json_valid(m.data) AND json_extract(m.data, '$.role') = 'assistant' AND (json_extract(m.data, '$.time.completed') IS NOT NULL OR json_extract(m.data, '$.finish') IS NOT NULL OR json_extract(m.data, '$.error') IS NOT NULL)";
+const COMPLETE_ASSISTANT: &str = "m.type = 'assistant' AND json_valid(m.data) AND (json_extract(m.data, '$.time.completed') IS NOT NULL OR json_extract(m.data, '$.finish') IS NOT NULL OR json_extract(m.data, '$.error') IS NOT NULL)";
 
 #[derive(Deserialize)]
 struct MessageData {
     #[serde(default, deserialize_with = "deserialize_optional_string_lossy")]
-    role: Option<String>,
+    text: Option<String>,
     #[serde(default, deserialize_with = "deserialize_optional_object_lossy")]
     time: Option<MessageTime>,
-    summary: Option<Value>,
+    #[serde(default)]
+    content: Vec<PartData>,
 }
 
 #[derive(Deserialize)]
@@ -45,8 +45,6 @@ struct PartData {
     part_type: Option<String>,
     #[serde(default, deserialize_with = "deserialize_optional_string_lossy")]
     text: Option<String>,
-    synthetic: Option<Value>,
-    ignored: Option<Value>,
 }
 
 struct MessageBuilder {
@@ -61,21 +59,12 @@ pub(super) fn read_messages(
 ) -> io::Result<Vec<TranscriptMessage>> {
     let session_id = require_session_id(session_id)?;
     let conn = connection(path)?;
-    let primary = concat!(
-        "SELECT m.rowid, m.time_created, m.data, p.data ",
-        "FROM message m LEFT JOIN part p ON p.message_id = m.id ",
-        "WHERE m.session_id = ?1 ",
-        "ORDER BY m.time_created, m.rowid, p.time_created, p.rowid"
+    let sql = concat!(
+        "SELECT m.rowid, m.time_created, m.type, m.data ",
+        "FROM session_message m WHERE m.session_id = ?1 AND m.type IN ('user', 'assistant') ",
+        "ORDER BY m.time_created, m.rowid"
     );
-    let fallback = concat!(
-        "SELECT m.rowid, NULL, m.data, p.data ",
-        "FROM message m LEFT JOIN part p ON p.message_id = m.id ",
-        "WHERE m.session_id = ?1 ORDER BY m.rowid, p.rowid"
-    );
-    let mut stmt = conn
-        .prepare(primary)
-        .or_else(|_| conn.prepare(fallback))
-        .map_err(sqlite_io)?;
+    let mut stmt = conn.prepare(sql).map_err(sqlite_io)?;
     let rows = stmt.query([session_id.as_str()]).map_err(sqlite_io)?;
     collect_messages(rows).map(|(messages, _)| messages)
 }
@@ -87,7 +76,7 @@ pub(super) fn position(
     let session_id = session_id?;
     let conn = open_readonly(path)?;
     let sql = format!(
-        "SELECT COALESCE(MAX(m.rowid), 0) FROM message m WHERE m.session_id = ?1 AND {COMPLETE_ASSISTANT}"
+        "SELECT COALESCE(MAX(m.rowid), 0) FROM session_message m WHERE m.session_id = ?1 AND {COMPLETE_ASSISTANT}"
     );
     let rowid = conn
         .query_row(&sql, [session_id.as_str()], |row| row.get::<_, i64>(0))
@@ -102,28 +91,16 @@ pub(super) fn read_assistant_page(
 ) -> Option<TranscriptPage> {
     let session_id = session_id?;
     let conn = open_readonly(path)?;
-    let primary = format!(
+    let sql = format!(
         concat!(
-            "SELECT m.rowid, m.time_created, m.data, p.data ",
-            "FROM message m LEFT JOIN part p ON p.message_id = m.id ",
+            "SELECT m.rowid, m.time_created, m.type, m.data ",
+            "FROM session_message m ",
             "WHERE m.session_id = ?1 AND m.rowid > ?2 AND {} ",
-            "ORDER BY m.rowid, p.time_created, p.rowid"
+            "ORDER BY m.rowid"
         ),
         COMPLETE_ASSISTANT
     );
-    let fallback = format!(
-        concat!(
-            "SELECT m.rowid, NULL, m.data, p.data ",
-            "FROM message m LEFT JOIN part p ON p.message_id = m.id ",
-            "WHERE m.session_id = ?1 AND m.rowid > ?2 AND {} ",
-            "ORDER BY m.rowid, p.rowid"
-        ),
-        COMPLETE_ASSISTANT
-    );
-    let mut stmt = conn
-        .prepare(&primary)
-        .or_else(|_| conn.prepare(&fallback))
-        .ok()?;
+    let mut stmt = conn.prepare(&sql).ok()?;
     let rows = stmt
         .query(params![session_id.as_str(), position.get() as i64])
         .ok()?;
@@ -150,39 +127,24 @@ pub(super) fn last_assistant_message(path: &Path, session_id: &AgentSessionId) -
 
 fn collect_messages(mut rows: Rows<'_>) -> io::Result<(Vec<TranscriptMessage>, u64)> {
     let mut messages = Vec::new();
-    let mut current_rowid = None;
-    let mut current = None;
     let mut max_rowid = 0;
 
     while let Some(row) = rows.next().map_err(sqlite_io)? {
         let rowid = row.get::<_, i64>(0).map_err(sqlite_io)?.max(0) as u64;
         max_rowid = max_rowid.max(rowid);
-        if current_rowid != Some(rowid) {
-            push_message(&mut messages, current.take());
-            current_rowid = Some(rowid);
-            let table_created = row.get::<_, Option<i64>>(1).map_err(sqlite_io)?;
-            let data = row.get::<_, String>(2).map_err(sqlite_io)?;
-            current = parse_message(&data, table_created);
-        }
-        let part = row.get::<_, Option<String>>(3).map_err(sqlite_io)?;
-        if let (Some(builder), Some(part)) = (&mut current, part.as_deref())
-            && let Some(text) = parse_text_part(part)
-        {
-            builder.text_parts.push(text);
-        }
+        let table_created = row.get::<_, Option<i64>>(1).map_err(sqlite_io)?;
+        let kind = row.get::<_, String>(2).map_err(sqlite_io)?;
+        let data = row.get::<_, String>(3).map_err(sqlite_io)?;
+        push_message(&mut messages, parse_message(&data, table_created, &kind));
     }
-    push_message(&mut messages, current);
     Ok((messages, max_rowid))
 }
 
-fn parse_message(data: &str, table_created: Option<i64>) -> Option<MessageBuilder> {
+fn parse_message(data: &str, table_created: Option<i64>, kind: &str) -> Option<MessageBuilder> {
     let data = serde_json::from_str::<MessageData>(data).ok()?;
-    if matches!(data.summary, Some(Value::Bool(true))) {
-        return None;
-    }
-    let role = match data.role.as_deref() {
-        Some("user") => TranscriptRole::User,
-        Some("assistant") => TranscriptRole::Assistant,
+    let role = match kind {
+        "user" => TranscriptRole::User,
+        "assistant" => TranscriptRole::Assistant,
         _ => return None,
     };
     let created = data
@@ -193,23 +155,18 @@ fn parse_message(data: &str, table_created: Option<i64>) -> Option<MessageBuilde
     Some(MessageBuilder {
         role,
         at: created.and_then(|millis| Timestamp::from_millisecond(millis).ok()),
-        text_parts: Vec::new(),
+        text_parts: match role {
+            TranscriptRole::User => data.text.into_iter().collect(),
+            TranscriptRole::Assistant => data
+                .content
+                .into_iter()
+                .filter(|part| part.part_type.as_deref() == Some("text"))
+                .filter_map(|part| part.text)
+                .map(|text| text.trim().to_owned())
+                .filter(|text| !text.is_empty())
+                .collect(),
+        },
     })
-}
-
-fn parse_text_part(data: &str) -> Option<String> {
-    let part = serde_json::from_str::<PartData>(data).ok()?;
-    if part.part_type.as_deref() != Some("text")
-        || matches!(part.synthetic, Some(Value::Bool(true)))
-        || matches!(part.ignored, Some(Value::Bool(true)))
-    {
-        return None;
-    }
-    part.text
-        .as_deref()
-        .map(str::trim)
-        .filter(|text| !text.is_empty())
-        .map(ToOwned::to_owned)
 }
 
 fn push_message(messages: &mut Vec<TranscriptMessage>, builder: Option<MessageBuilder>) {
@@ -265,46 +222,13 @@ mod tests {
     fn create_db() -> (tempfile::TempDir, std::path::PathBuf) {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("opencode.db");
-        let conn = Connection::open(&path).unwrap();
-        conn.execute_batch(
-            "CREATE TABLE message (
-                id TEXT PRIMARY KEY,
-                session_id TEXT NOT NULL,
-                time_created INTEGER NOT NULL,
-                time_updated INTEGER NOT NULL,
-                data TEXT NOT NULL
-            );
-            CREATE TABLE part (
-                id TEXT PRIMARY KEY,
-                message_id TEXT NOT NULL,
-                session_id TEXT NOT NULL,
-                time_created INTEGER NOT NULL,
-                time_updated INTEGER NOT NULL,
-                data TEXT NOT NULL
-            );",
-        )
-        .unwrap();
+        crate::testkit::opencode::OpenCodeDb::new(&path, false, false);
         (dir, path)
     }
 
-    fn insert_message(path: &Path, id: &str, session_id: &str, at: i64, data: &str) {
-        Connection::open(path)
-            .unwrap()
-            .execute(
-                "INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES (?1, ?2, ?3, ?3, ?4)",
-                params![id, session_id, at, data],
-            )
-            .unwrap();
-    }
-
-    fn insert_part(path: &Path, id: &str, message_id: &str, session_id: &str, at: i64, data: &str) {
-        Connection::open(path)
-            .unwrap()
-            .execute(
-                "INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES (?1, ?2, ?3, ?4, ?4, ?5)",
-                params![id, message_id, session_id, at, data],
-            )
-            .unwrap();
+    fn insert_message(path: &Path, id: &str, session_id: &str, kind: &str, at: i64, data: &str) {
+        crate::testkit::opencode::OpenCodeDb::new(path, false, false)
+            .message(id, session_id, kind, at, data);
     }
 
     #[test]
@@ -314,70 +238,25 @@ mod tests {
             &path,
             "msg-user",
             "ses-main",
+            "user",
             1_780_590_149_000,
-            r#"{"role":"user","time":{"created":"1780590149000"},"summary":{"title":"Fix parser"}}"#,
-        );
-        insert_part(
-            &path,
-            "part-user",
-            "msg-user",
-            "ses-main",
-            1_780_590_149_001,
-            r#"{"type":"text","text":"  fix the parser  "}"#,
+            r#"{"time":{"created":"1780590149000"},"text":"  fix the parser  "}"#,
         );
         insert_message(
             &path,
             "msg-assistant",
             "ses-main",
+            "assistant",
             1_780_590_150_000,
-            r#"{"role":"assistant","time":{"created":1780590150000,"completed":1780590151000},"finish":"stop"}"#,
-        );
-        insert_part(
-            &path,
-            "part-answer-1",
-            "msg-assistant",
-            "ses-main",
-            1_780_590_150_001,
-            r#"{"type":"text","text":"First line"}"#,
-        );
-        insert_part(
-            &path,
-            "part-reasoning",
-            "msg-assistant",
-            "ses-main",
-            1_780_590_150_002,
-            r#"{"type":"reasoning","text":"hidden"}"#,
-        );
-        insert_part(
-            &path,
-            "part-answer-2",
-            "msg-assistant",
-            "ses-main",
-            1_780_590_150_003,
-            r#"{"type":"text","text":"Second line"}"#,
-        );
-        insert_part(
-            &path,
-            "part-synthetic",
-            "msg-assistant",
-            "ses-main",
-            1_780_590_150_004,
-            r#"{"type":"text","text":"control","synthetic":true}"#,
+            r#"{"time":{"created":1780590150000,"completed":1780590151000},"finish":"stop","content":[{"type":"text","text":"First line"},{"type":"reasoning","text":"hidden"},{"type":"text","text":"Second line"}]}"#,
         );
         insert_message(
             &path,
             "msg-other",
             "ses-other",
+            "assistant",
             1_780_590_151_000,
-            r#"{"role":"assistant","time":{"created":1780590151000,"completed":1780590152000}}"#,
-        );
-        insert_part(
-            &path,
-            "part-other",
-            "msg-other",
-            "ses-other",
-            1_780_590_151_001,
-            r#"{"type":"text","text":"other session"}"#,
+            r#"{"time":{"created":1780590151000,"completed":1780590152000},"content":[{"type":"text","text":"other session"}]}"#,
         );
 
         let messages = read_messages(&path, Some(&AgentSessionId::from("ses-main"))).unwrap();
@@ -397,16 +276,9 @@ mod tests {
             &path,
             "msg-old",
             "ses-main",
+            "assistant",
             1_000,
-            r#"{"role":"assistant","time":{"created":1000,"completed":1100}}"#,
-        );
-        insert_part(
-            &path,
-            "part-old",
-            "msg-old",
-            "ses-main",
-            1_001,
-            r#"{"type":"text","text":"old"}"#,
+            r#"{"time":{"created":1000,"completed":1100},"content":[{"type":"text","text":"old"}]}"#,
         );
         let session_id = AgentSessionId::from("ses-main");
         let path_text = path.to_string_lossy().into_owned();
@@ -421,22 +293,15 @@ mod tests {
                 .is_empty()
         );
 
-        insert_message(&path, "msg-malformed", "ses-main", 1_500, "{");
+        insert_message(&path, "msg-malformed", "ses-main", "assistant", 1_500, "{");
 
         insert_message(
             &path,
             "msg-live",
             "ses-main",
+            "assistant",
             2_000,
-            r#"{"role":"assistant","time":{"created":2000}}"#,
-        );
-        insert_part(
-            &path,
-            "part-live",
-            "msg-live",
-            "ses-main",
-            2_001,
-            r#"{"type":"text","text":"partial"}"#,
+            r#"{"time":{"created":2000},"content":[{"type":"text","text":"partial"}]}"#,
         );
         assert!(
             cursor
@@ -448,17 +313,7 @@ mod tests {
                 .is_empty()
         );
 
-        let conn = Connection::open(&path).unwrap();
-        conn.execute(
-            "UPDATE message SET data = ?1, time_updated = 2100 WHERE id = 'msg-live'",
-            [r#"{"role":"assistant","time":{"created":2000,"completed":2100},"finish":"stop"}"#],
-        )
-        .unwrap();
-        conn.execute(
-            "UPDATE part SET data = ?1, time_updated = 2100 WHERE id = 'part-live'",
-            [r#"{"type":"text","text":"final answer"}"#],
-        )
-        .unwrap();
+        crate::testkit::opencode::OpenCodeDb::new(&path, false, false).update_message("msg-live", 2100, r#"{"time":{"created":2000,"completed":2100},"finish":"stop","content":[{"type":"text","text":"final answer"}]}"#);
 
         assert_eq!(
             cursor.messages(
@@ -482,16 +337,9 @@ mod tests {
             &path,
             "msg-other",
             "ses-other",
+            "assistant",
             3_000,
-            r#"{"role":"assistant","time":{"created":3000,"completed":3100}}"#,
-        );
-        insert_part(
-            &path,
-            "part-other",
-            "msg-other",
-            "ses-other",
-            3_001,
-            r#"{"type":"text","text":"other final"}"#,
+            r#"{"time":{"created":3000,"completed":3100},"content":[{"type":"text","text":"other final"}]}"#,
         );
         assert_eq!(
             cursor.messages(
@@ -511,31 +359,17 @@ mod tests {
             &path,
             "msg-newer",
             "ses-main",
+            "assistant",
             2_000,
-            r#"{"role":"assistant","time":{"created":2000,"completed":2100},"finish":"stop"}"#,
-        );
-        insert_part(
-            &path,
-            "part-newer",
-            "msg-newer",
-            "ses-main",
-            2_001,
-            r#"{"type":"text","text":"newer by timestamp"}"#,
+            r#"{"time":{"created":2000,"completed":2100},"finish":"stop","content":[{"type":"text","text":"newer by timestamp"}]}"#,
         );
         insert_message(
             &path,
             "msg-imported",
             "ses-main",
+            "assistant",
             1_000,
-            r#"{"role":"assistant","time":{"created":1000,"completed":1100},"finish":"stop"}"#,
-        );
-        insert_part(
-            &path,
-            "part-imported",
-            "msg-imported",
-            "ses-main",
-            1_001,
-            r#"{"type":"text","text":"older timestamp, higher rowid"}"#,
+            r#"{"time":{"created":1000,"completed":1100},"finish":"stop","content":[{"type":"text","text":"older timestamp, higher rowid"}]}"#,
         );
         let session_id = AgentSessionId::from("ses-main");
 
@@ -573,31 +407,17 @@ mod tests {
             &path,
             "msg-user",
             "ses-main",
+            "user",
             1_780_590_149_000,
-            r#"{"role":"user","time":{"created":1780590149000}}"#,
-        );
-        insert_part(
-            &path,
-            "part-user",
-            "msg-user",
-            "ses-main",
-            1_780_590_149_001,
-            r#"{"type":"text","text":"fix history"}"#,
+            r#"{"time":{"created":1780590149000},"text":"fix history"}"#,
         );
         insert_message(
             &path,
             "msg-assistant",
             "ses-main",
+            "assistant",
             1_780_590_150_000,
-            r#"{"role":"assistant","modelID":"gpt-priced","providerID":"openai","cost":0.42,"tokens":{"input":100,"output":50},"time":{"created":1780590150000,"completed":1780590151000},"finish":"stop"}"#,
-        );
-        insert_part(
-            &path,
-            "part-assistant",
-            "msg-assistant",
-            "ses-main",
-            1_780_590_150_001,
-            r#"{"type":"text","text":"done"}"#,
+            r#"{"cost":0.42,"tokens":{"input":100,"output":50},"time":{"created":1780590150000,"completed":1780590151000},"finish":"stop","model":{"id":"gpt-priced","providerID":"openai"},"content":[{"type":"text","text":"done"}]}"#,
         );
         let adapter = OpencodeAdapter;
         let session_id = AgentSessionId::from("ses-main");
@@ -628,16 +448,9 @@ mod tests {
             &path,
             "msg-assistant",
             "ses-main",
+            "assistant",
             2_000,
-            r#"{"role":"assistant","time":{"created":2000,"completed":2100},"finish":"stop"}"#,
-        );
-        insert_part(
-            &path,
-            "part-assistant",
-            "msg-assistant",
-            "ses-main",
-            2_001,
-            r#"{"type":"text","text":"completed reply"}"#,
+            r#"{"time":{"created":2000,"completed":2100},"finish":"stop","content":[{"type":"text","text":"completed reply"}]}"#,
         );
         assert_eq!(
             OpencodeAdapter
@@ -666,5 +479,59 @@ mod tests {
         let (_dir, path) = create_db();
         let error = read_messages(&path, None).unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn v2_transcript_reads_text_and_waits_for_completion() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("opencode.db");
+        let db = crate::testkit::opencode::OpenCodeDb::new(&path, false, false);
+        db.message(
+            "user",
+            "ses",
+            "user",
+            1000,
+            r#"{"text":"question","time":{"created":1000}}"#,
+        );
+        db.message(
+            "synthetic",
+            "ses",
+            "synthetic",
+            1100,
+            r#"{"text":"hidden"}"#,
+        );
+        db.message(
+            "assistant",
+            "ses",
+            "assistant",
+            2000,
+            r#"{"content":[{"type":"text","text":"partial"}],"time":{"created":2000}}"#,
+        );
+        let session = AgentSessionId::from("ses");
+        let messages = read_messages(&path, Some(&session)).expect("v2 conversation is readable");
+        assert_eq!(
+            messages
+                .iter()
+                .map(|message| message.text.as_str())
+                .collect::<Vec<_>>(),
+            ["question", "partial"]
+        );
+        assert_eq!(
+            position(&path, Some(&session)),
+            Some(TranscriptPosition::START)
+        );
+        db.update_message("assistant", 3000, r#"{"content":[{"type":"reasoning","text":"hidden"},{"type":"text","text":"final"},{"type":"text","text":"answer"}],"time":{"created":2000,"completed":3000}}"#);
+        let page = read_assistant_page(&path, Some(&session), TranscriptPosition::START).unwrap();
+        assert_eq!(page.messages, ["final\nanswer"]);
+        assert_eq!(
+            last_assistant_message(&path, &session).as_deref(),
+            Some("final\nanswer")
+        );
+        assert!(
+            read_assistant_page(&path, Some(&session), page.next)
+                .unwrap()
+                .messages
+                .is_empty()
+        );
     }
 }

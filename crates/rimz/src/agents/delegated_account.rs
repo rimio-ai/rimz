@@ -1,10 +1,10 @@
-//! Shared structured `auth.json` account seam for Pi and OpenCode.
+//! Shared credential-loader account seam for Pi and OpenCode.
 //!
-//! Both adapters store provider credentials in the same map shape and delegate
+//! Both adapters load provider credentials into the same map shape and delegate
 //! Anthropic/OpenAI quota reads to RimZ's provider-owned normalizers.
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::Path;
 
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -32,20 +32,33 @@ impl Adapter {
 
 pub(super) struct Config {
     pub(crate) adapter: Adapter,
-    pub(crate) auth_path: Option<PathBuf>,
+    pub(crate) load_credentials: Box<dyn Fn() -> Credentials>,
     pub(crate) used_provider: fn() -> Option<String>,
     pub(crate) api_key_types: &'static [&'static str],
     pub(crate) account_key_domain: &'static [u8],
 }
 
+pub(super) struct Credentials {
+    pub(super) stamp: Option<u64>,
+    pub(super) entries: Result<BTreeMap<String, Credential>, Error>,
+}
+
 #[derive(Debug, Default, Deserialize)]
-struct Credential {
+pub(super) struct Credential {
     #[serde(rename = "type")]
     kind: Option<String>,
     access: Option<String>,
     refresh: Option<String>,
     expires: Option<i64>,
     #[serde(default, rename = "accountId")]
+    account_id: Option<String>,
+    #[serde(default)]
+    metadata: CredentialMetadata,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct CredentialMetadata {
+    #[serde(rename = "accountID")]
     account_id: Option<String>,
 }
 
@@ -59,7 +72,7 @@ struct SelectedCredential {
 }
 
 #[derive(Debug, thiserror::Error)]
-enum Error {
+pub(super) enum Error {
     #[error("{adapter} OAuth credentials not found")]
     NoCredentials { adapter: &'static str },
     #[error("{adapter} auth file selected an API-key credential")]
@@ -112,16 +125,11 @@ impl AccountUsageReportable for Error {
 }
 
 pub(super) fn probe_account(config: &Config) -> AccountProbe {
-    let Some(path) = config.auth_path.as_deref() else {
-        return AccountProbe::LoggedOut;
-    };
-    let bytes = match std::fs::read(path) {
-        Ok(bytes) => bytes,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return AccountProbe::LoggedOut,
+    let loaded = (config.load_credentials)();
+    let credentials = match loaded.entries {
+        Ok(credentials) => credentials,
+        Err(Error::NoCredentials { .. }) => return AccountProbe::LoggedOut,
         Err(_) => return AccountProbe::Unavailable,
-    };
-    let Ok(credentials) = serde_json::from_slice::<BTreeMap<String, Credential>>(&bytes) else {
-        return AccountProbe::Unavailable;
     };
     if credentials.is_empty() {
         return AccountProbe::LoggedOut;
@@ -147,14 +155,17 @@ pub(super) fn probe_account(config: &Config) -> AccountProbe {
             None
         },
         sub_provider: Some(provider.clone()),
-        credentials_updated_at_ms: file_mtime_ms(path),
+        credentials_updated_at_ms: loaded.stamp,
         ..Default::default()
     })
 }
 
 pub(super) fn probe_account_usage(config: &Config) -> AccountUsageProbe {
-    let stamp = config.auth_path.as_deref().and_then(file_mtime_ms);
-    let selected = select_usage_from_config(config);
+    let loaded = (config.load_credentials)();
+    let stamp = loaded.stamp;
+    let selected = loaded
+        .entries
+        .and_then(|entries| select_usage_entries(&entries, config));
     let selected = match selected {
         Ok(selected) => selected,
         Err(error) => {
@@ -211,31 +222,46 @@ fn select_display<'a>(
         .or_else(|| credentials.iter().next())
 }
 
-fn select_usage_from_config(config: &Config) -> Result<SelectedCredential, Error> {
-    let path = config.auth_path.as_deref().ok_or(Error::NoCredentials {
-        adapter: config.adapter.name(),
-    })?;
-    let bytes = std::fs::read(path).map_err(|source| {
-        if source.kind() == std::io::ErrorKind::NotFound {
-            Error::NoCredentials {
-                adapter: config.adapter.name(),
+pub(super) fn load_auth_file(path: &Path, adapter: Adapter) -> Credentials {
+    let entries = std::fs::read(path)
+        .map_err(|source| {
+            if source.kind() == std::io::ErrorKind::NotFound {
+                Error::NoCredentials {
+                    adapter: adapter.name(),
+                }
+            } else {
+                Error::Io {
+                    adapter: adapter.name(),
+                    source,
+                }
             }
-        } else {
-            Error::Io {
-                adapter: config.adapter.name(),
+        })
+        .and_then(|bytes| {
+            serde_json::from_slice(&bytes).map_err(|source| Error::Parse {
+                adapter: adapter.name(),
                 source,
-            }
-        }
-    })?;
-    select_usage(&bytes, config)
+            })
+        });
+    Credentials {
+        stamp: file_mtime_ms(path),
+        entries,
+    }
 }
 
+#[cfg(test)]
 fn select_usage(bytes: &[u8], config: &Config) -> Result<SelectedCredential, Error> {
     let credentials: BTreeMap<String, Credential> =
         serde_json::from_slice(bytes).map_err(|source| Error::Parse {
             adapter: config.adapter.name(),
             source,
         })?;
+    select_usage_entries(&credentials, config)
+}
+
+fn select_usage_entries(
+    credentials: &BTreeMap<String, Credential>,
+    config: &Config,
+) -> Result<SelectedCredential, Error> {
     if credentials.is_empty() {
         return Err(Error::NoCredentials {
             adapter: config.adapter.name(),
@@ -275,7 +301,12 @@ fn select_usage(bytes: &[u8], config: &Config) -> Result<SelectedCredential, Err
             adapter: config.adapter.name(),
         });
     }
-    let account_id = credential.account_id.clone().filter(|id| !id.is_empty());
+    let account_id = credential
+        .account_id
+        .as_ref()
+        .or(credential.metadata.account_id.as_ref())
+        .filter(|id| !id.is_empty())
+        .cloned();
     let refresh_token = credential
         .refresh
         .as_deref()
@@ -337,7 +368,7 @@ fn provider_label(config: &Config, provider: &str, kind: Option<&str>) -> String
     match kind {
         Some("oauth") => format!("{name} OAuth"),
         Some(kind) if config.api_key_types.contains(&kind) => format!("{name} API Key"),
-        Some("wellknown") if config.adapter == Adapter::OpenCode => format!("{name} Wellknown"),
+        Some("external") if config.adapter == Adapter::OpenCode => format!("{name} External"),
         _ => name.to_owned(),
     }
 }
@@ -372,7 +403,10 @@ mod tests {
     fn config(adapter: Adapter, used: Option<&str>, domain: &'static [u8]) -> Config {
         Config {
             adapter,
-            auth_path: None,
+            load_credentials: Box::new(|| Credentials {
+                stamp: None,
+                entries: Ok(BTreeMap::new()),
+            }),
             used_provider: match used {
                 Some("openai") => openai_used_provider,
                 Some("opencode") => opencode_used_provider,
@@ -381,7 +415,7 @@ mod tests {
             },
             api_key_types: match adapter {
                 Adapter::Pi => &["api_key"],
-                Adapter::OpenCode => &["api", "api_key"],
+                Adapter::OpenCode => &["key"],
             },
             account_key_domain: domain,
         }
@@ -396,8 +430,8 @@ mod tests {
         let credentials: BTreeMap<String, Credential> = serde_json::from_str(
             r#"{
                 "anthropic":{"type":"oauth"},
-                "openai":{"type":"api"},
-                "opencode":{"type":"wellknown"}
+                "openai":{"type":"key"},
+                "opencode":{"type":"external"}
             }"#,
         )
         .unwrap();
@@ -415,9 +449,9 @@ mod tests {
             provider_label(
                 &config(Adapter::OpenCode, None, b"open"),
                 "opencode",
-                Some("wellknown")
+                Some("external")
             ),
-            "OpenCode Wellknown"
+            "OpenCode External"
         );
         assert_eq!(
             provider_label(&config(Adapter::Pi, None, b"pi"), "custom", None),
@@ -523,7 +557,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("auth.json");
         let mut pi = config(Adapter::Pi, Some("openai"), b"pi");
-        pi.auth_path = Some(path.clone());
+        let auth_path = path.clone();
+        pi.load_credentials = Box::new(move || load_auth_file(&auth_path, Adapter::Pi));
         assert!(matches!(probe_account(&pi), AccountProbe::LoggedOut));
 
         std::fs::write(&path, b"not json").unwrap();
@@ -534,7 +569,7 @@ mod tests {
             br#"{
                 "anthropic":{"type":"oauth"},
                 "openai":{"type":"api_key"},
-                "opencode":{"type":"wellknown"}
+                "opencode":{"type":"external"}
             }"#,
         )
         .unwrap();
@@ -565,17 +600,17 @@ mod tests {
             br#"{
                 "anthropic":{"type":"oauth"},
                 "openai":{"type":"api_key"},
-                "opencode":{"type":"wellknown"}
+                "opencode":{"type":"external"}
             }"#,
         )
         .unwrap();
 
         let mut opencode = config(Adapter::OpenCode, Some("opencode"), b"open");
-        opencode.auth_path = Some(path);
+        opencode.load_credentials = Box::new(move || load_auth_file(&path, Adapter::OpenCode));
         let AccountProbe::Found(account) = probe_account(&opencode) else {
             panic!("opencode account")
         };
-        assert_eq!(account.plan.as_deref(), Some("OpenCode Wellknown"));
+        assert_eq!(account.plan.as_deref(), Some("OpenCode External"));
         assert_eq!(account.metered, None);
     }
 
@@ -592,7 +627,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("auth.json");
         let mut config = config(Adapter::OpenCode, None, b"open");
-        config.auth_path = Some(path.clone());
+        let auth_path = path.clone();
+        config.load_credentials = Box::new(move || load_auth_file(&auth_path, Adapter::OpenCode));
         config.used_provider = counted_openai_provider;
 
         assert!(matches!(probe_account(&config), AccountProbe::LoggedOut));
@@ -604,7 +640,7 @@ mod tests {
 
         std::fs::write(
             &path,
-            br#"{"anthropic":{"type":"oauth"},"openai":{"type":"api_key"}}"#,
+            br#"{"anthropic":{"type":"oauth"},"openai":{"type":"key"}}"#,
         )
         .unwrap();
         let AccountProbe::Found(account) = probe_account(&config) else {

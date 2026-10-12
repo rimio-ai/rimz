@@ -1449,17 +1449,14 @@ fn materialize_spend_fixture(dir: &Path, fixture: &SpendFixture) -> PathBuf {
             fs::write(&path, format!("{body}\n")).expect("write spend JSONL fixture");
         }
         SpendFixtureBody::OpencodeSqlite { data } => {
-            let conn = rusqlite::Connection::open(&path).expect("open spend SQLite fixture");
-            conn.execute(
-                "CREATE TABLE message (id TEXT, session_id TEXT, data TEXT)",
-                [],
-            )
-            .expect("create message table");
-            conn.execute(
-                "INSERT INTO message (id, session_id, data) VALUES ('msg', ?1, ?2)",
-                (fixture.session_id, data),
-            )
-            .expect("insert message fixture");
+            let db = crate::testkit::opencode::OpenCodeDb::new(&path, false, false);
+            db.message(
+                "msg",
+                fixture.session_id,
+                "assistant",
+                1_780_394_400_000,
+                data,
+            );
         }
     }
     path

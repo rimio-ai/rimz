@@ -345,7 +345,7 @@ impl crate::agents::capabilities::CoreCapability for OpencodeAdapter {
                 session_id: "ses_1",
                 file_name: "opencode.db",
                 body: super::SpendFixtureBody::OpencodeSqlite {
-                    data: r#"{"cost":0.42,"modelID":"gpt-5","providerID":"openai","time":{"created":1780394400000},"tokens":{"input":100,"output":50}}"#,
+                    data: r#"{"cost":0.42,"model":{"id":"gpt-5","providerID":"openai"},"time":{"created":1780394400000},"tokens":{"input":100,"output":50}}"#,
                 },
             }),
             ..super::AdapterConformance::default()

@@ -6,10 +6,7 @@ use std::path::{Path, PathBuf};
 use rusqlite::{Connection, OpenFlags};
 use serde::Deserialize;
 
-use crate::agents::transcript_fs::{
-    deserialize_optional_object_lossy, deserialize_optional_string_lossy,
-    deserialize_optional_u64_lossy,
-};
+use crate::agents::transcript_fs::deserialize_optional_u64_lossy;
 use crate::agents::{TranscriptCompanionStat, TranscriptStat};
 
 /// Durable identity of the logical SQLite store read through `path`.
@@ -37,6 +34,14 @@ pub(super) fn files() -> Vec<PathBuf> {
     files
 }
 
+pub(super) fn newest_file() -> Option<PathBuf> {
+    files()
+        .into_iter()
+        .filter_map(|path| logical_stat(&path).map(|stat| (path, logical_mtime(stat))))
+        .max_by_key(|(_, stamp)| *stamp)
+        .map(|(path, _)| path)
+}
+
 pub(super) fn data_dirs() -> Vec<PathBuf> {
     if let Ok(value) = std::env::var("RIMZ_OPENCODE_DATA_DIR") {
         return value
@@ -58,13 +63,6 @@ pub(super) fn data_dirs() -> Vec<PathBuf> {
         })
         .unwrap_or_else(|| PathBuf::from("/").join(".local/share"));
     vec![data_home.join("opencode")]
-}
-
-pub(super) fn auth_path() -> Option<PathBuf> {
-    data_dirs()
-        .into_iter()
-        .map(|dir| dir.join("auth.json"))
-        .find(|path| path.exists())
 }
 
 fn file_in_dir(dir: &Path) -> Option<PathBuf> {
@@ -136,70 +134,9 @@ pub(super) fn open_readonly(path: &Path) -> Option<Connection> {
 }
 
 #[derive(Deserialize)]
-struct ToolPart {
-    #[serde(
-        rename = "type",
-        default,
-        deserialize_with = "deserialize_optional_string_lossy"
-    )]
-    kind: Option<String>,
-    #[serde(default, deserialize_with = "deserialize_optional_string_lossy")]
-    tool: Option<String>,
-}
-
-/// Named tool parts grouped under their owning message.
-pub(super) fn tool_calls_by_message(conn: &Connection) -> BTreeMap<String, BTreeMap<String, u32>> {
-    let Ok(mut statement) = conn.prepare("SELECT message_id, data FROM part ORDER BY rowid") else {
-        return BTreeMap::new();
-    };
-    let Ok(mut rows) = statement.query([]) else {
-        return BTreeMap::new();
-    };
-    let mut grouped = BTreeMap::<String, BTreeMap<String, u32>>::new();
-    while let Ok(Some(row)) = rows.next() {
-        let (Ok(message_id), Ok(data)) = (row.get::<_, String>(0), row.get::<_, String>(1)) else {
-            continue;
-        };
-        let Ok(part) = serde_json::from_str::<ToolPart>(&data) else {
-            continue;
-        };
-        if part.kind.as_deref() != Some("tool") {
-            continue;
-        }
-        let Some(tool) = part
-            .tool
-            .as_deref()
-            .map(str::trim)
-            .filter(|tool| !tool.is_empty())
-        else {
-            continue;
-        };
-        let count = grouped
-            .entry(message_id)
-            .or_default()
-            .entry(tool.to_owned())
-            .or_default();
-        *count = count.saturating_add(1);
-    }
-    grouped
-}
-
-#[derive(Deserialize)]
 pub(super) struct MessageTime {
     #[serde(default, deserialize_with = "deserialize_optional_u64_lossy")]
     pub(super) created: Option<u64>,
-}
-
-#[derive(Deserialize)]
-struct ProviderMetadata {
-    #[serde(
-        rename = "providerID",
-        default,
-        deserialize_with = "deserialize_optional_string_lossy"
-    )]
-    provider_id: Option<String>,
-    #[serde(default, deserialize_with = "deserialize_optional_object_lossy")]
-    time: Option<MessageTime>,
 }
 
 pub(super) fn latest_message_provider() -> Option<String> {
@@ -213,50 +150,222 @@ pub(super) fn latest_message_provider() -> Option<String> {
 fn latest_provider_in_file(path: &Path) -> Option<(u64, String)> {
     let conn = open_readonly(path)?;
     let mut statement = conn
-        .prepare("SELECT data FROM message ORDER BY rowid DESC LIMIT 100")
+        .prepare("SELECT time_created, json_extract(data, '$.model.providerID') FROM session_message WHERE type = 'assistant' AND json_valid(data) ORDER BY time_created DESC, rowid DESC LIMIT 100")
         .ok()?;
     let mut rows = statement.query([]).ok()?;
     while let Ok(Some(row)) = rows.next() {
-        let Ok(data) = row.get::<_, String>(0) else {
-            continue;
-        };
-        let Ok(metadata) = serde_json::from_str::<ProviderMetadata>(&data) else {
-            continue;
-        };
-        if let Some(provider) = metadata.provider_id {
-            return Some((
-                metadata.time.and_then(|time| time.created).unwrap_or(0),
-                provider,
-            ));
+        if let (Ok(created), Ok(provider)) = (row.get::<_, i64>(0), row.get::<_, String>(1)) {
+            return Some((created.max(0) as u64, provider));
         }
     }
     None
+}
+
+fn credentials_in_file(
+    path: &Path,
+) -> Result<(BTreeMap<String, serde_json::Value>, Option<u64>), rusqlite::Error> {
+    let mut credentials = BTreeMap::new();
+    let mut stamp = None;
+    let conn = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI,
+    )?;
+    if !conn.table_exists(None, "credential")? {
+        return Ok((credentials, stamp));
+    }
+    let mut statement = conn.prepare("SELECT integration_id, value, time_updated FROM credential WHERE integration_id IS NOT NULL ORDER BY active DESC, time_created DESC, id DESC")?;
+    let mut rows = statement.query([])?;
+    while let Some(row) = rows.next()? {
+        let (Ok(provider), Ok(value)) = (row.get::<_, String>(0), row.get::<_, String>(1)) else {
+            continue;
+        };
+        if credentials.contains_key(&provider) {
+            continue;
+        }
+        if let Ok(value) = serde_json::from_str(&value) {
+            stamp = stamp.max(u64::try_from(row.get::<_, i64>(2)?).ok());
+            credentials.insert(provider, value);
+        }
+    }
+    Ok((credentials, stamp))
+}
+
+pub(super) fn load_credentials() -> crate::agents::delegated_account::Credentials {
+    use crate::agents::delegated_account::{Credentials, Error};
+
+    let Some(path) = newest_file() else {
+        return Credentials {
+            stamp: None,
+            entries: Err(Error::NoCredentials {
+                adapter: "opencode",
+            }),
+        };
+    };
+    load_credentials_at(&path)
+}
+
+fn load_credentials_at(path: &Path) -> crate::agents::delegated_account::Credentials {
+    use crate::agents::delegated_account::{Credentials, Error};
+    let (credentials, stamp) = match credentials_in_file(path) {
+        Ok(loaded) => loaded,
+        Err(source) => {
+            return Credentials {
+                stamp: None,
+                entries: Err(if !path.try_exists().unwrap_or(true) {
+                    Error::NoCredentials {
+                        adapter: "opencode",
+                    }
+                } else {
+                    Error::Io {
+                        adapter: "opencode",
+                        source: std::io::Error::other(source),
+                    }
+                }),
+            };
+        }
+    };
+    let entries = credentials
+        .into_iter()
+        .map(|(provider, value)| {
+            serde_json::from_value(value)
+                .map(|credential| (provider, credential))
+                .map_err(|source| Error::Parse {
+                    adapter: "opencode",
+                    source,
+                })
+        })
+        .collect();
+    Credentials { stamp, entries }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    #[test]
+    fn credential_stamp_ignores_messages_and_tracks_selected_updates() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("opencode.db");
+        let db = crate::testkit::opencode::OpenCodeDb::new(&path, false, true);
+        db.credential(
+            "selected",
+            "openai",
+            None,
+            (100, 100),
+            r#"{"type":"oauth","access":"first"}"#,
+        );
+        set_mtime(&path, 1);
+        let before = load_credentials_at(&path).stamp;
+        db.message("m", "s", "assistant", 200, "{}");
+        set_mtime(&path, 2);
+        assert_eq!(
+            load_credentials_at(&path).stamp,
+            before,
+            "session writes must not invalidate OAuth usage"
+        );
+        db.connection().execute("UPDATE credential SET time_updated = 300, value = '{\"type\":\"oauth\",\"access\":\"second\"}' WHERE id = 'selected'", []).unwrap();
+        assert_ne!(load_credentials_at(&path).stamp, before);
+    }
+
+    #[test]
+    fn unreadable_credentials_are_unavailable_not_logged_out() {
+        use crate::agents::account::AccountProbe;
+        use crate::agents::delegated_account::{Adapter, Config, probe_account};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("opencode.db");
+        let load_path = path.clone();
+        let config = Config {
+            adapter: Adapter::OpenCode,
+            load_credentials: Box::new(move || load_credentials_at(&load_path)),
+            used_provider: || None,
+            api_key_types: &["key"],
+            account_key_domain: b"test",
+        };
+        assert!(matches!(probe_account(&config), AccountProbe::LoggedOut));
+        std::fs::write(&path, b"not a SQLite database").unwrap();
+        assert!(matches!(probe_account(&config), AccountProbe::Unavailable));
+    }
+
+    #[test]
+    fn credentials_follow_opencodes_active_creation_and_id_order() {
+        use crate::testkit::opencode::OpenCodeDb;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("opencode.db");
+        let db = OpenCodeDb::new(&path, false, true);
+        db.credential(
+            "older-refreshed",
+            "openai",
+            None,
+            (100, 300),
+            r#"{"type":"key","key":"old"}"#,
+        );
+        db.credential(
+            "newer-created",
+            "openai",
+            None,
+            (200, 200),
+            r#"{"type":"oauth","metadata":{"accountID":"account"}}"#,
+        );
+        let selected = credentials_in_file(&path).unwrap().0;
+        assert_eq!(
+            selected
+                .get("openai")
+                .and_then(|value| value["metadata"]["accountID"].as_str()),
+            Some("account")
+        );
+
+        db.credential(
+            "active",
+            "openai",
+            Some(true),
+            (50, 50),
+            r#"{"type":"external","methodID":"selected"}"#,
+        );
+        assert_eq!(
+            credentials_in_file(&path).unwrap().0["openai"]["methodID"],
+            "selected"
+        );
+
+        db.credential(
+            "a",
+            "anthropic",
+            None,
+            (200, 400),
+            r#"{"type":"key","key":"a"}"#,
+        );
+        db.credential(
+            "b",
+            "anthropic",
+            None,
+            (200, 200),
+            r#"{"type":"key","key":"b"}"#,
+        );
+        assert_eq!(
+            credentials_in_file(&path).unwrap().0["anthropic"]["key"],
+            "b"
+        );
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("opencode.db");
+        assert!(credentials_in_file(&path).is_err());
+        let _db = crate::testkit::opencode::OpenCodeDb::new(&path, false, false);
+        assert!(credentials_in_file(&path).unwrap().0.is_empty());
+    }
+
     fn create_db(dir: &Path, name: &str) -> PathBuf {
         let path = dir.join(name);
-        let connection = Connection::open(&path).unwrap();
-        connection
-            .execute(
-                "CREATE TABLE message (id TEXT, session_id TEXT, data TEXT)",
-                [],
-            )
-            .unwrap();
+        crate::testkit::opencode::OpenCodeDb::new(&path, false, false);
         path
     }
 
     fn insert_message(path: &Path, data: &str) {
-        Connection::open(path)
-            .unwrap()
-            .execute(
-                "INSERT INTO message (id, session_id, data) VALUES ('msg', 'ses', ?1)",
-                [data],
-            )
+        let db = crate::testkit::opencode::OpenCodeDb::new(path, false, false);
+        let index: i64 = db
+            .connection()
+            .query_row("SELECT COUNT(*) FROM session_message", [], |row| row.get(0))
             .unwrap();
+        db.message(&format!("msg-{index}"), "ses", "assistant", index, data);
     }
 
     #[test]
@@ -315,13 +424,20 @@ mod tests {
         let path = create_db(dir.path(), "opencode.db");
         insert_message(
             &path,
-            r#"{"providerID":"anthropic","time":{"created":"1000"},"tokens":false}"#,
+            r#"{"model":{"providerID":"anthropic"},"tokens":false}"#,
         );
         insert_message(
             &path,
-            r#"{"providerID":"openai","time":{"created":2000},"cost":"unknown"}"#,
+            r#"{"model":{"providerID":"openai"},"cost":"unknown"}"#,
         );
         insert_message(&path, "not json");
+        crate::testkit::opencode::OpenCodeDb::new(&path, false, false).message(
+            "compaction",
+            "ses",
+            "compaction",
+            1000,
+            r#"{"model":{"providerID":"anthropic"},"cost":0.5}"#,
+        );
         assert_eq!(
             latest_provider_in_file(&path).map(|(_, provider)| provider),
             Some("openai".to_owned())

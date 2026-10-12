@@ -563,20 +563,14 @@ fn catalog_merges_definition_and_live_instance() {
 fn live_member_cost_comes_from_its_audit_slot() {
     let dir = tempfile::tempdir().unwrap();
     let transcript = dir.path().join("opencode.db");
-    let connection = rusqlite::Connection::open(&transcript).unwrap();
-    connection
-        .execute_batch("CREATE TABLE message (id TEXT, session_id TEXT, data TEXT)")
-        .unwrap();
-    connection
-        .execute(
-            "INSERT INTO message (id, session_id, data) VALUES (?1, ?2, ?3)",
-            (
+    let connection = rimz::testkit::opencode::OpenCodeDb::new(&transcript, false, false);
+    connection.message(
                 "message",
                 "sess-planner",
-                r#"{"cost":0.25,"modelID":"gpt","providerID":"openai","time":{"created":1780394400000},"tokens":{"input":10,"output":2,"cache":{"read":3,"write":4}}}"#,
-            ),
-        )
-        .unwrap();
+                "assistant",
+                1_780_394_400_000,
+                r#"{"cost":0.25,"model":{"id":"gpt","providerID":"openai"},"time":{"created":1780394400000},"tokens":{"input":10,"output":2,"cache":{"read":3,"write":4}}}"#,
+        );
     drop(connection);
     let mut agent = AgentState::stub("opencode", "sess-planner", AgentStatus::Running);
     agent.team = Some("forge".to_owned());
@@ -626,24 +620,21 @@ fn live_member_cost_counts_only_the_current_lane_lifetime() {
     rimz::disk::atomic::write_temp_then_rename(&git_dir.join("rimz-worktree.json"), &marker)
         .unwrap();
     let transcript = dir.path().join("opencode.db");
-    let connection = rusqlite::Connection::open(&transcript).unwrap();
-    connection
-        .execute_batch("CREATE TABLE message (id TEXT, session_id TEXT, data TEXT)")
-        .unwrap();
+    let connection = rimz::testkit::opencode::OpenCodeDb::new(&transcript, false, false);
     for (session, cost) in [("old-planner", 10.0), ("current-planner", 0.25)] {
         let data = serde_json::json!({
             "cost": cost,
-            "modelID": "gpt",
-            "providerID": "openai",
+            "model":{"id":"gpt","providerID":"openai"},
             "time": { "created": 1780394400000_i64 },
             "tokens": { "input": 10, "output": 2, "cache": { "read": 3, "write": 4 } }
         });
-        connection
-            .execute(
-                "INSERT INTO message (id, session_id, data) VALUES (?1, ?2, ?3)",
-                (session, session, data.to_string()),
-            )
-            .unwrap();
+        connection.message(
+            session,
+            session,
+            "assistant",
+            1_780_394_400_000,
+            &data.to_string(),
+        );
     }
     drop(connection);
     let mut current = AgentState::stub("opencode", "current-planner", AgentStatus::Running);
