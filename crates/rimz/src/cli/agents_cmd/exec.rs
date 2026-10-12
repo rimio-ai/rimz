@@ -31,8 +31,6 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
 }
 
 fn run_exec_inner(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
-    let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())
-        .context("resolving the agent launch workspace")?;
     let envelope = rimz::harness::launch::decode_exec_envelope(
         &args.kind,
         args.worktree_path.as_deref(),
@@ -47,7 +45,7 @@ fn run_exec_inner(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
         .unwrap_or_else(|| std::env::current_dir().context("reading the agent pane cwd"))?;
     #[cfg(unix)]
     if let Some(path) = args.supervise.as_deref() {
-        let exit = match supervisor::run(path, &workspace) {
+        let (exit, workspace) = match supervisor::run(path) {
             Ok(exit) => exit,
             Err(error) => {
                 let _ = writeln!(crate::cli::render::err(), "rimz: {error:#}");
@@ -55,6 +53,8 @@ fn run_exec_inner(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
                 install_interrupt_signal_handler()?;
                 rimz::child_process::CleanupSignalMask::unblock()?;
                 let status = supervisor::terminate_retained();
+                let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())
+                    .context("resolving the agent launch workspace")?;
                 let request = envelope.request().clone();
                 let isolation = request
                     .isolation_default
@@ -70,7 +70,7 @@ fn run_exec_inner(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
                             .map(|record| record.keep)
                     })
                     .unwrap_or(false);
-                ParkExit {
+                let exit = ParkExit {
                     identity: exec_launch_identity(&request)?,
                     entered_worktree: request.worktree_path.as_ref().map(|_| cwd.clone()),
                     request,
@@ -85,7 +85,8 @@ fn run_exec_inner(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
                     },
                     terminal_grace: RUN_EXIT_TERMINAL_GRACE,
                     startup_deaths: None,
-                }
+                };
+                (exit, workspace)
             }
         };
         return settle_park_exit(exit, &workspace, globals);
@@ -94,6 +95,8 @@ fn run_exec_inner(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
     if args.supervise.is_some() {
         bail!("park image handoff is unavailable on this platform");
     }
+    let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())
+        .context("resolving the agent launch workspace")?;
     let mut invocation = ExecInvocationContext::new(&workspace, cwd);
     invocation.store()?;
     let run_context = run_exec_context(envelope.request(), &invocation)?;

@@ -1417,6 +1417,20 @@ fn resumed_lazy_agent_is_addressable_before_provider_registration() {
         .expect("ensure reborn session");
     let agent_bin = write_sleeping_agent_shim(&env, "codex");
     let ready = env.home_root.join("reborn-codex-ready");
+    let real_git = std::process::Command::new("sh")
+        .args(["-c", "command -v git"])
+        .output()
+        .expect("locate real git");
+    assert!(real_git.status.success());
+    let real_git = String::from_utf8(real_git.stdout).expect("git path is UTF-8");
+    crate::common::write_path_shim(
+        &agent_bin,
+        "git",
+        &format!(
+            "sleep 0.2\nexec {} \"$@\"",
+            shlex::try_quote(real_git.trim()).expect("quote git path")
+        ),
+    );
     let command = tmux_resume_command(&env, &agent_bin, &ready, "codex", agent_id);
     let (_stub_dir, stub) = sidebar_command_stub();
     // The recovering settlement takes the resumed agent out of the record.
@@ -1466,15 +1480,23 @@ fn resumed_lazy_agent_is_addressable_before_provider_registration() {
         .expect("attached pane")
         .pane_id
         .clone();
+    let pane_pid = attached.pane.as_ref().and_then(|pane| pane.pane_pid);
     assert_eq!(
-        attached
-            .pane
-            .as_ref()
-            .and_then(|pane| pane.pane_pid)
+        pane_pid
             .and_then(rimz::proc::hosted_agent_process_for_root)
             .map(|hosted| hosted.pid),
         attached.runtime_owner.as_ref().map(|owner| owner.pid),
-        "the runtime owner is the provider the pane's wrapper hosts"
+        "the runtime owner is the provider the pane's wrapper hosts: pane_pid={pane_pid:?}, owner={:?}, children={:?}",
+        attached.runtime_owner.as_ref().map(|owner| owner.pid),
+        pane_pid
+            .into_iter()
+            .flat_map(rimz::proc::children)
+            .map(|pid| (
+                pid,
+                std::fs::read(format!("/proc/{pid}/cmdline"))
+                    .map(|bytes| String::from_utf8_lossy(&bytes).replace('\0', " "))
+            ))
+            .collect::<Vec<_>>()
     );
 
     let mut panes = server

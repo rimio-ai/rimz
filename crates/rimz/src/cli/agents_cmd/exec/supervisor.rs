@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::ffi::OsString;
 use std::sync::mpsc;
 
-const PARK_VERSION: u32 = 1;
+const PARK_VERSION: u32 = 2;
 const CARD_EVIDENCE_POLL: Duration = Duration::from_millis(250);
 const DRAINER_LEASE_POLL: Duration = Duration::from_millis(200);
 
@@ -44,7 +44,7 @@ struct ParkState {
     entered_worktree: Option<PathBuf>,
     cwd: PathBuf,
     isolation: rimz::config::Isolation,
-    project_root: PathBuf,
+    workspace: rimz::ResolvedWorkspace,
 }
 
 impl ParkState {
@@ -229,7 +229,7 @@ impl ParkState {
             entered_worktree: startup.entered_worktree.map(Path::to_owned),
             cwd: startup.cwd.to_owned(),
             isolation: startup.isolation,
-            project_root: workspace.project_root.clone(),
+            workspace: workspace.clone(),
         }
     }
 
@@ -301,11 +301,12 @@ pub(super) fn park(
 }
 
 #[cfg(unix)]
-pub(super) fn run(path: &Path, workspace: &rimz::ResolvedWorkspace) -> Result<ParkExit> {
+pub(super) fn run(path: &Path) -> Result<(ParkExit, rimz::ResolvedWorkspace)> {
+    let state = ParkState::read(path)?;
+    let workspace = state.workspace.clone();
     let paths = rimz::StatePaths::for_project_root(&workspace.project_root)?;
     let path = handoff_path(path, &paths)?;
     let exit = (|| {
-        let state = ParkState::read(&path)?;
         if rimz::proc::comm_and_ppid(state.provider_pid).map(|(_, ppid)| ppid)
             != Some(std::process::id())
         {
@@ -317,7 +318,7 @@ pub(super) fn run(path: &Path, workspace: &rimz::ResolvedWorkspace) -> Result<Pa
         install_cleanup_signal_handlers()?;
         install_interrupt_signal_handler()?;
         let pid = state.provider_pid;
-        run_loop(state, ProviderChild::Retained(pid), workspace)
+        run_loop(state, ProviderChild::Retained(pid), &workspace).map(|exit| (exit, workspace))
     })();
     if let Err(error) = &exit {
         fail_handoff(&path, error);
@@ -351,9 +352,9 @@ fn handoff_path(path: &Path, paths: &rimz::StatePaths) -> Result<PathBuf> {
 pub(super) fn fail_handoff(path: &Path, error: &anyhow::Error) {
     let fail = || -> Result<()> {
         let state = ParkState::read(path)?;
-        let paths = rimz::StatePaths::for_project_root(&state.project_root)?;
+        let paths = rimz::StatePaths::for_project_root(&state.workspace.project_root)?;
         let path = handoff_path(path, &paths)?;
-        fail_run(&state.request, &state.project_root, error);
+        fail_run(&state.request, &state.workspace.project_root, error);
         let _ = std::fs::remove_file(path);
         Ok(())
     };
