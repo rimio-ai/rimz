@@ -1,32 +1,21 @@
-//! Wakeup codec for the sidebar input socket: the pure mapping between
-//! crossterm events, the wire strings the input thread sends over the
-//! `UnixDatagram`, and the [`Wakeup`] the serve loop dispatches. No
-//! `UiState` here — selection and focus handling stay in [`super`].
-
-use std::io;
-use std::os::unix::net::UnixDatagram;
+//! Wakeup codec: the pure mapping between crossterm events, input words, room event envelopes, and the [`Wakeup`] an attachment dispatches. Selection and focus handling stay in [`super`].
 
 use crate::agents::AgentStatus;
 use crate::sidebar_pane::view::BodyFilter;
-use crate::wakeup::events::{RELOAD_CONTROL_WORD, SidebarEventEnvelope};
+use crate::wakeup::events::SidebarEventEnvelope;
 use ratatui::crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEventKind};
 
 use super::NavKeymap;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) enum Wakeup {
+pub(in crate::sidebar_pane) enum Wakeup {
     Tick,
     /// A typed sidebar event posted by the store, presence CLI, reload path,
     /// or pane-frame publisher.
     Event(SidebarEventEnvelope),
-    /// The background fetch worker finished a snapshot and posted
-    /// [`SNAPSHOT_WAKEUP`]; the loop folds the result waiting on its result
-    /// channel. Keeps the fetch subprocess off the render thread.
+    /// The background fetch worker finished a snapshot; fold the waiting result.
     Snapshot,
     Resize,
-    /// `rimz reload` asks the host to compare its target image: drain for a
-    /// changed build, otherwise refresh without blanking the pane.
-    Reload,
     Press {
         code: KeyCode,
         mods: KeyModifiers,
@@ -44,7 +33,7 @@ pub(super) enum Wakeup {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum KeyAction {
+pub(in crate::sidebar_pane) enum KeyAction {
     WidthNarrower,
     WidthWider,
     Up,
@@ -88,11 +77,6 @@ pub(super) enum KeyAction {
     /// already closed.
     Other,
 }
-
-/// The control word the background fetch worker sends to the loop's wakeup
-/// socket once a snapshot is ready to fold. Riding the same socket every other
-/// wakeup uses keeps the loop blocking in exactly one place.
-pub(super) const SNAPSHOT_WAKEUP: &[u8] = b"snapshot";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum InputMode {
@@ -190,13 +174,6 @@ pub(super) fn encode_key(code: KeyCode, mods: KeyModifiers) -> Option<String> {
     Some(format!("press:{mods}:{code}"))
 }
 
-#[cfg(feature = "testkit")]
-pub(super) fn encode_click(column: u16, row: u16) -> String {
-    // A left-button press is always encoded by the ordinary mouse input path.
-    encode_mouse(MouseEventKind::Down(MouseButton::Left), column, row)
-        .expect("left-button press is always encoded")
-}
-
 pub(super) fn encode_mouse(kind: MouseEventKind, column: u16, row: u16) -> Option<String> {
     match kind {
         // Only the press fires a click — never the release. A press and its
@@ -213,7 +190,7 @@ pub(super) fn encode_mouse(kind: MouseEventKind, column: u16, row: u16) -> Optio
     }
 }
 
-fn decode_wakeup(bytes: &[u8]) -> Wakeup {
+pub(in crate::sidebar_pane) fn decode_wakeup(bytes: &[u8]) -> Wakeup {
     // External wakeups post JSON sidebar event envelopes; no control or input wire
     // word starts with `{` (asserted by `control_words_never_start_with_brace`),
     // so the leading brace is an unambiguous, allocation-free discriminator.
@@ -230,7 +207,6 @@ fn decode_wakeup(bytes: &[u8]) -> Wakeup {
     match raw {
         "snapshot" => Wakeup::Snapshot,
         "resize" => Wakeup::Resize,
-        RELOAD_CONTROL_WORD => Wakeup::Reload,
         "scroll:up" => Wakeup::Scroll { down: false },
         "scroll:down" => Wakeup::Scroll { down: true },
         _ => Wakeup::Tick,
@@ -296,27 +272,6 @@ fn decode_mouse_click(raw: &str) -> Option<Wakeup> {
             row: row.parse().ok()?,
         }),
         _ => None,
-    }
-}
-
-pub(super) fn wait_for_wakeup(socket: &UnixDatagram) -> io::Result<Wakeup> {
-    let mut buf = [0_u8; 16 * 1024];
-    match socket.recv(&mut buf) {
-        Ok(n) => Ok(decode_wakeup(&buf[..n])),
-        // Timeout (a frame boundary or the idle backstop interval), or a signal
-        // (the resize watcher's SIGWINCH handler interrupts this blocking recv):
-        // all decode to `Wakeup::Tick`, a bare wake the serve loop's frame phase
-        // turns into the spin advance, the paint decision, and the backstop poll.
-        // Never fatal.
-        Err(err)
-            if matches!(
-                err.kind(),
-                io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut | io::ErrorKind::Interrupted
-            ) =>
-        {
-            Ok(Wakeup::Tick)
-        }
-        Err(err) => Err(err),
     }
 }
 

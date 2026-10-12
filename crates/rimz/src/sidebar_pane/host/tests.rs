@@ -21,7 +21,7 @@ impl Room {
     }
 
     fn with_timing(timing: Timing) -> Self {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = tempfile::tempdir_in("/tmp").unwrap();
         let workspace_id: WorkspaceId = workspace();
         let runtime = RuntimePaths::under(workspace_id.clone(), dir.path()).unwrap();
         runtime.ensure_dirs().unwrap();
@@ -106,14 +106,18 @@ impl Room {
 
     fn has_runtime_files(&self, instance_id: &SidebarInstanceId) -> bool {
         self.runtime.sidebar_heartbeat_path(instance_id).exists()
-            || self.runtime.sidebar_socket_path(instance_id).exists()
     }
 
     fn wake(&self, instance_id: &SidebarInstanceId, word: &[u8]) {
-        std::os::unix::net::UnixDatagram::unbound()
-            .unwrap()
-            .send_to(word, self.runtime.sidebar_socket_path(instance_id))
-            .unwrap();
+        if word.first() == Some(&b'{') {
+            self.host.room_wakeup(word);
+        } else {
+            lock(&self.host.attachments)[instance_id.as_str()]
+                .close
+                .wake
+                .send(decode_wakeup(word))
+                .unwrap();
+        }
     }
 }
 
@@ -346,7 +350,10 @@ fn an_accepted_pane_is_painted_through_its_fd_and_reports_its_size() {
     );
     assert_eq!(
         heartbeat.wakeup_socket,
-        room.runtime.sidebar_socket_path(&pane.instance_id)
+        room.runtime.sidebar_host_wake_socket_path(
+            room.host.template.mux,
+            &room.host.template.session_name
+        )
     );
 
     pty.resize(40, 30);
@@ -796,9 +803,15 @@ fn listen(room: &Room) -> UnixListener {
 fn a_host_with_no_pane_for_the_grace_leaves_and_takes_its_socket() {
     let room = Room::with_timing(brisk());
     let listener = listen(&room);
+    let wake =
+        bind_wake_socket(&room.runtime.sidebar_host_wake_socket_path(
+            room.host.template.mux,
+            &room.host.template.session_name,
+        ))
+        .unwrap();
     let started = Instant::now();
 
-    room.host.serve(listener, || None);
+    room.host.serve(listener, wake, || None);
 
     assert!(started.elapsed() >= Duration::from_millis(200));
     assert!(!room.host.socket_path.exists());
@@ -808,8 +821,14 @@ fn a_host_with_no_pane_for_the_grace_leaves_and_takes_its_socket() {
 fn a_host_outlives_the_grace_while_a_pane_is_attached() {
     let room = Room::with_timing(brisk());
     let listener = listen(&room);
+    let wake =
+        bind_wake_socket(&room.runtime.sidebar_host_wake_socket_path(
+            room.host.template.mux,
+            &room.host.template.session_name,
+        ))
+        .unwrap();
     let host = room.host.clone();
-    let serving = std::thread::spawn(move || host.serve(listener, || None));
+    let serving = std::thread::spawn(move || host.serve(listener, wake, || None));
 
     let mut pty = Pty::open(40, 12);
     let instance_id = SidebarInstanceId::new();
@@ -825,12 +844,32 @@ fn a_host_outlives_the_grace_while_a_pane_is_attached() {
 
 #[test]
 fn a_recorded_build_other_than_the_hosts_reloads_every_pane_then_ends_it() {
-    let room = Room::with_timing(brisk());
+    reloads_every_pane_then_ends(false);
+}
+
+#[test]
+fn a_room_reload_word_reloads_every_pane_then_ends_it() {
+    reloads_every_pane_then_ends(true);
+}
+
+fn reloads_every_pane_then_ends(via_socket: bool) {
+    let mut room = Room::with_timing(brisk());
+    if via_socket {
+        Arc::get_mut(&mut room.host).unwrap().reload_action =
+            |_| reload::ReloadAction::Reexec(PathBuf::from("next-build"));
+    }
     let listener = listen(&room);
+    let wake =
+        bind_wake_socket(&room.runtime.sidebar_host_wake_socket_path(
+            room.host.template.mux,
+            &room.host.template.session_name,
+        ))
+        .unwrap();
     let host = room.host.clone();
     let recorded = Arc::new(Mutex::new(Some("build-a".to_owned())));
     let seen = recorded.clone();
-    let serving = std::thread::spawn(move || host.serve(listener, move || lock(&seen).clone()));
+    let serving =
+        std::thread::spawn(move || host.serve(listener, wake, move || lock(&seen).clone()));
 
     let mut ptys = [Pty::open(40, 12), Pty::open(31, 9)];
     let mut panes = Vec::new();
@@ -855,7 +894,11 @@ fn a_recorded_build_other_than_the_hosts_reloads_every_pane_then_ends_it() {
         "its own build recorded: nothing to do"
     );
 
-    *lock(&recorded) = Some("build-b".to_owned());
+    if via_socket {
+        assert_eq!(crate::wakeup::reload_all(&room.runtime).unwrap(), 2);
+    } else {
+        *lock(&recorded) = Some("build-b".to_owned());
+    }
 
     for pane in panes {
         let instance_id = pane.instance_id.clone();
@@ -863,6 +906,12 @@ fn a_recorded_build_other_than_the_hosts_reloads_every_pane_then_ends_it() {
         assert!(!room.has_runtime_files(&instance_id));
     }
     serving.join().unwrap();
+    assert!(
+        !room
+            .runtime
+            .sidebar_host_wake_socket_path(room.host.template.mux, &room.host.template.session_name)
+            .exists()
+    );
     assert!(
         !room.host.socket_path.exists(),
         "the next host binds a path this one no longer answers on"
@@ -890,9 +939,9 @@ fn a_pane_that_stopped_reading_does_not_hold_the_host_leaving() {
         config.clone(),
         &room.runtime,
         crate::diag::DiagSink::disabled(),
-    )
-    .unwrap();
-    crate::sidebar_pane::app::fixtures::fill_inbox(attachment.socket_path());
+    );
+    let close = attachment.close_handle();
+    while close.wake.try_send(Wakeup::Tick).is_ok() {}
     lock(&room.host.attachments).insert(
         config.instance_id.as_str().to_owned(),
         Live {
@@ -911,4 +960,79 @@ fn a_pane_that_stopped_reading_does_not_hold_the_host_leaving() {
         .recv_timeout(SETTLE)
         .expect("leaving returns with a pane's inbox full");
     drop(attachment);
+}
+
+#[test]
+fn room_events_are_scoped_once_before_reaching_each_attachment() {
+    use crate::wakeup::events::{SidebarEvent, SidebarEventEnvelope};
+    let room = Room::new();
+    let (first, _) = room.host.admit(&hello(&SidebarInstanceId::new())).unwrap();
+    let (second, _) = room.host.admit(&hello(&SidebarInstanceId::new())).unwrap();
+    let mut envelope = SidebarEventEnvelope::new(
+        workspace(),
+        Some("another-session".into()),
+        1,
+        SidebarEvent::PanesChanged,
+    );
+    room.host
+        .room_wakeup(&serde_json::to_vec(&envelope).unwrap());
+    for pane in [&first, &second] {
+        assert_eq!(
+            pane.inbox.try_recv(),
+            Err(std::sync::mpsc::TryRecvError::Empty)
+        );
+    }
+    envelope.session_name = None;
+    room.host
+        .room_wakeup(&serde_json::to_vec(&envelope).unwrap());
+    for pane in [&first, &second] {
+        assert_eq!(pane.inbox.try_recv(), Ok(Wakeup::Event(envelope.clone())));
+    }
+    envelope.workspace_id = WorkspaceId::from_project_root(Path::new("/another-workspace"));
+    room.host
+        .room_wakeup(&serde_json::to_vec(&envelope).unwrap());
+    for pane in [&first, &second] {
+        assert_eq!(
+            pane.inbox.try_recv(),
+            Err(std::sync::mpsc::TryRecvError::Empty)
+        );
+    }
+}
+
+#[test]
+fn a_room_click_reaches_only_the_named_attachment() {
+    let room = Room::new();
+    let id = SidebarInstanceId::new();
+    let (first, _) = room.host.admit(&hello(&id)).unwrap();
+    let (second, _) = room.host.admit(&hello(&SidebarInstanceId::new())).unwrap();
+    room.host
+        .room_wakeup(format!("click:{}:4:7", SidebarInstanceId::new()).as_bytes());
+    room.host.room_wakeup(format!("click:{id}:4:7").as_bytes());
+    assert_eq!(
+        first.inbox.try_recv(),
+        Ok(Wakeup::MouseClick { column: 4, row: 7 })
+    );
+    assert_eq!(
+        second.inbox.try_recv(),
+        Err(std::sync::mpsc::TryRecvError::Empty)
+    );
+}
+
+#[test]
+fn room_reload_words_and_envelopes_request_the_host_not_the_panes() {
+    use crate::wakeup::events::{SidebarEvent, SidebarEventEnvelope};
+    let room = Room::new();
+    let (pane, _) = room.host.admit(&hello(&SidebarInstanceId::new())).unwrap();
+    let envelope = SidebarEventEnvelope::new(workspace(), None, 1, SidebarEvent::Reload);
+    for bytes in [b"reload".to_vec(), serde_json::to_vec(&envelope).unwrap()] {
+        room.host.room_wakeup(&bytes);
+        assert!(matches!(
+            lock(&room.host.inbox).as_ref().unwrap().try_recv(),
+            Ok(Event::Reload)
+        ));
+        assert_eq!(
+            pane.inbox.try_recv(),
+            Err(std::sync::mpsc::TryRecvError::Empty)
+        );
+    }
 }

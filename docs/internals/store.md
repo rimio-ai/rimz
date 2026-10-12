@@ -177,7 +177,7 @@ The runtime tier is `${XDG_RUNTIME_DIR}/rimz/ws/<workspace-dir>/`, or `/tmp/rimz
 
 ```text
 sock/run.<short_run_id>.sock          per-run wakeup socket, bound by a supervised-run waiter
-sock/sidebar.<short_instance_id>.sock per-instance wakeup socket, bound by each live sidebar
+sock/host.<digest>.wake.sock           room event socket, bound by each sidebar host
 sock/codex-app-server.sock            the per-session Codex broker socket
 live/heartbeat/sidebar.*.json         renderer liveness
 live/read-marks/marks.json              room read marks
@@ -340,7 +340,7 @@ A rename over a path replaces a symlink there with a regular file; resolve the l
 
 ### Wakeups
 
-After a commit, the writer calls `wake_store_delta` in [`wakeup/mod.rs`](../../crates/rimz/src/wakeup/mod.rs), the shared leaf wire below this module. It walks the runtime heartbeat directory and sends a typed `store_delta` datagram to each sidebar whose heartbeat is no older than `SIDEBAR_HEARTBEAT_TTL` (5 seconds), re-statting each heartbeat just before the send to close the window where a renderer exits between read and write.
+After a commit, the writer calls `wake_store_delta` in [`wakeup/mod.rs`](../../crates/rimz/src/wakeup/mod.rs), the shared leaf wire below this module. It walks the runtime heartbeat directory and sends a typed `store_delta` datagram once per distinct `wakeup_socket` among sidebars whose heartbeats are no older than `SIDEBAR_HEARTBEAT_TTL` (5 seconds), re-statting each heartbeat before the send to close the window where a renderer exits between read and write. Each host's attachments name the same room socket.
 
 Sends are non-blocking, so a full receiver queue drops the datagram and the write moves on. Per-target failures are absorbed; only a failure to read the heartbeat directory reaches the writer, which logs it. A consumer closes any missed wakeup at its next tick (`rimz sidebar serve --tick-seconds`, default 1 second). The envelope and its event taxonomy belong to the receiving side, [state.md → Realtime events](./sidebar/state.md#realtime-events).
 

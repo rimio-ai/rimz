@@ -69,6 +69,14 @@ fn wake_sidebars_dispatches_to_fresh_heartbeats_and_skips_stale_or_wrong_protoco
     )
     .expect("write fresh hb");
 
+    let mut sibling_hb = fresh_hb.clone();
+    sibling_hb.instance_id = SidebarInstanceId::new();
+    std::fs::write(
+        h.runtime_paths.heartbeat_dir.join("sidebar.sibling.json"),
+        serde_json::to_vec(&sibling_hb).expect("serialize sibling hb"),
+    )
+    .expect("write sibling hb");
+
     let stale_sock_path = h.runtime_paths.sock_dir.join("sidebar.stale.sock");
     let stale_recv = UnixDatagram::bind(&stale_sock_path).expect("bind stale");
     // The wakeup walk runs synchronously inside the writer, so a wrongly sent
@@ -136,6 +144,15 @@ fn wake_sidebars_dispatches_to_fresh_heartbeats_and_skips_stale_or_wrong_protoco
     );
     assert_eq!(parsed["event"]["kind"], "store_delta");
     assert!(parsed["sent_at_ms"].as_u64().is_some());
+
+    fresh_recv
+        .set_nonblocking(true)
+        .expect("nonblocking receive");
+    assert_eq!(
+        fresh_recv.recv(&mut buf).unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock,
+        "one host receives only one datagram for its two panes",
+    );
 
     let mut buf2 = [0u8; 4096];
     let stale_result = stale_recv.recv_from(&mut buf2);

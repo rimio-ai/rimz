@@ -6,7 +6,7 @@ use crate::sidebar_pane::app::fixtures::{serve_config, snapshot, workspace};
 fn a_cold_plane_has_no_seed() {
     let plane = DataPlane::detached();
     let config = serve_config(&workspace());
-    let subscription = plane.subscribe(&config, PathBuf::from("missing.sock"));
+    let subscription = plane.subscribe(&config, std::sync::mpsc::sync_channel(64).0);
     assert!(subscription.seed.is_none());
 }
 
@@ -20,10 +20,7 @@ fn a_warm_plane_returns_its_fold_before_later_delivery() {
         workspace: WorkspaceSnapshot(remembered.clone()),
         frame: None,
     });
-    let dir = tempfile::tempdir().unwrap();
-    let socket_path = dir.path().join("seed.sock");
-    let _socket = std::os::unix::net::UnixDatagram::bind(&socket_path).unwrap();
-    let subscription = plane.subscribe(&config, socket_path);
+    let subscription = plane.subscribe(&config, std::sync::mpsc::sync_channel(64).0);
     assert_eq!(
         subscription
             .seed

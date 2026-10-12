@@ -901,51 +901,32 @@ fn external_focus_change_arms_group_reveal_once() {
 fn reload_key_preserves_control_reload_flow_without_freezing_order() {
     use ratatui::crossterm::event::{KeyCode, KeyModifiers};
 
-    for wakeup in [
-        Wakeup::Reload,
-        Wakeup::Press {
-            code: KeyCode::Char('r'),
-            mods: KeyModifiers::NONE,
-        },
-        Wakeup::Event(SidebarEventEnvelope::new(
-            workspace(),
-            Some("rimz-test".to_owned()),
-            crate::utils::time::unix_now_ms(),
-            SidebarEvent::Reload,
-        )),
-    ] {
-        let mut rig = Rig::new();
-        let (requests, received) = std::sync::mpsc::channel();
-        rig.state.request_reload = Box::new(move || {
-            requests.send(()).unwrap();
-        });
-        rig.fetch.defer_until(
-            FetchRequest::hard_refresh(),
-            Instant::now() + Duration::from_secs(60),
-        );
-        let flow = rig
-            .state
-            .on_wakeup(&mut rig.fetch, &mut rig.terminal, wakeup)
-            .unwrap();
-        assert_eq!(
-            flow,
-            LoopFlow::Continue,
-            "the pane keeps painting until the host decides"
-        );
-        assert_eq!(
-            received.try_iter().count(),
-            1,
-            "each trigger posts exactly one host request"
-        );
-        assert!(
-            rig.fetch.next_deadline().is_none(),
-            "reload clears deferred work"
-        );
-        assert!(
-            rig.state.ui.order_hold.is_none(),
-            "reload must not freeze the refreshed order"
-        );
-    }
+    let wakeup = Wakeup::Press {
+        code: KeyCode::Char('r'),
+        mods: KeyModifiers::NONE,
+    };
+    let mut rig = Rig::new();
+    let (requests, received) = std::sync::mpsc::channel();
+    rig.state.request_reload = Box::new(move || {
+        requests.send(()).unwrap();
+    });
+    rig.fetch.defer_until(
+        FetchRequest::hard_refresh(),
+        Instant::now() + Duration::from_secs(60),
+    );
+    rig.state
+        .on_wakeup(&mut rig.fetch, &mut rig.terminal, wakeup)
+        .unwrap();
+    assert_eq!(received.try_recv(), Ok(()));
+    assert!(received.try_recv().is_err());
+    assert!(
+        rig.fetch.next_deadline().is_some(),
+        "the host decides without clearing attachment-local deferred work"
+    );
+    assert!(
+        rig.state.ui.order_hold.is_none(),
+        "reload must not freeze the refreshed order"
+    );
 }
 
 #[test]

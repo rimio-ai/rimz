@@ -91,7 +91,7 @@ Start at `enrich.rs` to learn what a snapshot is made of, at `app/fetch.rs` to l
 
 ## The room data plane
 
-Every tab's sidebar pane runs one `rimz sidebar serve` supervisor, and one `rimz sidebar host` per mux session paints all of them. Each pane still has its own heartbeat, its own wakeup socket, and its own frame loop, and none waits on another to paint; what the panes of a session share is one process and one data plane.
+Every tab's sidebar pane runs one `rimz sidebar serve` supervisor, and one `rimz sidebar host` per mux session paints all of them. Each pane has its own heartbeat, bounded wake channel, and frame loop, and none waits on another to paint; the panes of a session share one process, one data plane, and the host's room socket for external events.
 
 ### The room host and its attachments
 
@@ -104,8 +104,8 @@ The supervisor forwards raw key presses. The host resolves them against each att
 | Owned by | What |
 | --- | --- |
 | Supervisor, one per pane | Terminal modes, the input and resize reader, the attach connection, self-close confirmation against the mux, the pane-liveness probe, its own re-exec onto a new build. |
-| Attachment, one per pane, in the host | The heartbeat (`instance_id` the supervisor's, `pane_id` the pane's, `build` the host's, `size` read from the pane fd), the wakeup socket at the pane's usual path, the frame loop, renderer-local state. |
-| Host, one per session | The data plane ([`app/plane.rs`](../../../crates/rimz/src/sidebar_pane/app/plane.rs)): one fetch worker, one cache refresher, one tmux watch, one transcript watch, one observer writer. |
+| Attachment, one per pane, in the host | The heartbeat (`instance_id` the supervisor's, `pane_id` the pane's, `build` the host's, `size` read from the pane fd), the bounded wake channel, the frame loop, renderer-local state. |
+| Host, one per session | The room event socket and the data plane ([`app/plane.rs`](../../../crates/rimz/src/sidebar_pane/app/plane.rs)): one fetch worker, one cache refresher, one tmux watch, one transcript watch, one observer writer. |
 
 An attachment never touches the host's own terminal state, because the host has none. Geometry comes from `tcgetwinsize` on the pane fd and is read again on every `resize` word. A pane the mux has not laid out yet reports `0x0`: its heartbeat carries no `size` and nothing is drawn until the first resize sizes it. A write error on the fd, which is how a closed pane first shows, closes the attachment exactly as the supervisor's end of stream does. A panic in one attachment closes that attachment alone.
 
@@ -149,7 +149,7 @@ Each failed round emits the identity-rate-limited `sidebar_host_unavailable` rec
 
 The supervisor that finds no host takes the session's spawn lock and starts one from the room's verified recorded build, using its own executable when no verified target is available, with the host's stderr appended to `log/sidebar-host.<session key>.log` under the room's state directory so a host that fails at startup leaves its error there. The host calls `setsid`, retains the session environment but removes pane-scoped variables so nothing attributes it to a pane, and holds the session's host lock for life: a second host for the same session waits out its predecessor and exits if that one stays.
 
-The host leaves in three ways. With no connection for ten seconds it exits. When the workspace record names a verified build other than its own, or a host-coalesced batch of attachment reload requests finds a byte-different target, it removes its socket, sends `reload` on every stream, and exits once the attachments have let go; supervisors then find no host and start the recorded build's. The room teardown sweep kills it like any other process carrying the session's tokens. A supervisor re-execs itself onto the recorded build once its attachment has run the stable window under a host of that build. Each pane's reload trigger clears its deferred fetch work and posts to the host inbox. The host drains all queued requests into one comparison per turn; an identical or missing target forces one hard refresh without blanking panes.
+The host leaves in three ways. With no connection for ten seconds it exits. When the workspace record names a verified build other than its own, or a host-coalesced batch of reload requests finds a byte-different target, it removes its sockets, sends `reload` on every stream, and exits once the attachments have let go; supervisors then find no host and start the recorded build's. The room teardown sweep kills it like any other process carrying the session's tokens. A supervisor re-execs itself onto the recorded build once its attachment has run the stable window under a host of that build. Room reload words and envelopes post directly to the host inbox; a pane's `r` action posts to the same inbox after UI-mode resolution. The host drains all queued requests into one comparison per turn; an identical or missing target forces one hard refresh without blanking panes. Attachment-local deferred fetches are not cleared first; a later deferred fetch can cost one extra fold.
 
 ### Shared lanes
 
@@ -167,9 +167,9 @@ Host replacement is supervised, not elected. Account-global spending retains its
 
 ## One fetch cycle
 
-An attachment's loop reads no data itself. It blocks on its wakeup socket, hands work to the process's fetch worker, and folds the result when the worker nudges it back. Requests from several attachments that are waiting together merge into one cycle. Everything below runs on the worker.
+An attachment's loop reads no data itself. It blocks in `recv_timeout` on its bounded wake channel, using the timeout as its frame clock, hands work to the process's fetch worker, and folds the result when the worker nudges it back. Requests from several attachments that are waiting together merge into one cycle. Everything below runs on the worker.
 
-Each subscriber retains at most one pending snapshot, with its shared context, and one non-snapshot final outcome. A newer snapshot replaces the unread one, except that an interim cannot displace a pending final snapshot. Failed outcomes do not erase that snapshot; the loop applies the snapshot before the outcome. Request completion is retained independently. Publication never waits for tty output, so a stalled pane cannot accumulate folds or block other panes. Wake datagrams remain hints: frame maintenance consumes pending results even if a wake was lost.
+Each subscriber retains at most one pending snapshot, with its shared context, and one non-snapshot final outcome. A newer snapshot replaces the unread one, except that an interim cannot displace a pending final snapshot. Failed outcomes do not erase that snapshot; the loop applies the snapshot before the outcome. Request completion is retained independently. Publication never waits for tty output, so a stalled pane cannot accumulate folds or block other panes. Channel wakes remain hints: a full inbox drops a wake, and frame maintenance consumes pending results even if a wake was lost.
 
 A request carries a mode, an optional pane-cache floor, and two flags:
 
@@ -329,7 +329,7 @@ Unless marked, these live in the workspace runtime directory.
 | File | Purpose |
 | --- | --- |
 | `live/heartbeat/sidebar.<instance>.json` | Liveness for launch gating and wakeup fanout, named by the full instance id, plus the pane size that `rimz sidebar frame` draws at. |
-| `sock/sidebar.<short-id>.sock` | The renderer's wakeup datagram socket, named by the short instance id to fit the AF_UNIX path limit. |
+| `sock/host.<digest>.wake.sock` | The host's room datagram socket, named by a digest of mux and session to fit the AF_UNIX path limit; every attachment's heartbeat names this same address. |
 | `lanes/focus-anchor.json` | The durable jump intent, viewport offset, and frozen order every renderer reads on fusion ([focus intent](#focus-intent)). |
 | `lanes/unread.json`, `live/read-marks/marks.json` | Open unread episodes and the room's locked, max-updated read marks. |
 | `lanes/loop-fire.json` | The host's loop-task arm and fire stamps for this room. |
@@ -350,7 +350,7 @@ Heartbeats are bounded by TTL while the session lives and by purge at rebirth: a
 
 Wakeup datagrams carry `SidebarEventEnvelope` ([`wakeup/events.rs`](../../../crates/rimz/src/wakeup/events.rs)): a schema version, the workspace id, an optional session scope, a sender timestamp, and the typed event.
 
-`session_name` is the scope. `Some` targets the one mux session whose pane ids the event names; `None` reaches every renderer of the workspace, which is how store deltas, reloads, and pane-frame publications travel. The receive path drops an event for another workspace or session before it reaches the overlay store.
+`session_name` is the scope. `Some` targets the one mux session whose pane ids the event names; `None` reaches every renderer of the workspace, which is how store deltas, reloads, and pane-frame publications travel. The host drops an event for another workspace or session once, before fanning it out to attachment channels. Reload words and envelopes instead reach the host inbox directly; other events keep their per-attachment effects, including the idempotent overlay-store append.
 
 Events divide by what the receiver does with them:
 

@@ -1,14 +1,11 @@
-//! One sidebar pane's renderer: its wakeup socket, heartbeat, loop state, and frame loop over the pane's own output.
+//! One sidebar pane's renderer: its wake channel, heartbeat, loop state, and frame loop over the pane's own output.
 //!
-//! The room host runs one attachment per pane it was handed. Nothing here reads the process terminal: geometry comes from the [`PaneBackend`], input and resize words from the supervisor through the wakeup socket.
+//! The room host runs one attachment per pane it was handed. Nothing here reads the process terminal: geometry comes from the [`PaneBackend`], input and resize words from the supervisor through the host.
 
 use std::io::Write;
-use std::os::unix::net::UnixDatagram;
-#[cfg(test)]
-use std::path::Path;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
 use std::time::Instant;
 
 use ratatui::Terminal;
@@ -22,10 +19,10 @@ use crate::{MuxName, RuntimePaths};
 
 use super::backend::PaneBackend;
 use super::fetch::{FetchDispatcher, FetchRequest};
-use super::input::wait_for_wakeup;
-use super::loop_state::{BaselineReporter, LoopFlow, LoopState};
+use super::input::Wakeup;
+use super::loop_state::{BaselineReporter, LoopState};
 use super::plane::DataPlane;
-use super::socket::{bind_socket, write_heartbeat};
+use super::socket::write_heartbeat;
 use super::{Result, RuntimeFileGuard, ServeConfig, fetch_deadline_timeout};
 
 /// Why an attachment's frame loop ended.
@@ -43,20 +40,14 @@ pub(in crate::sidebar_pane) enum AttachmentExit {
 #[derive(Clone)]
 pub(in crate::sidebar_pane) struct CloseHandle {
     requested: Arc<AtomicBool>,
-    socket_path: PathBuf,
+    pub(in crate::sidebar_pane) wake: SyncSender<Wakeup>,
 }
 
 impl CloseHandle {
     pub(in crate::sidebar_pane) fn close(&self) {
         self.requested.store(true, Ordering::SeqCst);
-        // A bare wake: the loop reads the request on its next turn. Best
-        // effort, since a loop that already ended has no socket, and never
-        // waiting, since a full inbox already holds a wake.
-        if let Ok(waker) = UnixDatagram::unbound()
-            && waker.set_nonblocking(true).is_ok()
-        {
-            let _ = waker.send_to(b"", &self.socket_path);
-        }
+        // A full inbox already holds a wake; closing must never wait for a pane.
+        let _ = self.wake.try_send(Wakeup::Tick);
     }
 }
 
@@ -64,58 +55,46 @@ pub(in crate::sidebar_pane) struct Attachment {
     config: ServeConfig,
     runtime: RuntimePaths,
     diag: crate::diag::DiagSink,
-    socket: UnixDatagram,
-    socket_path: PathBuf,
+    wake: SyncSender<Wakeup>,
+    pub(in crate::sidebar_pane) inbox: Receiver<Wakeup>,
     close_requested: Arc<AtomicBool>,
     // Dropped with the attachment, the heartbeat too: a lingering heartbeat
     // stays mtime-fresh for `SIDEBAR_HEARTBEAT_TTL`, during which `rimz`'s
     // freshness gate would skip relaunch and let a plain `attach` rebirth the
     // session with no sidebar.
-    _socket_cleanup: RuntimeFileGuard,
     _heartbeat_cleanup: RuntimeFileGuard,
 }
 
 impl Attachment {
-    /// Bind the pane's wakeup socket, so input and resize words queue from
-    /// here on, before the caller wires whatever sends them.
+    /// Open the pane's bounded inbox before the host wires its senders.
     pub(in crate::sidebar_pane) fn open(
         config: ServeConfig,
         runtime: &RuntimePaths,
         diag: crate::diag::DiagSink,
-    ) -> Result<Self> {
-        let socket_path = runtime.sidebar_socket_path(&config.instance_id);
-        let socket = bind_socket(&socket_path)?;
-        Ok(Self {
-            _socket_cleanup: RuntimeFileGuard {
-                path: socket_path.clone(),
-            },
+    ) -> Self {
+        let (wake, inbox) = sync_channel(64);
+        Self {
             _heartbeat_cleanup: RuntimeFileGuard {
                 path: runtime.sidebar_heartbeat_path(&config.instance_id),
             },
             config,
             runtime: runtime.clone(),
             diag,
-            socket,
-            socket_path,
+            wake,
+            inbox,
             close_requested: Arc::new(AtomicBool::new(false)),
-        })
-    }
-
-    #[cfg(test)]
-    pub(in crate::sidebar_pane) fn socket_path(&self) -> &Path {
-        &self.socket_path
+        }
     }
 
     pub(in crate::sidebar_pane) fn close_handle(&self) -> CloseHandle {
         CloseHandle {
             requested: self.close_requested.clone(),
-            socket_path: self.socket_path.clone(),
+            wake: self.wake.clone(),
         }
     }
 
     /// Paint the pane until it closes. An error is the pane's output failing,
-    /// which is how a closed pane first shows; either way the wakeup socket
-    /// and heartbeat are gone when this returns.
+    /// which is how a closed pane first shows; either way its heartbeat is gone when this returns.
     pub(in crate::sidebar_pane) fn run(
         self,
         plane: &DataPlane,
@@ -128,10 +107,9 @@ impl Attachment {
             config,
             runtime,
             diag,
-            socket,
-            socket_path,
+            wake,
+            inbox,
             close_requested,
-            _socket_cleanup,
             _heartbeat_cleanup,
         } = self;
         let pet_render_caps = plane
@@ -159,7 +137,9 @@ impl Attachment {
         terminal.swap_buffers();
 
         let initial_width = terminal.size().map(|s| s.width).ok();
-        let subscription = plane.subscribe(&config, socket_path.clone());
+        let subscription = plane.subscribe(&config, wake);
+        let host_wake_path =
+            runtime.sidebar_host_wake_socket_path(config.mux, &config.session_name);
         let pixel_lease = match PixelLease::acquire(&runtime) {
             Ok(Some(lease)) => Some(lease),
             Ok(None) => {
@@ -175,7 +155,7 @@ impl Attachment {
             config.clone(),
             baseline_pane,
             runtime.clone(),
-            socket_path.clone(),
+            host_wake_path.clone(),
             diag.clone(),
             subscription.results,
             initial_width,
@@ -204,7 +184,7 @@ impl Attachment {
         }
         // The dispatcher coalesces requests so a store-delta storm or a slow
         // produce can never queue more than one extra run. The fetch worker
-        // posts `SNAPSHOT_WAKEUP` when a result is ready; the frame/tick path
+        // posts `Wakeup::Snapshot` when a result is ready; the frame/tick path
         // also drains the result channel so that wakeup stays a latency hint.
         let mut fetch = FetchDispatcher::for_plane(subscription.requests, subscription.covered);
 
@@ -213,7 +193,7 @@ impl Attachment {
         if let Err(err) = write_heartbeat(
             &config,
             &runtime,
-            &socket_path,
+            &host_wake_path,
             terminal.backend().pane_size(),
         ) {
             warn!(
@@ -252,11 +232,8 @@ impl Attachment {
                 state.report_baseline();
                 let (active, mut timeout) = state.frame_timing();
                 timeout = fetch_deadline_timeout(timeout, fetch.next_deadline(), Instant::now());
-                socket.set_read_timeout(Some(timeout))?;
-                match state.on_wakeup(&mut fetch, &mut terminal, wait_for_wakeup(&socket)?)? {
-                    LoopFlow::Continue => {}
-                    LoopFlow::Repoll => continue,
-                }
+                let wakeup = inbox.recv_timeout(timeout).unwrap_or(Wakeup::Tick);
+                state.on_wakeup(&mut fetch, &mut terminal, wakeup)?;
                 // A pane the mux had not laid out at attach gets its title
                 // with its first size.
                 if !titled {

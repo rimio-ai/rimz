@@ -1,4 +1,4 @@
-//! Renderer wakeup socket binding, liveness heartbeat refresh, and terminal event forwarding onto the serve loop's wakeup path.
+//! Liveness heartbeat refresh and the supervisor's terminal event forwarding.
 
 use std::io;
 use std::os::unix::net::UnixDatagram;
@@ -40,16 +40,6 @@ pub(super) fn write_heartbeat(
         size,
     )
     .map_err(|err| SidebarAppErr::Heartbeat(err.to_string()))
-}
-
-pub(super) fn bind_socket(path: &Path) -> io::Result<UnixDatagram> {
-    crate::sock::validate_socket_path(path).map_err(io::Error::other)?;
-    match std::fs::remove_file(path) {
-        Ok(()) => {}
-        Err(err) if err.kind() == io::ErrorKind::NotFound => {}
-        Err(err) => return Err(err),
-    }
-    UnixDatagram::bind(path)
 }
 
 /// How often a stoppable forwarder looks for its stop request. Events still

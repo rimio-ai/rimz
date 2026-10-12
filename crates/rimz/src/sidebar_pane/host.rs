@@ -1,13 +1,13 @@
 //! The room host: one detached process that paints every sidebar pane of a mux session.
 //!
-//! Each pane's supervisor keeps the pane's tty, holding its modes and reading its input, and hands the host only the pane's output fd over the attach wire (`attach.rs`). The host runs one attachment per pane on its own thread over one shared data plane, so a room's tabs cost one fold between them. It holds no terminal: geometry comes from each fd, and input arrives on each attachment's wakeup socket.
+//! Each pane's supervisor keeps the pane's tty, holding its modes and reading its input, and hands the host only the pane's output fd over the attach wire (`attach.rs`). The host runs one attachment per pane on its own thread over one shared data plane, so a room's tabs cost one fold between them. It holds no terminal: geometry comes from each fd. One room socket receives external events; the host filters their scope and routes them to bounded attachment channels.
 //!
 //! The host lives as long as panes are attached. It leaves when none has been for a grace period, and when the room records a build other than its own, after telling every supervisor to attach again.
 
 use std::collections::BTreeMap;
 use std::io;
 use std::os::unix::fs::PermissionsExt;
-use std::os::unix::net::{UnixListener, UnixStream};
+use std::os::unix::net::{UnixDatagram, UnixListener, UnixStream};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -22,12 +22,14 @@ mod reload;
 use crate::RuntimePaths;
 use crate::sidebar_pane::app::{
     Attachment, AttachmentExit, CloseHandle, DataPlane, PaneBackend, ServeConfig, SidebarAppErr,
+    Wakeup, decode_wakeup,
 };
 use crate::sidebar_pane::attach::{
     self, Control, ControlLine, Hello, PROTOCOL, REJECT_BUILD, REJECT_CAPACITY, REJECT_PROTOCOL,
     Reply,
 };
 use crate::sidebar_pane::supervise::{RecordChange, RecordWatch};
+use crate::wakeup::events::{RELOAD_CONTROL_WORD, SidebarEvent};
 
 /// How long a host with no pane attached stays up for the next one.
 const UNATTACHED_GRACE: Duration = Duration::from_secs(10);
@@ -68,6 +70,9 @@ pub fn run(template: ServeConfig) -> Result<(), SidebarAppErr> {
     };
     let socket_path = runtime.sidebar_host_socket_path(template.mux, &template.session_name);
     let listener = bind_listener(&socket_path)?;
+    let wake = bind_wake_socket(
+        &runtime.sidebar_host_wake_socket_path(template.mux, &template.session_name),
+    )?;
     let diag = crate::diag::DiagSink::for_workspace(
         template.workspace_id.clone(),
         template.session_name.clone(),
@@ -91,7 +96,7 @@ pub fn run(template: ServeConfig) -> Result<(), SidebarAppErr> {
         crate::build_id::current().map(str::to_owned),
         Timing::default(),
     );
-    host.serve(listener, move || {
+    host.serve(listener, wake, move || {
         match watch.poll_if_due(Instant::now()) {
             Some(RecordChange::Verified(target)) => recorded = Some(target.build),
             Some(RecordChange::Unavailable) => recorded = None,
@@ -110,6 +115,15 @@ fn bind_listener(path: &Path) -> io::Result<UnixListener> {
     let listener = UnixListener::bind(path)?;
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
     Ok(listener)
+}
+
+pub(super) fn bind_wake_socket(path: &Path) -> io::Result<UnixDatagram> {
+    crate::sock::validate_socket_path(path).map_err(io::Error::other)?;
+    remove_socket(path)?;
+    let socket = UnixDatagram::bind(path)?;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    socket.set_read_timeout(Some(POLL_INTERVAL))?;
+    Ok(socket)
 }
 
 fn remove_socket(path: &Path) -> io::Result<()> {
@@ -159,6 +173,7 @@ struct Host {
     plane: DataPlane,
     socket_path: PathBuf,
     build: Option<String>,
+    reload_action: fn(&crate::WorkspaceId) -> reload::ReloadAction,
     timing: Timing,
     attachments: Mutex<BTreeMap<String, Live>>,
     /// Connections being served, from accept to the end of their attachment.
@@ -189,6 +204,7 @@ impl Host {
             plane,
             socket_path,
             build,
+            reload_action: reload::reload_action,
             timing,
             attachments: Mutex::default(),
             connections: AtomicUsize::new(0),
@@ -205,11 +221,32 @@ impl Host {
     fn serve(
         self: &Arc<Self>,
         listener: UnixListener,
+        wake: UnixDatagram,
         mut recorded_build: impl FnMut() -> Option<String>,
     ) {
         let Some(inbox) = lock(&self.inbox).take() else {
             return;
         };
+        let receiver = self.clone();
+        std::thread::spawn(move || {
+            let mut bytes = [0; 16 * 1024];
+            while !receiver.draining.load(Ordering::SeqCst) {
+                match wake.recv(&mut bytes) {
+                    Ok(len) => receiver.room_wakeup(&bytes[..len]),
+                    Err(err)
+                        if matches!(
+                            err.kind(),
+                            io::ErrorKind::WouldBlock
+                                | io::ErrorKind::TimedOut
+                                | io::ErrorKind::Interrupted
+                        ) => {}
+                    Err(err) => {
+                        debug!(error = %err, "sidebar host room receive failed");
+                        break;
+                    }
+                }
+            }
+        });
         let acceptor = self.clone();
         std::thread::spawn(move || {
             for stream in listener.incoming() {
@@ -250,7 +287,7 @@ impl Host {
                 }
             }
             if requested_reload {
-                match reload::reload_action(&self.template.workspace_id) {
+                match (self.reload_action)(&self.template.workspace_id) {
                     reload::ReloadAction::Reexec(target) => {
                         debug!(session = %self.template.session_name, target = %target.display(),
                             "reload: on-disk binary differs; asking supervisor to re-exec");
@@ -295,6 +332,13 @@ impl Host {
         }
         if let Err(err) = remove_socket(&self.socket_path) {
             warn!(error = %err, "sidebar host socket removal failed");
+        }
+        if let Err(err) = remove_socket(
+            &self
+                .runtime
+                .sidebar_host_wake_socket_path(self.template.mux, &self.template.session_name),
+        ) {
+            warn!(error = %err, "sidebar host room socket removal failed");
         }
         for live in attachments.values() {
             live.leaving.store(true, Ordering::SeqCst);
@@ -448,8 +492,7 @@ impl Host {
                         self.config_for(hello),
                         &self.runtime,
                         self.diag.for_renderer(hello.instance_id.clone()),
-                    )
-                    .map_err(|err| format!("pane attachment failed: {err}"))?;
+                    );
                     let live = Live {
                         close: attachment.close_handle(),
                         leaving: Arc::new(AtomicBool::new(false)),
@@ -466,6 +509,50 @@ impl Host {
             }
             drop(attachments);
             std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    fn room_wakeup(&self, bytes: &[u8]) {
+        if bytes == RELOAD_CONTROL_WORD.as_bytes() {
+            let _ = self.events.send(Event::Reload);
+            return;
+        }
+        if bytes.first() == Some(&b'{') {
+            let Wakeup::Event(envelope) = decode_wakeup(bytes) else {
+                return;
+            };
+            if envelope.workspace_id != self.template.workspace_id
+                || envelope
+                    .session_name
+                    .as_deref()
+                    .is_some_and(|session| session != self.template.session_name)
+            {
+                return;
+            }
+            if envelope.event == SidebarEvent::Reload {
+                let _ = self.events.send(Event::Reload);
+                return;
+            }
+            for live in lock(&self.attachments).values() {
+                let _ = live.close.wake.try_send(Wakeup::Event(envelope.clone()));
+            }
+            return;
+        }
+        let Some((instance, position)) = std::str::from_utf8(bytes)
+            .ok()
+            .and_then(|word| word.strip_prefix("click:"))
+            .and_then(|word| word.split_once(':'))
+        else {
+            return;
+        };
+        let Some((column, row)) = position
+            .split_once(':')
+            .and_then(|(column, row)| Some((column.parse().ok()?, row.parse().ok()?)))
+        else {
+            return;
+        };
+        if let Some(live) = lock(&self.attachments).get(instance) {
+            let _ = live.close.wake.try_send(Wakeup::MouseClick { column, row });
         }
     }
 

@@ -1178,11 +1178,28 @@ fn ensure_temp_unit_creates_the_unit_and_room_shared_dir_private() {
 
 #[test]
 fn sidebar_host_paths_are_per_session_and_fit_the_socket_budget() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir_in("/tmp").unwrap();
     let id = WorkspaceId::from_project_root(Path::new("/src/host-paths"));
     let runtime = RuntimePaths::under(id.clone(), dir.path()).unwrap();
     let session = "a session name far longer than any socket file name may be";
     let socket = runtime.sidebar_host_socket_path(MuxName::Tmux, session);
+    let wake = runtime.sidebar_host_wake_socket_path(MuxName::Tmux, session);
+    assert_eq!(
+        wake,
+        runtime.sock_dir.join(format!(
+            "host.{}.wake.sock",
+            sidebar_host_key(MuxName::Tmux, session)
+        ))
+    );
+    assert_ne!(
+        wake,
+        runtime.sidebar_host_wake_socket_path(MuxName::Zellij, session)
+    );
+    assert_ne!(
+        wake,
+        runtime.sidebar_host_wake_socket_path(MuxName::Tmux, "another session")
+    );
+    assert!(crate::sock::validate_socket_path(&wake).is_ok());
 
     assert_eq!(socket.parent(), Some(runtime.sock_dir.as_path()));
     let instance = runtime.sidebar_socket_path(&SidebarInstanceId::new());

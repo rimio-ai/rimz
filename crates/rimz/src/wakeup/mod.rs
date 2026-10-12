@@ -6,15 +6,16 @@
 //! imports upward; the inline tests borrow `agents` and `store::event`
 //! vocabulary.
 //!
-//! Each renderer publishes a heartbeat naming its datagram socket. Senders
+//! Each renderer publishes a heartbeat naming its host's room socket. Senders
 //! walk current-protocol heartbeats, enforce content and mtime freshness, and
-//! post nonblocking events. Per-target failures are absorbed; only heartbeat
+//! post nonblocking events once per distinct socket. Per-target failures are absorbed; only heartbeat
 //! directory reads and envelope serialization propagate. Wakeups cut latency
 //! but never carry truth.
 
 pub mod events;
 pub mod heartbeat;
 
+use std::collections::HashSet;
 use std::fs;
 use std::io;
 use std::os::unix::net::UnixDatagram;
@@ -69,7 +70,8 @@ pub fn reload_all(rt: &RuntimePaths) -> std::result::Result<usize, WakeupErr> {
         RELOAD_CONTROL_WORD.as_bytes(),
         sidebars
             .iter()
-            .map(|heartbeat| heartbeat.wakeup_socket.as_path()),
+            .map(|heartbeat| heartbeat.wakeup_socket.as_path())
+            .collect::<HashSet<_>>(),
     );
     Ok(signaled)
 }
@@ -97,7 +99,8 @@ pub fn broadcast(
         &payload,
         sidebars
             .iter()
-            .map(|heartbeat| heartbeat.wakeup_socket.as_path()),
+            .map(|heartbeat| heartbeat.wakeup_socket.as_path())
+            .collect::<HashSet<_>>(),
     );
     Ok(signaled)
 }

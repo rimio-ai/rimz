@@ -3,9 +3,7 @@
 //! refreshes run separately so render and input never block on production.
 
 use std::collections::{BTreeMap, HashMap};
-use std::os::unix::net::UnixDatagram;
-use std::path::PathBuf;
-use std::sync::mpsc::Sender;
+use std::sync::mpsc::{Sender, SyncSender};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
 
@@ -25,7 +23,7 @@ use crate::wakeup::events::{SidebarEvent, SidebarEventEnvelope};
 use crate::{RuntimePaths, StatePaths};
 
 use super::ServeConfig;
-use super::input::SNAPSHOT_WAKEUP;
+use super::input::Wakeup;
 use super::timing::tick_for;
 
 /// Run one produce behind a panic guard. An unwind keeps the renderer alive on its last good frame and degrades health; `panic = "abort"` falls back to host death and supervisor recovery.
@@ -657,7 +655,7 @@ fn deliver_notifications(
             crate::sidebar::notify::spawn_notify_handlers(prefs, &notification);
         }
         diag.trace_notify(notification_emitted_trace(&notification, &delivery.panes));
-        if let Err(err) = sink.notify(
+        sink.notify(
             workspace_id,
             session_name,
             SidebarEvent::Notify {
@@ -667,9 +665,7 @@ fn deliver_notifications(
                 recheck_unread: true,
                 notification_kind: Some(delivery.notification_kind),
             },
-        ) {
-            tracing::debug!(error = %err, "notification event serialization failed");
-        }
+        );
     }
 }
 
@@ -962,7 +958,7 @@ pub(super) struct Subscriber {
     pub(super) tick_seconds: u64,
     pub(super) refresh_override: Option<u16>,
     pub(super) tx: ResultSender,
-    pub(super) socket_path: PathBuf,
+    pub(super) wake: SyncSender<Wakeup>,
 }
 
 /// What the eldest renderer decides for every choice the worker makes once
@@ -989,7 +985,6 @@ impl Stand {
 pub(super) type Subscribers = Arc<Mutex<BTreeMap<String, Subscriber>>>;
 
 struct ResultSink {
-    waker: Option<UnixDatagram>,
     subscribers: Subscribers,
     host_data: Arc<Mutex<HostData>>,
     /// The renderers this cycle serves, taken once as it starts.
@@ -1008,14 +1003,14 @@ struct ResultSink {
 impl ResultSink {
     /// A sink feeding one renderer that folds as the worker's configured pane.
     #[cfg(test)]
-    fn new(tx: ResultSender, socket_path: PathBuf, refresh_override: Option<u16>) -> Self {
+    fn new(tx: ResultSender, wake: SyncSender<Wakeup>, refresh_override: Option<u16>) -> Self {
         let subscriber = Subscriber {
             instance_id: SidebarInstanceId::new(),
             own_pane: None,
             tick_seconds: 1,
             refresh_override,
             tx,
-            socket_path,
+            wake,
         };
         Self::shared(
             Arc::new(Mutex::new(BTreeMap::from([(
@@ -1029,7 +1024,6 @@ impl ResultSink {
 
     fn shared(subscribers: Subscribers, covered: Covered, host_data: Arc<Mutex<HostData>>) -> Self {
         let mut sink = Self {
-            waker: nonblocking_waker(),
             subscribers,
             host_data,
             cycle: Vec::new(),
@@ -1111,24 +1105,16 @@ impl ResultSink {
         }
     }
 
-    fn notify(
-        &self,
-        workspace_id: &crate::WorkspaceId,
-        session_name: &str,
-        event: SidebarEvent,
-    ) -> serde_json::Result<()> {
-        let bytes = serde_json::to_vec(&SidebarEventEnvelope::new(
+    fn notify(&self, workspace_id: &crate::WorkspaceId, session_name: &str, event: SidebarEvent) {
+        let envelope = SidebarEventEnvelope::new(
             workspace_id.clone(),
             Some(session_name.to_owned()),
             crate::utils::time::unix_now_ms(),
             event,
-        ))?;
-        if let Some(waker) = &self.waker {
-            for subscriber in self.subscribers() {
-                let _ = waker.send_to(&bytes, &subscriber.socket_path);
-            }
+        );
+        for subscriber in self.subscribers() {
+            let _ = subscriber.wake.try_send(Wakeup::Event(envelope.clone()));
         }
-        Ok(())
     }
 
     fn send(&self, subscriber: &Subscriber, mut update: FetchUpdate) {
@@ -1145,10 +1131,8 @@ impl ResultSink {
         }
         // A renderer that already closed removes itself from the set. A full
         // inbox already holds a wake, so a dropped one loses nothing.
-        if subscriber.tx.send(update).is_ok()
-            && let Some(waker) = &self.waker
-        {
-            let _ = waker.send_to(SNAPSHOT_WAKEUP, &subscriber.socket_path);
+        if subscriber.tx.send(update).is_ok() {
+            let _ = subscriber.wake.try_send(Wakeup::Snapshot);
         }
     }
 }
@@ -1220,13 +1204,6 @@ pub(super) fn spawn_fetch_worker(
             ResultSink::shared(subscribers, covered, host_data),
         );
     })
-}
-
-/// A sender that drops a wake rather than wait on a renderer's full inbox.
-fn nonblocking_waker() -> Option<UnixDatagram> {
-    let waker = UnixDatagram::unbound().ok()?;
-    waker.set_nonblocking(true).ok()?;
-    Some(waker)
 }
 
 /// A cycle: when it started and the merged request it runs.
@@ -1398,10 +1375,6 @@ impl FetchDispatcher {
         };
         self.deferred = None;
         self.dispatch(deferred.request.observed_now(), true);
-    }
-
-    pub(super) fn clear_deferred(&mut self) {
-        self.deferred = None;
     }
 
     pub(super) fn complete(&mut self, dispatch_follow_up: bool) {

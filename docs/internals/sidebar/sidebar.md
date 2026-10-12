@@ -368,7 +368,7 @@ The `baseline` control updates the supervisor's remembered selection baseline wi
 
 The host is the only painter. All failed starts, unanswered sockets, rejected or unreadable replies, and lost attachments use the same plain-text notice and exponential retry from one second to 60 seconds, resetting after a stable minute; a workspace-record change interrupts the wait. Non-terminal stdout or unavailable runtime paths refuse before socket or terminal-mode work ([state.md → Host unavailable](./state.md#host-unavailable)).
 
-Each attachment writes its own heartbeat in the host and binds a per-instance wakeup socket. The heartbeat record, its protocol version, and its TTL are wire, in [`wakeup/heartbeat.rs`](../../../crates/rimz/src/wakeup/heartbeat.rs). Heartbeat write failures log as best-effort liveness failures, and the normal reattach path repairs them.
+Each attachment writes its own heartbeat in the host, naming the host's room socket in `wakeup_socket`. The heartbeat record, its protocol version, and its TTL are wire, in [`wakeup/heartbeat.rs`](../../../crates/rimz/src/wakeup/heartbeat.rs). Heartbeat write failures log as best-effort liveness failures, and the normal reattach path repairs them.
 
 ### Launch
 

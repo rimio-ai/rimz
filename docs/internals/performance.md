@@ -30,7 +30,7 @@ The design keeps the three goals apart by putting them on separate threads, sepa
 
 Each tab's sidebar pane runs one `rimz sidebar serve` supervisor, and one `rimz sidebar host` per mux session paints every pane of the room ([`sidebar_pane::host`](../../crates/rimz/src/sidebar_pane/host.rs)). The supervisor keeps the pane's terminal modes and input, and owns reload convergence. The host runs one render/input loop per pane, each on its own thread, over one set of data-plane threads, so a room pays the per-process cost of a renderer once rather than once per tab. Each pane still owns its snapshot: the shared fold is projected once per pane (`project_local` consumes its own copy of the workspace) and each pane's loop holds the result, so a room's memory still grows with its tab count by one snapshot per pane. The host is the only painter; an unavailable host costs a supervisor notice and bounded retry, never another data plane ([state.md → Host unavailable](./sidebar/state.md#host-unavailable)).
 
-A render loop spins the animation, applies input, fuses overlay events, and projects a fold the fetch worker finished. It blocks only in `recv` on its own wakeup socket, which receives store and pane wakeups as well as the supervisor's terminal input and resize words. It never forks, never fsyncs, and never reads the pane roster. A mux action the loop starts (a jump, a width nudge) runs on a short-lived detached thread.
+A render loop spins the animation, applies input, fuses overlay events, and projects a fold the fetch worker finished. It blocks only in `recv_timeout` on its bounded channel, which receives host-routed room events, fetch hints, and supervisor input; the timeout is its frame clock. It never forks, never fsyncs, and never reads the pane roster. A mux action the loop starts (a jump, a width nudge) runs on a short-lived detached thread.
 
 The data-plane threads, one set per host, are the fetch worker, the cache refresher, the observer writer, the tmux control-mode watch, and the transcript watch; the terminal event reader lives in each pane's supervisor. Their responsibilities are in the thread table in [state.md](./sidebar/state.md#the-room-data-plane).
 
@@ -73,7 +73,7 @@ A performance change follows these rules. An earlier rule outranks a later one w
 5. **Single-flight, then coalesce.** One fetch runs at a time. A burst of requests collapses to one fetch, and a request racing an in-flight fetch leaves exactly one follow-up, never a queue.
 6. **Pay the external read once per window.** A short TTL bounds pane discovery, git, and forge probes, and the last good result is reused. A failed probe backs off and keeps its last known good value. A degraded roster read backfills missing fields per pane instead of painting a corrupt frame.
 7. **Take the cheapest correct read.** Catch-up is O(delta bytes) from the persisted fold base, never O(history). Skip work that cannot matter: unchanged inputs cost a stat, and a room with no agents skips the sidecar scans.
-8. **One host per room, one render loop per pane.** The data plane is shared, while every pane keeps its loop, heartbeat, and wakeup socket. Supervisors replace a lost host and reattach without an ownership election.
+8. **One host per room, one render loop per pane.** The data plane and room event socket are shared, while every pane keeps its loop, heartbeat, and bounded wake channel. Supervisors replace a lost host and reattach without an ownership election.
 
 ## The cost map
 
