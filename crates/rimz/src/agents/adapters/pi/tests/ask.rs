@@ -152,6 +152,36 @@ fn question_detail_carries_the_rpiv_preview_policy() {
 }
 
 #[test]
+fn multi_answer_keeps_picks_and_typed_text() {
+    for (selected, answer, expected) in [
+        (json!([]), json!(" text "), vec!["text"]),
+        (
+            json!([" a ", "b", " "]),
+            json!(" text "),
+            vec!["a", "b", "text"],
+        ),
+        (json!(["a", "b"]), Value::Null, vec!["a", "b"]),
+        (json!([]), json!(" "), vec![]),
+    ] {
+        let hook = decode(
+            "tool_execution_end",
+            &json!({
+                "tool_name": "ask_user_question",
+                "tool_details": {"answers": [{
+                    "kind": "multi", "selected": selected, "answer": answer
+                }]}
+            }),
+        );
+        let chosen = hook
+            .native_answers()
+            .and_then(|answers| answers.first())
+            .map(|answer| answer.chosen.clone())
+            .unwrap_or_default();
+        assert_eq!(chosen, expected);
+    }
+}
+
+#[test]
 fn native_answer_detail_maps_rpiv_2_answer_kinds() {
     let answers = decode(
         "tool_execution_end",

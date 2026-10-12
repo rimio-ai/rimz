@@ -53,6 +53,7 @@ pub(super) fn answer_detail(payload: &Value) -> Option<Vec<AskAnswer>> {
                     .unwrap_or_default()
                     .into_iter()
                     .filter_map(|selected| non_empty(&selected))
+                    .chain(answer.answer.as_deref().and_then(non_empty))
                     .collect(),
                 _ => return None,
             };
