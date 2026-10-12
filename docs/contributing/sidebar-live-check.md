@@ -196,7 +196,32 @@ Three checks cover what a unit test cannot:
 2. **Supervisor death.** Kill one tab's `sidebar serve` by PID. The host drops that pane: its heartbeat leaves the room's runtime directory (the testkit build's `rimz sidebar renderers` no longer lists the instance), and the other tabs keep painting.
 3. **Last pane.** Close every tab's sidebar pane, or kill the session. The host exits about ten seconds after its last pane detaches; `ps` shows no `sidebar host` for the session after that.
 
-A reload is the fourth: after `rimz reload` onto a new build the host's PID changes and every tab repaints from that host. A reload onto the build already painting restarts nothing (`rimz reload` prints `… already on the current build.`), so this check needs a second, different build. The old supervisors remain until the new painting build passes the stable window and preflight.
+4. **Reload onto different bytes.** Start the held room with `target/debug/xtask sandbox room`, rather than `cargo xtask sandbox room`, so it does not hold Cargo's lock during the rebuild. Set `ROOT` and `BIN` from that room's card. Copy the running build before rebuilding if `BIN` names Cargo's output. The build-version override below changes embedded bytes and therefore the linker build identity; changing a runtime environment variable or touching a source file without changing its contents does not. A reload onto the build already painting restarts nothing (`rimz reload` prints `… already on the current build.`), which is why this check needs a second, different build.
+
+   ```sh
+   RELOAD_DIR=$(mktemp -d "${TMPDIR:-/tmp}/rimz-reload.XXXXXXXX")
+   RIMZ_BUILD_VERSION_OVERRIDE=0.4.3+sidebar-reload \
+     cargo build -p rimz --bin rimz --features testkit --locked
+   RELOAD_BIN="$RELOAD_DIR/rimz"
+   cp "$(cargo metadata --format-version 1 --no-deps | jq -r .target_directory)/debug/rimz" "$RELOAD_BIN"
+   target/debug/xtask sandbox in "$ROOT" -- "$RELOAD_BIN" reload
+   ```
+
+   Record the room's host PID before and after. Expect `Reloaded 3 sidebars across 1 session.` for the standard three-tab room, one successor host, and every tab painting after its Look. The supervisors remain until the new painting build passes the stable window and preflight; inspect `/proc/<supervisor-pid>/exe` on Linux to distinguish re-exec from an unchanged command line. Repeat with a different override value for another reload. Across the room-socket upgrade, old supervisors still paint and receive room events but ignore keyboard, mouse, and resize input for about 60 seconds before promotion; this one-time input window does not apply between two stream-input builds. A mixed-build probe can shorten it with `RIMZ_TEST_SIDEBAR_STABLE_RUN_MS` in the supervisor's environment. Use a hand-built disposable room with its own short `XDG_RUNTIME_DIR` for that probe: the sandbox launcher scrubs ambient `RIMZ_*` keys. Press `?` before and after promotion and capture the help overlay, rather than treating a fresh heartbeat as proof of input.
+
+5. **One notification datagram, every attachment.** Notifications must be enabled in the sandbox's config (`[notifications] enabled = true`). Set `SESSION` from the room card, then send to its reviewer; `--force-bell` avoids requiring a genuine unread episode and `--no-command` skips external notification handlers.
+
+   ```sh
+   target/debug/xtask sandbox in "$ROOT" -- "$BIN" config get notifications.enabled
+   target/debug/xtask sandbox in "$ROOT" -- strace -f -e trace=sendto \
+     -o "$ROOT/tmp/notify.sendto" "$BIN" sidebar notify-test '@reviewer#probe' \
+     --force-bell --no-command
+   rg sendto "$ROOT/tmp/notify.sendto"
+   jq -c 'select(.event.kind == "bell_ring") | {instance_id, event}' \
+     "$ROOT/home/.rimz/ws/$SESSION/audit/notify.log.jsonl"
+   ```
+
+   Expect `Notification test sent: 1`, one send to `host.<digest>.wake.sock`, and a new `bell_ring` decision for each of the three renderer instances. Compare them with `sidebar renderers --json`. Only the reviewer's tab rings: the daemon tab reports `daemon_view` and the unrelated shell tab reports `pane_not_in_view`. Notifications emit terminal control bytes, not a painted banner; a pane capture cannot prove delivery. On both tmux and Zellij, check the per-instance decisions at the consumer, then Look and Capture each tab to confirm it still paints.
 
 ## First frame of a new tab
 
