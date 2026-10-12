@@ -90,7 +90,7 @@ fn unsupported_park_state_names_the_file_and_refuses() {
         },
     );
     let mut state = ParkState {
-        v: PARK_VERSION + 1,
+        v: 1,
         request,
         identity: None,
         provider: SavedCommand::capture(&Command::new("/bin/provider")),
@@ -107,7 +107,7 @@ fn unsupported_park_state_names_the_file_and_refuses() {
         entered_worktree: None,
         cwd: dir.path().to_owned(),
         isolation: rimz::config::Isolation::Host,
-        project_root: dir.path().to_owned(),
+        workspace: super::super::tests::test_workspace(dir.path()),
     };
     rimz::disk::atomic::write_temp_then_rename_cache(&path, &state).unwrap();
     assert!(
@@ -117,6 +117,13 @@ fn unsupported_park_state_names_the_file_and_refuses() {
     let error = ParkState::read(&path).err().unwrap().to_string();
     assert!(error.contains(&path.display().to_string()), "{error}");
     state.v = PARK_VERSION;
+    rimz::disk::atomic::write_temp_then_rename_cache(&path, &state).unwrap();
+    let restored = serde_json::to_value(ParkState::read(&path).unwrap()).unwrap();
+    assert_eq!(restored["v"], 2);
+    assert_eq!(
+        restored["workspace"],
+        serde_json::to_value(&state.workspace).unwrap()
+    );
     state.relaunch_cap = 256;
     rimz::disk::atomic::write_temp_then_rename_cache(&path, &state).unwrap();
     assert!(
@@ -292,7 +299,7 @@ fn park_errors_before_supervision_fail_the_run_and_end_the_provider() {
             entered_worktree: None,
             cwd: dir.path().into(),
             isolation: rimz::config::Isolation::Host,
-            project_root: dir.path().into(),
+            workspace: workspace.clone(),
         };
         let path = paths.park_state_file(Some("test"), None, std::process::id());
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();

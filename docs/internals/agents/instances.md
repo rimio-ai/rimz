@@ -21,6 +21,8 @@ The binding question is therefore one question: does a live local pane bind the 
 
 A multiplexer sometimes reports only a shared runtime basename such as `node` for a pane. The pane producer then walks one bounded chain from the pane root, following a single child at each step, and classifies each full command line through the adapter registry. The outermost proven known CLI supplies the hosted kind, its process start, and the lineage: the pids on the chain below the root, down to the CLI. A chain that is unreadable, branches, lacks a start time, exceeds the depth limit, or matches no adapter supplies nothing. This applies to every adapter, independent of `registers_lazily`, which governs only how an unstamped session is recovered.
 
+The [resident wrapper's park handoff](../harness/fleet.md#resident-wrapper) keeps its provider as its only child before supervision, rather than spawning workspace-resolution helpers alongside it. Run-duty helpers during supervision remain separate children.
+
 ## Before a session binds
 
 A wired instance with no bound session renders as an idle `○ <kind>` row, so a just-launched agent reads as itself instead of a bare process ([`idle_agent_row`](../../../crates/rimz/src/store/snapshot/panes/lazy.rs)). Claude shows it at the login screen and in the moment before `SessionStart` stamps the pane. Codex and OpenCode show it before their first real session exists. Kiro stays identity-less until its first-prompt hook or its provider-owned local store yields a safe binding, and Antigravity binds on its first invocation hook or an exact local-session match.
