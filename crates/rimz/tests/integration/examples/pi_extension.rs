@@ -21,19 +21,39 @@ fn extension_tracks_settled_boundary_spend_and_child_lineage() {
     // while older releases emit `agent_settled` themselves on `agent_end`.
     // Both paths must accumulate every upstream usage source, clear cost on
     // shutdown, and stop child rows at the same settled boundary.
-    run_extension_harness("0.84.3", "agent_end", "agent_settled");
-    run_extension_harness("0.80.3", "agent_settled", "agent_end");
+    run_extension_harness("1.1.0", "agent_end", "agent_settled", false);
+    run_extension_harness("0.80.3", "agent_settled", "agent_end", false);
+}
+
+#[test]
+#[cfg(unix)]
+fn extension_native_abort_overrides_retained_verdict() {
+    if std::process::Command::new("node")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        crate::common::skip("node not on PATH");
+        return;
+    }
+    run_extension_harness("1.1.0", "agent_end", "agent_settled", true);
 }
 
 /// Drive the embedded extension through Node as if `PI_VERSION` were
 /// `pi_version`, asserting the turn verdict rides `boundary_event` (carrying the
-/// accumulated cost and the `turn_end` token split), `absent_event` is never
-/// forwarded, shutdown clears the running cost, only in-turn extension dialogs
+/// accumulated cost and the `turn_end` token split), the legacy `absent_event`
+/// is never forwarded, native settlement and later envelopes retain standalone
+/// charges, shutdown clears the running cost, only in-turn extension dialogs
 /// outside a questionnaire are forwarded, and child factories report their own
 /// session identity (relabelled when the child session is renamed) through the
 /// process-lineage markers.
 #[cfg(unix)]
-fn run_extension_harness(pi_version: &str, boundary_event: &str, absent_event: &str) {
+fn run_extension_harness(
+    pi_version: &str,
+    boundary_event: &str,
+    absent_event: &str,
+    aborted: bool,
+) {
     use std::os::unix::fs::PermissionsExt as _;
 
     const EXTENSION_SOURCE: &str = include_str!("../../../src/agents/adapters/pi/extension.ts");
@@ -86,6 +106,7 @@ process.env.RIMZ_CAPTURE = {};
 const boundaryEvent = {};
 const absentEvent = {};
 const hasNativeSettled = {};
+const aborted = {aborted};
 
 const {{ default: rimz }} = await import({});
 const makePi = () => {{
@@ -110,10 +131,18 @@ const {{
   busHandlers: childBusHandlers,
 }} = makePi();
 let rootSessionId = "sess-1";
+const anonymousUsage = {{ type: "usage", kind: "cache_warm", model: "gpt-5",
+  usage: {{ input: 900, cost: {{ total: 0.1 }} }} }};
+const rootBranch = [
+  {{ ...anonymousUsage, id: "warm-1", usage: {{ cost: {{ total: 0.2 }} }} }},
+  anonymousUsage,
+  structuredClone(anonymousUsage),
+];
 const ctx = {{
   sessionManager: {{
     getSessionId: () => rootSessionId,
     getCwd: () => "/repo",
+    getBranch: () => structuredClone(rootBranch),
   }},
   getContextUsage: () => ({{ percent: 45, contextWindow: 1000, tokens: 450 }}),
   model: {{ id: "gpt-5" }},
@@ -159,6 +188,7 @@ handlers.get("tool_execution_end")({{
   toolName: "bash",
   isError: false,
 }}, ctx);
+rootBranch.push({{ ...anonymousUsage, id: "warm-2", usage: {{ cost: {{ total: 0.2 }} }} }});
 handlers.get("turn_end")({{
   message: {{
     role: "assistant",
@@ -201,6 +231,13 @@ handlers.get("agent_end")({{
     usage: {{ totalTokens: 20, cost: {{ total: 0.25 }} }},
   }}],
 }}, ctx);
+if (hasNativeSettled) {{
+  rootBranch.push({{ ...anonymousUsage, id: "warm-3", usage: {{ cost: {{ total: 0.3 }} }} }});
+  rootBranch.push(structuredClone(anonymousUsage));
+  handlers.get("agent_settled")({{}}, ctx);
+  handlers.get("before_agent_start")({{ prompt: "again", systemPrompt: "base" }}, ctx);
+  handlers.get("agent_settled")({{}}, ctx);
+}}
 handlers.get("session_shutdown")({{ reason: "new" }}, ctx);
 rootSessionId = "sess-2";
 handlers.get("session_start")({{ reason: "new" }}, ctx);
@@ -218,11 +255,11 @@ childHandlers.get("session_info_changed")({{ name: "reviewer: fix the parser" }}
 childHandlers.get("agent_end")({{
   messages: [{{
     role: "assistant",
-    stopReason: "error",
-    errorMessage: "child failed",
+    stopReason: aborted ? "stop" : "error",
+    errorMessage: aborted ? undefined : "child failed",
   }}],
 }}, childCtx);
-if (hasNativeSettled) childHandlers.get("agent_settled")({{}}, childCtx);
+if (hasNativeSettled) childHandlers.get("agent_settled")(aborted ? {{ aborted: true }} : {{}}, childCtx);
 handlers.get("session_shutdown")({{ reason: "quit" }}, ctx);
 if (busHandlers.size !== 0 || childBusHandlers.size !== 0) {{
   throw new Error("extension registered plugin bus handlers");
@@ -256,7 +293,7 @@ if (hasNativeSettled) {{
   }};
   rimz(dialogPi);
   dialogHandlers.get("ui_prompt_start")({{ reason: "open", kind: "select" }}, dialogCtx);
-  dialogHandlers.get("agent_settled")({{}}, dialogCtx);
+  dialogHandlers.get("agent_settled")(aborted ? {{ aborted: true }} : {{}}, dialogCtx);
   dialogHandlers.get("ui_prompt_end")({{ reason: "close", kind: "select" }}, dialogCtx);
 }}
 
@@ -270,7 +307,7 @@ const readPayloads = async () => {{
 }};
 
 let payloads = [];
-const expectedPayloads = hasNativeSettled ? 27 : 24;
+const expectedPayloads = hasNativeSettled ? 30 : 24;
 for (let i = 0; i < 250; i += 1) {{
   payloads = await readPayloads();
   if (payloads.length >= expectedPayloads) break;
@@ -307,10 +344,30 @@ const boundary = byEvent[boundaryEvent];
 if (!boundary) {{
   throw new Error(`missing boundary ${{boundaryEvent}}: ${{JSON.stringify(payloads.map((p) => p.hook_event_name))}}`);
 }}
-if (absentEvent in byEvent) {{
+if (!hasNativeSettled && absentEvent in byEvent) {{
   throw new Error(`unexpected ${{absentEvent}} forwarded for this pi version`);
 }}
-if (Math.abs(boundary.total_cost_usd - 0.55) > 1e-9) {{
+const childBoundary = payloads.find((payload) => payload.session_id === "sess-child" &&
+  payload.hook_event_name === "agent_settled");
+if (childBoundary?.stop_reason !== (aborted ? "aborted" : "error")) {{
+  throw new Error(`child settled verdict was ${{JSON.stringify(childBoundary)}}`);
+}}
+if (aborted && !payloads.some((payload) => payload.session_id === "sess-dialog" &&
+    payload.hook_event_name === "agent_settled" && payload.stop_reason === "aborted")) {{
+  throw new Error("native abort without a retained verdict was lost");
+}}
+if (hasNativeSettled) {{
+  const settled = rootPayloads.filter((payload) => payload.hook_event_name === "agent_settled");
+  const next = rootPayloads.find((payload) => payload.hook_event_name === "before_agent_start" && payload.prompt === "again");
+  if (settled.length !== 2 || settled.some((payload) => Math.abs(payload.total_cost_usd - 1.55) > 1e-9) ||
+      Math.abs((next?.total_cost_usd ?? 0) - 1.55) > 1e-9) {{
+    throw new Error(`standalone usage missing or counted twice across settle/next envelope: ${{JSON.stringify({{ settled, next }})}}`);
+  }}
+}}
+if (Math.abs(byEvent.turn_end.total_cost_usd - 0.9) > 1e-9) {{
+  throw new Error(`turn_end omitted new usage or recounted hydration: ${{JSON.stringify(byEvent.turn_end)}}`);
+}}
+if (Math.abs(boundary.total_cost_usd - 1.15) > 1e-9) {{
   throw new Error(`boundary cost was ${{boundary.total_cost_usd}}`);
 }}
 if (boundary.input_tokens !== 10 || boundary.cache_write_input_tokens !== 2) {{
