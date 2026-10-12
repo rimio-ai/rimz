@@ -190,7 +190,7 @@ Resume covers two moments: bringing the room back after the machine or the multi
 
 Subagent children are never restored. A child's open run cut off by the crash reports as canceled to its parent, which can relaunch the work if it is still needed.
 
-A running room never asks about parked agents, whether you use Zellij or tmux. Use `rimz agents resume '#channel'` or `rimz agents resume <worktree>` to bring a group back. An attended `rimz start --no-resume` ends all parked candidates instead, without a prompt.
+A running room never asks about parked agents, whether you use Zellij or tmux. Use `rimz agents resume '#channel'` or `rimz agents resume <worktree>` to bring a group back. An attended `rimz start --no-resume` ends all parked candidates instead, without a prompt. The host reports the ended count; if there were none, start or attach prints `rimz: --no-resume changed nothing: the room was already running with no parked agents`. Remote connects with `--no-resume` report the same outcome.
 
 **A park while the room is live.** `auto_continue` is off by default. Turned on, it picks a parked turn back up by typing `auto_continue_text` down the same path as `message --steer`:
 

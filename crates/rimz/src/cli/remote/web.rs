@@ -321,7 +321,7 @@ fn web_prep_options(
 ) -> rimz::remote::web::WebPrepOptions {
     rimz::remote::web::WebPrepOptions {
         confirm_resume: initial_prep && std::io::stdin().is_terminal(),
-        no_resume: initial_prep && remote.no_resume,
+        no_resume: initial_prep && !remote.resume,
         force_version: remote.force_version,
         client_size,
     }

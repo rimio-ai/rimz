@@ -71,7 +71,7 @@ Aliases persist per machine at `~/.rimz/remote.toml`, one `[[remote]]` table per
 | `mux` | unset | Pins `--mux` for this alias. |
 | `auto_forward` | `true` | `false` disables listener forwarding for this alias. |
 
-`resolve_connect` in [`cli/remote.rs`](../../crates/rimz/src/cli/remote.rs) merges the alias with the invocation. An input containing `:` is a raw target and skips aliases. Boolean opt-outs compose (`alias.reconnect && !no_reconnect`), and `--mux` on the command line wins over the alias.
+`resolve_connect` in [`cli/remote.rs`](../../crates/rimz/src/cli/remote.rs) merges the alias with the invocation. An input containing `:` is a raw target and starts from all-true settings. Paired setting flags override saved values only when passed; the last flag in each pair wins. `--mux` on the command line wins over the alias. `update` uses the same setting merge, keeps an omitted target, and supports `--no-mux` to clear the backend pin.
 
 ## The command RimZ runs on the host
 

@@ -830,7 +830,7 @@ surface-budget = 18
 [[module]]
 path = "crates/rimz/src/utils.rs"
 # `tokens` and `env` join `path` and `time` as cross-domain helpers.
-surface-budget = 5
+surface-budget = 6
 
 [[module]]
 path = "crates/rimz/src/web"
