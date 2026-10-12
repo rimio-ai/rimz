@@ -607,6 +607,19 @@ fn held_stats_refresh_failure_streak_resets_after_success() {
 }
 
 #[test]
+fn hold_cycle_ends_when_the_refresh_worker_exits() {
+    let mut state = HeldStats::new(false, panel_glyphs(), true);
+    let (tx, rx) = mpsc::sync_channel::<Result<Stats>>(1);
+    drop(tx);
+
+    let error = match hold_cycle(&mut state, &rx) {
+        Err(error) => error,
+        Ok(_) => panic!("a disconnected worker must end the hold, not keep cycling"),
+    };
+    assert_eq!(error.to_string(), "stats refresh worker exited");
+}
+
+#[test]
 fn empty_dashboard_refreshes_early_until_a_frame_exists() {
     let now = Instant::now();
     let current = now + REFRESH_INTERVAL;
