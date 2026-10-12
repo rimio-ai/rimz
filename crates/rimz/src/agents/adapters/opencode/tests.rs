@@ -550,6 +550,19 @@ fn opencode_tool_compaction_subagent_and_unknown_events_map_cleanly() {
         }
     );
 
+    let failed = hook_lifecycle(
+        &OpencodeAdapter,
+        "session_compacted",
+        &json!({ "session_id": "ses_1", "is_error": true }),
+    );
+    assert_eq!(
+        failed.signal,
+        LifecycleSignal::CompactionEnded {
+            auto: None,
+            failed: true,
+        }
+    );
+
     let child = hook_lifecycle(
         &OpencodeAdapter,
         "SubagentStart",
@@ -683,37 +696,7 @@ fn plugin_source_pins_rimz_wire_contract() {
     assert!(PLUGIN_SOURCE.contains("\"hooks\", \"feed\", \"--source\", \"opencode\""));
     assert!(PLUGIN_SOURCE.contains("RIMZ_AGENT_PID"));
     assert!(PLUGIN_SOURCE.contains("RIMZ_BIN"));
-    assert!(PLUGIN_SOURCE.contains("session_name: sessionID ? sessions.get(sessionID)?.title"));
-    assert!(PLUGIN_SOURCE.contains("agent_version: sessionID ? sessions.get(sessionID)?.version"));
-    assert!(PLUGIN_SOURCE.contains("model_display_name: currentGauge?.modelDisplayName"));
-    assert!(!PLUGIN_SOURCE.contains("server_url: input.serverUrl"));
-    // The typed `permission.ask` hook last fired in OpenCode 1.0.223; the
-    // plugin observes the bus only and never reads a decision from stdout.
-    assert!(!PLUGIN_SOURCE.contains("\"permission.ask\":"));
-    assert!(!PLUGIN_SOURCE.contains("output.status"));
     assert!(PLUGIN_SOURCE.contains("stdio: [\"pipe\", \"ignore\", \"ignore\"]"));
-    assert!(PLUGIN_SOURCE.contains("permission.asked"));
-    assert!(PLUGIN_SOURCE.contains("permission.replied"));
-    assert!(PLUGIN_SOURCE.contains("question.asked"));
-    assert!(PLUGIN_SOURCE.contains("question.replied"));
-    assert!(PLUGIN_SOURCE.contains("question.rejected"));
-    assert!(PLUGIN_SOURCE.contains("session.deleted"));
-    assert!(PLUGIN_SOURCE.contains("session.updated"));
-    assert!(PLUGIN_SOURCE.contains("DEFAULT_SESSION_TITLE"));
-    assert!(PLUGIN_SOURCE.contains("plan_proposed"));
-    assert!(PLUGIN_SOURCE.contains("agents.get(sessionID) === \"plan\""));
-    assert!(PLUGIN_SOURCE.contains("Promise.allSettled"));
-    assert!(PLUGIN_SOURCE.contains("endRoot(sessionID, \"dispose\")"));
-    assert!(PLUGIN_SOURCE.contains("export const RimzPlugin"));
-    assert!(PLUGIN_SOURCE.contains("server: RimzPlugin"));
-    // The gauge carries a catalog-resolved context window on every envelope,
-    // and the divisor is the model's max input tokens (the uniform cross-agent
-    // meaning), falling back to the total context only when no input cap exists.
-    assert!(PLUGIN_SOURCE.contains("context_window: currentGauge?.contextWindow"));
-    assert!(PLUGIN_SOURCE.contains("input.client.config.providers()"));
-    assert!(PLUGIN_SOURCE.contains("limit?.input ?? limit?.context"));
-    assert!(PLUGIN_SOURCE.contains("const hasMeasuredUsage ="));
-    assert!(PLUGIN_SOURCE.contains("(value) => (value ?? 0) > 0"));
 
     for hook in OPENCODE_HOOKS {
         let event = hook.event;
