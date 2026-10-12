@@ -102,6 +102,7 @@ export default function rimz(pi) {
   const launchReminders = claimLaunchReminders();
   const usageBySession = new Map();
   const costBySession = new Map();
+  const standaloneCostBySession = new Map();
   const verdictBySession = new Map();
   const nameBySession = new Map();
   const messagePushBySession = new Map();
@@ -145,16 +146,24 @@ export default function rimz(pi) {
     };
   };
 
-  const hydrateSession = (ctx) => {
+  const totalSessionCost = (id) => {
+    const cost = costBySession.get(id);
+    const standalone = standaloneCostBySession.get(id);
+    return cost == null && standalone == null ? undefined : (cost ?? 0) + (standalone ?? 0);
+  };
+
+  const refreshSessionCosts = (ctx, hydrate = false) => {
     const id = sessionId(ctx);
-    if (!id || costBySession.has(id)) return;
+    if (!id || (hydrate && costBySession.has(id))) return;
     try {
       const branch = ctx?.sessionManager?.getBranch?.();
-      if (!Array.isArray(branch) || branch.length === 0) return;
+      if (!Array.isArray(branch)) return;
       let cost = 0;
+      let standaloneCost = 0;
       let lastUsage;
       let name;
       for (const entry of branch) {
+        if (!hydrate && entry?.type !== "usage") continue;
         if (entry?.type === "session_info" && typeof entry?.name === "string") {
           name = entry.name;
         }
@@ -163,13 +172,19 @@ export default function rimz(pi) {
         const usage =
           entry?.type === "message" && ["assistant", "toolResult"].includes(message?.role)
             ? message?.usage
-            : ["compaction", "branch_summary"].includes(entry?.type)
+            : ["compaction", "branch_summary", "usage"].includes(entry?.type)
               ? entry?.usage
               : undefined;
         const entryCost = numberMaybe(usage?.cost?.total);
-        if (entryCost != null && entryCost > 0) cost += entryCost;
+        if (entryCost != null && entryCost > 0) {
+          if (entry?.type === "usage") standaloneCost += entryCost;
+          else cost += entryCost;
+        }
       }
-      if (cost > 0) costBySession.set(id, cost);
+      if (hydrate && cost + standaloneCost > 0) costBySession.set(id, cost);
+      if (standaloneCost > 0 || standaloneCostBySession.has(id)) {
+        standaloneCostBySession.set(id, standaloneCost);
+      }
       if (lastUsage) recordUsage(id, lastUsage);
       if (name) nameBySession.set(id, name);
     } catch {
@@ -227,7 +242,7 @@ export default function rimz(pi) {
       context_pct: usage?.percent == null ? undefined : Math.round(usage.percent),
       context_window: usage?.contextWindow,
       total_tokens: usage?.tokens == null ? undefined : Math.round(usage.tokens),
-      total_cost_usd: costBySession.get(id),
+      total_cost_usd: totalSessionCost(id),
       ...usageFields(id),
       rate_limits: latestWindows.length > 0 ? latestWindows : undefined,
       ...fields,
@@ -309,7 +324,7 @@ export default function rimz(pi) {
       context_pct: roundMaybe(usage?.percent),
       context_window: roundMaybe(usage?.contextWindow),
       total_tokens: roundMaybe(usage?.tokens),
-      total_cost_usd: costBySession.get(id),
+      total_cost_usd: totalSessionCost(id),
     });
   };
 
@@ -343,7 +358,7 @@ export default function rimz(pi) {
   };
 
   pi.on("session_start", (ev, ctx) => {
-    hydrateSession(ctx);
+    refreshSessionCosts(ctx, true);
     const id = sessionId(ctx);
     const parentId = text(globalThis[PRIMARY_SESSION]?.id) ??
       text(process.env[PARENT_SESSION_ENV]);
@@ -394,18 +409,21 @@ export default function rimz(pi) {
       // Pi before 0.80.4 has no automatic-work-aware settled event. Preserve
       // its historical agent_end boundary while new releases wait for the
       // native final-idle signal.
+      refreshSessionCosts(ctx);
       feed("agent_settled", ctx, fields);
       feedChildStop(ctx, fields);
       verdictBySession.delete(sessionId(ctx));
     }
   });
-  pi.on("agent_settled", (_ev, ctx) => {
+  pi.on("agent_settled", (ev, ctx) => {
     const id = sessionId(ctx);
     const verdict = verdictBySession.get(id) ?? {};
+    if (ev?.aborted === true) verdict.stop_reason = "aborted";
     openQuestionnaires.clear();
     // The settle already ended the wait; a dialog closed after it must not
     // reopen the turn as out-of-turn tool activity.
     uiPromptBySession.delete(id);
+    refreshSessionCosts(ctx);
     feed("agent_settled", ctx, verdict);
     feedChildStop(ctx, verdict);
     verdictBySession.delete(id);
@@ -418,6 +436,7 @@ export default function rimz(pi) {
     for (const toolResult of Array.isArray(ev?.toolResults) ? ev.toolResults : []) {
       addSessionCost(id, toolResult?.usage);
     }
+    refreshSessionCosts(ctx);
     feed("turn_end", ctx, {});
   });
   pi.on("after_provider_response", (ev, ctx) => {
@@ -517,6 +536,7 @@ export default function rimz(pi) {
     const id = sessionId(ctx);
     usageBySession.delete(id);
     costBySession.delete(id);
+    standaloneCostBySession.delete(id);
     verdictBySession.delete(id);
     nameBySession.delete(id);
     uiPromptBySession.delete(id);
