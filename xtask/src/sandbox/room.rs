@@ -182,7 +182,7 @@ pub(super) fn run(workspace: &Path, args: &[String]) -> Result<()> {
         stub_dir,
         binary: binary.clone(),
     };
-    let (panes, renderers, snapshot) = room.ready()?;
+    let panes = room.ready()?;
     // Warm every tab, the team's last, so each sidebar has been watched once and hands over
     // at the client's width.
     let mut tabs: Vec<_> = panes.tabs.iter().enumerate().collect();
@@ -191,7 +191,7 @@ pub(super) fn run(workspace: &Path, args: &[String]) -> Result<()> {
         room.look(&record.session, index, tab)?;
     }
     RoomRecord::write(root, &record)?;
-    let card = render_card(root, &binary, &record, &panes, &renderers, &snapshot)?;
+    let card = room.card(&record)?;
     let mut stdout = std::io::stdout().lock();
     stdout.write_all(card.as_bytes())?;
     stdout.flush()?;
@@ -222,6 +222,22 @@ struct Room<'a> {
 }
 
 impl Room<'_> {
+    fn card(&self, record: &RoomRecord) -> Result<String> {
+        let snapshot = self.json("card snapshot", &["sidebar", "snapshot", "--json"])?;
+        let renderers: Vec<Renderer> =
+            self.json("card renderers", &["sidebar", "renderers", "--json"])?;
+        // Read the roster last: a pane may have closed while the tabs were warming.
+        let panes = self.json("card pane list", &["pane", "list", "--json"])?;
+        render_card(
+            self.sandbox._root.path(),
+            self.binary,
+            record,
+            &panes,
+            &renderers,
+            &snapshot,
+        )
+    }
+
     fn command(&self, program: impl AsRef<OsStr>) -> Command {
         let mut command = Command::new(program);
         self.sandbox.apply_to(&mut command, true);
@@ -323,7 +339,7 @@ impl Room<'_> {
         }
     }
 
-    fn ready(&self) -> Result<(Panes, Vec<Renderer>, Snapshot)> {
+    fn ready(&self) -> Result<Panes> {
         let started = Instant::now();
         loop {
             let panes: Panes = self.json("readiness pane list", &["pane", "list", "--json"])?;
@@ -370,7 +386,7 @@ impl Room<'_> {
                 && pipeline.is_some()
                 && agents == 2
             {
-                return Ok((panes, renderers, snapshot));
+                return Ok(panes);
             }
             if started.elapsed() >= Duration::from_secs(30) {
                 bail!(
@@ -634,6 +650,109 @@ mod tests {
             "Look: target/debug/xtask sandbox in '/sandbox' -- '/dev/rimz' '--tmux' 'pane' 'focus' 'tmux:%3'"
         ));
         assert!(card.contains("unwatched sidebar can hold a stale frame"));
+    }
+
+    fn with_ready_room(test: impl FnOnce(&Room<'_>, &RoomRecord)) {
+        let sandbox = HostSandbox::for_manual_command().unwrap();
+        let cwd = sandbox.env["HOME"].clone();
+        let binary = cwd.join("rimz");
+        std::fs::write(
+            &binary,
+            r#"#!/bin/sh
+printf '%s\n' "$*" >> queries
+case "$*" in
+    '--tmux pane list --json') exec cat panes.json ;;
+    '--tmux sidebar renderers --json') exec cat renderers.json ;;
+    '--tmux sidebar snapshot --json') exec cat snapshot.json ;;
+    *) exit 1 ;;
+esac
+"#,
+        )
+        .unwrap();
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::write(
+            cwd.join("panes.json"),
+            r##"{"session":"private","tabs":[{"panes":[
+                {"kind":"sidebar","pane_id":"tmux:%1"},
+                {"kind":"sidebar","pane_id":"tmux:%3"},
+                {"kind":"agent","pane_id":"tmux:%4","agent":{"handle":"@coder#probe"}},
+                {"kind":"agent","pane_id":"tmux:%5","agent":{"handle":"@reviewer#probe"}}
+            ]}]}"##,
+        )
+        .unwrap();
+        std::fs::write(
+            cwd.join("renderers.json"),
+            r#"[{"pane_id":"tmux:%1"},{"pane_id":"tmux:%3"}]"#,
+        )
+        .unwrap();
+        std::fs::write(
+            cwd.join("snapshot.json"),
+            r#"{"worktree_groups":[{"pipeline":{"stage":"Build","owner":"coder"}}]}"#,
+        )
+        .unwrap();
+        let record = RoomRecord {
+            mux: "tmux".into(),
+            session: "private".into(),
+            repo: cwd.clone(),
+            worktree: cwd.clone(),
+            stub_dir: cwd.clone(),
+            binary: binary.clone(),
+        };
+        let room = Room {
+            sandbox: &sandbox,
+            binary: &binary,
+            mux: "tmux",
+            path: std::env::var_os("PATH").unwrap(),
+            cwd,
+        };
+        room.ready().unwrap();
+        std::fs::write(room.cwd.join("queries"), "").unwrap();
+        test(&room, &record);
+    }
+
+    #[test]
+    fn room_card_refreshes_after_readiness_despite_stale_renderer() {
+        with_ready_room(|room, record| {
+            std::fs::write(
+                room.cwd.join("panes.json"),
+                r##"{"session":"private","tabs":[{"panes":[
+                    {"kind":"sidebar","pane_id":"tmux:%3"},
+                    {"kind":"agent","pane_id":"tmux:%5","agent":{"handle":"@reviewer#probe"}}
+                ]}]}"##,
+            )
+            .unwrap();
+            std::fs::write(
+                room.cwd.join("snapshot.json"),
+                r#"{"worktree_groups":[{"pipeline":{"stage":"Build","owner":"reviewer"}}]}"#,
+            )
+            .unwrap();
+            let card = room.card(record).unwrap();
+            assert!(card.contains("Sidebar: tmux:%3"));
+            assert!(card.contains("Role: @reviewer#probe"));
+            assert!(card.contains("Stage: Build  Owner: reviewer"));
+            assert!(!card.contains("tmux:%1"));
+            assert!(!card.contains("tmux:%4"));
+            assert!(!card.contains("@coder#probe"));
+            let queries = std::fs::read_to_string(room.cwd.join("queries")).unwrap();
+            assert_eq!(queries.lines().count(), 3);
+            assert_eq!(queries.lines().last(), Some("--tmux pane list --json"));
+        });
+    }
+
+    #[test]
+    fn room_card_refuses_renderer_missing_after_readiness() {
+        with_ready_room(|room, record| {
+            std::fs::write(
+                room.cwd.join("renderers.json"),
+                r#"[{"pane_id":"tmux:%1"}]"#,
+            )
+            .unwrap();
+            let result = room.card(record);
+            assert!(
+                result
+                    .is_err_and(|error| error.to_string().contains("sidebar lacks live renderer"))
+            );
+        });
     }
 
     #[test]
