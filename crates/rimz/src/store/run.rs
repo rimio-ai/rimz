@@ -570,10 +570,17 @@ impl std::ops::Deref for RunListing {
     }
 }
 
+/// `files` maps each record file to its stamp and its index in `listing`;
+/// the two are replaced together, so every index is in bounds.
 #[derive(Default)]
 struct RunListingCache {
-    files: HashMap<PathBuf, (FileStamp, Arc<RunRecord>)>,
+    files: HashMap<PathBuf, (FileStamp, usize)>,
     listing: Option<RunListing>,
+}
+
+enum ListedRecord {
+    Cached(usize),
+    Parsed(Box<RunRecord>),
 }
 
 thread_local! {
@@ -626,7 +633,7 @@ impl RunListingCache {
                 });
             }
         };
-        let mut files = HashMap::new();
+        let mut found = Vec::new();
         let mut changed = false;
         for entry in entries.into_iter().flatten() {
             let entry = entry.map_err(|source| RunStoreErr::Io {
@@ -643,10 +650,10 @@ impl RunListingCache {
                 Err(source) => return Err(RunStoreErr::Io { path, source }),
             };
             let stamp = FileStamp::from_metadata(&metadata);
-            if let Some((old_stamp, record)) = self.files.get(&path)
+            if let Some((old_stamp, index)) = self.files.get(&path)
                 && *old_stamp == stamp
             {
-                files.insert(path, (stamp, Arc::clone(record)));
+                found.push((path, stamp, ListedRecord::Cached(*index)));
                 continue;
             }
             let bytes = match fs::read(&path) {
@@ -662,18 +669,34 @@ impl RunListingCache {
                     source,
                 }
             })?;
-            files.insert(path, (stamp, Arc::new(record)));
+            found.push((path, stamp, ListedRecord::Parsed(Box::new(record))));
             changed = true;
         }
-        changed |= files.len() != self.files.len();
+        changed |= found.len() != self.files.len();
         if !changed && let Some(listing) = &self.listing {
             return Ok(listing.clone());
         }
-        let mut records: Vec<_> = files
-            .values()
-            .map(|(_, record)| record.as_ref().clone())
+        let previous = self.listing.as_deref().unwrap_or_default();
+        let mut rows: Vec<_> = found
+            .into_iter()
+            .map(|(path, stamp, listed)| {
+                let record = match listed {
+                    ListedRecord::Cached(index) => previous[index].clone(),
+                    ListedRecord::Parsed(record) => *record,
+                };
+                (path, stamp, record)
+            })
             .collect();
-        records.sort_by_key(|record| std::cmp::Reverse(record.updated_at));
+        rows.sort_by_key(|(_, _, record)| std::cmp::Reverse(record.updated_at));
+        let mut files = HashMap::with_capacity(rows.len());
+        let records: Vec<_> = rows
+            .into_iter()
+            .enumerate()
+            .map(|(index, (path, stamp, record))| {
+                files.insert(path, (stamp, index));
+                record
+            })
+            .collect();
         let listing = RunListing {
             records: records.into(),
             generation: self
