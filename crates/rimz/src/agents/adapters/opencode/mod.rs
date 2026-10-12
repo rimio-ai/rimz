@@ -538,7 +538,8 @@ impl crate::agents::capabilities::HookCapability for OpencodeAdapter {
         };
         let mut observation =
             AgentLifecycleObservation::new(agent_id, signal).with_worktree_from_payload(payload);
-        observation.transcript_path = optional_payload_string(payload, &["transcript_path"]);
+        observation.transcript_path = optional_payload_string(payload, &["transcript_path"])
+            .or_else(|| database::newest_file().map(|path| path.to_string_lossy().into_owned()));
         observation.parent_agent_id = parent_agent_id;
         observation.task = sanitize_user_prompt(parsed.prompt.as_deref());
         observation.prompt = SanitizedPrompt::new(parsed.prompt.as_deref());
