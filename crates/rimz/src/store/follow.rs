@@ -1,6 +1,6 @@
 //! Read-only lifecycle and signal follower over the durable event log.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::fs;
 use std::io;
 
@@ -18,6 +18,7 @@ use serde::Serialize;
 use serde_json::{Map, Value};
 
 type AgentKey = (AgentKind, AgentSessionId);
+const ENDED_STATES_RETAINED: usize = 256;
 
 /// Fold-free raw event tail starting at a caller's saved extent.
 pub struct LaunchTail {
@@ -134,6 +135,8 @@ pub struct EventFollower {
     paths: StatePaths,
     cursor: event_log::LogExtent,
     states: BTreeMap<AgentKey, FollowState>,
+    // Only ended states are evicted; live agents retain their turn history.
+    ended: VecDeque<AgentKey>,
 }
 
 impl EventFollower {
@@ -147,13 +150,18 @@ impl EventFollower {
                 },
                 paths,
                 states: BTreeMap::new(),
+                ended: VecDeque::new(),
             });
         }
         let (cursor, agents) = snapshot::lifecycle_follow_seed(&paths)?;
+        let mut ended = Vec::new();
         let states = agents
             .into_iter()
             .map(|agent| {
                 let key = (agent.kind.clone(), agent.agent_id.clone());
+                if let Some(ended_at) = agent.ended_at {
+                    ended.push((ended_at, key.clone()));
+                }
                 let state = FollowState {
                     lifecycle: agent.lifecycle(),
                     open_ask_key: open_ask_key(&agent),
@@ -164,11 +172,24 @@ impl EventFollower {
                 (key, state)
             })
             .collect();
-        Ok(Self {
+        // The rollup is key-sorted; eviction must drop the oldest endings first.
+        ended.sort();
+        let mut follower = Self {
             paths,
             cursor,
             states,
-        })
+            ended: ended.into_iter().map(|(_, key)| key).collect(),
+        };
+        follower.prune_ended();
+        Ok(follower)
+    }
+
+    fn prune_ended(&mut self) {
+        while self.ended.len() > ENDED_STATES_RETAINED {
+            if let Some(key) = self.ended.pop_front() {
+                self.states.remove(&key);
+            }
+        }
     }
 
     /// Read every lifecycle frame appended since the prior poll.
@@ -304,7 +325,7 @@ impl EventFollower {
             let (started_turn_id, superseded_turn_id, interrupted_turn_id) =
                 turn_ids_after(turn_ids, &observation.signal, transition.opened_turn);
             self.states.insert(
-                key,
+                key.clone(),
                 FollowState {
                     lifecycle: transition.next,
                     open_ask_key,
@@ -313,6 +334,11 @@ impl EventFollower {
                     interrupted_turn_id,
                 },
             );
+            self.ended.retain(|ended| ended != &key);
+            if matches!(observation.signal, LifecycleSignal::Ended) {
+                self.ended.push_back(key);
+            }
+            self.prune_ended();
         }
         events
     }
@@ -371,10 +397,12 @@ mod tests {
     }
 
     fn append(store: &Store, signal: LifecycleSignal) {
-        let observation = crate::agents::AgentLifecycleObservation::new(
-            Some(AgentSessionId::from("session-1")),
-            signal,
-        );
+        append_for(store, "session-1", signal);
+    }
+
+    fn append_for(store: &Store, id: &str, signal: LifecycleSignal) {
+        let observation =
+            crate::agents::AgentLifecycleObservation::new(Some(AgentSessionId::from(id)), signal);
         store
             .append_agent_lifecycle(AgentLifecycleIntent {
                 session_name: "room",
@@ -404,6 +432,97 @@ mod tests {
         );
         assert!(follower.fold(vec![event]).is_empty());
         assert!(follower.states.is_empty());
+    }
+
+    fn observe(follower: &mut EventFollower, id: &str, signal: LifecycleSignal) -> LifecycleEvent {
+        let observation =
+            crate::agents::AgentLifecycleObservation::new(Some(AgentSessionId::from(id)), signal);
+        let envelope = crate::store::event::EventEnvelope::agent_lifecycle(
+            follower.paths.workspace_id.clone(),
+            "room",
+            "claude",
+            "test",
+            &observation,
+        );
+        let FollowEvent::Lifecycle(event) = follower.fold(vec![envelope]).remove(0) else {
+            panic!("lifecycle")
+        };
+        event
+    }
+
+    #[test]
+    fn replay_retains_only_the_latest_256_ended_states_and_all_live_states() {
+        let (_dir, _store, paths) = fixture();
+        let mut follower = EventFollower::open(paths, true).unwrap();
+        for index in 0..300 {
+            let id = format!("ended-{index}");
+            observe(&mut follower, &id, LifecycleSignal::Registered);
+            observe(&mut follower, &id, LifecycleSignal::Ended);
+        }
+        assert_eq!(follower.states.len(), 256);
+        observe(&mut follower, "live", LifecycleSignal::Registered);
+        for index in 300..600 {
+            let id = format!("ended-{index}");
+            observe(&mut follower, &id, LifecycleSignal::Registered);
+            observe(&mut follower, &id, LifecycleSignal::Ended);
+        }
+        assert_eq!(follower.states.len(), 257);
+        assert!(
+            observe(&mut follower, "live", LifecycleSignal::Registered)
+                .prior_status
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn a_recently_ended_agent_keeps_its_prior_status_on_return() {
+        let (_dir, _store, paths) = fixture();
+        let mut follower = EventFollower::open(paths, true).unwrap();
+        observe(&mut follower, "returning", LifecycleSignal::Registered);
+        let ended = observe(&mut follower, "returning", LifecycleSignal::Ended);
+        let resumed = observe(&mut follower, "returning", LifecycleSignal::Registered);
+        assert_eq!(resumed.prior_status, Some(ended.status));
+    }
+
+    #[test]
+    fn an_agent_evicted_after_256_later_endings_returns_without_prior_status() {
+        let (_dir, _store, paths) = fixture();
+        let mut follower = EventFollower::open(paths, true).unwrap();
+        observe(&mut follower, "returning", LifecycleSignal::Registered);
+        observe(&mut follower, "returning", LifecycleSignal::Ended);
+        for index in 0..256 {
+            let id = format!("ended-{index}");
+            observe(&mut follower, &id, LifecycleSignal::Registered);
+            observe(&mut follower, &id, LifecycleSignal::Ended);
+        }
+        let resumed = observe(&mut follower, "returning", LifecycleSignal::Registered);
+        assert_eq!(resumed.prior_status, None);
+    }
+
+    #[test]
+    fn live_seed_evicts_the_earliest_endings_not_the_lowest_keys() {
+        let (_dir, store, paths) = fixture();
+        for index in 0..ENDED_STATES_RETAINED {
+            let id = format!("b-{index:03}");
+            append_for(&store, &id, LifecycleSignal::Registered);
+            append_for(&store, &id, LifecycleSignal::Ended);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        append_for(&store, "a-latest", LifecycleSignal::Registered);
+        append_for(&store, "a-latest", LifecycleSignal::Ended);
+        let follower = EventFollower::open(paths, false).unwrap();
+        let claude = AgentKind::new_unchecked("claude");
+        assert_eq!(follower.states.len(), ENDED_STATES_RETAINED);
+        assert!(
+            follower
+                .states
+                .contains_key(&(claude.clone(), AgentSessionId::from("a-latest")))
+        );
+        assert!(
+            !follower
+                .states
+                .contains_key(&(claude, AgentSessionId::from("b-000")))
+        );
     }
 
     #[test]
