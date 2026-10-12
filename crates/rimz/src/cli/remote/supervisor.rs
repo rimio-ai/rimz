@@ -7,7 +7,7 @@ use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 
 use rimz::remote::forward::{PortAction, PortSync, cancel_spec, open_spec};
 use rimz::remote::link::{
@@ -371,7 +371,7 @@ pub(super) fn supervise_remote(
                     );
                     handoff.hold_failure(&message);
                     guard.reset_emulator();
-                    bail!("{message}")
+                    return Err(crate::cli::ExitCodeError { code, message }.into());
                 }
                 Verdict::Retry => {
                     handoff.release();
@@ -709,7 +709,11 @@ fn wait_for_master(
                     outage.panel.note_ssh_error(Some(message.clone()));
                     ui.fail_hold("Remote path does not exist", &details)?;
                     drop(guard);
-                    return Err(anyhow::anyhow!(message));
+                    return Err(crate::cli::ExitCodeError {
+                        code: rimz::remote::REMOTE_PATH_MISSING_EXIT,
+                        message,
+                    }
+                    .into());
                 }
                 let frame = outage
                     .panel

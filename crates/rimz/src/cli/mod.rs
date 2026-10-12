@@ -72,6 +72,7 @@ use rimz::store::snapshot::{PaneAgent, SidebarSnapshot};
 use rimz::{RuntimePaths, StatePaths, Store};
 
 pub(crate) use ctx::Ctx;
+pub(crate) use usage::ExitCodeError;
 pub use usage::UsageError;
 
 pub(crate) fn open_browser_best_effort(url: &str) {

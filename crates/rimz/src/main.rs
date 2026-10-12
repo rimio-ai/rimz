@@ -45,13 +45,19 @@ fn main() -> std::process::ExitCode {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(error) => {
             cli::report(&error);
-            if error.downcast_ref::<cli::UsageError>().is_some() {
-                std::process::ExitCode::from(2)
-            } else {
-                std::process::ExitCode::FAILURE
-            }
+            std::process::ExitCode::from(error_exit_code(&error))
         }
     }
+}
+
+fn error_exit_code(error: &anyhow::Error) -> u8 {
+    if error.downcast_ref::<cli::UsageError>().is_some() {
+        return 2;
+    }
+    error
+        .downcast_ref::<cli::ExitCodeError>()
+        .and_then(|error| u8::try_from(error.code).ok())
+        .unwrap_or(1)
 }
 
 fn install_tracing(report_to_sentry: bool) {
@@ -94,6 +100,19 @@ fn log_filter_for(args: impl Iterator<Item = String>) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn errors_preserve_explicit_exit_codes() {
+        for code in [65, 66, 67, 127, 255] {
+            let error = anyhow::Error::new(cli::ExitCodeError {
+                code,
+                message: "host refusal".to_owned(),
+            })
+            .context("connect");
+            assert_eq!(error_exit_code(&error), code as u8);
+        }
+        assert_eq!(error_exit_code(&anyhow::anyhow!("ordinary failure")), 1);
+    }
 
     fn filter(args: &[&str]) -> &'static str {
         log_filter_for(args.iter().map(|arg| (*arg).to_owned()))
