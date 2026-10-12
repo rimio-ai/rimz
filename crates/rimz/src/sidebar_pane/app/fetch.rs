@@ -537,7 +537,6 @@ impl FetchWorker {
                 .rows()
                 .map(|row| (row.id.as_str(), row.unread))
                 .collect();
-            let mut changed = false;
             for index in 0..fold.workspace.0.worktree_groups.len() {
                 let group = &fold.workspace.0.worktree_groups[index];
                 if !group.rows.iter().any(|row| {
@@ -553,10 +552,6 @@ impl FetchWorker {
                         row.unread = *unread;
                     }
                 }
-                changed = true;
-            }
-            if changed {
-                fold.workspace.0.sort_groups_for_presentation();
             }
         }
         sink.publish(FetchUpdate::Snapshot {
