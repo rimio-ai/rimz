@@ -1157,11 +1157,11 @@ fn opencode_native_envelopes_record_the_database_for_history() {
         "user",
         session,
         "user",
-        1780394400000,
-        r#"{"text":"integration prompt","time":{"created":1780394400000}}"#,
+        1780394400701,
+        r#"{"text":"integration prompt","time":{"created":1780394400701}}"#,
     );
-    db.message("assistant", session, "assistant", 1780394401000,
-        r#"{"model":{"id":"gpt-5","providerID":"openai"},"content":[{"type":"text","text":"integration answer"}],"time":{"created":1780394401000,"completed":1780394402000},"finish":"stop","cost":0.42,"tokens":{"input":100,"output":20,"reasoning":5}}"#);
+    db.message("assistant", session, "assistant", 1780394400722,
+        r#"{"model":{"id":"gpt-5","providerID":"openai"},"content":[{"type":"text","text":"integration answer"}],"time":{"created":1780394400722,"completed":1780394402000},"finish":"stop","cost":0.42,"tokens":{"input":100,"output":20,"reasoning":5}}"#);
     for event in ["session_created", "chat_message", "session_idle"] {
         let mut command = env.hook_command("opencode");
         command.env("RIMZ_OPENCODE_DATA_DIR", &data_dirs);

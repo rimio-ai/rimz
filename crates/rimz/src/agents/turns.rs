@@ -71,7 +71,8 @@ pub fn session_turns(
             let turn_messages = &messages[message_index..next_message_index];
             let turn_entries = entries.iter().copied().filter(|entry| {
                 timestamp(entry.ts_secs).is_some_and(|at| {
-                    at >= started_at && next_started_at.is_none_or(|next| at < next)
+                    at.as_second() >= started_at.as_second()
+                        && next_started_at.is_none_or(|next| at.as_second() < next.as_second())
                 })
             });
 
@@ -202,6 +203,32 @@ mod tests {
         assert_eq!(turns[1].outcome, TurnOutcome::Done);
         assert_eq!(turns[0].api_calls, 1);
         assert_eq!(turns[1].api_calls, 1);
+    }
+
+    #[test]
+    fn fractional_turn_boundaries_match_second_precision_spend() {
+        let messages = [
+            (TranscriptRole::User, 100_701, "first"),
+            (TranscriptRole::Assistant, 100_722, "answer"),
+            (TranscriptRole::User, 101_701, "second"),
+            (TranscriptRole::Assistant, 101_722, "answer"),
+        ]
+        .map(|(role, millis, text)| TranscriptMessage {
+            role,
+            at: Some(Timestamp::from_millisecond(millis).unwrap()),
+            text: text.to_owned(),
+        });
+        let entries = [entry(99, None), entry(100, None), entry(101, None)];
+        let turns = session_turns(&messages, &entries, "session-a", false);
+        assert_eq!(
+            turns[0].fresh_input, 10,
+            "the opening second belongs to this turn"
+        );
+        assert_eq!(
+            turns[1].fresh_input, 10,
+            "the next boundary must not leak backward"
+        );
+        assert_eq!(turns[0].started_at, messages[0].at.unwrap());
     }
 
     #[test]
