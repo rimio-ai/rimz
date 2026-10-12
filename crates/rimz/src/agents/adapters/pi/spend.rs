@@ -13,8 +13,8 @@
 //! the `PI_AGENT_DIR` env honored here is RimZ's own comma-separated test
 //! override, not a pi variable. Upstream shapes are mirrored in
 //! `docs/externals/agent-adapter/pi-reference.md`. Usage appears on assistant
-//! and tool-result messages and at the top level of compaction and branch
-//! summary entries. Assistant entries also carry durable tool-call counts:
+//! and tool-result messages and at the top level of compaction, branch-summary,
+//! and standalone usage entries. Assistant entries also carry durable tool-call counts:
 //! ```json
 //! { "type": "message",
 //!   "timestamp": "2026-01-01T10:00:00.000Z",
@@ -198,9 +198,9 @@ pub(super) fn pi_config_dir_from(configured: Option<&str>, home: Option<&Path>) 
 /// that origin so appended usage entries keep their workspace scope without
 /// re-reading the header.
 ///
-/// Counts assistant and tool-result message usage plus top-level compaction and
-/// branch-summary usage. A present non-negative `usage.cost.total` is
-/// authoritative; otherwise token-bearing assistant rows are priced through
+/// Counts assistant and tool-result message usage plus top-level compaction,
+/// branch-summary, and standalone usage. A present non-negative `usage.cost.total` is
+/// authoritative; otherwise token-bearing rows with a model are priced through
 /// `prices`. Any excess of `totalTokens` over the itemized parts is folded into
 /// output so sparse records still contribute their full reported total. Lines
 /// without a `"usage"` keyword are skipped before deserialization.

@@ -197,7 +197,7 @@ const PI_COVERAGE: CoverageAnnotations = CoverageAnnotations {
         via: "extension context usage (row gauge + AgentContext.tokens)",
     },
     realtime_cost: ConcernCoverage::Wired {
-        via: "extension four-source cumulative-cost push reconciled to authoritative session-transcript spend",
+        via: "extension cumulative-cost push reconciled to authoritative session-transcript spend",
     },
     rich_context: ConcernCoverage::Wired {
         via: "extension envelopes on every value-changing event, including throttled streaming updates and resume hydration",
