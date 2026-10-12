@@ -121,6 +121,133 @@ fn produce_cold(bencher: Bencher, fleet: usize) {
         });
 }
 
+mod publish {
+    use super::*;
+    use rimz::sidebar::enrich::{FoldOpts, WorkspaceSnapshot, enrich_workspace, project_local};
+    use rimz::testkit::fleet::{ScaleRoom, seed_scale_room};
+
+    struct Fixture {
+        _tempdir: TempDir,
+        paths: rimz::StatePaths,
+        runtime: rimz::RuntimePaths,
+        base: rimz::store::snapshot::SidebarSnapshot,
+        frame: rimz::sidebar::frame::PaneFrame,
+        own_panes: Vec<rimz::PaneId>,
+    }
+
+    impl Fixture {
+        fn new(panes: usize) -> Self {
+            let (tempdir, paths, runtime) = workspace();
+            let (agents, ended_sessions) = match panes {
+                24 => (51, 4_600),
+                100 => (200, 5_000),
+                _ => unreachable!("benchmark dimensions are fixed"),
+            };
+            let frame = seed_scale_room(
+                &paths,
+                &runtime,
+                ScaleRoom {
+                    agents,
+                    panes,
+                    ended_sessions,
+                },
+            )
+            .expect("scale room");
+            let store = rimz::Store::open(paths.clone(), runtime.clone()).expect("store");
+            let base = store.snapshot().expect("snapshot");
+            Self {
+                _tempdir: tempdir,
+                paths,
+                runtime,
+                base,
+                frame,
+                own_panes: (0..panes)
+                    .map(|index| {
+                        rimz::PaneId::from_parts(rimz::MuxName::Zellij, format!("sidebar_{index}"))
+                    })
+                    .collect(),
+            }
+        }
+
+        fn fold(&self) -> WorkspaceSnapshot {
+            enrich_workspace(
+                self.base.clone(),
+                Some(&self.frame),
+                &self.paths,
+                &self.runtime,
+                None,
+                FoldOpts {
+                    producing: false,
+                    fresh_roots: None,
+                    config: None,
+                    lanes: None,
+                    agent_projection: Default::default(),
+                },
+                &rimz::diag::DiagSink::disabled(),
+            )
+        }
+
+        fn project(&self, workspace: &WorkspaceSnapshot, exclude_agent: bool) {
+            let snapshots: Vec<_> = self
+                .own_panes
+                .iter()
+                .map(|own| {
+                    let excluded = if exclude_agent {
+                        &self.frame.tabs[0].panes[0].pane_id
+                    } else {
+                        own
+                    };
+                    project_local(workspace.clone(), Some(&self.frame), Some(excluded))
+                })
+                .collect();
+            divan::black_box(snapshots);
+        }
+    }
+
+    #[divan::bench(args = [24, 100], sample_count = 10, sample_size = 1, skip_ext_time)]
+    fn fold_and_project(bencher: Bencher, panes: usize) {
+        bencher
+            .with_inputs(|| Fixture::new(panes))
+            .bench_local_refs(|fixture| {
+                let workspace = fixture.fold();
+                fixture.project(&workspace, false);
+            });
+    }
+
+    #[divan::bench(args = [24, 100], sample_count = 10, sample_size = 1, skip_ext_time)]
+    fn exclude_agent(bencher: Bencher, panes: usize) {
+        bencher
+            .with_inputs(|| Fixture::new(panes))
+            .bench_local_refs(|fixture| {
+                let workspace = fixture.fold();
+                fixture.project(&workspace, true);
+            });
+    }
+
+    #[divan::bench(args = [24, 100], sample_count = 10, sample_size = 1, skip_ext_time)]
+    fn local_only(bencher: Bencher, panes: usize) {
+        bencher
+            .with_inputs(|| {
+                let fixture = Fixture::new(panes);
+                let workspace = fixture.fold();
+                (fixture, workspace)
+            })
+            .bench_local_refs(|(fixture, workspace)| fixture.project(workspace, false));
+    }
+
+    #[divan::bench(args = [24, 100], sample_count = 10, sample_size = 1, skip_ext_time)]
+    fn local_fixed_room(bencher: Bencher, subscribers: usize) {
+        bencher
+            .with_inputs(|| {
+                let mut fixture = Fixture::new(100);
+                fixture.own_panes.truncate(subscribers);
+                let workspace = fixture.fold();
+                (fixture, workspace)
+            })
+            .bench_local_refs(|(fixture, workspace)| fixture.project(workspace, false));
+    }
+}
+
 #[divan::bench(args = [20, 50, 100], sample_count = 10, sample_size = 1, skip_ext_time)]
 fn produce_warm(bencher: Bencher, fleet: usize) {
     bencher

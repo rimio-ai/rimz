@@ -28,7 +28,7 @@ The design keeps the three goals apart by putting them on separate threads, sepa
 
 ### The render thread
 
-Each tab's sidebar pane runs one `rimz sidebar serve` supervisor, and one `rimz sidebar host` per mux session paints every pane of the room ([`sidebar_pane::host`](../../crates/rimz/src/sidebar_pane/host.rs)). The supervisor keeps the pane's terminal modes and input, and owns reload convergence. The host runs one render/input loop per pane, each on its own thread, over one set of data-plane threads, so a room pays the per-process cost of a renderer once rather than once per tab. Each pane still owns its snapshot: the shared fold is projected once per pane (`project_local` consumes its own copy of the workspace) and each pane's loop holds the result, so a room's memory still grows with its tab count by one snapshot per pane. The host is the only painter; an unavailable host costs a supervisor notice and bounded retry, never another data plane ([state.md → Host unavailable](./sidebar/state.md#host-unavailable)).
+Each tab's sidebar pane runs one `rimz sidebar serve` supervisor, and one `rimz sidebar host` per mux session paints every pane of the room ([`sidebar_pane::host`](../../crates/rimz/src/sidebar_pane/host.rs)). The supervisor keeps the pane's terminal modes and input, and owns reload convergence. The host runs one render/input loop per pane, each on its own thread, over one set of data-plane threads, so a room pays the per-process cost of a renderer once rather than once per tab. Each pane holds the shared fold's agent-scaled collections, group vector, and rows by reference. `project_local` copies local metadata; a group edit detaches the vector and only changed row collections. Ordinary snapshot cloning has no term in agent, group, or history count. The host is the only painter; an unavailable host costs a supervisor notice and bounded retry, never another data plane ([state.md → Host unavailable](./sidebar/state.md#host-unavailable)).
 
 A render loop spins the animation, applies input, fuses overlay events, and projects a fold the fetch worker finished. It blocks only in `recv_timeout` on its bounded channel, which receives host-routed room events, fetch hints, and supervisor input; the timeout is its frame clock. It never forks, never fsyncs, and never reads the pane roster. A mux action the loop starts (a jump, a width nudge) runs on a short-lived detached thread.
 
@@ -95,7 +95,7 @@ Each lane's cost and the bound that holds it down. Reproducible figures come fro
 | --- | --- | --- |
 | Snapshot rollup | O(1) from `cache/snapshots/latest.json`; O(delta bytes) when writes outran the cache | The `(generation, offset)` freshness stamp; a long-lived `RollupCursor` holds the parsed base, and the rotation carryover beneath it is parsed once per file identity per thread and shared, never copied, by every fold |
 | Event-log fold | Warm cursor: one stat of the log and one of the carryover, plus the appended frames; the projection clones only the rows it keeps. Unchanged log: shared handles only | Guard tests `delta_fold_is_o_new_bytes` and `warm_fold_parses_unchanged_carryover_zero_times` |
-| Workspace fold | One enrichment, cloned for each pane's projection; no seed serialization | The host retains its last delivered fold for new-attachment seeds |
+| Workspace fold | One enrichment; pane projections share agent-scaled collections, the group vector, and rows, with no seed serialization | The host retains its last delivered fold for new-attachment seeds; only changed collections detach |
 | Fold observations | One focus-anchor read and one body-filter read per real cycle, shared by every attachment | Pane-local application keeps selection, confirmation and read intent; live nonce comparison guards retirement ([state.md](./sidebar/state.md#focus-intent)) |
 | Pane roster (producer) | Zellij: one topology read plus a `zellij pipe` nudge. tmux: one `list-panes` call | `SNAPSHOT_CACHE_TTL` while a client drives it, `EVENT_PANE_TTL` while the presence stamp is fresh; one attempt per data tick |
 | Process metrics (producer) | A due sample reads one metrics record per process | Per-pane focused and background stamps in `lanes/metrics-sample.json`; the full process-table walk runs only on pane churn |
@@ -187,6 +187,21 @@ The `cargo xtask invariants` check `ensure_sidebar_library_boundaries` keeps sto
 
 Allocation per operation is the steadier regression signal; medians move with host and load. The baseline was captured on `xlab-term`, a loaded LXC container on an AMD Ryzen 9 9950X with 28 online CPUs and the `performance` governor.
 
+Run `cargo xtask perf --bench fleet -- publish` for shared publication at (51 agents, 24 panes, 4,600 ended sessions) and (200, 100, 5,000). `crates/rimz/src/testkit/mod.rs::fleet::seed_scale_room` takes state paths, runtime paths, and `ScaleRoom { agents, panes, ended_sessions }`, publishes fresh producer inputs, and returns a frame for `produce_snapshot` or `enrich_workspace`. It binds the first live agents to the requested panes and leaves the remaining agents unbound. The carryover generator uses the existing representative row sizes but ends every history session, keeping the three dimensions independent; `seed_ended_carryover` retains its original 98% ended distribution for other benchmarks.
+
+`crates/rimz/benches/fleet.rs::publish` measures one enrichment followed by all local projections, retaining the delivered snapshots together until the end of publication. Normal sidebar IDs are absent from the frame; `exclude_agent` instead excludes a live agent pane from each projection to measure detaching the group vector, its row group, and pane bindings. `local_only` moves the fold outside timing to isolate per-pane allocations. Each bound agent has its own synthetic branch, so the two room sizes have 24 and 100 groups. `local_fixed_room` holds the larger room fixed while varying subscribers between 24 and 100, separating subscriber scaling from group-count scaling. All cases use ten samples, one iteration per sample, with fixture setup and teardown outside timing. These cases measure publication, not renderer loops or live host RSS.
+
+Captured 2026-10-12; paired values below are for 24 / 100 subscribers. Before is trunk `8fc7fe9cd`, measured in the reset checkout with only the fixture, benchmark, and public `project_local` seam added, before the sharing changes. After adds shared group vectors, rows, and pane bindings with guarded writers. Both runs use the same fixture and benchmark. Alloc/op is Divan's median `alloc` byte count, excluding its separately reported grow bytes.
+
+| Publish case | Before median | After median | Before alloc/op | After alloc/op |
+| --- | ---: | ---: | ---: | ---: |
+| `fold_and_project`, respective room sizes | 2.431 ms / 23.26 ms | 1.800 ms / 4.330 ms | 2.664 MB / 24.98 MB | 1.035 MB / 2.780 MB |
+| `exclude_agent`, respective room sizes | 2.487 ms / 18.81 ms | 2.417 ms / 12.65 ms | 2.683 MB / 25.37 MB | 1.589 MB / 12.27 MB |
+| `local_only`, respective room sizes | 999.5 µs / 15.94 ms | 58.34 µs / 188.2 µs | 1.690 MB / 22.53 MB | 88.36 KB / 368.2 KB |
+| `local_fixed_room`, 200 agents, 100 groups, 5,000 ended sessions | 4.403 ms / 18.79 ms | 62.84 µs / 206.4 µs | 5.407 MB / 22.53 MB | 88.36 KB / 368.2 KB |
+
+Local allocations are flat at about 3.68 KB per subscriber, both at fixed room size and across the two room sizes: groups, rows, and history do not multiply with subscribers. Sharing reduces the larger local publication from trunk's 22.53 MB to 368.2 KB (about 98.4% less allocation); local configuration, worktree roots, and pane metadata remain owned. A real exclusion still pays for a detached group vector and changed collections, as the `exclude_agent` case shows.
+
 | Bench | Median | Alloc/op | Captured |
 | --- | ---: | ---: | --- |
 | `fleet::produce_cold` 20 / 50 / 100 agents | 4.65 ms / 7.61 ms / 13.45 ms | 4.52 MB / 9.26 MB / 17.36 MB | 2026-07-05 |
@@ -247,7 +262,7 @@ Display-plane CPU and RAM estimates across a fleet of 2 to 5 rooms follow. They 
 | --- | --- | --- | --- | --- |
 | CPU, idle | ~0 | ~0 | ~0 | Loops block in `recv`; off-screen animation pauses |
 | CPU, busy | <0.3 core | ~0.3 to 0.8 core | ~0.5 to 1.5 core | One producer per room, bursting toward the 8-root git cap, never on the render thread |
-| RAM, resident | ~80 to 150 MiB | ~100 to 180 MiB | ~120 to 220 MiB | One host per room plus a small supervisor and one snapshot copy per tab, one spend walker, room-local rollups, prepared cell-pet grids |
+| RAM, resident | ~80 to 150 MiB | ~100 to 180 MiB | ~120 to 220 MiB | One host per room plus a small supervisor and local snapshot metadata per tab, shared rosters and rows, one spend walker, room-local rollups, prepared cell-pet grids |
 | Durable write | Event-volume dependent | Event-volume dependent | Event-volume dependent | Derived lifecycle frames at 1 KiB or less, raw ingress payload and environment, and cursor publications |
 | fsync rate | Event-volume dependent | Event-volume dependent | Event-volume dependent | Group event-log barrier plus four cursor fsyncs per applied frame and three barriers per drained-queue reset |
 | State on disk | Tens of MiB | Tens of MiB | ~100s of MiB | Rotation-capped event log, ~5 KiB of snapshot per agent, and the pending ingress queue, truncated after drain |
