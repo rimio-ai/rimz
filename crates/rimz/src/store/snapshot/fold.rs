@@ -20,7 +20,7 @@ use super::project::{
 use super::{Result, SnapshotErr};
 use crate::agents::AgentState;
 use crate::disk::atomic::{self, write_temp_then_rename};
-use crate::disk::parse_cache::{ParseCache, StampedPath};
+use crate::disk::parse_cache::{FileStamp, ParseCache, StampedPath};
 use crate::disk::paths::StatePaths;
 use crate::disk::retention::RESUME_OUTCOME_RETENTION_SECS;
 use crate::ids::{AgentKind, AgentSessionId, MessageId};
@@ -919,7 +919,8 @@ pub(crate) fn reseed_rollup_cache_for_rotation(paths: &StatePaths) -> Result<()>
 /// log file it folded. Where `catch_up_rollup` re-reads `rollup.json` per
 /// call, a cursor folds each delta from memory — O(new bytes) per wakeup with
 /// one `stat` each of the log and the carryover, parsing neither base — and
-/// an unchanged log returns the held rollup without opening a file. One
+/// an unchanged log and carryover return the held rollup without opening a
+/// file. One
 /// cursor per reader thread (the sidebar fetch worker owns one across its
 /// loop); one-shot readers stay on the disk-backed wrapper.
 ///
@@ -942,6 +943,10 @@ struct CursorState {
     merged: AgentRollup,
     resume_outcomes: Vec<ResumeOutcome>,
     file_id: Option<LogFileId>,
+    /// The carryover stamp observed before this base was folded: GC can
+    /// prune the carryover while the log stands still, so an unchanged log
+    /// alone does not make the held merge current.
+    carryover: FileStamp,
 }
 
 /// Identity of the log file a cursor folded: device + inode on unix, so a
@@ -991,14 +996,19 @@ impl RollupCursor {
         let meta = fs::metadata(&paths.events_log).ok();
         let file_id = meta.as_ref().and_then(LogFileId::of);
         let log_len = meta.map(|meta| meta.len()).unwrap_or(0);
+        // Stamped before any read, so a carryover replaced mid-fold reads as
+        // changed on the next call rather than hiding behind this one.
+        let carryover_stamp = StampedPath::of(&paths.agents_carryover).stamp;
         if let Some(held) = self.held.take() {
             // The held base serves warm only when the live log carries a real
             // identity that matches the one it folded; without one (a missing
             // log, a target with no dev+ino) the fold reloads `rollup.json`
             // rather than risk folding a swapped file's bytes onto it.
             let same_file = file_id.is_some() && held.file_id == file_id;
-            if same_file && held.cache.extent.offset == log_len {
-                // Nothing appended: serve the held fold without opening a file.
+            if same_file && held.cache.extent.offset == log_len && held.carryover == carryover_stamp
+            {
+                // Nothing appended and the carryover unchanged: serve the
+                // held fold without opening a file.
                 let out = (
                     held.cache.extent,
                     held.merged.clone(),
@@ -1016,13 +1026,13 @@ impl RollupCursor {
                 && let Ok((cache, merged, resume_outcomes)) =
                     catch_up_from(Some(held.cache), paths, carryover)
             {
-                return Ok(self.hold(cache, merged, resume_outcomes, file_id));
+                return Ok(self.hold(cache, merged, resume_outcomes, file_id, carryover_stamp));
             }
-            // Identity changed or the offset regressed: the file underneath
-            // was swapped, so the in-memory base describes a renamed-away log.
+            // Identity changed, the offset regressed, or only the carryover
+            // moved: the in-memory merge is stale, so reload from disk.
         }
         let (cache, merged, resume_outcomes) = catch_up_rollup_layered(paths)?;
-        Ok(self.hold(cache, merged, resume_outcomes, file_id))
+        Ok(self.hold(cache, merged, resume_outcomes, file_id, carryover_stamp))
     }
 
     fn hold(
@@ -1031,6 +1041,7 @@ impl RollupCursor {
         merged: AgentRollup,
         resume_outcomes: Vec<ResumeOutcome>,
         file_id: Option<LogFileId>,
+        carryover: FileStamp,
     ) -> (event_log::LogExtent, AgentRollup, Vec<ResumeOutcome>) {
         let extent = cache.extent;
         self.held = Some(CursorState {
@@ -1038,6 +1049,7 @@ impl RollupCursor {
             merged: merged.clone(),
             resume_outcomes: resume_outcomes.clone(),
             file_id,
+            carryover,
         });
         (extent, merged, resume_outcomes)
     }
