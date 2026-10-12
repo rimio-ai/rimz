@@ -1,6 +1,46 @@
 use super::*;
 
 #[test]
+fn cache_compaction_releases_spare_capacity() {
+    let file = PathBuf::from("/x/compacted.jsonl");
+    let mut entries = vec![cached_entry(NOW_SECS - 40 * 86_400, 1.0, "old"); 1000];
+    entries.push(cached_entry(NOW_SECS, 1.0, "recent"));
+    let mut absent_entries = Vec::with_capacity(1000);
+    absent_entries.push(cached_entry(NOW_SECS, 1.0, "absent"));
+    let mut cache = SpendingDiskCache {
+        files: HashMap::with_capacity(1000),
+        ..Default::default()
+    };
+    cache.files.extend([
+        cached_file(&file, entries),
+        cached_file(Path::new("/x/absent.jsonl"), absent_entries),
+    ]);
+    assert!(compact_spending_cache(
+        &mut cache,
+        &[spending_file(claude_adapter(), file)],
+        NOW_SECS,
+    ));
+    assert!(cache.files["/x/compacted.jsonl"].entries.len() < 10);
+    let actual = (
+        cache
+            .files
+            .values()
+            .map(|file| file.entries.capacity())
+            .sum::<usize>(),
+        cache.files.capacity(),
+    );
+    let expected = (
+        cache
+            .files
+            .values()
+            .map(|file| file.entries.len())
+            .sum::<usize>(),
+        HashMap::<String, FileCacheEntry>::with_capacity(cache.files.len()).capacity(),
+    );
+    assert_eq!(actual, expected);
+}
+
+#[test]
 fn cache_compaction_rolls_old_entries_losslessly_and_is_idempotent() {
     let dir = TempDir::new().unwrap();
     let project = dir.path().join("repo");

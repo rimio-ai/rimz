@@ -382,6 +382,10 @@ pub(crate) fn compact_spending_cache(
         .files
         .retain(|_, file| !cold_parse_out_of_window(file.stat.newest_mtime_secs(), now_secs));
     changed |= cache.files.len() != before;
+    for file in cache.files.values_mut() {
+        file.entries.shrink_to_fit();
+    }
+    cache.files.shrink_to_fit();
     changed
 }
 
