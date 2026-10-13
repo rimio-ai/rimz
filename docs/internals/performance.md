@@ -58,7 +58,7 @@ Every row of the cost map rolls up into one of three paths, each named with its 
 
 | Path | Budget | What happens |
 | --- | --- | --- |
-| Keypress to pixel | One in-process paint | Input applies synchronously and paints. Nothing on the path locks, forks, or reads the store. |
+| Keypress to pixel | One in-process paint | Input applies synchronously and paints; consecutive queued wheel ticks share one paint ([state.md](./sidebar/state.md#the-paint-clock)). Nothing on the path locks, forks, or reads the store. |
 | Pane event to pixel | One fuse plus one off-grid paint | A typed overlay event (`PaneClosed`, `FocusChanged`) lands in the in-memory event store, re-fuses the held frame, and paints at once. The producer's next pull confirms it ([state.md](./sidebar/state.md#fusion-rules)). |
 | Write to pixel | The frame grid after apply | Applied events wake the panes, which request a shared fold and paint on the next dirty frame. Hook ingress must first pass through the drainer; the 100 ms grid does not bound that queue. |
 

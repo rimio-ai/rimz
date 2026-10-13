@@ -50,9 +50,6 @@ fn synthetic_fold_releases_baseline_after_overlay_expires() {
     );
 }
 
-#[derive(Clone, Default)]
-struct FrameOutput(Arc<std::sync::Mutex<Vec<u8>>>);
-
 fn focus_records(rig: &Rig) -> Vec<serde_json::Value> {
     std::fs::read_to_string(crate::diag::focus_trace::log_path(rig._dir.path()))
         .unwrap_or_default()
@@ -69,17 +66,6 @@ fn enable_focus_trace(rig: &mut Rig) {
         "rimz-test",
         Some(rig.state.config.instance_id.clone()),
     );
-}
-
-impl std::io::Write for FrameOutput {
-    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-        self.0.lock().unwrap().extend_from_slice(bytes);
-        Ok(bytes.len())
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
 }
 
 #[test]

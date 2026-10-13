@@ -838,7 +838,7 @@ impl LoopState {
             self.paint_hold
                 .engage(Instant::now(), crate::utils::time::unix_now_ms());
         } else {
-            if self.apply_input(Wakeup::Resize, terminal)?.redraw {
+            if self.apply_input([Wakeup::Resize], terminal)?.redraw {
                 self.dirty = false;
             }
             // A safe-width paint just landed; drop any stale hold a prior grow
@@ -924,7 +924,16 @@ impl LoopState {
         terminal: &mut Terminal<PaneBackend>,
         fetch: &mut FetchDispatcher,
     ) -> Result<()> {
-        let applied = self.apply_input(wakeup, terminal)?;
+        self.on_inputs([wakeup], terminal, fetch)
+    }
+
+    pub(super) fn on_inputs(
+        &mut self,
+        wakeups: impl IntoIterator<Item = Wakeup>,
+        terminal: &mut Terminal<PaneBackend>,
+        fetch: &mut FetchDispatcher,
+    ) -> Result<()> {
+        let applied = self.apply_input(wakeups, terminal)?;
         if applied.redraw && self.watched() {
             // Key/mouse input paints synchronously for instant feedback; a
             // paint settles any frame the loop owed.
@@ -980,32 +989,37 @@ impl LoopState {
         }
     }
 
-    /// Apply an input wakeup (key/mouse/resize) to the local UI in place. Input
+    /// Apply a single input or queued wheel run to the local UI in order. Input
     /// never changes store data, so it redraws the *current* snapshot and may
     /// jump focus, but it never re-runs the snapshot burst — that per-keystroke
     /// refetch was the input lag. Input paints synchronously so a keypress or
-    /// click feels instant rather than waiting for the next frame; the returned
-    /// `InputOutcome::redraw` requests a paint; a hidden attachment keeps it
-    /// pending until it is watched.
+    /// click feels instant rather than waiting for the next frame. Wheel ticks
+    /// share one paint after the run, never an intermediate paint. A hidden
+    /// attachment keeps the redraw pending until it is watched.
     fn apply_input(
         &mut self,
-        wakeup: Wakeup,
+        wakeups: impl IntoIterator<Item = Wakeup>,
         terminal: &mut Terminal<PaneBackend>,
     ) -> Result<InputOutcome> {
         let keys = &self.current.sidebar.keys;
         if self.nav_keys.0 != *keys {
             self.nav_keys = (keys.clone(), super::NavKeymap::from_config(keys));
         }
-        let alert_active = self.alert_active();
-        let outcome = handle_wakeup(
-            wakeup,
-            &mut self.ui,
-            &self.current,
-            &self.nav_keys.1,
-            alert_active,
-        );
-        if outcome.effects.contains(&InputEffect::DismissAlert) {
-            self.health.alert = None;
+        let mut outcome = InputOutcome::default();
+        for wakeup in wakeups {
+            let alert_active = self.alert_active();
+            let applied = handle_wakeup(
+                wakeup,
+                &mut self.ui,
+                &self.current,
+                &self.nav_keys.1,
+                alert_active,
+            );
+            if applied.effects.contains(&InputEffect::DismissAlert) {
+                self.health.alert = None;
+            }
+            outcome.redraw |= applied.redraw;
+            outcome.effects.extend(applied.effects);
         }
         if outcome.redraw {
             if !self.watched() {
