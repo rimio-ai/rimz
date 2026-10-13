@@ -11,7 +11,7 @@ use super::transcript::{TranscriptMessage, TranscriptRole};
 pub enum TurnOutcome {
     Done,
     Open,
-    Cut,
+    Unknown,
 }
 
 impl TurnOutcome {
@@ -19,7 +19,7 @@ impl TurnOutcome {
         match self {
             Self::Done => "done",
             Self::Open => "open",
-            Self::Cut => "cut",
+            Self::Unknown => "-",
         }
     }
 }
@@ -104,7 +104,7 @@ pub fn session_turns(
             } else if final_turn && session_open {
                 TurnOutcome::Open
             } else {
-                TurnOutcome::Cut
+                TurnOutcome::Unknown
             };
             TurnRecord {
                 started_at,
@@ -189,9 +189,9 @@ mod tests {
     }
 
     #[test]
-    fn marks_unanswered_closed_turns_cut_and_accepts_session_scoped_entries() {
+    fn marks_unanswered_closed_turns_unknown_and_accepts_session_scoped_entries() {
         let messages = vec![
-            message(TranscriptRole::User, 100, "cut"),
+            message(TranscriptRole::User, 100, "unanswered"),
             message(TranscriptRole::User, 200, "done"),
             message(TranscriptRole::Assistant, 210, "answer"),
         ];
@@ -199,7 +199,8 @@ mod tests {
 
         let turns = session_turns(&messages, &entries, "session-a", false);
 
-        assert_eq!(turns[0].outcome, TurnOutcome::Cut);
+        assert_eq!(turns[0].outcome, TurnOutcome::Unknown);
+        assert_eq!(serde_json::to_value(turns[0].outcome).unwrap(), "unknown");
         assert_eq!(turns[1].outcome, TurnOutcome::Done);
         assert_eq!(turns[0].api_calls, 1);
         assert_eq!(turns[1].api_calls, 1);
