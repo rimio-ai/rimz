@@ -26,6 +26,7 @@ fn headless_result_reads_structured_verdict_cost_and_all_input_tokens() {
         b"diagnostic on stderr",
         &request,
         Some("haiku"),
+        false,
         &crate::agents::pricing::PriceBook::fixture(),
     );
     assert_eq!(
@@ -45,6 +46,7 @@ fn headless_result_reads_structured_verdict_cost_and_all_input_tokens() {
         b"diagnostic on stderr",
         &request,
         Some("haiku"),
+        false,
         &crate::agents::pricing::PriceBook::fixture(),
     );
     assert_eq!(
@@ -73,6 +75,7 @@ fn headless_result_rejects_malformed_and_provider_error_verdicts() {
             b"",
             &request,
             None,
+            false,
             &crate::agents::pricing::PriceBook::fixture(),
         );
         assert!(result.error.is_some(), "{stdout}");

@@ -72,6 +72,7 @@ impl HeadlessForm for ClaudeHeadless {
         _stderr: &[u8],
         _request: &HeadlessRequest,
         _model: Option<&str>,
+        _fast: bool,
         _prices: &PriceBook,
     ) -> HeadlessResult {
         let line = stdout

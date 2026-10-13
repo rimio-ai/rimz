@@ -150,6 +150,12 @@ pub(crate) enum RolloutKind<'a> {
     TurnContext(CodexTurnContext<'a>),
     TokenCount(CodexTokenCount<'a>),
     TokenUsageRecord(Option<CodexRawUsage>),
+    /// `thread_settings_applied`, written at start, at resume, and on `/fast`:
+    /// whether its `service_tier` asks for priority serving (`priority`, or the
+    /// `fast` spelling). An absent or other tier is standard serving.
+    ThreadSettings {
+        priority: bool,
+    },
     UserMessage,
     AgentMessage,
     TaskStarted,
@@ -344,6 +350,11 @@ fn decode_event<'a>(
             model: payload.model,
             info: parse_raw(payload.info.raw()),
         }),
+        Some("thread_settings_applied") => RolloutKind::ThreadSettings {
+            priority: parse_raw::<ThreadSettingsPayload<'_>>(payload.thread_settings.raw())
+                .and_then(|settings| settings.service_tier)
+                .is_some_and(|tier| matches!(tier.trim(), "priority" | "fast")),
+        },
         Some("user_message") => RolloutKind::UserMessage,
         Some("agent_message") => RolloutKind::AgentMessage,
         Some("task_started") => RolloutKind::TaskStarted,
@@ -433,6 +444,12 @@ struct TurnContextPayload<'a> {
 }
 
 #[derive(Default, Deserialize)]
+struct ThreadSettingsPayload<'a> {
+    #[serde(borrow, default, deserialize_with = "deserialize_optional_cow_str")]
+    service_tier: Option<Cow<'a, str>>,
+}
+
+#[derive(Default, Deserialize)]
 struct EventPayload<'a> {
     #[serde(
         rename = "type",
@@ -455,6 +472,8 @@ struct EventPayload<'a> {
     info: RawField<'a>,
     #[serde(borrow, default)]
     item: RawField<'a>,
+    #[serde(borrow, default)]
+    thread_settings: RawField<'a>,
     #[serde(borrow, default)]
     error: RawField<'a>,
     #[serde(rename = "codexErrorInfo", borrow, default)]

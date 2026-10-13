@@ -106,7 +106,9 @@ pub(super) fn legacy_spend_relative(path: &Path) -> bool {
 /// the price book: uncached input at the input rate, the cached slice at the
 /// model's cache-read rate when it is explicit (else at the input rate, per
 /// [`codex_billed_split`]), cache writes at the model's cache-create rate, and
-/// output (which already includes reasoning tokens) at the output rate.
+/// output (which already includes reasoning tokens) at the output rate. An
+/// event after a priority-tier `thread_settings_applied` bills at the model's
+/// fast multiplier.
 /// Automatic cache population records zero writes; explicit prompt caching can
 /// record nonzero writes. Events whose model has no known price still
 /// contribute tokens and sessions with zero dollars while recording an
@@ -135,7 +137,8 @@ pub(crate) fn parse_codex_spend(
         // Automatic cache population reports zero writes. Explicit prompt
         // caching reports a write slice priced at the model's cache-create rate.
         let split = TokenSplit::new(uncached_input, event.output_tokens)
-            .cached(event.cache_write_input_tokens, event.cached_input_tokens);
+            .cached(event.cache_write_input_tokens, event.cached_input_tokens)
+            .fast(event.fast);
         let cost = match prices.price(model) {
             Some(price) => price.cost_of(codex_billed_split(price, split)),
             None => {

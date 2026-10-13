@@ -48,6 +48,9 @@ pub(super) struct CodexTokenEvent {
     pub(super) total_tokens: u64,
     pub(super) tool_calls: BTreeMap<String, u32>,
     pub(super) timing: Option<ResponseTiming>,
+    /// The latest `thread_settings_applied` before this event asked for
+    /// priority serving, so the turn bills at the model's fast multiplier.
+    pub(super) fast: bool,
 }
 
 // ── Typed structs — headless format ──────────────────────────────────────────
@@ -127,7 +130,8 @@ struct CodexResultFields<'a> {
 pub(super) enum CodexLineKind {
     /// Rollout header: `"type":"session_meta"`, carrying the session `cwd`.
     SessionMeta,
-    /// Structured session log: context, usage counts, and response timing markers.
+    /// Structured session log: context, thread settings, usage counts, and
+    /// response timing markers.
     Session,
     /// Provider response item carrying input, model output, or a named tool call.
     ResponseItem,
@@ -151,8 +155,11 @@ pub(super) fn codex_line_kind(line: &[u8]) -> Option<CodexLineKind> {
     let has_token_count = bytes_contains(line, br#""type":"token_count""#);
     let has_task_started = bytes_contains(line, br#""type":"task_started""#);
     let has_usage_record = bytes_contains(line, br#""type":"token_usage_record""#);
+    let has_thread_settings = bytes_contains(line, br#""type":"thread_settings_applied""#);
 
-    if has_turn_ctx || has_usage_record || (has_event_msg && (has_token_count || has_task_started))
+    if has_turn_ctx
+        || has_usage_record
+        || (has_event_msg && (has_token_count || has_task_started || has_thread_settings))
     {
         return Some(CodexLineKind::Session);
     }
@@ -182,6 +189,10 @@ pub(super) struct CodexSpendState {
     pub(super) previous_totals: Option<CodexRawUsage>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     current_model: Option<String>,
+    /// The service tier the latest `thread_settings_applied` carried is
+    /// priority serving; it holds across cursors until another one says not.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    fast: bool,
     /// The session `cwd` from the rollout's `session_meta` header, captured
     /// once and carried across resume cursors so every appended usage entry
     /// keeps its workspace origin without re-reading the header.
@@ -439,6 +450,10 @@ fn visit_session_entry(
         }
         return;
     }
+    if let RolloutKind::ThreadSettings { priority } = record.kind {
+        state.fast = priority;
+        return;
+    }
     let RolloutKind::TokenCount(token_count) = &record.kind else {
         return;
     };
@@ -501,6 +516,7 @@ fn push_usage(
         total_tokens: raw.total_tokens,
         tool_calls: std::mem::take(&mut state.pending_tool_calls),
         timing,
+        fast: state.fast,
     });
 }
 

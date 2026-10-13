@@ -74,7 +74,9 @@ use super::aggregate::{
 /// v25 drops Grok child-session transcripts whose usage the parent already
 /// folds, so finalized child sessions cached with priced entries rebuild once.
 /// v26: `g` response timing (`m` ms, `o` output tokens) for the per-model tok/s figure.
-pub(crate) const SPENDING_CACHE_VERSION: u32 = 26;
+/// v27 prices Codex turns after a priority `thread_settings_applied` at the
+/// model's fast multiplier, so finalized Codex sessions reprice once.
+pub(crate) const SPENDING_CACHE_VERSION: u32 = 27;
 
 /// Output tokens and elapsed milliseconds for timed responses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

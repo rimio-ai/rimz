@@ -196,6 +196,7 @@ Codex writes one rollout per session at `sessions/YYYY/MM/DD/rollout-<timestamp>
 | `token_count` | `info.last_token_usage.output_tokens` | `output_tokens` (the card's `↗`) |
 | `token_count` | deltas of `info.total_token_usage` across the rollout | cumulative `session_usage` and `cost` |
 | `turn_context` | `model`, `effort` | model and live reasoning effort |
+| `event_msg` `thread_settings_applied` | `thread_settings.service_tier` | fast pricing for following token events ([cost](#cost)) |
 
 The adapter emits raw tokens and the window; the snapshot fold derives the gauge percentage. A rollout with no `token_count` yet reports zeros against the fallback window. For a child, `total_token_usage` includes the copied parent history, so it never becomes child lifetime usage or spend. The model falls back from the rollout to `model` in `config.toml`.
 
@@ -333,5 +334,7 @@ The probe reads `$CODEX_HOME/auth.json` first:
 - Forked and subagent rollouts open with a replay of the parent's cumulative history. The parser suppresses that prefix and keeps its last cumulative total as the baseline for the first new delta.
 - A fingerprint of `codex:`, timestamp, model, and token split collapses events copied across files while keeping events that differ at subsecond precision.
 - Each `CodexTokenEvent` is priced per model: fresh input (input minus cache reads and writes) at the input rate, cache writes at the cache-create rate, cache reads at the cache-read rate when the price book states one and at the input rate otherwise, and output (which includes reasoning) at the output rate ([token pricing](./spending.md#token-pricing)).
+- A token event bills at the model's fast multiplier when the latest `thread_settings_applied` before it carried `service_tier` `priority` (or `fast`): Codex writes that record at start, at resume, and on `/fast`, while `token_count` names no tier. An absent or other tier (`default`, `flex`) bills at the standard rate. The tier rides the spend cursor beside the tracked model, so a resumed parse keeps it. The live card's cost comes from the same fold.
+- A headless check (`codex exec --json`) reports usage with no tier, so it bills at the fast multiplier when the check's launch posture had fast on (`LaunchParams::fast`).
 - The fallback model is `gpt-5`. A model with no price keeps its tokens at zero dollars while the pricing refresh looks for a rate.
 - Tool calls come from `function_call`, `custom_tool_call`, `local_shell_call`, and `web_search_call` records and attach to the next token event, so tools that bypass hooks still count.
