@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use super::layout::{TempLayoutFile, render_session_layout};
 use super::pane_topology::{PaneTopologyCache, PaneTopologyPane, ZellijPaneId};
-use super::parse::{parse_client_view, terminal_client_ids};
+use super::parse::terminal_client_ids;
 use super::raw_pane::{
     SidebarDock, is_sidebar_pane, leftmost_live_work_pane, mounted_sidebar_pane,
     nested_work_pane_ids, parse_new_pane_id, repairable_nested_work_pane_ids, sidebar_dock_verdict,
@@ -835,13 +835,12 @@ impl ZellijBackend {
     }
 
     pub(super) fn focused_terminal_client_ids(&self, session: &str) -> BTreeSet<u32> {
-        self.zellij_action(session)
-            .arg("list-clients")
-            .run()
-            .ok()
-            .and_then(|output| parse_client_view(&output.stdout))
-            .map(|view| terminal_client_ids(&view))
-            .unwrap_or_default()
+        self.client_view(crate::mux::ClientFocusOptions {
+            session_name: Some(session.to_owned()),
+            ..Default::default()
+        })
+        .map(|view| terminal_client_ids(&view))
+        .unwrap_or_default()
     }
 
     /// `new-pane` in a stable target tab, titled and `close_on_exit` to match

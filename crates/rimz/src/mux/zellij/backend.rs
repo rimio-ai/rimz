@@ -589,18 +589,42 @@ impl ZellijBackend {
         let spec = self
             .zellij_action(session_name)
             .args(["list-panes", "--all", "--json"]);
+        self.retry_action_list(
+            session_name,
+            spec,
+            timeout,
+            "`list-panes --all --json` returned no array on every attempt",
+            |stdout| {
+                if is_transient_list_reply(stdout) {
+                    return None;
+                }
+                Some(serde_json::from_slice(stdout).map_err(|err| {
+                    output_error(format!("parsing `list-panes --all --json`: {err}"))
+                }))
+            },
+        )
+    }
+
+    fn retry_action_list<T>(
+        &self,
+        session_name: &str,
+        spec: CommandSpec,
+        timeout: Duration,
+        foreign_reply_error: &str,
+        read: impl Fn(&[u8]) -> Option<Result<T>>,
+    ) -> Result<T> {
         let deadline = Instant::now() + timeout;
+        let timeout_error = || MuxErr::Timeout {
+            program: spec.program.clone(),
+            args: spec.args.join(" "),
+            seconds: timeout.as_secs(),
+        };
         let mut remaining = timeout;
         for attempt in 0..super::TRANSIENT_EMPTY_ATTEMPTS {
             if attempt > 0 {
-                let Some(wait_budget) = deadline_remaining(deadline) else {
-                    break;
-                };
-                std::thread::sleep(super::TRANSIENT_EMPTY_RETRY_DELAY.min(wait_budget));
-                let Some(next_budget) = deadline_remaining(deadline) else {
-                    break;
-                };
-                remaining = next_budget;
+                remaining = deadline_remaining(deadline).ok_or_else(timeout_error)?;
+                std::thread::sleep(super::TRANSIENT_EMPTY_RETRY_DELAY.min(remaining));
+                remaining = deadline_remaining(deadline).ok_or_else(timeout_error)?;
             }
             let output = spec.run_with_timeout(remaining).map_err(|err| match err {
                 // A rerun runs on what is left of the budget; the caller reads its own bound.
@@ -616,15 +640,11 @@ impl ZellijBackend {
                     session: session_name.to_owned(),
                 });
             }
-            if !is_transient_list_reply(&output.stdout) {
-                return serde_json::from_slice(&output.stdout).map_err(|err| {
-                    output_error(format!("parsing `list-panes --all --json`: {err}"))
-                });
+            if let Some(answer) = read(&output.stdout) {
+                return answer;
             }
         }
-        Err(output_error(
-            "`list-panes --all --json` returned no array on every attempt",
-        ))
+        Err(output_error(foreign_reply_error))
     }
 
     fn live_session_health(&self, name: &str) -> SessionHealth {
@@ -998,34 +1018,26 @@ impl ZellijBackend {
     }
 
     pub(super) fn list_tabs(&self, session: &str) -> Result<Vec<RawTab>> {
-        for attempt in 0..super::TRANSIENT_EMPTY_ATTEMPTS {
-            if attempt > 0 {
-                std::thread::sleep(super::TRANSIENT_EMPTY_RETRY_DELAY);
-            }
-            let output = self
-                .zellij_action(session)
-                .args(["list-tabs", "--json", "--panes"])
-                .run()
-                .map_err(|err| classify_session_not_found(err, session))?;
-            if is_session_not_found(&output.stdout) || is_session_not_found(&output.stderr) {
-                return Err(MuxErr::SessionNotFound {
-                    session: session.to_owned(),
-                });
-            }
-            if is_transient_list_reply(&output.stdout) {
-                continue;
-            }
-            let tabs = serde_json::from_slice::<Vec<RawTab>>(&output.stdout)
-                .map_err(|e| output_error(format!("parsing list-tabs JSON: {e}")))?;
-            if tabs.is_empty() {
-                continue;
-            }
-            return Ok(tabs);
-        }
-        Err(output_error(format!(
-            "list-tabs returned no array after {} attempts",
-            super::TRANSIENT_EMPTY_ATTEMPTS
-        )))
+        let spec = self
+            .zellij_action(session)
+            .args(["list-tabs", "--json", "--panes"]);
+        self.retry_action_list(
+            session,
+            spec,
+            super::super::COMMAND_TIMEOUT,
+            "list-tabs returned no array on every attempt",
+            |stdout| {
+                if is_transient_list_reply(stdout) {
+                    return None;
+                }
+                let tabs = serde_json::from_slice::<Vec<RawTab>>(stdout)
+                    .map_err(|err| output_error(format!("parsing list-tabs JSON: {err}")));
+                if matches!(&tabs, Ok(tabs) if tabs.is_empty()) {
+                    return None;
+                }
+                Some(tabs)
+            },
+        )
     }
 }
 
@@ -1226,13 +1238,17 @@ impl MuxBackend for ZellijBackend {
             .command_timeout
             .unwrap_or(super::super::COMMAND_TIMEOUT);
         let session = self.resolve_session(opts.session_name.as_deref())?;
-        let output = self
-            .zellij_action(&session)
-            .arg("list-clients")
-            .run_with_timeout(timeout)?;
-        tracing::debug!(session = %session, stdout = ?String::from_utf8_lossy(&output.stdout), "zellij list-clients sample");
-        parse_client_view(&output.stdout)
-            .ok_or_else(|| output_error("`list-clients` returned no header"))
+        let spec = self.zellij_action(&session).arg("list-clients");
+        self.retry_action_list(
+            &session,
+            spec,
+            timeout,
+            "`list-clients` returned no header on every attempt",
+            |stdout| {
+                tracing::debug!(session = %session, stdout = ?String::from_utf8_lossy(stdout), "zellij list-clients sample");
+                parse_client_view(stdout).map(Ok)
+            },
+        )
     }
 
     fn split_pane(&self, opts: SplitPaneOptions) -> Result<Option<PaneId>> {

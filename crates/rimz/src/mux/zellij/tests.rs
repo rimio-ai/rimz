@@ -19,9 +19,10 @@ use crate::mux::zellij::pane_topology::{
 };
 #[cfg(unix)]
 use crate::mux::{
-    LayoutColumn, LayoutPanes, MuxBackend, PaneCmd, PaneListOptions, PaneReadConsistency,
-    ReconcilePaneRole, SessionHealth, SidebarLiveness, SidebarPaneOptions, SidebarWidth,
-    SplitDirection, SplitPaneOptions, SplitPlacement, SplitTarget, TabOptions, WidthSyncOptions,
+    ClientFocusOptions, LayoutColumn, LayoutPanes, MuxBackend, PaneCmd, PaneListOptions,
+    PaneReadConsistency, ReconcilePaneRole, SessionHealth, SidebarLiveness, SidebarPaneOptions,
+    SidebarWidth, SplitDirection, SplitPaneOptions, SplitPlacement, SplitTarget, TabOptions,
+    WidthSyncOptions,
 };
 #[cfg(unix)]
 use crate::utils::time::unix_now_ms;
@@ -549,6 +550,109 @@ fn pane_listing_retries_non_arrays_but_rejects_invalid_elements() {
         );
         assert_eq!(command_count(&shim_log(&temp), LIST_PANES), 5, "{reply}");
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn client_view_retries_a_foreign_reply_before_publishing_clients() {
+    let (temp, shim) = zellij_shim(
+        r#"#!/bin/sh
+dir=$(dirname "$0"); printf '%s\n' "$*" >> "$dir/zellij.log"
+if [ "$(wc -l < "$dir/zellij.log")" -eq 1 ]; then
+  printf '[{"id":7}]\n'
+else
+  printf 'CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND\n3 terminal_12 work\n'
+fi
+"#,
+    );
+    let view = ZellijBackend::with_program_for_test(&shim)
+        .client_view(ClientFocusOptions {
+            session_name: Some("room".to_owned()),
+            ..Default::default()
+        })
+        .expect("a foreign reply must be retried until a genuine listing answers");
+
+    assert_eq!(view.presence.human_clients, 1);
+    assert_eq!(
+        view.clients[0].client_id,
+        crate::ids::MuxClientId::Zellij(3)
+    );
+    assert_eq!(
+        view.viewed_panes,
+        vec![PaneId::from_parts(crate::MuxName::Zellij, "terminal_12")]
+    );
+    assert_eq!(command_count(&shim_log(&temp), "action list-clients"), 2);
+}
+
+#[cfg(unix)]
+#[test]
+fn client_view_errors_after_exhausting_foreign_replies() {
+    let (temp, shim) = zellij_shim(
+        r#"#!/bin/sh
+dir=$(dirname "$0"); printf '%s\n' "$*" >> "$dir/zellij.log"
+printf 'terminal_12\n'
+"#,
+    );
+    let err = ZellijBackend::with_program_for_test(&shim)
+        .client_view(ClientFocusOptions {
+            session_name: Some("room".to_owned()),
+            ..Default::default()
+        })
+        .expect_err("foreign replies are never a detached client view");
+
+    assert!(matches!(err, MuxErr::Output { .. }), "{err}");
+    assert!(err.to_string().contains("list-clients"), "{err}");
+    assert_eq!(
+        command_count(&shim_log(&temp), "action list-clients"),
+        TRANSIENT_EMPTY_ATTEMPTS as usize
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn client_view_classifies_a_stdout_session_not_found_without_retry() {
+    let (temp, shim) = zellij_shim(
+        r#"#!/bin/sh
+dir=$(dirname "$0"); printf '%s\n' "$*" >> "$dir/zellij.log"
+printf "Session 'missing-room' not found. The following sessions are active:\n"
+"#,
+    );
+    let err = ZellijBackend::with_program_for_test(&shim)
+        .client_view(ClientFocusOptions {
+            session_name: Some("missing-room".to_owned()),
+            ..Default::default()
+        })
+        .expect_err("the missing-session banner is an error, not a client view");
+
+    assert!(
+        matches!(err, MuxErr::SessionNotFound { ref session } if session == "missing-room"),
+        "{err}"
+    );
+    assert_eq!(command_count(&shim_log(&temp), "action list-clients"), 1);
+}
+
+#[cfg(unix)]
+#[test]
+fn go_to_lead_tab_retries_foreign_client_replies_without_moving_focus() {
+    let (temp, shim) = zellij_shim(
+        r#"#!/bin/sh
+dir=$(dirname "$0"); printf '%s\n' "$*" >> "$dir/zellij.log"
+printf '1 terminal_12 work\n'
+"#,
+    );
+    ZellijBackend::with_program_for_test(&shim)
+        .go_to_lead_tab("room")
+        .expect("an unanswerable client read skips the focus courtesy");
+
+    let log = shim_log(&temp);
+    assert!(
+        !log.contains("go-to-tab"),
+        "a foreign client row must not move focus: {log}"
+    );
+    assert_eq!(
+        command_count(&log, "action list-clients"),
+        TRANSIENT_EMPTY_ATTEMPTS as usize
+    );
 }
 
 #[cfg(unix)]
