@@ -31,6 +31,8 @@ On supported releases through 0.45.1, `SessionState::new_client` reuses the lowe
 
 At RimZ's 0.44.2 floor, `list-tabs --json` serializes `TabInfo`, including its stable `tab_id`; `list-panes --json` serializes `PaneListEntry`, also including `tab_id`. Sources: [`TabInfo` and `PaneListEntry`](https://github.com/zellij-org/zellij/blob/v0.44.2/zellij-utils/src/data.rs), [`format_tabs_as_json`](https://github.com/zellij-org/zellij/blob/v0.44.2/zellij-server/src/route.rs). Both list replies are JSON arrays, not scalar ids or objects.
 
+`list-clients` always starts with the whitespace-separated header `CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND`, including on a clientless session. Each subsequent row names a numeric client id, its focused `terminal_N` or `plugin_N` pane, and its running command. The issuing action client is omitted. Source: [`ClientMetadata::render_many`](https://github.com/zellij-org/zellij/blob/v0.45.1/zellij-server/src/session_layout_metadata.rs#L662-L682) (unchanged from the 0.44.2 floor through 0.45.1).
+
 ## Plugin API
 
 Plugins are wasm32-wasip1 binaries that run inside the Zellij server's plugin host.
