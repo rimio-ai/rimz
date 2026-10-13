@@ -149,6 +149,11 @@ fn watch_transcripts(runtime: &RuntimePaths) -> notify::Result<()> {
 /// sidecar directory's mtime moved since the last stamp, or the stamp is
 /// [`ROSTER_RESCAN_BACKSTOP`] old. Only a pass whose every registration
 /// succeeded stores a stamp, which is what keeps that retry alive.
+///
+/// The scan reads context sidecars only for the rollup's rows that have not
+/// ended (a session's sidecar is removed at `SessionEnd`), so a sidecar with
+/// no live row is not watched. That row's arrival moves the log extent, which
+/// reopens the gate on the next pass.
 fn reconcile_roster<W: Watcher>(
     runtime: &RuntimePaths,
     state: &crate::StatePaths,
@@ -168,8 +173,12 @@ fn reconcile_roster<W: Watcher>(
         return RosterPass::Unchanged;
     }
     roster.stamp = None;
+    let keys = agents
+        .iter()
+        .filter(|agent| agent.ended_at.is_none())
+        .map(|agent| (agent.kind.as_str(), agent.agent_id.as_str()));
     let live = transcript_targets(
-        &crate::store::agent_context::read_all(runtime),
+        &crate::store::agent_context::read_for_keys(runtime, keys),
         agents.iter(),
     );
     let mut registration_failed = false;
@@ -297,6 +306,30 @@ mod tests {
         (dir, state, runtime)
     }
 
+    fn append_codex_signal(
+        state: &crate::StatePaths,
+        session: &str,
+        signal: crate::agents::LifecycleSignal,
+    ) {
+        let observation =
+            crate::agents::AgentLifecycleObservation::new(Some(session.into()), signal);
+        crate::store::event_log::append(
+            &state.events_log,
+            &crate::store::event::EventEnvelope::agent_lifecycle(
+                state.workspace_id.clone(),
+                "room",
+                "codex",
+                "test",
+                &observation,
+            ),
+        )
+        .unwrap();
+    }
+
+    fn register_codex(state: &crate::StatePaths, session: &str) {
+        append_codex_signal(state, session, crate::agents::LifecycleSignal::Registered);
+    }
+
     fn write_sidecar(runtime: &RuntimePaths, session: &str, source: &str) -> PathBuf {
         let mut record = AgentContextRecord::new("codex", session, context("codex"));
         record.transcript_path = Some(source.to_owned());
@@ -315,6 +348,7 @@ mod tests {
     #[test]
     fn roster_rescan_skips_unchanged_inputs_and_rebuilds_after_add_and_remove() {
         let (_dir, state, runtime) = fixture();
+        register_codex(&state, "first");
         write_sidecar(&runtime, "first", "/t/first.jsonl");
         stamp_directory(&runtime, 1);
         let mut cursor = crate::sidebar::consumer::RollupCursor::new();
@@ -334,6 +368,7 @@ mod tests {
             RosterPass::Unchanged
         );
         assert_eq!(roster.watched, first);
+        register_codex(&state, "second");
         let second_path = write_sidecar(&runtime, "second", "/t/second.jsonl");
         stamp_directory(&runtime, 2);
         assert_eq!(
@@ -441,6 +476,7 @@ mod tests {
     #[test]
     fn failed_registration_keeps_the_roster_gate_open() {
         let (_dir, state, runtime) = fixture();
+        register_codex(&state, "first");
         write_sidecar(&runtime, "first", "/t/first.jsonl");
         let mut cursor = crate::sidebar::consumer::RollupCursor::new();
         let mut watcher = RefusingWatcher::default();
@@ -454,6 +490,50 @@ mod tests {
             assert!(roster.stamp.is_none());
         }
         assert_eq!(watcher.attempts, 2);
+    }
+
+    #[test]
+    fn rescan_reads_only_live_row_contexts_despite_orphans() {
+        const LIVE: usize = 20;
+        let (_dir, state, runtime) = fixture();
+        let mut expected = BTreeMap::new();
+        for slot in 0..LIVE {
+            let session = format!("live-{slot}");
+            let source = format!("/t/{session}.jsonl");
+            register_codex(&state, &session);
+            write_sidecar(&runtime, &session, &source);
+            expected.insert(
+                PathBuf::from(source),
+                BTreeSet::from([target("codex", &session)]),
+            );
+        }
+        register_codex(&state, "ended");
+        append_codex_signal(&state, "ended", crate::agents::LifecycleSignal::Ended);
+        write_sidecar(&runtime, "ended", "/t/ended.jsonl");
+        for slot in 0..3_000 {
+            write_sidecar(&runtime, &format!("orphan-{slot}"), "/t/orphan.jsonl");
+        }
+        let mut cursor = crate::sidebar::consumer::RollupCursor::new();
+        let mut watcher = notify::NullWatcher;
+        let mut roster = Roster::default();
+        let before = crate::testkit::sidecar_read_counts();
+        assert_eq!(
+            reconcile_roster(&runtime, &state, &mut cursor, &mut watcher, &mut roster),
+            RosterPass::Rebuilt
+        );
+        let after = crate::testkit::sidecar_read_counts();
+        assert_eq!(
+            after.1 - before.1,
+            0,
+            "a rescan must not enumerate sidecars"
+        );
+        // The fixture's own live row is a key too; the ended row is not.
+        assert!(
+            after.0 - before.0 <= LIVE + 1,
+            "at most one stat per live row, got {}",
+            after.0 - before.0,
+        );
+        assert_eq!(roster.watched, expected);
     }
 
     #[test]
