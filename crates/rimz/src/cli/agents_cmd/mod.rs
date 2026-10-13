@@ -456,6 +456,7 @@ enum AgentsSubcmd {
     /// Show one agent card.
     #[command(alias = "inspect")]
     Show {
+        /// Agent to show: @handle, @handle#lane, pet name, or pane id (tmux:%12).
         #[arg(add = clap_complete::ArgValueCandidates::new(
             crate::cli::complete::agent_refs
         ))]
@@ -492,6 +493,7 @@ enum AgentsSubcmd {
     },
     /// Show token usage and cost for each turn in an agent session.
     History {
+        /// Agent whose turns to show: @handle, @handle#lane, pet name, or pane id (tmux:%12).
         reference: String,
         /// Keep the last N turns.
         #[arg(short = 'n', long = "tail")]
@@ -526,6 +528,7 @@ enum AgentsSubcmd {
     Top(TopArgs),
     /// Focus an agent pane.
     Focus {
+        /// Agent to focus: @handle, @handle#lane, pet name, or pane id (tmux:%12).
         #[arg(add = clap_complete::ArgValueCandidates::new(
             crate::cli::complete::agent_refs
         ))]
@@ -535,6 +538,7 @@ enum AgentsSubcmd {
     Fork(ForkArgs),
     /// Wait for supervised runs or interactive agents; several references join.
     Wait {
+        /// Agents or runs to wait for: @handle, @handle#lane, pet name, pane id (tmux:%12), or run id.
         #[arg(
             required = true,
             num_args = 1..,
@@ -559,6 +563,7 @@ enum AgentsSubcmd {
     },
     /// Stop a supervised run or close an agent pane.
     Stop {
+        /// Agent or run to stop: @handle, @handle#lane, pet name, pane id (tmux:%12), or run id.
         #[arg(add = clap_complete::ArgValueCandidates::new(
             crate::cli::complete::agent_refs
         ))]
@@ -579,9 +584,13 @@ enum AgentsSubcmd {
         when_idle: Option<WhenIdle>,
     },
     /// Stop an agent and relaunch it in place, resuming its session.
-    Restart { reference: String },
+    Restart {
+        /// Agent to restart: @handle, @handle#lane, pet name, or pane id (tmux:%12).
+        reference: String,
+    },
     /// Compact an agent's context at its next turn boundary.
     Compact {
+        /// Agent to compact: @handle, @handle#lane, pet name, or pane id (tmux:%12).
         #[arg(add = clap_complete::ArgValueCandidates::new(crate::cli::complete::agent_refs))]
         reference: String,
         /// Replace the configured compaction brief; an empty string sends the bare command.

@@ -400,6 +400,41 @@ mod tests {
         );
     }
 
+    #[test]
+    fn agents_verb_positionals_are_described() {
+        fn undescribed(cmd: &Command, path: &str, missing: &mut Vec<String>) {
+            missing.extend(
+                cmd.get_positionals()
+                    .filter(|arg| {
+                        arg.get_help()
+                            .is_none_or(|help| help.to_string().is_empty())
+                    })
+                    .map(|arg| format!("{path} <{}>", arg.get_id())),
+            );
+            for subcmd in cmd
+                .get_subcommands()
+                .filter(|subcmd| subcmd.get_name() != "help" && !subcmd.is_hide_set())
+            {
+                undescribed(subcmd, &format!("{path} {}", subcmd.get_name()), missing);
+            }
+        }
+        let mut cmd = command();
+        cmd.build();
+        let agents = cmd.find_subcommand("agents").expect("agents");
+        let mut missing = Vec::new();
+        for verb in agents
+            .get_subcommands()
+            .filter(|verb| verb.get_name() != "help" && !verb.is_hide_set())
+        {
+            undescribed(
+                verb,
+                &format!("rimz agents {}", verb.get_name()),
+                &mut missing,
+            );
+        }
+        assert!(missing.is_empty(), "undescribed positionals: {missing:#?}");
+    }
+
     fn command_line_count(help: &str, name: &str) -> usize {
         help.lines()
             .filter(|line| line.starts_with("  ") && line.split_whitespace().next() == Some(name))
