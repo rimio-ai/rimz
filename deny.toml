@@ -53,7 +53,7 @@ skip = [
     { crate = "miniz_oxide@0.9.1", reason = "flate2 pins miniz_oxide 0.9; png still carries 0.8" },
     # `thiserror-impl` 2.0.20 leads the proc-macro stack onto syn 3; every other
     # derive crate still carries syn 2. Drop when the rest follow.
-    { crate = "syn@3.0.6", reason = "thiserror-impl 2.0.20 pins syn 3; the rest of the proc-macro stack carries syn 2" },
+    { crate = "syn@3.0.9", reason = "thiserror-impl 2.0.20 pins syn 3; the rest of the proc-macro stack carries syn 2" },
     # `toml_edit`/`indexmap` has moved to hashbrown 0.17 while the ratatui
     # stack still carries 0.16; drop when either upstream converges.
     { crate = "hashbrown@0.17.1", reason = "toml_edit/indexmap pins hashbrown 0.17; ratatui stack pins 0.16" },
@@ -65,6 +65,9 @@ skip = [
     # `tiktoken-rs` 0.12 still decodes its embedded vocabularies with base64
     # 0.22; drop when it moves to the workspace's 0.23.
     { crate = "base64@0.22.1", reason = "tiktoken-rs 0.12 pins base64 0.22; workspace otherwise on 0.23" },
+    # `crossterm` 0.29 (via ratatui) requires signal-hook `^0.3.17` while RimZ
+    # is on 0.4; drop when crossterm moves.
+    { crate = "signal-hook@0.3.18", reason = "crossterm 0.29 pins signal-hook 0.3; workspace otherwise on 0.4" },
 ]
 
 [advisories]

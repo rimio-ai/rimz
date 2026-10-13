@@ -43,17 +43,35 @@ criteria = "safe-to-deploy"
 delta = "1.2.1 -> 1.3.0"
 notes = "AI source review by a GPT 6 Astra subagent verified both published archive SHA-256 values against the baseline and updated workspace lockfiles. Reviewed all production and manifest deltas in src/input.rs, src/input/str.rs and src/scanner.rs, scanner/input context and regression assertions. Scalar scanning and oldest-simple-key tracking retain UTF-8 boundaries, control-character validation, error propagation and existing scanner limits. Inspected key bookkeeping through initialization, expiry, save, clear and removal. No new production dependencies, build scripts, unsafe code or external side effects. Delta review from the existing exempted baseline, not a full baseline or dependency audit. No upstream test execution was performed for this source review."
 
+[[audits.insta]]
+who = "Opus 5.5 <noreply@anthropic.com>"
+criteria = "safe-to-run"
+delta = "1.48.0 -> 1.49.0"
+notes = "AI source review by an Opus 5.5 subagent. Archive checksums verified against the workspace lockfile by cargo. Reviewed the complete package delta from 1.48.0 to 1.49.0: JSON serialization writes enum unit-variant map keys as strings, snapshot-failure hints mention `INSTA_UPDATE=always` only for file snapshots, a new `From<(Option<&OsStr>, &str)>` conversion for `SnapshotValue` was added, and the serialized-snapshot macros drop a trailing semicolon; new tests. No unsafe code, build script, network, process, or new filesystem or environment access was added; the manifest changes only the version. Delta review from the existing exempted baseline, not a full baseline or dependency audit. No upstream test execution was performed for this source review."
+
 [[audits.jiff]]
 who = "GPT 6 Astra <noreply@openai.com>"
 criteria = "safe-to-deploy"
 delta = "0.2.35 -> 0.2.37"
 notes = "AI source review by a GPT 6 Astra subagent verified both published archive SHA-256 values against the baseline and updated workspace lockfiles. Reviewed every production/build delta and serializer, display-wrapper and duration-constructor context. Optional Serde helpers emit serialize_some while preserving formatting and timezone representability checks. New opt-in Arbitrary implementations use wrapped types, bounded duration construction and existing timezone database enumeration/lookup with fixed-offset fallback; the generator may read that database when enabled. Other changes remove a redundant cast and update package metadata and jiff-static versions. Build remains disabled; no unsafe code is introduced. The workspace retains jiff-core 0.1.0; its source and optional arbitrary-feature compatibility were not audited here. Delta review from the existing exempted baseline, not a full baseline or dependency audit. No upstream test execution was performed for this source review."
 
+[[audits.jiff]]
+who = "Opus 5.5 <noreply@anthropic.com>"
+criteria = "safe-to-deploy"
+delta = "0.2.37 -> 0.2.38"
+notes = "AI source review by an Opus 5.5 subagent. Archive checksums verified against the workspace lockfile by cargo. Reviewed the complete package delta from 0.2.37 to 0.2.38: no Rust source changes; the release adds a README, a changelog entry for the IANA 2026e time-zone database, and manifest updates raising `jiff-tzdb` to 0.1.9 and pinning `jiff-static` to `=0.2.38`. No unsafe code, build script, I/O, network, process, or filesystem access was added. Delta review from the existing exempted baseline, not a full baseline or dependency audit. No upstream test execution was performed for this source review."
+
 [[audits.jiff-static]]
 who = "GPT 6 Astra <noreply@openai.com>"
 criteria = "safe-to-deploy"
 delta = "0.2.35 -> 0.2.37"
 notes = "AI source review by a GPT 6 Astra subagent verified both published archive SHA-256 values against the baseline and updated workspace lockfiles. Compared the complete extracted packages. Production source is byte-identical; changes are package versions, VCS metadata and packaged lockfile selections. Manifest dependency requirements are unchanged; build remains disabled. Inspected procedural-macro entry points and existing caller-selected TZif file reads. This update adds no compile-time capability or generated-code change. Packaged lockfile changes are not dependency audits. Delta review from the existing exempted baseline, not a full baseline or dependency audit. No upstream test execution was performed for this source review."
+
+[[audits.jiff-static]]
+who = "Opus 5.5 <noreply@anthropic.com>"
+criteria = "safe-to-deploy"
+delta = "0.2.37 -> 0.2.38"
+notes = "AI source review by an Opus 5.5 subagent. Archive checksums verified against the workspace lockfile by cargo. Reviewed the complete package delta from 0.2.37 to 0.2.38: version metadata only (Cargo.toml, Cargo.toml.orig, VCS info) and the bundled lockfile's resolution of `jiff-tzdb` to 0.1.9; no source, proc-macro, or dependency-requirement changes. No unsafe code, build script, I/O, network, process, or filesystem access was added. Delta review from the existing exempted baseline, not a full baseline or dependency audit. No upstream test execution was performed for this source review."
 
 [[audits.regex]]
 who = "Opus 5.5 <noreply@anthropic.com>"
@@ -139,11 +157,23 @@ criteria = "safe-to-deploy"
 delta = "1.0.228 -> 1.0.229"
 notes = "AI source review verified published archive SHA-256 values against the lockfile revisions and compared extracted content. Reviewed every production-source delta and enclosing functions/callees in src/{bound.rs,de.rs,lib.rs,pretend.rs,ser.rs}, src/de/{enum_adjacently.rs,enum_externally.rs} and src/internals/{ast.rs,attr.rs,ctxt.rs,receiver.rs}, plus complete manifests and package metadata. Checked Syn 3.0.4 AST definitions for type-default removal, generic bounds, function-pointer and parenthesized-argument traversal, and receiver substitution. Iterator-to-loop rewrites preserve field/variant ordering and generated expressions; explicit Result matches preserve error types and missing-element handling. Attribute defaults, borrowing, diagnostics and remote/packed-field handling retain prior behavior. No introduced unsafe code or ambient capability was found. MSRV rises to 1.71; no build script is added. Delta review only, based on the imported 1.0.228 audit; Syn 3.0.4 remains covered separately by existing policy, not this review."
 
+[[audits.signal-hook]]
+who = "Opus 5.5 <noreply@anthropic.com>"
+criteria = "safe-to-deploy"
+delta = "0.3.18 -> 0.4.5"
+notes = "AI source review by an Opus 5.5 subagent. Archive checksums verified against the workspace lockfile by cargo. Reviewed the complete package delta for signal-hook 0.3.18 -> 0.4.5: build.rs, Cargo.toml, src/low_level/pipe.rs, signal_details.rs, iterator/backend.rs, iterator/mod.rs, flag.rs, lib.rs, tests and example. The production changes move the pipe registration API from raw file descriptors to OwnedFd, which removes a manual close and fixes a double-close on unregister. register_raw now sets FD_CLOEXEC correctly. A hand-written 32-bit Android sigset fallback is replaced by sigemptyset/sigaddset, and Windows cfg gates are added. The remaining unsafe is the same fcntl/write/send libc calls as before, now in one helper, and net unsafe goes down. build.rs only adds a Windows skip around the existing optional cc compile of an unchanged extract.c. No new network, process, filesystem or proc-macro capability. Delta review from the existing exempted baseline, not a full baseline or dependency audit. No upstream test execution was performed for this source review."
+
 [[audits.syn]]
 who = "GPT 6 Astra <noreply@openai.com>"
 criteria = "safe-to-deploy"
 delta = "3.0.4 -> 3.0.6"
 notes = "AI source review by a GPT 6 Astra subagent verified both published archive SHA-256 values against the baseline and updated workspace lockfiles. Reviewed all production and manifest deltas, surrounding full/reduced-feature parser paths, group parsing and the interpolated-lifetime regression test. Expression parsing recognizes interpolated lifetime labels using forked lookahead without consuming the original stream. LitStr tokenization errors retain the literal span. No new unsafe code, external interaction or production dependency requirement. Delta review from the existing exempted baseline, not a full baseline or dependency audit. No upstream test execution was performed for this source review."
+
+[[audits.syn]]
+who = "Opus 5.5 <noreply@anthropic.com>"
+criteria = "safe-to-deploy"
+delta = "3.0.6 -> 3.0.9"
+notes = "AI source review by an Opus 5.5 subagent. Archive checksums verified against the workspace lockfile by cargo. Reviewed the complete package delta from 3.0.6 to 3.0.9: expression parsing now rejects `<-` after a binary operand with a diagnostic, binary-operator parsing no longer splits `->` or `<-`, `break 'label ::path` parses correctly, and a new safe `Punctuated::retain` method was added; test-only `rustc_ast` comparison updates. No unsafe code, build script, I/O, network, process, or filesystem access was added; the manifest changes only the version. Delta review from the existing exempted baseline, not a full baseline or dependency audit. No upstream test execution was performed for this source review."
 
 [[audits.thiserror]]
 who = "Opus 5.5 <noreply@anthropic.com>"
@@ -162,6 +192,12 @@ who = "Opus 5.5 <noreply@anthropic.com>"
 criteria = "safe-to-deploy"
 delta = "0.12.0 -> 0.12.1"
 notes = "AI source review by Opus 5.5. Archive SHA-256 values match the old and new workspace lockfile checksums. Reviewed the complete delta. lazy_static is replaced by std::sync::LazyLock for the tokenizer singletons and the model map; get_tokenizer matches any gpt-5 prefix to o200k_base; get_context_size returns 1,050,000 for gpt-6 names; _byte_pair_merge_large replaces a let-chain with nested ifs of the same meaning. Dependencies move to bstr 1.13.1, regex 1.13.1 and fancy-regex 0.19, each reviewed or decided separately, and lazy_static is dropped. README wording changes. No unsafe code, build script or I/O is added. Delta review from the existing exempted baseline, not a full baseline or dependency audit. No upstream test execution was performed for this source review."
+
+[[audits.tokio]]
+who = "Opus 5.5 <noreply@anthropic.com>"
+criteria = "safe-to-deploy"
+delta = "1.53.1 -> 1.53.2"
+notes = "AI source review by an Opus 5.5 subagent. Archive checksums verified against the workspace lockfile by cargo. Reviewed the complete package delta for tokio 1.53.1 -> 1.53.2, a bug-fix release. Changes: mpsc block-reclamation index wraparound and Permit::send ordering; semaphore MAX_PERMITS validation and permit cleanup if a tracing subscriber panics; wakers dropped outside timer, JoinSet, broadcast and blocking-pool locks; timer wheels drain directly at shutdown; AsyncFd deregister failure keeps its registration (revert); overflow-safe buffered File seek; Windows child wait unregistered before the handle closes; io_uring read length clamped and context kept across waker panics; task-dump leaf wakes deferred. Unsafe changes are small and fix existing code; no build script, network, process spawning or new filesystem access in shipped code; test files only scanned. Delta review from the existing exempted baseline, not a full baseline or dependency audit. No upstream test execution was performed for this source review."
 
 [[audits.toml]]
 who = "GPT 6 Astra <noreply@openai.com>"
@@ -198,6 +234,12 @@ who = "GPT 6 Astra <noreply@openai.com>"
 criteria = "safe-to-deploy"
 delta = "1.26.0 -> 1.26.1"
 notes = "AI source review by a GPT 6 Astra subagent verified both published archive SHA-256 values against the baseline and updated workspace lockfiles. Reviewed every production delta, manifests, timestamp encoder and RNG context. Uuid::new_v7 counter alignment preserves version/variant fields, bounds shifts and retains the most significant 74 counter bits. Full-width counters now invoke the existing RNG and inherit its failure behavior. Timestamp-to-SystemTime conversion uses checked_add with UNIX_EPOCH fallback on overflow. Optional wasm RNG dependency requirements change, but that package is absent from the workspace lockfile and was not audited here. Build remains disabled; no unsafe code is introduced. Delta review from the existing exempted baseline, not a full baseline or dependency audit. No upstream test execution was performed for this source review."
+
+[[audits.uuid]]
+who = "Opus 5.5 <noreply@anthropic.com>"
+criteria = "safe-to-deploy"
+delta = "1.26.1 -> 1.28.0"
+notes = "AI source review by an Opus 5.5 subagent. Archive checksums verified against the workspace lockfile by cargo. Reviewed the complete package delta from uuid 1.26.1 to 1.28.0: parser.rs and error.rs now accept the `urn:uuid:` prefix case-insensitively, behind length checks of 45 and at least 9 bytes; timestamp.rs changes the v7 ReseedingTimestamp::advance so that a timestamp from an earlier millisecond keeps the stored state and relies on the counter for monotonicity; serde_support.rs adds `option` serialize/deserialize helpers for each format and routes the existing byte encoding through a private wrapper; the rest is version strings, the bundled lockfile, and tests. No unsafe code, build script, proc-macro, filesystem, network, process, or environment access is added or changed. Delta review from the existing exempted baseline, not a full baseline or dependency audit. No upstream test execution was performed for this source review."
 
 [[trusted.addr2line]]
 criteria = "safe-to-deploy"
