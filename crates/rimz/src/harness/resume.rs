@@ -1889,6 +1889,9 @@ fn plan_team_restore_tabs(
         };
         let mut cohort = if fresh {
             CohortResumePlan {
+                spec: cohort_spec_label(&cells, Some(&team)),
+                lane_label: lane_label(Some(newest), newest.channel().as_deref(), &cwd),
+                matching_lanes: 1,
                 seeds: vec![CohortSeed::Fresh; cells.len()],
                 cwd: Some(cwd.clone()),
                 channel: newest.channel(),
@@ -2376,6 +2379,37 @@ pub fn plan_cohort_resume(
         .as_deref()
         .filter(|channel| !channel.is_empty())
         .map(ToOwned::to_owned);
+    // cohort_candidates admits only agents with an existing working directory.
+    let lane_label = lane_label(
+        Some(newest),
+        channel.as_deref(),
+        cwd.as_deref()
+            .expect("cohort candidate has a working directory"),
+    );
+    let mut lanes = BTreeMap::<_, Vec<_>>::new();
+    for agent in &candidates {
+        lanes
+            .entry((normalized_agent_worktree(agent), agent.channel()))
+            .or_default()
+            .push(*agent);
+    }
+    // Team roles fill across lanes, so the chosen lane's own match can hold a
+    // live member another lane's closed seat replaced; it still counts.
+    let chosen_lane = (normalized_agent_worktree(newest), newest.channel());
+    let matching_lanes = lanes
+        .iter()
+        .filter(|(lane, agents)| {
+            if **lane == chosen_lane {
+                return true;
+            }
+            let matches = match_cohort(agents, cells, team);
+            matches.iter().any(Option::is_some)
+                && matches
+                    .iter()
+                    .flatten()
+                    .all(|agent| !matches!(liveness(agent), AgentLiveness::Live { .. }))
+        })
+        .count();
     let launch_group = newest
         .launch_group
         .as_deref()
@@ -2412,6 +2446,9 @@ pub fn plan_cohort_resume(
     }
 
     Ok(CohortResumePlan {
+        spec,
+        lane_label,
+        matching_lanes,
         seeds,
         cwd,
         channel,

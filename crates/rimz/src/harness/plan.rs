@@ -181,6 +181,9 @@ pub enum CohortSeed {
 /// Explicit cohort resume state parallel to layout agent cells.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CohortResumePlan {
+    pub spec: String,
+    pub lane_label: String,
+    pub matching_lanes: usize,
     pub seeds: Vec<CohortSeed>,
     pub cwd: Option<PathBuf>,
     pub channel: Option<String>,

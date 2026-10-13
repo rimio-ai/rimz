@@ -2347,6 +2347,9 @@ fn matched_resume_isolation_overrides_without_stamping_one_shot_values() {
         )
         .unwrap();
         let plan = CohortResumePlan {
+            spec: "claude".to_owned(),
+            lane_label: "#main".to_owned(),
+            matching_lanes: 1,
             seeds: vec![CohortSeed::Resume(Box::new(agent))],
             cwd: Some(dir.path().to_owned()),
             channel: None,

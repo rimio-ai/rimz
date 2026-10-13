@@ -4,6 +4,82 @@
 use super::*;
 
 #[test]
+fn cohort_resume_counts_matching_closed_lanes_and_names_the_newest() {
+    for old_path in ["/repo/old", "/repo/new"] {
+        let old = AgentState {
+            channel: Some("old".to_owned()),
+            ..team_agent("codex", "old", "coder", old_path, 20)
+        };
+        let duplicate = AgentState {
+            agent_id: "older-in-old".into(),
+            last_activity: old.last_activity - std::time::Duration::from_secs(10),
+            ..old.clone()
+        };
+        let newest = AgentState {
+            channel: Some("new".to_owned()),
+            ..team_agent("codex", "new", "coder", "/repo/new", 1)
+        };
+        let unrelated = AgentState {
+            team: Some("other-team".to_owned()),
+            ..team_agent("codex", "other", "coder", "/repo/other", 0)
+        };
+        let live_lane = team_agent("codex", "live", "coder", "/repo/live", 40);
+        let plan = cohort_with(
+            &[old, duplicate, newest, unrelated, live_lane],
+            &[cohort_cell("codex", Some("coder"))],
+            Some("forge"),
+            |agent| {
+                if agent.agent_id.as_str() == "live" {
+                    live(agent)
+                } else {
+                    dead(agent)
+                }
+            },
+            |_| true,
+            |_| true,
+        )
+        .unwrap();
+        assert_eq!(plan.matching_lanes, 2);
+        assert_eq!(plan.lane_label, "#new");
+        assert_eq!(plan.spec, "forge");
+        assert_eq!(plan.cwd.as_deref(), Some(Path::new("/repo/new")));
+    }
+}
+
+#[test]
+fn cohort_resume_counts_the_chosen_lane_when_its_own_seat_is_live() {
+    let lane = |agent: AgentState, channel: &str| AgentState {
+        channel: Some(channel.to_owned()),
+        ..agent
+    };
+    let agents = [
+        lane(team_agent("claude", "a-plan", "planner", "/repo/a", 1), "a"),
+        lane(team_agent("codex", "a-code", "coder", "/repo/a", 5), "a"),
+        lane(team_agent("codex", "b-code", "coder", "/repo/b", 3), "b"),
+    ];
+    let plan = cohort_with(
+        &agents,
+        &[
+            cohort_cell("claude", Some("planner")),
+            cohort_cell("codex", Some("coder")),
+        ],
+        Some("forge"),
+        |agent| {
+            if agent.agent_id.as_str() == "a-code" {
+                live(agent)
+            } else {
+                dead(agent)
+            }
+        },
+        |_| true,
+        |_| true,
+    )
+    .unwrap();
+    assert_eq!(plan.lane_label, "#a");
+    assert_eq!(plan.matching_lanes, 2);
+}
+
+#[test]
 fn live_team_seats_are_refilled_without_planning_a_team_tab() {
     let (teams, profiles, commands) = team_configs();
     let parked = vec![
