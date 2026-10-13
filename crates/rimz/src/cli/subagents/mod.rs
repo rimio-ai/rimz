@@ -328,7 +328,7 @@ fn launch_child(args: SubagentLaunchArgs, json: bool, globals: &GlobalFlags) -> 
         return Ok(());
     };
     agents_cmd::wait_agent(
-        vec![child.name],
+        vec![(child.name.clone(), child.name)],
         false,
         timeout,
         false,
@@ -412,7 +412,10 @@ fn fanout_children(args: FanoutArgs, globals: &GlobalFlags) -> Result<()> {
         }
         return Ok(());
     };
-    let names = launched.into_iter().map(|child| child.name).collect();
+    let names = launched
+        .into_iter()
+        .map(|child| (child.name.clone(), child.name))
+        .collect();
     agents_cmd::wait_agent(names, false, wait_timeout, false, false, args.json, globals)
 }
 
@@ -945,7 +948,7 @@ fn wait_references(
     children: &[&AgentState],
     names: &[String],
     context: &rimz::address::AddressContext,
-) -> Result<Vec<String>> {
+) -> Result<Vec<(String, String)>> {
     if names.is_empty() {
         if children.is_empty() {
             bail!("this agent has no supervised subagents to wait for");
@@ -959,9 +962,16 @@ fn wait_references(
             "`rimz subagents wait` needs at least one child name; this agent's subagents: {names} (see `rimz subagents list`)"
         );
     }
-    Ok(resolve_child_names(children, names, context)?
+    let mut seen = std::collections::HashSet::new();
+    let names: Vec<_> = names
+        .iter()
+        .filter(|name| seen.insert(*name))
+        .cloned()
+        .collect();
+    Ok(resolve_child_names(children, &names, context)?
         .into_iter()
-        .map(child_reference)
+        .zip(names)
+        .map(|(child, name)| (name, child_reference(child)))
         .collect())
 }
 

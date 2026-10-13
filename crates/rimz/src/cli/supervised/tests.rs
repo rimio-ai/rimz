@@ -1466,6 +1466,7 @@ fn attached_stream_timeout_does_not_mark_run_timed_out() {
         false,
         Some(Duration::ZERO),
         &mut sink,
+        |_| Ok(()),
     )
     .unwrap();
 

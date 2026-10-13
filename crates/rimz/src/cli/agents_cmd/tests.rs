@@ -2300,6 +2300,31 @@ fn wait_style_labels_only_plural_or_any_results() {
 }
 
 #[test]
+fn wait_reason_reports_only_changes_and_resets_after_running() {
+    use rimz::message::reply::TurnWaitReason;
+
+    let mut err = Vec::new();
+    let mut previous = None;
+    for reason in [
+        TurnWaitReason::Paused,
+        TurnWaitReason::Paused,
+        TurnWaitReason::Running,
+        TurnWaitReason::Paused,
+        TurnWaitReason::NoTurnStarted,
+    ] {
+        wait::report_wait_reason(&mut err, &mut previous, Some(reason), "@coder#a").unwrap();
+    }
+    assert_eq!(
+        String::from_utf8(err).unwrap(),
+        concat!(
+            "waiting on @coder#a: it is paused\n",
+            "waiting on @coder#a: it is paused\n",
+            "waiting on @coder#a: no turn started\n",
+        )
+    );
+}
+
+#[test]
 fn plural_wait_block_prints_completed_answer() {
     let mut record = RunRecord::new(
         WorkspaceId::from_project_root(Path::new("/tmp/rimz-wait")),
@@ -2311,6 +2336,7 @@ fn plural_wait_block_prints_completed_answer() {
     record.status = RunStatus::Completed;
     record.last_message = Some("child answer\n".to_owned());
     let outcome = wait::TargetOutcome {
+        reference: "calm-fox".to_owned(),
         name: "calm-fox".to_owned(),
         payload: wait::TerminalPayload::Run(Box::new(record)),
     };
@@ -2327,7 +2353,7 @@ fn plural_wait_block_prints_completed_answer() {
 
     assert_eq!(
         anstream::adapter::strip_str(&String::from_utf8(out).unwrap()).to_string(),
-        "--- calm-fox ---\nchild answer\n\n"
+        "--- calm-fox (completed) ---\nchild answer\n\n"
     );
     assert!(err.is_empty());
 }
@@ -2344,6 +2370,7 @@ fn plural_wait_block_marks_failure_and_prints_forensics() {
     record.status = RunStatus::Failed;
     record.failure_tail = Some("provider failed".to_owned());
     let outcome = wait::TargetOutcome {
+        reference: "bright-owl".to_owned(),
         name: "bright-owl".to_owned(),
         payload: wait::TerminalPayload::Run(Box::new(record)),
     };
@@ -2377,6 +2404,7 @@ fn plural_wait_block_for_agent_payload_prints_last_message() {
         1_000,
     );
     let outcome = wait::TargetOutcome {
+        reference: "quiet-lynx".to_owned(),
         name: "quiet-lynx".to_owned(),
         payload: wait::TerminalPayload::Agent {
             agent: Box::new(agent),
@@ -2396,7 +2424,7 @@ fn plural_wait_block_for_agent_payload_prints_last_message() {
 
     assert_eq!(
         anstream::adapter::strip_str(&String::from_utf8(out).unwrap()).to_string(),
-        "--- quiet-lynx ---\nreviewed; two findings\n\n"
+        "--- quiet-lynx (completed) ---\nreviewed; two findings\n\n"
     );
     assert!(err.is_empty());
     assert_eq!(
@@ -2511,6 +2539,7 @@ fn plural_wait_json_entry_includes_last_message() {
     record.status = RunStatus::Completed;
     record.last_message = Some("finished review".to_owned());
     let outcome = wait::TargetOutcome {
+        reference: "calm-fox".to_owned(),
         name: "calm-fox".to_owned(),
         payload: wait::TerminalPayload::Run(Box::new(record)),
     };

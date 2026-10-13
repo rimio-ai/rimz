@@ -3,10 +3,76 @@ use super::*;
 use super::runs_lookup::{agent_name, newest_run_by_ref};
 use crate::cli::render;
 use rimz::agents::TurnCompletion;
-use rimz::message::reply::TurnWaitView;
+use rimz::message::reply::{TurnWaitReason, TurnWaitView};
 
+pub(super) fn report_wait_reason(
+    err: &mut impl Write,
+    previous: &mut Option<TurnWaitReason>,
+    reason: Option<TurnWaitReason>,
+    address: &str,
+) -> Result<()> {
+    let now = jiff::Timestamp::now();
+    let text = reason
+        .as_ref()
+        .and_then(|reason| wait_reason_text(reason, now));
+    let changed = text
+        != previous
+            .as_ref()
+            .and_then(|reason| wait_reason_text(reason, now));
+    *previous = reason;
+    if changed && let Some(text) = text {
+        let prefix = match previous {
+            Some(TurnWaitReason::NoTurnStarted) => "",
+            Some(TurnWaitReason::WakeInFlight) => "it has a ",
+            _ => "it is ",
+        };
+        write!(err, "waiting on {address}: {prefix}{text}")?;
+        if matches!(previous, Some(TurnWaitReason::WaitingOnPerson(_))) {
+            write!(
+                err,
+                "; answer: {}",
+                shlex::try_join(["rimz", "answer", address])?
+            )?;
+        }
+        writeln!(err)?;
+        err.flush()?;
+    }
+    Ok(())
+}
+
+fn wait_reason_text(reason: &TurnWaitReason, now: jiff::Timestamp) -> Option<String> {
+    Some(match reason {
+        TurnWaitReason::Running => return None,
+        TurnWaitReason::WaitingOnPerson(ask) => {
+            let mut text = "waiting on a person".to_owned();
+            if let Some(ask) = ask {
+                text.push_str(&format!(" ({}", ask.kind.short_label()));
+                if let Some(detail) = &ask.detail {
+                    text.push_str(&format!(": {detail:?}"));
+                }
+                text.push(')');
+            }
+            text
+        }
+        TurnWaitReason::Sleeping(waits) if !waits.is_empty() => format!(
+            "sleeping ({})",
+            waits
+                .iter()
+                .map(|wait| wait.label(now))
+                .collect::<Vec<_>>()
+                .join("; "),
+        ),
+        TurnWaitReason::Sleeping(_) => "sleeping".to_owned(),
+        TurnWaitReason::WakeInFlight => "wake in flight".to_owned(),
+        TurnWaitReason::Hibernating => "hibernating".to_owned(),
+        TurnWaitReason::Paused => "paused".to_owned(),
+        TurnWaitReason::NoTurnStarted => "no turn started".to_owned(),
+    })
+}
+
+/// Wait on pairs of the typed reference and its lookup reference.
 pub(in crate::cli) fn wait_agent(
-    references: Vec<String>,
+    mut references: Vec<(String, String)>,
     any: bool,
     timeout: Option<Duration>,
     stream_output: bool,
@@ -14,6 +80,8 @@ pub(in crate::cli) fn wait_agent(
     json: bool,
     globals: &GlobalFlags,
 ) -> Result<()> {
+    let mut seen = std::collections::HashSet::new();
+    references.retain(|(typed, _)| seen.insert(typed.clone()));
     if stream_output && references.len() > 1 {
         bail!("--stream tails one target; wait on a single reference");
     }
@@ -27,10 +95,13 @@ pub(in crate::cli) fn wait_agent(
             from_start,
             json,
         };
+        let (typed_reference, reference) =
+            references.first().context("wait requires a reference")?;
         return wait_stream_request(
             store,
             snapshot,
-            references.first().context("wait requires a reference")?,
+            typed_reference,
+            reference,
             current_channel,
             options,
         );
@@ -41,7 +112,7 @@ pub(in crate::cli) fn wait_agent(
 }
 
 fn wait_non_stream_request(
-    references: Vec<String>,
+    references: Vec<(String, String)>,
     any: bool,
     timeout: Option<Duration>,
     style: WaitStyle,
@@ -71,25 +142,33 @@ struct WaitStreamOptions {
 fn wait_stream_request(
     store: &rimz::Store,
     snapshot: rimz::store::snapshot::SidebarSnapshot,
+    typed_reference: &str,
     reference: &str,
     current_channel: &rimz::address::AddressContext,
     options: WaitStreamOptions,
 ) -> Result<()> {
-    match resolve_wait_target(store, &snapshot, reference, current_channel)? {
+    match resolve_wait_target(store, &snapshot, reference, reference, current_channel)? {
         WaitTarget::Run { run_id, .. } => {
             let run = rimz::harness::run::load(store.paths(), &run_id)?;
-            wait_run_stream(store, &run, options)
+            wait_run_stream(store, &run, typed_reference, current_channel, options)
         }
         WaitTarget::Agent {
             reference, kind, ..
-        } => wait_interactive_agent_stream(store, &reference, &kind, current_channel, options),
+        } => wait_interactive_agent_stream(
+            store,
+            typed_reference,
+            &reference,
+            &kind,
+            current_channel,
+            options,
+        ),
     }
 }
 
 fn wait_non_stream(
     ctx: &Ctx,
     snapshot: &rimz::store::snapshot::SidebarSnapshot,
-    references: Vec<String>,
+    references: Vec<(String, String)>,
     any: bool,
     timeout: Option<Duration>,
     style: WaitStyle,
@@ -99,7 +178,9 @@ fn wait_non_stream(
     let session_name = &ctx.workspace.session_name;
     let targets = references
         .iter()
-        .map(|reference| resolve_wait_target(store, snapshot, reference, current_channel))
+        .map(|(typed, reference)| {
+            resolve_wait_target(store, snapshot, typed, reference, current_channel)
+        })
         .collect::<Result<Vec<_>>>()?;
     let mut waits = WaitSet::new(
         targets,
@@ -120,10 +201,12 @@ fn wait_non_stream(
                     selected,
                     &settled,
                 )?;
+                render::err().flush()?;
                 std::process::exit(style.exit_code(&waits, selected)?);
             }
             WaitPoll::TimedOut { settled } => {
                 style.report_timeout(store, session_name, &waits, &settled)?;
+                render::err().flush()?;
                 std::process::exit(RunStatus::TimedOut.exit_code());
             }
         }
@@ -186,7 +269,7 @@ impl WaitStyle {
                     crate::cli::resolve_agent_one(
                         store,
                         &snapshot,
-                        waits.targets[selected].name(),
+                        waits.targets[selected].typed_reference(),
                         None,
                         current_channel,
                     )?;
@@ -322,24 +405,46 @@ enum WaitTarget {
     Run {
         run_id: rimz::RunId,
         name: String,
+        typed_reference: String,
+        reason: Option<TurnWaitReason>,
     },
     Agent {
         reference: String,
+        typed_reference: String,
+        name: String,
+        reason: Option<TurnWaitReason>,
         kind: rimz::ids::AgentKind,
         completed_seen_at: Option<Instant>,
     },
 }
 
 impl WaitTarget {
-    fn name(&self) -> &str {
+    fn typed_reference(&self) -> &str {
         match self {
-            Self::Run { name, .. } => name,
-            Self::Agent { reference, .. } => reference,
+            Self::Run {
+                typed_reference, ..
+            }
+            | Self::Agent {
+                typed_reference, ..
+            } => typed_reference,
         }
+    }
+
+    fn timeout_entry(&self) -> WaitEntryJson {
+        let (name, reason) = match self {
+            Self::Run { name, reason, .. } | Self::Agent { name, reason, .. } => (name, reason),
+        };
+        let mut entry =
+            WaitEntryJson::new(name.clone(), RunStatus::TimedOut, None, None, None, None);
+        entry.reason = reason
+            .as_ref()
+            .and_then(|reason| wait_reason_text(reason, jiff::Timestamp::now()));
+        entry
     }
 }
 
 pub(super) struct TargetOutcome {
+    pub(super) reference: String,
     pub(super) name: String,
     pub(super) payload: TerminalPayload,
 }
@@ -357,6 +462,7 @@ impl TargetOutcome {
     pub(super) fn entry(&self) -> WaitEntryJson {
         match &self.payload {
             TerminalPayload::Run(record) => WaitEntryJson::new(
+                self.name.clone(),
                 record.status,
                 record.cost_usd,
                 record.transcript_path.clone(),
@@ -369,6 +475,7 @@ impl TargetOutcome {
                 agent,
                 last_message,
             } => WaitEntryJson::new(
+                self.name.clone(),
                 if agent.effective_status() == rimz::agents::AgentStatus::Failed {
                     RunStatus::Failed
                 } else {
@@ -384,6 +491,7 @@ impl TargetOutcome {
                 None,
             ),
             TerminalPayload::Disappeared => WaitEntryJson::new(
+                self.name.clone(),
                 RunStatus::Failed,
                 None,
                 None,
@@ -400,6 +508,7 @@ impl TargetOutcome {
 
 #[derive(serde::Serialize)]
 pub(super) struct WaitEntryJson {
+    name: String,
     status: RunStatus,
     exit: i32,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -410,10 +519,13 @@ pub(super) struct WaitEntryJson {
     last_message: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<String>,
 }
 
 impl WaitEntryJson {
     fn new(
+        name: String,
         status: RunStatus,
         cost: Option<f64>,
         transcript_path: Option<String>,
@@ -421,12 +533,14 @@ impl WaitEntryJson {
         error: Option<String>,
     ) -> Self {
         Self {
+            name,
             status,
             exit: status.exit_code(),
             cost,
             transcript_path,
             last_message,
             error,
+            reason: None,
         }
     }
 }
@@ -434,6 +548,7 @@ impl WaitEntryJson {
 fn resolve_wait_target(
     store: &rimz::Store,
     snapshot: &rimz::store::snapshot::SidebarSnapshot,
+    typed_reference: &str,
     reference: &str,
     current_channel: &rimz::address::AddressContext,
 ) -> Result<WaitTarget> {
@@ -453,6 +568,8 @@ fn resolve_wait_target(
         return Ok(WaitTarget::Run {
             run_id: run.run_id,
             name,
+            typed_reference: typed_reference.to_owned(),
+            reason: None,
         });
     }
     if live_agent.is_none() {
@@ -460,6 +577,9 @@ fn resolve_wait_target(
     }
     Ok(WaitTarget::Agent {
         reference: reference.to_owned(),
+        typed_reference: typed_reference.to_owned(),
+        name: agent_name(live_agent.context("resolved wait agent without state")?).to_owned(),
+        reason: None,
         kind: live_agent
             .context("resolved wait agent without state")?
             .kind
@@ -508,18 +628,36 @@ fn poll_target(
     deadline: Option<Instant>,
 ) -> Result<Option<TargetOutcome>> {
     match target {
-        WaitTarget::Run { run_id, name } => {
+        WaitTarget::Run {
+            run_id,
+            name,
+            typed_reference,
+            reason,
+        } => {
             let record = rimz::harness::run::load(store.paths(), run_id)?;
+            *name = record
+                .agent_name
+                .clone()
+                .unwrap_or_else(|| run_id.to_string());
             if !record.status.is_terminal() {
+                if let Some(view) = agent_view {
+                    report_run_wait_reason(view, &record, current_channel, reason)?;
+                } else {
+                    *reason = None;
+                }
                 return Ok(None);
             }
             Ok(Some(TargetOutcome {
+                reference: typed_reference.clone(),
                 name: name.clone(),
                 payload: TerminalPayload::Run(Box::new(record)),
             }))
         }
         WaitTarget::Agent {
             reference,
+            typed_reference,
+            name,
+            reason,
             completed_seen_at,
             ..
         } => {
@@ -532,6 +670,10 @@ fn poll_target(
                 current_channel,
             ) {
                 Ok(agent) => {
+                    let address =
+                        rimz::address::paste_address(agent, &view.snapshot, current_channel);
+                    report_wait_reason(&mut render::err(), reason, view.reason(agent), &address)?;
+                    *name = agent_name(agent).to_owned();
                     let completion = view.completion(agent);
                     let latest = match agent.turn_started_at {
                         Some(since) if completion != TurnCompletion::Open => {
@@ -553,6 +695,7 @@ fn poll_target(
                         (Instant::now(), deadline),
                     );
                     Ok(settled.map(|last_message| TargetOutcome {
+                        reference: typed_reference.clone(),
                         name: agent_name(agent).to_owned(),
                         payload: TerminalPayload::Agent {
                             agent: Box::new(agent.clone()),
@@ -561,12 +704,32 @@ fn poll_target(
                     }))
                 }
                 Err(_) => Ok(Some(TargetOutcome {
-                    name: reference.clone(),
+                    reference: typed_reference.clone(),
+                    name: name.clone(),
                     payload: TerminalPayload::Disappeared,
                 })),
             }
         }
     }
+}
+
+fn report_run_wait_reason(
+    view: &TurnWaitView,
+    record: &RunRecord,
+    current_channel: &rimz::address::AddressContext,
+    reason: &mut Option<TurnWaitReason>,
+) -> Result<()> {
+    let Some(agent) = view
+        .snapshot
+        .agents
+        .iter()
+        .find(|agent| record.matches_agent(agent))
+    else {
+        *reason = None;
+        return Ok(());
+    };
+    let address = rimz::address::paste_address(agent, &view.snapshot, current_channel);
+    report_wait_reason(&mut render::err(), reason, view.reason(agent), &address)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -613,15 +776,20 @@ impl WaitSet {
         store: &rimz::Store,
         current_channel: &rimz::address::AddressContext,
     ) -> Result<WaitPoll> {
-        let agent_view = self
+        let pending_agent = self
             .targets
             .iter()
             .zip(&self.outcomes)
             .any(|(target, outcome)| {
-                outcome.is_none() && matches!(target, WaitTarget::Agent { .. })
-            })
-            .then(|| TurnWaitView::load(store).context("reading agent snapshot"))
-            .transpose()?;
+                matches!(target, WaitTarget::Agent { .. }) && outcome.is_none()
+            });
+        let agent_view = if pending_agent {
+            Some(TurnWaitView::load(store).context("reading agent snapshot")?)
+        } else if self.outcomes.iter().any(Option::is_none) {
+            TurnWaitView::load(store).ok()
+        } else {
+            None
+        };
 
         let mut settled = Vec::new();
         for (index, target) in self.targets.iter_mut().enumerate() {
@@ -679,7 +847,7 @@ impl WaitSet {
 fn print_wait_json<'a>(outcomes: impl IntoIterator<Item = &'a TargetOutcome>) -> Result<()> {
     let entries = outcomes
         .into_iter()
-        .map(|outcome| (outcome.name.as_str(), outcome.entry()))
+        .map(|outcome| (outcome.reference.as_str(), outcome.entry()))
         .collect::<BTreeMap<_, _>>();
     render::json(&entries)
 }
@@ -731,20 +899,12 @@ pub(super) fn print_wait_block(
 
 fn write_wait_header(out: &mut impl Write, outcome: &TargetOutcome) -> Result<()> {
     let entry = outcome.entry();
-    if entry.status == RunStatus::Completed {
-        writeln!(
-            out,
-            "--- {} ---",
-            render::paint(render::palette::body(), &outcome.name)
-        )?;
-    } else {
-        writeln!(
-            out,
-            "--- {} ({}) ---",
-            render::paint(render::palette::body(), &outcome.name),
-            render::paint(render::status::run(entry.status), entry.status.label()),
-        )?;
-    }
+    writeln!(
+        out,
+        "--- {} ({}) ---",
+        render::paint(render::palette::body(), &outcome.reference),
+        render::paint(render::status::run(entry.status), entry.status.label()),
+    )?;
     Ok(())
 }
 
@@ -783,7 +943,7 @@ fn report_disappearance(target: &WaitTarget, outcome: &TargetOutcome) -> Result<
         writeln!(
             render::err(),
             "{}: agent disappeared while waiting",
-            target.name()
+            target.typed_reference()
         )?;
     }
     Ok(())
@@ -816,14 +976,32 @@ fn print_pending_timeouts(waits: &WaitSet) -> Result<()> {
     let mut err = render::err();
     for (target, outcome) in waits.targets.iter().zip(&waits.outcomes) {
         if outcome.is_none() {
-            writeln!(
-                err,
-                "--- {} ({}) ---",
-                render::paint(render::palette::body(), target.name()),
-                render::paint(render::status::run(RunStatus::TimedOut), "timed out"),
+            write_timeout_header(
+                &mut err,
+                target.typed_reference(),
+                target.timeout_entry().reason,
             )?;
         }
     }
+    Ok(())
+}
+
+fn write_timeout_header(
+    err: &mut impl Write,
+    reference: &str,
+    reason: Option<String>,
+) -> Result<()> {
+    let label = reason.map_or_else(
+        || "timed out".to_owned(),
+        |reason| format!("timed out: {reason}"),
+    );
+    writeln!(
+        err,
+        "--- {} ({}) ---",
+        render::paint(render::palette::body(), reference),
+        render::paint(render::status::run(RunStatus::TimedOut), &label),
+    )?;
+    err.flush()?;
     Ok(())
 }
 
@@ -833,11 +1011,8 @@ fn print_timeout_json(waits: &WaitSet) -> Result<()> {
         .iter()
         .zip(&waits.outcomes)
         .map(|(target, outcome)| match outcome {
-            Some(outcome) => (outcome.name.as_str(), outcome.entry()),
-            None => (
-                target.name(),
-                WaitEntryJson::new(RunStatus::TimedOut, None, None, None, None),
-            ),
+            Some(outcome) => (outcome.reference.as_str(), outcome.entry()),
+            None => (target.typed_reference(), target.timeout_entry()),
         })
         .collect::<BTreeMap<_, _>>();
     render::json(&entries)
@@ -845,6 +1020,7 @@ fn print_timeout_json(waits: &WaitSet) -> Result<()> {
 
 fn wait_interactive_agent_stream(
     store: &rimz::Store,
+    typed_reference: &str,
     reference: &str,
     kind: &rimz::ids::AgentKind,
     current_channel: &rimz::address::AddressContext,
@@ -867,10 +1043,18 @@ fn wait_interactive_agent_stream(
         )
     };
     let deadline = options.timeout.map(|duration| Instant::now() + duration);
+    let mut reason = None;
     loop {
         let view = TurnWaitView::load(store).context("reading agent snapshot")?;
         let agent =
             crate::cli::resolve_agent_one(store, &view.snapshot, reference, None, current_channel)?;
+        let address = rimz::address::paste_address(agent, &view.snapshot, current_channel);
+        report_wait_reason(
+            &mut render::err(),
+            &mut reason,
+            view.reason(agent),
+            &address,
+        )?;
         for text in cursor.messages(
             agent.transcript_path.as_deref(),
             Some(&agent.agent_id),
@@ -894,6 +1078,12 @@ fn wait_interactive_agent_stream(
             if sink.is_text() {
                 sink.timeout()?;
             }
+            if let Some(text) = reason
+                .as_ref()
+                .and_then(|reason| wait_reason_text(reason, jiff::Timestamp::now()))
+            {
+                write_timeout_header(&mut render::err(), typed_reference, Some(text))?;
+            }
             std::process::exit(RunStatus::TimedOut.exit_code());
         }
         std::thread::sleep(Duration::from_millis(500));
@@ -913,7 +1103,13 @@ fn interactive_live_status(agent: &AgentState) -> rimz::harness::run::RunLiveSta
     }
 }
 
-fn wait_run_stream(store: &rimz::Store, run: &RunRecord, options: WaitStreamOptions) -> Result<()> {
+fn wait_run_stream(
+    store: &rimz::Store,
+    run: &RunRecord,
+    typed_reference: &str,
+    current_channel: &rimz::address::AddressContext,
+    options: WaitStreamOptions,
+) -> Result<()> {
     let adapter = rimz::agents::find_definition(run.kind.as_str())
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", run.kind))?;
     let mut stdout = render::out();
@@ -929,6 +1125,7 @@ fn wait_run_stream(store: &rimz::Store, run: &RunRecord, options: WaitStreamOpti
             render::prose::prose_width(0),
         )
     };
+    let mut reason = None;
     match supervised::stream::stream_attached_run(
         store,
         &run.run_id,
@@ -936,8 +1133,23 @@ fn wait_run_stream(store: &rimz::Store, run: &RunRecord, options: WaitStreamOpti
         options.from_start,
         options.timeout,
         &mut sink,
+        |record| {
+            if let Ok(view) = TurnWaitView::load(store) {
+                return report_run_wait_reason(&view, record, current_channel, &mut reason);
+            }
+            reason = None;
+            Ok(())
+        },
     )? {
         Some(record) => std::process::exit(record.status.exit_code()),
-        None => std::process::exit(RunStatus::TimedOut.exit_code()),
+        None => {
+            if let Some(text) = reason
+                .as_ref()
+                .and_then(|reason| wait_reason_text(reason, jiff::Timestamp::now()))
+            {
+                write_timeout_header(&mut render::err(), typed_reference, Some(text))?;
+            }
+            std::process::exit(RunStatus::TimedOut.exit_code());
+        }
     }
 }

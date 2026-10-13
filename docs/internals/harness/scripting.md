@@ -214,7 +214,9 @@ Three consequences follow from that:
 
 - Background [pane reclamation](#reclaiming-the-run-pane) belongs to the in-pane wrapper, not `wait`. A subagent without an attended join waits for digest receipt instead.
 - `--any` returns the first finisher and leaves the others running to their own completion, which is why the guide's [race recipe](../../guide/scripting.md#in-a-pipeline) stops the loser explicitly.
-- `wait --timeout` bounds the caller's patience, not the run. It exits `124` with the run still live, the same code a `TimedOut` run exits with. With several targets or `--any`, `--json` stamps each unfinished target `timed_out` in its result map; a single target prints nothing. Only the record tells them apart (a run the caller stopped waiting on is still `running`), so a script that needs the difference rereads it with `agents show`.
+- `wait --timeout` bounds the caller's patience, not the run. It exits `124` with the run still live, the same code a `TimedOut` run exits with. `--json` stamps each unfinished target `timed_out` in a map keyed by the typed reference, including a single target. Entries carry the pet `name` (session id for an unnamed agent, run id for an unnamed run), and blocked targets carry a `reason`. Settled single runs still print the full run record. Only the record tells a wait timeout from a run timeout (a run the caller stopped waiting on is still `running`), so a script that needs the difference rereads it with `agents show`.
+
+`TurnWaitView` projects why an agent's turn stays open, including a wake in flight that the card alone cannot show. The CLI retains the last typed reason per target, prints a stderr diagnostic only on changes, and flushes before exiting. Identical typed references are deduplicated before target resolution.
 
 ## Reclaiming the run pane
 

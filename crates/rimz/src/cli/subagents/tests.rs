@@ -787,7 +787,7 @@ fn bare_wait_lists_the_children_instead_of_joining() {
     );
     assert_eq!(
         wait_references(&children, &["bright-owl".into()], &address_context()).expect("named join"),
-        vec!["bright-owl"]
+        vec![("bright-owl".to_owned(), "bright-owl".to_owned())]
     );
 }
 

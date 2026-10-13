@@ -113,7 +113,7 @@ For each of `timeout`, `warn`, and `grace`, the task value wins over the fanout 
 | --- | --- |
 | default | Each petname as its child launches; the launch receipt goes to stderr |
 | `--json` | One object mapping each petname to `{"run_id": "..."}` |
-| `--wait[=DURATION]` | Each answer as it finishes, under a `--- <petname> ---` header, with a status suffix only for an abnormal outcome; the exit code follows [`agents wait`](./agents.md#wait) |
+| `--wait[=DURATION]` | Each answer as it finishes, under a `--- <petname> (<outcome>) ---` header; the exit code follows [`agents wait`](./agents.md#wait) |
 | `--wait --json` | The labeled result map of [`agents wait --json`](./agents.md#wait) |
 
 A fanout of one task under `--wait` behaves like a single join: the bare answer without a header, or the full run record with `--json`.
@@ -177,6 +177,8 @@ rimz subagents wait calm-fox bright-owl --json --timeout 10m
 ```
 
 `subagents wait` is [`rimz agents wait`](./agents.md#wait) restricted to the caller's own children: the same output, `--any`, `--stream`, `--timeout`, JSON map, and exit codes. Use it when the next step needs a child's text before the fleet settles, or to reread a result after its pane and response file are gone; results stay readable from the durable run record.
+
+Headers and JSON map keys preserve the reference as typed, including an `@` prefix or lane qualifier. Each summary entry carries the pet `name` separately. Identical typed references are deduplicated. A single settled run still prints its full record with `--json`; timeouts use the keyed map. Blocking reasons go to stderr even in JSON mode and appear in timed-out entries when the target is not running.
 
 `wait` keeps blocking on a child that is [paused on a provider limit](#a-child-paused-on-a-provider-limit): the run has no answer yet and may still resume. Bound the join with `--timeout`, then read `subagents list`.
 

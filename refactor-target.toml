@@ -599,7 +599,8 @@ upward-dependencies = [
 # The synthetic request type and public submodule join the surface; two entry functions replace three.
 # The ended-receiver archive reason is one formatter for the sweep and the lifecycle reactor.
 # ExpiryCheck carries the first ordered delivery check into the CLI (+1).
-surface-budget = 78
+# TurnWaitReason and TurnWaitView::reason expose wake-aware blockers to wait presentation (+2).
+surface-budget = 80
 
 [[module]]
 path = "crates/rimz/src/mux"
