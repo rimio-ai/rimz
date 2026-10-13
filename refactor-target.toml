@@ -601,7 +601,8 @@ upward-dependencies = [
 # The ended-receiver archive reason is one formatter for the sweep and the lifecycle reactor.
 # ExpiryCheck carries the first ordered delivery check into the CLI (+1).
 # TurnWaitReason and TurnWaitView::reason expose wake-aware blockers to wait presentation (+2).
-surface-budget = 80
+# FanoutMatch carries resolved identities and paste-ready addresses into CLI ambiguity rows (+1).
+surface-budget = 81
 
 [[module]]
 path = "crates/rimz/src/mux"
@@ -1985,6 +1986,11 @@ reason = "Pass 13: DispatchErr::Reply payload and ReplyWait's error."
 kind = "item"
 key = "message::dispatch::DispatchRequest"
 reason = "Pass 13, 27c: per-send facts (enter, force, auto_compact, allow_fanout, mux, automated, reply join) live on the request; DispatchMode holds timing only (9000c0f24, 3128b2029)."
+
+[[verdict]]
+kind = "item"
+key = "message::dispatch::FanoutMatch"
+reason = "DispatchErr::Fanout carries resolved agents and paste-ready addresses to CLI ambiguity rendering without re-resolution."
 
 [[verdict]]
 kind = "item"

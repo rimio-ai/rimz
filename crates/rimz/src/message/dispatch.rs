@@ -175,6 +175,13 @@ pub enum ConditionErr {
 
 type Result<T> = std::result::Result<T, DispatchErr>;
 
+#[derive(Debug)]
+pub struct FanoutMatch {
+    /// What the user pastes in place of the target: an agent's paste address or a sessionless pane's id.
+    pub address: String,
+    pub agent: Option<AgentState>,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum DispatchErr {
     #[error(transparent)]
@@ -190,8 +197,9 @@ pub enum DispatchErr {
     #[error("target `{target}` matched multiple agents")]
     Fanout {
         target: String,
-        labels: Vec<String>,
-        kind: DeliveryKind,
+        matches: Vec<FanoutMatch>,
+        /// The matches came from the durable (audit) fallback, not the live snapshot.
+        recorded: bool,
     },
     #[error(transparent)]
     Condition(#[from] ConditionErr),
@@ -280,7 +288,7 @@ pub fn dispatch(
         channel: &request.current_channel,
         rollup_only,
     };
-    let mut targets = resolution.resolve(&request.target)?;
+    let (mut targets, recorded) = resolution.resolve(&request.target)?;
     exclude_broadcast_caller(
         &request.target,
         &mut targets,
@@ -302,11 +310,11 @@ pub fn dispatch(
     {
         return Err(DispatchErr::Fanout {
             target: request.target,
-            labels: targets
+            matches: targets
                 .iter()
-                .map(|target| target.fanout_label(&snapshot))
+                .map(|target| target.fanout_match(&snapshot, &request.current_channel))
                 .collect(),
-            kind: request.mode.kind(),
+            recorded,
         });
     }
 
@@ -362,13 +370,21 @@ struct ResolvedTarget {
 }
 
 impl ResolvedTarget {
-    fn fanout_label(&self, snapshot: &SidebarSnapshot) -> String {
-        if self.agent.is_none()
-            && let Some(pane) = &self.pane
-        {
-            return pane.pane_id.to_string();
+    fn fanout_match(&self, snapshot: &SidebarSnapshot, reader: &AddressContext) -> FanoutMatch {
+        let address = match &self.agent {
+            Some(agent) => crate::address::paste_address(agent, snapshot, reader),
+            // combine_targets always supplies an agent or a pane.
+            None => self
+                .pane
+                .as_ref()
+                .expect("resolved pane target")
+                .pane_id
+                .to_string(),
+        };
+        FanoutMatch {
+            address,
+            agent: self.agent.clone(),
         }
-        self.label(snapshot)
     }
 
     fn label(&self, snapshot: &SidebarSnapshot) -> String {
@@ -493,23 +509,26 @@ struct ResolutionView<'a> {
 }
 
 impl ResolutionView<'_> {
-    fn resolve(&self, raw: &str) -> std::result::Result<Vec<ResolvedTarget>, TargetErr> {
+    fn resolve(&self, raw: &str) -> std::result::Result<(Vec<ResolvedTarget>, bool), TargetErr> {
         if self.rollup_only {
-            let agents = crate::address::resolve_many(self.snapshot, raw, self.scope, self.channel)
-                .or_else(|_| self.durable_targets(raw))?;
-            return Ok(self.combine_targets(agents, Vec::new()));
+            let (agents, recorded) =
+                match crate::address::resolve_many(self.snapshot, raw, self.scope, self.channel) {
+                    Ok(agents) => (agents, false),
+                    Err(_) => (self.durable_targets(raw)?, true),
+                };
+            return Ok((self.combine_targets(agents, Vec::new()), recorded));
         }
         let agent_result =
             crate::address::resolve_many(self.snapshot, raw, self.scope, self.channel);
         let pane_result =
             crate::address::resolve_targets(self.snapshot, raw, self.scope, self.channel);
         match (agent_result, pane_result) {
-            (Ok(agents), Ok(panes)) => Ok(self.combine_targets(agents, panes)),
-            (Ok(agents), Err(_)) => Ok(self.combine_targets(agents, Vec::new())),
-            (Err(_), Ok(panes)) => Ok(self.combine_targets(Vec::new(), panes)),
+            (Ok(agents), Ok(panes)) => Ok((self.combine_targets(agents, panes), false)),
+            (Ok(agents), Err(_)) => Ok((self.combine_targets(agents, Vec::new()), false)),
+            (Err(_), Ok(panes)) => Ok((self.combine_targets(Vec::new(), panes), false)),
             (Err(_), Err(_)) => self
                 .durable_targets(raw)
-                .map(|agents| self.combine_targets(agents, Vec::new())),
+                .map(|agents| (self.combine_targets(agents, Vec::new()), true)),
         }
     }
 
@@ -578,7 +597,7 @@ impl ResolutionView<'_> {
             }
             .into());
         }
-        let targets = self
+        let (targets, _) = self
             .resolve(address)
             .map_err(|source| ConditionErr::Target {
                 kind,

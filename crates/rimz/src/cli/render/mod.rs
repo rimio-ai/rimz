@@ -214,6 +214,29 @@ struct AmbiguityRow {
     description: Option<String>,
 }
 
+impl AmbiguityRow {
+    fn new(
+        address: String,
+        agent: Option<&rimz::agents::AgentState>,
+        snapshot: &rimz::store::snapshot::SidebarSnapshot,
+    ) -> Self {
+        let card = agent.and_then(|agent| {
+            snapshot
+                .rows()
+                .find(|row| row.is_agent() && row.id == agent.agent_id.as_str())
+                .and_then(rimz::store::snapshot::SidebarRow::as_agent)
+        });
+        Self {
+            address,
+            status: agent
+                .map(|agent| card.map_or_else(|| agent.effective_status(), |card| card.status)),
+            phase: card.map_or(rimz::agents::TurnPhase::Idle, |card| card.phase),
+            activity: agent.map(|agent| agent.last_activity),
+            description: agent.and_then(|agent| agent_activity_line(agent, card)),
+        }
+    }
+}
+
 impl AmbiguousAgents {
     pub(crate) fn new(
         target: &str,
@@ -222,22 +245,20 @@ impl AmbiguousAgents {
         reader: &rimz::address::AddressContext,
         recorded: bool,
     ) -> Self {
-        let mut rows = matches
+        let rows = matches
             .iter()
             .map(|agent| {
-                let card = snapshot
-                    .rows()
-                    .find(|row| row.is_agent() && row.id == agent.agent_id.as_str())
-                    .and_then(rimz::store::snapshot::SidebarRow::as_agent);
-                AmbiguityRow {
-                    address: rimz::address::paste_address(agent, snapshot, reader),
-                    status: Some(card.map_or_else(|| agent.effective_status(), |card| card.status)),
-                    phase: card.map_or(rimz::agents::TurnPhase::Idle, |card| card.phase),
-                    activity: Some(agent.last_activity),
-                    description: agent_activity_line(agent, card),
-                }
+                AmbiguityRow::new(
+                    rimz::address::paste_address(agent, snapshot, reader),
+                    Some(agent),
+                    snapshot,
+                )
             })
             .collect::<Vec<_>>();
+        Self::from_rows(target, rows, recorded)
+    }
+
+    fn from_rows(target: &str, mut rows: Vec<AmbiguityRow>, recorded: bool) -> Self {
         rows.sort_by_key(|row| {
             (
                 match row.status {
@@ -260,30 +281,19 @@ impl AmbiguousAgents {
         self.all_matches = Some(AllMatches::Stop);
     }
 
-    pub(crate) fn from_labels(
+    pub(crate) fn from_matches(
         target: &str,
-        labels: &[String],
+        matches: &[rimz::message::dispatch::FanoutMatch],
+        recorded: bool,
         snapshot: &rimz::store::snapshot::SidebarSnapshot,
-        reader: &rimz::address::AddressContext,
     ) -> Self {
-        let unscoped = crate::cli::CurrentChannel::Unscoped.address_context();
-        let mut matches = Vec::new();
-        let mut missing = Vec::new();
-        for label in labels {
-            match rimz::address::resolve_many(snapshot, label, None, &unscoped) {
-                Ok(found) if found.len() == 1 => matches.push(found[0]),
-                _ => missing.push(AmbiguityRow {
-                    address: label.clone(),
-                    status: None,
-                    phase: rimz::agents::TurnPhase::Idle,
-                    activity: None,
-                    description: None,
-                }),
-            }
-        }
-        let mut error = Self::new(target, &matches, snapshot, reader, false);
-        // A pane-only target or a session that ended since dispatch has no cached card.
-        error.rows.extend(missing);
+        let rows = matches
+            .iter()
+            .map(|matched| {
+                AmbiguityRow::new(matched.address.clone(), matched.agent.as_ref(), snapshot)
+            })
+            .collect();
+        let mut error = Self::from_rows(target, rows, recorded);
         error.all_matches = Some(AllMatches::Message);
         error
     }

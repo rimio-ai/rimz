@@ -5,7 +5,7 @@ use crate::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
 use crate::pane::PaneRef;
 
 #[test]
-fn fanout_labels_pin_sessionless_panes() {
+fn fanout_matches_pin_panes_and_round_trip_recorded_agents() {
     let mut pane = owner_pane("unused", Some("coder"));
     pane.agent_id = None;
     let snapshot = snapshot_with_panes(Vec::new(), vec![pane.clone()]);
@@ -13,7 +13,39 @@ fn fanout_labels_pin_sessionless_panes() {
         pane: Some(pane),
         agent: None,
     };
-    assert_eq!(target.fanout_label(&snapshot), "zellij:terminal_1");
+    let matched = target.fanout_match(&snapshot, &context(None));
+    assert_eq!(matched.address, "zellij:terminal_1");
+    assert!(matched.agent.is_none());
+
+    let snapshot = snapshot_with_panes(Vec::new(), Vec::new());
+    let durable = ["session-a", "session-b"].map(|id| {
+        let mut agent = agent(id, AgentStatus::Idle);
+        agent.channel = Some("B".to_owned());
+        agent
+    });
+    let channel = context(None);
+    for rollup_only in [false, true] {
+        let view = resolution(&snapshot, &durable, &channel, rollup_only);
+        let (targets, recorded) = view.resolve("@claude#B").unwrap();
+        assert_eq!(targets.len(), 2);
+        assert!(recorded);
+        let matches = targets
+            .iter()
+            .map(|target| target.fanout_match(&snapshot, &channel))
+            .collect::<Vec<_>>();
+        assert_ne!(matches[0].address, matches[1].address);
+        for (matched, expected) in matches.iter().zip(&durable) {
+            assert_eq!(matched.address, format!("@{}", expected.agent_id));
+            assert_eq!(matched.agent.as_ref().unwrap().agent_id, expected.agent_id);
+            let (resolved, recorded) = view.resolve(&matched.address).unwrap();
+            assert_eq!(resolved.len(), 1);
+            assert!(recorded);
+            assert_eq!(
+                resolved[0].agent.as_ref().unwrap().agent_id,
+                expected.agent_id
+            );
+        }
+    }
 }
 
 #[test]
@@ -362,10 +394,11 @@ fn co_resident_session_resolves_to_one_pane_backed_recipient() {
     let pane = owner_pane("sess-owner", Some("coder"));
     let snapshot = snapshot_with_panes(vec![older, owner], vec![pane]);
 
-    let targets = resolution(&snapshot, &durable, &context(Some("project")), false)
+    let (targets, recorded) = resolution(&snapshot, &durable, &context(Some("project")), false)
         .resolve("@coder")
         .unwrap();
 
+    assert!(!recorded);
     assert_eq!(targets.len(), 1);
     assert_eq!(
         targets[0]
@@ -388,9 +421,11 @@ fn durable_fallback_drops_shadowed_co_resident_session() {
     let snapshot = snapshot_with_panes(Vec::new(), vec![owner_pane("sess-owner", None)]);
 
     for rollup_only in [false, true] {
-        let targets = resolution(&snapshot, &durable, &context(Some("project")), rollup_only)
-            .resolve("@coder")
-            .unwrap();
+        let (targets, recorded) =
+            resolution(&snapshot, &durable, &context(Some("project")), rollup_only)
+                .resolve("@coder")
+                .unwrap();
+        assert!(recorded);
         assert_eq!(targets.len(), 1);
         assert_eq!(
             targets[0]
@@ -421,7 +456,7 @@ fn agent_broadcast_excludes_only_the_caller_after_channel_resolution() {
         other_channel,
     ];
     let snapshot = snapshot_with_panes(durable.clone(), Vec::new());
-    let mut targets = resolution(&snapshot, &durable, &context(None), false)
+    let (mut targets, _) = resolution(&snapshot, &durable, &context(None), false)
         .resolve("@all#project")
         .unwrap();
 
@@ -448,7 +483,7 @@ fn exact_self_handle_is_not_broadcast_filtered() {
     caller.launch_id = Some(AgentSessionId::from("launch-planner"));
     let durable = vec![caller];
     let snapshot = snapshot_with_panes(durable.clone(), Vec::new());
-    let mut targets = resolution(&snapshot, &durable, &context(Some("project")), false)
+    let (mut targets, _) = resolution(&snapshot, &durable, &context(Some("project")), false)
         .resolve("@planner")
         .unwrap();
 
@@ -478,7 +513,7 @@ fn explicit_selector_fanout_keeps_the_caller() {
     let peer = named_agent("peer", "coder", "project");
     let durable = vec![caller, peer];
     let snapshot = snapshot_with_panes(durable.clone(), Vec::new());
-    let mut targets = resolution(&snapshot, &durable, &context(Some("project")), false)
+    let (mut targets, _) = resolution(&snapshot, &durable, &context(Some("project")), false)
         .resolve("@claude")
         .unwrap();
 
@@ -515,7 +550,7 @@ fn broadcast_excludes_a_legacy_pane_only_caller() {
         profile: None,
         role: None,
     };
-    let mut targets = resolution(&snapshot, &durable, &context(Some("project")), false)
+    let (mut targets, _) = resolution(&snapshot, &durable, &context(Some("project")), false)
         .resolve("@all")
         .unwrap();
 
@@ -534,7 +569,7 @@ fn solo_agent_broadcast_reports_no_peers() {
     caller.launch_id = Some(AgentSessionId::from("launch-planner"));
     let durable = vec![caller];
     let snapshot = snapshot_with_panes(durable.clone(), Vec::new());
-    let mut targets = resolution(&snapshot, &durable, &context(Some("project")), false)
+    let (mut targets, _) = resolution(&snapshot, &durable, &context(Some("project")), false)
         .resolve("@all")
         .unwrap();
     let channel = "project".to_owned();

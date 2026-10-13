@@ -283,12 +283,13 @@ fn recipient_miss(
 
 fn map_dispatch_err(err: DispatchErr, ctx: &Ctx) -> anyhow::Error {
     match err {
-        DispatchErr::Fanout { target, labels, .. } => match ctx.cached_snapshot() {
-            Ok(snapshot) => crate::cli::render::AmbiguousAgents::from_labels(
-                &target,
-                &labels,
-                &snapshot,
-                &ctx.address_context(),
+        DispatchErr::Fanout {
+            target,
+            matches,
+            recorded,
+        } => match ctx.cached_snapshot() {
+            Ok(snapshot) => crate::cli::render::AmbiguousAgents::from_matches(
+                &target, &matches, recorded, &snapshot,
             )
             .into(),
             Err(err) => err,
