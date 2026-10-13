@@ -14,6 +14,7 @@ use super::session::{
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::backend::zellij) struct PaneGeometry {
     pub(in crate::backend::zellij) id: u64,
+    pub(in crate::backend::zellij) tab_id: u64,
     pub(in crate::backend::zellij) x: u64,
     pub(in crate::backend::zellij) y: u64,
     pub(in crate::backend::zellij) columns: u64,
@@ -60,6 +61,7 @@ impl ListedPane {
     pub(in crate::backend::zellij) fn geometry(&self) -> PaneGeometry {
         PaneGeometry {
             id: self.id,
+            tab_id: self.tab_id,
             x: self.pane_x,
             y: self.pane_y,
             columns: self.pane_columns,

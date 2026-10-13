@@ -330,7 +330,7 @@ impl FocusRepairLogs<'_> {
     /// What a missing tab sidebar leaves behind: `close_on_exit` removes its
     /// pane, so the listing, the supervisor's stderr, its spawn pokes, and its
     /// diagnostic records are the only trace of why it went.
-    fn missing_sidebar_dump(&self, session: &str, tab_name: &str) -> String {
+    fn missing_sidebar_dump(&self, session: &str, tab_name: &str, tab_id: u64) -> String {
         // Every tab, not only the target: a renamed tab hides a live sidebar
         // from the name match.
         let panes = list_panes(self.xdg, session).map(|snapshot| {
@@ -386,7 +386,7 @@ impl FocusRepairLogs<'_> {
             .collect::<Vec<_>>()
             .join("\n");
         format!(
-            "panes in {session}, awaiting tab {tab_name:?}:\n{}\n{}\ndiag records:\n{diag_logs}",
+            "panes in {session}, awaiting tab {tab_id} opened as {tab_name:?}:\n{}\n{}\ndiag records:\n{diag_logs}",
             panes.unwrap_or_else(|error| error),
             self.dump()
         )
@@ -944,8 +944,8 @@ fn tab_switch_repairs_sidebar_focus_from_attached_client_views() {
         pokes_before: pokes_before_target,
     };
     let target_work = wait_for_named_work_pane_count(xdg, &name, target_tab, 1)[0];
-    let target_sidebar = wait_for_named_sidebar_pane(xdg, &name, target_tab, || {
-        logs.missing_sidebar_dump(&name, target_tab)
+    let target_sidebar = wait_for_tab_sidebar_pane(xdg, &name, target_work.tab_id, || {
+        logs.missing_sidebar_dump(&name, target_tab, target_work.tab_id)
     });
     let target_work = PaneId::from_parts(MuxName::Zellij, format!("terminal_{}", target_work.id));
     let target_sidebar =

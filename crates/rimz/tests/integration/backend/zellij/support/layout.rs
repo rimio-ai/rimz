@@ -64,16 +64,30 @@ pub(in crate::backend::zellij) fn named_sidebar_pane_geometry(
         .map(|pane| pane.geometry()))
 }
 
-pub(in crate::backend::zellij) fn wait_for_named_sidebar_pane(
+/// The sidebar of tab `tab_id`. A tab is addressed by id once found, since
+/// the sidebar's status pass may rename a RimZ tab that hosts no agent.
+pub(in crate::backend::zellij) fn tab_sidebar_pane_geometry(
     xdg: &Path,
     session: &str,
-    tab_name: &str,
+    tab_id: u64,
+) -> Result<Option<PaneGeometry>, String> {
+    Ok(list_panes(xdg, session)?
+        .panes
+        .iter()
+        .find(|pane| pane.tab_id == tab_id && pane.is_sidebar())
+        .map(|pane| pane.geometry()))
+}
+
+pub(in crate::backend::zellij) fn wait_for_tab_sidebar_pane(
+    xdg: &Path,
+    session: &str,
+    tab_id: u64,
     evidence: impl FnOnce() -> String,
 ) -> PaneGeometry {
     let deadline = Instant::now() + Duration::from_secs(30);
     let mut last = Ok(None);
     while Instant::now() < deadline {
-        last = named_sidebar_pane_geometry(xdg, session, tab_name);
+        last = tab_sidebar_pane_geometry(xdg, session, tab_id);
         if let Ok(Some(sidebar)) = last {
             return sidebar;
         }
@@ -81,7 +95,7 @@ pub(in crate::backend::zellij) fn wait_for_named_sidebar_pane(
     }
     // The pane closes on exit, so the panic carries what the session kept.
     panic!(
-        "timed out waiting for sidebar pane in {session}/{tab_name}; last observation: {last:?}\n{}",
+        "timed out waiting for sidebar pane in {session} tab {tab_id}; last observation: {last:?}\n{}",
         evidence()
     )
 }

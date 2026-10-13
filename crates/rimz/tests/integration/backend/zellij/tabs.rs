@@ -1141,7 +1141,8 @@ fn native_focused_split_preserves_docked_sidebar() {
         "backend tab should focus the chosen work pane before native split; \
          focused client panes: {focused:?}",
     );
-    let sidebar_before = wait_for_named_sidebar_pane(xdg, &name, split_tab, || {
+    let split_tab_id = work[0].tab_id;
+    let sidebar_before = wait_for_tab_sidebar_pane(xdg, &name, split_tab_id, || {
         "backend tab keeps its sidebar".to_owned()
     });
     assert_eq!(
@@ -1169,7 +1170,7 @@ fn native_focused_split_preserves_docked_sidebar() {
     });
     poll_until(
         Duration::from_secs(30),
-        || named_sidebar_pane_geometry(xdg, &name, split_tab),
+        || tab_sidebar_pane_geometry(xdg, &name, split_tab_id),
         |sidebar| {
             sidebar.is_some_and(|sidebar| {
                 sidebar.x == sidebar_before.x
@@ -1188,7 +1189,7 @@ fn native_focused_split_preserves_docked_sidebar() {
         2,
         "native split should divide only the focused pane, got {split:?}",
     );
-    let sidebar_after = named_sidebar_pane_geometry(xdg, &name, split_tab)
+    let sidebar_after = tab_sidebar_pane_geometry(xdg, &name, split_tab_id)
         .expect("list backend tab sidebar")
         .expect("backend tab keeps its sidebar");
     assert_eq!(
