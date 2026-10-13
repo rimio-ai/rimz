@@ -6,7 +6,7 @@ use std::io::Write;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use ratatui::Terminal;
 use ratatui::backend::{Backend, ClearType};
@@ -19,6 +19,7 @@ use crate::{MuxName, RuntimePaths};
 
 use super::backend::PaneBackend;
 use super::fetch::{FetchDispatcher, FetchRequest};
+use super::inbox::WakeupInbox;
 use super::input::Wakeup;
 use super::loop_state::{BaselineReporter, LoopState};
 use super::plane::DataPlane;
@@ -63,53 +64,6 @@ pub(in crate::sidebar_pane) struct Attachment {
     // freshness gate would skip relaunch and let a plain `attach` rebirth the
     // session with no sidebar.
     _heartbeat_cleanup: RuntimeFileGuard,
-}
-
-/// The pane's inbox: a wheel tick takes every tick queued behind it as one
-/// run, and the wakeup that ends the run is held back and returned next.
-pub(super) struct WakeupInbox {
-    receiver: Receiver<Wakeup>,
-    pending: Option<Wakeup>,
-}
-
-impl WakeupInbox {
-    pub(super) fn new(receiver: Receiver<Wakeup>) -> Self {
-        Self {
-            receiver,
-            pending: None,
-        }
-    }
-
-    fn recv_timeout(&mut self, timeout: Duration) -> Wakeup {
-        self.pending
-            .take()
-            .unwrap_or_else(|| self.receiver.recv_timeout(timeout).unwrap_or(Wakeup::Tick))
-    }
-
-    fn scroll_run(&mut self, first: Wakeup) -> impl Iterator<Item = Wakeup> + '_ {
-        std::iter::once(first).chain(std::iter::from_fn(|| {
-            let wakeup = self.receiver.try_recv().ok()?;
-            if matches!(wakeup, Wakeup::Scroll { .. }) {
-                return Some(wakeup);
-            }
-            self.pending = Some(wakeup);
-            None
-        }))
-    }
-
-    pub(super) fn dispatch_next(
-        &mut self,
-        state: &mut LoopState,
-        fetch: &mut FetchDispatcher,
-        terminal: &mut Terminal<PaneBackend>,
-        timeout: Duration,
-    ) -> Result<()> {
-        let wakeup = self.recv_timeout(timeout);
-        if matches!(wakeup, Wakeup::Scroll { .. }) {
-            return state.on_inputs(self.scroll_run(wakeup), terminal, fetch);
-        }
-        state.on_wakeup(fetch, terminal, wakeup)
-    }
 }
 
 impl Attachment {
@@ -330,6 +284,3 @@ fn set_pane_title(terminal: &mut Terminal<PaneBackend>) -> std::io::Result<bool>
     Write::flush(backend)?;
     Ok(true)
 }
-
-#[cfg(test)]
-mod tests;

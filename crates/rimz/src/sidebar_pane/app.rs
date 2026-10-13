@@ -22,6 +22,7 @@ mod fetch;
 pub(super) mod fixtures;
 mod gate;
 mod health;
+mod inbox;
 mod input;
 mod keymap;
 mod lifecycle;
