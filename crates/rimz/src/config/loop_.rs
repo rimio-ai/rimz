@@ -389,6 +389,10 @@ pub struct TaskEntry {
     pub mode: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub effort: Option<String>,
+    /// Fast-mode override for the launched agent: `true` requests the
+    /// provider's fast mode, `false` turns off a profile's.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fast: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub budget: Option<String>,
     #[serde(rename = "budget-per-day", skip_serializing_if = "Option::is_none")]

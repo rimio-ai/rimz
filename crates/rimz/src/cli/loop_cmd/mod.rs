@@ -267,6 +267,12 @@ struct AddArgs {
     /// Reasoning effort for the launched agent.
     #[arg(long)]
     effort: Option<String>,
+    /// Launch the agent in the provider's fast mode (Claude, Codex, Amp).
+    #[arg(long, conflicts_with = "no_fast")]
+    fast: bool,
+    /// Request no fast mode, even where the agent's profile sets `fast`.
+    #[arg(long)]
+    no_fast: bool,
     /// Named account of the agent's provider that every fire runs on; unset follows the room.
     #[arg(long, value_name = "NAME")]
     account: Option<rimz::ids::LoginName>,

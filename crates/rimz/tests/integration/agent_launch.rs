@@ -2251,6 +2251,79 @@ fn explain_prints_the_plan_without_side_effects() {
         1
     );
     assert!(argv.iter().any(|arg| arg == "--foo"));
+    assert_eq!(overridden["fast"], false);
+    let fast = env
+        .rimz()
+        .args(["agents", "explain", "worker", "--json", "--fast"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let fast: serde_json::Value = serde_json::from_slice(&fast).unwrap();
+    assert_eq!(fast["overrides"], serde_json::json!(["--fast"]));
+    assert_eq!(fast["fast"], true);
+    let argv = fast["provider_argv"].as_array().unwrap();
+    let settings: Vec<_> = argv
+        .windows(2)
+        .filter(|pair| pair[0] == "--settings")
+        .map(|pair| pair[1].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(settings.len(), 1, "{argv:?}");
+    let settings: serde_json::Value = serde_json::from_str(&settings[0]).unwrap();
+    assert_eq!(settings["fastMode"], true, "{settings}");
+    let human = env
+        .rimz()
+        .args(["agents", "explain", "worker", "--fast"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let human = String::from_utf8(human).unwrap();
+    assert!(
+        human
+            .lines()
+            .any(|line| line.trim_start().starts_with("fast:") && line.trim_end().ends_with(" on")),
+        "{human}"
+    );
+    let codex = env
+        .rimz()
+        .args(["agents", "explain", "codex", "--json", "--fast"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let codex: serde_json::Value = serde_json::from_slice(&codex).unwrap();
+    let argv: Vec<_> = codex["provider_argv"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|arg| arg.as_str().unwrap())
+        .collect();
+    assert!(
+        argv.windows(4)
+            .any(|window| window == ["-c", "service_tier=fast", "-c", "features.fast_mode=true"]),
+        "{argv:?}"
+    );
+    let off = env
+        .rimz()
+        .args(["agents", "explain", "codex", "--json", "--no-fast"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let off: serde_json::Value = serde_json::from_slice(&off).unwrap();
+    assert_eq!(off["overrides"], serde_json::json!(["--no-fast"]));
+    assert!(
+        !off["provider_argv"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|arg| arg == "service_tier=fast")
+    );
     let team = env
         .rimz()
         .args(["agents", "explain", "duo.lead"])

@@ -1239,6 +1239,7 @@ impl<'a> TaskFire<'a> {
         request.worktree.clone_from(&self.entry.worktree);
         request.system_prompt_file = system_prompt_file;
         request.effort.clone_from(&self.entry.effort);
+        request.fast = self.entry.fast;
         request.budget = budget;
         request.timeout = task_timeout(&self.entry)?;
         request.keep = self.keep;

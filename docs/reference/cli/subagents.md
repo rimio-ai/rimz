@@ -50,7 +50,7 @@ rimz subagents wait "$first" "$second"
 | `--detach` | off | Launch without a report: the child stays out of the [fleet report](#the-fleet-report), never holds the parent's turn or run open, and outlives the parent's exit. Its pane closes when it finishes; `subagents wait <name>` still reads the answer. Refused with `--wait`. |
 | `--isolation host\|sandbox` | the parent's recorded override, else the child's profile default, else `agents.isolation` | A sandboxed parent refuses a host override; host defaults clamp to sandbox with a note. |
 | `--description <TEXT>` | none | Seed the child card's description; the fleet report uses it as the task label. |
-| `--model`, `--tier`, `--agent`, `--effort`, `--max-turns`, `-- <ARGS>` | from the profile | Override the concrete model or tier (mutually exclusive), prefer another family or re-base onto another profile or kind, set reasoning effort, cap agentic turns, or append provider argv. |
+| `--model`, `--tier`, `--agent`, `--effort`, `--fast` or `--no-fast`, `--max-turns`, `-- <ARGS>` | from the profile | Override the concrete model or tier (mutually exclusive), prefer another family or re-base onto another profile or kind, set reasoning effort, turn the provider's [fast mode](../agent-support.md#fast-mode) on or off, cap agentic turns, or append provider argv. |
 
 Run `rimz subagents launch --help` for the exact spellings. The global flags are on the [CLI page](../cli.md#global-flags).
 
@@ -104,6 +104,7 @@ JSON
 | `tier` | no | `intern`, `junior`, `senior`, or `principal`; conflicts with `model` |
 | `agent` | no | Re-base onto another profile or kind |
 | `effort` | no | Reasoning effort |
+| `fast` | no | `true` as `--fast`, `false` as `--no-fast` |
 | `max_turns` | no | Maximum agentic turns |
 
 For each of `timeout`, `warn`, and `grace`, the task value wins over the fanout flag, which wins over `[agents.subagents]`. `--keep` and `--detach` apply to every child. Tasks have no isolation, wait, pane-retention, or provider-argv fields, and `fanout` has no `--isolation` flag: every child inherits the parent's recorded override, otherwise follows its own definition then machine policy, capped by the parent's effective isolation. Child definitions carry tool and model settings. Use separate single launches when children need different lifecycle controls.

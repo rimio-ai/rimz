@@ -134,6 +134,8 @@ struct FanoutTask {
     tier: Option<rimz::config::tiers::ModelTier>,
     agent: Option<String>,
     effort: Option<String>,
+    /// `true` requests the provider's fast mode; `false` requests none, as `--no-fast` does.
+    fast: Option<bool>,
     timeout: Option<String>,
     warn: Option<Vec<String>>,
     grace: Option<String>,
@@ -173,6 +175,12 @@ struct SubagentLaunchArgs {
     /// Reasoning effort for the child.
     #[arg(long, value_name = "LEVEL")]
     effort: Option<String>,
+    /// Run the child in the provider's fast mode (Claude, Codex, Amp).
+    #[arg(long, conflicts_with = "no_fast")]
+    fast: bool,
+    /// Request no fast mode for the child, even where its profile sets `fast`.
+    #[arg(long)]
+    no_fast: bool,
     /// Run the child under this isolation instead of inheriting the parent's.
     #[arg(long, value_name = "host|sandbox")]
     isolation: Option<rimz::config::Isolation>,
@@ -487,6 +495,8 @@ impl FanoutTask {
             tier: self.tier,
             agent: self.agent,
             effort: self.effort,
+            fast: self.fast == Some(true),
+            no_fast: self.fast == Some(false),
             isolation: None,
             timeout,
             warn,
@@ -578,6 +588,8 @@ impl SubagentLaunchArgs {
                 tier: self.tier,
                 agent: self.agent,
                 effort: self.effort,
+                fast: self.fast,
+                no_fast: self.no_fast,
                 isolation: self.isolation,
                 passthrough: self.passthrough,
                 ..Default::default()

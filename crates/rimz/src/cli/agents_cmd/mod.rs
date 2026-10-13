@@ -273,12 +273,30 @@ pub(crate) struct LaunchOverrideArgs {
     /// Reasoning effort for the launched agents (provider-specific levels).
     #[arg(long, value_name = "LEVEL")]
     pub(crate) effort: Option<String>,
+    /// Launch in the provider's fast mode (Claude, Codex, Amp); resumes replay it.
+    #[arg(long, conflicts_with = "no_fast")]
+    pub(crate) fast: bool,
+    /// Request no fast mode, even where the profile sets `fast`; resumes replay it.
+    #[arg(long)]
+    pub(crate) no_fast: bool,
     /// Run the launched agents under this isolation instead of machine `agents.isolation`.
     #[arg(long, value_name = "host|sandbox")]
     pub(crate) isolation: Option<rimz::config::Isolation>,
     /// Extra argv appended to every launched agent cell.
     #[arg(last = true)]
     pub(crate) passthrough: Vec<String>,
+}
+
+impl LaunchOverrideArgs {
+    /// The fast-mode override: `Some(true)` for `--fast`, `Some(false)` for
+    /// `--no-fast`, `None` to keep the profile's setting.
+    fn fast_override(&self) -> Option<bool> {
+        match (self.fast, self.no_fast) {
+            (true, _) => Some(true),
+            (_, true) => Some(false),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Default, PartialEq, Args)]
@@ -1077,6 +1095,7 @@ fn into_supervised_request(
     request.force_new_tab = args.launch.cohort.new_tab;
     request.agent =
         rimz::harness::plan::normalized_preset_value(args.launch.overrides.agent.as_deref());
+    request.fast = args.launch.overrides.fast_override();
     request.model = args.launch.overrides.model;
     request.tier = args.launch.overrides.tier;
     request.isolation = args.launch.overrides.isolation;

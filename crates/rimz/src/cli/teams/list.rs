@@ -58,6 +58,8 @@ pub(super) struct RoleReport {
     pub tier_fallback: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub effort: Option<String>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub fast: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mode: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -423,6 +425,7 @@ fn role_report(role: String, cell: &AgentCell) -> RoleReport {
         kind: Some(cell.kind.to_string()),
         model: cell.launch.model.clone(),
         effort: cell.launch.effort.clone(),
+        fast: cell.launch.fast,
         mode: cell.launch.mode.map(|mode| mode.to_string()),
         system_prompt_file: cell
             .system_prompt_file
@@ -453,6 +456,11 @@ fn unresolved_roles(team: &Team, profiles: &ProfilesConfig) -> Vec<RoleReport> {
                     .as_ref()
                     .and_then(|profile| profile.launch.effort.clone())
                     .or_else(|| binding.effort.clone()),
+                // `resolve_role` already folded the binding over the profile.
+                fast: resolved
+                    .as_ref()
+                    .map_or(binding.fast, |profile| profile.fast)
+                    == Some(true),
                 mode: resolved
                     .as_ref()
                     .and_then(|profile| profile.launch.mode)

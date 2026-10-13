@@ -46,7 +46,7 @@ Every command takes the [global flags](../cli.md#global-flags). `loop show --jso
 
 `--check` combined with `--agent` or `--wait` is a guard: the command runs first, and the action runs only on the outcome `--on` names. A supervised `--agent` task refuses a kind whose hooks are not installed, because a scheduled turn reports completion through them.
 
-`--agent <SPEC> --stay` opens ordinary agents in a new background tab on the checkout's channel, leaves their panes open, and returns without supervising a turn. It accepts the same layout grammar as `rimz agents`, requires a prompt leader and a prompt, and accepts `--effort`. With `--stay`, `--mode ask` and `--mode yolo` override the layout; `--mode auto` leaves each profile its own mode. A missing room is opened detached. Scheduled fires launch only once per task and checkout; changing the task under the same name preserves that memory. `loop fire NAME` launches again, and `loop remove NAME` clears the launch records. `loop show NAME` lists launched checkouts, times, and leader handles; `--json` includes those records and run history. Logs identify each launch's checkout and leader.
+`--agent <SPEC> --stay` opens ordinary agents in a new background tab on the checkout's channel, leaves their panes open, and returns without supervising a turn. It accepts the same layout grammar as `rimz agents`, requires a prompt leader and a prompt, and accepts `--effort` and `--fast` or `--no-fast`. With `--stay`, `--mode ask` and `--mode yolo` override the layout; `--mode auto` leaves each profile its own mode. A missing room is opened detached. Scheduled fires launch only once per task and checkout; changing the task under the same name preserves that memory. `loop fire NAME` launches again, and `loop remove NAME` clears the launch records. `loop show NAME` lists launched checkouts, times, and leader handles; `--json` includes those records and run history. Logs identify each launch's checkout and leader.
 
 A resident condition task retries a failed or skipped fire that leaves no launch record after 5 minutes from that checkout's last fire, while the task is enabled, unpaused, and the condition remains true. A recorded launch suppresses further scheduled fires. Failures remain subject to the task's strike limit; budget skips and a blocked takeover add no strike. Strikes are per task, so one checkout that keeps failing disables the task for every checkout.
 
@@ -146,6 +146,7 @@ The receipt adds `trigger: when <expression>, for <duration>`, `scope: <checkout
 | `--worktree <NAME>` | `--agent`, `--wait` | Channel or worktree that hosts the transient pane, or that resolves the `--wait` address. |
 | `--mode auto\|ask\|yolo` | `--agent` | Permission posture for the turn. |
 | `--effort <EFFORT>` | `--agent` | Reasoning effort passed to the agent. |
+| `--fast`, `--no-fast` | `--agent` | Launch in the provider's [fast mode](../agent-support.md#fast-mode), or request none even where the profile sets `fast`. Stored as the task's `fast = true` or `false`. |
 | `--account <NAME>` | `--agent` | Named account of the agent's provider that every fire runs on; see [the account pin](#the-account-pin). |
 | `--system-prompt-file <PATH>` | `--agent` | Replace the agent's base system prompt with a file's contents. |
 | `--budget <AMOUNT[/day]>` | `--agent` | Dollar cap for each spawned run. |
@@ -155,7 +156,7 @@ The receipt adds `trigger: when <expression>, for <duration>`, `scope: <checkout
 | `--root <PATH>` | all | Project whose room hosts the task. Default `.`. |
 | `--project` | `--agent`, check-only | Write the task to the project's `.rimz/config.toml`; see [project tasks](#project-tasks). |
 
-`--mode`, `--effort`, `--account`, `--system-prompt-file`, `--budget`, and `--budget-per-day` are refused on `--wait` and check-only tasks, and `--worktree` on check-only tasks.
+`--mode`, `--effort`, `--fast`, `--no-fast`, `--account`, `--system-prompt-file`, `--budget`, and `--budget-per-day` are refused on `--wait` and check-only tasks, and `--worktree` on check-only tasks.
 
 ### The account pin
 

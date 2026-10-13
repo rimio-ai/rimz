@@ -2394,3 +2394,42 @@ fn ctrl_c_from_the_check_on_ends_a_spawn_the_throttle_then_holds() {
     assert_eq!(host.elapsed_ms(), 0, "the Ctrl-C was heard before any hold");
     assert_eq!(host.tickets(), 1, "only the holder's turn is queued");
 }
+
+#[test]
+fn spawn_request_carries_the_task_fast_mode_beside_effort() {
+    let dir = tempfile::tempdir().unwrap();
+    let catalog = TaskCatalog::load(Some(dir.path())).unwrap();
+    for fast in [None, Some(true), Some(false)] {
+        let entry = TaskEntry {
+            agent: Some("codex".to_owned()),
+            prompt: Some("check".to_owned()),
+            every: Some("1h".to_owned()),
+            effort: Some("high".to_owned()),
+            fast,
+            root: dir.path().to_owned(),
+            ..TaskEntry::default()
+        };
+        let fire = TaskFire::new(
+            "hourly",
+            LoadedTask::new("hourly", entry, catalog::TaskSource::Config),
+            &catalog,
+            LoopRunMode::Scheduled,
+            false,
+            Timestamp::now(),
+            Arc::new(MachineConfig::default()),
+            None,
+            CheckEcho::Capture,
+            Instant::now(),
+        )
+        .unwrap();
+        let request = fire
+            .compile_spawn_request(
+                "codex".to_owned(),
+                "check".to_owned(),
+                ManagedLaunchState::Unsupported,
+            )
+            .unwrap();
+        assert_eq!(request.effort.as_deref(), Some("high"));
+        assert_eq!(request.fast, fast);
+    }
+}

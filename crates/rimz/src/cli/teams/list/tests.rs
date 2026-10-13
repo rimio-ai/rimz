@@ -26,6 +26,51 @@ fn tier_role_reports_keep_concrete_models_and_show_fallback() {
     assert_eq!(json["roles"][0]["tier"], "senior");
     assert_eq!(json["roles"][0]["model"], "fable");
     assert_eq!(json["roles"][0]["tier_fallback"], true);
+    assert!(json["roles"][0].get("fast").is_none());
+    team.roles[0].fast = Some(true);
+    let report = definition_report(
+        "forge",
+        &team,
+        &profiles,
+        &Default::default(),
+        None,
+        Vec::new(),
+    );
+    let json = serde_json::to_value(&report).unwrap();
+    assert_eq!(json["roles"][0]["fast"], true);
+}
+
+#[test]
+fn unresolved_role_reports_the_profile_fast_field() {
+    // A second role on a missing profile keeps the layout from compiling, so
+    // the report falls back to resolving each role's profile on its own.
+    let profile: rimz::config::Profile = toml::from_str("agent = 'codex'\nfast = true").unwrap();
+    let profiles = ProfilesConfig(BTreeMap::from([("coder".into(), profile)]));
+    let mut team = team();
+    team.roles[0].profile = "coder".into();
+    let mut broken = team.roles[0].clone();
+    broken.role = "ghost".into();
+    broken.profile = "missing".into();
+    team.roles.push(broken);
+    let report = |team: &Team| {
+        let report = definition_report(
+            "forge",
+            team,
+            &profiles,
+            &Default::default(),
+            None,
+            Vec::new(),
+        );
+        assert!(!report.valid);
+        serde_json::to_value(&report).unwrap()
+    };
+    let json = report(&team);
+    assert_eq!(json["roles"][0]["kind"], "codex");
+    assert_eq!(json["roles"][0]["fast"], true);
+
+    // The binding's `fast = false` folds over the profile's field.
+    team.roles[0].fast = Some(false);
+    assert!(report(&team)["roles"][0].get("fast").is_none());
 }
 
 #[test]

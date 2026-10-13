@@ -132,6 +132,7 @@ fn launch_implies_supervised_background_defaults() {
         "review this",
         "--effort",
         "high",
+        "--fast",
         "--isolation",
         "sandbox",
     ]);
@@ -146,6 +147,7 @@ fn launch_implies_supervised_background_defaults() {
         "review this",
         "--effort",
         "high",
+        "--fast",
         "--isolation",
         "sandbox",
         "-p",
@@ -263,6 +265,7 @@ fn fanout_task_matches_the_single_launch_surface() {
             "model": "opus",
             "agent": "reviewer",
             "effort": "high",
+            "fast": true,
             "timeout": "5m",
             "max_turns": 4,
             "description": "checks auth"
@@ -283,6 +286,7 @@ fn fanout_task_matches_the_single_launch_surface() {
         "reviewer",
         "--effort",
         "high",
+        "--fast",
         "--timeout",
         "5m",
         "--max-turns",

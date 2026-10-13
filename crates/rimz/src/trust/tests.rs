@@ -574,6 +574,8 @@ fn hash_covers_every_documented_surface_field() {
         "[tasks.x]\nworktree = \"sync\"\n",
         "[tasks.x]\nmode = \"yolo\"\n",
         "[tasks.x]\neffort = \"low\"\n",
+        "[tasks.x]\nfast = true\n",
+        "[tasks.x]\nfast = false\n",
         "[tasks.x]\nsystem-prompt-file = \"prompts/system.md\"\n",
         "[tasks.x]\ntimeout = \"2h\"\n",
         "[tasks.x]\nat = \"08:00\"\n",
