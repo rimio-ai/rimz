@@ -69,6 +69,63 @@ fn idle_delivery_skips_content_but_changes_reach_the_renderer() {
 }
 
 #[test]
+fn renderer_local_reconciliation_state_forces_full_content() {
+    type Hold = fn(&mut LoopState);
+    let blockers: [(&str, Hold); 8] = [
+        ("should_exit", |state| state.should_exit = true),
+        ("overlay_baseline", |state| {
+            state.overlay_baseline = Some(state.current.clone());
+        }),
+        ("gate", |state| state.gate.reject_streak = 1),
+        ("failure_streak", |state| state.health.failure_streak = 1),
+        ("order_hold", |state| {
+            state.ui.order_hold = Some(crate::sidebar_pane::render::OrderHold {
+                frozen: crate::sidebar_pane::render::FrozenOrder::default(),
+                expires_ms: i64::MAX,
+            });
+        }),
+        ("tab_read_dwell", |state| {
+            state.tab_read_dwell_until = Some(Instant::now() + Duration::from_secs(60));
+        }),
+        ("self_close", |state| {
+            state.self_close.should_close(Some(0), Instant::now());
+        }),
+        ("focus_repair", |state| {
+            state.pending_focus_repair = Some(PendingFocusRepair {
+                pane_id: pane("terminal_9", "tab_0", false).pane_id,
+                generation: 1,
+                clients: Vec::new(),
+                sent_at_ms: crate::utils::time::unix_now_ms(),
+            });
+        }),
+    ];
+    let skipped: Vec<_> = blockers
+        .into_iter()
+        .filter_map(|(name, hold)| {
+            let mut rig = Rig::new();
+            let mut snapshot = agent_snapshot(&rig.ws);
+            rig.fold(snapshot.clone(), SnapshotSource::Produced);
+            hold(&mut rig.state);
+            for _ in 0..2 {
+                snapshot.now += jiff::SignedDuration::from_secs(1);
+                rig.fold(snapshot.clone(), SnapshotSource::Produced);
+            }
+            (rig.state.content_applications != 2).then_some(name)
+        })
+        .collect();
+    assert!(
+        skipped.is_empty(),
+        "held across an equal fold, these must re-admit full content: {skipped:?}"
+    );
+    let rig = Rig::new();
+    assert!(rig.state.admits_clock_only(false));
+    assert!(
+        !rig.state.admits_clock_only(true),
+        "a gate-rejected fold must not admit clock-only delivery"
+    );
+}
+
+#[test]
 fn synthetic_fold_releases_baseline_after_overlay_expires() {
     let mut rig = Rig::new();
     let mut process = pane("terminal_9", "tab_0", false);

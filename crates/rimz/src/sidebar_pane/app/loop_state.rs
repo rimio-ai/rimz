@@ -415,17 +415,8 @@ impl LoopState {
             rejected |= self.apply_latest_snapshot(update);
         }
         if delivered {
-            self.result_rx.allow_unchanged(
-                !self.should_exit
-                    && !rejected
-                    && self.overlay_baseline.is_none()
-                    && self.gate == GateState::default()
-                    && self.health.failure_streak == 0
-                    && self.ui.order_hold.is_none()
-                    && self.tab_read_dwell_until.is_none()
-                    && !self.self_close.confirming_empty()
-                    && self.pending_focus_repair.is_none(),
-            );
+            self.result_rx
+                .allow_unchanged(self.admits_clock_only(rejected));
         }
         if saw_final {
             fetch.complete(!self.should_exit);
@@ -438,6 +429,87 @@ impl LoopState {
                 .unwrap_or(crate::sidebar::timing::ACCEPT_REGRESSION_AFTER);
             fetch.defer_until(FetchRequest::default(), Instant::now() + defer_for);
         }
+    }
+
+    /// Whether the next fold equal to the one just applied may arrive as a
+    /// clock-only delivery. Renderer-local reconciliation state blocks it, so
+    /// that state always meets full content. Exhaustive: a new field must be
+    /// named here, as a blocker or as irrelevant to delivery.
+    fn admits_clock_only(&self, rejected: bool) -> bool {
+        let Self {
+            // Blockers: an exit, a held overlay or focus fence, a gate episode,
+            // a failure streak, a frozen order, an armed read dwell, an empty
+            // confirmation, and a pending focus repair each resolve on a fold.
+            should_exit,
+            overlay_baseline,
+            gate,
+            health,
+            ui,
+            tab_read_dwell_until,
+            self_close,
+            pending_focus_repair,
+            // The acknowledged baseline the comparison runs against.
+            current: _,
+            #[cfg(test)]
+                content_applications: _,
+            // Derived from `current`, which equal content leaves unchanged.
+            nav_keys: _,
+            last_focus_observation: _,
+            last_pulled_rows: _,
+            // Loop wiring and identity, fixed for the attachment.
+            config: _,
+            runtime: _,
+            host_wake_path: _,
+            diag: _,
+            result_rx: _,
+            observe_tx: _,
+            room_caps: _,
+            request_reload: _,
+            baseline_changed: _,
+            // Per-delivery fold context, replaced by every delivery.
+            observation: _,
+            fold_inputs: _,
+            // Focus-anchor bookkeeping: a live intent or fence holds
+            // `overlay_baseline`, and an anchor change is content.
+            observed_anchor: _,
+            retired_anchor: _,
+            confirmed_focus_intent_ms: _,
+            // Overlay events: an active one holds `overlay_baseline`.
+            events: _,
+            // Shared-filter fence: a shared filter change is content.
+            filter_observed_at: _,
+            // Paint, animation, and frame scheduling, which a clock-only
+            // delivery drives itself.
+            anim_start: _,
+            paint: _,
+            dirty: _,
+            paint_hold: _,
+            next_frame: _,
+            prev_width: _,
+            caps_refresh_deadline: _,
+            width_control: _,
+            observer: _,
+            optimistic_watch_until: _,
+            // Maintenance stamps and reminders, read against `current`.
+            fetched_at: _,
+            last_self_close_check: _,
+            last_heartbeat: _,
+            remind: _,
+            // Exit detail and baseline reporting, set beside `should_exit` or
+            // from `ui` outside the fold.
+            exit_cause: _,
+            tab_emptied: _,
+            last_reported_baseline: _,
+        } = self;
+        !should_exit
+            && !rejected
+            && overlay_baseline.is_none()
+            && *gate == GateState::default()
+            && health.failure_streak == 0
+            && ui.order_hold.is_none()
+            && tab_read_dwell_until.is_none()
+            && !self_close.confirming_empty()
+            && pending_focus_repair.is_none()
     }
 
     pub(super) fn share_width_geometry(
