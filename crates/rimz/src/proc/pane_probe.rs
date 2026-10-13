@@ -429,6 +429,41 @@ mod tests {
     }
 
     #[test]
+    fn agent_wrapper_root_is_the_hosted_cli_whatever_its_children() {
+        let start = timestamp("2026-07-01T10:00:00Z");
+        let launch = "/home/me/.cargo/bin/rimz agents exec codex --worktree-path /repo/wt -- codex";
+        let parked = "/home/me/.cargo/bin/rimz agents exec codex --worktree-path /repo/wt -- codex \
+                      --supervise /tmp/rimz/unit/supervise.json";
+        let duty = "/home/me/.cargo/bin/rimz agents supervise-duty --request /tmp/req";
+        let cases = [
+            chain([(10, launch), (20, "codex"), (30, duty)]).branch(10, [20, 30]),
+            chain([(10, parked), (20, "codex"), (30, duty)]).branch(10, [20, 30]),
+            chain([
+                (10, launch),
+                (20, "bwrap --unshare-pid -- codex"),
+                (30, "/home/me/.cargo/bin/rimz hooks drain"),
+                (40, "zombie"),
+            ])
+            .branch(10, [20, 30, 40])
+            .unreadable(40),
+        ];
+
+        for fixture in cases {
+            let fixture = fixture.live(10, start, None);
+            let hosted = fixture.hosted_agent(10).expect("wrapper reads as codex");
+            assert_eq!(
+                (hosted.kind.as_str(), hosted.pid, hosted.started_at),
+                ("codex", 10, start)
+            );
+            assert_eq!(hosted.lineage, Vec::<u32>::new());
+            let in_pane = fixture
+                .in_pane_agent("codex", 10)
+                .expect("wrapper is codex");
+            assert_eq!((in_pane.pid, in_pane.started_at), (10, start));
+        }
+    }
+
+    #[test]
     fn hosted_agent_process_requires_complete_live_proof() {
         let start = timestamp("2026-07-01T10:00:00Z");
         let cases = [
