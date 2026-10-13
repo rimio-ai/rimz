@@ -425,7 +425,7 @@ fn lane_selector(
     }
 }
 
-fn local_worktrees(workspace: &rimz::ResolvedWorkspace) -> Result<Vec<LaneWorktree>> {
+pub(super) fn local_worktrees(workspace: &rimz::ResolvedWorkspace) -> Result<Vec<LaneWorktree>> {
     if workspace.root_class != rimz::workspace::RootClass::Repo {
         return Ok(Vec::new());
     }

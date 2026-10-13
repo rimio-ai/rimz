@@ -44,6 +44,25 @@ pub(super) fn list_agents(
                 .is_none_or(|filter| rimz::address::agent_in_worktree(agent, filter))
         })
         .collect();
+    if agents.is_empty() {
+        if let Some(scope) = scope.as_deref() {
+            refuse_unknown_lane(&store, &workspace, scope)?;
+        }
+        if !json {
+            let line = match channel.as_deref() {
+                Some(lane) => {
+                    let lane = format!("#{lane}");
+                    format!(
+                        "no live agents in '{lane}'; reopen closed ones with {}",
+                        shell_command(["rimz", "agents", "resume", &lane])
+                    )
+                }
+                None => "no live agents in this room".to_owned(),
+            };
+            writeln!(render::out(), "{line}")?;
+            return Ok(());
+        }
+    }
     let now = jiff::Timestamp::now();
     let machine_config = crate::cli::machine_config();
     let demotion = rimz::harness::park_demotion(
@@ -247,6 +266,38 @@ fn channel_group_is_worktree_backed(
             .agents
             .iter()
             .all(|agent| agent.worktree_path.as_deref() == Some(first))
+}
+
+/// A named scope that selects no live agent: fail when it is no lane at all,
+/// by the rule `resume` resolves lanes with, naming the lanes there are.
+fn refuse_unknown_lane(
+    store: &rimz::Store,
+    workspace: &rimz::ResolvedWorkspace,
+    scope: &str,
+) -> Result<()> {
+    const SHOWN_LANES: usize = 8;
+    let audit = store
+        .runtime_projection(rimz::RuntimeScope::Audit)
+        .context("reading audit agent rollup")?
+        .agents;
+    let worktrees = super::resume::local_worktrees(workspace)?;
+    let Err(lanes) =
+        rimz::harness::resume::check_lane_scope(scope, &audit, &worktrees, &workspace.project_root)
+    else {
+        return Ok(());
+    };
+    let lane = format!("#{}", scope.trim_start_matches('#'));
+    if lanes.is_empty() {
+        bail!("no lane '{lane}' in this workspace");
+    }
+    let mut shown = lanes.iter().take(SHOWN_LANES).cloned().collect::<Vec<_>>();
+    if lanes.len() > SHOWN_LANES {
+        shown.push("…".to_owned());
+    }
+    bail!(
+        "no lane '{lane}' in this workspace; lanes: {}",
+        shown.join(", ")
+    )
 }
 
 pub(super) fn list_channel_filter(
