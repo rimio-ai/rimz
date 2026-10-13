@@ -21,7 +21,7 @@ The binding question is therefore one question: does a live local pane bind the 
 
 A multiplexer sometimes reports only a shared runtime basename such as `node` for a pane. The pane producer then walks one bounded chain from the pane root, following a single child at each step, and classifies each full command line through the adapter registry. The outermost proven known CLI supplies the hosted kind, its process start, and the lineage: the pids on the chain below the root, down to the CLI. A chain that is unreadable, branches, lacks a start time, exceeds the depth limit, or matches no adapter supplies nothing. This applies to every adapter, independent of `registers_lazily`, which governs only how an unstamped session is recovered.
 
-The [resident wrapper's park handoff](../harness/fleet.md#resident-wrapper) keeps its provider as its only child before supervision, rather than spawning workspace-resolution helpers alongside it. Run-duty helpers during supervision remain separate children.
+A RimZ-launched pane's root is its [resident wrapper](../harness/fleet.md#resident-wrapper), whose command line `rimz agents exec <kind> …` (the parked image adds `--supervise <path>`) itself classifies as the kind, so the walk stops at the root and never inspects the wrapper's children. Its helper children, a parked run's duties and a sandboxed launch's hook drainer, therefore cost nothing here. That protection holds only while the wrapper's command line classifies: the program basename must be `rimz` and `agents exec <kind>` must come first ([`rimz_exec_kind`](../../../crates/rimz/src/proc/command.rs)). A renamed binary or global flags before `agents` leave the root unclassified, and the walk then abstains at the wrapper's branch.
 
 ## Before a session binds
 
