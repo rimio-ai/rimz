@@ -14,19 +14,19 @@ Each page names its upstream sources and the version or commit it was last refre
 
 | Page | Upstream | Refreshed against | RimZ mapping |
 | --- | --- | --- | --- |
-| [claude-reference.md](./agent-adapter/claude-reference.md) | Claude Code | 2.1.270 (tag `v2.1.270`, 2026-09-12) | [adapter_claude.md](../internals/agents/adapter_claude.md) |
-| [codex-reference.md](./agent-adapter/codex-reference.md) | Codex | 0.154.0 | [adapter_codex.md](../internals/agents/adapter_codex.md) |
-| [amp-reference.md](./agent-adapter/amp-reference.md) | Amp CLI | `@ampcode/cli` 0.0.1789344113-g6e4515 (2026-09-14) | [adapter_amp.md](../internals/agents/adapter_amp.md) |
-| [antigravity-reference.md](./agent-adapter/antigravity-reference.md) | Antigravity CLI | 1.2.2 (tag `1.2.2`, 2026-09-12; transcript and subagent captures: 1.1.2) | [adapter_antigravity.md](../internals/agents/adapter_antigravity.md) |
-| [copilot-reference.md](./agent-adapter/copilot-reference.md) | GitHub Copilot CLI | 1.0.83 | [adapter_copilot.md](../internals/agents/adapter_copilot.md) |
-| [cursor-reference.md](./agent-adapter/cursor-reference.md) | Cursor CLI | 2026.09.10-fd3934a (2026-09-10) | [adapter_cursor.md](../internals/agents/adapter_cursor.md) |
-| [droid-reference.md](./agent-adapter/droid-reference.md) | Factory Droid CLI | 0.218.2 (JSON-RPC: `@factory/droid-sdk` 0.9.1) | [adapter_droid.md](../internals/agents/adapter_droid.md) |
-| [grok-reference.md](./agent-adapter/grok-reference.md) | Grok Build | 1.0.30 (2026-09-11; source at sync commit `37949780`) | [adapter_grok.md](../internals/agents/adapter_grok.md) |
-| [kimi-reference.md](./agent-adapter/kimi-reference.md) | Kimi Code | 0.42.0 (tag `@moonshot-ai/kimi-code@0.42.0`, 2026-09-09) | [adapter_kimi.md](../internals/agents/adapter_kimi.md) |
-| [kiro-reference.md](./agent-adapter/kiro-reference.md) | Kiro CLI | 2.21.4 (2026-09-11; engine `@kiro/agent` 0.63.3; turn-order captures: 2.12.1) | [adapter_kiro.md](../internals/agents/adapter_kiro.md) |
-| [opencode-reference.md](./agent-adapter/opencode-reference.md) | OpenCode | 1.18.30 | [adapter_opencode.md](../internals/agents/adapter_opencode.md) |
-| [pi-reference.md](./agent-adapter/pi-reference.md) | Pi | 0.85.1 | [adapter_pi.md](../internals/agents/adapter_pi.md) |
-| [qwen-reference.md](./agent-adapter/qwen-reference.md) | Qwen Code | 0.23.3 (tag `v0.23.3`, 2026-09-10) | [adapter_qwen.md](../internals/agents/adapter_qwen.md) |
+| [claude-reference.md](./agent-adapter/claude-reference.md) | Claude Code | 2.1.296 (tag `v2.1.296`, 2026-10-09) | [adapter_claude.md](../internals/agents/adapter_claude.md) |
+| [codex-reference.md](./agent-adapter/codex-reference.md) | Codex | 0.162.1 (tag `rust-v0.162.1`, 2026-10-09) | [adapter_codex.md](../internals/agents/adapter_codex.md) |
+| [amp-reference.md](./agent-adapter/amp-reference.md) | Amp CLI | `@ampcode/cli` 0.0.1791849701-g1448da (2026-10-13) | [adapter_amp.md](../internals/agents/adapter_amp.md) |
+| [antigravity-reference.md](./agent-adapter/antigravity-reference.md) | Antigravity CLI | 1.3.3 (tag `1.3.3`, 2026-10-10; transcript and subagent captures: 1.1.2) | [adapter_antigravity.md](../internals/agents/adapter_antigravity.md) |
+| [copilot-reference.md](./agent-adapter/copilot-reference.md) | GitHub Copilot CLI | 1.0.96 (tag `v1.0.96`, 2026-10-12) | [adapter_copilot.md](../internals/agents/adapter_copilot.md) |
+| [cursor-reference.md](./agent-adapter/cursor-reference.md) | Cursor CLI | 2026.10.01-e373342 (2026-10-01) | [adapter_cursor.md](../internals/agents/adapter_cursor.md) |
+| [droid-reference.md](./agent-adapter/droid-reference.md) | Factory Droid CLI | 0.239.1 (JSON-RPC: `@factory/droid-sdk` 0.9.1) | [adapter_droid.md](../internals/agents/adapter_droid.md) |
+| [grok-reference.md](./agent-adapter/grok-reference.md) | Grok Build | 1.0.52 (2026-10-11; source at sync commit `2bdd1d6a`, 2026-09-29) | [adapter_grok.md](../internals/agents/adapter_grok.md) |
+| [kimi-reference.md](./agent-adapter/kimi-reference.md) | Kimi Code | 2.1.1 (tag `@moonshot-ai/kimi-code@2.1.1`, 2026-09-24) | [adapter_kimi.md](../internals/agents/adapter_kimi.md) |
+| [kiro-reference.md](./agent-adapter/kiro-reference.md) | Kiro CLI | 2.30.0 (2026-10-12; engine `@kiro/agent` 0.66.33; turn-order captures: 2.12.1 and 2.21.4) | [adapter_kiro.md](../internals/agents/adapter_kiro.md) |
+| [opencode-reference.md](./agent-adapter/opencode-reference.md) | OpenCode | 2.0.27 (tag `v2.0.27`, 2026-10-12) | [adapter_opencode.md](../internals/agents/adapter_opencode.md) |
+| [pi-reference.md](./agent-adapter/pi-reference.md) | Pi | 1.2.0 (tag `v1.2.0`, 2026-10-12) | [adapter_pi.md](../internals/agents/adapter_pi.md) |
+| [qwen-reference.md](./agent-adapter/qwen-reference.md) | Qwen Code | 0.25.1 (tag `v0.25.1`, 2026-10-11) | [adapter_qwen.md](../internals/agents/adapter_qwen.md) |
 
 The provider-neutral contracts every adapter page feeds are [model.md](../internals/agents/model.md) for lifecycle and status, [adapter.md](../internals/agents/adapter.md) for the adapter layer, and [providers.md](../internals/agents/providers.md) for accounts and spend.
 
@@ -37,4 +37,4 @@ The provider-neutral contracts every adapter page feeds are [model.md](../intern
 | Page | Upstream | Refreshed against | RimZ mapping |
 | --- | --- | --- | --- |
 | [zellij-reference.md](./mux-adapter/zellij-reference.md) | Zellij: the wasm plugin API, CLI control surface, configuration, layout KDL, terminal graphics, and session serialization | 0.45.1 (tag `v0.45.1`, 2026-08-28) | [multiplexers.md](../internals/multiplexers.md), and [web.md](../internals/web.md) for browser access |
-| [tmux-reference.md](./mux-adapter/tmux-reference.md) | tmux: the client/server and socket model, command verbs, format language, hooks, options, session environment, and control mode | 3.7c | [multiplexers.md](../internals/multiplexers.md) |
+| [tmux-reference.md](./mux-adapter/tmux-reference.md) | tmux: the client/server and socket model, command verbs, format language, hooks, options, session environment, and control mode | 3.8 (tag `3.8`, 2026-09-09) | [multiplexers.md](../internals/multiplexers.md) |
