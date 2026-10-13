@@ -226,7 +226,7 @@ At narrow widths the right-hand buckets clip from the idle end. A bucket without
 
 ### The unread banner
 
-`↑ N need you` appears when the card that most needs you, the oldest unread `?` or `!`, has scrolled out of view. It is yellow for a waiting card and red for a failed one. Click it to scroll back to the top of the cards, where ranking places that card, or press `n` to jump to the next card that needs you. It disappears when that card is on screen or nothing is waiting for you.
+`↑ N need you` appears when the card that most needs you, the oldest unread `?` or `!`, has scrolled out of view. During a wheel glide it reflects where the cards will land, so it does not appear or disappear midway through the motion. It is yellow for a waiting card and red for a failed one. Click it to snap back to the top of the cards, where ranking places that card, or press `n` to jump to the next card that needs you. It disappears when that card is on screen or nothing is waiting for you.
 
 ### An empty room
 
@@ -242,7 +242,7 @@ A room with no agents has no make-up line:
 
 ## The agent cards
 
-The body holds one card per pane, grouped under the worktree the pane works in. When the cards outgrow the space they scroll between the cockpit and the dashboard, and a scrollbar shows on the right edge while the view moves, fading about a second after it stops (`[theme.display] scrollbar` pins or removes it). The view follows the selection: selecting a card brings all of it into view, and a card taller than the view is pinned by its first line. The mouse wheel scrolls without moving the selection, and the next selection change brings the view back.
+The body holds one card per pane, grouped under the worktree the pane works in. When the cards outgrow the space they scroll between the cockpit and the dashboard, and a scrollbar shows on the right edge while the view moves, fading about a second after it stops (`[theme.display] scrollbar` pins or removes it). The view follows the selection: selecting a card brings all of it into view, and a card taller than the view is pinned by its first line. A mouse wheel tick glides the cards to their new position over about a tenth of a second without moving the selection; under load the glide drops frames rather than slowing down. Selection changes, the unread-banner click, and jumps still land in one frame, and the next selection change brings the view back.
 
 ### The card
 

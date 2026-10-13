@@ -86,7 +86,7 @@ Focus: target/debug/xtask sandbox in '/tmp/rimz-sandbox-wsZYXO' -- zellij --sess
 Run a sidebar's Look first, then capture or click it: an unwatched sidebar can hold a stale frame.
 ```
 
-## Four checks
+## Five checks
 
 Run the sequence on both backends, using each room's own card.
 
@@ -179,6 +179,12 @@ On the team's tab, run the sidebar's Look and take a fresh Capture. Count rows f
 The recorded row was `row0=8` on both backends. tmux focus moved from `%3` to `%8`, matching `Role: @reviewer#probe  tmux:%8`. On Zellij, `8=forge.reviewer@#probe` joined the focused set, matching `Role: @reviewer#probe  zellij:terminal_8`.
 
 On Zellij the held room's attached client follows no focus sent from outside a pane, so `list-clients` and the active tab stay where they were after any click, a card click included. Prove a pane jump there from the target tab's focused set before and after the click (the sidebar pane leaves it and the target stays) and from the fused `focused_pane` in the renderer's fold trace. The client's tab switch itself needs a real attached session; tmux shows it through `list-clients`.
+
+### 5. Wheel glide
+
+On each backend, use an attached room with more cards than viewport rows (expand groups or shorten the terminal if needed). Focus the sidebar and wheel down, then up: the cards should glide over about a tenth of a second, and the scrollbar should follow the visible cards rather than jump ahead. Wheel again during a glide to check that it continues from the visible row without jumping back. Press a selection key during a glide: the view should snap to the selected card in one frame. Click a visible card mid-glide and confirm that the pane it opens matches the card under the pointer.
+
+The recorded run glided from an idle sidebar on 16 ms paints on both backends: three tmux ticks went `off=8 → 6 → 4 → 2 → 1` over 20–99 ms, and three Zellij ticks went `off=7 → 5 → 3 → 1 → 0` over 30–96 ms. A selection key 35 ms into a glide snapped in one paint on both, and a click mid-glide focused the card under the pointer (tmux `cmd=more`, Zellij `terminal_28`).
 
 ## Room host
 
@@ -402,7 +408,7 @@ target/debug/xtask sandbox in "$ROOT" -- "$PWD/target/debug/rimz" --tmux agents 
 jq -c '.agent.sub_agents[].tokens' /tmp/show.json
 ```
 
-`agents show --json` wraps the card in an `agent` envelope, so a bare `.sub_agents` reads null. The frame comes from the pane's Look then Capture, as in the four checks. The expected window is the newest assistant request in the child transcript, prompt side only:
+`agents show --json` wraps the card in an `agent` envelope, so a bare `.sub_agents` reads null. The frame comes from the pane's Look then Capture, as in the five checks. The expected window is the newest assistant request in the child transcript, prompt side only:
 
 ```sh
 jq -s '[.[] | select(.type == "assistant") | .message.usage] | last | .input_tokens + .cache_read_input_tokens + .cache_creation_input_tokens' "$ROOT/tmp/replay/$SESSION/subagents/agent-$CHILD.jsonl"
