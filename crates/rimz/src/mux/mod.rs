@@ -1096,8 +1096,8 @@ pub trait MuxBackend: Send + Sync {
     /// an attached terminal or direct the user to `rimz reset`.
     /// This is the authoritative pre-attach gate that the best-effort sidebar
     /// launch cannot bypass. A socket path overflow, or a command that outlives
-    /// its deadline, returns an error and reset is not offered. tmux has no resurrection, so the default is a no-op
-    /// `Healthy`.
+    /// its deadline, returns an error and reset is not offered. tmux has no
+    /// resurrection, so the default is a no-op `Healthy`.
     fn ensure_clean_session(
         &self,
         opts: &SidebarPaneOptions,
