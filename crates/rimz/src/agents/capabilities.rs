@@ -486,6 +486,27 @@ pub trait LaunchCapability: CoreCapability {
         Ok(())
     }
 
+    /// Take a fast switch that belongs inside the provider's settings document
+    /// out of launch argv, reporting whether one was there. The process
+    /// compiler merges it back through [`Self::merge_fast_settings`] after
+    /// every other settings mutation, so the launch still carries one
+    /// settings document. The default leaves argv alone: a provider whose fast
+    /// switch is plain argv keeps it where it was rendered.
+    fn take_fast_settings(&self, _extra_args: &mut Vec<String>) -> bool {
+        false
+    }
+
+    /// Merge the fast member taken by [`Self::take_fast_settings`] into the
+    /// launch's settings document.
+    fn merge_fast_settings(
+        &self,
+        _paths: (&Path, &Path),
+        _extra_args: &mut Vec<String>,
+        _artifact: &mut Option<super::skills::LaunchSettingsArtifact>,
+    ) -> std::result::Result<(), super::skills::LaunchSettingsErr> {
+        Ok(())
+    }
+
     /// Switch off the provider's native command sandbox for a launch inside
     /// RimZ sandbox isolation, where the RimZ view is the agent's one sandbox;
     /// approval flags stay as the mode set them. The default leaves argv

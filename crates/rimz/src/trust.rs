@@ -857,6 +857,7 @@ pub struct ProjectProfile {
     #[serde(rename = "append-system-prompt-files")]
     pub append_system_prompt_files: Option<Vec<String>>,
     pub args: Option<String>,
+    pub fast: Option<bool>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -948,6 +949,10 @@ struct ExecutableProfile<'a> {
     #[serde(rename = "append_system_prompt_file")]
     append_system_prompt_files: Option<&'a [String]>,
     args: Option<&'a str>,
+    // Fast shapes provider argv and cost, and an explicit off differs from
+    // unset; serialized only when set, so pinned hashes hold.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fast: Option<bool>,
 }
 
 #[derive(Serialize)]
@@ -981,6 +986,9 @@ struct ExecutableRole<'a> {
     #[serde(rename = "append_system_prompt_file")]
     append_system_prompt_files: Option<Vec<String>>,
     args: Option<&'a str>,
+    // A role's `fast` override; serialized only when set, so pinned hashes hold.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fast: Option<bool>,
 }
 
 #[derive(Serialize)]
@@ -1063,6 +1071,7 @@ impl<'a> From<&'a ProjectConfig> for ExecutableSurface<'a> {
                     system_prompt_file: p.system_prompt_file.as_deref(),
                     append_system_prompt_files: p.append_system_prompt_files.as_deref(),
                     args: p.args.as_deref(),
+                    fast: p.fast,
                 })
                 .collect(),
             subagent_profiles: config
@@ -1080,6 +1089,7 @@ impl<'a> From<&'a ProjectConfig> for ExecutableSurface<'a> {
                     system_prompt_file: p.system_prompt_file.as_deref(),
                     append_system_prompt_files: p.append_system_prompt_files.as_deref(),
                     args: p.args.as_deref(),
+                    fast: p.fast,
                 })
                 .collect(),
             teams: config
@@ -1113,6 +1123,7 @@ impl<'a> From<&'a ProjectConfig> for ExecutableSurface<'a> {
                                     .collect()
                             }),
                             args: role.args.as_deref(),
+                            fast: role.fast,
                         })
                         .collect(),
                     consensus_file: team

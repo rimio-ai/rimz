@@ -2930,6 +2930,7 @@ fn resume_exec_attaches_only_the_resumed_session_to_its_pane() {
         resume.identity.params.record = Some(Box::new(rimz::agents::LaunchRecord {
             model: Some("gpt-6-sol".into()),
             effort: Some("high".into()),
+            fast: false,
             agent: Some("reviewer".into()),
         }));
         resume.identity.params.tier = Some(Box::new(rimz::agents::TierStamp {

@@ -116,7 +116,12 @@ static DROID_DESCRIPTOR: AgentSpec = AgentSpec {
             command: "/compact",
             instruction: super::CompactInstruction::Trailing,
         }),
-        presets: super::PresetMatchers::EMPTY,
+        presets: super::PresetMatchers {
+            fast: super::FastSwitch::Unsupported {
+                fix: "toggle /fast inside the session",
+            },
+            ..super::PresetMatchers::EMPTY
+        },
         ..super::LaunchSpec::EMPTY
     },
 };

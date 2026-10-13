@@ -347,6 +347,7 @@ pub(super) fn resolve_model(
         request.identity.params.record.as_deref(),
         request.identity.params.model.as_deref(),
         request.identity.params.effort.as_deref(),
+        request.identity.params.fast,
     ));
     let Some(alias) = request.identity.params.model.as_deref() else {
         return Ok((warnings, movement, refresh_failure));

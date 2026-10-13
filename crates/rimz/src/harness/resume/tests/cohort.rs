@@ -214,6 +214,7 @@ fn recorded_team_restore_keeps_role_layers() {
             Box::new(crate::agents::LaunchRecord {
                 model: Some("opus".into()),
                 effort: Some("high".into()),
+                fast: false,
                 agent: None,
             })
         });
@@ -551,6 +552,7 @@ fn untiered_resume_rebuilds_the_record_and_saves_overrides() {
     agent.record = Some(Box::new(crate::agents::LaunchRecord {
         model: Some("opus[1m]".into()),
         effort: Some("high".into()),
+        fast: false,
         agent: None,
     }));
     let mut layout = LayoutSpec::single(crate::harness::spec::Cell::Agent(
@@ -621,6 +623,7 @@ fn resume_overrides_keep_provider_args_and_record_in_sync() {
                 agent.record = Some(Box::new(crate::agents::LaunchRecord {
                     model: Some("opus[1m]".into()),
                     effort: Some("xhigh".into()),
+                    fast: false,
                     agent: Some("reviewer".into()),
                 }));
                 let mut layout = LayoutSpec::single(crate::harness::spec::Cell::Agent(
@@ -1173,6 +1176,52 @@ fn stamped_cohort_resume_reapplies_explicit_model_and_effort() {
     assert_eq!(cell.launch.effort.as_deref(), Some("low"));
     assert!(cell.args.iter().any(|arg| arg == "sol"));
     assert!(cell.args.iter().any(|arg| arg.contains("low")));
+}
+
+#[test]
+fn stamped_cohort_resume_replays_and_rewrites_fast() {
+    let profiles = profiles("coder", profile("codex"));
+    let fast_args = |cell: &crate::harness::spec::AgentCell| {
+        cell.args
+            .iter()
+            .filter(|arg| *arg == "service_tier=fast")
+            .count()
+    };
+    for (recorded, flag, want) in [
+        (true, None, true),
+        (true, Some(false), false),
+        (false, Some(true), true),
+        (false, None, false),
+    ] {
+        let agent = AgentState {
+            profile: Some("coder".into()),
+            record: Some(Box::new(crate::agents::LaunchRecord {
+                fast: recorded,
+                ..Default::default()
+            })),
+            ..agent("codex", "fast", "/repo/forge", 1)
+        };
+        let mut layout = LayoutSpec::single(crate::harness::spec::Cell::Agent(
+            crate::harness::spec::profile_cell("coder", &profiles).unwrap(),
+        ));
+        restore_routed_cells(
+            &mut layout,
+            &[CohortSeed::Resume(Box::new(agent))],
+            &profiles,
+            &ResumeOverrides {
+                preset: crate::agents::LaunchPreset {
+                    fast: flag,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let cell = layout.agent_cells().next().unwrap();
+        assert_eq!(cell.launch.fast, want, "{recorded} {flag:?}");
+        assert_eq!(cell.launch.record.as_deref().unwrap().fast, want);
+        assert_eq!(fast_args(cell), usize::from(want), "{:?}", cell.args);
+    }
 }
 
 #[test]
@@ -2124,6 +2173,7 @@ fn explicit_resume_mode_beats_recorded_and_profile_modes() {
     agent.record = Some(Box::new(crate::agents::LaunchRecord {
         model: Some("opus".into()),
         effort: Some("high".into()),
+        fast: false,
         agent: None,
     }));
     let mut layout = LayoutSpec::single(crate::harness::spec::Cell::Agent(

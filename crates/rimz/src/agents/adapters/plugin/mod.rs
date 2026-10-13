@@ -28,7 +28,7 @@ use super::LaunchPreset;
 use super::account::AccountProbe;
 use super::definition::{
     AgentSpec, Brand, Capabilities, CapabilityLevel, ConcernCoverage, CoverageAnnotations,
-    HookCoverage, LaunchPermissionArgs, LaunchSpec, LifecycleAnnotations, PlanLabel,
+    FastSwitch, HookCoverage, LaunchPermissionArgs, LaunchSpec, LifecycleAnnotations, PlanLabel,
     PresetMatchers, PromptStyle, RemoteControlCapability, StaticPresetMatcher, ThreadKey,
     ToolClassification, UserCoverage,
 };
@@ -402,6 +402,7 @@ fn build_descriptor(manifest: &'static PluginManifest, plugin_dir: &'static Path
                     model: flag(&launch.model_flag),
                     effort: flag(&launch.effort_flag),
                     system_prompt_file: flag(&launch.system_prompt_file_flag),
+                    fast: FastSwitch::NONE,
                 },
                 ..LaunchSpec::EMPTY
             }

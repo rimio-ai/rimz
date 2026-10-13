@@ -255,6 +255,7 @@ pub struct ResumeLaunchPosture {
     pub mode: Option<PermissionMode>,
     pub model: Option<String>,
     pub effort: Option<String>,
+    pub fast: bool,
     pub budget: Option<String>,
 }
 
@@ -296,6 +297,7 @@ impl From<&AgentCell> for ResumeLaunchPosture {
             mode: cell.launch.mode,
             model: cell.launch.model.clone(),
             effort: cell.launch.effort.clone(),
+            fast: cell.launch.fast,
             budget: cell.launch.budget.clone(),
         }
     }
@@ -732,6 +734,7 @@ pub fn plan_supervised_launch(
         auto_compact: None,
         system_prompt_file: request.system_prompt_file.clone(),
         append_system_prompt_files: request.append_system_prompt_files.clone(),
+        fast: request.fast,
     };
     let finalized = finalize_launch_layout(
         &mut resolved.layout,
@@ -849,6 +852,11 @@ pub enum LaunchFinalizeError {
         "{agent} does not support config key `system-prompt-file` / flag `--system-prompt-file`; remove it or put provider-specific flags in `args`"
     )]
     UnsupportedSystemPrompt { agent: &'static str },
+    #[error("{agent} has no fast-mode launch switch; {fix}")]
+    UnsupportedFast {
+        agent: &'static str,
+        fix: &'static str,
+    },
     #[error(
         "{agent} append-system-prompt-files requires a base system-prompt-file; add one to the profile, role, or launch command"
     )]
@@ -870,6 +878,7 @@ impl LaunchFinalizeError {
             | Self::PromptFile(_)
             | Self::UnsupportedPresetField { .. }
             | Self::UnsupportedSystemPrompt { .. }
+            | Self::UnsupportedFast { .. }
             | Self::MissingSystemPromptBase { .. }
             | Self::PromptValidation { .. } => &[],
         }
@@ -983,6 +992,9 @@ pub(super) fn finalize_agent_cell(
             cell.launch.effort = Some(effort.clone());
             overridden.push(crate::agents::PresetField::Effort);
         }
+        if let Some(fast) = options.preset.fast {
+            cell.launch.fast = fast;
+        }
         apply_preset_args(&mut cell.args, adapter, options.preset, &overridden)?;
     }
     validate_finalized_cell(cell, adapter)?;
@@ -1016,6 +1028,7 @@ pub(super) fn finalize_agent_cell(
                 .as_ref()
                 .and_then(|record| record.agent.clone())
         }),
+        fast: cell.launch.fast,
     }));
     Ok(())
 }
@@ -1038,6 +1051,9 @@ pub(super) fn apply_preset_args(
         {
             matcher.remove_occurrences(args);
         }
+    }
+    if preset.fast.is_some() {
+        adapter.spec().launch.strip_fast_args(args);
     }
     args.extend(rendered);
     Ok(())
@@ -1198,6 +1214,9 @@ fn unsupported_preset_error(err: crate::agents::PresetErr) -> LaunchFinalizeErro
     match err {
         crate::agents::PresetErr::UnsupportedField { agent, field } => {
             LaunchFinalizeError::UnsupportedPresetField { agent, field }
+        }
+        crate::agents::PresetErr::UnsupportedFast { agent, fix } => {
+            LaunchFinalizeError::UnsupportedFast { agent, fix }
         }
     }
 }
@@ -1362,6 +1381,7 @@ pub(super) fn resume_command(
         isolation: effective_resume_isolation(posture.isolation, identity.isolation),
         model: posture.model.clone(),
         effort: posture.effort.clone(),
+        fast: posture.fast,
         budget: posture.budget.clone(),
         tier: posture.tier.clone(),
         record: posture.record.clone(),

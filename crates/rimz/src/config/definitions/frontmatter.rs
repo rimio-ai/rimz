@@ -21,6 +21,7 @@ pub(super) struct AgentFrontmatter {
     pub tier: Option<String>,
     pub mode: Option<PermissionMode>,
     pub effort: Option<String>,
+    pub fast: Option<bool>,
     #[serde(default, deserialize_with = "token_count")]
     pub auto_compact: Option<String>,
     #[serde(default, deserialize_with = "number_text")]
@@ -57,6 +58,7 @@ impl AgentFrontmatter {
             isolation,
             mode,
             effort,
+            fast,
             auto_compact,
             budget,
             tools,
@@ -102,6 +104,7 @@ pub(super) struct RoleFrontmatter {
     pub tier: Option<String>,
     pub mode: Option<PermissionMode>,
     pub effort: Option<String>,
+    pub fast: Option<bool>,
     #[serde(default, deserialize_with = "token_count")]
     pub auto_compact: Option<String>,
     #[serde(default, deserialize_with = "flip_compact")]
@@ -136,6 +139,7 @@ impl RoleFrontmatter {
             tier: self.tier.clone(),
             mode: self.mode,
             effort: self.effort.clone(),
+            fast: self.fast,
             auto_compact: self.auto_compact.clone(),
             budget: self.budget.clone(),
             model_reminder: self.model_reminder,

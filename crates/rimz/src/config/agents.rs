@@ -378,6 +378,11 @@ pub struct Profile {
     pub model: Option<String>,
     #[serde(default)]
     pub effort: Option<String>,
+    /// Launch in the provider's fast mode (priority serving). `false` and
+    /// unset render nothing, so the provider's own default stands; `true` on a
+    /// provider without a fast switch refuses the launch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fast: Option<bool>,
     #[serde(default)]
     pub budget: Option<String>,
     /// How long a solo agent's prompt cache is held warm after its last real turn; unset means off.
@@ -605,6 +610,9 @@ pub struct RoleBinding {
     pub model: Option<String>,
     #[serde(default)]
     pub effort: Option<String>,
+    /// Launch this member in its provider's fast mode; overrides the profile.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fast: Option<bool>,
     #[serde(default)]
     pub budget: Option<String>,
     /// The agent's native auto-compaction window as a token count; rendered per adapter, with unsupported adapters refusing the launch.

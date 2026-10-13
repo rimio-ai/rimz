@@ -429,6 +429,7 @@ fn subagent_observations_namespace_identity_and_keep_the_parent_link() {
             role: None,
             model: None,
             effort: None,
+            fast: false,
             budget: None,
             team: None,
             loop_task: None,

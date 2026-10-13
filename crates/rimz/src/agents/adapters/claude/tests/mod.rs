@@ -120,6 +120,73 @@ fn headless_settings_merge_pending_host_skills_without_another_settings_flag() {
 }
 
 #[test]
+fn fast_mode_merges_into_the_one_settings_flag() {
+    use crate::agents::capabilities::LaunchCapability;
+    let root = tempfile::tempdir().unwrap();
+    let fast = || vec!["--settings".to_owned(), r#"{"fastMode":true}"#.to_owned()];
+
+    let mut off = vec!["--settings".to_owned(), r#"{"theme":"dark"}"#.to_owned()];
+    assert!(!ClaudeAdapter.take_fast_settings(&mut off));
+    assert_eq!(off, vec!["--settings", r#"{"theme":"dark"}"#]);
+
+    let mut alone = [vec!["--model".to_owned(), "opus".to_owned()], fast()].concat();
+    assert!(ClaudeAdapter.take_fast_settings(&mut alone));
+    assert_eq!(alone, vec!["--model", "opus"]);
+    let mut artifact = None;
+    ClaudeAdapter
+        .merge_fast_settings((root.path(), root.path()), &mut alone, &mut artifact)
+        .unwrap();
+    assert_eq!(
+        alone,
+        vec!["--model", "opus", "--settings", r#"{"fastMode":true}"#]
+    );
+    assert!(artifact.is_none());
+
+    // The profile's own inline settings and a later RimZ mutation share the
+    // one `--settings` with fast, whichever order the fast member arrived in.
+    let mut inline = [
+        vec!["--settings".to_owned(), r#"{"theme":"dark"}"#.to_owned()],
+        fast(),
+    ]
+    .concat();
+    assert!(ClaudeAdapter.take_fast_settings(&mut inline));
+    let mut artifact = None;
+    ClaudeAdapter
+        .allow_listed_skill_args(
+            &["merge".parse().unwrap()],
+            (root.path(), root.path()),
+            &mut inline,
+            &mut artifact,
+        )
+        .unwrap();
+    ClaudeAdapter
+        .merge_fast_settings((root.path(), root.path()), &mut inline, &mut artifact)
+        .unwrap();
+    assert_eq!(inline.iter().filter(|arg| *arg == "--settings").count(), 1);
+    let settings: serde_json::Value = serde_json::from_str(inline.last().unwrap()).unwrap();
+    assert_eq!(settings["theme"], "dark");
+    assert_eq!(settings["fastMode"], true);
+    assert_eq!(settings["permissions"]["allow"], json!(["Skill(merge)"]));
+
+    // A profile settings file becomes the private artifact that carries fast.
+    std::fs::write(root.path().join("profile.json"), r#"{"theme":"light"}"#).unwrap();
+    let mut file = [
+        fast(),
+        vec!["--settings".to_owned(), "profile.json".to_owned()],
+    ]
+    .concat();
+    assert!(ClaudeAdapter.take_fast_settings(&mut file));
+    let mut artifact = None;
+    ClaudeAdapter
+        .merge_fast_settings((root.path(), root.path()), &mut file, &mut artifact)
+        .unwrap();
+    assert_eq!(file.iter().filter(|arg| *arg == "--settings").count(), 1);
+    let (path, settings, _) = artifact.unwrap();
+    assert_eq!(file.last().unwrap(), &path.display().to_string());
+    assert_eq!(settings, json!({"theme": "light", "fastMode": true}));
+}
+
+#[test]
 fn deadline_context_reply_matches_native_post_tool_contract() {
     let (post, other) = crate::agents::testkit::deadline_context_replies("claude", "PostToolUse");
     insta::assert_json_snapshot!(post, @r#"

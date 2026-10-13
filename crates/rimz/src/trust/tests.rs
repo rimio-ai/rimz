@@ -533,6 +533,10 @@ fn hash_covers_every_documented_surface_field() {
         "[profiles.x]\nagent = \"claude\"\nsystem-prompt-file = \"prompts/x.md\"\n",
         "[profiles.x]\nagent = \"claude\"\nappend-system-prompt-files = [\"prompts/a.md\"]\n",
         "[profiles.x]\nagent = \"claude\"\nargs = \"--profile x\"\n",
+        "[profiles.x]\nagent = \"claude\"\nfast = true\n",
+        "[subagents.profiles.x]\nagent = \"claude\"\nfast = true\n",
+        "[profiles.x]\nagent = \"claude\"\nfast = false\n",
+        "[subagents.profiles.x]\nagent = \"claude\"\nfast = false\n",
         "[profiles.y]\nagent = \"claude\"\n",
         "[agents.teams.review]\nlayout = \"planner,coder\"\n\n[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"x\"\n[[agents.teams.review.roles]]\nrole = \"coder\"\nprofile = \"x\"\n",
         "[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"x\"\n[[agents.teams.review.roles]]\nrole = \"coder\"\nprofile = \"x\"\n",
@@ -547,6 +551,8 @@ fn hash_covers_every_documented_surface_field() {
         "[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"x\"\nsystem-prompt-file = \"prompts/planner.md\"\n",
         "[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"x\"\nappend-system-prompt-files = [\"prompts/a.md\"]\n",
         "[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"x\"\nargs = \"--role planner\"\n",
+        "[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"x\"\nfast = true\n",
+        "[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"x\"\nfast = false\n",
         "[agents.teams.review]\nconsensus-file = \"prompts/consensus.md\"\n[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"x\"\n",
         "[agents.teams.review]\nappend-system-prompt-files = [\"prompts/pipeline.md\"]\n[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"x\"\n",
         "[tasks.x]\n",
@@ -631,6 +637,17 @@ fn hash_covers_every_documented_surface_field() {
             "case `{text}` collided with another surface case",
         );
     }
+}
+
+#[test]
+fn unset_fast_profile_keeps_its_executable_surface_shape() {
+    // An explicit `fast = false` is a choice that changes argv on resume and
+    // under a provider default, so it hashes apart from unset (the surface
+    // list covers that); unset adds nothing, so pinned hashes hold.
+    let bare: ProjectConfig = toml::from_str("[profiles.x]\nagent = \"claude\"\n").expect("bare");
+    let surface =
+        serde_json::to_value(ExecutableSurface::from(&bare).profiles).expect("profile surface");
+    assert!(surface[0].get("fast").is_none(), "{surface}");
 }
 
 #[test]

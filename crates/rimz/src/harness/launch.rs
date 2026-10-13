@@ -866,6 +866,9 @@ fn compile_agent_process_with_extra_env(
     if reminders.sandbox {
         adapter.disable_native_sandbox_args(action.extra_args_mut());
     }
+    // A settings-member fast switch rides outside the settings document until
+    // every other settings mutation has run, then merges into the one result.
+    let fast_settings = adapter.take_fast_settings(action.extra_args_mut());
     let reminder =
         crate::harness::launch_reminders::render(request, reminders, cwd, shell.as_deref());
     let channel = adapter.append_system_text_channel();
@@ -931,6 +934,13 @@ fn compile_agent_process_with_extra_env(
         .settings
         .as_ref()
         .map_or(cwd, |(dir, _)| dir.as_path());
+    if fast_settings {
+        adapter.merge_fast_settings(
+            (cwd, artifact_dir),
+            action.extra_args_mut(),
+            &mut settings_artifact,
+        )?;
+    }
     let provider_argv = compile_provider_argv_with_headless(
         adapter,
         kind,

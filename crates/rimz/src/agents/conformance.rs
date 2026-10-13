@@ -653,6 +653,61 @@ system-prompt-file-flag = "--system-prompt-file"
     "#);
 }
 
+#[test]
+fn fast_switch_characterization() {
+    let root = tempfile::TempDir::new().expect("plugin root");
+    let plugin_dir = root.path().join("fixturebot");
+    fs::create_dir(&plugin_dir).expect("plugin dir");
+    fs::write(plugin_dir.join("README.md"), "hook setup").expect("setup doc");
+    fs::write(
+        plugin_dir.join("agent.toml"),
+        "protocol = 1\nkind = \"fixturebot\"\ndisplay-name = \"Fixture Bot\"\nprocess-names = [\"fixturebot\"]\nemits = [\"session_start\", \"turn_start\", \"turn_end\"]\nsetup-doc = \"README.md\"\n\n[launch]\nbin = \"fixturebot\"\nmodel-flag = \"--model\"\n",
+    )
+    .expect("manifest");
+    let loaded = super::plugins::load_from_root(root.path());
+    assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
+    let mut cases = Vec::new();
+    for adapter in BUILTINS
+        .iter()
+        .copied()
+        .chain(loaded.definitions.iter().copied())
+    {
+        let spec = adapter.spec();
+        let on = spec.render_preset(&LaunchPreset {
+            fast: Some(true),
+            ..Default::default()
+        });
+        let off = spec.render_preset(&LaunchPreset {
+            fast: Some(false),
+            ..Default::default()
+        });
+        cases.push(format!(
+            "{}: on={} off={off:?}",
+            spec.kind,
+            match on {
+                Ok(argv) => format!("{argv:?}"),
+                Err(err) => err.to_string(),
+            }
+        ));
+    }
+    insta::assert_snapshot!(cases.join("\n"), @r#"
+    claude: on=["--settings", "{\"fastMode\":true}"] off=Ok([])
+    codex: on=["-c", "service_tier=fast", "-c", "features.fast_mode=true"] off=Ok([])
+    amp: on=["--fast"] off=Ok([])
+    copilot: on=agent `copilot` has no fast-mode launch switch; launch without --fast off=Ok([])
+    kimi: on=agent `kimi` has no fast-mode launch switch; use --model kimi-for-coding-highspeed off=Ok([])
+    pi: on=agent `pi` has no fast-mode launch switch; launch without --fast off=Ok([])
+    opencode: on=agent `opencode` has no fast-mode launch switch; launch without --fast off=Ok([])
+    antigravity: on=agent `antigravity` has no fast-mode launch switch; launch without --fast off=Ok([])
+    cursor: on=agent `cursor` has no fast-mode launch switch; choose a fast model id with --model, e.g. claude-opus-5-5-fast off=Ok([])
+    droid: on=agent `droid` has no fast-mode launch switch; toggle /fast inside the session off=Ok([])
+    kiro: on=agent `kiro` has no fast-mode launch switch; launch without --fast off=Ok([])
+    qwen: on=agent `qwen` has no fast-mode launch switch; launch without --fast off=Ok([])
+    grok: on=agent `grok` has no fast-mode launch switch; launch without --fast off=Ok([])
+    fixturebot: on=agent `fixturebot` has no fast-mode launch switch; launch without --fast off=Ok([])
+    "#);
+}
+
 fn strings(values: &[&str]) -> Vec<String> {
     values.iter().map(|value| (*value).to_owned()).collect()
 }

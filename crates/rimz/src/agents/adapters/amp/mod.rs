@@ -102,6 +102,7 @@ static AMP_DESCRIPTOR: AgentSpec = AgentSpec {
             model: Some(super::StaticPresetMatcher::Flag(&["--mode"])),
             effort: None,
             system_prompt_file: None,
+            fast: super::FastSwitch::Args(&["--fast"]),
         },
         ..super::LaunchSpec::EMPTY
     },

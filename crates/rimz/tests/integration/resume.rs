@@ -225,6 +225,7 @@ mod agent_ref {
                                 None,
                                 Some("sonnet"),
                                 None,
+                                false,
                             )),
                             parent_agent_id: parent.map(Into::into),
                             ..launch

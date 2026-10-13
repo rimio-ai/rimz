@@ -162,6 +162,7 @@ pub(super) fn launch_override_preset(
     Ok(rimz::agents::LaunchPreset {
         model: rimz::harness::plan::normalized_preset_value(overrides.model.as_deref()),
         effort: rimz::harness::plan::normalized_preset_value(overrides.effort.as_deref()),
+        fast: None,
         auto_compact: None,
         system_prompt_file,
         append_system_prompt_files,

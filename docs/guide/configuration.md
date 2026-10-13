@@ -626,6 +626,8 @@ A profile is a named agent preset, loaded from `agents/<name>.md` for one you la
 
 `auto-compact` sets the provider's own native compaction window, a token count from `100k` through `1M`, never a percentage. Profiles without a value inherit the machine [`auto_compact`](#native-auto-compaction) default on the kinds that support it ([provider support](../reference/agent-support.md#auto-compaction-window)). A role's `flip-compact` is a different field, covered under [hand-off compaction](#hand-off-compaction).
 
+`fast: true` launches the profile in the provider's fast mode, which serves turns sooner at a higher price; reach for it on a profile whose turns you sit and wait on. Claude, Codex, and Amp support it; on any other kind the definition fails to load and names the alternative, such as a fast model ID on Cursor. Leaving `fast` off adds nothing to the launch, so a fast mode you set inside the provider still applies. The exact switch each provider receives is in [provider support](../reference/agent-support.md#fast-mode).
+
 On the command line, `--model`, `--effort`, `--budget`, and `--system-prompt-file` override the resolved profile, and repeated `--append-system-prompt-file` values replace its fragment list for that launch while leaving the team layer intact. `--agent <PROFILE|KIND>` swaps the engine and keeps the seat identity; the carry-over rules are in the [launch reference](../reference/cli/agents.md#shared-launch-params). Markdown definitions accept no raw `args` and no prompt-path keys: tools generate the arguments, and bodies supply the prompt.
 
 #### Skills

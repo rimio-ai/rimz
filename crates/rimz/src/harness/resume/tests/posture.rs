@@ -18,6 +18,7 @@ fn recorded_posture_replays_verbatim_model_without_observed_switch() {
     let record = crate::agents::LaunchRecord {
         model: Some("opus[1m]".into()),
         effort: Some("high".into()),
+        fast: false,
         agent: None,
     };
     let stamp = tier_stamp("opus");
@@ -56,11 +57,100 @@ fn recorded_posture_replays_verbatim_model_without_observed_switch() {
 }
 
 #[test]
+fn recorded_fast_replays_over_the_current_profile() {
+    let switch = ["-c", "service_tier=fast", "-c", "features.fast_mode=true"];
+    let resolve = |profile: Profile, record: Option<&crate::agents::LaunchRecord>| {
+        let posture = resolve_posture(
+            PostureRequest {
+                record,
+                profile: Some("coder"),
+                kind: &AgentKind::new_unchecked("codex"),
+                stamped_mode: None,
+                stamped_tier: None,
+            },
+            &profiles("coder", profile),
+        );
+        assert!(posture.degraded.is_none(), "{:?}", posture.degraded);
+        posture.launch
+    };
+    let record = |fast| crate::agents::LaunchRecord {
+        fast,
+        ..Default::default()
+    };
+    let fast_profile: Profile = toml::from_str("agent = \"codex\"\nfast = true").unwrap();
+    let has_switch = |args: &[String]| args.windows(switch.len()).any(|part| part == switch);
+
+    // A `--fast` launch replays over a profile without it.
+    let posture = resolve(profile("codex"), Some(&record(true)));
+    assert!(posture.fast);
+    assert!(has_switch(&posture.args), "{:?}", posture.args);
+    assert!(posture.record.as_deref().unwrap().fast);
+
+    // The record wins over the profile, like model: a `--no-fast` launch stays
+    // off, and a launch that was fast stays fast after the profile drops it.
+    let posture = resolve(fast_profile.clone(), Some(&record(false)));
+    assert!(!posture.fast);
+    assert!(!has_switch(&posture.args), "{:?}", posture.args);
+
+    // A legacy row without a record follows the profile.
+    let posture = resolve(fast_profile, None);
+    assert!(posture.fast);
+    assert_eq!(
+        posture
+            .args
+            .iter()
+            .filter(|arg| *arg == "service_tier=fast")
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn off_record_keeps_a_fast_switch_the_profile_writes_in_raw_args() {
+    let resolve = |profile: Profile, fast| {
+        let record = crate::agents::LaunchRecord {
+            fast,
+            ..Default::default()
+        };
+        let posture = resolve_posture(
+            PostureRequest {
+                record: Some(&record),
+                profile: Some("coder"),
+                kind: &AgentKind::new_unchecked("amp"),
+                stamped_mode: None,
+                stamped_tier: None,
+            },
+            &profiles("coder", profile),
+        );
+        assert!(posture.degraded.is_none(), "{:?}", posture.degraded);
+        posture.launch
+    };
+    let count = |args: &[String]| args.iter().filter(|arg| *arg == "--fast").count();
+
+    // A raw `--fast` the profile carries is the user's argv, not RimZ's switch:
+    // an off record leaves it alone, and an on record does not double it.
+    let raw: Profile = toml::from_str("agent = \"amp\"\nargs = \"--fast\"").unwrap();
+    let posture = resolve(raw.clone(), false);
+    assert_eq!(count(&posture.args), 1, "{:?}", posture.args);
+    let posture = resolve(raw, true);
+    assert!(posture.fast);
+    assert_eq!(count(&posture.args), 1, "{:?}", posture.args);
+
+    // The profile's `fast = true` field is RimZ's switch, so an off record
+    // (a `--no-fast` launch) still drops it.
+    let field: Profile = toml::from_str("agent = \"amp\"\nfast = true").unwrap();
+    let posture = resolve(field, false);
+    assert!(!posture.fast);
+    assert_eq!(count(&posture.args), 0, "{:?}", posture.args);
+}
+
+#[test]
 fn recorded_model_override_keeps_the_stamped_family_render() {
     let profiles = profiles("planner", routed_profile(None));
     let record = crate::agents::LaunchRecord {
         model: Some("gpt-6-sol".into()),
         effort: Some("high".into()),
+        fast: false,
         agent: None,
     };
     let stamp = tier_stamp("astra");
@@ -166,6 +256,7 @@ fn recorded_base_replays_and_missing_base_degrades() {
     let record = crate::agents::LaunchRecord {
         model: Some("opus[1m]".into()),
         effort: Some("medium".into()),
+        fast: false,
         agent: Some("reviewer".into()),
     };
     let resolve = |profiles: &ProfilesConfig| {
