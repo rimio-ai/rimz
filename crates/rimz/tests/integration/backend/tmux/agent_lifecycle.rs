@@ -1382,7 +1382,20 @@ fn resumed_lazy_agent_is_addressable_before_provider_registration() {
             Some((160, 40)),
         ))
         .expect("ensure pre-crash session");
+    let server_pid = server
+        .stdout(&["display-message", "-p", "#{pid}"])
+        .parse::<u32>()
+        .expect("pre-crash server pid");
     server.tmux(&["kill-server"]);
+    // kill-server sends SIGTERM but does not wait for server shutdown.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while rimz::proc::process_is_live(server_pid, None) {
+        assert!(
+            Instant::now() < deadline,
+            "pre-crash tmux server {server_pid} did not exit"
+        );
+        thread::sleep(Duration::from_millis(25));
+    }
     // The rebirth boundary parks the roster's agents before it deletes the roster.
     std::fs::write(
         &store.paths().pending_recovery,
@@ -1466,9 +1479,29 @@ fn resumed_lazy_agent_is_addressable_before_provider_registration() {
         .expect("open resumed agent tab");
     wait_for_path(&ready, "resumed codex shim did not start");
 
-    let projection = store
-        .runtime_projection(rimz::RuntimeScope::Runtime)
-        .expect("post-attach runtime projection");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let projection = loop {
+        let projection = store
+            .runtime_projection(rimz::RuntimeScope::Runtime)
+            .expect("post-attach runtime projection");
+        let attached = projection
+            .agents
+            .iter()
+            .find(|agent| agent.agent_id == agent_id);
+        if let Some(attached) = attached
+            && let Some(pane_pid) = attached.pane.as_ref().and_then(|pane| pane.pane_pid)
+            && let Some(owner) = attached.runtime_owner.as_ref()
+            && owner.pid != pane_pid
+            && rimz::proc::argv(owner.pid).is_some_and(|argv| argv == ["codex", "300"])
+        {
+            break projection;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "provider never attached and exec'd: {attached:?}"
+        );
+        thread::sleep(Duration::from_millis(25));
+    };
     let attached = projection
         .agents
         .iter()
@@ -1499,14 +1532,28 @@ fn resumed_lazy_agent_is_addressable_before_provider_registration() {
             .collect::<Vec<_>>()
     );
 
-    let mut panes = server
-        .backend
-        .list_panes(PaneListOptions {
-            session_name: Some(workspace.session_name.clone()),
-            ..Default::default()
-        })
-        .expect("list reborn panes")
-        .panes;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut panes = loop {
+        let panes = server
+            .backend
+            .list_panes(PaneListOptions {
+                session_name: Some(workspace.session_name.clone()),
+                ..Default::default()
+            })
+            .expect("list reborn panes")
+            .panes;
+        if panes
+            .iter()
+            .any(|pane| pane.pane_id == attached_pane && pane.pane_pid.is_some())
+        {
+            break panes;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "reborn pane never reported its pid: {panes:?}"
+        );
+        thread::sleep(Duration::from_millis(25));
+    };
     for pane in &mut panes {
         let Some(hosted) = pane
             .pane_pid
