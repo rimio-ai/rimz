@@ -363,74 +363,27 @@ fn focus_repair_timeout_dump_reads_workspace_host_and_renderer_logs() {
     assert!(dump.contains("renderer stderr"), "{dump}");
 }
 
-fn wait_for_focus_action(
-    logs: &FocusRepairLogs<'_>,
-    pane: &PaneId,
-    prior_count: usize,
-    phase: &str,
-) -> String {
-    let raw = pane.raw();
-    let numeric = raw.strip_prefix("terminal_").unwrap_or(raw);
-    let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        let contents = std::fs::read_to_string(logs.trace).unwrap_or_default();
-        if contents
-            .lines()
-            .filter(|line| line.contains("action focus-pane-id"))
-            .skip(prior_count)
-            .any(|line| {
-                line.contains("action focus-pane-id")
-                    && line
-                        .split_whitespace()
-                        .any(|arg| arg == raw || arg == numeric)
-            })
-        {
-            return contents;
-        }
-        if Instant::now() >= deadline {
-            panic!(
-                "timed out waiting for {phase} focus action on {pane} (ignoring {prior_count} earlier action(s)); {}",
-                logs.dump(),
-            );
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
-}
-
-fn accepted_focus_repairs(xdg: &Path, target_pane: &PaneId) -> usize {
-    rimz::diag::focus_repair::recent(&xdg.join("logs"))
-        .iter()
-        .filter(|record| {
-            record.target == *target_pane
-                && record.outcome
-                    == rimz::diag::focus_repair::FocusRepairOutcome::AcceptedUnconfirmed
-        })
-        .count()
-}
-
 fn wait_for_accepted_focus_repair(
     logs: &FocusRepairLogs<'_>,
     target_pane: &PaneId,
-    prior_count: usize,
-) -> Vec<rimz::diag::focus_repair::FocusRepairRecord> {
+    generation: u64,
+    switched_at: jiff::Timestamp,
+) {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         let records = rimz::diag::focus_repair::recent(&logs.xdg.join("logs"));
-        if records
-            .iter()
-            .filter(|record| {
-                record.target == *target_pane
-                    && record.outcome
-                        == rimz::diag::focus_repair::FocusRepairOutcome::AcceptedUnconfirmed
-            })
-            .count()
-            > prior_count
-        {
-            return records;
+        if records.iter().any(|record| {
+            record.target == *target_pane
+                && record.generation == generation
+                && record.at >= switched_at
+                && record.outcome
+                    == rimz::diag::focus_repair::FocusRepairOutcome::AcceptedUnconfirmed
+        }) {
+            return;
         }
         assert!(
             Instant::now() < deadline,
-            "timed out waiting for accepted-unconfirmed focus repair diagnostic on {target_pane}; {}",
+            "timed out waiting for accepted-unconfirmed focus repair generation {generation} on {target_pane} after {switched_at}; {}",
             logs.dump(),
         );
         std::thread::sleep(Duration::from_millis(50));
@@ -461,16 +414,16 @@ fn wait_for_reload_baseline(log: &Path, prior_lines: usize, pane: &PaneId) -> Ve
     }
 }
 
-fn wait_for_switch_settled(log: &Path, prior_lines: usize, active_tab: u64) -> Vec<String> {
+fn wait_for_switch_settled(log: &Path, prior_lines: usize, active_tab: u64) -> String {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         let lines = poke_lines(log);
-        if lines[prior_lines..].iter().any(|line| {
+        if let Some(line) = lines[prior_lines..].iter().find(|line| {
             line.contains("sidebar wake --reason switch-settled")
                 && logged_arg(line, "--active-tab").and_then(|tab| tab.parse::<u64>().ok())
                     == Some(active_tab)
         }) {
-            return lines;
+            return line.clone();
         }
         assert!(
             Instant::now() < deadline,
@@ -478,6 +431,24 @@ fn wait_for_switch_settled(log: &Path, prior_lines: usize, active_tab: u64) -> V
         );
         std::thread::sleep(Duration::from_millis(50));
     }
+}
+
+fn stranded_generation(settled: &str, sidebar: &PaneId) -> u64 {
+    let clients: Vec<zellij::pane_topology::TopologyClientView> = serde_json::from_str(
+        logged_arg(settled, "--focus-clients").expect("settled client evidence"),
+    )
+    .expect("settled client views");
+    assert!(
+        !clients.is_empty()
+            && clients
+                .iter()
+                .all(|client| PaneId::from(client.pane_id) == *sidebar),
+        "measured switch did not strand focus on {sidebar}: {settled}",
+    );
+    logged_arg(settled, "--focus-generation")
+        .expect("settled generation")
+        .parse()
+        .expect("numeric settled generation")
 }
 
 /// End to end against a live Zellij: the pipe verb loads the presence plugin
@@ -911,47 +882,39 @@ fn tab_switch_repairs_sidebar_focus_from_attached_client_views() {
     // Presence positions are zero-based; the client's tab key is one-based.
     wait_for_switch_settled(&poke_log, pokes_before_target, 1);
 
-    client.press_alt_until('h', &target_sidebar, "stranded target sidebar");
+    client.press_alt_once_until('h', &target_sidebar, "stranded target sidebar");
 
     let pokes_before_birth = poke_lines(&poke_log).len();
     client.go_to_tab_until(1, &birth_work, "birth work pane before switch repair");
     wait_for_switch_settled(&poke_log, pokes_before_birth, 0);
-    let pokes_before = poke_lines(&poke_log).len();
-    let actions_before = focus_action_count(&trace_log);
-    let repairs_before = accepted_focus_repairs(xdg, &target_work);
     let logs = FocusRepairLogs {
         xdg,
         trace: &trace_log,
         renderer: &focus_exec_log,
         pokes: &poke_log,
-        pokes_before,
+        pokes_before: pokes_before_target,
     };
+    assert!(
+        rimz::diag::focus_repair::recent(&xdg.join("logs"))
+            .iter()
+            .all(|record| record.target != target_work),
+        "setup unexpectedly repaired the target tab; {}",
+        logs.dump(),
+    );
+    let pokes_before = poke_lines(&poke_log).len();
+    let logs = FocusRepairLogs {
+        pokes_before,
+        ..logs
+    };
+    let switched_at = jiff::Timestamp::now();
     client.go_to_tab(2);
     let settled = wait_for_switch_settled(&poke_log, pokes_before, 1);
-    assert!(
-        settled[pokes_before..].iter().any(|line| {
-            line.contains("--active-tab")
-                && line.contains("--focus-generation")
-                && line.contains("--focus-clients")
-        }),
-        "settled wake lacks tab/generation/client evidence: {settled:?}",
-    );
-    wait_for_focus_action(
-        &logs,
-        &target_work,
-        actions_before,
-        "first switch-settled repair",
-    );
-    let repairs = wait_for_accepted_focus_repair(&logs, &target_work, repairs_before);
+    let generation = stranded_generation(&settled, &target_sidebar);
+    wait_for_accepted_focus_repair(&logs, &target_work, generation, switched_at);
 
     client.assert_input_reaches(&target_work, "repaired target work pane");
 
-    assert!(repairs.iter().any(|record| {
-        record.target == target_work
-            && record.outcome == rimz::diag::focus_repair::FocusRepairOutcome::AcceptedUnconfirmed
-    }));
-
-    client.press_alt_until(
+    client.press_alt_once_until(
         'h',
         &target_sidebar,
         "stranded target sidebar before reload",
@@ -976,19 +939,18 @@ fn tab_switch_repairs_sidebar_focus_from_attached_client_views() {
         .expect("converge presence plugin");
     wait_for_reload_baseline(&poke_log, pokes_before_reload, &birth_work);
     let pokes_before = poke_lines(&poke_log).len();
-    let actions_before = focus_action_count(&trace_log);
-    let repairs_before = accepted_focus_repairs(xdg, &target_work);
     let logs = FocusRepairLogs {
         pokes_before,
         ..logs
     };
+    let switched_at = jiff::Timestamp::now();
     client.go_to_tab(2);
-    wait_for_switch_settled(&poke_log, pokes_before, 1);
-    wait_for_focus_action(&logs, &target_work, actions_before, "post-reload repair");
-    wait_for_accepted_focus_repair(&logs, &target_work, repairs_before);
+    let settled = wait_for_switch_settled(&poke_log, pokes_before, 1);
+    let generation = stranded_generation(&settled, &target_sidebar);
+    wait_for_accepted_focus_repair(&logs, &target_work, generation, switched_at);
     client.assert_input_reaches(&target_work, "repaired target after plugin reload");
 
-    client.press_alt_until(
+    client.press_alt_once_until(
         'h',
         &target_sidebar,
         "stranded target sidebar before detach",
