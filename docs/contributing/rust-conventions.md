@@ -31,7 +31,7 @@ struct Cli {
 
 ## Stdout and tracing
 
-Stdout is the protocol surface. The lint wall lives once in the workspace `Cargo.toml`: `[workspace.lints.clippy]` denies `print_stdout` and `print_stderr` in every crate, and `[workspace.lints.rust]` denies `unsafe_code`. The one admitted unsafe site is the glibc arena cap in `crates/rimz/src/main.rs`, annotated `#[expect(unsafe_code, reason = "...")]`; a second site is a design decision. Both binary crate roots restate the stdout rule as `#![deny(clippy::print_stdout)]`.
+Stdout is the protocol surface. The lint wall lives once in the workspace `Cargo.toml`: `[workspace.lints.clippy]` denies `print_stdout` and `print_stderr` in every crate, and `[workspace.lints.rust]` denies `unsafe_code`. Two unsafe sites are admitted, each annotated `#[expect(unsafe_code, reason = "...")]`: the glibc arena cap in `crates/rimz/src/main.rs`, and the counting allocator in `crates/rimz/benches/fleet.rs`, which only the fleet bench links and which gives the scale gate its deterministic allocation counts; a third site is a design decision. Both binary crate roots restate the stdout rule as `#![deny(clippy::print_stdout)]`.
 
 A `println!` site is legal only when annotated `#[expect(clippy::print_stdout, reason = "...")]` and its stdout is one of:
 
