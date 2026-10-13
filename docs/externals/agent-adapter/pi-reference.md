@@ -4,7 +4,7 @@
 
 This page mirrors the upstream surface of Pi (`@earendil-works/pi-coding-agent`) that a RimZ adapter binds to: the in-process extension API with its events, payloads, and blocking returns; the session JSONL; the headless JSON and RPC modes; the auth file; and the CLI and environment. It also records the third-party Pi extensions whose wire RimZ reads. Coverage is depth on what the adapter wires ([`extension.ts`](../../../crates/rimz/src/agents/adapters/pi/extension.ts), [`spend.rs`](../../../crates/rimz/src/agents/adapters/pi/spend.rs), [`account.rs`](../../../crates/rimz/src/agents/adapters/pi/account.rs), [`ask.rs`](../../../crates/rimz/src/agents/adapters/pi/ask.rs)) and breadth as an index for the rest.
 
-**Baseline.** Pi [1.1.0](https://www.npmjs.com/package/@earendil-works/pi-coding-agent/v/1.1.0), tag [`v1.1.0`](https://github.com/earendil-works/pi/tree/v1.1.0) (commit `abe508e1b89912adde45528136c3221eb69acdd7`), released 2026-10-07; npm's `latest` release, docs, types, and source checked 2026-10-12 against the release checkout. The [third-party extensions](#third-party-extensions) section pins each package to its own release. Repository paths below are relative to `packages/coding-agent/` at that tag unless they name another package. This is an upstream reference, not a claim that RimZ already wires every new surface.
+**Baseline.** Pi [1.2.0](https://www.npmjs.com/package/@earendil-works/pi-coding-agent/v/1.2.0), tag [`v1.2.0`](https://github.com/earendil-works/pi/tree/v1.2.0) (commit `06a466935536f8c9bcacb2d5efc0fc021be1bdff`), released 2026-10-12. npm's `latest` release, docs, types, and source checked 2026-10-12 against the release checkout. The [third-party extensions](#third-party-extensions) section pins each package to its own release. Repository paths below are relative to `packages/coding-agent/` at that tag unless they name another package. This is an upstream reference, not a claim that RimZ already wires every new surface.
 
 ## Upstream sources
 
@@ -12,24 +12,24 @@ Each `pi.dev/docs/latest/<page>` renders `packages/coding-agent/docs/<page>.md` 
 
 | Surface | Source |
 | --- | --- |
-| Extension API: events, payloads, returns, context, locations | <https://pi.dev/docs/latest/extensions> |
-| Sessions: storage, resume flags, tree navigation | <https://pi.dev/docs/latest/sessions> |
-| Session JSONL: header, entry types, message and usage shapes | <https://pi.dev/docs/latest/session-format> |
-| Message roles, content blocks, and tool results | <https://pi.dev/docs/latest/message-types> |
-| Settings (`extensions`, `packages`, `sessionDir`, `defaultProjectTrust`) | <https://pi.dev/docs/latest/settings> |
-| Project trust | <https://pi.dev/docs/latest/security> |
-| Providers and auth (`auth.json`, `/login`, key resolution) | <https://pi.dev/docs/latest/providers> |
-| Interactive usage | <https://pi.dev/docs/latest/usage> |
-| CLI option and command reference | <https://pi.dev/docs/latest/cli> |
-| Environment variables and process markers | <https://pi.dev/docs/latest/environment-variables> |
-| RPC mode | <https://pi.dev/docs/latest/rpc> |
-| JSON event-stream mode | <https://pi.dev/docs/latest/json> |
-| Pi packages (`pi install`) | <https://pi.dev/docs/latest/packages> |
-| SDK (`createAgentSession`) | <https://pi.dev/docs/latest/sdk> |
-| Built-in MCP and codemode | <https://pi.dev/docs/latest/mcp>; <https://pi.dev/docs/latest/codemode> |
-| Terminal program status | <https://pi.dev/docs/latest/terminal-setup#program-status> |
-| Version-pinned docs and types | <https://github.com/earendil-works/pi/tree/v1.1.0/packages/coding-agent>: `docs/`, `src/core/extensions/types.ts` |
-| Changelog | <https://github.com/earendil-works/pi/blob/v1.1.0/packages/coding-agent/CHANGELOG.md> |
+| Extension API: events, payloads, returns, context, locations | <https://github.com/earendil-works/pi/blob/v1.2.0/packages/coding-agent/docs/extensions.md> |
+| Sessions: storage, resume flags, tree navigation | <https://github.com/earendil-works/pi/blob/v1.2.0/packages/coding-agent/docs/sessions.md> |
+| Session JSONL: header, entry types, message and usage shapes | <https://github.com/earendil-works/pi/blob/v1.2.0/packages/coding-agent/docs/session-format.md> |
+| Message roles, content blocks, and tool results | <https://github.com/earendil-works/pi/blob/v1.2.0/packages/coding-agent/docs/message-types.md> |
+| Settings (`extensions`, `packages`, `sessionDir`, `defaultProjectTrust`) | <https://github.com/earendil-works/pi/blob/v1.2.0/packages/coding-agent/docs/settings.md> |
+| Project trust | <https://github.com/earendil-works/pi/blob/v1.2.0/packages/coding-agent/docs/security.md> |
+| Providers and auth (`auth.json`, `/login`, key resolution) | <https://github.com/earendil-works/pi/blob/v1.2.0/packages/coding-agent/docs/providers.md> |
+| Interactive usage | <https://github.com/earendil-works/pi/blob/v1.2.0/packages/coding-agent/docs/usage.md> |
+| CLI option and command reference | <https://github.com/earendil-works/pi/blob/v1.2.0/packages/coding-agent/docs/cli.md> |
+| Environment variables and process markers | <https://github.com/earendil-works/pi/blob/v1.2.0/packages/coding-agent/docs/environment-variables.md> |
+| RPC mode | <https://github.com/earendil-works/pi/blob/v1.2.0/packages/coding-agent/docs/rpc.md> |
+| JSON event-stream mode | <https://github.com/earendil-works/pi/blob/v1.2.0/packages/coding-agent/docs/json.md> |
+| Pi packages (`pi install`) | <https://github.com/earendil-works/pi/blob/v1.2.0/packages/coding-agent/docs/packages.md> |
+| SDK (`createAgentSession`) | <https://github.com/earendil-works/pi/blob/v1.2.0/packages/coding-agent/docs/sdk.md> |
+| Built-in MCP and codemode | <https://github.com/earendil-works/pi/blob/v1.2.0/packages/coding-agent/docs/mcp.md>; <https://github.com/earendil-works/pi/blob/v1.2.0/packages/coding-agent/docs/codemode.md> |
+| Terminal program status | <https://github.com/earendil-works/pi/blob/v1.2.0/packages/coding-agent/docs/terminal-setup.md#program-status> |
+| Version-pinned docs and types | <https://github.com/earendil-works/pi/tree/v1.2.0/packages/coding-agent>: `docs/`, `src/core/extensions/types.ts` |
+| Changelog | <https://github.com/earendil-works/pi/blob/v1.2.0/packages/coding-agent/CHANGELOG.md> |
 | Structured questionnaire extension | npm [`@juicesharp/rpiv-ask-user-question` 2.13.6](https://www.npmjs.com/package/@juicesharp/rpiv-ask-user-question/v/2.13.6); [source](https://github.com/juicesharp/rpiv-mono/tree/v2.13.6/packages/rpiv-ask-user-question) |
 | Subagent extension (nicobailon) | [`pi-subagents` v0.77.0](https://github.com/nicobailon/pi-subagents/tree/v0.77.0) |
 | Subagent extension (tintinweb) | [`@tintinweb/pi-subagents` v0.21.0](https://github.com/tintinweb/pi-subagents/tree/v0.21.0) |
@@ -40,7 +40,7 @@ Pi's integration surface is TypeScript extensions loaded in-process through [jit
 
 > **Divergence: the decision channel inverts.** Claude Code and Codex run a hook command as their child and read its stdout as the decision. Pi runs the extension inside its own process, so an extension that consults an external program spawns that program as *its* child, reads the child's stdout, and applies the answer through the handler's return value. Blocking is an awaited promise, and there is no installed hook config whose sync or async shape could be checked on disk.
 
-Extensions run with the user's full permissions and can execute arbitrary code ([extensions.md → Extension Locations](https://pi.dev/docs/latest/extensions#extension-locations)). Pi discovers them from these locations:
+Extensions run with the user's full permissions and can execute arbitrary code ([extensions.md → Extension Locations](https://github.com/earendil-works/pi/blob/v1.2.0/packages/coding-agent/docs/extensions.md#extension-locations)). Pi discovers them from these locations:
 
 | Location | Scope |
 | --- | --- |
@@ -49,7 +49,7 @@ Extensions run with the user's full permissions and can execute arbitrary code (
 | `settings.json` `extensions: [paths]` and `packages: ["npm:…", "git:…"]` | configured |
 | `pi -e <path>` / `--extension <path>` | one run; repeatable |
 
-Extensions in the discovered locations hot-reload with `/reload`, which fires `session_shutdown` and `session_start` with `reason: "reload"`. `--no-extensions` (`-ne`) disables discovery and built-in extensions but still loads explicit `-e` paths, including `builtin:<name>`. Before project trust resolves, Pi loads only context files, global extensions, and `-e` extensions, and only those can answer the `project_trust` event ([security.md → Project Trust](https://pi.dev/docs/latest/security#project-trust)).
+Extensions in the discovered locations hot-reload with `/reload`, which fires `session_shutdown` and `session_start` with `reason: "reload"`. `--no-extensions` (`-ne`) disables discovery and built-in extensions but still loads explicit `-e` paths, including `builtin:<name>`. Before project trust resolves, Pi loads only context files, global extensions, and `-e` extensions, and only those can answer the `project_trust` event ([security.md → Project Trust](https://github.com/earendil-works/pi/blob/v1.2.0/packages/coding-agent/docs/security.md#project-trust)).
 
 An extension default-exports a sync or async factory that receives `ExtensionAPI`. The package also exports `VERSION`, the running Pi version string, and `CONFIG_DIR_NAME` for building project-local paths. Node built-ins and npm dependencies from an adjacent `package.json` are importable.
 
@@ -81,7 +81,7 @@ Every handler except `project_trust` receives `ExtensionContext` (`src/core/exte
 | `ui` | dialogs `select`, `confirm`, `input`, `editor`, `custom`; fire-and-forget `notify`, `setStatus`, `setWidget`, `setTitle`, `setEditorText` |
 | `mode`, `hasUI` | run mode and whether dialogs work; see the table below |
 | `cwd`, `signal` | working directory; the active turn's abort signal, usually `undefined` outside a turn |
-| `isIdle()`, `hasPendingMessages()`, `abort()`, `shutdown()` | control flow; `isIdle()` is false during a run, automatic retry, compaction retry, or queued continuation |
+| `isIdle()`, `hasPendingMessages()`, `abort()`, `shutdown()` | control flow; `isIdle()` is false during run startup, a run, automatic retry, compaction retry, or queued continuation |
 | `isProjectTrusted()` | effective project trust, including one-run overrides |
 | `getSystemPrompt()`, `compact(options?)` | the assembled system prompt; start a compaction without awaiting it |
 
@@ -94,11 +94,12 @@ Every handler except `project_trust` receives `ExtensionContext` (`src/core/exte
 
 ## Extension events
 
-The lifecycle, condensed from [extensions.md → Lifecycle Overview](https://pi.dev/docs/latest/extensions#lifecycle-overview):
+The lifecycle, condensed from [extension event contracts](https://github.com/earendil-works/pi/blob/v1.2.0/packages/coding-agent/docs/extensions.md#events-and-concurrency):
 
 ```text
 launch         ─► project_trust ─► session_start { reason: "startup" } ─► resources_discover
-prompt         ─► input ─► before_agent_start ─► agent_start
+prompt         ─► input ─► before_agent_start { messageType: "user" } ─► agent_start
+idle custom    ─► before_agent_start { messageType: "custom" } ─► agent_start
                    ┌─ turn (one LLM call; repeats while tools run) ──────────┐
                    │ turn_start ─► context ─► before_provider_headers        │
                    │   ─► before_provider_request ─► after_provider_response │
@@ -121,17 +122,17 @@ exit (Ctrl+C, Ctrl+D, SIGHUP, SIGTERM) ─► session_shutdown { reason: "quit" 
 
 A Pi **turn** is one LLM call. `agent_start` and `agent_end` bracket one low-level agent run, and an `agent_end` can still be followed by an automatic retry, a compaction-and-retry, or a queued follow-up. `agent_settled` fires once none of those remains; it exists from Pi 0.80.4 (CHANGELOG 0.80.4), and earlier releases end at `agent_end`.
 
-Session identity comes from `ctx.sessionManager`, never from event payloads. `getSessionId()`, `getSessionFile()`, and `getCwd()` return values from the first `session_start` at launch.
+Session identity comes from `ctx.sessionManager`, never from event payloads. `getSessionId()`, `getSessionFile()`, and `getCwd()` describe the current session. Read them again after a session switch.
 
 ### Events the adapter wires
 
 | Event | Fires | Payload fields | Handler return |
 | --- | --- | --- | --- |
 | `session_start` | launch, `/new`, `/resume`, fork or clone, `/reload` | `reason` (`startup`\|`reload`\|`new`\|`resume`\|`fork`), `previousSessionFile?` (for `new`, `resume`, `fork`) | none |
-| `before_agent_start` | prompt submitted, before the agent loop | `prompt`, `images?`, `systemPrompt`, `systemPromptOptions` | may inject a message or replace the system prompt |
+| `before_agent_start` | user prompt or idle custom-message run starts | `messageType` (`user` or `custom`), `systemPrompt`, `systemPromptOptions`. User: `prompt`, `images?`. Custom: `message` | may inject a message or replace the system prompt |
 | `agent_end` | one low-level run ends | `messages`; the last assistant message carries `stopReason`, `errorMessage?`, `usage` | none |
 | `agent_settled` | the run fully settles | `aborted` (boolean, added in 1.1.0) | none |
-| `turn_end` | each LLM call ends | `turnIndex`, `message` (assistant, with `usage`), `toolResults` (each may carry `usage`), `messageEntryId`, `toolResultEntryIds`, boundary state | may append boundary entries and request continuation |
+| `turn_end` | each LLM call ends | `turnIndex`, `message` (assistant, with `usage`), `toolResults` (each may carry `usage`), `messageEntryId`, `toolResultEntryIds`, [boundary state](#event-index) | may append boundary entries and request continuation |
 | `after_provider_response` | provider HTTP response received, before the stream is read | `status`, `headers` (`Record<string, string>`) | none |
 | `message_update` | each assistant streaming delta | `message`, `assistantMessageEvent` | none |
 | `session_info_changed` | `/name` or `pi.setSessionName()` | `name` (`undefined` when cleared) | none |
@@ -145,9 +146,26 @@ Session identity comes from `ctx.sessionManager`, never from event payloads. `ge
 | `session_compact_failed` | compaction fails or is aborted | `reason`, `errorMessage?`, `aborted`, `willRetry`, `fromExtension` | none |
 | `session_shutdown` | quit (including Ctrl+C, SIGHUP, SIGTERM), `/new`, `/resume`, fork, `/reload` | `reason` (`quit`\|`reload`\|`new`\|`resume`\|`fork`), `targetSessionFile?` | none |
 
+From 1.2.0, `before_agent_start` also fires when idle `pi.sendMessage(..., { triggerTurn: true })` starts a run. Check `messageType === "user"` before reading `prompt` or `images`. Custom-message events carry `message` instead. Both variants accept handler messages and consume pending `deliverAs: "nextTurn"` messages. The union is `BeforeAgentStartEvent` ([event types](https://github.com/earendil-works/pi/blob/v1.2.0/packages/coding-agent/src/core/extensions/types.ts)).
+
+| Idle trigger | `input` event | `before_agent_start.messageType` |
+| --- | --- | --- |
+| User prompt | `source: "interactive"` | `"user"` |
+| RPC `prompt` | `source: "rpc"` | `"user"` |
+| `pi.sendUserMessage()` | `source: "extension"` | `"user"` |
+| `pi.sendMessage(..., { triggerTurn: true })` | none | `"custom"` |
+
+`messageType` identifies the message kind, not its human or extension origin. Use `input.source` for user-message origin. The events have no shared correlation id, and queued inputs do not each start a run. An `input` handler returning `handled` stops that input before run setup, so it promises neither `before_agent_start` nor `agent_settled` ([prompt dispatch](https://github.com/earendil-works/pi/blob/v1.2.0/packages/coding-agent/src/core/agent-session.ts)).
+
+The custom variant's `message` is `CustomMessage`: `role: "custom"`, `customType`, `content`, `display`, optional `details`, and a millisecond `timestamp`. `content` is text or an array of text/image blocks ([message type](https://github.com/earendil-works/pi/blob/v1.2.0/packages/coding-agent/src/core/messages.ts)). Both variants expose mutable `systemPromptOptions` for prompt sections, selected tools, and guidelines, plus the rendered `systemPrompt` ([prompt contract](https://github.com/earendil-works/pi/blob/v1.2.0/packages/coding-agent/docs/extensions.md#events-and-concurrency)).
+
+`sendMessage` with `deliverAs: "nextTurn"` stores a custom message for the next run without starting one. Queued follow-ups, retries, and boundary continuations stay within the active run and do not repeat `before_agent_start`. Settlement follows the run after continuations finish. A setup failure can occur after `before_agent_start` and before settlement handling, so do not assume a guaranteed start/settle pair ([run setup](https://github.com/earendil-works/pi/blob/v1.2.0/packages/coding-agent/src/core/agent-session.ts)).
+
+The session counts as busy during `before_agent_start`. During this phase, `pi.sendMessage()` queues into the starting run, and `pi.sendUserMessage()` fails without `deliverAs`. If setup completes, an abort requested during run setup takes effect at `agent_start` and settlement reports `aborted: true` ([run setup](https://github.com/earendil-works/pi/blob/v1.2.0/packages/coding-agent/src/core/agent-session.ts)).
+
 Header names in `after_provider_response` arrive lowercase for fetch-based providers because Pi copies `Headers.entries()` unchanged (`packages/ai/src/utils/headers.ts`, `headersToRecord`). Pi itself does not normalize them, and no Google adapter emits the event.
 
-Compaction is a bracket. `reason` is `manual` (`/compact`), `threshold` (the context threshold), or `overflow` (overflow recovery), and `willRetry` is true when the aborted turn retries after a successful compaction. At 1.1.0 every `session_compact_failed` emit site passes `willRetry: false` (`src/core/agent-session.ts`, `_emitSessionCompactFailed` and its three callers). An unrecoverable overflow can emit failure before `session_before_compact`, so consumers must not require an opening extension event for every failure.
+Compaction is a bracket. `reason` is `manual` (`/compact`), `threshold` (the context threshold), or `overflow` (overflow recovery), and `willRetry` is true when the aborted turn retries after a successful compaction. At 1.2.0 every `session_compact_failed` emit site passes `willRetry: false` (`src/core/agent-session.ts`, `_emitSessionCompactFailed` and its three callers). An unrecoverable overflow can emit failure before `session_before_compact`, so consumers must not require an opening extension event for every failure.
 
 ### Extension UI prompt events
 
@@ -188,11 +206,15 @@ Nested or overlapping prompts coalesce into one outer span, so only the outermos
 
 `turn_end` and `agent_before_settle` expose `entries`, `continue`, a context preview, and `outcome` (`completed`\|`aborted`\|`error`). Their return is `{ entries?, continue? }`; drafts can be `custom`, `custom_message`, `context_edit`, or `compaction`. This is a durable context-edit/continuation surface, distinct from a `tool_call` permission decision (`src/core/extensions/types.ts`, `BoundaryState`, `BoundaryResult`).
 
-Custom tools receive `ExtensionToolContext.executeTool()` for nested calls through Pi's tool runner, and may implement `prepareLoadout()` to control tools and prompt sections visible to the model. Tool definitions support `exposure`, `namespace`, `annotations`, `outputSchema`, and `defaultActive`. Active tools are model-declared tools, not the full callable set. Nested calls use ids `<parent>/<n>` and carry `parentToolCallId` on call/result/execution events; the parent's tool-result message stores bounded `nestedCalls` instead of separate nested transcript messages. A `tool_result` handler that replaces `content` without replacing `structuredContent` clears the latter (`src/core/extensions/types.ts`; `src/core/extensions/runner.ts`, `emitToolResult`).
+Custom tools receive `ExtensionToolContext.executeTool()` for nested calls through Pi's tool runner, and may implement `prepareLoadout()` to control tools and prompt sections visible to the model. Tool definitions support `exposure`, `namespace`, `annotations`, `outputSchema`, and `defaultActive`.
+
+From 1.2.0, `reachesTools(input)` returns `"all"` or a string array of words that may name reachable tools or namespaces. MCP uses this metadata to wait for required servers before execution. Tool namespaces also accept `aliases`, matched by codemode namespace discovery ([tool types](https://github.com/earendil-works/pi/blob/v1.2.0/packages/coding-agent/src/core/extensions/types.ts)).
+
+Active tools are model-declared tools, not the full callable set. Nested calls use ids `<parent>/<n>` and carry `parentToolCallId` on call/result/execution events; the parent's tool-result message stores bounded `nestedCalls` instead of separate nested transcript messages. A `tool_result` handler that replaces `content` without replacing `structuredContent` clears the latter (`src/core/extensions/types.ts`; `src/core/extensions/runner.ts`, `emitToolResult`).
 
 ### Blocking, dialogs, and errors
 
-`tool_call` is the only blocking return. Pi awaits each `tool_call` handler in load order with no timeout, and the first `{ block: true }` short-circuits the handlers after it (`src/core/extensions/runner.ts`, `ExtensionRunner.emitToolCall`). An awaiting handler therefore holds the turn open indefinitely. `terminate: true` on a blocked call asks Pi to stop after the current tool batch, and takes effect only when every finalized result in the batch terminates.
+`tool_call` blocks tool execution through its return value. Pi awaits each `tool_call` handler in load order with no timeout, and the first `{ block: true }` short-circuits the handlers after it (`src/core/extensions/runner.ts`, `ExtensionRunner.emitToolCall`). An awaiting handler therefore holds the turn open indefinitely. `terminate: true` on a blocked call asks Pi to stop after the current tool batch, and takes effect only when every finalized result in the batch carries `terminate: true`.
 
 In the default parallel tool mode, Pi preflights sibling tool calls from one assistant message sequentially and then executes them concurrently. A blocked or slow `tool_call` therefore delays its siblings, and `ctx.sessionManager` inside `tool_call` may lack sibling results from the same message.
 
@@ -267,19 +289,19 @@ The package now declares `@earendil-works/pi-ai >=0.86.1`; the old pinned `pi-se
 
 ## Session JSONL
 
-Pi writes one session file per conversation ([session-format.md](https://pi.dev/docs/latest/session-format)):
+Pi writes one session file per conversation ([session-format.md](https://github.com/earendil-works/pi/blob/v1.2.0/packages/coding-agent/docs/session-format.md)):
 
 ```text
 ~/.pi/agent/sessions/--<cwd-with-/-as-->--/<timestamp>_<uuid>.jsonl
 e.g.   sessions/--home-user-workspace-project-rimz-rimz--/2026-06-04T06-45-56-308Z_019e9161-a5d0-791d-879e-39679acd4ded.jsonl
 ```
 
-The directory key removes the leading path separator and replaces `/`, `\`, and `:` with `-`, then wraps the result in `--`. The filename stem is the ISO timestamp with `:` and `.` replaced by `-`, then `_`, then the session id (a UUID by default; the SDK and `--session-id` can supply a custom id). `--session-dir` overrides the location, then `PI_CODING_AGENT_SESSION_DIR`, then settings `sessionDir`; `--no-session` writes nothing. Subagent extensions nest child sessions below the parent's directory ([nicobailon `pi-subagents`](#nicobailon-pi-subagents)).
+The directory key removes the leading path separator and replaces `/`, `\`, and `:` with `-`, then wraps the result in `--`. The filename stem is the ISO timestamp with `:` and `.` replaced by `-`, then `_`, then the session id (a UUID by default; the SDK and `--session-id` can supply a custom id). `--session-dir` overrides the location, then `PI_CODING_AGENT_SESSION_DIR`, then settings `sessionDir`; `--no-session` writes nothing. The nicobailon subagent extension nests child sessions below the parent's directory ([nicobailon `pi-subagents`](#nicobailon-pi-subagents)).
 
 The first line is the header; every later line is a tree entry with an `id` (usually 8-character hex, with a full-UUID fallback), a `parentId` (`null` on a root entry), and an ISO `timestamp`:
 
 ```jsonc
-{"type":"session","version":3,"id":"<session uuid>","timestamp":"2026-07-09T06:45:56.308Z","cwd":"/home/user/…","parentSession":"<path, fork/clone only>"}
+{"type":"session","version":3,"id":"<session uuid>","timestamp":"2026-06-04T06:45:56.308Z","cwd":"/home/user/…","parentSession":"<path, fork/clone only>"}
 ```
 
 The session format is at version 3 (`CURRENT_SESSION_VERSION`): v1 was linear, v2 added the `id`/`parentId` tree, and v3 renamed the `hookMessage` role to `custom`. Pi migrates older files on load, so a reader outside Pi keys on `version`. `parentSession` is present only for a fork, clone, or `newSession({ parentSession })`.
@@ -298,9 +320,9 @@ The session format is at version 3 (`CURRENT_SESSION_VERSION`): v1 was linear, v
 | `label` | `targetId`, `label`; `/tree` bookmarks |
 | `session_info` | `name`; the `/name` display name |
 
-`firstKeptEntryId` remains required; a retain-none compaction stores its own id. The 1.1.0 session-format docs now agree with the CLI wire: no `retainedTail`. `systemMessage`, when present, is the complete prompt/tool checkpoint for compacted context and replaces system messages among retained entries (`src/core/session-manager.ts`, `CompactionEntry`).
+`firstKeptEntryId` is required. A compaction that keeps no prior entries stores its own id in this field. `systemMessage`, when present, is the complete prompt/tool checkpoint for compacted context and replaces system messages among retained entries (`src/core/session-manager.ts`, `CompactionEntry`).
 
-Message roles are `system`, `user`, `assistant`, `toolResult`, `bashExecution` (`!` commands), `custom`, `branchSummary`, and `compactionSummary`. A message's own `timestamp` is Unix milliseconds, unlike the ISO entry envelope. System messages persist the prompt and tool loadout: the first request records the complete state, and subsequent messages patch named `sections` (`null` removes a section) and `toolsAdded`/`toolsRemoved`. Older sessions gain their first system message on their next request. The assistant shape follows `AssistantMessage` in `packages/ai/src/types.ts`:
+Message roles are `system`, `user`, `assistant`, `toolResult`, `bashExecution` (`!` commands), `custom`, `branchSummary`, and `compactionSummary`. A message's own `timestamp` is Unix milliseconds, unlike the ISO entry envelope. System messages persist the prompt and tool loadout: the first request records the complete state, and subsequent messages patch named `sections` (`null` removes a section) and `toolsAdded`/`toolsRemoved`. Older sessions gain their first system message on their next request. The following illustrative assistant record follows `AssistantMessage` in `packages/ai/src/types.ts`:
 
 ```jsonc
 {"type":"message","id":"a1b2c3d4","parentId":"…","timestamp":"2026-06-04T06:46:14.308Z","message":{
@@ -308,7 +330,7 @@ Message roles are `system`, `user`, `assistant`, `toolResult`, `bashExecution` (
   "provider": "openai-codex", "model": "gpt-5.5", "responseModel": "gpt-5.6-sol", "api": "…", "responseId": "…",
   "content": [ {"type":"text","text":"…"} ],            // also "thinking" and "toolCall" blocks
   "stopReason": "stop",                                  // stop | length | toolUse | error | aborted
-  "errorMessage": "…",                                   // present on error
+  "errorMessage": "…",                                   // optional on error or abort
   "usage": { "input": 3435, "output": 6, "cacheRead": 0, "cacheWrite": 0, "cacheWrite1h": 0, "reasoning": 4, "totalTokens": 3441,
              "cost": { "input": 0.017175, "output": 0.00018, "cacheRead": 0, "cacheWrite": 0, "total": 0.017355 } },
   "timestamp": 1780555574308
@@ -326,11 +348,11 @@ Message roles are `system`, `user`, `assistant`, `toolResult`, `bashExecution` (
 | `thinkingLevel?` | Pi's requested thinking level for the response; absent on legacy messages or outside the agent loop |
 | `durationMs?` | request duration; absent on legacy responses |
 
-The pi-ai `StopReason` type also lists `pending` and `deferred`. `pending` marks partial streaming messages and never reaches the file ([session-format.md](https://pi.dev/docs/latest/session-format)). `deferred`, with a `deferred` handle, is available to providers that implement deferred responses.
+The pi-ai `StopReason` type also lists `pending` and `deferred`. `pending` marks partial streaming messages and never reaches the file ([session-format.md](https://github.com/earendil-works/pi/blob/v1.2.0/packages/coding-agent/docs/session-format.md)). `deferred`, with a `deferred` handle, is available to providers that implement deferred responses.
 
 `usage` has four token counters (`input`, `output`, `cacheRead`, `cacheWrite`) plus `totalTokens` and a `cost` object in dollars. Two optional counters are subsets and never add to `totalTokens`: `cacheWrite1h` is the part of `cacheWrite` written with one-hour retention (Anthropic only), and `reasoning` is the part of `output` spent thinking. Context tokens split the Anthropic way, as `input + cacheRead + cacheWrite`. The file carries no context window; a gauge resolves its divisor from the model's `contextWindow` in the registry.
 
-Usage appears in five places, and Pi's session totals include all five: the assistant message's `usage` (attributable to `responseModel ?? model`), a tool result's optional `message.usage` for LLM work the tool performed, the optional top-level `usage` on `compaction` and `branch_summary` entries, and standalone `usage` entries. Unknown `usage.kind` values remain ordinary billable usage. A selected virtual model can differ from the physical `provider`/`model` that an assistant message records ([session-format.md](https://pi.dev/docs/latest/session-format)).
+Usage appears in five places, and Pi's session totals include all five: the assistant message's `usage` (attributable to `responseModel ?? model`), a tool result's optional `message.usage` for LLM work the tool performed, the optional top-level `usage` on `compaction` and `branch_summary` entries, and standalone `usage` entries. Unknown `usage.kind` values remain ordinary billable usage. A selected virtual model can differ from the physical `provider`/`model` that an assistant message records ([session-format.md](https://github.com/earendil-works/pi/blob/v1.2.0/packages/coding-agent/docs/session-format.md)).
 
 Tool-result messages may also carry `durationMs` and bounded `nestedCalls`; nested calls are stored on the parent result and are not separate model-context messages (`packages/ai/src/types.ts`, `ToolResultMessage`).
 
@@ -338,17 +360,20 @@ The file is a tree, not a log. `/tree` moves the leaf in place; `/fork` creates 
 
 ## Headless modes
 
-Pi's headless modes and SDK expose the same session events outside a TUI. RimZ's adapter targets the interactive TUI in a pane, so this section is an index.
+Headless modes and the SDK expose `AgentSessionEvent` outside a TUI. Extension-only events have a separate contract.
 
 | Mode | Wire |
 | --- | --- |
-| `--mode json` | JSON lines on stdout: the session header first, then every `AgentSessionEvent` ([json.md](https://pi.dev/docs/latest/json)) |
-| `--mode rpc` | JSONL commands on stdin, responses and events on stdout, split on LF only ([rpc.md](https://pi.dev/docs/latest/rpc)) |
-| SDK | `createAgentSession({ customTools, … })` embeds the agent loop in a Node program ([sdk.md](https://pi.dev/docs/latest/sdk)) |
+| `-p` | print the final assistant text. From 1.2.0, output-token truncation prints partial text, warns on stderr, and exits 1 |
+| `--mode json` | JSON lines on stdout: the session header first, then every `AgentSessionEvent` ([json.md](https://github.com/earendil-works/pi/blob/v1.2.0/packages/coding-agent/docs/json.md)) |
+| `--mode rpc` | JSONL commands on stdin, responses and events on stdout, split on LF only ([rpc.md](https://github.com/earendil-works/pi/blob/v1.2.0/packages/coding-agent/docs/rpc.md)) |
+| SDK | `createAgentSession({ customTools, … })` embeds the agent loop in a Node program ([sdk.md](https://github.com/earendil-works/pi/blob/v1.2.0/packages/coding-agent/docs/sdk.md)) |
 
-The SDK now takes an async `modelRuntime` instead of the old `authStorage`/`modelRegistry` options. `ModelRuntime` owns model discovery and authentication; the extension-facing `ctx.modelRegistry` remains supported, but its `refresh()` is async and must be awaited before synchronous reads. Custom providers stream from `TranscriptContext`, which carries prompt/tool state in system messages instead of top-level context fields ([changelog](https://github.com/earendil-works/pi/blob/v1.1.0/packages/coding-agent/CHANGELOG.md); `src/core/extensions/types.ts`, `ProviderConfig`).
+The truncation exit applies to text print mode. JSON mode reports the message's `stopReason` without this text-mode exit check ([print-mode source](https://github.com/earendil-works/pi/blob/v1.2.0/packages/coding-agent/src/modes/print-mode.ts)).
 
-Both streams write every `AgentSessionEvent` through the same `toJsonEvent` projection (`src/modes/json-event.ts`), whose `message_update` records are delta-only: they omit the cumulative `message` and `assistantMessageEvent.partial` and carry a top-level cumulative `usage`; `toolcall_start` retains `id` and `toolName`. `message_end` is the authoritative completed message. Nested tool execution events carry `parentToolCallId?`. Beyond the `AgentEvent` set (`agent_start`, `turn_*`, `message_*`, `tool_execution_*`), `AgentSessionEvent` adds these (`src/core/agent-session.ts`, `AgentSessionEvent`):
+The SDK takes an async `modelRuntime` instead of the old `authStorage`/`modelRegistry` options. `ModelRuntime` owns model discovery and authentication; the extension-facing `ctx.modelRegistry` remains supported, but its `refresh()` is async and must be awaited before synchronous reads. Custom providers stream from `TranscriptContext`, which carries prompt/tool state in system messages instead of top-level context fields ([changelog](https://github.com/earendil-works/pi/blob/v1.2.0/packages/coding-agent/CHANGELOG.md); `src/core/extensions/types.ts`, `ProviderConfig`).
+
+JSON and RPC streams write every `AgentSessionEvent` through the same `toJsonEvent` projection (`src/modes/json-event.ts`), whose `message_update` records are delta-only: they omit the cumulative `message` and `assistantMessageEvent.partial` and carry a top-level cumulative `usage`; `toolcall_start` retains `id` and `toolName`. `message_end` is the authoritative completed message. Nested tool execution events carry `parentToolCallId?`. Beyond the `AgentEvent` set (`agent_start`, `turn_*`, `message_*`, `tool_execution_*`), `AgentSessionEvent` adds these (`src/core/agent-session.ts`, `AgentSessionEvent`):
 
 | Event | Carries |
 | --- | --- |
@@ -360,6 +385,8 @@ Both streams write every `AgentSessionEvent` through the same `toJsonEvent` proj
 | `summarization_retry_scheduled` / `summarization_retry_attempt_start` / `summarization_retry_finished` | retries of compaction or branch-summary summarization |
 | `bash_execution_update` | `id?`, `delta`: output of an RPC `bash` command |
 | `entry_appended`, `session_info_changed`, `thinking_level_changed` | `entry`, `name`, `level`; in the type union but absent from json.md and rpc.md |
+
+`before_agent_start` and `input` are extension events, absent from JSON/RPC event streams. Extensions still receive these events in RPC mode. Their discriminators are unavailable as JSON/RPC run-start fields ([session event union](https://github.com/earendil-works/pi/blob/v1.2.0/packages/coding-agent/src/core/agent-session.ts)).
 
 RPC mode also writes `extension_error` (`extensionPath`, `event`, `error`) when an extension throws.
 
@@ -378,7 +405,7 @@ RPC commands correlate by an optional `id` echoed in a `type: "response"` object
 
 ## Auth file
 
-`~/.pi/agent/auth.json` maps a provider id to one credential. Pi creates it with mode `0600`, `/login` and `/logout` manage it, and OAuth tokens refresh automatically when expired ([providers.md](https://pi.dev/docs/latest/providers)). The credential shape is `OAuthCredential` or an API-key credential (`packages/ai/src/auth/types.ts`):
+`~/.pi/agent/auth.json` maps a provider id to one credential. Pi creates it with mode `0600`, `/login` and `/logout` manage it, and OAuth tokens refresh automatically when expired ([providers.md](https://github.com/earendil-works/pi/blob/v1.2.0/packages/coding-agent/docs/providers.md)). The credential shape is `OAuthCredential` or an API-key credential (`packages/ai/src/auth/types.ts`):
 
 ```jsonc
 {
@@ -407,13 +434,19 @@ An `api_key` credential's `key` accepts a literal, `$ENV_VAR` or `${ENV_VAR}` in
 
 Pi resolves a provider's credential in this order: the `--api-key` flag, then the `auth.json` entry, then the provider's environment variable (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, …), then custom-provider keys in `models.json`.
 
-Non-interactive `pi auth` subcommands expose resolved credentials (`src/cli/auth-command.ts`). Resolution can refresh and persist stored OAuth credentials; `auth check --no-refresh` uses read-only storage. Each requires `--provider`, `--model`, or both. OpenAI's new ChatGPT login also persists a stable `deviceId` in global settings. Anthropic supports workload identity federation through `ANTHROPIC_FEDERATION_RULE_ID`, `ANTHROPIC_ORGANIZATION_ID`, and `ANTHROPIC_IDENTITY_TOKEN_FILE` when no key or token is set ([providers.md](https://github.com/earendil-works/pi/blob/v1.1.0/packages/coding-agent/docs/providers.md)).
+Non-interactive `pi auth` subcommands expose resolved credentials (`src/cli/auth-command.ts`). Resolution can refresh and persist stored OAuth credentials; `auth check --no-refresh` uses read-only storage. Each requires `--provider`, `--model`, or both. OpenAI's new ChatGPT login also persists a stable `deviceId` in global settings. Anthropic supports workload identity federation through `ANTHROPIC_FEDERATION_RULE_ID`, `ANTHROPIC_ORGANIZATION_ID`, and `ANTHROPIC_IDENTITY_TOKEN_FILE` when no key or token is set ([providers.md](https://github.com/earendil-works/pi/blob/v1.2.0/packages/coding-agent/docs/providers.md)).
 
 | Command | Extra flags | Output |
 | --- | --- | --- |
 | `pi auth print-api-key` | none | the resolved API key |
 | `pi auth print-bearer-token` | `--min-expiry <n>(ms\|s\|m\|h)` | an OAuth bearer token, refreshed when it would expire sooner |
 | `pi auth check` | `--json`, `--credentials` (include the credential), `--no-refresh` (skip refreshing expired OAuth) | provider readiness |
+
+From 1.2.0, OpenRouter chat catalogs use the key-specific `/models/user` endpoint, including configured regional base URLs. The catalog supplies permitted models, context limits, output limits, and prices. Image and classifier models remain unfiltered. Pi caches it for offline, print, and RPC use. A key change outside `/login` takes effect after the next catalog refresh.
+
+Rejected keys or missing endpoints fall back to the full catalog ([OpenRouter](https://github.com/earendil-works/pi/blob/v1.2.0/packages/coding-agent/docs/providers.md#openrouter)).
+
+OpenRouter negative placeholder prices become zero, including router models such as `openrouter/auto` ([price conversion](https://github.com/earendil-works/pi/blob/v1.2.0/packages/ai/src/providers/openrouter-api.ts)).
 
 Pi exposes no plan tier, quota, or usage endpoint of its own. The only per-response provider metadata an extension sees is the `status` and `headers` of [`after_provider_response`](#events-the-adapter-wires). How RimZ derives balance windows from those headers and the stored OAuth tokens is in [adapter_pi.md → Account and balance](../../internals/agents/adapter_pi.md#account-and-balance).
 
@@ -445,14 +478,14 @@ These are the flags a launch or resume plan uses; `pi --help` lists the rest.
 | `--tui-mode fullscreen\|regular` | interactive terminal layout; defaults to fullscreen |
 | `--offline` | disable startup network operations (same as `PI_OFFLINE=1`) |
 
-`--tools` and `--exclude-tools` accept `*` patterns. A list containing only `+name`/`-name` entries adjusts default tools instead of replacing them; these take exact names and cannot mix with plain entries. `--tools` keeps MCP tools callable unless an entry starts with `mcp__`; `--exclude-tools` also filters MCP tools. `--no-tools` disables all tools, including MCP ([cli.md → Tools](https://pi.dev/docs/latest/cli#tools)).
+`--tools` and `--exclude-tools` accept `*` patterns. A list containing only `+name`/`-name` entries adjusts default tools instead of replacing them; these take exact names and cannot mix with plain entries. `--tools` keeps MCP tools callable unless an entry starts with `mcp__`; `--exclude-tools` also filters MCP tools. `--no-tools` disables all tools, including MCP ([cli.md → Tools](https://github.com/earendil-works/pi/blob/v1.2.0/packages/coding-agent/docs/cli.md#tools)).
 
 | Command | Meaning |
 | --- | --- |
 | `pi install <source> [-l]`, `pi remove <source> [-l]`, `pi list` | manage Pi packages (`npm:…`, `git:…`, URLs, local paths) in global settings, or project `.pi/settings.json` with `-l` |
 | `pi update [source\|self\|pi]` | update Pi, packages, or model catalogs |
 | `pi auth <command>` | [credential helpers](#auth-file) |
-| `pi mcp add`, `remove`, `list`, `login`, `logout` | manage built-in MCP servers and their authentication without a session ([cli.md → MCP commands](https://pi.dev/docs/latest/cli#mcp-commands)) |
+| `pi mcp add`, `remove`, `list`, `login`, `logout` | manage built-in MCP servers and their authentication without a session ([cli.md → MCP commands](https://github.com/earendil-works/pi/blob/v1.2.0/packages/coding-agent/docs/cli.md#mcp-commands)) |
 
 | Variable | Meaning |
 | --- | --- |
@@ -463,14 +496,21 @@ These are the flags a launch or resume plan uses; `pi --help` lists the rest.
 | `PI_SKIP_VERSION_CHECK` | skip the `pi.dev` latest-version request (read by `src/utils/version-check.ts`; absent from `pi --help`) |
 | `PI_TELEMETRY` | override install and update telemetry and provider attribution headers |
 | `PI_CACHE_RETENTION` | `long` requests extended provider prompt caching where supported |
+| `PI_CLIPBOARD_OSC52` | `1` also sends copied text through terminal OSC 52 when Pi cannot detect a remote client |
 | `PI_PROGRAM_STATUS` | `1` forces terminal program-status reports without capability negotiation; `0` disables them |
 
-Pi also sets variables for the processes it starts ([environment-variables.md](https://pi.dev/docs/latest/environment-variables)). The CLI and RPC entry points set `AI_AGENT=pi` and `PI_CODING_AGENT=true`, which every child inherits. Commands run by the model's `bash` and `powershell` tools additionally receive `PI_SESSION_ID`, `PI_SESSION_FILE` (unset for ephemeral sessions), `PI_PROVIDER`, `PI_MODEL`, and `PI_REASONING_LEVEL`, resolved when each command starts; user-typed `!` commands do not.
+Clipboard OSC 52 output is capped at 100,000 base64 characters ([clipboard source](https://github.com/earendil-works/pi/blob/v1.2.0/packages/coding-agent/src/utils/clipboard.ts)).
+
+Pi also sets variables for the processes it starts ([environment-variables.md](https://github.com/earendil-works/pi/blob/v1.2.0/packages/coding-agent/docs/environment-variables.md)). The CLI and RPC entry points set `AI_AGENT=pi` and `PI_CODING_AGENT=true`, which every child inherits. Commands run by the model's `bash` and `powershell` tools additionally receive `PI_SESSION_ID`, `PI_SESSION_FILE` (unset for ephemeral sessions), `PI_PROVIDER`, `PI_MODEL`, and `PI_REASONING_LEVEL`, resolved when each command starts; user-typed `!` commands do not.
 
 ## Upstream scope
 
-Pi now ships built-in MCP support and the optional `codemode` and `tool_search` tools. MCP connects over stdio or streamable HTTP (not legacy SSE), reads global `~/.pi/agent/mcp.json` and trusted project `.pi/mcp.json`, and names tools `mcp__<server>__<tool>`. MCP OAuth state lives separately in `~/.pi/agent/mcp-auth.json`, keyed by server name and URL. Extensions can register servers through `pi.registerMcpServer()`. Provider/MCP login dialogs are native, but subagents, structured questionnaires, and tool-permission policies remain extension surfaces ([MCP](https://github.com/earendil-works/pi/blob/v1.1.0/packages/coding-agent/docs/mcp.md), [CLI tools](https://github.com/earendil-works/pi/blob/v1.1.0/packages/coding-agent/docs/cli.md#tools); `src/extensions/mcp/oauth.ts`, `McpOAuthCredentialStore`).
+From 1.2.0, configuration schemas are published at `https://pi.dev/schemas/{settings,models,keybindings,theme}.schema.json`. Set `$schema` in the corresponding configuration file for editor validation. The theme schema moved to this location in 1.2.0. Startup themes now receive the same validation as reloads, with reusable colors under `vars` and unsupported metadata rejected ([settings](https://github.com/earendil-works/pi/blob/v1.2.0/packages/coding-agent/docs/settings.md), [release notes](https://github.com/earendil-works/pi/blob/v1.2.0/packages/coding-agent/CHANGELOG.md#120---2026-10-12)).
 
-From 1.1.0, interactive Pi also reports terminal program status through OSC 7501: `working`, `blocked`, `done`, `error`, or `idle`. Dialogs and logins produce `blocked`; aborted settlement returns to `idle`. Reports include session names, dialog titles, or the first error line, never prompts or assistant output. Pi normally waits for a positive capability response; `PI_PROGRAM_STATUS` overrides it. This is terminal output, not a hook or JSON/RPC event ([terminal-setup.md → Program status](https://github.com/earendil-works/pi/blob/v1.1.0/packages/coding-agent/docs/terminal-setup.md#program-status); `src/modes/interactive/program-status-reporter.ts`).
+Pi ships built-in MCP support and the optional `codemode` and `tool_search` tools. MCP connects over stdio or streamable HTTP (not legacy SSE), reads global `~/.pi/agent/mcp.json` and trusted project `.pi/mcp.json`, and names tools `mcp__<server>__<tool>`. MCP OAuth state lives separately in `~/.pi/agent/mcp-auth.json`, keyed by server name and URL. Extensions can register servers through `pi.registerMcpServer()`. Provider/MCP login dialogs are native, but subagents, structured questionnaires, and tool-permission policies remain extension surfaces ([MCP](https://github.com/earendil-works/pi/blob/v1.2.0/packages/coding-agent/docs/mcp.md), [CLI tools](https://github.com/earendil-works/pi/blob/v1.2.0/packages/coding-agent/docs/cli.md#tools); `src/extensions/mcp/oauth.ts`, `McpOAuthCredentialStore`).
 
-Pi's experimental remote harness (the `server` and `client` commands and the `client` and `experimental/plugin` package subpaths) remains source-only at 1.1.0. It runs from a checkout with `PI_EXPERIMENTAL=1`, and the published npm runtime and standalone binaries exclude it ([services README](https://github.com/earendil-works/pi/blob/v1.1.0/packages/coding-agent/src/experimental/services/README.md); `package.json`, `files` and `exports`). Which surfaces RimZ wires, and the gaps that follow, are in [adapter_pi.md → Known gaps](../../internals/agents/adapter_pi.md#known-gaps).
+From 1.2.0, `pi mcp list --json` reports resource support as `resources: true`, replacing resource and resource-template counts. Pi no longer enumerates resources during connection. MCP `structuredContent` can be an object, array, primitive, or `null`. Without an output schema, codemode declarations type it as `unknown` ([release notes](https://github.com/earendil-works/pi/blob/v1.2.0/packages/coding-agent/CHANGELOG.md#120---2026-10-12)).
+
+From 1.1.0, interactive Pi also reports terminal program status through OSC 7501: `working`, `blocked`, `done`, `error`, or `idle`. Dialogs and logins produce `blocked`; aborted settlement returns to `idle`. Reports include session names, dialog titles, or the first error line, never prompts or assistant output. Pi normally waits for a positive capability response; `PI_PROGRAM_STATUS` overrides it. This is terminal output, not a hook or JSON/RPC event ([terminal-setup.md → Program status](https://github.com/earendil-works/pi/blob/v1.2.0/packages/coding-agent/docs/terminal-setup.md#program-status); `src/modes/interactive/program-status-reporter.ts`).
+
+Pi 1.2.0 removes the source-only experimental `server` and `client` commands, `client` and `experimental/plugin` exports, and their supporting packages. These were never included in the published npm runtime or standalone binaries ([release notes](https://github.com/earendil-works/pi/blob/v1.2.0/packages/coding-agent/CHANGELOG.md#120---2026-10-12)). Which surfaces RimZ wires, and the gaps that follow, are in [adapter_pi.md → Known gaps](../../internals/agents/adapter_pi.md#known-gaps).
