@@ -4300,6 +4300,15 @@ fn bare_word_naming_a_live_agent_refuses_with_show_and_launch() {
 
     let out = bare_coder(None);
     let stderr = String::from_utf8_lossy(&out.stderr);
+    let shown = run_in(&["agents", "show", "@coder", "--json"], None);
+    assert!(
+        shown.status.success(),
+        "{}",
+        String::from_utf8_lossy(&shown.stderr)
+    );
+    let shown: serde_json::Value = serde_json::from_slice(&shown.stdout).unwrap();
+    assert_eq!(shown["agent"]["id"], "sess-coder");
+    assert_eq!(shown["agent"]["handle"], "@coder");
     assert_eq!(out.status.code(), Some(2), "stderr:\n{stderr}");
     assert!(
         out.stdout.is_empty(),
@@ -4307,13 +4316,10 @@ fn bare_word_naming_a_live_agent_refuses_with_show_and_launch() {
         String::from_utf8_lossy(&out.stdout)
     );
     assert!(
-        stderr.starts_with("error: `coder` names a live agent (@coder#auth)"),
+        stderr.starts_with("error: `coder` names a live agent (@coder)"),
         "{stderr}"
     );
-    assert!(
-        stderr.contains("rimz agents show '@coder#auth'"),
-        "{stderr}"
-    );
+    assert!(stderr.contains("rimz agents show @coder"), "{stderr}");
     assert!(stderr.contains("rimz agents launch coder"), "{stderr}");
 
     crate::common::write_definition(
