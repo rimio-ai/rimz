@@ -885,6 +885,23 @@ impl LaunchFinalizeError {
     }
 }
 
+/// Validate a launch preset with the provider's renderer without changing argv.
+pub fn validate_launch_preset(
+    kind: &str,
+    preset: &crate::agents::LaunchPreset,
+) -> std::result::Result<(), LaunchFinalizeError> {
+    let adapter = crate::agents::find_definition(kind).ok_or_else(|| {
+        LaunchFinalizeError::UnknownAdapter {
+            kind: kind.to_owned(),
+        }
+    })?;
+    adapter
+        .spec()
+        .render_preset(preset)
+        .map(|_| ())
+        .map_err(unsupported_preset_error)
+}
+
 /// Apply launch-wide CLI options and provider preset reconciliation to a
 /// resolved layout. Command cells remain unchanged.
 pub fn finalize_launch_layout(
