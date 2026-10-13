@@ -2,18 +2,18 @@
 
 This page mirrors the Zellij surfaces RimZ binds to: the wasm plugin API (lifecycle, events, host commands, types, permissions, workers, pipes, keybind actions), the CLI control surface, configuration options and their merge rules, mouse handling, the kitty graphics protocol, layout KDL, and session serialization. It records what upstream ships. How RimZ maps these surfaces onto its own backend, including which events, host commands, and verbs it wires, is in [multiplexers.md](../../internals/multiplexers.md): the [Zellij backend](../../internals/multiplexers.md#zellij-backend), its [caveats](../../internals/multiplexers.md#zellij-backend-caveats), and [the Zellij presence plugin](../../internals/multiplexers.md#the-zellij-presence-plugin). Browser access is in [web.md](../../internals/web.md).
 
-**Baseline.** Zellij **0.45.1** (tag [`v0.45.1`](https://github.com/zellij-org/zellij/releases/tag/v0.45.1), commit `efd8fd5a89a20c07a111d248ad7fce53848d2c18`, released 2026-08-28). Docs and source were read 2026-09-14, and the host binary (`zellij --version` prints `zellij 0.45.1`) matches the baseline. Source anchors are paths under <https://github.com/zellij-org/zellij/tree/v0.45.1/> plus a symbol. Claims marked "observed on 0.44.3" are live captures from that release that the 0.45.1 source does not contradict. Version boundaries that matter below 0.45: `CwdChanged` exists at 0.44.0, `CommandChanged` first ships in 0.44.2, and `new-pane --no-focus` and the `stacked_pane_list` option first ship in 0.45.0.
+**Baseline.** Zellij **0.45.1** (tag [`v0.45.1`](https://github.com/zellij-org/zellij/releases/tag/v0.45.1), commit `efd8fd5a89a20c07a111d248ad7fce53848d2c18`, released 2026-08-28). Checked 2026-10-12 against the [latest stable release](https://github.com/zellij-org/zellij/releases/latest) and tagged source. Unreleased changes are outside this baseline. Source anchors are paths under <https://github.com/zellij-org/zellij/tree/v0.45.1/> plus a symbol. Claims marked "observed on 0.44.3" are live captures from that release that the 0.45.1 source does not contradict. Version boundaries that matter below 0.45: `CwdChanged` exists at 0.44.0, `CommandChanged` first ships in 0.44.2, and `new-pane --no-focus` and the `stacked_pane_list` option first ship in 0.45.0.
 
 ## Upstream sources
 
-The type definitions live in `zellij-utils/src/data.rs` and the plugin shims in `zellij-tile/src/shim.rs`, published as [`zellij-tile` on docs.rs](https://docs.rs/zellij-tile/latest/zellij_tile/). The website lags the source in places (for example, its permissions page lists 14 of the 17 permissions); each disagreement that matters is flagged at its claim, and the page follows the source and the binary.
+The type definitions live in `zellij-utils/src/data.rs` and the plugin shims in `zellij-tile/src/shim.rs`, published as [`zellij-tile` on docs.rs](https://docs.rs/zellij-tile/0.45.1/zellij_tile/). This page flags website disagreements at each affected claim and follows the tagged source.
 
 | Surface | Source |
 | --- | --- |
 | Release and changelog | <https://github.com/zellij-org/zellij/releases/tag/v0.45.1>, [`CHANGELOG.md`](https://github.com/zellij-org/zellij/blob/v0.45.1/CHANGELOG.md) |
 | Plugin events | <https://zellij.dev/documentation/plugin-api-events.html>, `zellij-server/src/plugins/wasm_bridge.rs` `check_event_permission` |
 | Plugin commands | <https://zellij.dev/documentation/plugin-api-commands.html>, `zellij-tile/src/shim.rs`, `zellij-server/src/plugins/zellij_exports.rs` `check_command_permission` |
-| Plugin types | <https://zellij.dev/documentation/plugin-api-types.html>, <https://docs.rs/zellij-tile/latest/zellij_tile/> |
+| Plugin types | <https://zellij.dev/documentation/plugin-api-types.html>, <https://docs.rs/zellij-tile/0.45.1/zellij_tile/> |
 | Plugin workers | <https://zellij.dev/documentation/plugin-api-workers.html> |
 | Plugin lifecycle | <https://zellij.dev/documentation/plugin-lifecycle.html> |
 | Plugin permissions | <https://zellij.dev/documentation/plugin-api-permissions.html>, `zellij-utils/src/plugin_api/plugin_permission.proto` |
@@ -27,7 +27,7 @@ The type definitions live in `zellij-utils/src/data.rs` and the plugin shims in 
 
 ## Plugin API
 
-Plugins are wasm32-wasip1 binaries that run inside the Zellij server's plugin host. RimZ ships one, [`rimz-presence-zellij`](../../../crates/rimz-presence-zellij/).
+Plugins are wasm32-wasip1 binaries that run inside the Zellij server's plugin host.
 
 ### Lifecycle
 
@@ -40,11 +40,11 @@ fn render(&mut self, rows: usize, cols: usize)               // print UI to STDO
 fn pipe(&mut self, pipe_message: PipeMessage) -> bool        // pipe messages; true = re-render
 ```
 
-Events arrive asynchronously with no ordering guarantee. `render` runs after `update` or `pipe` returns `true`, and on startup and resize. A headless plugin never draws and calls `hide_self()` once its permissions are granted.
+Events arrive asynchronously with no ordering guarantee. `render` runs after `update` or `pipe` returns `true`, and on startup and resize.
 
 ### Events
 
-`Event` in `zellij-utils/src/data.rs` has 48 variants, all listed below. A plugin receives an event only after `subscribe`, and the gate column is the permission `check_event_permission` requires at delivery. Built-in plugins (`zellij:` URLs) bypass every gate.
+[`Event`](https://github.com/zellij-org/zellij/blob/v0.45.1/zellij-utils/src/data.rs#L955-L1051) has 48 variants, all listed below. A plugin receives an event only after `subscribe`, and the gate column names the permission required by [`check_event_permission`](https://github.com/zellij-org/zellij/blob/v0.45.1/zellij-server/src/plugins/wasm_bridge.rs#L2071-L2118). Built-in plugins (`zellij:` URLs) bypass every gate.
 
 | Event | Payload | Delivery gate |
 | --- | --- | --- |
@@ -71,7 +71,8 @@ Events arrive asynchronously with no ordering guarantee. `render` runs after `up
 | `CommandPaneReRun` | `u32`, `Context` | ReadApplicationState |
 | `FailedToWriteConfigToDisk` | `Option<String>` file path | ReadApplicationState |
 | `ListClients` | `Vec<ClientInfo>`, the reply to `list_clients()` | none at delivery; the `list_clients()` command needs ReadApplicationState |
-| `HostFolderChanged`, `FailedToChangeHostFolder` | `PathBuf`, `Option<String>` error | none |
+| `HostFolderChanged` | `PathBuf` new host folder | none |
+| `FailedToChangeHostFolder` | `Option<String>` error | none |
 | `PastedText` | `String` | none |
 | `ConfigWasWrittenToDisk` | none | none |
 | `WebServerStatus` | `WebServerStatus` (`Online(url)`, `Offline`, `DifferentVersion(v)`) | StartWebServer |
@@ -105,13 +106,13 @@ Four delivery behaviours are easy to miss:
 
 **Client-bound tab state and detached geometry (0.45.1).** [`Screen::generate_and_report_tab_state`](https://github.com/zellij-org/zellij/blob/v0.45.1/zellij-server/src/screen.rs) builds a `TabUpdate` for each client in `active_tab_ids` and routes it to that client's plugin instance. `Screen::targeted_plugin_ids` includes subscribed background plugins. `TabInfo.active` identifies that client's viewed tab; `other_focused_clients` lists the other viewers and is empty in mirrored sessions, where `active` still identifies the shared tab.
 
-[`start_server_detached`](https://github.com/zellij-org/zellij/blob/v0.45.1/zellij-client/src/lib.rs) seeds a detached session at 50 columns by 50 rows. The birth client is a viewer: `Screen::apply_layout` and `Screen::add_client` insert it into `connected_clients` and `active_tab_ids`, so its bound plugin can receive an active tab at that placeholder size. A positive client count does not distinguish birth from an attached terminal. `Screen::recompute_tab_size` uses only clients actively viewing the tab and leaves a tab unchanged when there are none. Hidden tabs therefore retain detached geometry until viewed.
+[`start_server_detached`](https://github.com/zellij-org/zellij/blob/v0.45.1/zellij-client/src/lib.rs) seeds a detached session at 50 columns by 50 rows. The temporary client used by `attach --create-background` counts as a viewer: `Screen::apply_layout` and `Screen::add_client` insert it into `connected_clients` and `active_tab_ids`, so its bound plugin can receive an active tab at that placeholder size. A positive client count does not distinguish detached creation from an attached terminal. `Screen::recompute_tab_size` uses only clients actively viewing the tab and leaves a tab unchanged when there are none. Hidden tabs therefore retain detached geometry until viewed.
 
-On `ScreenInstruction::RemoveClient`, the screen removes the client and calls `Screen::log_and_report_session_state`. That reports `connected_clients` from `active_tab_ids.len()` and broadcasts `SessionUpdate` with no plugin or client target. [`WasmBridge::message_is_directed_at_plugin`](https://github.com/zellij-org/zellij/blob/v0.45.1/zellij-server/src/plugins/wasm_bridge.rs) delivers that broadcast to every instance. `WasmBridge::remove_client` removes the connected-client entry, not its plugin instances; the birth-bound instance can thus observe the count returning to zero and still run keepalives. `WasmBridge::add_client` starts an instance only for plugins with none already keyed to that client id, and [`SessionState::new_client`](https://github.com/zellij-org/zellij/blob/v0.45.1/zellij-server/src/lib.rs) hands out the lowest free id. So the first terminal to attach after a detached birth reuses the birth client's id and rebinds the surviving birth instance instead of starting a new one.
+On `ScreenInstruction::RemoveClient`, the screen removes the client and calls `Screen::log_and_report_session_state`. That reports `connected_clients` from `active_tab_ids.len()` and broadcasts `SessionUpdate` with no plugin or client target. [`WasmBridge::message_is_directed_at_plugin`](https://github.com/zellij-org/zellij/blob/v0.45.1/zellij-server/src/plugins/wasm_bridge.rs) delivers that broadcast to every instance. `WasmBridge::remove_client` removes the connected-client entry, not its plugin instances; the surviving instance can thus observe the count returning to zero. `WasmBridge::add_client` starts an instance only for plugins with none already keyed to that client id, and [`SessionState::new_client`](https://github.com/zellij-org/zellij/blob/v0.45.1/zellij-server/src/lib.rs) hands out the lowest free id. So the first terminal to attach after detached creation reuses the temporary client's id and rebinds the surviving instance instead of starting a new one.
 
 ### Commands (host functions)
 
-The shims in `zellij-tile/src/shim.rs` are grouped below by the permission `check_command_permission` requires. Signatures are abbreviated; [docs.rs](https://docs.rs/zellij-tile/latest/zellij_tile/shim/index.html) carries the full forms.
+The shims in `zellij-tile/src/shim.rs` are grouped below by the permission `check_command_permission` requires. Signatures are abbreviated. [docs.rs](https://docs.rs/zellij-tile/0.45.1/zellij_tile/shim/index.html) carries the full forms.
 
 **Ungated.** `subscribe(&[EventType])`, `unsubscribe(&[EventType])`, `request_permission(&[PermissionType])`, `set_selectable(bool)`, `show_cursor(Option<(x, y)>)`, `set_self_mouse_selection_support(bool)`, `get_plugin_ids() -> PluginIds`, `get_zellij_version() -> String`, `set_timeout(secs: f64)` (replies with `Timer`), `hide_self()`, `show_self(float_if_hidden)`, `close_self()`, `focus_last_pane()`, `post_message_to(PluginMessage)` (plugin to worker), `post_message_to_plugin(PluginMessage)` (worker to plugin, delivered as `CustomMessage`), `report_panic(&PanicHookInfo)`, `scan_host_folder(&Path)`, `watch_filesystem()` (enables the `FileSystem*` events). `get_focused_tab(&Vec<TabInfo>)` is a local helper that calls no host function.
 
@@ -128,11 +129,11 @@ The shims in `zellij-tile/src/shim.rs` are grouped below by the permission `chec
 - Sessions: `switch_session(Option<&str>)`, `switch_session_with_layout`, `switch_session_with_cwd`, `switch_session_with_focus(name, tab, (pane_id, is_plugin))`, `rename_session(&str)`, `kill_sessions(&[names])`, `delete_dead_session(name)`, `delete_all_dead_sessions()`, `detach()`, `disconnect_other_clients()`, `quit_zellij()`.
 - Plugins, signals, and layouts: `reload_plugin_with_id(u32)`, `load_new_plugin(url, config, in_background, skip_cache)`, `send_sigint_to_pane_id(PaneId)`, `send_sigkill_to_pane_id(PaneId)`, `rerun_command_pane(terminal_id)`, `save_layout(name, kdl, overwrite)`, `delete_layout(name)`, `rename_layout(old, new)`, `edit_layout(name, ctx)`, `override_layout(LayoutInfo, retain_terminals, retain_plugins, active_tab_only, ctx)`, `previous_swap_layout()`, `next_swap_layout()`.
 
-**RunCommands.** `run_command(&[&str], Context)` and `run_command_with_env_variables_and_cwd(cmd, env, cwd, ctx)` (both reply with `RunCommandResult`), the `open_command_pane*` family (`open_command_pane`, `_floating`, `_in_place`, `_near_plugin`, `_floating_near_plugin`, `_in_place_of_plugin(close_after)`, `_in_place_of_pane_id`, `_background`, each `(CommandToRun, [coords,] Context) -> Option<PaneId>`), `open_command_pane_in_new_tab`, and the doc-hidden `exec_cmd(&[&str])`. A background command spawns with the server's environment and the launching CLI's cwd unless the call passes its own. `run_command` and timers keep working with zero clients attached (observed on 0.44.3).
+**RunCommands.** `run_command(&[&str], Context)` and `run_command_with_env_variables_and_cwd(cmd, env, cwd, ctx)` (both reply with `RunCommandResult`), the `open_command_pane*` family (`open_command_pane`, `_floating`, `_in_place`, `_near_plugin`, `_floating_near_plugin`, `_in_place_of_plugin(close_after)`, `_in_place_of_pane_id`, `_background`, each `(CommandToRun, [coords,] Context) -> Option<PaneId>`), `open_command_pane_in_new_tab`, and the doc-hidden `exec_cmd(&[&str])`. `run_command` inherits the server's environment and uses the plugin's host directory as cwd. The [shim](https://github.com/zellij-org/zellij/blob/v0.45.1/zellij-tile/src/shim.rs#L829-L861) passes `.`. The server [resolves relative paths](https://github.com/zellij-org/zellij/blob/v0.45.1/zellij-server/src/plugins/zellij_exports.rs#L142-L158) against `plugin_cwd`. Use `run_command_with_env_variables_and_cwd` to supply environment variables and a cwd. `run_command` and timers keep working with zero clients attached (observed on 0.44.3).
 
 **OpenFiles.** The `open_file*` family mirrors the command-pane variants, each `(FileToOpen, [coords,] Context) -> Option<PaneId>`, plus `open_edit_pane_in_place_of_pane_id` and `open_editor_pane_in_new_tab`.
 
-**OpenTerminalsOrPlugins.** The `open_terminal*` family `(path) -> Option<PaneId>`, `new_tiled_pane_in_tab(tab_position) -> Option<PaneId>`, `open_plugin_pane_floating(url, config, coords, ctx)`, `open_plugin_pane_in_new_tab`, `start_or_reload_plugin(url)`.
+**OpenTerminalsOrPlugins.** The [terminal-opening shims](https://github.com/zellij-org/zellij/blob/v0.45.1/zellij-tile/src/shim.rs#L492-L588): `open_terminal`, `_near_plugin`, `_floating`, `_floating_near_plugin`, `_in_place`, `_in_place_of_plugin`, and `open_terminal_pane_in_place_of_pane_id`. Each returns `Option<PaneId>`. Other calls: `new_tiled_pane_in_tab(tab_position) -> Option<PaneId>`, `open_plugin_pane_floating(url, config, coords, ctx)`, `open_plugin_pane_in_new_tab`, `start_or_reload_plugin(url)`.
 
 **WriteToStdin.** `write(Vec<u8>)` and `write_chars(&str)` to the focused pane; `write_to_pane_id` and `write_chars_to_pane_id` to a given pane.
 
@@ -164,29 +165,34 @@ enum PaneId { Terminal(u32), Plugin(u32) }
 struct PaneManifest { panes: HashMap<usize /* tab position */, Vec<PaneInfo>> }
 ```
 
-Identity fields in [`PaneInfo`, `PaneListEntry`, and `TabInfo`](https://github.com/zellij-org/zellij/blob/v0.45.1/zellij-utils/src/data.rs), also present in the plugin API's [pinned 0.44.3 types](https://github.com/zellij-org/zellij/blob/v0.44.3/zellij-utils/src/data.rs):
+Identity fields in [`PaneInfo`, `PaneListEntry`, and `TabInfo`](https://github.com/zellij-org/zellij/blob/v0.45.1/zellij-utils/src/data.rs):
 
 | Type | Field | Meaning |
 | --- | --- | --- |
-| `PaneInfo` | `id: u32`, `is_plugin: bool` | Pane ordinal in the terminal or plugin namespace |
+| `PaneInfo` | `id: u32`, `is_plugin: bool` | Pane identifier in the terminal or plugin namespace |
 | `PaneListEntry` | `tab_id: usize` | Stable containing-tab id within the live session |
 | `PaneListEntry` | `tab_position: usize`, `tab_name: String` | Current tab position and display name |
 | `TabInfo` | `tab_id: usize` | Stable tab id within the live session |
 | `TabInfo` | `position: usize`, `name: String` | Current tab position and display name |
 
-`PaneInfo` itself has no tab identity. Plugin manifests are keyed by position and join `TabUpdate`'s `TabInfo.tab_id`; native `list-panes` returns `PaneListEntry`. These ids are not resurrection identities. A disposable 0.45.1 session with one remaining tab at id `1` and terminal pane id `1` resurrected with both at `0`, retaining its tab name.
+CLI `terminal_<n>` maps to `PaneId::Terminal(n)` and `PaneInfo { id: n, is_plugin: false, ... }`. CLI `plugin_<n>` maps to the plugin variant and `is_plugin: true`.
 
-`PaneInfo` has five field groups:
+Terminal and plugin ids come from increasing counters within the server. Closing a pane does not recycle its id. Sources: [Unix terminal allocation](https://github.com/zellij-org/zellij/blob/v0.45.1/zellij-server/src/os_input_output_unix.rs#L453-L464), [Windows terminal allocation](https://github.com/zellij-org/zellij/blob/v0.45.1/zellij-server/src/os_input_output_windows.rs#L657-L666), and [plugin allocation](https://github.com/zellij-org/zellij/blob/v0.45.1/zellij-server/src/plugins/wasm_bridge.rs#L310-L317).
+
+`PaneInfo` itself has no tab identity. Match each manifest key to `TabInfo.position`, then read that entry's stable `TabInfo.tab_id`. Native `list-panes` returns both fields in `PaneListEntry`. These ids are not resurrection identities. A disposable 0.45.1 session with one remaining tab at id `1` and terminal pane id `1` resurrected with both at `0`, retaining its tab name.
+
+`PaneInfo` fields:
 
 | Group | Fields |
 | --- | --- |
-| Identity | `id: u32`, `is_plugin`, `title` |
+| Identity | `id: u32`, `is_plugin` |
+| Display | `title` (renamable) |
 | State | `is_focused`, `is_fullscreen`, `is_floating`, `is_suppressed`, `is_selectable`, `exited`, `exit_status: Option<i32>`, `is_held` |
 | Geometry | `pane_x`, `pane_y`, `pane_rows`, `pane_columns` (including the frame); `pane_content_x`, `pane_content_y`, `pane_content_rows`, `pane_content_columns` (excluding it); `cursor_coordinates_in_pane: Option<(usize, usize)>` |
 | Spawn | `terminal_command: Option<String>` (a command pane's launch command, not its live foreground command), `plugin_url: Option<String>` |
 | Per-client chrome | `index_in_pane_group: BTreeMap<ClientId, usize>`, `default_fg`, `default_bg` (color strings) |
 
-`PaneInfo` carries no pid, cwd, or live command; those come from the `get_pane_*` commands or the `CwdChanged` and `CommandChanged` events. `is_held` means a command pane waits at the `Press ENTER to run` banner, which is how a resurrected pane looks. `is_focused` is a projected mark with no uniqueness guarantee: a session with one listed client has reported several `is_focused: true` terminal panes in one tab after SSH reconnect churn (observed on 0.44.3). The `(client_id, pane_id)` pairs from `list_clients()` are the per-client focus record, and they include plugin panes.
+`PaneInfo` carries no pid, cwd, or live command. Read those through the `get_pane_*` commands or the `CwdChanged` and `CommandChanged` events. `is_held` means a command pane waits for input before its first run or after exit. Check `exited` to distinguish these states ([`TerminalPane::exited`](https://github.com/zellij-org/zellij/blob/v0.45.1/zellij-server/src/panes/terminal_pane.rs#L1182-L1190)). `is_focused` is a projected mark with no uniqueness guarantee: a session with one listed client has reported several `is_focused: true` terminal panes in one tab after SSH reconnect churn (observed on 0.44.3). The `(client_id, pane_id)` pairs from `list_clients()` are the per-client focus record, and they include plugin panes.
 
 | Type | Fields (abridged) |
 | --- | --- |
@@ -214,7 +220,7 @@ Integer widths differ across tab and pane ids: `TabInfo.tab_id` is `usize`, `clo
 
 ### Permissions
 
-`PermissionType` has 17 variants (`zellij-utils/src/plugin_api/plugin_permission.proto`). The website's permissions page lists 14 and omits `WebAccess`, `ReadCliPipes`, and `MessageAndLaunchOtherPlugins`; docs.rs lists all 17.
+`PermissionType` has 17 variants ([`plugin_permission.proto`](https://github.com/zellij-org/zellij/blob/v0.45.1/zellij-utils/src/plugin_api/plugin_permission.proto)). The website's permissions page lists 14 and omits `WebAccess`, `ReadCliPipes`, and `MessageAndLaunchOtherPlugins`. The pinned docs.rs reference lists all 17.
 
 | Permission | Grants |
 | --- | --- |
@@ -236,10 +242,10 @@ Integer widths differ across tab and pane ids: `TabInfo.tab_id` is `usize`, `clo
 | `WriteToClipboard` | Writing to the clipboard |
 | `ReadSessionEnvironmentVariables` | Environment variables present at session creation |
 
-`request_permission(&[...])` raises one floating prompt for the whole batch, and the answer arrives as `PermissionRequestResult`. Zellij caches grants in `<cache-dir>/zellij/permissions.kdl` (`ZELLIJ_PLUGIN_PERMISSIONS_CACHE` in `zellij-utils/src/consts.rs`), keyed on the exact plugin location string, so two spellings of one path are two plugins. The file holds one node per plugin location with one child node per granted permission:
+`request_permission(&[...])` raises one floating prompt for the whole batch, and the answer arrives as `PermissionRequestResult`. Zellij caches grants in `<zellij-cache-dir>/permissions.kdl` ([`ZELLIJ_PLUGIN_PERMISSIONS_CACHE`](https://github.com/zellij-org/zellij/blob/v0.45.1/zellij-utils/src/consts.rs#L92-L108)), keyed on the exact plugin location string, so two spellings of one path are two plugins. The file holds one node per plugin location with one child node per granted permission:
 
 ```kdl
-"/home/user/.local/share/rimz/plugins/rimz-presence-zellij.wasm" {
+"/home/user/.local/share/zellij/plugins/session-monitor.wasm" {
     ReadApplicationState
     RunCommands
     Reconfigure
@@ -247,7 +253,7 @@ Integer widths differ across tab and pane ids: `TabInfo.tab_id` is `usize`, `clo
 }
 ```
 
-The cache file is documented only in source. A user revokes grants through the Zellij plugin manager.
+`<zellij-cache-dir>` is Zellij's platform-specific cache directory, resolved through `ProjectDirs`. The cache file is documented only in source. A user revokes grants through the Zellij plugin manager.
 
 ### Workers
 
@@ -292,11 +298,11 @@ Plugin keybind nodes parse to one variant, `Action::KeybindPipe` in `zellij-util
 | `MessagePlugin "<url>" { ... }` | URL destination, child configuration, optional `cwd`; `launch_new` and `skip_cache` default to `false` unless child nodes set them |
 | `MessagePluginId <id> { ... }` | `plugin_id` only; URL, configuration, and cwd stay unset, and `launch_new` and `skip_cache` are always `false` |
 
-On 0.44.x a plugin keybind that dispatches `KeybindPipe` can freeze the UI for about a second before the action completes ([zellij #4635](https://github.com/zellij-org/zellij/issues/4635)).
+A 0.44.x report describes a one-second UI freeze when a keybind dispatches `KeybindPipe` ([zellij #4635](https://github.com/zellij-org/zellij/issues/4635)). This refresh did not reproduce that report on 0.45.1.
 
 ## CLI surface
 
-Flags below are from the 0.45.1 binary's `--help` and `zellij-utils/src/cli.rs`. Every `--pane-id` accepts `terminal_<n>`, `plugin_<n>`, or a bare number meaning a terminal.
+Flags below follow the [0.45.1 CLI definitions](https://github.com/zellij-org/zellij/blob/v0.45.1/zellij-utils/src/cli.rs). Every `--pane-id` accepts `terminal_<n>`, `plugin_<n>`, or a bare number meaning a terminal.
 
 ### Top level
 
@@ -337,10 +343,10 @@ zellij attach [OPTIONS] [SESSION_NAME] [-- <INITIAL_COMMAND>...] [options ...]
       --index <n>            pick a session by creation-order index
       --close-on-exit        close the initial command's pane when the command exits
       --start-suspended      hold the initial command until ENTER
-  remote and web auth: -t/--token, -r/--remember (4-week re-auth), --forget (delete the saved session first), --ca-cert <pem>, --insecure
+  remote and web auth: -t/--token, -r/--remember (4-week re-auth), --forget (delete the saved remote authentication token first), --ca-cert <pem>, --insecure
 ```
 
-`attach` accepts a trailing `options` subcommand, `zellij attach <session> options --<flag> <value> ...`, which layers option flags onto that client's runtime configuration; the merge rule is in [Command-line options](#command-line-options). `attach` is also the remote client for sessions served by `zellij web`, hence the token and TLS flags.
+`attach` accepts a trailing `options` subcommand, `zellij attach <session> options --<flag> <value> ...`, which layers option flags onto that client's runtime configuration; the merge rule is in [Command-line options](#command-line-options). `attach` is also the remote client for sessions served by `zellij web`, hence the token and TLS flags. For remote URLs, [`--forget`](https://github.com/zellij-org/zellij/blob/v0.45.1/zellij-client/src/remote_attach/mod.rs#L44-L50) deletes the saved authentication token for that server. It does not remove local resurrection data. The CLI help calls this "Delete saved session before connecting", which obscures the token-only scope.
 
 An initial command after `--` runs in the first pane only when `attach` creates the session (`initial_panes_from_cli` in `zellij-utils/src/input/actions.rs`); it becomes a command pane that holds on exit unless `--close-on-exit` is set. With a remote session URL, an initial command exits with status 2 and `Cannot run an initial command on a remote session.`
 
@@ -372,9 +378,9 @@ An initial command after `--` runs in the first pane only when `attach` creates 
 - `--near-current-pane` keeps that anchor for stacked spawns. Combined with `--direction`, it creates nothing while still printing a pane id (observed on 0.44.3).
 - `--no-focus` (0.45.0 and later) opens the pane without moving any client's focus, placed relative to the pane the command came from or the explicit tab.
 
-With `stacked_pane_list false`, a `--stacked --no-focus` insert sends the new PTY no resize, leaving its kernel winsize at 0x0 until a frame pass or focus. Observed on 0.45.1; the omission is present in 0.45.0 and the 0.46.0 tip: [`TiledPanes::add_pane_to_stack_of_pane_id`](https://github.com/zellij-org/zellij/blob/3cfd57f89af9919b9fd87f1d4ec5dfae8fb20336/zellij-server/src/panes/tiled_panes/mod.rs#L501-L539) sets emulator geometry and inserts the pane without resizing its PTY; [`Tab::add_stacked_pane_to_pane_id`](https://github.com/zellij-org/zellij/blob/3cfd57f89af9919b9fd87f1d4ec5dfae8fb20336/zellij-server/src/tab/mod.rs#L8131-L8163) skips the focus/frame pass when `should_focus` is false.
+With `stacked_pane_list false`, a `--stacked --no-focus` insert sends the new PTY no resize, leaving its kernel winsize at 0x0 until a frame pass or focus. Observed on 0.45.1 and confirmed in its source: [`TiledPanes::add_pane_to_stack_of_pane_id`](https://github.com/zellij-org/zellij/blob/v0.45.1/zellij-server/src/panes/tiled_panes/mod.rs#L476-L509) sets emulator geometry and inserts the pane without resizing its PTY; [`Tab::add_stacked_pane_to_pane_id`](https://github.com/zellij-org/zellij/blob/v0.45.1/zellij-server/src/tab/mod.rs#L7369-L7395) skips the focus/frame pass when `should_focus` is false.
 
-**`list-panes` output.** JSON output is an array of `PaneListEntry` (`zellij-utils/src/data.rs`): every `PaneInfo` field flattened, plus `tab_id`, `tab_position`, `tab_name`, and, for terminal panes, `pane_command` and `pane_cwd`. With `--command`, `--all`, or `--json`, the server fills those last two per terminal pane through `enrich_panes_with_pty_data` in `zellij-server/src/route.rs`, whichever field flags are set:
+**`list-panes` output.** JSON output is an array of [`PaneListEntry`](https://github.com/zellij-org/zellij/blob/v0.45.1/zellij-utils/src/data.rs#L2412-L2422): every `PaneInfo` field flattened, plus `tab_id`, `tab_position`, `tab_name`, and, for terminal panes, `pane_command` and `pane_cwd`. With `--command`, `--all`, or `--json`, the server fills those last two per terminal pane through `enrich_panes_with_pty_data` in `zellij-server/src/route.rs`, whichever field flags are set:
 
 | Field | Value | When absent |
 | --- | --- | --- |
@@ -382,9 +388,9 @@ With `stacked_pane_list false`, a `--stacked --no-focus` insert sends the new PT
 | `pane_cwd` | The root process's cwd | The lookup failed or took more than 100 ms |
 | `terminal_command` | The command a command pane was launched with, unchanged by an in-place re-exec | Not a command pane |
 
-The output has no pid. Each enriched pane costs two sequential round trips to the PTY thread, so a JSON listing of a large session takes time in proportion to its terminal pane count.
+Missing `pane_command` and `pane_cwd` keys are omitted, rather than emitted as `null`. The output has no pid. Each enriched pane costs two sequential round trips to the PTY thread, so a JSON listing of a large session takes time in proportion to its terminal pane count.
 
-`pane_content_rows` and `pane_content_columns` follow the pane's applied frame offsets ([`pane_info_for_pane`](https://github.com/zellij-org/zellij/blob/3cfd57f89af9919b9fd87f1d4ec5dfae8fb20336/zellij-server/src/tab/mod.rs#L8927-L8940)). They equal the outer rectangle for a tab's sole framed pane, which renders no frame, and for a stacked `--no-focus` newcomer before a frame pass reaches it. Until that frame pass the client draws the pane over its whole outer rectangle, with no title line or frame of its own, so the reported content size is the drawable size; the first focus shrinks the PTY by one row (titles or no frames) or by two rows and two columns (full frames) through an ordinary resize (observed on 0.45.1). `borderless=true` siblings do not lift the framed-pane count. Measuring frame offsets therefore needs two framed panes in the tab and a sized client; content geometry alone cannot distinguish titles from no frames for an expanded stack member.
+`pane_content_rows` and `pane_content_columns` follow the pane's applied frame offsets ([`pane_info_for_pane`](https://github.com/zellij-org/zellij/blob/v0.45.1/zellij-server/src/tab/mod.rs#L8090-L8103)). A tab's sole framed pane renders without a frame, so its content rectangle equals its outer rectangle. A stacked `--no-focus` newcomer reports the same equality before its first frame pass. Until that pass, the client draws across the outer rectangle. First focus reduces the PTY height by one row with titles or no frames. Full frames reduce height and width by two cells (observed on 0.45.1). `borderless=true` siblings do not lift the framed-pane count. Measuring frame offsets therefore needs two framed panes in the tab and a sized client; content geometry alone cannot distinguish titles from no frames for an expanded stack member.
 
 **Blocking panes.** `--blocking` waits for the command to exit and its pane to close; `--block-until-exit` waits for any exit; `--block-until-exit-success` and `--block-until-exit-failure` return on that status or when the pane closes. `new-pane` and `zellij run` take all four, and `new-tab` takes the three `--block-until-exit` forms. The exit code reaches the caller, so `zellij action new-pane --block-until-exit-success -- cargo test && next-step` chains.
 
@@ -484,7 +490,9 @@ Top-level KDL options are written `option_name value`. `zellij options --help` e
 | `client_async_worker_tasks` | `4`; `0` means the physical core count | Async workers per active client; used by web clients |
 | `nested_session_handling` | `ask`, `fullscreen`, `descend`, `never` | Policy when a Zellij client runs inside a Zellij pane |
 
-Frame style resolves as follows: `pane_frames false` gives none; otherwise `pane_frame_style full` gives full, and anything else gives titles ([`PaneFrameStyle::from_options`](https://github.com/zellij-org/zellij/blob/3cfd57f89af9919b9fd87f1d4ec5dfae8fb20336/zellij-utils/src/input/options.rs#L93-L100)). The live style is exposed to pane plugins through `ModeInfo::pane_frame_style`, not through a `zellij action` query. `set-pane-frame-style` re-applies frames and resizes every tiled PTY in every tab even when the requested style is unchanged ([`ScreenInstruction::SetPaneFrameStyle`](https://github.com/zellij-org/zellij/blob/3cfd57f89af9919b9fd87f1d4ec5dfae8fb20336/zellij-server/src/screen.rs#L11157-L11164)).
+Frame style resolves as follows: `pane_frames false` gives none; otherwise `pane_frame_style full` gives full, and anything else gives titles ([`PaneFrameStyle::from_options`](https://github.com/zellij-org/zellij/blob/v0.45.1/zellij-utils/src/input/options.rs#L93-L100)). The live style is exposed to pane plugins through `ModeInfo::pane_frame_style`, not through a `zellij action` query. `set-pane-frame-style` re-applies frames and resizes every tiled PTY in every tab even when the requested style is unchanged ([`ScreenInstruction::SetPaneFrameStyle`](https://github.com/zellij-org/zellij/blob/v0.45.1/zellij-server/src/screen.rs#L9712-L9720)).
+
+Set one pane's frame independently with `--borderless true` on `new-pane`, `run`, `edit`, or `plugin`. Existing panes accept `action set-pane-borderless`. Layout panes accept `borderless=true`.
 
 The file also takes `keybinds`, `themes`, `plugins` (aliases), and `load_plugins` blocks. `load_plugins { "file:/path.wasm" }` starts background plugins when a session starts. It is a configuration-file block only; layouts have no `load_plugins` (observed on 0.44.3).
 
@@ -502,7 +510,7 @@ Options from the command line merge into the configuration at two points, with d
 
 [`Options::merge_from_cli`](https://github.com/zellij-org/zellij/blob/v0.45.1/zellij-utils/src/input/options.rs#L674-L745) XORs these nine booleans when both operands are present: `simplified_ui`, `mouse_mode`, `pane_frames`, `auto_layout`, `mirror_session`, `session_serialization`, `serialize_pane_viewport`, `focus_follows_mouse`, `mouse_click_through`. On the attach path, [`Setup::from_cli_args`](https://github.com/zellij-org/zellij/blob/v0.45.1/zellij-utils/src/setup.rs#L302-L329) has already applied the flags through plain `merge` before [`start_client`](https://github.com/zellij-org/zellij/blob/v0.45.1/src/commands.rs#L748-L753) applies them again through `merge_from_cli`. Each explicit flag is therefore XORed against itself: either `true` or `false` becomes `false`, regardless of `config.kdl`. Omitting the flag preserves the configured value. Every other option, including `support_kitty_keyboard_protocol`, `disable_session_metadata`, and `stacked_pane_list`, takes the flag value. The XOR arm in [`setup.rs::merge_attach_command_options`](https://github.com/zellij-org/zellij/blob/v0.45.1/zellij-utils/src/setup.rs#L674-L695) is unreachable from the real CLI: top-level `Options` and `Sessions::Attach` are mutually exclusive commands, so attach always takes the direct-adoption arm there.
 
-A detached birth drops the `attach` options entirely. `zellij attach --create-background <s> options ...` builds the new server's `CliAssets` in `start_server_detached` (`zellij-client/src/lib.rs`) from `CliArgs::options()`, which reads only a top-level `zellij options` command. Options a session fixes when its first client initializes must travel in the birth layout instead.
+Detached creation drops the `attach` options entirely. `zellij attach --create-background <s> options ...` builds the new server's `CliAssets` in `start_server_detached` (`zellij-client/src/lib.rs`) from `CliArgs::options()`, which reads only a top-level `zellij options` command. For detached creation, place session options in the layout.
 
 ### Runtime reconfigure
 
@@ -520,8 +528,6 @@ On the server, `determine_mouse_action` in `zellij-server/src/tab/mouse_handler.
 | any other combination | | The press only focuses the pane; a second click reaches the application |
 
 `advanced_mouse_actions` gates the hover, grouping, and resize branches and has no effect on click-through.
-
-A single pane can drop its frame without changing global `pane_frames`: `--borderless true` on `new-pane`, `run`, `edit`, or `plugin`, `action set-pane-borderless`, or `borderless=true` on a layout `pane` node.
 
 ### Kitty graphics protocol
 
@@ -554,14 +560,14 @@ An alias name works anywhere a plugin URL does: layouts, the CLI, keybinds, and 
 
 A layout's root node is `layout`, with children `pane`, `tab`, `pane_template`, `tab_template`, `default_tab_template`, `new_tab_template`, `floating_panes`, swap layout nodes, and a global `cwd`. A layout applies when a session is born, and afterwards only through `new-tab --layout`, `override-layout`, or a plugin's layout commands. `zellij setup --dump-layout default` prints the built-in layout.
 
-**`pane`** is a leaf or a container. Its attributes are `split_direction "vertical"|"horizontal"` (containers; default horizontal), `size "30%"` or a fixed integer, `borderless`, `focus`, `name`, `cwd`, `command` with `args "a" "b"` (args only in child braces), `close_on_exit`, `start_suspended`, `edit "file"`, `plugin { location "zellij:..." }` (location only in child braces), `stacked` and `expanded`, and `default_fg` and `default_bg`. Upstream docs call fixed sizes unstable. A detached session is created at a placeholder 50 by 50 cell size until a client connects (`start_server_detached`), and a fixed pane size that does not fit the birth geometry fails a `--create-background` birth (observed on 0.44.3).
+**`pane`** is a leaf or a container. Its attributes are `split_direction "vertical"|"horizontal"` (containers; default horizontal), `size "30%"` or a fixed integer, `borderless`, `focus`, `name`, `cwd`, `command` with `args "a" "b"` (args only in child braces), `close_on_exit`, `start_suspended`, `edit "file"`, `plugin { location "zellij:..." }` (location only in child braces), `stacked` and `expanded`, and `default_fg` and `default_bg`. Upstream docs call fixed sizes unstable. Detached sessions start with [placeholder geometry](#events). A fixed pane size that exceeds that geometry fails `attach --create-background` (observed on 0.44.3).
 
 **`tab`** takes `name`, `focus` (on one tab), `split_direction`, `cwd`, `hide_floating_panes`, and child panes.
 
-**Templates.** `pane_template name="..."` and `tab_template name="..."` mark their insertion point with a `children` node, and a consumer invokes a template by using its name as a node. A template with a `command` accepts `args` and `cwd` from the consumer. `default_tab_template` shapes the initial tabs and every later tab, and replaces Zellij's built-in template, so the tab bar and status bar disappear unless the template adds them. `new_tab_template` shapes only tabs opened after birth. Two constructs fail quietly (observed on 0.44.3):
+**Templates.** `pane_template name="..."` and `tab_template name="..."` mark their insertion point with a `children` node, and a consumer invokes a template by using its name as a node. A template with a `command` accepts `args` and `cwd` from the consumer. `default_tab_template` shapes the initial tabs and every later tab, and replaces Zellij's built-in template, so the tab bar and status bar disappear unless the template adds them. `new_tab_template` shapes only tabs opened after session creation. Two constructs fail quietly (observed on 0.44.3):
 
 - A `children` node nested inside a split is never filled with a default terminal; the terminal pane has to be written out.
-- A layout with a `new_tab_template` and no `tab` node kills a `--create-background` birth.
+- A layout with a `new_tab_template` and no `tab` node kills a session created with `--create-background`.
 
 **`floating_panes`** holds child panes with `x`, `y`, `width`, and `height`, each fixed or a percentage. A tab's or the global `cwd` applies to floating panes as it does to tiled ones.
 
@@ -585,9 +591,9 @@ A layout's root node is `layout`, with children `pane`, `tab`, `pane_template`, 
 
 ## Session serialization and resurrection
 
-With `session_serialization` on (the default), each session serializes to the cache folder, `~/.cache/zellij/<contract_version>/session_info/<session>/`, as a KDL layout in the same dialect `--layout` reads, so it can be shared across machines. The serializer writes the layout plus each pane's discovered command (`$RESURRECT_COMMAND`, which `post_command_discovery_hook` rewrites: its STDOUT replaces the discovered command), and optionally the viewport (`serialize_pane_viewport`) and scrollback (`scrollback_lines_to_serialize`).
+With `session_serialization` on (the default), Zellij saves a KDL layout that `--layout` can read. The path is `<zellij-cache-dir>/contract_version_<n>/session_info/<session>/` ([cache paths](https://github.com/zellij-org/zellij/blob/v0.45.1/zellij-utils/src/consts.rs#L89-L108), [cache directory](#permissions)). The serializer writes the layout plus each pane's discovered command (`$RESURRECT_COMMAND`, which `post_command_discovery_hook` rewrites: its STDOUT replaces the discovered command), and optionally the viewport (`serialize_pane_viewport`) and scrollback (`scrollback_lines_to_serialize`).
 
-Serialization and the disk write are two timers in `zellij-server/src/background_jobs.rs`:
+Serialization and the disk write use separate [timers](https://github.com/zellij-org/zellij/blob/v0.45.1/zellij-server/src/background_jobs.rs#L122-L124):
 
 | Timer | Interval | Work | Switched off by |
 | --- | --- | --- | --- |
@@ -596,6 +602,6 @@ Serialization and the disk write are two timers in `zellij-server/src/background
 
 The website's resurrection page says sessions serialize every second; the source default is 60 seconds. Because the metadata timer is what writes the serialized layout to disk, `disable_session_metadata true` with serialization on writes the layout to disk only on explicit saves: `action save-session` and the plugin `save_session()` serialize and write immediately. Neither option stops the one-second activity probe that emits `CwdChanged` and `CommandChanged` (see [Events](#events)).
 
-A dead serialized session lists as `EXITED - attach to resurrect`. Attaching recreates its layout with every command pane held at a `Press ENTER to run...` banner (`PaneInfo.is_held`), and `attach -f/--force-run-commands` runs them at once instead. Removal works at three levels: `kill-session` keeps the serialized state, `delete-session` and `delete-all-sessions` remove it, and `attach --forget` removes it before connecting. `session_serialization false` stops the serializer, so a session that dies leaves nothing to resurrect.
+A dead serialized session lists as `EXITED - attach to resurrect`. Attaching recreates its layout with every command pane held at a `Press ENTER to run...` banner (`PaneInfo.is_held`), and `attach -f/--force-run-commands` runs them at once instead. `kill-session` keeps the serialized state. `delete-session` and `delete-all-sessions` remove it. `session_serialization false` stops [automatic serialization](https://github.com/zellij-org/zellij/blob/v0.45.1/zellij-server/src/screen.rs#L11405-L11415). It does not remove existing cache files or disable [explicit saves](https://github.com/zellij-org/zellij/blob/v0.45.1/zellij-server/src/pty.rs#L795-L816).
 
 `attach` reads the target session's resurrection layout before it checks whether the session is live (`resurrection_layout(&s)` ahead of the live and exists match in `src/commands.rs`), and exits with status 2 when that parse fails. A corrupt serialized layout therefore blocks attaching to a healthy live session until the cache entry is removed.
