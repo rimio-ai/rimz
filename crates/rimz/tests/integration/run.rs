@@ -5416,7 +5416,7 @@ fn wait_multi_blocks_until_all_terminal() {
     );
     assert_eq!(
         String::from_utf8_lossy(&out.stdout),
-        "--- swift-otter ---\n\n--- quiet-fox ---\n\n"
+        "--- swift-otter (completed) ---\n\n--- quiet-fox (completed) ---\n\n"
     );
 }
 
@@ -5479,6 +5479,246 @@ fn wait_multi_json_emits_labeled_map() {
 }
 
 #[test]
+fn wait_preserves_typed_references_and_deduplicates() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let store = env.store();
+    let mut run = create_running_named_run(&env, &store, "swift-otter");
+    write_run_status(&store, &mut run, RunStatus::Completed);
+    let out = env
+        .rimz()
+        .args([
+            "agents",
+            "wait",
+            run.run_id.as_str(),
+            "swift-otter",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+    let result: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(result[run.run_id.as_str()]["name"], "swift-otter");
+    assert_eq!(result["swift-otter"]["status"], "completed");
+    let out = env
+        .rimz()
+        .args([
+            "agents",
+            "wait",
+            run.run_id.as_str(),
+            run.run_id.as_str(),
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    let result: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(
+        result["run_id"],
+        run.run_id.as_str(),
+        "duplicate refs become a single wait"
+    );
+}
+
+#[test]
+fn wait_agent_timeout_keeps_typed_address_name_and_reason() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let store = env.store();
+    let workspace = env.resolve_workspace(&env.project_root);
+    let mut registered = AgentLifecycleObservation::new(
+        Some(AgentSessionId::from("sess-never-started")),
+        LifecycleSignal::Registered,
+    );
+    registered.agent_name = Some("quiet-fox".to_owned());
+    registered.worktree_path = Some(env.project_root.display().to_string());
+    store
+        .append_event(&EventEnvelope::agent_lifecycle(
+            env.workspace_id.clone(),
+            &workspace.session_name,
+            "codex",
+            "SessionStart",
+            &registered,
+        ))
+        .unwrap();
+    let out = env
+        .rimz()
+        .args(["agents", "wait", "@codex#main", "--timeout", "1s", "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(124), "{out:?}");
+    let result: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(result["@codex#main"]["name"], "quiet-fox");
+    assert_eq!(result["@codex#main"]["reason"], "no turn started");
+    let err = String::from_utf8(out.stderr).unwrap();
+    assert_eq!(err.matches("no turn started").count(), 1, "{err}");
+}
+
+#[test]
+fn wait_settled_agent_keeps_typed_address_in_json_and_headers() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let store = env.store();
+    register_running_wait_agent(&env, &store, "quiet-fox", "sess-settled");
+    let workspace = env.resolve_workspace(&env.project_root);
+    store
+        .append_event(&EventEnvelope::agent_lifecycle(
+            env.workspace_id.clone(),
+            &workspace.session_name,
+            "codex",
+            "Stop",
+            &AgentLifecycleObservation::new(
+                Some(AgentSessionId::from("sess-settled")),
+                LifecycleSignal::TurnEnded {
+                    errored: false,
+                    parked_on_background: false,
+                    turn_id: None,
+                },
+            ),
+        ))
+        .unwrap();
+    for json in [true, false] {
+        let mut command = env.rimz();
+        command.args([
+            "agents",
+            "wait",
+            "@codex#main",
+            "quiet-fox",
+            "--timeout",
+            "0s",
+        ]);
+        if json {
+            command.arg("--json");
+        }
+        let out = command.output().unwrap();
+        assert!(out.status.success(), "{out:?}");
+        if json {
+            let result: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+            assert_eq!(result["@codex#main"]["name"], "quiet-fox");
+            assert_eq!(result["quiet-fox"]["status"], "completed");
+        } else {
+            let text = String::from_utf8(out.stdout).unwrap();
+            assert!(text.contains("--- @codex#main (completed) ---"), "{text}");
+        }
+    }
+}
+
+#[test]
+fn wait_subagent_keeps_typed_name() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let store = env.store();
+    let (_, kind, parent) = create_finished_subagent(&env, &store);
+    let out = env
+        .rimz()
+        .args(["subagents", "wait", "@quiet-fox", "--any", "--json"])
+        .env(rimz::harness::launch::ENV_AGENT_KIND, kind.as_str())
+        .env(rimz::harness::launch::ENV_AGENT_ID, parent.as_str())
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+    let result: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(result["@quiet-fox"]["name"], "quiet-fox");
+}
+
+#[test]
+fn wait_stream_run_reports_its_agents_blocker() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let store = env.store();
+    let workspace = env.resolve_workspace(&env.project_root);
+    let mut registered = AgentLifecycleObservation::new(
+        Some(AgentSessionId::from("sess-stream-wait")),
+        LifecycleSignal::Registered,
+    );
+    registered.agent_name = Some("quiet-fox".to_owned());
+    registered.worktree_path = Some(env.project_root.display().to_string());
+    store
+        .append_event(&EventEnvelope::agent_lifecycle(
+            env.workspace_id.clone(),
+            &workspace.session_name,
+            "codex",
+            "SessionStart",
+            &registered,
+        ))
+        .unwrap();
+    let record = create_running_named_run(&env, &store, "quiet-fox");
+    let out = env
+        .rimz()
+        .args([
+            "agents",
+            "wait",
+            record.run_id.as_str(),
+            "--stream",
+            "--json",
+            "--timeout",
+            "1s",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(124), "{out:?}");
+    let err = String::from_utf8(out.stderr).unwrap();
+    assert_eq!(err.matches("waiting on ").count(), 1, "{err}");
+    assert!(err.contains("timed out: no turn started"), "{err}");
+}
+
+#[test]
+fn wait_run_ignores_reason_read_error() {
+    assert_run_wait_ignores_reason_read_error(false);
+}
+
+#[test]
+fn wait_stream_run_ignores_reason_read_error() {
+    assert_run_wait_ignores_reason_read_error(true);
+}
+
+fn assert_run_wait_ignores_reason_read_error(stream: bool) {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let store = env.store();
+    let mut record = create_running_named_run(&env, &store, "quiet-fox");
+    std::fs::create_dir_all(&store.paths().messages_dir).unwrap();
+    std::fs::write(
+        store.paths().messages_dir.join("messages.jsonl"),
+        "invalid\n",
+    )
+    .unwrap();
+    assert!(store.list_messages().is_err());
+    for status in [RunStatus::Running, RunStatus::Completed] {
+        write_run_status(&store, &mut record, status);
+        let mut command = env.rimz();
+        command.args([
+            "agents",
+            "wait",
+            record.run_id.as_str(),
+            "--json",
+            "--timeout",
+            "1s",
+        ]);
+        if stream {
+            command.arg("--stream");
+        }
+        let output = command.output().unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(if status.is_terminal() { 0 } else { 124 }),
+            "{output:?}"
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!stderr.contains("reading agent snapshot"), "{stderr}");
+        assert!(!stderr.contains("timed out:"), "{stderr}");
+        if !stream {
+            let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+            if status.is_terminal() {
+                assert_eq!(result["status"], "completed");
+            } else {
+                assert_eq!(result[record.run_id.as_str()]["status"], "timed_out");
+                assert!(result[record.run_id.as_str()].get("reason").is_none());
+            }
+        }
+    }
+}
+
+#[test]
 fn wait_multi_json_reports_failed_entry_and_exit() {
     let env = Env::new();
     env.record(&env.project_root);
@@ -5526,11 +5766,11 @@ fn wait_any_prints_first_finisher_and_leaves_rest_running() {
     assert!(out.status.success());
     assert_eq!(
         String::from_utf8_lossy(&out.stdout),
-        "--- quiet-fox ---\n\n"
+        "--- quiet-fox (completed) ---\n\n"
     );
     assert_eq!(
         String::from_utf8_lossy(&out.stderr),
-        "--- quiet-fox ---\nrimz: run completed but no final assistant message was extracted\n"
+        "--- quiet-fox (completed) ---\nrimz: run completed but no final assistant message was extracted\n"
     );
     let other = rimz::harness::run::load(store.paths(), &otter.run_id).expect("load other run");
     assert_eq!(other.status, RunStatus::Running);
@@ -5616,11 +5856,11 @@ fn wait_any_same_poll_selects_first_input_reference() {
     assert!(out.status.success(), "first input exit code must win");
     assert_eq!(
         String::from_utf8_lossy(&out.stdout),
-        "--- swift-otter ---\n\n"
+        "--- swift-otter (completed) ---\n\n"
     );
     assert_eq!(
         String::from_utf8_lossy(&out.stderr),
-        "--- swift-otter ---\nrimz: run completed but no final assistant message was extracted\n"
+        "--- swift-otter (completed) ---\nrimz: run completed but no final assistant message was extracted\n"
     );
 }
 

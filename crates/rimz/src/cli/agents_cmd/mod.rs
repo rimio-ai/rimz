@@ -871,6 +871,10 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
             from_start,
             json,
         }) => {
+            let references = references
+                .into_iter()
+                .map(|reference| (reference.clone(), reference))
+                .collect();
             return wait_agent(references, any, timeout, stream, from_start, json, globals);
         }
         Some(AgentsSubcmd::Stop {

@@ -508,7 +508,39 @@ pub struct TurnWaitView {
     now: Timestamp,
 }
 
+/// Why a turn has not completed, including wakes not yet reflected on its card.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TurnWaitReason {
+    WaitingOnPerson(Option<crate::agents::OpenAsk>),
+    Sleeping(Vec<crate::agents::PendingWait>),
+    WakeInFlight,
+    Hibernating,
+    Paused,
+    NoTurnStarted,
+    Running,
+}
+
 impl TurnWaitView {
+    /// The blocker from the same wake-aware view used to decide completion.
+    pub fn reason(&self, agent: &AgentState) -> Option<TurnWaitReason> {
+        if self.completion(agent) != TurnCompletion::Open {
+            return None;
+        }
+        Some(match self.status(agent) {
+            AgentStatus::Waiting => {
+                TurnWaitReason::WaitingOnPerson(agent.actionable_asks().next().map(|(ask, _)| ask))
+            }
+            AgentStatus::Sleeping if self.wake_in_flight(agent, false) => {
+                TurnWaitReason::WakeInFlight
+            }
+            AgentStatus::Sleeping => TurnWaitReason::Sleeping(agent.pending_waits.clone()),
+            AgentStatus::Hibernating => TurnWaitReason::Hibernating,
+            AgentStatus::Paused => TurnWaitReason::Paused,
+            AgentStatus::Idle | AgentStatus::Success => TurnWaitReason::NoTurnStarted,
+            _ => TurnWaitReason::Running,
+        })
+    }
+
     pub fn load(store: &Store) -> Result<Self, crate::store::StoreErr> {
         let waits = crate::harness::schedule::pending::SessionWaits::load(store.paths());
         let messages = store.list_messages()?;

@@ -41,6 +41,7 @@ pub(crate) fn stream_attached_run(
     from_start: bool,
     timeout: Option<Duration>,
     sink: &mut StreamSink<'_>,
+    mut observe: impl FnMut(&RunRecord) -> Result<()>,
 ) -> Result<Option<RunRecord>> {
     let mut cursor = TranscriptCursor::new(from_start);
     let deadline = timeout.map(|duration| Instant::now() + duration);
@@ -51,6 +52,7 @@ pub(crate) fn stream_attached_run(
             sink.end_record(&record)?;
             return Ok(Some(record));
         }
+        observe(&record)?;
         if reached_deadline(deadline) {
             if sink.is_text() {
                 sink.timeout()?;

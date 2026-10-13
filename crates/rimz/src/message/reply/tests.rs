@@ -147,6 +147,10 @@ fn wake_in_flight_keeps_a_rested_agent_sleeping() {
             let view = view(wake(notice.clone()), status);
             assert_eq!(view.status(&agent), AgentStatus::Sleeping, "{status:?}");
             assert_eq!(view.completion(&agent), TurnCompletion::Open);
+            assert_eq!(view.reason(&agent), Some(TurnWaitReason::WakeInFlight));
+            let mut idle = agent.clone();
+            idle.status = AgentStatus::Idle;
+            assert_eq!(view.reason(&idle), Some(TurnWaitReason::WakeInFlight));
         }
     }
     let delivered = view(wake(HarnessNotice::Wait), MessageStatus::Delivered);
@@ -168,6 +172,34 @@ fn wake_in_flight_keeps_a_rested_agent_sleeping() {
             assert_eq!(report.wake_in_flight(&agent, true), !status.is_terminal());
         }
     }
+}
+
+#[test]
+fn turn_wait_reason_projects_each_open_status() {
+    let workspace = WorkspaceId::from_project_root(std::path::Path::new("/repo"));
+    let view = TurnWaitView {
+        snapshot: SidebarSnapshot::build_with_agents(workspace, vec![], Timestamp::now()),
+        messages: vec![],
+        now: Timestamp::now(),
+    };
+    for (status, expected) in [
+        (AgentStatus::Running, TurnWaitReason::Running),
+        (AgentStatus::Waiting, TurnWaitReason::WaitingOnPerson(None)),
+        (AgentStatus::Sleeping, TurnWaitReason::Sleeping(vec![])),
+        (AgentStatus::Hibernating, TurnWaitReason::Hibernating),
+        (AgentStatus::Paused, TurnWaitReason::Paused),
+        (AgentStatus::Idle, TurnWaitReason::NoTurnStarted),
+        (AgentStatus::Success, TurnWaitReason::NoTurnStarted),
+    ] {
+        let mut agent = crate::testkit::agent_state("claude", "sess-reason", Timestamp::UNIX_EPOCH);
+        agent.status = status;
+        agent.turn_started_at = None;
+        assert_eq!(view.reason(&agent), Some(expected), "{status:?}");
+    }
+    let mut agent = crate::testkit::agent_state("claude", "sess-done", Timestamp::UNIX_EPOCH);
+    agent.status = AgentStatus::Success;
+    agent.turn_started_at = Some(Timestamp::UNIX_EPOCH);
+    assert_eq!(view.reason(&agent), None);
 }
 
 #[test]
