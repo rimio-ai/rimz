@@ -287,6 +287,10 @@ pub(super) fn resolve_scope(
                         agent.kind.clone(),
                         agent.agent_id.clone(),
                     )]));
+                    scope.live_focus = Some(FocusTiming {
+                        registered_at: agent.registered_at,
+                        turn_started_at: agent.turn_started_at,
+                    });
                     return Ok(scope);
                 }
                 Err(error) if crate::cli::resolution_missed(&error) => error,

@@ -573,6 +573,10 @@ When the agent's temp directory exists, `show` prints its host path (`tmp:`) and
 
 #### `logs`
 
+Read messages to and from one agent, including `@me` from an agent's own pane. For its live screen instead, use `rimz agents show --capture`.
+
+A live agent with no messages exits 0 and prints `@handle has no messages yet (launched 37s ago, no turn opened)` on stderr. The age uses its recorded launch time, and `no turn opened` disappears once a turn has opened. Without a recorded launch time, it prints only `@handle has no messages yet`. The handle includes its channel when needed. An agent whose recorded entries are all RimZ automation traffic, hidden from this view, reads `@handle shows only RimZ traffic: N entries hidden (--json shows them)` instead.
+
 `rimz agents logs <TARGET>` shows the same view as [`rimz transcript <agent>`](./transcript.md). It resolves live agents first and historical sessions only after a live miss; ambiguity refuses with addresses to retype rather than choosing a session. Like `transcript`, it requires an existing room and refuses outside one with `no room at <root>: run \`rimz start\` there, or pass --root <room>`. Human output hides subagent digests, waits, and `rimz`-authored prompts along with the output of the turns they open; JSON keeps them. Unlike `transcript`, `logs` prints no prior-session note and has no `-w` or `--flat` flag.
 
 | Flag | Effect |

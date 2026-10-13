@@ -461,7 +461,7 @@ enum AgentsSubcmd {
         #[arg(long, requires = "capture")]
         ansi: bool,
     },
-    /// Show an agent's conversation: the same view as `rimz transcript <TARGET>`.
+    /// Show the messages to and from one agent (its live screen: rimz agents show --capture)
     Logs {
         /// Whose conversation: @handle[#channel], a session id, or run_<id>. A bare name is read as @name.
         #[arg(value_name = "TARGET", add = clap_complete::ArgValueCandidates::new(
