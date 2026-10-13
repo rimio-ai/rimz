@@ -21,6 +21,7 @@ mod interaction;
 mod labels;
 mod layout;
 mod odometer;
+mod scroll_ease;
 mod scrollbar;
 mod sections;
 mod theme;
@@ -49,6 +50,7 @@ pub(in crate::sidebar_pane) use self::ui_state::{
 pub(in crate::sidebar_pane) use crate::sidebar_pane::view::BodyFilter;
 use odometer::CLICK_PHASES;
 pub(in crate::sidebar_pane) use odometer::{CostRolls, TallyAnim};
+pub(in crate::sidebar_pane) use scroll_ease::{SCROLL_EASE_FRAME, ScrollEase};
 pub(in crate::sidebar_pane) use scrollbar::ScrollbarFade;
 
 use std::io::{self, Write};

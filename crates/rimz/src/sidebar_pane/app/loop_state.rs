@@ -60,8 +60,8 @@ use super::state::{
     set_rows_unread,
 };
 use super::timing::{
-    FOCUS_RESUME_WATCH_WINDOW, FRAME_MIN_TIMEOUT, animation_frame, duration_millis,
-    next_frame_after, tick_for, wall_clock_phase,
+    FOCUS_RESUME_WATCH_WINDOW, FRAME_MIN_TIMEOUT, animation_frame, duration_millis, frame_clock,
+    next_frame_after, tick_for,
 };
 use super::width_control::WidthController;
 use super::{Result, ServeConfig};
@@ -324,14 +324,15 @@ impl LoopState {
     }
 
     pub(super) fn frame_timing(&self) -> (bool, Duration) {
-        let phase = wall_clock_phase(
+        let clock = frame_clock(
             self.anim_start,
             self.current.theme.display.resolved_refresh_ms(),
         );
         let alert_active = self.alert_active();
         let watched = self.watched();
         let animating =
-            render::animation_interval(&self.current, &self.ui, phase, alert_active).is_some();
+            render::animation_interval(&self.current, &self.ui, clock.phase, alert_active)
+                .is_some();
         let active = !self.self_close.confirming_empty() && watched && (animating || self.dirty);
         let mut timeout = if active {
             self.next_frame
@@ -1143,10 +1144,11 @@ impl LoopState {
             }
             // Carry the live spin phase into the instant paint so a keypress
             // mid-spin never rewinds the animation to a stale frame.
-            self.ui.animation_phase = wall_clock_phase(
+            frame_clock(
                 self.anim_start,
                 self.current.theme.display.resolved_refresh_ms(),
-            );
+            )
+            .stamp(&mut self.ui);
             let alert_active = self.alert_active();
             self.paint
                 .refresh_view(&mut self.ui, &self.current, alert_active);
@@ -1399,10 +1401,11 @@ impl LoopState {
     }
 
     fn paint_now(&mut self, terminal: &mut Terminal<PaneBackend>, now: Instant) -> Result<()> {
-        self.ui.animation_phase = wall_clock_phase(
+        frame_clock(
             self.anim_start,
             self.current.theme.display.resolved_refresh_ms(),
-        );
+        )
+        .stamp(&mut self.ui);
         let alert_active = self.alert_active();
         let animating = render::animation_interval(
             &self.current,
@@ -1740,10 +1743,11 @@ impl LoopState {
     }
 
     fn fold_spend_rolls(&mut self) {
-        self.ui.animation_phase = wall_clock_phase(
+        frame_clock(
             self.anim_start,
             self.current.theme.display.resolved_refresh_ms(),
-        );
+        )
+        .stamp(&mut self.ui);
         // Fold the fresh headline spend into the count-up: a higher figure starts a
         // stepped roll that the next frames paint, a reset or first value snaps,
         // and an unchanged one is a no-op that leaves a climb in flight. The live

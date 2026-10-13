@@ -1,7 +1,8 @@
-//! Wall-clock phase and frame-grid helpers, with receive and focus-resume timing bounds.
+//! Wall-clock frame stamps and frame-grid helpers, with receive and focus-resume timing bounds.
 
 use std::time::{Duration, Instant};
 
+use crate::sidebar_pane::render::UiState;
 use crate::store::snapshot::SidebarSnapshot;
 
 /// Floor for the frame-boundary recv timeout. When the loop is at or past the
@@ -15,12 +16,25 @@ pub(super) const FRAME_MIN_TIMEOUT: Duration = Duration::from_millis(1);
 /// after a quick switch away.
 pub(super) const FOCUS_RESUME_WATCH_WINDOW: Duration = Duration::from_secs(3);
 
-/// The animation frame index for `now`, derived from elapsed wall-clock since
-/// the serve loop's monotonic base. Every redraw path sets the phase from this,
-/// so the spin advances on real time and survives re-fetches and store deltas
-/// without a per-tick counter that a break-and-refetch could reset.
-pub(super) fn wall_clock_phase(start: Instant, refresh_ms: u16) -> u64 {
-    (start.elapsed().as_millis() / u128::from(refresh_ms)) as u64
+pub(super) struct FrameClock {
+    pub(super) phase: u64,
+    elapsed_ms: u64,
+}
+
+impl FrameClock {
+    pub(super) fn stamp(&self, ui: &mut UiState) {
+        ui.animation_phase = self.phase;
+        ui.frame_ms = self.elapsed_ms;
+    }
+}
+
+/// Sample both animation units from the same elapsed time; every redraw stamps them together.
+pub(super) fn frame_clock(start: Instant, refresh_ms: u16) -> FrameClock {
+    let elapsed_ms = duration_millis(start.elapsed());
+    FrameClock {
+        phase: elapsed_ms / u64::from(refresh_ms),
+        elapsed_ms,
+    }
 }
 
 /// Animation tick: how often an animated row advances a spin frame - a running
