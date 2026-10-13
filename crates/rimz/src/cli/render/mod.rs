@@ -145,12 +145,11 @@ fn write_report_with_args(
         None => writeln!(w, "{}", paint(palette::alarm().bold(), "error:"))?,
     }
     for line in lines {
-        writeln!(w, "  {line}")?;
+        write_continuation(w, line)?;
     }
-
     for message in messages {
         for line in message.lines() {
-            writeln!(w, "  {line}")?;
+            write_continuation(w, line)?;
         }
     }
     let miss = error.chain().find_map(|cause| {
@@ -174,6 +173,16 @@ fn write_report_with_args(
         writeln!(w, "  try: {command}")?;
     }
     Ok(())
+}
+
+/// Indent one continuation line of an error under its `error:` head; a blank
+/// line stays empty rather than ending in the indent's trailing spaces.
+fn write_continuation(w: &mut impl Write, line: &str) -> std::io::Result<()> {
+    if line.is_empty() {
+        writeln!(w)
+    } else {
+        writeln!(w, "  {line}")
+    }
 }
 
 fn corrected_command(

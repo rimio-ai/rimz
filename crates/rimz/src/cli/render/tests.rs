@@ -803,3 +803,10 @@ fn window_cell_gates_pace_at_the_floor_and_omits_blank_states() {
         None
     );
 }
+
+#[test]
+fn report_leaves_blank_continuation_lines_without_trailing_spaces() {
+    let error = anyhow::anyhow!("head\n\nbody\n").context("outer\n\ntail");
+    let output = strip(|w| write_report_with_args(w, &error, &["rimz".into()]));
+    assert_eq!(output, "error: outer\n\n  tail\n  head\n\n  body\n");
+}
