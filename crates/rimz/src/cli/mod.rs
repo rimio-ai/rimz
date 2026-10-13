@@ -739,7 +739,7 @@ enum Subcmd {
     Update(update::UpdateArgs),
     /// Create, enter, merge, sweep, and remove RimZ-owned git worktrees.
     Worktree(worktree::WorktreeArgs),
-    /// Launch agent tabs, optionally in RimZ-owned worktrees.
+    /// See and drive the room's agents; launch new ones.
     Agents(Box<agents_cmd::AgentsArgs>),
     /// Launch and drive supervised child agents.
     Subagents(Box<subagents::SubagentsArgs>),

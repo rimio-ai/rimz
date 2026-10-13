@@ -4102,6 +4102,14 @@ fn agents_scope_positional_refuses_with_the_lane_list_and_address_hint_is_action
         .output()
         .expect("bare agents in a channel");
     assert_usage_refusal(&bare, "rimz agents list");
+    let orientation = String::from_utf8_lossy(&bare.stderr);
+    for line in [
+        "rimz agents <SPEC> [PROMPT]",
+        "See:     list  show  logs  history  top  attribution",
+        "Define:  validate  register  check",
+    ] {
+        assert!(orientation.contains(line), "{line}: {orientation}");
+    }
     let scoped = run_agents_json_command_in(
         &env,
         &workspace.session_name,

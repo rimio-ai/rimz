@@ -58,6 +58,36 @@ pub(crate) const GROUPS: [(&str, &[&str]); 4] = [
     ),
 ];
 
+/// `rimz agents` verbs by what they are for, as the orientation shows them.
+pub(crate) const AGENTS_GROUPS: [(&str, &[&str]); 4] = [
+    (
+        "See",
+        &["list", "show", "logs", "history", "top", "attribution"],
+    ),
+    (
+        "Drive",
+        &[
+            "focus", "wait", "stop", "restart", "compact", "refresh", "fork", "budget",
+        ],
+    ),
+    ("Start", &["launch", "resume", "profiles", "explain"]),
+    ("Define", &["validate", "register", "check"]),
+];
+
+/// What `rimz agents` does, shown by its `--help` and under its no-verb refusal.
+pub(crate) fn agents_orientation() -> String {
+    let mut lines = vec![
+        "  rimz agents list ['#lane']     agent cards (this lane; --all for the room)".to_owned(),
+        "  rimz agents <SPEC> [PROMPT]    launch (same as `rimz agents launch`)".to_owned(),
+        String::new(),
+    ];
+    lines.extend(
+        AGENTS_GROUPS
+            .map(|(heading, verbs)| format!("{:<9}{}", format!("{heading}:"), verbs.join("  "))),
+    );
+    lines.join("\n")
+}
+
 pub(crate) fn customize(cmd: Command) -> Command {
     let commands = visible_commands(&cmd);
     let grouped = grouped_commands(&commands);
@@ -72,7 +102,22 @@ pub(crate) fn customize(cmd: Command) -> Command {
     cmd.help_template(template)
         .after_help("Run `rimz <command> --help` for full flags and defaults.")
         .override_usage("rimz [OPTIONS] [COMMAND]")
+        .mut_subcommand("agents", customize_agents)
         .mut_subcommands(|subcmd| subcmd.hide(true))
+}
+
+/// `rimz agents --help` is the orientation; the launch flags live one
+/// command away, under `rimz agents launch --help`.
+fn customize_agents(cmd: Command) -> Command {
+    let orientation = agents_orientation();
+    assert_no_braces(&orientation);
+    cmd.help_template(format!(
+        "{{about-with-newline}}\n{orientation}{{after-help}}"
+    ))
+    .after_help(
+        "Launch flags: rimz agents launch --help\n\
+         One verb:     rimz agents <verb> --help",
+    )
 }
 
 fn visible_commands(cmd: &Command) -> BTreeMap<&str, &Command> {
@@ -305,6 +350,54 @@ mod tests {
             .expect("list command line");
         assert!(list_line.ends_with(" [alias: ls]"), "{list_line}");
         assert!(help.contains("Run `rimz <command> --help` for full flags and defaults."));
+    }
+
+    #[test]
+    fn agents_verbs_are_grouped_exactly_once() {
+        let cmd = command();
+        let agents = cmd.find_subcommand("agents").expect("agents");
+        let mut seen = BTreeSet::new();
+        for (heading, verbs) in AGENTS_GROUPS {
+            for verb in verbs {
+                assert!(
+                    seen.insert(verb.to_string()),
+                    "`{verb}` repeats in {heading}"
+                );
+            }
+        }
+        assert_eq!(visible_names(agents), seen);
+    }
+
+    #[test]
+    fn agents_help_leads_with_the_orientation_and_drops_launch_flags() {
+        let mut cmd = customize(command());
+        cmd.build();
+        let agents = cmd.find_subcommand_mut("agents").expect("agents");
+        for help in [
+            agents.render_help().to_string(),
+            agents.render_long_help().to_string(),
+        ] {
+            let orientation = agents_orientation();
+            assert!(
+                help.starts_with(&format!(
+                    "See and drive the room's agents; launch new ones\n\n{orientation}\n"
+                )),
+                "{help}"
+            );
+            assert!(!help.contains("--description"), "{help}");
+            assert!(help.contains("rimz agents launch --help"), "{help}");
+            assert!(help.contains("rimz agents <verb> --help"), "{help}");
+            for line in help.lines() {
+                assert!(UnicodeWidthStr::width(line) <= 80, "{line}");
+            }
+        }
+        let launch = agents.find_subcommand_mut("launch").expect("launch");
+        assert!(
+            launch
+                .render_long_help()
+                .to_string()
+                .contains("--description")
+        );
     }
 
     fn command_line_count(help: &str, name: &str) -> usize {

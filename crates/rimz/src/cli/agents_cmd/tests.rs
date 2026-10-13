@@ -1146,11 +1146,11 @@ mod parse {
             let refusal = launch_refusal(&args.launch, args.all, args.json)
                 .unwrap_or_else(|| panic!("{argv:?} must refuse"))
                 .to_string();
-            let first = refusal.lines().next().expect("fix line");
             assert_eq!(
-                first,
+                refusal,
                 format!(
-                    "`rimz agents` needs a verb or a launch spec; to list agents, run `{list}`"
+                    "`rimz agents` needs a verb or a launch spec; to list agents, run `{list}`\n\n{}",
+                    crate::cli::help::agents_orientation()
                 ),
                 "{argv:?}"
             );
