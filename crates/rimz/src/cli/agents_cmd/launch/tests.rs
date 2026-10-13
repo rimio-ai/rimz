@@ -352,6 +352,7 @@ fn team_launch_receipt_is_compact() {
             channel: Some("feat-x"),
             cwd: Path::new("/repo-worktrees/feat-x"),
             identities: &identities,
+            handles: &receipt_handles(&identities, &[]),
             leader_index: Some(0),
             terminal_width: 100,
             hints: true,
@@ -397,6 +398,7 @@ fn team_launch_receipt_is_compact() {
             channel: Some("feat-x"),
             cwd: Path::new("/repo-worktrees/feat-x"),
             identities: &identities,
+            handles: &receipt_handles(&identities, &[]),
             leader_index: None,
             terminal_width: 100,
             hints: true,
@@ -423,6 +425,7 @@ fn plain_launch_receipt_uses_the_first_member_without_a_team_check() {
             channel: None,
             cwd: Path::new("/repo"),
             identities: &identities,
+            handles: &receipt_handles(&identities, &[]),
             leader_index: Some(0),
             terminal_width: 100,
             hints: true,
@@ -461,6 +464,7 @@ fn plain_launch_receipt_uses_the_first_member_without_a_team_check() {
             channel: Some("parallel"),
             cwd: Path::new("/repo"),
             identities: &identities,
+            handles: &receipt_handles(&identities, &[]),
             leader_index,
             terminal_width: 100,
             hints: true,
@@ -477,6 +481,65 @@ fn plain_launch_receipt_uses_the_first_member_without_a_team_check() {
     <crate::cli::Cli as clap::Parser>::try_parse_from(shlex::split(wait).unwrap()).unwrap();
     assert!(!output.contains("leader"));
     assert!(!output.contains("prompt"));
+}
+
+#[test]
+fn launch_receipt_names_each_agent_by_its_list_handle() {
+    let lane_agent = |name: &str| {
+        let mut agent = rimz::testkit::agent_state(
+            "claude",
+            &format!("launch-{name}"),
+            jiff::Timestamp::UNIX_EPOCH,
+        );
+        agent.name = Some(name.to_owned());
+        agent.profile = Some("coder".to_owned());
+        agent.channel = Some("auth".to_owned());
+        agent
+    };
+    let receipt_for = |identities: &[AgentLaunchIdentity], handles: &[String]| {
+        let mut output = anstream::StripStream::new(Vec::new());
+        write_launch_receipt(
+            &mut output,
+            &LaunchReceipt {
+                team: None,
+                channel: Some("auth"),
+                cwd: Path::new("/repo"),
+                identities,
+                handles,
+                leader_index: Some(0),
+                terminal_width: 100,
+                hints: true,
+            },
+        )
+        .unwrap();
+        String::from_utf8(output.into_inner()).unwrap()
+    };
+    let mut identities = [launch_identity("claude", "round-binder")];
+    identities[0].prompt = Some("Fix the login.".to_owned());
+    let launched = lane_agent("round-binder");
+
+    let handles = receipt_handles(&identities, &[&launched]);
+    assert_eq!(handles, ["coder"]);
+    let output = receipt_for(&identities, &handles);
+    assert!(
+        output.contains("launched @coder (round-binder) in #auth (/repo)"),
+        "{output}"
+    );
+    assert!(
+        output.contains("  @coder (round-binder)   claude"),
+        "{output}"
+    );
+    assert!(output.contains("  prompt    → @coder  \"Fix the login.\""));
+    assert!(output.contains("Reach: rimz message @coder#auth '<text>'"));
+    assert!(output.contains("Wait:  rimz agents wait @coder#auth\n"));
+
+    let peer = lane_agent("able-fox");
+    let handles = receipt_handles(&identities, &[&peer, &launched]);
+    assert_eq!(handles, ["round-binder"]);
+    let output = receipt_for(&identities, &handles);
+    assert!(output.contains("launched @round-binder in #auth (/repo)"));
+    assert!(output.contains("  @round-binder   claude"), "{output}");
+    assert!(output.contains("Wait:  rimz agents wait @round-binder#auth\n"));
 }
 
 #[test]
@@ -525,6 +588,7 @@ fn team_launch_receipt_marks_the_implicit_leader() {
             channel: Some("feat-x"),
             cwd: Path::new("/repo-worktrees/feat-x"),
             identities: &identities,
+            handles: &receipt_handles(&identities, &[]),
             leader_index: Some(leader_index),
             terminal_width: 100,
             hints: true,
@@ -568,11 +632,13 @@ fn team_launch_receipt_uses_prompt_leader_and_clips_the_prompt() {
     identities[1].launch.role = Some("planner".to_owned());
     identities[1].prompt =
         Some("Read  \"the handoff\"\nthen design a fix for the team.".to_owned());
+    let handles = receipt_handles(&identities, &[]);
     let receipt = LaunchReceipt {
         team: Some(("forge", &team)),
         channel: Some("feat-x"),
         cwd: Path::new("/repo-worktrees/feat-x"),
         identities: &identities,
+        handles: &handles,
         leader_index: Some(leader_index),
         terminal_width: 52,
         hints: true,
