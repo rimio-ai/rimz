@@ -270,6 +270,7 @@ mod publish {
 
     #[divan::bench(args = [0, 3_000], sample_count = 10, sample_size = 1, skip_ext_time)]
     fn scale_with_orphans(bencher: Bencher, orphans: usize) {
+        const MAX_PUBLISH_BYTES: usize = 11_500_000;
         let mut counts = (0, 0);
         bencher
             .with_inputs(|| {
@@ -282,6 +283,11 @@ mod publish {
                     let workspace = fixture.fold();
                     fixture.project(&workspace, false);
                 });
+                assert!(
+                    counts.1 <= MAX_PUBLISH_BYTES,
+                    "200-agent/100-subscriber publication requested {} bytes; ceiling {MAX_PUBLISH_BYTES} bytes",
+                    counts.1,
+                );
             });
         writeln!(
             std::io::stderr(),
@@ -348,6 +354,7 @@ fn idle_cycle_worker(bencher: Bencher, orphans: usize) {
 
 fn bench_idle_cycle(bencher: Bencher, orphans: usize, apply: bool) {
     let mut counts = (0, 0);
+    let mut durations = Vec::new();
     bencher
         .with_inputs(|| {
             let (tempdir, paths, runtime) = workspace();
@@ -371,10 +378,26 @@ fn bench_idle_cycle(bencher: Bencher, orphans: usize, apply: bool) {
             (tempdir, cycle)
         })
         .bench_local_refs(|(_, cycle)| {
+            let started = std::time::Instant::now();
             counts = counted(|| {
                 cycle.run_cycle();
             });
+            durations.push(started.elapsed());
         });
+    if apply && orphans == 3_000 {
+        const MAX_IDLE_CYCLE: std::time::Duration = std::time::Duration::from_millis(33);
+        durations.sort_unstable();
+        let median = durations[durations.len() / 2];
+        assert!(
+            median <= MAX_IDLE_CYCLE,
+            "200-agent/100-subscriber idle cycle with 3000 orphans took {median:?} (median); ceiling {MAX_IDLE_CYCLE:?}",
+        );
+        writeln!(
+            std::io::stderr(),
+            "idle_cycle median={median:?} ceiling={MAX_IDLE_CYCLE:?}",
+        )
+        .expect("benchmark timing");
+    }
     writeln!(
         std::io::stderr(),
         "idle_cycle apply={apply} orphans={orphans}: allocations={} bytes={}",
