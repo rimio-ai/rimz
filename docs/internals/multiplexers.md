@@ -320,7 +320,7 @@ The renderer applies the same empty-view rule without waiting for reconcile: onc
 
 Replacement is add-before-close. [`mount_proof.rs`](../../crates/rimz/src/mux/mount_proof.rs) reads heartbeats from the room runtime paths supplied in `SidebarPaneOptions`, not from ambient workspace resolution. It waits up to six seconds for the new pane to publish a heartbeat naming the expected build before the old pane closes. A failed add leaves the user with the sidebar they had, and a pane running a stale binary never counts as the repair. After the closes, tmux snaps kept and newly mounted sidebars to their per-window targets. Zellij reads topology newer than the closes and repairs surviving sidebars in replaced tabs under the attached-client gate, within its native stop band. Width handed over by a closed pane therefore does not become the replacement's target.
 
-`SidebarRecovery` tallies the pass (`recovered`, `closed`, `failed`, `deferred`, `redocked`, `misdocked`). `execute_reconcile_plan` stops at the first failed verdict and counts it and every remaining verdict as `failed`. The pass is one best-effort attempt: nothing retries it, and a failure never escalates to a session rebirth. The next host tick, toggle, or `rimz sidebar repair` runs a fresh pass.
+`SidebarRecovery` tallies the pass (`recovered`, `closed`, `failed`, `deferred`, `redocked`, `misdocked`). `execute_reconcile_plan` stops at the first failed verdict and counts it and every remaining verdict as `failed`. The pass is one best-effort attempt: nothing retries it, and a failure never escalates to a session rebirth. The next attach, `rimz sidebar repair`, or `rimz reload` runs a fresh pass; no host tick reruns it.
 
 ### Width
 
@@ -404,7 +404,7 @@ These details in [`layout.rs`](../../crates/rimz/src/mux/zellij/layout.rs) are l
 - The sidebar pane is borderless and `close_on_exit`, so work-pane frames can be styled while sidebar hit-testing starts at row 0, and the pane disappears when its process exits.
 - Every sidebar width is a whole percentage, because Zellij pins a fixed-size layout pane against resize. With known geometry the percentage approximates the resolved share; detached birth tabs and the template keep configured percentage policy until a live view exists, and live convergence applies the exact target.
 - Every tab is born with an explicit focused terminal. A `children` placeholder nested in a split is never filled and would leave focus on the sidebar alone.
-- The layout file outlives the create call. Zellij parses `--default-layout` asynchronously, so the temp file stays on disk until the panes materialize.
+- A tab layout file only has to exist while the `zellij action new-tab --layout` client runs: the client parses the file and sends the parsed tree with the action, so the server never reads it. `open_tab` drops it once the tab is confirmed.
 - The layout ends with the complete resolved session option list, including `auto_layout false`, `stacked_resize true`, and `stacked_pane_list false` ([room options](#room-options-and-the-cli-xor-problem)).
 
 Birth branches on the session's liveness from `zellij list-sessions`:
@@ -444,7 +444,7 @@ Live reinjection resolves a stable tab id from an existing work pane and runs `n
 5. Each left move crosses one adjacent pane, the current tiled-pane count bounds the swaps, and every step must strictly decrease the sidebar's `pane_x`.
 6. Width convergence starts only after current geometry verifies a full-height left dock.
 
-A timed-out authoritative read aborts the pass instead of falling back to the topology cache, so stale truth never drives a close or a spawn; the next host or toggle pass retries.
+A timed-out authoritative read aborts the pass instead of falling back to the topology cache, so stale truth never drives a close or a spawn; the next attach, `rimz sidebar repair`, or `rimz reload` retries.
 
 RimZ passes `auto_layout=false` and `stacked_resize=true`, so `Alt+n` uses Zellij's native focused-pane split along the edge that suits the terminal's cell ratio, and closing a pane returns its space to the sibling it split from. It also pins `stacked_pane_list=false`. Zellij 0.45's list mode keeps collapsed stack members in `list-panes` but marks them suppressed and reports the stack's full rectangle for every member; RimZ filters suppressed panes and relies on per-pane geometry, so the classic representation keeps every agent observable with its own rectangle. The birth tree makes the sidebar and compact bar tree siblings. When an add nests the new sidebar into one row, the same transaction stacks every surviving work pane into the right column; repair of an arbitrary pre-existing multi-column layout only reports.
 
