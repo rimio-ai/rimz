@@ -38,6 +38,7 @@ dir=$(dirname "$0")
 printf '%s\n' "$*" >> "$dir/zellij.log"
 if [ "$1" = "--version" ]; then printf 'zellij 0.44.3\n'; exit 0; fi
 case " $* " in
+  *" action list-clients "*) printf 'CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND\n' ;;
   *" action list-panes --all --json "*)
 {list_panes} ;;
 esac

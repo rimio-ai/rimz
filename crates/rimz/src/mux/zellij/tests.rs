@@ -1533,6 +1533,7 @@ if [ "$1" = "--version" ]; then printf 'zellij 0.44.3\n'; exit 0; fi
 if [ "$1" = "--session" ] && [ -z "$2" ]; then exit 1; fi
 case " $* " in
   *" action list-clients "*)
+    printf 'CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND\n'
     if [ -f "$dir/spawned" ] && [ ! -f "$dir/restored" ]; then printf '1 terminal_8 work\n'; else printf '1 terminal_9 work\n'; fi ;;
   *" action list-panes "*) printf '[{"id":7,"tab_id":42,"tab_position":0},{"id":9,"tab_id":43,"tab_position":1}]\n' ;;
   *" action new-pane "*) touch "$dir/spawned" ;;
@@ -1596,7 +1597,7 @@ dir=$(dirname "$0")
 if [ "$1" = "--version" ]; then printf 'zellij {version}\n'; exit 0; fi
 printf '%s\n' "$*" >> "$dir/zellij.log"
 case " $* " in
-  *" action list-clients "*) printf '1 terminal_9 work\n' ;;
+  *" action list-clients "*) printf 'CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND\n1 terminal_9 work\n' ;;
   *" action list-panes "*) printf '[{{"id":7,"tab_id":42,"tab_position":0}},{{"id":9,"tab_id":43,"tab_position":1}}]\n' ;;
 esac
 exit 0
@@ -2925,7 +2926,7 @@ case " $* " in
   *" action move-tab "*)
     position=$(cat "$dir/position" 2>/dev/null || printf 3)
     printf '%s' "$((position - 1))" > "$dir/position" ;;
-  *" action list-clients "*) printf '1 terminal_7 work\n' ;;
+  *" action list-clients "*) printf 'CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND\n1 terminal_7 work\n' ;;
   *" action list-tabs "*)
     printf '[{{"tab_id":0,"name":"main","selectable_tiled_panes_count":1}},{{"tab_id":1,"name":"two","selectable_tiled_panes_count":1}},{{"tab_id":2,"name":"three","selectable_tiled_panes_count":1}}'
     if [ -f "$dir/opened" ]; then printf ',{{"tab_id":45,"name":"new","selectable_tiled_panes_count":1}}'; fi
@@ -3008,7 +3009,7 @@ dir=$(dirname "$0"); log="$dir/zellij.log"; tab="$dir/tab-created"
 if [ "$1" = "--version" ]; then printf 'zellij VERSION\n'; exit 0; fi
 printf '%s\n' "$*" >> "$log"
 case " $* " in
-  *" action list-clients "*) printf '1 terminal_7 zsh\n'; exit 0 ;;
+  *" action list-clients "*) printf 'CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND\n1 terminal_7 zsh\n'; exit 0 ;;
   *" action list-panes --all --json "*) printf '[{"id":7,"is_plugin":false,"tab_position":0,"pane_columns":120,"pane_x":0,"title":"zsh"}]\n'; exit 0 ;;
   *" action list-tabs "*)
     if [ -f "$tab" ]; then printf '[{"tab_id":0,"name":"main","selectable_tiled_panes_count":1},{"tab_id":45,"name":"new","selectable_tiled_panes_count":1}]\n';
