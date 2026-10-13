@@ -1141,8 +1141,9 @@ fn native_focused_split_preserves_docked_sidebar() {
         "backend tab should focus the chosen work pane before native split; \
          focused client panes: {focused:?}",
     );
-    let sidebar_before =
-        wait_for_named_sidebar_pane(xdg, &name, split_tab).expect("backend tab keeps its sidebar");
+    let sidebar_before = wait_for_named_sidebar_pane(xdg, &name, split_tab, || {
+        "backend tab keeps its sidebar".to_owned()
+    });
     assert_eq!(
         sidebar_before.x, 0,
         "backend tab starts with the sidebar docked left: {sidebar_before:?}",

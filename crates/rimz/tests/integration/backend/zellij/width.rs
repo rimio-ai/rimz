@@ -277,8 +277,9 @@ fn sidebar_width_steps_resize_birth_and_explicit_layout_panes() {
             sidebar: sidebar.clone(),
         })
         .expect("open explicit tab");
-    let explicit =
-        wait_for_named_sidebar_pane(xdg, &name, tab_name).expect("explicit tab carries sidebar");
+    let explicit = wait_for_named_sidebar_pane(xdg, &name, tab_name, || {
+        "explicit tab carries sidebar".to_owned()
+    });
     let pane = PaneId::from_parts(MuxName::Zellij, format!("terminal_{}", explicit.id));
     let explicit_cols = u16::try_from(explicit.columns).expect("sidebar width fits u16");
     backend
