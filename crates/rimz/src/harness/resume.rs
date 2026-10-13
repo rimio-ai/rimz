@@ -1686,14 +1686,7 @@ fn lane_summaries(
                 .count();
             Some(LaneSummary {
                 path: lane.path.clone(),
-                label: candidates
-                    .first()
-                    .and_then(AgentState::lane_label)
-                    .or_else(|| lane.channel.clone())
-                    .map_or_else(
-                        || format!("#{}", path_label(&lane.path)),
-                        |value| format!("#{value}"),
-                    ),
+                label: lane_label(candidates.first(), lane.channel.as_deref(), &lane.path),
                 members: candidates.len(),
                 live,
                 freshest,
@@ -1711,6 +1704,16 @@ fn sort_lane_summaries(summaries: &mut [LaneSummary]) {
             .cmp(&left.freshest)
             .then_with(|| left.label.cmp(&right.label))
     });
+}
+
+fn lane_label(agent: Option<&AgentState>, channel: Option<&str>, path: &Path) -> String {
+    agent
+        .and_then(AgentState::lane_label)
+        .or_else(|| channel.map(ToOwned::to_owned))
+        .map_or_else(
+            || format!("#{}", path_label(path)),
+            |value| format!("#{value}"),
+        )
 }
 
 fn path_label(path: &Path) -> String {
