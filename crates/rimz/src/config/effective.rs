@@ -185,6 +185,14 @@ impl LaunchAgents {
                         })
                         .collect::<Vec<_>>()
                 } else {
+                    // `<base>-fast` launches its base, so the base is what routes;
+                    // a profile literally named `<base>-fast` wins, as at launch.
+                    let profiles = self.profiles_for(scope);
+                    let name = agents_spec::fast_suffix_base(name)
+                        .filter(|base| {
+                            !profiles.0.contains_key(name) && profiles.0.contains_key(*base)
+                        })
+                        .unwrap_or(name);
                     vec![(scope, name.to_owned(), name.to_owned())]
                 }
             })

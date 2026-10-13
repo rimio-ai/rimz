@@ -1441,6 +1441,103 @@ fn virtual_cells_obey_adapter_capabilities_and_profile_overrides() {
 }
 
 #[test]
+fn fast_suffix_cells_stamp_fast_on_their_base() {
+    let fast_args = |kind: &str| {
+        crate::agents::find_definition(kind)
+            .expect("kind")
+            .spec()
+            .launch
+            .fast_args()
+            .expect("fast switch")
+    };
+    let claude = agent_cell("claude-fast", &no_profiles(), &no_commands());
+    assert_eq!(claude.kind.as_str(), "claude");
+    assert!(claude.launch.fast);
+    assert_eq!(claude.launch.profile, None);
+    assert!(
+        claude
+            .args
+            .windows(2)
+            .any(|pair| pair == fast_args("claude").as_slice()),
+        "{:?}",
+        claude.args
+    );
+
+    let profiles = profiles([
+        (
+            "reviewer",
+            Profile {
+                agent: "codex".to_owned(),
+                effort: Some("high".to_owned()),
+                ..profile("codex")
+            },
+        ),
+        (
+            "x-fast",
+            Profile {
+                agent: "claude".to_owned(),
+                ..profile("claude")
+            },
+        ),
+    ]);
+    let reviewer = agent_cell("reviewer-fast", &profiles, &no_commands());
+    assert_eq!(reviewer.kind.as_str(), "codex");
+    assert_eq!(reviewer.launch.profile.as_deref(), Some("reviewer"));
+    assert_eq!(reviewer.launch.effort.as_deref(), Some("high"));
+    assert!(reviewer.launch.fast);
+    assert!(
+        reviewer
+            .args
+            .windows(4)
+            .any(|window| window == fast_args("codex").as_slice()),
+        "{:?}",
+        reviewer.args
+    );
+
+    let yolo = agent_cell("codex-yolo-fast", &no_profiles(), &no_commands());
+    assert_eq!(yolo.kind.as_str(), "codex");
+    assert_eq!(yolo.launch.mode, Some(PermissionMode::Yolo));
+    assert!(yolo.launch.fast);
+    for arg in crate::agents::find_definition("codex")
+        .expect("codex")
+        .spec()
+        .launch
+        .permission_args(PermissionMode::Yolo)
+    {
+        assert!(yolo.args.contains(&arg), "{:?}", yolo.args);
+    }
+
+    // An exact profile name wins over the suffix reading.
+    let exact = agent_cell("x-fast", &profiles, &no_commands());
+    assert_eq!(exact.launch.profile.as_deref(), Some("x-fast"));
+    assert!(!exact.launch.fast);
+
+    let refused = parse_layout_spec("cursor-fast", &no_profiles(), &no_commands())
+        .expect_err("cursor has no fast switch");
+    assert_eq!(
+        refused.to_string(),
+        "cell `cursor-fast`: cursor has no fast-mode launch switch; choose a fast model id with --model, e.g. claude-opus-5-5-fast"
+    );
+    assert!(matches!(
+        parse_layout_spec("nosuch-fast", &no_profiles(), &no_commands()),
+        Err(LayoutErr::UnknownCell { cell, .. }) if cell == "nosuch-fast"
+    ));
+
+    for raw in [
+        "claude-fast",
+        "reviewer-fast",
+        "codex-yolo-fast",
+        "cursor-fast",
+    ] {
+        assert!(is_cell_word(raw, &profiles, &no_commands()), "{raw}");
+    }
+    assert_eq!(
+        split_inline_role("reviewer-fast:critic", &profiles, &no_commands()),
+        ("reviewer-fast", Some("critic"))
+    );
+}
+
+#[test]
 fn config_names_reject_grammar_clashes() {
     assert!(
         parse_layout_spec(

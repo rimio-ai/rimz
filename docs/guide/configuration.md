@@ -676,7 +676,8 @@ An inline spec such as `rimz agents "claude,codex+term"` names the cells to laun
 3. the built-in `term`,
 4. a registered agent kind,
 5. an adapter-supported `<kind>-<mode>` cell (`claude-auto`, `codex-ask`, `codex-yolo`, and so on; the [agents reference](../reference/cli/agents.md#permission-mode-cells) lists which kinds have which),
-6. an executable of that name on `PATH`.
+6. a `<base>-fast` cell over a profile, kind, or `<kind>-<mode>` cell, launched in the provider's fast mode ([fast cells](../reference/cli/agents.md#fast-cells)); a base whose kind has no fast switch refuses here instead of reaching step 7,
+7. an executable of that name on `PATH`.
 
 `rimz subagents` uses the same order with one change: step 2 reads child profiles from `subagents/`. A profile that exists only in the other namespace fails the launch and names the namespace to move or copy it to.
 

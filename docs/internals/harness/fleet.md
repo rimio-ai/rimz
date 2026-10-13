@@ -81,7 +81,7 @@ Every file below is under `harness/` except the top-level `address.rs`, the petn
 
 | File | Owns |
 | --- | --- |
-| [`spec.rs`](../../../crates/rimz/src/harness/spec.rs) | The layout IR: the inline grammar, team and profile resolution, virtual `<kind>-<mode>` cells, prompt-file path rooting, the prompt leader, and the name-collision rules that keep profile names addressable. |
+| [`spec.rs`](../../../crates/rimz/src/harness/spec.rs) | The layout IR: the inline grammar, team and profile resolution, virtual `<kind>-<mode>` and `<base>-fast` cells, prompt-file path rooting, the prompt leader, and the name-collision rules that keep profile names addressable. |
 | [`plan.rs`](../../../crates/rimz/src/harness/plan.rs) | Turning a spec into a launch: effective-config resolution, launch finalization, per-cell launch identities, and fresh or resumed compilation to backend-neutral pane commands. |
 | [`launch_plan.rs`](../../../crates/rimz/src/harness/launch_plan.rs) | The exec wrapper's plan: `prepare_exec` makes its launch decisions through `compile`, which decides without writing; `apply` materializes. |
 | [`launch.rs`](../../../crates/rimz/src/harness/launch.rs) | The provider process: adapter argv for launch, resume, and fork; the hidden `ExecRequest` wire; launch environment composition; the login-shell wrapper; and preflight. |
@@ -138,7 +138,7 @@ claude-auto,codex-yolo     → agent cells with adapter-owned permission posture
 claude:planner,codex:coder → agent cells with ad-hoc `@planner` and `@coder` handles
 ```
 
-Each cell is one of: the built-in `term`, a registered agent kind, a virtual `<kind>-<mode>` variant, a configured profile, a configured command, or an executable found on PATH ([configuration.md](../../guide/configuration.md#agent-profiles-commands-and-teams)). Configured cells and built-ins resolve before PATH. An agent cell may carry an ad-hoc role as `<cell>:<role>`; inline roles follow team-role naming and addressing rules, must be unique within the spec, and apply only to agent cells.
+Each cell is one of: the built-in `term`, a registered agent kind, a virtual `<kind>-<mode>` variant, a `<base>-fast` cell (`harness/spec.rs::fast_suffix_cell`, which refuses an unsupported kind rather than falling through to PATH), a configured profile, a configured command, or an executable found on PATH ([configuration.md](../../guide/configuration.md#agent-profiles-commands-and-teams)). Configured cells and built-ins resolve before PATH. An agent cell may carry an ad-hoc role as `<cell>:<role>`; inline roles follow team-role naming and addressing rules, must be unique within the spec, and apply only to agent cells.
 
 A named team is an ordered role list. It opens as one column per role unless it declares its own `layout`, which uses the same row and column grammar and resolves declared role names before roleless cells. A team layout may name only the team's declared roles and takes no `:role` suffix. `<team>.<role>` launches one declared role with its team identity, placed like any single-agent launch.
 

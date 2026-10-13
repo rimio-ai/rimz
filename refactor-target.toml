@@ -558,7 +558,8 @@ path = "crates/rimz/src/harness"
 # Hibernation decision, helper request, producer and projection share the CLI/sidebar seam and idle-stop predicates (+12).
 # Wake requests, synchronous thaw, and recovery cross the CLI/sidebar/retirement seams (+10).
 # `resume::check_lane_scope` gives `agents list` resume's lane rule (+1).
-surface-budget = 817
+# The `<base>-fast` cell grammar is shared by launch and tier routing (+1).
+surface-budget = 818
 
 [[module]]
 path = "crates/rimz/src/ids.rs"

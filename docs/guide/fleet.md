@@ -61,7 +61,7 @@ rimz agents claude:planner,codex:coder -w feat-x   # ad-hoc role handles, no sav
 rimz agents claude,codex "Draft the API shape."    # the prompt lands on the first cell, Claude
 ```
 
-Each cell is an agent kind, a `<kind>-<mode>` cell ([permission modes](#set-a-permission-mode)), a [profile](#profiles-shape-an-agent-for-one-job), a command you configured, any executable on your `PATH`, or `term` for a plain shell; a configured command or profile wins over a same-named binary. Suffix an agent cell with `:role` and it answers to `@role` for this launch, without a saved team.
+Each cell is an agent kind, a `<kind>-<mode>` cell ([permission modes](#set-a-permission-mode)), a `-fast` cell such as `claude-fast` ([fast cells](../reference/cli/agents.md#fast-cells)), a [profile](#profiles-shape-an-agent-for-one-job), a command you configured, any executable on your `PATH`, or `term` for a plain shell; a configured command or profile wins over a same-named binary. Suffix an agent cell with `:role` and it answers to `@role` for this launch, without a saved team.
 
 A trailing prompt goes to exactly one agent: the leader when you launched a named team, and the first agent cell otherwise. Give a repeated first cell an inline role to make that target unambiguous, and use `rimz message @all` after launch when every agent needs the same text.
 
