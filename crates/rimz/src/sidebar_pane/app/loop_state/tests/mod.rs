@@ -11,6 +11,25 @@ mod fetch;
 mod focus;
 mod maintenance;
 mod paint;
+mod scroll;
+
+#[derive(Clone, Default)]
+struct FrameOutput(
+    Arc<std::sync::Mutex<Vec<u8>>>,
+    Arc<std::sync::atomic::AtomicUsize>,
+);
+
+impl std::io::Write for FrameOutput {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.1.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(())
+    }
+}
 
 /// One `LoopState` under test with the runtime, dispatcher, request channel,
 /// and terminal it needs. Fields stay reachable: these tests drive internal

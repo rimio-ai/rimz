@@ -6,7 +6,7 @@ use std::io::Write;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use ratatui::Terminal;
 use ratatui::backend::{Backend, ClearType};
@@ -63,6 +63,53 @@ pub(in crate::sidebar_pane) struct Attachment {
     // freshness gate would skip relaunch and let a plain `attach` rebirth the
     // session with no sidebar.
     _heartbeat_cleanup: RuntimeFileGuard,
+}
+
+/// The pane's inbox: a wheel tick takes every tick queued behind it as one
+/// run, and the wakeup that ends the run is held back and returned next.
+pub(super) struct WakeupInbox {
+    receiver: Receiver<Wakeup>,
+    pending: Option<Wakeup>,
+}
+
+impl WakeupInbox {
+    pub(super) fn new(receiver: Receiver<Wakeup>) -> Self {
+        Self {
+            receiver,
+            pending: None,
+        }
+    }
+
+    fn recv_timeout(&mut self, timeout: Duration) -> Wakeup {
+        self.pending
+            .take()
+            .unwrap_or_else(|| self.receiver.recv_timeout(timeout).unwrap_or(Wakeup::Tick))
+    }
+
+    fn scroll_run(&mut self, first: Wakeup) -> impl Iterator<Item = Wakeup> + '_ {
+        std::iter::once(first).chain(std::iter::from_fn(|| {
+            let wakeup = self.receiver.try_recv().ok()?;
+            if matches!(wakeup, Wakeup::Scroll { .. }) {
+                return Some(wakeup);
+            }
+            self.pending = Some(wakeup);
+            None
+        }))
+    }
+
+    pub(super) fn dispatch_next(
+        &mut self,
+        state: &mut LoopState,
+        fetch: &mut FetchDispatcher,
+        terminal: &mut Terminal<PaneBackend>,
+        timeout: Duration,
+    ) -> Result<()> {
+        let wakeup = self.recv_timeout(timeout);
+        if matches!(wakeup, Wakeup::Scroll { .. }) {
+            return state.on_inputs(self.scroll_run(wakeup), terminal, fetch);
+        }
+        state.on_wakeup(fetch, terminal, wakeup)
+    }
 }
 
 impl Attachment {
@@ -216,7 +263,8 @@ impl Attachment {
         // mark the frame dirty; the loop paints at most once per configured base
         // frame boundary, coalescing every change that landed mid-frame into a
         // single paint. Data and animation ride this frame grid; input paints
-        // synchronously for instant feedback (see `apply_input`). The grid stays
+        // synchronously for instant feedback, with queued wheel ticks sharing
+        // one paint (see `apply_input`). The grid stays
         // warm while there is something to show (`active`) and relaxes to the
         // `tick` backstop when idle, snapping back the instant an event or
         // animation arrives. Fetches run off-thread. Width geometry probes still
@@ -227,13 +275,13 @@ impl Attachment {
         // share-file read, no fork. Width commits and trailing capability
         // refreshes run once after their bursts settle; resize actuators run
         // off-thread.
+        let mut inbox = WakeupInbox::new(inbox);
         let loop_result: Result<()> = (|| {
             while !state.should_exit && !close_requested.load(Ordering::SeqCst) {
                 state.report_baseline();
                 let (active, mut timeout) = state.frame_timing();
                 timeout = fetch_deadline_timeout(timeout, fetch.next_deadline(), Instant::now());
-                let wakeup = inbox.recv_timeout(timeout).unwrap_or(Wakeup::Tick);
-                state.on_wakeup(&mut fetch, &mut terminal, wakeup)?;
+                inbox.dispatch_next(&mut state, &mut fetch, &mut terminal, timeout)?;
                 // A pane the mux had not laid out at attach gets its title
                 // with its first size.
                 if !titled {
@@ -278,3 +326,6 @@ fn set_pane_title(terminal: &mut Terminal<PaneBackend>) -> std::io::Result<bool>
     Write::flush(backend)?;
     Ok(true)
 }
+
+#[cfg(test)]
+mod tests;
