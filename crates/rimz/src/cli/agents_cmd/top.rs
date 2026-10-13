@@ -525,6 +525,42 @@ mod tests {
     }
 
     #[test]
+    fn card_projection_stalled_child_show_uses_parent_projection() {
+        let snapshot = stalled_child_snapshot();
+        let child = snapshot
+            .agents
+            .iter()
+            .find(|agent| agent.agent_id.as_str() == "child")
+            .unwrap();
+        assert!(row_for_agent(&snapshot, child).is_none());
+        let report = super::super::report::build_list_report(
+            &Default::default(),
+            &snapshot,
+            &[child],
+            snapshot.now,
+            None,
+            &[],
+            &Default::default(),
+            &crate::cli::CurrentChannel::Unscoped.address_context(),
+        );
+        let entry = &report.agents[0];
+        let mut out = anstream::StripStream::new(Vec::new());
+        super::super::show::render_activity_section(
+            &mut out,
+            entry,
+            None,
+            None,
+            false,
+            snapshot.now,
+        )
+        .unwrap();
+        let text = String::from_utf8(out.into_inner()).unwrap();
+        assert!(text.starts_with("failed ·"), "{text}");
+        assert!(text.contains("  failed: silent 32m"), "{text}");
+        assert_eq!(entry.phase, rimz::agents::TurnPhase::Idle);
+    }
+
+    #[test]
     fn top_addresses_use_unfiltered_snapshot() {
         let now = jiff::Timestamp::UNIX_EPOCH;
         let mut snapshot = rimz::store::snapshot::SidebarSnapshot::build_with_agents(

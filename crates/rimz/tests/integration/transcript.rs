@@ -694,7 +694,7 @@ fn transcript_renders_durable_turns_asks_answers_and_channels() {
     }));
     push_pending_agent_ask(&env, "sess-transcript-a");
     let show = run_ok(env.rimz().args(["agents", "show", "sess-transcript-a"]));
-    assert!(show.contains("ask:"), "{show}");
+    assert!(show.contains("waiting:"), "{show}");
     assert!(show.contains("approve patch [allow, deny]"), "{show}");
     let transcript_after_pending =
         run_ok(

@@ -2148,7 +2148,7 @@ mod render {
             super::report::ReportOverrides::default(),
         );
         let mut out = anstream::StripStream::new(Vec::new());
-        super::show::render_placement_section(&mut out, &report).unwrap();
+        super::show::render_identity_section(&mut out, &report, None).unwrap();
         let text = String::from_utf8(out.into_inner()).unwrap();
 
         assert!(
@@ -2194,17 +2194,12 @@ mod render {
         let idle = report(&idle);
 
         let mut active_out = anstream::StripStream::new(Vec::new());
-        super::show::render_activity_section(&mut active_out, &active, None, false, now)
+        super::show::render_activity_section(&mut active_out, &active, None, None, false, now)
             .expect("render active activity");
         let active_text = String::from_utf8(active_out.into_inner()).expect("utf8");
         assert!(
-            active_text
-                .lines()
-                .any(|line| line.contains("status:") && line.contains("running"))
-                && active_text
-                    .lines()
-                    .any(|line| line.contains("phase:") && line.contains("acting"))
-                && active_text.contains("description:   ship wide fix"),
+            active_text.contains("running (acting)")
+                && active_text.lines().any(|line| line == "ship wide fix"),
             "{active_text}"
         );
         assert!(
@@ -2220,11 +2215,12 @@ mod render {
         );
 
         let mut idle_out = anstream::StripStream::new(Vec::new());
-        super::show::render_activity_section(&mut idle_out, &idle, None, false, now)
+        super::show::render_activity_section(&mut idle_out, &idle, None, None, false, now)
             .expect("render idle activity");
         let idle_text = String::from_utf8(idle_out.into_inner()).expect("utf8");
-        assert!(idle_text.contains("status:"), "{idle_text}");
-        assert!(!idle_text.contains("phase:"), "{idle_text}");
+        assert!(idle_text.starts_with("idle ·"), "{idle_text}");
+        assert!(!idle_text.contains("(idle)"), "{idle_text}");
+        assert!(!idle_text.contains("(acting)"), "{idle_text}");
         assert!(
             idle_text.lines().any(|line| line.contains("idle_stop:")
                 && line.ends_with("after 20m idle, in 4m (@lead)")),
@@ -2252,7 +2248,7 @@ mod render {
         native_wait.context = Some(context);
         let native_wait = report(&native_wait);
         let mut native_out = anstream::StripStream::new(Vec::new());
-        super::show::render_activity_section(&mut native_out, &native_wait, None, false, now)
+        super::show::render_activity_section(&mut native_out, &native_wait, None, None, false, now)
             .expect("render native wait activity");
         let native_text = String::from_utf8(native_out.into_inner()).expect("utf8");
         assert!(native_text.contains("waiting"), "{native_text}");
