@@ -925,6 +925,7 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
         && let Some(refusal) = collision_refusal(
             word,
             &snapshot.pane_bound_roots().collect::<Vec<_>>(),
+            &snapshot,
             &current_channel,
         )
     {
@@ -1267,11 +1268,12 @@ fn lone_launch_word(launch: &AgentLaunchArgs) -> Option<&str> {
 fn collision_refusal(
     word: &str,
     live: &[&AgentState],
+    snapshot: &rimz::store::snapshot::SidebarSnapshot,
     current_channel: &rimz::address::AddressContext,
 ) -> Option<UsageError> {
     let matches = rimz::address::launch_word_matches(word, live, current_channel);
     let newest = matches.iter().max_by_key(|agent| agent.last_activity)?;
-    let address = rimz::address::agent_handle(newest, live, true);
+    let address = rimz::address::paste_address(newest, snapshot, current_channel);
     let named = match matches.len() {
         1 => format!("a live agent ({address})"),
         count => format!("{count} live agents"),

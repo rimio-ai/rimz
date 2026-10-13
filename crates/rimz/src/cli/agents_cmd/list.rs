@@ -1,9 +1,10 @@
 use super::*;
 
 use super::report::{
-    AgentReportEntry, PrInfo, ReportOverrides, build_entry, build_list_report, context_cell,
-    row_for_agent, slot_records_for_agent, status_style,
+    AgentReportEntry, PrInfo, build_list_report, context_cell, slot_records_for_agent, status_style,
 };
+#[cfg(test)]
+use super::report::{ReportOverrides, build_entry};
 use crate::cli::render;
 use rimz::config::{GlyphRole, ThemeConfig};
 #[cfg(test)]
@@ -110,15 +111,33 @@ pub(super) fn list_agents(
     }
 
     let mut out = render::out();
-    render_agents_table(
+    let report = build_list_report(
         &demotion,
-        &mut out,
         &snapshot,
         &agents,
         now,
+        None,
+        &[],
+        &Default::default(),
+        &reader,
+    );
+    let scope = channel
+        .as_ref()
+        .map_or_else(|| "whole room".to_owned(), |lane| format!("#{lane}"));
+    render_list_summary(
+        &mut out,
+        &report.agents,
+        group_live_agents_by_worktree(&agents, &snapshot).len(),
+        &scope,
+    )?;
+    render_projected_agents_table(
+        &mut out,
+        &snapshot,
+        &agents,
+        &report.agents,
+        now,
         render::terminal_columns(120),
         &machine_config.theme,
-        &reader,
     )?;
     Ok(())
 }
@@ -171,34 +190,44 @@ pub(crate) fn render_agents_table(
     theme: &ThemeConfig,
     reader: &rimz::address::AddressContext,
 ) -> std::io::Result<()> {
+    let report = build_list_report(
+        demotion,
+        snapshot,
+        agents,
+        now,
+        None,
+        &[],
+        &Default::default(),
+        reader,
+    );
+    render_projected_agents_table(w, snapshot, agents, &report.agents, now, max_width, theme)
+}
+
+fn render_projected_agents_table(
+    w: &mut impl std::io::Write,
+    snapshot: &SidebarSnapshot,
+    agents: &[&AgentState],
+    grouped_entries: &[AgentReportEntry],
+    now: jiff::Timestamp,
+    max_width: usize,
+    theme: &ThemeConfig,
+) -> std::io::Result<()> {
     let groups = group_live_agents_by_worktree(agents, snapshot);
-    let identity = super::report::SelfIdentity::from_env();
-    let me = identity.resolve(snapshot);
+    let mut entries = grouped_entries.iter();
     let glyph = theme_glyphs(theme);
     let mut table = render::Table::new([
-        "HANDLE", "PROFILE", "AGENT", "STATUS", "MODEL", "CTX", "TOKENS", "AGE",
+        "HANDLE", "PROFILE", "AGENT", "STATUS", "MODEL", "CTX", "TOKENS", "SEEN",
     ])
     .right(&[5, 6, 7])
     .max_width(max_width);
     for group in groups {
         table.section_cells(group_header_cells(&group, snapshot, &glyph));
-        let pr = group_pr(snapshot, &group.key).and_then(pr_info);
-        for &agent in &group.agents {
-            let report = build_entry(
-                demotion,
-                agent,
-                row_for_agent(snapshot, agent),
-                pr,
-                rimz::address::paste_address(agent, snapshot, reader),
-                me.as_ref(),
-                now,
-                ReportOverrides::default(),
+        for report in entries.by_ref().take(group.agents.len()) {
+            let detail = Some(
+                render::cell(report.description.as_deref().unwrap_or("-"))
+                    .fg(render::palette::muted()),
             );
-            let detail = report
-                .description
-                .as_deref()
-                .map(|line| render::cell(line).fg(render::palette::muted()));
-            table.card(agent_row(&report, now), detail);
+            table.card(agent_row(report, now), detail);
         }
     }
     table.render(w)
@@ -259,6 +288,72 @@ fn group_header_cells(
     cells
 }
 
+fn render_list_summary(
+    w: &mut impl std::io::Write,
+    entries: &[AgentReportEntry],
+    lanes: usize,
+    scope: &str,
+) -> std::io::Result<()> {
+    let attention = entries
+        .iter()
+        .filter(|entry| entry.status.is_attention())
+        .count();
+    let running = entries
+        .iter()
+        .filter(|entry| entry.status == rimz::agents::AgentStatus::Running)
+        .count();
+    let sleeping = entries
+        .iter()
+        .filter(|entry| entry.status == rimz::agents::AgentStatus::Sleeping)
+        .count();
+    let at_rest = entries.len() - attention - running - sleeping;
+    let mut summary = vec![
+        format!(
+            "{} agent{}",
+            entries.len(),
+            if entries.len() == 1 { "" } else { "s" }
+        ),
+        format!("{lanes} lane{}", if lanes == 1 { "" } else { "s" }),
+    ];
+    for (count, label) in [
+        (attention, "needs you"),
+        (running, "running"),
+        (sleeping, "sleeping"),
+        (at_rest, "at rest"),
+    ] {
+        if count > 0 {
+            summary.push(format!("{count} {label}"));
+        }
+    }
+    summary.push(scope.to_owned());
+    writeln!(w, "{}", summary.join(" · "))?;
+    if attention == 0 {
+        return Ok(());
+    }
+    writeln!(
+        w,
+        "\n{}",
+        render::paint(render::palette::header(), "needs you")
+    )?;
+    let mut table = render::Table::new(["", "", ""]).without_headers().indent(2);
+    for entry in entries.iter().filter(|entry| entry.status.is_attention()) {
+        let detail = entry
+            .ask
+            .as_ref()
+            .and_then(|ask| ask.detail.as_deref())
+            .or(entry.description.as_deref())
+            .unwrap_or("-");
+        table.row([
+            render::cell(&entry.handle).fg(render::palette::identity(entry.kind.as_str())),
+            render::cell(entry.status.as_str()).fg(status_style(entry)),
+            render::cell(render::one_line(detail)).fg(render::palette::muted()),
+        ]);
+    }
+    table.render(w)?;
+    writeln!(w)?;
+    Ok(())
+}
+
 fn channel_group_is_worktree_backed(
     group: &AgentWorktreeGroup<'_>,
     snapshot: &SidebarSnapshot,
@@ -282,7 +377,7 @@ fn channel_group_is_worktree_backed(
 
 /// A named scope that selects no live agent: fail when it is no lane at all,
 /// by the rule `resume` resolves lanes with, naming the lanes there are.
-fn refuse_unknown_lane(
+pub(super) fn refuse_unknown_lane(
     store: &rimz::Store,
     workspace: &rimz::ResolvedWorkspace,
     scope: &str,
@@ -345,8 +440,8 @@ fn agent_row(agent: &AgentReportEntry, now: jiff::Timestamp) -> Vec<render::Cell
         render::cell(model).fg(render::palette::muted())
     };
     let tokens = agent
-        .stats
-        .total_tokens
+        .context
+        .used_tokens
         .map(render::compact_count)
         .unwrap_or_else(|| "-".to_owned());
     vec![
@@ -370,6 +465,98 @@ fn agent_row(agent: &AgentReportEntry, now: jiff::Timestamp) -> Vec<render::Cell
 mod tests {
     use super::super::report::model_report;
     use super::*;
+    use rimz::agents::AgentStatus;
+
+    fn entry(status: AgentStatus) -> AgentReportEntry {
+        let state = test_agent(status.as_str());
+        let mut entry = build_entry(
+            &Default::default(),
+            &state,
+            None,
+            None,
+            format!("@{}", status.as_str()),
+            None,
+            jiff::Timestamp::UNIX_EPOCH,
+            ReportOverrides::default(),
+        );
+        entry.status = status;
+        entry.description = Some("provider overloaded".into());
+        entry
+    }
+
+    #[test]
+    fn card_projection_list_summary_counts_and_attention() {
+        let entries = [
+            AgentStatus::Running,
+            AgentStatus::Sleeping,
+            AgentStatus::Waiting,
+            AgentStatus::Paused,
+            AgentStatus::Failed,
+            AgentStatus::Success,
+        ]
+        .map(entry);
+        let mut out = anstream::StripStream::new(Vec::new());
+        render_list_summary(&mut out, &entries, 2, "whole room").unwrap();
+        let text = String::from_utf8(out.into_inner()).unwrap();
+        assert_eq!(
+            text.lines().next(),
+            Some(
+                "6 agents · 2 lanes · 3 needs you · 1 running · 1 sleeping · 1 at rest · whole room"
+            )
+        );
+        assert!(text.contains("\nneeds you\n"), "{text}");
+        for status in ["waiting", "paused", "failed"] {
+            assert!(
+                text.lines().any(|line| line.contains(&format!("@{status}"))
+                    && line.contains("provider overloaded")),
+                "{text}"
+            );
+        }
+        assert!(
+            !text.lines().skip(1).any(|line| line.contains("@running")),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn card_projection_list_summary_omits_zero_counts_and_uses_ask() {
+        let mut waiting = entry(AgentStatus::Waiting);
+        waiting.ask = Some(super::super::report::AskReport {
+            id: "ask_0123456789abcdef".parse().unwrap(),
+            kind: rimz::agents::AskKind::Question,
+            detail: Some("which strategy?".into()),
+            native_key: None,
+            since: jiff::Timestamp::UNIX_EPOCH,
+        });
+        let mut out = anstream::StripStream::new(Vec::new());
+        render_list_summary(&mut out, &[waiting], 1, "#auth").unwrap();
+        let text = String::from_utf8(out.into_inner()).unwrap();
+        assert_eq!(
+            text.lines().next(),
+            Some("1 agent · 1 lane · 1 needs you · #auth")
+        );
+        assert!(text.contains("which strategy?"), "{text}");
+        let mut out = Vec::new();
+        render_list_summary(&mut out, &[entry(AgentStatus::Success)], 1, "whole room").unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert_eq!(text.trim(), "1 agent · 1 lane · 1 at rest · whole room");
+    }
+
+    #[test]
+    fn card_projection_list_tokens_are_window_occupancy() {
+        let mut report = entry(AgentStatus::Running);
+        report.context.used_tokens = Some(81_234);
+        report.stats.total_tokens = Some(3_000_000);
+        let mut table = render::Table::new([
+            "HANDLE", "PROFILE", "AGENT", "STATUS", "MODEL", "CTX", "TOKENS", "SEEN",
+        ]);
+        table.row(agent_row(&report, jiff::Timestamp::UNIX_EPOCH));
+        let mut out = anstream::StripStream::new(Vec::new());
+        table.render(&mut out).unwrap();
+        let text = String::from_utf8(out.into_inner()).unwrap();
+        assert!(text.contains("81k"), "{text}");
+        assert!(!text.contains("3M"), "{text}");
+    }
 
     #[test]
     fn list_channel_filter_resolves_explicit_all_and_current_channel() {

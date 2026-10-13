@@ -1896,7 +1896,7 @@ mod render {
                 .split_whitespace()
                 .collect::<Vec<_>>(),
             [
-                "HANDLE", "PROFILE", "AGENT", "STATUS", "MODEL", "CTX", "TOKENS", "AGE"
+                "HANDLE", "PROFILE", "AGENT", "STATUS", "MODEL", "CTX", "TOKENS", "SEEN"
             ],
             "{text}"
         );
@@ -2033,8 +2033,9 @@ mod render {
             .expect("beta row");
         let earlier = first.min(second);
 
-        assert_eq!(first.abs_diff(second), 2, "{text}");
-        assert!(lines[earlier + 1].is_empty(), "{text}");
+        assert_eq!(first.abs_diff(second), 3, "{text}");
+        assert_eq!(lines[earlier + 1], "  -", "{text}");
+        assert!(lines[earlier + 2].is_empty(), "{text}");
         assert!(!text.ends_with("\n\n"), "{text}");
     }
 
@@ -2633,6 +2634,11 @@ fn a_lone_launch_word_naming_a_live_agent_refuses() {
     newer.name = Some("lucid-atlas".to_owned());
     newer.last_activity = Timestamp::from_second(9_000).unwrap();
     let live = [&older, &newer];
+    let snapshot = rimz::store::snapshot::SidebarSnapshot::build_with_agents(
+        WorkspaceId::from_project_root(Path::new("/repo")),
+        vec![older.clone(), newer.clone()],
+        Timestamp::UNIX_EPOCH,
+    );
     let refusal_in = |argv: &[&str], lane: Option<&str>| {
         let launch = parse_agents(argv).launch;
         let context = rimz::address::AddressContext {
@@ -2640,7 +2646,7 @@ fn a_lone_launch_word_naming_a_live_agent_refuses() {
             origin: rimz::address::ChannelOrigin::Stamped,
         };
         lone_launch_word(&launch)
-            .and_then(|word| collision_refusal(word, &live, &context))
+            .and_then(|word| collision_refusal(word, &live, &snapshot, &context))
             .map(|err| err.to_string())
     };
     let refusal = |argv: &[&str]| refusal_in(argv, None);
@@ -2684,7 +2690,7 @@ fn a_lone_launch_word_naming_a_live_agent_refuses() {
 
     let in_auth = refusal_in(&["rimz", "coder"], Some("auth")).expect("its own lane refuses");
     assert!(
-        in_auth.starts_with("`coder` names a live agent (@coder#auth)"),
+        in_auth.starts_with("`coder` names a live agent (@coder)"),
         "only the caller's lane counts: {in_auth}"
     );
     assert_eq!(
@@ -2697,5 +2703,5 @@ fn a_lone_launch_word_naming_a_live_agent_refuses() {
         channel: None,
         origin: rimz::address::ChannelOrigin::Root,
     };
-    assert!(collision_refusal("coder", &[], &context).is_none());
+    assert!(collision_refusal("coder", &[], &snapshot, &context).is_none());
 }
