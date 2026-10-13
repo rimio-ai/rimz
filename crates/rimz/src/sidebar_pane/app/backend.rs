@@ -35,6 +35,10 @@ impl PaneBackend {
         self.frame = Some(Vec::new());
     }
 
+    /// Write the buffered frame and flush once, even when the frame is empty.
+    /// The synchronized-output bracket wraps a non-empty frame only when the
+    /// caller passes `bracket`, which `FramePainter::draw_and_paint` does only
+    /// for frames carrying kitty graphics: a cell-only frame has no bracket.
     pub(super) fn end_frame(&mut self, bracket: bool) -> io::Result<()> {
         let frame = self.frame.take().unwrap_or_default();
         let bracket = bracket && !frame.is_empty();
