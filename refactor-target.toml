@@ -816,7 +816,9 @@ path = "crates/rimz/src/store"
 # RunListing and listing share cached run slices with host readers (+2).
 # Durable hibernation codec and record operations serve the producer and freeze/wake helpers.
 # Sidebar enrichment reads context sidecars only for its agent keys (`read_for_keys`, +2).
-surface-budget = 420
+# CardDescription and AgentCard::description share one styled description rule with CLI (+2).
+# SidebarSubAgent::holds_parent_turn is public for CLI delegation, within its existing slot.
+surface-budget = 422
 
 [[module]]
 path = "crates/rimz/src/theme"

@@ -221,7 +221,7 @@ fn settle(facts: SettleFacts<'_>) -> Settled {
         if source_agent.is_some_and(|agent| demotion.is_spent(agent, class)) {
             return Settled::with_label(AgentStatus::Failed, error.label.clone());
         }
-        return Settled::status(AgentStatus::Paused);
+        return Settled::with_label(AgentStatus::Paused, error.label.clone());
     }
     if let Some((error, _class)) = turn_error.filter(|(_, class)| {
         matches!(

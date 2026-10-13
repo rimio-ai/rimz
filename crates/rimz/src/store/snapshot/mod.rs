@@ -50,8 +50,8 @@ pub use panes::{SidebarOwnView, stamped_agent_for_pane};
 pub(crate) use process::pane_agent_kind;
 pub(crate) use process::{pane_worktree_path, process_is_active};
 pub use row::{
-    AgentCard, CacheClock, PaneAgent, ProcessCard, ProcessState, RowCallSplit, RowCard, SidebarRow,
-    SidebarSubAgent, SubAgentTokens,
+    AgentCard, CacheClock, CardDescription, PaneAgent, ProcessCard, ProcessState, RowCallSplit,
+    RowCard, SidebarRow, SidebarSubAgent, SubAgentTokens,
 };
 pub use view::{AgentWorktreeGroup, find_agent, group_live_agents_by_worktree};
 pub use view::{

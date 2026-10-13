@@ -248,7 +248,7 @@ fn displayed_status_rungs() -> Vec<StatusRung> {
             with_live_child: true,
             budget_windows: spent_windows(),
             expect: AgentStatus::Paused,
-            expect_error_label: false,
+            expect_error_label: true,
         },
         StatusRung {
             name: "overloaded marker parks without budget data",
@@ -259,7 +259,7 @@ fn displayed_status_rungs() -> Vec<StatusRung> {
             with_live_child: false,
             budget_windows: Vec::new(),
             expect: AgentStatus::Paused,
-            expect_error_label: false,
+            expect_error_label: true,
         },
         StatusRung {
             name: "rate-limit marker fails after reset",

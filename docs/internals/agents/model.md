@@ -252,7 +252,7 @@ The sidebar row projection, [`project_display_status`](../../../crates/rimz/src/
 | 1 | a `waiting` row that `is_awaiting_input` holds | `waiting` |
 | 2 | a `running` row with a native-wait or plan-proposal marker | `waiting` |
 | 3 | a budget park | `paused`, with spend against cap |
-| 4 | a turn-error marker of a pausing class | `paused`; `failed` with the upstream label once retries are exhausted or the limit window reset with no spent window |
+| 4 | a turn-error marker of a pausing class | `paused`, with the upstream label; `failed` with the same label once retries are exhausted or the limit window reset with no spent window |
 | 5 | a turn-error marker of a fatal class | `failed`, with the upstream label |
 | 6 | a live launched child with a displayed pausing marker under an `idle`, `success`, or `running` parent | `paused`, or `failed` after the child's spent-park demotion, labelled `@<child>: <label>` |
 | 7 | a displayed `running` subagent under an `idle`, `success`, or `running` parent | `running` |

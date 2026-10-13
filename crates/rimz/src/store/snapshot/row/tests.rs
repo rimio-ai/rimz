@@ -316,6 +316,95 @@ fn agent_card_activity_description_matches_agent_state_precedence() {
 }
 
 #[test]
+fn card_description_error_wins_over_sleeping_wait() {
+    let card = AgentCard {
+        status: AgentStatus::Sleeping,
+        turn_error_label: Some(" API Error:\nOverloaded ".to_owned()),
+        pending_waits: vec![crate::agents::PendingWait {
+            name: "wait-test".to_owned(),
+            trigger: crate::agents::PendingWaitTrigger::Signal {
+                selector: "pr.merged".to_owned(),
+            },
+            armed_at: Some(row_time()),
+        }],
+        ..AgentCard::default()
+    };
+    assert_eq!(
+        card.description(row_time()),
+        CardDescription::Error("API Error: Overloaded".to_owned())
+    );
+}
+
+#[test]
+fn card_description_sleeping_uses_first_wait_and_view_clock() {
+    let card = AgentCard {
+        status: AgentStatus::Sleeping,
+        turn_error_label: Some(" \n\t".to_owned()),
+        task: Some("finished work".to_owned()),
+        pending_waits: vec![
+            crate::agents::PendingWait {
+                name: "timer".to_owned(),
+                trigger: crate::agents::PendingWaitTrigger::Timer {
+                    due: row_time() + jiff::SignedDuration::from_mins(12),
+                    delay: None,
+                },
+                armed_at: Some(row_time()),
+            },
+            crate::agents::PendingWait {
+                name: "signal".to_owned(),
+                trigger: crate::agents::PendingWaitTrigger::Signal {
+                    selector: "pr.merged".to_owned(),
+                },
+                armed_at: Some(row_time()),
+            },
+        ],
+        ..AgentCard::default()
+    };
+    assert_eq!(
+        card.description(row_time()),
+        CardDescription::Wait("wakes in 12m".to_owned())
+    );
+    assert_eq!(
+        card.description(row_time() + jiff::SignedDuration::from_mins(12)),
+        CardDescription::Wait("wakes now".to_owned())
+    );
+}
+
+#[test]
+fn card_description_activity_ignores_wait_unless_sleeping_and_falls_to_none() {
+    let mut card = AgentCard {
+        task: Some(" ship\nwide ".to_owned()),
+        pending_waits: vec![crate::agents::PendingWait {
+            name: "wait-test".to_owned(),
+            trigger: crate::agents::PendingWaitTrigger::Signal {
+                selector: "pr.merged".to_owned(),
+            },
+            armed_at: Some(row_time()),
+        }],
+        ..AgentCard::default()
+    };
+    for status in [
+        AgentStatus::Idle,
+        AgentStatus::Running,
+        AgentStatus::Waiting,
+        AgentStatus::Paused,
+        AgentStatus::Failed,
+    ] {
+        card.status = status;
+        assert_eq!(
+            card.description(row_time()),
+            CardDescription::Activity("ship wide".to_owned()),
+            "{status:?}"
+        );
+    }
+    card.task = None;
+    assert_eq!(card.description(row_time()), CardDescription::None);
+    card.status = AgentStatus::Sleeping;
+    card.pending_waits.clear();
+    assert_eq!(card.description(row_time()), CardDescription::None);
+}
+
+#[test]
 fn agent_card_session_history_requires_positive_evidence() {
     assert!(!AgentCard::default().has_session_history());
     assert!(

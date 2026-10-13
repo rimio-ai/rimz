@@ -434,7 +434,7 @@ pub struct AgentCard {
     /// Open run of consecutive identical tool calls.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_repeat: Option<crate::agent_activity::ToolRepeat>,
-    /// Label explaining why the row projected to failed.
+    /// Label explaining why the row projected to paused or failed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_error_label: Option<String>,
 }
@@ -493,7 +493,35 @@ impl Default for AgentCard {
     }
 }
 
+/// The card's one-line description, with its presentation role.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CardDescription {
+    Error(String),
+    Wait(String),
+    Activity(String),
+    None,
+}
+
 impl AgentCard {
+    /// Error reason, sleeping wait, activity, or no description, at the view's clock.
+    pub fn description(&self, now: Timestamp) -> CardDescription {
+        if let Some(label) = self
+            .turn_error_label
+            .as_deref()
+            .and_then(crate::agents::single_line_description)
+        {
+            return CardDescription::Error(label);
+        }
+        if self.status == AgentStatus::Sleeping
+            && let Some(wait) = self.pending_waits.first()
+        {
+            return CardDescription::Wait(wait.label(now));
+        }
+        self.activity_description()
+            .and_then(crate::agents::single_line_description)
+            .map_or(CardDescription::None, CardDescription::Activity)
+    }
+
     pub fn current_sub_agents(&self) -> impl Iterator<Item = &SidebarSubAgent> {
         self.sub_agents.iter().filter(|child| !child.prior_turn)
     }
@@ -767,7 +795,7 @@ pub struct SidebarSubAgent {
 }
 
 impl SidebarSubAgent {
-    pub(crate) fn holds_parent_turn(&self) -> bool {
+    pub fn holds_parent_turn(&self) -> bool {
         self.status == AgentStatus::Running
     }
 

@@ -2,6 +2,39 @@ use super::*;
 use ratatui::text::Span;
 
 #[test]
+fn render_paused_turn_card_quotes_provider_reason_in_italics() {
+    let mut claude = agent(
+        "claude-1",
+        "claude",
+        AgentStatus::Running,
+        Some("/repo/main"),
+        Some("main"),
+        Some("db migrate"),
+    );
+    claude.last_activity = fixed_now() - Duration::from_secs(60);
+    let mut context = claude_context(fixed_now());
+    context.turn_error = Some(AgentTurnError {
+        class: TurnErrorClass::PausedOverloaded,
+        at: fixed_now() - Duration::from_secs(10),
+        label: Some("API Error: Overloaded".to_owned()),
+    });
+    claude.context = Some(context);
+    let snapshot = snapshot_with(vec![claude]);
+    let rendered = snapshot_to_screen(&snapshot, 54, 17);
+    assert!(rendered.contains("API Error: Overloaded"), "{rendered}");
+    assert!(!rendered.contains("store refactor"), "{rendered}");
+    let theme = Theme::fixed(false);
+    let lines = group_lines(&snapshot, &theme, 0);
+    assert!(
+        span_for(&lines, "API Error: Overloaded")
+            .style
+            .add_modifier
+            .contains(Modifier::ITALIC)
+    );
+    assert_snapshot("paused_turn_card", rendered);
+}
+
+#[test]
 fn sleeping_card_describes_its_wait_using_the_snapshot_clock() {
     let mut sleeper = agent(
         "claude-1",

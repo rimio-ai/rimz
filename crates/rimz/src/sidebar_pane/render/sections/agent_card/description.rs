@@ -1,4 +1,5 @@
 use super::*;
+use crate::store::snapshot::CardDescription;
 
 /// The compose-affordance frames for a selected, awaiting-first-prompt card:
 /// a fixed-width ellipsis that grows `.  ` -> `.. ` -> `...`.
@@ -32,9 +33,9 @@ pub(super) fn awaiting_prompt_line(animation_phase: u64, width: usize) -> Line<'
 /// `preview`. Named sessions and live task/prompt fallbacks keep the row
 /// labelled when richer metadata is absent. An idle agent with nothing to show
 /// yet contributes no line; any non-idle empty description falls to an em dash.
-/// A turn that died on a provider API error takes the line over the
+/// A turn that failed or paused on a provider API error takes the line over the
 /// fall-through — the soft upstream error text (`turn_error_label`, quoted
-/// verbatim) is the row's most important fact while the `!` escalation holds,
+/// verbatim) is the row's most important fact while the failure or pause holds,
 /// and the fall-through returns once it clears. The row emphasis that drives
 /// the glyph and name also drives the description: unread actionable rows and
 /// unread results blink, rows worth a look or selected rows read at full body
@@ -71,26 +72,17 @@ pub(super) fn description_line(
         }
     };
     let mut left = vec![Span::raw("  ")];
-    if let Some(label) = row
+    match row
         .as_agent()
-        .and_then(|agent| agent.turn_error_label.as_deref())
-        .and_then(crate::agents::single_line_description)
+        .map_or(CardDescription::None, |agent| agent.description(ctx.now))
     {
-        left.extend(body_spans(&label, true));
-    } else if let Some(wait) = row
-        .as_agent()
-        .filter(|agent| agent.status == AgentStatus::Sleeping)
-        .and_then(|agent| agent.pending_waits.first())
-    {
-        left.push(Span::styled(
-            wait.label(ctx.now),
+        CardDescription::Error(label) => left.extend(body_spans(&label, true)),
+        CardDescription::Wait(label) => left.push(Span::styled(
+            label,
             theme.body().add_modifier(Modifier::ITALIC),
-        ));
-    } else {
-        match descriptor(row).and_then(crate::agents::single_line_description) {
-            Some(text) => left.extend(body_spans(&text, false)),
-            None => left.push(Span::raw("—".to_owned())),
-        }
+        )),
+        CardDescription::Activity(text) => left.extend(body_spans(&text, false)),
+        CardDescription::None => left.push(Span::raw("—".to_owned())),
     }
     // The agent parked its turn on still-in-flight background work: keep the
     // real activity above and add a distinct, faint secondary marker rather than
@@ -102,19 +94,6 @@ pub(super) fn description_line(
         ));
     }
     Line::from(trim_spans_to_width(left, width))
-}
-
-/// The line-2 description: a rich session/thread name that does not merely
-/// prefix the prompt, then rich preview, launch or adapter description, task,
-/// first prompt, and latest prompt. Codex maps app-server `name` to the rich
-/// name and `preview` to the rich preview, so its concrete order is thread name
-/// → thread preview. The
-/// activity-bound `task` clears on idle, so the set-once first prompt keeps an
-/// unnamed session stably labelled until it earns richer metadata. `None` when
-/// the session has nothing to show — the caller skips blank idle cards or
-/// paints an em dash.
-pub(super) fn descriptor(row: &SidebarRow) -> Option<&str> {
-    row.as_agent().and_then(AgentCard::activity_description)
 }
 
 /// An idle agent with no submitted prompt or authored pre-prompt label. Rich

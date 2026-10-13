@@ -81,7 +81,7 @@ fn limit_marker_terminal_row_parks_until_budget_resets() {
             vec![window(100, 3_600)],
             vec![window(100, 3_600)],
             AgentStatus::Paused,
-            None,
+            Some("You've hit your usage limit"),
         ),
         (
             "recovered fused budget does not turn a live park into an actionable failure",
@@ -90,7 +90,7 @@ fn limit_marker_terminal_row_parks_until_budget_resets() {
             vec![window(100, -60)],
             vec![window(0, 3_600)],
             AgentStatus::Paused,
-            None,
+            Some("You've hit your usage limit"),
         ),
         (
             "a reset short window still waits on a longer spent window",
@@ -99,7 +99,7 @@ fn limit_marker_terminal_row_parks_until_budget_resets() {
             vec![window(100, -60), window(100, 86_400)],
             vec![window(100, -60), window(100, 86_400)],
             AgentStatus::Paused,
-            None,
+            Some("You've hit your usage limit"),
         ),
         (
             "a spent window with no recovery clock becomes actionable",
@@ -117,7 +117,7 @@ fn limit_marker_terminal_row_parks_until_budget_resets() {
             vec![window(100, 3_600)],
             vec![window(100, 3_600)],
             AgentStatus::Paused,
-            None,
+            Some("You've hit your monthly spend limit."),
         ),
         (
             "recovered fused budget keeps the spend-limit park non-actionable",
@@ -126,7 +126,7 @@ fn limit_marker_terminal_row_parks_until_budget_resets() {
             vec![window(100, -60)],
             vec![window(0, 3_600)],
             AgentStatus::Paused,
-            None,
+            Some("You've hit your monthly spend limit."),
         ),
         (
             "a spent window with no recovery clock becomes actionable",
@@ -245,9 +245,9 @@ fn legacy_session_limit_marker_parks_while_budget_is_spent() {
         Some(AgentStatus::Paused),
         "older sidecars with a failed-class session-limit marker still render as parked"
     );
-    assert!(
-        row.turn_error_label().is_none(),
-        "a parked limit keeps the upstream text out of the actionable-failure line"
+    assert_eq!(
+        row.turn_error_label(),
+        Some("You've hit your session limit · resets 10:50am (UTC)")
     );
 }
 
@@ -331,6 +331,7 @@ fn paused_class_marker_survives_the_stall_window() {
 
         let row = row(&snapshot, "busy-claude");
         assert_eq!(row.status(), Some(AgentStatus::Paused), "{expected}");
+        assert_eq!(row.turn_error_label(), Some(label), "{expected}");
     }
 }
 
