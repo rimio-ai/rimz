@@ -2,11 +2,9 @@
 //!
 //! The room host runs one attachment per pane it was handed. Nothing here reads the process terminal: geometry comes from the [`PaneBackend`], input and resize words from the supervisor through the host.
 
-use std::io::Write;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
-use std::time::Instant;
 
 use ratatui::Terminal;
 use ratatui::backend::{Backend, ClearType};
@@ -24,7 +22,7 @@ use super::input::Wakeup;
 use super::loop_state::{BaselineReporter, LoopState};
 use super::plane::DataPlane;
 use super::socket::write_heartbeat;
-use super::{Result, RuntimeFileGuard, ServeConfig, fetch_deadline_timeout};
+use super::{Result, RuntimeFileGuard, ServeConfig};
 
 /// Why an attachment's frame loop ended.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -133,7 +131,7 @@ impl Attachment {
             );
         }
         let mut terminal = Terminal::new(backend)?;
-        let mut titled = set_pane_title(&mut terminal)?;
+        let titled = terminal.backend_mut().set_pane_title()?;
         terminal.backend_mut().clear_region(ClearType::All)?;
         terminal.swap_buffers();
 
@@ -164,6 +162,7 @@ impl Attachment {
             pet_render_caps,
             pixel_lease.as_ref().map(|lease| lease.slot),
         );
+        state.titled = titled;
         state.room_caps = plane.caps.clone();
         state.share_width_geometry(plane.geometry.clone());
         state.events = plane.events.clone();
@@ -233,23 +232,7 @@ impl Attachment {
         let mut inbox = WakeupInbox::new(inbox);
         let loop_result: Result<()> = (|| {
             while !state.should_exit && !close_requested.load(Ordering::SeqCst) {
-                state.report_baseline();
-                let (_, mut timeout) = state.frame_timing();
-                timeout = fetch_deadline_timeout(timeout, fetch.next_deadline(), Instant::now());
-                inbox.dispatch_next(&mut state, &mut fetch, &mut terminal, timeout)?;
-                // A pane the mux had not laid out at attach gets its title
-                // with its first size.
-                if !titled {
-                    titled = set_pane_title(&mut terminal)?;
-                }
-
-                state.run_maintenance(&mut fetch, &terminal);
-                state.run_width_control_backstop(&mut terminal);
-                state.maybe_remind(&mut terminal);
-                // Read activity after dispatch: an input that started an
-                // animation must keep its frame boundary, not the idle re-arm.
-                let (active, _) = state.frame_timing();
-                state.paint_frame_if_due(&mut terminal, active)?;
+                state.step(&mut inbox, &mut fetch, &mut terminal)?;
             }
             Ok(())
         })();
@@ -271,16 +254,4 @@ impl Attachment {
             },
         )
     }
-}
-
-/// Name the pane as sidebar chrome. `false` while the pane is unsized, when
-/// the backend drops everything written to it.
-fn set_pane_title(terminal: &mut Terminal<PaneBackend>) -> std::io::Result<bool> {
-    let backend = terminal.backend_mut();
-    if backend.is_unsized() {
-        return Ok(false);
-    }
-    write!(backend, "\x1b]2;{}\x07", crate::pane::SIDEBAR_CHROME_TITLE)?;
-    Write::flush(backend)?;
-    Ok(true)
 }

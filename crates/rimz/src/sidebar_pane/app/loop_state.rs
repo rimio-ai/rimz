@@ -40,6 +40,7 @@ use super::fetch::{
 };
 use super::gate::{GateState, apply_gate, gate_remaining};
 use super::health::{Health, degraded_too_long};
+use super::inbox::WakeupInbox;
 use super::input::{InputMode, KeyAction, Wakeup, resolve_key};
 use super::lifecycle::{
     PaintHold, SELF_CLOSE_WATCHDOG, SelfCloseState, grow_beyond_legit, resize_grew,
@@ -64,7 +65,7 @@ use super::timing::{
     next_frame_after, tick_for,
 };
 use super::width_control::WidthController;
-use super::{Result, ServeConfig};
+use super::{Result, ServeConfig, fetch_deadline_timeout};
 
 const RESIZE_CAPS_SETTLE: Duration = Duration::from_millis(300);
 
@@ -144,6 +145,7 @@ pub(super) struct LoopState {
     prev_width: Option<u16>,
     caps_refresh_deadline: Option<Instant>,
     width_control: WidthController,
+    pub(super) titled: bool,
     pub(super) should_exit: bool,
     pub(super) exit_cause: Option<RendererExitCause>,
     pub(super) tab_emptied: bool,
@@ -287,6 +289,7 @@ impl LoopState {
             prev_width: initial_width,
             caps_refresh_deadline: None,
             width_control,
+            titled: false,
             should_exit: false,
             exit_cause: None,
             tab_emptied: false,
@@ -294,6 +297,32 @@ impl LoopState {
             baseline_changed: Box::new(|_| {}),
             last_reported_baseline: baseline_pane,
         }
+    }
+
+    /// Run one serve-loop iteration, the decision point for frame timing.
+    ///
+    /// Read activity again after dispatch so an input-started animation avoids the idle re-arm.
+    pub(super) fn step(
+        &mut self,
+        inbox: &mut WakeupInbox,
+        fetch: &mut FetchDispatcher,
+        terminal: &mut Terminal<PaneBackend>,
+    ) -> Result<()> {
+        self.report_baseline();
+        let (_, mut timeout) = self.frame_timing();
+        timeout = fetch_deadline_timeout(timeout, fetch.next_deadline(), Instant::now());
+        inbox.dispatch_next(self, fetch, terminal, timeout)?;
+        // A pane the mux had not laid out at attach gets its title
+        // with its first size.
+        if !self.titled {
+            self.titled = terminal.backend_mut().set_pane_title()?;
+        }
+
+        self.run_maintenance(fetch, terminal);
+        self.run_width_control_backstop(terminal);
+        self.maybe_remind(terminal);
+        let (active, _) = self.frame_timing();
+        self.paint_frame_if_due(terminal, active)
     }
 
     pub(super) fn report_baseline(&mut self) {
@@ -323,7 +352,7 @@ impl LoopState {
         );
     }
 
-    pub(super) fn frame_timing(&self) -> (bool, Duration) {
+    fn frame_timing(&self) -> (bool, Duration) {
         let clock = frame_clock(
             self.anim_start,
             self.current.theme.display.resolved_refresh_ms(),
@@ -483,6 +512,7 @@ impl LoopState {
             // delivery drives itself.
             anim_start: _,
             paint: _,
+            titled: _,
             dirty: _,
             paint_hold: _,
             next_frame: _,
@@ -982,7 +1012,7 @@ impl LoopState {
         self.width_control.observe(size.width, trigger, &self.diag);
     }
 
-    pub(super) fn run_width_control_backstop(&mut self, terminal: &mut Terminal<PaneBackend>) {
+    fn run_width_control_backstop(&mut self, terminal: &mut Terminal<PaneBackend>) {
         self.width_control.backstop(
             terminal.size().ok().map(|size| size.width),
             self.current
@@ -1261,11 +1291,7 @@ impl LoopState {
         fetch.request(FetchRequest::default(), true);
     }
 
-    pub(super) fn run_maintenance(
-        &mut self,
-        fetch: &mut FetchDispatcher,
-        terminal: &Terminal<PaneBackend>,
-    ) {
+    fn run_maintenance(&mut self, fetch: &mut FetchDispatcher, terminal: &Terminal<PaneBackend>) {
         let own_pane = self.config.own_pane.clone();
         let room_caps = self.room_caps.clone();
         self.refresh_pet_render_caps_if_stale_with(
@@ -1356,7 +1382,7 @@ impl LoopState {
         }
     }
 
-    pub(super) fn maybe_remind(&mut self, terminal: &mut Terminal<PaneBackend>) {
+    fn maybe_remind(&mut self, terminal: &mut Terminal<PaneBackend>) {
         self.remind
             .maybe_remind(&self.config, terminal, &self.current, &self.diag);
     }
@@ -1367,7 +1393,7 @@ impl LoopState {
         }
     }
 
-    pub(super) fn paint_frame_if_due(
+    fn paint_frame_if_due(
         &mut self,
         terminal: &mut Terminal<PaneBackend>,
         active: bool,

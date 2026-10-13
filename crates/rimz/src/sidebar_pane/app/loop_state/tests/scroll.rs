@@ -141,13 +141,7 @@ fn wheel_input_pulls_the_next_grid_frame_in() {
     rig.state.next_frame = Instant::now() + Duration::from_secs(1);
     assert!(!rig.frame_active(), "the run starts from an idle loop");
     let mut inbox = queued((0..3).map(|_| Wakeup::Scroll { down: true }));
-    dispatch(&mut rig, &mut inbox);
-    // The serve loop's frame step after dispatch reads activity afresh; an
-    // idle reading taken before the wheel would re-arm the base grid and the
-    // glide would finish before its first eased frame.
-    let active = rig.frame_active();
-    assert!(active);
-    rig.paint(active);
+    rig.step(&mut inbox);
     assert!(
         rig.state
             .next_frame

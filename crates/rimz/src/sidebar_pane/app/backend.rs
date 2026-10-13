@@ -31,6 +31,16 @@ enum Geometry {
 }
 
 impl PaneBackend {
+    /// Name the pane as sidebar chrome; return `false` while the unsized backend drops writes.
+    pub(super) fn set_pane_title(&mut self) -> io::Result<bool> {
+        if self.is_unsized() {
+            return Ok(false);
+        }
+        write!(self, "\x1b]2;{}\x07", crate::pane::SIDEBAR_CHROME_TITLE)?;
+        Write::flush(self)?;
+        Ok(true)
+    }
+
     pub(super) fn begin_frame(&mut self) {
         self.frame = Some(Vec::new());
     }
