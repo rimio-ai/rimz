@@ -39,6 +39,12 @@ impl ScrollEase {
         self.armed = false;
     }
 
+    /// Land the flight on its target now and drop any pending wheel arm.
+    pub(in crate::sidebar_pane) fn cancel(&mut self) {
+        self.from = self.to;
+        self.armed = false;
+    }
+
     pub(in crate::sidebar_pane) fn in_flight(&self) -> bool {
         self.from != self.to
     }

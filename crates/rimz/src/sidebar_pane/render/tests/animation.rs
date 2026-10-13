@@ -2,6 +2,76 @@ use super::*;
 use crate::sidebar_pane::app::fixtures::{agent_snapshot, pane, snapshot, workspace};
 
 #[test]
+fn wheel_ease_overrides_fast_pet_help_and_fade_grids() {
+    let ws = workspace();
+    let mut snapshot = agent_snapshot(&ws);
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[0]
+    .as_agent_mut()
+    .unwrap()
+    .status = AgentStatus::Running;
+    let mut ui = selected_ui();
+    ui.scroll_ease.arm();
+    ui.scroll_ease.observe(9, 0);
+    for refresh_ms in [16, 100, 1000] {
+        snapshot.theme.display.refresh_ms = refresh_ms;
+        ui.theme(&snapshot.theme);
+        assert_eq!(
+            animation_interval(&snapshot, &ui, 0, false),
+            Some(scroll_ease::SCROLL_EASE_FRAME)
+        );
+    }
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[0]
+    .as_agent_mut()
+    .unwrap()
+    .status = AgentStatus::Idle;
+    snapshot.theme.pets.enabled = true;
+    ui.pet = Some(crate::sidebar_pane::pets::PetView {
+        body: None,
+        caption: None,
+        frame_interval: Some(Duration::from_millis(625)),
+    });
+    ui.theme(&snapshot.theme);
+    assert_eq!(
+        animation_interval(&snapshot, &ui, 0, false),
+        Some(scroll_ease::SCROLL_EASE_FRAME)
+    );
+    ui.scrollbar.observe(0, 0);
+    ui.scrollbar.observe(1, 1);
+    ui.help_visible = true;
+    assert_eq!(
+        animation_interval(&snapshot, &ui, 1, false),
+        Some(scroll_ease::SCROLL_EASE_FRAME)
+    );
+}
+
+#[test]
+fn settling_draw_returns_to_fade_grid_then_idle() {
+    let ws = workspace();
+    let snapshot = snapshot(&ws);
+    let mut ui = selected_ui();
+    ui.theme(&snapshot.theme);
+    ui.scrollbar.observe(0, 0);
+    ui.scroll_ease.arm();
+    ui.scroll_ease.observe(9, 0);
+    // An overdue flight still needs its final paint, even when the observed phase is ahead.
+    assert_eq!(
+        animation_interval(&snapshot, &ui, 100, false),
+        Some(scroll_ease::SCROLL_EASE_FRAME)
+    );
+    ui.scroll_ease.observe(9, 100);
+    ui.scrollbar.observe(9, 1);
+    assert_eq!(
+        animation_interval(&snapshot, &ui, 1, false),
+        Some(Duration::from_millis(100))
+    );
+    assert_eq!(animation_interval(&snapshot, &ui, 100, false), None);
+}
+
+#[test]
 fn animation_gate_uses_observed_phase_for_money_and_scrollbar() {
     let ws = workspace();
     let snapshot = snapshot(&ws);

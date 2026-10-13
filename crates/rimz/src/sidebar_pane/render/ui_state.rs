@@ -71,8 +71,15 @@ pub(in crate::sidebar_pane) struct UiState {
     /// The active renderer-local order/visibility hold, or `None` while rows
     /// rank and cap live.
     pub(in crate::sidebar_pane) order_hold: Option<OrderHold>,
-    /// Target scroll-zone offset, clamped and auto-followed on every draw unless a [`ManualScroll`] pin holds it. [`Self::scroll_ease`] supplies the visible position.
+    /// Target first scroll-zone content line of the agent-cards viewport.
+    /// Resolved by every draw — clamped to the zone, then auto-scrolled so the
+    /// selected card stays in view unless a [`ManualScroll`] pin holds it —
+    /// and written back as a byproduct of the draw, like frame interactions.
+    /// The line actually shown is [`Self::scroll_ease`]'s visible row.
     pub(in crate::sidebar_pane) scroll_offset: usize,
+    /// The wheel glide from the last shown line toward `scroll_offset`: armed
+    /// by a wheel tick, observed at every draw's write-back, snapped by any
+    /// other target change.
     pub(in crate::sidebar_pane) scroll_ease: ScrollEase,
     /// Maximum offset in the last drawn frame, absent before the first draw.
     pub(in crate::sidebar_pane) drawn_scroll_max: Option<usize>,
@@ -94,7 +101,7 @@ pub(in crate::sidebar_pane) struct UiState {
     /// off it releases the guard so a later revisit clears normally.
     pub(in crate::sidebar_pane) unread_guard: Option<String>,
     /// The agent-cards scrollbar's auto-hide fade: every draw folds the
-    /// resolved viewport offset into it as a write-back byproduct, and the
+    /// visible viewport offset into it as a write-back byproduct, and the
     /// `auto` scrollbar mode reads it to paint the bar only while the viewport
     /// moves plus a short settle window. Crate-internal, like `tally`.
     pub(in crate::sidebar_pane) scrollbar: ScrollbarFade,

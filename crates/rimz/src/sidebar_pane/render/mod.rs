@@ -100,6 +100,11 @@ fn draw_into(
     // the geometry of the frame the user is actually looking at.
     prune_expanded_groups(snapshot, ui);
     prune_delegation_state(snapshot, ui);
+    // Selection-follow and focus anchors snap, even onto the target a wheel
+    // flight was already heading for.
+    if ui.manual_scroll.is_none() {
+        ui.scroll_ease.cancel();
+    }
     let theme = ui.theme(&snapshot.theme);
     let mut meter_pixels = ui.meter_pixels.take();
     let composed = compose_lines_with_meter(
@@ -116,7 +121,8 @@ fn draw_into(
     let bottom_height = composed.bottom_height;
     ui.interactions = composed.interactions;
     ui.scrollbar
-        .observe(composed.scroll_offset, ui.animation_phase);
+        .observe(composed.visible_scroll_offset, ui.animation_phase);
+    ui.scroll_ease.observe(composed.scroll_offset, ui.frame_ms);
     ui.scroll_offset = composed.scroll_offset;
     ui.drawn_scroll_max = Some(composed.scroll_max);
     // One paint consumes the focus reveal; later folds with unchanged selection
@@ -575,6 +581,9 @@ pub(in crate::sidebar_pane) fn animation_interval(
     phase: u64,
     alert_active: bool,
 ) -> Option<Duration> {
+    if ui.scroll_ease.in_flight() {
+        return Some(SCROLL_EASE_FRAME);
+    }
     let refresh_ms = snapshot.theme.display.resolved_refresh_ms();
     let base = crate::sidebar::timing::animation_frame(refresh_ms);
     let Some(theme) = ui.cached_theme(&snapshot.theme) else {

@@ -37,12 +37,14 @@ use super::{
 /// body is a stale/empty fetch, so the footer steps aside and the alert speaks
 /// beneath any committed search.
 ///
-/// The viewport window is `UiState::scroll_offset`, resolved here each frame:
+/// The viewport target is `UiState::scroll_offset`, resolved here each frame:
 /// clamped to the zone, then minimally auto-scrolled so the selected card — its
 /// expanded subagent lines included — sits fully in view, unless a manual wheel
 /// pin ([`ManualScroll`]) holds the window. A one-shot external-focus reveal can
-/// widen that span to include the selected row's worktree header. The effective
-/// offset is returned for the caller to write back, a draw byproduct like the
+/// widen that span to include the selected row's worktree header. The unread
+/// banner decides from the target; the cards, scrollbar, and hit geometry use
+/// the visible row from `UiState::scroll_ease`, clamped to that viewport. Both
+/// offsets are returned for the caller to write back, a draw byproduct like the
 /// hit-test map. When the cards overflow the viewport, each visible scroll line
 /// carries a track/thumb glyph in the right rail column — part of the composed
 /// line, so every consumer of the frame sees it.
@@ -141,7 +143,8 @@ pub(in crate::sidebar_pane) fn compose_lines_with_meter(
     ComposedFrame {
         lines: frame.lines,
         interactions: frame.interactions,
-        scroll_offset: layout.offset,
+        scroll_offset: layout.target_offset,
+        visible_scroll_offset: layout.offset,
         scroll_max: scroll_len.saturating_sub(layout.viewport),
         top_height: layout.top_shown,
         bottom_height,
@@ -154,6 +157,7 @@ struct ZoneLayout {
     show_banner: bool,
     top_shown: usize,
     viewport: usize,
+    target_offset: usize,
     offset: usize,
 }
 
@@ -198,7 +202,7 @@ fn plan_zones(input: ZoneInputs<'_, '_>) -> ZoneLayout {
         .saturating_add(usize::from(show_banner))
         .min(after_bottom);
     let viewport = after_bottom - top_shown;
-    let offset = if show_banner {
+    let target_offset = if show_banner {
         resolve_scroll_offset(roster, ui, scroll_map, scroll_len, viewport)
     } else {
         offset_without_banner
@@ -207,7 +211,11 @@ fn plan_zones(input: ZoneInputs<'_, '_>) -> ZoneLayout {
         show_banner,
         top_shown,
         viewport,
-        offset,
+        target_offset,
+        offset: ui
+            .scroll_ease
+            .visible(target_offset, ui.frame_ms)
+            .min(scroll_len.saturating_sub(viewport)),
     }
 }
 
@@ -464,6 +472,7 @@ pub(in crate::sidebar_pane) struct ComposedFrame {
     pub(in crate::sidebar_pane) lines: Vec<Line<'static>>,
     pub(in crate::sidebar_pane) interactions: FrameInteractions,
     pub(in crate::sidebar_pane) scroll_offset: usize,
+    pub(super) visible_scroll_offset: usize,
     pub(in crate::sidebar_pane) scroll_max: usize,
     pub(in crate::sidebar_pane) top_height: usize,
     pub(in crate::sidebar_pane) bottom_height: usize,
