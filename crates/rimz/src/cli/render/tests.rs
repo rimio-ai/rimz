@@ -2,6 +2,130 @@ use super::*;
 use serde::ser::Error as _;
 
 #[test]
+fn ambiguity_rows_are_ranked_runnable_and_offer_stop_all() {
+    let now = Timestamp::now();
+    let mut agents = Vec::new();
+    for (id, state) in [
+        ("idle", rimz::agents::AgentStatus::Idle),
+        ("running", rimz::agents::AgentStatus::Running),
+        ("waiting", rimz::agents::AgentStatus::Waiting),
+    ] {
+        let mut agent = rimz::testkit::agent_state("claude", id, now);
+        agent.role = Some("coder".into());
+        agent.channel = Some(id.into());
+        agent.status = state;
+        agents.push(agent);
+    }
+    let snapshot = rimz::store::snapshot::SidebarSnapshot::build_with_agents(
+        rimz::ids::WorkspaceId::from_project_root(std::path::Path::new("/repo")),
+        agents,
+        now,
+    );
+    let context = crate::cli::CurrentChannel::Unscoped.address_context();
+    let mut error =
+        crate::cli::resolve_agent_one_unhinted(None, &snapshot, "@coder", None, &context)
+            .unwrap_err();
+    error
+        .downcast_mut::<AmbiguousAgents>()
+        .unwrap()
+        .offer_stop_all();
+    let argv = ["rimz", "agents", "stop", "@coder"].map(str::to_owned);
+    let output = strip(|out| write_report_with_args(out, &error, &argv));
+    assert!(
+        output.contains("matches 3 live agents; pick one:"),
+        "{output}"
+    );
+    assert!(
+        output.find("'@coder#waiting'").unwrap() < output.find("'@coder#running'").unwrap(),
+        "{output}"
+    );
+    assert!(
+        output.find("'@coder#running'").unwrap() < output.find("'@coder#idle'").unwrap(),
+        "{output}"
+    );
+    assert!(
+        output.contains("or stop every match: rimz agents stop @coder --all"),
+        "{output}"
+    );
+    let output = strip(|out| {
+        write_report_with_args(
+            out,
+            &error,
+            &["rimz".into(), "agents".into(), "show".into(), "@me".into()],
+        )
+    });
+    assert!(
+        output
+            .lines()
+            .any(|line| line.trim_start().starts_with("@coder#waiting")),
+        "{output}"
+    );
+    // A branch-style worktree flag takes the row's lane, so the pasted row
+    // does not contradict its own address.
+    for (flag, rewritten) in [
+        (vec!["-w", "feature/foo"], "-w waiting"),
+        (vec!["--worktree=feature/foo"], "'--worktree=waiting'"),
+    ] {
+        let argv = ["rimz", "agents", "show"]
+            .into_iter()
+            .chain(flag)
+            .chain(["@coder"])
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        let output = strip(|out| write_report_with_args(out, &error, &argv));
+        assert!(
+            output.contains(&format!("rimz agents show {rewritten} '@coder#waiting'")),
+            "{output}"
+        );
+        assert!(!output.contains("feature/foo"), "{output}");
+    }
+}
+
+#[test]
+fn message_management_ambiguities_offer_no_send_all_retry() {
+    let snapshot = rimz::store::snapshot::SidebarSnapshot::build_with_agents(
+        rimz::ids::WorkspaceId::from_project_root(std::path::Path::new("/repo")),
+        Vec::new(),
+        Timestamp::now(),
+    );
+    let reader = crate::cli::CurrentChannel::Unscoped.address_context();
+    let error = AmbiguousAgents::new("@coder", &[], &snapshot, &reader, false).into();
+    for verb in ["clear", "list"] {
+        let argv = ["rimz", "message", verb, "@coder"].map(str::to_owned);
+        let output = strip(|out| write_report_with_args(out, &error, &argv));
+        assert!(!output.contains("or message every match:"), "{output}");
+    }
+}
+
+#[test]
+fn message_send_all_retry_precedes_the_option_terminator() {
+    let snapshot = rimz::store::snapshot::SidebarSnapshot::build_with_agents(
+        rimz::ids::WorkspaceId::from_project_root(std::path::Path::new("/repo")),
+        Vec::new(),
+        Timestamp::now(),
+    );
+    let reader = crate::cli::CurrentChannel::Unscoped.address_context();
+    let error = AmbiguousAgents::from_labels("@coder", &[], &snapshot, &reader).into();
+    for (argv, retry) in [
+        (
+            vec!["rimz", "message", "@coder", "hi"],
+            "rimz message --all @coder hi",
+        ),
+        (
+            vec!["rimz", "message", "--", "@coder", "hi"],
+            "rimz message --all -- @coder hi",
+        ),
+    ] {
+        let argv = argv.into_iter().map(str::to_owned).collect::<Vec<_>>();
+        let output = strip(|out| write_report_with_args(out, &error, &argv));
+        assert!(
+            output.contains(&format!("or message every match: {retry}")),
+            "{output}"
+        );
+    }
+}
+
+#[test]
 fn headerless_tables_align_rows_without_padding_absent_options() {
     let mut table = Table::new(["LONG NAME", "LONG TARGET", "OPTIONS"])
         .without_headers()

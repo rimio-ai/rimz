@@ -304,7 +304,7 @@ pub fn dispatch(
             target: request.target,
             labels: targets
                 .iter()
-                .map(|target| target.label(&snapshot))
+                .map(|target| target.fanout_label(&snapshot))
                 .collect(),
             kind: request.mode.kind(),
         });
@@ -362,6 +362,15 @@ struct ResolvedTarget {
 }
 
 impl ResolvedTarget {
+    fn fanout_label(&self, snapshot: &SidebarSnapshot) -> String {
+        if self.agent.is_none()
+            && let Some(pane) = &self.pane
+        {
+            return pane.pane_id.to_string();
+        }
+        self.label(snapshot)
+    }
+
     fn label(&self, snapshot: &SidebarSnapshot) -> String {
         if let Some(agent) = self.agent.as_ref() {
             let peers = crate::address::addressable_agents(snapshot);

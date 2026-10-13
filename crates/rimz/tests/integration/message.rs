@@ -9651,6 +9651,18 @@ fn steer_fanout_requires_opt_in_then_reports_all_targets() {
     assert!(!out.status.success());
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("--all"), "stderr: {stderr}");
+    assert!(
+        stderr.contains("matches 2 live agents; pick one:"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("message --steer '@claude#feature-aa' -- hello"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("message --steer '@claude#feature-ab' -- hello"),
+        "{stderr}"
+    );
     assert!(trace_lines(&trace_log).is_empty());
 
     let out = run_success(

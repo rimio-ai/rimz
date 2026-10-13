@@ -73,7 +73,7 @@ How many matches a command accepts:
 | `refresh` | One agent with a reference; every live root agent in the channel without one; the whole workspace with `--all`. |
 | `message` | One agent unless you opt into fan-out with `--all` or address `@all`. |
 
-An ambiguity lists up to eight addresses you can retype, the full match count, and a pointer to `rimz agents list --all` when more matches remain. `show`, `fork`, `history`, and `explain` consult ended agents only after a live miss; a live ambiguity is not widened to historical sessions.
+An ambiguity lists up to eight runnable commands, with status, activity age, and description. A row whose address names a lane also carries that lane in any `--channel`/`--worktree`/`-w` flag of the original command, so the row never contradicts itself. Agents waiting on a person come first, then running agents, then the rest, newest activity first within each group. The header gives the full match count and distinguishes live from recorded agents; a pointer to `rimz agents list --all` appears when more matches remain. `stop` and `message` also offer `--all`. `show`, `fork`, `history`, and `explain` consult ended agents only after a live miss; a live ambiguity is not widened to historical sessions.
 
 A fan-out message is prefixed with the addressed handle (`@all,`, `@claude,`) so receivers read it as a group message. A human-sent `@all` reaches every match. An agent-sent `@all` skips the sender and fails when no other agent remains; an explicit `--all @claude` from an agent keeps every match. The [message reference](./message.md) owns delivery.
 
@@ -321,7 +321,7 @@ rimz agents resume @bright-otter
 rimz agents resume @a1b2c3d4 --bg
 ```
 
-Resolution checks live agents in the current channel first, then retained agents across the room. An ambiguous reference refuses and names the candidates. A live session refuses with `rimz agents focus @<name>`; a team member points to `rimz agents <team>.<role> --resume`; a child or provider subagent points to `rimz subagents`. `--fresh`, `--from-pr`, and `--worktree` take lane scopes only, not an `@ref`.
+Resolution checks live agents first, then retained agents under the same channel context. After a scoped miss, a room-wide retained lookup is accepted only when exactly one agent matches, so a stopped agent's unique pet name still works from another lane. Otherwise the live miss and its correction remain the answer. An ambiguity in the requested scope refuses and names the candidates. A live session refuses with `rimz agents focus @<name>`; a team member points to `rimz agents <team>.<role> --resume`; a child or provider subagent points to `rimz subagents`. `--fresh`, `--from-pr`, and `--worktree` take lane scopes only, not an `@ref`.
 
 The session keeps its provider, working directory, channel, and saved launch posture, with its profile rendered from current definitions. Account selection is the same as lane resume: the room's selected account must share the session's history pool. Missing worktrees, unsupported resume CLIs, absent saved conversations, resume caps, unsupported prompt replacement, and unavailable or mismatched accounts refuse rather than launching fresh. A missing worktree also records the session ended. Success prints `resumed <kind>:<name> (<session-id>)` on stdout.
 
@@ -616,7 +616,7 @@ Read messages to and from one agent, including `@me` from an agent's own pane. F
 
 A live agent with no messages exits 0 and prints `@handle has no messages yet (launched 37s ago, no turn opened)` on stderr. The age uses its recorded launch time, and `no turn opened` disappears once a turn has opened. Without a recorded launch time, it prints only `@handle has no messages yet`. The handle includes its channel when needed. An agent whose recorded entries are all RimZ automation traffic, hidden from this view, reads `@handle shows only RimZ traffic: N entries hidden (--json shows them)` instead.
 
-`rimz agents logs <TARGET>` shows the same view as [`rimz transcript <agent>`](./transcript.md). It resolves live agents first and historical sessions only after a live miss; ambiguity refuses with addresses to retype rather than choosing a session. Like `transcript`, it requires an existing room and refuses outside one with `no room at <root>: run \`rimz start\` there, or pass --root <room>`. Human output hides subagent digests, waits, and `rimz`-authored prompts along with the output of the turns they open; JSON keeps them. Unlike `transcript`, `logs` prints no prior-session note and has no `-w` or `--flat` flag.
+`rimz agents logs <TARGET>` shows the same view as [`rimz transcript <agent>`](./transcript.md). It resolves live agents first and historical sessions only after a live miss; live ambiguity offers runnable commands, while historical ambiguity lists addresses to retype rather than choosing a session. Like `transcript`, it requires an existing room and refuses outside one with `no room at <root>: run \`rimz start\` there, or pass --root <room>`. Human output hides subagent digests, waits, and `rimz`-authored prompts along with the output of the turns they open; JSON keeps them. Unlike `transcript`, `logs` prints no prior-session note and has no `-w` or `--flat` flag.
 
 | Flag | Effect |
 | --- | --- |

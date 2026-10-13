@@ -138,7 +138,7 @@ fn resolve_live_or_audit(
             Err(error) if super::resolution_missed(&error) => error,
             Err(error) => return Err(error),
         };
-    match show::resolve_audit_agent(store, workspace, runtime, reference)? {
+    match show::resolve_audit_agent(store, workspace, runtime, reference, channel)? {
         Some(agent) => Ok((agent, false)),
         None => super::resolve_hint(reference, Err(live_error)),
     }

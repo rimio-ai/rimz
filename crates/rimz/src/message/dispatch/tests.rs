@@ -5,6 +5,18 @@ use crate::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
 use crate::pane::PaneRef;
 
 #[test]
+fn fanout_labels_pin_sessionless_panes() {
+    let mut pane = owner_pane("unused", Some("coder"));
+    pane.agent_id = None;
+    let snapshot = snapshot_with_panes(Vec::new(), vec![pane.clone()]);
+    let target = ResolvedTarget {
+        pane: Some(pane),
+        agent: None,
+    };
+    assert_eq!(target.fanout_label(&snapshot), "zellij:terminal_1");
+}
+
+#[test]
 fn dispatch_park_causes_follow_schedule_conditions_readiness_and_fifo() {
     let mut receiver = resident("session", "terminal_1");
     receiver.status = AgentStatus::Idle;

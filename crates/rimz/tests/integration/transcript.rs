@@ -144,7 +144,28 @@ fn agents_show_ambiguity_excludes_ended_matches() {
                 &observation,
             ))
             .unwrap();
-        if n >= 2 {
+        if n < 2 {
+            observation.signal = if n == 0 {
+                rimz::agents::LifecycleSignal::AwaitingInput {
+                    kind: rimz::agents::AskKind::Question,
+                    ask_id: None,
+                    detail: Some("Which strategy?".into()),
+                    native_key: None,
+                }
+            } else {
+                rimz::agents::LifecycleSignal::TurnStarted { turn_id: None }
+            };
+            store
+                .append_event(&rimz::EventEnvelope::agent_lifecycle(
+                    env.workspace_id.clone(),
+                    "session",
+                    "claude",
+                    "activity",
+                    &observation,
+                ))
+                .unwrap();
+        }
+        if n >= 10 {
             observation.signal = rimz::agents::LifecycleSignal::Ended;
             store
                 .append_event(&rimz::EventEnvelope::agent_lifecycle(
@@ -158,7 +179,7 @@ fn agents_show_ambiguity_excludes_ended_matches() {
         }
     }
     let live = store.snapshot_cached().unwrap();
-    assert_eq!(live.agents.len(), 2, "live fixture: {:#?}", live.agents);
+    assert_eq!(live.agents.len(), 10, "live fixture: {:#?}", live.agents);
     for json in [false, true] {
         let mut command = env.rimz();
         command.args(["agents", "show", "@peer"]);
@@ -174,10 +195,38 @@ fn agents_show_ambiguity_excludes_ended_matches() {
         );
         let stderr = String::from_utf8_lossy(&result.stderr);
         assert!(
-            stderr.contains("matches 2 agents: @peer#lane-0, @peer#lane-1"),
+            stderr.contains("matches 10 live agents; pick one:"),
             "{stderr}"
         );
-        assert!(!stderr.contains("lane-2"), "{stderr}");
+        assert!(!stderr.contains("lane-10"), "{stderr}");
+        assert!(
+            stderr.contains("… and 2 more (rimz agents list --all)"),
+            "{stderr}"
+        );
+        let rows: Vec<_> = stderr
+            .lines()
+            .filter(|line| line.contains(" agents show "))
+            .collect();
+        assert_eq!(rows.len(), 8, "{stderr}");
+        assert!(
+            rows[0].contains("'@peer#lane-0'") && rows[0].contains("waiting"),
+            "{stderr}"
+        );
+        assert!(
+            rows[1].contains("'@peer#lane-1'") && rows[1].contains("running"),
+            "{stderr}"
+        );
+        for row in rows {
+            let args = shlex::split(row.trim()).unwrap();
+            assert_eq!(&args[1..3], &["agents", "show"]);
+            assert!(args[3].starts_with("@peer#lane-"), "{row}");
+            let resolved = env
+                .rimz()
+                .args(["agents", "show", &args[3], "--json"])
+                .output()
+                .unwrap();
+            assert!(resolved.status.success(), "{resolved:?}");
+        }
     }
 }
 
@@ -243,8 +292,107 @@ fn transcript_live_ambiguity_matches_agents_show() {
         !transcript.status.success(),
         "an empty log must not hide live ambiguity"
     );
-    assert_eq!(transcript.stderr, show.stderr);
-    assert!(String::from_utf8_lossy(&show.stderr).contains("matches 2 agents: @peer#a, @peer#b"));
+    for output in [&show, &transcript] {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("matches 2 live agents; pick one:"),
+            "{stderr}"
+        );
+        assert!(
+            stderr.contains("'@peer#a'") && stderr.contains("'@peer#b'"),
+            "{stderr}"
+        );
+    }
+}
+
+#[test]
+fn agents_show_cross_lane_miss_keeps_live_correction() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    register_address_peer(&env, "claude", "live-b", "peer", "b", 1);
+    for n in 0..10 {
+        let id = format!("ended-{n}");
+        register_address_peer(&env, "claude", &id, "peer", "archive", n + 2);
+        let observation = rimz::agents::AgentLifecycleObservation::new(
+            Some(id.into()),
+            rimz::agents::LifecycleSignal::Ended,
+        );
+        env.store()
+            .append_event(&rimz::EventEnvelope::agent_lifecycle(
+                env.workspace_id.clone(),
+                "session",
+                "claude",
+                "SessionEnd",
+                &observation,
+            ))
+            .unwrap();
+    }
+    let output = env
+        .rimz()
+        .args(["agents", "show", "@peer"])
+        .env("RIMZ_CHANNEL", "a")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success());
+    assert!(
+        stderr.contains("try:") && stderr.contains("'@peer#b'"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("matches 11"), "{stderr}");
+    let output = env
+        .rimz()
+        .args(["agents", "show", "@peer"])
+        .env("RIMZ_CHANNEL", "archive")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success());
+    assert!(
+        stderr.contains("matches 10 recorded agents; pick one:"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn agents_show_stopped_petname_from_another_lane() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let mut observation = rimz::agents::AgentLifecycleObservation::new(
+        Some("stopped-session".into()),
+        rimz::agents::LifecycleSignal::Registered,
+    );
+    observation.agent_name = Some("calm-otter".into());
+    observation.launch.channel = Some("b".into());
+    observation.agent_pid = Some(env.agent_owner_pid());
+    observation.pane_id = Some(rimz::ids::PaneId::from_parts(
+        rimz::ids::MuxName::Zellij,
+        "terminal_1",
+    ));
+    for (signal, hook) in [
+        (rimz::agents::LifecycleSignal::Registered, "SessionStart"),
+        (rimz::agents::LifecycleSignal::Ended, "SessionEnd"),
+    ] {
+        observation.signal = signal;
+        env.store()
+            .append_event(&rimz::EventEnvelope::agent_lifecycle(
+                env.workspace_id.clone(),
+                "session",
+                "claude",
+                hook,
+                &observation,
+            ))
+            .unwrap();
+    }
+    let output = env
+        .rimz()
+        .args(["agents", "show", "@calm-otter", "--json"])
+        .env("RIMZ_CHANNEL", "a")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["agent"]["id"], "stopped-session");
 }
 
 #[test]

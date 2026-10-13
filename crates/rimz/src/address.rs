@@ -1405,6 +1405,35 @@ pub fn agent_handle(agent: &AgentState, peers: &[&AgentState], include_channel: 
     }
 }
 
+/// Return the shortest address that resolves to an addressable agent from the reader's lane.
+///
+/// An agent outside this snapshot's addressable roster uses its session id when available, otherwise its full handle.
+pub fn paste_address(
+    agent: &AgentState,
+    snapshot: &SidebarSnapshot,
+    reader: &AddressContext,
+) -> String {
+    let peers = addressable_agents(snapshot);
+    let full = agent_handle(agent, &peers, true);
+    if !peers.contains(&agent) {
+        return agent.session_id().map_or(full, |id| format!("@{id}"));
+    }
+    let forms = [
+        Some(handle_base(agent, &peers, true)),
+        Some(full.clone()),
+        agent.session_id().map(|id| format!("@{id}")),
+        agent.pane_id().map(ToString::to_string),
+    ];
+    forms
+        .into_iter()
+        .flatten()
+        .find(|form| {
+            resolve_many(snapshot, form, None, reader)
+                .is_ok_and(|matches| matches.as_slice() == [agent])
+        })
+        .unwrap_or(full)
+}
+
 /// The structured header for a human-, agent-, subagent-, or harness-authored message.
 ///
 /// Agent-authored text uses a stable reply handle and a profile or kind label,
@@ -1661,7 +1690,7 @@ fn render_candidate_addresses(addresses: impl ExactSizeIterator<Item = String>) 
     let extra = count.saturating_sub(CANDIDATE_CAP);
     if extra > 0 {
         rendered.push_str(&format!(
-            " (+{extra} more; `rimz agents list --all` lists every live agent)"
+            " (+{extra} more; `rimz agents list --all` lists agents)"
         ));
     }
     rendered

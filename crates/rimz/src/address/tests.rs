@@ -18,6 +18,93 @@ fn context(channel: Option<&str>) -> AddressContext {
 }
 
 #[test]
+fn paste_addresses_round_trip_from_every_reader() {
+    let mut snapshot = empty_snapshot();
+    let mut agents = vec![
+        agent("claude", "session-a", Some("a"), "terminal_1"),
+        agent("claude", "session-b", Some("b"), "terminal_2"),
+        agent("codex", "session-review", Some("b"), "terminal_3"),
+        agent("claude", "session-pair-one", Some("pair"), "terminal_4"),
+        agent("claude", "session-pair-two", Some("pair"), "terminal_5"),
+        agent("codex", "session-root", Some("main"), "terminal_6"),
+        agent("claude", "session-loose", None, "terminal_7"),
+        agent("claude", "launch_loose", None, "terminal_9"),
+    ];
+    agents[0].role = Some("coder".into());
+    agents[1].role = Some("coder".into());
+    agents[2].role = Some("reviewer".into());
+    agents[3].name = Some("bright-fox".into());
+    agents[4].name = Some("calm-owl".into());
+    agents[6].name = Some("lucid-atlas".into());
+    snapshot.agents = agents.into();
+    for reader in [
+        context(None),
+        context(Some("a")),
+        context(Some("b")),
+        context(Some("pair")),
+        AddressContext {
+            channel: Some("main".into()),
+            origin: ChannelOrigin::Root,
+        },
+    ] {
+        for agent in addressable_agents(&snapshot) {
+            let address = paste_address(agent, &snapshot, &reader);
+            let resolved = resolve_many(&snapshot, &address, None, &reader);
+            assert!(
+                matches!(&resolved, Ok(matches) if matches.as_slice() == [agent]),
+                "{address} for {} from {reader:?}: {resolved:?}",
+                agent.agent_id
+            );
+        }
+    }
+    assert_eq!(
+        paste_address(&snapshot.agents[0], &snapshot, &context(Some("a"))),
+        "@coder"
+    );
+    assert_eq!(
+        paste_address(&snapshot.agents[0], &snapshot, &context(None)),
+        "@coder#a"
+    );
+    assert_eq!(
+        paste_address(&snapshot.agents[2], &snapshot, &context(None)),
+        "@reviewer"
+    );
+    assert_eq!(
+        paste_address(&snapshot.agents[2], &snapshot, &context(Some("a"))),
+        "@reviewer#b"
+    );
+    assert_eq!(
+        paste_address(&snapshot.agents[6], &snapshot, &context(Some("main"))),
+        "@session-loose"
+    );
+    assert_eq!(
+        paste_address(&snapshot.agents[7], &snapshot, &context(Some("main"))),
+        "zellij:terminal_9"
+    );
+    let mut stale = snapshot.agents[0].clone();
+    stale.agent_id = "session-ended".into();
+    stale.ended_at = Some(Timestamp::UNIX_EPOCH);
+    for reader in [context(None), context(Some("a")), context(Some("b"))] {
+        let address = paste_address(&stale, &snapshot, &reader);
+        assert_eq!(address, "@session-ended");
+        assert!(resolve_many(&snapshot, &address, None, &reader).is_err());
+        let mut audit = snapshot.clone();
+        std::sync::Arc::make_mut(&mut audit.agents).push(stale.clone());
+        assert_eq!(
+            resolve_one(&audit, &address, None, &reader).unwrap(),
+            &stale
+        );
+    }
+    let absent = agent("claude", "absent", Some("elsewhere"), "terminal_8");
+    assert_eq!(paste_address(&absent, &snapshot, &context(None)), "@absent");
+    let absent_launch = agent("claude", "launch_absent", Some("elsewhere"), "terminal_10");
+    assert_eq!(
+        paste_address(&absent_launch, &snapshot, &context(None)),
+        agent_handle(&absent_launch, &addressable_agents(&snapshot), true)
+    );
+}
+
+#[test]
 fn resolve_prefers_name_ordinal_kind_then_session_prefix() {
     let mut snapshot = empty_snapshot();
     let mut alpha = agent("claude", "session-alpha", Some("main"), "terminal_1");
@@ -211,7 +298,7 @@ fn ambiguity_lists_round_tripping_addresses_and_full_count() {
         "{message}"
     );
     assert!(
-        message.ends_with("(+3 more; `rimz agents list --all` lists every live agent)"),
+        message.ends_with("(+3 more; `rimz agents list --all` lists agents)"),
         "{message}"
     );
     let addresses = message
