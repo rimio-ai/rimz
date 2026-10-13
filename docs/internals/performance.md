@@ -48,7 +48,7 @@ Heavy-lane external reads still single-flight through [`disk::single_flight::coa
 
 Smoothness and freshness run on separate clocks, so tuning one never taxes the other.
 
-The frame clock is a fixed grid at `[theme.display] refresh_ms` (100 ms by default). A frame redraws from the cached snapshot and does no IO. The data clock is event-driven, with a one-second backstop tick (`rimz sidebar serve --tick-seconds`), and it folds new truth when a wakeup says there is some. The clamps, animation cadences, and hidden-tab paint rules are [state.md → The paint clock](./sidebar/state.md#the-paint-clock).
+The base frame grid is set by `[theme.display] refresh_ms` (100 ms by default); a wheel glide briefly uses a finer grid. A frame redraws from the cached snapshot and does no IO. The data clock is event-driven, with a one-second backstop tick (`rimz sidebar serve --tick-seconds`), and it folds new truth when a wakeup says there is some. The clamps, animation cadences, and hidden-tab paint rules are [state.md → The paint clock](./sidebar/state.md#the-paint-clock).
 
 Durable truth and the pane roster are split the same way. Every fold reads the store rollup event-fresh, so a status flip repaints within one wakeup. The pane roster sits behind a TTL cache, so discovery stays cheap. A writer that knows about a change posts a typed wakeup, and polling only backs up a missed one.
 
@@ -58,7 +58,7 @@ Every row of the cost map rolls up into one of three paths, each named with its 
 
 | Path | Budget | What happens |
 | --- | --- | --- |
-| Keypress to pixel | One in-process paint | Input applies synchronously and paints; consecutive queued wheel ticks share one paint ([state.md](./sidebar/state.md#the-paint-clock)). Nothing on the path locks, forks, or reads the store. |
+| Keypress to pixel | One in-process paint; at most eight for a wheel glide | Input applies synchronously and paints; consecutive queued wheel ticks share the first paint, followed by time-based eased frames for at most 100 ms ([state.md](./sidebar/state.md#the-paint-clock)). Nothing on the path locks, forks, or reads the store. |
 | Pane event to pixel | One fuse plus one off-grid paint | A typed overlay event (`PaneClosed`, `FocusChanged`) lands in the in-memory event store, re-fuses the held frame, and paints at once. The producer's next pull confirms it ([state.md](./sidebar/state.md#fusion-rules)). |
 | Write to pixel | The frame grid after apply | Applied events wake the panes, which request a shared fold and paint on the next dirty frame. Hook ingress must first pass through the drainer; the 100 ms grid does not bound that queue. |
 
@@ -83,7 +83,7 @@ Each lane's cost and the bound that holds it down. Reproducible figures come fro
 
 | Operation | Cost | Bound |
 | --- | --- | --- |
-| Frame redraw | Sub-millisecond in process; 413 µs at 40 agents | The fixed `refresh_ms` grid; off-screen animation relaxes to the data backstop; a frame never starts a fetch |
+| Frame redraw | Sub-millisecond in process; 413 µs at 40 agents | The base `refresh_ms` grid, briefly finer for a wheel glide; off-screen animation relaxes to the data backstop; a frame never starts a fetch |
 | Overlay fuse | 75 µs with no active overlay, at 40 agents | Pure: no IO, no subprocess, no clock read |
 | Jump to a pane | One mux client fork, tens to hundreds of ms | Detached thread; the focus intent it writes reaches the frame through the fold ([state.md](./sidebar/state.md#focus-intent)) |
 | Tmux graphics capabilities | One room-wide client/process/version sample and one pane-option listing | Ten-second plane cadence; a missing pane or unavailable listing uses a targeted permission query; escalation remains per pane |
@@ -306,7 +306,7 @@ Each mechanism that holds a cost down, named once with its code home. Where anot
 
 ### The frame is decoupled from the fetch
 
-The fetch worker builds snapshots; the render loop blocks in `recv` and folds a result when the worker's `snapshot` wakeup arrives. The animation tick redraws from the cached snapshot and never fetches, so a missed push degrades to the backstop tick instead of a poll storm. [`animation_cadence`](../../crates/rimz/src/sidebar_pane/render/animation.rs) classifies motion: fast work stays on the base grid, row animations redraw on `BREATH_ANIMATION_FRAME`, and a dirty data fold pulls the next frame back to the base grid so freshness never waits on cosmetic motion.
+The fetch worker builds snapshots; the render loop blocks in `recv` and folds a result when the worker's `snapshot` wakeup arrives. The animation tick redraws from the cached snapshot and never fetches, so a missed push degrades to the backstop tick instead of a poll storm. [`animation_cadence`](../../crates/rimz/src/sidebar_pane/render/animation.rs) classifies row motion: fast work stays on the base grid, row animations redraw on `BREATH_ANIMATION_FRAME`, and a dirty data fold pulls the next frame back to the base grid so freshness never waits on cosmetic motion. A wheel glide temporarily takes the finer grid ([state.md](./sidebar/state.md#the-paint-clock)).
 
 ### Only the watched tab animates
 
