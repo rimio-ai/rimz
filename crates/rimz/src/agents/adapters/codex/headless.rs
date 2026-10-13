@@ -64,6 +64,7 @@ impl HeadlessForm for CodexHeadless {
         _stderr: &[u8],
         request: &HeadlessRequest,
         model: Option<&str>,
+        fast: bool,
         prices: &PriceBook,
     ) -> HeadlessResult {
         let mut result = HeadlessResult::default();
@@ -83,7 +84,10 @@ impl HeadlessForm for CodexHeadless {
                 usage.input_tokens.saturating_sub(usage.cached_input_tokens),
                 usage.output_tokens,
             )
-            .cached(0, usage.cached_input_tokens);
+            .cached(0, usage.cached_input_tokens)
+            // `codex exec --json` usage names no service tier, so a check
+            // launched with the fast switch prices from that launch posture.
+            .fast(fast);
             result.cost_usd = model
                 .filter(|model| crate::agents::spending::is_priceable_model_name(model))
                 .and_then(|model| prices.price(model))

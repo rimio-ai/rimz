@@ -225,6 +225,7 @@ pub(super) fn run(
                 &output.stderr,
                 &host_request,
                 plan.request.identity.params.model.as_deref(),
+                plan.request.identity.params.fast,
                 &prices,
             );
             if output.timed_out {

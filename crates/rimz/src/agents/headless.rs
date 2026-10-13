@@ -59,6 +59,9 @@ pub trait HeadlessForm: std::fmt::Debug + Sync {
         stderr: &[u8],
         request: &HeadlessRequest,
         model: Option<&str>,
+        // The check's launch posture asked the provider for fast mode, for a
+        // form whose output carries no service tier to price from.
+        fast: bool,
         prices: &PriceBook,
     ) -> HeadlessResult;
 }

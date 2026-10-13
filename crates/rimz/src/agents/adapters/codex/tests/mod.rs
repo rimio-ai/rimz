@@ -45,6 +45,7 @@ fn headless_result_reads_verdict_file_and_prices_last_completed_turn() {
         b"",
         &request,
         Some("check-model"),
+        false,
         &prices,
     );
     assert_eq!(
@@ -69,6 +70,7 @@ fn headless_result_reads_verdict_file_and_prices_last_completed_turn() {
         b"",
         &request,
         Some("check-model"),
+        false,
         &prices,
     );
     assert_eq!(
@@ -80,6 +82,7 @@ fn headless_result_reads_verdict_file_and_prices_last_completed_turn() {
         b"",
         &request,
         Some("unknown-check-model"),
+        false,
         &prices,
     );
     assert_eq!(unpriced.cost_usd, None);
@@ -93,9 +96,34 @@ fn headless_result_reads_verdict_file_and_prices_last_completed_turn() {
         b"",
         &request,
         Some("check-model"),
+        false,
         &prices,
     );
     assert!((implicit.cost_usd.unwrap() - 0.15).abs() < 1e-12);
+    let prices = crate::agents::pricing::PriceBook::from_litellm_json(
+        r#"{"check-model":{"input_cost_per_token":0.001,"output_cost_per_token":0.01,"cache_read_input_token_cost":0.0001,"provider_specific_entry":{"fast":2.5}}}"#,
+    );
+    let fast = CODEX_DESCRIPTOR.launch.headless.unwrap().read_result(
+        stdout,
+        b"",
+        &request,
+        Some("check-model"),
+        true,
+        &prices,
+    );
+    assert!(
+        (fast.cost_usd.unwrap() - 0.114 * 2.5).abs() < 1e-12,
+        "a check launched in fast mode prices with the fast multiplier"
+    );
+    let standard = CODEX_DESCRIPTOR.launch.headless.unwrap().read_result(
+        stdout,
+        b"",
+        &request,
+        Some("check-model"),
+        false,
+        &prices,
+    );
+    assert!((standard.cost_usd.unwrap() - 0.114).abs() < 1e-12);
 }
 
 #[test]
@@ -108,7 +136,7 @@ fn headless_result_rejects_missing_and_malformed_verdict_files() {
     };
     let form = CODEX_DESCRIPTOR.launch.headless.unwrap();
     let prices = crate::agents::pricing::PriceBook::fixture();
-    let result = form.read_result(b"", b"", &request, None, &prices);
+    let result = form.read_result(b"", b"", &request, None, false, &prices);
     assert!(result.error.is_some());
     for verdict in [
         "garbage",
@@ -116,12 +144,12 @@ fn headless_result_rejects_missing_and_malformed_verdict_files() {
         r#"{"pass":true,"reason":"bad","extra":1}"#,
     ] {
         std::fs::write(&request.verdict_file, verdict).unwrap();
-        let result = form.read_result(b"", b"", &request, None, &prices);
+        let result = form.read_result(b"", b"", &request, None, false, &prices);
         assert!(result.error.is_some());
         assert_eq!(result.verdict, None);
     }
     std::fs::remove_file(&request.verdict_file).unwrap();
-    let result = form.read_result(b"not JSON", b"", &request, None, &prices);
+    let result = form.read_result(b"not JSON", b"", &request, None, false, &prices);
     assert!(result.error.is_some());
     assert_eq!(result.verdict, None);
 }

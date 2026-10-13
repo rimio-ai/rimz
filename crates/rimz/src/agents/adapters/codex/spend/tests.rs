@@ -532,6 +532,7 @@ fn dedup_key_separates_events_differing_only_in_reasoning_or_total() {
         total_tokens: 155,
         tool_calls: BTreeMap::new(),
         timing: None,
+        fast: false,
     };
     let key = |event: &parse::CodexTokenEvent| {
         codex_event_dedup_key(&event.timestamp, &event.model, event)
@@ -812,4 +813,96 @@ fn cache_tokens_clamp_to_input_and_zero_usage_emits_nothing_in_both_formats() {
         assert_eq!(events[0].cached_input_tokens, 100);
         assert_eq!(events[0].cache_write_input_tokens, 100);
     }
+}
+
+fn fast_book() -> PriceBook {
+    PriceBook::from_litellm_json(
+        r#"{"gpt-5": {"input_cost_per_token": 1e-6, "output_cost_per_token": 2e-6,
+                      "cache_read_input_token_cost": 1e-7,
+                      "provider_specific_entry": {"fast": 2.5}}}"#,
+    )
+}
+
+fn tier_line(second: u64, tier: Option<&str>) -> String {
+    let mut settings = serde_json::json!({"model": "gpt-5", "reasoning_effort": "high"});
+    if let Some(tier) = tier {
+        settings["service_tier"] = tier.into();
+    }
+    serde_json::json!({
+        "timestamp": format!("2026-01-01T10:00:{second:02}.000Z"),
+        "type": "event_msg",
+        "payload": {"type": "thread_settings_applied", "thread_settings": settings},
+    })
+    .to_string()
+}
+
+fn count_line(second: u64) -> String {
+    serde_json::json!({
+        "timestamp": format!("2026-01-01T10:00:{second:02}.000Z"),
+        "type": "event_msg",
+        "payload": {"type": "token_count", "info": {
+            "last_token_usage": {"input_tokens": 1000, "output_tokens": 100}
+        }},
+    })
+    .to_string()
+}
+
+fn costs(path: &Path, resume: Option<&SpendCursor>) -> (Vec<f64>, SpendCursor) {
+    let parsed = parse_codex_spend(path, resume, &fast_book());
+    (
+        parsed.entries.iter().map(|entry| entry.cost_usd).collect(),
+        parsed.cursor,
+    )
+}
+
+#[test]
+fn priority_thread_settings_price_following_turns_fast_until_the_tier_reverts() {
+    let standard = 1000.0 * 1e-6 + 100.0 * 2e-6;
+    let lines = [
+        r#"{"type":"turn_context","payload":{"model":"gpt-5"}}"#.to_owned(),
+        count_line(1),
+        tier_line(2, Some("priority")),
+        count_line(3),
+        tier_line(4, Some("default")),
+        count_line(5),
+        tier_line(6, Some("fast")),
+        count_line(7),
+        tier_line(8, None),
+        count_line(9),
+    ];
+    let (_dir, path) = write_session(
+        "tier.jsonl",
+        &lines.iter().map(String::as_str).collect::<Vec<_>>(),
+    );
+    let (costs, _) = costs(&path, None);
+    let expected = [standard, standard * 2.5, standard, standard * 2.5, standard];
+    assert_eq!(costs.len(), expected.len(), "{costs:?}");
+    for (cost, expected) in costs.iter().zip(expected) {
+        assert!((cost - expected).abs() < 1e-12, "{costs:?}");
+    }
+}
+
+#[test]
+fn a_resumed_spend_cursor_keeps_the_fast_tier() {
+    let (_dir, path) = write_session(
+        "tier-resume.jsonl",
+        &[
+            r#"{"type":"turn_context","payload":{"model":"gpt-5"}}"#,
+            &tier_line(1, Some("priority")),
+            &count_line(2),
+        ],
+    );
+    let (_, cursor) = costs(&path, None);
+    let cursor: SpendCursor =
+        serde_json::from_value(serde_json::to_value(&cursor).unwrap()).unwrap();
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .unwrap();
+    writeln!(file, "{}", count_line(3)).unwrap();
+    let (resumed, _) = costs(&path, Some(&cursor));
+    let (cold, _) = costs(&path, None);
+    assert_eq!(resumed.len(), 1);
+    assert!((resumed[0] - (1000.0 * 1e-6 + 100.0 * 2e-6) * 2.5).abs() < 1e-12);
+    assert_eq!(resumed[0], cold[1]);
 }
