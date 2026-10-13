@@ -9105,6 +9105,112 @@ fn loop_add_agent_check_names_the_checker_and_rejects_unsupported_kinds() {
 }
 
 #[test]
+fn loop_add_rejects_unsupported_fast_before_saving() {
+    let env = Env::new();
+    env.install_agent_hooks("cursor");
+    write_loop_config(&env, "");
+    let (_, error) = loop_fail(
+        &env,
+        &[
+            "loop", "add", "bad-fast", "--agent", "cursor", "--fast", "--prompt", "p", "--every",
+            "1h",
+        ],
+    );
+    assert!(
+        error.contains("cursor has no fast-mode launch switch; choose a fast model id with --model, e.g. claude-opus-5-5-fast"),
+        "{error}"
+    );
+    let config: LoopConfig =
+        toml::from_str(&std::fs::read_to_string(loop_config_path(&env)).unwrap()).unwrap();
+    assert!(!config.tasks.0.contains_key("bad-fast"));
+}
+
+#[test]
+fn loop_add_rejects_unsupported_effort_before_saving() {
+    let env = Env::new();
+    env.install_agent_hooks("cursor");
+    write_loop_config(&env, "");
+    let (_, error) = loop_fail(
+        &env,
+        &[
+            "loop",
+            "add",
+            "bad-effort",
+            "--agent",
+            "cursor",
+            "--effort",
+            "high",
+            "--prompt",
+            "p",
+            "--every",
+            "1h",
+        ],
+    );
+    assert!(
+        error.contains(
+            "cursor does not support --effort; remove it or put provider-specific flags in `args`"
+        ),
+        "{error}"
+    );
+    let config: LoopConfig =
+        toml::from_str(&std::fs::read_to_string(loop_config_path(&env)).unwrap()).unwrap();
+    assert!(!config.tasks.0.contains_key("bad-effort"));
+}
+
+#[test]
+fn loop_add_rejects_unsupported_fast_on_nonleader_before_saving() {
+    let env = Env::new();
+    write_loop_config(&env, "");
+    let (_, error) = loop_fail(
+        &env,
+        &[
+            "loop",
+            "add",
+            "bad-resident",
+            "--agent",
+            "claude,cursor",
+            "--stay",
+            "--fast",
+            "--when",
+            "pr=open",
+            "--prompt",
+            "p",
+        ],
+    );
+    assert!(
+        error.contains("cursor has no fast-mode launch switch; choose a fast model id with --model, e.g. claude-opus-5-5-fast"),
+        "{error}"
+    );
+    let config: LoopConfig =
+        toml::from_str(&std::fs::read_to_string(loop_config_path(&env)).unwrap()).unwrap();
+    assert!(!config.tasks.0.contains_key("bad-resident"));
+}
+
+#[test]
+fn loop_add_accepts_no_fast_without_provider_switch() {
+    let env = Env::new();
+    env.install_agent_hooks("cursor");
+    loop_ok(
+        &env,
+        &[
+            "loop",
+            "add",
+            "no-fast",
+            "--agent",
+            "cursor",
+            "--no-fast",
+            "--prompt",
+            "p",
+            "--every",
+            "1h",
+        ],
+    );
+    let config: LoopConfig =
+        toml::from_str(&std::fs::read_to_string(loop_config_path(&env)).unwrap()).unwrap();
+    assert_eq!(config.tasks.0["no-fast"].fast, Some(false));
+}
+
+#[test]
 fn loop_add_rejects_invalid_action_shapes() {
     let env = Env::new();
     env.record(&env.project_root);

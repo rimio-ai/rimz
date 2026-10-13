@@ -598,12 +598,18 @@ fn resolve_add_action(
     workspace: &rimz::ResolvedWorkspace,
     kind: TaskActionKind,
 ) -> Result<AddTaskAction> {
+    let preset = rimz::agents::LaunchPreset {
+        effort: rimz::harness::plan::normalized_preset_value(args.effort.as_deref()),
+        fast: fast_switch(args),
+        ..Default::default()
+    };
     let mut action = match kind {
-        TaskActionKind::Spawn if args.stay => resolve_resident_action(args, workspace)?,
+        TaskActionKind::Spawn if args.stay => resolve_resident_action(args, workspace, &preset)?,
         TaskActionKind::Spawn => {
             let spec = args.agent.as_deref().unwrap_or_default();
             let resolved =
                 resolve_single_agent_launch(spec, workspace, &args.account.clone().into())?;
+            rimz::harness::plan::validate_launch_preset(resolved.kind(), &preset)?;
             AddTaskAction::Spawn {
                 resolved,
                 mode: None,
@@ -625,6 +631,7 @@ fn resolve_add_action(
 fn resolve_resident_action(
     args: &AddArgs,
     workspace: &rimz::ResolvedWorkspace,
+    preset: &rimz::agents::LaunchPreset,
 ) -> Result<AddTaskAction> {
     let machine = MachineConfig::load_lenient();
     let mut effective = rimz::config::effective::load(&machine, &workspace.project_root)?;
@@ -648,6 +655,9 @@ fn resolve_resident_action(
         args.agent.as_deref(),
         None,
     )?;
+    for cell in resolved.layout.agent_cells() {
+        rimz::harness::plan::validate_launch_preset(&cell.kind, preset)?;
+    }
     let team = resolved
         .team_name
         .as_ref()

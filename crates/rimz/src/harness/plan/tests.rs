@@ -79,6 +79,38 @@ fn fast_override_renders_strips_stamps_and_refuses_where_unsupported() {
 }
 
 #[test]
+fn launch_preset_validation_matches_provider_support() {
+    let on = crate::agents::LaunchPreset {
+        fast: Some(true),
+        ..Default::default()
+    };
+    let off = crate::agents::LaunchPreset {
+        fast: Some(false),
+        ..Default::default()
+    };
+    let effort = crate::agents::LaunchPreset {
+        effort: Some("high".into()),
+        ..Default::default()
+    };
+    assert_eq!(validate_launch_preset("claude", &on), Ok(()));
+    assert_eq!(validate_launch_preset("cursor", &off), Ok(()));
+    assert_eq!(
+        validate_launch_preset("cursor", &on),
+        Err(LaunchFinalizeError::UnsupportedFast {
+            agent: "cursor",
+            fix: "choose a fast model id with --model, e.g. claude-opus-5-5-fast",
+        })
+    );
+    assert_eq!(
+        validate_launch_preset("cursor", &effort),
+        Err(LaunchFinalizeError::UnsupportedPresetField {
+            agent: "cursor",
+            field: "effort",
+        })
+    );
+}
+
+#[test]
 fn off_launch_record_keeps_its_wire_bytes() {
     let record = crate::agents::LaunchRecord {
         model: Some("opus".into()),

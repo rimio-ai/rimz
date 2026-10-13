@@ -560,7 +560,8 @@ path = "crates/rimz/src/harness"
 # Wake requests, synchronous thaw, and recovery cross the CLI/sidebar/retirement seams (+10).
 # `resume::check_lane_scope` gives `agents list` resume's lane rule (+1).
 # The `<base>-fast` cell grammar is shared by launch and tier routing (+1).
-surface-budget = 818
+# `plan::validate_launch_preset` shares launch capability refusal with loop admission (+1).
+surface-budget = 819
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -1167,7 +1168,8 @@ allowed-dependencies = [
 # Record replay shares the finalizer's preset argv application (+1).
 # A supervised launch judges tier availability on its own login per kind: `LaunchAvailability::read_as` (+1).
 # The supervised run's one-cell launch plan and its result leave `cli/supervised`, reading `harness::run`'s request (+2).
-surface-budget = 42
+# `validate_launch_preset` shares launch capability refusal with loop admission (+1).
+surface-budget = 43
 
 [[module]]
 path = "crates/rimz/src/harness/resume.rs"
