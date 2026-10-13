@@ -4141,14 +4141,93 @@ fn agents_scope_positional_refuses_with_the_lane_list_and_address_hint_is_action
         .args(["agents", "@coder"])
         .output()
         .expect("agents address hint");
-    assert!(!out.status.success(), "address-as-spec must fail");
     let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "address-as-spec is a usage error: {stderr}"
+    );
     assert!(
         stderr.contains("agent address, not a launch spec")
             && stderr.contains("rimz agents show @coder")
             && stderr.contains("rimz message @coder"),
         "hint should name address verbs: {stderr}"
     );
+}
+
+#[test]
+fn bare_word_naming_a_live_agent_refuses_with_show_and_launch() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let workspace = env.resolve_workspace(&env.project_root);
+    let mut observation = rimz::agents::AgentLifecycleObservation::new(
+        Some(AgentSessionId::from("sess-coder")),
+        LifecycleSignal::Registered,
+    );
+    observation.worktree_path = Some(env.home_root.join("auth").display().to_string());
+    observation.worktree_branch = Some("auth".to_owned());
+    observation.pane_id = Some(PaneId::from_parts(MuxName::Tmux, "%1"));
+    observation.launch.profile = Some("coder".to_owned());
+    env.store()
+        .append_event(&rimz::EventEnvelope::agent_lifecycle(
+            workspace.workspace_id.clone(),
+            workspace.session_name.clone(),
+            "claude",
+            "SessionStart",
+            &observation,
+        ))
+        .expect("append lifecycle");
+    publish_pane_frame(
+        &env,
+        &workspace.session_name,
+        vec![list_pane(
+            &workspace.session_name,
+            "%1",
+            "claude",
+            &env.home_root.join("auth"),
+        )],
+    );
+
+    let bare_coder = |channel: Option<&str>| {
+        let mut command = env.rimz();
+        command
+            .args(["--mux", "zellij", "agents", "coder"])
+            .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+            .env("RIMZ_TEST_ZELLIJ_LOG", env.project_root.join("zellij.log"))
+            .env(
+                "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
+                format!("{} [Created 1s ago]\n", workspace.session_name),
+            );
+        if let Some(channel) = channel {
+            command.env(rimz::workspace::ENV_CHANNEL, channel);
+        }
+        command.output().expect("bare agents word")
+    };
+
+    let out = bare_coder(Some("billing"));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("names a live agent"),
+        "a live agent in another lane leaves the word a launch: {stderr}"
+    );
+
+    let out = bare_coder(None);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(2), "stderr:\n{stderr}");
+    assert!(
+        out.stdout.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    assert!(
+        stderr.starts_with("error: `coder` names a live agent (@coder#auth)"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("rimz agents show '@coder#auth'"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("rimz agents launch coder"), "{stderr}");
 }
 
 #[test]

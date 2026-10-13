@@ -2496,3 +2496,80 @@ fn agent_with_status(id: &str, status: AgentStatus, phase: TurnPhase, activity: 
         ..rimz::testkit::agent_state("claude", id, at)
     }
 }
+
+#[test]
+fn a_lone_launch_word_naming_a_live_agent_refuses() {
+    let mut older = agent_in_lane("sess-old", Some("dying-roster"), None, None);
+    older.profile = Some("coder".to_owned());
+    older.name = Some("round-binder".to_owned());
+    let mut newer = agent_in_lane("sess-new", Some("auth"), None, None);
+    newer.profile = Some("coder".to_owned());
+    newer.name = Some("lucid-atlas".to_owned());
+    newer.last_activity = Timestamp::from_second(9_000).unwrap();
+    let live = [&older, &newer];
+    let refusal_in = |argv: &[&str], lane: Option<&str>| {
+        let launch = parse_agents(argv).launch;
+        let context = rimz::address::AddressContext {
+            channel: lane.map(str::to_owned),
+            origin: rimz::address::ChannelOrigin::Stamped,
+        };
+        lone_launch_word(&launch)
+            .and_then(|word| collision_refusal(word, &live, &context))
+            .map(|err| err.to_string())
+    };
+    let refusal = |argv: &[&str]| refusal_in(argv, None);
+
+    let message = refusal(&["rimz", "coder"]).expect("a lone word naming live agents refuses");
+    let lines = message.lines().collect::<Vec<_>>();
+    assert!(
+        lines[0].starts_with("`coder` names 2 live agents"),
+        "{message}"
+    );
+    assert!(
+        lines.contains(&"  inspect: rimz agents show '@coder#auth'"),
+        "the most recently active match: {message}"
+    );
+    assert!(
+        lines.contains(&"  all:     rimz agents list --all"),
+        "{message}"
+    );
+    assert!(
+        lines.contains(&"  launch:  rimz agents launch coder"),
+        "{message}"
+    );
+
+    let single = refusal(&["rimz", "round-binder"]).expect("a pet name refuses");
+    assert!(
+        single.starts_with("`round-binder` names a live agent (@coder#dying-roster)"),
+        "{single}"
+    );
+    assert!(!single.contains("list --all"), "{single}");
+
+    for argv in [
+        &["rimz", "coder", "do x"][..],
+        &["rimz", "coder", "--cwd", "."],
+        &["rimz", "coder", "--", "--flag"],
+        &["rimz", "claude"],
+        &["rimz", "sess-ol"],
+        &["rimz", "nobody"],
+    ] {
+        assert_eq!(refusal(argv), None, "{argv:?}");
+    }
+
+    let in_auth = refusal_in(&["rimz", "coder"], Some("auth")).expect("its own lane refuses");
+    assert!(
+        in_auth.starts_with("`coder` names a live agent (@coder#auth)"),
+        "only the caller's lane counts: {in_auth}"
+    );
+    assert_eq!(
+        refusal_in(&["rimz", "round-binder"], Some("auth")),
+        None,
+        "a live agent in another lane leaves the bare word a launch"
+    );
+    assert_eq!(refusal_in(&["rimz", "coder"], Some("billing")), None);
+    let context = rimz::address::AddressContext {
+        channel: None,
+        origin: rimz::address::ChannelOrigin::Root,
+    };
+    assert!(collision_refusal("coder", &[], &context).is_none());
+}

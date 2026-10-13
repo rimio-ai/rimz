@@ -76,7 +76,9 @@ path = "crates/rimz/src/address.rs"
 # AddressContext and ChannelOrigin carry room identity and lane provenance
 # from the binary into the shared resolver and library dispatch callers;
 # Root-lane labels and record/filter predicates keep CLI readers on one rule (+4).
-surface-budget = 44
+# `launch_word_matches` lets the bare `rimz agents <word>` refusal reuse the
+# role, name, and profile tiers instead of matching them a second time (+1).
+surface-budget = 45
 
 [[module]]
 path = "crates/rimz/src/pixel_wire.rs"
@@ -884,7 +886,9 @@ surface-budget = 38
 [[module]]
 path = "crates/rimz/src/cli/agents_cmd/mod.rs"
 # `report_to` maps `--detach` to the run policy for both launch commands, so `subagents` keeps no copy (+1).
-surface-budget = 25
+# `AgentsArgs::launch_verb` lets `rimz teams <name>` launch through the explicit
+# verb, past the bare-word live-agent refusal, without a caller flag (+1).
+surface-budget = 26
 
 [[module]]
 path = "crates/rimz/src/cli/agents_cmd/exec.rs"

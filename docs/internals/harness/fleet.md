@@ -334,7 +334,7 @@ The default is the channel the command runs in, and an inline `#<name>`, `--chan
 
 A scoped miss names the searched `#lane`, notes when the ambient lane came from a directory name, labels root-lane matches `main`, and supplies a resolving correction address (or a corrected channel flag). The shared CLI error renderer adds a shell-quoted whole command on a `try:` line when the target appears verbatim in the invocation.
 
-Launch specs resolve against the same lane. A bare role qualifies to `<team>.<role>` when the lane's agents carry that team, so `rimz agents reviewer` in `#forge` launches the forge reviewer and stamps it into the lane it resolved from. The inference reads the stamped `team` on those agents, because the three lane shapes mean the channel string alone does not name a team. A bare role that also names a cell resolving to a different agent refuses instead of guessing. Branch names are display metadata only.
+Launch specs resolve against the same lane. A bare role qualifies to `<team>.<role>` when the lane's agents carry that team, so `rimz agents reviewer` in `#forge` launches the forge reviewer and stamps it into the lane it resolved from, unless a live agent in that lane already answers to `reviewer`, which [refuses the bare word](../../reference/cli/agents.md#launch-agents) under the same lane rule. The inference reads the stamped `team` on those agents, because the three lane shapes mean the channel string alone does not name a team. A bare role that also names a cell resolving to a different agent refuses instead of guessing. Branch names are display metadata only.
 
 ### Handle classes
 

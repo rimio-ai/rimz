@@ -2466,3 +2466,48 @@ fn the_yield_never_crosses_lanes() {
         "in one lane the claimed holder still wins"
     );
 }
+
+#[test]
+fn launch_word_names_live_agents_by_role_name_profile_or_pet_name() {
+    let mut role = agent("claude", "sess-role", Some("a"), "terminal_1");
+    role.role = Some("planner".to_owned());
+    let mut explicit = agent("codex", "sess-explicit", Some("b"), "terminal_2");
+    explicit.name = Some("scribe".to_owned());
+    explicit.name_explicit = true;
+    let mut profile = agent("claude", "sess-profile", Some("c"), "terminal_3");
+    profile.profile = Some("coder".to_owned());
+    profile.name = Some("round-binder".to_owned());
+    let mut second = agent("claude", "sess-profile-2", Some("d"), "terminal_4");
+    second.profile = Some("coder".to_owned());
+    let agents = [&role, &explicit, &profile, &second];
+    let ids = |word: &str| {
+        launch_word_matches(word, &agents, &context(None))
+            .into_iter()
+            .map(|agent| agent.agent_id.as_str())
+            .collect::<Vec<_>>()
+    };
+
+    assert_eq!(ids("planner"), ["sess-role"]);
+    assert_eq!(ids("scribe"), ["sess-explicit"]);
+    assert_eq!(ids("coder"), ["sess-profile", "sess-profile-2"]);
+    assert_eq!(ids("round-binder"), ["sess-profile"]);
+    assert!(ids("sess-pro").is_empty(), "a session prefix never counts");
+    assert!(
+        ids("claude").is_empty(),
+        "the kind is not one of the four tiers"
+    );
+    assert!(ids("nobody").is_empty());
+
+    let in_lane = |word: &str, lane: &str| {
+        launch_word_matches(word, &agents, &context(Some(lane)))
+            .into_iter()
+            .map(|agent| agent.agent_id.as_str())
+            .collect::<Vec<_>>()
+    };
+    assert!(
+        in_lane("planner", "b").is_empty(),
+        "a scoped caller does not see another lane's live role"
+    );
+    assert_eq!(in_lane("planner", "a"), ["sess-role"]);
+    assert_eq!(in_lane("coder", "d"), ["sess-profile-2"]);
+}

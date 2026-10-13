@@ -565,6 +565,16 @@ fn resolve_mentions<'a, C: Candidate<'a>>(
     )
 }
 
+/// The candidates a mention without its own `#channel` selects from: those in
+/// `channel`, or every one when the caller stands outside every lane.
+fn channel_candidates<'a, C: Candidate<'a>>(candidates: &[C], channel: Option<&str>) -> Vec<C> {
+    candidates
+        .iter()
+        .copied()
+        .filter(|candidate| channel.is_none_or(|filter| candidate.in_worktree(filter)))
+        .collect()
+}
+
 fn resolve_mentions_with_launch_candidates<'a, C: Candidate<'a>>(
     raw: &str,
     worktree_flag: Option<&str>,
@@ -601,24 +611,8 @@ fn resolve_mentions_with_launch_candidates<'a, C: Candidate<'a>>(
                     });
                 }
             }
-            let in_channel: Vec<C> = candidates
-                .iter()
-                .copied()
-                .filter(|candidate| {
-                    channel
-                        .as_deref()
-                        .is_none_or(|filter| candidate.in_worktree(filter))
-                })
-                .collect();
-            let launch_in_channel = launch_candidates
-                .iter()
-                .copied()
-                .filter(|candidate| {
-                    channel
-                        .as_deref()
-                        .is_none_or(|filter| candidate.in_worktree(filter))
-                })
-                .collect::<Vec<_>>();
+            let in_channel = channel_candidates(candidates, channel.as_deref());
+            let launch_in_channel = channel_candidates(launch_candidates, channel.as_deref());
             let matches = select_with_launch_candidates(&selector, &in_channel, &launch_in_channel);
             if !matches.is_empty() {
                 return Ok(matches);
@@ -1354,6 +1348,33 @@ pub(crate) fn recipient_channel(
         .and_then(AgentState::channel)
         .or_else(|| target.channel())
         .or_else(|| scope_channel.map(ToOwned::to_owned))
+}
+
+/// The agents among `agents` that a bare launch word also names, from where
+/// `rimz agents show <word>` would look: the caller's current lane, or the
+/// whole room outside every lane. They match by role, explicit name, profile,
+/// or pet name; a kind word or a session-id prefix never matches here, so a
+/// launch by kind stays unambiguous.
+pub fn launch_word_matches<'a>(
+    word: &str,
+    agents: &[&'a AgentState],
+    current_channel: &AddressContext,
+) -> Vec<&'a AgentState> {
+    let selector = AgentSelector::NameOrSession(word.to_owned());
+    let tiers = [
+        SelectorTier::Role,
+        SelectorTier::ExplicitName,
+        SelectorTier::Profile,
+        SelectorTier::Name,
+    ];
+    channel_candidates(agents, current_channel.channel.as_deref())
+        .into_iter()
+        .filter(|agent| {
+            tiers
+                .into_iter()
+                .any(|tier| tier_matches(tier, &selector, *agent))
+        })
+        .collect()
 }
 
 /// The canonical rendered address of an agent — the inverse of `parse_target`.
