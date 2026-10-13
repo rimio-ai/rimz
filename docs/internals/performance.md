@@ -183,11 +183,11 @@ The `cargo xtask invariants` check `ensure_sidebar_library_boundaries` keeps sto
 
 ### Benchmarks
 
-`cargo xtask perf` runs the non-gating divan benches in `crates/rimz/benches/` over synthetic stores and pane frames, through the same entry points the sidebar uses. It launches no agents and spends no tokens. Wall-clock and allocation figures stay out of `ci`, so a busy runner never fails a build on timing.
+`cargo xtask perf` runs divan benches in `crates/rimz/benches/` over synthetic stores and pane frames, through the same entry points the sidebar uses. Explicit regression ceilings, including `hook_stop_budget`, fail this command. It launches no agents and spends no tokens. These benches stay out of `ci`, so a busy CI runner never fails a build on their timing.
 
 Allocation per operation is the steadier regression signal; medians move with host and load. The baseline was captured on `xlab-term`, a loaded LXC container on an AMD Ryzen 9 9950X with 28 online CPUs and the `performance` governor.
 
-Run `cargo xtask perf --bench fleet -- publish` for shared publication at (51 agents, 24 panes, 4,600 ended sessions) and (200, 100, 5,000). `crates/rimz/src/testkit/mod.rs::fleet::seed_scale_room` takes state paths, runtime paths, and `ScaleRoom { agents, panes, ended_sessions }`, publishes fresh producer inputs, and returns a frame for `produce_snapshot` or `enrich_workspace`. It binds the first live agents to the requested panes and leaves the remaining agents unbound. The carryover generator uses the existing representative row sizes but ends every history session, keeping the three dimensions independent; `seed_ended_carryover` retains its original 98% ended distribution for other benchmarks.
+Run `cargo xtask perf --bench fleet -- publish` for shared publication at (51 agents, 24 panes, 4,600 ended sessions) and (200, 100, 5,000). `crates/rimz/src/testkit/mod.rs::fleet::seed_scale_room` takes state paths, runtime paths, and `ScaleRoom { agents, panes, ended_sessions, orphan_contexts }`, publishes fresh producer inputs, and returns a frame for `produce_snapshot` or `enrich_workspace`. Orphan context sidecars have keys absent from the room's agents. It binds the first live agents to the requested panes and leaves the remaining agents unbound. The carryover generator uses the existing representative row sizes but ends every history session, keeping the three dimensions independent; `seed_ended_carryover` retains its original 98% ended distribution for other benchmarks.
 
 `crates/rimz/benches/fleet.rs::publish` measures one enrichment followed by all local projections, retaining the delivered snapshots together until the end of publication. Normal sidebar IDs are absent from the frame; `exclude_agent` instead excludes a live agent pane from each projection to measure detaching the group vector, its row group, and pane bindings. `local_only` moves the fold outside timing to isolate per-pane allocations. Each bound agent has its own synthetic branch, so the two room sizes have 24 and 100 groups. `local_fixed_room` holds the larger room fixed while varying subscribers between 24 and 100, separating subscriber scaling from group-count scaling. All cases use ten samples, one iteration per sample, with fixture setup and teardown outside timing. These cases measure publication, not renderer loops or live host RSS.
 
@@ -201,6 +201,34 @@ Captured 2026-10-12; paired values below are for 24 / 100 subscribers. Before is
 | `local_fixed_room`, 200 agents, 100 groups, 5,000 ended sessions | 4.403 ms / 18.79 ms | 62.84 µs / 206.4 µs | 5.407 MB / 22.53 MB | 88.36 KB / 368.2 KB |
 
 Local allocations are flat at about 3.68 KB per subscriber, both at fixed room size and across the two room sizes: groups, rows, and history do not multiply with subscribers. Sharing reduces the larger local publication from trunk's 22.53 MB to 368.2 KB (about 98.4% less allocation); local configuration, worktree roots, and pane metadata remain owned. A real exclusion still pays for a detached group vector and changed collections, as the `exclude_agent` case shows.
+
+#### Change-driven delivery at 200 agents and 100 subscribers
+
+`crates/rimz/benches/fleet.rs::idle_cycle` measures a real retained worker fold and delivery followed by all 100 subscribers applying through `LoopState::on_snapshot`. Painting is excluded: content and clock-only deliveries both mark the frame dirty. `idle_cycle_worker` retains the worker-only measurement. Both use 5,000 ended sessions and either zero or 3,000 orphan context sidecars; fixture creation and the initial content cycle are outside timing. Each applied cycle asserts that every renderer's snapshot clock advanced.
+
+The earlier keyed-read measurements used `cargo xtask perf --bench fleet -- publish` and `cargo xtask perf --bench fleet -- idle_cycle` (the latter was worker-only then). Ten samples per case, median wall time; requested bytes include allocations and reallocations counted by `crates/rimz/benches/fleet.rs::counted`, not Divan's separate allocation column:
+
+| Case | Orphans | Before keyed reads, ms / bytes | After keyed reads, ms / bytes |
+| --- | ---: | ---: | ---: |
+| Publish | 0 | 3.045 / 3,528,539 | 3.744 / 3,773,532 |
+| Publish | 3,000 | 22.59 / 25,098,655 | 3.703 / 3,773,532 |
+| Worker-only idle | 0 | 4.579 / 6,257,968 | 8.041 / 6,502,961 |
+| Worker-only idle | 3,000 | 21.70 / 27,824,532 | 5.779 / 6,502,961 |
+
+The renderer-apply comparison below was captured on 2026-10-12. Before is the keyed-read change, after adds delivery gating, each with the same renderer fixture. Native bench executables ran from the checkout root in three before/after alternations, ten samples per run: `--bench idle_cycle` and `--bench publish::scale_with_orphans`. Times summarize the three medians by their median; counts are per warm cycle. The idle comparison was repeated after adding the renderer clock assertion; that final series is reported here. These runs were on a loaded host, not measurements of live-host CPU.
+
+| Case | Orphans | Before ms | After ms | Before → after allocation requests | Before → after requested bytes |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Publish | 0 | 3.875 | 3.881 | 37,674 → 37,674 | 3,753,128 → 3,753,128 |
+| Publish | 3,000 | 3.907 | 3.735 | 37,674 → 37,674 | 3,753,128 → 3,753,128 |
+| End-to-end idle | 0 | 27.64 | 12.25 | 300,454 → 50,877 to 51,438 | 22,498,013 → 6,502,167 to 6,531,291 |
+| End-to-end idle | 3,000 | 24.24 | 10.77 | 300,454 → 50,877 | 22,498,013 → 6,502,167 |
+| Worker-only idle | 0 | 7.228 | 11.39 | 50,657 → 50,780 | 6,482,557 → 6,495,111 |
+| Worker-only idle | 3,000 | 7.280 | 8.234 | 50,657 → 50,780 | 6,482,557 → 6,495,111 |
+
+End-to-end saving is 15.39 ms per cycle without orphans and 13.47 ms with 3,000 orphans. Worker-only medians increased 4.162 / 0.954 ms respectively; the after medians span 9.786 to 12.90 / 7.182 to 19.05 ms. The worker-only target is not established within noise, and these deltas do not isolate comparison cost from scheduling noise. Three further alternating no-orphan runs against the tree before keyed reads gave worker medians 5.397 → 6.317 ms, with 47,405 → 50,780 requests and 6,237,564 → 6,495,111 bytes. All three after medians were higher. The earlier 4.579 → 8.041 ms rise was exaggerated by noise, but the no-orphan overhead is not all noise; this comparison includes both keyed reads and delivery gating.
+
+Scale ceilings fail `cargo xtask perf --bench fleet`: publication at 200/100 may request at most 11,500,000 bytes per cycle (about 3× the measured 3,753,128 bytes), and the upper median end-to-end idle cycle with 3,000 orphans may take at most 33 ms (about 3× the measured 10.77 ms). Each failure prints the measured value and ceiling. The time bound uses the median rather than a single scheduler stall; these benches remain outside CI.
 
 | Bench | Median | Alloc/op | Captured |
 | --- | ---: | ---: | --- |
@@ -350,7 +378,7 @@ Release replay used the same frozen room copy (3.7 MB cache, 84 MB log, 9.2 MB r
 
 The after replay's cold hooks returned in 5.238 and 4.485 ms. Drain-through after the measured returns took another 2.865 s sequentially and 7.176 s after the burst: the serial environment-scoped apply child moves fold and effects off the foreground, not out of the system. Cursor claim, applied and reset publications are additional durability work, not the debounced event-log barrier.
 
-`crates/rimz/tests/integration/performance/concurrent_stops.rs::every_concurrent_stop_lands_and_folds` feeds 24 concurrent Stops through `rimz hooks feed` against a live `rimz hooks drain` worker, once on an empty store and once on a 40-agent seeded store. It proves every Stop's frame is in ingress or the event log before its hook returns, that drain-through derives exactly one lifecycle event per Stop, and that the fold sees all 24 agents. It asserts no timing: per the performance tier rule in [rust-conventions.md](../contributing/rust-conventions.md), the timing guard for this path is `crates/rimz/benches/hotpath.rs::hook_stop_budget` alone, and it does not gate.
+`crates/rimz/tests/integration/performance/concurrent_stops.rs::every_concurrent_stop_lands_and_folds` feeds 24 concurrent Stops through `rimz hooks feed` against a live `rimz hooks drain` worker, once on an empty store and once on a 40-agent seeded store. It proves every Stop's frame is in ingress or the event log before its hook returns, that drain-through derives exactly one lifecycle event per Stop, and that the fold sees all 24 agents. It asserts no timing: per the performance tier rule in [rust-conventions.md](../contributing/rust-conventions.md), the timing guard for this path is `crates/rimz/benches/hotpath.rs::hook_stop_budget` alone. That guard fails `cargo xtask perf`, not CI.
 
 `crates/rimz/benches/hotpath.rs::hook_stop_budget` holds the release hook wall to max(4 ms, 2x the `--version` wall) for sequential and 24-way ingress, each case at its own statistic. The sequential half compares medians over 100 interleaved pairs: a single spawn stalls at random, so a high percentile of a few dozen samples is the slowest one and fails on host noise, while a regression on the foreground path (fold or lifecycle effects, an extra fsync, git resolution) shifts every sample and still fails the median. The 24-way half compares p99 over 240 children per side, where tail contention (lock retries, drainer contention) would surface. Its Rust coordinator prepares commands before one barrier releases 24 threads, each timing spawn through the standard child wait. One unmeasured warm-up burst per side precedes ten hook bursts alternating with ten version bursts; both write and close the same piped stdin, and output collection is outside timing. Sequential samples alternate 100 pairs. Both cases measure a warmed, live draining worker; first-creation directory sync and worker startup remain in the separately measured cold hook.
 
