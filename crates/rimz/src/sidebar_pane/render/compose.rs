@@ -142,6 +142,7 @@ pub(in crate::sidebar_pane) fn compose_lines_with_meter(
         lines: frame.lines,
         interactions: frame.interactions,
         scroll_offset: layout.offset,
+        scroll_max: scroll_len.saturating_sub(layout.viewport),
         top_height: layout.top_shown,
         bottom_height,
         content_height,
@@ -463,6 +464,7 @@ pub(in crate::sidebar_pane) struct ComposedFrame {
     pub(in crate::sidebar_pane) lines: Vec<Line<'static>>,
     pub(in crate::sidebar_pane) interactions: FrameInteractions,
     pub(in crate::sidebar_pane) scroll_offset: usize,
+    pub(in crate::sidebar_pane) scroll_max: usize,
     pub(in crate::sidebar_pane) top_height: usize,
     pub(in crate::sidebar_pane) bottom_height: usize,
     /// Rows occupied by composed content before viewport padding.
