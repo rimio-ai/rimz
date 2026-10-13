@@ -216,7 +216,7 @@ nix = { version = "0.31", features = ["feature", "fs", "hostname", "net", "poll"
 # build whose other dependencies enable none of them fails without it.
 rustix = { version = "1", features = ["net", "termios", "time"] }
 # Held on 0.3 because `crossterm` 0.29 (via ratatui) requires `^0.3.17`; bump when that line moves.
-signal-hook = "0.3"
+signal-hook = "0.4"
 
 # Process detection
 which = "8"
