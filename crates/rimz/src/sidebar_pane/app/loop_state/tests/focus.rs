@@ -308,10 +308,12 @@ fn focus_stranded_keeps_empty_evidence_and_tmux_ambiguity_guards() {
         None,
     );
     let tmux_sidebar = PaneId::from_parts(MuxName::Tmux, "%10");
-    snapshot.viewed_panes = vec![
-        tmux_sidebar.clone(),
-        PaneId::from_parts(MuxName::Tmux, "%11"),
-    ];
+    snapshot.client_views[0].client_id = crate::ids::MuxClientId::Tmux("first".to_owned());
+    snapshot.client_views[0].pane_id = tmux_sidebar.clone();
+    snapshot.client_views.push(crate::pane::ClientPaneView {
+        client_id: crate::ids::MuxClientId::Tmux("second".to_owned()),
+        pane_id: PaneId::from_parts(MuxName::Tmux, "%11"),
+    });
     assert_eq!(
         focus_stranded_target(
             &snapshot,
@@ -325,20 +327,28 @@ fn focus_stranded_keeps_empty_evidence_and_tmux_ambiguity_guards() {
         .ok(),
         None,
     );
-    snapshot.viewed_panes.clear();
-    assert!(
-        focus_stranded_target(
-            &snapshot,
-            &UiState::default(),
-            &tmux_sidebar,
-            &[],
-            Some(&tmux_sidebar),
-            1_000,
-            1_050,
-        )
-        .ok()
-        .is_some()
-    );
+    snapshot.client_views.pop();
+    let mut agreeing_clients = snapshot.client_views.clone();
+    agreeing_clients.push(crate::pane::ClientPaneView {
+        client_id: crate::ids::MuxClientId::Tmux("second".to_owned()),
+        pane_id: tmux_sidebar.clone(),
+    });
+    for views in [snapshot.client_views.clone(), agreeing_clients, Vec::new()] {
+        snapshot.client_views = views;
+        assert!(
+            focus_stranded_target(
+                &snapshot,
+                &UiState::default(),
+                &tmux_sidebar,
+                &[],
+                Some(&tmux_sidebar),
+                1_000,
+                1_050,
+            )
+            .ok()
+            .is_some()
+        );
+    }
 }
 
 #[test]
@@ -455,6 +465,41 @@ fn focus_stranded_refuses_distinct_panes_in_settled_evidence() {
 
 fn zellij(raw: &str) -> PaneId {
     PaneId::from_parts(crate::MuxName::Zellij, raw)
+}
+
+#[test]
+fn focus_stranded_ignores_a_fresh_automatic_repair_overlay() {
+    let (mut snapshot, sidebar, first_work, _) = focus_fixture();
+    snapshot.viewed_panes = vec![sidebar.clone()];
+    let evidence = snapshot.client_views.clone();
+    let mut anchor = applied_focus_anchor(first_work.clone(), 0, 1_000, None);
+    anchor.origin = FocusOrigin::AutomaticRepair;
+    anchor.repair_generation = Some(1);
+    anchor.pre_action = evidence.clone();
+    let (snapshot, _, _) = crate::sidebar::fuse::fuse_owned(
+        snapshot,
+        &crate::sidebar::event_store::EventStore::default(),
+        Some(&crate::mux::focus_anchor::FocusPresentation::Target(
+            Box::new(anchor),
+        )),
+        1_050,
+    );
+    assert!(snapshot.viewed_panes.contains(&sidebar));
+    assert!(snapshot.viewed_panes.contains(&first_work));
+    assert_eq!(snapshot.client_views, evidence);
+    assert_eq!(
+        focus_stranded_target(
+            &snapshot,
+            &UiState::default(),
+            &sidebar,
+            &evidence,
+            Some(&sidebar),
+            1_000,
+            1_050,
+        )
+        .ok(),
+        Some(first_work),
+    );
 }
 
 fn applied_focus_anchor(
