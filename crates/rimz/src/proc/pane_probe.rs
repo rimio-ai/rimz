@@ -163,8 +163,8 @@ pub fn hosted_agent_process_for_root(root_pid: u32) -> Option<HostedAgentProcess
 }
 
 /// Whether an agent of the requested kind is authoritatively absent below a pane root.
-/// This is stricter than [`in_pane_agent_process_for_root`]: unreadable
-/// cmdlines, branching trees, and depth exhaustion are indeterminate, so they
+/// This is stricter than [`in_pane_agent_process_for_root`]: unreadable or
+/// empty cmdlines, branching trees, and depth exhaustion are indeterminate, so they
 /// return `false` and keep callers on their transient-miss path.
 pub(crate) fn hosted_agent_absent_under_root(kind: &str, root_pid: u32) -> bool {
     hosted_agent_absent_under_root_with(
@@ -234,7 +234,7 @@ fn pane_agent_process_for_root_with(
     let mut pid = root_pid;
     let mut lineage = Vec::new();
     for _ in 0..=PANE_AGENT_DESCENT_DEPTH {
-        let command = cmdline(pid)?;
+        let command = proven_cmdline(cmdline, pid)?;
         if let Some(kind) = classify(&command) {
             return Some(HostedAgentProcess {
                 kind,
@@ -265,7 +265,7 @@ fn hosted_agent_absent_under_root_with(
     }
     let mut pid = root_pid;
     for _ in 0..=PANE_AGENT_DESCENT_DEPTH {
-        let Some(cmdline) = cmdline(pid) else {
+        let Some(cmdline) = proven_cmdline(cmdline, pid) else {
             return false;
         };
         if in_pane_agent_cmdline_matches(kind, &cmdline) {
@@ -279,6 +279,13 @@ fn hosted_agent_absent_under_root_with(
         }
     }
     false
+}
+
+/// A node's command line as evidence. An empty one (a process mid-execve, such
+/// as the exec wrapper parking into its supervisor) proves no more than an
+/// unreadable one, so both walks abstain on it rather than descend.
+fn proven_cmdline(cmdline: &dyn Fn(u32) -> Option<String>, pid: u32) -> Option<String> {
+    cmdline(pid).filter(|command| !command.trim().is_empty())
 }
 
 fn in_pane_agent_cmdline_matches(kind: &str, cmdline: &str) -> bool {
@@ -472,6 +479,8 @@ mod tests {
             ProcFixture::depth_bound(),
             chain([(10, "codex app-server")]).live(10, start, None),
             chain([(10, "qwen")]),
+            chain([(10, ""), (20, "codex")]).live(20, start, None),
+            chain([(10, "zsh"), (20, " "), (30, "codex")]).live(30, start, None),
         ];
 
         for fixture in cases {
@@ -504,6 +513,12 @@ mod tests {
                 (false, false),
             ),
             ("codex", ProcFixture::depth_bound(), (false, false)),
+            (
+                "codex",
+                chain([(10, ""), (20, "codex")]).live(20, start, None),
+                (false, false),
+            ),
+            ("codex", chain([(10, ""), (20, "/bin/zsh")]), (false, false)),
             ("unknown", chain([(10, "unknown")]), (false, false)),
         ];
 
