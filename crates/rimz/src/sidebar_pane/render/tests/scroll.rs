@@ -1,6 +1,86 @@
 use super::*;
 
 #[test]
+fn wheel_ease_positions_cards_scrollbar_and_hits_by_the_visible_row() {
+    let snapshot = overflowing_fleet();
+    let theme = Theme::fixed(false);
+    let mut ui = UiState {
+        scroll_offset: 9,
+        frame_ms: 40,
+        manual_scroll: Some(ManualScroll {
+            selection_at_start: None,
+        }),
+        ..Default::default()
+    };
+    ui.scrollbar.observe(0, 0);
+    ui.scroll_ease.arm();
+    ui.scroll_ease.observe(9, 0);
+    let visible = ui.scroll_ease.visible(9, ui.frame_ms);
+    assert!((1..9).contains(&visible));
+    let expected = compose_lines(
+        &snapshot,
+        None,
+        &UiState {
+            scroll_offset: visible,
+            scroll_ease: Default::default(),
+            ..ui.clone()
+        },
+        &theme,
+        38,
+        20,
+    );
+    let actual = compose_lines(&snapshot, None, &ui, &theme, 38, 20);
+    assert_eq!(actual.scroll_offset, 9);
+    assert_eq!(actual.lines, expected.lines);
+    assert_eq!(actual.interactions, expected.interactions);
+}
+
+#[test]
+fn wheel_banner_height_uses_the_target_throughout_the_glide() {
+    let snapshot = overflowing_fleet_with_unread_lead();
+    let theme = Theme::fixed(false);
+    let mut ui = UiState {
+        scroll_offset: 99,
+        manual_scroll: Some(ManualScroll {
+            selection_at_start: None,
+        }),
+        ..Default::default()
+    };
+    let target_frame = compose_lines(&snapshot, None, &ui, &theme, 38, 20);
+    ui.scroll_offset = target_frame.scroll_offset;
+    ui.scroll_ease.arm();
+    ui.scroll_ease.observe(ui.scroll_offset, 0);
+    let first = compose_lines(&snapshot, None, &ui, &theme, 38, 20);
+    assert_eq!(first.interactions.visible_row_span().unwrap().0, 0);
+    for elapsed in [0, 16, 48, 100] {
+        ui.frame_ms = elapsed;
+        let frame = compose_lines(&snapshot, None, &ui, &theme, 38, 20);
+        assert_eq!(frame.top_height, target_frame.top_height);
+        assert!(
+            frame
+                .interactions
+                .line_for_target(&HitTarget::UnreadBanner)
+                .is_some()
+        );
+    }
+}
+
+#[test]
+fn selection_follow_cancels_a_flight_even_with_the_same_target() {
+    let snapshot = overflowing_fleet();
+    let mut ui = UiState {
+        scroll_offset: 3,
+        ..Default::default()
+    };
+    ui.scroll_ease.arm();
+    ui.scroll_ease.observe(3, 0);
+    let mut terminal = Terminal::new(TestBackend::new(38, 20)).unwrap();
+    draw_to_terminal(&mut terminal, &snapshot, None, &mut ui).unwrap();
+    assert_eq!(ui.scroll_offset, 3);
+    assert!(!ui.scroll_ease.in_flight());
+}
+
+#[test]
 fn no_selection_holds_the_clamped_scroll_even_when_revealing_a_group() {
     let snapshot = overflowing_fleet();
     let mut ui = UiState {

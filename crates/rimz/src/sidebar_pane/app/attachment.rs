@@ -264,10 +264,11 @@ impl Attachment {
         // frame boundary, coalescing every change that landed mid-frame into a
         // single paint. Data and animation ride this frame grid; input paints
         // synchronously for instant feedback, with queued wheel ticks sharing
-        // one paint (see `apply_input`). The grid stays
-        // warm while there is something to show (`active`) and relaxes to the
-        // `tick` backstop when idle, snapping back the instant an event or
-        // animation arrives. Fetches run off-thread. Width geometry probes still
+        // one paint (see `apply_input`), and a wheel glide then samples elapsed
+        // time on a 16 ms grid until it settles. The grid stays warm while
+        // there is something to show (`active`) and relaxes to the `tick`
+        // backstop when idle, snapping back the instant an event or animation
+        // arrives. Fetches run off-thread. Width geometry probes still
         // fork on target refresh, structural, classification, and commit events
         // (or tmux's first press without cached geometry), never on cached
         // presses or resize feedback; on Zellij the opening press of a burst
@@ -279,7 +280,7 @@ impl Attachment {
         let loop_result: Result<()> = (|| {
             while !state.should_exit && !close_requested.load(Ordering::SeqCst) {
                 state.report_baseline();
-                let (active, mut timeout) = state.frame_timing();
+                let (_, mut timeout) = state.frame_timing();
                 timeout = fetch_deadline_timeout(timeout, fetch.next_deadline(), Instant::now());
                 inbox.dispatch_next(&mut state, &mut fetch, &mut terminal, timeout)?;
                 // A pane the mux had not laid out at attach gets its title
@@ -291,6 +292,9 @@ impl Attachment {
                 state.run_maintenance(&mut fetch, &terminal);
                 state.run_width_control_backstop(&mut terminal);
                 state.maybe_remind(&mut terminal);
+                // Read activity after dispatch: an input that started an
+                // animation must keep its frame boundary, not the idle re-arm.
+                let (active, _) = state.frame_timing();
                 state.paint_frame_if_due(&mut terminal, active)?;
             }
             Ok(())

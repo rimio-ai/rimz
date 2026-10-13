@@ -1123,6 +1123,7 @@ impl LoopState {
         }
         let mut outcome = InputOutcome::default();
         for wakeup in wakeups {
+            let wheel = matches!(wakeup, Wakeup::Scroll { .. });
             let alert_active = self.alert_active();
             let applied = handle_wakeup(
                 wakeup,
@@ -1131,6 +1132,9 @@ impl LoopState {
                 &self.nav_keys.1,
                 alert_active,
             );
+            if applied.redraw && !wheel {
+                self.ui.scroll_ease.cancel();
+            }
             if applied.effects.contains(&InputEffect::DismissAlert) {
                 self.health.alert = None;
             }
@@ -1158,6 +1162,19 @@ impl LoopState {
                 self.health.alert.as_ref(),
                 &mut self.ui,
             )?;
+            let now = Instant::now();
+            let interval = render::animation_interval(
+                &self.current,
+                &self.ui,
+                self.ui.animation_phase,
+                alert_active,
+            )
+            .unwrap_or(animation_frame(&self.current));
+            // This paint satisfied a lapsed boundary; a sooner pending one stands.
+            let deadline = now + interval;
+            if self.next_frame <= now || self.next_frame > deadline {
+                self.next_frame = deadline;
+            }
         }
         Ok(outcome)
     }

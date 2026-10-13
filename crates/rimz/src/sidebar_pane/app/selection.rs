@@ -414,6 +414,7 @@ pub(super) fn handle_mouse_click(
 /// without an intervening paint. The draw still resolves geometry changes.
 pub(super) fn handle_scroll(down: bool, ui: &mut UiState) -> InputOutcome {
     pin_manual_scroll(ui);
+    ui.scroll_ease.arm();
     ui.scroll_offset = if down {
         ui.scroll_offset
             .saturating_add(SCROLL_STEP)

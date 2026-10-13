@@ -5,17 +5,17 @@
 //! auto-follow, a clamp shift — then hides once the view settles. Like the
 //! odometer's [`super::odometer::Roll`], motion is driven purely by the
 //! wall-clock animation phase ([`super::UiState::animation_phase`]): every
-//! draw [`observe`](ScrollbarFade::observe)s the resolved viewport offset, a
+//! draw [`observe`](ScrollbarFade::observe)s the visible viewport offset, a
 //! change stamps the phase, and visibility is a pure read over that stamp —
 //! so golden tests pin the bar deterministically and render never touches the
 //! wall clock.
 //!
 //! The baseline lives here rather than in a `prev != ui.scroll_offset`
-//! compare because a wheel tick mutates `ui.scroll_offset` *before* the draw
-//! ([`crate::sidebar_pane::app::selection`]), which would hide every wheel move from a
-//! write-back comparison. `last_offset` advances only at `observe`, so the
-//! next draw — synchronous for input — sees every kind of move through one
-//! mechanism, stamped at the freshly-set phase.
+//! compare because a wheel tick mutates the target `ui.scroll_offset`
+//! *before* the draw ([`crate::sidebar_pane::app::selection`]), and
+//! `ui.scroll_ease` then moves the visible row over the following frames.
+//! `last_offset` advances only at `observe`, which takes the visible row, so
+//! the fade and thumb follow the cards rather than the input target.
 
 /// Phases the bar lingers after the viewport last moved — about a second at
 /// the 100ms animation tick.
@@ -33,9 +33,9 @@ pub(in crate::sidebar_pane) struct ScrollbarFade {
 }
 
 impl ScrollbarFade {
-    /// Fold in the offset a draw resolved: a change from the last draw stamps
-    /// scroll activity at `phase`. Called at the draw write-back, beside
-    /// `scroll_offset` itself.
+    /// Fold in the visible offset a draw resolved: a change from the last draw
+    /// stamps scroll activity at `phase`. Called at the draw write-back, beside
+    /// `scroll_offset` and `scroll_ease`.
     pub(in crate::sidebar_pane) fn observe(&mut self, offset: usize, phase: u64) {
         if self.moved_from(offset) {
             self.last_activity = Some(phase);

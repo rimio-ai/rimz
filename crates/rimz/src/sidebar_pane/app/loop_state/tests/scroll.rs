@@ -62,6 +62,100 @@ fn paints(output: &FrameOutput) -> usize {
     output.1.load(std::sync::atomic::Ordering::SeqCst)
 }
 
+fn visible(rig: &Rig) -> usize {
+    rig.state
+        .ui
+        .scroll_ease
+        .visible(rig.state.ui.scroll_offset, rig.state.ui.frame_ms)
+}
+
+fn paint_at(rig: &mut Rig, elapsed_ms: u64) {
+    rig.state.anim_start = Instant::now() - Duration::from_millis(elapsed_ms);
+    rig.state.next_frame = Instant::now();
+    rig.paint(true);
+}
+
+#[test]
+fn wheel_run_eases_then_releases_the_animation_grid() {
+    let (mut rig, output) = scroll_rig();
+    let mut inbox = queued((0..3).map(|_| Wakeup::Scroll { down: true }));
+    dispatch(&mut rig, &mut inbox);
+    assert_eq!(rig.state.ui.scroll_offset, 9);
+    assert_eq!(visible(&rig), 0);
+    assert_eq!(paints(&output), 1);
+    assert!(rig.frame_active());
+    let started = rig.state.ui.frame_ms;
+    paint_at(&mut rig, started + 100);
+    assert_eq!(visible(&rig), 9);
+    assert!(!rig.state.ui.scroll_ease.in_flight());
+    assert_eq!(
+        render::animation_interval(
+            &rig.state.current,
+            &rig.state.ui,
+            rig.state.ui.animation_phase,
+            false
+        ),
+        Some(animation_frame(&rig.state.current))
+    );
+    paint_at(&mut rig, started + 2100);
+    assert!(!rig.frame_active());
+}
+
+#[test]
+fn late_wheel_frame_matches_regular_playback() {
+    let (mut regular, _) = scroll_rig();
+    let (mut late, _) = scroll_rig();
+    let mut starts = Vec::new();
+    for rig in [&mut regular, &mut late] {
+        let mut inbox = queued((0..3).map(|_| Wakeup::Scroll { down: true }));
+        dispatch(rig, &mut inbox);
+        starts.push(rig.state.ui.frame_ms);
+    }
+    for elapsed in [16, 32, 48, 64] {
+        paint_at(&mut regular, starts[0] + elapsed);
+    }
+    paint_at(&mut late, starts[1] + 64);
+    assert!((1..9).contains(&visible(&late)));
+    assert_eq!(visible(&regular), visible(&late));
+}
+
+#[test]
+fn selection_key_snaps_an_in_flight_wheel_run() {
+    for count in [1, 3] {
+        let (mut rig, _) = scroll_rig();
+        rig.input(KeyAction::Down);
+        let mut inbox = queued((0..count).map(|_| Wakeup::Scroll { down: true }));
+        dispatch(&mut rig, &mut inbox);
+        assert!(rig.state.ui.scroll_ease.in_flight());
+        rig.input(KeyAction::Down);
+        assert!(!rig.state.ui.scroll_ease.in_flight());
+        assert_eq!(visible(&rig), rig.state.ui.scroll_offset);
+        let (first, last) = rig.state.ui.interactions.visible_row_span().unwrap();
+        assert!((first..=last).contains(&rig.state.ui.selected_index.unwrap()));
+    }
+}
+
+#[test]
+fn wheel_input_pulls_the_next_grid_frame_in() {
+    let (mut rig, _) = scroll_rig();
+    rig.state.next_frame = Instant::now() + Duration::from_secs(1);
+    assert!(!rig.frame_active(), "the run starts from an idle loop");
+    let mut inbox = queued((0..3).map(|_| Wakeup::Scroll { down: true }));
+    dispatch(&mut rig, &mut inbox);
+    // The serve loop's frame step after dispatch reads activity afresh; an
+    // idle reading taken before the wheel would re-arm the base grid and the
+    // glide would finish before its first eased frame.
+    let active = rig.frame_active();
+    assert!(active);
+    rig.paint(active);
+    assert!(
+        rig.state
+            .next_frame
+            .saturating_duration_since(Instant::now())
+            <= render::SCROLL_EASE_FRAME
+    );
+}
+
 #[test]
 fn queued_wheel_ticks_paint_once_at_the_final_offset() {
     for count in [1, 4, 30] {
