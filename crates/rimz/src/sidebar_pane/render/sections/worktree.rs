@@ -18,7 +18,9 @@ use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 
 use crate::sidebar_pane::pixel::meter::MeterPixels;
-use crate::sidebar_pane::render::fmt::{activity_short, age_label, age_secs, dollars2, tokens_int};
+use crate::sidebar_pane::render::fmt::{
+    activity_short, age_label, age_secs, compact_count, dollars2,
+};
 use crate::sidebar_pane::render::labels::{
     TokenColumns, TokenDetail, branch_delta_spans, diff_spans, elapsed_glyph, status_glyph,
     status_rest_style, status_style_at, token_breakdown_spans, token_total_glyph,
@@ -482,7 +484,7 @@ fn finished_totals_line(ctx: &RowCtx<'_>, group: &SidebarWorktreeGroup) -> Optio
             input,
             output,
             cache_read,
-            tokens_int,
+            compact_count,
             TokenDetail::Full,
             &TokenColumns::default(),
         );
@@ -492,7 +494,7 @@ fn finished_totals_line(ctx: &RowCtx<'_>, group: &SidebarWorktreeGroup) -> Optio
             input,
             output,
             cache_read,
-            tokens_int,
+            compact_count,
             TokenDetail::Summary,
             &TokenColumns::default(),
         );
@@ -506,7 +508,7 @@ fn finished_totals_line(ctx: &RowCtx<'_>, group: &SidebarWorktreeGroup) -> Optio
                     token_total_glyph(ctx.theme),
                     ctx.theme.styled(Component::TokenTotal, Modifier::empty()),
                 ),
-                Span::styled(format!(" {}", tokens_int(total)), ctx.theme.body()),
+                Span::styled(format!(" {}", compact_count(total)), ctx.theme.body()),
             ]);
         }
         left.extend(cache_hit);

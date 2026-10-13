@@ -4,6 +4,7 @@
 //! that skeleton. The card anatomy is drawn in docs/interface/sidebar.md; the
 //! density and expansion invariants live in docs/internals/sidebar/sidebar.md.
 
+use crate::agents::model_display::{model_label_parts, window_short};
 use crate::agents::{AgentContext, AgentCurrentUsage, CacheHealth, TurnPhase};
 use crate::agents::{AgentStatus, ContextSeverity};
 use crate::config::{AnimationRole, CardDensityMode, ContextMeterConfig, GlyphRole};
@@ -16,8 +17,7 @@ use ratatui::text::{Line, Span};
 use crate::sidebar_pane::pixel::meter::MeterPixels;
 use crate::sidebar_pane::render::HitTarget;
 use crate::sidebar_pane::render::fmt::{
-    activity_short, age_secs, dollars2, elapsed_label, model_label, pct_label, tokens_int,
-    window_short,
+    activity_short, age_secs, compact_count, dollars2, elapsed_label, pct_label,
 };
 use crate::sidebar_pane::render::labels::{
     CardAttention, CardEmphasis, TokenColumns, TokenDetail, activity_age_style, agent_glyph,
@@ -360,13 +360,13 @@ fn sub_agent_entry_lines(
     let token_col = grid
         .iter()
         .filter_map(sub_agent_tokens)
-        .map(|total| tokens_int(total).chars().count())
+        .map(|total| compact_count(total).chars().count())
         .max()
         .unwrap_or(0);
     let model_col = grid
         .iter()
         .filter_map(|sub| sub.model.as_deref())
-        .map(|model| model_label(model).chars().count())
+        .map(|model| model_label_parts(model).0.chars().count())
         .max()
         .unwrap_or(0);
     for sub in rows {
@@ -536,7 +536,7 @@ fn append_sub_agent_tokens(
             };
             left.push(Span::styled(glyph, style));
             left.push(Span::styled(
-                format!(" {:>token_col$}", tokens_int(total)),
+                format!(" {:>token_col$}", compact_count(total)),
                 theme.body(),
             ));
             true
@@ -572,7 +572,7 @@ fn append_sub_agent_model(
                 left.push(Span::raw(" ".repeat(seam)));
             }
             left.push(Span::styled(
-                format!("{:<model_col$}", model_label(model)),
+                format!("{:<model_col$}", model_label_parts(model).0),
                 theme.muted(),
             ));
             *prev_rendered = true;

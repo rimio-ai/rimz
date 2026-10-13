@@ -12,7 +12,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use crate::sidebar_pane::render::fmt::{
-    dollars_cap, dollars2, expiry_label, reset_countdown, tokens_int, tokens_short, window_label,
+    compact_count, dollars_cap, dollars2, expiry_label, reset_countdown, tokens_short, window_label,
 };
 use crate::sidebar_pane::render::labels::{
     ManaTick, TokenColumns, TokenDetail, mana_bar_spans, mana_style, pace_style,
@@ -1128,7 +1128,7 @@ fn provider_stats_left_spans(
         headline.input,
         headline.output,
         headline.cache_read,
-        tokens_int,
+        compact_count,
         detail,
         &TokenColumns::default(),
     );

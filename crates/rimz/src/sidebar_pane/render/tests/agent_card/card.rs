@@ -205,25 +205,28 @@ fn reasoning_configuration_uses_live_then_carried_then_thinking() {
     };
 
     let live = render(Some("medium"), Some("low"), Some(true), 54);
-    assert!(live.contains("Opus · medium"), "live effort wins:\n{live}");
+    assert!(
+        live.contains("Opus 4.8 · medium"),
+        "live effort wins:\n{live}"
+    );
     assert!(!live.contains(" · low") && !live.contains("thinking"));
 
     let carried = render(None, Some("high"), Some(true), 54);
     assert!(
-        carried.contains("Opus · high"),
+        carried.contains("Opus 4.8 · high"),
         "carried effort precedes thinking:\n{carried}"
     );
     assert!(!carried.contains("thinking"));
 
     let empty_live = render(Some(""), Some("high"), Some(false), 54);
     assert!(
-        empty_live.contains("Opus · high"),
+        empty_live.contains("Opus 4.8 · high"),
         "an empty live value does not suppress carried effort:\n{empty_live}"
     );
 
     let thinking = render(None, None, Some(true), 54);
     assert!(
-        thinking.contains("Opus · thinking"),
+        thinking.contains("Opus 4.8 · thinking"),
         "thinking is the final fallback:\n{thinking}"
     );
 

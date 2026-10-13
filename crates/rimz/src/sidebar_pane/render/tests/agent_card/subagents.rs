@@ -487,7 +487,7 @@ fn render_selected_card_keeps_finished_metadata_and_frozen_runtime() {
     child.last_activity = fixed_now() - Duration::from_secs(30);
     child.last_seen = fixed_now() - Duration::from_secs(30);
     child.usage.fresh_input_tokens = Some(12_400);
-    // A bare model id — the renderer prettifies it through `model_label`.
+    // A bare model id — the renderer prettifies it through `model_label_parts`.
     child.model = Some("claude-opus-4-8".to_owned());
     // Claude reports the child's effort on its `SubagentStop`.
     child.effort = Some("high".to_owned());
