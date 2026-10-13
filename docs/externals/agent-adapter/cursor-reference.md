@@ -4,7 +4,11 @@
 
 The Cursor CLI is Cursor's terminal coding agent. This page covers what a contributor binds to: the executable and its updates, session identity, command hooks and their decision channel, the command status line, transcripts and local chat state, headless print mode, the ACP server, authentication, usage and pricing, and CLI configuration, modes, and permissions. It makes no claim about what RimZ supports.
 
-**Refresh baseline.** Cursor CLI build `2026.09.10-fd3934a`, released 2026-09-10: the build the official installer at <https://cursor.com/install> pins (it downloads `https://downloads.cursor.com/lab/2026.09.10-fd3934a/<os>/<arch>/agent-cli-package.tar.gz`). Docs, changelog, and the installed build were read on 2026-09-13. Cursor publishes no source, tags, or commits, so the build token is the only identifier. Wire claims the docs leave out are read from the installed JavaScript bundle under `~/.local/share/cursor-agent/versions/2026.09.10-fd3934a/`, cited as a bundle module name (for example `../hooks/dist/index.js`) and, when the module sits outside `index.js`, the chunk file that carries it.
+**Refresh baseline.** Cursor CLI build `2026.10.01-e373342`, dated 2026-10-01, checked 2026-10-12. The [official installer](https://cursor.com/install) and the [update service](https://api2.cursor.sh/aiserver.v1.DashboardService/GetCliDownloadUrl) both select this build. The service was queried with a JSON POST body of `{ "channel": "prod" }`. Its [Linux x64 release bundle](https://downloads.cursor.com/lab/2026.10.01-e373342/linux/x64/agent-cli-package.tar.gz) supplies the wire evidence below. Cursor publishes no source repository, release tag, or full commit for this artifact. The build token identifies it.
+
+Bundle citations name webpack modules and their containing chunks.
+
+The rolling [changelog](https://cursor.com/docs/cli/changelog.md) includes entries through 2026-10-08, later than the installer's build date. Changelog dates alone do not identify a downloadable build. This page distinguishes those announcements from verified bundle behaviour.
 
 **Inline pins.** Some facts come from live sessions captured against build `2026.07.09-a3815c0` and were not re-captured on the baseline, because running a session is outside a refresh pass. Each is marked "captured on 2026.07.09" at the claim: `/clear` hook firing, the subagent hook probe, hook firing under `-p`, transcript row shapes and the resume rewrite, the pending `AskQuestion` and child chat records, the status line model display, and the `status`/`about` JSON shapes.
 
@@ -46,9 +50,11 @@ agent --disable-auto-update mcp list
 
 The installer places the build under `~/.local/share/cursor-agent/versions/<build>/` and links both `~/.local/bin/agent` and `~/.local/bin/cursor-agent` to the same `cursor-agent` entry point. `agent` is the documented name; `cursor-agent` is the older name and remains installed. Older build directories stay beside the current one.
 
-`agent --version` prints the build token alone, in the form `YYYY.MM.DD-<7 hex>` with a zero-padded month and day (`2026.09.10-fd3934a` on the baseline). Hook payloads carry the same token as `cursor_version`, and hook processes receive it as `CURSOR_VERSION`.
+`agent --version` prints the build token alone, in the form `YYYY.MM.DD-<7 hex>` with a zero-padded month and day (`2026.10.01-e373342` on the baseline). Hook payloads carry the same token as `cursor_version`, and hook processes receive it as `CURSOR_VERSION`.
 
-The CLI updates itself. An interactive session schedules a background update check two seconds after start, skipped when `--disable-auto-update` is passed or `cli-config.json` sets `channel` to `static` (bundle: `./src/run-agent.tsx` in `1931.index.js`). `agent update` and `/update` update on demand. `--disable-auto-update` is hidden from help, and the docs name no channel values; the config schema accepts `static`, `prod`, `lab`, and `prod-stable-internal` (bundle: `../cursor-config/dist/schema.js`). Running sessions mark their install directory in use so update cleanup skips it (changelog, July 13, 2026).
+The CLI updates itself. An interactive session schedules a background update check two seconds after start, skipped when `--disable-auto-update` is passed or `cli-config.json` sets `channel` to `static` (bundle: `./src/run-agent.tsx` in `7000.index.js`). `agent update` and `/update` update on demand. `--disable-auto-update` is hidden from help, and the docs name no channel values; the config schema accepts `static`, `prod`, `lab`, and `prod-stable-internal` (bundle: `../cursor-config/dist/schema.js`). Running sessions mark their install directory in use so update cleanup skips it ([changelog, July 13, 2026](https://cursor.com/docs/cli/changelog.md)).
+
+`AGENT_CLI_UPDATE_CHECK_URL` overrides update discovery with a JSON endpoint returning non-empty `version` and `url` strings. A `{channel}` placeholder expands to the selected channel. The default channel is `prod`. `agent update` also skips checks when the channel is `static`. Source: `./src/commands/update-core.ts` in the [release bundle](https://downloads.cursor.com/lab/2026.10.01-e373342/linux/x64/agent-cli-package.tar.gz).
 
 ## Surface index
 
@@ -90,7 +96,7 @@ Resume opens chats from every workspace by default, so a resumed conversation ca
 
 Session hooks do not fire for every conversation a process holds:
 
-- A launch with a resume target fires no `sessionStart`; the CLI calls it only when no resume ID is set (bundle: `./src/run-agent.tsx` in `1931.index.js`).
+- A launch with a resume target fires no `sessionStart`; the CLI calls it only when no resume ID is set (bundle: `./src/run-agent.tsx` in `7000.index.js`).
 - `/clear` fires neither `sessionEnd` for the old conversation nor `sessionStart` for the new one. The next `beforeSubmitPrompt` is the first event with the new `conversation_id` (captured on 2026.07.09).
 - `sessionEnd` fires once per process, with the `conversation_id` the process started with, so conversations created later in that process get no end event (bundle: `./src/run-agent.tsx`; captured on 2026.07.09).
 
@@ -117,7 +123,7 @@ The docs name the first four rows and the Claude rows; the plugin row is [change
 
 ### Claude Code hooks
 
-Cursor loads Claude Code hook files when the account setting **Third-party skills** is on ([third-party-hooks.md](https://cursor.com/docs/reference/third-party-hooks.md)). The Claude events map as follows; `Notification` and `PermissionRequest` are ignored with a warning, and Claude has no `subagentStart`.
+Cursor loads Claude Code hook files when the account setting **Third-party skills** is on ([third-party-hooks.md](https://cursor.com/docs/reference/third-party-hooks.md)). The Claude events map as follows; `Notification` and `PermissionRequest` are ignored with a warning, and the compatibility mapping has no `SubagentStart` entry.
 
 | Claude Code event | Cursor step |
 | --- | --- |
@@ -130,7 +136,7 @@ Cursor loads Claude Code hook files when the account setting **Third-party skill
 | `SessionEnd` | `sessionEnd` |
 | `PreCompact` | `preCompact` |
 
-Tool matchers translate `Bash` to `Shell`, `Edit` to `Write`, and `mcp__<server>__<tool>` to `MCP:<tool>`; `Read`, `Write`, `Grep`, and `Task` pass through, and `Glob` is dropped. The bundle also passes `WebFetch` and `WebSearch` through, while the docs list both as unsupported (bundle: `../hooks/dist/index.js`). `SessionStart` and `PreCompact` trigger matchers are ignored, so those hooks fire for every trigger.
+Tool matchers translate `Bash` to `Shell`, `Edit` to `Write`, and `mcp__<server>__<tool>` to `MCP:<tool>`; `Read`, `Write`, `Grep`, and `Task` pass through, and `Glob` is dropped. `WebFetch` and `WebSearch` also pass through (bundle: `../hooks/dist/index.js`). `SessionStart` and `PreCompact` trigger matchers are ignored, so those hooks fire for every trigger.
 
 Converted Claude entries get `loop_limit: null` and `failClosed: false`. Claude response shapes are accepted: nested `hookSpecificOutput.permissionDecision`, `permissionDecisionReason`, and `updatedInput` map to `permission`, `user_message`, and `updated_input` on `preToolUse`, and `decision: "block"` with a `reason` becomes `followup_message` on `stop` and `subagentStop`.
 
@@ -162,7 +168,7 @@ A hooks file is JSON with a positive integer `version` (currently `1`) and a `ho
 | `failClosed` | boolean; default `false` | turns a failure into a block (see [Exit codes and failures](#exit-codes-and-failures)) |
 | `matcher` | string; a valid regular expression | see [Matchers](#matchers) |
 
-The docs give `timeout` as "platform default" and `matcher` as type "object"; the values above are the bundle's (`../hooks/dist/index.js`: default timeout `60`, loop limit `5`, and a validator that requires a string matcher that compiles as a `RegExp`). A top-level `stop_hook_loop_limit` is deprecated and ignored with a warning.
+The docs give `timeout` as "platform default". The bundle sets it to `60` seconds (`../hooks/dist/index.js`). It requires a string matcher that compiles as a `RegExp`. A top-level `stop_hook_loop_limit` is deprecated and ignored with a warning.
 
 ### Process and environment
 
@@ -225,16 +231,16 @@ Step-specific input fields below come from the docs and the generated request ty
 | --- | --- | --- |
 | `sessionStart` | a new conversation starts; fire-and-forget | `is_background_agent` (`false` in the CLI), `composer_mode` (the `--mode` value when set) |
 | `beforeSubmitPrompt` | after send, before the backend request | `prompt`, `attachments[]` (`{ type: "file" \| "rule", file_path }`), `composer_mode` |
-| `preToolUse` | before any tool runs | `tool_name`, `tool_input`, `tool_use_id`, `cwd`, `agent_message` |
-| `postToolUse` | a tool succeeds | `tool_name`, `tool_input`, `tool_output` (JSON string), `tool_use_id`, `cwd`, `duration` (ms) |
-| `postToolUseFailure` | a tool errors, times out, or is denied | `tool_name`, `tool_input`, `tool_use_id`, `error_message`, `failure_type` (`error`, `timeout`, `permission_denied`), `duration` (ms), `is_interrupt` |
+| `preToolUse` | before any tool runs | `tool_name`, `tool_input`, `tool_use_id`, `cwd`, optional `parent_tool_call_id`. The docs also list `agent_message` |
+| `postToolUse` | a tool succeeds | `tool_name`, `tool_input`, `tool_output` (JSON string), `tool_use_id`, `cwd`, `duration` (ms), optional `parent_tool_call_id` |
+| `postToolUseFailure` | a tool errors, times out, or is denied | `tool_name`, `tool_input`, `tool_use_id`, `error_message`, `failure_type` (`error`, `timeout`, `permission_denied`), `duration` (ms), `is_interrupt`, optional `parent_tool_call_id` |
 | `afterAgentResponse` | an assistant message completes | `text`; optional `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens` |
 | `afterAgentThought` | a thinking block completes | `text`, optional `duration_ms` |
 | `stop` | the agent loop ends | `status` (`completed`, `aborted`, `error`), `loop_count`; optional `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens` |
 | `preCompact` | summarization begins, automatic or `/summarize`; observational | `trigger` (`auto`, `manual`), `context_usage_percent`, `context_tokens`, `context_window_size`, `message_count`, `messages_to_compact`, `is_first_compaction` |
 | `sessionEnd` | the process exits; fire-and-forget | `reason` and `final_status` (both `completed`, `aborted` on SIGINT or SIGTERM, or `error` in the CLI), `duration_ms`, `is_background_agent`; the docs also list `window_close`, `user_close`, and `error_message` |
 
-The docs omit the token fields; the generated `StopRequestQuery` and `AfterAgentResponseRequestQuery` types carry them. No event follows compaction.
+The docs omit the token fields. The generated `StopRequestQuery` and `AfterAgentResponseRequestQuery` types carry them. The CLI also forwards optional `parent_tool_call_id` on the three tool hooks, from `../agent-exec/dist/index.js`. No event follows compaction.
 
 ### Subagent hooks
 
@@ -256,9 +262,11 @@ The docs omit the token fields; the generated `StopRequestQuery` and `AfterAgent
 | `subagent_id`, `subagent_type`, `parent_conversation_id` | string |
 | `status` | string: `completed`, `error`, `aborted` |
 | `duration_ms`, `message_count`, `tool_call_count`, `loop_count` | number |
-| `summary`, `error_message`, `git_branch`, `task`, `description` | optional string |
+| `summary`, `error_message`, `git_branch`, `task`, `description`, `child_conversation_id` | optional string |
 | `modified_files` | string array |
 | `agent_transcript_path` | string or `null`, added by the executor from `(subagent_id, parent_conversation_id)` |
+
+The CLI forwards `child_conversation_id` on `subagentStop` when the backend supplies it. Its relationship to `subagent_id` is not documented.
 
 Both steps also carry the common conversation and model fields. Both are requests the Cursor backend issues to the CLI (bundle: `../agent-exec/dist/index.js`), not calls the CLI makes on its own. In a live probe on 2026.07.09, configured root hooks fired on every turn while four successful child launches produced no `subagentStart` or `subagentStop` process. The baseline sends the configured hook step names to the backend with each request (`hooksConfig.configuredSteps`); whether the backend now issues the subagent requests to the CLI is not re-verified.
 
@@ -297,7 +305,6 @@ A matcher is a regular expression tested with JavaScript `RegExp.test` against o
 | `afterAgentResponse` | `AgentResponse` |
 | `afterAgentThought` | `AgentThought` |
 
-The docs list `TabRead` under `beforeReadFile` and `TabWrite` under `afterFileEdit`; the bundle tests those values only on the Tab steps.
 
 ### Outputs
 
@@ -319,11 +326,13 @@ An empty object `{}` is a valid response on every step and changes nothing. Outp
 | `workspaceOpen` | `pluginPaths` |
 | `afterShellExecution`, `afterMCPExecution`, `afterFileEdit`, `afterTabFileEdit`, `afterAgentResponse`, `afterAgentThought`, `sessionEnd` | none |
 
-The docs omit `additional_context` on `beforeSubmitPrompt` and `postToolUseFailure`. Cursor reads stdout after trimming it; when the whole text is not JSON but ends in `}`, it parses the last `{...}` suffix that is.
+The CLI also forwards `additional_context` from `subagentStart` and `subagentStop` responses to the backend (`../agent-exec/dist/index.js`). The local validators pass that field through without checking its type. Its backend effect is not verified.
+
+The docs omit `additional_context` on `beforeSubmitPrompt`. Cursor reads stdout after trimming it; when the whole text is not JSON but ends in `}`, it parses the last `{...}` suffix that is.
 
 ### Merged responses
 
-Only successful hook responses merge, in source order (bundle: `O` in `../hooks/dist/index.js`):
+Only successful hook responses merge, in source order (bundle: `../hooks/dist/index.js`):
 
 | Field | Merge |
 | --- | --- |
@@ -335,7 +344,7 @@ Only successful hook responses merge, in source order (bundle: `O` in `../hooks/
 | `pluginPaths` | de-duplicated union |
 | any other field | the later response overwrites the earlier |
 
-The docs say higher-priority sources take precedence in a conflict. The wire merges in source order, so for an overwritten field a lower-priority source's value wins.
+For an overwritten field, a lower-priority source's value wins, as the [hooks documentation](https://cursor.com/docs/hooks.md) specifies.
 
 ### Exit codes and failures
 
@@ -350,7 +359,7 @@ The docs say higher-priority sources take precedence in a conflict. The wire mer
 | other non-zero exit | failure |
 | timeout or spawn error | failure |
 
-A failure contributes no response, so the action proceeds. With `failClosed: true`, a failure blocks instead, which takes effect on permission steps and `beforeSubmitPrompt`. The docs say invalid JSON on `beforeShellExecution`, `beforeMCPExecution`, and `beforeReadFile` fails open; the wire blocks it.
+A failure contributes no response, so the action proceeds. With `failClosed: true`, a failure blocks instead, which takes effect on permission steps and `beforeSubmitPrompt`.
 
 ## Waiting for the user
 
@@ -362,7 +371,7 @@ Structured permission, question, and plan requests exist only in [ACP](#acp-serv
 
 ## Command status line
 
-`statusLine` in the global `cli-config.json` (see [Configuration files](#configuration-files)) runs a command that renders the status line. The docs mention the feature in the changelog only; the fields below come from the config schema (`../cursor-config/dist/schema.js`) and the runner (`./src/hooks/use-status-line.ts` in `1931.index.js`).
+`statusLine` in the global `cli-config.json` (see [Configuration files](#configuration-files)) runs a command that renders the status line. The docs mention the feature in the changelog only; the fields below come from the config schema (`../cursor-config/dist/schema.js`) and the runner (`./src/hooks/use-status-line.ts` in `7000.index.js`).
 
 ```json
 {
@@ -386,7 +395,7 @@ Structured permission, question, and plan requests exist only in [ACP](#acp-serv
 
 Cursor splits `command` shell-style into argv, expands a leading `~` in the program, and spawns it directly without a shell, in the session's working directory with Cursor's environment. It writes one JSON payload to stdin and renders stdout with trailing newlines removed. Updates are throttled to `updateIntervalMs`; a newer update aborts a running one. A timeout or a non-zero exit with empty stdout leaves the previous text.
 
-The payload (bundle: `./src/ui.tsx` in `1931.index.js`):
+The payload (bundle: `./src/ui.tsx` in `7000.index.js`):
 
 | Field | Content |
 | --- | --- |
@@ -410,7 +419,9 @@ Nothing versions this payload. An explicit-model capture on 2026.07.09 reported 
 
 ### Transcripts
 
-The CLI writes transcripts under `~/.cursor/projects/<project>/agent-transcripts/`, where `<project>` is the workspace path with every run of non-alphanumeric characters replaced by `-` and leading and trailing `-` trimmed (bundle: `../utils/dist/workspace-paths.js` in `index.js`; `../agent-transcript/dist/paths.js`).
+The default transcript directory is `~/.cursor/projects/<project>/agent-transcripts/`. `<project>` replaces each run of non-alphanumeric workspace-path characters with `-`, then trims leading and trailing `-`.
+
+A non-blank `CURSOR_DATA_DIR` replaces `~/.cursor` for project data. The hidden root option `--data-dir <path>` resolves an absolute path and sets that variable for the session. This root is independent of `CURSOR_CONFIG_DIR`, which selects configuration and chat stores. Sources: `../cursor-config/dist/paths.js`, `../utils/dist/workspace-paths.js`, `../agent-transcript/dist/paths.js`, `./src/transcript/cli-transcript-writer.ts`, and `./src/run-agent.tsx` in the [release bundle](https://downloads.cursor.com/lab/2026.10.01-e373342/linux/x64/agent-cli-package.tar.gz).
 
 | Transcript | Path under `agent-transcripts/` |
 | --- | --- |
@@ -431,6 +442,8 @@ Upstream publishes no record schema. These minimized row shapes were captured on
 
 The file also holds thinking and tool records. Assistant `text` blocks mix visible commentary with model thinking and carry no field that tells them apart. The captured writer also wrote `turn_ended` rows with `status` `aborted` and `error` and optional error text. An authenticated `--print --resume` run rewrote the whole file as a snapshot of the conversation instead of appending to it (captured on 2026.07.09).
 
+The baseline writer serializes updates and appends new rows when its saved cursor still matches the conversation. It resets that cursor after a terminal row, a changed summary archive, or a changed message prefix. A zero cursor causes a full rewrite, so readers must tolerate replacement. Sources: `./src/transcript/cli-transcript-writer.ts` in `1623.index.js` and `../agent-transcript/dist/index.js` in `7923.index.js` of the [release bundle](https://downloads.cursor.com/lab/2026.10.01-e373342/linux/x64/agent-cli-package.tar.gz).
+
 ### Chat store
 
 The CLI keeps each conversation in `<config dir>/chats/<md5>/<session id>/`, where `<config dir>` is the directory that holds the global `cli-config.json` (see [Configuration files](#configuration-files)) and `<md5>` is the lowercase hex MD5 of the absolute, resolved workspace path (bundle: `./src/state/index.ts`). A directory holds `store.db` and a `meta.json` sidecar.
@@ -444,7 +457,7 @@ CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);
 
 `meta` row `'0'` holds hex-encoded UTF-8 JSON. Captured on 2026.07.09, it carries `agentId`, `createdAt`, and `latestRootBlobId`, a 64-character lowercase hex SHA-256 of the root blob in `blobs`. The bundle also reads `name`, `mode`, `currentPlanUri`, and `subagentInfo` from it.
 
-`meta.json` is written by `./src/state/chat-session-sidecar.ts` in `1931.index.js`:
+`meta.json` is written by `./src/state/chat-session-sidecar.ts` in `7000.index.js`:
 
 | Field | Content |
 | --- | --- |
@@ -468,7 +481,7 @@ The pending entry records neither the terminal UI's focus nor a partially select
 
 ### Child chats
 
-A subagent's chat directory sits in the same `chats/<md5>/` bucket, named by the child's `agentId`. Its `meta['0']` JSON adds `subagentInfo` with `parentAgentId`, `rootParentAgentId`, `toolCallId`, and `typeName` (bundle: `./src/subagent/cli-subagent-host-adapter.ts` in `7569.index.js`). Captured on 2026.07.09, a child directory had no `meta.json`, and the child's transcript ended with a `turn_ended` row once the child finished; the CLI host adapter gives the child its own primary transcript writer, so the transcript sits at `<subagent_id>/<subagent_id>.jsonl` (bundle: `./src/subagent/cli-subagent-host-adapter.ts`), as listed in [Transcripts](#transcripts).
+A subagent's chat directory sits in the same `chats/<md5>/` bucket, named by the child's `agentId`. Its `meta['0']` JSON adds `subagentInfo` with `parentAgentId`, `rootParentAgentId`, `toolCallId`, and `typeName` (bundle: `./src/subagent/cli-subagent-host-adapter.ts` in `1623.index.js`). Captured on 2026.07.09, a child directory had no `meta.json`, and the child's transcript ended with a `turn_ended` row once the child finished; the CLI host adapter gives the child its own primary transcript writer, so the transcript sits at `<subagent_id>/<subagent_id>.jsonl` (bundle: `./src/subagent/cli-subagent-host-adapter.ts`), as listed in [Transcripts](#transcripts).
 
 Background subagent files under `~/.cursor/subagents/` have no published format.
 
@@ -483,8 +496,11 @@ Headless and single-turn runs wait for delegated subagents before exiting ([chan
 | `--output-format <text\|json\|stream-json>` | output format; only with `--print` |
 | `--stream-partial-output` | streams text deltas; only with `stream-json` |
 | `--show-thinking` (hidden) | includes thinking blocks in the `json` result |
-| `--single-turn` (hidden) | finishes after the first user turn and its subagents |
+| `--single-turn` (hidden) | finishes after the first user turn and its subagents, skipping background shell waits and follow-up turns |
+| `--background-shell-timeout <seconds>` (hidden) | limits the final background shell wait in print mode, then aborts remaining shells. Background subagent waits remain unbounded |
 | `--printenv` (hidden) | captures an environment snapshot after each terminal command |
+
+The hidden flags above come from `./src/cli.ts` in the [release bundle](https://downloads.cursor.com/lab/2026.10.01-e373342/linux/x64/agent-cli-package.tar.gz).
 
 ### JSON result
 
@@ -534,8 +550,23 @@ The request flow is `initialize`; `authenticate` with `methodId: "cursor_login"`
 | `cursor/ask_question` | request, blocking | `toolCallId`, optional `title`, `questions[]` of `{ id, prompt, options[] of { id, label }, allowMultiple? }`; answer, skip, or cancel |
 | `cursor/create_plan` | request, blocking | Markdown plan and todos; accept, reject, or cancel |
 | `cursor/update_todos` | notification | todo state updates |
-| `cursor/task` | notification | subagent task completion |
+| `cursor/task` | notification | subagent task completion for clients without the `subagents` capability |
 | `cursor/generate_image` | notification | generated image output |
+
+ACP clients can negotiate child sessions with `initialize.clientCapabilities.subagents: {}` ([changelog, September 15](https://cursor.com/docs/cli/changelog.md)). The bundle also accepts `true` and the same values under `clientCapabilities._meta.subagents`. The response advertises `agentCapabilities.sessionCapabilities.subagents: {}`.
+
+The child-session wire comes from `./src/acp/types.ts` and `./src/acp/session-resources.ts` in `6136.index.js` of the [release bundle](https://downloads.cursor.com/lab/2026.10.01-e373342/linux/x64/agent-cli-package.tar.gz):
+
+| Parent `session/update` discriminator | Fields |
+| --- | --- |
+| `subagent_spawned` | `subagentSessionId`, `name`, `task`, `capabilities: {}`, `_meta.cursor` |
+| `subagent_state_update` | `subagentSessionId`, `state`, `_meta.cursor` |
+
+`_meta.cursor` carries `toolCallId`, `agentId`, and optional `model`. Child text, thinking, and tool updates use the child's session ID. The first run uses `agentId` as its session ID. Further runs of that child use `<agentId>.2`, `<agentId>.3`, and so on.
+
+Terminal states include `completed`, `failed`, `cancelled`, and `disconnected`. With this capability, prompts wait for background subagents and incorporate their results. Cancelling a prompt stops those subagents. Loading a session replays its historical children.
+
+The October 8 changelog also announces ACP wakeups for watched background shells. That announcement is newer than the installer baseline and does not establish support in this bundle.
 
 A client that never answers a blocking request stalls tool execution. The upstream ACP specification owns the standard request and update schemas.
 
@@ -548,13 +579,27 @@ Authentication before start-up uses `agent login`, `--api-key` or `CURSOR_API_KE
 | `agent login` | browser login; `NO_OPEN_BROWSER=1` prints the URL instead, and pressing `q` shows a QR code |
 | `agent logout`, `/logout` | signs out and clears stored credentials |
 | `agent status`, `agent whoami` | authentication status; `--format json` |
-| `agent about`, `/about` | version, system, and account details; `--format json` |
+| `agent about`, `/about` | version, system, and account details. `--format json` |
+| `agent team list` | teams for the account, with `--format json` |
+| `agent team switch [id-or-name]` | selects the active team for models and settings. Without an argument, opens an interactive picker |
 | `--api-key <key>`, `CURSOR_API_KEY` | API key authentication |
 | `--auth-token <token>`, `CURSOR_AUTH_TOKEN` | auth token (hidden from help) |
 | `-e, --endpoint <url>`, `CURSOR_API_ENDPOINT` | API endpoint; default `https://api2.cursor.sh` |
 | `-H, --header 'Name: Value'` | extra request header, repeatable |
+| `--website-url <url>`, `CURSOR_WEBSITE_URL` | browser-login website override, hidden from help. Defaults to the API endpoint's environment |
 | `agent bedrock`, `/bedrock` | AWS Bedrock configuration, when the feature is enabled |
 | `AGENT_CLI_CREDENTIAL_STORE=file` | stores credentials unencrypted in an owner-only file, for sandboxed environments ([changelog](https://cursor.com/docs/cli/changelog.md)); path and format unpublished |
+
+The [September 15 changelog](https://cursor.com/docs/cli/changelog.md) records that browser-login requests trust operating-system CA certificates, including behind `HTTPS_PROXY`.
+
+The [release bundle](https://downloads.cursor.com/lab/2026.10.01-e373342/linux/x64/agent-cli-package.tar.gz), `./src/commands/teams.ts` in `3550.index.js`, defines the team JSON responses:
+
+| Command | Success response |
+| --- | --- |
+| `team list --format json` | `{ "teams": [...] }`. Entries have `id`, `name`, optional `role`, `isActive`, `isExplicitSelection`, and `isSelectable` |
+| `team switch <id-or-name> --format json` | `{ "status": "switched", "team": { "id": ..., "name": ... } }` |
+
+Team switches require direct membership and an active plan. Duplicate team names require selection by ID. Failures print to stderr and exit `1`. The selected team persists as `authInfo.activeTeamId` alongside `teamId` and `teamName`.
 
 The docs publish no JSON schema, exit codes, or error arms for `status` and `about`. An authenticated browser login on 2026.07.09 produced this sanitized `status --format json`:
 
@@ -590,7 +635,7 @@ The same login produced this `about --format json`, with non-empty `subscription
 }
 ```
 
-Logged-out, expired, API-key, service-account, proxy, and server-error responses are uncaptured. Credential storage has no published location or format. The config file caches `authInfo` (`email`, `displayName`, `teamId`, `teamName`, `userId`, `authId`, `organizationId`) as CLI-managed state.
+Logged-out, expired, API-key, service-account, proxy, and server-error responses are uncaptured. Credential storage has no published location or format. The config file caches `authInfo` (`email`, `displayName`, `teamId`, `teamName`, `userId`, `authId`, `organizationId`, `activeTeamId`) as CLI-managed state.
 
 ## Usage, tokens, and pricing
 
@@ -600,7 +645,8 @@ The hook wire carries per-turn token counts: `input_tokens`, `output_tokens`, `c
 
 Pricing ([models-and-pricing.md](https://cursor.com/docs/models-and-pricing.md)):
 
-- Pro, Pro Plus, and Ultra include two monthly usage pools: Cursor Models (Grok 4.6, Grok 4.5, Composer 2.5) and Other Models, charged at each model's API price.
+- Pro, Pro Plus, and Ultra include two monthly usage pools: Cursor Models (Grok 4.7, Grok 4.6, Grok 4.5, Composer 2.5) and Other Models, charged at each model's API price.
+- Start, available in India, includes only the Cursor Models pool.
 - Auto has Cost, Balance, and Intelligence modes and bills every request at the list price of the model it routes to. The page publishes no flat Auto rate.
 - On Teams and Enterprise plans, third-party model requests add a Cursor Token Rate of $0.25 per million tokens, including when Auto routes to a third-party model. First-party Cursor models are exempt.
 - Max Mode exists only on legacy request-based plans, billed at the model's API rate plus 20%.
@@ -620,7 +666,7 @@ The team [Admin API](https://cursor.com/docs/account/teams/admin-api.md) returns
 | Global, XDG override, every platform | `$XDG_CONFIG_HOME/cursor/cli-config.json` | all CLI settings |
 | Project | `<project>/.cursor/cli.json` | permissions only; ignored with the hidden `--disable-project-configs` |
 
-The global rows resolve in one order with no fallback: a non-blank `$CURSOR_CONFIG_DIR`, else `$XDG_CONFIG_HOME/cursor` when `XDG_CONFIG_HOME` is non-blank, else `~/.cursor` (bundle: `../cursor-config/dist/paths.js`). A missing file at the resolved path is created from defaults there; `~/.cursor/cli-config.json` is not consulted. User hooks (`~/.cursor/hooks.json`) and `projects/` transcripts stay under the home directory.
+The global rows resolve in one order with no fallback: a non-blank `$CURSOR_CONFIG_DIR`, else `$XDG_CONFIG_HOME/cursor` when `XDG_CONFIG_HOME` is non-blank, else `~/.cursor` (bundle: `../cursor-config/dist/paths.js`). A missing file at the resolved path is created from defaults there; `~/.cursor/cli-config.json` is not consulted. User hooks stay at `~/.cursor/hooks.json`. Project data has a separate root, described under [Transcripts](#transcripts).
 
 The file is pure JSON with `version` `1`. Cursor repairs missing fields and moves a corrupted file aside as `.bad` ([configuration.md](https://cursor.com/docs/cli/reference/configuration.md)). The CLI rewrites the whole file from its schema through a temp file and rename, so keys outside the schema are dropped.
 
@@ -643,7 +689,7 @@ The file is pure JSON with `version` `1`. Cursor repairs missing fields and move
 | `exploreSubagentModel` | `default` (default) or `inherit` |
 | `subagentModels.explore` | Explore subagent model: `default`, `inherit`, `disabled`, or a model selection |
 | `notifications` | boolean; default `true`; notifies when the agent finishes or needs input |
-| `hints`, `modelSlashCommands`, `rewind` | booleans; default `true` |
+| `hints`, `modelSlashCommands`, `steering`, `rewind` | booleans. Default `true` |
 | `display` | booleans `showLineNumbers`, `showThinkingBlocks`, `showStatusIndicators`, `showStatusLineRunningTime` (all default `false`); `mode` `zen` (default) or `standard` |
 | `channel` | `static`, `prod`, `lab`, `prod-stable-internal` |
 | `network.useHttp1ForAgent` | boolean; default `false` |
@@ -666,7 +712,7 @@ Approval is a separate setting from mode: `approvalMode` chooses an allowlist, A
 
 ### Launch flags
 
-From `agent --help` on the baseline:
+From the command definitions in `./src/cli.ts` in the [release bundle](https://downloads.cursor.com/lab/2026.10.01-e373342/linux/x64/agent-cli-package.tar.gz):
 
 | Flag | Effect |
 | --- | --- |
@@ -689,7 +735,7 @@ From `agent --help` on the baseline:
 | `-p`, `--output-format`, `--stream-partial-output` | see [Headless print mode](#headless-print-mode) |
 | `--api-key`, `-H`, `-e` | see [Authentication and account](#authentication-and-account) |
 
-The parameters page omits `--auto-review`, `--add-dir`, and `-e`, and still describes `--trust` as headless-only. Hidden options in `./src/cli.ts` besides those named above include `--disable-auto-update`, `--new-session-id <uuid>`, `--min-version <version>`, `--disable-project-configs`, and `--debug` (local log server).
+The parameters page omits `--auto-review`, `--add-dir`, and `-e`, and still describes `--trust` as headless-only. Hidden options in `./src/cli.ts` besides those named above include `--disable-auto-update`, `--new-session-id <uuid>`, `--min-version <version>`, `--disable-project-configs`, `--data-dir <path>` (project data root), and `--debug` (local log server).
 
 ### Permission tokens
 
@@ -717,7 +763,19 @@ Auto-review reads plain-English guidance from `~/.cursor/permissions.json` and `
 | `agent install-shell-integration`, `uninstall-shell-integration` | edits `~/.zshrc` |
 | `agent generate-rule`, `agent rule` | creates a Cursor rule |
 
-Plugins, worktree setup commands, MCP server commands, hooks, and the status line command are the CLI surfaces that execute configured commands.
+Worker options in `./src/cli.ts` of the [release bundle](https://downloads.cursor.com/lab/2026.10.01-e373342/linux/x64/agent-cli-package.tar.gz) include:
+
+| Worker option | Contract |
+| --- | --- |
+| `--clone-git-repos` | any-repo pools only. Reuses a clean checkout or clones the claimed repository. Implies `--mint-github-token` |
+| `--on-session-start <command>`, `--on-session-end <command>` | adds worker-host hooks after claim and before teardown. `hooks.json` remains the primary configuration |
+| `--auth-token-file <path>` | reads an operator-managed token file. Conflicts with `--auth-token` |
+| `controller --warm-idle <count>` | keeps idle workers in named pools. Hibernated follow-ups invoke the spawn hook with `CURSOR_WAKE=1` |
+| `controller --session-token` | gives the spawn hook claim-scoped `CURSOR_AUTH_TOKEN` and `CURSOR_AUTH_TOKEN_EXPIRES_AT`. Requires team enablement and conflicts with `--warm-idle` |
+
+The [September 22 changelog](https://cursor.com/docs/cli/changelog.md) documents checkout reuse and warm-pool wakeups. The October 8 entry reports further checkout-isolation fixes, beyond this bundle's date.
+
+Plugins, worktree setup commands, MCP server commands, hooks, and the status line command execute configured commands.
 
 ## Upstream scope
 
