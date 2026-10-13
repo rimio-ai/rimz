@@ -68,12 +68,21 @@ pub(in crate::backend::zellij) fn wait_for_named_sidebar_pane(
     xdg: &Path,
     session: &str,
     tab_name: &str,
-) -> Option<PaneGeometry> {
-    poll_until(
-        Duration::from_secs(30),
-        || named_sidebar_pane_geometry(xdg, session, tab_name),
-        Option::is_some,
-        &format!("sidebar pane in {session}/{tab_name}"),
+    evidence: impl FnOnce() -> String,
+) -> PaneGeometry {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut last = Ok(None);
+    while Instant::now() < deadline {
+        last = named_sidebar_pane_geometry(xdg, session, tab_name);
+        if let Ok(Some(sidebar)) = last {
+            return sidebar;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    // The pane closes on exit, so the panic carries what the session kept.
+    panic!(
+        "timed out waiting for sidebar pane in {session}/{tab_name}; last observation: {last:?}\n{}",
+        evidence()
     )
 }
 

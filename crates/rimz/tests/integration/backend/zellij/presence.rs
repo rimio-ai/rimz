@@ -326,6 +326,71 @@ impl FocusRepairLogs<'_> {
             rimz::diag::focus_repair::recent(&self.xdg.join("logs")),
         )
     }
+
+    /// What a missing tab sidebar leaves behind: `close_on_exit` removes its
+    /// pane, so the listing, the supervisor's stderr, its spawn pokes, and its
+    /// diagnostic records are the only trace of why it went.
+    fn missing_sidebar_dump(&self, session: &str, tab_name: &str) -> String {
+        // Every tab, not only the target: a renamed tab hides a live sidebar
+        // from the name match.
+        let panes = list_panes(self.xdg, session).map(|snapshot| {
+            snapshot
+                .panes
+                .into_iter()
+                .filter(|pane| !pane.is_plugin)
+                .map(|pane| {
+                    format!(
+                        "id={} tab={}:{:?} title={:?} held={} exited={} command={:?}",
+                        pane.id,
+                        pane.tab_id,
+                        pane.tab_name,
+                        pane.title,
+                        pane.is_held,
+                        pane.exited,
+                        pane.terminal_command,
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        });
+        let mut diag_logs = Vec::new();
+        let mut dirs = vec![self.xdg.join("ws")];
+        while let Some(dir) = dirs.pop() {
+            for path in std::fs::read_dir(dir)
+                .into_iter()
+                .flatten()
+                .filter_map(Result::ok)
+                .map(|entry| entry.path())
+            {
+                if path.is_dir() {
+                    dirs.push(path);
+                } else if path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.starts_with("diag.log"))
+                {
+                    diag_logs.push(path);
+                }
+            }
+        }
+        diag_logs.sort();
+        let diag_logs = diag_logs
+            .iter()
+            .map(|path| {
+                format!(
+                    "{}:\n{}",
+                    path.display(),
+                    std::fs::read_to_string(path).unwrap_or_else(|error| error.to_string()),
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        format!(
+            "panes in {session}, awaiting tab {tab_name:?}:\n{}\n{}\ndiag records:\n{diag_logs}",
+            panes.unwrap_or_else(|error| error),
+            self.dump()
+        )
+    }
 }
 
 #[test]
@@ -871,9 +936,17 @@ fn tab_switch_repairs_sidebar_focus_from_attached_client_views() {
             sidebar: sidebar.clone(),
         })
         .expect("open switch target tab");
+    let logs = FocusRepairLogs {
+        xdg,
+        trace: &trace_log,
+        renderer: &focus_exec_log,
+        pokes: &poke_log,
+        pokes_before: pokes_before_target,
+    };
     let target_work = wait_for_named_work_pane_count(xdg, &name, target_tab, 1)[0];
-    let target_sidebar =
-        wait_for_named_sidebar_pane(xdg, &name, target_tab).expect("target tab sidebar");
+    let target_sidebar = wait_for_named_sidebar_pane(xdg, &name, target_tab, || {
+        logs.missing_sidebar_dump(&name, target_tab)
+    });
     let target_work = PaneId::from_parts(MuxName::Zellij, format!("terminal_{}", target_work.id));
     let target_sidebar =
         PaneId::from_parts(MuxName::Zellij, format!("terminal_{}", target_sidebar.id));
@@ -887,13 +960,6 @@ fn tab_switch_repairs_sidebar_focus_from_attached_client_views() {
     let pokes_before_birth = poke_lines(&poke_log).len();
     client.go_to_tab_until(1, &birth_work, "birth work pane before switch repair");
     wait_for_switch_settled(&poke_log, pokes_before_birth, 0);
-    let logs = FocusRepairLogs {
-        xdg,
-        trace: &trace_log,
-        renderer: &focus_exec_log,
-        pokes: &poke_log,
-        pokes_before: pokes_before_target,
-    };
     assert!(
         rimz::diag::focus_repair::recent(&xdg.join("logs"))
             .iter()
