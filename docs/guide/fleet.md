@@ -167,14 +167,14 @@ Added tests/auth/refresh_expiry.rs covering sliding and hard expiry.
 
 ```console
 $ rimz agents history @coder -n 3
-START             DUR    TOKENS     COST  OUTCOME  PROMPT
-2026-07-08 15:12   8m  ↘4k ↗510  $0.4210  done     implement refresh-token rotation
-2026-07-08 15:38   3m  ↘1k ↗284  $0.2870  done     add coverage for the expiry edge cases
-2026-07-08 15:44  12s   ↘320 ↗0  $0.0310  open     run the focused integration tests
-3 turns · 54k tokens · $0.7390
+START  DUR     FRESH     COST  OUTCOME  FROM      PROMPT
+15:12   8m  ↘4k ↗510  $0.4210  done     user      implement refresh-token rotation
+15:38   3m  ↘1k ↗284  $0.2870  done     @planner  add coverage for the expiry edge cases
+15:44  12s   ↘320 ↗0  $0.0310  open     wait      run the focused integration tests
+3 turns · 6k fresh + 48k cached tokens · $0.7390
 ```
 
-`↘` is the fresh input the turn sent and `↗` the tokens it produced; the `TOKENS` total on the last line counts cache reads and writes too, which is why it dwarfs the rows.
+`↘` is the fresh input the turn sent and `↗` the tokens it produced; the footer sums these as `fresh` and counts cache reads and writes separately as `cached`. `FROM` tells you who sent the prompt, without burying its text in a delivery header. An unknown outcome reads `-`, not an interruption. Dates disappear when every shown turn started today.
 
 **Credit the people and models behind the change.** A pull request usually opens after the first teammate has already exited, so live agent cards cannot supply a complete byline. `rimz agents attribution` reads the lane's audit records and provider transcripts instead:
 

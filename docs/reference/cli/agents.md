@@ -588,14 +588,16 @@ When the agent's temp directory exists, `show` prints its host path (`tmp:`) and
 
 ```console
 $ rimz agents history @coder -n 3
-START             DUR  TOKENS       COST     OUTCOME  PROMPT
-2026-07-08 15:12   8m  ↘4k ↗510     $0.4210  done     implement refresh-token rotation
-2026-07-08 15:38   3m  ↘1k ↗284     $0.2870  done     add coverage for expiry edge cases
-2026-07-08 15:44  12s  ↘320 ↗0      $0.0310  open     run the focused integration tests
-3 turns · 54k tokens · $0.7390
+START  DUR     FRESH     COST  OUTCOME  FROM      PROMPT
+15:12   8m  ↘4k ↗510  $0.4210  done     user      implement refresh-token rotation
+15:38   3m  ↘1k ↗284  $0.2870  done     @planner  add coverage for expiry edge cases
+15:44  12s   ↘320 ↗0  $0.0310  open     wait      run the focused integration tests
+3 turns · 6k fresh + 48k cached tokens · $0.7390
 ```
 
-`TOKENS` shows fresh input and output. `OUTCOME` is best-effort: `done` means an assistant reply closed the turn, `open` is the live final turn, and `cut` means the turn or session ended without a reply. A response repeated under the same message and request id counts once. `-n, --tail <N>` keeps the newest `N` turns, and `--json` emits full records, adding cache-read tokens, cache-write tokens, and the API-call count.
+`FRESH` shows fresh input and output. The footer separates their sum from cached tokens (cache reads plus writes). `OUTCOME` is best-effort: `done` means an assistant reply was observed, `open` is the final turn of a running, waiting, or paused session that has not ended and whose process is not known to be dead, and `-` means the outcome is unknown, not an interruption. `FROM` shows the envelope sender, a harness kind such as `wait`, or `user` for plain text. `PROMPT` shows the envelope body; batched deliveries show the first section. `START` omits the date only when every displayed row is today in the configured time zone.
+
+A response repeated under the same message and request id counts once. `-n, --tail <N>` keeps the newest `N` turns, and `--json` emits full records, adding cache-read tokens, cache-write tokens, and the API-call count. JSON keeps the raw delivered `prompt` and uses `done`, `open`, and `unknown` for `outcome`.
 
 A stopped agent's history stays readable while its provider transcript exists. Per-turn history needs an adapter with normalized transcript and spend coverage; [agent support](../agent-support.md) lists which have it.
 
