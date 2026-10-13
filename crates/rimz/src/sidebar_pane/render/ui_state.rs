@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use super::theme::Theme;
-use super::{CostRolls, FrameInteractions, ScrollbarFade, TallyAnim};
+use super::{CostRolls, FrameInteractions, ScrollEase, ScrollbarFade, TallyAnim};
 
 pub(in crate::sidebar_pane) use crate::mux::focus_anchor::{FrozenOrder, FrozenRow};
 
@@ -22,6 +22,8 @@ pub(in crate::sidebar_pane) struct UiState {
     /// animation tick. The renderer derives the running-agent spin frame from
     /// it; freshness gating (per row) keeps a quiet agent frozen.
     pub(in crate::sidebar_pane) animation_phase: u64,
+    /// Elapsed milliseconds since the loop's monotonic base, stamped beside the phase.
+    pub(in crate::sidebar_pane) frame_ms: u64,
     pub(in crate::sidebar_pane) theme_cache: Option<(ThemeConfig, Rc<Theme>)>,
     /// The cockpit spend's count-up state — one stepped roll for today's `$`.
     /// Folded forward on each data refresh (`TallyAnim::observe`) and read by the
@@ -69,11 +71,9 @@ pub(in crate::sidebar_pane) struct UiState {
     /// The active renderer-local order/visibility hold, or `None` while rows
     /// rank and cap live.
     pub(in crate::sidebar_pane) order_hold: Option<OrderHold>,
-    /// First scroll-zone content line visible in the agent-cards viewport.
-    /// Resolved by every draw — clamped to the zone, then auto-scrolled so the
-    /// selected card stays in view unless a [`ManualScroll`] pin holds it —
-    /// and written back as a byproduct of the draw, like frame interactions.
+    /// Target scroll-zone offset, clamped and auto-followed on every draw unless a [`ManualScroll`] pin holds it. [`Self::scroll_ease`] supplies the visible position.
     pub(in crate::sidebar_pane) scroll_offset: usize,
+    pub(in crate::sidebar_pane) scroll_ease: ScrollEase,
     /// Maximum offset in the last drawn frame, absent before the first draw.
     pub(in crate::sidebar_pane) drawn_scroll_max: Option<usize>,
     /// Request stamp of the last jump scroll anchor this renderer applied, so
