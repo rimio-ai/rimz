@@ -8,7 +8,7 @@ use super::placement::{PlacementErrors, PlacementRequest};
 
 #[derive(Debug, Args)]
 pub(super) struct ForkArgs {
-    /// Existing live or stopped agent to fork.
+    /// Existing live or stopped agent to fork: @handle, @handle#lane, pet name, or pane id (tmux:%12).
     #[arg(
         value_name = "REFERENCE",
         add = clap_complete::ArgValueCandidates::new(crate::cli::complete::agent_refs)
