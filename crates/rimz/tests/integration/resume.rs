@@ -276,10 +276,15 @@ mod agent_ref {
         }
 
         fn command(&self, reference: &str) -> Command {
+            self.command_args(&["resume", reference])
+        }
+
+        fn command_args(&self, args: &[&str]) -> Command {
             let workspace = self.env.resolve_workspace(&self.env.project_root);
             let mut command = self.env.rimz();
             command
-                .args(["--mux", "zellij", "agents", "resume", reference])
+                .args(["--mux", "zellij", "agents"])
+                .args(args)
                 .envs(rimz::workspace::pin_env(
                     &workspace.workspace_id,
                     &self.env.project_root,
@@ -543,6 +548,39 @@ mod agent_ref {
             !trace.contains("action\tnew-tab") && !trace.contains("action\tnew-pane"),
             "{trace}"
         );
+    }
+
+    #[test]
+    fn flag_resume_announces_before_new_tab_and_same_pane_takeover() {
+        for same_pane in [false, true] {
+            let fixture = Fixture::new(LaunchParams::default(), false, None);
+            let output = fixture
+                .command_args(&["worker", "--resume"])
+                .current_dir(if same_pane {
+                    &fixture.cwd
+                } else {
+                    &fixture.env.project_root
+                })
+                .env("ZELLIJ_PANE_ID", "2")
+                .bounded_output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            assert!(
+                stdout.starts_with(
+                    "resuming worker in #saved\nresumed claude:bright-otter (saved-session)\n"
+                ),
+                "{stdout}"
+            );
+            assert_eq!(fixture.trace().contains("action\tnew-tab"), !same_pane);
+            if same_pane {
+                assert!(!fixture.trace().contains("action\tnew-pane"));
+            }
+        }
     }
 
     #[test]

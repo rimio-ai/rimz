@@ -317,6 +317,8 @@ rimz agents astra --resume                           # the newest root session o
 
 Scope follows the worktree. `-w NAME` resumes that worktree's cohort; bare `-w`, or no flag while you stand in a worktree, scopes to the current worktree; from the project root, the newest match anywhere in the room wins.
 
+Before opening a pane or taking over the current one, stdout starts with `resuming <spec> in #<lane>`. When several places match, it reads `resuming <spec> in #<lane> (newest of N; others: run rimz agents resume from the project root)`. `N` counts distinct matching closed lanes (worktree and channel pairs), including the selected one, not sessions. One worktree can hold several matching channels, so run the suggested listing from the project root. The usual per-member receipts follow unchanged.
+
 A matched member that is still live refuses the command, so an address is never duplicated. `rimz agents resume @<ref>` can reopen an older closed solo session even when the newest matching root is live. Cleanly closed members still match while their worktree exists, and a cell with no resumable member launches fresh in the cohort's directory and channel. A spec that matches nothing fails and names the specs the same scope can resume.
 
 A single-cell resume run from the cohort's own directory takes over the current pane, so the hint an exiting team member leaves (`resume with rimz agents forge.coder --resume`) works from the shell it dropped into. An agent caller or `--bg` makes that a split instead, under the [focus rule](#channel-worktree-and-placement). Run from anywhere else, a lane-scoped resume opens its own tab.

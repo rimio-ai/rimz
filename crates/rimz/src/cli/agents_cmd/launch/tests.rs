@@ -623,6 +623,9 @@ fn resume_hint_uses_the_first_resumed_member_without_fresh_identities() {
     agent.name = Some("stable-haven".to_owned());
     agent.role = Some("planner".to_owned());
     let plan = rimz::harness::plan::CohortResumePlan {
+        spec: "forge".to_owned(),
+        lane_label: "#feat-x".to_owned(),
+        matching_lanes: 1,
         seeds: vec![rimz::harness::plan::CohortSeed::Resume(Box::new(agent))],
         cwd: Some(PathBuf::from("/repo")),
         channel: Some("feat-x".to_owned()),
@@ -631,6 +634,20 @@ fn resume_hint_uses_the_first_resumed_member_without_fresh_identities() {
         launch_group: None,
     };
 
+    let mut announcement = Vec::new();
+    write_resume_announcement(&mut announcement, &plan).unwrap();
+    assert_eq!(
+        String::from_utf8(announcement).unwrap(),
+        "resuming forge in #feat-x\n"
+    );
+    let mut alternatives = plan.clone();
+    alternatives.matching_lanes = 2;
+    let mut announcement = Vec::new();
+    write_resume_announcement(&mut announcement, &alternatives).unwrap();
+    assert_eq!(
+        String::from_utf8(announcement).unwrap(),
+        "resuming forge in #feat-x (newest of 2; others: run rimz agents resume from the project root)\n"
+    );
     assert_eq!(resume_hint_handle(&plan, &[]), Some("planner"));
     let mut output = Vec::new();
     write_resume_receipt(&mut output, &plan, Some("forge"), Some("feat-x"), &[], None).unwrap();

@@ -888,6 +888,10 @@ fn assert_tier_launch(routing: &str, surface: &str) {
             "the announcement must precede even a failed tab open: {stdout}"
         );
     }
+    if resume && !lane && refilled {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(stdout.starts_with("resuming duo in #"), "{stdout}");
+    }
     let events = env.read_events();
     if refilled {
         let refills: Vec<_> = events

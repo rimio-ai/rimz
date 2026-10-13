@@ -1210,6 +1210,7 @@ fn launch_resume_layout(
         )?;
         rimz::message::deliver::register_message_wake(workspace, store);
     }
+    write_resume_announcement(&mut render::out(), &plan)?;
     if in_place {
         write_receipt()?;
     }
@@ -1517,6 +1518,22 @@ fn write_launch_hints(
             "Wait:  rimz loop add team-idle --wait @me --signal team.idle --match instance={team}#{channel} --once"
         )?;
     }
+    Ok(())
+}
+
+fn write_resume_announcement(
+    w: &mut impl Write,
+    plan: &rimz::harness::plan::CohortResumePlan,
+) -> Result<()> {
+    write!(w, "resuming {} in {}", plan.spec, plan.lane_label)?;
+    if plan.matching_lanes > 1 {
+        write!(
+            w,
+            " (newest of {}; others: run rimz agents resume from the project root)",
+            plan.matching_lanes
+        )?;
+    }
+    writeln!(w)?;
     Ok(())
 }
 
