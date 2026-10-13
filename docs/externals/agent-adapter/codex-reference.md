@@ -1,29 +1,33 @@
 # Codex protocol reference
 
-This page mirrors the upstream surfaces of OpenAI's Codex CLI that RimZ binds to: hook events and their decision schema, project directory trust, launch flags and config overrides, the TUI input and notification channels, the app-server JSON-RPC API and its daemon, rollout and session-index files, and the ChatGPT auth file and usage endpoints. It records what upstream ships. How RimZ maps each surface onto its own types, and which events and methods it wires, is in [adapter_codex.md](../../internals/agents/adapter_codex.md); the provider-neutral model is [model.md](../../internals/agents/model.md), and accounts and spend are [providers.md](../../internals/agents/providers.md).
+This page records Codex CLI's hooks, launch behavior, app-server API, session files, folder trust, TUI input, authentication, and usage endpoints. The RimZ mapping is in [adapter_codex.md](../../internals/agents/adapter_codex.md). The provider-neutral model is [model.md](../../internals/agents/model.md), and accounts and spend are [providers.md](../../internals/agents/providers.md).
 
 ## Baseline and sources
 
-Except for the [async-question observations](#async-questions-observed-on-01580) and the newer [`--no-daemon` note](#execution), this page describes Codex CLI **0.154.0** (tag `rust-v0.154.0`, commit `6b9826e3aa83b1a5947db50f4332cb9c65f1b340`, released 2026-09-09), read on 2026-09-13, when it was the GitHub latest release and the npm `@openai/codex` `latest` dist-tag. A source reference written as `path:line` is relative to `codex-rs/` at that tag. Generated app-server shapes come from `codex app-server generate-json-schema` run on the 0.154.0 binary, and live rollout samples come from the same build. A fact that exists only on `main` is marked unreleased with its pull request.
+This page describes Codex CLI **0.162.1** (tag `rust-v0.162.1`, commit `092d3acd6bec3e3a14bdc7e7a2810ab628ab759d`, released 2026-10-09), checked 2026-10-12. The baseline matches the [latest stable GitHub release](https://github.com/openai/codex/releases/tag/rust-v0.162.1) and npm `@openai/codex` `latest`. Source paths are relative to [`codex-rs/` at that tag](https://github.com/openai/codex/tree/rust-v0.162.1/codex-rs).
+
+App-server shapes come from the release's [precomputed schema exports](https://github.com/openai/codex/tree/rust-v0.162.1/codex-rs/app-server-protocol/schema/precomputed), which its schema commands emit. The linked TypeScript files match the corresponding stable exports. Live captures retain their original version labels. The [async-question observations](#async-questions-observed-on-01580) remain scoped to 0.158.0.
+
+The table lists main sources. Additional links appear beside the corresponding wire details. Historical notes describe compatibility and observations, without setting an adapter support floor.
 
 | Surface | Source |
 | --- | --- |
-| Hooks: events, payloads, output, trust, limits | <https://learn.chatgpt.com/docs/hooks>; [`hooks/src/schema.rs`](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/hooks/src/schema.rs), [`hooks/src/engine/`](https://github.com/openai/codex/tree/rust-v0.154.0/codex-rs/hooks/src/engine), generated schemas in [`hooks/schema/generated/`](https://github.com/openai/codex/tree/rust-v0.154.0/codex-rs/hooks/schema/generated) |
-| Hook event enum and runtime dispatch | [`protocol/src/protocol.rs`](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/protocol/src/protocol.rs) `HookEventName`, [`core/src/hook_runtime.rs`](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/core/src/hook_runtime.rs) |
-| Hook tool names | [`core/src/tools/hook_names.rs`](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/core/src/tools/hook_names.rs) |
-| Project directory trust | [`tui/src/lib.rs`](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/tui/src/lib.rs), [`config/src/loader/mod.rs`](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/config/src/loader/mod.rs), [`git-utils/src/trust.rs`](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/git-utils/src/trust.rs) |
-| Config keys (`notify`, `[tui]`, credential store, `projects`, compaction) | <https://learn.chatgpt.com/docs/config-file/config-reference>, <https://learn.chatgpt.com/docs/config-file/config-advanced>; [`config/src/config_toml.rs`](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/config/src/config_toml.rs), [`config/src/types.rs`](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/config/src/types.rs) |
-| CLI commands and `-c` parser | <https://learn.chatgpt.com/docs/developer-commands?surface=cli>; `codex <command> --help`; [`utils/cli/src/config_override.rs`](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/utils/cli/src/config_override.rs), [`cli/src/login.rs`](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/cli/src/login.rs) |
-| Auto-compaction ceiling | [`protocol/src/openai_models.rs`](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/protocol/src/openai_models.rs), [`protocol/src/config_types.rs`](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/protocol/src/config_types.rs) |
-| TUI paste burst, plan prompt, questionnaire | [`tui/src/bottom_pane/paste_burst.rs`](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/tui/src/bottom_pane/paste_burst.rs), [`tui/src/chatwidget/plan_implementation.rs`](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/tui/src/chatwidget/plan_implementation.rs), [`tui/src/bottom_pane/request_user_input/mod.rs`](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/tui/src/bottom_pane/request_user_input/mod.rs) |
-| App-server protocol | <https://learn.chatgpt.com/docs/app-server>; [`app-server/README.md`](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/app-server/README.md), [`app-server-protocol/src/protocol/`](https://github.com/openai/codex/tree/rust-v0.154.0/codex-rs/app-server-protocol/src/protocol) |
-| App-server daemon and updater | [`app-server-daemon/README.md`](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/app-server-daemon/README.md), [`app-server-daemon/src/`](https://github.com/openai/codex/tree/rust-v0.154.0/codex-rs/app-server-daemon/src) (`lib.rs`, `backend/pid.rs`, `update_loop.rs`, `managed_install.rs`) |
-| Rollout files, persistence policy, compression, session index | [`rollout/src/`](https://github.com/openai/codex/tree/rust-v0.154.0/codex-rs/rollout/src) (`recorder.rs`, `policy.rs`, `rollout_file_name.rs`, `compression.rs`, `session_index.rs`), [`protocol/src/protocol.rs`](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/protocol/src/protocol.rs), [`protocol/src/items.rs`](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/protocol/src/items.rs) |
-| `auth.json` | [`login/src/auth/storage.rs`](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/login/src/auth/storage.rs) |
-| ChatGPT usage and reset-credit endpoints | [`backend-client/src/client/rate_limit_resets.rs`](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/backend-client/src/client/rate_limit_resets.rs), [`backend-client/src/types.rs`](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/backend-client/src/types.rs), [`codex-backend-openapi-models/src/models/`](https://github.com/openai/codex/tree/rust-v0.154.0/codex-rs/codex-backend-openapi-models/src/models) |
+| Hooks: events, payloads, output, trust, limits | <https://learn.chatgpt.com/docs/hooks>. [`hooks/src/schema.rs`](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/hooks/src/schema.rs), [`hooks/src/engine/`](https://github.com/openai/codex/tree/rust-v0.162.1/codex-rs/hooks/src/engine), generated schemas in [`hooks/schema/generated/`](https://github.com/openai/codex/tree/rust-v0.162.1/codex-rs/hooks/schema/generated) |
+| Hook event enum and runtime dispatch | [`protocol/src/protocol.rs`](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/protocol/src/protocol.rs) `HookEventName`, [`core/src/hook_runtime.rs`](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/core/src/hook_runtime.rs) |
+| Hook tool names | [`core/src/tools/hook_names.rs`](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/core/src/tools/hook_names.rs) |
+| Project directory trust | [`tui/src/lib.rs`](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/tui/src/lib.rs), [`config/src/loader/mod.rs`](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/config/src/loader/mod.rs), [`git-utils/src/trust.rs`](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/git-utils/src/trust.rs) |
+| Config keys (`notify`, `[tui]`, credential store, `projects`, compaction) | <https://learn.chatgpt.com/docs/config-file/config-reference>, <https://learn.chatgpt.com/docs/config-file/config-advanced>. [`config/src/config_toml.rs`](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/config/src/config_toml.rs), [`config/src/types.rs`](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/config/src/types.rs) |
+| CLI commands and `-c` parser | <https://learn.chatgpt.com/docs/developer-commands?surface=cli>. `codex <command> --help`. [`utils/cli/src/config_override.rs`](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/utils/cli/src/config_override.rs), [`cli/src/login.rs`](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/cli/src/login.rs) |
+| Auto-compaction ceiling | [`protocol/src/openai_models.rs`](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/protocol/src/openai_models.rs), [`protocol/src/config_types.rs`](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/protocol/src/config_types.rs) |
+| TUI paste burst, plan prompt, questionnaire | [`tui/src/bottom_pane/paste_burst.rs`](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/tui/src/bottom_pane/paste_burst.rs), [`tui/src/chatwidget/plan_implementation.rs`](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/tui/src/chatwidget/plan_implementation.rs), [`tui/src/bottom_pane/request_user_input/mod.rs`](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/tui/src/bottom_pane/request_user_input/mod.rs) |
+| App-server protocol | <https://learn.chatgpt.com/docs/app-server>. [`app-server/README.md`](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/app-server/README.md), [`app-server-protocol/src/protocol/`](https://github.com/openai/codex/tree/rust-v0.162.1/codex-rs/app-server-protocol/src/protocol) |
+| App-server daemon and updater | [`app-server-daemon/README.md`](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/app-server-daemon/README.md), [`app-server-daemon/src/`](https://github.com/openai/codex/tree/rust-v0.162.1/codex-rs/app-server-daemon/src) (`lib.rs`, `backend/pid.rs`, `update_loop.rs`, `managed_install.rs`) |
+| Rollout files, persistence policy, compression, session index | [`rollout/src/`](https://github.com/openai/codex/tree/rust-v0.162.1/codex-rs/rollout/src) (`recorder.rs`, `policy.rs`, `rollout_file_name.rs`, `compression.rs`, `session_index.rs`), [`protocol/src/protocol.rs`](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/protocol/src/protocol.rs), [`protocol/src/items.rs`](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/protocol/src/items.rs) |
+| `auth.json` | [`login/src/auth/storage.rs`](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/login/src/auth/storage.rs) |
+| ChatGPT usage and reset-credit endpoints | [`backend-client/src/client/rate_limit_resets.rs`](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/backend-client/src/client/rate_limit_resets.rs), [`backend-client/src/types.rs`](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/backend-client/src/types.rs), [`codex-backend-openapi-models/src/models/`](https://github.com/openai/codex/tree/rust-v0.162.1/codex-rs/codex-backend-openapi-models/src/models) |
 | Release notes | <https://github.com/openai/codex/releases> |
 
-The app-server protocol publishes no version string. The binary generates its exact schema; `--experimental` adds the methods and fields gated as experimental:
+The app-server protocol publishes no version string. The binary generates its exact schema. `--experimental` adds the methods and fields gated as experimental:
 
 ```bash
 codex app-server generate-ts --out DIR
@@ -32,11 +36,11 @@ codex app-server generate-json-schema --out DIR [--experimental]
 
 ## Hooks
 
-A Codex hook is a handler Codex runs at a lifecycle point. A command handler receives a JSON payload on stdin and answers on stdout. The event set, payloads, and output rules follow Claude Code's hook shape with the differences recorded below; never reuse a Claude decision without checking this section.
+A Codex hook is a handler Codex runs at a lifecycle point. A command handler receives a JSON payload on stdin and answers on stdout. The event set, payloads, and output rules follow Claude Code's hook shape with the differences recorded below. Never reuse a Claude decision without checking this section.
 
 ### Config shape
 
-Hooks are declared as `[[hooks.<Event>]]` groups in a `config.toml`, or in a `hooks.json` beside it. Codex discovers both beside the user config (`$CODEX_HOME/config.toml`, default `~/.codex/config.toml`), beside each trusted project's `.codex/` layer, and in plugin and managed layers. Sources merge; a layer holding both `hooks.json` and TOML hooks gets a startup warning. Hooks are enabled by default: `[features].hooks = false` disables them, and `codex_hooks` is a deprecated alias for that feature (`features/src/lib.rs:1166`, `features/src/legacy.rs:49`).
+Hooks are declared as `[[hooks.<Event>]]` groups in a `config.toml`, or in a `hooks.json` beside it. Codex discovers both beside the user config (`$CODEX_HOME/config.toml`, default `~/.codex/config.toml`), beside each trusted project's `.codex/` layer, and in plugin and managed layers. Sources merge. A layer holding both `hooks.json` and TOML hooks gets a startup warning. Hooks are enabled by default: `[features].hooks = false` disables them, and `codex_hooks` is a deprecated alias for that feature (`features/src/lib.rs`, `features/src/legacy.rs`).
 
 ```toml
 [[hooks.PreToolUse]]
@@ -52,28 +56,41 @@ statusMessage = "Checking Bash command"
 
 | Field | Meaning |
 | --- | --- |
-| `matcher` (group) | Regex over the tool name, or over the source or trigger for lifecycle events. `UserPromptSubmit`, `Stop`, and `Interrupt` ignore it (`hooks/src/events/common.rs:112`). |
-| `type` | `command` and `mcp_tool` run. `prompt` and `agent` parse and are skipped with a warning (`hooks/src/engine/discovery.rs:635`, `:645`). `mcp_tool` is unsupported on `SessionEnd`. Handler fields are in `HookHandlerConfig` (`config/src/hook_config.rs:163`). |
-| `command`, `commandWindows` | Shell command; the Windows variant (alias `command_windows`) replaces it on Windows. |
+| `matcher` (group) | Regex over the tool name, or over the source or trigger for lifecycle events. `UserPromptSubmit`, `Stop`, and `Interrupt` ignore it (`hooks/src/events/common.rs`). |
+| `type` | `command` and `mcp_tool` run. `prompt` and `agent` parse and are skipped with a warning (`hooks/src/engine/discovery.rs`). `mcp_tool` is unsupported on `SessionEnd`. Handler fields are in `HookHandlerConfig` (`config/src/hook_config.rs`). |
+| `command`, `commandWindows` | Shell command. The Windows variant (alias `command_windows`) replaces it on Windows. |
 | `server`, `tool`, `input` | The MCP server, tool, and TOML-representable input of an `mcp_tool` handler. |
-| `timeout` | Seconds. Default 600. `SessionEnd` and `Interrupt` default to 1 and clamp to 1 through 3 (`discovery.rs:740` to `:763`). |
-| `async` | A command with `async = true` runs in the background and cannot apply control effects. At most eight background hooks run per session; the rest queue (`MAX_CONCURRENT_ASYNC_HOOKS`, `hooks/src/engine/command_runner.rs:45`). `async` on `SessionEnd` runs synchronously with a warning. |
+| `timeout` | Seconds. Default 600. `SessionEnd` and `Interrupt` default to 1 and clamp to 1 through 3 (`discovery.rs`). |
+| `async` | A command with `async = true` runs in the background and cannot apply control effects. At most eight background hooks run per session. The rest queue (`MAX_CONCURRENT_ASYNC_HOOKS`, `hooks/src/engine/command_runner.rs`). `async` on `SessionEnd` runs synchronously with a warning. |
 | `statusMessage` | Text the TUI shows while the hook runs. |
-| `additionalContextLimit` | Approximate token threshold for spilling a command hook's `additionalContext` to disk; unset means 2,500 and `0` disables spilling. Overflow is saved under `<temp_dir>/hook_outputs/<session_id>/` and the model sees a head and tail preview ([hooks docs, "Large hook output"](https://learn.chatgpt.com/docs/hooks)). |
+| `additionalContextLimit` | Approximate token threshold for spilling a command hook's `additionalContext` to disk. Unset means 2,500 and `0` disables spilling. Overflow is saved under `<temp_dir>/hook_outputs/<session_id>/` and the model sees a head and tail preview ([hooks docs, "Large hook output"](https://learn.chatgpt.com/docs/hooks)). |
 
-Managed hooks come from `requirements.toml` `[hooks]` (`managed_dir`, `windows_managed_dir`); `allow_managed_hooks_only` makes Codex ignore every other source.
+Managed hooks come from `requirements.toml` `[hooks]` (`managed_dir`, `windows_managed_dir`). `allow_managed_hooks_only` makes Codex ignore every other source.
 
 ### Execution
 
-Codex starts all matching handlers for one event concurrently (`hooks/src/engine/dispatcher.rs:125`), with the session cwd as working directory. `build_command` (`command_runner.rs:390` to `:426`) clears the child environment, replays the environment snapshot `Hooks::new` captured from the Codex process (`hooks/src/registry.rs:79`), applies the source's environment overlay, and then scrubs non-inheritable credential variables. Only plugin hooks have an overlay (`PLUGIN_ROOT`, `CLAUDE_PLUGIN_ROOT`, `PLUGIN_DATA`, `CLAUDE_PLUGIN_DATA`); a handler has no `env` field.
+Codex runs ordinary synchronous handlers concurrently and schedules asynchronous handlers separately (`hooks/src/engine/dispatcher.rs`). Executor-scoped plugin hooks run after synchronous results, subject to their control outcome. Tool hooks use the local environment cwd, with the turn cwd as fallback. They run on the host even with a remote workspace (`core/src/hook_runtime.rs`, `tool_hook_cwd`). `build_command` (`command_runner.rs`) clears the child environment, replays the environment snapshot `Hooks::new` captured from the Codex process (`hooks/src/registry.rs`), applies the source's environment overlay, and then scrubs non-inheritable credential variables. Only plugin hooks have an overlay (`PLUGIN_ROOT`, `CLAUDE_PLUGIN_ROOT`, `PLUGIN_DATA`, `CLAUDE_PLUGIN_DATA`). A handler has no `env` field.
 
-A plain TUI launch runs its session inside the shared per-user app-server daemon ([App-server daemon](#app-server-daemon)), so a hook child's parent process is the daemon, and the environment snapshot is the daemon's. Newer than this page's baseline: `--no-daemon` (0.156.0, [PR #46088](https://github.com/openai/codex/pull/46088), [`codex-rs/tui/src/cli.rs`](https://github.com/openai/codex/blob/rust-v0.156.0/codex-rs/tui/src/cli.rs)) keeps the session embedded and cannot combine with `--remote`: `ERROR: --no-daemon cannot be used with --remote.` (observed on 0.159.2, 2026-09-30).
+An eligible TUI launch automatically starts or attaches to the shared [app-server daemon](#app-server-daemon) for its `CODEX_HOME`. Hook children inherit the environment captured when the daemon started. A new terminal does not replace it. `--no-daemon`, introduced in 0.156.0, keeps the session embedded and cannot combine with `--remote` ([startup checks](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/tui/src/startup_orchestration.rs)).
+
+[Daemon exclusions](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/tui/src/daemon_startup.rs) include `--oss`, workload identity, `CODEX_EXEC_SERVER_URL`, `--profile`, `--strict-config`, hook-trust bypass, and unsupported configuration overrides. Overrides outside the allowlist select embedded execution. The allowlist accepts boolean `suppress_unstable_features_warning`, `tui.fullscreen_transcript`, and selected boolean `features.*` keys. The complete feature list is `allowed_feature` in that source. `--no-daemon` provides deterministic embedded execution. Automatic startup also excludes Windows-mounted WSL homes. In 0.162.1, compatibility checks compare the daemon's shared services only against explicit CLI feature overrides, rather than client defaults.
+
+For a normal TUI session, server selection follows these rules ([startup orchestration](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/tui/src/startup_orchestration.rs)):
+
+| Condition | Result |
+| --- | --- |
+| Explicit `--remote` endpoint | Connect to that app-server. Connection failure is an error. `--no-daemon` conflicts, and workload identity must be configured on the remote host. |
+| Local daemon exclusion | Use embedded execution. Other exclusions include a custom configuration loader and required Bedrock sign-in. Elevated Windows sessions also run embedded. |
+| Eligible local session, `features.daemon_auto_start = true` (default) | Start or reuse the managed daemon. Startup or connection failure exits with the `--no-daemon` recovery hint. A Windows launcher that forbids detached processes falls back to embedded. |
+| Automatic startup disabled | Attach to an eligible daemon already discovered at the default socket, otherwise run embedded. This optional attachment can fall back if connection or compatibility checks fail. |
+
+Automatic startup requires daemon compatibility. If stdin or stdout is not a terminal, a compatibility failure returns an error. The TUI offers embedded execution or a confirmed managed restart with the requested settings ([recovery choices](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/tui/src/daemon_recovery.rs)). Restart can interrupt other clients. Codex checks compatibility once more after restart. A failed second check returns an error. Daemon logs are listed under [App-server daemon](#app-server-daemon).
 
 ### Trust state
 
-Codex runs a non-managed hook only after the user trusts its current definition. Trust is recorded per handler as a hash, so a new or changed handler is skipped until the user reviews it in `/hooks`; the TUI raises a startup review listing hooks that need it (`tui/src/startup_hooks_review.rs`), and the engine never runs them in the meantime. `--dangerously-bypass-hook-trust` runs enabled hooks without trust for one invocation. Managed hooks, and the bundled cleanup-plugin hooks Codex treats as built-ins, need no trust (`discovery.rs:713` to `:735`).
+Codex runs a non-managed hook only after the user trusts its current definition. Trust is recorded per handler as a hash, so a new or changed handler is skipped until the user reviews it in `/hooks`. The TUI raises a startup review listing hooks that need it (`tui/src/startup_hooks_review.rs`), and the engine never runs them in the meantime. `--dangerously-bypass-hook-trust` runs enabled hooks without trust for one invocation. Managed hooks, and the bundled cleanup-plugin hooks Codex treats as built-ins, need no trust (`discovery.rs`).
 
-State lives in the user config as `[hooks.state]` entries, `{ enabled, trusted_hash }`, keyed `"<key_source>:<event_label>:<group>:<handler>"` (`hooks/src/lib.rs:113`, `config/src/hook_config.rs:28`). For a config-file hook `key_source` is the config path; for a plugin hook it is `"<plugin_id>:<relative_path>"`. The event label is the event name in lower snake case, and the hash carries a `sha256:` prefix (`config/src/fingerprint.rs:61`):
+State lives in the user config as `[hooks.state]` entries, `{ enabled, trusted_hash }`, keyed `"<key_source>:<event_label>:<group>:<handler>"` (`hooks/src/lib.rs`, `config/src/hook_config.rs`). For a config-file hook `key_source` is its source path, including `hooks.json` when that file declares it. Group and handler indices are zero-based within that source. For a plugin hook it is `"<plugin_id>:<relative_path>"`. The event label is lower snake case. The hash covers the event label and normalized matcher group containing only that handler. Sorted JSON serialization is SHA-256 hashed with a `sha256:` prefix ([hash construction](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/hooks/src/engine/discovery.rs), `hook_hash`, and `config/src/fingerprint.rs`):
 
 ```toml
 [hooks.state."/home/user/.codex/config.toml:permission_request:0:0"]
@@ -82,28 +99,28 @@ trusted_hash = "sha256:…"
 
 ### Common input
 
-Every command hook except `SessionEnd` receives this envelope (`hooks/src/schema.rs`):
+These fields form the hook input envelope. Availability varies by event as noted below (`hooks/src/schema.rs`). `SessionEnd` has its own reduced envelope.
 
 | Field | Type | Notes |
 | --- | --- | --- |
-| `session_id` | string | The root thread id; also the rollout UUID. |
+| `session_id` | string | The shared session-tree id, equal to the root thread id. A child has its own `agent_id`. |
 | `transcript_path` | string or null | Rollout path. |
 | `cwd` | string | Session cwd. |
 | `hook_event_name` | string | Event name. |
 | `model` | string | Active model slug. |
-| `permission_mode` | string | `default`, `acceptEdits`, `plan`, `dontAsk`, or `bypassPermissions` (`schema.rs:843`). Absent on `PreCompact` and `PostCompact`. |
-| `turn_id` | string | Turn-scoped events only; absent on `SessionStart`. |
-| `agent_id`, `agent_type` | string, optional | Present on `UserPromptSubmit`, `PreToolUse`, `PermissionRequest`, `PostToolUse`, `PreCompact`, and `PostCompact` when the hook fires inside a child thread. The hooks docs omit them on these events; the schema carries them. |
+| `permission_mode` | string | Runtime emits `bypassPermissions` for approval policy `never`, otherwise `default`. Absent on `PreCompact` and `PostCompact`. The schema also lists `acceptEdits`, `plan`, and `dontAsk`, which this runtime does not emit (`core/src/hook_runtime.rs`, `hook_permission_mode`). |
+| `turn_id` | string | Turn-scoped events only. Absent on `SessionStart`. |
+| `agent_id`, `agent_type` | string, optional | Present on `UserPromptSubmit`, `PreToolUse`, `PermissionRequest`, `PostToolUse`, `PreCompact`, and `PostCompact` when the hook fires inside a child thread. The release schema carries these fields. |
 
-A child observation carries an `agent_id` distinct from the root `session_id`. Hooks carry no child nickname, task path, token usage, or assignment prompt; those are in the child's [rollout header](#rollout-records).
+A child observation carries an `agent_id` distinct from the root `session_id`. Hooks carry no child nickname, task path, token usage, or assignment prompt. See [rollout records](#rollout-records) for lineage and usage.
 
 ### Events
 
-Codex 0.154.0 has twelve hook events (`HookEventName`, `protocol/src/protocol.rs:1576`) and no `Notification` or dedicated plan-approval event.
+Codex 0.162.1 has twelve hook events (`HookEventName`, `protocol/src/protocol.rs`) and no `Notification` or dedicated plan-approval event.
 
 | Event | Fires | Event-specific input |
 | --- | --- | --- |
-| `SessionStart` | a root session starts, resumes, clears, compacts, or forks; dispatched at the start of the next turn (`run_pending_session_start_hooks`, `core/src/hook_runtime.rs:124`) | `source`: `startup`, `resume`, `clear`, `compact`, or `fork` |
+| `SessionStart` | a root session starts, resumes, clears, compacts, or forks. Dispatched at the start of the next turn (`run_pending_session_start_hooks`, `core/src/hook_runtime.rs`) | `source`: `startup`, `resume`, `clear`, `compact`, or `fork` |
 | `UserPromptSubmit` | the user submits a prompt | `turn_id`, `prompt` |
 | `SubagentStart` | a spawned child thread starts | `turn_id`, `agent_id`, `agent_type`, `permission_mode` |
 | `PreToolUse` | before a hooked tool call ([tool names](#tool-names)) | `turn_id`, `tool_name`, `tool_use_id`, `tool_input` |
@@ -114,13 +131,13 @@ Codex 0.154.0 has twelve hook events (`HookEventName`, `protocol/src/protocol.rs
 | `Interrupt` | a root turn is interrupted (`TurnAbortReason::Interrupted` only) | `turn_id`, plus common `model` and `permission_mode` |
 | `PreCompact` | before compaction | `turn_id`, `trigger` (`manual` or `auto`) |
 | `PostCompact` | after compaction | `turn_id`, `trigger` |
-| `SessionEnd` | the root session runtime shuts down | `session_id`, `transcript_path`, `cwd`, `hook_event_name`, `reason` (always `other`); no `model`, `permission_mode`, or `turn_id` |
+| `SessionEnd` | the root session runtime shuts down | `session_id`, `transcript_path`, `cwd`, `hook_event_name`, `reason` (always `other`). No `model`, `permission_mode`, or `turn_id` |
 
-`Interrupt` and `SessionEnd` fire only for root threads, each after Codex flushes the rollout (`hook_runtime.rs:455` to `:526`). `Interrupt` fires before the `turn_aborted` record is emitted (`core/src/tasks/mod.rs:807`, `:965`). `SessionEnd` runs from the shutdown handler, which the app-server also reaches when it unloads an idle thread (`unload_thread_without_subscribers`, `app-server/src/request_processors/thread_lifecycle.rs:422`), so the event does not prove the interactive session ended. Codex 0.152.0 added executor-plugin `Interrupt` hooks (#41432); they run async and leave the command-hook payload unchanged.
+`Interrupt` and `SessionEnd` fire only for root threads, each after Codex flushes the rollout (`hook_runtime.rs`). `Interrupt` fires before the `turn_aborted` record is emitted (`core/src/tasks/mod.rs`). `SessionEnd` runs from the shutdown handler, which the app-server also reaches when it unloads an idle thread (`unload_thread_without_subscribers`, `app-server/src/request_processors/thread_lifecycle.rs`), so the event does not prove the interactive session ended. Codex 0.152.0 added executor-plugin `Interrupt` hooks (#41432). They run async and leave the command-hook payload unchanged.
 
-Compaction runs in place: Codex writes a `compacted` record into the same rollout, keeps the session id, and queues `SessionStart` with `source = "compact"` for the next turn (`core/src/session/mod.rs:3831` to `:3847`). Local 0.154.0 rollouts confirm it: sessions with several compactions keep one file and a parentless header.
+Compaction runs in place: Codex writes a `compacted` record into the same rollout, keeps the session id, and queues `SessionStart` with `source = "compact"` for the next turn (`core/src/session/mod.rs`). Local 0.154.0 rollouts confirm it: sessions with several compactions keep one file and a parentless header.
 
-`/btw` (alias `/side`) forks an ephemeral side thread: `side_fork_config` sets `ephemeral = true` ([`tui/src/app/side.rs`](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/tui/src/app/side.rs)). No rollout is persisted, so `hook_transcript_path` yields a null `transcript_path` ([`core/src/hook_runtime.rs`](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/core/src/hook_runtime.rs)). Its `SessionStart` carries `source: "fork"`; later `UserPromptSubmit` and `Stop` hooks carry the new session id and null transcript path, but no source or ephemeral marker. A persistent fork has a materialized rollout; an ephemeral root instead starts with `source: "startup"`.
+`/btw` (alias `/side`) forks an ephemeral side thread: `side_fork_config` sets `ephemeral = true` ([`tui/src/app/side.rs`](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/tui/src/app/side.rs)). No rollout is persisted, so `hook_transcript_path` yields a null `transcript_path` ([`core/src/hook_runtime.rs`](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/core/src/hook_runtime.rs)). Its `SessionStart` carries `source: "fork"`. Later `UserPromptSubmit` and `Stop` hooks carry the new session id and null transcript path, but no source or ephemeral marker. A persistent fork has a materialized rollout. An ephemeral root instead starts with `source: "startup"`.
 
 ### Tool names
 
@@ -133,27 +150,27 @@ Hook `tool_name` values are canonical names, distinct from the function names a 
 | `spawn_agent` | child thread spawn | `Agent` |
 | `mcp__<server>__<tool>` | MCP tool calls | none |
 | `request_user_input` | a blocking questionnaire ([questions](#questions-and-plan-approval)) | none |
-| `request_user_input_async` | a non-blocking question set; returns `{"accepted":true}` at once | none |
-| `update_plan` | the todo-plan tool; non-blocking | none |
+| `request_user_input_async` | a [non-blocking question set](#questions-and-plan-approval) | none |
+| `update_plan` | the todo-plan tool. Non-blocking | none |
 
-Hooks are a partial interception boundary: web search and other unhooked tool paths bypass them. `update_plan` is off by default since 0.152.0; `[tools.update_plan] enabled = true` turns it on (`core/src/config/mod.rs:2659`). `request_user_input_async` is registered only for root threads whose model catalog entry advertises it (0.153.0).
+Hooks are a partial interception boundary: web search and other unhooked tool paths bypass them. `update_plan` is off by default since 0.152.0. `[tools.update_plan] enabled = true` turns it on (`core/src/config/mod.rs`). `request_user_input_async` is registered only for root threads whose model catalog entry advertises it (0.153.0).
 
-For function tools without a dedicated hook contract, `tool_response` is the tool's text output as a JSON **string** (`core/src/tools/registry.rs:95` to `:125`). `request_user_input` is such a tool, so its `tool_response` is a string holding `{"answers":{…}}`, which a consumer must parse a second time.
+For function tools without a dedicated contract, `tool_response` is a string for one text item and a content-item array otherwise ([output projection](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/core/src/tools/context.rs)). `request_user_input` returns a string containing `{"answers":{…}}`, which requires a second JSON parse. `request_user_input_async` also returns a JSON string.
 
 ### Hook output
 
-Every output type is parsed with `deny_unknown_fields` (`hooks/src/engine/output_parser.rs`): an unrecognized field marks the hook run failed. The universal fields are `continue`, `stopReason`, `systemMessage`, and `suppressOutput`; `hookSpecificOutput` carries event-specific fields.
+Every output type is parsed with `deny_unknown_fields` (`hooks/src/engine/output_parser.rs`): an unrecognized field marks the hook run failed. The universal fields are `continue`, `stopReason`, `systemMessage`, and `suppressOutput`. `hookSpecificOutput` carries event-specific fields.
 
 | Event | Accepted | Rejected (hook fails) |
 | --- | --- | --- |
-| `PreToolUse` | `hookSpecificOutput.permissionDecision` `allow` with `updatedInput`, or `deny` with `permissionDecisionReason`; `hookSpecificOutput.additionalContext`; legacy `decision: "block"` with `reason`; `systemMessage` | `ask`; `allow` without `updatedInput`; `updatedInput` without `allow`; `deny` without a reason; `decision: "approve"`; `continue: false`; `stopReason`; `suppressOutput` |
-| `PermissionRequest` | `hookSpecificOutput.decision` `{ behavior: "allow" \| "deny", message }`; a deny without `message` gets "PermissionRequest hook denied approval"; `systemMessage` | `updatedInput`, `updatedPermissions`, `interrupt: true`, `continue: false`, `stopReason`, `suppressOutput` |
-| `PostToolUse` | `decision: "block"` with `reason`; `hookSpecificOutput.additionalContext`, with `hookSpecificOutput.hookEventName: "PostToolUse"` required (`hooks/src/schema.rs`, `PostToolUseHookSpecificOutputWire`); a top-level `additionalContext` is an unknown field; `continue: false` stops and sends feedback; `systemMessage`, `stopReason` | `updatedMCPToolOutput`, `suppressOutput`, `reason` without `decision` |
-| `UserPromptSubmit` | `decision: "block"` with `reason`; `hookSpecificOutput.additionalContext`, with `hookSpecificOutput.hookEventName: "UserPromptSubmit"` required ([`hooks/src/schema.rs`](https://github.com/openai/codex/blob/rust-v0.158.0/codex-rs/hooks/src/schema.rs) at `rust-v0.158.0`, `UserPromptSubmitCommandOutputWire` and `UserPromptSubmitHookSpecificOutputWire`, both `deny_unknown_fields`); plain stdout becomes context | a top-level `additionalContext` |
-| `SessionStart`, `SubagentStart` | `additionalContext`; plain stdout becomes context; `continue: false` stops only on `SessionStart`; `suppressOutput` is ignored on `SessionStart` | |
-| `Stop`, `SubagentStop` | universal fields; `decision: "block"` with `reason` | `additionalContext` |
-| `PreCompact`, `PostCompact` | universal fields; `suppressOutput` ignored | `additionalContext` |
-| `Interrupt` | `systemMessage` only, shown as a warning; non-JSON stdout or a non-zero exit is a failure | everything else |
+| `PreToolUse` | `hookSpecificOutput.permissionDecision` accepts `allow` with `updatedInput`, or `deny` with `permissionDecisionReason`. Optional `hookSpecificOutput.additionalContext` and `systemMessage`. Legacy `decision: "block"` requires `reason`. | `ask`, `allow` without `updatedInput`, `updatedInput` without `allow`, `deny` without a reason, `decision: "approve"`, `continue: false`, `stopReason`, `suppressOutput` |
+| `PermissionRequest` | `hookSpecificOutput.decision` `{ behavior: "allow" \| "deny", message }`. A deny without `message` gets "PermissionRequest hook denied approval". `systemMessage` | `updatedInput`, `updatedPermissions`, `interrupt: true`, `continue: false`, `stopReason`, `suppressOutput` |
+| `PostToolUse` | `decision: "block"` with `reason`. `hookSpecificOutput.additionalContext`, with `hookSpecificOutput.hookEventName: "PostToolUse"` required (`hooks/src/schema.rs`, `PostToolUseHookSpecificOutputWire`). `continue: false` stops and sends feedback. `systemMessage`, `stopReason` | top-level `additionalContext`, `updatedMCPToolOutput`, `suppressOutput`, `reason` without `decision` |
+| `UserPromptSubmit` | `decision: "block"` with `reason`. `hookSpecificOutput.additionalContext`, with `hookSpecificOutput.hookEventName: "UserPromptSubmit"` required ([`hooks/src/schema.rs`](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/hooks/src/schema.rs), `UserPromptSubmitCommandOutputWire` and `UserPromptSubmitHookSpecificOutputWire`, both `deny_unknown_fields`). Plain stdout becomes context | a top-level `additionalContext` |
+| `SessionStart`, `SubagentStart` | `hookSpecificOutput.additionalContext`, with matching `hookSpecificOutput.hookEventName`. Plain stdout becomes context. `continue: false` stops only on `SessionStart`. `suppressOutput` is ignored on `SessionStart` | |
+| `Stop`, `SubagentStop` | Universal fields, plus `decision: "block"` with `reason` | `additionalContext` |
+| `PreCompact`, `PostCompact` | Universal fields. `suppressOutput` is ignored | `additionalContext` |
+| `Interrupt` | `systemMessage` only, shown as a warning. Non-JSON stdout or a non-zero exit is a failure | everything else |
 | `SessionEnd` | output ignored | |
 
 The decision shapes a permission or pre-tool hook returns:
@@ -164,45 +181,62 @@ The decision shapes a permission or pre-tool hook returns:
 { "hookSpecificOutput": { "hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "string" } }
 ```
 
-A `PermissionRequest` answer carries only `decision.behavior` and `decision.message`. Claude Code's `updatedInput`, `updatedPermissions`, and `interrupt` fail it.
+The `PermissionRequest` decision object carries only `behavior` and `message`. `systemMessage` remains a separate top-level field. Claude Code's `updatedInput`, `updatedPermissions`, and `interrupt` fail it.
 
-Exit codes: exit 0 with JSON applies the output, and exit 0 with empty stdout continues. Exit 2 with non-empty stderr blocks, using stderr as the reason, on `PreToolUse`, `PermissionRequest`, `PostToolUse`, `UserPromptSubmit`, `Stop`, and `SubagentStop`; exit 2 with empty stderr, or on the compact events and `Interrupt`, is a failure.
+Exit codes: exit 0 with JSON applies the output, and exit 0 with empty stdout continues. Exit 2 with non-empty stderr blocks, using stderr as the reason, on `PreToolUse`, `PermissionRequest`, `PostToolUse`, `UserPromptSubmit`, `Stop`, and `SubagentStop`. Exit 2 with empty stderr, or on the compact events and `Interrupt`, is a failure.
+
+A hook run marked `Failed` contributes diagnostics, without a block or stop decision. Timeouts, process errors, and invalid output take this path. Successful output from another handler can still block or stop the flow ([event handlers](https://github.com/openai/codex/tree/rust-v0.162.1/codex-rs/hooks/src/events)). A failed `PermissionRequest` hook supplies no approval decision, so normal approval processing continues. Asynchronous hooks cannot apply control effects, including exit-2 blocking.
+
+Other nonzero exits fail the handler. Exit 2 also fails on `SessionStart` and `SubagentStart`. For exit-zero non-JSON stdout, these rules apply:
+
+| Events | Plain stdout |
+| --- | --- |
+| `SessionStart`, `SubagentStart`, `UserPromptSubmit` | Added as context |
+| `PreToolUse`, `PermissionRequest`, `PostToolUse`, `PreCompact`, `PostCompact` | Ignored unless it looks like malformed JSON |
+| Synchronous `Stop`, `SubagentStop`, and `Interrupt` | Fails the handler |
+| `SessionEnd` | Ignored |
+
+JSON-looking text starts with `{` or `[`. Malformed JSON fails parsing. Public hook-run summaries expose failures through `hook/completed` and the TUI's hook details.
 
 ## Async questions (observed on 0.158.0)
 
-`request_user_input_async` takes `questions: [{title, options?: [string]}]`, returns `{"accepted":true}` immediately, and leaves the turn running. Both PreToolUse and PostToolUse fire; PostToolUse carries `tool_use_id`, the input, and `tool_response` as a JSON string (`"{\"accepted\":true}"`). Each question's `questionItemId` is the JSON-encoded string `["request_user_input_async", call_id, index]`. A committed answer fires UserPromptSubmit during the same turn with a prompt containing `<send_user_message_question_reply>`, a JSON array of `{answer, question, questionItemId}`, and the closing tag. Ordinary user prompts do not clear questions; replies clear only the named questions, and completion, interruption, failure, or thread reset clears the queue. The 30-second timer is a countdown, not automatic removal. Local Ctrl+] skips send no hook.
+The captures below describe 0.158.0. In 0.162.1, an accepted ordinary composer prompt clears pending questions, while question-editor answers preserve unanswered siblings ([submission handling](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/tui/src/chatwidget/input_submission.rs)). Escape collapses the expanded editor when you are not editing text. This behavior defaults on through `tui.question_esc_back`. Ctrl+C follows the interrupt path ([key handling](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/tui/src/chatwidget/questions.rs)). The earlier Escape behavior below is historical.
+
+In the 0.158.0 capture, `request_user_input_async` takes `questions: [{title, options?: [string]}]`, returns `{"accepted":true}` immediately, and leaves the turn running. Both PreToolUse and PostToolUse fire. PostToolUse carries `tool_use_id`, the input, and `tool_response` as a JSON string (`"{\"accepted\":true}"`). Each question's `questionItemId` is the JSON-encoded string `["request_user_input_async", call_id, index]`. A committed answer fires UserPromptSubmit during the same turn with a prompt containing `<send_user_message_question_reply>`, a JSON array of `{answer, question, questionItemId}`, and the closing tag. Ordinary user prompts do not clear questions. Replies clear only the named questions, and completion, interruption, failure, or thread reset clears the queue. The widget displays a 30-second countdown, but questions remain after it expires. Skipping a question with Ctrl+] sends no hook.
 
 A live trial on 0.158.0 found that pasting a reply envelope into the ordinary composer and pressing Enter cleared the whole pending-question widget, including the unanswered sibling. The UserPromptSubmit hook arrived about 26 seconds later, after four intervening tool boundaries. Composer submission is therefore not equivalent to answering through the question editor.
 
-The default editor keys are Shift+Left to expand/advance, Shift+Right to move backward and then collapse at the first question, digits 1–9 to select and submit, and paste plus Enter for free text. Answering leaves the editor open on the next pending question (wrapping to the first after answering the last). The current index survives collapse. Escape interrupts the turn. A reply may be held until the next tool boundary. Sources: [`request_user_input_async.rs`](https://github.com/openai/codex/blob/rust-v0.158.0/codex-rs/core/src/tools/handlers/request_user_input_async.rs), [`async_questions/state.rs`](https://github.com/openai/codex/blob/rust-v0.158.0/codex-rs/tui/src/bottom_pane/async_questions/state.rs), [`chatwidget/questions.rs`](https://github.com/openai/codex/blob/rust-v0.158.0/codex-rs/tui/src/chatwidget/questions.rs), and [`answered_question.rs`](https://github.com/openai/codex/blob/rust-v0.158.0/codex-rs/context-fragments/src/answered_question.rs).
+On 0.158.0, the default editor keys are Shift+Left to expand/advance, Shift+Right to move backward and then collapse at the first question, digits 1 through 9 to select and submit, and paste plus Enter for free text. Answering leaves the editor open on the next pending question (wrapping to the first after answering the last). The current index survives collapse. Escape interrupts the turn. A reply may be held until the next tool boundary. Sources: [`request_user_input_async.rs`](https://github.com/openai/codex/blob/rust-v0.158.0/codex-rs/core/src/tools/handlers/request_user_input_async.rs), [`async_questions/state.rs`](https://github.com/openai/codex/blob/rust-v0.158.0/codex-rs/tui/src/bottom_pane/async_questions/state.rs), [`chatwidget/questions.rs`](https://github.com/openai/codex/blob/rust-v0.158.0/codex-rs/tui/src/chatwidget/questions.rs), and [`answered_question.rs`](https://github.com/openai/codex/blob/rust-v0.158.0/codex-rs/context-fragments/src/answered_question.rs).
 
 ## Project directory trust
 
-Codex shows "Do you trust the contents of this directory?" at TUI startup whenever the resolved project has no trust level: `should_show_trust_screen` is `config.active_project.trust_level.is_none()` (`tui/src/lib.rs:2055`). A recorded `untrusted` is a decision and suppresses the screen. The screen comes before the first prompt, so an unattended launch in an undecided directory stops there and never starts a turn.
+Codex checks folder access after selecting the destination and reading the app-server's effective configuration ([directory consent](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/tui/src/onboarding/directory_trust.rs)). An undecided project can stop an unattended launch at the "Folder access" screen. Local directories without a project can skip consent.
 
-Decisions live in the merged configuration, keyed by absolute path; the user writes them to `$CODEX_HOME/config.toml`, and a managed layer can supply the same keys:
+A saved local `untrusted` decision shows "Open restricted", or "Open existing task" for a connected resume. Accepting it keeps the saved decision unchanged. Existing tasks can retain configuration and hooks loaded while trusted. Remote checks retain their explicit-cwd scope and skip the screen for saved `untrusted` projects. Local-daemon resumes check selected and saved thread directories, then recheck after consent.
+
+Decisions live in the merged configuration, keyed by absolute path. The user writes them to `$CODEX_HOME/config.toml`, and a managed layer can supply the same keys:
 
 ```toml
 [projects."/home/user/src/app"]
 trust_level = "trusted"   # or "untrusted"
 ```
 
-`decision_for_dir` (`config/src/loader/mod.rs:1062`) takes the first candidate that carries a level, in this order:
+`decision_for_dir` (`config/src/loader/mod.rs`) takes the first candidate that carries a level, in this order:
 
 1. The session cwd.
-2. The nearest ancestor holding a `project_root_markers` entry (default `[".git"]`); a `.git` directory counts only if it holds `HEAD` (`find_project_root`, `loader/mod.rs:1548`).
-3. The main repository root from `resolve_root_git_project_for_trust` (`git-utils/src/trust.rs:13`). For a linked worktree it reads the `.git` file, follows `gitdir` into `worktrees/<name>`, and returns the checkout owning the canonical `commondir`, so a worktree of a trusted repository is trusted through its main root.
+2. The nearest ancestor holding a `project_root_markers` entry (default `[".git"]`). A `.git` directory counts only if it holds `HEAD` (`find_project_root`, `loader/mod.rs`).
+3. The main repository root from `resolve_root_git_project_for_trust` (`git-utils/src/trust.rs`). For a linked worktree it reads the `.git` file, follows `gitdir` into `worktrees/<name>`, and returns the checkout owning the canonical `commondir`, so a worktree of a trusted repository is trusted through its main root.
 
-Each candidate is looked up as its normalized canonical path and as written, so a symlinked directory and its target share one decision. Windows folds ASCII case; other platforms compare exactly (`loader/mod.rs:1450`, `:1463`).
+Each candidate is looked up as its normalized canonical path and as written, so a symlinked directory and its target share one decision. Windows folds ASCII case. Other platforms compare exactly (`loader/mod.rs`).
 
-Answering "Yes, continue" writes `trust_level = "trusted"` for the trust target: the main git root when there is one, the cwd otherwise (`tui/src/onboarding/onboarding_screen.rs:172`, `tui/src/config_update.rs:62`).
+Choosing "Trust and continue" writes `trust_level = "trusted"` for the resolved trust target ([consent persistence](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/tui/src/onboarding/onboarding_screen.rs)). Restricted-opening choices do not write `trusted`.
 
 | Related behaviour | Upstream |
 | --- | --- |
-| What trust gates | Project-scoped `.codex/` layers: project-local config, hooks, and rules ([config reference](https://learn.chatgpt.com/docs/config-file/config-reference), `projects.<path>.trust_level`). User-level `$CODEX_HOME/config.toml` hooks run regardless. |
+| What trust gates | Project-scoped `.codex/` layers: project-local config, hooks, and rules ([config reference](https://learn.chatgpt.com/docs/config-file/config-reference), `projects.<path>.trust_level`). User-level hook discovery is independent of directory trust. Hook-definition trust still applies. |
 | Skipping the screen | No CLI flag skips it. Approval and sandbox flags leave trust untouched. |
-| `codex exec --skip-git-repo-check` | Covers the separate not-a-git-repository refusal, which `--dangerously-bypass-approvals-and-sandbox` also bypasses (`exec/src/lib.rs:964` to `:969`). |
-| Unparseable `config.toml` | The TUI exits at startup instead of prompting (`tui/src/lib.rs:2034` to `:2049`). |
+| `codex exec --skip-git-repo-check` | Covers the separate not-a-git-repository refusal, which `--dangerously-bypass-approvals-and-sandbox` also bypasses (`exec/src/lib.rs`). |
+| Unparseable `config.toml` | The TUI exits at startup instead of prompting (`tui/src/lib.rs`). |
 | Helpers before trust | Since 0.154.0 (#42324) startup resolves helper executables from trusted system directories instead of `PATH`, and `codex doctor` inspects executables without running them. |
 
 ## Launch and config overrides
@@ -212,11 +246,15 @@ Answering "Yes, continue" writes `trust_level = "trusted"` for the trust target:
 | Command | Behaviour |
 | --- | --- |
 | `codex [OPTIONS] [PROMPT]` | Starts the interactive TUI, submitting `PROMPT` as the first message when given. The CLI parses arguments with clap (`cli/src/main.rs`), so everything after `--` is positional: `codex -- "<prompt>"` passes a prompt even when it begins with `-`. |
-| `codex resume [SESSION_ID] [PROMPT]` | Reopens a session in place. `SESSION_ID` is a UUID or a session name (a parseable UUID wins); `--last` picks the most recent. |
-| `codex fork [SESSION_ID] [PROMPT]` | Copies the conversation into a new session id and leaves the source untouched; `--last` forks the most recent. |
+| `codex resume [SESSION_ID] [PROMPT]` | Reopens a session in place. `SESSION_ID` is a UUID or a session name (a parseable UUID wins). `--last` picks the most recent. |
+| `codex fork [SESSION_ID] [PROMPT]` | Copies the conversation into a new session id and leaves the source untouched. `--last` forks the most recent. |
 | `codex exec resume`, `codex exec fork` | Non-interactive equivalents. |
 
-Both interactive commands accept an optional initial `PROMPT` in 0.154.0 (`codex resume --help`, `codex fork --help`). A fork's rollout header names its source in `forked_from_id`. Codex 0.154.0 also adds experimental `--worktree` and `/worktree` for new or forked sessions.
+Both interactive commands accept an optional initial `PROMPT` ([CLI definitions](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/cli/src/main.rs)). A fork's rollout header names its source in `forked_from_id`. `--worktree` and `/worktree` create worktrees for new or forked sessions. The `worktrees` feature defaults to enabled ([feature registry](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/features/src/lib.rs)).
+
+`codex exec --json` emits JSONL events: `thread.started`, `turn.started`, `turn.completed`, `turn.failed`, `item.started`, `item.updated`, `item.completed`, and `error`. This is a separate wire from app-server JSON-RPC and rollout files ([event types](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/exec/src/exec_events.rs)). Web-search items carry `query`, `action`, and optional structured `results`. `turn.completed.usage` carries input, cached-input, cache-write-input, output, and reasoning-output token counts.
+
+[Exec flags](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/exec/src/cli.rs) include `--ephemeral`, `--output-schema FILE`, and `--output-last-message FILE`. `--ignore-user-config` skips the user config while authentication still uses `CODEX_HOME`. `--ignore-rules` skips user and project execution-policy files.
 
 ### CLI config overrides
 
@@ -224,17 +262,21 @@ Each `-c key=value` or `--config key=value` overrides one loaded configuration k
 
 | Key | Type and behaviour |
 | --- | --- |
-| `developer_instructions` | String, added as a developer-role message separate from the user prompt (`config_toml.rs:235`). |
-| `model_instructions_file` | Path; replaces the built-in instructions (`config_toml.rs:253`). |
+| `developer_instructions` | String, added as a developer-role message separate from the user prompt (`config_toml.rs`). |
+| `model_instructions_file` | Path. Replaces the built-in instructions (`config_toml.rs`). |
 | `model_reasoning_effort` | Reasoning effort for the session model. |
-| `model_auto_compact_token_limit` | `Option<i64>`, an absolute token threshold (`config_toml.rs:168`). The effective limit is `min(configured, 90% of the model context window)`, and 90% is the default when unset (`openai_models.rs:515`). Compaction triggers at `>=` the limit (`core/src/session/context_window.rs:105`), so zero or a negative value compacts at once. |
-| `model_auto_compact_token_limit_scope` | `total` (default) counts all active context; `body_after_prefix` counts growth after the carried compaction prefix and compares against the configured value unclamped (`config_toml.rs:172`, `config_types.rs:49`). |
+| `model_auto_compact_token_limit` | `Option<i64>`, an absolute token threshold (`config_toml.rs`). The effective limit is `min(configured, 90% of the model context window)`, and 90% is the default when unset (`openai_models.rs`). Compaction triggers at `>=` the limit (`core/src/session/context_window.rs`), so zero or a negative value compacts at once. |
+| `model_auto_compact_token_limit_scope` | `total` (default) counts all active context. `body_after_prefix` counts growth after the carried compaction prefix and compares against the configured value unclamped (`config_toml.rs`, `config_types.rs`). |
 
-`model_auto_compact_token_limit` is a top-level key only: it is not a field of `[profiles.<name>]` (`config/src/profile_toml.rs`), and it has no dedicated flag or environment variable. The override parser requires a TOML integer for it, so `-c model_auto_compact_token_limit=200000` works and `200k` does not.
+`model_auto_compact_token_limit` is a top-level key only: it is not a field of `[profiles.<name>]` (`config/src/profile_toml.rs`), and it has no dedicated flag or environment variable. The override parser requires a TOML integer for it, so `-c model_auto_compact_token_limit=200000` works. `200k` becomes a string and fails configuration type validation.
+
+`-p NAME` or `--profile NAME` layers `$CODEX_HOME/NAME.config.toml` over the base user config ([shared CLI options](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/utils/cli/src/shared_options.rs)). This full-config file can carry top-level compaction settings. Legacy `[profiles.NAME]` tables are a separate configuration surface.
+
+`--approve-for-me` (alias `--not-so-yolo`) sets automatic approval review, `approval_policy="on-request"`, and `sandbox_mode="workspace-write"`. It conflicts with explicit sandbox and bypass flags, plus the TUI's explicit approval-policy flag.
 
 ### Login status
 
-`codex login status` prints one line to **stderr** and exits 0 when credentials are present (`cli/src/login.rs:443` to `:500`). It reports the login kind, never the plan or a token. Workload identity is checked first.
+`codex login status` prints one line to **stderr** and exits 0 when credentials are present (`cli/src/login.rs`). It reports the login kind, never the plan or a token. Workload identity is checked first. Missing credentials and lookup errors exit 1.
 
 | Output line | Login kind |
 | --- | --- |
@@ -249,40 +291,40 @@ Each `-c key=value` or `--config key=value` overrides one loaded configuration k
 
 ### Execution policy rules
 
-At the pinned `rust-v0.154.0` baseline, [`execpolicy/README.md`](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/execpolicy/README.md) defines the Starlark `prefix_rule` syntax. [`core/src/exec_policy.rs`](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/core/src/exec_policy.rs), `load_exec_policy`, collects `*.rules` from each enabled config layer's `rules/` directory. A user rule file can therefore be `~/.codex/rules/rimz.rules`, or `$CODEX_HOME/rules/rimz.rules` with a custom home. Managed policy can disable user/project rules.
+At the pinned release, [`execpolicy/README.md`](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/execpolicy/README.md) defines the Starlark `prefix_rule` syntax. [`core/src/exec_policy.rs`](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/core/src/exec_policy.rs), `load_exec_policy`, collects `*.rules` from each enabled config layer's `rules/` directory. A user rule file can therefore be `~/.codex/rules/build.rules`, or `$CODEX_HOME/rules/build.rules` with a custom home. Managed policy can disable user/project rules.
 
 ```starlark
 prefix_rule(
-    pattern = ["rimz", "agents"],
+    pattern = ["cargo", "test"],
     decision = "allow",
-    match = ["rimz agents", "rimz agents --json"],
-    not_match = ["rimz pane send"],
+    match = ["cargo test", "cargo test --locked"],
+    not_match = ["cargo publish"],
 )
 ```
 
-Patterns match ordered command-token prefixes, not shell globs; an element may be a list of alternative tokens. `decision` is `allow` (the default), `prompt`, or `forbidden`. Optional `match` and `not_match` examples are validated at load time. Across matching rules the strictest decision wins: `forbidden` over `prompt` over `allow`. This is Codex's user-owned execution policy; RimZ does not install this example or any routine-command rules for Codex.
+Patterns match ordered command-token prefixes, not shell globs. An element may be a list of alternative tokens. `decision` is `allow` (the default), `prompt`, or `forbidden`. Optional `match` and `not_match` examples are validated at load time. Across matching rules the strictest decision wins: `forbidden` over `prompt` over `allow`. These rules belong to the Codex user configuration.
 
 ### Per-launch skill overrides
 
-[`skills.config`](https://developers.openai.com/codex/skills) entries accept `name` or `path` selectors and `enabled=false`; disabled skills are also unavailable to explicit `$skill` invocation. [CLI `-c` overrides](https://developers.openai.com/codex/config-advanced) can supply this array for one run. Local probes on 0.157.0 found that `name` selects the frontmatter name (directory fallback), there is no wildcard, and file `[[skills.config]]` entries remain in effect alongside CLI entries.
+[`skills.config`](https://developers.openai.com/codex/skills) entries accept `name` or `path` selectors and `enabled=false`. Disabled skills are also unavailable to explicit `$skill` invocation. [CLI `-c` overrides](https://developers.openai.com/codex/config-advanced) can supply this array for one run. Local probes on 0.157.0 found that `name` selects the frontmatter name (directory fallback), there is no wildcard, and file `[[skills.config]]` entries remain in effect alongside CLI entries.
 
 ## TUI input and notifications
 
 ### Paste burst
 
-The composer treats plain characters arriving at most 8 ms apart as a suspected paste once at least 3 arrive (`paste_burst.rs:159`, `:163`). It flushes the buffered burst after 8 ms of inactivity, or 60 ms on Windows (`:167` to `:170`), and appends Enter received during the burst or within the following 120 ms as a literal newline instead of submitting (`PASTE_ENTER_SUPPRESS_WINDOW`, `:160`). A bracketed paste clears the burst state through `clear_after_explicit_paste` (`:458`). A client typing raw keystrokes therefore needs a gap of more than 120 ms before a separate Enter; a bracketed paste does not.
+The composer treats plain characters arriving at most 8 ms apart as a suspected paste once at least 3 arrive (`paste_burst.rs`). It flushes the buffered burst after 8 ms of inactivity, or 60 ms on Windows (`paste_burst.rs`), and appends Enter received during the burst or within the following 120 ms as a literal newline instead of submitting (`PASTE_ENTER_SUPPRESS_WINDOW`). A bracketed paste clears the burst state through `clear_after_explicit_paste` (`paste_burst.rs`). A client typing raw keystrokes therefore needs a gap of more than 120 ms before a separate Enter. A bracketed paste does not.
 
-`tui.disable_paste_burst = true` turns the heuristic off (`config/src/types.rs:753`, default false). Since 0.153.0 that is the key's home; the top-level `disable_paste_burst` still works as a fallback.
+`tui.disable_paste_burst = true` turns the heuristic off (`config/src/types.rs`, default false). Since 0.153.0 that is the key's home. The top-level `disable_paste_burst` still works as a fallback.
 
 ### `notify`
 
-`notify` runs an external program when a turn completes, independent of hooks. It must be set in the user-level config; a project-local `notify` is ignored with a startup warning (`PROJECT_LOCAL_CONFIG_DENYLIST`, `config/src/loader/mod.rs:74` to `:87`).
+`notify` runs an external program when a turn completes, independent of hooks. It must be set in the user-level config. A project-local `notify` is ignored with a startup warning (`PROJECT_LOCAL_CONFIG_DENYLIST`, `config/src/loader/mod.rs`).
 
 ```toml
 notify = ["python3", "/path/to/notify.py"]
 ```
 
-The program receives one JSON document as its last argument (`hooks/src/legacy_notify.rs:16`). `agent-turn-complete` is the only type:
+The program receives one JSON document as its last argument (`hooks/src/legacy_notify.rs`). `agent-turn-complete` is the only type:
 
 ```json
 {
@@ -292,21 +334,21 @@ The program receives one JSON document as its last argument (`hooks/src/legacy_n
   "cwd": "string",
   "client": "string (optional)",
   "input-messages": ["user messages preceding the turn"],
-  "last-assistant-message": "string"
+  "last-assistant-message": "string or null"
 }
 ```
 
-In-terminal notifications are a separate `[tui]` setting (`config/src/types.rs:633` to `:671`), and approval prompts appear only there:
+In-terminal notifications are a separate `[tui]` setting (`config/src/types.rs`), and approval prompts appear only there:
 
 | Key | Values |
 | --- | --- |
-| `tui.notifications` | `true`, `false`, or an array of event types such as `agent-turn-complete` and `approval-requested` |
+| `tui.notifications` | `true`, `false`, or an array of event types containing `agent-turn-complete`, `approval-requested`, `plan-mode-prompt`, or `async-question` |
 | `tui.notification_method` | `auto`, `osc9`, or `bel` |
 | `tui.notification_condition` | `unfocused` or `always` |
 
 ## App-server API
 
-`codex app-server` is a bidirectional JSON-RPC 2.0 service with the `"jsonrpc":"2.0"` member omitted on the wire. It exposes thread, turn, account, config, and filesystem operations and streams notifications; the TUI itself runs on it. The protocol has three primitives: an **item** (one input or output unit with a `started`, optional `delta`, `completed` lifecycle), a **turn** (the items from one unit of agent work), and a **thread** (the durable session).
+`codex app-server` is a bidirectional JSON-RPC 2.0 service with the `"jsonrpc":"2.0"` member omitted on the wire. It exposes thread, turn, account, config, and filesystem operations and streams notifications. The TUI itself runs on it. The protocol has three primitives: an **item** (one input or output unit with a `started`, optional `delta`, `completed` lifecycle), a **turn** (the items from one unit of agent work), and a **thread** (the durable session).
 
 ### Transport and handshake
 
@@ -314,23 +356,25 @@ In-terminal notifications are a separate `[tui]` setting (`config/src/types.rs:6
 
 | URL | Transport |
 | --- | --- |
-| `stdio://` | JSONL over stdin and stdout (default; `--stdio` is the same) |
-| `unix://`, `unix://PATH` | WebSocket HTTP upgrade over a Unix domain socket, then JSON-RPC text frames. Bare `unix://` is `$CODEX_HOME/app-server-control/app-server-control.sock` (`app-server-transport/src/transport/mod.rs:55`). |
-| `ws://IP:PORT` | WebSocket over TCP; experimental |
+| `stdio://` | JSONL over stdin and stdout (default, also selected by `--stdio`) |
+| `unix://`, `unix://PATH` | WebSocket HTTP upgrade over a Unix domain socket, then JSON-RPC text frames. Bare `unix://` is `$CODEX_HOME/app-server-control/app-server-control.sock` (`app-server-transport/src/transport/mod.rs`). |
+| `ws://IP:PORT` | WebSocket over TCP. Experimental |
 | `off` | no listener |
 
 A client sends one `initialize` request per connection, then an `initialized` notification, before any other method. The `initialize` result carries `userAgent` (which embeds the Codex version), `codexHome`, `platformFamily`, and `platformOs`.
 
 ```jsonc
-{ "method": "initialize", "params": { "clientInfo": { "name": "my-client", "version": "x.y.z" } } }
+{ "id": 1, "method": "initialize", "params": { "clientInfo": { "name": "my-client", "version": "x.y.z" } } }
 { "method": "initialized", "params": {} }
 ```
 
-Ingress queues are bounded. When one is full the server rejects the request with retryable JSON-RPC error `-32001` on stdio, WebSocket, and Unix-socket connections (`enqueue_incoming_message`, `transport/mod.rs:205` to `:250`); the docs describe this for WebSocket mode only.
+`initialize.params.capabilities` can negotiate `experimentalApi`, `requestAttestation`, exact-name `optOutNotificationMethods`, and MCP `extensions`. Legacy `mcpServerOpenaiFormElicitation` remains accepted. `explicitGatewayOauth` selects explicit gateway login for the app-server process, and later connections cannot undo it ([capabilities](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/app-server-protocol/schema/typescript/InitializeCapabilities.ts)).
+
+Ingress queues are bounded. When one is full the server rejects the request with retryable JSON-RPC error `-32001` on stdio, WebSocket, and Unix-socket connections (`enqueue_incoming_message`, `transport/mod.rs`). The docs describe this for WebSocket mode only.
 
 ### Read methods
 
-These are the read-only methods whose shapes RimZ depends on, from the 0.154.0 generated schema. None of them subscribes to a thread; `thread/resume` and `turn/start` join and own a thread.
+These reads use the 0.162.1 stable schema and do not subscribe to a thread. Mutating methods appear in the [method index](#method-index).
 
 **`thread/loaded/list`** returns the thread ids the app-server holds in memory. Params are `{ cursor?, limit? }`.
 
@@ -339,14 +383,14 @@ These are the read-only methods whose shapes RimZ depends on, from the 0.154.0 g
 { "data": ["thread-id", …], "nextCursor": "string | null" }
 ```
 
-A thread stays loaded until it has had no subscriber for `thread_unload_delay_secs`, default 60, where 0 unloads at once (`config_toml.rs:322`, `core/src/config/mod.rs:3829`; configurable since 0.154.0, a fixed 30 minutes before). An idle daemon's list is therefore a loaded-in-memory set, not a set of attached terminals, and a freshly spawned app-server returns an empty list.
+An inactive thread with no subscribers unloads after `thread_unload_delay_secs`, default 60. The delay starts at the later transition to inactivity or no subscribers. Zero removes that delay, but active turns stay loaded ([unload condition](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/app-server/src/request_processors/thread_lifecycle.rs)). The list reports loaded threads, which can outlive attached terminals. Managed restart recovery can repopulate it after startup.
 
-**`account/rateLimits/read`** returns included-usage windows, plan, credits, and reset credits for a ChatGPT login. Fields are camelCase.
+**`account/rateLimits/read`** returns included-usage windows, plan, credits, and reset credits for a ChatGPT login. Fields are camelCase. Optional request booleans `supportsLunaReserve` and `excludeResetCreditDetails` default to false ([request type](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/app-server-protocol/schema/typescript/v2/GetAccountRateLimitsParams.ts)). `excludeResetCreditDetails` skips the separate detail fetch while retaining the available count. `supportsLunaReserve` declares support for automatic reserve fallback and can record backend experiment exposure.
 
 ```jsonc
 // v2/GetAccountRateLimitsResponse
 {
-  "rateLimits": {                         // required; the single-bucket view
+  "rateLimits": {                         // required. The single-bucket view
     "limitId": "codex",                   // string | null
     "limitName": null,                    // string | null
     "primary":   { "usedPercent": 19, "windowDurationMins": 300,   "resetsAt": 1789290347 }, // or null
@@ -358,17 +402,17 @@ A thread stays loaded until it has had no subscriber for `thread_unload_delay_se
     "spendControlReached": null,          // boolean | null
     "normalModelSlug": null               // string | null
   },
-  "rateLimitsByLimitId": { "codex": { … } },  // object | null; RateLimitSnapshot per metered limit id
+  "rateLimitsByLimitId": { "codex": { … } },  // object | null. RateLimitSnapshot per metered limit id
   "rateLimitResetCredits": {                  // object | null
     "availableCount": 2,
-    "credits": [                              // array | null; null means only the count is known
+    "credits": [                              // array | null. null means only the count is known
       { "id": "opaque", "status": "available", "resetType": "codexRateLimits",
         "grantedAt": 1789000000, "expiresAt": 1789600000, "title": null, "description": null }
     ]
   },
-  "ordinaryUsageAllowed": true,  // boolean | null; null means unavailable
+  "ordinaryUsageAllowed": true,  // boolean | null. null means unavailable
   "accountId": "string | null",
-  "rateLimitUpsell": {}          // optional backend banner; nested keys stay snake_case
+  "rateLimitUpsell": {}          // optional backend banner. nested keys stay snake_case
 }
 ```
 
@@ -376,97 +420,130 @@ A thread stays loaded until it has had no subscriber for `thread_unload_delay_se
 | --- | --- |
 | `RateLimitWindow` | `usedPercent` (int, required), `windowDurationMins` (int or null), `resetsAt` (epoch seconds or null) |
 | `CreditsSnapshot` | `hasCredits` (required), `unlimited` (required), `balance` (string or null) |
-| `PlanType` | `free`, `go`, `plus`, `pro`, `prolite`, `team`, `self_serve_business_prolite`, `self_serve_business_usage_based`, `business`, `ent26`, `enterprise_cbp_automation`, `enterprise_cbp_usage_based`, `enterprise`, `edu`, `edu_plus`, `edu_pro`, `unknown` |
+| `PlanType` | `free`, `go`, `plus`, `pro`, `prolite`, `promax`, `team`, `self_serve_business_prolite`, `self_serve_business_usage_based`, `business`, `ent26`, `enterprise_cbp_automation`, `enterprise_cbp_usage_based`, `enterprise`, `edu`, `edu_plus`, `edu_pro`, `unknown` |
 | `RateLimitReachedType` | `rate_limit_reached`, `workspace_owner_credits_depleted`, `workspace_member_credits_depleted`, `workspace_owner_usage_limit_reached`, `workspace_member_usage_limit_reached` |
 | `RateLimitResetCredit.status` | `available`, `redeeming`, `redeemed`, `unknown` |
 | `RateLimitResetCredit.resetType` | `codexRateLimits`, `unknown` |
 
-`CreditsSnapshot` has no `overageLimitReached` field at 0.150.1 or 0.154.0 (no `overage` string exists under `codex-rs` at either tag), and the 0.154.0 response has no root-level `credits` object. `accountId`, `ordinaryUsageAllowed`, `rateLimitUpsell`, and `normalModelSlug` are new since 0.150.1. `account/rateLimitResetCredit/consume` takes `{ idempotencyKey, creditId? }` and returns `{ outcome }` with `reset`, `nothingToReset`, `noCredit`, or `alreadyRedeemed`.
+`CreditsSnapshot` has no `overageLimitReached` field, and the response has no root-level `credits` object. `accountId`, `ordinaryUsageAllowed`, `rateLimitUpsell`, and `normalModelSlug` are new since 0.150.1.
 
-**`model/list`** with `{ "includeHidden": true }` returns the model catalog in `data[]`. Each `Model` carries `id`, `model`, `displayName`, `description`, `hidden`, `isDefault`, `defaultReasoningEffort`, `supportedReasoningEfforts`, service tiers, input modalities, and upgrade metadata. `defaultReasoningEffort` is the catalog default, not a session's live effort.
+**`model/list`** with `{ "includeHidden": true }` returns the model catalog in `data[]`. Each `Model` carries `id`, `model`, `displayName`, `description`, `hidden`, `isDefault`, `defaultReasoningEffort`, `supportedReasoningEfforts`, service tiers, input modalities, and upgrade metadata. It also carries `modelSpecialty`, `multiAgentVersion`, `defaultServiceTier`, and `availableAccessPrograms` ([model type](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/app-server-protocol/schema/typescript/v2/Model.ts)). `defaultReasoningEffort` is the catalog default, not a session's live effort.
 
-**`thread/read`** with `{ "threadId": "<id>", "includeTurns": false }` returns `{ "thread": Thread }`. **`thread/list`** returns `{ data: Thread[], nextCursor, backwardsCursor }` and filters on `archived`, `cwd`, `searchTerm`, `sourceKinds`, `sortKey`, and more. A `Thread` always carries `id`, `sessionId`, `preview`, `cwd`, `cliVersion`, `createdAt`, `updatedAt`, `ephemeral`, `modelProvider`, `projectId`, `source`, `status`, and `turns`, and optionally `name`, `model`, `reasoningEffort`, `forkedFromId`, `parentThreadId`, `agentNickname`, `agentRole`, `threadSource`, `historyMode`, `path`, and `gitInfo`. `name` is the thread title ([session index](#session-index)); `preview` is derived from the first user message. `includeTurns: true` is deprecated for paginated threads in favour of `thread/turns/list` and `thread/items/list`.
+**`thread/read`** with `{ "threadId": "<id>", "includeTurns": false }` returns `{ "thread": Thread }`. **`thread/list`** returns `{ data: Thread[], nextCursor, backwardsCursor }` and filters on `archived`, `cwd`, `searchTerm`, `sourceKinds`, `sortKey`, and more. A `Thread` always carries `id`, `sessionId`, `preview`, `cwd`, `cliVersion`, `createdAt`, `updatedAt`, `ephemeral`, `modelProvider`, `projectId`, `source`, `status`, `turns`, and `historyMode`. Nullable fields include `name`, `model`, `reasoningEffort`, `forkedFromId`, `parentThreadId`, `agentNickname`, `agentRole`, `threadSource`, `path`, and `gitInfo`. The [thread type](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/app-server-protocol/schema/typescript/v2/Thread.ts) also carries nullable `originator`, `recencyAt`, `section`, and `sectionEnteredAt`. `name` is the thread title ([session index](#session-index)). `preview` is derived from the first user message. `includeTurns: true` is deprecated for paginated threads in favour of `thread/turns/list` and `thread/items/list`.
 
 ```jsonc
 { "thread": { "id": "01a09a03-fd61-7eb3-9f97-0b24ec37cde7", "sessionId": "01a09a03-fd61-7eb3-9f97-0b24ec37cde7",
               "preview": "Trace the isolation override", "name": "Trace isolation override flow", "updatedAt": 1789290354, … } }
 ```
 
-Token and context-window usage has no read method. It arrives only as the `thread/tokenUsage/updated` notification to a subscribed client; `account/usage/read` is an account-level activity summary, not per-thread context.
+`thread/items/list.cursor` accepts an opaque string or `{ "type": "item", "itemId": "<id>" }`. An item anchor requires nonempty `turnId` and excludes that item in the requested direction. Returned entries carry nullable `startedAtMs` and `completedAtMs` ([paging contract](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/app-server-protocol/schema/typescript/v2/ThreadItemsListParams.ts)).
+
+Live context-window usage arrives through `thread/tokenUsage/updated`, with `{ threadId, turnId, tokenUsage }`. There is no equivalent context-window read method. `account/usage/read` accepts optional `threadId` for backend billing estimates. Its nullable `threadUsage` contains credit and USD estimates plus model/effort/speed groups ([usage response](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/app-server-protocol/schema/typescript/v2/GetAccountTokenUsageResponse.ts)). Billing estimates do not measure live context occupancy.
+
+`account/gatewayOAuth/read` returns `{ providerId, providerName, required, status, error }`, without credentials. `status` is null or `notReady`, `started`, `succeeded`, or `failed`. `account/gatewayOAuth/changed` reports changes ([types](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/app-server-protocol/schema/typescript/v2/GatewayOAuthReadResponse.ts)).
+
+`thread/attachment/list` pages a thread's attachments. `thread/attachmentOwner/list` finds owners by `{ attachmentType, identityKey, archived?, cursor?, limit? }`.
 
 ### Method index
 
-The 0.154.0 stable schema, grouped. `--experimental` adds the methods listed last.
+The 0.162.1 stable schema, grouped. `--experimental` adds the methods listed last. The release's [schema exports](https://github.com/openai/codex/tree/rust-v0.162.1/codex-rs/app-server-protocol/schema/precomputed) include complete request and notification types.
 
 | Group | Methods |
 | --- | --- |
-| Thread | `thread/start`, `thread/resume`, `thread/fork`, `thread/read`, `thread/list`, `thread/loaded/list`, `thread/unsubscribe`, `thread/archive`, `thread/unarchive`, `thread/delete`, `thread/name/set`, `thread/metadata/update`, `thread/goal/{set,get,clear}`, `thread/compact/start`, `thread/revert`, `thread/rollback` (deprecated; removed on `main` by #44915, unreleased), `thread/inject_items`, `thread/shellCommand`, `thread/turns/list`, `thread/items/list` (both stable since 0.154.0), `thread/approveGuardianDeniedAction`, `thread/section/move`, `threadSection/{create,list,update,delete}` |
+| Thread | `thread/start`, `thread/resume`, `thread/fork`, `thread/read`, `thread/list`, `thread/loaded/list`, `thread/unsubscribe`, `thread/archive`, `thread/unarchive`, `thread/delete`, `thread/name/set`, `thread/metadata/update`, `thread/goal/{set,get,clear}`, `thread/compact/start`, `thread/revert`, `thread/inject_items`, `thread/shellCommand`, `thread/turns/list`, `thread/items/list` (both stable since 0.154.0), `thread/approveGuardianDeniedAction`, `thread/attachment/{add,list,remove}`, `thread/attachmentOwner/list`, `thread/section/move`, `threadSection/{create,list,update,delete}` |
 | Turn and review | `turn/start`, `turn/steer`, `turn/interrupt`, `review/start` |
-| Account | `account/read`, `account/login/{start,cancel}`, `account/logout`, `account/rateLimits/read`, `account/rateLimitResetCredit/consume`, `account/usage/read`, `account/workspaceMessages/read`, `account/sendAddCreditsNudgeEmail` |
+| Account | `account/read`, `account/gatewayOAuth/{read,login,cancel}`, `account/login/{start,cancel}`, `account/logout`, `account/rateLimits/read`, `account/rateLimitResetCredit/consume`, `account/usage/read`, `account/workspaceMessages/read`, `account/sendAddCreditsNudgeEmail` |
 | Exec and filesystem | `command/exec`, `command/exec/{write,resize,terminate}`, `fs/{readFile,writeFile,createDirectory,getMetadata,readDirectory,remove,copy,watch,unwatch}`, `fuzzyFileSearch` |
 | Config, models, features | `config/read`, `config/value/write`, `config/batchWrite`, `config/mcpServer/reload`, `configRequirements/read`, `model/list`, `modelProvider/capabilities/read`, `permissionProfile/list`, `experimentalFeature/list`, `experimentalFeature/enablement/set` |
 | Skills, hooks, plugins, apps, MCP | `skills/list`, `skills/config/write`, `skills/extraRoots/set`, `hooks/list`, `plugin/{list,read,install,installed,uninstall,reconcile}`, `plugin/skill/read`, `plugin/share/{list,save,delete,checkout,updateTargets}`, `marketplace/{add,remove,upgrade}`, `app/{list,read,installed}`, `mcpServerStatus/list`, `mcpServer/oauth/login`, `mcpServer/resource/read`, `mcpServer/tool/call` |
-| Other | `externalAgentConfig/{detect,import}`, `externalAgentConfig/import/{readHistories,recordHistory}`, `feedback/upload`, `windowsSandbox/{readiness,setupStart}` |
-| Experimental only | `process/{spawn,writeStdin,resizePty,kill}`, `thread/queue/*`, `thread/realtime/*`, `thread/search`, `thread/timeline/list`, `thread/settings/update`, `turn/settings/update`, `thread/backgroundTerminals/*`, `thread/memoryMode/set`, `remoteControl/*`, `project/*`, `environment/*`, `collaborationMode/list`, `userVerification/*`, `account/bedrock/{discover,setup}`, `server/diagnostics`, `memory/reset` |
+| Other | `externalAgentConfig/{detect,import}`, `externalAgentConfig/import/{readHistories,recordHistory}`, `feedback/upload`, `windowsSandbox/{readiness,setupStart}`, legacy `getConversationSummary`, `gitDiffToRemote`, `getAuthStatus` |
+| Experimental only | `process/{spawn,writeStdin,resizePty,kill}`, `thread/queue/*`, `thread/realtime/*`, `thread/search`, `thread/searchOccurrences`, `thread/prediction/request`, `thread/{increment_elicitation,decrement_elicitation}`, `thread/timeline/list`, `thread/settings/update`, `turn/settings/update`, `thread/backgroundTerminals/*`, `thread/memoryMode/set`, `remoteControl/*`, `project/*`, `environment/*`, `collaborationMode/list`, `userVerification/*`, `account/bedrock/{discover,setup,checkGovCloudRequirements}`, `server/diagnostics`, `memory/{reset,status}`, `rollout/compress`, `plugin/search`, `mcpServer/event/stream/{start,stop}`, `fuzzyFileSearch/{sessionStart,sessionUpdate,sessionStop}` |
 
-Server requests to the client: `item/commandExecution/requestApproval`, `item/fileChange/requestApproval`, `item/permissions/requestApproval`, `item/tool/requestUserInput`, `item/tool/call`, `mcpServer/elicitation/request`, `account/chatgptAuthTokens/refresh`, `attestation/generate`, and the legacy `execCommandApproval` and `applyPatchApproval`.
+`account/rateLimitResetCredit/consume` takes `{ idempotencyKey, creditId? }` and returns `{ outcome }` with `reset`, `nothingToReset`, `noCredit`, or `alreadyRedeemed`.
 
-Notifications include `thread/{started,status/changed,tokenUsage/updated,name/updated,compacted,archived,unarchived,deleted,closed,goal/updated,goal/cleared,settings/updated,queue/changed}`, `turn/{started,completed,diff/updated,plan/updated}`, `item/{started,completed}` with the `item/agentMessage/delta`, `item/reasoning/*`, `item/commandExecution/outputDelta`, and `item/fileChange/*` streams, `hook/{started,completed}`, `account/{updated,rateLimits/updated,login/completed}`, `model/rerouted`, `remoteControl/status/changed`, `error`, and `warning`. The generated `ServerNotification.json` is the full list.
+`account/gatewayOAuth/login` and `cancel` control authentication. `thread/attachment/add` takes `{ threadId, attachmentType, identityKey, payload }` ([attachment types](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/app-server-protocol/schema/typescript/v2/ThreadAttachmentAddParams.ts)).
+
+`thread/rollback` was removed in 0.156.0 ([release notes](https://github.com/openai/codex/releases/tag/rust-v0.156.0), #44915). Use `thread/revert`. Legacy `thread_rolled_back` rollout records remain readable.
+
+Server requests to the client: `item/commandExecution/requestApproval`, `item/fileChange/requestApproval`, `item/permissions/requestApproval`, `item/tool/requestUserInput`, `item/tool/call`, `mcpServer/elicitation/request`, `account/chatgptAuthTokens/refresh`, `attestation/generate`, and the legacy `execCommandApproval` and `applyPatchApproval`. Experimental `currentTime/read` asks for `{ currentTimeAt }` in whole Unix seconds ([request registry](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/app-server-protocol/src/protocol/common.rs)).
+
+Notifications include `thread/{started,status/changed,tokenUsage/updated,name/updated,compacted,archived,unarchived,deleted,closed,goal/updated,goal/cleared,settings/updated,queue/changed}`, `turn/{started,completed,diff/updated,plan/updated}`, `item/{started,completed}` with the `item/agentMessage/delta`, `item/reasoning/*`, `item/commandExecution/outputDelta`, and `item/fileChange/*` streams, `hook/{started,completed}`, `account/{updated,rateLimits/updated,login/completed}`, `model/rerouted`, `remoteControl/status/changed`, `account/gatewayOAuth/changed`, `thread/attachment/updated`, experimental `thread/prediction/updated`, `thread/reverted`, `serverRequest/resolved`, `model/verification`, `modelProvider/{authRecoveryStarted,authRecoveryCompleted}`, `error`, and `warning`. The generated `ServerNotification.json` contains the full list. The schema-generation commands in [Baseline and sources](#baseline-and-sources) emit it.
+
+`item/tool/requestUserInput` carries `threadId`, `turnId`, `itemId`, `questions`, and `isBlocking`. Missing `isBlocking` defaults to true. Deprecated `autoResolutionMs` must not determine blocking ([request type](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/app-server-protocol/src/protocol/v2/item.rs)).
 
 `ThreadItem` types: `userMessage`, `hookPrompt`, `agentMessage`, `functionCallOutput`, `plan`, `reasoning`, `commandExecution`, `fileChange`, `mcpToolCall`, `dynamicToolCall`, `collabAgentToolCall`, `subAgentActivity`, `webSearch`, `imageView`, `sleep`, `imageGeneration`, `enteredReviewMode`, `exitedReviewMode`, `contextCompaction`.
 
-`TurnError.codexErrorInfo` is one of `contextWindowExceeded`, `sessionBudgetExceeded`, `usageLimitExceeded`, `rateLimitExceeded`, `serverOverloaded`, `cyberPolicy`, `misalignmentPolicyViolation`, `internalServerError`, `unauthorized`, `badRequest`, `threadRollbackFailed`, `sandboxError`, `other`, or an object variant `httpConnectionFailed`, `responseStreamConnectionFailed`, or `responseStreamDisconnected`, each with an optional `httpStatusCode`. The [rollout spelling](#rollout-records) is snake case.
+`TurnError.codexErrorInfo` uses camelCase. String variants include `contextWindowExceeded`, `sessionBudgetExceeded`, `usageLimitExceeded`, `rateLimitExceeded`, `flexUnavailable`, `serverOverloaded`, `cyberPolicy`, `misalignmentPolicyViolation`, `tooManyDenials`, `internalServerError`, `unauthorized`, `badRequest`, `threadRollbackFailed`, `sandboxError`, and `other`. Object variants `httpConnectionFailed`, `responseStreamConnectionFailed`, `responseStreamDisconnected`, and `responseTooManyFailedAttempts` carry nullable `httpStatusCode`. `activeTurnNotSteerable` carries `turnKind`, either `review` or `compact`. The [exported type](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/app-server-protocol/schema/typescript/v2/CodexErrorInfo.ts) also permits unknown strings and objects. The [rollout spelling](#rollout-records) is snake case. Rollout `bio_policy` and `invalid_prompt` map to app-server `other` ([conversion](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/app-server-protocol/src/protocol/v2/shared.rs)).
 
 ### App-server daemon
 
-`codex remote-control start` enables remote control and starts the persistent per-user app-server; `codex remote-control stop` stops it, and `pair` prints a pairing code. `codex app-server daemon` exposes `start`, `restart`, `stop`, `bootstrap`, `enable-remote-control`, `disable-remote-control`, and `version`. Windows uses the same backend and file names since 0.154.0.
+`codex remote-control start` enables remote control and starts the persistent app-server for its `CODEX_HOME`. `codex remote-control stop` stops it, and `pair` prints a pairing code. `codex app-server daemon` exposes `start`, `restart`, `stop`, `bootstrap`, `update`, `enable-remote-control`, `disable-remote-control`, and `version`. Successful lifecycle commands print one JSON object ([daemon reference](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/app-server-daemon/README.md)).
 
 | Item | Upstream |
 | --- | --- |
-| Managed binary | `$CODEX_HOME/packages/standalone/current/bin/codex`, falling back to the legacy `current/codex` (`managed_install.rs:19`; the `bin/` layout is from #42318). The 0.154.0 installer keeps `current/codex` as a symlink to `bin/codex`. |
-| PID records | `$CODEX_HOME/app-server-daemon/app-server.pid` and `app-server-updater.pid`, each `{ "pid", "processStartTime" }` (`lib.rs:35`, `backend/pid.rs:38`). `processStartTime` is the `lstart` value from `ps -p PID -o stat= -o lstart=` and guards against pid reuse (`pid.rs:645`). |
-| Other state | `daemon.lock` (lifecycle lock), `settings.json`, and per-process `.stderr.log` files in the same directory. |
-| App-server argv | `codex app-server --remote-control --listen unix://`, or `codex app-server --listen unix://` without remote control (`pid.rs:340` to `:344`). |
-| Updater argv | `codex app-server daemon pid-update-loop` |
-| Shutdown | A request to `ws://localhost/daemon/shutdown` over the control socket (#43308). |
+| Managed binary | New installations use `$CODEX_HOME/packages/app-server-daemon/current/bin/codex` (`codex.exe` on Windows). Existing standalone daemon installations can retain `$CODEX_HOME/packages/standalone/current/bin/codex` or legacy `current/codex` ([installation selection](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/app-server-daemon/src/managed_install.rs)). The dedicated root was introduced in 0.156.0. |
+| PID records | `$CODEX_HOME/app-server-daemon/daemon.pid` and `daemon-updater.pid`. Legacy installations use `app-server.pid` and `app-server-updater.pid`. JSON records contain `pid`, `processStartTime`, optional `processIdentity`, and optional `executableIdentity` ([PID backend](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/app-server-daemon/src/backend/pid.rs)). |
+| Process identity | Linux uses `{ bootId, startTicks }`. Current macOS records use `{ bootId, uniqueId, startSeconds, startMicroseconds }`. Older timestamp-only macOS records remain readable. `processStartTime` retains the platform start-time string for legacy readers ([native identity](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/app-server-daemon/src/backend/pid_identity.rs)). |
+| Executable identity | `digest` and optional `path_digest` are 32-byte arrays. The path digest distinguishes release directories containing identical executable bytes (`managed_install.rs`). |
+| Other state | `daemon.lock`, `settings.json`, `daemon.stderr.log`, `daemon-updater.stderr.log`, and `daemon-updater.sock`. Legacy names use `app-server` in place of `daemon` (`app-server-daemon/src/lib.rs`). |
+| Control socket | `$CODEX_HOME/app-server-control/app-server-control.sock`, using the [Unix WebSocket transport](#transport-and-handshake). |
+| App-server argv | `codex app-server --remote-control --listen unix://`, or without `--remote-control`. The daemon adds `--analytics-default-enabled`. Saved feature overrides add `-c features.<name>=<bool>` (`backend/pid.rs`). |
+| Updater argv | `codex app-server daemon pid-update-loop`, optionally with internal restoration arguments. |
+| Shutdown | Unix sends SIGTERM, then forces termination after the grace period. Windows sends the PID as a text frame over the control socket at `ws://localhost/daemon/shutdown` and expects the same PID back ([shutdown client](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/app-server-daemon/src/client.rs)). |
 
-The updater waits five minutes before its first pass and one hour between passes (`update_loop.rs:34`, `:36`). Each pass runs the standalone installer and compares its own executable with the managed binary; when they differ it restarts a running app-server from the managed binary and then replaces its own process image with it.
+[Updater settings](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/app-server-daemon/src/settings.rs) live in `settings.json`: `updater.autoUpdateEnabled` defaults to true and `updater.updateIntervalMinutes` defaults to 60. The interval must be positive. `shutdownGraceSeconds` defaults to 60 and accepts 0 through 300. Zero requests graceful shutdown and then forces it immediately.
 
-`stop` stops only the app-server (`lib.rs:435`), and `start` never touches the updater (`lib.rs:313`), so a stop and start pair leaves an updater running an old binary. `codex app-server daemon bootstrap --remote-control` takes `daemon.lock` (`lib.rs:516`), restarts the app-server, stops any live updater, and starts a new one from the managed binary (`bootstrap_locked`, `lib.rs:616` to `:641`).
+The [update loop](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/app-server-daemon/src/update_loop.rs) normally waits five minutes before its first scheduled check. Managed-binary handoff and restoration use shorter waits. Each scheduled pass can install a release, restart the app-server, and replace the updater process.
 
-A zombie app-server counts as inactive and is reaped with a non-blocking `waitpid` (`pid.rs:183`, `:508` to `:516`; #43504). Up to 0.144.4 the PID backend treated a recorded process as active when `kill(pid, 0)` succeeded and its start time matched, so a zombie child of the updater looked alive: `start` waited ten seconds for an absent control socket, and `stop` signalled the zombie through a 60-second grace period and failed at its 70-second timeout. RimZ's recovery for those releases is in [adapter_codex.md → Remote control](../../internals/agents/adapter_codex.md#remote-control).
+`daemon update` selects the latest stable release even when automatic updates are disabled. It can restore pinned or local packages to the production update channel. It reports `updated`, `noUpdate`, or `unsupported`. A running daemon restarts, while a stopped daemon stays stopped. Active or queued work can be interrupted. CLI `-c` overrides do not reach the updater.
+
+Managed restarts can restore persisted root threads from `$CODEX_HOME/app-server-daemon/loaded-threads.json`. Recovery runs asynchronously after startup, so readiness does not mean restoration has finished ([recovery](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/app-server/src/daemon_thread_recovery.rs)). The running daemon can use a different release from the invoking CLI. `daemon version` and the connection's `initialize.userAgent` expose its version.
+
+`start` and `restart` ensure an eligible updater. `stop` stops the app-server and clears pending thread recovery. `bootstrap --remote-control` stops the previous updater and app-server, then starts the selected managed installation ([lifecycle implementation](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/app-server-daemon/src/lib.rs)).
+
+Zombie app-servers count as inactive. Codex 0.144.4 and earlier could treat a zombie as active because its PID and start time still matched. That behavior could make startup wait for an absent control socket and shutdown exceed its timeout.
 
 ## Session files
 
 ### Rollout files
 
-Codex writes one rollout per thread at `$CODEX_HOME/sessions/YYYY/MM/DD/rollout-<timestamp>-<thread_id>[_<rollout_id>].jsonl` (`precompute_new_rollout_path`, `rollout/src/recorder.rs:1635`; `rollout_file_name.rs:62`). The optional rollout id appears when a reverted thread keeps its thread id but starts a new file; the newest timestamp and UUIDv7 rollout id win. Archiving moves a rollout into the flat `$CODEX_HOME/archived_sessions/` (`recorder.rs:1457`). Readers accept `.jsonl` and zstd-compressed `.jsonl.zst` (`compression.rs:41`); writing compressed files is behind the `local_thread_store_compression` feature, which is under development and off by default (`features/src/lib.rs:1112`).
+Codex writes a current rollout for each persistent thread at `$CODEX_HOME/sessions/YYYY/MM/DD/rollout-<timestamp>-<thread_id>[_<rollout_id>].jsonl` (`precompute_new_rollout_path`, `rollout/src/recorder.rs`, `rollout_file_name.rs`). The optional rollout id appears when a reverted thread keeps its thread id but starts a new file. The newest timestamp and UUIDv7 rollout id select the current revision. Archiving moves a rollout into the flat `$CODEX_HOME/archived_sessions/` (`recorder.rs`). Readers accept `.jsonl` and zstd-compressed `.jsonl.zst` (`compression.rs`). Writing compressed files is behind the `local_thread_store_compression` feature, which is under development and off by default (`features/src/lib.rs`).
 
-Each line is `{ "timestamp", "ordinal", "type", "payload" }`, where `type` is `session_meta`, `turn_context`, `event_msg`, `response_item`, `compacted`, or one of the newer item kinds. Which `event_msg` records persist depends on the thread's history mode (`should_persist_event_msg`, `rollout/src/policy.rs`):
+Each line carries `timestamp`, `type`, and `payload`. Paginated records carry increasing `ordinal` values, starting at zero or the inherited exclusive boundary. Legacy records omit `ordinal` ([ordinal state](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/rollout/src/ordinal.rs)). A `response_item` can also carry top-level `metadata`. The [wire enum](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/history/src/rollout_payload.rs) defines `session_meta`, `turn_context`, `event_msg`, `response_item`, `compacted`, `token_usage_record`, `world_state`, `retained_context`, `security_risk_score`, `inter_agent_communication`, `inter_agent_communication_metadata`, and `realtime_item`. Which `event_msg` records persist depends on the thread's history mode (`persisted_event_msg`, `rollout/src/policy.rs`):
 
 | Record | Legacy | Paginated |
 | --- | --- | --- |
-| `item_completed` with a turn item | `Plan`, `Sleep`, `FunctionCallOutput`, and completed `SubAgentActivity` items only | every turn item, including `UserMessage` and `AgentMessage` |
+| `item_completed` with a turn item | `Plan`, sleep extension items, `FunctionCallOutput`, and completed `SubAgentActivity` items only | every turn item, including `UserMessage` and `AgentMessage` |
 | `user_message`, `agent_message`, `agent_reasoning`, review, patch, MCP, web-search, image, and context-compacted end events | persisted | omitted |
 | `token_count`, `task_started`, `task_complete`, `turn_aborted`, `thread_goal_updated`, `thread_rolled_back`, thread settings | persisted | persisted |
 | `error`, `stream_error`, `warning`, exec begin and delta events, approval requests | never persisted | never persisted |
-| `response_item` | persisted | persisted |
+| `response_item` | persisted except `compaction_trigger` and unknown `other` items | same |
+| `realtime_item` | omitted | persisted |
 
-Non-ephemeral TUI sessions use Paginated history (`tui/src/app_server_session.rs:2038`), and the header records it as `history_mode`. `codex migrate-rollouts` converts legacy sessions. `response_item` rows are model transport, including developer and system messages, and are not a second copy of the visible transcript.
+Paginated persistence truncates command output and MCP results using 64 KiB limits ([persistence policy](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/rollout/src/policy.rs)). Persisted output can therefore differ from the live stream.
+
+Experimental `rollout/compress` takes no parameters and returns `{}` after scheduling a cold-file compression pass. It works independently of the startup compression flag. Its acknowledgement does not imply completion, and it has no progress or cancellation API ([compression API](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/app-server/README.md#local-rollout-compression)).
+
+`history_mode` uses `legacy` or `paginated`. Missing values default to `legacy`. Non-ephemeral TUI sessions use Paginated history (`tui/src/app_server_session.rs`), and the header records it as `history_mode`. `codex migrate-rollouts` converts legacy sessions. `response_item` rows are model transport, including developer and system messages, and are not a second copy of the visible transcript.
 
 ### Rollout records
 
-The header is the first line. `SessionMeta` (`protocol.rs:3040`) carries `id`, `session_id`, `timestamp`, `cwd`, `originator`, `cli_version`, `source`, `model_provider`, `history_mode`, `context_window`, git metadata, and these lineage fields:
+The header is the first line. Its `id` identifies the thread, while `session_id` identifies the shared session tree. Child hooks point `transcript_path` at the child's rollout. `SessionMeta` (`protocol.rs`) carries `id`, `session_id`, `timestamp`, `cwd`, `originator`, `cli_version`, `source`, `model_provider`, `history_mode`, `context_window`, git metadata, and these lineage fields:
 
 | Field | Meaning |
 | --- | --- |
-| `forked_from_id` | Source thread of a user fork (`/fork`, `codex fork`; an ephemeral `/side` or `/btw` thread writes no rollout); absent on a fresh root such as `/new` or `/clear`. |
-| `forked_from_ordinal_exclusive` | Ordinal in the source where the copy stops; new since 0.150.1. |
-| `thread_source` | `user`, `subagent`, `guardian_review`, `memory_consolidation`, or a feature string (`protocol.rs:2760`). `subagent` identifies a child; `forked_from_id` alone does not. |
+| `creator_user_id`, `creator_account_id` | Creator identity when available. The account id stays fixed across resumes. |
+| `selected_capability_roots` | Capability roots selected by the hosting platform. |
+| `runtime_workspace_roots` | Runtime workspace roots at creation. Absent means unknown, and an empty list means no roots. |
+| `history_base` | Inherited prefix: `thread_id` identifies its rollout, with boundaries `end_ordinal_exclusive` and `end_byte_offset`. A reverted thread can have a distinct rollout id. |
+| `subagent_history_start_ordinal` | First ordinal belonging to the child's own projected history. |
+| `forked_from_id` | Source thread of a user fork (`/fork`, `codex fork`). An ephemeral `/side` or `/btw` thread writes no rollout. Absent on a fresh root such as `/new` or `/clear`. |
+| `forked_from_ordinal_exclusive` | Ordinal in the source where the copy stops. New since 0.150.1. |
+| `thread_source` | `user`, `subagent`, `guardian_review`, `memory_consolidation`, or a feature string (`protocol.rs`). `subagent` identifies a child. `forked_from_id` alone does not. |
 | `parent_thread_id` | Immediate parent of a child. |
-| `agent_nickname`, `agent_path`, `agent_role` | Child display name, root-relative task path such as `/root/research/explore_hooks`, and role; `agent_role` also accepts `agent_type`. |
+| `agent_nickname`, `agent_path`, `agent_role` | Child display name, root-relative task path such as `/root/research/explore_hooks`, and role. `agent_role` also accepts `agent_type`. |
 | `multi_agent_version` | `disabled`, `v1`, or `v2`. |
-| `source.subagent.thread_spawn` | Older structured child source `{ parent_thread_id, depth, agent_path, agent_nickname, agent_role }` (`protocol.rs:2828`), still found in copied headers. |
+| `source.subagent.thread_spawn` | Older structured child source `{ parent_thread_id, depth, agent_path, agent_nickname, agent_role }` (`protocol.rs`), still found in copied headers. |
 
 ```jsonc
 { "type": "session_meta", "payload": {
@@ -476,12 +553,12 @@ The header is the first line. `SessionMeta` (`protocol.rs:3040`) carries `id`, `
     "agent_role": "explorer", "multi_agent_version": "v2" } }
 ```
 
-A fork or child rollout begins with a copy of the parent's history, including its `token_count` records, before its own work.
+Forks and children inherit parent history, which can include `token_count` records. Paginated forks can reference a shared prefix through `history_base` instead of copying it into the new file ([session creation](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/core/src/session/session.rs)). A raw child-file scan can therefore omit inherited records.
 
 Turn and usage records, as a 0.154.0 build writes them:
 
 ```jsonc
-// model and effort for the turn; collaboration_mode.mode is "plan" or "default"
+// model and effort for the turn. collaboration_mode.mode is "plan" or "default"
 { "type": "turn_context", "payload": { "model": "gpt-5.5-codex", "effort": "xhigh", "collaboration_mode": { "mode": "default" }, … } }
 
 { "type": "event_msg", "payload": { "type": "task_started", "turn_id": "01a09a03-fdd7-…", "started_at": 1789290347,
@@ -495,30 +572,30 @@ Turn and usage records, as a 0.154.0 build writes them:
     "rate_limits": { "limit_id": "codex", "primary": { "used_percent": 19.0, "window_minutes": 10080, "resets_at": … }, … } } }
 ```
 
-`TokenUsage` (`protocol.rs:2216`): `input_tokens` includes both cache slices, `output_tokens` includes `reasoning_output_tokens`, and `cache_write_input_tokens` defaults to 0 when absent (older rollouts omit it). `last_token_usage` is the most recent request; `total_token_usage` is cumulative for the rollout, including any copied parent prefix.
+`TokenUsage` (`protocol.rs`): `input_tokens` includes both cache slices, `output_tokens` includes `reasoning_output_tokens`, and `cache_write_input_tokens` defaults to 0 when absent (older rollouts omit it). `last_token_usage` is the most recent request. `total_token_usage` is cumulative for the rollout, including inherited parent usage. Do not sum cumulative totals across records or count inherited usage as new child work.
 
 Visible messages in Paginated mode:
 
 ```jsonc
-// user message; content is UserInput, snake-tagged: text, image, local_image, audio, local_audio, skill, mention
+// user message. content is UserInput, snake-tagged: text, image, local_image, audio, local_audio, skill, mention
 { "type": "event_msg", "payload": { "type": "item_completed", "turn_id": "turn-1",
     "item": { "type": "UserMessage", "content": [ { "type": "text", "text": "prompt", "text_elements": [] } ] } } }
 
-// assistant message; the content tag is capitalized; the item may also carry phase, memory_citation, delivery, questions
+// assistant message. The content tag is capitalized. The item may also carry phase, memory_citation, delivery, questions
 { "type": "event_msg", "payload": { "type": "item_completed", "turn_id": "turn-1",
     "item": { "type": "AgentMessage", "content": [ { "type": "Text", "text": "assistant update" } ] } } }
 ```
 
 Legacy mode writes the same text as `{ "type": "user_message", "message": … }` and `{ "type": "agent_message", "message": … }` event payloads.
 
-Turn endings (`TurnCompleteEvent`, `protocol.rs:2141`, serialized as `task_complete` with alias `turn_complete`; `TurnAbortedEvent`, `protocol.rs:4154`). Timestamps inside the payload are epoch seconds:
+Turn endings (`TurnCompleteEvent` and `TurnAbortedEvent`, `protocol.rs`). Completion serializes as `task_complete` with alias `turn_complete`. Timestamps inside the payload are epoch seconds:
 
 ```jsonc
 // clean completion
 { "type": "event_msg", "payload": { "type": "task_complete", "turn_id": "…", "last_agent_message": "patch is correct",
     "started_at": 1789290347, "completed_at": 1789290628, "duration_ms": 280548 } }
 
-// failed turn; the only persisted error record
+// failed turn
 { "type": "event_msg", "payload": { "type": "task_complete", "turn_id": "…", "last_agent_message": null,
     "error": { "message": "This content was flagged for possible cybersecurity risk. …", "codex_error_info": "cyber_policy" } } }
 
@@ -529,17 +606,21 @@ Turn endings (`TurnCompleteEvent`, `protocol.rs:2141`, serialized as `task_compl
 
 | Field | Values |
 | --- | --- |
-| `turn_aborted.reason` | `interrupted`, `replaced`, `review_ended`, `budget_limited`; Esc and `/clear` during a turn were observed writing `interrupted` on 0.144.x |
-| `task_complete.error` | `ErrorEvent { message, codex_error_info }` (`protocol.rs:2063`) |
-| `codex_error_info` | snake case (`protocol.rs:1851`): `context_window_exceeded`, `session_budget_exceeded`, `usage_limit_exceeded`, `rate_limit_exceeded`, `server_overloaded`, `cyber_policy`, `misalignment_policy_violation`, `http_connection_failed`, `response_stream_connection_failed`, `internal_server_error`, `unauthorized`, `bad_request`, `sandbox_error`, `response_stream_disconnected`, `response_too_many_failed_attempts`, `active_turn_not_steerable`, `thread_rollback_failed`, `other` |
+| `turn_aborted.reason` | `interrupted`, `replaced`, `review_ended`, `budget_limited`. Esc and `/clear` during a turn were observed writing `interrupted` on 0.144.x |
+| `task_complete.error` | `ErrorEvent { message, codex_error_info }` (`protocol.rs`) |
+| `codex_error_info` | snake case (`protocol.rs`): `context_window_exceeded`, `session_budget_exceeded`, `usage_limit_exceeded`, `rate_limit_exceeded`, `flex_unavailable`, `server_overloaded`, `cyber_policy`, `bio_policy`, `misalignment_policy_violation`, `too_many_denials`, `http_connection_failed`, `response_stream_connection_failed`, `internal_server_error`, `unauthorized`, `bad_request`, `invalid_prompt`, `sandbox_error`, `response_stream_disconnected`, `response_too_many_failed_attempts`, `active_turn_not_steerable`, `thread_rollback_failed`, `other` |
+
+`token_usage_record.payload` carries `thread_id`, `turn_id`, `session_id`, `root_turn_id`, `response_id`, `usage`, `turn_token_usage`, and `thread_token_usage`. It records best-effort usage for a completed response. The latter two usage fields are cumulative.
+
+`task_started`, `task_complete`, and `turn_aborted` can carry `root_turn_id`. `task_complete` can also carry `time_to_first_token_ms`, and `task_started` can carry `trace_id`. `task_started.turn_attribution` adds `turn_id`, `turn_trigger`, `parent_turn_id`, `initiating_agent_path`, and `root_turn_id` ([turn input types](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/protocol/src/turn_input.rs)). `turn_aborted.error` can contain the interruption error.
 
 `other` is a catch-all and can accompany a transient failure such as an HTTP 503. There is no `turn_error` record, and `error` and `stream_error` events are never persisted.
 
-Some provider failures leave no error in the rollout. Observed on 0.142.x, a serving-capacity failure (TUI: `⚠ Selected model is at capacity. Please try a different model.`) and a usage-limit failure (TUI: `■ You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage … try again at 6:35 AM.`) both end in a `task_complete` with `last_agent_message: null` and no `error`, with no `Stop` hook and no error on the app-server thread; see openai/codex #22277, #19579, #28507, and #29760. This has not been re-observed on 0.154.0.
+Some provider failures leave no error in the rollout. Observed on 0.142.x, a serving-capacity failure (TUI: `Selected model is at capacity. Please try a different model.`) and a usage-limit failure (TUI: `You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage … try again at 6:35 AM.`) both end in a `task_complete` with `last_agent_message: null` and no `error`, with no `Stop` hook and no error on the app-server thread. See openai/codex #22277, #19579, #28507, and #29760. This has not been re-observed on 0.162.1.
 
 ### Session index
 
-`$CODEX_HOME/session_index.jsonl` maps a thread id to its title (`rollout/src/session_index.rs:25`). The TUI generates a title of at most 36 characters after the first turn (`THREAD_TITLE_MAX_CHARS`, `tui/src/app/thread_title.rs:25`) and appends one row with it (`append_thread_name`, `session_index.rs:33`). Renames append further rows, and the newest valid row for an `id` wins; deleting a thread rewrites the file without its rows (`remove_thread_name_entries`, `session_index.rs:74`). Since 0.154.0 (#42749) the TUI writes only the generated title; earlier builds first appended a provisional row made from the whitespace-normalized first prompt.
+`$CODEX_HOME/session_index.jsonl` maps a thread id to its title (`rollout/src/session_index.rs`). The TUI generates a title of at most 36 characters after the first turn (`THREAD_TITLE_MAX_CHARS`, `tui/src/app/thread_title.rs`) and appends one row with it (`append_thread_name`, `session_index.rs`). Renames append further rows, and the newest valid row for an `id` wins. Deleting a thread rewrites the file without its rows (`remove_thread_name_entries`, `session_index.rs`). Since 0.154.0 (#42749) the TUI writes only the generated title. Earlier builds first appended a provisional row made from the whitespace-normalized first prompt.
 
 ```json
 { "id": "01a09a03-fd61-7eb3-9f97-0b24ec37cde7", "thread_name": "Trace isolation override flow", "updated_at": "2026-09-13T09:05:54.102581041Z" }
@@ -549,7 +630,7 @@ The same title is the app-server `Thread.name`.
 
 ### Questions and plan approval
 
-A Plan-mode turn records `turn_context.payload.collaboration_mode.mode = "plan"` and `task_started.payload.collaboration_mode_kind = "plan"`, and its hooks report `permission_mode = "plan"`. The plan itself is a completed `Plan` item followed by a clean completion of the same turn:
+A Plan-mode turn records `turn_context.payload.collaboration_mode.mode = "plan"` and `task_started.payload.collaboration_mode_kind = "plan"`. Hook `permission_mode` describes approval policy and cannot identify Plan mode. The plan itself is a completed `Plan` item followed by a clean completion of the same turn:
 
 ```jsonc
 { "type": "event_msg", "payload": { "type": "item_completed", "turn_id": "turn-1",
@@ -557,7 +638,7 @@ A Plan-mode turn records `turn_context.payload.collaboration_mode.mode = "plan"`
 { "type": "event_msg", "payload": { "type": "task_complete", "turn_id": "turn-1", "last_agent_message": "Codex says:" } }
 ```
 
-The model's response wraps the plan in `<proposed_plan>…</proposed_plan>`, which `last_agent_message` excludes. After the turn the TUI asks "Implement this plan?" with three rows (`tui/src/chatwidget/plan_implementation.rs:9` to `:13`): "Yes, implement this plan" switches to Default mode and submits `Implement the plan.`; "Yes, clear context and implement" starts a fresh thread seeded with the plan; "No, stay in Plan mode" continues planning. The prompt is client-side and emits no hook or `notify` event ([openai/codex#19921](https://github.com/openai/codex/issues/19921)), so the ordinary `Stop` hook and the rollout are the only signals.
+The model's response wraps the plan in `<proposed_plan>…</proposed_plan>`, which `last_agent_message` excludes. After the turn the TUI asks "Implement this plan?" with three rows (`tui/src/chatwidget/plan_implementation.rs`): "Yes, implement this plan" switches to Default mode and submits the prompt `Implement the plan.` "Yes, clear context and implement" starts a fresh thread seeded with the plan. "No, stay in Plan mode" continues planning. The prompt is client-side and emits no lifecycle hook or external `notify` event ([openai/codex#19921](https://github.com/openai/codex/issues/19921)), and requests a terminal `plan-mode-prompt` notification. Blocking questionnaires use the same notification type. Async questions use `async-question` ([notification types](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/tui/src/chatwidget/notifications.rs)).
 
 Plan clarifications and default-mode questionnaires use the blocking `request_user_input` tool:
 
@@ -577,21 +658,21 @@ Plan clarifications and default-mode questionnaires use the blocking `request_us
 
 The questionnaire (`tui/src/bottom_pane/request_user_input/mod.rs`) opens with the first option of each question selected. Down moves the selection, and the submit key (Enter by default, remappable in the keymap) commits the answer, advances to the next question, and submits after the last. Each question also accepts notes and free-form text.
 
-`request_user_input_async` (0.153.0) is the non-blocking variant: its input is `{ "questions": [ { "title", "options"?: [string] } ] }`, it returns `{"accepted":true}` at once, and the questions appear as an `AgentMessage` item with `delivery: "async"` and `questions` that the user answers inline while the turn continues (`core/src/tools/handlers/request_user_input_async.rs`).
+`request_user_input_async` is the non-blocking variant: its input is `{ "questions": [ { "title", "options"?: [string] } ] }`, it returns `{"accepted":true}` at once, and the questions appear as an `AgentMessage` item with `delivery: "async"` and `questions` that the user answers inline while the turn continues ([handler](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/core/src/tools/handlers/request_user_input_async.rs)). The [historical observations](#async-questions-observed-on-01580) distinguish current editor changes from 0.158.0 captures.
 
 ## Auth and usage endpoints
 
 ### `auth.json`
 
-`cli_auth_credentials_store` selects where Codex keeps credentials: `file` (default), `keyring`, `auto`, or `ephemeral`, which keeps them in memory for the current process (`config/src/types.rs:109`). With `file`, credentials are in `$CODEX_HOME/auth.json` (`login/src/auth/storage.rs:41`):
+`cli_auth_credentials_store` selects where Codex keeps credentials: `file` (default), `keyring`, `auto`, or `ephemeral`, which keeps them in memory for the current process (`config/src/types.rs`). With `file`, credentials are in `$CODEX_HOME/auth.json` (`login/src/auth/storage.rs`):
 
 | Key | Meaning |
 | --- | --- |
 | `OPENAI_API_KEY` | API-key login when non-empty. |
-| `tokens.access_token` | ChatGPT OAuth access token; the bearer token for the usage endpoints below. |
+| `tokens.access_token` | ChatGPT OAuth access token. The bearer token for the usage endpoints below. |
 | `tokens.account_id` | ChatGPT account id, sent as the `ChatGPT-Account-Id` header. |
 
-With keyring or ephemeral storage there is no file; `codex login status` still reports the login kind.
+Keyring and ephemeral credentials need not exist in `auth.json`. `codex login status` still reports the login kind.
 
 ### Responses rate-limit headers
 
@@ -607,11 +688,11 @@ Codex also reads rate-limit state from response headers on model requests (`code
 | `x-codex-rate-limit-reached-type` | a `RateLimitReachedType` value |
 | `x-codex-promo-message` | backend promotional text |
 
-Every `x-*-primary-used-percent` header names one limit id, so `parse_all_rate_limits` returns one snapshot per limit present. The same state reaches rollouts as `token_count.rate_limits` and app-server clients as `account/rateLimits/updated`. The public docs do not describe these headers.
+Every `x-*-primary-used-percent` header names one limit id, so `parse_all_rate_limits` returns one snapshot per limit present. The same state reaches rollouts as `token_count.rate_limits` and app-server clients as `account/rateLimits/updated`.
 
 ### ChatGPT usage endpoints
 
-Codex's backend client reads account usage over HTTPS with the OAuth bearer token and, when known, the `ChatGPT-Account-Id` header. The base URL is `chatgpt_base_url` from config, default `https://chatgpt.com/backend-api/` (`core/src/config/mod.rs:4283`), with trailing slashes trimmed. A `https://chatgpt.com` or `https://chat.openai.com` base without `/backend-api` gets it appended, and the path style follows from whether the base contains `/backend-api` (`PathStyle::from_base_url`, `backend-client/src/client.rs:126`, `:184` to `:196`):
+Codex's backend client reads account usage over HTTPS with the OAuth bearer token and, when known, the `ChatGPT-Account-Id` header. The base URL is `chatgpt_base_url` from config, default `https://chatgpt.com/backend-api/` (`core/src/config/mod.rs`), with trailing slashes trimmed. A `https://chatgpt.com` or `https://chat.openai.com` base without `/backend-api` gets it appended, and the path style follows from whether the base contains `/backend-api` (`PathStyle::from_base_url`, `backend-client/src/client.rs`):
 
 | Call | Base contains `/backend-api` | Other bases |
 | --- | --- | --- |
@@ -623,7 +704,7 @@ The usage response is snake case (`RateLimitStatusPayload` and `RateLimitStatusW
 
 ```jsonc
 {
-  "plan_type": "plus",                    // required; guest, free, go, plus, pro, prolite, free_workspace, team, business, education, edu, enterprise, k12, quorum, … unknown
+  "plan_type": "plus",                    // required. guest, free, go, plus, pro, prolite, promax, free_workspace, team, business, education, edu, enterprise, k12, quorum, … unknown
   "rate_limit": {                         // optional
     "allowed": true,
     "limit_reached": false,
@@ -644,6 +725,22 @@ The usage response is snake case (`RateLimitStatusPayload` and `RateLimitStatusW
 }
 ```
 
-Windows carry `limit_window_seconds`; primary and secondary order carries no meaning beyond position. Codex converts this payload into the app-server `account/rateLimits/read` shape: the main bucket gets `limitId: "codex"`, each additional limit becomes a further bucket, and `rate_limit.allowed` becomes `ordinaryUsageAllowed`.
+Windows carry `limit_window_seconds`. Primary and secondary order carries no meaning beyond position. Codex converts this payload into the app-server `account/rateLimits/read` shape: the main bucket gets `limitId: "codex"`, each additional limit becomes a further bucket, and `rate_limit.allowed` becomes `ordinaryUsageAllowed`.
 
-The reset-credit list is `{ "available_count", "credits": [ { "id", "reset_type", "status", "granted_at", "expires_at"?, "title"?, "description"? } ] }`, with the timestamps as strings (`RateLimitResetCreditDetails`, `types.rs:34`). The consume request is `{ "redeem_request_id": "<id>", "credit_id": "<optional id>" }`, and the response is `{ "code", "windows_reset" }` with `code` one of `reset`, `nothing_to_reset`, `no_credit`, or `already_redeemed` (`types.rs:106` to `:116`). `nothing_to_reset` leaves the credit available.
+The reset-credit list is `{ "available_count", "credits": [ { "id", "reset_type", "status", "granted_at", "expires_at"?, "title"?, "description"? } ] }`, with the timestamps as strings (`RateLimitResetCreditDetails`, `types.rs`). The consume request is `{ "redeem_request_id": "<id>", "credit_id": "<optional id>" }`, and the response is `{ "code", "windows_reset" }` with `code` one of `reset`, `nothing_to_reset`, `no_credit`, or `already_redeemed` (`types.rs`). `nothing_to_reset` leaves the credit available.
+
+Account analytics use the same authentication and path prefix, `/wham` or `/api/codex` ([client](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/backend-client/src/client/analytics.rs)). Each route below uses `GET`. Except for credit events, requests include inclusive UTC `start_date` and `end_date`.
+
+| Report | Route after the prefix | Other query fields |
+| --- | --- | --- |
+| Token usage | `/usage/daily-token-usage-breakdown` | `group_by=day` |
+| Credit events | `/usage/credit-usage-events` | No date query |
+| Workspace token usage | `/usage/daily-workspace-user-token-usage-breakdown` | `group_by=day`. Enterprise token reports also send `breakdown_by=model` and repeated `modes=codex`, `modes=work`. |
+| Enterprise credit usage | `/usage/daily-workspace-user-credit-usage` | `breakdown` |
+| Workspace messages | `/analytics/daily-workspace-usage-counts` | `group_by=day`, `workspace_user=true` |
+| Plugin activity | `/analytics/daily-plugin-usage-metrics` | `group_by=day`, `workspace_user=true`, `top_plugin_limit` |
+| Skill activity | `/analytics/daily-skill-usage-metrics` | `group_by=day`, `workspace_user=true`, `top_skill_limit` |
+
+Responses use [report-specific types](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/codex-backend-openapi-models/src/models/analytics.rs). Missing amounts remain unavailable.
+
+Thread costs use `POST /wham/usage/thread_usage/query`, or `/api/codex/usage/thread_usage/query`, with `{ "thread_ids": ["<id>"] }`. The [client](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/backend-client/src/client/thread_usage.rs) accepts 1 through 100 distinct ids. The response contains `threads[]` with `thread_id`, `estimated_usage_credits_micros`, optional estimated and native USD amounts, and optional model/effort/speed groups. Amounts are integer millionths of credits or USD. Omitted rows and missing credit estimates mean unavailable usage, not zero.
