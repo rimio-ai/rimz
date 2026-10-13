@@ -93,8 +93,8 @@ pub use definition::{
     UserCapability,
 };
 use definition::{
-    CompactCommand, CompactInstruction, LaunchPermissionArgs, LaunchSpec, PresetMatchers,
-    PromptStyle, SessionCommand, StaticPresetMatcher, program_names_kind,
+    CompactCommand, CompactInstruction, FastSwitch, LaunchPermissionArgs, LaunchSpec,
+    PresetMatchers, PromptStyle, SessionCommand, StaticPresetMatcher, program_names_kind,
 };
 pub use emblems::{Emblem, EmblemTint, emblem_for};
 pub use folder_trust::{
@@ -199,6 +199,9 @@ pub struct LaunchPreset {
     /// Absolute paths composed in order into the replacement system prompt.
     /// A non-empty launch override replaces the profile's complete list.
     pub append_system_prompt_files: Vec<PathBuf>,
+    /// Provider fast mode: `Some(true)` renders the adapter's fast switch,
+    /// `Some(false)` removes a rendered one, `None` leaves argv as it is.
+    pub fast: Option<bool>,
 }
 
 impl LaunchPreset {
@@ -208,6 +211,7 @@ impl LaunchPreset {
             && self.auto_compact.as_deref().is_none_or(str::is_empty)
             && self.system_prompt_file.is_none()
             && self.append_system_prompt_files.is_empty()
+            && self.fast.is_none()
     }
 }
 
@@ -343,6 +347,11 @@ pub enum PresetErr {
     UnsupportedField {
         agent: &'static str,
         field: &'static str,
+    },
+    #[error("agent `{agent}` has no fast-mode launch switch; {fix}")]
+    UnsupportedFast {
+        agent: &'static str,
+        fix: &'static str,
     },
 }
 

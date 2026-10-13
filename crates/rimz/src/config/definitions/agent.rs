@@ -37,6 +37,7 @@ pub(super) fn empty_profile(kind: &str) -> Profile {
         mode: None,
         model: None,
         effort: None,
+        fast: None,
         budget: None,
         auto_compact: None,
         system_prompt_file: None,
@@ -405,6 +406,17 @@ impl Resolver<'_> {
                     ));
                 }
             }
+            if fm.fast == Some(true)
+                && let Err(fix) = definition.spec().launch.fast_args()
+            {
+                return Err(DefinitionErr::new(
+                    path,
+                    format!(
+                        "sets `fast: true`, but {} has no fast-mode launch switch; {fix}, or remove `fast`",
+                        definition.spec().kind
+                    ),
+                ));
+            }
         }
         if let Some(model) = fm.model.as_deref()
             && let Some(implied) = agents::definition_model_kind(model)
@@ -528,6 +540,7 @@ impl Resolver<'_> {
             })
             .map(|value| auto_compact(path, &value))
             .transpose()?;
+        profile.fast = fm.fast;
         profile.budget = fm.budget.clone();
         profile.keep_warm = fm
             .keep_warm

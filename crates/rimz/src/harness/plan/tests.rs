@@ -20,8 +20,92 @@ fn finalized_launch_stamps_verbatim_record() {
         Some(&crate::agents::LaunchRecord {
             model: Some("opus[1m]".into()),
             effort: Some("high".into()),
+            fast: false,
             agent: None,
         })
+    );
+}
+
+#[test]
+fn fast_override_renders_strips_stamps_and_refuses_where_unsupported() {
+    let on = crate::agents::LaunchPreset {
+        fast: Some(true),
+        ..Default::default()
+    };
+    let off = crate::agents::LaunchPreset {
+        fast: Some(false),
+        ..Default::default()
+    };
+    let mut layout = LayoutSpec::single(preset_cell("codex", &["--search"], None, None));
+    finalize(&mut layout, &on, &[]).unwrap();
+    let cell = layout.agent_cells().next().unwrap();
+    assert!(cell.launch.fast);
+    assert!(cell.launch.record.as_deref().unwrap().fast);
+    assert_eq!(
+        cell.args,
+        [
+            "--search",
+            "-c",
+            "service_tier=fast",
+            "-c",
+            "features.fast_mode=true"
+        ]
+    );
+
+    // `--no-fast` over a profile that rendered fast removes the switch.
+    let mut layout = LayoutSpec::single(preset_cell(
+        "amp",
+        &["--fast", "--dangerously-allow-all"],
+        None,
+        None,
+    ));
+    if let Some(cell) = layout.agent_cells_mut().next() {
+        cell.launch.fast = true;
+    }
+    finalize(&mut layout, &off, &[]).unwrap();
+    let cell = layout.agent_cells().next().unwrap();
+    assert!(!cell.launch.fast);
+    assert!(!cell.launch.record.as_deref().unwrap().fast);
+    assert_eq!(cell.args, ["--dangerously-allow-all"]);
+
+    // Off never refuses; on refuses with the adapter's fix.
+    let mut layout = LayoutSpec::single(preset_cell("cursor", &[], None, None));
+    finalize(&mut layout, &off, &[]).unwrap();
+    let mut layout = LayoutSpec::single(preset_cell("cursor", &[], None, None));
+    assert_eq!(
+        finalize(&mut layout, &on, &[]).unwrap_err().to_string(),
+        "cursor has no fast-mode launch switch; choose a fast model id with --model, e.g. claude-opus-5-5-fast"
+    );
+}
+
+#[test]
+fn off_launch_record_keeps_its_wire_bytes() {
+    let record = crate::agents::LaunchRecord {
+        model: Some("opus".into()),
+        effort: None,
+        agent: None,
+        fast: false,
+    };
+    assert_eq!(
+        serde_json::to_string(&record).unwrap(),
+        r#"{"model":"opus","effort":null,"agent":null}"#
+    );
+    let fast = crate::agents::LaunchRecord {
+        fast: true,
+        ..record
+    };
+    let wire = serde_json::to_string(&fast).unwrap();
+    assert_eq!(
+        wire,
+        r#"{"model":"opus","effort":null,"agent":null,"fast":true}"#
+    );
+    assert_eq!(
+        serde_json::from_str::<crate::agents::LaunchRecord>(&wire).unwrap(),
+        fast
+    );
+    assert_eq!(
+        serde_json::to_string(&LaunchParams::default()).unwrap(),
+        "{}"
     );
 }
 
@@ -349,6 +433,7 @@ fn cell_posture_projection_covers_every_agent_cell_field() {
             mode: launch.mode,
             model: launch.model,
             effort: launch.effort,
+            fast: false,
             budget: launch.budget,
         }
     );
@@ -375,6 +460,7 @@ fn role_binding(role: &str) -> RoleBinding {
         mode: None,
         model: None,
         effort: None,
+        fast: None,
         budget: None,
         auto_compact: None,
         system_prompt_file: None,
@@ -525,6 +611,7 @@ fn configured_profile(
         mode,
         model: model.map(str::to_owned),
         effort: effort.map(str::to_owned),
+        fast: None,
         budget: None,
         auto_compact: None,
         system_prompt_file: system_prompt_file.map(Into::into),
@@ -860,6 +947,7 @@ fn subagent_doorway_keeps_team_roles_on_agent_profiles() {
                 mode: None,
                 model: None,
                 effort: None,
+                fast: None,
                 budget: None,
                 auto_compact: None,
                 system_prompt_file: None,

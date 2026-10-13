@@ -170,6 +170,9 @@ pub struct ResolvedProfile {
     pub layers: Vec<String>,
     pub launch: crate::agents::LaunchParams,
     pub auto_compact: Option<String>,
+    /// Fast mode as the chain set it; unset is off. Kept apart from
+    /// `launch.fast` so a nearer layer's `false` wins over a base's `true`.
+    pub fast: Option<bool>,
     pub system_prompt_file: Option<crate::config::PromptSource>,
     pub append_system_prompt_files: Vec<crate::config::PromptSource>,
     pub skills: Option<Vec<crate::config::SkillName>>,
@@ -191,6 +194,7 @@ impl ResolvedProfile {
             layers: Vec::new(),
             launch: crate::agents::LaunchParams::default(),
             auto_compact: None,
+            fast: None,
             system_prompt_file: None,
             append_system_prompt_files: Vec::new(),
             skills: None,
@@ -222,6 +226,7 @@ impl ResolvedProfile {
         if self.auto_compact.is_none() {
             self.auto_compact.clone_from(&layer.auto_compact);
         }
+        self.fast = self.fast.or(layer.fast);
         if self.system_prompt_file.is_none() {
             self.system_prompt_file
                 .clone_from(&layer.system_prompt_file);
@@ -242,6 +247,9 @@ impl ResolvedProfile {
         }
         if let Some(mode) = binding.mode {
             self.launch.mode = Some(mode);
+        }
+        if binding.fast.is_some() {
+            self.fast = binding.fast;
         }
         for (target, source) in [
             (&mut self.launch.model, &binding.model),
@@ -1104,7 +1112,7 @@ pub fn resolve_profile(name: &str, profiles: &ProfilesConfig) -> Result<Resolved
         .render_preset(&profile_preset(&resolved))
         .map_err(|err| LayoutErr::InvalidProfile {
             profile: name.to_owned(),
-            reason: err.to_string(),
+            reason: profile_preset_reason(&err),
         })?;
     normalize_budget(&mut resolved.launch.budget, name)?;
     Ok(resolved)
@@ -1478,6 +1486,7 @@ fn agent_cell_from(
             profile,
             mode,
             role,
+            fast: resolved.fast == Some(true),
             ..resolved.launch.clone()
         },
     }
@@ -1491,7 +1500,7 @@ fn render_profile_args(name: &str, resolved: &ResolvedProfile) -> Result<Vec<Str
         .render_preset(&profile_preset(resolved))
         .map_err(|err| LayoutErr::InvalidProfile {
             profile: name.to_owned(),
-            reason: err.to_string(),
+            reason: profile_preset_reason(&err),
         })?;
     if let Some(mode) = resolved.launch.mode {
         argv.extend(adapter.spec().launch.permission_args(mode));
@@ -1510,11 +1519,22 @@ fn render_profile_args(name: &str, resolved: &ResolvedProfile) -> Result<Vec<Str
     Ok(argv)
 }
 
+/// Why a profile's launch fields do not render, naming the profile field.
+fn profile_preset_reason(err: &crate::agents::PresetErr) -> String {
+    match err {
+        crate::agents::PresetErr::UnsupportedFast { agent, fix } => format!(
+            "field `fast = true`: agent `{agent}` has no fast-mode launch switch; {fix}, or remove `fast`"
+        ),
+        crate::agents::PresetErr::UnsupportedField { .. } => err.to_string(),
+    }
+}
+
 fn profile_preset(resolved: &ResolvedProfile) -> crate::agents::LaunchPreset {
     crate::agents::LaunchPreset {
         model: resolved.launch.model.clone(),
         effort: resolved.launch.effort.clone(),
         auto_compact: resolved.auto_compact.clone(),
+        fast: resolved.fast.filter(|fast| *fast),
         ..Default::default()
     }
 }
@@ -1979,11 +1999,15 @@ fn rebase_onto(mut original: ResolvedProfile, base: Option<&ResolvedProfile>) ->
         if base.launch.model.is_some() {
             original.launch.model.clone_from(&base.launch.model);
         }
+        if base.fast.is_some() {
+            original.fast = base.fast;
+        }
         if original.args.is_none() {
             original.args.clone_from(&base.args);
         }
     } else {
         original.launch.model.clone_from(&base.launch.model);
+        original.fast = base.fast;
         original.args.clone_from(&base.args);
     }
 

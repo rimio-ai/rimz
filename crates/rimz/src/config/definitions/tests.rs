@@ -1149,6 +1149,60 @@ fn unsupported_preset_fields_fail_at_the_definition() {
 }
 
 #[test]
+fn fast_on_an_unsupported_kind_fails_at_the_definition() {
+    let root = fixture();
+    definition(
+        root.path(),
+        "agents/quick.md",
+        "agent: cursor\nfast: true",
+        "",
+    );
+    definition(
+        root.path(),
+        "agents/off.md",
+        "agent: cursor\nfast: false",
+        "",
+    );
+    definition(root.path(), "agents/swift.md", "agent: amp\nfast: true", "");
+    definition(
+        root.path(),
+        "agents/steady.md",
+        "agent: swift\nfast: false",
+        "",
+    );
+    let loaded = load(
+        root.path(),
+        SkillCheck::Skip,
+        &CommandsConfig::default(),
+        &crate::config::tiers::TierConfig::default(),
+        Some(272_000),
+    );
+    assert!(
+        loaded.errors.iter().any(|error| error.path
+            == root.path().join("agents/quick.md")
+            && error.message
+                == "sets `fast: true`, but cursor has no fast-mode launch switch; choose a fast model id with --model, e.g. claude-opus-5-5-fast, or remove `fast`"),
+        "{:?}",
+        loaded.errors
+    );
+    assert!(!loaded.agent_profiles.0.contains_key("quick"));
+    assert_eq!(
+        loaded.agent_profiles.0.get("off").map(|p| p.fast),
+        Some(Some(false)),
+        "{:?}",
+        loaded.errors
+    );
+    assert_eq!(
+        loaded.agent_profiles.0.get("swift").map(|p| p.fast),
+        Some(Some(true)),
+        "{:?}",
+        loaded.errors
+    );
+    // A child's own `fast: false` wins over its parent's `true`.
+    assert_eq!(loaded.agent_profiles.0["steady"].fast, Some(false));
+}
+
+#[test]
 fn duplicate_team_names_remove_all_seats_and_sources() {
     let root = team_fixture();
     team_definition(root.path(), TEAM_STAGES, TEAM_ROLES, "Pipeline.");

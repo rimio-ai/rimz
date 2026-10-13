@@ -245,6 +245,14 @@ static CODEX_DESCRIPTOR: AgentSpec = AgentSpec {
                 flags: &["-c", "--config"],
                 key: "model_instructions_file",
             }),
+            // Core keeps the tier only with feature `fast_mode` on, and a user
+            // config may switch the feature off.
+            fast: super::FastSwitch::Args(&[
+                "-c",
+                "service_tier=fast",
+                "-c",
+                "features.fast_mode=true",
+            ]),
         },
     },
 };

@@ -173,9 +173,15 @@ static CLAUDE_DESCRIPTOR: AgentSpec = AgentSpec {
             model: Some(super::StaticPresetMatcher::Flag(&["--model"])),
             effort: Some(super::StaticPresetMatcher::Flag(&["--effort"])),
             system_prompt_file: Some(super::StaticPresetMatcher::Flag(&["--system-prompt-file"])),
+            fast: super::FastSwitch::Args(&["--settings", CLAUDE_FAST_SETTINGS]),
         },
     },
 };
+
+/// Claude's fast switch: the documented `fastMode` settings key, rendered as an
+/// inline settings member and merged into the launch's one `--settings` by the
+/// process compiler, since Claude honours only the last `--settings`.
+const CLAUDE_FAST_SETTINGS: &str = r#"{"fastMode":true}"#;
 
 const CLAUDE_COVERAGE: CoverageAnnotations = CoverageAnnotations {
     turn_lifecycle: ConcernCoverage::Wired {
@@ -829,6 +835,32 @@ impl crate::agents::capabilities::LaunchCapability for ClaudeAdapter {
 
     fn lockdown_subagent_args(&self, extra_args: &mut Vec<String>) {
         deny_native_tool(extra_args, "Agent");
+    }
+
+    fn take_fast_settings(&self, extra_args: &mut Vec<String>) -> bool {
+        let before = extra_args.len();
+        CLAUDE_DESCRIPTOR.launch.strip_fast_args(extra_args);
+        extra_args.len() != before
+    }
+
+    fn merge_fast_settings(
+        &self,
+        (cwd, artifact_dir): (&Path, &Path),
+        extra_args: &mut Vec<String>,
+        artifact: &mut Option<crate::agents::skills::LaunchSettingsArtifact>,
+    ) -> std::result::Result<(), crate::agents::skills::LaunchSettingsErr> {
+        *artifact = merge_settings(
+            cwd,
+            artifact_dir,
+            extra_args,
+            artifact.as_ref(),
+            false,
+            |object| {
+                object.insert("fastMode".to_owned(), serde_json::Value::Bool(true));
+                Ok(())
+            },
+        )?;
+        Ok(())
     }
 
     fn allow_routine_rimz_args(

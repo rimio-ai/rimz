@@ -387,6 +387,7 @@ fn supervised_request(prompt: &str, subagent: bool) -> SupervisedRunRequest {
         system_prompt_file: None,
         append_system_prompt_files: Vec::new(),
         effort: None,
+        fast: None,
         budget: None,
         max_turns: None,
         timeout: None,

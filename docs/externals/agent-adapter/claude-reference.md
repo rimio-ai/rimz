@@ -585,6 +585,10 @@ The valid range is 100K to 1M tokens, capped at the model's context window. The 
 
 [`skillOverrides`](https://code.claude.com/docs/en/skills) accepts `"user-invocable-only"`, which leaves explicit `/skill` expansion available while removing model invocation. [`--settings`](https://code.claude.com/docs/en/cli-reference) accepts a file or inline JSON. Local probes on 2.1.282 found that keys are skill directory names, only the last `--settings` takes effect, and `*` is not a wildcard.
 
+### Fast mode
+
+`fastMode` is a Boolean [settings key](https://code.claude.com/docs/en/settings-reference): "a `fastMode: true` passed with `--settings` still counts for that session unless managed settings set this key" (read 2026-10-13). The [fast-mode page](https://code.claude.com/docs/en/fast-mode) documents the `-p` form; the interactive form is implied, not stated. Since only the last `--settings` takes effect, the key must ride in the same settings value as every other launch setting. A fast turn's usage carries `speed: "fast"`.
+
 ### Tool shell
 
 The Bash tool picks its shell in this order ([environment variables](https://code.claude.com/docs/en/env-vars#variables)): `CLAUDE_CODE_SHELL` when it names a working bash or zsh, then `$SHELL` when it names bash or zsh, then the first working zsh, then bash, found on `PATH` or in standard install locations. An invalid override is ignored, and other shells are unsupported: "Other shells such as `fish` are not supported." `CLAUDE_CODE_SHELL` arrived in [2.0.65](https://github.com/anthropics/claude-code/blob/v2.1.296/CHANGELOG.md#2065). `CLAUDE_CODE_SHELL_PREFIX` is a different variable: it wraps commands, hooks, status-line commands, and stdio MCP startup, and does not select the shell.

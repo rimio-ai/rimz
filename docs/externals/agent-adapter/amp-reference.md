@@ -469,7 +469,7 @@ The dial has four built-in modes: `low`, `medium`, `high`, and `ultra`. Each mod
 | --- | --- |
 | `-m, --mode <value>` | `low`, `medium`, `high`, `ultra`, or a plugin mode by key or label, case-insensitive. Controls the model, system prompt, and tool selection |
 | `--features <value>` | comma-separated `fast`, `plaid`, or `pro`. `plaid` enables premium ultrafast GPT-6 Astra serving and implies Fast on other models. `pro` selects GPT-5.6 Pro (OpenAI API only) |
-| `--fast` | alias for `--features fast` |
+| `--fast` | alias for `--features fast`; `amp threads continue` accepts it too, but fast is fixed when a thread is created, so it does not change a continued thread (`amp --help`, `amp threads continue --help`, 0.0.1791792883, read 2026-10-13) |
 
 Plaid requires Amp-provided inference. Linked ChatGPT subscriptions do not support it ([Plaid Speed](https://ampcode.com/news/plaid-mode)).
 

@@ -170,6 +170,8 @@ pub struct SupervisedRunRequest {
     pub system_prompt_file: Option<PathBuf>,
     pub append_system_prompt_files: Vec<PathBuf>,
     pub effort: Option<String>,
+    /// `--fast` / `--no-fast`; `None` keeps the profile's value.
+    pub fast: Option<bool>,
     pub budget: Option<crate::harness::budget::BudgetSpec>,
     pub max_turns: Option<u32>,
     pub timeout: Option<std::time::Duration>,
@@ -223,6 +225,7 @@ impl SupervisedRunRequest {
             system_prompt_file: None,
             append_system_prompt_files: Vec::new(),
             effort: None,
+            fast: None,
             budget: None,
             max_turns: None,
             timeout: None,

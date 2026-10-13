@@ -1715,6 +1715,16 @@ fn sandbox_skills_under_host_use_provider_switches() {
             let missing = skills.contains(&"missing-skill");
             let commit_listed = skills.contains(&"commit");
             request.skills = Some(skills.iter().map(|name| name.parse().unwrap()).collect());
+            // The listed-skill Claude launch is also fast: its rendered
+            // `fastMode` member lands in the same one settings file.
+            let fast = commit_listed;
+            if kind == "claude" {
+                let mut args = vec!["--settings".to_owned(), settings.display().to_string()];
+                if fast {
+                    args.extend(["--settings".to_owned(), r#"{"fastMode":true}"#.to_owned()]);
+                }
+                *request.action.extra_args_mut() = args;
+            }
             let output = env
                 .rimz()
                 .args(exec_args(&env, &request))
@@ -1786,10 +1796,11 @@ fn sandbox_skills_under_host_use_provider_switches() {
                 if !commit_listed {
                     overrides["commit"] = serde_json::json!("user-invocable-only");
                 }
-                assert_eq!(
-                    settings,
-                    serde_json::json!({"env":{"ANTHROPIC_API_KEY":"sk-secret-123"}, "theme":"dark", "skillOverrides":overrides})
-                );
+                let mut expected = serde_json::json!({"env":{"ANTHROPIC_API_KEY":"sk-secret-123"}, "theme":"dark", "skillOverrides":overrides});
+                if fast {
+                    expected["fastMode"] = serde_json::json!(true);
+                }
+                assert_eq!(settings, expected);
             }
             assert!(
                 dump.lines()

@@ -160,6 +160,30 @@ impl LaunchSpec {
         })
     }
 
+    /// The provider argv that turns fast mode on, or the refusal's fix text.
+    pub fn fast_args(self) -> Result<Vec<String>, &'static str> {
+        match self.presets.fast {
+            FastSwitch::Args(args) => Ok(args.iter().map(|arg| (*arg).to_owned()).collect()),
+            FastSwitch::Unsupported { fix } => Err(fix),
+        }
+    }
+
+    /// Remove every exact rendered fast switch from launch argv.
+    pub fn strip_fast_args(self, args: &mut Vec<String>) {
+        let FastSwitch::Args(switch) = self.presets.fast else {
+            return;
+        };
+        if switch.is_empty() {
+            return;
+        }
+        while let Some(index) = args
+            .windows(switch.len())
+            .position(|part| part.iter().zip(switch).all(|(arg, want)| arg == want))
+        {
+            args.drain(index..index + switch.len());
+        }
+    }
+
     fn render_preset(
         self,
         agent_kind: &'static str,
@@ -216,6 +240,12 @@ impl LaunchSpec {
                     });
                 }
             }
+        }
+        if preset.fast == Some(true) {
+            argv.extend(self.fast_args().map_err(|fix| PresetErr::UnsupportedFast {
+                agent: agent_kind,
+                fix,
+            })?);
         }
         Ok(argv)
     }
@@ -356,6 +386,7 @@ pub struct PresetMatchers {
     pub effort: Option<StaticPresetMatcher>,
     pub auto_compact: Option<StaticPresetMatcher>,
     pub system_prompt_file: Option<StaticPresetMatcher>,
+    pub fast: FastSwitch,
 }
 
 impl PresetMatchers {
@@ -364,6 +395,29 @@ impl PresetMatchers {
         effort: None,
         auto_compact: None,
         system_prompt_file: None,
+        fast: FastSwitch::NONE,
+    };
+}
+
+/// How a provider is launched in its fast mode (priority serving).
+///
+/// Fast is on or off: on renders the switch, off renders nothing, so the
+/// provider's own default stands. A provider without a launch switch carries
+/// the fix a refusal prints.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FastSwitch {
+    /// Exact argv appended when fast is on and stripped when a launch turns it
+    /// off. Claude's inline `--settings` member is folded into the launch's one
+    /// `--settings` at the process boundary.
+    Args(&'static [&'static str]),
+    /// No launch switch; `fix` tells the user what to do instead.
+    Unsupported { fix: &'static str },
+}
+
+impl FastSwitch {
+    /// The refusal for a provider with no fast mode RimZ can reach.
+    pub const NONE: Self = Self::Unsupported {
+        fix: "launch without --fast",
     };
 }
 

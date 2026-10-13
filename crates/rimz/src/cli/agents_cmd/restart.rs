@@ -277,6 +277,7 @@ pub(in crate::cli) fn relaunch_request(
         isolation: agent.isolation,
         model: posture.launch.model.clone(),
         effort: posture.launch.effort.clone(),
+        fast: posture.launch.fast,
         budget: posture.launch.budget.clone(),
         kind_ordinal: None,
     };
@@ -366,12 +367,14 @@ fn restart_cell(agent: &AgentState, posture: &ResumePosture) -> Cell {
                 posture.launch.record.as_deref(),
                 posture.launch.model.as_deref(),
                 posture.launch.effort.as_deref(),
+                posture.launch.fast,
             )),
             role: agent.role.clone(),
             mode: posture.launch.mode,
             isolation: agent.isolation,
             model: posture.launch.model.clone(),
             effort: posture.launch.effort.clone(),
+            fast: posture.launch.fast,
             budget: posture.launch.budget.clone(),
             ..Default::default()
         },

@@ -233,6 +233,22 @@ Grok Plan adds no arguments because Grok's `/plan` is an interactive command, an
 
 Amp has no model flag; its `--mode` selects the agent mode, and the `model` value is passed there. The `--max-turns` cap for supervised runs is in [supervised runs](./cli/agents.md#supervised-runs--p).
 
+### Fast mode
+
+The `fast` profile and role field asks the provider for its fast mode (priority serving, at a higher price). Fast is on or off. On renders the switch below; off renders nothing, so the provider's own default stands (a saved Claude `/fast`, a Codex `service_tier` in `config.toml`). The launch record keeps the effective value, so restart, fork, and resume replay it like the recorded model.
+
+| Agent | Switch |
+| --- | --- |
+| Claude Code | `"fastMode": true` inside the launch's one `--settings` |
+| Codex | `-c service_tier=fast -c features.fast_mode=true` |
+| Amp | `--fast` |
+| Cursor | refused: choose a fast model ID with `--model` (for example `claude-opus-5-5-fast`) |
+| Kimi | refused: use `--model kimi-for-coding-highspeed` |
+| Droid | refused: toggle `/fast` inside the session |
+| Every other built-in and process plugin | refused |
+
+A definition that sets `fast: true` on a kind without a switch fails at load with the fix. Claude merges `fastMode` into the same settings value as RimZ's other settings, since only the last `--settings` takes effect. Codex also turns on its `fast_mode` feature, since a user-level `fast_mode = false` otherwise drops the tier silently; a managed feature pin still wins without an error. Amp fixes fast when a thread is created, and RimZ prices Amp fast turns at the standard rate because Amp's thread file carries no fast marker.
+
 ### Launch-prompt replacement
 
 The profile fields `system-prompt-file` and `append-system-prompt-files` (and the matching `rimz agents` flags) replace the agent's system prompt. RimZ joins the base file and the appended files in order into one prompt, then hands it to the agent.

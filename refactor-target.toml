@@ -190,7 +190,8 @@ upward-dependencies = ["address"]
 # RoomAccounts::project shares the resolver's trust metadata with account standing (+1).
 # Headless schema, request, verdict, result, form operations, adapter forms and shared Codex billing (+10).
 # Entitlement shares typed per-login subscription access with projection and CLI (+1).
-surface-budget = 1030
+# The fast-mode switch declaration is shared by adapters and definition load.
+surface-budget = 1031
 
 [[module]]
 path = "crates/rimz/src/agents/park.rs"

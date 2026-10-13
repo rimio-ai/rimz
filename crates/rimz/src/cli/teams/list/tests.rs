@@ -91,6 +91,7 @@ fn team() -> Team {
             mode: None,
             model: Some("fable".to_owned()),
             effort: Some("high".to_owned()),
+            fast: None,
             budget: None,
             system_prompt_file: Some("planner.md".into()),
             append_system_prompt_files: vec!["consensus.md".into()],

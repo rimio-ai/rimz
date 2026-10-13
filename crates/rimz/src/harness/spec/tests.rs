@@ -61,6 +61,7 @@ fn profile(agent: &str) -> Profile {
         mode: None,
         model: None,
         effort: None,
+        fast: None,
         budget: None,
         auto_compact: None,
         system_prompt_file: None,
@@ -235,6 +236,7 @@ fn role(role: &str, profile: &str) -> RoleBinding {
         mode: None,
         model: None,
         effort: None,
+        fast: None,
         budget: None,
         auto_compact: None,
         system_prompt_file: None,
@@ -824,6 +826,7 @@ fn cross_kind_override_replaces_provider_fields_and_carries_portable_fields() {
             mode: Some(PermissionMode::Auto),
             model: Some("claude-model".to_owned()),
             effort: Some("high".to_owned()),
+            fast: None,
             budget: Some("$4".to_owned()),
             auto_compact: Some("200k".to_owned()),
             system_prompt_file: Some("/prompts/system.md".into()),
@@ -1339,6 +1342,46 @@ fn profile_resolution_rejects_invalid_chains_and_fields() {
 }
 
 #[test]
+fn profile_fast_follows_the_chain_and_refuses_where_unsupported() {
+    let fast = |agent: &str, fast: Option<bool>| Profile {
+        fast,
+        ..profile(agent)
+    };
+    let profiles = ProfilesConfig(BTreeMap::from([
+        ("swift".to_owned(), fast("codex", Some(true))),
+        ("steady".to_owned(), fast("swift", Some(false))),
+        ("heir".to_owned(), fast("swift", None)),
+        ("quick".to_owned(), fast("cursor", Some(true))),
+        ("calm".to_owned(), fast("cursor", Some(false))),
+    ]));
+    let switch = ["-c", "service_tier=fast", "-c", "features.fast_mode=true"];
+    for (name, want) in [
+        ("swift", true),
+        ("steady", false),
+        ("heir", true),
+        ("calm", false),
+    ] {
+        let cell = profile_cell(name, &profiles).unwrap();
+        assert_eq!(cell.launch.fast, want, "{name}");
+        assert_eq!(
+            cell.args.windows(switch.len()).any(|part| part == switch),
+            want,
+            "{name}: {:?}",
+            cell.args
+        );
+    }
+    assert_eq!(
+        profile_cell("quick", &profiles).unwrap_err().to_string(),
+        "invalid profile `quick`: field `fast = true`: agent `cursor` has no fast-mode launch switch; choose a fast model id with --model, e.g. claude-opus-5-5-fast, or remove `fast`"
+    );
+    let role = RoleBinding {
+        fast: Some(false),
+        ..role("coder", "swift")
+    };
+    assert!(!resolve_role(&role, &profiles).unwrap().fast.unwrap());
+}
+
+#[test]
 fn virtual_cells_obey_adapter_capabilities_and_profile_overrides() {
     for (raw, mode) in [
         ("pi-ask", PermissionMode::Ask),
@@ -1522,6 +1565,7 @@ fn named_teams_compile_roles_and_apply_overrides() {
                 mode: Some(PermissionMode::Ask),
                 model: Some("role-model".to_owned()),
                 effort: Some("high".to_owned()),
+                fast: None,
                 budget: None,
                 system_prompt_file: Some("/prompts/coder.md".into()),
                 auto_compact: None,
@@ -1539,6 +1583,7 @@ fn named_teams_compile_roles_and_apply_overrides() {
                 mode: None,
                 model: None,
                 effort: None,
+                fast: None,
                 budget: None,
                 system_prompt_file: Some("/prompts/role.md".into()),
                 auto_compact: None,

@@ -335,6 +335,7 @@ mod tests {
             mode: None,
             model: None,
             effort: None,
+            fast: None,
             budget: None,
             system_prompt_file: None,
             append_system_prompt_files: Vec::new(),

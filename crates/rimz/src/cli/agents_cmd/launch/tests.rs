@@ -381,6 +381,7 @@ fn team_launch_receipt_is_compact() {
                         mode: None,
                         model: None,
                         effort: None,
+                        fast: None,
                         budget: None,
                         auto_compact: None,
                         system_prompt_file: None,

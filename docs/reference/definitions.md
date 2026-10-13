@@ -52,6 +52,7 @@ Follow the project's instructions and report what you verified.
 | `mode` | `ask`, `auto`, `plan`, or `yolo`. |
 | `isolation` | `host` or `sandbox`; overrides machine policy unless `--isolation` is recorded. Inherited through definitions, unavailable on team roles or repository profiles. |
 | `effort` | Provider-specific absolute effort (YAML integer or string), or omit for the selected model's default. Relative `+N` / `-N` values are refused. |
+| `fast` | Boolean requesting the provider's [fast mode](./agent-support.md#fast-mode). Off by default; refused at load on a kind with no fast switch. |
 | `auto-compact` | Native compaction window: integer or string token count from `100k` through `1M`, inclusive; no percentages or decimals. |
 | `budget` | Dollar cap as string or number; a string such as `20/day` selects a daily cap. |
 | `keep-warm` | Prompt-cache [keep-warm](#keep-warm) horizon for a solo seat: `off` or a duration such as `2h`. |
@@ -72,9 +73,9 @@ The nearest definition setting `tier:`, `model:`, or a registered `agent:` kind 
 
 `agent:` follows only definitions in its own namespace: an agent cannot inherit a subagent or vice versa. Without `agent:`, a recognized model alias, model ID, or prefix determines the kind: Claude's roster and `claude-` prefix, and Codex's roster and `gpt-` prefix. Unknown models use the chain's kind or require `agent:` when none exists. A model implying a different kind from a registered `agent:` in the same definition is an error; a child model may change its ancestor's kind.
 
-Children inherit `tier` or `model`, `mode`, `isolation`, `effort`, `auto-compact`, `budget`, `keep-warm`, `tools`, `allowed-tools`, `skills`, `subagents`, and `model-reminder`. An explicit child field replaces the inherited value; lists never concatenate. Descriptions and trait lists are local. Parent prompt bodies are retained in order before the child's body. A bodyless definition adds no craft, so it can serve as a model-only preset on its kind base.
+Children inherit `tier` or `model`, `mode`, `isolation`, `effort`, `fast`, `auto-compact`, `budget`, `keep-warm`, `tools`, `allowed-tools`, `skills`, `subagents`, and `model-reminder`. An explicit child field replaces the inherited value; lists never concatenate. Descriptions and trait lists are local. Parent prompt bodies are retained in order before the child's body. A bodyless definition adds no craft, so it can serve as a model-only preset on its kind base.
 
-Defaults apply after inheritance: Claude uses mode `auto` and effort `xhigh`, except `fable` defaults to `high`; Codex and Pi default to effort `xhigh`. Codex aliases `astra`, `sol`, `luna`, and `terra` follow their account catalog's newest family model at fresh launch, subject to effort support; definitions retain the requested alias. Machine [model alias pins](../guide/configuration.md#model-aliases) take precedence. Resume and fork keep the session's recorded model for alias postures. A kind whose adapter declares native auto-compaction support uses the machine [`[harness] auto_compact`](../guide/configuration.md#native-auto-compaction) default (`272k` built in, `"off"` passes none); other kinds have no default window. Definitions are rejected at load if their resolved kind cannot render a supplied or inherited `model`, `effort`, or `auto-compact` field. Defaults are filled only when supported.
+Defaults apply after inheritance: Claude uses mode `auto` and effort `xhigh`, except `fable` defaults to `high`; Codex and Pi default to effort `xhigh`. Codex aliases `astra`, `sol`, `luna`, and `terra` follow their account catalog's newest family model at fresh launch, subject to effort support; definitions retain the requested alias. Machine [model alias pins](../guide/configuration.md#model-aliases) take precedence. Resume and fork keep the session's recorded model for alias postures. A kind whose adapter declares native auto-compaction support uses the machine [`[harness] auto_compact`](../guide/configuration.md#native-auto-compaction) default (`272k` built in, `"off"` passes none); other kinds have no default window. Definitions are rejected at load if their resolved kind cannot render a supplied or inherited `model`, `effort`, `fast: true`, or `auto-compact` field. Defaults are filled only when supported.
 
 ### Kind bases
 
@@ -143,7 +144,7 @@ Host isolation enforces the list through Claude's or Codex's per-launch switch; 
 | `agent` | Required direct definition name. |
 | `role` | Optional handle, defaulting to `agent`; unique within the team. |
 | `owns` | Stages owned by this role; omitted or null means none. |
-| `tier`, `model`, `mode`, `effort`, `auto-compact`, `budget`, `model-reminder`, `tools`, `allowed-tools`, `subagents`, `skills` | Overrides with the same types and inheritance as agent fields, including mutually exclusive `tier` and `model`, and absolute effort only. |
+| `tier`, `model`, `mode`, `effort`, `fast`, `auto-compact`, `budget`, `model-reminder`, `tools`, `allowed-tools`, `subagents`, `skills` | Overrides with the same types and inheritance as agent fields, including mutually exclusive `tier` and `model`, and absolute effort only. |
 | `traits` | Additional traits for this seat's leaf craft. |
 | `signals` | Optional nonempty signal-binding list. |
 | `flip-compact` | Stage-handoff compaction threshold or `off`. |

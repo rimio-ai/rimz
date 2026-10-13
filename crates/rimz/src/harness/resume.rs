@@ -304,10 +304,12 @@ pub struct ResumeSkip {
 ///
 /// A profile is durable, named configuration, so a session that launched as
 /// `@planner` comes back as a planner. A launch with a durable record replays
-/// the record's model and effort verbatim; without one, one-off `--model` /
-/// `--effort` flags typed at the original launch stay out. A resume may pass its own `--model`, `--effort`, and `--ask` /
-/// `--yolo` for that run only; `--isolation` is the one resume override the
-/// exec wrapper records.
+/// the record's model, effort, and fast mode verbatim; without one, one-off
+/// `--model` / `--effort` flags typed at the original launch stay out. A
+/// resume may pass its own `--model`, `--effort`, `--fast` / `--no-fast`, and
+/// `--ask` / `--yolo`; the exec wrapper records the model, effort, and fast
+/// mode it launched with, so a later resume replays them, and `--isolation`
+/// is recorded the same way.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ResumePosture {
     pub launch: ResumeLaunchPosture,
@@ -498,8 +500,17 @@ fn resolve_posture_with_role(
     }
     cell.launch.tier = request.stamped_tier.cloned().map(Box::new);
     if let Some(record) = request.record {
+        // Only RimZ's own switch is the record's to replace: an off record
+        // strips the switch the profile's `fast` field rendered, and leaves a
+        // switch the profile writes in raw `args` alone, as a fresh launch does.
+        let fast = match (record.fast, cell.launch.fast) {
+            (true, _) => Some(true),
+            (false, true) => Some(false),
+            (false, false) => None,
+        };
         cell.launch.model.clone_from(&record.model);
         cell.launch.effort.clone_from(&record.effort);
+        cell.launch.fast = record.fast;
         cell.launch.record = Some(Box::new(record.clone()));
         if cell
             .launch
@@ -513,6 +524,7 @@ fn resolve_posture_with_role(
             let preset = crate::agents::LaunchPreset {
                 model: record.model.clone(),
                 effort: record.effort.clone(),
+                fast,
                 ..Default::default()
             };
             let mut replaced = Vec::new();
@@ -2556,6 +2568,7 @@ pub fn restore_routed_cells(
                     model: rebased.launch.model.clone(),
                     effort: rebased.launch.effort.clone(),
                     agent: Some(base_name.to_owned()),
+                    fast: rebased.launch.fast,
                 })),
                 ..ResumeLaunchPosture::from(&rebased)
             }
@@ -2676,6 +2689,7 @@ pub fn restore_routed_cells(
         cell.isolation_default = posture.isolation_default;
         cell.launch.model = posture.model;
         cell.launch.effort = posture.effort;
+        cell.launch.fast = posture.fast;
         cell.launch.mode = posture.mode;
         cell.launch.tier = posture.tier;
         cell.launch.record = posture.record;
