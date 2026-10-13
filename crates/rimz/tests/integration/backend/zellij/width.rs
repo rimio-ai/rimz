@@ -277,7 +277,8 @@ fn sidebar_width_steps_resize_birth_and_explicit_layout_panes() {
             sidebar: sidebar.clone(),
         })
         .expect("open explicit tab");
-    let explicit = wait_for_named_sidebar_pane(xdg, &name, tab_name, || {
+    let explicit_tab_id = wait_for_named_work_pane_count(xdg, &name, tab_name, 1)[0].tab_id;
+    let explicit = wait_for_tab_sidebar_pane(xdg, &name, explicit_tab_id, || {
         "explicit tab carries sidebar".to_owned()
     });
     let pane = PaneId::from_parts(MuxName::Zellij, format!("terminal_{}", explicit.id));
