@@ -25,6 +25,12 @@ The type definitions live in `zellij-utils/src/data.rs` and the plugin shims in 
 | Layout KDL | <https://zellij.dev/documentation/creating-a-layout.html>, `zellij-utils/src/kdl/kdl_layout_parser.rs` |
 | Session resurrection | <https://zellij.dev/documentation/session-resurrection.html>, `zellij-server/src/background_jobs.rs` |
 
+## CLI action reply association
+
+On supported releases through 0.45.1, `SessionState::new_client` reuses the lowest free client id. A delayed `RemoveClient` from a connection probe can remove a different action client's sender after that id is reused, and a `Log` reply addressed by the bare id can reach another client. Action stdout can therefore be empty or belong to another action. Upstream [55d077a5](https://github.com/zellij-org/zellij/commit/55d077a5) retires client ids instead of reusing them and removes the connection probe's immediate cleanup. Sources: [`SessionState::new_client` and `ConnStatus`](https://github.com/zellij-org/zellij/blob/v0.45.1/zellij-server/src/lib.rs), [issue #5270](https://github.com/zellij-org/zellij/issues/5270), [PR #5272](https://github.com/zellij-org/zellij/pull/5272) (closed in favor of [#5630](https://github.com/zellij-org/zellij/pull/5630)).
+
+At RimZ's 0.44.2 floor, `list-tabs --json` serializes `TabInfo`, including its stable `tab_id`; `list-panes --json` serializes `PaneListEntry`, also including `tab_id`. Sources: [`TabInfo` and `PaneListEntry`](https://github.com/zellij-org/zellij/blob/v0.44.2/zellij-utils/src/data.rs), [`format_tabs_as_json`](https://github.com/zellij-org/zellij/blob/v0.44.2/zellij-server/src/route.rs). Both list replies are JSON arrays, not scalar ids or objects.
+
 ## Plugin API
 
 Plugins are wasm32-wasip1 binaries that run inside the Zellij server's plugin host.
