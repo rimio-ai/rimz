@@ -176,6 +176,12 @@ impl Rig {
             .expect("paint");
     }
 
+    fn step(&mut self, inbox: &mut WakeupInbox) {
+        self.state
+            .step(inbox, &mut self.fetch, &mut self.terminal)
+            .expect("step");
+    }
+
     fn next_request(&mut self) -> Option<FetchRequest> {
         self.requests.try_recv().ok()
     }

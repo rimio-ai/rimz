@@ -352,7 +352,7 @@ Provider budgets are account-scoped: every session of a provider shares one acco
 
 ## The serve loop
 
-`rimz sidebar serve` is the pane's command. Its supervisor owns the pane command's PID and the pane's terminal, and hands the painting to the session's room host, so a painter crash, a reload, and a self-close request each resolve without losing the pane ([state.md → The room host and its attachments](./state.md#the-room-host-and-its-attachments)). The pane's loop runs on a fixed timestep, folds each wakeup through [`loop_state.rs`](../../../crates/rimz/src/sidebar_pane/app/loop_state.rs), and paints from the last committed snapshot; data flow into it is [state.md](./state.md#one-fetch-cycle).
+`rimz sidebar serve` is the pane's command. Its supervisor owns the pane command's PID and the pane's terminal, and hands the painting to the session's room host, so a painter crash, a reload, and a self-close request each resolve without losing the pane ([state.md → The room host and its attachments](./state.md#the-room-host-and-its-attachments)). The pane's loop runs on a fixed timestep, folds each wakeup through [`LoopState::step`](../../../crates/rimz/src/sidebar_pane/app/loop_state.rs) as its per-iteration body, and paints from the last committed snapshot; data flow into it is [state.md](./state.md#one-fetch-cycle). The frame-activity read that decides the paint follows wakeup dispatch, so an input that starts a glide keeps its 16 ms boundary.
 
 A pane the host is painting reaches its supervisor over the attach stream ([`supervise.rs`](../../../crates/rimz/src/sidebar_pane/supervise.rs)):
 
