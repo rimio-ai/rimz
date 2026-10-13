@@ -344,6 +344,10 @@ rimz agents resume                # in a worktree: that lane; at the project roo
 
 Members are root sessions: subagent children never come back through resume; their parent relaunches what it still needs. The durable lane listing's `MEMBERS` and `LIVE` counts exclude children.
 
+At the project root, the listing shows only lanes with closed members, in columns `LANE MEMBERS LIVE CLOSED LAST ACTIVE`. It ends with `resume one: rimz agents resume '#docs'`, using the first listed lane's quoted label. With no lanes it prints `nothing to resume`; when every lane is already live it prints `nothing to resume: every lane's agents are live (rimz agents list --all)`. Both exit 0.
+
+Before opening any pane or tab, resume announces `resuming N closed agent(s) in '<lane>'` for a partial restore, or `resuming N agent(s) in '<lane>'` for a full restore (`relaunching` with `--fresh`). Any `skipped live <label>` lines precede the announcement. There is no second receipt after opening; a failed open still reports its error.
+
 When rebuilding a team tab, a member the lane cannot resume comes back as a fresh seat; its old session ends `rimz.seat-refilled` when the tab opens.
 
 | Lane state | Result |

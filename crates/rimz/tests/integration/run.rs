@@ -881,6 +881,13 @@ fn assert_tier_launch(routing: &str, surface: &str) {
         output
     })
     .unwrap();
+    if lane && refilled {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.starts_with("resuming 3 agents in '#restore'\n"),
+            "the announcement must precede even a failed tab open: {stdout}"
+        );
+    }
     let events = env.read_events();
     if refilled {
         let refills: Vec<_> = events

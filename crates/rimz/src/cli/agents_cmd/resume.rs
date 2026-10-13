@@ -297,7 +297,7 @@ pub(super) fn resume_lane(
     }
 
     match action {
-        LaneResumeAction::List { lanes } => render_lane_list(lanes),
+        LaneResumeAction::List { lanes } => render_lane_list(&mut crate::cli::render::out(), lanes),
         LaneResumeAction::Focus {
             lane_label,
             pane_id,
@@ -337,6 +337,14 @@ pub(super) fn resume_lane(
             report_resume_skips(&skipped)?;
             report_posture_warnings(&warnings)?;
             let resumed = commands.len();
+            for label in live_labels {
+                writeln!(std::io::stdout().lock(), "skipped live {label}")?;
+            }
+            writeln!(
+                std::io::stdout().lock(),
+                "resuming {resumed} closed agent{} in '{lane_label}'",
+                if resumed == 1 { "" } else { "s" }
+            )?;
             let direction = rimz::mux::detect_terminal_size()
                 .map(|(cols, rows)| rimz::mux::split_along_longer_edge(cols, rows))
                 .unwrap_or_default();
@@ -355,14 +363,6 @@ pub(super) fn resume_lane(
                     focus: focus.takes_focus(),
                 })?;
             }
-            for label in live_labels {
-                writeln!(std::io::stdout().lock(), "skipped live {label}")?;
-            }
-            writeln!(
-                std::io::stdout().lock(),
-                "resumed {resumed} closed agent{} in '{lane_label}'",
-                if resumed == 1 { "" } else { "s" }
-            )?;
             Ok(())
         }
         LaneResumeAction::RestoreClosed {
@@ -376,6 +376,12 @@ pub(super) fn resume_lane(
                 tab_agents,
             } = plan.materialize(&store, &workspace.session_name)?;
             let count = plan.tabs.iter().map(ResumeTab::pane_count).sum::<usize>();
+            writeln!(
+                std::io::stdout().lock(),
+                "{} {count} agent{} in '{lane_label}'",
+                if fresh { "relaunching" } else { "resuming" },
+                if count == 1 { "" } else { "s" }
+            )?;
             for (index, (tab, agents)) in plan.tabs.into_iter().zip(tab_agents).enumerate() {
                 if let Err(error) = room.open_resume_tab(tab, focus.takes_focus()) {
                     for launch in plan
@@ -401,12 +407,6 @@ pub(super) fn resume_lane(
                     rimz::harness::assist_log::record_tier_fallbacks(launch.batch.identities());
                 }
             }
-            writeln!(
-                std::io::stdout().lock(),
-                "{} {count} agent{} in '{lane_label}'",
-                if fresh { "relaunched" } else { "resumed" },
-                if count == 1 { "" } else { "s" }
-            )?;
             Ok(())
         }
     }
@@ -499,9 +499,25 @@ fn report_discovery_skips(skips: &[LocalSessionObservation]) -> Result<()> {
     Ok(())
 }
 
-fn render_lane_list(lanes: Vec<LaneSummary>) -> Result<()> {
-    let mut table = crate::cli::render::Table::new(["LANE", "MEMBERS", "LIVE", "CLOSED", "AGE"])
-        .right(&[1, 2, 3, 4]);
+fn render_lane_list(out: &mut impl Write, mut lanes: Vec<LaneSummary>) -> Result<()> {
+    let had_lanes = !lanes.is_empty();
+    lanes.retain(|lane| lane.members > lane.live);
+    let Some(first) = lanes.first() else {
+        writeln!(
+            out,
+            "{}",
+            if had_lanes {
+                "nothing to resume: every lane's agents are live (rimz agents list --all)"
+            } else {
+                "nothing to resume"
+            }
+        )?;
+        return Ok(());
+    };
+    let hint = shlex::try_quote(&first.label)?.into_owned();
+    let mut table =
+        crate::cli::render::Table::new(["LANE", "MEMBERS", "LIVE", "CLOSED", "LAST ACTIVE"])
+            .right(&[1, 2, 3, 4]);
     let now = Timestamp::now();
     for lane in lanes {
         table.row([
@@ -512,13 +528,53 @@ fn render_lane_list(lanes: Vec<LaneSummary>) -> Result<()> {
             crate::cli::render::cell(crate::cli::render::rel_age(lane.freshest, now)),
         ]);
     }
-    table.render(&mut crate::cli::render::out())?;
+    table.render(out)?;
+    writeln!(out, "resume one: rimz agents resume {hint}")?;
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lane_list_only_offers_closed_members_with_a_quoted_hint() {
+        let lane = |label: &str, members, live| LaneSummary {
+            path: Path::new("/repo").to_owned(),
+            label: label.to_owned(),
+            members,
+            live,
+            freshest: Timestamp::UNIX_EPOCH,
+        };
+        let mut out = Vec::new();
+        render_lane_list(&mut out, vec![lane("#live", 1, 1), lane("#docs", 2, 1)]).unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert!(!text.contains("#live"), "{text}");
+        assert!(text.contains("LAST ACTIVE"), "{text}");
+        assert!(text.contains("#docs"));
+        assert!(text.ends_with("resume one: rimz agents resume '#docs'\n"));
+    }
+
+    #[test]
+    fn lane_list_explains_both_empty_states() {
+        for (lanes, expected) in [
+            (vec![], "nothing to resume\n"),
+            (
+                vec![LaneSummary {
+                    path: Path::new("/repo").to_owned(),
+                    label: "#live".to_owned(),
+                    members: 1,
+                    live: 1,
+                    freshest: Timestamp::UNIX_EPOCH,
+                }],
+                "nothing to resume: every lane's agents are live (rimz agents list --all)\n",
+            ),
+        ] {
+            let mut out = Vec::new();
+            render_lane_list(&mut out, lanes).unwrap();
+            assert_eq!(String::from_utf8(out).unwrap(), expected);
+        }
+    }
 
     #[test]
     fn selector_translation_preserves_cli_precedence() {
