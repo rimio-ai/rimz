@@ -111,10 +111,9 @@ user-login = "Manishearth"
 user-name = "Manish Goregaokar"
 
 [[publisher.libc]]
-version = "0.2.186"
-when = "2026-04-23"
-user-id = 55123
-user-login = "rust-lang-owner"
+version = "0.2.190"
+when = "2026-10-02"
+trusted-publisher = "github:rust-lang/libc"
 
 [[publisher.litemap]]
 version = "0.8.2"
