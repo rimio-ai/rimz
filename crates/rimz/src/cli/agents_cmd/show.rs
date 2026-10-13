@@ -3,12 +3,12 @@ use super::*;
 use super::list::agent_pr;
 use super::report::{
     AgentReportEntry, PrInfo, ReportOverrides, SelfIdentity, build_entry, child_for_agent,
-    context_cell, row_for_agent, status_style,
+    row_for_agent, status_style,
 };
 use super::runs_lookup::{agent_name, newest_run_by_ref, newest_run_for_agent, print_run_line};
 use crate::cli::render;
 
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, Default)]
 struct ShowReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     tmp_dir: Option<std::path::PathBuf>,
@@ -22,6 +22,8 @@ struct ShowReport {
     run: Option<RunRecord>,
     #[serde(skip_serializing_if = "Option::is_none")]
     ask: Option<crate::cli::transcript::AskView>,
+    #[serde(skip)]
+    ask_next_step: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     messages: Vec<ShowMessage>,
     #[serde(skip)]
@@ -63,10 +65,6 @@ fn collect_show_report(
         Err(err) => (None, false, Some(err)),
     };
     let run = newest_run_by_ref(store, reference, agent.as_ref())?;
-    let ask = match agent.as_ref() {
-        Some(agent) => crate::cli::transcript::latest_ask_view(workspace, agent)?,
-        None => None,
-    };
     let pane_capture = if capture {
         let agent = agent.as_ref().ok_or_else(|| {
             anyhow::anyhow!("no live agent matches `{reference}`; nothing to capture")
@@ -132,6 +130,13 @@ fn collect_show_report(
             },
         )
     });
+    let (ask, ask_next_step) = match agent.as_ref().zip(report_agent.as_ref()) {
+        Some((agent, entry)) => (
+            crate::cli::transcript::latest_ask_view(workspace, agent)?,
+            show_ask_next_step(store.paths(), agent, &entry.handle)?,
+        ),
+        None => (None, None),
+    };
     Ok((
         ShowReport {
             tmp_dir: agent
@@ -149,6 +154,7 @@ fn collect_show_report(
             stale,
             run,
             ask,
+            ask_next_step,
             messages,
             system_messages_hidden,
             capture: pane_capture,
@@ -159,7 +165,7 @@ fn collect_show_report(
 }
 
 fn render_show_report(
-    report: ShowReport,
+    mut report: ShowReport,
     store: &rimz::Store,
     deferred_error: Option<anyhow::Error>,
 ) -> Result<()> {
@@ -175,51 +181,69 @@ fn render_show_report(
     };
     let now = jiff::Timestamp::now();
     let mut out = render::out();
-    render_agent_section(&mut out, agent)?;
-    render_activity_section(&mut out, agent, report.ask.as_ref(), report.stale, now)?;
-    render_context_section(&mut out, agent, now)?;
-    render_placement_section(&mut out, agent)?;
-    if let Some(tmp_dir) = &report.tmp_dir {
-        writeln!(
-            out,
-            "  tmp: {} (/tmp in a sandboxed pane)",
-            tmp_dir.display()
-        )?;
-        writeln!(out)?;
+    if report.run.is_none() {
+        report.run = newest_run_for_agent(store, state).ok().flatten();
     }
-    let fallback_run = if report.run.is_none() {
-        newest_run_for_agent(store, state).ok().flatten()
-    } else {
-        None
-    };
-    if let Some(run) = report.run.as_ref().or(fallback_run.as_ref()) {
-        render_run_section(&mut out, run, now)?;
+    render_show_sections(&mut out, &report, agent, now)?;
+    Ok(())
+}
+
+fn render_show_sections(
+    w: &mut impl Write,
+    report: &ShowReport,
+    agent: &AgentReportEntry,
+    now: jiff::Timestamp,
+) -> Result<()> {
+    render_agent_section(w, agent)?;
+    render_activity_section(
+        w,
+        agent,
+        report.ask.as_ref(),
+        report.ask_next_step.as_deref(),
+        report.stale,
+        now,
+    )?;
+    if let Some(run) = report.run.as_ref() {
+        render_run_section(w, run, now)?;
     }
     if !report.messages.is_empty() || report.system_messages_hidden > 0 {
         render_messages_section(
-            &mut out,
+            w,
             &report.messages,
             report.system_messages_hidden,
-            &state.agent_id,
+            &agent.id,
         )?;
     }
     if let Some(view) = report.recent_transcript.as_ref() {
-        section(&mut out, "Recent transcript")?;
+        section(w, "Recent transcript")?;
         let tz = crate::cli::machine_config().time_zone();
-        crate::cli::transcript::render_lines_to(
-            &mut out,
-            view,
-            &tz,
-            render::prose::Prose::for_stdout(),
-        )?;
+        crate::cli::transcript::render_lines_to(w, view, &tz, render::prose::Prose::for_stdout())?;
+        writeln!(w)?;
     }
+    render_context_section(w, agent, now)?;
+    render_identity_section(w, agent, report.tmp_dir.as_deref())?;
+    writeln!(w)?;
     if let Some(capture) = report.capture.as_ref() {
-        if report.recent_transcript.is_some() {
-            writeln!(out)?;
-        }
-        render_capture_section(&mut out, capture)?;
+        render_capture_section(w, capture)?;
     }
     Ok(())
+}
+
+fn show_ask_next_step(
+    paths: &rimz::StatePaths,
+    state: &AgentState,
+    handle: &str,
+) -> Result<Option<String>> {
+    Ok(
+        rimz::agents::read_open_ask(paths, state, None)?.map(|detail| {
+            crate::cli::ask_commands::AskCommands {
+                detail: &detail,
+                pane: handle,
+                target: handle,
+            }
+            .next_step()
+        }),
+    )
 }
 
 pub(super) fn show_agent(
@@ -331,86 +355,91 @@ fn render_capture_section(
 }
 
 fn render_agent_section(w: &mut impl Write, agent: &AgentReportEntry) -> std::io::Result<()> {
-    section(w, "Agent")?;
-    let mut kv = render::KeyVals::new().indent(2);
-    kv.push(
-        "handle",
-        render::cell(agent.handle.as_str()).fg(render::palette::identity(agent.kind.as_str())),
-    );
-    kv.push(
-        "kind",
-        render::cell(agent.kind.to_string()).fg(render::palette::meta()),
-    );
-    if let Some(login) = &agent.login {
-        kv.push(
-            "account",
-            render::cell(login.to_string()).fg(render::palette::meta()),
-        );
+    let handle = agent
+        .handle
+        .split_once('#')
+        .map_or(agent.handle.as_str(), |(handle, _)| handle);
+    let identity = render::paint(render::palette::identity(agent.kind.as_str()), handle);
+    let mut facts = vec![
+        agent
+            .login
+            .as_ref()
+            .map_or_else(|| agent.kind.to_string(), ToString::to_string),
+    ];
+    if let Some(profile) = &agent.profile {
+        facts.push(profile.clone());
     }
-    if let Some(profile) = agent.profile.as_deref() {
-        kv.push("profile", render::cell(profile).fg(render::palette::meta()));
+    if let Some(model) = &agent.model.label {
+        facts.push(model.clone());
     }
-    if let Some(role) = agent.role.as_deref() {
-        kv.push("role", render::cell(role).fg(render::palette::meta()));
-    }
-    if let Some(team) = agent.team.as_deref() {
-        kv.push("team", render::cell(team).fg(render::palette::meta()));
-    }
-    if let Some(name) = agent.name.as_deref() {
-        kv.push("name", render::cell(name));
-    }
-    kv.push("session", render::cell(agent.id.to_string()));
-    if let Some(registered_at) = agent.timeline.registered_at {
-        kv.push("registered_at", render::cell(registered_at.to_string()));
-    }
-    if !agent.launch_warnings.is_empty() {
-        kv.push_lines(
-            "launch_warnings",
-            agent
-                .launch_warnings
-                .iter()
-                .map(|warning| vec![render::cell(warning.as_str()).fg(render::palette::warn())]),
-        );
-    }
-    kv.render(w)?;
-    writeln!(w)
+    let address = if handle == agent.handle {
+        String::new()
+    } else {
+        format!("  ({})", agent.handle)
+    };
+    writeln!(w, "{identity}  {}{address}", facts.join(" · "))
 }
 
 pub(super) fn render_activity_section(
     w: &mut impl Write,
     agent: &AgentReportEntry,
-    ask: Option<&crate::cli::transcript::AskView>,
+    ask_view: Option<&crate::cli::transcript::AskView>,
+    next_step: Option<&str>,
     stale: bool,
     now: jiff::Timestamp,
 ) -> std::io::Result<()> {
-    section(w, "Activity")?;
-    let mut kv = render::KeyVals::new().indent(2);
-    kv.push(
-        "description",
-        render::cell(agent.description.as_deref().unwrap_or("-")).dash(),
-    );
-    kv.push(
-        "status",
-        render::cell(agent.status.as_str()).fg(status_style(agent)),
-    );
+    let mut state = render::paint(status_style(agent), agent.status.as_str());
     if agent.phase != rimz::agents::TurnPhase::Idle {
-        kv.push("phase", render::cell(agent.phase.as_str()));
+        state.push_str(&format!(" ({})", agent.phase.as_str()));
     }
-    if let Some(started) = agent.timeline.turn_started_at {
-        kv.push("turn_started", render::cell(started.to_string()));
-        kv.push("turn_elapsed", render::cell(render::rel_age(started, now)));
+    if agent.status == rimz::agents::AgentStatus::Running
+        && let Some(started) = agent.timeline.turn_started_at
+    {
+        state.push_str(&format!(" · turn {}", duration_label(started, now)));
     }
-    kv.push(
-        "last_activity",
-        render::cell(render::rel_age(agent.timeline.last_activity, now)),
-    );
-    if let Some(error) = agent.turn_error.as_ref() {
-        kv.push(
-            "turn_error",
-            render::cell(error.label.as_deref().unwrap_or("provider API error"))
-                .fg(render::palette::alarm()),
-        );
+    state.push_str(&format!(
+        " · last seen {}",
+        render::rel_age(agent.timeline.last_seen, now)
+    ));
+    if stale {
+        state.push_str(" · stale");
     }
+    writeln!(w, "{state}")?;
+    if agent.status == rimz::agents::AgentStatus::Waiting {
+        let summary = ask_view
+            .map(crate::cli::transcript::ask_summary)
+            .unwrap_or_else(|| {
+                render::one_line(agent.ask.as_ref().map_or_else(
+                    || agent.description.as_deref().unwrap_or("in the pane"),
+                    |ask| {
+                        ask.detail
+                            .as_deref()
+                            .unwrap_or_else(|| ask.kind.short_label())
+                    },
+                ))
+            });
+        let pane_step = agent
+            .ask
+            .is_none()
+            .then(|| format!("rimz agents focus {}", agent.handle));
+        let step = next_step
+            .or(pane_step.as_deref())
+            .map(|step| format!(" → {step}"))
+            .unwrap_or_default();
+        writeln!(w, "  waiting: {summary}{step}")?;
+    }
+    if matches!(
+        agent.status,
+        rimz::agents::AgentStatus::Paused | rimz::agents::AgentStatus::Failed
+    ) && let Some(description) = &agent.description
+    {
+        writeln!(w, "  {}: {description}", agent.status.as_str())?;
+    } else if !(agent.status == rimz::agents::AgentStatus::Waiting && agent.ask.is_none())
+        && let Some(description) = &agent.description
+    {
+        writeln!(w, "{description}")?;
+    }
+    let mut kv = render::KeyVals::new().indent(2);
     if let Some(pending) = agent.idle_stop.as_ref() {
         let requester = pending
             .stop
@@ -433,15 +462,6 @@ pub(super) fn render_activity_section(
             )),
         );
     }
-    if let Some(ask) = ask {
-        kv.push(
-            "ask",
-            render::cell(crate::cli::transcript::ask_summary(ask)).fg(render::palette::warn()),
-        );
-    }
-    if stale {
-        kv.push("stale", render::cell("yes").fg(render::palette::faint()));
-    }
     kv.render(w)?;
     writeln!(w)
 }
@@ -452,45 +472,31 @@ fn render_context_section(
     now: jiff::Timestamp,
 ) -> std::io::Result<()> {
     section(w, "Context")?;
+    let fill = agent
+        .context
+        .fill_pct
+        .map(|pct| format!("{pct}%"))
+        .unwrap_or_else(|| "-".into());
+    let cost = agent
+        .stats
+        .cost_usd
+        .map(fmt_cost)
+        .unwrap_or_else(|| "-".into());
+    let active = agent
+        .stats
+        .active_secs
+        .map(render::age_label)
+        .unwrap_or_else(|| "-".into());
+    writeln!(
+        w,
+        "  {fill} of {} · {} in window · {} spent ({} cache read) · {} · {active} active",
+        opt_compact_count(agent.context.window),
+        opt_compact_count(agent.context.used_tokens),
+        opt_compact_count(agent.stats.total_tokens),
+        opt_compact_count(agent.stats.cache_read_tokens),
+        render::paint(render::palette::money(), &cost)
+    )?;
     let mut kv = render::KeyVals::new().indent(2);
-    kv.push(
-        "model",
-        render::cell(agent.model.label.as_deref().unwrap_or("-"))
-            .dash()
-            .fg(render::palette::muted()),
-    );
-    kv.push("fill", context_cell(agent.context.fill_pct));
-    kv.push(
-        "window",
-        render::cell(
-            agent
-                .context
-                .window
-                .map(|tokens| tokens.to_string())
-                .unwrap_or_else(|| "-".to_owned()),
-        )
-        .dash(),
-    );
-    kv.push(
-        "total_tokens",
-        render::cell(opt_count(agent.stats.total_tokens)).dash(),
-    );
-    kv.push(
-        "fresh_input_tokens",
-        render::cell(opt_count(agent.stats.fresh_input_tokens)).dash(),
-    );
-    kv.push(
-        "cache_read_tokens",
-        render::cell(opt_count(agent.stats.cache_read_tokens)).dash(),
-    );
-    kv.push(
-        "cache_write_tokens",
-        render::cell(opt_count(agent.stats.cache_write_tokens)).dash(),
-    );
-    kv.push(
-        "output_tokens",
-        render::cell(opt_count(agent.stats.output_tokens)).dash(),
-    );
     kv.push(
         "compactions",
         render::cell(agent.context.compactions.to_string()),
@@ -520,21 +526,6 @@ fn render_context_section(
             )),
         );
     }
-    if let Some(active_secs) = agent.stats.active_secs {
-        kv.push("active", render::cell(render::age_label(active_secs)));
-    }
-    kv.push(
-        "cost",
-        render::cell(
-            agent
-                .stats
-                .cost_usd
-                .map(fmt_cost)
-                .unwrap_or_else(|| "-".to_owned()),
-        )
-        .dash()
-        .fg(render::palette::money()),
-    );
     kv.push(
         "budget",
         render::cell(budget_summary(&agent.budget))
@@ -579,12 +570,32 @@ fn format_tool_calls(tool_calls: &std::collections::BTreeMap<String, u32>) -> St
     }
 }
 
-pub(super) fn render_placement_section(
+pub(super) fn render_identity_section(
     w: &mut impl Write,
     agent: &AgentReportEntry,
+    tmp_dir: Option<&Path>,
 ) -> std::io::Result<()> {
-    section(w, "Placement")?;
+    section(w, "Identity")?;
     let mut kv = render::KeyVals::new().indent(2);
+    kv.push("session", render::cell(agent.id.to_string()));
+    if let Some(registered) = agent.timeline.registered_at {
+        kv.push("registered", render::cell(registered.to_string()));
+    }
+    if let Some(login) = &agent.login {
+        kv.push(
+            "account",
+            render::cell(login.to_string()).fg(render::palette::meta()),
+        );
+    }
+    for (label, value) in [
+        ("role", &agent.role),
+        ("team", &agent.team),
+        ("name", &agent.name),
+    ] {
+        if let Some(value) = value {
+            kv.push(label, render::cell(value));
+        }
+    }
     kv.push(
         "channel",
         render::cell(agent.placement.lane_label.as_deref().unwrap_or("-")).dash(),
@@ -608,8 +619,22 @@ pub(super) fn render_placement_section(
         "pane",
         render::cell(agent.placement.pane.as_deref().unwrap_or("-")).dash(),
     );
-    kv.render(w)?;
-    writeln!(w)
+    if let Some(tmp_dir) = tmp_dir {
+        kv.push(
+            "tmp",
+            render::cell(format!("{} (/tmp in a sandboxed pane)", tmp_dir.display())),
+        );
+    }
+    if !agent.launch_warnings.is_empty() {
+        kv.push_lines(
+            "launch_warnings",
+            agent
+                .launch_warnings
+                .iter()
+                .map(|warning| vec![render::cell(warning).fg(render::palette::warn())]),
+        );
+    }
+    kv.render(w)
 }
 
 pub(super) fn format_pr_info(pr: PrInfo) -> String {
@@ -636,37 +661,37 @@ fn render_run_section(
     now: jiff::Timestamp,
 ) -> std::io::Result<()> {
     section(w, "Run")?;
-    let mut kv = render::KeyVals::new().indent(2);
-    kv.push("id", render::cell(run.run_id.to_string()));
-    kv.push(
-        "status",
-        render::cell(run.status.label()).fg(render::status::run(run.status)),
-    );
+    let status = render::paint(render::status::run(run.status), run.status.label());
+    let summary = if run.status.is_terminal() {
+        format!(
+            "{status} · exit {} · {}",
+            run.status.exit_code(),
+            duration_label(run.started_at, run.completed_at.unwrap_or(run.updated_at))
+        )
+    } else {
+        format!("{status} {}", duration_label(run.started_at, now))
+    };
+    let reader = run
+        .reader
+        .as_deref()
+        .map(|reader| format!(" · for @{}", reader.trim_start_matches('@')))
+        .unwrap_or_default();
+    writeln!(w, "  {} · {summary}{reader}", run.run_id)?;
     if let Some(parked_at) = run.parked_at {
-        kv.push("parked", render::cell(render::rel_age(parked_at, now)));
+        writeln!(w, "  parked: {}", render::rel_age(parked_at, now))?;
     }
-    kv.push("prompt", render::cell(preview(&run.prompt)));
-    kv.push(
-        "started",
-        render::cell(render::rel_age(run.started_at, now)),
-    );
-    let end = run.completed_at.unwrap_or(run.updated_at);
-    kv.push("updated", render::cell(render::rel_age(end, now)));
-    kv.push(
-        "duration",
-        render::cell(duration_label(run.started_at, end)),
-    );
-    kv.push(
-        "exit_code",
-        render::cell(run.status.exit_code().to_string()),
-    );
+    writeln!(
+        w,
+        "  prompt: {}",
+        preview(run.prompt.lines().next().unwrap_or_default())
+    )?;
     if let Some(tail) = run.failure_tail.as_deref() {
-        kv.push(
-            "failure",
-            render::cell(preview(tail)).fg(render::palette::alarm()),
-        );
+        writeln!(
+            w,
+            "  failure: {}",
+            render::paint(render::palette::alarm(), &preview(tail))
+        )?;
     }
-    kv.render(w)?;
     writeln!(w)
 }
 
@@ -705,9 +730,9 @@ fn render_messages_section(
     writeln!(w)
 }
 
-fn opt_count(value: Option<u64>) -> String {
+fn opt_compact_count(value: Option<u64>) -> String {
     value
-        .map(|value| value.to_string())
+        .map(render::compact_count)
         .unwrap_or_else(|| "-".to_owned())
 }
 
@@ -912,9 +937,265 @@ pub(in crate::cli) fn focus_resolved(ctx: &Ctx, agent: &AgentState) -> Result<()
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rimz::agents::{AgentStatus, TurnPhase};
+    use rimz::ids::{PaneId, WorkspaceId};
 
-    fn strip(
-        render_one: impl FnOnce(&mut anstream::StripStream<Vec<u8>>) -> std::io::Result<()>,
+    fn entry() -> AgentReportEntry {
+        let state = rimz::testkit::agent_state("codex", "coder", jiff::Timestamp::UNIX_EPOCH);
+        build_entry(
+            &Default::default(),
+            &state,
+            None,
+            None,
+            "@coder".into(),
+            None,
+            jiff::Timestamp::UNIX_EPOCH,
+            ReportOverrides::default(),
+        )
+    }
+
+    fn run(status: RunStatus) -> RunRecord {
+        let mut run = RunRecord::new(
+            WorkspaceId::from_project_root(Path::new("/repo")),
+            AgentKind::new_unchecked("codex"),
+            PermissionMode::Auto,
+            "ship the fix\nand run tests".into(),
+            PathBuf::from("/repo"),
+        );
+        run.status = status;
+        run.started_at = jiff::Timestamp::UNIX_EPOCH;
+        run.updated_at = run.started_at + jiff::SignedDuration::from_secs(10);
+        run.reader = Some("leader".into());
+        run
+    }
+
+    #[test]
+    fn card_projection_show_live_run_duration_moves_without_exit() {
+        let run = run(RunStatus::Running);
+        for secs in [120, 180] {
+            let text =
+                strip(|w| render_run_section(w, &run, jiff::Timestamp::from_second(secs).unwrap()));
+            assert!(!text.contains("exit"), "{text}");
+            assert!(
+                text.contains(&format!("running {}m · for @leader", secs / 60)),
+                "{text}"
+            );
+            assert!(text.contains("prompt: ship the fix"), "{text}");
+            assert!(!text.contains("and run tests"), "{text}");
+        }
+    }
+
+    #[test]
+    fn card_projection_show_terminal_run_has_exit_and_fixed_duration() {
+        let mut run = run(RunStatus::Completed);
+        run.completed_at = Some(jiff::Timestamp::from_second(120).unwrap());
+        let text =
+            strip(|w| render_run_section(w, &run, jiff::Timestamp::from_second(600).unwrap()));
+        assert!(text.contains("completed · exit 0 · 2m"), "{text}");
+    }
+
+    #[test]
+    fn card_projection_show_turn_elapsed_is_a_duration() {
+        let mut entry = entry();
+        entry.status = AgentStatus::Running;
+        entry.phase = TurnPhase::Acting;
+        entry.timeline.turn_started_at = Some(jiff::Timestamp::UNIX_EPOCH);
+        entry.timeline.last_seen = jiff::Timestamp::from_second(119).unwrap();
+        let text = strip(|w| {
+            render_activity_section(
+                w,
+                &entry,
+                None,
+                None,
+                true,
+                jiff::Timestamp::from_second(120).unwrap(),
+            )
+        });
+        assert!(
+            text.contains("running (acting) · turn 2m · last seen 1s ago · stale"),
+            "{text}"
+        );
+        assert!(!text.contains("2m ago"), "{text}");
+        for status in [AgentStatus::Idle, AgentStatus::Success] {
+            entry.status = status;
+            entry.phase = TurnPhase::Idle;
+            entry.timeline.last_seen = jiff::Timestamp::from_second(120).unwrap();
+            let text = strip(|w| {
+                render_activity_section(
+                    w,
+                    &entry,
+                    None,
+                    None,
+                    false,
+                    jiff::Timestamp::from_second(3600).unwrap(),
+                )
+            });
+            assert!(!text.contains(" · turn "), "{text}");
+            assert!(text.contains("last seen 58m ago"), "{text}");
+        }
+    }
+
+    #[test]
+    fn paused_and_failed_show_their_reason_once() {
+        for status in [AgentStatus::Paused, AgentStatus::Failed] {
+            let mut entry = entry();
+            entry.status = status;
+            entry.description = Some("provider unavailable".into());
+            let text = strip(|w| {
+                render_activity_section(w, &entry, None, None, false, jiff::Timestamp::UNIX_EPOCH)
+            });
+            assert_eq!(text.matches("provider unavailable").count(), 1, "{text}");
+            assert!(
+                text.contains(&format!("  {}: provider unavailable", status.as_str())),
+                "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn card_projection_show_context_distinguishes_occupancy_and_spend() {
+        let mut entry = entry();
+        entry.context.fill_pct = Some(31);
+        entry.context.window = Some(272_000);
+        entry.context.used_tokens = Some(84_320);
+        entry.stats.total_tokens = Some(3_000_000);
+        entry.stats.cache_read_tokens = Some(2_000_000);
+        entry.stats.cost_usd = Some(0.87);
+        entry.stats.active_secs = Some(720);
+        let text = strip(|w| render_context_section(w, &entry, jiff::Timestamp::UNIX_EPOCH));
+        assert!(
+            text.contains(
+                "31% of 272k · 84k in window · 3M spent (2M cache read) · $0.8700 · 12m active"
+            ),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn card_projection_show_ask_next_step_uses_supported_or_pane_route() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = rimz::StatePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path())
+            .unwrap();
+        for (provider, kind, expected) in [
+            (
+                "codex",
+                rimz::agents::AskKind::PlanApproval,
+                "rimz answer @coder",
+            ),
+            (
+                "codex",
+                rimz::agents::AskKind::Permission,
+                "rimz agents focus @coder",
+            ),
+        ] {
+            let mut state =
+                rimz::testkit::agent_state(provider, "coder", jiff::Timestamp::UNIX_EPOCH);
+            state.status = AgentStatus::Waiting;
+            state.waiting_since = Some(state.last_activity);
+            state.open_ask = Some(rimz::agents::OpenAsk {
+                id: "ask_0123456789abcdef".parse().unwrap(),
+                kind,
+                detail: Some("approve this?".into()),
+                native_key: None,
+                since: state.last_activity,
+            });
+            let next_step = show_ask_next_step(&paths, &state, "@coder").unwrap();
+            assert!(
+                next_step
+                    .as_deref()
+                    .is_some_and(|step| step.starts_with(expected)),
+                "{next_step:?}"
+            );
+            let agent = build_entry(
+                &Default::default(),
+                &state,
+                None,
+                None,
+                "@coder".into(),
+                None,
+                jiff::Timestamp::UNIX_EPOCH,
+                ReportOverrides::default(),
+            );
+            let report = ShowReport {
+                ask_next_step: next_step,
+                ..ShowReport::default()
+            };
+            let text =
+                strip(|w| render_show_sections(w, &report, &agent, jiff::Timestamp::UNIX_EPOCH));
+            assert!(
+                text.contains(&format!("waiting: approve this? → {expected}")),
+                "{text}"
+            );
+        }
+        for description in [None, Some("approve the plan")] {
+            let mut agent = entry();
+            agent.status = AgentStatus::Waiting;
+            agent.description = description.map(str::to_owned);
+            let text = strip(|w| {
+                render_show_sections(
+                    w,
+                    &ShowReport::default(),
+                    &agent,
+                    jiff::Timestamp::UNIX_EPOCH,
+                )
+            });
+            assert!(
+                text.contains(&format!(
+                    "  waiting: {} → rimz agents focus @coder",
+                    description.unwrap_or("in the pane")
+                )),
+                "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn card_projection_show_sections_follow_activity_before_stable_facts() {
+        let agent = entry();
+        let report = ShowReport {
+            run: Some(run(RunStatus::Running)),
+            messages: vec![ShowMessage {
+                id: "msg_1".into(),
+                status: rimz::store::message::MessageStatus::Queued,
+                from: "@user".into(),
+                age: "1m ago".into(),
+                text: "check".into(),
+            }],
+            recent_transcript: Some(crate::cli::transcript::RenderedChat {
+                lane_label: None,
+                channel: None,
+                focus: None,
+                entries: vec![],
+                archive_prefix: 0,
+                archived_hidden: 0,
+                newest_archived_at: None,
+                empty_message: None,
+                last: None,
+                flat: false,
+            }),
+            capture: Some(rimz::mux::PaneCapture {
+                pane_id: PaneId::from_parts(rimz::MuxName::Tmux, "%1"),
+                raw_text: "working".into(),
+                lines: vec!["working".into()],
+            }),
+            ..ShowReport::default()
+        };
+        let text = strip(|w| render_show_sections(w, &report, &agent, jiff::Timestamp::UNIX_EPOCH));
+        assert!(text.starts_with("@coder  codex"), "{text}");
+        let positions = [
+            "Run\n",
+            "Messages\n",
+            "Recent transcript\n",
+            "Context\n",
+            "Identity\n",
+            "Capture\n",
+        ]
+        .map(|section| text.find(section).unwrap());
+        assert!(positions.windows(2).all(|pair| pair[0] < pair[1]), "{text}");
+    }
+
+    fn strip<E: std::fmt::Debug>(
+        render_one: impl FnOnce(&mut anstream::StripStream<Vec<u8>>) -> std::result::Result<(), E>,
     ) -> String {
         let mut stream = anstream::StripStream::new(Vec::new());
         render_one(&mut stream).expect("render to in-memory buffer");
@@ -983,6 +1264,7 @@ mod tests {
             stale: true,
             run: None,
             ask: None,
+            ask_next_step: None,
             messages: Vec::new(),
             system_messages_hidden: 0,
             capture: None,
@@ -1019,8 +1301,9 @@ mod tests {
             jiff::Timestamp::UNIX_EPOCH,
             ReportOverrides::default(),
         );
-        let text =
-            strip(|w| render_activity_section(w, &entry, None, false, jiff::Timestamp::UNIX_EPOCH));
+        let text = strip(|w| {
+            render_activity_section(w, &entry, None, None, false, jiff::Timestamp::UNIX_EPOCH)
+        });
         assert!(
             text.contains("hibernating since 1970-01-01T00:00:00Z, 2 KB reclaimed"),
             "{text}"
@@ -1042,7 +1325,7 @@ mod tests {
                 jiff::Timestamp::UNIX_EPOCH,
                 ReportOverrides::default(),
             );
-            let text = strip(|out| render_agent_section(out, &entry));
+            let text = strip(|out| render_identity_section(out, &entry, None));
             assert_eq!(text.contains("account"), state.login.is_some(), "{text}");
             if state.login.is_some() {
                 assert!(text.contains("codex@work"), "{text}");
@@ -1069,7 +1352,7 @@ mod tests {
                 ReportOverrides::default(),
             );
             let mut output = Vec::new();
-            render_agent_section(&mut output, &entry).unwrap();
+            render_identity_section(&mut output, &entry, None).unwrap();
             let output = String::from_utf8(output).unwrap();
             assert_eq!(
                 output.contains("launch_warnings"),
