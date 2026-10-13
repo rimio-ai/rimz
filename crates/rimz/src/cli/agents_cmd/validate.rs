@@ -207,12 +207,23 @@ fn rows<'a>(
                 row.tier,
                 row.tier_fallback,
             )),
-            render::cell(row.effort.as_deref().unwrap_or("—")),
+            render::cell(effort_label(row)),
             render::cell(row.source.display().to_string()),
         ]);
     }
     table.render(out)?;
     Ok(())
+}
+
+/// The EFFORT cell: the effort, with `fast` appended when the definition
+/// launches in the provider's fast mode.
+fn effort_label(row: &definitions::DefinitionRow) -> String {
+    let effort = row.effort.as_deref().unwrap_or("—");
+    if row.fast {
+        format!("{effort} · fast")
+    } else {
+        effort.to_owned()
+    }
 }
 
 /// A `keep-warm` horizon that will not hold, with the setting that decides it:
@@ -522,6 +533,7 @@ mod tests {
                 kind: "claude".into(),
                 model: None,
                 effort: None,
+                fast: false,
                 source: format!("agents/{name}.md").into(),
                 team: None,
                 role: None,
@@ -538,6 +550,30 @@ mod tests {
             warnings[0].message,
             "profile navigator: tools names LSP, which a room with a shared language server strips"
         );
+    }
+
+    #[test]
+    fn effort_cell_appends_fast_only_when_on() {
+        let mut row = definitions::DefinitionRow {
+            tier: None,
+            tier_fallback: None,
+            name: "quick".into(),
+            namespace: "agents".into(),
+            kind: "codex".into(),
+            model: None,
+            effort: Some("high".into()),
+            fast: false,
+            source: "agents/quick.md".into(),
+            team: None,
+            role: None,
+            owns: Vec::new(),
+            signals: Vec::new(),
+        };
+        assert_eq!(effort_label(&row), "high");
+        row.fast = true;
+        assert_eq!(effort_label(&row), "high · fast");
+        row.effort = None;
+        assert_eq!(effort_label(&row), "— · fast");
     }
 
     #[test]

@@ -876,6 +876,7 @@ pub struct ProjectTask {
     pub worktree: Option<String>,
     pub mode: Option<String>,
     pub effort: Option<String>,
+    pub fast: Option<bool>,
     #[serde(rename = "system-prompt-file")]
     pub system_prompt_file: Option<PathBuf>,
     pub timeout: Option<String>,
@@ -1010,6 +1011,8 @@ struct ExecutableTask<'a> {
     worktree: Option<&'a str>,
     mode: Option<&'a str>,
     effort: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fast: Option<bool>,
     system_prompt_file: Option<String>,
     timeout: Option<&'a str>,
     at: Option<&'a str>,
@@ -1155,6 +1158,7 @@ impl<'a> From<&'a ProjectConfig> for ExecutableSurface<'a> {
                     worktree: task.worktree.as_deref(),
                     mode: task.mode.as_deref(),
                     effort: task.effort.as_deref(),
+                    fast: task.fast,
                     system_prompt_file: task
                         .system_prompt_file
                         .as_ref()

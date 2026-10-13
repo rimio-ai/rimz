@@ -302,6 +302,7 @@ struct ExplainReport<'a> {
     #[serde(skip_serializing_if = "<[rimz::agents::TierSkip]>::is_empty")]
     tier_skipped: &'a [rimz::agents::TierSkip],
     effort: Option<&'a str>,
+    fast: bool,
     budget: Option<&'a str>,
     skills: SkillsReport<'a>,
     program: &'a str,
@@ -559,6 +560,7 @@ impl<'a> ExplainReport<'a> {
                 })
             },
             effort: params.effort.as_deref(),
+            fast: params.fast,
             tier_skipped: params
                 .tier
                 .as_ref()
@@ -635,6 +637,11 @@ fn applied_overrides(
         if let Some(value) = value {
             flags.push(format!("{flag} {value}"));
         }
+    }
+    match overrides.fast_override() {
+        Some(true) => flags.push("--fast".to_owned()),
+        Some(false) => flags.push("--no-fast".to_owned()),
+        None => {}
     }
     if overrides.ask {
         flags.push("--ask".to_owned());
@@ -731,6 +738,9 @@ fn render_explain(report: &ExplainReport<'_>) -> Result<()> {
     );
     for (label, value) in [("model", report.model), ("effort", report.effort)] {
         plan.push(label, render::cell(value.unwrap_or("provider default")));
+    }
+    if report.fast {
+        plan.push("fast", render::cell("on"));
     }
     if let Some(tier) = report.tier {
         plan.push(

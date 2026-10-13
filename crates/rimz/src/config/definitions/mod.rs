@@ -142,6 +142,9 @@ pub struct DefinitionRow {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tier_fallback: Option<bool>,
     pub effort: Option<String>,
+    /// Whether the definition launches in the provider's fast mode.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub fast: bool,
     pub source: PathBuf,
     pub team: Option<String>,
     pub role: Option<String>,
@@ -413,6 +416,7 @@ impl LoadedDefinitions {
             tier: profile.model_tier.as_ref().map(|tier| tier.tier),
             tier_fallback: profile.model_tier.as_ref().map(|tier| tier.fell_back),
             effort: profile.effort.clone(),
+            fast: profile.fast == Some(true),
             source: source.to_owned(),
             team: None,
             role: None,

@@ -790,6 +790,7 @@ fn resident_add_accepts_layout_and_persists_launch_options() {
             "ask",
             "--effort",
             "high",
+            "--fast",
             "--prompt",
             "repair",
         ])
@@ -810,6 +811,7 @@ fn resident_add_accepts_layout_and_persists_launch_options() {
     assert_eq!(entry["subscribe"][1]["signal"], "pr.conflicted");
     assert_eq!(entry["mode"], "ask");
     assert_eq!(entry["effort"], "high");
+    assert_eq!(entry["fast"], true);
 }
 
 #[test]
@@ -9147,6 +9149,7 @@ fn loop_add_rejects_invalid_action_shapes() {
                 "auto",
                 "--effort",
                 "high",
+                "--fast",
                 "--budget",
                 "5",
                 "--budget-per-day",
@@ -9160,7 +9163,7 @@ fn loop_add_rejects_invalid_action_shapes() {
                 "--prompt",
                 "x",
             ],
-            "`wait-flags` uses --wait, so --mode, --effort, --budget, --budget-per-day, --system-prompt-file, --timeout only apply to --agent tasks",
+            "`wait-flags` uses --wait, so --mode, --effort, --fast, --budget, --budget-per-day, --system-prompt-file, --timeout only apply to --agent tasks",
         ),
         (
             vec![
@@ -9175,6 +9178,7 @@ fn loop_add_rejects_invalid_action_shapes() {
                 "auto",
                 "--effort",
                 "high",
+                "--no-fast",
                 "--budget",
                 "5",
                 "--budget-per-day",
@@ -9186,7 +9190,7 @@ fn loop_add_rejects_invalid_action_shapes() {
                 "--every",
                 "15m",
             ],
-            "`check-flags` uses --check without an agent action, so --worktree, --mode, --effort, --budget, --budget-per-day, --system-prompt-file only apply to --agent tasks",
+            "`check-flags` uses --check without an agent action, so --worktree, --mode, --effort, --no-fast, --budget, --budget-per-day, --system-prompt-file only apply to --agent tasks",
         ),
         (
             vec![

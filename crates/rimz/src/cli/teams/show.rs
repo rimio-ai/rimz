@@ -519,6 +519,7 @@ mod tests {
                 kind: Some("claude".to_owned()),
                 model: Some("fable".to_owned()),
                 effort: Some("high".to_owned()),
+                fast: false,
                 mode: Some("auto".to_owned()),
                 system_prompt_file: Some("planner.md".into()),
                 append_system_prompt_files: Vec::new(),

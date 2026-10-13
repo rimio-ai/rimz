@@ -134,6 +134,12 @@ struct ResumeArgs {
     /// Save this reasoning effort for subsequent resumes.
     #[arg(long, value_name = "LEVEL")]
     effort: Option<String>,
+    /// Save fast mode on for subsequent resumes (Claude, Codex, Amp).
+    #[arg(long, conflicts_with = "no_fast")]
+    fast: bool,
+    /// Save fast mode off for subsequent resumes.
+    #[arg(long)]
+    no_fast: bool,
     /// Replace the saved launch record with a same-provider profile or kind base.
     #[arg(long, value_name = "PROFILE|KIND")]
     agent: Option<String>,
@@ -179,6 +185,8 @@ impl ResumeArgs {
                 isolation: self.isolation,
                 model: self.model,
                 effort: self.effort,
+                fast: self.fast,
+                no_fast: self.no_fast,
                 agent: self.agent,
                 tier: self.tier,
                 ask: self.ask,
@@ -770,6 +778,7 @@ mod tests {
             "opus[1m]",
             "--effort",
             "high",
+            "--fast",
             "--ask",
         ]);
         let Some(TeamsSubcmd::Resume(args)) = resume.command else {
@@ -782,6 +791,7 @@ mod tests {
         assert_eq!(args.launch.overrides.agent.as_deref(), Some("reviewer"));
         assert_eq!(args.launch.overrides.model.as_deref(), Some("opus[1m]"));
         assert_eq!(args.launch.overrides.effort.as_deref(), Some("high"));
+        assert!(args.launch.overrides.fast && !args.launch.overrides.no_fast);
         assert!(args.launch.overrides.ask);
         let resume = parse_teams(&["rimz", "resume", "forge", "--tier", "senior", "--yolo"]);
         let Some(TeamsSubcmd::Resume(tier_args)) = resume.command else {
@@ -793,6 +803,13 @@ mod tests {
             Some(rimz::config::tiers::ModelTier::Senior)
         );
         assert!(tier_args.launch.overrides.yolo);
+        assert!(!tier_args.launch.overrides.fast && !tier_args.launch.overrides.no_fast);
+        let resume = parse_teams(&["rimz", "resume", "forge", "--no-fast"]);
+        let Some(TeamsSubcmd::Resume(off_args)) = resume.command else {
+            panic!("resume verb")
+        };
+        let off = off_args.into_agents_args().launch.overrides;
+        assert!(!off.fast && off.no_fast);
         assert_eq!(
             args.launch.overrides.isolation,
             Some(rimz::config::Isolation::Host)

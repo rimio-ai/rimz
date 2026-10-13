@@ -263,6 +263,7 @@ subscribe = [{ signal = "ci.failed", match = { branch = "feature" }, prompt = "r
             worktree: Some("task".to_owned()),
             mode: Some("plan".to_owned()),
             effort: Some("high".to_owned()),
+            fast: Some(true),
             budget: Some("$2".to_owned()),
             budget_per_day: Some("$8".to_owned()),
             surplus: Some("1.5x".to_owned()),

@@ -25,6 +25,8 @@ pub(crate) struct AgentProfileReport {
     pub(crate) tier_fallback: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) effort: Option<String>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) fast: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) description: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -51,6 +53,7 @@ pub(crate) fn available_profiles(
             tier: profile.model_tier.as_ref().map(|tier| tier.tier),
             tier_fallback: profile.model_tier.as_ref().map(|tier| tier.fell_back),
             effort: profile.effort.clone(),
+            fast: profile.fast == Some(true),
             description: profile.description.clone(),
             allowed_tools: profile.allowed_tools.clone().unwrap_or_default(),
             path: sources.profile(scope, name).map(PathBuf::from),
@@ -66,6 +69,7 @@ pub(crate) fn available_profiles(
         tier: None,
         tier_fallback: None,
         effort: None,
+        fast: false,
         description: None,
         path: sources.command(name).map(PathBuf::from),
     }));
@@ -122,6 +126,10 @@ fn subagent_report(
         .0
         .get(&profile.name)
         .and_then(|profile| profile.model_tier.as_ref());
+    let fast = profiles
+        .0
+        .get(&profile.name)
+        .is_some_and(|profile| profile.fast == Some(true));
     AgentProfileReport {
         allowed_tools: profiles
             .0
@@ -136,6 +144,7 @@ fn subagent_report(
         agent: profile.agent,
         model: profile.model,
         effort: profile.effort,
+        fast,
         description: profile.description,
         path,
     }
@@ -238,6 +247,9 @@ fn profile_cards(
                 let mut segments = vec![agent.as_str()];
                 segments.extend(model.as_deref());
                 segments.extend(report.effort.as_deref());
+                if report.fast {
+                    segments.push("fast");
+                }
                 let brand_kind = report.brand_kind.as_deref().unwrap_or(agent);
                 (render::palette::identity(brand_kind).bold(), segments)
             }
@@ -337,6 +349,7 @@ mod tests {
                 agent: Some("codex".to_owned()),
                 model: Some("gpt-5.6".to_owned()),
                 effort: Some("high".to_owned()),
+                fast: true,
                 description: Some("Plans the work".to_owned()),
                 path: Some(PathBuf::from("/tmp/.agents/agents/planner.md")),
             },
@@ -350,6 +363,7 @@ mod tests {
                 agent: Some("claude".to_owned()),
                 model: None,
                 effort: Some("max".to_owned()),
+                fast: false,
                 description: Some("Reviews the result".to_owned()),
                 path: None,
             },
@@ -363,6 +377,7 @@ mod tests {
                 agent: Some("codex".to_owned()),
                 model: Some("gpt-5.6".to_owned()),
                 effort: None,
+                fast: false,
                 description: None,
                 path: None,
             },
@@ -376,6 +391,7 @@ mod tests {
                 agent: None,
                 model: None,
                 effort: None,
+                fast: false,
                 description: None,
                 path: Some(PathBuf::from("/tmp/rimz/config.toml")),
             },
@@ -392,7 +408,7 @@ mod tests {
         .expect("render profile cards");
 
         insta::assert_snapshot!(String::from_utf8(output).expect("utf-8"), @r"
-        planner — codex · gpt-5.6 · high
+        planner — codex · gpt-5.6 · high · fast
           Plans the work
           /tmp/.agents/agents/planner.md
 
@@ -418,6 +434,7 @@ mod tests {
             agent: Some("codex".to_owned()),
             model: None,
             effort: None,
+            fast: false,
             description: None,
             path: Some(PathBuf::from("/tmp/.agents/agents/planner.md")),
         }];

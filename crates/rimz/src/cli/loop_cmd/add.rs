@@ -813,6 +813,7 @@ fn build_task_entry(
             entry.agent = args.agent.clone();
             entry.mode = args.mode.as_deref().map(parse_mode).transpose()?;
             entry.effort = args.effort.clone();
+            entry.fast = fast_switch(args);
         }
         AddTaskAction::Spawn { resolved, mode, .. } => {
             resolved_for_preflight = Some(resolved);
@@ -823,6 +824,7 @@ fn build_task_entry(
             entry.worktree = args.worktree.clone();
             entry.mode = mode;
             entry.effort = args.effort.clone();
+            entry.fast = fast_switch(args);
             entry.account.clone_from(&args.account);
             entry.budget = budget;
             entry.budget_per_day = budget_per_day;
@@ -1055,6 +1057,14 @@ fn self_wait_guard_message() -> &'static str {
     "--wait on an agent.* signal requires --match handle=<other> or --match session=<other> to avoid waking the target from its own lifecycle signal"
 }
 
+fn fast_switch(args: &AddArgs) -> Option<bool> {
+    match (args.fast, args.no_fast) {
+        (true, _) => Some(true),
+        (_, true) => Some(false),
+        _ => None,
+    }
+}
+
 fn reject_unsupported_action_flags(args: &AddArgs, kind: TaskActionKind) -> Result<()> {
     if kind.is_spawn() {
         return Ok(());
@@ -1068,6 +1078,12 @@ fn reject_unsupported_action_flags(args: &AddArgs, kind: TaskActionKind) -> Resu
     }
     if args.effort.is_some() {
         flags.push("--effort");
+    }
+    if args.fast {
+        flags.push("--fast");
+    }
+    if args.no_fast {
+        flags.push("--no-fast");
     }
     if args.account.is_some() {
         flags.push("--account");

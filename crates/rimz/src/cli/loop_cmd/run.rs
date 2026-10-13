@@ -184,6 +184,8 @@ pub(super) fn run_one(
                 launch.overrides.ask = entry.mode.as_deref() == Some("ask");
                 launch.overrides.yolo = entry.mode.as_deref() == Some("yolo");
                 launch.overrides.effort = entry.effort.clone();
+                launch.overrides.fast = entry.fast == Some(true);
+                launch.overrides.no_fast = entry.fast == Some(false);
                 let launched = crate::cli::agents_cmd::launch::launch_resolved(
                     launch,
                     &launch_globals,

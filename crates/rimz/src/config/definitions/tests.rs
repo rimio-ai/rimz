@@ -1200,6 +1200,18 @@ fn fast_on_an_unsupported_kind_fails_at_the_definition() {
     );
     // A child's own `fast: false` wins over its parent's `true`.
     assert_eq!(loaded.agent_profiles.0["steady"].fast, Some(false));
+    let row_fast = |name: &str| {
+        loaded
+            .rows
+            .iter()
+            .find(|row| row.name == name)
+            .map(|row| row.fast)
+    };
+    assert_eq!(row_fast("swift"), Some(true));
+    assert_eq!(row_fast("steady"), Some(false));
+    let row =
+        serde_json::to_value(loaded.rows.iter().find(|row| row.name == "steady").unwrap()).unwrap();
+    assert!(row.get("fast").is_none(), "{row}");
 }
 
 #[test]

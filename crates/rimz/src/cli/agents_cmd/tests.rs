@@ -820,6 +820,8 @@ mod parse {
             vec!["--yolo"],
             vec!["--model", "opus"],
             vec!["--effort", "high"],
+            vec!["--fast"],
+            vec!["--no-fast"],
             vec!["--isolation", "host"],
             vec!["--agent", "claude"],
             vec!["--tier", "senior"],
@@ -884,6 +886,10 @@ mod parse {
         );
         assert_clap_error(
             &["rimz", "claude", "--resume", "--ask", "--yolo"],
+            clap::error::ErrorKind::ArgumentConflict,
+        );
+        assert_clap_error(
+            &["rimz", "claude", "--fast", "--no-fast"],
             clap::error::ErrorKind::ArgumentConflict,
         );
     }
@@ -1522,6 +1528,25 @@ mod launch_options {
                 finalized.qualified_spec.as_deref(),
                 inferred.map(|_| "forge.planner")
             );
+        }
+    }
+
+    #[test]
+    fn fast_flags_map_to_the_preset_and_the_supervised_request() {
+        for (flag, expected) in [
+            (None, None),
+            (Some("--fast"), Some(true)),
+            (Some("--no-fast"), Some(false)),
+        ] {
+            let mut argv = vec!["rimz", "codex", "hi"];
+            argv.extend(flag);
+            let preset = launch_override_preset(&parse_agents(&argv).launch.overrides)
+                .expect("build preset");
+            assert_eq!(preset.fast, expected, "{flag:?}");
+            argv.push("-p");
+            let (request, _) =
+                into_supervised_request(parse_agents(&argv)).expect("build supervised request");
+            assert_eq!(request.fast, expected, "{flag:?}");
         }
     }
 
