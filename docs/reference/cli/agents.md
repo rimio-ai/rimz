@@ -533,15 +533,22 @@ rimz agents compact @coder               # compact context at the next turn boun
 
 ```console
 $ rimz agents list
-HANDLE    PROFILE  AGENT   STATUS   MODEL         CTX  TOKENS  AGE
+2 agents · 1 lane · 1 needs you · 1 running · #auth-refresh
+
+needs you
+  @planner  waiting  which rotation strategy should we use?
+
+HANDLE    PROFILE  AGENT   STATUS   MODEL         CTX  TOKENS  SEEN
 
 ⑂ auth-refresh · forge team
-@planner  planner  claude  waiting  opus@high     42%     78k   2m
+@planner  planner  claude  waiting  Opus 5@high   42%     84k    2m
   which rotation strategy should we use?
 
-@coder    coder    codex   running  gpt-5.5@high  31%     54k   0s
+@coder    coder    codex   running  GPT 5.5@high  31%     84k    0s
   wire up the refresh-token path
 ```
+
+The summary counts agents, lanes, and states in the selected scope. Zero state counts are omitted; waiting, failed, and paused cards count as `needs you`, and everything except attention, running, or sleeping counts as `at rest`. When anyone needs you, a block before the tables lists their paste-ready addresses and ask summaries or pause/failure reasons.
 
 Cards group under lane headers. `⑂` marks a worktree-backed lane, `#` a plain channel, and a bare label the room root; agents outside the project collect under a dim `external` header. When the displayed label is not a selector for the group, the header adds `· #<channel>`. A header adds `· <team> team` for a shared team and the lane's pull-request number and CI glyph when one is known. Glyphs follow the configured theme glyph set.
 
@@ -551,12 +558,12 @@ Cards group under lane headers. `⑂` marks a worktree-backed lane, `#` a plain 
 | `PROFILE` | The launch profile, or a faint `-` when absent. |
 | `AGENT` | The provider kind, such as `claude` or `codex`; a named account includes its name, such as `claude@work`. |
 | `STATUS` | The card status (below). |
-| `MODEL` | Model and effort, as `model@effort`. |
+| `MODEL` | The shared model display name and effort, as `model@effort`; a recorded context-window qualifier appears as `[1m]`. |
 | `CTX` | Context-window fill. |
-| `TOKENS` | Session tokens. |
-| `AGE` | Time since the agent was last seen active. |
+| `TOKENS` | Tokens currently occupying the context window, not cumulative spend. Integer counts use `k`, `M`, and `B`. |
+| `SEEN` | Time since the agent was last seen active. |
 
-Under each row, the agent's activity description (the line the sidebar card shows) wraps to at most three indented lines, ending in an ellipsis when cut.
+Under each row, the sidebar's description rule chooses the error reason, first armed wait while sleeping, or activity, with `-` when none is known. It wraps to at most three indented lines, ending in an ellipsis when cut. A running parent whose own turn is idle adds `· on N subagents (@x, @y)` for its current running children.
 
 | Status | Meaning |
 | --- | --- |
@@ -594,11 +601,39 @@ The status is derived for display. [`rimz message --when`](./message.md) matches
 
 #### `show` / `inspect`
 
-`rimz agents show <REF>` prints one agent's report in the sections Agent, Activity, Context, Placement, Run, Messages, and Recent transcript. It works for live agents and for stopped ones still in the audit record. To see what an agent would launch or restart with, use [`explain`](#explain-a-launch).
+`rimz agents show <REF>` leads with identity, state, and the shared card description, followed by Run, Messages, Recent transcript, Context, and Identity. Optional sections appear only when present; Capture is last with `--capture`. It works for live agents and for stopped ones still in the audit record. To see what an agent would launch or restart with, use [`explain`](#explain-a-launch).
 
-The Agent section includes an `account` line for a named account, as `kind@name`; the default account has no account line. It includes `launch_warnings` when the current launch printed warnings, one per line. A clean relaunch clears the entry; the warnings still print to stderr at launch.
+The state line shows the phase and time last seen, plus the turn duration while running. Waiting cards include the ask summary and the next supported answer command, or `rimz agents focus` for a pane-only prompt, even when no ask was recorded. A live Run shows its elapsed duration without an exit code; a terminal one shows its result, exit code, and completed duration.
 
-Context cost, token split, and active time cover the agent's seat for its whole life: every resumed session plus the pane-backed children it launched. Addressing a child directly reports that child alone. Context fill, window, and tool activity describe the current session. An open run of identical tool calls appears once it reaches the configured warning threshold, as `Bash ×23, 4m`.
+```console
+$ rimz agents show @coder
+@coder  codex · coder · GPT 5.5@high
+running (acting) · turn 2m · last seen 0s ago
+wire up the refresh-token path
+
+Run
+  run_01a135a0ce647155bc4c9cb30ac37447 · running 2m · for @planner
+  prompt: wire up the refresh-token path
+
+Context
+  31% of 272k · 84k in window · 3M spent (2M cache read) · $0.8700 · 12m active
+  compactions: 0
+  tools:       12 · Bash 9, Read 3
+  budget:      -
+
+Identity
+  session:  01JQZ8L4M2P9RT
+  role:     coder
+  team:     forge
+  channel:  auth-refresh
+  worktree: /home/you/code/query-engine-auth-refresh
+  pr:       #91 open · ci passing
+  pane:     tmux:%14
+```
+
+The Identity section includes an `account` line for a named account, as `kind@name`; the default account has no account line. It includes `launch_warnings` when the current launch printed warnings, one per line. A clean relaunch clears the entry; the warnings still print to stderr at launch.
+
+Context labels window occupancy separately from lifetime tokens spent, cache reads, cost, and active time. Lifetime figures cover the agent's seat for its whole life: every resumed session plus the pane-backed children it launched. Addressing a child directly reports that child alone. Context fill, window, and tool activity describe the current session. An open run of identical tool calls appears once it reaches the configured warning threshold, as `Bash ×23, 4m`.
 
 The Messages section lists your messages and agents' attributed messages. When it hides system messages, a faint line gives their count and the command that lists them, `rimz message list --all --system @<agent>`.
 
@@ -712,10 +747,12 @@ The `--json` document has the keys `schema` (`7`), `generated_at`, `rimz_version
 
 ```console
 $ rimz agents top --once
-4 agents · 2 running · 143% CPU · 1.9G MEM · 248k tokens
-AGENT         STATUS   CPU   MEM  IO/S  PROCS  CTX  TOKENS  AGE
-@coder        running  96%  892M  4M/s     12  31%     54k  0s
-@planner      waiting   2%  410M     -      6  42%     78k  2m
+4 agents · 143.0% CPU · 1.9 GB MEM · 3M spent
+AGENT             STATUS     CPU     MEM    IO/S  PROCS  CTX  SPENT  SEEN
+@coder            running  96.0%  892 MB  4 MB/s     12  31%     1M  0s
+  └ @swift-otter  running  44.0%  600 MB  2 MB/s      8  62%     2M  1s
+@planner          waiting   2.0%  410 MB       -      6  42%   200k  2m
+@reviewer         idle      1.0%   50 MB       -      4   3%    12k  15m
 ```
 
 | Flag | Effect |
@@ -723,9 +760,14 @@ AGENT         STATUS   CPU   MEM  IO/S  PROCS  CTX  TOKENS  AGE
 | `--once` | Take two samples 500 ms apart, print one table, and exit. Without it, `top` refreshes until you quit. |
 | `--interval <DURATION>` | Refresh interval (`2s`, `500ms`, or bare seconds). Default 2 seconds. |
 | `--all` | Every channel in the room instead of the current channel. |
-| `-w, --worktree <NAME>` | One worktree or channel. Conflicts with `--all`. |
+| `-w, --worktree <NAME>` | One worktree or channel, with an optional leading `#`. Conflicts with `--all`. An unknown lane fails with the same refusal as `list`. |
 
-The `AGENT` column uses the same paste-ready addresses as `list`, even when the table is filtered. Resource columns read `-` where process metrics are unavailable for the platform or pane; context and token columns still render.
+The `AGENT` column uses the same paste-ready addresses as `list`, even when the table is filtered. Children indent under their parent, whose rank uses their combined CPU; a child without a parent in scope stays at top level. Resource columns read `-` where process metrics are unavailable for the platform or pane; the summary's CPU is `-` until any row has two samples, and `IO/S` is omitted when no row has an I/O rate. `SPENT` is provider-reported cumulative session usage, while `list`'s `TOKENS` shows window occupancy. The summary sums `SPENT` across the displayed sessions. In this example the parent's 1M and child's 2M together account for the 3M whole-seat spend in `show @coder`.
+
+```console
+$ rimz agents top -w '#nonsense' --once
+error: no lane '#nonsense' in this workspace; lanes: #auth-refresh, #main
+```
 
 #### `focus`
 

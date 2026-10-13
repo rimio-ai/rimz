@@ -81,71 +81,57 @@ The addresses in `list` and `top` work from where you are: `#channel` appears wh
 
 ```console
 $ rimz agents list --all
-HANDLE        PROFILE   AGENT   STATUS   MODEL         CTX  TOKENS  AGE
+4 agents · 2 lanes · 1 needs you · 1 running · 2 at rest · whole room
+
+needs you
+  @planner  waiting  which rotation strategy should we use?
+
+HANDLE        PROFILE   AGENT   STATUS   MODEL         CTX  TOKENS  SEEN
 
 ⑂ auth-refresh · forge team
-@planner      planner   claude  waiting  opus@high     42%     78k   2m
+@planner      planner   claude  waiting  Opus 5@high   42%     84k    2m
   which rotation strategy should we use?
 
-@coder        coder     codex   running  gpt-5.5@high  31%     54k   0s
+@coder        coder     codex   running  GPT 5.5@high  31%     84k    0s
   wire up the refresh-token path
 
-@reviewer     reviewer  claude  idle     opus@high      3%     12k  15m
+@reviewer     reviewer  claude  idle     Opus 5@high    3%      6k   15m
   review the diff once coder lands
 
 main
-@claude#main  -         claude  success  opus@high     78%    120k   8m
+@claude#main  -         claude  success  Opus 5@high   78%    156k    8m
   store refactor
 ```
 
-`@planner` sits first because it stopped to ask you something. `CTX` is how full each agent's context window is and `AGE` how long since it last moved; the indented line under a row is what that agent is working on. `rimz agents list --all` widens past the current channel to every lane in the room, and a scope like `rimz agents list '#auth-refresh'` reads one. Listing needs the `list` verb: bare `rimz agents` refuses and prints the `list` command to run, then a map of its verbs (the same map `rimz agents --help` shows), so a launch whose spec came out empty fails instead of printing cards.
+`@planner` sits first because it stopped to ask you something. The summary and `needs you` block name everyone waiting, paused, or failed before the full tables. `CTX` is how full each agent's context window is, `TOKENS` how many tokens occupy it now, and `SEEN` how long since the agent was last seen active. The indented line follows the sidebar: a pause or failure reason first, an armed wait while sleeping, then what the agent is working on. A parent waiting on its children names them there too. `rimz agents list --all` widens past the current channel to every channel in the room, and a scope like `rimz agents list '#auth-refresh'` reads one. Listing needs the `list` verb: bare `rimz agents` refuses and prints the `list` command to run, then a map of its verbs (the same map `rimz agents --help` shows), so a launch whose spec came out empty fails instead of printing cards.
 
 **Ask why one agent is where it is.** When a card raises a question you cannot answer from one line, `rimz agents show` prints the full report for a single agent, so you see what you asked it, what it is spending, and where its pane lives without switching to it:
 
 ```console
 $ rimz agents show @coder
-Agent
-  handle:  @coder
-  kind:    codex
-  role:    coder
-  team:    forge
-  session: 01JQZ8L4M2P9RT
-
-Activity
-  description:   wire up the refresh-token path
-  status:        running
-  phase:         acting
-  turn_started:  2026-07-08T15:41:02Z
-  turn_elapsed:  3m ago
-  last_activity: 0s ago
+@coder  codex · coder · GPT 5.5@high
+running (acting) · turn 3m · last seen 0s ago
+wire up the refresh-token path
 
 Context
-  model:              gpt-5.5@high
-  fill:               31%
-  window:             272000
-  total_tokens:       54210
-  fresh_input_tokens: 4180
-  cache_read_tokens:  47600
-  cache_write_tokens: 1920
-  output_tokens:      510
-  compactions:        0
-  tools:              12 · Bash 9, Read 3
-  active:             12m
-  cost:               $0.8700
-  budget:             -
+  31% of 272k · 84k in window · 3M spent (2M cache read) · $0.8700 · 12m active
+  compactions: 0
+  tools:       12 · Bash 9, Read 3
+  budget:      -
 
-Placement
+Identity
+  session:  01JQZ8L4M2P9RT
+  role:     coder
+  team:     forge
   channel:  auth-refresh
   worktree: /home/you/code/query-engine-auth-refresh
   pr:       #91 open · ci passing
   pane:     tmux:%14
-
-…
 ```
 
-The report ends with the agent's recent transcript, cut from the block above. Add `--capture` to append the pane's visible text, or `--json` for the structured record a script can read.
+Run, Messages, and Recent transcript appear before Context when present, so recent activity comes before stable facts. Waiting cards give you the next answer command, or point to the pane when the prompt needs its own UI. Live runs show a moving duration; only a finished run has an exit code. Add `--capture` to append the pane's visible text, or `--json` for the structured record a script can read.
 
-If the provider's screen hid a launch warning, find it under `launch_warnings` in the Agent section. A clean relaunch clears those warnings.
+If the provider's screen hid a launch warning, find it under `launch_warnings` in the Identity section. A clean relaunch clears those warnings.
 
 **Read along without leaving your pane.** `rimz agents logs` tails an agent's transcript. Your own prompts appear as `user → @coder`, the agent's replies under its handle, so you watch a long run from the pane you are already in:
 
@@ -217,14 +203,17 @@ The report covers the agents that worked the checkout's current branch within th
 **Find what is burning CPU or tokens.** When the machine gets loud, `rimz agents top` ranks the live fleet by the resources each agent's pane process tree is using. It streams by default; `--once` takes a sample and exits for a script:
 
 ```console
-$ rimz agents top --once
-4 agents · 1 running · 99.0% CPU · 1.4 GB MEM · 264k tokens
-AGENT         STATUS     CPU     MEM    IO/S  PROCS  CTX  TOKENS  AGE
-@coder        running  96.0%  892 MB  4 MB/s     12  31%     54k  0s
-@planner      waiting   2.0%  410 MB       -      6  42%     78k  2m
-@reviewer     idle      1.0%  180 MB       -      4   3%     12k  15m
-@claude#main  success      -       -       -      -  78%    120k  8m
+$ rimz agents top --once --all
+5 agents · 143.0% CPU · 1.9 GB MEM · 3M spent
+AGENT             STATUS     CPU     MEM    IO/S  PROCS  CTX  SPENT  SEEN
+@coder            running  96.0%  892 MB  4 MB/s     12  31%     1M  0s
+  └ @swift-otter  running  44.0%  600 MB  2 MB/s      8  62%     2M  1s
+@planner          waiting   2.0%  410 MB       -      6  42%   200k  2m
+@reviewer         idle      1.0%   50 MB       -      4   3%    12k  15m
+@claude#main      success      -       -       -      -  78%   240k  8m
 ```
+
+`SPENT` is each provider session's cumulative token usage, not its current window occupancy. Children nest under their parent; here `@coder` has spent 1M and its child 2M, so `show @coder` reports 3M for the whole seat. `--all` includes the same channels as the room-wide `list` above.
 
 **Jump in, or shut one down.** A row you want to answer is one `focus` away; a pane you are done with is one `stop`:
 
