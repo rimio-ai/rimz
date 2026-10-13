@@ -10,10 +10,10 @@
 
 use rimz::store::event_log::{self, testkit::bytes_read};
 use rimz::store::snapshot::RollupCursor;
-use rimz::testkit::carryover_bytes_parsed;
 use rimz::testkit::fleet::{
     SESSION_NAME, registered_lifecycle, seed_ended_carryover, seed_fleet_store, synthetic_panes,
 };
+use rimz::testkit::{carryover_bytes_parsed, rollup_base_copies, rollup_rows_materialized};
 
 use crate::common::Harness;
 
@@ -400,6 +400,49 @@ fn cold_carryover_trims_ended_text_and_shares_the_parse_with_audit_reads() {
         assert_eq!(audit.agents.len(), 3_300);
     }
     assert_eq!(carryover_bytes_parsed() - before, carryover_len);
+}
+
+/// A `hooks apply` child reads the rollup several times per frame. Repeated in
+/// one thread at an unchanged log, `Store::snapshot` and
+/// `Store::runtime_projection` are served by the thread's held fold: no log or
+/// carryover bytes, no copy of the fold base, and no carried row flattened, so
+/// the repeat costs nothing that grows with the 3,300-row history.
+#[test]
+fn repeat_store_reads_at_an_unchanged_log_copy_no_history() {
+    let h = Harness::new();
+    seed_ended_carryover(&h.store, 3_300).expect("seed carryover");
+    let paths = h.store.paths();
+    seed_fleet_store(paths, FLEET, HISTORY_EVENTS).expect("seed event");
+    h.store
+        .append_event(&registered_lifecycle(&paths.workspace_id, 0))
+        .expect("publish rollup");
+    let cold = h.store.snapshot().expect("cold snapshot");
+    let cold_projection = h
+        .store
+        .runtime_projection(rimz::RuntimeScope::Runtime)
+        .expect("cold projection");
+
+    let counters = || {
+        (
+            bytes_read(),
+            carryover_bytes_parsed(),
+            rollup_base_copies(),
+            rollup_rows_materialized(),
+        )
+    };
+    let before = counters();
+    let warm = h.store.snapshot().expect("warm snapshot");
+    let projection = h
+        .store
+        .runtime_projection(rimz::RuntimeScope::Runtime)
+        .expect("warm projection");
+    assert_eq!(
+        counters(),
+        before,
+        "(log bytes, carryover bytes, fold-base copies, flattened rows) moved on a repeat read"
+    );
+    assert_eq!(warm.agents, cold.agents);
+    assert_eq!(projection, cold_projection);
 }
 
 #[test]

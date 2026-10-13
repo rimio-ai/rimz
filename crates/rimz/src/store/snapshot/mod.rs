@@ -27,6 +27,7 @@ use crate::store::event_log::EventLogErr;
 
 pub(super) use assemble::{build_from, build_from_pending, rebuild};
 pub use assemble::{build_with_cursor, read_fresh_latest};
+pub(super) use fold::AgentRollup;
 pub(super) use fold::lifecycle_follow_seed;
 pub use fold::lifecycle_log_generation;
 #[cfg(feature = "testkit")]

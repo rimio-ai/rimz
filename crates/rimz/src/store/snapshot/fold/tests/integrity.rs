@@ -101,11 +101,15 @@ proptest::proptest! {
         write_rollup_cache(&paths.rollup_cache, &prefix_cache).unwrap();
         let mut cursor = RollupCursor::new();
         cursor.fold(&paths).unwrap();
+        // Cases share this thread, so the thread's held fold also crosses
+        // from the previous case's workspace here.
+        thread_catch_up(&paths).unwrap();
         for event in &events[at..] {
             event_log::append(&paths.events_log, event).unwrap();
         }
         let (incremental_cache, incremental, _) = catch_up_rollup(&paths).unwrap();
         let (cursor_extent, cursor_merged, _) = cursor.fold(&paths).unwrap();
+        let (thread_cache, thread_merged, _) = thread_catch_up(&paths).unwrap();
 
         std::fs::remove_file(&paths.rollup_cache).unwrap();
         let (cold_cache, cold, _) = catch_up_rollup(&paths).unwrap();
@@ -117,9 +121,15 @@ proptest::proptest! {
         );
         prop_assert_eq!(
             sorted_value(cursor_merged.to_vec()),
-            sorted_value(cold),
+            sorted_value(cold.clone()),
             "the warm in-memory cursor fold equals the cold fold"
         );
+        prop_assert_eq!(
+            sorted_value(thread_merged.to_vec()),
+            sorted_value(cold),
+            "the thread-held fold equals the cold fold"
+        );
+        prop_assert_eq!(thread_cache.extent, cold_cache.extent);
         prop_assert_eq!(cursor_extent, cold_cache.extent);
         prop_assert_eq!(
             sorted_value(incremental_cache.raw_agents),

@@ -90,7 +90,8 @@ fn launch_batch_pins_named_and_default_accounts_over_the_room_selection() {
         request.login = LaunchLogin::Pinned(name.parse().unwrap());
         request.launch.login = Some("ignored".parse().unwrap());
         let identities =
-            allocate_agent_launch_identities(&[request], &[], &room.clone().into()).unwrap();
+            allocate_agent_launch_identities(&[request], &Vec::new().into(), &room.clone().into())
+                .unwrap();
         assert_eq!(
             identities[0]
                 .launch
@@ -1276,10 +1277,11 @@ fn rotation_carryover_drops_consumed_launch_tombstones() {
 
 #[test]
 fn launch_identity_allocation_rejects_explicit_live_name_or_session_prefix() {
-    let agents = vec![
+    let agents: snapshot::AgentRollup = vec![
         agent_state("claude", "sess-live-alpha", Some("lucid-atlas")),
         agent_state("claude", "prefix-session", Some("solid-lumen")),
-    ];
+    ]
+    .into();
     let duplicate = AgentLaunchRequest {
         login: crate::store::writer::LaunchLogin::RoomDefault,
         kind: AgentKind::new_unchecked("claude"),
@@ -1323,7 +1325,8 @@ fn soft_launch_name_falls_back_when_it_collides() {
         "claude",
         "sess-live-alpha",
         Some("lucid-atlas"),
-    )];
+    )]
+    .into();
     let request = AgentLaunchRequest {
         login: crate::store::writer::LaunchLogin::RoomDefault,
         kind: AgentKind::new_unchecked("claude"),
@@ -1350,7 +1353,7 @@ fn soft_launch_name_falls_back_when_it_collides() {
 
 #[test]
 fn launch_identity_tracks_explicit_name_provenance() {
-    let agents = Vec::new();
+    let agents = Vec::new().into();
     let requests = [
         launch_request(
             "launch_explicit",

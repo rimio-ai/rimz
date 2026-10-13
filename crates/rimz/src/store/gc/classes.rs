@@ -120,7 +120,7 @@ fn owned_expired(
 fn collect_units(
     dir: &Path,
     keep: Option<&Path>,
-    agents: &[crate::agents::AgentState],
+    agents: &crate::store::snapshot::AgentRollup,
     sweep: &mut Sweep,
     report: &mut GcReport,
 ) -> Result<()> {
@@ -171,7 +171,7 @@ fn collect_units(
 
 fn collect_owned(
     paths: &crate::StatePaths,
-    agents: &[crate::agents::AgentState],
+    agents: &crate::store::snapshot::AgentRollup,
     sweep: &mut Sweep,
     report: &mut GcReport,
 ) -> Result<()> {
@@ -194,7 +194,7 @@ fn collect_owned(
 /// Temp units by the owned rule; the handleless unit goes only with the room.
 fn collect_tmp(
     paths: &crate::StatePaths,
-    agents: &[crate::agents::AgentState],
+    agents: &crate::store::snapshot::AgentRollup,
     sweep: &mut Sweep,
     report: &mut GcReport,
 ) -> Result<()> {
@@ -397,7 +397,7 @@ mod tests {
         let mut report = GcReport::default();
         collect_tmp(
             &paths,
-            &[ended_row, live_row],
+            &vec![ended_row, live_row].into(),
             &mut Sweep::new(false),
             &mut report,
         )
@@ -445,11 +445,23 @@ mod tests {
         let running = paths.runs_dir.join(format!("{}.json", run.run_id));
         fs::File::open(&running).unwrap().set_modified(old).unwrap();
         let mut preview = GcReport::default();
-        collect_owned(&paths, &[], &mut Sweep::new(true), &mut preview).unwrap();
+        collect_owned(
+            &paths,
+            &Vec::new().into(),
+            &mut Sweep::new(true),
+            &mut preview,
+        )
+        .unwrap();
         assert_eq!(preview.sidecar_files_removed, 2);
         assert!(orphan.exists() && terminal.exists() && running.exists());
         let mut actual = GcReport::default();
-        collect_owned(&paths, &[], &mut Sweep::new(false), &mut actual).unwrap();
+        collect_owned(
+            &paths,
+            &Vec::new().into(),
+            &mut Sweep::new(false),
+            &mut actual,
+        )
+        .unwrap();
         assert_eq!(preview, actual);
         assert!(!orphan.exists() && !terminal.exists() && running.exists());
     }
@@ -496,7 +508,7 @@ mod tests {
         agent.ended_at = Some(jiff::Timestamp::try_from(old).unwrap());
         collect_owned(
             &paths,
-            &[agent],
+            &vec![agent].into(),
             &mut Sweep::new(false),
             &mut GcReport::default(),
         )

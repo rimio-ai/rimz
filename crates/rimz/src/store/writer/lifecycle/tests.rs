@@ -7,6 +7,7 @@ use crate::agents::lifecycle::{LifecycleState, PingEdge, TurnPhase};
 use crate::disk::paths::{RuntimePaths, StatePaths};
 use crate::ids::{AgentSessionId, MuxName, PaneId, WorkspaceId};
 use crate::store::event::EventKind;
+use crate::store::snapshot::find_agent;
 
 fn transition(kind: TransitionKind, compaction_closed: bool) -> Transition {
     Transition {
@@ -389,7 +390,12 @@ fn side_conversation_receipts_append_only_the_registration() {
     );
     root.signal = LifecycleSignal::TurnStarted { turn_id: None };
     append("UserPromptSubmit", &root, u64::MAX);
-    let agents = || snapshot::catch_up_rollup(store.paths()).expect("rollup").1;
+    let agents = || {
+        snapshot::catch_up_rollup(store.paths())
+            .expect("rollup")
+            .1
+            .to_vec()
+    };
     let before = agents();
     assert_eq!(before.len(), 1);
     let mut side = in_root_process(AgentLifecycleObservation::new(
@@ -1014,7 +1020,7 @@ fn cross_kind_native_child_uses_its_own_room_default() {
     let default = "personal".parse().unwrap();
     assert_eq!(
         ingress_login(
-            &[parent],
+            &vec![parent].into(),
             &AgentKind::new_unchecked("codex"),
             &child,
             Some(&default)
@@ -1043,7 +1049,7 @@ fn adoption_inherits_immediate_parent_before_flattening_cross_kind_lineage() {
     append_adoption(
         &WorkspaceId::from_project_root(std::path::Path::new("/repo")),
         &intent,
-        &[root, parent.clone()],
+        &vec![root, parent.clone()].into(),
         &parent.agent_id,
         child.clone(),
         LifecycleSignal::SubagentStarted,
@@ -1089,9 +1095,9 @@ fn ingress_stamps_the_rooms_account_only_on_rows_it_creates() {
         snapshot::catch_up_rollup(&paths)
             .expect("rollup")
             .1
-            .into_iter()
+            .iter()
             .find(|state| state.agent_id == id)
-            .map(|state| state.login)
+            .map(|state| state.login.clone())
     };
 
     append("claude", "before", LifecycleSignal::Registered);

@@ -387,3 +387,43 @@ fn reseed_for_rotation_bumps_generation_and_starts_an_empty_fold() {
     };
     assert_eq!(ids, ["a", "b"], "carryover and fresh-log agents merge");
 }
+
+#[test]
+fn thread_fold_serves_across_a_rotation() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+    paths.ensure_dirs().unwrap();
+    let registered = |agent_id: &str| {
+        lifecycle_at(
+            &workspace,
+            "claude",
+            "SessionStart",
+            agent_id,
+            lifecycle::LifecycleSignal::Registered,
+        )
+    };
+    event_log::append(&paths.events_log, &registered("before")).unwrap();
+    let (held, _, _) = thread_catch_up(&paths).unwrap();
+    write_rollup_cache(&paths.rollup_cache, &held).unwrap();
+    drop(held);
+
+    stage_carryover_for_rotation(&paths, 1).unwrap();
+    event_log::rotate(&paths.events_log, &paths.events_archive_dir, 1).unwrap();
+    reseed_rollup_cache_for_rotation(&paths).unwrap();
+    event_log::append(&paths.events_log, &registered("after")).unwrap();
+
+    let (cache, served, _) = thread_catch_up(&paths).unwrap();
+    let (cold_extent, cold, _) = RollupCursor::new().fold(&paths).unwrap();
+    assert_eq!(cache.extent, cold_extent);
+    assert_eq!(
+        cache.extent.generation, 1,
+        "the reseeded generation is read"
+    );
+    assert_eq!(sorted_value(served.to_vec()), sorted_value(cold.to_vec()));
+    let ids = served
+        .iter()
+        .map(|agent| agent.agent_id.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(ids, ["after", "before"]);
+}

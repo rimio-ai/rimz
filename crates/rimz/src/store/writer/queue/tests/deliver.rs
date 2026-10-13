@@ -280,7 +280,10 @@ fn idle_compact_command_delivers_at_boundary_and_stamps_the_rollup() {
         .unwrap();
     assert_eq!(delivered.len(), 1);
 
-    let (_, agents, _) = crate::store::snapshot::catch_up_rollup(&q.inner.paths).unwrap();
+    let agents = crate::store::snapshot::catch_up_rollup(&q.inner.paths)
+        .unwrap()
+        .1
+        .to_vec();
     assert_eq!(agents.len(), 1);
     assert_eq!(agents[0].last_compact_command_tokens, Some(80_000));
     assert!(agents[0].compacted_awaiting_prompt.is_some());
@@ -305,7 +308,10 @@ fn compact_delivery_ack_after_a_prompt_does_not_rearm_the_rollup() {
         message.text = "/compact".to_owned();
         message.body = MessageBody::Command;
     });
-    let (_, agents, _) = crate::store::snapshot::catch_up_rollup(&q.inner.paths).unwrap();
+    let agents = crate::store::snapshot::catch_up_rollup(&q.inner.paths)
+        .unwrap()
+        .1
+        .to_vec();
     assert!(agents[0].compacted_awaiting_prompt.is_some());
     assert_eq!(agents[0].last_compact_command_tokens, None);
 
@@ -339,7 +345,10 @@ fn compact_delivery_ack_after_a_prompt_does_not_rearm_the_rollup() {
         .unwrap();
     assert_eq!(delivered.len(), 1);
     assert_eq!(delivered[0].status, MessageStatus::Delivered);
-    let (_, agents, _) = crate::store::snapshot::catch_up_rollup(&q.inner.paths).unwrap();
+    let agents = crate::store::snapshot::catch_up_rollup(&q.inner.paths)
+        .unwrap()
+        .1
+        .to_vec();
     assert_eq!(agents[0].compacted_awaiting_prompt, None);
     assert_eq!(q.count("message.delivered"), 1);
 }

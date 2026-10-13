@@ -156,7 +156,7 @@ impl EventFollower {
         let (cursor, agents) = snapshot::lifecycle_follow_seed(&paths)?;
         let mut ended = Vec::new();
         let states = agents
-            .into_iter()
+            .iter()
             .map(|agent| {
                 let key = (agent.kind.clone(), agent.agent_id.clone());
                 if let Some(ended_at) = agent.ended_at {
@@ -164,10 +164,10 @@ impl EventFollower {
                 }
                 let state = FollowState {
                     lifecycle: agent.lifecycle(),
-                    open_ask_key: open_ask_key(&agent),
-                    started_turn_id: agent.started_turn_id,
-                    superseded_turn_id: agent.superseded_turn_id,
-                    interrupted_turn_id: agent.interrupted_turn_id,
+                    open_ask_key: open_ask_key(agent),
+                    started_turn_id: agent.started_turn_id.clone(),
+                    superseded_turn_id: agent.superseded_turn_id.clone(),
+                    interrupted_turn_id: agent.interrupted_turn_id.clone(),
                 };
                 (key, state)
             })

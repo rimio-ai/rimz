@@ -72,7 +72,7 @@ A performance change follows these rules. An earlier rule outranks a later one w
 4. **Fsync truth, rename caches.** Durable records fsync. Everything derived (rollup caches, the snapshot cache, diff stats, context sidecars) is written with `write_temp_then_rename_cache`, which renames atomically without fsync, because it rebuilds from truth on the next read. Neither form allows a torn read; the cache form gives up only surviving a power cut ([store.md → Write classes](./store.md#write-classes)).
 5. **Single-flight, then coalesce.** One fetch runs at a time. A burst of requests collapses to one fetch, and a request racing an in-flight fetch leaves exactly one follow-up, never a queue.
 6. **Pay the external read once per window.** A short TTL bounds pane discovery, git, and forge probes, and the last good result is reused. A failed probe backs off and keeps its last known good value. A degraded roster read backfills missing fields per pane instead of painting a corrupt frame.
-7. **Take the cheapest correct read.** Catch-up is O(delta bytes) from the persisted fold base, never O(history). Skip work that cannot matter: unchanged inputs cost a stat, and a room with no agents skips the sidecar scans.
+7. **Take the cheapest correct read.** Catch-up is O(delta bytes) from the thread's held fold or the persisted fold base, never O(history). Skip work that cannot matter: unchanged inputs cost a stat, and a room with no agents skips the sidecar scans.
 8. **One host per room, one render loop per pane.** The data plane and room event socket are shared, while every pane keeps its loop, heartbeat, and bounded wake channel. Supervisors replace a lost host and reattach without an ownership election.
 
 ## The cost map
@@ -93,7 +93,7 @@ Each lane's cost and the bound that holds it down. Reproducible figures come fro
 
 | Operation | Cost | Bound |
 | --- | --- | --- |
-| Snapshot rollup | O(1) from `cache/snapshots/latest.json`; O(delta bytes) when writes outran the cache | The `(generation, offset)` freshness stamp; a long-lived `RollupCursor` holds the parsed base, and the rotation carryover beneath it is parsed once per file identity per thread and shared, never copied, by every fold |
+| Snapshot rollup | O(1) from `cache/snapshots/latest.json`; O(delta bytes) when writes outran the cache | The `(generation, offset)` freshness stamp; a `RollupCursor` holds the parsed base (one held per thread for store reads, one owned by the sidebar fetch worker), and the rotation carryover beneath it is parsed once per file identity per thread and shared, never copied, by every fold |
 | Event-log fold | Warm cursor: one stat of the log and one of the carryover, plus the appended frames; the projection clones only the rows it keeps. Unchanged log: shared handles only | Guard tests `delta_fold_is_o_new_bytes` and `warm_fold_parses_unchanged_carryover_zero_times` |
 | Workspace fold | One enrichment; pane projections share agent-scaled collections, the group vector, and rows, with no seed serialization | The host retains its last delivered fold for new-attachment seeds; only changed collections detach |
 | Fold observations | One focus-anchor read and one body-filter read per real cycle, shared by every attachment | Pane-local application keeps selection, confirmation and read intent; live nonce comparison guards retirement ([state.md](./sidebar/state.md#focus-intent)) |
