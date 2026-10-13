@@ -113,7 +113,14 @@ pub(super) fn stop_agent(
         return Ok(());
     }
     let live_agent_result =
-        crate::cli::resolve_agent_one(store, &snapshot, &reference, None, current_channel);
+        crate::cli::resolve_agent_one(store, &snapshot, &reference, None, current_channel).map_err(
+            |mut err| {
+                if let Some(ambiguity) = err.downcast_mut::<render::AmbiguousAgents>() {
+                    ambiguity.offer_stop_all();
+                }
+                err
+            },
+        );
     let live_agent = live_agent_result.as_ref().ok().copied();
     if let Some(live_agent) = live_agent {
         let peers = rimz::address::addressable_agents(&snapshot);
@@ -134,7 +141,7 @@ pub(super) fn stop_agent(
         supervised::stop_supervised_run(workspace, store, globals, &run)?;
         return Ok(());
     }
-    let live_agent = live_agent_result.map_err(|err| stop_resolve_error(err, &reference))?;
+    let live_agent = live_agent_result?;
     close_agent_pane(workspace, store, live_agent)
 }
 
@@ -218,19 +225,6 @@ fn request_idle_stop(reference: &str, when_idle: WhenIdle, globals: &GlobalFlags
         "{label} stops once idle for {duration} with nothing owed{replaced}"
     )?;
     Ok(())
-}
-
-fn stop_resolve_error(err: anyhow::Error, reference: &str) -> anyhow::Error {
-    let Some(target_err) = err.downcast_ref::<rimz::address::TargetErr>() else {
-        return err;
-    };
-    if matches!(target_err, rimz::address::TargetErr::Ambiguous { .. }) {
-        anyhow::anyhow!(
-            "{target_err}; re-run `rimz agents stop {reference} --all` to stop every match"
-        )
-    } else {
-        err
-    }
 }
 
 fn stop_live_agent(

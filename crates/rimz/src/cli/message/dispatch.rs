@@ -124,10 +124,10 @@ pub(super) fn send_message(
                     recipient_miss(&ctx, miss(), err, globals, false)?;
                     return Ok(());
                 }
-                Err(err) => return Err(map_dispatch_err(err)),
+                Err(err) => return Err(map_dispatch_err(err, &ctx)),
             }
         }
-        Err(err) => return Err(map_dispatch_err(err)),
+        Err(err) => return Err(map_dispatch_err(err, &ctx)),
     };
     if let Some(reply_wait) = result.reply {
         {
@@ -274,21 +274,18 @@ fn recipient_miss(
     message_miss(&demotion, &snapshot, miss.current_channel, &mapped).map(|()| false)
 }
 
-fn map_dispatch_err(err: DispatchErr) -> anyhow::Error {
+fn map_dispatch_err(err: DispatchErr, ctx: &Ctx) -> anyhow::Error {
     match err {
-        DispatchErr::Fanout {
-            target,
-            labels,
-            kind,
-        } => crate::cli::ambiguous_fanout(
-            match kind {
-                rimz::message::DeliveryKind::Steer => "message --steer",
-                rimz::message::DeliveryKind::Interrupt => "message --interrupt",
-                rimz::message::DeliveryKind::Boundary => "deliver to",
-            },
-            &target,
-            &labels,
-        ),
+        DispatchErr::Fanout { target, labels, .. } => match ctx.cached_snapshot() {
+            Ok(snapshot) => crate::cli::render::AmbiguousAgents::from_labels(
+                &target,
+                &labels,
+                &snapshot,
+                &ctx.address_context(),
+            )
+            .into(),
+            Err(err) => err,
+        },
         DispatchErr::Condition(err) => map_condition_err(err),
         DispatchErr::ReplyPreparation(err) => map_reply_prepare_err(err),
         other => anyhow::Error::new(other),

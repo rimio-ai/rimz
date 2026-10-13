@@ -135,6 +135,9 @@ fn write_report_with_args(
     error: &anyhow::Error,
     argv: &[String],
 ) -> std::io::Result<()> {
+    if let Some(ambiguity) = error.downcast_ref::<AmbiguousAgents>() {
+        return ambiguity.write(w, argv);
+    }
     let mut messages = distinct_messages(error).into_iter();
     let Some(message) = messages.next() else {
         return Ok(());
@@ -185,6 +188,167 @@ fn write_continuation(w: &mut impl Write, line: &str) -> std::io::Result<()> {
     }
 }
 
+const AMBIGUITY_ROW_CAP: usize = 8;
+
+#[derive(Debug, thiserror::Error)]
+#[error("`{target}` matches {count} {pool} agents; pick one:", count = .rows.len())]
+pub(crate) struct AmbiguousAgents {
+    target: String,
+    pool: &'static str,
+    rows: Vec<AmbiguityRow>,
+    all_matches: Option<AllMatches>,
+}
+
+#[derive(Debug)]
+enum AllMatches {
+    Stop,
+    Message,
+}
+
+#[derive(Debug)]
+struct AmbiguityRow {
+    address: String,
+    status: Option<rimz::agents::AgentStatus>,
+    phase: rimz::agents::TurnPhase,
+    activity: Option<Timestamp>,
+    description: Option<String>,
+}
+
+impl AmbiguousAgents {
+    pub(crate) fn new(
+        target: &str,
+        matches: &[&rimz::agents::AgentState],
+        snapshot: &rimz::store::snapshot::SidebarSnapshot,
+        reader: &rimz::address::AddressContext,
+        recorded: bool,
+    ) -> Self {
+        let mut rows = matches
+            .iter()
+            .map(|agent| {
+                let card = snapshot
+                    .rows()
+                    .find(|row| row.is_agent() && row.id == agent.agent_id.as_str())
+                    .and_then(rimz::store::snapshot::SidebarRow::as_agent);
+                AmbiguityRow {
+                    address: rimz::address::paste_address(agent, snapshot, reader),
+                    status: Some(card.map_or_else(|| agent.effective_status(), |card| card.status)),
+                    phase: card.map_or(rimz::agents::TurnPhase::Idle, |card| card.phase),
+                    activity: Some(agent.last_activity),
+                    description: agent_activity_line(agent, card),
+                }
+            })
+            .collect::<Vec<_>>();
+        rows.sort_by_key(|row| {
+            (
+                match row.status {
+                    Some(rimz::agents::AgentStatus::Waiting) => 0,
+                    Some(rimz::agents::AgentStatus::Running) => 1,
+                    _ => 2,
+                },
+                std::cmp::Reverse(row.activity),
+            )
+        });
+        Self {
+            target: target.to_owned(),
+            pool: if recorded { "recorded" } else { "live" },
+            rows,
+            all_matches: None,
+        }
+    }
+
+    pub(crate) fn offer_stop_all(&mut self) {
+        self.all_matches = Some(AllMatches::Stop);
+    }
+
+    pub(crate) fn from_labels(
+        target: &str,
+        labels: &[String],
+        snapshot: &rimz::store::snapshot::SidebarSnapshot,
+        reader: &rimz::address::AddressContext,
+    ) -> Self {
+        let unscoped = crate::cli::CurrentChannel::Unscoped.address_context();
+        let mut matches = Vec::new();
+        let mut missing = Vec::new();
+        for label in labels {
+            match rimz::address::resolve_many(snapshot, label, None, &unscoped) {
+                Ok(found) if found.len() == 1 => matches.push(found[0]),
+                _ => missing.push(AmbiguityRow {
+                    address: label.clone(),
+                    status: None,
+                    phase: rimz::agents::TurnPhase::Idle,
+                    activity: None,
+                    description: None,
+                }),
+            }
+        }
+        let mut error = Self::new(target, &matches, snapshot, reader, false);
+        // A pane-only target or a session that ended since dispatch has no cached card.
+        error.rows.extend(missing);
+        error.all_matches = Some(AllMatches::Message);
+        error
+    }
+
+    fn write(&self, w: &mut impl Write, argv: &[String]) -> std::io::Result<()> {
+        writeln!(w, "{} {self}", paint(palette::alarm().bold(), "error:"))?;
+        let now = Timestamp::now();
+        let mut table = Table::new(["COMMAND", "STATUS", "AGE", "DESCRIPTION"])
+            .without_headers()
+            .indent(2);
+        for row in self.rows.iter().take(AMBIGUITY_ROW_CAP) {
+            let command = argv
+                .iter()
+                .position(|arg| arg == &self.target)
+                .and_then(|index| {
+                    let mut args = argv.to_vec();
+                    args[index] = row.address.clone();
+                    // A row that names its lane carries it into the channel flag,
+                    // which would otherwise contradict the address.
+                    if let Ok((_, Some(lane))) = rimz::address::parse_selector(&row.address) {
+                        rewrite_channel_flags(&mut args, &lane)?;
+                    }
+                    shlex::try_join(args.iter().map(String::as_str)).ok()
+                })
+                .unwrap_or_else(|| row.address.clone());
+            table.row([
+                cell(command),
+                cell(row.status.map_or("", rimz::agents::AgentStatus::as_str)).fg(row
+                    .status
+                    .map_or_else(palette::muted, |state| status::agent(state, row.phase))),
+                cell(
+                    row.activity
+                        .map(|at| age_short(at, now))
+                        .unwrap_or_default(),
+                ),
+                cell(row.description.as_deref().unwrap_or_default()),
+            ]);
+        }
+        table.render(w)?;
+        if self.rows.len() > AMBIGUITY_ROW_CAP {
+            writeln!(
+                w,
+                "  … and {} more (rimz agents list --all)",
+                self.rows.len() - AMBIGUITY_ROW_CAP
+            )?;
+        }
+        if matches!(self.all_matches, Some(AllMatches::Stop)) {
+            if let Ok(target) = shlex::try_quote(&self.target) {
+                writeln!(w, "  or stop every match: rimz agents stop {target} --all")?;
+            }
+        } else if matches!(self.all_matches, Some(AllMatches::Message)) {
+            let mut args = argv.to_vec();
+            let index = args
+                .iter()
+                .position(|arg| arg == "--" || arg == &self.target)
+                .unwrap_or(args.len());
+            args.insert(index, "--all".into());
+            if let Ok(command) = shlex::try_join(args.iter().map(String::as_str)) {
+                writeln!(w, "  or message every match: {command}")?;
+            }
+        }
+        Ok(())
+    }
+}
+
 fn corrected_command(
     argv: &[String],
     target: &str,
@@ -199,7 +363,16 @@ fn corrected_command(
         argv[target_index].push_str(&format!("#{channel}"));
         return shlex::try_join(argv.iter().map(String::as_str)).ok();
     }
-    let mut corrected_flag = false;
+    rewrite_channel_flags(&mut argv, channel)?
+        .then(|| shlex::try_join(argv.iter().map(String::as_str)).ok())
+        .flatten()
+}
+
+/// Point every `--channel`/`--worktree`/`-w` value before any `--` at
+/// `channel`, returning whether one was rewritten, or `None` when a flag lacks
+/// its value.
+fn rewrite_channel_flags(argv: &mut [String], channel: &str) -> Option<bool> {
+    let mut rewritten = false;
     let mut index = 1;
     while index < argv.len() {
         let arg = &argv[index];
@@ -209,19 +382,17 @@ fn corrected_command(
         if matches!(arg.as_str(), "--channel" | "--worktree" | "-w") {
             index += 1;
             *argv.get_mut(index)? = channel.to_owned();
-            corrected_flag = true;
+            rewritten = true;
         } else if let Some(prefix) = ["--channel=", "--worktree=", "-w"]
             .into_iter()
             .find(|prefix| arg.starts_with(prefix))
         {
             argv[index] = format!("{prefix}{channel}");
-            corrected_flag = true;
+            rewritten = true;
         }
         index += 1;
     }
-    corrected_flag
-        .then(|| shlex::try_join(argv.iter().map(String::as_str)).ok())
-        .flatten()
+    Some(rewritten)
 }
 
 /// An error's messages outermost first, each trimmed, without any source the

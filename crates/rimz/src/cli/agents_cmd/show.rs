@@ -54,8 +54,9 @@ fn collect_show_report(
         // A live ambiguity or bad selector is the answer; a miss, its launch hint,
         // or an audit read error still lets a run match the reference.
         Err(err)
-            if err.downcast_ref::<rimz::address::TargetErr>().is_some()
-                && !crate::cli::resolution_missed(&err) =>
+            if err.downcast_ref::<render::AmbiguousAgents>().is_some()
+                || (err.downcast_ref::<rimz::address::TargetErr>().is_some()
+                    && !crate::cli::resolution_missed(&err)) =>
         {
             return Err(err);
         }
@@ -250,6 +251,7 @@ pub(super) fn resolve_audit_agent(
     workspace: &rimz::ResolvedWorkspace,
     runtime: &rimz::RuntimePaths,
     reference: &str,
+    context: &rimz::address::AddressContext,
 ) -> Result<Option<AgentState>> {
     let audit = store
         .runtime_projection(rimz::RuntimeScope::Audit)
@@ -263,15 +265,37 @@ pub(super) fn resolve_audit_agent(
         jiff::Timestamp::now(),
     )
     .with_agent_context(rimz::store::agent_context::read_all(runtime));
-    let context = crate::cli::CurrentChannel::Unscoped.address_context();
-    match crate::cli::resolve_agent_one(store, &snapshot, reference, None, &context) {
-        Ok(agent) => Ok(Some(
+    let matches = match rimz::address::resolve_many(&snapshot, reference, None, context) {
+        Ok(matches) if matches.len() > 1 => {
+            return Err(render::AmbiguousAgents::new(
+                reference, &matches, &snapshot, context, true,
+            )
+            .into());
+        }
+        Ok(matches) => matches,
+        Err(
+            rimz::address::TargetErr::NoMatch { .. }
+            | rimz::address::TargetErr::NoMatchInChannel { .. },
+        ) => {
+            if context.channel.is_none() {
+                return Ok(None);
+            }
+            let unscoped = crate::cli::CurrentChannel::Unscoped.address_context();
+            match rimz::address::resolve_many(&snapshot, reference, None, &unscoped) {
+                Ok(matches) if matches.len() == 1 => matches,
+                _ => return Ok(None),
+            }
+        }
+        Err(err) => return Err(err.into()),
+    };
+    matches
+        .first()
+        .map(|agent| {
             store
                 .load_full_agent(agent)
-                .context("loading audit agent text")?,
-        )),
-        Err(err) => Err(err),
-    }
+                .context("loading audit agent text")
+        })
+        .transpose()
 }
 
 fn is_false(value: &bool) -> bool {

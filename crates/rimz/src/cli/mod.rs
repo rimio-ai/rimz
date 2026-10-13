@@ -386,29 +386,6 @@ fn directory_channel(workspace: &rimz::ResolvedWorkspace, cwd: &Path) -> Option<
     rimz::harness::spec::resolve_room_channel(&workspace.project_root, cwd, None, None)
 }
 
-/// Refuse a plain selector that matched several agents. A bare `@<kind>`/`@<profile>`
-/// names a profile, not "everyone", so several matches is a "pick one" error: it
-/// lists the disambiguating handles to retype and names `--all` as the opt-in to
-/// reach every match. The explicit broadcast `@all` and `--all` fan out directly;
-/// each delivery carries the addressed handle as a prefix.
-pub(crate) fn ambiguous_fanout(verb: &str, target: &str, labels: &[String]) -> anyhow::Error {
-    let list = labels
-        .iter()
-        .map(|label| {
-            if label.starts_with('@') {
-                label.clone()
-            } else {
-                format!("@{label}")
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(", ");
-    anyhow::anyhow!(
-        "`{target}` matches {} agents ({list}); name one above, or pass --all to {verb} them all",
-        labels.len()
-    )
-}
-
 /// Resolve a ref to exactly one agent (`show`/`focus`/`wait`/`stop`,
 /// `message clear`/`list`). `@all` or a fan-out kind is an explicit ambiguity.
 pub(crate) fn resolve_agent_one<'a>(
@@ -458,7 +435,11 @@ fn resolve_agent_one_unhinted<'a>(
         }
         return Ok(agent);
     }
-    rimz::address::resolve_one(snapshot, raw, worktree_flag, current_channel).map_err(Into::into)
+    let matches = rimz::address::resolve_many(snapshot, raw, worktree_flag, current_channel)?;
+    if let [agent] = matches.as_slice() {
+        return Ok(agent);
+    }
+    Err(render::AmbiguousAgents::new(raw, &matches, snapshot, current_channel, false).into())
 }
 
 fn resolution_missed(error: &anyhow::Error) -> bool {
