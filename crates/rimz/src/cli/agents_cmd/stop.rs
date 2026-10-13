@@ -56,31 +56,80 @@ impl TreeStop {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum WhenIdle {
     After(Duration),
     Off,
+    Reference(String),
 }
 
+/// The rest a bare `--when-idle` waits for.
+pub(super) const WHEN_IDLE_DEFAULT: &str = "3m";
+
 pub(super) fn parse_when_idle(raw: &str) -> std::result::Result<WhenIdle, String> {
+    if raw.starts_with('@') {
+        return Ok(WhenIdle::Reference(raw.to_owned()));
+    }
     if raw == "off" {
         return Ok(WhenIdle::Off);
     }
     supervised::parse_timeout(raw)
         .map(WhenIdle::After)
-        .map_err(|err| {
-            format!(
-                "{err}; --when-idle takes a duration (`90s`, `5m`) or `off`, so put the reference before the flag (`rimz agents stop @me --when-idle`)"
-            )
-        })
+        .map_err(|err| format!("{err}; use `rimz agents stop <ref> --when-idle <duration>`"))
+}
+
+pub(super) fn normalize_stop(
+    reference: Option<String>,
+    when_idle: Option<WhenIdle>,
+) -> Result<(String, Option<WhenIdle>)> {
+    let usage = || {
+        crate::cli::usage::UsageError::new(
+            "name one reference: rimz agents stop <ref> --when-idle <duration>".to_owned(),
+        )
+    };
+    match (reference, when_idle) {
+        (None, None) => Err(crate::cli::usage::UsageError::new(
+            "name one reference: rimz agents stop <ref>".to_owned(),
+        )
+        .into()),
+        (None, Some(WhenIdle::Reference(reference))) => {
+            let default = parse_when_idle(WHEN_IDLE_DEFAULT).map_err(anyhow::Error::msg)?;
+            Ok((reference, Some(default)))
+        }
+        (None, _) | (Some(_), Some(WhenIdle::Reference(_))) => Err(usage().into()),
+        (Some(reference), when_idle) => Ok((reference, when_idle)),
+    }
+}
+
+/// The `-w` name that `agents <team>.<role> --resume` maps back to this seat's
+/// recorded worktree; `None` for a project-root seat or a worktree whose path
+/// that name does not reproduce.
+fn resume_worktree_name<'a>(
+    workspace: &rimz::ResolvedWorkspace,
+    agent: &'a AgentState,
+) -> Option<&'a str> {
+    use rimz::utils::path::normalize_path_lexical;
+    let recorded = agent.worktree_path.as_deref()?;
+    let name = Path::new(recorded).file_name()?.to_str()?;
+    let path = normalize_path_lexical(Path::new(recorded));
+    let mapped = rimz::worktree::worktree_path(
+        workspace.launch_repo_root(),
+        &crate::cli::machine_config().agents.worktree,
+        name,
+    )
+    .ok()?;
+    (path != normalize_path_lexical(&workspace.project_root)
+        && normalize_path_lexical(&mapped) == path)
+        .then_some(name)
 }
 
 pub(super) fn stop_agent(
-    reference: String,
+    reference: Option<String>,
     all: bool,
     when_idle: Option<WhenIdle>,
     globals: &GlobalFlags,
 ) -> Result<()> {
+    let (reference, when_idle) = normalize_stop(reference, when_idle)?;
     if let Some(when_idle) = when_idle {
         return request_idle_stop(&reference, when_idle, globals);
     }
@@ -95,7 +144,7 @@ pub(super) fn stop_agent(
         let mut failed = false;
         let mut out = render::out();
         for agent in agents {
-            let label = rimz::address::agent_handle(agent, &peers, true);
+            let label = rimz::address::paste_address(agent, &snapshot, current_channel);
             failed |= stop_live_agent_tree(
                 workspace,
                 store,
@@ -124,7 +173,8 @@ pub(super) fn stop_agent(
     let live_agent = live_agent_result.as_ref().ok().copied();
     if let Some(live_agent) = live_agent {
         let peers = rimz::address::addressable_agents(&snapshot);
-        return stop_live_agent_tree(
+        let label = rimz::address::paste_address(live_agent, &snapshot, current_channel);
+        stop_live_agent_tree(
             workspace,
             store,
             globals,
@@ -133,12 +183,48 @@ pub(super) fn stop_agent(
             live_agent,
             &mut StopTracker::default(),
         )?
-        .into_result(&rimz::address::agent_handle(live_agent, &peers, true));
+        .into_result(&rimz::address::agent_handle(live_agent, &peers, true))?;
+        let mut receipt = format!("stopped {label} ({})", live_agent.kind);
+        if !live_agent.is_provider_subagent()
+            && live_agent.parent_agent_id.is_none()
+            && !live_agent.launch_depth.is_some_and(|depth| depth > 0)
+            && agent_session_resumable(
+                &live_agent.kind,
+                &live_agent.agent_id,
+                live_agent
+                    .worktree_path
+                    .as_deref()
+                    .map_or(workspace.project_root.as_path(), Path::new),
+            )
+        {
+            let command = if let (Some(team), Some(role)) = (&live_agent.team, &live_agent.role) {
+                let spec = format!("{team}.{role}");
+                let mut args = vec!["rimz", "agents", &spec, "--resume"];
+                if let Some(name) = resume_worktree_name(workspace, live_agent) {
+                    args.extend(["-w", name]);
+                }
+                shlex::try_join(args)?
+            } else {
+                let name = live_agent
+                    .name
+                    .as_deref()
+                    .unwrap_or(live_agent.agent_id.as_str());
+                shlex::try_join(["rimz", "agents", "resume", &format!("@{name}")])?
+            };
+            receipt.push_str(&format!("; resume: {command}"));
+        }
+        writeln!(render::out(), "{receipt}")?;
+        return Ok(());
     }
     if let Some(run) =
         newest_run_by_ref(store, &reference, live_agent)?.filter(|run| run.peer.is_none())
     {
         supervised::stop_supervised_run(workspace, store, globals, &run)?;
+        writeln!(
+            render::out(),
+            "stopped {} (run)",
+            run.agent_name.as_deref().unwrap_or(run.run_id.as_str())
+        )?;
         return Ok(());
     }
     let live_agent = live_agent_result?;

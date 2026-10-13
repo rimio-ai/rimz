@@ -543,11 +543,11 @@ HANDLE    PROFILE  AGENT   STATUS   MODEL         CTX  TOKENS  AGE
   wire up the refresh-token path
 ```
 
-Cards group under lane headers. `⑂` marks a worktree-backed lane, `#` a plain channel, and a bare label the room root; agents outside the project collect under a dim `external` header. A header adds `· <team> team` for a shared team and the lane's pull-request number and CI glyph when one is known. Glyphs follow the configured theme glyph set.
+Cards group under lane headers. `⑂` marks a worktree-backed lane, `#` a plain channel, and a bare label the room root; agents outside the project collect under a dim `external` header. When the displayed label is not a selector for the group, the header adds `· #<channel>`. A header adds `· <team> team` for a shared team and the lane's pull-request number and CI glyph when one is known. Glyphs follow the configured theme glyph set.
 
 | Column | Shows |
 | --- | --- |
-| `HANDLE` | The shortest handle you can type under that header: the role (`@coder`), else the `--name` (`@writer`), else the profile when unique (`@planner`), else `@<kind>` when unique, else the pet name. Launched agents show the pet name rather than an ordinal. |
+| `HANDLE` | An address you can paste from your current channel: a bare role, name, profile, or kind when it resolves uniquely, otherwise qualified with `#channel` (or a session or pane id when needed). Uniqueness is checked against the room, not just the printed rows. The JSON `handle` in `list` and `show` carries the same address. |
 | `PROFILE` | The launch profile, or a faint `-` when absent. |
 | `AGENT` | The provider kind, such as `claude` or `codex`; a named account includes its name, such as `claude@work`. |
 | `STATUS` | The card status (below). |
@@ -725,11 +725,11 @@ AGENT         STATUS   CPU   MEM  IO/S  PROCS  CTX  TOKENS  AGE
 | `--all` | Every channel in the room instead of the current channel. |
 | `-w, --worktree <NAME>` | One worktree or channel. Conflicts with `--all`. |
 
-Resource columns read `-` where process metrics are unavailable for the platform or pane; context and token columns still render.
+The `AGENT` column uses the same paste-ready addresses as `list`, even when the table is filtered. Resource columns read `-` where process metrics are unavailable for the platform or pane; context and token columns still render.
 
 #### `focus`
 
-`rimz agents focus <REF>` moves your multiplexer focus to the agent's pane.
+`rimz agents focus <REF>` moves your multiplexer focus to the agent's pane and prints `focused <address>`.
 
 #### `fork`
 
@@ -780,13 +780,15 @@ The exit code is `0` when every target completes; otherwise it is the status cod
 
 #### `stop`
 
-`rimz agents stop <REF>` ends an agent's CLI process the way Ctrl+C would. For a live supervised run it cancels the run; for a completed run kept open with `--keep` it reclaims the pane; for an agent it closes the pane. The provider's session files stay on disk, so a stopped agent is one [`--resume`](#resume-agents) away.
+`rimz agents stop <REF>` ends an agent's CLI process the way Ctrl+C would. For a live supervised run it cancels the run; for a completed run kept open with `--keep` it reclaims the pane; for an agent it closes the pane. The provider's session files stay on disk. When the provider supports resuming that session, a stopped agent is one [`--resume`](#resume-agents) away.
+
+Success prints `stopped <address> (<kind>)`. A resumable solo agent's receipt adds `; resume: rimz agents resume @<pet-name>` (session id when unnamed); a resumable team seat points to `rimz agents <team>.<role> --resume`, with `-w <name>` when the seat ran in a RimZ worktree whose name maps back to its path. Children and sessions the provider cannot resume get no resume clause. A run-only stop prints `stopped <name-or-run-id> (run)`. The address is resolved before the stop, from the caller's channel.
 
 A stop succeeds only when the agent's own pane is gone. A pane the multiplexer still lists after its close failed, or one whose state could not be read and whose close failed, fails the stop with exit `1` and `<handle> was not stopped: <failures>`; the session keeps its loop rows and any pending idle stop, and rerunning the stop retries the close. When the agent's pane closed but something else failed (a child's pane stayed open, or the session's rows could not be retired), the stop exits `1` with `<handle> stopped, but: <failures>`. Each failure starts with the handle it concerns.
 
 An interactive peer still takes the pane-close path when it has a launcher-opened run, whether that run is open or already terminal. An open turn reports failure to its launcher when session-end or the backstop observes the stop; an idle peer with no open turn reports nothing.
 
-Stopping a parent first stops its live children launched with `rimz subagents`, including when [`rimz teams stop`](./teams.md#drive-a-live-team) reaches the parent. Without `--all`, the reference must match one agent. With `--all`, `stop` acts on every match and prints `stopped <handle>` for each agent whose pane closed and `error <handle>: <failures>` for each one with a failure; an agent that closed while a child or its retirement failed gets both lines. It exits `1` if any agent had a failure.
+Stopping a parent first stops its live children launched with `rimz subagents`, including when [`rimz teams stop`](./teams.md#drive-a-live-team) reaches the parent. Without `--all`, the reference must match one agent. With `--all`, `stop` acts on every match and prints `stopped <address>` for each agent whose pane closed and `error <address>: <failures>` for each one with a failure; an agent that closed while a child or its retirement failed gets both lines. These addresses follow `list`'s reader-relative rule, without a resume clause. It exits `1` if any agent had a failure.
 
 `rimz agents stop <REF> --when-idle [DURATION|off]` asks for the same stop later, once the agent is finished rather than now. It records the request, prints one line, and returns at once with exit `0`; the room stops the agent after it has rested for the duration with nothing owed to it. An agent can pass `@me` to end its own session when its work is done.
 
@@ -796,7 +798,7 @@ Stopping a parent first stops its live children launched with `rimz subagents`, 
 | `--when-idle 10m`, `--when-idle=10m` | Stop after the given rest: a whole number with `s`, `m`, `h`, or `d`. `0s` stops at the first check that finds nothing owed. |
 | `--when-idle off` | Withdraw the pending request; with none pending it says so and still exits `0`. |
 
-The reference comes before the flag: in `rimz agents stop --when-idle @me` the flag takes `@me` as its duration and the command fails with that fix. `--when-idle` conflicts with `--all` and needs one live agent; an ended one refuses with `rimz agents resume` as the fix. A reference that resolves only to a run refuses and names the plain `stop`, and a provider's own subagent refuses because it ends with its parent. A second request for the same agent replaces the first, and its clock starts over.
+`rimz agents stop --when-idle @me` and `--when-idle=@me` also request the default `3m`. An `@` reference in the flag plus a positional reference is a usage error (exit `2`), as is omitting the reference entirely; use `rimz agents stop <ref> --when-idle <duration>`. `--when-idle` conflicts with `--all` and needs one live agent; an ended one refuses with `rimz agents resume` as the fix. A reference that resolves only to a run refuses and names the plain `stop`, and a provider's own subagent refuses because it ends with its parent. A second request for the same agent replaces the first, and its clock starts over.
 
 The agent stops only when all of this holds at one check:
 

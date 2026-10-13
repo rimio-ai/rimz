@@ -862,11 +862,7 @@ fn relaunch_command(request: &rimz::harness::launch::ExecRequest) -> String {
 /// provider session id whose adapter compiles a resume command for this
 /// directory. The hint then teaches resume; anything else relaunches fresh.
 fn exited_session_resumable(ended: Option<&EndedSession>, cwd: &Path) -> bool {
-    ended.is_some_and(|ended| {
-        !ended.agent_id.is_provisional()
-            && rimz::agents::find_definition(ended.kind.as_str())
-                .is_some_and(|adapter| adapter.resume_command(&ended.agent_id, cwd).is_some())
-    })
+    ended.is_some_and(|ended| agent_session_resumable(&ended.kind, &ended.agent_id, cwd))
 }
 
 fn exit_hint(

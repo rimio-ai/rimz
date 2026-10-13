@@ -102,7 +102,7 @@ fn collect_show_report(
         None => None,
     }
     .filter(|view| !view.entries.is_empty());
-    let peers = rimz::address::addressable_agents(snapshot);
+    let reader = crate::cli::current_channel(workspace, Some(store)).address_context();
     let me = SelfIdentity::from_env().resolve(snapshot);
     let now = jiff::Timestamp::now();
     let demotion = rimz::harness::park_demotion(
@@ -120,7 +120,7 @@ fn collect_show_report(
             agent,
             row_for_agent(snapshot, agent),
             agent_pr(snapshot, agent),
-            &peers,
+            rimz::address::paste_address(agent, snapshot, &reader),
             me.as_ref(),
             now,
             ReportOverrides {
@@ -877,7 +877,13 @@ pub(super) fn focus_agent(reference: String, globals: &GlobalFlags) -> Result<()
         None,
         &ctx.address_context(),
     )?;
-    focus_resolved(&ctx, agent)
+    focus_resolved(&ctx, agent)?;
+    writeln!(
+        render::out(),
+        "focused {}",
+        rimz::address::paste_address(agent, &snapshot, &ctx.address_context())
+    )?;
+    Ok(())
 }
 
 pub(in crate::cli) fn focus_resolved(ctx: &Ctx, agent: &AgentState) -> Result<()> {
@@ -955,7 +961,7 @@ mod tests {
                 &state,
                 None,
                 None,
-                &peers,
+                rimz::address::agent_handle(peers[0], &peers, false),
                 None,
                 jiff::Timestamp::UNIX_EPOCH,
                 ReportOverrides {
@@ -1001,7 +1007,7 @@ mod tests {
             &state,
             None,
             None,
-            &[&state],
+            rimz::address::agent_handle(&state, &[&state], false),
             None,
             jiff::Timestamp::UNIX_EPOCH,
             ReportOverrides::default(),
@@ -1024,7 +1030,7 @@ mod tests {
                 &state,
                 None,
                 None,
-                &[&state],
+                rimz::address::agent_handle(&state, &[&state], false),
                 None,
                 jiff::Timestamp::UNIX_EPOCH,
                 ReportOverrides::default(),
@@ -1050,7 +1056,7 @@ mod tests {
                 &state,
                 None,
                 None,
-                &[&state],
+                rimz::address::agent_handle(&state, &[&state], false),
                 None,
                 jiff::Timestamp::UNIX_EPOCH,
                 ReportOverrides::default(),

@@ -117,6 +117,12 @@ use supervised::run::{run_print, run_supervised};
 use top::{TopArgs, run_top};
 pub(in crate::cli) use wait::wait_agent;
 
+fn agent_session_resumable(kind: &AgentKind, agent_id: &AgentSessionId, cwd: &Path) -> bool {
+    !agent_id.is_provisional()
+        && rimz::agents::find_definition(kind.as_str())
+            .is_some_and(|adapter| adapter.resume_command(agent_id, cwd).is_some())
+}
+
 fn resolve_live_or_audit(
     store: &rimz::Store,
     workspace: &rimz::ResolvedWorkspace,
@@ -585,7 +591,7 @@ enum AgentsSubcmd {
         #[arg(add = clap_complete::ArgValueCandidates::new(
             crate::cli::complete::agent_refs
         ))]
-        reference: String,
+        reference: Option<String>,
         /// Stop every agent the address matches.
         #[arg(long)]
         all: bool,
@@ -595,7 +601,7 @@ enum AgentsSubcmd {
             long,
             value_name = "DURATION|off",
             num_args = 0..=1,
-            default_missing_value = "3m",
+            default_missing_value = stop::WHEN_IDLE_DEFAULT,
             value_parser = parse_when_idle,
             conflicts_with = "all"
         )]
