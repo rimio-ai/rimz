@@ -1,5 +1,5 @@
 use super::*;
-use crate::sidebar_pane::app::attachment::WakeupInbox;
+use crate::sidebar_pane::app::inbox::WakeupInbox;
 
 fn scroll_rig() -> (Rig, FrameOutput) {
     let mut rig = Rig::with_own_pane(pane("terminal_99", "tab_0", false).pane_id);
