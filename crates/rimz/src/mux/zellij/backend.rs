@@ -10,8 +10,8 @@ use super::pane_topology::{
     PaneTopologyCache, PaneTopologyPane, ZellijPaneId, read_pane_topology_cache,
 };
 use super::parse::{
-    classify_session_not_found, is_no_active_sessions, is_session_not_found, is_transient_empty,
-    live_session_name_from_line, parse_client_view,
+    classify_session_not_found, is_no_active_sessions, is_session_not_found,
+    is_transient_list_reply, live_session_name_from_line, parse_client_view,
 };
 use super::raw_pane::{
     floating_panes_in_anchor_view, is_daemon_host_pane, is_sidebar_pane, sidebar_geometry_off_spec,
@@ -41,6 +41,7 @@ use serde::Deserialize;
 #[derive(Debug, Deserialize)]
 pub(super) struct RawTab {
     pub(super) name: String,
+    tab_id: u64,
     #[serde(default)]
     selectable_tiled_panes_count: u64,
 }
@@ -608,16 +609,21 @@ impl ZellijBackend {
                     args,
                     seconds: timeout.as_secs(),
                 },
-                err => err,
+                err => classify_session_not_found(err, session_name),
             })?;
-            if !is_transient_empty(&output.stdout) {
+            if is_session_not_found(&output.stdout) || is_session_not_found(&output.stderr) {
+                return Err(MuxErr::SessionNotFound {
+                    session: session_name.to_owned(),
+                });
+            }
+            if !is_transient_list_reply(&output.stdout) {
                 return serde_json::from_slice(&output.stdout).map_err(|err| {
                     output_error(format!("parsing `list-panes --all --json`: {err}"))
                 });
             }
         }
         Err(output_error(
-            "`list-panes --all --json` returned no output on every attempt",
+            "`list-panes --all --json` returned no array on every attempt",
         ))
     }
 
@@ -827,52 +833,55 @@ impl ZellijBackend {
         let tabs = self.list_tabs(session)?;
         let config = crate::config::MachineConfig::load_lenient();
         let theme = &config.theme;
-        let (before, before_materialized) = named_tab_counts(&tabs, tab_name, theme);
-        let mut created_tab = None;
+        let named =
+            |tab: &RawTab| crate::theme::strip_status_glyph_suffix(&tab.name, theme) == tab_name;
+        // Zellij numbers a new tab after the highest live id, so a tab closed
+        // mid-call can hand its id over: an id held under another name is new.
+        let before = tabs
+            .iter()
+            .filter(|tab| named(tab))
+            .map(|tab| tab.tab_id)
+            .collect::<BTreeSet<_>>();
+        let confirm = |tabs: &[RawTab], hint: Option<u64>| -> Result<Option<u64>> {
+            let candidates = tabs
+                .iter()
+                .filter(|tab| named(tab) && !before.contains(&tab.tab_id))
+                .collect::<Vec<_>>();
+            let tab = match candidates.as_slice() {
+                [] => return Ok(None),
+                [tab] => tab,
+                _ => candidates
+                    .iter()
+                    .find(|tab| Some(tab.tab_id) == hint)
+                    .ok_or_else(|| {
+                        output_error(format!(
+                            "new-tab '{tab_name}' is ambiguous: multiple new namesakes"
+                        ))
+                    })?,
+            };
+            self.wait_for_tab_materialized(session, tab)
+                .inspect_err(|_| self.close_unconfirmed_tab(session, tab.tab_id))?;
+            Ok(Some(tab.tab_id))
+        };
+        let mut hint = None;
         for attempt in 0..super::NEW_TAB_ATTEMPTS {
-            if attempt > 0 {
-                let tabs = self
-                    .list_tabs(session)
-                    .inspect_err(|_| self.close_unconfirmed_tab(session, created_tab))?;
-                let (named, materialized) = named_tab_counts(&tabs, tab_name, theme);
-                if named > before {
-                    self.wait_for_named_tab_materialized(
-                        session,
-                        tab_name,
-                        before_materialized,
-                        materialized,
-                        theme,
-                    )
-                    .inspect_err(|_| self.close_unconfirmed_tab(session, created_tab))?;
-                    return created_tab
-                        .ok_or_else(|| output_error("new-tab did not return its stable tab id"));
-                }
+            if attempt > 0
+                && let Some(tab_id) = confirm(&self.list_tabs(session)?, hint)?
+            {
+                return Ok(tab_id);
             }
             let output = self
                 .zellij_action(session)
                 .args(args.iter().cloned())
                 .run()?;
-            created_tab = String::from_utf8_lossy(&output.stdout)
+            hint = String::from_utf8_lossy(&output.stdout)
                 .trim()
                 .parse::<u64>()
                 .ok();
             let deadline = Instant::now() + super::NEW_TAB_CONFIRM_WINDOW;
             loop {
-                let tabs = self
-                    .list_tabs(session)
-                    .inspect_err(|_| self.close_unconfirmed_tab(session, created_tab))?;
-                let (named, materialized) = named_tab_counts(&tabs, tab_name, theme);
-                if named > before {
-                    self.wait_for_named_tab_materialized(
-                        session,
-                        tab_name,
-                        before_materialized,
-                        materialized,
-                        theme,
-                    )
-                    .inspect_err(|_| self.close_unconfirmed_tab(session, created_tab))?;
-                    return created_tab
-                        .ok_or_else(|| output_error("new-tab did not return its stable tab id"));
+                if let Some(tab_id) = confirm(&self.list_tabs(session)?, hint)? {
+                    return Ok(tab_id);
                 }
                 if Instant::now() >= deadline {
                     break;
@@ -880,7 +889,6 @@ impl ZellijBackend {
                 std::thread::sleep(super::NEW_TAB_CONFIRM_STEP);
             }
         }
-        self.close_unconfirmed_tab(session, created_tab);
         Err(output_error(format!(
             "new-tab '{tab_name}' did not appear after {} attempts",
             super::NEW_TAB_ATTEMPTS
@@ -958,39 +966,34 @@ impl ZellijBackend {
         })
     }
 
-    fn close_unconfirmed_tab(&self, session: &str, tab: Option<u64>) {
-        // Never close a namesake: new-tab returns the stable id it created.
-        if let Some(tab) = tab
-            && let Err(error) = self
-                .zellij_action(session)
-                .args(["close-tab", "--tab-id", &tab.to_string()])
-                .run()
+    fn close_unconfirmed_tab(&self, session: &str, tab: u64) {
+        // Only a new named tab proven by topology reaches cleanup.
+        if let Err(error) = self
+            .zellij_action(session)
+            .args(["close-tab", "--tab-id", &tab.to_string()])
+            .run()
         {
             tracing::warn!(%session, tab, %error, "could not close unconfirmed tab");
         }
     }
 
-    fn wait_for_named_tab_materialized(
-        &self,
-        session: &str,
-        tab_name: &str,
-        before_materialized: usize,
-        mut last_count: usize,
-        theme: &crate::config::ThemeConfig,
-    ) -> Result<()> {
+    fn wait_for_tab_materialized(&self, session: &str, tab: &RawTab) -> Result<()> {
+        let mut materialized = tab.selectable_tiled_panes_count > 0;
         let deadline = Instant::now() + super::NEW_TAB_MATERIALIZE_WINDOW;
         loop {
-            if last_count > before_materialized {
+            if materialized {
                 return Ok(());
             }
             if Instant::now() >= deadline {
                 return Err(output_error(format!(
-                    "new-tab '{tab_name}' appeared but its layout panes did not materialize; \
-                         materialized named tabs stayed at {last_count}"
+                    "new-tab '{}' (id {}) appeared but its layout panes did not materialize",
+                    tab.name, tab.tab_id,
                 )));
             }
             std::thread::sleep(super::NEW_TAB_MATERIALIZE_STEP);
-            last_count = named_tab_counts(&self.list_tabs(session)?, tab_name, theme).1;
+            materialized = self.list_tabs(session)?.iter().any(|current| {
+                current.tab_id == tab.tab_id && current.selectable_tiled_panes_count > 0
+            });
         }
     }
 
@@ -1009,7 +1012,7 @@ impl ZellijBackend {
                     session: session.to_owned(),
                 });
             }
-            if is_transient_empty(&output.stdout) {
+            if is_transient_list_reply(&output.stdout) {
                 continue;
             }
             let tabs = serde_json::from_slice::<Vec<RawTab>>(&output.stdout)
@@ -1020,7 +1023,7 @@ impl ZellijBackend {
             return Ok(tabs);
         }
         Err(output_error(format!(
-            "list-tabs returned no output after {} attempts",
+            "list-tabs returned no array after {} attempts",
             super::TRANSIENT_EMPTY_ATTEMPTS
         )))
     }
@@ -1056,21 +1059,6 @@ pub(super) fn live_tab_shapes(
         }
     }
     tabs.into_iter().map(|(_, shape)| shape).collect()
-}
-
-fn named_tab_counts(
-    tabs: &[RawTab],
-    tab_name: &str,
-    theme: &crate::config::ThemeConfig,
-) -> (usize, usize) {
-    tabs.iter()
-        .filter(|tab| crate::theme::strip_status_glyph_suffix(&tab.name, theme) == tab_name)
-        .fold((0, 0), |(named, materialized), tab| {
-            (
-                named + 1,
-                materialized + usize::from(tab.selectable_tiled_panes_count > 0),
-            )
-        })
 }
 
 impl MuxBackend for ZellijBackend {

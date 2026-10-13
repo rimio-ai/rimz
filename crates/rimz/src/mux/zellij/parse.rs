@@ -6,20 +6,20 @@ use crate::ids::{MuxClientId, MuxName, PaneId};
 use crate::mux::{ClientPresence, ClientView, MuxErr, SessionLiveness};
 use crate::pane::ClientPaneView;
 
-/// Whether action stdout is the transient empty race rather than a real answer.
-/// Empty or whitespace-only output means the action client raced the session
-/// server and is worth a retry — not an EOF parse error.
-pub(super) fn is_transient_empty(stdout: &[u8]) -> bool {
-    stdout.iter().all(u8::is_ascii_whitespace)
+/// List replies are arrays. A non-array reply can belong to another action
+/// client and is worth retrying; array element errors belong to the parser.
+pub(super) fn is_transient_list_reply(stdout: &[u8]) -> bool {
+    !matches!(
+        serde_json::from_slice::<serde_json::Value>(stdout),
+        Ok(serde_json::Value::Array(_))
+    )
 }
 
 /// Whether `action`-client output is Zellij's "this session is not addressable"
 /// answer. When the named session is absent, exited (resurrectable), or still
 /// registering, `zellij --session <name> action ...` prints a `Session '<name>'
-/// not found...` banner and still exits 0. The line is non-whitespace when it
-/// lands on stdout, so [`is_transient_empty`] misses it; callers recognize it
-/// here and surface a typed mux error instead of feeding the banner or session
-/// list to a JSON or tab-name parser.
+/// not found...` banner and still exits 0. Callers check this before classifying
+/// transient list replies, surfacing a typed mux error rather than retrying.
 pub(super) fn is_session_not_found(stream: &[u8]) -> bool {
     let text = String::from_utf8_lossy(stream);
     let Some(first) = text.lines().next() else {
@@ -224,11 +224,24 @@ mod tests {
 
     #[test]
     fn transient_empty_detects_blank_list_panes_output() {
-        assert!(is_transient_empty(b""));
-        assert!(is_transient_empty(b"  \n\t"));
+        assert!(is_transient_list_reply(b""));
+        assert!(is_transient_list_reply(b"  \n\t"));
         // A real, parseable answer — even an empty pane set — is not transient.
-        assert!(!is_transient_empty(b"[]"));
-        assert!(!is_transient_empty(b"[{\"id\":0}]"));
+        assert!(!is_transient_list_reply(b"[]"));
+        assert!(!is_transient_list_reply(b"[{\"id\":0}]"));
+    }
+
+    #[test]
+    fn foreign_action_replies_are_transient() {
+        for reply in [b"1".as_slice(), b"{}", b"another action's banner"] {
+            assert!(is_transient_list_reply(reply), "{reply:?}");
+        }
+    }
+
+    #[test]
+    fn invalid_array_elements_are_not_transient() {
+        assert!(!is_transient_list_reply(b"[{}]"));
+        assert!(serde_json::from_slice::<Vec<super::super::backend::RawTab>>(b"[{}]").is_err());
     }
 
     #[test]

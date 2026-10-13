@@ -219,13 +219,15 @@ fn handle_action_query(query: ActionQuery, log_path: &Path) {
         ActionQuery::Panes => write_env_raw("RIMZ_TEST_ZELLIJ_LIST_PANES"),
         ActionQuery::Tabs => {
             let trace = std::fs::read_to_string(log_path).expect("read tab launches");
-            let mut tabs =
-                vec![serde_json::json!({"name": "main", "selectable_tiled_panes_count": 1})];
+            let mut tabs = vec![
+                serde_json::json!({"name": "main", "tab_id": 0, "selectable_tiled_panes_count": 1}),
+            ];
             tabs.extend(trace.lines().filter_map(|line| {
                 let args = line.split('\t').map(str::to_owned).collect::<Vec<_>>();
-                has_pair(&args, "action", "new-tab").then(|| {
-                    serde_json::json!({"name": arg_after(&args, "--name"), "selectable_tiled_panes_count": 1})
-                })
+                has_pair(&args, "action", "new-tab")
+                    .then(|| arg_after(&args, "--name").map(str::to_owned))
+            }).enumerate().map(|(index, name)| {
+                serde_json::json!({"name": name, "tab_id": index + 1, "selectable_tiled_panes_count": 1})
             }));
             write_stdout(&serde_json::to_string(&tabs).expect("serialize tabs"));
         }

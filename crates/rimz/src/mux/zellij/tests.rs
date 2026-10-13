@@ -472,7 +472,7 @@ printf '[{"id":0,"is_plugin":false}]\n'
 
 #[cfg(unix)]
 #[test]
-fn pane_listing_reruns_only_an_empty_success() {
+fn pane_listing_retries_non_arrays_but_rejects_invalid_elements() {
     use crate::mux::MuxErr;
 
     let (temp, shim) = support::pane_roster_shim("[]");
@@ -482,10 +482,10 @@ fn pane_listing_reruns_only_an_empty_success() {
     assert!(listed.is_empty());
     assert_eq!(command_count(&shim_log(&temp), LIST_PANES), 1);
 
-    let (temp, shim) = support::pane_roster_shim("[{");
+    let (temp, shim) = support::pane_roster_shim("[{}]");
     let err = ZellijBackend::with_program_for_test(&shim)
         .raw_listed_panes("rimz-test", Duration::from_secs(5))
-        .expect_err("malformed JSON is not an answer");
+        .expect_err("invalid array elements are not an answer");
     assert!(matches!(err, MuxErr::Output { .. }), "{err}");
     assert_eq!(command_count(&shim_log(&temp), LIST_PANES), 1);
 
@@ -496,16 +496,18 @@ fn pane_listing_reruns_only_an_empty_success() {
     assert!(matches!(err, MuxErr::Command { .. }), "{err}");
     assert_eq!(command_count(&shim_log(&temp), LIST_PANES), 1);
 
-    let (temp, shim) = support::logging_shim();
-    let err = ZellijBackend::with_program_for_test(&shim)
-        .raw_listed_panes("rimz-test", Duration::from_secs(5))
-        .expect_err("a listing that stays empty is not an answer");
-    assert!(
-        err.to_string()
-            .contains("`list-panes --all --json` returned no output on every attempt"),
-        "{err}"
-    );
-    assert_eq!(command_count(&shim_log(&temp), LIST_PANES), 5);
+    for reply in ["", "1", "{}", "a foreign banner", "[{"] {
+        let (temp, shim) = support::pane_roster_shim(reply);
+        let err = ZellijBackend::with_program_for_test(&shim)
+            .raw_listed_panes("rimz-test", Duration::from_secs(5))
+            .expect_err("a listing that never returns an array is not an answer");
+        assert!(
+            err.to_string()
+                .contains("`list-panes --all --json` returned no array on every attempt"),
+            "{err}"
+        );
+        assert_eq!(command_count(&shim_log(&temp), LIST_PANES), 5, "{reply}");
+    }
 }
 
 #[cfg(unix)]
@@ -2612,7 +2614,7 @@ fn list_tabs_retries_a_parsed_empty_listing() {
 dir=$(dirname "$0"); log="$dir/zellij.log"; count_file="$dir/list-tabs-count"
 printf '%s\n' "$*" >> "$log"
 count=$(cat "$count_file" 2>/dev/null || printf 0); count=$((count + 1)); printf '%s\n' "$count" > "$count_file"
-if [ "$count" -eq 1 ]; then printf '[]\n'; else printf '[{"name":"main"}]\n'; fi
+if [ "$count" -eq 1 ]; then printf '[]\n'; else printf '[{"tab_id":0,"name":"main"}]\n'; fi
 "#,
     );
 
@@ -2628,6 +2630,128 @@ if [ "$count" -eq 1 ]; then printf '[]\n'; else printf '[{"name":"main"}]\n'; fi
 
 #[cfg(unix)]
 #[test]
+fn open_tab_finds_topology_id_without_stdout() {
+    assert_open_tab_reply(
+        "",
+        false,
+        &[("work", 2)],
+        &[("work", 2), ("work", 7)],
+        Some(7),
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn open_tab_ignores_a_foreign_stdout_id() {
+    assert_open_tab_reply(
+        "2",
+        false,
+        &[("work", 2)],
+        &[("work", 2), ("work", 7)],
+        Some(7),
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn open_tab_retries_a_foreign_list_reply() {
+    assert_open_tab_reply(
+        "7",
+        true,
+        &[("work", 2)],
+        &[("work", 2), ("work", 7)],
+        Some(7),
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn open_tab_finds_a_new_tab_on_a_reused_id() {
+    // Zellij numbers a new tab after the highest live id, so closing the
+    // last tab mid-call hands its id to the new one.
+    assert_open_tab_reply("", false, &[("old", 7)], &[("work", 7)], Some(7));
+}
+
+#[cfg(unix)]
+#[test]
+fn open_tab_rejects_ambiguous_new_namesakes() {
+    assert_open_tab_reply(
+        "",
+        false,
+        &[("work", 2)],
+        &[("work", 2), ("work", 7), ("work", 8)],
+        None,
+    );
+}
+
+#[cfg(unix)]
+fn assert_open_tab_reply(
+    reply: &str,
+    foreign_listing: bool,
+    before: &[(&str, u64)],
+    after: &[(&str, u64)],
+    expected: Option<u64>,
+) {
+    let listing = |tabs: &[(&str, u64)]| {
+        serde_json::json!(
+            tabs.iter()
+                .map(|(name, tab_id)| serde_json::json!({
+                    "name": name,
+                    "tab_id": tab_id,
+                    "selectable_tiled_panes_count": 1,
+                }))
+                .collect::<Vec<_>>()
+        )
+        .to_string()
+    };
+    let (before, after) = (listing(before), listing(after));
+    let room = TestRoom::new();
+    let (temp, shim) = zellij_shim(&format!(
+        r#"#!/bin/sh
+dir=$(dirname "$0")
+printf '%s\n' "$*" >> "$dir/zellij.log"
+case " $* " in
+  *" action new-tab "*) touch "$dir/opened"; printf '%s\n' '{reply}' ;;
+  *" action list-tabs "*)
+    if {foreign_listing} && [ ! -f "$dir/listed" ]; then touch "$dir/listed"; printf '1\n'; exit 0; fi
+    if [ -f "$dir/opened" ]; then printf '%s\n' '{after}'; else printf '%s\n' '{before}'; fi ;;
+  *" action list-panes "*) printf '[]\n' ;;
+esac
+"#,
+    ));
+    let result = room.backend(&shim).open_tab(&TabOptions {
+        env: Default::default(),
+        title: "work".into(),
+        panes: LayoutPanes {
+            columns: vec![LayoutColumn {
+                panes: vec![PaneCmd {
+                    argv: vec!["sleep".into(), "600".into()],
+                    name: None,
+                }],
+                stacked: false,
+            }],
+            focused_pane: 0,
+        },
+        focus: true,
+        dock_sidebar: false,
+        after: None,
+        sidebar: room.sidebar_options(120),
+    });
+    if let Some(tab_id) = expected {
+        assert!(result.is_ok(), "{result:?}");
+        let owners = tab_owner::read(&room.runtime, "rimz-test");
+        assert_eq!(owners.keys().copied().collect::<Vec<_>>(), vec![tab_id]);
+    } else {
+        let error = result.expect_err("ambiguous new tabs");
+        assert!(error.to_string().contains("ambiguous"), "{error}");
+    }
+    let log = shim_log(&temp);
+    assert!(!log.contains("action close-tab"), "{log}");
+    assert_eq!(command_count(&log, "action new-tab "), 1, "{log}");
+}
+
+#[cfg(unix)]
+#[test]
 fn new_tab_keeps_layout_until_panes_materialize() {
     let room = TestRoom::new();
     let (temp, shim) = zellij_shim(
@@ -2639,8 +2763,8 @@ case " $* " in
   *" action new-tab "*) while [ "$#" -gt 0 ]; do if [ "$1" = "--layout" ]; then shift; printf '%s' "$1" > "$layout_ref"; fi; shift; done; : > "$tab"; printf '7\n'; exit 0 ;;
   *" action list-tabs "*)
     count=$(cat "$count_file" 2>/dev/null || printf 0); count=$((count + 1)); printf '%s\n' "$count" > "$count_file"
-    printf '[{"name":"main","selectable_tiled_panes_count":1}'
-    if [ -f "$tab" ]; then panes=0; layout=$(cat "$layout_ref" 2>/dev/null || true); if [ "$count" -ge 3 ]; then if [ -n "$layout" ] && [ -f "$layout" ]; then panes=2; else printf 'layout-missing-before-materialized\n' >> "$log"; fi; fi; printf ',{"name":"work","selectable_tiled_panes_count":%s}' "$panes"; fi
+    printf '[{"tab_id":0,"name":"main","selectable_tiled_panes_count":1}'
+    if [ -f "$tab" ]; then panes=0; layout=$(cat "$layout_ref" 2>/dev/null || true); if [ "$count" -ge 3 ]; then if [ -n "$layout" ] && [ -f "$layout" ]; then panes=2; else printf 'layout-missing-before-materialized\n' >> "$log"; fi; fi; printf ',{"name":"work","tab_id":7,"selectable_tiled_panes_count":%s}' "$panes"; fi
     printf ']\n'; exit 0 ;;
 esac
 exit 0
@@ -2762,8 +2886,8 @@ case " $* " in
     printf '%s' "$((position - 1))" > "$dir/position" ;;
   *" action list-clients "*) printf '1 terminal_7 work\n' ;;
   *" action list-tabs "*)
-    printf '[{{"name":"main","selectable_tiled_panes_count":1}},{{"name":"two","selectable_tiled_panes_count":1}},{{"name":"three","selectable_tiled_panes_count":1}}'
-    if [ -f "$dir/opened" ]; then printf ',{{"name":"new","selectable_tiled_panes_count":1}}'; fi
+    printf '[{{"tab_id":0,"name":"main","selectable_tiled_panes_count":1}},{{"tab_id":1,"name":"two","selectable_tiled_panes_count":1}},{{"tab_id":2,"name":"three","selectable_tiled_panes_count":1}}'
+    if [ -f "$dir/opened" ]; then printf ',{{"tab_id":45,"name":"new","selectable_tiled_panes_count":1}}'; fi
     printf ']\n' ;;
   *" action list-panes "*)
     position=3
@@ -2846,8 +2970,8 @@ case " $* " in
   *" action list-clients "*) printf '1 terminal_7 zsh\n'; exit 0 ;;
   *" action list-panes --all --json "*) printf '[{"id":7,"is_plugin":false,"tab_position":0,"pane_columns":120,"pane_x":0,"title":"zsh"}]\n'; exit 0 ;;
   *" action list-tabs "*)
-    if [ -f "$tab" ]; then printf '[{"name":"main","selectable_tiled_panes_count":1},{"name":"new","selectable_tiled_panes_count":1}]\n';
-    else printf '[{"name":"main","selectable_tiled_panes_count":1}]\n'; fi
+    if [ -f "$tab" ]; then printf '[{"tab_id":0,"name":"main","selectable_tiled_panes_count":1},{"tab_id":45,"name":"new","selectable_tiled_panes_count":1}]\n';
+    else printf '[{"tab_id":0,"name":"main","selectable_tiled_panes_count":1}]\n'; fi
     exit 0 ;;
   *" action new-tab "*) : > "$tab"; printf '7\n'; exit 0 ;;
 esac
