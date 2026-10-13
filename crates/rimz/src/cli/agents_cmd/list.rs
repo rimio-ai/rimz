@@ -478,31 +478,31 @@ mod tests {
         agent.context = Some(context);
         assert_eq!(
             model_report(&agent).label.as_deref(),
-            Some("Context Display@high")
+            Some("Context Id@high")
         );
 
         agent.context.as_mut().unwrap().model_display_name = None;
         assert_eq!(
             model_report(&agent).label.as_deref(),
-            Some("context-id@high")
+            Some("Context Id@high")
         );
 
         agent.context.as_mut().unwrap().model_id = None;
         assert_eq!(
             model_report(&agent).label.as_deref(),
-            Some("launch-model@high")
+            Some("Launch Model@high")
         );
 
         agent.context.as_mut().unwrap().effort = None;
         assert_eq!(
             model_report(&agent).label.as_deref(),
-            Some("launch-model@launch-effort")
+            Some("Launch Model@launch-effort")
         );
 
         agent.context = None;
         assert_eq!(
             model_report(&agent).label.as_deref(),
-            Some("launch-model@launch-effort")
+            Some("Launch Model@launch-effort")
         );
     }
 

@@ -1963,7 +1963,9 @@ mod render {
             text.contains("@writer")
                 && !text.contains("@claude")
                 && !header.contains("DESC")
-                && text.lines().any(|line| line == "  fix failing auth flow")
+                && text.lines().any(|line| line == "  API Error: Bad Request")
+                && text.lines().any(|line| line == "  API Error: Overloaded")
+                && !text.contains("fix failing auth flow")
                 && ["failed", "paused", "running"]
                     .into_iter()
                     .all(|status| text.contains(status))

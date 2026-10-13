@@ -4,6 +4,181 @@ fn agent(id: &str) -> AgentState {
     rimz::testkit::agent_state("codex", id, Timestamp::UNIX_EPOCH)
 }
 
+fn card_row(card: AgentCard) -> SidebarRow {
+    SidebarRow {
+        id: "card".into(),
+        name: "codex".into(),
+        pane: None,
+        worktree_path: None,
+        worktree_branch: None,
+        channel: None,
+        unread: false,
+        inactive: false,
+        archived: false,
+        attention_score: 0,
+        last_activity: Timestamp::UNIX_EPOCH,
+        card: RowCard::Agent(std::sync::Arc::new(card)),
+    }
+}
+
+#[test]
+fn card_projection_status_honors_card_and_rowless_demotion() {
+    let now = Timestamp::UNIX_EPOCH;
+    let mut state = agent("status");
+    state.status = AgentStatus::Running;
+    let mut context = rimz::agents::AgentContext::new("codex", now);
+    context.turn_error = Some(rimz::agents::AgentTurnError {
+        class: TurnErrorClass::PausedRateLimit,
+        at: now + jiff::SignedDuration::from_secs(1),
+        label: Some("limit reached".into()),
+    });
+    state.context = Some(context);
+    let demotion = rimz::agents::ParkDemotion::default();
+    let card = AgentCard {
+        status: AgentStatus::Sleeping,
+        ..AgentCard::default()
+    };
+    assert_eq!(
+        card_status(&state, Some(&card), None, &demotion),
+        AgentStatus::Sleeping
+    );
+    assert_eq!(
+        card_status(&state, None, None, &demotion),
+        AgentStatus::Paused
+    );
+    let spent = rimz::agents::ParkDemotion::new(
+        &Default::default(),
+        [(state.kind.clone(), state.agent_id.clone())].into(),
+        now,
+    );
+    assert_eq!(card_status(&state, None, None, &spent), AgentStatus::Failed);
+}
+
+#[test]
+fn card_projection_description_matches_shared_rule() {
+    let now = Timestamp::UNIX_EPOCH;
+    let state = agent("description");
+    let mut row = card_row(AgentCard::default());
+    for (reason, expected) in [
+        (Some("provider overloaded"), Some("provider overloaded")),
+        (None, Some("ship the fix")),
+    ] {
+        let card = row.as_agent_mut().unwrap();
+        card.turn_error_label = reason.map(str::to_owned);
+        card.description = Some("ship the fix".into());
+        let entry = build_entry(
+            &Default::default(),
+            &state,
+            Some(&row),
+            None,
+            "@description".into(),
+            None,
+            now,
+            ReportOverrides::default(),
+        );
+        assert_eq!(entry.description.as_deref(), expected);
+    }
+}
+
+#[test]
+fn card_projection_delegation_only_for_idle_running_parent() {
+    let now = Timestamp::UNIX_EPOCH;
+    let mut parent = agent("parent");
+    parent.status = AgentStatus::Running;
+    parent.description = Some("coordinate".into());
+    let child = serde_json::from_value(serde_json::json!({
+        "id": "child", "name": "codex", "petname": "swift-otter",
+        "status": "running", "last_activity": now,
+    }))
+    .unwrap();
+    let mut row = card_row(AgentCard {
+        description: parent.description.clone(),
+        sub_agents: vec![child],
+        ..AgentCard::default()
+    });
+    for (status, phase, expected) in [
+        (
+            AgentStatus::Running,
+            TurnPhase::Idle,
+            "coordinate · on 1 subagent (@swift-otter)",
+        ),
+        (AgentStatus::Running, TurnPhase::Acting, "coordinate"),
+        (AgentStatus::Paused, TurnPhase::Idle, "coordinate"),
+    ] {
+        let card = row.as_agent_mut().unwrap();
+        card.status = status;
+        card.phase = phase;
+        let entry = build_entry(
+            &Default::default(),
+            &parent,
+            Some(&row),
+            None,
+            "@parent".into(),
+            None,
+            now,
+            ReportOverrides::default(),
+        );
+        assert_eq!(entry.description.as_deref(), Some(expected));
+    }
+    row.as_agent_mut().unwrap().sub_agents[0].status = AgentStatus::Success;
+    row.as_agent_mut().unwrap().status = AgentStatus::Running;
+    let entry = build_entry(
+        &Default::default(),
+        &parent,
+        Some(&row),
+        None,
+        "@parent".into(),
+        None,
+        now,
+        ReportOverrides::default(),
+    );
+    assert_eq!(entry.description.as_deref(), Some("coordinate"));
+}
+
+#[test]
+fn card_projection_model_label_is_stable_across_a_turn() {
+    let mut state = agent("model");
+    state.model = Some("claude-opus-5".into());
+    state.effort = Some("medium".into());
+    let before = model_report(&state);
+    assert_eq!(before.label.as_deref(), Some("Opus 5@medium"));
+    let mut context = rimz::agents::AgentContext::new("codex", Timestamp::UNIX_EPOCH);
+    context.model_id = state.model.clone();
+    context.model_display_name = Some("Opus".into());
+    state.context = Some(context);
+    let after = model_report(&state);
+    assert_eq!(after.label, before.label);
+    assert_eq!(after.id, before.id);
+    state.context.as_mut().unwrap().model_id = None;
+    assert_eq!(model_report(&state).label, before.label);
+    state.model = None;
+    assert_eq!(model_report(&state).label.as_deref(), Some("Opus@medium"));
+}
+
+#[test]
+fn card_projection_model_keeps_versioned_provider_display_names() {
+    for (provider, id, display, expected) in [
+        ("cursor", "auto", "GPT-5.6 Sol", "GPT 5.6 Sol@high"),
+        (
+            "qwen",
+            "[DeepSeek] deepseek-v4-pro",
+            "DeepSeek V4 Pro",
+            "DeepSeek V4 Pro@high",
+        ),
+    ] {
+        let mut state = rimz::testkit::agent_state(provider, "model", Timestamp::UNIX_EPOCH);
+        state.model = Some(id.into());
+        state.effort = Some("high".into());
+        let mut context = rimz::agents::AgentContext::new(provider, Timestamp::UNIX_EPOCH);
+        context.model_id = Some(id.into());
+        context.model_display_name = Some(display.into());
+        state.context = Some(context);
+        let report = model_report(&state);
+        assert_eq!(report.label.as_deref(), Some(expected));
+        assert_eq!(report.id.as_deref(), Some(id));
+    }
+}
+
 fn pane_agent(id: &str, pane: &str) -> PaneAgent {
     PaneAgent {
         root_lane: false,
@@ -219,6 +394,7 @@ fn rowless_spent_child_reports_failed_with_provider_error() {
     );
     assert_eq!(entry.status, AgentStatus::Failed);
     assert_eq!(entry.phase, TurnPhase::Idle);
+    assert_eq!(entry.description.as_deref(), Some("usage limit reached"));
     let json = serde_json::to_value(entry).unwrap();
     assert_eq!(json["status"], "failed");
     assert_eq!(json["turn_error"]["class"], "paused_rate_limit");
@@ -320,6 +496,7 @@ fn full_entry_has_a_stable_projection() {
         card: RowCard::Agent(std::sync::Arc::new(AgentCard {
             status: AgentStatus::Running,
             phase: TurnPhase::Acting,
+            description: state.description.clone(),
             context: Some(context),
             context_severity: Some(ContextSeverity::Yellow),
             sub_agent_count: 1,

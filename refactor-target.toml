@@ -820,7 +820,8 @@ path = "crates/rimz/src/store"
 # Sidebar enrichment reads context sidecars only for its agent keys (`read_for_keys`, +2).
 # CardDescription and AgentCard::description share one styled description rule with CLI (+2).
 # SidebarSubAgent::holds_parent_turn is public for CLI delegation, within its existing slot.
-surface-budget = 422
+# AgentCard::from_agent shares the store's base card projection with rowless CLI reports (+1).
+surface-budget = 423
 
 [[module]]
 path = "crates/rimz/src/theme"
