@@ -700,7 +700,7 @@ impl LoopState {
                     generation = repair.generation,
                     evidence = ?repair.clients,
                     own_view = ?self.current.own_view,
-                    viewed_panes = ?self.current.viewed_panes,
+                    client_views = ?self.current.client_views,
                     age_ms = now_ms.saturating_sub(repair.sent_at_ms),
                     reason,
                     "sidebar focus repair deferred",
@@ -1902,8 +1902,9 @@ fn focus_stranded_target(
         return Err("strand TTL expired");
     }
     // `focus-pane-id` is session-global: with clients viewing distinct panes it
-    // would yank a client looking elsewhere. Zellij checks settled evidence,
-    // fenced by a live sample at dispatch; tmux still checks the pane cache.
+    // would yank a client looking elsewhere. Only observed client views count,
+    // never fused focus or intents: Zellij checks settled evidence, fenced by a
+    // live sample at dispatch; tmux checks the pulled client sample.
     if stranded_pane_id.mux() == MuxName::Zellij {
         let Some(first) = evidence.first() else {
             return Err("empty settled evidence");
@@ -1911,8 +1912,13 @@ fn focus_stranded_target(
         if evidence.iter().any(|view| view.pane_id != first.pane_id) {
             return Err("distinct panes in settled evidence");
         }
-    } else if snapshot.viewed_panes.len() > 1 {
-        return Err("distinct panes in pane cache");
+    } else if let Some(first) = snapshot.client_views.first()
+        && snapshot
+            .client_views
+            .iter()
+            .any(|view| view.pane_id != first.pane_id)
+    {
+        return Err("distinct panes in pulled client views");
     }
     let Some(view) = snapshot.own_view.as_ref() else {
         return Err("missing own view");
