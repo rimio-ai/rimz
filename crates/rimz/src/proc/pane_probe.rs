@@ -282,8 +282,9 @@ fn hosted_agent_absent_under_root_with(
 }
 
 /// A node's command line as evidence. An empty one (a process mid-execve, such
-/// as the exec wrapper parking into its supervisor) proves no more than an
-/// unreadable one, so both walks abstain on it rather than descend.
+/// as the exec wrapper parking into its supervisor, or an unreaped zombie)
+/// proves no more than an unreadable one, so both walks abstain on it rather
+/// than descend.
 fn proven_cmdline(cmdline: &dyn Fn(u32) -> Option<String>, pid: u32) -> Option<String> {
     cmdline(pid).filter(|command| !command.trim().is_empty())
 }
