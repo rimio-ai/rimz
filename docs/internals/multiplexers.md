@@ -127,10 +127,11 @@ Every control command runs through [`CommandSpec`](../../crates/rimz/src/mux/com
 | --- | --- | --- |
 | `COMMAND_TIMEOUT` | 30 s | A `zellij action` whose server died busy-loops at 100% CPU and would otherwise hang the caller. |
 | `LIST_SESSIONS_TIMEOUT` | 3 s | A read-only local query on hot paths. |
+| `SESSION_BIRTH_TIMEOUT` | 60 s | One Zellij `attach --create-background` birth client, which forks and boots a server from a cold binary rather than answering from a live one. It normally returns in under a second; a wedged client is killed and `rimz start` refuses. |
 | `TAB_RENAME_TIMEOUT` | 2 s | Tab status is disposable chrome, so a stuck backend drops the rename instead of holding a worker for the structural bound. |
 | `SESSION_PROBE_TIMEOUT`, then `SESSION_PROBE_RETRY_TIMEOUT` | 1 s, then 3 s | The start-path responsiveness probe (`mux_responsive_preflight` in `cli/room/mod.rs`). A first timeout prints a `note:` line and retries once with the longer bound. |
 
-A healthy command answers in milliseconds, and most callers treat a mux failure as best-effort, so a bound degrades the caller instead of blocking it. The start path is the exception: when the selected backend also times out on the retry, `rimz start` refuses with the backend's recovery command and the other backend as a fallback. Backend-selection and notice probes skip their enrichment and continue; birth admission uses the room lock, not a rival query.
+A healthy command answers in milliseconds, and most callers treat a mux failure as best-effort, so a bound degrades the caller instead of blocking it. The start path is the exception: when the selected backend also times out on the retry, `rimz start` refuses with the backend's recovery command and the other backend as a fallback, and a Zellij birth client that outlives `SESSION_BIRTH_TIMEOUT` makes `rimz start` refuse with the command and the bound. Backend-selection and notice probes skip their enrichment and continue; birth admission uses the room lock, not a rival query.
 
 Every Zellij command also reruns one refusal inside its own deadline. Zellij's client probes each session socket before it dispatches anything and counts a server too busy to answer as absent (`assert_socket` in `zellij-utils`, observed on 0.45.1), so a live session can answer `There is no active session!` or the `Session '<name>' not found` banner for a few milliseconds. `socket::refused_live_session` recognises that nonzero exit only while the session's socket is still on disk, and `ZellijBackend::cmd` attaches it as the command's `RefusalRetry`: at most `PREDISPATCH_REFUSAL_RERUNS` (5) reruns, `PREDISPATCH_REFUSAL_DELAY` (100 ms) apart. Nothing was dispatched, so a rerun cannot repeat a side effect. A session with no socket is absent and its refusal returns at once, as does every other failure.
 
@@ -361,6 +362,7 @@ Zellij fullscreen holds width convergence; it is not geometry to repair. The pre
 | Absent | Birth from the layout | `Reborn` |
 | Exited (Zellij resurrection record) | Delete, then birth from the layout | `Reborn` |
 | Still not live after a rebirth | Nothing further | `Stuck` |
+| A rebirth command outlives its deadline (a wedged birth client) | Kill it; no reset, no attach | None: `rimz start` refuses with the command and the bound |
 
 tmux has no resurrection, so its gate is a no-op `Healthy`.
 

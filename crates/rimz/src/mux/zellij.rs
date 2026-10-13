@@ -165,6 +165,13 @@ const PRESENCE_RETIRE_PIPE: &str = "rimz:retire";
 /// Deadline for the presence-plugin boot pipe.
 const PRESENCE_PIPE_TIMEOUT: Duration = Duration::from_secs(2);
 
+/// Deadline for one `attach --create-background` birth client. Longer than
+/// `COMMAND_TIMEOUT` because the client forks and boots a server from a cold
+/// binary rather than answering from a live one; it normally returns in under
+/// a second. On the bound the client is killed and `rimz start` refuses with
+/// the command and this bound.
+const SESSION_BIRTH_TIMEOUT: Duration = Duration::from_secs(60);
+
 /// Ceiling on how long `create_session_with_sidebar` holds the temp layout file
 /// on disk while waiting for Zellij to parse it.
 const SIDEBAR_LAYOUT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -401,6 +408,9 @@ pub struct ZellijBackend {
     /// Test-only responsiveness budget override.
     #[cfg(test)]
     health_probe_timeout: Option<Duration>,
+    /// Test-only birth-client deadline override.
+    #[cfg(test)]
+    birth_timeout: Option<Duration>,
     /// Test-only stand-in for the caller's `ZELLIJ_SESSION_NAME`, which a
     /// test never reads from the process environment.
     #[cfg(test)]
@@ -419,6 +429,20 @@ impl ZellijBackend {
     #[cfg(test)]
     fn with_health_probe_timeout_for_test(mut self, timeout: Duration) -> Self {
         self.health_probe_timeout = Some(timeout);
+        self
+    }
+
+    fn birth_timeout(&self) -> Duration {
+        #[cfg(test)]
+        if let Some(timeout) = self.birth_timeout {
+            return timeout;
+        }
+        SESSION_BIRTH_TIMEOUT
+    }
+
+    #[cfg(test)]
+    fn with_birth_timeout_for_test(mut self, timeout: Duration) -> Self {
+        self.birth_timeout = Some(timeout);
         self
     }
 

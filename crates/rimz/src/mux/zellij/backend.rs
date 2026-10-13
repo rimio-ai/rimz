@@ -1640,7 +1640,9 @@ impl MuxBackend for ZellijBackend {
         // Absent → first birth; Exited → delete and rebirth from the layout so
         // the room comes up clean and RUNNING (with serialization off, a rebirth
         // can never resurrect). A rebirth that still fails to talk to Zellij
-        // reads as Stuck so the caller runs or reports the reset path.
+        // reads as Stuck so the caller runs or reports the reset path; a
+        // command that outlived its deadline is refused instead, since a reset
+        // would drive more commands at the same wedged binary.
         let rebirth = || -> Result<()> {
             if !matches!(state, SessionLiveness::Absent) {
                 self.delete_session(&opts.session_name)?;
@@ -1650,7 +1652,9 @@ impl MuxBackend for ZellijBackend {
         match rebirth() {
             Ok(()) => Ok(SessionHealth::Reborn),
             Err(
-                err @ (MuxErr::SocketPathTooLong { .. } | MuxErr::SocketPathReportedTooLong { .. }),
+                err @ (MuxErr::SocketPathTooLong { .. }
+                | MuxErr::SocketPathReportedTooLong { .. }
+                | MuxErr::Timeout { .. }),
             ) => Err(err),
             Err(err) => {
                 tracing::warn!(

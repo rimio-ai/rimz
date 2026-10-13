@@ -136,7 +136,10 @@ impl ZellijBackend {
         let layout = TempLayoutFile::new(body)?;
         let spec = self.background_session_command(opts, layout.path());
         let spawn = || -> Result<bool> {
-            let output = spec.clone().cwd(opts.cwd.clone()).output_raw()?;
+            let output = spec
+                .clone()
+                .cwd(opts.cwd.clone())
+                .output_raw_with_timeout(self.birth_timeout())?;
             if output.status.success() {
                 return Ok(true);
             }
