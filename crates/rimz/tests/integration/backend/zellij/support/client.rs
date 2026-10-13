@@ -239,6 +239,19 @@ impl AttachedClient {
         self.converge_focus(want, context, |client| client.press_alt(key))
     }
 
+    /// Press `Alt+key` exactly once and wait for `want`. `Alt h`/`Alt l` are
+    /// `MoveFocusOrTab`: a re-press that a lagging observation triggers
+    /// crosses the edge pane into the neighbouring tab, and wraps from either end.
+    pub(in crate::backend::zellij) fn press_alt_once_until(
+        &mut self,
+        key: char,
+        want: &PaneId,
+        context: &str,
+    ) -> Vec<PaneId> {
+        self.press_alt(key);
+        self.wait_until_focused(want, context)
+    }
+
     pub(in crate::backend::zellij) fn go_to_tab_until(
         &mut self,
         tab: u8,
