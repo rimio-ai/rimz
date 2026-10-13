@@ -104,8 +104,7 @@ fn message_send_all_retry_precedes_the_option_terminator() {
         Vec::new(),
         Timestamp::now(),
     );
-    let reader = crate::cli::CurrentChannel::Unscoped.address_context();
-    let error = AmbiguousAgents::from_labels("@coder", &[], &snapshot, &reader).into();
+    let error = AmbiguousAgents::from_matches("@coder", &[], false, &snapshot).into();
     for (argv, retry) in [
         (
             vec!["rimz", "message", "@coder", "hi"],
@@ -120,6 +119,47 @@ fn message_send_all_retry_precedes_the_option_terminator() {
         let output = strip(|out| write_report_with_args(out, &error, &argv));
         assert!(
             output.contains(&format!("or message every match: {retry}")),
+            "{output}"
+        );
+    }
+}
+
+#[test]
+fn message_fanout_rows_keep_recorded_status_and_distinct_addresses() {
+    let now = Timestamp::now();
+    let snapshot = rimz::store::snapshot::SidebarSnapshot::build_with_agents(
+        rimz::ids::WorkspaceId::from_project_root(std::path::Path::new("/repo")),
+        Vec::new(),
+        now,
+    );
+    let matches = ["session-a", "session-b"].map(|id| {
+        let mut agent = rimz::testkit::agent_state("claude", id, now);
+        agent.channel = Some("B".to_owned());
+        agent.status = rimz::agents::AgentStatus::Idle;
+        agent.last_activity = now - std::time::Duration::from_secs(3600);
+        rimz::message::dispatch::FanoutMatch {
+            address: format!("@{id}"),
+            agent: Some(agent),
+        }
+    });
+    let error = AmbiguousAgents::from_matches("@claude#B", &matches, true, &snapshot).into();
+    let argv = ["rimz", "message", "@claude#B", "hi"].map(str::to_owned);
+    let output = strip(|out| write_report_with_args(out, &error, &argv));
+    assert!(output.contains("matches 2 recorded agents"), "{output}");
+    assert!(!output.contains("live"), "{output}");
+    let rows = output
+        .lines()
+        .filter(|line| line.trim_start().starts_with("rimz message "))
+        .collect::<Vec<_>>();
+    assert_eq!(rows.len(), 2, "{output}");
+    assert_ne!(rows[0], rows[1], "{output}");
+    for row in &rows {
+        assert!(row.contains("idle"), "{output}");
+        assert!(row.contains("1h"), "{output}");
+    }
+    for id in ["session-a", "session-b"] {
+        assert!(
+            output.contains(&format!("rimz message @{id} hi")),
             "{output}"
         );
     }
