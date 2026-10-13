@@ -556,7 +556,8 @@ path = "crates/rimz/src/harness"
 # Hibernation admission reports and scope naming cross launch and CLI seams (+9).
 # Hibernation decision, helper request, producer and projection share the CLI/sidebar seam and idle-stop predicates (+12).
 # Wake requests, synchronous thaw, and recovery cross the CLI/sidebar/retirement seams (+10).
-surface-budget = 816
+# `resume::check_lane_scope` gives `agents list` resume's lane rule (+1).
+surface-budget = 817
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -1197,7 +1198,8 @@ allowed-dependencies = [
 # RecoveryTabAgents carries confirmed resume and Fresh replacement keys into rebirth (+1).
 # MaterializedRecovery and RecoveryTabAgents also publish that pairing to lane placement.
 # RelaunchLoginErr distinguishes an unavailable kind from a history-pool mismatch (+1).
-surface-budget = 64
+# check_lane_scope lets `agents list` tell an unknown lane from an empty one by resume's lane rule (+1).
+surface-budget = 65
 
 [[module]]
 path = "crates/rimz/src/harness/launch.rs"

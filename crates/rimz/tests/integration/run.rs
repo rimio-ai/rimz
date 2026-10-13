@@ -4156,6 +4156,91 @@ fn agents_scope_positional_refuses_with_the_lane_list_and_address_hint_is_action
 }
 
 #[test]
+fn agents_list_tells_an_unknown_lane_from_an_empty_one() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let workspace = env.resolve_workspace(&env.project_root);
+    register_list_agent(&env, &workspace, "sess-auth", "claude", "auth", "%1");
+    register_list_agent(&env, &workspace, "sess-ops", "codex", "ops", "%2");
+    let auth_pane = || {
+        list_pane(
+            &workspace.session_name,
+            "%1",
+            "claude",
+            &env.home_root.join("auth"),
+        )
+    };
+    publish_pane_frame(&env, &workspace.session_name, vec![auth_pane()]);
+    let list = |args: &[&str], channel: Option<&str>| {
+        let mut command = env.rimz();
+        command
+            .args(["--mux", "zellij", "agents", "list"])
+            .args(args)
+            .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+            .env("RIMZ_TEST_ZELLIJ_LOG", env.project_root.join("zellij.log"))
+            .env(
+                "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
+                format!("{} [Created 1s ago]\n", workspace.session_name),
+            );
+        if let Some(channel) = channel {
+            command.env(rimz::workspace::ENV_CHANNEL, channel);
+        }
+        let out = command.output().expect("agents list");
+        (
+            out.status.code(),
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        )
+    };
+    let empty_json = |stdout: &str| {
+        let json: serde_json::Value = serde_json::from_str(stdout).expect("list json");
+        json["schema"] == 1 && json["agents"].as_array().is_some_and(Vec::is_empty)
+    };
+
+    for args in [&["#nope"][..], &["-w", "nope"], &["#nope", "--json"]] {
+        let (code, stdout, stderr) = list(args, None);
+        assert_eq!(code, Some(1), "{args:?}: {stderr}");
+        assert!(stdout.is_empty(), "{args:?}: {stdout}");
+        assert!(
+            stderr.contains("no lane '#nope' in this workspace; lanes: #ops, #auth"),
+            "{args:?}: {stderr}"
+        );
+    }
+
+    let (code, stdout, stderr) = list(&["#ops"], None);
+    assert_eq!(code, Some(0), "{stderr}");
+    assert_eq!(
+        stdout.trim_end(),
+        "no live agents in '#ops'; reopen closed ones with rimz agents resume '#ops'"
+    );
+    let (code, stdout, stderr) = list(&["-w", "ops", "--json"], None);
+    assert_eq!(code, Some(0), "{stderr}");
+    assert!(empty_json(&stdout), "{stdout}");
+
+    let (code, stdout, stderr) = list(&[], Some("ops"));
+    assert_eq!(code, Some(0), "{stderr}");
+    assert_eq!(
+        stdout.trim_end(),
+        "no live agents in '#ops'; reopen closed ones with rimz agents resume '#ops'"
+    );
+
+    let (code, stdout, _) = list(&["#auth", "--json"], None);
+    assert_eq!(code, Some(0));
+    assert!(
+        !empty_json(&stdout),
+        "a live lane lists as before: {stdout}"
+    );
+
+    publish_pane_frame(&env, &workspace.session_name, Vec::new());
+    let (code, stdout, stderr) = list(&["--all"], None);
+    assert_eq!(code, Some(0), "{stderr}");
+    assert_eq!(stdout.trim_end(), "no live agents in this room");
+    let (code, stdout, stderr) = list(&["--all", "--json"], None);
+    assert_eq!(code, Some(0), "{stderr}");
+    assert!(empty_json(&stdout), "{stdout}");
+}
+
+#[test]
 fn bare_word_naming_a_live_agent_refuses_with_show_and_launch() {
     let env = Env::new();
     env.record(&env.project_root);

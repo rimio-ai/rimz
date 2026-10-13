@@ -1239,6 +1239,36 @@ fn resolve_lane(request: &LaneResumeRequest<'_>) -> Result<ResolvedLane, LaneRes
     }
 }
 
+/// Whether `scope` names a lane in this workspace, by the rule `resume`
+/// resolves a lane scope with. A miss carries the known lane labels, freshest
+/// first: the durable lanes, then local worktrees no durable member holds.
+pub fn check_lane_scope(
+    scope: &str,
+    agents: &[AgentState],
+    worktrees: &[LaneWorktree],
+    project_root: &Path,
+) -> Result<(), Vec<String>> {
+    if resolve_scope_lane(scope, agents, worktrees).is_ok() {
+        return Ok(());
+    }
+    let mut lanes = lane_summaries(agents, project_root, |_| AgentLiveness::Unknown);
+    sort_lane_summaries(&mut lanes);
+    let durable = lanes
+        .iter()
+        .map(|lane| lane.path.clone())
+        .collect::<HashSet<_>>();
+    Err(lanes
+        .into_iter()
+        .map(|lane| lane.label)
+        .chain(
+            worktrees
+                .iter()
+                .filter(|worktree| !durable.contains(&worktree.path))
+                .map(|worktree| format!("#{}", worktree.name)),
+        )
+        .collect())
+}
+
 fn resolve_pr_lane(
     number: u64,
     worktrees: &[LaneWorktree],

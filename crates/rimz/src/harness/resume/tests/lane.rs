@@ -1032,3 +1032,49 @@ fn lane_resumes_a_pooled_member_under_the_rooms_account() {
         Some("work".parse().expect("login name"))
     );
 }
+
+#[test]
+fn lane_scope_check_agrees_with_resume_and_names_known_lanes() {
+    let agents = [
+        agent_on_pane("claude", "api", "/api", 2, "api"),
+        AgentState {
+            channel: Some("docs".to_owned()),
+            ..agent("codex", "docs", "/docs", 30)
+        },
+    ];
+    let worktrees = [
+        lane_worktree("review", "feat/review", None),
+        LaneWorktree {
+            name: "docs".to_owned(),
+            path: PathBuf::from("/docs"),
+            branch: None,
+            from_pr: None,
+        },
+    ];
+    let root = Path::new("/repo");
+    for scope in ["#api", "docs", "#review", "feat/review"] {
+        assert_eq!(
+            check_lane_scope(scope, &agents, &worktrees, root),
+            Ok(()),
+            "{scope}"
+        );
+        assert!(
+            !matches!(
+                LaneCase::new(LaneResumeSelector::Scope(scope.to_owned()), &agents)
+                    .worktrees(&worktrees)
+                    .path_exists(|_| false)
+                    .run(),
+                Err(LaneResumeError::Unknown { .. })
+            ),
+            "resume must know `{scope}` too"
+        );
+    }
+    assert_eq!(
+        check_lane_scope("#nope", &agents, &worktrees, root),
+        Err(vec![
+            "#api".to_owned(),
+            "#docs".to_owned(),
+            "#review".to_owned()
+        ])
+    );
+}
