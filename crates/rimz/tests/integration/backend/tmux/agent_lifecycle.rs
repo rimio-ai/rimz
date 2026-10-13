@@ -944,8 +944,6 @@ fn tmux_agent_exec_command(
         format!("PATH={path}"),
         format!("RIMZ_TEST_AGENT_READY={}", ready.display()),
         rimz_bin,
-        "--mux".to_owned(),
-        "tmux".to_owned(),
     ];
     argv.extend(exec.into_iter().skip(1));
     argv
@@ -994,10 +992,6 @@ fn tmux_resume_command(
         format!("PATH={path}"),
         format!("RIMZ_TEST_AGENT_READY={}", ready.display()),
         env.rimz_bin().to_string_lossy().into_owned(),
-        "--root".to_owned(),
-        env.project_root.to_string_lossy().into_owned(),
-        "--mux".to_owned(),
-        "tmux".to_owned(),
     ];
     argv.extend(exec.into_iter().skip(1));
     argv
@@ -1049,8 +1043,6 @@ fn tmux_failing_agent_exec_command(env: &Env, agent_bin: &Path, launch_id: &str)
         "SHELL=/definitely/not/a/shell".to_owned(),
         format!("PATH={path}"),
         rimz_bin,
-        "--mux".to_owned(),
-        "tmux".to_owned(),
     ];
     argv.extend(exec.into_iter().skip(1));
     argv
@@ -1493,6 +1485,9 @@ fn resumed_lazy_agent_is_addressable_before_provider_registration() {
             && let Some(owner) = attached.runtime_owner.as_ref()
             && owner.pid != pane_pid
             && rimz::proc::argv(owner.pid).is_some_and(|argv| argv == ["codex", "300"])
+            // The wrapper spawns the provider, then re-execs itself into its
+            // supervisor; mid-exec its cmdline reads empty and the walk skips it.
+            && rimz::proc::argv(pane_pid).is_some_and(|argv| argv.iter().any(|arg| arg == "--supervise"))
         {
             break projection;
         }
@@ -1513,17 +1508,29 @@ fn resumed_lazy_agent_is_addressable_before_provider_registration() {
         .expect("attached pane")
         .pane_id
         .clone();
-    let pane_pid = attached.pane.as_ref().and_then(|pane| pane.pane_pid);
+    let pane_pid = attached
+        .pane
+        .as_ref()
+        .and_then(|pane| pane.pane_pid)
+        .expect("attached pane pid");
+    let owner_pid = attached
+        .runtime_owner
+        .as_ref()
+        .expect("attached runtime owner")
+        .pid;
+    let hosted = rimz::proc::hosted_agent_process_for_root(pane_pid)
+        .expect("the production wrapper root is a hosted CLI");
     assert_eq!(
-        pane_pid
-            .and_then(rimz::proc::hosted_agent_process_for_root)
-            .map(|hosted| hosted.pid),
-        attached.runtime_owner.as_ref().map(|owner| owner.pid),
-        "the runtime owner is the provider the pane's wrapper hosts: pane_pid={pane_pid:?}, owner={:?}, children={:?}",
-        attached.runtime_owner.as_ref().map(|owner| owner.pid),
-        pane_pid
-            .into_iter()
-            .flat_map(rimz::proc::children)
+        (hosted.pid, &hosted.kind, hosted.lineage.is_empty()),
+        (pane_pid, &kind, true),
+        "the hosted CLI is the pane's wrapper root itself"
+    );
+    let children = rimz::proc::children(pane_pid);
+    assert!(
+        children.contains(&owner_pid),
+        "the runtime owner is the provider the pane's wrapper spawned: pane_pid={pane_pid}, owner={owner_pid}, children={:?}",
+        children
+            .iter()
             .map(|pid| (
                 pid,
                 std::fs::read(format!("/proc/{pid}/cmdline"))
@@ -1563,6 +1570,7 @@ fn resumed_lazy_agent_is_addressable_before_provider_registration() {
         };
         pane.hosted_agent_kind = Some(hosted.kind);
         pane.hosted_agent_process_start = Some(hosted.started_at);
+        pane.hosted_agent_lineage = hosted.lineage;
     }
     let live_pane = panes
         .iter()
