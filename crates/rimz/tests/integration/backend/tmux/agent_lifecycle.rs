@@ -1486,7 +1486,7 @@ fn resumed_lazy_agent_is_addressable_before_provider_registration() {
             && owner.pid != pane_pid
             && rimz::proc::argv(owner.pid).is_some_and(|argv| argv == ["codex", "300"])
             // The wrapper spawns the provider, then re-execs itself into its
-            // supervisor; mid-exec its cmdline reads empty and the walk skips it.
+            // supervisor; mid-exec its cmdline reads empty and the walk abstains.
             && rimz::proc::argv(pane_pid).is_some_and(|argv| argv.iter().any(|arg| arg == "--supervise"))
         {
             break projection;
