@@ -44,26 +44,28 @@ pub(crate) fn audit_projection(
 ) -> crate::store::snapshot::Result<RuntimeProjection> {
     let (_, agents, resume_outcomes) = super::snapshot::catch_up_rollup(paths)?;
     Ok(RuntimeProjection::from_parts(
-        agents,
+        &agents,
         RuntimeScope::Audit,
         resume_outcomes,
     ))
 }
 
 impl RuntimeProjection {
+    /// Audit keeps every row, so it owns a copy of each; runtime owns only
+    /// the rows it keeps.
     pub(super) fn from_parts(
-        agents: Vec<AgentState>,
+        agents: &super::snapshot::AgentRollup,
         scope: RuntimeScope,
         resume_outcomes: Vec<super::snapshot::ResumeOutcome>,
     ) -> Self {
         match scope {
             RuntimeScope::Audit => Self {
-                ended: ended_keys(&agents),
+                ended: ended_keys(agents.iter()),
                 expelled: BTreeSet::new(),
-                agents,
+                agents: agents.to_vec(),
                 resume_outcomes,
             },
-            RuntimeScope::Runtime => Self::runtime_from_refs(&agents, resume_outcomes),
+            RuntimeScope::Runtime => Self::runtime_from_refs(agents.iter(), resume_outcomes),
         }
     }
 
@@ -164,6 +166,7 @@ pub fn agent_liveness(agent: &AgentState) -> AgentLiveness {
 mod tests {
     use super::*;
     use crate::agents::AgentStatus;
+    use crate::store::snapshot::AgentRollup;
     use jiff::Timestamp;
 
     fn agent(owner: Option<RuntimeOwner>) -> AgentState {
@@ -191,7 +194,8 @@ mod tests {
             agents
         };
 
-        let projection = RuntimeProjection::from_parts(agents, RuntimeScope::Runtime, Vec::new());
+        let projection =
+            RuntimeProjection::from_parts(&agents.into(), RuntimeScope::Runtime, Vec::new());
 
         assert_eq!(
             projection.agents.len(),
@@ -228,20 +232,23 @@ mod tests {
         child.status = AgentStatus::Success;
 
         let projection = RuntimeProjection::from_parts(
-            vec![parent.clone(), child.clone()],
+            &AgentRollup::from(vec![parent.clone(), child.clone()]),
             RuntimeScope::Runtime,
             Vec::new(),
         );
         assert_eq!(projection.agents, vec![parent.clone(), child.clone()]);
 
-        let without_parent =
-            RuntimeProjection::from_parts(vec![child.clone()], RuntimeScope::Runtime, Vec::new());
+        let without_parent = RuntimeProjection::from_parts(
+            &AgentRollup::from(vec![child.clone()]),
+            RuntimeScope::Runtime,
+            Vec::new(),
+        );
         assert!(without_parent.agents.is_empty());
 
         let mut ended_parent = parent;
         ended_parent.ended_at = Some(Timestamp::UNIX_EPOCH);
         let ended_parent_projection = RuntimeProjection::from_parts(
-            vec![ended_parent, child],
+            &AgentRollup::from(vec![ended_parent, child]),
             RuntimeScope::Runtime,
             Vec::new(),
         );
@@ -265,13 +272,16 @@ mod tests {
             child.ended_at = Some(Timestamp::UNIX_EPOCH);
 
             let projection = RuntimeProjection::from_parts(
-                vec![old.clone(), successor.clone(), child.clone()],
+                &AgentRollup::from(vec![old.clone(), successor.clone(), child.clone()]),
                 RuntimeScope::Runtime,
                 Vec::new(),
             );
             assert_eq!(projection.agents, vec![successor, child.clone()]);
-            let without_successor =
-                RuntimeProjection::from_parts(vec![old, child], RuntimeScope::Runtime, Vec::new());
+            let without_successor = RuntimeProjection::from_parts(
+                &AgentRollup::from(vec![old, child]),
+                RuntimeScope::Runtime,
+                Vec::new(),
+            );
             assert!(without_successor.agents.is_empty());
         }
     }
@@ -285,7 +295,7 @@ mod tests {
         let key = (ended.kind.clone(), ended.agent_id.clone());
 
         let runtime = RuntimeProjection::from_parts(
-            vec![active.clone(), ended.clone()],
+            &AgentRollup::from(vec![active.clone(), ended.clone()]),
             RuntimeScope::Runtime,
             Vec::new(),
         );
@@ -293,8 +303,11 @@ mod tests {
         assert_eq!(runtime.ended, [key.clone()].into_iter().collect());
         assert!(runtime.expelled.is_empty());
 
-        let audit =
-            RuntimeProjection::from_parts(vec![ended.clone()], RuntimeScope::Audit, Vec::new());
+        let audit = RuntimeProjection::from_parts(
+            &AgentRollup::from(vec![ended.clone()]),
+            RuntimeScope::Audit,
+            Vec::new(),
+        );
         assert_eq!(audit.agents, vec![ended]);
         assert_eq!(audit.ended, [key].into_iter().collect());
         assert!(audit.expelled.is_empty());

@@ -452,3 +452,110 @@ fn cached_rebirth_continues_to_reset_carryover_identity_after_extent() {
     assert!(old.kind_ordinal.is_some());
     assert!(new.kind_ordinal.is_some());
 }
+
+fn registered_workspace(agent_id: &str) -> (tempfile::TempDir, WorkspaceId, StatePaths) {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+    paths.ensure_dirs().unwrap();
+    append_registered(&workspace, &paths, agent_id);
+    (dir, workspace, paths)
+}
+
+fn append_registered(workspace: &WorkspaceId, paths: &StatePaths, agent_id: &str) {
+    event_log::append(
+        &paths.events_log,
+        &lifecycle_at(
+            workspace,
+            "claude",
+            "SessionStart",
+            agent_id,
+            lifecycle::LifecycleSignal::Registered,
+        ),
+    )
+    .unwrap();
+}
+
+fn log_len(paths: &StatePaths) -> u64 {
+    std::fs::metadata(&paths.events_log).unwrap().len()
+}
+
+#[test]
+fn thread_fold_holds_one_workspace_and_another_replaces_it() {
+    let (_a_dir, _, a) = registered_workspace("a-agent");
+    let (_b_dir, _, b) = registered_workspace("b-agent");
+    let read = |paths: &StatePaths| {
+        let before = event_log::testkit::bytes_read();
+        let (_, agents, _) = thread_catch_up(paths).unwrap();
+        let ids = agents
+            .iter()
+            .map(|agent| agent.agent_id.to_string())
+            .collect::<Vec<_>>();
+        (event_log::testkit::bytes_read() - before, ids)
+    };
+
+    assert_eq!(read(&a), (log_len(&a), vec!["a-agent".to_owned()]));
+    assert_eq!(
+        read(&a),
+        (0, vec!["a-agent".to_owned()]),
+        "a repeat read at an unchanged log is served by the thread's held fold"
+    );
+    assert_eq!(read(&b), (log_len(&b), vec!["b-agent".to_owned()]));
+    assert_eq!(
+        read(&a),
+        (log_len(&a), vec!["a-agent".to_owned()]),
+        "the one slot held only the other workspace, so this read folds cold"
+    );
+}
+
+#[test]
+fn thread_fold_reflects_an_append_made_in_the_same_thread() {
+    let (_dir, workspace, paths) = registered_workspace("first");
+    thread_catch_up(&paths).unwrap();
+    let held = log_len(&paths);
+    append_registered(&workspace, &paths, "second");
+
+    let before = event_log::testkit::bytes_read();
+    let (cache, agents, _) = thread_catch_up(&paths).unwrap();
+    assert_eq!(
+        event_log::testkit::bytes_read() - before,
+        log_len(&paths) - held,
+        "the held fold reads only the appended frame"
+    );
+    assert_eq!(cache.extent.offset, log_len(&paths));
+    let ids = agents
+        .iter()
+        .map(|agent| agent.agent_id.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(ids, ["first", "second"]);
+}
+
+#[test]
+fn thread_fold_serves_a_replaced_carryover_at_an_unchanged_log() {
+    let (_dir, _, paths) = registered_workspace("live");
+    write_carryover(
+        &paths.agents_carryover,
+        &EventCarryover {
+            agents: vec![agent("codex", "carried", AgentStatus::Success, 1_000)],
+            ..EventCarryover::default()
+        },
+    )
+    .unwrap();
+    let (_, first, _) = thread_catch_up(&paths).unwrap();
+    assert_eq!(first.len(), 2);
+
+    // GC prunes or rotation rewrites the carryover while the log stands still.
+    write_carryover(
+        &paths.agents_carryover,
+        &EventCarryover {
+            agents: vec![agent("codex", "replacement", AgentStatus::Success, 2_000)],
+            ..EventCarryover::default()
+        },
+    )
+    .unwrap();
+    let (_, served, _) = thread_catch_up(&paths).unwrap();
+    let (_, cold, _) = RollupCursor::new().fold(&paths).unwrap();
+    assert_eq!(sorted_value(served.to_vec()), sorted_value(cold.to_vec()));
+    assert!(served.iter().any(|agent| agent.agent_id == "replacement"));
+    assert!(served.iter().all(|agent| agent.agent_id != "carried"));
+}

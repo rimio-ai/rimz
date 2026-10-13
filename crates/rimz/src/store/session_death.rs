@@ -108,7 +108,7 @@ pub(crate) fn same_agent_instance(older: &AgentState, newer: &AgentState) -> boo
 /// binds. `agents` is the carryover-merged rollup, so a host silent since the
 /// last log rotation is still found.
 pub(in crate::store) fn side_conversation_host<'a>(
-    agents: &'a [AgentState],
+    agents: &'a crate::store::snapshot::AgentRollup,
     kind: &AgentKind,
     observation: &AgentLifecycleObservation,
 ) -> Option<&'a AgentState> {
@@ -289,7 +289,8 @@ mod tests {
         side.agent_pid = Some(42);
         let kind = AgentKind::new_unchecked("codex");
         let host = |agents: &[AgentState]| {
-            side_conversation_host(agents, &kind, &side).map(|host| host.agent_id.to_string())
+            side_conversation_host(&agents.to_vec().into(), &kind, &side)
+                .map(|host| host.agent_id.to_string())
         };
 
         // A compaction predecessor left running outranks its rested

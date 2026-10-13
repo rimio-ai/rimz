@@ -12,7 +12,7 @@ use crate::pane::{PaneRef, RuntimeOwner};
 use crate::store::event::{self, EventEnvelope};
 use crate::store::{
     session_death,
-    snapshot::{self, find_agent},
+    snapshot::{self, AgentRollup},
 };
 
 use super::{Store, debounce};
@@ -145,18 +145,19 @@ impl Store {
         rotation_threshold: u64,
     ) -> Result<AgentLifecycleReceipt> {
         self.commit(|txn| {
-            let (cache, agents, _resume_outcomes) = snapshot::catch_up_with_pending(txn.paths, &self.pending_hook_events())?;
+            let rollup = snapshot::catch_up_with_pending(txn.paths, &self.pending_hook_events())?;
+            let agents = &rollup.agents;
             let known_side = intent
                 .observation
                 .agent_id
                 .as_ref()
-                .is_some_and(|agent_id| cache.agent_identity.is_side_session(agent_id));
+                .is_some_and(|agent_id| rollup.agent_identity().is_side_session(agent_id));
             let mut staged = Vec::new();
             let mut receipt = if known_side
                 || intent.observation.origin == Some(SessionOrigin::SideConversation)
             {
                 let host = session_death::side_conversation_host(
-                    &agents,
+                    agents,
                     &intent.agent_kind,
                     intent.observation,
                 );
@@ -190,13 +191,13 @@ impl Store {
                     .observation
                     .agent_id
                     .as_ref()
-                    .and_then(|agent_id| find_agent(&agents, &intent.agent_kind, agent_id))
+                    .and_then(|agent_id| agents.find(&intent.agent_kind, agent_id))
                     .map(|agent| agent.status);
                 let transition =
-                    lifecycle_transition(&agents, &intent.agent_kind, intent.observation);
+                    lifecycle_transition(agents, &intent.agent_kind, intent.observation);
                 // Only hook-first roots take the room default; launched rows and children keep their account.
                 let creates_row = |agent_id: &AgentSessionId| {
-                    find_agent(&agents, &intent.agent_kind, agent_id).is_none()
+                    agents.find(&intent.agent_kind, agent_id).is_none()
                 };
                 let login = if intent
                     .observation
@@ -232,7 +233,7 @@ impl Store {
                     let mut observation = event::observation_for_event(intent.observation);
                     if prior_status.is_none() {
                         observation.launch.login = ingress_login(
-                            &agents,
+                            agents,
                             &intent.agent_kind,
                             &observation,
                             login.as_ref(),
@@ -253,7 +254,7 @@ impl Store {
                 derive_lifecycle_events(
                     &self.inner.paths.workspace_id,
                     &intent,
-                    &agents,
+                    agents,
                     transition,
                     login.as_ref(),
                     &mut staged,
@@ -327,12 +328,12 @@ fn claim_rotation(paths: &StatePaths, rotation_threshold: u64, pending_bytes: u6
 }
 
 fn lifecycle_transition(
-    agents: &[AgentState],
+    agents: &AgentRollup,
     kind: &AgentKind,
     observation: &AgentLifecycleObservation,
 ) -> Option<Transition> {
     let agent_id = observation.agent_id.as_ref()?;
-    let prior = find_agent(agents, kind, agent_id);
+    let prior = agents.find(kind, agent_id);
     Some(AgentState::transition(
         prior,
         &observation.signal,
@@ -346,7 +347,7 @@ fn lifecycle_transition(
 fn derive_lifecycle_events(
     workspace_id: &WorkspaceId,
     intent: &AgentLifecycleIntent<'_>,
-    agents: &[AgentState],
+    agents: &AgentRollup,
     primary_transition: Option<Transition>,
     login: Option<&LoginName>,
     staged: &mut Vec<StagedLifecycleEvent>,
@@ -383,7 +384,7 @@ fn derive_lifecycle_events(
         ..
     } = &intent.observation.signal
         && let Some(parent_id) = intent.observation.parent_agent_id.as_ref()
-        && let Some(parent) = find_agent(agents, &intent.agent_kind, parent_id)
+        && let Some(parent) = agents.find(&intent.agent_kind, parent_id)
         && parent.status == AgentStatus::Waiting
         && parent
             .open_ask
@@ -422,7 +423,7 @@ fn derive_lifecycle_events(
         && let Some(parent_id) = intent.observation.agent_id.as_ref()
     {
         for child in intent.spawned_subagents {
-            let child_state = find_agent(agents, &intent.agent_kind, &child.child_agent_id);
+            let child_state = agents.find(&intent.agent_kind, &child.child_agent_id);
             let errored = child_state.is_some_and(|state| state.status == AgentStatus::Failed);
             let mut observation = AgentLifecycleObservation::new(
                 Some(child.child_agent_id.clone()),
@@ -493,9 +494,9 @@ pub(super) fn superseded_on_attach(
     agent_id: &AgentSessionId,
     pane: &PaneRef,
     owner: &RuntimeOwner,
-    agents: &[AgentState],
+    agents: &AgentRollup,
 ) -> Option<EventEnvelope> {
-    let card = find_agent(agents, kind, agent_id)?;
+    let card = agents.find(kind, agent_id)?;
     agents
         .iter()
         .any(|speaker| {
@@ -541,11 +542,11 @@ fn forked_from_resumed(
 }
 
 fn root_parent(
-    agents: &[AgentState],
+    agents: &AgentRollup,
     kind: &AgentKind,
     parent_id: &AgentSessionId,
 ) -> (AgentSessionId, AgentKind) {
-    let parent = find_agent(agents, kind, parent_id);
+    let parent = agents.find(kind, parent_id);
     (
         parent
             .and_then(|state| state.parent_agent_id.clone())
@@ -560,7 +561,7 @@ fn root_parent(
 fn append_adoption(
     workspace_id: &WorkspaceId,
     intent: &AgentLifecycleIntent<'_>,
-    agents: &[AgentState],
+    agents: &AgentRollup,
     parent_id: &AgentSessionId,
     mut observation: AgentLifecycleObservation,
     signal: LifecycleSignal,
@@ -574,7 +575,7 @@ fn append_adoption(
     if child_id == *parent_id {
         return;
     }
-    let child_state = find_agent(agents, &intent.agent_kind, &child_id);
+    let child_state = agents.find(&intent.agent_kind, &child_id);
     if child_state.is_some_and(|state| state.parent_agent_id.is_some())
         || child_state
             .and_then(|state| state.pane.as_ref())
@@ -584,7 +585,8 @@ fn append_adoption(
     }
     observation.signal = signal;
     if child_state.is_none() {
-        observation.launch.login = find_agent(agents, &intent.agent_kind, parent_id)
+        observation.launch.login = agents
+            .find(&intent.agent_kind, parent_id)
             .map_or_else(|| login.cloned(), |parent| parent.login.clone());
     }
     let (parent_id, parent_kind) = root_parent(agents, &intent.agent_kind, parent_id);
@@ -621,7 +623,7 @@ fn append_adoption(
 }
 
 fn ingress_login(
-    agents: &[AgentState],
+    agents: &AgentRollup,
     kind: &AgentKind,
     observation: &AgentLifecycleObservation,
     default: Option<&LoginName>,
@@ -632,7 +634,8 @@ fn ingress_login(
             .parent_agent_kind
             .as_ref()
             .unwrap_or(kind);
-        if let Some(parent) = find_agent(agents, parent_kind.as_str(), parent_id)
+        if let Some(parent) = agents
+            .find(parent_kind.as_str(), parent_id)
             .filter(|parent| parent.kind == *kind)
         {
             return parent.login.clone();
@@ -663,7 +666,7 @@ fn ingress_login(
 fn append_reconciliation(
     workspace_id: &WorkspaceId,
     intent: &AgentLifecycleIntent<'_>,
-    agents: &[AgentState],
+    agents: &AgentRollup,
     parent_id: &AgentSessionId,
     mut observation: AgentLifecycleObservation,
     staged: &mut Vec<StagedLifecycleEvent>,
@@ -672,7 +675,7 @@ fn append_reconciliation(
         return;
     };
     let (root_parent_id, parent_kind) = root_parent(agents, &intent.agent_kind, parent_id);
-    let Some(child_state) = find_agent(agents, &intent.agent_kind, &child_id) else {
+    let Some(child_state) = agents.find(&intent.agent_kind, &child_id) else {
         return;
     };
     if child_state.parent_agent_id.as_ref() != Some(&root_parent_id)

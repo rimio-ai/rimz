@@ -25,13 +25,14 @@ use crate::workspace::record::{self, WorkspaceRecordErr};
 /// attach. Caller owns a write serialization point (the workspace lock, or
 /// the publish single-flight).
 ///
-/// Cost is O(delta bytes) per call: the fold resumes from the persisted base.
+/// Cost is O(delta bytes) per call: the fold resumes from the thread's held
+/// fold, or from the persisted base on the thread's first read.
 /// Archived event logs are never rescanned; rotation
 /// pre-projects the agent rollup into `agents.carryover.json` and reseeds
 /// the fold base, so the reducer stays bounded.
 pub(crate) fn rebuild(paths: &StatePaths) -> Result<SidebarSnapshot> {
     let (rollup, agents, resume_outcomes) = catch_up_rollup(paths)?;
-    let snapshot = assemble_snapshot(paths, rollup.extent, &agents, resume_outcomes)?;
+    let snapshot = assemble_snapshot(paths, rollup.extent, agents.iter(), resume_outcomes)?;
     // The fold base lands first: its extent always runs at or past
     // `latest.json`'s stamp, so a crash between the two leaves a stale view
     // that the next catch-up refreshes from the newer base. Both writes are
@@ -46,20 +47,26 @@ pub(crate) fn rebuild(paths: &StatePaths) -> Result<SidebarSnapshot> {
 /// the read-only twin of [`rebuild`], safe from a lock-free reader.
 pub(crate) fn build_from(paths: &StatePaths) -> Result<SidebarSnapshot> {
     let (rollup, agents, resume_outcomes) = catch_up_rollup(paths)?;
-    assemble_snapshot(paths, rollup.extent, &agents, resume_outcomes)
+    assemble_snapshot(paths, rollup.extent, agents.iter(), resume_outcomes)
 }
 
 pub(in crate::store) fn build_from_pending(
     paths: &StatePaths,
     pending: &[crate::store::event::EventEnvelope],
 ) -> Result<SidebarSnapshot> {
-    let (rollup, agents, outcomes) = super::fold::catch_up_with_pending(paths, pending)?;
-    assemble_snapshot(paths, rollup.extent, &agents, outcomes)
+    let rollup = super::fold::catch_up_with_pending(paths, pending)?;
+    assemble_snapshot(
+        paths,
+        rollup.extent(),
+        rollup.agents.iter(),
+        rollup.resume_outcomes,
+    )
 }
 
-/// Build the same projection for a long-lived reader, but with the
-/// rollup base rides in the caller's [`RollupCursor`] instead of being
-/// re-read from `rollup.json` per call — O(new log bytes) per delta.
+/// Build the same projection for a long-lived reader whose rollup base rides
+/// in its own [`RollupCursor`] rather than the thread's one held fold, so
+/// another workspace's read on the thread cannot evict it — O(new log bytes)
+/// per delta.
 pub fn build_with_cursor(paths: &StatePaths, cursor: &mut RollupCursor) -> Result<SidebarSnapshot> {
     let (extent, agents, resume_outcomes) = cursor.fold(paths)?;
     assemble_snapshot(paths, extent, agents.iter(), resume_outcomes)

@@ -919,7 +919,7 @@ fn workspace_record_preserving_room_state(
 
 fn allocate_agent_launch_identities(
     requests: &[AgentLaunchRequest],
-    agents: &[crate::agents::AgentState],
+    agents: &snapshot::AgentRollup,
     accounts: &crate::agents::RoomAccounts,
 ) -> Result<Vec<AgentLaunchIdentity>> {
     // Retained ended rows keep their names reserved so an address stays

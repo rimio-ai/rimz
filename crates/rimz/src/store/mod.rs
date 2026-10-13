@@ -175,20 +175,20 @@ impl Store {
     /// Project the live runtime state (event-log agent rollup) for CLI read
     /// entry points and resume planning.
     ///
-    /// Lock-free. The agent rollup resumes from the persisted fold base, so
-    /// an in-flight tail frame a reader races is simply not folded yet — it
-    /// can never drop a previously-folded event, and the write that
-    /// completes the frame posts the wakeup that folds it.
+    /// Lock-free. The agent rollup resumes from the thread's held fold or the
+    /// persisted fold base, so an in-flight tail frame a reader races is
+    /// simply not folded yet — it can never drop a previously-folded event,
+    /// and the write that completes the frame posts the wakeup that folds it.
     pub fn runtime_projection(
         &self,
         scope: runtime::RuntimeScope,
     ) -> Result<runtime::RuntimeProjection> {
-        let (_, agents, resume_outcomes) =
+        let rollup =
             snapshot::catch_up_with_pending(&self.inner.paths, &self.pending_hook_events())?;
         Ok(runtime::RuntimeProjection::from_parts(
-            agents,
+            &rollup.agents,
             scope,
-            resume_outcomes,
+            rollup.resume_outcomes,
         ))
     }
 
@@ -204,7 +204,8 @@ impl Store {
     }
 
     /// Build a fresh snapshot in memory (no disk write). Lock-free and
-    /// O(delta): the rollup resumes from the persisted fold base.
+    /// O(delta): the rollup resumes from the thread's held fold or the
+    /// persisted fold base.
     pub fn snapshot(&self) -> Result<SidebarSnapshot> {
         if self.hook_transaction.is_some() {
             return Ok(snapshot::build_from_pending(

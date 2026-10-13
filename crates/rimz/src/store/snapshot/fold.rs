@@ -1,6 +1,7 @@
 //! The resumable event-log fold: the persisted rollup cache, its extent
 //! stamp, and the carryover that survives log rotation.
 
+use std::cell::Cell;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::fs;
@@ -66,15 +67,27 @@ pub mod testkit {
 
     static CARRYOVER_BYTES_PARSED: AtomicU64 = AtomicU64::new(0);
     static ROLLUP_ROWS_MATERIALIZED: AtomicU64 = AtomicU64::new(0);
+    static ROLLUP_BASE_COPIES: AtomicU64 = AtomicU64::new(0);
 
     /// Rollup rows flattened since process start; borrowed readers add nothing.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testkit"))]
     pub fn rollup_rows_materialized() -> u64 {
         ROLLUP_ROWS_MATERIALIZED.load(Ordering::Relaxed)
     }
 
     pub(super) fn count_rows_materialized(n: u64) {
         ROLLUP_ROWS_MATERIALIZED.fetch_add(n, Ordering::Relaxed);
+    }
+
+    /// Deep copies of a shared fold base since process start: a fold resumed
+    /// from a base another holder still shares.
+    #[cfg(any(test, feature = "testkit"))]
+    pub fn rollup_base_copies() -> u64 {
+        ROLLUP_BASE_COPIES.load(Ordering::Relaxed)
+    }
+
+    pub(super) fn count_base_copy() {
+        ROLLUP_BASE_COPIES.fetch_add(1, Ordering::Relaxed);
     }
 
     /// `agents.carryover.json` bytes parsed since process start.
@@ -294,6 +307,12 @@ impl AgentRollup {
         self.iter().count()
     }
 
+    /// The row for an exact provider and session identity.
+    pub fn find(&self, kind: &str, agent_id: &AgentSessionId) -> Option<&AgentState> {
+        self.iter()
+            .find(|agent| agent.kind == kind && agent.agent_id == *agent_id)
+    }
+
     pub fn is_empty(&self) -> bool {
         self.base.agents.is_empty() && self.live.is_empty()
     }
@@ -302,6 +321,16 @@ impl AgentRollup {
         let agents: Vec<_> = self.iter().cloned().collect();
         testkit::count_rows_materialized(agents.len() as u64);
         agents
+    }
+}
+
+/// Rows a fold already owns, with no carryover beneath them.
+impl From<Vec<AgentState>> for AgentRollup {
+    fn from(rows: Vec<AgentState>) -> Self {
+        Self {
+            base: Arc::default(),
+            live: rows.into(),
+        }
     }
 }
 
@@ -365,10 +394,19 @@ fn read_rollup_cache(path: &Path) -> Option<Arc<RollupCache>> {
     Some(cache)
 }
 
+/// The fold base a fold may consume: moved out when this is its only holder,
+/// copied (and counted) when the parse cache or a reader still shares it.
+fn owned_base(base: Arc<RollupCache>) -> RollupCache {
+    Arc::try_unwrap(base).unwrap_or_else(|shared| {
+        testkit::count_base_copy();
+        RollupCache::clone(&shared)
+    })
+}
+
 /// Seed the lifecycle stream at the exact active-log extent its states reflect.
 pub(crate) fn lifecycle_follow_seed(
     paths: &StatePaths,
-) -> Result<(event_log::LogExtent, Vec<AgentState>)> {
+) -> Result<(event_log::LogExtent, AgentRollup)> {
     let (cache, agents, _resume_outcomes) = catch_up_rollup(paths)?;
     Ok((cache.extent, agents))
 }
@@ -393,8 +431,8 @@ pub fn lifecycle_log_generation(paths: &StatePaths) -> u64 {
 }
 
 thread_local! {
-    /// This thread's last `rollup.json` parse — the fold base a long-lived
-    /// reader re-reads on every catch-up fold.
+    /// This thread's last `rollup.json` parse — the fold base a cold
+    /// catch-up fold resumes from.
     static ROLLUP_PARSE_CACHE: ParseCache<RollupCache> = const { ParseCache::new() };
 }
 
@@ -599,42 +637,112 @@ pub(crate) fn load_full_agent(paths: &StatePaths, agent: &AgentState) -> Result<
     Ok(loaded)
 }
 
-/// Catch the rollup up to the live log: resume the fold from
-/// `snapshots/rollup.json`, fold only the frames appended since its extent,
-/// and return the refreshed cache beside the carryover-merged rollup.
+/// Catch the rollup up to the live log and return the fold base beside the
+/// carryover-merged rollup, both shared rather than copied.
 ///
-/// O(delta bytes) on the common path. Any miss — an absent or
-/// shape-mismatched cache, or an extent past the live log (a rotation this
-/// cache predates) — falls back to the full fold from offset zero, the
-/// universal recovery path. Read-only: the caller that owns a write
-/// serialization point (a locked rebuild, the single-flighted publisher)
-/// persists the returned cache; a plain reader just uses it.
+/// Served by this thread's held [`RollupCursor`]: the first read parses
+/// `snapshots/rollup.json` and the carryover, a read after an append folds only
+/// the new frames, and a read at an unchanged log and carryover opens no file.
+/// The slot holds one workspace, keyed by the fold's input paths; a read of
+/// another workspace replaces it, so a thread holds at most one rollup.
+/// Read-only: the caller that owns a write serialization point (a locked
+/// rebuild, the single-flighted publisher) persists the returned cache; a
+/// plain reader just uses it.
 pub(crate) fn catch_up_rollup(
     paths: &StatePaths,
-) -> Result<(RollupCache, Vec<AgentState>, Vec<ResumeOutcome>)> {
-    let (cache, merged, resume_outcomes) = catch_up_rollup_layered(paths)?;
-    Ok((cache, merged.to_vec(), resume_outcomes))
+) -> Result<(Arc<RollupCache>, AgentRollup, Vec<ResumeOutcome>)> {
+    thread_local! {
+        static THREAD_ROLLUP: Cell<Option<ThreadRollup>> = const { Cell::new(None) };
+    }
+    THREAD_ROLLUP.with(|slot| {
+        let mut held = slot
+            .take()
+            .filter(|held| held.inputs == FoldInputs::of(paths))
+            .unwrap_or_else(|| ThreadRollup {
+                inputs: FoldInputs::of(paths),
+                cursor: RollupCursor::new(),
+            });
+        let read = held.cursor.fold_shared(paths);
+        slot.set(Some(held));
+        read
+    })
 }
 
+/// The thread's one held fold and the workspace files it folded.
+struct ThreadRollup {
+    inputs: FoldInputs,
+    cursor: RollupCursor,
+}
+
+#[derive(PartialEq, Eq)]
+struct FoldInputs {
+    events_log: PathBuf,
+    rollup_cache: PathBuf,
+    agents_carryover: PathBuf,
+}
+
+impl FoldInputs {
+    fn of(paths: &StatePaths) -> Self {
+        Self {
+            events_log: paths.events_log.clone(),
+            rollup_cache: paths.rollup_cache.clone(),
+            agents_carryover: paths.agents_carryover.clone(),
+        }
+    }
+}
+
+/// [`catch_up_rollup`] with a hook transaction's staged, unappended events
+/// folded on top. With nothing staged the shared rollup passes through; with
+/// events staged the reducer folds them over its own copy of the rows.
 pub(in crate::store) fn catch_up_with_pending(
     paths: &StatePaths,
     pending: &[EventEnvelope],
-) -> Result<(RollupCache, Vec<AgentState>, Vec<ResumeOutcome>)> {
-    let (mut cache, agents, outcomes) = catch_up_rollup(paths)?;
+) -> Result<PendingRollup> {
+    let (base, agents, resume_outcomes) = catch_up_rollup(paths)?;
     if pending.is_empty() {
-        return Ok((cache, agents, outcomes));
+        return Ok(PendingRollup {
+            base,
+            pending_identity: None,
+            agents,
+            resume_outcomes,
+        });
     }
     let seed = agents
-        .into_iter()
-        .map(|agent| ((agent.kind.clone(), agent.agent_id.clone()), agent))
+        .iter()
+        .map(|agent| ((agent.kind.clone(), agent.agent_id.clone()), agent.clone()))
         .collect();
     let (agents, identity) = reduce_agent_states_seeded_with_identity(
         seed,
-        cache.agent_identity.clone(),
+        base.agent_identity.clone(),
         &decode_events(pending),
     );
-    cache.agent_identity = identity;
-    Ok((cache, agents.into_values().collect(), outcomes))
+    Ok(PendingRollup {
+        base,
+        pending_identity: Some(identity),
+        agents: agents.into_values().collect::<Vec<_>>().into(),
+        resume_outcomes,
+    })
+}
+
+/// The rollup a store read sees inside a hook transaction: the shared fold
+/// base, plus the identity state its staged events folded to.
+pub(in crate::store) struct PendingRollup {
+    base: Arc<RollupCache>,
+    pending_identity: Option<AgentIdentityState>,
+    pub agents: AgentRollup,
+    pub resume_outcomes: Vec<ResumeOutcome>,
+}
+
+impl PendingRollup {
+    pub fn extent(&self) -> event_log::LogExtent {
+        self.base.extent
+    }
+
+    pub fn agent_identity(&self) -> &AgentIdentityState {
+        self.pending_identity
+            .as_ref()
+            .unwrap_or(&self.base.agent_identity)
+    }
 }
 
 fn catch_up_rollup_layered(
@@ -645,7 +753,7 @@ fn catch_up_rollup_layered(
         .unwrap_or(0);
     let base = read_rollup_cache(&paths.rollup_cache)
         .filter(|cache| cache.extent.offset <= log_len)
-        .map(Arc::unwrap_or_clone);
+        .map(owned_base);
     catch_up_from(base, paths, workspace_carryover(paths)?)
 }
 
@@ -839,7 +947,7 @@ pub(crate) fn stage_carryover_for_rotation(paths: &StatePaths, min_bytes: u64) -
 
     let base = read_rollup_cache(&paths.rollup_cache)
         .filter(|cache| cache.extent.offset <= current_bytes)
-        .map(Arc::unwrap_or_clone);
+        .map(owned_base);
     let identity = super::assemble::WorkspaceSnapshotIdentity::from_paths(paths);
     let mut carryover = FoldCarryover::from_raw(read_carryover(&paths.agents_carryover)?);
     carryover.stamp_root_lane(identity.project_root.as_deref());
@@ -916,13 +1024,12 @@ pub(crate) fn reseed_rollup_cache_for_rotation(paths: &StatePaths) -> Result<()>
 
 /// A long-lived reader's in-memory fold base: the last `RollupCache` this
 /// cursor folded to, the merged rollup it produced, and the identity of the
-/// log file it folded. Where `catch_up_rollup` re-reads `rollup.json` per
-/// call, a cursor folds each delta from memory — O(new bytes) per wakeup with
-/// one `stat` each of the log and the carryover, parsing neither base — and
-/// an unchanged log and carryover return the held rollup without opening a
-/// file. One
-/// cursor per reader thread (the sidebar fetch worker owns one across its
-/// loop); one-shot readers stay on the disk-backed wrapper.
+/// log file it folded. A cursor folds each delta from memory — O(new bytes)
+/// per wakeup with one `stat` each of the log and the carryover, parsing
+/// neither base — and an unchanged log and carryover return the held rollup
+/// without opening a file. A long-lived reader (the sidebar fetch worker)
+/// owns its cursor across its loop; every other store read goes through the
+/// thread's one held cursor in `catch_up_rollup`.
 ///
 /// Staleness is structural, not best-effort: a swapped log file — rotation's
 /// rename-and-recreate, the identity rewrite's rename-over — changes the
@@ -939,7 +1046,7 @@ pub struct RollupCursor {
 
 #[derive(Debug)]
 struct CursorState {
-    cache: RollupCache,
+    cache: Arc<RollupCache>,
     merged: AgentRollup,
     resume_outcomes: Vec<ResumeOutcome>,
     file_id: Option<LogFileId>,
@@ -993,6 +1100,17 @@ impl RollupCursor {
         &mut self,
         paths: &StatePaths,
     ) -> Result<(event_log::LogExtent, AgentRollup, Vec<ResumeOutcome>)> {
+        let (cache, merged, resume_outcomes) = self.fold_shared(paths)?;
+        Ok((cache.extent, merged, resume_outcomes))
+    }
+
+    /// [`Self::fold`] returning the whole fold base, shared with the cursor:
+    /// a caller that drops it before the next fold leaves the cursor the only
+    /// holder, so that fold resumes without copying it.
+    fn fold_shared(
+        &mut self,
+        paths: &StatePaths,
+    ) -> Result<(Arc<RollupCache>, AgentRollup, Vec<ResumeOutcome>)> {
         let meta = fs::metadata(&paths.events_log).ok();
         let file_id = meta.as_ref().and_then(LogFileId::of);
         let log_len = meta.map(|meta| meta.len()).unwrap_or(0);
@@ -1010,7 +1128,7 @@ impl RollupCursor {
                 // Nothing appended and the carryover unchanged: serve the
                 // held fold without opening a file.
                 let out = (
-                    held.cache.extent,
+                    Arc::clone(&held.cache),
                     held.merged.clone(),
                     held.resume_outcomes.clone(),
                 );
@@ -1024,7 +1142,7 @@ impl RollupCursor {
                 && held.cache.extent.offset < log_len
                 && let Ok(carryover) = workspace_carryover(paths)
                 && let Ok((cache, merged, resume_outcomes)) =
-                    catch_up_from(Some(held.cache), paths, carryover)
+                    catch_up_from(Some(owned_base(held.cache)), paths, carryover)
             {
                 return Ok(self.hold(cache, merged, resume_outcomes, file_id, carryover_stamp));
             }
@@ -1042,16 +1160,16 @@ impl RollupCursor {
         resume_outcomes: Vec<ResumeOutcome>,
         file_id: Option<LogFileId>,
         carryover: FileStamp,
-    ) -> (event_log::LogExtent, AgentRollup, Vec<ResumeOutcome>) {
-        let extent = cache.extent;
+    ) -> (Arc<RollupCache>, AgentRollup, Vec<ResumeOutcome>) {
+        let cache = Arc::new(cache);
         self.held = Some(CursorState {
-            cache,
+            cache: Arc::clone(&cache),
             merged: merged.clone(),
             resume_outcomes: resume_outcomes.clone(),
             file_id,
             carryover,
         });
-        (extent, merged, resume_outcomes)
+        (cache, merged, resume_outcomes)
     }
 }
 

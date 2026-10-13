@@ -1,5 +1,6 @@
 use std::path::Path;
 
+use super::catch_up_rollup as thread_catch_up;
 use super::*;
 
 use crate::agents::lifecycle;
@@ -19,6 +20,16 @@ fn fold_delta(
     now: Timestamp,
 ) -> FoldedDelta {
     super::fold_delta(seed, carryover, events, now).expect("fold delta")
+}
+
+/// The disk-backed fold these tests pin: resume from `rollup.json` on every
+/// call, never from the thread's held fold, flattened for comparison. The
+/// thread-served read is [`thread_catch_up`].
+fn catch_up_rollup(
+    paths: &StatePaths,
+) -> Result<(RollupCache, Vec<AgentState>, Vec<ResumeOutcome>)> {
+    let (cache, merged, outcomes) = catch_up_rollup_layered(paths)?;
+    Ok((cache, merged.to_vec(), outcomes))
 }
 
 fn recent(secs_ago: u64) -> jiff::Timestamp {
