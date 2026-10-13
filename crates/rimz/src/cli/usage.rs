@@ -26,11 +26,6 @@ impl UsageError {
     /// command first, since a truncated read keeps the first line, then the
     /// scene's verbs as `--help` shows them.
     pub(super) fn missing_verb(scene: &str, target: &str, list_flags: &[&str]) -> Self {
-        let list = shell_command(
-            ["rimz", scene, "list"]
-                .into_iter()
-                .chain(list_flags.iter().copied()),
-        );
         let cli = super::Cli::command();
         let verbs = cli
             .find_subcommand(scene)
@@ -41,9 +36,29 @@ impl UsageError {
             .collect::<Vec<_>>()
             .join(", ");
         Self(format!(
-            "`rimz {scene}` needs a verb or {target}; to list {scene}, run `{list}`\nverbs: {verbs}"
+            "{}\nverbs: {verbs}",
+            missing_verb_line(scene, target, list_flags)
         ))
     }
+
+    /// `rimz agents` with neither a verb nor a launch spec: the list command
+    /// first, then the orientation `rimz agents --help` leads with.
+    pub(super) fn missing_agents_verb(list_flags: &[&str]) -> Self {
+        Self(format!(
+            "{}\n\n{}",
+            missing_verb_line("agents", "a launch spec", list_flags),
+            super::help::agents_orientation()
+        ))
+    }
+}
+
+fn missing_verb_line(scene: &str, target: &str, list_flags: &[&str]) -> String {
+    let list = shell_command(
+        ["rimz", scene, "list"]
+            .into_iter()
+            .chain(list_flags.iter().copied()),
+    );
+    format!("`rimz {scene}` needs a verb or {target}; to list {scene}, run `{list}`")
 }
 
 /// `argv` as one shell-runnable command line.

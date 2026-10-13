@@ -1183,7 +1183,7 @@ fn launch_refusal(launch: &AgentLaunchArgs, all: bool, json: bool) -> Option<Usa
     if json {
         flags.push("--json");
     }
-    Some(UsageError::missing_verb("agents", "a launch spec", &flags))
+    Some(UsageError::missing_agents_verb(&flags))
 }
 
 fn scope_refusal(scope: &str, json: bool) -> UsageError {

@@ -1,6 +1,19 @@
 # Agent control CLI
 
-`rimz agents` launches agents into panes and reads and drives the agents already running in the room. `rimz agents list` lists the current channel's agent cards; `rimz agents <SPEC> [PROMPT]` launches; bare `rimz agents`, with no verb and no spec, refuses with exit 2 and prints the `list` command to run; each subcommand below acts on launches, lanes, or one agent. Run these commands from inside the room, or from any directory that resolves to the same workspace ([which room a command reaches](../cli.md#which-room-a-command-reaches)). `rimz agents <subcommand> --help` prints every flag.
+`rimz agents` launches agents into panes and reads and drives the agents already running in the room. `rimz agents list` lists the current channel's agent cards; `rimz agents <SPEC> [PROMPT]` launches; bare `rimz agents`, with no verb and no spec, refuses with exit 2, prints the `list` command to run, and follows it with the orientation below; each subcommand below acts on launches, lanes, or one agent. Run these commands from inside the room, or from any directory that resolves to the same workspace ([which room a command reaches](../cli.md#which-room-a-command-reaches)). `rimz agents --help` prints the same orientation; `rimz agents launch --help` prints the launch flags, and `rimz agents <subcommand> --help` every flag of one verb.
+
+```console
+$ rimz agents
+error: `rimz agents` needs a verb or a launch spec; to list agents, run `rimz agents list`
+
+    rimz agents list ['#lane']     agent cards (this lane; --all for the room)
+    rimz agents <SPEC> [PROMPT]    launch (same as `rimz agents launch`)
+
+  See:     list  show  logs  history  top  attribution
+  Drive:   focus  wait  stop  restart  compact  refresh  fork  budget
+  Start:   launch  resume  profiles  explain
+  Define:  validate  register  check
+```
 
 Why you would launch through RimZ instead of the bare CLI is the [agents guide](../../guide/fleet.md). Profiles, commands, and teams are configured in the [configuration guide](../../guide/configuration.md#agent-profiles-commands-and-teams), and the launch machinery is [fleet.md](../../internals/harness/fleet.md).
 
@@ -496,7 +509,7 @@ rimz agents compact @coder               # compact context at the next turn boun
 
 #### `list`
 
-`rimz agents list [SCOPE]` prints the room's pane-backed root agents as cards in attention order, scoped to the current channel. `SCOPE` (`#channel`, worktree, branch, or directory name) or `-w, --worktree` selects one lane, and `--all` covers every channel; the three conflict. Listing needs the verb: bare `rimz agents` and `rimz agents '#auth'` refuse with exit 2 and print the `list` command that would run, carrying over `--all`, `--json`, `-w NAME`, and the scope. It needs a live room: enter one with `rimz start` or `rimz attach`.
+`rimz agents list [SCOPE]` prints the room's pane-backed root agents as cards in attention order, scoped to the current channel. `SCOPE` (`#channel`, worktree, branch, or directory name) or `-w, --worktree` selects one lane, and `--all` covers every channel; the three conflict. Listing needs the verb: bare `rimz agents` and `rimz agents '#auth'` refuse with exit 2 and print the `list` command that would run, carrying over `--all`, `--json`, `-w NAME`, and the scope; bare `rimz agents` follows it with the [orientation](#agent-control-cli). It needs a live room: enter one with `rimz start` or `rimz attach`.
 
 ```console
 $ rimz agents list
