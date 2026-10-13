@@ -419,18 +419,31 @@ fn stop_when_idle_takes_an_optional_duration_or_off() {
         else {
             panic!("stop")
         };
-        assert_eq!((reference.as_str(), all), ("@coder", false), "{argv:?}");
+        assert_eq!(
+            (reference.as_deref(), all),
+            (Some("@coder"), false),
+            "{argv:?}"
+        );
         assert_eq!(when_idle, expected, "{argv:?}");
     }
 
-    let misplaced = AgentsHarness::try_parse_from(["rimz", "stop", "--when-idle", "@me"])
-        .expect_err("a reference is not a duration")
-        .to_string();
-    assert!(
-        misplaced
-            .contains("put the reference before the flag (`rimz agents stop @me --when-idle`)"),
-        "{misplaced}"
-    );
+    for argv in [
+        vec!["rimz", "stop", "--when-idle", "@me"],
+        vec!["rimz", "stop", "--when-idle=@me"],
+    ] {
+        let Some(AgentsSubcmd::Stop {
+            reference,
+            when_idle,
+            ..
+        }) = parse_agents(&argv).command
+        else {
+            panic!("stop")
+        };
+        assert_eq!(
+            super::stop::normalize_stop(reference, when_idle).unwrap(),
+            ("@me".to_owned(), minutes(3))
+        );
+    }
     for argv in [
         &["rimz", "stop", "@coder", "--when-idle", "soon"][..],
         &["rimz", "stop", "@coder", "--all", "--when-idle"],
@@ -1802,6 +1815,57 @@ mod render {
     }
 
     #[test]
+    fn agents_table_addresses_use_the_room_not_the_printed_subset() {
+        let now = Timestamp::from_second(2_000).unwrap();
+        let agents = [("a", "coder"), ("b", "coder"), ("c", "reviewer")]
+            .into_iter()
+            .map(|(lane, role)| {
+                let mut agent = agent_in_lane(lane, Some(lane), None, None);
+                agent.role = Some(role.to_owned());
+                agent
+            })
+            .collect();
+        let snapshot = rimz::store::snapshot::SidebarSnapshot::build_with_agents(
+            WorkspaceId::from_project_root(Path::new("/repo")),
+            agents,
+            now,
+        );
+        let text = render_agents_text(&snapshot, now, 180);
+        for address in ["@coder#a", "@coder#b", "@reviewer"] {
+            assert!(text.contains(address), "{text}");
+        }
+        let mut out = anstream::StripStream::new(Vec::new());
+        render_agents_table(
+            &rimz::agents::ParkDemotion::default(),
+            &mut out,
+            &snapshot,
+            &[&snapshot.agents[0]],
+            now,
+            180,
+            &ThemeConfig::default(),
+            &crate::cli::CurrentChannel::Unscoped.address_context(),
+        )
+        .unwrap();
+        let text = String::from_utf8(out.into_inner()).unwrap();
+        assert!(text.contains("@coder#a"), "{text}");
+    }
+
+    #[test]
+    fn agents_table_branch_header_includes_selectable_channel() {
+        let now = Timestamp::from_second(2_000).unwrap();
+        let mut agent = agent_in_lane("coder", None, Some("/repo/worktrees/short"), None);
+        agent.worktree_branch = Some("feature/long-branch".to_owned());
+        let snapshot = rimz::store::snapshot::SidebarSnapshot::build_with_agents(
+            WorkspaceId::from_project_root(Path::new("/repo")),
+            vec![agent],
+            now,
+        )
+        .with_project_root(Some(PathBuf::from("/repo")));
+        let text = render_agents_text(&snapshot, now, 180);
+        assert!(text.contains("feature/long-branch · #short"), "{text}");
+    }
+
+    #[test]
     fn agents_table_shows_petnames_profiles_and_kinds() {
         let now = Timestamp::from_second(2_000).unwrap();
         let mut first =
@@ -2075,7 +2139,7 @@ mod render {
                 state: rimz::store::snapshot::WorktreePrState::Open,
                 ci: Some(rimz::store::snapshot::WorktreeCi::Failing),
             }),
-            &peers,
+            rimz::address::agent_handle(peers[0], &peers, false),
             None,
             Timestamp::UNIX_EPOCH,
             super::report::ReportOverrides::default(),
@@ -2117,7 +2181,7 @@ mod render {
                 agent,
                 None,
                 None,
-                &peers,
+                rimz::address::agent_handle(peers[0], &peers, false),
                 None,
                 now,
                 super::report::ReportOverrides::default(),
@@ -2480,6 +2544,7 @@ fn render_agents_text_with_theme(
         now,
         max_width,
         theme,
+        &crate::cli::CurrentChannel::Unscoped.address_context(),
     )
     .expect("render agents table");
     String::from_utf8(out.into_inner()).expect("utf8")

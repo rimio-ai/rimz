@@ -77,22 +77,24 @@ Once a few agents are working, the same `rimz agents` command reads the room and
 
 **See the whole room at a glance.** `rimz agents list` lists the current channel's cards; `--all` includes every channel. Cards group by the worktree each lives in and put whoever needs you on top:
 
+The addresses in `list` and `top` work from where you are: `#channel` appears when a bare handle would reach another agent or miss. Copy the whole address, including that suffix, into `show`, `focus`, or `stop`. A branch header also shows `· #channel` when its branch name would not select that group.
+
 ```console
 $ rimz agents list --all
-HANDLE     PROFILE   AGENT   STATUS   MODEL         CTX  TOKENS  AGE
+HANDLE        PROFILE   AGENT   STATUS   MODEL         CTX  TOKENS  AGE
 
 ⑂ auth-refresh · forge team
-@planner   planner   claude  waiting  opus@high     42%     78k   2m
+@planner      planner   claude  waiting  opus@high     42%     78k   2m
   which rotation strategy should we use?
 
-@coder     coder     codex   running  gpt-5.5@high  31%     54k   0s
+@coder        coder     codex   running  gpt-5.5@high  31%     54k   0s
   wire up the refresh-token path
 
-@reviewer  reviewer  claude  idle     opus@high      3%     12k  15m
+@reviewer     reviewer  claude  idle     opus@high      3%     12k  15m
   review the diff once coder lands
 
-query-engine
-@claude    -         claude  success  opus@high     78%    120k   8m
+main
+@claude#main  -         claude  success  opus@high     78%    120k   8m
   store refactor
 ```
 
@@ -221,7 +223,7 @@ AGENT         STATUS     CPU     MEM    IO/S  PROCS  CTX  TOKENS  AGE
 @coder        running  96.0%  892 MB  4 MB/s     12  31%     54k  0s
 @planner      waiting   2.0%  410 MB       -      6  42%     78k  2m
 @reviewer     idle      1.0%  180 MB       -      4   3%     12k  15m
-@swift-otter  success      -       -       -      -  78%    120k  8m
+@claude#main  success      -       -       -      -  78%    120k  8m
 ```
 
 **Jump in, or shut one down.** A row you want to answer is one `focus` away; a pane you are done with is one `stop`:
@@ -232,7 +234,7 @@ rimz agents stop @reviewer      # close the idle reviewer's pane
 rimz agents stop @claude --all  # close every Claude in scope
 ```
 
-`stop` closes the agent's pane, which ends the CLI process with it, and stops any supervised children that agent launched. Sessions stay on disk in the provider's own format. To reopen one stopped solo agent, use [`rimz agents resume @swift-otter`](../reference/cli/agents.md#resume-one-closed-session). Its exit hint names that exact handle: `resume with rimz agents resume @swift-otter`. Run it from the recorded directory to take over the current pane again; from elsewhere it opens a tab. Team members keep their team-role resume command.
+`focus` confirms the destination with `focused <address>`. `stop` closes the agent's pane, which ends the CLI process with it, and stops any supervised children that agent launched. Its receipt names the stopped agent and, for a resumable solo agent or team seat, the command to resume it. Sessions stay on disk in the provider's own format. To reopen one stopped solo agent, use [`rimz agents resume @swift-otter`](../reference/cli/agents.md#resume-one-closed-session). Its exit hint names that exact handle: `resume with rimz agents resume @swift-otter`. Run it from the recorded directory to take over the current pane again; from elsewhere it opens a tab. Team members keep their team-role resume command, pinned to the stopped lane.
 
 To keep the conversation but change how it runs, [`rimz agents <spec> --resume`](../reference/cli/agents.md#resume-a-cohort) accepts overrides that become its saved launch settings. Before opening anything, it names the selected channel or worktree; when several places match, it points to the project-root listing. A prompt can ride along: `rimz agents claude --resume --model sonnet 'Continue the review'` reopens the conversation and queues your instruction for the agent. Later resumes keep that model. An in-session `/model` switch is not carried; restate it with `--model` on resume to keep it.
 

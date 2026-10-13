@@ -36,6 +36,7 @@ pub(super) fn list_agents(
     .context("reading the room snapshot")?;
 
     let channel = list_channel_filter(all, scope.as_deref(), &workspace);
+    let reader = crate::cli::current_channel(&workspace, Some(&store)).address_context();
     let agents: Vec<&AgentState> = snapshot
         .pane_bound_roots()
         .filter(|agent| {
@@ -104,6 +105,7 @@ pub(super) fn list_agents(
             Some(&runtime),
             &slots,
             &active_secs,
+            &reader,
         ));
     }
 
@@ -116,6 +118,7 @@ pub(super) fn list_agents(
         now,
         render::terminal_columns(120),
         &machine_config.theme,
+        &reader,
     )?;
     Ok(())
 }
@@ -154,6 +157,10 @@ pub(super) fn pr_info(group: &SidebarWorktreeGroup) -> Option<PrInfo> {
     })
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the reader's address scope is independent of the listed rows"
+)]
 pub(crate) fn render_agents_table(
     demotion: &rimz::agents::ParkDemotion,
     w: &mut impl std::io::Write,
@@ -162,12 +169,9 @@ pub(crate) fn render_agents_table(
     now: jiff::Timestamp,
     max_width: usize,
     theme: &ThemeConfig,
+    reader: &rimz::address::AddressContext,
 ) -> std::io::Result<()> {
     let groups = group_live_agents_by_worktree(agents, snapshot);
-    let ordered_agents: Vec<&AgentState> = groups
-        .iter()
-        .flat_map(|group| group.agents.iter().copied())
-        .collect();
     let identity = super::report::SelfIdentity::from_env();
     let me = identity.resolve(snapshot);
     let glyph = theme_glyphs(theme);
@@ -185,7 +189,7 @@ pub(crate) fn render_agents_table(
                 agent,
                 row_for_agent(snapshot, agent),
                 pr,
-                &ordered_agents,
+                rimz::address::paste_address(agent, snapshot, reader),
                 me.as_ref(),
                 now,
                 ReportOverrides::default(),
@@ -225,6 +229,14 @@ fn group_header_cells(
         }
     };
     let mut cells = vec![render::cell(label).fg(render::palette::header())];
+    if !group
+        .agents
+        .iter()
+        .all(|agent| rimz::address::agent_in_worktree(agent, &group.label))
+        && let Some(lane) = group.agents.first().and_then(|agent| agent.lane_label())
+    {
+        cells.push(render::cell(format!("· #{lane}")).fg(render::palette::meta()));
+    }
     if let Some(team) = group.team()
         && !group.label.ends_with(&format!("/{team}"))
     {
@@ -428,7 +440,7 @@ mod tests {
     }
 
     #[test]
-    fn agent_list_role_handle_ignores_historical_roots() {
+    fn agent_list_address_accounts_for_unprinted_addressable_roots() {
         let mut live = test_agent("sess-live");
         live.role = Some("coder".to_owned());
         let mut historical = test_agent("sess-historical");
@@ -449,8 +461,9 @@ mod tests {
             None,
             &[],
             &Default::default(),
+            &crate::cli::CurrentChannel::Unscoped.address_context(),
         );
-        assert_eq!(report.agents[0].handle, "@coder");
+        assert_eq!(report.agents[0].handle, "@sess-live");
     }
 
     #[test]
@@ -541,6 +554,7 @@ mod tests {
             None,
             &[],
             &Default::default(),
+            &crate::cli::CurrentChannel::Unscoped.address_context(),
         );
         let linked = entries
             .agents

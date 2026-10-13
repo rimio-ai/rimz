@@ -2720,6 +2720,193 @@ fn idle_stop_holds_while_a_message_is_owed_then_stops_without_canceling_the_run(
     }
 }
 
+#[test]
+fn stop_when_idle_reference_reparse_and_usage_errors() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.install_agent_hooks("claude");
+    append_lifecycle(
+        &env,
+        "claude",
+        "SessionStart",
+        "receipt-session",
+        LifecycleSignal::Registered,
+        |observation| {
+            observation.agent_name = Some("receipt-pet".to_owned());
+            observation.launch.role = Some("receipt-pet".to_owned());
+            observation.pane_id = Some(PaneId::from_parts(MuxName::Zellij, TRACE_PANE));
+        },
+    );
+    for args in [
+        vec!["--when-idle", "@receipt-pet"],
+        vec!["--when-idle=@receipt-pet"],
+    ] {
+        let output = traced_rimz(&env, "reparse.log")
+            .args(["agents", "stop"])
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains("idle for 3m"),
+            "{output:?}"
+        );
+    }
+    for (args, usage) in [
+        (vec![], "rimz agents stop <ref>"),
+        (vec!["--all"], "rimz agents stop <ref>"),
+        (
+            vec!["--when-idle"],
+            "rimz agents stop <ref> --when-idle <duration>",
+        ),
+        (
+            vec!["@receipt-pet", "--when-idle", "@second"],
+            "rimz agents stop <ref> --when-idle <duration>",
+        ),
+    ] {
+        let output = env
+            .rimz()
+            .args(["agents", "stop"])
+            .args(args)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2), "{output:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains(usage), "{output:?}");
+        if usage == "rimz agents stop <ref>" {
+            assert!(!stderr.contains("--when-idle"), "{output:?}");
+        }
+    }
+}
+
+#[test]
+fn stop_and_focus_print_paste_ready_receipts() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.install_agent_hooks("claude");
+    append_lifecycle(
+        &env,
+        "claude",
+        "SessionStart",
+        "receipt-session",
+        LifecycleSignal::Registered,
+        |observation| {
+            observation.agent_name = Some("receipt-pet".to_owned());
+            observation.launch.role = Some("receipt-pet".to_owned());
+            observation.pane_id = Some(PaneId::from_parts(MuxName::Zellij, TRACE_PANE));
+        },
+    );
+    let focus = traced_rimz(&env, "receipt.log")
+        .args(["agents", "focus", "@receipt-pet"])
+        .output()
+        .unwrap();
+    assert!(focus.status.success(), "{focus:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&focus.stdout).trim(),
+        "focused @receipt-pet"
+    );
+    let stop = traced_rimz(&env, "receipt.log")
+        .args(["agents", "stop", "@receipt-pet"])
+        .output()
+        .unwrap();
+    assert!(stop.status.success(), "{stop:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&stop.stdout).trim(),
+        "stopped @receipt-pet (claude); resume: rimz agents resume @receipt-pet"
+    );
+    let show = env
+        .rimz()
+        .args(["agents", "show", "@receipt-pet", "--json"])
+        .output()
+        .unwrap();
+    assert!(show.status.success(), "{show:?}");
+    let report: serde_json::Value = serde_json::from_slice(&show.stdout).unwrap();
+    assert_eq!(report["agent"]["id"], "receipt-session");
+    append_lifecycle(
+        &env,
+        "claude",
+        "SessionStart",
+        "team-receipt-session",
+        LifecycleSignal::Registered,
+        |observation| {
+            observation.agent_name = Some("team-pet".to_owned());
+            observation.launch.team = Some("forge".to_owned());
+            observation.launch.role = Some("coder".to_owned());
+            observation.launch.channel = Some("feat-a".to_owned());
+            observation.pane_id = Some(PaneId::from_parts(MuxName::Zellij, TRACE_PANE));
+        },
+    );
+    let stop = traced_rimz(&env, "receipt.log")
+        .args(["agents", "stop", "@coder#feat-a"])
+        .output()
+        .unwrap();
+    assert!(stop.status.success(), "{stop:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&stop.stdout).trim(),
+        "stopped @coder (claude); resume: rimz agents forge.coder --resume"
+    );
+    // A seat in a RimZ worktree resumes by the name `-w` maps back to its path.
+    let repo = env.project_root.file_name().unwrap().to_str().unwrap();
+    let worktree = env
+        .project_root
+        .parent()
+        .unwrap()
+        .join(format!("{repo}-worktrees"))
+        .join("feat-b");
+    std::fs::create_dir_all(&worktree).unwrap();
+    append_lifecycle(
+        &env,
+        "claude",
+        "SessionStart",
+        "worktree-receipt-session",
+        LifecycleSignal::Registered,
+        |observation| {
+            observation.agent_name = Some("worktree-pet".to_owned());
+            observation.launch.team = Some("forge".to_owned());
+            observation.launch.role = Some("reviewer".to_owned());
+            observation.launch.channel = Some("lane-b".to_owned());
+            observation.worktree_path = Some(worktree.display().to_string());
+            observation.pane_id = Some(PaneId::from_parts(MuxName::Zellij, TRACE_PANE));
+        },
+    );
+    let stop = traced_rimz(&env, "receipt.log")
+        .args(["agents", "stop", "@reviewer#lane-b"])
+        .output()
+        .unwrap();
+    assert!(stop.status.success(), "{stop:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&stop.stdout).trim(),
+        "stopped @reviewer (claude); resume: rimz agents forge.reviewer --resume -w feat-b"
+    );
+}
+
+#[test]
+fn stop_non_resumable_agent_omits_resume_clause() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.install_agent_hooks("claude");
+    append_lifecycle(
+        &env,
+        "claude",
+        "SessionStart",
+        "launch_receipt-session",
+        LifecycleSignal::Registered,
+        |observation| {
+            observation.agent_name = Some("receipt-pet".to_owned());
+            observation.pane_id = Some(PaneId::from_parts(MuxName::Zellij, TRACE_PANE));
+        },
+    );
+    let stop = traced_rimz(&env, "receipt.log")
+        .args(["agents", "stop", "@receipt-pet"])
+        .output()
+        .unwrap();
+    assert!(stop.status.success(), "{stop:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&stop.stdout).trim(),
+        "stopped @claude (claude)"
+    );
+}
+
 /// A stop says which pane closed: a root whose close fails was not stopped and
 /// keeps its idle-stop request; a root that closed while its child failed was
 /// stopped and retired, and the command still fails naming the child.
@@ -2779,7 +2966,7 @@ fn stop_reports_a_pane_left_open_and_a_child_that_failed() {
 
     let (ok, text) = stop(&["@parent", "--all"], true);
     assert!(!ok, "{text}");
-    assert!(text.contains("error @parent#main: "), "{text}");
+    assert!(text.contains("error @parent: "), "{text}");
     assert!(!text.contains("stopped @parent"), "{text}");
     assert_eq!(armed(), 1);
 

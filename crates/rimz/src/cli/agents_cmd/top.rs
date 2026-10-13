@@ -9,7 +9,7 @@ use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers
 use super::GlobalFlags;
 use crate::cli::render;
 use rimz::address;
-use rimz::agents::{AgentState, AgentStatus};
+use rimz::agents::AgentStatus;
 use rimz::ids::AgentSessionId;
 use rimz::pane::PaneRef;
 use rimz::proc::TreeTotals;
@@ -56,9 +56,11 @@ pub(super) fn run_top(args: TopArgs, globals: &GlobalFlags) -> Result<()> {
     );
     let interval = args.interval.unwrap_or(DEFAULT_INTERVAL);
     let filter = channel_filter(args.all, args.worktree.as_deref(), &workspace);
-    let first = sample(&state, &mut reader, filter.as_deref())?;
+    let store = crate::cli::open_existing_store(&workspace)?;
+    let address_reader = crate::cli::current_channel(&workspace, store.as_ref()).address_context();
+    let first = sample(&state, &mut reader, filter.as_deref(), &address_reader)?;
     std::thread::sleep(FIRST_SAMPLE_DELAY);
-    let mut current = sample(&state, &mut reader, filter.as_deref())?;
+    let mut current = sample(&state, &mut reader, filter.as_deref(), &address_reader)?;
     if args.once {
         let rows = top_rows(&first, &current, FIRST_SAMPLE_DELAY);
         let mut out = render::out();
@@ -75,7 +77,7 @@ pub(super) fn run_top(args: TopArgs, globals: &GlobalFlags) -> Result<()> {
             return Ok(());
         }
         previous = current;
-        current = sample(&state, &mut reader, filter.as_deref())?;
+        current = sample(&state, &mut reader, filter.as_deref(), &address_reader)?;
         elapsed_hint = interval;
     }
 }
@@ -84,8 +86,17 @@ fn sample(
     state: &rimz::StatePaths,
     reader: &mut rimz::sidebar::consumer::PublishedSnapshotReader,
     channel: Option<&str>,
+    address_reader: &address::AddressContext,
 ) -> Result<TopSample> {
     let snapshot = reader.read(state).context("reading the room snapshot")?;
+    Ok(sample_snapshot(&snapshot, channel, address_reader))
+}
+
+fn sample_snapshot(
+    snapshot: &rimz::store::snapshot::SidebarSnapshot,
+    channel: Option<&str>,
+    reader: &address::AddressContext,
+) -> TopSample {
     let in_room: HashMap<AgentSessionId, Option<u32>> = snapshot
         .agent_panes
         .iter()
@@ -96,17 +107,16 @@ fn sample(
                 .map(|id| (id, pane_agent.pane_pid))
         })
         .collect();
-    let agents: Vec<AgentState> = std::sync::Arc::unwrap_or_clone(snapshot.agents)
-        .into_iter()
+    let agents = snapshot
+        .agents
+        .iter()
         .filter(|agent| !agent.is_provider_subagent())
         .filter(|agent| in_room.contains_key(&agent.agent_id))
-        .filter(|agent| channel.is_none_or(|filter| address::agent_in_worktree(agent, filter)))
-        .collect();
-    let peers: Vec<&AgentState> = agents.iter().collect();
+        .filter(|agent| channel.is_none_or(|filter| address::agent_in_worktree(agent, filter)));
     let now = jiff::Timestamp::now();
     let mut rows = BTreeMap::new();
-    for agent in &agents {
-        let handle = address::agent_handle(agent, &peers, false);
+    for agent in agents {
+        let handle = address::paste_address(agent, snapshot, reader);
         let live_pane_pid = in_room.get(&agent.agent_id).copied().flatten();
         let metrics =
             metrics_root_pid(live_pane_pid, agent.pane.as_ref()).and_then(rimz::proc::tree_totals);
@@ -123,10 +133,10 @@ fn sample(
             },
         );
     }
-    Ok(TopSample {
+    TopSample {
         sampled_at: Instant::now(),
         rows,
-    })
+    }
 }
 
 fn metrics_root_pid(live_pane_pid: Option<u32>, stamped_pane: Option<&PaneRef>) -> Option<u32> {
@@ -356,6 +366,46 @@ fn parse_interval(raw: &str) -> std::result::Result<Duration, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn top_addresses_use_unfiltered_snapshot() {
+        let now = jiff::Timestamp::UNIX_EPOCH;
+        let mut snapshot = rimz::store::snapshot::SidebarSnapshot::build_with_agents(
+            rimz::WorkspaceId::from_project_root(std::path::Path::new("/repo")),
+            ["a", "b"]
+                .into_iter()
+                .map(|lane| {
+                    let mut agent = rimz::testkit::agent_state("claude", lane, now);
+                    agent.role = Some("coder".to_owned());
+                    agent.channel = Some(lane.to_owned());
+                    agent
+                })
+                .collect(),
+            now,
+        );
+        snapshot.agent_panes = snapshot
+            .agents
+            .iter()
+            .map(|agent| {
+                serde_json::from_value(serde_json::json!({
+                    "kind": "claude",
+                    "agent_id": agent.agent_id,
+                    "pane_id": format!("tmux:%{}", agent.agent_id),
+                    "channel": agent.channel,
+                }))
+                .unwrap()
+            })
+            .collect::<Vec<_>>()
+            .into();
+        let reader = crate::cli::CurrentChannel::Unscoped.address_context();
+        let sample = sample_snapshot(&snapshot, Some("a"), &reader);
+        assert_eq!(
+            sample.rows.get("a").map(|row| row.handle.as_str()),
+            Some("@coder#a")
+        );
+        let rows = top_rows(&sample, &sample, Duration::from_secs(1));
+        assert_eq!(rows[0].handle, "@coder#a");
+    }
 
     #[test]
     fn interval_accepts_documented_units() {

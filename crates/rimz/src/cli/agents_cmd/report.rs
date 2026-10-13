@@ -221,6 +221,10 @@ impl SelfIdentity {
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the reader's address scope is independent of the listed rows"
+)]
 pub(super) fn build_list_report(
     demotion: &rimz::agents::ParkDemotion,
     snapshot: &SidebarSnapshot,
@@ -229,19 +233,15 @@ pub(super) fn build_list_report(
     runtime: Option<&rimz::RuntimePaths>,
     slots: &[Vec<&AgentState>],
     active_secs: &rimz::agents::attribution::ActiveSecs,
+    reader: &rimz::address::AddressContext,
 ) -> AgentListReport {
     let identity = SelfIdentity::from_env();
     let me = identity.resolve(snapshot);
     let groups = group_live_agents_by_worktree(agents, snapshot);
-    let peers: Vec<&AgentState> = groups
-        .iter()
-        .flat_map(|group| group.agents.iter().copied())
-        .collect();
     let agents = groups
         .into_iter()
         .flat_map(|group| {
             let pr = super::list::group_pr(snapshot, &group.key).and_then(super::list::pr_info);
-            let peers = &peers;
             let me = me.as_ref();
             group.agents.into_iter().map(move |agent| {
                 build_entry(
@@ -249,7 +249,7 @@ pub(super) fn build_list_report(
                     agent,
                     row_for_agent(snapshot, agent),
                     pr,
-                    peers,
+                    rimz::address::paste_address(agent, snapshot, reader),
                     me,
                     now,
                     ReportOverrides {
@@ -290,7 +290,7 @@ pub(super) fn build_entry(
     agent: &AgentState,
     row: Option<&SidebarRow>,
     pr: Option<PrInfo>,
-    peers: &[&AgentState],
+    handle: String,
     me: Option<&AgentSessionId>,
     now: Timestamp,
     overrides: ReportOverrides<'_>,
@@ -327,7 +327,7 @@ pub(super) fn build_entry(
         id: agent.agent_id.clone(),
         kind: agent.kind.clone(),
         login: agent.login.as_ref().map(|_| agent.login_key()),
-        handle: rimz::address::agent_handle(agent, peers, false),
+        handle,
         name: agent.name.clone(),
         name_explicit: agent.name_explicit,
         profile: agent.profile.clone(),

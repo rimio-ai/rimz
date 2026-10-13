@@ -271,7 +271,14 @@ fn recipient_miss(
         snapshot.resume_outcomes.as_deref().unwrap_or_default(),
         Timestamp::now(),
     );
-    message_miss(&demotion, &snapshot, miss.current_channel, &mapped).map(|()| false)
+    message_miss(
+        &demotion,
+        &snapshot,
+        miss.current_channel,
+        &ctx.address_context(),
+        &mapped,
+    )
+    .map(|()| false)
 }
 
 fn map_dispatch_err(err: DispatchErr, ctx: &Ctx) -> anyhow::Error {
@@ -386,6 +393,7 @@ pub(super) fn message_miss(
     demotion: &rimz::agents::ParkDemotion,
     snapshot: &SidebarSnapshot,
     channel: Option<&str>,
+    reader: &rimz::address::AddressContext,
     err: &anyhow::Error,
 ) -> Result<()> {
     render::report(err);
@@ -408,6 +416,7 @@ pub(super) fn message_miss(
             Timestamp::now(),
             render::terminal_columns(120),
             &crate::cli::machine_config().theme,
+            reader,
         )?;
     }
     out.flush().ok();
