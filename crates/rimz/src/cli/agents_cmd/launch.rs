@@ -111,6 +111,11 @@ impl LaunchedLayout {
         }
         let paths = store.paths();
         let lane_label = launched_lane_label(self.channel.as_deref(), &self.cwd, project_root);
+        // The agents are already launched, so an unreadable snapshot only
+        // costs the receipt its list handles.
+        let snapshot = store.snapshot_cached().ok();
+        let peers = snapshot.as_ref().map(receipt_peers).unwrap_or_default();
+        let handles = receipt_handles(&self.identities, &peers);
         write_launch_receipt(
             w,
             &LaunchReceipt {
@@ -118,6 +123,7 @@ impl LaunchedLayout {
                 channel: lane_label.as_deref(),
                 cwd: &self.cwd,
                 identities: &self.identities,
+                handles: &handles,
                 leader_index: self.leader_index,
                 terminal_width: render::terminal_columns(100),
                 hints: reported_peer(self.peer.as_ref(), paths).is_none(),
@@ -1383,6 +1389,8 @@ struct LaunchReceipt<'a> {
     channel: Option<&'a str>,
     cwd: &'a Path,
     identities: &'a [AgentLaunchIdentity],
+    /// Each identity's `rimz agents list` handle, without the `@`.
+    handles: &'a [String],
     leader_index: Option<usize>,
     terminal_width: usize,
     /// Off when the peer receipt prints, since it names the same two commands.
@@ -1393,10 +1401,21 @@ fn write_launch_receipt(w: &mut impl Write, receipt: &LaunchReceipt<'_>) -> Resu
     let team = receipt.team.map(|(name, _)| name);
     let channel = receipt.channel;
     let identities = receipt.identities;
-    let subject = match (team, identities) {
+    let members = identities
+        .iter()
+        .enumerate()
+        .map(|(index, identity)| {
+            let handle = receipt
+                .handles
+                .get(index)
+                .map_or_else(|| launch_identity_handle(identity), String::as_str);
+            (identity, handle)
+        })
+        .collect::<Vec<_>>();
+    let subject = match (team, members.as_slice()) {
         (Some(team), _) => team.to_owned(),
-        (None, [identity]) => format!("@{}", identity.name),
-        (None, identities) => format!("{} agents", identities.len()),
+        (None, [(identity, handle)]) => format!("@{}", receipt_label(handle, identity)),
+        (None, members) => format!("{} agents", members.len()),
     };
     let lane = channel.map_or_else(String::new, |channel| {
         if team.is_some() {
@@ -1413,16 +1432,13 @@ fn write_launch_receipt(w: &mut impl Write, receipt: &LaunchReceipt<'_>) -> Resu
     } else {
         writeln!(w, "launched {subject}{lane} ({})", cwd.display())?;
     }
-    let leader = receipt.leader_index.and_then(|index| identities.get(index));
-    if let Some(identity) = leader
+    let leader = receipt.leader_index.and_then(|index| members.get(index));
+    if let Some((identity, handle)) = leader
         && let Some(prompt) = identity.prompt.as_deref()
     {
         let prompt = prompt.split_whitespace().collect::<Vec<_>>().join(" ");
         let prompt = prompt.replace('\\', "\\\\").replace('"', "\\\"");
-        let line = format!(
-            "  prompt    → @{}  \"{prompt}\"",
-            launch_identity_handle(identity)
-        );
+        let line = format!("  prompt    → @{handle}  \"{prompt}\"");
         writeln!(
             w,
             "{}",
@@ -1431,11 +1447,11 @@ fn write_launch_receipt(w: &mut impl Write, receipt: &LaunchReceipt<'_>) -> Resu
     }
     writeln!(w)?;
 
-    let rows = identities
+    let rows = members
         .iter()
         .enumerate()
-        .map(|(index, identity)| render::RosterRow {
-            handle: launch_identity_handle(identity).to_owned(),
+        .map(|(index, (identity, handle))| render::RosterRow {
+            handle: receipt_label(handle, identity),
             kind: identity.kind.as_str().to_owned(),
             model: identity.launch.model.clone(),
             leader: team.is_some() && receipt.leader_index == Some(index),
@@ -1469,9 +1485,45 @@ fn write_launch_receipt(w: &mut impl Write, receipt: &LaunchReceipt<'_>) -> Resu
         w,
         team,
         channel,
-        identities.first().map(launch_identity_handle),
-        leader.map(launch_identity_handle),
+        members.first().map(|(_, handle)| *handle),
+        leader.map(|(_, handle)| *handle),
     )
+}
+
+/// The handle `rimz agents list` gives each launched agent among `agents`,
+/// which holds the launch's own rows beside the room's open ones; an identity
+/// with no row yet keeps its role, else its pet name.
+fn receipt_handles(identities: &[AgentLaunchIdentity], agents: &[&AgentState]) -> Vec<String> {
+    identities
+        .iter()
+        .map(|identity| {
+            agents
+                .iter()
+                .find(|agent| agent.agent_id == identity.agent_id && agent.kind == identity.kind)
+                .map(|agent| rimz::address::agent_handle(agent, agents, false))
+                .and_then(|handle| handle.strip_prefix('@').map(str::to_owned))
+                .unwrap_or_else(|| launch_identity_handle(identity).to_owned())
+        })
+        .collect()
+}
+
+/// The open root rows a launch's handles are counted among, read after the
+/// launch events committed; a stale row only costs a fresh agent its short
+/// handle, never an ambiguous one.
+fn receipt_peers(snapshot: &rimz::store::snapshot::SidebarSnapshot) -> Vec<&AgentState> {
+    rimz::address::addressable_agents(snapshot)
+        .into_iter()
+        .filter(|agent| agent.parent_agent_id.is_none() && agent.ended_at.is_none())
+        .collect()
+}
+
+/// A receipt handle with the pet name beside it when the two differ.
+fn receipt_label(handle: &str, identity: &AgentLaunchIdentity) -> String {
+    if handle == identity.name {
+        handle.to_owned()
+    } else {
+        format!("{handle} ({})", identity.name)
+    }
 }
 
 fn launch_identity_handle(identity: &AgentLaunchIdentity) -> &str {

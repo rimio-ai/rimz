@@ -232,13 +232,13 @@ launched forge in worktree #feat-rate-limits
   board     blackboard.md
   prompt    → @planner  "add rate limiting"
 
-  @planner    claude  fable        <- leader
-  @coder      codex   gpt-6-astra
-  @reviewer   claude  opus
+  @planner (stable-haven)   claude  fable        <- leader
+  @coder (round-binder)     codex   gpt-6-astra
+  @reviewer (quiet-otter)   claude  opus
   signals   ci.failed → @coder
 ```
 
-The header names the lane as `in worktree #<lane>`, for a `--channel` lane too. `path` is the absolute checkout, and `board` is `blackboard.md` relative to it, whether or not the file exists yet. The `prompt` line appears only when you gave one: whitespace collapsed, quotes escaped, clipped to the terminal width. Member rows show handle, provider, and model (`-` when unset), and a `signals` line closes them when roles declare bindings. The receipt has no command hints and no JSON form; an agent's prompted launch adds the [team report](#team-reports) lines.
+The header names the lane as `in worktree #<lane>`, for a `--channel` lane too. `path` is the absolute checkout, and `board` is `blackboard.md` relative to it, whether or not the file exists yet. The `prompt` line appears only when you gave one: whitespace collapsed, quotes escaped, clipped to the terminal width. Member rows show the handle `rimz agents list` gives the member, its pet name beside it when the two differ, then provider and model (`-` when unset), and a `signals` line closes them when roles declare bindings. The receipt has no command hints and no JSON form; an agent's prompted launch adds the [team report](#team-reports) lines.
 
 The receipt records what was launched. Members start asynchronously and may not yet appear in `rimz teams show`, which is the source of live status. To block until the board reaches `Done`, run [`rimz teams wait forge#feat-rate-limits`](#wait-for-a-cohort-to-finish); the cohort is resolvable as soon as the launch command returns. To be told when the cohort next goes idle instead, arm a one-shot [signal subscription](./loop.md#signals):
 
