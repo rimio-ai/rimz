@@ -357,7 +357,7 @@ fn launch_team(
     launch.worktree = worktree;
     ensure_defined(&name, globals)?;
     agents_cmd::run(
-        agents_cmd::AgentsArgs::from_launch(agents_cmd::AgentLaunchArgs {
+        agents_cmd::AgentsArgs::launch_verb(agents_cmd::AgentLaunchArgs {
             spec: Some(name),
             prompt,
             cohort: launch,
