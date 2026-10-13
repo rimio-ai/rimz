@@ -2,16 +2,17 @@
 
 This page mirrors the GitHub Copilot CLI surfaces a RimZ adapter binds to: lifecycle hooks and their decision channel, session identity and the local session store, the custom statusline command, OpenTelemetry, interactive, programmatic, and ACP launch, modes and permissions, authentication and account usage, and remote control. It records what upstream ships. How RimZ maps these surfaces, and which it wires, lives in [adapter_copilot.md](../../internals/agents/adapter_copilot.md); the provider-neutral contracts are [model.md](../../internals/agents/model.md) and [providers.md](../../internals/agents/providers.md).
 
-Refresh baseline: GitHub Copilot CLI **1.0.83** (tag [`v1.0.83`](https://github.com/github/copilot-cli/releases/tag/v1.0.83), commit `be82101`, released 2026-09-04, npm `@github/copilot` `latest`), with the official GitHub documentation and the installed 1.0.83 binary's help read on **2026-09-13**. GitHub publishes the executable, installer, and changelog in [`github/copilot-cli`](https://github.com/github/copilot-cli) but not the runtime source, and the binary is a compressed single file with no readable strings, so the official docs and `copilot help` output are the wire evidence. Where the two disagree, the page follows the binary and flags the claim.
+Refresh baseline: GitHub Copilot CLI **1.0.96**, released 2026-10-12, checked 2026-10-12. The stable tag is [`v1.0.96`](https://github.com/github/copilot-cli/releases/tag/v1.0.96), at commit [`dcdc0273c0250d8b32677ca99bc0e1f5006daa89`](https://github.com/github/copilot-cli/commit/dcdc0273c0250d8b32677ca99bc0e1f5006daa89). The npm `@github/copilot` `latest` tag also resolves to 1.0.96. Evidence includes the official documentation and the released Linux x64 binary's help, with automatic updates disabled. GitHub publishes the executable, installer, and changelog in [`github/copilot-cli`](https://github.com/github/copilot-cli), but not the runtime source. Where the two disagree, the page follows the binary and flags the claim.
 
-Four surfaces have no published schema and carry their own pins: the hook fields observed beyond the reference ([Captured hook wire](#captured-hook-wire), 1.0.70 and 1.0.71), the `events.jsonl` records ([Session event log](#session-event-log), 1.0.70 and 1.0.71), the statusline input ([Statusline input](#statusline-input), 1.0.70 and 1.0.71), and the file exporter's flush behaviour ([Captured file-exporter behaviour](#captured-file-exporter-behaviour), 1.0.70). Nothing in 1.0.72 through 1.0.83's changelog announces a change to them, and no newer capture exists.
+Four captured surfaces carry older evidence pins: the hook fields observed beyond the reference ([Captured hook wire](#captured-hook-wire), 1.0.70, 1.0.71, and 1.0.83), the `events.jsonl` records ([Session event log](#session-event-log), 1.0.70 and 1.0.71), the statusline input ([Statusline input](#statusline-input), 1.0.70 and 1.0.71), and the file exporter's flush behaviour ([Captured file-exporter behaviour](#captured-file-exporter-behaviour), 1.0.70). These captures retain their original version pins. Later release notes identify lifecycle and telemetry changes below, but do not establish compatibility for unpublished payload schemas. [Upstream scope](#upstream-scope) lists the remaining undocumented contracts.
 
 ## Upstream sources
 
 | Surface | Source |
 | --- | --- |
 | CLI repository, install, license | <https://github.com/github/copilot-cli> |
-| Releases and changelog | <https://github.com/github/copilot-cli/releases> · <https://github.com/github/copilot-cli/blob/main/changelog.md> |
+| Released binary used for help probes | [Linux x64, v1.0.96](https://github.com/github/copilot-cli/releases/download/v1.0.96/copilot-linux-x64.tar.gz) |
+| Releases and changelog | <https://github.com/github/copilot-cli/releases> · <https://github.com/github/copilot-cli/blob/v1.0.96/changelog.md> |
 | Commands, options, slash commands, environment, permission patterns, OTel | <https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference> |
 | Hook locations, entry types, events, payloads, outputs, exit codes | <https://docs.github.com/en/copilot/reference/hooks-reference> |
 | Configuration directory, settings, session files | <https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-config-dir-reference> |
@@ -24,7 +25,7 @@ Four surfaces have no published schema and carry their own pins: the hook fields
 | Modes and autopilot | <https://docs.github.com/en/copilot/concepts/agents/copilot-cli/about-copilot-cli> · <https://docs.github.com/en/copilot/concepts/agents/copilot-cli/autopilot> |
 | Billing usage REST API | <https://docs.github.com/en/rest/billing/usage> |
 
-The installed executable carries the same references as help topics. Set `COPILOT_AUTO_UPDATE=false` (or pass `--no-auto-update`) on read-only probes so evidence collection never downloads a build.
+The released executable carries help topics for these surfaces. Use the 1.0.96 release artifact above and disable updates with `COPILOT_AUTO_UPDATE=false` or `--no-auto-update` for read-only probes. Confirm `copilot --version` before collecting evidence. Disabling updates also ignores cached upgrades, so an older installed executable can report an older version.
 
 ```sh
 copilot --help
@@ -38,7 +39,7 @@ copilot help limits         # session AI credit limits
 copilot login --help
 ```
 
-The two version probes print different banners. `copilot --version` prints `GitHub Copilot CLI 1.0.83.` (with a trailing period) followed by `Run 'copilot update' to check for updates.`; `copilot version` prints `GitHub Copilot CLI 1.0.83` without the period, a blank line, and an update-status line.
+The two version probes print different banners. `copilot --version` prints `GitHub Copilot CLI 1.0.96.` (with a trailing period) followed by `Run 'copilot update' to check for updates.`; `copilot version` prints `GitHub Copilot CLI 1.0.96` without the period, a blank line, and an update-status line.
 
 ## Hooks
 
@@ -63,7 +64,9 @@ A malformed item in a directory-sourced hook file is dropped and logged while it
 
 `disableAllHooks: true` skips hooks at two scopes. Inside one `.github/hooks/*.json` file it skips that file's hooks. At the top level of repository `settings.json` it skips every hook from every source except policy hooks. `copilot help config` and the [settings table](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-config-dir-reference#configuration-file-settings) also list it as a user setting that disables repository and user hooks, and repository settings take precedence over user settings for this key.
 
-Prompt mode (`-p`) loads repository hooks only when the folder is already trusted, `COPILOT_ALLOW_ALL` is set, or `GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS=true` ([environment variables](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference#environment-variables)). User hook files carry no such gate.
+The `allowManagedHooksOnly` policy restricts hooks to managed sources. Since 1.0.85, it also blocks extension-registered tool callbacks, including `preToolUse`, `postToolUse`, and `postToolUseFailure` ([1.0.85](https://github.com/github/copilot-cli/releases/tag/v1.0.85)).
+
+The [environment table](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference#environment-variables) says prompt mode loads repository hooks when the folder is trusted, `COPILOT_ALLOW_ALL` is set, or `GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS=true`. The binary help says only exact `COPILOT_ALLOW_ALL=true` grants folder trust. Other truthy spellings approve tools only. The independent hook gate for those spellings remains unverified. The published gate does not cover user hook files.
 
 ### Hook entry types
 
@@ -96,7 +99,9 @@ Command entries run a shell command or, with `exec`, an executable directly:
 | `timeout` | alias read only when `timeoutSec` is absent |
 | `matcher` | anchored regex on an event-specific value; see [Matchers and tool names](#matchers-and-tool-names) |
 
-The docs do not name the shell that runs `bash` strings. Since 1.0.72, lifecycle and subagent hook commands run in the session's current directory after `/cd` ([changelog 1.0.72](https://github.com/github/copilot-cli/releases/tag/v1.0.72)).
+The docs do not name the shell that runs `bash` strings. Since [1.0.88](https://github.com/github/copilot-cli/releases/tag/v1.0.88), hook commands without an explicit `cwd` run in the project root. This replaces the session-current-directory behaviour documented for 1.0.72.
+
+With sandboxing enabled, repository, user, and plugin command hooks run inside the session sandbox. Policy hooks run on the host. Hook `cwd` and `env` do not widen access. Extra paths require `sandbox.userPolicy` grants ([sandboxed hooks](https://docs.github.com/en/copilot/reference/hooks-reference#sandboxed-sessions)).
 
 HTTP entries (`type: "http"`) `POST` the same input JSON to `url`, with optional `headers`, `allowedEnvVars` (names that may expand inside `headers`, which forces `https://`), `timeoutSec`, and `timeout`. `url` must be `https://` for `preToolUse` and `permissionRequest`. Other events reject plain `http://` except loopback (`localhost`, `127.*`, `[::1]`) when `COPILOT_HOOK_ALLOW_LOCALHOST=1`. HTTP `preToolUse` hooks fail open on network errors, timeouts, and non-2xx responses.
 
@@ -111,13 +116,13 @@ The configured event name selects the payload dialect:
 | camelCase | `sessionStart`, `preToolUse`, … | camelCase | Unix milliseconds (number) | absent |
 | VS Code compatible | `SessionStart`, `PreToolUse`, `Stop`, `UserPromptSubmit`, … | snake_case | ISO 8601 string | `hook_event_name` |
 
-Only the camelCase dialect covers every event: `userPromptTransformed`, `subagentStart`, and `notification` document no PascalCase form. Every payload carries `sessionId`, `timestamp`, and `cwd` (`session_id`, `timestamp`, `cwd` in the VS Code dialect). No common field names the model, effort, permission mode, or event; a command that serves several events must learn the event from its own configuration.
+Only the camelCase dialect covers every event: `userPromptTransformed`, `subagentStart`, and `notification` document no PascalCase form. Every payload carries `sessionId`, `timestamp`, and `cwd` (`session_id`, `timestamp`, `cwd` in the VS Code dialect). No common field names the model, effort, or permission mode. Most camelCase events also omit the event name, so a shared command must identify it through its configuration.
 
 Two camelCase payloads break the casing rule: `agentStop` carries `stop_hook_active`, and `notification` carries `hook_event_name` and `notification_type`.
 
 ### Events
 
-The reference documents thirteen events. The fields column lists the camelCase input beyond `sessionId`, `timestamp`, and `cwd`.
+The reference documents fourteen events. The fields column lists the camelCase input beyond `sessionId`, `timestamp`, and `cwd`.
 
 | Event | Fires | Input fields | Output processed |
 | --- | --- | --- | --- |
@@ -140,11 +145,13 @@ No hook fires after compaction, on a model or effort change, on a rate limit, or
 
 `stop_hook_active` is `true` when a prior `block` from the same hook already forced this turn to continue. `subagentStop.response` carries the full final subagent text (`last_assistant_message` in the VS Code dialect), because the hook fires before large-response spill handling.
 
-The built-in `general-purpose` agent emits neither `subagentStart` nor `subagentStop`. The other built-in agents (`explore`, `task`, `code-review`, `rubber-duck`, `research`, `security-review`) and user custom agents emit both. The docs do not say whether `subagentStop.agentId` is unique per child run or names the definition. In a Copilot CLI 1.0.83 capture, a `general-purpose` child and an `explore` child each emitted both events: `subagentStart` carried the parent `sessionId` and `agentName`, and `subagentStop.agentId` was that child run's UUID.
+The hooks reference says `general-purpose` emits neither subagent event, while other built-in and custom agents emit both. The captured wire contradicts that exclusion. The docs do not say whether `subagentStop.agentId` is unique per child run or names the definition. In a Copilot CLI 1.0.83 capture, a `general-purpose` child and an `explore` child each emitted both events: `subagentStart` carried the parent `sessionId` and `agentName`, and `subagentStop.agentId` was that child run's UUID.
 
 The reference does not define the file behind `transcriptPath` or promise that it is `session-state/<sessionId>/events.jsonl`; the 1.0.70 capture below shows that it is for a root `agentStop`.
 
-For a run whose prompt is piped over stdin, as under `-p`, `sessionEnd` fires once per completed agent turn with `reason` `complete` or `error`, and a run that exits before completing a turn fires none ([changelog 1.0.78](https://github.com/github/copilot-cli/releases/tag/v1.0.78)).
+Since [1.0.92](https://github.com/github/copilot-cli/releases/tag/v1.0.92), prompt-mode sessions fire one `sessionEnd` after `agentStop` continuations finish. This supersedes the per-turn behaviour described in 1.0.78.
+
+Since [1.0.85](https://github.com/github/copilot-cli/releases/tag/v1.0.85), interactive `/clear` closes the old session and fires `sessionEnd` with `reason: "user_exit"`. The [hooks reference](https://docs.github.com/en/copilot/reference/hooks-reference#sessionend--sessionend) says these hooks run detached with their full timeout while the replacement session starts. Quitting the CLI terminates any detached hook still running.
 
 The 1.0.81 changelog says hook inputs gain `traceparent` (plus `tracestate` when the span has vendor state) and that command hooks also receive the trace context in environment variables ([changelog 1.0.81](https://github.com/github/copilot-cli/releases/tag/v1.0.81)). Neither the hooks reference nor `copilot help` names the fields' placement or the variables.
 
@@ -152,7 +159,7 @@ The 1.0.81 changelog says hook inputs gain `traceparent` (plus `tracestate` when
 
 Live captures show payload shapes the reference does not describe. They are compatibility evidence at the version named, not an upstream contract.
 
-Copilot CLI 1.0.71 sent `preToolUse`, `postToolUse`, and `postToolUseFailure` tool detail as a batch, `toolCalls: [{name, args}]`, in place of the documented singular `toolName`/`toolArgs`. `args` arrived either as an object or as a JSON-encoded string, and one batch could hold `ask_user` beside other calls. Selecting or dismissing an `ask_user` question emitted `postToolUse` before the next assistant output. `postToolUseFailure.error` is a string, unlike the object in `errorOccurred`.
+Copilot CLI 1.0.71 sent `preToolUse`, `postToolUse`, and `postToolUseFailure` tool detail as a batch, `toolCalls: [{name, args}]`, in place of the documented singular `toolName`/`toolArgs`. `args` arrived either as an object or as a JSON-encoded string, and one batch could hold `ask_user` beside other calls. Selecting or dismissing an `ask_user` question emitted `postToolUse` before the next assistant output. No 1.0.96 capture establishes whether the batch form still occurs or how its matchers select a tool.
 
 Copilot CLI 1.0.71 fired the ordinary `userPromptSubmitted` and `agentStop` hooks once per `general-purpose` child. Each child payload set `sessionId` to the parent's `task` tool `toolCallId` (a `toolu_…` value), kept the parent `cwd`, and carried an empty `transcriptPath`; two simultaneous children produced distinct IDs.
 
@@ -162,7 +169,9 @@ Copilot CLI 1.0.70 ran the hooks of a fresh prompt-seeded (`-i`) turn in the ord
 
 ### Hook outputs
 
-Empty stdout or `{}` with exit `0` is neutral: the event proceeds as if no hook ran, and permission and question UI stay native. Hook output (stdout for command hooks, the response body for HTTP hooks) is capped at 10 MiB per invocation and truncated beyond that. A non-string `modifiedPrompt`, `modifiedTransformedPrompt`, or `responseContent` is ignored with a `session.warning`, an empty-string override is rejected, and a `null` `additionalContext` counts as absent.
+Empty stdout or `{}` with exit `0` is neutral: the event proceeds as if no hook ran, and permission and question UI stay native. Hook output (stdout for command hooks, the response body for HTTP hooks) is capped at 10 MiB per invocation and truncated beyond that. A non-string `modifiedPrompt` or `modifiedTransformedPrompt` is ignored with a `session.warning`, an empty-string override is rejected, and a `null` `additionalContext` counts as absent.
+
+Since [1.0.88](https://github.com/github/copilot-cli/releases/tag/v1.0.88), session and subagent start hooks combine successful additional-context contributions. Non-empty strings join in execution order with two newlines. A contribution exceeding the combined 10 MiB limit is dropped without erasing prior context ([hooks reference](https://docs.github.com/en/copilot/reference/hooks-reference#subagentstart)).
 
 `sessionStart`, `subagentStart`, and `notification` accept additional context:
 
@@ -198,7 +207,7 @@ If any `preToolUse` hook returns `deny`, the tool is blocked. When the CLI shows
 | `message` | reason fed to the model on deny |
 | `interrupt` | with `deny`, `true` stops the agent |
 
-All matching `permissionRequest` hooks run, and later outputs override earlier ones. `read` and `hook` permission kinds short-circuit before hooks run. A request with `requestSandboxBypass: true` in `toolInput` (a shell command asking to leave the sandbox, or a `web_fetch` the sandbox network policy denies) ignores a hook `allow` and still prompts the user; only `deny` propagates.
+All matching `permissionRequest` hooks run, and later outputs override earlier ones. The permission service bypasses hooks for its internal `read` and `hook` request categories. The reference does not publish the complete category list. A request with `requestSandboxBypass: true` in `toolInput` (a shell command asking to leave the sandbox, or a `web_fetch` the sandbox network policy denies) ignores a hook `allow` and still prompts the user; only `deny` propagates.
 
 `agentStop` and `subagentStop` can force another turn:
 
@@ -284,6 +293,8 @@ The `notification` hook is fire-and-forget: it never blocks the session, and its
 | `permission_prompt` | the agent requests permission to run a tool |
 | `elicitation_dialog` | the agent asks the user for information |
 
+Terminal notifications are separate from hook notifications. Since [1.0.88](https://github.com/github/copilot-cli/releases/tag/v1.0.88), `terminalNotifications: true` opts into OSC 777 for direct Ghostty and WezTerm sessions. It requires `notifications: true`. The 1.0.96 `copilot help config` says tmux, screen, and Zellij use the OS notification fallback when available.
+
 ## Sessions and local state
 
 A session is identified by the UUID that every hook carries as `sessionId`. Each session keeps its event log and workspace artifacts under `$COPILOT_HOME/session-state/<sessionId>/`, and that directory is what resume reads.
@@ -298,11 +309,13 @@ A session is identified by the UUID that every hook carries as `sessionId`. Each
 | `--connect[=ID]` | connect to a remote session or task; requires the remote sessions feature |
 | `-n`, `--name NAME` | name a new session for `--resume` and `/resume` |
 | `-C DIRECTORY` | change directory before anything else; overrides the directory a resumed session restores |
-| `-w`, `--worktree[=NAME]` | start in an isolated Git worktree under `<repo>.worktrees/`; experimental mode only |
+| `-w`, `--worktree[=NAME]` | start in an isolated Git worktree, default `<repo>.worktrees/`. Available without experimental mode since [1.0.85](https://github.com/github/copilot-cli/releases/tag/v1.0.85) |
 | `/resume [ID]`, `/rename [NAME]` | switch or rename sessions inside the UI |
 | `/fork [NAME]`, `/branch [NAME]` | fork the current session into a new one |
 
-`--session-id` conflicts with `--resume`, `--continue`, and `--connect`; `--continue` and `--resume` reject each other; `--worktree` conflicts with all three. `--name` with `--session-id` for an existing session is an error. A resumed session restores its working directory and its interactive, plan, or autopilot mode.
+`--session-id` conflicts with `--resume`, `--continue`, `--connect`, and `--worktree`. `--continue` and `--resume` reject each other. `--worktree` also conflicts with `--resume`, `--continue`, and `--connect`. `--name` with `--session-id` for an existing session is an error. A resumed session restores its working directory and its interactive, plan, or autopilot mode.
+
+The `worktreePathTemplate` setting changes the destination using `{repoPath}`, `{repo}`, `{branch}`, and `{branchSlug}` placeholders ([1.0.87](https://github.com/github/copilot-cli/releases/tag/v1.0.87)).
 
 ### Configuration directory
 
@@ -321,13 +334,17 @@ $COPILOT_HOME/
 └── logs/process-<timestamp>-<pid>.log
 ```
 
-User settings live in `settings.json`, and the CLI migrates any user settings it finds in `config.json` there at startup. Application state, such as `loggedInUsers`, stays in `config.json`. Settings apply in this order, later winning: built-in defaults, MDM managed settings, user `settings.json`, repository `.github/copilot/settings.json`, local `.github/copilot/settings.local.json`, environment variables, command-line flags.
+User settings live in `settings.json`. Since [1.0.93](https://github.com/github/copilot-cli/releases/tag/v1.0.93), user-setting keys in `config.json` are ignored. The earlier startup migration no longer applies. Application state, such as `loggedInUsers`, stays in `config.json`. Settings apply in this order, later winning: built-in defaults, MDM managed settings, user `settings.json`, repository `.github/copilot/settings.json`, local `.github/copilot/settings.local.json`, environment variables, command-line flags.
+
+`copilot config` reads and changes settings using dot notation. `--list` lists settings, `--rm` removes a value, and `--repo` or `--local` selects repository settings ([1.0.92](https://github.com/github/copilot-cli/releases/tag/v1.0.92), `copilot help config`).
+
+`copilot sessions import <transcript.jsonl>` imports semantic session JSONL ([1.0.85](https://github.com/github/copilot-cli/releases/tag/v1.0.85), `copilot sessions import --help`). `--dry-run` validates without writing, `--output json` selects JSON output, and `--working-directory` and `--name` override imported values. Its help does not publish the interchange record schema.
 
 `session-store.db` is a derived Chronicle index; `/chronicle reindex` rebuilds it and also syncs session data to the account. In a 1.0.70 capture its `turns` rows lagged the live event file until session shutdown.
 
 ### Session event log
 
-GitHub documents `events.jsonl` as the per-session event log and publishes no record discriminants, field schema, append guarantee, or compatibility rule. Each line is one JSON record with a top-level `type`, an RFC 3339 `timestamp`, an `id`, and a `data` object. The records below come from 1.0.70 and 1.0.71 captures.
+GitHub documents `events.jsonl` as the per-session event log and publishes no record discriminants, field schema, append guarantee, or compatibility rule. Each line is one JSON record with a top-level `type`, an RFC 3339 `timestamp`, an `id`, and a `data` object. The records below come from 1.0.70 and 1.0.71 captures. The [1.0.83 hook capture](#captured-hook-wire) also observed top-level `agentId` on parent-side subagent and child tool records.
 
 | `type` | `data` fields observed |
 | --- | --- |
@@ -346,7 +363,7 @@ Records also seen without their fields pinned: `assistant.turn_end`, `session.mo
 
 A delegated `task` call writes its parent-side records in a fixed order in 1.0.71: `tool.execution_start` with `toolName: "task"` and `arguments.name`, `description`, `prompt`, and `agent_type`; then `subagent.started` with the same `toolCallId`, before the child's `userPromptSubmitted` hook; then, after the child's `agentStop` hook, `subagent.completed` with the same `toolCallId`. The parent's next `postToolUse` hook is the first hook after the completed record.
 
-`session.shutdown.data.modelMetrics.<model>` holds cumulative per-model counters. `usage` has `inputTokens`, `cacheReadTokens`, `cacheWriteTokens`, `outputTokens`, and `reasoningTokens`; `tokenDetails` has disjoint `input`, `cache_read`, `cache_write`, and `output` entries, each with a `tokenCount`. `usage.inputTokens` includes both cache categories, and `outputTokens` includes `reasoningTokens`. A resumed session writes a further `session.shutdown` on each exit, repeating cumulative totals. `totalNanoAiu` is nano AI units (see [OpenTelemetry](#traces)); premium-request counts carry no published conversion.
+`session.shutdown.data.modelMetrics.<model>` holds cumulative per-model counters. `usage` has `inputTokens`, `cacheReadTokens`, `cacheWriteTokens`, `outputTokens`, and `reasoningTokens`; `session.shutdown.data.tokenDetails` has disjoint `input`, `cache_read`, `cache_write`, and `output` entries, each with a `tokenCount`. `usage.inputTokens` includes both cache categories, and `outputTokens` includes `reasoningTokens`. Since [1.0.92](https://github.com/github/copilot-cli/releases/tag/v1.0.92), usage reporting preserves provider-reported reasoning totals when available. A resumed session writes a further `session.shutdown` on each exit, repeating cumulative totals. `totalNanoAiu` is nano AI units (see [OpenTelemetry](#traces)); premium-request counts carry no published conversion.
 
 ### Sync and privacy
 
@@ -380,7 +397,7 @@ The built-in footer is configured separately under `footer` (`showModelEffort`, 
 
 ### Statusline input
 
-The stdin object is snake_case. These fields come from 1.0.70 and 1.0.71 captures, preserved as a sanitized 1.0.71 fixture.
+The stdin object is snake_case. These fields come from 1.0.70 and 1.0.71 captures.
 
 | Field | Observed content |
 | --- | --- |
@@ -424,7 +441,7 @@ COPILOT_OTEL_FILE_EXPORTER_PATH=/path/to/copilot-otel.jsonl copilot
 
 ### Traces
 
-Each agent interaction produces an `invoke_agent` span with `chat` and `execute_tool` children. Top-level and subagent `invoke_agent` spans are both `INTERNAL`, `chat` spans are `CLIENT`, and `execute_tool` spans are `INTERNAL`; subagent invocations join the parent trace. The 1.0.83 `copilot help monitoring` tree also shows a `plan` span, for plan-mode decomposition, between `invoke_agent` and its `chat` and `execute_tool` children; the docs do not list it.
+Each agent interaction produces an `invoke_agent` span with `chat` and `execute_tool` children. Top-level and subagent `invoke_agent` spans are both `INTERNAL`, `chat` spans are `CLIENT`, and `execute_tool` spans are `INTERNAL`; subagent invocations join the parent trace. The 1.0.96 `copilot help monitoring` tree also shows a `plan` span, for plan-mode decomposition, between `invoke_agent` and its `chat` and `execute_tool` children; the docs do not list it.
 
 | Span | Attributes |
 | --- | --- |
@@ -459,11 +476,18 @@ Metrics carry no session identity beyond resource attributes; they are indexed h
 | Metric | Type |
 | --- | --- |
 | `gen_ai.client.operation.duration`, `gen_ai.client.operation.time_to_first_chunk`, `gen_ai.client.operation.time_per_output_chunk`, `gen_ai.invoke_agent.duration` | histogram, seconds |
-| `gen_ai.client.token.usage` | histogram, tokens by type |
+| `gen_ai.client.inference.operation.input_tokens`, `gen_ai.client.inference.operation.output_tokens` | histogram, tokens per model call |
+| `gen_ai.client.inference.usage.input_tokens`, `gen_ai.client.inference.usage.output_tokens`, `gen_ai.client.inference.usage.cache_read.input_tokens`, `gen_ai.client.inference.usage.cache_write.input_tokens`, `gen_ai.client.inference.usage.reasoning.output_tokens` | counter, tokens |
+| `gen_ai.invoke_workflow.duration`, `gen_ai.execute_tool.duration` | histogram, seconds |
+| `github.copilot.changeboarding.model_nudge.count` | counter, model nudge allocations and conversions |
 | `gen_ai.invoke_agent.inference_calls`, `gen_ai.invoke_agent.tool_calls` | histogram by `gen_ai.agent.name` |
 | `github.copilot.tool.call.count`, `github.copilot.mcp.server.connection.count`, `github.copilot.code.lines_added`, `github.copilot.code.lines_removed` | counter |
 | `github.copilot.tool.call.duration`, `github.copilot.agent.turn.count` | histogram |
 | `github.copilot.sandbox.operation.count`, `github.copilot.sandbox.spawn.duration`, `github.copilot.sandbox.policy.path.count` | sandbox counters and histograms; `copilot help monitoring` only |
+
+The 1.0.96 binary lists the inference token metrics above. The [online table](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference#opentelemetry-monitoring) still lists `gen_ai.client.token.usage`, which the binary help omits. No release note pins its removal or confirms whether it still emits.
+
+Since [1.0.91](https://github.com/github/copilot-cli/releases/tag/v1.0.91), shutdown flushes pending telemetry, with a bounded delay when telemetry is still initializing. The release note does not specify the bound.
 
 ### Captured file-exporter behaviour
 
@@ -479,7 +503,8 @@ A 1.0.70 capture pinned how the file exporter writes. Two direct processes runni
 | `--output-format text\|json` | `json` is JSONL, one object per line; no object schema is published |
 | `--stream on\|off` | progressive or buffered response; default `on` |
 | `--model MODEL` | model ID, or `auto` for automatic selection; `COPILOT_MODEL` also sets it |
-| `--effort`, `--reasoning-effort LEVEL` | the 1.0.83 binary accepts `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`; the docs list `low` through `max` |
+| `--effort`, `--reasoning-effort LEVEL` | the 1.0.96 binary accepts `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. `--effort` is a hidden alias. The docs list `low` through `max` |
+| `--auto-tier PROFILE` | Auto routing profile. Overrides `autoTier`, which overrides `COPILOT_AUTO_TIER`. Standard profiles: `efficiency`, `balance`, `intelligence` |
 | `--context default\|long_context` | context-window tier for tiered-pricing models; overrides the `contextTier` setting |
 | `--mode interactive\|plan\|autopilot`, `--plan`, `--autopilot` | initial mode; see [Modes and permissions](#modes-and-permissions) |
 | `--agent NAME` | custom agent, including a plugin agent as `<plugin>:<agent>` |
@@ -490,9 +515,20 @@ A 1.0.70 capture pinned how the file exporter writes. Two direct processes runni
 | `--usage-output-file FILE` | write final usage statistics as JSON, with per-agent metrics since 1.0.81 |
 | `--max-ai-credits CREDITS` | soft AI credit limit, minimum 30 |
 | `--attachment PATH` | attach a file to the initial prompt; `-p` only |
-| `--no-auto-update` | skip the automatic update download (also `COPILOT_AUTO_UPDATE=false`; off by default in CI) |
+| `--no-auto-update` | run the version bundled in the binary and disable automatic updates. `COPILOT_AUTO_UPDATE=false` also prevents applying a downloaded update |
+| `--mcp-github-auth server=origin` | scope GitHub account authentication to an explicit `--additional-mcp-config` server and approved origin. HTTPS required except literal loopback HTTP. Repeatable, never accepts a token |
 
-`-p` exits with a failure code when a prompt is blocked before any response. `permissionRequest` hooks apply under `-p` and can supply the decisions no prompt can. No flag writes a session ID or completion record in machine-readable form other than the unschematized JSONL and `--usage-output-file`.
+The 1.0.96 help allows additional server-advertised Auto profiles when dynamic tiers are enabled. Stored `fast` falls back to `balance`, while `COPILOT_AUTO_TIER=fast` is rejected (`copilot help config`, `copilot help environment`).
+
+Custom agents can opt into repository instructions with `include-custom-instructions: true` ([1.0.86](https://github.com/github/copilot-cli/releases/tag/v1.0.86)). Their `reasoning-effort` applies when selected, but explicit CLI effort wins. Unsupported levels warn and remain unapplied ([1.0.88](https://github.com/github/copilot-cli/releases/tag/v1.0.88)).
+
+Consecutive same-mode steering prompts coalesce, while `Ctrl+Q` queues separately ([1.0.87](https://github.com/github/copilot-cli/releases/tag/v1.0.87)). Messaging a running background agent steers its active turn at the next processing opportunity ([1.0.92](https://github.com/github/copilot-cli/releases/tag/v1.0.92)).
+
+The parser moved from Commander to Rust in [1.0.85](https://github.com/github/copilot-cli/releases/tag/v1.0.85). Help and error wording changed, and `--max-autopilot-continues` no longer accepts scientific notation.
+
+`-p` exits with a failure code when a prompt is blocked before any response. Since [1.0.87](https://github.com/github/copilot-cli/releases/tag/v1.0.87), a failed child task does not make the run fail when the parent recovers. `permissionRequest` hooks apply under `-p` and can supply the decisions no prompt can. No flag writes a session ID or completion record in machine-readable form other than the unschematized JSONL and `--usage-output-file`.
+
+`COPILOT_TASK_WAIT_TIMEOUT_SECONDS` bounds prompt-mode waiting for background agents and shells, including under `-p --autopilot`. Its default is 600 seconds, and `0` disables waiting ([environment variables](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference#environment-variables)).
 
 The binary and the docs disagree on `--max-ai-credits`: `copilot help limits` scopes the limit to the whole session (reset by `/clear`), while the [command reference](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference#command-line-options) says it resets per user message.
 
@@ -500,9 +536,9 @@ The binary and the docs disagree on `--max-ai-credits`: `copilot help limits` sc
 
 `copilot --acp` starts the Agent Client Protocol server, in public preview ([ACP server](https://docs.github.com/en/copilot/reference/copilot-cli-reference/acp-server)). stdio is the default transport and `--stdio` names it; `--port PORT` listens on TCP, bound to `127.0.0.1`. The two are mutually exclusive and both carry NDJSON. A stdio server serves the one client that spawned it and exits when stdin closes; a TCP server accepts many connections and runs until stopped. Neither flag appears in `copilot --help`.
 
-`session/new` sets only per-session parameters such as `cwd` and MCP servers. Tool filters (`--available-tools`, `--excluded-tools`) and `--effort` passed to the server process apply to every session it creates or loads. BYOK provider configuration lets ACP sessions run without a GitHub login.
+`session/new` sets only per-session parameters such as `cwd` and MCP servers. Tool filters (`--available-tools`, `--excluded-tools`) and `--effort` passed to the server process apply to every session it creates or loads. Since [1.0.95](https://github.com/github/copilot-cli/releases/tag/v1.0.95), `--context` also applies to new and resumed ACP sessions. [Bring-your-own-key (BYOK) provider configuration](#authentication-and-account) lets ACP sessions run without a GitHub login.
 
-A client spawns `copilot --acp --stdio`, sends `initialize` with its protocol version and capabilities, creates a session with `cwd` and MCP servers, sends `prompt`, consumes `sessionUpdate` notifications (text arrives as `agent_message_chunk`), and answers `requestPermission`. Since 1.0.78 prompt results and live `usage_update` notifications carry token usage and clients can send `closeSession`; since 1.0.81 clients receive subagent IDs, raw event subscriptions, and live title, mode, command, and plan updates ([changelog 1.0.78](https://github.com/github/copilot-cli/releases/tag/v1.0.78), [1.0.81](https://github.com/github/copilot-cli/releases/tag/v1.0.81)). ACP hosts the agent; it cannot observe a separately running interactive session.
+A client spawns `copilot --acp --stdio`, sends `initialize` with its protocol version and capabilities, creates a session with `cwd` and MCP servers, sends `prompt`, consumes `sessionUpdate` notifications (text arrives as `agent_message_chunk`), and answers `requestPermission`. Since 1.0.78 prompt results and live `usage_update` notifications carry token usage and clients can send `closeSession`; since 1.0.81 clients receive subagent IDs, raw event subscriptions, and live title, mode, command, and plan updates ([changelog 1.0.78](https://github.com/github/copilot-cli/releases/tag/v1.0.78), [1.0.81](https://github.com/github/copilot-cli/releases/tag/v1.0.81)). ACP hosts the agent. It cannot observe a separately running interactive session. Since [1.0.88](https://github.com/github/copilot-cli/releases/tag/v1.0.88), enterprise managed MCP, permission, and plugin settings apply to ACP, AHP (`--ahp-host`), and published `--server` sessions.
 
 ## Modes and permissions
 
@@ -514,14 +550,16 @@ Copilot has three agent modes: interactive (standard), plan, and autopilot. `Shi
 | plan | builds a plan; built-in tools that would modify the workspace are blocked outside the session folder, while MCP and external tools stay allowed |
 | autopilot | continues without waiting for the user until the agent calls `task_complete`, up to `--max-autopilot-continues` continuation messages |
 
-`--plan --mode autopilot` (or `COPILOT_PLAN_THEN_AUTOPILOT=1`) starts in plan mode and moves to autopilot once the plan is ready; `--plan` rejects any other `--mode` and cannot combine with `--autopilot`. `stayInAutopilot` (default `true`) keeps autopilot selected after `task_complete`. The 1.0.83 binary documents a `--max-autopilot-continues` default of `5`, as does the [autopilot page](https://docs.github.com/en/copilot/concepts/agents/copilot-cli/autopilot); the command reference says unlimited.
+`--plan --mode autopilot` (or `COPILOT_PLAN_THEN_AUTOPILOT=1`) starts in plan mode and moves to autopilot once the plan is ready; `--plan` rejects any other `--mode` and cannot combine with `--autopilot`. `stayInAutopilot` (default `true`) keeps autopilot selected after `task_complete`. The 1.0.96 binary documents a `--max-autopilot-continues` default of `5`, as does the [autopilot page](https://docs.github.com/en/copilot/concepts/agents/copilot-cli/autopilot); the command reference says unlimited.
 
-Two settings choose how new interactive sessions start; neither applies to resumed sessions, `-p`, or `--acp`, and launch flags win.
+The 1.0.96 `copilot help config` documents two settings for new interactive sessions; neither applies to resumed sessions, `-p`, or `--acp`, and launch flags win.
 
 | Setting | Values |
 | --- | --- |
 | `defaultMode` | `interactive` (default), `plan`, `autopilot` |
-| `defaultPermissionMode` | `manual` (default: prompt for writes and commands, auto-approve reads), `assisted` (an LLM safety check approves what it judges safe; needs the experimental auto-approval feature), `allow-all` |
+| `defaultPermissionMode` | `manual` (prompt for writes and commands, auto-approve reads), `assisted` (LLM review approves requests it judges safe), `allow-all`. Default `manual` unless an eligible organization targets Assisted Permissions |
+
+The 1.0.96 `copilot help environment` accepts `true`, `1`, `yes`, `on`, and `y` for `COPILOT_ALLOW_ALL`, ignoring case and surrounding whitespace. `false`, `0`, `no`, `off`, `n`, and an empty value disable it. Only the exact value `true` also trusts the working directory and loads its hooks, skills, plugins, and MCP servers. The online environment table calls it equivalent to `--allow-all`, but the binary help scopes it to automatic tool approval.
 
 `--allow-all` and `--yolo` equal `--allow-all-tools --allow-all-paths --allow-all-urls`. Managed `permissions.disableBypassPermissionsMode` restricts them: `"disable"` suppresses every allow-all flag and the `/permissions allow-all`, `/allow-all`, and `/yolo` commands at startup, and `"allow-auto-only"` blocks full allow-all while permitting assisted approval. An unrecognized value is enforced as `"disable"`. An MDM value of `"disable"` always wins over user settings.
 
@@ -536,6 +574,10 @@ Tool rules take `kind(argument)` patterns ([permission patterns](https://docs.gi
 | `memory` | storing facts to agent memory |
 | `<mcp-server>(tool)` | an MCP server's tool, or all its tools |
 
+Command sandboxing is available through `/sandbox` and `--sandbox` without experimental mode since [1.0.93](https://github.com/github/copilot-cli/releases/tag/v1.0.93). Managed policy can restrict bypass, and `permissions.limitTo` enforces managed network domain boundaries. Since [1.0.92](https://github.com/github/copilot-cli/releases/tag/v1.0.92), sandboxed shells withhold ambient `GITHUB_TOKEN` unless explicitly configured. Since [1.0.96](https://github.com/github/copilot-cli/releases/tag/v1.0.96), `/add-dir` also grants sandbox access for the current session.
+
+Managed policy can disable Assisted Permissions and require Manual Approval ([1.0.94](https://github.com/github/copilot-cli/releases/tag/v1.0.94)).
+
 Deny rules always win, including over `--allow-all-tools`. Saved approvals live in `$COPILOT_HOME/permissions-config.json`, keyed by location, and do not carry across repositories after `/cd`.
 
 ## Authentication and account
@@ -544,7 +586,11 @@ Deny rules always win, including over `--allow-all-tools`. Saved approvals live 
 
 Environment tokens take precedence over stored credentials, in the order `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN`. In Codespaces the auto-injected `GITHUB_TOKEN` does not override a `/login` account, though an explicitly exported one does. Supported tokens are fine-grained PATs with the **Copilot Requests** permission, Copilot CLI OAuth tokens, and GitHub CLI OAuth tokens; classic `ghp_` PATs are not. `GH_HOST` selects the host for both GitHub CLI and Copilot, and `COPILOT_GH_HOST` overrides it for Copilot only. `COPILOT_OFFLINE=true` with a BYOK provider (`COPILOT_PROVIDER_BASE_URL`) skips GitHub authentication entirely.
 
-No command reports auth status in machine-readable form; `/user show`, `/user list`, and `/user switch` are interactive. The config directory reference names `loggedInUsers` as application state in `config.json`. A captured `config.json` holds the current identity as `lastLoggedInUser: {host, login}`, the known identities as `loggedInUsers: [{host, login}]`, and plaintext-stored tokens under `copilotTokens`, keyed `<host>:<login>`.
+The [BYOK registry](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-config-dir-reference#providersjson) is `~/.copilot/providers.json`, or the path selected by `COPILOT_PROVIDERS_CONFIG`. Its object has `providers` and `models` keys. Declaring any provider or model there takes precedence over legacy `COPILOT_PROVIDER_*` variables.
+
+Microsoft Entra sign-in offers account selection and `/logout` for those OAuth sessions ([1.0.92](https://github.com/github/copilot-cli/releases/tag/v1.0.92)). On macOS it uses the native Entra broker when available, with browser fallback ([1.0.95](https://github.com/github/copilot-cli/releases/tag/v1.0.95)). `/user list` shows each account's authentication source ([1.0.96](https://github.com/github/copilot-cli/releases/tag/v1.0.96)).
+
+No command reports auth status in machine-readable form; `/user show`, `/user list`, and `/user switch` are interactive. The config directory reference names `loggedInUsers` as application state in `config.json`. An older capture, with no recorded CLI version, holds the current identity in `config.json` as `lastLoggedInUser: {host, login}`, the known identities as `loggedInUsers: [{host, login}]`, and plaintext-stored tokens under `copilotTokens`, keyed `<host>:<login>`.
 
 ### Account usage response
 
@@ -578,7 +624,7 @@ These endpoints report per account and period, need broader access than a CLI lo
 
 Remote control lets GitHub.com and GitHub Mobile view a running local session, answer its permission requests, and continue the conversation ([steer remotely](https://docs.github.com/en/copilot/how-tos/copilot-cli/use-copilot-cli/steer-remotely)). The host machine must stay online with the session running in a terminal. It needs no GitHub-hosted repository: sessions outside one appear with no repository.
 
-Enable it with `copilot --remote`, `/remote on`, or a setting; disable it per launch with `--no-remote` or in session with `/remote off`. `/remote` alone shows the status and the access links. `--remote` with `--resume <task-id>` resumes a remote task locally.
+Enable it with `copilot --remote`, `/remote on`, or a setting; disable it per launch with `--no-remote` or in session with `/remote off`. `/remote` alone shows the status and the access links. `--remote` with `--resume <task-id>` resumes a remote task locally. Since [1.0.92](https://github.com/github/copilot-cli/releases/tag/v1.0.92), remote `--resume` and `--connect` use the configured GitHub authentication.
 
 The docs disagree on the setting. The how-to enables it with `"remoteSessions": true` in `settings.json`, while the [settings table](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-config-dir-reference#configuration-file-settings) documents `remote: "on" | "off"` (default `"on"`, controlling sync and remote access) and mentions `remoteSessions` only inside the `remoteExport` row. `remoteExport` (default `true`) and `--remote-export` control read-only export; `--no-remote-export` also disables remote control.
 
@@ -586,7 +632,7 @@ All remote flags require the remote sessions feature on the account. Enterprise 
 
 ## Upstream scope
 
-These surfaces have no published contract at 1.0.83, so anything built on them rests on the captures above or on nothing:
+The sources reviewed for 1.0.96 do not specify these contracts. Where captures exist, their version pins apply:
 
 - the `permissionRequest` input schema, including any permission kind, subject, or request ID;
 - whether any hook output can answer an `ask_user` question or `elicitation_dialog`;
