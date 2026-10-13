@@ -1,6 +1,36 @@
 use super::*;
 
 #[test]
+fn empty_live_focus_explains_launch_age_and_turn_state() {
+    let now = ts("2026-06-01T12:00:00Z");
+    let mut scope = Scope::for_channel(None, None);
+    scope.focus = Some("@fresh".to_owned());
+    for (registered_at, turn_started_at, expected) in [
+        (
+            Some(now - jiff::SignedDuration::from_secs(37)),
+            None,
+            "@fresh has no messages yet (launched 37s ago, no turn opened)",
+        ),
+        (
+            Some(now - jiff::SignedDuration::from_hours(2)),
+            Some(now),
+            "@fresh has no messages yet (launched 2h ago)",
+        ),
+        (None, None, "@fresh has no messages yet"),
+    ] {
+        scope.live_focus = Some(FocusTiming {
+            registered_at,
+            turn_started_at,
+        });
+        assert_eq!(empty_scope_message(&scope, None, 0, now), expected);
+    }
+    assert_eq!(
+        empty_scope_message(&scope, None, 11, now),
+        "@fresh shows only RimZ traffic: 11 entries hidden (--json shows them)"
+    );
+}
+
+#[test]
 fn transcript_default_bounds_human_entries_and_reports_display_counts() {
     let mut view = follow_view(
         (0..25)
@@ -1901,6 +1931,7 @@ fn focus_keeps_messages_sent_by_the_focal_agent() {
         channel_filter: Some("chat".to_owned()),
         focus: Some("@claude".to_owned()),
         focus_keys: Some(BTreeSet::from([entry_key(&focal)])),
+        live_focus: None,
         include_channel: false,
     };
 
@@ -1935,6 +1966,7 @@ fn focus_and_speaker_use_petname_sender_address() {
         channel_filter: Some("chat".to_owned()),
         focus: Some("@calm-fox".to_owned()),
         focus_keys: Some(BTreeSet::from([entry_key(&focal)])),
+        live_focus: None,
         include_channel: false,
     };
     let sent_chat = chat_entry_for_log_entry(&sent, &identities, false, None);
@@ -2653,6 +2685,7 @@ fn live_boundary_uses_channel_cohort_or_focus_key() {
                 channel_filter: Some("chat".to_owned()),
                 focus: Some("@claude".to_owned()),
                 focus_keys: Some(BTreeSet::from([other])),
+                live_focus: None,
                 include_channel: false,
             },
             &live,
@@ -2671,6 +2704,7 @@ fn live_boundary_uses_channel_cohort_or_focus_key() {
                 channel_filter: Some("chat".to_owned()),
                 focus: Some("@codex".to_owned()),
                 focus_keys: Some(BTreeSet::from([child])),
+                live_focus: None,
                 include_channel: false,
             },
             &live,
@@ -2744,6 +2778,7 @@ fn child_entries_require_child_focus() {
             channel_filter: Some("chat".to_owned()),
             focus: Some("@claude".to_owned()),
             focus_keys: Some(BTreeSet::from([entry_key(&parent)])),
+            live_focus: None,
             include_channel: false,
         },
         &identities,
@@ -2756,6 +2791,7 @@ fn child_entries_require_child_focus() {
             channel_filter: Some("chat".to_owned()),
             focus: Some("@codex".to_owned()),
             focus_keys: Some(BTreeSet::from([entry_key(&child)])),
+            live_focus: None,
             include_channel: false,
         },
         &identities,

@@ -203,12 +203,19 @@ impl Identity {
 }
 
 #[derive(Clone, Debug)]
+struct FocusTiming {
+    registered_at: Option<jiff::Timestamp>,
+    turn_started_at: Option<jiff::Timestamp>,
+}
+
+#[derive(Clone, Debug)]
 struct Scope {
     root_channel: Option<String>,
     channel: Option<String>,
     channel_filter: Option<String>,
     focus: Option<String>,
     focus_keys: Option<BTreeSet<AgentKey>>,
+    live_focus: Option<FocusTiming>,
     include_channel: bool,
 }
 
@@ -234,6 +241,7 @@ impl Scope {
             channel_filter,
             focus: None,
             focus_keys: None,
+            live_focus: None,
             include_channel,
         }
     }
@@ -589,12 +597,14 @@ fn chat_view_with_mode(
     entries.sort_by(|left, right| {
         compare_optional_timestamps(left.chat.arrived_at(), right.chat.arrived_at())
     });
+    let recorded = entries.len();
     if mode.hidden == Hidden::Skip {
         entries = thread::hide_harness_turns(entries, &asked_ids);
     }
 
     if entries.is_empty() {
-        let empty_message = empty_scope_message(&scope, target.as_deref());
+        let empty_message =
+            empty_scope_message(&scope, target.as_deref(), recorded, jiff::Timestamp::now());
         return Ok(RenderedChat {
             lane_label: scope.lane_label().map(str::to_owned),
             channel: scope.channel,
@@ -704,17 +714,49 @@ fn write_empty_chat(json: bool, message: &str) -> Result<()> {
     Ok(())
 }
 
-fn empty_scope_message(scope: &Scope, target: Option<&str>) -> String {
+fn empty_scope_message(
+    scope: &Scope,
+    target: Option<&str>,
+    hidden: usize,
+    now: jiff::Timestamp,
+) -> String {
+    if hidden > 0 {
+        let label = scope.focus.as_ref().map_or_else(
+            || scope_label(scope, target),
+            |focus| chat::render_handle(focus, scope.lane_label(), true),
+        );
+        let noun = if hidden == 1 { "entry" } else { "entries" };
+        return format!(
+            "{label} shows only RimZ traffic: {hidden} {noun} hidden (--json shows them)"
+        );
+    }
     if let Some(focus) = &scope.focus {
         let label = chat::render_handle(focus, scope.lane_label(), true);
+        if let Some(timing) = &scope.live_focus {
+            let mut message = format!("{label} has no messages yet");
+            if let Some(registered_at) = timing.registered_at {
+                let age =
+                    render::age_label(now.duration_since(registered_at).as_secs().max(0) as u64);
+                let turn = if timing.turn_started_at.is_none() {
+                    ", no turn opened"
+                } else {
+                    ""
+                };
+                message.push_str(&format!(" (launched {age} ago{turn})"));
+            }
+            return message;
+        }
         return format!("No conversation for {label} yet.");
     }
-    let label = scope
+    format!("No conversation for {} yet.", scope_label(scope, target))
+}
+
+fn scope_label(scope: &Scope, target: Option<&str>) -> String {
+    scope
         .lane_label()
         .map(|channel| format!("#{channel}"))
         .or_else(|| target.map(ToOwned::to_owned))
-        .unwrap_or_else(|| "this room".to_owned());
-    format!("No conversation for {label} yet.")
+        .unwrap_or_else(|| "this room".to_owned())
 }
 
 fn resolve_run_target(paths: &rimz::StatePaths, target: Option<&str>) -> Result<Option<String>> {

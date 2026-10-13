@@ -264,15 +264,17 @@ fn transcript_from_main_checkout_resolves_peer_and_me() {
         line.role = Some(role.to_owned());
         append_transcript(&env, line);
     }
-    for (target, wanted) in [
-        ("@peer", "session-1"),
-        ("@me", "session-0"),
-        ("session-2", "session-2"),
-        ("zellij:terminal_1", "session-1"),
+    for (command, target, wanted) in [
+        (vec!["transcript"], "@peer", "session-1"),
+        (vec!["transcript"], "@me", "session-0"),
+        (vec!["agents", "logs"], "@me", "session-0"),
+        (vec!["transcript"], "session-2", "session-2"),
+        (vec!["transcript"], "zellij:terminal_1", "session-1"),
     ] {
         let result = env
             .rimz()
-            .args(["transcript", target, "--json"])
+            .args(command)
+            .args([target, "--json"])
             .env("RIMZ_AGENT_KIND", "claude")
             .env("RIMZ_AGENT_ID", "session-0")
             .env_remove("RIMZ_CHANNEL")
@@ -304,17 +306,21 @@ fn transcript_live_empty_focus_does_not_use_other_channel_lines() {
     );
     other.role = Some("peer".to_owned());
     append_transcript(&env, other);
-    let result = env.rimz().args(["transcript", "@peer#a"]).output().unwrap();
-    assert!(
-        result.status.success(),
-        "{}",
-        String::from_utf8_lossy(&result.stderr)
-    );
-    assert_eq!(
-        String::from_utf8_lossy(&result.stderr).trim(),
-        "No conversation for @peer#a yet."
-    );
-    assert!(result.stdout.is_empty());
+    for command in [vec!["transcript"], vec!["agents", "logs"]] {
+        let result = env.rimz().args(command).arg("@peer#a").output().unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        let stderr = String::from_utf8_lossy(&result.stderr);
+        assert!(
+            stderr.starts_with("@peer#a has no messages yet (launched "),
+            "{stderr}"
+        );
+        assert!(stderr.trim().ends_with(" ago, no turn opened)"), "{stderr}");
+        assert!(result.stdout.is_empty());
+    }
     let result = env
         .rimz()
         .args(["transcript", "@peer#a", "--json"])
