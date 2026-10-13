@@ -875,6 +875,7 @@ fn tab_switch_repairs_sidebar_focus_from_attached_client_views() {
 
     let target_tab = "switch target";
     let input_log = cwd.path().join("routed-input.log");
+    let pokes_before_target = poke_lines(&poke_log).len();
     backend
         .open_tab(&TabOptions {
             env: Default::default(),
@@ -906,10 +907,15 @@ fn tab_switch_repairs_sidebar_focus_from_attached_client_views() {
     let target_sidebar =
         PaneId::from_parts(MuxName::Zellij, format!("terminal_{}", target_sidebar.id));
     client.go_to_tab_until(2, &target_work, "target work pane");
+    // Let the setup switch sample the work pane before staging a strand.
+    // Presence positions are zero-based; the client's tab key is one-based.
+    wait_for_switch_settled(&poke_log, pokes_before_target, 1);
 
     client.press_alt_until('h', &target_sidebar, "stranded target sidebar");
 
+    let pokes_before_birth = poke_lines(&poke_log).len();
     client.go_to_tab_until(1, &birth_work, "birth work pane before switch repair");
+    wait_for_switch_settled(&poke_log, pokes_before_birth, 0);
     let pokes_before = poke_lines(&poke_log).len();
     let actions_before = focus_action_count(&trace_log);
     let repairs_before = accepted_focus_repairs(xdg, &target_work);
@@ -921,7 +927,6 @@ fn tab_switch_repairs_sidebar_focus_from_attached_client_views() {
         pokes_before,
     };
     client.go_to_tab(2);
-    // Presence positions are zero-based; the client's tab key is one-based.
     let settled = wait_for_switch_settled(&poke_log, pokes_before, 1);
     assert!(
         settled[pokes_before..].iter().any(|line| {
@@ -951,7 +956,9 @@ fn tab_switch_repairs_sidebar_focus_from_attached_client_views() {
         &target_sidebar,
         "stranded target sidebar before reload",
     );
+    let pokes_before_birth = poke_lines(&poke_log).len();
     client.go_to_tab_until(1, &birth_work, "birth work pane before presence reload");
+    wait_for_switch_settled(&poke_log, pokes_before_birth, 0);
     let pokes_before_reload = poke_lines(&poke_log).len();
     let room_bin = rimz::StatePaths::under(sidebar.workspace_id.clone(), xdg)
         .expect("room state paths")
@@ -986,7 +993,9 @@ fn tab_switch_repairs_sidebar_focus_from_attached_client_views() {
         &target_sidebar,
         "stranded target sidebar before detach",
     );
+    let pokes_before_birth = poke_lines(&poke_log).len();
     client.go_to_tab_until(1, &birth_work, "birth work pane before detach");
+    wait_for_switch_settled(&poke_log, pokes_before_birth, 0);
     let actions_before = focus_action_count(&trace_log);
     client.go_to_tab(2);
     drop(client);
