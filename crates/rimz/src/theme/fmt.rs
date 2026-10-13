@@ -120,20 +120,50 @@ pub fn group_thousands(n: u64) -> String {
     out
 }
 
-/// Whole-unit compact token count for CLI surfaces.
+/// Whole-unit token count shared by CLI and sidebar: `523`, `76k`, `1M`, `2B`.
 pub fn compact_count(value: u64) -> String {
     if value < 1_000 {
         value.to_string()
     } else if value < 1_000_000 {
         format!("{}k", value / 1_000)
+    } else if value < 1_000_000_000 {
+        format!("{}M", value / 1_000_000)
     } else {
-        format!("{}m", value / 1_000_000)
+        format!("{}B", value / 1_000_000_000)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn compact_count_uses_uppercase_millions() {
+        assert_eq!(compact_count(1_200_000), "1M");
+        for (value, expected) in [
+            (0, "0"),
+            (523, "523"),
+            (999, "999"),
+            (1_000, "1k"),
+            (76_500, "76k"),
+            (999_999, "999k"),
+            (1_000_000, "1M"),
+            (999_999_999, "999M"),
+        ] {
+            assert_eq!(compact_count(value), expected);
+        }
+    }
+
+    #[test]
+    fn compact_count_uses_billions() {
+        for (value, expected) in [
+            (1_000_000_000, "1B"),
+            (2_500_000_000, "2B"),
+            (u64::MAX, "18446744073B"),
+        ] {
+            assert_eq!(compact_count(value), expected);
+        }
+    }
 
     #[test]
     fn fmt_bytes_uses_binary_units_and_short_decimals() {

@@ -938,7 +938,7 @@ fn token_breakdown_keeps_shape_and_marker_styles() {
         12_000,
         64_000,
         68_000,
-        fmt::tokens_int,
+        fmt::compact_count,
         TokenDetail::Full,
         &TokenColumns::default(),
     );
@@ -951,7 +951,7 @@ fn token_breakdown_keeps_shape_and_marker_styles() {
         12_000,
         64_000,
         68_000,
-        fmt::tokens_int,
+        fmt::compact_count,
         TokenDetail::Full,
         &TokenColumns::default(),
     );
@@ -1006,7 +1006,7 @@ fn nerd_font_glyph_set_reaches_token_and_meter_labels() {
         12_000,
         64_000,
         68_000,
-        fmt::tokens_int,
+        fmt::compact_count,
         TokenDetail::Full,
         &TokenColumns::default(),
     );
@@ -1026,7 +1026,7 @@ fn nerd_font_glyph_set_reaches_token_and_meter_labels() {
         6_600,
         1_700,
         2_300,
-        fmt::tokens_int,
+        fmt::compact_count,
     );
     assert_eq!(
         text(&spans),
@@ -1045,7 +1045,7 @@ fn context_breakdown_keeps_shape_marker_styles_and_compactions() {
         6_600,
         1_700,
         2_300,
-        fmt::tokens_int,
+        fmt::compact_count,
     );
     assert_eq!(text(&spans), "▤ 76k · ◌ 68k ◍ 6k ↘ 1k ↗ 2k");
     assert_no_fg(&spans);
@@ -1059,7 +1059,7 @@ fn context_breakdown_keeps_shape_marker_styles_and_compactions() {
         6_600,
         1_700,
         2_300,
-        fmt::tokens_int,
+        fmt::compact_count,
     );
     let tone = |glyph: &str| {
         spans

@@ -4,7 +4,9 @@ use jiff::Timestamp;
 
 use crate::agents::RateLimitWindow;
 use crate::sidebar_pane::render::layout::clip;
-pub(super) use crate::theme::fmt::{dollars_cap, dollars2, expiry_label, reset_countdown};
+pub(super) use crate::theme::fmt::{
+    compact_count, dollars_cap, dollars2, expiry_label, reset_countdown,
+};
 
 /// Seconds since `at`, clamped at zero — the shared input for [`age_short`] and
 /// the staleness color ramp, so a row reads the frame clock once and styles and
@@ -81,94 +83,6 @@ pub(super) fn window_label(window: &RateLimitWindow) -> String {
         format!("{}h", (mins + 30) / 60)
     } else {
         format!("{}d", (mins + 720) / 1_440)
-    }
-}
-
-/// Spend at full cent resolution with thousands grouped — `$0.00`, `$3.50`,
-/// `$124.05`, `$1,240.57`. Every spend in the sidebar reads as money at two
-/// decimals: the per-row cost, the cockpit's count-up headline total, the provider
-/// dashboard, and the fleet store all share this one shape, so a price never
-/// jitters between a cents and a whole-dollar form. Grouping keeps a large
-/// accumulating pile (`$12,480.13`) legible without changing that shape.
-/// Shorten a model's display name for the capability line. First drops a
-/// trailing context-window parenthetical (`Opus 4.8 (1M context)` / `Opus 4.8
-/// (1M)` → `Opus 4.8`) — the identity line's dedicated window token carries
-/// that figure now, so the name never repeats it. Then, when the name is still
-/// a bare vendor *slug* (all lowercase, hyphenated, no spaces — the
-/// pre-enrichment fallback), prettifies it (`claude-opus-4-8` → `Opus 4.8`). A
-/// friendly name keeps its words but trades hyphens for spaces (`GPT-5.5
-/// Codex` → `GPT 5.5 Codex`), so every name on the line speaks the spaced
-/// `Opus 4.8` form whatever the vendor's catalog punctuation.
-pub(super) fn model_label(display: &str) -> String {
-    let cleaned = strip_window_qualifier(display);
-    if let Some(custom) = crate::agents::model_display::display_factory_custom_selector(&cleaned) {
-        custom
-    } else if looks_like_slug(&cleaned) {
-        crate::agents::model_display::display_model(&cleaned)
-    } else {
-        cleaned.replace('-', " ")
-    }
-}
-
-/// Drop a trailing `(…)` suffix when it reads as a context-window size — a
-/// magnitude like `1M` or `200K`, optionally followed by ` context`. Any other
-/// parenthetical (a genuine name qualifier) passes through untouched.
-fn strip_window_qualifier(display: &str) -> String {
-    let trimmed = display.trim_end();
-    let stripped = trimmed
-        .strip_suffix(')')
-        .and_then(|head| head.rsplit_once(" ("))
-        .and_then(|(name, qualifier)| {
-            let magnitude = qualifier.strip_suffix(" context").unwrap_or(qualifier);
-            let (digits, unit) = magnitude.split_at(magnitude.len().saturating_sub(1));
-            let is_window = !digits.is_empty()
-                && digits.chars().all(|c| c.is_ascii_digit())
-                && matches!(unit, "k" | "K" | "m" | "M");
-            is_window.then(|| name.trim_end().to_owned())
-        });
-    stripped.unwrap_or_else(|| trimmed.to_owned())
-}
-
-/// A name still reads as a raw model slug when it is hyphenated, carries no
-/// space, no parenthetical, and no uppercase letter — exactly the shape of a
-/// catalog id (`claude-opus-4-8`, `gpt-5.5-codex`) and never of a friendly
-/// display name (`Opus 4.8`, `GPT-5.5 Codex`), so the prettifier only fires on
-/// the fallback path.
-fn looks_like_slug(value: &str) -> bool {
-    value.contains('-')
-        && !value.contains(' ')
-        && !value.contains('(')
-        && !value.chars().any(|c| c.is_ascii_uppercase())
-}
-
-/// A token count as a whole-unit magnitude with no decimal — `523`, `76k`,
-/// `1M`, `2B` — for the agent card and the live cockpit / provider lines, where a
-/// tenths place is noise beside the precise `76.5k` the W/M store rows carry.
-/// Truncates to the unit (`76_500` → `76k`), matching the live figures' coarser
-/// read; sub-thousand counts stay exact.
-pub(super) fn tokens_int(count: u64) -> String {
-    if count >= 1_000_000_000 {
-        format!("{}B", count / 1_000_000_000)
-    } else if count >= 1_000_000 {
-        format!("{}M", count / 1_000_000)
-    } else if count >= 1_000 {
-        format!("{}k", count / 1_000)
-    } else {
-        count.to_string()
-    }
-}
-
-/// The model's context window as a compact lowercase magnitude — `200k`,
-/// `272k`, `1m` — for the identity line's capability token. Lowercase `m`
-/// keeps the window class quiet beside the model name; the count-of-tokens
-/// figures elsewhere keep [`tokens_int`]'s uppercase `M`.
-pub(super) fn window_short(window: u64) -> String {
-    if window >= 1_000_000 {
-        format!("{}m", window / 1_000_000)
-    } else if window >= 1_000 {
-        format!("{}k", window / 1_000)
-    } else {
-        window.to_string()
     }
 }
 
@@ -283,21 +197,7 @@ mod tests {
     }
 
     #[test]
-    fn model_money_token_and_percent_labels_keep_display_shapes() {
-        for (raw, expected) in [
-            ("Opus 4.8 (1M context)", "Opus 4.8"),
-            ("Opus 4.8 (1M)", "Opus 4.8"),
-            ("Sonnet 4.6 (200K context)", "Sonnet 4.6"),
-            ("GPT-5.5", "GPT 5.5"),
-            ("Sonnet 3.5 (New)", "Sonnet 3.5 (New)"),
-            ("claude-opus-4-8", "Opus 4.8"),
-            ("claude-opus-4-8-20260101", "Opus 4.8"),
-            ("gpt-5.5-codex", "GPT 5.5 Codex"),
-            ("GPT-5.5 Codex", "GPT 5.5 Codex"),
-        ] {
-            assert_eq!(model_label(raw), expected);
-        }
-
+    fn money_token_and_percent_labels_keep_display_shapes() {
         for (usd, expected) in [
             (0.0, "$0.00"),
             (3.5, "$3.50"),
@@ -319,12 +219,9 @@ mod tests {
             (47_200_000, "47.2M", "47M"),
         ] {
             assert_eq!(tokens_short(count), short);
-            assert_eq!(tokens_int(count), int);
+            assert_eq!(compact_count(count), int);
         }
-        assert_eq!(tokens_int(2_500_000_000), "2B");
-        assert_eq!(window_short(1_050_000), "1m");
-        assert_eq!(window_short(272_000), "272k");
-        assert_eq!(window_short(523), "523");
+        assert_eq!(compact_count(2_500_000_000), "2B");
 
         for (precise, whole, expected) in [
             (Some(78.23), 78, "78.2%"),

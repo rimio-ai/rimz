@@ -39,7 +39,7 @@ pub(in crate::sidebar_pane::render) struct TokenColumns {
 /// `↘` input in the expense vermilion, `↗` output in blue, and `◌` cache-read
 /// in green. The figures read at the soft tier
 /// ([`Theme::soft`]) like every stat figure; under `NO_COLOR` the glyph shapes
-/// still spell the split. `fmt` chooses the magnitude form (`tokens_int` live,
+/// still spell the split. `fmt` chooses the magnitude form (`compact_count` live,
 /// `tokens_short` for the precise W/M rows). `total` is the caller's `◇` value
 /// (`input` with cache-write folded in, plus output), passed in so a row can
 /// read it straight from its accumulated window.

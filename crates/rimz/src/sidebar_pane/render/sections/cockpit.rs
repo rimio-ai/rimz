@@ -9,7 +9,7 @@ use ratatui::text::{Line, Span};
 
 use crate::config::GlyphRole;
 use crate::sidebar_pane::render::TallyAnim;
-use crate::sidebar_pane::render::fmt::{dollars_cap, dollars2, tokens_int};
+use crate::sidebar_pane::render::fmt::{compact_count, dollars_cap, dollars2};
 use crate::sidebar_pane::render::labels::{TokenColumns, TokenDetail, token_breakdown_spans};
 use crate::sidebar_pane::render::theme::{Component, Theme};
 
@@ -43,7 +43,7 @@ pub(in crate::sidebar_pane::render) fn cockpit_summary_line(
         window.input,
         window.output,
         window.cache_read,
-        tokens_int,
+        compact_count,
         TokenDetail::Full,
         &TokenColumns::default(),
     );

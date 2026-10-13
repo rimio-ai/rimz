@@ -1,5 +1,6 @@
 use super::*;
 use crate::agents::ATTENTION_AGE_CEILING_SECS;
+use crate::agents::model_display::model_label_source;
 use crate::sidebar_pane::pixel::meter::{MeterPixels, MeterRaster};
 use crate::sidebar_pane::pixel::{
     image_id_color, placeholder_cluster, placeholder_columns_supported,
@@ -10,16 +11,15 @@ pub(super) fn ctx(row: &SidebarRow) -> Option<&AgentContext> {
     row.as_agent().and_then(|agent| agent.context.as_ref())
 }
 
-/// Model name preferred from the provider display label over the normalized
-/// context model id, then the coarser lifecycle scalar, and shortened for the
-/// row (`Opus 4.8 (1M)`); never synthesized.
+/// The most specific observed or carried model name; never synthesized.
 pub(super) fn display_model(row: &SidebarRow) -> Option<String> {
-    ctx(row)
-        .and_then(|context| context.model_display_name.as_deref())
-        .or_else(|| ctx(row).and_then(|context| context.model_id.as_deref()))
-        .or_else(|| row.as_agent().and_then(|agent| agent.model.as_deref()))
-        .filter(|model| !model.is_empty())
-        .map(model_label)
+    model_label_source(
+        ctx(row).and_then(|context| context.model_display_name.as_deref()),
+        ctx(row).and_then(|context| context.model_id.as_deref()),
+        row.as_agent().and_then(|agent| agent.model.as_deref()),
+    )
+    .filter(|model| !model.is_empty())
+    .map(|raw| model_label_parts(raw).0)
 }
 
 /// Reasoning configuration: the session's observed live effort is preferred;
@@ -447,7 +447,7 @@ pub(super) fn context_tokens_line(row_ctx: &RowCtx<'_>, row: &SidebarRow) -> Lin
             cache_write,
             input,
             output,
-            tokens_int,
+            compact_count,
         ));
     } else if let Some(split) = row.call_split() {
         // The row-level split — the lifecycle rail's per-call composition.
@@ -459,13 +459,13 @@ pub(super) fn context_tokens_line(row_ctx: &RowCtx<'_>, row: &SidebarRow) -> Lin
             split.cache_write,
             split.fresh_input,
             split.output,
-            tokens_int,
+            compact_count,
         ));
     } else if let Some(total) = ctx(row)
         .and_then(|context| context.tokens.as_ref())
         .and_then(|tokens| tokens.current_context_tokens)
     {
-        left.extend(context_total_spans(theme, severity, total, tokens_int));
+        left.extend(context_total_spans(theme, severity, total, compact_count));
     } else if let Some(usage) = ctx(row)
         .and_then(|context| context.tokens.as_ref())
         .and_then(|tokens| tokens.session_usage.as_ref())
@@ -476,7 +476,7 @@ pub(super) fn context_tokens_line(row_ctx: &RowCtx<'_>, row: &SidebarRow) -> Lin
             usage.displayed_input_tokens(),
             usage.displayed_output_tokens(),
             usage.cache_read_tokens(),
-            tokens_int,
+            compact_count,
             TokenDetail::Full,
             &TokenColumns::default(),
         ));
@@ -485,7 +485,7 @@ pub(super) fn context_tokens_line(row_ctx: &RowCtx<'_>, row: &SidebarRow) -> Lin
             .context_used_tokens()
             .or_else(|| row.as_agent().and_then(|agent| agent.usage.total_tokens))
             .unwrap_or(0);
-        left.extend(context_total_spans(theme, severity, total, tokens_int));
+        left.extend(context_total_spans(theme, severity, total, compact_count));
     }
     if let Some(percent) = ctx(row)
         .and_then(|context| context.tokens.as_ref())
@@ -515,7 +515,35 @@ pub(super) fn context_tokens_line(row_ctx: &RowCtx<'_>, row: &SidebarRow) -> Lin
 
 #[cfg(test)]
 mod tests {
-    use super::log_scaled_fill;
+    use super::*;
+
+    #[test]
+    fn card_projection_model_prefers_id_over_friendly_name() {
+        let now = jiff::Timestamp::UNIX_EPOCH;
+        let mut state = crate::testkit::agent_state("claude", "model", now);
+        state.model = Some("claude-opus-5".into());
+        state.pane = Some(crate::pane::PaneRef::from_id(
+            crate::ids::PaneId::from_parts(crate::MuxName::Tmux, "%1"),
+        ));
+        let mut context = AgentContext::new("claude", now);
+        context.model_id = state.model.clone();
+        context.model_display_name = Some("Opus".into());
+        state.context = Some(context);
+        let project = |state: &crate::agents::AgentState| {
+            let snapshot = crate::store::snapshot::SidebarSnapshot::build_with_agents(
+                crate::WorkspaceId::from_project_root(std::path::Path::new("/repo")),
+                vec![state.clone()],
+                now,
+            )
+            .with_live_panes(vec![state.pane.clone().unwrap()], None);
+            display_model(snapshot.rows().next().unwrap())
+        };
+        assert_eq!(project(&state).as_deref(), Some("Opus 5"));
+        state.context.as_mut().unwrap().model_id = None;
+        assert_eq!(project(&state).as_deref(), Some("Opus 5"));
+        state.model = None;
+        assert_eq!(project(&state).as_deref(), Some("Opus"));
+    }
 
     fn assert_close(actual: f64, expected: f64) {
         assert!(
