@@ -98,7 +98,7 @@ const TOPOLOGY_CACHE_POLL_STEP: Duration = Duration::from_millis(50);
 /// it is publishing before stale instances are retired.
 const PRESENCE_RETIRE_PROOF_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// A tab or pane listing can hit an action-client startup race during busy
+/// A list action can hit an action-client startup race during busy
 /// session ticks and answer a successful empty stdout.
 const TRANSIENT_EMPTY_ATTEMPTS: u32 = 5;
 const TRANSIENT_EMPTY_RETRY_DELAY: Duration = Duration::from_millis(50);

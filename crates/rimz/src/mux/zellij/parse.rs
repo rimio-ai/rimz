@@ -6,7 +6,7 @@ use crate::ids::{MuxClientId, MuxName, PaneId};
 use crate::mux::{ClientPresence, ClientView, MuxErr, SessionLiveness};
 use crate::pane::ClientPaneView;
 
-/// List replies are arrays. A non-array reply can belong to another action
+/// JSON list replies are arrays. A non-array reply can belong to another action
 /// client and is worth retrying; array element errors belong to the parser.
 pub(super) fn is_transient_list_reply(stdout: &[u8]) -> bool {
     !matches!(
