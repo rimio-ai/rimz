@@ -74,6 +74,8 @@ pub(in crate::sidebar_pane) struct UiState {
     /// selected card stays in view unless a [`ManualScroll`] pin holds it —
     /// and written back as a byproduct of the draw, like frame interactions.
     pub(in crate::sidebar_pane) scroll_offset: usize,
+    /// Maximum offset in the last drawn frame, absent before the first draw.
+    pub(in crate::sidebar_pane) drawn_scroll_max: Option<usize>,
     /// Request stamp of the last jump scroll anchor this renderer applied, so
     /// its later acceptance cannot seed the viewport a second time. `0` before
     /// any jump handoff.

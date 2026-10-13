@@ -116,6 +116,7 @@ fn draw_into(
     ui.scrollbar
         .observe(composed.scroll_offset, ui.animation_phase);
     ui.scroll_offset = composed.scroll_offset;
+    ui.drawn_scroll_max = Some(composed.scroll_max);
     // One paint consumes the focus reveal; later folds with unchanged selection
     // leave the viewport free to follow the card or scroll by hand.
     ui.focus_group_reveal = false;

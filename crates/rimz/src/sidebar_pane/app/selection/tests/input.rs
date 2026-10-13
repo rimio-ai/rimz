@@ -791,6 +791,22 @@ fn dismiss_key_requests_alert_dismissal() {
     // Dismiss never moves the selection.
     assert_eq!(ui.selected_index, None);
 }
+
+#[test]
+fn wheel_scroll_clamps_to_the_drawn_range_before_reversing() {
+    let mut ui = UiState {
+        drawn_scroll_max: Some(5),
+        ..Default::default()
+    };
+    for _ in 0..4 {
+        handle_scroll(true, &mut ui);
+        assert!(ui.scroll_offset <= 5);
+    }
+    assert_eq!(ui.scroll_offset, 5);
+    handle_scroll(false, &mut ui);
+    assert_eq!(ui.scroll_offset, 5 - SCROLL_STEP);
+}
+
 #[test]
 fn wheel_scroll_pins_the_viewport_and_steps_the_offset() {
     // The wheel moves the window, never the selection: each tick steps the

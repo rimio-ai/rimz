@@ -410,12 +410,14 @@ pub(super) fn handle_mouse_click(
 /// A wheel tick: move the viewport, never the selection. The first tick pins a
 /// [`ManualScroll`] capturing the selection it began over — the clear condition
 /// — and later ticks only move the window, so a long peek keeps one anchor.
-/// Overshoot is fine: the draw clamps the offset to the zone and writes the
-/// effective value back.
+/// Clamp to the last drawn range so queued ticks can reverse at the bottom
+/// without an intervening paint. The draw still resolves geometry changes.
 pub(super) fn handle_scroll(down: bool, ui: &mut UiState) -> InputOutcome {
     pin_manual_scroll(ui);
     ui.scroll_offset = if down {
-        ui.scroll_offset.saturating_add(SCROLL_STEP)
+        ui.scroll_offset
+            .saturating_add(SCROLL_STEP)
+            .min(ui.drawn_scroll_max.unwrap_or(usize::MAX))
     } else {
         ui.scroll_offset.saturating_sub(SCROLL_STEP)
     };
