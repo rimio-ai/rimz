@@ -399,6 +399,47 @@ exit 0
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn wedged_birth_client_refuses_with_the_birth_bound() {
+    let room = TestRoom::new();
+    let (temp, shim) = zellij_shim(
+        r#"#!/bin/sh
+dir=$(dirname "$0"); printf '%s\n' "$*" >> "$dir/zellij.log"
+if [ "$1" = "list-sessions" ]; then exit 0; fi
+case " $* " in
+  *" attach --create-background "*) exec sleep 30 ;;
+esac
+exit 0
+"#,
+    );
+    let started = std::time::Instant::now();
+
+    let err = room
+        .backend(&shim)
+        .with_birth_timeout_for_test(Duration::from_secs(1))
+        .ensure_clean_session(&room.sidebar_options(120), None)
+        .expect_err("a wedged birth refuses rather than reading as stuck");
+
+    assert!(
+        started.elapsed() < Duration::from_secs(3),
+        "the birth client outlived its bound: {:?}",
+        started.elapsed()
+    );
+    assert!(
+        matches!(err, crate::mux::MuxErr::Timeout { seconds: 1, .. }),
+        "{err}"
+    );
+    let message = err.to_string();
+    assert!(
+        message.contains("attach rimz-test") && message.contains("within 1s; killed"),
+        "{message}"
+    );
+    let log = shim_log(&temp);
+    assert_eq!(command_count(&log, "attach --create-background"), 1);
+    assert_eq!(command_count(&log, "delete-session"), 0);
+}
+
 const LIST_PANES: &str = "action list-panes --all --json";
 
 #[cfg(unix)]

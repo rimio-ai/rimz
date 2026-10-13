@@ -471,7 +471,8 @@ impl RoomContext {
             Ok(health) => Ok(health),
             Err(
                 err @ (crate::mux::MuxErr::SocketPathTooLong { .. }
-                | crate::mux::MuxErr::SocketPathReportedTooLong { .. }),
+                | crate::mux::MuxErr::SocketPathReportedTooLong { .. }
+                | crate::mux::MuxErr::Timeout { .. }),
             ) => Err(err.into()),
             Err(err) => {
                 tracing::warn!(error = %err, "session health gate failed; attaching as-is");
