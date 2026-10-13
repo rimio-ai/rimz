@@ -257,7 +257,7 @@ fn parent_own_attention_outranks_child_park() {
             agent("claude", "root", AgentStatus::Running, 0)
                 .overloaded_turn_error(0, "own overload"),
             AgentStatus::Paused,
-            None,
+            Some("own overload"),
         ),
     ] {
         let snapshot =

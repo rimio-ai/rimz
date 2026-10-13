@@ -1,6 +1,7 @@
 use super::*;
 use crate::agents::AgentLifecycleObservation;
 use crate::store::event::EventEnvelope;
+use crate::store::snapshot::SidebarSubAgent;
 
 #[test]
 fn launched_child_ended_mid_turn_projects_failed_and_frees_its_parent() {
@@ -88,6 +89,24 @@ fn launched_child_ended_mid_turn_projects_failed_and_frees_its_parent() {
             }),
         ),
     ];
+
+    let before_child_ended = reduce_agent_states(&events[..events.len() - 1]);
+    let snapshot = SidebarSnapshot::build_with_agents(workspace(), before_child_ended, at(35))
+        .with_live_panes(
+            vec![
+                pane("%1", "codex", "/repo/main"),
+                pane("%2", "codex", "/repo/main"),
+            ],
+            None,
+        );
+    let parent = row(&snapshot, "parent-session").as_agent().unwrap();
+    assert_eq!(parent.status, AgentStatus::Running);
+    assert_eq!(parent.phase, TurnPhase::Idle);
+    assert!(
+        parent
+            .current_sub_agents()
+            .any(SidebarSubAgent::holds_parent_turn)
+    );
 
     let agents = reduce_agent_states(&events);
     let child = agents

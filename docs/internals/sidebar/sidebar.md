@@ -241,7 +241,7 @@ Context severity is one four-tier ramp classified once in the domain ([`ContextS
 Three projection rules are not evident from the field catalog:
 
 - The renderer prefers the rich `context` blob over the coarse scalars, except that `row.effort` wins over `context.effort`.
-- The description line reads the session name first, then the provider thread preview, task, and prompt, so Codex's generated title replaces its first-message preview.
+- The description line uses [`AgentCard::description`](../../../crates/rimz/src/store/snapshot/row.rs): the displayed error or pause label first, then the first pending wait while sleeping, then activity (session name, provider thread preview, launch description, task, first prompt, latest prompt). Codex's generated title replaces its first-message preview.
 - Display preferences travel in `SidebarSnapshot.sidebar`.
 
 The status projection is pinned in [`view/tests/status/`](../../../crates/rimz/src/store/snapshot/view/tests/status) and [`project/tests/`](../../../crates/rimz/src/store/snapshot/project/tests).
