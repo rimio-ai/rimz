@@ -4273,10 +4273,11 @@ fn bare_word_naming_a_live_agent_refuses_with_show_and_launch() {
         )],
     );
 
-    let bare_coder = |channel: Option<&str>| {
+    let run_in = |args: &[&str], channel: Option<&str>| {
         let mut command = env.rimz();
         command
-            .args(["--mux", "zellij", "agents", "coder"])
+            .args(["--mux", "zellij"])
+            .args(args)
             .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
             .env("RIMZ_TEST_ZELLIJ_LOG", env.project_root.join("zellij.log"))
             .env(
@@ -4288,6 +4289,7 @@ fn bare_word_naming_a_live_agent_refuses_with_show_and_launch() {
         }
         command.output().expect("bare agents word")
     };
+    let bare_coder = |channel: Option<&str>| run_in(&["agents", "coder"], channel);
 
     let out = bare_coder(Some("billing"));
     let stderr = String::from_utf8_lossy(&out.stderr);
@@ -4313,6 +4315,27 @@ fn bare_word_naming_a_live_agent_refuses_with_show_and_launch() {
         "{stderr}"
     );
     assert!(stderr.contains("rimz agents launch coder"), "{stderr}");
+
+    crate::common::write_definition(
+        &env,
+        "agents",
+        "worker",
+        "description: Team worker\nagent: claude\ntools: []",
+        "",
+    );
+    crate::common::write_definition(
+        &env,
+        "teams",
+        "coder",
+        "leader: lead\nstages: [Build]\nroles:\n  - {role: lead, agent: worker, owns: [Build]}",
+        "Complete the work.",
+    );
+    let out = run_in(&["teams", "coder"], None);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("names a live agent") && !stderr.contains("unknown team"),
+        "`rimz teams <name>` launches through the explicit verb, past the bare-word check: {stderr}"
+    );
 }
 
 #[test]
