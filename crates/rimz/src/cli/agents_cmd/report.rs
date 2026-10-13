@@ -10,11 +10,11 @@ use rimz::agents::{
 };
 use rimz::ids::{AgentKind, AgentSessionId, LoginKey, PaneId};
 use rimz::store::snapshot::{
-    AgentCard, SidebarRow, SidebarSnapshot, SubAgentTokens, WorktreeCi, WorktreePrState,
-    group_live_agents_by_worktree,
+    AgentCard, CardDescription, SidebarRow, SidebarSnapshot, SidebarSubAgent, SubAgentTokens,
+    WorktreeCi, WorktreePrState, group_live_agents_by_worktree,
 };
 #[cfg(test)]
-use rimz::store::snapshot::{PaneAgent, RowCard, SidebarSubAgent};
+use rimz::store::snapshot::{PaneAgent, RowCard};
 
 pub(super) const AGENT_LIST_SCHEMA: u8 = 1;
 
@@ -166,6 +166,7 @@ pub(super) struct SubAgentReport {
 
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct ReportOverrides<'a> {
+    pub child: Option<&'a SidebarSubAgent>,
     pub runtime: Option<&'a rimz::RuntimePaths>,
     pub effort: Option<rimz::agents::spending::SlotEffort>,
     pub active_secs: Option<u64>,
@@ -253,6 +254,7 @@ pub(super) fn build_list_report(
                     me,
                     now,
                     ReportOverrides {
+                        child: child_for_agent(snapshot, agent),
                         runtime,
                         active_secs: rimz::agents::attribution::seat_active_secs(
                             slot_records_for_agent(slots, agent),
@@ -281,6 +283,18 @@ pub(super) fn slot_records_for_agent<'a>(
         .unwrap_or_else(|| vec![agent])
 }
 
+pub(super) fn card_status(
+    agent: &AgentState,
+    card: Option<&AgentCard>,
+    child: Option<&SidebarSubAgent>,
+    demotion: &rimz::agents::ParkDemotion,
+) -> AgentStatus {
+    card.map_or_else(
+        || child.map_or_else(|| agent.rowless_status(demotion).0, |child| child.status),
+        |card| card.status,
+    )
+}
+
 #[expect(
     clippy::too_many_arguments,
     reason = "report projection keeps durable demotion and presentation overrides explicit"
@@ -296,9 +310,12 @@ pub(super) fn build_entry(
     overrides: ReportOverrides<'_>,
 ) -> AgentReportEntry {
     let card = row.and_then(SidebarRow::as_agent);
-    let (status, phase) = card
-        .map(|card| (card.status, card.phase))
-        .unwrap_or_else(|| agent.rowless_status(demotion));
+    let child = overrides.child;
+    let status = card_status(agent, card, child, demotion);
+    let phase = card.map_or_else(
+        || child.map_or_else(|| agent.rowless_status(demotion).1, |child| child.phase),
+        |card| card.phase,
+    );
     let displayed_error = agent.displayed_turn_error();
     let turn_error = displayed_error.map(|(class, error)| TurnErrorReport {
         class,
@@ -307,7 +324,47 @@ pub(super) fn build_entry(
             .or(error.label.as_deref())
             .map(ToOwned::to_owned),
     });
-    let description = render::agent_activity_line(agent, card);
+    let fallback_card;
+    let description_card = match card {
+        Some(card) => card,
+        None => {
+            fallback_card = AgentCard {
+                status,
+                phase,
+                turn_error_label: child
+                    .and_then(|child| child.turn_error_label.clone())
+                    .or_else(|| turn_error.as_ref().and_then(|error| error.label.clone())),
+                ..AgentCard::from_agent(agent, now)
+            };
+            &fallback_card
+        }
+    };
+    let mut description = match description_card.description(now) {
+        CardDescription::Error(text)
+        | CardDescription::Wait(text)
+        | CardDescription::Activity(text) => Some(text),
+        CardDescription::None => None,
+    };
+    if let Some(card) =
+        card.filter(|card| card.status == AgentStatus::Running && card.phase == TurnPhase::Idle)
+    {
+        let children = card
+            .current_sub_agents()
+            .filter(|child| child.holds_parent_turn())
+            .map(|child| format!("@{}", child.petname.as_deref().unwrap_or(&child.name)))
+            .collect::<Vec<_>>();
+        if !children.is_empty() {
+            let plural = if children.len() == 1 { "" } else { "s" };
+            let suffix = format!(
+                "on {} subagent{plural} ({})",
+                children.len(),
+                children.join(", ")
+            );
+            description = Some(
+                description.map_or_else(|| suffix.clone(), |text| format!("{text} · {suffix}")),
+            );
+        }
+    }
     let model = model_report(agent);
     let pane = row
         .and_then(|row| row.pane.as_ref())
@@ -471,6 +528,19 @@ pub(super) fn row_for_agent<'a>(
         .find(|row| row.is_agent() && row.id == agent.agent_id.as_str())
 }
 
+pub(super) fn child_for_agent<'a>(
+    snapshot: &'a SidebarSnapshot,
+    agent: &AgentState,
+) -> Option<&'a SidebarSubAgent> {
+    let parent_id = agent.parent_agent_id.as_ref()?;
+    snapshot
+        .rows()
+        .find(|row| row.is_agent() && row.id == parent_id.as_str())?
+        .sub_agents()
+        .iter()
+        .find(|child| child.id == agent.agent_id.as_str())
+}
+
 pub(super) fn status_style(entry: &AgentReportEntry) -> anstyle::Style {
     render::status::agent(entry.status, entry.phase)
 }
@@ -497,10 +567,16 @@ pub(super) fn model_report(agent: &AgentState) -> ModelReport {
     let effort = context
         .and_then(|context| context.effort.clone())
         .or_else(|| agent.effort.clone());
-    let display = context
-        .and_then(|context| context.model_display_name.as_deref())
-        .or(id.as_deref());
-    let label = model_label(display, effort.as_deref());
+    let display = rimz::agents::model_display::model_label_source(
+        context.and_then(|context| context.model_display_name.as_deref()),
+        context.and_then(|context| context.model_id.as_deref()),
+        agent.model.as_deref(),
+    );
+    let display = display.map(|raw| {
+        let (name, window) = rimz::agents::model_display::model_label_parts(raw);
+        window.map_or_else(|| name.clone(), |window| format!("{name}[{window}]"))
+    });
+    let label = model_label(display.as_deref(), effort.as_deref());
     ModelReport { id, effort, label }
 }
 

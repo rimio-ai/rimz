@@ -2,8 +2,8 @@ use super::*;
 
 use super::list::agent_pr;
 use super::report::{
-    AgentReportEntry, PrInfo, ReportOverrides, SelfIdentity, build_entry, context_cell,
-    row_for_agent, status_style,
+    AgentReportEntry, PrInfo, ReportOverrides, SelfIdentity, build_entry, child_for_agent,
+    context_cell, row_for_agent, status_style,
 };
 use super::runs_lookup::{agent_name, newest_run_by_ref, newest_run_for_agent, print_run_line};
 use crate::cli::render;
@@ -124,6 +124,7 @@ fn collect_show_report(
             me.as_ref(),
             now,
             ReportOverrides {
+                child: child_for_agent(snapshot, agent),
                 runtime: Some(runtime),
                 effort: effort.map(|(effort, _)| effort),
                 active_secs: effort.and_then(|(_, active_secs)| active_secs),

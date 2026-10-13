@@ -565,9 +565,16 @@ pub(crate) fn agent_activity_line(
     agent: &rimz::agents::AgentState,
     card: Option<&rimz::store::snapshot::AgentCard>,
 ) -> Option<String> {
-    card.and_then(rimz::store::snapshot::AgentCard::activity_description)
-        .and_then(rimz::agents::single_line_description)
-        .or_else(|| agent.activity_line())
+    use rimz::store::snapshot::CardDescription;
+    let Some(card) = card else {
+        return agent.activity_line();
+    };
+    match card.description(jiff::Timestamp::now()) {
+        CardDescription::Error(text)
+        | CardDescription::Wait(text)
+        | CardDescription::Activity(text) => Some(text),
+        CardDescription::None => None,
+    }
 }
 
 /// Collapse a diagnostic into one terminal-friendly line.
