@@ -1007,7 +1007,7 @@ fn focus_changed_wake_publishes_authoritative_topology_focus_without_list_panes_
         String::from_utf8_lossy(&wake.stderr),
     );
 
-    let output = env.snapshot_with_list_clients(Some(""));
+    let output = env.snapshot_with_list_clients(None);
     assert!(
         output.status.success(),
         "snapshot failed: stderr={}",

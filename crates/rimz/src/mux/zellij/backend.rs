@@ -1231,7 +1231,8 @@ impl MuxBackend for ZellijBackend {
             .arg("list-clients")
             .run_with_timeout(timeout)?;
         tracing::debug!(session = %session, stdout = ?String::from_utf8_lossy(&output.stdout), "zellij list-clients sample");
-        Ok(parse_client_view(&output.stdout))
+        parse_client_view(&output.stdout)
+            .ok_or_else(|| output_error("`list-clients` returned no header"))
     }
 
     fn split_pane(&self, opts: SplitPaneOptions) -> Result<Option<PaneId>> {

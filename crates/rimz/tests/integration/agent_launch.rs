@@ -386,7 +386,10 @@ fn assert_from_pr_launch(cohort: Option<LifecycleSignal>, behind: bool, symlinke
         .env("RIMZ_TEST_ZELLIJ_VERSION", "0.45.1")
         .env("RIMZ_ZELLIJ_BIN", crate::common::cargo_bin("zellij-trace", env!("CARGO_BIN_EXE_zellij-trace")))
         .env("RIMZ_TEST_ZELLIJ_LOG", &log)
-        .env("RIMZ_TEST_ZELLIJ_LIST_CLIENTS", "1 terminal_3 claude\n")
+        .env(
+            "RIMZ_TEST_ZELLIJ_LIST_CLIENTS",
+            "CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND\n1 terminal_3 claude\n",
+        )
         .env("RIMZ_TEST_ZELLIJ_LIST_PANES", r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"sh"},{"id":3,"is_plugin":false,"tab_id":2,"title":"claude"}]"#)
         .env("RIMZ_TEST_ZELLIJ_LIST_SESSIONS", format!("{} [Created 1s ago]\n", workspace.session_name))
         .bounded_output().unwrap();
@@ -630,7 +633,10 @@ fn assert_launch_focus_version(args: &[&str], agent: bool, action: &str, version
         .env("RIMZ_TEST_ZELLIJ_TRACE_CONTEXT", "1")
         .env("RIMZ_ZELLIJ_BIN", crate::common::cargo_bin("zellij-trace", env!("CARGO_BIN_EXE_zellij-trace")))
         .env("RIMZ_TEST_ZELLIJ_VERSION", version)
-        .env("RIMZ_TEST_ZELLIJ_LIST_CLIENTS", "1 terminal_3 claude\n")
+        .env(
+            "RIMZ_TEST_ZELLIJ_LIST_CLIENTS",
+            "CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND\n1 terminal_3 claude\n",
+        )
         .env("RIMZ_TEST_ZELLIJ_LOG", &log)
         .env("RIMZ_TEST_ZELLIJ_LIST_PANES", r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"sh"},{"id":3,"is_plugin":false,"tab_id":2,"title":"claude"}]"#)
         .env("RIMZ_TEST_ZELLIJ_LIST_SESSIONS", format!("{} [Created 1s ago]\n", workspace.session_name));
@@ -3908,7 +3914,10 @@ fn launch_team_worktree(env: &Env, args: &[&str]) -> std::process::Output {
         .env("RIMZ_ZELLIJ_BIN", crate::common::zellij_trace_shim())
         .env("RIMZ_TEST_ZELLIJ_LOG", env.home_root.join("mux.log"))
         .env("RIMZ_TEST_ZELLIJ_VERSION", "0.45.1")
-        .env("RIMZ_TEST_ZELLIJ_LIST_CLIENTS", "1 terminal_3 claude\n")
+        .env(
+            "RIMZ_TEST_ZELLIJ_LIST_CLIENTS",
+            "CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND\n1 terminal_3 claude\n",
+        )
         .env("RIMZ_TEST_ZELLIJ_LIST_PANES", r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"sh"},{"id":3,"is_plugin":false,"tab_id":2,"title":"claude"}]"#)
         .env("RIMZ_TEST_ZELLIJ_LIST_SESSIONS", format!("{} [Created 1s ago]\n", workspace.session_name))
         .bounded_output().unwrap()

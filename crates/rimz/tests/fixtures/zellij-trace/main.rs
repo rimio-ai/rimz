@@ -215,7 +215,10 @@ fn handle_list_sessions(log_path: &Path) {
 
 fn handle_action_query(query: ActionQuery, log_path: &Path) {
     match query {
-        ActionQuery::Clients => write_env_raw("RIMZ_TEST_ZELLIJ_LIST_CLIENTS"),
+        ActionQuery::Clients => write_stdout_raw(
+            &env::var("RIMZ_TEST_ZELLIJ_LIST_CLIENTS")
+                .unwrap_or_else(|_| "CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND\n".to_owned()),
+        ),
         ActionQuery::Panes => write_env_raw("RIMZ_TEST_ZELLIJ_LIST_PANES"),
         ActionQuery::Tabs => {
             let trace = std::fs::read_to_string(log_path).expect("read tab launches");

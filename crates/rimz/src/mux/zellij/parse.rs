@@ -110,14 +110,22 @@ fn strip_ansi(line: &str) -> String {
     out
 }
 
-pub(super) fn parse_client_view(stdout: &[u8]) -> ClientView {
+pub(super) fn parse_client_view(stdout: &[u8]) -> Option<ClientView> {
+    let mut has_header = false;
     let mut client_ids = BTreeSet::new();
     let mut clients = Vec::new();
     let mut viewed_panes = Vec::new();
     for line in String::from_utf8_lossy(stdout).lines() {
         let clean = strip_ansi(line);
         let mut cols = clean.split_whitespace();
-        let (Some(raw_client), Some(raw_pane)) = (cols.next(), cols.next()) else {
+        let Some(raw_client) = cols.next() else {
+            continue;
+        };
+        if raw_client == "CLIENT_ID" {
+            has_header = true;
+            continue;
+        }
+        let Some(raw_pane) = cols.next() else {
             continue;
         };
         let Ok(client_id) = raw_client.parse::<u32>() else {
@@ -139,14 +147,14 @@ pub(super) fn parse_client_view(stdout: &[u8]) -> ClientView {
     }
     clients.sort();
     clients.dedup();
-    ClientView {
+    has_header.then_some(ClientView {
         clients,
         viewed_panes,
         presence: ClientPresence {
             human_clients: client_ids.len(),
             last_input_ms: None,
         },
-    }
+    })
 }
 
 pub(super) fn terminal_client_ids(view: &ClientView) -> BTreeSet<u32> {
@@ -167,6 +175,42 @@ mod tests {
     use crate::mux::MuxErr;
 
     #[test]
+    fn parse_client_view_rejects_foreign_replies() {
+        let replies: &[&[u8]] = &[
+            b"",
+            b" \n\t ",
+            b"[]",
+            b"[{\"id\":0}]",
+            b"terminal_12\n",
+            b"7\n",
+            b"Session 'missing-room' not found. The following sessions are active:\n",
+            b"1 terminal_12 work\n",
+        ];
+        let accepted = replies
+            .iter()
+            .filter(|reply| parse_client_view(reply).is_some())
+            .map(|reply| String::from_utf8_lossy(reply))
+            .collect::<Vec<_>>();
+        assert!(
+            accepted.is_empty(),
+            "foreign replies accepted: {accepted:?}"
+        );
+    }
+
+    #[test]
+    fn parse_client_view_accepts_header_only_listings() {
+        for reply in [
+            &b"CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND\n"[..],
+            &b"\x1b[32;1mCLIENT_ID\x1b[m ZELLIJ_PANE_ID RUNNING_COMMAND\n"[..],
+        ] {
+            let view = parse_client_view(reply).expect("a header-only listing is genuine");
+            assert_eq!(view.presence.human_clients, 0);
+            assert!(view.clients.is_empty());
+            assert!(view.viewed_panes.is_empty());
+        }
+    }
+
+    #[test]
     fn terminal_client_ids_reads_terminals_and_skips_noise() {
         let output = b"CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND\n\
                        1         terminal_30    codex\n\
@@ -176,14 +220,14 @@ mod tests {
                        5         -              unknown\n\
                        action    terminal_9     unknown\n";
         assert_eq!(
-            terminal_client_ids(&parse_client_view(output)),
+            terminal_client_ids(&parse_client_view(output).unwrap()),
             BTreeSet::from([1, 2, 3])
         );
 
         assert!(
-            terminal_client_ids(&parse_client_view(
-                b"\x1b[32;1mCLIENT_ID\x1b[m ZELLIJ_PANE_ID\n"
-            ))
+            terminal_client_ids(
+                &parse_client_view(b"\x1b[32;1mCLIENT_ID\x1b[m ZELLIJ_PANE_ID\n").unwrap()
+            )
             .is_empty()
         );
     }
@@ -196,7 +240,8 @@ mod tests {
               2 terminal_30 codex\n\
               3 plugin_2 rimz-presence-zellij\n\
               4 - unknown\n",
-        );
+        )
+        .unwrap();
 
         assert_eq!(
             view.viewed_panes,

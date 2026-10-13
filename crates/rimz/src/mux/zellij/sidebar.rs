@@ -838,7 +838,9 @@ impl ZellijBackend {
         self.zellij_action(session)
             .arg("list-clients")
             .run()
-            .map(|output| terminal_client_ids(&parse_client_view(&output.stdout)))
+            .ok()
+            .and_then(|output| parse_client_view(&output.stdout))
+            .map(|view| terminal_client_ids(&view))
             .unwrap_or_default()
     }
 
