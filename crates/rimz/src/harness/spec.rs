@@ -277,6 +277,12 @@ impl ResolvedProfile {
 pub enum LayoutErr {
     #[error("layout spec is empty")]
     Empty,
+    #[error("cell `{cell}`: {kind} has no fast-mode launch switch; {fix}")]
+    UnsupportedFastCell {
+        cell: String,
+        kind: String,
+        fix: &'static str,
+    },
     #[error("empty layout cell in `{0}`")]
     EmptyCell(String),
     #[error("a layout column uses `+` (tile) or `/` (stack), not both: `{column}`")]
@@ -1345,6 +1351,11 @@ fn is_cell_word(raw: &str, profiles: &ProfilesConfig, commands: &CommandsConfig)
         || raw == "term"
         || crate::agents::find_definition(raw).is_some()
         || virtual_agent_shape(raw)
+        || fast_suffix_base(raw).is_some_and(|base| {
+            profiles.0.contains_key(base)
+                || crate::agents::find_definition(base).is_some()
+                || virtual_agent_shape(base)
+        })
 }
 
 pub(crate) fn split_inline_role<'a>(
@@ -1412,6 +1423,9 @@ fn parse_cell(
         )));
     }
     if let Some(cell) = virtual_agent_cell(raw, profiles, base_override)? {
+        return Ok(cell);
+    }
+    if let Some(cell) = fast_suffix_cell(raw, profiles, base_override)? {
         return Ok(cell);
     }
     if let Some(cell) = path_command_cell(raw) {
@@ -1620,6 +1634,81 @@ fn virtual_base(
         Some(rebase_onto(ResolvedProfile::bare(kind_name), base_override)),
         None,
     ))
+}
+
+/// The base of a `<base>-fast` cell word, before any check that it names a
+/// profile, kind, or permission-mode cell.
+pub(crate) fn fast_suffix_base(raw: &str) -> Option<&str> {
+    raw.strip_suffix("-fast").filter(|base| !base.is_empty())
+}
+
+/// `<base>[-<mode>]-fast`: the base profile or kind, launched as `--fast`
+/// would launch it. The profile name stays the base and fast is stamped on
+/// the cell; a kind without a fast switch refuses here rather than falling
+/// through to a PATH executable. Exact command, profile, `term`, and kind
+/// names were tried first, so a profile literally named `x-fast` wins.
+fn fast_suffix_cell(
+    raw: &str,
+    profiles: &ProfilesConfig,
+    base_override: Option<&ResolvedProfile>,
+) -> Result<Option<Cell>> {
+    let Some(base) = fast_suffix_base(raw) else {
+        return Ok(None);
+    };
+    let (mut resolved, profile_name, mode) = if profiles.0.contains_key(base) {
+        let resolved = resolve_profile(base, profiles)?;
+        (
+            rebase_onto(resolved, base_override),
+            Some(base.to_owned()),
+            None,
+        )
+    } else if crate::agents::find_definition(base).is_some() {
+        (
+            rebase_onto(ResolvedProfile::bare(base), base_override),
+            None,
+            None,
+        )
+    } else if let Some((kind_name, mode)) = virtual_agent_parts(base) {
+        let (resolved, profile_name) = virtual_base(kind_name, profiles, base_override)?;
+        let Some(resolved) = resolved else {
+            return Ok(None);
+        };
+        (resolved, profile_name, Some(mode))
+    } else {
+        return Ok(None);
+    };
+    let adapter = crate::agents::find_definition(resolved.kind.as_str())
+        .expect("resolved profile terminal kind is known");
+    if let Err(fix) = adapter.spec().launch.fast_args() {
+        return Err(LayoutErr::UnsupportedFastCell {
+            cell: raw.to_owned(),
+            kind: resolved.kind.to_string(),
+            fix,
+        });
+    }
+    resolved.fast = Some(true);
+    let Some(mode) = mode else {
+        return Ok(Some(match profile_name {
+            Some(name) => Cell::Agent(cell_from_profile(&name, &resolved)?),
+            None => Cell::Agent(agent_cell_from(
+                &resolved,
+                render_profile_args(base, &resolved)?,
+                None,
+                None,
+                resolved.launch.mode,
+            )),
+        }));
+    };
+    let posture = adapter.spec().launch.permission_args(mode);
+    if mode != PermissionMode::Ask && mode != PermissionMode::Plan && posture.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(virtual_cell_from(
+        resolved,
+        profile_name,
+        posture,
+        Some(mode),
+    )?))
 }
 
 fn virtual_agent_parts(raw: &str) -> Option<(&str, PermissionMode)> {

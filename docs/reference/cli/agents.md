@@ -105,7 +105,7 @@ A spec is one of three things:
 | `<team>.<role>` | One declared role of a running or stopped team, with the same role handle and team lane. Inside that team's lane the bare role is enough: `rimz agents planner` in `#forge` means `rimz agents forge.planner`. A bare role that also names a profile or command resolving to a different agent is ambiguous and refused. |
 | An inline layout | Cells joined by `,` (columns), `+` (tiled rows), or `/` (a stacked row group; Zellij stacks, tmux tiles). |
 
-Each inline cell is `term` (a plain shell), an agent kind, a [permission-mode cell](#permission-mode-cells) such as `claude-plan`, a configured profile, a configured command, or any executable on your `PATH`. Add `:<role>` to an agent cell for an ad-hoc role handle. Quote a spec that contains `+`, a space, or anything else your shell expands. The full grammar and how cells compile to panes are in [fleet.md → The layout IR](../../internals/harness/fleet.md#the-layout-ir).
+Each inline cell is `term` (a plain shell), an agent kind, a [permission-mode cell](#permission-mode-cells) such as `claude-plan`, a [fast cell](#fast-cells) such as `claude-fast`, a configured profile, a configured command, or any executable on your `PATH`. Add `:<role>` to an agent cell for an ad-hoc role handle. Quote a spec that contains `+`, a space, or anything else your shell expands. The full grammar and how cells compile to panes are in [fleet.md → The layout IR](../../internals/harness/fleet.md#the-layout-ir).
 
 The optional `PROMPT` goes to exactly one leader: the team's configured `leader` role, else its first declared role, else the first agent cell. When the first cell repeats (`claude,claude`), give it a role so the target is unambiguous. To send every agent the same text, launch without a prompt and use `rimz message @all`. A second positional that is itself a cell (`rimz agents claude codex`) is refused with a `rimz agents a,b` hint, and a scope such as `rimz agents '#auth'` in the SPEC slot is refused with exit 2 and the `rimz agents list '#auth'` command, prompt or not. A lone word with no prompt and no launch flag that is also the role, explicit name, profile, or pet name of a live agent in your current lane, or anywhere when you stand outside every lane, is refused with exit 2, since you more likely meant that agent: the refusal prints a runnable `rimz agents show` for the most recently active match and the `rimz agents launch <word>` that launches anyway. A kind such as `claude` or `codex` is exempt, and a prompt, any launch flag, or `rimz agents launch` launches as before. That includes a bare role inside its team lane while that role is live (`rimz agents planner` in `#forge` with `@planner` running); once its seat is closed, the bare role re-adds it.
 
@@ -149,6 +149,18 @@ A `<kind>-<mode>` cell launches that kind with one permission posture. RimZ rend
 
 On the command line, `--ask` keeps native permission prompts and `--yolo` passes the adapter's bypass flags. Either flag replaces a profile's declared mode or a permission-mode cell's posture, and the agent's record keeps it, so restart, resume, and rebirth replay that mode rather than the profile's. With neither, the declared mode stays, or the CLI keeps its own default (supervised `-p` defaults an unset mode to `auto`). Replacement recognizes the adapter's rendered flag vectors, not alternate spellings in raw profile `args` such as `--permission-mode=plan`. Each agent's exact flags per mode are in [agent support](../agent-support.md#permission-modes).
 
+### Fast cells
+
+A `<base>-fast` cell launches its base in the provider's fast mode, as `--fast` would. The base is a configured profile, an agent kind, or a permission-mode cell, so `reviewer-fast`, `claude-fast`, and `codex-yolo-fast` all parse; the profile name stays the base and the launch record keeps fast on.
+
+| Cell | Launch |
+| --- | --- |
+| `<profile>-fast` | the profile, with fast on |
+| `<kind>-fast` | the kind, with fast on |
+| `<kind>-<mode>-fast` | the permission-mode cell, with fast on |
+
+A command, profile, `term`, or kind whose exact name ends in `-fast` wins over this reading. A base on a kind with no fast switch, such as `cursor-fast`, refuses the launch with the alternative rather than looking for a `cursor-fast` executable on `PATH`; the supported kinds are in [agent support](../agent-support.md#fast-mode). `--no-fast` on the same launch turns the suffix off. An inline role works as on any agent cell: `reviewer-fast:critic`. A team role's `profile`, `--agent`, and a subagent allow-list entry take an exact profile or kind name, so they refuse the `-fast` suffix as they refuse a permission-mode cell; set fast there with the role's `fast = true` or the `--fast` flag.
+
 ### Shared launch params
 
 These flags apply to every agent cell in the launch, and each adapter renders them into its own native flags.
@@ -162,7 +174,7 @@ These flags apply to every agent cell in the launch, and each adapter renders th
 | `--budget <AMOUNT[/day]>` | Dollar cap per agent: a bare amount caps the session, `/day` resets at the local day boundary. Inspect or change it later with [`rimz agents budget`](./budget.md#cap-one-agent). |
 | `--system-prompt-file <PATH>` | Replace each agent's base system prompt with the file. |
 | `--append-system-prompt-file <PATH>` | Repeatable. Replaces the inherited profile and role fragment list with these files, in command-line order; the team layer stays intact. |
-| `--ask`, `--yolo` | Replace the permission posture for this run, including a profile's declared mode; see [Permission-mode cells](#permission-mode-cells). The two conflict. |
+| `--ask`, `--yolo` | Replace the permission posture, including a profile's declared mode, and record it for restart and resume; see [Permission-mode cells](#permission-mode-cells). The two conflict. |
 | `--agent <PROFILE\|KIND>` | Re-base every agent cell onto another profile or provider (below). |
 | `--isolation host\|sandbox` | Isolation for this launch instead of its profile default or the machine's `agents.isolation` (below). |
 | `-n`, `--name <NAME>` | Handle for a single-agent launch: `rimz agents claude --name writer` appears as `@writer`. Without it, after any role or unique profile, the agent renders as `@<kind>` when unambiguous, else its pet name. |

@@ -208,6 +208,58 @@ fn definition_routing_overlay_keeps_load_choice_and_provider_fields() {
 }
 
 #[test]
+fn fast_suffix_routes_the_base_definition() {
+    let root = tempdir().unwrap();
+    std::fs::create_dir(root.path().join("agents")).unwrap();
+    for kind in ["claude", "codex"] {
+        std::fs::write(
+            root.path().join(format!("agents/{kind}.md")),
+            "---\ndescription: Base\n---\nBase.",
+        )
+        .unwrap();
+    }
+    std::fs::write(
+        root.path().join("agents/reviewer.md"),
+        "---\ndescription: Reviewer\ntier: junior\ntools: [Bash]\n---\nCraft.",
+    )
+    .unwrap();
+    let mut machine = MachineConfig::default();
+    let definitions = crate::config::definitions::load(
+        root.path(),
+        crate::config::definitions::SkillCheck::Skip,
+        &CommandsConfig::default(),
+        &machine.tiers,
+        machine.harness.auto_compact,
+    );
+    assert!(definitions.errors.is_empty(), "{:?}", definitions.errors);
+    machine.agents.profiles = definitions.agent_profiles;
+    let project = tempdir().unwrap();
+    let mut launch = load_with_roots(&machine, project.path(), root.path()).unwrap();
+
+    // `reviewer-fast --tier senior --family codex` routes the `reviewer`
+    // definition, as `reviewer --tier senior --family codex` would.
+    let consumed = launch
+        .route(
+            &machine.tiers,
+            ProfileScope::Agents,
+            Some("reviewer-fast"),
+            Some(super::super::tiers::ModelTier::Senior),
+            None,
+            Some("codex"),
+            |_, _| None,
+        )
+        .unwrap();
+    assert!(consumed);
+    let reviewer = &launch.profiles.0["reviewer"];
+    assert_eq!(reviewer.agent, "codex");
+    assert_eq!(reviewer.model.as_deref(), Some("astra"));
+    assert_eq!(
+        reviewer.model_tier.as_ref().map(|route| route.tier),
+        Some(super::super::tiers::ModelTier::Senior)
+    );
+}
+
+#[test]
 fn team_cli_models_route_each_markdown_role() {
     let root = tempdir().unwrap();
     std::fs::create_dir(root.path().join("agents")).unwrap();
