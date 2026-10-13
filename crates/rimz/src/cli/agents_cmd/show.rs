@@ -241,6 +241,12 @@ pub(super) fn show_agent(
         ansi,
     )?;
     if json {
+        // A miss is an error in either format: an empty report is not an answer.
+        if report.agent.is_none() && report.run.is_none() {
+            return Err(
+                deferred_error.unwrap_or_else(|| anyhow::anyhow!("agent resolution failed"))
+            );
+        }
         return render::json_pretty(&report);
     }
     render_show_report(report, &ctx.store, deferred_error)

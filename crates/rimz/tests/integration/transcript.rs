@@ -231,6 +231,19 @@ fn agents_show_ambiguity_excludes_ended_matches() {
 }
 
 #[test]
+fn agents_show_json_miss_exits_non_zero() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let result = env
+        .rimz()
+        .args(["agents", "show", "@nobody", "--json"])
+        .output()
+        .unwrap();
+    assert!(!result.status.success(), "{result:?}");
+    assert!(result.stdout.is_empty(), "{result:?}");
+}
+
+#[test]
 fn agents_show_from_main_checkout_uses_callers_channel() {
     let env = Env::new();
     env.record(&env.project_root);
