@@ -79,6 +79,7 @@ pub(super) fn queued_questions(
             })
             .collect(),
         answered: Vec::new(),
+        clear_all: false,
     })
 }
 
@@ -103,6 +104,7 @@ pub(super) fn answered_questions(prompt: &str) -> Option<crate::agents::AskQueue
     Some(crate::agents::AskQueueEdit {
         queued: Vec::new(),
         answered,
+        clear_all: false,
     })
 }
 

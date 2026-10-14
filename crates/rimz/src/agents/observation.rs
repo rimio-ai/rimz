@@ -332,9 +332,11 @@ impl AgentUsageSummary {
     }
 }
 
-/// Non-blocking questions queued or answered alongside a lifecycle signal.
+/// Non-blocking questions queued, answered, or cleared alongside a lifecycle signal.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AskQueueEdit {
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub clear_all: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub queued: Vec<QueuedQuestion>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

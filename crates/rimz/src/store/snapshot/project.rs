@@ -1180,6 +1180,9 @@ fn fold_lifecycle(
         .map(|state| state.queued_asks.clone())
         .unwrap_or_default();
     if let Some(edit) = ask_queue {
+        if edit.clear_all {
+            state.queued_asks.clear();
+        }
         state.queued_asks.retain(|ask| {
             !edit
                 .answered

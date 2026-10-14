@@ -290,7 +290,7 @@ To keep watching a conversation, run `rimz transcript '#feature' -f`. Add `-n 10
 
 ## Asks and answers
 
-An agent holding a permission prompt, a plan approval, or a blocking question has handed that prompt its input, and your queued messages wait behind it until it is answered. Answering is part of keeping the fleet moving, so RimZ lets you do it from any shell. Codex can also ask while it keeps working: these async questions appear in `rimz asks` and as a question line on its running card, without holding your messages.
+An agent holding a permission prompt, a plan approval, or a blocking question has handed that prompt its input, and your queued messages wait behind it until it is answered. Answering is part of keeping the fleet moving, so RimZ lets you do it from any shell. Codex can also ask while it keeps working: these async questions appear in `rimz asks` and as a question line on its running card, without holding your messages. Sending an ordinary or steered prompt clears its listed async questions.
 
 ```sh
 rimz asks                          # open prompts in this channel; --all for every channel
