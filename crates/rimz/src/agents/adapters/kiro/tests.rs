@@ -148,11 +148,15 @@ fn native_hooks_decode_session_turn_tool_and_stop() {
             json!({ "session_id": "sess_redacted", "tool_name": "fs_write", "tool_response": "ok" }),
         ),
         ("Stop", session),
+        (
+            "SessionEnd",
+            json!({"session_id": "sess_redacted", "reason": "shutdown"}),
+        ),
     ];
     for (event, payload) in cases {
         let decoded = agent.decode_hook(event, &payload).expect("hook decodes");
         assert_eq!(decoded.class(), AgentHookClass::Lifecycle, "{event}");
-        assert!(decoded.records_progress(), "{event}");
+        assert_eq!(decoded.records_progress(), event != "SessionEnd", "{event}");
         assert_eq!(decoded.json_reply().cloned(), None, "{event} stays neutral");
         let observation = decoded.lifecycle().cloned().expect("lifecycle observation");
         assert_eq!(
@@ -160,6 +164,10 @@ fn native_hooks_decode_session_turn_tool_and_stop() {
             Some("sess_redacted")
         );
         match event {
+            "SessionEnd" => {
+                assert!(decoded.ends_session());
+                insta::assert_debug_snapshot!(observation.signal, @"Ended");
+            }
             "SessionStart" => assert!(matches!(observation.signal, LifecycleSignal::Registered)),
             "UserPromptSubmit" => {
                 assert!(matches!(
@@ -772,7 +780,13 @@ fn hook_install_writes_reclaims_and_removes_the_managed_file() {
     assert!(!report.files[0].existed);
     assert_eq!(
         report.installed_events,
-        ["SessionStart", "UserPromptSubmit", "PostToolUse", "Stop"]
+        [
+            "SessionStart",
+            "UserPromptSubmit",
+            "PostToolUse",
+            "Stop",
+            "SessionEnd"
+        ]
     );
     assert_eq!(std::fs::read_to_string(&path).unwrap(), HOOK_SOURCE);
     assert!(KIRO_MANAGED_SOURCE.installed_at(&path));
@@ -780,7 +794,7 @@ fn hook_install_writes_reclaims_and_removes_the_managed_file() {
 
     let removed = install::uninstall_from(&path).unwrap();
     assert!(removed.files[0].existed);
-    assert_eq!(removed.removed_events.len(), 4);
+    assert_eq!(removed.removed_events.len(), 5);
     assert!(!path.exists());
 }
 
@@ -824,7 +838,13 @@ fn legacy_owned_hook_file_is_reclaimed_and_removed() {
     assert!(removed.files[0].existed);
     assert_eq!(
         removed.removed_events,
-        ["SessionStart", "UserPromptSubmit", "PostToolUse", "Stop"]
+        [
+            "SessionStart",
+            "UserPromptSubmit",
+            "PostToolUse",
+            "Stop",
+            "SessionEnd"
+        ]
     );
     assert!(!path.exists());
 }
@@ -955,6 +975,22 @@ fn session_lookups_share_the_selected_home() {
 
 #[test]
 fn launch_resume_and_presets_use_v3_surface() {
+    let mut args = KiroAdapter
+        .spec()
+        .launch
+        .permission_args(crate::agents::PermissionMode::Yolo);
+    assert_eq!(
+        KiroAdapter.launch_command(&args, Some("review")),
+        Some(vec![
+            "kiro-cli".to_owned(),
+            "chat".to_owned(),
+            "--v3".to_owned(),
+            "--trust-all-tools".to_owned(),
+            "review".to_owned()
+        ])
+    );
+    KiroAdapter.spec().launch.strip_permission_args(&mut args);
+    assert!(args.is_empty());
     assert_eq!(
         KiroAdapter.launch_command(
             &["--agent".to_owned(), "reviewer".to_owned()],

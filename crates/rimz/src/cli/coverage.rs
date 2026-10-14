@@ -515,12 +515,12 @@ mod tests {
         );
 
         let kiro = agent_cells(&matrix, "kiro");
-        assert_eq!(count(&kiro, MatrixCellState::Ok), 2);
+        assert_eq!(count(&kiro, MatrixCellState::Ok), 3);
         assert_eq!(count(&kiro, MatrixCellState::Partial), 4);
-        assert_eq!(count(&kiro, MatrixCellState::Absent), 13);
+        assert_eq!(count(&kiro, MatrixCellState::Absent), 12);
         assert_eq!(
             agent_labels(&matrix, "kiro", MatrixCellState::Partial),
-            ["perm", "end", "idle", "usage"]
+            ["perm", "ask", "idle", "usage"]
         );
 
         let qwen = agent_cells(&matrix, "qwen");
@@ -614,7 +614,7 @@ mod tests {
                 MatrixCellState::Partial, // antigravity
                 MatrixCellState::Ok,      // cursor
                 MatrixCellState::Ok,      // droid
-                MatrixCellState::Partial, // kiro
+                MatrixCellState::Ok,      // kiro
                 MatrixCellState::Ok,      // qwen
                 MatrixCellState::Ok,      // grok
             ]

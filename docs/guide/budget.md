@@ -33,7 +33,7 @@ rimz agents claude --budget 20/day                         # resets at local mid
 
 A daily agent cap starts counting from the moment the cap takes effect, so a cap you add at noon ignores the morning's spend. The count then restarts on the first check after midnight. In a profile the same cap is the `budget` field, so a preset carries its price ceiling with it.
 
-The cap never reaches the stock CLI: RimZ's own launcher carries it and the room enforces it, so it works for any agent whose running cost RimZ can read. Two agents publish nothing to read. Kiro exposes no machine-readable usage, and Antigravity prices the current turn rather than the session, so neither accumulates a total a cap could cross ([agent support](../reference/agent-support.md#notes-on-the-alpha-and-experimental-set)).
+The cap never reaches the stock CLI: RimZ's own launcher carries it and the room enforces it, so it works for any agent whose running cost RimZ can read. Kiro meters credits without a dollar price, and Antigravity prices the current turn rather than the session, so neither supplies a running dollar total a cap could cross ([agent support](../reference/agent-support.md#notes-on-the-alpha-and-experimental-set)).
 
 Inspect or change a running agent's cap without relaunching:
 

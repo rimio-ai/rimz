@@ -12,6 +12,8 @@ Global hooks run in every workspace, so session, turn, and tool lifecycle arrive
 
 Fresh sessions run `kiro-cli chat --v3`, with a launch prompt as a bare trailing positional: the v3 TUI parser reads `--` as an unknown flag that swallows the next token, so no argv form passes a prompt starting with `-`. Profiles map `model` and `effort` to chat-level flags. Exact resume runs `kiro-cli chat --v3 --resume-id <session_id>`; both split and joined flag forms are recognized on the launcher and `kiro-cli-chat` engine process. `kiro-cli-term` remains excluded because it is the shell-integration daemon.
 
+Yolo adds the boolean `--trust-all-tools` flag before the prompt. Ask, Auto, and Plan add no flags. Resume strips and re-renders the selected permission posture through the shared launch machinery.
+
 Fresh session binding starts from a live pane's effective Kiro kind and exact absolute cwd. Direct `kiro-cli-chat` commands identify the v3 engine alongside launcher commands, while `kiro-cli-term` and shared runtimes stay excluded. RimZ hashes the cwd into Kiro's 16-hex workspace bucket, validates provider metadata, then pairs exact resume IDs first. For fresh sessions, validated `createdAt` authorizes same-cwd binding: a recordless session requires a compatible pane process start, and fresh sessions pair newest-first to the newest uniquely compatible process. Missing process evidence for an empty session and indistinguishable candidates remain process rows.
 
 A provider session replacing a provisional launch row inherits launch-owned name, profile, permission mode, role, team, cohort, channel, description, model and effort fallbacks, worktree metadata, and budget. Provider sessions are transient in the snapshot; a dead pane removes the card while history remains on disk.
@@ -20,7 +22,7 @@ A provider session replacing a provisional launch row inherits launch-owned name
 
 `rimz hooks install kiro` writes `<kiro-home>/hooks/rimz.json` whole, from the embedded [`hooks.json`](../../../crates/rimz/src/agents/adapters/kiro/hooks.json), through the shared managed source. The file carries the first-line `_rimz_managed` marker, which Kiro's non-strict hook schema accepts; an unmarked file is refused unless every command in it is a RimZ feed, which is the file earlier RimZ builds wrote and install reclaims. Configuration, skills, sessions, and hooks share one home: `KIRO_HOME` when non-empty, absolute, non-root, and neither equal to nor an ancestor of `HOME`; otherwise `$HOME/.kiro`. RimZ compares lexically normalized paths without filesystem canonicalization. `RIMZ_KIRO_HOOKS` overrides the hook file path.
 
-Install and preview refuse when `kiro-cli --version` reports a release older than 2.31.0, which lacks the shared-home contract; an unprobeable binary installs. Each command is `rimz hooks feed --source kiro || true` with a 10-second timeout, because a `Stop` hook exiting 1 continues the turn. Neutral output is empty stdout and exit 0 on every trigger.
+Install and preview refuse when `kiro-cli --version` reports a release older than 2.31.0, which lacks the shared-home contract; an unprobeable binary installs. Each command is `rimz hooks feed --source kiro || true`, because a `Stop` hook exiting 1 continues the turn. `SessionEnd` has a 5-second timeout matching the teardown budget; the other four hooks have 10 seconds. Neutral output is empty stdout and exit 0 on every trigger.
 
 | Native event | `LifecycleSignal` | Notes |
 | --- | --- | --- |
@@ -28,6 +30,7 @@ Install and preview refuse when `kiro-cli --version` reports a release older tha
 | `UserPromptSubmit` | `TurnStarted` | Carries the sanitized prompt as task and prompt metadata. |
 | `PostToolUse` | `ToolUsed { mutates, edits }` | Fires after an approved tool completes. |
 | `Stop` | `TurnEnded { errored: false, parked_on_background: false }` | Runs for `end_turn`, `max_tokens`, and `refusal`, before `turn_end` is written; the final message is the session's closing `Say` record, already on disk when the hook runs. |
+| `SessionEnd` | `Ended` | Teardown of a loaded session, routed by that session's ID; never a turn boundary. |
 
 Every payload carries `session_id` (the `sess_<uuid>` store directory name), `hook_event_name`, and `cwd`; the hook process inherits the pane environment. The engine skips `Stop` when a model error or a cancel throws out of the turn graph, and default subagents run with hooks skipped. `/compact` fires no hook and keeps the session id; the next prompt's `UserPromptSubmit` re-arms the compaction guard.
 
@@ -71,4 +74,5 @@ Run `rimz coverage` for the current wired/partial/unsupported matrix. The gaps b
 - **Kiro CLI older than 2.31.0 gets no hooks.** `rimz hooks install kiro` refuses there, detected installs skip Kiro, and supervised runs keep refusing because hooks are not installed.
 - **Pending approvals and questions have no hook.** The waiting card comes from the store and stays out of `rimz asks`.
 - **Credits are not dollars.** Until Kiro publishes token counts or a dollar figure, no spend parser can be honest.
-- **Native Ask/Answer routing, plan and question handling, compaction events, subagents, background parking, remote control, and account probing** have no available surface.
+- **Subagents have no separate discovered session.** Parent transcripts carry `sub_agent_start` and `sub_agent_complete`, but child transcripts under `sub-executions/` have no `session.json` and run without hooks. RimZ does not project child cards from them.
+- **Native Ask/Answer routing, plan handling, compaction events, background parking, remote control, and account probing** have no mapped surface.
