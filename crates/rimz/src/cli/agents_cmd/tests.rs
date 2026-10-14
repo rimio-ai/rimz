@@ -1172,7 +1172,7 @@ mod parse {
                 refusal,
                 format!(
                     "`rimz agents` needs a verb or a launch spec; to list agents, run `{list}`\n\n{}",
-                    crate::cli::help::agents_orientation()
+                    crate::cli::help::scene_orientation(crate::cli::help::Scene::Agents)
                 ),
                 "{argv:?}"
             );

@@ -41,13 +41,16 @@ impl UsageError {
         ))
     }
 
-    /// `rimz agents` with neither a verb nor a launch spec: the list command
-    /// first, then the orientation `rimz agents --help` leads with.
-    pub(super) fn missing_agents_verb(list_flags: &[&str]) -> Self {
+    /// A scene without a verb or launch target: the list command first, then its help orientation.
+    pub(super) fn missing_scene_verb(
+        scene: super::help::Scene,
+        target: &str,
+        list_flags: &[&str],
+    ) -> Self {
         Self(format!(
             "{}\n\n{}",
-            missing_verb_line("agents", "a launch spec", list_flags),
-            super::help::agents_orientation()
+            missing_verb_line(scene.name(), target, list_flags),
+            super::help::scene_orientation(scene)
         ))
     }
 }

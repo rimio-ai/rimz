@@ -1252,7 +1252,11 @@ fn launch_refusal(launch: &AgentLaunchArgs, all: bool, json: bool) -> Option<Usa
     if json {
         flags.push("--json");
     }
-    Some(UsageError::missing_agents_verb(&flags))
+    Some(UsageError::missing_scene_verb(
+        crate::cli::help::Scene::Agents,
+        "a launch spec",
+        &flags,
+    ))
 }
 
 /// The word of a bare `rimz agents <word>` with no prompt and no launch flag,
