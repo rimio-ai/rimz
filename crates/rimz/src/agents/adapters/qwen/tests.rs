@@ -1016,6 +1016,50 @@ fn transcript_cursor_streams_physical_appends_across_a_rewind() {
 }
 
 #[test]
+fn projects_only_human_turn_openers_and_mid_turn_steering() {
+    let lines = [
+        (
+            json!({"subtype":"notification", "provenance":"system"}),
+            None,
+        ),
+        (json!({"subtype":"cron", "provenance":"system"}), None),
+        (
+            json!({"subtype":"goal_runtime", "provenance":"goal_runtime"}),
+            None,
+        ),
+        (json!({"subtype":"agent_mention", "author":"child"}), None),
+        (json!({"subtype":"agent_mention"}), None),
+        (json!({"subtype":"agent_message"}), None),
+        (json!({"subtype":"realtime_message"}), None),
+        (json!({"backgroundTurn":{}}), None),
+        (json!({"subtype":"future_injected"}), None),
+        (json!({"provenance":"system"}), None),
+        (
+            json!({"subtype":"mid_turn_user_message", "provenance":"real_user"}),
+            Some(TranscriptRole::Steering),
+        ),
+        (
+            json!({"provenance":"real_user"}),
+            Some(TranscriptRole::User),
+        ),
+        (json!({}), Some(TranscriptRole::User)),
+    ];
+    for (mut record, expected) in lines {
+        record["type"] = "user".into();
+        record["message"] = json!({"parts":[{"text":"words"}]});
+        let messages = parse_messages(&record.to_string());
+        assert_eq!(
+            messages.first().map(|message| message.role),
+            expected,
+            "{record}"
+        );
+        if expected.is_some() {
+            assert_eq!(messages[0].text, "words");
+        }
+    }
+}
+
+#[test]
 fn parses_legacy_main_thread_transcript_and_excludes_sidechains() {
     let adapter = QwenAdapter;
     let lines = concat!(

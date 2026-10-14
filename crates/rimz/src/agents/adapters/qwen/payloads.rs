@@ -109,7 +109,10 @@ pub(super) struct TranscriptRecord {
     parent_uuid: Option<String>,
     pub(super) session_id: Option<String>,
     pub(super) r#type: Option<String>,
-    subtype: Option<String>,
+    pub(super) subtype: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional_string_lossy")]
+    pub(super) provenance: Option<String>,
+    pub(super) background_turn: Option<Value>,
     pub(super) timestamp: Option<String>,
     pub(super) cwd: Option<String>,
     pub(super) model: Option<String>,

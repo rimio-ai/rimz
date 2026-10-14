@@ -169,6 +169,7 @@ mod tests {
     fn groups_entries_at_user_boundaries_and_filters_session() {
         let messages = vec![
             message(TranscriptRole::User, 100, "first"),
+            message(TranscriptRole::Steering, 105, "keep going"),
             message(TranscriptRole::Assistant, 110, "answer"),
             message(TranscriptRole::User, 200, "second"),
         ];
