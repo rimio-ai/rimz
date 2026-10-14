@@ -7,7 +7,9 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::agents::account::file_mtime_ms;
-use crate::agents::context::{AgentRateLimits, RateLimitWindow, WindowSource};
+use crate::agents::context::{
+    AgentRateLimits, RateLimitWindow, RateLimitWindowScope, WindowSource,
+};
 use crate::agents::credits::{AccountUsageFault, oauth_http_get};
 use crate::agents::{AccountUsageSnapshot, ExtraCredits, HttpErrKind};
 
@@ -138,22 +140,20 @@ fn usage_headers(token: &str) -> [(&'static str, String); 2] {
 
 fn parse_response(body: &str) -> Result<AccountUsageSnapshot, Error> {
     let root: Value = serde_json::from_str(body)?;
-    let mut rows = Vec::new();
-    if let Some(usage) = root.get("usage") {
-        rows.push((usage, Some(10_080)));
+    let usages = root.get("usages").and_then(Value::as_object);
+    if usages.is_none() {
+        tracing::debug!("Kimi quota response has no usages block");
     }
-    rows.extend(
-        root.get("limits")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .map(|row| (row, None)),
-    );
     let now = Timestamp::now();
-    let windows = rows
-        .into_iter()
-        .filter_map(|(row, duration)| parse_window(row, now, duration))
-        .collect::<Vec<_>>();
+    let windows = [
+        ("limit_5h", Some(300), None),
+        ("limit_7d", Some(10_080), None),
+        ("limit_month_total", None, Some(("month_total", "mo"))),
+        ("limit_month_code", None, Some(("month_code", "mcd"))),
+    ]
+    .into_iter()
+    .filter_map(|(key, duration, scope)| parse_window(usages?.get(key)?, now, duration, scope))
+    .collect::<Vec<_>>();
     let extra_credits = root.get("boosterWallet").and_then(parse_booster_wallet);
     let reported_plan = ["plan", "planName"]
         .into_iter()
@@ -161,7 +161,7 @@ fn parse_response(body: &str) -> Result<AccountUsageSnapshot, Error> {
         .map(str::trim)
         .filter(|plan| !plan.is_empty())
         .map(ToOwned::to_owned);
-    if windows.is_empty() && extra_credits.is_none() && reported_plan.is_none() {
+    if usages.is_none() && extra_credits.is_none() {
         return Err(Error::Schema {
             shape: "no-known-usage-fields",
         });
@@ -177,73 +177,22 @@ fn parse_response(body: &str) -> Result<AccountUsageSnapshot, Error> {
 fn parse_window(
     row: &Value,
     now: Timestamp,
-    fixed_duration_mins: Option<u32>,
+    duration_mins: Option<u32>,
+    scope: Option<(&str, &str)>,
 ) -> Option<RateLimitWindow> {
-    let detail = row.get("detail").unwrap_or(row);
-    let limit = number(detail.get("limit")?)?;
-    if !limit.is_finite() || limit <= 0.0 {
-        return None;
-    }
-    let used = detail.get("used").and_then(number).or_else(|| {
-        detail
-            .get("remaining")
-            .and_then(number)
-            .map(|remaining| limit - remaining)
-    });
-    let used_percentage =
-        used.map(|used| ((used.max(0.0).min(limit) / limit) * 100.0).round() as u8);
-    let resets_at = ["reset_at", "resetAt", "reset_time", "resetTime"]
-        .into_iter()
-        .find_map(|key| detail.get(key).or_else(|| row.get(key)).and_then(timestamp))
-        .or_else(|| {
-            ["reset_in", "resetIn", "ttl"]
-                .into_iter()
-                .find_map(|key| detail.get(key).or_else(|| row.get(key)).and_then(number))
-                .and_then(|seconds| {
-                    Timestamp::from_second(now.as_second().saturating_add(seconds as i64)).ok()
-                })
-        });
-    let duration_mins = fixed_duration_mins.or_else(|| {
-        duration_minutes(row, detail)
-            .and_then(|minutes| u32::try_from(minutes.max(0.0).round() as u64).ok())
-    });
+    let ratio = number(row.get("used_ratio")?)?;
     Some(RateLimitWindow {
-        used_percentage,
-        resets_at,
+        used_percentage: Some((ratio.clamp(0.0, 1.0) * 100.0).round() as u8),
+        resets_at: row.get("reset_time").and_then(timestamp),
         duration_mins,
+        scope: scope.map(|(id, label)| RateLimitWindowScope {
+            id: id.to_owned(),
+            label: label.to_owned(),
+        }),
         observed_at: Some(now),
         source: WindowSource::Authoritative,
         ..Default::default()
     })
-}
-
-fn duration_minutes(row: &Value, detail: &Value) -> Option<f64> {
-    if let Some(seconds) = detail
-        .get("window")
-        .or_else(|| row.get("window"))
-        .and_then(number)
-    {
-        return Some(seconds / 60.0);
-    }
-    let window = row
-        .get("window")
-        .or_else(|| detail.get("window"))?
-        .as_object()?;
-    let duration = window.get("duration").and_then(number)?;
-    let unit = window
-        .get("timeUnit")
-        .and_then(Value::as_str)
-        .unwrap_or("seconds")
-        .to_ascii_lowercase();
-    let multiplier = match unit.as_str() {
-        "time_unit_second" | "second" | "seconds" | "s" => 1.0 / 60.0,
-        "time_unit_minute" | "minute" | "minutes" | "m" => 1.0,
-        "time_unit_hour" | "hour" | "hours" | "h" => 60.0,
-        "time_unit_day" | "day" | "days" | "d" => 1_440.0,
-        "time_unit_week" | "week" | "weeks" | "w" => 10_080.0,
-        _ => return None,
-    };
-    Some(duration * multiplier)
 }
 
 fn parse_booster_wallet(wallet: &Value) -> Option<ExtraCredits> {
@@ -339,17 +288,43 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn quota_parser_accepts_nested_remaining_and_reset_spellings() {
+    fn quota_usages_map_ratios_durations_and_month_scopes() {
         let snapshot = parse_response(
-            r#"{"limits":[{"detail":{"limit":100,"remaining":25,"resetAt":"2030-01-01T00:00:00Z"},"window":{"duration":5,"timeUnit":"HOUR"}}],"boosterWallet":{"balance":{"type":"BOOSTER","amount":500000000,"amountLeft":125000000},"monthlyChargeLimitEnabled":true,"monthlyChargeLimit":{"priceInCents":500,"currency":"USD"},"monthlyUsed":{"priceInCents":125,"currency":"USD"}}}"#,
+            &json!({
+                "usages": {
+                    "limit_5h": {"used_ratio":0.754,"reset_time":"2030-01-01T00:00:00Z"},
+                    "limit_7d": {"used_ratio":"1.2","reset_time":"not-a-time"},
+                    "limit_month_total": {"used_ratio":-0.1},
+                    "limit_month_code": {"used_ratio":"0.345"}
+                }
+            })
+            .to_string(),
         )
         .unwrap();
-        let window = &snapshot.rate_limits.as_ref().unwrap().windows[0];
-        assert_eq!(window.used_percentage, Some(75));
-        assert_eq!(window.duration_mins, Some(300));
+        let windows = snapshot.rate_limits.unwrap().windows;
+        assert_eq!(windows.len(), 4);
         assert_eq!(
-            snapshot.extra_credits,
-            Some(ExtraCredits::known(Some(1.25), Some(1.25), Some(5.0)))
+            windows
+                .iter()
+                .map(|w| w.used_percentage)
+                .collect::<Vec<_>>(),
+            vec![Some(75), Some(100), Some(0), Some(35)]
+        );
+        assert_eq!(
+            windows.iter().map(|w| w.duration_mins).collect::<Vec<_>>(),
+            vec![Some(300), Some(10_080), None, None]
+        );
+        assert_eq!(
+            windows[0].resets_at,
+            Some("2030-01-01T00:00:00Z".parse().unwrap())
+        );
+        assert_eq!(windows[1].resets_at, None);
+        assert_eq!(windows[2].scope.as_ref().unwrap().id, "month_total");
+        assert_eq!(windows[3].scope.as_ref().unwrap().id, "month_code");
+        assert!(
+            windows[2..]
+                .iter()
+                .all(|w| w.scope.as_ref().unwrap().label.chars().count() <= 3)
         );
     }
 
@@ -401,40 +376,55 @@ mod tests {
     }
 
     #[test]
-    fn official_minute_enum_and_top_level_week_are_minutes() {
-        let snapshot = parse_response(
-            &json!({
-                "usage":{"limit":100,"used":25},
-                "limits":[{
-                    "detail":{"limit":100,"used":50},
-                    "window":{"duration":300,"timeUnit":"TIME_UNIT_MINUTE"}
-                },{
-                    "detail":{"limit":100,"used":10},
-                    "window":{"duration":1,"timeUnit":"TIME_UNIT_WEEK"}
-                }]
-            })
-            .to_string(),
-        )
-        .unwrap();
-        let windows = snapshot.rate_limits.unwrap().windows;
-        assert_eq!(windows[0].duration_mins, Some(10_080));
-        assert_eq!(windows[1].duration_mins, Some(300));
-        assert_eq!(windows[1].used_percentage, Some(50));
-        assert_eq!(windows[2].duration_mins, Some(10_080));
+    fn quota_usages_drop_absent_and_invalid_ratios() {
+        for ratio in [
+            Value::Null,
+            json!("NaN"),
+            json!("infinity"),
+            json!(""),
+            json!({}),
+        ] {
+            let snapshot = parse_response(
+                &json!({"usages":{
+                    "limit_5h":{"used_ratio":ratio},
+                    "limit_7d":{"reset_time":"2030-01-01T00:00:00Z"},
+                    "limit_month_code":{"used_ratio":0.5}
+                }})
+                .to_string(),
+            )
+            .unwrap();
+            let windows = snapshot.rate_limits.unwrap().windows;
+            assert_eq!(windows.len(), 1);
+            assert_eq!(windows[0].scope.as_ref().unwrap().id, "month_code");
+        }
     }
 
     #[test]
-    fn unknown_duration_units_do_not_fall_back_to_seconds() {
-        let window = parse_window(
-            &json!({
-                "detail":{"limit":10,"used":1},
-                "window":{"duration":300,"timeUnit":"FORTNIGHTS"}
-            }),
-            Timestamp::now(),
-            None,
+    fn quota_rejects_legacy_only_and_keeps_booster_only() {
+        assert!(matches!(
+            parse_response("{\"usage\":{\"limit\":100,\"used\":25},\"limits\":[]}"),
+            Err(Error::Schema { .. })
+        ));
+        assert!(matches!(
+            parse_response(r#"{"plan":"Code"}"#),
+            Err(Error::Schema { .. })
+        ));
+        let snapshot = parse_response(
+            &json!({"boosterWallet":{
+                "balance":{"type":"BOOSTER","amount":500000000,"amountLeft":125000000},
+                "monthlyChargeLimitEnabled":true,
+                "monthlyChargeLimit":{"priceInCents":500,"currency":"USD"},
+                "monthlyUsed":{"priceInCents":125,"currency":"USD"}
+            }})
+            .to_string(),
         )
         .unwrap();
-        assert_eq!(window.duration_mins, None);
+        assert!(snapshot.rate_limits.is_none());
+        assert_eq!(
+            snapshot.extra_credits,
+            Some(ExtraCredits::known(Some(1.25), Some(1.25), Some(5.0)))
+        );
+        assert_eq!(snapshot.plan.as_deref(), Some("Code"));
     }
 
     #[test]
