@@ -190,7 +190,11 @@ fn builtin_host_skill_switches_are_declared() {
 
 #[test]
 fn named_login_env_resolves_hook_install_under_the_named_home() {
-    for (kind, filename) in [("claude", "settings.json"), ("codex", "config.toml")] {
+    for (kind, filename) in [
+        ("claude", "settings.json"),
+        ("codex", "config.toml"),
+        ("qwen", "settings.json"),
+    ] {
         let temp = tempfile::tempdir().unwrap();
         let home = temp.path().join("home");
         let named = temp.path().join("named");

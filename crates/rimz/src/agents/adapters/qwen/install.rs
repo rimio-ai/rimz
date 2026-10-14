@@ -1,12 +1,13 @@
 //! Qwen `settings.json` hook and nested statusline integration.
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use super::{QWEN_HOOK_TIMEOUT_SECS, QWEN_HOOKS, RIMZ_HOOK_COMMAND, RIMZ_HOOK_MARKER, STATUS_LINE};
+use crate::agents::capabilities::LaunchCapability;
 use crate::agents::managed_json_hooks::{ManagedJsonHookSpec, SyncEncoding};
 use crate::agents::managed_source::ManagedSource;
-use crate::agents::{Result, agent_config_path};
+use crate::agents::{AgentErr, Result};
 
 static SPEC: ManagedJsonHookSpec = ManagedJsonHookSpec {
     agent: "qwen",
@@ -20,22 +21,20 @@ static SPEC: ManagedJsonHookSpec = ManagedJsonHookSpec {
 
 pub(super) static MANAGED_SOURCE: ManagedSource = ManagedSource::json(&SPEC, qwen_settings_path);
 
-pub(super) fn qwen_settings_path(_login_env: &BTreeMap<String, String>) -> Result<PathBuf> {
-    if std::env::var_os("RIMZ_QWEN_SETTINGS").is_some() {
-        return agent_config_path(
-            "qwen",
-            "RIMZ_QWEN_SETTINGS",
-            Path::new(".qwen/settings.json"),
-        );
+pub(super) fn qwen_settings_path(login_env: &BTreeMap<String, String>) -> Result<PathBuf> {
+    if let Some(raw) = login_env
+        .get("RIMZ_QWEN_SETTINGS")
+        .filter(|value| !value.is_empty())
+    {
+        return Ok(PathBuf::from(raw));
     }
-    if let Some(home) = qwen_home_from(std::env::var_os("QWEN_HOME").as_deref(), None) {
-        return Ok(home.join("settings.json"));
-    }
-    agent_config_path(
-        "qwen",
-        "RIMZ_QWEN_SETTINGS",
-        Path::new(".qwen/settings.json"),
-    )
+    super::QwenAdapter
+        .config_home(login_env)
+        .map(|home| home.join("settings.json"))
+        .ok_or_else(|| AgentErr::Install {
+            agent: "qwen",
+            reason: "$QWEN_HOME and $HOME are not set; cannot resolve Qwen settings".to_owned(),
+        })
 }
 
 pub(super) fn qwen_home_from(

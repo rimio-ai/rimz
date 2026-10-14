@@ -17,12 +17,12 @@ pub(super) fn layers(cwd: Option<&Path>, env: &BTreeMap<String, String>) -> Vec<
     let home = env
         .get("HOME")
         .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(crate::agents::transcript_fs::home_dir);
+        .map(PathBuf::from);
     let resolve = |path: PathBuf| {
-        let path = path
-            .strip_prefix("~")
-            .map_or_else(|_| path.clone(), |relative| home.join(relative));
+        let path = match (&home, path.strip_prefix("~")) {
+            (Some(home), Ok(relative)) => home.join(relative),
+            _ => path,
+        };
         match cwd {
             Some(cwd) if path.is_relative() => cwd.join(path),
             _ => path,
@@ -52,12 +52,12 @@ pub(super) fn layers(cwd: Option<&Path>, env: &BTreeMap<String, String>) -> Vec<
     let mut paths = vec![(defaults, false)];
     if let Some(user) = super::install::qwen_home_from(
         env.get("QWEN_HOME").map(std::ffi::OsStr::new),
-        Some(home.as_os_str()),
+        home.as_deref().map(Path::as_os_str),
     ) {
         paths.push((resolve(user).join("settings.json"), false));
     }
     if let Some(cwd) = cwd
-        && cwd != home.as_path()
+        && home.as_deref() != Some(cwd)
     {
         paths.push((cwd.join(".qwen/settings.json"), true));
     }

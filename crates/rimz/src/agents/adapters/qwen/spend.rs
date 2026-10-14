@@ -1,36 +1,28 @@
 //! Read-only Qwen Code JSONL token-spend parser.
 
 use std::collections::BTreeMap;
-use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
+use crate::agents::capabilities::LaunchCapability;
 use crate::agents::pricing::{PriceBook, TokenSplit};
 use crate::agents::spending::{
     CachedEntry, SpendCursor, SpendParse, SpendUpdate, iso_to_unix_secs, origin_path, price_split,
 };
-use crate::agents::transcript_fs::home_dir;
 
 use super::payloads::{TranscriptRecord, fold_transcript};
 
-pub(super) fn runtime_base() -> PathBuf {
-    runtime_base_from(&std::env::vars_os().collect())
-}
-
-fn runtime_base_from(env: &BTreeMap<OsString, OsString>) -> PathBuf {
+/// The Qwen runtime output directory for one login env, or `None` when the
+/// env names neither a runtime dir nor a home to fall back to.
+pub(super) fn runtime_base(env: &BTreeMap<String, String>) -> Option<PathBuf> {
     let env_path = |key: &str| {
-        env.get(OsStr::new(key))
+        env.get(key)
             .filter(|value| !value.is_empty())
             .map(PathBuf::from)
     };
     if let Some(path) = env_path("QWEN_RUNTIME_DIR") {
-        return path;
+        return Some(path);
     }
-    let home = env_path("HOME").unwrap_or_else(home_dir);
-    let settings_env = env
-        .iter()
-        .filter_map(|(key, value)| Some((key.to_str()?.to_owned(), value.to_str()?.to_owned())))
-        .collect();
-    super::settings::layers(None, &settings_env)
+    super::settings::layers(None, env)
         .iter()
         .rev()
         .find_map(|layer| {
@@ -44,12 +36,10 @@ fn runtime_base_from(env: &BTreeMap<OsString, OsString>) -> PathBuf {
             if path.is_absolute() {
                 return Some(path.to_owned());
             }
-            path.strip_prefix("~")
-                .ok()
-                .map(|relative| home.join(relative))
+            let relative = path.strip_prefix("~").ok()?;
+            Some(env_path("HOME")?.join(relative))
         })
-        .or_else(|| env_path("QWEN_HOME"))
-        .unwrap_or_else(|| home.join(".qwen"))
+        .or_else(|| super::QwenAdapter.config_home(env))
 }
 
 /// Qwen rewinds can invalidate any earlier root assistant, so a readable file
@@ -144,18 +134,18 @@ mod tests {
         )
         .unwrap();
         let mut env = BTreeMap::from([
-            ("HOME".into(), home.as_os_str().to_owned()),
+            ("HOME".into(), home.display().to_string()),
             (
                 "QWEN_CODE_SYSTEM_SETTINGS_PATH".into(),
-                home.join("settings.json").into_os_string(),
+                home.join("settings.json").display().to_string(),
             ),
         ]);
-        assert_eq!(runtime_base_from(&env), home.join("runtime"));
+        assert_eq!(runtime_base(&env), Some(home.join("runtime")));
         env.insert(
             "QWEN_RUNTIME_DIR".into(),
-            home.join("override").into_os_string(),
+            home.join("override").display().to_string(),
         );
-        assert_eq!(runtime_base_from(&env), home.join("override"));
+        assert_eq!(runtime_base(&env), Some(home.join("override")));
     }
 
     #[test]
@@ -165,11 +155,11 @@ mod tests {
         let user = home.join("user");
         std::fs::create_dir_all(&user).unwrap();
         let env = BTreeMap::from([
-            ("HOME".into(), home.as_os_str().to_owned()),
-            ("QWEN_HOME".into(), user.clone().into_os_string()),
+            ("HOME".into(), home.display().to_string()),
+            ("QWEN_HOME".into(), user.display().to_string()),
             (
                 "QWEN_CODE_SYSTEM_SETTINGS_PATH".into(),
-                home.join("settings.json").into_os_string(),
+                home.join("settings.json").display().to_string(),
             ),
         ]);
         let write = |path: PathBuf, value: &str| {
@@ -180,21 +170,25 @@ mod tests {
             .unwrap();
         };
         write(home.join("system-defaults.json"), "/defaults");
-        assert_eq!(runtime_base_from(&env), Path::new("/defaults"));
+        assert_eq!(runtime_base(&env).as_deref(), Some(Path::new("/defaults")));
         write(user.join("settings.json"), "/user");
-        assert_eq!(runtime_base_from(&env), Path::new("/user"));
+        assert_eq!(runtime_base(&env).as_deref(), Some(Path::new("/user")));
         write(home.join("settings.json"), "/system");
-        assert_eq!(runtime_base_from(&env), Path::new("/system"));
+        assert_eq!(runtime_base(&env).as_deref(), Some(Path::new("/system")));
         for unresolvable in ["", "relative", "~someone/runtime"] {
             write(home.join("settings.json"), unresolvable);
-            assert_eq!(runtime_base_from(&env), user, "{unresolvable:?}");
+            assert_eq!(
+                runtime_base(&env).as_deref(),
+                Some(user.as_path()),
+                "{unresolvable:?}"
+            );
         }
         std::fs::write(
             home.join("settings.json"),
             r#"{"advanced":{"runtimeOutputDir":null}}"#,
         )
         .unwrap();
-        assert_eq!(runtime_base_from(&env), Path::new("/user"));
+        assert_eq!(runtime_base(&env).as_deref(), Some(Path::new("/user")));
     }
 
     #[test]
