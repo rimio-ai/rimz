@@ -1013,12 +1013,12 @@ fn resolve_delivery_target(
         Ok(agent) => agent,
         Err(err) if address == "@me" => return Err(err),
         Err(_) => {
-            bail!("no live agent matches `{address}`; run /schedule from inside the agent pane")
+            bail!("no live agent matches `{address}`; see `rimz agents list` for live handles")
         }
     };
     if agent.agent_id.is_provisional() {
         bail!(
-            "`{address}` has not registered a real session yet; run /schedule from inside the agent pane"
+            "`{address}` has not registered a real session yet; retry once its first turn has started"
         );
     }
     let peers = rimz::address::addressable_agents(&snapshot);
