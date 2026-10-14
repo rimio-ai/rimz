@@ -59,6 +59,20 @@ fn watchdog() -> TaskEntry {
 const TWO_HOURS: Duration = Duration::from_secs(2 * 60 * 60);
 
 #[test]
+fn judge_reminder_names_the_shell_and_forward_evidence() {
+    let mut entry = resident("ci=failed");
+    entry.check = Some(crate::config::TaskCheck::Shell("cargo test".into()));
+    let task = LoadedTask::new("repair", entry, TaskSource::Config);
+    let text = compose_check("repair", &task, "Repair CI.");
+    assert!(
+        text.contains("read-only judge")
+            && text.contains("guards this action after the shell check")
+            && text.contains("evidence follows the prompt"),
+        "{text}"
+    );
+}
+
+#[test]
 fn resident_reminder_names_its_agent_check() {
     let mut entry = resident("ci=failed");
     entry.check = Some(
@@ -67,7 +81,7 @@ fn resident_reminder_names_its_agent_check() {
     );
     entry.on = Some(CheckOn::Success);
     let text = body("repair", entry, LoopRunMode::Scheduled, None);
-    assert!(text.contains("and its check by `codex` passes"), "{text}");
+    assert!(text.contains("and its judge `codex` passes"), "{text}");
 }
 
 #[test]

@@ -23,6 +23,10 @@ pub(super) struct DeclineRecord {
     #[serde(default)]
     pub(super) tier: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) kind: Option<crate::ids::AgentKind>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) fingerprint: Option<String>,
 }
 
@@ -232,6 +236,8 @@ mod tests {
                     reason: "nothing to do".into(),
                     profile: "codex".into(),
                     tier: 1,
+                    kind: None,
+                    model: None,
                     fingerprint: check_fingerprint(&entry),
                 },
             )]),

@@ -90,8 +90,13 @@ pub(super) fn compose_check(name: &str, task: &LoadedTask, action_prompt: &str) 
         CheckOn::Fail => "on = fail launches on pass: false and skips on pass: true",
         CheckOn::Any => "on = any launches on either verdict",
     };
+    let after_shell = if entry.guard().shell.is_some() {
+        " after the shell check"
+    } else {
+        ""
+    };
     format!(
-        "This is a headless run with no pane and no user present: ask no questions and decide with what you have.\n\nThis is a read-only check, not the task: change nothing in the checkout.\n\nThe rule {}{} guards this action: {action}.\n\nThe guarded action will {action} with prompt: {}. For this task, {polarity}; a pass launches the action only when that polarity permits it.\n\nYour final answer is one JSON object {{\"pass\": <bool>, \"reason\": \"<one or two sentences>\"}} and nothing else. The reason is read by the launched agent and by the user in rimz loop show.",
+        "This is a headless run with no pane and no user present: ask no questions and decide with what you have.\n\nThis is a read-only judge, not the task: change nothing in the checkout.\n\nThe rule {}{} guards this action{after_shell}: {action}. The evidence follows the prompt.\n\nThe guarded action will {action} with prompt: {}. For this task, {polarity}; a pass launches the action only when that polarity permits it.\n\nYour final answer is one JSON object {{\"pass\": <bool>, \"reason\": \"<one or two sentences>\"}} and nothing else. The reason is read by the launched agent and by the user in rimz loop show.",
         span(name),
         trigger,
         verbatim(action_prompt.lines().next().unwrap_or(""))
@@ -164,15 +169,32 @@ fn trigger_clause(parsed: &ParsedTrigger, entry: &TaskEntry) -> String {
 }
 
 fn check_clause(entry: &TaskEntry, after_condition: bool) -> Option<String> {
-    let check = match entry.check.as_ref()? {
-        crate::config::TaskCheck::Shell(cmd) => span(cmd),
-        crate::config::TaskCheck::Agent(check) => format!("by {}", span(&check.agent)),
+    let guard = entry.guard();
+    let mut stages = guard
+        .shell
+        .map(|command| format!("check {}", span(command)))
+        .into_iter()
+        .collect::<Vec<_>>();
+    stages.extend(
+        guard
+            .judges
+            .iter()
+            .map(|judge| format!("judge {}", span(&judge.agent))),
+    );
+    let (label, subject) = match stages.as_slice() {
+        [] => return None,
+        [one] => (one.clone(), format!("its {one}")),
+        _ => {
+            let label = format!("guard chain ({})", stages.join(", then "));
+            let subject = format!("every stage of its {label}");
+            (label, subject)
+        }
     };
     let joiner = if after_condition { "and" } else { "when" };
     Some(match entry.on.unwrap_or_default() {
-        CheckOn::Fail => format!(" {joiner} its check {check} fails"),
-        CheckOn::Success => format!(" {joiner} its check {check} passes"),
-        CheckOn::Any => format!(" after its check {check} runs"),
+        CheckOn::Fail => format!(" {joiner} {subject} fails"),
+        CheckOn::Success => format!(" {joiner} {subject} passes"),
+        CheckOn::Any => format!(" after its {label} runs"),
     })
 }
 

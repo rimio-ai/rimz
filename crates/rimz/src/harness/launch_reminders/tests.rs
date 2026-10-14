@@ -196,8 +196,9 @@ fn headless_check_section_replaces_loop_in_the_same_slot() {
         None,
     );
     assert!(!text.contains("### Loop"));
+    assert!(text.contains("### Judge"), "{text}");
     let check = text
-        .find("### Check\n\nDecide without a user or pane.")
+        .find("### Judge\n\nDecide without a user or pane.")
         .unwrap();
     assert!(text.find("Haiku").unwrap() < check);
     assert!(check < text.find("### Environment").unwrap());

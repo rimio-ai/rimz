@@ -26,7 +26,8 @@ pub struct AssistRecord {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "assist")]
 pub enum Assist {
-    CheckDecline {
+    #[serde(alias = "check_decline")]
+    JudgeDecline {
         task: String,
         checkout: PathBuf,
         profile: String,

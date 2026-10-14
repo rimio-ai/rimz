@@ -6,6 +6,35 @@ fn day(tokens: u64, usd: f64) -> DaySpend {
     DaySpend { tokens, usd }
 }
 
+#[test]
+fn judge_declines_include_legacy_assist_records() {
+    let records = ["judge_decline", "check_decline"].map(|tag| {
+        let record =
+            serde_json::from_value::<rimz::harness::assist_log::AssistRecord>(serde_json::json!({
+                "at": "2026-06-01T00:00:00Z", "assist": tag, "task": "guard",
+                "checkout": "/repo", "profile": "haiku", "kind": "claude", "reason": "no work"
+            }));
+        assert!(record.is_ok(), "both assist tags must read: {record:?}");
+        record.unwrap()
+    });
+    let stats = assists::AssistStats::from_records("all", records.into());
+    assert_eq!(
+        serde_json::to_value(&stats.rollup).unwrap()["judge_declines"],
+        2
+    );
+    assert!(
+        assists::category_rows(&stats.rollup)
+            .join("\n")
+            .contains("Judge declines:")
+    );
+    for event in stats.events {
+        assert_eq!(
+            serde_json::to_value(event).unwrap()["assist"],
+            "judge_decline"
+        );
+    }
+}
+
 fn spend_window(
     tokens: u64,
     usd: f64,
@@ -1790,7 +1819,7 @@ fn assists_fold_rolls_up_benefit_and_keeps_failed_attempts_forensics() {
         AssistRollup {
             stall_notices: 0,
             resident_launches: 0,
-            check_declines: 0,
+            judge_declines: 0,
             model_aliases: 0,
             tier_fallbacks: 0,
             redeems: 1,

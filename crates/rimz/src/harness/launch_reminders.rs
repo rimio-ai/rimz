@@ -116,7 +116,7 @@ pub(super) fn render(
     }
     if let Some(body) = &request.loop_reminder {
         let heading = if request.headless.is_some() {
-            "Check"
+            "Judge"
         } else {
             "Loop"
         };

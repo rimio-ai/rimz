@@ -19,7 +19,7 @@ pub(super) struct AssistStats {
 pub(super) struct AssistRollup {
     pub(super) stall_notices: usize,
     pub(super) resident_launches: usize,
-    pub(super) check_declines: usize,
+    pub(super) judge_declines: usize,
     pub(super) model_aliases: usize,
     pub(super) tier_fallbacks: usize,
     pub(super) redeems: usize,
@@ -44,7 +44,7 @@ pub(super) struct AssistRollup {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "snake_case", tag = "assist")]
 pub(super) enum AssistEvent {
-    CheckDecline {
+    JudgeDecline {
         at: Timestamp,
         task: String,
         checkout: std::path::PathBuf,
@@ -276,7 +276,7 @@ impl AssistStats {
         for event in &events {
             match event {
                 AssistEvent::ResidentLaunch { .. } => rollup.resident_launches += 1,
-                AssistEvent::CheckDecline { .. } => rollup.check_declines += 1,
+                AssistEvent::JudgeDecline { .. } => rollup.judge_declines += 1,
                 AssistEvent::ModelAlias { .. } => rollup.model_aliases += 1,
                 AssistEvent::TierFallback { .. } => rollup.tier_fallbacks += 1,
                 AssistEvent::Redeem {
@@ -363,14 +363,14 @@ impl AssistStats {
 impl AssistEvent {
     fn from_record(record: AssistRecord) -> Self {
         match record.assist {
-            Assist::CheckDecline {
+            Assist::JudgeDecline {
                 task,
                 checkout,
                 profile,
                 kind,
                 reason,
                 cost_usd,
-            } => Self::CheckDecline {
+            } => Self::JudgeDecline {
                 at: record.at,
                 task,
                 checkout,
@@ -681,7 +681,7 @@ impl AssistEvent {
         match self {
             Self::StallNotice { at, .. }
             | Self::ResidentLaunch { at, .. }
-            | Self::CheckDecline { at, .. }
+            | Self::JudgeDecline { at, .. }
             | Self::ModelAlias { at, .. }
             | Self::Redeem { at, .. }
             | Self::Continue { at, .. }
@@ -771,8 +771,8 @@ fn category_entries(rollup: &AssistRollup) -> Vec<(&'static str, String)> {
     if rollup.resident_launches > 0 {
         rows.push(("Resident launches:", rollup.resident_launches.to_string()));
     }
-    if rollup.check_declines > 0 {
-        rows.push(("Check declines:", rollup.check_declines.to_string()));
+    if rollup.judge_declines > 0 {
+        rows.push(("Judge declines:", rollup.judge_declines.to_string()));
     }
     if rollup.model_aliases > 0 {
         rows.push(("Model aliases:", rollup.model_aliases.to_string()));
@@ -861,7 +861,7 @@ pub(super) fn benefit_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> St
         AssistEvent::ResidentLaunch { task, handles, .. } => {
             format!("{time} loop {task} opened {}", handles.join(", "))
         }
-        AssistEvent::CheckDecline {
+        AssistEvent::JudgeDecline {
             task,
             profile,
             reason,
@@ -1208,7 +1208,7 @@ pub(super) fn forensic_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> S
                 format!(" · took over from {}", stopped.join(", "))
             },
         ),
-        AssistEvent::CheckDecline {
+        AssistEvent::JudgeDecline {
             checkout, cost_usd, ..
         } => format!(
             "{at} {benefit} · checkout {}{}",
@@ -1461,7 +1461,7 @@ mod tests {
 
     #[test]
     fn check_decline_assists_roll_up_and_render_reason_and_cost() {
-        let wire = serde_json::json!({
+        let mut wire = serde_json::json!({
             "at": "2026-01-01T00:00:00Z", "assist": "check_decline", "task": "fixer",
             "checkout": "/repo-worktrees/auth", "profile": "haiku", "kind": "claude",
             "reason": "No actionable work.", "cost_usd": 0.01
@@ -1472,15 +1472,16 @@ mod tests {
             "decline assist must be readable: {decoded:?}"
         );
         let record = decoded.unwrap();
+        wire["assist"] = "judge_decline".into();
         assert_eq!(serde_json::to_value(&record).unwrap(), wire);
         let stats = AssistStats::from_records("all", vec![record]);
         let json = serde_json::to_value(&stats).unwrap();
-        assert_eq!(json["rollup"]["check_declines"], 1);
+        assert_eq!(json["rollup"]["judge_declines"], 1);
         assert_eq!(json["events"][0]["cost_usd"], 0.01);
         assert!(
             category_rows(&stats.rollup)
                 .join(" ")
-                .contains("Check declines:")
+                .contains("Judge declines:")
         );
         let line = forensic_line(&stats.events[0], &jiff::tz::TimeZone::UTC);
         for fact in [

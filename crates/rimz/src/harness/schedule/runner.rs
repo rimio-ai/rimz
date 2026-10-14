@@ -36,16 +36,16 @@ use crate::agents::{
     RateLimitWindow, RoomLoginErr, TurnLifecycleNeed, WindowSpan, WindowSurplus, ambient_env,
     find_definition, preflight_hooks,
 };
-use crate::config::{
-    CheckOn, MachineConfig, TaskCheck, TaskEntry, TaskTarget, ThrottleSwitch, WatchSpec,
-};
+#[cfg(test)]
+use crate::config::TaskCheck;
+use crate::config::{CheckOn, MachineConfig, TaskEntry, TaskTarget, ThrottleSwitch, WatchSpec};
 use crate::disk::paths::{RuntimePaths, StatePaths, logs_dir};
 use crate::harness::plan::ResolvedSingleAgentLaunch;
 use crate::harness::run::{SupervisedRunOutcome, SupervisedRunRequest};
 use crate::harness::schedule::catalog::{self, LoadedTask, TaskCatalog};
 use crate::harness::schedule::run_log::{
-    self, CheckRecord, LoopRunMode, LoopRunPresentation, LoopRunRecord, LoopRunResult, RunStage,
-    RunTransition, SignalRecord,
+    self, CheckRecord, JudgeRecord, LoopRunMode, LoopRunPresentation, LoopRunRecord, LoopRunResult,
+    RunStage, RunTransition, SignalRecord,
 };
 use crate::harness::schedule::signal::{
     Signal as TriggerSignal, WAIT_TAIL_CAP, WatchOutcome, WatchVerdict,
@@ -119,7 +119,7 @@ pub struct TaskFireFinished {
 /// One fired guard check awaiting CLI presentation before its effect.
 #[derive(Clone, Debug)]
 pub struct CheckTrip {
-    pub record: CheckRecord,
+    pub record: LoopRunRecord,
     pub watch: Option<WatchVerdict>,
     pub duration_ms: u64,
 }
@@ -189,44 +189,77 @@ pub enum TaskFireEffect {
 #[derive(Clone, Debug)]
 enum PendingEffect {
     Resident,
-    Spawn {
-        check: Option<CheckRecord>,
-        stream: bool,
+    Spawn { stream: bool },
+    Deliver { target: TaskTarget },
+}
+
+enum FiredCheck {
+    Shell {
+        command: String,
+        record: CheckRecord,
     },
-    Deliver {
-        target: TaskTarget,
-        check: Option<CheckRecord>,
+    Judge {
+        tier: usize,
+        record: JudgeRecord,
     },
 }
 
-struct FiredCheck {
-    command: String,
-    outcome: CheckOutcome,
-    record: CheckRecord,
+enum GuardStop {
+    Interrupted,
+    Declined,
+    Gate(LoopRunResult, String),
+    CheckOnly(LoopRunResult),
 }
 
 impl FiredCheck {
     fn heading(&self) -> String {
-        if let Some(agent) = &self.record.agent {
-            let status = agent.verdict.as_ref().map_or("no verdict", |verdict| {
-                if verdict.pass { "pass" } else { "fail" }
-            });
-            return format!(
-                "check by `{}` ({} {}): {status}",
-                agent.profile,
-                agent.kind,
-                agent.model.as_deref().unwrap_or("default")
-            );
+        match self {
+            Self::Judge { record, .. } => {
+                let status = record
+                    .verdict
+                    .map_or("no verdict", |pass| if pass { "pass" } else { "fail" });
+                format!(
+                    "judge `{}` ({} {}): {status}",
+                    record.profile,
+                    record.kind,
+                    record.model.as_deref().unwrap_or("default")
+                )
+            }
+            Self::Shell { command, record } => {
+                let status = if record.timed_out {
+                    "timeout".to_owned()
+                } else {
+                    record
+                        .code
+                        .map(|code| code.to_string())
+                        .unwrap_or_else(|| "signal".to_owned())
+                };
+                format!("check `{command}` exited {status}")
+            }
         }
-        let status = if self.outcome.timed_out {
-            "timeout".to_owned()
-        } else {
-            self.outcome
-                .code
-                .map(|code| code.to_string())
-                .unwrap_or_else(|| "signal".to_owned())
-        };
-        format!("check `{}` exited {status}", self.command)
+    }
+
+    fn output(&self) -> String {
+        match self {
+            Self::Shell { record, .. } => record.output.clone(),
+            Self::Judge { record, .. } => std::iter::once(
+                record
+                    .reason
+                    .as_deref()
+                    .or(record.error.as_deref())
+                    .unwrap_or_default(),
+            )
+            .chain(record.warnings.iter().map(String::as_str))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        }
+    }
+
+    fn duration_ms(&self) -> u64 {
+        match self {
+            Self::Shell { record, .. } => record.duration_ms.unwrap_or_default(),
+            Self::Judge { record, .. } => record.duration_ms.unwrap_or_default(),
+        }
     }
 }
 
@@ -392,8 +425,7 @@ pub struct TaskFire<'a> {
     throttle_turn: Option<throttle::Turn>,
     throttle_wait: Option<Duration>,
     hold_notice: Option<HoldNotice<'a>>,
-    /// The check a spawn fired on, kept for whatever row ends the fire.
-    fired_check: Option<CheckRecord>,
+    fired_guard: Vec<FiredCheck>,
     pending: Option<PendingEffect>,
     finished: bool,
     check_process: agent_check::ProcessRunner,
@@ -445,7 +477,7 @@ impl<'a> TaskFire<'a> {
             throttle_turn: None,
             throttle_wait: None,
             hold_notice: None,
-            fired_check: None,
+            fired_guard: Vec::new(),
             pending: None,
             finished: false,
             check_process: agent_check::execute,
@@ -578,12 +610,10 @@ impl<'a> TaskFire<'a> {
         } else {
             self.prepare_check(before_check)?
         };
-        let fired_check = match check {
-            ControlFlow::Break(done) => return Ok(TaskFirePlan::Done(done)),
-            ControlFlow::Continue(check) => check,
-        };
+        if let ControlFlow::Break(done) = check {
+            return Ok(TaskFirePlan::Done(done));
+        }
         if self.run_lock.is_none() {
-            self.fired_check = fired_check.as_ref().map(|check| check.record.clone());
             if let Some(done) = self.prepare_throttle()? {
                 return Ok(TaskFirePlan::Done(done));
             }
@@ -592,12 +622,12 @@ impl<'a> TaskFire<'a> {
                 return Ok(TaskFirePlan::Done(done));
             }
         }
-        self.prepare_effect(fired_check)
+        self.prepare_effect()
     }
 
     /// The effect of a one-shot fire whose gates passed. Only a spawn takes a
     /// turn in the start throttle, before its ephemeral row is consumed.
-    fn prepare_effect(&mut self, fired_check: Option<FiredCheck>) -> Result<TaskFirePlan> {
+    fn prepare_effect(&mut self) -> Result<TaskFirePlan> {
         match self
             .context
             .as_ref()
@@ -606,13 +636,12 @@ impl<'a> TaskFire<'a> {
             .clone()
         {
             TaskAction::Spawn(spec) => {
-                self.fired_check = fired_check.as_ref().map(|check| check.record.clone());
                 if let Some(done) = self.prepare_throttle()? {
                     return Ok(TaskFirePlan::Done(done));
                 }
-                self.prepare_spawn(spec, fired_check)
+                self.prepare_spawn(spec)
             }
-            TaskAction::Deliver(target) => self.prepare_delivery(target, fired_check),
+            TaskAction::Deliver(target) => self.prepare_delivery(target),
             TaskAction::CheckOnly => {
                 unreachable!("check-only action is completed by prepare_check")
             }
@@ -660,10 +689,9 @@ impl<'a> TaskFire<'a> {
         if let Some(done) = self.prepare_deadline()? {
             return Ok(TaskFirePlan::Done(done));
         }
-        let fired_check = match self.prepare_check(before_launch)? {
-            ControlFlow::Break(done) => return Ok(TaskFirePlan::Done(done)),
-            ControlFlow::Continue(check) => check,
-        };
+        if let ControlFlow::Break(done) = self.prepare_check(before_launch)? {
+            return Ok(TaskFirePlan::Done(done));
+        }
         if let Some(done) = self.prepare_throttle()? {
             return Ok(TaskFirePlan::Done(done));
         }
@@ -674,7 +702,7 @@ impl<'a> TaskFire<'a> {
         else {
             bail!("--stay requires an agent layout");
         };
-        let prompt = self.resolve_effect_prompt(fired_check.as_ref())?;
+        let prompt = self.resolve_effect_prompt()?;
         before_launch(&root)?;
         if self.run_lock.is_none() {
             if let Some(done) = self.prepare_run_lock(false)? {
@@ -922,13 +950,12 @@ impl<'a> TaskFire<'a> {
                     LoopRunResult::TakeoverBlocked,
                     super::takeover::blocked_reason(&blockers),
                 )),
-            (PendingEffect::Spawn { check, stream }, TaskFireEffect::Spawn(outcome)) => {
+            (PendingEffect::Spawn { stream }, TaskFireEffect::Spawn(outcome)) => {
                 let mut record = self.terminal_record(LoopRunResult::Completed);
-                let (presentation, notice) =
-                    finish_spawn_effect(&mut record, outcome, check, stream);
+                let (presentation, notice) = finish_spawn_effect(&mut record, outcome, stream);
                 Ok(self.finish_record(record, presentation, notice, None))
             }
-            (PendingEffect::Deliver { target, check }, TaskFireEffect::Delivered(message_id)) => {
+            (PendingEffect::Deliver { target }, TaskFireEffect::Delivered(message_id)) => {
                 self.consume_ephemeral()?;
                 let handle = target.handle;
                 Ok(self.record_terminal_with(
@@ -938,12 +965,11 @@ impl<'a> TaskFire<'a> {
                     None,
                     |record| {
                         record.target = Some(handle);
-                        record.check = check;
                         record.message_id = Some(message_id);
                     },
                 ))
             }
-            (PendingEffect::Deliver { target, check }, TaskFireEffect::TargetGone) => {
+            (PendingEffect::Deliver { target }, TaskFireEffect::TargetGone) => {
                 if self.mode == LoopRunMode::Scheduled {
                     self.remove_schedule()?;
                 }
@@ -957,7 +983,6 @@ impl<'a> TaskFire<'a> {
                     None,
                     |record| {
                         record.target = Some(handle.clone());
-                        record.check = check;
                     },
                 ))
             }
@@ -996,121 +1021,37 @@ impl<'a> TaskFire<'a> {
     fn prepare_check(
         &mut self,
         before_check: &mut dyn FnMut(&Path) -> Result<()>,
-    ) -> Result<ControlFlow<TaskFireFinished, Option<FiredCheck>>> {
-        let watch_command = self.watch_spec().map(WatchSpec::describe);
-        let (command, outcome, duration_ms, agent) = if let Some((command, outcome)) =
-            watch_command.as_ref().zip(self.watch_outcome())
-        {
-            (
-                command.clone(),
-                outcome.to_check_outcome(),
-                outcome.verdict.elapsed_ms(),
-                None,
-            )
-        } else if let Some(check) = self.entry.check.clone() {
-            let root = if self.entry.stay {
-                self.entry.resolved_root()
-            } else {
-                self.context_root()?
-            };
-            if !self.entry.stay
-                && (self.run_lock.is_some()
-                    || !matches!(
-                        self.context.as_ref().map(|context| &context.action),
-                        Some(TaskAction::Spawn(_))
-                    ))
-            {
-                before_check(&root)?;
-            }
-            let mut env = crate::workspace::pin_env(&WorkspaceId::from_project_root(&root), &root);
-            env.insert(LOOP_TASK_ENV.to_owned(), self.name.clone());
-            let dir = self.launch_checkout();
-            env.insert(
-                crate::workspace::ENV_WORKTREE_PATH.to_owned(),
-                dir.to_string_lossy().into_owned(),
-            );
-            // The check leaves SIGINT ignored once it returns, so listen first
-            // and let a hold this fire reaches inherit the listener.
-            self.check_interrupts = Some(
-                self.throttle_host
-                    .interrupts()
-                    .map_err(throttle::ThrottleError::Interrupts)?,
-            );
-            let check_started = Instant::now();
-            let (command, outcome, agent) = match check {
-                TaskCheck::Shell(command) => {
-                    let outcome = run_check(
-                        &dir,
-                        &command,
-                        task_timeout(&self.entry)?.unwrap_or(CHECK_DEFAULT_TIMEOUT),
-                        self.check_echo.take().unwrap_or(CheckEcho::Capture),
-                        &env,
-                    )?;
-                    (command, outcome, None)
+    ) -> Result<ControlFlow<TaskFireFinished, ()>> {
+        let stop = self.run_guard(before_check)?;
+        let duration_ms = self.fired_guard.iter().map(FiredCheck::duration_ms).sum();
+        if let ControlFlow::Break(stop) = stop {
+            let (result, interrupted, consume) = match stop {
+                GuardStop::Gate(result, reason) => {
+                    return Ok(ControlFlow::Break(self.record_gate(result, reason)));
                 }
-                TaskCheck::Agent(check) => {
-                    let (outcome, record) = match agent_check::run(self, &check, &dir, &root)? {
-                        ControlFlow::Continue(result) => result,
-                        ControlFlow::Break((result, reason)) => {
-                            return Ok(ControlFlow::Break(self.record_gate(result, reason)));
-                        }
-                    };
-                    (String::new(), outcome, Some(record))
-                }
+                GuardStop::Interrupted => (LoopRunResult::Canceled, true, false),
+                GuardStop::Declined => (
+                    LoopRunResult::CheckSkipped,
+                    false,
+                    self.watch_spec().is_some(),
+                ),
+                GuardStop::CheckOnly(result) => (result, false, self.ephemeral),
             };
-            (command, outcome, elapsed_millis(check_started), agent)
-        } else {
-            return Ok(ControlFlow::Continue(None));
-        };
-        let supplied_watch = watch_command.as_ref().and(self.watch_outcome());
-        let mut record = check_record(&outcome);
-        record.agent = agent;
-        record.output_path = supplied_watch.and_then(|watch| watch.output_path.clone());
-        let supplied_watch = supplied_watch.map(|watch| watch.verdict.clone());
-        self.fired_check = Some(record.clone());
-        if supplied_watch
-            .as_ref()
-            .is_some_and(|watch| !watch.is_terminal())
-        {
-            return Ok(ControlFlow::Continue(Some(FiredCheck {
-                command,
-                outcome,
-                record,
-            })));
-        }
-        let terminal = if outcome.interrupted {
-            Some((LoopRunResult::Canceled, false))
-        } else if self
-            .context
-            .as_ref()
-            .is_some_and(|context| context.action.is_check_only())
-        {
-            Some((check_only_result(&outcome), self.ephemeral))
-        } else if !record
-            .agent
-            .as_ref()
-            .is_some_and(|agent| agent.verdict.is_none())
-            && !polarity_fires(self.entry.on, &outcome)
-        {
-            Some((LoopRunResult::CheckSkipped, self.watch_spec().is_some()))
-        } else {
-            None
-        };
-        if let Some((result, consume)) = terminal {
             if result == LoopRunResult::CheckSkipped
-                && let Some(agent) = &record.agent
-                && let Some(verdict) = &agent.verdict
+                && let Some(FiredCheck::Judge { tier, record }) = self.fired_guard.last()
+                && !record.reused
+                && record.verdict.is_some()
             {
                 let checkout = self.launch_checkout();
                 let assist = AssistRecord {
                     at: Timestamp::now(),
-                    assist: Assist::CheckDecline {
+                    assist: Assist::JudgeDecline {
                         task: self.name.clone(),
                         checkout: checkout.clone(),
-                        profile: agent.profile.clone(),
-                        kind: agent.kind.clone(),
-                        reason: verdict.reason.clone(),
-                        cost_usd: agent.cost_usd,
+                        profile: record.profile.clone(),
+                        kind: record.kind.clone(),
+                        reason: record.reason.clone().unwrap_or_default(),
+                        cost_usd: record.cost_usd,
                     },
                 };
                 if self.entry.stay {
@@ -1119,14 +1060,16 @@ impl<'a> TaskFire<'a> {
                         &self.name,
                         &checkout,
                         super::launch_ledger::DeclineRecord {
-                            tier: 0,
+                            tier: *tier,
                             at: assist.at,
                             since: self
                                 .condition
                                 .as_ref()
                                 .and_then(|condition| condition.since),
-                            reason: verdict.reason.clone(),
-                            profile: agent.profile.clone(),
+                            reason: record.reason.clone().unwrap_or_default(),
+                            profile: record.profile.clone(),
+                            kind: Some(record.kind.clone()),
+                            model: record.model.clone(),
                             fingerprint: super::launch_ledger::check_fingerprint(&self.entry),
                         },
                         || assist_log::try_append(&assist),
@@ -1142,23 +1085,17 @@ impl<'a> TaskFire<'a> {
                 result,
                 LoopRunPresentation {
                     check_duration_ms: Some(duration_ms),
-                    exit_code: outcome.interrupted.then_some(130),
+                    exit_code: interrupted.then_some(130),
                     ..LoopRunPresentation::default()
                 },
                 TaskFireNotice::None,
                 None,
-                |run| {
-                    run.check = Some(record);
-                    run.error = outcome.interrupted.then(|| "check interrupted".to_owned());
-                },
+                |run| run.error = interrupted.then(|| "check interrupted".to_owned()),
             )));
         }
         if self.mode == LoopRunMode::Manual
             && self.entry.stay
-            && record
-                .agent
-                .as_ref()
-                .is_some_and(|agent| agent.verdict.is_some())
+            && self.fired_guard.iter().any(|stage| matches!(stage, FiredCheck::Judge { record, .. } if record.verdict.is_some()))
         {
             super::launch_ledger_store::remove_checkout_decline(
                 &StatePaths::for_project_root(&self.entry.resolved_root())?,
@@ -1166,25 +1103,179 @@ impl<'a> TaskFire<'a> {
                 &self.launch_checkout(),
             )?;
         }
-        if self.mode == LoopRunMode::Manual {
+        let supplied_watch = self
+            .watch_spec()
+            .and(self.watch_outcome())
+            .map(|watch| watch.verdict.clone());
+        if self.mode == LoopRunMode::Manual
+            && !self.fired_guard.is_empty()
+            && supplied_watch
+                .as_ref()
+                .is_none_or(WatchVerdict::is_terminal)
+        {
             self.check_trip = Some(CheckTrip {
-                record: record.clone(),
+                record: self.terminal_record(LoopRunResult::Completed),
                 watch: supplied_watch,
                 duration_ms,
             });
         }
-        Ok(ControlFlow::Continue(Some(FiredCheck {
-            command,
-            outcome,
-            record,
-        })))
+        Ok(ControlFlow::Continue(()))
     }
 
-    fn prepare_spawn(
+    fn run_guard(
         &mut self,
-        spec: String,
-        fired_check: Option<FiredCheck>,
-    ) -> Result<TaskFirePlan> {
+        before_check: &mut dyn FnMut(&Path) -> Result<()>,
+    ) -> Result<ControlFlow<GuardStop, ()>> {
+        if let Some((command, watch)) = self
+            .watch_spec()
+            .map(WatchSpec::describe)
+            .zip(self.watch_outcome())
+        {
+            let outcome = watch.to_check_outcome();
+            let terminal = watch.verdict.is_terminal();
+            let mut record = check_record(&outcome);
+            record.duration_ms = Some(watch.verdict.elapsed_ms());
+            record.output_path.clone_from(&watch.output_path);
+            self.fired_guard.push(FiredCheck::Shell { command, record });
+            if !terminal {
+                return Ok(ControlFlow::Continue(()));
+            }
+            if outcome.interrupted {
+                return Ok(ControlFlow::Break(GuardStop::Interrupted));
+            }
+            if !polarity_fires(self.entry.on, &outcome) {
+                return Ok(ControlFlow::Break(GuardStop::Declined));
+            }
+            return Ok(ControlFlow::Continue(()));
+        }
+        let guard = self.entry.guard();
+        let shell = guard.shell.map(str::to_owned);
+        let shell_timeout = guard
+            .shell_timeout
+            .map(parse_task_timeout)
+            .transpose()
+            .map_err(anyhow::Error::msg)?
+            .unwrap_or(CHECK_DEFAULT_TIMEOUT);
+        let judges: Vec<_> = guard.judges.into_iter().cloned().collect();
+        if shell.is_none() && judges.is_empty() {
+            return Ok(ControlFlow::Continue(()));
+        }
+        let root = if self.entry.stay {
+            self.entry.resolved_root()
+        } else {
+            self.context_root()?
+        };
+        if !self.entry.stay
+            && (self.run_lock.is_some()
+                || !matches!(
+                    self.context.as_ref().map(|context| &context.action),
+                    Some(TaskAction::Spawn(_))
+                ))
+        {
+            before_check(&root)?;
+        }
+        // The shell check leaves SIGINT ignored once it returns, so listen first
+        // and let a hold this fire reaches inherit the listener.
+        self.check_interrupts = Some(
+            self.throttle_host
+                .interrupts()
+                .map_err(throttle::ThrottleError::Interrupts)?,
+        );
+        let dir = self.launch_checkout();
+        if let Some(command) = shell {
+            if self.check_interrupted() {
+                return Ok(ControlFlow::Break(GuardStop::Interrupted));
+            }
+            let mut env = crate::workspace::pin_env(&WorkspaceId::from_project_root(&root), &root);
+            env.insert(LOOP_TASK_ENV.to_owned(), self.name.clone());
+            env.insert(
+                crate::workspace::ENV_WORKTREE_PATH.to_owned(),
+                dir.to_string_lossy().into_owned(),
+            );
+            let started = Instant::now();
+            let mut outcome = run_check(
+                &dir,
+                &command,
+                shell_timeout,
+                self.check_echo.take().unwrap_or(CheckEcho::Capture),
+                &env,
+            )?;
+            outcome.passed &= !outcome.timed_out;
+            let mut record = check_record(&outcome);
+            record.duration_ms = Some(elapsed_millis(started));
+            self.fired_guard.push(FiredCheck::Shell { command, record });
+            if outcome.interrupted || self.check_interrupted() {
+                return Ok(ControlFlow::Break(GuardStop::Interrupted));
+            }
+            if self
+                .context
+                .as_ref()
+                .is_some_and(|context| context.action.is_check_only())
+            {
+                return Ok(ControlFlow::Break(GuardStop::CheckOnly(check_only_result(
+                    &outcome,
+                ))));
+            }
+            if !polarity_fires(self.entry.on, &outcome) {
+                return Ok(ControlFlow::Break(GuardStop::Declined));
+            }
+        }
+        if self.mode == LoopRunMode::Scheduled && self.entry.stay && !judges.is_empty() {
+            let paths = StatePaths::for_project_root(&self.entry.resolved_root())?;
+            let declines = super::launch_ledger::load_declines(&paths)?;
+            if let Some(decline) = super::launch_ledger::holding_decline(
+                &declines,
+                &self.name,
+                &self.entry,
+                &dir,
+                self.condition
+                    .as_ref()
+                    .and_then(|condition| condition.since),
+                Timestamp::now(),
+            ) && let Some(kind) = &decline.kind
+            {
+                if self.check_interrupted() {
+                    return Ok(ControlFlow::Break(GuardStop::Interrupted));
+                }
+                let record = agent_check::replay(self, decline, kind);
+                self.fired_guard.push(FiredCheck::Judge {
+                    tier: decline.tier,
+                    record,
+                });
+                return Ok(ControlFlow::Break(GuardStop::Declined));
+            }
+        }
+        for (tier, judge) in judges.iter().enumerate() {
+            if self.check_interrupted() {
+                return Ok(ControlFlow::Break(GuardStop::Interrupted));
+            }
+            let started = Instant::now();
+            let (outcome, mut record) = match agent_check::run(self, judge, &dir, &root)? {
+                ControlFlow::Continue(stage) => stage,
+                ControlFlow::Break((result, reason)) => {
+                    return Ok(ControlFlow::Break(GuardStop::Gate(result, reason)));
+                }
+            };
+            record.duration_ms = Some(elapsed_millis(started));
+            let has_verdict = record.verdict.is_some();
+            self.fired_guard.push(FiredCheck::Judge { tier, record });
+            if outcome.interrupted || self.check_interrupted() {
+                return Ok(ControlFlow::Break(GuardStop::Interrupted));
+            }
+            if has_verdict && !polarity_fires(self.entry.on, &outcome) {
+                return Ok(ControlFlow::Break(GuardStop::Declined));
+            }
+        }
+        Ok(ControlFlow::Continue(()))
+    }
+
+    fn check_interrupted(&self) -> bool {
+        self.check_interrupts
+            .as_ref()
+            .is_some_and(throttle::Interrupts::raised)
+    }
+
+    fn prepare_spawn(&mut self, spec: String) -> Result<TaskFirePlan> {
         let managed_launch = {
             let scope = self
                 .context
@@ -1198,16 +1289,12 @@ impl<'a> TaskFire<'a> {
             preflight_kind(&resolved.kind, scope.login.as_ref())?;
             scope.managed_launch.clone()
         };
-        let prompt = self.resolve_effect_prompt(fired_check.as_ref())?;
+        let prompt = self.resolve_effect_prompt()?;
         let mut request = self.compile_spawn_request(spec, prompt, managed_launch)?;
         request.throttle_turn.clone_from(&self.throttle_turn);
         self.consume_ephemeral()?;
-        let check = fired_check.as_ref().map(|check| check.record.clone());
         let stream = self.mode == LoopRunMode::Manual;
-        self.pending = Some(PendingEffect::Spawn {
-            check: check.clone(),
-            stream,
-        });
+        self.pending = Some(PendingEffect::Spawn { stream });
         Ok(TaskFirePlan::Spawn(PreparedSpawn {
             root: self.context_root()?,
             request,
@@ -1266,12 +1353,7 @@ impl<'a> TaskFire<'a> {
         })
     }
 
-    fn prepare_delivery(
-        &mut self,
-        target: TaskTarget,
-        fired_check: Option<FiredCheck>,
-    ) -> Result<TaskFirePlan> {
-        let check = fired_check.as_ref().map(|check| check.record.clone());
+    fn prepare_delivery(&mut self, target: TaskTarget) -> Result<TaskFirePlan> {
         if !catalog::delivery_target_alive(&self.entry, &target)? {
             if self.mode == LoopRunMode::Scheduled {
                 self.remove_schedule()?;
@@ -1286,17 +1368,15 @@ impl<'a> TaskFire<'a> {
                 None,
                 |record| {
                     record.target = Some(handle);
-                    record.check = check;
                 },
             )));
         }
-        let prompt = self.resolve_effect_prompt(fired_check.as_ref())?;
+        let prompt = self.resolve_effect_prompt()?;
         // The one-shot row is consumed in `finish`, once the wake's message
         // record exists: turn-completion waits read the row, then the queue,
         // so the agent never looks rested between the two.
         self.pending = Some(PendingEffect::Deliver {
             target: target.clone(),
-            check: check.clone(),
         });
         Ok(TaskFirePlan::Deliver(PreparedDelivery {
             root: self.context_root()?,
@@ -1381,7 +1461,7 @@ impl<'a> TaskFire<'a> {
             .context("loop task context missing after gates")
     }
 
-    fn resolve_effect_prompt(&self, fired_check: Option<&FiredCheck>) -> Result<String> {
+    fn resolve_effect_prompt(&self) -> Result<String> {
         let mut body = resolve_task_prompt(&self.name, &self.entry)?;
         let signal_trigger =
             self.entry.signal.is_some() || self.entry.watch.is_some() || self.entry.when.is_some();
@@ -1410,12 +1490,17 @@ impl<'a> TaskFire<'a> {
                 self.now,
             );
         }
-        if let Some(check) = fired_check
-            && self.entry.watch.is_none()
-        {
-            body = augment_prompt(body, &check.heading(), &check.outcome.output);
+        if self.entry.watch.is_none() {
+            body = self.augment_guard_prompt(body);
         }
         Ok(body)
+    }
+
+    fn augment_guard_prompt(&self, mut body: String) -> String {
+        for stage in &self.fired_guard {
+            body = augment_prompt(body, &stage.heading(), &stage.output());
+        }
+        body
     }
 
     fn terminal_record(&self, result: LoopRunResult) -> LoopRunRecord {
@@ -1427,7 +1512,12 @@ impl<'a> TaskFire<'a> {
             payload: signal.payload.clone(),
         });
         record.condition = self.condition.clone();
-        record.check.clone_from(&self.fired_check);
+        for stage in &self.fired_guard {
+            match stage {
+                FiredCheck::Shell { record: shell, .. } => record.check = Some(shell.clone()),
+                FiredCheck::Judge { record: judge, .. } => record.judge.push(judge.clone()),
+            }
+        }
         record.throttle_wait_ms = self
             .throttle_wait
             .map(|waited| u64::try_from(waited.as_millis()).unwrap_or(u64::MAX));
@@ -1499,10 +1589,8 @@ impl<'a> TaskFire<'a> {
 fn finish_spawn_effect(
     record: &mut LoopRunRecord,
     effect: SupervisedRunOutcome,
-    check: Option<CheckRecord>,
     stream: bool,
 ) -> (LoopRunPresentation, TaskFireNotice) {
-    record.check = check;
     match effect {
         SupervisedRunOutcome::Record(run) => {
             let run = *run;

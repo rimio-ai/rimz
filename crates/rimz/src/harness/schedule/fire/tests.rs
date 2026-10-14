@@ -34,6 +34,8 @@ fn declined_scopes_wait_for_a_new_condition_clock_or_elapsed_recheck() {
         BTreeMap::from([(
             owned[0].clone(),
             DeclineRecord {
+                kind: None,
+                model: None,
                 tier: 0,
                 at: now,
                 since: Some(since),
@@ -113,6 +115,8 @@ fn held_judges_suppress_helpers_only_without_a_shell_check() {
                 BTreeMap::from([(
                     checkout,
                     DeclineRecord {
+                        kind: None,
+                        model: None,
                         at: now,
                         since: None,
                         reason: "No work".into(),
