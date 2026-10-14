@@ -190,6 +190,20 @@ impl ProviderLogin {
         observations
     }
 
+    /// Locate an exact session in this account's home and stamp its login.
+    pub fn locate_session(
+        &self,
+        adapter: &super::AgentDefinition,
+        session_id: &crate::ids::AgentSessionId,
+        ambient: &BTreeMap<String, String>,
+    ) -> super::session::LocalSessionLookup {
+        let mut found = adapter.locate_session(session_id, &self.env(ambient));
+        if let super::session::LocalSessionLookup::Found(observation) = &mut found {
+            observation.login = (!self.is_default()).then(|| self.name.clone());
+        }
+        found
+    }
+
     /// `ambient`, with this login's overrides applied. The default login
     /// leaves the ambient environment exactly as it is, so today's resolution
     /// policies — comma lists, XDG order, test overrides — keep running.

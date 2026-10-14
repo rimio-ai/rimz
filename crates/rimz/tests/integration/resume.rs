@@ -421,6 +421,85 @@ mod agent_ref {
     }
 
     #[test]
+    fn exact_provider_id_keeps_the_recorded_handle() {
+        let fixture = Fixture::new(LaunchParams::default(), false, None);
+        let output = fixture
+            .command_args(&["claude", "--resume", SESSION])
+            .bounded_output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            "resumed claude:bright-otter (saved-session)\n"
+        );
+        assert!(fixture.trace().contains("action\tnew-tab"));
+    }
+
+    #[test]
+    fn exact_provider_id_refusals_name_the_existing_session_action() {
+        for (kind, live, launch, hint) in [
+            (
+                "codex",
+                false,
+                LaunchParams::default(),
+                "rimz agents resume @bright-otter",
+            ),
+            (
+                "claude",
+                true,
+                LaunchParams::default(),
+                "rimz agents focus @bright-otter",
+            ),
+            (
+                "claude",
+                false,
+                LaunchParams {
+                    team: Some("forge".into()),
+                    role: Some("coder".into()),
+                    ..Default::default()
+                },
+                "rimz agents forge.coder --continue",
+            ),
+        ] {
+            let fixture = Fixture::new(launch, live, None);
+            let output = fixture
+                .command_args(&[kind, "--resume", SESSION])
+                .bounded_output()
+                .unwrap();
+            let error = String::from_utf8_lossy(&output.stderr);
+            assert!(error.contains(hint), "{error}");
+            assert!(!output.status.success());
+            assert!(!fixture.trace().contains("action\tnew-tab"));
+        }
+    }
+
+    #[test]
+    fn provider_resume_refusals_explain_scope_picker_and_search_home() {
+        let fixture = Fixture::new(LaunchParams::default(), false, None);
+        for (args, hint) in [
+            (vec!["claude,codex", "--resume"], "--continue"),
+            (vec!["claude", "--resume"], "--resume=<id>"),
+            (vec!["claude", "--resume=absent-id"], "absent-id"),
+        ] {
+            let output = fixture.command_args(&args).bounded_output().unwrap();
+            let error = String::from_utf8_lossy(&output.stderr);
+            assert!(error.contains(hint), "{error}");
+            assert!(!output.status.success());
+            if args.contains(&"--resume=absent-id") {
+                assert!(
+                    error.contains("claude") && error.contains(".claude"),
+                    "{error}"
+                );
+            }
+            assert!(!fixture.trace().contains("action\tnew-tab"));
+        }
+    }
+
+    #[test]
     fn live_session_in_another_channel_is_refused_with_focus() {
         let fixture = Fixture::new(LaunchParams::default(), true, None);
         let output = fixture.output("@bright-otter");

@@ -22,6 +22,123 @@ use rimz::mux::{ResumeTab, SplitPaneOptions, SplitPlacement, SplitTarget};
 use super::placement::{self, Placement, PlacementErrors, PlacementRequest};
 use super::{GlobalFlags, RoomContext, RoomSizing};
 
+fn validate_recorded_resume(
+    agent: &rimz::agents::AgentState,
+    kind: &rimz::ids::AgentKind,
+    profile: Option<&str>,
+) -> Result<()> {
+    let name = agent.name.as_deref().unwrap_or(agent.agent_id.as_str());
+    if &agent.kind != kind
+        || profile.is_some_and(|profile| agent.profile.as_deref() != Some(profile))
+    {
+        bail!(
+            "session {} belongs to {}:{name} (profile {}); use `rimz agents resume @{name}`",
+            agent.agent_id,
+            agent.kind,
+            agent.profile.as_deref().unwrap_or("none")
+        );
+    }
+    if matches!(
+        rimz::store::runtime::agent_liveness(agent),
+        rimz::store::runtime::AgentLiveness::Live { .. }
+    ) {
+        bail!(
+            "agent `{}:{name}` is still live; `rimz agents focus @{name}` reaches it",
+            agent.kind
+        );
+    }
+    if let (Some(team), Some(role)) = (&agent.team, &agent.role) {
+        bail!(
+            "@{name} is a member of team `{team}`; reopen it with `rimz agents {team}.{role} --continue`"
+        );
+    }
+    if agent.is_provider_subagent()
+        || agent.parent_agent_id.is_some()
+        || agent.launch_depth.is_some_and(|depth| depth > 0)
+    {
+        bail!("@{name} is a child session; use `rimz subagents` instead");
+    }
+    Ok(())
+}
+
+enum ResumeSource<'a> {
+    Recorded(&'a rimz::agents::AgentState),
+    Provider(&'a LocalSessionObservation, Option<&'a str>),
+}
+
+pub(super) fn resume_provider(
+    args: &super::AgentLaunchArgs,
+    layout: &super::LayoutSpec,
+    team: Option<&str>,
+    ctx: &crate::cli::ctx::Ctx,
+    globals: &GlobalFlags,
+) -> Result<()> {
+    let cell = layout.agent_cells().next().filter(|cell| {
+        team.is_none()
+            && cell.launch.team.is_none()
+            && cell.launch.role.is_none()
+            && layout.columns.iter().map(|column| column.rows.len()).sum::<usize>() == 1
+    }).context("--resume takes a kind or solo profile, not a team, team role, or multi-cell spec; use --continue to reopen a cohort")?;
+    let adapter = rimz::agents::find_definition(&cell.kind)
+        .with_context(|| format!("unknown provider {}", cell.kind))?;
+    let profile = cell
+        .launch
+        .profile
+        .as_deref()
+        .filter(|profile| *profile != cell.kind.as_str());
+    let Some(session_id) = args.resume.as_ref().and_then(|id| id.as_deref()) else {
+        let alternative = if adapter.spec().launch.resume.is_some() {
+            "use --resume=<id> for an exact session, or --continue for a cohort"
+        } else {
+            "use --continue for a cohort, or launch without --resume"
+        };
+        bail!("{} has no session picker; {alternative}", cell.kind);
+    };
+    let projection = ctx.store.runtime_projection(rimz::RuntimeScope::Audit)?;
+    if let Some(agent) = projection
+        .agents
+        .iter()
+        .find(|agent| agent.agent_id.as_str() == session_id)
+    {
+        validate_recorded_resume(agent, &cell.kind, profile)?;
+        return resume_selected(ResumeSource::Recorded(agent), args, globals, ctx);
+    }
+    let machine = crate::cli::machine_config();
+    let logins = rimz::agents::room_accounts(
+        &ctx.store.paths().workspace_record,
+        Some(&ctx.workspace.project_root),
+        &machine,
+    )?;
+    let login = logins.login(&cell.kind, &machine.accounts)?;
+    let catalog = rimz::agents::LoginCatalog::room_view(&machine.accounts).0;
+    let ambient = catalog.native_ambient(&cell.kind, &rimz::agents::ambient_env());
+    match login.locate_session(adapter, &session_id.into(), &ambient) {
+        rimz::agents::session::LocalSessionLookup::Found(observation) => resume_selected(
+            ResumeSource::Provider(&observation, profile),
+            args,
+            globals,
+            ctx,
+        ),
+        rimz::agents::session::LocalSessionLookup::NotFound => {
+            let home = adapter.config_home(&login.env(&ambient));
+            bail!(
+                "no {} session `{session_id}` found in {}; check the exact id and room account, or use --continue",
+                cell.kind,
+                home.as_deref().map_or_else(
+                    || "an unresolved provider home".to_owned(),
+                    |home| home.display().to_string()
+                )
+            );
+        }
+        rimz::agents::session::LocalSessionLookup::Unsupported => {
+            bail!(
+                "{} cannot look up unrecorded session ids; use `rimz agents resume @<handle>` for a recorded session, or --continue for a cohort",
+                cell.kind
+            );
+        }
+    }
+}
+
 pub(super) fn resume_agent(reference: &str, bg: bool, globals: &GlobalFlags) -> Result<()> {
     let ctx = crate::cli::ctx::Ctx::open(globals)?;
     let workspace = &ctx.workspace;
@@ -56,37 +173,48 @@ pub(super) fn resume_agent(reference: &str, bg: bool, globals: &GlobalFlags) -> 
         }
         Err(error) => return Err(error),
     };
-    let name = agent.name.as_deref().unwrap_or(agent.agent_id.as_str());
-    if matches!(
-        rimz::store::runtime::agent_liveness(&agent),
-        rimz::store::runtime::AgentLiveness::Live { .. }
-    ) {
-        bail!(
-            "agent `{}:{name}` is still live; `rimz agents focus @{name}` reaches it",
-            agent.kind
-        );
-    }
-    if let (Some(team), Some(role)) = (&agent.team, &agent.role) {
-        bail!(
-            "@{name} is a member of team `{team}`; reopen it with `rimz agents {team}.{role} --continue`"
-        );
-    }
-    if agent.parent_agent_id.is_some() || agent.launch_depth.is_some_and(|depth| depth > 0) {
-        bail!("@{name} is a child session; use `rimz subagents` instead");
-    }
-    let cwd = agent
-        .worktree_path
-        .as_deref()
-        .filter(|path| !path.is_empty())
-        .map(Path::new)
-        .with_context(|| format!("cannot resume @{name}: no saved working directory"))?;
+    validate_recorded_resume(&agent, &agent.kind, None)?;
+    let args = super::AgentLaunchArgs {
+        cohort: super::CohortLaunchArgs {
+            bg,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    resume_selected(ResumeSource::Recorded(&agent), &args, globals, &ctx)
+}
+
+fn resume_selected(
+    source: ResumeSource<'_>,
+    args: &super::AgentLaunchArgs,
+    globals: &GlobalFlags,
+    ctx: &crate::cli::ctx::Ctx,
+) -> Result<()> {
+    let workspace = &ctx.workspace;
+    let store = &ctx.store;
+    let snapshot = ctx.alive_snapshot()?;
+    let (kind, cwd, channel) = match source {
+        ResumeSource::Recorded(agent) => {
+            let name = agent.name.as_deref().unwrap_or(agent.agent_id.as_str());
+            let cwd = agent
+                .worktree_path
+                .as_deref()
+                .filter(|path| !path.is_empty())
+                .map(Path::new)
+                .with_context(|| format!("cannot resume @{name}: no saved working directory"))?;
+            (&agent.kind, cwd, agent.channel.as_deref())
+        }
+        ResumeSource::Provider(observation, _) => {
+            (&observation.kind, observation.workspace.as_path(), None)
+        }
+    };
     let mux = rimz::room::require_live_mux(globals.mux, workspace)?;
     let machine = crate::cli::machine_config();
     let room =
         RoomContext::from_resolved(workspace, machine.clone(), mux, RoomSizing::OrdinaryTab)?;
-    let focus = LaunchFocus::resolve(bg, resolve_caller(&snapshot.agents).as_ref());
+    let focus = LaunchFocus::resolve(args.cohort.bg, resolve_caller(&snapshot.agents).as_ref());
     let outside_launch_dir = placement::resume_outside_launch_dir(
-        agent.channel.as_deref(),
+        channel,
         cwd,
         &workspace.project_root,
         &workspace.worktree_root,
@@ -94,8 +222,8 @@ pub(super) fn resume_agent(reference: &str, bg: bool, globals: &GlobalFlags) -> 
     );
     let placement = placement::apply_in_place_downgrade(
         placement::resolve_placement(
-            false,
-            false,
+            args.cohort.new_tab,
+            args.new_pane,
             machine.agents.placement,
             outside_launch_dir,
             true,
@@ -119,23 +247,43 @@ pub(super) fn resume_agent(reference: &str, bg: bool, globals: &GlobalFlags) -> 
     let config = LaneRestoreConfig::load(&machine, &workspace.project_root, |kind, model| {
         availability.unavailable(kind, model)
     })?;
-    let plan = plan_resume(
-        std::slice::from_ref(&agent),
-        &BTreeSet::new(),
-        ResumeContext {
-            in_place: placement == Placement::SamePane,
-            project_root: Some(&workspace.project_root),
-            workspace_id: &workspace.workspace_id,
-            rimz_bin: &rimz::proc::rimz_exe(),
-            runtime: ctx.runtime(),
-            profiles: &config.profiles,
-            max: machine.resume.max,
-            logins: &logins,
-            catalog: &catalog,
-        },
-        Path::is_dir,
-        resume_session_present,
-    );
+    let resume_ctx = ResumeContext {
+        in_place: placement == Placement::SamePane,
+        project_root: Some(&workspace.project_root),
+        workspace_id: &workspace.workspace_id,
+        rimz_bin: &rimz::proc::rimz_exe(),
+        runtime: ctx.runtime(),
+        profiles: &config.profiles,
+        max: machine.resume.max,
+        logins: &logins,
+        catalog: &catalog,
+    };
+    let (name, session_id, plan) = match source {
+        ResumeSource::Recorded(agent) => (
+            agent
+                .name
+                .as_deref()
+                .unwrap_or(agent.agent_id.as_str())
+                .to_owned(),
+            &agent.agent_id,
+            plan_resume(
+                std::slice::from_ref(agent),
+                &BTreeSet::new(),
+                resume_ctx,
+                Path::is_dir,
+                resume_session_present,
+            ),
+        ),
+        ResumeSource::Provider(observation, profile) => {
+            let (name, plan) = rimz::harness::resume::plan_provider_resume(
+                observation,
+                profile,
+                &snapshot.agents,
+                resume_ctx,
+            );
+            (name, &observation.session_id, plan)
+        }
+    };
     report_posture_warnings(&plan.warnings)?;
     for (kind, agent_id) in &plan.agents_to_end {
         let observation = rimz::agents::AgentLifecycleObservation::new(
@@ -160,17 +308,13 @@ pub(super) fn resume_agent(reference: &str, bg: bool, globals: &GlobalFlags) -> 
         bail!("cannot resume @{name}: {reason}");
     };
     crate::cli::lsp_admission::admit(&tab.cwd, &machine)?;
-    rimz::harness::launch::preflight_agent_kind(
-        &workspace.project_root,
-        agent.kind.as_str(),
-        &tab.cwd,
-    )?;
-    let login = logins.login(&agent.kind, &machine.accounts)?;
-    login.health(&catalog.native_ambient(&agent.kind, &rimz::agents::ambient_env()))?;
-    let adapter = rimz::agents::find_definition(agent.kind.as_str())
-        .with_context(|| format!("unknown agent kind `{}`", agent.kind))?;
+    rimz::harness::launch::preflight_agent_kind(&workspace.project_root, kind.as_str(), &tab.cwd)?;
+    let login = logins.login(kind, &machine.accounts)?;
+    login.health(&catalog.native_ambient(kind, &rimz::agents::ambient_env()))?;
+    let adapter = rimz::agents::find_definition(kind.as_str())
+        .with_context(|| format!("unknown agent kind `{kind}`"))?;
     crate::cli::folder_trust::preflight(
-        agent.kind.as_str(),
+        kind.as_str(),
         adapter.folder_trust(
             &tab.cwd,
             Some(workspace.launch_repo_root()),
@@ -178,7 +322,7 @@ pub(super) fn resume_agent(reference: &str, bg: bool, globals: &GlobalFlags) -> 
         ),
         None,
     )?;
-    let receipt = format!("resumed {}:{name} ({})", agent.kind, agent.agent_id);
+    let receipt = format!("resumed {kind}:{name} ({session_id})");
     if placement == Placement::NewTab {
         room.open_resume_tab(tab, focus.takes_focus())?;
         writeln!(std::io::stdout().lock(), "{receipt}")?;
@@ -557,6 +701,23 @@ fn render_lane_list(out: &mut impl Write, mut lanes: Vec<LaneSummary>) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recorded_provider_resume_refuses_mismatched_spec() {
+        let mut agent = rimz::testkit::agent_state("claude", "saved", Timestamp::UNIX_EPOCH);
+        agent.name = Some("old-handle".into());
+        agent.profile = Some("original".into());
+        for (kind, profile) in [("codex", None), ("claude", Some("different"))] {
+            let error = validate_recorded_resume(
+                &agent,
+                &rimz::ids::AgentKind::new_unchecked(kind),
+                profile,
+            )
+            .unwrap_err()
+            .to_string();
+            assert!(error.contains("rimz agents resume @old-handle"), "{error}");
+        }
+    }
 
     #[test]
     fn lane_list_only_offers_closed_members_with_a_quoted_hint() {

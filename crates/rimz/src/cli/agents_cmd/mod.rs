@@ -309,6 +309,20 @@ impl LaunchOverrideArgs {
 
 #[derive(Debug, Default, PartialEq, Args)]
 pub(crate) struct AgentLaunchArgs {
+    /// Resume an exact provider session; omit the id to request its session picker.
+    #[arg(
+        long,
+        value_name = "ID",
+        num_args = 0..=1,
+        value_parser = clap::builder::NonEmptyStringValueParser::new(),
+        conflicts_with_all = [
+            "continue_cohort", "prompt", "channel", "from_pr", "description", "budget",
+            "worktree", "fresh", "detach", "cwd", "name", "print", "model", "tier",
+            "agent", "effort", "fast", "no_fast", "isolation", "ask", "yolo",
+            "system_prompt_file", "append_system_prompt_files", "passthrough"
+        ]
+    )]
+    pub(crate) resume: Option<Option<String>>,
     /// Working directory for the launched agent; the room stays the caller's.
     #[arg(long, value_name = "DIR", conflicts_with_all = ["worktree", "from_pr", "continue_cohort", "fresh"])]
     pub(crate) cwd: Option<PathBuf>,

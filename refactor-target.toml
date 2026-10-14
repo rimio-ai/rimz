@@ -203,7 +203,8 @@ upward-dependencies = ["address"]
 # LaunchCapability::changed_system_prompt_args lets launch compilation refresh changed prompts on resume (+1).
 # LaunchCapability::system_prompt_arg_matchers identifies native configured prompt inputs (+1).
 # AgentDefinition::is_foreign_hook_payload and HookCapability::recognizes_hook_payload keep native recognition in adapters (+2).
-surface-budget = 1055
+# LocalSessionLookup and the capability/login locate_session methods support exact provider resume (+3).
+surface-budget = 1058
 
 [[verdict]]
 kind = "item"
@@ -1395,7 +1396,8 @@ allowed-dependencies = [
 # RelaunchLoginErr distinguishes an unavailable kind from a history-pool mismatch (+1).
 # check_lane_scope lets `agents list` tell an unknown lane from an empty one by resume's lane rule (+1).
 # inspect_cohort_hold shares checkout/channel hold ownership with addressed board commands (+1).
-surface-budget = 66
+# plan_provider_resume adopts an exact session through the flat resume planner (+1).
+surface-budget = 67
 
 [[module]]
 path = "crates/rimz/src/harness/launch.rs"
@@ -3871,6 +3873,21 @@ reason = "The posture seam with a team member's role layers, for agents restart 
 kind = "item"
 key = "harness::resume::plan_resume"
 reason = "Integration suites plan flat resume from the separate test crate; production callers sit inside resume and rebirth (pass 19a)."
+
+[[verdict]]
+kind = "item"
+key = "harness::resume::plan_provider_resume"
+reason = "The CLI adopts an exact provider session through the same flat planner as lane discovery, with a solo profile and minted handle."
+
+[[verdict]]
+kind = "item"
+key = "agents::session::LocalSessionLookup"
+reason = "Provider-session resume distinguishes an unsupported locator, an absent id, and a session found in the room account."
+
+[[verdict]]
+kind = "item"
+key = "agents::login::locate_session"
+reason = "Provider-session resume searches one login home and carries that login into the adopted session plan."
 
 [[verdict]]
 kind = "item"

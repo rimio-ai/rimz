@@ -182,7 +182,7 @@ pub(in crate::cli) fn launch_resolved<'a>(
     let store = &ctx.store;
     report_unknown_config_keys(&machine_config)?;
     let effective = rimz::config::effective::load(&machine_config, &workspace.project_root)?;
-    if !args.launch.cohort.continue_cohort {
+    if !args.launch.cohort.continue_cohort && args.launch.resume.is_none() {
         machine_config.agents.startup_relaunch_wait()?;
     }
     let default_lane = if loop_task.is_some() {
@@ -252,6 +252,19 @@ pub(in crate::cli) fn launch_resolved<'a>(
         layout,
         team_name,
     } = resolved;
+    if args.launch.resume.is_some() {
+        // An exact id resumes or refuses; the resume is the launch's execution.
+        return Ok(Box::new(move || {
+            super::resume::resume_provider(
+                &args.launch,
+                &layout,
+                team_name.as_deref(),
+                ctx,
+                globals,
+            )
+            .map(|()| None)
+        }));
+    }
     let team = team_name.as_deref().and_then(|name| teams.0.get(name));
     if !args.launch.cohort.continue_cohort
         && args.launch.cohort.from_pr.is_none()

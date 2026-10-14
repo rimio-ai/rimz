@@ -649,6 +649,15 @@ pub struct ModelAliasResolution {
 
 #[doc(hidden)]
 pub trait SessionCapability: CoreCapability {
+    /// Locate one exact session id, reading only the passed account's config home.
+    fn locate_session(
+        &self,
+        _session_id: &crate::ids::AgentSessionId,
+        _login_env: &BTreeMap<String, String>,
+    ) -> session::LocalSessionLookup {
+        session::LocalSessionLookup::Unsupported
+    }
+
     fn daemon_session_evidence(
         &self,
         _login_env: &BTreeMap<String, String>,

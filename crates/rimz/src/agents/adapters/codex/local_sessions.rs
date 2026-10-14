@@ -23,6 +23,50 @@ use crate::ids::{AgentKind, AgentSessionId};
 const MAX_EXAMINED_FILES: usize = 512;
 const MAX_SESSION_AGE_DAYS: usize = 14;
 
+pub(super) fn locate(
+    session_id: &AgentSessionId,
+    login_env: &std::collections::BTreeMap<String, String>,
+) -> Option<LocalSessionObservation> {
+    let home = super::CodexAdapter.config_home(login_env)?;
+    for root in ["sessions", "archived_sessions"] {
+        let mut dirs = vec![home.join(root)];
+        while let Some(dir) = dirs.pop() {
+            let Ok(entries) = fs::read_dir(dir) else {
+                continue;
+            };
+            for entry in entries.filter_map(Result::ok) {
+                let Ok(kind) = entry.file_type() else {
+                    continue;
+                };
+                let path = entry.path();
+                if kind.is_dir() {
+                    dirs.push(path);
+                    continue;
+                }
+                if !kind.is_file() || path.extension().is_none_or(|ext| ext != "jsonl") {
+                    continue;
+                }
+                let Some(header) = read_rollout_header(&path) else {
+                    continue;
+                };
+                if header.session_id.as_deref() != Some(session_id.as_str()) {
+                    continue;
+                }
+                let Some(cwd) = header.cwd.clone().filter(|cwd| cwd.is_absolute()) else {
+                    continue;
+                };
+                let stamp = ProviderPathStamp::read(&path);
+                if let Some(found) =
+                    observation_from_header(path, header, stamp, &HashSet::from([cwd.as_path()]))
+                {
+                    return Some(found);
+                }
+            }
+        }
+    }
+    None
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct RolloutCandidate {
     path: PathBuf,
@@ -375,6 +419,59 @@ mod tests {
     use std::time::{Duration, UNIX_EPOCH};
 
     use super::*;
+
+    #[test]
+    fn exact_locator_finds_old_and_archived_sessions_only_in_named_home() {
+        use crate::agents::capabilities::SessionCapability as _;
+        use crate::agents::session::LocalSessionLookup;
+        let temp = tempfile::tempdir().unwrap();
+        let named = temp.path().join("named");
+        let env = std::collections::BTreeMap::from([
+            ("HOME".to_owned(), temp.path().display().to_string()),
+            ("CODEX_HOME".to_owned(), named.display().to_string()),
+        ]);
+        let id = AgentSessionId::from("22222222-2222-4222-8222-222222222222");
+        write_rollout(
+            &date_path(&temp.path().join(".codex"), false, 40),
+            &id,
+            "/original/cwd",
+            "2025-01-01T00:00:00Z",
+            1,
+        );
+        assert!(matches!(
+            super::super::CodexAdapter.locate_session(&id, &env),
+            LocalSessionLookup::NotFound
+        ));
+        for (archived, reverted) in [(false, false), (true, false), (false, true), (true, true)] {
+            let mut path = write_rollout(
+                &date_path(&named, archived, 40),
+                &id,
+                "/original/cwd",
+                "2025-01-01T00:00:00Z",
+                1,
+            );
+            if reverted {
+                let suffixed = path.with_file_name(format!(
+                    "{}_33333333-3333-4333-8333-333333333333.jsonl",
+                    path.file_stem().unwrap().to_str().unwrap()
+                ));
+                fs::rename(&path, &suffixed).unwrap();
+                path = suffixed;
+            }
+            for days in 0..20 {
+                fs::create_dir_all(date_path(&named, false, days)).unwrap();
+            }
+            let LocalSessionLookup::Found(found) =
+                super::super::CodexAdapter.locate_session(&id, &env)
+            else {
+                panic!("must find old and archived sessions without a day budget");
+            };
+            assert_eq!(found.workspace, Path::new("/original/cwd"));
+            assert_eq!(found.session_id, id);
+            assert_eq!(found.transcript_path, path);
+            fs::remove_file(path).unwrap();
+        }
+    }
 
     fn date_path(root: &Path, archived: bool, days_ago: usize) -> PathBuf {
         let mut date = Timestamp::now().to_zoned(jiff::tz::TimeZone::UTC).date();

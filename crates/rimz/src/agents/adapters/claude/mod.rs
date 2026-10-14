@@ -1207,6 +1207,19 @@ impl crate::agents::capabilities::InstallationCapability for ClaudeAdapter {
 }
 
 impl crate::agents::capabilities::SessionCapability for ClaudeAdapter {
+    fn locate_session(
+        &self,
+        session_id: &crate::ids::AgentSessionId,
+        login_env: &BTreeMap<String, String>,
+    ) -> crate::agents::session::LocalSessionLookup {
+        local_sessions::locate(session_id, login_env)
+            .map(Box::new)
+            .map_or(
+                crate::agents::session::LocalSessionLookup::NotFound,
+                crate::agents::session::LocalSessionLookup::Found,
+            )
+    }
+
     fn discover_local_sessions(
         &self,
         workspaces: &[&Path],

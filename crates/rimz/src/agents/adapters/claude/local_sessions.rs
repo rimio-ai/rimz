@@ -26,6 +26,41 @@ const MAX_DISCOVERED_SESSIONS: usize = 512;
 const MAX_SESSION_HEAD_LINES: usize = 32;
 const MAX_SESSION_HEAD_BYTES: u64 = 64 * 1024;
 
+pub(super) fn locate(
+    session_id: &AgentSessionId,
+    login_env: &std::collections::BTreeMap<String, String>,
+) -> Option<LocalSessionObservation> {
+    use crate::agents::capabilities::LaunchCapability as _;
+
+    Uuid::parse_str(session_id.as_str()).ok()?;
+    let home = super::ClaudeAdapter.config_home(login_env)?;
+    let projects = fs::read_dir(home.join("projects")).ok()?;
+    for project in projects.filter_map(Result::ok) {
+        if !project.file_type().is_ok_and(|kind| kind.is_dir()) {
+            continue;
+        }
+        let path = project.path().join(format!("{session_id}.jsonl"));
+        let Ok(file) = fs::File::open(&path) else {
+            continue;
+        };
+        let Some(first) = std::io::BufReader::new(file)
+            .lines()
+            .map_while(Result::ok)
+            .filter_map(|line| serde_json::from_str::<ClaudeSessionRecord>(&line).ok())
+            .find(|record| record.cwd.is_some() && record.timestamp.is_some())
+        else {
+            continue;
+        };
+        let Some(cwd) = first.cwd.clone().filter(|cwd| cwd.is_absolute()) else {
+            continue;
+        };
+        if let Some(found) = observation(path, &cwd, first) {
+            return Some(found);
+        }
+    }
+    None
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ClaudeSessionRecord {
@@ -167,7 +202,10 @@ impl ClaudeDiscoverySnapshot {
                     .iter()
                     .next()
                     .is_some_and(|(_, stamp)| stamp.is_file())
-                    .then(|| observation(entry.path.clone(), &entry.workspace))
+                    .then(|| {
+                        let first = first_session_record(&entry.path)?;
+                        observation(entry.path.clone(), &entry.workspace, first)
+                    })
                     .flatten()
             });
         #[cfg(test)]
@@ -286,10 +324,13 @@ fn observation_cmp(
         .then_with(|| left.session_id.cmp(&right.session_id))
 }
 
-fn observation(path: PathBuf, workspace: &Path) -> Option<LocalSessionObservation> {
+fn observation(
+    path: PathBuf,
+    workspace: &Path,
+    first: ClaudeSessionRecord,
+) -> Option<LocalSessionObservation> {
     let session_id = path.file_stem()?.to_str()?;
     Uuid::parse_str(session_id).ok()?;
-    let first = first_session_record(&path)?;
     if first.is_sidechain || first.cwd.as_deref() != Some(workspace) {
         return None;
     }
@@ -416,6 +457,52 @@ mod tests {
     fn write_session(dir: &Path, id: &str, records: &[&str]) {
         fs::create_dir_all(dir).unwrap();
         fs::write(dir.join(format!("{id}.jsonl")), records.join("\n")).unwrap();
+    }
+
+    #[test]
+    fn exact_locator_stays_in_named_home_and_reads_cwd() {
+        use crate::agents::capabilities::SessionCapability as _;
+        use crate::agents::session::LocalSessionLookup;
+        let temp = tempfile::tempdir().unwrap();
+        let id = AgentSessionId::from("22222222-2222-4222-8222-222222222222");
+        let named = temp.path().join("named");
+        let env = std::collections::BTreeMap::from([
+            ("HOME".to_owned(), temp.path().display().to_string()),
+            ("CLAUDE_CONFIG_DIR".to_owned(), named.display().to_string()),
+        ]);
+        let record = r#"{"cwd":"/original/cwd","timestamp":"2025-01-01T00:00:00Z"}"#;
+        write_session(
+            &temp.path().join(".claude/projects/-original-cwd"),
+            &id,
+            &[record],
+        );
+        assert!(matches!(
+            super::super::ClaudeAdapter.locate_session(&id, &env),
+            LocalSessionLookup::NotFound
+        ));
+        for prefix in [
+            String::new(),
+            serde_json::json!({"snapshot": "x".repeat(128 * 1024)}).to_string(),
+            "{}\n".repeat(40),
+        ] {
+            write_session(
+                &named.join("projects/-original-cwd"),
+                &id,
+                &[&prefix, record],
+            );
+            let LocalSessionLookup::Found(found) =
+                super::super::ClaudeAdapter.locate_session(&id, &env)
+            else {
+                panic!("must find the named account's session past leading records");
+            };
+            assert_eq!(found.workspace, Path::new("/original/cwd"));
+            assert_eq!(found.session_id, id);
+            assert!(found.transcript_path.starts_with(&named));
+        }
+        assert!(matches!(
+            super::super::ClaudeAdapter.locate_session(&"../../escape".into(), &env),
+            LocalSessionLookup::NotFound
+        ));
     }
 
     #[test]
