@@ -318,6 +318,7 @@ impl Env {
             .env_remove("SSH_CONNECTION")
             .env_remove("SSH_TTY")
             .env_remove("RIMZ_GROK_HOOKS")
+            .env("RIMZ_TEST_GROK_POLICY_ROOT", self.grok_policy_root())
             .env_remove("XAI_API_KEY")
             .current_dir(&self.project_root);
         cmd
@@ -348,6 +349,13 @@ impl Env {
         cmd.env_remove("RUST_LOG");
         cmd.env_remove("SSH_CONNECTION");
         cmd.env_remove("SSH_TTY");
+        cmd.env("RIMZ_TEST_GROK_POLICY_ROOT", self.grok_policy_root());
+    }
+
+    /// Stands in for `/` when the Grok policy probe reads machine-wide policy
+    /// (`/etc/grok`, Claude's managed settings), so the host's own files stay out.
+    pub fn grok_policy_root(&self) -> PathBuf {
+        self.home_root.join("machine-root")
     }
 
     // --- hooks ---

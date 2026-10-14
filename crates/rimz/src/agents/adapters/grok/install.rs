@@ -104,10 +104,23 @@ const CLAUDE_MANAGED_SETTINGS: &str = "/etc/claude-code/managed-settings.json";
 
 fn policy_blocker() -> Option<String> {
     policy_blocker_at(
-        Path::new(SYSTEM_DIR),
+        &machine_path(SYSTEM_DIR),
         &super::paths::home(),
-        Path::new(CLAUDE_MANAGED_SETTINGS),
+        &machine_path(CLAUDE_MANAGED_SETTINGS),
     )
+}
+
+/// A machine-wide policy path. Test builds re-root it under
+/// `RIMZ_TEST_GROK_POLICY_ROOT` so the suite never reads the host's own
+/// policy; a shipped binary has no override for the managed-hooks pin.
+fn machine_path(path: &str) -> PathBuf {
+    #[cfg(feature = "testkit")]
+    if let Some(root) =
+        std::env::var_os("RIMZ_TEST_GROK_POLICY_ROOT").filter(|value| !value.is_empty())
+    {
+        return Path::new(&root).join(path.trim_start_matches('/'));
+    }
+    PathBuf::from(path)
 }
 
 /// Why RimZ's Grok hooks will not run: a policy layer pins Grok to managed
