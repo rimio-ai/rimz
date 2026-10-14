@@ -354,6 +354,8 @@ fn idle_cycle_worker(bencher: Bencher, orphans: usize) {
 
 #[divan::bench(sample_count = 10, sample_size = 1, skip_ext_time)]
 fn idle_cycle_hidden_fanout(bencher: Bencher) {
+    // About 3x the coalesced 23,776 requests, below the uncoalesced 116,624.
+    const MAX_ALLOCATIONS: usize = 72_000;
     let mut counts = (0, 0);
     bencher
         .with_inputs(|| {
@@ -396,8 +398,12 @@ fn idle_cycle_hidden_fanout(bencher: Bencher) {
         })
         .bench_local_refs(|(_, cycle)| {
             counts = counted(|| cycle.run_content_cycle());
+            assert!(
+                counts.0 <= MAX_ALLOCATIONS,
+                "50-agent/57-subscriber hidden fanout requested {} allocations; ceiling {MAX_ALLOCATIONS}",
+                counts.0,
+            );
         });
-    // Set the allocation ceiling here after the hidden-pane optimization is measured.
     writeln!(
         std::io::stderr(),
         "idle_cycle_hidden_fanout: allocations={} bytes={}",

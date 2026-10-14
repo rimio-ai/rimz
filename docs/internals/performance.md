@@ -203,6 +203,24 @@ Captured 2026-10-12; paired values below are for 24 / 100 subscribers. Before is
 
 Local allocations are flat at about 3.68 KB per subscriber, both at fixed room size and across the two room sizes: groups, rows, and history do not multiply with subscribers. Sharing reduces the larger local publication from trunk's 22.53 MB to 368.2 KB (about 98.4% less allocation); local configuration, worktree roots, and pane metadata remain owned. A real exclusion still pays for a detached group vector and changed collections, as the `exclude_agent` case shows.
 
+#### Hidden-pane fanout at 50 agents and 57 subscribers
+
+`crates/rimz/benches/fleet.rs::idle_cycle_hidden_fanout` places each subscriber in a distinct tab, watches one, and paints every attachment once before timing. Every measured cycle changes row content, delivers a real retained worker fold, and steps each renderer's frame timing twice. The 56 hidden panes coalesce content within the data tick; the watched pane applies every change. The allocation ceiling is 72,000 requests per cycle, about three times the measured 23,776 and below the uncoalesced 116,624.
+
+Captured 2026-10-14 with `cargo xtask perf --bench fleet -- idle_cycle` and `cargo xtask perf --bench fleet -- publish`, ten samples per case. Before is `fb140708c`, after is `6c22a4b01`, on the same machine with the arena cap unchanged. Bytes include allocation and reallocation requests from the counting allocator, rather than Divan's allocation-only column. The other cases retain their 200-agent/100-subscriber fixtures.
+
+| Case | Orphans | Before → after median, ms | Before → after allocation requests | Before → after requested bytes |
+| --- | ---: | ---: | ---: | ---: |
+| Painted hidden fanout | 0 | 7.689 → 5.115 | 116,624 → 23,776 | 10,846,587 → 2,920,860 |
+| End-to-end idle | 0 | 7.013 → 5.924 | 51,200 → 51,200 | 6,566,776 → 6,483,552 |
+| End-to-end idle | 3,000 | 6.407 → 7.637 | 51,200 → 51,200 | 6,566,776 → 6,483,552 |
+| Worker-only idle | 0 | 6.142 → 16.74 | 51,103 → 51,103 | 6,559,720 → 6,476,496 |
+| Worker-only idle | 3,000 | 6.280 → 16.37 | 51,103 → 51,103 | 6,559,720 → 6,476,496 |
+| Publish | 0 | 3.952 → 3.327 | 37,996 → 37,996 | 3,807,708 → 3,724,484 |
+| Publish | 3,000 | 4.857 → 7.687 | 37,996 → 37,996 | 3,807,708 → 3,724,484 |
+
+Hidden fanout requests 79.6% fewer allocations and 73.1% fewer bytes. The wall times were taken at a load average near 45 and are not comparable: two back-to-back reruns of the unchanged worker-only arm read 6.4 ms and 12.2 ms. Allocation counts are deterministic and carry the comparison; no wall-time change is claimed for the other arms. This pair compares the complete implementation, without isolating the animation short-circuit or measuring live-host CPU.
+
 #### Change-driven delivery at 200 agents and 100 subscribers
 
 `crates/rimz/benches/fleet.rs::idle_cycle` measures a real retained worker fold and delivery followed by all 100 subscribers applying through `LoopState::on_snapshot`. Painting is excluded: content and clock-only deliveries both mark the frame dirty. `idle_cycle_worker` retains the worker-only measurement. Both use 5,000 ended sessions and either zero or 3,000 orphan context sidecars; fixture creation and the initial content cycle are outside timing. The idle-consumer tests assert that every renderer's snapshot clock advances; the shared benchmark fixture permits unchanged clocks when hidden content is deferred.
@@ -235,6 +253,7 @@ Scale ceilings fail `cargo xtask perf --bench fleet`: publication at 200/100 may
 | --- | ---: | ---: | --- |
 | `fleet::produce_cold` 20 / 50 / 100 agents | 4.65 ms / 7.61 ms / 13.45 ms | 4.52 MB / 9.26 MB / 17.36 MB | 2026-07-05 |
 | `fleet::produce_warm` 20 / 50 / 100 agents | 520 µs / 792 µs / 1.32 ms | 1.53 MB / 2.09 MB / 2.98 MB | 2026-07-05 |
+| `fleet::idle_cycle_hidden_fanout` 50 agents / 57 subscribers, one watched | 5.115 ms | 2.92 MB requested | 2026-10-14 |
 | `hotpath::fuse_owned_no_overlay` 40 agents | 74.7 µs | 819 B | not recorded |
 | `hotpath::rollup_fold_warm` 40 agents | 129 µs | 637.1 KB | 2026-07-05 |
 | `hotpath::rollup_fold_warm` 40 agents, 0 / 1,500 carryover rows, re-parsing carryover | 70.8 µs / 16.52 ms | 989 KB / 90.11 MB | 2026-09-14 |
