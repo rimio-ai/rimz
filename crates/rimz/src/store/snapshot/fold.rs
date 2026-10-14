@@ -3,11 +3,11 @@
 
 use std::cell::Cell;
 use std::cmp::Ordering;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::Duration;
 
 use jiff::Timestamp;
@@ -66,6 +66,7 @@ pub mod testkit {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static CARRYOVER_BYTES_PARSED: AtomicU64 = AtomicU64::new(0);
+    static DERIVED_CARRYOVER_BYTES_READ: AtomicU64 = AtomicU64::new(0);
     static ROLLUP_ROWS_MATERIALIZED: AtomicU64 = AtomicU64::new(0);
     static ROLLUP_BASE_COPIES: AtomicU64 = AtomicU64::new(0);
 
@@ -98,6 +99,17 @@ pub mod testkit {
 
     pub(super) fn count_bytes_parsed(n: u64) {
         CARRYOVER_BYTES_PARSED.fetch_add(n, Ordering::Relaxed);
+        crate::lane::count_event_log_bytes_read(n);
+    }
+
+    /// Trimmed carryover cache bytes read since process start, including misses.
+    #[cfg(feature = "testkit")]
+    pub fn derived_carryover_bytes_read() -> u64 {
+        DERIVED_CARRYOVER_BYTES_READ.load(Ordering::Relaxed)
+    }
+
+    pub(super) fn count_derived_bytes(n: u64) {
+        DERIVED_CARRYOVER_BYTES_READ.fetch_add(n, Ordering::Relaxed);
         crate::lane::count_event_log_bytes_read(n);
     }
 }
@@ -142,6 +154,7 @@ struct FoldCarryover {
     agent_identity: AgentIdentityState,
     resume_outcomes: Vec<ResumeOutcome>,
     source_path: Option<PathBuf>,
+    raw_source: Option<FileStamp>,
     reborn: OnceLock<Arc<Self>>,
 }
 
@@ -163,6 +176,7 @@ impl FoldCarryover {
             agent_identity: raw.agent_identity,
             resume_outcomes: raw.resume_outcomes,
             source_path: None,
+            raw_source: None,
             reborn: OnceLock::new(),
         }
     }
@@ -223,6 +237,7 @@ impl FoldCarryover {
                 agent_identity: self.agent_identity.clone(),
                 resume_outcomes: self.resume_outcomes.clone(),
                 source_path: self.source_path.clone(),
+                raw_source: self.raw_source,
                 reborn: OnceLock::new(),
             })
         }))
@@ -238,16 +253,37 @@ thread_local! {
 /// The fold-ready carryover under the file identity observed before the read.
 /// Rotation and prune replace the file by atomic rename, so a changed payload
 /// changes `(len, mtime, dev, ino)` and re-parses exactly once. An error is
-/// never cached: a corrupt carryover fails every fold until it is replaced.
-fn fold_carryover(path: &Path, project_root: Option<&Path>) -> Result<Arc<FoldCarryover>> {
+/// never cached: a corrupt replacement fails every fold until it is replaced.
+fn fold_carryover(
+    path: &Path,
+    project_root: Option<&Path>,
+    derived_path: Option<&Path>,
+) -> Result<Arc<FoldCarryover>> {
     let stamped = StampedPath::of(path);
     let (mut carryover, cached) =
         match CARRYOVER_PARSE_CACHE.with(|cache| cache.get_stamped(&stamped)) {
             Some(carryover) => (carryover, true),
-            None => (
-                Arc::new(FoldCarryover::from_raw(read_carryover(path)?).trimmed(path)),
-                false,
-            ),
+            None => {
+                let derived = derived_path
+                    .filter(|_| path.exists())
+                    .and_then(|derived| read_derived_carryover(derived, stamped.stamp));
+                let carryover = match derived {
+                    Some(raw) => FoldCarryover {
+                        agents: raw.agents,
+                        agent_identity: raw.agent_identity,
+                        resume_outcomes: raw.resume_outcomes,
+                        source_path: Some(path.to_path_buf()),
+                        ..FoldCarryover::default()
+                    },
+                    None => {
+                        let mut carryover =
+                            FoldCarryover::from_raw(read_carryover(path)?).trimmed(path);
+                        carryover.raw_source = path.exists().then_some(stamped.stamp);
+                        carryover
+                    }
+                };
+                (Arc::new(carryover), false)
+            }
         };
     if !cached || carryover.project_root.as_deref() != project_root {
         Arc::make_mut(&mut carryover).stamp_root_lane(project_root);
@@ -258,7 +294,61 @@ fn fold_carryover(path: &Path, project_root: Option<&Path>) -> Result<Arc<FoldCa
 
 fn workspace_carryover(paths: &StatePaths) -> Result<Arc<FoldCarryover>> {
     let identity = super::assemble::WorkspaceSnapshotIdentity::from_paths(paths);
-    fold_carryover(&paths.agents_carryover, identity.project_root.as_deref())
+    fold_carryover(
+        &paths.agents_carryover,
+        identity.project_root.as_deref(),
+        Some(&paths.carryover_cache),
+    )
+}
+
+#[derive(Serialize, Deserialize)]
+struct DerivedCarryover {
+    version: u32,
+    source: FileStamp,
+    agents: Vec<AgentState>,
+    agent_identity: AgentIdentityState,
+    resume_outcomes: Vec<ResumeOutcome>,
+}
+
+fn read_derived_carryover(path: &Path, source: FileStamp) -> Option<EventCarryover> {
+    let bytes = fs::read(path).ok()?;
+    testkit::count_derived_bytes(bytes.len() as u64);
+    let cached: DerivedCarryover = serde_json::from_slice(&bytes).ok()?;
+    (cached.version == ROLLUP_CACHE_VERSION && cached.source == source).then_some(EventCarryover {
+        agents: cached.agents,
+        agent_identity: cached.agent_identity,
+        resume_outcomes: cached.resume_outcomes,
+    })
+}
+
+pub(super) fn write_carryover_cache(paths: &StatePaths) -> Result<()> {
+    static PUBLISHED: OnceLock<Mutex<HashSet<StampedPath>>> = OnceLock::new();
+    let carryover = workspace_carryover(paths)?;
+    let Some(source) = carryover.raw_source else {
+        return Ok(());
+    };
+    let stamped = StampedPath {
+        path: paths.agents_carryover.clone(),
+        stamp: source,
+    };
+    let mut published = PUBLISHED
+        .get_or_init(Mutex::default)
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    if published.contains(&stamped) {
+        return Ok(());
+    }
+    let cached = DerivedCarryover {
+        version: ROLLUP_CACHE_VERSION,
+        source,
+        agents: carryover.agents.clone(),
+        agent_identity: carryover.agent_identity.clone(),
+        resume_outcomes: carryover.resume_outcomes.clone(),
+    };
+    let _ = atomic::sweep_stale_temp_siblings(&paths.carryover_cache, Duration::from_secs(3_600));
+    atomic::write_temp_then_rename_cache_compact(&paths.carryover_cache, &cached)?;
+    published.insert(stamped);
+    Ok(())
 }
 
 /// The carryover-merged agent rollup, layered so a fold never copies history:
@@ -354,7 +444,8 @@ pub(crate) fn agent_rollup_with_carryover(
     .to_vec()
 }
 
-/// Bump when [`RollupCache`]'s shape or a reducer's semantics change — a
+/// Bump when [`RollupCache`]'s shape, a reducer's semantics, or
+/// [`FoldCarryover::trimmed`]'s rules change — a
 /// mismatched cache reads as absent and cold-rebuilds.
 const ROLLUP_CACHE_VERSION: u32 = 27;
 
