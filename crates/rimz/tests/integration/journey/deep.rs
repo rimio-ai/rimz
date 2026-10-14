@@ -1101,7 +1101,7 @@ fn tmux_resumed_parent_session_switch_keeps_subagent_nested() {
         tmux(&socket, &["set-environment", "-t", &session, key, value]);
     }
     // Exercise the real resume exec/attach path, not cohort selection. Bare
-    // `agents codex --resume` execs directly; close-on-exit forces spawn mode.
+    // `agents codex --continue` execs directly; close-on-exit forces spawn mode.
     let mut request = rimz::harness::launch::ExecRequest::bare_launch(old.kind.clone(), vec![]);
     request.action = rimz::harness::launch::ExecAction::Resume {
         session_id: old.agent_id.to_string(),

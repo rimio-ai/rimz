@@ -742,7 +742,7 @@ mod pane_exec {
         assert_eq!(
             message,
             format!(
-                "rimz: agent `codex` exited ({status}); resume with `rimz agents forge.coder --resume`\r\n"
+                "rimz: agent `codex` exited ({status}); resume with `rimz agents forge.coder --continue`\r\n"
             )
         );
 

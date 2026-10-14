@@ -55,7 +55,7 @@ pub(super) fn launch_layout(
     globals: &GlobalFlags,
     allow_in_place: bool,
 ) -> Result<()> {
-    if args.launch.cohort.resume {
+    if args.launch.cohort.continue_cohort {
         validate_resume_inputs(&args.launch, ResumeEntrance::Flag)?;
     }
     if args.launch.cohort.fresh
@@ -182,7 +182,7 @@ pub(in crate::cli) fn launch_resolved<'a>(
     let store = &ctx.store;
     report_unknown_config_keys(&machine_config)?;
     let effective = rimz::config::effective::load(&machine_config, &workspace.project_root)?;
-    if !args.launch.cohort.resume {
+    if !args.launch.cohort.continue_cohort {
         machine_config.agents.startup_relaunch_wait()?;
     }
     let default_lane = if loop_task.is_some() {
@@ -222,8 +222,8 @@ pub(in crate::cli) fn launch_resolved<'a>(
         args.launch
             .prompt
             .as_deref()
-            .filter(|_| !args.launch.cohort.resume),
-        if args.launch.cohort.resume {
+            .filter(|_| !args.launch.cohort.continue_cohort),
+        if args.launch.cohort.continue_cohort {
             &matching_overrides
         } else {
             &args.launch.overrides
@@ -253,7 +253,7 @@ pub(in crate::cli) fn launch_resolved<'a>(
         team_name,
     } = resolved;
     let team = team_name.as_deref().and_then(|name| teams.0.get(name));
-    if !args.launch.cohort.resume
+    if !args.launch.cohort.continue_cohort
         && args.launch.cohort.from_pr.is_none()
         && let Some(name) = team_name.as_deref()
         && let Some(team) = team
@@ -300,7 +300,7 @@ pub(in crate::cli) fn launch_resolved<'a>(
     let prompt_agent_index = prompt.and(receipt_leader_index);
     let mut checked_folder_trust = HashSet::new();
     let mut preflighted_logins = Vec::new();
-    if !args.launch.cohort.resume {
+    if !args.launch.cohort.continue_cohort {
         crate::cli::admit_launch_worktree_name(
             workspace,
             &machine_config.agents.worktree,
@@ -320,7 +320,7 @@ pub(in crate::cli) fn launch_resolved<'a>(
         .map(|column| column.rows.len())
         .sum::<usize>()
         == 1;
-    if args.launch.cohort.resume {
+    if args.launch.cohort.continue_cohort {
         let worktree_filter = resume_worktree_scope(
             args.launch.cohort.worktree.as_deref(),
             workspace,
@@ -1402,7 +1402,7 @@ fn cohort_resume_error(
                     let retry = if teams.0.contains_key(first) {
                         format!("rimz teams resume {first}")
                     } else {
-                        format!("rimz agents {first} --resume")
+                        format!("rimz agents {first} --continue")
                     };
                     anyhow::anyhow!(
                         "nothing to resume for {subject}; resumable here: {} — retry with `{retry}`",
@@ -1410,14 +1410,19 @@ fn cohort_resume_error(
                     )
                 }
                 None => {
-                    anyhow::anyhow!("nothing to resume for {subject}; launch without `--resume`")
+                    anyhow::anyhow!("nothing to resume for {subject}; launch without `--continue`")
                 }
             }
         }
         rimz::harness::resume::CohortResumeErr::MembersStillLive { labels } => {
             anyhow::anyhow!(
-                "cannot resume {subject}; still live: {}; close them first or drop `--resume`",
+                "cannot resume {subject}; still live: {}; close them first or drop `--continue`",
                 labels.join(", ")
+            )
+        }
+        rimz::harness::resume::CohortResumeErr::SessionNotResumable { label } => {
+            anyhow::anyhow!(
+                "cannot continue {subject}; {label} has no resumable session; use `rimz agents {spec} --resume` to choose a provider session, or `rimz agents {spec}` to launch fresh"
             )
         }
         rimz::harness::resume::CohortResumeErr::LoginMismatch(mismatch) => mismatch.into(),

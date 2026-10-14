@@ -68,7 +68,7 @@ pub(super) fn resume_agent(reference: &str, bg: bool, globals: &GlobalFlags) -> 
     }
     if let (Some(team), Some(role)) = (&agent.team, &agent.role) {
         bail!(
-            "@{name} is a member of team `{team}`; reopen it with `rimz agents {team}.{role} --resume`"
+            "@{name} is a member of team `{team}`; reopen it with `rimz agents {team}.{role} --continue`"
         );
     }
     if agent.parent_agent_id.is_some() || agent.launch_depth.is_some_and(|depth| depth > 0) {

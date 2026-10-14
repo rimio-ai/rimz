@@ -186,6 +186,9 @@ fn parse_agent_prompt(value: &str) -> Result<String, String> {
 }
 
 fn parse_launch_prompt(value: &str, shorts: &[char]) -> Result<String, String> {
+    if value == "--resume" || value.starts_with("--resume=") {
+        return Err("use --continue to reopen a cohort".to_owned());
+    }
     if let Some(short) = value.strip_prefix('-').and_then(|rest| rest.chars().next())
         && shorts.contains(&short)
     {
@@ -225,15 +228,14 @@ pub(crate) struct CohortLaunchArgs {
     /// Create or reuse a RimZ-owned worktree from a pull request number or URL.
     #[arg(long = "from-pr", value_name = "PR", value_parser = parse_pr, conflicts_with = "channel")]
     pub(crate) from_pr: Option<rimz::forge::PrTarget>,
-    /// Resume (alias --continue) a matching prior cohort, optionally scoped by -w or cwd.
+    /// Continue a matching prior cohort, optionally scoped by -w or cwd.
     #[arg(
-        long,
-        visible_alias = "continue",
+        long = "continue",
         conflicts_with_all = ["channel", "from_pr", "description", "budget"]
     )]
-    pub(crate) resume: bool,
+    pub(crate) continue_cohort: bool,
     /// Launch new sessions in a named worktree instead of resuming its closed cohort.
-    #[arg(long, conflicts_with_all = ["resume", "from_pr"])]
+    #[arg(long, conflicts_with_all = ["continue_cohort", "from_pr"])]
     pub(crate) fresh: bool,
     /// Cap each member's spend for the session (`5`) or local day (`20/day`).
     #[arg(long, value_name = "AMOUNT[/day]")]
@@ -308,7 +310,7 @@ impl LaunchOverrideArgs {
 #[derive(Debug, Default, PartialEq, Args)]
 pub(crate) struct AgentLaunchArgs {
     /// Working directory for the launched agent; the room stays the caller's.
-    #[arg(long, value_name = "DIR", conflicts_with_all = ["worktree", "from_pr", "resume", "fresh"])]
+    #[arg(long, value_name = "DIR", conflicts_with_all = ["worktree", "from_pr", "continue_cohort", "fresh"])]
     pub(crate) cwd: Option<PathBuf>,
     /// Inline spec, named team, or team role (`claude,codex+term`, `forge.planner`).
     #[arg(
@@ -324,7 +326,7 @@ pub(crate) struct AgentLaunchArgs {
     #[command(flatten)]
     pub(crate) cohort: CohortLaunchArgs,
     /// Durable name for a single launched agent.
-    #[arg(long, short = 'n', conflicts_with = "resume")]
+    #[arg(long, short = 'n', conflicts_with = "continue_cohort")]
     pub(crate) name: Option<String>,
     /// Split the agent into a new pane in the current tab instead of taking
     /// over the current pane. Single agent cell only.
@@ -333,7 +335,7 @@ pub(crate) struct AgentLaunchArgs {
     #[command(flatten)]
     pub(crate) overrides: LaunchOverrideArgs,
     /// Run one supervised agent prompt and print its final answer.
-    #[arg(short = 'p', long = "print", conflicts_with = "resume")]
+    #[arg(short = 'p', long = "print", conflicts_with = "continue_cohort")]
     pub(crate) print: bool,
     /// Internal lifecycle policy for callers whose child must remain
     /// self-cleaning even when the supervised run blocks.
@@ -975,9 +977,9 @@ fn validate_detach(launch: &AgentLaunchArgs, print: bool) -> Result<()> {
     if !launch.cohort.detach {
         return Ok(());
     }
-    if launch.cohort.resume {
+    if launch.cohort.continue_cohort {
         bail!(
-            "--detach cannot be combined with --resume: a resumed cohort has no launch task to detach; drop --detach"
+            "--detach cannot be combined with --continue: a resumed cohort has no launch task to detach; drop --detach"
         );
     }
     if print {

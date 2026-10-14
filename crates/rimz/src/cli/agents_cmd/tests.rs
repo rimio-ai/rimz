@@ -736,7 +736,7 @@ mod parse {
         ]))
         .unwrap();
         assert_eq!(request.cwd.as_deref(), Some(Path::new("/tmp/clean")));
-        for flag in ["--worktree=demo", "--from-pr=12", "--resume", "--fresh"] {
+        for flag in ["--worktree=demo", "--from-pr=12", "--continue", "--fresh"] {
             let error =
                 AgentsHarness::try_parse_from(["rimz", "claude", "--cwd", "/tmp/clean", flag])
                     .unwrap_err();
@@ -796,19 +796,14 @@ mod parse {
             Some(Forge::GitLab)
         );
 
-        let resume = parse_agents(&["rimz", "forge", "--resume"]);
-        let alias = parse_agents(&["rimz", "forge", "--continue"]);
+        let resume = parse_agents(&["rimz", "forge", "--continue"]);
         let scoped = parse_agents(&[
             "rimz",
             "forge",
             "--worktree=restore-living-team",
-            "--resume",
+            "--continue",
         ]);
-        assert!(
-            resume.launch.cohort.resume
-                && alias.launch.cohort.resume
-                && scoped.launch.cohort.resume
-        );
+        assert!(resume.launch.cohort.continue_cohort && scoped.launch.cohort.continue_cohort);
         assert_eq!(
             scoped.launch.cohort.worktree.as_deref(),
             Some("restore-living-team")
@@ -841,19 +836,17 @@ mod parse {
             vec!["ship"],
         ] {
             for prefix in [vec!["rimz", "claude"], vec!["rimz", "launch", "claude"]] {
-                for resume in ["--resume", "--continue"] {
-                    let mut argv = prefix.clone();
-                    argv.push(resume);
-                    argv.extend_from_slice(&override_args);
-                    let args = parse_agents(&argv);
-                    let launch = match &args.command {
-                        Some(AgentsSubcmd::Launch(launch)) => launch.as_ref(),
-                        _ => &args.launch,
-                    };
-                    assert!(launch.cohort.resume);
-                    validate_resume_inputs(launch, ResumeEntrance::Flag).unwrap();
-                    validate_resume_inputs(launch, ResumeEntrance::Reconcile).unwrap();
-                }
+                let mut argv = prefix;
+                argv.push("--continue");
+                argv.extend_from_slice(&override_args);
+                let args = parse_agents(&argv);
+                let launch = match &args.command {
+                    Some(AgentsSubcmd::Launch(launch)) => launch.as_ref(),
+                    _ => &args.launch,
+                };
+                assert!(launch.cohort.continue_cohort);
+                validate_resume_inputs(launch, ResumeEntrance::Flag).unwrap();
+                validate_resume_inputs(launch, ResumeEntrance::Reconcile).unwrap();
             }
         }
         for (input, override_args, message) in [
@@ -873,7 +866,7 @@ mod parse {
                 "resume does not accept passthrough arguments after `--`; put supported settings in the profile or launch fresh",
             ),
         ] {
-            for resume in [Some("--resume"), Some("--continue"), None] {
+            for resume in [Some("--continue"), None] {
                 let mut argv = vec!["rimz", "claude"];
                 argv.extend(resume);
                 argv.extend_from_slice(&override_args);
@@ -898,7 +891,7 @@ mod parse {
             clap::error::ErrorKind::ArgumentConflict,
         );
         assert_clap_error(
-            &["rimz", "claude", "--resume", "--ask", "--yolo"],
+            &["rimz", "claude", "--continue", "--ask", "--yolo"],
             clap::error::ErrorKind::ArgumentConflict,
         );
         assert_clap_error(
@@ -915,12 +908,10 @@ mod parse {
         ] {
             assert!(parse_agents(&argv).launch.cohort.fresh);
         }
-        for conflicting in ["--resume", "--continue"] {
-            assert_clap_error(
-                &["rimz", "forge", "-w", "topic", "--fresh", conflicting],
-                clap::error::ErrorKind::ArgumentConflict,
-            );
-        }
+        assert_clap_error(
+            &["rimz", "forge", "-w", "topic", "--fresh", "--continue"],
+            clap::error::ErrorKind::ArgumentConflict,
+        );
         assert_clap_error(
             &["rimz", "forge", "--fresh", "--from-pr", "1"],
             clap::error::ErrorKind::ArgumentConflict,
@@ -1052,7 +1043,7 @@ mod parse {
             &["--budget", "5"],
             &["-p"],
         ] {
-            let argv = [vec!["rimz", "claude", "--resume"], override_args.to_vec()].concat();
+            let argv = [vec!["rimz", "claude", "--continue"], override_args.to_vec()].concat();
             assert_clap_error(&argv, ArgumentConflict);
         }
     }
@@ -1104,8 +1095,8 @@ mod parse {
                 "--detach on `-p` requires --bg: a foreground run prints its answer inline; add --bg, or drop --detach",
             ),
             (
-                &["rimz", "claude", "--resume", "--detach"],
-                "--detach cannot be combined with --resume: a resumed cohort has no launch task to detach; drop --detach",
+                &["rimz", "claude", "--continue", "--detach"],
+                "--detach cannot be combined with --continue: a resumed cohort has no launch task to detach; drop --detach",
             ),
             (
                 &["rimz", "claude", "--detach"],
@@ -1123,7 +1114,7 @@ mod parse {
         for argv in [
             &["rimz", "claude", "hi", "--detach"][..],
             &["rimz", "claude", "hi", "-p", "--bg", "--detach"],
-            &["rimz", "claude", "--resume"],
+            &["rimz", "claude", "--continue"],
             &["rimz", "claude", "-p"],
         ] {
             let args = parse_agents(argv);

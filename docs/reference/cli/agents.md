@@ -21,7 +21,7 @@ Why you would launch through RimZ instead of the bare CLI is the [agents guide](
 | --- | --- | --- |
 | Launch agents, a layout, or a team role | `rimz agents <SPEC>`, `launch` | [Launch agents](#launch-agents) |
 | Run one scripted, exit-coded turn | `rimz agents <SPEC> <PROMPT> -p` | [Supervised runs](#supervised-runs--p) |
-| Reopen closed agents | `resume @<ref>`, `--resume`, `resume [SCOPE]` | [Resume agents](#resume-agents) |
+| Reopen closed agents | `resume @<ref>`, `--continue`, `resume [SCOPE]` | [Resume agents](#resume-agents) |
 | See what a launch would run | `profiles`, `explain` | [Inspect profiles and launch plans](#inspect-profiles-and-launch-plans) |
 | Check machine definitions | `validate` | [Validate definitions](#validate-definitions) |
 | Add a third-party agent kind | `register`, `check` | [Register a third-party kind](#register-a-third-party-kind) |
@@ -120,11 +120,11 @@ error: `planner` names a live agent (@planner) as well as a launch spec
 
 A launch that opens a new pane or tab prints a receipt: the checkout path, then each member's handle, provider, and resolved model (`-` when unset). The handle is the one [`list`](#list) shows for that agent, with the pet name beside it whenever the two differ: a `coder` profile launch reads `launched @coder (round-binder) in #auth (…)`, and a second `coder` in the same lane is named by its pet name. When you gave a prompt, a shortened echo names its recipient, and non-team launches add copy-ready `Reach` and `Wait` commands for the leader, all under the same handle. A launch that creates a launch-prompt run (below) prints the peer receipt in their place. The receipt records what was launched; the agents start asynchronously. A named team prints the [team receipt](./teams.md#launch-a-team) instead, and a launch that takes over the current pane prints none.
 
-A freshly launched agent whose CLI exits with an error before its session opens is relaunched in the same pane. RimZ prints `rimz: codex exited with code 1 before its session opened; relaunching in 3s (1 of 3, Ctrl-C cancels)`, waits, and starts the same command again, up to three times by default ([startup relaunches](../../guide/configuration.md#startup-relaunches)). When the last relaunch dies the same way, RimZ says it is not relaunching again and reports the failure as it would have the first. A session opened with `--resume` or [`fork`](#fork) is never relaunched.
+A freshly launched agent whose CLI exits with an error before its session opens is relaunched in the same pane. RimZ prints `rimz: codex exited with code 1 before its session opened; relaunching in 3s (1 of 3, Ctrl-C cancels)`, waits, and starts the same command again, up to three times by default ([startup relaunches](../../guide/configuration.md#startup-relaunches)). When the last relaunch dies the same way, RimZ says it is not relaunching again and reports the failure as it would have the first. A session opened with `--continue` or [`fork`](#fork) is never relaunched.
 
-An agent-launched interactive peer with a nonempty prompt also gets a per-turn run before its pane opens. Only the prompt recipient gets that run in a layout. A team launch instead reports its leader once per `Done` ([team reports](./teams.md#team-reports)). Its receipt names the `AGENT_REPORT` that returns when the launcher's fleet settles, the launcher-visible response file, and the peer's handle (`@<name>#<channel>`, or `@<name>` outside a channel) in a `rimz agents wait` command and a `rimz message` follow-up. Later launcher messages can open new reportable turns; user-typed turns do not. User launches, promptless launches, and `--resume` create no launch-prompt run. An adapter without native root turn-start and turn-end hooks creates none and its receipt says it will not report back. The peer stays interactive after reporting.
+An agent-launched interactive peer with a nonempty prompt also gets a per-turn run before its pane opens. Only the prompt recipient gets that run in a layout. A team launch instead reports its leader once per `Done` ([team reports](./teams.md#team-reports)). Its receipt names the `AGENT_REPORT` that returns when the launcher's fleet settles, the launcher-visible response file, and the peer's handle (`@<name>#<channel>`, or `@<name>` outside a channel) in a `rimz agents wait` command and a `rimz message` follow-up. Later launcher messages can open new reportable turns; user-typed turns do not. User launches, promptless launches, and `--continue` create no launch-prompt run. An adapter without native root turn-start and turn-end hooks creates none and its receipt says it will not report back. The peer stays interactive after reporting.
 
-`--detach` launches that prompt without the report: the run and its response file are still written and `rimz agents wait <RUN_ID>` still reads the answer, but no `AGENT_REPORT` returns for the launch, the launcher is not held open or shown as waiting, and the receipt says so and names the wait by the peer's handle. A launcher message sent after the launch turn settles still opens a reported turn; one that lands while the launch turn is open becomes part of the unreported answer. On a team launch the flag drops the `TEAM_REPORT` instead ([team reports](./teams.md#team-reports)). `--detach` is refused without a prompt, with `--resume`, and on `-p` without `--bg`, where the run prints its answer inline.
+`--detach` launches that prompt without the report: the run and its response file are still written and `rimz agents wait <RUN_ID>` still reads the answer, but no `AGENT_REPORT` returns for the launch, the launcher is not held open or shown as waiting, and the receipt says so and names the wait by the peer's handle. A launcher message sent after the launch turn settles still opens a reported turn; one that lands while the launch turn is open becomes part of the unreported answer. On a team launch the flag drops the `TEAM_REPORT` instead ([team reports](./teams.md#team-reports)). `--detach` is refused without a prompt, with `--continue`, and on `-p` without `--bg`, where the run prints its answer inline.
 
 Launches refuse before they create any pane or record when:
 
@@ -189,7 +189,7 @@ The profile fields these flags override are described in the [configuration guid
 
 For a routed profile that can render the requested kind, `--agent <kind>` selects that family's complete definition, including its tool arguments. Otherwise `--agent` uses the re-base behavior below.
 
-`--agent` swaps the engine and keeps the job. The replacement profile or kind supplies the provider, and supplies model and effort whenever it sets them, so `rimz agents fixer --agent opus` runs the fixer prompt on the `opus` profile's model and effort. When the replacement leaves model or effort unset, a same-provider re-base keeps the cell's values, while a provider change drops the cell's model and keeps its effort. Permission mode, isolation default, budget, `auto-compact`, skills, and prompt files carry over from the original profile, and the replacement fills only what the original left unset. Raw profile `args` carry over on a same-provider re-base; on a provider change they come from the replacement instead, so a named Codex definition can supply its model and generated tool flags when selected as the replacement. Command-line flags still win, and typed fields the new adapter cannot express fail before any pane opens. `--agent` applies to this launch only: `--resume` refuses it, and a later `restart` refuses when the profile resolves back to a different provider.
+`--agent` swaps the engine and keeps the job. The replacement profile or kind supplies the provider, and supplies model and effort whenever it sets them, so `rimz agents fixer --agent opus` runs the fixer prompt on the `opus` profile's model and effort. When the replacement leaves model or effort unset, a same-provider re-base keeps the cell's values, while a provider change drops the cell's model and keeps its effort. Permission mode, isolation default, budget, `auto-compact`, skills, and prompt files carry over from the original profile, and the replacement fills only what the original left unset. Raw profile `args` carry over on a same-provider re-base; on a provider change they come from the replacement instead, so a named Codex definition can supply its model and generated tool flags when selected as the replacement. Command-line flags still win, and typed fields the new adapter cannot express fail before any pane opens. `--agent` applies to this launch only: `--continue` requires the same provider, and a later `restart` refuses when the profile resolves back to a different provider.
 
 Isolation resolves as recorded `--isolation` flag, then the profile's `isolation` default, then machine `agents.isolation`. Sandbox isolation runs the bubblewrap preflight and refuses before any pane opens when it fails, including when selected by a profile. The override is recorded on each agent, so `restart`, `fork`, resume, room rebirth, and the agent's `rimz subagents` children keep it. A cohort resume with `--isolation host|sandbox` replaces that recorded override while keeping the conversation. Omitting the flag preserves any recorded override; an agent with none re-reads its profile default on every relaunch. The profile default itself is never recorded as a flag.
 
@@ -199,7 +199,7 @@ A launch runs in the current directory's checkout by default. These flags choose
 
 | Flag | Effect |
 | --- | --- |
-| `--cwd <DIR>` | Launch in an existing directory without changing rooms or taking worktree ownership. Relative paths resolve against the caller's current directory, in its sandbox view when sandboxed. Missing directories are refused, never created. The channel follows the directory basename unless `--channel` names one. Conflicts with `--worktree`, `--from-pr`, `--resume`, and `--fresh`. |
+| `--cwd <DIR>` | Launch in an existing directory without changing rooms or taking worktree ownership. Relative paths resolve against the caller's current directory, in its sandbox view when sandboxed. Missing directories are refused, never created. The channel follows the directory basename unless `--channel` names one. Conflicts with `--worktree`, `--from-pr`, `--continue`, and `--fresh`. |
 | `-w`, `--worktree [NAME]` | Reuse or create the RimZ-owned worktree `NAME`, on channel `#NAME` in a tab named `#NAME`. Creating a named worktree whose channel live agents hold is refused with ``channel `NAME` is held by live agents``; reusing an existing worktree is unchanged. Bare `-w` creates a fresh worktree with a generated name. |
 | `--from-pr <NUMBER\|URL>` | Reuse the marked tree holding a same-repository PR's head branch, or create a tree named `pr-<N>` unless `-w NAME` names it. An explicit name must match an existing holder. |
 | `--channel <NAME>` | Launch into the lane `#NAME` in the selected directory, in a tab named `#NAME`. The lane exists while agents run in it. `NAME` is bare ASCII letters, digits, `_`, or `-` (`--channel '#design'` is refused with `invalid channel name`), and a name a RimZ-owned worktree holds is refused with ``channel `NAME` is backed by a worktree``. |
@@ -239,19 +239,19 @@ Launching a named team, or an inline spec of two or more cells, into a named wor
 | live | With a prompt, sends or queues it to the leader at a completed-turn boundary and prints a message receipt. If the leader is not live, refuses with exit 1 and commands to message the live members instead. Without a prompt, focuses the cohort and exits 0. Focus stays put with `--bg` or an agent caller. |
 | closed, RimZ-owned worktree with work in progress | Prompts `(resume/fresh/cancel)`, default `resume`. |
 | closed, RimZ-owned worktree that is clean and landed | Prompts `(remove/fresh/cancel)`, default `cancel`. `remove` deletes the worktree and its branch, then launches. |
-| closed, worktree RimZ did not create | Asks to enter the worktree, as above; add `--resume` to resume the cohort. |
+| closed, worktree RimZ did not create | Asks to enter the worktree, as above; add `--continue` to resume the cohort. |
 
-The same table applies to `--from-pr` when it reuses the tree holding the PR head branch. If its tips differ, the PR tip choice comes after the reconciliation prompt and before launching or resuming. A live cohort exits without moving the tip. Choosing `remove` resolves a fresh PR checkout instead. `--resume` and `--fresh` are rejected alongside `--from-pr`; to answer in advance, run the printed `-w <holder>` command instead.
+The same table applies to `--from-pr` when it reuses the tree holding the PR head branch. If its tips differ, the PR tip choice comes after the reconciliation prompt and before launching or resuming. A live cohort exits without moving the tip. Choosing `remove` resolves a fresh PR checkout instead. `--continue` and `--fresh` are rejected alongside `--from-pr`; to answer in advance, run the printed `-w <holder>` command instead.
 
 Enter takes the default, and an unrecognized answer or end of input refuses with `canceled; nothing launched` and exit 1. Without a terminal on stdin, RimZ refuses with exit 1 and prints the resume-or-remove command and the `--fresh` command instead of prompting. Relaunch commands preserve the supplied prompt; teams use `team#lane` addresses. A single-agent spec launches fresh without reconciling.
 
-Two flags answer the prompt in advance. `--resume` (or `--continue`) resumes the prior cohort even when the worktree is clean or merged; see [Resume a cohort](#resume-a-cohort). `--fresh` starts new sessions in the existing checkout:
+Two flags answer the prompt in advance. `--continue` resumes the prior cohort even when the worktree is clean or merged; see [Resume a cohort](#resume-a-cohort). `--fresh` starts new sessions in the existing checkout:
 
 ```sh
 rimz agents forge -w restore-living-team --fresh   # new sessions, same checkout and files
 ```
 
-`--fresh` removes nothing. The worktree, its branch, and every file survive, so the previous run's team scratch files still reach each member: with its first prompt on Claude and Codex, and in the launch reminder where another adapter takes one. The closed members keep their store rows, the new members get new handles in the same channel, and messages still queued for the old members are archived by the next `rimz gc`. `--fresh` needs a named worktree (`-w NAME`), conflicts with `--resume` and `--from-pr`, is refused with `-p`, and never duplicates a live cohort: that case reports the running cohort and follows the [focus rule](#channel-worktree-and-placement). The decision logic is in [fleet.md → Cohort relaunch reconciliation](../../internals/harness/fleet.md#cohort-relaunch-reconciliation).
+`--fresh` removes nothing. The worktree, its branch, and every file survive, so the previous run's team scratch files still reach each member: with its first prompt on Claude and Codex, and in the launch reminder where another adapter takes one. The closed members keep their store rows, the new members get new handles in the same channel, and messages still queued for the old members are archived by the next `rimz gc`. `--fresh` needs a named worktree (`-w NAME`), conflicts with `--continue` and `--from-pr`, is refused with `-p`, and never duplicates a live cohort: that case reports the running cohort and follows the [focus rule](#channel-worktree-and-placement). The decision logic is in [fleet.md → Cohort relaunch reconciliation](../../internals/harness/fleet.md#cohort-relaunch-reconciliation).
 
 ### Supervised runs (`-p`)
 
@@ -312,7 +312,7 @@ Attended agent launches and relaunches warn, but continue, when the selected acc
 
 ## Resume agents
 
-A closed agent's session files stay where its CLI wrote them, so RimZ can reopen it with the provider's own resume. Use `resume @<ref>` for one closed solo session, `--resume` when you know the spec you launched, or `resume` when you know the lane.
+A closed agent's session files stay where its CLI wrote them, so RimZ can reopen it with the provider's own resume. Use `resume @<ref>` for one closed solo session, `--continue` when you know the spec you launched, or `resume` when you know the lane.
 
 ### Resume one closed session
 
@@ -323,7 +323,7 @@ rimz agents resume @bright-otter
 rimz agents resume @a1b2c3d4 --bg
 ```
 
-Resolution checks live agents first, then retained agents under the same channel context. After a scoped miss, a room-wide retained lookup is accepted only when exactly one agent matches, so a stopped agent's unique pet name still works from another lane. Otherwise the live miss and its correction remain the answer. An ambiguity in the requested scope refuses and names the candidates. A live session refuses with `rimz agents focus @<name>`; a team member points to `rimz agents <team>.<role> --resume`; a child or provider subagent points to `rimz subagents`. `--fresh`, `--from-pr`, and `--worktree` take lane scopes only, not an `@ref`.
+Resolution checks live agents first, then retained agents under the same channel context. After a scoped miss, a room-wide retained lookup is accepted only when exactly one agent matches, so a stopped agent's unique pet name still works from another lane. Otherwise the live miss and its correction remain the answer. An ambiguity in the requested scope refuses and names the candidates. A live session refuses with `rimz agents focus @<name>`; a team member points to `rimz agents <team>.<role> --continue`; a child or provider subagent points to `rimz subagents`. `--fresh`, `--from-pr`, and `--worktree` take lane scopes only, not an `@ref`.
 
 The session keeps its provider, working directory, channel, and saved launch posture, with its profile rendered from current definitions. Account selection is the same as lane resume: the room's selected account must share the session's history pool. Missing worktrees, unsupported resume CLIs, absent saved conversations, resume caps, unsupported prompt replacement, and unavailable or mismatched accounts refuse rather than launching fresh. A missing worktree also records the session ended. Success prints `resumed <kind>:<name> (<session-id>)` on stdout.
 
@@ -333,14 +333,14 @@ A closed session's record is retained for at least 14 days after it ended; `rimz
 
 ### Resume a cohort
 
-`--resume` (alias `--continue`) relaunches the prior cohort that matches the spec, taking identity, working directory, and channel from the store:
+`--continue` relaunches the prior cohort that matches the spec, taking identity, working directory, and channel from the store:
 
 ```sh
-rimz agents forge --resume                           # the newest forge cohort
-rimz agents forge -w restore-living-team --resume    # that worktree's forge cohort
-rimz agents claude,codex --resume                    # the newest matching inline cohort
-rimz agents claude --resume                          # the newest matching Claude root session
-rimz agents astra --resume                           # the newest root session of profile astra
+rimz agents forge --continue                           # the newest forge cohort
+rimz agents forge -w restore-living-team --continue    # that worktree's forge cohort
+rimz agents claude,codex --continue                    # the newest matching inline cohort
+rimz agents claude --continue                          # the newest matching Claude root session
+rimz agents astra --continue                           # the newest root session of profile astra
 ```
 
 | Spec | Matches |
@@ -354,11 +354,11 @@ Scope follows the worktree. `-w NAME` resumes that worktree's cohort; bare `-w`,
 
 Before opening a pane or taking over the current one, stdout starts with `resuming <spec> in #<lane>`. When several places match, it reads `resuming <spec> in #<lane> (newest of N; others: run rimz agents resume from the project root)`. `N` counts distinct matching closed lanes (worktree and channel pairs), including the selected one, not sessions. One worktree can hold several matching channels, so run the suggested listing from the project root. The usual per-member receipts follow unchanged.
 
-A matched member that is still live refuses the command, so an address is never duplicated. `rimz agents resume @<ref>` can reopen an older closed solo session even when the newest matching root is live. Cleanly closed members still match while their worktree exists, and a cell with no resumable member launches fresh in the cohort's directory and channel. A spec that matches nothing fails and names the specs the same scope can resume.
+A matched member that is still live refuses the command, so an address is never duplicated. `rimz agents resume @<ref>` can reopen an older closed solo session even when the newest matching root is live. Cleanly closed members still match while their worktree exists. A single non-team cell whose session cannot resume refuses instead of launching fresh. Teams and multi-cell cohorts refill unresumable cells fresh in the cohort's directory and channel. A spec that matches nothing fails and names the specs the same scope can resume.
 
-A single-cell resume run from the cohort's own directory takes over the current pane, so the hint an exiting team member leaves (`resume with rimz agents forge.coder --resume`) works from the shell it dropped into. An agent caller or `--bg` makes that a split instead, under the [focus rule](#channel-worktree-and-placement). Run from anywhere else, a lane-scoped resume opens its own tab.
+A single-cell resume run from the cohort's own directory takes over the current pane, so the hint an exiting team member leaves (`resume with rimz agents forge.coder --continue`) works from the shell it dropped into. An agent caller or `--bg` makes that a split instead, under the [focus rule](#channel-worktree-and-placement). Run from anywhere else, a lane-scoped resume opens its own tab.
 
-`--resume` and `--continue` accept `--isolation host|sandbox`, `--ask` or `--yolo`, `--model`, `--effort`, `--fast` or `--no-fast`, `--agent`, and `--tier`. Overrides become the saved launch record for later resumes, restart, and rebirth. Omitting them replays the saved model, effort, fast mode, and agent base, including model suffixes such as `opus[1m]`; in-session `/model` switches are not carried, so restate one with `--model` to keep it. Sessions predating launch records retain their legacy profile and tier behavior. Isolation replaces the recorded override and also survives child launches. A member with no resumable session starts fresh and records its launch settings normally.
+`--continue` accepts `--isolation host|sandbox`, `--ask` or `--yolo`, `--model`, `--effort`, `--fast` or `--no-fast`, `--agent`, and `--tier`. Overrides become the saved launch record for later resumes, restart, and rebirth. Omitting them replays the saved model, effort, fast mode, and agent base, including model suffixes such as `opus[1m]`; in-session `/model` switches are not carried, so restate one with `--model` to keep it. Sessions predating launch records retain their legacy profile and tier behavior. Isolation replaces the recorded override and also survives child launches. In a team or multi-cell cohort, a member with no resumable session starts fresh and records its launch settings normally.
 
 `--agent` must name a profile or kind matching every resumed member's provider. `--tier` requires Markdown definitions and selects only same-provider entries in the requested tier, never a higher tier; a missing entry refuses the whole resume and names the tiers that carry that provider. `--model` and `--tier` conflict. A positional `PROMPT` is queued to the layout's leader as a user message for its first available turn after reopening, not as a new-session prompt.
 
@@ -825,9 +825,9 @@ The exit code is `0` when every target completes; otherwise it is the status cod
 
 #### `stop`
 
-`rimz agents stop <REF>` ends an agent's CLI process the way Ctrl+C would. For a live supervised run it cancels the run; for a completed run kept open with `--keep` it reclaims the pane; for an agent it closes the pane. The provider's session files stay on disk. When the provider supports resuming that session, a stopped agent is one [`--resume`](#resume-agents) away.
+`rimz agents stop <REF>` ends an agent's CLI process the way Ctrl+C would. For a live supervised run it cancels the run; for a completed run kept open with `--keep` it reclaims the pane; for an agent it closes the pane. The provider's session files stay on disk. When the provider supports resuming that session, a stopped agent is one [`--continue`](#resume-agents) away.
 
-Success prints `stopped <address> (<kind>)`. A resumable solo agent's receipt adds `; resume: rimz agents resume @<pet-name>` (session id when unnamed); a resumable team seat points to `rimz agents <team>.<role> --resume`, with `-w <name>` when the seat ran in a RimZ worktree whose name maps back to its path. Children and sessions the provider cannot resume get no resume clause. A run-only stop prints `stopped <name-or-run-id> (run)`. The address is resolved before the stop, from the caller's channel.
+Success prints `stopped <address> (<kind>)`. A resumable solo agent's receipt adds `; resume: rimz agents resume @<pet-name>` (session id when unnamed); a resumable team seat points to `rimz agents <team>.<role> --continue`, with `-w <name>` when the seat ran in a RimZ worktree whose name maps back to its path. Children and sessions the provider cannot resume get no resume clause. A run-only stop prints `stopped <name-or-run-id> (run)`. The address is resolved before the stop, from the caller's channel.
 
 A stop succeeds only when the agent's own pane is gone. A pane the multiplexer still lists after its close failed, or one whose state could not be read and whose close failed, fails the stop with exit `1` and `<handle> was not stopped: <failures>`; the session keeps its loop rows and any pending idle stop, and rerunning the stop retries the close. When the agent's pane closed but something else failed (a child's pane stayed open, or the session's rows could not be retired), the stop exits `1` with `<handle> stopped, but: <failures>`. Each failure starts with the handle it concerns.
 

@@ -451,7 +451,7 @@ mod agent_ref {
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(
             stderr.contains("member of team `forge`")
-                && stderr.contains("rimz agents forge.coder --resume"),
+                && stderr.contains("rimz agents forge.coder --continue"),
             "{stderr}"
         );
     }
@@ -557,7 +557,7 @@ mod agent_ref {
         for same_pane in [false, true] {
             let fixture = Fixture::new(LaunchParams::default(), false, None);
             let output = fixture
-                .command_args(&["worker", "--resume"])
+                .command_args(&["worker", "--continue"])
                 .current_dir(if same_pane {
                     &fixture.cwd
                 } else {
