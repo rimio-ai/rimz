@@ -78,6 +78,12 @@ Read memory from `/proc/<pid>/smaps_rollup`: report `Pss`, and compute USS as `P
 
 Take the delta of `read_bytes` and `write_bytes` in `/proc/<pid>/io` over a fixed window. The hot runtime caches live in `$XDG_RUNTIME_DIR`, which is tmpfs, so their churn is memory traffic; sustained disk bytes point at durable state or transcripts.
 
+### Comparing hosts across a setting
+
+To compare an allocator or other startup setting, give each configuration at least six fresh hosts, interleave the configurations so machine load drifts across all of them, and compare per-run mean CPU. Three hosts per configuration on a loaded machine left the arena-cap comparison in [performance.md](./performance.md#anti-patterns) undecided and forced a second round. glibc fixes its arena limit at first contention, so set a different cap by rebuilding or by an `LD_PRELOAD` shim over `mallopt`, never on a running host.
+
+A hand-relaunched host (supervisors paused with `SIGSTOP`, the host replaced, the supervisors resumed) must stay up at least 60 s after its supervisors attach. A supervisor resets its respawn backoff only after a host outlives `RESPAWN_STABLE_RUN` in `crates/rimz/src/sidebar_pane/supervise.rs`. Each shorter run doubles the backoff, and once it exceeds the host's `UNATTACHED_GRACE` in `crates/rimz/src/sidebar_pane/host.rs` (10 s), the next host exits cleanly before any pane attaches. That looks like a crash of the configuration under test.
+
 ## Build a profilable binary
 
 Profile a binary built with the `profiling` Cargo profile. `perf` and `samply` need frame pointers and line tables, and the release profile strips symbols.
