@@ -578,12 +578,12 @@ fn budget_refusal_finishes_as_a_recorded_gate() {
         12,
     );
 
+    record.check = Some(check.clone());
     let (presentation, notice) = finish_spawn_effect(
         &mut record,
         SupervisedRunOutcome::BudgetExceeded {
             reason: "room budget reached".to_owned(),
         },
-        Some(check.clone()),
         true,
     );
 
@@ -873,11 +873,10 @@ fn skipped_check_preserves_poll_until_and_consumes_watch() {
             .prepare_check(&mut |_| panic!("supplied watch runs no check"))
             .expect("running watch always delivers");
         assert!(check.is_continue());
-        let record = check
-            .continue_value()
-            .unwrap()
-            .expect("watch evidence")
-            .record;
+        let record = fire
+            .terminal_record(LoopRunResult::Completed)
+            .check
+            .unwrap();
         assert_eq!(record.code, None);
         assert!(!record.timed_out);
         assert_eq!(record.output, "still running");
@@ -1358,12 +1357,11 @@ fn loop_signal_prompts_keep_braces_and_check_evidence() {
     )
     .unwrap();
     let outcome = CheckOutcome::new(false, false, "failed guard".to_owned(), Some(1));
-    let check = FiredCheck {
+    fire.fired_guard.push(FiredCheck::Shell {
         command: "false".to_owned(),
         record: check_record(&outcome),
-        outcome,
-    };
-    let body = fire.resolve_effect_prompt(Some(&check)).unwrap();
+    });
+    let body = fire.resolve_effect_prompt().unwrap();
     assert!(
         body.starts_with(
             "Rule `deployment` fired here. deploy.failed · branch: feature\n\nInspect {{branch}}\n\n--- check `false` exited 1 ---\nfailed guard"
@@ -1371,8 +1369,9 @@ fn loop_signal_prompts_keep_braces_and_check_evidence() {
         "{body}"
     );
     fire.signal.as_mut().unwrap().name = "ci.failed".parse().unwrap();
+    fire.fired_guard.clear();
     assert_eq!(
-        fire.resolve_effect_prompt(None).unwrap(),
+        fire.resolve_effect_prompt().unwrap(),
         "Rule `deployment` fired here. ci.failed on feature\n\nInspect {{branch}}"
     );
     let launched = fire.entry.clone();
@@ -1383,20 +1382,14 @@ fn loop_signal_prompts_keep_braces_and_check_evidence() {
         handle: "@coder".to_owned(),
     });
     assert_eq!(
-        fire.resolve_effect_prompt(None).unwrap(),
+        fire.resolve_effect_prompt().unwrap(),
         "waited on ci.failed on feature\nfired [deployment]\n\nInspect {{branch}}"
     );
     fire.entry = launched;
     fire.signal = None;
-    assert_eq!(
-        fire.resolve_effect_prompt(None).unwrap(),
-        "Inspect {{branch}}"
-    );
+    assert_eq!(fire.resolve_effect_prompt().unwrap(), "Inspect {{branch}}");
     fire.entry.signal = None;
-    assert_eq!(
-        fire.resolve_effect_prompt(None).unwrap(),
-        "Inspect {{branch}}"
-    );
+    assert_eq!(fire.resolve_effect_prompt().unwrap(), "Inspect {{branch}}");
 }
 
 #[test]
@@ -1455,7 +1448,7 @@ fn condition_evidence_reaches_prompt_and_terminal_record() {
     .unwrap()
     .with_condition(Some(evidence.clone()));
     assert_eq!(
-        fire.resolve_effect_prompt(None).unwrap(),
+        fire.resolve_effect_prompt().unwrap(),
         "Rule `ship` fired here. ci.log: \"red\\nlog\" · pr.state: unknown · team.stage: Done\n\nInspect {{branch}}"
     );
     let record = fire.terminal_record(LoopRunResult::Completed);
@@ -1464,10 +1457,7 @@ fn condition_evidence_reaches_prompt_and_terminal_record() {
         serde_json::to_value(&evidence).unwrap()
     );
     fire.condition = None;
-    assert_eq!(
-        fire.resolve_effect_prompt(None).unwrap(),
-        "Inspect {{branch}}"
-    );
+    assert_eq!(fire.resolve_effect_prompt().unwrap(), "Inspect {{branch}}");
 }
 
 #[test]
@@ -2193,7 +2183,7 @@ fn min_disk_is_read_where_a_fresh_worktree_will_be_made() {
         let mut fire = skipped_fire(name, &catalog, None);
         fire.config = Arc::clone(&config);
         fire.throttle_host = host.host();
-        let _ = fire.prepare_effect(None);
+        let _ = fire.prepare_effect();
         host.disk_reads().last().cloned()
     };
 
@@ -2277,10 +2267,9 @@ fn only_a_spawning_fire_that_is_not_exempt_takes_a_turn() {
     };
     let fired_check = || {
         let outcome = CheckOutcome::new(true, false, "ok".to_owned(), Some(0));
-        FiredCheck {
+        FiredCheck::Shell {
             command: "true".to_owned(),
             record: check_record(&outcome),
-            outcome,
         }
     };
 
@@ -2297,7 +2286,8 @@ fn only_a_spawning_fire_that_is_not_exempt_takes_a_turn() {
         );
     });
     let mut held = gated("held");
-    let TaskFirePlan::Done(done) = held.prepare_effect(Some(fired_check())).unwrap() else {
+    held.fired_guard.push(fired_check());
+    let TaskFirePlan::Done(done) = held.prepare_effect().unwrap() else {
         panic!("a held spawn is done")
     };
     assert_eq!(done.record.result, LoopRunResult::ThrottleSkipped);
@@ -2309,14 +2299,14 @@ fn only_a_spawning_fire_that_is_not_exempt_takes_a_turn() {
     // An exempt spawn, a delivery, and a check-only fire go straight to their
     // effect: no wait and no ticket, though the queue is held.
     let mut exempt = gated("exempt");
-    let error = exempt.prepare_effect(None).unwrap_err();
+    let error = exempt.prepare_effect().unwrap_err();
     assert!(
         error.to_string().contains("provider scope"),
         "an exempt spawn reaches its launch: {error:#}"
     );
     assert!(exempt.throttle_turn.is_none());
     let mut deliver = gated("deliver");
-    let plan = deliver.prepare_effect(None);
+    let plan = deliver.prepare_effect();
     assert!(
         !matches!(&plan, Ok(TaskFirePlan::Done(done)) if done.record.result == LoopRunResult::ThrottleSkipped),
         "{plan:?}"
@@ -2340,7 +2330,8 @@ fn only_a_spawning_fire_that_is_not_exempt_takes_a_turn() {
     drop(holder);
     crate::harness::schedule::instances::insert(&state, "held", &spawn).unwrap();
     let mut admitted = gated("held");
-    let error = admitted.prepare_effect(Some(fired_check())).unwrap_err();
+    admitted.fired_guard.push(fired_check());
+    let error = admitted.prepare_effect().unwrap_err();
     assert!(error.to_string().contains("provider scope"), "{error:#}");
     assert!(admitted.throttle_turn.is_some());
     assert_eq!(host.tickets(), 1);
@@ -2399,16 +2390,13 @@ fn ctrl_c_from_the_check_on_ends_a_spawn_the_throttle_then_holds() {
     fire.throttle_host = host.host();
 
     fire.prepare_run_lock(false).unwrap();
-    let fired_check = fire
-        .prepare_check(&mut |_| {
-            host.interrupt
-                .store(true, std::sync::atomic::Ordering::SeqCst);
-            Ok(())
-        })
+    fire.prepare_check(&mut |_| Ok(()))
         .unwrap()
         .continue_value()
         .expect("a passing check fires the spawn");
-    let TaskFirePlan::Done(done) = fire.prepare_effect(fired_check).unwrap() else {
+    host.interrupt
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let TaskFirePlan::Done(done) = fire.prepare_effect().unwrap() else {
         panic!("an interrupted fire is done")
     };
     assert_eq!(done.record.result, LoopRunResult::Canceled);

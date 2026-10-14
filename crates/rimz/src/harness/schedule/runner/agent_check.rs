@@ -6,7 +6,7 @@ use crate::config::{Judge, effective::ProfileScope};
 use crate::harness::launch::{ExecAction, ExecIdentity, ExecRequest, decode_exec_envelope};
 use crate::harness::launch_plan::{self, LaunchPlan};
 use crate::harness::plan::{LaunchAvailability, LaunchFinalizeOptions, PermissionModeChoice};
-use crate::harness::schedule::run_log::AgentCheckRecord;
+use crate::harness::schedule::run_log::JudgeRecord;
 
 #[derive(Debug, thiserror::Error)]
 pub(super) enum ProcessErr {
@@ -21,7 +21,7 @@ struct CheckFiles(PathBuf);
 impl Drop for CheckFiles {
     fn drop(&mut self) {
         if let Err(error) = std::fs::remove_dir_all(&self.0) {
-            tracing::debug!(%error, "headless check scratch cleanup failed");
+            tracing::debug!(%error, "headless judge scratch cleanup failed");
         }
     }
 }
@@ -43,19 +43,19 @@ pub(super) fn prompt_path(path: &Path, task: &LoadedTask) -> Result<PathBuf> {
 
 pub(super) fn run(
     fire: &TaskFire<'_>,
-    check: &Judge,
+    judge: &Judge,
     dir: &Path,
     root: &Path,
-) -> Result<ControlFlow<(LoopRunResult, String), (CheckOutcome, AgentCheckRecord)>> {
-    if check.recheck.is_some() && !fire.entry.stay {
-        bail!("agent check recheck requires a resident task");
+) -> Result<ControlFlow<(LoopRunResult, String), (CheckOutcome, JudgeRecord)>> {
+    if judge.recheck.is_some() && !fire.entry.stay {
+        bail!("judge recheck requires a resident task");
     }
-    if let Some(recheck) = &check.recheck
+    if let Some(recheck) = &judge.recheck
         && recheck.trim() != "0"
     {
         parse_task_timeout(recheck).map_err(anyhow::Error::msg)?;
     }
-    let timeout = check
+    let timeout = judge
         .timeout
         .as_deref()
         .map(parse_task_timeout)
@@ -63,19 +63,19 @@ pub(super) fn run(
         .map_err(anyhow::Error::msg)?
         .unwrap_or(CHECK_DEFAULT_TIMEOUT);
     if timeout.is_zero() {
-        bail!("agent check timeout must be greater than zero");
+        bail!("judge timeout must be greater than zero");
     }
-    let prompt = match (&check.prompt, &check.prompt_file) {
+    let prompt = match (&judge.prompt, &judge.prompt_file) {
         (Some(prompt), None) => prompt.clone(),
         (None, Some(path)) => {
             let path = prompt_path(path, &fire.task)?;
             std::fs::read_to_string(&path)
-                .with_context(|| format!("reading checker prompt-file `{}`", path.display()))?
+                .with_context(|| format!("reading judge prompt-file `{}`", path.display()))?
         }
-        _ => bail!("agent check requires exactly one of prompt and prompt-file"),
+        _ => bail!("judge requires exactly one of prompt and prompt-file"),
     };
     if prompt.trim().is_empty() {
-        bail!("agent check prompt is empty");
+        bail!("judge prompt is empty");
     }
     let action_prompt = resolve_task_prompt(&fire.name, &fire.entry)?;
     let workspace = WorkspaceResolver::resolve(dir, Some(root.to_path_buf()))?;
@@ -86,7 +86,7 @@ pub(super) fn run(
     effective.route(
         &fire.config.tiers,
         ProfileScope::Agents,
-        Some(&check.agent),
+        Some(&judge.agent),
         None,
         None,
         None,
@@ -96,7 +96,7 @@ pub(super) fn run(
         &effective,
         ProfileScope::Agents,
         &fire.config.agents.commands,
-        Some(&check.agent),
+        Some(&judge.agent),
         None,
     )?;
     let cells: usize = resolved
@@ -106,27 +106,26 @@ pub(super) fn run(
         .map(|column| column.rows.len())
         .sum();
     if cells != 1 || resolved.layout.agent_cells().count() != 1 {
-        bail!("check profile `{}` must resolve to one agent", check.agent);
+        bail!("judge profile `{}` must resolve to one agent", judge.agent);
     }
     let kind = resolved
         .layout
         .agent_cells()
         .next()
-        .context("single checker cell missing")?
+        .context("single judge cell missing")?
         .kind
         .clone();
-    let adapter =
-        find_definition(&kind).with_context(|| format!("unknown checker kind `{kind}`"))?;
+    let adapter = find_definition(&kind).with_context(|| format!("unknown judge kind `{kind}`"))?;
     let form = adapter.spec().launch.headless.with_context(|| {
         format!(
-            "check profile `{}` resolves to `{kind}`; only claude and codex run headless checks",
-            check.agent
+            "judge profile `{}` resolves to `{kind}`; only claude and codex run headless judges",
+            judge.agent
         )
     })?;
     let mut warnings: Vec<String> = crate::harness::plan::finalize_launch_layout(
         &mut resolved.layout,
         LaunchFinalizeOptions {
-            agent_base: Some(&check.agent),
+            agent_base: Some(&judge.agent),
             permission_mode: Some(PermissionModeChoice::Default(PermissionMode::Auto)),
             isolation: None,
             preset: &crate::agents::LaunchPreset::default(),
@@ -142,7 +141,7 @@ pub(super) fn run(
         .layout
         .agent_cells()
         .next()
-        .context("single checker cell missing")?;
+        .context("single judge cell missing")?;
     let accounts = crate::agents::room_accounts(&state.workspace_record, None, &fire.config)?;
     let login = LaunchLogin::RoomDefault.resolve(&kind, &accounts, &fire.config.accounts)?;
     let mut scope = FireScope::new(
@@ -172,7 +171,7 @@ pub(super) fn run(
     identity.params.loop_task = Some(fire.name.clone());
     let mut request = ExecRequest::fresh(cell, identity, None, false);
     request.action = ExecAction::Launch {
-        prompt: Some(prompt),
+        prompt: Some(fire.augment_guard_prompt(prompt)),
         extra_args: cell.args.clone(),
     };
     request.loop_reminder = Some(reminder::compose_check(
@@ -181,7 +180,7 @@ pub(super) fn run(
         &action_prompt,
     ));
     let unit = state.ensure_temp_unit(None)?;
-    let path = unit.join(format!("loop-check-{}", RunId::new()));
+    let path = unit.join(format!("loop-judge-{}", RunId::new()));
     std::fs::create_dir(&path)?;
     let files = CheckFiles(path);
     let host_request = HeadlessRequest {
@@ -231,15 +230,12 @@ pub(super) fn run(
             if output.timed_out {
                 result.verdict = None;
                 result.error = Some(format!(
-                    "agent check timed out after {}",
+                    "judge timed out after {}",
                     super::super::arm::duration_label(timeout)
                 ));
             }
             if result.verdict.is_none() && result.error.is_none() {
-                result.error = Some(format!(
-                    "agent check returned no verdict ({})",
-                    output.status
-                ));
+                result.error = Some(format!("judge returned no verdict ({})", output.status));
             }
             let tail = format!(
                 "{}\n{}",
@@ -251,7 +247,7 @@ pub(super) fn run(
         Err(ProcessErr::Directory(error)) => return Err(error.into()),
         Err(ProcessErr::Io(error)) => (
             crate::agents::HeadlessResult {
-                error: Some(format!("running agent check: {error}")),
+                error: Some(format!("running judge: {error}")),
                 ..Default::default()
             },
             false,
@@ -260,45 +256,68 @@ pub(super) fn run(
         ),
     };
     let passed = result.verdict.as_ref().is_some_and(|verdict| verdict.pass);
-    let code = result
-        .verdict
-        .as_ref()
-        .map(|verdict| if verdict.pass { 0 } else { 1 });
-    let mut output = result.verdict.as_ref().map_or_else(
+    let output = result.verdict.as_ref().map_or_else(
         || {
             format!(
                 "{}\n{tail}",
                 result
                     .error
                     .as_deref()
-                    .unwrap_or("agent check returned no verdict")
+                    .unwrap_or("judge returned no verdict")
             )
         },
         |verdict| verdict.reason.clone(),
     );
-    if !warnings.is_empty() {
-        output.push_str(&format!("\n{}", warnings.join("\n")));
-    }
-    let record = AgentCheckRecord {
-        profile: check.agent.clone(),
+    let error = if result.verdict.is_none() {
+        Some(output.clone())
+    } else {
+        result.error
+    };
+    let record = JudgeRecord {
+        profile: judge.agent.clone(),
         kind,
         model: plan.request.identity.params.model.clone(),
-        verdict: result.verdict.take(),
-        error: result.error,
+        verdict: result.verdict.as_ref().map(|verdict| verdict.pass),
+        reason: result.verdict.take().map(|verdict| verdict.reason),
+        error,
         cost_usd: result.cost_usd,
         input_tokens: result.input_tokens,
         output_tokens: result.output_tokens,
+        duration_ms: None,
+        reused: false,
+        warnings,
     };
     Ok(ControlFlow::Continue((
         CheckOutcome {
             passed,
-            code,
+            code: None,
             timed_out,
             interrupted,
             output,
         },
         record,
     )))
+}
+
+pub(super) fn replay(
+    fire: &TaskFire<'_>,
+    decline: &super::super::launch_ledger::DeclineRecord,
+    kind: &crate::ids::AgentKind,
+) -> JudgeRecord {
+    JudgeRecord {
+        profile: decline.profile.clone(),
+        kind: kind.clone(),
+        model: decline.model.clone(),
+        verdict: Some(fire.entry.on == Some(CheckOn::Fail)),
+        reason: Some(decline.reason.clone()),
+        error: None,
+        cost_usd: Some(0.0),
+        input_tokens: Some(0),
+        output_tokens: Some(0),
+        duration_ms: Some(0),
+        reused: true,
+        warnings: Vec::new(),
+    }
 }
 
 pub(super) type ProcessRunner = fn(

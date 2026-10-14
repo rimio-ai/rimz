@@ -249,28 +249,43 @@ fn check_result_label(check: &CheckRecord, watch: Option<&WatchVerdict>, decline
 pub(super) fn write_check_trip_line(
     out: &mut impl Write,
     action: &TaskAction,
-    check: &CheckRecord,
+    record: &LoopRunRecord,
     watch: Option<&WatchVerdict>,
     duration_ms: u64,
 ) -> std::io::Result<()> {
-    let (glyph, style) = if check.timed_out || check.code != Some(0) {
-        ("✗", ui::palette::alarm())
-    } else {
-        ("✓", ui::palette::good())
-    };
-    let mut label = check_result_label(check, watch, false);
-    if watch.is_none() {
-        label.push_str(&format!(" in {}", render::format_duration_ms(duration_ms)));
+    for stage in record.stages() {
+        let (glyph, style) = if stage.verdict() == Some(true) {
+            ("✓", ui::palette::good())
+        } else {
+            ("✗", ui::palette::alarm())
+        };
+        let mut label = match stage {
+            rimz::harness::schedule::run_log::RunStage::Check(check) => {
+                check_result_label(check, watch, false)
+            }
+            rimz::harness::schedule::run_log::RunStage::Judge(judge) => {
+                let verdict = match judge.verdict {
+                    Some(true) => "passed",
+                    Some(false) => "failed",
+                    None => judge.error.as_deref().unwrap_or("no verdict"),
+                };
+                format!("judge `{}` {verdict}", judge.profile)
+            }
+        };
+        if watch.is_none() {
+            label.push_str(&format!(" in {}", render::format_duration_ms(duration_ms)));
+        }
+        write!(out, "  {}", ui::paint(style, &format!("{glyph} {label}")))?;
+        writeln!(
+            out,
+            " {}",
+            ui::paint(
+                ui::palette::accent(),
+                &format!("→ {}", render::action_progressive_phrase(action))
+            )
+        )?;
     }
-    write!(out, "  {}", ui::paint(style, &format!("{glyph} {label}")))?;
-    writeln!(
-        out,
-        " {}",
-        ui::paint(
-            ui::palette::accent(),
-            &format!("→ {}", render::action_progressive_phrase(action))
-        )
-    )
+    Ok(())
 }
 
 fn write_check_skipped_summary(
@@ -837,15 +852,15 @@ mod tests {
             write_check_trip_line(
                 &mut trip,
                 &TaskAction::Spawn("claude".into()),
-                record.check.as_ref().unwrap(),
+                &record,
                 None,
                 1,
             )
             .unwrap();
             let trip = String::from_utf8(trip).unwrap();
             let label = match verdict {
-                Some(true) => "check passed",
-                Some(false) => "check failed",
+                Some(true) => "judge `haiku` passed",
+                Some(false) => "judge `haiku` failed",
                 None => "provider down",
             };
             assert!(

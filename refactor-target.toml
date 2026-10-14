@@ -587,7 +587,12 @@ path = "crates/rimz/src/harness"
 # The `<base>-fast` cell grammar is shared by launch and tier routing (+1).
 # `plan::validate_launch_preset` shares launch capability refusal with loop admission (+1).
 # HeldStats and its constructor/stats retain per-root summaries for the CLI (+3).
-surface-budget = 827
+surface-budget = 828 # agent_check::replay rebuilds a held judge's record from its decline without starting a process.
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::runner::agent_check::replay"
+reason = "Runner rebuilds a held tier's judge record from the stored decline without another process."
 
 [[verdict]]
 kind = "item"

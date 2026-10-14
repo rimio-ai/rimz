@@ -414,10 +414,12 @@ fn trip_line_names_check_fact_and_action() {
     };
     let mut out = Vec::new();
 
+    let mut record = LoopRunRecord::new("guard", LoopRunResult::Completed, LoopRunMode::Manual, 0);
+    record.check = Some(check);
     write_check_trip_line(
         &mut out,
         &TaskAction::Spawn("codex".to_owned()),
-        &check,
+        &record,
         None,
         12_000,
     )
@@ -653,10 +655,13 @@ fn watch_trip_and_summary_use_verdict_elapsed_once() {
             output_path: Some("/tmp/wait.log".into()),
         };
         let mut out = Vec::new();
+        let mut record =
+            LoopRunRecord::new("watch", LoopRunResult::Completed, LoopRunMode::Manual, 0);
+        record.check = Some(check.clone());
         write_check_trip_line(
             &mut out,
             &TaskAction::Spawn("codex".to_owned()),
-            &check,
+            &record,
             Some(&verdict),
             0,
         )

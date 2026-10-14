@@ -154,6 +154,7 @@ impl LoopRunRecord {
                     output_tokens: agent.output_tokens,
                     duration_ms: check.duration_ms,
                     reused: false,
+                    warnings: Vec::new(),
                 })),
                 None => RunStage::Check(check),
             })
@@ -258,9 +259,15 @@ pub struct JudgeRecord {
     pub duration_ms: Option<u64>,
     #[serde(default)]
     pub reused: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "a short-lived projection; only legacy rows own their judge, and boxing it would allocate for every read"
+)]
 pub enum RunStage<'a> {
     Check(&'a CheckRecord),
     Judge(std::borrow::Cow<'a, JudgeRecord>),
