@@ -273,6 +273,49 @@ fn authoritative_probe_is_shared_across_consumers() {
 }
 
 #[test]
+fn authoritative_probe_never_serves_a_watchdog_its_own_last_observation() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace_id = crate::ids::WorkspaceId::from_project_root(dir.path());
+    let runtime = crate::RuntimePaths::under(workspace_id.clone(), dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    let mut watchdog = PaneWatchdog {
+        pane: crate::ids::PaneId::from_parts(crate::ids::MuxName::Tmux, "%1"),
+        mux: crate::ids::MuxName::Tmux,
+        session_name: "rimz-test".to_owned(),
+        workspace_id,
+        next_probe: Instant::now(),
+        strikes: 0,
+        last_observed_at_ms: None,
+    };
+    let base_ms = crate::utils::time::unix_now_ms();
+    let calls = std::cell::Cell::new(0);
+    let produce = || {
+        calls.set(calls.get() + 1);
+        Some(AuthoritativePaneProbe {
+            mux: crate::ids::MuxName::Tmux,
+            session_name: "rimz-test".to_owned(),
+            observed_at_ms: base_ms + calls.get(),
+            pane_ids: Vec::new(),
+        })
+    };
+
+    for _ in 0..2 {
+        let probe = shared_authoritative_pane_probe(&watchdog, &runtime, produce);
+        assert!(!watchdog.observe(probe));
+    }
+
+    assert_eq!(calls.get(), 2, "the second due probe produces anew");
+    assert_eq!(watchdog.strikes, 2, "each due probe counts a strike");
+
+    for seen_ms in [base_ms + 2, base_ms + 3] {
+        watchdog.last_observed_at_ms = Some(seen_ms);
+        assert!(read_authoritative_pane_probe(&runtime, &watchdog, base_ms + 3).is_none());
+    }
+    watchdog.last_observed_at_ms = Some(base_ms + 1);
+    assert!(read_authoritative_pane_probe(&runtime, &watchdog, base_ms + 3).is_some());
+}
+
+#[test]
 fn authoritative_probe_rejects_malformed_and_mismatched_cache() {
     let dir = tempfile::tempdir().unwrap();
     let workspace_id = crate::ids::WorkspaceId::from_project_root(dir.path());

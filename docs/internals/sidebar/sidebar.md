@@ -400,7 +400,7 @@ The attachment keeps its last committed frame. When a produce fails (a vanished 
 
 A renderer degraded past `GIVE_UP_AFTER_DEGRADED` (30 seconds) records `renderer_exit` with cause `degraded_gave_up` and closes its attachment without a control word. The supervisor observes the stream loss, shows the host-unavailable notice, and retries in the same pane; the host's other attachments stay alive.
 
-Across attach rounds the supervisor also watches that its pane still exists. A fresh presence roster containing the pane resets the strike count without a mux command; supervision ends only after three distinct authoritative absences, recorded as `supervisor_pane_gone`. The evidence rules are shared with orphan reaping in [multiplexers.md](../multiplexers.md#sidebar-orphan-reaping).
+Across attach rounds the supervisor also watches that its pane still exists. A fresh presence roster containing the pane resets the strike count without a mux command; each due probe counts on an observation newer than the supervisor's last, and supervision ends only after three distinct authoritative absences, recorded as `supervisor_pane_gone`. The evidence rules are shared with orphan reaping in [multiplexers.md](../multiplexers.md#sidebar-orphan-reaping).
 
 ## Reload and repair
 
