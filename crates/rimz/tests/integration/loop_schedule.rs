@@ -4761,6 +4761,20 @@ fn external_tick_does_not_record_a_fast_run_as_a_failed_start() {
 }
 
 #[test]
+fn loop_watch_requires_a_terminal() {
+    let env = Env::new();
+    for args in [vec!["loop", "watch"], vec!["loop", "watch", "--hold"]] {
+        let output = env.rimz().args(args).output().unwrap();
+        assert!(!output.status.success());
+        assert_eq!(
+            String::from_utf8_lossy(&output.stderr).trim(),
+            "error: `rimz loop watch` needs a terminal; use `rimz loop list` for one snapshot"
+        );
+        assert!(output.stdout.is_empty());
+    }
+}
+
+#[test]
 fn loop_watch_reloads_tasks_without_reprobing_workspace() {
     let env = Env::new();
     let Some(real_git) = find_real_git() else {

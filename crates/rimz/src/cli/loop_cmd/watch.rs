@@ -1,5 +1,7 @@
 //! Full-screen dashboard for live loop task state.
 
+use std::io::IsTerminal;
+
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use rimz::tui::{MouseCapture, Screen, TerminalModeGuard};
 use unicode_width::UnicodeWidthStr;
@@ -12,6 +14,9 @@ const WATCH_NARROW: usize = 44;
 const WATCH_WIDE: usize = 68;
 
 pub(super) fn watch(args: WatchArgs, globals: &GlobalFlags) -> Result<()> {
+    if !std::io::stdout().is_terminal() || !std::io::stdin().is_terminal() {
+        bail!("`rimz loop watch` needs a terminal; use `rimz loop list` for one snapshot");
+    }
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone()).ok();
     let _input = TerminalModeGuard::enable(MouseCapture::Off, Screen::Alternate)?;
     let mut held_stats = run_log::HeldStats::new(&rimz::disk::paths::logs_dir());
