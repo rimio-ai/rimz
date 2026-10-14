@@ -22,6 +22,26 @@ use std::path::{Path, PathBuf};
 use std::process::Output;
 
 #[test]
+fn doctor_reports_installed_but_disabled_copilot_hooks() {
+    let env = Env::new();
+    env.install_agent_hooks("copilot");
+    let settings = env.home_root.join(".copilot/settings.json");
+    let mut document: Value = serde_json::from_slice(&std::fs::read(&settings).unwrap()).unwrap();
+    document["disableAllHooks"] = serde_json::json!(true);
+    std::fs::write(&settings, serde_json::to_vec(&document).unwrap()).unwrap();
+    let output = env.rimz().args(["doctor", "--json"]).output().unwrap();
+    let report = doctor_json(&output);
+    let row = hook(report["hooks"].as_array().unwrap(), "copilot");
+    assert_eq!(row["status"]["state"], "installed_disabled");
+    for part in [settings.to_str().unwrap(), "disableAllHooks", "false"] {
+        assert!(fix(row).contains(part), "{row}");
+    }
+    let output = env.rimz().arg("doctor").output().unwrap();
+    let rendered = String::from_utf8_lossy(&output.stdout);
+    assert!(rendered.contains("installed, disabled"), "{rendered}");
+}
+
+#[test]
 fn doctor_reports_folder_trust_without_writing() {
     let env = Env::new();
     let bin = crate::common::write_env_dump_shim(&env, "codex");

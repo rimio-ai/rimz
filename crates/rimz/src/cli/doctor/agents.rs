@@ -220,6 +220,7 @@ fn account_rows(
 
 pub(super) fn collect_hooks() -> Vec<HookRow> {
     let login_env = rimz::agents::ambient_env();
+    let cwd = std::env::current_dir().ok();
     rimz::agents::all_definitions()
         .map(|agent| {
             let definition = agent.spec();
@@ -239,7 +240,14 @@ pub(super) fn collect_hooks() -> Vec<HookRow> {
                 HookStatus::Blocked { fix }
             } else if agent.hooks_installed(&login_env) {
                 let untrusted = agent.untrusted_installed_hooks(&login_env);
-                if untrusted.is_empty() {
+                if let Some(conflict) = cwd
+                    .as_deref()
+                    .and_then(|cwd| agent.hooks_disabled(cwd, &login_env))
+                {
+                    HookStatus::InstalledDisabled {
+                        fix: conflict.to_string(),
+                    }
+                } else if untrusted.is_empty() {
                     HookStatus::Installed
                 } else {
                     HookStatus::InstalledUntrusted {

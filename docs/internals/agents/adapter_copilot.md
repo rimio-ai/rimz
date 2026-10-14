@@ -40,6 +40,8 @@ Hook readiness requires both the marked hook file and the canonical managed stat
 
 ## Launch and resume
 
+Doctor evaluates effective `disableAllHooks` for its current directory and ambient account environment. An installed-but-disabled surface remains installed, but appears at warning severity with the settings file, key, and fix; it is not treated as a missing-hook reinstall.
+
 Read-only settings probes resolve each key independently: repository `.github/copilot/settings.local.json`, then `.github/copilot/settings.json`, then the user `settings.json`. A repository `false` overrides a user `true`. The repository root is the nearest ancestor of the launch cwd holding a `.git` file or directory, otherwise the cwd itself. User settings resolve through the launch environment's `COPILOT_HOME` and `HOME`, retaining the `RIMZ_COPILOT_SETTINGS` override. JSONC is accepted; missing, unreadable, or malformed files count as unset.
 
 `copilot` launches a fresh interactive session and `copilot --resume <session_id>` restores one. Ask mode uses `--mode interactive`, overriding `defaultMode`; plan uses `--plan`, auto uses `--autopilot`, and yolo uses `--allow-all`. Model and effort profiles map to `--model` and `--reasoning-effort`; the legacy `--effort` spelling is still recognized for replacement.
