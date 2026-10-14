@@ -418,7 +418,8 @@ allowed-dependencies = [
 # Hook appenders share a typed, blocking ingress guard (+2).
 # Birth, reset, supervisors and integration tests share RoomLock's claim/hold/share and its classed path (+5).
 # Run listings construct full stamps from their single metadata read (+1).
-surface-budget = 237
+# IncrementalFold and its constructor/refresh share rotating-log cursors (+3).
+surface-budget = 240
 
 [[module]]
 path = "crates/rimz/src/forge"
@@ -563,7 +564,8 @@ path = "crates/rimz/src/harness"
 # `resume::check_lane_scope` gives `agents list` resume's lane rule (+1).
 # The `<base>-fast` cell grammar is shared by launch and tier routing (+1).
 # `plan::validate_launch_preset` shares launch capability refusal with loop admission (+1).
-surface-budget = 819
+# HeldStats and its constructor/stats retain per-root summaries for the CLI (+3).
+surface-budget = 822
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -1501,6 +1503,11 @@ reason = "Returned by acting_run and carried by LoopRunStats across the loop CLI
 kind = "item"
 key = "harness::schedule::run_log::HeardSignal"
 reason = "Carried by LoopRunStats for the loop list model; narrowing breaks the public interface."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::run_log::HeldStats"
+reason = "The loop CLI holds per-root incremental run summaries across watch repaints."
 
 [[verdict]]
 kind = "item"

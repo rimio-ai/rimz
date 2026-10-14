@@ -17,7 +17,8 @@ mod tests;
 
 pub(super) fn run(args: ListArgs, globals: &GlobalFlags) -> Result<()> {
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone()).ok();
-    let mut model = load(workspace.as_ref(), LoadScope::AllRooms)?;
+    let mut held_stats = run_log::HeldStats::new(&rimz::disk::paths::logs_dir());
+    let mut model = load(workspace.as_ref(), LoadScope::AllRooms, &mut held_stats)?;
     let caller_session = workspace
         .as_ref()
         .and_then(|workspace| super::super::open_existing_store(workspace).ok().flatten())
@@ -300,6 +301,7 @@ pub(super) enum LoadScope {
 pub(super) fn load(
     workspace: Option<&rimz::ResolvedWorkspace>,
     scope: LoadScope,
+    held_stats: &mut run_log::HeldStats,
 ) -> Result<ListModel> {
     let caller_root = workspace.map(|workspace| workspace.project_root.clone());
     let roots = match (scope, caller_root.as_ref()) {
@@ -352,7 +354,7 @@ pub(super) fn load(
             .as_ref()
             .map(schedule::last_stamps)
             .unwrap_or_default();
-        let stats = run_log::stats(&rimz::disk::paths::logs_dir(), &now_zoned, Some(&root));
+        let stats = held_stats.stats(&root, &now_zoned);
         let ledger = StatePaths::for_project_root(&root)
             .ok()
             .and_then(|paths| launch_ledger::load(&paths).ok())

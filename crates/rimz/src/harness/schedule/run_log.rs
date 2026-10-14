@@ -3,8 +3,9 @@
 //! Loop config is per-machine, so task outcomes append to one user-global JSONL
 //! log. Each loaded `rimz loop run`/`fire` appends one best-effort record with
 //! the terminal result, mode, duration, and capped forensics. `rimz loop list`
-//! folds the current and rotated files for summary columns; `rimz loop show`
-//! reads the same records for per-task inspection.
+//! folds the current and rotated files for summary columns; `rimz loop watch`
+//! retains that fold across repaints, rebuilding on rotation or a local date or
+//! time-zone change. `rimz loop show` reads records for per-task inspection.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -406,13 +407,57 @@ pub fn stats(
     now: &Zoned,
     root: Option<&Path>,
 ) -> BTreeMap<String, LoopRunStats> {
-    let mut stats = BTreeMap::new();
-    crate::disk::rotating::visit_records(&log_path(state_root), |record: LoopRunRecord| {
-        if matches_root(&record, root) {
-            fold_record(record, now, &mut stats);
+    StatsFold::new(state_root, now).refresh(root, now).clone()
+}
+
+/// Per-room run summaries retained across dashboard repaints.
+pub struct HeldStats {
+    state_root: PathBuf,
+    roots: BTreeMap<PathBuf, StatsFold>,
+}
+
+impl HeldStats {
+    pub fn new(state_root: &Path) -> Self {
+        Self {
+            state_root: state_root.into(),
+            roots: BTreeMap::new(),
         }
-    });
-    stats
+    }
+
+    pub fn stats(&mut self, root: &Path, now: &Zoned) -> &BTreeMap<String, LoopRunStats> {
+        let fold = self
+            .roots
+            .entry(root.into())
+            .or_insert_with(|| StatsFold::new(&self.state_root, now));
+        if fold.date != now.date() || fold.zone != *now.time_zone() {
+            *fold = StatsFold::new(&self.state_root, now);
+        }
+        fold.refresh(Some(root), now)
+    }
+}
+
+struct StatsFold {
+    reader: crate::disk::rotating::IncrementalFold<BTreeMap<String, LoopRunStats>>,
+    date: jiff::civil::Date,
+    zone: jiff::tz::TimeZone,
+}
+
+impl StatsFold {
+    fn new(state_root: &Path, now: &Zoned) -> Self {
+        Self {
+            reader: crate::disk::rotating::IncrementalFold::new(log_path(state_root)),
+            date: now.date(),
+            zone: now.time_zone().clone(),
+        }
+    }
+
+    fn refresh(&mut self, root: Option<&Path>, now: &Zoned) -> &BTreeMap<String, LoopRunStats> {
+        self.reader.refresh(|stats, record: LoopRunRecord| {
+            if matches_root(&record, root) {
+                fold_record(record, now, stats);
+            }
+        })
+    }
 }
 
 pub fn task_records(state_root: &Path, task: &str, root: Option<&Path>) -> Vec<LoopRunRecord> {
