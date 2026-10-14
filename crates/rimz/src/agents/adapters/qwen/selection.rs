@@ -203,6 +203,7 @@ struct ModelSelection {
 #[serde(default, rename_all = "camelCase")]
 struct ModelProvider {
     id: String,
+    wire_api: Option<String>,
     base_url: Option<String>,
     env_key: Option<String>,
 }
@@ -493,21 +494,24 @@ fn selected_model_provider<'a>(
         .model_providers
         .iter()
         .filter(|(provider_id, _)| {
-            explicit_provider.is_some_and(|selected| selected == provider_id.as_str())
-                || (explicit_provider.is_none()
-                    && provider_protocol(settings, provider_id) == selected_protocol)
+            explicit_provider.is_none_or(|selected| selected == provider_id.as_str())
         })
         .flat_map(|(provider_id, models)| {
-            let protocol = provider_protocol(settings, provider_id).to_owned();
-            models
-                .iter()
-                .filter(|model| {
-                    model.id == model_name
-                        && selected_base_url.is_none_or(|selected| {
-                            non_empty(model.base_url.as_deref()) == Some(selected)
-                        })
-                })
-                .map(move |model| (protocol.clone(), model))
+            let protocol = provider_protocol(settings, provider_id);
+            models.iter().filter_map(move |model| {
+                let protocol = match (protocol, model.wire_api.as_deref()) {
+                    (_, None) => protocol,
+                    ("openai" | "openai-responses", Some("responses")) => "openai-responses",
+                    ("openai" | "openai-responses", Some("chat-completions")) => "openai",
+                    _ => return None,
+                };
+                (model.id == model_name
+                    && (explicit_provider.is_some() || protocol == selected_protocol)
+                    && selected_base_url.is_none_or(|selected| {
+                        non_empty(model.base_url.as_deref()) == Some(selected)
+                    }))
+                .then(|| (protocol.to_owned(), model))
+            })
         })
         .collect::<Vec<_>>();
     match matches.as_slice() {
@@ -743,6 +747,68 @@ mod tests {
         )
         .binding()
         .cloned()
+    }
+
+    #[test]
+    fn wire_api_routes_models_across_provider_buckets() {
+        for (bucket, wire, selected) in [
+            ("openai", "responses", "openai-responses"),
+            ("openai-responses", "chat-completions", "openai"),
+        ] {
+            let settings = serde_json::json!({
+                "security": {"auth": {"selectedType": selected}},
+                "model": {"name": "model"},
+                "modelProviders": {bucket: [{"id": "model", "wireApi": wire}]},
+                "env": {"OPENAI_API_KEY": "secret"}
+            });
+            assert!(matches!(
+                resolve_fixture(&settings.to_string(), None),
+                SelectionState::Found(Selection {
+                    provider: SelectedProvider::OpenAi,
+                    ..
+                })
+            ));
+        }
+    }
+
+    #[test]
+    fn wire_api_disambiguates_same_id_and_explicit_provider_routes() {
+        let mut settings = serde_json::json!({
+            "security": {"auth": {"selectedType": "openai-responses"}},
+            "model": {"name": "model"},
+            "modelProviders": {
+                "openai": [{"id": "model", "wireApi": "responses", "envKey": "RIGHT"}],
+                "openai-responses": [{"id": "model", "wireApi": "chat-completions", "envKey": "WRONG"}]
+            },
+            "env": {"RIGHT": "right", "WRONG": "wrong"}
+        });
+        let SelectionState::Found(selection) = resolve_fixture(&settings.to_string(), None) else {
+            panic!("wire route must select one model");
+        };
+        assert_eq!(selection.credential, "right");
+        settings["model"]["provider"] = "openai".into();
+        let parsed: Settings = serde_json::from_value(settings).unwrap();
+        assert_eq!(
+            selected_model_provider(&parsed, "openai", Some("model"))
+                .unwrap()
+                .unwrap()
+                .0,
+            "openai-responses"
+        );
+    }
+
+    #[test]
+    fn wire_api_is_invalid_under_non_openai_protocols() {
+        let settings = r#"{
+            "security":{"auth":{"selectedType":"anthropic"}},
+            "model":{"name":"model"},
+            "modelProviders":{"anthropic":[{"id":"model","wireApi":"responses"}]},
+            "env":{"ANTHROPIC_API_KEY":"secret"}
+        }"#;
+        assert!(matches!(
+            resolve_fixture(settings, None),
+            SelectionState::Unavailable
+        ));
     }
 
     #[test]
