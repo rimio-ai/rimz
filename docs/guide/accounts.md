@@ -6,8 +6,8 @@ That works for one terminal. A fleet needs each agent, child, and restart to kee
 
 ```sh
 rimz accounts add claude work          # declare the home, link it, install hooks
-rimz start --account claude=work       # a room whose Claude agents all run under `work`
-rimz reset --account claude=default    # rebuild the room on Claude's own home
+rimz start --account claude@work       # a room whose Claude agents all run under `work`
+rimz reset --account claude@default    # rebuild the room on Claude's own home
 ```
 
 ## Redeem a reset credit by hand
@@ -33,7 +33,7 @@ linked to /home/me/.claude: settings.json, settings.local.json, CLAUDE.md, skill
 ✓ claude  installed 13 hooks → ~/.rimz/accounts/claude/work/settings.json  (new file)
 claude account `work` lives at ~/.rimz/accounts/claude/work
   log in once   CLAUDE_CONFIG_DIR=/home/me/.rimz/accounts/claude/work claude
-  use at birth  rimz start --account claude=work
+  use at birth  rimz start --account claude@work
   this room     rimz accounts use claude work
   new rooms     rimz accounts use --global claude work
 ```
@@ -82,7 +82,7 @@ An account reads `ready` once its home exists, holds trusted RimZ hooks, and has
 To keep a room on one account per provider across restarts and changes to your defaults, pin it at start:
 
 ```sh
-rimz start --account claude=work --account codex=personal
+rimz start --account claude@work --account codex@personal
 ```
 
 To set the machine default without repeating the flag, run `rimz accounts use --global codex personal` once. It checks the account's home and hooks, then writes the machine's `[accounts.use]` selection while keeping the account declarations and comments. New rooms and existing rooms following that default use it on their next launch; pinned rooms keep their account, and running agents stay where they are. Reverse it with `rimz accounts use --global codex default`.
@@ -99,9 +99,9 @@ That selection sits in the project trust hash, so a repository you cloned cannot
 `rimz start` also checks every selected named account before it builds the room, and refuses rather than opening a room whose agents cannot reach their home or report from it:
 
 ```console
-$ rimz start --account claude=personal
+$ rimz start --account claude@personal
 error: unknown claude account `personal`; configured: default, work; run `rimz accounts add claude personal`
-$ rimz start --account claude=work
+$ rimz start --account claude@work
 error: RimZ hooks are missing for claude account `work` at `/home/me/.rimz/accounts/claude/work`; run `rimz accounts add claude work`
 ```
 

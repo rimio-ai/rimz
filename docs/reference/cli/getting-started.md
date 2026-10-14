@@ -24,7 +24,7 @@ Command, flag, and live session-name completion is set up in the [shell completi
 
 ```sh
 rimz [--attach | --no-attach | --print] [--no-resume] [--refresh-ms <MS>]
-rimz start [PATH] [launch options] [--account <KIND=NAME>]...
+rimz start [PATH] [launch options] [--account <KIND@NAME>]...
 rimz attach [SESSION] [launch options]
 ```
 
@@ -36,7 +36,7 @@ Bare `rimz` is `rimz start .`. `rimz start [PATH]` resolves the room for `PATH` 
 | `--no-attach`, `--print` | Open the room, then print the attach command instead of entering it. |
 | `--no-resume` | Bring a reborn room up empty, without recovering its prior agents. See [Resume on rebirth](#resume-on-rebirth). |
 | `--refresh-ms <MS>` | Sidebar render cadence in milliseconds for sidebars this launch creates, clamped to 16 through 1000. The persistent setting is `refresh_ms` under [`[theme.display]`](../../guide/theme.md#display). |
-| `--account <KIND=NAME>` | `start` only, repeatable. Launch that provider's agents under a named account. See [Accounts](#accounts). |
+| `--account <KIND@NAME>` | `start` only, repeatable. Launch that provider's agents under a named account. See [Accounts](#accounts). |
 
 `--attach`, `--no-attach`, and `--print` are mutually exclusive.
 
@@ -123,7 +123,7 @@ A running room never asks a recovery question, including web and remote entries,
 
 ### Accounts
 
-`--account <KIND=NAME>` (for example `--account claude=work`) pins that provider's launch account from accounts declared with [`rimz accounts`](./accounts.md); `default` pins the provider's own home. Pins persist across starts. Without a pin, each launch follows the trusted project's `[accounts]`, then the machine's `[accounts.use]`, then `default`, live. Without `--account`, start writes no pin. On re-entry from outside the room, the flag can pin an inheriting provider or repeat its existing pin, but not replace a different pin. `rimz accounts use` pins future launches inside a running room; `--reset` unpins, without changing running agents' accounts. `start` checks all providers before building the room, and refuses in these cases:
+`--account <KIND@NAME>` (for example `--account claude@work`) pins that provider's launch account from accounts declared with [`rimz accounts`](./accounts.md); `default` pins the provider's own home. Pins persist across starts. Without a pin, each launch follows the trusted project's `[accounts]`, then the machine's `[accounts.use]`, then `default`, live. Without `--account`, start writes no pin. On re-entry from outside the room, the flag can pin an inheriting provider or repeat its existing pin, but not replace a different pin. `rimz accounts use` pins future launches inside a running room; `--reset` unpins, without changing running agents' accounts. `start` checks all providers before building the room, and refuses in these cases:
 
 | Case | Fix it names |
 | --- | --- |

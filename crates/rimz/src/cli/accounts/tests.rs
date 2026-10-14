@@ -717,8 +717,9 @@ fn removed_notice_warns_about_live_room_pins() {
 
 #[test]
 fn account_flags_parse_kind_and_name_and_refuse_a_repeated_kind() {
-    let work = parse_account_flag("claude=work").expect("claude=work");
-    let default = parse_account_flag("codex=default").expect("codex=default");
+    let work = parse_account_flag("claude@work").expect("claude@work");
+    assert_eq!(parse_account_flag("claude=work").unwrap(), work);
+    let default = parse_account_flag("codex@default").expect("codex@default");
     assert_eq!(
         requested_logins(&[work.clone(), default]).expect("one per kind"),
         RoomLogins::from([

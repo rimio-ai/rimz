@@ -53,7 +53,7 @@
 ## codex = 25.0
 
 # Named provider accounts (Claude and Codex). Each one is a standalone provider
-# home a room launches into. Pin it with `rimz start --account claude=work` or
+# home a room launches into. Pin it with `rimz start --account claude@work` or
 # `rimz accounts use claude work`; `default` is the provider's own home and is
 # never declared. Without a pin, the room follows project and machine defaults.
 # `rimz accounts add` writes these entries, creates the directory and installs

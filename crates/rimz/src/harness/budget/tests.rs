@@ -1184,7 +1184,7 @@ fn scope_gate_reads_room_and_account_local_day_caches() {
             &config,
             now
         )
-        .is_some_and(|reason| reason.contains("claude@default account budget exhausted"))
+        .is_some_and(|reason| reason.contains("rimz budget --account claude@default"))
     );
     let availability = crate::harness::plan::LaunchAvailability::read(
         &runtime,

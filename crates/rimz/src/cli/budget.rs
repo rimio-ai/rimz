@@ -20,7 +20,7 @@ pub struct BudgetArgs {
     /// New `/day` cap, `+AMOUNT`, or `off`/`clear`; omit to inspect.
     value: Option<String>,
     /// Target a provider's room default or an explicit kind@name instead of the fleet.
-    #[arg(long, value_name = "KIND")]
+    #[arg(long, value_name = "KIND[@NAME]")]
     account: Option<String>,
     /// Lift a park without queueing the configured continue prompt.
     #[arg(long)]

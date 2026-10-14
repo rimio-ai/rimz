@@ -188,7 +188,9 @@ impl SurfaceSummary {
             accounts: config
                 .accounts
                 .iter()
-                .map(|(kind, name)| format!("{kind}={name}"))
+                .map(|(kind, name)| {
+                    crate::ids::LoginKey::new(kind.clone(), name.clone()).to_string()
+                })
                 .collect(),
             hooks: config.hooks.len(),
         }

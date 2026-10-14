@@ -229,7 +229,7 @@ The repair rules are in [sidebar internals](../../internals/sidebar/sidebar.md#s
 ## Reset a wedged room
 
 ```sh
-rimz reset [--yes] [--no-start] [--hard] [--account <KIND=NAME>]... [PATH]
+rimz reset [--yes] [--no-start] [--hard] [--account <KIND@NAME>]... [PATH]
 ```
 
 `reset` tears down the room for `PATH` (default `.`) and rebuilds it empty. Use it when a room is stuck, or came back wrong after a reboot. In order, it:
@@ -249,7 +249,7 @@ On a room with sandbox isolation, a process an agent left running in the backgro
 | `--yes` | Skip the `[y/N]` prompt. Required when stdin is not a terminal. |
 | `--no-start` | Stop after step 4 and print ``Room torn down. Run `rimz start` to rebuild it.`` |
 | `--hard` | Also delete prior-agent carryover, audit history (transcripts, messages, diagnostics), owned state except run records, and room tmp. Canceled run records and the rotated log archive remain. |
-| `--account <KIND=NAME>` | Rebuild the room under this [provider account](./accounts.md), with no agents. Repeatable. Cannot be combined with `--no-start`. |
+| `--account <KIND@NAME>` | Rebuild the room under this [provider account](./accounts.md), with no agents. Repeatable. Cannot be combined with `--no-start`. |
 
 `rimz accounts use` moves a running room's launch default in place; `reset --account` rebuilds the room under a different account instead.
 

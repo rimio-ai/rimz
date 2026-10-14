@@ -1,5 +1,5 @@
 //! Provider accounts at the command line: `rimz accounts add|use|list|redeem|remove`,
-//! and the `--account <kind>=<name>` selection `rimz start` and `rimz reset`
+//! and the `--account <kind>@<name>` selection `rimz start` and `rimz reset`
 //! pass to a room's birth.
 
 use std::collections::BTreeMap;
@@ -509,7 +509,7 @@ fn add(
     crate::cli::hooks::install_hooks_into(definition, &login.env(&ambient), &mut out)?;
     render::finish(writeln!(
         out,
-        "{kind} account `{name}` lives at {}\n  log in once   {}\n  use at birth  rimz start --account {kind}={name}\n  this room     rimz accounts use {kind} {name}\n  new rooms     rimz accounts use --global {kind} {name}",
+        "{kind} account `{name}` lives at {}\n  log in once   {}\n  use at birth  rimz start --account {kind}@{name}\n  this room     rimz accounts use {kind} {name}\n  new rooms     rimz accounts use --global {kind} {name}",
         render::home_relative(&home.display().to_string()),
         login_command(&login, &ambient)
     ))
@@ -1271,7 +1271,7 @@ fn removed_notice(kind: &AgentKind, name: &LoginName, home: &str, live: &[String
     notice
 }
 
-/// One `--account <kind>=<name>` flag.
+/// One `--account <kind>@<name>` flag.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AccountFlag {
     kind: AgentKind,
@@ -1279,8 +1279,8 @@ pub struct AccountFlag {
 }
 
 pub(crate) fn parse_account_flag(raw: &str) -> std::result::Result<AccountFlag, String> {
-    let Some((kind, name)) = raw.split_once('=') else {
-        return Err(format!("expected `<kind>=<name>`, got `{raw}`"));
+    let Some((kind, name)) = raw.split_once('@').or_else(|| raw.split_once('=')) else {
+        return Err(format!("expected `<kind>@<name>`, got `{raw}`"));
     };
     let Some(definition) = rimz::agents::find_definition(kind) else {
         return Err(format!("unknown agent kind `{kind}`"));
