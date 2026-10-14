@@ -312,7 +312,7 @@ A remote session's SDK child inherits the user's Claude hooks, but its events ar
 | settings | `disableRemoteControl: true` in Claude's `settings.json` |
 | consent | `remoteDialogSeen` in `.claude.json` is missing, or set to anything other than `true`; an unreadable file does not block |
 | traffic switches | `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` or `DISABLE_GROWTHBOOK` is present in the launch environment or settings `env` |
-| folder trust | the supplied project root has no Claude folder-trust decision under the selected login; machine-wide toggle preflight supplies no root and skips this check |
+| folder trust | the supplied project root has no Claude folder-trust decision under the selected login; Git rooms require the exact root key, while non-Git rooms also accept a trusted ancestor; machine-wide toggle preflight supplies no root and skips this check |
 | version | `claude --version` reports below 2.1.51; an unreadable version skips the remaining checks with a warning |
 | authentication (2.1.157 and later) | `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, or `CLAUDE_CODE_OAUTH_TOKEN` in the launch environment or settings `env`, or `apiKeyHelper` in settings |
 | endpoint (2.1.196 and later) | an `ANTHROPIC_BASE_URL` other than `https://api.anthropic.com`, or `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX`, or `CLAUDE_CODE_USE_FOUNDRY`, in the launch environment or settings `env` |
