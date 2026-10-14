@@ -598,6 +598,8 @@ pub enum AccountStatus {
     HomeMissing,
     HooksMissing,
     HooksUntrusted,
+    /// The provider's own policy keeps RimZ's hooks from running.
+    HooksDisabled,
     /// The home is set up, and the provider reports no login in it.
     LoggedOut,
     Unavailable,
@@ -610,6 +612,7 @@ impl AccountStatus {
             Some(BirthLoginErr::MissingHome { .. }) => Self::HomeMissing,
             Some(BirthLoginErr::HooksMissing { .. }) => Self::HooksMissing,
             Some(BirthLoginErr::HooksUntrusted { .. }) => Self::HooksUntrusted,
+            Some(BirthLoginErr::HooksDisabled { .. }) => Self::HooksDisabled,
             Some(
                 BirthLoginErr::Login(_)
                 | BirthLoginErr::MachineUnknown { .. }
@@ -624,6 +627,7 @@ impl AccountStatus {
             Self::HomeMissing => "home missing",
             Self::HooksMissing => "hooks missing",
             Self::HooksUntrusted => "hooks untrusted",
+            Self::HooksDisabled => "hooks disabled",
             Self::LoggedOut => "logged out",
             Self::Unavailable => "unavailable",
         }
@@ -687,6 +691,13 @@ pub enum BirthLoginErr {
         hooks: Box<str>,
         fix: Box<str>,
     },
+    #[error("{kind} account `{name}` cannot run RimZ hooks: {reason}; {fix}")]
+    HooksDisabled {
+        kind: AgentKind,
+        name: LoginName,
+        reason: Box<str>,
+        fix: Box<str>,
+    },
 }
 
 impl ProviderLogin {
@@ -746,6 +757,14 @@ impl ProviderLogin {
                     home: path,
                     env_key: self.home.as_ref().map(|home| home.env_key),
                     hooks: hooks.into(),
+                    fix: fix.into(),
+                })
+            }
+            Err(crate::agents::HookPreflightErr::HooksDisabled { reason, fix }) => {
+                Err(BirthLoginErr::HooksDisabled {
+                    kind,
+                    name,
+                    reason: reason.into(),
                     fix: fix.into(),
                 })
             }

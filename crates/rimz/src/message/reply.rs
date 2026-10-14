@@ -96,6 +96,12 @@ pub enum ReplyPrepareErr {
         hooks: String,
         fix: String,
     },
+    #[error("reply wait hooks are disabled for `{kind}`: {reason}")]
+    HooksDisabled {
+        kind: AgentKind,
+        reason: String,
+        fix: String,
+    },
     #[error("reply wait would create a dependency cycle")]
     DependencyCycle {
         target: String,
@@ -810,6 +816,13 @@ fn preflight_reply_hooks(
             Err(ReplyPrepareErr::HooksUntrusted {
                 kind: agent.kind.clone(),
                 hooks,
+                fix,
+            })
+        }
+        Err(crate::agents::HookPreflightErr::HooksDisabled { reason, fix }) => {
+            Err(ReplyPrepareErr::HooksDisabled {
+                kind: agent.kind.clone(),
+                reason,
                 fix,
             })
         }

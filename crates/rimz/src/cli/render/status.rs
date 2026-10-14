@@ -138,6 +138,7 @@ pub(crate) fn account(status: AccountStatus) -> anstyle::Style {
         AccountStatus::HomeMissing
         | AccountStatus::HooksMissing
         | AccountStatus::HooksUntrusted
+        | AccountStatus::HooksDisabled
         | AccountStatus::LoggedOut
         | AccountStatus::Unavailable => role(StateRole::Waiting),
     }

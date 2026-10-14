@@ -532,7 +532,7 @@ impl crate::agents::capabilities::HookCapability for GrokAdapter {
 
 impl crate::agents::capabilities::InstallationCapability for GrokAdapter {
     fn managed_integration(&self) -> Option<&'static dyn super::ManagedIntegration> {
-        Some(&install::MANAGED_SOURCE)
+        Some(&install::GrokManagedIntegration)
     }
 }
 

@@ -38,6 +38,16 @@ pub trait ManagedIntegration: Sync {
         None
     }
 
+    /// A [`super::HookPreflightErr::HooksDisabled`] when the provider's own
+    /// policy keeps RimZ's hooks from running, so installing them cannot help.
+    /// Runs on every hook preflight, so it reads files and never spawns.
+    fn hooks_disabled(
+        &self,
+        _login_env: &BTreeMap<String, String>,
+    ) -> Option<super::HookPreflightErr> {
+        None
+    }
+
     fn wiring_input_paths(
         &self,
         _descriptor: &AgentSpec,
