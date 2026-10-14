@@ -14,6 +14,8 @@ Fresh sessions run `kiro-cli chat --v3`, with a launch prompt as a bare trailing
 
 Yolo adds the boolean `--trust-all-tools` flag before the prompt. Ask, Auto, and Plan add no flags. Resume strips and re-renders the selected permission posture through the shared launch machinery.
 
+The shared process compiler refuses launch prompts beginning with `-` for any `PromptStyle::Positional` definition before building argv. It does not rewrite the prompt; the error directs the user to start with a word or send it through `rimz message` after launch. Resume and fork are unaffected.
+
 Fresh session binding starts from a live pane's effective Kiro kind and exact absolute cwd. Direct `kiro-cli-chat` commands identify the v3 engine alongside launcher commands, while `kiro-cli-term` and shared runtimes stay excluded. RimZ hashes the cwd into Kiro's 16-hex workspace bucket, validates provider metadata, then pairs exact resume IDs first. For fresh sessions, validated `createdAt` authorizes same-cwd binding: a recordless session requires a compatible pane process start, and fresh sessions pair newest-first to the newest uniquely compatible process. Missing process evidence for an empty session and indistinguishable candidates remain process rows.
 
 A provider session replacing a provisional launch row inherits launch-owned name, profile, permission mode, role, team, cohort, channel, description, model and effort fallbacks, worktree metadata, and budget. Provider sessions are transient in the snapshot; a dead pane removes the card while history remains on disk.

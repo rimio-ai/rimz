@@ -522,6 +522,51 @@ fn provider_prompt_size_is_checked_at_the_argv_boundary() {
 }
 
 #[test]
+fn positional_prompts_cannot_be_mistaken_for_options() {
+    let adapter = crate::agents::find_definition("kiro").unwrap();
+    for kind in ["kiro", "custom-positional"] {
+        let result = compile_provider_argv(
+            adapter,
+            kind,
+            &ExecAction::Launch {
+                prompt: Some("- fix it".to_owned()),
+                extra_args: Vec::new(),
+            },
+            Path::new("/repo"),
+        );
+        assert!(
+            matches!(&result, Err(AgentProcessCompileErr::PositionalPromptOption { kind: rejected }) if rejected == kind)
+        );
+        let message = result.unwrap_err().to_string();
+        assert!(message.contains("rimz message"));
+        assert!(message.contains("start the prompt with a word"));
+    }
+    let argv = compile_provider_argv(
+        adapter,
+        "kiro",
+        &ExecAction::Launch {
+            prompt: Some("fix - it".to_owned()),
+            extra_args: Vec::new(),
+        },
+        Path::new("/repo"),
+    )
+    .unwrap();
+    assert_eq!(argv.last().map(String::as_str), Some("fix - it"));
+    assert!(
+        compile_provider_argv(
+            adapter,
+            "kiro",
+            &ExecAction::Resume {
+                session_id: "sess_redacted".to_owned(),
+                extra_args: Vec::new(),
+            },
+            Path::new("/repo")
+        )
+        .is_ok()
+    );
+}
+
+#[test]
 fn process_compiler_composes_adapter_and_identity_environment() {
     let project = tempfile::tempdir().expect("project");
     let params = crate::agents::LaunchParams {
