@@ -53,10 +53,32 @@ fn main() -> std::process::ExitCode {
 
 fn cap_malloc_arenas() {
     #[cfg(all(target_os = "linux", target_env = "gnu"))]
-    #[expect(unsafe_code, reason = "cap glibc arenas before starting any threads")]
-    // SAFETY: mallopt takes two integer arguments; no threads exist yet.
-    unsafe {
-        libc::mallopt(libc::M_ARENA_MAX, 2);
+    {
+        let arenas = malloc_arena_cap(std::env::args_os().skip(1));
+        #[expect(unsafe_code, reason = "cap glibc arenas before starting any threads")]
+        // SAFETY: mallopt takes two integer arguments; no threads exist yet.
+        unsafe {
+            libc::mallopt(libc::M_ARENA_MAX, arenas);
+        }
+    }
+}
+
+/// Two arenas bound per-thread resident memory in short-lived commands and
+/// helpers. The sidebar host is long-lived and runs over a hundred threads,
+/// where two arenas serialize malloc on their locks, so it gets more. The
+/// host is recognized by the exact argv prefix that `host_args` in
+/// `sidebar_pane/supervise/host_link.rs` emits; anything else, including a
+/// global flag before `sidebar`, keeps two.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+fn malloc_arena_cap(mut args: impl Iterator<Item = std::ffi::OsString>) -> libc::c_int {
+    const DEFAULT_ARENAS: libc::c_int = 2;
+    const SIDEBAR_HOST_ARENAS: libc::c_int = 16;
+    let is_sidebar_host = args.next().is_some_and(|arg| arg == "sidebar")
+        && args.next().is_some_and(|arg| arg == "host");
+    if is_sidebar_host {
+        SIDEBAR_HOST_ARENAS
+    } else {
+        DEFAULT_ARENAS
     }
 }
 
@@ -141,5 +163,41 @@ mod tests {
         assert_eq!(filter(&["stats", "--json"]), "warn");
         assert_eq!(filter(&["sidebar", "--refresh-ms", "500"]), "warn");
         assert_eq!(filter(&["sidebar", "snapshot", "serve"]), "warn");
+    }
+
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    #[test]
+    fn only_the_sidebar_host_argv_lifts_the_arena_cap() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+
+        let arenas = |args: &[&str]| malloc_arena_cap(args.iter().map(OsString::from));
+        // The exact argv `host_args` emits.
+        let host = [
+            "sidebar",
+            "host",
+            "--mux",
+            "zellij",
+            "--workspace-id",
+            "ws-1",
+            "--session-name",
+            "s",
+        ];
+        assert_eq!(arenas(&host), 16);
+        for args in [
+            &["sidebar", "serve"][..],
+            &["sidebar", "snapshot"],
+            &["sidebar"],
+            &[],
+            &["hook", "claude", "stop"],
+            &["--zellij", "sidebar", "host"],
+            &["host", "sidebar"],
+        ] {
+            assert_eq!(arenas(args), 2, "{args:?}");
+        }
+        let non_utf8 = [OsString::from("sidebar"), OsString::from_vec(vec![0xff])];
+        assert_eq!(malloc_arena_cap(non_utf8.into_iter()), 2);
+        let non_utf8_first = [OsString::from_vec(vec![0xff]), OsString::from("host")];
+        assert_eq!(malloc_arena_cap(non_utf8_first.into_iter()), 2);
     }
 }

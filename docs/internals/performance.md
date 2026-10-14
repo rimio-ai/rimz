@@ -365,6 +365,17 @@ Each of these has cost RimZ a real regression. They are grouped by the principle
 
 **An atomic reinstall leaves deleted inodes behind.** A long-lived renderer's `current_exe()` resolves to `rimz (deleted)`, so a naive self-spawn fails `execve`, and a supervisor parent holds the deleted inode until session end while its children orphan. `rimz_exe` repairs the suffix, supervisor-owned reload convergence re-execs parents onto the new binary, and supervisor-side reaping clears the orphans.
 
+**A 2-arena cap serializes malloc in a many-threaded long-lived process.** With glibc capped to two malloc arenas, the sidebar host's 123 threads queued on the arena locks: a profile of a 57-window room put 48% of its on-CPU samples under `__lll_lock_wait_private`. `crates/rimz/src/main.rs::malloc_arena_cap` gives the host 16 arenas and keeps 2 everywhere else. On a 57-window tmux sandbox room with 5 `store_delta` events per second and only stub agents, fresh hosts measured, over 3 × 10 s windows each:
+
+| Host arena cap | Hosts | Mean CPU (run means) | USS after about 1 min |
+| --- | ---: | --- | --- |
+| 2 (old) | 3 | 27.7% (26.1 to 30.3) | 51 MiB |
+| 8 | 6 | 19.1% (18.6 to 20.1) | 53 MiB |
+| 16 (adopted) | 6 | 16.9% (15.2 to 18.4) | 56 MiB |
+| no cap (8 × cores) | 6 | 15.0% (13.7 to 16.6) | 62 MiB |
+
+The 2-arena row comes from an earlier session of the same harness, where cap 8 averaged 18.1%. Cap 4 averaged 22.8%. Every cap-8 run averaged above every uncapped run, while cap 16 overlapped them. The host stays capped because glibc's default, 8 arenas per core, bounds nothing on a many-core machine over hours of uptime. Lift another process's cap only after a profile of that process shows the same lock wait.
+
 ## Adopted hook drainer
 
 The rejected resident-writer premise was wrong: the foreground hook folded the room and ran lifecycle effects, not merely a microsecond append. `crates/rimz/src/cli/hooks.rs::run_feed` now appends raw ingress before return and nudges an elected, idle-exiting worker. Verified pins avoid git resolution; path discovery and typed validation reuse the same atomically stamped workspace-record bytes. A failed connect spawns without waiting for the spawn lock or listener. Host drain-through callers keep polling the socket and lifetime lock until their deadline: a socket connection requests the elected drainer's result, while a free lock applies inline immediately, including after a failed spawn. Sandbox callers use their wrapper-held lease and apply in the caller's view without appending when the host drainer is unreachable or their launch predates the `RIMZ_SANDBOX_HOST_PATHS` mount pin. A missing pin also skips the connect. Hook stdout remains the provider's decision channel and helper children have fresh stdio. Reply-bearing events wait for enrichment, not all hooks.

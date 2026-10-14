@@ -142,7 +142,7 @@ Classify a rising resident set before changing allocation policy: it is usually 
 1. Sample one host at a fixed cadence. A resident set that keeps rising while the room is idle is a leak candidate; a flat plateau after an attachment change is retained state or high-water.
 2. Compare attachment counts, pets disabled, and cell pets enabled. A step tied to one attachment or feature names the owner even when the allocator keeps freed pages resident.
 3. Attach `heaptrack`. Outstanding Rust allocations that grow cycle over cycle are a leak; bounded freed pages in the one owner are high-water.
-4. The process-start glibc arena cap is the one allocator setting in force. For everything else, fix the owning feature before tuning malloc: remove duplicate owners or compact the retained representation first, and revisit allocator policy only when a single correct owner is still a material cost.
+4. The process-start glibc arena cap (2, or 16 for the sidebar host) is the one allocator setting in force. For everything else, fix the owning feature before tuning malloc: remove duplicate owners or compact the retained representation first, and revisit allocator policy only when a single correct owner is still a material cost.
 
 ## Turn a finding into a guard
 

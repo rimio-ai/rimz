@@ -39,6 +39,8 @@ const HOST_PANE_ENV_REMOVALS: &[&str] = &[
     super::BASELINE_ENV,
 ];
 
+/// The leading `sidebar host` is what `malloc_arena_cap` in the binary's
+/// `main.rs` matches to give the host its larger arena cap; keep the two in step.
 pub(super) fn host_args(config: &ServeConfig) -> Vec<OsString> {
     [
         "sidebar",
