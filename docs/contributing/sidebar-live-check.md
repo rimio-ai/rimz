@@ -658,9 +658,9 @@ Before you read any timing, confirm from the shell that sends the messages that 
 
 A room built by hand, outside `cargo xtask sandbox`, needs `XDG_RUNTIME_DIR` set to a short path (a few characters under `/tmp`): socket paths under a long directory exceed the AF_UNIX limit and the room fails to start. The state root may be long.
 
-## Check a loop agent check against a real provider
+## Probe a loop judge against a real provider
 
-An [agent check](../reference/cli/loop.md#waits-and-checks) asks a real Claude or Codex model, so it needs a provider login too, and a check that fires its action then starts a real agent. Two choices keep the run to the checker alone:
+A [judge](../reference/cli/loop.md#waits-and-checks) asks a real Claude or Codex model, so it needs a provider login too, and a firing verdict then starts a real agent. Two choices keep the run to the judge alone:
 
 - Ask a question whose answer cannot fire the action: one that must answer false under `--on success`, or one that must answer true under `--on fail`.
 - Run from a checkout the provider already trusts. A scratch repository is untrusted, and the fire ends `Errored` naming `rimz trust grant --agents <kind>` as the fix.
@@ -671,13 +671,13 @@ Fire by hand, so the scheduler never runs the task, then remove it. `--in 1d` gi
 cargo build -p rimz --bin rimz
 BIN="$(cargo metadata --format-version 1 --no-deps | jq -r .target_directory)/debug/rimz"
 "$BIN" loop add acheck --in 1d --agent haiku --prompt "say ok" \
-  --check-agent haiku --check-prompt "Does README.md contain the word zebra-quartz-9?" --on success
+  --judge haiku --judge-prompt "Does README.md contain the word zebra-quartz-9?" --on success
 "$BIN" loop fire acheck
 "$BIN" loop logs acheck
 "$BIN" loop remove acheck
 ```
 
-`haiku` stands for any profile of yours that resolves to one Claude or Codex agent. `loop fire` reports `check declined` and starts nothing, and `loop logs` holds the checker's verdict, reason, cost, and tokens. For the other polarity, ask a question that is true and pass `--on fail`: the fire reports `check passed` and still starts nothing.
+`haiku` stands for any profile of yours that resolves to one Claude or Codex agent. `loop fire` reports ``judge `haiku` declined`` and starts nothing, and `loop logs` holds the judge's verdict, reason, cost, and tokens. For the other polarity, ask a question that is true and pass `--on fail`: the fire reports ``judge `haiku` passed`` and still starts nothing.
 
 ## Traps
 

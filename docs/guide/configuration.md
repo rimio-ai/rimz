@@ -847,20 +847,20 @@ Loop tasks live in `~/.rimz/loop.toml` under `[tasks.<name>]`. Shared project ta
 
 Every task you write here does one thing: `agent` runs one agent cell on a calendar, interval, cron, or one-shot schedule.
 
-`check` guards that run. It is a shell command RimZ runs first, and its exit code decides whether the agent fires at all: `on = "fail"` proceeds on a non-zero exit or a timeout, `on = "success"` on a zero exit. The check's output is appended to the agent's prompt when it fires. It runs in the task's `dir` when one is set, and at `root` otherwise; `rimz loop add` fills `dir` with the worktree you ran it from.
+`check` guards that run. It is a shell command RimZ runs first: `on = "fail"` proceeds on a non-zero exit or a timeout, `on = "success"` on a zero exit. `check-timeout` caps it, else `timeout`, else five minutes. The output flows to any judges and then the agent's prompt when it fires. It runs in the task's `dir` when one is set, and at `root` otherwise; `rimz loop add` fills `dir` with the worktree you ran it from.
 
-When the guard needs judgment rather than a command's exit code, `check` also accepts an agent table. The profile must resolve to one Claude or Codex agent, with exactly one of `prompt` and `prompt-file`:
+When the guard also needs judgment, add `judge` beside `check`. The profile must resolve to one Claude or Codex agent, with exactly one of `prompt` and `prompt-file`, an action, and explicit `on` on the task:
 
 ```toml
-[tasks.pr_watch.check]
+[tasks.pr_watch.judge]
 agent = "haiku"
 prompt = "Does this failure need a code change?"
-timeout = "5m"           # optional; the check's own cap, independent of the task timeout
-# prompt-file = "prompts/check.md"  # instead of prompt
+timeout = "5m"           # optional; the judge's own cap, independent of the task timeout
+# prompt-file = "prompts/judge.md"  # instead of prompt
 # recheck = "6h"         # optional; resident tasks only, no default
 ```
 
-Agent checks run without a pane and return a verdict and reason before the action. The [loop guide](./loops.md#guard-a-turn-with-a-check) explains judgment guards, and the [loop reference](../reference/cli/loop.md#waits-and-checks) lists the corresponding flags and refusals.
+Judges run without a pane and return a verdict and reason before the action. For several, use `[[tasks.pr_watch.judge]]` tables in the order they should run. The shell runs first, then each judge sees all earlier evidence; the first answered stage that misses `on` stops the chain. A judge without a verdict continues it. An old agent table under `check` still reads as the first judge. The [loop guide](./loops.md#guard-a-turn-with-a-check) explains judgment guards, and the [loop reference](../reference/cli/loop.md#waits-and-checks) lists the corresponding flags and refusals.
 
 The rest tune what one fire is allowed to do:
 

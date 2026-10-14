@@ -298,7 +298,7 @@ impl std::fmt::Display for TaskCheck {
     }
 }
 
-/// A headless guard's profile, question, and independent timing options.
+/// A headless judge's profile, question, and independent timing options.
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub struct Judge {

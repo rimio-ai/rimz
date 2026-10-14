@@ -1,12 +1,12 @@
 # Loop CLI
 
-`rimz loop` runs work on a clock, on a signal, or while state conditions hold. A task is a name, one trigger, and one action: start a fresh supervised agent (`--agent`), deliver a prompt to a live agent session (`--wait`), or run a shell command (`--check`). A check can also stand in front of an agent action as a guard. The [loops guide](../../guide/loops.md) teaches when to use each; an alarm an agent sets for itself, after a delay or a watched command, is [`rimz wait`](./wait.md).
+`rimz loop` runs work on a clock, on a signal, or while state conditions hold. A task is a name, one trigger, and one action: start a fresh supervised agent (`--agent`), deliver a prompt to a live agent session (`--wait`), or run a shell command (`--check`). A shell check and model judges can guard an agent action, in that order. The [loops guide](../../guide/loops.md) teaches when to use each; an alarm an agent sets for itself, after a delay or a watched command, is [`rimz wait`](./wait.md).
 
 A clock task fires while a room for its project is open, from that room's sidebar, or from the optional machine-wide [timer](#timer) when no room is open. A signal task fires from whichever process emits the signal, so it needs no room.
 
 ```sh
 rimz loop add morning --agent claude --prompt "summarize what landed on main overnight" --every weekday --at 07:00
-rimz loop add watchdog --check "cargo test" --on fail --agent codex --prompt "fix the failing test" --every 15m
+rimz loop add watchdog --every 15m --check "cargo test" --check-timeout 10m --judge haiku --judge-prompt "Are these failures flakes or already fixed on main?" --on fail --agent codex --prompt "fix the failing test"
 rimz loop add ci-green --check "gh run watch --exit-status" --on success --until 30m --every 2m --wait @planner --prompt "CI is green; merge"
 rimz loop add merged --signal pr.merged --once --wait @planner --prompt "start the follow-up"
 rimz loop list
@@ -44,7 +44,7 @@ Every command takes the [global flags](../cli.md#global-flags). `loop show --jso
 | Wake a live agent | `--wait [<ADDRESS>]`: pins one live session now; see [waits and checks](#waits-and-checks). | Optional. |
 | Run a command | `--check <CMD>` with no other action. Records `completed`, `failed`, or `timed out`. | None. |
 
-`--check` combined with `--agent` or `--wait` is a guard: the command runs first, and the action runs only on the outcome `--on` names. A supervised `--agent` task refuses a kind whose hooks are not installed, because a scheduled turn reports completion through them.
+`--check` combined with `--agent` or `--wait` is a guard: the command runs first, then any `--judge`, and the action runs only when every answered stage lands on the outcome `--on` names. A supervised `--agent` task refuses a kind whose hooks are not installed, because a scheduled turn reports completion through them.
 
 `--agent <SPEC> --stay` opens ordinary agents in a new background tab on the checkout's channel, leaves their panes open, and returns without supervising a turn. It accepts the same layout grammar as `rimz agents`, requires a prompt leader and a prompt, and accepts `--effort` and `--fast` or `--no-fast`. For both supervised and resident tasks, add refuses `--effort` or `--fast` before saving if any agent in the spec cannot take it, with the same message as a direct launch. With `--stay`, `--mode ask` and `--mode yolo` override the layout; `--mode auto` leaves each profile its own mode. A missing room is opened detached. Scheduled fires launch only once per task and checkout; changing the task under the same name preserves that memory. `loop fire NAME` launches again, and `loop remove NAME` clears the launch records. `loop show NAME` lists launched checkouts, times, and leader handles; `--json` includes those records and run history. Logs identify each launch's checkout and leader.
 
@@ -73,7 +73,7 @@ With `--each-worktree`, each RimZ-owned checkout has its own condition and `--fo
 | Interval | `--every <DUR>`, measured from the last fire | Yes. |
 | Calendar | `--every <DAYS> --at HH:MM` | On each matching day. |
 | Raw cron | `--cron "<5 fields>"` | Per the expression. |
-| Poll-until | `--every <DUR> --until <DUR>` with `--check` or `--check-agent`, plus `--agent` or `--wait` | Until the guard fires the action or the deadline passes. |
+| Poll-until | `--every <DUR> --until <DUR>` with `--check` or `--judge`, plus `--agent` or `--wait` | Until the guard fires the action or the deadline passes. |
 | Signal | `--signal <NAME\|FAMILY.*>`, narrowed by `--match` | On every delivering signal, or once with `--once`; see [signals](#signals). |
 | Condition | `--when <EXPR>` with optional `--for <DUR>` | Once per continuously true period, except resident retries; `--once` retires after the first fire. |
 
@@ -86,7 +86,7 @@ The trigger values follow these rules:
 | `--every` days | `day`, `weekday`, `weekend`, a list such as `mon,wed,fri`, or a range such as `mon-fri`. Requires `--at`. |
 | `--cron` | Five whitespace-separated fields. |
 | `--in` | A [duration](../cli.md#durations) in `s`, `m`, `h`, or `d`, greater than zero and less than `24h`. It resolves at add time to a one-shot `--at`, rounded up to the next minute. |
-| `--until` | A duration in `s`, `m`, `h`, or `d`, resolved at add time to a deadline. Requires `--check` or `--check-agent`, `--every`, and `--agent` or `--wait`; refused with `--in` or `--stay`. |
+| `--until` | A duration in `s`, `m`, `h`, or `d`, resolved at add time to a deadline. Requires `--check` or `--judge`, `--every`, and `--agent` or `--wait`; refused with `--in` or `--stay`. |
 
 `--every 1d` fires a day after the last fire and drifts with it; `--every day --at 07:00` fires at 07:00. Calendar times, `--in`, and `--until` resolve in the top-level `timezone` setting, or the system zone when it is unset. A clock task arms the first time a clock sees it and fires on the next occurrence after that, so a late room or a new timer never replays missed fires.
 
@@ -131,18 +131,19 @@ The receipt adds `trigger: when <expression>, for <duration>`, `scope: <checkout
 | `--takeover` | `--stay` | Stop the checkout's idle agents before launching; a busy one defers the fire, a failed stop aborts it. |
 | `--prompt <TEXT>`, `--prompt-file <PATH>` | `--agent`, `--wait` | The prompt the action delivers. The two conflict. |
 | `--check <CMD>` | all | Shell command to run; alone it is the action, otherwise the guard. |
-| `--check-agent <PROFILE>` | `--agent`, `--wait` | Profile for a headless guard, resolving to one Claude or Codex agent. Conflicts with `--check`. |
-| `--check-prompt <TEXT>`, `--check-prompt-file <PATH>` | `--check-agent` | Guard question; exactly one is required. |
-| `--check-recheck <DUR>` | `--check-agent --stay` | Re-ask after a decline; no default. Refused on non-resident tasks. |
-| `--check-timeout <DUR>` | `--check-agent` | Guard's own timeout, default `5m`, independent of `--timeout`. |
+| `--check-timeout <DUR>` | `--check` | Cap for the shell check; default `--timeout`, else `5m`; a killed check fails. |
+| `--judge <PROFILE>` | `--agent`, `--wait` | Profile for a headless judge, resolving to one Claude or Codex agent. May follow `--check`; requires `--on`. |
+| `--judge-prompt <TEXT>`, `--judge-prompt-file <PATH>` | `--judge` | Judge question; exactly one is required. |
+| `--judge-recheck <DUR>` | `--judge --stay` | Re-ask after a decline; no default. Refused on non-resident tasks. |
+| `--judge-timeout <DUR>` | `--judge` | Cap for the judge; default `5m`, independent of `--timeout`. |
 | `--when <EXPR>` | all | Repeatable state condition; see [conditions](#conditions). |
 | `--for <DUR>` | `--when` | Continuous hold before firing. |
 | `--once` | `--signal`, `--when` | Retire after the first delivering fire. |
-| `--on fail\|success\|any` | `--check`, `--check-agent` | Which check outcome fires the action. Default `fail`. |
+| `--on fail\|success\|any` | `--check`, `--judge` | Outcome every stage must land on for the action to run; required with `--judge`, otherwise default `fail`. |
 | `--verify <CMD>` | `--agent` | Command that must pass after the turn; a failure re-prompts the same session. |
 | `--max-attempts <N>` | `--verify` | Total turns allowed to make `--verify` pass. Default `3`, at least `1`. |
 | `--max-strikes <N>` | all | Consecutive failed fires before the task disables itself. Default `3`; `0` turns the gate off. |
-| `--timeout <DUR>` | all | Caps the check, the agent turn, and its verify commands; see [timeouts](#timeouts). `--wait` accepts it only with `--check`. |
+| `--timeout <DUR>` | all except `--stay` | Cap for the agent turn, each verify command, and the shell check when it has no `--check-timeout`; see [timeouts](#timeouts). `--wait` accepts it only with `--check`. |
 | `--worktree <NAME>` | `--agent`, `--wait` | Channel or worktree that hosts the transient pane, or that resolves the `--wait` address. |
 | `--mode auto\|ask\|yolo` | `--agent` | Permission posture for the turn. |
 | `--effort <EFFORT>` | `--agent` | Reasoning effort passed to the agent. Add refuses before saving if any agent in the spec cannot take it, with the direct launch's message. |
@@ -200,6 +201,8 @@ next fire: 2026-09-05 14:00 (in 2h)
 ```
 
 A window that has not started reads `window: claude 5h · not started · 100% left` and `next fire: the next scheduler tick, since the window has not started`.
+
+A judge or a shell check before an action adds one `guard:` line. The watchdog above reads `guard: runs cargo test (cap 10m), then asks haiku (cap 5m); acts when both fail`.
 
 A `--wait` action reads ``action: waits @planner — pinned to claude session `<id>` now; skipped and removed if that session exits``, a check-only task `action: runs check in <dir>`, and a surplus gate adds a `gate:` line. The last line reads `the loop timer will keep time` when the timer is active.
 
@@ -322,33 +325,37 @@ rimz loop add merged --signal pr.merged --once --wait @me
 
 A `--wait` delivery arrives from `@rimz` and parks until the target's current turn ends. A signal fire carries `Type: SIGNAL`; a clock fire carries `Type: WAIT` and opens `scheduled wait` then `fired [<task>]`. The [message header](./message.md#the-message-header) lists every type. Waits armed by `rimz wait` interrupt instead ([the delivered message](./wait.md#the-delivered-message)).
 
-`--check` runs through `sh` at the root of the checkout the task was added from, a linked worktree included; project tasks run at the project root. The outcome decides the action:
+`--check` runs through plain `sh` at the root of the checkout the task was added from, a linked worktree included; project tasks run at the project root. It runs before the judges, which run in file order, then the action. The first answered stage that misses `--on` stops the chain:
 
 | `--on` | Fires the action on |
 | --- | --- |
-| `fail` (default) | A non-zero exit, death by signal, or a timeout. |
-| `success` | Exit `0`. |
+| `fail` (default without a judge) | Each shell result is non-zero, death by signal, or a timeout; each judge verdict is negative. |
+| `success` | The shell exits `0`; each judge verdict is positive. |
 | `any` | Every outcome. |
 
 When the guard fires, the prompt gains ``--- check `<cmd>` exited <code> ---`` and the check's output. A check that does not fire the action records `skipped`.
+
+Plain `sh` reports a pipeline's last command: `cargo test | tail` can pass when the tests failed. Pipe nothing; RimZ caps the captured output tail itself.
 
 A scheduled check-only task opens its root's room before it runs the check, so a check that reads room state finds one. A check guarding an `--agent` or `--wait` action runs with no room open; the action opens it if the guard fires.
 
 `--verify <CMD>` runs after an `--agent` turn and re-prompts the same session with the failure until the command passes or `--max-attempts` turns are spent, then records `verify failed`. `--wait` and check-only tasks refuse it, because they have no supervised session to re-prompt. The retry loop is the one [supervised runs](./agents.md#supervised-runs--p) use.
 
-`--check-agent` requires `--agent` or `--wait`, and exactly one of `--check-prompt` and `--check-prompt-file`. The prompt flags, `--check-recheck`, and `--check-timeout` require `--check-agent`; `--check-recheck` also requires `--stay`. Layouts with multiple cells and kinds other than Claude or Codex are refused at add. Agent checks are stored as a [check table](../../guide/configuration.md#looptoml-scheduled-turns), and receipts, `loop show`, and `loop list` name them as ``check by `<profile>` ``. Both check forms run with `--stay`, before the action launches. A resident agent verdict that declines the action under `--on` is remembered per task and checkout: scheduled fires do not re-ask until the condition goes false and true, the task is redefined, the check table or `--on` changes, or `--check-recheck` elapses. A verdict from an older definition cannot hold a replacement. There is no default recheck; `0` re-asks every fire. Manual `loop fire` ignores the memory; a valid verdict that fires the action clears that checkout's decline. Removal clears it, and rename moves it. Shell checks and ordinary non-resident agent checks still run on every eligible fire. A missing verdict proceeds without recording a decline.
+`--judge` requires `--agent` or `--wait`, explicit `--on`, and exactly one of `--judge-prompt` and `--judge-prompt-file`. The prompt flags, `--judge-recheck`, and `--judge-timeout` require `--judge`; `--judge-timeout` without it names `--check-timeout` as the shell cap. `--judge-recheck` also requires `--stay`. Layouts with multiple cells and kinds other than Claude or Codex are refused at add. Judges are stored as a [judge table or ordered array](../../guide/configuration.md#looptoml-scheduled-turns); an old agent table under `check` still reads as the first judge. A judge cannot be a check-only action. `--check-timeout` requires `--check`, and `--on` requires `--check` or `--judge`.
 
-The checker runs headlessly in the task's checkout, with the profile's isolation and the room-default account. It has no pane or user to question, and is instructed to change nothing. This is an instruction, not an enforced read-only permission mode. Its final answer is one JSON object with `pass` and `reason`: `pass: true` counts as success, `pass: false` as failure, and `--on` applies as above. A missing or invalid verdict, provider failure, or timeout lets the action proceed, with the error in `loop logs`; a provider outage does not add a strike. A missing profile, unsupported kind, or unreadable prompt file instead records `error` and stops the fire.
+Both stages guard `--stay` launches. A resident judge's polarity miss is remembered per task and checkout, including its tier and the whole guard definition. With a standing hold, the shell still runs on every eligible fire; if it reaches the judges, none is re-asked, and the held tier is recorded as `reused` with zero spend. Without a shell, scheduled helpers are suppressed entirely. A changed guard or `--on`, a new true condition edge, task redefinition, or the declining tier's `--judge-recheck` expires the hold. No recheck means an indefinite hold; `0` re-asks every fire. Manual `loop fire` re-asks; a valid firing verdict clears that checkout's decline. Removal clears it, and rename moves it. Ordinary non-resident judges re-ask every eligible fire. A missing verdict continues to the next judge or action without recording a decline.
 
-`--check-timeout` caps only the checker, default `5m`; the task's `--timeout` never caps an agent check. Relative checker prompt files resolve beside `loop.toml` for machine and instance tasks, or beside `.rimz/config.toml` for project tasks. A fired prompt includes ``--- check by `<profile>` (<kind> <model>): pass ---`` (or `fail` or `no verdict`) and the reason or error. `loop logs` shows the verdict, reason, cost when known, and token counts. The task's recorded cost and tokens include both the checker and the action.
+The judge runs headlessly in the task's checkout, with the profile's isolation and the room-default account. It has no pane or user to question, and is instructed to change nothing. This is an instruction, not an enforced read-only permission mode. Its final answer is one JSON object with `pass` and `reason`: `pass: true` counts as success, `pass: false` as failure. A missing or invalid verdict, provider failure, or timeout continues the chain, with the error in `loop logs`. Strikes use the last stage with a verdict, so an outage alone cannot disable a successfully launched task. A missing profile, unsupported kind, or unreadable prompt file instead records `error` and stops the fire; completed stages and their spend survive.
 
-Ctrl-C during an agent check cancels the checker and the fire, exits `130`, and neither launches the action nor sends a delivery. This also applies when the start throttle is off or has no limits.
+`--judge-timeout` caps only the judge, default `5m`; the task's `--timeout` never caps a judge. Relative judge prompt files resolve beside `loop.toml` for machine and instance tasks, or beside `.rimz/config.toml` for project tasks. Each judge's prompt receives the shell output and every earlier judge's heading and reason or error. The action receives all completed evidence, including ``--- judge `<profile>` (<kind> <model>): pass ---`` (or `fail` or `no verdict`). `loop logs` shows every stage's duration, verdict, reason, cost, tokens, and reuse status. Recorded cost and tokens sum every judge and the action.
 
-Every agent-check decline appears in `rimz stats --assists` and increments the `check_declines` count in `rimz stats --json`, including ordinary tasks. Decline memory remains resident-only.
+Ctrl-C before, during, or between stages cancels the guard and the fire, exits `130`, and neither launches the action nor sends a delivery. Completed evidence remains. This also applies when the start throttle is off or has no limits.
+
+Every fresh judge decline appears in `rimz stats --assists` and increments `judge_declines` in `rimz stats --json`, including ordinary tasks. Reused decisions do not append assists. Decline memory remains resident-only.
 
 ## Budgets, gates, and strikes
 
-Budget, account, and deadline gates run before the check, so their refusals spend nothing and open no room. An agent checker also passes the same scope gates for its own kind and room-default account before it runs; a refusal skips the entire fire without running the check or launching the action. The start throttle runs after the check. A gate skip never counts as a strike.
+The action's budget, account, and deadline gates run before the guard, so their refusals spend nothing and open no room. Each judge also passes scope gates for its own kind and room-default account before its process starts; a refusal stops the fire without launching the action, retaining earlier stages and spend. The start throttle runs after the guard. A gate skip never counts as a strike.
 
 ### Budgets
 
@@ -403,10 +410,10 @@ After `--max-strikes` consecutive strikes (default `3`), the task disables itsel
 | Run result | Effect on strikes |
 | --- | --- |
 | `failed`, `timed out`, `error`, `verify failed`, `budget exceeded` | Strike. |
-| `completed`, `delivered` after a guard that fired on a failing check | Strike. |
-| `completed`, `delivered` otherwise | Resets the count. |
-| `skipped` after a passing check | Resets the count. |
-| `skipped` after a failing check, or a sibling signal | Neutral. |
+| `completed`, `delivered`, `launched` whose last answered guard stage failed | Strike. |
+| `completed`, `delivered`, `launched` otherwise | Resets the count. |
+| `skipped` whose last answered guard stage passed | Resets the count. |
+| `skipped` whose last answered guard stage failed or is absent, or a sibling signal | Neutral. |
 | `budget skipped`, `surplus skipped`, `account skipped`, `throttle skipped`, `takeover blocked`, `overlapped`, `canceled`, `expired`, `target gone` | Neutral. |
 | `start failed` — the fire left no run behind, so the occurrence is spent without one: either the runner was never spawned, or it exited before it could record anything | Neutral. Shown as a failure, but a fire that ran nothing never auto-disables the task. |
 
@@ -414,11 +421,12 @@ After `--max-strikes` consecutive strikes (default `3`), the task disables itsel
 
 | What | Cap |
 | --- | --- |
-| `--check` | The task's `--timeout`, else 5 minutes. A killed check counts as a failure. |
+| `--check` | `--check-timeout`, else the task's `--timeout`, else 5 minutes. A killed check counts as a failure. |
+| Each judge | Its own `--judge-timeout` or table `timeout`, else 5 minutes, independent of `--timeout`. No verdict continues the chain. |
 | Scheduled `--agent` turn and its verify commands | The task's `--timeout`, else `loop.default-timeout` (default `2h`, set with `rimz config set loop.default-timeout 3h`). |
 | `--agent` turn under `loop fire` | The task's `--timeout`, else unbounded. |
 
-`--timeout` takes `s`, `m`, `h`, or `d`, and must be greater than zero. `loop.default-timeout` is refused the same way.
+`--timeout`, `--check-timeout`, and `--judge-timeout` take `s`, `m`, `h`, or `d`, and must be greater than zero. `loop.default-timeout` is refused the same way. Resident `--stay` tasks accept `--check-timeout` and `--judge-timeout`, not `--timeout`.
 
 ## Enable, disable, and pause
 
@@ -491,7 +499,7 @@ For an `--agent` task with no configured limit and no run waiting in the start t
 
 | Section | Contents |
 | --- | --- |
-| `WORKTREES` | Fan-out tasks only: owned checkout count and nonzero blocked, ready, holding, declined, waiting, and launched counts. Columns are `WORKTREE`, `STATE`, each distinct condition key in expression order, and `LEADER`. Rows put blocked checkouts first, then ready, holding, declined, waiting one term short, and launched with live leaders (newest first). Blocked means ready now (condition true and hold elapsed), unlaunched, with an uninterrupted takeover refusal run. Blocked rows name the newest recorded blockers and the uninterrupted refusal age; holding rows show elapsed/hold; declined rows show the checker profile, reason, and decline age; waiting and ready rows show leaf truth and readings (`unknown` when absent). Launched rows show launch age, ledgered handle, effective status, and that checkout's armed subscription count. Term cells stay blank for blocked, declined, and launched rows. Waiting on two or more terms and launched with ended leaders fold into count lines; `--all` unfolds both, with ended leaders marked `@handle ended`. A closed room adds the condition block's note about unavailable CI and PR readings. Readings come from disk, never a forge poll. |
+| `WORKTREES` | Fan-out tasks only: owned checkout count and nonzero blocked, ready, holding, declined, waiting, and launched counts. Columns are `WORKTREE`, `STATE`, each distinct condition key in expression order, and `LEADER`. Rows put blocked checkouts first, then ready, holding, declined, waiting one term short, and launched with live leaders (newest first). Blocked means ready now (condition true and hold elapsed), unlaunched, with an uninterrupted takeover refusal run. Blocked rows name the newest recorded blockers and the uninterrupted refusal age; holding rows show elapsed/hold; declined rows show the judge profile, reason, and decline age; waiting and ready rows show leaf truth and readings (`unknown` when absent). Launched rows show launch age, ledgered handle, effective status, and that checkout's armed subscription count. Term cells stay blank for blocked, declined, and launched rows. Waiting on two or more terms and launched with ended leaders fold into count lines; `--all` unfolds both, with ended leaders marked `@handle ended`. A closed room adds the condition block's note about unavailable CI and PR readings. Readings come from disk, never a forge poll. |
 | `LAUNCHES` | Non-fan-out resident launch memory, when nonempty: bare checkout names, ledgered leader handles, and relative launch ages, newest first. |
 | `LAST RUN` | The newest detailed run that is not an overlapped fire. Omitted when the newest non-overlapped record is a clean `launched`; a failed launch keeps its error body. The header carries status, age, duration, exit, `manual` for a hand fire, and the signal that fired it. The body is what `loop logs` prints for that run, except that a passing check prints its last five lines, followed by the `loop logs` command whose first block is this run. A failed check prints every line. While the task is failing and a newer run that is not the failure takes this section, a `last failure` pointer to `loop logs --failed` follows; a healthy task prints none. |
 | `AGENT RUNS` | Check-gated `--agent` and `--wait` tasks only: how many fires escalated to the action, the total and average cost across every escalated run the log still holds that recorded one, and the five latest attempts, newest first. |
@@ -500,7 +508,7 @@ For an `--agent` task with no configured limit and no run waiting in the start t
 
 `loop logs` and `loop show --json` keep one entry per fire, overlapped fires included. The JSON document keeps `task`, `entry`, `launches`, `runs`, `running`, `held`, and `waiting`, and adds `worktrees`. `running` is `null` while no run holds the lock, otherwise an object with `pid`, `started_at`, and `run_id`, each `null` when the lock names no holder or the run has no record yet. `held` is `null` unless that run is waiting in the start throttle, and then an object with `pid`, `checkout`, `since`, `reason` (`null` before the first reading), and `position`, its 1-based place in the queue. `waiting` lists the task's other runs waiting in the throttle, each an object of the same shape. A record admitted after a hold carries `throttle_wait_ms`. A run lock that cannot be read warns on stderr and prints `null`.
 
-`worktrees` is an unfolded array for fan-out tasks (empty for other tasks). Each row has `checkout` (path), `name`, and `state` (`blocked`, `ready`, `holding`, `declined`, `waiting`, or `launched`). Condition rows include `readings` (key to value or `null`, in expression order) and `short` (unmatched leaf keys). Holding rows add `since`, `hold_ms`, and `held_ms`; ready rows add `since`. A true condition without a matching hold clock starts as holding with `since` set to now and `held_ms` zero when a hold is configured, otherwise ready since now. Blocked rows add `since` and `blocked` (`count`, `since`, `reason`), whose count and age span only the current uninterrupted refusal run. Declined rows add `since` (decline time), `reason`, and checker `profile`; the human table shows the reason and leaves term cells blank. Launched rows add `since` (launch time), `leader`, `leader_status` (`null` when ended), and `armed`. `--all` changes only the human table, not JSON.
+`worktrees` is an unfolded array for fan-out tasks (empty for other tasks). Each row has `checkout` (path), `name`, and `state` (`blocked`, `ready`, `holding`, `declined`, `waiting`, or `launched`). Condition rows include `readings` (key to value or `null`, in expression order) and `short` (unmatched leaf keys). Holding rows add `since`, `hold_ms`, and `held_ms`; ready rows add `since`. A true condition without a matching hold clock starts as holding with `since` set to now and `held_ms` zero when a hold is configured, otherwise ready since now. Blocked rows add `since` and `blocked` (`count`, `since`, `reason`), whose count and age span only the current uninterrupted refusal run. Declined rows add `since` (decline time), `reason`, and judge `profile`; the human table shows the reason and leaves term cells blank. Launched rows add `since` (launch time), `leader`, `leader_status` (`null` when ended), and `armed`. `--all` changes only the human table, not JSON.
 
 In the human table, a condition key used by multiple terms shows its reading without a truth glyph; single-term keys keep their glyph. If the owned worktree list cannot be read, the table prints one explanatory note instead of rows. If the room's subscription catalog cannot be read, both the screen and `--json` print what they have, with every `armed` count at zero, and then exit nonzero with the error.
 
