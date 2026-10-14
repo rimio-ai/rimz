@@ -13,6 +13,7 @@ use crate::agents::pricing::{PriceBook, Pricing};
 
 const PER_MILLION: f64 = 1_000_000.0;
 const MAX_RATE_PER_MTOK: f64 = 10_000.0;
+const MAX_MULTIPLIER: f64 = 10.0;
 
 #[derive(Clone, Debug, Default, PartialEq)]
 struct ManagedPricing {
@@ -234,7 +235,7 @@ fn merge_model_pricing(pricing: &mut ManagedPricing, root: &Value) {
     if let Some(multiplier) = model_pricing
         .get("multiplier")
         .and_then(Value::as_f64)
-        .filter(|value| value.is_finite() && *value > 0.0 && *value <= 1.0)
+        .filter(|value| value.is_finite() && *value > 0.0 && *value <= MAX_MULTIPLIER)
     {
         pricing.multiplier = Some(multiplier);
     }
@@ -369,17 +370,20 @@ mod tests {
     #[test]
     fn invalid_multiplier_bounds_do_not_replace_a_valid_value() {
         let mut pricing = ManagedPricing::default();
-        merge_model_pricing(
-            &mut pricing,
-            &serde_json::json!({"modelPricing": {"multiplier": 0.75}}),
-        );
-        for invalid in [0.0, -0.1, 1.1, 10_001.0] {
+        for valid in [0.75, 1.5, 10.0] {
+            merge_model_pricing(
+                &mut pricing,
+                &serde_json::json!({"modelPricing": {"multiplier": valid}}),
+            );
+            assert_eq!(pricing.multiplier, Some(valid));
+        }
+        for invalid in [0.0, -0.1, 10.01, 10_001.0] {
             merge_model_pricing(
                 &mut pricing,
                 &serde_json::json!({"modelPricing": {"multiplier": invalid}}),
             );
         }
-        assert_eq!(pricing.multiplier, Some(0.75));
+        assert_eq!(pricing.multiplier, Some(10.0));
     }
 
     #[test]
