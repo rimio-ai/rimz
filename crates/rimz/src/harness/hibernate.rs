@@ -745,7 +745,7 @@ fn inspect_with(config: &HibernateConfig, host: &impl Host) -> PreflightReport {
         "user manager",
         host.manager(),
         "reachable",
-        "systemd user manager is unreachable; run loginctl enable-linger <user> or log in through a systemd session",
+        "systemd user manager is unreachable; run loginctl enable-linger <user> or log in through a systemd session, or, when XDG_RUNTIME_DIR is unset or overridden (an SSH login, a sandbox), export XDG_RUNTIME_DIR=/run/user/$(id -u)",
     );
     let slice = host.app_slice();
     let memory = slice.as_ref().is_ok_and(|slice| {
