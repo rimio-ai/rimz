@@ -424,17 +424,17 @@ mod tests {
 
         let amp = agent_cells(&matrix, "amp");
         assert_eq!(count(&amp, MatrixCellState::Ok), 3);
-        assert_eq!(count(&amp, MatrixCellState::Partial), 5);
-        assert_eq!(count(&amp, MatrixCellState::Absent), 11);
+        assert_eq!(count(&amp, MatrixCellState::Partial), 2);
+        assert_eq!(count(&amp, MatrixCellState::Absent), 14);
         assert_eq!(
             agent_labels(&matrix, "amp", MatrixCellState::Partial),
-            ["end", "idle", "usage", "live$", "spend"]
+            ["end", "idle"]
         );
         assert_eq!(
             agent_labels(&matrix, "amp", MatrixCellState::Absent),
             [
-                "plan", "ask", "answer", "compact", "sub", "remind", "bg", "bgsh", "rich", "tools",
-                "remote"
+                "plan", "ask", "answer", "compact", "sub", "remind", "bg", "bgsh", "usage",
+                "live$", "rich", "spend", "tools", "remote"
             ]
         );
 

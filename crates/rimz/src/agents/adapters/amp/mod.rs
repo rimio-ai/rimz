@@ -119,7 +119,7 @@ const AMP_COVERAGE: CoverageAnnotations = CoverageAnnotations {
         reason: "no native event",
     },
     user_question: ConcernCoverage::Unsupported {
-        reason: "no native event",
+        reason: "Amp's ask_user_choice question waits are not observable",
     },
     answer: ConcernCoverage::Unsupported {
         reason: "no external resolver",
@@ -147,13 +147,11 @@ const AMP_COVERAGE: CoverageAnnotations = CoverageAnnotations {
         via: "turn-end + awaiting-approval + stall window",
         gap: "no notification event",
     },
-    context_usage: ConcernCoverage::Partial {
-        via: "private thread cache on turn boundaries + producer tick",
-        gap: "no stable context-window divisor",
+    context_usage: ConcernCoverage::Unsupported {
+        reason: "Amp no longer writes a local thread cache",
     },
-    realtime_cost: ConcernCoverage::Partial {
-        via: "private thread cache tokens + estimated model pricing",
-        gap: "60s mid-turn cadence and unknown models can omit dollars",
+    realtime_cost: ConcernCoverage::Unsupported {
+        reason: "Amp no longer writes a local thread cache",
     },
     rich_context: ConcernCoverage::Unsupported {
         reason: "no out-of-band context transport",
@@ -161,9 +159,8 @@ const AMP_COVERAGE: CoverageAnnotations = CoverageAnnotations {
     hook_install: ConcernCoverage::Wired {
         via: "~/.config/amp/plugins/rimz.ts",
     },
-    account_spend: ConcernCoverage::Partial {
-        via: "private rewritten thread-cache fold",
-        gap: "estimated pricing does not reconcile Amp credits or workspace billing",
+    account_spend: ConcernCoverage::Unsupported {
+        reason: "Amp no longer writes a local thread cache",
     },
     tool_stats: ConcernCoverage::Unsupported {
         reason: "tool statistics are not integrated for this adapter",
@@ -177,20 +174,19 @@ const AMP_USER_COVERAGE: UserCoverage = UserCoverage {
     state: CapabilityLevel::Full {
         note: "the card follows every turn and clears when the pane goes away",
     },
-    live: CapabilityLevel::Partial {
-        shows: "token totals and an estimated dollar figure, refreshed every 60 seconds",
-        limit: "no context-window fill, and unknown models show no dollars",
+    live: CapabilityLevel::Unsupported {
+        reason: "Amp keeps no local token or cost record",
     },
-    history: CapabilityLevel::Partial {
-        shows: "past threads read end to end with tokens and estimated dollars",
-        limit: "estimates do not reconcile against Amp credits or workspace billing",
+    history: CapabilityLevel::Unsupported {
+        reason: "Amp keeps no local record of past thread spend",
     },
     account: CapabilityLevel::Partial {
-        shows: "your Amp identity and estimated thread spend",
-        limit: "no plan tier and no usage window",
+        shows: "whether an Amp login is present on this machine",
+        limit: "no identity, plan, credits, or usage window",
     },
-    ask: CapabilityLevel::Full {
-        note: "a thread waiting on approval raises Waiting and reaches rimz asks",
+    ask: CapabilityLevel::Partial {
+        shows: "a thread waiting on tool approval raises Waiting",
+        limit: "Amp's default asks no approvals and ask_user_choice questions go unseen",
     },
     subagents: CapabilityLevel::Unsupported {
         reason: "Amp's events expose no durable child identity",
@@ -283,13 +279,6 @@ impl crate::agents::capabilities::CoreCapability for AmpAdapter {
     fn conformance(&self) -> super::AdapterConformance {
         super::AdapterConformance {
             classification: super::hook_types::catalog_classification_corpus(AMP_HOOKS),
-            spend: Some(super::SpendFixture {
-                session_id: "T-conformance",
-                file_name: "T-conformance.json",
-                body: super::SpendFixtureBody::Jsonl(
-                    r#"{"id":"T-conformance","messages":[{"role":"assistant","messageId":"m1","content":"done","usage":{"timestamp":"2026-01-01T00:00:00Z","model":"gpt-5","inputTokens":100,"outputTokens":20}}]}"#,
-                ),
-            }),
             ..super::AdapterConformance::default()
         }
     }
