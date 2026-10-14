@@ -1654,7 +1654,11 @@ fn config_set_account_history_declares_the_pool_and_leaves_links_to_accounts_add
                 .args(["budget", "--account", &format!("{kind}@work")])
                 .assert()
                 .success()
-                .stdout(contains(format!("scope:  {kind}@{scope} account")));
+                .stdout(contains(if scope == "default" {
+                    format!("{kind}@work (shares the {kind}@default pool with default)")
+                } else {
+                    format!("{kind}@work (pool {kind}@work)")
+                }));
         }
         let config = machine_config_path(&env);
         let before = std::fs::read(&config).unwrap();

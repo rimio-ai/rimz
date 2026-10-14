@@ -1289,7 +1289,7 @@ fn a_history_entry_on_another_filesystem_stays_in_the_account_home_and_out_of_th
 
     // One fixture per layout: the account home beside the default home, then
     // on another filesystem. Returns the default pool's spend and `add`'s stdout.
-    let run = |env: &Env, home: &std::path::Path| -> (String, String) {
+    let run = |env: &Env, home: &std::path::Path| -> (Value, String) {
         let session = home.join("projects/repo/session.jsonl");
         std::fs::create_dir_all(session.parent().unwrap()).unwrap();
         let now = rimz::agents::spending::unix_secs_now();
@@ -1313,16 +1313,16 @@ fn a_history_entry_on_another_filesystem_stays_in_the_account_home_and_out_of_th
         succeeded(&env.rimz().arg("stats").output().unwrap());
         let budget = env
             .rimz()
-            .args(["budget", "--account", "claude"])
+            .args(["budget", "--account", "claude", "--json"])
             .output()
             .unwrap();
-        (succeeded(&budget), added)
+        (serde_json::from_str(&succeeded(&budget)).unwrap(), added)
     };
 
     let local = Env::new();
     local.record(&local.project_root);
     let (spend, added) = run(&local, &local.home_root.join("work"));
-    assert!(spend.contains("spend:  $0.25 today"), "{spend}\n{added}");
+    assert_eq!(spend["accounts"][0]["spend_usd"], 0.25, "{spend}\n{added}");
 
     let env = Env::new();
     env.record(&env.project_root);
@@ -1340,7 +1340,7 @@ fn a_history_entry_on_another_filesystem_stays_in_the_account_home_and_out_of_th
     let entry = std::fs::symlink_metadata(home.join("projects")).unwrap();
     assert!(entry.is_dir(), "{added}");
     assert!(std::fs::symlink_metadata(native.join("projects")).is_err());
-    assert!(spend.contains("spend:  $0.00 today"), "{spend}\n{added}");
+    assert_eq!(spend["accounts"][0]["spend_usd"], 0.0, "{spend}\n{added}");
 }
 
 /// Answer `thread/loaded/list` on the control socket under a Codex `home` with

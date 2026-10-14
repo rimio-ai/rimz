@@ -18,7 +18,7 @@ A cap is a dollar amount (`5`, `$4.50`), optionally windowed with `/day`. Five s
 | Room | every agent under one project root, worktrees included | `harness.budget = "50/day"` | `/day` only |
 | Account | one provider's `default` and shared accounts together, or one standalone account; every room on them | `[accounts.budget] claude = "100/day"` | `/day` only |
 
-A `/day` window runs from local midnight in your configured [`timezone`](./configuration.md#sidebar-rendering). Each scope is checked on its own, so the first cap crossed is the one that parks.
+A room or account `/day` window runs from local midnight in your configured [`timezone`](./configuration.md#sidebar-rendering). An agent's day window starts when its cap takes effect and restarts on the first check after midnight. Each scope is checked on its own, so the first cap crossed is the one that parks.
 
 One limit stops a launch without being a dollar cap. Qwen's Alibaba Coding Plan quota belongs to the exact account rather than to the CLI, so an unattended launch on an account whose quota window is spent exits `125`, or records `budget skipped` on a loop task, before a pane exists. Launches you make by hand ignore it ([agent support](../reference/agent-support.md#qwen)).
 
@@ -41,7 +41,7 @@ Inspect or change a running agent's cap without relaunching:
 rimz agents budget @coder         # current spend, cap, window, park state
 rimz agents budget @coder 10      # replace the cap
 rimz agents budget @coder +5      # add headroom
-rimz agents budget @coder clear   # remove it
+rimz agents budget @coder off     # remove it; `clear` is an alias
 ```
 
 In a supervised `-p` run the park is also the run's ending: the run records `budget_exceeded` and exits `125`, distinct from a timeout or a failure, so a pipeline branches on it ([scripting](./scripting.md#one-run-one-exit-code)).
@@ -85,18 +85,9 @@ rimz budget off                    # disable it; `clear` is an alias
 rimz budget +25 --account claude   # the same verbs against this room's claude account
 ```
 
-```console
-$ rimz budget
-scope:    fleet
-cap:      $50.00/day
-source:   config
-spend:    $0.00 today
-parked:   no
-turn cap: $3.00/turn (source: config; per turn)
+The report puts today's spend beside the cap, says whether the scope is parked, and gives the commands to raise or lift it. With no cap it gives the command to set one. The account table includes runtime-only caps and lifted pools, not just config defaults. An account report names the login you asked for, the pool it shares, and the other members, so you can see which accounts an edit affects.
 
-ACCOUNT         CAP          SOURCE  SPEND  PARKED
-claude@default  $100.00/day  config  $0.00  no
-```
+For scripts, add `--json` to either budget command. Dollar amounts are numbers, unknown agent spend is null, and account scopes carry the pool and all its members. The [budget reference](../reference/cli/budget.md) lists the fields.
 
 `source` says where the cap in force came from: `config` for the key you set, `override` for an absolute cap set through `rimz budget`, `raised` for a raise on a base cap, `cleared` after `off`, and `none` when no base cap is set.
 
