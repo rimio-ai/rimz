@@ -666,7 +666,7 @@ fn launch_resume_permissions_and_presets_are_pinned() {
             .spec()
             .launch
             .permission_args(PermissionMode::Ask),
-        Vec::<String>::new()
+        vec!["--mode", "interactive"]
     );
     assert_eq!(
         CopilotAdapter
@@ -689,6 +689,32 @@ fn launch_resume_permissions_and_presets_are_pinned() {
             .permission_args(PermissionMode::Yolo),
         vec!["--allow-all"]
     );
+    let mut args = vec!["--mode".to_owned(), "interactive".to_owned()];
+    CopilotAdapter
+        .spec()
+        .launch
+        .strip_permission_args(&mut args);
+    args.extend(
+        CopilotAdapter
+            .spec()
+            .launch
+            .permission_args(PermissionMode::Yolo),
+    );
+    assert_eq!(args, vec!["--allow-all"]);
+}
+
+#[test]
+fn effort_aliases_remain_replaceable() {
+    let matcher = CopilotAdapter
+        .spec()
+        .launch
+        .preset_arg_matcher(crate::agents::PresetField::Effort)
+        .unwrap();
+    for spelling in [vec!["--effort", "high"], vec!["--effort=high"]] {
+        let mut args: Vec<String> = spelling.into_iter().map(str::to_owned).collect();
+        matcher.remove_occurrences(&mut args);
+        assert!(args.is_empty());
+    }
 }
 
 #[test]

@@ -109,7 +109,7 @@ static COPILOT_DESCRIPTOR: AgentSpec = AgentSpec {
         }),
         fork: None,
         permission: super::LaunchPermissionArgs {
-            ask: &[],
+            ask: &["--mode", "interactive"],
             auto: &["--autopilot"],
             yolo: &["--allow-all"],
             plan: &["--plan"],
@@ -123,7 +123,10 @@ static COPILOT_DESCRIPTOR: AgentSpec = AgentSpec {
         presets: super::PresetMatchers {
             auto_compact: None,
             model: Some(super::StaticPresetMatcher::Flag(&["--model"])),
-            effort: Some(super::StaticPresetMatcher::Flag(&["--effort"])),
+            effort: Some(super::StaticPresetMatcher::Flag(&[
+                "--reasoning-effort",
+                "--effort",
+            ])),
             system_prompt_file: None,
             fast: super::FastSwitch::NONE,
         },
