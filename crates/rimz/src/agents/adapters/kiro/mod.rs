@@ -398,15 +398,11 @@ impl crate::agents::capabilities::ContextCapability for KiroAdapter {
         _trigger: RefreshTrigger<'_>,
         ctx: &LocalContextRefreshCtx<'_>,
     ) -> Option<LocalContextRefresh> {
-        let path = ctx
-            .prior_transcript_path
-            .map(PathBuf::from)
-            .filter(|path| {
-                path.parent().and_then(Path::file_name) == Some(std::ffi::OsStr::new(ctx.agent_id))
-                    && std::fs::symlink_metadata(path)
-                        .is_ok_and(|metadata| metadata.file_type().is_file())
-            })
-            .or_else(|| self.session_transcript(ctx.agent_id, None, ctx.login_env))?;
+        let path = self.session_transcript(
+            ctx.agent_id,
+            ctx.prior_transcript_path.map(Path::new),
+            ctx.login_env,
+        )?;
         let stat = ctx.changed_transcript(TranscriptStat::from_path(&path)?)?;
         Some(LocalContextRefresh {
             context: session::refresh_context(&path),

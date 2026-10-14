@@ -122,26 +122,20 @@ fn local_refresh_clears_absent_metadata_fields() {
 }
 
 #[test]
-fn local_refresh_keeps_metadata_when_it_cannot_be_validated() {
-    use crate::agents::FieldPatch;
+fn local_refresh_skips_a_session_it_cannot_validate() {
     let root = tempfile::tempdir().unwrap();
     let path = refresh_fixture(root.path(), json!({}), &[]);
+    let metadata_path = path.parent().unwrap().join("session.json");
     for metadata in [None, Some("not json"), Some(r#"{"id":"wrong"}"#)] {
-        let metadata_path = path.parent().unwrap().join("session.json");
         if let Some(metadata) = metadata {
             std::fs::write(&metadata_path, metadata).unwrap();
         } else {
             std::fs::remove_file(&metadata_path).unwrap();
         }
-        let refresh = refresh_at(&path);
         assert!(
-            refresh.is_some(),
-            "a recorded transcript still refreshes without readable metadata"
+            refresh_at(&path).is_none(),
+            "an unvalidated session yields no refresh, so every field is kept: {metadata:?}"
         );
-        let patch = refresh.unwrap().context;
-        assert_eq!(patch.model_id, FieldPatch::Keep);
-        assert_eq!(patch.effort, FieldPatch::Keep);
-        assert_eq!(patch.session_name, FieldPatch::Keep);
     }
 }
 
