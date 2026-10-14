@@ -1,4 +1,4 @@
-//! A loop guard's complete launch path, bounded process edge, and verdict record.
+//! A loop judge's complete launch path, bounded process edge, and verdict record.
 
 use super::*;
 use crate::agents::{CHECK_VERDICT_SCHEMA, HeadlessRequest, PermissionMode};

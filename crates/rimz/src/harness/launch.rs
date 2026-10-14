@@ -585,8 +585,7 @@ pub struct ExecRequest {
     /// `rimz subagents`.
     #[serde(default)]
     pub subagent: bool,
-    /// The `### Loop` or headless `### Check` reminder body composed for this
-    /// launch; set on a resident's prompt leader, a loop single run, or a checker.
+    /// The `### Loop` or headless `### Judge` reminder body composed for this launch; set on a resident's prompt leader, a loop single run, or a judge.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub loop_reminder: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -212,7 +212,7 @@ When the guard fires, RimZ appends the command, its exit status, and its output 
 
 `--until 30m` is the poll-until deadline: the task retires when the check trips or the deadline passes, whichever comes first. A one-shot guarded by a check retires only when the guard fires, so a skipped check leaves a bare `--at` task armed for the same time next day.
 
-A check is killed after five minutes unless the task's `--timeout` says otherwise (the same flag caps the agent turn), and a killed check counts as a failure. `gh run watch` on a long pipeline is the case to watch: give the task a `--timeout` longer than the pipeline, or poll on `--every` with a command that returns at once.
+A check is killed after five minutes unless `--check-timeout` says otherwise, falling back to the task's `--timeout` when set. A killed check counts as a failure. `gh run watch` on a long pipeline is the case to watch: give the check a cap longer than the pipeline, or poll on `--every` with a command that returns at once. Pipe nothing: plain `sh` takes a pipeline's last exit status, so `cargo test | tail` can hide a failure; RimZ trims the captured output itself.
 
 Ctrl-C during a manual fire cancels the check and the fire, rather than treating the interruption as a failed check and launching the task's agent.
 
@@ -220,14 +220,32 @@ A `--check` with no agent action is still worth having. It is a scheduled comman
 
 `--check` gates firing; `--verify` gates completion. Add `--verify "cargo test"` to a scheduled `--agent` task when the command is the definition of done: a red result returns its evidence to the same live session, up to `--max-attempts` total turns (default 3), before the fire records `verify failed`. It behaves exactly as it does on a hand-run `-p`, described under [verify and retry](./scripting.md#verify-and-retry).
 
-When the decision needs judgment rather than an exit code, use a small agent as the guard:
+When a failing test might be a flake or already fixed on main, ask a small model before spending a full agent turn. The shell runs first; only a failure reaches the judge, and only a negative answer to this question reaches Codex:
 
 ```sh
-rimz loop add triage --every 1h --agent codex --prompt 'Fix actionable CI failures.' \
-  --check-agent claude --check-prompt 'Does this checkout have an actionable CI failure?' --on success
+rimz loop add watchdog --every 15m --check "cargo test" --check-timeout 10m --judge haiku --judge-prompt "Are these failures flakes or already fixed on main?" --on fail --agent codex --prompt "fix the failing test"
 ```
 
-The checker runs without a pane, using the room-default account and the profile's isolation, and is told to ask no questions and change nothing. It returns `pass` and a short reason: with `--on success`, only a positive verdict opens the task's agent pane. `loop logs triage` shows the reason, cost, and tokens, and the launched agent receives the same evidence. The checker has its own five-minute cap, adjustable with `--check-timeout`. If it cannot produce a verdict, the action proceeds and the log carries the error, so a provider outage cannot silently prevent recovery. Shell and agent checks also guard `--stay` launches. A resident agent's decline is remembered, so RimZ does not spend another check on unchanged conditions; `loop show` names the declined checkout and its reason, and `stats --assists` records the saved launch. Fire by hand with `loop fire triage` to ask again, or set `--check-recheck` for periodic reconsideration. The [check reference](../reference/cli/loop.md#waits-and-checks) lists reset, polarity, and prompt-file rules.
+The judge runs without a pane, using the room-default account and the profile's isolation, and is told to ask no questions and change nothing. It sees the shell output, returns `pass` and a short reason, and the action receives both stages' evidence. `loop logs watchdog` shows each verdict, reason, cost, tokens, and duration. The judge has its own five-minute cap, adjustable with `--judge-timeout`, independent of the shell cap. A missing verdict passes the turn to the next judge or action with the error in history, so an outage alone cannot silently prevent recovery. `--on` is required with a judge: `fail` needs negative verdicts, `success` positive verdicts, and `any` accepts either.
+
+The same task in `loop.toml` gives its judge a two-minute cap:
+
+```toml
+[tasks.watchdog]
+every = "15m"
+check = "cargo test"
+check-timeout = "10m"
+on = "fail"
+agent = "codex"
+prompt = "fix the failing test"
+
+[tasks.watchdog.judge]
+agent = "haiku"
+prompt = "Are these failures flakes or already fixed on main?"
+timeout = "2m"
+```
+
+Shell checks and judges also guard `--stay` launches. A resident judge's decline is remembered, but the shell still runs on every eligible fire. While the hold stands, no judge is asked again; history marks the held verdict `reused` with zero spend. `loop show` names the declined checkout and reason, and `stats --assists` records fresh declines, not replays. Fire by hand with `loop fire watchdog` to ask again, or set `--judge-recheck` for periodic reconsideration. The [guard reference](../reference/cli/loop.md#waits-and-checks) lists reset, polarity, and prompt-file rules.
 
 A check script that sometimes needs judgment can call an agent itself: `rimz agents codex "inspect the failed deployment"`. RimZ supplies `RIMZ_LOOP_TASK` with the task name and keeps nested commands in the task's room; the launched agent uses the check's checkout unless it selects another worktree. Inside a check, a prompted launch implies `-p`: it waits for the run, captures the answer in the check output, and returns the run's exit code. The run opens its pane beside the room's loop dashboard and closes it on success or failure, unless `--keep` holds it open; its timeout is the launch's own `--timeout` or `loop.default-timeout` (two hours by default). A launch with no prompt, or with `--bg`, is refused, because the check has to wait for the run to end, and the check's own timeout still bounds how long it can wait.
 

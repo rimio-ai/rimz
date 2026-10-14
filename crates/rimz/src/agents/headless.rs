@@ -1,4 +1,4 @@
-//! Provider-neutral schema, paths, and results for bounded headless checks.
+//! Provider-neutral schema, paths, and results for bounded headless judges.
 
 use std::path::{Path, PathBuf};
 

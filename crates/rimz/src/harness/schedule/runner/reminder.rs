@@ -135,7 +135,11 @@ fn origin(name: &str, task: &LoadedTask) -> String {
         check.as_deref().unwrap_or_default()
     );
     if check.is_some() {
-        origin.push_str(" The check's output follows the prompt.");
+        origin.push_str(if entry.guard().judges.is_empty() {
+            " The check's output follows the prompt."
+        } else {
+            " The guard evidence follows the prompt."
+        });
     }
     origin.push_str(" The prompt is the rule's fixed text, not a message someone just typed.");
     origin
