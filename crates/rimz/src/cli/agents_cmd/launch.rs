@@ -687,6 +687,13 @@ pub(in crate::cli) fn launch_resolved(
         PlacementRequest {
             placement,
             mux,
+            tab_anchor: super::placement::resolve_tab_anchor(
+                placement,
+                team_name.is_some(),
+                rimz::mux::own_pane_id(mux),
+                crate::cli::pinned_room_root().as_deref(),
+                &workspace.project_root,
+            ),
             cwd: cwd.clone(),
             title,
             panes,
@@ -1227,6 +1234,7 @@ fn launch_resume_layout(
         PlacementRequest {
             placement,
             mux,
+            tab_anchor: None,
             cwd: cwd.clone(),
             title,
             panes,
