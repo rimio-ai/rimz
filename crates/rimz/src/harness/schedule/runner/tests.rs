@@ -803,6 +803,58 @@ fn check_polarity_truth_table() {
 }
 
 #[test]
+fn signal_carried_watch_result_is_not_the_subscribers_guard() {
+    let dir = tempfile::tempdir().unwrap();
+    record_room(dir.path()).unwrap();
+    let paths = StatePaths::for_project_root(dir.path()).unwrap();
+    crate::testkit::fleet::seed_fleet_store(&paths, 1, 1).unwrap();
+    let catalog = TaskCatalog::load(Some(dir.path())).unwrap();
+    let entry = TaskEntry {
+        root: dir.path().to_owned(),
+        signal: Some("wait.*".into()),
+        on: Some(CheckOn::Fail),
+        wait: Some(TaskTarget {
+            kind: crate::ids::AgentKind::new_unchecked("claude"),
+            session: "agent-0".into(),
+            handle: "@subscriber".into(),
+        }),
+        ..TaskEntry::default()
+    };
+    let signal = TriggerSignal {
+        name: "wait.completed".parse().unwrap(),
+        payload: serde_json::Map::new(),
+        source: crate::store::event::SignalSource::Watch,
+        watch: Some(WatchOutcome {
+            verdict: WatchVerdict::Exited {
+                code: Some(0),
+                elapsed_ms: 1234,
+            },
+            output: String::new(),
+            output_path: None,
+            summary: crate::disk::summary::FileSummary::default(),
+        }),
+    };
+    let mut fire = TaskFire::new(
+        "subscriber",
+        LoadedTask::new("subscriber", entry, catalog::TaskSource::Config),
+        &catalog,
+        LoopRunMode::Scheduled,
+        false,
+        Timestamp::now(),
+        Arc::new(MachineConfig::default()),
+        Some(signal),
+        CheckEcho::Capture,
+        Instant::now(),
+    )
+    .unwrap();
+    let plan = fire
+        .prepare(&mut |_| panic!("subscriber runs no shell"))
+        .unwrap();
+    assert!(matches!(plan, TaskFirePlan::Deliver(_)), "{plan:?}");
+    assert!(fire.fired_guard.is_empty());
+}
+
+#[test]
 fn skipped_check_preserves_poll_until_and_consumes_watch() {
     let dir = tempfile::tempdir().expect("tempdir");
     record_room(dir.path()).unwrap();
