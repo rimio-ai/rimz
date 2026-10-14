@@ -850,7 +850,7 @@ fn window_cell_reads_what_is_left_and_when_it_resets() {
             Some("31%"),
         ),
         (window(Some(0), Some(5 * 3_600)), Some("100% · ready")),
-        (lifted, Some("∞")),
+        (lifted, Some("no limit")),
         (window(None, Some(3_720)), None),
     ] {
         let text = window_cell(&window, now).map(|cell| strip(|w| cell.write_styled(w)));
@@ -917,7 +917,7 @@ fn window_cell_gates_pace_at_the_floor_and_omits_blank_states() {
                 lifted: true,
                 ..window.clone()
             },
-            "∞",
+            "no limit",
         ),
         (
             RateLimitWindow {

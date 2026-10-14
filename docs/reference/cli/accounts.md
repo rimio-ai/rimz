@@ -159,7 +159,7 @@ $ rimz accounts list
 ○  claude  default  ready            100% · 3h31m · 0.0x  89% · 4d03h · 0.3x   -        -       -        ~/.claude
 ●  claude  work     ready            98% · 4h21m · 0.2x   31% · 13h51m · 0.8x  -        -       shared   ~/.rimz/accounts/claude/work
 
-●  codex   default  hooks untrusted  ∞                    64% · 5d11h · 1.6x   -        -       -        ~/.codex
+●  codex   default  hooks untrusted  no limit             64% · 5d11h · 1.6x   -        -       -        ~/.codex
 ●  this room (claude)   ●  new rooms (codex)   ○  new rooms
 pace: used share ÷ elapsed share; 1.0x lasts exactly to reset
 RimZ hooks for codex account `default` at `/home/me/.codex` are untrusted (SessionStart, UserPromptSubmit, SubagentStart, SubagentStop, Stop, PermissionRequest, PreToolUse, PostToolUse, PreCompact, PostCompact); run /hooks inside codex and trust the RimZ hooks
@@ -185,7 +185,7 @@ The legend line under the table names every layer that decides `●` among the k
 | --- | --- |
 | `85% · 2h46m · 0.3x` | 85% left; resets in 2 hours 46 minutes; using budget at 0.3 times even pace. |
 | `100% · ready` | The window's clock has not started. |
-| `∞` | The limit is lifted, or the account has no subscription windows. |
+| `no limit` | The limit is lifted, or the account has no subscription windows. |
 | `–` | Unknown: no reading yet, or the account is logged out or not declared. |
 
 Pace is the used share divided by the elapsed share of the window: `1.0x` lasts exactly to reset; above it, the account runs dry early at that average rate. It is rounded to one decimal, with `>10x` at a rounded pace of 10.0 or higher. A trailing `–` means less than 5% of the window has elapsed, too early to tell. Pace is absent for a lifted, unknown, not-started or exhausted window, or without a duration, reset time or positive elapsed time. Its color follows `[theme.display.budget_bar.burn_rate]`, the same bands as the sidebar reset marker.

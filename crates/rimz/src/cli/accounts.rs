@@ -1129,7 +1129,12 @@ fn write_accounts(
     if let Some(legend) = render::account_marker_legend(
         &rows.iter().map(|row| row.kind.as_str()).collect(),
         deciding,
-        rows.iter().any(|row| row.machine_default && !row.active),
+        rows.iter().any(|row| {
+            (row.machine_default && !row.active)
+                || deciding
+                    .get(&row.kind)
+                    .is_some_and(|source| *source != Deciding::Machine)
+        }),
     ) {
         writeln!(w, "{legend}")?;
     }
@@ -1167,14 +1172,14 @@ fn unknown_cell() -> render::Cell {
     render::cell("–").fg(render::palette::faint())
 }
 
-/// One window's cell in left terms: `–` without a login or a reading, `∞`
-/// for an account without subscription windows or a lifted limit.
+/// One window's cell in left terms: `–` without a login or a reading, and
+/// `no limit` for an account without subscription windows or a lifted limit.
 fn window_cell(row: &AccountRow, span: WindowSpan, now: Timestamp) -> render::Cell {
     if row.without_login() || matches!(row.entitlement, Entitlement::Lapsed { .. }) {
         return unknown_cell();
     }
     if row.metered == Some(false) {
-        return render::cell("∞");
+        return render::cell("no limit");
     }
     row.windows
         .iter()

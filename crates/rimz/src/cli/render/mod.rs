@@ -744,8 +744,7 @@ pub(crate) fn account_marker_legend(
         };
         format!("{}  {words}{kinds}", paint(palette::accent(), "●"))
     });
-    let new_rooms = (layers.iter().any(|(layer, _)| *layer != Deciding::Machine) || machine_marker)
-        .then(|| format!("{}  new rooms", paint(palette::muted(), "○")));
+    let new_rooms = machine_marker.then(|| format!("{}  new rooms", paint(palette::muted(), "○")));
     let halves: Vec<_> = active.chain(new_rooms).collect();
     (!halves.is_empty()).then(|| halves.join("   "))
 }
@@ -797,12 +796,12 @@ pub(crate) fn window_pace_cell(
     Some(cell(" · pace").suffix(text, style))
 }
 
-/// A rate-limit window's table cell in what is left: `∞` when lifted,
+/// A rate-limit window's table cell in what is left: `no limit` when lifted,
 /// `N% · ready` before its clock starts, else the percentage with its reset
 /// countdown and pace when known. `None` without a reading.
 pub(crate) fn window_cell(window: &rimz::agents::RateLimitWindow, now: Timestamp) -> Option<Cell> {
     if window.lifted {
-        return Some(cell("∞"));
+        return Some(cell("no limit"));
     }
     let percent = percent_left_cell(window.remaining_percentage(now)?);
     if window.not_started(now) {
@@ -1211,11 +1210,11 @@ impl Table {
         cells: &[Cell],
         widths: &[usize],
     ) -> std::io::Result<()> {
-        let cols = if self.show_headers {
-            self.headers.len()
-        } else {
-            cells.len().min(self.headers.len())
-        };
+        let cols = cells
+            .iter()
+            .take(self.headers.len())
+            .rposition(|cell| cell.width() > 0)
+            .map_or(0, |last| last + 1);
         let blank = cell("");
         write!(w, "{:indent$}", "", indent = self.indent)?;
         for (col, (&width, &align)) in widths.iter().zip(&self.align).take(cols).enumerate() {
