@@ -1,6 +1,7 @@
 //! Read-only Qwen Code JSONL token-spend parser.
 
 use std::collections::BTreeMap;
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
 use crate::agents::pricing::{PriceBook, TokenSplit};
@@ -12,11 +13,43 @@ use crate::agents::transcript_fs::home_dir;
 use super::payloads::{TranscriptRecord, fold_transcript};
 
 pub(super) fn runtime_base() -> PathBuf {
-    std::env::var_os("QWEN_RUNTIME_DIR")
-        .filter(|value| !value.is_empty())
-        .or_else(|| std::env::var_os("QWEN_HOME").filter(|value| !value.is_empty()))
-        .map(PathBuf::from)
-        .unwrap_or_else(|| home_dir().join(".qwen"))
+    runtime_base_from(&std::env::vars_os().collect())
+}
+
+fn runtime_base_from(env: &BTreeMap<OsString, OsString>) -> PathBuf {
+    let env_path = |key: &str| {
+        env.get(OsStr::new(key))
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+    };
+    if let Some(path) = env_path("QWEN_RUNTIME_DIR") {
+        return path;
+    }
+    let home = env_path("HOME").unwrap_or_else(home_dir);
+    let settings_env = env
+        .iter()
+        .filter_map(|(key, value)| Some((key.to_str()?.to_owned(), value.to_str()?.to_owned())))
+        .collect();
+    super::settings::layers(None, &settings_env)
+        .iter()
+        .rev()
+        .find_map(|layer| {
+            layer
+                .value
+                .pointer("/advanced/runtimeOutputDir")
+                .filter(|value| !value.is_null())
+        })
+        .and_then(|value| {
+            let path = Path::new(value.as_str()?);
+            if path.is_absolute() {
+                return Some(path.to_owned());
+            }
+            path.strip_prefix("~")
+                .ok()
+                .map(|relative| home.join(relative))
+        })
+        .or_else(|| env_path("QWEN_HOME"))
+        .unwrap_or_else(|| home.join(".qwen"))
 }
 
 /// Qwen rewinds can invalidate any earlier root assistant, so a readable file
@@ -98,6 +131,71 @@ fn priced_entry(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn runtime_output_dir_selects_spend_root_with_env_override() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        let user = home.join(".qwen");
+        std::fs::create_dir_all(&user).unwrap();
+        std::fs::write(
+            user.join("settings.json"),
+            r#"{"advanced":{"runtimeOutputDir":"~/runtime"}}"#,
+        )
+        .unwrap();
+        let mut env = BTreeMap::from([
+            ("HOME".into(), home.as_os_str().to_owned()),
+            (
+                "QWEN_CODE_SYSTEM_SETTINGS_PATH".into(),
+                home.join("settings.json").into_os_string(),
+            ),
+        ]);
+        assert_eq!(runtime_base_from(&env), home.join("runtime"));
+        env.insert(
+            "QWEN_RUNTIME_DIR".into(),
+            home.join("override").into_os_string(),
+        );
+        assert_eq!(runtime_base_from(&env), home.join("override"));
+    }
+
+    #[test]
+    fn runtime_output_dir_highest_defining_layer_wins() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        let user = home.join("user");
+        std::fs::create_dir_all(&user).unwrap();
+        let env = BTreeMap::from([
+            ("HOME".into(), home.as_os_str().to_owned()),
+            ("QWEN_HOME".into(), user.clone().into_os_string()),
+            (
+                "QWEN_CODE_SYSTEM_SETTINGS_PATH".into(),
+                home.join("settings.json").into_os_string(),
+            ),
+        ]);
+        let write = |path: PathBuf, value: &str| {
+            std::fs::write(
+                path,
+                serde_json::json!({"advanced":{"runtimeOutputDir":value}}).to_string(),
+            )
+            .unwrap();
+        };
+        write(home.join("system-defaults.json"), "/defaults");
+        assert_eq!(runtime_base_from(&env), Path::new("/defaults"));
+        write(user.join("settings.json"), "/user");
+        assert_eq!(runtime_base_from(&env), Path::new("/user"));
+        write(home.join("settings.json"), "/system");
+        assert_eq!(runtime_base_from(&env), Path::new("/system"));
+        for unresolvable in ["", "relative", "~someone/runtime"] {
+            write(home.join("settings.json"), unresolvable);
+            assert_eq!(runtime_base_from(&env), user, "{unresolvable:?}");
+        }
+        std::fs::write(
+            home.join("settings.json"),
+            r#"{"advanced":{"runtimeOutputDir":null}}"#,
+        )
+        .unwrap();
+        assert_eq!(runtime_base_from(&env), Path::new("/user"));
+    }
 
     #[test]
     fn fold_retracts_rewound_root_and_prices_known_categories() {
