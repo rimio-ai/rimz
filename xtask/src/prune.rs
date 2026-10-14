@@ -1,4 +1,4 @@
-//! Reclaim superseded Cargo units without racing profile builds.
+//! Reclaim superseded Cargo units and idle incremental state without racing profile builds.
 
 use std::collections::BTreeMap;
 use std::fs::{self, File, TryLockError};
@@ -193,12 +193,17 @@ fn sweep(target: &Path, dry_run: bool, now: SystemTime) -> Result<Report> {
             }
         }
         for (profile, _lock) in &locked {
-            for dir in ["deps", "build", ".fingerprint", "incremental"] {
+            for dir in ["deps", "build", ".fingerprint"] {
                 let path = profile.join(dir);
                 if fs::symlink_metadata(&path).is_ok_and(|meta| meta.is_dir()) {
                     prune_units(&path, dry_run, now, &mut report)
                         .with_context(|| format!("pruning {}", path.display()))?;
                 }
+            }
+            let path = profile.join("incremental");
+            if fs::symlink_metadata(&path).is_ok_and(|meta| meta.is_dir()) {
+                prune_incremental(&path, dry_run, now, &mut report)
+                    .with_context(|| format!("pruning {}", path.display()))?;
             }
         }
     }
@@ -300,6 +305,42 @@ fn prune_units(dir: &Path, dry_run: bool, now: SystemTime, report: &mut Report) 
     Ok(())
 }
 
+fn incremental_unit_name(name: &str) -> bool {
+    let Some((stem, hash)) = name.rsplit_once('-') else {
+        return false;
+    };
+    !stem.is_empty()
+        && hash.len() == 13
+        && hash
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || byte.is_ascii_lowercase())
+}
+
+fn prune_incremental(
+    dir: &Path,
+    dry_run: bool,
+    now: SystemTime,
+    report: &mut Report,
+) -> Result<()> {
+    for path in directories(dir)? {
+        if !path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(incremental_unit_name)
+        {
+            continue;
+        }
+        let tree = measure(&path)?;
+        if tree
+            .newest
+            .is_some_and(|mtime| older_than(mtime, now, DAY * 3))
+        {
+            remove(&path, tree.report, dry_run, report)?;
+        }
+    }
+    Ok(())
+}
+
 fn remove(path: &Path, removed: Report, dry_run: bool, report: &mut Report) -> Result<()> {
     if !dry_run {
         if fs::symlink_metadata(path)?.is_dir() {
@@ -350,11 +391,23 @@ mod tests {
         age(path, days);
     }
 
+    fn incremental(root: &Path, name: &str, days: u32) -> PathBuf {
+        let path = root.join("incremental").join(name);
+        file(
+            &path,
+            "s-hkgx0zlc0a-0b1c2d3-0123456789abcdef/query-cache.bin",
+            days,
+        );
+        file(&path, "s-hkgx0zlc0a-0b1c2d3.lock", days);
+        age_tree(&path, days);
+        path
+    }
+
     #[test]
-    fn superseded_units_expire_in_all_four_directories() {
+    fn superseded_units_expire_in_all_three_directories() {
         let target = tempfile::tempdir().unwrap();
         let debug = profile(target.path(), "debug");
-        for dir in ["deps", ".fingerprint", "build", "incremental"] {
+        for dir in ["deps", ".fingerprint", "build"] {
             let suffix = if dir == "deps" { ".rlib" } else { "/output" };
             file(&debug, &format!("{dir}/foo-0000000000000001{suffix}"), 20);
             age_tree(&debug.join(dir), 20);
@@ -364,11 +417,11 @@ mod tests {
         assert_eq!(
             sweep(target.path(), false, SystemTime::now()).unwrap(),
             Report {
-                files: 4,
-                bytes: 16
+                files: 3,
+                bytes: 12
             }
         );
-        for dir in ["deps", ".fingerprint", "build", "incremental"] {
+        for dir in ["deps", ".fingerprint", "build"] {
             assert!(
                 !debug
                     .join(dir)
@@ -381,6 +434,74 @@ mod tests {
             );
             assert!(debug.join(dir).join("unrecognized").exists());
         }
+    }
+
+    #[test]
+    fn idle_incremental_units_expire_after_three_days_without_supersession() {
+        let target = tempfile::tempdir().unwrap();
+        let debug = profile(target.path(), "debug");
+        let old = incremental(&debug, "rimz-006q9heqbt2or", 3);
+        let recent = incremental(&debug, "rimz-006q9heqbt2os", 0);
+        let only = incremental(&debug, "build_script_build-08h7jmnozd8ka", 30);
+        assert_eq!(
+            sweep(target.path(), false, SystemTime::now()).unwrap(),
+            Report {
+                files: 4,
+                bytes: 16
+            }
+        );
+        assert!(!old.exists());
+        assert!(!only.exists());
+        assert!(recent.exists());
+    }
+
+    #[test]
+    fn incremental_age_uses_the_newest_entry_or_descendant() {
+        let target = tempfile::tempdir().unwrap();
+        let debug = profile(target.path(), "debug");
+        let under_three_days = incremental(&debug, "rimz-006q9heqbt2or", 2);
+        let recent_entry = incremental(&debug, "rimz-006q9heqbt2os", 30);
+        age(&recent_entry, 0);
+        let recent_descendant = incremental(&debug, "rimz-006q9heqbt2ot", 30);
+        age(&recent_descendant.join("s-hkgx0zlc0a-0b1c2d3.lock"), 0);
+        assert_eq!(
+            sweep(target.path(), false, SystemTime::now()).unwrap(),
+            Report::default()
+        );
+        for path in [under_three_days, recent_entry, recent_descendant] {
+            assert!(path.exists());
+        }
+    }
+
+    #[test]
+    fn unrecognized_incremental_names_and_non_directories_survive() {
+        let target = tempfile::tempdir().unwrap();
+        let debug = profile(target.path(), "debug");
+        let mut preserved = Vec::new();
+        for name in [
+            "rimz-0000000000000001",
+            "notes.txt",
+            "rimz-006Q9heqbt2or",
+            "rimz-006q9heqbt2o",
+            "rimz-006q9heqbt2orr",
+            "-006q9heqbt2or",
+        ] {
+            preserved.push(incremental(&debug, name, 30));
+        }
+        incremental(&debug, "rimz-0000000000000002", 0);
+        preserved.push(file(&debug, "incremental/rimz-006q9heqbt2os", 30));
+        #[cfg(unix)]
+        {
+            let unit = incremental(target.path(), "rimz-006q9heqbt2ot", 30);
+            let link = debug.join("incremental/rimz-006q9heqbt2ot");
+            std::os::unix::fs::symlink(&unit, &link).unwrap();
+            preserved.extend([unit, link]);
+        }
+        assert_eq!(
+            sweep(target.path(), false, SystemTime::now()).unwrap(),
+            Report::default()
+        );
+        assert!(preserved.iter().all(|path| path.exists()));
     }
 
     #[test]
@@ -496,14 +617,21 @@ mod tests {
         let path = profile(target.path(), "llvm-cov-target/debug");
         let old = file(&path, "deps/foo-0000000000000001.d", 30);
         file(&path, "deps/foo-0000000000000002.d", 20);
+        let enclosed = incremental(&path, "rimz-006q9heqbt2or", 30);
+        let debug = profile(target.path(), "debug");
+        let idle = incremental(&debug, "rimz-006q9heqbt2or", 30);
         age_tree(target.path(), 20);
         let lock = File::open(path.join(".cargo-lock")).unwrap();
         lock.lock().unwrap();
+        let debug_lock = File::open(debug.join(".cargo-lock")).unwrap();
+        debug_lock.lock().unwrap();
         assert_eq!(
             sweep(target.path(), false, SystemTime::now()).unwrap(),
             Report::default()
         );
         assert!(old.exists());
+        assert!(enclosed.exists());
+        assert!(idle.exists());
         drop(lock);
         assert!(
             sweep(target.path(), false, SystemTime::now())
@@ -512,6 +640,29 @@ mod tests {
                 > 0
         );
         assert!(!path.exists());
+        assert!(idle.exists());
+        drop(debug_lock);
+        assert_eq!(
+            sweep(target.path(), false, SystemTime::now()).unwrap(),
+            Report { files: 2, bytes: 8 }
+        );
+        assert!(!idle.exists());
+    }
+
+    #[test]
+    fn missing_profile_lock_protects_idle_incremental_units() {
+        let target = tempfile::tempdir().unwrap();
+        let debug = profile(target.path(), "debug");
+        let idle = incremental(&debug, "rimz-006q9heqbt2or", 30);
+        fs::remove_file(debug.join(".cargo-lock")).unwrap();
+        for dry_run in [true, false] {
+            assert_eq!(
+                sweep(target.path(), dry_run, SystemTime::now()).unwrap(),
+                Report::default()
+            );
+            assert!(idle.exists());
+            assert!(!debug.join(".cargo-lock").exists());
+        }
     }
 
     #[test]
@@ -526,20 +677,23 @@ mod tests {
         assert!(automatic_at(target.path(), now).unwrap().is_some());
         let old = file(&debug, "deps/foo-0000000000000001.d", 30);
         file(&debug, "deps/foo-0000000000000002.d", 0);
+        let idle = incremental(&debug, "rimz-006q9heqbt2or", 3);
         assert!(
             automatic_at(target.path(), now + DAY - Duration::from_secs(1))
                 .unwrap()
                 .is_none()
         );
         assert!(old.exists());
+        assert!(idle.exists());
         assert_eq!(
             automatic_at(target.path(), now + DAY)
                 .unwrap()
                 .unwrap()
                 .files,
-            1
+            3
         );
         assert!(!old.exists());
+        assert!(!idle.exists());
         stamp(target.path(), now + DAY * 2).unwrap();
         assert!(
             automatic_at(target.path(), now + DAY * 2)
@@ -554,17 +708,26 @@ mod tests {
         let debug = profile(target.path(), "debug");
         let old = file(&debug, "deps/foo-0000000000000001.d", 30);
         file(&debug, "deps/foo-0000000000000002.d", 0);
+        let idle = incremental(&debug, "rimz-006q9heqbt2or", 3);
         let release = profile(target.path(), "release");
         file(&release, "deps/foo-0000000000000001.d", 30);
         age_tree(&release, 30);
         let preview = sweep(target.path(), true, SystemTime::now()).unwrap();
-        assert_eq!(preview, Report { files: 3, bytes: 8 });
+        assert_eq!(
+            preview,
+            Report {
+                files: 5,
+                bytes: 16
+            }
+        );
         assert!(old.exists());
+        assert!(idle.exists());
         assert!(release.exists());
         assert!(!target.path().join(STAMP).exists());
         assert_eq!(
             preview,
             sweep(target.path(), false, SystemTime::now()).unwrap()
         );
+        assert!(!idle.exists());
     }
 }
