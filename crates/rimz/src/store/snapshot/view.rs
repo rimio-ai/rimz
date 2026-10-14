@@ -38,11 +38,11 @@ pub(crate) use providers::{format_plan_label, sort_windows};
 pub use layout::{AgentWorktreeGroup, group_live_agents_by_worktree};
 use model::cohort_team;
 pub use model::{
-    DailyBudgetView, PipelinePosition, PrStack, PresenceSample, RedeemForecast, RemoteControlBadge,
-    SidebarCohortEffort, SidebarLinkFreshness, SidebarLinkHealth, SidebarPipeline, SidebarPresence,
-    SidebarProviderPanel, SidebarSeatEffort, SidebarStatusCount, SidebarWorktreeGroup,
-    SidebarWorktreeKind, StackPr, WorktreeCi, WorktreePrQueue, WorktreePrState, WorktreeTrunkSync,
-    lead_unread_row,
+    DailyBudgetView, NeedsYou, PipelinePosition, PrStack, PresenceSample, RedeemForecast,
+    RemoteControlBadge, SidebarCohortEffort, SidebarLinkFreshness, SidebarLinkHealth,
+    SidebarPipeline, SidebarPresence, SidebarProviderPanel, SidebarSeatEffort, SidebarStatusCount,
+    SidebarWorktreeGroup, SidebarWorktreeKind, StackPr, WorktreeCi, WorktreePrQueue,
+    WorktreePrState, WorktreeTrunkSync, lead_unread_row, needs_you,
 };
 pub(crate) use model::{actionable_unread_count, triage_key};
 pub use reap::RuntimeReapInputs;

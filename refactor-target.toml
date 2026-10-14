@@ -991,7 +991,8 @@ path = "crates/rimz/src/store"
 # SidebarSubAgent::holds_parent_turn is public for CLI delegation, within its existing slot.
 # AgentCard::from_agent shares the store's base card projection with rowless CLI reports (+1).
 # SignalEvent::from_envelope shares the signal-line projection with events list (+1).
-surface-budget = 424
+# NeedsYou and needs_you share sidebar attention membership with both CLI scenes (+2).
+surface-budget = 426
 
 [[module]]
 path = "crates/rimz/src/theme"
@@ -3078,6 +3079,31 @@ reason = "Pane binding calls the classifier inside the fold; the re-export survi
 kind = "item"
 key = "store::snapshot::view::model::SidebarPipeline"
 reason = "A pub field of SidebarWorktreeGroup in the published snapshot schema the renderer decodes (pass 23a)."
+
+[[verdict]]
+kind = "item"
+key = "store::snapshot::view::model::NeedsYou"
+reason = "Read-only attention value shared by agents and teams; never persisted."
+
+[[verdict]]
+kind = "item"
+key = "store::snapshot::view::model::needs_you"
+reason = "CLI scenes use the sidebar's attention membership, ask age, and rowless demotion."
+
+[[verdict]]
+kind = "item"
+key = "address::role_holders"
+reason = "Teams CLI and harness delivery share the claimed-wins owner-liveness rule."
+
+[[verdict]]
+kind = "item"
+key = "cli::render::NeedsYouRow"
+reason = "Both command lists share one attention-row presentation, including absent owners."
+
+[[verdict]]
+kind = "item"
+key = "cli::render::needs_you"
+reason = "Agents and teams render the same oldest-first attention block."
 
 [[verdict]]
 kind = "item"

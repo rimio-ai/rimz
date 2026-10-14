@@ -11,6 +11,67 @@ use crate::config::PaletteRole;
 use crate::ids::LinkTier;
 use crate::store::snapshot::row::SidebarRow;
 
+/// An actionable card, shared by the agent and team command scenes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NeedsYou {
+    pub status: AgentStatus,
+    pub reason: Option<String>,
+    pub since: jiff::Timestamp,
+}
+
+/// Project attention using the sidebar's native-child lift and rowless demotion.
+pub fn needs_you(
+    agent: &crate::agents::AgentState,
+    row: Option<&SidebarRow>,
+    demotion: &crate::agents::ParkDemotion,
+    now: jiff::Timestamp,
+) -> Option<NeedsYou> {
+    use crate::store::snapshot::row::{AgentCard, CardDescription};
+
+    let status = row
+        .and_then(SidebarRow::attention_status)
+        .unwrap_or_else(|| agent.rowless_status(demotion).0);
+    if !status.is_attention() {
+        return None;
+    }
+    let fallback;
+    let card = match row.and_then(SidebarRow::as_agent) {
+        Some(card) => card,
+        None => {
+            let (status, phase) = agent.rowless_status(demotion);
+            fallback = AgentCard {
+                status,
+                phase,
+                turn_error_label: agent
+                    .displayed_turn_error()
+                    .and_then(|(_, error)| error.label.clone()),
+                ..AgentCard::from_agent(agent, now)
+            };
+            &fallback
+        }
+    };
+    let ask = agent
+        .open_ask
+        .as_ref()
+        .filter(|_| agent.is_awaiting_input());
+    let reason = ask
+        .and_then(|ask| ask.detail.clone())
+        .or_else(|| match card.description(now) {
+            CardDescription::Error(text)
+            | CardDescription::Wait(text)
+            | CardDescription::Activity(text) => Some(text),
+            CardDescription::None => None,
+        });
+    Some(NeedsYou {
+        status,
+        reason,
+        since: ask.map_or_else(
+            || row.map_or(agent.last_activity, |row| row.last_activity),
+            |ask| ask.since,
+        ),
+    })
+}
+
 /// One configured local-day dollar cap and its current metered state.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DailyBudgetView {
