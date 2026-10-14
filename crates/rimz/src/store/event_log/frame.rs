@@ -1,5 +1,5 @@
 use std::fs::File;
-use std::io::{self, BufRead, BufReader, Seek, SeekFrom};
+use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
 
 use serde::de::DeserializeOwned;
@@ -67,6 +67,61 @@ pub(in crate::store) fn read_rows(path: &Path, start: u64) -> Result<Vec<(u64, b
     testkit::count_bytes_read(offset - start);
     testkit::count_path_bytes_read(path, offset - start);
     Ok(rows)
+}
+
+/// Read the terminated row ending at `end`, searching backward in bounded blocks.
+pub(in crate::store) fn read_row_ending_at(
+    path: &Path,
+    end: u64,
+) -> Result<Option<(u64, Vec<u8>)>> {
+    if end == 0 {
+        return Ok(None);
+    }
+    let mut read = 0;
+    let result = (|| -> io::Result<_> {
+        let mut file = File::open(path)?;
+        file.seek(SeekFrom::Start(end - 1))?;
+        let mut newline = [0];
+        file.read_exact(&mut newline)?;
+        read += 1;
+        if newline[0] != b'\n' {
+            return Ok(None);
+        }
+        let mut at = end - 1;
+        let mut row = Vec::new();
+        let mut block = [0; 256];
+        while at > 0 {
+            let count = at.min(block.len() as u64) as usize;
+            at -= count as u64;
+            file.seek(SeekFrom::Start(at))?;
+            file.read_exact(&mut block[..count])?;
+            read += count as u64;
+            if let Some(previous) = block[..count].iter().rposition(|byte| *byte == b'\n') {
+                row.extend(block[previous + 1..count].iter().rev());
+                at += previous as u64 + 1;
+                break;
+            }
+            row.extend(block[..count].iter().rev());
+        }
+        row.reverse();
+        Ok(Some((at, row)))
+    })();
+    testkit::count_bytes_read(read);
+    testkit::count_path_bytes_read(path, read);
+    match result {
+        Err(source)
+            if matches!(
+                source.kind(),
+                io::ErrorKind::NotFound | io::ErrorKind::UnexpectedEof
+            ) =>
+        {
+            Ok(None)
+        }
+        result => result.map_err(|source| EventLogErr::Io {
+            path: path.to_path_buf(),
+            source,
+        }),
+    }
 }
 
 /// Decode one raw row into its event: unterminated and non-UTF-8 rows read as

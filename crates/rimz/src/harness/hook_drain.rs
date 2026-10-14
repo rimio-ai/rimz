@@ -833,13 +833,13 @@ impl Drainer {
             if frames.is_empty() {
                 return Ok(());
             }
-            let recovering = cursor.claimed > cursor.applied;
             let mut expected = cursor.clone();
             for (frame, end) in frames {
+                let recovering = cursor.claimed > cursor.applied && end == cursor.claimed;
                 let Some(frame) = frame else {
                     let lock = workspace_lock()?;
                     validate_ownership(store, socket, &expected, identity)?;
-                    let mut cursor = ingress::read_cursor(store.paths())?;
+                    let mut cursor = expected.clone();
                     cursor.applied = end;
                     cursor.claimed = end;
                     cursor.applied_event_id = None;
@@ -863,7 +863,7 @@ impl Drainer {
                 {
                     let lock = workspace_lock()?;
                     validate_ownership(store, socket, &expected, identity)?;
-                    let mut cursor = ingress::read_cursor(store.paths())?;
+                    let mut cursor = expected.clone();
                     if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
                         return Err(io::Error::new(
                             io::ErrorKind::TimedOut,
@@ -928,7 +928,7 @@ impl Drainer {
                 let lock =
                     WorkspaceLock::acquire_with_timeout(&store.paths().workspace_lock, LOCK_WAIT)?;
                 validate_ownership(store, socket, &expected, identity)?;
-                let mut cursor = ingress::read_cursor(store.paths())?;
+                let mut cursor = expected.clone();
                 cursor.applied = end;
                 cursor.applied_event_id = Some(frame.event_id.clone());
                 ingress::write_cursor(store.paths(), &cursor, &lock)?;
@@ -963,7 +963,12 @@ impl Drainer {
         store: &Store,
         lock: &WorkspaceLock,
     ) -> Result<bool, HookDrainErr> {
-        if !ingress::truncate_drained(store.paths(), lock)? {
+        let len = match fs::metadata(&store.paths().hook_ingress_log) {
+            Ok(metadata) => metadata.len(),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+            Err(error) => return Err(error.into()),
+        };
+        if self.applied != len || !ingress::truncate_drained(store.paths(), lock)? {
             return Ok(false);
         }
         self.completed
@@ -1055,6 +1060,131 @@ fn remove_socket(path: &std::path::Path) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn fixture(prefix_frames: usize) -> (tempfile::TempDir, Store, Vec<(HookIngress, u64)>) {
+        use crate::disk::paths::{RuntimePaths, StatePaths};
+        use crate::ids::{AgentKind, WorkspaceId};
+        let dir = tempfile::tempdir().unwrap();
+        let id = WorkspaceId::from_project_root(dir.path());
+        let paths = StatePaths::under(id.clone(), dir.path()).unwrap();
+        let runtime = RuntimePaths::under(id, dir.path()).unwrap();
+        let store = Store::open(paths, runtime).unwrap();
+        let mut frames = Vec::new();
+        let mut bytes = Vec::new();
+        for _ in 0..prefix_frames + 4 {
+            let frame = HookIngress {
+                schema_version: "1".into(),
+                event_id: EventId::new(),
+                ts: "2026-01-01T00:00:00Z".parse().unwrap(),
+                source: AgentKind::new_unchecked("codex"),
+                event: None,
+                payload: "x".repeat(1024),
+                cwd: "/tmp/project".into(),
+                hook_pid: 1234,
+                env: BTreeMap::new(),
+            };
+            let payload = serde_json::to_string(&frame).unwrap();
+            writeln!(
+                bytes,
+                "{} {:08x} {}",
+                payload.len(),
+                crc32fast::hash(payload.as_bytes()),
+                payload
+            )
+            .unwrap();
+            frames.push((frame, bytes.len() as u64));
+        }
+        fs::create_dir_all(store.paths().hook_ingress_log.parent().unwrap()).unwrap();
+        fs::write(&store.paths().hook_ingress_log, bytes).unwrap();
+        let (frame, end) = &frames[prefix_frames - 1];
+        let lock = WorkspaceLock::acquire(&store.paths().workspace_lock).unwrap();
+        ingress::write_cursor(
+            store.paths(),
+            &ingress::HookDrainCursor {
+                applied: *end,
+                claimed: *end,
+                applied_event_id: Some(frame.event_id.clone()),
+                claimed_event_id: Some(frame.event_id.clone()),
+                ..Default::default()
+            },
+            &lock,
+        )
+        .unwrap();
+        (dir, store, frames.split_off(prefix_frames))
+    }
+
+    #[test]
+    fn ingress_reads_are_independent_of_applied_prefix() {
+        register_processor(|_, _, _, _, _| Ok(HookReply::Silent));
+        let mut reads = Vec::new();
+        for prefix in [1, 4096] {
+            let (_dir, store, pending) = fixture(prefix);
+            let log_dir = store.paths().hook_ingress_log.parent().unwrap();
+            let before = crate::store::event_log::testkit::bytes_read_under(log_dir);
+            let lifetime =
+                WorkspaceLock::acquire(&store.runtime_paths().hook_drainer_lock()).unwrap();
+            let mut drain = Drainer::default();
+            drain
+                .drain(&store, &lifetime, None, None, |_| Ok(false))
+                .unwrap();
+            let read = crate::store::event_log::testkit::bytes_read_under(log_dir) - before;
+            let frame_bytes = pending[1].1 - pending[0].1;
+            assert!(
+                read <= frame_bytes * 32,
+                "prefix {prefix}: read {read} bytes"
+            );
+            assert_eq!(
+                drain.completed.values().next().unwrap().0,
+                pending.last().unwrap().1
+            );
+            reads.push(read);
+        }
+        assert!(reads[0].abs_diff(reads[1]) <= 1024, "{reads:?}");
+    }
+
+    #[test]
+    fn crash_redo_is_only_the_in_flight_frame() {
+        static CALLS: std::sync::Mutex<Vec<(Option<LogExtent>, LogExtent)>> =
+            std::sync::Mutex::new(Vec::new());
+        register_processor(|store, _, recover, _, _| {
+            let cursor = ingress::read_cursor(store.paths())?;
+            CALLS
+                .lock()
+                .unwrap()
+                .push((recover, cursor.log_extent_at_claim));
+            Ok(HookReply::Silent)
+        });
+        let (_dir, store, pending) = fixture(1);
+        let old = LogExtent {
+            generation: 9,
+            offset: 42,
+        };
+        {
+            let lock = WorkspaceLock::acquire(&store.paths().workspace_lock).unwrap();
+            let mut cursor = ingress::read_cursor(store.paths()).unwrap();
+            cursor.claimed = pending[0].1;
+            cursor.claimed_event_id = Some(pending[0].0.event_id.clone());
+            cursor.log_extent_at_claim = old;
+            ingress::write_cursor(store.paths(), &cursor, &lock).unwrap();
+        }
+        let lifetime = WorkspaceLock::acquire(&store.runtime_paths().hook_drainer_lock()).unwrap();
+        Drainer::default()
+            .drain(&store, &lifetime, None, None, |_| Ok(false))
+            .unwrap();
+        let calls = CALLS.lock().unwrap();
+        assert_eq!(calls.len(), pending.len());
+        assert_eq!(calls[0], (Some(old), old));
+        for (recover, extent) in &calls[1..] {
+            assert_eq!(*recover, None);
+            assert_eq!(
+                *extent,
+                LogExtent {
+                    generation: 0,
+                    offset: 0
+                }
+            );
+        }
+    }
 
     #[test]
     fn receipt_never_claims_unapplied_ingress() {
