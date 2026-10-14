@@ -415,8 +415,10 @@ fn prompt_receipt_does_not_wait_for_a_later_frame() {
     let mut release = apply_barrier(&first_barrier);
     let mut request =
         UnixStream::connect(store.runtime_paths().hook_drainer_socket_path()).unwrap();
+    // The apply includes the git enrichment, budgeted 2 s; stay below the
+    // later barrier's 10 s release timeout so that frame is blocked throughout.
     request
-        .set_read_timeout(Some(Duration::from_secs(1)))
+        .set_read_timeout(Some(Duration::from_secs(5)))
         .unwrap();
     writeln!(
         request,
@@ -430,7 +432,7 @@ fn prompt_receipt_does_not_wait_for_a_later_frame() {
     drainer.kill().unwrap();
     drainer.wait().unwrap();
     assert!(
-        received.is_ok(),
+        matches!(received, Ok(read) if read > 0),
         "an applied prompt must be answered while the later frame is blocked: {received:?}"
     );
     let receipt: Value = serde_json::from_str(&line).unwrap();
@@ -438,8 +440,8 @@ fn prompt_receipt_does_not_wait_for_a_later_frame() {
     assert!(
         receipt["reply"]["hookSpecificOutput"]["additionalContext"]
             .as_str()
-            .unwrap()
-            .contains("$ git status --short --branch")
+            .is_some_and(|context| context.contains("$ git status --short --branch")),
+        "the receipt must carry the prompt's git-enriched reply: {receipt}"
     );
 }
 
@@ -1107,15 +1109,11 @@ fn leased_idle_drainer_blocks_without_progress_wakeups() {
     );
 }
 
-#[test]
-fn reset_stops_a_leased_drainer_and_allows_a_successor() {
-    let env = Env::new();
-    env.record(&env.project_root);
-    let store = env.store();
-    let mut drainer = drain_command(&env).spawn().unwrap();
-    let _lease = drainer_connection(&store);
-    store.reset_records(true).unwrap();
-    let deadline = Instant::now() + Duration::from_secs(1);
+/// Waits up to 5 s for `drainer` to exit on its own, killing it otherwise.
+/// The window stays far below the 60 s `DRAINER_IDLE`, so a drainer that
+/// ignores its stop condition still fails the caller's assertion.
+fn drainer_stops(drainer: &mut std::process::Child) -> bool {
+    let deadline = Instant::now() + Duration::from_secs(5);
     while drainer.try_wait().unwrap().is_none() && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(5));
     }
@@ -1124,6 +1122,18 @@ fn reset_stops_a_leased_drainer_and_allows_a_successor() {
         drainer.kill().unwrap();
         drainer.wait().unwrap();
     }
+    stopped
+}
+
+#[test]
+fn reset_stops_a_leased_drainer_and_allows_a_successor() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let store = env.store();
+    let mut drainer = drain_command(&env).spawn().unwrap();
+    let _lease = drainer_connection(&store);
+    store.reset_records(true).unwrap();
+    let stopped = drainer_stops(&mut drainer);
     assert!(
         stopped,
         "reset must stop even a leased drainer before clearing ingress"
@@ -1156,15 +1166,7 @@ fn drainer_exits_without_unlinking_a_replacement_socket() {
     std::fs::remove_file(&socket).unwrap();
     let _replacement = std::os::unix::net::UnixListener::bind(&socket).unwrap();
     drop(lease);
-    let deadline = Instant::now() + Duration::from_secs(1);
-    while drainer.try_wait().unwrap().is_none() && Instant::now() < deadline {
-        std::thread::sleep(Duration::from_millis(5));
-    }
-    let stopped = drainer.try_wait().unwrap().is_some();
-    if !stopped {
-        drainer.kill().unwrap();
-        drainer.wait().unwrap();
-    }
+    let stopped = drainer_stops(&mut drainer);
     assert!(
         stopped,
         "a lost listener must stop the drainer despite its lease"
@@ -1191,15 +1193,7 @@ fn drainer_discards_buffered_frames_after_its_cursor_is_reset() {
     }
     let (fresh, _) = append_stop(&env);
     release.write_all(&[1]).unwrap();
-    let deadline = Instant::now() + Duration::from_secs(1);
-    while drainer.try_wait().unwrap().is_none() && Instant::now() < deadline {
-        std::thread::sleep(Duration::from_millis(5));
-    }
-    let stopped = drainer.try_wait().unwrap().is_some();
-    if !stopped {
-        drainer.kill().unwrap();
-        drainer.wait().unwrap();
-    }
+    let stopped = drainer_stops(&mut drainer);
     assert!(
         derived(&env, &stale.event_id).is_empty(),
         "buffered pre-reset work must not be applied"
