@@ -378,6 +378,12 @@ fn spawn(store: &Store) -> Result<(), HookDrainErr> {
     }
     let record = crate::workspace::record::read(&store.paths().workspace_record)
         .map_err(|error| io::Error::other(error.to_string()))?;
+    let binary = crate::disk::paths::env_path("RIMZ_BIN").unwrap_or_else(|| {
+        crate::workspace::resolve_recorded_rimz_bin(
+            &store.paths().workspace_id,
+            record.rimz_bin.as_deref(),
+        )
+    });
     let log_path = store.paths().hook_drainer_log();
     if let Some(parent) = log_path.parent() {
         fs::create_dir_all(parent)?;
@@ -387,7 +393,7 @@ fn spawn(store: &Store) -> Result<(), HookDrainErr> {
         .append(true)
         .open(log_path)?;
     crate::child_process::spawn_detached_reaped(
-        crate::proc::rimz_exe(),
+        binary,
         |command| {
             crate::child_process::anchor_detached_command(command, runtime)
                 .args(["hooks", "drain", "--project-root"])
