@@ -29,10 +29,10 @@ fn probe_descriptor_version_with_locator(
 /// `$HOME`. An installer that drops its binary in a private dir (OpenCode's
 /// `~/.opencode/bin`) and edits a shell rc the running environment never sourced
 /// leaves the agent off `$PATH` yet present; this finds it. A name another
-/// provider's installer also ships under the same filename is confirmed by the definition's
-/// [`bin_identity`](AgentSpec::bin_identity) before it is accepted, so a
-/// colliding alias never resolves as this agent. Returns the absolute path, or
-/// `None` when the binary is nowhere RimZ knows to look.
+/// provider's installer also ships under the same filename is confirmed by the
+/// definition's [`bin_identity`](AgentSpec::bin_identity) before it is
+/// accepted, so a colliding alias never resolves as this agent. Returns the
+/// absolute path, or `None` when the binary is nowhere RimZ knows to look.
 pub fn locate_binary(definition: &AgentSpec) -> Option<PathBuf> {
     for name in definition.bin_names {
         if let Some(identity) = definition.ambiguous_bin_identity(name) {
@@ -52,8 +52,8 @@ pub fn locate_binary(definition: &AgentSpec) -> Option<PathBuf> {
 }
 
 /// The first candidate whose `--version` proves it is this provider. `$PATH` can
-/// carry several providers' binaries under one ambiguous name, so every match is probed in order rather than trusting the
-/// first-on-`$PATH` hit.
+/// carry several providers' binaries under one ambiguous name, so every match
+/// is probed in order rather than trusting the first-on-`$PATH` hit.
 fn first_matching_identity(
     candidates: impl IntoIterator<Item = PathBuf>,
     identity: &BinIdentity,
