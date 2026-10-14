@@ -44,7 +44,7 @@ use crate::harness::plan::ResolvedSingleAgentLaunch;
 use crate::harness::run::{SupervisedRunOutcome, SupervisedRunRequest};
 use crate::harness::schedule::catalog::{self, LoadedTask, TaskCatalog};
 use crate::harness::schedule::run_log::{
-    self, CheckRecord, LoopRunMode, LoopRunPresentation, LoopRunRecord, LoopRunResult,
+    self, CheckRecord, LoopRunMode, LoopRunPresentation, LoopRunRecord, LoopRunResult, RunStage,
     RunTransition, SignalRecord,
 };
 use crate::harness::schedule::signal::{
@@ -148,6 +148,10 @@ pub struct PreparedDelivery {
 }
 
 #[derive(Clone, Debug)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "one fire plan keeps its completed history inline without another allocation"
+)]
 pub enum TaskFirePlan {
     Done(TaskFireFinished),
     AlreadyLaunched,
@@ -1534,27 +1538,33 @@ fn finish_spawn_effect(
 }
 
 fn add_check_usage(record: &mut LoopRunRecord) {
-    let Some(agent) = record.check.as_ref().and_then(|check| check.agent.as_ref()) else {
-        return;
-    };
-    record.cost_usd = match (record.cost_usd, agent.cost_usd) {
-        (None, None) => None,
-        (run, check) => Some(run.unwrap_or_default() + check.unwrap_or_default()),
-    };
-    record.input_tokens = match (record.input_tokens, agent.input_tokens) {
-        (None, None) => None,
-        (run, check) => Some(
-            run.unwrap_or_default()
-                .saturating_add(check.unwrap_or_default()),
-        ),
-    };
-    record.output_tokens = match (record.output_tokens, agent.output_tokens) {
-        (None, None) => None,
-        (run, check) => Some(
-            run.unwrap_or_default()
-                .saturating_add(check.unwrap_or_default()),
-        ),
-    };
+    let (mut cost_usd, mut input_tokens, mut output_tokens) =
+        (record.cost_usd, record.input_tokens, record.output_tokens);
+    for stage in record.stages() {
+        let RunStage::Judge(judge) = stage else {
+            continue;
+        };
+        cost_usd = match (cost_usd, judge.cost_usd) {
+            (None, None) => None,
+            (run, check) => Some(run.unwrap_or_default() + check.unwrap_or_default()),
+        };
+        input_tokens = match (input_tokens, judge.input_tokens) {
+            (None, None) => None,
+            (run, check) => Some(
+                run.unwrap_or_default()
+                    .saturating_add(check.unwrap_or_default()),
+            ),
+        };
+        output_tokens = match (output_tokens, judge.output_tokens) {
+            (None, None) => None,
+            (run, check) => Some(
+                run.unwrap_or_default()
+                    .saturating_add(check.unwrap_or_default()),
+            ),
+        };
+    }
+    (record.cost_usd, record.input_tokens, record.output_tokens) =
+        (cost_usd, input_tokens, output_tokens);
 }
 
 fn elapsed_millis(started: Instant) -> u64 {
@@ -2472,6 +2482,7 @@ pub fn check_record(outcome: &CheckOutcome) -> CheckRecord {
         timed_out: outcome.timed_out,
         output: outcome.output.clone(),
         output_path: None,
+        duration_ms: None,
         agent: None,
     }
 }

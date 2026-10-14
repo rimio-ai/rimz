@@ -573,6 +573,7 @@ path = "crates/rimz/src/harness"
 # The supervisor wakes receipt-cadence tail drains through ParentWatch (+1).
 # ModelRefreshFailure carries actual catalog refresh failures to the exec wrapper (+1).
 # AgentCheckRecord carries headless verdicts and usage into loop CLI forensics (+1).
+# JudgeRecord, RunStage and its verdict accessor, and LoopRunRecord's stages/last_verdict project old and new loop history (+5).
 # The hook drainer publishes its wire, accepted-owner env seam and entry points; lifecycle replay keeps signal firing at-most-once (+14).
 # Connected sandbox hooks and host-wrapper leases share the existing socket (+8).
 # The CLI apply-child wait reuses the bounded subprocess pump through the drainer (+1).
@@ -586,7 +587,32 @@ path = "crates/rimz/src/harness"
 # The `<base>-fast` cell grammar is shared by launch and tier routing (+1).
 # `plan::validate_launch_preset` shares launch capability refusal with loop admission (+1).
 # HeldStats and its constructor/stats retain per-root summaries for the CLI (+3).
-surface-budget = 822
+surface-budget = 827
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::run_log::JudgeRecord"
+reason = "Per-judge usage and verdict wire record shared with the binary's loop forensics."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::run_log::RunStage"
+reason = "Legacy-aware history stage projection shared with loop CLI presentation."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::run_log::RunStage::verdict"
+reason = "One verdict reader for shell and legacy/current judge records."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::run_log::LoopRunRecord::stages"
+reason = "Single projection of legacy model checks and the new judge array for history consumers."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::run_log::LoopRunRecord::last_verdict"
+reason = "Shared last-answer rule for strikes, history polarity and CLI status."
 
 [[module]]
 path = "crates/rimz/src/ids.rs"

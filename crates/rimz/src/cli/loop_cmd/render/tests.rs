@@ -965,6 +965,7 @@ fn true_condition_without_hold_renders_due() {
 
 fn record(second: i64, result: LoopRunResult) -> LoopRunRecord {
     LoopRunRecord {
+        judge: Vec::new(),
         checkout: None,
         task: "wait".to_owned(),
         root: None,
@@ -991,6 +992,7 @@ fn record(second: i64, result: LoopRunResult) -> LoopRunRecord {
 
 fn check(code: Option<i32>, output: &str) -> CheckRecord {
     CheckRecord {
+        duration_ms: None,
         agent: None,
         output_path: None,
         code,
@@ -1321,6 +1323,7 @@ fn agent_runs_heading_aggregates_all_valid_costs() {
 fn check_failure_line_uses_last_non_empty_failed_check_line() {
     let mut failed = record(10, LoopRunResult::Failed);
     failed.check = Some(CheckRecord {
+        duration_ms: None,
         agent: None,
         output_path: None,
         code: Some(127),
@@ -1331,6 +1334,7 @@ fn check_failure_line_uses_last_non_empty_failed_check_line() {
 
     let mut passed = record(11, LoopRunResult::Completed);
     passed.check = Some(CheckRecord {
+        duration_ms: None,
         agent: None,
         output_path: None,
         code: Some(0),
@@ -1344,6 +1348,7 @@ fn check_failure_line_uses_last_non_empty_failed_check_line() {
 fn record_note_prefers_error_then_failed_check_output() {
     let mut failed = record(10, LoopRunResult::Failed);
     failed.check = Some(CheckRecord {
+        duration_ms: None,
         agent: None,
         output_path: None,
         code: Some(1),
@@ -1361,6 +1366,7 @@ fn record_note_prefers_error_then_failed_check_output() {
 fn run_status_names_check_skipped_outcomes() {
     let mut skipped = record(10, LoopRunResult::CheckSkipped);
     skipped.check = Some(CheckRecord {
+        duration_ms: None,
         agent: None,
         output_path: None,
         code: Some(0),
@@ -1373,6 +1379,7 @@ fn run_status_names_check_skipped_outcomes() {
     assert_eq!(status.style, ui::palette::good());
 
     skipped.check = Some(CheckRecord {
+        duration_ms: None,
         agent: None,
         output_path: None,
         code: Some(1),
@@ -1385,6 +1392,7 @@ fn run_status_names_check_skipped_outcomes() {
     assert_eq!(status.style, ui::palette::muted());
 
     skipped.check = Some(CheckRecord {
+        duration_ms: None,
         agent: None,
         output_path: None,
         code: None,
@@ -1779,6 +1787,7 @@ fn run_status_merges_failed_check_exit() {
     let mut failed = record(10, LoopRunResult::Failed);
     failed.run_id = Some("run_0123456789abcdef01234567".to_owned());
     failed.check = Some(CheckRecord {
+        duration_ms: None,
         agent: None,
         output_path: None,
         code: Some(127),
@@ -1824,6 +1833,7 @@ fn collapsed_run_rows_merge_adjacent_matching_render_columns() {
     first.mode = Some(LoopRunMode::Scheduled);
     first.duration_ms = Some(10);
     first.check = Some(CheckRecord {
+        duration_ms: None,
         agent: None,
         output_path: None,
         code: Some(1),
@@ -1836,6 +1846,7 @@ fn collapsed_run_rows_merge_adjacent_matching_render_columns() {
     let mut third = second.clone();
     third.at = Timestamp::from_second(30).expect("timestamp");
     third.check = Some(CheckRecord {
+        duration_ms: None,
         agent: None,
         output_path: None,
         code: Some(1),
@@ -1940,6 +1951,7 @@ fn render_record_detail_titles_status_age_and_mode() {
 fn render_record_detail_marks_failed_check_output() {
     let mut detail = record(20, LoopRunResult::Failed);
     detail.check = Some(CheckRecord {
+        duration_ms: None,
         agent: None,
         output_path: None,
         code: Some(2),
@@ -2339,6 +2351,7 @@ fn watch_history_uses_verdict_words_and_output_path() {
             detail.watch = Some(verdict.clone());
             detail.duration_ms = Some(0);
             detail.check = Some(CheckRecord {
+                duration_ms: None,
                 agent: None,
                 code: match verdict {
                     WatchVerdict::Exited { code, .. } => code,

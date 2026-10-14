@@ -785,6 +785,7 @@ fn fail_open_check_does_not_strike_a_launched_run() {
     let mut record =
         LoopRunRecord::new("guard", LoopRunResult::Launched, LoopRunMode::Scheduled, 1);
     record.check = Some(CheckRecord {
+        duration_ms: None,
         code: None,
         timed_out: true,
         output: "timeout".into(),
@@ -841,6 +842,7 @@ fn spawn_completion_sums_check_and_task_usage() {
     let mut record =
         LoopRunRecord::new("guard", LoopRunResult::Completed, LoopRunMode::Scheduled, 1);
     let check = CheckRecord {
+        duration_ms: None,
         code: Some(0),
         timed_out: false,
         output: "yes".into(),

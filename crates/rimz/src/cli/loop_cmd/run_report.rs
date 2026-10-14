@@ -826,6 +826,7 @@ mod tests {
             );
             let agent: rimz::harness::schedule::run_log::AgentCheckRecord = serde_json::from_value(serde_json::json!({"profile":"haiku","kind":"claude","model":"haiku","verdict":verdict.map(|pass| serde_json::json!({"pass":pass,"reason":"Read the tree."})),"error":error,"cost_usd":0.02,"input_tokens":10,"output_tokens":5})).unwrap();
             record.check = Some(CheckRecord {
+                duration_ms: None,
                 code: verdict.map(|pass| if pass { 0 } else { 1 }),
                 timed_out: false,
                 output: "Read the tree.".into(),

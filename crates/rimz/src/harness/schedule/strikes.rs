@@ -36,12 +36,7 @@ pub(super) fn classify(record: &LoopRunRecord) -> Signal {
     {
         return Signal::Neutral;
     }
-    let check = record.check.as_ref().filter(|check| {
-        !check
-            .agent
-            .as_ref()
-            .is_some_and(|agent| agent.verdict.is_none())
-    });
+    let check = record.last_verdict();
     match record.result {
         LoopRunResult::Failed
         | LoopRunResult::VerifyFailed
@@ -49,13 +44,13 @@ pub(super) fn classify(record: &LoopRunRecord) -> Signal {
         | LoopRunResult::Errored
         | LoopRunResult::BudgetExceeded => Signal::Strike,
         LoopRunResult::Completed | LoopRunResult::Delivered | LoopRunResult::Launched => {
-            if check.is_some_and(|check| !check_passed(check)) {
+            if check == Some(false) {
                 Signal::Strike
             } else {
                 Signal::Reset
             }
         }
-        LoopRunResult::CheckSkipped => match check.map(check_passed) {
+        LoopRunResult::CheckSkipped => match check {
             Some(true) => Signal::Reset,
             Some(false) | None => Signal::Neutral,
         },
@@ -71,10 +66,6 @@ pub(super) fn classify(record: &LoopRunRecord) -> Signal {
         | LoopRunResult::Expired
         | LoopRunResult::TargetGone => Signal::Neutral,
     }
-}
-
-fn check_passed(check: &crate::harness::schedule::run_log::CheckRecord) -> bool {
-    check.code == Some(0) && !check.timed_out
 }
 
 pub fn threshold(entry: &TaskEntry) -> Option<u32> {
@@ -160,6 +151,7 @@ mod tests {
 
     fn record(result: LoopRunResult, check: Option<CheckRecord>) -> LoopRunRecord {
         LoopRunRecord {
+            judge: Vec::new(),
             checkout: None,
             task: "nightly".to_owned(),
             root: None,
@@ -186,6 +178,7 @@ mod tests {
 
     fn check(code: Option<i32>, timed_out: bool) -> Option<CheckRecord> {
         Some(CheckRecord {
+            duration_ms: None,
             agent: None,
             output_path: None,
             code,
@@ -245,6 +238,22 @@ mod tests {
         ] {
             assert_eq!(classify(&record(result, None)), Signal::Strike);
         }
+    }
+
+    #[test]
+    fn strikes_read_the_last_guard_verdict() {
+        let mut wire =
+            serde_json::to_value(record(LoopRunResult::Completed, check(Some(1), false))).unwrap();
+        wire["judge"] = serde_json::json!([
+            {"profile": "haiku", "kind": "claude", "verdict": true},
+            {"profile": "sonnet", "kind": "claude", "error": "outage"}
+        ]);
+        let row: LoopRunRecord = serde_json::from_value(wire).unwrap();
+        assert_eq!(
+            classify(&row),
+            Signal::Reset,
+            "shell failure followed by a pass is not a strike"
+        );
     }
 
     #[test]
