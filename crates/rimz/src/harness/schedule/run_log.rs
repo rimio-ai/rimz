@@ -424,7 +424,7 @@ impl ActingRun {
 }
 
 /// The newest signal a subscription heard without acting on it, in log order.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct HeardSignal {
     pub signal: SignalName,
     pub at: Timestamp,
@@ -432,9 +432,6 @@ pub struct HeardSignal {
 
 impl HeardSignal {
     fn of(record: &LoopRunRecord) -> Option<Self> {
-        if record.result != LoopRunResult::SignalSkipped {
-            return None;
-        }
         Some(Self {
             signal: record.signal.as_ref()?.name.clone(),
             at: record.at,
@@ -450,7 +447,7 @@ pub fn acting_run(records: &[LoopRunRecord]) -> Option<ActingRun> {
 #[derive(Clone, Debug, PartialEq)]
 pub struct LoopRunStats {
     pub runs: usize,
-    pub last: LoopRunRecord,
+    pub last: Option<LoopRunRecord>,
     pub spend_today_usd: f64,
     pub acting: Option<ActingRun>,
     pub heard: Option<HeardSignal>,
@@ -538,6 +535,70 @@ pub fn task_records(state_root: &Path, task: &str, root: Option<&Path>) -> Vec<L
         }
     });
     records
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct TaskHistory {
+    pub fires: Vec<LoopRunRecord>,
+    pub heard: Option<HeardSummary>,
+    pub records: Vec<LoopRunRecord>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct HeardSummary {
+    pub count: usize,
+    pub since: Option<Timestamp>,
+    pub latest: SignalName,
+    pub latest_at: Timestamp,
+}
+
+impl TaskHistory {
+    fn split(mut records: Vec<LoopRunRecord>, armed_at: Option<Timestamp>) -> Self {
+        records.retain(|record| armed_at.is_none_or(|at| record.at >= at));
+        let mut fires = Vec::new();
+        let mut heard = None;
+        let mut count = 0;
+        let mut since = None;
+        for record in &records {
+            if record.result == LoopRunResult::SignalSkipped {
+                count += 1;
+                if let Some(signal) = HeardSignal::of(record) {
+                    heard = Some(HeardSummary {
+                        count,
+                        since,
+                        latest: signal.signal,
+                        latest_at: signal.at,
+                    });
+                } else if let Some(summary) = &mut heard {
+                    summary.count = count;
+                }
+                continue;
+            }
+            if record.polarity().is_some() {
+                since = Some(record.at);
+                count = 0;
+                if let Some(summary) = &mut heard {
+                    summary.count = 0;
+                    summary.since = since;
+                }
+            }
+            fires.push(record.clone());
+        }
+        Self {
+            fires,
+            heard,
+            records,
+        }
+    }
+}
+
+pub fn task_history(
+    state_root: &Path,
+    task: &str,
+    root: Option<&Path>,
+    armed_at: Option<Timestamp>,
+) -> TaskHistory {
+    TaskHistory::split(task_records(state_root, task, root), armed_at)
 }
 
 pub(super) fn has_scheduled_row_since(
@@ -667,27 +728,25 @@ pub(super) fn daily_budget_gate(
 }
 
 fn fold_record(record: LoopRunRecord, now: &Zoned, stats: &mut BTreeMap<String, LoopRunStats>) {
-    let spend_today_usd = cost_on_local_day(&record, now).unwrap_or(0.0);
-    stats
-        .entry(record.task.clone())
-        .and_modify(|entry| {
-            entry.runs += 1;
-            entry.spend_today_usd += spend_today_usd;
-            entry.acting = ActingRun::after(entry.acting.take(), &record);
-            if let Some(heard) = HeardSignal::of(&record) {
-                entry.heard = Some(heard);
-            }
-            if record.at > entry.last.at {
-                entry.last = record.clone();
-            }
-        })
-        .or_insert_with(|| LoopRunStats {
-            runs: 1,
-            acting: ActingRun::after(None, &record),
-            heard: HeardSignal::of(&record),
-            last: record,
-            spend_today_usd,
-        });
+    let entry = stats.entry(record.task.clone()).or_insert(LoopRunStats {
+        runs: 0,
+        last: None,
+        spend_today_usd: 0.0,
+        acting: None,
+        heard: None,
+    });
+    if record.result == LoopRunResult::SignalSkipped {
+        if let Some(heard) = HeardSignal::of(&record) {
+            entry.heard = Some(heard);
+        }
+        return;
+    }
+    entry.runs += 1;
+    entry.spend_today_usd += cost_on_local_day(&record, now).unwrap_or(0.0);
+    entry.acting = ActingRun::after(entry.acting.take(), &record);
+    if entry.last.as_ref().is_none_or(|last| record.at >= last.at) {
+        entry.last = Some(record);
+    }
 }
 
 fn capped_record(record: &LoopRunRecord) -> LoopRunRecord {

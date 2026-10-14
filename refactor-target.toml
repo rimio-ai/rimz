@@ -587,7 +587,8 @@ path = "crates/rimz/src/harness"
 # The `<base>-fast` cell grammar is shared by launch and tier routing (+1).
 # `plan::validate_launch_preset` shares launch capability refusal with loop admission (+1).
 # HeldStats and its constructor/stats retain per-root summaries for the CLI (+3).
-surface-budget = 828 # agent_check::replay rebuilds a held judge's record from its decline without starting a process.
+# TaskHistory, HeardSummary, and task_history share the fire/heard view with the CLI (+3).
+surface-budget = 831 # agent_check::replay rebuilds a held judge's record from its decline without starting a process.
 
 [[verdict]]
 kind = "item"
@@ -1563,6 +1564,21 @@ reason = "Carried by LoopRunStats for the loop list model; narrowing breaks the 
 kind = "item"
 key = "harness::schedule::run_log::HeldStats"
 reason = "The loop CLI holds per-root incremental run summaries across watch repaints."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::run_log::TaskHistory"
+reason = "Shared fire/heard partition returned to the loop CLI."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::run_log::HeardSummary"
+reason = "Loop show serializes and renders the shared heard summary."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::run_log::task_history"
+reason = "Loop show and logs share the history split and wait arming cutoff."
 
 [[verdict]]
 kind = "item"

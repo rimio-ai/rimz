@@ -1,4 +1,4 @@
-use super::super::run_report::{render_record_detail, write_failure_pointer};
+use super::super::run_report::render_record_detail;
 use super::*;
 
 #[test]
@@ -57,6 +57,7 @@ fn show_view(each_worktree: bool) -> ShowView {
         timing,
         now_zoned: now.to_zoned(jiff::tz::TimeZone::UTC),
         records: vec![failed],
+        heard: None,
         launches: BTreeMap::from([
             (
                 PathBuf::from("/repo/older"),
@@ -113,6 +114,76 @@ fn show_text(view: &ShowView) -> String {
     let mut out = Vec::new();
     render_show(&mut out, view, 10).unwrap();
     anstream::adapter::strip_str(&String::from_utf8(out).unwrap()).to_string()
+}
+
+#[test]
+fn last_run_ignores_fifty_heard_siblings() {
+    let mut completed = record(10, LoopRunResult::Completed);
+    completed.check = Some(check(Some(0), "ok"));
+    let mut records = vec![completed];
+    for second in 11..61 {
+        let mut heard = record(second, LoopRunResult::SignalSkipped);
+        heard.signal = Some(run_log::SignalRecord {
+            name: "ci.passed".parse().unwrap(),
+            payload: serde_json::Map::new(),
+        });
+        records.push(heard);
+    }
+    assert!(last_run(&records).contains("LAST RUN — ✓ completed"));
+}
+
+#[test]
+fn empty_history_hints_only_for_spawn_and_check() {
+    let mut view = show_view(false);
+    view.records.clear();
+    assert!(show_text(&view).contains("try `rimz loop fire sweep`"));
+    view.entry.agent = None;
+    assert!(show_text(&view).contains("try `rimz loop fire sweep`"));
+    view.entry.check = None;
+    view.entry.wait = Some(rimz::config::TaskTarget {
+        kind: rimz::ids::AgentKind::new_unchecked("claude"),
+        session: "current".into(),
+        handle: "@coder".into(),
+    });
+    for you in [false, true] {
+        view.you = you;
+        let text = show_text(&view);
+        assert!(
+            text.contains("not fired yet") && !text.contains("loop fire"),
+            "{text}"
+        );
+    }
+}
+
+#[test]
+fn watch_timeout_is_a_check_in() {
+    let mut view = show_view(false);
+    view.entry.watch = Some(rimz::config::WatchSpec::Command("true".into()));
+    view.entry.timeout = Some("5m".into());
+    let text = show_text(&view);
+    assert!(
+        text.contains("check-in:") && !text.contains("timeout:"),
+        "{text}"
+    );
+}
+
+#[test]
+fn logs_name_signal_or_manual_trigger() {
+    let mut row = record(10, LoopRunResult::Completed);
+    row.signal = Some(run_log::SignalRecord {
+        name: "ci.failed".parse().unwrap(),
+        payload: serde_json::Map::new(),
+    });
+    for (mode, trigger) in [
+        (LoopRunMode::Scheduled, "signal ci.failed"),
+        (LoopRunMode::Manual, "manual"),
+    ] {
+        row.mode = Some(mode);
+        let mut out = Vec::new();
+        write_log_records(&mut out, None, &[&row]).unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert!(text.lines().next().unwrap().contains(trigger), "{text}");
+    }
 }
 
 #[test]
@@ -1882,23 +1953,23 @@ fn collapsed_run_rows_merge_adjacent_matching_render_columns() {
 }
 
 #[test]
-fn detail_indices_point_at_the_current_failure_only_when_a_later_run_shadows_it() {
+fn detail_index_keeps_the_acting_run_across_refusals() {
     let mut error = record(10, LoopRunResult::Errored);
     error.error = Some("reading prompt-file\nmissing".to_owned());
     let mut failed = record(20, LoopRunResult::Failed);
     failed.run_id = Some("run_0123456789abcdef01234567".to_owned());
     let mut records = vec![error, failed];
-    assert_eq!(detail_indices(&records), (Some(1), None));
+    assert_eq!(detail_index(&records), Some(1));
 
     let mut skipped = record(30, LoopRunResult::BudgetSkipped);
     skipped.error = Some("daily budget reached".to_owned());
     records.push(skipped);
-    assert_eq!(detail_indices(&records), (Some(2), Some(1)));
+    assert_eq!(detail_index(&records), Some(1));
 
     let mut recovered = record(40, LoopRunResult::Completed);
     recovered.check = Some(check(Some(0), "ok"));
     records.push(recovered);
-    assert_eq!(detail_indices(&records), (Some(3), None));
+    assert_eq!(detail_index(&records), Some(3));
 }
 
 #[test]
@@ -1907,7 +1978,7 @@ fn detail_indices_skip_a_trailing_overlap() {
     completed.check = Some(check(Some(0), "ok"));
     let records = vec![completed, overlap(20)];
 
-    assert_eq!(detail_indices(&records), (Some(0), None));
+    assert_eq!(detail_index(&records), Some(0));
     assert!(last_run(&records).contains("LAST RUN — ✓ completed"));
 }
 
@@ -1920,7 +1991,7 @@ fn detail_indices_skip_last_run_after_a_clean_launch_even_with_a_trailing_overla
     launched.target = Some("@fixer".to_owned());
     let mut records = vec![error, launched];
 
-    assert_eq!(detail_indices(&records), (None, None));
+    assert_eq!(detail_index(&records), None);
     records.push(overlap(30));
     assert!(!last_run(&records).contains("LAST RUN"));
 }
@@ -2044,8 +2115,11 @@ fn last_run_cuts_a_passing_check_to_its_tail_and_points_at_the_rest() {
     failed.check = Some(check(Some(1), seven));
     let mut gated = scheduled(80, LoopRunResult::CheckSkipped);
     gated.check = Some(check(Some(1), seven));
+    assert!(last_run(&[gated.clone()]).is_empty());
     for record in [failed, gated] {
-        let out = last_run(&[record]);
+        let mut out = Vec::new();
+        write_log_records(&mut out, None, &[&record]).unwrap();
+        let out = anstream::adapter::strip_str(&String::from_utf8(out).unwrap()).to_string();
         assert!(out.contains("  │ l1\n  │ l2\n  │ l3\n"), "{out}");
         assert!(!out.contains("full output"), "{out}");
     }
@@ -2130,7 +2204,6 @@ fn trailing_overlaps_keep_a_row_and_mark_the_verdict() {
         LoopRunResult::BudgetSkipped,
         LoopRunResult::AccountSkipped,
         LoopRunResult::SurplusSkipped,
-        LoopRunResult::SignalSkipped,
     ] {
         let refused = |second| scheduled(second, refused);
         let clause = |records: &[LoopRunRecord], has_active_run| {
@@ -2291,28 +2364,6 @@ fn loop_logs_forensics_print_a_signal_payload_under_its_name() {
 
     let out = render(serde_json::Map::new());
     assert!(out.ends_with("  signal: deploy.finished\n"), "{out}");
-}
-
-#[test]
-fn failure_pointer_links_to_filtered_logs_without_full_forensics() {
-    let mut failure = record(20, LoopRunResult::Errored);
-    failure.mode = Some(LoopRunMode::Scheduled);
-    failure.error = Some("outer error\ninner detail".to_owned());
-    let mut out = Vec::new();
-
-    write_failure_pointer(
-        &mut out,
-        "wait",
-        &failure,
-        Timestamp::from_second(30).unwrap(),
-    )
-    .unwrap();
-
-    let out = anstream::adapter::strip_str(&String::from_utf8(out).unwrap()).to_string();
-    assert!(out.contains(
-        "last failure — ✗ error · 10s ago · scheduled · dig in: rimz loop logs wait --failed"
-    ));
-    assert!(!out.contains("outer error"));
 }
 
 #[test]

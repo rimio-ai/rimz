@@ -59,6 +59,84 @@ fn every_judge_reason_and_error_is_capped() {
 }
 
 #[test]
+fn history_keeps_declines_and_refusals_and_counts_heard_since_acting() {
+    use LoopRunResult::*;
+    let mut rows = vec![record("task", 1, SignalSkipped)];
+    for (index, result) in [
+        Completed,
+        CheckSkipped,
+        CheckSkipped,
+        BudgetSkipped,
+        AccountSkipped,
+        ThrottleSkipped,
+        SurplusSkipped,
+        Overlapped,
+        TakeoverBlocked,
+        TargetGone,
+        Expired,
+        Canceled,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut row = record("task", index as i64 + 2, result);
+        if result == CheckSkipped {
+            row.check = Some(
+                serde_json::from_value(serde_json::json!({
+                    "code": if index == 1 { 0 } else { 1 }, "timed_out": false, "output": ""
+                }))
+                .unwrap(),
+            );
+        }
+        rows.push(row);
+    }
+    let mut sibling = record("task", 20, SignalSkipped);
+    sibling.signal = Some(SignalRecord {
+        name: "ci.passed".parse().unwrap(),
+        payload: Map::new(),
+    });
+    rows.extend([sibling.clone(), sibling.clone()]);
+    let history = TaskHistory::split(rows, None);
+    assert_eq!(history.fires.len(), 12);
+    let heard = history.heard.unwrap();
+    assert_eq!(heard.count, 2);
+    assert_eq!(heard.since, Some(Timestamp::from_second(3).unwrap()));
+    assert_eq!(heard.latest.as_str(), "ci.passed");
+    let history = TaskHistory::split(vec![sibling.clone(), sibling], None);
+    assert!(history.fires.is_empty());
+    assert_eq!(history.heard.as_ref().unwrap().count, 2);
+    assert_eq!(history.heard.unwrap().since, None);
+}
+
+#[test]
+fn history_arming_cutoff_applies_to_fires_and_heard() {
+    let rows = vec![
+        record("wait", 1, LoopRunResult::Completed),
+        record("wait", 2, LoopRunResult::SignalSkipped),
+        record("wait", 3, LoopRunResult::Failed),
+    ];
+    let history = TaskHistory::split(rows, Some(Timestamp::from_second(3).unwrap()));
+    assert_eq!(history.records.len(), 1);
+    assert_eq!(history.fires.len(), 1);
+    assert!(history.heard.is_none());
+}
+
+#[test]
+fn stats_counts_fires_not_heard_siblings() {
+    let dir = tempfile::tempdir().unwrap();
+    append_to(dir.path(), &record("wait", 10, LoopRunResult::Completed));
+    append_to(
+        dir.path(),
+        &record("wait", 20, LoopRunResult::SignalSkipped),
+    );
+    let now = Timestamp::from_second(30)
+        .unwrap()
+        .to_zoned(jiff::tz::TimeZone::UTC);
+    let stats = stats(dir.path(), &now, None);
+    assert_eq!(stats["wait"].runs, 1);
+}
+
+#[test]
 fn agent_check_evidence_is_bounded_in_the_persisted_record() {
     let dir = tempfile::tempdir().unwrap();
     let evidence = format!("{}tail", "界".repeat(CHECK_OUTPUT_CAP));
@@ -251,8 +329,8 @@ fn acting_and_heard_survive_skips_rotation_and_root_filtering() {
             at: heard.at
         })
     );
-    assert_eq!(task.last.result, LoopRunResult::SignalSkipped);
-    assert_eq!(task.runs, 6);
+    assert_eq!(task.last.as_ref().unwrap().result, LoopRunResult::Delivered);
+    assert_eq!(task.runs, 3);
     assert_eq!(
         task.acting,
         acting_run(&task_records(
@@ -263,6 +341,8 @@ fn acting_and_heard_survive_skips_rotation_and_root_filtering() {
     );
     assert!(stats["only-heard"].acting.is_none());
     assert!(stats["only-heard"].heard.is_some());
+    assert_eq!(stats["only-heard"].runs, 0);
+    assert!(stats["only-heard"].last.is_none());
 }
 
 #[test]
@@ -355,7 +435,10 @@ fn append_then_stats_round_trips_records() {
     let wait = stats.get("wait").expect("wait stats");
     assert_eq!(wait.runs, 2);
     assert_eq!(wait.acting.as_ref().unwrap().streak, 1);
-    assert_eq!(wait.last.result, LoopRunResult::TargetGone);
+    assert_eq!(
+        wait.last.as_ref().unwrap().result,
+        LoopRunResult::TargetGone
+    );
 }
 
 #[test]
@@ -633,7 +716,7 @@ fn stats_folds_rotated_sibling_and_keeps_newest_last() {
     let wait = stats.get("wait").expect("wait stats");
     assert_eq!(wait.runs, 2);
     assert_eq!(wait.acting.as_ref().unwrap().streak, 1);
-    assert_eq!(wait.last.result, LoopRunResult::Completed);
+    assert_eq!(wait.last.as_ref().unwrap().result, LoopRunResult::Completed);
 }
 
 #[test]
@@ -657,7 +740,7 @@ fn stats_tracks_matching_result_streak_across_rotated_and_current_files() {
     let wait = stats.get("wait").expect("wait stats");
     assert_eq!(wait.runs, 2);
     assert_eq!(wait.acting.as_ref().unwrap().streak, 2);
-    assert_eq!(wait.last.result, LoopRunResult::Failed);
+    assert_eq!(wait.last.as_ref().unwrap().result, LoopRunResult::Failed);
 }
 
 #[test]

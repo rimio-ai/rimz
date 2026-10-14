@@ -300,6 +300,7 @@ struct ShowView {
     timing: schedule::TaskTiming,
     now_zoned: jiff::Zoned,
     records: Vec<LoopRunRecord>,
+    heard: Option<run_log::HeardSummary>,
     launches: BTreeMap<PathBuf, schedule::launch_ledger::LaunchRecord>,
     in_flight: Option<InFlightRun>,
     condition: String,
@@ -833,6 +834,25 @@ fn worktrees_json(view: &ShowView) -> Vec<WorktreeJson<'_>> {
         .collect()
 }
 
+fn write_empty_history(
+    out: &mut impl Write,
+    name: &str,
+    entry: Option<&TaskEntry>,
+    you: bool,
+) -> std::io::Result<()> {
+    if let Some(entry) = entry {
+        let shape = schedule::TaskShape::compile(name, entry);
+        if let Ok(action @ TaskAction::Deliver(_)) = shape.action() {
+            return writeln!(
+                out,
+                "{}; not fired yet",
+                list::action(action.kind(), action.subject(), Some(entry), you)
+            );
+        }
+    }
+    writeln!(out, "no runs recorded; try `rimz loop fire {name}`")
+}
+
 fn render_show(out: &mut impl Write, view: &ShowView, runs: usize) -> Result<()> {
     let now = view.now_zoned.timestamp();
     write_show_headline(
@@ -850,6 +870,26 @@ fn render_show(out: &mut impl Write, view: &ShowView, runs: usize) -> Result<()>
         view.in_flight.is_some(),
         now,
     )?;
+    if let Some(heard) = &view.heard
+        && heard.count > 0
+    {
+        let family = heard.latest.family();
+        let plural = if heard.count == 1 { "" } else { "s" };
+        let since = if heard.since.is_some() { " since" } else { "" };
+        writeln!(
+            out,
+            "  {}",
+            ui::paint(
+                ui::palette::muted(),
+                &format!(
+                    "heard {} other {family}.* signal{plural}{since}, latest {} {}",
+                    heard.count,
+                    heard.latest,
+                    ui::rel_age(heard.latest_at, now)
+                )
+            )
+        )?;
+    }
     let expr = worktree_expr(view);
     let rows = if view.entry.each_worktree {
         worktree_rows(view, expr)
@@ -877,11 +917,8 @@ fn render_show(out: &mut impl Write, view: &ShowView, runs: usize) -> Result<()>
         write!(out, "{}", view.condition)?;
     }
     if view.records.is_empty() {
-        writeln!(
-            out,
-            "\nno runs recorded; try `rimz loop fire {}`",
-            view.name
-        )?;
+        writeln!(out)?;
+        write_empty_history(out, &view.name, Some(&view.entry), view.you)?;
     } else {
         write_last_run(
             out,
@@ -921,6 +958,7 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
                 name: args.name,
                 runs: args.runs,
                 failed: false,
+                heard: false,
             },
             globals,
         );
@@ -947,11 +985,12 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
     } else {
         observe_task_timing(&args.name, &task, &stamps, arming.as_ref(), &now_zoned)
     };
-    let mut records =
-        run_log::task_records(&rimz::disk::paths::logs_dir(), &args.name, Some(&root));
-    if let Some(meta) = &entry.wait_meta {
-        records.retain(|record| record.at >= meta.armed_at);
-    }
+    let history = run_log::task_history(
+        &rimz::disk::paths::logs_dir(),
+        &args.name,
+        Some(&root),
+        entry.wait_meta.as_ref().map(|meta| meta.armed_at),
+    );
     let launches = if entry.stay {
         rimz::harness::schedule::launch_ledger::load(&StatePaths::for_project_root(&root)?)?
             .remove(&args.name)
@@ -1042,7 +1081,8 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
         source: task.source(),
         timing,
         now_zoned,
-        records,
+        records: history.fires,
+        heard: history.heard,
         launches,
         in_flight,
         condition: String::from_utf8(condition)?,
@@ -1077,7 +1117,7 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
             worktrees: Vec<WorktreeJson<'a>>,
         }
         let json = ShowJson {
-            facts: serde_json::json!({ "task": view.name, "entry": view.entry, "launches": view.launches, "runs": view.records, "running": running, "held": held, "waiting": waiting }),
+            facts: serde_json::json!({ "task": view.name, "entry": view.entry, "launches": view.launches, "runs": view.records, "heard": view.heard, "running": running, "held": held, "waiting": waiting }),
             worktrees: worktrees_json(&view),
         };
         writeln!(ui::out(), "{}", serde_json::to_string_pretty(&json)?)?;
@@ -1201,7 +1241,6 @@ fn is_refused_fire(record: &LoopRunRecord) -> bool {
             | LoopRunResult::AccountSkipped
             | LoopRunResult::ThrottleSkipped
             | LoopRunResult::SurplusSkipped
-            | LoopRunResult::SignalSkipped
     )
 }
 
@@ -1261,7 +1300,7 @@ fn write_last_run(
     now: Timestamp,
     prose: ui::prose::Prose,
 ) -> std::io::Result<()> {
-    let (detail_idx, failure_idx) = detail_indices(records);
+    let detail_idx = detail_index(records);
     if let Some(idx) = detail_idx {
         writeln!(out)?;
         run_report::render_record_detail(
@@ -1273,9 +1312,6 @@ fn write_last_run(
             now,
             prose,
         )?;
-    }
-    if let Some(failure) = failure_idx.and_then(|idx| records.get(idx)) {
-        run_report::write_failure_pointer(out, name, failure, now)?;
     }
     Ok(())
 }
@@ -1302,7 +1338,8 @@ fn show_in_flight(args: &ShowArgs, root: &Path, in_flight: &InFlightRun) -> Resu
         kv.render(&mut out)?;
     }
     writeln!(out, "  stop with `rimz loop stop {}`", args.name)?;
-    let records = run_log::task_records(&rimz::disk::paths::logs_dir(), &args.name, Some(root));
+    let records =
+        run_log::task_history(&rimz::disk::paths::logs_dir(), &args.name, Some(root), None).fires;
     let visible = records.iter().rev().take(args.runs).collect::<Vec<_>>();
     if !visible.is_empty() {
         writeln!(out)?;
@@ -1314,18 +1351,29 @@ fn show_in_flight(args: &ShowArgs, root: &Path, in_flight: &InFlightRun) -> Resu
 pub(super) fn logs(args: LogsArgs, globals: &GlobalFlags) -> Result<()> {
     let task = load_task(&args.name, globals)?;
     let entry = task.as_ref().map(|task| task.entry());
-    let records = run_log::task_records(
+    let root = entry
+        .map(TaskEntry::resolved_root)
+        .or_else(|| project_root_for_globals(globals));
+    let history = run_log::task_history(
         &rimz::disk::paths::logs_dir(),
         &args.name,
-        project_root_for_globals(globals).as_deref(),
+        root.as_deref(),
+        entry
+            .and_then(|entry| entry.wait_meta.as_ref())
+            .map(|meta| meta.armed_at),
     );
+    let records = if args.heard {
+        &history.records
+    } else {
+        &history.fires
+    };
     let lookup = match entry {
         Some(entry) => in_flight_run(&args.name, &entry.resolved_root()),
         None => in_flight_without_row(&args.name, globals)
             .map(|found| found.map(|(_, in_flight)| in_flight)),
     };
     let in_flight = displayed_in_flight(&args.name, lookup);
-    if entry.is_none() && records.is_empty() && in_flight.is_none() {
+    if entry.is_none() && history.records.is_empty() && in_flight.is_none() {
         anyhow::bail!("no loop task named `{}`; see `rimz loop list`", args.name);
     }
     let in_flight = in_flight.filter(|_| !args.failed);
@@ -1339,8 +1387,14 @@ pub(super) fn logs(args: LogsArgs, globals: &GlobalFlags) -> Result<()> {
     if visible.is_empty() && in_flight.is_none() {
         if args.failed {
             writeln!(out, "no failed runs recorded")?;
+        } else if entry.is_none() && !history.records.is_empty() {
+            writeln!(
+                out,
+                "no fires recorded, only heard signals; see `rimz loop logs {} --heard`",
+                args.name
+            )?;
         } else {
-            writeln!(out, "no runs recorded; try `rimz loop fire {}`", args.name)?;
+            write_empty_history(&mut out, &args.name, entry, false)?;
         }
         return Ok(());
     }
@@ -1383,7 +1437,13 @@ fn write_log_records(
             out,
             " · {} · {}",
             ui::rel_age(record.at, now),
-            record.mode.map_or("legacy", LoopRunMode::label)
+            if record.mode == Some(LoopRunMode::Manual) {
+                "manual".to_owned()
+            } else if let Some(signal) = &record.signal {
+                format!("signal {}", signal.name)
+            } else {
+                "scheduled".to_owned()
+            }
         )?;
         if let Some(exit) = run_report::detail_exit_segment(record) {
             write!(out, " · {exit}")?;
@@ -1667,7 +1727,14 @@ fn write_show_facts(out: &mut impl Write, view: &ShowView) -> std::io::Result<()
     if !entry.stay
         && let Some(timeout) = timeout
     {
-        kv.push("timeout", ui::cell(timeout));
+        kv.push(
+            if entry.watch.is_some() {
+                "check-in"
+            } else {
+                "timeout"
+            },
+            ui::cell(timeout),
+        );
     }
     if let Some(state) = blocked_state {
         kv.push(
@@ -2041,6 +2108,7 @@ pub(super) fn run_status(record: &LoopRunRecord) -> RunStatusDisplay {
                 label
             }
             LoopRunResult::CheckSkipped => check_skipped_label(record).to_owned(),
+            LoopRunResult::SignalSkipped => "heard".to_owned(),
             result => result.label().to_owned(),
         },
     };
@@ -2056,10 +2124,6 @@ pub(super) fn run_status(record: &LoopRunRecord) -> RunStatusDisplay {
         label,
         style: mark.style,
     }
-}
-
-fn record_is_good(record: &LoopRunRecord) -> bool {
-    record.polarity() == Some(run_log::RunPolarity::Good)
 }
 
 fn verdict_line(records: &[LoopRunRecord], now: Timestamp) -> Option<(String, anstyle::Style)> {
@@ -2285,21 +2349,6 @@ fn truncate_note(text: &str, max: usize) -> String {
     }
 }
 
-fn record_has_detail(record: &LoopRunRecord) -> bool {
-    record.check.is_some()
-        || !record.judge.is_empty()
-        || record.error.is_some()
-        || record.last_message.is_some()
-        || record.signal.is_some()
-        || record.message_id.is_some()
-        || record.run_id.is_some()
-        || record
-            .cost_usd
-            .is_some_and(|cost| cost.is_finite() && cost >= 0.0)
-        || record.input_tokens.is_some()
-        || record.output_tokens.is_some()
-}
-
 pub(super) fn record_is_failure(record: &LoopRunRecord) -> bool {
     record.polarity() == Some(run_log::RunPolarity::Failure)
 }
@@ -2312,26 +2361,12 @@ fn is_agent_run(record: &LoopRunRecord) -> bool {
         )
 }
 
-/// The record LAST RUN details, and the failure to point at when the loop is
-/// failing and LAST RUN is some other record. An overlap is never the detail:
-/// it is a refused fire, and the run before it is the last thing that ran.
-fn detail_indices(records: &[LoopRunRecord]) -> (Option<usize>, Option<usize>) {
-    if records
-        .iter()
-        .rev()
-        .find(|record| !is_overlap(record))
-        .is_some_and(|record| record.result == LoopRunResult::Launched)
-    {
-        return (None, None);
+fn detail_index(records: &[LoopRunRecord]) -> Option<usize> {
+    let acting = run_log::acting_run(records)?;
+    if acting.record.result == LoopRunResult::Launched {
+        return None;
     }
-    let detail_idx = records
-        .iter()
-        .rposition(|record| !is_overlap(record) && record_has_detail(record));
-    let failure_idx = records
-        .iter()
-        .rposition(|record| record_is_failure(record) || record_is_good(record))
-        .filter(|&idx| record_is_failure(&records[idx]) && Some(idx) != detail_idx);
-    (detail_idx, failure_idx)
+    records.iter().rposition(|record| record == &acting.record)
 }
 
 pub(super) fn spend_segments(

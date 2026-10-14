@@ -163,6 +163,8 @@ pub(super) struct LiveSignal {
     pub matches: BTreeMap<String, String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fired: Option<SignalFire>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub heard: Option<run_log::HeardSignal>,
 }
 
 /// The loop run log's latest record for an armed subscription.
@@ -638,11 +640,17 @@ fn live_instances(
                             live_signal(name, task.entry(), task.source(), &instance, agent)
                         })
                         .map(|signal| LiveSignal {
-                            fired: catalog.runs.get(&signal.name).map(|stats| SignalFire {
-                                at: stats.last.at,
-                                result: stats.last.result,
-                                runs: stats.runs,
+                            fired: catalog.runs.get(&signal.name).and_then(|stats| {
+                                stats.last.as_ref().map(|last| SignalFire {
+                                    at: last.at,
+                                    result: last.result,
+                                    runs: stats.runs,
+                                })
                             }),
+                            heard: catalog
+                                .runs
+                                .get(&signal.name)
+                                .and_then(|stats| stats.heard.clone()),
                             ..signal
                         })
                         .collect(),
@@ -728,6 +736,7 @@ fn live_signal(
         selector: entry.signal.clone()?,
         matches: entry.matches.clone().unwrap_or_default(),
         fired: None,
+        heard: None,
     })
 }
 

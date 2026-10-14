@@ -372,6 +372,8 @@ RECENT RUNS (newest first · 1 of 1)
 
 The screen answers first and shows its evidence after. The verdict line reads the latest conclusive run: how long ago it ran, how it ended, and, once there is a streak, how many runs in a row ended that way and when the streak began. `LAST RUN` is that run's output (a passing check prints its last five lines and the `rimz loop logs` command for the rest), `RECENT RUNS` reads newest first, and the task's facts close the screen, where `strikes` counts consecutive failures against the threshold. `manual` marks a run you fired by hand; a clock's fire carries no mark.
 
+A subscription can hear another signal in its family without acting on it. Those signals do not replace `LAST RUN` or inflate the run counts: a muted `heard` line counts them since the last acting run and names the latest. `rimz loop logs <name> --heard` includes that listening history when you need it. Refused fires and guard declines still appear in recent runs. A wake that has not fired describes what it will wake instead of suggesting a manual fire, which would spend a one-shot wait.
+
 Teardown is one command. `rimz loop remove <name>` deletes the entry from whichever file owns it; the run history stays. `rimz loop timer remove` takes the timer out, and `rimz uninstall` removes it too.
 
 ## Every schedule shape
