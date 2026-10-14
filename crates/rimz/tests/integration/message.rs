@@ -1584,6 +1584,17 @@ fn sweep_delivers_harness_wake_to_stamped_daemon_view_agent() {
     let mut pane = agent_pane(&env, "claude");
     pane.view_name = Some("rimzd".to_owned());
     let pane_fixture = env.write_pane_fixture(&[pane]);
+    // The wake is queued after Stop: a Stop with a queued head spawns a
+    // detached `message deliver` the test cannot await, which would race the sweep.
+    run_hook(
+        &env,
+        json!({
+            "hook_event_name": "Stop",
+            "session_id": "sess-daemon-view",
+            "worktree_branch": "feature-daemon-view",
+        }),
+        &[("ZELLIJ_PANE_ID", "3")],
+    );
     let snapshot = env.store().snapshot_cached().expect("snapshot");
     let wake = MessageRecord::new(
         env.workspace_id.clone(),
@@ -1595,15 +1606,6 @@ fn sweep_delivers_harness_wake_to_stamped_daemon_view_agent() {
         notice: HarnessNotice::Wait,
     });
     env.store().queue_message(&wake, "rimz-test").unwrap();
-    run_hook(
-        &env,
-        json!({
-            "hook_event_name": "Stop",
-            "session_id": "sess-daemon-view",
-            "worktree_branch": "feature-daemon-view",
-        }),
-        &[("ZELLIJ_PANE_ID", "3")],
-    );
 
     let trace_log = env.project_root.join("zellij-daemon-view-wake-trace.log");
     run_success(
@@ -5649,6 +5651,9 @@ fn boundary_dispatch_sends_when_idle_then_parks_and_delivers_when_running() {
         message_by_id(&env, &MessageId::parse(&queued_id).expect("message id")).status,
         MessageStatus::Queued
     );
+    // The Stop's own detached `message deliver` is the boundary delivery under test.
+    let trace_log = env.project_root.join("zellij-deferred-deliver-trace.log");
+    let shim = zellij_trace_shim();
     run_hook(
         &env,
         json!({
@@ -5656,17 +5661,21 @@ fn boundary_dispatch_sends_when_idle_then_parks_and_delivers_when_running() {
             "session_id": "sess-boundary",
             "worktree_branch": "feature-boundary",
         }),
-        pane_env,
+        &[
+            ("ZELLIJ_PANE_ID", "3"),
+            ("RIMZ_ZELLIJ_BIN", shim.to_str().expect("shim path")),
+            (
+                "RIMZ_TEST_ZELLIJ_LOG",
+                trace_log.to_str().expect("trace path"),
+            ),
+            (
+                "RIMZ_TEST_PANE_LIST",
+                pane_fixture.to_str().expect("pane fixture path"),
+            ),
+            ("RIMZ_MESSAGE_SETTLE_MS", "0"),
+        ],
     );
-
-    let trace_log = env.project_root.join("zellij-deferred-deliver-trace.log");
-    run_success(
-        traced_rimz(&env, "zellij-deferred-deliver-trace.log")
-            .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
-            .env("RIMZ_MESSAGE_SETTLE_MS", "0")
-            .args(["message", "deliver", "--message-id", &queued_id]),
-        "deliver at boundary",
-    );
+    wait_for_text_then_enter(&trace_log, &user_message("later"));
     assert_text_then_enter(&trace_log, &user_message("later"));
     assert_eq!(
         message_by_id(&env, &MessageId::parse(&queued_id).expect("message id")).status,
@@ -5796,6 +5805,8 @@ fn boundary_slash_prompt_parks_behind_sent_prompt_until_turn_ends() {
         "the acknowledgement must not deliver into the running turn"
     );
 
+    // The Stop's own detached `message deliver` is the boundary delivery under test.
+    let shim = zellij_trace_shim();
     run_hook(
         &env,
         json!({
@@ -5803,15 +5814,21 @@ fn boundary_slash_prompt_parks_behind_sent_prompt_until_turn_ends() {
             "session_id": "sess-sent-hold",
             "worktree_branch": "feature-sent-hold",
         }),
-        pane_env,
+        &[
+            ("ZELLIJ_PANE_ID", "3"),
+            ("RIMZ_ZELLIJ_BIN", shim.to_str().expect("shim path")),
+            (
+                "RIMZ_TEST_ZELLIJ_LOG",
+                trace_log.to_str().expect("trace path"),
+            ),
+            (
+                "RIMZ_TEST_PANE_LIST",
+                pane_fixture.to_str().expect("pane fixture path"),
+            ),
+            ("RIMZ_MESSAGE_SETTLE_MS", "0"),
+        ],
     );
-    run_success(
-        traced_rimz(&env, "zellij-sent-hold-trace.log")
-            .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
-            .env("RIMZ_MESSAGE_SETTLE_MS", "0")
-            .args(["message", "deliver", "--message-id", command_id.as_str()]),
-        "deliver slash prompt at boundary",
-    );
+    wait_for_text_then_enter(&trace_log, &user_message("/compact"));
     assert_eq!(message_by_id(&env, &command_id).status, MessageStatus::Sent);
     let lines = trace_lines(&trace_log);
     let prompt_at = lines
@@ -6892,6 +6909,9 @@ fn mixed_submit_confirms_record_and_never_resends() {
         MessageStatus::Queued
     );
 
+    // The Stop's own detached `message deliver` is the delivery under test.
+    let sent_trace = env.project_root.join("zellij-mixed-sent-trace.log");
+    let shim = zellij_trace_shim();
     run_hook(
         &env,
         json!({
@@ -6899,16 +6919,21 @@ fn mixed_submit_confirms_record_and_never_resends() {
             "session_id": "sess-mixed",
             "worktree_branch": "feature-mixed",
         }),
-        pane_env,
+        &[
+            ("ZELLIJ_PANE_ID", "3"),
+            ("RIMZ_ZELLIJ_BIN", shim.to_str().expect("shim path")),
+            (
+                "RIMZ_TEST_ZELLIJ_LOG",
+                sent_trace.to_str().expect("trace path"),
+            ),
+            (
+                "RIMZ_TEST_PANE_LIST",
+                pane_fixture.to_str().expect("pane fixture path"),
+            ),
+            ("RIMZ_MESSAGE_SETTLE_MS", "0"),
+        ],
     );
-    let sent_trace = env.project_root.join("zellij-mixed-sent-trace.log");
-    run_success(
-        traced_rimz(&env, "zellij-mixed-sent-trace.log")
-            .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
-            .env("RIMZ_MESSAGE_SETTLE_MS", "0")
-            .args(["message", "deliver", "--message-id", message_id.as_str()]),
-        "deliver after question closes",
-    );
+    wait_for_text_then_enter(&sent_trace, &user_message("report body"));
     assert_text_then_enter(&sent_trace, &user_message("report body"));
     let sent = message_by_id(&env, &message_id);
     assert_eq!(sent.status, MessageStatus::Sent);
@@ -7400,20 +7425,34 @@ fn hook_delivery_is_sent_when_its_wake_cannot_be_refreshed() {
         &[("ZELLIJ_PANE_ID", "3")],
     );
     let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "claude")]);
-    let message_id = queue_add(&env, "@claude", "after the turn");
+    // Queued through the store after Stop: a Stop with a queued head spawns a
+    // detached `message deliver` that would take the claim and the warning from
+    // the deliver under test, and a CLI message at the idle agent sends live.
     run_hook(
         &env,
         json!({"hook_event_name": "Stop", "session_id": "sess-hook-broken-wake", "worktree_branch": "hook-broken-wake"}),
         &[("ZELLIJ_PANE_ID", "3")],
     );
-    std::fs::remove_file(wake_stamp_path(&env)).unwrap();
-    std::fs::create_dir(wake_stamp_path(&env)).unwrap();
+    let snapshot = env.store().snapshot_cached().expect("snapshot");
+    let message = MessageRecord::new(
+        env.workspace_id.clone(),
+        &snapshot.agents[0],
+        "after the turn".to_owned(),
+        DeliveryGate::Done,
+    );
+    env.store().queue_message(&message, "rimz-test").unwrap();
+    let message_id = message.message_id.as_str();
+    match std::fs::remove_file(wake_stamp_path(&env)) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        removed => removed.unwrap(),
+    }
+    std::fs::create_dir_all(wake_stamp_path(&env)).unwrap();
     let trace = env.project_root.join("hook-broken-wake.log");
     let output = run_success(
         traced_rimz(&env, &trace)
             .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
             .env("RIMZ_MESSAGE_SETTLE_MS", "0")
-            .args(["message", "deliver", "--message-id", &message_id]),
+            .args(["message", "deliver", "--message-id", message_id]),
         "hook delivery with a broken wake stamp",
     );
     assert!(
@@ -9776,7 +9815,7 @@ fn boundary_auto_compact_defers_prompt_until_compaction_ends() {
             ("RIMZ_MESSAGE_INTERVAL_MS", "0"),
         ],
     );
-    wait_for_message_event_count(&env, "message.sent", 2, Duration::from_secs(5));
+    wait_for_text_then_enter(&trace_log, &user_message("go after compact"));
 
     let lines = trace_lines(&trace_log);
     assert_eq!(
@@ -11043,6 +11082,28 @@ fn wait_for_message_event_count(env: &Env, method: &str, count: usize, timeout: 
         assert!(
             Instant::now() < deadline,
             "timed out waiting for {count} {method} events"
+        );
+        std::thread::sleep(Duration::from_millis(25));
+    }
+}
+
+/// Waits for a hook's detached `message deliver` to paste `text` and press its
+/// Enter: the record turns `Sent` between the two writes, so `Sent` alone does
+/// not cover the Enter.
+fn wait_for_text_then_enter(trace_log: &Path, text: &str) {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        let lines = trace_lines(trace_log);
+        if lines
+            .iter()
+            .position(|line| is_paste(line, text))
+            .is_some_and(|at| lines[at..].iter().any(|line| is_enter_key(line)))
+        {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for a paste of `{text}` and its Enter; trace: {lines:?}"
         );
         std::thread::sleep(Duration::from_millis(25));
     }
