@@ -44,7 +44,9 @@ Give the name without the channel's `#`: `-w feat-a` creates the tree `feat-a` a
 
 A `/` in the name goes into the branch and becomes `-` everywhere else: `-w feat/login` puts branch `feat/login` in a tree called `feat-login`, on channel `#feat-login`.
 
-`rimz worktree new <name>` creates an empty tree, launching nothing into it, for work of your own or a tree you will fill with agents later. [`rimz worktree`](../reference/cli/worktree.md) is the whole verb surface: `new`, `list`, `cd`, `merge`, `remove`, and `sweep`.
+`rimz worktree new <name>` creates an empty tree, launching nothing into it, for work of your own or a tree you will fill with agents later. [`rimz worktree`](../reference/cli/worktree.md) is the whole verb surface: `new`, `list` (`ls`), `cd`, `path`, `merge`, `remove` (`rm`), and `sweep`. Use `new --json` when a script needs the path and full base commit rather than a human receipt.
+
+To work in the tree yourself, run `rimz worktree cd <name>`. It opens a new shell and prints where you entered and where exiting will return you. It requires a terminal; `rimz worktree path <name>` prints just the absolute path for scripts or your own shell's `cd`.
 
 Already made the tree with `git worktree add`? If it is in the configured worktree directory and belongs to this repository, `rimz agents <spec> -w <name>` and `rimz teams <team> -w <name>` ask whether to enter it. Answer `y` to launch there; Enter or `n` prints `Launch aborted; nothing changed.` RimZ keeps your files and branch as they are, does not mark or seed the tree, and leaves cleanup to you. Confirmation needs a terminal; an unattended launch refuses instead of guessing.
 
@@ -79,11 +81,10 @@ Both files take one entry per line and ignore blank lines and `#` comments. Beca
 $ rimz worktree new feat-a
 created feat-a
   path   : ~/code/query-engine-worktrees/feat-a
-  branch : feat-a
-  base branch: main
-  base   : c175274596fd0148c7ad1b8376d4f69f55160b9a
+  branch : feat-a, from main at c175274
   seeded : 2 file(s) from .worktreeinclude
   linked : 1 dir(s) from .worktreelink
+  next   : rimz agents <spec> -w feat-a    or    rimz worktree cd feat-a
 ```
 
 Cover every `.worktreeinclude` path in `.gitignore`. A copied file that Git can see makes the tree permanently dirty, and a dirty tree is one RimZ refuses to reclaim. Linked directories need no such care: RimZ writes each one into the new tree's `.git/info/exclude` as it links it.
@@ -120,10 +121,9 @@ A successful setup command adds the hook line:
 $ rimz worktree new feat-a
 created feat-a
   path   : ~/code/query-engine-worktrees/feat-a
-  branch : feat-a
-  base branch: main
-  base   : 1946c748b6ea964ada3fed9ce5347496e2b5232b
+  branch : feat-a, from main at 1946c74
   hook   : worktree.created ran
+  next   : rimz agents <spec> -w feat-a    or    rimz worktree cd feat-a
 ```
 
 A setup command that prints `init-out` to stdout, prints `init-err` to stderr, and exits with status 3 reports:
@@ -196,13 +196,16 @@ auth      auth    unlanded · dirty  @coder#auth
 feat-a    feat-a  landed            -
 ```
 
-`rimz worktree merge auth` takes the deliberately narrow landing path: with no agent or pane left in the worktree and both checkouts clean, the branch rebases onto `main` and the main checkout advances by fast-forward only. A conflict aborts the rebase and leaves `main` unchanged rather than creating a merge commit. Your main checkout must have a branch named `main` out, so a repository whose trunk is `master` lands its branches with Git or a pull request instead.
+When you are ready to land local work, `rimz worktree merge auth` names its destination and asks before moving anything. For a local base, the destination is the branch that `list` measures against, including `master` or a stacked feature branch, falling back to the trunk once the base is superseded. With no agent or pane left in the worktree and both checkouts clean, RimZ rebases the work onto that branch and advances it by fast-forward in whichever checkout holds it. A conflict aborts the rebase and leaves the destination unchanged rather than creating a merge commit. The destination must be checked out; a snapshot commit is not a branch you can land on. Scripts use `--yes`; without a terminal and without that flag, RimZ refuses.
+
+For a remote-tracking base such as the `origin/main` recorded by `--base fresh`, RimZ lands on the local branch that tracks it, or the trunk's local branch if none tracks it. With neither, it refuses. The prompt and receipt name that local branch, for example `main`. `list` keeps measuring against `origin/main`, so the tree still reads `unlanded` after a local landing until you push the destination branch.
 
 ```console
-$ rimz worktree merge auth
-merged auth into main
+$ rimz worktree merge auth --yes
+landed auth on main
   branch : auth
   head   : f0c10e649367adc7a6a82bbbe07549e5ea1f805b
+  the worktree stays at ~/code/query-engine-worktrees/auth; `rimz worktree remove auth` reclaims it
 ```
 
 Merging leaves the tree in place. `rimz worktree sweep` is the routine that takes it away: it removes every marked tree that is clean, proven landed, and unoccupied, reports what it reclaimed and why it kept the rest, and previews with `--dry-run`. `rimz gc` runs the same sweep alongside the other maintenance areas. A sweep never forces, so a tree you are still working in survives it.
