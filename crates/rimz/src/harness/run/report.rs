@@ -84,7 +84,11 @@ fn answer_opened_by(record: &RunRecord, message_id: &MessageId) -> Option<(u32, 
         .as_ref()
         .map_or(&record.opened_by, |peer| &peer.opened_by);
     if opened_by.contains(message_id) {
-        return Some((record.follow_ups + 1, record.status.is_terminal()));
+        // The printed reply is one turn; an answer that spans a park owes the rest.
+        return record
+            .parked_answer
+            .is_none()
+            .then(|| (record.follow_ups + 1, record.status.is_terminal()));
     }
     record
         .earlier_answers
@@ -401,7 +405,7 @@ mod tests {
         use crate::harness::run;
         use crate::store::run::{EarlierAnswer, PeerRun};
 
-        for answer in ["current", "earlier", "peer"] {
+        for answer in ["current", "earlier", "peer", "parked"] {
             for caller_kind in ["parent", "human", "stranger", "unattended", "missing"] {
                 let (_dir, store, mut record, message_id) = claim_fixture();
                 if answer == "earlier" {
@@ -424,6 +428,9 @@ mod tests {
                         launch_id: "child".into(),
                         opened_by: std::mem::take(&mut record.opened_by),
                     });
+                } else if answer == "parked" {
+                    // The printed reply is one turn of an answer that spans a park.
+                    record.parked_answer = Some("report".into());
                 }
                 run::create(store.paths(), &record).unwrap();
                 let caller_name = match caller_kind {
@@ -461,7 +468,7 @@ mod tests {
                 };
                 assert_eq!(
                     joined.is_some(),
-                    matches!(caller_kind, "parent" | "human"),
+                    answer != "parked" && matches!(caller_kind, "parent" | "human"),
                     "{answer}/{caller_kind}"
                 );
                 if answer != "earlier" && joined.is_some() {

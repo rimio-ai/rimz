@@ -1002,13 +1002,130 @@ fn parked_run_resumes_and_completes_once() {
     .expect("terminal update");
     assert_eq!(completed.status, RunStatus::Completed);
     assert_eq!(completed.parked_at, None);
-    assert_eq!(completed.last_message.as_deref(), Some("done"));
+    assert_eq!(
+        completed.last_message.as_deref(),
+        Some("waiting\n\n---\n\ndone")
+    );
     assert!(
         record_lifecycle(&paths, &record.run_id, "claude", &ended, None, || None)
             .unwrap()
             .is_none()
     );
     assert_eq!(load(&paths, &record.run_id).unwrap(), completed);
+}
+
+/// Folds one root observation of `child`; a turn end parks when `owed`.
+fn fold_turn(
+    paths: &StatePaths,
+    run_id: &RunId,
+    signal: LifecycleSignal,
+    message: Option<&str>,
+    owed: bool,
+) -> RunRecord {
+    let observation = AgentLifecycleObservation::new(Some("child".into()), signal);
+    record_lifecycle(
+        paths,
+        run_id,
+        "claude",
+        &observation,
+        message.map(str::to_owned),
+        || owed.then_some(OwedWake::Wait),
+    )
+    .unwrap();
+    load(paths, run_id).unwrap()
+}
+
+fn turn_ended() -> LifecycleSignal {
+    LifecycleSignal::TurnEnded {
+        errored: false,
+        parked_on_background: false,
+        turn_id: None,
+    }
+}
+
+fn turn_started() -> LifecycleSignal {
+    LifecycleSignal::TurnStarted { turn_id: None }
+}
+
+#[test]
+fn a_parked_answer_keeps_every_turn_in_order() {
+    for (last, expected) in [
+        (Some("three"), "one\n\n---\n\ntwo\n\n---\n\nthree"),
+        (Some(""), "one\n\n---\n\ntwo"),
+        (None, "one\n\n---\n\ntwo"),
+    ] {
+        let (_dir, paths, record) = setup();
+        let id = &record.run_id;
+        // A replayed Stop of the parked turn replaces that turn's text.
+        for _ in 0..2 {
+            let parked = fold_turn(&paths, id, turn_ended(), Some("one"), true);
+            assert!(parked.parked_at.is_some());
+            assert_eq!(parked.last_message.as_deref(), Some("one"));
+            assert_eq!(parked.parked_answer, None);
+        }
+        let woke = fold_turn(&paths, id, turn_started(), None, false);
+        assert_eq!(woke.parked_answer.as_deref(), Some("one"));
+        let parked = fold_turn(&paths, id, turn_ended(), Some("two"), true);
+        assert_eq!(parked.last_message.as_deref(), Some("one\n\n---\n\ntwo"));
+        fold_turn(&paths, id, turn_started(), None, false);
+        let settled = fold_turn(&paths, id, turn_ended(), last, false);
+        assert_eq!(settled.status, RunStatus::Completed, "{last:?}");
+        assert_eq!(settled.last_message.as_deref(), Some(expected), "{last:?}");
+        assert_eq!(settled.parked_answer.as_deref(), Some("one\n\n---\n\ntwo"));
+    }
+}
+
+#[test]
+fn assistant_messages_compose_after_the_parked_answer() {
+    let (_dir, paths, record) = setup();
+    let id = &record.run_id;
+    fold_turn(&paths, id, turn_ended(), Some("waiting"), true);
+    fold_turn(&paths, id, turn_started(), None, false);
+    for draft in ["draft", "final"] {
+        record_assistant_message(&paths, id, "claude", &"child".into(), draft.into()).unwrap();
+        assert_eq!(
+            load(&paths, id).unwrap().last_message,
+            Some(format!("waiting\n\n---\n\n{draft}"))
+        );
+    }
+    // A duplicate turn start after the unpark seals nothing new.
+    let replayed = fold_turn(&paths, id, turn_started(), None, false);
+    assert_eq!(replayed.parked_answer.as_deref(), Some("waiting"));
+    let settled = fold_turn(&paths, id, turn_ended(), None, false);
+    assert_eq!(settled.status, RunStatus::Completed);
+    assert_eq!(
+        settled.last_message.as_deref(),
+        Some("waiting\n\n---\n\nfinal")
+    );
+}
+
+#[test]
+fn a_reopen_after_a_parked_answer_starts_a_fresh_one() {
+    let (_dir, paths, mut record) = setup();
+    record.subagent = true;
+    record.agent_name = Some("child".into());
+    create(&paths, &record).unwrap();
+    let id = &record.run_id;
+    fold_turn(&paths, id, turn_ended(), Some("report"), true);
+    fold_turn(&paths, id, turn_started(), None, false);
+    fold_turn(&paths, id, turn_ended(), Some("woke"), false);
+    let out = paths.out_reader_dir(Some("child"));
+    assert_eq!(
+        std::fs::read_to_string(out.join("child.output")).unwrap(),
+        "report\n\n---\n\nwoke\n"
+    );
+    let reopened = fold_turn(&paths, id, turn_started(), None, false);
+    assert_eq!(reopened.follow_ups, 1);
+    assert_eq!(reopened.parked_answer, None);
+    fold_turn(&paths, id, turn_ended(), Some("follow-up"), false);
+    assert_eq!(
+        std::fs::read_to_string(out.join("child.output")).unwrap(),
+        "report\n\n---\n\nwoke\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(out.join("child.2.output")).unwrap(),
+        "follow-up\n"
+    );
 }
 
 #[test]

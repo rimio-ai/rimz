@@ -2043,6 +2043,10 @@ mod parked {
         }
 
         fn hook(&self, event: &str, prompt: &str) {
+            self.hook_replying(event, prompt, "finished");
+        }
+
+        fn hook_replying(&self, event: &str, prompt: &str, reply: &str) {
             let mut command = self.env.hook_command("claude");
             command
                 .env(rimz::harness::launch::ENV_RUN_ID, self.run_id.as_str())
@@ -2056,7 +2060,7 @@ mod parked {
                         "hook_event_name": event,
                         "session_id": "provider-session",
                         "prompt": prompt,
-                        "last_assistant_message": "finished",
+                        "last_assistant_message": reply,
                         "cwd": self.env.project_root,
                     })
                     .to_string(),
@@ -2179,6 +2183,34 @@ mod parked {
         fixture.hook("Stop", "");
         fixture.assert_parked();
         fixture.resume(&message, "Type: WAIT\nFrom: @rimz\nContent:\nwake now");
+    }
+
+    #[test]
+    fn wake_turn_keeps_the_parked_report_in_the_answer() {
+        let env = Env::new();
+        if env.skip_if_sandboxed() {
+            return;
+        }
+        let fixture = Fixture::new(env);
+        let name = fixture.arm();
+        fixture.hook_replying("Stop", "", "FINDINGS");
+        fixture.assert_parked();
+        let message = fixture.wake(HarnessNotice::Wait);
+        wait_ok(&fixture.env, &["wait", "cancel", &name]);
+        fixture
+            .store
+            .record_sent_batch(std::slice::from_ref(&message), "rimz-test")
+            .expect("send wake");
+        fixture.hook(
+            "UserPromptSubmit",
+            "Type: WAIT\nFrom: @rimz\nContent:\nwake now",
+        );
+        fixture.hook_replying("Stop", "", "WOKE");
+        let terminal = fixture.assert_terminal(RunStatus::Completed);
+        assert_eq!(
+            terminal.last_message.as_deref(),
+            Some("FINDINGS\n\n---\n\nWOKE")
+        );
     }
 
     #[test]

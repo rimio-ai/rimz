@@ -1004,13 +1004,16 @@ fn fold_lifecycle(
         record.joined_at = None;
         record.report_message_id = None;
         record.last_message = None;
+        record.parked_answer = None;
         record.failure_tail = None;
     }
     if let Some(disposition) = observation.signal.terminal_disposition() {
         if let Some(path) = observation.transcript_path.as_ref() {
             record.transcript_path = Some(path.clone());
         }
-        record.last_message = last_message.or(record.last_message.take());
+        if let Some(message) = last_message {
+            set_turn_message(record, message);
+        }
         if disposition == TerminalDisposition::Completed
             && let Some(owed) = owed
         {
@@ -1038,6 +1041,11 @@ fn fold_lifecycle(
         && record.parked_at.is_some();
     if unparked {
         record.parked_at = None;
+        // Sealed here, not at park, so a replayed Stop of the parked turn
+        // still replaces its own text rather than adding a copy.
+        if let Some(answer) = record.last_message.as_ref().filter(|text| !text.is_empty()) {
+            record.parked_answer = Some(answer.clone());
+        }
     }
     let first_transcript_path =
         record.transcript_path.is_none() && observation.transcript_path.is_some();
@@ -1093,6 +1101,17 @@ fn fold_team_lifecycle(
     }
 }
 
+/// Write one turn's final message into the answer: the text sealed at the
+/// last park, then this turn's message. A later message of the same turn
+/// replaces only this turn's part, and an empty one adds nothing.
+fn set_turn_message(record: &mut RunRecord, message: String) {
+    record.last_message = Some(match record.parked_answer.as_deref() {
+        Some(parked) if message.is_empty() => parked.to_owned(),
+        Some(parked) => format!("{parked}\n\n---\n\n{message}"),
+        None => message,
+    });
+}
+
 /// Store provider-declared final visible output without ending the run.
 pub fn record_assistant_message(
     paths: &StatePaths,
@@ -1114,7 +1133,7 @@ pub fn record_assistant_message(
             None => record.agent_id = Some(agent_id.clone()),
             Some(_) => {}
         }
-        record.last_message = Some(message);
+        set_turn_message(record, message);
         Ok(RecordMutation::Write(()))
     })
     .map(|_| ())

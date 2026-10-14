@@ -301,6 +301,11 @@ pub struct RunRecord {
     /// terminal write.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parked_at: Option<Timestamp>,
+    /// The answer text through the most recent park, sealed when the wake
+    /// turn starts; each later turn's final message joins after it in
+    /// `last_message`. Kept by the terminal write, cleared by a reopen.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parked_answer: Option<String>,
     /// The child's `last_activity` at the provider-limit park its parent was
     /// last told about. Activity is frozen while the turn is dead and advances
     /// on any resume, so a later park carries a later value.
@@ -464,6 +469,7 @@ impl RunRecord {
             updated_at: now,
             completed_at: None,
             parked_at: None,
+            parked_answer: None,
             park_noticed_activity: None,
             stall_noticed_at: None,
         }
