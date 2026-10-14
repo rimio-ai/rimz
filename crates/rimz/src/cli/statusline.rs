@@ -469,6 +469,7 @@ mod tests {
             observed_at,
         };
         let cursor = |model: Option<&str>| SubagentUsageCursor {
+            anchor: None,
             last_call: None,
             transcript_path: "/tmp/parent/subagents/agent-child-1.jsonl".to_owned(),
             offset: 0,

@@ -69,6 +69,27 @@ fn advance(parent: &Path, prior: Option<&SubagentUsageCursor>) -> SubagentUsageC
 }
 
 #[test]
+fn rewrite_regrowth_restarts_child_cost() {
+    let (_dir, parent, child) = session();
+    write_lines(
+        &child,
+        &[line("old", "old", "model-a", json!({"input_tokens": 100}))],
+    );
+    let first = advance(&parent, None);
+    write_lines(
+        &child,
+        &[
+            line("new-one", "new-one", "model-a", json!({"input_tokens": 2})),
+            line("new-two", "new-two", "model-a", json!({"input_tokens": 3})),
+        ],
+    );
+    assert!(std::fs::metadata(&child).unwrap().len() > first.offset);
+    let resumed = advance(&parent, Some(&first));
+    assert_eq!(resumed.display_cost(), Some(5.0));
+    assert_eq!(resumed, advance(&parent, None));
+}
+
+#[test]
 fn sums_each_request_at_its_own_model_price() {
     let (_dir, parent, child) = session();
     write_lines(

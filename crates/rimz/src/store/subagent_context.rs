@@ -201,6 +201,7 @@ mod tests {
         let (_dir, runtime) = runtime();
         let now = Timestamp::now();
         let cursor = SubagentUsageCursor {
+            anchor: None,
             last_call: None,
             transcript_path: "/tmp/parent/subagents/agent-child-1.jsonl".to_owned(),
             offset: 412,
@@ -232,6 +233,16 @@ mod tests {
         .unwrap();
 
         assert_eq!(cursor.book_fingerprint, None);
+        assert!(
+            serde_json::to_value(&cursor)
+                .unwrap()
+                .get("anchor")
+                .is_none()
+        );
+        let mut wire = serde_json::to_value(&cursor).unwrap();
+        wire["anchor"] = serde_json::json!(123);
+        let anchored: SubagentUsageCursor = serde_json::from_value(wire).unwrap();
+        assert_eq!(serde_json::to_value(anchored).unwrap()["anchor"], 123);
     }
 
     #[test]
@@ -267,6 +278,7 @@ mod tests {
         })
         .unwrap();
         let cursor = SubagentUsageCursor {
+            anchor: None,
             last_call: None,
             transcript_path: "child.jsonl".to_owned(),
             offset: 7,

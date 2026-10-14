@@ -565,6 +565,7 @@ pub(super) fn clamp_pct(value: Option<f64>) -> Option<u8> {
 }
 
 /// Resume state for exact, incremental pricing of one child's transcript.
+/// A content-anchor mismatch restarts the fold; legacy cursors resume unverified.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SubagentUsageCursor {
     /// Newest assistant request's token split, retained across incremental
@@ -575,6 +576,9 @@ pub struct SubagentUsageCursor {
     pub transcript_path: String,
     /// Byte offset just past the last complete JSONL record consumed.
     pub offset: u64,
+    /// CRC-32 of up to 4 KiB immediately before the nonzero byte offset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anchor: Option<u32>,
     /// Newest non-synthetic `message.model` consumed from the child transcript,
     /// retained across incremental folds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
