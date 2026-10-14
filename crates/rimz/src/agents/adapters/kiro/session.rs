@@ -18,8 +18,9 @@ use crate::agents::local_session_cache::{
     normalized_workspace_inputs,
 };
 use crate::agents::{
-    AgentStatus, LocalSessionObservation, LocalSessionProjection, LocalSessionState,
-    TranscriptMessage, TranscriptRole, read_transcript_tail,
+    AgentStatus, AgentTurnError, FieldPatch, LocalContextPatch, LocalSessionObservation,
+    LocalSessionProjection, LocalSessionState, TranscriptMessage, TranscriptRole, TurnErrorClass,
+    TurnSettle, TurnSettleOutcome, read_transcript_tail,
 };
 use crate::ids::{AgentKind, AgentSessionId};
 
@@ -36,6 +37,9 @@ struct SessionMetadata {
     workspace_paths: Vec<PathBuf>,
     created_at: String,
     status: Option<String>,
+    title: Option<String>,
+    model_id: Option<String>,
+    effort_level: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -224,7 +228,8 @@ enum TurnState {
     Running(TurnPhase),
     Waiting,
     Success,
-    Failed,
+    Interrupted(Timestamp),
+    Failed(Option<Timestamp>),
 }
 
 impl TurnState {
@@ -233,28 +238,28 @@ impl TurnState {
     fn from_metadata_status(status: Option<&str>) -> Self {
         match status {
             Some("in_progress") => Self::Running(TurnPhase::Reasoning),
-            Some("failed") => Self::Failed,
+            Some("failed") => Self::Failed(None),
             _ => Self::Idle,
         }
     }
 
     /// The engine closes every turn from its stop reason: `cancelled` aborts,
     /// `refusal` and `error` fail, and any other reason succeeds.
-    fn from_stop_reason(stop_reason: &str) -> Self {
+    fn from_stop_reason(stop_reason: &str, at: Timestamp) -> Self {
         match stop_reason {
-            "cancelled" => Self::Idle,
-            "refusal" | "error" => Self::Failed,
+            "cancelled" => Self::Interrupted(at),
+            "refusal" | "error" => Self::Failed(Some(at)),
             _ => Self::Success,
         }
     }
 
     fn observation(self) -> (AgentStatus, TurnPhase) {
         match self {
-            Self::Idle => (AgentStatus::Idle, TurnPhase::Idle),
+            Self::Idle | Self::Interrupted(_) => (AgentStatus::Idle, TurnPhase::Idle),
             Self::Running(phase) => (AgentStatus::Running, phase),
             Self::Waiting => (AgentStatus::Waiting, TurnPhase::Idle),
             Self::Success => (AgentStatus::Success, TurnPhase::Idle),
-            Self::Failed => (AgentStatus::Failed, TurnPhase::Idle),
+            Self::Failed(_) => (AgentStatus::Failed, TurnPhase::Idle),
         }
     }
 }
@@ -322,7 +327,7 @@ impl FoldedSession {
             Payload::SessionEvent { category, context } => {
                 self.apply_successful_pause(category, context);
             }
-            Payload::TurnEnd { stop_reason } => self.apply_turn_end(stop_reason),
+            Payload::TurnEnd { stop_reason } => self.apply_turn_end(stop_reason, at),
             Payload::User { .. } | Payload::Assistant { .. } | Payload::Unknown => {}
         }
     }
@@ -454,11 +459,11 @@ impl FoldedSession {
         }
     }
 
-    fn apply_turn_end(&mut self, stop_reason: Option<String>) {
+    fn apply_turn_end(&mut self, stop_reason: Option<String>, at: Timestamp) {
         let Some(stop_reason) = non_empty(stop_reason.as_deref()) else {
             return;
         };
-        self.turn = TurnState::from_stop_reason(stop_reason);
+        self.turn = TurnState::from_stop_reason(stop_reason, at);
         if !matches!(self.turn, TurnState::Success) {
             self.pending.clear();
             self.waiting = None;
@@ -699,6 +704,53 @@ pub(super) fn valid_transcript(path: &Path, session_id: &str) -> bool {
     session.file_name().and_then(|name| name.to_str()) == Some(session_id)
         && validate_unscoped_session(bucket, session)
             .is_some_and(|validated| validated.messages == path)
+}
+
+pub(super) fn refresh_context(path: &Path) -> LocalContextPatch {
+    let validated = path.parent().and_then(|directory| {
+        let metadata = validate_unscoped_session(directory.parent()?, directory)?.metadata;
+        let created_at = metadata.created_at.parse::<Timestamp>().ok()?;
+        Some((metadata, created_at))
+    });
+    let created_at = validated
+        .as_ref()
+        .map_or(Timestamp::UNIX_EPOCH, |(_, created_at)| *created_at);
+    let metadata = validated.map(|(metadata, _)| metadata);
+    let folded = fold(
+        &read_transcript_tail(path).unwrap_or_default(),
+        created_at,
+        metadata
+            .as_ref()
+            .and_then(|metadata| metadata.status.as_deref()),
+    );
+    let settle = match folded.turn {
+        TurnState::Interrupted(at) => Some(TurnSettle::new(at, TurnSettleOutcome::Interrupted)),
+        TurnState::Waiting => folded
+            .waiting
+            .map(|waiting| TurnSettle::new(waiting.since, TurnSettleOutcome::NativeWait)),
+        _ => None,
+    };
+    let turn_error = match folded.turn {
+        TurnState::Failed(Some(at)) => Some(AgentTurnError {
+            class: TurnErrorClass::Failed,
+            at,
+            label: None,
+        }),
+        _ => None,
+    };
+    let mut patch = LocalContextPatch {
+        settle: settle.map_or(FieldPatch::Clear, FieldPatch::Set),
+        turn_error: turn_error.map_or(FieldPatch::Clear, FieldPatch::Set),
+        ..LocalContextPatch::authoritative_current()
+    };
+    if let Some(metadata) = metadata {
+        patch.model_id = metadata.model_id.map_or(FieldPatch::Clear, FieldPatch::Set);
+        patch.effort = metadata
+            .effort_level
+            .map_or(FieldPatch::Clear, FieldPatch::Set);
+        patch.session_name = metadata.title.map_or(FieldPatch::Clear, FieldPatch::Set);
+    }
+    patch
 }
 
 pub(super) fn messages(lines: &str) -> Vec<TranscriptMessage> {

@@ -148,7 +148,8 @@ pub struct AgentContext {
     /// projection settles a falsely-active row to the outcome's status while
     /// the marker postdates `last_activity`, and a newer prompt advancing
     /// `last_activity` past it drops the row back to its lifecycle status.
-    /// Display-only — it never reaches the event log or a decision.
+    /// It never reaches the event log; effective-status consumers can use it
+    /// to complete a turn wait, unlike supervised runs' durable run records.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub settle: Option<TurnSettle>,
     /// When the producer observed this record. Snapshot liveness comes from

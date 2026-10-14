@@ -38,6 +38,8 @@ Every payload carries `session_id` (the `sess_<uuid>` store directory name), `ho
 
 ## Context and transcript
 
+Local refresh keeps the transcript-stat gate and uses the same bounded-tail fold as discovery. It reads model, effort, and title from validated `session.json`, clearing absent fields and retaining established values when metadata cannot be read or validated. A previously recorded transcript can still supply turn settlement while metadata is unavailable. Metadata-only edits become visible on the next transcript change; token gauges stay preserved and credits never become dollars.
+
 ### Local store validation
 
 The stock layout is `~/.kiro/sessions/<sha256(cwd)[0..16]>/<sess_uuid>/{session.json,messages.jsonl}`. Discovery inspects direct `sess_*` children of the requested workspace bucket only. Exact live/conversation lookup validates the requested session candidate across sorted immediate workspace buckets without enumerating sibling sessions, while fleet spending discovery excludes Kiro because it has no spend parser.
@@ -66,13 +68,13 @@ Kiro exposes no account probe, so RimZ reports no account panel or rate-limit wi
 
 ## Cost
 
-Kiro usage summaries report credits, not tokens or dollars. RimZ does not infer an active model, tokens, a context-window denominator, dollars, realtime cost, or historical/account spend from credits; a provisional RimZ launch may retain model and effort values it already owns. Kiro has no spend parser and is excluded from fleet spending discovery.
+Kiro usage summaries report credits, not tokens or dollars. RimZ does not infer tokens, a context-window denominator, dollars, realtime cost, or historical/account spend from credits. Kiro has no spend parser and is excluded from fleet spending discovery.
 
 ## Known gaps
 
 Run `rimz coverage` for the current wired/partial/unsupported matrix. The gaps below are the ones with a reason worth recording.
 
-- **Errored and cancelled turns fire no hook.** The card settles once the store records `turn_end`, but a supervised run, `message --wait`, or a scheduled turn waiting on that turn ends at its deadline. A refused turn fires `Stop`, so its hook outcome is a success while the card folds to failed.
+- **Errored and cancelled turns fire no hook.** Local refresh projects cancellation as `Interrupted` and unresolved interactions as `NativeWait`. While a sidebar ticks (or a hook refreshes context), this releases `message --wait` and `agents wait` on cancellation and keeps questions open as Waiting. Errors and refusals set a Failed-class `turn_error`, which does not release a Running row's waiter. Supervised runs read only durable run records, so both cancel and error still wait out their deadlines. A refused turn fires `Stop`, so its hook outcome is a success while the card folds to failed.
 - **Kiro CLI older than 2.31.0 gets no hooks.** `rimz hooks install kiro` refuses there, detected installs skip Kiro, and supervised runs keep refusing because hooks are not installed.
 - **Pending approvals and questions have no hook.** The waiting card comes from the store and stays out of `rimz asks`.
 - **Credits are not dollars.** Until Kiro publishes token counts or a dollar figure, no spend parser can be honest.

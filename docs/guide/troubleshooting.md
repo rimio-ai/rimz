@@ -339,7 +339,7 @@ Signal and watch tasks need no timekeeper: whatever emits the signal or runs the
 
 A `rimz agents -p` run or a scheduled agent turn that sits at `running` is usually parked. RimZ holds a run open past a clean turn end while something is still owed to it: an armed `rimz wait`, or children still working. When nothing is owed any more, RimZ ends the run itself: it fails with `parked on a wake that never arrived` and exits `1`, a few seconds after the last thing it was holding for goes away.
 
-Kiro is the exception that really does hang: it fires no hook for a cancelled or errored turn, so give every `rimz agents kiro -p` a `--timeout`, which turns a wedged turn into exit `124`.
+Kiro fires no hook for a cancelled or errored turn, so give every `rimz agents kiro -p` a `--timeout`, which turns a wedged turn into exit `124`. While a sidebar runs, a cancelled Kiro turn releases `message --wait` and `agents wait`; an errored turn still waits out the deadline. Supervised runs wait out their deadline on both cancel and error.
 
 A run that ended instantly instead never started at all. The usual cause is reporting hooks the agent's own trust prompt has not approved; the message names the fix, and no run record was written either way. [One run, one exit code](./scripting.md#one-run-one-exit-code) maps every code.
 
