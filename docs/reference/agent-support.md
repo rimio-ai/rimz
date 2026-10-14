@@ -87,6 +87,7 @@ These are the gaps you will notice, per agent, beyond what the matrix and `rimz 
 - History replays every past session and adds no dollars to `rimz stats`.
 - Children come from the parent's `invoke_subagent` transcript records, which the CLI writes late, so a fan-out often appears as the parent's turn ends. A worktree, `branch`, or `share` child stays a root card while its validated siblings nest.
 - Every error stop is terminal: a supervised run does not survive a provider limit, and [auto-continue](../guide/loops.md#auto-continue) never arms.
+- Yolo does not approve implementation plans (since 1.3.2). Only the user's `artifactReviewPolicy` setting lifts plan review; RimZ does not change it.
 
 ### Copilot
 
@@ -181,7 +182,7 @@ A permission mode comes from the `mode` profile field, the `--ask` and `--yolo` 
 | Codex | none | `--ask-for-approval never --sandbox workspace-write` | none | `--dangerously-bypass-approvals-and-sandbox` |
 | Pi | none | none | none | none |
 | OpenCode | none | none | none | `--auto` |
-| Antigravity | none | `--mode accept-edits` | `--mode plan` | `--dangerously-skip-permissions` |
+| Antigravity | none | `--mode accept-edits` | `--mode plan` | `--dangerously-skip-permissions --mode accept-edits` |
 | Copilot | none | `--autopilot` | `--plan` | `--allow-all` |
 | Droid | none | `--auto medium` | `--use-spec` | none |
 | Cursor | none | `--auto-review` | `--mode=plan` | `--force --sandbox disabled` |
