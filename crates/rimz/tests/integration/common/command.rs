@@ -20,7 +20,13 @@ const AMBIENT_SESSION_PREFIXES: [&str; 3] = ["RIMZ_", "ZELLIJ", "TMUX"];
 /// CI never sets it, so the suite is green there and red in a pane. Scrubbing
 /// it puts both on the plain detached-spawn path; `detect_host`'s systemd
 /// branch keeps its own unit coverage in `cli::loop_timer`.
-const AMBIENT_SESSION_KEYS: [&str; 1] = ["INVOCATION_ID"];
+/// Claude traffic switches likewise belong to the fixture: inheriting them
+/// disables remote control regardless of the test's configured settings.
+const AMBIENT_SESSION_KEYS: [&str; 3] = [
+    "INVOCATION_ID",
+    "DISABLE_GROWTHBOOK",
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
+];
 
 /// Provider state and config paths outside the home key each adapter declares
 /// through `config_home_env_keys`, which [`provider_home_keys`] reads directly.

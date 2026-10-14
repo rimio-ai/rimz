@@ -765,7 +765,7 @@ impl DaemonRepairTracker {
                 let readiness = match &resolved.host_envs {
                     Ok(envs) => {
                         crate::remote_control::prepare_hosts(&machine.remote_control, envs);
-                        crate::remote_control::ReadinessSnapshot::probe(&machine.remote_control, envs)
+                        crate::remote_control::ReadinessSnapshot::probe(&machine.remote_control, envs, Some(&record.project_root))
                     }
                     Err(err) => {
                         tracing::warn!(workspace = %workspace_id, error = %err, "daemon host accounts unavailable");

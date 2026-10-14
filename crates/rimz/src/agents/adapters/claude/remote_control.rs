@@ -6,7 +6,7 @@
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::agents::runtime_control::{RuntimeControlIssue, RuntimeControlReadiness};
 use crate::agents::version::{CliVersion, probe_cli_version};
@@ -23,6 +23,10 @@ const ANTHROPIC_API_KEY: &str = "ANTHROPIC_API_KEY";
 const ANTHROPIC_AUTH_TOKEN: &str = "ANTHROPIC_AUTH_TOKEN";
 const CLAUDE_CODE_OAUTH_TOKEN: &str = "CLAUDE_CODE_OAUTH_TOKEN";
 const ANTHROPIC_BASE_URL: &str = "ANTHROPIC_BASE_URL";
+const TRAFFIC_SWITCHES: [&str; 2] = [
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
+    "DISABLE_GROWTHBOOK",
+];
 const THIRD_PARTY_PROVIDER_VARS: [&str; 3] = [
     "CLAUDE_CODE_USE_BEDROCK",
     "CLAUDE_CODE_USE_VERTEX",
@@ -67,6 +71,7 @@ pub(crate) struct ClaudeRcSettings {
     pub env_auth_conflict: bool,
     pub oauth_token_env: bool,
     pub env_endpoint_conflict: bool,
+    pub env_traffic_switch: Option<&'static str>,
 }
 
 pub(crate) fn read_rc_settings(
@@ -129,6 +134,12 @@ pub(crate) fn rc_settings_from(root: &Map<String, Value>) -> ClaudeRcSettings {
             .get("env")
             .and_then(Value::as_object)
             .is_some_and(endpoint_conflict_in),
+        env_traffic_switch: root.get("env").and_then(Value::as_object).and_then(|env| {
+            TRAFFIC_SWITCHES
+                .iter()
+                .copied()
+                .find(|key| env.get(*key).is_some_and(setting_value_present))
+        }),
     }
 }
 
@@ -137,17 +148,37 @@ pub(crate) fn probed_version() -> Option<CliVersion> {
 }
 
 pub(crate) fn pane_auto_enabled(settings: &ClaudeRcSettings, version: Option<CliVersion>) -> bool {
-    if !settings.remote_control_at_startup || settings.disable_remote_control {
+    pane_auto_enabled_from(
+        settings,
+        version,
+        launch_env_auth_conflict(),
+        launch_endpoint_conflict(),
+        launch_traffic_switch(),
+    )
+}
+
+fn pane_auto_enabled_from(
+    settings: &ClaudeRcSettings,
+    version: Option<CliVersion>,
+    env_auth_conflict: bool,
+    env_endpoint_conflict: bool,
+    env_traffic_switch: Option<&str>,
+) -> bool {
+    if !settings.remote_control_at_startup
+        || settings.disable_remote_control
+        || settings.env_traffic_switch.is_some()
+        || env_traffic_switch.is_some()
+    {
         return false;
     }
     let auth_conflict = settings.api_key_helper
         || settings.env_auth_conflict
         || settings.oauth_token_env
-        || launch_env_auth_conflict();
+        || env_auth_conflict;
     if auth_conflict && version.is_some_and(|found| found >= AUTH_ENV_BLOCKS_RC_SINCE) {
         return false;
     }
-    let endpoint_conflict = settings.env_endpoint_conflict || launch_endpoint_conflict();
+    let endpoint_conflict = settings.env_endpoint_conflict || env_endpoint_conflict;
     !(endpoint_conflict && version.is_some_and(|found| found >= CUSTOM_ENDPOINT_BLOCKS_RC_SINCE))
 }
 
@@ -159,6 +190,13 @@ fn launch_env_auth_conflict() -> bool {
 
 fn env_value_present(key: &str) -> bool {
     std::env::var_os(key).is_some_and(|value| !value.is_empty())
+}
+
+fn launch_traffic_switch() -> Option<&'static str> {
+    TRAFFIC_SWITCHES
+        .iter()
+        .copied()
+        .find(|key| env_value_present(key))
 }
 
 fn setting_value_present(value: &Value) -> bool {
@@ -204,11 +242,28 @@ fn endpoint_is_conflicting(value: &str) -> bool {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Issue {
     Uninstalled,
-    TooOld { found: CliVersion },
-    RemoteControlDisabled { settings_path: PathBuf },
-    ConsentPending { config_path: PathBuf },
-    ConsentRefused { config_path: PathBuf },
-    AuthConflict { sources: Vec<AuthConflictSource> },
+    TooOld {
+        found: CliVersion,
+    },
+    RemoteControlDisabled {
+        settings_path: PathBuf,
+    },
+    ConsentPending {
+        config_path: PathBuf,
+    },
+    ConsentRefused {
+        config_path: PathBuf,
+    },
+    AuthConflict {
+        sources: Vec<AuthConflictSource>,
+    },
+    TrafficDisabled {
+        variable: &'static str,
+        settings_path: Option<PathBuf>,
+    },
+    FolderTrust {
+        fix: String,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -251,6 +306,27 @@ impl std::fmt::Display for AuthConflictSource {
 impl std::fmt::Display for Issue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::TrafficDisabled {
+                variable,
+                settings_path,
+            } => {
+                write!(
+                    f,
+                    "Claude remote-control is enabled (`[remote_control] claude = true`) but `{variable}` in "
+                )?;
+                match settings_path {
+                    Some(path) => write!(f, "the settings env in {}", path.display())?,
+                    None => write!(f, "the launch environment")?,
+                }
+                write!(
+                    f,
+                    " blocks it.\n\nUnset that value, then re-run, or set `[remote_control] claude = false` to disable the Claude host."
+                )
+            }
+            Self::FolderTrust { fix } => write!(
+                f,
+                "Claude remote-control is enabled (`[remote_control] claude = true`) but the project has no folder-trust decision.\n\n{fix}; or set `[remote_control] claude = false` to disable the Claude host."
+            ),
             Self::Uninstalled => write!(
                 f,
                 "Claude remote-control is enabled (`[remote_control] claude = true`) but `claude` is not on PATH."
@@ -311,7 +387,11 @@ impl std::fmt::Display for Issue {
 impl std::error::Error for Issue {}
 
 /// Probe configured Claude readiness once and return launch argv with success.
-pub fn readiness(enabled: bool, login_env: &BTreeMap<String, String>) -> RuntimeControlReadiness {
+pub fn readiness(
+    enabled: bool,
+    login_env: &BTreeMap<String, String>,
+    project_root: Option<&Path>,
+) -> RuntimeControlReadiness {
     if !enabled {
         return RuntimeControlReadiness::Disabled;
     }
@@ -335,6 +415,8 @@ pub fn readiness(enabled: bool, login_env: &BTreeMap<String, String>) -> Runtime
         env_value_present(CLAUDE_CODE_OAUTH_TOKEN),
         launch_endpoint_conflict(),
         remote_consent::read_consent(login_env),
+        launch_traffic_switch(),
+        project_root.map(|root| super::folder_trust::folder_trust(root, Some(root), login_env)),
     ) {
         Ok(host_argv) => RuntimeControlReadiness::Ready {
             host_argv: Some(host_argv_with_login(host_argv, login_env)),
@@ -408,6 +490,8 @@ fn readiness_from(
     env_oauth_token: bool,
     env_endpoint_conflict: bool,
     consent: Option<(PathBuf, remote_consent::ConsentState)>,
+    env_traffic_switch: Option<&'static str>,
+    folder_trust: Option<crate::agents::FolderTrust>,
 ) -> Result<Vec<String>, Issue> {
     if settings.disable_remote_control {
         return Err(Issue::RemoteControlDisabled { settings_path });
@@ -425,6 +509,23 @@ fn readiness_from(
                 return Err(Issue::ConsentRefused { config_path });
             }
         }
+    }
+    if let Some(variable) = env_traffic_switch {
+        return Err(Issue::TrafficDisabled {
+            variable,
+            settings_path: None,
+        });
+    }
+    if let Some(variable) = settings.env_traffic_switch {
+        return Err(Issue::TrafficDisabled {
+            variable,
+            settings_path: Some(settings_path),
+        });
+    }
+    if let Some(crate::agents::FolderTrust::Undecided(gap)) = folder_trust {
+        return Err(Issue::FolderTrust {
+            fix: gap.fix("claude"),
+        });
     }
     let Some(found) = version else {
         tracing::warn!(
@@ -471,436 +572,4 @@ fn readiness_from(
 }
 
 #[cfg(test)]
-mod tests {
-    use serde_json::json;
-
-    use super::*;
-
-    fn settings(value: Value) -> ClaudeRcSettings {
-        rc_settings_from(value.as_object().expect("object"))
-    }
-
-    #[test]
-    fn remote_session_env_accepts_each_upstream_marker() {
-        assert!(remote_session_env(Some(OsStr::new("token")), None));
-        assert!(remote_session_env(None, Some(OsStr::new("bridge"))));
-        assert!(!remote_session_env(Some(OsStr::new("")), None));
-        assert!(!remote_session_env(None, Some(OsStr::new("local"))));
-        assert!(!remote_session_env(None, None));
-    }
-
-    #[test]
-    fn remote_session_ancestry_matches_only_a_claude_remote_control_host() {
-        let remote = |pid| match pid {
-            30 => Some("/versions/claude --print --sdk-url wss://example".to_owned()),
-            20 => Some("/usr/local/bin/claude remote-control --spawn worktree".to_owned()),
-            _ => None,
-        };
-        assert!(claude_host_in(vec![30, 20, 10], remote));
-
-        let normal = |pid| match pid {
-            30 => Some("/usr/local/bin/claude --resume session".to_owned()),
-            20 => Some("zsh".to_owned()),
-            _ => None,
-        };
-        assert!(!claude_host_in(vec![30, 20, 10], normal));
-    }
-
-    #[test]
-    fn rc_settings_from_reads_flags_conflicts_and_ignores_empties() {
-        let parsed = settings(json!({
-            "disableRemoteControl": true,
-            "remoteControlAtStartup": true,
-        }));
-        assert!(parsed.disable_remote_control);
-        assert!(parsed.remote_control_at_startup);
-
-        // An apiKeyHelper or an env auth token (either key) is an auth conflict.
-        assert!(settings(json!({ "apiKeyHelper": "op read key" })).api_key_helper);
-        assert!(settings(json!({ "env": { "ANTHROPIC_API_KEY": "sk-ant" } })).env_auth_conflict);
-        assert!(settings(json!({ "env": { "ANTHROPIC_AUTH_TOKEN": "token" } })).env_auth_conflict);
-        assert!(settings(json!({ "env": { "CLAUDE_CODE_OAUTH_TOKEN": "token" } })).oauth_token_env);
-        assert!(
-            settings(json!({ "env": { "ANTHROPIC_BASE_URL": "https://gateway.example" } }))
-                .env_endpoint_conflict
-        );
-        assert!(
-            settings(json!({ "env": { "CLAUDE_CODE_USE_BEDROCK": "1" } })).env_endpoint_conflict
-        );
-        assert!(
-            !settings(json!({ "env": { "ANTHROPIC_BASE_URL": "https://api.anthropic.com/" } }))
-                .env_endpoint_conflict
-        );
-
-        // Falsey, empty, and empty-env values read as the default (nothing set).
-        assert_eq!(
-            settings(json!({
-                "disableRemoteControl": false,
-                "remoteControlAtStartup": false,
-                "apiKeyHelper": "",
-                "env": {
-                    "ANTHROPIC_API_KEY": "",
-                    "CLAUDE_CODE_OAUTH_TOKEN": ""
-                }
-            })),
-            ClaudeRcSettings::default()
-        );
-    }
-
-    #[test]
-    fn pane_auto_status_suppresses_settings_disabled_cases() {
-        let disabled = ClaudeRcSettings {
-            remote_control_at_startup: true,
-            disable_remote_control: true,
-            ..ClaudeRcSettings::default()
-        };
-        assert!(!pane_auto_enabled(&disabled, None));
-
-        let off = ClaudeRcSettings {
-            remote_control_at_startup: false,
-            ..ClaudeRcSettings::default()
-        };
-        assert!(!pane_auto_enabled(&off, None));
-    }
-
-    #[test]
-    fn pane_auto_status_uses_account_version_for_auth_gate() {
-        let conflict = ClaudeRcSettings {
-            remote_control_at_startup: true,
-            api_key_helper: true,
-            ..ClaudeRcSettings::default()
-        };
-
-        assert!(
-            pane_auto_enabled(&conflict, None),
-            "unknown versions apply only version-independent gates"
-        );
-        assert!(pane_auto_enabled(
-            &conflict,
-            Some(CliVersion::new(2, 1, 156))
-        ));
-        assert!(!pane_auto_enabled(
-            &conflict,
-            Some(CliVersion::new(2, 1, 157))
-        ));
-    }
-
-    #[test]
-    fn pane_auto_status_applies_the_custom_endpoint_gate_readiness_applies() {
-        let endpoint = ClaudeRcSettings {
-            remote_control_at_startup: true,
-            env_endpoint_conflict: true,
-            ..ClaudeRcSettings::default()
-        };
-
-        assert!(pane_auto_enabled(&endpoint, None));
-        assert!(pane_auto_enabled(
-            &endpoint,
-            Some(CliVersion::new(2, 1, 195))
-        ));
-        assert!(!pane_auto_enabled(
-            &endpoint,
-            Some(CUSTOM_ENDPOINT_BLOCKS_RC_SINCE)
-        ));
-        assert!(
-            readiness_from(
-                Some(CUSTOM_ENDPOINT_BLOCKS_RC_SINCE),
-                PathBuf::from("settings.json"),
-                endpoint,
-                false,
-                false,
-                false,
-                false,
-                None,
-            )
-            .is_err()
-        );
-    }
-
-    fn readiness_settings() -> ClaudeRcSettings {
-        ClaudeRcSettings::default()
-    }
-
-    fn settings_path() -> PathBuf {
-        PathBuf::from("/home/u/.claude/settings.json")
-    }
-
-    fn v(patch: u64) -> Option<CliVersion> {
-        Some(CliVersion::new(2, 1, patch))
-    }
-
-    fn consent(
-        state: remote_consent::ConsentState,
-    ) -> Option<(PathBuf, remote_consent::ConsentState)> {
-        Some((PathBuf::from("/home/u/.claude.json"), state))
-    }
-
-    fn decision(
-        version: Option<CliVersion>,
-        settings: ClaudeRcSettings,
-        env_api_key: bool,
-        env_auth_token: bool,
-        env_oauth_token: bool,
-    ) -> Result<Vec<String>, Issue> {
-        readiness_from(
-            version,
-            settings_path(),
-            settings,
-            env_api_key,
-            env_auth_token,
-            env_oauth_token,
-            false,
-            consent(remote_consent::ConsentState::Seeded),
-        )
-    }
-
-    #[test]
-    fn host_argv_uses_worktree_spawn() {
-        let argv = host_argv();
-        assert_eq!(
-            argv,
-            vec!["claude", "remote-control", "--spawn", "worktree"]
-        );
-        assert!(crate::pane::command_is_host(&argv.join(" ")));
-    }
-
-    #[test]
-    fn host_argv_preserves_login_and_host_identity() {
-        let env = BTreeMap::from([("CLAUDE_CONFIG_DIR".to_owned(), "/srv/work".to_owned())]);
-        let argv = host_argv_with_login(host_argv(), &env);
-        assert_eq!(
-            argv,
-            vec![
-                "env",
-                "CLAUDE_CONFIG_DIR=/srv/work",
-                "claude",
-                "remote-control",
-                "--spawn",
-                "worktree"
-            ]
-        );
-        assert!(crate::pane::command_is_host(&argv.join(" ")));
-        assert_eq!(
-            host_argv_with_login(host_argv(), &BTreeMap::new()),
-            host_argv()
-        );
-    }
-
-    #[test]
-    fn an_unrecorded_dialog_blocks_before_any_version_or_auth_gate() {
-        // An unanswered prompt holds the pane open, so it outranks every gate
-        // that only degrades the host.
-        let blocked = readiness_from(
-            None,
-            settings_path(),
-            readiness_settings(),
-            true,
-            true,
-            true,
-            true,
-            consent(remote_consent::ConsentState::Unseeded),
-        );
-        assert_eq!(
-            blocked,
-            Err(Issue::ConsentPending {
-                config_path: PathBuf::from("/home/u/.claude.json"),
-            })
-        );
-    }
-
-    #[test]
-    fn an_explicit_refusal_is_reported_rather_than_overridden() {
-        assert_eq!(
-            readiness_from(
-                v(215),
-                settings_path(),
-                readiness_settings(),
-                false,
-                false,
-                false,
-                false,
-                consent(remote_consent::ConsentState::Refused),
-            ),
-            Err(Issue::ConsentRefused {
-                config_path: PathBuf::from("/home/u/.claude.json"),
-            })
-        );
-    }
-
-    #[test]
-    fn an_unreadable_global_config_leaves_the_host_launchable() {
-        // Claude owns that file and may still recover it; refusing the room
-        // over a file RimZ cannot parse would be worse than letting it try.
-        assert!(
-            readiness_from(
-                v(215),
-                settings_path(),
-                readiness_settings(),
-                false,
-                false,
-                false,
-                false,
-                consent(remote_consent::ConsentState::Unreadable),
-            )
-            .is_ok()
-        );
-    }
-
-    #[test]
-    fn consent_issues_keep_claude_setup_guidance() {
-        let pending = Issue::ConsentPending {
-            config_path: PathBuf::from("/home/u/.claude.json"),
-        }
-        .to_string();
-        assert!(pending.contains("[remote_control] claude"));
-        assert!(pending.contains("remoteDialogSeen"));
-        assert!(pending.contains("/home/u/.claude.json"));
-
-        let refused = Issue::ConsentRefused {
-            config_path: PathBuf::from("/home/u/.claude.json"),
-        }
-        .to_string();
-        assert!(refused.contains("[remote_control] claude"));
-        assert!(refused.contains("remoteDialogSeen"));
-    }
-
-    #[test]
-    fn issues_keep_claude_setup_guidance() {
-        let issue = Issue::TooOld {
-            found: CliVersion::new(2, 1, 50),
-        }
-        .to_string();
-        assert!(issue.contains("[remote_control] claude"));
-        assert!(issue.contains(">= 2.1.51"));
-    }
-
-    #[test]
-    fn readiness_blocks_old_versions_and_disabled_settings() {
-        assert_eq!(
-            decision(v(50), readiness_settings(), false, false, false),
-            Err(Issue::TooOld {
-                found: CliVersion::new(2, 1, 50)
-            })
-        );
-
-        let settings = ClaudeRcSettings {
-            disable_remote_control: true,
-            ..readiness_settings()
-        };
-        assert_eq!(
-            decision(v(173), settings, false, false, false),
-            Err(Issue::RemoteControlDisabled {
-                settings_path: settings_path()
-            })
-        );
-    }
-
-    #[test]
-    fn readiness_auth_conflict_gate_starts_at_2_1_157() {
-        let settings = ClaudeRcSettings {
-            api_key_helper: true,
-            env_auth_conflict: true,
-            ..readiness_settings()
-        };
-        assert!(decision(v(156), settings.clone(), true, true, true).is_ok());
-        assert_eq!(
-            decision(v(157), settings, true, true, true),
-            Err(Issue::AuthConflict {
-                sources: vec![
-                    AuthConflictSource::ApiKeyEnv,
-                    AuthConflictSource::AuthTokenEnv,
-                    AuthConflictSource::OAuthTokenEnv,
-                    AuthConflictSource::ApiKeyHelperSetting,
-                    AuthConflictSource::SettingsEnv,
-                ]
-            })
-        );
-    }
-
-    #[test]
-    fn readiness_blocks_long_lived_oauth_tokens_from_env_or_settings() {
-        assert_eq!(
-            decision(v(247), readiness_settings(), false, false, true),
-            Err(Issue::AuthConflict {
-                sources: vec![AuthConflictSource::OAuthTokenEnv],
-            })
-        );
-
-        let settings = ClaudeRcSettings {
-            oauth_token_env: true,
-            ..readiness_settings()
-        };
-        assert_eq!(
-            decision(v(247), settings, false, false, false),
-            Err(Issue::AuthConflict {
-                sources: vec![AuthConflictSource::OAuthTokenEnv],
-            })
-        );
-
-        let guidance = Issue::AuthConflict {
-            sources: vec![AuthConflictSource::OAuthTokenEnv],
-        }
-        .to_string();
-        assert!(guidance.contains("CLAUDE_CODE_OAUTH_TOKEN"));
-        assert!(guidance.contains("claude auth login"));
-    }
-
-    #[test]
-    fn readiness_custom_endpoint_gate_starts_at_2_1_196() {
-        let settings = ClaudeRcSettings {
-            env_endpoint_conflict: true,
-            ..readiness_settings()
-        };
-        assert!(
-            readiness_from(
-                v(195),
-                settings_path(),
-                settings.clone(),
-                false,
-                false,
-                false,
-                true,
-                consent(remote_consent::ConsentState::Seeded),
-            )
-            .is_ok()
-        );
-        assert_eq!(
-            readiness_from(
-                v(196),
-                settings_path(),
-                settings,
-                false,
-                false,
-                false,
-                true,
-                consent(remote_consent::ConsentState::Seeded),
-            ),
-            Err(Issue::AuthConflict {
-                sources: vec![
-                    AuthConflictSource::EndpointEnv,
-                    AuthConflictSource::SettingsEndpoint,
-                ]
-            })
-        );
-    }
-
-    #[test]
-    fn unknown_version_applies_only_settings_independent_gate() {
-        let settings = ClaudeRcSettings {
-            api_key_helper: true,
-            ..readiness_settings()
-        };
-        assert!(decision(None, settings, true, false, true).is_ok());
-
-        let settings = ClaudeRcSettings {
-            disable_remote_control: true,
-            ..readiness_settings()
-        };
-        assert_eq!(
-            decision(None, settings, false, false, false),
-            Err(Issue::RemoteControlDisabled {
-                settings_path: settings_path()
-            })
-        );
-    }
-}
+mod tests;
