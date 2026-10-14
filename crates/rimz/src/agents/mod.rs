@@ -1056,6 +1056,8 @@ pub enum HookPreflightErr {
     HooksMissing,
     #[error("hooks untrusted: {hooks}")]
     HooksUntrusted { hooks: String, fix: String },
+    #[error("hooks disabled: {reason}")]
+    HooksDisabled { reason: String, fix: String },
 }
 
 /// Check the hook installation, trust, and requested turn-lifecycle coverage
@@ -1073,14 +1075,18 @@ pub fn preflight_hooks(
             reason: reason.to_owned(),
         });
     }
+    let integration = adapter.managed_integration();
+    if let Some(disabled) =
+        integration.and_then(|integration| integration.hooks_disabled(login_env))
+    {
+        return Err(disabled);
+    }
     if !adapter.hooks_installed(login_env) {
         return Err(HookPreflightErr::HooksMissing);
     }
-    let untrusted = adapter
-        .managed_integration()
-        .map_or_else(Vec::new, |integration| {
-            integration.untrusted_preflight_hooks(login_env)
-        });
+    let untrusted = integration.map_or_else(Vec::new, |integration| {
+        integration.untrusted_preflight_hooks(login_env)
+    });
     if !untrusted.is_empty() {
         return Err(HookPreflightErr::HooksUntrusted {
             hooks: untrusted.join(", "),

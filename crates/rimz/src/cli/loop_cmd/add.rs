@@ -716,7 +716,8 @@ fn resolve_resident_action(
             rimz::agents::TurnLifecycleNeed::NotUnsupported,
         ) {
             let fix = match &error {
-                rimz::agents::HookPreflightErr::HooksUntrusted { fix, .. } => fix.clone(),
+                rimz::agents::HookPreflightErr::HooksUntrusted { fix, .. }
+                | rimz::agents::HookPreflightErr::HooksDisabled { fix, .. } => fix.clone(),
                 rimz::agents::HookPreflightErr::TurnLifecycleUnsupported { .. } => {
                     "choose a prompt leader whose provider supports registration hooks".to_owned()
                 }

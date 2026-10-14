@@ -76,7 +76,7 @@ $ rimz hooks install --dry-run grok
     @@ no changes @@
 ```
 
-A file install would create diffs from `/dev/null` under an `@@ new file @@` header. RimZ builds every preview before printing any, so when one agent fails (an unmarked whole file, or a Kiro CLI below 2.31.0), the dry run prints only the error and exits 1.
+A file install would create diffs from `/dev/null` under an `@@ new file @@` header. RimZ builds every preview before printing any, so when one agent fails (an unmarked whole file, a Kiro CLI below 2.31.0, or Grok's `allow_managed_hooks_only` policy without RimZ's handler in `/etc/grok`), the dry run prints only the error and exits 1.
 
 ### Uninstall hooks
 
@@ -99,7 +99,7 @@ Both commands exit 0 on success and 1 on any of these:
 | --- | --- |
 | `install` with no `AGENT` finds no agent | `no supported coding agents detected on PATH (KINDS) - install an agent and rerun, or name one: rimz hooks install <agent>` |
 | `AGENT` is not a known kind | ``unknown agent integration `NAME` `` |
-| The named kind cannot take RimZ hooks (a plugin agent, or a Kiro CLI below 2.31.0) | `install failed for AGENT: REASON` |
+| The named kind cannot take RimZ hooks (a plugin agent, a Kiro CLI below 2.31.0, or Grok's `allow_managed_hooks_only` policy engaged with no `rimz hooks feed --source grok` handler in `/etc/grok/managed_config.toml` or `/etc/grok/requirements.toml`) | `install failed for AGENT: REASON` |
 | A whole-file path holds a file without the marker | `refusing to overwrite an unmarked user plugin at PATH; move it aside or remove it to let RimZ manage this file` (`extension` for Pi, `hook file` for Copilot) |
 | `uninstall` with no `AGENT` finds the machine's accounts config invalid | `only the providers' own homes were unhooked; fix the accounts config and rerun`, after unhooking those homes |
 

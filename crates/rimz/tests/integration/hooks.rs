@@ -2469,6 +2469,29 @@ fn cross_kind_grok_envelopes_are_dropped_before_recording_or_reply() {
 }
 
 #[test]
+fn grok_managed_policy_refuses_install_and_preflight_before_missing_hooks() {
+    let env = Env::new();
+    let home = env.home_root.join(".grok");
+    std::fs::create_dir_all(&home).unwrap();
+    let policy = home.join("managed_config.toml");
+    std::fs::write(&policy, "allow_managed_hooks_only = true").unwrap();
+    for args in [
+        vec!["agents", "grok", "summarize", "-p"],
+        vec!["hooks", "install", "grok"],
+    ] {
+        let output = env.rimz().args(args).output().unwrap();
+        assert!(!output.status.success());
+        let error = String::from_utf8_lossy(&output.stderr);
+        assert!(error.contains("allow_managed_hooks_only"), "{error}");
+        assert!(error.contains(&policy.display().to_string()), "{error}");
+        assert!(error.contains("rimz hooks feed --source grok"), "{error}");
+        assert!(error.contains("/etc/grok/managed_config.toml"), "{error}");
+        assert!(!error.contains("untrusted"), "{error}");
+        assert!(!env.agent_config_path("grok").exists());
+    }
+}
+
+#[test]
 fn internal_app_server_hook_is_suppressed_and_records_nothing() {
     // A `codex app-server` that RimZ cold-spawns for read-only enrichment fires
     // its own `SessionStart` hook on startup. The internal-app-server marker

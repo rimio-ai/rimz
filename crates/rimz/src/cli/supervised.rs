@@ -112,6 +112,9 @@ fn preflight_agent(
             hooks,
             fix
         ),
+        Err(HookPreflightErr::HooksDisabled { reason, fix }) => {
+            bail!("`rimz agents -p` cannot supervise {kind}: {reason}; {fix}")
+        }
     }
     if let Err(error) = rimz::agents::preflight_launch_dir(
         adapter,

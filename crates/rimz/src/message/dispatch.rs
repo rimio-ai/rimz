@@ -226,6 +226,12 @@ pub enum DispatchErr {
         hooks: String,
         fix: String,
     },
+    #[error("queued delivery cannot reach {kind}: {reason}; {fix}")]
+    HooksDisabled {
+        kind: AgentKind,
+        reason: String,
+        fix: String,
+    },
     #[error("`{label}` cannot receive now and has no durable session to park")]
     NoDurableSession { label: String },
     #[error("{label} is waiting on your input in its pane; answer it or pass --force")]
@@ -1092,6 +1098,13 @@ fn preflight_queue_hooks(
             Err(DispatchErr::HooksUntrusted {
                 kind: agent.kind.clone(),
                 hooks,
+                fix,
+            })
+        }
+        Err(crate::agents::HookPreflightErr::HooksDisabled { reason, fix }) => {
+            Err(DispatchErr::HooksDisabled {
+                kind: agent.kind.clone(),
+                reason,
                 fix,
             })
         }

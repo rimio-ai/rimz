@@ -373,6 +373,9 @@ fn map_reply_prepare_err(err: ReplyPrepareErr) -> anyhow::Error {
         ReplyPrepareErr::HooksUntrusted { kind, hooks, fix } => {
             anyhow::anyhow!("{kind} hooks are installed but not trusted ({hooks}); {fix}")
         }
+        ReplyPrepareErr::HooksDisabled { kind, reason, fix } => {
+            anyhow::anyhow!("--wait cannot use {kind}: {reason}; {fix}")
+        }
         ReplyPrepareErr::DependencyCycle {
             target,
             first_handle,

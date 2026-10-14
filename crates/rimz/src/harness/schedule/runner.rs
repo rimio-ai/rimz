@@ -1794,6 +1794,9 @@ fn preflight_kind(kind: &str, login: Option<&ProviderLogin>) -> Result<()> {
             hooks,
             fix
         ),
+        Err(HookPreflightErr::HooksDisabled { reason, fix }) => {
+            anyhow::bail!("{kind} cannot run as a scheduled turn: {reason}\n{fix}")
+        }
     }
 }
 
