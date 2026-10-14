@@ -615,7 +615,11 @@ pub struct ResumePlan {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CohortRelaunchState {
     Absent,
-    Present { focus_pane: Option<PaneId> },
+    Present {
+        focus_pane: Option<PaneId>,
+        leader: Option<AgentSessionId>,
+        members: Vec<AgentSessionId>,
+    },
     Closed,
 }
 
@@ -2858,6 +2862,7 @@ pub fn inspect_cohort_relaunch(
     worktree: &Path,
     cells: &[CohortCell],
     team: Option<&str>,
+    leader_index: Option<usize>,
 ) -> CohortRelaunchState {
     let target = crate::utils::path::normalize_path_lexical(worktree);
     let candidates = agents
@@ -2870,7 +2875,7 @@ pub fn inspect_cohort_relaunch(
         })
         .collect::<Vec<_>>();
     let members = match team {
-        Some(team) => crate::address::launch_occupants(candidates)
+        Some(team) => crate::address::launch_occupants(candidates.iter().copied())
             .into_iter()
             .filter(|agent| agent.team.as_deref() == Some(team))
             .collect::<Vec<_>>(),
@@ -2890,13 +2895,31 @@ pub fn inspect_cohort_relaunch(
     if present.is_empty() {
         return CohortRelaunchState::Closed;
     }
+    let leader = leader_index.and_then(|index| {
+        let member = match (team, cells.get(index).and_then(|cell| cell.role.as_deref())) {
+            (Some(_), Some(role)) => crate::address::role_holders(present.iter().copied(), role)
+                .into_iter()
+                .next(),
+            _ => match_cohort(&candidates, cells, team)
+                .get(index)
+                .copied()
+                .flatten(),
+        };
+        member
+            .filter(|agent| cohort_member_is_present(agent))
+            .map(|agent| agent.agent_id.clone())
+    });
     let focus_pane = present
-        .into_iter()
+        .iter()
         .filter(|agent| agent.pane.is_some())
         .max_by(|left, right| left.last_activity.cmp(&right.last_activity))
         .and_then(|agent| agent.pane.as_ref())
         .map(|pane| pane.pane_id.clone());
-    CohortRelaunchState::Present { focus_pane }
+    CohortRelaunchState::Present {
+        focus_pane,
+        leader,
+        members: present.iter().map(|agent| agent.agent_id.clone()).collect(),
+    }
 }
 
 fn cohort_member_is_present(agent: &AgentState) -> bool {

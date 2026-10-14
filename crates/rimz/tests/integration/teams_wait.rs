@@ -22,6 +22,7 @@ struct Fixture {
 #[test]
 fn teams_show_root_alias_misses_use_main() {
     let fixture = Fixture::new();
+    fixture.lane("a");
     for alias in [
         "main",
         "project",
@@ -33,9 +34,10 @@ fn teams_show_root_alias_misses_use_main() {
             .args(["teams", "show", &format!("forge#{alias}")])
             .output()
             .unwrap();
-        assert!(output.status.success(), "{output:?}");
-        let text = String::from_utf8_lossy(&output.stdout);
-        assert!(text.contains("no live instance in #main"), "{text}");
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        let text = String::from_utf8_lossy(&output.stderr);
+        assert!(text.contains("no live cohort in #main"), "{text}");
+        assert!(text.contains("live cohorts: #a"), "{text}");
     }
 }
 

@@ -312,11 +312,13 @@ The caller supplies the named worktree path without creating it, or the PR branc
 | History in that worktree | Outcome |
 | --- | --- |
 | none | continue into the ordinary launch path |
-| live members | focus the newest bound member and exit under `LaunchFocus::Take`; under `Keep`, report already running without a jump |
+| live members | with a prompt, dispatch to the live leader at the Done boundary and print the shared message receipt; without one, focus the newest bound member. `LaunchFocus::Keep` suppresses either focus jump. A missing leader refuses without sending |
 | closed, with dirty or unproven work | offer resume / fresh / cancel, default resume |
 | closed, clean and content-landed | offer remove / fresh / cancel, default cancel |
 
-Both offers read one line through `cli::choose`, which takes the default on Enter and returns `None` for an ambiguous prefix, an unknown word, or EOF. The caller maps `None` and an explicit `cancel` to the same no-op and prints `canceled; nothing launched`, so a declined relaunch is never silent. Without a terminal on stdin neither offer prompts. Each prints its alternatives instead: `relaunch_commands` builds the resume and `--fresh` spellings for both teams and inline layouts, and the remove offer prints `rimz worktree remove <name>`.
+The harness returns the leader's identity and present member identities with `Present`. A declared leader role uses the same claimed-wins `address::role_holders` rule as stage delivery; inline layouts and roleless team cells use the existing cohort matcher. The CLI dispatches to that identity with ordinary caller attribution, focuses its pane when allowed, and uses the other present members for missing-leader message hints. Resume's pre-registration prompt queue is unchanged.
+
+Both offers read one line through `cli::choose`, which takes the default on Enter and returns `None` for an ambiguous prefix, an unknown word, or EOF. The caller maps `None` and an explicit `cancel` to an error with `canceled; nothing launched` and exit 1. Without a terminal on stdin neither offer prompts, and both refuse with exit 1. Each refusal prints its alternatives: `relaunch_commands` builds shell-quoted, prompt-preserving resume and `--fresh` spellings for teams (`team#lane`) and inline layouts, and the remove offer also prints `rimz worktree remove <name>`.
 
 Named-team reconciliation considers every member of that team in the target worktree, including sibling roles when a single-role spec relaunches. Inline membership matches by launch group, then ordinal, then kind and role, with a final kind-only fallback for records that carry no role. Ended and confirmed-dead members both count as closed. A worktree holding only non-live launch placeholders has no cohort, by the same admission rule resume uses, and proceeds to a fresh launch.
 

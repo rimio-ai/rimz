@@ -236,14 +236,14 @@ Launching a named team, or an inline spec of two or more cells, into a named wor
 
 | Existing cohort | Result |
 | --- | --- |
-| live | Focuses its tab and exits, in any worktree, unless `--bg` or an agent caller keeps focus where it is. |
+| live | With a prompt, sends or queues it to the leader at a completed-turn boundary and prints a message receipt. If the leader is not live, refuses with exit 1 and commands to message the live members instead. Without a prompt, focuses the cohort and exits 0. Focus stays put with `--bg` or an agent caller. |
 | closed, RimZ-owned worktree with work in progress | Prompts `(resume/fresh/cancel)`, default `resume`. |
 | closed, RimZ-owned worktree that is clean and landed | Prompts `(remove/fresh/cancel)`, default `cancel`. `remove` deletes the worktree and its branch, then launches. |
 | closed, worktree RimZ did not create | Asks to enter the worktree, as above; add `--resume` to resume the cohort. |
 
 The same table applies to `--from-pr` when it reuses the tree holding the PR head branch. If its tips differ, the PR tip choice comes after the reconciliation prompt and before launching or resuming. A live cohort exits without moving the tip. Choosing `remove` resolves a fresh PR checkout instead. `--resume` and `--fresh` are rejected alongside `--from-pr`; to answer in advance, run the printed `-w <holder>` command instead.
 
-Enter takes the default, and an unrecognized answer or end of input prints `canceled; nothing launched`. Without a terminal on stdin, RimZ prints the resume-or-remove command and the `--fresh` command instead of prompting. A single-agent spec launches fresh without reconciling.
+Enter takes the default, and an unrecognized answer or end of input refuses with `canceled; nothing launched` and exit 1. Without a terminal on stdin, RimZ refuses with exit 1 and prints the resume-or-remove command and the `--fresh` command instead of prompting. Relaunch commands preserve the supplied prompt; teams use `team#lane` addresses. A single-agent spec launches fresh without reconciling.
 
 Two flags answer the prompt in advance. `--resume` (or `--continue`) resumes the prior cohort even when the worktree is clean or merged; see [Resume a cohort](#resume-a-cohort). `--fresh` starts new sessions in the existing checkout:
 

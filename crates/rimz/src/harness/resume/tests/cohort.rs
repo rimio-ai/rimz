@@ -1262,7 +1262,7 @@ fn cohort_resume_ignores_launched_children() {
             .expect("child does not compete with root");
             assert_eq!(resume_id(&plan.seeds[0]), Some("parent"));
             assert_eq!(
-                inspect_cohort_relaunch(&agents, Path::new("/code/feature"), &[cell], None,),
+                inspect_cohort_relaunch(&agents, Path::new("/code/feature"), &[cell], None, None),
                 CohortRelaunchState::Closed,
             );
         }
@@ -1798,9 +1798,12 @@ fn cohort_relaunch_normalizes_worktrees_and_keeps_named_team_siblings() {
             Path::new("/code/topic/../feature"),
             &[cohort_cell("claude", Some("planner"))],
             Some("forge"),
+            None,
         ),
         CohortRelaunchState::Present {
             focus_pane: Some(pane_id("terminal_reviewer")),
+            leader: None,
+            members: vec!["reviewer".into()],
         }
     );
 }
@@ -1840,10 +1843,13 @@ fn cohort_matching_uses_one_occupant_per_launch_instance() {
             &live_pool,
             Path::new("/code/feature"),
             std::slice::from_ref(&cell),
-            Some("forge")
+            Some("forge"),
+            None,
         ),
         CohortRelaunchState::Present {
             focus_pane: Some(pane_id("terminal_coder")),
+            leader: None,
+            members: vec!["current".into()],
         }
     );
 
@@ -1866,9 +1872,58 @@ fn cohort_matching_uses_one_occupant_per_launch_instance() {
             &closed_pool,
             Path::new("/code/feature"),
             &[cell],
-            Some("forge")
+            Some("forge"),
+            None,
         ),
         CohortRelaunchState::Closed
+    );
+}
+
+#[test]
+fn cohort_relaunch_selects_the_leader_not_the_freshest_member() {
+    let agents = vec![
+        team_agent("claude", "planner", "planner", "/code/feature", 10),
+        team_agent("codex", "reviewer", "reviewer", "/code/feature", 1),
+    ];
+    let cells = vec![
+        cohort_cell("claude", Some("planner")),
+        cohort_cell("codex", Some("reviewer")),
+    ];
+    let state = inspect_cohort_relaunch(
+        &agents,
+        Path::new("/code/feature"),
+        &cells,
+        Some("forge"),
+        Some(0),
+    );
+    assert!(
+        matches!(state, CohortRelaunchState::Present { leader: Some(ref leader), .. } if leader.as_str() == "planner")
+    );
+    let inline = vec![
+        inline_agent("claude", "first", "group", 0, "/code/feature", 10),
+        inline_agent("codex", "second", "group", 1, "/code/feature", 1),
+    ];
+    let cells = vec![cohort_cell("claude", None), cohort_cell("codex", None)];
+    let state = inspect_cohort_relaunch(&inline, Path::new("/code/feature"), &cells, None, Some(0));
+    assert!(
+        matches!(state, CohortRelaunchState::Present { leader: Some(ref leader), .. } if leader.as_str() == "first")
+    );
+    let roleless_team = inline
+        .into_iter()
+        .map(|mut agent| {
+            agent.team = Some("pair".into());
+            agent
+        })
+        .collect::<Vec<_>>();
+    let state = inspect_cohort_relaunch(
+        &roleless_team,
+        Path::new("/code/feature"),
+        &cells,
+        Some("pair"),
+        Some(0),
+    );
+    assert!(
+        matches!(state, CohortRelaunchState::Present { leader: Some(ref leader), .. } if leader.as_str() == "first")
     );
 }
 
@@ -1947,6 +2002,8 @@ fn cohort_relaunch_presence_table() {
             None,
             CohortRelaunchState::Present {
                 focus_pane: Some(pane_id("terminal_pane")),
+                leader: None,
+                members: vec!["pane".into()],
             },
         ),
         (
@@ -1961,7 +2018,11 @@ fn cohort_relaunch_presence_table() {
             vec![live_without_pane],
             &one_cell,
             None,
-            CohortRelaunchState::Present { focus_pane: None },
+            CohortRelaunchState::Present {
+                focus_pane: None,
+                leader: None,
+                members: vec!["live".into()],
+            },
         ),
         (
             "newest inline group decides, and it is closed",
@@ -1977,6 +2038,8 @@ fn cohort_relaunch_presence_table() {
             None,
             CohortRelaunchState::Present {
                 focus_pane: Some(pane_id("terminal_fresher")),
+                leader: None,
+                members: vec!["older".into(), "fresher".into()],
             },
         ),
         (
@@ -1991,7 +2054,11 @@ fn cohort_relaunch_presence_table() {
             vec![live_placeholder],
             &one_cell,
             Some("forge"),
-            CohortRelaunchState::Present { focus_pane: None },
+            CohortRelaunchState::Present {
+                focus_pane: None,
+                leader: None,
+                members: vec!["launch_019f2cecea067320b667c5946d266e64".into()],
+            },
         ),
         (
             "a partially adopted team still offers resume",
@@ -2011,7 +2078,7 @@ fn cohort_relaunch_presence_table() {
         ),
     ] {
         assert_eq!(
-            inspect_cohort_relaunch(&agents, Path::new("/code/feature"), cells, team),
+            inspect_cohort_relaunch(&agents, Path::new("/code/feature"), cells, team, None),
             expected,
             "{label}"
         );

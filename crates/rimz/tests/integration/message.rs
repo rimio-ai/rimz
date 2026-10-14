@@ -2025,6 +2025,127 @@ fn sweep_clears_a_recorded_no_pane_blocker_once_the_pane_returns() {
 }
 
 #[test]
+fn live_cohort_prompt_reaches_only_its_leader_from_both_scenes() {
+    for scene in ["teams", "agents"] {
+        let env = Env::new();
+        env.record(&env.project_root);
+        env.install_agent_hooks("claude");
+        std::fs::write(
+            env.rimz_home().join("config.toml"),
+            "[agents]\nisolation = 'host'\n",
+        )
+        .unwrap();
+        crate::common::write_definition(
+            &env,
+            "agents",
+            "claude",
+            "description: Claude base",
+            "Follow instructions.",
+        );
+        crate::common::write_definition(
+            &env,
+            "agents",
+            "worker",
+            "description: Team worker\nagent: claude\ntools: []",
+            "Work.",
+        );
+        crate::common::write_definition(
+            &env,
+            "teams",
+            "forge",
+            "leader: planner\nstages: [Plan, Review]\nroles:\n  - {role: planner, agent: worker, owns: [Plan]}\n  - {role: reviewer, agent: worker, owns: [Review]}",
+            "Work together.",
+        );
+        let worktree = env.home_root.join("project-worktrees/topic");
+        std::fs::create_dir_all(&worktree).unwrap();
+        for role in ["planner", "reviewer"] {
+            append_lifecycle(
+                &env,
+                "claude",
+                "SessionStart",
+                role,
+                LifecycleSignal::Registered,
+                |observation| {
+                    observation.agent_name = Some(role.into());
+                    observation.launch.team = Some("forge".into());
+                    observation.launch.role = Some(role.into());
+                    observation.launch.profile = Some("worker".into());
+                    observation.launch.channel = Some("topic".into());
+                    observation.worktree_path = Some(worktree.display().to_string());
+                    observation.pane_id = Some(PaneId::from_parts(
+                        MuxName::Zellij,
+                        if role == "planner" {
+                            "terminal_1"
+                        } else {
+                            "terminal_2"
+                        },
+                    ));
+                },
+            );
+        }
+        let workspace = env.resolve_workspace(&env.project_root);
+        let shim = crate::common::write_env_dump_shim(&env, "claude");
+        let panes = env.write_pane_fixture(&["terminal_1", "terminal_2"].map(|id| {
+            let mut pane = agent_pane(&env, "claude");
+            pane.pane_id = PaneId::from_parts(MuxName::Zellij, id);
+            pane.session_name = workspace.session_name.clone();
+            pane.cwd = Some(worktree.display().to_string());
+            pane
+        }));
+        let launch = |prompt: Option<&str>| {
+            let mut command = traced_rimz(&env, "live-cohort.log");
+            command
+                .env("PATH", crate::common::path_with_front(&shim))
+                .env("ZELLIJ_PANE_ID", "99")
+                .env("RIMZ_TEST_PANE_LIST", &panes)
+                .env(
+                    "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
+                    format!("{} [Created 1s ago]\n", workspace.session_name),
+                )
+                .args(["--mux", "zellij", scene, "forge", "-w", "topic", "--bg"]);
+            if let Some(prompt) = prompt {
+                command.arg(prompt);
+            }
+            command.output().unwrap()
+        };
+        let no_prompt = launch(None);
+        assert!(no_prompt.status.success(), "{no_prompt:?}");
+        assert!(env.store().list_messages().unwrap().is_empty());
+        let output = launch(Some("review the design"));
+        assert!(output.status.success(), "{output:?}");
+        let messages = env.store().list_messages().unwrap();
+        assert_eq!(messages.len(), 1, "{scene}: {output:?}");
+        assert_eq!(messages[0].agent_id, AgentSessionId::from("planner"));
+        assert_eq!(messages[0].sender, MessageSender::Human);
+        assert_eq!(messages[0].gate, DeliveryGate::Done);
+        let receipt = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(receipt.contains("@planner#topic"), "{receipt}");
+        assert!(
+            receipt.contains("already running; prompt sent to its leader"),
+            "{receipt}"
+        );
+        append_lifecycle(
+            &env,
+            "claude",
+            "SessionEnd",
+            "planner",
+            LifecycleSignal::Ended,
+            |_| {},
+        );
+        let refused = launch(Some("try again"));
+        assert_eq!(refused.status.code(), Some(1), "{refused:?}");
+        let error = String::from_utf8_lossy(&refused.stderr);
+        assert!(error.contains("leader is not live"), "{error}");
+        assert!(error.contains("rimz message '@reviewer#topic'"), "{error}");
+        assert_eq!(env.store().list_messages().unwrap().len(), 1);
+    }
+}
+
+#[test]
 fn resume_prompt_wakes_and_sends_after_registration_without_a_stop() {
     let env = Env::new();
     env.record(&env.project_root);

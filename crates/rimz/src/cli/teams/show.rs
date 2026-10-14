@@ -20,13 +20,6 @@ pub(super) fn run(
     let machine = rimz::config::MachineConfig::load().context("loading machine config")?;
     let reports = super::list::load_catalog(globals, lane, &machine)?;
     let selected = select_reports(&reports, name)?;
-    if json {
-        return if name.is_some() {
-            render::json_pretty(&selected[0])
-        } else {
-            render::json_pretty(&selected)
-        };
-    }
     let lane = if let Some(lane) = lane {
         let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())
             .context("resolving current workspace")?;
@@ -40,6 +33,20 @@ pub(super) fn run(
     } else {
         None
     };
+    if let (Some(name), Some(lane)) = (name, lane)
+        && selected[0].instances.is_empty()
+    {
+        let all = super::list::load_catalog(globals, None, &machine)?;
+        let report = select_reports(&all, Some(name))?[0];
+        return Err(missing_cohort(report, lane));
+    }
+    if json {
+        return if name.is_some() {
+            render::json_pretty(&selected[0])
+        } else {
+            render::json_pretty(&selected)
+        };
+    }
     let mut out = render::out();
     if selected.is_empty() {
         writeln!(
@@ -93,6 +100,23 @@ fn select_reports<'a>(
     Ok(vec![report])
 }
 
+fn missing_cohort(report: &TeamReport, lane: &str) -> anyhow::Error {
+    let team = &report.name;
+    let lanes = report
+        .instances
+        .iter()
+        .map(|instance| format!("#{}", instance.channel))
+        .collect::<Vec<_>>()
+        .join(", ");
+    if lanes.is_empty() {
+        anyhow::anyhow!(
+            "{team} has no live cohort in #{lane}; resume: rimz teams resume {team}#{lane}"
+        )
+    } else {
+        anyhow::anyhow!("{team} has no live cohort in #{lane}; live cohorts: {lanes}")
+    }
+}
+
 fn write_report(
     w: &mut impl Write,
     report: &TeamReport,
@@ -104,15 +128,7 @@ fn write_report(
         return write_cohort_table(w, report, now);
     };
     if report.instances.is_empty() {
-        writeln!(
-            w,
-            "{}",
-            render::paint(
-                render::palette::muted(),
-                &format!("no live instance in #{lane}")
-            )
-        )?;
-        writeln!(w)?;
+        return Err(missing_cohort(report, lane));
     }
     for instance in &report.instances {
         write_lane(w, &report.name, instance, now)?;
@@ -711,7 +727,17 @@ mod tests {
 
     #[test]
     fn human_show_without_live_instance() {
-        insta::assert_snapshot!(rendered(&report(Vec::new()), Some("ended-lane")));
+        let error = write_report(
+            &mut Vec::new(),
+            &report(Vec::new()),
+            Some("ended-lane"),
+            jiff::Timestamp::now(),
+        )
+        .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "forge has no live cohort in #ended-lane; resume: rimz teams resume forge#ended-lane"
+        );
     }
 
     #[test]
@@ -720,6 +746,9 @@ mod tests {
             let mut report = report(instances);
             report.roles.clear();
             for lane in [None, Some("feat-x")] {
+                if report.instances.is_empty() && lane.is_some() {
+                    continue;
+                }
                 let output = rendered(&report, lane);
                 assert!(!output.contains("\n\n\n"));
                 assert!(!output.ends_with("\n\n"));
@@ -729,8 +758,15 @@ mod tests {
 
     #[test]
     fn human_show_answers_when_a_selected_lane_is_not_live() {
-        let output = rendered(&report(Vec::new()), Some("ended-lane"));
-        assert!(output.contains("no live instance in #ended-lane"));
+        assert!(
+            write_report(
+                &mut Vec::new(),
+                &report(Vec::new()),
+                Some("ended-lane"),
+                jiff::Timestamp::now()
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -739,6 +775,9 @@ mod tests {
         second.channel = "feat-y".to_owned();
         for instances in [vec![], vec![live_instance()], vec![live_instance(), second]] {
             for lane in [None, Some("feat-x")] {
+                if instances.is_empty() && lane.is_some() {
+                    continue;
+                }
                 let output = rendered(&report(instances.clone()), lane);
                 for hint in ["Reach:", "Focus:", "Launch:", "Resume:"] {
                     assert!(!output.contains(hint));

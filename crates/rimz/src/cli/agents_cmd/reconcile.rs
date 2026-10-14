@@ -1,11 +1,15 @@
 use super::*;
+use crate::cli::send;
 use rimz::harness::ancestry::LaunchFocus;
+use rimz::message::dispatch::{DispatchMode, DispatchRequest};
+use rimz::store::message::DeliveryGate;
 use std::io::IsTerminal;
 
 pub(super) enum Reconciled {
     Continue,
     Removed,
     Done,
+    PromptDispatched,
     Resume(PathBuf),
 }
 
@@ -20,6 +24,8 @@ pub(super) fn reconcile_cohort_launch(
     spec_display: &str,
     team: Option<&str>,
     cells: &[rimz::harness::plan::CohortCell],
+    leader_index: Option<usize>,
+    prompt: Option<&str>,
     fresh: bool,
     focus: LaunchFocus,
 ) -> Result<Reconciled> {
@@ -28,9 +34,86 @@ pub(super) fn reconcile_cohort_launch(
     }
     let projection = store.runtime_projection(rimz::RuntimeScope::Audit)?;
     let subject = cohort_subject(spec_display, team);
-    match rimz::harness::resume::inspect_cohort_relaunch(&projection.agents, path, cells, team) {
+    match rimz::harness::resume::inspect_cohort_relaunch(
+        &projection.agents,
+        path,
+        cells,
+        team,
+        leader_index,
+    ) {
         rimz::harness::resume::CohortRelaunchState::Absent => Ok(Reconciled::Continue),
-        rimz::harness::resume::CohortRelaunchState::Present { focus_pane } => {
+        rimz::harness::resume::CohortRelaunchState::Present {
+            mut focus_pane,
+            leader,
+            members,
+        } => {
+            if let Some(prompt) = prompt {
+                let peers = projection.agents.iter().collect::<Vec<_>>();
+                let leader = leader
+                    .as_ref()
+                    .and_then(|id| projection.agents.iter().find(|agent| &agent.agent_id == id));
+                let Some(leader) = leader else {
+                    let hints = members
+                        .iter()
+                        .filter_map(|id| {
+                            projection.agents.iter().find(|agent| &agent.agent_id == id)
+                        })
+                        .map(|member| {
+                            shell_command([
+                                "rimz",
+                                "message",
+                                &rimz::address::agent_handle(member, &peers, true),
+                                prompt,
+                            ])
+                        })
+                        .collect::<Vec<_>>()
+                        .join("; ");
+                    bail!(
+                        "{}#{name} is already running, but its leader is not live; message a live member: {hints}",
+                        team.unwrap_or(spec_display)
+                    );
+                };
+                let caller = send::resolve_caller(store)?;
+                let channel = crate::cli::current_channel(workspace, Some(store));
+                let target = format!("@{}", leader.agent_id);
+                let result = rimz::message::dispatch::dispatch(
+                    workspace,
+                    store,
+                    DispatchRequest {
+                        target: target.clone(),
+                        text: prompt.to_owned(),
+                        target_scope: leader.channel(),
+                        current_channel: channel.address_context(),
+                        sender: send::sender_for(caller.as_ref(), channel.as_deref(), false),
+                        caller,
+                        automated: false,
+                        allow_fanout: false,
+                        reply: None,
+                        mux: Some(backend.name()),
+                        enter: true,
+                        force: false,
+                        auto_compact: None,
+                        mode: DispatchMode::Boundary {
+                            gate: DeliveryGate::Done,
+                            not_before: None,
+                            after: Vec::new(),
+                            when: Vec::new(),
+                        },
+                    },
+                )?;
+                writeln!(
+                    std::io::stderr().lock(),
+                    "{}#{name} is already running; prompt sent to its leader",
+                    team.unwrap_or(spec_display)
+                )?;
+                send::report_dispatch(
+                    rimz::message::DeliveryKind::Boundary,
+                    &target,
+                    &result.outcomes,
+                    &result.compacted,
+                )?;
+                focus_pane = leader.pane.as_ref().map(|pane| pane.pane_id.clone());
+            }
             if focus.takes_focus()
                 && let Some(pane_id) = focus_pane
             {
@@ -42,11 +125,17 @@ pub(super) fn reconcile_cohort_launch(
                     &workspace.session_name,
                     pane_id,
                 )?;
+                if prompt.is_some() {
+                    return Ok(Reconciled::PromptDispatched);
+                }
                 writeln!(
                     std::io::stderr().lock(),
                     "{subject} is already running in worktree `{name}`; focused it"
                 )?;
                 return Ok(Reconciled::Done);
+            }
+            if prompt.is_some() {
+                return Ok(Reconciled::PromptDispatched);
             }
             writeln!(
                 std::io::stderr().lock(),
@@ -61,7 +150,8 @@ pub(super) fn reconcile_cohort_launch(
             if fresh {
                 return launch_fresh(name, &subject);
             }
-            let (resume_command, fresh_command) = relaunch_commands(name, spec_display, team);
+            let (resume_command, fresh_command) =
+                relaunch_commands(name, spec_display, team, prompt);
             // Cohort liveness was already decided above, so Git state alone
             // separates "recreate it" from "resume into it". A concurrent
             // cleanup may still remove the checkout after this decision.
@@ -77,11 +167,20 @@ pub(super) fn reconcile_cohort_launch(
                     path,
                     &subject,
                     &protections,
+                    &resume_command,
                     &fresh_command,
                     &memo,
+                    std::io::stdin().is_terminal(),
                 )
             } else {
-                resume_or_done(name, &subject, path, &resume_command, &fresh_command)
+                resume_or_done(
+                    name,
+                    &subject,
+                    path,
+                    &resume_command,
+                    &fresh_command,
+                    std::io::stdin().is_terminal(),
+                )
             };
             memo.save();
             result
@@ -110,13 +209,12 @@ fn resume_or_done(
     path: &Path,
     resume_command: &str,
     fresh_command: &str,
+    terminal: bool,
 ) -> Result<Reconciled> {
-    if !std::io::stdin().is_terminal() {
-        writeln!(
-            std::io::stderr().lock(),
+    if !terminal {
+        bail!(
             "worktree `{name}` has work in progress; resume with `{resume_command}` or launch fresh with `{fresh_command}`"
-        )?;
-        return Ok(Reconciled::Done);
+        );
     }
     match crate::cli::choose(
         &format!(
@@ -127,7 +225,7 @@ fn resume_or_done(
     )? {
         Some(0) => Ok(Reconciled::Resume(path.to_owned())),
         Some(1) => launch_fresh(name, subject),
-        _ => canceled(),
+        _ => canceled(resume_command, fresh_command),
     }
 }
 
@@ -140,15 +238,15 @@ fn recreate_or_done(
     path: &Path,
     subject: &str,
     protections: &rimz::worktree::ProtectionSet,
+    resume_command: &str,
     fresh_command: &str,
     memo: &rimz::worktree::LandedMemo,
+    terminal: bool,
 ) -> Result<Reconciled> {
-    if !std::io::stdin().is_terminal() {
-        writeln!(
-            std::io::stderr().lock(),
-            "worktree `{name}` is clean and landed; recreate {subject} with `rimz worktree remove {name}` then relaunch, or launch fresh into it with `{fresh_command}`"
-        )?;
-        return Ok(Reconciled::Done);
+    if !terminal {
+        bail!(
+            "worktree `{name}` is clean and landed; recreate {subject} with `rimz worktree remove {name}` then relaunch, resume with `{resume_command}`, or launch fresh into it with `{fresh_command}`"
+        );
     }
     match crate::cli::choose(
         &format!(
@@ -159,7 +257,7 @@ fn recreate_or_done(
     )? {
         Some(0) => {}
         Some(1) => return launch_fresh(name, subject),
-        _ => return canceled(),
+        _ => return canceled(resume_command, fresh_command),
     }
     let removed = match rimz::worktree::remove(
         workspace.launch_repo_root(),
@@ -205,22 +303,38 @@ fn launch_fresh(name: &str, subject: &str) -> Result<Reconciled> {
     Ok(Reconciled::Continue)
 }
 
-fn canceled() -> Result<Reconciled> {
-    writeln!(std::io::stderr().lock(), "canceled; nothing launched")?;
-    Ok(Reconciled::Done)
+fn canceled(resume_command: &str, fresh_command: &str) -> Result<Reconciled> {
+    bail!(
+        "canceled; nothing launched; resume with `{resume_command}` or launch fresh with `{fresh_command}`"
+    )
 }
 
-fn relaunch_commands(name: &str, spec_display: &str, team: Option<&str>) -> (String, String) {
-    match team {
-        Some(team) => (
-            format!("rimz teams resume {team} -w {name}"),
-            format!("rimz teams {team} -w {name} --fresh"),
+fn relaunch_commands(
+    name: &str,
+    spec_display: &str,
+    team: Option<&str>,
+    prompt: Option<&str>,
+) -> (String, String) {
+    let target = team.map(|team| format!("{team}#{name}"));
+    let (mut resume, mut fresh) = match target.as_deref() {
+        Some(target) => (
+            vec!["rimz", "teams", "resume", target],
+            vec!["rimz", "teams", target, "--fresh"],
         ),
         None => (
-            format!("rimz agents {spec_display} -w {name} --resume"),
-            format!("rimz agents {spec_display} -w {name} --fresh"),
+            vec!["rimz", "agents", spec_display, "-w", name, "--resume"],
+            vec!["rimz", "agents", spec_display, "-w", name, "--fresh"],
         ),
+    };
+    if let Some(prompt) = prompt {
+        if team.is_some() && prompt.starts_with('-') {
+            resume.push("--");
+            fresh.push("--");
+        }
+        resume.push(prompt);
+        fresh.push(prompt);
     }
+    (shell_command(resume), shell_command(fresh))
 }
 
 #[cfg(test)]
@@ -228,21 +342,95 @@ mod tests {
     use super::*;
 
     #[test]
+    fn cancel_refuses_without_launching() {
+        assert!(canceled("resume", "fresh").is_err());
+    }
+
+    #[test]
+    fn nonterminal_work_in_progress_refuses() {
+        assert!(
+            resume_or_done(
+                "topic",
+                "forge",
+                Path::new("/topic"),
+                "resume",
+                "fresh",
+                false
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn nonterminal_clean_landed_refuses() {
+        let dir = tempfile::tempdir().unwrap();
+        let id = rimz::WorkspaceId::from_project_root(dir.path());
+        let workspace = rimz::ResolvedWorkspace {
+            workspace_id: id.clone(),
+            project_root: dir.path().into(),
+            cwd_project_root: None,
+            root_class: rimz::workspace::RootClass::Directory,
+            worktree_root: dir.path().into(),
+            worktree_branch: None,
+            session_name: "reconcile-test".into(),
+            mux_hint: None,
+        };
+        let store = rimz::Store::open(
+            rimz::StatePaths::under(id.clone(), &dir.path().join("state")).unwrap(),
+            rimz::RuntimePaths::under(id, &dir.path().join("runtime")).unwrap(),
+        )
+        .unwrap();
+        let result = recreate_or_done(
+            &workspace,
+            &rimz::config::MachineConfig::default(),
+            &store,
+            "topic",
+            dir.path(),
+            "forge",
+            &rimz::worktree::ProtectionSet::default(),
+            "resume",
+            "fresh",
+            &rimz::worktree::LandedMemo::load(dir.path()),
+            false,
+        );
+        assert!(result.is_err());
+        assert!(dir.path().exists());
+    }
+
+    #[test]
     fn relaunch_commands_cover_teams_and_inline_specs() {
         assert_eq!(
-            relaunch_commands("topic", "forge", Some("forge")),
+            relaunch_commands("topic", "forge", Some("forge"), None),
             (
-                "rimz teams resume forge -w topic".to_owned(),
-                "rimz teams forge -w topic --fresh".to_owned(),
+                "rimz teams resume 'forge#topic'".to_owned(),
+                "rimz teams 'forge#topic' --fresh".to_owned(),
             )
         );
         assert_eq!(
-            relaunch_commands("topic", "claude,codex", None),
+            relaunch_commands("topic", "claude,codex", None, None),
             (
-                "rimz agents claude,codex -w topic --resume".to_owned(),
-                "rimz agents claude,codex -w topic --fresh".to_owned(),
+                "rimz agents 'claude,codex' -w topic --resume".to_owned(),
+                "rimz agents 'claude,codex' -w topic --fresh".to_owned(),
             )
         );
+    }
+
+    #[test]
+    fn relaunch_commands_preserve_prompt_as_one_argument() {
+        for (team, prompt) in [
+            (Some("forge"), "review 'this' and $(that)"),
+            (None, "review 'this' and $(that)"),
+            (Some("forge"), "--fresh"),
+        ] {
+            let (resume, fresh) = relaunch_commands("topic", "claude,codex", team, Some(prompt));
+            for command in [resume, fresh] {
+                let words = shlex::split(&command).unwrap();
+                assert_eq!(words.last().map(String::as_str), Some(prompt));
+                if prompt.starts_with('-') {
+                    assert_eq!(words[words.len() - 2], "--");
+                }
+            }
+        }
     }
 
     #[test]
