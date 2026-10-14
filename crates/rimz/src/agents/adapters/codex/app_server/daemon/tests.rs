@@ -1,9 +1,215 @@
 use super::*;
 
 #[test]
+fn managed_layouts_resolve_in_priority_order() {
+    let home = tempfile::tempdir().expect("tempdir");
+    let paths = [
+        "packages/app-server-daemon/current/bin/codex",
+        "packages/app-server-daemon/current/codex",
+        "packages/standalone/current/bin/codex",
+        "packages/standalone/current/codex",
+    ];
+    for path in paths.into_iter().rev() {
+        let bin = home.path().join(path);
+        std::fs::create_dir_all(bin.parent().expect("parent")).expect("mkdir");
+        std::fs::write(&bin, b"").expect("binary");
+        assert_eq!(managed_bin_under(home.path()), Some(bin), "{path}");
+    }
+}
+
+#[test]
+fn dedicated_only_install_is_ready() {
+    let home = tempfile::tempdir().expect("tempdir");
+    let bin = home
+        .path()
+        .join("packages/app-server-daemon/current/bin/codex");
+    std::fs::create_dir_all(bin.parent().expect("parent")).expect("mkdir");
+    std::fs::write(bin, b"").expect("binary");
+    let env = BTreeMap::from([("CODEX_HOME".into(), home.path().display().to_string())]);
+    assert!(matches!(
+        readiness(true, &env),
+        crate::agents::runtime_control::RuntimeControlReadiness::Ready { .. }
+    ));
+}
+
+#[test]
+fn updater_only_records_do_not_name_a_writer() {
+    for name in ["daemon-updater.pid", "app-server-updater.pid"] {
+        let home = tempfile::tempdir().expect("tempdir");
+        let state = home.path().join("app-server-daemon");
+        std::fs::create_dir_all(&state).expect("mkdir");
+        let pid = std::process::id();
+        std::fs::write(
+            state.join(name),
+            serde_json::json!({"pid": pid, "processStartTime": start_time(pid)}).to_string(),
+        )
+        .expect("record");
+        assert!(!app_server_runs_under(home.path()));
+    }
+}
+
+#[test]
+fn dedicated_writer_is_not_clear() {
+    let home = tempfile::tempdir().expect("tempdir");
+    let pid = std::process::id();
+    write_app_record(
+        home.path(),
+        &serde_json::json!({"pid": pid, "processStartTime": start_time(pid)}).to_string(),
+    );
+    std::fs::rename(
+        home.path().join("app-server-daemon/app-server.pid"),
+        home.path().join("app-server-daemon/daemon.pid"),
+    )
+    .expect("rename");
+    assert!(app_server_runs_under(home.path()));
+    let env = BTreeMap::from([("CODEX_HOME".into(), home.path().display().to_string())]);
+    assert_eq!(writes_history(&env), DaemonSessions::Unknown);
+    let _daemon = StandInDaemon::serve(home.path(), serde_json::json!({"data": ["thread"]}));
+    assert_eq!(
+        writes_history(&env),
+        DaemonSessions::Live(NonZeroUsize::new(1).expect("one"))
+    );
+}
+
+#[test]
+fn pending_restore_refuses_without_opening_socket() {
+    let home = tempfile::tempdir().expect("tempdir");
+    let state = home.path().join("app-server-daemon");
+    std::fs::create_dir_all(&state).expect("mkdir");
+    std::fs::write(state.join("loaded-threads.json"), b"{}").expect("handoff");
+    let daemon = StandInDaemon::serve(home.path(), serde_json::json!({"data": []}));
+    assert_eq!(sessions_under(home.path()), DaemonSessions::Unknown);
+    write_app_record(
+        home.path(),
+        r#"{"pid":4294967295,"processStartTime":"dead"}"#,
+    );
+    assert_eq!(sessions_under(home.path()), DaemonSessions::Unknown);
+    assert_eq!(daemon.connections(), 0);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn native_pid_identity_takes_precedence_and_accepts_alias() {
+    let pid = std::process::id();
+    let boot = std::fs::read_to_string("/proc/sys/kernel/random/boot_id").expect("boot id");
+    let ticks = crate::proc::stat_metrics(pid).expect("stat").start_ticks;
+    for key in ["processIdentity", "linuxProcessIdentity"] {
+        let record: PidRecord = serde_json::from_value(serde_json::json!({"pid": pid, "processStartTime": "garbage", key: {"bootId": boot.trim(), "startTicks": ticks}})).expect("record");
+        assert!(pid_record_matches(&record), "{key}");
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn native_pid_identity_mismatch_is_final() {
+    let pid = std::process::id();
+    let boot = std::fs::read_to_string("/proc/sys/kernel/random/boot_id").expect("boot id");
+    let ticks = crate::proc::stat_metrics(pid).expect("stat").start_ticks;
+    for identity in [
+        serde_json::json!({"bootId": boot.trim(), "startTicks": ticks + 1}),
+        serde_json::json!({"bootId": "wrong", "startTicks": ticks}),
+    ] {
+        let record: PidRecord = serde_json::from_value(serde_json::json!({"pid": pid, "processStartTime": start_time(pid), "processIdentity": identity})).expect("record");
+        assert!(!pid_record_matches(&record));
+    }
+}
+
+#[test]
+fn unfamiliar_pid_identity_falls_back_to_text() {
+    let home = tempfile::tempdir().expect("tempdir");
+    let path = home.path().join("record");
+    let pid = std::process::id();
+    for identity in [
+        serde_json::json!({"bootSessionUuid": "mac", "uniqueId": 1}),
+        serde_json::json!({"future": true}),
+    ] {
+        std::fs::write(&path, serde_json::json!({"pid": pid, "processStartTime": start_time(pid), "processIdentity": identity, "executableIdentity": {}}).to_string()).expect("write");
+        assert!(pid_record_matches(&read_pid_record(&path).expect("record")));
+    }
+}
+
+#[test]
+fn updater_restore_release_argv_is_recognised() {
+    let home = Path::new("/home/u/.codex");
+    let mut argv: Vec<OsString> = [
+        "/home/u/.codex/packages/standalone/current/codex",
+        "app-server",
+        "daemon",
+        "pid-update-loop",
+        "--restore-release",
+        "release",
+    ]
+    .map(OsString::from)
+    .into();
+    assert!(updater_argv(home, &argv));
+    argv.pop();
+    assert!(!updater_argv(home, &argv));
+    argv[4] = "--other".into();
+    assert!(!updater_argv(home, &argv));
+    argv.push("release".into());
+    assert!(!updater_argv(home, &argv));
+}
+
+#[cfg(unix)]
+#[test]
+fn dedicated_updater_can_recover() {
+    let home = Path::new("/home/u/.codex");
+    let mut snapshot = stale_snapshot(home);
+    snapshot.updater_exe = home.join("packages/app-server-daemon/releases/0.162/bin/codex");
+    snapshot.updater_argv[0] = snapshot.updater_exe.clone().into_os_string();
+    assert_eq!(
+        stale_updater_pid(home, &pid_record(42), &pid_record(41), &snapshot),
+        Some(41)
+    );
+    assert!(!managed_executable(
+        home,
+        &home.join("packages/app-server-daemon/releases/other")
+    ));
+    assert!(!managed_executable(home, Path::new("/tmp/codex")));
+}
+
+#[test]
+fn updater_skew_compares_release_not_launcher() {
+    let root = Path::new("/home/u/.codex/packages/app-server-daemon/releases");
+    let launcher = root.join("0.162/bin/codex");
+    let bundle = root.join("0.162/CodexCLI.app/Contents/MacOS/codex");
+    let binary = PathBuf::from("packages/app-server-daemon/current/bin/codex");
+    assert_eq!(
+        classify_updater_skew(42, bundle.clone(), launcher.clone(), false, binary.clone()),
+        None
+    );
+    assert!(classify_updater_skew(42, bundle.clone(), launcher, true, binary.clone()).is_some());
+    assert!(
+        classify_updater_skew(42, bundle, root.join("0.163/bin/codex"), false, binary).is_some()
+    );
+}
+
+#[test]
+fn dedicated_updater_guidance_uses_dedicated_binary() {
+    let skew = UpdaterSkew {
+        updater_pid: 42,
+        updater_exe: "/home/u/.codex/packages/app-server-daemon/releases/old/bin/codex".into(),
+        managed_exe: "/home/u/.codex/packages/app-server-daemon/releases/new/bin/codex".into(),
+        updater_exe_deleted: false,
+        managed_bin_relative: "packages/app-server-daemon/current/bin/codex".into(),
+    };
+    insta::assert_snapshot!(skew.to_string(), @r###"
+    Codex remote-control updater version skew:
+    updater pid: 42
+    updater exe: /home/u/.codex/packages/app-server-daemon/releases/old/bin/codex
+    managed exe: /home/u/.codex/packages/app-server-daemon/releases/new/bin/codex
+    The next successful hourly updater pass will restart the shared app-server, then replace the updater with the managed binary. This should clear the skew automatically, but it disconnects every daemon-backed Codex session.
+
+    To choose the timing, run one provider-owned bootstrap while no valuable Codex turns are running:
+        cd ~; "${CODEX_HOME:-$HOME/.codex}/packages/app-server-daemon/current/bin/codex" app-server daemon bootstrap --remote-control
+    This restarts both provider processes and disconnects daemon-backed Codex sessions once; resume them afterwards. A `remote-control stop` / `start` pair restarts only the app-server and does not clear updater skew.
+    "###);
+}
+
+#[test]
 fn standalone_bin_resolves_only_when_install_exists() {
     let home = tempfile::tempdir().expect("tempdir");
-    assert!(standalone_bin_under(home.path()).is_none());
+    assert!(managed_bin_under(home.path()).is_none());
 
     let bin = home
         .path()
@@ -13,12 +219,15 @@ fn standalone_bin_resolves_only_when_install_exists() {
         .join("codex");
     std::fs::create_dir_all(bin.parent().expect("parent")).expect("mkdir");
     std::fs::write(&bin, b"#!/bin/sh\n").expect("write");
-    assert_eq!(standalone_bin_under(home.path()), Some(bin));
+    assert_eq!(managed_bin_under(home.path()), Some(bin));
 }
 
 #[test]
 fn missing_standalone_guidance_uses_official_install_command() {
-    let issue = standalone_missing_guidance();
+    let issue = managed_missing_guidance();
+    assert!(issue.contains("managed Codex install is missing"));
+    assert!(issue.contains("$CODEX_HOME/packages/app-server-daemon/current/bin/codex"));
+    assert!(issue.contains("packages/standalone"));
     assert!(issue.contains(INSTALL_COMMAND));
     assert!(issue.contains("[remote_control] codex"));
 }
@@ -30,6 +239,7 @@ fn updater_skew_guidance_names_auto_refresh_and_provider_bootstrap() {
         updater_exe: "/home/u/.codex/packages/standalone/releases/0.144.4/bin/codex".into(),
         managed_exe: "/home/u/.codex/packages/standalone/releases/0.144.5/bin/codex".into(),
         updater_exe_deleted: false,
+        managed_bin_relative: "packages/standalone/current/codex".into(),
     };
 
     insta::assert_snapshot!(skew.to_string(), @r###"
@@ -48,7 +258,7 @@ fn updater_skew_guidance_names_auto_refresh_and_provider_bootstrap() {
 #[test]
 fn updater_skew_recycle_expands_the_managed_home_without_path_lookup() {
     assert_eq!(
-        RECYCLE_COMMAND,
+        recycle_command(Path::new("packages/standalone/current/codex")),
         "cd ~; \"${CODEX_HOME:-$HOME/.codex}/packages/standalone/current/codex\" app-server daemon bootstrap --remote-control"
     );
 }
@@ -69,27 +279,30 @@ fn updater_skew_requires_different_or_deleted_executable_identities() {
     std::fs::write(&managed, b"managed").expect("write managed executable");
     std::fs::write(&updater, b"old").expect("write updater executable");
     let managed = std::fs::canonicalize(managed).expect("canonical managed executable");
+    let binary = PathBuf::from("packages/standalone/current/codex");
 
     assert_eq!(
-        classify_updater_skew(42, managed.clone(), managed.clone(), false),
+        classify_updater_skew(42, managed.clone(), managed.clone(), false, binary.clone()),
         None
     );
     assert_eq!(
-        classify_updater_skew(42, updater.clone(), managed.clone(), false),
+        classify_updater_skew(42, updater.clone(), managed.clone(), false, binary.clone()),
         Some(UpdaterSkew {
             updater_pid: 42,
             updater_exe: updater,
             managed_exe: managed.clone(),
             updater_exe_deleted: false,
+            managed_bin_relative: binary.clone(),
         })
     );
     assert_eq!(
-        classify_updater_skew(42, managed.clone(), managed.clone(), true),
+        classify_updater_skew(42, managed.clone(), managed.clone(), true, binary.clone()),
         Some(UpdaterSkew {
             updater_pid: 42,
             updater_exe: managed.clone(),
             managed_exe: managed,
             updater_exe_deleted: true,
+            managed_bin_relative: binary,
         })
     );
 }
@@ -210,6 +423,8 @@ fn pid_record(pid: u32) -> PidRecord {
     PidRecord {
         pid,
         process_start_time: "Mon Jul 13 02:03:45 2026".to_owned(),
+        #[cfg(target_os = "linux")]
+        process_identity: None,
     }
 }
 

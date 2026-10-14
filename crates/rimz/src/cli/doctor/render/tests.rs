@@ -1636,7 +1636,7 @@ fn remote_agent_fields_render_as_key_and_verdict() {
                     ready: false,
                 }],
                 refusals: vec!["disableRemoteControl: true".to_owned()],
-                skipped: vec!["managed standalone Codex install is missing".to_owned()],
+                skipped: vec!["managed Codex install is missing".to_owned()],
                 advisories: vec![
                     "Codex remote-control updater version skew:\n    codex app-server daemon bootstrap --remote-control"
                         .to_owned(),
@@ -1654,10 +1654,7 @@ fn remote_agent_fields_render_as_key_and_verdict() {
             && out.contains("skipped (the room still starts)"),
         "{out}"
     );
-    assert!(
-        out.contains("managed standalone Codex install is missing"),
-        "{out}"
-    );
+    assert!(out.contains("managed Codex install is missing"), "{out}");
     assert!(
         out.contains("provider daemon advisory (no start impact)")
             && out.contains("Codex remote-control updater version skew")

@@ -723,7 +723,13 @@ upward-dependencies = [
 # Cgroup scope identity, freezer/reclaim operations and meminfo parsing serve hibernation (+14).
 # Workspace scope enumeration and thaw share naming with launch and recovery (+3).
 # Timeout wake uses the injected-root workspace thaw entry point (+1).
-surface-budget = 133
+# Native Linux boot identity serves provider PID record validation (+1).
+surface-budget = 134
+
+[[verdict]]
+kind = "item"
+key = "proc::boot_id"
+reason = "The process reader owns Linux boot identity used to validate Codex daemon PID records."
 
 [[module]]
 path = "crates/rimz/src/reload.rs"

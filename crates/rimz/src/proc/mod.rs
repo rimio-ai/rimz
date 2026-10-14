@@ -24,6 +24,14 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
+/// Native Linux boot identity for matching provider process records.
+#[cfg(target_os = "linux")]
+pub(crate) fn boot_id() -> Option<String> {
+    let id = std::fs::read_to_string("/proc/sys/kernel/random/boot_id").ok()?;
+    let id = id.trim().to_owned();
+    (!id.is_empty()).then_some(id)
+}
+
 /// Stable per-device identity carried to the remote attach so a replacement
 /// can retire an orphaned predecessor before entering the multiplexer.
 pub const REMOTE_LINEAGE_ENV: &str = "RIMZ_REMOTE_LINEAGE";

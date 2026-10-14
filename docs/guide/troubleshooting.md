@@ -201,7 +201,7 @@ If a card stops updating after you hand-edited an agent's config, the RimZ-manag
 
 ### Codex sessions drop with a WebSocket reset about hourly
 
-`WebSocket protocol error: Connection reset without closing handshake` can mean Codex's own updater is running a different executable from the managed standalone install. `rimz doctor` reports that state in its `REMOTE CONTROL` section, as `Codex remote-control updater version skew`, and prints the two process paths that disagree.
+`WebSocket protocol error: Connection reset without closing handshake` can mean Codex's own updater is running a different release from the managed install. `rimz doctor` reports that state in its `REMOTE CONTROL` section, as `Codex remote-control updater version skew`, and prints the two process paths that disagree.
 
 The updater clears the skew by itself. Its next successful hourly pass restarts the shared app-server, then replaces the updater binary, and that pass disconnects every daemon-backed Codex session one time. You either wait for it or choose the moment: run the managed-binary `codex app-server daemon bootstrap --remote-control` command doctor prints while no valuable Codex turns are running, then resume the sessions it drops. A `codex remote-control stop` and `start` pair restarts only the app-server and clears nothing.
 
