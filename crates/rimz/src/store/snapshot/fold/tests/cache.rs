@@ -3,6 +3,122 @@ use std::time::{Duration, SystemTime};
 use super::*;
 
 #[test]
+fn derived_carryover_is_published_only_by_rebuild() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = StatePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
+    paths.ensure_dirs().unwrap();
+    write_carryover(
+        &paths.agents_carryover,
+        &EventCarryover {
+            agents: vec![agent("claude", "old", AgentStatus::Idle, 1_000)],
+            ..EventCarryover::default()
+        },
+    )
+    .unwrap();
+    let derived = paths.snapshots_dir.join("carryover.json");
+    crate::store::snapshot::build_from(&paths).unwrap();
+    assert!(!derived.exists(), "lock-free readers persist nothing");
+    crate::store::snapshot::rebuild(&paths).unwrap();
+    assert!(derived.exists(), "rebuild publishes the trimmed carryover");
+    let first = StampedPath::of(&derived);
+    crate::store::snapshot::rebuild(&paths).unwrap();
+    assert_eq!(first, StampedPath::of(&derived));
+    assert_eq!(prune_carryover(&paths, Duration::ZERO).unwrap(), 1);
+    crate::store::snapshot::rebuild(&paths).unwrap();
+    assert_ne!(first, StampedPath::of(&derived));
+}
+
+#[test]
+fn derived_carryover_preserves_the_raw_fold_and_rejects_stale_copies() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = StatePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
+    let runtime =
+        crate::disk::paths::RuntimePaths::under(paths.workspace_id.clone(), dir.path()).unwrap();
+    let store = crate::Store::open(paths.clone(), runtime).unwrap();
+    crate::testkit::fleet::seed_ended_carryover(&store, 3_300).unwrap();
+    let mut raw = read_carryover(&paths.agents_carryover).unwrap();
+    raw.agents
+        .push(agent("claude", "backfill", AgentStatus::Idle, 1_000));
+    raw.agents
+        .push(agent("claude", "backfill", AgentStatus::Running, 2_000));
+    raw.resume_outcomes.push(ResumeOutcome {
+        message_id: message_id(1),
+        kind: AgentKind::new_unchecked("claude"),
+        agent_id: "backfill".into(),
+        agent_name: None,
+        status: MessageStatus::Delivered,
+        enqueued_at: Timestamp::now(),
+        updated_at: Timestamp::now(),
+    });
+    write_carryover(&paths.agents_carryover, &raw).unwrap();
+    let durable = fs::read(&paths.agents_carryover).unwrap();
+    let expected = workspace_carryover(&paths).unwrap();
+    let expected_fold = catch_up_rollup(&paths).unwrap();
+    let expected_snapshot = crate::store::snapshot::build_from(&paths).unwrap();
+    crate::store::snapshot::rebuild(&paths).unwrap();
+    let derived = paths.snapshots_dir.join("carryover.json");
+    assert!(derived.exists(), "rebuild publishes the fold-ready copy");
+    let valid = fs::read(&derived).unwrap();
+    assert!(valid.len() < durable.len());
+    let cold_read = || {
+        let paths = paths.clone();
+        std::thread::spawn(move || {
+            let before = testkit::carryover_bytes_parsed();
+            let base = workspace_carryover(&paths).unwrap();
+            let folded = catch_up_rollup(&paths).unwrap();
+            let snapshot = crate::store::snapshot::build_from(&paths).unwrap();
+            (
+                base,
+                folded,
+                testkit::carryover_bytes_parsed() - before,
+                snapshot,
+            )
+        })
+        .join()
+        .unwrap()
+    };
+    let (actual, actual_fold, bytes, mut actual_snapshot) = cold_read();
+    assert_eq!(bytes, 0, "a current copy avoids the raw parse");
+    assert_eq!(actual.agents, expected.agents);
+    assert_eq!(actual.agent_identity, expected.agent_identity);
+    assert_eq!(actual.resume_outcomes, expected.resume_outcomes);
+    assert_eq!(actual_fold.1, expected_fold.1);
+    assert_eq!(actual_fold.2, expected_fold.2);
+    actual_snapshot.generated_at = expected_snapshot.generated_at;
+    actual_snapshot.now = expected_snapshot.now;
+    assert_eq!(
+        serde_json::to_value(actual_snapshot).unwrap(),
+        serde_json::to_value(expected_snapshot).unwrap()
+    );
+    let mut wrong_version: serde_json::Value = serde_json::from_slice(&valid).unwrap();
+    wrong_version["version"] = serde_json::json!(0);
+    for invalid in [
+        b"{".to_vec(),
+        b"garbage".to_vec(),
+        serde_json::to_vec(&wrong_version).unwrap(),
+    ] {
+        fs::write(&derived, invalid).unwrap();
+        let (actual, _, bytes, _) = cold_read();
+        assert_eq!(bytes, durable.len() as u64);
+        assert_eq!(actual.agents, expected.agents);
+    }
+    fs::write(&derived, &valid).unwrap();
+    write_carryover(&paths.agents_carryover, &raw).unwrap();
+    let (_, _, bytes, _) = cold_read();
+    assert_eq!(
+        bytes,
+        durable.len() as u64,
+        "replacement rejects the old stamp"
+    );
+    assert_eq!(fs::read(&paths.agents_carryover).unwrap(), durable);
+    fs::remove_file(&paths.agents_carryover).unwrap();
+    assert!(
+        cold_read().0.agents.is_empty(),
+        "a derived copy cannot resurrect absent truth"
+    );
+}
+
+#[test]
 fn materialized_rows_count_flattening_but_not_borrowed_iteration() {
     let rollup = AgentRollup::layered(
         Arc::new(FoldCarryover::from_raw(EventCarryover {
@@ -306,9 +422,9 @@ fn carryover_parse_is_shared_per_identity_and_corruption_errors_until_replaced()
         ..EventCarryover::default()
     };
     write_carryover(&path, &carryover_with("aaaa")).unwrap();
-    let first = fold_carryover(&path, None).unwrap();
+    let first = fold_carryover(&path, None, None).unwrap();
     assert!(
-        Arc::ptr_eq(&first, &fold_carryover(&path, None).unwrap()),
+        Arc::ptr_eq(&first, &fold_carryover(&path, None, None).unwrap()),
         "an unchanged file identity serves the shared parse"
     );
     assert!(
@@ -319,7 +435,7 @@ fn carryover_parse_is_shared_per_identity_and_corruption_errors_until_replaced()
     // Atomic replacement with identical bytes still changes the inode.
     write_carryover(&path, &carryover_with("aaaa")).unwrap();
     assert!(
-        !Arc::ptr_eq(&first, &fold_carryover(&path, None).unwrap()),
+        !Arc::ptr_eq(&first, &fold_carryover(&path, None, None).unwrap()),
         "a replaced file re-parses"
     );
 
@@ -328,18 +444,21 @@ fn carryover_parse_is_shared_per_identity_and_corruption_errors_until_replaced()
     std::fs::rename(&corrupt, &path).unwrap();
     for attempt in 0..2 {
         assert!(
-            matches!(fold_carryover(&path, None), Err(SnapshotErr::Json { .. })),
+            matches!(
+                fold_carryover(&path, None, None),
+                Err(SnapshotErr::Json { .. })
+            ),
             "corruption surfaces on fold {attempt}, never a cached default"
         );
     }
     write_carryover(&path, &carryover_with("bbbb")).unwrap();
     assert_eq!(
-        fold_carryover(&path, None).unwrap().agents[0].agent_id,
+        fold_carryover(&path, None, None).unwrap().agents[0].agent_id,
         "bbbb"
     );
 
     std::fs::remove_file(&path).unwrap();
-    assert!(fold_carryover(&path, None).unwrap().agents.is_empty());
+    assert!(fold_carryover(&path, None, None).unwrap().agents.is_empty());
 }
 
 #[test]

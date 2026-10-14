@@ -34,7 +34,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::de::DeserializeOwned;
 
-#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct FileStamp {
     pub(crate) len: u64,
     pub(crate) modified_secs: u64,
