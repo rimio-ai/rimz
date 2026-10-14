@@ -78,9 +78,11 @@ struct WaitArgs {
     /// Deliver for a failed, successful, or any command outcome (default: any; --check: success).
     #[arg(long, value_name = "fail|success|any", value_parser = ["fail", "success", "any"])]
     on: Option<String>,
-    /// Send one still-running notice; default 30m only without cache keepalive. Never stop the wait.
-    #[arg(long, value_name = "DURATION", value_parser = super::supervised::parse_timeout)]
-    timeout: Option<Duration>,
+    /// Send one still-running notice; default 30m only without cache keepalive. Never stop the command.
+    #[arg(long = "check-in", value_name = "DURATION", value_parser = super::supervised::parse_timeout)]
+    check_in: Option<Duration>,
+    #[arg(long, hide = true, value_name = "DURATION")]
+    timeout: Option<String>,
     #[arg(long)]
     json: bool,
 }
@@ -105,6 +107,7 @@ impl WaitArgs {
             && self.file.is_none()
             && self.grep.is_none()
             && self.on.is_none()
+            && self.check_in.is_none()
             && self.timeout.is_none()
             && self.label.is_none()
     }

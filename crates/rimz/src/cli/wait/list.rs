@@ -26,8 +26,8 @@ pub(super) struct WakeRow {
     dir: Option<String>,
     elapsed: Option<String>,
     elapsed_s: Option<u64>,
-    timeout: Option<String>,
-    timeout_s: Option<u64>,
+    check_in: Option<String>,
+    check_in_s: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     watcher_pid: Option<u32>,
 }
@@ -64,7 +64,7 @@ pub(super) fn write_rows(out: &mut impl Write, rows: Vec<WakeRow>) -> Result<()>
         return Ok(());
     }
     let mut table = super::super::render::Table::new([
-        "NAME", "TYPE", "STATE", "TARGET", "ELAPSED", "TIMEOUT", "TRIGGER",
+        "NAME", "TYPE", "STATE", "TARGET", "ELAPSED", "CHECK-IN", "TRIGGER",
     ])
     .max_width(super::super::render::terminal_columns(120));
     for row in rows {
@@ -74,7 +74,7 @@ pub(super) fn write_rows(out: &mut impl Write, rows: Vec<WakeRow>) -> Result<()>
             super::super::render::cell(row.state),
             super::super::render::cell(row.target),
             super::super::render::cell(row.elapsed.as_deref().unwrap_or("-")),
-            super::super::render::cell(row.timeout.as_deref().unwrap_or("-")),
+            super::super::render::cell(row.check_in.as_deref().unwrap_or("-")),
             super::super::render::cell(row.trigger),
         ]);
     }
@@ -170,8 +170,8 @@ fn row(
         dir,
         elapsed: meta.map(|meta| super::super::render::age_short(meta.armed_at, now)),
         elapsed_s: meta.map(|meta| now.duration_since(meta.armed_at).as_secs().max(0) as u64),
-        timeout_s: timeout.as_ref().map(|(_, seconds)| *seconds),
-        timeout: timeout.map(|(label, _)| label),
+        check_in_s: timeout.as_ref().map(|(_, seconds)| *seconds),
+        check_in: timeout.map(|(label, _)| label),
         watcher_pid,
     })
 }

@@ -12,7 +12,7 @@ rimz wait --file build.log                   # any file change
 rimz wait --file build.log --grep 'READY'    # a new matching line
 rimz wait --run 'gh run watch --exit-status' # a watched command
 rimz wait --on fail --run 'cargo test'       # deliver only if the command fails
-rimz wait --timeout 1h --run 'cargo build'   # request a check-in after 1h
+rimz wait --check-in 1h --run 'cargo build'  # request a check-in after 1h
 rimz wait list                               # pending waits (bare `rimz wait` does the same)
 rimz wait cancel wait-bold-comet
 rimz wait cancel --all
@@ -35,24 +35,24 @@ Give exactly one trigger: `--in`, `--pid`, `--check`, `--file`, or `--run`. With
 | `--file <PATH>` | file | Wait for a change in existence, size, or modification time. |
 | `--grep <PATTERN>` | file only | Wait for a new newline-terminated line containing this literal, case-sensitive pattern. |
 | `--on fail\|success\|any` | check or command | Default `success` for a check, `any` for a command. A check refuses `any`. |
-| `--timeout <DURATION>` | every trigger except timer | When to send one check-in. No default check-in with cache keepalive enabled and a known provider TTL; otherwise `30m`. Explicit durations must be greater than zero and less than `24h`. The watch continues; commands are never killed. |
+| `--check-in <DURATION>` | every trigger except timer | When to send one check-in. No default check-in with cache keepalive enabled and a known provider TTL; otherwise `30m`. Explicit durations must be greater than zero and less than `24h`. The watch continues; commands are never killed. |
 | `--json` | all | Print the receipt as JSON. |
 
 Durations take `s`, `m`, `h`, or `d` units (`90s`, `30m`, `1h`).
 
-While an agent sleeps with waits pending, RimZ sends a facts-only prompt-cache keepalive shortly before its provider TTL expires. One ping lists every pending wait, subagent, and launched team, including elapsed times when known. Pings recur after each completed ping turn, without instructions, while each would start less than `harness.cache_keepalive_max` (default `6h`, `off` for no limit) after the agent's last request of its own. The last one adds `Keepalive limit 6h reached: this is the last ping until your next turn.`, and none follow until the agent's next turn of any other kind, which restarts the clock. The [configuration guide](../../guide/configuration.md) sets the switch and provider TTLs; delivery is best-effort and does not replace a wait's final wake. A ping missed in its window (no running sidebar, a suspended machine) is skipped, and no further pings come until the agent's next turn. With a known TTL and no `--timeout`, a wait on a command that never exits therefore stays silent; pass `--timeout` to get a check-in.
+While an agent sleeps with waits pending, RimZ sends a facts-only prompt-cache keepalive shortly before its provider TTL expires. One ping lists every pending wait, subagent, and launched team, including elapsed times when known. Pings recur after each completed ping turn, without instructions, while each would start less than `harness.cache_keepalive_max` (default `6h`, `off` for no limit) after the agent's last request of its own. The last one adds `Keepalive limit 6h reached: this is the last ping until your next turn.`, and none follow until the agent's next turn of any other kind, which restarts the clock. The [configuration guide](../../guide/configuration.md) sets the switch and provider TTLs; delivery is best-effort and does not replace a wait's final wake. A ping missed in its window (no running sidebar, a suspended machine) is skipped, and no further pings come until the agent's next turn. With a known TTL and no `--check-in`, a wait on a command that never exits therefore stays silent; pass `--check-in` to get a check-in.
 
 Each arm mints a name of the form `wait-<adjective>-<noun>`, unique in the workspace (a collision appends `-<N>`). The receipt names the wait, its trigger, and its target, then lists every pending row for the caller:
 
 ```console
 $ rimz wait --run 'cargo test'
-armed wait-solid-pixel: watch: cargo test → @coder (timeout 30m)
-NAME              TYPE   STATE     TARGET  ELAPSED  TIMEOUT  TRIGGER
-wait-bold-comet   timer  pending   @coder  2m       30m      once at 14:32
-wait-solid-pixel  watch  watching  @coder  0s       30m      cargo test
+armed wait-solid-pixel: watch: cargo test → @coder (check-in 30m)
+NAME              TYPE   STATE     TARGET  ELAPSED  CHECK-IN  TRIGGER
+wait-bold-comet   timer  pending   @coder  2m       30m       once at 14:32
+wait-solid-pixel  watch  watching  @coder  0s       30m       cargo test
 ```
 
-The trigger text in the receipt is `in <DURATION>`, `pid <PID>`, `watch: <command>`, `check: <command>` (with ` every <DURATION>` for a non-default interval and ` on fail` for failure polarity), or `file: <absolute path>` (with ` grep: <pattern>` when supplied). Watch receipt headers end with `(timeout <DURATION>)` when a check-in limit is recorded; timers, and watches armed without one under cache keepalive, have no suffix. `--json` prints `{"name", "trigger", "target", "pending"}`, where `trigger` carries the prefixed header text and `pending` is the array [`rimz wait list --json`](#list-pending-waits) prints, with separate types and bare trigger subjects.
+The trigger text in the receipt is `in <DURATION>`, `pid <PID>`, `watch: <command>`, `check: <command>` (with ` every <DURATION>` for a non-default interval and ` on fail` for failure polarity), or `file: <absolute path>` (with ` grep: <pattern>` when supplied). Watch receipt headers end with `(check-in <DURATION>)` when a check-in limit is recorded; timers, and watches armed without one under cache keepalive, have no suffix. `--json` prints `{"name", "trigger", "target", "pending"}`, where `trigger` carries the prefixed header text and `pending` is the array [`rimz wait list --json`](#list-pending-waits) prints, with separate types and bare trigger subjects.
 
 Arming is refused, exit 1, in these cases (an invalid `--label` exits 2 during argument parsing):
 
@@ -68,9 +68,9 @@ Arming is refused, exit 1, in these cases (an invalid `--label` exits 2 during a
 | `--on requires --check or --run` | `--on` with a timer, PID, or file. |
 | `--on any has no meaning with --check; it polls until the command succeeds (default) or fails` | A check with `--on any`. |
 | `--every requires --check` | An interval on another trigger. |
-| `--timeout requires --pid, --check, --file, or --run` | `--timeout` with `--in`. |
-| `<flag> must be greater than zero` | Zero for `--in`, `--timeout`, or `--every`. |
-| `<flag> must be less than 24h` | `24h` or more for `--in`, `--timeout`, or `--every`. |
+| `--check-in requires --pid, --check, --file, or --run` | `--check-in` with `--in`. |
+| `<flag> must be greater than zero` | Zero for `--in`, `--check-in`, or `--every`. |
+| `<flag> must be less than 24h` | `24h` or more for `--in`, `--check-in`, or `--every`. |
 | `--file <path> is a directory; watch a file` | The path names a directory. |
 | `cannot watch PID <PID>: permission denied; choose a process owned by your user` | The caller may not signal that process. |
 | `arming a wait is only available to an agent RimZ can identify; run this command from an agent pane` | Run from a user shell, or from a process RimZ cannot trace to an agent. |
@@ -101,7 +101,7 @@ The receipt, the list, and the sidebar read `pid <PID>`. The delivered message s
 
 The first run starts immediately. `--every` is the sleep between completed runs, default `1s`, not a fixed start-to-start interval. Each run truncates and rewrites the output file, so it holds the latest run's stdout and stderr. Exit 126 or 127 ends the wait and delivers `exit <CODE> after <ELAPSED>` rather than retrying a command that cannot run.
 
-Completion reads `met after <ELAPSED>` beneath ``waited on check `<command>` ``. The single `--timeout` check-in reads `still not met after <ELAPSED>` and is evaluated between runs; a blocking run defers it and is never interrupted for it.
+Completion reads `met after <ELAPSED>` beneath ``waited on check `<command>` ``. The single check-in reads `still not met after <ELAPSED>` and is evaluated between runs; a blocking run defers it and is never interrupted for it.
 
 ### File: `--file`
 
@@ -127,9 +127,11 @@ Quote the whole string so the caller's shell does not split it at `&&`, `|`, or 
 
 An outcome `--on` filters out records `skipped` in the loop history and retires the wait without a message.
 
-### Check-ins: `--timeout`
+### Check-ins: `--check-in`
 
-`--timeout` sets when a pending process, command, check, or file watch checks in; it never kills anything. RimZ sends one check-in message, including the output file's summary when non-empty, keeps watching, and delivers the final verdict later. The check-in ignores `--on`, happens once per wait, and leaves the wait pending. Polled watches evaluate it between probes. At arm time, a known provider TTL with `harness.cache_keepalive = true` suppresses the default check-in because keepalive pings replace it. An explicit `--timeout` always wins. With no TTL or with keepalive disabled, the default remains `30m`, independent of `loop.default-timeout`. Changing the configuration does not change check-ins already armed, and reaching `harness.cache_keepalive_max` does not restore one: a watch armed without `--timeout` under keepalive stays silent after the last ping.
+`--timeout` is no longer accepted by `rimz wait`; use `--check-in` instead. It sends one still-running notice and never stops the command. Other commands' `--timeout` flags are unchanged.
+
+`--check-in` sets when a pending process, command, check, or file watch checks in; it never kills anything. RimZ sends one check-in message, including the output file's summary when non-empty, keeps watching, and delivers the final verdict later. The check-in ignores `--on`, happens once per wait, and leaves the wait pending. Polled watches evaluate it between probes. At arm time, a known provider TTL with `harness.cache_keepalive = true` suppresses the default check-in because keepalive pings replace it. An explicit `--check-in` always wins. With no TTL or with keepalive disabled, the default remains `30m`, independent of `loop.default-timeout`. Changing the configuration does not change check-ins already armed, and reaching `harness.cache_keepalive_max` does not restore one: a watch armed without `--check-in` under keepalive stays silent after the last ping.
 
 ## The delivered message
 
@@ -148,7 +150,7 @@ waited on `cargo test`
 exit 1 after 12m · output: /home/me/.rimz/ws/myrepo-f89e/out/planner/wait-solid-pixel.output (~14k tokens, 1210 lines) [wait-solid-pixel]
 ```
 
-A check-in adds `· still watching` immediately after the verdict and the follow-up commands. `Another check-in` repeats the wait's recorded `--timeout` value; running it arms a separate timer that neither restarts nor stops the command:
+A check-in adds `· still watching` immediately after the verdict and the follow-up commands. `Another check-in` repeats the wait's recorded `--check-in` value; running it arms a separate timer that neither restarts nor stops the command:
 
 ```text
 waited on `cargo build`
@@ -194,10 +196,10 @@ A sleeping agent still takes messages: a normal message starts a turn and leaves
 | `STATE` | `pending` for a timer; `waiting` for a signal or loop clock; `watching` or `lost` for a command, PID, check, or file row; `disabled` or `paused` for a held row. A check-in leaves the state `watching`. |
 | `TARGET` | The target agent's handle. |
 | `ELAPSED` | Time since the self wait was armed, including lost watches; `-` for signal and loop clock rows. |
-| `TIMEOUT` | Requested delay for a timer; check-in limit for a watch, `-` when it recorded none; `-` for signal and loop clock rows. Timer firing rounds up to the minute, so elapsed time can reach the requested delay before firing. |
+| `CHECK-IN` | Requested delay for a timer; check-in limit for a watch, `-` when it recorded none; `-` for signal and loop clock rows. Timer firing rounds up to the minute, so elapsed time can reach the requested delay before firing. |
 | `TRIGGER` | `once at HH:MM` for a timer, `<PID>`, `<command>[ every <DURATION>][ on fail]`, `<path>[ grep: <pattern>]`, a loop schedule such as `every day at 09:00`, or `on <selector> [k=v]`. A labelled watch uses its label instead of the subject. A watch row armed from a linked worktree adds `· in <dir>`. A paused row ends with `· resumes in <DURATION>`. |
 
-`--json` prints an array with keys in order: `name`, `type`, `state`, `target`, `trigger`, optional `label`, optional `dir`, `elapsed`, `elapsed_s`, `timeout`, `timeout_s`, and optional `watcher_pid`. Elapsed and timeout values are labels plus integer seconds, always present and `null` when not applicable. `watcher_pid` appears only while a live watcher holds the row's lock. There is no `age` field. `dir` appears only when the row recorded a linked worktree, as a home-relative path; timers and signal rows record it too, though only commands and checks run there.
+`--json` prints an array with keys in order: `name`, `type`, `state`, `target`, `trigger`, optional `label`, optional `dir`, `elapsed`, `elapsed_s`, `check_in`, `check_in_s`, and optional `watcher_pid`. Elapsed and check-in values are labels plus integer seconds, always present and `null` when not applicable. `watcher_pid` appears only while a live watcher holds the row's lock. There is no `age` field. `dir` appears only when the row recorded a linked worktree, as a home-relative path; timers and signal rows record it too, though only commands and checks run there.
 
 ## Cancel a wait
 
