@@ -37,7 +37,7 @@ struct HeadRef {
     branch: Option<String>,
 }
 
-fn common_dir(git_dir: &Path) -> Option<PathBuf> {
+pub(super) fn common_dir(git_dir: &Path) -> Option<PathBuf> {
     let path = git_dir.join("commondir");
     let Ok(text) = std::fs::read_to_string(&path) else {
         return Some(git_dir.to_path_buf());
@@ -52,6 +52,10 @@ fn common_dir(git_dir: &Path) -> Option<PathBuf> {
     } else {
         git_dir.join(common)
     })
+}
+
+pub(super) fn head_branch(git_dir: &Path, common_dir: &Path) -> Option<Option<String>> {
+    read_head(git_dir, common_dir).map(|head| head.branch)
 }
 
 fn read_head(git_dir: &Path, common_dir: &Path) -> Option<HeadRef> {

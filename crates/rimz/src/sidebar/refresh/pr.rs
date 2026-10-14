@@ -48,6 +48,7 @@ fn pr_state_failure_ttl(consecutive_failures: u32, cap: Duration) -> Duration {
 pub(super) fn produce_pr_states(
     snapshot: &SidebarSnapshot,
     runtime: &RuntimePaths,
+    state: &mut super::ProducerRefreshState,
 ) -> PrStateCache {
     let path = runtime.pr_state_path();
     let cache = read_pr_state_cache(&path);
@@ -65,7 +66,7 @@ pub(super) fn produce_pr_states(
         return cache;
     }
 
-    let targets = build_targets(&needed, &diff_cache);
+    let targets = build_targets(&needed, &diff_cache, state);
     let groups = group_targets(targets);
     let target_paths = current_target_paths(&groups);
     let due_and_reconcile = |cache: &PrStateCache, now_ms| {
@@ -340,11 +341,33 @@ impl Target {
     }
 }
 
-fn build_targets(needed: &[String], diff_cache: &DiffStatsCache) -> Vec<Target> {
+fn build_targets(
+    needed: &[String],
+    diff_cache: &DiffStatsCache,
+    state: &mut super::ProducerRefreshState,
+) -> Vec<Target> {
     let mut targets = Vec::new();
     for path in needed {
         let worktree = Path::new(path);
-        let Some(branch) = git_branch(worktree) else {
+        let Some(checkout) = worktree.ancestors().find(|path| path.join(".git").exists()) else {
+            continue;
+        };
+        let Some(git_dir) = crate::worktree::git_admin_dir_from_checkout_metadata(checkout)
+            .ok()
+            .flatten()
+        else {
+            continue;
+        };
+        let Some(common_dir) =
+            super::git_refs::common_dir(&git_dir).and_then(|path| path.canonicalize().ok())
+        else {
+            continue;
+        };
+        let branch = super::git_refs::head_branch(&git_dir, &common_dir).unwrap_or_else(|| {
+            git_line(worktree, &["rev-parse", "--abbrev-ref", "HEAD"])
+                .filter(|branch| branch != "HEAD")
+        });
+        let Some(branch) = branch else {
             continue;
         };
         let trunk = is_trunk_branch(
@@ -354,10 +377,39 @@ fn build_targets(needed: &[String], diff_cache: &DiffStatsCache) -> Vec<Target> 
                 .get(path)
                 .and_then(|entry| entry.trunk.as_deref()),
         );
-        let Some(remote) = git_line(worktree, &["remote", "get-url", "origin"]) else {
+        let stamp = std::fs::metadata(common_dir.join("config"))
+            .ok()
+            .map(|meta| crate::disk::parse_cache::FileStamp::from_metadata(&meta));
+        if !state
+            .pr_origins
+            .get(&common_dir)
+            .is_some_and(|origin| origin.0 == stamp)
+        {
+            let Some(output) = super::git_output(worktree, &["remote", "get-url", "origin"]) else {
+                continue;
+            };
+            let remote = if output.status.success() {
+                String::from_utf8_lossy(&output.stdout)
+                    .lines()
+                    .map(str::trim)
+                    .find(|line| !line.is_empty())
+                    .map(str::to_owned)
+            } else if output.status.code() == Some(2) {
+                // Git remote get-url exits 2 when the remote has no URL.
+                None
+            } else {
+                continue;
+            };
+            state.pr_origins.insert(common_dir.clone(), (stamp, remote));
+        }
+        let Some(remote) = state
+            .pr_origins
+            .get(&common_dir)
+            .and_then(|origin| origin.1.as_deref())
+        else {
             continue;
         };
-        let Some(remote) = forge::RemoteRepo::parse(&remote) else {
+        let Some(remote) = forge::RemoteRepo::parse(remote) else {
             continue;
         };
         let Some(forge_cli) = remote.forge_cli() else {
@@ -1119,11 +1171,6 @@ fn probe_tea_ci(worktree: &Path, repo_slug: &str, branch: &str) -> Option<Worktr
         })
         .ok()
         .flatten()
-}
-
-fn git_branch(worktree: &Path) -> Option<String> {
-    let branch = git_line(worktree, &["rev-parse", "--abbrev-ref", "HEAD"])?;
-    (branch != "HEAD").then_some(branch)
 }
 
 fn command_stdout(worktree: &Path, program: &str, args: &[&str]) -> Option<String> {

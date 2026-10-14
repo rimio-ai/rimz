@@ -920,7 +920,176 @@ fn github_group_failure_carries_complete_prior_truth() {
 }
 
 #[test]
+fn target_assembly_reuses_origins_but_reads_head_fresh() {
+    let repo = tempfile::tempdir().unwrap();
+    let git = |args: &[&str]| {
+        assert!(
+            Command::new("git")
+                .arg("-C")
+                .arg(repo.path())
+                .args(args)
+                .status()
+                .unwrap()
+                .success()
+        );
+    };
+    git(&["init", "-q", "-b", "main"]);
+    git(&[
+        "-c",
+        "user.name=test",
+        "-c",
+        "user.email=test@example.com",
+        "commit",
+        "--allow-empty",
+        "-qm",
+        "base",
+    ]);
+    git(&[
+        "remote",
+        "add",
+        "origin",
+        "https://github.com/org/first.git",
+    ]);
+    let mut paths = vec![repo.path().display().to_string()];
+    for branch in ["one", "two"] {
+        let path = repo.path().join(branch).display().to_string();
+        git(&["worktree", "add", "-qb", branch, &path]);
+        paths.push(path);
+    }
+    for root in paths.clone() {
+        let nested = Path::new(&root).join("src/nested");
+        std::fs::create_dir_all(&nested).unwrap();
+        paths.push(nested.display().to_string());
+    }
+    let mut state = super::super::ProducerRefreshState::default();
+    let mut counts = Vec::new();
+    let mut assemble = || {
+        let before = crate::proc::testkit::spawn_count();
+        let targets = build_targets(&paths, &DiffStatsCache::default(), &mut state);
+        counts.push(crate::proc::testkit::spawn_count() - before);
+        targets
+    };
+    assert_eq!(assemble().len(), 6);
+    assert_eq!(assemble().len(), 6);
+    git(&[
+        "remote",
+        "set-url",
+        "origin",
+        "https://github.com/org/second.git",
+    ]);
+    assert!(
+        assemble()
+            .iter()
+            .all(|target| target.repo_slug.as_deref() == Some("org/second"))
+    );
+    git(&["switch", "-qc", "changed"]);
+    assert_eq!(assemble()[0].branch, "changed");
+    git(&["checkout", "-q", "--detach"]);
+    assert_eq!(assemble().len(), 4);
+    assert_eq!(
+        counts,
+        [1, 0, 1, 0, 0],
+        "cold, warm, config change, branch change, detached HEAD"
+    );
+}
+
+#[test]
+fn target_assembly_retries_failed_origin_reads() {
+    let repo = tempfile::tempdir().unwrap();
+    let git = |args: &[&str]| {
+        assert!(
+            Command::new("git")
+                .arg("-C")
+                .arg(repo.path())
+                .args(args)
+                .status()
+                .unwrap()
+                .success()
+        );
+    };
+    git(&["init", "-q", "-b", "main"]);
+    git(&[
+        "-c",
+        "user.name=test",
+        "-c",
+        "user.email=test@example.com",
+        "commit",
+        "--allow-empty",
+        "-qm",
+        "base",
+    ]);
+    git(&["remote", "add", "origin", "https://github.com/org/repo.git"]);
+    let included = repo.path().join("included.config");
+    git(&["config", "include.path", included.to_str().unwrap()]);
+    std::fs::write(&included, "[invalid\n").unwrap();
+    let paths = vec![repo.path().display().to_string()];
+    let mut state = super::super::ProducerRefreshState::default();
+    assert!(build_targets(&paths, &DiffStatsCache::default(), &mut state).is_empty());
+    // Repair the transient failure without changing the memo's config identity.
+    std::fs::write(&included, "").unwrap();
+    assert_eq!(
+        build_targets(&paths, &DiffStatsCache::default(), &mut state).len(),
+        1,
+        "failed origin reads must be retried without a config stamp change"
+    );
+    git(&["remote", "remove", "origin"]);
+    let before = crate::proc::testkit::spawn_count();
+    assert!(build_targets(&paths, &DiffStatsCache::default(), &mut state).is_empty());
+    assert!(build_targets(&paths, &DiffStatsCache::default(), &mut state).is_empty());
+    assert_eq!(
+        crate::proc::testkit::spawn_count() - before,
+        1,
+        "a definitive missing origin is memoized"
+    );
+}
+
+#[test]
+fn target_assembly_falls_back_for_symbolic_branch_refs() {
+    let repo = tempfile::tempdir().unwrap();
+    let git = |args: &[&str]| {
+        assert!(
+            Command::new("git")
+                .arg("-C")
+                .arg(repo.path())
+                .args(args)
+                .status()
+                .unwrap()
+                .success()
+        );
+    };
+    git(&["init", "-q", "-b", "main"]);
+    git(&[
+        "-c",
+        "user.name=test",
+        "-c",
+        "user.email=test@example.com",
+        "commit",
+        "--allow-empty",
+        "-qm",
+        "base",
+    ]);
+    git(&["remote", "add", "origin", "https://github.com/org/repo.git"]);
+    git(&["symbolic-ref", "refs/heads/alias", "refs/heads/main"]);
+    git(&["symbolic-ref", "HEAD", "refs/heads/alias"]);
+    let paths = vec![repo.path().display().to_string()];
+    let targets = build_targets(
+        &paths,
+        &DiffStatsCache::default(),
+        &mut super::super::ProducerRefreshState::default(),
+    );
+    assert_eq!(
+        targets.len(),
+        1,
+        "unresolved local refs must fall back to Git"
+    );
+    assert_eq!(targets[0].branch, "main");
+}
+
+#[test]
 fn build_targets_marks_main_and_the_resolved_trunk() {
+    let mut state = super::super::ProducerRefreshState::default();
+    let mut build_targets =
+        |needed: &[String], diff: &DiffStatsCache| super::build_targets(needed, diff, &mut state);
     let repo = tempfile::tempdir().unwrap();
     let git = |args: &[&str]| {
         Command::new("git")
