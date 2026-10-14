@@ -554,6 +554,7 @@ impl Resolver<'_> {
             path,
             &definition.body,
             fm.traits.as_deref().unwrap_or_default(),
+            self.scope.skills,
         )?;
         if !craft.is_empty() {
             profile.append_system_prompt_files.push(PromptSource::Text {
@@ -667,7 +668,7 @@ pub(super) fn skill_policy(
                 .with_cause(DefinitionCause::MissingSkill { skill, roots }));
             };
             let skill_path = found.source.join("SKILL.md");
-            let text = std::fs::read_to_string(&skill_path).map_err(|error| {
+            let text = catalog.read_text(&skill_path).map_err(|error| {
                 DefinitionErr::new(
                     path,
                     format!(
@@ -701,7 +702,7 @@ pub(super) fn skill_policy(
                 }
                 ManualSkill::OpenAiPolicy => {
                     let policy_path = directory.join("agents/openai.yaml");
-                    match std::fs::read_to_string(&policy_path) {
+                    match catalog.read_text(&policy_path) {
                         Ok(text) => {
                             #[derive(serde::Deserialize)]
                             struct Document {

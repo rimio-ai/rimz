@@ -29,10 +29,22 @@ pub enum SkillCheck<'a> {
 }
 
 type SkillInventory = Rc<BTreeMap<String, crate::agents::skills::SkillDir>>;
+type TextRead = Result<Rc<str>, Rc<std::io::Error>>;
+
+#[cfg(test)]
+thread_local! {
+    static TEXT_READS: RefCell<BTreeMap<PathBuf, usize>> = const { RefCell::new(BTreeMap::new()) };
+}
+
+#[cfg(test)]
+fn count_text_read(path: &Path) {
+    TEXT_READS.with(|reads| *reads.borrow_mut().entry(path.to_path_buf()).or_default() += 1);
+}
 
 struct SkillCatalog<'a> {
     check: SkillCheck<'a>,
     inventories: RefCell<BTreeMap<String, Result<SkillInventory, String>>>,
+    texts: RefCell<BTreeMap<PathBuf, TextRead>>,
 }
 
 impl<'a> SkillCatalog<'a> {
@@ -40,7 +52,20 @@ impl<'a> SkillCatalog<'a> {
         Self {
             check,
             inventories: RefCell::default(),
+            texts: RefCell::default(),
         }
+    }
+
+    fn read_text(&self, path: &Path) -> TextRead {
+        self.texts
+            .borrow_mut()
+            .entry(path.to_path_buf())
+            .or_insert_with(|| {
+                #[cfg(test)]
+                count_text_read(path);
+                std::fs::read_to_string(path).map(Rc::from).map_err(Rc::new)
+            })
+            .clone()
     }
 
     fn enumerate(&self, kind: &str) -> Result<Option<SkillInventory>, String> {

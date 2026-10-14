@@ -2,13 +2,14 @@
 
 use std::path::Path;
 
-use super::DefinitionErr;
+use super::{DefinitionErr, SkillCatalog};
 
 pub(super) fn render(
     home: &Path,
     source: &Path,
     body: &str,
     names: &[String],
+    catalog: &SkillCatalog<'_>,
 ) -> Result<String, DefinitionErr> {
     if !names.is_empty() && !body.contains("${traits}") {
         return Err(DefinitionErr::new(
@@ -30,7 +31,7 @@ pub(super) fn render(
             ));
         }
         let path = home.join("traits").join(format!("{name}.md"));
-        let text = std::fs::read_to_string(&path).map_err(|error| {
+        let text = catalog.read_text(&path).map_err(|error| {
             DefinitionErr::new(
                 source,
                 format!("cannot read trait '{}': {error}", path.display()),

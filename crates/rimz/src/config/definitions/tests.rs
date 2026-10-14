@@ -2,6 +2,69 @@ use super::*;
 use crate::config::{CommandsConfig, SkillName};
 
 #[test]
+fn shared_skill_and_trait_text_is_read_once_per_load() {
+    let root = fixture();
+    write(
+        root.path(),
+        "skills/reflect/SKILL.md",
+        "---\ndescription: Reflect.\n---\nReflect.",
+    );
+    write(
+        root.path(),
+        "skills/one/SKILL.md",
+        "---\ndescription: Shared.\n---\nSkill.",
+    );
+    write(
+        root.path(),
+        "skills/one/agents/openai.yaml",
+        "policy:\n  allow_implicit_invocation: true\n",
+    );
+    for (name, kind) in [("worker", "claude"), ("reviewer", "codex")] {
+        definition(
+            root.path(),
+            &format!("agents/{name}.md"),
+            &format!("agent: {kind}\ntools: [Skill]\nskills: [one]\ntraits: [shared]"),
+            "${traits}",
+        );
+    }
+    team_definition(
+        root.path(),
+        TEAM_STAGES,
+        "  - agent: worker\n    role: lead\n    owns: [Plan, Implement]\n  - agent: reviewer\n    role: judge\n    owns: [Review]",
+        "Pipeline.",
+    );
+    for text in ["Shared first.", "Shared changed."] {
+        write(root.path(), "traits/shared.md", text);
+        TEXT_READS.with(|reads| reads.borrow_mut().clear());
+        let loaded = load_checked(root.path());
+        assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
+        assert!(loaded.teams.0.contains_key("probe"));
+        for (name, kind) in [("worker", "claude"), ("reviewer", "codex")] {
+            let profile = &loaded.agent_profiles.0[name];
+            assert_eq!(profile.agent, kind);
+            assert!(profile.append_system_prompt_files.iter().any(|source| {
+                matches!(source, PromptSource::Text { text: craft, .. } if craft == text)
+            }));
+        }
+        TEXT_READS.with(|reads| {
+            let reads = reads.borrow();
+            assert!(reads.values().all(|count| *count == 1), "{reads:?}");
+            for path in [
+                "skills/one/SKILL.md",
+                "skills/one/agents/openai.yaml",
+                "traits/shared.md",
+            ] {
+                assert_eq!(
+                    reads.get(&root.path().join(path)),
+                    Some(&1),
+                    "{path}: {reads:?}"
+                );
+            }
+        });
+    }
+}
+
+#[test]
 fn skill_inventory_is_per_family_and_expires_with_the_load() {
     let root = tempfile::tempdir().unwrap();
     let library = root.path().join("skills");
@@ -1920,6 +1983,7 @@ fn an_agent_allowing_a_failed_subagent_fails_on_its_own_file() {
 #[test]
 fn traits_deduplicate_and_preserve_unrelated_placeholders() {
     let root = fixture();
+    let catalog = SkillCatalog::new(SkillCheck::Skip);
     write(root.path(), "traits/one.md", " One.\n");
     write(root.path(), "traits/two.md", "Two.");
     let source = root.path().join("agents/probe.md");
@@ -1932,6 +1996,7 @@ fn traits_deduplicate_and_preserve_unrelated_placeholders() {
                 .iter()
                 .map(|name| (*name).to_owned())
                 .collect::<Vec<_>>(),
+            &catalog,
         )
     };
     assert_eq!(
