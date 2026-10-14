@@ -129,6 +129,7 @@ pub(super) fn list_agents(
         &report.agents,
         group_live_agents_by_worktree(&agents, &snapshot).len(),
         &scope,
+        now,
     )?;
     render_projected_agents_table(
         &mut out,
@@ -293,18 +294,23 @@ fn render_list_summary(
     entries: &[AgentReportEntry],
     lanes: usize,
     scope: &str,
+    now: jiff::Timestamp,
 ) -> std::io::Result<()> {
     let attention = entries
         .iter()
-        .filter(|entry| entry.status.is_attention())
+        .filter(|entry| entry.needs_you.is_some())
         .count();
     let running = entries
         .iter()
-        .filter(|entry| entry.status == rimz::agents::AgentStatus::Running)
+        .filter(|entry| {
+            entry.needs_you.is_none() && entry.status == rimz::agents::AgentStatus::Running
+        })
         .count();
     let sleeping = entries
         .iter()
-        .filter(|entry| entry.status == rimz::agents::AgentStatus::Sleeping)
+        .filter(|entry| {
+            entry.needs_you.is_none() && entry.status == rimz::agents::AgentStatus::Sleeping
+        })
         .count();
     let at_rest = entries.len() - attention - running - sleeping;
     let mut summary = vec![
@@ -327,31 +333,20 @@ fn render_list_summary(
     }
     summary.push(scope.to_owned());
     writeln!(w, "{}", summary.join(" · "))?;
-    if attention == 0 {
-        return Ok(());
-    }
-    writeln!(
-        w,
-        "\n{}",
-        render::paint(render::palette::header(), "needs you")
-    )?;
-    let mut table = render::Table::new(["", "", ""]).without_headers().indent(2);
-    for entry in entries.iter().filter(|entry| entry.status.is_attention()) {
-        let detail = entry
-            .ask
-            .as_ref()
-            .and_then(|ask| ask.detail.as_deref())
-            .or(entry.description.as_deref())
-            .unwrap_or("-");
-        table.row([
-            render::cell(&entry.handle).fg(render::palette::identity(entry.kind.as_str())),
-            render::cell(entry.status.as_str()).fg(status_style(entry)),
-            render::cell(render::one_line(detail)).fg(render::palette::muted()),
-        ]);
-    }
-    table.render(w)?;
-    writeln!(w)?;
-    Ok(())
+    let rows = entries
+        .iter()
+        .filter_map(|entry| {
+            let attention = entry.needs_you.as_ref()?;
+            Some(render::NeedsYouRow {
+                handle: entry.handle.clone(),
+                kind: Some(entry.kind.to_string()),
+                status: Some(attention.status),
+                since: attention.since,
+                reason: attention.reason.clone(),
+            })
+        })
+        .collect::<Vec<_>>();
+    render::needs_you(w, &rows, now)
 }
 
 fn channel_group_is_worktree_backed(
@@ -481,6 +476,16 @@ mod tests {
         );
         entry.status = status;
         entry.description = Some("provider overloaded".into());
+        entry.needs_you = match status {
+            AgentStatus::Waiting | AgentStatus::Failed | AgentStatus::Paused => {
+                Some(rimz::store::snapshot::NeedsYou {
+                    status,
+                    reason: entry.description.clone(),
+                    since: jiff::Timestamp::UNIX_EPOCH,
+                })
+            }
+            _ => None,
+        };
         entry
     }
 
@@ -496,7 +501,14 @@ mod tests {
         ]
         .map(entry);
         let mut out = anstream::StripStream::new(Vec::new());
-        render_list_summary(&mut out, &entries, 2, "whole room").unwrap();
+        render_list_summary(
+            &mut out,
+            &entries,
+            2,
+            "whole room",
+            jiff::Timestamp::UNIX_EPOCH,
+        )
+        .unwrap();
         let text = String::from_utf8(out.into_inner()).unwrap();
         assert_eq!(
             text.lines().next(),
@@ -528,16 +540,41 @@ mod tests {
             native_key: None,
             since: jiff::Timestamp::UNIX_EPOCH,
         });
+        waiting.needs_you.as_mut().unwrap().reason = Some("which strategy?".into());
         let mut out = anstream::StripStream::new(Vec::new());
-        render_list_summary(&mut out, &[waiting], 1, "#auth").unwrap();
+        render_list_summary(
+            &mut out,
+            &[waiting],
+            1,
+            "#auth",
+            jiff::Timestamp::UNIX_EPOCH,
+        )
+        .unwrap();
         let text = String::from_utf8(out.into_inner()).unwrap();
         assert_eq!(
             text.lines().next(),
             Some("1 agent · 1 lane · 1 needs you · #auth")
         );
         assert!(text.contains("which strategy?"), "{text}");
+        assert!(
+            text.lines().any(|line| line.split_whitespace().eq([
+                "@waiting",
+                "waiting",
+                "0s",
+                "which",
+                "strategy?"
+            ])),
+            "{text}"
+        );
         let mut out = Vec::new();
-        render_list_summary(&mut out, &[entry(AgentStatus::Success)], 1, "whole room").unwrap();
+        render_list_summary(
+            &mut out,
+            &[entry(AgentStatus::Success)],
+            1,
+            "whole room",
+            jiff::Timestamp::UNIX_EPOCH,
+        )
+        .unwrap();
         let text = String::from_utf8(out).unwrap();
         assert_eq!(text.trim(), "1 agent · 1 lane · 1 at rest · whole room");
     }

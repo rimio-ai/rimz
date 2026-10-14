@@ -40,6 +40,8 @@ pub(super) struct AgentReportEntry {
     pub launch_warnings: Vec<String>,
     pub me: bool,
     pub status: AgentStatus,
+    #[serde(skip)]
+    pub needs_you: Option<rimz::store::snapshot::NeedsYou>,
     pub pending_waits: Vec<rimz::agents::state::PendingWait>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub idle_stop: Option<rimz::agents::PendingIdleStop>,
@@ -395,6 +397,7 @@ pub(super) fn build_entry(
         me: me == Some(&agent.agent_id),
         status,
         pending_waits: agent.pending_waits.clone(),
+        needs_you: rimz::store::snapshot::needs_you(agent, row, demotion, now),
         idle_stop: agent.idle_stop.clone(),
         hibernation: agent.hibernation.clone(),
         background_shells: agent.background_shells.clone(),

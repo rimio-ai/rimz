@@ -538,7 +538,7 @@ $ rimz agents list
 2 agents · 1 lane · 1 needs you · 1 running · #auth-refresh
 
 needs you
-  @planner  waiting  which rotation strategy should we use?
+  @planner  waiting  2m  which rotation strategy should we use?
 
 HANDLE    PROFILE  AGENT   STATUS   MODEL         CTX  TOKENS  SEEN
 
@@ -550,7 +550,7 @@ HANDLE    PROFILE  AGENT   STATUS   MODEL         CTX  TOKENS  SEEN
   wire up the refresh-token path
 ```
 
-The summary counts agents, lanes, and states in the selected scope. Zero state counts are omitted; waiting, failed, and paused cards count as `needs you`, and everything except attention, running, or sleeping counts as `at rest`. When anyone needs you, a block before the tables lists their paste-ready addresses and ask summaries or pause/failure reasons.
+The summary counts agents, lanes, and states in the selected scope. Zero state counts are omitted; waiting, failed, and paused cards count as `needs you`, including a parent whose provider-native child waits or fails, using the sidebar's rule. Everything except attention, running, or sleeping counts as `at rest`. The `needs you` block lists paste-ready addresses, status, age, and ask summaries or pause/failure reasons, oldest first. Age is the open ask's age while awaiting input, otherwise time since the card's last activity.
 
 Cards group under lane headers. `⑂` marks a worktree-backed lane, `#` a plain channel, and a bare label the room root; agents outside the project collect under a dim `external` header. When the displayed label is not a selector for the group, the header adds `· #<channel>`. A header adds `· <team> team` for a shared team and the lane's pull-request number and CI glyph when one is known. Glyphs follow the configured theme glyph set.
 

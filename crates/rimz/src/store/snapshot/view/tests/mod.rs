@@ -11,6 +11,7 @@ mod agent_panes;
 mod forks;
 mod grouping;
 mod lazy_bind;
+mod needs_you;
 mod pane_binding;
 mod providers;
 mod ranking;

@@ -959,7 +959,7 @@ fn prefer_claimed<'a, C: Candidate<'a>>(candidates: Vec<C>) -> Vec<C> {
 /// The agents holding `role` among `members`, under the same claimed-wins rule
 /// the Role tier applies, so a harness lookup and a `@role` address pick the
 /// same agent.
-pub(crate) fn role_holders<'a>(
+pub fn role_holders<'a>(
     members: impl IntoIterator<Item = &'a AgentState>,
     role: &str,
 ) -> Vec<&'a AgentState> {

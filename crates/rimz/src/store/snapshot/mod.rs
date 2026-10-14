@@ -54,7 +54,9 @@ pub use row::{
     AgentCard, CacheClock, CardDescription, PaneAgent, ProcessCard, ProcessState, RowCallSplit,
     RowCard, SidebarRow, SidebarSubAgent, SubAgentTokens,
 };
-pub use view::{AgentWorktreeGroup, find_agent, group_live_agents_by_worktree};
+pub use view::{
+    AgentWorktreeGroup, NeedsYou, find_agent, group_live_agents_by_worktree, needs_you,
+};
 pub use view::{
     DailyBudgetView, PipelinePosition, PrStack, PresenceSample, RedeemForecast, RemoteControlBadge,
     RuntimeReapInputs, SNAPSHOT_VERSION, SidebarCohortEffort, SidebarLinkFreshness,

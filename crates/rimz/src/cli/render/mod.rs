@@ -661,6 +661,50 @@ pub(crate) fn age_short(ts: Timestamp, now: Timestamp) -> String {
     age_label(age.as_secs().max(0) as u64)
 }
 
+pub(crate) struct NeedsYouRow {
+    pub handle: String,
+    pub kind: Option<String>,
+    pub status: Option<rimz::agents::AgentStatus>,
+    pub since: Timestamp,
+    pub reason: Option<String>,
+}
+
+pub(crate) fn needs_you(
+    w: &mut impl Write,
+    rows: &[NeedsYouRow],
+    now: Timestamp,
+) -> std::io::Result<()> {
+    if rows.is_empty() {
+        return Ok(());
+    }
+    writeln!(w, "\n{}", paint(palette::header(), "needs you"))?;
+    let mut rows = rows.iter().collect::<Vec<_>>();
+    rows.sort_by_key(|row| row.since);
+    let mut table = Table::new(["", "", "", ""])
+        .without_headers()
+        .indent(2)
+        .right(&[2]);
+    for row in rows {
+        table.row([
+            cell(&row.handle).fg(row
+                .kind
+                .as_deref()
+                .map_or_else(palette::accent, palette::identity)),
+            cell(
+                row.status
+                    .map_or("not live", rimz::agents::AgentStatus::as_str),
+            )
+            .fg(row.status.map_or_else(palette::warn, |state| {
+                status::agent(state, rimz::agents::TurnPhase::Idle)
+            })),
+            cell(age_short(row.since, now)).fg(palette::muted()),
+            cell(one_line(row.reason.as_deref().unwrap_or("-"))).fg(palette::muted()),
+        ]);
+    }
+    table.render(w)?;
+    writeln!(w)
+}
+
 /// What is left of a window, in the tone the sidebar's budget bar has there.
 pub(crate) fn percent_left_cell(left: u8) -> Cell {
     cell(format!("{left}%")).fg(palette::budget(left))
