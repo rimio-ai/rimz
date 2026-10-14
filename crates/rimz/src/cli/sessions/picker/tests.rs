@@ -146,10 +146,13 @@ fn room_agents_count_only_pane_bound_root_sessions() {
         usd: 1.25,
         ..SpendWindow::default()
     };
-    snapshot.workspace_value_tally = Some(rimz::SpendTally {
-        headline: headline.clone(),
-        ..rimz::SpendTally::default()
-    });
+    snapshot.workspace_value_tally = Some(
+        rimz::SpendTally {
+            headline: headline.clone(),
+            ..rimz::SpendTally::default()
+        }
+        .into(),
+    );
 
     assert_eq!(
         RoomStats::from_snapshot(&snapshot),

@@ -307,7 +307,7 @@ fn carry_episode(
         .then_some(since)
 }
 
-fn has_nonzero_tally(tally: &Option<crate::SpendTally>) -> bool {
+fn has_nonzero_tally(tally: &Option<std::sync::Arc<crate::SpendTally>>) -> bool {
     tally.as_ref().is_some_and(|tally| !tally.is_zero())
 }
 

@@ -65,7 +65,7 @@ fn provider_labels_include_only_non_default_logins() {
         let names: Vec<_> = panels.iter().map(|panel| &panel.product_name).collect();
         assert_eq!(names, [expected]);
         assert_eq!(
-            panels[0].spending.as_ref(),
+            panels[0].spending.as_deref(),
             pool_spending.spending.by_login.get(&pool),
             "a shared account's panel reads its pool's spend"
         );

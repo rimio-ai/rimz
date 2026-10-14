@@ -701,19 +701,22 @@ fn provider_panel(
             crate::store::snapshot::RemoteControlBadge::Hidden
         },
         active_sessions: 12,
-        spending: Some(crate::SpendTally {
-            headline: crate::SpendWindow {
-                usd: 3.5,
-                tokens: 498_000,
-                input: 434_000,
-                output: 64_000,
-                cache_write: 12_000,
-                cache_read: 68_000,
-                sessions: 12,
+        spending: Some(
+            crate::SpendTally {
+                headline: crate::SpendWindow {
+                    usd: 3.5,
+                    tokens: 498_000,
+                    input: 434_000,
+                    output: 64_000,
+                    cache_write: 12_000,
+                    cache_read: 68_000,
+                    sessions: 12,
+                    ..Default::default()
+                },
                 ..Default::default()
-            },
-            ..Default::default()
-        }),
+            }
+            .into(),
+        ),
         day_budget: None,
         extra_credits: None,
         reset_credits: None,
@@ -809,19 +812,22 @@ fn two_provider_panels() -> Vec<SidebarProviderPanel> {
             let mut codex = provider_panel("codex", "Codex", 33, false, false, None);
             codex.plan = Some("ChatGPT Pro".to_owned());
             codex.version = Some("0.135.0".to_owned());
-            codex.spending = Some(crate::SpendTally {
-                headline: crate::SpendWindow {
-                    usd: 1.2,
-                    tokens: 88_000,
-                    input: 76_000,
-                    output: 12_000,
-                    cache_write: 0,
-                    cache_read: 8_000,
-                    sessions: 3,
+            codex.spending = Some(
+                crate::SpendTally {
+                    headline: crate::SpendWindow {
+                        usd: 1.2,
+                        tokens: 88_000,
+                        input: 76_000,
+                        output: 12_000,
+                        cache_write: 0,
+                        cache_read: 8_000,
+                        sessions: 3,
+                        ..Default::default()
+                    },
                     ..Default::default()
-                },
-                ..Default::default()
-            });
+                }
+                .into(),
+            );
             codex
         },
     ]

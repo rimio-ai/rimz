@@ -287,7 +287,7 @@ fn search_line_without_dashboard_reserves_one_row_and_help_stays_above() {
         compose_lines(&snapshot, None, &ui, &theme, 42, 24).bottom_height,
         empty_baseline.bottom_height + 1
     );
-    snapshot.value_tally = Some(bottom_tally());
+    snapshot.value_tally = Some(bottom_tally().into());
     let mut ui = search_ui("auth");
     let block = bottom(&snapshot, &ui, &theme, 42);
     assert!(block.lines[0].to_string().contains("/ auth"));

@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
@@ -95,7 +96,7 @@ pub struct SidebarProviderPanel {
     /// JSONL-computed headline / week / month / trailing-year spend and tokens
     /// for this provider, summed across all of its sessions' transcript history.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub spending: Option<SpendTally>,
+    pub spending: Option<Arc<SpendTally>>,
     /// Configured provider-login local-day dollar cap.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub day_budget: Option<DailyBudgetView>,

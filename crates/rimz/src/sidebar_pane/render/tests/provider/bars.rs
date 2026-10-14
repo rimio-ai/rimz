@@ -1164,19 +1164,22 @@ fn provider_window_layout_handles_single_windows_and_wide_hour_countdowns() {
 fn provider_stats_read_todays_jsonl_spend_and_tokens() {
     let theme = Theme::fixed(false);
     let mut codex = provider_panel("codex", "Codex", 33, false, false, None);
-    codex.spending = Some(crate::SpendTally {
-        headline: crate::SpendWindow {
-            usd: 4.20,
-            tokens: 486_000,
-            input: 422_000,
-            output: 64_000,
-            cache_write: 0,
-            cache_read: 68_000,
-            sessions: 5,
+    codex.spending = Some(
+        crate::SpendTally {
+            headline: crate::SpendWindow {
+                usd: 4.20,
+                tokens: 486_000,
+                input: 422_000,
+                output: 64_000,
+                cache_write: 0,
+                cache_read: 68_000,
+                sessions: 5,
+                ..Default::default()
+            },
             ..Default::default()
-        },
-        ..Default::default()
-    });
+        }
+        .into(),
+    );
     let stats = stats_line(&theme, &codex);
     assert!(stats.contains("$4.20"), "today's JSONL spend: {stats:?}");
     assert!(stats.contains("486k"), "today's JSONL tokens: {stats:?}");

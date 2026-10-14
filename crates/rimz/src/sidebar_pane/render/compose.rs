@@ -430,7 +430,7 @@ fn dashboard_chrome(
         providers: &snapshot.providers,
         active_provider: active_tab.as_ref(),
         mode,
-        fleet_tally: snapshot.value_tally.as_ref(),
+        fleet_tally: snapshot.value_tally.as_deref(),
         pet: ui.pet.as_ref(),
         folded_footer,
         width: inner,
@@ -453,8 +453,12 @@ fn bottom_corner_chrome(
     // The static `W:`/`M:` rows seal the main dashboard. The pet-enabled tall
     // provider block owns those totals inside its `Total:` section.
     let lines = match corner {
-        BottomCorner::FleetTotal => fleet_total_lines(theme, snapshot.value_tally.as_ref(), inner),
-        BottomCorner::FleetStore => fleet_store_lines(theme, snapshot.value_tally.as_ref(), inner),
+        BottomCorner::FleetTotal => {
+            fleet_total_lines(theme, snapshot.value_tally.as_deref(), inner)
+        }
+        BottomCorner::FleetStore => {
+            fleet_store_lines(theme, snapshot.value_tally.as_deref(), inner)
+        }
         BottomCorner::None => return RenderedBlock::default(),
     };
     let mut block = RenderedBlock::default();

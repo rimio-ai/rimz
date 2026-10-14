@@ -507,13 +507,16 @@ fn panel(kind: &str, metered: bool) -> SidebarProviderPanel {
         metered,
         remote_control: Default::default(),
         active_sessions: 0,
-        spending: Some(SpendTally {
-            month: SpendWindow {
-                usd: 12.5,
+        spending: Some(
+            SpendTally {
+                month: SpendWindow {
+                    usd: 12.5,
+                    ..Default::default()
+                },
                 ..Default::default()
-            },
-            ..Default::default()
-        }),
+            }
+            .into(),
+        ),
         day_budget: None,
         extra_credits: None,
         reset_credits: None,

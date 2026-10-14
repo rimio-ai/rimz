@@ -25,90 +25,96 @@ fn render_fleet_store_pins_week_month_rows_under_the_dashboard() {
         true,
         Some((25, 40)),
     )];
-    snapshot.value_tally = Some(crate::SpendTally {
-        headline: crate::SpendWindow {
-            usd: 40.23,
-            tokens: 3_420_000,
-            input: 420_000,
-            output: 3_000_000,
-            cache_write: 120_000,
-            cache_read: 6_800_000,
-            sessions: 12,
-            ..Default::default()
-        },
-        week: crate::SpendWindow {
-            usd: 312.40,
-            tokens: 21_900_000,
-            input: 3_200_000,
-            output: 18_700_000,
-            cache_write: 900_000,
-            cache_read: 51_000_000,
-            sessions: 92,
-            ..Default::default()
-        },
-        month: crate::SpendWindow {
-            usd: 1_240.57,
-            tokens: 34_900_000,
-            input: 6_200_000,
-            output: 28_700_000,
-            cache_write: 1_900_000,
-            cache_read: 121_000_000,
-            sessions: 212,
-            ..Default::default()
-        },
-        year: crate::SpendWindow {
-            usd: 4_821.90,
-            tokens: 50_200_000,
-            input: 10_200_000,
-            output: 40_000_000,
-            cache_write: 3_000_000,
-            cache_read: 210_000_000,
-            sessions: 980,
-            ..Default::default()
-        },
-    });
-    snapshot.workspace_value_tally = Some(crate::SpendTally {
-        headline: crate::SpendWindow {
-            usd: 8.25,
-            tokens: 1_210_000,
-            input: 210_000,
-            output: 1_000_000,
-            cache_write: 80_000,
-            cache_read: 2_400_000,
-            sessions: 4,
-            ..Default::default()
-        },
-        week: crate::SpendWindow {
-            usd: 8.25,
-            tokens: 1_210_000,
-            input: 210_000,
-            output: 1_000_000,
-            cache_write: 80_000,
-            cache_read: 2_400_000,
-            sessions: 4,
-            ..Default::default()
-        },
-        month: crate::SpendWindow {
-            usd: 8.25,
-            tokens: 1_210_000,
-            input: 210_000,
-            output: 1_000_000,
-            cache_write: 80_000,
-            cache_read: 2_400_000,
-            sessions: 4,
-            ..Default::default()
-        },
-        year: crate::SpendWindow {
-            usd: 8.25,
-            tokens: 1_210_000,
-            input: 210_000,
-            output: 1_000_000,
-            cache_write: 80_000,
-            cache_read: 2_400_000,
-            sessions: 4,
-            ..Default::default()
-        },
-    });
+    snapshot.value_tally = Some(
+        crate::SpendTally {
+            headline: crate::SpendWindow {
+                usd: 40.23,
+                tokens: 3_420_000,
+                input: 420_000,
+                output: 3_000_000,
+                cache_write: 120_000,
+                cache_read: 6_800_000,
+                sessions: 12,
+                ..Default::default()
+            },
+            week: crate::SpendWindow {
+                usd: 312.40,
+                tokens: 21_900_000,
+                input: 3_200_000,
+                output: 18_700_000,
+                cache_write: 900_000,
+                cache_read: 51_000_000,
+                sessions: 92,
+                ..Default::default()
+            },
+            month: crate::SpendWindow {
+                usd: 1_240.57,
+                tokens: 34_900_000,
+                input: 6_200_000,
+                output: 28_700_000,
+                cache_write: 1_900_000,
+                cache_read: 121_000_000,
+                sessions: 212,
+                ..Default::default()
+            },
+            year: crate::SpendWindow {
+                usd: 4_821.90,
+                tokens: 50_200_000,
+                input: 10_200_000,
+                output: 40_000_000,
+                cache_write: 3_000_000,
+                cache_read: 210_000_000,
+                sessions: 980,
+                ..Default::default()
+            },
+        }
+        .into(),
+    );
+    snapshot.workspace_value_tally = Some(
+        crate::SpendTally {
+            headline: crate::SpendWindow {
+                usd: 8.25,
+                tokens: 1_210_000,
+                input: 210_000,
+                output: 1_000_000,
+                cache_write: 80_000,
+                cache_read: 2_400_000,
+                sessions: 4,
+                ..Default::default()
+            },
+            week: crate::SpendWindow {
+                usd: 8.25,
+                tokens: 1_210_000,
+                input: 210_000,
+                output: 1_000_000,
+                cache_write: 80_000,
+                cache_read: 2_400_000,
+                sessions: 4,
+                ..Default::default()
+            },
+            month: crate::SpendWindow {
+                usd: 8.25,
+                tokens: 1_210_000,
+                input: 210_000,
+                output: 1_000_000,
+                cache_write: 80_000,
+                cache_read: 2_400_000,
+                sessions: 4,
+                ..Default::default()
+            },
+            year: crate::SpendWindow {
+                usd: 8.25,
+                tokens: 1_210_000,
+                input: 210_000,
+                output: 1_000_000,
+                cache_write: 80_000,
+                cache_read: 2_400_000,
+                sessions: 4,
+                ..Default::default()
+            },
+        }
+        .into(),
+    );
     let rendered = snapshot_to_screen(&snapshot, 60, 34);
 
     // The `W:` and `M:` rows: each labelled left, the `$` spend pinned right.
@@ -193,32 +199,35 @@ fn pets_provider_dashboard_owns_total_rows() {
     snapshot.providers = two_provider_panels();
     snapshot.theme.display.provider_tabs = crate::config::ProviderTabsMode::Always;
     snapshot.theme.pets.enabled = true;
-    snapshot.value_tally = Some(crate::SpendTally {
-        week: crate::SpendWindow {
-            usd: 44.20,
-            tokens: 4_200_000,
-            input: 3_100_000,
-            output: 1_100_000,
-            cache_read: 9_900_000,
-            sessions: 44,
+    snapshot.value_tally = Some(
+        crate::SpendTally {
+            week: crate::SpendWindow {
+                usd: 44.20,
+                tokens: 4_200_000,
+                input: 3_100_000,
+                output: 1_100_000,
+                cache_read: 9_900_000,
+                sessions: 44,
+                ..Default::default()
+            },
+            month: crate::SpendWindow {
+                usd: 101.99,
+                tokens: 9_100_000,
+                input: 6_100_000,
+                output: 3_000_000,
+                cache_read: 20_000_000,
+                sessions: 101,
+                ..Default::default()
+            },
+            year: crate::SpendWindow {
+                usd: 101.99,
+                tokens: 9_100_000,
+                ..Default::default()
+            },
             ..Default::default()
-        },
-        month: crate::SpendWindow {
-            usd: 101.99,
-            tokens: 9_100_000,
-            input: 6_100_000,
-            output: 3_000_000,
-            cache_read: 20_000_000,
-            sessions: 101,
-            ..Default::default()
-        },
-        year: crate::SpendWindow {
-            usd: 101.99,
-            tokens: 9_100_000,
-            ..Default::default()
-        },
-        ..Default::default()
-    });
+        }
+        .into(),
+    );
 
     let rendered = snapshot_to_screen(&snapshot, 60, 34);
     let lines = rendered.lines().collect::<Vec<_>>();

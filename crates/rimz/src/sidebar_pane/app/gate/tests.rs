@@ -56,7 +56,7 @@ fn provider(
         metered: true,
         remote_control: Default::default(),
         active_sessions: 0,
-        spending,
+        spending: spending.map(Into::into),
         day_budget: None,
         extra_credits: None,
         reset_credits: None,
@@ -78,8 +78,8 @@ fn spend_snapshot(
     used_percentage: u8,
 ) -> SidebarSnapshot {
     let mut snapshot = agent_snapshot(ws);
-    snapshot.value_tally = fleet_usd.map(spend_tally);
-    snapshot.workspace_value_tally = workspace_usd.map(spend_tally);
+    snapshot.value_tally = fleet_usd.map(spend_tally).map(Into::into);
+    snapshot.workspace_value_tally = workspace_usd.map(spend_tally).map(Into::into);
     snapshot.providers = vec![provider(
         "codex",
         provider_usd.map(spend_tally),

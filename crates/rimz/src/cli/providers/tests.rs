@@ -852,27 +852,30 @@ fn protocol_fixture(
         ],
         effect: rimz::agents::RedeemEffect::RestartsWindow,
     });
-    provider.spending = Some(SpendTally {
-        week: SpendWindow {
-            usd: 31.2,
-            tokens: 12_000,
-            sessions: 3,
+    provider.spending = Some(
+        SpendTally {
+            week: SpendWindow {
+                usd: 31.2,
+                tokens: 12_000,
+                sessions: 3,
+                ..Default::default()
+            },
+            month: SpendWindow {
+                usd: 118.75,
+                tokens: 48_000,
+                sessions: 9,
+                ..Default::default()
+            },
+            year: SpendWindow {
+                usd: 400.0,
+                tokens: 160_000,
+                sessions: 20,
+                ..Default::default()
+            },
             ..Default::default()
-        },
-        month: SpendWindow {
-            usd: 118.75,
-            tokens: 48_000,
-            sessions: 9,
-            ..Default::default()
-        },
-        year: SpendWindow {
-            usd: 400.0,
-            tokens: 160_000,
-            sessions: 20,
-            ..Default::default()
-        },
-        ..Default::default()
-    });
+        }
+        .into(),
+    );
     provider.day_budget = Some(DailyBudgetView {
         cap_usd: 25.0,
         spend_usd: 8.1,
@@ -895,10 +898,10 @@ fn protocol_fixture(
         )]),
     };
     let mut spending = ProviderSpendingCache::default();
-    spending
-        .spending
-        .by_provider
-        .insert("claude".to_owned(), provider.spending.clone().unwrap());
+    spending.spending.by_provider.insert(
+        "claude".to_owned(),
+        provider.spending.as_deref().cloned().unwrap(),
+    );
     (accounts, provider, spending)
 }
 
