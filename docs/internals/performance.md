@@ -175,7 +175,8 @@ The deterministic gates pin exact integers. They live in `crates/rimz/tests/inte
 | --- | --- |
 | `store_fsync.rs` | The warm write path's fsync count |
 | `store_bytes.rs` | A lifecycle frame at 1 KiB or less |
-| `produce_budget.rs` | Zero subprocess spawns for a warm fleet-scale produce with fresh inputs, and for a produce over stale or missing heavy caches; its wall-clock cost is the `fleet::produce_warm` bench below |
+| `produce_budget.rs` | Zero subprocess spawns for a warm fleet-scale produce with fresh inputs, and for a produce over stale or missing heavy caches; a retained refresh cycle over mixed Codex/Claude sessions and linked worktrees also spawns zero, after one cold origin lookup and no branch subprocess; produce wall-clock cost is the `fleet::produce_warm` bench below |
+| Detached-helper and Codex transport unit tests | Spawn attempts include detached helpers, scope retries, and cold app-servers, so refresh budgets count these children too |
 | `fold_incremental.rs` | Warm folds and produces read O(new bytes); a warm or unchanged fold parses zero carryover bytes, and a replaced carryover re-parses once |
 | `consumer_enrichment.rs`, `enrichment_cadence.rs`, `spending_incremental.rs` | Unchanged-room consumer cost, per-enrichment TTL stamps, and O(delta) spend IO |
 

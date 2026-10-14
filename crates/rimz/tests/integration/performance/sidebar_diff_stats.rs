@@ -50,6 +50,14 @@ impl Fixture {
 
     /// Build a fixture with `count` independent git worktrees.
     pub(crate) fn with_worktrees(count: usize) -> Option<Self> {
+        Self::build(count, false)
+    }
+
+    pub(crate) fn with_linked_worktrees(count: usize) -> Option<Self> {
+        Self::build(count, true)
+    }
+
+    fn build(count: usize, linked: bool) -> Option<Self> {
         assert!(count > 0, "fixture needs at least one worktree");
         let env = Env::new();
         let Some(real_git) = find_git() else {
@@ -75,9 +83,36 @@ impl Fixture {
                 env.project_root.join(format!("worktree-{idx:02}"))
             };
             std::fs::create_dir_all(&worktree).expect("mkdir worktree");
-            if !init_git_worktree(&worktree, &real_git) {
+            let initialized = if linked && idx > 0 {
+                Command::new(&real_git)
+                    .arg("-C")
+                    .arg(env.project_root.join("worktree-00"))
+                    .args(["worktree", "add", "-qb", &format!("linked-{idx}")])
+                    .arg(&worktree)
+                    .status()
+                    .is_ok_and(|status| status.success())
+            } else {
+                init_git_worktree(&worktree, &real_git)
+            };
+            if !initialized {
                 crate::common::skip("git init failed");
                 return None;
+            }
+            if linked && idx == 0 {
+                assert!(
+                    Command::new(&real_git)
+                        .arg("-C")
+                        .arg(&worktree)
+                        .args([
+                            "remote",
+                            "add",
+                            "origin",
+                            "https://github.com/org/refresh-budget.git"
+                        ])
+                        .status()
+                        .unwrap()
+                        .success()
+                );
             }
             panes.push(PaneRef {
                 pane_id: PaneId::from_parts(MuxName::Zellij, format!("terminal_{idx}")),
