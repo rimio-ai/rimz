@@ -1647,7 +1647,7 @@ fn config_set_account_history_declares_the_pool_and_leaves_links_to_accounts_add
             .unwrap();
             let row = rows
                 .iter()
-                .find(|row| row["kind"] == kind && row["name"] == "work")
+                .find(|row| row["account"] == format!("{kind}@work"))
                 .unwrap_or_else(|| panic!("no {kind} work row: {rows:?}"));
             assert_eq!(row["history"], mode, "{kind}");
             rimz()

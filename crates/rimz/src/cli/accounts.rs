@@ -48,11 +48,17 @@ fn redeem_exit_code(outcome: RedemptionCode) -> i32 {
 #[derive(Debug, Args)]
 pub struct AccountsArgs {
     #[command(subcommand)]
-    command: AccountsSubcmd,
+    command: Option<AccountsSubcmd>,
 }
 
 #[derive(Debug, Subcommand)]
 enum AccountsSubcmd {
+    /// List every account with its 5h and 7d usage left, its home, and whether a room can launch into it.
+    List {
+        /// Emit the accounts as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Pin this room's launch account, or change the live machine default with --global.
     Use {
         /// Set the default for new rooms and rooms following the machine default.
@@ -84,12 +90,6 @@ enum AccountsSubcmd {
         #[arg(long, value_name = "MODE")]
         history: Option<AccountHistory>,
     },
-    /// List every account with its 5h and 7d usage left, its home, and whether a room can launch into it.
-    List {
-        /// Emit the accounts as JSON.
-        #[arg(long)]
-        json: bool,
-    },
     /// Preview and spend one reset credit by hand (claude or codex).
     Redeem {
         /// Provider kind: claude or codex.
@@ -113,7 +113,7 @@ enum AccountsSubcmd {
 }
 
 pub fn run(args: AccountsArgs, globals: &GlobalFlags) -> Result<()> {
-    match args.command {
+    match args.command.unwrap_or(AccountsSubcmd::List { json: false }) {
         AccountsSubcmd::Add {
             kind,
             name,
@@ -591,7 +591,7 @@ fn use_room_account(
             "already"
         };
         format!(
-            "this room {change} follows the {} for {kind} (`{}`)",
+            "this room {change} follows the {} for {kind} (`{kind}@{}`)",
             account.source, account.name
         )
     } else {
@@ -599,7 +599,7 @@ fn use_room_account(
         if prior_pin.as_ref() == Some(&account.name) {
             return render::finish(writeln!(
                 render::out(),
-                "this room already launches {kind} on `{}` (pinned)",
+                "this room already launches {kind} on `{kind}@{}` (pinned)",
                 account.name
             ));
         }
@@ -611,7 +611,7 @@ fn use_room_account(
             " (pinned)".to_owned()
         };
         format!(
-            "this room now launches {kind} on account `{}`{suffix}",
+            "this room now launches {kind} on account `{kind}@{}`{suffix}",
             account.name
         )
     };
@@ -631,17 +631,20 @@ fn use_room_account(
                     .is_none_or(|prior| agent.login_key().name == *prior)
         })
         .count();
-    let remaining = match (count, prior) {
-        (0, Some(prior)) => format!("no running {kind} agent is on `{prior}`"),
-        (count, Some(prior)) => {
-            format!("{count} running {kind} agent(s) keep `{prior}` until they end")
-        }
-        (0, None) => format!("no running {kind} agent"),
-        (count, None) => {
-            format!("{count} running {kind} agent(s) keep their accounts until they end")
-        }
+    let remaining = match prior {
+        Some(prior) => format!(
+            "{count} running {kind} agent(s) stay on {}",
+            LoginKey {
+                kind: kind.clone(),
+                name: prior
+            }
+        ),
+        None => format!("{count} running {kind} agent(s) stay on their accounts"),
     };
-    render::finish(writeln!(render::out(), "{heading}; {remaining}"))
+    render::finish(writeln!(
+        render::out(),
+        "{heading}; new launches only; {remaining}"
+    ))
 }
 
 fn use_account(raw_kind: &str, name: &LoginName) -> Result<()> {
@@ -659,6 +662,25 @@ fn use_account(raw_kind: &str, name: &LoginName) -> Result<()> {
     if let Some(login) = login {
         login.preflight(&rimz::agents::ambient_env())?;
     }
+    let prior = LoginKey {
+        kind: kind.clone(),
+        name: machine
+            .accounts
+            .use_accounts
+            .get(kind)
+            .cloned()
+            .unwrap_or_default(),
+    };
+    let remaining = match rimz::room::live_agents_on_machine_default(&prior, &machine) {
+        Ok(count) => format!("{count} running {kind} agent(s) stay on {prior}"),
+        Err(error) => {
+            writeln!(
+                render::err(),
+                "warning: could not count running agents: {error}"
+            )?;
+            format!("running {kind} agents stay on {prior} (count unknown)")
+        }
+    };
     ConfigEditor::machine().use_account(kind, name)?;
     if name.is_default() {
         machine.accounts.use_accounts.remove(kind);
@@ -684,20 +706,20 @@ fn use_account(raw_kind: &str, name: &LoginName) -> Result<()> {
         )
     };
     let selected = if name.is_default() {
-        format!("{kind}'s own home (`default`)")
+        format!("{kind}'s own home (`{kind}@default`)")
     } else {
-        format!("{kind} account `{name}`")
+        format!("{kind} account `{kind}@{name}`")
     };
     render::finish(writeln!(
         render::out(),
-        "new rooms and rooms following the machine default now use {selected}; {reach}; a pinned room keeps its account until `rimz accounts use --reset {kind}` runs inside it"
+        "new rooms and rooms following the machine default now use {selected}; new launches only; {remaining}; {reach}; a pinned room keeps its account until `rimz accounts use --reset {kind}` runs inside it"
     ))
 }
 
 #[derive(Serialize)]
 struct AccountRow {
     kind: AgentKind,
-    name: LoginName,
+    account: LoginKey,
     home: Option<PathBuf>,
     /// `None` for `default` and for a selected account nothing declares.
     history: Option<AccountHistory>,
@@ -720,18 +742,23 @@ struct AccountRow {
     reset_credits: Option<ResetCredits>,
     /// `false` for an account without subscription windows.
     metered: Option<bool>,
-    /// This run's login record; `None` for a row no declared login backs.
-    #[serde(skip)]
+    /// This run's probe outcome; `None` when no record is available.
     login: Option<ProviderStatus>,
 }
 
 impl AccountRow {
-    /// Fold this run's reading of the row's login into it. A logged-out
-    /// account whose setup is healthy takes the `logged out` status; a setup
-    /// problem stands, since it must be fixed first.
+    /// Fold login knowledge into healthy setup; setup problems stand because
+    /// they must be fixed first. Only a confident login leaves it ready.
     fn read(&mut self, reading: Option<&LoginReading>, login_command: impl FnOnce() -> String) {
-        let status = reading.map_or(ProviderStatus::Unavailable, |reading| reading.status);
-        self.login = Some(status);
+        self.login = reading.map(|reading| reading.status);
+        if self.status == AccountStatus::Ready
+            && !matches!(
+                self.login,
+                Some(ProviderStatus::LoggedIn | ProviderStatus::LoggedOut)
+            )
+        {
+            self.status = AccountStatus::LoginUnknown;
+        }
         let Some(reading) = reading else {
             return;
         };
@@ -746,12 +773,12 @@ impl AccountRow {
             ));
             return;
         }
-        if self.status == AccountStatus::Ready && status == ProviderStatus::LoggedOut {
+        if self.status == AccountStatus::Ready && reading.status == ProviderStatus::LoggedOut {
             self.status = AccountStatus::LoggedOut;
             self.problem = Some(format!(
                 "{} account `{}` is logged out; log in once: {}",
                 self.kind,
-                self.name,
+                self.account.name,
                 login_command()
             ));
         }
@@ -897,9 +924,9 @@ fn login_readings(
     let spending = read_provider_spending_cache(&runtime.shared_provider_spending_path());
     Ok(logins
         .iter()
-        .map(|login| {
-            let record = accounts.logins.get(&login.key());
-            let account = record.and_then(|record| record.account.clone());
+        .filter_map(|login| {
+            let record = accounts.logins.get(&login.key())?;
+            let account = record.account.clone();
             let probed_metered = account.as_ref().and_then(|account| account.metered);
             let panel = provider_panel_for_login(
                 &runtime,
@@ -914,13 +941,13 @@ fn login_readings(
                     .as_ref()
                     .map_or(Entitlement::Ok, |panel| panel.entitlement),
                 reset_credits: panel.as_ref().and_then(|panel| panel.reset_credits.clone()),
-                status: ProviderStatus::from_record(record),
+                status: ProviderStatus::from_record(Some(record)),
                 metered: panel.as_ref().map(|panel| panel.metered).or(probed_metered),
                 windows: panel
                     .as_ref()
                     .map_or_else(Vec::new, |panel| list_windows(&panel.windows)),
             };
-            (login.key(), reading)
+            Some((login.key(), reading))
         })
         .collect())
 }
@@ -939,7 +966,10 @@ fn account_rows(
     let row =
         |kind: &AgentKind, name: &LoginName, home, problem: Option<BirthLoginErr>| AccountRow {
             kind: kind.clone(),
-            name: name.clone(),
+            account: LoginKey {
+                kind: kind.clone(),
+                name: name.clone(),
+            },
             home,
             history: accounts
                 .named(kind)
@@ -1000,7 +1030,7 @@ fn account_rows(
         }
     }
     for (kind, error) in errors {
-        rows.retain(|row| row.kind != *kind || !row.name.is_default());
+        rows.retain(|row| row.kind != *kind || !row.account.name.is_default());
         for row in rows.iter_mut().filter(|row| row.kind == *kind) {
             row.active = false;
         }
@@ -1014,7 +1044,11 @@ fn account_rows(
         rows.push(failed);
     }
     rows.sort_by(|a, b| {
-        (&a.kind, !a.name.is_default(), &a.name).cmp(&(&b.kind, !b.name.is_default(), &b.name))
+        (&a.kind, !a.account.name.is_default(), &a.account.name).cmp(&(
+            &b.kind,
+            !b.account.name.is_default(),
+            &b.account.name,
+        ))
     });
     rows
 }
@@ -1039,7 +1073,7 @@ fn write_accounts(
         }
         previous = Some(&row.kind);
         let muted = |cell: render::Cell| {
-            if row.name.is_default() {
+            if row.account.name.is_default() {
                 cell.fg(render::palette::muted())
             } else {
                 cell
@@ -1055,7 +1089,7 @@ fn write_accounts(
                 render::cell("")
             },
             render::cell(row.kind.as_str()).fg(render::palette::identity(row.kind.as_str())),
-            muted(render::cell(row.name.as_str())),
+            muted(render::cell(row.account.name.as_str())),
             if matches!(row.entitlement, Entitlement::Lapsed { .. }) {
                 render::cell("lapsed").fg(render::status::role(render::status::StateRole::Failed))
             } else {
@@ -1092,7 +1126,27 @@ fn write_accounts(
         ]);
     }
     table.render(w)?;
-    if let Some(legend) = legend(rows, deciding) {
+    if let Some(legend) = render::account_marker_legend(
+        &rows.iter().map(|row| row.kind.as_str()).collect(),
+        deciding,
+        rows.iter().any(|row| row.machine_default && !row.active),
+    ) {
+        writeln!(w, "{legend}")?;
+    }
+    let windows = rows
+        .iter()
+        .filter(|row| {
+            !row.without_login()
+                && row.metered != Some(false)
+                && !matches!(row.entitlement, Entitlement::Lapsed { .. })
+        })
+        .flat_map(|row| &row.windows)
+        .filter(|window| {
+            WINDOW_SPANS
+                .iter()
+                .any(|span| window.duration_mins == Some(span.minutes()))
+        });
+    if let Some(legend) = render::pace_legend(windows, now) {
         writeln!(w, "{legend}")?;
     }
     for (row, problem) in rows
@@ -1127,50 +1181,6 @@ fn window_cell(row: &AccountRow, span: WindowSpan, now: Timestamp) -> render::Ce
         .find(|window| window.duration_mins == Some(span.minutes()))
         .and_then(|window| render::window_cell(window, now))
         .unwrap_or_else(unknown_cell)
-}
-
-/// Name every deciding layer present among the displayed kinds.
-fn legend(rows: &[AccountRow], deciding: &BTreeMap<AgentKind, Deciding>) -> Option<String> {
-    let layers: Vec<_> = [Deciding::Room, Deciding::Project, Deciding::Machine]
-        .into_iter()
-        .filter_map(|layer| {
-            let kinds: std::collections::BTreeSet<_> = rows
-                .iter()
-                .filter(|row| deciding.get(&row.kind) == Some(&layer))
-                .map(|row| row.kind.as_str())
-                .collect();
-            (!kinds.is_empty()).then_some((layer, kinds))
-        })
-        .collect();
-    let active = layers.iter().map(|(layer, kinds)| {
-        let words = match layer {
-            Deciding::Room => "this room",
-            Deciding::Project => "this project",
-            Deciding::Machine => "new rooms",
-        };
-        let kinds = if layers.len() > 1 {
-            format!(
-                " ({})",
-                kinds.iter().copied().collect::<Vec<_>>().join(", ")
-            )
-        } else {
-            String::new()
-        };
-        format!(
-            "{}  {words}{kinds}",
-            render::paint(render::palette::accent(), "●")
-        )
-    });
-    let new_rooms = (layers.iter().any(|(layer, _)| *layer != Deciding::Machine)
-        || rows.iter().any(|row| row.machine_default && !row.active))
-    .then(|| {
-        format!(
-            "{}  new rooms",
-            render::paint(render::palette::muted(), "○")
-        )
-    });
-    let halves: Vec<_> = active.chain(new_rooms).collect();
-    (!halves.is_empty()).then(|| halves.join("   "))
 }
 
 fn remove(kind: &AgentKind, name: &LoginName) -> Result<()> {

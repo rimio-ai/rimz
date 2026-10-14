@@ -609,6 +609,8 @@ fn started_as(env_key: Option<&str>, home: &Path, kind: &AgentKind) -> String {
 #[serde(rename_all = "snake_case")]
 pub enum AccountStatus {
     Ready,
+    /// The home is set up, but no confident login reading is available.
+    LoginUnknown,
     HomeMissing,
     HooksMissing,
     HooksUntrusted,
@@ -638,6 +640,7 @@ impl AccountStatus {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Ready => "ready",
+            Self::LoginUnknown => "login unknown",
             Self::HomeMissing => "home missing",
             Self::HooksMissing => "hooks missing",
             Self::HooksUntrusted => "hooks untrusted",

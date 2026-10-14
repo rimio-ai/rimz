@@ -696,7 +696,7 @@ enum Subcmd {
     Stats(stats::StatsArgs),
     /// Query provider account plans, auth, limits, credits, and spend.
     Providers(providers::ProvidersArgs),
-    /// Declare, list, and remove named provider accounts.
+    /// List, select, declare, and remove provider accounts.
     ///
     /// A named account is a separate provider home a room launches into.
     #[command(name = "accounts")]
