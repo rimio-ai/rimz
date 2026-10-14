@@ -241,7 +241,7 @@ The account model these fields fill is [providers.md](./providers.md); the per-p
 
 | Source | Read by | Produces |
 | --- | --- | --- |
-| [`claude auth status`](../../externals/agent-adapter/claude-reference.md#auth-surface) | `account::probe`, with null stdin and piped stdout and stderr | `plan` from `subscriptionType`; `metered` false for `authMethod` `apiKey`, true for another non-empty method, unknown when absent. The CLI exits 1 when logged out and still prints `"loggedIn": false`: that is `LoggedOut`, and any other non-zero exit is `Unavailable` |
+| [`claude auth status`](../../externals/agent-adapter/claude-reference.md#auth-surface) | `account::probe`, with null stdin and piped stdout and stderr | `plan` from `subscriptionType`; `metered` false for `authMethod` `api_key` or legacy `apiKey`, true for another non-empty method, unknown when absent. The CLI exits 1 when logged out and still prints `"loggedIn": false`: that is `LoggedOut`, and any other non-zero exit is `Unavailable` |
 | `claude --version` | the shared display-only version probe | the account's version field, also filled into entries whose login facts are fresh |
 | statusline `rate_limits` | `observe_context` | 5h and 7d windows plus the gateway's durationless `spend` scope (label `$`), from epoch-second resets, marked `BestEffort`; spend percentage only, not dollar amounts or period |
 | OAuth usage endpoint | [`oauth_usage.rs`](../../../crates/rimz/src/agents/adapters/claude/oauth_usage.rs) | the same windows from RFC 3339 resets, marked `Authoritative`; `extra_usage` cents as `ExtraCredits::Known { used_usd, limit_usd }` or `Disabled`; model sub-caps; `cedar_ember` as `ResetCredits` |
