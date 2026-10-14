@@ -761,7 +761,7 @@ fn preflight_checks_each_precondition_and_ends_errors_with_fixes() {
         ),
         (
             "user manager",
-            "run loginctl enable-linger <user> or log in through a systemd session",
+            "run loginctl enable-linger <user> or log in through a systemd session, or, when XDG_RUNTIME_DIR is unset or overridden (an SSH login, a sandbox), export XDG_RUNTIME_DIR=/run/user/$(id -u)",
         ),
         (
             "memory controller",
