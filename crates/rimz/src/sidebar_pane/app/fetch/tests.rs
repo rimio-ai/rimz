@@ -7,6 +7,61 @@ use crate::{MuxName, SidebarInstanceId, WorkspaceId};
 use std::path::PathBuf;
 
 #[test]
+fn identity_free_nudges_keep_every_idle_consumer_clock_only() {
+    let fixture = FetchFixture::new();
+    let frame = crate::testkit::fleet::seed_scale_room(
+        &fixture.state,
+        &fixture.runtime,
+        crate::testkit::fleet::ScaleRoom {
+            agents: 50,
+            panes: 57,
+            ended_sessions: 0,
+            orphan_contexts: 0,
+        },
+    )
+    .unwrap();
+    let mut panes = frame.to_pane_refs();
+    for pane in &mut panes {
+        pane.first_seen_at_ms = Some(frame.produced_at_ms - 60_000);
+    }
+    let frame =
+        crate::sidebar::frame::assemble_frame(panes, frame.produced_at_ms, frame.session_name);
+    let mut cycles =
+        IdleCycleFixture::new(fixture.state.clone(), fixture.runtime.clone(), frame, 57);
+    cycles.enable_renderer_apply();
+    cycles.run_cycle();
+    cycles.run_cycle();
+    assert!(
+        cycles
+            .renderers
+            .iter()
+            .all(|(renderer, _)| renderer.content_applications == 1),
+        "fixture is idle before the nudge"
+    );
+    for event in [
+        SidebarEvent::StoreDelta {
+            event_method: None,
+            agent_signal: None,
+        },
+        SidebarEvent::PanesChanged,
+        SidebarEvent::PaneOpened {
+            pane_id: PaneId::from_parts(crate::MuxName::Zellij, "terminal_0"),
+            command: None,
+        },
+    ] {
+        cycles.deliver_event(event);
+        cycles.run_cycle();
+        assert!(
+            cycles
+                .renderers
+                .iter()
+                .all(|(renderer, _)| renderer.content_applications == 1),
+            "identity-free nudges must not force content onto idle consumers"
+        );
+    }
+}
+
+#[test]
 fn fetch_window_records_consumed_deliveries_once_per_window() {
     let fixture = FetchFixture::new();
     let diag = crate::diag::DiagSink::under(
