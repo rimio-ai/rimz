@@ -80,7 +80,7 @@ impl RemindState {
         self.last_reminded_at_ms = Some(now_ms);
     }
 
-    fn due(&self, now_ms: u64, count: usize, remind_secs: u64) -> bool {
+    pub(super) fn due(&self, now_ms: u64, count: usize, remind_secs: u64) -> bool {
         if count == 0 || remind_secs == 0 {
             return false;
         }

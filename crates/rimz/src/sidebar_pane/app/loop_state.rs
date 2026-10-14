@@ -140,6 +140,7 @@ pub(super) struct LoopState {
     paint_hold: PaintHold,
     next_frame: Instant,
     fetched_at: Instant,
+    last_content_fold: Instant,
     last_self_close_check: Instant,
     last_heartbeat: Option<Instant>,
     prev_width: Option<u16>,
@@ -284,6 +285,7 @@ impl LoopState {
             paint_hold: PaintHold::default(),
             next_frame: now,
             fetched_at: now,
+            last_content_fold: now,
             last_self_close_check: now,
             last_heartbeat: None,
             prev_width: initial_width,
@@ -320,7 +322,7 @@ impl LoopState {
 
         self.run_maintenance(fetch, terminal);
         self.run_width_control_backstop(terminal);
-        self.maybe_remind(terminal);
+        self.maybe_remind(fetch, terminal);
         let (active, _) = self.frame_timing();
         self.paint_frame_if_due(terminal, active)
     }
@@ -387,6 +389,12 @@ impl LoopState {
             let watchdog_due =
                 SELF_CLOSE_WATCHDOG.saturating_sub(self.last_self_close_check.elapsed());
             let mut timeout = tick_for(self.config.tick_seconds).min(watchdog_due);
+            if !watched && self.result_rx.has_pending_snapshot() {
+                timeout = timeout.min(
+                    tick_for(self.config.tick_seconds)
+                        .saturating_sub(self.last_content_fold.elapsed()),
+                );
+            }
             if let Some(hold) = self.ui.order_hold.as_ref() {
                 let now_ms = jiff::Timestamp::now().as_millisecond();
                 let remaining = Duration::from_millis((hold.expires_ms - now_ms).max(0) as u64);
@@ -434,6 +442,10 @@ impl LoopState {
     /// Unknown ownership or own-view state reads as watched so uncertainty never
     /// suppresses motion.
     fn watched(&self) -> bool {
+        self.watches_snapshot(&self.current)
+    }
+
+    fn watches_snapshot(&self, snapshot: &SidebarSnapshot) -> bool {
         if self
             .optimistic_watch_until
             .is_some_and(|until| Instant::now() < until)
@@ -443,14 +455,29 @@ impl LoopState {
         let Some(own_pane) = self.config.own_pane.as_ref() else {
             return true;
         };
-        let Some(view) = self.current.own_view.as_ref() else {
+        let Some(view) = snapshot.own_view.as_ref() else {
             return true;
         };
-        own_tab_viewed(&self.current, view, own_pane)
+        own_tab_viewed(snapshot, view, own_pane)
     }
 
     pub(super) fn on_snapshot(&mut self, fetch: &mut FetchDispatcher) {
-        let pending = self.result_rx.take();
+        self.drain_snapshot(fetch, true);
+    }
+
+    fn drain_snapshot(&mut self, fetch: &mut FetchDispatcher, allow_defer: bool) {
+        let (pending, deferred) = self.result_rx.take_unless(|snapshot| {
+            allow_defer
+                && !self.watched()
+                && !self.watches_snapshot(snapshot)
+                && snapshot.own_view == self.current.own_view
+                && self.admits_clock_only(false)
+                && self.last_content_fold.elapsed() < tick_for(self.config.tick_seconds)
+        });
+        if deferred {
+            self.fetched_at = Instant::now();
+            self.last_self_close_check = self.fetched_at;
+        }
         let delivered = pending.snapshot.is_some() || pending.outcome.is_some();
         let saw_final = pending.completed;
         let mut rejected = false;
@@ -536,6 +563,7 @@ impl LoopState {
             optimistic_watch_until: _,
             // Maintenance stamps and reminders, read against `current`.
             fetched_at: _,
+            last_content_fold: _,
             last_self_close_check: _,
             last_heartbeat: _,
             remind: _,
@@ -628,6 +656,7 @@ impl LoopState {
                 phase,
                 source,
             } => {
+                self.last_content_fold = Instant::now();
                 #[cfg(test)]
                 {
                     self.content_applications += 1;
@@ -738,13 +767,13 @@ impl LoopState {
         }
         match envelope.event {
             SidebarEvent::WidthTargetChanged => {
-                self.result_rx.invalidate();
+                self.prepare_action(fetch);
                 let measured = terminal.size().ok().map(|size| size.width);
                 self.width_control
                     .reload_target(&self.current.theme, measured, &self.diag);
             }
             SidebarEvent::BodyFilterChanged => {
-                self.result_rx.invalidate();
+                self.prepare_action(fetch);
                 self.filter_observed_at = Some(Instant::now());
                 let filter = crate::sidebar::body_filter::load(&self.runtime);
                 if set_make_up_filter(&mut self.ui, &self.current, filter) {
@@ -752,7 +781,7 @@ impl LoopState {
                 }
             }
             event @ SidebarEvent::Notify { .. } => {
-                self.result_rx.invalidate();
+                self.prepare_action(fetch);
                 self.handle_notification(terminal, event);
             }
             SidebarEvent::FocusStranded {
@@ -760,7 +789,7 @@ impl LoopState {
                 generation,
                 clients,
             } => {
-                self.result_rx.invalidate();
+                self.prepare_action(fetch);
                 if self.config.own_pane.as_ref() != Some(&pane_id) {
                     trace!(pane = %pane_id, own_pane = ?self.config.own_pane, generation, "sidebar ignored foreign strand");
                     return;
@@ -782,11 +811,11 @@ impl LoopState {
                 }
             }
             SidebarEvent::FocusIntent { .. } => {
-                self.result_rx.invalidate();
+                self.prepare_action(fetch);
                 self.fold_fused_now();
             }
             event if event.is_overlay() => {
-                self.result_rx.invalidate();
+                self.prepare_action(fetch);
                 self.handle_overlay_event(fetch, event, sent_at_ms);
             }
             // Identity-free nudges — store deltas, `PanesChanged`, a `PaneOpened` without a command: nothing to fuse, so refetch, bypassing the pane cache when the event says topology moved.
@@ -801,6 +830,14 @@ impl LoopState {
                 );
             }
         }
+    }
+
+    fn prepare_action(&mut self, fetch: &mut FetchDispatcher) {
+        // Restore a queued clock before flushing, then fence the baseline
+        // again: the action can change renderer state after acknowledgement.
+        self.result_rx.invalidate();
+        self.drain_snapshot(fetch, false);
+        self.result_rx.invalidate();
     }
 
     fn handle_notification(&mut self, terminal: &mut Terminal<PaneBackend>, event: SidebarEvent) {
@@ -1096,7 +1133,7 @@ impl LoopState {
         terminal: &mut Terminal<PaneBackend>,
         fetch: &mut FetchDispatcher,
     ) -> Result<()> {
-        self.result_rx.invalidate();
+        self.prepare_action(fetch);
         let applied = self.apply_input(wakeups, terminal)?;
         if applied.redraw && self.watched() {
             // Key/mouse input paints synchronously for instant feedback; a
@@ -1400,7 +1437,15 @@ impl LoopState {
         }
     }
 
-    fn maybe_remind(&mut self, terminal: &mut Terminal<PaneBackend>) {
+    fn maybe_remind(&mut self, fetch: &mut FetchDispatcher, terminal: &mut Terminal<PaneBackend>) {
+        // Scope is checked after flushing; consult only the timer here.
+        if self.remind.due(
+            crate::utils::time::unix_now_ms(),
+            1,
+            self.config.notification_prefs.remind_secs,
+        ) {
+            self.drain_snapshot(fetch, false);
+        }
         self.remind
             .maybe_remind(&self.config, terminal, &self.current, &self.diag);
     }
