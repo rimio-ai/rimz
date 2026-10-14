@@ -110,6 +110,7 @@ fn append_launched_agent(
             "session",
             &kind,
             rimz::store::event::AgentLaunchPayload {
+                system_prompt_digest: None,
                 agent_id: rimz::ids::AgentSessionId::from(agent_id),
                 launch_id: launch_id.map(rimz::ids::AgentSessionId::from),
                 agent_name: name.to_owned(),

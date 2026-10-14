@@ -708,6 +708,9 @@ pub struct AgentState {
     /// to the launched process.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub launch_id: Option<AgentSessionId>,
+    /// The fresh launch's configured system-prompt baseline, unchanged by resume.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_prompt_digest: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub launch_warnings: Vec<String>,
     pub kind: AgentKind,
@@ -1099,6 +1102,7 @@ impl AgentState {
         Self {
             agent_id,
             launch_id: None,
+            system_prompt_digest: None,
             launch_warnings: Vec::new(),
             kind,
             name: None,

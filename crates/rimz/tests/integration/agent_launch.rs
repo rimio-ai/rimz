@@ -1264,6 +1264,7 @@ fn over_limit_agent_launch_refuses_before_creating_runtime_state() {
             &workspace.session_name,
             &AgentKind::new_unchecked("codex"),
             AgentLaunchPayload {
+                system_prompt_digest: None,
                 agent_id: AgentSessionId::from("provider-caller"),
                 launch_id: Some(launch_id.clone()),
                 agent_name: "caller".to_owned(),
@@ -1326,6 +1327,7 @@ fn seed_subagent_caller(env: &Env) -> AgentSessionId {
             &workspace.session_name,
             &AgentKind::new_unchecked("codex"),
             AgentLaunchPayload {
+                system_prompt_digest: None,
                 agent_id: AgentSessionId::from("provider-subagent"),
                 launch_id: Some(launch_id.clone()),
                 agent_name: "subagent".to_owned(),
@@ -1394,6 +1396,7 @@ fn user_shell_subagents_list_labels_root_children_main_but_keeps_json_channel() 
                 &workspace.session_name,
                 &AgentKind::new_unchecked("claude"),
                 AgentLaunchPayload {
+                    system_prompt_digest: None,
                     agent_id: AgentSessionId::from(id),
                     launch_id: None,
                     agent_name: name.to_owned(),
@@ -1468,6 +1471,7 @@ fn user_shell_subagents_list_inspects_the_channel() {
                 &workspace.session_name,
                 &AgentKind::new_unchecked(kind),
                 AgentLaunchPayload {
+                    system_prompt_digest: None,
                     agent_id: AgentSessionId::from(id),
                     launch_id: None,
                     agent_name: name.to_owned(),
@@ -1614,6 +1618,7 @@ fn limit_parked_child_lists_paused_and_tells_its_parent_once() {
                 &workspace.session_name,
                 kind,
                 AgentLaunchPayload {
+                    system_prompt_digest: None,
                     agent_id: id.clone(),
                     launch_id: None,
                     agent_name: name.to_owned(),
@@ -1886,6 +1891,7 @@ fn silent_child_tells_its_parent_once_and_records_the_queued_assist() {
             &workspace.session_name,
             kind,
             AgentLaunchPayload {
+                system_prompt_digest: None,
                 agent_id: id.clone(),
                 launch_id: None,
                 agent_name: name.to_owned(),
@@ -2575,6 +2581,7 @@ fn explain_seat_replays_current_profile_without_writes_and_refuses_overrides() {
                 &workspace.session_name,
                 &AgentKind::new_unchecked("claude"),
                 AgentLaunchPayload {
+                    system_prompt_digest: None,
                     agent_id: AgentSessionId::from("missing-conversation"),
                     launch_id: Some(AgentSessionId::from("launch_explain_worker")),
                     agent_name: "worker".to_owned(),
@@ -2754,6 +2761,7 @@ fn empty_subagent_list_explains_itself_on_stderr_only() {
             &workspace.session_name,
             &AgentKind::new_unchecked("claude"),
             AgentLaunchPayload {
+                system_prompt_digest: None,
                 agent_id: AgentSessionId::from("planner"),
                 launch_id: None,
                 agent_name: "planner".to_owned(),
@@ -2832,6 +2840,7 @@ fn launch_identity_and_parentage_survive_event_log_rotation() {
             &workspace.session_name,
             &kind,
             AgentLaunchPayload {
+                system_prompt_digest: None,
                 agent_id: agent_id.clone(),
                 launch_id: Some(launch_id.clone()),
                 agent_name: "rotated-child".to_owned(),
@@ -5410,6 +5419,7 @@ fn an_unusable_startup_relaunch_wait_refuses_every_launch_doorway_before_side_ef
             &workspace.session_name,
             &AgentKind::new_unchecked("codex"),
             AgentLaunchPayload {
+                system_prompt_digest: None,
                 agent_id: AgentSessionId::from("provider-root-caller"),
                 launch_id: Some(caller.clone()),
                 agent_name: "caller".to_owned(),
@@ -5483,6 +5493,7 @@ fn seed_launch(env: &Env, launch_id: &str, agent_name: &str, launch: LaunchParam
         workspace.session_name,
         &kind,
         AgentLaunchPayload {
+            system_prompt_digest: None,
             agent_id: AgentSessionId::from(launch_id),
             launch_id: None,
             agent_name: agent_name.to_owned(),
@@ -5635,6 +5646,7 @@ fn cohort_resume_preflights_a_matched_session_on_its_effective_isolation() {
                 &workspace.session_name,
                 &kind,
                 AgentLaunchPayload {
+                    system_prompt_digest: None,
                     agent_id: session_id.into(),
                     launch_id: Some(session_id.into()),
                     agent_name: "quiet-otter".to_owned(),

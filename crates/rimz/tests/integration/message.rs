@@ -3917,6 +3917,7 @@ fn parent_message_to_resumed_child_waits_for_installed_registration() {
             &workspace.session_name,
             &AgentKind::new_unchecked("claude"),
             AgentLaunchPayload {
+                system_prompt_digest: None,
                 agent_id: "child".into(),
                 launch_id: Some("launch_child".into()),
                 agent_name: "otter".into(),
@@ -10631,6 +10632,7 @@ impl ReplyAgentFixture {
                 workspace.session_name,
                 &AgentKind::new_unchecked("claude"),
                 AgentLaunchPayload {
+                    system_prompt_digest: None,
                     agent_id: AgentSessionId::from(self.session_id.as_str()),
                     launch_id: Some(AgentSessionId::from(launch_id)),
                     agent_name: name.to_owned(),
@@ -11183,6 +11185,7 @@ fn seed_provisional_codex_launch(
         workspace.session_name,
         &kind,
         AgentLaunchPayload {
+            system_prompt_digest: None,
             agent_id: AgentSessionId::from(launch_id),
             launch_id: None,
             agent_name: agent_name.to_owned(),

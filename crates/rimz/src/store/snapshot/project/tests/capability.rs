@@ -96,6 +96,7 @@ fn lifecycle_carries_stable_fields_forward_when_event_omits_them() {
         "session",
         &AgentKind::new_unchecked("codex"),
         AgentLaunchPayload {
+            system_prompt_digest: None,
             agent_id: "sess-1".into(),
             launch_id: None,
             agent_name: "lucid-atlas".to_owned(),

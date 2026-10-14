@@ -3706,6 +3706,7 @@ fn seed_agent_launch(
         workspace.session_name,
         &kind,
         AgentLaunchPayload {
+            system_prompt_digest: None,
             agent_id: AgentSessionId::from(launch_id),
             launch_id: None,
             agent_name: agent_name.to_owned(),

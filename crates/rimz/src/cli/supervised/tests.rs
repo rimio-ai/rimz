@@ -880,6 +880,7 @@ fn stopped_subagent_end_is_recorded_once() {
             "room",
             &fixture.record.kind,
             rimz::store::event::AgentLaunchPayload {
+                system_prompt_digest: None,
                 agent_id: "launch_child".into(),
                 launch_id: None,
                 agent_name: "otter".to_owned(),

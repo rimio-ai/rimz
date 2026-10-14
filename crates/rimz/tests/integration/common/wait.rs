@@ -54,6 +54,7 @@ pub fn register_agent(
             &workspace.session_name,
             &AgentKind::new_unchecked("claude"),
             AgentLaunchPayload {
+                system_prompt_digest: None,
                 agent_id: AgentSessionId::from(session_id),
                 launch_id: Some(AgentSessionId::from(launch_id)),
                 agent_name: name.to_owned(),

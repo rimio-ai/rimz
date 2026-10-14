@@ -527,6 +527,7 @@ fn pane_send_refuses_an_agent_whose_pane_left_the_room() {
             &workspace.session_name,
             &AgentKind::new_unchecked("claude"),
             rimz::store::event::AgentLaunchPayload {
+                system_prompt_digest: None,
                 agent_id: rimz::ids::AgentSessionId::from("gone-session"),
                 launch_id: Some(rimz::ids::AgentSessionId::from("gone-launch")),
                 agent_name: "gone".to_owned(),

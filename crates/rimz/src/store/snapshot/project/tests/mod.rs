@@ -95,6 +95,7 @@ fn indexed_launch_agent(
 
 fn launch_payload(agent_id: &str, agent_name: &str) -> AgentLaunchPayload {
     AgentLaunchPayload {
+        system_prompt_digest: None,
         agent_id: agent_id.into(),
         launch_id: None,
         agent_name: agent_name.to_owned(),
@@ -118,6 +119,34 @@ fn launch_event(kind: &str, payload: AgentLaunchPayload) -> EventEnvelope {
         &AgentKind::new_unchecked(kind),
         payload,
     )
+}
+
+#[test]
+fn system_prompt_digest_survives_attach_and_absent_launch_values() {
+    let digest = "a".repeat(64);
+    let launch = |digest: Option<&str>| {
+        let mut event = launch_event("claude", launch_payload("session", "coder"));
+        let mut params: serde_json::Value = serde_json::from_str(event.params.get()).unwrap();
+        if let Some(digest) = digest {
+            params["system_prompt_digest"] = json!(digest);
+        }
+        event.params = serde_json::value::to_raw_value(&params).unwrap();
+        event
+    };
+    let folded_digest = |events: &[EventEnvelope]| {
+        serde_json::to_value(&reduce_agent_states(events)[0]).unwrap()["system_prompt_digest"]
+            .clone()
+    };
+    let mut events = vec![launch(Some(&digest))];
+    assert_eq!(folded_digest(&events), json!(digest));
+    events.push(attach_event("claude", "session", None, "tmux:%4", None, 7));
+    assert_eq!(folded_digest(&events), json!(digest));
+    events.push(launch(None));
+    assert_eq!(folded_digest(&events), json!(digest));
+    let replacement = "b".repeat(64);
+    events.push(launch(Some(&replacement)));
+    assert_eq!(folded_digest(&events), json!(replacement));
+    assert_eq!(folded_digest(&[launch(None)]), serde_json::Value::Null);
 }
 
 #[test]
