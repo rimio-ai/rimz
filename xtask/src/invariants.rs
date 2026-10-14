@@ -1781,26 +1781,44 @@ fn ensure_provider_files_follow_symlinks(root: &Path, files: &[PathBuf]) -> Resu
 
 /// A provider home is an account: host-side code resolves it from the login
 /// env it is handed, never the process env, or a named account would read the
-/// default home. Only the ambient snapshot in `agents/login.rs` reads the whole
-/// process env; tests may set up their own.
+/// default home. Under `agents/`, only the ambient snapshot in `agents/login.rs`
+/// reads the whole process env, so no home key escapes the per-key needles
+/// through a snapshot map; tests may set up their own.
 fn ensure_provider_homes_resolve_from_login_env(root: &Path, files: &[PathBuf]) -> Result<()> {
     let src = root.join("crates/rimz/src");
-    for key in ["CLAUDE_CONFIG_DIR", "CODEX_HOME"] {
+    let is_test = |path: &Path| {
+        path.strip_prefix(&src).is_ok_and(path_has_tests_component)
+            || path
+                .file_name()
+                .and_then(OsStr::to_str)
+                .is_some_and(|name| name == "tests.rs" || name.ends_with("_tests.rs"))
+    };
+    let message =
+        "resolve provider homes through the login env (`agents::login`), not the process env";
+    for key in [
+        "CLAUDE_CONFIG_DIR",
+        "CODEX_HOME",
+        "QWEN_HOME",
+        "QWEN_RUNTIME_DIR",
+    ] {
         for read in [concat!("var", "(\""), concat!("var", "_os(\"")] {
             ensure_no_match(
                 files,
                 &format!("{read}{key}\""),
-                |path| {
-                    !path.starts_with(&src)
-                        || path.strip_prefix(&src).is_ok_and(path_has_tests_component)
-                        || path
-                            .file_name()
-                            .and_then(OsStr::to_str)
-                            .is_some_and(|name| name == "tests.rs" || name.ends_with("_tests.rs"))
-                },
-                "resolve provider homes through the login env (`agents::login`), not the process env",
+                |path| !path.starts_with(&src) || is_test(path),
+                message,
             )?;
         }
+    }
+    let agents = src.join("agents");
+    let ambient = agents.join("login.rs");
+    for snapshot in [concat!("vars", "_os()"), concat!("env::", "vars()")] {
+        ensure_no_match(
+            files,
+            snapshot,
+            |path| !path.starts_with(&agents) || path == ambient || is_test(path),
+            message,
+        )?;
     }
     Ok(())
 }
