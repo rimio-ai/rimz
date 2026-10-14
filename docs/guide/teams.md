@@ -130,7 +130,7 @@ rimz teams stop forge      # close every member, and their subagents
 rimz teams wait forge      # block until the board reaches Done, then print its Result
 ```
 
-`wait` is the one for a script. It needs the cohort live when it starts, then polls the board and returns when the stage is exactly `Done`, printing the board's `## Result` section; it exits `1` if every member ends first, and `--timeout 4h` caps it at exit `124`. Idle members are not the finish line, and neither is a quiet room: only the board says the work is done.
+`wait` is the one for a script. It needs the cohort live when it starts, then polls the board and returns when the stage is exactly `Done`, printing the board's `## Result` section; it exits `1` if every member ends first, and `--timeout 4h` caps it at exit `124`. Idle members are not the finish line, and neither is a quiet room: only the board says the work is done. Progress and attention changes go to stderr, including with `--json`; when someone needs you, the wait tells you and keeps waiting.
 
 An agent that launches a team need not run `wait` at all. Each time the board flips to `Done`, RimZ sends that agent one `TEAM_REPORT` with the leader's final response and the absolute path of the team's board, as if the whole team were one agent ([team reports](../reference/cli/teams.md#team-reports)). If every member ends before `Done`, the launcher instead receives one failure report with the last stage and the leader's last response. Stopping or restarting the team yourself does not send that report. The members' own turns report nothing back. A team launched with `--detach` sends no report at any `Done`; its launcher goes on without it and can still run `rimz teams wait`.
 

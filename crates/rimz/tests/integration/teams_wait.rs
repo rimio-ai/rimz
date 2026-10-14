@@ -150,7 +150,9 @@ fn wait_times_out_on_a_pending_board_and_settles_at_once_on_done() {
         "{}",
         text(&missing.stderr)
     );
-    assert!(text(&missing.stderr).contains("forge#a (timed out)"));
+    assert!(
+        text(&missing.stderr).contains("forge#a: timed out after 1s at none; cohort left running")
+    );
 
     std::fs::write(worktree.join("blackboard.md"), "Stage: Build (@coder)\n").unwrap();
     let pending = fixture.run(&["forge", "-w", "a", "--timeout", "1s", "--json"]);
@@ -159,10 +161,23 @@ fn wait_times_out_on_a_pending_board_and_settles_at_once_on_done() {
     assert_eq!(report["status"], "timed_out");
     assert_eq!(report["stage"], "Build");
     assert_eq!(report["result"], Value::Null);
+    assert!(
+        text(&pending.stderr).contains("waiting on forge#a: Build (@coder, not live)"),
+        "{}",
+        text(&pending.stderr),
+    );
+    assert!(
+        text(&pending.stderr).contains(
+            "forge#a: timed out after 1s at Build (@coder, not live); cohort left running"
+        ),
+        "{}",
+        text(&pending.stderr)
+    );
 
     std::fs::write(worktree.join("blackboard.md"), DONE_BOARD).unwrap();
     let done = fixture.run(&["forge#a"]);
     assert_eq!(done.status.code(), Some(0), "{}", text(&done.stderr));
+    assert!(text(&done.stderr).is_empty(), "{}", text(&done.stderr));
     assert_eq!(
         text(&done.stdout),
         "PR: https://example.test/pr/1\n- gate green\n"
