@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::agents::account::AccountProbe;
+use crate::agents::account::{AccountProbe, AccountProbeError};
 
 pub(super) fn probe(login_env: &BTreeMap<String, String>) -> AccountProbe {
     match super::selection::resolve(login_env) {
@@ -10,6 +10,8 @@ pub(super) fn probe(login_env: &BTreeMap<String, String>) -> AccountProbe {
             AccountProbe::Found(selection.account())
         }
         super::selection::SelectionState::LoggedOut => AccountProbe::LoggedOut,
-        super::selection::SelectionState::Unavailable => AccountProbe::Unavailable,
+        super::selection::SelectionState::Unavailable => {
+            AccountProbe::Unavailable(AccountProbeError::SourceUnavailable)
+        }
     }
 }

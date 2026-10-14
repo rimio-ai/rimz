@@ -6,7 +6,7 @@ use std::path::Path;
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::agents::account::AccountProbe;
+use crate::agents::account::{AccountProbe, AccountProbeError};
 use crate::agents::context::AgentAccount;
 
 #[derive(Default, Deserialize)]
@@ -35,7 +35,7 @@ pub(super) enum CopilotConfigLoad {
         config: CopilotConfig,
         stamp: Option<u64>,
     },
-    Unavailable,
+    Unavailable(AccountProbeError),
 }
 
 pub(super) fn probe() -> AccountProbe {
@@ -52,7 +52,7 @@ fn probe_home(home: Option<&Path>) -> AccountProbe {
 fn probe_at(path: &Path) -> AccountProbe {
     let (config, stamp) = match load_config(path) {
         CopilotConfigLoad::Missing => return AccountProbe::LoggedOut,
-        CopilotConfigLoad::Unavailable => return AccountProbe::Unavailable,
+        CopilotConfigLoad::Unavailable(cause) => return AccountProbe::Unavailable(cause),
         CopilotConfigLoad::Loaded { config, stamp } => (config, stamp),
     };
     let Some(account_id) = config.account_id() else {
@@ -74,14 +74,14 @@ pub(super) fn load_config(path: &Path) -> CopilotConfigLoad {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return CopilotConfigLoad::Missing;
         }
-        Err(_) => return CopilotConfigLoad::Unavailable,
+        Err(_) => return CopilotConfigLoad::Unavailable(AccountProbeError::ReadFailed),
     };
     match crate::agents::jsonc::from_slice::<CopilotConfig>(&bytes) {
         Ok(config) => CopilotConfigLoad::Loaded {
             config,
             stamp: crate::agents::account::file_mtime_ms(path),
         },
-        Err(_) => CopilotConfigLoad::Unavailable,
+        Err(_) => CopilotConfigLoad::Unavailable(AccountProbeError::UnparseableOutput),
     }
 }
 
@@ -304,11 +304,17 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.json");
         std::fs::write(&path, "not json").unwrap();
-        assert!(matches!(probe_at(&path), AccountProbe::Unavailable));
+        assert!(matches!(
+            probe_at(&path),
+            AccountProbe::Unavailable(AccountProbeError::UnparseableOutput)
+        ));
 
         let directory = dir.path().join("config-directory");
         std::fs::create_dir(&directory).unwrap();
-        assert!(matches!(probe_at(&directory), AccountProbe::Unavailable));
+        assert!(matches!(
+            probe_at(&directory),
+            AccountProbe::Unavailable(AccountProbeError::ReadFailed)
+        ));
     }
 
     #[test]

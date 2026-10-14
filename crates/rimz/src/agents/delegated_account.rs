@@ -11,7 +11,7 @@ use sha2::{Digest, Sha256};
 
 use crate::utils::time::unix_now_ms;
 
-use super::account::{AccountProbe, file_mtime_ms};
+use super::account::{AccountProbe, AccountProbeError, file_mtime_ms};
 use super::credits::{AccountUsageFault, AccountUsageReportable};
 use super::{AccountUsageIdentity, AccountUsageProbe, AgentAccount, ProviderAccountScope};
 
@@ -129,7 +129,8 @@ pub(super) fn probe_account(config: &Config) -> AccountProbe {
     let credentials = match loaded.entries {
         Ok(credentials) => credentials,
         Err(Error::NoCredentials { .. }) => return AccountProbe::LoggedOut,
-        Err(_) => return AccountProbe::Unavailable,
+        Err(Error::Io { .. }) => return AccountProbe::Unavailable(AccountProbeError::ReadFailed),
+        Err(_) => return AccountProbe::Unavailable(AccountProbeError::UnparseableOutput),
     };
     if credentials.is_empty() {
         return AccountProbe::LoggedOut;
@@ -562,7 +563,10 @@ mod tests {
         assert!(matches!(probe_account(&pi), AccountProbe::LoggedOut));
 
         std::fs::write(&path, b"not json").unwrap();
-        assert!(matches!(probe_account(&pi), AccountProbe::Unavailable));
+        assert!(matches!(
+            probe_account(&pi),
+            AccountProbe::Unavailable(AccountProbeError::UnparseableOutput)
+        ));
 
         std::fs::write(
             &path,
@@ -633,7 +637,10 @@ mod tests {
 
         assert!(matches!(probe_account(&config), AccountProbe::LoggedOut));
         std::fs::write(&path, b"not json").unwrap();
-        assert!(matches!(probe_account(&config), AccountProbe::Unavailable));
+        assert!(matches!(
+            probe_account(&config),
+            AccountProbe::Unavailable(AccountProbeError::UnparseableOutput)
+        ));
         std::fs::write(&path, b"{}").unwrap();
         assert!(matches!(probe_account(&config), AccountProbe::LoggedOut));
         assert_eq!(RESOLVER_CALLS.load(Ordering::Relaxed), 0);

@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tracing::warn;
 
-use crate::agents::account::AccountProbe;
+use crate::agents::account::{AccountProbe, AccountProbeError};
 use crate::agents::spending::{CachedEntry, SpendCursor, SpendParse, SpendUpdate};
 use crate::agents::{
     AccountUsageProbe, AccountUsageSnapshot, AgentAccount, AgentRateLimits, RateLimitWindow,
@@ -126,8 +126,9 @@ pub(super) fn spend(
 }
 
 pub(super) fn account(kind: &str, plugin_dir: &Path, argv: &[String]) -> AccountProbe {
-    let Some(response) = account_response(kind, plugin_dir, argv) else {
-        return AccountProbe::Unavailable;
+    let response = match account_response(kind, plugin_dir, argv) {
+        Ok(response) => response,
+        Err(cause) => return AccountProbe::Unavailable(cause),
     };
     if response.logged_out {
         return AccountProbe::LoggedOut;
@@ -146,7 +147,7 @@ pub(super) fn account(kind: &str, plugin_dir: &Path, argv: &[String]) -> Account
 }
 
 pub(super) fn account_usage(kind: &str, plugin_dir: &Path, argv: &[String]) -> AccountUsageProbe {
-    let Some(response) = account_response(kind, plugin_dir, argv) else {
+    let Ok(response) = account_response(kind, plugin_dir, argv) else {
         return AccountUsageProbe::Failed(Default::default());
     };
     let identity = crate::agents::AccountUsageIdentity {
@@ -194,7 +195,7 @@ pub(super) fn check_spend(
     };
     let output = match run_json_diagnostic(kind, "spend", plugin_dir, argv, Some(&request)) {
         Ok(output) => output,
-        Err(error) => return ProbeCheck::Failed(error),
+        Err(error) => return ProbeCheck::Failed(error.to_string()),
     };
     let response: SpendResponse = match serde_json::from_slice(&output) {
         Ok(response) => response,
@@ -216,7 +217,7 @@ pub(super) fn check_spend(
 pub(super) fn check_account(kind: &str, plugin_dir: &Path, argv: &[String]) -> ProbeCheck {
     let output = match run_json_diagnostic::<Value>(kind, "account", plugin_dir, argv, None) {
         Ok(output) => output,
-        Err(error) => return ProbeCheck::Failed(error),
+        Err(error) => return ProbeCheck::Failed(error.to_string()),
     };
     match serde_json::from_slice::<AccountResponse>(&output) {
         Ok(_) => ProbeCheck::Passed("canonical account response".into()),
@@ -227,7 +228,7 @@ pub(super) fn check_account(kind: &str, plugin_dir: &Path, argv: &[String]) -> P
 pub(super) fn check_version(kind: &str, plugin_dir: &Path, argv: &[String]) -> ProbeCheck {
     let output = match run_json_diagnostic::<Value>(kind, "version", plugin_dir, argv, None) {
         Ok(output) => output,
-        Err(error) => return ProbeCheck::Failed(error),
+        Err(error) => return ProbeCheck::Failed(error.to_string()),
     };
     match String::from_utf8(output).ok().and_then(|output| {
         output
@@ -241,13 +242,21 @@ pub(super) fn check_version(kind: &str, plugin_dir: &Path, argv: &[String]) -> P
     }
 }
 
-fn account_response(kind: &str, plugin_dir: &Path, argv: &[String]) -> Option<AccountResponse> {
-    let output = run_json::<Value>(kind, "account", plugin_dir, argv, None)?;
+fn account_response(
+    kind: &str,
+    plugin_dir: &Path,
+    argv: &[String],
+) -> Result<AccountResponse, AccountProbeError> {
+    let output =
+        run_json_diagnostic::<Value>(kind, "account", plugin_dir, argv, None).map_err(|error| {
+            warn!(kind, error = %error, "agent plugin account probe failed");
+            error.cause
+        })?;
     match serde_json::from_slice(&output) {
-        Ok(response) => Some(response),
+        Ok(response) => Ok(response),
         Err(err) => {
             warn!(kind, error = %err, "agent plugin account probe returned invalid JSON");
-            None
+            Err(AccountProbeError::UnparseableOutput)
         }
     }
 }
@@ -262,10 +271,17 @@ fn run_json<T: Serialize>(
     match run_json_diagnostic(kind, probe, plugin_dir, argv, request) {
         Ok(output) => Some(output),
         Err(error) => {
-            warn!(kind, probe, error, "agent plugin probe failed");
+            warn!(kind, probe, error = %error, "agent plugin probe failed");
             None
         }
     }
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("{detail}")]
+struct ProbeFailure {
+    cause: AccountProbeError,
+    detail: String,
 }
 
 fn run_json_diagnostic<T: Serialize>(
@@ -274,9 +290,12 @@ fn run_json_diagnostic<T: Serialize>(
     plugin_dir: &Path,
     argv: &[String],
     request: Option<&T>,
-) -> Result<Vec<u8>, String> {
+) -> Result<Vec<u8>, ProbeFailure> {
     let Some(executable_arg) = argv.first() else {
-        return Err("probe command is empty".into());
+        return Err(ProbeFailure {
+            cause: AccountProbeError::SpawnFailed,
+            detail: "probe command is empty".into(),
+        });
     };
     let executable = resolve_executable(plugin_dir, executable_arg);
     let mut command = Command::new(&executable);
@@ -286,9 +305,10 @@ fn run_json_diagnostic<T: Serialize>(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let mut child = command
-        .spawn()
-        .map_err(|error| format!("did not start: {error}"))?;
+    let mut child = command.spawn().map_err(|error| ProbeFailure {
+        cause: AccountProbeError::SpawnFailed,
+        detail: format!("did not start: {error}"),
+    })?;
     let mut stdin = child.stdin.take();
     let request_failed = request.is_some_and(|request| {
         let Some(stdin) = stdin.as_mut() else {
@@ -300,7 +320,10 @@ fn run_json_diagnostic<T: Serialize>(
     if request_failed {
         let _ = child.kill();
         let _ = child.wait();
-        return Err("request write failed".into());
+        return Err(ProbeFailure {
+            cause: AccountProbeError::SourceUnavailable,
+            detail: "request write failed".into(),
+        });
     }
     let stdout = child.stdout.take().map(|pipe| drain(pipe, MAX_STDOUT));
     let stderr = child.stderr.take().map(|pipe| drain(pipe, MAX_STDERR));
@@ -312,25 +335,37 @@ fn run_json_diagnostic<T: Serialize>(
             Ok(None) => {
                 let _ = child.kill();
                 let _ = child.wait();
-                return Err("timed out after 3 seconds".into());
+                return Err(ProbeFailure {
+                    cause: AccountProbeError::TimedOut,
+                    detail: "timed out after 3 seconds".into(),
+                });
             }
             Err(err) => {
                 let _ = child.kill();
                 let _ = child.wait();
-                return Err(format!("wait failed: {err}"));
+                return Err(ProbeFailure {
+                    cause: AccountProbeError::SourceUnavailable,
+                    detail: format!("wait failed: {err}"),
+                });
             }
         }
     };
     let stdout = join(stdout);
     let stderr = join(stderr);
     if !status.success() {
-        return Err(format!(
-            "exited with {status}: {}",
-            String::from_utf8_lossy(&stderr).trim()
-        ));
+        return Err(ProbeFailure {
+            cause: AccountProbeError::ExitNonZero(status.code()),
+            detail: format!(
+                "exited with {status}: {}",
+                String::from_utf8_lossy(&stderr).trim()
+            ),
+        });
     }
     if stdout.len() as u64 > MAX_STDOUT {
-        return Err("output exceeded 1 MiB".into());
+        return Err(ProbeFailure {
+            cause: AccountProbeError::UnparseableOutput,
+            detail: "output exceeded 1 MiB".into(),
+        });
     }
     Ok(stdout)
 }
@@ -371,6 +406,33 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+
+    #[test]
+    #[cfg(unix)]
+    fn account_probe_failure_causes() {
+        use crate::agents::account::AccountProbeError;
+        let dir = TempDir::new().unwrap();
+        for (argv, expected) in [
+            (vec!["./missing".into()], AccountProbeError::SpawnFailed),
+            (
+                vec!["/bin/sh".into(), "-c".into(), "exit 7".into()],
+                AccountProbeError::ExitNonZero(Some(7)),
+            ),
+            (
+                vec!["/bin/sh".into(), "-c".into(), "printf invalid".into()],
+                AccountProbeError::UnparseableOutput,
+            ),
+            (
+                vec!["/bin/sh".into(), "-c".into(), "exec sleep 10".into()],
+                AccountProbeError::TimedOut,
+            ),
+        ] {
+            let AccountProbe::Unavailable(cause) = account("testbot", dir.path(), &argv) else {
+                panic!("failed probe must retain its cause");
+            };
+            assert_eq!(cause, expected);
+        }
+    }
 
     #[test]
     #[cfg(unix)]

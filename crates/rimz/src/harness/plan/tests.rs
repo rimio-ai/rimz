@@ -250,6 +250,7 @@ fn launch_availability_judges_the_pinned_account_not_the_rooms() {
         )
         .unwrap();
         let record = ProviderRecord {
+            probe_error: None,
             login: None,
             probed_at_ms: 1,
             ok: true,
@@ -292,6 +293,7 @@ fn launch_availability_judges_the_pinned_account_not_the_rooms() {
     // A logout probed while the kind had a live agent keeps the CLI version;
     // the recorded outcome, not the account's presence, is what skips it.
     let version_only = |login| ProviderRecord {
+        probe_error: None,
         login,
         probed_at_ms: 1,
         ok: true,

@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::agents::account::AccountProbe;
+use crate::agents::account::{AccountProbe, AccountProbeError};
 use crate::agents::context::AgentAccount;
 
 pub(super) fn probe() -> AccountProbe {
@@ -18,7 +18,10 @@ fn probe_sources(api_key_present: bool, secret_path: Option<&Path>) -> AccountPr
     if api_key_present {
         return AccountProbe::Found(pay_per_use_account(None));
     }
-    secret_path.map_or(AccountProbe::Unavailable, probe_path)
+    secret_path.map_or(
+        AccountProbe::Unavailable(AccountProbeError::SourceUnavailable),
+        probe_path,
+    )
 }
 
 fn pay_per_use_account(credentials_updated_at_ms: Option<u64>) -> AgentAccount {
@@ -39,9 +42,9 @@ fn probe_path(path: &Path) -> AccountProbe {
             let credentials_updated_at_ms = crate::agents::account::file_mtime_ms(path);
             AccountProbe::Found(pay_per_use_account(credentials_updated_at_ms))
         }
-        Ok(_) => AccountProbe::Unavailable,
+        Ok(_) => AccountProbe::Unavailable(AccountProbeError::ReadFailed),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => AccountProbe::LoggedOut,
-        Err(_) => AccountProbe::Unavailable,
+        Err(_) => AccountProbe::Unavailable(AccountProbeError::ReadFailed),
     }
 }
 
@@ -65,7 +68,10 @@ mod tests {
 
         std::fs::remove_file(&path).unwrap();
         std::fs::create_dir(&path).unwrap();
-        assert!(matches!(probe_path(&path), AccountProbe::Unavailable));
+        assert!(matches!(
+            probe_path(&path),
+            AccountProbe::Unavailable(AccountProbeError::ReadFailed)
+        ));
     }
 
     #[test]
@@ -77,7 +83,7 @@ mod tests {
         assert_eq!(account.credentials_updated_at_ms, None);
         assert!(matches!(
             probe_sources(false, None),
-            AccountProbe::Unavailable
+            AccountProbe::Unavailable(AccountProbeError::SourceUnavailable)
         ));
     }
 }

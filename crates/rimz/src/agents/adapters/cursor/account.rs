@@ -5,12 +5,12 @@ use std::process::{Command, Stdio};
 
 use serde::Deserialize;
 
-use crate::agents::account::AccountProbe;
+use crate::agents::account::{AccountProbe, AccountProbeError};
 use crate::agents::{AgentAccount, AgentSpec, locate_binary};
 
 #[derive(Debug)]
 struct ProbeOutput {
-    success: bool,
+    failure: Option<AccountProbeError>,
     stdout: Vec<u8>,
 }
 
@@ -27,7 +27,13 @@ fn run(binary: &Path, args: &[&str]) -> Option<ProbeOutput> {
     )
     .ok()?;
     Some(ProbeOutput {
-        success: !output.timed_out && output.status.success(),
+        failure: if output.timed_out {
+            Some(AccountProbeError::TimedOut)
+        } else if !output.status.success() {
+            Some(AccountProbeError::ExitNonZero(output.status.code()))
+        } else {
+            None
+        },
         stdout: output.stdout,
     })
 }
@@ -38,46 +44,50 @@ fn probe_with(
     mut run: impl FnMut(&Path, &[&str]) -> Option<ProbeOutput>,
 ) -> AccountProbe {
     let Some(binary) = locate(definition) else {
-        return AccountProbe::Unavailable;
+        return AccountProbe::Unavailable(AccountProbeError::SpawnFailed);
     };
     let Some(status_output) = run(&binary, &["status", "--format", "json"]) else {
-        return AccountProbe::Unavailable;
+        return AccountProbe::Unavailable(AccountProbeError::SpawnFailed);
     };
-    if !status_output.success {
-        return AccountProbe::Unavailable;
+    if let Some(cause) = status_output.failure {
+        return AccountProbe::Unavailable(cause);
     }
     let Ok(status) = serde_json::from_slice::<StatusShape>(&status_output.stdout) else {
-        return AccountProbe::Unavailable;
+        return AccountProbe::Unavailable(AccountProbeError::UnparseableOutput);
     };
     let status_fact = match status.status.as_deref().map(parse_status_fact) {
         Some(Some(fact)) => Some(fact),
-        Some(None) if non_blank(status.status).is_some() => return AccountProbe::Unavailable,
+        Some(None) if non_blank(status.status).is_some() => {
+            return AccountProbe::Unavailable(AccountProbeError::UnparseableOutput);
+        }
         _ => None,
     };
     let auth_fact = match (status_fact, status.is_authenticated) {
-        (Some(left), Some(right)) if left != right => return AccountProbe::Unavailable,
+        (Some(left), Some(right)) if left != right => {
+            return AccountProbe::Unavailable(AccountProbeError::UnparseableOutput);
+        }
         (Some(fact), _) | (_, Some(fact)) => fact,
-        (None, None) => return AccountProbe::Unavailable,
+        (None, None) => return AccountProbe::Unavailable(AccountProbeError::UnparseableOutput),
     };
     if !auth_fact {
         return AccountProbe::LoggedOut;
     }
 
     let Some(about_output) = run(&binary, &["about", "--format", "json"]) else {
-        return AccountProbe::Unavailable;
+        return AccountProbe::Unavailable(AccountProbeError::SpawnFailed);
     };
-    if !about_output.success {
-        return AccountProbe::Unavailable;
+    if let Some(cause) = about_output.failure {
+        return AccountProbe::Unavailable(cause);
     }
     let Ok(about) = serde_json::from_slice::<AboutShape>(&about_output.stdout) else {
-        return AccountProbe::Unavailable;
+        return AccountProbe::Unavailable(AccountProbeError::UnparseableOutput);
     };
     let status_email = status.user_info.and_then(|info| non_blank(info.email));
     let about_email = non_blank(about.user_email);
     if let (Some(status_email), Some(about_email)) = (&status_email, &about_email)
         && !status_email.eq_ignore_ascii_case(about_email)
     {
-        return AccountProbe::Unavailable;
+        return AccountProbe::Unavailable(AccountProbeError::UnparseableOutput);
     }
     let plan = non_blank(about.subscription_tier);
     AccountProbe::Found(AgentAccount {
@@ -147,7 +157,7 @@ mod tests {
 
     fn output(stdout: &str) -> ProbeOutput {
         ProbeOutput {
-            success: true,
+            failure: None,
             stdout: stdout.as_bytes().to_vec(),
         }
     }
@@ -240,7 +250,7 @@ mod tests {
         ] {
             assert!(matches!(
                 probe_outputs(outputs).0,
-                AccountProbe::Unavailable
+                AccountProbe::Unavailable(AccountProbeError::UnparseableOutput)
             ));
         }
     }
@@ -249,23 +259,32 @@ mod tests {
     fn malformed_spawn_and_nonzero_results_retry() {
         assert!(matches!(
             probe_outputs(vec![output("not json")]).0,
-            AccountProbe::Unavailable
+            AccountProbe::Unavailable(AccountProbeError::UnparseableOutput)
         ));
         let (spawn_failure, _) = probe_outputs(Vec::new());
-        assert!(matches!(spawn_failure, AccountProbe::Unavailable));
+        assert!(matches!(
+            spawn_failure,
+            AccountProbe::Unavailable(AccountProbeError::SpawnFailed)
+        ));
         let (nonzero, _) = probe_outputs(vec![ProbeOutput {
-            success: false,
+            failure: Some(AccountProbeError::ExitNonZero(Some(1))),
             stdout: b"{}".to_vec(),
         }]);
-        assert!(matches!(nonzero, AccountProbe::Unavailable));
+        assert!(matches!(
+            nonzero,
+            AccountProbe::Unavailable(AccountProbeError::ExitNonZero(Some(1)))
+        ));
         let (about_failure, _) = probe_outputs(vec![
             output(r#"{"isAuthenticated":true}"#),
             ProbeOutput {
-                success: false,
+                failure: Some(AccountProbeError::ExitNonZero(Some(1))),
                 stdout: b"{}".to_vec(),
             },
         ]);
-        assert!(matches!(about_failure, AccountProbe::Unavailable));
+        assert!(matches!(
+            about_failure,
+            AccountProbe::Unavailable(AccountProbeError::ExitNonZero(Some(1)))
+        ));
     }
 
     #[test]

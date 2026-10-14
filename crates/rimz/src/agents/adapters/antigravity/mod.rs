@@ -558,7 +558,9 @@ impl crate::agents::capabilities::AccountCapability for AntigravityAdapter {
     fn probe_account(&self, _login_env: &BTreeMap<String, String>) -> super::account::AccountProbe {
         local_api::probe_account()
             .map(super::account::AccountProbe::Found)
-            .unwrap_or(super::account::AccountProbe::Unavailable)
+            .unwrap_or(super::account::AccountProbe::Unavailable(
+                crate::agents::account::AccountProbeError::SourceUnavailable,
+            ))
     }
 
     fn probe_account_usage(

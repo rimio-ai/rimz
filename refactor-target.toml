@@ -204,7 +204,8 @@ upward-dependencies = ["address"]
 # LaunchCapability::system_prompt_arg_matchers identifies native configured prompt inputs (+1).
 # AgentDefinition::is_foreign_hook_payload and HookCapability::recognizes_hook_payload keep native recognition in adapters (+2).
 # LocalSessionLookup and the capability/login locate_session methods support exact provider resume (+3).
-surface-budget = 1058
+# AccountProbeError carries secret-free failed-probe causes to cache and CLI (+1).
+surface-budget = 1059
 
 [[verdict]]
 kind = "item"
@@ -5913,3 +5914,8 @@ reason = "Distinct Zellij log shapes retain neighbor-aware disconnect pairing, l
 kind = "item"
 key = "cli::doctor::mux_log::scan_tail"
 reason = "After mirror types and duplicate bookkeeping are deleted, the ordered read, assemble, cutoff, group and cap pipeline remains. Pins preserve first and last dated occurrences, last-occurrence ordering, first sample and truncation accumulation; further single-use splits delete nothing (pass 29c)."
+
+[[verdict]]
+kind = "item"
+key = "agents::account::AccountProbeError"
+reason = "Provider adapters publish typed, secret-free failure causes through the account cache for CLI reporting."

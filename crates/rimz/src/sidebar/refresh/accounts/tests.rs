@@ -19,6 +19,7 @@ fn native_logins() -> Vec<ProviderLogin> {
 
 fn record(probed_at_ms: u64, ok: bool, account: Option<AgentAccount>) -> ProviderRecord {
     ProviderRecord {
+        probe_error: None,
         login: None,
         probed_at_ms,
         ok,
@@ -265,7 +266,10 @@ fn failed_provider_retries_alone_without_refreshing_successful_records() {
     let mut probed = Vec::new();
     let merged = probe_accounts_with(&due, &cache, &BTreeSet::new(), now_ms, |kind, _active| {
         probed.push(kind.to_owned());
-        Some((AccountProbe::Unavailable, None))
+        Some((
+            AccountProbe::Unavailable(crate::agents::account::AccountProbeError::TimedOut),
+            None,
+        ))
     });
 
     assert_eq!(probed, ["copilot"]);
@@ -292,7 +296,12 @@ fn unavailable_probe_keeps_last_known_account() {
         &previous,
         &BTreeSet::new(),
         20,
-        |_kind, _active| Some((AccountProbe::Unavailable, None)),
+        |_kind, _active| {
+            Some((
+                AccountProbe::Unavailable(crate::agents::account::AccountProbeError::TimedOut),
+                None,
+            ))
+        },
     );
 
     assert_eq!(
@@ -300,13 +309,40 @@ fn unavailable_probe_keeps_last_known_account() {
         Some(previous_account)
     );
     assert!(!merged.logins[&key("copilot")].ok);
+    assert_eq!(
+        serde_json::to_value(&merged.logins[&key("copilot")]).unwrap()["probe_error"],
+        serde_json::json!("timed_out")
+    );
+
+    for outcome in [
+        AccountProbe::LoggedOut,
+        AccountProbe::Found(AgentAccount::default()),
+    ] {
+        let mut outcome = Some(outcome);
+        let recovered = probe_accounts_with(
+            &BTreeSet::from([key("copilot")]),
+            &merged,
+            &BTreeSet::new(),
+            30,
+            |_, _| Some((outcome.take().unwrap(), None)),
+        );
+        assert!(
+            serde_json::to_value(&recovered.logins[&key("copilot")]).unwrap()["probe_error"]
+                .is_null()
+        );
+    }
 
     let active = probe_accounts_with(
         &BTreeSet::from([key("copilot")]),
         &previous,
         &BTreeSet::from(["copilot".to_owned()]),
         20,
-        |_kind, _active| Some((AccountProbe::Unavailable, Some("1.0.0".to_owned()))),
+        |_kind, _active| {
+            Some((
+                AccountProbe::Unavailable(crate::agents::account::AccountProbeError::TimedOut),
+                Some("1.0.0".to_owned()),
+            ))
+        },
     );
     let account = active.logins[&key("copilot")].account.as_ref().unwrap();
     assert_eq!(account.account_id.as_deref(), Some("octocat"));
@@ -391,7 +427,10 @@ fn refreshed_accounts_keep_versions_and_logged_out_active_kinds_keep_version_onl
 
     // A failed probe records no outcome: it keeps what it had and retries.
     let failed = probe_accounts_with(&due, &logged_out, &active, 30, |_kind, _active| {
-        Some((AccountProbe::Unavailable, None))
+        Some((
+            AccountProbe::Unavailable(crate::agents::account::AccountProbeError::TimedOut),
+            None,
+        ))
     });
     assert_eq!(failed.logins[&key("pi")].login, None);
     assert!(!failed.logins[&key("pi")].ok);

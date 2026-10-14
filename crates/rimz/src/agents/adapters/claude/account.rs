@@ -11,7 +11,7 @@ use std::process::{Command, Stdio};
 
 use serde::Deserialize;
 
-use crate::agents::account::AccountProbe;
+use crate::agents::account::{AccountProbe, AccountProbeError};
 use crate::agents::context::{AgentAccount, RateLimitWindow, RateLimitWindowScope, WindowSource};
 use crate::agents::payload::non_empty_trimmed;
 
@@ -74,12 +74,12 @@ pub(crate) fn probe(login_env: &BTreeMap<String, String>) -> AccountProbe {
         &mut command,
         crate::agents::account::INFORMATIONAL_PROBE_TIMEOUT,
     ) else {
-        return AccountProbe::Unavailable;
+        return AccountProbe::Unavailable(AccountProbeError::SpawnFailed);
     };
     if output.timed_out {
-        return AccountProbe::Unavailable;
+        return AccountProbe::Unavailable(AccountProbeError::TimedOut);
     }
-    let mut probe = exit_outcome(output.status.success(), &output.stdout);
+    let mut probe = exit_outcome(output.status.code(), &output.stdout);
     if let AccountProbe::Found(account) = &mut probe {
         account.credentials_updated_at_ms = super::oauth_usage::credentials_stamp(login_env);
     }
@@ -90,13 +90,13 @@ pub(crate) fn probe(login_env: &BTreeMap<String, String>) -> AccountProbe {
 /// when logged out while still printing `"loggedIn": false`, so a failed exit
 /// is a logout only when its stdout says exactly that; any other failed exit,
 /// an error object included, is `Unavailable`.
-fn exit_outcome(succeeded: bool, stdout: &[u8]) -> AccountProbe {
-    if succeeded {
+fn exit_outcome(code: Option<i32>, stdout: &[u8]) -> AccountProbe {
+    if code == Some(0) {
         return parse_claude_auth(stdout);
     }
     match serde_json::from_slice::<ClaudeAuthStatus>(stdout) {
         Ok(status) if status.logged_in == Some(false) => AccountProbe::LoggedOut,
-        _ => AccountProbe::Unavailable,
+        _ => AccountProbe::Unavailable(AccountProbeError::ExitNonZero(code)),
     }
 }
 
@@ -117,7 +117,7 @@ struct ClaudeAuthStatus {
 /// confident logout.
 fn parse_claude_auth(stdout: &[u8]) -> AccountProbe {
     let Ok(status) = serde_json::from_slice::<ClaudeAuthStatus>(stdout) else {
-        return AccountProbe::Unavailable;
+        return AccountProbe::Unavailable(AccountProbeError::UnparseableOutput);
     };
     if status.logged_in == Some(false) {
         return AccountProbe::LoggedOut;
@@ -201,7 +201,7 @@ mod tests {
 
         assert!(matches!(
             parse_claude_auth(b"not json"),
-            AccountProbe::Unavailable
+            AccountProbe::Unavailable(AccountProbeError::UnparseableOutput)
         ));
     }
 
@@ -209,11 +209,11 @@ mod tests {
     fn a_failed_exit_is_logged_out_only_on_a_confident_logout() {
         let logged_out = br#"{ "loggedIn": false, "authMethod": "none" }"#;
         assert!(matches!(
-            exit_outcome(false, logged_out),
+            exit_outcome(Some(1), logged_out),
             AccountProbe::LoggedOut
         ));
         assert!(matches!(
-            exit_outcome(true, logged_out),
+            exit_outcome(Some(0), logged_out),
             AccountProbe::LoggedOut
         ));
         for stdout in [
@@ -224,15 +224,18 @@ mod tests {
             br#"{ "loggedIn": true, "authMethod": "claude.ai" }"#,
         ] {
             assert!(
-                matches!(exit_outcome(false, stdout), AccountProbe::Unavailable),
+                matches!(
+                    exit_outcome(Some(1), stdout),
+                    AccountProbe::Unavailable(AccountProbeError::ExitNonZero(Some(1)))
+                ),
                 "{}",
                 String::from_utf8_lossy(stdout)
             );
         }
         let json = br#"{ "loggedIn": true, "authMethod": "claude.ai" }"#;
-        found(exit_outcome(true, json), "a zero exit parses as before");
+        found(exit_outcome(Some(0), json), "a zero exit parses as before");
         assert!(
-            matches!(exit_outcome(true, b"{}"), AccountProbe::LoggedOut),
+            matches!(exit_outcome(Some(0), b"{}"), AccountProbe::LoggedOut),
             "a zero exit parses as before"
         );
     }

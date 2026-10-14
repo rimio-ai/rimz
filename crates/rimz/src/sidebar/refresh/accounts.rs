@@ -327,14 +327,14 @@ fn probe_one_account(login: &ProviderLogin, active: bool) -> Option<ProviderProb
     let outcome_class = match &outcome {
         AccountProbe::Found(_) => ProbeOutcomeClass::Success,
         AccountProbe::LoggedOut => ProbeOutcomeClass::LoggedOut,
-        AccountProbe::Unavailable => ProbeOutcomeClass::Unavailable,
+        AccountProbe::Unavailable(_) => ProbeOutcomeClass::Unavailable,
     };
     let version_started = Instant::now();
     let version = match &outcome {
         AccountProbe::Found(account) if account_version(Some(account)).is_none() => {
             adapter.probe_version()
         }
-        AccountProbe::LoggedOut | AccountProbe::Unavailable if active => adapter.probe_version(),
+        AccountProbe::LoggedOut | AccountProbe::Unavailable(_) if active => adapter.probe_version(),
         _ => None,
     };
     let version_ms = duration_ms(version_started.elapsed());
@@ -393,11 +393,15 @@ fn merge_probe_results(
             ..
         } = result;
         let active = active_version_kinds.contains(key.kind.as_str());
-        let ok = !matches!(&outcome, AccountProbe::Unavailable);
+        let ok = !matches!(&outcome, AccountProbe::Unavailable(_));
+        let probe_error = match &outcome {
+            AccountProbe::Unavailable(cause) => Some(*cause),
+            _ => None,
+        };
         let login = match &outcome {
             AccountProbe::Found(_) => Some(RecordedLogin::LoggedIn),
             AccountProbe::LoggedOut => Some(RecordedLogin::LoggedOut),
-            AccountProbe::Unavailable => None,
+            AccountProbe::Unavailable(_) => None,
         };
         let previous_record = previous.logins.get(&key);
         let account = match outcome {
@@ -422,7 +426,7 @@ fn merge_probe_results(
                         })
                 })
                 .flatten(),
-            AccountProbe::Unavailable => {
+            AccountProbe::Unavailable(_) => {
                 let mut account = previous_record.and_then(|record| record.account.clone());
                 if let Some(version) = probed_version {
                     account.get_or_insert_default().version = Some(version);
@@ -433,6 +437,7 @@ fn merge_probe_results(
         logins.insert(
             key,
             ProviderRecord {
+                probe_error,
                 probed_at_ms,
                 ok,
                 account,
@@ -458,7 +463,7 @@ fn probe_accounts_with(
         let outcome_class = match &outcome {
             AccountProbe::Found(_) => ProbeOutcomeClass::Success,
             AccountProbe::LoggedOut => ProbeOutcomeClass::LoggedOut,
-            AccountProbe::Unavailable => ProbeOutcomeClass::Unavailable,
+            AccountProbe::Unavailable(_) => ProbeOutcomeClass::Unavailable,
         };
         Some(ProviderProbeResult {
             key: key.clone(),
