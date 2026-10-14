@@ -1535,7 +1535,7 @@ fn cursor_ask_local_store_waits_in_pane_without_creating_a_structured_ask() {
         );
         assert_eq!(String::from_utf8_lossy(&output.stdout), "{}\n");
     }
-    let pane = tmux_pane("%0", "agent", &env.project_root);
+    let pane = tmux_pane("%0", "cursor-agent", &env.project_root);
     let discovered = rimz::agents::session::discover_local_sessions_under(
         "cursor",
         &cursor_home,
