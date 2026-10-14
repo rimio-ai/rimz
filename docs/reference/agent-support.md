@@ -115,10 +115,10 @@ These are the gaps you will notice, per agent, beyond what the matrix and `rimz 
 
 ### Kiro
 
-- Turns and tool calls arrive through the global hook file `rimz hooks install kiro` manages, which needs Kiro CLI 2.31.0 or later.
+- Turns, tool calls, and session exits arrive through the global hook file `rimz hooks install kiro` manages, which needs Kiro CLI 2.31.0 or later.
 - Kiro's local session store still supplies the card before the first prompt, pending approvals, context, and history.
 - A cancelled or errored turn fires no hook: the card settles from the store, and a supervised `-p` run on that turn ends at its `--timeout`.
-- A pending tool approval raises Waiting; `rimz asks` and `rimz answer` do not see it.
+- A pending tool approval or native question raises Waiting; answer it in Kiro's pane, not through `rimz asks` or `rimz answer`.
 - Context is a percentage only.
 
 ### Kimi
@@ -190,7 +190,7 @@ A permission mode comes from the `mode` profile field, the `--ask` and `--yolo` 
 | Droid | none | `--auto medium` | `--use-spec` | none |
 | Cursor | none | `--auto-review` | `--mode=plan` | `--force --sandbox disabled` |
 | Amp | none | none | none | none |
-| Kiro | none | none | none | none |
+| Kiro | none | none | none | `--trust-all-tools` |
 | Qwen | `--approval-mode default` | `--approval-mode auto-edit` | `--approval-mode plan` | `--approval-mode yolo` |
 | Kimi | none | `--auto` | `--plan` | `--yolo` |
 | Grok | `--permission-mode default` | `--permission-mode auto` | none | `--yolo` |
@@ -307,7 +307,7 @@ The wiring matrix is the mechanism under the six capabilities: nineteen integrat
 | Droid | ✓ | ✓ | ◐ | ✓ | ✗ | ◐ | ✗ | ✓ | ✗ | ✗ | ✓ | ◐ | ✓ | ◐ | ◐ | ✓ | ✗ | ✗ | ✗ |
 | Cursor | ✓ | ✗ | ◐ | ◐ | ✗ | ◐ | ◐ | ✗ | ✗ | ✗ | ✓ | ◐ | ✓ | ◐ | ✓ | ✓ | ✗ | ✗ | ✗ |
 | Amp | ✓ | ✓ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ◐ | ◐ | ✗ | ✗ | ✗ | ✓ | ✗ | ✗ | ✗ |
-| Kiro | ✓ | ◐ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ◐ | ◐ | ◐ | ✗ | ✗ | ✓ | ✗ | ✗ | ✗ |
+| Kiro | ✓ | ◐ | ✗ | ◐ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✓ | ◐ | ◐ | ✗ | ✗ | ✓ | ✗ | ✗ | ✗ |
 | Qwen | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ | ✓ | ✓ | ◐ | ✓ | ✓ | ◐ | ✗ | ✗ |
 | Kimi | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ | ◐ | ✗ | ✗ | ✗ | ✓ | ◐ | ◐ | ✓ | ✗ | ✓ | ◐ | ✗ | ✗ |
 | Grok | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ | ✓ | ✓ | ✗ | ✗ | ✓ | ◐ | ✓ | ◐ | ◐ | ✓ | ✓ | ✗ | ✗ |
@@ -353,12 +353,12 @@ RimZ folds eleven lifecycle signals into every agent's state. The table names th
 | Droid | `SessionStart` | `UserPromptSubmit` | `Stop` | `PostToolUse` | `Notification` | ✗ | ✗ | `PreCompact` | ◐ derived | `SessionEnd` | ◐ derived |
 | Cursor | `sessionStart` | `beforeSubmitPrompt` | `stop` | `postToolUse` | ◐ local pending `AskQuestion` or plan proposal | ◐ chat-store child | ◐ child transcript | `preCompact` | ◐ derived | `sessionEnd` | ◐ derived |
 | Amp | `session_start` | `agent_start` | `agent_end` | `tool_result` | `permission_ask` | ✗ | ✗ | ✗ | ✗ | ◐ derived | ◐ derived |
-| Kiro | `SessionStart` | `UserPromptSubmit` | `Stop` | `PostToolUse` | ◐ pending interaction | ✗ | ✗ | ✗ | ✗ | ◐ derived | ◐ derived |
+| Kiro | `SessionStart` | `UserPromptSubmit` | `Stop` | `PostToolUse` | ◐ pending interaction | ✗ | ✗ | ✗ | ✗ | `SessionEnd` | ◐ derived |
 | Qwen | `SessionStart` | `UserPromptSubmit` | `Stop` | `PostToolUse` | `PermissionRequest` | `SubagentStart` | `SubagentStop` | `PreCompact` | `PostCompact` | `SessionEnd` | ◐ derived |
 | Kimi | `SessionStart` | `UserPromptSubmit` | `Stop` | `PostToolUse` | `PermissionRequest` | ◐ `SubagentStart` + child session files | ◐ `SubagentStop` + child session files | `PreCompact` | `PostCompact` | `SessionEnd` | ◐ derived |
 | Grok | `SessionStart` | `UserPromptSubmit` | `Stop` / `StopFailure` / `StopCancelled` | `PostToolUse` | `Notification` | `SubagentStart` | `SubagentStop` | `PreCompact` | `PostCompact` | `SessionEnd` | ◐ derived |
 
-`lost` means the agent's multiplexer session died under it. No agent reports that, because its hooks stop firing at the moment of death, so RimZ derives it from the `rimz exec` launch wrapper for every agent. Where `ended` is derived (Codex, Antigravity, Amp, Kiro), RimZ clears the card on the next snapshot tick after the pane is gone, not at the instant the agent exits.
+`lost` means the agent's multiplexer session died under it. No agent reports that, because its hooks stop firing at the moment of death, so RimZ derives it from the `rimz exec` launch wrapper for every agent. Where `ended` is derived (Codex, Antigravity, Amp), RimZ clears the card on the next snapshot tick after the pane is gone, not at the instant the agent exits.
 
 Codex's `Interrupt` hook ends the turn with an interrupted outcome. RimZ does not install Codex's `SessionEnd` hook, because Codex also fires it when an idle app server unloads while the pane stays open.
 

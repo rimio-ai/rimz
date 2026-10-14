@@ -62,8 +62,7 @@ static KIRO_DESCRIPTOR: AgentSpec = AgentSpec {
     capabilities: Capabilities {
         hook_context: None,
         prompt_context: false,
-        // Kiro can draw native prompts, but v3 exposes no hook that records
-        // them for RimZ routing.
+        // Native prompts are visible through the session store, not RimZ asks.
         native_ask_ui: true,
         transcript_tail_context: true,
         registers_lazily: true,
@@ -101,7 +100,10 @@ static KIRO_DESCRIPTOR: AgentSpec = AgentSpec {
             after_id: &[],
         }),
         fork: None,
-        permission: super::LaunchPermissionArgs::EMPTY,
+        permission: super::LaunchPermissionArgs {
+            yolo: &["--trust-all-tools"],
+            ..super::LaunchPermissionArgs::EMPTY
+        },
         max_turn_flag: None,
         interrupt_key: None,
         compact_command: Some(super::CompactCommand {
@@ -130,8 +132,9 @@ const KIRO_COVERAGE: CoverageAnnotations = CoverageAnnotations {
     plan_approval: ConcernCoverage::Unsupported {
         reason: "no v3 plan-approval hook",
     },
-    user_question: ConcernCoverage::Unsupported {
-        reason: "no v3 native-question hook",
+    user_question: ConcernCoverage::Partial {
+        via: "native user_input records raise Waiting",
+        gap: "answer the question in Kiro's pane",
     },
     answer: ConcernCoverage::Unsupported {
         reason: "native prompt choreography is not mapped",
@@ -140,7 +143,7 @@ const KIRO_COVERAGE: CoverageAnnotations = CoverageAnnotations {
         reason: "no compaction hook; /compact leaves only a tombstone record afterwards",
     },
     subagents: ConcernCoverage::Unsupported {
-        reason: "default subagents skip hooks and publish no child lifecycle",
+        reason: "sub-executions stay within the parent session without child sessions or hooks",
     },
     launch_reminders: ConcernCoverage::Unsupported {
         reason: "no additive system-text launch channel is implemented",
@@ -151,10 +154,7 @@ const KIRO_COVERAGE: CoverageAnnotations = CoverageAnnotations {
     background_shells: ConcernCoverage::Unsupported {
         reason: "background shells are not mapped",
     },
-    session_end: ConcernCoverage::Partial {
-        via: "pane liveness + rollup reaper",
-        gap: "no SessionEnd hook; v3 Stop is turn end, not session end",
-    },
+    session_end: ConcernCoverage::Wired { via: "SessionEnd" },
     idle_notification: ConcernCoverage::Partial {
         via: "Stop hook plus session_pause and turn_end records",
         gap: "no native Notification event",
@@ -164,7 +164,7 @@ const KIRO_COVERAGE: CoverageAnnotations = CoverageAnnotations {
         gap: "percentage only; no token counts or context-window size",
     },
     realtime_cost: ConcernCoverage::Unsupported {
-        reason: "credit-metered; no machine-readable usage surface",
+        reason: "credit-metered usage has no dollar price",
     },
     rich_context: ConcernCoverage::Unsupported {
         reason: "hooks publish no model, effort, context, or transcript contract",
@@ -200,11 +200,11 @@ const KIRO_USER_COVERAGE: UserCoverage = UserCoverage {
         reason: "Kiro publishes no readable login, plan, or credit ledger",
     },
     ask: CapabilityLevel::Partial {
-        shows: "a pending tool approval raises Waiting and routes you to the pane",
+        shows: "pending tool approvals and native questions raise Waiting and route to the pane",
         limit: "the prompt stays in Kiro's own UI, so rimz asks stays empty",
     },
     subagents: CapabilityLevel::Unsupported {
-        reason: "Kiro publishes no child lifecycle",
+        reason: "subagents stay within the parent session without child sessions or hooks",
     },
 };
 
@@ -220,7 +220,7 @@ const KIRO_LIFECYCLE_HOOKS: LifecycleAnnotations = LifecycleAnnotations {
         event: "PostToolUse",
     },
     awaiting_input: HookCoverage::Derived {
-        via: "unresolved pending_interaction tool approval",
+        via: "unresolved pending_interaction approval or question",
         gap: "native prompt is visible but has no structured RimZ answer route",
     },
     subagent_started: HookCoverage::Absent {
@@ -235,9 +235,8 @@ const KIRO_LIFECYCLE_HOOKS: LifecycleAnnotations = LifecycleAnnotations {
     compaction_ended: HookCoverage::Absent {
         reason: "no compaction hook",
     },
-    ended: HookCoverage::Derived {
-        via: "pane liveness + rollup reaper",
-        gap: "Stop ends a turn, not the session",
+    ended: HookCoverage::Native {
+        event: "SessionEnd",
     },
     lost: HookCoverage::Derived {
         via: "rimz exec wrapper",
@@ -266,6 +265,11 @@ const KIRO_HOOKS: &[HookEventSpec] = &[
         r#"{"session_id":"sess_redacted","hook_event_name":"Stop"}"#,
     )
     .progress(),
+    HookEventSpec::lifecycle(
+        "SessionEnd",
+        r#"{"session_id":"sess_redacted","hook_event_name":"SessionEnd","reason":"shutdown"}"#,
+    )
+    .session_ended(),
 ];
 
 /// Carries [`super::managed_source::RIMZ_MANAGED_MARKER`] on its first line;
@@ -325,6 +329,7 @@ impl crate::agents::capabilities::HookCapability for KiroAdapter {
         let signal = match event_name {
             // Kiro's payload carries no start source.
             "SessionStart" => SessionSource::Startup.session_start_signal(),
+            "SessionEnd" => LifecycleSignal::Ended,
             "UserPromptSubmit" => LifecycleSignal::TurnStarted { turn_id: None },
             "PostToolUse" => LifecycleSignal::ToolUsed {
                 mutates: self.spec().tool_mutates(payload),

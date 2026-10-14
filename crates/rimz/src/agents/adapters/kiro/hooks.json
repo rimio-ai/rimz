@@ -4,6 +4,7 @@
     {"name": "rimz-session-start", "trigger": "SessionStart", "action": {"type": "command", "command": "rimz hooks feed --source kiro || true"}, "timeout": 10},
     {"name": "rimz-user-prompt-submit", "trigger": "UserPromptSubmit", "action": {"type": "command", "command": "rimz hooks feed --source kiro || true"}, "timeout": 10},
     {"name": "rimz-post-tool-use", "trigger": "PostToolUse", "action": {"type": "command", "command": "rimz hooks feed --source kiro || true"}, "timeout": 10},
-    {"name": "rimz-stop", "trigger": "Stop", "action": {"type": "command", "command": "rimz hooks feed --source kiro || true"}, "timeout": 10}
+    {"name": "rimz-stop", "trigger": "Stop", "action": {"type": "command", "command": "rimz hooks feed --source kiro || true"}, "timeout": 10},
+    {"name": "rimz-session-end", "trigger": "SessionEnd", "action": {"type": "command", "command": "rimz hooks feed --source kiro || true"}, "timeout": 5}
   ]
 }

@@ -261,11 +261,11 @@ DETAIL
 ...
 
 WIRING — INTEGRATION CONCERNS
-AGENT        turn  perm  plan  ask  answer  compact  sub  remind  bg  end  idle  usage  live$  rich  install  spend  tools  remote
-claude       ✓     ✓     ✓     ✓    ✓       ✓        ✓    ✓       ✓   ✓    ✓     ✓      ✓      ✓     ✓        ✓      ✓      ✓
-codex        ✓     ✓     ✓     ✓    ✓       ✓        ✓    ✓       ✗   !    !     ✓      ✓      ✓     ✓        ✓      !      ✓
+AGENT        turn  perm  plan  ask  answer  compact  sub  remind  bg  bgsh  end  idle  usage  live$  rich  install  spend  tools  remote
+claude       ✓     ✓     ✓     ✓    ✓       ✓        ✓    ✓       ✓   ✓     ✓    ✓     ✓      ✓      ✓     ✓        ✓      ✓      ✓
+codex        ✓     ✓     ✓     ✓    ✓       ✓        ✓    ✓       ✗   ✗     !    !     ✓      ✓      ✓     ✓        ✓      !      ✓
 ...
-kiro         !     !     ✗     ✗    ✗       ✗        ✗    ✗       ✗   !    !     !      ✗      ✗     ✗        ✗      ✗      ✗
+kiro         ✓     !     ✗     !    ✗       ✗        ✗    ✗       ✗   ✗     ✓    !     !      ✗      ✗     ✓        ✗      ✗      ✗
 ...
   legend ✓ wired   ! partial   ✗ unsupported
 ...

@@ -210,11 +210,11 @@ fn kiro_global_hook_install_gates_version_reclaims_legacy_and_routes_neutrally()
             .expect("spawn Kiro install")
     };
 
-    stub_version("2.12.1");
+    stub_version("2.30.0");
     let out = install();
-    assert!(!out.status.success(), "pre-2.13 install must refuse");
+    assert!(!out.status.success(), "pre-2.31 install must refuse");
     assert!(
-        String::from_utf8_lossy(&out.stderr).contains("upgrade to 2.13.0 or later"),
+        String::from_utf8_lossy(&out.stderr).contains("upgrade to 2.31.0 or later"),
         "stderr names the minimum release: {}",
         String::from_utf8_lossy(&out.stderr)
     );
@@ -250,7 +250,7 @@ fn kiro_global_hook_install_gates_version_reclaims_legacy_and_routes_neutrally()
         r#"{"version":"v1","hooks":[{"action":{"command":"/old/rimz hooks feed --source kiro --event Stop"}}]}"#,
     )
     .expect("write legacy hook");
-    stub_version("2.21.4");
+    stub_version("2.31.0");
     let out = install();
     assert!(
         out.status.success(),
@@ -261,7 +261,7 @@ fn kiro_global_hook_install_gates_version_reclaims_legacy_and_routes_neutrally()
     let installed: Value =
         serde_json::from_slice(&std::fs::read(&path).expect("read Kiro hooks")).expect("JSON");
     let hooks = installed["hooks"].as_array().expect("hook list");
-    assert_eq!(hooks.len(), 4);
+    assert_eq!(hooks.len(), 5);
     assert!(
         hooks
             .iter()
