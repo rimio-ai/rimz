@@ -63,3 +63,7 @@ A change to a declared coverage or lifecycle-hook verdict runs `cargo xtask test
 Write capability text as product language: it prints verbatim to users, so keep it lowercase, without a trailing period, and about six to fourteen words. The rubric lives in [agent-support.md](../../../../docs/reference/agent-support.md). `rimz coverage` leads with the capability grid and `rimz coverage --wiring` adds the concern and lifecycle-hook grids, so a missing surface is visible product behavior.
 
 A coverage change runs two pins the adapter filters miss: `cargo xtask test -E 'binary(integration) & test(coverage::)'` checks the capability matrices in both `README.md` and `agent-support.md` against the descriptors, and `cargo xtask test 'cli::coverage'` pins each agent's partial and absent wiring cells by lowercase kind name.
+
+A lifecycle signal declared derived while its native mapping stays installed (an event the provider defines but never sends) leaves the adapter's conformance corpus: conformance requires that no corpus sample produce a non-native signal. The adapter tests keep pinning that mapping.
+
+A change to an adapter's `process_names` or `bin_names` greps each removed name as a quoted literal across `crates/`: fixtures model a provider's pane by its command string (`pane("%1", "<name>", ...)`), and a text search for the kind misses them.
