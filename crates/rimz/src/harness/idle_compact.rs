@@ -91,6 +91,7 @@ fn eligible_seat(agent: &AgentState) -> bool {
         && !agent.agent_id.is_empty()
         && agent.compacting_since.is_none()
         && agent.budget_park.is_none()
+        && agent.hibernation.is_none()
         && !agent.is_awaiting_input()
         && matches!(
             agent.effective_status(),
@@ -510,6 +511,19 @@ mod tests {
             |_| panic!("solo spawn"),
         );
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn frozen_seats_never_receive_idle_compaction() {
+        let mut candidate = agent(AgentStatus::Idle, 6_000, 50_000);
+        assert!(due(&candidate));
+        candidate.hibernation = Some(crate::agents::state::Hibernation {
+            frozen_at: ts(9_000),
+            reclaimed_bytes: 200,
+        });
+        assert!(!due(&candidate));
+        candidate.hibernation = None;
+        assert!(due(&candidate));
     }
 
     #[test]

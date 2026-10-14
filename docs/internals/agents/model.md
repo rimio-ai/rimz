@@ -34,7 +34,7 @@ Everything on this page is provider-neutral. An integration that emits well-form
 
 A session's lifecycle state is a status, the running turn's phase, and a transient compacting head painted over both ([`LifecycleState`](../../../crates/rimz/src/agents/lifecycle.rs)). The glyph, animation, and color for each value are [the interface legend](../../interface/sidebar.md#reading-the-glyphs); this page owns what the values mean and how they move.
 
-The statuses rank by a base weight, most attention-hungry first ([`status_weight`](../../../crates/rimz/src/store/snapshot/view/score.rs)). The rollup stores only `waiting`, `failed`, `success`, `running`, and `idle`; `paused`, `sleeping`, and `hibernating` exist only in the [displayed status](#displayed-status).
+The statuses rank by a base weight, most attention-hungry first ([`status_weight`](../../../crates/rimz/src/store/snapshot/view/score.rs)). The rollup stores only `waiting`, `failed`, `success`, `running`, and `idle`; `paused` and `sleeping` exist only in the [displayed status](#displayed-status).
 
 | Status | Weight | Meaning |
 | --- | --- | --- |
@@ -44,7 +44,6 @@ The statuses rank by a base weight, most attention-hungry first ([`status_weight
 | `success` | 300 | the last turn completed cleanly |
 | `running` | 200 | working a turn |
 | `sleeping` | 150 | at rest with a pending one-shot wait armed (display only) |
-| `hibernating` | 100 | at rest with the provider frozen and memory reclaimed (display only) |
 | `idle` | 100 | wired in, nothing in flight |
 
 `waiting` and `failed` sit close enough that the time curve can lift an older failure above a fresh ask, and the lowest attention weight still starts above the highest calm one. A finished `success` outranks a working `running` row because a result deserves one look and work in progress does not. The time curve that multiplies the base weight is [sidebar.md](../sidebar/sidebar.md#attention-ranking-and-the-cap).
@@ -237,7 +236,7 @@ The rollup holds the agent-reported lifecycle status, and `rimz sidebar snapshot
 3. A `waiting` row with an interruption marker reads `idle`.
 4. A `running` or `failed` row with a qualifying turn-error marker of a pausing class reads `paused`.
 5. A `running` row with a completion marker reads `success`; with an interruption marker, `idle`; in the `parked` phase, `success`.
-6. An `idle` or `success` result with a hibernation record reads `hibernating`; otherwise a pending wait makes it `sleeping`.
+6. A pending wait makes an `idle` or `success` result read `sleeping`.
 
 That pending wait also holds a supervised run open at a clean turn end. Agent status and run status remain separate: a sleeping card can have a `Running` run with `parked_at` set.
 
@@ -283,7 +282,7 @@ A projection to any status other than `running` drops the phase, except `success
 
 ### Sleeping
 
-[Hibernation](../harness/hibernate.md) takes precedence over sleeping for resting rows, uses the same calm tone family, and ranks with idle. Like sleeping, it holds interactive turn-completion waits open and never opens an attention episode.
+[Hibernation](../harness/hibernate.md) attaches metadata without changing displayed status, ranking, unread episodes, notifications, or turn-completion waits. A frozen resting row with an armed wait still reads `sleeping`; frozen rows receive neither cache keepalive pings nor idle compaction.
 
 After the ladder settles, an `idle` or `success` result with `pending_waits` displays `sleeping`; `running`, `waiting`, `failed`, and `paused` never do. Running-child delegation and delegated parks take precedence over sleep. A parked clean turn can therefore display `sleeping` while keeping its `parked` phase. Enrichment reads pending waits from instance-sourced, one-shot delivery rows in the loop catalog that match the workspace root and the target kind and session, without writing a store event. Timers, PID waits, watched commands, polled checks, file watches, and one-shot signal deliveries count; standing subscriptions and recurring clocks do not, even when a recurring row has a deadline.
 
@@ -291,7 +290,7 @@ A pending catalog wait needs a parsed trigger. A self-wait timer's due time anch
 
 Enrichment also reads the runs directory when launched fleet members or agent-launched team seats exist. It prepends a `Subagent` wait per unsettled launched child or peer run, then a `Team` wait per open team run belonging to the launcher. These waits remain enrich-only, not catalog rows or store events; the [keepalive rules](../harness/loops.md#prompt-cache-keepalive) define settlement and the resulting pings.
 
-`sleeping` is neither attention nor actionable, so `needs_a_look` is false: the unread episode and any configured success notification open when the wait cycle finishes at `success`, not on the intermediate rest, and an existing unread episode persists across sleep. The cockpit tally orders `waiting → failed → paused → success → running → sleeping → hibernating → idle`. The `Done` and `Any` delivery gates open for a sleeping agent, so a message can start a turn without consuming the armed wait; `Resume` does not open. Reply waits treat it as completed. Sleeping agents are not idle-compacted; eligible sleepers receive prompt-cache keepalive pings instead. `--when` still reads the raw lifecycle status and does not accept `sleeping`, and `agent.idle` remains a turn-boundary event.
+`sleeping` is neither attention nor actionable, so `needs_a_look` is false: the unread episode and any configured success notification open when the wait cycle finishes at `success`, not on the intermediate rest, and an existing unread episode persists across sleep. The cockpit tally orders `waiting → failed → paused → success → running → sleeping → idle`. The `Done` and `Any` delivery gates open for a sleeping agent, so a message can start a turn without consuming the armed wait; `Resume` does not open. Reply waits treat it as completed. Sleeping agents are not idle-compacted; eligible unfrozen sleepers receive prompt-cache keepalive pings instead. `--when` still reads the raw lifecycle status and does not accept `sleeping`, and `agent.idle` remains a turn-boundary event.
 
 ## Activity clocks
 

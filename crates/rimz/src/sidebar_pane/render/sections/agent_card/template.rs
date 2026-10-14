@@ -98,8 +98,7 @@ pub(super) fn template(
             AgentStatus::Paused
             | AgentStatus::Success
             | AgentStatus::Failed
-            | AgentStatus::Sleeping
-            | AgentStatus::Hibernating => IDENTITY_DESCRIPTION,
+            | AgentStatus::Sleeping => IDENTITY_DESCRIPTION,
         };
     }
 
@@ -166,8 +165,7 @@ mod tests {
                 AgentStatus::Paused
                 | AgentStatus::Success
                 | AgentStatus::Failed
-                | AgentStatus::Sleeping
-                | AgentStatus::Hibernating => IDENTITY_DESCRIPTION,
+                | AgentStatus::Sleeping => IDENTITY_DESCRIPTION,
             };
         }
         match (stage, expansion.by_selection, expansion.delegation) {

@@ -47,7 +47,6 @@ glyph_roles! {
         StatusAttention => "attention",
         StatusPaused => "paused",
         StatusSleeping => "sleeping",
-        StatusHibernating => "hibernating",
         StatusDone => "done",
         StatusIdle => "idle",
         StatusWorking => "working",

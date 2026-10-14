@@ -49,7 +49,7 @@ The top block reads the whole room in four lines:
 - The first line names the workspace and its path, so a glance confirms which project this room is.
 - The second counts the agent sessions that have run in the configured spend window, with the room's token breakdown pinned right: total, input, output, and cache-read.
 - The third counts the agents alive right now, and adds an unread count like `(2)`, the worktrees where results or questions await you (a team with several unread agents counts once), and the open-PR count `⑃ N`, stacked PRs included. The room's dollar spend pins right, rolling up live as agents work, and the PR count turns red for failing CI, amber while CI runs, green when every known lane passes, and stays its plain self when CI is unknown.
-- The fourth is the make-up line, the fleet by state. `? 3  ! 1  ⏸ 0  ✓ 8` counts who asked you something, who failed, who is parked on a provider limit, and who holds a finished result, with the calm states (`⢿` working, `☾` sleeping, `❄` hibernating, `○` idle) on the right.
+- The fourth is the make-up line, the fleet by state. `? 3  ! 1  ⏸ 0  ✓ 8` counts who asked you something, who failed, who is parked on a provider limit, and who holds a finished result, with the calm states (`⢿` working, `☾` sleeping, `○` idle) on the right.
 
 A row of zeros with no unread count means nothing needs you, so you can skip the scan entirely. Every non-zero bucket is a click target that filters the cards to that state in every tab of the room; clearing or replacing the filter in one tab updates them all. The unread count and `⑃ N` filter the same way. When the card that most needs you scrolls out of view, an `↑ N need you` banner appears; click it to bring that card back.
 
@@ -136,7 +136,7 @@ A pane no agent has claimed (your editor, a shell, a build) renders as a slimmer
 
 ## The agent lifecycle
 
-Every card wears one state, and eight cover the life of a session:
+Every card wears one state, and seven cover the life of a session:
 
 | glyph | state | meaning | needs you |
 |-------|-------|---------|-----------|
@@ -147,7 +147,6 @@ Every card wears one state, and eight cover the life of a session:
 | `⏸` | paused | stopped mid-turn on a provider rate limit or overload; the description quotes the reason | when it recovers |
 | `✓` | done | the turn finished cleanly and holds a result | a look, when convenient |
 | `☾` | sleeping | resting until an armed one-shot wait fires; the description names the wait | nothing yet |
-| `❄` | hibernating | frozen to save memory until focus or input wakes it | no |
 
 The full glyph vocabulary, including the transient heads that ride over a running card (thinking before the first file edit, compacting, waiting on subagents, parked on background work), is the [interface legend](../interface/sidebar.md#reading-the-glyphs).
 
@@ -176,9 +175,9 @@ RimZ also derives states rather than waiting for an agent to report one.
 
 Working, waiting, failed, paused, and waiting on live subagents all take precedence over sleep, and a standing subscription does not make an agent sleep. You can message a sleeping agent now without canceling its future wait. Its last result can still be unread, but sleeping itself needs no answer and sends no notification.
 
-**Hibernating** saves memory on an [opted-in Linux machine](./configuration.md#agent-hibernation). A seen, unfocused idle or successful agent can freeze after the grace period when it owes no work, has no background commands, and has no foreign processes in its scope. Agents with remote control enabled stay awake. The `❄` card ranks with idle, needs no answer, and is distinct from a sleeping agent with a wait armed.
+**Hibernation** saves memory on an [opted-in Linux machine](./configuration.md#agent-hibernation). An unfocused idle or successful agent can freeze after the grace period when it owes no work, has no background commands, and has no foreign processes in its scope. Agents with remote control enabled or a keep-warm horizon holding their cache stay awake. Hibernation leaves the card's state and unread result unchanged; `rimz agents show` carries the freeze time and reclaimed memory.
 
-Focus the pane, click its card, or send it a message or pane input to wake it. RimZ also wakes it before answering, interrupting, restarting, or closing it. Waking restarts the configured grace period, so a glance does not immediately freeze the agent again. Waking may take seconds as memory comes back from swap; keys typed before thaw remain in the terminal queue and arrive when it wakes. The card leaves hibernating on the next snapshot.
+Focus the pane, click its card, or send it a message or pane input to wake it. RimZ also wakes it before answering, interrupting, restarting, or closing it. Waking restarts the configured grace period, so a glance does not immediately freeze the agent again. Waking may take seconds as memory comes back from swap; keys typed before thaw remain in the terminal queue and arrive when it wakes.
 
 ## Glance, jump, answer
 

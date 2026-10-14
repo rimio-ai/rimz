@@ -20,15 +20,8 @@ pub(super) fn run(request: HibernateHelperRequest) -> Result<()> {
     let snapshot = reader
         .read(ctx.store.paths())
         .context("reading hibernation snapshot")?;
-    hibernate::run_request(
-        &ctx.store,
-        &snapshot,
-        &request,
-        &config,
-        &|agent| {
-            rimz::sidebar::unread::seen_since(ctx.runtime(), agent, hibernate::rested_at(agent))
-        },
-        || reader.read(ctx.store.paths()),
-    )
+    hibernate::run_request(&ctx.store, &snapshot, &request, &config, || {
+        reader.read(ctx.store.paths())
+    })
     .context("hibernating idle agent")
 }

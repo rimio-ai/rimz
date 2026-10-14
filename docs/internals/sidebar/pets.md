@@ -50,7 +50,7 @@ Each frame runs two calls in [`app/paint.rs`](../../../crates/rimz/src/sidebar_p
 | agent `running` with a running subagent | `Waiting` | `waiting` | `waiting on work` |
 | agent `running` in the reasoning phase | `Thinking` | `thinking` | `thinking it through` |
 | agent otherwise `running`, or a busy process row | `Running` | `running` | `room is moving` |
-| agent `idle`, `success`, `sleeping`, or `hibernating`; an idle process row; no selection | `Idle` | `idle` | `all caught up` after another action, `resting` on a cold start |
+| agent `idle`, `success`, or `sleeping`; an idle process row; no selection | `Idle` | `idle` | `all caught up` after another action, `resting` on a cold start |
 
 Tracks index into the sheet's rows. The `ANIMATIONS` table in `model.rs` holds the mapping and the cadence, and `default_catalog_matches_petdex_rows` pins it:
 

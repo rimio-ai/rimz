@@ -186,7 +186,6 @@ fn turn_wait_reason_projects_each_open_status() {
         (AgentStatus::Running, TurnWaitReason::Running),
         (AgentStatus::Waiting, TurnWaitReason::WaitingOnPerson(None)),
         (AgentStatus::Sleeping, TurnWaitReason::Sleeping(vec![])),
-        (AgentStatus::Hibernating, TurnWaitReason::Hibernating),
         (AgentStatus::Paused, TurnWaitReason::Paused),
         (AgentStatus::Idle, TurnWaitReason::NoTurnStarted),
         (AgentStatus::Success, TurnWaitReason::NoTurnStarted),

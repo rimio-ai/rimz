@@ -10,13 +10,13 @@ pub fn run_request(
     snapshot: &crate::store::snapshot::SidebarSnapshot,
     request: &HibernateHelperRequest,
     config: &MachineConfig,
-    seen: &dyn Fn(&AgentState) -> bool,
     mut refresh: impl FnMut() -> crate::store::snapshot::Result<crate::store::snapshot::SidebarSnapshot>,
 ) -> Result<(), HibernateErr> {
     if !cfg!(target_os = "linux") || !config.agents.hibernate.enabled {
         return Ok(());
     }
-    let policy = Policy::new(config)?;
+    let keep_warm = KeepWarmPolicy::load(config, snapshot.project_root.as_deref());
+    let policy = Policy::new(config, &keep_warm)?;
     let Some(agent) =
         crate::store::snapshot::find_agent(&snapshot.agents, &request.kind, &request.agent_id)
     else {
@@ -33,7 +33,6 @@ pub fn run_request(
     let scope = ScopeView::probe(
         &agent.kind,
         request.root_pid,
-        seen(agent),
         pane_focused(store.runtime_paths(), snapshot, &request.pane_id),
     );
     let verdict = decide(store, agent, &policy, jiff::Timestamp::now(), &scope)?;
@@ -74,7 +73,6 @@ pub fn run_request(
             let scope = ScopeView::probe(
                 &agent.kind,
                 request.root_pid,
-                seen(agent),
                 pane_focused(store.runtime_paths(), &fresh, &request.pane_id),
             );
             if scope.scope.as_ref() != Some(path) || scope.provider_pid != provider_pid {

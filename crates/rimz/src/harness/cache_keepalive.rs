@@ -141,6 +141,7 @@ fn pingable(agent: &AgentState) -> bool {
         || agent.agent_id.is_empty()
         || agent.compacting_since.is_some()
         || agent.budget_park.is_some()
+        || agent.hibernation.is_some()
         || agent.is_awaiting_input())
 }
 

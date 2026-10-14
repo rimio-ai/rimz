@@ -166,7 +166,7 @@ The `status` group sets head shapes only. Their color, effect, and speed live in
 
 ## Animations
 
-`[theme.animations]` themes the status heads the sidebar paints; [the glyph legend](../interface/sidebar.md#reading-the-glyphs) says what each head means. There are twelve roles: `thinking`, `working`, `compacting`, `delegating`, `resolving`, `idle`, `success`, `paused`, `sleeping`, `hibernating`, `waiting`, and `failed`, and the template carries a commented block for each.
+`[theme.animations]` themes the status heads the sidebar paints; [the glyph legend](../interface/sidebar.md#reading-the-glyphs) says what each head means. There are eleven roles: `thinking`, `working`, `compacting`, `delegating`, `resolving`, `idle`, `success`, `paused`, `sleeping`, `waiting`, and `failed`, and the template carries a commented block for each.
 
 Each role takes four optional fields, and an omitted field keeps the built-in, so a one-line override leaves the rest alone.
 

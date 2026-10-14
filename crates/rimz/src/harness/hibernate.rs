@@ -5,6 +5,7 @@ use crate::config::HibernateConfig;
 use crate::ids::WorkspaceId;
 use std::path::{Path, PathBuf};
 
+use super::cache_keepalive::KeepWarmPolicy;
 use crate::agents::AgentState;
 use crate::config::{MachineConfig, RemoteControlConfig};
 use crate::ids::{AgentKind, AgentSessionId, PaneId};
@@ -21,13 +22,20 @@ pub use wake::{ReconcileReport, Woken, reconcile, reconcile_at, wake_pane, wake_
 pub struct Policy {
     after: std::time::Duration,
     remote_control: RemoteControlConfig,
+    harness: crate::config::HarnessConfig,
+    keep_warm: KeepWarmPolicy,
 }
 
 impl Policy {
-    pub fn new(config: &MachineConfig) -> Result<Self, crate::config::HibernateAfterErr> {
+    pub fn new(
+        config: &MachineConfig,
+        keep_warm: &KeepWarmPolicy,
+    ) -> Result<Self, crate::config::HibernateAfterErr> {
         Ok(Self {
             after: config.agents.hibernate.after()?,
             remote_control: config.remote_control.clone(),
+            harness: config.harness.clone(),
+            keep_warm: keep_warm.clone(),
         })
     }
 }
@@ -128,7 +136,6 @@ pub struct ScopeView {
     provider_pid: u32,
     members: Vec<u32>,
     parents: std::collections::BTreeMap<u32, (String, u32)>,
-    seen: bool,
     focused: bool,
 }
 
@@ -144,7 +151,7 @@ pub enum Hold {
     Owed(super::owed::OwedWake),
     Message,
     OpenRun,
-    Unseen,
+    KeepWarm,
     Focused,
     RemoteControl,
     NoScope,
@@ -171,7 +178,7 @@ pub fn decide(
     {
         return Ok(Verdict::Hold(Hold::AlreadyHibernating));
     }
-    if let Some(hold) = cheap_hold(agent, config, now, scope.seen, scope.focused) {
+    if let Some(hold) = cheap_hold(agent, config, now, scope.focused) {
         return Ok(Verdict::Hold(hold));
     }
     let woke_at = [
@@ -266,7 +273,6 @@ fn cheap_hold(
     agent: &AgentState,
     config: &Policy,
     now: jiff::Timestamp,
-    seen: bool,
     focused: bool,
 ) -> Option<Hold> {
     if let Err(hold) = super::idle_stop::resting(agent) {
@@ -275,14 +281,18 @@ fn cheap_hold(
     if now.duration_since(rested_at(agent)).as_nanos() < config.after.as_nanos() as i128 {
         return Some(Hold::Clock);
     }
-    if !seen {
-        return Some(Hold::Unseen);
-    }
     if focused {
         return Some(Hold::Focused);
     }
     if config.remote_control.enabled_for(agent.kind.as_str()) {
         return Some(Hold::RemoteControl);
+    }
+    if config
+        .keep_warm
+        .holding(agent, &config.harness, now)
+        .is_some()
+    {
+        return Some(Hold::KeepWarm);
     }
     None
 }
@@ -308,7 +318,7 @@ fn scoped_provider(
 }
 
 impl ScopeView {
-    pub fn probe(kind: &AgentKind, root_pid: u32, seen: bool, focused: bool) -> Self {
+    pub fn probe(kind: &AgentKind, root_pid: u32, focused: bool) -> Self {
         let (provider_pid, scope) = scoped_provider(
             root_pid,
             &|pid| {
@@ -342,7 +352,6 @@ impl ScopeView {
             provider_pid,
             members,
             parents,
-            seen,
             focused,
         }
     }
@@ -353,14 +362,14 @@ pub fn hibernate_idle_agents(
     paths: &crate::StatePaths,
     runtime: &crate::RuntimePaths,
     config: &MachineConfig,
-    seen: &dyn Fn(&AgentState) -> bool,
+    keep_warm: &KeepWarmPolicy,
 ) {
     hibernate_idle_agents_with(
         snapshot,
         paths,
         runtime,
         config,
-        seen,
+        keep_warm,
         |request| {
             let args = crate::child_process::agent_helper_argv("hibernate", request);
             match crate::child_process::spawn_detached_rimz(runtime, args, "agent-hibernate") {
@@ -380,7 +389,7 @@ fn hibernate_idle_agents_with(
     paths: &crate::StatePaths,
     runtime: &crate::RuntimePaths,
     config: &MachineConfig,
-    seen: &dyn Fn(&AgentState) -> bool,
+    keep_warm: &KeepWarmPolicy,
     mut spawn: impl FnMut(&HibernateHelperRequest) -> bool,
     wake: impl FnMut(&PaneId),
 ) {
@@ -404,7 +413,7 @@ fn hibernate_idle_agents_with(
     if !config.agents.hibernate.enabled {
         return;
     }
-    let policy = match Policy::new(config) {
+    let policy = match Policy::new(config, keep_warm) {
         Ok(policy) => policy,
         Err(error) => {
             tracing::warn!(%error, "hibernation disabled for this pass");
@@ -430,7 +439,6 @@ fn hibernate_idle_agents_with(
             agent,
             &policy,
             snapshot.now,
-            seen(agent),
             snapshot.focused_pane.as_ref() == Some(&pane.pane_id),
         )
         .is_some()

@@ -130,9 +130,6 @@
 ## [theme.animations.sleeping]
 ## frames = "☾"
 ## color = "cool"
-## [theme.animations.hibernating]
-## frames = "❄"
-## color = "cool"
 ## [theme.animations.waiting]
 ## frames = "?"
 ## color = "warn"
@@ -152,7 +149,6 @@
 ## attention = "!"
 ## paused = "⏸︎"
 ## sleeping = "☾"
-## hibernating = "❄"
 ## done = "✓"
 ## idle = "○"
 ## working = "⢿"
@@ -280,7 +276,6 @@
 ## attention = ""
 ## paused = ""
 ## sleeping = "󰤄"
-## hibernating = "❄"
 ## done = ""
 ## idle = ""
 ## working = "⢿"

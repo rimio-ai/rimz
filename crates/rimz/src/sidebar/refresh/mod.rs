@@ -283,19 +283,7 @@ pub(super) fn refresh_heavy_lanes(
     let teams = &policy.teams;
     crate::harness::idle_compact::compact_idle_agents(base, runtime, config, &policy);
     crate::harness::idle_stop::stop_idle_agents(base, state_paths, runtime);
-    crate::harness::hibernate::hibernate_idle_agents(
-        base,
-        state_paths,
-        runtime,
-        config,
-        &|agent| {
-            crate::sidebar::unread::seen_since(
-                runtime,
-                agent,
-                crate::harness::hibernate::rested_at(agent),
-            )
-        },
-    );
+    crate::harness::hibernate::hibernate_idle_agents(base, state_paths, runtime, config, &policy);
     crate::harness::cache_keepalive::keepalive_agents(base, runtime, &config.harness, &policy);
     keep_warm::publish(base, runtime, &config.harness, &policy);
     crate::harness::auto_redeem::redeem_credits(

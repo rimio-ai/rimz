@@ -76,10 +76,37 @@ fn decision_fixture() -> (tempfile::TempDir, Store, AgentState, Policy, ScopeVie
             (12, ("mcp".into(), 11)),
         ]
         .into(),
-        seen: true,
         focused: false,
     };
-    (dir, store, agent, Policy::new(&config).unwrap(), scope)
+    (
+        dir,
+        store,
+        agent,
+        Policy::new(&config, &KeepWarmPolicy::load(&config, None)).unwrap(),
+        scope,
+    )
+}
+
+#[test]
+fn keep_warm_holds_hibernation_only_while_the_cache_can_stay_warm() {
+    let (_dir, store, mut agent, _policy, scope) = decision_fixture();
+    let mut config = MachineConfig::default();
+    config.agents.hibernate.after = "3m".into();
+    config.agents.profiles.0.insert(
+        "warm".into(),
+        toml::from_str("agent = 'claude'\nkeep-warm = '2h'").unwrap(),
+    );
+    let policy = Policy::new(&config, &KeepWarmPolicy::load(&config, None)).unwrap();
+    agent.profile = Some("warm".into());
+    agent.turn_started_at = Some(agent.last_activity);
+    assert_eq!(
+        decision(&store, &agent, &policy, &scope, 1_180),
+        Verdict::Hold(Hold::KeepWarm)
+    );
+    assert_eq!(
+        decision(&store, &agent, &policy, &scope, 8_200),
+        Verdict::Hibernate { idle_secs: 7_200 }
+    );
 }
 
 #[test]
@@ -192,18 +219,11 @@ fn provider_ancestors_are_owned_but_their_other_children_are_foreign() {
 }
 
 #[test]
-fn decision_requires_seen_unfocused_owned_scope_and_provider_membership() {
+fn decision_requires_unfocused_owned_scope_and_provider_membership() {
     let (_dir, store, agent, config, clear) = decision_fixture();
     let ready = Verdict::Hibernate { idle_secs: 180 };
     assert_eq!(decision(&store, &agent, &config, &clear, 1_180), ready);
     for (expected, changed) in [
-        (
-            Hold::Unseen,
-            ScopeView {
-                seen: false,
-                ..clear.clone()
-            },
-        ),
         (
             Hold::Focused,
             ScopeView {
@@ -401,7 +421,7 @@ fn open_runs_hold_only_until_terminal() {
 }
 
 #[test]
-fn producer_requires_seen_unfocused_due_pane_and_paces_without_recording() {
+fn producer_requires_unfocused_due_pane_and_paces_without_recording() {
     let (_dir, store, agent, _policy, _scope) = decision_fixture();
     let paths = store.paths();
     let runtime = store.runtime_paths();
@@ -429,14 +449,14 @@ fn producer_requires_seen_unfocused_due_pane_and_paces_without_recording() {
         worktree_path: None,
         worktree_branch: None,
     });
-    let spawned = |snapshot: &crate::store::snapshot::SidebarSnapshot, seen: bool| {
+    let spawned = |snapshot: &crate::store::snapshot::SidebarSnapshot| {
         let mut requests = Vec::new();
         hibernate_idle_agents_with(
             snapshot,
             paths,
             runtime,
             &config,
-            &|_| seen,
+            &KeepWarmPolicy::default(),
             |request| {
                 requests.push(request.clone());
                 true
@@ -445,18 +465,19 @@ fn producer_requires_seen_unfocused_due_pane_and_paces_without_recording() {
         );
         requests
     };
-    assert!(spawned(&snapshot, false).is_empty());
+    assert_eq!(spawned(&snapshot).len(), 1);
+    snapshot.now = jiff::Timestamp::from_second(1_210).unwrap();
     snapshot.focused_pane = Some(pane.clone());
-    assert!(spawned(&snapshot, true).is_empty());
+    assert!(spawned(&snapshot).is_empty());
     snapshot.focused_pane = None;
-    let requests = spawned(&snapshot, true);
+    let requests = spawned(&snapshot);
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].pane_id, pane);
     assert_eq!(requests[0].root_pid, 42);
-    assert_eq!(requests[0].idle_secs, 180);
-    assert!(spawned(&snapshot, true).is_empty());
-    snapshot.now = jiff::Timestamp::from_second(1_210).unwrap();
-    assert_eq!(spawned(&snapshot, true).len(), 1);
+    assert_eq!(requests[0].idle_secs, 210);
+    assert!(spawned(&snapshot).is_empty());
+    snapshot.now = jiff::Timestamp::from_second(1_240).unwrap();
+    assert_eq!(spawned(&snapshot).len(), 1);
     assert!(crate::store::hibernate::read(paths).is_empty());
 }
 
@@ -510,7 +531,7 @@ fn producer_repairs_lost_focus_events_and_focus_during_freeze() {
             store.paths(),
             store.runtime_paths(),
             &config,
-            &|_| true,
+            &KeepWarmPolicy::default(),
             |_| panic!("focused pane must not freeze"),
             |pane| wakes.push(pane.clone()),
         );
@@ -540,7 +561,7 @@ fn producer_repairs_lost_focus_events_and_focus_during_freeze() {
         store.paths(),
         store.runtime_paths(),
         &config,
-        &|_| true,
+        &KeepWarmPolicy::default(),
         |_| panic!("disabled hibernation must not freeze"),
         |pane| wakes.push(pane.clone()),
     );
@@ -552,7 +573,7 @@ fn producer_repairs_lost_focus_events_and_focus_during_freeze() {
 }
 
 #[test]
-fn record_projection_clears_stale_state_and_only_projects_resting_sessions() {
+fn record_projection_clears_stale_state_and_preserves_real_status() {
     let (_dir, store, agent, _config, scope) = decision_fixture();
     let mut snapshot = crate::store::snapshot::SidebarSnapshot::build_with_agents(
         store.paths().workspace_id.clone(),
@@ -575,7 +596,7 @@ fn record_projection_clears_stale_state_and_only_projects_resting_sessions() {
     project_hibernation(&mut snapshot, store.paths());
     assert_eq!(
         snapshot.agents[0].effective_status(),
-        crate::agents::AgentStatus::Hibernating
+        crate::agents::AgentStatus::Idle
     );
     assert_eq!(
         snapshot.agents[0]

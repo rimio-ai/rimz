@@ -13,7 +13,7 @@ fn pending_wait() -> PendingWait {
 }
 
 #[test]
-fn hibernation_is_calm_in_consumer_tallies_and_ranking() {
+fn hibernation_preserves_sleeping_in_consumer_tallies_and_ranking() {
     let mut resting = agent("claude", "frozen", AgentStatus::Success, 0).worktree("/repo/main");
     resting.hibernation = Some(crate::agents::state::Hibernation {
         frozen_at: ago(30),
@@ -23,18 +23,19 @@ fn hibernation_is_calm_in_consumer_tallies_and_ranking() {
     let idle = agent("claude", "idle", AgentStatus::Idle, 1).worktree("/repo/main");
     let snapshot = room_with_agent_panes(vec![resting, idle]);
     let frozen = row(&snapshot, "frozen");
-    assert_eq!(frozen.status(), Some(AgentStatus::Hibernating));
+    assert_eq!(frozen.status(), Some(AgentStatus::Sleeping));
     assert!(!frozen.status().unwrap().is_attention());
     assert_eq!(
         frozen.attention_score,
-        row(&snapshot, "idle").attention_score
+        crate::store::snapshot::view::score::status_weight(AgentStatus::Sleeping)
     );
     assert!(
         snapshot.worktree_groups[0]
             .status_counts
             .iter()
-            .any(|count| count.status == AgentStatus::Hibernating && count.count == 1)
+            .any(|count| count.status == AgentStatus::Sleeping && count.count == 1)
     );
+    assert_eq!(serde_json::to_value(frozen).unwrap()["status"], "sleeping");
 }
 
 #[test]
