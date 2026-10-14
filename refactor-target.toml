@@ -195,7 +195,8 @@ upward-dependencies = ["address"]
 # model_label_parts and window_short share model and window spelling across renderers (+2).
 # model_label_source shares version-aware model source selection between CLI and sidebar (+1).
 # SpendUpdate distinguishes authoritative replacement from a counted-spend rewrite merge (+1).
-surface-budget = 1035
+# LaunchBlocker and LaunchCapability::launch_blocker share provider launch preconditions (+2).
+surface-budget = 1037
 
 [[module]]
 path = "crates/rimz/src/agents/park.rs"
@@ -4732,6 +4733,11 @@ reason = "Public trait-object floor; see agents::capabilities::CoreCapability (p
 kind = "item"
 key = "agents::capabilities::LaunchCapability"
 reason = "Public trait-object floor; see agents::capabilities::CoreCapability (pass 24b)."
+
+[[verdict]]
+kind = "item"
+key = "agents::capabilities::LaunchBlocker"
+reason = "The public provider launch capability returns a typed refusal to the binary's three launch preflight sites."
 
 [[verdict]]
 kind = "item"

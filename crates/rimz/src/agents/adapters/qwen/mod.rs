@@ -7,6 +7,7 @@ mod install;
 mod payloads;
 mod process;
 mod selection;
+mod settings;
 mod spend;
 mod statusline;
 
@@ -473,6 +474,15 @@ impl crate::agents::capabilities::LaunchCapability for QwenAdapter {
 
     fn version_upgrade_fix(&self) -> Option<&'static str> {
         Some("run `npm install -g @qwen-code/qwen-code@latest`")
+    }
+
+    fn launch_blocker(
+        &self,
+        cwd: &Path,
+        env: &BTreeMap<String, String>,
+        argv: &[String],
+    ) -> Option<LaunchBlocker> {
+        settings::hook_blocker(cwd, env, argv)
     }
 
     fn config_home_env_keys(&self) -> &'static [&'static str] {

@@ -131,7 +131,13 @@ fn preflight_agent(
 fn preflight_program(
     adapter: &AgentDefinition,
     process: &rimz::harness::launch::CompiledAgentProcess,
+    cwd: &Path,
 ) -> Result<()> {
+    let mut launch_env = rimz::agents::ambient_env();
+    launch_env.extend(process.env.clone());
+    if let Some(error) = adapter.launch_blocker(cwd, &launch_env, &process.provider_argv) {
+        return Err(error.into());
+    }
     let program = &process.provider_program;
     let path = process
         .resolve_program_after_shell_rc()
