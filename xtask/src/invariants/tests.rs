@@ -3,6 +3,49 @@ use std::path::{Path, PathBuf};
 use super::*;
 
 #[test]
+fn pane_writes_require_an_earlier_wake_in_the_same_function() {
+    let root = temp_repo_root("wake-first");
+    let path = root.join("crates/rimz/src/message/send.rs");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    for body in [
+        "fn send() { PaneWriter::open(); hibernate::wake_pane(); }",
+        "fn send() { PaneWriter::open(); }\nfn wake() { hibernate::wake_pane(); }",
+        "fn send() { unrelated::wake_pane(); PaneWriter::open(); }",
+    ] {
+        std::fs::write(&path, body).unwrap();
+        assert!(
+            ensure_pane_writes_wake_first(&root, std::slice::from_ref(&path)).is_err(),
+            "admitted {body}"
+        );
+    }
+    for wake in ["wake_pane", "wake_pane_at", "wake_pane_in"] {
+        std::fs::write(
+            &path,
+            format!("fn send() {{ hibernate::{wake}(); PaneWriter::open(); }}"),
+        )
+        .unwrap();
+        ensure_pane_writes_wake_first(&root, std::slice::from_ref(&path)).unwrap();
+    }
+    std::fs::write(
+        &path,
+        "fn send() {}\n#[cfg(test)]\nmod tests {\nfn fixture() { PaneWriter::open(); }\n}\n",
+    )
+    .unwrap();
+    ensure_pane_writes_wake_first(&root, &[path]).unwrap();
+    for relative in [
+        "crates/rimz/src/mux/pane_writer.rs",
+        "crates/rimz/src/message/tests.rs",
+        "crates/rimz/src/message/tests/send.rs",
+    ] {
+        let path = root.join(relative);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "fn fixture() { PaneWriter::open(); }").unwrap();
+        ensure_pane_writes_wake_first(&root, &[path]).unwrap();
+    }
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn thin_park_rejects_store_entry_points_but_leaves_event_follower_alone() {
     let root = temp_repo_root("thin-park");
     let relatives = [
