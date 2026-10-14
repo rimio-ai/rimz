@@ -11,8 +11,9 @@ use crate::agents::spending::{
 
 use super::payloads::{TranscriptRecord, fold_transcript};
 
-/// The Qwen runtime output directory for one login env, or `None` when the
-/// env names neither a runtime dir nor a home to fall back to.
+/// The Qwen runtime output directory for one login env, or `None` when neither
+/// the env's runtime dir, a system or system-defaults `runtimeOutputDir`, nor
+/// a home names one.
 pub(super) fn runtime_base(env: &BTreeMap<String, String>) -> Option<PathBuf> {
     let env_path = |key: &str| {
         env.get(key)

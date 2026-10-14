@@ -237,14 +237,18 @@ fn spending_sources_follow_the_login_env_home_and_runtime_dir() {
             .flat_map(|source| source.complete_files())
             .collect::<Vec<_>>()
     };
-    assert!(QwenAdapter.spending_sources(&BTreeMap::new()).is_empty());
     let mut env = BTreeMap::from([
-        ("QWEN_HOME".to_owned(), named.display().to_string()),
         (
             "QWEN_CODE_SYSTEM_SETTINGS_PATH".to_owned(),
             temp.path().join("system.json").display().to_string(),
         ),
+        (
+            "QWEN_CODE_SYSTEM_DEFAULTS_PATH".to_owned(),
+            temp.path().join("defaults.json").display().to_string(),
+        ),
     ]);
+    assert!(QwenAdapter.spending_sources(&env).is_empty());
+    env.insert("QWEN_HOME".to_owned(), named.display().to_string());
     assert_eq!(files(&env), vec![named.join(session)]);
     fs::write(
         named.join("settings.json"),
